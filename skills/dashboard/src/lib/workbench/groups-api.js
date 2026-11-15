@@ -191,7 +191,7 @@ export function createGroupsApi({ workbench, groupConfig, getRuntimeInfo = () =>
         readExtra('config', async () => groupConfig ? groupConfig.get(id) : null),
       ]);
       const selected = ['running', 'starting'].includes(row.presence) ? row.launchConfig : row.target;
-      return { ...row, readAt: snapshot.readAt, ...raw, ...config, runtimeInfo: getRuntimeInfo(row),
+      return { ...row, currentAction: projectCurrentAction(row), readAt: snapshot.readAt, ...raw, ...config, runtimeInfo: getRuntimeInfo(row),
         effective: { runtime: row.runtime, model: row.model ?? selected?.model?.model ?? (typeof selected?.model === 'string' && selected.model !== 'default' ? selected.model : null),
           effort: row.effort ?? selected?.effort ?? selected?.model?.effort ?? null,
           runtimeOverridden: row.runtimeOverridden, modelOverridden: row.modelOverridden },

@@ -118,9 +118,14 @@ test('detail shares its list row and adds one configuration and raw-message read
   let rawReads = 0, configReads = 0;
   const row = base(); row.launchConfig = { mode: 'override', runtime: 'claude', model: 'test-model', effort: 'high' };
   row.model = 'test-model';
+  row.preview = { text: 'Current received message', timestamp: now - 1000 };
+  row.tools = [{ name: 'Read' }];
   const api = createGroupsApi({ workbench: { getSnapshot: async () => snapshot([row]), raw: async key => { rawReads++; assert.equal(key, row.sessionGroup); return { raw: 'First message' }; } },
     groupConfig: { get: async () => { configReads++; return { runtime: { ok: true }, model: { ok: true } }; } } });
   const detail = await api.detail(row.sessionGroup);
+  const list = (await api.running()).rows[0];
+  assert.deepEqual(detail.currentAction, list.currentAction);
+  assert.deepEqual(detail.currentAction, { tool: 'Read', message: 'Current received message', receivedAt: new Date(now - 1000).toISOString() });
   assert.equal(detail.raw, 'First message'); assert.equal(detail.state.kind, 'idle'); assert.equal(detail.effective.effort, 'high');
   assert.equal(detail.effective.modelOverridden, true); assert.equal(rawReads, 1); assert.equal(configReads, 1);
   await assert.rejects(api.detail('telegram:absent'), { statusCode: 404 });

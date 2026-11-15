@@ -5,21 +5,6 @@ import path from 'node:path';
 import test from 'node:test';
 import { getActionsMeta, handleAction } from '../src/lib/actions.js';
 import { getCodexModels, codexEffortsForModel } from '../src/lib/codex-models.js';
-import { codexRuntimeFields } from '../src/lib/runtime-info.js';
-
-test('runtime identity and effort do not borrow configuration or catalog defaults', () => {
-  assert.deepEqual(codexRuntimeFields(null, { model: 'gpt-5.6-sol', effort: 'high' }), {
-    model: null, model_id: null, effort: null, service_tier: null,
-    configured_model: 'gpt-5.6-sol', configured_effort: 'high',
-  });
-  const fields = codexRuntimeFields({ model_id: 'relay-custom', reasoning_effort: 'max', service_tier: 'priority' }, {
-    model: 'gpt-5.6-sol', effort: 'low',
-  });
-  assert.equal(fields.model, 'relay-custom');
-  assert.equal(fields.model_id, 'relay-custom');
-  assert.equal(fields.effort, 'max');
-  assert.equal(fields.service_tier, 'priority');
-});
 
 test('catalog is independent of cache existence, corruption and replacement', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-catalog-'));

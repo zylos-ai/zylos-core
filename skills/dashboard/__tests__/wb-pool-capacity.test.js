@@ -118,8 +118,7 @@ test('snapshot joins real capacity and occupancy into inbound positions without 
   assert.equal(snapshot.instance.pool.capacity, 3);
   assert.equal(snapshot.instance.pool.used, 3);
   assert.equal(snapshot.instance.pool.waiting, 40);
-  assert.equal(snapshot.instance.pool.capacityRecord.source, 'auto');
-  assert.equal(snapshot.instance.pool.capacityRecord.fresh, true);
+  assert.equal(Object.hasOwn(snapshot.instance.pool, 'capacityRecord'), false);
   assert.equal(Object.hasOwn(snapshot.instance.pool, 'occupancy'), false);
   assert.deepEqual(snapshot.rows.find(row => row.sessionGroup === 'b').wait, { kind: 'pool_wait', position: 1 });
   assert.deepEqual(snapshot.rows.find(row => row.sessionGroup === 'c').wait, { kind: 'pool_wait', position: 2 });
@@ -186,15 +185,13 @@ test('shrinking capacity reports occupancy above the limit without clamping', as
   assert.equal(pool.capacity, 3); assert.equal(pool.used, 4);
 });
 
-// Integration: real Core freshness/baseline selection with preserved publication fields.
-// Run for capacity adapter changes; skip UI-only work. Private files/DB only.
-test('stale records use Core effective limit while preserving publication source and explanation', async t => {
-  const record = freshRecord({ k: 6, computedAt: NOW - 90000, kMemory: 3 });
-  const f = fixture(t, { record });
+// Integration: Core freshness still selects the effective limit. Run for
+// capacity adapter changes; skip UI-only work. Private files/DB only.
+test('stale records use Core effective limit without exposing publication provenance', async t => {
+  const f = fixture(t, { record: freshRecord({ k: 6, computedAt: NOW - 90000, kMemory: 3 }) });
   const pool = await f.read();
-  assert.equal(pool.capacity, 3); assert.equal(pool.capacityRecord.valid, true); assert.equal(pool.capacityRecord.fresh, false);
-  assert.equal(pool.capacityRecord.source, 'auto'); assert.deepEqual(pool.capacityRecord.memory, record.memory);
-  assert.equal(pool.capacityRecord.kMemory, 3);
+  assert.equal(pool.capacity, 3);
+  assert.equal(Object.hasOwn(pool, 'capacityRecord'), false);
 });
 
 // Integration: real Core missing/invalid record fallback with private baseline.
@@ -203,43 +200,17 @@ for (const [label, record] of [['missing', null], ['invalid JSON', '{'], ['inval
   test('Core baseline supplies capacity for ' + label, async t => {
     const f = fixture(t, { record });
     const pool = await f.read();
-    assert.equal(pool.capacity, 3); assert.equal(pool.capacityRecord.valid, false); assert.equal(pool.capacityRecord.fresh, false);
+    assert.equal(pool.capacity, 3);
   });
 }
 
-// Integration: actual publication field mapping through the capacity adapter.
-// Run for source/explanation changes; skip unrelated UI work. Private files/DB.
-test('fresh fixed and fallback explanations are carried only from the publication', async t => {
+// Integration: Core owns effective fixed and fallback limits. Run for capacity
+// adapter changes; skip unrelated UI work. Private files/DB only.
+test('fresh fixed and fallback records supply Core effective capacity', async t => {
   const f = fixture(t, { record: freshRecord({ source: 'fixed', k: 6, kMemory: 3 }) });
-  const fixed = await f.read();
-  assert.equal(fixed.capacity, 6); assert.equal(fixed.capacityRecord.source, 'fixed'); assert.equal(fixed.capacityRecord.kMemory, 3);
+  assert.equal((await f.read()).capacity, 6);
   f.publish(freshRecord({ source: 'fallback', k: 1, reason: 'memory_unreadable', memory: null, model: null }));
-  const fallback = await f.read();
-  assert.equal(fallback.capacity, 1); assert.equal(fallback.capacityRecord.fresh, true); assert.equal(fallback.capacityRecord.source, 'fallback');
-  assert.equal(fallback.capacityRecord.memory, null);
-});
-
-test('capacity adapter preserves the published decision and bucket evidence without calculating limits', async t => {
-  const model = { state: 'fitted', slopeBytes: 268435456, interceptBytes: 6141803233, windowDays: 7,
-    buckets: [{ n: 1, highBytes: 8010114007, hours: 7, samples: 2511 }] };
-  const f = fixture(t, { record: freshRecord({ k: 29, limitedBy: 'model', model }) });
-  const pool = await f.read();
-  assert.equal(pool.capacity, 29);
-  assert.equal(pool.capacityRecord.limitedBy, 'model');
-  assert.deepEqual(pool.capacityRecord.model, model);
-  assert.equal(Object.hasOwn(pool.capacityRecord, 'nModel'), false);
-  assert.equal(Object.hasOwn(pool.capacityRecord, 'nLive'), false);
-  for (const limitedBy of ['model', 'live']) {
-    f.publish(freshRecord({ k: 1, reason: 'floor', limitedBy, model }));
-    const floor = await f.read();
-    assert.equal(floor.capacity, 1);
-    assert.equal(floor.capacityRecord.reason, 'floor');
-    assert.equal(floor.capacityRecord.limitedBy, limitedBy);
-  }
-  f.publish(freshRecord({ limitedBy: 'live', computedAt: NOW - 90000 }));
-  const stale = await f.read();
-  assert.equal(stale.capacityRecord.limitedBy, 'live');
-  assert.equal(stale.capacityRecord.fresh, false);
+  assert.equal((await f.read()).capacity, 1);
 });
 
 // Integration: repeated reads cross Core freshness without publication changes.
@@ -249,7 +220,7 @@ test('capacity is reevaluated for freshness without a Dashboard cache', async t 
   assert.equal((await f.read()).capacity, 6);
   f.advance(60001);
   const pool = await f.read();
-  assert.equal(pool.capacity, 3); assert.equal(pool.capacityRecord.fresh, false); assert.equal(f.calls(), 2);
+  assert.equal(pool.capacity, 3); assert.equal(f.calls(), 2);
 });
 
 // Integration: missing private table fails through real reader to snapshot and

@@ -5,18 +5,14 @@ export async function readPool({ mode, now = Date.now(), sample, c4Reader, loadC
   const pool = Object.fromEntries(['ready', 'starting', 'reclaiming', 'waiting'].map(key => [key, sample?.[key] ?? null]));
   if (mode !== 'multi') return { ...pool, capacity: null,
     used: pool.ready === null ? null : pool.ready + pool.starting, occupancy: null };
-  let cap = { k: null, record: null, valid: false, fresh: false };
+  let cap = { k: null };
   try { cap = (await loadCoreModule('session-pool-config.js')).readPoolCapacity({ now }); }
   catch { /* Core unavailable: leave the limit unknown rather than invent one. */ }
-  const record = cap.record;
-  const capacityRecord = { valid: cap.valid, fresh: cap.fresh,
-    ...Object.fromEntries(['source', 'reason', 'limitedBy', 'memory', 'model', 'kMemory']
-      .filter(key => record != null && Object.hasOwn(record, key)).map(key => [key, record[key]])) };
   let occupancy = null;
   try { occupancy = c4Reader.listSlotOccupancy(now); }
   catch { /* A missing table or unreadable connection is not an empty pool. */ }
   return { ...pool,
-    capacity: cap.k, used: occupancy?.length ?? null, capacityRecord, occupancy,
+    capacity: cap.k, used: occupancy?.length ?? null, occupancy,
     ...(occupancy === null ? { reason: 'pool_occupancy_unreadable' } : {}) };
 }
 

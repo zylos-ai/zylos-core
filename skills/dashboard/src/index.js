@@ -95,7 +95,6 @@ import { createInstanceTimezone, handleInstanceTimezone, handleInstanceTimezoneR
 import { handleAction, getActionsMeta, readCodexRootString } from './lib/actions.js';
 import { VersionChecker } from './lib/version-checker.js';
 import { isNewerVersion } from './lib/version-utils.js';
-import { applyVersionUpdateFields, codexRuntimeFields } from './lib/runtime-info.js';
 
 const { readConfigStrict } = await loadCoreModule('config-store.js');
 const startedAt = new Date();
@@ -280,60 +279,6 @@ function readClaudeSettings() {
 // and upgrade actions, never by the state broadcast path.
 const INSTALLED_VERSIONS_REFRESH_MS = 10 * 60 * 1000;
 setInterval(() => eventLoopMonitor.runTask('installed-versions.refresh', readInstalledVersions), INSTALLED_VERSIONS_REFRESH_MS).unref();
-
-function buildRuntimeInfo() {
-  const live = coreState.getState();
-  const usageObservation = coreState.getUsageObservation();
-  const usage = usageObservation.valid ? usageObservation.value : null;
-  const slInfo = live.runtime === 'claude' && usage ? { model: usage.model?.display_name, model_id: usage.model?.id, effort: usage.effort?.level, cc_version: usage.version } : null;
-  const latest = versionChecker.getLatest();
-  const ccRunning = slInfo?.cc_version || null;
-
-  const settings = isClaudeRuntime ? readClaudeSettings() : {};
-  const codexRuntimeInfo = live.runtime === 'codex' && usage ? { model_id: usage.model ?? null, effort: usage.reasoningEffort ?? null, cli_version: usage.cliVersion ?? null } : null;
-  const codexRunning = activeRuntime === 'codex' ? codexRuntimeInfo?.cli_version || null : null;
-  const claudeNeedsRestart = isClaudeRuntime &&
-    ((settings.model && slInfo?.model_id && settings.model !== slInfo.model_id) ||
-    (settings.effortLevel && slInfo?.effort && settings.effortLevel !== slInfo.effort) ||
-    (ccInstalledVersion && ccRunning && isNewerVersion(ccInstalledVersion, ccRunning)));
-  const codexNeedsRestart = activeRuntime === 'codex' &&
-    codexInstalledVersion &&
-    codexRunning &&
-    isNewerVersion(codexInstalledVersion, codexRunning);
-  const needsRestart = claudeNeedsRestart || codexNeedsRestart;
-
-  const info = {
-    zylos_version: zylosVersion,
-    runtime: live.runtime || 'unknown',
-    configured_runtime: activeRuntime,
-    ...(live.runtime === 'codex'
-      ? codexRuntimeFields(codexRuntimeInfo, {
-          model: readCodexRootString('model', config.zylosDir),
-          effort: readCodexRootString('model_reasoning_effort', config.zylosDir),
-        })
-      : { model: slInfo?.model || null, model_id: slInfo?.model_id || null, effort: slInfo?.effort || null, service_tier: null }),
-    cc_version: ccRunning,
-    cc_installed: ccInstalledVersion || null,
-    codex_version: codexRunning || codexInstalledVersion || null,
-    codex_running: codexRunning,
-    codex_installed: codexInstalledVersion || null,
-    pending_restart: !!needsRestart,
-  };
-  // info bar: installed newer than running → show restart hint
-  if (ccInstalledVersion && ccRunning && isNewerVersion(ccInstalledVersion, ccRunning)) {
-    info.cc_restart = ccInstalledVersion;
-  }
-  if (codexInstalledVersion && codexRunning && isNewerVersion(codexInstalledVersion, codexRunning)) {
-    info.codex_restart = codexInstalledVersion;
-  }
-  // upgrade button: installed != latest → show upgrade dot
-  const ccEffective = ccInstalledVersion || ccRunning;
-  return applyVersionUpdateFields(info, latest, {
-    zylosVersion,
-    ccEffectiveVersion: ccEffective,
-    codexInstalledVersion,
-  });
-}
 
 function getSystemMetrics() {
   const data = systemCollector.getLatestSystemData();

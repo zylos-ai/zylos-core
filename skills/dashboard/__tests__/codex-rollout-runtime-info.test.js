@@ -4,7 +4,6 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
-import { codexRuntimeFields } from '../src/lib/runtime-info.js';
 import { Store } from '../src/lib/store.js';
 import { UsageTranscripts } from '../src/lib/collectors/usage-transcripts.js';
 
@@ -129,33 +128,16 @@ test('same-size transcript replacement invalidates runtime metadata', async t =>
   assert.equal(h.collector.getRuntimeInfo().model_id, 'new');
 });
 
-test('collector evidence reaches runtime fields independently of configured values', async t => {
-  const h = harness(t);
-  const configured = { model: 'configured-model', effort: 'high' };
-  h.select('actual', [turn({ model: 'actual-model', effort: 'medium', service_tier: 'priority' })]);
-  await h.collector.collect();
-  assert.deepEqual(codexRuntimeFields(h.collector.getRuntimeInfo(), configured), {
-    model: 'actual-model', model_id: 'actual-model', effort: 'medium', service_tier: 'priority',
-    configured_model: 'configured-model', configured_effort: 'high'
-  });
-  h.select('no-evidence', []);
-  await h.collector.collect();
-  assert.deepEqual(codexRuntimeFields(h.collector.getRuntimeInfo(), configured), {
-    model: null, model_id: null, effort: null, service_tier: null,
-    configured_model: 'configured-model', configured_effort: 'high'
-  });
-});
-
 test('new mapping clears runtime facts before the next collection poll', async t => {
   const h = harness(t);
   h.select('first', [turn({ model: 'old', effort: 'high', service_tier: 'priority' })]);
   await h.collector.collect();
   assert.equal(h.collector.getRuntimeInfo().model_id, 'old');
   const nextPath = h.select('next', [turn({ model: 'next', effort: 'low' })]);
-  assert.deepEqual(codexRuntimeFields(h.collector.getRuntimeInfo()), {
-    model: null, model_id: null, effort: null, service_tier: null,
-    configured_model: null, configured_effort: null
-  });
+  const cleared = h.collector.getRuntimeInfo();
+  assert.equal(cleared.model_id, undefined);
+  assert.equal(cleared.reasoning_effort, null);
+  assert.equal(cleared.service_tier, null);
   await h.collector.collect();
   assert.equal(h.collector.getRuntimeInfo().model_id, 'next');
   h.map('next', `${nextPath}.different.jsonl`);

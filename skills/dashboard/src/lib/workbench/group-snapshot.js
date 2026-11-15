@@ -2,7 +2,7 @@ import { readThresholdPolicy, sessionThreshold } from '../session-threshold.js';
 import { loadCoreModule as defaultLoadCoreModule } from '../core-modules.js';
 import { Sanitizer } from '../sanitizer.js';
 import { createCoreCli } from './core-cli.js';
-import { mergeGroups, previewTaskIds, safeRaw } from './group-merge.js';
+import { mergeGroups, previewTaskIds, safePreview, safeRaw } from './group-merge.js';
 import { readTaskNames as defaultReadTaskNames } from './schedule-read.js';
 import { waitingReason } from './waiting-reason.js';
 import { classify, durationOf, sortRows, countRows } from './group-state.js';
@@ -20,6 +20,21 @@ const AUTO_RESTART_TYPES = ['no_response_restart', 'tool_timeout_restart'];
 // What the supervisor takes as the main agent responding: a tool call or words it wrote.
 const RESPONSE_TYPES = ['pre_tool_use', 'tool_call', 'assistant_message'];
 const AUTO_RESTART_WINDOW_MS = 3600_000;
+
+function singleQueue(groups) {
+  const queue = { pending: { count: 0, oldestAt: null, head: null }, running: { count: 0 },
+    fence: groups.find(group => group.sessionGroup === 'origin')?.fence ?? null };
+  for (const group of groups) {
+    const pending = group.pending;
+    queue.pending.count += pending.count;
+    queue.running.count += group.running.count;
+    if (pending.oldestAt !== null && (queue.pending.oldestAt === null || pending.oldestAt < queue.pending.oldestAt)) queue.pending.oldestAt = pending.oldestAt;
+    const head = pending.head;
+    if (head && (!queue.pending.head || head.priority < queue.pending.head.priority ||
+      (head.priority === queue.pending.head.priority && head.id < queue.pending.head.id))) queue.pending.head = head;
+  }
+  return queue;
+}
 
 
 function queryAllEvents(store, filter) {
@@ -150,7 +165,14 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       row.contextPct = usage?.valid ? usage.value.context_window?.used_percentage ??
         (usage.value.contextUsage?.ceiling > 0 ? usage.value.contextUsage.used / usage.value.contextUsage.ceiling * 100 : null) : null;
       if (observation && !usage?.valid) row.contextReason = 'usage_unreadable';
-      row.queue = q.ok ? q.data.groups.find(item => item.sessionGroup === row.sessionGroup) ??
+      // In single mode every channel feeds the one null-key Origin session.
+      const singleOrigin = status?.view === 'single' && row.sessionGroup === null;
+      if (singleOrigin && c4.ok) {
+        const latest = c4.data.groups.reduce((latest, item) => item.preview && (!latest ||
+          item.preview.timestamp > latest.preview.timestamp) ? item : latest, null);
+        row.preview = safePreview(latest, sanitizer, taskNames);
+      }
+      row.queue = q.ok ? (singleOrigin ? singleQueue(q.data.groups) : q.data.groups.find(item => item.sessionGroup === row.sessionGroup)) ??
         { pending: { count: 0, oldestAt: null, head: null }, running: { count: 0 }, fence: null } : { known: false, reason: q.reason };
       row.fence = row.queue.known === false ? null : row.queue.fence ?? q.data.globalFence;
       const selectedRuntime = ov.ok ? ov.data.runtime.find(item => item.sessionGroup === row.sessionGroup)?.runtime ?? ov.data.baseline.runtime : null;

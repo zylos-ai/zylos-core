@@ -148,10 +148,7 @@ function hasUpgrade(runtimeInfo) {
   return Boolean(
     runtimeInfo?.zylos_update ||
     runtimeInfo?.cc_update ||
-    runtimeInfo?.cc_restart ||
-    runtimeInfo?.codex_update ||
-    runtimeInfo?.codex_restart ||
-    runtimeInfo?.pending_restart
+    runtimeInfo?.codex_update
   );
 }
 

@@ -1594,3 +1594,16 @@ test('Fleet object projection never reads Origin session information or fetches 
   for (const key of ['model', 'effort', 'context_pct', 'new_session_threshold']) assert.equal(Object.hasOwn(record, key), false);
   assert.equal(record.activity, null);
 });
+
+// The object API exposes installed-version updates only. This pure projection
+// uses no services, sockets, timers or external requests.
+test('Fleet upgrade marker uses only installed-version update fields', () => {
+  for (const field of ['zylos_update', 'cc_update', 'codex_update']) {
+    assert.equal(stateToFleetRecord({}, { runtime_info: { [field]: '2.0.0' } }).has_upgrade, true, field);
+  }
+  const runtimeInfo = {};
+  for (const field of ['cc_restart', 'codex_restart', 'pending_restart']) {
+    Object.defineProperty(runtimeInfo, field, { get() { assert.fail(`retired restart observation read: ${field}`); } });
+  }
+  assert.equal(stateToFleetRecord({}, { runtime_info: runtimeInfo }).has_upgrade, false);
+});

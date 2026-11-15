@@ -62,7 +62,10 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
 
   const catalog = () => ['origin', 'telegram:working', 'telegram:child', ...Array.from({ length: 57 }, (_, i) => `telegram:offline-${i}`)]
     .map(sessionGroup => ({ sessionGroup, componentName: sessionGroup === 'origin' ? null : 'telegram', sessionGroupName: sessionGroup.split(':')[1],
-      lastActivityAt: clock - (sessionGroup.includes('offline') ? 9 * 86400000 : 1000), preview: { text: 'Fixture message', message: 'Fixture message', messageRaw: 'Fixture first message' } }));
+      lastActivityAt: clock - (sessionGroup.includes('offline') ? 9 * 86400000 : 1000), preview: {
+        timestamp: clock - (sessionGroup === 'telegram:working' ? 100 : 1000),
+        text: sessionGroup === 'telegram:working' ? 'Latest channel message' : 'Fixture message',
+        message: sessionGroup === 'telegram:working' ? 'Latest channel message' : 'Fixture message', messageRaw: 'Fixture first message' } }));
   const cli = { runC4Db: async args => {
     cliCalls.push(args);
     if (!catalogReadable && args[0] === 'groups') return { ok: false, reason: 'fixture_catalog_failed' };
@@ -229,7 +232,15 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     if (next === 'single') {
       const originRow = running.rows.find(row => row.id === 'origin');
       assert.equal(originRow.state.kind, 'working'); assert.equal(originRow.mainAgent, 'idle');
+      assert.equal(originRow.flags.queued.count, 3, 'single Origin owns pending input from every channel');
+      assert.equal(originRow.flags.queued.oldestAt, new Date(clock - 1000).toISOString());
+      assert.equal(counts.running.flags.queued, 1, 'queued counts rows, not messages');
+      assert.equal(originRow.currentAction.message, 'Latest channel message');
+      assert.equal(originRow.currentAction.receivedAt, new Date(clock - 100).toISOString());
       const detail = await request('/api/groups/origin?include=');
+      assert.deepEqual(detail.currentAction, originRow.currentAction, 'HTTP detail and list share compact action projection');
+      assert.equal(detail.queue.pending.count, originRow.flags.queued.count);
+      assert.equal(detail.preview.text, originRow.currentAction.message);
       assert.equal(detail.working.main, null, 'only child agents work while the main status remains idle');
       assert.equal(detail.working.subagents.count, 2, 'current hook origin and historical null records both contribute');
       assert.ok(detail.duration > 0);

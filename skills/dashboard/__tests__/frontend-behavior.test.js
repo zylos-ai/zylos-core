@@ -215,17 +215,6 @@ test('SSE state updates preserve the agent identity color between full state rea
   assert.match(app, /if \(!data\.agent && prevAgent\) state\.dashboardState\.agent = prevAgent;/);
 });
 
-test('runtime info upgrade badges use semver-aware comparison', () => {
-  const index = fs.readFileSync(new URL('../src/index.js', import.meta.url).pathname, 'utf8');
-  const runtimeInfo = fs.readFileSync(new URL('../src/lib/runtime-info.js', import.meta.url).pathname, 'utf8');
-  assert.match(runtimeInfo, /isNewerVersion\(latest\.cc, ccEffectiveVersion\)/);
-  assert.match(runtimeInfo, /isNewerVersion\(latest\.zylos, zylosVersion\)/);
-  assert.match(runtimeInfo, /isNewerVersion\(latest\.codex, codexInstalledVersion\)/);
-  assert.match(index, /applyVersionUpdateFields\(info, latest,/);
-  assert.doesNotMatch(index, /latest\.cc !== ccEffective/);
-  assert.doesNotMatch(index, /latest\.zylos !== zylosVersion/);
-});
-
 test('Codex runtime renders CLI update badge in settings', () => {
   const version = fs.readFileSync(new URL('../public/js/wb/settings-version.js', import.meta.url), 'utf8');
   assert.match(version, /ri\[runtime\]\?\.installed/);
@@ -245,16 +234,6 @@ test('zylos-core upgrade stays an agent hint in settings', () => {
   assert.match(version, /onHint\(hint\)/);
   assert.match(en['info.zylos_update_hint'], /ask your agent: "Please upgrade your zylos-core to the latest version\."/);
   assert.match(zh['info.zylos_update_hint'], /请升级你的 zylos-core 到最新版本/);
-});
-
-test('Codex runtime info exposes running, installed, effective, and restart fields', () => {
-  const index = fs.readFileSync(new URL('../src/index.js', import.meta.url).pathname, 'utf8');
-  assert.match(index, /const codexRunning = activeRuntime === 'codex' \? codexRuntimeInfo\?\.cli_version \|\| null : null;/);
-  assert.match(index, /codex_version: codexRunning \|\| codexInstalledVersion \|\| null,/);
-  assert.match(index, /codex_running: codexRunning,/);
-  assert.match(index, /codex_installed: codexInstalledVersion \|\| null,/);
-  assert.match(index, /info\.codex_restart = codexInstalledVersion;/);
-  assert.match(index, /pending_restart: !!needsRestart,/);
 });
 
 function fleetFixture() {
