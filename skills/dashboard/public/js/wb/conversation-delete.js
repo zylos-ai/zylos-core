@@ -1,4 +1,4 @@
-import { countLabel } from '../count-label.js';
+import { countLabel } from '../count-label.js?v=1';
 /** UI state only. The server resolves target ownership and Core owns the deletion. */
 export function deletionPath(item) {
   if (item?.id?.startsWith('d:')) return `/api/chat/drafts/${encodeURIComponent(item.id.slice(2))}`;

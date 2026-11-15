@@ -1,6 +1,6 @@
 import { zonedDay, zonedInputValue } from './wb/instance-zone.js?v=100';
 import cjkFriendly from './markdown-it-cjk-friendly/index.js?v=1';
-import { countLabel } from './count-label.js';
+import { countLabel } from './count-label.js?v=1';
 // Read-only history UI. The controller never owns the terminal or its lease.
 export function escapeHistory(value) {
   return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);

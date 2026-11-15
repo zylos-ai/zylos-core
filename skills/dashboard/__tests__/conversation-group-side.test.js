@@ -427,7 +427,7 @@ for (const locale of ['zh', 'en']) for (const level of ['plain', 'technical']) f
           assert.ok(tags[1].textContent.includes('Background helper 2'));
         }
       } else if (level === 'plain') {
-        assert.match(titles[0].textContent, zh ? /^额度已用完，.+恢复。1 条消息在等/ : /^Allowance exhausted; recovers at .+\. 1 messages are waiting/);
+        assert.match(titles[0].textContent, zh ? /^额度已用完，.+恢复。1 条消息在等/ : /^Allowance exhausted; recovers at .+\. 1 message is waiting/);
         assert.doesNotMatch(titles[0].textContent, /恢复时间未知|recovery time unknown/);
       } else {
         assert.equal(titles[0].textContent, zh ? '等待' : 'Waiting');

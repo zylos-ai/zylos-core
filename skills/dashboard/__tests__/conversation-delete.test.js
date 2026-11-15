@@ -1,14 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { createConversationDeletion, deletionPath } from '../public/js/wb/conversation-delete.js';
 
 const item = { id: 'g:ABC', sessionGroup: 'dashboard:example' };
 const boundary = { cutoffId: 4 };
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+const labels = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url), 'utf8'));
 function fixture(options = {}) {
   const calls = [], confirmations = [], removed = [];
   const controller = createConversationDeletion({
-    available: () => true, t: (key, args) => JSON.stringify({ key, ...args }),
+    available: () => true, t: (key, args) => /^chat\.delete\.(messages|attachments)(One)?$/.test(key)
+      ? labels[key].replace('{count}', String(args.count)) : JSON.stringify({ key, ...args }),
     request: async (path, options = {}) => { calls.push({ path, ...options }); return options.method
       ? { ok: true, counts: { messages: 4, attachments: 2 } }
       : { ...boundary, ok: true, operationId: 'operation-one', messages: 4, attachments: 2, draft: false }; },
@@ -23,7 +26,8 @@ test('conversation deletion previews counts and confirms before one operation-bo
   assert.equal(f.calls.length, 2);
   assert.equal(f.calls[0].path, '/api/workbench/groups/dashboard%3Aexample/deletion');
   assert.equal(f.confirmations.length, 1);
-  assert.deepEqual(JSON.parse(f.confirmations[0][0]), { key: 'chat.delete.confirm', messages: 4, attachments: 2 });
+  assert.deepEqual(JSON.parse(f.confirmations[0][0]), { key: 'chat.delete.confirm', messages: 4, attachments: 2,
+    messagesLabel: '4 messages', attachmentsLabel: '2 removable attachments' });
   assert.deepEqual(f.calls[1].body, { confirmed: true, operationId: 'operation-one', ...boundary });
   assert.deepEqual(f.removed, [item.id]);
 });

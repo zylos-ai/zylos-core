@@ -1,4 +1,4 @@
-import { countLabel } from '../count-label.js';
+import { countLabel } from '../count-label.js?v=1';
 import { element, icon } from './plain-text.js?v=106';
 import { chars, composeContent, storedContent, contentBytes, shortStamp, MAX_ANNOTATIONS, MAX_CHARS, MAX_CONTENT_BYTES } from './chat-compose-text.js?v=4';
 

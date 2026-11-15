@@ -14,6 +14,7 @@ const { createAnnotationUi } = await import('../public/js/wb/chat-annotations.js
 const { mountConversationPage } = await import('../public/js/wb/conversation-page.js');
 const pack = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
 const t = (key, params = {}) => Object.entries(params).reduce((value, [name, text]) => value.replaceAll(`{${name}}`, String(text)), pack[key] ?? key);
+const lookup = key => pack[key] ?? key;
 const flush = async () => { for (let i = 0; i < 12; i++) await tick(); };
 // In-memory injected DOM and request responses only: no HTTP, database, browser or running instance.
 for (const count of [1, 2]) {
@@ -27,14 +28,14 @@ for (const count of [1, 2]) {
     ui.destroy();
   });
   test(`subtask row renders ${count} step(s) in text and title`, () => {
-    const area = createLiveArea({ document: createDocument(), t });
+    const area = createLiveArea({ document: createDocument(), t: lookup });
     area.update({ under: 'in', subtasks: [{ id: 'a', start: 0, steps: count, label: { key: 'named', arg: 'Review' } }] }, { now: 1000 });
     const expected = ` · running 1 s · ${count} step${count === 1 ? '' : 's'}`;
     assert.ok(area.node.textContent.endsWith(expected));
     assert.ok(allNodes(area.node).find(node => node.tagName === 'BUTTON').title.endsWith(expected));
   });
 }
-for (const messages of [1, 2]) for (const attachments of [1, 2]) test(`deletion confirmation renders ${messages} message(s) and ${attachments} attachment(s) independently`, async () => {
+for (const messages of [1, 2]) for (const attachments of [0, 1, 2]) test(`deletion confirmation renders ${messages} message(s) and ${attachments} attachment(s) independently`, async () => {
   let rendered;
   const deletion = createConversationDeletion({ t, available: () => true,
     request: async () => ({ operationId: 'preview', cutoffId: 3, messages, attachments }),
@@ -43,14 +44,14 @@ for (const messages of [1, 2]) for (const attachments of [1, 2]) test(`deletion 
   assert.ok(rendered.includes(`It shows ${messages} message${messages === 1 ? '' : 's'} and ${attachments} removable attachment${attachments === 1 ? '' : 's'}.`));
 });
 
-async function pageFixture(context, { retained = 1 } = {}) {
+async function pageFixture(context, { retained = 1, translate = t } = {}) {
   const document = createDocument(), root = document.createElement('div');
   document.defaultView = { innerWidth: 1000, setTimeout, clearTimeout, setInterval, clearInterval, requestAnimationFrame: () => 1, cancelAnimationFrame() {}, addEventListener() {}, removeEventListener() {},
     FormData: class { append() {} }, XMLHttpRequest: class { upload = { addEventListener() {}, removeEventListener() {} }; addEventListener() {} removeEventListener() {} open() {} send() {} abort() {} },
     URL: { createObjectURL: () => 'blob:fixture', revokeObjectURL() {} } };
   let deleted = false, rows = [{ id: 1, direction: 'out', status: 'delivered', content: 'Hello' }];
   const item = { id: 'g:AA', sessionGroup: 'dashboard:a', display_name: 'Conversation' };
-  const page = mountConversationPage({ root, document, t, local: () => true, confirm: async () => true, fetch: async (path, options = {}) => {
+  const page = mountConversationPage({ root, document, t: translate, local: () => true, confirm: async () => true, fetch: async (path, options = {}) => {
     let data;
     if (options.method === 'DELETE') { deleted = true; data = { ok: true, retainedMessages: retained, groupDataRetained: true }; }
     else if (path.endsWith('/deletion')) data = { operationId: 'preview', cutoffId: 1, messages: 1, attachments: 1 };
@@ -70,7 +71,7 @@ async function pageFixture(context, { retained = 1 } = {}) {
 }
 for (const count of [1, 2]) {
   test(`upload tray renders ${count} pending attachment(s)`, async context => {
-    const f = await pageFixture(context);
+    const f = await pageFixture(context, { translate: lookup });
     const input = allNodes(f.root).find(node => node.tagName === 'INPUT' && node.type === 'file');
     input.files = Array.from({ length: count }, (_, n) => Object.assign(new Blob(['hi'], { type: 'text/plain' }), { name: `file${n}.txt` }));
     input.dispatch('change'); await flush();
@@ -82,7 +83,7 @@ for (const count of [1, 2]) {
     assert.ok(f.root.textContent.includes(`${count} message${count === 1 ? ' remains' : 's remain'}; conversation memory has been retained.`));
   });
   test(`unread button renders ${count} new message(s)`, async context => {
-    const f = await pageFixture(context);
+    const f = await pageFixture(context, { translate: lookup });
     const stream = f.find('conversation-stream'); stream.scrollHeight = 1000; stream.clientHeight = 100; stream.scrollTop = 0;
     f.setRows(Array.from({ length: count + 1 }, (_, n) => ({ id: n + 1, direction: 'out', status: 'delivered', content: `Message ${n}` })));
     const sub = f.page.streamSubscription();

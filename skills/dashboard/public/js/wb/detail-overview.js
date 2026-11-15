@@ -1,8 +1,8 @@
-import { countLabel } from '../count-label.js';
+import { countLabel } from '../count-label.js?v=1';
 import { listen } from './detail-update.js?v=158';
 import { element, icon, lastReceived, runtimeName } from './plain-text.js?v=106';
-import { annotateStatus, modelCell, pendingModel, shortDuration } from './board.js?v=155';
-import { toolLabel, waitText } from './view-mode.js?v=151';
+import { annotateStatus, modelCell, pendingModel, shortDuration } from './board.js?v=156';
+import { toolLabel, waitText } from './view-mode.js?v=152';
 import { displayTime, eventLabel, timeValue } from './event-labels.js?v=93';
 import { recentRows } from './timeline-rows.js?v=112';
 import { formatZoned, zonedDay } from './instance-zone.js?v=100';

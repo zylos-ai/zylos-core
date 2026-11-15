@@ -43,7 +43,7 @@ for (const count of [1, 2]) {
     const panel = renderDefaults(root, { document, t, snapshot, page: { runtimeTotal: count }, metadata: { claude: { runtime: 'claude', current_model: 'one', current_effort: 'high', models: [{ id: 'one' }], efforts_by_model: { one: ['high'] } } }, read: async () => ({}) });
     assert.ok(root.textContent.includes(`Switching interrupts ${count} running group${noun}`));
     assert.ok(root.textContent.includes(`${count} group${noun} ${count === 1 ? 'sets its' : 'set their'} own engine`));
-    assert.ok(root.textContent.includes(`Show ${count === 1 ? 'this' : 'these'} ${count} group${noun}`));
+    assert.ok(root.textContent.includes(count === 1 ? 'Show this group' : 'Show these 2 groups'));
     assert.ok(root.textContent.includes(`${count} running group${noun} ${count === 1 ? 'uses' : 'use'} these defaults`), root.textContent);
     assert.ok(runtimeConfirmation(snapshot, t).includes(`${count} running group${noun} that ${count === 1 ? 'follows' : 'follow'} the default`));
     panel.destroy();

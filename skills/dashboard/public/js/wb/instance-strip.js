@@ -1,4 +1,4 @@
-import { countLabel } from '../count-label.js';
+import { countLabel } from '../count-label.js?v=1';
 import { element, icon, runtimeName } from './plain-text.js?v=106';
 import { recoveryTime } from './cooldown.js?v=89';
 import { formatZoned, zonedDay } from './instance-zone.js?v=100';
