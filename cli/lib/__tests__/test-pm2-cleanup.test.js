@@ -118,7 +118,7 @@ test('daemon enumeration rejects unverifiable candidates and tolerates exited pr
       stop: () => assert.fail('unverified daemon was stopped'),
     }), /Cannot verify PM2 daemon 123: environment unreadable/);
   }
-  for (const environment of ['', 'PM2_HOME=relative\0']) {
+  for (const environment of ['', 'OTHER=value\0', 'PM2_HOME=relative\0']) {
     assert.throws(() => listPm2Daemons({ ...options, readFile: () => environment }), /Cannot verify PM2 daemon/);
   }
   for (const code of ['ENOENT', 'ESRCH']) {
@@ -165,14 +165,18 @@ test('daemon enumeration rechecks candidates when environment reads race with ex
   const live = '100 123 S PM2 v7.0.1: God Daemon (/tmp/cut';
   for (const changed of ['', '100 123 Z PM2 v7.0.1: God Daemon <defunct>',
     '100 123 S unrelated process', '101 123 S PM2 v7.0.1: God Daemon (/tmp/cut']) {
-    for (const code of ['EACCES', 'EPERM', 'EIO']) {
+    for (const value of ['EACCES', 'EPERM', 'EIO', '', 'OTHER=value\0']) {
       let snapshots = 0;
       let reads = 0;
       cleanupTestPm2('/tmp/test-root', {
         list: () => listPm2Daemons({
           platform: 'linux', uid: 100,
           exec: (_command, args) => psRow(++snapshots === 1 ? live : changed, args),
-          readFile: () => { reads++; throw Object.assign(new Error('process changed'), { code }); },
+          readFile: () => {
+            reads++;
+            if (value.startsWith('E')) throw Object.assign(new Error('process changed'), { code: value });
+            return value;
+          },
         }),
         stop: () => assert.fail('unverified process was stopped'),
       });
@@ -183,7 +187,7 @@ test('daemon enumeration rechecks candidates when environment reads race with ex
 });
 
 test('daemon enumeration retries transient reads and still cleans owned homes', () => {
-  for (const first of ['EACCES', 'EPERM', 'EIO', '', 'PM2_HOME=relative\0']) {
+  for (const first of ['EACCES', 'EPERM', 'EIO', '', 'OTHER=value\0', 'PM2_HOME=relative\0']) {
     let reads = 0;
     const home = '/tmp/test-root/pm2';
     const stopped = [];
@@ -227,7 +231,7 @@ test('daemon enumeration reports the original code for persistent unreadable liv
 
 test('daemon enumeration rechecks exit after the final read and excludes dead candidates', () => {
   const live = '100 123 S PM2 v7.0.1: God Daemon (/tmp/cut';
-  for (const value of ['EACCES', '', 'PM2_HOME=relative\0']) {
+  for (const value of ['EACCES', '', 'OTHER=value\0', 'PM2_HOME=relative\0']) {
     let snapshots = 0;
     let reads = 0;
     assert.deepEqual(listPm2Daemons({
