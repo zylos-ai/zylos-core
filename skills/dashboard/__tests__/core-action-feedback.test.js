@@ -261,14 +261,20 @@ test('every Core action return path has a bilingual message key', async t => {
   assert.deepEqual(spawns, Array.from({ length: 2 }, () => ({ file: 'pm2', args: ['restart', 'zylos-dashboard'] })));
 });
 
-test('English and Chinese translation keys are complete and identical', () => {
+test('English and Chinese translation keys match with optional English singular forms', () => {
   const en = dictionary('en'), zh = dictionary('zh');
-  const keys = Object.keys(en);
-  assert.equal(keys.length, Object.keys(zh).length);
-  for (const key of keys) {
-    assert.ok(Object.hasOwn(zh, key), `Chinese missing ${key}`);
-    assert.equal(typeof en[key], 'string');
+  for (const key of Object.keys(zh)) {
+    assert.ok(Object.hasOwn(en, key), `English missing ${key}`);
     assert.equal(typeof zh[key], 'string');
-    assert.ok(en[key].length > 0 && zh[key].length > 0, `empty locale entry ${key}`);
+    assert.ok(zh[key].length > 0, `empty locale entry ${key}`);
+  }
+  for (const key of Object.keys(en)) {
+    if (key.endsWith('One')) {
+      assert.ok(Object.hasOwn(en, key.slice(0, -3)), `Singular translation has no base: ${key}`);
+    } else {
+      assert.ok(Object.hasOwn(zh, key), `Chinese missing ${key}`);
+    }
+    assert.equal(typeof en[key], 'string');
+    assert.ok(en[key].length > 0, `empty locale entry ${key}`);
   }
 });
