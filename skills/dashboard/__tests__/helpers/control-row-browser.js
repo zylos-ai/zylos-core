@@ -22,7 +22,7 @@ export function measureControlRows() {
     if (el.matches('.wb-seg-engine') || (!mobile && el.matches('#settings-save-runtime,#settings-undo-runtime'))) return { heightException: 'natural two-line engine row' };
     if (el.matches('.conversation-running')) return { expectedHeight: mobile ? 22 : 30, heightException: mobile ? 'activity visible 22px / transparent hit target 44px' : undefined };
     if (el.closest('.conversation-compose-box')) return { heightException: 'composer retains its dedicated input/attachment/send dimensions' };
-    if (el.closest('.q-card,.question-card,.chat-question')) return { heightException: 'question family has dedicated fields, chips and multiline options; question browser gate covers it' };
+    if (el.closest('.chat-question')) return { heightException: 'question family has dedicated fields, chips and multiline options; question browser gate covers it' };
     if (el.matches('textarea')) return { heightException: 'multiline field grows with content' };
     if (mobile && el.matches('.wb-mobile-icon-button,.header-icon-btn,.wb-set-nav-btn,.wb-set-drawer-btn,.conversation-back,.conversation-menu-toggle,.wb-group-side-back')) return { expectedHeight: 44 };
     if (el.matches('.wb-sched-field .wb-input')) return { expectedHeight: 36 };
@@ -31,10 +31,13 @@ export function measureControlRows() {
     if (el.matches('.conversation-rename :is(input,button),.wb-timezone-controls :is(select,button),.wb-timezone-pending button')) return { expectedHeight: mobile ? 36 : 30 };
     if (el.matches('.wb-d-title-wrap > .wb-icon-btn-sm,.wb-set-body :is(.wb-btn,.wb-input,.wb-select),.wb-memory-search')) return { expectedHeight: mobile ? 36 : 30 };
     if (el.matches('.wb-btn-sm,.wb-icon-btn-sm,.wb-chip,.wb-seg-sm,#wb-auto-name') || el.matches('.wb-search:not(.wb-sched-filters .wb-search)')) return { expectedHeight: mobile ? 36 : 26 };
+    if (el.matches('.wb-row,.wb-sched-dot,.wb-sched-select,.wb-sched-target,.conversation-list-item,.conversation-delete,.memory-file,.wb-memory-group-h,.wb-memory-section-h,.wb-attention-item')) return { heightException: 'named content selection target retains its content or graphic geometry' };
     if (el.matches('.wb-btn,.wb-icon-btn,.wb-input,.wb-select,.wb-date,.wb-seg,.wb-seg2,.conversation-tabs,.conversation-reload,.header-icon-btn,.wb-tech-btn,.wb-sched-filters .wb-search,.memory-refresh')) return { expectedHeight: mobile ? 36 : 30 };
-    if (el.matches('.wb-sched-dot,.wb-sched-select,.wb-sched-target,.conversation-list-item,.conversation-delete,.memory-file,.wb-memory-group-h,.wb-memory-section-h,.wb-attention-item')) return { heightException: 'named content selection target retains its content or graphic geometry' };
     if (el.matches('.wb-switch-btn,input[type=range]')) return { heightException: 'switch or range retains its dedicated graphic and touch frame' };
     if (el.matches('.wb-mobile-tab,.wb-mobile-sheet-item,.wb-mobile-scrim,.wb-set-scrim,.conversation-menu-item,.conversation-menu-scrim,.wb-rt-tab,.wb-set-nav-btn,.wb-detail-tabs button,.app-header .tab')) return { heightException: 'dedicated navigation row or backdrop retains its own dimensions' };
+    if (el.matches('.conversation-quote-button')) return { expectedHeight: 22, heightException: 'inline message quotation action retains its dedicated metadata height' };
+    if (el.matches('.wb-run-h')) return mobile ? { expectedHeight: 36 } : { heightException: 'run-history disclosure uses its text height plus vertical padding' };
+    if (el.matches('.wb-inst-more')) return mobile ? { expectedHeight: 36 } : { heightException: 'inline host disclosure uses content height plus padding' };
     if (el.matches('summary,.wb-link-btn,a[href]')) return mobile && el.matches('summary,.wb-link-btn') ? { expectedHeight: 36 } : { heightException: 'inline disclosure or text link follows its content' };
     return {};
 
@@ -42,7 +45,11 @@ export function measureControlRows() {
   const all = controls.map((el, index) => { const b = el.getBoundingClientRect(); let owner = el.parentElement; while (owner.parentElement && owner !== root && !/flex|grid/.test(getComputedStyle(owner).display)) owner = owner.parentElement;
     owner = el.closest('#wb-board-head,.wb-usage-controls,.wb-sched-filters,.conversation-list-toolbar,.wb-timezone-controls,.wb-config-fields,.wb-pref-controls,.wb-d-top,.conversation-header,.wb-cfg-controls,.wb-cfg-more,.wb-name-editor,.wb-sched-pair') || owner;
     const contentTarget = el.matches('.wb-sched-dot,.wb-sched-select,.wb-sched-target,.conversation-list-item,.conversation-delete');
-    return { ...contract(el), control: identify(el), owner: identify(owner) + (contentTarget ? ` / content target ${index}` : ''), height: b.height, center: b.y + b.height / 2,
+    const searchInput = el.matches('.wb-search') && el.querySelector('input');
+    const inputBounds = searchInput && searchInput.getBoundingClientRect();
+    const innerTop = b.top + parseFloat(getComputedStyle(el).borderTopWidth);
+    const innerBottom = b.bottom - parseFloat(getComputedStyle(el).borderBottomWidth);
+    return { ...(inputBounds ? { searchInputInside: inputBounds.top >= innerTop - 0.1 && inputBounds.bottom <= innerBottom + 0.1 } : {}), ...contract(el), control: identify(el), owner: identify(owner) + (contentTarget ? ` / content target ${index}` : ''), height: b.height, center: b.y + b.height / 2,
       ...(() => {
         if (innerWidth > 760 || !el.matches('.conversation-running:is([data-state=busy], [data-state=idle])')) return {};
         const pseudo = getComputedStyle(el, '::after');
@@ -105,8 +112,9 @@ export async function runControlRows(t, sandbox) {
         const rows = await page.evaluate(measureControlRows);
         for (const row of rows) {
           if (survey) for (const control of row.controls) {
+            if (control.searchInputInside !== undefined) assert.equal(control.searchInputInside, true, `${name}: search input stays inside its bordered outer frame for ${control.control}`);
             if (control.expectedHeight !== undefined) assert.equal(control.height, control.expectedHeight, `${name}: approved size tier for ${control.control}`);
-            else assert.ok(control.heightException, `${name}: control has an explicit height exception`);
+            else assert.ok(control.heightException, `${name}: control has an explicit height exception: ${control.control}`);
           }
           for (const control of row.controls.filter(c => c.hitHeight !== undefined)) {
             assert.equal(control.height, 22, `${name}: activity visible frame remains 22px`);

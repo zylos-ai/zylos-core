@@ -230,6 +230,8 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 | Scheduled tasks | Segmented outer track, dropdowns, search, or other controls in the filter row |
 | Conversations | Top switch outer track and same-row actions |
 
+[Approved] Also assert the approved size tier independently of the CSS tokens: desktop compact 26 px, regular 30 px, large fields 36 px; ordinary mobile controls 36 px and mobile navigation 44 px. Check search inputs remain inside their outer frame. Include configuration and rename states, and record the natural engine row, activity visible/hit geometry, question family, composer, multiline, and content/navigation exceptions explicitly. Equal peer heights alone do not establish the correct tier.
+
 [Approved] The same assertions must fail against the old CSS. Review mutation tests provide the negative control; do not rewrite product source at runtime to introduce errors. Tests call actual product entry points rather than re-evaluating source code.
 
 [Approved] When changing mobile or responsive layouts, run the affected gated browser tests (`ZYLOS_CHAT_INTEGRATION=1`), covering at least 390 px. If they cannot run, state the specific reason and remaining checks; static checks cannot substitute for a passing result.
