@@ -43,18 +43,14 @@ export function updateNextRunTime(db, task) {
 }
 
 /**
- * Handle completed tasks - update recurring ones, finalize one-time
+ * Reschedule completed periodic tasks without loading completed one-time history.
  */
 export function processCompletedTasks(db) {
   const completedTasks = db.prepare(`
-    SELECT * FROM tasks WHERE status = 'completed'
+    SELECT * FROM tasks WHERE status = 'completed' AND type != 'one-time'
   `).all();
 
   for (const task of completedTasks) {
-    if (task.type === 'one-time') {
-      continue;
-    }
-
     try {
       updateNextRunTime(db, task);
     } catch (error) {
