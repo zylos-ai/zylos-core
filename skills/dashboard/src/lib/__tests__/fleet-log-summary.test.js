@@ -112,3 +112,27 @@ test('remove and stop flush pending repeats and release all summary state and ti
   f.poller.stop();
   assert.equal(f.logs.length, afterStop);
 });
+
+test('consecutive connection log windows summarize only their own repeated events', async () => {
+  const f = fixture();
+  const [agent] = f.agents;
+  try {
+    for (let i = 0; i < 3; i++) await failSse(f.poller, agent, 'timeout');
+    f.poller._stopFallbackPolling(agent, 'sse-takeover');
+    f.poller._startFallbackPolling(agent, 'sse-failure');
+    f.poller._stopFallbackPolling(agent, 'sse-takeover');
+    f.flushWindow();
+    const first = f.logs.filter(log => log.line.includes('repeated connection events'));
+    assert.equal(first.length, 1);
+    assert.match(first[0].line, /window_ms=60000 sse_failure_repeats=2 fallback_started=1 fallback_stopped=2$/);
+
+    for (let i = 0; i < 2; i++) await failSse(f.poller, agent, 'timeout');
+    f.poller._stopFallbackPolling(agent, 'sse-takeover');
+    f.flushWindow();
+    const summaries = f.logs.filter(log => log.line.includes('repeated connection events'));
+    assert.equal(summaries.length, 2);
+    assert.match(summaries[1].line, /window_ms=60000 sse_failure_repeats=1 fallback_started=0 fallback_stopped=1$/);
+  } finally { f.poller.stop(); }
+  assert.equal(f.timers.size, 0);
+  assert.equal(f.poller.connectionLogs.size, 0);
+});

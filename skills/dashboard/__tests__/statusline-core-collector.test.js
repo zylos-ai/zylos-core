@@ -288,3 +288,26 @@ test('unchanged healthy and stale samples do not rewrite source health, transiti
   await f.collector.collect();
   assert.equal(f.health.length, firstWrites + 4, 'a new sample advances liveness and progress evidence');
 });
+
+test('a changed stale reason rewrites source health without a status transition', async () => {
+  let reason = 'identity_missing';
+  const health = [];
+  const collector = new StatuslineCollector({
+    insertMetric: () => assert.fail('invalid usage must not write metrics'),
+    upsertSourceHealth: (...args) => health.push(args),
+  }, {}, { read: async () => ({ usage: { valid: false, reason } }) });
+  try {
+    await collector.collect();
+    await collector.collect();
+    assert.equal(health.length, 1, 'unchanged stale evidence is deduplicated');
+    assert.equal(health[0][2], 'stale');
+    assert.equal(health[0][3].reason, 'identity_missing');
+    reason = 'stale';
+    await collector.collect();
+    assert.equal(health.length, 2, 'a new reason must be persisted even when status stays stale');
+    assert.equal(health[1][2], 'stale');
+    assert.equal(health[1][3].reason, 'stale');
+    await collector.collect();
+    assert.equal(health.length, 2, 'the new reason is also deduplicated after it is written');
+  } finally { await collector.stop(); }
+});
