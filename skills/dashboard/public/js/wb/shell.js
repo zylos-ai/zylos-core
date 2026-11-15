@@ -1,12 +1,12 @@
 import { withRequestTimeout } from '../request-timeout.js?v=2';
-import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js?v=151';
-import { boardController, renderBoard, renderDistribution } from './board.js?v=155';
+import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js?v=152';
+import { boardController, renderBoard, renderDistribution } from './board.js?v=156';
 import { createBoardSearch } from './board-search.js?v=87';
-import { instanceStrip, accountRuntimes } from './instance-strip.js?v=201';
-import { renderAttention } from './attention-bar.js?v=193';
-import { createGroupDetail } from './detail.js?v=174';
+import { instanceStrip, accountRuntimes } from './instance-strip.js?v=202';
+import { renderAttention } from './attention-bar.js?v=194';
+import { createGroupDetail } from './detail.js?v=175';
 import { loadNamePrompt, renderAutoName } from './auto-name.js?v=106';
-import { createHostPanel } from './host-panel.js?v=201';
+import { createHostPanel } from './host-panel.js?v=202';
 import { element, icon } from './plain-text.js?v=106';
 import { watchRows } from './label-fit.js?v=2';
 

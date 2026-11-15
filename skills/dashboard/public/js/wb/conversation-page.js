@@ -1,24 +1,24 @@
-import { countLabel } from '../count-label.js';
+import { countLabel } from '../count-label.js?v=1';
 import { workingParts, workingText } from './working-display.js?v=5';
 import { createUploadTray } from './chat-upload-tray.js?v=2';
 import { createChatAttachment } from './chat-attachments.js?v=155';
 import { element, icon } from './plain-text.js?v=106';
 import { asDate } from './conversation-time.js?v=99';
 import { formatZoned } from './instance-zone.js?v=100';
-import { channelIcon, channelIcons } from './board.js?v=155';
+import { channelIcon, channelIcons } from './board.js?v=156';
 import { createConversationState, isOriginConversation } from './conversation-state.js?v=167';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=158';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=164';
-import { createGroupSide } from './group-side.js?v=175';
-import { createLiveArea, livePresentation } from './conversation-activity.js?v=159';
+import { createGroupSide } from './group-side.js?v=176';
+import { createLiveArea, livePresentation } from './conversation-activity.js?v=160';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
-import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=5';
+import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=6';
 import { createRowSwipe } from './conversation-swipe.js?v=1';
 import { renderInternalMessage } from './conversation-internal.js?v=4';
 import { composeContent, contentBytes, displayRow, previewLine, readableText, shortStamp, storedContent, MAX_CONTENT_BYTES } from './chat-compose-text.js?v=4';
 import { createQuoteGesture } from './chat-quote-gesture.js?v=1';
-import { createAnnotationUi, quoteAuthor } from './chat-annotations.js?v=4';
+import { createAnnotationUi, quoteAuthor } from './chat-annotations.js?v=5';
 const laterThan = (left, right) => {
   const a = String(left),
     b = String(right);
@@ -722,7 +722,7 @@ export function mountConversationPage({
   }
   function updateUnread() {
     latest.hidden = !unread;
-    const title = countLabel(t, 'chat.page.newMessages', unread);
+    const title = countLabel(t, 'chat.page.newMessages', unread, {}).replace('{count}', String(unread));
     text(latest.label, title);
     latest.setAttribute('aria-label', title);
   }
@@ -1682,7 +1682,7 @@ export function mountConversationPage({
       resource.mount();
     }
     tray.hidden = trayLabel.hidden = !upload.items.length;
-    text(trayLabel, countLabel(t, 'chat.upload.trayCount', upload.items.length));
+    text(trayLabel, countLabel(t, 'chat.upload.trayCount', upload.items.length, {}).replace('{count}', String(upload.items.length)));
     const uploadError = upload.error || (s.error === 'chat_attachment_unavailable' ? s.error : null);
     uploadNotice.hidden = !uploadError;
     text(uploadNotice, uploadError ? t('chat.upload.' + uploadError).replace('{count}', String(upload.config?.maxAttachments || 20)) : '');

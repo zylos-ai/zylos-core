@@ -1205,7 +1205,7 @@
   "wb.settings.modelFollowersOne": "{count} running group uses these defaults",
   "wb.settings.interruptFollowersOne": "Switching interrupts {count} running group that follows the default:",
   "wb.settings.priceUsersOne": "{count} running group uses these prices",
-  "wb.settings.showGroupsOne": "Show this {count} group",
+  "wb.settings.showGroupsOne": "Show this group",
   "wb.memory.pendingSummariesOne": "{count} unread summary",
   "wb.memory.countThresholdOne": "{count} message, sync threshold {threshold}",
   "wb.memory.summarySyncingOne": "{count} group being saved",

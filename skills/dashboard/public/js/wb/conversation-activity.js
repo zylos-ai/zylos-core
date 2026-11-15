@@ -1,4 +1,4 @@
-import { countLabel } from '../count-label.js';
+import { countLabel } from '../count-label.js?v=1';
 import { element, icon } from './plain-text.js?v=106';
 import { formatZoned } from './instance-zone.js?v=100';
 
@@ -179,9 +179,9 @@ export function createLiveArea({ document, t = key => key, locale, onToggle, onD
       item.button.setAttribute('aria-expanded', String(expanded));
       const name = subtaskName(subtask.label, t);
       if (item.name.textContent !== name) item.name.textContent = name;
-      const rest = countLabel(t, 'chat.activity.subtask.progress', subtask.steps ?? 0, {
-        duration: formatDuration(now - subtask.start, t), count: subtask.steps ?? 0,
-      });
+      const rest = countLabel(t, 'chat.activity.subtask.progress', subtask.steps ?? 0, {})
+        .replace('{duration}', formatDuration(now - subtask.start, t))
+        .replace('{count}', String(subtask.steps ?? 0));
       if (item.rest.textContent !== rest) item.rest.textContent = rest;
       item.button.title = `${t('chat.activity.subtask.prefix')}${name}${rest}`;
       const detail = expanded ? details?.get(subtask.id) : null;

@@ -1,7 +1,7 @@
-import { countLabel } from '../count-label.js';
+import { countLabel } from '../count-label.js?v=1';
 import { effortOptionState, modelOptionState } from '../runtime-ui.js?v=98';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=106';
-import { annotateStatus } from './board.js?v=155';
+import { annotateStatus } from './board.js?v=156';
 import { settingsCard } from './settings.js?v=116';
 
 const running = row => ['running', 'starting'].includes(row.presence);

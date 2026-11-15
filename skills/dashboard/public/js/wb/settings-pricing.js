@@ -1,6 +1,6 @@
-import { countLabel } from '../count-label.js';
+import { countLabel } from '../count-label.js?v=1';
 import { element, icon, runtimeName } from './plain-text.js?v=106';
-import { money } from './instance-strip.js?v=201';
+import { money } from './instance-strip.js?v=202';
 import { priceWithEditedBaseRates } from '../pricing-form.js';
 
 const fields = ['input', 'output', 'cacheRead', 'cacheCreation'];
