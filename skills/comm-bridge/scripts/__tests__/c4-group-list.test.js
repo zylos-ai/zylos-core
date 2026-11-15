@@ -23,6 +23,22 @@ function fixture(t) {
 }
 const cutoff = Date.parse('2026-01-24T00:00:00Z');
 
+test('group heads and previews tolerate numeric and malformed timestamps', t => {
+  const { seed, store } = fixture(t);
+  seed('lark:numeric', 9999999999);
+  seed('lark:invalid', Buffer.from('invalid timestamp'));
+  seed('lark:invalid-text', 'invalid timestamp');
+  const rows = Object.fromEntries(store.queries.listGroups().map(row => [row.sessionGroup, row]));
+  assert.equal(rows['lark:numeric'].lastActivityAt, 9999999999000);
+  assert.equal(rows['lark:numeric'].preview.timestamp, 9999999999000);
+  for (const group of ['lark:invalid', 'lark:invalid-text']) {
+    assert.equal(rows[group].lastActivityAt, null);
+    assert.equal(rows[group].preview.timestamp, null);
+  }
+  assert.equal(rows.origin.lastActivityAt, Date.parse('2026-01-30T02:00:00Z'));
+  assert.equal(store.queries.listGroups({ keyMatch: 'lark:numeric' })[0].lastActivityAt, 9999999999000);
+});
+
 test('activity cutoff returns recent groups, boundary and exact remaining flag', t => {
   const { db, store } = fixture(t);
   const result = store.queries.listGroups({ activeSince: cutoff });
@@ -37,6 +53,25 @@ test('activity cutoff returns recent groups, boundary and exact remaining flag',
   db.exec('DELETE FROM group_heads');
   assert.deepEqual(store.queries.listGroups({ activeSince: cutoff }), { groups: [], hasOlder: false });
 });
+
+for (const invalid of ['invalid timestamp', Buffer.from('invalid timestamp')]) {
+  test(`activity cutoff skips a ${typeof invalid === 'string' ? 'text' : 'blob'} timestamp between recent groups`, t => {
+    const { db, seed, store } = fixture(t);
+    db.exec('DELETE FROM group_heads');
+    seed('lark:recent-a', '2026-01-30 00:00:00');
+    seed('lark:invalid', invalid);
+    seed('lark:recent-b', '2026-01-30 01:00:00');
+    seed('origin', '2026-01-30 02:00:00');
+    const result = store.queries.listGroups({ activeSince: cutoff, limit: 3 });
+    assert.deepEqual(result.groups.map(row => row.sessionGroup), ['origin', 'lark:recent-b', 'lark:recent-a']);
+    assert.equal(result.hasOlder, false, 'unknown times alone do not indicate older groups');
+    const limited = store.queries.listGroups({ activeSince: cutoff, limit: 2 });
+    assert.deepEqual(limited.groups.map(row => row.sessionGroup), ['origin', 'lark:recent-b']);
+    assert.equal(limited.hasOlder, true, 'a valid omitted group still indicates more results');
+    db.exec("DELETE FROM group_heads WHERE session_group<>'lark:invalid'");
+    assert.deepEqual(store.queries.listGroups({ activeSince: cutoff }), { groups: [], hasOlder: false });
+  });
+}
 
 test('key search is case insensitive and ordered by latest head without matching preview text', t => {
   const { store } = fixture(t);

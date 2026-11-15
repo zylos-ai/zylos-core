@@ -487,14 +487,17 @@ test(`${category} receipt keeps its history when the saved timezone cannot be re
 
 test('real recent/range reads find full execution after a non-maximum-id lower bound',t=>{
  const {db,task,read}=fixture(t);
- const messages=c4.getDb();
+ const messages=new Database(':memory:');
+ guardDatabase(messages,c4Schema);t.after(()=>messages.close());
+ const recent=limit=>c4.getRecentConversations(limit,messages);
+ const range=(begin,end)=>c4.getConversationsByRange(begin,end,messages);
  // U readback needs a persisted row with a deliberately lost receipt; inject only that uncertainty.
  const put=messages.prepare("INSERT INTO conversations(direction,channel,content,timestamp,status,session_group) VALUES('in','system',?,?,?,?)");
- const old=Number(put.run(executionMarker(task.id,999)+'\nold',9999999999,'failed','origin').lastInsertRowid);
- const later=Number(put.run('different prior message',1,'pending','origin').lastInsertRowid);
- assert.ok(later>old);assert.equal(c4.getRecentConversations(1)[0].id,old);
- const result=dispatchTask(db,task,{sendViaC4(message){
-   put.run(message+'\n'+('long'.repeat(3000)),2,'failed','origin');
+ const old=Number(put.run(executionMarker(task.id,999)+'\nold','2099-01-01 00:00:00','failed','origin').lastInsertRowid);
+ const later=Number(put.run('different prior message','2000-01-01 00:00:00','pending','origin').lastInsertRowid);
+ assert.ok(later>old);assert.equal(recent(1)[0].id,old);
+ const result=dispatchTask(db,task,{getRecentConversations:recent,getConversationsByRange:range,sendViaC4(message){
+   put.run(message+'\n'+('long'.repeat(3000)),'2000-01-01 00:00:01','failed','origin');
    return {category:'U'};
  }});
  assert.equal(result.category,'success');assert.equal(read().task.status,'completed');
