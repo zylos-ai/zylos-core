@@ -6,6 +6,7 @@ import path from 'node:path';
 import { Store } from '../skills/dashboard/src/lib/store.js';
 import { UsageTranscripts } from '../skills/dashboard/src/lib/collectors/usage-transcripts.js';
 import { ConversationCollector } from '../skills/dashboard/src/lib/collectors/conversation-collector.js';
+import { claudeProjectSlug } from '../skills/dashboard/src/lib/claude-project-path.js';
 
 const home = fs.realpathSync(process.env.HOME);
 assert.notEqual(home, fs.realpathSync(os.userInfo().homedir));
@@ -155,4 +156,76 @@ test('fresh legacy liveness, recent files, unread bytes and unknown snapshots pr
     await f.inventory.collect('claude', row => row.byte_offset);
     assert.equal(f.store.getUsageTranscript(file).status, 'active', mode);
   }
+});
+
+// Error flush with another runtime still outstanding: run for shared-round
+// error/commit changes; skip UI work. Isolated files/DB only, no background work.
+test('a runtime failure commits its completed progress before the other runtime polls', async t => {
+  const f = fixture(t);
+  const completed = f.add('a', { age: 31 * MINUTE });
+  const failed = f.add('b');
+  const codex = f.add('codex', { runtime: 'codex' });
+  f.statusline(31 * MINUTE);
+  await assert.rejects(f.inventory.collect('claude', row => {
+    if (row.transcript_path === failed) throw new Error('read failed');
+    return 5;
+  }), /read failed/);
+  const row = f.store.getUsageTranscript(completed);
+  assert.equal(row.byte_offset, 5);
+  assert.equal(row.status, 'finished');
+  assert.equal(f.store.getUsageTranscript(failed).byte_offset, 0);
+  assert.equal(f.store.getUsageTranscript(codex).byte_offset, 0);
+});
+
+// Real collector output distinguishes fresh/stale legacy attribution even with
+// new content. Run for Origin liveness changes; skip UI. Private files/DB only.
+test('fresh content in a stale legacy transcript is not emitted as an Origin message', async t => {
+  for (const age of [MINUTE, 31 * MINUTE]) {
+    const f = fixture(t);
+    const file = f.add('main');
+    fs.writeFileSync(file, JSON.stringify({ type: 'assistant', uuid: 'legacy-message',
+      timestamp: new Date(f.at()).toISOString(), sessionId: 'legacy',
+      message: { content: [{ type: 'text', text: 'New assistant content' }] } }) + '\n');
+    f.statusline(age);
+    const collector = new ConversationCollector(f.store, { homeDir: f.root, zylosDir: f.root },
+      { transcripts: f.inventory });
+    let emitted = 0;
+    collector._onEvent = () => { emitted++; };
+    await collector.collect();
+    assert.equal(f.store.getUsageTranscript(file).byte_offset, fs.statSync(file).size);
+    const expected = age === MINUTE ? 1 : 0;
+    assert.equal(emitted, expected);
+    assert.equal(f.store.queryEvents({ eventType: 'assistant_message' }).length, expected);
+  }
+});
+
+// Discovery must reject a stale pointer to a real, unregistered file. Run for
+// legacy discovery changes; skip UI. No services/sockets/children are used.
+test('only a fresh legacy statusline discovers an unregistered transcript', t => {
+  const f = fixture(t);
+  const file = path.join(f.root, '.claude', 'projects', claudeProjectSlug(f.root), 'legacy.jsonl');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, 'line\n');
+  f.statusline(31 * MINUTE);
+  f.inventory.discover();
+  assert.equal(f.store.getUsageTranscript(file), null);
+  f.statusline(MINUTE);
+  f.inventory.discover();
+  assert.equal(f.store.getUsageTranscript(file).status, 'active');
+});
+
+// Competing persisted cursor versus delayed mixed-runtime flush. Run for cursor
+// guards/batching changes; skip UI. Temporary Store/files; cleanup via t.after.
+test('a delayed round preserves a cursor changed by another writer', async t => {
+  const f = fixture(t);
+  const claude = f.add('claude');
+  f.add('codex', { runtime: 'codex' });
+  await f.inventory.collect('claude', () => 5);
+  assert.equal(f.store.getUsageTranscript(claude).byte_offset, 0);
+  f.store.updateUsageTranscript(claude, { byte_offset: 3, status: 'active',
+    now: new Date(f.at()).toISOString() });
+  await f.inventory.collect('codex', () => 5);
+  const current = f.store.getUsageTranscript(claude);
+  assert.equal(current.status, 'active');
+  assert.equal(current.byte_offset, 3);
 });

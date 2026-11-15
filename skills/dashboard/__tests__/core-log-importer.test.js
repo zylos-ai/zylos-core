@@ -70,6 +70,48 @@ test('unchanged active polls do not open files, but append and same-size rewrite
   assert.equal(f.rows()[1].generation, 2);
 });
 
+// Real importer/files/SQLite: run for active snapshot invalidation changes;
+// skip unrelated UI. Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR;
+// no services, tmux or children; fixture cleanup closes importer and database.
+test('appended lines are imported when the file mtime is restored', async t => {
+  const f = fixture(t);
+  f.write(line('a'));
+  fs.utimesSync(f.file, 1_700_000_000, 1_700_000_000);
+  await f.read();
+  const before = fs.statSync(f.file);
+  f.append(line('b'));
+  fs.utimesSync(f.file, before.atime, before.mtime);
+  const after = fs.statSync(f.file);
+  assert.equal(after.dev, before.dev);
+  assert.equal(after.ino, before.ino);
+  assert.equal(after.mtimeMs, before.mtimeMs);
+  assert.ok(after.size > before.size);
+  await f.read();
+  assert.deepEqual(f.events().map(row => row.event_type), ['a', 'b']);
+  assert.equal(f.rows()[0].byte_offset, after.size);
+});
+
+// Database cursor invalidation with an unchanged real file: run for cache/cursor
+// changes; skip UI. Same isolated runner and fixture cleanup; no background work.
+test('an unchanged file is read again after its database cursor is reset', async t => {
+  const f = fixture(t);
+  f.write(line('a') + line('b'));
+  await f.read();
+  const before = fs.statSync(f.file);
+  const open = fs.promises.open.bind(fs.promises);
+  let opens = 0;
+  t.mock.method(fs.promises, 'open', async (...args) => { opens++; return open(...args); });
+  await f.read();
+  assert.equal(opens, 0);
+  f.store.db.prepare('UPDATE core_log_cursors SET byte_offset = 0').run();
+  await f.read();
+  assert.equal(opens, 1);
+  assert.equal(f.rows()[0].byte_offset, before.size);
+  assert.deepEqual(f.events().map(row => row.event_type), ['a', 'b']);
+  const after = fs.statSync(f.file);
+  for (const key of ['dev', 'ino', 'size', 'mtimeMs']) assert.equal(after[key], before[key], key);
+});
+
 test('done rotations are never reopened and active replacement with identical size and mtime is imported', async t => {
   const f = fixture(t);
   const open = fs.promises.open.bind(fs.promises);
