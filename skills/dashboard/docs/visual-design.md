@@ -156,6 +156,8 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 ## 5. Layout: Readable Content and Discoverable Actions
 
+[Current] The live conversation activity area reuses the AI message avatar, author and time styles, with the same avatar and body columns. It has no quote action or delivery status. The time comes from the activity API's main work start (`working.main.since`, otherwise `working.since`); queued input uses the presentation's unanswered-message start, child-only work can use its subtask start, and handled input uses `awaiting.since`. It uses the instance time zone, never the browser's current time. The header is removed with the activity area when nothing remains to show.
+
 [Current] Conversation activity marks for new messages, system instructions, scheduled tasks, other messages, and subtask starts align their 13 px icons and text with the step grid's icon and text columns. They have no separator lines and retain the pale label background, 10 px radius, 11.5 px font, and existing colors. Long labels stay on one line with an ellipsis within the activity width, including at 390 px.
 
 [Current] The workbench consists of a top bar, instance status, notices, main content, and right-hand details. The top bar is usually 48 px; navigation moves to a new row when space is insufficient. The scheduled-task drawer is 480 px wide and positioned according to the actual top-bar height. Settings has separate navigation and content areas.
