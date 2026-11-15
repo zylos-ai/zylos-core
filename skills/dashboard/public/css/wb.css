@@ -153,10 +153,10 @@
 .wb-btn-danger { background: var(--c-danger); border-color: var(--c-danger); color: var(--c-on-fill); }
 .wb-btn-danger:hover:not(:disabled) { background: var(--c-danger-hover); border-color: var(--c-danger-hover); }
 .wb-btn-danger:active:not(:disabled) { background: var(--c-danger-press); border-color: var(--c-danger-press); }
-.wb-icon-btn { width: 30px; height: var(--wb-h); flex: none; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid transparent; border-radius: var(--wb-r); background: transparent; color: var(--text-dim); cursor: pointer; transition: background .14s, color .14s; }
+.wb-icon-btn { width: var(--wb-h); height: var(--wb-h); flex: none; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid transparent; border-radius: var(--wb-r); background: transparent; color: var(--text-dim); cursor: pointer; transition: background .14s, color .14s; }
 .wb-icon-btn:hover:not(:disabled) { background: var(--wb-hover); color: var(--text); }
 .wb-icon-btn:disabled { opacity: .38; cursor: not-allowed; }
-.wb-icon-btn-sm { width: 24px; height: var(--wb-control-compact); }
+.wb-icon-btn-sm { width: var(--wb-control-compact); height: var(--wb-control-compact); }
 .wb-act-label { display: none; }
 .wb-link-btn { display: inline-flex; align-items: center; gap: 3px; padding: 0; border: 0; background: transparent; color: var(--accent); font-size: 12.5px; cursor: pointer; }
 .wb-link-btn:hover { text-decoration: underline; text-underline-offset: 2px; }
@@ -199,7 +199,7 @@
 .app-header .tab[hidden] { display: none; }
 body:has(#agent-detail[hidden]) .app-header .tab-bar { visibility: hidden; }
 .app-header .header-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; flex: none; }
-.app-header .header-icon-btn { width: 32px; min-width: 32px; height: var(--wb-h); padding: 0; border-color: transparent; background: transparent; color: var(--text-dim); }
+.app-header .header-icon-btn { width: var(--wb-h); min-width: var(--wb-h); height: var(--wb-h); padding: 0; border-color: transparent; background: transparent; color: var(--text-dim); }
 .app-header .header-icon-btn:hover { background: var(--wb-hover); border-color: transparent; color: var(--text); }
 #wb-theme-toggle .wb-theme-sun, :root[data-theme="dark"] #wb-theme-toggle .wb-theme-moon { display: none; }
 :root[data-theme="dark"] #wb-theme-toggle .wb-theme-sun { display: inline-block; }
@@ -399,7 +399,7 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-d-title { margin: 0; min-width: 0; font-size: 16px; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wb-d-acts { display: flex; gap: 2px; }
 .wb-d-sub { display: contents; }
-.wb-d-acts .wb-icon-btn { width: 28px; height: var(--wb-h); }
+.wb-d-acts .wb-icon-btn { width: var(--wb-h); height: var(--wb-h); }
 .wb-d-acts .wb-d-conv { height: var(--wb-h); margin-right: 4px; padding: 0 10px; }
 /* Group detail: row one is icon, name, state and close; row two is the actions, starting at the icon's left edge. */
 .wb-group-head .wb-d-top:has(> .wb-d-sub) { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 8px; }
@@ -614,7 +614,7 @@ html[data-detail=plain] #observer-tab { display: none!important; }
   .wb-d-top > .wb-d-sub { grid-column: 2 / -1; grid-row: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
   .wb-d-sub > .wb-d-acts { flex-wrap: wrap; gap: 6px; }
   /* Phones: the group's name has the first row beside the close button and may take two lines. The second row
-     holds the state, the conversation button (the main action, with its label) and the other actions as 40px
+     holds the state, the conversation button (the main action, with its label) and the other actions as 36px
      icons, named for screen readers as on desktop, so no label is cut in either language. */
   .wb-group-head .wb-d-top:has(> .wb-d-sub) { grid-template-columns: auto minmax(0, 1fr) auto; }
   .wb-group-head .wb-d-top:has(> .wb-d-sub) > :last-child { grid-column: 3; }
@@ -625,7 +625,7 @@ html[data-detail=plain] #observer-tab { display: none!important; }
   .wb-group-head .wb-d-sub > .wb-d-acts { flex: 1 1 auto; flex-wrap: nowrap; gap: 6px; min-width: 0; }
   .wb-group-head .wb-d-acts > * { height: 40px; }
   .wb-group-head .wb-d-acts > .wb-d-conv { flex: 1 1 auto; min-width: 0; padding: 0 10px; }
-  .wb-group-head .wb-d-acts > .wb-act { flex: none; width: 40px; padding: 0; }
+  .wb-group-head .wb-d-acts > .wb-act { flex: none; width: var(--wb-control-touch); padding: 0; }
   .wb-group-head .wb-d-acts .wb-act-label { display: none; }
   .wb-group-head .wb-d-acts .wb-conv-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wb-detail-meta .wb-mono { overflow-wrap: anywhere; }
@@ -1513,7 +1513,7 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 .wb-bh { align-items: center; }
 :is(.wb-name-editor, .wb-cfg-controls, .wb-cfg-more) { --wb-h: var(--wb-control-compact); align-items: center; }
 :is(.wb-name-editor, .wb-cfg-controls, .wb-cfg-more) :is(.wb-input, input, select, .wb-btn-sm, .wb-link-btn) { height: var(--wb-h); }
-.wb-d-title-wrap > .wb-icon-btn-sm { height: var(--wb-h); }
+.wb-d-title-wrap > .wb-icon-btn-sm { width: var(--wb-h); height: var(--wb-h); }
 .wb-timezone-controls .wb-select, .wb-timezone-controls .wb-btn, .wb-timezone-pending .wb-btn { min-height: var(--wb-h); }
 #wb-auto-name { height: var(--wb-control-compact); }
 #settings-price-show-all { height: var(--wb-h); }
@@ -1525,7 +1525,9 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side)
     :is(button, select, summary, a.wb-btn, input:not([type=checkbox], [type=radio], [type=range], [type=hidden], .wb-search input)):not(.wb-vh, .wb-switch-btn, .wb-sched-dot, .wb-set-nav-btn, .wb-set-drawer-btn) { min-height: var(--wb-control-touch); }
   /* A short label ("Edit" in English) must not leave a labelled button narrower than a fingertip either. */
-  :is(.app-header .header-icon-btn, .wb-icon-btn, .memory-head .memory-refresh, .wb-btn) { min-width: 40px; }
+  .wb-btn { min-width: 40px; }
+  :where(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side) .wb-icon-btn { width: var(--wb-control-touch); min-width: var(--wb-control-touch); }
+  .memory-head .memory-refresh { width: var(--wb-control-touch); }
   .wb-switch-l { min-height: 40px; }
   /* Measure the search outer frame once; its input fits inside the border. */
   .wb-search { min-height: var(--wb-control-touch); }
@@ -1537,7 +1539,7 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
     :is(.wb-seg, .wb-seg2, .wb-seg-sm):not(.wb-seg-engine) > :is(button, .wb-btn) { height: 100%; min-height: 0; }
   .wb-date-native { min-height: 0; }
   #wb-auto-name { height: var(--wb-control-touch); }
-  .app-header .header-icon-btn { min-height: 44px; }
+  .app-header .header-icon-btn { width: 44px; min-width: 44px; min-height: 44px; }
   .wb-group-head .wb-d-acts > * { height: var(--wb-control-touch); }
   /* Switch-style buttons keep their 36×20 look inside a transparent 40px frame. */
   .fleet-sound-toggle.wb-switch-btn { box-sizing: content-box; border: 10px solid transparent; background-clip: padding-box; }
@@ -1564,7 +1566,7 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   #tab-memory.memory-file-open .memory-content { padding: 12px 12px 24px; }
   /* The open file's header stays compact: back, path and scope on one row; view mode and editing on the next. */
   #tab-memory.memory-file-open .memory-viewer-head { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 10px; padding: 8px 12px 10px; }
-  #tab-memory.memory-file-open .memory-back { grid-column: 1; grid-row: 1; align-self: center; width: 40px; padding: 0; justify-content: center; }
+  #tab-memory.memory-file-open .memory-back { grid-column: 1; grid-row: 1; align-self: center; width: var(--wb-control-touch); min-width: var(--wb-control-touch); padding: 0; justify-content: center; }
   .memory-back > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   #tab-memory.memory-file-open .memory-viewer-title { grid-column: 2; grid-row: 1; }
   #tab-memory.memory-file-open .memory-viewer-actions { grid-column: 1 / -1; grid-row: 2; display: flex; flex-wrap: wrap; justify-content: flex-end; }

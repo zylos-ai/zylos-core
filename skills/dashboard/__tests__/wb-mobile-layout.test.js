@@ -23,7 +23,7 @@ function phoneRules(source) {
 }
 const phone = phoneRules(css);
 
-test('stylesheet: on phones ordinary control frames are at least 36px, icon-only and short labelled buttons 40px wide', () => {
+test('stylesheet: on phones ordinary control frames are at least 36px, square icons use 36px and short labelled buttons remain 40px wide', () => {
   const rule = phone.match(/:is\(([^)]*)\)\s*:is\(button, select, summary, a\.wb-btn, input[^{]*\{ min-height: var\(--wb-control-touch\); \}/);
   assert.match(css, /--wb-control-touch: 36px;/, 'approved ordinary mobile tier');
   assert.ok(rule, 'one rule sets the minimum height of tappable controls');
@@ -31,7 +31,10 @@ test('stylesheet: on phones ordinary control frames are at least 36px, icon-only
     assert.ok(rule[1].split(',').map(item => item.trim()).includes(area), area + ' is covered');
   }
   assert.doesNotMatch(rule[1], /#tab-chat/, 'the conversation page keeps its own layout');
-  assert.match(phone, /:is\(\.app-header \.header-icon-btn, \.wb-icon-btn, \.memory-head \.memory-refresh, \.wb-btn\) \{ min-width: 40px; \}/);
+  assert.match(phone, /\.wb-btn \{ min-width: 40px; \}/, 'labelled actions retain their minimum width');
+  assert.match(phone, /:where\([^)]*\) \.wb-icon-btn \{ width: var\(--wb-control-touch\); min-width: var\(--wb-control-touch\); \}/, 'ordinary icon width follows the 36px tier');
+  assert.match(phone, /\.memory-head \.memory-refresh \{ width: var\(--wb-control-touch\); \}/);
+  assert.match(phone, /\.app-header \.header-icon-btn \{ width: 44px; min-width: 44px; min-height: 44px; \}/, 'navigation keeps its 44px tier');
   assert.match(phone, /\.wb-switch-l \{ min-height: 40px; \}/);
   assert.match(phone, /\.wb-sched-timeline \.wb-sched-dot \{[^}]*width: 40px; height: 40px;/, 'timeline dots are 40px targets');
   assert.match(phone, /\.memory-file, \.wb-memory-group-h, \.wb-memory-section-h \{ min-height: 40px; \}/);
@@ -80,7 +83,7 @@ test('stylesheet: on phones the six schedule numbers form three columns by two r
 
 test('stylesheet: on phones the open memory file keeps its header compact: back, path and scope on one row', () => {
   assert.match(phone, /#tab-memory\.memory-file-open \.memory-viewer-head \{ display: grid; grid-template-columns: auto minmax\(0, 1fr\);/);
-  assert.match(phone, /#tab-memory\.memory-file-open \.memory-back \{ grid-column: 1; grid-row: 1;[^}]*width: 40px;/);
+  assert.match(phone, /#tab-memory\.memory-file-open \.memory-back \{ grid-column: 1; grid-row: 1;[^}]*width: var\(--wb-control-touch\); min-width: var\(--wb-control-touch\);/);
   assert.match(phone, /#tab-memory\.memory-file-open \.memory-viewer-title \{ grid-column: 2; grid-row: 1; \}/);
   assert.match(phone, /#tab-memory\.memory-file-open \.memory-viewer-actions \{ grid-column: 1 \/ -1; grid-row: 2;/);
   // The label stays for screen readers while the button shows only its arrow.
@@ -144,7 +147,7 @@ test('stylesheet and page: on phones the terminal observer is one left-aligned c
 test('stylesheet: on phones a group\'s name has the first row, and the actions are icons beside a labelled conversation button', () => {
   assert.match(phone, /\.wb-group-head \.wb-d-top:has\(> \.wb-d-sub\) > \.wb-d-sub \{ display: flex; flex-wrap: wrap; grid-column: 1 \/ -1; grid-row: 2;/, 'state and actions form the second row');
   assert.match(phone, /\.wb-group-head \.wb-d-title \{ display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal;/, 'a long name takes two lines instead of being cut');
-  assert.match(phone, /\.wb-group-head \.wb-d-acts > \.wb-act \{ flex: none; width: 40px; padding: 0; \}/);
+  assert.match(phone, /\.wb-group-head \.wb-d-acts > \.wb-act \{ flex: none; width: var\(--wb-control-touch\); padding: 0; \}/);
   assert.match(phone, /\.wb-group-head \.wb-d-acts \.wb-act-label \{ display: none; \}/, 'secondary actions show their icon; their name stays as aria-label');
   // Wider touch screens (tablets) keep the labelled actions.
   assert.match(css, /@media \(max-width: 900px\) \{[^@]*\.wb-act-label \{ display: inline; \}/);

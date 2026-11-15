@@ -9,11 +9,11 @@ import { openMobileMore } from './browser-navigation.js';
 // never their inset options or borderless nested inputs. Geometry is read only.
 // Card/list selection targets and timeline dots retain content-dependent geometry;
 // their measured entries are not treated as field/button sizing peers.
-export function measureControlRows() {
+export function measureControlRows(controlSelector = null) {
   const root = document.querySelector('.tab-content:not([hidden])') || document.body;
   const visible = el => { const b = el.getBoundingClientRect(), s = getComputedStyle(el); return b.width > 0 && b.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && !el.closest('[hidden],[inert],[aria-hidden=true]') && s.clip === 'auto' && el.checkVisibility(); };
   const selector = '.wb-date,.wb-seg,.wb-seg2,.wb-seg-sm,.conversation-tabs,.wb-search,button,input:not([type=hidden]),select,textarea,summary,a[href]';
-  const controls = [...document.querySelectorAll(selector)].filter(el => visible(el) && !el.parentElement.closest('.wb-seg,.wb-seg2,.wb-seg-sm,.conversation-tabs,.wb-search,.wb-date') && !el.matches('input[type=checkbox],input[type=radio]'));
+  const controls = [...document.querySelectorAll(selector)].filter(el => (!controlSelector || el.matches(controlSelector)) && visible(el) && !el.parentElement.closest('.wb-seg,.wb-seg2,.wb-seg-sm,.conversation-tabs,.wb-search,.wb-date') && !el.matches('input[type=checkbox],input[type=radio]'));
   const identify = el => el.id ? '#' + el.id : el.tagName.toLowerCase() + (el.classList.length ? '.' + [...el.classList].join('.') : '') + ':' + (el.getAttribute('aria-label') || el.textContent || el.getAttribute('placeholder') || '').trim().replace(/\s+/g, ' ').slice(0, 48);
   // Literal contract values deliberately do not read CSS variables: an entire row
   // can agree with itself while drifting to the wrong size tier.
@@ -42,6 +42,15 @@ export function measureControlRows() {
     return {};
 
   };
+  // Membership follows product roles and responsive states, independently of
+  // measured dimensions, so an incorrectly rectangular icon cannot opt out.
+  const squareIcon = el => {
+    if (el.matches('.conversation-delete,.conversation-quote-bar-close') || el.closest('.conversation-compose-box')) return false;
+    if (el.matches('.wb-sched-detail .wb-d-acts .wb-icon-btn') && innerWidth <= 760) return false;
+    if (el.matches('.wb-act') && innerWidth > 760 && innerWidth <= 900) return false;
+    return el.matches('.wb-icon-btn,.header-icon-btn,.memory-refresh,.wb-mobile-icon-button') || (innerWidth <= 760 && el.matches('.memory-back'));
+  };
+  const selectorFor = el => el.id ? '#' + CSS.escape(el.id) : el.tagName.toLowerCase() + [...el.classList].map(value => '.' + CSS.escape(value)).join('') + (el.hasAttribute('aria-label') ? `[aria-label=${JSON.stringify(el.getAttribute('aria-label'))}]` : '');
   const all = controls.map((el, index) => { const b = el.getBoundingClientRect(); let owner = el.parentElement; while (owner.parentElement && owner !== root && !/flex|grid/.test(getComputedStyle(owner).display)) owner = owner.parentElement;
     owner = el.closest('#wb-board-head,.wb-usage-controls,.wb-sched-filters,.conversation-list-toolbar,.wb-timezone-controls,.wb-config-fields,.wb-pref-controls,.wb-d-top,.conversation-header,.wb-cfg-controls,.wb-cfg-more,.wb-name-editor,.wb-sched-pair') || owner;
     const contentTarget = el.matches('.wb-sched-dot,.wb-sched-select,.wb-sched-target,.conversation-list-item,.conversation-delete');
@@ -49,7 +58,7 @@ export function measureControlRows() {
     const inputBounds = searchInput && searchInput.getBoundingClientRect();
     const innerTop = b.top + parseFloat(getComputedStyle(el).borderTopWidth);
     const innerBottom = b.bottom - parseFloat(getComputedStyle(el).borderBottomWidth);
-    return { ...(inputBounds ? { searchInputInside: inputBounds.top >= innerTop - 0.1 && inputBounds.bottom <= innerBottom + 0.1 } : {}), ...contract(el), control: identify(el), owner: identify(owner) + (contentTarget ? ` / content target ${index}` : ''), height: b.height, center: b.y + b.height / 2,
+    return { ...(inputBounds ? { searchInputInside: inputBounds.top >= innerTop - 0.1 && inputBounds.bottom <= innerBottom + 0.1 } : {}), ...contract(el), selector: selectorFor(el), squareIcon: squareIcon(el), width: b.width, control: identify(el), owner: identify(owner) + (contentTarget ? ` / content target ${index}` : ''), height: b.height, center: b.y + b.height / 2,
       ...(() => {
         if (innerWidth > 760 || !el.matches('.conversation-running:is([data-state=busy], [data-state=idle])')) return {};
         const pseudo = getComputedStyle(el, '::after');
@@ -103,15 +112,20 @@ export async function runControlRows(t, sandbox) {
       await context.addInitScript(theme => { localStorage.setItem('zylos-dashboard-theme', theme); localStorage.setItem('zylos-dashboard-locale', 'zh'); }, theme);
       const page = await context.newPage(); page.setDefaultTimeout(12000);
       async function settle() { await page.evaluate(() => document.fonts.ready); await page.waitForTimeout(160); await page.mouse.move(-20, -20); await page.evaluate(() => document.activeElement?.blur()); }
-      async function capture(name) {
+      async function capture(name, controlSelector = null) {
         await settle();
         const interaction = await page.evaluate(() => ({ focusedControl: document.activeElement?.matches('button,input,select,textarea,a[href]') ?? false, hoveredControls: [...document.querySelectorAll('button:hover,input:hover,select:hover,textarea:hover,a[href]:hover')].length }));
         assert.equal(interaction.focusedControl, false, 'static capture has no focused control');
         assert.equal(interaction.hoveredControls, 0, 'static capture has no hovered control');
         if (width === 390) assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${name}: no horizontal overflow`);
-        const rows = await page.evaluate(measureControlRows);
+        const rows = await page.evaluate(measureControlRows, controlSelector);
+        if (controlSelector) assert.ok(rows.flatMap(row => row.controls).length > 0, `${name}: requested controls rendered`);
         for (const row of rows) {
           if (survey) for (const control of row.controls) {
+            if (control.squareIcon) {
+              assert.equal(control.width, control.height, `${name}: icon button is square: ${control.selector}`);
+              assert.ok([26, 30, 36, 44].includes(control.expectedHeight), `${name}: square icon has an approved size tier: ${control.selector}`);
+            }
             if (control.searchInputInside !== undefined) assert.equal(control.searchInputInside, true, `${name}: search input stays inside its bordered outer frame for ${control.control}`);
             if (control.expectedHeight !== undefined) assert.equal(control.height, control.expectedHeight, `${name}: approved size tier for ${control.control}`);
             else assert.ok(control.heightException, `${name}: control has an explicit height exception: ${control.control}`);
@@ -209,6 +223,14 @@ export async function runControlRows(t, sandbox) {
           for (const section of sections) {
             if (width === 390) { await page.locator('.wb-set-drawer-btn').click(); await page.locator('.wb-set-nav').waitFor({ state: 'visible' }); if (section === sections[0]) await capture('settings-drawer'); }
             await page.locator(`[data-settings-section="${section}"]`).click(); await capture(`settings-${section}`);
+            if (section === 'pricing') {
+              await page.locator('#settings-add-model').click();
+              await page.locator('#settings-price-rows .settings-remove-btn').last().waitFor();
+              await page.locator('#settings-price-rows .settings-remove-btn').last().scrollIntoViewIfNeeded();
+              // Exercise the real compact icon action. Pricing cells retain
+              // their existing table geometry and are outside this icon check.
+              await capture('settings-pricing-custom-icon', '#settings-price-rows .settings-remove-btn');
+            }
             if (section === 'defaults') { await page.locator('#settings-use-codex').click(); await page.locator('#settings-save-runtime').waitFor(); await capture('settings-runtime-draft'); }
           }
         }
@@ -220,6 +242,11 @@ export async function runControlRows(t, sandbox) {
     const table = ['| Page | Width/theme | Row | Controls: visible height px; center px; hit height px | Interaction height spread | Center spread |', '|---|---|---|---|---:|---:|'];
     for (const shot of captures) for (const row of shot.rows) table.push(`| ${shot.page} | ${shot.width}/${shot.theme} | ${row.row.replaceAll('|', '/')} | ${row.controls.map(c => `${c.control.replaceAll('|', '/')}: ${c.height.toFixed(2)}; ${c.center.toFixed(2)}; ${(c.hitHeight ?? c.height).toFixed(2)}`).join('<br>')} | ${row.heightSpread.toFixed(2)} | ${row.controls.length > 1 ? row.centerSpread.toFixed(2) : 'n/a'} |`);
     fs.writeFileSync(path.join(evidence, 'rows.md'), table.join('\n') + '\n');
+    const buttons = captures.flatMap(shot => shot.rows.flatMap(row => row.controls.filter(control => control.squareIcon).map(control => ({ page: shot.page, viewport: shot.width, theme: shot.theme, selector: control.selector, control: control.control, width: control.width, height: control.height, expectedHeight: control.expectedHeight }))));
+    fs.writeFileSync(path.join(evidence, 'icon-buttons.json'), JSON.stringify(buttons, null, 2) + '\n');
+    const buttonTable = ['| Page | Viewport/theme | Icon button selector | Width px | Height px |', '|---|---|---|---:|---:|'];
+    for (const button of buttons) buttonTable.push(`| ${button.page} | ${button.viewport}/${button.theme} | ${button.selector.replaceAll('|', '/')} | ${button.width.toFixed(2)} | ${button.height.toFixed(2)} |`);
+    fs.writeFileSync(path.join(evidence, 'icon-buttons.md'), buttonTable.join('\n') + '\n');
   }
   console.info(`Control row captures: ${captures.length}`);
 }

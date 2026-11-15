@@ -1817,11 +1817,12 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 .conversation-list-toolbar { align-items: center; }
 .conversation-tabs { height: var(--wb-h); }
 .conversation-tabs .wb-btn { height: 100%; min-height: 0; }
-.conversation-reload { height: var(--wb-h); }
+.conversation-reload { width: var(--wb-h); height: var(--wb-h); }
 .conversation-rename { align-items: center; }
 .conversation-rename :is(input, button) { height: var(--wb-h); }
 @media (min-width: 761px) {
   .conversation-page .conversation-header { align-items: flex-start; }
+  .conversation-page .conversation-title-line .wb-icon-btn { width: var(--wb-control-regular); }
   .conversation-page :is(.conversation-title-row, .conversation-title-line) { height: var(--wb-control-regular); }
   .conversation-page .conversation-header :is(.conversation-title-line .wb-icon-btn, .conversation-list-toggle, .conversation-running, .conversation-header-actions > .wb-btn) { height: var(--wb-control-regular); min-height: var(--wb-control-regular); }
 }

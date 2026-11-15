@@ -65,7 +65,8 @@ function measure() {
     if (seen.has(target) || target.matches('textarea, .wb-vh') || target.closest('[aria-hidden=true], #tab-chat')) continue;
     seen.add(target);
     const box = visible(target);
-    if (box && (box.width < 36 || box.height < 36) && small.length < 10) {
+    const minimumWidth = target.matches('.wb-btn:not(.memory-back)') ? 40 : 36;
+    if (box && (box.width < minimumWidth || box.height < 36) && small.length < 10) {
       small.push(`${target.tagName.toLowerCase()}.${String(target.className).trim().split(/\s+/).join('.')} "${(target.getAttribute('aria-label') ?? target.textContent).trim().slice(0, 24)}" ${Math.round(box.width)}x${Math.round(box.height)}`);
     }
   }
@@ -382,10 +383,10 @@ export async function runWorkbenchBrowser(t, sandbox) {
     state = await drawerState(page);
     assert.deepEqual([state.open, state.expanded, state.left, state.visible, state.focus, state.current], [true, 'true', 0, true, 'section:defaults', 'defaults']);
     assert.equal(state.height, 844, 'the drawer runs the full height of the screen');
-    // The prototype's sizes: 300px drawer, 44px section rows and opening button, 40×36 close button.
+    // The prototype's sizes: 300px drawer, 44px section rows and opening button, 36×36 close button.
     const sizes = await page.evaluate(() => Object.fromEntries([['drawer', '.wb-set-nav'], ['section', '[data-settings-section="defaults"]'], ['button', '.wb-set-drawer-btn'], ['close', '.wb-set-drawer-x']]
       .map(([name, selector]) => { const box = document.querySelector(selector).getBoundingClientRect(); return [name, [Math.round(box.width), Math.round(box.height)]]; })));
-    assert.deepEqual([sizes.drawer[0], sizes.section[1], sizes.button[1], sizes.close], [300, 44, 44, [40, 36]], JSON.stringify(sizes));
+    assert.deepEqual([sizes.drawer[0], sizes.section[1], sizes.button[1], sizes.close], [300, 44, 44, [36, 36]], JSON.stringify(sizes));
     assert.ok(state.entry && state.bodyInert && state.headerInert, 'one history entry; the page behind the drawer is inert');
     const layout = await page.evaluate(measure);
     assert.deepEqual(layout.small, [], 'drawer: no control under 36px');
