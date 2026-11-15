@@ -1491,7 +1491,7 @@ test('memory browser is admin-scoped, agent-routed, and cache-busted', () => {
   assert.match(index, /id="memory-tree"/);
   assert.match(index, /id="memory-content"/);
   assert.match(index, /app\.js\?v=\d+/);
-  assert.match(index, /style\.css\?v=64/);
+  assert.match(index, /style\.css\?v=65/);
 
   assert.match(app, /fetchAgentJson\('\/api\/memory\/tree'\)/);
   assert.match(app, /fetchAgentJson\(`\/api\/memory\/file\?path=\$\{encoded\}`\)/);

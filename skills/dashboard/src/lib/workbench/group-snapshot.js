@@ -298,8 +298,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
   // exact key first; a first row with another key means the group was not found.
   async function raw(key, snapshot) {
     // Keep source selection tied to the detail request's snapshot generation.
-    snapshot ??= cache?.value;
-    const rawGroups = snapshot?.groupEvidence?.rawGroups;
+    const rawGroups = snapshot.groupEvidence?.rawGroups;
     if (rawGroups?.has(key)) key = rawGroups.get(key);
     if (key === null) return { raw: null };
     const result = await cli.runC4Db(['groups', '--key-match', key, '--limit', '1', '--raw', '--json']);
