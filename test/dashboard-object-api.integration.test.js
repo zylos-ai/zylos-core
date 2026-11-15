@@ -168,7 +168,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     await request('/api/instance', { identity: 'none', expected: 401 });
     await request('/api/instance/runtime-options?runtime=claude');
   });
-  const retired = ['/api/health?probe=ready', '/api/state', '/api/agent-status', '/api/restart-status', '/api/session-mode', '/api/instance-status', '/api/timeline', '/api/system', '/api/summary', '/api/communication',
+  const retired = ['/api/health?probe=ready', '/api/state', '/api/restart-status', '/api/session-mode', '/api/instance-status', '/api/timeline', '/api/system', '/api/summary', '/api/communication',
     '/api/metrics/history/cpu_pct', '/api/metrics/aggregate', '/api/metrics/cpu_pct', '/api/metrics/series', '/api/actions/meta', '/api/actions/interrupt', '/api/actions/chop-chop',
     '/api/workbench/groups', '/api/workbench/groups/search', '/api/workbench/activity', '/api/workbench/groups/telegram%3Aworking/raw', '/api/workbench/groups/telegram%3Aworking/config',
     '/api/workbench/usage', '/api/workbench/host', '/api/workbench/pricing', '/api/workbench/name-prompt', '/api/workbench/runtime-overrides', '/api/agent/name', '/api/settings'];

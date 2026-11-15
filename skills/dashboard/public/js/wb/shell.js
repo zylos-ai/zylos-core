@@ -1,4 +1,4 @@
-import { readGroupSnapshot } from './group-data.js?v=1';
+import { readGroupSnapshot, groupSnapshot } from './group-data.js?v=1';
 import { withRequestTimeout } from '../request-timeout.js?v=2';
 import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js?v=153';
 import { boardController, renderBoard, renderDistribution } from './board.js?v=157';
@@ -25,7 +25,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   const rangeInput = document.querySelector('#wb-range');
   const toggle = document.querySelector('#wb-detail-toggle');
   const nav = document.querySelector('#observer-tab');
-  let groupSide = 'running', offlineDepth = 1;
+  let groupSide = 'running', offlineDepth = 1, pushedCounts = null, instanceRead = null;
   const sides = element(document, 'div', undefined, 'wb-seg wb-group-sides');
   sides.setAttribute('role', 'group'); sides.setAttribute('aria-label', t('wb.board.groupsLabel'));
   board.parentNode?.insertBefore(sides, board);
@@ -39,7 +39,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   try {
     if (storage.getItem('zylos-dashboard-activity-range') === '6h') range = '6h';
   } catch {}
-  const read = async (path, { signal } = {}) => {
+  const readFresh = async (path, { signal } = {}) => {
     const captured = identity();
     const response = await fetch(endpoint(path), { signal });
     if (captured !== identity() || stopped) {
@@ -53,6 +53,15 @@ export function mountWorkbench({ document = globalThis.document, window = global
       throw Error('view_changed');
     }
     return value;
+  };
+  const read = (path, options = {}) => {
+    if (path !== '/api/instance') return readFresh(path, options);
+    if (!instanceRead || instanceRead.owner !== identity()) {
+      const record = { owner: identity(), promise: null };
+      record.promise = readFresh(path, options).catch(error => { if (instanceRead === record) instanceRead = null; throw error; });
+      instanceRead = record;
+    }
+    return instanceRead.promise;
   };
   const observerEntry = () => {
     const status = observerStatus();
@@ -253,7 +262,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   nameButton?.addEventListener('click', autoName);
   const controller = boardController({
     visible,
-    fetchSnapshot: () => withRequestTimeout(signal => readGroupSnapshot(read, { signal, side: groupSide, pages: offlineDepth }), REQUEST_TIMEOUT_MS),
+    fetchSnapshot: () => withRequestTimeout(signal => readGroupSnapshot(read, { signal, side: groupSide, pages: offlineDepth, counts: pushedCounts, instance: pushedCounts ? snapshot?.instance : null }), REQUEST_TIMEOUT_MS),
     onSnapshot: value => {
       snapshot = value;
       groupDetail.updateSnapshot(snapshot);
@@ -337,7 +346,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     event.preventDefault?.();
   };
   const visibility = () => {
-    if (document.visibilityState === 'visible') { controller.refresh(); costController.refresh(); }
+    if (document.visibilityState === 'visible') { instanceRead = null; controller.refresh(); costController.refresh(); }
   };
   // An installed-but-unavailable observer still opens its page, which explains why and links to settings.
   const observerClick = event => {
@@ -359,7 +368,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     const changed = resetOwner();
     const active = visible();
     syncNav();
-    if (active && (changed || !previousVisible)) { controller.refresh(); costController.refresh(); }
+    if (active && (changed || !previousVisible)) { instanceRead = null; controller.refresh(); costController.refresh(); }
     if (!pageActive()) hostPanel.close();
     previousVisible = active;
   }) : null;
@@ -373,7 +382,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   controller.start();
   costController.start();
   refreshMode();
-  const modeTimer = setInterval(refreshMode, 60000);
+  const modeTimer = setInterval(() => { if (visible()) instanceRead = null; return refreshMode(); }, 60000);
   function destroy() {
     stopped = true;
     controller.stop();
@@ -397,7 +406,18 @@ export function mountWorkbench({ document = globalThis.document, window = global
     window.removeEventListener('popstate', visibility);
   }
   return {
-    setViewDetail: redraw, refresh: () => controller.refresh(),
+    setViewDetail: redraw,
+    applyInstance(instance) {
+      instanceRead = { owner: identity(), promise: Promise.resolve(instance) };
+      transition = instance.transition ?? null;
+      if (snapshot) snapshot = groupSnapshot(instance, snapshot.groupCounts, snapshot);
+      redraw();
+    },
+    refresh(counts) {
+      pushedCounts = counts ?? null;
+      if (snapshot && counts) { snapshot = groupSnapshot(snapshot.instance, counts, snapshot); redraw(); }
+      return controller.refresh().finally(() => { pushedCounts = null; });
+    },
     selectedGroup: () => groupDetail?.state.row?.sessionGroup,
     async locateGroup(key) {
       if (stopped) return;
@@ -409,11 +429,18 @@ export function mountWorkbench({ document = globalThis.document, window = global
       searchRows = null;
       const captured = identity(), generation = ++locateGeneration;
       let groups;
-      try { groups = await readGroupSnapshot(read, { side: groupSide, pages: offlineDepth }); } catch { return; }
+      try {
+        if (key) {
+          const selected = await read('/api/groups/' + encodeURIComponent(key));
+          groupSide = selected.state?.kind === 'offline' ? 'offline' : 'running';
+          if (groupSide === 'offline') { searchRows = [selected]; }
+        }
+        groups = await readGroupSnapshot(read, { side: groupSide, pages: offlineDepth });
+      } catch { return; }
       if (stopped || captured !== identity() || generation !== locateGeneration || !pageActive()) return;
       snapshot = groups;
       groupDetail.updateSnapshot(snapshot);
-      locatedGroup = key || snapshot?.rows.find(row => row.state?.kind === 'error' || row.attention?.some(item => ['auth_failed', 'start_failed'].includes(item.kind)))?.sessionGroup;
+      locatedGroup = key || snapshot?.rows.find(row => row.flags?.startFailed || row.attention?.some(item => ['auth_failed', 'start_failed'].includes(item.kind)))?.sessionGroup;
       redraw();
       const row = [...board.querySelectorAll('.wb-row')].find(node => node.dataset.group === locatedGroup);
       row?.focus();

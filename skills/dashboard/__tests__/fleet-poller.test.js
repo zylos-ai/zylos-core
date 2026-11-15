@@ -1559,3 +1559,23 @@ test('object reads reject incomplete counts and usage as bad payloads', async ()
     assert.equal(poller.getFleet().agents[0].health_reason, 'bad_payload', path);
   }
 });
+
+test('object events received during a Fleet read schedule one later read without losing the final change', async t => {
+  const poller = new FleetPoller(makeConfig([{ name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'fixture' }]));
+  t.after(() => poller.stop());
+  const agent = poller.agents[0], stream = poller._streamState(agent);
+  poller.running = true;
+  let reads = 0; const releases = [];
+  t.mock.method(poller, '_pollAgentAndNotify', async () => { reads++; await new Promise(resolve => releases.push(resolve)); });
+  poller._handleSseEvent(agent, { event: 'groups' });
+  poller._handleSseEvent(agent, { event: 'instance' });
+  poller._handleSseEvent(agent, { event: 'groups' });
+  assert.equal(reads, 1);
+  releases.shift()(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reads, 2, 'events during the held read require one follow-up after it');
+  poller._handleSseEvent(agent, { event: 'groups' });
+  releases.shift()(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reads, 3, 'a later event during the second read is not lost either');
+  releases.shift()(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reads, 3); assert.equal(stream.objectReadPending, false); assert.equal(stream.objectReadDirty, false);
+});

@@ -32,7 +32,7 @@ async function controller(t, { result, failure, answerStatus } = {}) {
       if (p.includes('/questions?')) return { items: [row], nextCursor: null };
       if (p.includes('/messages?')) return { items: [], nextCursor: null };
       if (p.includes('/status?')) return { items: [] };
-      if (p === '/api/session-mode') return { data: { sessionMode: 'multi' } };
+      if (p === '/api/instance') return { session_mode: 'multi' };
       if (p.endsWith('/g%3AAA')) return { conversation: { id: 'g:AA', state: 'active' } };
       return { items: [{ id: 'g:AA' }], nextCursor: null };
     } });
@@ -89,7 +89,7 @@ async function mounted(t, { terminal = false, gate = null, answerFailure = null,
     if (p.includes('/questions?')) { if (gate) await gate.promise; data = { items: [{ ...question(), status: ended ? 'stopped' : 'paused' }], nextCursor: null }; }
     else if (p.includes('/messages?')) data = { items: [{ id: 12, direction: 'out', status: 'delivered', content: CONTENT_PREFIX + JSON.stringify(envelope) }], nextCursor: null };
     else if (p.includes('/status?')) data = { items: [] };
-    else if (p.includes('/api/session-mode')) data = { data: { sessionMode: 'multi' } };
+    else if (p.includes('/api/instance')) data = { session_mode: 'multi' };
     else if (p.endsWith('/g%3AAA')) data = { conversation: { id: 'g:AA', state: 'active' } };
     else data = { items: [{ id: 'g:AA' }], nextCursor: null };
     return { ok: true, status: 200, json: async () => data };

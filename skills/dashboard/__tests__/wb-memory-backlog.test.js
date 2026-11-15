@@ -300,7 +300,7 @@ test('memory backlog HTTP route shares the detail cache and enforces administrat
   assert.equal(calls.length, 0);
   assert.deepEqual(versionCalls, ['zylos', 'claude', 'codex'].map(file => ({ file, args: ['--version'] })),
     'startup probes use the injected async transport; denied requests add no version calls');
-  const detail = await request('/api/workbench/groups/origin/backlog', 'admin');
+  const detail = await request('/api/groups/origin/backlog', 'admin');
   assert.equal(detail.status, 200);
   assert.equal((await detail.json()).count, 7);
   const before = calls.length;

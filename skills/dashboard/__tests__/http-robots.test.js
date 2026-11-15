@@ -75,7 +75,7 @@ test('Dashboard responses and documents exclude search crawlers', { timeout: 200
   // skip UI-only changes. Uses the parent fixture and bounded request helper.
   await t.test('anonymous pages, JSON, static files and errors carry the policy', async () => {
     await request('/api/health', 200);
-    await request('/api/state', 401);
+    await request('/api/instance', 401);
     const redirect = await request('/', 302);
     assert.match(redirect.res.headers.get('location'), /^\/login\?/);
     const login = await request('/login', 200);

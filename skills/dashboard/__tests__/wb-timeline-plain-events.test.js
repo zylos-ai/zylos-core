@@ -18,7 +18,7 @@ setInstanceZone(ZONE);
 
 // Boundary: a real Store (private SQLite in a temporary directory) and the real run listing answer the
 // timeline and run reads; the real loader, group detail and renderers draw into an injected DOM. The
-// /api/timeline route's own parameter parsing is covered by core-log-http.test.js and the runs route's by
+// /api/groups/:id/events route's own parameter parsing is covered by core-log-http.test.js and the runs route's by
 // wb-detail-http.test.js; here a read passes the same parameters to store.queryEvents / createRuns.
 // Run for timeline filtering, counting or ordering changes. No network, child process or timer; the
 // temporary directory is removed after each case.
@@ -50,9 +50,9 @@ function fixture(t, { unattributed = false } = {}) {
     const url = new URL(pathname, 'http://fixture'), params = url.searchParams;
     reads.push(url);
     const types = params.get('types')?.split(',').filter(Boolean) || undefined;
-    if (url.pathname === '/api/timeline') {
+    if (url.pathname === '/api/groups/' + encodeURIComponent(GROUP) + '/events') {
       const afterSeq = Number(params.get('after_seq'));
-      return { events: store.queryEvents({ types, sessionGroup: params.has('session_group') ? params.get('session_group') || null : undefined,
+      return { events: store.queryEvents({ types, sessionGroup: GROUP,
         runId: params.get('run_id') || undefined, afterSeq, order: params.get('order') === 'desc' ? 'desc' : 'asc',
         limit: Math.min(1000, Number(params.get('limit') ?? 100)) }) };
     }
@@ -74,7 +74,7 @@ test('600 release diagnostics: plain view shows only the plain events newest fir
   let level = 'plain';
   const loader = createTimelineLoader({ request: f.read, detail: () => level, now: () => Date.parse(at(80)) });
   await loader.open(GROUP, RUN);
-  const eventReads = f.reads.filter(url => url.pathname === '/api/timeline');
+  const eventReads = f.reads.filter(url => url.pathname === '/api/groups/' + encodeURIComponent(GROUP) + '/events');
   assert.equal(eventReads.length, 1, 'the plain events fit one page: the server filtered the diagnostics out');
   assert.equal(eventReads[0].searchParams.get('types').split(',').includes('release'), false);
   assert.equal(loader.state.events.get(RUN).length, 5);
@@ -91,7 +91,7 @@ test('600 release diagnostics: plain view shows only the plain events newest fir
   level = 'technical';
   f.reads.length = 0;
   await loader.setLevel();
-  const technicalReads = f.reads.filter(url => url.pathname === '/api/timeline');
+  const technicalReads = f.reads.filter(url => url.pathname === '/api/groups/' + encodeURIComponent(GROUP) + '/events');
   assert.equal(technicalReads.every(url => !url.searchParams.has('types')), true, 'technical view reads every type');
   assert.equal(loader.state.events.get(RUN).length, 605);
   assert.equal(loader.state.totalEvents, 605);
@@ -129,7 +129,7 @@ test('recent activity is not taken over by diagnostics and follows the technical
   f.reads.length = 0;
   detail.setViewDetail();
   // The switch alone rereads: wait (bounded) for the read it starts and the redraw after it.
-  const recentReadOf = () => f.reads.find(url => url.pathname === '/api/timeline' && url.searchParams.get('limit') === String(recentWindow));
+  const recentReadOf = () => f.reads.find(url => url.pathname === '/api/groups/' + encodeURIComponent(GROUP) + '/events' && url.searchParams.get('limit') === String(recentWindow));
   for (let i = 0; i < 50 && !(recentReadOf() && codes(recent()).includes('release')); i++) await new Promise(resolve => setImmediate(resolve));
   const recentRead = recentReadOf();
   assert.ok(recentRead, 'switching to technical detail rereads recent activity');
@@ -196,7 +196,7 @@ test('plain view: new diagnostics are not appended on refresh', async t => {
   f.put('release', 71, 'diagnostic'); f.put('user_prompt_submit', 72);
   f.reads.length = 0;
   await loader.refresh();
-  const append = f.reads.find(url => url.pathname === '/api/timeline');
+  const append = f.reads.find(url => url.pathname === '/api/groups/' + encodeURIComponent(GROUP) + '/events');
   assert.ok(append?.searchParams.has('after_seq'), 'the refresh reads only what follows the loaded events');
   assert.equal(append.searchParams.get('types')?.split(',').includes('release'), false, 'the read asks for plain events only');
   const types = loader.state.events.get(RUN).map(event => event.event_type);

@@ -872,13 +872,13 @@ export function createConversationState({
     const stillCurrent = () => valid(e) && navigation === selectedVersion && version === current.groupPresenceVersion;
     record.promise = (async () => {
       try {
-        const data = await request('/api/groups/' + encodeURIComponent(sessionGroup), { signal: record.controller.signal });
+        const data = await request('/api/groups/' + encodeURIComponent(sessionGroup) + '?include=', { signal: record.controller.signal });
         if (!stillCurrent()) return;
         const origin = sessionGroup === 'origin';
         const group = data;
         const instance = await request('/api/instance', { signal: record.controller.signal });
         if (!stillCurrent()) return;
-        const trusted = (group?.sessionGroup ?? group?.id) === sessionGroup && group?.state && group.state.kind !== 'unknown' && Number.isFinite(data.readAt);
+        const trusted = (group?.sessionGroup ?? group?.id) === sessionGroup && group?.state && ['running', 'not_running'].includes(group.presence) && Number.isFinite(data.readAt);
         current.groupProcessing = trusted && origin && group?.processing === 'scheduled_task' ? 'scheduled_task' : null;
         applyGroupReading(current, trusted ? { readAt: data.readAt, presence: group?.presence ?? null,
           wait: group?.wait ?? null, health: instance?.runtimeHealth?.[group?.target?.runtime]?.health ?? null,
@@ -1245,11 +1245,7 @@ export function createConversationState({
           // A read started before storage cannot describe the newly queued message.
           cancelGroupPresenceRead();
           if (visible()) {
-            storedWorkingTimer = delay(() => {
-              storedWorkingTimer = null;
-              if (valid(e) && navigation === selectedVersion) readGroupPresence(current, currentTab, e);
-            }, 2000);
-            storedWorkingTimer?.unref?.();
+            readGroupPresence(current, currentTab, e);
           }
         }
         await list();

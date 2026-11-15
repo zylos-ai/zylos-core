@@ -29,7 +29,6 @@ import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPa
 import { createFleetSounds } from './fleet-sounds.js?v=203';
 import { refreshDashboardState } from './state-refresh.js?v=101';
 import { formatActionResult } from './action-result.js';
-import { originSessionUnavailable } from './state-presentation.js?v=98';
 import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from './origin-lock.js?v=114';
 import { mergeRuntimeInfo } from './runtime-ui.js?v=98';
 import { countLabel } from './count-label.js?v=1';
@@ -244,7 +243,6 @@ function agentFleetLabels() {
     noActivity: t('agent_fleet.no_activity'),
     context: t('label.context'),
     model: t('agent_fleet.model'),
-    sessionCost: t('cost.session'),
     dailyCost: t('cost.today'),
     weeklyCost: t('cost.7d'),
     subagent: t('label.subagents')
@@ -1013,9 +1011,6 @@ async function refreshState() {
   if (!data) return;
   remoteAccess.noteState(data);
   state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
-  if (Object.hasOwn(data, 'new_session_threshold')) {
-    state.newSessionThreshold = data.new_session_threshold;
-  }
   renderInfoBar();
   renderObserverAvailability();
   renderObserverPage();
@@ -1062,7 +1057,7 @@ function renderObserverPage() {
   const row = observerGroupRow(state.observer.groups, group);
   const multi = status?.sessionMode === 'multi';
   const groupName = group === undefined && multi ? t('wb.observer.chooseGroup') : observerGroupName(row, group, t('wb.term.origin'), t);
-  const hasTarget = status && Object.hasOwn(status, 'target') ? Boolean(status.target) : !originSessionUnavailable(state.dashboardState);
+  const hasTarget = status && Object.hasOwn(status, 'target') ? Boolean(status.target) : Boolean(state.originGroup?.live);
   $('#observer-title').textContent = t(observerTitleKey({ focus, hasTarget, multi }), { name: groupName });
   const target = $('#observer-target');
   target.replaceChildren();
@@ -1625,12 +1620,11 @@ function applySse(name, data) {
     remoteAccess.noteState(data);
     if (nextRuntimeInfo) state.dashboardState.runtime_info = nextRuntimeInfo;
     if (!data.agent && prevAgent) state.dashboardState.agent = prevAgent;
-    if (Object.hasOwn(data, 'new_session_threshold')) state.newSessionThreshold = data.new_session_threshold;
     state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
+    workbench?.applyInstance?.(data);
     renderInfoBar(); renderObserverAvailability(); renderObserverPage();
   } else if (name === 'groups') {
-    void refreshState().catch(() => {});
-    void workbench?.refresh?.();
+    void workbench?.refresh?.(data);
   } else if (name === 'fleet') {
     setFleet(data);
     clearFleetFallback();
@@ -1638,7 +1632,7 @@ function applySse(name, data) {
   }
 }
 
-function connectSse() {
+function connectSse({ ordinary = false } = {}) {
   if (!window.EventSource) return;
   sseGeneration++;
   chatPush.detach();
@@ -1648,7 +1642,8 @@ function connectSse() {
   }
   clearTimeout(state.sseReconnectTimer);
 
-  const source = new EventSource(chatPush.streamUrl(api(agentPath('/api/stream'))));
+  const streamPath = api(agentPath('/api/stream'));
+  const source = new EventSource(ordinary ? streamPath : chatPush.streamUrl(streamPath));
   state.eventSource = source;
 
   source.onopen = () => {
@@ -1665,10 +1660,14 @@ function connectSse() {
     source.close();
     state.eventSource = null;
     renderConnection('reconnecting');
+    if (!ordinary && chatPush.streamUrl(streamPath) !== streamPath) {
+      connectSse({ ordinary: true });
+      return;
+    }
     scheduleSseReconnect();
   };
 
-  chatPush.attach(source);
+  if (!ordinary) chatPush.attach(source);
   for (const ev of ['instance', 'groups', 'metric_update', 'fleet', 'history_changed']) {
     state.eventSource.addEventListener(ev, (e) => {
       if (state.eventSource !== source) return;
@@ -1915,6 +1914,7 @@ function applyFleetMode(fleet) {
 // Clear all per-agent data and incremental DOM so two agents' panels never
 // mix while switching the detail view between self and a remote agent.
 function resetAgentData() {
+  state.originGroup = null;
   chatPage?.close();
   usagePage?.close();
   closeObserver({ release: true }).catch(() => {});
@@ -2548,6 +2548,11 @@ async function refreshObserverStatus({ quiet = false, signal } = {}) {
       if (!resp.ok) throw observerRequestError(data, resp.status);
       if (state.observer.statusGeneration !== requestGeneration || observerTargetKey() !== targetKey) return null;
       state.observer.status = data;
+      if (state.observer.group !== undefined && groups && !groups.rows?.some(row => row.sessionGroup === state.observer.group)) {
+        const selected = await fetch(observerEndpoint('/api/groups/' + encodeURIComponent(state.observer.group)), { cache: 'no-store', signal }).then(response => response.ok ? response.json() : null).catch(() => null);
+        if (state.observer.statusGeneration !== requestGeneration || observerTargetKey() !== targetKey) return null;
+        if (selected) groups.rows = [...(groups.rows ?? []), selected];
+      }
       state.observer.groups = groups;
       renderObserverStatus(data);
       if (data && state.observer.intent && (data.desired?.enabled !== true || observerRecoveryReason(data))) {
@@ -2783,8 +2788,8 @@ async function refreshModeStatus() {
     if (observerTargetKey() !== targetKey) return;
     const origin = await fetchJson('/api/groups/origin');
     const data = { ...result, origin };
-    state.originGroup = origin;
     if (observerTargetKey() !== targetKey) return;
+    state.originGroup = origin;
     if (instanceText) instanceText.textContent = instanceStatusText(data, document.documentElement.dataset.detail === 'technical' ? 'technical' : 'plain', t);
   } catch (error) { if (observerTargetKey() !== targetKey) return; if (instanceText) instanceText.textContent = error.message; }
 }
@@ -2862,7 +2867,7 @@ function pageActions() {
   return pageActions.value ??= createPageActions({
     t, send: sendAction, confirm: showConfirm, effortLabel,
     readOnly: () => Boolean(remoteIsReadOnly()), remoteTarget: viewedRemoteTarget,
-    shownSession: () => ({ ...state.dashboardState, runId: state.originGroup?.live?.runId, sessionId: state.originGroup?.live?.sessionId }), runtime: () => state.dashboardState?.runtime_info?.runtime,
+    shownSession: () => ({ sessionGroup: 'origin', runId: state.originGroup?.live?.runId, sessionId: state.originGroup?.live?.sessionId }), runtime: () => state.dashboardState?.runtime_info?.runtime,
   });
 }
 
@@ -2873,6 +2878,10 @@ function execAction(action, body) {
 
 // Sends a dashboard action. Only the page actions call this, after they have checked access and asked when needed.
 async function sendAction(action, body) {
+  if (action === 'restart-session' && !body?.runId) {
+    const origin = await fetchJson('/api/groups/origin');
+    body = { ...body, sessionGroup: 'origin', runId: origin.live?.runId, sessionId: origin.live?.sessionId };
+  }
   const request = instanceActionRequest(action, body);
   const actionPath = agentPath(request.path);
   const healthPath = agentPath('/api/health');

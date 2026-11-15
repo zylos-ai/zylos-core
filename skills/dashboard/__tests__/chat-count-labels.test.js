@@ -54,11 +54,11 @@ async function pageFixture(context, { retained = 1, translate = t } = {}) {
   const page = mountConversationPage({ root, document, t: translate, local: () => true, confirm: async () => true, fetch: async (path, options = {}) => {
     let data;
     if (options.method === 'DELETE') { deleted = true; data = { ok: true, retainedMessages: retained, groupDataRetained: true }; }
-    else if (path.endsWith('/deletion')) data = { operationId: 'preview', cutoffId: 1, messages: 1, attachments: 1 };
+    else if (path.endsWith('/deletion-preview')) data = { operationId: 'preview', cutoffId: 1, messages: 1, attachments: 1 };
     else if (path.endsWith('/uploads/config')) data = { maxUploadBytes: 1024, maxAttachments: 20 };
     else if (path.includes('/messages?')) data = { items: rows, nextCursor: null, afterCursor: 'after' };
     else if (path.includes('/questions?') || path.includes('/status?')) data = { items: [] };
-    else if (path.includes('/api/session-mode')) data = { data: { sessionMode: 'multi' } };
+    else if (path.includes('/api/instance')) data = { session_mode: 'multi' };
     else if (/conversations\/g%3AAA$/.test(path)) data = { conversation: { ...item, state: 'active' }, stored: false };
     else data = { items: deleted ? [] : [item], nextCursor: null, canWrite: true, deletionAllowed: true };
     return { ok: true, status: 200, json: async () => data };

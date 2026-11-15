@@ -5,9 +5,9 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readJsonSample, sampleResult } from '../../cli/lib/session-usage-reader.js';
 import { collectStatus } from '../../cli/lib/status-view.js';
-import { classify, countRows } from '../../skills/dashboard/src/lib/workbench/group-state.js';
+import { projectGroup } from '../../skills/dashboard/src/lib/workbench/groups-api.js';
 import { sendHtml, sendJson, serveStatic } from '../../skills/dashboard/src/lib/http.js';
-import { GROUP, workbenchAnswer } from '../../skills/dashboard/__tests__/fixtures/workbench-browser-api.js';
+import { GROUP, workbenchAnswer, workbenchSnapshot, workbenchSnapshotAnswer } from '../../skills/dashboard/__tests__/fixtures/workbench-browser-api.js';
 import { openDashboardTab } from '../../skills/dashboard/__tests__/helpers/browser-navigation.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../skills/dashboard/public/', import.meta.url)));
@@ -25,22 +25,22 @@ export async function runStaleStatusBrowser(t, sandbox) {
   let sampleMode = 'file', runtimeHealth = 'ok', wait = null;
   async function snapshot(url) {
     const now = Date.now();
-    const data = workbenchAnswer(url, now);
+    const data = workbenchSnapshot(now);
     const status = await collectStatus({ mode: () => ({ mode: 'multi' }), list: () => [],
       session: async () => ({ identity, status: sampleResult(sampleMode === 'missing' ? null : readJsonSample(file, 'status'), identity, identity, 5000, now) }),
       runtimes: [], facts: async () => ({ originNeed: null }), configIssue: () => null, resolveRoot: () => sandbox.paths.zylos, now: () => now });
     const row = data.rows.find(row => row.sessionGroup === GROUP);
     row.live = status.origin;
     row.wait = wait;
-    row.state = classify(row, { now });
     data.instance.runtimeHealth.claude = { health: runtimeHealth };
     row.name = { displayName: '状态刷新已停止的会话' };
     row.tools = []; row.working = { on: true, since: sampledAt - 1000, main: { since: sampledAt - 1000, lastActivityAt: sampledAt - 1000 }, tools: 0, subagents: null };
     row.queue = { known: true, pending: { count: 0 }, running: { count: 0 }, fence: null };
     row.duration = null;
-    data.rows = [row]; data.counts = countRows(data.rows);
+    data.rows = [projectGroup(row, data)];
+    row.state = data.rows[0].state;
     if (reads.length < 100) reads.push({ at: now, age: now - sampledAt, state: row.state, status: row.live.status });
-    return data;
+    return workbenchSnapshotAnswer(url, data, now);
   }
   const conversation = { id: ID, localId: 'stale-browser', sessionGroup: GROUP, channel: 'telegram', state: 'active', displayName: '状态刷新已停止的会话' };
   const server = http.createServer(async (req, res) => {
@@ -51,7 +51,7 @@ export async function runStaleStatusBrowser(t, sandbox) {
         res.write(`event: chat_ready\ndata: ${JSON.stringify({ version: 1, tab: 'mine', conversationId: url.searchParams.get('chat_conversation'), ids: [] })}\n\n`);
         streams.add(res); res.on('close', () => streams.delete(res)); return;
       }
-      if (url.pathname === '/api/workbench/groups') return sendJson(res, 200, await snapshot(url));
+      if (url.pathname === '/api/instance' || url.pathname.startsWith('/api/groups/')) return sendJson(res, 200, await snapshot(url));
       if (url.pathname === '/api/chat/conversations') return sendJson(res, 200, { items: [{ ...conversation, session_group: GROUP, display_name: conversation.displayName }], nextCursor: null, tz: 'UTC' });
       if (url.pathname.startsWith('/api/chat/conversations/')) {
         const p = url.pathname;
@@ -106,7 +106,7 @@ export async function runStaleStatusBrowser(t, sandbox) {
     await element.filter({ hasText: stale ? /秒前/ : /未知/ }).waitFor({ state: 'visible' });
     const text = await element.innerText();
     if (stale) {
-      assert.match(text, /忙/);
+      assert.match(text, /工作中/);
       assert.match(text, /\d+\s*秒前/);
       const age = element.locator('.wb-status-age');
       assert.equal(await age.isVisible(), true);

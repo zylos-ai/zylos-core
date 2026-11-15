@@ -358,7 +358,7 @@ export class FleetProxy {
   }
 
   async proxyApi(req, res, agent, suffix, search) {
-    if (isGroupDeletionRoute(suffix) && (req.method === 'DELETE' || (suffix.endsWith('/deletion') || suffix.endsWith('/deletion-preview')))) {
+    if (isGroupDeletionRoute(suffix) && (req.method === 'DELETE' || suffix.endsWith('/deletion-preview'))) {
       sendJson(res, 403, { error: 'remote_deletion_forbidden' }); return;
     }
     if (req.method === 'PUT' && suffix === '/api/settings/timezone' ||
@@ -371,8 +371,8 @@ export class FleetProxy {
     }
     if ((suffix.startsWith('/api/instance/') || suffix.startsWith('/api/groups/')) && !['GET', 'HEAD'].includes(req.method)) {
       const context = req._authContext;
-      if (context?.scope !== 'admin') { sendJson(res, 403, { error: 'admin_required' }); return; }
-      if (context.kind === 'cookie' && !isSameOriginRequest(req)) { sendJson(res, 403, { error: 'same_origin_required' }); return; }
+      if (this.authGate?.enabled !== false && context?.scope !== 'admin') { sendJson(res, 403, { error: 'admin_required' }); return; }
+      if (context?.kind === 'cookie' && !isSameOriginRequest(req)) { sendJson(res, 403, { error: 'same_origin_required' }); return; }
     }
     const chatStream = suffix === '/api/stream' && new URLSearchParams(search).has('chat');
     if (suffix.startsWith('/api/chat/') || chatStream) {

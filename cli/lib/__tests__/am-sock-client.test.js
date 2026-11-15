@@ -261,6 +261,7 @@ test('group restart progress never adopts another group or an instance upgrade',
   fs.writeFileSync(file, [
     {v:1,event:'manual_restart_done',requestId:'group-done',session_group:'telegram:a'},
     {v:1,event:'manual_restart_done',requestId:'origin-done',session_group:null},
+    {v:1,event:'manual_restart_done',requestId:'single-done',session_group:'*'},
     {v:1,event:'restart_done',requestId:'upgrade-done'},
   ].map(row=>JSON.stringify(row)).join('\n')+'\n');
   const lookup = (id,sessionGroup) => lookupRestartRequest(id,{sessionGroup,readRequests:()=>[]});
@@ -268,6 +269,8 @@ test('group restart progress never adopts another group or an instance upgrade',
   assert.equal(await lookup('group-done','telegram:b'),'unknown');
   assert.equal(await lookup('origin-done','origin'),'done');
   assert.equal(await lookup('origin-done','telegram:a'),'unknown');
+  assert.equal(await lookup('single-done','origin'),'done');
+  assert.equal(await lookup('single-done','telegram:a'),'unknown');
   assert.equal(await lookup('upgrade-done','origin'),'unknown');
   assert.equal(await lookupRestartRequest('upgrade-done',{readRequests:()=>[]}),'done');
 });

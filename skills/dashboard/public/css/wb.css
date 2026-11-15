@@ -1685,7 +1685,7 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 /* State flags stack below the mutually exclusive primary status without crossing into the next cell. */
 .wb-group-sides { margin: 8px 16px; }
 .wb-state-stack { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; max-width: 100%; }
-.wb-state-stack > .wb-pill { flex: none; max-width: 100%; }
+.wb-state-stack > .wb-pill { flex: none; flex-wrap: wrap; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .wb-state-flags { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: 100%; }
 .wb-state-flags .wb-tag { white-space: normal; overflow-wrap: anywhere; line-height: 18px; }
 @media (max-width: 760px) {

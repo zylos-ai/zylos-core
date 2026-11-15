@@ -87,7 +87,6 @@ import { isSameOriginRequest } from './lib/request-origin.js';
 import { usageSeries } from './lib/workbench/usage-series.js';
 import { hostSeries } from './lib/workbench/host-series.js';
 import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText } from '../public/js/wb/auto-name.js';
-import { searchTerm } from './lib/workbench/group-search.js';
 import { createGroupSnapshot } from './lib/workbench/group-snapshot.js';
 import { createScheduleRead, scheduleReadResponse } from './lib/workbench/schedule-read.js';
 import { createScheduleWrite } from './lib/workbench/schedule-write.js';
@@ -236,13 +235,23 @@ const sse = new SseHub(15_000, { onClientCountChange: count => coreState.setWatc
 const scheduleHistoryBroadcast = createCoalescedBroadcast(() => eventLoopMonitor.runTask('history.broadcast', () => sse.broadcast('history_changed', {})));
 let fleetPollerReady = false; // fleetPoller is declared later (TDZ guard)
 
+const volatilePublicationFields = new Set(['readAt', 'sampledAt', 'sampled_at', 'updated_at', 'duration', 'waitSeconds', 'idleSeconds', 'lastIdleSeconds']);
+function publicationKey(value) {
+  return JSON.stringify(value, (key, item) => volatilePublicationFields.has(key) ? undefined : item);
+}
+let lastInstancePublication = null, lastGroupsPublication = null;
 async function broadcastFleetState() {
   if (sse.clients.size === 0) return;
   try {
-    await Promise.all([coreState.refresh(), workbench.getSnapshot(undefined, { fresh: true })]);
-    sse.broadcast('instance', buildInstancePayload());
-    sse.broadcast('groups', await groupsApi.counts());
-    if (fleetPollerReady) broadcastFleet(fleetPoller.getFleet());
+    const [, snapshot] = await Promise.all([coreState.refresh(), workbench.getSnapshot()]);
+    const instance = buildInstancePayload();
+    const counts = groupCounts(snapshot, { allowUnreadable: true });
+    const running = snapshot.rows.map(row => projectGroup(row, snapshot)).filter(row => row.side === 'running');
+    const instanceKey = publicationKey(instance), groupsKey = publicationKey({ counts, running });
+    const instanceChanged = instanceKey !== lastInstancePublication, groupsChanged = groupsKey !== lastGroupsPublication;
+    if (instanceChanged) { sse.broadcast('instance', instance); lastInstancePublication = instanceKey; }
+    if (groupsChanged) { sse.broadcast('groups', counts); lastGroupsPublication = groupsKey; }
+    if ((instanceChanged || groupsChanged) && fleetPollerReady) broadcastFleet(fleetPoller.getFleet());
   } catch (err) {
     process.stderr.write(`[fleet] instance/groups SSE broadcast skipped: ${err.message}\n`);
   }
@@ -382,7 +391,7 @@ if (codexRolloutCollector) {
 }
 
 // 8. Metric resolver
-const metricResolver = new MetricResolver(store, collectors, config, { stateEngine: coreState, timeZone: instanceTz });
+const metricResolver = new MetricResolver(store, collectors, config);
 
 // 9b. C4 reader (read-only access to comm-bridge DB)
 const c4Reader = new C4Reader(config.zylosDir);
@@ -404,6 +413,11 @@ function recordDashboardInterrupt(record) {
 }
 const groupAction = createGroupActions({ zylosDir: config.zylosDir, config, onInterrupt: recordDashboardInterrupt });
 
+function runtimeOverrideSearchTerm(q) {
+  const term = String(q ?? '').trim();
+  return !term || term.length > 64 ? { none: true }
+    : { term, keyable: /^[A-Za-z0-9_.:-]+$/.test(term) && !term.startsWith('--') };
+}
 async function runtimeOverridesPage(params) {
   const childEnv = { ...process.env, ZYLOS_DIR: config.zylosDir };
   delete childEnv.ZYLOS_SESSION_GROUP;
@@ -419,7 +433,7 @@ async function runtimeOverridesPage(params) {
     return data;
   }
   const hasQuery = params.has('q');
-  const term = hasQuery ? searchTerm(params.get('q')) : null;
+  const term = hasQuery ? runtimeOverrideSearchTerm(params.get('q')) : null;
   if (term?.none) return { runtime: [], nextAfter: null };
   const after = params.get('after');
   const cursor = after === null ? [] : ['--after', after];
@@ -479,6 +493,7 @@ function buildInstancePayload() {
     runtimeHealth: observed.runtimeHealth ?? null, accounts: observed.accounts ?? null,
     supervisorPaused: observed.supervisorPaused ?? null, autoRestarts: observed.autoRestarts ?? null,
     resources, system: observed.system ?? null, services: observed.services ?? null,
+    poolCapacityRecord: observed.pool?.capacityRecord ?? null,
     chat_allow_remote: config.chat?.allowRemote === true };
 }
 
@@ -492,12 +507,12 @@ function readFleetSessionMode() {
   return ['single', 'multi'].includes(result.config.session_mode) ? result.config.session_mode : null;
 }
 
-async function refreshFleetGroupSummary(options) {
+async function refreshFleetGroupSummary() {
   if (readFleetSessionMode() !== 'multi') return;
-  try { await workbench.getSnapshot(undefined, options); } catch { /* Optional observations cannot break the existing state API. */ }
+  try { await workbench.getSnapshot(); } catch { /* Optional observations cannot break the existing state API. */ }
 }
 
-function buildSelfFleetRecord(statePayload = fleetStateFromObjects(buildInstancePayload(), groupCounts(workbench.getCachedSnapshot() ?? { rows: [], readAt: Date.now(), listKnown: false }), usageSummary(store, { tz: instanceTz() }), { rows: (workbench.getCachedSnapshot()?.rows ?? []).map(row => projectGroup(row, workbench.getCachedSnapshot())) })) {
+function buildSelfFleetRecord(statePayload = fleetStateFromObjects(buildInstancePayload(), groupCounts(workbench.getCachedSnapshot() ?? { rows: [], readAt: Date.now(), listKnown: false }, { allowUnreadable: true }), usageSummary(store, { tz: instanceTz() }), { rows: (workbench.getCachedSnapshot()?.rows ?? []).map(row => projectGroup(row, workbench.getCachedSnapshot())) })) {
   return stateToFleetRecord({
     name: config.agent?.name,
     color: agentColor(config.agent?.name)
@@ -1063,7 +1078,7 @@ async function handleApi(req, res, pathname, url) {
       const { lookupRestartRequest } = await loadCoreModule('am-sock-client.js');
       const completion = await lookupRestartRequest(requestId, { deadlineAt: Date.now() + 10000, sessionGroup: key });
       await workbench.getSnapshot(undefined, { fresh: true });
-      const row = await groupsApi.detail(key);
+      const row = await groupsApi.detail(key, { include: [] });
       sendJson(res, 200, { requestId, completion: completion === 'deadline_exceeded' ? 'unknown' : completion,
         group: { id: key, runId: row.runId ?? row.run?.runId ?? null, sessionId: row.sessionId ?? row.run?.sessionId ?? null,
           ready: row.presence === 'running' && row.live?.status?.valid === true, state: row.state } });
@@ -1150,7 +1165,7 @@ async function handleApi(req, res, pathname, url) {
 
   const groupDetail = pathname.match(/^\/api\/groups\/([^/]+)$/);
   if (groupDetail) {
-    try { sendJson(res, 200, await groupsApi.detail(workbenchGroupKey(groupDetail[1]))); }
+    try { sendJson(res, 200, await groupsApi.detail(workbenchGroupKey(groupDetail[1]), { include: url.searchParams })); }
     catch (error) { workbenchFailure(res, error); }
     return true;
   }
@@ -1218,7 +1233,7 @@ async function handleApi(req, res, pathname, url) {
 
   if (pathname === '/api/stream') {
     await Promise.all([coreState.refresh(), refreshFleetGroupSummary()]);
-    const initialCounts = await groupsApi.counts();
+    const initialCounts = groupCounts(await workbench.getSnapshot(), { allowUnreadable: true });
     const initialInstance = buildInstancePayload();
     const apiToken = req._apiToken;
     const validator = apiToken ? () => !!validateApiSession(apiToken) : null;
@@ -1506,7 +1521,7 @@ export function createServer() {
       return;
     }
 
-    const retired = /^\/api\/(?:state|agent-status|restart-status|session-mode|instance-status|system|summary|communication|timeline|metrics(?:\/.*)?|actions(?:\/.*)?|agent\/name)$/.test(pathname) ||
+    const retired = /^\/api\/(?:state|restart-status|session-mode|instance-status|system|summary|communication|timeline|metrics(?:\/.*)?|actions(?:\/.*)?|agent\/name)$/.test(pathname) ||
       /^\/api\/workbench\/(?:groups(?:\/.*)?|activity|usage|host|name-prompt|runtime-overrides|pricing)$/.test(pathname);
     if (retired && pathname !== '/api/actions/restart-timezone-services') { sendJson(res, 404, { error: 'not_found' }); return; }
     if ((pathname.startsWith('/api/instance/') || pathname.startsWith('/api/groups/')) && !['GET', 'HEAD'].includes(req.method)) {
@@ -1569,7 +1584,7 @@ export function createServer() {
     const instanceAction = pathname.match(/^\/api\/instance\/actions\/(switch-mode|switch-runtime|upgrade|upgrade-runtime)$/);
     if ((instanceAction && req.method === 'POST') || (pathname === '/api/instance/defaults' && req.method === 'PUT')) {
       try {
-        const body = await readJsonBody(req, 4096);
+        const body = await readJsonBody(req, 4096, { allowEmpty: Boolean(instanceAction) });
         const action = instanceAction ? ({ upgrade: 'upgrade-zylos', 'upgrade-runtime': 'upgrade-cc' }[instanceAction[1]] ?? instanceAction[1])
           : ({ model: 'switch-model', effort: 'switch-effort', threshold: 'set-threshold', 'session-hot-ttl': 'set-session-hot-ttl' }[body?.kind]);
         if (!action) { sendJson(res, 400, { ok: false, error: { code: 'INVALID_DEFAULT', message: 'Choose model, effort, threshold or session-hot-ttl' } }); return; }

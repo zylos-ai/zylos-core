@@ -114,7 +114,7 @@ test('page script text: dashboard actions are sent only through the page actions
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
   assert.deepEqual(app.match(/\bsendAction\b/g), ['sendAction', 'sendAction'], 'the sender is defined once and handed only to the page actions');
   assert.match(app, /createPageActions\(\{\s*t, send: sendAction,/);
-  assert.match(app, /shownSession: \(\) => state\.dashboardState,/, 'a manual restart names the session the page shows');
+  assert.match(app, /shownSession: \(\) => \(\{ sessionGroup: 'origin', runId: state\.originGroup\?\.live\?\.runId, sessionId: state\.originGroup\?\.live\?\.sessionId \}\),/, 'a manual restart names the session the page shows');
   assert.match(app, /function execAction\(action, body\) \{\s*return pageActions\(\)\.exec\(action, body\);\s*\}/, 'every page action asks through exec');
   assert.doesNotMatch(app, /runConfirmed/, 'only the default-settings card, after confirming, uses the no-ask path');
   assert.doesNotMatch(app, /createActionRunner/, 'the page has one action runner');

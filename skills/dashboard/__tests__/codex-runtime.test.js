@@ -1,3 +1,4 @@
+import { usageTokenRows } from '../src/lib/workbench/cost-query.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -235,20 +236,20 @@ test('CodexRolloutCollector ingests rollout fixture metrics from hook-derived pa
   assert.equal(tokens[0].dimensions.rollout_line, 3);
   assert.ok(tokens[0].dimensions.event_id.startsWith(`token_count-codex-session-1-${tokenOffset}-3-`));
 
-  const aggregateTokens = store.aggregateTokens({ sessionId: 'codex-session-1' });
-  assert.equal(aggregateTokens.input, 12000);
-  assert.equal(aggregateTokens.cache_read, 3000);
-  assert.equal(aggregateTokens.cache_rate, 0.25);
+  const aggregateTokens = usageTokenRows(store, { since: '2026-01-01T00:00:00.000Z', until: '2027-01-01T00:00:00.000Z', bucket: 'total' }).find(row => row.runtime === 'codex');
+  assert.equal(aggregateTokens.inputTokens, 12000);
+  assert.equal(aggregateTokens.cacheReadTokens, 3000);
+  assert.equal(aggregateTokens.cacheReadTokens / aggregateTokens.inputTokens, 0.25);
 
-  const tokenSeries = store.aggregateTokenSeries({
+  const tokenSeries = usageTokenRows(store, {
     since: '2026-05-23T00:00:00.000Z',
     until: '2026-05-23T02:00:00.000Z',
-    bucketSeconds: 3600
+    bucket: 'hour', tz: 'UTC'
   });
   assert.equal(tokenSeries.length, 1);
-  assert.equal(tokenSeries[0].input_sum, 12000);
-  assert.equal(tokenSeries[0].cache_read_sum, 3000);
-  assert.equal(tokenSeries[0].cache_rate, 0.25);
+  assert.equal(tokenSeries[0].inputTokens, 12000);
+  assert.equal(tokenSeries[0].cacheReadTokens, 3000);
+  assert.equal(tokenSeries[0].cacheReadTokens / tokenSeries[0].inputTokens, 0.25);
 
   assert.equal(tokens[0].dimensions.cache_hit_rate, 0.25);
   assert.equal(tokens[0].dimensions.cost_confidence, 'estimated');
@@ -632,9 +633,9 @@ test('CodexRolloutCollector deduplicates metrics when rollout cursor is replayed
   assert.equal(store.queryMetrics({ name: 'turn_duration' }).length, 1);
   assert.equal(store.queryEvents({ types: ['turn_complete'] }).length, 1);
 
-  const aggregateTokens = store.aggregateTokens({ sessionId: 'codex-session-1' });
-  assert.equal(aggregateTokens.input, 12000);
-  assert.equal(aggregateTokens.output, 800);
+  const aggregateTokens = usageTokenRows(store, { since: '2026-01-01T00:00:00.000Z', until: '2027-01-01T00:00:00.000Z', bucket: 'total' }).find(row => row.runtime === 'codex');
+  assert.equal(aggregateTokens.inputTokens, 12000);
+  assert.equal(aggregateTokens.outputTokens, 800);
 
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });

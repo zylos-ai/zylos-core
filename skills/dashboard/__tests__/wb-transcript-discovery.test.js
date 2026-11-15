@@ -8,7 +8,6 @@ import { UsageTranscripts } from '../src/lib/collectors/usage-transcripts.js';
 import { ConversationCollector } from '../src/lib/collectors/conversation-collector.js';
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
 import { claudeProjectSlug } from '../src/lib/claude-project-path.js';
-import { latestCodexRolloutSessionBounds } from '../src/lib/metric-aggregate.js';
 import { CodexHistory } from '../src/lib/history/codex-history.js';
 
 // All cases use actual SQLite/files and collectors. Run for transcript discovery,
@@ -116,12 +115,12 @@ test('Codex discovery keeps only Origin rollout paths while collecting every gro
   assert.deepEqual(paths.map(row => row.session_id), ['session-null', 'session-origin']);
 });
 
-// SQLite/inventory/metric integration: newer non-Origin starts must not select the
-// session fallback. Run for discovery or fallback selection changes; skip UI-only
+// SQLite/inventory integration: newer non-Origin starts must not select the
+// current rollout. Run for discovery selection changes; skip UI-only
 // changes. Same isolated runner and temporary fixture cleanup as the case above.
-test('Codex session metric fallback selects the latest Origin despite a newer group', t => {
+test('Codex rollout discovery selects the latest Origin despite a newer group', t => {
   const f = codexGroups(t);
-  assert.equal(latestCodexRolloutSessionBounds(f.store).sessionId, 'session-origin');
+  assert.equal(f.store.latestCodexRolloutPath('codex').session_id, 'session-origin');
 });
 
 // SQLite/inventory/history integration: real rollout metadata under a private HOME.

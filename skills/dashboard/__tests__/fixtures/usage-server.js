@@ -15,7 +15,7 @@ import { VersionChecker } from '../../src/lib/version-checker.js';
 // Only this fixture's random loopback port is opened. CLI and Core callbacks
 // are replaced before index import; collectors/main are never started. Cleanup
 // is registered before import and owns listener, intervals, engine and DBs.
-export async function usageServer(t, configBody = {}) {
+export async function usageServer(t, configBody = {}, { snapshot } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-http-'));
   const previous = process.env.ZYLOS_DIR;
   let server, store, reader, engine, core;
@@ -66,6 +66,10 @@ export async function usageServer(t, configBody = {}) {
     ZYLOS_DIR: dir, PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR,
     socket: path.join(dir, 'tmux.sock'), databaseRoot: dir,
     listener: '127.0.0.1:0', coreAndCli: 'mocked before import; no tmux or PM2 opened' }));
+  if (snapshot) t.mock.module('../../src/lib/workbench/group-snapshot.js', { namedExports: {
+    createGroupSnapshot: () => ({ getSnapshot: async () => snapshot(core), getCachedSnapshot: () => snapshot(core),
+      channelDownCounter: { update() {} }, hotTtlMs: () => 1800000 })
+  } });
   const { createServer } = await import(`../../src/index.js?usage=${Date.now()}-${Math.random()}`);
   server = createServer();
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });

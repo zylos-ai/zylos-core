@@ -16,19 +16,6 @@ function restartDashboard() {
   child.unref();
 }
 
-export function buildRestartStatus(requestId, completion, current = {}) {
-  return {
-    requestId,
-    completion: completion === 'deadline_exceeded' ? 'unknown' : completion || 'unknown',
-    origin: {
-      runId: current.runId ?? null,
-      sessionId: current.sessionId ?? null,
-      ready: current.ready === true,
-      state: current.state || 'UNKNOWN',
-    },
-  };
-}
-
 async function command(file, args, { timeout = 10000 } = {}) {
   try {
     const { stdout } = await execute(file, args, { timeout, maxBuffer: 1024 * 1024 });

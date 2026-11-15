@@ -387,6 +387,18 @@ test('technical usage uses the cache rate included in the usage response without
   assert.match(f.root.textContent, /wb\.usage\.cacheHit \{"pct":62\}/);
   page.destroy();
 });
+test('technical usage hides the cache-rate summary when that reading is unavailable', async () => {
+  const f = fixture(), paths = [];
+  const reply = { ...value, totals: { ...value.totals, cacheHitRate: null }, cache: [] };
+  const page = createUsagePage({ ...f, detail: () => 'technical', t: key => key,
+    read: async path => { paths.push(path); return reply; } });
+  try {
+    await page.open();
+    assert.deepEqual(paths, ['/api/usage/series?range=7d']);
+    assert.equal(f.root.textContent.includes('wb.usage.cacheHit'), false);
+    assert.ok(f.root.textContent.includes('wb.usage.tokens'), 'the token total remains visible');
+  } finally { page.destroy(); }
+});
 test('beyond the seven days of runtime events the unknown cards take full rows and tokens fills its row', () => {
   const f = fixture();
   renderUsage(f.root, { ...value, rotations: null, tools: null }, { ...f, level: 'technical' });

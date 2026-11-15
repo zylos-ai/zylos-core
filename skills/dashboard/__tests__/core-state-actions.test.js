@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { projectOrigin } from '../src/lib/core-state.js';
-import { buildRestartStatus, handleCoreAction } from '../src/lib/core-actions.js';
+import { handleCoreAction } from '../src/lib/core-actions.js';
 import { Sanitizer } from '../src/lib/sanitizer.js';
 import { formatActionResult } from '../public/js/action-result.js';
 
@@ -53,17 +53,6 @@ test('control result formatter lists every id and explicit rejection code', () =
   assert.match(rejected, /submission_rejected/); assert.match(rejected, /DB_BUSY/);
 });
 
-test('restart status keeps old-run completion separate from current Origin readiness', () => {
-  assert.deepEqual(buildRestartStatus(
-    '11111111-1111-4111-8111-111111111111',
-    'deadline_exceeded',
-    { runId: 'R2', sessionId: 'S2', ready: true, state: 'IDLE', identity: { token: 'private' } },
-  ), {
-    requestId: '11111111-1111-4111-8111-111111111111',
-    completion: 'unknown',
-    origin: { runId: 'R2', sessionId: 'S2', ready: true, state: 'IDLE' },
-  });
-});
 
 test('Core state enforces readiness, freshness and runtime-specific account usage', async t => {
   const calls = [];

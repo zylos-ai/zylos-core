@@ -1,3 +1,4 @@
+import { conversationDetail } from './helpers/conversation-object-api.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -38,9 +39,8 @@ function originPage(t, { locale = 'en', mode = 'multi', row = originRow(mode), h
   const translate = (key, params = {}) => Object.entries(params).reduce((text, [name, value]) => text.replaceAll(`{${name}}`, value ?? ''), translations[key] ?? key);
   const page = mountConversationPage({ root, document, groupLinks: {}, t: translate, fetch: async (path, options = {}) => {
     requests.push(path);
-    const body = path === '/api/session-mode' ? { data: { sessionMode: mode } }
-      : path === '/api/workbench/groups' ? { listKnown: true, rows: [row],
-        instance: { runtimeHealth: { claude: { health } } }, sources: { status: { ok: true, readAt: 1000 } } }
+    const body = path === '/api/instance' ? { session_mode: mode, runtimeHealth: { claude: { health } } }
+      : path.split('?')[0] === '/api/groups/origin' ? conversationDetail(row)
       : path.startsWith('/api/chat/conversations?') ? { items: [otherItem, originItem], nextCursor: null }
       : path.endsWith('/send') ? (sends.push({ path, body: options.body }), { stored: true, conversationId: ORIGIN })
       : path.includes('/messages?') ? { items: path.includes(encodeURIComponent(ORIGIN)) ? messages : [], afterCursor: 'after', nextCursor: null }

@@ -13,7 +13,7 @@ import { createDocument, allNodes, tick } from './fixtures/workbench-dom.js';
 import { documentFixture } from './fixtures/settings-dom.js';
 const en = JSON.parse(readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
 const t = (key, values = {}) => (en[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => String(values[name] ?? `{${name}}`));
-const groups = count => Array.from({ length: count }, (_, n) => ({ sessionGroup: `telegram:dm-${n}`, presence: 'running', state: { kind: 'busy' }, name: { displayName: `Group ${n}` }, target: { runtime: 'claude' } }));
+const groups = count => Array.from({ length: count }, (_, n) => ({ sessionGroup: `telegram:dm-${n}`, presence: 'running', state: { kind: 'working' }, name: { displayName: `Group ${n}` }, target: { runtime: 'claude' } }));
 for (const count of [1, 2]) {
   const noun = count === 1 ? '' : 's';
   test(`Workbench waiting and attention render English count ${count}`, () => {

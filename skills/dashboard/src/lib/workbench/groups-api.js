@@ -1,5 +1,6 @@
 import { validKey, fallbackName } from './display-names.js';
 import { Sanitizer } from '../sanitizer.js';
+import { STALE_STATUS_DISPLAY_MS } from './group-state.js';
 
 const STATES = ['working', 'idle', 'starting', 'stopping', 'unknown'];
 const FLAGS = ['queued', 'blocked', 'waitingSlot', 'startFailed', 'unreadable'];
@@ -17,6 +18,10 @@ export function groupKey(id) {
  * a waiting condition precedence over work which is actually running. */
 export function projectGroup(row, snapshot) {
   const now = snapshot.readAt, status = row.live?.status;
+  const stale = row.presence === 'running' && status?.valid !== true && status?.reason === 'stale' &&
+    ['busy', 'idle'].includes(status.lastState) && Number.isFinite(status.sampledAt) &&
+    now >= status.sampledAt && now - status.sampledAt < STALE_STATUS_DISPLAY_MS;
+  const activity = status?.valid ? status.state : stale ? status.lastState : null;
   const errors = [];
   if (row.presence === 'unknown' || row.live?.error || snapshot.sources?.status?.ok === false) {
     errors.push(row.live?.error?.code ?? row.reason ?? snapshot.sources?.status?.reason ?? 'status_unreadable');
@@ -26,8 +31,8 @@ export function projectGroup(row, snapshot) {
   else if (row.presence === 'not_running') kind = 'offline';
   else if (row.presence === 'starting') kind = 'starting';
   else if (row.presence === 'running' && row.fence) kind = 'stopping';
-  else if (row.presence === 'running' && status?.valid && ['busy', 'idle'].includes(status.state)) {
-    kind = row.working?.on || status.state === 'busy' ? 'working' : 'idle';
+  else if (row.presence === 'running' && ['busy', 'idle'].includes(activity)) {
+    kind = row.working?.on || activity === 'busy' ? 'working' : 'idle';
   } else {
     kind = 'unknown'; errors.push(status?.reason ?? 'activity_unreadable');
   }
@@ -63,16 +68,20 @@ export function projectGroup(row, snapshot) {
     : kind === 'starting' ? row.createdAt == null ? null : row.createdAt * 1000
       : kind === 'stopping' ? row.fence?.createdAt == null ? null : row.fence.createdAt * 1000 : null;
   const duration = Number.isFinite(since) ? Math.max(0, (now - since) / 1000)
-    : kind === 'idle' ? status.idleSeconds ?? null : kind === 'working' ? row.duration ?? null : null;
+    : kind === 'idle' ? (stale ? status.lastIdleSeconds : status.idleSeconds) ?? null : kind === 'working' ? row.duration ?? null : null;
   const id = row.sessionGroup ?? 'origin';
-  const runtimeOverridden = snapshot.overrides ? snapshot.overrides.runtime.some(item => item.sessionGroup === row.sessionGroup) : null;
-  const modelOverridden = snapshot.overrides ? snapshot.overrides.model.some(item => item.sessionGroup === row.sessionGroup && item.runtime === runtime) : null;
+  const launched = ['running', 'starting'].includes(row.presence);
+  const runtimeOverridden = launched
+    ? typeof runtime === 'string' && snapshot.baselineRuntime != null ? runtime !== snapshot.baselineRuntime : null
+    : snapshot.overrides ? snapshot.overrides.runtime.some(item => item.sessionGroup === row.sessionGroup) : null;
+  const modelOverridden = launched ? row.launchConfig ? row.launchConfig.mode === 'override' : null
+    : snapshot.overrides ? snapshot.overrides.model.some(item => item.sessionGroup === row.sessionGroup && item.runtime === runtime) : null;
   return { ...row, id, channel: row.c4?.componentName ?? (id === 'origin' ? null : id.split(':')[0]),
     displayName: row.name?.displayName ?? row.name?.effectiveName ?? fallbackName(id, row.c4?.componentName),
     runtime, model: row.model ?? (typeof row.target?.model === 'object' ? row.target.model?.model : null),
-    state: { kind, since: iso(since) }, duration, flags, side: kind === 'offline' ? 'offline' : 'running', runtimeOverridden, modelOverridden,
+    state: { kind, since: iso(since), ...(stale ? { stale: true, sampledAt: status.sampledAt } : {}) }, duration, flags, side: kind === 'offline' ? 'offline' : 'running', runtimeOverridden, modelOverridden,
     lastActivityAt: iso(row.c4?.lastActivityAt),
-    ...(kind === 'offline' ? {} : { mainAgent: row.presence === 'running' && status?.valid && ['busy', 'idle'].includes(status.state) ? status.state : 'unknown' }) };
+    ...(kind === 'offline' ? {} : { mainAgent: row.presence === 'running' && ['busy', 'idle'].includes(activity) ? activity : 'unknown' }) };
 }
 
 function rowsOf(snapshot) { return snapshot.rows.map(row => projectGroup(row, snapshot)); }
@@ -80,8 +89,8 @@ function requireCatalog(snapshot) {
   if (snapshot.sources?.c4?.ok === false) throw failure('GROUP_CATALOG_UNREADABLE', 'Session group catalog could not be read', 502);
 }
 
-export function groupCounts(snapshot) {
-  requireCatalog(snapshot);
+export function groupCounts(snapshot, { allowUnreadable = false } = {}) {
+  if (!allowUnreadable) requireCatalog(snapshot);
   const states = Object.fromEntries(STATES.map(key => [key, 0]));
   const flags = Object.fromEntries(FLAGS.map(key => [key, 0]));
   const offline = { total: 0, waitingSlot: 0, startFailed: 0 };
@@ -95,9 +104,9 @@ export function groupCounts(snapshot) {
       for (const key of FLAGS) if (row.flags[key]) flags[key]++;
     }
   }
-  return { readAt: snapshot.readAt, mode: snapshot.mode, listKnown: snapshot.listKnown,
+  return { readAt: snapshot.readAt, mode: snapshot.mode, listKnown: snapshot.listKnown === true && snapshot.sources?.c4?.ok !== false,
     running: { total: Object.values(states).reduce((sum, count) => sum + count, 0), states, flags }, offline,
-    pool: snapshot.instance?.pool ?? null };
+    pool: snapshot.instance?.pool ? { used: snapshot.instance.pool.used ?? null, capacity: snapshot.instance.pool.capacity ?? null } : null };
 }
 
 /** Object APIs reuse the existing request snapshot; no second poller or cache. */
@@ -140,18 +149,27 @@ export function createGroupsApi({ workbench, groupConfig } = {}) {
       return { rows: matches.slice(0, 50), truncated: matches.length > 50 };
     },
     activity: range => workbench.activity((range instanceof URLSearchParams ? range.get('range') : range) || '6h'),
-    async detail(id) {
+    async detail(id, { include = ['raw', 'config'] } = {}) {
+      if (include instanceof URLSearchParams) include = include.has('include') ? include.get('include').split(',').filter(Boolean) : ['raw', 'config'];
+      if (!Array.isArray(include) || include.some(value => !['raw', 'config'].includes(value))) throw failure('INVALID_INCLUDE', 'Include must contain raw or config');
       groupKey(id);
       const snapshot = await workbench.getSnapshot();
       const row = rowsOf(snapshot).find(row => row.id === id);
       if (!row) { requireCatalog(snapshot); throw failure('GROUP_NOT_FOUND', 'Session group not found', 404); }
-      const [raw, config] = await Promise.all([workbench.raw(id), groupConfig ? groupConfig.get(id) : null]);
-      const launch = row.launchConfig;
-      return { ...row, readAt: snapshot.readAt, raw: raw.raw, config,
-        effective: { runtime: row.runtime, model: row.model ?? config?.model?.data?.resolved?.model ?? null, effort: row.effort ?? launch?.effort ?? config?.model?.data?.resolved?.effort ?? null,
-          runtimeOverridden: snapshot.overrides?.runtime?.some(item => item.sessionGroup === row.sessionGroup) ?? null,
-          modelOverridden: launch ? launch.mode === 'override' : row.target?.model === 'default' ? false : row.target?.model != null,
-        },
+      const readExtra = async (name, read) => {
+        if (!include.includes(name)) return {};
+        try { return { [name]: await read() }; }
+        catch (error) { return { [name]: null, [name + 'Error']: { code: error.code ?? 'READ_FAILED', message: error.message ?? 'Observation unavailable' } }; }
+      };
+      const [raw, config] = await Promise.all([
+        readExtra('raw', async () => (await workbench.raw(id)).raw),
+        readExtra('config', async () => groupConfig ? groupConfig.get(id) : null),
+      ]);
+      const selected = ['running', 'starting'].includes(row.presence) ? row.launchConfig : row.target;
+      return { ...row, readAt: snapshot.readAt, ...raw, ...config,
+        effective: { runtime: row.runtime, model: row.model ?? selected?.model?.model ?? (typeof selected?.model === 'string' && selected.model !== 'default' ? selected.model : null),
+          effort: row.effort ?? selected?.effort ?? selected?.model?.effort ?? null,
+          runtimeOverridden: row.runtimeOverridden, modelOverridden: row.modelOverridden },
         run: row.live ? { runId: row.live.runId, sessionId: row.live.sessionId, createdAt: row.createdAt == null ? null : iso(row.createdAt * 1000) } : null };
     },
   };

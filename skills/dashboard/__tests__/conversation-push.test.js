@@ -47,7 +47,7 @@ function fixture(t, override = () => undefined) {
     const u = new URL(url, 'http://fixture');
     assert.ok(calls.length < 250, 'bounded request log'); calls.push({ url, u, options, at: timer.now() });
     const result = override(u, options, timer.now()); if (result !== undefined) return result;
-    if (url === '/api/session-mode') return { data: { sessionMode: 'multi' } };
+    if (url === '/api/instance') return { session_mode: 'multi' };
     if (u.pathname === '/api/chat/conversations') return { items: [{ id: 'g:AA' }], nextCursor: null };
     if (u.pathname.endsWith('/messages')) return { items: u.searchParams.get('direction') === 'before' ? [{ id: 1, direction: 'in', content: 'hello', status: 'pending' }] : [], afterCursor: 'cursor', nextCursor: null };
     if (u.pathname.endsWith('/questions') || u.pathname.endsWith('/status')) return { items: [], nextCursor: null };

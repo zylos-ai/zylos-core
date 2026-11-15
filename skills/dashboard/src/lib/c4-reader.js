@@ -63,36 +63,6 @@ export class C4Reader {
     } catch { throw failure(); }
   }
 
-  getTodayStats() {
-    const db = this._open();
-    if (!db) return null;
-    const today = new Date().toISOString().slice(0, 10);
-    try {
-      const rows = db.prepare(`
-        SELECT channel, direction, COUNT(*) as count
-        FROM conversations
-        WHERE timestamp >= ?
-        GROUP BY channel, direction
-      `).all(today);
-
-      const channels = {};
-      for (const r of rows) {
-        if (!channels[r.channel]) channels[r.channel] = { in: 0, out: 0 };
-        channels[r.channel][r.direction === 'in' ? 'in' : 'out'] += r.count;
-      }
-
-      let totalIn = 0, totalOut = 0;
-      for (const r of rows) {
-        if (r.direction === 'in') totalIn += r.count;
-        else totalOut += r.count;
-      }
-
-      return { channels, total_in: totalIn, total_out: totalOut };
-    } catch {
-      return null;
-    }
-  }
-
   getInboundTimes({ since, groups }) {
     if (!groups.length) return [];
     const failure = () => Object.assign(new Error('Inbound activity unavailable'), { code: 'READ_FAILED', reason: 'READ_FAILED', statusCode: 502 });
@@ -125,82 +95,6 @@ export class C4Reader {
         WHERE session_group IS ? AND channel <> 'internal' AND timestamp BETWEEN ? AND ?
         ORDER BY id`).all(key, start, end);
     } catch { throw failure(); }
-  }
-
-  getPendingQueue() {
-    const db = this._open();
-    if (!db) return { depth: null, oldest_age_s: null, error: 'READ_FAILED' };
-    try {
-      const row = db.prepare(`
-        SELECT COUNT(*) as depth,
-               CAST(strftime('%s','now') - strftime('%s', MIN(timestamp)) AS INTEGER) as oldest_age_s
-        FROM conversations
-        WHERE direction = 'in' AND status IN ('pending', 'running')
-      `).get();
-
-      return {
-        depth: row.depth || 0,
-        oldest_age_s: row.oldest_age_s ?? null
-      };
-    } catch {
-      return { depth: null, oldest_age_s: null, error: 'READ_FAILED' };
-    }
-  }
-
-  getLastOutbound() {
-    const db = this._open();
-    if (!db) return {};
-    try {
-      const rows = db.prepare(`
-        SELECT channel, MAX(timestamp) as last_ts
-        FROM conversations
-        WHERE direction = 'out'
-        GROUP BY channel
-      `).all();
-
-      const result = {};
-      for (const r of rows) {
-        result[r.channel] = r.last_ts ? r.last_ts.replace(' ', 'T') + 'Z' : r.last_ts;
-      }
-      return result;
-    } catch {
-      return {};
-    }
-  }
-
-  getAvgResponseTime() {
-    const db = this._open();
-    if (!db) return null;
-    const today = new Date().toISOString().slice(0, 10);
-    const now = Date.now();
-    if (this._responseTimeCache?.day === today && now - this._responseTimeCache.at < 60_000) {
-      return this._responseTimeCache.value;
-    }
-    try {
-      // Incoming rows precede outgoing rows at equal timestamps, preserving
-      // the old join's strictly-later response rule. Keep SQLite's date math
-      // and exact ten-minute cutoff to avoid changing boundary rounding.
-      const rows = db.prepare(`
-        SELECT channel, direction, timestamp, julianday(timestamp) AS day
-        FROM conversations
-        WHERE timestamp >= ? AND direction IN ('in', 'out')
-          AND channel NOT IN ('scheduler', 'system', 'control')
-        ORDER BY channel, timestamp DESC, direction ASC
-      `).all(today);
-      let channel = null, nextOutbound = null, total = 0, count = 0;
-      for (const row of rows) {
-        if (row.channel !== channel) { channel = row.channel; nextOutbound = null; }
-        if (row.direction === 'out') { nextOutbound = row; continue; }
-        if (!nextOutbound || row.day == null || nextOutbound.day == null) continue;
-        const delta = nextOutbound.day - row.day;
-        if (delta > 0 && delta < 0.0069444) { total += delta * 86400; count++; }
-      }
-      const value = count ? Math.round(total / count) : null;
-      this._responseTimeCache = { day: today, at: Date.now(), value };
-      return value;
-    } catch {
-      return null;
-    }
   }
 
   getMessageSeries({ since, until, bucketSeconds = 3600, intervals } = {}) {
@@ -274,6 +168,5 @@ export class C4Reader {
     this._db?.close();
     this._db = null;
     this._fileIdentity = null;
-    this._responseTimeCache = null;
   }
 }

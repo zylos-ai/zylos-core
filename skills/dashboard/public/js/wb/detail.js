@@ -347,7 +347,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       else await timeline.refresh();
     }
   }
-  function refresh() {
+  function refresh({ includeExtras = false } = {}) {
     invalidateOwner();
     if (!controller || !active(generation) || !isVisible()) return Promise.resolve();
     if (refreshTask) return refreshTask;
@@ -364,7 +364,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
         request(`/api/groups/${encodeURIComponent(key)}/backlog`),
         request(`/api/groups/${encodeURIComponent(key)}/runs?` + runsQuery),
         loadSubagents(),
-        request(`/api/groups/${encodeURIComponent(key)}`),
+        request(`/api/groups/${encodeURIComponent(key)}` + (includeExtras ? '' : '?include=')),
         request(`/api/groups/${encodeURIComponent(key)}/usage`),
       ]);
       if (!active(gen) || state.row.live?.runId !== runId || readLevel() !== level) return;
@@ -430,7 +430,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       configRevision = 0;
       config = createGroupConfig({ key, request, t, active: () => active(gen), onChange: () => { configRevision++; draw(); } });
       draw();
-      await refresh();
+      await refresh({ includeExtras: true });
     },
     async updateSnapshot(snapshot) {
       invalidateOwner();

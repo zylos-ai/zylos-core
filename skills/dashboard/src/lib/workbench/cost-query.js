@@ -117,13 +117,3 @@ export function summarizeCosts(rows) {
   }
   return { total, byRuntime };
 }
-
-export function costSummary(store, { tz, now = new Date() } = {}) {
-  const timezone = resolveUsageTimezone(tz);
-  tz = timezone.tz;
-  const weekBounds = usageBounds({ range: '7d', tz, now });
-  const intervals = usageIntervals(weekBounds);
-  const week = costRows(store, { ...weekBounds, intervals });
-  const todayAt = intervals.at(-1)?.at;
-  return { ...timezone, today: summarizeCosts(week.filter(row => row.at === todayAt)), sevenDay: summarizeCosts(week) };
-}

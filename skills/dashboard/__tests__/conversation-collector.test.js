@@ -1,3 +1,4 @@
+import { costRows } from '../src/lib/workbench/cost-query.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
@@ -1063,23 +1064,23 @@ for (const scenario of [
       assert.equal(rows[0].timestamp, expectedTime);
       assert.equal(rows[0].session_id, scenario.session);
       for (const bucketSeconds of [3600, 86400]) {
-        const series = store.aggregateCostSeries({
-          since: '2026-09-13', until: '2026-09-15', bucketSeconds
+        const series = costRows(store, {
+          since: '2026-09-13T00:00:00.000Z', until: '2026-09-15T00:00:00.000Z', bucket: bucketSeconds === 3600 ? 'hour' : 'day', tz: 'UTC'
         });
         assert.equal(series.length, 1);
-        assert.equal(series[0].bucket_start, Math.floor(Date.parse(expectedTime) / (bucketSeconds * 1000)) * bucketSeconds);
-        assert.equal(series[0].request_count, 1);
-        assert.ok(Math.abs(series[0].cost_sum - 0.001024) < 1e-12);
+        assert.equal(Date.parse(series[0].at) / 1000, Math.floor(Date.parse(expectedTime) / (bucketSeconds * 1000)) * bucketSeconds);
+        assert.equal(rows.filter(row => Date.parse(row.timestamp) >= Date.parse(series[0].at) && Date.parse(row.timestamp) < Date.parse(series[0].at) + bucketSeconds * 1000).length, 1);
+        assert.ok(Math.abs(series[0].value - 0.001024) < 1e-12);
         const start = Math.floor(Date.parse(expectedTime) / (bucketSeconds * 1000)) * bucketSeconds * 1000;
-        const window = { since: new Date(start).toISOString(), until: new Date(start + bucketSeconds * 1000 - 1).toISOString(), bucketSeconds };
-        assert.deepEqual(store.aggregateCostSeries(window), series);
-        assert.equal(store.aggregateCostSeries({
+        const window = { since: new Date(start).toISOString(), until: new Date(start + bucketSeconds * 1000 - 1).toISOString(), bucket: bucketSeconds === 3600 ? 'hour' : 'day', tz: 'UTC' };
+        assert.deepEqual(costRows(store, window), series);
+        assert.equal(costRows(store, {
           since: new Date(start - bucketSeconds * 1000).toISOString(),
-          until: new Date(start - 1).toISOString(), bucketSeconds
+          until: new Date(start - 1).toISOString(), bucket: bucketSeconds === 3600 ? 'hour' : 'day', tz: 'UTC'
         }).length, 0);
-        assert.equal(store.aggregateCostSeries({
+        assert.equal(costRows(store, {
           since: new Date(start + bucketSeconds * 1000).toISOString(),
-          until: new Date(start + 2 * bucketSeconds * 1000 - 1).toISOString(), bucketSeconds
+          until: new Date(start + 2 * bucketSeconds * 1000 - 1).toISOString(), bucket: bucketSeconds === 3600 ? 'hour' : 'day', tz: 'UTC'
         }).length, 0);
       }
       const sessions = store.db.prepare("SELECT session_id, SUM(json_extract(dimensions, '$.cost')) AS cost FROM metric_points WHERE source = 'jsonl_usage' GROUP BY session_id").all();

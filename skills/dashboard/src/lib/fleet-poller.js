@@ -349,7 +349,7 @@ export function stateToFleetRecord(agentConfig = {}, statePayload = {}, opts = {
     rate_limit_7d_recorded_at: statePayload?.rate_limit_7d_recorded_at ?? null,
     rate_limit_7d_live: statePayload?.rate_limit_7d_live ?? null,
     context_pct: statePayload?.context_pct ?? metricValue(statePayload, 'context_pct'),
-    cost: statePayload?.session_cost ?? statePayload?.daily_cost ?? statePayload?.weekly_cost ?? metricValue(statePayload, 'session_cost') ?? metricValue(statePayload, 'daily_cost'),
+    cost: statePayload?.session_cost ?? metricValue(statePayload, 'session_cost'),
     session_cost: statePayload?.session_cost ?? metricValue(statePayload, 'session_cost'),
     daily_cost: statePayload?.daily_cost ?? metricValue(statePayload, 'daily_cost'),
     weekly_cost: statePayload?.weekly_cost ?? null,
@@ -1038,11 +1038,17 @@ export class FleetPoller {
     if (stream) {
       stream.seenFleetState = true;
       if (stream.compatibilityTimer) { this.clearTimeout(stream.compatibilityTimer); stream.compatibilityTimer = null; }
-      if (stream.objectReadPending) return;
+      if (stream.objectReadPending) { stream.objectReadDirty = true; return; }
       stream.objectReadPending = true;
     }
     this._pollAgentAndNotify(agent).finally(() => {
-      if (stream) stream.objectReadPending = false;
+      if (stream) {
+        stream.objectReadPending = false;
+        if (stream.objectReadDirty && this._isCurrentAgent(agent, undefined, stream)) {
+          stream.objectReadDirty = false;
+          this._handleSseEvent(agent, { event: 'groups' });
+        }
+      }
     });
     this._stopFallbackPolling(agent, 'sse-takeover');
   }

@@ -7,18 +7,18 @@ export function groupSnapshot(instance, counts, page) {
     baselineRuntime: instance.default_runtime ?? instance.runtime_info?.runtime,
     readAt: counts.readAt, listKnown: counts.listKnown !== false && page.listKnown !== false, rows, counts: { ...counts.running?.states, offline: counts.offline?.total ?? 0 },
     groupCounts: counts, nextCursor: page.nextCursor ?? null, hasOlder: page.nextCursor != null, overrides,
-    instance: { ...instance, pool: counts.pool },
+    instance: { ...instance, pool: instance.poolCapacityRecord == null ? counts.pool : { ...counts.pool, capacityRecord: instance.poolCapacityRecord } },
     sources: { status: { ok: counts.listKnown !== false && page.listKnown !== false, readAt: page.readAt ?? counts.readAt } },
     attention: { problems: rows.flatMap(row => row.attention ?? []).filter(item => item.severity !== 'reminder'),
       reminders: rows.flatMap(row => row.attention ?? []).filter(item => item.severity === 'reminder') } };
 }
 
-export async function readGroupSnapshot(read, { signal, side = 'running', cursor = null, pages = 1 } = {}) {
+export async function readGroupSnapshot(read, { signal, side = 'running', cursor = null, pages = 1, instance, counts } = {}) {
   const params = new URLSearchParams();
   if (cursor != null) params.set('cursor', cursor);
   const path = side === 'offline' ? '/api/groups/offline' + (params.size ? '?' + params : '') : '/api/groups/running';
-  const [instance, counts, page] = await Promise.all([
-    read('/api/instance', { signal }), read('/api/groups/counts', { signal }), read(path, { signal }),
+  const [instanceData, countsData, page] = await Promise.all([
+    instance ?? read('/api/instance', { signal }), counts ?? read('/api/groups/counts', { signal }), read(path, { signal }),
   ]);
   const combined = { ...page, rows: [...(page.rows ?? [])] };
   const visited = new Set();
@@ -30,7 +30,7 @@ export async function readGroupSnapshot(read, { signal, side = 'running', cursor
     combined.rows.push(...(next.rows ?? []).filter(row => !known.has(row.sessionGroup)));
     combined.nextCursor = next.nextCursor ?? null;
   }
-  return groupSnapshot(instance, counts, combined);
+  return groupSnapshot(instanceData, countsData, combined);
 }
 
 /** Instance defaults use one write resource; process actions belong to their object. */

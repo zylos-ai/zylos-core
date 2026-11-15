@@ -34,7 +34,7 @@ const createGroupConfig = options => productGroupConfig({ ...options, request: a
   const value = await options.request(path, requestOptions);
   return !requestOptions?.method && !path.includes('/runtime-options') && !value?.config ? { config: value } : value;
 } });
-const isGroupDetail = path => /^\/api\/groups\/[^/?]+$/.test(path);
+const isGroupDetail = path => /^\/api\/groups\/[^/?]+(?:\?include=)?$/.test(path);
 const emptyRuns = { runs: [], totalEvents: 17, totalRuns: 5, unattributed: 0 };
 function detailFixture(fetch, options = {}) {
   const document = createDocument(), root = document.createElement('aside'), timers = [];
@@ -1813,7 +1813,7 @@ test('plain working and offline summaries keep the primary state on one line', (
   const card = allNodes(root).find(node => node.classList.contains('wb-now-card'));
   const titles = allNodes(card).filter(node => node.classList.contains('wb-now-title'));
   assert.equal(titles.length, 1);
-  assert.equal(titles[0].textContent, 'wb.detail.standby');
+  assert.equal(titles[0].textContent, 'wb.wait.pool_wait {"position":2}');
   assert.doesNotMatch(card.textContent, /wb\.state\.waiting|pool_capacity/);
 });
 
@@ -1936,13 +1936,13 @@ test('plain active tools use the locale separator between their readable names',
 test('failed starts and unknown waits keep their full readable reason in the plain title', () => {
   const document = createDocument();
   for (const [locale, cases] of [
-    ['zh', [['error', 'start_failed', '会话启动失败，请查看技术细节中的原因。'],
+    ['zh', [['offline', 'start_failed', '会话启动失败，请查看技术细节中的原因。'],
       ['unknown', 'unknown', '正在等待，恢复条件未知，请查看技术细节。']]],
-    ['en', [['error', 'start_failed', 'Session start failed. Check technical details for the reason.'],
+    ['en', [['offline', 'start_failed', 'Session start failed. Check technical details for the reason.'],
       ['unknown', 'unknown', 'Waiting; the recovery condition is unknown. Check technical details.']]],
   ]) for (const [kind, wait, expected] of cases) {
     const root = document.createElement('div');
-    renderOverview(root, row('telegram:wait', { presence: kind === 'error' ? 'not_running' : 'unknown', live: null, target: { runtime: 'claude' }, state: { kind }, wait: { kind: wait } }), {},
+    renderOverview(root, row('telegram:wait', { presence: kind === 'offline' ? 'not_running' : 'unknown', live: null, target: { runtime: 'claude' }, state: { kind }, flags: wait === 'start_failed' ? { startFailed: { count: 1 } } : {}, wait: { kind: wait } }), {},
       { document, t: overviewTranslation(locale), level: 'plain' });
     const titles = allNodes(root).filter(node => node.classList.contains('wb-now-title'));
     assert.equal(titles.length, 1);
@@ -2041,4 +2041,21 @@ test('group details keep authoritative offline flags after the running list no l
     assert.equal(f.controller.state.row.flags.waitingSlot.position, 1);
     assert.match(f.root.textContent, /wb.flags.waitingSlot/);
   } finally { f.controller.destroy(); }
+});
+
+test('periodic detail refresh skips stored-message and configuration extras without clearing an open raw fold', async tctx => {
+  const paths = [], current = row('telegram:extras', { preview: { text: 'preview', timestamp: 1, source: { kind: 'channel' } } });
+  const f = detailFixture(async path => {
+    paths.push(path);
+    if (isGroupDetail(path)) return response({ ...current, ...(path.includes('?include=') ? {} : { raw: 'stored original', config: { runtime: 'claude' } }) });
+    return response(defaultRead(path));
+  }, { detail: () => 'technical' });
+  tctx.after(() => f.controller.destroy());
+  await f.controller.open(current, { rows: [current], listKnown: true });
+  const fold = () => allNodes(f.root).find(node => node.classList.contains('wb-now-raw'));
+  fold().open = true; fold().dispatch('toggle'); await tick();
+  await f.controller.updateSnapshot({ rows: [current], listKnown: true });
+  assert.deepEqual(paths.filter(isGroupDetail), ['/api/groups/telegram%3Aextras', '/api/groups/telegram%3Aextras?include=']);
+  assert.equal(fold().open, true);
+  assert.match(fold().textContent, /stored original/);
 });

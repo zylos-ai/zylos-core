@@ -31,7 +31,7 @@ async function fixture(t, { initialContent = content('First'), initialTz } = {})
     if (blocked) return { ok: false, status: 403, json: async () => ({ error: 'remote_chat_disabled' }) };
     if (p.includes('/messages?')) data = { items: [{ id: 12, direction: 'out', status: 'delivered', content: value }], nextCursor: null, afterCursor: 'after', ...(tz === undefined ? {} : { tz }) };
     else if (p.includes('/questions?') || p.includes('/status?')) data = { items: [], nextCursor: null };
-    else if (p.includes('/api/session-mode')) data = { data: { sessionMode: 'multi' } };
+    else if (p.includes('/api/instance')) data = { session_mode: 'multi' };
     else if (/\/g%3A(?:AA|BB)$/.test(p)) data = { conversation: { id: p.endsWith('AA') ? 'g:AA' : 'g:BB', state: 'active' } };
     else data = { items: [{ id: 'g:AA' }, { id: 'g:BB' }], nextCursor: null };
     return { ok: true, status: 200, json: async () => data };

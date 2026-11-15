@@ -1,7 +1,7 @@
 /** A projection of the Workbench snapshot, never a second status or health reader. */
 export function fleetGroupSummary(snapshot) {
   if (snapshot?.mode !== 'multi' || !Array.isArray(snapshot.rows)) return null;
-  const rows = snapshot.rows.filter(row => row && ['running', 'starting'].includes(row.presence));
+  const rows = snapshot.rows.filter(row => row && ['running', 'starting', 'unknown'].includes(row.presence));
   const counts = { busy: 0, idle: 0, waiting: 0, unknown: 0, error: 0, no_response: 0 };
   const errors = [], silent = [];
   for (const row of rows) {

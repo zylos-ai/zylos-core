@@ -53,3 +53,14 @@ test('refreshing an offline list rereads the loaded page depth and retains later
   assert.equal(refreshed.rows[0].name.displayName, '1'); assert.equal(refreshed.rows[1].sessionGroup, 'second');
   assert.equal(calls.filter(path => path.includes('cursor=second')).length, 2);
 });
+
+test('pushed counts and the current instance refresh only the group rows', async () => {
+  const paths = [], counts = { mode: 'multi', running: { total: 1 }, offline: { total: 500 }, pool: { used: 1, capacity: 4 } };
+  const instance = { default_runtime: 'codex', poolCapacityRecord: { source: 'configured' } };
+  const row = { sessionGroup: 'a', state: { kind: 'working' } };
+  const snapshot = await readGroupSnapshot(async path => { paths.push(path); return { rows: [row] }; }, { counts, instance });
+  assert.deepEqual(paths, ['/api/groups/running']);
+  assert.equal(snapshot.groupCounts, counts);
+  assert.equal(snapshot.rows[0], row);
+  assert.equal(snapshot.instance.pool.capacityRecord, instance.poolCapacityRecord);
+});

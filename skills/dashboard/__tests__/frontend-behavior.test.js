@@ -204,7 +204,7 @@ function observerResponse(data, { ok = true, status = ok ? 200 : 503 } = {}) {
 
 test('/api/instance exposes the agent identity colour for remote machines that still tint by it', () => {
   const index = fs.readFileSync(new URL('../src/index.js', import.meta.url).pathname, 'utf8');
-  assert.match(index, /stateData\.agent = \{ \.\.\.config\.agent, \.\.\.agentColor\(config\.agent\?\.name\) \}/);
+  assert.match(index, /agent: \{ \.\.\.config\.agent, \.\.\.agentColor\(config\.agent\?\.name\) \}/);
 });
 
 test('SSE state updates preserve the agent identity color between full state reads', () => {
@@ -756,19 +756,19 @@ test('fleet summary shows state dots with dimmed zeros and aggregated cost tiers
   assert.match(html, /<span class="sum-seg"><i class="sum-dot dot-idle"><\/i>1 Idle<\/span>/);
   assert.match(html, /<span class="sum-seg is-zero"><i class="sum-dot dot-stuck"><\/i>0 Possible Stuck<\/span>/);
   assert.match(html, /<span class="sum-seg is-zero"><i class="sum-dot dot-offline"><\/i>0 Offline<\/span>/);
-  assert.match(html, /<small>Session<\/small> <strong>\$113\.33<\/strong>/);
+  assert.doesNotMatch(html, /Session|113\.33/);
   assert.match(html, /<small>Today<\/small> <strong>\$205\.58<\/strong>/);
   assert.match(html, /<small>7 days<\/small> <strong>\$1986\.55<\/strong>/);
 });
 
 test('fleet summary cost totals render -- when no agent reports a tier', () => {
   const view = buildAgentFleetView({ agents: [{ name: 'a', state: 'IDLE' }] });
-  assert.deepEqual(view.costTotals, { session: '--', daily: '--', weekly: '--' });
+  assert.deepEqual(view.costTotals, { daily: '--', weekly: '--' });
   // Partial fleet: one agent reporting still produces a total, not '--'.
   const partial = buildAgentFleetView({
-    agents: [{ name: 'a', state: 'IDLE', session_cost: 2 }, { name: 'b', state: 'IDLE' }]
+    agents: [{ name: 'a', state: 'IDLE', daily_cost: 2 }, { name: 'b', state: 'IDLE' }]
   });
-  assert.equal(partial.costTotals.session, '$2.00');
+  assert.equal(partial.costTotals.daily, '$2.00');
 });
 
 test('fleet summary cost totals treat explicit null as unreported, but 0 as a real report', () => {
@@ -777,13 +777,13 @@ test('fleet summary cost totals treat explicit null as unreported, but 0 as a re
   const nulls = buildAgentFleetView({
     agents: [{ name: 'a', state: 'IDLE', session_cost: null, daily_cost: null, weekly_cost: null }]
   });
-  assert.deepEqual(nulls.costTotals, { session: '--', daily: '--', weekly: '--' });
+  assert.deepEqual(nulls.costTotals, { daily: '--', weekly: '--' });
 
   const zero = buildAgentFleetView({
-    agents: [{ name: 'a', state: 'IDLE', session_cost: 0, daily_cost: null, weekly_cost: null }]
+    agents: [{ name: 'a', state: 'IDLE', session_cost: 0, daily_cost: 0, weekly_cost: null }]
   });
-  assert.equal(zero.costTotals.session, '$0.0000');
-  assert.equal(zero.costTotals.daily, '--');
+  assert.equal(zero.costTotals.daily, '$0.0000');
+  assert.equal(Object.hasOwn(zero.costTotals, 'session'), false);
 });
 
 test('in-page remote viewing rewrites agent data paths through the fleet proxy', () => {
@@ -800,9 +800,9 @@ test('in-page remote viewing rewrites agent data paths through the fleet proxy',
 
 test('SSE stream follows the viewed agent and remote fleet events never clobber the local wall', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  assert.match(app, /new EventSource\(chatPush\.streamUrl\(api\(agentPath\('\/api\/stream'\)\)\)\)/);
+  assert.match(app, /new EventSource\(ordinary \? streamPath : chatPush\.streamUrl\(streamPath\)\)/);
   // Reconnect probe targets the same agent the stream does.
-  assert.match(app, /await fetch\(api\(agentPath\('\/api\/state'\)\), \{ cache: 'no-store' \}\);/);
+  assert.match(app, /await fetch\(api\(agentPath\('\/api\/instance'\)\), \{ cache: 'no-store' \}\);/);
   // A remote agent's stream describes its own fleet — drop those events.
   assert.match(app, /if \(name === 'fleet' && state\.remoteAgent\) return;/);
 });
@@ -873,7 +873,7 @@ test('remote Actions/Settings are gated by access and routed through the viewed 
   assert.match(app, /applySettingsReadOnly\(remoteIsReadOnly\(\)\)/);
   // The action runner refuses to send for a read-only key (wb-action-runner tests); the app tells it when that is.
   assert.match(app, /readOnly: \(\) => Boolean\(remoteIsReadOnly\(\)\)/);
-  assert.match(app, /const actionPath = agentPath\(`\/api\/actions\/\$\{action\}`\);/);
+  assert.match(app, /const actionPath = agentPath\(request\.path\);/);
   assert.match(app, /const healthPath = agentPath\('\/api\/health'\);/);
   assert.match(app, /startCountdownAndReload\(15, statusEl, healthPath, summary\);/);
   const reset = app.slice(app.indexOf('function resetAgentData('), app.indexOf('function enterRemoteAgent('));
@@ -1608,7 +1608,7 @@ test('fleet management entry stays local and its controls are retained in settin
   // agent in-page, so these calls intentionally avoid agentPath().
   assert.match(app, /fetch\(api\('\/api\/fleet\/agents'\), \{ cache: 'no-store' \}\)/);
   assert.match(app, /fetch\(api\('\/api\/fleet\/agents\/test'\), \{/);
-  assert.match(app, /fetch\(api\('\/api\/agent\/name'\), \{/);
+  assert.match(app, /fetch\(api\('\/api\/instance\/name'\), \{/);
   assert.match(app, /fetch\(api\('\/api\/keys'\), \{ cache: 'no-store' \}\)/);
   assert.match(app, /fetch\(api\('\/api\/keys'\), \{/);
   // Which request each key action makes is decided by keyActionRequest (wb-settings-wiring tests); the app sends it as built,
@@ -1616,7 +1616,7 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.match(app, /request: async \(method, path\) => \{ const resp = await fetch\(api\(path\), \{ method \}\);/);
   assert.match(app, /fetch\(api\('\/api\/keys\/purge-revoked'\), \{ method: 'POST' \}\)/);
   assert.doesNotMatch(app, /agentPath\('\/api\/fleet\/agents/);
-  assert.doesNotMatch(app, /agentPath\('\/api\/agent\/name/);
+  assert.doesNotMatch(app, /agentPath\('\/api\/instance\/name/);
   assert.doesNotMatch(app, /agentPath\('\/api\/keys/);
   assert.match(app, /function fleetManageError\(code, fallback\)/);
   assert.match(app, /fleetManageStatus\(fleetManageError\(data\.error \|\| 'unreachable'/);
@@ -2189,7 +2189,7 @@ function workbenchHarness(context, read, options = {}) {
     } });
   const stop = () => mounted.destroy();
   context.after(stop);
-  return { document, nodes, saved, calls, listeners, windowListeners, intervals, timeouts, stop, openGroup: key => mounted.openGroup(key), locateGroup: key => mounted.locateGroup(key), makeSnapshot,
+  return { document, nodes, saved, calls, listeners, windowListeners, intervals, timeouts, stop, refresh: counts => mounted.refresh(counts), applyInstance: value => mounted.applyInstance(value), openGroup: key => mounted.openGroup(key), locateGroup: key => mounted.locateGroup(key), makeSnapshot,
     poll: delay => { const timers = [...intervals.values()].filter(timer => timer.delay === delay); assert.ok(timers.length, 'expected polling timer'); return Promise.all(timers.map(timer => timer.handler())); },
     debounce: async () => { const job = [...timeouts.entries()].find(([, timer]) => timer.delay === 300); assert.ok(job, 'search debounce exists'); timeouts.delete(job[0]); await job[1].handler(); },
     setOwner: value => { owner = value; },
@@ -2217,7 +2217,7 @@ test('workbench shell detail changes redraw without network and activity range p
 // Real mounted modules use the injected DOM/fetch/timers above, with no live I/O and lifecycle cleanup.
 test('workbench shell renders groups while cost is pending and fills cost independently', { timeout: 5000 }, async context => {
   const cost = wbDeferred();
-  const h = workbenchHarness(context, (path, fallback) => path.includes('/usage?summary=cost') ? cost.promise : fallback(path));
+  const h = workbenchHarness(context, (path, fallback) => path.includes('/usage/summary') ? cost.promise : fallback(path));
   context.after(async () => { h.stop(); cost.resolve({}); await wbTick(); });
   await wbTick(); await wbTick();
   const board = h.nodes.get('#wb-board'), instance = h.nodes.get('#wb-instance');
@@ -2226,10 +2226,10 @@ test('workbench shell renders groups while cost is pending and fills cost indepe
   assert.match(costText(), /—/);
   assert.doesNotMatch(h.nodes.get('#wb-attention').textContent, /wb.readFailed/);
   await h.poll(5000); await wbTick();
-  assert.equal(h.calls.filter(path => path.includes('/usage?summary=cost')).length, 1, 'cost polling shares its pending request');
+  assert.equal(h.calls.filter(path => path.includes('/usage/summary')).length, 1, 'cost polling shares its pending request');
   assert.equal(h.calls.filter(path => path.endsWith('/api/groups/running')).length, 2, 'groups keep polling while cost is pending');
   const groupReads = h.calls.filter(path => path.endsWith('/api/groups/running')).length;
-  cost.resolve({ costSummary: { today: { total: 1.5 } } }); await wbTick(); await wbTick();
+  cost.resolve({ today: { cost: 1.5 } }); await wbTick(); await wbTick();
   assert.match(costText(), /\$1\.50/, 'a late cost response redraws without waiting for another groups poll');
   assert.equal(h.calls.filter(path => path.endsWith('/api/groups/running')).length, groupReads);
   assert.equal(wbName(board.children[0]), 'A');
@@ -2238,9 +2238,9 @@ test('workbench shell renders groups while cost is pending and fills cost indepe
 test('workbench shell clears a previously shown cost when a later cost read fails', { timeout: 5000 }, async context => {
   let costReads = 0;
   const h = workbenchHarness(context, (path, fallback) => {
-    if (!path.includes('/usage?summary=cost')) return fallback(path);
+    if (!path.includes('/usage/summary')) return fallback(path);
     costReads++;
-    if (costReads === 1) return { costSummary: { today: { total: 1.5 } } };
+    if (costReads === 1) return { today: { cost: 1.5 } };
     throw new Error('cost read failed');
   });
   await wbTick(); await wbTick();
@@ -2259,21 +2259,21 @@ test('workbench shell invalidates pending groups and cost when the viewed owner 
   const oldGroups = wbDeferred(), oldCost = wbDeferred(), newCost = wbDeferred();
   const h = workbenchHarness(context, (path, fallback) => {
     if (path === '/api/groups/running') return oldGroups.promise;
-    if (path === '/api/workbench/usage?summary=cost') return oldCost.promise;
-    if (path.includes('/usage?summary=cost')) return newCost.promise;
+    if (path === '/api/usage/summary') return oldCost.promise;
+    if (path.includes('/usage/summary')) return newCost.promise;
     return fallback(path);
   });
   context.after(async () => { h.stop(); oldGroups.resolve(workbenchSnapshot()); oldCost.resolve({}); newCost.resolve({}); await wbTick(); });
   await wbTick(); h.setOwner('Other'); h.mutate(); await wbTick(); await wbTick();
   assert.ok(h.calls.includes('/fleet/Other/api/groups/running'), 'new owner starts groups without waiting for the old owner');
-  assert.ok(h.calls.includes('/fleet/Other/api/workbench/usage?summary=cost'), 'new owner starts cost without waiting for the old owner');
+  assert.ok(h.calls.includes('/fleet/Other/api/usage/summary'), 'new owner starts cost without waiting for the old owner');
   const board = h.nodes.get('#wb-board'), instance = h.nodes.get('#wb-instance');
   assert.equal(wbName(board.children[0]), 'A');
-  newCost.resolve({ costSummary: { today: { total: 2.5 } } }); await wbTick(); await wbTick();
+  newCost.resolve({ today: { cost: 2.5 } }); await wbTick(); await wbTick();
   const costText = () => instance.children.find(node => node.classList.contains('wb-cost'))?.textContent;
   assert.match(costText(), /\$2\.50/);
   oldGroups.resolve(workbenchSnapshot('busy', 'previous-owner'));
-  oldCost.resolve({ costSummary: { today: { total: 99 } } }); await wbTick(); await wbTick();
+  oldCost.resolve({ today: { cost: 99 } }); await wbTick(); await wbTick();
   assert.equal(wbName(board.children[0]), 'A', 'old groups cannot replace current rows');
   assert.match(costText(), /\$2\.50/, 'old cost completion cannot clear or replace current cost');
   assert.doesNotMatch(h.nodes.get('#wb-attention').textContent, /wb.readFailed/);
@@ -2283,18 +2283,18 @@ test('workbench shell stops both pending board reads before disposal completions
   const groups = wbDeferred(), cost = wbDeferred(); let pending = false;
   const h = workbenchHarness(context, (path, fallback) => {
     if (pending && path.endsWith('/api/groups/running')) return groups.promise;
-    if (pending && path.includes('/usage?summary=cost')) return cost.promise;
+    if (pending && path.includes('/usage/summary')) return cost.promise;
     return fallback(path);
   });
   context.after(async () => { h.stop(); groups.resolve(workbenchSnapshot()); cost.resolve({}); await wbTick(); });
   await wbTick(); await wbTick(); pending = true;
   const refresh = h.poll(5000); await wbTick();
   assert.equal(h.calls.filter(path => path.endsWith('/api/groups/running')).length, 2);
-  assert.equal(h.calls.filter(path => path.includes('/usage?summary=cost')).length, 2);
+  assert.equal(h.calls.filter(path => path.includes('/usage/summary')).length, 2);
   const board = h.nodes.get('#wb-board'), instance = h.nodes.get('#wb-instance');
   const row = board.children[0], expense = instance.children.find(node => node.classList.contains('wb-cost'));
   h.stop(); assert.equal(h.intervals.size, 0);
-  groups.resolve(workbenchSnapshot('busy', 'disposed')); cost.resolve({ costSummary: { today: { total: 99 } } });
+  groups.resolve(workbenchSnapshot('busy', 'disposed')); cost.resolve({ today: { cost: 99 } });
   await refresh; await wbTick();
   assert.equal(board.children[0], row, 'late groups do not redraw the disposed mount');
   assert.equal(instance.children.find(node => node.classList.contains('wb-cost')), expense, 'late cost does not redraw the disposed mount');
@@ -2402,7 +2402,7 @@ test('workbench shell removes the transition hint after a session mode read fail
     if (path === '/api/instance') {
       modeReads++;
       if (failed) throw Error('offline');
-      return { data: { transition: { phase: 'draining' } } };
+      return { session_mode: 'multi', transition: { phase: 'draining' } };
     }
     return fallback(path);
   });
@@ -2502,7 +2502,7 @@ test('workbench shell opens selected detail and aborts its reads when agent chan
 test('workbench shell gates automatic naming and discards an old agent prompt', async context => {
   let writable = false;
   const pending = wbDeferred(), requests = [];
-  const h = workbenchHarness(context, (path, fallback) => path.endsWith('/name-prompt')
+  const h = workbenchHarness(context, (path, fallback) => path.endsWith('/naming-prompt')
     ? pending.promise : fallback(path), { writable: () => writable,
     onRequest: (path, options) => requests.push({ path, options }) });
   await wbTick(); await wbTick();
@@ -2510,12 +2510,12 @@ test('workbench shell gates automatic naming and discards an old agent prompt', 
   assert.equal(button.disabled, true);
   assert.equal(button.title, 'wb.readOnly');
   button.dispatch('click'); await wbTick();
-  assert.equal(requests.some(item => item.path.endsWith('/name-prompt')), false);
+  assert.equal(requests.some(item => item.path.endsWith('/naming-prompt')), false);
   writable = true; h.listeners.get('dashboard-locale-change')();
   assert.equal(button.disabled, false);
   assert.equal(button.title, 'wb.name.autoHint', 'redraw keeps the auto-name explanation as the tooltip');
   button.dispatch('click'); await wbTick();
-  const prompt = requests.find(item => item.path.endsWith('/name-prompt'));
+  const prompt = requests.find(item => item.path.endsWith('/naming-prompt'));
   assert.ok(prompt?.options?.signal);
   assert.equal(dialog.hidden, false);
   h.setOwner('Other'); h.mutate();
@@ -2656,13 +2656,13 @@ test('workbench shell opens a key outside the snapshot and requests only that gr
   await h.openGroup(key);
   assert.equal(h.nodes.get('#wb-side').hidden, false);
   assert.match(h.nodes.get('#wb-side').textContent, /wb\.platform\.telegram · historic-room/);
-  assert.equal(h.calls.length, 3);
+  assert.equal(h.calls.length, 5);
   for (const path of h.calls) {
     const url = new URL(path, 'http://fixture');
     if (url.pathname === '/api/groups/origin/events') {
       assert.equal(url.searchParams.get('session_group'), key);
       assert.equal(url.searchParams.has('run_id'), false);
-    } else assert.ok(url.pathname.startsWith('/api/groups/' + encodeURIComponent(key) + '/'));
+    } else assert.ok(url.pathname === '/api/groups/' + encodeURIComponent(key) || url.pathname.startsWith('/api/groups/' + encodeURIComponent(key) + '/'));
   }
   h.stop(); h.calls.length = 0;
   await h.openGroup('telegram:after-unmount');
@@ -2776,4 +2776,34 @@ test('workbench shell keeps host open through document hiding and background red
   h.document.visibilityState = 'hidden'; h.navigate(false);
   assert.equal(side.hidden, true, 'actual navigation closes host even while the document is hidden');
   h.stop();
+});
+
+test('group count pushes refresh rows without reading instance or counts again', async context => {
+  const h = workbenchHarness(context); await wbTick(); await wbTick();
+  h.calls.length = 0;
+  await h.refresh({ mode: 'multi', running: { total: 1, states: { idle: 1 } }, offline: { total: 42 }, pool: { used: 1, capacity: 4 } });
+  await wbTick();
+  assert.deepEqual(h.calls, ['/api/groups/running']);
+  assert.equal(wbName(h.nodes.get('#wb-board').children[0]), 'A');
+  h.applyInstance({ default_runtime: 'codex' });
+  assert.deepEqual(h.calls, ['/api/groups/running'], 'instance pushes redraw without additional reads');
+});
+
+test('locating an offline group finds its row beyond the first offline page', async context => {
+  const selected = { sessionGroup: 'telegram:later', name: { displayName: 'Later conversation' }, state: { kind: 'offline' } };
+  const h = workbenchHarness(context, (path, fallback) => {
+    if (path === '/api/groups/telegram%3Alater') return selected;
+    if (path === '/api/groups/offline') return { rows: [], nextCursor: 'second' };
+    return fallback(path);
+  });
+  await wbTick(); await wbTick();
+  const createElement = h.document.createElement.bind(h.document), scrolled = [];
+  h.document.createElement = tag => { const element = createElement(tag); element.scrollIntoView = options => scrolled.push({ element, options }); return element; };
+  await h.locateGroup(selected.sessionGroup); await wbTick();
+  const board = h.nodes.get('#wb-board');
+  assert.equal(board.children[0].dataset.group, selected.sessionGroup);
+  assert.equal(wbName(board.children[0]), 'Later conversation');
+  assert.equal(h.document.activeElement, board.children[0]);
+  assert.equal(scrolled[0].element, board.children[0]);
+  assert.deepEqual(scrolled[0].options, { block: 'center' });
 });

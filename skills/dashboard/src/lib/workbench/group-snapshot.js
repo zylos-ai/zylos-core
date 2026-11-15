@@ -10,7 +10,6 @@ import { buildAttention, createChannelDownCounter } from './attention.js';
 import { activityBuckets } from './activity-buckets.js';
 import { workingHistory, END_TYPES, TOOL_TYPES, CHILD_TYPES, MAIN_ACTION_TYPES, MAIN_INPUT_TYPES, STOP_HOOK_LAG_MS } from './working.js';
 const { resolveSessionHotTtl } = await defaultLoadCoreModule('session-hot-ttl.js');
-import { searchGroups } from './group-search.js';
 import { readPool, poolPositions } from './pool-capacity.js';
 
 const emptyNames = { listAll: () => new Map(), search: () => [] };
@@ -264,8 +263,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     if (!result.ok) throw Object.assign(new Error('Group read failed'), { statusCode: 502, code: 'group_raw_failed', reason: 'c4_groups_failed' });
     return { raw: safeRaw(result.data.find(item => item.sessionGroup === key)?.preview?.messageRaw, sanitizer) };
   }
-  return { getSnapshot, getCachedSnapshot: () => cache?.value ?? null, hotTtlMs: () => hotTtlMs, activity, channelDownCounter, raw,
-    search: (q, at = now()) => searchGroups(q, { now: at, runC4Db: cli.runC4Db, getSnapshot, displayNames, sanitizer, namesOfTasks }) };
+  return { getSnapshot, getCachedSnapshot: () => cache?.value ?? null, hotTtlMs: () => hotTtlMs, activity, channelDownCounter, raw };
 }
 
 function source({ ok, reason, detail, readAt }) { return { ok, ...(reason ? { reason } : {}), ...(detail ? { detail } : {}), readAt }; }

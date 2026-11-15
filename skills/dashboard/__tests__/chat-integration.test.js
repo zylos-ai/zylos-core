@@ -416,18 +416,21 @@ registerIntegrationCase('remote chat off, on and off enforces both direct and pr
       for (const identity of ['read', 'admin']) for (const fleet of [false, true]) {
         const client = fleet ? local : remote;
         const options = { identity, ...(fleet ? { fleet: true } : {}) };
-        const overview = await client.request('/api/workbench/groups', options);
+        const overview = await client.request('/api/groups/offline', options);
         assert.equal(overview.status, 200);
-        const row = overview.body.rows.find(item => item.sessionGroup?.endsWith(':' + active.draft.localId));
+        const running = await client.request('/api/groups/running', options);
+        assert.equal(running.status, 200);
+        const row = [...overview.body.rows, ...running.body.rows].find(item => item.sessionGroup?.endsWith(':' + active.draft.localId));
         assert.ok(row); assert.ok(row.state); assert.equal(row.queue.pending.count, 2);
         assert.ok(row.preview.text.length <= 80); assert.ok(row.preview.text.includes('[REDACTED]'));
         assert.ok(!overview.text.includes(fakeCredential));
-        const summary = await client.request('/api/workbench/groups?view=summary', options);
-        assert.equal(summary.status, 200); assert.ok(summary.body.counts);
-        const search = await client.request('/api/workbench/groups/search?q=' + active.draft.localId, options);
+        assert.ok(!running.text.includes(fakeCredential));
+        const summary = await client.request('/api/groups/counts', options);
+        assert.equal(summary.status, 200); assert.ok(summary.body.running);
+        const search = await client.request('/api/groups/search?q=' + active.draft.localId, options);
         assert.equal(search.status, 200); assert.equal(search.body.rows.length, 1);
         assert.ok(!search.text.includes(fakeCredential));
-        const activity = await client.request('/api/workbench/activity?range=60m', options);
+        const activity = await client.request('/api/groups/activity?range=60m', options);
         assert.equal(activity.status, 200); assert.ok(activity.body.groups[row.sessionGroup]);
         assert.equal(activity.body.groups[row.sessionGroup].inbound.length, 2);
       }

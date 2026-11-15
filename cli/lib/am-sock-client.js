@@ -177,7 +177,7 @@ export async function lookupRestartRequest(requestId, { deadlineAt, now = Date.n
   if (!readCompleted) readCompleted = id => {
     const reader = new EventLogReader(supervisorDiagnosticPath());
     try { return reader.read().some(row => row.requestId === id && ['restart_done', 'manual_restart_done'].includes(row.event) && (sessionGroup === undefined ||
-        row.event === 'manual_restart_done' && (row.session_group ?? 'origin') === (sessionGroup ?? 'origin'))); }
+        row.event === 'manual_restart_done' && ((row.session_group ?? 'origin') === (sessionGroup ?? 'origin') || (sessionGroup ?? 'origin') === 'origin' && row.session_group === '*'))); }
     finally { reader.close(); }
   };
   return await readCompleted(requestId) ? 'done' : 'unknown';

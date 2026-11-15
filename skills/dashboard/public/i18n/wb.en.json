@@ -386,7 +386,6 @@
   "wb.usage.range.24h": "24 hours",
   "wb.usage.range.7d": "7 days",
   "wb.usage.range.30d": "30 days",
-  "wb.usage.range.month": "This month",
   "wb.usage.range.custom": "Custom",
   "wb.host.title": "Host status",
   "wb.host.open": "Host status",

@@ -327,15 +327,10 @@ function needsAdminApiAccess(pathname, method) {
   pathname = pathname.replace(/\/{2,}/g, '/');
   if ((pathname.startsWith('/api/instance/') || pathname.startsWith('/api/groups/')) && !['GET', 'HEAD'].includes(method)) return true;
   if (pathname === '/api/observer' || pathname.startsWith('/api/observer/')) return true;
-  if (pathname.startsWith('/api/actions')) return true;
-  if ((method === 'GET' && /^\/api\/workbench\/groups\/[^/]+\/deletion$/.test(pathname)) ||
-      (method === 'DELETE' && /^\/api\/workbench\/groups\/[^/]+$/.test(pathname)) ||
-      /^\/api\/chat\/drafts\/[^/]+(?:\/deletion)?$/.test(pathname)) return true;
+  if (pathname === '/api/actions/restart-timezone-services') return true;
+  if (/^\/api\/chat\/drafts\/[^/]+(?:\/deletion)?$/.test(pathname)) return true;
   if (['/api/settings', '/api/settings/timezone'].includes(pathname) && method === 'PUT') return true;
   if (pathname === '/api/fleet/agents' || pathname.startsWith('/api/fleet/agents/')) return true;
-  if (pathname === '/api/agent/name') return true;
-  if (['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/groups\/[^/]+\/name$/.test(pathname)) return true;
-  if (method === 'POST' && /^\/api\/workbench\/groups\/[^/]+\/(?:config|actions\/(?:interrupt|chop-chop|restart))$/.test(pathname)) return true;
   if (isScheduleWrite(method, pathname)) return true;
   if (pathname === '/api/keys' || pathname.startsWith('/api/keys/')) return true;
   if (pathname === '/api/memory' || pathname.startsWith('/api/memory/')) return true;
@@ -347,10 +342,8 @@ function needsAdminApiAccess(pathname, method) {
   if (remotePath.startsWith('/api/chat/')) return true;
   if (remotePath === '/api/memory' || remotePath.startsWith('/api/memory/')) return true;
   if (remotePath === '/api/workbench/memory' || remotePath.startsWith('/api/workbench/memory/')) return true;
-  return ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/groups\/[^/]+\/name$/.test(remotePath) ||
-    method === 'POST' && /^\/api\/workbench\/groups\/[^/]+\/(?:config|actions\/(?:interrupt|chop-chop|restart))$/.test(remotePath) ||
-    isScheduleWrite(method, remotePath) ||
-    method === 'POST' && remotePath.startsWith('/api/actions/') ||
+  return isScheduleWrite(method, remotePath) ||
+    method === 'POST' && remotePath === '/api/actions/restart-timezone-services' ||
     method === 'PUT' && ['/api/settings', '/api/settings/timezone'].includes(remotePath);
 }
 

@@ -1201,12 +1201,12 @@ const groupSnapshot = (presence, extra = {}) => {
   const row = rows.find(item => item.sessionGroup === 'dashboard:a') ?? rows[0];
   const known = extra.listKnown !== false && extra.sources?.status?.ok !== false && row;
   const health = extra.instance?.runtimeHealth?.[row?.target?.runtime]?.health;
-  return { ...row, fixtureInstance: extra.instance, state: { kind: known ? presence === 'running' ? 'idle' : presence === 'not_running' ? 'offline' : 'unknown' : 'unknown' },
+  return { ...row, ...(!known ? { presence: 'unknown', wait: null, working: null, target: null } : {}), fixtureInstance: extra.instance, state: { kind: known ? presence === 'running' ? 'idle' : presence === 'not_running' ? 'offline' : 'unknown' : 'unknown' },
     readAt: extra.sources?.status?.readAt ?? 1000,
     flags: { ...(health && health !== 'ok' ? { blocked: { reason: health } } : {}) } };
 };
 for (const health of ['rate_limited', 'recovering']) {
-  test(`sending into an empty ${health} queue refreshes wait within two seconds`, { timeout: 2000 }, async t => {
+  test(`sending into an empty ${health} queue refreshes wait immediately`, { timeout: 2000 }, async t => {
     let stored = false;
     const wait = { kind: 'rate_wait', runtime: 'claude' };
     const f = groupFixture(() => groupSnapshot('running', {
@@ -1221,10 +1221,8 @@ for (const health of ['rate_limited', 'recovering']) {
     const before = f.timer.now();
     f.state.setInput('new message'); await f.state.send(); await flush();
     assert.equal(f.state.snapshot().receipt.stored, true);
-    assert.equal(f.state.snapshot().groupWait, null, 'the stored-message refresh waits two seconds');
-    await f.timer.advance(2000);
     assert.equal(f.state.snapshot().groupWait, wait);
-    assert.equal(f.timer.now(), before + 2000, 'the refresh runs before the normal thirty-second cadence');
+    assert.equal(f.timer.now(), before, 'the refresh runs before any polling interval');
     assert.equal(f.calls.filter(call => call.path.startsWith('/api/groups/')).length, 2);
   });
 }
@@ -1529,18 +1527,18 @@ for (const health of ['ok', 'rate_limited']) test(`sending with ${health} health
     assert.equal(groupReads(), 1);
     f.state.setInput('hello');
     await f.state.send();
-    const afterSendReads = 1;
+    const afterSendReads = 2;
     assert.equal(groupReads(), afterSendReads);
     const initialReads = f.reads().length;
     await f.timer.advance(12000);
     assert.equal(f.reads().length, initialReads + 6);
-    assert.equal(groupReads(), afterSendReads + 1, 'stored-message replacement runs after two seconds');
-    await f.timer.advance(18000);
+    assert.equal(groupReads(), afterSendReads, 'the immediate stored-message reading starts its normal cadence');
+    await f.timer.advance(17999);
+    assert.equal(groupReads(), afterSendReads);
+    await f.timer.advance(1);
     assert.equal(groupReads(), afterSendReads + 1);
-    await f.timer.advance(2000);
-    assert.equal(groupReads(), afterSendReads + 2);
     await f.timer.advance(30000);
-    assert.equal(groupReads(), afterSendReads + 3);
+    assert.equal(groupReads(), afterSendReads + 2);
   } finally {
     f.state.destroy();
   }

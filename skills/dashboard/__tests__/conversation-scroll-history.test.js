@@ -41,7 +41,7 @@ function fixture(t, { initial = rows(100, 10), cursor = 'older-1', older } = {})
     assert.ok(requests.length < 100, 'request history stays bounded'); requests.push(path);
     const url = new URL(path, 'http://fixture');
     let body, status = 200;
-    if (path === '/api/session-mode') body = { data: { sessionMode: 'multi' } };
+    if (path === '/api/instance') body = { session_mode: 'multi' };
     else if (url.pathname === '/api/chat/conversations') body = { items: [{ id: 'g:AA', sessionGroup: 'dashboard:fixture', channel: url.searchParams.get('tab') === 'external' ? 'telegram' : 'dashboard' }], nextCursor: null };
     else if (url.pathname.endsWith('/messages')) {
       if (url.searchParams.has('cursor') && url.searchParams.get('direction') === 'before') {

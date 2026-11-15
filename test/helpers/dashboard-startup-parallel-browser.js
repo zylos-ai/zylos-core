@@ -10,7 +10,7 @@ const publicDir = path.resolve(fileURLToPath(new URL('../../skills/dashboard/pub
 const mainPath = '/_assets/i18n/zh.json';
 const wbPath = '/_assets/i18n/wb.zh.json';
 const observerPath = '/api/observer/status';
-const groupsPath = '/api/workbench/groups';
+const groupsPath = '/api/groups/running';
 const pack = locale => JSON.parse(fs.readFileSync(path.join(publicDir, 'i18n', `wb.${locale}.json`), 'utf8'));
 
 export async function runStartupParallelBrowser(sandbox, scenario) {
@@ -66,7 +66,7 @@ export async function runStartupParallelBrowser(sandbox, scenario) {
       if (!starts.has(pathname)) starts.set(pathname, performance.now());
       if (count > 50) { recordError(`request bound exceeded for ${pathname}`); return await route.abort(); }
       const isHeldGroups = scenario.kind === 'timeout' && scenario.held === 'groups' && pathname === groupsPath && count === 2;
-      const isHeldCost = scenario.kind === 'timeout' && scenario.held === 'cost' && pathname === '/api/workbench/usage' && url.searchParams.get('summary') === 'cost';
+      const isHeldCost = scenario.kind === 'timeout' && scenario.held === 'cost' && pathname === '/api/usage/summary';
       if (isHeldGroups || isHeldCost) {
         heldRequest ??= { pathname, count };
         // Supply no response, not even after the product aborts. Only lifecycle
@@ -74,7 +74,7 @@ export async function runStartupParallelBrowser(sandbox, scenario) {
         await heldGate;
         return await route.abort();
       }
-      if (scenario.kind === 'cost-late' && pathname === '/api/workbench/usage' && url.searchParams.get('summary') === 'cost' && !lateCostDelayed) {
+      if (scenario.kind === 'cost-late' && pathname === '/api/usage/summary' && !lateCostDelayed) {
         lateCostDelayed = true;
         await pause(2000);
         if (closing) return await route.abort();
@@ -120,7 +120,7 @@ export async function runStartupParallelBrowser(sandbox, scenario) {
     window.addEventListener('pagehide', () => observer.disconnect(), { once: true });
     window.fetch = function (...args) {
       const url = new URL(typeof args[0] === 'string' ? args[0] : args[0].url, location.href);
-      const cost = url.pathname === '/api/workbench/usage' && url.searchParams.get('summary') === 'cost';
+      const cost = url.pathname === '/api/usage/summary';
       if (url.pathname !== groupsPath && !cost) return fetch(...args);
       const source = cost ? 'cost' : new Error().stack.includes('/wb/shell.js') ? 'board' : 'startup';
       const signal = args[1]?.signal ?? args[0]?.signal;
@@ -180,7 +180,7 @@ export async function runStartupParallelBrowser(sandbox, scenario) {
       assert.equal(board[0].finished, null, 'the held second groups HTTP request belongs to the board');
     } else {
       assert.equal(initial.filter(call => call.source === 'cost').length, 1);
-      assert.equal(initial.find(call => call.source === 'cost').finished, null, 'the first summary=cost request is still held');
+      assert.equal(initial.find(call => call.source === 'cost').finished, null, 'the first usage summary request is still held');
     }
     // This bound exceeds the real 30s timeout plus a 5s poll. With no request
     // timeout, the first snapshot/second poll cannot complete and this wait fails.

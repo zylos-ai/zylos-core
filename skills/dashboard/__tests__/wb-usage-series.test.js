@@ -1,7 +1,8 @@
+import { usageSummary } from '../src/lib/workbench/usage-api.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { usageBounds, usageSeries } from '../src/lib/workbench/usage-series.js';
-import { costRows, costSummary, summarizeCosts, usageIntervals } from '../src/lib/workbench/cost-query.js';
+import { costRows, summarizeCosts, usageIntervals } from '../src/lib/workbench/cost-query.js';
 import { usageFixture } from './fixtures/usage-store.js';
 
 // SQLite integration: real Store and private readonly C4Reader, owned fixture
@@ -27,9 +28,9 @@ test('usage combines both runtimes and legacy costs while tokens use dimensions'
   assert.equal(result.totals.rotations, 1);
   assert.equal(result.totals.cost, f.store.aggregateCost(result));
   assert.equal(summarizeCosts(costRows(f.store, result)).total, result.totals.cost);
-  const summary = costSummary(f.store, { tz: result.tz, now });
-  assert.equal(summary.today.total, 8);
-  assert.equal(summary.sevenDay.total, result.totals.cost);
+  const summary = usageSummary(f.store, { tz: result.tz, now });
+  assert.equal(summary.today.cost, 8);
+  assert.equal(summary.sevenDay.cost, result.totals.cost);
   assert.equal(Object.hasOwn(result, 'costSummary'), false, 'full usage must not repeat the summary query');
   assert.equal(result.projects.items[0].name, 'beta');
   assert.equal(result.projects.items[0].outputTokens, 210);
@@ -59,14 +60,14 @@ test('summary and full usage label missing or invalid timezones as UTC fallback'
   const f = usageFixture(t), now = new Date('2026-11-06T04:00:00.000Z');
   f.metric('2026-11-06T01:00:00.000Z', 'claude', { cost: 3 });
   for (const tz of [undefined, 'unknown-zone']) {
-    const summary = costSummary(f.store, { tz, now });
+    const summary = usageSummary(f.store, { tz, now });
     const usage = usageSeries(f.store, f.reader, { tz, now });
     assert.equal(summary.tz, 'UTC');
     assert.equal(summary.tzFallback, true);
     assert.equal(usage.tz, summary.tz);
     assert.equal(usage.tzFallback, summary.tzFallback);
     assert.equal(Object.hasOwn(usage, 'costSummary'), false);
-    assert.equal(usage.totals.cost, summary.sevenDay.total);
+    assert.equal(usage.totals.cost, summary.sevenDay.cost);
   }
 });
 
@@ -78,9 +79,9 @@ test('seven-day costs keep seven natural days across midnight and month boundari
   for (const instant of ['2026-10-31T15:59:00.000Z', '2026-10-31T16:01:00.000Z', '2026-11-01T16:01:00.000Z']) {
     const now = new Date(instant), bounds = usageBounds({ tz: 'Asia/Singapore', now });
     const result = usageSeries(f.store, f.reader, { tz: 'Asia/Singapore', now });
-    const summary = costSummary(f.store, { tz: 'Asia/Singapore', now });
+    const summary = usageSummary(f.store, { tz: 'Asia/Singapore', now });
     assert.equal(result.buckets.length, 7);
-    assert.equal(summary.sevenDay.total, result.totals.cost);
+    assert.equal(summary.sevenDay.cost, result.totals.cost);
     assert.equal(result.totals.cost, f.store.aggregateCost(bounds) ?? 0);
     assert.equal(usageIntervals(usageBounds({ range: '24h', tz: 'Asia/Singapore', now })).length, 24);
     assert.equal(usageIntervals(usageBounds({ range: '30d', tz: 'Asia/Singapore', now })).length, 30);

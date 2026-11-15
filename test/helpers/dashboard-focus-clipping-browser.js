@@ -4,7 +4,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sendHtml, sendJson, serveStatic } from '../../skills/dashboard/src/lib/http.js';
-import { workbenchAnswer } from '../../skills/dashboard/__tests__/fixtures/workbench-browser-api.js';
+import { workbenchSnapshot, workbenchSnapshotAnswer } from '../../skills/dashboard/__tests__/fixtures/workbench-browser-api.js';
 import { openDashboardTab } from '../../skills/dashboard/__tests__/helpers/browser-navigation.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../skills/dashboard/public/', import.meta.url)));
@@ -78,13 +78,15 @@ export async function runFocusClippingBrowser(sandbox, { width, theme, assetDire
           : { conversation, stored: true });
       }
       if (p.startsWith('/api/')) {
-        const value = workbenchAnswer(url, Date.now());
-        if (p === '/api/workbench/groups') {
-          const origin = value.rows.find(row => row.sessionGroup === 'origin');
-          origin.presence = 'not_running'; origin.state = { kind: 'not_running' }; origin.live = null;
+        const now = Date.now(), snapshot = workbenchSnapshot(now);
+        {
+          const origin = snapshot.rows.find(row => row.sessionGroup === 'origin');
+          origin.presence = 'not_running'; origin.state = { kind: 'offline' }; origin.live = null;
+          origin.flags = state === 'pending' ? { queued: { count: 1 }, waitingSlot: { position: 1 } } : {};
           origin.wait = state === 'pending' ? { kind: 'pool_wait', pendingCount: 1 } : null;
           origin.queue.pending.count = state === 'pending' ? 1 : 0;
         }
+        const value = workbenchSnapshotAnswer(url, snapshot, now);
         if (p === '/api/workbench/memory/backlog') {
           const row = value.groups[0];
           value.groups.push({ ...row, sessionGroup: 'lark:oc_product', displayName: 'Product weekly', count: 18 },

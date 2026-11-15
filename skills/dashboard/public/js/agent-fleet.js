@@ -166,7 +166,6 @@ export function defaultAgentFleetLabels() {
     noActivity: 'Standing by',
     context: 'Context',
     model: 'Model',
-    sessionCost: 'Session',
     dailyCost: 'Today',
     weeklyCost: '7 days',
     todayWeek: 'Today / 7 days',
@@ -273,7 +272,6 @@ export function buildAgentFleetView(fleet, options = {}) {
       activityFeed,
       rate7dPct: pctValue(agent.rate_limit_7d_pct),
       rate7dRecord: { recordedAt: agent.rate_limit_7d_recorded_at, live: agent.rate_limit_7d_live },
-      sessionCostLabel: money(agent.session_cost ?? agent.cost),
       dailyCostLabel: money(agent.daily_cost),
       weeklyCostLabel: money(agent.weekly_cost),
       cpuPct: agent.cpu_pct,
@@ -318,7 +316,6 @@ export function buildAgentFleetView(fleet, options = {}) {
     return total;
   };
   const costTotals = {
-    session: money(sumTier((a) => a.session_cost ?? a.cost)),
     daily: money(sumTier((a) => a.daily_cost)),
     weekly: money(sumTier((a) => a.weekly_cost))
   };
@@ -434,7 +431,7 @@ function renderTile(tile, labels, t) {
     ${act}
     ${quotaBars(tile, labels)}
     <div class="wb-f-kv">
-      <div title="${escapeHtml(labels.sessionCost)} ${escapeHtml(tile.sessionCostLabel)}">${escapeHtml(labels.todayWeek)}<b>${escapeHtml(tile.dailyCostLabel)} / ${escapeHtml(tile.weeklyCostLabel)}</b></div>
+      <div>${escapeHtml(labels.todayWeek)}<b>${escapeHtml(tile.dailyCostLabel)} / ${escapeHtml(tile.weeklyCostLabel)}</b></div>
       ${second}
       <div>${escapeHtml(labels.host)}<b>${[tile.cpuPct, tile.memPct, tile.diskPct].map((value) => value == null ? '--' : Number(value).toFixed(0)).join(' · ')}%</b></div>
     </div>
@@ -456,7 +453,6 @@ function renderAgentFleetViewHtml(view) {
         ${seg(view.counts.offline, labels.offline, 'dot-offline')}
       </span>
       <span class="sum-costs">
-        ${costCell(labels.sessionCost, view.costTotals.session)}
         ${costCell(labels.dailyCost, view.costTotals.daily)}
         ${costCell(labels.weeklyCost, view.costTotals.weekly)}
       </span>

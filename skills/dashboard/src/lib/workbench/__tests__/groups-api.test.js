@@ -153,3 +153,36 @@ test('real snapshot projects child-only work and an old offline catalog in both 
     assert.equal(running.rows.some(row => row.state.kind === 'offline'), false);
   }
 });
+
+test('running status keeps its last main-agent state for the established stale display window', () => {
+  for (const lastState of ['busy', 'idle']) {
+    const row = base(); row.live.status = { valid: false, reason: 'stale', lastState, sampledAt: now - 6000, lastIdleSeconds: 17 };
+    const value = projectGroup(row, snapshot([row]));
+    assert.equal(value.state.kind, lastState === 'busy' ? 'working' : 'idle');
+    assert.equal(value.state.stale, true); assert.equal(value.state.sampledAt, now - 6000); assert.equal(value.mainAgent, lastState);
+    assert.equal(value.flags.unreadable, undefined);
+    if (lastState === 'idle') assert.equal(value.duration, 17);
+    row.live.status.sampledAt = now - 60000;
+    assert.equal(projectGroup(row, snapshot([row])).state.kind, 'unknown');
+    assert.equal(projectGroup(row, snapshot([row])).mainAgent, 'unknown');
+  }
+});
+
+test('detail can omit expensive extras and reports each optional read failure without losing state', async () => {
+  let reads = 0; const row = base();
+  const api = createGroupsApi({ workbench: { getSnapshot: async () => snapshot([row]), raw: async () => { reads++; throw new Error('Raw unavailable'); } },
+    groupConfig: { get: async () => { reads++; throw new Error('Config unavailable'); } } });
+  const fast = await api.detail(row.sessionGroup, { include: new URLSearchParams({ include: '' }) });
+  assert.equal(fast.state.kind, 'idle'); assert.equal(reads, 0); assert.equal(Object.hasOwn(fast, 'raw'), false); assert.equal(Object.hasOwn(fast, 'config'), false);
+  const full = await api.detail(row.sessionGroup);
+  assert.equal(full.state.kind, 'idle'); assert.equal(reads, 2); assert.equal(full.raw, null); assert.equal(full.config, null);
+  assert.equal(full.rawError.code, 'READ_FAILED'); assert.equal(full.configError.code, 'READ_FAILED');
+  await assert.rejects(api.detail(row.sessionGroup, { include: new URLSearchParams({ include: 'bad' }) }), { code: 'INVALID_INCLUDE' });
+});
+
+test('stream and self-fleet counts can retain known rows when only the catalog is unreadable', () => {
+  const value = snapshot([base()]); value.sources.c4 = { ok: false }; value.instance.pool.capacityRecord = { source: 'fixture' };
+  assert.throws(() => groupCounts(value), { code: 'GROUP_CATALOG_UNREADABLE' });
+  const counts = groupCounts(value, { allowUnreadable: true });
+  assert.equal(counts.listKnown, false); assert.equal(counts.running.total, 1); assert.deepEqual(counts.pool, { used: 1, capacity: 1 });
+});

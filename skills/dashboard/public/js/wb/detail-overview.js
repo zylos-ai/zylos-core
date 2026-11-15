@@ -198,15 +198,15 @@ function nowCard(document, row, data, { level, t, snapshot, onRaw, showLastRecei
   card.append(title);
   const tools = row.tools ?? [];
   if (!technical(level)) {
-    const waiting = row.wait && ['waiting', 'unknown', 'error'].includes(kind);
+    const waiting = row.wait && (row.flags?.waitingSlot || row.flags?.blocked || row.flags?.startFailed || kind === 'unknown');
     const status = waiting ? waitText({ ...row.wait, pendingCount: row.queue?.pending?.count }, 'plain', t)
       : kind === 'working' ? [tools.length ? tools.map(tool => toolLabel(tool.name, 'plain', t)).join(t('wb.detail.toolSeparator')) : t('wb.state.working'),
         agents.length ? countLabel(t, 'wb.detail.backgroundAgents', agents.length) : null].filter(Boolean).join(' · ')
         : kind === 'offline' ? t('wb.detail.standby') : t('wb.state.' + kind);
-    title.append(icon(document, kind === 'working' ? 'tool' : kind === 'error' ? 'alert' : kind === 'unknown' ? 'help' : 'clock'), element(document, 'span', status));
+    title.append(icon(document, kind === 'working' ? 'tool' : row.flags?.startFailed ? 'alert' : kind === 'unknown' ? 'help' : 'clock'), element(document, 'span', status));
     if (kind === 'idle' && row.duration != null) title.append(element(document, 'span', ' · ' + t('wb.detail.idleElapsed', { duration: idleDuration(row.duration, t) }), 'wb-dur'));
     if (kind === 'working') card.classList.add('wb-now-work');
-    else if (['waiting', 'error', 'unknown'].includes(kind)) card.classList.add(kind === 'error' ? 'wb-now-err' : kind === 'unknown' ? 'wb-now-unk' : 'wb-now-wait');
+    else if (waiting || kind === 'unknown') card.classList.add(row.flags?.startFailed ? 'wb-now-err' : kind === 'unknown' ? 'wb-now-unk' : 'wb-now-wait');
   } else if (tools.length) {
     card.classList.add('wb-now-work');
     for (const [index, tool] of tools.entries()) {
@@ -222,13 +222,13 @@ function nowCard(document, row, data, { level, t, snapshot, onRaw, showLastRecei
       if (level === 'technical' && tool.detail) card.append(element(document, 'div', tool.detail, 'wb-args'));
     }
   } else if (row.wait) {
-    const failed = row.wait.kind === 'start_failed' || kind === 'error';
+    const failed = row.wait.kind === 'start_failed' || Boolean(row.flags?.startFailed);
     card.classList.add(failed ? 'wb-now-err' : kind === 'unknown' ? 'wb-now-unk' : 'wb-now-wait');
     title.append(icon(document, failed ? 'alert' : kind === 'unknown' ? 'help' : 'clock'), element(document, 'span', t('wb.state.' + kind)));
     card.append(element(document, 'p', waitText({ ...row.wait, pendingCount: row.queue?.pending?.count }, level, t), 'wb-now-sub'));
   } else {
-    if (kind === 'error') card.classList.add('wb-now-err');
-    const glyph = icon(document, kind === 'offline' ? 'power' : kind === 'error' ? 'alert' : kind === 'unknown' ? 'help' : 'clock');
+    if (row.flags?.startFailed) card.classList.add('wb-now-err');
+    const glyph = icon(document, kind === 'offline' ? 'power' : row.flags?.startFailed ? 'alert' : kind === 'unknown' ? 'help' : 'clock');
     title.append(glyph, element(document, 'span', kind === 'offline' ? t('wb.detail.standby') : t('wb.state.' + kind)));
     if (row.duration != null && !['offline', 'unknown'].includes(kind)) title.append(element(document, 'span', shortDuration(row.duration), 'wb-dur'));
   }
