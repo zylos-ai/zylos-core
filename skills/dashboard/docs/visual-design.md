@@ -124,6 +124,8 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Approved] When top navigation and detail tabs already occupy separate rows, adjust them only if they are misaligned with other controls on their row. After wrapping, check each actual row separately; do not offset individual controls to compensate for a particular language.
 
+[Approved] The default-engine selector retains its natural two-line height. Desktop Save/Undo buttons on the same row stretch to that height; after mobile wrapping, these buttons remain 36 px. In the mobile conversation header, busy/idle activity pills retain their existing visible dimensions (22 px high); a transparent extension provides a centered 44 px-high click target matching navigation controls. Measure visible geometry and hit geometry separately for this exception; do not enlarge the visible pill to 44 px.
+
 ## 3. Control Families and Interaction States
 
 [Current] Ordinary, primary, and destructive buttons each have default, hover, and pressed appearances. Selected, keyboard focus, disabled, and loading are distinct states; do not describe unimplemented states as existing component capabilities.

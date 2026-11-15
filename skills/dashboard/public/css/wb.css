@@ -212,6 +212,7 @@ html[data-detail=technical] .wb-tech-btn i::after { left: 12px; }
 .wb-tech-btn:focus-visible, .wb-icon-btn:focus-visible, .wb-btn:focus-visible, .wb-link-btn:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 /* Filled buttons draw their focus ring with the box shadow instead; they follow the rule above so the outline does not come back as a second ring. */
 .wb-btn-primary:focus-visible { outline: none; box-shadow: var(--c-focus); }
+.wb-btn-danger:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--c-surface), 0 0 0 4px var(--c-danger); }
 
 /* Navigation on its own scrollable row: phones always, wider screens when the one row does not fit. */
 html.wb-nav-row .app-header { flex-wrap: wrap; height: auto; min-height: 48px; column-gap: 6px; row-gap: 0; }
@@ -1207,6 +1208,10 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-seg2.wb-seg-engine { height: auto; }
 .wb-seg-engine button { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 3px; min-height: var(--wb-h); padding: 7px 16px; line-height: 1.2; text-align: left; }
 .wb-seg-engine .wb-login { font-size: 11.5px; font-weight: 400; line-height: 1.2; }
+@media (min-width: 761px) {
+  #settings-current-runtime .wb-set-inline:has(> .wb-seg-engine) { align-items: stretch; }
+  #settings-current-runtime :is(#settings-save-runtime, #settings-undo-runtime) { height: auto; }
+}
 .wb-login-unavailable { color: var(--wb-err); }
 .wb-login-unavailable .wb-hdot { background: var(--wb-err); }
 .wb-login-unknown .wb-hdot { background: var(--wb-off); }

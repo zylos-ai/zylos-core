@@ -1510,9 +1510,9 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-page .chat-question > .conversation-question-other { flex: 1 1 100%; margin: 8px 0 0; }
   .conversation-page .conversation-question-other > summary { margin-inline-start: -12px; }
   .conversation-page .chat-question-option { min-height: 48px; padding: 12px; }
-  .conversation-page .chat-form-chip { height: 40px; }
+  .conversation-page .chat-form-chip { height: var(--c-h); }
   .conversation-page .chat-form-segments { width: 100%; box-sizing: border-box; }
-  .conversation-page .chat-question .chat-form-segment { flex: 1 1 0; height: var(--c-h); font-size: 14px; }
+  .conversation-page .chat-question .chat-form-segment { flex: 1 1 0; height: calc(var(--c-h) - 8px); font-size: 14px; }
   .conversation-page .conversation-chart-plot { height: 184px; }
   .conversation-page .chat-block-category_series .conversation-chart-plot { height: var(--chat-plot-h, 184px); }
   .conversation-page .chat-block-breakdown .conversation-chart-plot { height: 24px; }
@@ -1748,9 +1748,9 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-page .conversation-running:not([data-state=busy]) .wi-ind-text { white-space:normal; overflow-wrap:anywhere; }
   .conversation-page .conversation-running[data-state=busy] .wi-ind-desktop { display:none; }
   .conversation-page .conversation-running[data-state=busy] .wi-ind-mobile { display:block; }
-  .conversation-page .conversation-running[data-state=busy]::after { content:""; position:absolute; left:-4px; right:-2px; top:-11px; bottom:-11px; }
+  .conversation-page .conversation-running:is([data-state=busy], [data-state=idle])::after { content:""; position:absolute; left:-4px; right:-2px; top:50%; height:44px; transform:translateY(-50%); }
   .conversation-header .wi-comet { --wi-rx:10.25px; --wi-t:2.2s; }
-  .conversation-page .conversation-header .conversation-running[data-state=idle] { grid-column:3; grid-row:1; display:inline-flex; align-self:center; gap:6px; width:auto; max-width:46vw; min-height:22px; margin:0 2px 0 4px; padding:0 4px; border:0; border-top:0; background:transparent; color:var(--text-dim); font-size:12px; line-height:1; }
+  .conversation-page .conversation-header .conversation-running[data-state=idle] { position:relative; grid-column:3; grid-row:1; display:inline-flex; align-self:center; gap:6px; width:auto; max-width:46vw; min-height:22px; margin:0 2px 0 4px; padding:0 4px; border:0; border-top:0; background:transparent; color:var(--text-dim); font-size:12px; line-height:1; }
   .conversation-page .conversation-running[data-state=idle] .wi-ind-text { white-space:nowrap; }
   .conversation-page .conversation-running[data-state=idle] .wi-ind-chev { display:none; }
   .conversation-page .conversation-running .wi-ind-chev { margin-left:auto; }

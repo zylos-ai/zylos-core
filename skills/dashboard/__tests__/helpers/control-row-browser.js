@@ -18,7 +18,17 @@ export function measureControlRows() {
   const all = controls.map((el, index) => { const b = el.getBoundingClientRect(); let owner = el.parentElement; while (owner.parentElement && owner !== root && !/flex|grid/.test(getComputedStyle(owner).display)) owner = owner.parentElement;
     owner = el.closest('#wb-board-head,.wb-usage-controls,.wb-sched-filters,.conversation-list-toolbar,.wb-timezone-controls,.wb-config-fields,.wb-pref-controls,.wb-d-top,.conversation-header,.wb-cfg-controls,.wb-cfg-more,.wb-name-editor,.wb-sched-pair') || owner;
     const contentTarget = el.matches('.wb-sched-dot,.wb-sched-select,.wb-sched-target,.conversation-list-item,.conversation-delete');
-    return { control: identify(el), owner: identify(owner) + (contentTarget ? ` / content target ${index}` : ''), height: b.height, center: b.y + b.height / 2, top: b.y, left: b.x, right: b.right, bottom: b.bottom }; });
+    return { control: identify(el), owner: identify(owner) + (contentTarget ? ` / content target ${index}` : ''), height: b.height, center: b.y + b.height / 2,
+      ...(() => {
+        if (innerWidth > 760 || !el.matches('.conversation-running:is([data-state=busy], [data-state=idle])')) return {};
+        const pseudo = getComputedStyle(el, '::after');
+        const hitHeight = parseFloat(pseudo.height);
+        const hitTop = b.top + parseFloat(getComputedStyle(el).borderTopWidth) + parseFloat(pseudo.top) + new DOMMatrix(pseudo.transform).m42;
+        const hitCenter = hitTop + hitHeight / 2;
+        const x = b.x + b.width / 2;
+        const hits = [hitTop + 1, hitTop + hitHeight - 1].map(y => el.contains(document.elementFromPoint(x, y)));
+        return { hitHeight, hitCenter, hitTop, hitBottom: hitTop + hitHeight, hitEdgesReachButton: hits.every(Boolean) };
+      })(), top: b.y, left: b.x, right: b.right, bottom: b.bottom }; });
   const rows = [];
   for (const item of all) {
     let row = rows.find(row => row.owner === item.owner && Math.abs(row.anchor - item.center) <= Math.max(9, item.height / 3));
@@ -26,8 +36,9 @@ export function measureControlRows() {
     row.controls.push(item);
   }
   return rows.map((row, i) => ({ row: `${row.owner} [${i + 1}]`, controls: row.controls,
-    heightSpread: Math.max(...row.controls.map(c => c.height)) - Math.min(...row.controls.map(c => c.height)),
-    centerSpread: Math.max(...row.controls.map(c => c.center)) - Math.min(...row.controls.map(c => c.center)) }));
+    visibleHeightSpread: Math.max(...row.controls.map(c => c.height)) - Math.min(...row.controls.map(c => c.height)),
+    heightSpread: Math.max(...row.controls.map(c => c.hitHeight ?? c.height)) - Math.min(...row.controls.map(c => c.hitHeight ?? c.height)),
+    centerSpread: Math.max(...row.controls.map(c => c.hitCenter ?? c.center)) - Math.min(...row.controls.map(c => c.hitCenter ?? c.center)) }));
 }
 
 async function checkRow(page, name, selector, { separateRows = false, expectedGroups, expectedHeight } = {}) {
@@ -68,6 +79,18 @@ export async function runControlRows(t, sandbox) {
         assert.equal(interaction.hoveredControls, 0, 'static capture has no hovered control');
         if (width === 390) assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${name}: no horizontal overflow`);
         const rows = await page.evaluate(measureControlRows);
+        for (const row of rows) {
+          for (const control of row.controls.filter(c => c.hitHeight !== undefined)) {
+            assert.equal(control.height, 22, `${name}: activity visible frame remains 22px`);
+            assert.equal(control.hitHeight, 44, `${name}: activity transparent target is 44px`);
+            // The open menu intentionally overlays the header; hit testing belongs to the unobscured states.
+            if (name !== 'conversation-menu') assert.equal(control.hitEdgesReachButton, true, `${name}: both transparent edges hit the activity button`);
+          }
+          if (survey && row.controls.length > 1) {
+            assert.ok(row.heightSpread <= 1, `${name}: peer interaction heights ${JSON.stringify(row)}`);
+            assert.ok(row.centerSpread <= 1, `${name}: peer interaction centers ${JSON.stringify(row)}`);
+          }
+        }
         const item = { page: name, width, theme, rows }; captures.push(item);
         if (evidence) {
           fs.writeFileSync(path.join(evidence, 'rows.json'), JSON.stringify(captures, null, 2));
@@ -116,6 +139,24 @@ export async function runControlRows(t, sandbox) {
           await page.locator('.conversation-header').waitFor(); await capture('conversation-running'); fixture.setScene('idle');
         }
       }
+      if (!survey) {
+        await page.goto(fixture.base + '/settings');
+        await page.locator('#settings-use-codex').click(); await settle();
+        await checkRow(page, 'default engine', width === 390 ? '#settings-save-runtime, #settings-undo-runtime' : '.wb-seg-engine, #settings-save-runtime, #settings-undo-runtime', width === 390 ? { expectedHeight: 36 } : {});
+        assert.ok(await page.locator('.wb-seg-engine').evaluate(el => el.getBoundingClientRect().height) > 36, 'engine retains its natural two-line height');
+        await capture('settings-runtime-draft');
+        for (const scene of ['idle', 'running']) {
+          fixture.setScene(scene); await page.goto(fixture.base + '/chat');
+          await page.locator('[data-conversation-id]').last().click(); await page.locator('.conversation-header').waitFor();
+          await capture('conversation-' + scene);
+          if (width === 390) {
+            const pill = (await page.evaluate(measureControlRows)).flatMap(row => row.controls).find(c => c.hitHeight !== undefined);
+            await page.mouse.click((pill.left + pill.right) / 2, pill.hitTop + 1);
+            await page.locator('.wb-group-side').waitFor({ state: 'visible' });
+          }
+        }
+        fixture.setScene('idle');
+      }
       if (survey) {
         for (const route of ['/memory', '/settings']) {
           await page.goto(fixture.base + route);
@@ -133,8 +174,8 @@ export async function runControlRows(t, sandbox) {
     } finally { await context.close(); }
   }
   if (evidence) {
-    const table = ['| Page | Width/theme | Row | Controls: height px; center px | Height spread | Center spread |', '|---|---|---|---|---:|---:|'];
-    for (const shot of captures) for (const row of shot.rows) table.push(`| ${shot.page} | ${shot.width}/${shot.theme} | ${row.row.replaceAll('|', '/')} | ${row.controls.map(c => `${c.control.replaceAll('|', '/')}: ${c.height.toFixed(2)}; ${c.center.toFixed(2)}`).join('<br>')} | ${row.heightSpread.toFixed(2)} | ${row.controls.length > 1 ? row.centerSpread.toFixed(2) : 'n/a'} |`);
+    const table = ['| Page | Width/theme | Row | Controls: visible height px; center px; hit height px | Interaction height spread | Center spread |', '|---|---|---|---|---:|---:|'];
+    for (const shot of captures) for (const row of shot.rows) table.push(`| ${shot.page} | ${shot.width}/${shot.theme} | ${row.row.replaceAll('|', '/')} | ${row.controls.map(c => `${c.control.replaceAll('|', '/')}: ${c.height.toFixed(2)}; ${c.center.toFixed(2)}; ${(c.hitHeight ?? c.height).toFixed(2)}`).join('<br>')} | ${row.heightSpread.toFixed(2)} | ${row.controls.length > 1 ? row.centerSpread.toFixed(2) : 'n/a'} |`);
     fs.writeFileSync(path.join(evidence, 'rows.md'), table.join('\n') + '\n');
   }
   console.info(`Control row captures: ${captures.length}`);
