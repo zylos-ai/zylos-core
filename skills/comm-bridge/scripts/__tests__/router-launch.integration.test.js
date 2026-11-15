@@ -59,6 +59,7 @@ setInterval(()=>{},1000);
   let beforeLaunch = () => {};
   const deps = { db, now: () => clock,
     readSessionMode: () => ({ mode, keyPresent: true }),
+    readLiveIdentities: reader.readLiveIdentities,
     readLiveIdentity: reader.readLiveIdentity,
     readCurrentSession: readReadyIdentity,
     listGroupTmuxSessions: () => listGroupTmuxSessions(tmux),

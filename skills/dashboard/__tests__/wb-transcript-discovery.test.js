@@ -624,10 +624,12 @@ for (const failureAt of ['before snapshot', 'after snapshot']) {
 
 // Real collector/SQLite integration: lifecycle keys gate current summaries while
 // usage retains each transcript's own session/run attribution, including late writes.
-test('session rotation keeps old and new usage on their own runs and authorizes only current summaries', async t => {
+for (const signal of ['sampled live key', 'idle live key with lifecycle event']) {
+test(`session rotation with ${signal} keeps usage on its own run and authorizes current summaries`, async t => {
   const snapshot = { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: 'run-origin' } }] };
   const f = fixture(t, snapshot), old = f.file('usage-old'), next = f.file('usage-next');
   f.start(old, 'origin');
+  if (signal === 'idle live key with lifecycle event') f.inventory.getSnapshotKey = () => 'previous-idle-sample';
   f.store.insertEvent({ id: 'usage-next-start', ingest_id: 'usage-next-start', timestamp: new Date(f.now()).toISOString(),
     runtime: 'claude', session_id: 'next-session', session_group: 'origin', run_id: 'next-run',
     event_type: 'session_start', category: 'session', metadata: { transcript_path: next }, source: 'core-log', confidence: 'actual' });
@@ -641,6 +643,7 @@ test('session rotation keeps old and new usage on their own runs and authorizes 
   append(old, 'session-origin', 'old-current'); append(next, 'next-session', 'next-before-start');
   await collector.collect();
   snapshot.rows[0].live.runId = 'next-run'; f.advance(5000);
+  if (signal === 'idle live key with lifecycle event') lifecycleEvent(f, 'rotate_done');
   append(old, 'session-origin', 'old-late'); append(next, 'next-session', 'next-current');
   await collector.collect();
   const summaries = f.store.queryEvents({ types: ['assistant_message'] });
@@ -655,6 +658,8 @@ test('session rotation keeps old and new usage on their own runs and authorizes 
     assert.equal(row.dimensions.run_id, oldRun ? 'run-origin' : 'next-run');
   }
 });
+
+}
 
 // Real Store/collector integration covers cursor advancement while unrelated Core
 // lifecycle events arrive during every snapshot read. Run for snapshot acceptance,

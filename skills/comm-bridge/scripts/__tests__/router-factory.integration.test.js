@@ -40,6 +40,7 @@ function setup(t, { mode = 'multi', phase } = {}) {
     env: { ...process.env, ZYLOS_SESSION_POOL_SIZE: '2' },
     db, diagnostics: { diagnostic: (...args) => calls.push(['event', ...args]), maintain() {} }, log: message => calls.push(['log', message]),
     listGroupTmuxSessions: async () => keys.map(sessionGroup => ({ sessionGroup, ...scenes.get(sessionGroup) })),
+    readLiveIdentities: async groups => new Map(groups.map(group => [group, scenes.get(group) ?? { present: false }])),
     readLiveIdentity: async group => scenes.get(group) ?? { present: false },
     readCurrentSession: async group => { calls.push(['current', group]); return { runId: `r-${group}`, sessionId: `business-${group}`, startupControlIds: [] }; },
     readSessionState: async (group, options) => { assert.deepEqual(options, { freshnessMs: 5000 }); calls.push(['state', group]);

@@ -173,15 +173,38 @@ export function createSupervisor(deps) {
     reconcileRunEndings:context=>endings.advance(context),
     reconciliationReadFailed:error=>endings.reportReadFailure(error),
     afterRound:()=>deps.afterRound?.({health,lifecycle,admission,context:roundContext}),
+    preparePublication: typeof scenes.readIdentities === 'function' ? async context=>{
+      context.publicationIdentities = new Map();
+      context.publicationActivities = new Map();
+      const candidates = context.scenes.filter(scene=>scene.ready && scene.processRunning===true && scene.runId && scene.sessionId);
+      if(!candidates.length)return;
+      const matches=(scene,current)=>current?.present && current.ready && current.runId===scene.runId && current.sessionId===scene.sessionId && current.runtime===scene.runtime;
+      const first=await scenes.readIdentities(candidates.map(scene=>scene.sessionGroup));
+      for(const scene of candidates) {
+        if(!matches(scene,first.get(scene.sessionGroup)))continue;
+        try {
+          const activity=readActivity(scene);
+          await deps.consumeHealthEvents?.(scene,health);
+          context.publicationActivities.set(scene.sessionGroup,activity);
+        } catch(error) { await reportError(error,{phase:'observe',sessionGroup:scene.sessionGroup}); }
+      }
+      context.publicationIdentities=await scenes.readIdentities([...context.publicationActivities.keys()]);
+    } : undefined,
     probeAndPublish:async(scene,context)=>{
       if(!scene.ready || scene.processRunning!==true || !scene.runId || !scene.sessionId)return;
       const matches=current=>current.present && current.ready && current.runId===scene.runId && current.sessionId===scene.sessionId && current.runtime===scene.runtime;
       // The round owns the process sample. Recheck only run/session identity at
       // publication boundaries; do not resample every read-only health check.
-      if(!matches(await scenes.readIdentity(scene.sessionGroup)))return;
-      const activity=readActivity(scene);
-      await deps.consumeHealthEvents?.(scene,health);
-      if(!matches(await scenes.readIdentity(scene.sessionGroup)))return;
+      let activity;
+      if(context.publicationIdentities) {
+        if(!context.publicationActivities.has(scene.sessionGroup) || !matches(context.publicationIdentities.get(scene.sessionGroup) ?? {}))return;
+        activity=context.publicationActivities.get(scene.sessionGroup);
+      } else {
+        if(!matches(await scenes.readIdentity(scene.sessionGroup)))return;
+        activity=readActivity(scene);
+        await deps.consumeHealthEvents?.(scene,health);
+        if(!matches(await scenes.readIdentity(scene.sessionGroup)))return;
+      }
       publishSessionStatus({statusFile:path.join(scene.runDir,'agent-status.json'),scene,activity,health:health.store(scene.runtime).read(),proc:scene.proc,now:now()});
       await observer.observeScene(scene);
     },

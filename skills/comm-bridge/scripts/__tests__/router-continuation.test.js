@@ -300,7 +300,7 @@ test('continuation ready timeout releases confirmed absent launch and keeps its 
 
 test('transient observation failure after continuation launch does not stop the new run', async t => {
   const f = routerFixture(t); f.put('origin'); const id = continuation(f);
-  const read = f.deps.readLiveIdentity;
+  const read = f.deps.readLiveIdentities;
   const adapter = f.deps.getSessionAdapter;
   let failNextRead = false;
   let failures = 0;
@@ -309,12 +309,12 @@ test('transient observation failure after continuation launch does not stop the 
     f.put(input.sessionGroup, { runId: input.runId, ready: false });
     failNextRead = true;
   } });
-  f.deps.readLiveIdentity = async group => {
-    if (group === 'a' && failNextRead) {
+  f.deps.readLiveIdentities = async groups => {
+    if (groups.includes('a') && failNextRead) {
       failNextRead = false; failures++;
       throw Object.assign(Error('temporary tmux read failure'), { code: 'TMUX_UNAVAILABLE' });
     }
-    return read(group);
+    return read(groups);
   };
   await initialize(f); await readyToStart(f);
   assert.equal(failures, 1);
@@ -490,6 +490,12 @@ ZYLOS_MODEL_CONFIG="{\"runtime\":\"claude\"}"; export ZYLOS_MODEL_CONFIG;`;
   });
   const original = f.deps.readLiveIdentity;
   f.deps.readLiveIdentity = group => group === 'a' ? reader.readLiveIdentity(group) : original(group);
+  const batch = f.deps.readLiveIdentities;
+  f.deps.readLiveIdentities = async groups => {
+    const identities = await batch(groups);
+    if(groups.includes('a'))identities.set('a', await reader.readLiveIdentity('a'));
+    return identities;
+  };
   assert.equal((await reader.readLiveIdentity('a')).ready, false);
   await initialize(f);
   assert.equal(f.db.listRunEndings(['a'])[0].continuationPending, 1);

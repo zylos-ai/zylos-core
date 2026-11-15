@@ -113,6 +113,8 @@ test('scene threshold uses the identity-validated model and observed window', {t
     const observed=await scenes.observeGroup('origin');
     assert.equal(observed.model,model);assert.equal(observed.contextWindow,window);assert.equal(observed.usagePercent,50);
     assert.equal(sceneRotationThreshold(observed,configuration),expected);
+    const [batched]=await scenes.observe({configuration:{mode:'multi'}});
+    assert.equal(batched.model,model);assert.equal(batched.contextWindow,window);assert.equal(batched.usagePercent,50);
   }
 });
 
@@ -156,4 +158,59 @@ test('repeated multi READY observations and adapter liveness use pane PID withou
   }
   assert.equal(treeCalls,0);
   assert.equal(spawned.includes('ps'),false,`unexpected process snapshot: ${spawned.join(', ')}`);
+});
+
+// Boundary: batch scene sampling on a real private tmux socket; the fixture and
+// official runner isolate all runtime paths and reclaim processes on failure.
+// Run for polling/scene projection changes; unrelated lifecycle actions may skip.
+for (const size of [6, 12]) test(`scene polling uses bounded tmux processes for ${size} groups and detects disappearance next round`, { timeout: 20000 }, async t => {
+  const f = readyTmuxTarget(t, { prefix: 'scene-batch-', mode: 'multi' });
+  for (let i = 1; i < size; i++) f.tmux('new-session', '-d', '-s', `zylos-group-extra${i}`, 'sleep', '120');
+  const scenes = service(f);
+  const spawn = ChildProcess.prototype.spawn;
+  let spawned = 0;
+  t.mock.method(ChildProcess.prototype, 'spawn', function(options) {
+    if (options.file === f.binary || options.args?.includes(f.socketPath)) spawned++;
+    return spawn.call(this, options);
+  });
+  const observed = await scenes.observe({ configuration: { mode: 'multi' } });
+  assert.equal(observed.length, size);
+  assert.equal(observed.find(scene => scene.sessionGroup === 'origin').ready, true);
+  // Each bracket boundary reads panes and session-local environments in one batch.
+  assert.ok(spawned <= 4, `scene polling spawned ${spawned} tmux processes for ${size} groups`);
+  f.tmux('kill-session', '-t', '=zylos-group-origin');
+  const next = await scenes.observe({ configuration: { mode: 'multi' } });
+  assert.equal(next.some(scene => scene.sessionGroup === 'origin' && scene.present), false);
+});
+
+// Boundary: sampling callbacks change a real private tmux session inside the
+// batch bracket. Run for sampling fences; unrelated lifecycle work may skip.
+for (const phase of ['activity', 'usage']) for (const change of ['disappearance', 'replacement']) test(`batch scene rejects ${change} during ${phase} sampling`, {timeout:15000}, async t=>{
+  const f=readyTmuxTarget(t,{prefix:'scene-sampling-',mode:'multi'});
+  f.tmux('new-session','-d','-s','keeper','sleep','120');
+  let activityCalls=0, usageCalls=0;
+  const changeTarget=()=>{
+    if(change==='disappearance')f.tmux('kill-session','-t','=zylos-group-origin');
+    else f.tmux('set-environment','-t','=zylos-group-origin','ZYLOS_RUN_ID','replacement');
+  };
+  const scenes=service(f,{readActivity:()=>{activityCalls++;if(phase==='activity')changeTarget();return {state:'idle',idleSince:123};},
+    readUsage:()=>{usageCalls++;if(phase==='usage')changeTarget();return 75;}});
+  const [scene]=await scenes.observe({configuration:{mode:'multi'}});
+  assert.equal(activityCalls,1);assert.equal(usageCalls,1);
+  assert.ok(scene.observationError);assert.equal(scene.ready,false);
+  assert.equal(scene.processRunning,undefined);assert.equal(scene.usagePercent,null);
+});
+
+// Boundary: source single/multi identities stay authoritative after F1 cutover,
+// on real private tmux. Run for scope/transition changes; other work may skip.
+for(const sourceMode of ['single','multi'])test(`batch observation preserves ${sourceMode} source scope across configuration cutover`,{timeout:15000},async t=>{
+  const f=readyTmuxTarget(t,{prefix:'scene-source-scope-',mode:sourceMode});
+  const destinationMode=sourceMode==='single'?'multi':'single';
+  const scenes=service(f,{readMode:()=>{throw Error('batch observation reread mode');}});
+  const [scene]=await scenes.observe({configuration:{mode:destinationMode}});
+  assert.equal(scene.sessionGroup,'origin');assert.equal(scene.ready,true);
+  const targets=await scenes.reader.readSessionTargets();
+  const target=targets.get('origin');
+  const rejected=await scenes.observeGroup('origin',{sample:{target},scope:sourceMode==='single'?'origin':null});
+  assert.equal(rejected.ready,false);
 });

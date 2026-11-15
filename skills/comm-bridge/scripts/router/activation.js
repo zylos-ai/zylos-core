@@ -185,7 +185,7 @@ export function createActivationManager(context) {
         diagnostic('launch_name_conflict', { session_group: group, runId, conversation_id: candidate?.id ?? null });
         return;
       }
-      await advance(group);
+      await advance(group, { afterLaunch: true });
     } catch (error) {
       diagnostic('activate_failed', { session_group: group, conversation_id: candidate?.id ?? null, reason: error.code ?? error.message });
       // Once claimed, the activation owns convergence and the running row.
@@ -260,7 +260,7 @@ export function createActivationManager(context) {
         await deps.getSessionAdapter(launchConfig.runtime).launch({ sessionGroup: group, runId, launchConfig, sessionMode: state.mode });
       } catch (error) { activation.launchError = error; }
       activation.launchSettled = true;
-      await advance(group);
+      await advance(group, { afterLaunch: true });
     } catch (error) {
       diagnostic('activate_failed', { session_group: group, reason: error.code ?? error.message });
     } finally {
@@ -281,7 +281,7 @@ export function createActivationManager(context) {
     activation.slotTaken = false; context.refreshSlots();
   }
 
-  async function advance(group) {
+  async function advance(group, { afterLaunch = false } = {}) {
     const activation = state.activations.get(group);
     if (!activation) return;
     // Failed prelaunch cleanup retains ownership so a later round can retry it.
@@ -297,10 +297,13 @@ export function createActivationManager(context) {
       return;
     }
     try {
-      // One fresh observation after launch settles, including at the timeout boundary.
-      const live = await deps.readLiveIdentity(group);
-      state.live.set(group, live);
-      if (live.present && live.runId === activation.runId && live.ready) {
+      // Periodic readiness follows the shared scene snapshot. Cleanup reacquires
+      // a fresh identity immediately before the existing guarded stop action.
+      // Launch completion also keeps its original immediate identity check.
+      const converging = Boolean(activation.launchError) || now() - activation.startedAt >= options.readyTimeoutMs;
+      const live = converging || afterLaunch ? await deps.readLiveIdentity(group) : state.live.get(group);
+      if (converging || afterLaunch) state.live.set(group, live);
+      if (live?.present && live.runId === activation.runId && live.ready) {
         context.continuationRestarts.ready(group);
         return;
       }

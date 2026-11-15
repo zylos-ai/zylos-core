@@ -91,21 +91,14 @@ export function createLane(context, group) {
     }
     const live = state.live.get(group);
     if (!live) return; // Unobservable is not absent.
+    // A prelaunch snapshot or another run cannot authorize startup delivery.
+    if (activation && (!activation.launchSettled || !live.present || !live.ready || live.runId !== activation.runId)) return;
     if (live.present) {
       context.capacityWaits.clear(group);
       if (live.ready && live.runId) {
-        if (state.mode === 'multi') {
-          try {
-            const pending = group === 'origin'
-              ? deps.db.listRunEndings(['origin']).some(row => row.continuationPending)
-              : state.continuations.has(group);
-            if (pending && deps.db.clearContinuation(group, { runId: live.runId }).cleared) {
-              diagnostic('continuation_cleared', { session_group: group, runId: live.runId });
-            }
-          } catch (error) {
-            diagnostic('continuation_clear_failed', { session_group: group, runId: live.runId, reason: error.code ?? error.message });
-          }
-        }
+        // Cached identities can pace guarded delivery while a batch is pending,
+        // but cannot clear a newer restart marker. Activation pins its run.
+        if (activation) context.clearContinuation(group, live);
         return ready(live);
       }
       if (activation) return;

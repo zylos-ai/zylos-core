@@ -42,6 +42,7 @@ function dispatcherFixture(sandbox, api, sessionGroup) {
     diagnostics: { diagnostic() {}, maintain() {} }, diagnostic() {}, log() {},
     listGroupTmuxSessions: async () => groups.map(group => ({ sessionGroup: group, ...scenes.get(group) })),
     readLiveIdentity: async group => scenes.get(group) ?? { present: false },
+    readLiveIdentities: async () => new Map(scenes),
     readCurrentSession: async group => ({ runId: scenes.get(group).runId,
       sessionId: scenes.get(group).sessionId, startupControlIds: [] }),
     readSessionState: async group => ({ identity: scenes.get(group),

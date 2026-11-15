@@ -1,6 +1,7 @@
 export class SseHub {
-  constructor(keepaliveMs = 15_000, { maxChatClients = 100, maxChatClientsPerPrincipal = 20 } = {}) {
+  constructor(keepaliveMs = 15_000, { maxChatClients = 100, maxChatClientsPerPrincipal = 20, onClientCountChange = () => {} } = {}) {
     this.keepaliveMs = keepaliveMs;
+    this.onClientCountChange = onClientCountChange;
     this.clients = new Set();
     this.keepaliveTimer = null;
     this.sequence = 0;
@@ -25,6 +26,7 @@ export class SseHub {
     const client = { res, validator: validator || null, onClose, chatPrincipal };
     if (chatPrincipal !== undefined) this.chatClients.set(chatPrincipal, (this.chatClients.get(chatPrincipal) || 0) + 1);
     this.clients.add(client);
+    this.onClientCountChange(this.clients.size);
     res.on('close', () => this._remove(client));
     this._write(client, ': connected\n\n');
     if (this.clients.size) this._startKeepalive();
@@ -42,6 +44,7 @@ export class SseHub {
 
   _remove(client) {
     if (!this.clients.delete(client)) return;
+    this.onClientCountChange(this.clients.size);
     this.detachChat(client);
     try { client.onClose?.(); } catch { /* transport teardown must continue */ }
     if (this.clients.size === 0) this._stopKeepalive();

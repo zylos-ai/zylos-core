@@ -8,11 +8,12 @@ import { once } from 'node:events';
 import { createSupervisor } from '../supervisor.js';
 import { RestartRequestStore } from '../restart-request-store.js';
 import { groupRunDir } from '../../../../cli/lib/session-group-paths.js';
-function fixture(t,{badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunchConfig=()=>({runtime:'claude',mode:'default'}),consumeHealthEvents,readConfiguration=async()=>({mode:'multi',runtime:'claude',capacity:2}),checkAuth=async()=>({status:'uncertain'}),alert,now=Date.now,database={},readSyncMarker,prepareReferenceReorg,prompts}={}) {
+function fixture(t,{batchIdentities,badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunchConfig=()=>({runtime:'claude',mode:'default'}),consumeHealthEvents,readConfiguration=async()=>({mode:'multi',runtime:'claude',capacity:2}),checkAuth=async()=>({status:'uncertain'}),alert,now=Date.now,database={},readSyncMarker,prepareReferenceReorg,prompts}={}) {
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-assembly-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const file=path.join(root,'requests.json');if(badRequests)fs.writeFileSync(file,'broken');
  const calls=[],db={getOriginNeed:()=>({controls:{count:0},inbound:{oldestAt:null}}),getModeTransition:()=>null,listDrainFences:()=>[],getDrainFence:()=>null,listSlotOccupancy:()=>[],pruneSlots:()=>({deletedHeld:0,deletedOrphans:[]}),listPendingContinuations:()=>[],listRunEndings:()=>[],getLastCompletedModeTransition:()=>null,listPendingSessionGroups:()=>[],getControlById:()=>null,resolveSessionLaunchConfig:resolveLaunchConfig,...database};
  const scenes={observe:async()=>[],readIdentity(group) { return this.observeGroup(group); }, observeGroup:async()=>({present:false}),listRuns:async()=>[],readRun:async()=>null};
+ if(batchIdentities)scenes.readIdentities=batchIdentities;
  const supervisor=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},readConfiguration,readMode,resolveTargetRuntime:async()=> 'claude',requestStore:new RestartRequestStore({file}),consumeHealthEvents,checkAuth,alert,now,readSyncMarker,prepareReferenceReorg,prompts,log:item=>calls.push(item),loopOptions:{schedule:()=>1,cancel:()=>{}}});
  t.after(()=>supervisor.stop());return {supervisor,calls,file,root,scenes,db};
 }
@@ -700,4 +701,60 @@ test('assembled Origin Sync forwards reference proposal preparation before its S
  assert.equal(prepared,1);
  assert.deepEqual(controls.map(row=>row.content),['Reference proposal fixture instruction','Origin Sync fixture instruction']);
  assert.equal(controls[0].priority,3);assert.equal(controls[1].priority,2);
+});
+
+// Boundary: real Supervisor publication pipeline with injected identity I/O;
+// no processes, external sockets or service databases. Run for batched health
+// publication changes; unrelated admission and delivery work can skip.
+test('publication batches both identity boundaries and rejects replacement during health consumption', async t=>{
+  let batches=0, replacements=false;
+  const current=new Map(), consumed=[];
+  const f=fixture(t,{batchIdentities:async groups=>{
+    batches++;
+    return new Map(groups.map(group=>[group,current.get(group)]));
+  },consumeHealthEvents:async scene=>{
+    consumed.push(scene.sessionGroup);
+    if(replacements && scene.sessionGroup==='a')current.set('a',{...scene,runId:'replacement'});
+  }});
+  const samples=['a','b'].map(sessionGroup=>{
+    const runDir=path.join(f.root,sessionGroup);fs.mkdirSync(runDir);
+    const scene={sessionGroup,runDir,present:true,ready:true,processRunning:true,runtime:'claude',runId:'r',sessionId:'s',createdAt:100};
+    current.set(sessionGroup,scene);return scene;
+  });
+  f.scenes.readIdentity=async()=>assert.fail('periodic publication queried one identity');
+  await f.supervisor.loop.deps.readConfiguration();
+  const context={scenes:samples};
+  await f.supervisor.loop.deps.preparePublication(context);
+  for(const scene of samples)await f.supervisor.loop.deps.probeAndPublish(scene,context);
+  assert.equal(batches,2);assert.equal(consumed.length,2);
+  const file=path.join(samples[0].runDir,'agent-status.json');
+  fs.writeFileSync(file,'prior state');replacements=true;
+  await f.supervisor.loop.deps.preparePublication(context);
+  for(const scene of samples)await f.supervisor.loop.deps.probeAndPublish(scene,context);
+  assert.equal(batches,4);assert.equal(fs.readFileSync(file,'utf8'),'prior state');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(samples[1].runDir,'agent-status.json'))).runId,'r');
+});
+
+// Publication boundaries use the actual assembly with private filesystem data;
+// no runtime or daemon is contacted. Run for identity/activity guard changes.
+test('publication skips activity and health consumption when the first identity changed', async t=>{
+  let consumed=0, activityReads=0;
+  const f=fixture(t,{batchIdentities:async groups=>new Map(groups.map(group=>[group,{present:true,ready:true,runId:'replacement',sessionId:'s',runtime:'claude'}])),consumeHealthEvents:()=>{consumed++;}});
+  const scene={sessionGroup:'a',runDir:f.root,present:true,ready:true,processRunning:true,runtime:'claude',runId:'r',sessionId:'s',createdAt:100};
+  Object.defineProperty(scene,'currentSessionTs',{get(){activityReads++;return 100;}});
+  const context={scenes:[scene]};
+  await f.supervisor.loop.deps.preparePublication(context);
+  await f.supervisor.loop.deps.probeAndPublish(scene,context);
+  assert.equal(activityReads,0);assert.equal(consumed,0);
+  assert.equal(context.publicationActivities.size,0);
+  assert.equal(fs.existsSync(path.join(f.root,'agent-status.json')),false);
+});
+
+test('publication requires activity sampled for the current round even with a matching final identity', async t=>{
+  const scene={sessionGroup:'a',present:true,ready:true,processRunning:true,runtime:'claude',runId:'r',sessionId:'s',createdAt:100};
+  const f=fixture(t);scene.runDir=f.root;
+  const file=path.join(f.root,'agent-status.json');fs.writeFileSync(file,'prior state');
+  const context={scenes:[scene],publicationIdentities:new Map([['a',scene]]),publicationActivities:new Map()};
+  await f.supervisor.loop.deps.probeAndPublish(scene,context);
+  assert.equal(fs.readFileSync(file,'utf8'),'prior state');
 });

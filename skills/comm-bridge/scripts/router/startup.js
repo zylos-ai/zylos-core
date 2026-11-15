@@ -20,6 +20,8 @@ export async function initializeRouter(context) {
   const ids = [...recovered.requeued.ids, ...recovered.ageExpired.ids, ...recovered.retryExhausted.ids];
   diagnostic('orphan_recovery_summary', { ...recovered, oldestId: ids.length ? Math.min(...ids) : null });
   if (state.mode === 'single') state.legacy = await deps.findLegacySessions();
-  await context.refreshScene();
+  // Initial observation remains asynchronous, as it was for individual identities.
+  // The first lane round must not consume work ahead of startup recovery.
+  await context.refreshScene([], { startup: true });
   state.ready = true;
 }

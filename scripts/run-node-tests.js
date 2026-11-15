@@ -9,6 +9,7 @@ const ROOT = process.cwd();
 const ROOT_NODE_TESTS = [
   'test/account-usage-cache.integration.test.js',
   'test/dashboard-transcript-idle.integration.test.js',
+  'test/session-batch-reader.integration.test.js',
   'test/account-quota-browser.test.js',
   'test/dashboard-initial-timezone.integration.test.js',
   'test/skill-command-arguments.test.js',
@@ -131,7 +132,7 @@ try {
   fs.mkdirSync(tmpdir);
   const env = { ...process.env, TMPDIR: tmpdir };
   // Runtime identity belongs to each fixture, never the agent running tests.
-  for (const key of ['CLAUDE_SESSION_ID','CODEX_SESSION_ID','ZYLOS_RUN_ID','ZYLOS_SESSION_GROUP']) delete env[key];
+  for (const key of ['CLAUDE_SESSION_ID','CODEX_SESSION_ID','ZYLOS_RUN_ID','ZYLOS_SESSION_GROUP','ZYLOS_MODEL_CONFIG']) delete env[key];
   const reporter = patterns.length
     ? [`--test-reporter=${fileURLToPath(new URL('./test-match-reporter.js', import.meta.url))}`] : [];
   const nodeArgs = ['--experimental-test-module-mocks', '--test', ...reporter, ...patterns, ...testFiles];

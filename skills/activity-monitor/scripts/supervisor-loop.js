@@ -1,5 +1,8 @@
 /** One non-overlapping observation/reconciliation loop. Socket I/O is independent. */
 export class SupervisorLoop {
+  // Keep one-second observation: three-second idle confirmation, five-second
+  // restart/screen checks and watchdog/reclaim deadlines depend on this bound.
+  // Batching reduces tmux work without extending their detection latency.
   constructor(deps, { intervalMs = 1000, schedule = setTimeout, cancel = clearTimeout } = {}) {
     this.deps = deps;
     this.intervalMs = intervalMs;
@@ -125,6 +128,10 @@ export class SupervisorLoop {
     await d.observeExits?.(context.scenes);
     try { await d.lifecycleSerial(() => d.reconcileRunEndings?.(context)); }
     catch (error) { await d.reportError(error, { phase: 'run-ending-reconciliation' }); }
+    if (d.preparePublication) {
+      try { await d.preparePublication(context); }
+      catch (error) { await d.reportError(error, { phase: 'publication' }); }
+    }
     await this.each(context.scenes, scene => d.probeAndPublish(scene, context), 'observe');
     try { await d.updateCapacity?.(context); }
     catch (error) { await d.reportError(error, { phase: 'capacity' }); }

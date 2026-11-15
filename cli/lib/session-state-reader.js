@@ -5,7 +5,7 @@ import { zylosRoot } from './session-group-paths.js';
 import { safeHealthReason } from '../../skills/activity-monitor/scripts/health-evidence.js';
 
 // Public readers retain one asynchronous tmux connection per observation.
-export const { readLiveIdentity, readSessionState, resolveTargetRuntime,
+export const { readLiveIdentity, readSessionState, readLiveIdentities, readSessionStates, readSessionTargets, resolveTargetRuntime,
   readCodexUsageSample, readAccountUsage, readAccountUsageSnapshot } = createSessionReader();
 
 export function readRuntimeHealth(runtime) {

@@ -41,6 +41,7 @@ test('factory sends a due supplementary Enter to only the settled message group'
     diagnostics: { diagnostic() {}, maintain() {} }, log() {},
     diagnostic: (event, fields) => { if (event === 'periodic_sent') periodicSends.push(fields); },
     listGroupTmuxSessions: async () => groups.map(sessionGroup => ({ sessionGroup, ...scenes.get(sessionGroup) })),
+    readLiveIdentities: async groups => new Map(groups.map(group => [group, scenes.get(group) ?? { present: false }])),
     readLiveIdentity: async sessionGroup => scenes.get(sessionGroup) ?? { present: false },
     readCurrentSession: async sessionGroup => ({ runId: `run-${sessionGroup}`, sessionId: `business-${sessionGroup}`, startupControlIds: [] }),
     readSessionState: async sessionGroup => ({ identity: scenes.get(sessionGroup),

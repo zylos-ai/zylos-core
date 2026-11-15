@@ -85,6 +85,7 @@ fs.appendFileSync(file,JSON.stringify({argv:process.argv.slice(2),body})+'\\n');
     diagnostic: (event, fields) => { assert.ok(events.length < 100); events.push({ event, ...fields }); },
     log() {}, maintainDiagnostics() {},
     listGroupTmuxSessions: async () => [...scenes].map(([sessionGroup, identity]) => ({ sessionGroup, ...identity })),
+    readLiveIdentities: async groups => new Map(groups.map(group => [group, scenes.get(group) ?? { present: false }])),
     readLiveIdentity: async group => scenes.get(group) ?? { present: false },
     readCurrentSession: async group => ({ ...scenes.get(group), startupControlIds: [] }),
     readRuntimeHealth: () => ({ health: 'ok' }),

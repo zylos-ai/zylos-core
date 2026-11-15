@@ -39,7 +39,7 @@ setInterval(() => {}, 1000);
     getControlById: id => f.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id),
     expireTimedOutControls: () => 0, cleanupControlQueue: () => 0 },
     now: () => clock, readSessionMode: () => ({ mode: 'single', keyPresent: true }),
-    readLiveIdentity: group => scenes.readIdentity(group), readCurrentSession: scenes.readReady,
+    readLiveIdentity: group => scenes.readIdentity(group), readLiveIdentities: groups => scenes.readIdentities(groups), readCurrentSession: scenes.readReady,
     listGroupTmuxSessions: () => assert.fail('single does not list groups'),
     readRuntimeHealth: () => ({ health: 'ok', publicHealth: 'ok' }),
     getSessionAdapter: runtime => {

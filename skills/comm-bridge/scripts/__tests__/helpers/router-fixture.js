@@ -34,6 +34,7 @@ export function routerFixture(t, { mode = 'multi', poolSize = 2, readyTimeoutMs 
     findLegacySessions: async () => [], advanceLegacy: async () => {}, diagnostic: (event, fields) => events.push({ event, ...fields }),
     alert: (event, fields) => calls.push(['alert', event, fields]), log: line => calls.push(['log', line]),
   };
+  deps.readLiveIdentities = async groups => new Map(groups.map(group => [group, scene.get(group) ?? { present: false, ready: false, tmuxName: tmuxNameForGroup(group ?? 'origin') }]));
   const recover = db.recoverOrphanRunning;
   db.recoverOrphanRunning = options => { calls.push(['recover']); return recover(options); };
   const options = { poolSize: typeof poolSize === 'function' ? poolSize : () => poolSize, readyTimeoutMs };

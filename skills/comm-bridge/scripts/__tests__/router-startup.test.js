@@ -36,12 +36,16 @@ test('dispatcher default pool size honors the configuration file', { timeout: 20
   const options = { readyTimeoutMs: 1000, delivery: { periodicEnabled: false } };
   assert.equal(Object.hasOwn(options, 'poolSize'), false);
   let dispatcher;
+  let clock = Date.now();
   try {
     // Two fixed values prevent the hardware fallback from passing by coincidence.
     for (const fixed of [3, 4]) {
+      clock += 1001;
       fs.writeFileSync(CONFIG_FILE, JSON.stringify({ runtime: 'claude', session_mode: 'multi', session_pool_size: fixed }));
+      // Ensure the real config cache sees distinct file identities on coarse filesystems.
+      fs.utimesSync(CONFIG_FILE, new Date(clock), new Date(clock));
       assert.equal(readZylosConfigStrict().config.session_pool_size, fixed);
-      dispatcher = createDispatcher({ ...f.deps,
+      dispatcher = createDispatcher({ ...f.deps, now: () => clock,
         env: { ...process.env, ZYLOS_SESSION_POOL_SIZE: '' },
         diagnostics: { diagnostic() {}, maintain() {} }, sendStatusNotice: async () => {},
       }, options);
@@ -242,6 +246,7 @@ test('listed session with unreadable identity cannot supply shared capacity to a
  const f=routerFixture(t,{poolSize:1});f.add('a');f.put('origin');const read=f.deps.readLiveIdentity;
  f.deps.listGroupTmuxSessions=async()=>[{sessionGroup:'x',tmuxName:f.identity('x').tmuxName},{sessionGroup:'origin',tmuxName:f.identity('origin').tmuxName}];
  f.deps.readLiveIdentity=async group=>{if(group==='x')throw new Error('identity unavailable');return read(group);};
+ f.deps.readLiveIdentities=async()=>{throw new Error('identity batch unavailable');};
  let takes=0;const take=f.db.takeSlot;f.db.takeSlot=(...args)=>{takes++;return take(...args);};
  await f.create().initialize();await f.rounds(3);
  assert.equal(f.router.availableCapacity(),0);assert.equal(takes,0);assert.equal(f.calls.some(row=>row[0]==='launch'),false);

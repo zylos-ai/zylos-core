@@ -29,7 +29,7 @@ function fixture(t, { live = identity } = {}) {
   publishContextSample(JSON.stringify(statusLine), { env, now: writtenAt });
   let clock = writtenAt;
   const reader = createSessionReader({ env: { ZYLOS_DIR: root }, now: () => clock,
-    open: async () => ({ close: async () => {} }), observe: async () => live, listSessions: async () => [] });
+    open: async () => ({ close: async () => {} }), observe: async () => live });
   const cli = {
     runC4Db: async args => args[0] === 'groups'
       ? { ok: true, readAt: clock, data: { groups: [{ sessionGroup: GROUP, componentName: 'dashboard', lastActivityAt: writtenAt }], hasOlder: false } }
