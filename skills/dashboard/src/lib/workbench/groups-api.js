@@ -187,7 +187,7 @@ export function createGroupsApi({ workbench, groupConfig, getRuntimeInfo = () =>
         catch (error) { return { [name]: null, [name + 'Error']: { code: error.code ?? 'READ_FAILED', message: error.message ?? 'Observation unavailable' } }; }
       };
       const [raw, config] = await Promise.all([
-        readExtra('raw', async () => (await workbench.raw(id)).raw),
+        readExtra('raw', async () => (await workbench.raw(id, snapshot)).raw),
         readExtra('config', async () => groupConfig ? groupConfig.get(id) : null),
       ]);
       const selected = ['running', 'starting'].includes(row.presence) ? row.launchConfig : row.target;

@@ -160,7 +160,6 @@ export function defaultAgentFleetLabels() {
     quotaUnknown: 'No data',
     quotaRecorded: 'Recorded {time}',
     quotaRecordedHint: 'No session is currently running; showing the most recent recorded quota.',
-    subagent: 'Subagent',
     self: 'This machine',
     modeMulti: 'Multi-session',
     modeSingle: 'Single session',
@@ -248,8 +247,6 @@ export function buildAgentFleetView(fleet, options = {}) {
       cpuPct: agent.cpu_pct,
       memPct: agent.mem_pct,
       diskPct: agent.disk_pct,
-      hasSubagent: agent.has_subagent === true,
-      subagentCount: Number.isFinite(agent.subagent_count) ? agent.subagent_count : 0,
       reason: agent.health_reason || '',
       showReason: REASON_BADGE_REASONS.has(String(agent.health_reason || '').toLowerCase()),
       baseUrl: agent.base_url || '',
@@ -385,11 +382,8 @@ function renderTile(tile, labels, t) {
     <div class="wb-f-foot"><span class="wb-grow"></span><button class="wb-btn" type="button" data-fleet-action="settings">${escapeHtml(labels.toSettings)}</button><button class="wb-btn" type="button" data-fleet-action="refresh">${escapeHtml(labels.refresh)}</button></div>
   </div>`;
   }
-  const subagent = tile.subagentCount > 0
-    ? `<span class="fleet-subagent-badge" title="${escapeHtml(labels.subagent)}: ${tile.subagentCount}">⚡${tile.subagentCount}</span>`
-    : '';
   const act = multi ? groupStates(tile, labels, t)
-    : `<div class="wb-f-act"><span class="wb-pill wb-${escapeHtml(pillKind[tile.mood] ?? 'unknown')}" data-mood="${escapeHtml(tile.mood)}"><span class="wb-dot"></span>${escapeHtml(tile.stateLabel)}</span><span title="${escapeHtml(tile.activity)}">${escapeHtml(tile.activity)}</span>${subagent}</div>`;
+    : `<div class="wb-f-act"><span class="wb-pill wb-${escapeHtml(pillKind[tile.mood] ?? 'unknown')}" data-mood="${escapeHtml(tile.mood)}"><span class="wb-dot"></span>${escapeHtml(tile.stateLabel)}</span><span title="${escapeHtml(tile.activity)}">${escapeHtml(tile.activity)}</span></div>`;
   const pool = tile.groupSummary?.pool;
   const poolValue = pool?.used == null ? '--' : String(pool.used) + (pool.capacity == null ? '' : '/' + pool.capacity);
   const second = multi ? `<div>${escapeHtml(labels.pool)}<b>${escapeHtml(poolValue)}</b></div>` : '';

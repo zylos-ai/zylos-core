@@ -724,24 +724,6 @@ main { padding: var(--space-md) var(--space-lg) var(--space-xl); }
 .agent-link-chip.link-slow { --link-color: #f59e0b; }
 .agent-link-chip.link-degraded { --link-color: #d97706; }
 .agent-link-chip.link-stale { --link-color: #64748b; }
-/* Active-subagent count chip, pinned to the fleet tile activity corner (#279).
-   Absolutely positioned so it never becomes .agent-activity's :last-child
-   span — that selector styles the legacy single-line activity text. Distinct
-   from .subagent-badge, which is the single-agent view's subagent counter. */
-.fleet-subagent-badge {
-  position: absolute;
-  right: 6px;
-  bottom: 6px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--green) 16%, transparent);
-  color: var(--green);
-  font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1.6;
-  pointer-events: none;
-}
 .agent-fleet-reason {
   display: inline-flex;
   width: fit-content;

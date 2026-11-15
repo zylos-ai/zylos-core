@@ -642,7 +642,6 @@ test('explicit runtime metadata reads saved defaults for active and inactive run
     } }
   }));
   await server.statusline.collect();
-  assert.equal(server.statusline.getRuntimeInfo().effort, 'high');
   for (const [runtime, effort] of [['claude', 'low'], ['codex', 'high']]) {
     const response = await fetch(server.origin + '/api/instance/runtime-options?runtime=' + runtime);
     assert.equal(response.status, 200);

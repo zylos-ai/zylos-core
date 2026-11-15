@@ -75,7 +75,6 @@
   "label.confidence": "置信度",
   "label.action": "建议动作",
   "label.running_tools": "运行中的工具",
-  "label.subagents": "子 Agent",
   "status.connecting": "连接中",
   "status.live": "实时",
   "status.degraded": "降级",

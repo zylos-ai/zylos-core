@@ -88,20 +88,22 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
 // No processes, timers, network or tmux sockets start; fixture teardown closes
 // the DB before removing its root, including on assertion failure.
 test('single Origin aggregates channel queues and latest inbound while multi groups stay isolated', async t => {
-  const f = fixture(t, { groupKeys: ['telegram:first', 'lark:second'] });
+  const f = fixture(t, { groupKeys: ['telegram:first', 'lark:second', 'origin'] });
   const file = path.join(f.root, 'c4.db'), writer = new Database(file);
   try {
     guardDatabase(writer, c4Schema);
     const seed = writer.prepare('INSERT INTO conversations(id,direction,channel,content,status,session_group,priority,timestamp) VALUES(?,?,?,?,?,?,?,?)');
     for (const row of [
-      [1, 'in', 'telegram', 'Oldest queued', 'pending', 'telegram:first', 3, f.now() - 9000],
+      [1, 'in', 'telegram', 'Oldest queued', 'pending', 'telegram:first', 1, f.now() - 9000],
       [2, 'in', 'lark', 'Second queued', 'pending', 'lark:second', 1, f.now() - 5000],
-      [3, 'in', 'lark', 'Latest received ?token=private-value', 'delivered', 'lark:second', 3, f.now() - 1000],
+      [3, 'in', 'lark', '[Release bot] Latest received ?token=private-value', 'delivered', 'lark:second', 3, f.now() - 1000],
       [4, 'in', 'telegram', 'Being delivered', 'running', 'telegram:first', 3, f.now() - 3000],
       [5, 'out', 'telegram', 'Newer outbound is not received', 'delivered', 'telegram:first', 3, f.now()],
       [6, 'in', 'internal', 'Internal protocol is not a preview', 'delivered', 'origin', 3, f.now()],
+      [7, 'in', 'scheduler', '[Scheduled Task: origin-task] Origin queued', 'pending', 'origin', 3, f.now() - 2000],
     ]) seed.run(...row.slice(0, -1), new Date(row.at(-1)).toISOString());
     writer.exec('INSERT INTO group_heads(session_group,head_id) SELECT session_group,max(id) FROM conversations GROUP BY session_group');
+    createC4Store(writer).setDrainFence('*');
   } finally { writer.close(); }
   const before = fs.readFileSync(file), db = new Database(file, { readonly: true });
   f.addCleanup(() => {
@@ -116,32 +118,79 @@ test('single Origin aggregates channel queues and latest inbound while multi gro
     PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, database: file,
     databaseMode: 'read-only after seed', socket: 'none', processes: 'none', timers: 'none' }));
   const c4 = createC4Store(db);
-  f.cli.runC4Db = async args => ({ ok: true, data: args[0] === 'groups' ? c4.queries.listGroups() : c4.listGroupQueues() });
+  f.cli.runC4Db = async args => {
+    const option = name => args.includes(name) ? args[args.indexOf(name) + 1] : undefined;
+    return { ok: true, data: args[0] === 'groups' ? c4.queries.listGroups({
+      keyMatch: option('--key-match'), limit: option('--limit') === undefined ? undefined : Number(option('--limit')),
+      raw: args.includes('--raw'),
+    }) : c4.listGroupQueues() };
+  };
   f.live.set(null, f.live.get('telegram:first'));
   f.setMode('single');
   const api = createGroupsApi({ workbench: f.service });
-  const list = await api.running(), origin = list.rows[0], detail = await api.detail('origin', { include: [] });
+  const list = await api.running(), origin = list.rows[0], detail = await api.detail('origin', { include: ['raw'] });
+  const singleSnapshot = await f.service.getSnapshot();
   assert.equal(list.rows.length, 1); assert.equal(origin.id, 'origin');
-  assert.equal(origin.flags.queued.count, 2);
+  assert.equal(origin.flags.queued.count, 3);
   assert.equal(origin.flags.queued.oldestAt, new Date(f.now() - 9000).toISOString());
   assert.equal((await api.counts()).running.flags.queued, 1);
-  assert.equal(detail.queue.pending.count, 2); assert.equal(detail.queue.pending.oldestAt, f.now() - 9000);
-  assert.deepEqual(detail.queue.pending.head, { id: 2, priority: 1 }); assert.equal(detail.queue.running.count, 1);
+  assert.equal(detail.queue.pending.count, 3); assert.equal(detail.queue.pending.oldestAt, f.now() - 9000);
+  assert.deepEqual(detail.queue.pending.head, { id: 1, priority: 1 }); assert.equal(detail.queue.running.count, 1);
   assert.equal(detail.preview.text, 'Latest received ?token=[REDACTED]');
+  assert.deepEqual(detail.preview.source, { kind: 'channel' });
+  assert.equal(detail.raw, '[Release bot] Latest received ?token=[REDACTED]');
+  assert.deepEqual(detail.fence, c4.getDrainFence('*'));
+  assert.equal(detail.queue.fence, null);
+  assert.equal(detail.fence.sessionGroup, '*');
+  assert.equal(detail.state.kind, 'stopping');
+  for (const value of [singleSnapshot, list, detail]) assert.doesNotMatch(JSON.stringify(value), /rawGroups|groupEvidence|private-value/);
   assert.equal(origin.currentAction.message, detail.preview.text);
   assert.equal(origin.currentAction.receivedAt, new Date(f.now() - 1000).toISOString());
   assert.deepEqual(detail.currentAction, origin.currentAction);
   for (const [key, value] of Object.entries(origin)) assert.deepEqual(detail[key], value, `detail retains list field ${key}`);
   f.setMode('multi'); f.advance(3000);
   const multi = (await api.running()).rows;
-  assert.equal(multi.length, 2); assert.equal((await api.counts()).running.flags.queued, 2);
+  assert.equal(multi.length, 3); assert.equal((await api.counts()).running.flags.queued, 3);
+  assert.equal((await f.service.raw('origin', singleSnapshot)).raw, detail.raw, 'source stays tied to the selected single snapshot after a new multi generation');
+  const multiOrigin = multi.find(row => row.id === 'origin');
+  assert.equal(multiOrigin.flags.queued.count, 1);
+  assert.equal(multiOrigin.currentAction.message, 'Origin queued');
   for (const row of multi) {
     const expanded = await api.detail(row.id, { include: [] });
     assert.equal(row.flags.queued.count, 1); assert.equal(expanded.queue.pending.count, 1);
     assert.deepEqual(expanded.currentAction, row.currentAction);
-    assert.equal(row.currentAction.message, row.id === 'telegram:first' ? 'Being delivered' : 'Latest received ?token=[REDACTED]');
+    assert.equal(row.currentAction.message, row.id === 'telegram:first' ? 'Being delivered' : row.id === 'origin' ? 'Origin queued' : 'Latest received ?token=[REDACTED]');
     assert.equal(expanded.queue.running.count, row.id === 'telegram:first' ? 1 : 0);
   }
+});
+
+// Injected queue observations and private runner root; no DB or processes.
+// Run for aggregate queue head ordering; lower priority number wins before id.
+test('single Origin queue head uses priority before conversation id', async t => {
+  const f = fixture(t), original = f.cli.runC4Db;
+  f.setMode('single'); f.live.set(null, f.live.get('telegram:g0'));
+  f.cli.runC4Db = async args => args[0] === 'group-queues' ? { ok: true, data: { globalFence: null, groups: [
+    { sessionGroup: 'telegram:first', pending: { count: 1, oldestAt: f.now() - 2000, head: { id: 1, priority: 3 } }, running: { count: 0 } },
+    { sessionGroup: 'lark:second', pending: { count: 1, oldestAt: f.now() - 1000, head: { id: 2, priority: 1 } }, running: { count: 0 } },
+  ] } } : original(args);
+  const detail = await createGroupsApi({ workbench: f.service }).detail('origin', { include: [] });
+  assert.deepEqual(detail.queue.pending.head, { id: 2, priority: 1 });
+});
+
+// Injected channel catalog with no inbound preview, private runner root only.
+// Run for single Origin raw-source selection; no DB, processes or sockets.
+test('single Origin without a preview has no unrelated raw message', async t => {
+  const f = fixture(t), original = f.cli.runC4Db;
+  f.setMode('single'); f.live.set(null, f.live.get('telegram:g0'));
+  f.cli.runC4Db = async args => {
+    assert.equal(args.includes('--raw'), false, 'no raw source was selected');
+    const result = await original(args);
+    if (args[0] === 'groups') for (const row of result.data.groups) row.preview = null;
+    return result;
+  };
+  const detail = await createGroupsApi({ workbench: f.service }).detail('origin', { include: ['raw'] });
+  assert.equal(detail.preview, null); assert.equal(detail.raw, null);
+  assert.equal(Object.hasOwn(detail, 'rawError'), false);
 });
 
 // Real Core status -> Workbench observations, isolated store and fake

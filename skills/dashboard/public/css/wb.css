@@ -1355,7 +1355,6 @@ html[lang^="zh"] .wb-sent-gap { display: none; }
 .fleet-view .sum-dot.dot-idle { background: var(--wb-idle); }
 .fleet-view .sum-dot.dot-stuck { background: var(--wb-wait); }
 .fleet-view .sum-dot.dot-offline { background: var(--wb-err); }
-.wb-f-card .fleet-subagent-badge { position: static; flex: none; margin-left: auto; }
 .wb-f-reason .agent-fleet-reason { margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; }
 html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { display: none !important; }
 .wb-f-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); align-items: start; gap: 12px; margin-top: 14px; }

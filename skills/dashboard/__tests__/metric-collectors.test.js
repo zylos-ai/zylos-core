@@ -118,7 +118,6 @@ test('StatuslineCollector writes one statusline_summary row with capacity dimens
     assert.equal(rows[0].dimensions.rate_limit, undefined);
     assert.equal(rows[0].dimensions.rate_limit_7d, undefined);
     assert.equal(rows[0].dimensions.cache_hit_rate, 0.6);
-    assert.equal(collector.getRuntimeInfo().model_id, 'claude-opus-4-6');
   });
 });
 

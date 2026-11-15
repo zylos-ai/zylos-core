@@ -98,7 +98,8 @@ test('fleet poller exchanges token and derives safe agent records', async () => 
   assert.equal(fleet.agents[0].mem_pct, 34);
   assert.equal(fleet.agents[0].disk_pct, 56);
   assert.equal(fleet.agents[0].has_upgrade, true);
-  assert.equal(fleet.agents[0].has_subagent, false, 'compact rows do not expose subagents');
+  assert.equal(Object.hasOwn(fleet.agents[0], 'has_subagent'), false, 'compact rows omit Origin child fields');
+  assert.equal(Object.hasOwn(fleet.agents[0], 'subagent_count'), false);
   assert.equal(fleet.agents[0].health_reason, 'ok');
   assert.equal(JSON.stringify(fleet).includes('zylos_ak_secret'), false);
   assert.equal(JSON.stringify(fleet).includes('zylos_st_secret'), false);
@@ -674,7 +675,8 @@ test('stateToFleetRecord produces a secret-free self record from local API state
   assert.equal(record.mem_pct, 34);
   assert.equal(record.disk_pct, 56);
   assert.equal(record.has_upgrade, true);
-  assert.equal(record.has_subagent, false, 'Fleet ignores Origin child observations');
+  assert.equal(Object.hasOwn(record, 'has_subagent'), false, 'Fleet omits Origin child observations');
+  assert.equal(Object.hasOwn(record, 'subagent_count'), false);
   assert.equal(record.base_url, null);
   assert.equal(record.pulse_rate, 1);
   assert.equal(record.health_reason, 'ok');
@@ -1369,8 +1371,8 @@ test('Fleet does not read raw Origin activity or subagent observations', () => {
     }
     const record = stateToFleetRecord({ name: 'a' }, input);
     assert.equal(record.activity, null);
-    assert.equal(record.has_subagent, false);
-    assert.equal(record.subagent_count, 0);
+    assert.equal(Object.hasOwn(record, 'has_subagent'), false);
+    assert.equal(Object.hasOwn(record, 'subagent_count'), false);
     assert.deepEqual(record.activity_feed, []);
   }
 });
@@ -1606,4 +1608,23 @@ test('Fleet upgrade marker uses only installed-version update fields', () => {
     Object.defineProperty(runtimeInfo, field, { get() { assert.fail(`retired restart observation read: ${field}`); } });
   }
   assert.equal(stateToFleetRecord({}, { runtime_info: runtimeInfo }).has_upgrade, false);
+});
+
+test('Fleet placeholder and failed records omit Origin child fields', () => {
+  const first = { name: 'first', base_url: 'https://first.example.test' };
+  const poller = new FleetPoller(makeConfig([first]), { now: () => 0 });
+  const check = () => {
+    for (const record of poller.getFleet().agents) {
+      assert.equal(Object.hasOwn(record, 'has_subagent'), false);
+      assert.equal(Object.hasOwn(record, 'subagent_count'), false);
+    }
+  };
+  check();
+  const second = { name: 'second', base_url: 'https://second.example.test' };
+  poller.addAgent(second);
+  check();
+  for (const reason of ['unreachable', 'version_unsupported']) {
+    poller._setFailure(first, reason);
+    check();
+  }
 });

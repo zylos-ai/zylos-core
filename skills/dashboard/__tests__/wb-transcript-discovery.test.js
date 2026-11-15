@@ -312,60 +312,6 @@ test('historical groups cause no transcript file accesses', async t => {
   assert.equal(stats.size, 3); assert.equal(reads.size, 3);
 });
 
-test('Codex runtime metadata clears when the Origin run changes or its file disappears', async t => {
-  const snapshot = { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: 'run-origin' } }] };
-  const f = fixture(t, snapshot), p = f.file('origin-codex');
-  fs.writeFileSync(p, JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-5.3-codex' } }) + '\n');
-  fs.utimesSync(p, new Date(f.now()), new Date(f.now()));
-  f.start(p, 'origin', 'codex');
-  const collector = new CodexRolloutCollector(f.store, { zylosDir: f.root }, { transcripts: f.inventory });
-  await collector.collect();
-  assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
-  f.advance(60000);
-  snapshot.rows[0].live.runId = 'replacement';
-  await collector.collect();
-  assert.equal(collector.getRuntimeInfo().session_id, null);
-  assert.equal(collector.getRuntimeInfo().model_id, undefined);
-  f.advance(60000);
-  snapshot.rows[0].live.runId = 'run-origin';
-  await collector.collect();
-  assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
-  fs.unlinkSync(p); await collector.collect();
-  assert.equal(collector.getRuntimeInfo().session_id, null);
-  assert.equal(collector.getRuntimeInfo().model_id, undefined);
-});
-
-test('failed snapshots retain established Codex runtime facts until current evidence returns', async t => {
-  const snapshot = { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: 'run-origin' } }] };
-  const f = fixture(t, snapshot), p = f.file('origin-metadata');
-  fs.writeFileSync(p, [
-    { type: 'session_meta', payload: { cli_version: '1.0.0' } },
-    { type: 'turn_context', payload: { model: 'gpt-5.3-codex', effort: 'high', service_tier: 'priority' } },
-  ].map(event => JSON.stringify(event)).join('\n') + '\n');
-  f.start(p, 'origin', 'codex');
-  const collector = new CodexRolloutCollector(f.store, { zylosDir: f.root }, { transcripts: f.inventory });
-  await collector.collect();
-  assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
-  assert.equal(collector.getRuntimeInfo().cli_version, '1.0.0');
-  f.inventory.getSnapshot = async () => { throw new Error('status unavailable'); };
-  f.inventory.getSnapshotKey = () => 'changed';
-  f.advance(5000);
-  await collector.collect();
-  assert.equal(f.inventory.snapshot, null);
-  const retained = collector.getRuntimeInfo();
-  assert.equal(retained.session_id, 'session-origin');
-  assert.equal(retained.model_id, 'gpt-5.3-codex');
-  assert.equal(retained.reasoning_effort, 'high');
-  assert.equal(retained.service_tier, 'priority');
-  assert.equal(retained.cli_version, '1.0.0');
-  f.inventory.getSnapshot = async () => snapshot;
-  snapshot.rows[0].live.runId = 'replacement';
-  f.advance(5000);
-  await collector.collect();
-  assert.equal(collector.getRuntimeInfo().model_id, undefined);
-  assert.equal(collector.getRuntimeInfo().session_id, null);
-});
-
 test('unchanged session identities reuse snapshots across discovery rounds until ten minutes', async t => {
   const f = fixture(t), p = f.file('snapshot-cache'); f.start(p, 'origin');
   let calls = 0, discoveries = 0;

@@ -23,7 +23,7 @@ const AUTO_RESTART_WINDOW_MS = 3600_000;
 
 function singleQueue(groups) {
   const queue = { pending: { count: 0, oldestAt: null, head: null }, running: { count: 0 },
-    fence: groups.find(group => group.sessionGroup === 'origin')?.fence ?? null };
+    fence: null };
   for (const group of groups) {
     const pending = group.pending;
     queue.pending.count += pending.count;
@@ -85,7 +85,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     } finally { inflight = null; }
   }
   async function buildGroupSnapshot(at) {
-    const captured = new Map(), sources = {};
+    const captured = new Map(), sources = {}, rawGroups = new Map();
     let mode = 'unreadable', status = null, statusError = null, reader;
     try { mode = (await loadCoreModule('config.js')).readSessionMode().mode ?? 'single'; }
     catch { mode = 'unreadable'; }
@@ -171,6 +171,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
         const latest = c4.data.groups.reduce((latest, item) => item.preview && (!latest ||
           item.preview.timestamp > latest.preview.timestamp) ? item : latest, null);
         row.preview = safePreview(latest, sanitizer, taskNames);
+        rawGroups.set('origin', latest?.sessionGroup ?? null);
       }
       row.queue = q.ok ? (singleOrigin ? singleQueue(q.data.groups) : q.data.groups.find(item => item.sessionGroup === row.sessionGroup)) ??
         { pending: { count: 0, oldestAt: null, head: null }, running: { count: 0 }, fence: null } : { known: false, reason: q.reason };
@@ -251,7 +252,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       overrides: ov.ok ? ov.data : null, sources };
     // Projection evidence is shared with the object APIs, but is not an extra
     // public copy of the event catalog or slot owners.
-    Object.defineProperty(value, 'groupEvidence', { value: { activations, positions, owners } });
+    Object.defineProperty(value, 'groupEvidence', { value: { activations, positions, owners, rawGroups } });
     const channels = new Set(rows.flatMap(row => row.c4?.componentName ? [row.c4.componentName] : []));
     if (services) services.channels = [...channels].map(channel => {
       const service = 'zylos-' + channel;
@@ -295,7 +296,12 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
   }
   // One group's stored message start, read only when someone opens it in the technical view. Key search puts the
   // exact key first; a first row with another key means the group was not found.
-  async function raw(key) {
+  async function raw(key, snapshot) {
+    // Keep source selection tied to the detail request's snapshot generation.
+    snapshot ??= cache?.value;
+    const rawGroups = snapshot?.groupEvidence?.rawGroups;
+    if (rawGroups?.has(key)) key = rawGroups.get(key);
+    if (key === null) return { raw: null };
     const result = await cli.runC4Db(['groups', '--key-match', key, '--limit', '1', '--raw', '--json']);
     if (!result.ok) throw Object.assign(new Error('Group read failed'), { statusCode: 502, code: 'group_raw_failed', reason: 'c4_groups_failed' });
     return { raw: safeRaw(result.data.find(item => item.sessionGroup === key)?.preview?.messageRaw, sanitizer) };

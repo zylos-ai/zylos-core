@@ -258,7 +258,6 @@ function fleetFixture() {
         mem_pct: 34,
         disk_pct: 56,
         has_upgrade: false,
-        has_subagent: false,
         cost: 0.006,
         last_seen: now,
         pulse_rate: 1,
@@ -282,7 +281,6 @@ function fleetFixture() {
         mem_pct: 43,
         disk_pct: 65,
         has_upgrade: true,
-        has_subagent: true,
         cost: 0.12,
         last_seen: '2026-06-07T15:19:45.000Z',
         pulse_rate: 0.8,
@@ -306,7 +304,6 @@ function fleetFixture() {
         mem_pct: 71,
         disk_pct: 44,
         has_upgrade: false,
-        has_subagent: false,
         cost: 0.03,
         last_seen: '2026-06-07T15:18:00.000Z',
         pulse_rate: 1.5,
@@ -329,7 +326,6 @@ function fleetFixture() {
         mem_pct: null,
         disk_pct: null,
         has_upgrade: false,
-        has_subagent: false,
         cost: 0,
         last_seen: '2026-06-07T14:20:00.000Z',
         pulse_rate: 0,
@@ -447,19 +443,6 @@ test('problem cards say why in plain words, keep the precise reason for technica
   assert.match(html, /wb-tech wb-mono"> · auth_failed/);
   assert.equal((html.match(/data-fleet-action="settings"/g) || []).length, 2);
   assert.equal((html.match(/data-fleet-action="refresh"/g) || []).length, 2);
-});
-
-test('Agent Fleet tile shows subagent count badge only when subagents are active (#279)', () => {
-  const fixture = fleetFixture();
-  fixture.agents[0].has_subagent = true;
-  fixture.agents[0].subagent_count = 37;
-  const html = renderAgentFleetHtml(fixture, { basePath: '/dash' });
-  assert.match(html, /class="fleet-subagent-badge"[^>]*>⚡37</);
-  assert.equal((html.match(/fleet-subagent-badge/g) || []).length, 1);
-
-  // Payloads without the field (older remotes) and zero-count agents render no badge.
-  const bareHtml = renderAgentFleetHtml(fleetFixture(), { basePath: '/dash' });
-  assert.doesNotMatch(bareHtml, /fleet-subagent-badge/);
 });
 
 test('Agent Fleet preserves self first and stable name color mapping when response order changes', () => {

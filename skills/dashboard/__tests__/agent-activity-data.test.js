@@ -64,7 +64,7 @@ test('Codex tool results carry only a success or failure flag, and other groups 
       { type: 'response_item', payload: { type: 'function_call_output', call_id: `${group}-bad`, output: 'Process exited with code 1\nsecret-bad' } },
       { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: `Words of ${group}` }] } },
     ]), session_id: `${group}-session`, session_group: group, run_id: `${group}-run` }));
-  const transcripts = { snapshot: { listKnown: true }, currentOriginMapping: () => mappings[0],
+  const transcripts = { snapshot: { listKnown: true },
     isOriginCurrent: row => row.session_group === 'origin', async collect(runtime, callback) {
       let written = 0;
       for (const mapping of mappings) written += (await callback(mapping, mapping.session_group === 'origin')).written;
@@ -170,7 +170,7 @@ test('Codex exec results written as content arrays get a failure flag and keep n
     { type: 'response_item', payload: { type: 'custom_tool_call', name: 'exec', call_id: 'bad', input: 'false' } },
     { type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'bad', output: output(1, 'secret-bad') } },
   ]), session_id: 'exec-session', session_group: 'dashboard:a', run_id: 'exec-run' };
-  const transcripts = { snapshot: { listKnown: true }, currentOriginMapping: () => null, isOriginCurrent: () => false,
+  const transcripts = { snapshot: { listKnown: true }, isOriginCurrent: () => false,
     async collect(runtime, callback) { return (await callback(mapping, false)).written; } };
   store.insertUsageTranscript({ ...mapping, runtime: 'codex' }, new Date().toISOString());
   await new CodexRolloutCollector(store, { modelPrices: {} }, { transcripts }).collect();

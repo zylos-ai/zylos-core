@@ -40,11 +40,11 @@ test('removed five-hour metric never reads current or historical samples while w
 // usageServer. Run for these endpoints/auth/quota payload changes, skip UI-only.
 // Runner must isolate HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/private tmux socket.
 test('usage and resource reads enforce auth while retired metric routes return 404', async t => {
+  let accountRecord = { recordedAt: 1000, live: false };
   const f = await usageServer(t, { auth: { enabled: true, password: 'scrypt:fixture' } }, { snapshot: core => ({
-    readAt: Date.now(), rows: [], sources: {}, instance: { accounts: { claude: core.accountUsage ? { ...core.accountUsage.seven_day, ...core.accountUsageRecord } : null } }
+    readAt: Date.now(), rows: [], sources: {}, instance: { accounts: { claude: core.accountUsage ? { ...core.accountUsage.seven_day, ...accountRecord } : null } }
   }) });
   f.core.accountUsage = { seven_day: { used_percentage: 21 }, five_hour: { used_percentage: 73 } };
-  f.core.accountUsageRecord = { recordedAt: 1000, live: false };
   f.store.insertApiKey({ name: 'reader', keyHash: hashApiKey('zylos_ak_usage_fixture'), scope: 'read' });
   const headers = { Authorization: `Bearer ${exchangeApiKeyForToken('zylos_ak_usage_fixture').token}` };
   for (const route of ['/api/usage/series', '/api/instance/resources', '/api/instance', '/api/usage/summary']) {
@@ -78,7 +78,7 @@ test('usage and resource reads enforce auth while retired metric routes return 4
   assert.equal(account.live, false);
   assert.equal(account.recordedAt, 1000);
   assert.equal(Object.hasOwn(account, 'five_hour'), false);
-  f.core.accountUsageRecord = { recordedAt: 2000, live: true };
+  accountRecord = { recordedAt: 2000, live: true };
   account = await readAccount();
   assert.equal(account.used_percentage, 21);
   assert.equal(account.live, true);
@@ -87,7 +87,7 @@ test('usage and resource reads enforce auth while retired metric routes return 4
   const liveMetric = resolver.resolve('rate_limit_7d');
   assert.equal(liveMetric.value, 21);
   assert.equal(liveMetric.confidence, 'actual');
-  f.core.accountUsage = null; f.core.accountUsageRecord = null;
+  f.core.accountUsage = null; accountRecord = null;
   assert.equal(await readAccount(), null);
   currentAccount = null;
   const emptyMetric = resolver.resolve('rate_limit_7d');

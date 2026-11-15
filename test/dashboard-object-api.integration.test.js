@@ -65,7 +65,9 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       lastActivityAt: clock - (sessionGroup.includes('offline') ? 9 * 86400000 : 1000), preview: {
         timestamp: clock - (sessionGroup === 'telegram:working' ? 100 : 1000),
         text: sessionGroup === 'telegram:working' ? 'Latest channel message' : 'Fixture message',
-        message: sessionGroup === 'telegram:working' ? 'Latest channel message' : 'Fixture message', messageRaw: 'Fixture first message' } }));
+        message: sessionGroup === 'telegram:working' ? 'Latest channel message' : 'Fixture message',
+        messageSource: sessionGroup === 'telegram:working' ? { kind: 'header' } : undefined,
+        messageRaw: sessionGroup === 'telegram:working' ? '[Telegram fixture] Latest channel message' : 'Fixture first message' } }));
   const cli = { runC4Db: async args => {
     cliCalls.push(args);
     if (!catalogReadable && args[0] === 'groups') return { ok: false, reason: 'fixture_catalog_failed' };
@@ -241,6 +243,11 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       assert.deepEqual(detail.currentAction, originRow.currentAction, 'HTTP detail and list share compact action projection');
       assert.equal(detail.queue.pending.count, originRow.flags.queued.count);
       assert.equal(detail.preview.text, originRow.currentAction.message);
+      const expanded = await request('/api/groups/origin?include=raw');
+      assert.deepEqual(expanded.preview.source, { kind: 'channel' });
+      assert.equal(expanded.raw, '[Telegram fixture] Latest channel message', 'raw follows the selected channel preview');
+      assert.equal(Object.hasOwn(expanded, 'groupEvidence'), false, 'snapshot source mapping stays private');
+      assert.ok(cliCalls.some(args => args[0] === 'groups' && args.includes('--raw') && args[2] === 'telegram:working'));
       assert.equal(detail.working.main, null, 'only child agents work while the main status remains idle');
       assert.equal(detail.working.subagents.count, 2, 'current hook origin and historical null records both contribute');
       assert.ok(detail.duration > 0);

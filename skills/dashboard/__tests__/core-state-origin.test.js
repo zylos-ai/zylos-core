@@ -69,13 +69,10 @@ test('Core state reads Origin facts only for absence or authentication and reads
   assert.deepEqual(accountCalls, ['codex']);
   assert.equal(core.accountUsage.fiveHour.usedPercentage, 37);
   assert.equal(core.accountUsage.sevenDay.usedPercentage, 61);
-  assert.equal(core.accountUsageRecord.live, true);
-  assert.equal(core.accountUsageRecord.recordedAt, 1000);
   const before = changes;
   await core.refresh(); assert.equal(changes, before);
   accountLive = false;
   await core.refresh(); assert.equal(changes, before + 1);
-  assert.equal(core.accountUsageRecord.live, false);
   const metrics = new MetricResolver({}, { statusline: { getAccountUsage: () => ({ runtime: 'codex', value: core.accountUsage }) } }, {});
   assert.equal(metrics.resolve('rate_limit').value, null);
   assert.equal(metrics.resolve('rate_limit').fallback_reason, 'Unknown metric: rate_limit');
@@ -119,7 +116,6 @@ test('Core state reads Origin facts only for absence or authentication and reads
   accountAvailable = true;
   assert.equal((await core.refresh()).state, 'OFFLINE');
   assert.equal(core.accountUsage.sevenDay.usedPercentage, 61);
-  assert.equal(core.accountUsageRecord.live, false);
 });
 
 test('Core state ignores live sample timestamps and notifies recorded provenance changes', async t => {
@@ -141,7 +137,6 @@ test('Core state ignores live sample timestamps and notifies recorded provenance
   record.recordedAt = 2000;
   await core.refresh();
   assert.equal(changes, 1, 'same live percentage with a new sample time does not broadcast');
-  assert.equal(core.accountUsageRecord.recordedAt, 2000, 'the current sample still updates');
   record.live = false;
   await core.refresh();
   assert.equal(changes, 2, 'same percentage switching to recorded evidence broadcasts');

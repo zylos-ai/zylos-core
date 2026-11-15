@@ -75,7 +75,6 @@
   "label.confidence": "Confidence",
   "label.action": "Action",
   "label.running_tools": "Running tools",
-  "label.subagents": "Subagents",
   "status.connecting": "Connecting",
   "status.live": "Live",
   "status.degraded": "Degraded",

@@ -43,7 +43,6 @@ export class StatuslineCollector {
     this._read = read ?? (() => readCoreUsage(accountUsageCache));
     this._health = new Map();
     this._pending = null;
-    this._runtimeInfo = null;
     this._accountUsage = null;
   }
 
@@ -60,19 +59,12 @@ export class StatuslineCollector {
     const { identity, usage } = observation;
     this._accountUsage = observation.accountUsage ?? null;
     if (!usage?.valid) {
-      this._runtimeInfo = null;
       this._upsertHealth('collector_liveness', 'stale', {
         reason: usage?.reason || 'identity_missing', last_check: now
       });
       return { written: 0 };
     }
     const data = usage.value;
-    this._runtimeInfo = identity.runtime === 'claude' ? {
-      model: data.model?.display_name || data.model?.id || null,
-      model_id: data.model?.id || null,
-      effort: data.effort?.level || null,
-      cc_version: data.version || null
-    } : null;
     const hash = JSON.stringify([identity.runtime, identity.runId, identity.sessionId, usage.sampledAt, data]);
     if (hash === this._lastHash) {
       this._upsertHealth('collector_liveness', 'healthy', {
@@ -157,10 +149,6 @@ export class StatuslineCollector {
 
   getAccountUsage() {
     return this._accountUsage;
-  }
-
-  getRuntimeInfo() {
-    return this._runtimeInfo;
   }
 
   async stop() {
