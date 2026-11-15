@@ -147,6 +147,64 @@ describe('updateNextRunTime', () => {
 // ---- processCompletedTasks ----
 
 describe('processCompletedTasks', () => {
+  // Observe actual SQLite result rows, rather than only the unchanged one-time
+  // status: filtering after .all() would pass status checks and still grow memory.
+  it('materializes only completed periodic tasks with a large one-time history', async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2030-01-01T00:00:00Z') });
+    await withDb((db) => {
+      const timestamp = now();
+      const historicalCount = 10000;
+      db.transaction(() => {
+        for (let i = 0; i < historicalCount; i++) {
+          insertTask(db, { id: `historical-${i}`, type: 'one-time', cron_expression: null,
+            status: 'completed', prompt: 'archived prompt '.repeat(100),
+            next_run_at: timestamp - 3600, updated_at: timestamp - 1800 });
+        }
+      })();
+      insertTask(db, { id: 'cron', status: 'completed', cron_expression: '0 9 * * *' });
+      insertTask(db, { id: 'interval', status: 'completed', type: 'interval',
+        cron_expression: null, interval_seconds: 1800 });
+      insertTask(db, { id: 'invalid-cron', status: 'completed', cron_expression: 'invalid cron' });
+      for (const status of ['pending', 'running', 'failed', 'paused']) {
+        insertTask(db, { id: status, status });
+      }
+      const controls = db.prepare("SELECT * FROM tasks WHERE status != 'completed' ORDER BY id").all();
+      const originalHistory = db.prepare("SELECT * FROM tasks WHERE id = 'historical-0'").get();
+
+      const materialized = [];
+      const prepare = db.prepare.bind(db);
+      const prepareMock = t.mock.method(db, 'prepare', (sql) => {
+        const statement = prepare(sql);
+        const all = statement.all.bind(statement);
+        t.mock.method(statement, 'all', (...bindings) => {
+          const rows = all(...bindings);
+          assert.ok(rows.length <= 3, `Completed sweep materialized ${rows.length} rows`);
+          materialized.push(rows.map(row => row.id));
+          return rows;
+        });
+        return statement;
+      });
+      try {
+        processCompletedTasks(db);
+        processCompletedTasks(db);
+      } finally {
+        prepareMock.mock.restore();
+      }
+
+      assert.deepEqual(materialized.map(ids => ids.sort()), [['cron', 'interval', 'invalid-cron'], []]);
+      assert.deepEqual(db.prepare("SELECT * FROM tasks WHERE id IN ('pending', 'running', 'failed', 'paused') ORDER BY id").all(), controls);
+      assert.deepEqual(db.prepare("SELECT * FROM tasks WHERE id = 'historical-0'").get(), originalHistory);
+      assert.equal(db.prepare("SELECT count(*) AS count FROM tasks WHERE type = 'one-time' AND status = 'completed' AND updated_at = ?").get(timestamp - 1800).count, historicalCount);
+      for (const [id, nextRun] of [['cron', Date.parse('2030-01-01T09:00:00Z') / 1000], ['interval', timestamp + 1800]]) {
+        const task = db.prepare('SELECT status, next_run_at, last_run_at, updated_at FROM tasks WHERE id = ?').get(id);
+        assert.deepEqual(task, { status: 'pending', next_run_at: nextRun, last_run_at: timestamp, updated_at: timestamp });
+      }
+      const invalid = db.prepare("SELECT status, last_error FROM tasks WHERE id = 'invalid-cron'").get();
+      assert.equal(invalid.status, 'failed');
+      assert.match(invalid.last_error, /Invalid cron/);
+    });
+  });
+
   it('reschedules completed recurring task', async () => {
     await withDb((db) => {
       insertTask(db, { type: 'recurring', cron_expression: '0 9 * * *', status: 'completed' });
