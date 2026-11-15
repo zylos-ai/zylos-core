@@ -30,9 +30,10 @@ export function measureControlRows() {
     centerSpread: Math.max(...row.controls.map(c => c.center)) - Math.min(...row.controls.map(c => c.center)) }));
 }
 
-async function checkRow(page, name, selector, { separateRows = false, expectedGroups } = {}) {
+async function checkRow(page, name, selector, { separateRows = false, expectedGroups, expectedHeight } = {}) {
   const controls = await page.locator(selector).evaluateAll(nodes => nodes.filter(node => { const b = node.getBoundingClientRect(); return b.width > 0 && b.height > 0 && getComputedStyle(node).visibility !== 'hidden'; }).map(node => { const b = node.getBoundingClientRect(); return { name: node.id || node.className, height: b.height, center: b.y + b.height / 2, top: b.top, bottom: b.bottom }; }));
   assert.ok(controls.length >= 2, `${name}: at least two real controls rendered`);
+  if (expectedHeight !== undefined) for (const control of controls) assert.equal(control.height, expectedHeight, `${name}: approved outer-frame height`);
   const groups = [];
   for (const control of controls) { let group = separateRows && groups.find(row => Math.min(row[0].bottom, control.bottom) > Math.max(row[0].top, control.top)); if (!group) { if (separateRows || !groups.length) groups.push(group = []); else group = groups[0]; } group.push(control); }
   if (expectedGroups) assert.deepEqual(groups.map(row => row.length), expectedGroups, `${name}: physical row membership cannot collapse into singleton checks`);
@@ -65,6 +66,7 @@ export async function runControlRows(t, sandbox) {
         const interaction = await page.evaluate(() => ({ focusedControl: document.activeElement?.matches('button,input,select,textarea,a[href]') ?? false, hoveredControls: [...document.querySelectorAll('button:hover,input:hover,select:hover,textarea:hover,a[href]:hover')].length }));
         assert.equal(interaction.focusedControl, false, 'static capture has no focused control');
         assert.equal(interaction.hoveredControls, 0, 'static capture has no hovered control');
+        if (width === 390) assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${name}: no horizontal overflow`);
         const rows = await page.evaluate(measureControlRows);
         const item = { page: name, width, theme, rows }; captures.push(item);
         if (evidence) {
@@ -84,10 +86,13 @@ export async function runControlRows(t, sandbox) {
         if (width === 390 && route === '/usage') await page.locator('.wb-usage-custom-btn').click();
         await settle();
         if (!survey) {
-          if (route === '/') await checkRow(page, name, '#wb-range, .wb-bh-now .wb-search');
-          if (route === '/usage') await checkRow(page, name, '#wb-usage-range, .wb-usage-custom > .wb-date, #wb-usage-apply', { separateRows: width === 390, expectedGroups: width === 390 ? [1, 3] : [4] });
-          if (route === '/schedule') await checkRow(page, name, '.wb-sched-filters > .wb-seg, .wb-sched-filters .wb-select, .wb-sched-filters > .wb-search, .wb-sched-new', { separateRows: width === 390, expectedGroups: width === 390 ? [1, 2, 1] : [4] });
-          if (route === '/chat') await checkRow(page, name, width === 390 ? '.conversation-tabs > button' : '.conversation-tabs, .conversation-reload');
+          if (route === '/') await checkRow(page, name, '#wb-range, .wb-bh-now .wb-search', { expectedHeight: width === 390 ? 36 : 26 });
+          if (route === '/usage') await checkRow(page, name, '#wb-usage-range, .wb-usage-custom > .wb-date, #wb-usage-apply', { separateRows: width === 390, expectedGroups: width === 390 ? [1, 3] : [4], expectedHeight: width === 390 ? 36 : 30 });
+          if (route === '/schedule') await checkRow(page, name, '.wb-sched-filters > .wb-seg, .wb-sched-filters .wb-select, .wb-sched-filters > .wb-search, .wb-sched-new', { separateRows: width === 390, expectedGroups: width === 390 ? [1, 2, 1] : [4], expectedHeight: width === 390 ? 36 : 30 });
+          if (route === '/chat') {
+            assert.equal(await page.locator('.conversation-tabs').evaluate(node => node.getBoundingClientRect().height), width === 390 ? 36 : 30, 'chat: approved outer track');
+            await checkRow(page, name, width === 390 ? '.conversation-tabs > button' : '.conversation-tabs, .conversation-reload', { expectedHeight: width === 390 ? 32 : 30 });
+          }
         }
         await capture(name);
         if (survey && route === '/') {

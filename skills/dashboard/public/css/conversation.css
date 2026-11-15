@@ -1502,7 +1502,7 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 
 /* Phone layout */
 @media (max-width: 760px) {
-  :root { --c-pad: 16px; --c-h: 40px; --c-input-fs: 16px; }
+  :root { --c-pad: 16px; --c-h: 36px; --c-input-fs: 16px; }
   .conversation-page .conversation-message-body:has(> .chat-message-content > :is(.chat-block-choice, .chat-block-confirmation, .chat-block-form_intent, .chat-block-time_series, .chat-block-breakdown, .chat-block-category_series, .chat-block-diagram)),
   .conversation-page .conversation-message-body-wide { width: calc(100% - 35px); }
   .conversation-page .chat-block:not(.chat-block-markdown):not(:has(> .chat-attachment)) { padding: var(--c-pad); }

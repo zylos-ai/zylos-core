@@ -1666,8 +1666,6 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 .wb-timezone-controls .wb-select, .wb-timezone-controls .wb-btn, .wb-timezone-pending .wb-btn { min-height: var(--wb-h); }
 @media (max-width: 760px) {
   :root { --wb-h: var(--wb-control-touch); }
-  :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side)
-    :is(button, select, summary, a.wb-btn, input:not([type=checkbox], [type=radio], [type=range], [type=hidden])):not(.wb-vh, .wb-switch-btn, .wb-sched-dot, .wb-set-nav-btn, .wb-set-drawer-btn) { min-height: var(--wb-control-touch); }
   :is(.wb-btn-sm, .wb-icon-btn-sm, .wb-chip, .wb-search, .wb-input, .wb-seg, .wb-seg2, .wb-seg-sm):not(.wb-seg-engine) { height: var(--wb-control-touch); }
   :is(.wb-name-editor, .wb-cfg-controls, .wb-cfg-more) { --wb-h: var(--wb-control-touch); }
   :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side)
@@ -1686,4 +1684,8 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 
 @media (max-width: 760px) {
   .app-header .header-icon-btn { height: 44px; min-height: 44px; }
+}
+
+@media (max-width: 760px) {
+  .wb-group-head .wb-d-acts > * { height: var(--wb-control-touch); }
 }

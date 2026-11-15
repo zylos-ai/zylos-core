@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 // Text checks of the shipped stylesheet and page: quick guards that the phone layout rules are still there.
-// They do not render anything. The rendered result (no control under 40px, no sideways scrolling, the two-row
+// They do not render anything. The rendered result (no control under 36px, no sideways scrolling, the two-row
 // detail header, the memory list and file screens, schedule numbers 3+3) is measured by the opt-in browser
 // case in workbench-browser.test.js.
 const read = path => fs.readFileSync(new URL('../public/' + path, import.meta.url), 'utf8');
@@ -23,8 +23,9 @@ function phoneRules(source) {
 }
 const phone = phoneRules(css);
 
-test('stylesheet: on phones every control a finger taps is at least 40px, icon-only and short labelled buttons 40px wide', () => {
-  const rule = phone.match(/:is\(([^)]*)\)\s*:is\(button, select, summary, a\.wb-btn, input[^{]*\{ min-height: 40px; \}/);
+test('stylesheet: on phones ordinary control frames are at least 36px, icon-only and short labelled buttons 40px wide', () => {
+  const rule = phone.match(/:is\(([^)]*)\)\s*:is\(button, select, summary, a\.wb-btn, input[^{]*\{ min-height: var\(--wb-control-touch\); \}/);
+  assert.match(css, /--wb-control-touch: 36px;/, 'approved ordinary mobile tier');
   assert.ok(rule, 'one rule sets the minimum height of tappable controls');
   for (const area of ['.app-header', '#fleet-view', '#tab-overview', '#tab-memory', '#tab-observer', '#tab-trends', '#tab-schedule', '#tab-settings', '.wb-modal']) {
     assert.ok(rule[1].split(',').map(item => item.trim()).includes(area), area + ' is covered');
