@@ -96,8 +96,8 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     const importLine = (source, name) => (source.split('\n').find(line => line.startsWith('import ') && line.includes(name)) || '').slice(0, 512);
     const appSource = await moduleAt(appUrl);
     assert.match(importLine(appSource, 'markdown-config.js'), /from ['"]\.\/markdown-config\.js\?v=3['"]/);
-    assert.match(importLine(appSource, 'observer-history.js'), /from ['"]\.\/observer-history\.js\?v=5['"]/);
-    const observerUrl = new URL('./observer-history.js?v=5', appUrl).href;
+    assert.match(importLine(appSource, 'observer-history.js'), /from ['"]\.\/observer-history\.js\?v=6['"]/);
+    const observerUrl = new URL('./observer-history.js?v=6', appUrl).href;
     const observerSource = await moduleAt(observerUrl);
     assert.match(importLine(observerSource, 'markdown-it-cjk-friendly/index.js'), /from ['"]\.\/markdown-it-cjk-friendly\/index\.js\?v=1['"]/);
     const markdownUrl = new URL('./markdown-config.js?v=3', appUrl).href;
