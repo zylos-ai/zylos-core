@@ -29,6 +29,7 @@ test('old configuration upgrade exposes the same model threshold in settings, mo
   ctx.maintenance={transaction:()=>ctx.journal,classifyCutoff:()=> 'closed',update(_dir,j,changes){Object.assign(j,changes);},stop(){},canRecognizeProcesses:()=>true};
   const result=await completeUpgradeFinalization(ctx,{
     finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false}),
+    ensureLogRotation:()=>({state:'present'}),
     ensureMemoryMigration(){},rotateSession(){},verifyPublicationForServices(){},protectedSuccess(){},
     startServices:()=>({status:'done'}),verifyServices:()=>({status:'done'}),
     dashboardOwner:{verifyDashboard:()=>({state:'degraded',errors:[]})},

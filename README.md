@@ -228,6 +228,11 @@ Dashboard port, `curl --fail --location http://127.0.0.1:3470/` checks that page
 configured port if different. SQLite CLI must be installed for the database
 check. A notice alone does not complete this setup.
 
+`zylos init` and `zylos upgrade --self` also make sure the PM2 module
+`pm2-logrotate` rotates the PM2 logs of all services and components; an
+existing module keeps its settings, and a failed install only prints a warning
+with the command to install it later. See [PM2 log rotation](docs/pm2-log-rotation.md).
+
 The notice uses stdout when it is a terminal; otherwise it tries `/dev/tty`
 so interactive npm installs can show it even when npm captures hook output.
 If no terminal is available (including platforms without `/dev/tty`), it falls

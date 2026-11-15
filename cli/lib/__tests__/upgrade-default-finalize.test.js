@@ -138,6 +138,7 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
   const deps = {
     zylosDir: root, maintenance: m, dashboardOwner,
     finalizeWebConsoleRemoval:async()=>({warnings:[]}),savePm2ProcessList:()=>true,
+    ensureLogRotation:()=>({state:'present'}),
     // The package is already deployed into this private fixture. Do not run
     // the host-oriented skill copier or invoke npm against the real host.
     syncSkills: () => ({ step: 5, name: 'sync_core_skills', status: 'done' }),

@@ -40,6 +40,7 @@ function fixture(t, { added = false } = {}) {
   let starts = 0;
   const deps = { maintenance: m, verifySnapshot: () => {}, assertDashboardUninstalled: () => {},
     finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false}),
+    ensureLogRotation:()=>({state:'present'}),
     syncSkills: ctx => {
       const merged = smartSync(source, target);
       assert.deepEqual(merged.errors, []);

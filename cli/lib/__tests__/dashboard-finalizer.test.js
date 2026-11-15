@@ -60,7 +60,8 @@ function prerequisites() {
     startServices: () => ({ status: 'done' }), verifyServices: () => ({ status: 'done' }),
     readModeStatus: () => ({ sessionMode: 'single', transition: null }),
     readMode: () => ({ mode: 'single' }), readTransition: () => null,
-    restart: () => ({ ok: true, data: { result: 'exit_enqueued' } }), audit: () => []
+    restart: () => ({ ok: true, data: { result: 'exit_enqueued' } }), audit: () => [],
+    ensureLogRotation: () => ({ state: 'present' })
   };
 }
 
