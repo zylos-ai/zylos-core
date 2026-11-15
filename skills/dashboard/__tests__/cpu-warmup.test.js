@@ -1,6 +1,9 @@
+import { createCgroupCollector } from '../src/lib/cgroup-resources.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { SystemCollector } from '../src/lib/collectors/system-collector.js';
+
+const cgroupCollector = createCgroupCollector({ readFile: () => { throw new Error('fixture: no cgroup'); } });
 
 function makeStubStore() {
   return {
@@ -10,7 +13,7 @@ function makeStubStore() {
 }
 
 test('SystemCollector — single collect has no cpu_pct', async () => {
-  const collector = new SystemCollector(makeStubStore(), { zylosDir: '/tmp', runtime: 'test' });
+  const collector = new SystemCollector(makeStubStore(), { zylosDir: '/tmp', runtime: 'test' }, { cgroupCollector });
   await collector.collect();
   const data = collector.getLatestSystemData();
   assert.equal(data.cpu_pct, undefined, 'first collect must not have cpu_pct');
@@ -18,7 +21,7 @@ test('SystemCollector — single collect has no cpu_pct', async () => {
 });
 
 test('SystemCollector — warmup produces cpu_pct', async () => {
-  const collector = new SystemCollector(makeStubStore(), { zylosDir: '/tmp', runtime: 'test' });
+  const collector = new SystemCollector(makeStubStore(), { zylosDir: '/tmp', runtime: 'test' }, { cgroupCollector });
   await collector.warmup();
   const data = collector.getLatestSystemData();
   assert.ok(typeof data.cpu_pct === 'number', 'warmup must produce cpu_pct');

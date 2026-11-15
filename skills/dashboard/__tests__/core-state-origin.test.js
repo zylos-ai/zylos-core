@@ -1,7 +1,11 @@
+import { agentReadiness } from '../src/lib/agent-readiness.js';
 import { AccountUsageCache } from '../src/lib/account-usage-cache.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
+import { createSessionReader } from '../../../cli/lib/session-state-reader-async.js';
+import { readRuntimeHealth } from '../../../cli/lib/session-state-reader.js';
 import { CoreState, projectOrigin } from '../src/lib/core-state.js';
 import { MetricResolver } from '../src/lib/metric-resolver.js';
 import { describeOrigin } from '../../../cli/lib/origin-presence.js';
@@ -46,9 +50,9 @@ test('Core state reads Origin facts only for absence or authentication and reads
   let mode = 'multi', observation = absent(), health = { health: 'ok' }, targetRuntime = 'codex', factsReads = 0;
   let facts = { originNeed: { inbound: 0, controls: 0, oldestAt: null }, transitionOpen: false, fenced: false };
   const accountCalls = [];
-  let accountAvailable = true, accountLive = true, changes = 0;
+  let accountAvailable = true, accountLive = true, changes = 0, readFailure = false;
   const reader = {
-    readSessionStates: async groups => new Map(groups.map(group => [group, structuredClone(observation)])),
+    readSessionStates: async groups => { if (readFailure) throw new Error('fixture unavailable'); return new Map(groups.map(group => [group, structuredClone(observation)])); },
     readLiveIdentity: async () => ({ present: true, ready: true, runtime: 'codex', runId: 'other-run', sessionId: 'other-session' }),
     resolveTargetRuntime: async group => { assert.equal(group, mode === 'multi' ? 'origin' : null); return targetRuntime; },
     readRuntimeHealth: async runtime => { assert.equal(runtime, targetRuntime); return health; },
@@ -67,6 +71,10 @@ test('Core state reads Origin facts only for absence or authentication and reads
   const { CoreState } = await import(`../src/lib/core-state.js?origin-facts=${Date.now()}`);
   const core = new CoreState({ accountUsageCache: new AccountUsageCache({ ttlMs: 0 }), zylosDir: process.env.ZYLOS_DIR, onChange: () => { changes++; } });
   assert.equal((await core.refresh()).state, 'SLEEPING');
+  assert.equal(agentReadiness(core.getReadinessObservation(), { sessionMode: 'multi' }).ready, true);
+  const copy = core.getReadinessObservation();
+  copy.view.state = 'auth_wait';
+  assert.equal(core.getReadinessObservation().view.state, 'sleeping');
   assert.deepEqual(accountCalls, ['codex']);
   assert.equal(core.accountUsage.fiveHour.usedPercentage, 37);
   assert.equal(core.accountUsage.sevenDay.usedPercentage, 61);
@@ -84,17 +92,20 @@ test('Core state reads Origin facts only for absence or authentication and reads
   assert.equal(factsReads, 3);
   observation = live();
   assert.equal((await core.refresh()).state, 'BUSY');
+  assert.deepEqual(agentReadiness(core.getReadinessObservation(), { sessionMode: 'multi' }), { ready: true, observable: true, stage: 'ready', reason: 'ready' });
   health = { health: 'rate_limited' };
   assert.equal((await core.refresh()).state, 'BUSY');
   assert.equal(factsReads, 3, 'present healthy or limited Origin does not open C4');
   health = { health: 'auth_failed' };
   facts.originNeed = { inbound: 1, controls: 0, oldestAt: Math.floor(Date.now() / 1000) };
   assert.equal((await core.refresh()).state, 'AUTH_WAIT');
+  assert.equal(agentReadiness(core.getReadinessObservation(), { sessionMode: 'multi' }).stage, 'runtime_down');
   assert.equal(core.getState().runId, 'run-current');
   assert.equal(factsReads, 4);
   observation = absent(); health = { health: 'rate_limited' };
   facts.originNeed.oldestAt -= 400;
   assert.equal((await core.refresh()).state, 'RATE_WAIT');
+  assert.equal(agentReadiness(core.getReadinessObservation(), { sessionMode: 'multi' }).stage, 'session_ready');
   facts = { originNeed: { error: { code: 'READ_FAILED', message: 'unreadable' } }, transitionOpen: null, fenced: null };
   const unreadable = await core.refresh();
   assert.equal(unreadable.state, 'UNKNOWN'); assert.equal(unreadable.reason, 'origin_need_unreadable');
@@ -106,21 +117,130 @@ test('Core state reads Origin facts only for absence or authentication and reads
   assert.equal(metrics.resolve('rate_limit_7d').value, null);
   facts.originNeed = { inbound: 0, controls: 0, continuation: true, oldestAt: Math.floor(Date.now() / 1000) };
   assert.equal((await core.refresh()).state, 'WAKING');
+  assert.equal(agentReadiness(core.getReadinessObservation(), { sessionMode: 'multi' }).ready, true);
   facts.originNeed.oldestAt -= 400;
   assert.equal((await core.refresh()).state, 'WAKE_OVERDUE');
+  assert.equal(agentReadiness(core.getReadinessObservation(), { sessionMode: 'multi' }).stage, 'runtime_up');
   health = { health: 'auth_failed' };
   assert.equal((await core.refresh()).state, 'AUTH_WAIT');
   facts.originNeed = { inbound: 0, controls: 0, continuation: false, oldestAt: null };
   assert.equal((await core.refresh()).state, 'SLEEPING');
   const reads = factsReads;
   mode = 'single';
-  assert.equal((await core.refresh()).state, 'OFFLINE');
+  const singleReadiness = await core.refresh({ readiness: true });
+  assert.equal(singleReadiness.snapshot.state, 'OFFLINE');
+  assert.equal(singleReadiness.sessionMode, 'single');
+  assert.equal(agentReadiness(singleReadiness.readinessObservation).stage, 'runtime_down');
+  health = { health: 'ok' };
   assert.equal(factsReads, reads);
   assert.equal(core.accountUsage, null);
   accountAvailable = true;
   assert.equal((await core.refresh()).state, 'OFFLINE');
   assert.equal(core.accountUsage.sevenDay.usedPercentage, 61);
   assert.equal(core.accountUsageRecord.live, false);
+  assert.equal(agentReadiness(core.getReadinessObservation()).stage, 'runtime_up');
+  readFailure = true;
+  await core.refresh();
+  assert.deepEqual(core.getReadinessObservation(), { observation: null, view: null, runtimeHealth: null });
+  assert.equal(agentReadiness(core.getReadinessObservation()).stage, 'runtime_down');
+});
+
+// Real Core file/health evidence across concurrent reads. Run for readiness
+// capture changes; skip unrelated UI edits. Own a private root beneath the
+// runner's short TMPDIR and restore the environment on success or failure.
+// The tmux transport is injected; no process, database or network starts.
+test('readiness returns real Core file evidence that survives a concurrent background refresh', { timeout: 3000 }, async t => {
+  const previousRoot = process.env.ZYLOS_DIR;
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR, 'core-readiness-'));
+  t.after(() => {
+    process.env.ZYLOS_DIR = previousRoot;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  process.env.ZYLOS_DIR = root;
+  assert.notEqual(root, previousRoot);
+  assert.ok(root.startsWith(process.env.TMPDIR + path.sep));
+  console.log('Core readiness isolation:', JSON.stringify({ HOME: process.env.HOME,
+    ZYLOS_DIR: root, previousRoot, PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR,
+    tmux: 'injected', network: 'none', database: 'none' }));
+  const runDir = path.join(root, 'activity-monitor', 'session-groups', 'origin');
+  const healthDir = path.join(root, 'activity-monitor', 'runtime-health');
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.mkdirSync(healthDir, { recursive: true });
+  const identity = { ...live().identity, createdAt: 123, serverGeneration: 'generation', tmuxSessionId: '$1', paneId: '%1', tmuxName: 'zylos-group-origin' };
+  const statusFile = path.join(runDir, 'agent-status.json');
+  const healthFile = path.join(healthDir, 'claude.json');
+  const writeStatus = state => fs.writeFileSync(statusFile, JSON.stringify({ runId: identity.runId, sessionId: identity.sessionId, state }));
+  const writeHealth = health => fs.writeFileSync(healthFile, JSON.stringify({
+    v: 1, runtime: 'claude', health, reason: '', updatedAt: 100, hook: {},
+    unavailableSince: 0, cooldownUntil: 0, recoveringStartedAt: 0, lastUserMessageRecoveryAt: 0,
+    restartFailureCount: 0, lastRecoveryAt: 0, lastDownCheckAt: 0, rateLimitResetTime: '',
+  }));
+  // Exercise Core's identity-bracketed file reader with only the tmux transport replaced.
+  const sessionReader = createSessionReader({ open: async () => ({ close: async () => {} }),
+    observe: async () => identity, observeAll: async () => new Map([['origin', identity]]) });
+  let mode = 'single', healthReads = 0, releaseHealth, healthStarted;
+  let holdHealth = false;
+  const reader = { ...sessionReader, readRuntimeHealth: async runtime => {
+    healthReads++;
+    const sampled = readRuntimeHealth(runtime);
+    if (holdHealth) {
+      healthStarted();
+      await new Promise(resolve => { releaseHealth = resolve; });
+    }
+    return sampled;
+  } };
+  t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
+    if (name === 'config.js') return { readSessionMode: () => ({ mode }) };
+    if (name === 'session-state-reader.js') return reader;
+    if (name === 'session-group-paths.js') return { listGroupTmuxSessions: async () => [{ sessionGroup: 'origin' }] };
+    if (name === 'origin-presence.js') return { describeOrigin, readOriginFacts: async () => ({ originNeed: { inbound: 1, controls: 0, oldestAt: Math.floor(Date.now() / 1000) } }) };
+    assert.fail(`Unexpected core module ${name}`);
+  } } });
+  const { CoreState } = await import(`../src/lib/core-state.js?request-local=${Date.now()}`);
+  const core = new CoreState({ zylosDir: root, accountUsageCache: { read: async () => null } });
+  writeStatus('idle'); writeHealth('auth_failed');
+  assert.equal((await core.refresh()).state, 'IDLE');
+  assert.equal(healthReads, 0, 'the single background poll never reads runtime health');
+
+  const started = new Promise(resolve => { healthStarted = resolve; });
+  holdHealth = true;
+  const requested = core.refresh({ readiness: true });
+  await started;
+  writeStatus('busy'); writeHealth('ok');
+  const background = await core.refresh();
+  assert.equal(background.state, 'BUSY');
+  assert.equal(healthReads, 1, 'the concurrent background poll does not re-read health');
+  releaseHealth();
+  const sampled = await requested;
+  assert.equal(sampled.snapshot.state, 'IDLE');
+  assert.equal(sampled.sessionMode, 'single');
+  assert.equal(sampled.readinessObservation.observation.status.value.state, 'idle');
+  assert.equal(sampled.readinessObservation.runtimeHealth.health, 'auth_failed');
+  assert.equal(agentReadiness(sampled.readinessObservation).reason, 'health_auth_failed');
+  assert.equal(core.getReadinessObservation().runtimeHealth, null, 'request health is never written to shared single-session state');
+  await core.refresh();
+  assert.equal(sampled.readinessObservation.runtimeHealth.health, 'auth_failed', 'later polls cannot erase request evidence');
+
+  holdHealth = false;
+  const healthy = await core.refresh({ readiness: true });
+  assert.equal(healthy.readinessObservation.runtimeHealth.health, 'ok');
+  assert.equal(agentReadiness(healthy.readinessObservation).reason, 'busy');
+  writeStatus('idle');
+  assert.equal(agentReadiness((await core.refresh({ readiness: true })).readinessObservation).ready, true);
+
+  const [first, second] = await Promise.all([core.refresh({ readiness: true }), core.refresh({ readiness: true })]);
+  first.readinessObservation.observation.identity.ready = false;
+  first.readinessObservation.runtimeHealth.health = 'auth_failed';
+  assert.equal(second.readinessObservation.observation.identity.ready, true, 'coalesced requests own separate observations');
+  assert.equal(second.readinessObservation.runtimeHealth.health, 'ok', 'coalesced requests own separate health');
+
+  mode = 'multi'; writeHealth('auth_failed');
+  const multi = await core.refresh({ readiness: true });
+  assert.equal(multi.sessionMode, 'multi');
+  assert.equal(multi.snapshot.state, 'AUTH_WAIT');
+  assert.equal(multi.readinessObservation.runtimeHealth.health, 'auth_failed');
+  writeHealth('ok'); await core.refresh();
+  assert.equal(agentReadiness(multi.readinessObservation, { sessionMode: multi.sessionMode }).reason, 'health_auth_failed');
 });
 
 test('Core state ignores live sample timestamps and notifies recorded provenance changes', async t => {

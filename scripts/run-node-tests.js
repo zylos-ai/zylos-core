@@ -7,6 +7,7 @@ import { createTestEnvironment } from './test-environment.js';
 
 const ROOT = process.cwd();
 const ROOT_NODE_TESTS = [
+  'test/agent-status.integration.test.js',
   'test/account-usage-cache.integration.test.js',
   'test/dashboard-transcript-idle.integration.test.js',
   'test/session-batch-reader.integration.test.js',

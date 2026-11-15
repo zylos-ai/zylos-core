@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildAgentStatus } from './lib/agent-status.js';
+import { agentReadiness } from './lib/agent-readiness.js';
 import { readThresholdPolicy, sessionThreshold } from './lib/session-threshold.js';
 import { createInstalledVersionReader } from './lib/installed-versions.js';
 import { CoreState } from './lib/core-state.js';
@@ -343,11 +345,12 @@ function getNewSessionThreshold() {
 
 function getSystemMetrics() {
   const data = systemCollector.getLatestSystemData();
-  const memUsed = Number(data?.mem_used_bytes);
-  const memTotal = Number(data?.mem_total_bytes);
+  const memUsed = data?.mem_used_bytes;
+  const memTotal = data?.mem_total_bytes;
   return {
-    cpu_pct: Number.isFinite(Number(data?.cpu_pct)) ? Number(data.cpu_pct) : null,
-    mem_pct: Number.isFinite(memUsed) && Number.isFinite(memTotal) && memTotal > 0 ? (memUsed / memTotal) * 100 : null,
+    scope: data?.resource_scope ?? 'host',
+    cpu_pct: Number.isFinite(data?.cpu_pct) ? data.cpu_pct : null,
+    mem_pct: data?.resource_scope === 'container' ? data.mem_pct ?? null : Number.isFinite(memUsed) && Number.isFinite(memTotal) && memTotal > 0 ? (memUsed / memTotal) * 100 : null,
     mem_used_bytes: Number.isFinite(memUsed) ? memUsed : null,
     mem_total_bytes: Number.isFinite(memTotal) ? memTotal : null,
     disk_pct: Number.isFinite(Number(data?.disk_used_pct)) ? Number(data.disk_used_pct) : null,
@@ -537,9 +540,9 @@ function readFleetSessionMode() {
   return ['single', 'multi'].includes(value.session_mode) ? value.session_mode : null;
 }
 
-async function refreshFleetGroupSummary() {
+async function refreshFleetGroupSummary(options) {
   if (readFleetSessionMode() !== 'multi') return;
-  try { await workbench.getSnapshot(); } catch { /* Optional observations cannot break the existing state API. */ }
+  try { await workbench.getSnapshot(undefined, options); } catch { /* Optional observations cannot break the existing state API. */ }
 }
 
 function buildSelfFleetRecord(statePayload = buildApiStatePayload()) {
@@ -1193,6 +1196,14 @@ async function handleApi(req, res, pathname, url) {
     }
     return true;
   }
+  if (pathname === '/api/agent-status' && req.method === 'GET') {
+    const [sampled] = await Promise.all([coreState.refresh({ readiness: true }), refreshFleetGroupSummary({ maxAgeMs: 30000 })]);
+    const state = buildApiStatePayload();
+    const readiness = agentReadiness(sampled.readinessObservation, { sessionMode: sampled.sessionMode });
+    sendJson(res, 200, buildAgentStatus({ state, readiness }));
+    return true;
+  }
+
   if (pathname === '/api/state') {
     await Promise.all([coreState.refresh(), refreshFleetGroupSummary()]);
     sendJson(res, 200, { ...buildApiStatePayload(), tz: (await scheduleTz()).tz });
