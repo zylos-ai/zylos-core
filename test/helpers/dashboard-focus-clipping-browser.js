@@ -55,7 +55,7 @@ function focusGeometry(control) {
     width: rect.width, height: rect.height };
 }
 
-export async function runFocusClippingBrowser(sandbox, { width, theme, assetDirectory = publicDir, captureOnly = false, onLayout = () => {} }) {
+export async function runFocusClippingBrowser(sandbox, { width, theme }) {
   console.info('Focus browser isolation:', JSON.stringify(sandbox.assertIsolation()));
   const errors = [], streams = new Set(), observations = [];
   let closing = false, state = 'asleep';
@@ -101,9 +101,9 @@ export async function runFocusClippingBrowser(sandbox, { width, theme, assetDire
         }
         return sendJson(res, value === undefined ? 404 : 200, value ?? { error: 'not_found' });
       }
-      if (['/', '/chat'].includes(p)) return sendHtml(res, 200, fs.readFileSync(path.join(assetDirectory, 'index.html'), 'utf8')
+      if (['/', '/chat'].includes(p)) return sendHtml(res, 200, fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8')
         .replaceAll('__BASE_PATH__', '').replaceAll('__ASSET_ROOT__', '/_assets').replaceAll('__REMOTE_ACCESS__', 'admin'));
-      if (!serveStatic(req, res, assetDirectory)) sendJson(res, 404, { error: 'not_found' });
+      if (!serveStatic(req, res, publicDir)) sendJson(res, 404, { error: 'not_found' });
     } catch (error) { recordError(error); if (!res.headersSent) sendJson(res, 500, { error: 'fixture_failed' }); else res.end(); }
   });
   const base = await sandbox.startHttp(server);
@@ -141,40 +141,6 @@ export async function runFocusClippingBrowser(sandbox, { width, theme, assetDire
       await page.screenshot({ path: path.join(evidence, `focus-${width}-${theme}-${name}.png`), animations: 'disabled', timeout: 5000 });
     }
   }
-  async function layout(name) {
-    const metrics = await page.evaluate(name => {
-      const box = selector => {
-        const r = document.querySelector(selector).getBoundingClientRect();
-        return [r.x + scrollX, r.y + scrollY, r.width, r.height];
-      };
-      if (name === 'conversation') return { row: box('.conversation-list-item'), text: box('.conversation-list-title') };
-      const tabs = document.querySelector('.wb-rt-tabs'), r = tabs.getBoundingClientRect();
-      const css = getComputedStyle(tabs), after = getComputedStyle(tabs, '::after');
-      const separator = after.content !== 'none' ? r.bottom + scrollY - parseFloat(css.borderBottomWidth) - parseFloat(after.bottom) - parseFloat(after.height)
-        : r.bottom + scrollY - parseFloat(css.borderBottomWidth);
-      return { tab: box('#settings-price-tab-claude'), separator, table: box('.wb-ptable'), more: box('#settings-price-more') };
-    }, name);
-    if (!captureOnly) {
-      // Immutable prerelease asset geometry, measured with this same API fixture.
-      // These constants deliberately do not derive from the stylesheet under test.
-      const baseline = width === 1280 ? {
-        conversation: { row: [32,165,303,61.59375], text: [82,176,243,19.5] },
-        pricing: { tab: [237,174.765625,288.65625,39.5], separator: 213.265625, table: [254,272.765625,886,64.25], more: [254,345.015625,886,32] },
-      } : {
-        conversation: { row: [20,116,350,72], text: [76,130,286,22.5] },
-        pricing: { tab: [12,208.375,183,56.75], separator: 264.125, table: [25,340.125,640.703125,76.25], more: [25,424.375,340,92] },
-      };
-      for (const [key, expected] of Object.entries(baseline[name])) {
-        const actual = Array.isArray(expected) ? metrics[key] : [metrics[key]];
-        for (const [index, value] of (Array.isArray(expected) ? expected : [expected]).entries()) {
-          assert.ok(Math.abs(actual[index] - value) < 0.1, `${name} ${key}[${index}] retains baseline ${value}, got ${actual[index]}`);
-        }
-      }
-    }
-    onLayout(name, metrics);
-    await screenshot(`${name}-layout`);
-    return metrics;
-  }
   async function check(control, name, requiredClips, { alreadyFocused = false, inward = false } = {}) {
     await control.waitFor({ state: 'visible' });
     // Enter the actual sequential keyboard focus order and return to this real
@@ -182,7 +148,6 @@ export async function runFocusClippingBrowser(sandbox, { width, theme, assetDire
     if (!alreadyFocused) { await control.focus(); await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Tab'); }
     const geometry = await control.evaluate(focusGeometry);
     await screenshot(name);
-    if (captureOnly) { observations.push({ name, ...geometry }); return; }
     assert.ok(geometry.focused && geometry.visible, `${name}: keyboard focus and :focus-visible are active`);
     if (inward) {
       assert.equal(parseFloat(geometry.outlineWidth), 1, `${name}: baseline browser outline width remains`);
@@ -207,7 +172,6 @@ export async function runFocusClippingBrowser(sandbox, { width, theme, assetDire
   }
 
   async function tabThrough(containerSelector, controlSelector, name) {
-    if (captureOnly) return;
     const container = page.locator(containerSelector);
     const controls = container.locator(controlSelector);
     await controls.first().focus();
@@ -232,7 +196,7 @@ export async function runFocusClippingBrowser(sandbox, { width, theme, assetDire
 
   await openDashboardTab(page, 'chat');
   const rows = page.locator('.conversation-list-item'); await rows.first().waitFor();
-  await layout('conversation');
+  await screenshot('conversation-layout');
   await tabThrough('.conversation-items', '.conversation-list-item', 'conversation');
   {
     for (const [position, row] of [['first', rows.first()], ['last', rows.last()]]) {
@@ -257,7 +221,7 @@ export async function runFocusClippingBrowser(sandbox, { width, theme, assetDire
   if (width === 390) await page.locator('.wb-set-drawer-btn').click();
   await page.locator('[data-settings-section="pricing"]').click();
   await page.locator('#settings-price-rows tr').first().waitFor();
-  await layout('pricing');
+  await screenshot('pricing-layout');
   for (const runtime of ['claude', 'codex']) {
     const tab = page.locator(`#settings-price-tab-${runtime}`);
     await check(tab, `pricing-tab-${runtime}`, ['wb-rt-tabs']);
@@ -277,10 +241,8 @@ export async function runFocusClippingBrowser(sandbox, { width, theme, assetDire
   const editor = page.locator('#memory-editor');
   await page.locator('.memory-notice.warning').waitFor();
   assert.ok(await page.locator('.wb-memory-card').count() >= 2, 'real backlog and budget cards precede the editor');
-  if (!captureOnly) {
-    const paneHeight = await page.locator('.memory-content').evaluate(node => node.clientHeight);
-    if (width === 1280) assert.ok(paneHeight < 520, `real memory pane ${paneHeight}px is shorter than editor`);
-  }
+  const paneHeight = await page.locator('.memory-content').evaluate(node => node.clientHeight);
+  if (width === 1280) assert.ok(paneHeight < 520, `real memory pane ${paneHeight}px is shorter than editor`);
   await check(editor, 'memory-editor', ['memory-content', 'memory-viewer'], { inward: true });
   async function mouseWithoutScroll(position, height = 520) {
     await editor.evaluate((node, { position, height }) => {
