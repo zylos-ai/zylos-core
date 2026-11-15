@@ -290,6 +290,11 @@ test('schedule HTTP routes read, write and map errors through the real server', 
   });
   context.mock.method(EventLoopMonitor.prototype, 'start', function () { return this; });
   context.mock.method(VersionChecker.prototype, 'start', () => {});
+  // Version discovery is a startup dependency, outside the action transport
+  // boundary whose exact child count and authorization this fixture proves.
+  context.mock.module('../src/lib/installed-versions.js', { namedExports: {
+    createInstalledVersionReader: () => async () => ({ zylos: '1.0.0', claude: '1.0.0', codex: '1.0.0' }),
+  } });
   const children = [];
   context.mock.module('node:child_process', { namedExports: {
     ...childProcess,

@@ -15,6 +15,6 @@ mock.module('node:child_process', { namedExports: {
 } });
 const dashboard = new URL('../../../../skills/dashboard/src/index.js', import.meta.url);
 mock.module(new URL('./lib/version-checker.js', dashboard).href, { namedExports: {
-  VersionChecker: class { start() {} getLatest() { return {}; } },
+  VersionChecker: class { start() {} check() {} getLatest() { return {}; } },
 } });
 await import(dashboard.href);
