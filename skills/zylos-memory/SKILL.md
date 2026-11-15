@@ -79,10 +79,17 @@ result to the requesting parent; the parent owns any owner notification.
   `Completed` without starting another parent turn. Do not rely on a later
   notification to finish this obligation. A timeout or an empty wait is not a
   terminal result; wait again while keeping the input channel responsive.
+  If the worker no longer exists, has been closed, or its result can no longer
+  be retrieved, stop waiting and treat it as a result that cannot be retrieved.
   `Completed` describes worker execution, not successful Sync: inspect the
   returned outcome, including checkpoint, state-commit and release failures.
-- Report a failed Sync to the owner once through the existing channel route,
-  before finishing the parent turn in Codex. Include partial commits and
+- Only the worker's final result decides whether Sync succeeded or failed.
+  Messages the worker sends while it is still running are not a Sync outcome;
+  do not report success or failure from them.
+- Report a failed Sync to the owner once, before finishing the parent turn in
+  Codex. Send directly only to addresses your own thread handles; to reach any
+  other owner address, send an internal message to the owning thread asking it
+  to deliver the report (One thread per address). Include partial commits and
   cleanup/release warnings; do not repeat a report already sent for this run.
   If the result cannot be retrieved, report that failure without claiming Sync
   succeeded. Successful Sync and the documented `SYNC_BUSY` no-op need no extra

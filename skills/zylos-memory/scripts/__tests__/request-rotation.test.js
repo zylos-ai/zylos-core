@@ -72,13 +72,29 @@ test('fixed prompts distinguish background work from reclaim wait and identity h
     assert.match(prompt, /In Claude, do not wait for it/);
     assert.match(prompt, /In Codex, before ending your turn, use the native agent tools to wait for this worker and read its terminal result/);
     assert.match(prompt, /a timeout or a Completed label alone is not a Sync outcome/);
-    assert.match(prompt, /Report a failed Sync to the owner once through the existing channel route/);
+    assert.match(prompt, /Report a failed Sync, or a result that cannot be retrieved, to the owner once\./);
     assert.match(prompt, /Successful Sync needs no extra owner message/);
   }
   assert.match(PRE_RECLAIM_SYNC_PROMPT, /Wait for it to finish before acknowledging/);
   assert.match(IDENTITY_ROTATION_PROMPT, /atomic replacement/);
   assert.match(IDENTITY_ROTATION_PROMPT, /\/clear.*\/exit/);
   assert.equal(SYNC_BACKLOG_ALERT('origin', 10, 20), SYNC_BACKLOG_ALERT('origin', 10, 20));
+});
+test('background Sync prompts route owner reports by thread ownership', () => {
+  for (const prompt of [GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT]) {
+    assert.match(prompt, /Send directly only to addresses your own thread handles; to reach any other owner address, send an internal message to the owning thread asking it to deliver the report/);
+    assert.doesNotMatch(prompt, /existing channel route/);
+  }
+});
+test('background Sync prompts stop waiting when the worker is gone', () => {
+  for (const prompt of [GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT]) {
+    assert.match(prompt, /If the worker no longer exists, has been closed, or its result can no longer be retrieved, stop waiting and treat it as a result that cannot be retrieved/);
+  }
+});
+test('background Sync prompts judge only the worker final result', () => {
+  for (const prompt of [GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT]) {
+    assert.match(prompt, /Only the worker’s final result decides success or failure; messages it sends while still running are not a Sync outcome/);
+  }
 });
 
 test('real control transactions supersede repeat requests and preserve exact options', async t => {
