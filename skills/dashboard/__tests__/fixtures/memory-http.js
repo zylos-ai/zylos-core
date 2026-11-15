@@ -42,7 +42,8 @@ export async function setupMemoryHttp(t) {
   put.run(4, 'telegram:a', 'in', 'telegram', '2026-10-01 12:00:00', 'private ordinary body');
   let clock = 1800000000000;
   let engine, auth, reader, server, view = 'multi', snapshotReads = 0, cachedSnapshot = null;
-  const calls = [], restarts = [];
+  const calls = [], restarts = [], versionCalls = [];
+  let unexpectedChild;
   const previous = process.env.ZYLOS_DIR;
   t.after(async () => {
     if (previous === undefined) delete process.env.ZYLOS_DIR; else process.env.ZYLOS_DIR = previous;
@@ -53,6 +54,8 @@ export async function setupMemoryHttp(t) {
     c4.close();
     engine?.store.close();
     fs.rmSync(root, { recursive: true, force: true });
+    // Product readers may catch transport errors; retain the first fixture violation.
+    if (unexpectedChild) throw unexpectedChild;
   });
   t.mock.method(Date, 'now', () => clock);
   t.mock.method(EventLoopMonitor.prototype, 'start', function () { return this; });
@@ -87,10 +90,17 @@ export async function setupMemoryHttp(t) {
     if (args[0] === path.join(root, '.claude/skills/zylos-memory/scripts/sync-lock.js')) {
       return { stdout: JSON.stringify({ sync: { held: true }, origin: { held: false } }) };
     }
-    assert.fail(`Unexpected child request: ${file} ${args.join(' ')}`);
+    unexpectedChild ??= new Error(`Unexpected child request: ${file} ${args.join(' ')}`);
+    throw unexpectedChild;
   };
   const execFile = () => assert.fail('callback child invocation must not bypass the injected transport');
-  execFile[promisify.custom] = async (...args) => execute(...args);
+  execFile[promisify.custom] = async (file, args) => {
+    if (['zylos', 'claude', 'codex'].includes(file) && args.length === 1 && args[0] === '--version') {
+      versionCalls.push({ file, args });
+      return { stdout: '1.0.0' };
+    }
+    return execute(file, args);
+  };
   t.mock.module('../../src/lib/workbench/group-backlog.js', { namedExports: {
     createGroupBacklog: options => createGroupBacklog({ ...options, execute: async (...args) => execute(...args) }),
   } });
@@ -155,5 +165,5 @@ export async function setupMemoryHttp(t) {
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 
-  return { root, engine, request, calls, snapshotReads: () => snapshotReads };
+  return { root, engine, request, calls, versionCalls, snapshotReads: () => snapshotReads };
 }

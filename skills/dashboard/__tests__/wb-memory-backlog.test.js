@@ -293,11 +293,13 @@ test('memory routes require admin locally and through repeated proxy slashes', a
 // the shared backlog cache. Run for route/metadata changes; skip UI-only work.
 // setupMemoryHttp owns isolated resources and registers bounded teardown.
 test('memory backlog HTTP route shares the detail cache and enforces administrator access', { timeout: 15000 }, async t => {
-  const { root, engine, request, calls, snapshotReads } = await setupMemoryHttp(t);
+  const { root, engine, request, calls, versionCalls, snapshotReads } = await setupMemoryHttp(t);
   const denied = await request('/api/workbench/memory/backlog');
   assert.equal(denied.status, 403);
   assert.deepEqual(await denied.json(), { error: 'insufficient_scope', required: 'admin' });
   assert.equal(calls.length, 0);
+  assert.deepEqual(versionCalls, ['zylos', 'claude', 'codex'].map(file => ({ file, args: ['--version'] })),
+    'startup probes use the injected async transport; denied requests add no version calls');
   const detail = await request('/api/workbench/groups/origin/backlog', 'admin');
   assert.equal(detail.status, 200);
   assert.equal((await detail.json()).count, 7);
