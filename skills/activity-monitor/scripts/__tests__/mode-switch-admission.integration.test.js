@@ -27,8 +27,21 @@ async function fixture(responder) {
   });
   server.listen(socketPath);await once(server,'listening');
   cleanups.push(async()=>{for(const p of peers)p.destroy();await new Promise(resolve=>server.close(resolve));});
-  return {root,db,store,requests,send:(request,options)=>submit(request,{...options,socketPath,replyMaxMs:40})};
+  return {root,db,store,requests,send:(request,options)=>submit(request,{...options,socketPath})};
 }
+// Covers: the real socket client and session-mode command against an in-process
+// Unix socket and a real C4 store, with every path under the runner's temporary
+// directory. Run after changes to submit/validateReply, session-mode switch or
+// the mode transition store; other changes can skip it.
+// The server's reply or close decides each branch, never a reply timer. The
+// fixture leaves submit's 10 s reply budget in place, which the command's own
+// 10 s deadline also caps and which outlasts Jest's 5 s test timeout: a short
+// budget armed when the request is written can expire under CPU load before
+// the client reads a reply the server has already sent, sending the client
+// down the lookup branch. A slow reply now fails the test as a timeout.
+// Budget expiry is covered by the expired-budget case below, the submit
+// timeout cases in am-sock-client.test.js, and the timeout-then-lookup cases
+// in session-mode-command.test.js.
 for (const behavior of ['accept','lost-after-commit','malformed','closed-before-commit']) {
   test(`real socket ${behavior} and real observation`,async()=>{
     const f=await fixture((socket,request,store)=>{
@@ -48,18 +61,26 @@ for (const behavior of ['accept','lost-after-commit','malformed','closed-before-
     if(!result.ok)expect(result.error.persisted).toBeNull();
   });
 }
+// Budget expiry is driven by a controlled clock, not by real elapsed time:
+// the clock stays before the deadline until the server has recorded the
+// request, then jumps to it. The client's write callback is held until that
+// moment, so submit arms its reply timer with no time left and its real timer
+// ends the wait as deadline_exceeded. Until then the 10 s window outlasts
+// Jest's test timeout, so no timer can expire before the request is sent and
+// read, however slow the machine is.
 test('expired reply budget does not start a read or resend',async()=>{
-  const f=await fixture(()=>{});let reads=0;
-  const deadlineAt=Date.now()+25;
-  const result=await executeSessionMode(['switch','multi'],{deadlineAt,send:async(request,options)=>{
-    const response=await f.send(request,options);
-    // Socket timers use a monotonic fractional clock; Node can wake before
-    // Date.now reaches the integer deadline. This case specifically tests an
-    // exhausted lookup budget, so let that same real deadline elapse first.
-    while(Date.now()<deadlineAt) await new Promise(resolve=>setTimeout(resolve,deadlineAt-Date.now()));
-    return response;
-  },lookup:(target,options)=>lookupModeSwitch(target,{...options,getModeTransition:()=>{reads++;return f.store.getModeTransition();}})});
-  expect(result.ok).toBe(false);expect(result.error.persisted).toBeNull();expect(reads).toBe(0);expect(f.requests).toHaveLength(1);
+  const start=Date.now();const deadlineAt=start+10000;let expired=false;let markReceived;
+  const received=new Promise(resolve=>{markReceived=resolve;});
+  const now=()=>expired?deadlineAt:start;
+  const f=await fixture(()=>{expired=true;markReceived();});let reads=0;
+  const connect=options=>{
+    const socket=net.createConnection(options);const write=socket.write.bind(socket);
+    socket.write=(data,callback)=>write(data,error=>received.then(()=>callback(error)));
+    return socket;
+  };
+  const result=await executeSessionMode(['switch','multi'],{deadlineAt,send:(request,options)=>f.send(request,{...options,now,connect}),
+    lookup:(target,options)=>lookupModeSwitch(target,{...options,now,getModeTransition:()=>{reads++;return f.store.getModeTransition();}})});
+  expect(result.ok).toBe(false);expect(result.error.code).toBe('deadline_exceeded');expect(result.error.persisted).toBeNull();expect(reads).toBe(0);expect(f.requests).toHaveLength(1);
 });
 test('public CLI dispatch rejects bad target with one JSON line and no instance writes',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'mode-switch-cli-args-'));cleanups.push(()=>fs.rmSync(root,{recursive:true,force:true}));
