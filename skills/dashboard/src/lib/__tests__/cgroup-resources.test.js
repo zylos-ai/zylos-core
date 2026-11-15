@@ -65,6 +65,22 @@ test('cgroup v2: only one sample → cpu_pct null, memory still reported', () =>
   assert.equal(r.mem_pct, 40);
 });
 
+test('cgroup v2: memory-only controller retains container memory gauges', () => {
+  const files = {
+    '/cg/memory.max': '800000000',
+    '/cg/memory.current': '300000000',
+  };
+  const c = createCgroupCollector({ cgroupRoot: '/cg', readFile: fakeReadFile(files), now: () => 0 });
+  const r = c.read();
+  assert.equal(r.cgroup_version, 'v2');
+  assert.equal(r.cpu_limit_cores, null);
+  assert.equal(r.cpu_pct, null);
+  assert.equal(r.mem_total_bytes, 800000000);
+  assert.equal(r.mem_used_bytes, 300000000);
+  assert.equal(r.mem_pct, 37.5);
+  assert.deepEqual(r.errors, ['cpu_limit_unreadable']);
+});
+
 test('cgroup v2: unlimited (cpu.max "max", memory.max "max")', () => {
   const files = {
     '/cg/cpu.max': 'max 100000',

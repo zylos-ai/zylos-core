@@ -149,7 +149,7 @@ test('Core state reads Origin facts only for absence or authentication and reads
 // capture changes; skip unrelated UI edits. Own a private root beneath the
 // runner's short TMPDIR and restore the environment on success or failure.
 // The tmux transport is injected; no process, database or network starts.
-test('readiness returns real Core file evidence that survives a concurrent background refresh', async t => {
+test('readiness returns real Core file evidence that survives a concurrent background refresh', { timeout: 3000 }, async t => {
   const previousRoot = process.env.ZYLOS_DIR;
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR, 'core-readiness-'));
   t.after(() => {
@@ -176,7 +176,8 @@ test('readiness returns real Core file evidence that survives a concurrent backg
     restartFailureCount: 0, lastRecoveryAt: 0, lastDownCheckAt: 0, rateLimitResetTime: '',
   }));
   // Exercise Core's identity-bracketed file reader with only the tmux transport replaced.
-  const sessionReader = createSessionReader({ open: async () => ({ close: async () => {} }), observe: async () => identity });
+  const sessionReader = createSessionReader({ open: async () => ({ close: async () => {} }),
+    observe: async () => identity, observeAll: async () => new Map([['origin', identity]]) });
   let mode = 'single', healthReads = 0, releaseHealth, healthStarted;
   let holdHealth = false;
   const reader = { ...sessionReader, readRuntimeHealth: async runtime => {
