@@ -117,7 +117,8 @@ async function handleEnqueue(args) {
     bypassState: hasFlag(args, '--bypass-state'),
     appendAckSuffix: !hasFlag(args, '--no-ack-suffix'),
     ackDeadlineAt,
-    availableAt
+    availableAt,
+    createdAt: now
   });
 
   if (hasFlag(args, '--json')) {

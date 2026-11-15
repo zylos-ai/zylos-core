@@ -25,8 +25,10 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
   function multiSlots() {
     if (baseline().sessionMode !== 'multi') throw dataError('INVALID_ARGS', 'Pool slots require multi mode');
   }
-  function insert(c, content, { sessionGroup = null, targetBinding = null, priority = 3, requireIdle = false, bypassState = false, ackDeadlineAt = null, availableAt = null, appendAckSuffix = true } = {}) {
-    const current = seconds();
+  // createdAt: the caller's own reading of now (Unix seconds) when it derived ackDeadlineAt or availableAt from it,
+  // so the stored window is exactly the requested number of seconds; otherwise the store reads the clock.
+  function insert(c, content, { sessionGroup = null, targetBinding = null, priority = 3, requireIdle = false, bypassState = false, ackDeadlineAt = null, availableAt = null, appendAckSuffix = true, createdAt = null } = {}) {
+    const current = createdAt ?? seconds();
     const open = get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'");
     if (sessionGroup === null) {
       let config; try { config = baseline(); } catch (cause) { throw dataError('CONTROL_TARGET_REQUIRED', 'A control target is required when configuration cannot be read', { cause }); }
