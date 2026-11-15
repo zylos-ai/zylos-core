@@ -169,6 +169,29 @@ test('warning keeps real stdout and stderr errors before generic PM2 failure', a
   assert.ok(result.warning.endsWith(logRotateInstallCommand()));
 });
 
+test('warning selects the first eight error lines after verbose progress output', async t => {
+  const f = fakePm2(t);
+  f.enablePackageManager();
+  const progress = Array.from({ length: 12 }, (_, index) => `progress step ${index + 1}`);
+  const errors = Array.from({ length: 12 }, (_, index) => `npm error detail ${String(index + 1).padStart(2, '0')}`);
+  fs.writeFileSync(`${f.bin}/npm`, `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify([...progress, ...errors].join('\n') + '\n')});\nprocess.exit(1);\n`);
+  const result = await ensurePm2LogRotate({ env: f.env });
+  assert.equal(result.state, 'failed');
+  assert.deepEqual(result.warning.match(/npm error detail \d{2}/g), errors.slice(0, 8));
+  assert.doesNotMatch(result.warning, /progress step/);
+});
+
+test('the printed install command reports failure through its exit status and stderr', async t => {
+  const f = fakePm2(t, { mode: 'fail' });
+  f.enablePackageManager();
+  const failed = await ensurePm2LogRotate({ env: f.env });
+  assert.equal(failed.state, 'failed');
+  const command = failed.warning.split('Install it later with: ')[1];
+  const shell = spawnSync('/bin/sh', ['-c', command], { env: f.env, encoding: 'utf8', timeout: 20_000 });
+  assert.equal(shell.status, 1, shell.stderr);
+  assert.ok(shell.stderr.includes(failed.warning), shell.stderr);
+});
+
 test('failure details remain bounded when npm prints many error lines', async t => {
   const f = fakePm2(t);
   const result = await ensurePm2LogRotate({ env: f.env, run: async () => ({
