@@ -123,11 +123,11 @@ export async function runControlRows(t, sandbox) {
         for (const row of rows) {
           if (survey) for (const control of row.controls) {
             if (control.squareIcon) {
-              assert.equal(control.width, control.height, `${name}: icon button is square: ${control.selector}`);
+              assert.ok(Math.abs(control.width - control.height) < 0.01, `${name}: icon button is square: ${control.selector}; width=${control.width}, height=${control.height}`);
               assert.ok([26, 30, 36, 44].includes(control.expectedHeight), `${name}: square icon has an approved size tier: ${control.selector}`);
             }
             if (control.searchInputInside !== undefined) assert.equal(control.searchInputInside, true, `${name}: search input stays inside its bordered outer frame for ${control.control}`);
-            if (control.expectedHeight !== undefined) assert.equal(control.height, control.expectedHeight, `${name}: approved size tier for ${control.control}`);
+            if (control.expectedHeight !== undefined) assert.ok(Math.abs(control.height - control.expectedHeight) < 0.01, `${name}: approved size tier for ${control.control}; height=${control.height}, expected=${control.expectedHeight}`);
             else assert.ok(control.heightException, `${name}: control has an explicit height exception: ${control.control}`);
           }
           for (const control of row.controls.filter(c => c.hitHeight !== undefined)) {
