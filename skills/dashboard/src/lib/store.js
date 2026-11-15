@@ -54,7 +54,7 @@ export class Store {
       VALUES (@transcript_path, @parent_path, @runtime, @session_group, @run_id, @session_id, @byte_offset, @now, @now)
     `);
     this._getUsageTranscript = this.db.prepare('SELECT * FROM usage_transcripts WHERE transcript_path = ?');
-    this._activeUsageTranscripts = this.db.prepare("SELECT * FROM usage_transcripts WHERE status = 'active' ORDER BY updated_at, transcript_path LIMIT ?");
+    this._activeUsageTranscripts = this.db.prepare("SELECT * FROM usage_transcripts WHERE status = 'active' ORDER BY transcript_path LIMIT ?");
     this._currentOriginTranscript = this.db.prepare(`SELECT * FROM usage_transcripts
       WHERE status = 'active' AND runtime = ? AND run_id = ?
         AND (session_group = 'origin' OR session_group IS NULL) AND parent_path IS NULL

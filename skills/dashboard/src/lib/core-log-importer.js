@@ -9,6 +9,8 @@ import { createRedactor, UNAVAILABLE } from './redaction/engine.js';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const identity = row => `${row.file_dev}:${row.file_ino}`;
+const sameSnapshot = (a, b) => a && a.dev === b.dev && a.ino === b.ino
+  && a.size === b.size && a.mtimeMs === b.mtimeMs;
 const HOOKS = {
   session_start: ['SessionStart', 'session_start', 'session'],
   prompt: ['UserPromptSubmit', 'user_prompt_submit', 'turn'],
@@ -52,6 +54,7 @@ export class CoreLogImporter {
     this.stopping = false;
     this.running = null;
     this.timer = null;
+    this.snapshots = new Map();
     this.current = store.db.prepare(`SELECT * FROM core_log_cursors
       WHERE stream = ? AND file_dev = ? AND file_ino = ? ORDER BY generation DESC LIMIT 1`);
     this.cursors = store.db.prepare(`SELECT c.* FROM core_log_cursors c WHERE stream = ?
@@ -169,16 +172,29 @@ export class CoreLogImporter {
       for (const name of orderedNames(entries)) {
         let handle;
         try {
-          handle = await fs.open(path.join(dir, name), 'r');
+          const source = path.join(dir, name);
+          const snapshot = await fs.stat(source);
+          const cursor = this.current.get(stream, snapshot.dev, snapshot.ino);
+          const cacheKey = `${stream}:${source}`;
+          const cached = this.snapshots.get(cacheKey);
+          const rotated = name !== path.basename(file);
+          if ((rotated && cursor?.status === 'done') || (!rotated && cursor?.status === 'active'
+            && sameSnapshot(cached?.stat, snapshot) && cached.cursor === JSON.stringify(cursor))) {
+            retained.add(`${snapshot.dev}:${snapshot.ino}`);
+            continue;
+          }
+          this.snapshots.delete(cacheKey);
+          handle = await fs.open(source, 'r');
           const stat = await this.statFile(handle);
           const key = `${stat.dev}:${stat.ino}`;
           if (retained.has(key)) {
             // A rescan can discover a descriptor under its rotated name.
-            opened.find(item => `${item.stat.dev}:${item.stat.ino}` === key).name = name;
+            const previous = opened.find(item => `${item.stat.dev}:${item.stat.ino}` === key);
+            if (previous) previous.name = name;
             await handle.close();
           } else {
             retained.add(key);
-            opened.push({ handle, name, stat });
+            opened.push({ handle, name, stat, snapshot });
           }
         } catch (error) {
           await handle?.close();
@@ -207,13 +223,18 @@ export class CoreLogImporter {
           }
         }
       }).immediate();
-      if (!opened.length && cursors.length) this.diagnostic(stream, 'source_missing');
-      for (const { handle, name } of opened) {
+      if (!retained.size && cursors.length) this.diagnostic(stream, 'source_missing');
+      for (const { handle, name, stat, snapshot } of opened) {
         if (this.stopping) return;
-        await this.importFile(stream, path.join(dir, name), name !== path.basename(file), handle);
+        const source = path.join(dir, name);
+        if (await this.importFile(stream, source, name !== path.basename(file), handle)
+          && name === path.basename(file)) {
+          const cursor = this.current.get(stream, stat.dev, stat.ino);
+          this.snapshots.set(`${stream}:${source}`, { stat: snapshot, cursor: JSON.stringify(cursor) });
+        }
       }
       if (!this.stopping) {
-        if (opened.length || !cursors.length) this.recoverHealth(`core:${stream}:source_missing`);
+        if (retained.size || !cursors.length) this.recoverHealth(`core:${stream}:source_missing`);
         this.recoverHealth(`core:${stream}`);
       }
     } finally {
@@ -423,6 +444,7 @@ export class CoreLogImporter {
         if (batch.offset === offset || batch.offset >= stat.size) break;
         await yieldLoop();
       }
+      return !this.stopping;
     } finally { if (!openedHandle) await handle.close(); }
   }
 }

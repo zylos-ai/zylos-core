@@ -4,6 +4,7 @@ import { claudeProjectSlug } from '../claude-project-path.js';
 import { sameSourceFile } from '../source-file-identity.js';
 
 const DAY = 86400000;
+const INACTIVE_MS = 30 * 60000;
 // Healthy snapshots reuse existing identity/lifecycle signals between refreshes.
 const SNAPSHOT_FALLBACK_MS = 10 * 60000;
 // Persisted lifecycle signals still work when Origin is asleep and costKey is
@@ -33,6 +34,8 @@ export class UsageTranscripts {
     this._snapshotAt = null;
     this._snapshotKey = undefined;
     this._legacySessionId = null;
+    this._legacyStatusStale = false;
+    this._lastChecked = new Map();
   }
 
   discover(at = this.now()) {
@@ -61,12 +64,16 @@ export class UsageTranscripts {
     }
     let mains = this.store.claudeMainTranscripts();
     this._legacySessionId = null;
+    this._legacyStatusStale = false;
     try {
       const zylosDir = this.config.zylosDir || path.join(process.env.HOME, 'zylos');
-      const status = JSON.parse(fs.readFileSync(path.join(zylosDir, 'activity-monitor', 'statusline.json'), 'utf8'));
+      const statusFile = path.join(zylosDir, 'activity-monitor', 'statusline.json');
+      const status = JSON.parse(fs.readFileSync(statusFile, 'utf8'));
+      // A legacy statusline left behind by multi-session startup is not liveness.
       if (status.session_id) {
         this._legacySessionId = status.session_id;
-        if (!mains.some(main => main.session_id === status.session_id)) {
+        this._legacyStatusStale = fs.statSync(statusFile).mtimeMs < at - INACTIVE_MS;
+        if (!this._legacyStatusStale && !mains.some(main => main.session_id === status.session_id)) {
           const file = path.join(this.config.homeDir || process.env.HOME, '.claude', 'projects',
             claudeProjectSlug(zylosDir), `${status.session_id}.jsonl`);
           if (fs.existsSync(file)) insert({ transcript_path: file, runtime: 'claude', session_id: status.session_id });
@@ -99,7 +106,8 @@ export class UsageTranscripts {
       return this.store.currentOriginTranscript('codex', current)?.transcript_path === row.transcript_path;
     }
     return (row.run_id != null && row.run_id === current) ||
-      (row.run_id == null && row.session_group == null && row.session_id === this._legacySessionId);
+      (row.run_id == null && row.session_group == null && !this._legacyStatusStale &&
+        row.session_id === this._legacySessionId);
   }
 
   _currentRun(row, snapshot) {
@@ -114,6 +122,7 @@ export class UsageTranscripts {
   }
 
   async _newRound(at) {
+    if (this._round && at < this._round.at) this._lastChecked.clear();
     const discoveryDue = this._lastDiscovery == null || at - this._lastDiscovery >= 60000 || at < this._lastDiscovery;
     if (discoveryDue) this.discover(at);
     const snapshotKey = this._readSnapshotKey();
@@ -141,7 +150,16 @@ export class UsageTranscripts {
       this._snapshotAt = snapshot ? at : null;
       this._snapshotKey = matchedKey; // An unmatched key forces the next round to refresh.
     }
-    return { at, snapshot, rows: this.store.activeUsageTranscripts(50) };
+    const active = this.store.activeUsageTranscripts(-1);
+    const paths = new Set(active.map(row => row.transcript_path));
+    for (const file of this._lastChecked.keys()) {
+      if (!paths.has(file)) this._lastChecked.delete(file);
+    }
+    active.sort((a, b) => (this._lastChecked.get(a.transcript_path) ?? -Infinity) -
+      (this._lastChecked.get(b.transcript_path) ?? -Infinity) || a.transcript_path.localeCompare(b.transcript_path));
+    const rows = active.slice(0, 50);
+    for (const row of rows) this._lastChecked.set(row.transcript_path, at);
+    return { at, snapshot, rows };
   }
 
   _readSnapshotKey() {
@@ -174,48 +192,61 @@ export class UsageTranscripts {
   async _collect(runtime, callback, at) {
     // Both runtime pollers consume one shared oldest-file selection.
     if (!this._round || this._round.runtimes.has(runtime) || at < this._round.at) {
-      this._round = { at, runtimes: new Set(), data: this._newRound(at) };
+      // A stopped runtime poller must not hold completed progress indefinitely.
+      this._flushRound(this._round);
+      this._round = { at, runtimes: new Set(), completed: new Set(), updates: [], data: this._newRound(at) };
     }
-    this._round.runtimes.add(runtime);
-    const { rows, snapshot } = await this._round.data;
+    const round = this._round;
+    round.runtimes.add(runtime);
+    const { rows, snapshot } = await round.data;
     let written = 0;
-    for (const row of rows) {
-      if (row.runtime !== runtime) continue;
-      const stamp = new Date(at).toISOString();
-      let status = 'active', offset = row.byte_offset, identity = null;
-      try {
-        identity = fs.statSync(row.transcript_path);
-        const result = await callback(row, this.isOriginCurrent(row, snapshot));
-        if (typeof result === 'number') offset = result;
-        else {
-          offset = result?.byteOffset ?? offset;
-          written += result?.written ?? 0;
+    let succeeded = false;
+    try {
+      for (const row of rows) {
+        if (row.runtime !== runtime) continue;
+        const stamp = new Date(at).toISOString();
+        let status = 'active', offset = row.byte_offset, identity = null;
+        try {
+          identity = fs.statSync(row.transcript_path);
+          const result = await callback(row, this.isOriginCurrent(row, snapshot));
+          if (typeof result === 'number') offset = result;
+          else {
+            offset = result?.byteOffset ?? offset;
+            written += result?.written ?? 0;
+          }
+          const stat = fs.statSync(row.transcript_path);
+          const ended = snapshot && (row.runtime === 'claude' && row.run_id == null &&
+            row.session_group == null && this._legacySessionId != null
+            ? this._legacyStatusStale || row.session_id !== this._legacySessionId
+            : row.run_id !== this._currentRun(row, snapshot));
+          if (snapshot && stat.size === offset && stat.mtimeMs < at - INACTIVE_MS && ended) status = 'finished';
+        } catch (error) {
+          if (error.code === 'ENOENT') status = 'missing';
+          else throw error;
         }
-        const stat = fs.statSync(row.transcript_path);
-        const ended = snapshot && (row.runtime === 'claude' && row.run_id == null &&
-          row.session_group == null && this._legacySessionId != null
-          ? row.session_id !== this._legacySessionId : row.run_id !== this._currentRun(row, snapshot));
-        if (snapshot && stat.size === offset && stat.mtimeMs < at - 30 * 60000 && ended) status = 'finished';
-      } catch (error) {
-        if (error.code === 'ENOENT') status = 'missing';
-        else {
-          this.store.db.transaction(() => {
-            if (this.store.getUsageTranscript(row.transcript_path)?.status === 'finished') return;
-            if (identity && !sameSourceFile(row.transcript_path, identity)) return;
-            this.store.updateUsageTranscript(row.transcript_path, { now: stamp });
-          }).immediate();
-          throw error;
-        }
+        if (offset !== row.byte_offset || status !== row.status) round.updates.push({ row, offset, status, identity, stamp });
       }
-      this.store.db.transaction(() => {
-        // A deletion may have finalized this mapping while the collector awaited
-        // its callback. Never downgrade that EOF proof or write an old cursor
-        // onto a replacement file at the same name.
-        if (this.store.getUsageTranscript(row.transcript_path)?.status === 'finished') return;
-        if (identity && !sameSourceFile(row.transcript_path, identity)) return;
-        this.store.updateUsageTranscript(row.transcript_path, { byte_offset: offset, status, now: stamp });
-      }).immediate();
+      succeeded = true;
+    } finally {
+      round.completed.add(runtime);
+      if (!succeeded || rows.every(row => round.completed.has(row.runtime))) this._flushRound(round);
     }
     return written;
+  }
+
+  _flushRound(round) {
+    if (!round?.updates.length) return;
+    this.store.db.transaction(() => {
+      for (const { row, offset, status, identity, stamp } of round.updates) {
+        // Deletion may finalize a mapping while its callback awaits. Preserve
+        // that EOF proof and never put an old cursor onto a replacement file.
+        const current = this.store.getUsageTranscript(row.transcript_path);
+        if (!current || current.status === 'finished' || current.byte_offset !== row.byte_offset) continue;
+        if (identity && !sameSourceFile(row.transcript_path, identity)) continue;
+        if (current.byte_offset === offset && current.status === status) continue;
+        this.store.updateUsageTranscript(row.transcript_path, { byte_offset: offset, status, now: stamp });
+      }
+    }).immediate();
+    round.updates.length = 0;
   }
 }

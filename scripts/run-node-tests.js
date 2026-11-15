@@ -8,6 +8,7 @@ import { createTestEnvironment } from './test-environment.js';
 const ROOT = process.cwd();
 const ROOT_NODE_TESTS = [
   'test/account-usage-cache.integration.test.js',
+  'test/dashboard-transcript-idle.integration.test.js',
   'test/account-quota-browser.test.js',
   'test/dashboard-initial-timezone.integration.test.js',
   'test/skill-command-arguments.test.js',
