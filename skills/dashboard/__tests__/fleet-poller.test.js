@@ -1371,13 +1371,14 @@ test('Fleet does not read raw Origin activity or subagent observations', () => {
     assert.equal(record.activity, null);
     assert.equal(record.has_subagent, false);
     assert.equal(record.subagent_count, 0);
-    assert.deepEqual(record.activity_feed, state === 'BUSY' ? [{ kind: 'thinking', label: null, started_at: null }] : []);
+    assert.deepEqual(record.activity_feed, []);
   }
 });
 
-test('stateToFleetRecord activity_feed shows thinking when busy without tools, empty when idle', () => {
+test('stateToFleetRecord does not infer activity from an aggregate busy state', () => {
   const busy = stateToFleetRecord({ name: 'a' }, { state: 'BUSY', running_tools: [] }, { self: false, nowMs: 0 });
-  assert.deepEqual(busy.activity_feed, [{ kind: 'thinking', label: null, started_at: null }]);
+  assert.equal(busy.state, 'BUSY');
+  assert.deepEqual(busy.activity_feed, []);
 
   const idle = stateToFleetRecord({ name: 'a' }, { state: 'IDLE' }, { self: false, nowMs: 0 });
   assert.deepEqual(idle.activity_feed, []);

@@ -120,21 +120,22 @@ test('remote chat permission preserves workbench groups and search for all API s
       assert.equal(direct.status, 200);
       const value = JSON.parse(direct.text);
       for (const key of ['dashboard:local-chat', 'telegram:external']) {
-        const row = value.rows.find(row => row.sessionGroup === key);
+        const row = value.rows.find(row => row.id === key);
         assert.ok(row.state); assert.ok(Object.hasOwn(row, 'duration'));
-        assert.match(row.preview.text, /Visible summary/);
-        assert.match(row.preview.text, /REDACTED/);
-        assert.ok(row.preview.text.length > 0 && row.preview.text.length <= 80);
-        assert.doesNotMatch(row.preview.text, /sk-123456/);
+        assert.match(row.currentAction.message, /Visible summary/);
+        assert.match(row.currentAction.message, /REDACTED/);
+        assert.ok(row.currentAction.message.length > 0 && row.currentAction.message.length <= 80);
+        assert.doesNotMatch(row.currentAction.message, /sk-123456/);
+        for (const field of ['preview', 'tools', 'raw', 'live']) assert.equal(Object.hasOwn(row, field), false);
       }
       const search = await http.request({ method: 'GET', path: '/api/groups/search?q=local-chat' }, { identity, fleet });
       assert.equal(search.status, 200);
-      assert.ok(JSON.parse(search.text).rows.some(row => row.sessionGroup === 'dashboard:local-chat'));
-      assert.deepEqual(JSON.parse(search.text).rows.find(row => row.sessionGroup === 'dashboard:local-chat').preview,
-        value.rows.find(row => row.sessionGroup === 'dashboard:local-chat').preview);
+      assert.ok(JSON.parse(search.text).rows.some(row => row.id === 'dashboard:local-chat'));
+      assert.deepEqual(JSON.parse(search.text).rows.find(row => row.id === 'dashboard:local-chat').currentAction,
+        value.rows.find(row => row.id === 'dashboard:local-chat').currentAction);
       const named = await http.request({ method: 'GET', path: '/api/groups/search?q=Private%20project' }, { identity, fleet });
       assert.equal(named.status, 200);
-      assert.ok(JSON.parse(named.text).rows.some(row => row.sessionGroup === 'dashboard:local-chat'));
+      assert.ok(JSON.parse(named.text).rows.some(row => row.id === 'dashboard:local-chat'));
       const activity = await http.request({ method: 'GET', path: '/api/groups/activity?range=60m' }, { identity, fleet });
       assert.equal(activity.status, 200);
       assert.deepEqual(JSON.parse(activity.text), await f.service.activity('60m'));
@@ -250,7 +251,7 @@ test('full and summary responses preserve metadata-only C4 and redact messages a
   assert.equal(JSON.stringify(value).includes('sk-123456789012345678901234'), false);
   assert.match(row.preview.text, /REDACTED/); assert.match(row.tools[0].detail, /REDACTED/);
   const summary = await createGroupsApi({ workbench: f.service }).counts();
-  assert.deepEqual(Object.keys(summary).sort(), ['listKnown', 'mode', 'offline', 'pool', 'readAt', 'running']);
+  assert.deepEqual(Object.keys(summary).sort(), ['listKnown', 'offline', 'pool', 'readAt', 'running']);
   assert.equal(summary.pool.used, null); assert.equal(summary.pool.capacity, null);
 });
 
@@ -270,7 +271,8 @@ test('service totals and channel attention share exactly one PM2 sample per snap
   f.service.channelDownCounter.update(sample);
   const snapshot = await f.service.getSnapshot();
   assert.equal(reads, 1);
-  assert.deepEqual(snapshot.instance.services, { online: 1, total: 3 });
+  assert.deepEqual(snapshot.instance.services, { online: 1, total: 3,
+    channels: [{ channel: 'telegram', service: 'zylos-telegram', status: 'stopped', down: true }] });
   assert.equal(snapshot.attention.problems.find(item => item.kind === 'channel_down' && item.service === 'zylos-telegram').pm2Status, 'stopped');
   const summary = await createGroupsApi({ workbench: f.service }).counts();
   assert.equal(reads, 1, 'summary uses the existing snapshot cache');
@@ -280,7 +282,8 @@ test('service totals and channel attention share exactly one PM2 sample per snap
   f.advance(2100);
   const next = await f.service.getSnapshot();
   assert.equal(reads, 2);
-  assert.deepEqual(next.instance.services, { online: 2, total: 3 });
+  assert.deepEqual(next.instance.services, { online: 2, total: 3,
+    channels: [{ channel: 'telegram', service: 'zylos-telegram', status: 'online', down: true }] });
   assert.equal(next.attention.problems.find(item => item.kind === 'channel_down' && item.service === 'zylos-telegram').pm2Status, 'online');
 });
 
@@ -298,7 +301,8 @@ test('unreadable and malformed PM2 samples keep service counts unknown', async t
     assert.equal(snapshot.attention.problems.find(item => item.kind === 'channel_down').pm2Status, null);
   }
   const empty = fixture(t, { readPm2: () => ({ processes: [] }) });
-  assert.deepEqual((await empty.service.getSnapshot()).instance.services, { online: 0, total: 0 });
+  assert.deepEqual((await empty.service.getSnapshot()).instance.services, { online: 0, total: 0,
+    channels: [{ channel: 'telegram', service: 'zylos-telegram', status: null, down: false }] });
 });
 
 // Integration: the snapshot forwards the injected host sample reader. Run for overview snapshot or system sample

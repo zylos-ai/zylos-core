@@ -11,7 +11,7 @@ import { scheduleEnv } from './fixtures/schedule-env.js';
 mock.method(VersionChecker.prototype, 'start', () => {});
 
 // HTTP integration. Covers: the real server entry hands its own system collector to the overview snapshot, so
-// GET /api/instance carries the collector's latest CPU, memory and disk sample under instance.system.
+// GET /api/instance carries the collector's latest CPU, memory and disk sample under resources.
 // The snapshot's forwarding of an injected reader is covered by wb-groups-api; this case proves the server wiring.
 // The periodic collector loop only starts in the listening entry point, so the test asks the server's own
 // collector instance (the one /api/instance reads) for one real sample instead of waiting for that loop.
@@ -20,7 +20,7 @@ mock.method(VersionChecker.prototype, 'start', () => {});
 // points the process's ZYLOS_DIR at the temporary installation from scheduleEnv (asserted to stay under its root),
 // with a private dashboard.db inside it; no PM2 or tmux command runs. The server, timers and stores are closed,
 // ZYLOS_DIR restored and the root removed in teardown.
-test('the overview snapshot carries the server system collector sample', { timeout: 20_000 }, async t => {
+test('instance resources carry the server system collector sample', { timeout: 20_000 }, async t => {
   const install = scheduleEnv(t, { link: false });
   const { zylosDir } = install;
   assert.ok(zylosDir.startsWith(install.root + path.sep));
@@ -95,8 +95,9 @@ test('the overview snapshot carries the server system collector sample', { timeo
 
   clock += 2100;
   const snapshot = await get('/api/instance');
-  assert.ok(snapshot.system, 'the snapshot carries a host sample');
-  assert.equal(typeof snapshot.system.sampledAt, 'number');
-  assert.equal(snapshot.system.sampledAt, sample.collectedAt, 'the sample is the server collector\'s latest');
-  assert.equal(snapshot.system.memTotalBytes, sample.mem_total_bytes ?? null);
+  assert.ok(snapshot.resources, 'the instance carries a resource sample');
+  assert.equal(typeof snapshot.resources.sampledAt, 'number');
+  assert.equal(snapshot.resources.sampledAt, sample.collectedAt, 'the sample is the server collector\'s latest');
+  assert.equal(snapshot.resources.mem_total_bytes, sample.mem_total_bytes ?? null);
+  assert.equal(Object.hasOwn(snapshot, 'system'), false, 'resources are the sole public system sample');
 });

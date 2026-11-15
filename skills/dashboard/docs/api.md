@@ -435,7 +435,7 @@ Example: `GET /api/groups/origin/restarts/00000000-0000-4000-8000-000000000001`.
 
 ### GET /api/groups/:id/deletion-preview
 
-**Access:** Local owner. **Parameters:** encoded ID; no body.
+**Access:** Local owner. Fleet refuses group and draft deletion previews and deletes with 403 `remote_deletion_forbidden` before obtaining upstream credentials or making a request. **Parameters:** encoded ID; no body.
 
 Returns Core's deletion preview: `ok:boolean`, `sessionGroup:string`, `draft:boolean`, `cutoffId:number` (message boundary), `operationId:string`, `messages:number`, `attachments:number`, `files:number`, and target/boundary metadata. Preserve the operation ID and cutoff for the confirmed delete.
 
@@ -530,7 +530,7 @@ Example: `GET /api/usage/pricing`.
 | `chat_*` | Existing chat subscription event payloads | Conversation data/activity invalidation |
 | `auth_expired` | Existing expiry payload | Authorization expired; reconnect after authentication |
 
-Fleet shows instance and group summaries only. It does not fetch Origin group detail, read Origin session metadata, or expose `model`, `effort`, `context_pct` or `new_session_threshold` on Fleet records. These observations remain in group detail and runtime settings. Its independent no-response count comes from `counts.running.flags.noResponse`; problem durations use `flags.noResponse.since`. Error precedence still keeps the summary categories mutually exclusive, so its no-response category can be smaller than the independent no-response count.
+Fleet shows instance and group summaries only. It does not fetch Origin group detail, read Origin session metadata, or expose `model`, `effort`, `context_pct` or `new_session_threshold` on Fleet records. These observations remain in group detail and runtime settings. Aggregate `BUSY` retains the Working label; it does not imply a thinking or tool-activity observation, so its `activity_feed` is empty. Its independent no-response count comes from `counts.running.flags.noResponse`; problem durations use `flags.noResponse.since`. Error precedence still keeps the summary categories mutually exclusive, so its no-response category can be smaller than the independent no-response count.
 
 If the group catalog cannot be read, ordinary stream and Fleet retain known rows and publish counts with `listKnown:false`; they do not drop unrelated updates. Direct counts, offline and search reads retain their explicit catalog errors.
 

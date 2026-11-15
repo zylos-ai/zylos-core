@@ -142,15 +142,17 @@ test('unknown child outcomes are never turned into successful deletion', async (
 });
 
 test('Fleet never relays group or draft deletion preview and writes', async () => {
-  let calls = 0;
-  const proxy = new FleetProxy({ config: { fleet: { agents: [] } }, poller: { getSessionToken: async () => 'private' }, fetch: async () => { calls++; throw new Error('must not relay'); } });
+  let calls = 0, tokenCalls = 0;
+  const proxy = new FleetProxy({ config: { fleet: { agents: [] } }, poller: { getSessionToken: async () => { tokenCalls++; return 'private'; } }, fetch: async () => { calls++; throw new Error('must not relay'); } });
   for (const suffix of ['/api/groups/dashboard%3Ax/deletion-preview', '/api/groups/dashboard%3Ax', '/api/chat/drafts/x/deletion', '/api/chat/drafts/x']) {
     const req = { method: (suffix.endsWith('/deletion-preview') || suffix.endsWith('/deletion')) ? 'GET' : 'DELETE', headers: owner, _authContext: { kind: 'cookie', scope: 'admin' } };
-    const res = { writeHead(status) { this.status = status; }, end() {} };
+    const res = { writeHead(status) { this.status = status; }, end(body) { this.body = JSON.parse(body); } };
     await proxy.proxyApi(req, res, { name: 'remote' }, suffix, '');
     assert.equal(res.status, 403);
+    assert.equal(res.body.error, 'remote_deletion_forbidden');
   }
   assert.equal(calls, 0);
+  assert.equal(tokenCalls, 0);
 });
 
 test('conversation list exposes deletion capability only to the local password owner', async t => {

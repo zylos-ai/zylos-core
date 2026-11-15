@@ -298,7 +298,7 @@ export function stateToFleetRecord(agentConfig = {}, statePayload = {}, opts = {
     session_mode: statePayload?.session_mode,
     group_summary: statePayload?.group_summary,
     activity: null,
-    activity_feed: liveState === 'BUSY' ? [{ kind: 'thinking', label: null, started_at: null }] : [],
+    activity_feed: [],
     rate_limit_pct: statePayload?.rate_limit_pct ?? null,
     rate_limit_7d_pct: statePayload?.rate_limit_7d_pct ?? null,
     rate_limit_7d_recorded_at: statePayload?.rate_limit_7d_recorded_at ?? null,

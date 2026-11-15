@@ -358,7 +358,7 @@ export class FleetProxy {
   }
 
   async proxyApi(req, res, agent, suffix, search) {
-    if (isGroupDeletionRoute(suffix) && (req.method === 'DELETE' || suffix.endsWith('/deletion-preview'))) {
+    if (isGroupDeletionRoute(suffix) && (req.method === 'DELETE' || suffix.endsWith('/deletion-preview') || suffix.endsWith('/deletion'))) {
       sendJson(res, 403, { error: 'remote_deletion_forbidden' }); return;
     }
     if (req.method === 'PUT' && suffix === '/api/settings/timezone' ||
