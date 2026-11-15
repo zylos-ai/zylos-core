@@ -24,11 +24,28 @@ test('Sync parents consume Codex worker outcomes before ending their turn', () =
   assert.match(parent, /before ending the parent turn.*native agent wait\/result tools.*this worker's terminal result/);
   assert.match(parent, /A timeout or an empty wait is not a terminal result; wait again/);
   assert.match(parent, /`Completed` describes worker execution, not successful Sync/);
-  assert.match(parent, /Report a failed Sync to the owner once through the existing channel route/);
+  assert.match(parent, /Report a failed Sync to the owner once, before finishing the parent turn in Codex/);
   assert.match(parent, /Include partial commits and cleanup\/release warnings/);
   assert.match(parent, /If the result cannot be retrieved, report that failure/);
   assert.match(parent, /Successful Sync and the documented `SYNC_BUSY` no-op need no extra owner message/);
   assert.match(parent, /Do not restart Sync/);
+});
+
+test('Sync parents send owner reports only to addresses their thread handles', () => {
+  const parent = normalize(between(skill, '## Parent result handling', '## Writing rules'));
+  assert.match(parent, /Send directly only to addresses your own thread handles; to reach any other owner address, send an internal message to the owning thread asking it to deliver the report \(One thread per address\)/);
+  assert.doesNotMatch(parent, /existing channel route/);
+});
+
+test('Codex Sync parents stop waiting for a worker that is gone', () => {
+  const parent = normalize(between(skill, '## Parent result handling', '## Writing rules'));
+  assert.match(parent, /wait again while keeping the input channel responsive\. If the worker no longer exists, has been closed, or its result can no longer be retrieved, stop waiting and treat it as a result that cannot be retrieved\./);
+  assert.match(parent, /If the result cannot be retrieved, report that failure without claiming Sync succeeded/);
+});
+
+test('Sync parents judge success or failure only from the worker final result', () => {
+  const parent = normalize(between(skill, '## Parent result handling', '## Writing rules'));
+  assert.match(parent, /Only the worker's final result decides whether Sync succeeded or failed\. Messages the worker sends while it is still running are not a Sync outcome; do not report success or failure from them\./);
 });
 
 test('state guidance assigns committed segment IDs to the commit script', () => {
