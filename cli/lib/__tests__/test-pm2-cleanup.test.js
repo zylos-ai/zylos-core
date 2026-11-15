@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { cleanupTestPm2, listPm2Daemons } from '../../../scripts/test-pm2-cleanup.js';
 
 const hasPm2 = (process.env.PATH || '').split(path.delimiter).some(directory => {
@@ -90,6 +91,68 @@ test('runner cleans an owned daemon after its PM2 home was deleted', { skip: !ha
     assert(!listPm2Daemons().some(daemon => daemon.home === home));
   } finally {
     cleanupTestPm2(root);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('daemon enumeration resolves truncated titles from same-user Linux environments', () => {
+  const exec = () => '100 123 PM2 v7.0.1: God Daemon (/tmp/cut\n101 456 PM2 v7.0.1: God Daemon (/other';
+  const home = '/tmp/complete/home/.pm2';
+  const readFile = (file, encoding) => {
+    assert.equal(file, '/proc/123/environ');
+    assert.equal(encoding, 'utf8');
+    return `OTHER=value\0PM2_HOME=${home}\0`;
+  };
+  assert.deepEqual(listPm2Daemons({ exec, readFile, platform: 'linux', uid: 100 }), [{ pid: 123, home }]);
+});
+
+test('daemon enumeration rejects unverifiable candidates and tolerates exited processes', () => {
+  const exec = () => '100 123 PM2 v7.0.1: God Daemon (/tmp/cut';
+  const options = { exec, platform: 'linux', uid: 100 };
+  for (const code of ['EACCES', 'EPERM']) {
+    assert.throws(() => cleanupTestPm2('/tmp/test-root', {
+      list: () => listPm2Daemons({ ...options, readFile: () => { throw Object.assign(new Error(), { code }); } }),
+      stop: () => assert.fail('unverified daemon was stopped'),
+    }), /Cannot verify PM2 daemon 123: environment unreadable/);
+  }
+  for (const environment of ['', 'PM2_HOME=relative\0']) {
+    assert.throws(() => listPm2Daemons({ ...options, readFile: () => environment }), /Cannot verify PM2 daemon/);
+  }
+  for (const code of ['ENOENT', 'ESRCH']) {
+    assert.deepEqual(listPm2Daemons({ ...options, readFile: () => { throw Object.assign(new Error(), { code }); } }), []);
+  }
+  assert.throws(() => listPm2Daemons({ ...options, platform: 'darwin' }), /unavailable or truncated/);
+  assert.deepEqual(listPm2Daemons({ ...options, platform: 'darwin',
+    exec: () => '100 123 PM2 v7.0.1: God Daemon (/tmp/full)',
+  }), [{ pid: 123, home: '/tmp/full' }]);
+});
+
+// Integration boundary: only a fixture process and a home beneath the isolated
+// runner TMPDIR. finally terminates this child and removes its private root.
+test('runner finds and cleans a live daemon with a truncated title and deleted home', {
+  skip: process.platform !== 'linux',
+}, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pm2-cut-'));
+  const home = path.join(root, 'home/.pm2');
+  fs.mkdirSync(home, { recursive: true });
+  const child = spawn(process.execPath, [new URL('./fixtures/truncated-pm2-daemon.js', import.meta.url).pathname], {
+    env: { ...process.env, PM2_HOME: home }, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const exited = once(child, 'exit');
+  try {
+    await once(child.stdout, 'data');
+    const title = execFileSync('ps', ['-p', String(child.pid), '-o', 'args='], { encoding: 'utf8' }).trim();
+    assert.match(title, /^PM2 .*: God Daemon \(/);
+    assert(!title.endsWith(')'), title);
+    assert(listPm2Daemons().some(daemon => daemon.pid === child.pid && daemon.home === home));
+    fs.rmSync(home, { recursive: true });
+    assert.throws(() => cleanupTestPm2(root, { stop: () => {}, attempts: 0 }), /Test runner leaked PM2 daemons/);
+    cleanupTestPm2(root);
+    await exited;
+    assert(!listPm2Daemons().some(daemon => daemon.pid === child.pid));
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    await exited;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
