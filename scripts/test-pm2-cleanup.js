@@ -7,30 +7,40 @@ export function listPm2Daemons({
   exec = execFileSync, readFile = fs.readFileSync, platform = process.platform,
   uid = process.getuid(),
 } = {}) {
-  const output = exec('ps', ['-eo', 'uid=,pid=,args='], {
+  const snapshot = () => exec('ps', ['-eo', 'uid=,pid=,stat=,args='], {
     encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
+  }).split('\n').flatMap(line => {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+)\s+(PM2 .*: God Daemon(?: \(.*)?)\s*$/);
+    if (!match || Number(match[1]) !== uid || /^[ZX]/.test(match[3])) return [];
+    return [{ pid: Number(match[2]), title: match[4] }];
   });
-  return output.split('\n').flatMap(line => {
-    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(PM2 .*: God Daemon(?: \(.*)?)\s*$/);
-    if (!match || Number(match[1]) !== uid) return [];
-    const pid = Number(match[2]);
-    let home;
-    if (platform === 'linux') {
-      // argv-backed titles can truncate PM2_HOME. The initial environment
-      // retains the full path even after a test deletes the home directory.
-      let environment;
+  return snapshot().flatMap(({ pid, title }) => {
+    if (platform !== 'linux') {
+      const home = title.match(/^PM2 .+: God Daemon \((.+)\)\s*$/)?.[1];
+      assert(home && path.isAbsolute(home), `Cannot verify PM2 daemon ${pid}: PM2_HOME unavailable or truncated`);
+      return [{ pid, home }];
+    }
+    // argv-backed titles can truncate PM2_HOME. The initial environment
+    // retains the full path even after a test deletes the home directory.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let failure;
       try {
-        environment = readFile(`/proc/${pid}/environ`, 'utf8');
+        const environment = readFile(`/proc/${pid}/environ`, 'utf8');
+        const home = environment.split('\0').find(entry => entry.startsWith('PM2_HOME='))?.slice(9);
+        assert(home && path.isAbsolute(home), `Cannot verify PM2 daemon ${pid}: PM2_HOME unavailable or truncated`);
+        return [{ pid, home }];
       } catch (error) {
         if (error.code === 'ENOENT' || error.code === 'ESRCH') return [];
-        throw new Error(`Cannot verify PM2 daemon ${pid}: environment unreadable`, { cause: error });
+        failure = error;
       }
-      home = environment.split('\0').find(entry => entry.startsWith('PM2_HOME='))?.slice(9);
-    } else {
-      home = match[3].match(/^PM2 .+: God Daemon \((.+)\)\s*$/)?.[1];
+      // Exit-to-zombie can produce EACCES, just like a live unreadable process.
+      // Recheck after EACH failed read, including the last, before failing closed.
+      if (!snapshot().some(candidate => candidate.pid === pid)) return [];
+      if (attempt === 1) {
+        if (failure.code === 'ERR_ASSERTION') throw failure;
+        throw new Error(`Cannot verify PM2 daemon ${pid}: environment unreadable (${failure.code ?? 'unknown'})`, { cause: failure });
+      }
     }
-    assert(home && path.isAbsolute(home), `Cannot verify PM2 daemon ${pid}: PM2_HOME unavailable or truncated`);
-    return [{ pid, home }];
   });
 }
 
