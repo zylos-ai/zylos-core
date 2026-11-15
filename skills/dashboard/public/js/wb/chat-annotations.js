@@ -1,3 +1,4 @@
+import { countLabel } from '../count-label.js';
 import { element, icon } from './plain-text.js?v=106';
 import { chars, composeContent, storedContent, contentBytes, shortStamp, MAX_ANNOTATIONS, MAX_CHARS, MAX_CONTENT_BYTES } from './chat-compose-text.js?v=4';
 
@@ -399,8 +400,8 @@ export function createAnnotationUi({ document, t, root, composer, composeBox, na
     const total = s.tab === 'mine' ? s.annotations.length : 0;
     count.hidden = total === 0;
     countText.textContent = String(total);
-    count.setAttribute('aria-label', t('chat.annotation.count', { count: String(total) }));
-    count.title = t('chat.annotation.countTitle', { count: String(total) });
+    count.setAttribute('aria-label', countLabel(t, 'chat.annotation.count', total));
+    count.title = countLabel(t, 'chat.annotation.countTitle', total);
     const writable = editable(s);
     comment.disabled = editorSave.disabled = !writable;
     if (!writable) { mark.hidden = true; if (!editor.el.hidden) closeEditor(); }

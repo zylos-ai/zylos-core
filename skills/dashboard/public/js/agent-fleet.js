@@ -1,4 +1,5 @@
 import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, quotaRecordedTime } from './wb/instance-strip.js?v=201';
+import { counted } from './count-label.js';
 
 import { fallbackName, platformOf } from './wb/plain-text.js?v=106';
 
@@ -204,8 +205,6 @@ export function defaultAgentFleetLabels() {
 }
 
 const fill = (text, values = {}) => String(text ?? '').replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '');
-// A count label reads in the singular for one (`<key>One`), when the language has that form; otherwise the plural.
-const counted = (labels, key, count) => count === 1 && labels[key + 'One'] ? labels[key + 'One'] : labels[key];
 // A sentence that already ends with a full stop is followed directly by the next one, not by a separator.
 export function afterSentence(text, next) {
   if (!next) return text;

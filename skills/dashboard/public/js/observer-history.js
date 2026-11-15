@@ -1,5 +1,6 @@
 import { zonedDay, zonedInputValue } from './wb/instance-zone.js?v=100';
 import cjkFriendly from './markdown-it-cjk-friendly/index.js?v=1';
+import { countLabel } from './count-label.js';
 // Read-only history UI. The controller never owns the terminal or its lease.
 export function escapeHistory(value) {
   return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -193,7 +194,7 @@ export class ObserverHistory {
     if (details) node.querySelector('details').ontoggle = () => this.refreshOverflow();
     if (entry.redaction?.count) {
       const badge = this.doc.createElement('div'); badge.className = 'history-redaction';
-      badge.textContent = this.label('redacted', { count: entry.redaction.count }) + ' · ' + (entry.redaction.kinds || []).join(', '); container.append(badge);
+      badge.textContent = countLabel(this.t, 'observer.history.redacted', entry.redaction.count) + ' · ' + (entry.redaction.kinds || []).join(', '); container.append(badge);
     }
     for (const [name, field] of Object.entries(entry.fields || {})) {
       const wrapper = this.doc.createElement('section'); wrapper.className = 'history-field';

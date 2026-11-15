@@ -1,3 +1,4 @@
+import { countLabel } from '../count-label.js';
 import { workingParts, workingText } from './working-display.js?v=5';
 import { createUploadTray } from './chat-upload-tray.js?v=2';
 import { createChatAttachment } from './chat-attachments.js?v=155';
@@ -721,7 +722,7 @@ export function mountConversationPage({
   }
   function updateUnread() {
     latest.hidden = !unread;
-    const title = t('chat.page.newMessages').replace('{count}', String(unread));
+    const title = countLabel(t, 'chat.page.newMessages', unread);
     text(latest.label, title);
     latest.setAttribute('aria-label', title);
   }
@@ -1541,7 +1542,7 @@ export function mountConversationPage({
     text(listNotice, t(s.loading ? 'chat.loading' : s.tab === 'mine' ? 'chat.page.emptyMine' : 'chat.page.emptyExternal'));
     const completionText = [];
     if (deletionResult?.retainedMessages > 0 && deletionResult.groupDataRetained === true) {
-      completionText.push(t('chat.delete.retained', { count: deletionResult.retainedMessages }));
+      completionText.push(countLabel(t, 'chat.delete.retained', deletionResult.retainedMessages));
     }
     if (deletionResult?.countsEstimated === true) completionText.push(t('chat.delete.estimated'));
     deletionNotice.hidden = !local() || !completionText.length || deletionResult.identity !== (typeof identity === 'function' ? identity() : identity);
@@ -1681,7 +1682,7 @@ export function mountConversationPage({
       resource.mount();
     }
     tray.hidden = trayLabel.hidden = !upload.items.length;
-    text(trayLabel, t('chat.upload.trayCount').replace('{count}', String(upload.items.length)));
+    text(trayLabel, countLabel(t, 'chat.upload.trayCount', upload.items.length));
     const uploadError = upload.error || (s.error === 'chat_attachment_unavailable' ? s.error : null);
     uploadNotice.hidden = !uploadError;
     text(uploadNotice, uploadError ? t('chat.upload.' + uploadError).replace('{count}', String(upload.config?.maxAttachments || 20)) : '');

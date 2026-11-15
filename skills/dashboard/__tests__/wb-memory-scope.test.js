@@ -457,7 +457,12 @@ test('group navigation after an instance change keeps the requested group select
 test('workbench language packages contain the same translation keys', async () => {
   const en = JSON.parse(await readFile(new URL('../public/i18n/wb.en.json', import.meta.url), 'utf8'));
   const zh = JSON.parse(await readFile(new URL('../public/i18n/wb.zh.json', import.meta.url), 'utf8'));
-  assert.deepEqual(Object.keys(en).sort(), Object.keys(zh).sort());
+  const englishFragments = new Set(['chat.delete.messages', 'chat.delete.attachments']);
+  for (const key of Object.keys(en)) {
+    if (key.endsWith('One')) assert.ok(Object.hasOwn(en, key.slice(0, -3)), key);
+    assert.ok(Object.hasOwn(zh, key) || englishFragments.has(key) || key.endsWith('One') && (Object.hasOwn(zh, key.slice(0, -3)) || englishFragments.has(key.slice(0, -3))), key);
+  }
+  for (const key of Object.keys(zh)) assert.ok(Object.hasOwn(en, key), key);
 });
 
 

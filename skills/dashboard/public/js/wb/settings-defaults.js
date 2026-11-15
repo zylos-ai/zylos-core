@@ -1,3 +1,4 @@
+import { countLabel } from '../count-label.js';
 import { effortOptionState, modelOptionState } from '../runtime-ui.js?v=98';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=106';
 import { annotateStatus } from './board.js?v=155';
@@ -26,7 +27,7 @@ export function runtimeHealth(snapshot, runtime) {
 export function runtimeConfirmation(snapshot, t = key => key) {
   const rows = defaultGroups(snapshot).followers;
   if (rows == null) return t('wb.settings.cannotList');
-  return [t('wb.settings.interruptFollowers', { count: rows.length }), ...rows.slice(0, 5).map(row =>
+  return [countLabel(t, 'wb.settings.interruptFollowers', rows.length), ...rows.slice(0, 5).map(row =>
     row.name?.displayName ?? fallbackName(row, t)), ...(rows.length > 5 ? [t('wb.settings.moreGroups', { count: rows.length })] : [])].join('\n');
 }
 export function createOverrideSearch({ read, onChange, setTimer = setTimeout, clearTimer = clearTimeout }) {
@@ -125,7 +126,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   // Counts stay visible; names fold into a searchable list so large instances are not spelled out.
   function groupList(rows, meta, { searchable = rows?.length > 8 } = {}) {
     const details = element(document, 'details', undefined, 'wb-glist');
-    const summary = element(document, 'summary'); summary.append(icon(document, 'chev', 'xs'), element(document, 'span', t('wb.settings.showGroups', { count: rows.length })));
+    const summary = element(document, 'summary'); summary.append(icon(document, 'chev', 'xs'), element(document, 'span', countLabel(t, 'wb.settings.showGroups', rows.length)));
     const box = element(document, 'div', undefined, 'wb-gl-box'), list = element(document, 'div', undefined, 'wb-gl-rows');
     const redraw = query => {
       const term = query.toLocaleLowerCase();
@@ -179,12 +180,12 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   // A count of zero tells nothing, so its line is left out.
   const followerCol = element(document, 'div');
   if (groups.followers == null) followerCol.append(element(document, 'div', t('wb.settings.followers', { count: t('wb.unknown') }), 'wb-gsum'), failed());
-  else if (groups.followers.length) followerCol.append(element(document, 'div', t('wb.settings.followers', { count: groups.followers.length }), 'wb-gsum'),
+  else if (groups.followers.length) followerCol.append(element(document, 'div', countLabel(t, 'wb.settings.followers', groups.followers.length), 'wb-gsum'),
     groupList(groups.followers, stateText, { searchable: true }));
   followerCol.hidden = groups.followers != null && !groups.followers.length;
   const overrideCol = element(document, 'div');
   overrideCol.hidden = groups.total === 0;
-  overrideCol.append(element(document, 'div', t('wb.settings.overrides', { count: groups.total ?? t('wb.unknown') }), 'wb-gsum'));
+  overrideCol.append(element(document, 'div', countLabel(t, 'wb.settings.overrides', groups.total ?? t('wb.unknown')), 'wb-gsum'));
   if (groups.total == null) overrideCol.append(failed());
   const overrides = element(document, 'div', undefined, 'wb-gl-box');
   const flat = element(document, 'div', undefined, 'wb-gl-rows'); flat.append(...groups.flat.map(row => groupRow(row, row.target?.runtime ? runtimeName(row.target.runtime) : null)));
@@ -292,7 +293,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
     const thresholdBox = element(document, 'span', undefined, 'wb-set-inline'); thresholdBox.append(threshold, element(document, 'span', '%'));
     fields.append(field(t('actions.model'), wrapSelect(document, model), custom), field(t('actions.effort'), wrapSelect(document, effort)), field(t('actions.threshold'), thresholdBox), dirty);
     const users = modelFollowers(snapshot, runtime);
-    const count = element(document, 'small', users == null ? t('wb.unknown') : users.length ? t('wb.settings.modelFollowers', { count: users.length }) : t('wb.settings.noFollowers'), 'wb-pref-note');
+    const count = element(document, 'small', users == null ? t('wb.unknown') : users.length ? countLabel(t, 'wb.settings.modelFollowers', users.length) : t('wb.settings.noFollowers'), 'wb-pref-note');
     cell.append(fields, count);
     if (users?.length) cell.append(groupList(users, stateText));
     rows[runtime] = { model, custom, effort, threshold, thresholdEdits, dirty, meta, renderEffort, renderThreshold,

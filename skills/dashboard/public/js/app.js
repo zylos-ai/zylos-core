@@ -31,6 +31,7 @@ import { formatActionResult } from './action-result.js';
 import { originSessionUnavailable } from './state-presentation.js?v=98';
 import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from './origin-lock.js?v=114';
 import { mergeRuntimeInfo } from './runtime-ui.js?v=98';
+import { countLabel } from './count-label.js';
 
 const BASE_PATH = document.documentElement.dataset.basePath || '';
 const ASSET_ROOT = `${BASE_PATH}/_assets`;
@@ -662,7 +663,7 @@ function renderMemoryConflict(conflict) {
   const rows = diff.slice(0, 240).map(row =>
     `<div class="memory-diff-row ${row.type}"><span>${row.type === 'same' ? ' ' : row.type === 'mine' ? '-' : row.type === 'theirs' ? '+' : '!'}</span><code>${esc(row.text)}</code></div>`
   ).join('');
-  const notice = truncated ? `<div class="memory-diff-note">${esc(t('memory.diff_truncated', { count: diff.length - 240 }))}</div>` : '';
+  const notice = truncated ? `<div class="memory-diff-note">${esc(countLabel(t, 'memory.diff_truncated', diff.length - 240))}</div>` : '';
   return `<div class="wb-modal-bg memory-conflict-bg"><section class="memory-conflict wb-modal" id="memory-conflict" role="dialog" aria-modal="true">
     <div class="memory-conflict-head">
       <strong>${esc(t('memory.conflict_title'))}</strong>
@@ -2351,7 +2352,7 @@ async function purgeRevokedApiKeys() {
     if (fleetManageModal?._createdKey?.name && !data.keys?.some(key => key.name === fleetManageModal._createdKey.name)) {
       renderCreatedApiKey(null);
     }
-    fleetManageStatus(t('fleet_manage.purge_revoked_status', { count: data.purged ?? 0 }), 'success');
+    fleetManageStatus(countLabel(t, 'fleet_manage.purge_revoked_status', data.purged ?? 0), 'success');
   } catch (err) {
     fleetManageStatus(err.message, 'error');
   } finally {
@@ -2474,7 +2475,9 @@ function observerStatusLabel(status) {
   if (observerRecoveryReason(status)) return t('observer.state_recovery');
   if (status.state === 'installed' && status.desired?.enabled) {
     const count = runningObserverGroups(state.observer.groups).length;
-    return t(state.observer.groups ? count ? 'wb.observer.enabledRunning' : 'wb.observer.enabledNone' : 'observer.state_enabled', { count });
+    return state.observer.groups && count
+      ? countLabel(t, 'wb.observer.enabledRunning', count)
+      : t(state.observer.groups ? 'wb.observer.enabledNone' : 'observer.state_enabled');
   }
   if (status.state === 'installed') return t('observer.state_disabled');
   if (status.state === 'not_installed') return t('observer.state_not_installed');

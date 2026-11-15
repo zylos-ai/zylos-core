@@ -9,7 +9,15 @@ const response = value => ({ ok: true, json: async () => value });
 test('translation packs contain the same keys and sentinel', () => {
   const en = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url), 'utf8'));
   const zh = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.zh.json', import.meta.url), 'utf8'));
-  assert.deepEqual(Object.keys(en).sort(), Object.keys(zh).sort()); assert.equal(validWbPack(en), true); assert.equal(validWbPack(zh), true);
+  // English has optional singular forms and independently counted deletion fragments.
+  // Chinese keeps its existing complete sentence for every count.
+  const englishFragments = new Set(['chat.delete.messages', 'chat.delete.attachments']);
+  for (const key of Object.keys(zh)) assert.ok(key in en, `English translation missing: ${key}`);
+  for (const key of Object.keys(en)) {
+    if (key.endsWith('One')) assert.ok(key.slice(0, -3) in en, `Singular translation has no base: ${key}`);
+    else assert.ok(key in zh || englishFragments.has(key), `Chinese translation missing: ${key}`);
+  }
+  assert.equal(validWbPack(en), true); assert.equal(validWbPack(zh), true);
 });
 test('translation loader preserves primary keys and replaces cached workbench values with fresh pack', async () => {
   const saved = storage({ 'zylos-dashboard-i18n-wb-en': JSON.stringify(pack('cached')) });
