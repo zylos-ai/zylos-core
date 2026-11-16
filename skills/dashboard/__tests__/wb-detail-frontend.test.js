@@ -653,6 +653,28 @@ test('automatic naming failures read as one plain sentence in either language, w
   assert.match(words.en['wb.name.unknown'], /Origin/); assert.match(words.en['wb.name.unknownSingle'], /only session/);
 });
 
+test('automatic naming handles primitive JSON error bodies in either session mode', async () => {
+  for (const single of [false, true]) for (const body of ['bad gateway', 502, true, null, 0, false]) {
+    let error;
+    try {
+      await sendNamePrompt({ request: (url, options) => fetchJson(async () => ({ ok: false, status: 502, json: async () => body }), url, options) });
+      assert.fail('HTTP failure must reject');
+    } catch (failure) { error = failure; }
+    assert.equal(error.body, body);
+    let result;
+    assert.doesNotThrow(() => { result = namePromptResult(undefined, error, t, { single }); });
+    assert.equal(result.ok, false);
+    assert.equal(result.text, body ? 'wb.name.failed'
+      : `wb.name.${single ? 'unknownSingle' : 'unknown'}`);
+    assert.equal(result.detail, 'request_failed');
+    const document = createDocument(), root = document.createElement('div');
+    const rendered = renderNameResult(root, result, { document, t, single });
+    assert.equal(rendered.message.getAttribute('role'), 'alert');
+    assert.equal(rendered.message.textContent, result.text);
+    assert.ok(rendered.close, 'a failed response can be closed');
+  }
+});
+
 test('automatic naming result dialog shows sending, then the outcome as plain text with a close button', () => {
   const document = createDocument(), root = document.createElement('div');
   const sending = renderNameResult(root, 'sending', { document, t });

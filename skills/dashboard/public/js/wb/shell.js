@@ -261,7 +261,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     try {
       value = await sendNamePrompt({ request: (path, options) => fetchJson(fetch, endpoint(path), { ...options, signal }) });
     } catch (error) { failure = error; }
-    if (!current()) return;
+    if (!current()) { endNameFlow(flow); return; }
     flow.state = 'answered';
     renderNameResult(nameDialog, namePromptResult(value, failure, t, { single }), { document, t, onClose: () => endNameFlow(flow) });
   };
