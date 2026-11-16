@@ -28,13 +28,16 @@ export async function advance({ group, input, ...settings }, deps = {}) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload) || Object.keys(payload).some(key => !['summary', 'raw', 'inputs'].includes(key))) throw inputError('Expected {"summary":{...},"raw":{...}|null,"inputs":{...}}');
     const database = deps.database || await import('../../comm-bridge/scripts/c4-db.js');
     // "Today" is this script's own date, from the same list call and timezone.
-    const { inputs: actual, today } = await listWithDate({ env: settings.env, group, now: deps.now }, { database });
+    // The cursor is stamped with that same instant: the next list starts at
+    // the stamp's date, which must be the date the logs were judged against.
+    const at = (deps.now ?? Date.now)();
+    const { inputs: actual, today } = await listWithDate({ env: settings.env, group, now: () => at }, { database });
     if (payload.inputs?.scope !== actual.scope || !sessionsUnchanged(payload.inputs?.sessions, actual.sessions, today)) {
       throw memoryError('INPUT_CHANGED', 'Session logs differ from list --group; list and read them again');
     }
     const cursor = verifyOriginReceipts(payload, { group, database });
     if (!cursor) return { advanced: false };
-    database.advanceOriginSyncCursor(group, cursor);
+    database.advanceOriginSyncCursor(group, { ...cursor, updatedAt: Math.floor(at / 1000) });
     return { advanced: true, ...cursor };
   });
 }

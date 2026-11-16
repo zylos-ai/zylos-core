@@ -113,12 +113,16 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
         rows: rawAfter === undefined ? null : originRows(c, group, rawAfter, rawEnd),
       };
     }),
-    advanceOriginSyncCursor: (group, { syncedId, checkpointId }) => write(c => {
+    // updatedAt: the caller's own reading of now (Unix seconds) when it judged
+    // the cursor against that time; otherwise the store reads the clock.
+    advanceOriginSyncCursor: (group, { syncedId, checkpointId, updatedAt }) => write(c => {
       requireGroup(group);
+      const at = updatedAt ?? seconds();
+      if (!Number.isSafeInteger(at) || at <= 0) throw dataError('INVALID_ARGS', 'updatedAt must be a positive integer');
       const old = get(c, 'SELECT * FROM origin_sync_cursors WHERE session_group=?', group);
       const maxCheckpoint = get(c, 'SELECT COALESCE(MAX(id),0) AS n FROM checkpoints WHERE session_group=?', group).n;
       if (![syncedId, checkpointId].every(n => Number.isSafeInteger(n) && n >= 0) || syncedId < (old?.synced_id ?? 0) || syncedId > frontier(c, group) || checkpointId < (old?.checkpoint_id ?? 0) || checkpointId > maxCheckpoint) throw dataError('CURSOR_INVALID', 'Cursor would regress or exceed its source');
-      run(c, 'INSERT INTO origin_sync_cursors(session_group,synced_id,checkpoint_id,updated_at) VALUES(?,?,?,?) ON CONFLICT(session_group) DO UPDATE SET synced_id=excluded.synced_id,checkpoint_id=excluded.checkpoint_id,updated_at=excluded.updated_at', group, syncedId, checkpointId, seconds());
+      run(c, 'INSERT INTO origin_sync_cursors(session_group,synced_id,checkpoint_id,updated_at) VALUES(?,?,?,?) ON CONFLICT(session_group) DO UPDATE SET synced_id=excluded.synced_id,checkpoint_id=excluded.checkpoint_id,updated_at=excluded.updated_at', group, syncedId, checkpointId, at);
     }),
     getOriginSyncBacklog: () => snapshot(c => {
       const base = baseline(c), groups = [];

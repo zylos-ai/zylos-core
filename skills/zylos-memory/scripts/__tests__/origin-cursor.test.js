@@ -317,10 +317,11 @@ test('checkpoint rejects conversation edits after export without writing group o
 });
 
 // Session logs around the advance date. The store and advance share one
-// injected clock; the timezone comes from the instance .env, as on a host.
+// injected clock unless clock.store sets the store's own reading apart; the
+// timezone comes from the instance .env, as on a host.
 async function dayFixture(t, at) {
-  const clock = { now: Date.parse(at) };
-  const f = await fixture(t, 'origin', { now: () => clock.now });
+  const clock = { now: Date.parse(at), store: null };
+  const f = await fixture(t, 'origin', { now: () => clock.store ?? clock.now });
   fs.writeFileSync(path.join(f.root, '.env'), 'TZ=Asia/Singapore\n');
   const group = 'telegram:day';
   f.seedGroup(group, 3);
@@ -431,4 +432,26 @@ test('Origin advance across midnight treats the listed day as earlier and the ne
   fs.writeFileSync(unchanged.log('2026-03-11'), '# first line of 03-11\n');
   assert.equal((await unchanged.attempt(payload)).advanced, true);
   assert.deepEqual((await unchanged.listed()).sessions.map(item => path.basename(item.path)), ['2026-03-11.md']);
+});
+
+test('Origin advance stamps the cursor with the instant it judged today, even when the write lands after midnight', async t => {
+  // Judged at 23:59:59.9 on 03-10 Singapore time; the store's own clock already
+  // reads 00:00:00.1 on 03-11 when the cursor is written.
+  const d = await dayFixture(t, '2026-03-10T23:59:50+08:00');
+  fs.writeFileSync(d.log('2026-03-10'), '# 03-10\n');
+  const payload = await d.read();
+  fs.appendFileSync(d.log('2026-03-10'), '- 23:59:55 line\n');
+  const judged = Date.parse('2026-03-10T23:59:59.900+08:00');
+  d.clock.now = judged;
+  d.clock.store = Date.parse('2026-03-11T00:00:00.100+08:00');
+  assert.equal((await d.attempt(payload)).advanced, true);
+  const { updated_at: stamp } = d.f.db.prepare('SELECT updated_at FROM origin_sync_cursors WHERE session_group=?').get(d.group);
+  assert.equal(stamp, Math.floor(judged / 1000));
+  assert.equal(dateInTimeZone(new Date(stamp * 1000), 'Asia/Singapore'), '2026-03-10');
+  // The next run, on 03-11, still lists 03-10 and reads the line appended after the list.
+  d.clock.now = Date.parse('2026-03-11T00:05:00+08:00');
+  d.clock.store = null;
+  const next = await d.listed();
+  assert.deepEqual(next.sessions.map(item => [path.basename(item.path), item.sha256]), [['2026-03-10.md', d.sha(d.log('2026-03-10'))]]);
+  assert.notEqual(next.sessions[0].sha256, payload.inputs.sessions[0].sha256);
 });

@@ -95,6 +95,20 @@ test('Origin cursor rejection and trigger failure leave both cursor columns unch
   db.exec("CREATE TRIGGER reject_cursor BEFORE UPDATE ON origin_sync_cursors BEGIN SELECT RAISE(ABORT,'reject cursor'); END");
   assert.throws(() => store.advanceOriginSyncCursor('foo', { syncedId: a.id, checkpointId: cp.id }), { code: 'DB_WRITE_FAILED' }); assert.deepEqual(read(), before);
 });
+test('Origin cursor stores the caller-supplied update time, else the store clock, and rejects an invalid one without writing', t => {
+  const clock = { now: 1_700_000_000_500 };
+  const { db, store } = storeFixture(t, { now: () => clock.now });
+  const a = store.insertConversation('out', 'foo', 'e', 'a'); const cp = store.createCheckpoint('foo', a.id, 'summary');
+  const read = () => db.prepare('SELECT * FROM origin_sync_cursors').get();
+  store.advanceOriginSyncCursor('foo', { syncedId: 0, checkpointId: 0 });
+  assert.equal(read().updated_at, 1_700_000_000);
+  const before = read();
+  for (const updatedAt of [0, -1, 1.5, NaN, '1700000100']) {
+    assert.throws(() => store.advanceOriginSyncCursor('foo', { syncedId: a.id, checkpointId: cp.id, updatedAt }), { code: 'INVALID_ARGS' }); assert.deepEqual(read(), before);
+  }
+  store.advanceOriginSyncCursor('foo', { syncedId: a.id, checkpointId: cp.id, updatedAt: 1_699_999_999 });
+  assert.deepEqual(read(), { ...before, synced_id: a.id, checkpoint_id: cp.id, updated_at: 1_699_999_999 });
+});
 for (const group of ['foo', '*']) test(`unsummarized ${group} reads use the greater of coverage and the optional cursor`, t => {
   const { store, seed } = fixture(t);
   for (let id = 1; id <= 5; id++) seed(id);
