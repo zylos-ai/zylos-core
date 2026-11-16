@@ -1,4 +1,4 @@
-import { instantSeconds } from './api-time.js?v=2';
+import { instantSeconds } from './api-time.js';
 // Core clears cooldownUntil to 0 when a reply is due, so only a future epoch
 // second is a recovery time. Anything else is an unknown recovery time.
 export function recoveryTime(cooldownUntil, now = Date.now()) {

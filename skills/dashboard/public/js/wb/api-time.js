@@ -10,4 +10,4 @@ export function conversationStampMs(value) {
   return typeof value === 'number' ? value > 0 ? (value - 2440587.5) * 86400000 : NaN : instantMs(value);
 }
 
-export { scheduleTimes, activityTimes } from './wire-time.js?v=1';
+export { scheduleTimes, activityTimes } from './wire-time.js';

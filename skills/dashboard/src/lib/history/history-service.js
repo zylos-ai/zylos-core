@@ -58,10 +58,10 @@ function position(entries, index, cursor) {
 }
 
 export class HistoryService {
-  constructor({ config = {}, store, stateEngine, parser, redactor, resolveScope, readCurrentSessionId } = {}) {
+  constructor({ config = {}, store, stateEngine, parser, redactor, resolveScope, readCurrentSessionId, readGroupKey } = {}) {
     this.config = config;
     this.store = store;
-    this.resolveScope = resolveScope || (parser ? null : createHistoryScope({ config, store, readCurrentSessionId }));
+    this.resolveScope = resolveScope || (parser ? null : createHistoryScope({ config, store, readCurrentSessionId, readGroupKey }));
     this.scopedParsers = new Map();
     this.runtime = config.runtime || 'claude';
     const Parser = this.runtime === 'codex' ? CodexHistory : ClaudeHistory;
@@ -277,7 +277,7 @@ export class HistoryService {
       } else sendJson(res, 200, result);
     } catch (error) {
       // Never reflect exception text or record-controlled paths into errors.
-      const known = error instanceof HistoryError || ['invalid_session_group', 'target_mismatch'].includes(error.code);
+      const known = error instanceof HistoryError || ['invalid_session_group', 'target_mismatch', 'group_catalog_unreadable'].includes(error.code);
       sendJson(res, known ? error.status : 503, { error: known ? error.code : 'history_unavailable' });
     }
     return true;

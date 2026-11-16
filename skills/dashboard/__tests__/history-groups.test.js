@@ -8,10 +8,11 @@ import { Store } from '../src/lib/store.js';
 import { HistoryService } from '../src/lib/history/history-service.js';
 import { createHistoryScope } from '../src/lib/history/history-scope.js';
 import { claudeProjectSlug } from '../src/lib/claude-project-path.js';
+import { createGroupsApi } from '../src/lib/workbench/groups-api.js';
 import { assertSessionGroup } from '../../../cli/lib/session-group-paths.js';
 
-// Real parsers, imported attribution and HTTP handlers; only the session-mode
-// reader is injected. Run for history scope/runtime/read changes. Fixtures live
+// Real parsers, imported attribution, group read validation and HTTP handlers;
+// session-mode and catalog snapshot inputs are isolated fixtures. Run for history scope/runtime/read changes. Fixtures live
 // under the runner's isolated HOME/ZYLOS_DIR, and no terminal or PM2 is opened.
 test('history isolates Origin, offline groups and cross-runtime sessions on every route', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'history-groups-'));
@@ -28,7 +29,13 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
   await fs.mkdir(project, { recursive: true });
   t.after(() => fs.rm(project, { recursive: true, force: true }));
   const record = text => JSON.stringify({ type: 'assistant', timestamp: 1700000000000, message: { content: [{ type: 'text', text }] } }) + '\n';
-  for (const [id, group, runtime] of [['origin-session', null, 'claude'], ['team-session', 'telegram:team', 'claude'], ['codex-session', 'dashboard:codex', 'codex']]) {
+  const legacyGroup = 'telegram:运维群-测试';
+  let catalogReadable = true;
+  const catalog = new Set([legacyGroup]);
+  const groups = createGroupsApi({ workbench: { getSnapshot: async () => ({
+    sources: { c4: { ok: catalogReadable } }, groupEvidence: { catalog }
+  }) } });
+  for (const [id, group, runtime] of [['legacy-session', legacyGroup, 'claude'], ['origin-session', null, 'claude'], ['team-session', 'telegram:team', 'claude'], ['codex-session', 'dashboard:codex', 'codex']]) {
     store.insertEvent({ id, ingest_id: id, session_id: id, session_group: group, runtime,
       event_type: 'session_start', category: 'lifecycle', timestamp: '2026-01-01T00:00:00Z' });
     if (runtime === 'claude') await fs.writeFile(path.join(project, id + '.jsonl'), record(id + ' needle'));
@@ -44,7 +51,7 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
   await fs.writeFile(rollout, JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'codex needle' }] } }) + '\n');
   store.db.prepare('INSERT INTO codex_rollout_paths(runtime,session_id,transcript_path) VALUES(?,?,?)').run('codex', 'codex-session', rollout);
   const service = new HistoryService({ config, store, resolveScope: createHistoryScope({ config, store, load,
-    readCurrentSessionId: () => liveSingleSessionId }) });
+    readCurrentSessionId: () => liveSingleSessionId, readGroupKey: key => groups.readKey(key) }) });
   t.after(() => service.close());
   const server = http.createServer((req, res) => { const url = new URL(req.url, 'http://fixture'); res.apiPath = url.pathname; return service.handle(req, res, url); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -117,6 +124,21 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
       assert.equal(denied.body.error.code, 'session_not_found');
     }
   }
+  assert.equal(await groups.readKey(legacyGroup), legacyGroup);
+  for (const route of ['sessions', 'entries', 'content', 'search']) {
+    assert.equal((await get(route, { session_group: legacyGroup, session: 'legacy-session', entry: 'o:0', field: 'body', q: 'needle' })).status, 200,
+      `historical group ${route} uses the same catalog-backed read key`);
+    assert.equal((await get(route, { session_group: 'telegram:运维群-不存在', session: 'legacy-session', entry: 'o:0', field: 'body', q: 'needle' })).status, 400);
+  }
+  catalog.delete(legacyGroup);
+  assert.equal((await get('sessions', { session_group: legacyGroup })).status, 400, 'import attribution alone is not C4 membership');
+  catalog.add(legacyGroup);
+  catalogReadable = false;
+  assert.equal((await get('sessions', { session_group: legacyGroup })).body.error.code, 'group_catalog_unreadable');
+  assert.equal((await get('sessions', { session_group: legacyGroup })).status, 502);
+  assert.equal((await get('entries', { session_group: 'telegram:team', session: 'team-session' })).status, 200,
+    'current valid keys retain the upstream empty/catalog-independent read behavior');
+  catalogReadable = true;
   const parallel = await Promise.all(['telegram:team', 'dashboard:codex', 'origin'].map(session_group => get('sessions', { session_group })));
   assert.deepEqual(parallel.map(item => item.body.runtime), ['claude', 'codex', 'claude']);
   assert.equal(parallel[2].body.sessions.some(row => row.id.startsWith('team-session')), false);

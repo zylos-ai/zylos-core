@@ -4,13 +4,19 @@ import { loadCoreModule } from '../core-modules.js';
 
 // Historical selection uses imported attribution and files only. It must remain
 // available for offline groups without opening tmux or starting Observer.
-export function createHistoryScope({ config = {}, store, load = loadCoreModule, readCurrentSessionId } = {}) {
+export function createHistoryScope({ config = {}, store, load = loadCoreModule, readCurrentSessionId, readGroupKey } = {}) {
   return async function scope(params) {
     const group = params.get('session_group') ?? 'origin';
     const [{ assertSessionGroup }, { readSessionMode }] = await Promise.all([
       load('session-group-paths.js'), load('config.js'),
     ]);
-    try { assertSessionGroup(group); } catch {
+    try {
+      if (readGroupKey) await readGroupKey(group);
+      else assertSessionGroup(group);
+    } catch (error) {
+      if (error.code === 'GROUP_CATALOG_UNREADABLE') {
+        throw Object.assign(new Error('Session group catalog could not be read'), { status: 502, code: 'group_catalog_unreadable' });
+      }
       throw Object.assign(new Error('Invalid session group'), { status: 400, code: 'invalid_session_group' });
     }
     const mode = readSessionMode().mode;
