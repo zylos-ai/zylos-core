@@ -352,7 +352,7 @@ for (const mutation of ['source', 'manifest']) test(`${mutation} mutation before
    maintenance:{...f.m,discover:()=>({candidates:[],diagnostics:[]})},
    inspect:()=>({zylosDir:f.root,skillsDir:f.j.skillsDir,tempDir:download,from:'0.9.3',to:'0.9.4',
      transactionId:'tx',transactionDir:f.dir,journal:f.load(),maintenance:f.m,steps:[]}),
-   resolveNpm:()=>'/unused/npm-cli.js',begin:()=>{},savePackage:()=>{},saveCode:()=>{},prepare:()=>{},install:()=>{},
+   resolveNpm:()=>'/unused/npm-cli.js',validateNpmPrefix:()=>{},begin:()=>{},savePackage:()=>{},saveCode:()=>{},prepare:()=>{},install:()=>{},
    finalize:()=>runSelfUpgradeFinalize({zylosDir:f.root,
      transactionId:'tx',transactionDir:f.dir,tempDir:download},{
      maintenance:f.m,assertDashboardUninstalled:()=>{},
@@ -396,7 +396,7 @@ test('baseline write failure is reported as sync step 5 before dependency instal
    maintenance:{...f.m,discover:()=>({candidates:[],diagnostics:[]})},
    inspect:()=>({zylosDir:f.root,skillsDir:f.j.skillsDir,tempDir:f.root,from:'0.9.3',to:'0.9.4',
      transactionId:'tx',transactionDir:f.dir,journal:f.load(),maintenance:f.m,steps:[]}),
-   resolveNpm:()=>'/unused/npm-cli.js',begin:()=>{},savePackage:()=>{},saveCode:()=>{},prepare:()=>{},install:()=>{},
+   resolveNpm:()=>'/unused/npm-cli.js',validateNpmPrefix:()=>{},begin:()=>{},savePackage:()=>{},saveCode:()=>{},prepare:()=>{},install:()=>{},
    finalize:()=>runSelfUpgradeFinalize({zylosDir:f.root,transactionId:'tx',transactionDir:f.dir,tempDir:f.root},{
      maintenance:f.m,assertDashboardUninstalled:()=>{},
      syncSkills:()=>{change(f);return {step:5,status:'done'};},

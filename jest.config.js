@@ -46,6 +46,7 @@ export default {
     '<rootDir>/test/web-console-caddy.integration.test.js',
     '<rootDir>/test/single-upgrade-check.integration.test.js',
     '<rootDir>/test/exit-control.integration.test.js',
+    '<rootDir>/test/upgrade-npm-prefix.integration.test.js',
     '<rootDir>/test/session-release.integration.test.js',
     '<rootDir>/test/component-source-record.integration.test.js',
   ],

@@ -3,12 +3,17 @@
 // This graph must stay dependency-free until npm has installed the target.
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { validateUpgradeHandoff, upgradeFailureCode, upgradeFailureMessage } from './upgrade-admission.js';
 import { probeCoreDbVersions, preflightCoreDbUpgrade, rehearseCoreDbUpgrade, inspectFirstDashboardTakeover, inspectCoreManagesDashboardDb, assertDashboardUninstalled } from './core-db-backup.js';
 import { beginUpgrade, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { saveOriginalPackage } from './upgrade-package.js';
 import { recoveryNext } from './upgrade-discovery.js';
+
+class UpgradeNpmPrefixError extends Error {
+  code = 'UNSUPPORTED_INSTALL_LAYOUT';
+}
 
 export function resolveUpgradeNpmCli() {
   for (const directory of String(process.env.PATH || '').split(path.delimiter)) {
@@ -22,6 +27,25 @@ export function resolveUpgradeNpmCli() {
     } catch {}
   }
   throw new Error('trusted npm-cli.js entry is unavailable');
+}
+
+export function validateUpgradeNpmPrefix(ctx) {
+  const result = spawnSync(process.execPath, [ctx.protectedNpmCli, 'root', '-g'], {cwd:ctx.tempDir, encoding:'utf8', timeout:30000});
+  const root = result.stdout?.trim();
+  const target = root && path.isAbsolute(root) ? path.join(root, 'zylos') : null;
+  if (!result.error && result.status === 0 && target) {
+    try {
+      if (fs.realpathSync(target) === fs.realpathSync(ctx.coreDir)) return;
+    } catch {}
+  }
+  const reason = result.error?.code === 'ETIMEDOUT' ? 'npm timed out after 30 seconds'
+    : result.error ? `npm execution failed (${result.error.code || 'unknown error'})`
+    : result.status !== 0 ? `npm exited with code ${result.status}`
+    : 'npm returned an empty or non-absolute global directory';
+  const message = result.error || result.status !== 0 || !target
+    ? `Cannot determine where npm would install zylos (currently at ${ctx.coreDir}): ${reason}, so the upgrade was stopped and nothing was changed.`
+    : `npm would install zylos at ${target}, but zylos is currently at ${ctx.coreDir}; the directories do not match, so the upgrade was stopped and nothing was changed. Check npm root -g: remove or align the prefix setting in ~/.npmrc or the npm_config_prefix environment variable, then run the upgrade again.`;
+  throw new UpgradeNpmPrefixError(message);
 }
 
 export function inspectUpgradeSource(input, deps = {}) {
@@ -118,6 +142,7 @@ export async function runUpgradeEntry(input, deps = {}) {
     }
     ctx = (deps.inspect ?? inspectUpgradeSource)(input, deps);
     ctx.protectedNpmCli = (deps.resolveNpm ?? resolveUpgradeNpmCli)();
+    (deps.validateNpmPrefix ?? validateUpgradeNpmPrefix)(ctx);
     (deps.begin ?? beginUpgrade)(ctx, {zylosDir:ctx.zylosDir, skillsDir:ctx.skillsDir});
     (deps.savePackage ?? saveOriginalPackage)(ctx);
     (deps.saveCode ?? saveProtectedCode)(ctx);
@@ -134,7 +159,8 @@ export async function runUpgradeEntry(input, deps = {}) {
     return result;
   } catch (error) {
     const rollback = ctx?.transactionDir ? (deps.recover ?? recovery)(ctx) : {attempted:false, completed:false, performed:false};
-    return {action:'self_upgrade', success:false, code:upgradeFailureCode(error), error:upgradeFailureMessage(error),
+    return {action:'self_upgrade', success:false, code:upgradeFailureCode(error),
+      error:error instanceof UpgradeNpmPrefixError ? error.message : upgradeFailureMessage(error),
       next:error.next, persisted:error.persisted || [], upgradeProtected:!!ctx?.upgradeProtected,
       transactionDir:ctx?.transactionDir, rollback:{...rollback, performed:!!rollback.attempted},
       recovery_required:rollback.recovery_required || error.recovery_required || false};
