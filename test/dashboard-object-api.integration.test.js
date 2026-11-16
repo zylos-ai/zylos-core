@@ -15,6 +15,7 @@ import { loadCoreModule as originalLoadCoreModule } from '../skills/dashboard/sr
 import { readSessionModeStatus } from '../cli/lib/session-mode-status.js';
 import { populateSchedulePagination } from '../skills/dashboard/__tests__/fixtures/schedule-pagination.js';
 import { SseHub } from '../skills/dashboard/src/lib/sse.js';
+import { claudeProjectSlug } from '../skills/dashboard/src/lib/claude-project-path.js';
 
 // Real HTTP, auth, SQLite, group projection and usage boundary. Run when these
 // object routes or authorization rules change; skip unrelated presentation work.
@@ -120,6 +121,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     usage: { valid: true, value: { version: usageVersion, effort: { level: usageEffort }, model: { id: usageModel }, context_window: { used_percentage: 25 } } } }),
     readLiveIdentity: async () => ({ present: true, ready: true }), readRuntimeHealth: async () => ({ missing: true }), readAccountUsage: async () => null };
   const core = async name => {
+    if (name === 'config.js') return { ...await originalLoadCoreModule(name), readSessionMode: () => ({ mode }) };
     if (name === 'am-sock-client.js') return { submit: async () => ({ kind: 'rejected', reply: { code: 'invalid_request' } }),
       lookupRestartRequest: async (requestId, options) => {
         assert.equal(options.sessionGroup, 'origin', 'the request lookup is bound to the group named in the HTTP path');
@@ -211,6 +213,38 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   await t.test('read authentication and runtime options retain read-key access', async () => {
     await request('/api/instance', { identity: 'none', expected: 401 });
     await request('/api/instance/runtime-options?runtime=claude');
+  });
+  // Real createServer composition, group catalog, history parser and HTTP auth.
+  // Run when history group admission or server wiring changes; unrelated UI may
+  // skip. Mode and installation observations are supplied by this fixture;
+  // HistoryService, group admission and the index.js callback remain real.
+  // Transcript and event DB stay under the outer runner's private paths; the
+  // enclosing fixture owns server/DB teardown and this case removes its file.
+  await t.test('assembled history routes reject unknown groups and retain offline history', async t => {
+    const { ObserverCoordinator } = await import('../skills/dashboard/src/lib/observer-coordinator.js');
+    t.mock.method(ObserverCoordinator.prototype, 'historyStatus', async () => ({ state: 'installed', desired: { enabled: true } }));
+    writeMode('multi');
+    const sessionId = 'offline-history-session';
+    const project = path.join(os.homedir(), '.claude', 'projects', claudeProjectSlug(root));
+    const transcript = path.join(project, `${sessionId}.jsonl`);
+    assert.ok(project.startsWith(process.env.HOME + path.sep));
+    console.log('History composition fixture:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: root,
+      transcript, database: path.join(data, 'dashboard.db'), tmux: 'unused; offline files only' }));
+    fs.mkdirSync(project, { recursive: true });
+    fs.writeFileSync(transcript, JSON.stringify({ type: 'assistant', timestamp: new Date(clock).toISOString(),
+      message: { content: [{ type: 'text', text: 'Offline history remains readable' }] } }) + '\n');
+    t.after(() => { fs.rmSync(project, { recursive: true, force: true }); writeMode('single'); });
+    seedStore.insertEvent({ id: 'fixture-offline-history', ingest_id: 'fixture-offline-history',
+      timestamp: new Date(clock).toISOString(), session_id: sessionId, session_group: 'telegram:offline-0',
+      runtime: 'claude', event_type: 'session_start', category: 'lifecycle' });
+    const rejected = await request('/api/observer/history/sessions?session_group=nosuch%3Agroup',
+      { identity: 'cookie', expected: 400 });
+    assert.equal(rejected.error.code, 'invalid_session_group');
+    const offline = await request('/api/groups/telegram%3Aoffline-0?include=', { identity: 'cookie' });
+    assert.equal(offline.state.kind, 'offline');
+    const history = await request('/api/observer/history/sessions?session_group=telegram%3Aoffline-0', { identity: 'cookie' });
+    assert.equal(history.current, null);
+    assert.ok(history.sessions.some(session => session.id === sessionId), 'Catalogued offline history stays visible');
   });
   const retired = ['/api/health?probe=ready', '/api/state', '/api/restart-status', '/api/session-mode', '/api/instance-status', '/api/timeline', '/api/system', '/api/summary', '/api/communication',
     '/api/metrics/history/cpu_pct', '/api/metrics/aggregate', '/api/metrics/cpu_pct', '/api/metrics/series', '/api/actions/meta', '/api/actions/interrupt', '/api/actions/chop-chop',
