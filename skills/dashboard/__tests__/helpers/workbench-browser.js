@@ -314,7 +314,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
       await result.waitFor({ state: 'hidden' });
       assert.equal(await button.isDisabled(), false, `${width}: closing the answer gives the button back`);
 
-      naming.answer = { ok: false, sessionGroup: 'origin', error: { code: 'CONTROL_TARGET_REQUIRED', message: 'A control target is required in multi or during transition' } };
+      naming.answer = { ok: false, sessionGroup: 'origin', error: { code: 'CONTROL_TARGET_REQUIRED', message: 'C4 did not queue the naming prompt' } };
       await button.click();
       await question.locator('.wb-modal-acts button').last().click();
       const failure = result.locator('[role="alert"]');
@@ -332,22 +332,21 @@ export async function runWorkbenchBrowser(t, sandbox) {
   });
 
   // Automatic naming that did not go out, or may not have: the dialog says one plain sentence in the page's language,
-  // naming Origin or, in single mode, the only session. The raw answer (code, English message, command and stack) is
+  // naming Origin or, in single mode, the only session. The Dashboard's answer (error code and English message) is
   // folded under technical detail and is not on screen while technical detail is off.
   await step('automatic naming failures: one plain sentence per language and mode, raw answer only in technical detail', async () => {
     const words = Object.fromEntries(['zh', 'en'].map(language =>
       [language, JSON.parse(fs.readFileSync(path.join(publicDir, 'i18n', `wb.${language}.json`), 'utf8'))]));
-    const refused = { code: 'CONTROL_TARGET_REQUIRED', message: 'A control target is required when configuration cannot be read' };
-    const broken = { code: 'RESULT_UNKNOWN', message: 'Command failed: /usr/bin/node /home/agent/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue '
-      + '--content 请给 Dashboard 里还没有名字的会话组起个名字 --no-ack-suffix --json\nError: Cannot find module '
-      + "'/home/agent/zylos/.claude/skills/comm-bridge/scripts/c4-control.js'\n    at Function._resolveFilename (node:internal/modules/cjs/loader:1225:15)" };
+    // The Dashboard's answers: an error code and a fixed English sentence (the child's own output stays in its log).
+    const refused = { code: 'CONTROL_TARGET_REQUIRED', message: 'C4 did not queue the naming prompt' };
+    const broken = { code: 'RESULT_UNKNOWN', message: 'Send command failed (exit 1)' };
     const outcomes = [
-      ['failed-multi', { ok: false, sessionGroup: 'origin', error: refused }, 'wb.name.failed', refused.code],
-      ['failed-single', { ok: false, sessionGroup: null, error: refused }, 'wb.name.failed', refused.code],
-      ['unknown-multi', { ok: false, unknown: true, sessionGroup: 'origin', error: broken }, 'wb.name.unknown', 'Cannot find module'],
-      ['unknown-single', { ok: false, unknown: true, sessionGroup: null, error: broken }, 'wb.name.unknownSingle', 'Cannot find module'],
+      ['failed-multi', { ok: false, sessionGroup: 'origin', error: refused }, 'wb.name.failed', 'CONTROL_TARGET_REQUIRED · C4 did not queue the naming prompt'],
+      ['failed-single', { ok: false, sessionGroup: null, error: refused }, 'wb.name.failed', 'CONTROL_TARGET_REQUIRED · C4 did not queue the naming prompt'],
+      ['unknown-multi', { ok: false, unknown: true, sessionGroup: 'origin', error: broken }, 'wb.name.unknown', 'RESULT_UNKNOWN · Send command failed (exit 1)'],
+      ['unknown-single', { ok: false, unknown: true, sessionGroup: null, error: broken }, 'wb.name.unknownSingle', 'RESULT_UNKNOWN · Send command failed (exit 1)'],
     ];
-    const raw = /CONTROL_TARGET_REQUIRED|RESULT_UNKNOWN|A control target|c4-control|--content|Cannot find module|_resolveFilename|node:internal/;
+    const raw = /CONTROL_TARGET_REQUIRED|RESULT_UNKNOWN|C4 did not queue|Send command/;
     for (const language of ['zh', 'en']) {
       for (const [width, height] of [[1280, 800], [390, 844]]) {
         const { page, context, errors, shot } = await open(width, height, '/', {}, language);
@@ -378,8 +377,8 @@ export async function runWorkbenchBrowser(t, sandbox) {
           await detail.waitFor({ state: 'visible' });
           assert.equal(await detail.evaluate(node => node.open), false, `${label}: folded at first`);
           await detail.locator('summary').click();
-          assert.match(await detail.locator('pre').innerText(), new RegExp(original), `${label}: technical detail shows the original answer`);
-          if (name === 'unknown-multi' && language === 'zh') await shot('auto-name-unknown-technical-zh');
+          assert.equal(await detail.locator('pre').innerText(), original, `${label}: technical detail shows the Dashboard's code and message`);
+          if (width === 390 && name.endsWith('-multi')) await shot(`auto-name-${name.split('-')[0]}-technical-${language}`);
           await page.locator('#wb-tech-btn').evaluate(node => node.click());
           await detail.waitFor({ state: 'hidden' });
           await page.keyboard.press('Escape');

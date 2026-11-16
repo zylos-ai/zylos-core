@@ -210,12 +210,25 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     fs.writeFileSync(configFile, JSON.stringify({ session_mode: 'multi' }));
     controlFailure = Object.assign(new Error('Command failed'), { stdout: JSON.stringify({ ok: false,
       error: { code: 'CONTROL_TARGET_REQUIRED', message: 'A control target is required in multi or during transition' } }) });
+    const logged = t.mock.method(console, 'error', () => {});
     try {
       const refused = await naming('admin');
       assert.equal(refused.status, 200);
       assert.deepEqual(await refused.json(), { ok: false, sessionGroup: 'origin',
-        error: { code: 'CONTROL_TARGET_REQUIRED', message: 'A control target is required in multi or during transition' } });
-    } finally { controlFailure = null; fs.rmSync(configFile); }
+        error: { code: 'CONTROL_TARGET_REQUIRED', message: 'C4 did not queue the naming prompt' } });
+
+      // The child crashed: the answer is a code and a fixed sentence; the command, prompt, path and stack are only logged.
+      const crash = `Command failed: ${process.execPath} ${path.join(root, '.claude/skills/comm-bridge/scripts/c4-control.js')} enqueue --content 请给 Dashboard 里还没有名字的会话组起个名字\n`
+        + `Error: Cannot find module '${root}/c4-db.js'\n    at Function._resolveFilename (node:internal/modules/cjs/loader:1225:15)`;
+      controlFailure = Object.assign(new Error(crash), { code: 1, stdout: '', stderr: '' });
+      const crashed = await naming('admin');
+      assert.equal(crashed.status, 200);
+      const body = await crashed.text();
+      assert.deepEqual(JSON.parse(body), { ok: false, unknown: true, sessionGroup: 'origin',
+        error: { code: 'RESULT_UNKNOWN', message: 'Send command failed (exit 1)' } });
+      for (const fragment of ['Command failed', 'c4-control', '请给', root, 'node:internal', ' at ']) assert.equal(body.includes(fragment), false, `no ${fragment} in the response`);
+      assert.ok(logged.mock.calls.some(call => String(call.arguments[0]).includes(crash)), 'the service log keeps the original');
+    } finally { controlFailure = null; logged.mock.restore(); fs.rmSync(configFile); }
   });
 
   await t.test('single message HTTP reads NULL attribution without exposing bodies or Origin rows', async () => {
