@@ -37,10 +37,10 @@ export function renderAttention(root, snapshot, { error, lastSuccess, now = Date
     const group = item.group !== undefined ? item.group : item.groups?.length === 1 ? item.groups[0] : undefined;
     const subs = [];
     if (item.group !== undefined) subs.push(item.displayName ?? nameOf(item.group));
-    if (item.kind === 'data_unreadable') subs.push(item.reasonCode ?? item.source ?? '');
+    if (item.kind === 'data_unreadable') subs.push(t('wb.flags.unreadable'));
     if (item.kind === 'auth_failed' && item.extraUnknown) subs.push(countLabel(t, 'wb.extraUnknown', item.extraUnknown).replace(/^\s*·\s*/, ''));
     const details = [item.reasonCode, item.source, item.pm2Status].filter(Boolean).join(' · ');
-    if (level === 'technical' && item.kind !== 'data_unreadable' && details) subs.push(details);
+    if (level === 'technical' && details) subs.push(details);
     root.append(entry(document, { severity, glyph: severity === 'reminder' ? 'clock' : 'alert', text: ['auth_failed', 'start_failed', 'pool_full'].includes(item.kind)
       ? countLabel(t, key, item.kind === 'pool_full' ? values.waiting : values.count, values) : t(key, values),
       sub: subs.join(' · '), group, onSelect, t }));

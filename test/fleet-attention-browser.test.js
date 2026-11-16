@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { chatEnabled, createChatSandbox } from '../skills/dashboard/__tests__/helpers/chat-integration-harness.js';
@@ -10,6 +11,7 @@ test('Fleet diagnostics wrap and remain literal across desktop/mobile and themes
   { skip: !chatEnabled(), timeout: 120_000 }, async t => {
     const sandbox = createChatSandbox(t);
     await sandbox.runCase(async () => {
+      console.log('Fleet attention isolation:', JSON.stringify(sandbox.assertIsolation()));
       const { startPage } = await import('../skills/dashboard/__tests__/helpers/workbench-browser.js');
       const { base } = await startPage(sandbox);
       const { chromium } = await import(pathToFileURL(process.env.ZYLOS_CHAT_BROWSER_MODULE));
@@ -23,6 +25,7 @@ test('Fleet diagnostics wrap and remain literal across desktop/mobile and themes
           await page.goto(base + '/_assets/themes/' + theme + '.css');
           await page.setContent(`<html data-theme="${theme}"><head><link rel="stylesheet" href="${base}/_assets/css/style.css"><link rel="stylesheet" href="${base}/_assets/themes/${theme}.css"><link rel="stylesheet" href="${base}/_assets/css/wb.css"></head><body><div id="fleet-view" class="fleet-view"><div id="root"></div></div></body></html>`);
           await page.evaluate(async base => {
+            document.documentElement.dataset.detail = 'technical';
             const { renderAgentFleet } = await import(base + '/_assets/js/agent-fleet.js');
             const pack = await (await fetch(base + '/_assets/i18n/wb.en.json')).json();
             const attention = [
@@ -37,6 +40,7 @@ test('Fleet diagnostics wrap and remain literal across desktop/mobile and themes
               options = { t: (key, values = {}) => (pack[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => String(values[name] ?? '')) };
             renderAgentFleet(document.querySelector('#root'), fleet, options);
             window.renderCleanAttention = () => {
+              document.documentElement.dataset.detail = 'plain';
               attention.at(-1).reasonCode = 'identity_mismatch'; attention.at(-1).displayName = 'Operations';
               renderAgentFleet(document.querySelector('#root'), fleet, options);
             };
@@ -65,13 +69,35 @@ test('Fleet diagnostics wrap and remain literal across desktop/mobile and themes
             renderAttention(root, { attention: { problems: [{ kind: 'data_unreadable', group: 'ops',
               displayName: 'Operations', reasonCode: 'identity_mismatch' }] } }, { level: 'plain', t: key => pack[key] ?? key });
           }, base);
-          assert.match(await page.locator('#overview-attention').innerText(), /Operations.*identity_mismatch/);
+          for (const selector of ['#overview-attention', '.wb-f-attention']) {
+            const text = await page.locator(selector).innerText();
+            assert.match(text, /Operations/);
+            assert.match(text, /Status unavailable/);
+            assert.doesNotMatch(text, /identity_mismatch/);
+          }
           if (process.env.ZYLOS_CHAT_EVIDENCE_DIR) await page.screenshot({
             path: process.env.ZYLOS_CHAT_EVIDENCE_DIR + `/fleet-attention-${width}-${theme}.png`, fullPage: true });
           console.log('Fleet attention geometry:', JSON.stringify({ theme, ...geometry }));
         } finally { await page.close(); }
       }
     }, { timeoutMs: 110_000 });
+    assert.equal(fs.existsSync(sandbox.root), false, 'private fixture root reclaimed');
+    assert.equal(sandbox.children.size, 0, 'no fixture children remain');
+  });
+
+// Boundary: real app, actual technical-details button and fixed local APIs in both languages.
+// Run for unreadable attention copy or detail-level changes; unrelated chat/backend gates may skip.
+// The sandbox owns private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/socket/DB paths and browser/HTTP cleanup.
+test('unreadable attention shows readable status until technical details are opened',
+  { skip: !chatEnabled(), timeout: 120_000 }, async t => {
+    const sandbox = createChatSandbox(t);
+    await sandbox.runCase(async () => {
+      const { runUnreadableAttentionBrowser } = await import('./helpers/unreadable-attention-browser.js');
+      await runUnreadableAttentionBrowser(sandbox);
+    }, { timeoutMs: 110_000 });
+    assert.equal(fs.existsSync(sandbox.root), false, 'private fixture root reclaimed');
+    assert.equal(sandbox.children.size, 0, 'no fixture children remain');
+    assert.ok([...sandbox.servers].every(server => !server.listening), 'fixture listeners reclaimed');
   });
 
 // Boundary: actual chat HTTP history, private C4/dashboard databases and full page at 390px.

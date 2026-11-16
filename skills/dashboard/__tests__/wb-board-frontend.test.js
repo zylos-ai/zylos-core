@@ -193,6 +193,24 @@ test('attention shows both problems and recovery reminders with text-safe techni
   assert.equal(root.children.length, 4); assert.match(root.textContent, /wb.attention.rate_limited/); assert.match(root.textContent, /<img onerror=x>/);
   assert.equal(allNodes(root).some(node => node.tagName === 'IMG'), false);
 });
+test('unreadable attention keeps localized status and group in plain view and codes in technical details', () => {
+  const document = createDocument(), root = document.createElement('div');
+  for (const locale of ['en', 'zh']) {
+    const pack = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.' + locale + '.json', import.meta.url)));
+    const translate = key => pack[key] ?? key;
+    for (const reasonCode of ['identity_mismatch', 'status_unreadable', 'activity_unreadable', 'queue_summary_failed',
+      'runtime_health_unreadable', '<img onerror=alert(1)>']) {
+      const snapshot = { attention: { problems: [{ kind: 'data_unreadable', group: 'ops', displayName: 'Operations room', reasonCode }] } };
+      renderAttention(root, snapshot, { document, t: translate });
+      assert.match(root.textContent, /Operations room/);
+      assert.ok(root.textContent.includes(pack['wb.flags.unreadable']));
+      assert.equal(root.textContent.includes(reasonCode), false);
+      renderAttention(root, snapshot, { document, t: translate, level: 'technical' });
+      assert.ok(root.textContent.includes(reasonCode));
+      assert.equal(allNodes(root).some(node => node.tagName === 'IMG'), false);
+    }
+  }
+});
 test('attention renders problems and reminders as distinct item classes', () => {
   const document = createDocument(), root = document.createElement('div'), selected = [];
   renderAttention(root, { attention: { problems: [{ kind: 'auth_failed', runtime: 'claude', groups: ['a'] }],

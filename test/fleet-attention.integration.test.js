@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import test from 'node:test';
 import { fleetGroupSummary, sanitizeFleetGroupSummary } from '../skills/dashboard/src/lib/workbench/fleet-summary.js';
 import { renderFleetAttention, renderAgentFleetHtml } from '../skills/dashboard/public/js/agent-fleet.js';
@@ -36,15 +37,30 @@ test('Fleet diagnostic reasons use text nodes and preserve group navigation', ()
     replaceChildren() { this.children = []; }
     set innerHTML(_) { assert.fail('diagnostic text must not be assigned as HTML'); }
   }
-  const document = { createElement: tag => new Node(tag, document) };
+  const document = { createElement: tag => new Node(tag, document), documentElement: { dataset: { detail: 'plain' } } };
   const root = new Node('div', document);
   const reason = '<img src=x onerror=alert(1)>';
   renderFleetAttention(root, [{ kind: 'data_unreadable', group: 'ops', reasonCode: reason }, { kind: 'future' }],
-    (key, values) => key + ' ' + values.reason);
+    key => key);
   assert.equal(root.children.length, 1);
   assert.equal(root.children[0].dataset.fleetGroup, 'ops');
-  assert.equal(root.children[0].children[1].textContent, 'ops · ' + reason);
+  assert.equal(root.children[0].children[1].textContent, 'ops · wb.flags.unreadable');
+  document.documentElement.dataset.detail = 'technical';
+  renderFleetAttention(root, [{ kind: 'data_unreadable', group: 'ops', reasonCode: reason }]);
+  assert.equal(root.children[0].children[1].textContent, 'ops · wb.flags.unreadable · ' + reason);
   assert.equal(root.children[0].children[0].children.length, 0);
+  for (const locale of ['en', 'zh']) {
+    const pack = JSON.parse(fs.readFileSync(new URL('../skills/dashboard/public/i18n/wb.' + locale + '.json', import.meta.url)));
+    for (const level of ['plain', 'technical']) {
+      document.documentElement.dataset.detail = level;
+      renderFleetAttention(root, [{ kind: 'data_unreadable', group: 'ops', displayName: 'Operations room', reasonCode: 'identity_mismatch' }],
+        key => pack[key] ?? key);
+      const detail = root.children[0].children[1].textContent;
+      assert.ok(detail.includes('Operations room'));
+      assert.ok(detail.includes(pack['wb.flags.unreadable']));
+      assert.equal(detail.includes('identity_mismatch'), level === 'technical');
+    }
+  }
   renderFleetAttention(root, [{ kind: 'rate_limited', runtime: 'codex', until: Math.floor(Date.now() / 1000) + 3600 },
     { kind: 'rate_limited', runtime: 'codex', until: 0 }], (key, values) => JSON.stringify({ key, ...values }));
   const known = JSON.parse(root.children[0].children[0].textContent);

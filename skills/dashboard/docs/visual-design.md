@@ -194,7 +194,7 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] Technical group detail retains its folded diagnostic evidence for starting, stopping and unknown states, and for blocked, waiting-slot, start-failed or unreadable flags. A diagnostic flag can coexist with an idle or working primary state; it does not replace that state.
 
-[Current] Fleet summary labels and diagnostic rows wrap within their cards at desktop and mobile widths, preserving full counts and explanations. Multi-session local cards share Overview's channel send-failure/restart, start-failure, rate-limit and unreadable-data observations. Unreadable group notices show the display name (or group key) and reason in both views, including plain mode; diagnostic reason text is inserted through text nodes. Channel notices describe the instance and do not link to a group.
+[Current] Fleet summary labels and diagnostic rows wrap within their cards at desktop and mobile widths, preserving full counts and explanations. Multi-session local cards share Overview's channel send-failure/restart, start-failure, rate-limit and unreadable-data observations. Overview and Fleet unreadable group notices show the display name (or group key) and the localized status-unavailable phrase. Raw reason codes appear only with Technical details enabled and are inserted through text nodes. Channel notices describe the instance and do not link to a group.
 
 ## 7. Copy: Preserve Factual Distinctions Without Exposing Development Processes
 

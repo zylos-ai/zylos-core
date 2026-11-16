@@ -468,7 +468,10 @@ export function renderFleetAttention(root, items = [], t = key => key) {
     const label = root.ownerDocument.createElement('span');
     label.textContent = t(key, values);
     node.append(label);
-    const details = [item.displayName ?? item.group, item.reasonCode ?? item.source].filter(Boolean);
+    const technical = root.ownerDocument.documentElement?.dataset?.detail === 'technical';
+    const details = [item.displayName ?? item.group, item.kind === 'data_unreadable'
+      ? t('wb.flags.unreadable') : item.reasonCode ?? item.source].filter(Boolean);
+    if (item.kind === 'data_unreadable' && technical) details.push(item.reasonCode ?? item.source ?? '');
     if (details.length) {
       const reason = root.ownerDocument.createElement('span');
       reason.className = 'wb-f-attention-detail';
