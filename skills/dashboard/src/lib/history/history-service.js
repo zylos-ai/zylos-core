@@ -221,14 +221,18 @@ export class HistoryService {
         const scope = await this.resolveScope(url.searchParams);
         const key = `${url.searchParams.get('session_group') ?? 'origin'}:${scope.runtime}`;
         let cached = this.scopedParsers.get(key);
-        if (!cached || cached.revision !== scope.revision) {
+        const discovery = cached?.parser.discoveryVersion ? await cached.parser.discoveryVersion() : null;
+        if (!cached || cached.revision !== scope.revision || cached.discovery !== discovery) {
           const Parser = scope.runtime === 'codex' ? CodexHistory : ClaudeHistory;
           const parser = new Parser({ ...scope, zylosDir: this.config.zylosDir, store: this.store, indexCache: this.parser.indexCache });
           if (cached?.parser) {
             parser.metadataCache = cached.parser.metadataCache;
             if (parser.metadataLoads) parser.metadataLoads = cached.parser.metadataLoads;
           }
-          cached = { parser, revision: scope.revision, snapshot: parser.listSessions().then(listing => ({ parser, listing, paths: parser.paths })) };
+          cached = { parser, revision: scope.revision, snapshot: parser.listSessions().then(async listing => {
+            cached.discovery = parser.discoveryVersion ? await parser.discoveryVersion() : null;
+            return { parser, listing, paths: parser.paths };
+          }) };
         }
         this.scopedParsers.delete(key);
         this.scopedParsers.set(key, cached);

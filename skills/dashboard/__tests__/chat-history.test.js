@@ -583,7 +583,7 @@ test('HTTP history routes enforce access before reading and reject ambiguous que
     for (const route of routes) for (const identity of ['none', 'read', 'admin', 'cookie']) {
       const before = reads;
       const response = await request(route, identity);
-      const permitted = identity === 'cookie' || ['admin', 'read'].includes(identity) && allow;
+      const permitted = identity === 'cookie' || identity === 'admin' && allow;
       assert.equal(response.status, permitted ? 200 : identity === 'none' ? 401 : 403);
       if (!permitted) { assert.equal(reads, before); assert.ok(!JSON.stringify(response.body).includes('PRIVATE_HISTORY')); }
       else assert.ok(reads > before);

@@ -394,6 +394,22 @@ export class Store {
     return this._writeGroupDisplayName.immediate(key, name, source, clear);
   }
 
+  getHistoryAttribution() {
+    // data_version changes only for commits from other connections (e.g. CLI
+    // group deletion), so ordinary local imports do not force a grouped scan.
+    const version = this.db.pragma('data_version', { simple: true });
+    if (!this._historyAttribution || version !== this._historyDataVersion) {
+      const rows = this.db.prepare(`SELECT session_id, runtime, session_group, MAX(timestamp) AS latest_timestamp, MAX(event_seq) AS latest_seq FROM runtime_events
+        WHERE session_id IS NOT NULL AND runtime IN ('claude', 'codex')
+        GROUP BY session_id, runtime, session_group ORDER BY MAX(timestamp) DESC, MAX(event_seq) DESC`).all();
+      this._historyAttribution = new Map(rows.map(row => [JSON.stringify([row.session_id, row.runtime, row.session_group]), row]));
+      this._historyDataVersion = version;
+      this.historyRevision++;
+    }
+    return [...this._historyAttribution.values()].sort((a, b) =>
+      (a.latest_timestamp < b.latest_timestamp ? 1 : a.latest_timestamp > b.latest_timestamp ? -1 : 0) || b.latest_seq - a.latest_seq);
+  }
+
   insertEvent(event) {
     const seq = this._nextSeq.get().seq;
     const info = this._insertEvent.run({
@@ -413,7 +429,17 @@ export class Store {
       source: event.source || 'hook',
       confidence: event.confidence || 'actual'
     });
-    if (info.changes) this.historyRevision++;
+    if (info.changes && event.session_id && ['claude', 'codex'].includes(event.runtime || 'claude')) {
+      const row = { session_id: event.session_id, runtime: event.runtime || 'claude', session_group: event.session_group ?? null };
+      const key = JSON.stringify([row.session_id, row.runtime, row.session_group]);
+      if (!this._historyAttribution?.has(key)) this.historyRevision++;
+      if (this._historyAttribution) {
+        const previous = this._historyAttribution.get(key);
+        this._historyAttribution.set(key, { ...row,
+          latest_timestamp: previous?.latest_timestamp > event.timestamp ? previous.latest_timestamp : event.timestamp,
+          latest_seq: seq });
+      }
+    }
     return { inserted: info.changes > 0, event_seq: seq };
   }
 
@@ -470,7 +496,7 @@ export class Store {
 
   deleteEventsOlderThan(days, anchor = 'now') {
     const result = this._deleteOldEvents.run({ days, anchor });
-    if (result.changes) this.historyRevision++;
+    if (result.changes) { this._historyAttribution = null; this.historyRevision++; }
     return result;
   }
 
@@ -782,13 +808,14 @@ export class Store {
   upsertCodexRolloutPath({ runtime = 'codex', sessionId, transcriptPath, lastEventAt }) {
     if (!sessionId || !transcriptPath || typeof transcriptPath !== 'string') return { changes: 0 };
     if (!transcriptPath.endsWith('.jsonl')) return { changes: 0 };
+    const previous = this.db.prepare('SELECT transcript_path FROM codex_rollout_paths WHERE runtime = ? AND session_id = ?').get(runtime, sessionId);
     const info = this._upsertCodexRolloutPath.run({
       runtime,
       session_id: sessionId,
       transcript_path: transcriptPath,
       last_event_at: lastEventAt || null
     });
-    if (info.changes) this.historyRevision++;
+    if (info.changes && previous?.transcript_path !== transcriptPath) this.historyRevision++;
     return { changes: info.changes };
   }
 

@@ -41,7 +41,8 @@ function failureStatus(code) {
 /** HTTP errors are normalized; command envelopes are interpreted only at explicit adapter boundaries. */
 export function jsonResponse(status, payload, { write = false, command = false } = {}) {
   const value = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : { data: payload };
-  const rejected = command && (value.ok === false || value.result === 'rejected' || value.result === 'unknown');
+  const rejected = ((write || command) && value.ok === false)
+    || (command && (value.result === 'rejected' || value.result === 'unknown'));
   if (status >= 400 || rejected) {
     const detail = value.error && typeof value.error === 'object' ? value.error : {};
     const rawCode = String(detail.code || (typeof value.error === 'string' ? value.error : null) || value.code || value.reason || (status >= 500 ? 'internal_error' : 'request_failed'));

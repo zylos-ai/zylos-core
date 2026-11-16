@@ -34,7 +34,7 @@ test('JSON failures retain diagnostics and map command rejection status', () => 
     { ok: false, error: { code: 'invalid_request', message: 'Invalid prices supplied' } });
 });
 
-test('JSON reads retain direct data and writes always declare success', () => {
+test('JSON reads retain direct data and successful writes declare success', () => {
   assert.deepEqual(jsonResponse(202, { ok: true, pending: true }), { status: 202, body: { ok: true, pending: true } });
   assert.deepEqual(jsonResponse(200, { items: [] }), { status: 200, body: { items: [] } });
   assert.deepEqual(jsonResponse(200, { result: 'done', data: { id: 'task' } }, { write: true, command: true }),
@@ -43,6 +43,15 @@ test('JSON reads retain direct data and writes always declare success', () => {
   sendJson(res, 200, { changed: true });
   assert.equal(res.status, 200);
   assert.deepEqual(res.body, { changed: true, ok: true });
+});
+
+test('ordinary JSON writes retain explicit failures', () => {
+  const payload = { ok: false, error: { code: 'invalid_value', message: 'Invalid setting' } };
+  assert.deepEqual(jsonResponse(200, payload, { write: true }), { status: 400, body: payload });
+  const res = { apiWrite: true, writeHead(status) { this.status = status; }, end(body) { this.body = JSON.parse(body); } };
+  sendJson(res, 200, payload);
+  assert.equal(res.status, 400);
+  assert.deepEqual(res.body, payload);
 });
 
 test('schedule adapters expose only object routes and action subpaths', async () => {

@@ -87,17 +87,30 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
   const parallel = await Promise.all(['telegram:team', 'dashboard:codex', 'origin'].map(session_group => get('sessions', { session_group })));
   assert.deepEqual(parallel.map(item => item.body.runtime), ['claude', 'codex', 'claude']);
   assert.equal(parallel[2].body.sessions.some(row => row.id.startsWith('team-session')), false);
-  assert.equal(attributionScans, 1, 'one attribution query serves all groups until the next import');
+  assert.equal(attributionScans, 1, 'one attribution query serves all groups');
   const scans = directoryScans;
+  store.insertEvent({ id: 'ordinary-event', ingest_id: 'ordinary-event', session_id: 'team-session', session_group: 'telegram:team',
+    runtime: 'claude', event_type: 'tool_use', category: 'tool', timestamp: '2026-01-02T00:00:00Z' });
   await get('sessions', { session_group: 'telegram:team' });
+  assert.equal(attributionScans, 1, 'ordinary events reuse attribution');
   await get('entries', { session_group: 'telegram:team', session: 'team-session' });
   assert.equal(directoryScans, scans, 'warm requests reuse the scoped resolver paths');
   await fs.writeFile(path.join(project, 'new-team-session.jsonl'), record('new session needle'));
   store.insertEvent({ id: 'new-team-event', ingest_id: 'new-team-event', session_id: 'new-team-session', session_group: 'telegram:team',
     runtime: 'claude', event_type: 'session_start', category: 'lifecycle', timestamp: '2026-01-02T00:00:00Z' });
   assert.ok((await get('sessions', { session_group: 'telegram:team' })).body.sessions.some(row => row.id === 'new-team-session'));
-  assert.equal(attributionScans, 2, 'a new import invalidates attribution');
+  assert.equal(attributionScans, 1, 'a new combination is added incrementally');
   assert.ok(directoryScans > scans, 'a new import refreshes transcript discovery');
+  await fs.writeFile(path.join(subagents, 'agent-later.jsonl'), record('later child needle'));
+  assert.ok((await get('sessions', { session_group: 'telegram:team' })).body.sessions.some(row => row.id === 'team-session/agent-later'),
+    'new subagent files are discovered without any new attribution');
+  const external = new Store(path.join(root, 'history.db'));
+  try {
+    external.db.prepare('DELETE FROM runtime_events WHERE session_id = ?').run('new-team-session');
+    assert.equal((await get('sessions', { session_group: 'telegram:team' })).body.sessions.some(row => row.id === 'new-team-session'), false,
+      'CLI deletion through another connection invalidates cached group membership');
+    assert.equal(attributionScans, 2, 'external commit refreshes attribution once');
+  } finally { external.close(); }
   const readyDir = path.join(zylosDir, 'activity-monitor', 'session-groups', 'telegram:team');
   await fs.mkdir(readyDir, { recursive: true });
   await fs.writeFile(path.join(readyDir, 'current-session.json'), JSON.stringify({ sessionId: 'team-session' }));
@@ -122,4 +135,25 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
     await fs.mkdir(path.dirname(process.env.DASHBOARD_HISTORY_EVIDENCE), { recursive: true });
     await fs.writeFile(process.env.DASHBOARD_HISTORY_EVIDENCE, JSON.stringify(observations, null, 2));
   }
+});
+
+test('history revisions track path changes and local deletion without invalidating on rollout timestamps', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'history-revisions-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new Store(path.join(root, 'history.db'));
+  t.after(() => store.close());
+  store.insertEvent({ id: 'old', ingest_id: 'old', session_id: 'session', runtime: 'codex',
+    session_group: 'telegram:team', event_type: 'tool_end', category: 'tool', timestamp: '2020-01-01T00:00:00Z' });
+  assert.equal(store.getHistoryAttribution().length, 1);
+  store.insertEvent({ id: 'backfill', ingest_id: 'backfill', session_id: 'older-session', runtime: 'claude',
+    session_group: 'telegram:team', event_type: 'tool_end', category: 'tool', timestamp: '2019-01-01T00:00:00Z' });
+  assert.equal(store.getHistoryAttribution()[0].runtime, 'codex', 'backfilled events retain latest-runtime ordering');
+  store.upsertCodexRolloutPath({ sessionId: 'session', transcriptPath: '/isolated/rollout.jsonl', lastEventAt: '2020-01-01T00:00:00Z' });
+  const revision = store.historyRevision;
+  store.upsertCodexRolloutPath({ sessionId: 'session', transcriptPath: '/isolated/rollout.jsonl', lastEventAt: '2020-01-02T00:00:00Z' });
+  assert.equal(store.historyRevision, revision, 'timestamp-only imports keep discovery warm');
+  store.upsertCodexRolloutPath({ sessionId: 'session', transcriptPath: '/isolated/rollout-moved.jsonl' });
+  assert.ok(store.historyRevision > revision, 'a moved transcript refreshes discovery');
+  store.deleteEventsOlderThan(1, '2026-01-01T00:00:00Z');
+  assert.equal(store.getHistoryAttribution().length, 0, 'local pruning clears stale attribution');
 });

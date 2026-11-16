@@ -91,14 +91,14 @@ export async function runRemoteAccessBrowser(t, sandbox) {
       assert.match(await side.locator('.wb-now-title').first().innerText(), /Idle/, 'now card uses the same working state');
       assert.equal(chatRequests.length, 0, 'closed remote access makes no chat requests');
       const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
-      if (evidence) {
+      if (evidence && width === 390) {
         fs.mkdirSync(evidence, { recursive: true });
-        await page.screenshot({ path: path.join(evidence, `remote-group-chat-closed-${width}.png`) });
+        await page.screenshot({ path: path.join(evidence, 'remote-group-chat-closed-390.png') });
       }
       policy.allow = true;
       await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
       await action.waitFor();
-      if (evidence) await page.screenshot({ path: path.join(evidence, `remote-group-chat-open-${width}.png`) });
+      if (evidence && width === 390) await page.screenshot({ path: path.join(evidence, 'remote-group-chat-open-390.png') });
       // Retain a previously offered action to exercise a delayed callback after
       // permission closes, the same guard used when returning from observer.
       const stale = await action.elementHandle();

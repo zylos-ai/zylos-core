@@ -7,7 +7,7 @@ import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { once } from 'node:events';
 import { browserPath, browserBaseFromRequest } from './browser-base.js';
-import { sendHtml, sendJson, sendText, serveStatic, jsonResponse } from './http.js';
+import { sendHtml, sendJson, sendText, serveStatic } from './http.js';
 import { validateMemoryQueryPath } from './memory-browser.js';
 import {
   acceptObserverWebSocket,
@@ -58,17 +58,6 @@ function stripHopByHop(headers) {
     if (!blocked.has(key.toLowerCase()) && value !== undefined) result[key] = value;
   }
   return result;
-}
-
-/** Buffered JSON errors use the local wire contract; binaries and streams retain their bytes. */
-function relayBufferedResponse(res, status, headers, bytes) {
-  let body = bytes;
-  if (status >= 400 && /\bapplication\/(?:[a-z0-9.+-]+\+)?json\b/i.test(headers['content-type'] || '')) {
-    try { body = Buffer.from(JSON.stringify(jsonResponse(status, JSON.parse(bytes.toString('utf8'))).body)); }
-    catch { /* A non-JSON upstream body retains its existing transport contract. */ }
-  }
-  res.writeHead(status, headers);
-  res.end(body);
 }
 
 function remoteUrl(agent, remotePath, search = '') {
@@ -561,7 +550,8 @@ export class FleetProxy {
         for (const [id, binding] of this.observerLeases) if (binding.agentName === agent.name) this.observerLeases.delete(id);
         for (const stream of [...this.observerStreams]) if (stream.agentName === agent.name) stream.close();
       }
-      relayBufferedResponse(res, remoteResp.status, responseHeaders, buffer);
+      res.writeHead(remoteResp.status, responseHeaders);
+      res.end(buffer);
     }
   }
 
@@ -751,7 +741,9 @@ export class FleetProxy {
         const configHeaders = responseHeaders(configResponse);
         const configBytes = await smallBody(configResponse);
         if (!configResponse.ok) {
-          relayBufferedResponse(res, configResponse.status, configHeaders, configBytes); return;
+          res.writeHead(configResponse.status, configHeaders);
+          res.end(configBytes);
+          return;
         }
         let maximum;
         try { maximum = JSON.parse(configBytes.toString('utf8')).maxUploadBytes; } catch { throw fail('invalid_upload_config'); }
@@ -774,7 +766,8 @@ export class FleetProxy {
         const bytes = await smallBody(response);
         if (uploadError) throw uploadError;
         if (!localAccess()) throw fail('admin_required', 403);
-        relayBufferedResponse(res, response.status, headers, bytes);
+        res.writeHead(response.status, headers);
+        res.end(bytes);
         return;
       }
 
@@ -782,7 +775,9 @@ export class FleetProxy {
       const headers = responseHeaders(response);
       if (!response.ok) {
         const bytes = await smallBody(response);
-        relayBufferedResponse(res, response.status, headers, bytes); return;
+        res.writeHead(response.status, headers);
+        res.end(bytes);
+        return;
       }
       if (response.headers.get('content-encoding') && response.headers.get('content-encoding') !== 'identity') throw fail('unexpected_attachment_encoding');
       const declared = response.headers.get('content-length');

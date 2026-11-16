@@ -25,7 +25,7 @@ test('group HTTP failures preserve expected statuses and conceal internal failur
   }
   assert.deepEqual(response(new Error('private failure')), { status: 500,
     body: { ok: false, error: { code: 'internal_error', message: 'Request failed' } } });
-  assert.deepEqual(response(Object.assign(new Error('Too large'), { status: 413 })), { status: 413, body: { error: 'Too large' } });
+  assert.deepEqual(response(Object.assign(new Error('Too large'), { status: 413 })), { status: 413, body: { ok: false, error: { code: 'invalid_request', message: 'Too large' } } });
 });
 
 

@@ -1,4 +1,3 @@
-import { isSameOriginRequest } from './request-origin.js';
 import { isRetiredApiPath } from './api-routes.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';

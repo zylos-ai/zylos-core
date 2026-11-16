@@ -113,7 +113,7 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     const style = (locator, property) => locator.evaluate((node, property) => getComputedStyle(node)[property], property);
     // Real touch input through the browser's input pipeline, including its scrolling and fling decisions:
     // one move per frame and the finger lifts while still moving, as a quick swipe does.
-    const swipe = async (item, dx, dy = 0, nextTap = null) => {
+    const swipe = async (item, dx, dy = 0) => {
       const box = await row(item).locator('.conversation-list-item').boundingBox();
       const x = box.x + box.width * 0.7, y = box.y + box.height / 2;
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
@@ -121,14 +121,7 @@ export async function runConversationDeleteBrowser(t, sandbox) {
         await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x + dx * step / 8, y: y + dy * step / 8 }] });
         await pause(16);
       }
-      // Submit the lift and immediate next tap in protocol order without waiting
-      // for a rendering acknowledgement between them. The measured DOM events
-      // still have to prove that this was a fast real touch sequence.
-      const lift = cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-      if (nextTap) await Promise.all([lift,
-        cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [nextTap] }),
-        cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })]);
-      else await lift;
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     };
     // Phone: whether the open conversation's menu offers delete.
     const menuOffersDelete = async name => {
@@ -159,7 +152,9 @@ export async function runConversationDeleteBrowser(t, sandbox) {
         };
         addEventListener('touchend', end, true); addEventListener('touchstart', start, true);
       });
-      await swipe(item, -160, 0, at);
+      await swipe(item, -160);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [at] });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
       const gap = await page.evaluate(() => window.__tapGap);
       assert.ok(gap !== null && gap < 100, `the tap follows the lift within 100 ms (${gap} ms)`);
       tapGaps.push(gap);

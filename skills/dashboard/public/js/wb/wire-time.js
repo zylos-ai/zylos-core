@@ -1,6 +1,6 @@
 /** Absolute time conversion is a wire concern; storage, caches and cursors keep their source units. */
 export function isoTimestamp(value, unit = 'ms') {
-  if (value == null || value === '' || value === 0 || value === '0') return null;
+  if (value == null || value === '') return null;
   let milliseconds;
   if (typeof value === 'number' || typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value)) {
     if (Number(value) === 0) return null;
@@ -88,9 +88,6 @@ function project(value, schema, convert) {
 /** Endpoint-specific catalogue. Opaque continuation fields and transcript payloads are excluded. */
 export function projectApiTimestamps(pathname, value) {
   if (typeof pathname !== 'string' || !value) return value;
-  // Fleet HTTP relays may apply the same idempotent projection to a remote object.
-  const remote = pathname.match(/^\/fleet\/[^/]+(\/api\/.*)$/);
-  if (remote) return projectApiTimestamps(remote[1], value);
   if (pathname === '/api/instance') return project(value, INSTANCE);
   if (pathname === '/api/health') return project(value, ms('startedAt', 'source.*.*.updated_at'));
   if (pathname === '/api/groups/activity') return project(value, ms('start', 'groups.*.inbound.*'));

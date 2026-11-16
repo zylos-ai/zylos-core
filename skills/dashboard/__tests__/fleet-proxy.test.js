@@ -1043,35 +1043,6 @@ test('fleet proxy keeps encoded slash fail-closed for memory URL path', async ()
   }
 });
 
-test('fleet proxy normalizes upstream insufficient_scope for whitelisted writes', async () => {
-  const remote = await listen((_req, res) => {
-    res.writeHead(403, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ error: 'insufficient_scope', required: 'admin' }));
-  });
-  const proxy = new FleetProxy({
-    config: { fleet: { agents: [{ name: 'Remote', base_url: remote.origin, read_api_key: 'zylos_ak_secret' }] } },
-    rootDir: publicDir(),
-    poller: { getSessionToken: async () => 'zylos_st_secret' }
-  });
-  const hub = await listen((req, res) => {
-    req._authContext = { kind: 'api', scope: 'admin', principalId: 'fixture' };
-    const url = new URL(req.url, 'http://hub.test');
-    proxy.handle(req, res, url);
-  });
-  try {
-    const resp = await fetch(`${hub.origin}/fleet/Remote/api/settings/pricing`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}'
-    });
-    assert.equal(resp.status, 403);
-    assert.deepEqual(await resp.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
-  } finally {
-    await hub.close();
-    await remote.close();
-  }
-});
-
 test('fleet proxy refreshes token once for write 401 and reuses the request body', async () => {
   const seenAuth = [];
   const seenBodies = [];
@@ -1534,7 +1505,7 @@ test('fleet forwards Observer Set size with its body and relays the producer ver
     res.writeHead(allowed ? 200 : 403, { 'content-type': 'application/json' });
     res.end(JSON.stringify(allowed
       ? { agentSize: JSON.parse(body), applied: { ...JSON.parse(body), statusLines: 1 } }
-      : { error: 'insufficient_scope' }));
+      : { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' } }));
   });
   const proxy = new FleetProxy({
     config: { fleet: { agents: [{ name: 'Remote', base_url: remote.origin }] } },
@@ -1878,32 +1849,4 @@ test('fleet schedule writes allow only exact object and action paths', async () 
       assert.equal(seen.length, count, 'rejected paths must not reach the destination');
     }
   } finally { await hub.close(); await remote.close(); }
-});
-
-
-// Loopback buffered-error relay boundary. Covers ordinary JSON and the separate
-// attachment/config paths; run for relay normalization changes, skip unrelated UI.
-test('fleet buffered attachment failures normalize JSON while binary failures keep their bytes', async () => {
-  const proxy = new FleetProxy({
-    config: { fleet: { agents: [{ name: 'Remote', base_url: 'http://fixture.invalid', read_api_key: 'fixture' }] } },
-    rootDir: publicDir(), poller: { getSessionToken: async () => 'fixture-session' },
-    fetch: async url => new Response(url.includes('binary') ? 'binary-error-body' : '{"error":"insufficient_scope","required":"admin"}',
-      { status: 403, headers: { 'content-type': url.includes('binary') ? 'application/octet-stream' : 'application/json' } }),
-  });
-  const hub = await listen((req, res) => {
-    req._authContext = { kind: 'api', scope: 'admin', principalId: 'fixture' };
-    proxy.handle(req, res, new URL(req.url, 'http://hub.test'));
-  });
-  try {
-    for (const [method, suffix] of [['GET', '/api/chat/conversations/example/attachments/file'],
-      ['POST', '/api/chat/conversations/example/uploads']]) {
-      const reply = await fetch(`${hub.origin}/fleet/Remote${suffix}`, { method });
-      assert.equal(reply.status, 403);
-      assert.deepEqual(await reply.json(), { ok: false, required: 'admin', error: { code: 'insufficient_scope', message: 'insufficient_scope' } });
-    }
-    const binary = await fetch(`${hub.origin}/fleet/Remote/api/chat/conversations/example/attachments/binary`);
-    assert.equal(binary.status, 403);
-    assert.equal(binary.headers.get('content-type'), 'application/octet-stream');
-    assert.equal(await binary.text(), 'binary-error-body');
-  } finally { await hub.close(); }
 });

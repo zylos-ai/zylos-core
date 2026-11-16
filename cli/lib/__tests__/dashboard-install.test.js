@@ -171,7 +171,7 @@ test('registration preserves the original password and live session credentials'
  assert.equal(applyDashboardRegistration({zylosDir:dir}).state,'done');
  assert.equal(fs.readFileSync(path.join(data,'config.json'),'utf8'),bytes);
  assert.deepEqual(store.db.prepare('SELECT token_hash,created_at FROM auth_sessions').all(),sessionsBefore);
- const retained=await fetch(origin+'/api/state',{headers:{cookie}});
+ const retained=await fetch(origin+'/api/instance',{headers:{cookie}});
  assert.equal(retained.status,200);assert.deepEqual(await retained.json(),{originalSession:true});
  assert.equal((await login()).status,302);
 });

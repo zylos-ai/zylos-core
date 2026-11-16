@@ -17,7 +17,17 @@ export class ClaudeHistory extends HistoryParser {
     this.metadataLoads = new Map();
   }
   get projectDir() { return path.join(this.homeDir, '.claude', 'projects', claudeProjectSlug(this.zylosDir)); }
+  async discoveryVersion() {
+    const directories = this.discoveryDirectories || [this.projectDir];
+    return (await Promise.all(directories.map(async directory => {
+      try {
+        const stat = await fs.stat(directory);
+        return `${stat.dev}:${stat.ino}:${stat.mtimeMs}`;
+      } catch { return 'missing'; }
+    }))).join('|');
+  }
   async listSessions() {
+    this.discoveryDirectories = [this.projectDir];
     const sessions = [];
     const paths = new Map();
     const scanned = new Set();
@@ -44,6 +54,7 @@ export class ClaudeHistory extends HistoryParser {
     for (const directory of files) {
       if (!directory.isDirectory() || !SESSION_ID.test(directory.name) || !this.includesSession(directory.name)) continue;
       const subRoot = path.join(root, directory.name, 'subagents');
+      this.discoveryDirectories.push(path.join(root, directory.name), subRoot);
       let subFiles;
       try {
         if (await fs.realpath(subRoot) !== subRoot) continue;

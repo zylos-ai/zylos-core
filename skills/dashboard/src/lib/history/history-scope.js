@@ -5,8 +5,6 @@ import { loadCoreModule } from '../core-modules.js';
 // Historical selection uses imported attribution and files only. It must remain
 // available for offline groups without opening tmux or starting Observer.
 export function createHistoryScope({ config = {}, store, load = loadCoreModule, readCurrentSessionId } = {}) {
-  let attributionRevision;
-  let rows;
   return async function scope(params) {
     const group = params.get('session_group') ?? 'origin';
     const [{ assertSessionGroup }, { readSessionMode }] = await Promise.all([
@@ -19,14 +17,8 @@ export function createHistoryScope({ config = {}, store, load = loadCoreModule, 
     if (mode !== 'multi' && group !== 'origin') {
       throw Object.assign(new Error('Only Origin is available in single session mode'), { status: 400, code: 'target_mismatch' });
     }
+    const attribution = store?.getHistoryAttribution?.() ?? [];
     const revision = store?.historyRevision ?? 0;
-    if (!rows || attributionRevision !== revision) {
-      rows = store?.db?.prepare(`SELECT session_id, runtime, session_group FROM runtime_events
-        WHERE session_id IS NOT NULL AND runtime IN ('claude', 'codex')
-        GROUP BY session_id, runtime, session_group ORDER BY MAX(timestamp) DESC, MAX(event_seq) DESC`).all() ?? [];
-      attributionRevision = revision;
-    }
-    const attribution = rows;
     const belongs = row => (row.session_group ?? 'origin') === group;
     const selected = attribution.filter(belongs);
     let current = null;

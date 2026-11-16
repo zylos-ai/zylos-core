@@ -234,7 +234,7 @@ export async function runVisualCase(t, sandbox) {
     // local browser cookie is only the viewing instance's identity.
     fixture.setProxy(fixture);
     const toggle = async allowRemote => {
-      const result = await fixture.request('/api/settings/chat', { method: 'PUT', body: { allowRemote } });
+      const result = await fixture.request('/api/settings/chat', { method: 'PUT', body: { chat_allow_remote: allowRemote } });
       assert.equal(result.status, 200);
     };
     for (const operation of ['refresh', 'automaticPoll', 'switchGroup']) {

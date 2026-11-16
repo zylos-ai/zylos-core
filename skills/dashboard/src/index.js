@@ -313,7 +313,7 @@ const stateEngine = new StateEngine(store, collectors, config, {
 timeMethod(stateEngine, '_periodicSnapshot', 'state.snapshot');
 timeMethod(stateEngine, '_readAMHeartbeat', 'state.heartbeat');
 
-observerService.historyService = new HistoryService({ config, store, stateEngine, readCurrentSessionId: () => coreState.getState().sessionGroup === null ? coreState.getCurrentSessionId() : null });
+observerService.historyService = new HistoryService({ config, store, stateEngine, readCurrentSessionId: () => coreState.getSingleSessionId() });
 
 // Wire collector updates to state engine
 pm2Collector._onUpdate = (data) => {
