@@ -1,6 +1,7 @@
 export default {
   transform: {},
   testPathIgnorePatterns: [
+    '<rootDir>/test/self-upgrade-output.integration.test.js',
     '<rootDir>/test/fleet-attention.integration.test.js',
     '<rootDir>/test/fleet-attention-browser.test.js',
     '<rootDir>/test/channel-delivery.integration.test.js',
