@@ -139,6 +139,7 @@ async function maintenanceProcess(t, script, mentions = []) {
 // Covers same-UID incidental arguments, including the concurrent test runner.
 // Run for matching changes; skip unrelated work. Children are stopped and awaited.
 test('maintenance ignores same-user commands that only mention script words or test paths', { skip: !hasPgrep, timeout: 15000 }, async t => {
+  isolationReadback();
   const grep = spawn('grep', ['upgrade-claude'], { stdio: ['pipe', 'ignore', 'ignore'] });
   const grepExited = once(grep, 'exit');
   t.after(async () => {
@@ -193,6 +194,8 @@ for (const title of ['curl -fsSL https://claude.ai/install.sh',
   });
 }
 
+// Real script/pgrep/preparation boundary; run for maintenance checks, skip unrelated
+// work. The isolated child is stopped and awaited; no live restart is performed.
 test('with pgrep, a running restart-claude process holds single preparation until it exits', { skip: !hasPgrep && 'pgrep is not installed', timeout: 15000 }, async t => {
   const { child, exited } = await maintenanceProcess(t, 'restart-claude/scripts/restart.js');
   assert.match(await runningMaintenance(), /restart-claude\/scripts\/restart/);
@@ -202,7 +205,7 @@ test('with pgrep, a running restart-claude process holds single preparation unti
     clearStaleState: async () => calls.push('clear'), resetToolLifecycle: async () => calls.push('reset'),
     buildInstructionFile: async () => calls.push('instructions') });
   await prepare('claude');
-  assert.deepEqual(waits.slice(0, 2), [1000, 1000]);
+  assert.deepEqual(waits, [1000, 1000]);
   assert.deepEqual(calls, ['clear','reset','instructions']);
   assert.equal(logs.some(line => /pgrep/.test(line)), false);
 });
