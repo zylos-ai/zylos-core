@@ -55,7 +55,7 @@ function focusGeometry(control) {
     width: rect.width, height: rect.height };
 }
 
-export async function runFocusClippingBrowser(sandbox, { width, theme, memoryRefresh = false }) {
+export async function runFocusClippingBrowser(sandbox, { width, theme, memoryRefresh = false, memoryFocus = 'file' }) {
   console.info('Focus browser isolation:', JSON.stringify(sandbox.assertIsolation()));
   const errors = [], streams = new Set(), observations = [];
   let closing = false, state = 'asleep';
@@ -140,23 +140,43 @@ export async function runFocusClippingBrowser(sandbox, { width, theme, memoryRef
 
   if (memoryRefresh) {
     await openDashboardTab(page, 'memory');
-    const first = page.locator('.memory-file').first();
+    const first = page.locator(memoryFocus === 'file' ? '.memory-file'
+      : memoryFocus === 'header' ? '.wb-memory-section-h' : '.wb-memory-search input').first();
     await first.focus();
     await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Tab');
-    const original = await page.locator('.memory-file:focus').elementHandle();
-    const filePath = await original.getAttribute('data-path');
+    const original = await first.elementHandle();
+    assert.ok(await original.evaluate(node => node === document.activeElement), 'the intended control has keyboard focus');
+    const filePath = await page.locator('.memory-file').first().getAttribute('data-path');
+    const collapseKey = await original.getAttribute('data-collapse-key');
+    const oldFile = await page.locator('.memory-file').first().elementHandle();
     const response = page.waitForResponse(value => new URL(value.url()).pathname === '/api/memory/git');
     releaseMemoryGit();
     await response;
-    await page.waitForFunction(node => !node.isConnected && document.querySelector('#memory-status').hidden, original);
+    await page.waitForFunction(node => !node.isConnected && document.querySelector('#memory-status').hidden, oldFile);
     const focus = await page.evaluate(() => ({ path: document.activeElement.dataset.path,
+      tag: document.activeElement.tagName,
+      inList: !!document.activeElement.closest('.memory-tree'),
+      key: document.activeElement.dataset.collapseKey,
+      header: document.activeElement.matches('.wb-memory-section-h'),
+      search: document.activeElement.matches('.wb-memory-search input'),
       connected: document.activeElement.isConnected, file: document.activeElement.matches('.memory-file'),
       visible: document.activeElement.matches(':focus-visible') }));
-    await original.dispose();
-    assert.equal(focus.path, filePath, 'memory response preserves the focused file path after rebuilding the list');
-    assert.ok(focus.file && focus.connected && focus.visible, 'the replacement file keeps connected keyboard focus');
+    await original.dispose(); await oldFile.dispose();
+    if (memoryFocus !== 'search') assert.ok(focus.connected && focus.visible, 'the control keeps connected keyboard focus');
+    if (memoryFocus === 'file') {
+      assert.equal(focus.path, filePath, 'memory response preserves the focused file path after rebuilding the list');
+      assert.ok(focus.file, 'the replacement is a file button');
+      await screenshot('memory-refresh');
+      const nextPath = await page.locator('.memory-file').nth(1).getAttribute('data-path');
+      await page.keyboard.press('Tab');
+      assert.equal(await page.locator('.memory-file:focus').getAttribute('data-path'), nextPath,
+        'Tab continues to the next file after the response');
+    } else if (memoryFocus === 'header') {
+      assert.ok(focus.header, 'focus stays on the folding header');
+      assert.equal(focus.key, collapseKey, 'the same folding key keeps focus');
+    } else assert.equal(focus.inList, false, 'a response does not pull external search focus into the memory list');
     assert.equal(errors.length, 0, errors.join('\n'));
-    console.info('Memory refresh focus:', JSON.stringify(focus));
+    console.info('Memory refresh focus:', JSON.stringify({ width, memoryFocus, ...focus }));
     return;
   }
 
