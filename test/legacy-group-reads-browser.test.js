@@ -228,7 +228,7 @@ test('catalog-backed Chinese, hyphen and percent groups load real details and ti
       assert.equal(cliCalls.length, cliBefore, 'invalid target never reaches config/name CLI');
     }
   }
-  const memory = await request('/api/workbench/memory/backlog', { identity: 'cookie' });
+  const memory = await request('/api/memory/backlog', { identity: 'cookie' });
   const percentMemory = memory.groups.find(row => row.sessionGroup === 'tg:有%号');
   assert.equal(percentMemory.count, 1); assert.equal(percentMemory.aged, false);
   assert.equal(percentMemory.syncing, null); assert.equal(percentMemory.reason, 'backlog_failed');

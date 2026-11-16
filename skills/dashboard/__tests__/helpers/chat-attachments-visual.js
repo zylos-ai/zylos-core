@@ -198,7 +198,7 @@ export async function runAttachmentVisual(t, sandbox) {
     await chooseFiles([textFile('补充说明.pdf')]); await waitReady('补充说明.pdf');
     const uploadPattern = '**/api/chat/conversations/*/uploads';
     expectedHttpError = (url, status) => url.pathname.endsWith('/uploads') && status === 503;
-    await context.route(uploadPattern, route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'chat_attachment_write_failed' }) }));
+    await context.route(uploadPattern, route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ ok: false, error: { code: 'chat_attachment_write_failed', message: 'chat_attachment_write_failed' } }) }));
     await chooseFiles([imageFile('补充截图.png')]);
     await itemNamed('补充截图.png').locator('[data-action="retryUpload"]').waitFor();
     const failedTrayPreview = await itemNamed('补充截图.png').locator('.chat-attachment-image-frame[data-state="failed"]').evaluate(frame => ({ height: frame.getBoundingClientRect().height, icon: !!frame.querySelector('.chat-attachment-placeholder .wb-ico-image') }));
@@ -331,11 +331,14 @@ export async function runAttachmentVisual(t, sandbox) {
   await chooseFiles(twenty); await waitReady(null, 20);
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    // Enter the narrow detail view through the same conversation selection as a phone user.
+    if (width === 390) await choose('uploads');
+    await page.clock.runFor(100);
     await bounded(page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))), 'twenty-item viewport layout did not settle');
     const bounds = await page.locator('#wb-chat .conversation-upload-tray').evaluate(tray => ({ height: tray.getBoundingClientRect().height,
       scrollHeight: tray.scrollHeight, clientHeight: tray.clientHeight, historyHeight: document.querySelector('#wb-chat .chat-messages').getBoundingClientRect().height,
       pageHeight: document.documentElement.scrollHeight, viewport: innerHeight }));
-    if (output) fs.writeFileSync(path.join(output, `twenty-item-bounds-${width}.json`), JSON.stringify(bounds, null, 2));
+    if (output) { fs.writeFileSync(path.join(output, `twenty-item-bounds-${width}.json`), JSON.stringify(bounds, null, 2)); await page.screenshot({ path: path.join(output, `twenty-item-${width}.png`) }); }
     assert.ok(bounds.height <= 190, 'twenty-item tray remains bounded by the approved188px limit: ' + JSON.stringify(bounds));
     assert.ok(bounds.scrollHeight <= (width === 390 ? 1600 : 800), 'twenty file rows keep the approved compact information layout: ' + JSON.stringify(bounds));
     assert.ok(bounds.historyHeight > 0 && bounds.pageHeight <= bounds.viewport + 1, 'history remains visible while the full tray is scrollable: ' + JSON.stringify(bounds));
@@ -522,9 +525,9 @@ export async function runAttachmentVisual(t, sandbox) {
   });
   assert.equal(readonlyDrop.over, true); assert.equal(readonlyDrop.drop, true); assert.equal(uploads, uploadsBeforeReadonlyDrop);
   fixture.setProxy(fixture); expectedHttpError = (url, status) => url.pathname.startsWith('/fleet/Remote/api/chat/') && status === 403;
-  // A refused remote view hides the conversation tab and leaves for the overview (remote-access.js);
-  // the conversation page keeps only its fallback notice.
-  await page.goto(fixture.base + '/fleet/Remote/chat'); await page.locator('#wb-chat .conversation-blocked-notice').waitFor({ state: 'attached' });
+  // Settings admission may hide the remote conversation tab before its page mounts.
+  // In either admission path, no upload control remains and the overview is shown.
+  await page.goto(fixture.base + '/fleet/Remote/chat');
   await page.waitForFunction(() => document.querySelector('.tab[data-tab="chat"]').hidden
     && document.querySelector('.tab.active')?.dataset.tab === 'overview' && !document.querySelector('#tab-overview').hidden, null, { timeout: 10_000 });
   assert.equal(await page.locator('#wb-chat [data-action="attach"]').count(), 0);

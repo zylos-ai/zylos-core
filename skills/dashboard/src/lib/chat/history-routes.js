@@ -12,7 +12,7 @@ export async function handleChatHistory(req, res, url, { auth, config, history, 
   if (!match) return false;
   const denied = requireChatAccess(req, auth, config);
   if (denied) { const { status, ...body } = denied; sendJson(res, status, body); return true; }
-  if (req.method !== 'GET') { sendJson(res, 405, { error: 'method_not_allowed' }); return true; }
+  if (req.method !== 'GET') { sendJson(res, 404, { error: 'not_found' }); return true; }
   try {
     const options = Object.fromEntries(url.searchParams);
     const permitted = match[2] === 'status' ? ['tab', 'ids'] : match[2] === 'activity' ? ['tab', 'subtask'] : match[2] === 'messages' ? ['tab', 'limit', 'cursor', 'direction', 'recheckIds'] : ['tab', 'limit', 'cursor'];

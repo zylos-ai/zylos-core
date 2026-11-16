@@ -338,7 +338,10 @@ test('login keeps a next target inside the forwarded prefix', { timeout: 15_000 
   assert.equal(login.headers.get('location'), next);
 });
 
-test('logout succeeds without origin checks and respects forwarded prefix', async () => {
+// HTTP integration: actual authenticated logout in runner-isolated installation;
+// run for logout/auth/browser-origin changes. The fixture has private DB, PM2_HOME
+// and tmux directory and disabled network version checks; loopback servers close.
+test('logout always clears browser sessions and respects forwarded prefix', async () => {
   const { origin, server } = await makeServer();
   const clearCookie = '__Secure-zylos_dashboard_session=; HttpOnly; Secure; SameSite=Strict; Path=/dashboard; Max-Age=0';
   const loginCookie = async () => (await fetch(`${origin}/login`, {
@@ -353,18 +356,19 @@ test('logout succeeds without origin checks and respects forwarded prefix', asyn
     redirect: 'manual'
   });
   try {
-    // A proxy that rewrites Host (e.g. Cloudflare in front) makes Origin differ.
     const cookie = await loginCookie();
     const mismatched = await logout({ Cookie: cookie, Origin: 'https://agent.example.com' });
     assert.equal(mismatched.status, 302);
     assert.equal(mismatched.headers.get('location'), '/dashboard/login');
     assert.equal(mismatched.headers.get('set-cookie'), clearCookie);
     const revoked = await fetch(`${origin}/api/instance`, { headers: { Cookie: cookie }, redirect: 'manual' });
-    assert.notEqual(revoked.status, 200);
-
-    const noHeaders = await logout({ Cookie: await loginCookie() });
-    assert.equal(noHeaders.status, 302);
-    assert.equal(noHeaders.headers.get('set-cookie'), clearCookie);
+    assert.equal(revoked.status, 401);
+    for (const headers of [{ Origin: origin }, {}]) {
+      const accepted = await logout({ Cookie: await loginCookie(), ...headers });
+      assert.equal(accepted.status, 302);
+      assert.equal(accepted.headers.get('location'), '/dashboard/login');
+      assert.equal(accepted.headers.get('set-cookie'), clearCookie);
+    }
 
     const expired = await logout({ Cookie: '__Secure-zylos_dashboard_session=stale' });
     assert.equal(expired.status, 302);
@@ -654,7 +658,7 @@ test('/api/stream accepts Bearer API session and emits initial instance', { time
 // Integration: real auth/routing and Core save, including the 1 MiB boundary.
 // Run when memory transport or auth changes; skip unrelated UI/collector edits.
 // All config/DB/memory is fixture-owned; Core uses a private short tmux socket.
-test('/api/memory is admin-gated and browser sessions can read tree', async () => {
+test('/api/memory tree accepts read keys while file contents require admin', async () => {
   const zylosDir = memoryTempRoot('wba-');
   installMemoryScripts(zylosDir);
   const isolatedEnv = memoryTestEnv(zylosDir);
@@ -694,8 +698,11 @@ test('/api/memory is admin-gated and browser sessions can read tree', async () =
     const readResp = await fetch(`${origin}/api/memory/tree`, {
       headers: { Authorization: `Bearer ${readToken}` }
     });
-    assert.equal(readResp.status, 403);
-    assert.deepEqual(await readResp.json(), { error: 'insufficient_scope', required: 'admin' });
+    assert.equal(readResp.status, 200);
+    assert.equal((await readResp.json()).root.type, 'directory');
+    const readFile = await fetch(`${origin}/api/memory/file?path=identity.md`, { headers: { Authorization: `Bearer ${readToken}` } });
+    assert.equal(readFile.status, 403);
+    assert.equal((await readFile.json()).error.code, 'insufficient_scope');
 
     const adminResp = await fetch(`${origin}/api/memory/tree`, {
       headers: { Authorization: `Bearer ${adminToken}` }
@@ -729,7 +736,7 @@ test('/api/memory is admin-gated and browser sessions can read tree', async () =
       body: JSON.stringify({ text: '# Read key write\n', sha256: browserBody.sha256 })
     });
     assert.equal(readWriteResp.status, 403);
-    assert.deepEqual(await readWriteResp.json(), { error: 'insufficient_scope', required: 'admin' });
+    assert.deepEqual(await readWriteResp.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
 
     const nullWriteResp = await fetch(`${origin}/api/memory/file?path=identity.md`, {
       method: 'PUT',
@@ -740,7 +747,7 @@ test('/api/memory is admin-gated and browser sessions can read tree', async () =
       body: 'null'
     });
     assert.equal(nullWriteResp.status, 400);
-    assert.deepEqual(await nullWriteResp.json(), { error: 'invalid_memory_write' });
+    assert.deepEqual(await nullWriteResp.json(), { ok: false, error: { code: 'invalid_memory_write', message: 'invalid_memory_write' } });
 
     const largeWriteResp = await fetch(`${origin}/api/memory/file?path=large.txt`, {
       method: 'PUT',
@@ -782,7 +789,7 @@ test('/api/memory is admin-gated and browser sessions can read tree', async () =
     });
     assert.equal(conflictResp.status, 409);
     const conflictBody = await conflictResp.json();
-    assert.equal(conflictBody.error, 'memory_conflict');
+    assert.equal(conflictBody.error.code, 'memory_conflict');
     assert.equal(conflictBody.current.sha256, adminWriteBody.sha256);
     assert.equal(conflictBody.current.text, '# Identity\nEdited\n');
     assert.equal(fs.readFileSync(path.join(zylosDir, 'memory', 'identity.md'), 'utf8'), '# Identity\nEdited\n');
@@ -864,7 +871,7 @@ test('proxied interrupt and chop-chop writes require consumer admin API scope or
       body: '{}'
     });
     assert.equal(readWrite.status, 403);
-    assert.deepEqual(await readWrite.json(), { error: 'insufficient_scope', required: 'admin' });
+    assert.deepEqual(await readWrite.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
     assert.equal(actionHits, 0);
 
     const adminWrite = await fetch(`${origin}/fleet/Remote/api/groups/origin/actions/interrupt`, {
@@ -899,7 +906,7 @@ test('proxied interrupt and chop-chop writes require consumer admin API scope or
       body: JSON.stringify({ text: '# Read key write\n', sha256: 'a'.repeat(64) })
     });
     assert.equal(readMemoryWrite.status, 403);
-    assert.deepEqual(await readMemoryWrite.json(), { error: 'insufficient_scope', required: 'admin' });
+    assert.deepEqual(await readMemoryWrite.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
     assert.equal(memoryWriteHits, 0);
 
     const adminMemoryWrite = await fetch(`${origin}/fleet/Remote/api/memory/file?path=identity.md`, {
@@ -979,7 +986,7 @@ test('API key management is admin-gated, show-once, and revoke invalidates activ
       headers: { Authorization: `Bearer ${readToken}` }
     });
     assert.equal(readList.status, 403);
-    assert.deepEqual(await readList.json(), { error: 'insufficient_scope', required: 'admin' });
+    assert.deepEqual(await readList.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
 
     const create = await fetch(`${origin}/api/keys`, {
       method: 'POST',
@@ -1015,7 +1022,7 @@ test('API key management is admin-gated, show-once, and revoke invalidates activ
       body: JSON.stringify({ name: 'producer-read', scope: 'read' })
     });
     assert.equal(duplicate.status, 400);
-    assert.deepEqual(await duplicate.json(), { error: 'duplicate_name' });
+    assert.deepEqual(await duplicate.json(), { ok: false, error: { code: 'duplicate_name', message: 'duplicate_name' } });
 
     const badScope = await fetch(`${origin}/api/keys`, {
       method: 'POST',
@@ -1026,7 +1033,7 @@ test('API key management is admin-gated, show-once, and revoke invalidates activ
       body: JSON.stringify({ name: 'bad-scope', scope: 'owner' })
     });
     assert.equal(badScope.status, 400);
-    assert.deepEqual(await badScope.json(), { error: 'invalid_scope' });
+    assert.deepEqual(await badScope.json(), { ok: false, error: { code: 'invalid_scope', message: 'invalid_scope' } });
 
     const createAdmin = await fetch(`${origin}/api/keys`, {
       method: 'POST',
@@ -1075,7 +1082,7 @@ test('API key management is admin-gated, show-once, and revoke invalidates activ
       headers: { Authorization: `Bearer ${adminToken}` }
     });
     assert.equal(secondRevoke.status, 404);
-    assert.deepEqual(await secondRevoke.json(), { error: 'unknown_key' });
+    assert.deepEqual(await secondRevoke.json(), { ok: false, error: { code: 'unknown_key', message: 'unknown_key' } });
   } finally {
     await closeServer(server);
     fs.rmSync(zylosDir, { recursive: true, force: true });
@@ -1304,7 +1311,7 @@ test('API key lifecycle supports name reuse, rotate, permanent delete, and revok
       body: JSON.stringify({ name: 'producer-read', scope: 'read' })
     });
     assert.equal(duplicate.status, 400);
-    assert.deepEqual(await duplicate.json(), { error: 'duplicate_name' });
+    assert.deepEqual(await duplicate.json(), { ok: false, error: { code: 'duplicate_name', message: 'duplicate_name' } });
 
     const beforeRotate = new Store(dbPath);
     const rowBefore = beforeRotate.getApiKeyByName('producer-read');
@@ -1324,7 +1331,7 @@ test('API key lifecycle supports name reuse, rotate, permanent delete, and revok
     const rotateBody = await rotate.json();
     assert.equal(rotateBody.key.name, 'producer-read');
     assert.equal(rotateBody.key.scope, rowBefore.scope);
-    assert.equal(rotateBody.key.created_at, rowBefore.created_at);
+    assert.equal(rotateBody.key.created_at, new Date(rowBefore.created_at.replace(' ', 'T') + 'Z').toISOString());
     assert.match(rotateBody.plaintext_key, /^zylos_ak_/);
     assert.equal(JSON.stringify(rotateBody).includes('key_hash'), false);
 
@@ -1416,7 +1423,7 @@ test('API key lifecycle supports name reuse, rotate, permanent delete, and revok
       headers: { Authorization: `Bearer ${adminToken}` }
     });
     assert.equal(activeHardDelete.status, 409);
-    assert.deepEqual(await activeHardDelete.json(), { error: 'must_revoke_first' });
+    assert.deepEqual(await activeHardDelete.json(), { ok: false, error: { code: 'must_revoke_first', message: 'must_revoke_first' } });
 
     await createKey('purge-revoked');
     const deleteNamedPurge = await fetch(`${origin}/api/keys/purge-revoked`, {
@@ -1544,7 +1551,7 @@ test('fleet management API is admin-gated, masks keys, persists atomically, and 
       headers: { Authorization: `Bearer ${readToken}` }
     });
     assert.equal(readList.status, 403);
-    assert.deepEqual(await readList.json(), { error: 'insufficient_scope', required: 'admin' });
+    assert.deepEqual(await readList.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
 
     const add = await fetch(`${origin}/api/fleet/agents`, {
       method: 'POST',
@@ -1578,7 +1585,7 @@ test('fleet management API is admin-gated, masks keys, persists atomically, and 
       })
     });
     assert.equal(duplicate.status, 400);
-    assert.deepEqual(await duplicate.json(), { error: 'duplicate_name' });
+    assert.deepEqual(await duplicate.json(), { ok: false, error: { code: 'duplicate_name', message: 'duplicate_name' } });
 
     const reserved = await fetch(`${origin}/api/fleet/agents`, {
       method: 'POST',
@@ -1593,7 +1600,7 @@ test('fleet management API is admin-gated, masks keys, persists atomically, and 
       })
     });
     assert.equal(reserved.status, 400);
-    assert.deepEqual(await reserved.json(), { error: 'reserved_name' });
+    assert.deepEqual(await reserved.json(), { ok: false, error: { code: 'reserved_name', message: 'reserved_name' } });
 
     const list = await fetch(`${origin}/api/fleet/agents`, {
       headers: { Authorization: `Bearer ${adminToken}` }
@@ -1698,7 +1705,7 @@ test('fleet management add rechecks duplicate names after slow probe', async () 
 
     const bodies = await Promise.all(responses.map(resp => resp.json()));
     assert.equal(bodies.some(body => body.ok === true && body.agent?.name === 'Remote'), true);
-    assert.equal(bodies.some(body => body.error === 'duplicate_name'), true);
+    assert.equal(bodies.some(body => body.error?.code === 'duplicate_name'), true);
 
     const saved = JSON.parse(fs.readFileSync(path.join(zylosDir, 'components', 'dashboard', 'config.json'), 'utf8'));
     assert.equal(saved.fleet.agents.filter(agent => agent.name === 'Remote').length, 1);
@@ -1746,8 +1753,8 @@ test('fleet test-connection API reports auth failures and reachable read scope w
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ base_url: remote.origin, read_api_key: 'zylos_ak_bad' })
     });
-    assert.equal(bad.status, 200);
-    assert.deepEqual(await bad.json(), { reachable: false, error: 'auth_failed' });
+    assert.equal(bad.status, 502);
+    assert.deepEqual(await bad.json(), { ok: false, reachable: false, error: { code: 'auth_failed', message: 'auth_failed' } });
 
     const good = await fetch(`${origin}/api/fleet/agents/test`, {
       method: 'POST',
@@ -1755,7 +1762,7 @@ test('fleet test-connection API reports auth failures and reachable read scope w
       body: JSON.stringify({ base_url: remote.origin, read_api_key: 'zylos_ak_good' })
     });
     assert.equal(good.status, 200);
-    assert.deepEqual(await good.json(), { reachable: true, scope: 'read', version: '0.3.0' });
+    assert.deepEqual(await good.json(), { ok: true, reachable: true, scope: 'read', version: '0.3.0' });
 
     const saved = JSON.parse(fs.readFileSync(path.join(zylosDir, 'components', 'dashboard', 'config.json'), 'utf8'));
     assert.equal(saved.fleet, undefined, 'test-connection must not persist the submitted key');
@@ -1805,7 +1812,7 @@ test('nested Dashboard login accepts any valid same-name cookie and logout clear
   }
   const rejected = await fetch(origin, { headers: { ...headers, cookie: `${invalid}; __Secure-zylos_dashboard_session=also-invalid` }, redirect: 'manual' });
   assert.equal(rejected.status, 302); assert.match(rejected.headers.get('location'), /^\/ib\/dashboard\/login/); await rejected.text();
-  const logout = await fetch(`${origin}/logout`, { method: 'POST', headers: { ...headers, cookie: `${valid}; ${invalid}` }, redirect: 'manual' });
+  const logout = await fetch(`${origin}/logout`, { method: 'POST', headers: { ...headers, origin, cookie: `${valid}; ${invalid}` }, redirect: 'manual' });
   await logout.text();
   assert.deepEqual(logout.headers.getSetCookie(), ['__Secure-zylos_dashboard_session=; HttpOnly; Secure; SameSite=Strict; Path=/ib/dashboard; Max-Age=0']);
   const ended = await fetch(origin, { headers: { ...headers, cookie: valid }, redirect: 'manual' });
@@ -1908,4 +1915,29 @@ test('group thresholds follow actual session models while Fleet omits Origin ses
     const fleetResponse = await fetch(running.origin + '/api/fleet', { signal: AbortSignal.timeout(3000) });
     assertNoSessionFields((await fleetResponse.json()).agents.find(agent => agent.self));
   }
+});
+
+
+// Actual HTTP auth and method dispatch: private installation and loopback only.
+// Run when API method routing or Fleet authentication changes; unrelated views may skip.
+test('unsupported API method path pairs return 404 and Fleet APIs require login', async () => {
+  const { origin, server } = await makeServer();
+  try {
+    for (const [method, url] of [['GET', '/fleet/Remote/api/instance'], ['POST', '/fleet/Remote/api/schedules']]) {
+      const reply = await fetch(origin + url, { method, redirect: 'manual' });
+      assert.equal(reply.status, 401, `${method} ${url}`);
+      assert.equal(reply.headers.get('location'), null);
+      assert.equal((await reply.json()).error.code, 'unauthorized');
+    }
+    const loggedIn = await fetch(`${origin}/login`, { method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: form({ password: 'secret' }), redirect: 'manual' });
+    const cookie = loggedIn.headers.get('set-cookie');
+    for (const [method, url] of [['PATCH', '/api/instance'], ['POST', '/api/usage/summary'],
+      ['POST', '/api/settings/chat'], ['POST', '/api/schedules/task/pause'],
+      ['PATCH', '/api/schedules/task'], ['POST', '/api/unknown']]) {
+      const reply = await fetch(origin + url, { method, headers: { Cookie: cookie, Origin: origin } });
+      assert.equal(reply.status, 404, `${method} ${url}`);
+      assert.equal((await reply.json()).error.code, 'not_found');
+    }
+  } finally { await closeServer(server); }
 });

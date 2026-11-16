@@ -50,16 +50,17 @@ test('list sections order enabled tasks by next run and keep expired and complet
   assert.deepEqual(groupTasks(tasks, { t, status: 'failed' }).map(section => section.name), ['failed']);
   assert.deepEqual(groupTasks(tasks, { t, query: 'BUSY' })[0].tasks.map(item => item.id), ['busy']);
   assert.equal(writeMessage({ result: 'unknown', reason: 'scheduler_cli_failed' }, t), '结果未知，已重新读取当前状态');
+  assert.deepEqual(writeOutcome(200, { ok: true, data: { task: { id: 'new' } } }), { result: 'done', data: { task: { id: 'new' } } });
   assert.equal(writeMessage({ result: 'rejected', code: 'INVALID_ARGS', message: 'Priority must be 1-3' }, t), 'Priority must be 1-3');
   // Definite refusals without a scheduler envelope are rejections, not unknown results.
   for (const [status, error, text] of [[413, 'payload_too_large', '内容太长，未保存'], [400, 'invalid_json', '请求格式错误，未保存'],
     [403, 'insufficient_scope', '当前密钥只读，不能修改定时任务'], [403, 'read_only_proxy', '经代理访问这台 agent 时不允许这项修改'],
     [401, 'unauthorized', '登录已失效，请重新登录']]) {
-    const outcome = writeOutcome(status, { error });
+    const outcome = writeOutcome(status, { error: { code: error, message: '' } });
     assert.deepEqual(outcome, { result: 'rejected', code: error, message: '' });
     assert.equal(writeMessage(outcome, t), text);
   }
-  for (const [status, value] of [[500, { error: 'internal_error' }], [502, { result: 'unknown', reason: 'scheduler_cli_failed' }], [200, null]]) {
+  for (const [status, value] of [[500, { error: { code: 'internal_error', message: 'Internal error' } }], [502, { result: 'unknown', reason: 'scheduler_cli_failed' }], [200, null]]) {
     assert.equal(writeOutcome(status, value).result, 'unknown');
   }
   assert.equal(writeMessage({ result: 'rejected', code: 'invalid_form', message: 'missThreshold must be a whole number' }, t),
@@ -175,7 +176,7 @@ function harness(context, respond, { writable = true, hidden = false } = {}) {
       calls.push({ path, method: options.method ?? 'GET', body: options.body });
       let value = await respond(path, options);
       // Existing page fixtures share their full task rows with the detail route.
-      const detail = path.match(/\/api\/workbench\/schedule\/([^/?]+)$/);
+      const detail = path.match(/\/api\/schedules\/([^/?]+)$/);
       if (detail && value?.tasks) value = { task: value.tasks.find(item => item.id === decodeURIComponent(detail[1])) };
       if (!detail && value?.tasks) value = { ...value, tasks: value.tasks.map(task => {
         if (!Object.hasOwn(task, 'promptTruncated')) return task;
@@ -183,7 +184,7 @@ function harness(context, respond, { writable = true, hidden = false } = {}) {
         delete summary.prompt;
         return summary;
       }) };
-      return value?.json ? value : { ok: true, json: async () => value };
+      return value?.json ? value : { ok: true, status: 200, json: async () => value };
     } });
   context.after(stop);
   const root = nodes.get('#wb-schedule');
@@ -191,7 +192,7 @@ function harness(context, respond, { writable = true, hidden = false } = {}) {
     poll: () => [...intervals.values()].find(timer => timer.delay === 30000).handler(),
     setOwner: value => { owner = value; },
     mutate: () => mutation?.(),
-    reads: () => calls.filter(call => call.method === 'GET' && call.path.split('?')[0].endsWith('/api/workbench/schedule')).length };
+    reads: () => calls.filter(call => call.method === 'GET' && call.path.split('?')[0].endsWith('/api/schedules')).length };
 }
 
 // Mounted page lifecycle with the real schedule modules and injected DOM, fetch,
@@ -236,7 +237,7 @@ test('schedule page discards a response that finishes after switching agents', a
   const json = deferred();
   let first = true;
   const h = harness(context, path => {
-    if (first && path === '/api/workbench/schedule') {
+    if (first && path === '/api/schedules') {
       first = false;
       return { ok: true, json: () => json.promise };
     }
@@ -251,7 +252,7 @@ test('schedule page discards a response that finishes after switching agents', a
   await h.poll();
   await tick();
   assert.match(textOf(h.root), /Other agent task/);
-  assert.ok(h.calls.some(call => call.path === '/fleet/Remote/api/workbench/schedule'));
+  assert.ok(h.calls.some(call => call.path === '/fleet/Remote/api/schedules'));
 });
 
 test('an unknown write result re-reads the list once and a re-enable moves the task to enabled', async context => {
@@ -259,7 +260,7 @@ test('an unknown write result re-reads the list once and a re-enable moves the t
     showLastError: true, lastError: 'Missed execution window', nextRuns: [] })]);
   let outcome = { result: 'unknown', reason: 'scheduler_cli_failed' };
   const h = harness(context, (path, options) => {
-    if (path.startsWith('/api/workbench/schedule/preview')) return { valid: true, runs: [1800009000] };
+    if (path.startsWith('/api/schedules/preview')) return { valid: true, runs: [1800009000] };
     if (path.includes('/history')) return { rows: [], next: null };
     if (options.method === 'PUT') return outcome;
     return current;
@@ -285,7 +286,7 @@ test('an unknown write result re-reads the list once and a re-enable moves the t
   assert.equal(h.reads(), before + 1);
   assert.match(textOf(form), /结果未知，已重新读取当前状态/);
 
-  outcome = { result: 'done', data: { task: { id: 'task-x' }, reenabled: true } };
+  outcome = { ok: true, data: { task: { id: 'task-x' }, reenabled: true } };
   current = page([task({ id: 'task-x', type: 'one-time', status: 'pending', cron: null })]);
   form.dispatch('submit', { preventDefault() {} });
   await tick();
@@ -349,7 +350,7 @@ test('schedule page shows an unknown time zone, unavailable previews and the idl
 test('a refused write explains the refusal and rows hold two sibling buttons', async context => {
   const group = { kind: 'group', sessionGroup: 'telegram:dm-1001', componentName: 'telegram', displayName: null };
   const h = harness(context, (path, options) => {
-    if (options.method === 'PUT') return { ok: false, status: 413, json: async () => ({ error: 'payload_too_large' }) };
+    if (options.method === 'PUT') return { ok: false, status: 413, json: async () => ({ error: { code: 'payload_too_large', message: '' } }) };
     return path.includes('/history') ? { rows: [], next: null } : page([task({ target: group })]);
   });
   await tick();
@@ -489,7 +490,7 @@ test('the edit button of an expired one-time task opens the re-enable form', asy
   const expired = task({ id: 'task-x', type: 'one-time', status: 'failed', cron: null, reenable: true,
     showLastError: true, lastError: 'Missed execution window', nextRuns: [] });
   const h = harness(context, path => path.includes('/history') ? { rows: [], next: null }
-    : path.startsWith('/api/workbench/schedule/preview') ? { valid: true, runs: [] } : page([expired]));
+    : path.startsWith('/api/schedules/preview') ? { valid: true, runs: [] } : page([expired]));
   await tick();
   allNodes(h.root).find(node => node.classList.contains('wb-sched-select')).dispatch('click');
   await tick();
@@ -602,7 +603,7 @@ test('detail and editing wait for the complete prompt instead of using a list su
   const summary = task({ prompt: 'Truncated summary', promptTruncated: true });
   const full = 'Complete prompt\n' + '内容'.repeat(240) + '\nfinal secret tail';
   const h = harness(context, path => {
-    if (path === '/api/workbench/schedule/task-1') return { ok: true, json: () => detail.promise };
+    if (path === '/api/schedules/task-1') return { ok: true, json: () => detail.promise };
     if (path.includes('/history')) return { rows: [], next: null };
     return page([summary]);
   });
@@ -619,8 +620,8 @@ test('detail and editing wait for the complete prompt instead of using a list su
 test('detail failures and stale detail replies expose no editable truncated prompt', async context => {
   const late = deferred();
   const h = harness(context, path => {
-    if (path === '/api/workbench/schedule/task-1') return { ok: true, json: () => late.promise };
-    if (path === '/api/workbench/schedule/other') throw Error('offline');
+    if (path === '/api/schedules/task-1') return { ok: true, json: () => late.promise };
+    if (path === '/api/schedules/other') throw Error('offline');
     if (path.includes('/history')) return { rows: [], next: null };
     return page([task({ promptTruncated: true }), task({ id: 'other', name: 'Other task', promptTruncated: true })]);
   });
@@ -638,7 +639,7 @@ test('a global timeline dot opens its full task while the completed list is sele
   const active = task({ prompt: 'Active full prompt from detail' });
   const done = task({ id: 'done', name: 'Completed item', status: 'completed', nextRuns: { runs: [], in24h: [] } });
   const h = harness(context, path => {
-    if (path === '/api/workbench/schedule/task-1') return { task: active };
+    if (path === '/api/schedules/task-1') return { task: active };
     if (path.includes('/history')) return { rows: [], next: null };
     return path.includes('status=completed') ? { ...page([done]), timelineTasks: [active] } : page([active]);
   });
@@ -659,7 +660,7 @@ test('legacy full task lists search locally and edit without a detail endpoint',
   delete unmatched.promptTruncated;
   const h = harness(context, path => {
     if (path.includes('/history')) return { rows: [], next: null };
-    assert.equal(path, '/api/workbench/schedule', 'legacy reads never request search or task detail');
+    assert.equal(path, '/api/schedules', 'legacy reads never request search or task detail');
     const value = page([legacy, unmatched]);
     delete value.counts;
     delete value.timelineTasks;
@@ -674,7 +675,7 @@ test('legacy full task lists search locally and edit without a detail endpoint',
   assert.equal(listRows(h).length, 1, 'legacy all search retains completed matches');
   assert.equal(listRows(h).some(node => node.textContent.includes(unmatched.name)), false, 'unmatched legacy content is filtered out');
   listRows(h)[0].dispatch('click'); await tick();
-  assert.equal(h.calls.some(call => call.path === '/api/workbench/schedule/legacy'), false);
+  assert.equal(h.calls.some(call => call.path === '/api/schedules/legacy'), false);
   buttons(h.root, '编辑')[0].dispatch('click');
   assert.equal(allNodes(h.root).find(node => node.tagName === 'TEXTAREA').value, full);
 });
@@ -790,4 +791,22 @@ test('weekly delivery summary keeps legacy timeouts visible without a false wors
   assert.equal(allNodes(legend).filter(node => node.classList.contains('wb-sched-note')).length, 0);
   const timeouts = allNodes(legend).find(node => node.classList.contains('wb-timeout'));
   assert.match(timeouts.textContent, /超时64/);
+});
+
+
+test('structured preview validation failures block saving and unavailable previews retain scheduler validation', async () => {
+  for (const [status, code, valid] of [[400, 'invalid_cron', false], [503, 'cron_preview_unavailable', null]]) {
+    let run;
+    const results = [];
+    const previewer = createPreviewer({
+      fetchPreview: async () => { throw Object.assign(new Error(code), { status, code }); },
+      onResult: value => results.push(value), setTimer: handler => { run = handler; return 1; }, clearTimer() {},
+    });
+    previewer.request('/api/schedules/preview?kind=cron&value=invalid');
+    await run();
+    assert.equal(results[0].valid, valid);
+    if (!valid && valid !== null) assert.equal(results[0].error, code);
+    assert.equal(saveAllowed({ ...initialForm(), prompt: 'x', value: 'invalid' }, results[0], { creating: true }), valid !== false);
+    previewer.destroy();
+  }
 });

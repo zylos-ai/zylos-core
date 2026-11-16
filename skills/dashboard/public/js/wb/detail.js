@@ -1,3 +1,4 @@
+import { instantSeconds } from './api-time.js';
 import { listen, reconcileChildren } from './detail-update.js';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js';
 import { olderRow } from './older-row.js';
@@ -76,14 +77,14 @@ export function confirmDialog(document, { title, body, ok, cancel, danger = true
 
 export function formatStartedAt(value, locale) {
   if (value == null) return null;
-  const date = new Date(value * 1000);
+  const date = new Date(instantSeconds(value) * 1000);
   return Number.isFinite(date.getTime()) ? formatZoned(date, locale) : null;
 }
 
 /** The plain header line: the engine and when this run started (the time alone today, with the date otherwise). */
 export function plainMeta(row, t = key => key, { now = Date.now(), locale } = {}) {
   const runtime = row.runtimeInfo?.runtime ?? row.launchConfig?.runtime ?? row.target?.runtime;
-  const date = row.createdAt == null ? null : new Date(row.createdAt * 1000);
+  const date = row.createdAt == null ? null : new Date(instantSeconds(row.createdAt) * 1000);
   const started = date && Number.isFinite(date.getTime()) ? t('wb.detail.startedAt', { time: formatZoned(date, locale,
     zonedDay(date) === zonedDay(now) ? { hour: '2-digit', minute: '2-digit' } : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }) : null;
   return [runtime ? runtimeName(runtime) : null, started].filter(Boolean).join(' · ');

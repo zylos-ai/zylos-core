@@ -540,7 +540,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
   async function load() {
     const operation = ++generation, captured = identity();
     try {
-      const value = await request('/api/workbench/memory/backlog');
+      const value = await request('/api/memory/backlog');
       if (stopped || operation !== generation || captured !== identity()) return;
       backlog = value; loaded = true; owner = captured; render();
     } catch {

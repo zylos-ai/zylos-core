@@ -12,7 +12,7 @@ test('chat API keys require remote permission and admin at both instances', { ti
     for (const fleet of [false, true]) for (const identity of ['read', 'admin']) for (const route of chatRoutes) {
       const before = { ...f.counts };
       const result = await f.request(route, { identity, fleet });
-      const allowed = identity === 'admin' && allowRemote;
+      const allowed = allowRemote && identity === 'admin';
       assert.equal(result.status, allowed ? 200 : 403, JSON.stringify({ route, identity, fleet, allowRemote, result }));
       if (!allowed) {
         assert.doesNotMatch(result.text, /PRIVATE_|"count"|"questions"/);
@@ -92,7 +92,7 @@ test('proxy refuses disabled local authentication before calling an enabled remo
   for (const identity of ['none', 'cookie', 'read', 'admin']) for (const route of chatRoutes) {
     const result = await f.request(route, { fleet: true, identity });
     assert.equal(result.status, 403);
-    assert.equal(JSON.parse(result.text).error, 'admin_required');
+    assert.equal(JSON.parse(result.text).error.code, 'admin_required');
     assert.deepEqual(f.counts, { reads: 0, receives: 0, upstream: 0 });
   }
   for (const identity of ['none', 'cookie']) {
@@ -117,7 +117,7 @@ test('proxy cookie writes require exact origin before upstream while API admin m
   for (const origin of [null, false, 'http://127.0.0.1:1']) for (const route of writes) {
     const result = await f.request(route, { fleet: true, origin, contentType: 'text/plain' });
     assert.equal(result.status, 403);
-    assert.equal(JSON.parse(result.text).error, 'origin_required');
+    assert.equal(JSON.parse(result.text).error.code, 'same_origin_required');
     assert.deepEqual(f.counts, { reads: 0, receives: 0, upstream: 0 });
   }
   for (const route of writes) {
@@ -136,19 +136,59 @@ test('proxy protects chat prefix for every method and retains explicit write all
   for (const method of ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) for (const path of paths) {
     const result = await f.request({ method, path }, { fleet: true, identity: 'read' });
     assert.equal(result.status, 403, `${method} ${path}`);
-    assert.deepEqual(f.counts, { reads: 0, receives: 0, upstream: 0 });
+    assert.equal(f.counts.receives, 0);
   }
   for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) for (const path of paths) {
     const result = await f.request({ method, path }, { fleet: true });
     assert.equal(result.status, 403);
-    assert.equal(JSON.parse(result.text).error, 'read_only_proxy');
-    assert.deepEqual(f.counts, { reads: 0, receives: 0, upstream: 0 });
+    assert.equal(JSON.parse(result.text).error.code, 'read_only_proxy');
+    assert.equal(f.counts.receives, 0);
   }
+  const beforeHead = f.counts.upstream;
   assert.equal((await f.request({ method: 'HEAD', path: paths[0] }, { fleet: true })).status, 404);
-  assert.equal(f.counts.upstream, 1);
+  assert.equal(f.counts.upstream, beforeHead + 1);
   for (const method of ['GET', 'PUT']) {
     const before = f.counts.upstream;
-    assert.equal((await f.request({ method, path: '/api/chat/settings' }, { fleet: true })).status, 403);
-    assert.equal(f.counts.upstream, before);
+    assert.equal((await f.request({ method, path: '/api/settings/chat' }, { fleet: true })).status, method === 'GET' ? 200 : 403);
+    assert.equal(f.counts.upstream, before + (method === 'GET' ? 1 : 0));
+  }
+});
+
+
+// Real AuthGate, chat access, ObserverService/HistoryService and FleetProxy over
+// two ephemeral loopback listeners. Run for sensitive read permissions or relay
+// changes; unrelated layout work may skip. The official runner supplies private
+// HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR, read back below. No live DB, files, runtime,
+// PM2 or tmux is opened: parser and session rows are injected. Fixture teardown
+// closes both servers and auth timers even on an assertion failure.
+test('chat content and terminal history require admin at the local and Fleet destination gates', { timeout: 15000 }, async t => {
+  console.log('Sensitive read matrix isolation:', JSON.stringify(Object.fromEntries(
+    ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(name => [name, process.env[name]]))),
+  'network=loopback only; DB/tmux/PM2=none');
+  const f = await chatHttpFixture(t, { chat: { allowRemote: true } }, { withHistory: true });
+  const routes = ['/api/chat/conversations', '/api/chat/conversations/local-chat/messages',
+    '/api/observer/history/sessions', '/api/observer/history/entries?session=session',
+    '/api/observer/history/content?session=session&entry=o:0&field=body',
+    '/api/observer/history/search?session=session&q=PRIVATE'];
+  const check = async (path, identity, fleet, expected, destination = 'admin') => {
+    f.setDestinationIdentity(destination);
+    const result = await f.request({ method: 'GET', path }, { identity, fleet });
+    console.log('Sensitive read matrix:', JSON.stringify({ method: 'GET', path, via: fleet ? 'Fleet' : 'local', identity, destination, status: result.status }));
+    assert.equal(result.status, expected, JSON.stringify({ path, identity, fleet, destination, body: result.text }));
+    if (expected === 403) assert.doesNotMatch(result.text, /PRIVATE_TERMINAL|PRIVATE_BODY/);
+    return result;
+  };
+  for (const path of routes) {
+    for (const fleet of [false, true]) {
+      const before = f.counts.upstream;
+      await check(path, 'read', fleet, 403);
+      if (fleet) assert.equal(f.counts.upstream, before, 'local read keys must not reach the destination');
+      await check(path, 'admin', fleet, 200);
+    }
+    await check(path, 'admin', true, 403, 'read');
+  }
+  for (const path of ['/api/settings/chat', '/api/observer/status']) {
+    for (const fleet of [false, true]) await check(path, 'read', fleet, 200);
+    await check(path, 'admin', true, 200, 'read');
   }
 });

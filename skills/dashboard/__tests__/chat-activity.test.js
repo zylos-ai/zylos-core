@@ -662,16 +662,20 @@ test('the activity route uses the chat access rules and accepts only tab and sub
   const auth = new AuthGate(config, f.store);
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
+    res.apiPath = url.pathname;
     if (await auth.handle(req, res, url)) return;
     if (await handleChatHistory(req, res, url, { auth, config, history: f.history, activity: f.activity })) return;
     sendJson(res, 404, { error: 'not_found' });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { clearInterval(auth._cleanupTimer); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  const observations = [];
   const request = async (route, withCookie = true) => {
     const response = await fetch(`http://127.0.0.1:${server.address().port}${route}`,
       { headers: withCookie ? { cookie: `__Secure-zylos_dashboard_session=${cookie}` } : {} });
-    return { status: response.status, body: await response.json() };
+    const result = { status: response.status, body: await response.json() };
+    observations.push({ method: 'GET', route, withCookie, ...result, fixtureBoundary: 'Real AuthGate, ChatHistory, ChatActivity, C4Reader and isolated SQLite databases; injected group observation.' });
+    return result;
   };
   const ok = await request(`/api/chat/conversations/${ID}/activity?tab=mine`);
   assert.equal(ok.status, 200);
@@ -682,7 +686,10 @@ test('the activity route uses the chat access rules and accepts only tab and sub
   assert.equal((await request(`/api/chat/conversations/${ID}/activity?tab=mine`, false)).status, 401);
   for (const suffix of ['tab=mine&extra=1', 'tab=mine&ids=1', 'tab=mine&tab=mine', 'tab=mine&subtask=a&subtask=b', 'tab=mine&subtask=bad%20id',
     'tab=external'])
-    assert.ok((await request(`/api/chat/conversations/${ID}/activity?${suffix}`)).status >= 400, suffix);
+    assert.ok((await request(`/api/chat/conversations/${ID}/activity?${suffix}`)).status >= 400, suffix);  if (process.env.DASHBOARD_CHAT_ACTIVITY_EVIDENCE) {
+    fs.mkdirSync(path.dirname(process.env.DASHBOARD_CHAT_ACTIVITY_EVIDENCE), { recursive: true });
+    fs.writeFileSync(process.env.DASHBOARD_CHAT_ACTIVITY_EVIDENCE, JSON.stringify(observations, null, 2));
+  }
 });
 
 test('a Dashboard database one version older gains the group, type and time index, and activity lookups use it', async t => {

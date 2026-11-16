@@ -153,18 +153,24 @@ test('Fleet relays producer chat limits and preserves explicitly requested ordin
   const producer = f.open('admin', '?chat=1&chat_tab=mine', true);
   await until(() => producer.ended());
   assert.equal(producer.status(), 429);
-  assert.deepEqual(JSON.parse(producer.text()), { error: 'chat_connection_limit' });
+  assert.deepEqual(JSON.parse(producer.text()), { ok: false, error: { code: 'chat_connection_limit', message: 'chat_connection_limit' } });
   const relayed = f.open();
   await until(() => relayed.ended());
   assert.equal(relayed.status(), 429);
-  assert.equal(relayed.text(), producer.text(), 'Fleet preserves the producer limit response');
+  assert.deepEqual(JSON.parse(relayed.text()), JSON.parse(producer.text()), 'Fleet preserves the producer limit response object');
   assert.equal(f.observer.subscriptions.size, 0);
   assert.equal(f.hub.chatClients.size, 0);
   const stream = f.open('cookie', '');
   await until(() => stream.text().includes(': connected'));
   assert.equal(stream.status(), 200);
-  f.hub.broadcast('instance', { sessionMode: 'multi' });
-  await until(() => stream.text().includes('event: instance'));
+  f.hub.broadcast('instance', { sessionMode: 'multi', runtimeHealth: { claude: { updatedAt: 1794805421568, cooldownUntil: 0 } } });
+  // Ordinary Fleet SSE retains a bounded secret-guard tail; a later record
+  // flushes the complete instance snapshot without changing that contract.
+  f.hub.broadcast('state_change', { padding: 'x'.repeat(1024) });
+  await until(() => /event: instance\r?\ndata:[^\r\n]+\r?\n\r?\n/.test(stream.text()));
+  const instance = JSON.parse(stream.text().match(/event: instance\r?\ndata:\s*([^\r\n]+)/)[1]);
+  assert.equal(instance.runtimeHealth.claude.updatedAt, new Date(1794805421568).toISOString());
+  assert.equal(instance.runtimeHealth.claude.cooldownUntil, null);
   assert.equal(stream.ended(), false);
   assert.doesNotMatch(stream.text(), /chat_ready|chat_connection_limit/);
 });

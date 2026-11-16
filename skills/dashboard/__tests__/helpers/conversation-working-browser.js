@@ -62,6 +62,7 @@ async function startPage(sandbox) {
   const server = http.createServer((req, res) => {
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
+      res.apiPath = url.pathname;
       if (url.pathname === '/api/stream') {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
         const data = { version: 1, tab: url.searchParams.get('chat_tab') || 'mine', conversationId: url.searchParams.get('chat_conversation'), ids: [] };

@@ -29,7 +29,7 @@ for (const url of ['/%', '/%2', '/%GG', '/%E0%A4', '/%FF', '/_assets/js/%', 'htt
     assert.equal(res.status, 400);
     assert.equal(res.headers['content-type'], 'application/json; charset=utf-8');
     assert.equal(res.headers['cache-control'], 'no-store');
-    assert.deepEqual(JSON.parse(res.body()), { error: 'invalid_request' });
+    assert.deepEqual(JSON.parse(res.body()), { ok: false, error: { code: 'invalid_request', message: 'invalid_request' } });
   });
 }
 

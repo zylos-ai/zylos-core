@@ -1,3 +1,4 @@
+import { formatZoned, setInstanceZone } from '../public/js/wb/instance-zone.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -678,7 +679,8 @@ test('key table lists active keys before revoked ones with their own text action
   const keys = [{ name: 'old', scope: 'read', status: 'revoked', created_at: '2026-01-02T03:04:05Z' }, { name: 'ops', scope: 'admin', status: 'active', created_at: '2026-02-03T04:05:06Z', last_used_at: null }];
   renderKeyTable(root, keys, { document, t, confirm: async () => true, onAction: (action, name) => calls.push([action, name]) });
   const rows = root.querySelector('tbody').children; assert.deepEqual(rows.map(row => row.children[0].textContent), ['ops', 'old']);
-  assert.match(rows[0].textContent, /fleet_manage\.scope_admin.*2026-02-03 04:05.*wb\.settings\.keys\.never/);
+  assert.ok(rows[0].textContent.includes(formatZoned(keys[1].created_at)));
+  assert.match(rows[0].textContent, /wb\.settings\.keys\.never/);
   assert.ok(rows[0].querySelector('.api-key-rotate')); assert.ok(rows[0].querySelector('.api-key-revoke')); assert.equal(rows[0].querySelector('.api-key-delete'), null);
   await rows[1].querySelector('.api-key-delete').dispatch('click'); assert.deepEqual(calls, [['delete', 'old']]);
   assert.deepEqual(keyCounts(keys), { active: 1, revoked: 1 });
@@ -902,4 +904,17 @@ test('settings hydrates only the bounded running rows to recover explicit detail
       assert.deepEqual(loads[0].snapshot.overrides.model.map(row => row.sessionGroup), ['b']);
     }
   }
+});
+
+test('key table formats UTC key clocks in the instance timezone', () => {
+  const document = documentFixture(), root = document.createElement('div');
+  setInstanceZone('Asia/Singapore');
+  try {
+    const at = '2026-02-03T04:05:06Z';
+    renderKeyTable(root, [{ name: 'ops', scope: 'admin', created_at: at, last_used_at: at }], { document, t });
+    const row = root.querySelector('tbody').children[0];
+    assert.equal(row.children[3].textContent, formatZoned(at));
+    assert.equal(row.children[4].textContent, formatZoned(at));
+    assert.doesNotMatch(row.textContent, /2026-02-03T04:05/);
+  } finally { setInstanceZone(null); }
 });

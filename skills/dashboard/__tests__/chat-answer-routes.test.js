@@ -181,7 +181,7 @@ test('malformed answers and forged summary or routing fields cannot accept or de
   assert.equal((await f.request('/answers', { body, target: '/api/chat/conversations/foreign' })).status, 403);
   assert.equal((await f.request('/answers', { body: { ...body, interruptId: 'foreign_interrupt' } })).status, 404);
   assert.equal((await f.request('/answers?channel=other', { body })).status, 400);
-  assert.equal((await f.request('/answers', { method: 'GET' })).status, 405);
+  assert.equal((await f.request('/answers', { method: 'GET' })).status, 404);
   assert.equal(f.count('chat_answers'), 0);
   assert.equal(f.count('chat_answer_deliveries'), 0);
   assert.equal(f.calls.deliveries.length, 0);
@@ -284,7 +284,7 @@ test('remote access is checked again after asynchronous answer reconciliation', 
   f.setOnReconcile(async () => { await Promise.resolve(); f.config.chat.allowRemote = false; });
   const result = await f.request('/questions', { method: 'GET', identity: 'admin' });
   assert.equal(result.status, 403);
-  assert.equal(result.body.error, 'remote_chat_disabled');
+  assert.equal(result.body.error.code, 'remote_chat_disabled');
   assert.equal(Object.hasOwn(result.body, 'items'), false);
   assert.equal(f.calls.deliveries.length, 0);
 });
@@ -331,7 +331,7 @@ test('a refreshed question exposes its saved action for one explicit retry after
   const changed = structuredClone(body); changed.action.payload.selected = ['b'];
   const conflict = await f.request('/answers', { body: changed });
   assert.equal(conflict.status, 409);
-  assert.equal(conflict.body.error, 'chat_answer_conflict');
+  assert.equal(conflict.body.error.code, 'chat_answer_conflict');
   assert.equal(engine.counts.receive, 1);
   assert.deepEqual(engine.answers.get(answerId).action, saved);
   const original = engine.db.prepare('SELECT content FROM conversations WHERE id=?').get(question.row.id);

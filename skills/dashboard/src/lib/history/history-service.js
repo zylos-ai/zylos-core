@@ -1,6 +1,8 @@
 import { sendJson } from '../http.js';
+import { isoTimestamp } from '../wire-time.js';
 import { ClaudeHistory } from './claude-history.js';
 import { CodexHistory } from './codex-history.js';
+import { createHistoryScope } from './history-scope.js';
 import { createRedactor } from '../redaction/engine.js';
 
 const PREVIEW = 2000;
@@ -56,7 +58,11 @@ function position(entries, index, cursor) {
 }
 
 export class HistoryService {
-  constructor({ config = {}, store, stateEngine, parser, redactor } = {}) {
+  constructor({ config = {}, store, stateEngine, parser, redactor, resolveScope, readCurrentSessionId, readGroupKey } = {}) {
+    this.config = config;
+    this.store = store;
+    this.resolveScope = resolveScope || (parser ? null : createHistoryScope({ config, store, readCurrentSessionId, readGroupKey }));
+    this.scopedParsers = new Map();
     this.runtime = config.runtime || 'claude';
     const Parser = this.runtime === 'codex' ? CodexHistory : ClaudeHistory;
     this.parser = parser || new Parser({ zylosDir: config.zylosDir, store, stateEngine });
@@ -85,7 +91,7 @@ export class HistoryService {
     for (const key of ['ts', 'channel', 'sender', 'target', 'name', 'tool', 'summary', 'status', 'label', 'system']) {
       if (entry[key] === undefined) continue;
       if (typeof entry[key] === 'boolean') { out[key] = entry[key]; continue; }
-      const result = await this.safe(String(entry[key]), `${session}:${generation}:${entry.id}:meta:${key}`);
+      const result = await this.safe(key === 'ts' ? isoTimestamp(entry[key]) : String(entry[key]), `${session}:${generation}:${entry.id}:meta:${key}`);
       out[key] = result.text; add(result);
     }
     for (const [key, value] of Object.entries(entry.fields || {})) {
@@ -209,8 +215,60 @@ export class HistoryService {
     const route = url.pathname.slice('/api/observer/history/'.length);
     try {
       if (!ROUTES.has(route)) throw new HistoryError(404, 'not_found');
-      if (req.method !== 'GET') throw new HistoryError(405, 'method_not_allowed');
-      const result = route === 'sessions' ? await this.sessions() : await this[route](url.searchParams);
+      if (req.method !== 'GET') throw new HistoryError(404, 'not_found');
+      let service = this;
+      if (this.resolveScope) {
+        const scope = await this.resolveScope(url.searchParams);
+        const key = `${url.searchParams.get('session_group') ?? 'origin'}:${scope.runtime}`;
+        let cached = this.scopedParsers.get(key);
+        // A pending discovery is shared before checking its completed version.
+        const pending = cached?.pending;
+        if (cached) {
+          try { await cached.snapshot; }
+          catch (error) {
+            if (this.scopedParsers.get(key) === cached) this.scopedParsers.delete(key);
+            throw error;
+          }
+        }
+        const discovery = cached?.parser.discoveryVersion ? await cached.parser.discoveryVersion() : null;
+        // Another request may have published a replacement while this one awaited stat.
+        const latest = this.scopedParsers.get(key);
+        if (latest !== cached && latest?.revision === scope.revision) {
+          cached = latest;
+        } else if (!cached || cached.revision !== scope.revision || cached.discovery !== discovery
+            || (route === 'sessions' && !pending)) {
+          const Parser = scope.runtime === 'codex' ? CodexHistory : ClaudeHistory;
+          const parser = new Parser({ ...scope, zylosDir: this.config.zylosDir, store: this.store, indexCache: this.parser.indexCache });
+          if (cached?.parser) {
+            parser.metadataCache = cached.parser.metadataCache;
+            if (parser.metadataLoads) parser.metadataLoads = cached.parser.metadataLoads;
+          }
+          const next = { parser, revision: scope.revision, pending: true };
+          next.snapshot = parser.listSessions().then(listing => {
+            next.discovery = parser.discoverySnapshot ?? null;
+            next.pending = false;
+            return { parser, listing, paths: parser.paths };
+          });
+          cached = next;
+        }
+        this.scopedParsers.delete(key);
+        this.scopedParsers.set(key, cached);
+        while (this.scopedParsers.size > 8) this.scopedParsers.delete(this.scopedParsers.keys().next().value);
+        let snapshot;
+        try { snapshot = await cached.snapshot; }
+        catch (error) {
+          if (this.scopedParsers.get(key) === cached) this.scopedParsers.delete(key);
+          throw error;
+        }
+        const { parser, listing, paths } = snapshot;
+        service = Object.create(this);
+        service.runtime = scope.runtime;
+        // Discovery and paths belong to one group/runtime/import generation.
+        // Each request keeps that snapshot even while another import refreshes it.
+        service.parser = Object.assign(Object.create(parser), scope, { paths, loads: new Map(),
+          listSessions: async () => ({ ...listing, current: paths.has(scope.currentSessionId) ? scope.currentSessionId : null }) });
+      }
+      const result = route === 'sessions' ? await service.sessions() : await service[route](url.searchParams);
       if (result.binary) {
         const { data, mimeType } = result.binary;
         const mime = INLINE_MEDIA.has(mimeType) ? mimeType : 'application/octet-stream';
@@ -219,7 +277,8 @@ export class HistoryService {
       } else sendJson(res, 200, result);
     } catch (error) {
       // Never reflect exception text or record-controlled paths into errors.
-      sendJson(res, error instanceof HistoryError ? error.status : 503, { error: error instanceof HistoryError ? error.code : 'history_unavailable' });
+      const known = error instanceof HistoryError || ['invalid_session_group', 'group_catalog_unreadable'].includes(error.code);
+      sendJson(res, known ? error.status : 503, { error: known ? error.code : 'history_unavailable' });
     }
     return true;
   }

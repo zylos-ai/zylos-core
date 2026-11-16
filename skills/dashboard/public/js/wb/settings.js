@@ -130,7 +130,7 @@ export function createSettingsLoader({ read, onLoad }) {
   return {
     async open() {
       const current = ++generation;
-      const paths = [null, '/api/groups/runtime-overrides', '/api/settings?all=1', '/api/usage/pricing', '/api/instance/runtime-options?runtime=claude', '/api/instance/runtime-options?runtime=codex'];
+      const paths = [null, '/api/groups/runtime-overrides', '/api/settings/pricing', '/api/usage/pricing', '/api/instance/runtime-options?runtime=claude', '/api/instance/runtime-options?runtime=codex'];
       const values = await Promise.allSettled(paths.map(path => path === null ? readGroupSnapshot(read).then(async snapshot => {
         const details = await Promise.allSettled(snapshot.rows.map(row => read('/api/groups/' + encodeURIComponent(row.sessionGroup) + '?include=')));
         if (details.some(result => result.status === 'rejected')) return { ...snapshot, overrides: null };

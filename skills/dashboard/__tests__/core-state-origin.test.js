@@ -23,6 +23,37 @@ test('captured model override is unavailable when the sampled session identity c
   assert.equal(core.getCurrentSessionId(), null);
 });
 
+test('single-session history ignores a multi-session sample until a fresh single-session observation arrives', async t => {
+  let mode = 'multi', identityChanged = false;
+  t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
+    if (name === 'config.js') return { readSessionMode: () => ({ mode }) };
+    if (name === 'session-state-reader.js') return {
+      readSessionStates: async groups => new Map(groups.map(group => {
+        const observation = live();
+        observation.identity.sessionId = group === null ? 'single-session' : 'multi-session';
+        if (identityChanged) observation.status = { valid: false, reason: 'identity_changed' };
+        return [group, observation];
+      })),
+      resolveTargetRuntime: async () => 'claude',
+      readRuntimeHealth: async () => ({ health: 'ok' }),
+      readAccountUsageSnapshot: async () => ({ live: null, recorded: null }),
+    };
+    assert.fail(`Unexpected core module ${name}`);
+  } } });
+  const { CoreState } = await import(`../src/lib/core-state.js?single-history=${Date.now()}`);
+  const core = new CoreState({ accountUsageCache: new AccountUsageCache({ ttlMs: 0 }) });
+  assert.equal(core.getSingleSessionId(), null, 'no sample cannot mark a history session current');
+  await core.refresh();
+  assert.equal(core.getCurrentSessionId(), 'multi-session');
+  mode = 'single';
+  assert.equal(core.getSingleSessionId(), null, 'the previous multi-session sample cannot mark single-session history current');
+  await core.refresh();
+  assert.equal(core.getSingleSessionId(), 'single-session', 'a fresh single-session observation supplies the current history session');
+  identityChanged = true;
+  await core.refresh();
+  assert.equal(core.getSingleSessionId(), null, 'an invalidated identity cannot mark a history session current');
+});
+
 test('Origin display states preserve identity and respect transition and fence priority', () => {
   for (const [state, expected] of Object.entries(mapping)) {
     const projected = projectOrigin('origin', absent(), undefined, {}, { state });

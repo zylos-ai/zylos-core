@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import net from 'node:net';
 import tls from 'node:tls';
+import { jsonResponse } from './http.js';
 
 const WEBSOCKET_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const DEFAULT_MAX_MESSAGE_BYTES = 1024 * 1024;
@@ -245,7 +246,7 @@ export function acceptObserverWebSocket(req, socket, head, protocol) {
 }
 
 export function rejectObserverUpgrade(socket, status = 404, code = 'not_found') {
-  const body = JSON.stringify({ error: code });
+  const body = JSON.stringify(jsonResponse(status, { error: code }).body);
   const reason = status === 400 ? 'Bad Request' : status === 401 ? 'Unauthorized' : status === 403 ? 'Forbidden' :
     status === 429 ? 'Too Many Requests' : status === 502 ? 'Bad Gateway' : status === 503 ? 'Service Unavailable' : 'Not Found';
   socket.end([

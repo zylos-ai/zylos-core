@@ -1,3 +1,4 @@
+import { instantMs } from './api-time.js';
 import { formatZoned } from './instance-zone.js';
 import { workingNowText } from './working-display.js';
 import { listen } from './detail-update.js';
@@ -235,7 +236,7 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
     if (working.on) line.append(icon(document, 'loader'));
     const locale = document.documentElement?.lang;
     const caption = element(document, 'span', workingNowText(working, { t, locale }));
-    if (working.subagents && Number.isFinite(working.subagents.lastActivityAt)) {
+    if (working.subagents && Number.isFinite(instantMs(working.subagents.lastActivityAt))) {
       const time = formatZoned(new Date(working.subagents.lastActivityAt), locale, { hour: '2-digit', minute: '2-digit' });
       caption.append(element(document, 'span', ' · ' + t('chat.working.latest', { time }), 'wi-now-sub'));
     }

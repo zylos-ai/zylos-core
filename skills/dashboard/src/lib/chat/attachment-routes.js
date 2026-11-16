@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { requireChatAccess, requireChatWrite } from './access.js';
+import { requireChatAccess, requireChatWrite, requireChatWriteTarget } from './access.js';
 import { sendJson } from '../http.js';
 import { sniffImage, contentDisposition } from '../../../scripts/attachment-utils.js';
 import { receiveMultipartFile } from '../../../scripts/multipart-upload.js';
@@ -17,7 +17,7 @@ export async function handleChatAttachments(req, res, url, { auth, config, sende
   if (denied) { const { status, ...body } = denied; sendJson(res, status, body); return true; }
   try {
     const upload = match[2] === 'uploads';
-    if (req.method !== (upload ? 'POST' : 'GET')) { sendJson(res, 405, { error: 'method_not_allowed' }); return true; }
+    if (req.method !== (upload ? 'POST' : 'GET')) { sendJson(res, 404, { error: 'not_found' }); return true; }
     if ([...url.searchParams].length) throw fail('invalid_chat_parameters');
     let id, attachmentId;
     try { id = decodeURIComponent(match[1]); attachmentId = match[3] && decodeURIComponent(match[3]); }
@@ -28,7 +28,10 @@ export async function handleChatAttachments(req, res, url, { auth, config, sende
       draft: conversation.namespace === null && conversation.state !== 'active',
     });
     if (upload || match[2] === 'uploads/config') {
-      const writeDenied = checkWrite();
+      const writeDenied = upload ? checkWrite() : requireChatWriteTarget({
+        mode: readMode(), conversation, namespace: conversation.namespace, localId: conversation.localId,
+        draft: conversation.namespace === null && conversation.state !== 'active',
+      });
       if (writeDenied) { const { status, ...body } = writeDenied; sendJson(res, status, body); return true; }
       if (!upload) { sendJson(res, 200, attachments.config()); return true; }
       await sender.prepareAttachmentConversation(conversation, { authorize: checkWrite });

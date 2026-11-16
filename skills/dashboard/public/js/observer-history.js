@@ -19,8 +19,8 @@ export function createHistoryMarkdown(factory) {
   return text => md.render(String(text ?? ''));
 }
 export class ObserverHistory {
-  constructor({ root, endpoint, t, document: doc = document, fetch: request = fetch }) {
-    Object.assign(this, { root, endpoint, t, doc });
+  constructor({ root, endpoint, group = () => undefined, t, document: doc = document, fetch: request = fetch }) {
+    Object.assign(this, { root, endpoint, group, t, doc });
     this.request = (...args) => request(...args);
     this.active = false;
     this.generation = 0;
@@ -83,19 +83,37 @@ export class ObserverHistory {
     for (const field of this.fields.values()) { field.loading = false; field.more.disabled = false; field.all.disabled = false; }
   }
   setActive(active) {
+    const scope = this.endpoint('/api/observer/history/sessions') + '\0' + (this.group() ?? 'origin');
+    if (scope !== this.scope) {
+      this.scope = scope;
+      this.session = this.current = null;
+      this.sessions = null;
+      this.entries.clear(); this.fields.clear();
+      this.el('sessions').replaceChildren();
+      this.el('entries').replaceChildren();
+      this.el('results').replaceChildren();
+      this.el('results').hidden = true;
+      this.before = this.after = null;
+      this.hasOlder = false;
+      this.el('older').hidden = this.el('latest').hidden = true;
+    }
     this.active = active;
     this.cancel();
     if (active && !this.doc.hidden) this.start();
+  }
+  scopedParams(params) {
+    const group = this.group();
+    return { ...params, ...(group === undefined ? {} : { session_group: group }) };
   }
   async json(route, params = {}) {
     const controller = new AbortController();
     const generation = this.generation;
     this.controllers.add(controller);
     try {
-      const response = await this.request(this.endpoint(`/api/observer/history/${route}`) + '?' + new URLSearchParams(params), { cache: 'no-store', signal: controller.signal });
+      const response = await this.request(this.endpoint(`/api/observer/history/${route}`) + '?' + new URLSearchParams(this.scopedParams(params)), { cache: 'no-store', signal: controller.signal });
       const data = await response.json();
       if (generation !== this.generation) throw Object.assign(new Error('stale'), { name: 'AbortError' });
-      if (!response.ok) throw new Error(data.error || this.label('error'));
+      if (!response.ok) throw new Error(data.error?.message || this.label('error'));
       return data;
     } finally { this.controllers.delete(controller); }
   }
@@ -201,7 +219,7 @@ export class ObserverHistory {
       const heading = this.doc.createElement('strong'); heading.textContent = ['body','input','output','raw'].includes(name) ? this.label('field_' + name) : name; wrapper.append(heading);
       if (field.type === 'binary') {
         const link = this.doc.createElement('a');
-        link.href = this.endpoint('/api/observer/history/content') + '?' + new URLSearchParams({ session: this.session, entry: entry.id, field: name });
+        link.href = this.endpoint('/api/observer/history/content') + '?' + new URLSearchParams(this.scopedParams({ session: this.session, entry: entry.id, field: name }));
         link.textContent = `${this.label('attachment')} · ${field.mimeType || ''} · ${field.bytes ?? field.total} B`;
         link.target = '_blank'; link.rel = 'noopener noreferrer'; wrapper.append(link);
       } else {

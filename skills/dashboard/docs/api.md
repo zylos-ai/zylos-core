@@ -2,7 +2,7 @@
 
 ## Module Responsibilities
 
-This reference describes the health, instance, session-group, usage and push APIs implemented by Dashboard. Other API families retain their existing contracts and are outside this reference's current scope. Any PR that changes an API documented here must update this file in the same PR. Check methods, paths, parameters, permissions, fields and errors against the implementation, rather than copying a design proposal.
+This reference describes Dashboard HTTP routes, including health, instance, session groups, usage, memory, schedules, settings, chat, terminal history, Fleet and push. Any PR that changes an API documented here must update this file in the same PR. Check methods, paths, parameters, permissions, fields and errors against the implementation, rather than copying a design proposal.
 
 Paths are relative to the Dashboard base URL. For example, with the default HTTP mount, `/api/instance` is available at `/dashboard/api/instance`. Group IDs are URL-encoded session-group keys such as `telegram%3Aexample`, or `origin` for the single session and the multi-session Origin. Display names are not IDs.
 
@@ -10,14 +10,26 @@ Paths are relative to the Dashboard base URL. For example, with the default HTTP
 
 - **Public**: no login required.
 - **Read**: an authenticated browser session or an API session with `read` or `admin` scope. An API key must first be exchanged for an API session through the existing authentication API.
-- **Admin**: an authenticated administrator. Browser-cookie writes also require a same-origin request. Read-scope API sessions cannot write.
+- **Admin**: an authenticated administrator. Browser-cookie writes also require a same-origin request. Read-scope API sessions cannot write or read conversation content, attachments or full terminal history.
 - **Local owner**: an administrator logged in with the local password cookie. API keys do not grant deletion or deletion-preview access, even with admin scope.
 
-The existing auth gate may return HTTP 401 (unauthenticated) or 403 (`insufficient_scope`). Browser writes can return 403 `same_origin_required`. Invalid JSON returns 400 `invalid_json`, and oversized JSON bodies return 413 `payload_too_large`; the write APIs below use a 4096-byte body limit. Unknown GET routes return 404 `not_found`; unknown non-GET `/api/*` routes return 405 plain text `method not allowed`.
+The existing auth gate may return HTTP 401 (unauthenticated) or 403 (`insufficient_scope`). Browser writes can return 403 `same_origin_required`. Invalid JSON returns 400 `invalid_json`, and oversized JSON bodies return 413 `payload_too_large`; body limits are route-specific (4 KiB for object actions/timezone/names/keys, 16 KiB for pricing/Fleet config, 64 KiB for schedule forms; chat and memory have their own limits). Removed routes and unsupported API method/path pairs return 404 `not_found` (including a known path called with the wrong method). Login/logout retain HTTP 405 for unsupported methods. JSON failures use the common envelope.
 
-Read APIs normally return their data object directly. Group and usage handler failures use `{ok:false,error:{code:string,message:string}}`. Some inherited actions and access gates still return `{error:string}` or `{ok:false,error:string,...}`; callers must inspect `ok` and the returned error, including on HTTP 200 group-action responses. A successful submission is not proof that a session restarted or that an instruction was delivered. Do not automatically repeat a write whose result is unknown.
+Read APIs return their data object directly. Successful JSON writes return `{ok:true,...result}`. All JSON failures, including Core rejections, use `{ok:false,error:{code:string,message:string}}` and an appropriate non-2xx status. Authentication exchange bootstraps API access with the supplied key; login/logout retain their HTML/redirect protocol. Binary downloads, HTML and upgraded streams retain their own content type. A successful submission is not proof that a session restarted or that an instruction was delivered. Do not automatically repeat a write whose result is unknown.
 
-Unless stated otherwise, timestamps are ISO strings or `null`. Existing snapshot `readAt`, resource `sampledAt`, and activity `start` are Unix milliseconds; `createdAt` in raw lifecycle evidence can be Unix seconds. These observation fields retain their source units. Unknown measurements are `null`, rather than zero.
+HTTP handlers select their status explicitly. The common serializer normalizes bodies when the HTTP status is already an error or a write explicitly returns `ok:false`, and adds `ok:true` to successful writes; it does not interpret diagnostic read fields as command outcomes. Numeric internal HTTP `status` fields are removed from write bodies. Command-envelope interpretation is opt-in at these adapter boundaries: instance/default actions, group configuration/actions, group/draft deletion, timezone service restart and scheduler writes. Those adapters recognize Core `{ok:false}` and scheduler `{result:"rejected"|"unknown"}` failures, map their declared codes to HTTP status, and convert scheduler `result:"done"` to write success. Supervisor restart `result:"stale_target"` becomes HTTP 409 `stale_target`, retaining `currentRunId`. Interrupt/chop-chop Core rejections return HTTP 409: `TARGET_MISMATCH` when `runId` is stale, or `STALE_TARGET` when `runId` is current but `sessionId` is stale. The latter sets both `error.code` and `rejectionCode` to `STALE_TARGET`, with message `The target session has changed` and `currentRunId:null`. Unknown command failures map to 502; `control_target_required` maps to 503. Read payload `status`, `result`, `reason`, `code` and `ok` fields otherwise remain data.
+
+Every public absolute timestamp is an ISO 8601 string with a timezone designator (UTC `Z`), or `null` when unknown. This includes `readAt`, `sampledAt`, activity starts, scheduler task/execution times and the equivalent push fields. Durations, counts and opaque continuation values retain their numeric types. Unknown measurements are `null`, rather than zero.
+
+The same ISO projection applies to HTTP and SSE. Server serialization and browser calculation adapters share the explicit catalogue in `public/js/wb/wire-time.js`; zero and empty source clocks become `null`. The declared absolute-time fields include:
+
+| Family | ISO fields (nullable when the source is unknown) |
+|---|---|
+| Instance / health | `startedAt`, resource `sampledAt`, account `recordedAt` and reset time, runtime-health `cooldownUntil`/`updatedAt`, transition creation/update, blocked `since`, diagnostic `ts`, source-health `updated_at` |
+| Groups / activity | `readAt`, `lastActivityAt`, state `since`/`sampledAt`, lifecycle `createdAt`, fences, working/main/subagent times, pending queue `oldestAt`, wait `since`/`lastAt`/`cooldownUntil`, preview `timestamp`, name update, run start/end, event/message timestamps (including event `metadata.pasted_at`), heatmap `start` and inbound times |
+| Schedules | `readAt`, task `nextRunAt`/`lastRunAt`/`updatedAt`, execution `executedAt`/`completedAt`, preview `iso` and next-run arrays, returned CLI task time columns |
+| Chat / terminal | Conversation creation/update, list `stamp`, message and quote timestamps, activity `now`/`from`/step/subtask/awaiting times, upload/lease `expiresAt`, transcript-session start/update and entry `ts` |
+| Fleet / keys / memory | Fleet observation/link/problem times and nested instance fields, key creation/use/revocation, file `mtime`, Git `commit.author_date` and backlog `firstAt` |
 
 The examples below show request methods, URLs and JSON bodies. Supply the appropriate cookie or API-session authorization header; example writes are illustrative and should only be issued with authorization for their effects.
 
@@ -39,9 +51,9 @@ Example: `GET /api/health` → `{"ok":true,"service":"zylos-dashboard","bootId":
 
 Returns `ready:boolean`, `reason:string|null`, `session_mode:"single"|"multi"|null`, `session_running:boolean|null`, and `runtime_health:object` keyed by runtime. Each runtime entry has `source:"record"|"missing"|"unreadable"` and `health:string|null`. A responsive supervisor establishes readiness unless the single-mode session is confirmed absent. Runtime health is diagnostic, not an admission gate.
 
-**Errors:** HTTP 503 when `ready:false`; `reason` is `supervisor_unavailable` or `session_not_running`. Unavailable observations remain null.
+**Errors:** HTTP 503 with `{ok:false,error:{code,message},...readiness}` when `ready:false`; `reason` is `supervisor_unavailable` or `session_not_running`. Unavailable observations remain null.
 
-Example: `GET /api/health/ready` → `{"ready":false,"reason":"supervisor_unavailable","session_mode":"multi","session_running":null,"runtime_health":{"claude":{"source":"missing","health":null},"codex":{"source":"missing","health":null}}}`.
+Example: `GET /api/health/ready` → `{"ok":false,"error":{"code":"supervisor_unavailable","message":"supervisor_unavailable"},"ready":false,"reason":"supervisor_unavailable","session_mode":"multi","session_running":null,"runtime_health":{"claude":{"source":"missing","health":null},"codex":{"source":"missing","health":null}}}`.
 
 ## Instance
 
@@ -61,9 +73,8 @@ Example: `GET /api/health/ready` → `{"ready":false,"reason":"supervisor_unavai
 | `accounts` | object / null | Runtime-keyed weekly account quota objects or null; observations include used percentage, reset time, `recordedAt` and `live` |
 | `supervisorPaused` | boolean / null | Whether new supervisor actions are paused |
 | `autoRestarts` | object / null | `{count:number}` automatic restarts recorded during the past hour |
-| `resources` | object | One current resource sample: `scope:"host"\|"container"\|"mixed"`, `sampledAt:number\|null` (Unix milliseconds), `cpu_pct:number\|null`, `cpu_count:number\|null`, `cpu_source:"container"\|"host"`, `mem_pct:number\|null`, `mem_used_bytes:number\|null`, `mem_total_bytes:number\|null`, `mem_source:"container"\|"host"`, `disk_pct:number\|null`, `disk_free_bytes:number\|null`, `disk_total_bytes:number\|null` |
+| `resources` | object | One current resource sample: `scope:"host"\|"container"\|"mixed"`, `sampledAt:string\|null` (ISO), `cpu_pct:number\|null`, `cpu_count:number\|null`, `cpu_source:"container"\|"host"`, `mem_pct:number\|null`, `mem_used_bytes:number\|null`, `mem_total_bytes:number\|null`, `mem_source:"container"\|"host"`, `disk_pct:number\|null`, `disk_free_bytes:number\|null`, `disk_total_bytes:number\|null` |
 | `services` | object / null | PM2 counts `online:number`, `total:number`, plus `channels:Array<{channel:string,service:string,status:string\|null,restarts10m:number,lastSendFailed:boolean\|null,consecutiveFailures:number\|null}>`. Channels come from installed skill frontmatter `type: communication` and `lifecycle.service.name`, and must exist in the PM2 sample. `restarts10m` sums observed counter increases in the last ten minutes, beginning at zero on Dashboard startup. Send fields describe the latest C4 outbound status and failures after the latest successful outbound; null means the C4 read failed. |
-| `chat_allow_remote` | boolean | Whether remote chat is enabled |
 
 Each `defaults[runtime]` contains `model:string|null`, `effort:string|null`, `threshold:number`, `model_thresholds:Record<string,number>` and `session_hot_ttl:object` (effective mode, keepalive seconds and configuration/environment provenance). CPU and memory limits are resolved independently: a limited resource uses its container quota, while an explicitly unlimited resource uses host values and labels that resource’s source `host`. `scope` is `mixed` when the two sources differ, otherwise it is their common source; each resource’s source remains authoritative. An unreadable container limit keeps that resource’s source `container` with unknown measurements rather than implying unlimited host fallback. CPU percentages use the selected CPU capacity (which can be fractional); memory percentages use the selected total bytes. Disk describes the filesystem visible at the instance data directory and is independent of the CPU/memory scope. Unreadable observations remain null. There is no duplicate `system` sample or `runtime_info` object. Origin’s current model, effort, running CLI version and restart-to-apply status belong to group detail; instance versions and defaults describe installed software and configuration. Session context, cost and pool counts belong to the group and usage APIs.
 
@@ -74,14 +85,14 @@ Each `defaults[runtime]` contains `model:string|null`, `effort:string|null`, `th
 | `sessionMode` | `"single"\|"multi"\|null`; null means the configured mode could not be established |
 | `transition` | null or `{runId,sourceMode,targetMode,phase,cutoff,reason,createdAt,updatedAt}`, preserving Core's transition record |
 | `globalGate` | null or `{present:boolean,reason:string\|null,runId:string\|null}`; null is unknown, not an absent gate |
-| `blocked` | null or `{reason:string,since:number\|null}`; `since` is the matching diagnostic event's Unix milliseconds, when known |
+| `blocked` | null or `{reason:string,since:string\|null}`; `since` is the matching diagnostic event's ISO timestamp, when known |
 | `supervisor` | `"reachable"\|"unreachable"\|"unknown"`; socket reachability is separate from the authoritative transition and gate records |
 | `lastCompleted` | null or `{runId,sourceMode,targetMode,updatedAt}` from the most recent completed transition |
 | `lastEvents` | array of the last ten matching Core diagnostic events; unavailable diagnostics produce an empty array without hiding authoritative records |
 | `supervisorPm2` | optional `{status:string,error:{code:string,message:string}\|null}` alongside an unreachable supervisor |
 | `error` | optional `{code:string,message:string}` when mode-status collection failed |
 
-Transition and completion timestamps retain Core’s numeric source units. If authoritative status collection fails, Dashboard preserves the independently established `sessionMode`, sets `transition`, `globalGate`, `blocked` and `lastCompleted` to null, `lastEvents` to an empty array and `supervisor` to `unknown`, and includes `error`. These null fields do not prove that no transition, gate or block exists. These observations share the same object in GET and instance push; no separate transition endpoint exists.
+Transition `createdAt`/`updatedAt`, last-completion `updatedAt`, blocked `since`, and diagnostic-event `ts` are ISO timestamps at this boundary; Core storage units are not exposed. If authoritative status collection fails, Dashboard preserves the independently established `sessionMode`, sets `transition`, `globalGate`, `blocked` and `lastCompleted` to null, `lastEvents` to an empty array and `supervisor` to `unknown`, and includes `error`. These null fields do not prove that no transition, gate or block exists. These observations share the same object in GET and instance push; no separate transition endpoint exists.
 
 The overview composes reminders from `supervisorPaused`, runtime health/account limits, `services.channels`, group counts/pool, offline `flag=startFailed`, row `flags.unreadable`, `counts.listKnown` and request failures. It does not receive a second instance-level attention list.
 
@@ -122,7 +133,7 @@ Example: `GET /api/instance/runtime-options?runtime=codex`.
 
 Returns `ok:boolean`, optional `runtime:string`, `model:string`, `value:number`, `previous:string|null`, `requires_restart:boolean`, `minutes:number`, `seconds:number`, plus optional localized result metadata `message:string`, `messageKey:string`, `messageParams:object`. Specifying a runtime changes its defaults without requiring the active session to restart; callers should use the returned `requires_restart` value.
 
-**Errors:** 400 `INVALID_DEFAULT`, `INVALID_RUNTIME`, `invalid_model`, `invalid_effort`, `unknown_model_capabilities`, `invalid_value`, `already_set`, `duplicate_request`, `environment_override`, `multi_session_required`, `set_failed`; common write errors. Action failures can carry their own HTTP `status`.
+**Errors:** 400 `INVALID_DEFAULT`, `INVALID_RUNTIME`, `invalid_model`, `invalid_effort`, `invalid_value`; 409 `already_set`, `duplicate_request`, `environment_override`, `multi_session_required`; 503 `unknown_model_capabilities`; 500 `set_failed`; common write errors. Action failures select their HTTP response status; numeric internal `status` fields are omitted from the JSON write body.
 
 Example: `PUT /api/instance/defaults` with `{"kind":"threshold","runtime":"claude","model":"opus","value":80}`.
 
@@ -140,7 +151,7 @@ Example: `PUT /api/instance/name` with `{"name":"my-agent"}`.
 
 **Access:** Admin. **Parameters:** JSON `{mode:"single"|"multi"}`. Core owns transition validation and admission.
 
-Returns the Core action envelope: `ok:boolean`, optional `data:object`, `message:string`, `error:string|object`, and transition/result metadata. Completion and acceptance are distinct; refresh the instance after an accepted transition.
+Returns `{ok:true,...CoreResult}` on success, with optional `data:object`, `message:string` and transition/result metadata. Core failures are mapped to the common error envelope and HTTP status. Completion and acceptance are distinct; refresh the instance after an accepted transition.
 
 **Errors:** invalid mode, unavailable supervisor, transition conflicts and Core rejection codes in the returned envelope; common write errors.
 
@@ -150,7 +161,7 @@ Example: `POST /api/instance/actions/switch-mode` with `{"mode":"multi"}`.
 
 **Access:** Admin. **Parameters:** JSON `{runtime:"claude"|"codex"}` plus any authentication-confirmation fields required by Core's runtime-switch flow.
 
-Returns the Core action envelope (`ok:boolean`, optional `data`, `message` and `error`). An `AUTH_NOT_CONFIRMED` result can include authentication details; it is not a successful switch.
+Returns `{ok:true,...CoreResult}` on success, with optional `data` and `message`; failures use the common envelope. An `AUTH_NOT_CONFIRMED` result can include authentication details; it is not a successful switch.
 
 **Errors:** `AUTH_NOT_CONFIRMED`, invalid runtime, supervisor/transition rejection codes, and common write errors.
 
@@ -162,7 +173,7 @@ Example: `POST /api/instance/actions/switch-runtime` with `{"runtime":"codex"}`.
 
 Returns `ok:boolean`, optional `message:string`, `detached:boolean` and localization fields. `detached:true` means the upgrade process was launched; it does not prove completion.
 
-**Errors:** 400 `already_up_to_date`, `duplicate_request`, or returned upgrade failure; common write errors.
+**Errors:** 409 `already_up_to_date`, `duplicate_request`; 502 upgrade outcome unknown/failed; common write errors.
 
 Example: `POST /api/instance/actions/upgrade` with `{}`.
 
@@ -172,7 +183,7 @@ Example: `POST /api/instance/actions/upgrade` with `{}`.
 
 Returns `ok:boolean`, optional `message:string`, `output:string`, `requires_restart:boolean` and localization fields. Restart applies the installed CLI to a session.
 
-**Errors:** 400 `upgrade_failed`, `duplicate_request`; common write errors.
+**Errors:** 502 `upgrade_failed`; 409 `duplicate_request`; common write errors.
 
 Example: `POST /api/instance/actions/upgrade-runtime` with `{}`.
 
@@ -188,7 +199,7 @@ Lists contain presentation observations only. Running rows have exactly these fi
 | `displayName` | string | Effective human-readable name or fallback |
 | `channel` | string / null | Channel namespace; Origin has no channel |
 | `runtime`, `model` | string / null | Current runtime and model observations |
-| `state` | `{kind:string,since:string\|null,stale?:boolean,sampledAt?:number,lastState?:"busy"\|"idle"}` | Mutually exclusive primary state and its known start; stale observations retain the last busy/idle classification for less than 60 seconds. Older samples become unknown while retaining sampledAt/lastState for an explicitly historical hint |
+| `state` | `{kind:string,since:string\|null,stale?:boolean,sampledAt?:string,lastState?:"busy"\|"idle"}` | Mutually exclusive primary state and its known start; stale observations retain the last busy/idle classification for less than 60 seconds. Older samples become unknown while retaining sampledAt/lastState for an explicitly historical hint |
 | `duration` | number / null | State duration in seconds; a tolerated stale idle sample retains its last recorded idle duration |
 | `flags` | object | Independent conditions, below |
 | `mainAgent` | `busy` / `idle` / `unknown` | Main Agent observation for instruction callers; UI does not display it |
@@ -226,7 +237,7 @@ Flags are independent: a working row can carry both `queued` and `blocked`. Miss
 
 **Access:** Read. **Parameters:** none.
 
-Returns `readAt:number`, `listKnown:boolean`, `running:{total:number,states:Record<PrimaryState,number>,flags:Record<Flag,number>}`, `offline:{total:number,waitingSlot:number,startFailed:number}`, and `pool:{used:number|null,capacity:number|null}|null`. Running state counts include working, idle, starting, stopping and unknown. `running.flags.noResponse` counts the independent no-response flag, including a row also flagged with an error. All count/pool observations are numeric or null; there are no rows, mode or capacity-provenance records. Session mode comes only from `/api/instance`. Pool capacity provenance is not exposed by instance or counts.
+Returns `readAt:string`, `listKnown:boolean`, `running:{total:number,states:Record<PrimaryState,number>,flags:Record<Flag,number>}`, `offline:{total:number,waitingSlot:number,startFailed:number}`, and `pool:{used:number|null,capacity:number|null}|null`. Running state counts include working, idle, starting, stopping and unknown. `running.flags.noResponse` counts the independent no-response flag, including a row also flagged with an error. All count/pool observations are numeric or null; there are no rows, mode or capacity-provenance records. Session mode comes only from `/api/instance`. Pool capacity provenance is not exposed by instance or counts.
 
 **Errors:** 502 `GROUP_CATALOG_UNREADABLE`; common read errors. Other source availability is represented by nullable observations. In counts, `listKnown` additionally requires a readable C4 catalog; running and offline responses expose the snapshot’s live-list availability directly. Offline and search still reject an unreadable C4 catalog even when the live list is known.
 
@@ -236,7 +247,7 @@ Example: `GET /api/groups/counts`.
 
 **Access:** Read. **Parameters:** none; this list is not paginated.
 
-Returns `{readAt:number,listKnown:boolean,rows:RunningRow[]}` with only the running fields listed above. Confirmed offline rows are excluded. Its practical size follows the session pool.
+Returns `{readAt:string,listKnown:boolean,rows:RunningRow[]}` with only the running fields listed above. Confirmed offline rows are excluded. Its practical size follows the session pool.
 
 **Errors:** common read errors.
 
@@ -246,7 +257,7 @@ Example: `GET /api/groups/running`.
 
 **Access:** Read. **Parameters:** optional `q:string` (trimmed, at most 64 characters), `flag:queued|blocked|waitingSlot|startFailed|unreadable|noResponse` (one flag), `cursor:string` (opaque cursor from the previous page), `limit:integer` (1–200, default 50).
 
-Returns `{readAt:number,listKnown:boolean,rows:OfflineRow[],nextCursor:string|null}` with only the five offline fields above. Rows are ordered by descending last activity and then ID. Text matches group ID/address and display name. A flag matches only when that key exists in the row’s flags; text and flag filters combine with AND before pagination. Pass the cursor unchanged with the same filters to continue.
+Returns `{readAt:string,listKnown:boolean,rows:OfflineRow[],nextCursor:string|null}` with only the five offline fields above. Rows are ordered by descending last activity and then ID. Text matches group ID/address and display name. A flag matches only when that key exists in the row’s flags; text and flag filters combine with AND before pagination. Pass the cursor unchanged with the same filters to continue.
 
 **Errors:** 400 `INVALID_LIMIT`, `INVALID_QUERY`, `INVALID_FLAG`, `INVALID_CURSOR`; 502 `GROUP_CATALOG_UNREADABLE`; common read errors.
 
@@ -266,7 +277,7 @@ Example: `GET /api/groups/search?q=team`.
 
 **Access:** Read. **Parameters:** `range=60m|6h` (default `6h`).
 
-Returns `{range:string,cellSeconds:number,start:number,groups:Record<string,{cells:string[],inbound:number[]}>,inboundError?:"inbound_unreadable"}`. Cells are activity classifications (`none`, `idle`, `busy`, `waiting`, `error`); inbound entries are message timestamps in milliseconds. This heatmap retains historical activity classifications, which are separate from the current primary-state vocabulary. If inbound timestamps cannot be read, the response includes `inboundError:"inbound_unreadable"` while retaining the event classifications.
+Returns `{range:string,cellSeconds:number,start:string,groups:Record<string,{cells:string[],inbound:string[]}>,inboundError?:"inbound_unreadable"}`. Cells are activity classifications (`none`, `idle`, `busy`, `waiting`, `error`); inbound entries are message ISO timestamps. This heatmap retains historical activity classifications, which are separate from the current primary-state vocabulary. If inbound timestamps cannot be read, the response includes `inboundError:"inbound_unreadable"` while retaining the event classifications.
 
 In single-session mode, `groups.origin` combines current `origin` and historical null-group events, including turn transitions before the window needed to seed its first cell. Its inbound markers include all external channel groups feeding the sole session; internal and outbound messages are excluded. Multi-session heatmaps retain each group's own event and inbound scope.
 
@@ -280,7 +291,7 @@ Example: `GET /api/groups/activity?range=6h`.
 
 **Access:** Read. **Parameters:** encoded group ID; optional `include=raw,config` (default both). An empty `include=` requests neither extra; either name can be selected independently.
 
-Returns the complete group observation, including the applicable list fields plus `sessionGroup:string|null`, `name:object|null`, `side:"running"|"offline"`, `presence:string`, `live:object|null`, `fence:object|null`, `working:object|null`, `queue:object|null`, `wait:object|null`, `target:object|null`, `launchConfig:object|null`, `createdAt:number|null`, `c4:object|null`, `tools:array`, and other source observations. `readAt:number` is the snapshot’s Unix milliseconds. `runtimeInfo` is the group-specific object `{runtime:string|null,model:string|null,effort:string|null,runningVersion:string|null,installedVersion:string|null,update:string|null,pendingRestart:boolean}`. Its runtime/model/effort and running version are observed group values; unavailable strings remain null. `installedVersion` is the installed version for that runtime; `update` is an available newer version string or null, using the same version comparison as `versions[runtime]`. `pendingRestart` is true only on the running side when known evidence identifies a newer installed CLI or a desired runtime/model/effort that differs from the current observation. False does not establish that unknown values match. This group-specific object does not appear in `/api/instance`.
+Returns the complete group observation, including the applicable list fields plus `sessionGroup:string|null`, `name:object|null`, `side:"running"|"offline"`, `presence:string`, `live:object|null`, `fence:object|null`, `working:object|null`, `queue:object|null`, `wait:object|null`, `target:object|null`, `launchConfig:object|null`, `createdAt:string|null`, `c4:object|null`, `tools:array`, and other source observations. `readAt:string` is the snapshot’s ISO observation timestamp. `runtimeInfo` is the group-specific object `{runtime:string|null,model:string|null,effort:string|null,runningVersion:string|null,installedVersion:string|null,update:string|null,pendingRestart:boolean}`. Its runtime/model/effort and running version are observed group values; unavailable strings remain null. `installedVersion` is the installed version for that runtime; `update` is an available newer version string or null, using the same version comparison as `versions[runtime]`. `pendingRestart` is true only on the running side when known evidence identifies a newer installed CLI or a desired runtime/model/effort that differs from the current observation. False does not establish that unknown values match. This group-specific object does not appear in `/api/instance`.
 
 Detail also includes `currentAction:{tool:string|null,message:string|null,receivedAt:string|null}` using the same bounded, sanitized projection as a running list row. Optional `include` extras do not change this field.
 
@@ -354,16 +365,6 @@ Returns `count:number|null`, `firstAt:string|null`, `syncing:boolean|null`, and 
 
 Example: `GET /api/groups/origin/backlog`.
 
-### GET /api/workbench/memory/backlog
-
-**Access:** Admin. **Parameters:** none.
-
-Returns `{groups:Array, originSync?:object, hasOlder:boolean, budgets:object|null}` from the shared backlog reader. Each group includes `sessionGroup`, `count:number|null`, `firstAt:string|null`, `aged:boolean`, `syncing:boolean|null`, `threshold:number|null`, and optional `reason`. Historical C4 groups with the same safe name shape accepted by group observation reads retain their counts and oldest time. Historical names cannot participate in per-group memory sync, so they return `aged:false` and do not produce an overdue warning. Historical groups’ `syncing` remains `null` with `reason:"backlog_failed"`, because sync-marker paths retain Core's strict grammar. Syncable groups still set `aged:true` when the oldest message is over six hours old. Unsafe name shapes return unknown backlog fields. The optional `originSync` row is a separate cross-group observation in multi mode.
-
-**Errors:** 503 `backlog_failed` if collection fails; common read errors.
-
-Example: `GET /api/workbench/memory/backlog`.
-
 ### PUT /api/groups/:id/config
 
 **Access:** Admin. **Parameters:** encoded ID; one JSON change:
@@ -372,9 +373,9 @@ Example: `GET /api/workbench/memory/backlog`.
 - `{kind:"model",runtime:"claude"|"codex",model:string,effort:string}` sets a complete pair.
 - `{kind:"model",runtime:"claude"|"codex",reset:true}` restores the runtime's default model/effort.
 
-Returns Core's `{ok:boolean,data?:object,error?:object,unknown?:boolean}` envelope. `RESULT_UNKNOWN` means the result could not be established; read the group detail before deciding whether any retry is needed.
+Returns `{ok:true,data?:object,...metadata}` on success; Core failures use the common error envelope and a non-2xx status. `RESULT_UNKNOWN` means the result could not be established; read the group detail before deciding whether any retry is needed.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`; `INVALID_ARGUMENT`, Core configuration rejection codes, or `RESULT_UNKNOWN` in the result; common write errors.
+**Errors:** 400 `SESSION_GROUP_INVALID`, `SESSION_GROUP_TOO_LONG`, `INVALID_ARGUMENT`, `MODEL_PAIR_REQUIRED`, `MODEL_CONFIG_INVALID` and other Core validation rejections; 404 `SESSION_GROUP_NOT_FOUND`; 500 `CONFIG_STORE_FAILED`; 502 `RESULT_UNKNOWN`; common write errors.
 
 Example: `PUT /api/groups/telegram%3Aexample/config` with `{"kind":"runtime","value":"inherit"}`.
 
@@ -414,7 +415,7 @@ Example: `GET /api/groups/runtime-overrides?q=team`.
 
 Queues one C4 control that asks Origin to name recently active unnamed groups. The mode comes from this instance's `.zylos/config.json`: multi targets session group `origin`; otherwise the target stays empty, which C4 accepts only for the single session. The control text is the Dashboard naming prompt with the installed `group-name.js` path. Returns `{ok:true,controlId:number,sessionGroup:'origin'|null}` once C4 has queued it. Queued is the whole result: the response does not wait for delivery or naming, and nothing reports the names chosen.
 
-**Errors:** HTTP 200 `{ok:false,sessionGroup?:'origin'|null,error:{code:string,message:string}}` when C4 rejects the control, keeping C4's code (for example `CONTROL_TARGET_REQUIRED` during a mode transition, or when the configuration cannot be read without a multi-mode target); `unknown:true` with `RESULT_UNKNOWN` when the send command fails or Core's answer cannot be read, in which case do not repeat automatically. `message` is a fixed English sentence such as `Send command failed (exit 1)`; it never carries the command line, prompt, paths or stack, which are written to the Dashboard service log instead. GET and HEAD return 405 `method_not_allowed`. Common write errors.
+**Errors:** Command failures use the common `{ok:false,error:{code,message}}` envelope and non-2xx status, retaining `sessionGroup` and, for uncertain outcomes, `unknown:true`. C4 rejection retains its code: `CONTROL_TARGET_REQUIRED` returns 503; an unrecognized rejection (including `ENQUEUE_REJECTED`) returns 502. `RESULT_UNKNOWN` returns 502 when the send command fails or Core's answer cannot be read; do not repeat automatically. `message` is a fixed English sentence such as `Send command failed (exit 1)`; it never carries the command line, prompt, paths or stack, which are written to the Dashboard service log instead. GET and HEAD return 404 `not_found`. Common write errors.
 
 Example: `POST /api/groups/naming-prompt`.
 
@@ -424,7 +425,7 @@ Example: `POST /api/groups/naming-prompt`.
 
 Returns `ok:boolean`, `controlId:number|null`, `submission:string`, optional `rejectionCode:string|null`, `currentRunId:string|null`, `unknown?:boolean`, and `steps:object[]`. Core may add `data` or `error`. A submitted Escape is not a delivery acknowledgement.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`, `TARGET_REQUIRED`, `INVALID_ARGUMENT`; 409 `not_multi`; result `RESULT_UNKNOWN` or Core rejection codes; common write errors.
+**Errors:** 400 `SESSION_GROUP_INVALID`, `TARGET_REQUIRED`, `INVALID_ARGUMENT`; 409 `not_multi`, `TARGET_MISMATCH` for stale `runId`, or `STALE_TARGET` for stale `sessionId` with current `runId` (`error.code` and `rejectionCode` are `STALE_TARGET`, message `The target session has changed`, `currentRunId:null`); result `RESULT_UNKNOWN` or Core rejection codes; common write errors.
 
 Example: `POST /api/groups/telegram%3Aexample/actions/interrupt` with `{"runId":"observed-run","sessionId":"observed-session"}`.
 
@@ -432,7 +433,7 @@ Example: `POST /api/groups/telegram%3Aexample/actions/interrupt` with `{"runId":
 
 **Access:** Admin. **Parameters:** same identity body as interrupt.
 
-Returns a Core nudge result envelope with `ok:boolean`, optional `steps:object[]`, `unknown:boolean`, `submission:string` and `error:string|object`. Steps describe submitted controls; a partial/unknown result is not safe to repeat blindly.
+Returns a Core nudge result envelope with `ok:boolean`, optional `steps:object[]`, `unknown:boolean`, `submission:string`; failures use `error:{code,message}` and non-2xx HTTP status. Steps describe submitted controls; a partial/unknown result is not safe to repeat blindly.
 
 **Errors:** same target/mode/access errors as interrupt; Core nudge rejection codes.
 
@@ -442,7 +443,7 @@ Example: `POST /api/groups/telegram%3Aexample/actions/chop-chop` with `{"runId":
 
 **Access:** Admin. **Parameters:** same identity body as interrupt.
 
-Returns the supervisor result with `ok:boolean`, `requestId?:string`, `submission:"accepted"|"rejected"|"unknown"|"not_submitted"`, optional `completion:string`, `unknown?:boolean` and `error:string|object`. Origin uses the same public address and Core's Origin action implementation. Query the restart resource to establish progress.
+Returns the supervisor result with `ok:boolean`, `requestId?:string`, `submission:"accepted"|"rejected"|"unknown"|"not_submitted"`, optional `completion:string`, `unknown?:boolean`; failures use `error:{code,message}` and non-2xx HTTP status. Origin uses the same public address and Core's Origin action implementation. Query the restart resource to establish progress.
 
 **Errors:** same target/mode/access errors as interrupt; `INSTANCE_ROOT_MISMATCH`; supervisor rejection/unavailable result codes.
 
@@ -462,7 +463,7 @@ Example: `GET /api/groups/origin/restarts/00000000-0000-4000-8000-000000000001`.
 
 **Access:** Local owner. Fleet refuses group and draft deletion previews and deletes with 403 `remote_deletion_forbidden` before obtaining upstream credentials or making a request. **Parameters:** encoded ID; no body.
 
-Returns Core's deletion preview: `ok:boolean`, `sessionGroup:string`, `draft:boolean`, `cutoffId:number` (message boundary), `operationId:string`, `messages:number`, `attachments:number`, `files:number`, and target/boundary metadata. Preserve the operation ID and cutoff for the confirmed delete.
+Returns Core's deletion preview: `ok:boolean`, `sessionGroup:string`, `draft:boolean`, `cutoffId:number` (message boundary), `operationId:string`, `pending:boolean`, `messages:number`, `attachments:number`, `files:number`, and target/boundary metadata. HTTP 200 has `pending:false`; when a deletion is already in flight, HTTP 202 has `pending:true` and the existing operation's ID and cutoff. Preserve the operation ID and cutoff for the confirmed delete.
 
 **Errors:** 403 `local_cookie_required`, `origin_deletion_forbidden`; 400 `invalid_deletion_target`; 502 `deletion_result_unknown` / `deletion_unavailable`; Core target/preview errors.
 
@@ -472,7 +473,7 @@ Example: `GET /api/groups/telegram%3Aexample/deletion-preview`.
 
 **Access:** Local owner, same origin. **Parameters:** encoded ID; JSON `{confirmed:true,operationId:string,cutoffId:integer}` from a fresh preview. Operation IDs are nonempty and at most 128 characters; cutoff is a nonnegative safe integer. Origin cannot be deleted.
 
-Returns `ok:boolean`, `pending:boolean`, `operationId:string`, optional `reason:string`, `counts:object`, `countsEstimated:boolean` and retained-target metadata. HTTP 202 means draining or cleanup remains pending; HTTP 200 with `pending:false` establishes completed deletion.
+HTTP 202 means deletion remains pending: draining returns `{ok:true,pending:true,operationId:string,reason:"draining"}`; waiting for usage finalization uses `reason:"usage_pending"`. These pending results contain neither `counts` nor `countsEstimated`. Retrying the same confirmed operation after it finishes returns HTTP 200 with `ok:true`, `pending:false`, `operationId:string`, `counts:object`, `countsEstimated:boolean`, `retainedMessages:number` and `groupDataRetained:boolean`. Counts and retained-target metadata appear only in the completed result.
 
 **Errors:** 400 `deletion_confirmation_required`, `invalid_deletion_target`; 403 `local_cookie_required`, `same_origin_required`, `origin_deletion_forbidden`; 409 for transition/ownership/fence conflicts and `DELETION_PREVIEW_STALE`; 502 `deletion_result_unknown` / `deletion_unavailable`; Core deletion errors.
 
@@ -537,13 +538,136 @@ Returns range/boundary/time-zone fields as above, `models:Array<{runtime:string,
 
 Example: `GET /api/usage/pricing`.
 
+## Memory
+
+Read-scope callers can inspect the tree and backlog. File bodies and Git metadata require admin access. PUT requires admin and browser same origin. Paths are relative to the memory root; absolute paths, traversal, symlinks and unsupported text files are rejected.
+
+| Method/path | Parameters and result | Errors / example |
+|---|---|---|
+| `GET /api/memory/tree` | No parameters. Returns `root:{name,path,type,children}`, recursively ordered directories/files with relative paths and file metadata. | 503 `memory_unavailable`. Example: `GET /api/memory/tree`. |
+| `GET /api/memory/file` | Required `path`. Returns `{path,name,size_bytes,mtime,sha256,markdown,text}`. `mtime` is ISO; `sha256` is the optimistic-write version. | 400 `invalid_memory_path`, 404 `memory_file_not_found`, 413 `memory_file_too_large`. Example: `GET /api/memory/file?path=state.md`. |
+| `PUT /api/memory/file` | Required `path`; JSON `{text:string,sha256:string}`. Returns `{ok:true,...file}` after Core's lock, conflict check and atomic save. | 409 `memory_conflict` (with current file), `memory_sync_busy`; 503 `memory_write_unavailable`, `memory_lock_timeout`; 502 `memory_write_unknown`. Example body: `{"text":"# Current work\n","sha256":"<64 hex characters>"}`. |
+| `GET /api/memory/git` | Required `path` (empty root allowed). Returns `{path,commit:null|{hash,short_hash,author_name,author_date,subject}}`. Missing Git history yields `commit:null`. | Path/file errors as above. Example: `GET /api/memory/git?path=state.md`. |
+| `GET /api/memory/backlog` | No parameters. Returns `{groups,originSync?,hasOlder,budgets}`. Each group has `sessionGroup,displayName,c4,count,firstAt,aged,syncing,threshold` and optional failure `reason`; multi mode adds cross-group `originSync`. | 503 `backlog_failed`. Example: `GET /api/memory/backlog`. |
+
+Backlog `count`, `firstAt`, `syncing` and `threshold` can be null when unknown; `budgets` is an object or null. Historical C4 groups accepted by group observation reads retain their count and oldest time. Historical groups cannot participate in per-group sync, so `aged:false`, `syncing:null` and `reason:"backlog_failed"` avoid implying an overdue sync. Syncable groups become `aged:true` when the oldest message is over six hours old. Unsafe names have unknown backlog fields. Multi-mode `originSync` is a separate cross-group observation.
+
+## Schedules
+
+All reads allow read scope; all writes require admin and browser same origin. A schedule ID is an ASCII letter/digit followed by at most 127 letters, digits, `_` or `-`. Writes go through the scheduler CLI and return `{ok:true,data}`. A rejected CLI result becomes an HTTP error; an unknown outcome is HTTP 502 `scheduler_cli_failed` and must not be automatically repeated.
+
+| Method/path | Parameters and result | Errors / example |
+|---|---|---|
+| `GET /api/schedules` | `status=all|enabled|paused|failed|completed` (default all), `q`, `cursor`, `limit=1..100` (default30). Returns availability, task rows, summary counts, timeline bands, timezone and paging metadata. Task rows contain `id,name,promptSummary,promptTruncated,type,status,cron,intervalSeconds,nextRunAt,lastRunAt,updatedAt,priority,requireIdle,missThreshold,recent,nextRuns,target,reply,reenable`. | 400 `invalid_status`, `invalid_limit`, `invalid_cursor`. Example: `GET /api/schedules?status=completed&limit=30`. |
+| `GET /api/schedules/preview` | `kind=cron|every|at`, `value`; optional `reenable=1`, `locale=en|zh`. Returns `{valid,runs?,text?,iso?,error?}`; invalid input is an HTTP error. | 400 `invalid_preview`, `invalid_cron`, `invalid_duration`, `invalid_time`, `reschedule_not_future`; 503 preview/timezone unavailable. Example: `GET /api/schedules/preview?kind=every&value=1h`. |
+| `GET /api/schedules/:id` | Full task including `prompt`, recent executions and resolved delivery target; returns `{task}`. | 400 `invalid_task`; 404 `task_not_found`. Example: `GET /api/schedules/daily-report`. |
+| `GET /api/schedules/:id/history` | Optional `before`, `beforeId`, `limit` for stable history pagination. Returns `{rows,next}` with execution status, start/completion, duration and error; an absent task/database returns an empty page (200). | 400 `invalid_task` for malformed URL encoding, `invalid_cursor` / `invalid_limit`; 503 `scheduler_unreadable`. Example: `GET /api/schedules/daily-report/history?limit=20`. |
+| `POST /api/schedules` | JSON `{name?,prompt,schedule:{kind:"cron"|"every"|"at",value},priority?,requireIdle?,missThreshold?}`. Routing/delivery fields are not accepted by this form. | 400 invalid form/schedule; CLI validation errors. Example body: `{"name":"Report","prompt":"Summarize progress","schedule":{"kind":"every","value":"1h"}}`. |
+| `PUT /api/schedules/:id` | Same editable fields, all optional. A supplied schedule replaces the schedule. | 404 missing task, 409 conflicting task state. Example body: `{"name":"Weekly report"}`. |
+| `DELETE /api/schedules/:id` | No body. Removes the named task through Core. | 404 missing task; CLI rejection/unknown errors. Example: `DELETE /api/schedules/daily-report`. |
+| `POST /api/schedules/:id/actions/pause` | No body. Pauses the named task. | 404 missing task; 409 invalid current state. Example: `POST /api/schedules/daily-report/actions/pause`. |
+| `POST /api/schedules/:id/actions/resume` | No body. Resumes the named task. | 404 missing task; 409 invalid current state. Example: `POST /api/schedules/daily-report/actions/resume`. |
+
+Schedule `nextRunAt`, `lastRunAt`, `updatedAt`, history `executedAt`/`completedAt`, every `runs[]`/`in24h[]` entry and `readAt` are ISO strings (or null where the source is unknown). Scheduler CLI write results project task `created_at`, `updated_at`, `next_run_at`, `last_run_at` and completion/failure fields to ISO too. `duration` is a millisecond duration and `intervalSeconds` is a duration in seconds. Cursor fields are opaque continuation values, not display timestamps.
+
+## Settings and Credentials
+
+| Method/path | Access, input and result | Errors / example |
+|---|---|---|
+| `GET /api/settings/pricing` | Read. Returns `{active,runtimes:{claude,codex}}`; runtime objects contain built-in model names, effective model prices, priority prices where applicable, configured prices and fast-mode metadata. Prices use input/output/cacheRead/cacheCreation per million tokens. | Common read errors. Example: `GET /api/settings/pricing`. |
+| `PUT /api/settings/pricing` | Admin. JSON `{runtimes:{claude?:{modelPrices?,fastModeMultiplier?},codex?:{modelPrices?,priorityModelPrices?}}}`. Returns `{ok:true,active,runtimes}`. Claude multiplier can be null to restore default. Prices must be finite nonnegative numbers; built-in models cannot be removed. | 400 `invalid_pricing` / `invalid_request`; 500 save failure. Example body: `{"runtimes":{"claude":{"fastModeMultiplier":2}}}`. The single-runtime request format is removed. |
+| `GET /api/settings/timezone` | Read. Returns `{tz,writable,read_only_reason,restart_services,restart_status}`. `tz` is an IANA name or null; the service list is advisory. | Common read errors. Example: `GET /api/settings/timezone`. |
+| `PUT /api/settings/timezone` | Admin. JSON `{tz:string}`. Saves instance `.env` without restarting services; returns `{ok:true,tz,previous,changed,...restartAdvice}`. | 400 invalid/unavailable timezone; 503 environment inaccessible. Example body: `{"tz":"Asia/Singapore"}`. |
+| `POST /api/settings/timezone/actions/restart-services` | Admin. JSON confirmation required by the timezone restart action. Restarts only services identified as belonging to this instance. Returns `{ok:true,...actionResult}`. | 400 `confirmation_required`; 409 no matching service; Core/service errors. Example body: `{"tz":"Asia/Singapore","confirm":true,"services":["scheduler"]}`. |
+| `GET /api/settings/chat` | Read, including Fleet read proxies. Returns `{chat_allow_remote:boolean}`. This is the sole source of the remote chat/terminal visibility setting. | Common read errors. Example: `GET /api/settings/chat`. |
+| `PUT /api/settings/chat` | Admin, local only (not Fleet proxied). JSON `{chat_allow_remote:boolean}`. Returns `{ok:true,chat_allow_remote}`; disabling revokes remote chat/terminal access. | 400 `invalid_chat_settings`; 500 `chat_settings_write_failed`. Example body: `{"chat_allow_remote":false}`. |
+| `POST /api/auth/token` | Public credential exchange; requires `Authorization: Bearer <API key>`. Returns `{ok:true,token,expires_at,ttl_seconds,scope}`. The API key is not itself a data-access bearer token. | 401 `invalid_api_key`. Example: `POST /api/auth/token` with the key header. |
+| `GET /api/keys` | Admin, local only. Returns key metadata; key material is omitted. | Common access errors. Example: `GET /api/keys`. |
+| `POST /api/keys` | Admin, local only. JSON `{name,scope:"read"|"admin"}`; returns `{ok:true,key,plaintext_key,...keyMetadata}`. The key is shown once. | 400 `invalid_name`, `invalid_scope` or `duplicate_name` when the name already exists at validation; 409 `name_taken` if a concurrent insert wins the database unique constraint. Example body: `{"name":"reader","scope":"read"}`. |
+| `POST /api/keys/:name/rotate` | Admin, local only. Returns `{ok:true,key,plaintext_key,...keyMetadata}` with replacement material once. | 404 `unknown_key`. Example: `POST /api/keys/reader/rotate`. |
+| `DELETE /api/keys/:name` | Admin, local only. `permanent=1` permanently removes an already revoked key; otherwise revokes it. Returns `{ok:true,...}`. | 404 `unknown_key`; 409 `must_revoke_first`. Example: `DELETE /api/keys/reader`. |
+| `POST /api/keys/purge-revoked` | Admin, local only. Returns `{ok:true,purged,...keyMetadata}`. | Common write errors. Example: `POST /api/keys/purge-revoked`. |
+| `GET /login`, `POST /login` | Public password login form and submission (`application/x-www-form-urlencoded`, password, optional remember). Success redirects and sets the scoped secure session cookie. Failure renders HTML. | Invalid credentials/rate limit are rendered on the form. Example: `GET /login`. |
+| `POST /logout` | Browser session logout; clears cookie and redirects. | Always clears the session, including when Origin is missing or mismatched; no same-origin precondition. Example: `POST /logout`. |
+
+## Chat
+
+**Access:** Admin for all conversation content, metadata, attachment and chat push routes below. The remote chat switch must be enabled for API-session access. All conversation content and attachment reads require admin scope at both the local and destination instances; read keys receive 403. Writes also require admin and browser same origin. `GET /api/settings/chat` remains read-scoped because it exposes only the access setting. Local password sessions can read their own instance independently of the remote switch. Conversation IDs are opaque and must be URL-encoded; query parameters are validated per route. Take `items[].id` from `GET /api/chat/conversations` (or `conversation.id` from draft creation). For example, Origin has ID `g:6F726967696E`, encoded as `g%3A6F726967696E`; the group key `origin` is not a chat conversation ID. Use the returned ID for subsequent conversation requests, with the same `tab` where supported. Message IDs come from `items[].id` in that conversation’s `/messages` response.
+
+| Method/path | Contract and minimal example |
+|---|---|
+| `GET /api/chat/conversations` | `tab=mine|external`, `limit`, `cursor`. Returns `{items,nextCursor,tz,deletionAllowed,...}`. Example: `GET /api/chat/conversations?tab=mine`. |
+| `GET /api/chat/conversations/:id` | Returns reconciliation receipt plus conversation metadata. Example: `GET /api/chat/conversations/g%3A6F726967696E`. |
+| `POST /api/chat/drafts` | JSON `{displayName?}` → `{ok:true,conversation}` (201). Example body: `{}`. |
+| `PATCH /api/chat/conversations/:id` | JSON `{displayName}` → `{ok:true,conversation}`. Example body: `{"displayName":"Work"}`. |
+| `POST /api/chat/conversations/:id/send` | JSON `{content,retry?,attachments?,quote?}` → `{ok:true,...receipt}`. Uncertain delivery is not safe to repeat automatically. Example body: `{"content":"Hello"}`. |
+| `GET /api/chat/conversations/:id/messages` | `tab,limit,cursor,direction,recheckIds` → paged messages and `tz`. Example: `GET /api/chat/conversations/g%3A6F726967696E/messages?limit=30`. |
+| `GET /api/chat/conversations/:id/status` | Optional `tab`; required `ids` is a comma-separated list of 1–100 distinct positive message IDs from `/messages` → `{items:Array<{id,direction,status,delivery_action,deliveryState}>}`. Example: after `/messages` returns an item with `id:123`, `GET /api/chat/conversations/g%3A6F726967696E/status?ids=123`. |
+| `GET /api/chat/conversations/:id/activity` | `tab,subtask` → current conversation activity. Example: `GET /api/chat/conversations/g%3A6F726967696E/activity`. |
+| `GET /api/chat/conversations/:id/questions` | Optional `limit=1..100` (default 50), `cursor`. Returns `{items,nextCursor}` with interactive questions for the stored conversation. Example: `GET /api/chat/conversations/g%3A6F726967696E/questions`. |
+| `POST /api/chat/conversations/:id/answers` | JSON control answer payload validated against the stored question/control; returns `{ok:true,...receipt}`. Example: JSON `{interruptId,action,retry?}`, using the stored question/control action from the question response. |
+| `GET /api/chat/conversations/:id/uploads/config` | Returns `{maxUploadBytes:number,maxAttachments:number}` for a writable conversation. Example: `GET /api/chat/conversations/g%3A6F726967696E/uploads/config`. |
+| `POST /api/chat/conversations/:id/uploads` | Multipart file upload → `{ok:true,id,name,size,mime,kind}` (201). Example: multipart field `file` containing one supported file. |
+| `GET /api/chat/conversations/:id/attachments/:attachmentId` | Streams authorized file bytes with safe content type/disposition. Example: `GET /api/chat/conversations/g%3A6F726967696E/attachments/<id>`. |
+| `GET /api/chat/drafts/:id/deletion` | Local-owner-only draft deletion preview. Here `:id` is the bare `conversation.localId` returned by `POST /api/chat/drafts`, also available as `items[].localId` on draft rows in the conversation list. Do not pass the `d:`-prefixed conversation ID. Example: with `localId:"550e8400-e29b-41d4-a716-446655440000"`, `GET /api/chat/drafts/550e8400-e29b-41d4-a716-446655440000/deletion`. |
+| `DELETE /api/chat/drafts/:id` | Local-owner-only; `:id` is the same bare `localId` used for the preview. JSON `{confirmed:true,operationId,cutoffId}` from the preview. Returns `{ok:true,...deletionResult}`. Example: `DELETE /api/chat/drafts/550e8400-e29b-41d4-a716-446655440000` with the preview's confirmation values. Passing `d:<uuid>` returns 404 `chat_conversation_not_found`. |
+
+Chat validation uses HTTP 400 (`invalid_chat_parameters`, invalid conversation/control IDs), missing resources 404, forbidden writes 403, conflicting state 409, upload limits 413 and upstream/unknown outcomes 502. All JSON failures use the common error envelope. Attachment downloads are binary; SSE uses the Push contract below.
+
+## Terminal Observer and History
+
+**Access:** Read for observer status; Admin for every terminal-history route and live terminal resource. Read-scope callers can read observer status when remote access is enabled. All four terminal-history reads require admin at both the local and destination instances; read keys receive 403. Administration, terminal-size changes and leases require admin and browser same origin. `/observer/frame` and `/observer/stream` are lease-bound terminal resources, not read-key data APIs. Install/enable/disable/uninstall retain their existing coordinator semantics.
+
+| Method/path | Contract and minimal example |
+|---|---|
+| `GET /api/observer/status` | Optional `session_group` (default Origin); returns installation/enable state, target/runtime/startup status and agent size. Example: `GET /api/observer/status?session_group=origin`. |
+| `POST /api/observer/agent-size` | JSON size and optional `sessionGroup`; optional query `session_group`. Returns `{ok:true,...sizeResult}`. Example body: `{"cols":120,"rows":40,"sessionGroup":"origin"}`. |
+| `POST /api/observer/install` | Installs/enables observer; returns `{ok:true,...publicStatus}`. Example body: `{}`. |
+| `POST /api/observer/enable` | Enables installed observer; returns `{ok:true,...publicStatus}`. Example body: `{}`. |
+| `POST /api/observer/disable` | Revokes leases/streams, disables observer; returns `{ok:true,...publicStatus}`. Example body: `{}`. |
+| `DELETE /api/observer/install` | Uninstalls and revokes access; returns `{ok:true,...publicStatus}`. Example: `DELETE /api/observer/install`. |
+| `POST /api/observer/leases` | Optional JSON `{sessionGroup}`; returns `{ok:true,...lease}` (201). The lease binds identity and target. Example body: `{"sessionGroup":"origin"}`. |
+| `POST /api/observer/leases/:id/renew` | Renews the same principal's lease → `{ok:true,...lease}`. Example: `POST /api/observer/leases/<id>/renew`. |
+| `POST /api/observer/leases/:id/release` | Releases owned lease → `{ok:true,released:true}`; missing owned lease is idempotent. Example: `POST /api/observer/leases/<id>/release`. |
+| `GET /observer/frame` | HTML terminal frame; `X-Observer-Lease` header required. HEAD is supported. Example: `GET /observer/frame` with lease header. |
+| `GET /observer/stream` | WebSocket upgrade with the observer protocol and lease credentials. Query parameters are rejected. Example: connect to `/observer/stream` using the issued lease. |
+| `GET /api/observer/history/sessions` | Optional `session_group` (default Origin); in single mode a non-Origin selection returns 400 `invalid_session_group`. Existing historical keys follow the same C4-catalog membership rules as group detail (unreadable catalog: 502 `group_catalog_unreadable`, unknown/unsafe key: 400 `invalid_session_group`) → `{runtime,current,sessions}`. Each list request refreshes discovery and file metadata (including appended titles/bytes/timestamps and Codex event ordering), reusing parsed metadata; entries/content/search retain scoped snapshots. Example: `GET /api/observer/history/sessions?session_group=telegram%3Ateam`. |
+| `GET /api/observer/history/entries` | Same group, required `session`, optional `before|after|around`, `limit=1..200`, `internal=0|1` → entries, updates and older/newer cursors. Example: `GET /api/observer/history/entries?session_group=origin&session=<id>`. |
+| `GET /api/observer/history/content` | Same group, required `session,entry,field`, optional text `offset` → UTF-16 text chunk `{text,offset,next,total}` or binary bytes. Example: `GET /api/observer/history/content?session_group=origin&session=<id>&entry=o:0&field=text`. |
+| `GET /api/observer/history/search` | Same group, required `session,q` (2–200 chars), optional `limit=1..200`, `before` and `internal=1` to include internal entries → `{matches:Array<{entry,snippet}>,before,hasMore}`. Example: `GET /api/observer/history/search?session_group=origin&session=<id>&q=hello`. |
+
+All four history routes use the same selected group. In single mode only Origin is valid; selecting any non-Origin group returns HTTP 400 `invalid_session_group` from group-detail validation, including groups that have readable history in multi mode. History supports offline groups through imported runtime-event attribution and transcript files, without acquiring a live terminal lease. A session outside the selected group returns 404. Missing/disabled observer history returns 404; invalid group/target/cursor/size returns 400; state conflicts return 409; inaccessible dependencies return 503. Rejected `/observer/stream` upgrades use the common JSON error envelope (including 401 `unauthorized`, 403 `same_origin_required` and 404 `not_found`); terminal stream failures close the connection after upgrade.
+
+## Fleet
+
+`GET /api/fleet` is a read-scoped status API. Configuration and probe routes are admin and local-only. A remote request is authorized both on the local proxy and the destination; no old-version fallback exists.
+
+| Method/path | Contract and minimal example |
+|---|---|
+| `GET /api/fleet` | Returns self/remote status records and update metadata. Example: `GET /api/fleet`. |
+| `GET /api/fleet/agents` | Returns `{self,agents}` configuration with credential material redacted. Each agent has `{name,base_url,key_masked,access}`; `access` is `"admin"` when the poller has a cached admin session, otherwise `"read"` (including before a successful probe). Example: `GET /api/fleet/agents`. |
+| `POST /api/fleet/agents` | JSON `{name,base_url,read_api_key}` → `{ok:true,agent:{name,base_url,key_masked,access}}` (200). Input is validated, then the destination is probed before saving; a failed probe does not reject the addition. `access` is `"admin"` or `"read"` when the probe established that API-session scope, or `"unknown"` when the probe failed (including invalid credentials or an unreachable destination). Validation returns 400 `invalid_name`, `reserved_name`, `duplicate_name`, `invalid_url` or `missing_read_api_key`; save failure returns 500 `failed_to_save_config`. Example body: `{"name":"worker","base_url":"https://worker.example/dashboard","read_api_key":"<key>"}`. |
+| `POST /api/fleet/agents/test` | JSON `{base_url,read_api_key}` → `{ok:true,reachable:true,scope,version}`. A failed destination probe returns HTTP 502 with `{ok:false,reachable:false,error:{code,message}}`; codes include `auth_failed`, `version_unsupported` and `unreachable`. Example: same destination/key as an add request. |
+| `DELETE /api/fleet/agents/:name` | Removes the configured remote → `{ok:true,self,agents}`. Example: `DELETE /api/fleet/agents/worker`. |
+| `GET /fleet/:name/*` | Proxies allowed read routes/assets using configured credentials. Example: `GET /fleet/worker/api/settings/chat`. |
+| `PUT`, `PATCH`, `POST`, `DELETE /fleet/:name/*` | Only explicit object-write allowlist entries are proxyable, with admin and browser same origin. Local-only instance-name, key, Fleet config, deletion and chat-setting writes cannot be proxied; group display-name writes are allowed. Example: `POST /fleet/worker/api/schedules/report/actions/pause`. |
+
+Fleet rejects unknown agents with 404, invalid memory path queries with 400 `invalid_memory_path`, and upstream failures with 502/504. Suffix handling depends on the path:
+
+- Encoded slash `%2F` (case-insensitive), undecodable percent encoding, and paths whose decoded/normalized suffix reaches a local-only endpoint (including through `..`) return 403 `local_endpoint_not_proxyable`.
+- `/fleet/peer//api/...` bypasses API proxy dispatch and falls through to page serving: GET returns 404 plain text `not found`; POST returns 405 plain text `method not allowed`.
+- Encoded `%2e%2e` reaching another route is not rejected as `local_endpoint_not_proxyable`; a write outside the explicit proxy allowlist returns 403 `read_only_proxy`.
+- Encoded backslash `%5C` is forwarded unchanged in an otherwise allowed API request.
+
+Other forbidden routes return 403. Same-version peers return the common JSON error envelope, which the proxy relays unchanged. Attachment, observer WebSocket and SSE relays keep their streaming content types.
+
 ## Push
 
 ### GET /api/stream
 
 **Access:** Read for the ordinary stream. Chat subscriptions additionally use the existing chat-access rules (local owner or permitted remote chat access).
 
-**Parameters:** no parameters for ordinary instance events. Chat opt-in uses `chat=1`, optional `chat_tab=mine|external` (default mine) and `chat_conversation` (an encoded conversation ID); repeated subscription parameters and legacy `chat_ids` are invalid; invalid subscriptions are rejected rather than treated as an ordinary stream. Response is `text/event-stream`, not JSON.
+**Parameters:** no parameters for ordinary instance events. Chat opt-in requires admin at both instances and uses `chat=1`, optional `chat_tab=mine|external` (default mine) and `chat_conversation` (an encoded conversation ID); repeated subscription parameters and legacy `chat_ids` are invalid; invalid subscriptions are rejected rather than treated as an ordinary stream. Response is `text/event-stream`, not JSON.
 
 | SSE event | Data | Meaning |
 |---|---|---|
@@ -557,7 +681,7 @@ Example: `GET /api/usage/pricing`.
 
 Fleet shows instance and group summaries only. It does not fetch Origin group detail, read Origin session metadata, or expose `model`, `effort`, `context_pct` or `new_session_threshold` on Fleet records. These observations remain in group detail and runtime settings. Single-session cards show only the actual state pill. Fleet records do not include current-action text or feeds; aggregate `BUSY` retains the Working label without implying a thinking or tool-activity observation. A known runtime authentication failure remains an error for a running-list row whose activity state is unknown. Its independent no-response count comes from `counts.running.flags.noResponse`; problem durations use `flags.noResponse.since`. Error precedence still keeps the summary categories mutually exclusive, so its no-response category can be smaller than the independent no-response count.
 
-Multi-session Fleet `group_summary` optionally includes `attention`, projected from the same observations as Overview. Supported kinds are `channel_send_failed`, `channel_restarting`, `start_failed`, `rate_limited` and `data_unreadable`. Items carry only applicable bounded text fields (`group`, `displayName`, `runtime`, `channel`, `service`, `reasonCode`, `source`), nonnegative `count`/`count30m`, and `until`. Channel items have no group link. Group unreadability includes the group name/key and diagnostic reason; clients render reason text through text nodes. Existing running/counts/problems semantics remain unchanged, and older remote summaries without `attention` remain valid. Offline start failures use the existing filtered offline resource, including pagination; a failed read remains a diagnostic observation.
+Multi-session Fleet `group_summary` optionally includes `attention`, projected from the same observations as Overview. Supported kinds are `channel_send_failed`, `channel_restarting`, `start_failed`, `rate_limited` and `data_unreadable`. Items carry only applicable bounded text fields (`group`, `displayName`, `runtime`, `channel`, `service`, `reasonCode`, `source`), nonnegative `count`/`count30m`, and `until:string|null` (ISO UTC recovery time; null means unknown). Channel items have no group link. Group unreadability includes the group name/key and diagnostic reason; clients render reason text through text nodes. Existing running/counts/problems semantics remain unchanged, and older remote summaries without `attention` remain valid. Offline start failures use the existing filtered offline resource, including pagination; a failed read remains a diagnostic observation.
 
 If the group catalog cannot be read, ordinary stream and Fleet retain known rows and publish counts with `listKnown:false`; they do not drop unrelated updates. Direct counts, offline and search reads retain their explicit catalog errors.
 

@@ -1,3 +1,4 @@
+import { instantMs, conversationStampMs, activityTimes } from './api-time.js';
 import { parseC4Content, evaluateFormState } from '../../chat-schema.js';
 import { messageState } from './chat-delivery-state.js';
 import { asDate } from './conversation-time.js';
@@ -12,7 +13,7 @@ export const ORIGIN_CONVERSATION_ID = 'g:6F726967696E';
 export const isOriginConversation = id => id === ORIGIN_CONVERSATION_ID;
 // Origin stays pinned first; the rest follow recent activity.
 const listOrder = (a, b) => Number(isOriginConversation(b.id)) - Number(isOriginConversation(a.id))
-  || Number(b.stamp || 0) - Number(a.stamp || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  || (conversationStampMs(b.stamp) || 0) - (conversationStampMs(a.stamp) || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const query = values => new URLSearchParams(Object.entries(values).filter(([, v]) => v !== null && v !== undefined)).toString();
 export function createConversationState({
   request,
@@ -358,7 +359,7 @@ export function createConversationState({
         }
       } catch (err) {
         if (!valid(e)) return;
-        if ((err?.code || err?.payload?.error) === 'remote_chat_disabled') {
+        if ((err?.code || err?.payload?.error?.code) === 'remote_chat_disabled') {
           failure(err, e);
         } else {
           updateError = err?.code || 'chat_request_failed';
@@ -396,23 +397,29 @@ export function createConversationState({
     }
   };
   document?.addEventListener?.('visibilitychange', visibilityChanged);
+  function blockRemote() {
+    if (destroyed || blocked) return;
+    stopTimer();
+    resetStream();
+    cancelGroupPresenceRead();
+    updateError = null;
+    epoch++;
+    blocked = true;
+    cells.clear();
+    items = [];
+    nextCursor = null;
+    selectedId = null;
+    mode = null;
+    loading = false;
+    error = null;
+    emit();
+  }
   function failure(err, e, target = null) {
     if (!valid(e)) return;
-    const code = err?.code || err?.payload?.error || err?.message || 'chat_request_failed';
+    const code = err?.code || err?.payload?.error?.code || err?.message || 'chat_request_failed';
     if (code === 'remote_chat_disabled') {
-      stopTimer();
-      resetStream();
-      cancelGroupPresenceRead();
-      updateError = null;
-      epoch++;
-      blocked = true;
-      cells.clear();
-      items = [];
-      nextCursor = null;
-      selectedId = null;
-      mode = null;
-      loading = false;
-      error = null;
+      blockRemote();
+      return;
     } else if (target) {
       target.error = typeof code === 'string' ? code : 'chat_request_failed';
     } else {
@@ -700,11 +707,11 @@ export function createConversationState({
       } : row);
     } catch (err) {
       if (sendIdentity !== openedIdentity || blocked || destroyed || form.authCleared) return;
-      if (err?.code === 'remote_chat_disabled' || err?.payload?.error === 'remote_chat_disabled') {
+      if (err?.code === 'remote_chat_disabled' || err?.payload?.error?.code === 'remote_chat_disabled') {
         failure(err, e);
         return;
       }
-      form.error = err?.code || err?.payload?.error || 'chat_request_failed';
+      form.error = err?.code || err?.payload?.error?.code || 'chat_request_failed';
       if ([400, 422].includes(err?.status)) {
         // Field errors belong only to this immutable form and its submitted active keys.
         const fields = question.constraints?.block?.data?.fields;
@@ -882,9 +889,9 @@ export function createConversationState({
         const group = data;
         const instance = await request('/api/instance', { signal: record.controller.signal });
         if (!stillCurrent()) return;
-        const trusted = (group?.sessionGroup ?? group?.id) === sessionGroup && group?.state && ['running', 'not_running'].includes(group.presence) && Number.isFinite(data.readAt);
+        const trusted = (group?.sessionGroup ?? group?.id) === sessionGroup && group?.state && ['running', 'not_running'].includes(group.presence) && Number.isFinite(instantMs(data.readAt));
         current.groupProcessing = trusted && origin && group?.processing === 'scheduled_task' ? 'scheduled_task' : null;
-        applyGroupReading(current, trusted ? { readAt: data.readAt, presence: group?.presence ?? null,
+        applyGroupReading(current, trusted ? { readAt: instantMs(data.readAt), presence: group?.presence ?? null,
           wait: group?.wait ?? null, health: instance?.runtimeHealth?.[group?.target?.runtime]?.health ?? null,
           working: group?.working ?? null } : null);
       } catch {
@@ -916,6 +923,7 @@ export function createConversationState({
    * An older reading than the one shown is ignored; an untrusted one (null) clears it.
    */
   function applyGroupReading(current, reading) {
+    if (reading) reading = { ...reading, readAt: instantMs(reading.readAt) };
     if (reading && Number.isFinite(reading.readAt) && Number.isFinite(current.groupPresenceReadAt) && reading.readAt < current.groupPresenceReadAt) return;
     current.groupPresence = reading?.presence === 'running' ? true : reading?.presence === 'not_running' ? false : null;
     current.groupHealth = reading?.health ?? null;
@@ -933,7 +941,7 @@ export function createConversationState({
     if (currentTab !== 'mine' || typeof id !== 'string' || !id.startsWith('g:') || current.activity.reading || current.activity.unsupported) return;
     current.activity.reading = true;
     try {
-      const data = await request(`${pathFor(id)}/activity?${query({ tab: currentTab })}`);
+      const data = activityTimes(await request(`${pathFor(id)}/activity?${query({ tab: currentTab })}`));
       if (!valid(e) || !Array.isArray(data?.steps) || !Array.isArray(data?.subtasks)) return;
       if (Number.isFinite(data.now)) current.activity.offset = data.now - now();
       current.activity.data = data;
@@ -950,7 +958,8 @@ export function createConversationState({
           && pollAt !== null && pollAt > now() + 2000 && !updateError) schedule(2000);
     } catch (err) {
       // Keep the last activity; the next poll asks again, unless this instance has no activity route at all.
-      if (err?.status === 404 && valid(e)) current.activity.unsupported = true;
+      if (err?.code === 'remote_chat_disabled') failure(err, e);
+      else if (err?.status === 404 && valid(e)) current.activity.unsupported = true;
     } finally {
       current.activity.reading = false;
     }
@@ -958,7 +967,7 @@ export function createConversationState({
   /** One open subtask's steps; a failed read keeps the ones shown. */
   async function readSubtask(current, id, key, e) {
     try {
-      const data = await request(`${pathFor(id)}/activity?${query({ tab: 'mine', subtask: key })}`);
+      const data = activityTimes(await request(`${pathFor(id)}/activity?${query({ tab: 'mine', subtask: key })}`));
       if (valid(e) && current.activity.open.has(key) && Array.isArray(data?.steps)) current.activity.details.set(key, data);
     } catch { /* the next poll asks again */ }
   }
@@ -1292,10 +1301,10 @@ export function createConversationState({
         } else current.pending = null;
         persistCompose(current);
       }
-      if ((err?.code || err?.payload?.error) === 'remote_chat_disabled') {
+      if ((err?.code || err?.payload?.error?.code) === 'remote_chat_disabled') {
         failure(err, e);
       } else if (sendIdentity === openedIdentity && !blocked) {
-        current.error = err?.code || err?.payload?.error || err?.message || 'chat_request_failed';
+        current.error = err?.code || err?.payload?.error?.code || err?.message || 'chat_request_failed';
         if (valid(e)) emit();
       }
     } finally {
@@ -1305,6 +1314,7 @@ export function createConversationState({
     return outcome;
   }
   return {
+    blockRemote,
     snapshot,
     /** Expands or folds a subtask row; only expanded rows have their steps read, from now on every poll. */
     async toggleSubtask(key) {

@@ -93,7 +93,7 @@ export async function runConversationGenuiVisual(t, sandbox) {
     const values = {
       '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: '隔离浏览器' } },
       '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
-      '/api/settings': {active:'claude',runtimes:{claude:{modelPrices:{},builtInModels:[],fastMode:{}},codex:{modelPrices:{},builtInModels:[],priorityModelPrices:{},builtInPriorityModels:[]}}},
+      '/api/settings/pricing': {active:'claude',runtimes:{claude:{modelPrices:{},builtInModels:[],fastMode:{}},codex:{modelPrices:{},builtInModels:[],priorityModelPrices:{},builtInPriorityModels:[]}}},
       '/api/usage/pricing':{models:[]}, '/api/groups/runtime-overrides':{runtime:[],runtimeTotal:0,nextAfter:null} };
     sendJson(res, 200, values[url.pathname] || {}); return true;
   } });
@@ -330,7 +330,7 @@ export async function runConversationGenuiVisual(t, sandbox) {
   // instance's next history response is unauthorized; ordinary data still uses
   // the real fixture, so an unrelated background request cannot clear drafts.
   fixture.setProxy(fixture);
-  assert.equal((await fixture.request('/api/chat/settings', { method: 'PUT', body: { allowRemote: true } })).status, 200);
+  assert.equal((await fixture.request('/api/settings/chat', { method: 'PUT', body: { chat_allow_remote: true } })).status, 200);
   await page.goto(fixture.base + '/fleet/Remote/chat');
   await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
   root = await choose('controls'); await formValues(root); await chooseType(root, 'person');

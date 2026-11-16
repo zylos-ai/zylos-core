@@ -25,7 +25,8 @@ export async function runSchedulePaginationBrowser(t, sandbox) {
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
-      if (url.pathname.startsWith('/api/workbench/schedule')) {
+      res.apiPath = url.pathname;
+      if (url.pathname.startsWith('/api/schedules')) {
         if (req.method === 'GET') {
           if (reads.length < 100) reads.push(url.pathname + url.search);
           const value = await scheduleReadResponse(reader, url.pathname, url.searchParams);
@@ -157,6 +158,17 @@ export async function runSchedulePaginationBrowser(t, sandbox) {
         assert.equal(await page.locator('.wb-sched-prompt').textContent(), fixture.prompt);
         await page.getByRole('button', { name: '编辑', exact: true }).click();
         assert.equal(await page.locator('.wb-sched-side textarea').inputValue(), fixture.prompt);
+        await page.locator('.wb-sched-side [data-kind="cron"]').click();
+        const rule = page.locator('.wb-sched-side input[type="text"]').last();
+        const invalidPreview = page.waitForResponse(response => new URL(response.url()).pathname === '/api/schedules/preview' && response.status() === 400);
+        await rule.fill('invalid-rule');
+        const rejected = await invalidPreview;
+        const payload = await rejected.json();
+        assert.equal(typeof payload.error.code, 'string');
+        assert.equal(typeof payload.error.message, 'string');
+        await page.waitForFunction(() => document.querySelector('.wb-sched-side button[type="submit"]')?.disabled === true);
+        assert.equal(await page.locator('.wb-sched-preview').textContent(), '规则写错了');
+        if (evidence) await page.screenshot({ path: path.join(evidence, `${width}-${theme}-schedule-invalid-preview.png`) });
         await page.getByRole('button', { name: '取消', exact: true }).click();
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width, 'page fits viewport');
         assert.equal(errors.length, 0, errors.join('\n'));

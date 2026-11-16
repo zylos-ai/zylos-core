@@ -152,6 +152,8 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
+      res.apiPath = url.pathname;
+      res.apiWrite = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
       if (await auth.handle(req, res, url)) return;
       if (url.pathname.startsWith('/fleet/') && proxy && await proxy.handle(req, res, url)) return;
       const common = { auth, config, conversations, sender, history, activity, answers, delivery, attachments, readMode, instanceTz };
@@ -165,7 +167,7 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
       }
       if (req.method === 'GET' && url.pathname === '/api/groups/naming-prompt') {
         // As in the Dashboard: this resource only takes the POST that sends the prompt to Origin.
-        sendJson(res, 405, { error: 'method_not_allowed' }); return;
+        sendJson(res, 404, { error: 'not_found' }); return;
       }
       if (req.method === 'GET' && url.pathname === '/api/groups/runtime-overrides') {
         // This HTTP-only fixture has no runtime overrides or runtime CLI.
@@ -333,7 +335,7 @@ export async function createRemoteChatApiFixture(t, sandbox, { timeoutMs = 45000
       const response = await fetch(info.base + route, { method, headers, signal: AbortSignal.timeout(timeoutMs),
         ...(['GET', 'HEAD'].includes(method) ? {} : { body: JSON.stringify(body ?? {}) }) });
       const text = await response.text(); let value; try { value = JSON.parse(text); } catch { value = text; }
-      if (route === '/api/chat/settings' && response.ok) config.chat.allowRemote = value.allowRemote;
+      if (route === '/api/settings/chat' && response.ok) config.chat.allowRemote = value.chat_allow_remote;
       return { status: response.status, body: value, text };
     },
     async createConversation(content = 'isolated remote first text') {

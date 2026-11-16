@@ -405,18 +405,20 @@ export function createScheduleRead({ zylosDir, scheduleTz, getSnapshot = async (
 
 /** GET routes of the schedule page; authentication is owned by the API gate. */
 export async function scheduleReadResponse(reader, pathname, searchParams) {
-  if (pathname === '/api/workbench/schedule') return reader.read(undefined, {
+  if (pathname === '/api/schedules') return reader.read(undefined, {
     status: searchParams.get('status'), q: searchParams.get('q'), cursor: searchParams.get('cursor'), limit: searchParams.get('limit'),
   });
-  if (pathname === '/api/workbench/schedule/preview') {
-    return reader.preview({
+  if (pathname === '/api/schedules/preview') {
+    const preview = await reader.preview({
       kind: searchParams.get('kind'),
       value: searchParams.get('value') ?? '',
       reenable: searchParams.get('reenable') === '1',
       locale: searchParams.get('locale') === 'en' ? 'en' : 'zh',
     });
+    if (preview.valid !== true) throw httpError(preview.valid === null || preview.error === 'tz_unavailable' ? 503 : 400, preview.error || 'preview_unavailable');
+    return preview;
   }
-  const route = pathname.match(/^\/api\/workbench\/schedule\/([^/]+)(\/history)?$/);
+  const route = pathname.match(/^\/api\/schedules\/([^/]+)(\/history)?$/);
   if (!route) return undefined;
   let id;
   try {

@@ -18,7 +18,7 @@ import { hashApiKey, exchangeApiKeyForToken } from '../src/lib/auth.js';
 const fetch = (url, options = {}) => globalThis.fetch(url, { ...options, signal: AbortSignal.timeout(3000) });
 
 async function readSettings(server) {
-  const response = await fetch(server.origin + '/api/settings?all=1');
+  const response = await fetch(server.origin + '/api/settings/pricing');
   assert.equal(response.status, 200);
   const all = await response.json();
   return all.runtimes[all.active];
@@ -157,11 +157,11 @@ async function makeSettingsServer(t, runtime = 'claude', configBody = {}, runCli
 // HTTP integration via makeSettingsServer: actual route/config persistence;
 // run when this behavior changes, skip presentation-only changes. Private
 // runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
-test('PUT /api/settings rejects non-object bodies without changing config', async t => {
+test('PUT /api/settings/pricing rejects non-object bodies without changing config', async t => {
   const server = await makeSettingsServer(t);
   const before = fs.readFileSync(server.configPath, 'utf8');
   for (const body of [null, [], 'hello']) {
-    const response = await fetch(server.origin + '/api/settings', {
+    const response = await fetch(server.origin + '/api/settings/pricing', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
     assert.equal(response.status, 400);
@@ -333,7 +333,7 @@ test('loadConfig migrates legacy modelPrices into Claude prices only', () => {
 test('all-runtime settings expose Codex fast mode as priority service tier', async t => {
   const server = await makeSettingsServer(t, 'codex');
   try {
-    const resp = await fetch(`${server.origin}/api/settings?all=1`);
+    const resp = await fetch(`${server.origin}/api/settings/pricing`);
     assert.equal(resp.status, 200);
     const all = await resp.json();
     const body = all.runtimes[all.active];
@@ -353,7 +353,7 @@ test('all-runtime settings expose Codex fast mode as priority service tier', asy
 // HTTP integration via makeSettingsServer: actual route/config persistence;
 // run when this behavior changes, skip presentation-only changes. Private
 // runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
-test('PUT /api/settings stores Codex priority model prices', async t => {
+test('PUT /api/settings/pricing stores Codex priority model prices', async t => {
   const server = await makeSettingsServer(t, 'codex');
   try {
     const current = await readSettings(server);
@@ -361,14 +361,14 @@ test('PUT /api/settings stores Codex priority model prices', async t => {
       ...current.priorityModelPrices,
       'gpt-5.5': { ...current.priorityModelPrices['gpt-5.5'], input: 13 }
     };
-    const resp = await fetch(`${server.origin}/api/settings`, {
+    const resp = await fetch(`${server.origin}/api/settings/pricing`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ modelPrices: current.modelPrices, priorityModelPrices })
+      body: JSON.stringify({ runtimes: { codex: { modelPrices: current.modelPrices, priorityModelPrices } } })
     });
     assert.equal(resp.status, 200);
     const body = await resp.json();
-    assert.equal(body.priorityModelPrices['gpt-5.5'].input, 13);
+    assert.equal(body.runtimes.codex.priorityModelPrices['gpt-5.5'].input, 13);
     const written = parseConfigFile(server.configPath);
     assert.equal(written.runtimeServiceTierModelPrices.codex.priority['gpt-5.5'].input, 13);
   } finally {
@@ -379,18 +379,18 @@ test('PUT /api/settings stores Codex priority model prices', async t => {
 // HTTP integration via makeSettingsServer: actual route/config persistence;
 // run when this behavior changes, skip presentation-only changes. Private
 // runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
-test('PUT /api/settings rejects fast mode multiplier for Codex runtime', async t => {
+test('PUT /api/settings/pricing rejects fast mode multiplier for Codex runtime', async t => {
   const server = await makeSettingsServer(t, 'codex');
   try {
     const current = await readSettings(server);
-    const resp = await fetch(`${server.origin}/api/settings`, {
+    const resp = await fetch(`${server.origin}/api/settings/pricing`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ modelPrices: current.modelPrices, fastModeMultiplier: 6 })
+      body: JSON.stringify({ runtimes: { codex: { modelPrices: current.modelPrices, fastModeMultiplier: 6 } } })
     });
     assert.equal(resp.status, 400);
     const body = await resp.json();
-    assert.match(body.error, /not supported for codex runtime/);
+    assert.match(body.error.message, /not supported for codex runtime/);
   } finally {
     await server.close();
   }
@@ -399,19 +399,19 @@ test('PUT /api/settings rejects fast mode multiplier for Codex runtime', async t
 // HTTP integration via makeSettingsServer: actual route/config persistence;
 // run when this behavior changes, skip presentation-only changes. Private
 // runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
-test('PUT /api/settings stores fast mode multiplier under Claude runtime', async t => {
+test('PUT /api/settings/pricing stores fast mode multiplier under Claude runtime', async t => {
   const server = await makeSettingsServer(t, 'claude');
   try {
     const current = await readSettings(server);
-    const resp = await fetch(`${server.origin}/api/settings`, {
+    const resp = await fetch(`${server.origin}/api/settings/pricing`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ modelPrices: current.modelPrices, fastModeMultiplier: 7 })
+      body: JSON.stringify({ runtimes: { claude: { modelPrices: current.modelPrices, fastModeMultiplier: 7 } } })
     });
     assert.equal(resp.status, 200);
     const body = await resp.json();
-    assert.equal(body.fastMode.available, true);
-    assert.equal(body.fastMode.multiplier, 7);
+    assert.equal(body.runtimes.claude.fastMode.available, true);
+    assert.equal(body.runtimes.claude.fastMode.multiplier, 7);
     const written = parseConfigFile(server.configPath);
     assert.equal(written.runtimeFastModeMultipliers.claude, 7);
     assert.equal(written.fastModeMultiplier, 7);
@@ -470,8 +470,8 @@ test('settings roundtrip preserves current tariff metadata and marks only explic
     const current = await readSettings(server);
     assert.equal(current.fastMode.configuredMultiplier, null);
     assert.equal(current.modelPrices['claude-opus-5'].fastModeMultiplier, 2);
-    const put = body => fetch(`${server.origin}/api/settings`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    const put = body => fetch(`${server.origin}/api/settings/pricing`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runtimes: { claude: body } })
     });
     assert.equal((await put({ modelPrices: current.modelPrices })).status, 200);
     const unchanged = await readSettings(server);
@@ -498,8 +498,8 @@ test('settings preserves long-context rates and rejects invalid tariff metadata'
   const server = await makeSettingsServer(t, 'codex');
   try {
     const current = await readSettings(server);
-    const put = body => fetch(`${server.origin}/api/settings`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    const put = body => fetch(`${server.origin}/api/settings/pricing`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runtimes: { codex: body } })
     });
     const body = { modelPrices: current.modelPrices, priorityModelPrices: current.priorityModelPrices };
     assert.ok(Buffer.byteLength(JSON.stringify(body)) < 16 * 1024);
@@ -552,9 +552,9 @@ test('ordinary Settings save preserves custom prefixes without broadening built-
   try {
     verify(reload());
     const current = await readSettings(server);
-    const response = await fetch(`${server.origin}/api/settings`, {
+    const response = await fetch(`${server.origin}/api/settings/pricing`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ modelPrices: current.modelPrices, priorityModelPrices: current.priorityModelPrices })
+      body: JSON.stringify({ runtimes: { codex: { modelPrices: current.modelPrices, priorityModelPrices: current.priorityModelPrices } } })
     });
     assert.equal(response.status, 200);
     const saved = await readSettings(server);
@@ -570,9 +570,9 @@ test('ordinary Settings save preserves custom prefixes without broadening built-
 // runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
 test('all-runtime settings retire the single-runtime read and atomically save both price tables', async t => {
   const server = await makeSettingsServer(t);
-  const get = async suffix => (await fetch(server.origin + '/api/settings' + suffix)).json();
+  const get = async suffix => (await fetch(server.origin + '/api/settings/pricing' + suffix)).json();
   assert.equal((await fetch(server.origin + '/api/settings')).status, 404);
-  const all = await get('?all=1');
+  const all = await get('');
   assert.deepEqual(Object.keys(all).sort(), ['active', 'runtimes']);
   assert.equal(all.active, 'claude');
   assert.equal(all.runtimes.claude.runtime, 'claude');
@@ -582,13 +582,13 @@ test('all-runtime settings retire the single-runtime read and atomically save bo
   const codex = structuredClone(all.runtimes.codex.modelPrices);
   claude['claude-opus-4'].input = 11;
   codex['gpt-6-astra'].input = 17;
-  const response = await fetch(server.origin + '/api/settings', {
+  const response = await fetch(server.origin + '/api/settings/pricing', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ runtimes: { claude: { modelPrices: claude, fastModeMultiplier: 7 }, codex: { modelPrices: codex } } }),
   });
   assert.equal(response.status, 200);
   const saved = await response.json();
-  assert.deepEqual(saved, await get('?all=1'));
+  assert.deepEqual(saved, { ok: true, ...await get('') });
   assert.equal(server.mutations(), 1);
   assert.equal(saved.runtimes.claude.modelPrices['claude-opus-4'].input, 11);
   assert.equal(saved.runtimes.codex.modelPrices['gpt-6-astra'].input, 17);
@@ -603,7 +603,7 @@ test('all-runtime settings retire the single-runtime read and atomically save bo
 // runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
 test('invalid combined settings leave both memory and disk unchanged with zero mutations', async t => {
   const server = await makeSettingsServer(t);
-  const all = await (await fetch(server.origin + '/api/settings?all=1')).json();
+  const all = await (await fetch(server.origin + '/api/settings/pricing')).json();
   const claude = structuredClone(all.runtimes.claude.modelPrices);
   claude['claude-opus-4'].input = 19;
   const missing = structuredClone(all.runtimes.codex.modelPrices);
@@ -616,14 +616,14 @@ test('invalid combined settings leave both memory and disk unchanged with zero m
     { runtimes: { claude: {} }, modelPrices: claude },
     { runtimes: { foo: {} } }, { runtimes: null }, { runtimes: [] },
   ]) {
-    const response = await fetch(server.origin + '/api/settings', {
+    const response = await fetch(server.origin + '/api/settings/pricing', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
     assert.equal(response.status, 400);
     assert.equal(fs.readFileSync(server.configPath, 'utf8'), before);
   }
   assert.equal(server.mutations(), 0);
-  assert.deepEqual(await (await fetch(server.origin + '/api/settings?all=1')).json(), all);
+  assert.deepEqual(await (await fetch(server.origin + '/api/settings/pricing')).json(), all);
 });
 
 // HTTP integration via makeSettingsServer: actual route/config persistence;
@@ -748,7 +748,7 @@ test('override source failures and malformed envelopes return one failure code',
     output = bad;
     const response = await fetch(server.origin + '/api/groups/runtime-overrides');
     assert.equal(response.status, 502);
-    assert.deepEqual(await response.json(), { error: 'override_list_failed' });
+    assert.deepEqual(await response.json(), { ok: false, error: { code: 'override_list_failed', message: 'override_list_failed' } });
   }
   server.store.writeGroupDisplayName('chat:named', '竞品', 'human');
   output = new Error('named lookup failed');
@@ -784,10 +784,10 @@ test('pricing usage aggregates dimension tokens and preserves old costs after pr
   assert.equal(ingest('price-before'), 1);
   const readCost = id => JSON.parse(server.store.db.prepare("SELECT dimensions FROM metric_points WHERE json_extract(dimensions,'$.event_id')=?").get(id).dimensions).cost;
   const before = readCost('price-before');
-  const all = await (await fetch(server.origin + '/api/settings?all=1')).json();
+  const all = await (await fetch(server.origin + '/api/settings/pricing')).json();
   const prices = all.runtimes.codex.modelPrices;
   prices['gpt-6-astra'].input += 20;
-  const saved = await fetch(server.origin + '/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+  const saved = await fetch(server.origin + '/api/settings/pricing', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ runtimes: { codex: { modelPrices: prices } } }) });
   assert.equal(saved.status, 200);
   assert.equal(ingest('price-after'), 1);

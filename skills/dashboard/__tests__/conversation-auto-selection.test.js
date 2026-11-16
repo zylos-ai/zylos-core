@@ -22,7 +22,7 @@ assert.equal(process.env.PM2_HOME, path.join(process.env.HOME, '.pm2'));
 assert.equal(process.env.TMPDIR, path.join(runnerRoot, 'tmp'));
 const flush = async () => { for (let i = 0; i < 100; i++) await Promise.resolve(); };
 const deferred = () => { let resolve; const promise = new Promise(yes => { resolve = yes; }); return { promise, resolve }; };
-const row = id => ({ id, sessionGroup: id === 'g:AA' ? 'dashboard:first' : 'dashboard:chosen', stamp: id === 'g:AA' ? 2 : 1 });
+const row = id => ({ id, sessionGroup: id === 'g:AA' ? 'dashboard:first' : 'dashboard:chosen', stamp: id === 'g:AA' ? '2026-01-02T00:00:00.000Z' : '2026-01-01T00:00:00.000Z' });
 
 function fixture(t, { width = 1440, mode = 'multi' } = {}) {
   let time = 1_700_000_000_000, serial = 0, identity = 'local';
@@ -182,28 +182,28 @@ test('reopening the same instance selects its first newly available conversation
 });
 
 // In single, Origin is the only conversation that can be written to, so desktop opens it even when others are newer.
-for (const originStamp of [null, 1]) {
+for (const originStamp of [null, '2026-01-01T00:00:00.000Z']) {
   test(`single desktop opens Origin ahead of newer read-only conversations (Origin ${originStamp === null ? 'empty' : 'older'})`, { timeout: 2000 }, async t => {
     const f = fixture(t, { mode: 'single' }), opening = f.page.open(); await flush();
     f.lists[0].resolve({ items: [{ ...row('g:6F726967696E'), session_group: 'origin', origin: true, stamp: originStamp },
-      { ...row('g:AA'), stamp: 3 }, { ...row('g:BB'), stamp: 5 }], nextCursor: null, deletionAllowed: false });
+      { ...row('g:AA'), stamp: '2026-01-03T00:00:00.000Z' }, { ...row('g:BB'), stamp: '2026-01-05T00:00:00.000Z' }], nextCursor: null, deletionAllowed: false });
     await flush(); await opening; await flush();
     assert.deepEqual(f.selected(), ['g:6F726967696E']);
   });
 }
 test('single desktop without an Origin row still opens the latest conversation', { timeout: 2000 }, async t => {
   const f = fixture(t, { mode: 'single' }), opening = f.page.open(); await flush();
-  f.lists[0].resolve({ items: [{ ...row('g:AA'), stamp: 3 }, { ...row('g:BB'), stamp: 5 }], nextCursor: null, deletionAllowed: false });
+  f.lists[0].resolve({ items: [{ ...row('g:AA'), stamp: '2026-01-03T00:00:00.000Z' }, { ...row('g:BB'), stamp: '2026-01-05T00:00:00.000Z' }], nextCursor: null, deletionAllowed: false });
   await flush(); await opening; await flush();
   assert.deepEqual(f.selected(), ['g:BB']);
 });
 
 // Origin is pinned first in "mine", so "first" is no longer "latest": desktop opens the most recently active one.
-for (const [name, originStamp, expected] of [['an empty Origin', null, 'g:BB'], ['Origin when it is the latest', 9, 'g:6F726967696E']]) {
+for (const [name, originStamp, expected] of [['an empty Origin', null, 'g:BB'], ['Origin when it is the latest', '2026-01-09T00:00:00.000Z', 'g:6F726967696E']]) {
   test(`desktop opens the most recently active conversation, not ${name === 'an empty Origin' ? name : 'another'} pinned first`, { timeout: 2000 }, async t => {
     const f = fixture(t), opening = f.page.open(); await flush();
     f.lists[0].resolve({ items: [{ ...row('g:6F726967696E'), session_group: 'origin', origin: true, stamp: originStamp },
-      { ...row('g:AA'), stamp: 3 }, { ...row('g:BB'), stamp: 5 }], nextCursor: null, deletionAllowed: true });
+      { ...row('g:AA'), stamp: '2026-01-03T00:00:00.000Z' }, { ...row('g:BB'), stamp: '2026-01-05T00:00:00.000Z' }], nextCursor: null, deletionAllowed: true });
     await flush(); await opening; await flush();
     assert.deepEqual(f.selected(), [expected]);
   });

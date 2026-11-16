@@ -127,7 +127,7 @@ test('revoking the key that is shown hides it; a refused request shows why and c
   wired(p, { keyPage }).renderKeyTable(root, [{ name: 'ops', scope: 'admin', status: 'active' }]);
   await root.querySelector('.api-key-revoke').dispatch('click');
   assert.deepEqual(keyPage.shown.created, [null], 'the revoked key is no longer shown');
-  const refused = keyRequests([], { answer: { ok: false, data: { error: 'must_revoke_first' } } });
+  const refused = keyRequests([], { answer: { ok: false, data: { error: { code: 'must_revoke_first', message: 'Revoke the key first' } } } });
   const other = node(p.document, 'div');
   wired(p, { keyPage: refused }).renderKeyTable(other, [{ name: 'ops', scope: 'admin', status: 'active' }]);
   await other.querySelector('.api-key-rotate').dispatch('click');

@@ -582,7 +582,7 @@ export async function runConversationVisual(t, sandbox) {
   await page.setViewportSize({ width: 1440, height: 900 });
   fixture.setProxy(fixture);
   const allowRemote = async value => {
-    const result = await fixture.request('/api/chat/settings', { method: 'PUT', body: { allowRemote: value } });
+    const result = await fixture.request('/api/settings/chat', { method: 'PUT', body: { chat_allow_remote: value } });
     assert.equal(result.status, 200);
   };
   await allowRemote(true);

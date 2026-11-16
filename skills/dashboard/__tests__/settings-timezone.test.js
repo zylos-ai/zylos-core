@@ -133,7 +133,7 @@ test('a partial restart retries only failed services from its new confirmation l
 });
 test('a rejected restart explains its cause instead of naming an empty failed-service list', async () => {
   for (const [error, key] of [['confirmation_required', 'confirmationRequired'], ['service_discovery_unavailable', 'discoveryUnknown']]) {
-    const f = fixture({ restart: async () => ({ ok: false, error, failed: [], restart_services: [{ name: 'scheduler' }] }) });
+    const f = fixture({ restart: async () => ({ ok: false, error: { code: error, message: error }, failed: [], restart_services: [{ name: 'scheduler' }] }) });
     await f.view.refresh(); await save(f); await f.restart.dispatch('click');
     assert.equal(f.notice.textContent, 'wb.settings.timezone.' + key); assert.equal(f.pending.hidden, false);
   }
@@ -144,7 +144,7 @@ test('rediscovery after partial progress cannot add a successfully restarted ser
     read: async () => settings({ restart_services: [{ name: 'scheduler' }, { name: 'activity-monitor' }] }),
     write: async body => settings({ tz: body.tz, restart_services: [{ name: 'scheduler' }, { name: 'activity-monitor' }] }),
     restart: async body => { calls.push(body); return calls.length === 1
-      ? { ok: false, error: 'service_discovery_unavailable', restarted: ['scheduler'], failed: [], restart_status: 'unknown', restart_services: [{ name: 'activity-monitor' }] }
+      ? { ok: false, error: { code: 'service_discovery_unavailable', message: 'Service discovery unavailable' }, restarted: ['scheduler'], failed: [], restart_status: 'unknown', restart_services: [{ name: 'activity-monitor' }] }
       : { ok: true, restarted: ['activity-monitor'], failed: [], restart_services: [] }; },
   });
   await f.view.refresh(); await save(f, 'UTC'); await f.restart.dispatch('click');
@@ -256,4 +256,20 @@ test('restart service labels cover the core monitor and dispatcher', async () =>
   await f.view.refresh(); await save(f);
   assert.equal(f.root.querySelector('#settings-timezone-services').textContent,
     'wb.settings.timezone.activityMonitorwb.settings.timezone.dispatcher');
+});
+
+
+test('a structured restart failure names failed services and retains only those for retry', async () => {
+  const f = fixture({ restart: async () => {
+    const error = Object.assign(new Error('Some services failed'), { code: 'restart_failed', result: {
+      ok: false, error: { code: 'restart_failed', message: 'Some services failed' },
+      restarted: ['activity-monitor'], failed: [{ name: 'scheduler', error: 'restart_failed' }],
+      restart_services: [{ name: 'scheduler' }], restart_status: 'known',
+    } });
+    throw error;
+  } });
+  await f.view.refresh(); await save(f); await f.restart.dispatch('click');
+  assert.equal(f.notice.textContent, 'wb.settings.timezone.restartFailed');
+  assert.equal(f.root.querySelector('#settings-timezone-services').textContent, 'wb.settings.timezone.scheduler');
+  assert.equal(f.restart.disabled, false);
 });

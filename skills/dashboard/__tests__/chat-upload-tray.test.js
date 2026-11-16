@@ -71,7 +71,7 @@ test('a smaller configured attachment limit is used without adding a total byte 
 });
 test('failed and expired uploads stay visible while text or other ready attachments may be sent', async () => {
   const f = fixture(); await f.controller.setScope(scope()); await f.controller.acceptFiles([file(), file(), file()]);
-  f.uploads[0].reply(413, { error: 'chat_attachment_too_large' }); f.ready(1); f.ready(2, { expiresAt: 1000 });
+  f.uploads[0].reply(413, { ok: false, error: { code: 'chat_attachment_too_large', message: 'chat_attachment_too_large' } }); f.ready(1); f.ready(2, { expiresAt: 1000 });
   assert.deepEqual(f.controller.snapshot().items.map(item => item.status), ['failed', 'ready', 'expired']);
   assert.equal(f.controller.snapshot().items[0].error, 'chat_attachment_too_large');
   assert.deepEqual(f.controller.readyIDs(), ['attachment-1']); assert.equal(f.controller.isSendable(), true);

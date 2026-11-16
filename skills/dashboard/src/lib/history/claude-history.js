@@ -17,7 +17,26 @@ export class ClaudeHistory extends HistoryParser {
     this.metadataLoads = new Map();
   }
   get projectDir() { return path.join(this.homeDir, '.claude', 'projects', claudeProjectSlug(this.zylosDir)); }
+  async directoryVersion(directory) {
+    try {
+      const stat = await fs.stat(directory);
+      return `${stat.dev}:${stat.ino}:${stat.mtimeMs}`;
+    } catch { return 'missing'; }
+  }
+  async trackDiscovery(directory) {
+    this.discoveryDirectories.push(directory);
+    this.discoveryReadings.push(await this.directoryVersion(directory));
+    this.discoverySnapshot = this.discoveryReadings.join('|');
+  }
+  async discoveryVersion() {
+    const directories = this.discoveryDirectories || [this.projectDir];
+    return (await Promise.all(directories.map(directory => this.directoryVersion(directory)))).join('|');
+  }
+
   async listSessions() {
+    this.discoveryDirectories = [];
+    this.discoveryReadings = [];
+    await this.trackDiscovery(this.projectDir);
     const sessions = [];
     const paths = new Map();
     const scanned = new Set();
@@ -31,7 +50,7 @@ export class ClaudeHistory extends HistoryParser {
     for (const file of files) {
       if (!file.isFile() || !file.name.endsWith('.jsonl')) continue;
       const id = file.name.slice(0, -6);
-      if (!SESSION_ID.test(id)) continue;
+      if (!SESSION_ID.test(id) || !this.includesSession(id)) continue;
       const filePath = path.join(root, file.name);
       const stat = await fs.stat(filePath);
       scanned.add(filePath);
@@ -42,8 +61,10 @@ export class ClaudeHistory extends HistoryParser {
     }
     // Include orphan subagent directories after /clear, even without .meta.json.
     for (const directory of files) {
-      if (!directory.isDirectory() || !SESSION_ID.test(directory.name)) continue;
+      if (!directory.isDirectory() || !SESSION_ID.test(directory.name) || !this.includesSession(directory.name)) continue;
       const subRoot = path.join(root, directory.name, 'subagents');
+      await this.trackDiscovery(path.join(root, directory.name));
+      await this.trackDiscovery(subRoot);
       let subFiles;
       try {
         if (await fs.realpath(subRoot) !== subRoot) continue;
@@ -65,8 +86,8 @@ export class ClaudeHistory extends HistoryParser {
           startedAt: stat.birthtime.toISOString(), updatedAt: stat.mtime.toISOString(), bytes: stat.size });
       }
     }
-    let current = this.stateEngine?.getCurrentSessionId?.() || null;
-    if (!current) {
+    let current = this.currentSessionId ?? this.stateEngine?.getCurrentSessionId?.() ?? null;
+    if (!current && this.currentSessionId === undefined) {
       try { current = JSON.parse(await fs.readFile(path.join(this.zylosDir, 'activity-monitor', 'statusline.json'), 'utf8')).session_id || null; }
       catch { /* No active Claude session. */ }
     }

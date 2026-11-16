@@ -46,8 +46,8 @@ export function mountChatSettings(root, { document = root.ownerDocument, t = key
     try {
       const value = await read();
       if (current !== generation || !local()) return;
-      if (typeof value?.allowRemote !== 'boolean') throw Error('invalid_chat_settings');
-      saved = value.allowRemote;
+      if (typeof value?.chat_allow_remote !== 'boolean') throw Error('invalid_chat_settings');
+      saved = value.chat_allow_remote;
       checkbox.checked = saved;
       loaded = true;
       checkbox.disabled = false;
@@ -62,10 +62,10 @@ export function mountChatSettings(root, { document = root.ownerDocument, t = key
     checkbox.disabled = true;
     message(null);
     try {
-      const value = await write({ allowRemote: desired });
+      const value = await write({ chat_allow_remote: desired });
       if (current !== generation || !local()) return;
-      if (typeof value?.allowRemote !== 'boolean') throw Error('invalid_chat_settings');
-      saved = value.allowRemote;
+      if (typeof value?.chat_allow_remote !== 'boolean') throw Error('invalid_chat_settings');
+      saved = value.chat_allow_remote;
       message('wb.settings.chatSaved');
     } catch {
       if (current === generation && local()) message('wb.settings.chatSaveFailed');

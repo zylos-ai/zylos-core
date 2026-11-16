@@ -1,7 +1,7 @@
 import { isSameOriginRequest } from '../request-origin.js';
 import { isOriginRecord } from './origin.js';
 
-export const CHAT_SETTINGS_PATH = '/api/chat/settings';
+export const CHAT_SETTINGS_PATH = '/api/settings/chat';
 
 // Named data routes; the proxy protects the entire /api/chat/ prefix.
 export function isChatDataRoute(method, pathname) {
@@ -48,6 +48,11 @@ export function requireChatWritePreflight(req, auth, config) {
 export function requireChatWrite(req, auth, config, { mode, draft = false, conversation, namespace, localId } = {}) {
   const denied = requireChatWritePreflight(req, auth, config);
   if (denied) return denied;
+  return requireChatWriteTarget({ mode, draft, conversation, namespace, localId });
+}
+
+/** Target capability, also used to read upload configuration without writing. */
+export function requireChatWriteTarget({ mode, draft = false, conversation, namespace, localId } = {}) {
   const origin = !draft && isOriginRecord(namespace, localId)
     && isOriginRecord(conversation?.namespace, conversation?.localId);
   if (mode !== 'multi' && !origin) return { status: 403, error: 'chat_requires_multi' };
@@ -61,8 +66,11 @@ export function requireChatWrite(req, auth, config, { mode, draft = false, conve
 }
 
 export function requireChatSettingsAccess(req, auth) {
-  const context = auth.enabled ? auth.resolveAuthContext(req) : null;
-  if (context?.kind !== 'cookie' || context.scope !== 'admin') return { status: 403, error: 'local_cookie_required' };
-  if (req.method !== 'GET' && !isSameOriginRequest(req)) return { status: 403, error: 'same_origin_required' };
+  if (!auth.enabled) return null;
+  const context = auth.resolveAuthContext(req);
+  if (!context) return { status: 401, error: 'authentication_required' };
+  if (req.method === 'GET') return null;
+  if (context.scope !== 'admin') return { status: 403, error: 'insufficient_scope' };
+  if (context.kind === 'cookie' && !isSameOriginRequest(req)) return { status: 403, error: 'same_origin_required' };
   return null;
 }

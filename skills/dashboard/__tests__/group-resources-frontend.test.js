@@ -4,6 +4,7 @@ import { readGroupSnapshot, groupSnapshot, instanceActionRequest } from '../publ
 import { statePill, renderDistribution, modelCell, renderRow } from '../public/js/wb/board.js';
 import { renderAttention } from '../public/js/wb/attention-bar.js';
 import { systemItems, instanceStrip } from '../public/js/wb/instance-strip.js';
+import { formatZoned } from '../public/js/wb/instance-zone.js?v=100';
 import { createDocument } from './fixtures/workbench-dom.js';
 
 // Pure page modules and injected reads/DOM: no process, database, network or source evaluation.
@@ -154,7 +155,7 @@ test('no-response flag coexists with primary working state and exposes its autho
   const pill = statePill(document, compactRunning('waiting', { noResponse: { since } }));
   assert.match(pill.textContent, /wb.state.working.*wb.flags.noResponse/);
   const mark = pill.children[1].children[0];
-  assert.equal(mark.title, since);
+  assert.equal(mark.title, formatZoned(since));
 });
 
 

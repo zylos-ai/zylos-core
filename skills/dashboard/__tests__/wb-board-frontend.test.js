@@ -596,3 +596,13 @@ test('status pills distinguish stale sample age, last-status tooltip and fresh d
   assert.equal(allNodes(fresh).some(node => node.classList.contains('wb-status-age')), false);
   assert.equal(allNodes(fresh).find(node => node.classList.contains('wb-dur')).textContent, '32s');
 });
+
+test('technical state and attention flag tooltips format ISO clocks in the instance timezone', () => {
+  setInstanceZone(ZONE);
+  const document = createDocument(), at = '2026-11-16T01:02:03.000Z';
+  const view = statePill(document, { state: { kind: 'working', sampledAt: at }, flags: { blocked: { reason: 'rate_limited', recoveryAt: at }, noResponse: { since: at } } }, { t, level: 'technical' });
+  const titles = [view.title, ...allNodes(view).map(node => node.title)].filter(Boolean);
+  const expected = new Intl.DateTimeFormat(undefined, { timeZone: ZONE, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(new Date(at));
+  assert.ok(titles.some(title => title.includes(expected)));
+  assert.ok(titles.every(title => !title.includes(at)));
+});

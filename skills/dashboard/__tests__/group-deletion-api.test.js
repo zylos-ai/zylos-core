@@ -100,7 +100,7 @@ test('pending deletion and Core conflicts preserve their result envelope', async
   assert.equal(res.status, 202); assert.equal(res.body.operationId, 'same-operation');
   value = { ok: false, error: { code: 'FENCE_MISMATCH' } };
   res = await call(handler, '/api/groups/dashboard%3Aexample/deletion-preview');
-  assert.equal(res.status, 409); assert.deepEqual(res.body, value);
+  assert.equal(res.status, 409); assert.deepEqual(res.body, { ...value, error: { ...value.error, message: value.error.code } });
   value = { ok: false, error: { code: 'TRANSITION_OPEN' } };
   assert.equal((await call(handler, '/api/groups/dashboard%3Aexample/deletion-preview')).status, 409);
   value = { ok: false, error: { code: 'transition_open' } };
@@ -153,7 +153,7 @@ test('Fleet never relays group or draft deletion preview and writes', async () =
     const res = { writeHead(status) { this.status = status; }, end(body) { this.body = JSON.parse(body); } };
     await proxy.proxyApi(req, res, { name: 'remote' }, suffix, '');
     assert.equal(res.status, 403);
-    assert.equal(res.body.error, 'remote_deletion_forbidden');
+    assert.equal(res.body.error.code, 'remote_deletion_forbidden');
   }
   assert.equal(calls, 0);
   assert.equal(tokenCalls, 0);
@@ -187,6 +187,13 @@ test('Core storage errors preserve their HTTP status through the bridge response
       error: { code: status === 404 ? 'chat_conversation_not_found' : 'group_delete_dashboard_unavailable', status } }) });
     const res = await call(handler, '/api/chat/drafts/missing/deletion');
     assert.equal(res.status, status);
+    assert.deepEqual(res.body.error, { code: status === 404 ? 'chat_conversation_not_found' : 'group_delete_dashboard_unavailable',
+      message: status === 404 ? 'chat_conversation_not_found' : 'group_delete_dashboard_unavailable' });
+    const deleted = await call(handler, '/api/chat/drafts/d%3Amissing', { method: 'DELETE',
+      body: { confirmed: true, operationId: 'private-operation', ...boundary } });
+    assert.equal(deleted.status, status);
+    assert.deepEqual(deleted.body, res.body);
+    assert.equal(Object.hasOwn(deleted.body.error, 'status'), false);
   }
 });
 

@@ -1,7 +1,8 @@
+import { formatZoned } from './instance-zone.js';
 import { element, icon } from './plain-text.js';
 
 const keyStatus = key => key.status || (key.revoked_at ? 'revoked' : 'active');
-const dateText = (value, t) => value ? String(value).replace('T', ' ').replace(/\.\d+Z?$|Z$/, '').slice(0, 16) : t('wb.settings.keys.never');
+const dateText = (value, t) => value ? formatZoned(value) : t('wb.settings.keys.never');
 
 /** What each key action asks before it runs: rotating and revoking break machines using the key, deleting is permanent. */
 export function keyActionConfirmation(action, name, t = key => key) {

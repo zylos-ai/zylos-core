@@ -22,7 +22,7 @@ export class CodexHistory extends HistoryParser {
   }
   async listSessions() {
     const rows = this.store?.listCodexRolloutPaths?.('codex') || this.store?.db?.prepare(
-      'SELECT * FROM codex_rollout_paths WHERE runtime = ? ORDER BY updated_at DESC'
+      'SELECT * FROM codex_rollout_paths WHERE runtime = ? ORDER BY last_event_at DESC, updated_at DESC, rowid DESC'
     ).all('codex') || [];
     const sessions = [], paths = new Map();
     const scanned = new Set();
@@ -35,6 +35,7 @@ export class CodexHistory extends HistoryParser {
     }
     for (const row of rows) {
       if (typeof row.session_id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(row.session_id)) continue;
+      if (!this.includesSession(row.session_id)) continue;
       try {
         const filePath = await fs.realpath(row.transcript_path);
         if (!filePath.startsWith(root + path.sep) || !/^rollout-[^/]+\.jsonl$/.test(path.basename(filePath))) continue;
@@ -68,7 +69,8 @@ export class CodexHistory extends HistoryParser {
       if (!scanned.has(filePath)) this.metadataCache.delete(filePath);
     }
     const latest = this.store?.latestCodexRolloutPath?.('codex');
-    const current = paths.has(latest?.session_id) ? latest.session_id : null;
+    const currentId = this.currentSessionId === undefined ? latest?.session_id : this.currentSessionId;
+    const current = paths.has(currentId) ? currentId : null;
     return { runtime: 'codex', current, sessions };
   }
   async parseRecord(record, offset, state) {

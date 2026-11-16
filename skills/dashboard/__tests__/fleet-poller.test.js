@@ -84,7 +84,7 @@ test('fleet poller exchanges token and derives safe agent records', async () => 
   assert.equal(fleet.agents[0].state, 'BUSY');
   assert.equal(fleet.agents[0].rate_limit_7d_pct, 4);
   assert.equal(fleet.agents[0].rate_limit_7d_live, false);
-  assert.equal(fleet.agents[0].rate_limit_7d_recorded_at, 1000);
+  assert.equal(fleet.agents[0].rate_limit_7d_recorded_at, new Date(1000).toISOString());
   assert.equal(Object.hasOwn(fleet.agents[0], 'activity'), false, 'compact rows do not expose tool details');
   assert.equal(Object.hasOwn(fleet.agents[0], 'context_pct'), false);
   assert.equal(Object.hasOwn(fleet.agents[0], 'cost'), false);

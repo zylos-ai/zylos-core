@@ -7,7 +7,7 @@ import path from 'node:path';
 import { GROUP } from '../fixtures/workbench-browser-api.js';
 
 const REMOTE = 'spark';
-const REFUSAL = { error: 'remote_chat_disabled', message: '对方实例未允许远端访问对话和终端' };
+const REFUSAL = { ok: false, error: { code: 'remote_chat_disabled', message: '对方实例未允许远端访问对话和终端' } };
 // An installed, enabled observer on the remote, so its observer entry is offered.
 const OBSERVER_STATUS = { state: 'installed', desired: { enabled: true, generation: 1, teardownFence: false }, sessionMode: 'multi',
   target: { sessionGroup: 'origin', runId: 'run-origin', runtime: 'claude' }, runtime: { state: 'idle' }, agentSize: { cols: 120, rows: 40 } };
@@ -34,6 +34,10 @@ export async function runRemoteAccessBrowser(t, sandbox) {
     await context.addInitScript(() => { try { localStorage.setItem('zylos-dashboard-locale', 'en'); localStorage.setItem('zylos-dashboard-detail-level', 'technical'); } catch {} });
     const page = await context.newPage();
     const errors = [], refusals = [], chatRequests = [];
+    let localSettingsReads = 0;
+    page.on('request', request => {
+      if (new URL(request.url()).pathname === '/api/settings/chat') localSettingsReads++;
+    });
     page.on('pageerror', error => { if (errors.length < 5) errors.push(error.message); });
     await page.route('**/*', async route => {
       const url = new URL(route.request().url());
@@ -59,11 +63,14 @@ export async function runRemoteAccessBrowser(t, sandbox) {
       if (apiPath === '/api/groups/running' && value) value = { ...value, rows: value.rows.map(row => row.id === GROUP
         ? { ...row, state: { kind: 'idle', since: null }, flags: {} } : row) };
       if (value?.sessionGroup === GROUP) value = { ...value, state: { kind: 'idle' }, flags: {}, tools: [], working: { on: false, since: null, main: null, tools: 0, subagents: null } };
-      if (apiPath === '/api/instance' && value) value = { ...value, agent: { name: REMOTE }, chat_allow_remote: refuse.allow !== false };
+      if (apiPath === '/api/instance' && value) value = { ...value, agent: { name: REMOTE } };
+      if (apiPath === '/api/settings/chat') value = { chat_allow_remote: refuse.allow !== false };
       return value === undefined ? route.fulfill({ status: 404, json: { error: 'not_found' } }) : route.fulfill({ json: value });
     });
     await page.goto(base + '/');
     const instance = page.waitForResponse(response => new URL(response.url()).pathname === `/fleet/${REMOTE}/api/instance`);
+    await page.locator(`#agent-fleet-root .agent-open[data-agent="${REMOTE}"]`).waitFor();
+    assert.equal(localSettingsReads, 0, 'local status refreshes do not read remote chat settings');
     await page.locator(`#agent-fleet-root .agent-open[data-agent="${REMOTE}"]`).click();
     await (await instance).finished();
     await page.waitForFunction(() => !document.querySelector('#agent-detail').hidden);

@@ -123,7 +123,7 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
     }
     for (const probe of ['ready', 'other']) {
       for (const headers of [{}, { Authorization: 'Bearer invalid' }, { Cookie: '__Secure-zylos_dashboard_session=invalid' }]) {
-        assert.deepEqual(await request(`/api/health?probe=${probe}`, headers), { status: 404, body: { error: 'not_found' } });
+        assert.deepEqual(await request(`/api/health?probe=${probe}`, headers), { status: 404, body: { ok: false, error: { code: 'not_found', message: 'not_found' } } });
       }
     }
     assert.equal(identityReads, 0, 'retired query probes never enter the readiness reader');

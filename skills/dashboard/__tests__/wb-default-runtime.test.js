@@ -144,7 +144,7 @@ test('runtime authentication rejection keeps the Core reason visible through act
   assert.equal(result.error, reason);
   assert.equal(result.messageParams, rejected.messageParams);
   assert.equal(rejected.messageKey, 'result.runtime_unknown');
-  assert.equal(formatActionResult(result, translate), 'AUTH_NOT_CONFIRMED: Please confirm the runtime login.');
+  assert.equal(formatActionResult(result, translate), 'Please confirm the runtime login.');
   response = { ok: false, error: { code: 'RESULT_UNKNOWN' }, messageKey: 'result.runtime_unknown' };
   const unknown = await dispatch('switch-runtime', { runtime: 'claude' }, config);
   assert.equal(unknown, response);

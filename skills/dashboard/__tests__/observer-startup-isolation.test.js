@@ -149,7 +149,7 @@ for (const failure of [null, 'missing', 'long', 'state']) test(failure === 'stat
     const response = await request(`/api/observer/${endpoint}`, { method: 'POST', headers });
     assert.equal(response.status, 503, endpoint);
     const expectedError = failure === 'state' && endpoint === 'disable' ? 'teardown_failed' : errorCode;
-    assert.equal((await response.json()).error, expectedError, endpoint);
+    assert.equal((await response.json()).error.code, expectedError, endpoint);
   }
   if (failure) {
     assert.equal(fs.existsSync(candidate), failure === 'state');

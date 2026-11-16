@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import net from 'node:net';
 import test from 'node:test';
-import { connectObserverWebSocket, ObserverWebSocket } from '../src/lib/observer-websocket.js';
+import { connectObserverWebSocket, ObserverWebSocket, rejectObserverUpgrade } from '../src/lib/observer-websocket.js';
 
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
@@ -131,5 +131,20 @@ test('close enters a terminal closing state and destroys a half-open socket by d
   } finally {
     socket?.destroy();
     await peer.close();
+  }
+});
+
+// Covers HTTP rejection before a WebSocket is established. Run when handshake
+// response formatting changes; unrelated framing changes may skip this case.
+test('rejected observer upgrades use the JSON failure contract', () => {
+  for (const [status, code] of [[400, 'invalid_request'], [401, 'unauthorized'],
+    [403, 'same_origin_required'], [404, 'not_found'], [503, 'not_ready']]) {
+    let wire;
+    rejectObserverUpgrade({ end(value) { wire = value; } }, status, code);
+    const [headers, body] = wire.split('\r\n\r\n');
+    assert.match(headers, new RegExp(`^HTTP/1.1 ${status} `));
+    assert.match(headers, /Content-Type: application\/json; charset=utf-8/);
+    assert.match(headers, new RegExp(`Content-Length: ${Buffer.byteLength(body)}(?:\r\n|$)`));
+    assert.deepEqual(JSON.parse(body), { ok: false, error: { code, message: code } });
   }
 });
