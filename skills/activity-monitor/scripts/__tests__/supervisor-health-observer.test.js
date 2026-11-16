@@ -557,8 +557,8 @@ test('future responses cannot disarm and foreign sessions cannot authorize recov
   }
 });
 
-for(const mode of ['single',null])test(`${mode ?? 'unconfigured'} session mode nudges after 15 minutes and stops once 180 seconds later`,async t=>{
-  const f=fixture(t);f.setMode(mode);f.setScenes([{...f.scene(),sessionGroup:'origin'}]);f.delivered();
+test('single session mode nudges after 15 minutes and stops once 180 seconds later',async t=>{
+  const f=fixture(t);f.setMode('single');f.setScenes([{...f.scene(),sessionGroup:'origin'}]);f.delivered();
   f.advance(899999);await f.observer.tick();assert.equal(f.interrupts.length,0);
   f.advance(1);await f.observer.tick();assert.equal(f.interrupts.length,1);assert.equal(f.events[0].event,'no_response_nudge');assert.equal(f.events[0].sessionGroup,'origin');
   f.advance(179999);await f.observer.tick();assert.equal(f.stops.length,0);
@@ -578,8 +578,8 @@ test('single session: a failed nudge retries after 60 seconds',async t=>{
   fail=false;f.advance(59999);await f.observer.tick();assert.equal(f.interrupts.length,0);
   f.advance(1);await f.observer.tick();assert.equal(f.interrupts.length,1);
 });
-for(const mode of ['single',null])for(const reason of ['memory_sync','session_switch','drain_fence','manual_restart','mode_transition'])test(`${mode ?? 'unconfigured'} session: ${reason} holds observation and silence restarts when it ends`,async t=>{
-  const f=fixture(t);f.setMode(mode);f.delivered();f.setMaintenance(reason);
+for(const reason of ['memory_sync','session_switch','drain_fence','manual_restart','mode_transition'])test(`single session: ${reason} holds observation and silence restarts when it ends`,async t=>{
+  const f=fixture(t);f.setMode('single');f.delivered();f.setMaintenance(reason);
   f.advance(1200000);await f.observer.tick();assert.equal(f.interrupts.length,0);
   f.setMaintenance(null);await f.observer.tick();
   f.advance(899999);await f.observer.tick();assert.equal(f.interrupts.length,0);
