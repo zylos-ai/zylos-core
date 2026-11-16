@@ -268,6 +268,8 @@ Example: `GET /api/groups/search?q=team`.
 
 Returns `{range:string,cellSeconds:number,start:number,groups:Record<string,{cells:string[],inbound:number[]}>}`. Cells are activity classifications (`none`, `idle`, `busy`, `waiting`, `error`); inbound entries are message timestamps in milliseconds. This heatmap retains historical activity classifications, which are separate from the current primary-state vocabulary.
 
+In single-session mode, `groups.origin` combines current `origin` and historical null-group events, including turn transitions before the window needed to seed its first cell. Its inbound markers include all external channel groups feeding the sole session; internal and outbound messages are excluded. Multi-session heatmaps retain each group's own event and inbound scope.
+
 **Errors:** 400 `invalid_range`; source read failures and common read errors.
 
 Example: `GET /api/groups/activity?range=6h`.

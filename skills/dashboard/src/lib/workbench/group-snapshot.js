@@ -266,16 +266,19 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     if (!['60m', '6h'].includes(range)) throw Object.assign(new Error('Invalid range'), { code: 'invalid_range', statusCode: 400 });
     const prior = activities.get(range);
     if (prior && at - prior.at < 30000) return prior.value;
-    const snapshot = await getSnapshot(at), keys = snapshot.rows.map(row => row.sessionGroup).filter(key => key !== null);
+    const snapshot = await getSnapshot(at);
+    const singleOrigin = snapshot.mode === 'single' && snapshot.view === 'single';
+    const rows = singleOrigin ? snapshot.rows.map(row => ({ ...row, sessionGroup: row.sessionGroup ?? 'origin' })) : snapshot.rows;
+    const keys = rows.map(row => row.sessionGroup).filter(key => key !== null);
     const width = range === '60m' ? 60000 : 300000, size = range === '60m' ? 60 : 72;
     const start = Math.floor(at / width) * width - (size - 1) * width;
-    const events = keys.flatMap(sessionGroup => queryAllEvents(store, { sessionGroup,
+    const events = keys.flatMap(sessionGroup => queryAllEvents(store, { sessionGroup, includeLegacyOrigin: singleOrigin,
       since: new Date(start).toISOString(), until: new Date(at).toISOString(), sourceTime: true }));
     const runs = new Map(keys.map(key => [key, new Set()]));
-    for (const row of snapshot.rows) if (row.live?.runId && runs.has(row.sessionGroup)) runs.get(row.sessionGroup).add(row.live.runId);
-    for (const event of events) if (event.run_id != null) runs.get(event.session_group)?.add(event.run_id);
+    for (const row of rows) if (row.live?.runId && runs.has(row.sessionGroup)) runs.get(row.sessionGroup).add(row.live.runId);
+    for (const event of events) if (event.run_id != null) runs.get(singleOrigin ? event.session_group ?? 'origin' : event.session_group)?.add(event.run_id);
     for (const [sessionGroup, runIds] of runs) for (const runId of runIds) {
-      const filter = { sessionGroup, runId, until: new Date(start - 1).toISOString(), sourceTime: true, order: 'desc' };
+      const filter = { sessionGroup, includeLegacyOrigin: singleOrigin, runId, until: new Date(start - 1).toISOString(), sourceTime: true, order: 'desc' };
       // Seed by source time, not insertion order: late ingestion must not hide a newer transition.
       events.push(...store.queryEvents({ ...filter, types: ['user_prompt_submit'], agentScope: 'main', limit: 1 }));
       events.push(...store.queryEvents({ ...filter, types: END_TYPES, agentScope: 'main', limit: 1 }));
@@ -287,9 +290,12 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       events.push(...store.queryEvents({ ...filter, types: TOOL_TYPES, agentScope: 'child', latestPerAgent: true, limit: activityLookbackLimit }));
     }
     let inbound = [], inboundError = false;
-    try { if (keys.length) inbound = c4Reader.getInboundTimes({ since: start, groups: keys }); }
+    // All channel groups feed the sole session; C4 retains their channel keys.
+    try { if (keys.length) inbound = c4Reader.getInboundTimes({ since: start, ...(singleOrigin ? {} : { groups: keys }) }); }
     catch { inboundError = true; }
-    const value = activityBuckets({ range, now: at, rows: snapshot.rows, events, inbound, ttlMs: hotTtlMs });
+    const value = activityBuckets({ range, now: at, rows,
+      events: singleOrigin ? events.map(event => ({ ...event, session_group: event.session_group ?? 'origin' })) : events,
+      inbound: singleOrigin ? inbound.map(message => ({ ...message, session_group: 'origin' })) : inbound, ttlMs: hotTtlMs });
     if (inboundError) return { ...value, inboundError: 'inbound_unreadable' };
     activities.set(range, { at: now(), value });
     return value;
