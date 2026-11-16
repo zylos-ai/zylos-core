@@ -114,7 +114,7 @@ export async function runStaleStatusBrowser(t, sandbox) {
       assert.ok(style.font <= style.parentFont, 'age stays auxiliary text');
     } else {
       assert.match(text, /未知/);
-      assert.match(await element.getAttribute('title'), /最后一次状态.*忙.*前/);
+      assert.match(await element.getAttribute('title'), /最后一次状态.*工作中.*前/);
       assert.equal(await element.locator('.wb-status-age').count(), 0);
     }
   }

@@ -690,3 +690,30 @@ test('a failed dirty list catchup retries that list at its backoff deadline', { 
   assert.equal(f.state.snapshot().updateError, null);
   assert.equal(f.calls.filter(call => call.u.pathname.endsWith('/send')).length, 0);
 });
+
+for (const held of ['list', 'detail']) test(`readiness catchup survives same-conversation selection while ${held} is pending`, { timeout: 2000 }, async t => {
+  let resolve, hold = false, heldOnce = false;
+  const pending = new Promise(done => { resolve = done; });
+  const f = fixture(t, u => {
+    if (hold && !heldOnce && (held === 'list' ? u.pathname === '/api/chat/conversations' : u.pathname === '/api/chat/conversations/g%3AAA')) {
+      heldOnce = true; return pending;
+    }
+    if (u.pathname.endsWith('/messages') && u.searchParams.get('direction') === 'after') return {
+      items: [{ id: 2, direction: 'out', content: 'committed during admission', status: 'delivered' }], afterCursor: 'cursor2'
+    };
+  });
+  await f.open(); hold = true;
+  await f.event('chat_ready');
+  assert.equal(heldOnce, true);
+  await f.state.select('g:AA');
+  assert.equal(f.reads().filter(call => call.u.searchParams.get('direction') === 'after').length, 0);
+  resolve(held === 'list' ? { items: [{ id: 'g:AA' }], nextCursor: null }
+    : { conversation: { id: 'g:AA', state: 'active' }, conversationId: 'g:AA', stored: true });
+  await flush(); await f.timer.advance(0);
+  assert.equal(f.state.snapshot().streamState, 'live');
+  assert.equal(f.state.snapshot().selectedId, 'g:AA');
+  assert.equal(f.reads().filter(call => call.u.searchParams.get('direction') === 'after').length, 1,
+    'canceled metadata pass must retain the admitted message read, without waiting thirty seconds');
+  assert.equal(f.state.snapshot().messages.find(row => row.id === 2)?.content, 'committed during admission');
+  assert.equal(f.timer.now(), 1000);
+});

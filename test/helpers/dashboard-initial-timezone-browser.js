@@ -92,8 +92,7 @@ export async function runInitialTimezoneBrowser(sandbox, scenario) {
     page.setDefaultTimeout(10000);
     const errors = []; page.on('pageerror', error => { if (errors.length < 3) errors.push(error.message); });
     await page.goto(origin, { waitUntil: 'commit' });
-    try { await page.waitForFunction(() => window.__zoneObservations.requests.length >= 2 && window.__zoneObservations.sse !== null); }
-    catch (error) { console.info('Timezone pending observation:', JSON.stringify({ held: releases.length, observed: await page.evaluate(() => window.__zoneObservations), errors })); throw error; }
+    await page.waitForFunction(() => window.__zoneObservations.requests.length >= 2 && window.__zoneObservations.sse !== null);
     const before = await page.evaluate(() => window.__zoneObservations);
     try {
       assert.equal(await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone), 'America/Los_Angeles');

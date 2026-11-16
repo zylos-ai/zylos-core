@@ -45,14 +45,10 @@ const listRow = row => projectListRow(detailRow(row));
 
 export function workbenchSnapshot(now) {
   const list = rows(now);
-  const counts = { working: 0, starting: 0, stopping: 0, unknown: 0, idle: 0, offline: 0 };
-  for (const row of list) counts[row.state.kind]++;
-  return { readAt: now, mode: 'multi', view: 'multi', rows: list, counts, hasOlder: false, listKnown: true, baselineRuntime: 'claude',
-    overrides: { runtime: [], model: [] },
+  return { readAt: now, mode: 'multi', view: 'multi', rows: list, listKnown: true, baselineRuntime: 'claude',
     instance: { runtimeHealth: { claude: { health: 'ok' }, codex: { health: 'ok' } }, accounts: { claude: { used_percentage: 42 }, codex: null },
       pool: { ready: 2, starting: 0, reclaiming: 0, waiting: 0, capacity: 4, used: 2 }, services: { online: 6, total: 6 },
-      system: { sampledAt: now - 12000, cpuPct: 23.4, cpuCount: 8, memUsedBytes: 2147483648, memTotalBytes: 17179869184, diskUsedPct: 61.6, diskFreeBytes: 43218108416 } },
-    sources: { status: { ok: true, readAt: now }, c4: { ok: true, readAt: now } }, attention: { ok: true, problems: [], reminders: [] } };
+      system: { sampledAt: now - 12000, cpuPct: 23.4, cpuCount: 8, memUsedBytes: 2147483648, memTotalBytes: 17179869184, diskUsedPct: 61.6, diskFreeBytes: 43218108416 } } };
 }
 
 export function workbenchInstanceAnswer(value, now) {

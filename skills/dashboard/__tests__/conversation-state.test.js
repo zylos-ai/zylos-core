@@ -2185,3 +2185,38 @@ for (const session_mode of [null, undefined, 'unreadable']) test('unreadable ins
   assert.equal(f.state.snapshot().mode, null);
   assert.equal(f.state.snapshot().canCreate, false);
 });
+
+test('historic UTF-8 groups use canonical optional status and keep readable chat', async t => {
+  const key = 'telegram:运维群-测试';
+  const f = groupFixture(() => groupSnapshot('running', { rows: [{ sessionGroup: key, presence: 'running' }] }), u =>
+    u.pathname === '/api/chat/conversations/g%3AA' ? {
+      conversation: { id: 'g:A', sessionGroup: key, state: 'active' }, stored: false
+    } : undefined);
+  t.after(() => f.state.destroy());
+  await f.state.open(); await f.state.select('g:A'); await flush();
+  const reads = f.calls.filter(call => call.path.startsWith('/api/groups/'));
+  assert.equal(reads.length, 1);
+  assert.equal(decodeURIComponent(new URL(reads[0].path, 'http://fixture').pathname.split('/').at(-1)), key);
+  assert.equal(f.state.snapshot().historyLoaded, true);
+  assert.equal(f.state.snapshot().messages[0].content, 'before');
+  assert.equal(f.state.snapshot().groupPresence, true);
+  assert.equal(f.state.snapshot().error, null);
+});
+
+test('a new group absent from the snapshot has no status reading and recovers on the normal cadence', async t => {
+  let reads = 0;
+  const f = groupFixture(() => ++reads === 1
+    ? Promise.reject({ status: 404, code: 'GROUP_NOT_FOUND', payload: { error: { code: 'GROUP_NOT_FOUND' } } })
+    : groupSnapshot('running'));
+  t.after(() => f.state.destroy());
+  await f.state.open(); await f.state.select('g:A'); await flush();
+  assert.equal(reads, 1);
+  assert.equal(f.state.snapshot().groupPresence, null);
+  assert.equal(f.state.snapshot().groupPresenceReadAt, null);
+  assert.equal(f.state.snapshot().error, null);
+  assert.equal(f.state.snapshot().updateError, null);
+  assert.equal(f.state.snapshot().historyLoaded, true);
+  await f.timer.advance(30000);
+  assert.equal(reads, 2);
+  assert.equal(f.state.snapshot().groupPresence, true);
+});

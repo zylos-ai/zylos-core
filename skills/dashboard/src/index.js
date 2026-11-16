@@ -72,7 +72,8 @@ import { shutdownDashboardTransports } from './lib/dashboard-shutdown.js';
 import { MemoryBrowser, memoryErrorPayload } from './lib/memory-browser.js';
 import { agentColor } from './lib/agent-color.js';
 import { C4Reader } from './lib/c4-reader.js';
-import { createDisplayNames, validKey } from './lib/workbench/display-names.js';
+import { createDisplayNames } from './lib/workbench/display-names.js';
+import { workbenchGroupKey, workbenchGroupDetailKey, workbenchFailure } from './lib/workbench/group-http.js';
 import { parseSessionGroup } from '../../comm-bridge/scripts/c4-session-group.js';
 import { createRuns } from './lib/workbench/runs.js';
 import { createGroupConfig } from './lib/workbench/group-config.js';
@@ -403,24 +404,6 @@ async function runtimeOverridesPage(params) {
     nextAfter: page.nextAfter ?? null };
 }
 
-function workbenchGroupKey(encoded) {
-  let key;
-  try { key = decodeURIComponent(encoded); } catch {}
-  if (key !== 'origin' && !validKey(key)) {
-    throw Object.assign(new Error('Invalid session group'), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
-  }
-  return key;
-}
-
-function workbenchFailure(res, error) {
-  if ([400, 413].includes(error.status)) {
-    sendJson(res, error.status, { error: error.message });
-    return;
-  }
-  const status = error.statusCode ?? 500;
-  sendJson(res, status, { ok: false, error: { code: status === 500 ? 'internal_error' : error.code,
-    message: status === 500 ? 'Request failed' : error.message } });
-}
 function runtimeVersionRecord(runtime) {
   const installed = ({ zylos: zylosVersion, claude: ccInstalledVersion, codex: codexInstalledVersion })[runtime] ?? null;
   const latest = versionChecker.getLatest()[runtime === 'claude' ? 'cc' : runtime] ?? null;
@@ -1132,7 +1115,7 @@ async function handleApi(req, res, pathname, url) {
 
   const groupDetail = pathname.match(/^\/api\/groups\/([^/]+)$/);
   if (groupDetail) {
-    try { sendJson(res, 200, await groupsApi.detail(workbenchGroupKey(groupDetail[1]), { include: url.searchParams })); }
+    try { sendJson(res, 200, await groupsApi.detail(workbenchGroupDetailKey(groupDetail[1]), { include: url.searchParams })); }
     catch (error) { workbenchFailure(res, error); }
     return true;
   }

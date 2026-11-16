@@ -14,6 +14,8 @@ import { sendJson, sendHtml, serveStatic } from '../../src/lib/http.js';
 import { createGroupSnapshot } from '../../src/lib/workbench/group-snapshot.js';
 import { workbenchInstanceAnswer } from '../fixtures/workbench-browser-api.js';
 import { createGroupsApi } from '../../src/lib/workbench/groups-api.js';
+import { workbenchGroupDetailKey, workbenchFailure } from '../../src/lib/workbench/group-http.js';
+import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText } from '../../public/js/wb/auto-name.js';
 import { createDisplayNames } from '../../src/lib/workbench/display-names.js';
 import { createQueryHandlers } from '../../../comm-bridge/scripts/c4-v2-cli.js';
 import { ChatConversations, isChatLocalIdUsed } from '../../src/lib/chat/conversations.js';
@@ -130,9 +132,10 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
   };
   // Runtime observation is deliberately unavailable in this HTTP-only fixture;
   // actual C4 queue/history, dashboard event store and sanitizer remain real.
+  const displayNames = createDisplayNames({ store, zylosDir: zylos, runC4Db });
   workbench = createGroupSnapshot({ zylosDir: zylos, store, c4Reader: reader,
     cli: { runC4Db, readOverrides: async () => ({ ok: false, reason: 'fixture_no_runtime' }) },
-    displayNames: createDisplayNames({ store, zylosDir: zylos, runC4Db }),
+    displayNames,
     loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => ({ mode: readMode() }) };
       throw Error('No runtime observations in this private HTTP fixture');
@@ -161,8 +164,18 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
       if (req.method === 'GET' && ['/api/groups/counts', '/api/groups/running', '/api/groups/offline', '/api/groups/search', '/api/groups/activity'].includes(url.pathname)) {
         sendJson(res, 200, await groupsApi[url.pathname.split('/').at(-1)](url.searchParams)); return;
       }
+      if (req.method === 'GET' && url.pathname === '/api/groups/naming-prompt') {
+        const todo = await displayNames.listNames({ unnamed: true, activeSinceMs: 3 * 86400000 });
+        const script = path.join(zylos, '.claude', 'skills', 'dashboard', 'scripts', 'group-name.js');
+        sendJson(res, 200, { text: namePromptText(script, NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH),
+          todo: todo.map(row => row.fallbackName) }); return;
+      }
+      if (req.method === 'GET' && url.pathname === '/api/groups/runtime-overrides') {
+        // This HTTP-only fixture has no runtime overrides or runtime CLI.
+        sendJson(res, 200, { ...(url.searchParams.has('q') ? {} : { runtimeTotal: 0 }), runtime: [], nextAfter: null }); return;
+      }
       if (req.method === 'GET' && /^\/api\/groups\/[^/]+$/.test(url.pathname)) {
-        sendJson(res, 200, await groupsApi.detail(decodeURIComponent(url.pathname.split('/').at(-1)))); return;
+        sendJson(res, 200, await groupsApi.detail(workbenchGroupDetailKey(url.pathname.split('/').at(-1)), { include: url.searchParams })); return;
       }
       if (req.method === 'GET' && url.pathname === '/api/instance') {
         const snapshot = await workbench.getSnapshot();
@@ -175,7 +188,7 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
       }
       if (serveStatic(req, res, publicDir)) return;
       sendJson(res, 404, { error: 'not_found' });
-    } catch (error) { sendJson(res, 500, { error: error.code || error.message }); }
+    } catch (error) { workbenchFailure(res, error); }
   });
   const address = await sandbox.startHttp(server);
   const base = typeof address === 'string' ? address : `http://127.0.0.1:${server.address().port}`;

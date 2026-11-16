@@ -35,7 +35,6 @@ export async function runQuoteAnnotateBrowser(t, sandbox, { widths = [1280, 390]
       return true;
     }
     const values = {
-
       '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: 'Private browser' } },
       '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
     };

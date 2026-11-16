@@ -277,3 +277,27 @@ test('existing no-response observation is an independent ISO flag counted on the
   assert.equal((await api.counts()).running.flags.noResponse, 0);
   assert.equal((await api.running()).rows[0].flags.noResponse, undefined);
 });
+
+
+test('canonical detail reads only bounded historic keys proven by the healthy catalog', async () => {
+  const key = 'telegram:运维群-测试', row = { ...base('not_running'), sessionGroup: key, live: null };
+  const value = snapshot([row]); value.sources.c4 = { ok: true };
+  const api = createGroupsApi({ workbench: { getSnapshot: async () => value } });
+  assert.equal((await api.detail(key, { include: [] })).id, key);
+  assert.equal((await api.offline()).rows[0].id, key);
+  row.sessionGroup = 'telegram:遗留 群🧪';
+  assert.equal((await api.detail(row.sessionGroup, { include: [] })).id, row.sessionGroup);
+  row.sessionGroup = key;
+  await assert.rejects(api.detail('telegram:另一群', { include: [] }), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
+  row.c4 = null;
+  await assert.rejects(api.detail(key, { include: [] }), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
+  row.c4 = { lastActivityAt: now };
+  value.sources.c4 = { ok: false };
+  await assert.rejects(api.detail(key, { include: [] }), { code: 'GROUP_CATALOG_UNREADABLE', statusCode: 502 });
+  value.sources.c4 = { ok: true };
+  for (const bad of ['../bad', 'telegram:', 'void:运维', 'origin:运维', 'internal:运维', 'Telegram:运维', 'telegram:群/组', 'telegram:群\\组', 'telegram:群\n组', 'telegram:群\u0000组', 'telegram:' + '群'.repeat(96), 'a'.repeat(33) + ':群']) {
+    row.sessionGroup = bad;
+    await assert.rejects(api.detail(bad, { include: [] }), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
+  }
+  await assert.rejects(api.detail('telegram:absent', { include: [] }), { code: 'GROUP_NOT_FOUND', statusCode: 404 });
+});

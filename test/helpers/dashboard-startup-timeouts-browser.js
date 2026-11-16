@@ -128,17 +128,7 @@ export async function runStartupTimeoutBrowser(sandbox, scenario) {
   assert.equal(released, false, 'timeout must mount before intercepted requests are released');
   await page.locator(scenario.width <= 760 ? '.wb-mobile-topbar' : '.app-header').waitFor({ state: 'visible', timeout: remaining() });
   await page.locator('.view-stack').waitFor({ state: 'visible', timeout: remaining() });
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
-  if (overflow) {
-    console.info('Startup overflow:', JSON.stringify(await page.evaluate(() => ({ width: innerWidth, scrollWidth: document.documentElement.scrollWidth,
-      nodes: [...document.querySelectorAll('body *')].filter(node => { const r = node.getBoundingClientRect(); return r.width > 0 && (r.right > innerWidth + 1 || r.left < -1); })
-        .slice(0, 12).map(node => ({ tag: node.tagName, class: node.className, text: node.textContent.slice(0, 100), right: node.getBoundingClientRect().right })) }))));
-    if (process.env.ZYLOS_CHAT_EVIDENCE_DIR) {
-      fs.mkdirSync(process.env.ZYLOS_CHAT_EVIDENCE_DIR, { recursive: true });
-      await page.screenshot({ path: path.join(process.env.ZYLOS_CHAT_EVIDENCE_DIR, 'startup-overflow.png'), fullPage: true });
-    }
-  }
-  assert.equal(overflow, false, 'mounted page has no horizontal overflow');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'mounted page has no horizontal overflow');
   for (const pathname of scenario.blocked) {
     // Both pack requests must be live; observers can start after pack UI waiting
     // completes. Their independent cases prove interception before mount.

@@ -118,7 +118,7 @@ async function startApi(sandbox) {
     Object.assign(row, { sessionGroup: GROUP, origin: false, presence: scene().presence ?? 'running', processing: null, name: { displayName: '起名示例' },
       state: { kind: 'idle' }, duration: 75, tools: [], queue: { known: true, pending: { count: 0 }, running: { count: 0 }, fence: null },
       working: scene().working, wait: scene().wait ?? null, preview: { text: scene().messages.at(-1).content, timestamp: scene().messages.at(-1).timestamp, channel: 'dashboard' } });
-    value.rows = [row]; value.counts = { busy: 0, idle: 1, waiting: 0, unknown: 0, error: 0, not_running: 0 };
+    value.rows = [row];
     value.instance.runtimeHealth = { claude: { health: 'ok' } };
     return value;
   };

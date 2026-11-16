@@ -31,11 +31,6 @@ async function startSummaryPage(sandbox) {
     if (url.pathname.startsWith('/api/groups/') || url.pathname === '/api/instance') {
       const value = workbenchSnapshot(now), group = row();
       value.rows = value.rows.map(item => item.sessionGroup === GROUP ? group : item);
-      value.counts = { idle: 1, busy: 0, waiting: 0, error: 0, unknown: 0, not_running: 1 };
-      value.counts[group.state.kind]++;
-      const ok = { ok: true, readAt: now };
-      value.sources = { status: { ...ok }, c4: { ok: false, reason: 'messages_unreadable', readAt: now },
-        q: { ...ok }, ov: { ...ok }, accounts: { claude: { ...ok }, codex: { ...ok } } };
       value.instance.runtimeHealth = { claude: { health: 'rate_limited', updatedAt: now - 360000, cooldownUntil: Math.floor(now / 1000) + 3600 }, codex: { health: 'ok', updatedAt: now - 360000 } };
       return workbenchSnapshotAnswer(url, value, now);
     }

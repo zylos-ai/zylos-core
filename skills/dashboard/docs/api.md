@@ -286,7 +286,11 @@ When requested, `raw:string|null` contains sanitized first-message content and `
 
 Bare keys `counts`, `running`, `offline`, `search`, `activity`, `naming-prompt` and `runtime-overrides` are reserved API namespace segments and cannot address a group detail. Use namespaced group keys rather than those bare names.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_INCLUDE`; 404 `GROUP_NOT_FOUND`; 502 `GROUP_CATALOG_UNREADABLE` when an unknown group cannot be checked against the catalog; common read errors. Known detail remains readable when unrelated catalog collection fails. Individual Core configuration errors can also appear inside their configuration envelopes.
+**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_INCLUDE`; 404 `GROUP_NOT_FOUND`; 502 `GROUP_CATALOG_UNREADABLE` when an unknown group cannot be checked against the catalog or a historical key cannot be verified; common read errors. Detail for a current valid key remains readable when unrelated catalog collection fails. Individual Core configuration errors can also appear inside their configuration envelopes.
+
+Canonical detail also reads historical imported group IDs outside the current write grammar, such as `telegram:运维群-测试`, only when a healthy C4 catalog contains that exact group with C4 evidence. These IDs must retain a valid namespace, a nonempty local name of at most 95 characters and total length at most 128; control characters, DEL, slash and backslash are rejected. Unknown historical IDs return `SESSION_GROUP_INVALID`; an unreadable catalog returns `GROUP_CATALOG_UNREADABLE`. This read exception does not change write validation or other group routes. Optional raw/config readers retain their own field-level failures.
+
+Conversation status is an optional consumer of this detail. A newly created chat group can be absent from the snapshot: `GROUP_NOT_FOUND` means no reading yet, with a retry on the existing status cadence. Chat remains usable without a status reading; other HTTP errors retain their existing failure semantics.
 
 Example: `GET /api/groups/telegram%3Aexample?include=`.
 
@@ -540,6 +544,8 @@ If the group catalog cannot be read, ordinary stream and Fleet retain known rows
 The ordinary stream does not emit `state_change` or `fleet_state`. Chat connection-limit exhaustion returns an explicit HTTP 429; it does not silently fall back to the ordinary stream.
 
 The Dashboard reconnects an established conversation stream directly with its existing backoff after a database generation change or transport closure. An admission-status probe is needed only when a conversation stream fails before opening; a confirmed HTTP 429 selects the ordinary stream while the conversation subscription is retried later. Database absence alone keeps the existing stream open; restoration to a new generation resumes live updates through one application reconnect.
+
+A `chat_ready` catchup hint remains pending when a metadata read is superseded by reselecting the same conversation. The existing polling scheduler immediately retries that hint for the still-selected subscription; a changed conversation or instance does not inherit it.
 
 **Errors:** 400 `invalid_chat_subscription`, `invalid_chat_tab` or `invalid_chat_conversation`; 403 chat-access refusal; 429 `chat_connection_limit`; common read errors. After headers are sent, authentication failure is delivered through stream lifecycle/events rather than a new JSON response.
 

@@ -11,7 +11,6 @@ export async function runHistoryVisibilityBrowser(t, sandbox, { width, trigger }
     if (!url.pathname.startsWith('/api/')) return false;
     if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return true; }
     const values = {
-
       '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: 'Private browser' } },
       '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
     };

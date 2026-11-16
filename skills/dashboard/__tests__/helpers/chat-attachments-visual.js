@@ -95,7 +95,8 @@ export async function runAttachmentVisual(t, sandbox) {
     try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(Error(message)), timeoutMs); })]); }
     finally { clearTimeout(timer); }
   };
-  let expectedHttpError = null, uploads = 0, sends = 0, reads = 0;
+  let expectedHttpError = null, expectedMissingGroupPath = null, uploads = 0, sends = 0, reads = 0;
+  const missingGroupChecks = [];
   const attachmentRequests = [];
   page.on('pageerror', error => { if (!errors.length) errors.push(error.message); });
   page.on('console', message => { if (message.type() === 'error' && !message.text().startsWith('Failed to load resource:') && !errors.length) errors.push(message.text()); });
@@ -108,6 +109,16 @@ export async function runAttachmentVisual(t, sandbox) {
   });
   page.on('response', response => {
     const url = new URL(response.url());
+    // A newly sent draft may not have reached the group snapshot yet. Only
+    // this exact optional read and its typed not-found response are expected.
+    if (response.status() === 404 && response.request().method() === 'GET'
+        && url.pathname === expectedMissingGroupPath && url.search === '?include=') {
+      assert.ok(missingGroupChecks.length < 16, 'new-group status checks stay bounded');
+      missingGroupChecks.push(response.json().then(body => {
+        if (body?.error?.code !== 'GROUP_NOT_FOUND' && !errors.length) errors.push('unexpected new-group status error');
+      }).catch(error => { if (!errors.length) errors.push(error.message); }));
+      return;
+    }
     if (response.status() >= 400 && url.pathname !== '/favicon.ico' && !expectedHttpError?.(url, response.status()) && !errors.length) errors.push(`${response.status()} ${url.pathname}`);
   });
   const choose = async (name, { writable = true } = {}) => {
@@ -361,6 +372,7 @@ export async function runAttachmentVisual(t, sandbox) {
   await clearTray(); check('real tray expiry timer under controlled browser time; explicit reupload restores readiness');
   // Pure attachment first send uses a persisted blank draft, then its canonical group.
   const draft = await fixture.request('/api/chat/drafts', { method: 'POST', body: { displayName: '仅附件首发' } }); assert.equal(draft.status, 201);
+  expectedMissingGroupPath = '/api/groups/' + encodeURIComponent('dashboard:' + draft.body.conversation.localId);
   await page.locator('#wb-chat [data-action="refresh"]').click();
   await page.locator(`#wb-chat [data-conversation-id="${draft.body.conversation.id}"]`).click();
   await chooseFiles([textFile('仅附件首发.txt')]); await waitReady('仅附件首发.txt'); assert.equal(await input().inputValue(), '');
@@ -536,6 +548,7 @@ export async function runAttachmentVisual(t, sandbox) {
   }
   await prototypePage.close();
   }
+  await Promise.all(missingGroupChecks);
   assert.deepEqual(errors, []);
   if (output) fs.writeFileSync(path.join(output, 'chat-attachments-browser.json'), JSON.stringify({ sourceHead: process.env.ZYLOS_CHAT_SOURCE_HEAD || null,
     sourceProductDigest: process.env.ZYLOS_CHAT_SOURCE_PRODUCT_DIGEST || null, isolation, shots, prototypeShots, checks, measurements, uploads, sends, reads, errors,

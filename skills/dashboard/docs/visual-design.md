@@ -219,6 +219,8 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] Ordinary conversation push failures reconnect the conversation subscription with backoff. An established stream reconnects directly; only a failure before opening needs an admission-status probe. Only an explicit HTTP 429 admission response opens the ordinary stream while conversation polling continues; the page periodically retries the conversation subscription. Reconnect timers, admission probes and subscription changes retain their lifecycle ownership.
 
+[Current] Chat history remains usable when optional group status has no reading, including newly created groups not yet in the snapshot. Existing historical imported groups use canonical detail to read their catalog-backed status. A same-conversation refresh preserves an unfinished readiness catchup and retries it immediately through the existing scheduler; it does not wait for the fallback polling interval or carry the hint into another conversation.
+
 [Current] After Origin model, effort or CLI settings are saved, a stopped or uncertain Origin, an unreadable detail response, or a missing run ID produces a successful next-start notice without submitting a restart. A running Origin retains the canonical run-bound restart. Default settings show configured model and effort rather than Origin's current observations. Pool displays contain only used and capacity values, without source or capacity-calculation explanations.
 
 [Current] Runtime, connection, login, and delivery use distinct business copy; preserve the distinctions above.

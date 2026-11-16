@@ -23,7 +23,6 @@ export async function runConversationVisual(t, sandbox) {
     if (!url.pathname.startsWith('/api/')) return false;
     if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return true; }
     const values = {
-
       '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: 'Isolated browser' } },
       '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
     };
@@ -441,7 +440,8 @@ export async function runConversationVisual(t, sandbox) {
   let releaseGroup, observeGroup;
   const groupObserved = new Promise(resolve => { observeGroup = resolve; });
   const heldGroup = new Promise(resolve => { releaseGroup = resolve; });
-  const groupPattern = '**/api/groups/' + encodeURIComponent(first.receipt.namespace + ':' + localId);
+  const groupPath = '/api/groups/' + encodeURIComponent(first.receipt.namespace + ':' + localId);
+  const groupPattern = url => url.pathname === groupPath;
   await context.route(groupPattern, async route => { observeGroup(); await heldGroup; await route.continue().catch(() => {}); });
   sandbox.addCleanup(() => releaseGroup());
   await select();

@@ -74,7 +74,6 @@ export async function runFleetSelfBrowser(t, sandbox) {
         snapshot.mode = snapshot.view = mode;
         snapshot.rows = snapshot.rows.map(row => row.presence === 'not_running'
           ? { ...row, presence: 'starting', state: { kind: 'starting' } } : row);
-        snapshot.counts = { ...snapshot.counts, starting: 1, offline: 0 };
         snapshot.instance.pool = { ...snapshot.instance.pool, used: 3, starting: 1, ready: 2 };
         const fleet = records(state, unreachable, now, snapshot);
         const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 800 },

@@ -31,7 +31,6 @@ export async function runInternalConversationBrowser(t, sandbox) {
       return true;
     }
     const values = {
-
       '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: 'Private browser' } },
       '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
     };

@@ -35,7 +35,7 @@ async function startPage(sandbox) {
     row.tools = []; row.queue = { known: true, pending: { count: 0 }, running: { count: 0 }, fence: null };
     row.working = working(); row.state = { kind: row.presence === 'not_running' ? 'offline' : row.working?.on ? 'working' : 'idle' }; row.duration = row.working?.on ? (NOW - row.working.since) / 1000 : 75; row.preview = { text: '请继续整理这份资料', timestamp: iso(NOW - 4 * 60000), channel: 'dashboard' };
     row.wait = ({ queue: { kind: 'pool_wait' }, starting: { kind: 'starting' }, rate: { kind: 'rate_wait', cooldownUntil: NOW / 1000 + 3600 }, auth: { kind: 'auth_wait' } })[scene] ?? null;
-    value.rows = [row]; value.counts = { busy: 0, idle: 1, waiting: 0, unknown: 0, error: 0, not_running: 0 };
+    value.rows = [row];
     value.instance.runtimeHealth = { claude: { health: scene.startsWith('unknown-') ? null : ({ rate: 'rate_limited', auth: 'auth_failed' })[scene] ?? 'ok' } };
     return value;
   };

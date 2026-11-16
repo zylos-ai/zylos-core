@@ -1,4 +1,5 @@
 import { validKey, fallbackName } from './display-names.js';
+import { validNamespace } from '../../../../comm-bridge/scripts/c4-session-group.js';
 import { Sanitizer } from '../sanitizer.js';
 import { redactQuerySecrets } from './group-merge.js';
 import { STALE_STATUS_DISPLAY_MS } from './group-state.js';
@@ -177,9 +178,21 @@ export function createGroupsApi({ workbench, groupConfig, getRuntimeInfo = () =>
     async detail(id, { include = ['raw', 'config'] } = {}) {
       if (include instanceof URLSearchParams) include = include.has('include') ? include.get('include').split(',').filter(Boolean) : ['raw', 'config'];
       if (!Array.isArray(include) || include.some(value => !['raw', 'config'].includes(value))) throw failure('INVALID_INCLUDE', 'Include must contain raw or config');
-      groupKey(id);
+      const currentKey = id === 'origin' || validKey(id);
+      if (!currentKey) {
+        const colon = typeof id === 'string' ? id.indexOf(':') : -1;
+        const name = colon > 0 ? id.slice(colon + 1) : '';
+        // Read existing imported names, never treat arbitrary input as a key
+        // or reuse this exception for a write or a filesystem operation.
+        if (typeof id !== 'string' || id.length > 128 || !validNamespace(id.slice(0, colon))
+          || !name || name.length > 95 || /[\u0000-\u001f\u007f/\\]/.test(name)) groupKey(id);
+      }
       const snapshot = await workbench.getSnapshot();
       const row = rowsOf(snapshot).find(row => row.id === id);
+      if (!currentKey) {
+        if (snapshot.sources?.c4?.ok !== true) throw failure('GROUP_CATALOG_UNREADABLE', 'Session group catalog could not be read', 502);
+        if (!row?.c4) groupKey(id);
+      }
       if (!row) { requireCatalog(snapshot); throw failure('GROUP_NOT_FOUND', 'Session group not found', 404); }
       const readExtra = async (name, read) => {
         if (!include.includes(name)) return {};

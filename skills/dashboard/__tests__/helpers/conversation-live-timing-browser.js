@@ -32,9 +32,8 @@ async function startApi(sandbox) {
       state: { kind: 'idle' }, duration: 75, tools: [], queue: { known: true, pending: { count: 0 }, running: { count: 0 }, fence: null },
       working: state.presence === 'running' ? state.working : null, wait: state.wait,
       preview: { text: state.messages.at(-1).content, timestamp: state.messages.at(-1).timestamp, channel: 'dashboard' } });
-    value.rows = [row]; value.counts = { busy: 0, idle: 1, waiting: 0, unknown: 0, error: 0, not_running: 0 };
+    value.rows = [row];
     value.instance.runtimeHealth = { claude: { health: 'ok' } };
-    value.sources = { ...value.sources, status: { ok: true, readAt: Date.now() } };
     return value;
   };
   const conversation = { id: ID, localId: 'live-timing', sessionGroup: GROUP, channel: 'dashboard', state: 'active', origin: false, displayName: '计时示例' };
