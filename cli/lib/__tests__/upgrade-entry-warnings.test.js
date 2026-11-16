@@ -53,6 +53,7 @@ for(const mode of ['none','runtime','notice','service','incomplete-audit']) test
   `);
   const input={schemaVersion:1,fromVersion:'0.9.3',tempDir:target,installedRoot:installed,zylosDir:deployment};
   const child=spawnSync(process.execPath,['--experimental-test-module-mocks',launcher],{
+    env:{...process.env,npm_config_prefix:prefix},
     input:JSON.stringify(input),encoding:'utf8',timeout:15000,
   });
   assert.equal(child.status,0,child.stderr+child.stdout);
@@ -117,7 +118,7 @@ test('downloaded upgrade entry audits a real C4 database and warns for every rep
     await import(${JSON.stringify(url('upgrade-entry.js'))});
   `);
   const input={schemaVersion:1,fromVersion:'0.9.3',tempDir:target,installedRoot:installed,zylosDir:deployment};
-  const child=spawnSync(process.execPath,['--experimental-test-module-mocks',launcher],{input:JSON.stringify(input),encoding:'utf8',timeout:15000});
+  const child=spawnSync(process.execPath,['--experimental-test-module-mocks',launcher],{env:{...process.env,npm_config_prefix:prefix},input:JSON.stringify(input),encoding:'utf8',timeout:15000});
   assert.equal(child.status,0,child.stderr+child.stdout);
   assert.deepEqual(JSON.parse(child.stdout),{success:true,warnings:[],checkpointAudit:{state:'complete',items:[{
     checkpointId:100,end:2000,maxConversationId:7,affected:{B:2000,coverageAll:2000},repairRequired:true,
