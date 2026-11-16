@@ -195,7 +195,6 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
     assert.equal(unknown.body.error.code, 'invalid_session_group');
   }
   mode = 'single';
-  assert.equal((await get('sessions', { session_group: 'telegram:team' })).body.error.code, 'target_mismatch');
   const staleOrigin = path.join(zylosDir, 'activity-monitor', 'session-groups', 'origin');
   await fs.mkdir(staleOrigin, { recursive: true });
   await fs.writeFile(path.join(staleOrigin, 'current-session.json'), JSON.stringify({ sessionId: 'origin-session' }));

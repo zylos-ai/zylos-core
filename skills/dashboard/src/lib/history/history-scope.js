@@ -20,9 +20,6 @@ export function createHistoryScope({ config = {}, store, load = loadCoreModule, 
       throw Object.assign(new Error('Invalid session group'), { status: 400, code: 'invalid_session_group' });
     }
     const mode = readSessionMode().mode;
-    if (mode !== 'multi' && group !== 'origin') {
-      throw Object.assign(new Error('Only Origin is available in single session mode'), { status: 400, code: 'target_mismatch' });
-    }
     const attribution = store?.getHistoryAttribution?.() ?? [];
     const revision = store?.historyRevision ?? 0;
     const belongs = row => (row.session_group ?? 'origin') === group;

@@ -245,6 +245,10 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     const history = await request('/api/observer/history/sessions?session_group=telegram%3Aoffline-0', { identity: 'cookie' });
     assert.equal(history.current, null);
     assert.ok(history.sessions.some(session => session.id === sessionId), 'Catalogued offline history stays visible');
+    writeMode('single');
+    const single = await request('/api/observer/history/sessions?session_group=telegram%3Aoffline-0',
+      { identity: 'cookie', expected: 400 });
+    assert.equal(single.error.code, 'invalid_session_group');
   });
   const retired = ['/api/health?probe=ready', '/api/state', '/api/restart-status', '/api/session-mode', '/api/instance-status', '/api/timeline', '/api/system', '/api/summary', '/api/communication',
     '/api/metrics/history/cpu_pct', '/api/metrics/aggregate', '/api/metrics/cpu_pct', '/api/metrics/series', '/api/actions/meta', '/api/actions/interrupt', '/api/actions/chop-chop',

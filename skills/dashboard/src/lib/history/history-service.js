@@ -277,7 +277,7 @@ export class HistoryService {
       } else sendJson(res, 200, result);
     } catch (error) {
       // Never reflect exception text or record-controlled paths into errors.
-      const known = error instanceof HistoryError || ['invalid_session_group', 'target_mismatch', 'group_catalog_unreadable'].includes(error.code);
+      const known = error instanceof HistoryError || ['invalid_session_group', 'group_catalog_unreadable'].includes(error.code);
       sendJson(res, known ? error.status : 503, { error: known ? error.code : 'history_unavailable' });
     }
     return true;
