@@ -55,7 +55,7 @@ function focusGeometry(control) {
     width: rect.width, height: rect.height };
 }
 
-export async function runFocusClippingBrowser(sandbox, { width, theme }) {
+export async function runFocusClippingBrowser(sandbox, { width, theme, memoryRefresh = false }) {
   console.info('Focus browser isolation:', JSON.stringify(sandbox.assertIsolation()));
   const errors = [], streams = new Set(), observations = [];
   let closing = false, state = 'asleep';
@@ -114,10 +114,14 @@ export async function runFocusClippingBrowser(sandbox, { width, theme }) {
   const context = await browser.newContext({ viewport: { width, height: 900 }, locale: 'zh-CN', reducedMotion: 'reduce' });
   sandbox.addCleanup(() => context.close());
   let requests = 0;
+  let releaseMemoryGit;
+  const memoryGitReady = memoryRefresh ? new Promise(resolve => { releaseMemoryGit = resolve; }) : null;
+  sandbox.addCleanup(() => releaseMemoryGit?.());
   await context.route('**/*', async route => {
     try {
       if (new URL(route.request().url()).origin !== base) return await route.abort();
       if (++requests > 600) { recordError('fixture request bound exceeded'); return await route.abort(); }
+      if (memoryRefresh && new URL(route.request().url()).pathname === '/api/memory/git') await memoryGitReady;
       await route.continue();
     } catch (error) { recordError(error); }
   });
@@ -133,6 +137,28 @@ export async function runFocusClippingBrowser(sandbox, { width, theme }) {
   await page.goto(base + '/');
   await page.locator('.wb-row[data-group]').first().waitFor();
   assert.equal(await page.locator('html').getAttribute('data-theme'), theme);
+
+  if (memoryRefresh) {
+    await openDashboardTab(page, 'memory');
+    const first = page.locator('.memory-file').first();
+    await first.focus();
+    await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Tab');
+    const original = await page.locator('.memory-file:focus').elementHandle();
+    const filePath = await original.getAttribute('data-path');
+    const response = page.waitForResponse(value => new URL(value.url()).pathname === '/api/memory/git');
+    releaseMemoryGit();
+    await response;
+    await page.waitForFunction(node => !node.isConnected && document.querySelector('#memory-status').hidden, original);
+    const focus = await page.evaluate(() => ({ path: document.activeElement.dataset.path,
+      connected: document.activeElement.isConnected, file: document.activeElement.matches('.memory-file'),
+      visible: document.activeElement.matches(':focus-visible') }));
+    await original.dispose();
+    assert.equal(focus.path, filePath, 'memory response preserves the focused file path after rebuilding the list');
+    assert.ok(focus.file && focus.connected && focus.visible, 'the replacement file keeps connected keyboard focus');
+    assert.equal(errors.length, 0, errors.join('\n'));
+    console.info('Memory refresh focus:', JSON.stringify(focus));
+    return;
+  }
 
   async function screenshot(name) {
     const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;

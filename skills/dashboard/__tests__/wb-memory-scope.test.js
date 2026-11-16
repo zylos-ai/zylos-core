@@ -719,6 +719,62 @@ test('the file list folds by section, keeps search results open and names the fo
   f.controller.destroy();
 });
 
+test('memory list redraws restore files and folding headers by stable identity without scrolling', () => {
+  for (const kind of ['file', 'shared', 'group']) {
+    const document = createDocument(), listRoot = document.createElement('div'), calls = [];
+    const create = document.createElement;
+    document.createElement = tag => {
+      const node = create(tag), focus = node.focus.bind(node);
+      node.focus = options => { calls.push(options); focus(); };
+      return node;
+    };
+    const f = fixture({ document, listRoot });
+    const target = () => kind === 'file' ? nodesOfClass(listRoot, 'memory-file')[1]
+      : nodesOfClass(listRoot, kind === 'shared' ? 'wb-memory-section-h' : 'wb-memory-group-h')[0];
+    const original = target(); original.focus(); calls.length = 0;
+    f.controller.renderList();
+    assert.notEqual(target(), original, 'rows were really rebuilt');
+    assert.equal(document.activeElement, target(), `${kind} focus follows its identity`);
+    assert.equal(listRoot.contains(document.activeElement), true);
+    assert.deepEqual(calls, [{ preventScroll: true }]);
+    f.controller.destroy();
+  }
+});
+
+test('memory list redraws do not take focus from search or editor controls', () => {
+  const document = createDocument(), listRoot = document.createElement('div');
+  const f = fixture({ document, listRoot });
+  for (const tag of ['input', 'textarea']) {
+    const external = document.createElement(tag);
+    external.dataset.path = nodesOfClass(listRoot, 'memory-file')[0].dataset.path;
+    external.dataset.collapseKey = 'shared';
+    external.focus();
+    f.controller.renderList();
+    assert.equal(document.activeElement, external);
+  }
+  f.controller.destroy();
+});
+
+test('memory list redraws do not redirect focus when the focused row disappears', () => {
+  for (const reason of ['filtered', 'collapsed', 'removed', 'missing-tree']) {
+    const document = createDocument(), listRoot = document.createElement('div'), collapsed = new Set();
+    const f = fixture({ document, listRoot, isCollapsed: key => collapsed.has(key) });
+    const original = nodesOfClass(listRoot, 'memory-file')[0]; original.focus();
+    if (reason === 'filtered') {
+      const search = allNodes(f.root).find(node => node.type === 'search');
+      search.value = 'no-matching-path'; search.dispatch('input');
+    } else {
+      if (reason === 'collapsed') collapsed.add('shared');
+      if (reason === 'removed') f.setTree({ root: dir('', []) });
+      if (reason === 'missing-tree') f.setTree(null);
+      f.controller.renderList();
+    }
+    assert.equal(listRoot.contains(original), false);
+    assert.equal(document.activeElement, original, 'injected DOM records no fallback focus call');
+    f.controller.destroy();
+  }
+});
+
 test('later in the conflict dialog closes it and keeps the unsaved draft', () => {
   const memory = { conflict: { mine: 'a', theirs: { text: 'b' } }, draft: 'my draft', dirty: true, editing: true };
   leaveMemoryConflict(memory);
