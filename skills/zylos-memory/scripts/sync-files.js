@@ -91,7 +91,7 @@ const describeFile = file => {
   const content = fs.readFileSync(file);
   return { path: path.resolve(file), bytes: content.length, sha256: createHash('sha256').update(content).digest('hex') };
 };
-async function describeInputs({ env = process.env, group, now = Date.now } = {}, includeSessions = true, deps = {}) {
+async function describeInputs({ env = process.env, group, now = Date.now } = {}, includeSessions = true, deps = {}, withDate = false) {
   const current = await memoryScope(env);
   if (group !== undefined && group !== current.scope && current.scope !== 'origin') throw memoryError('SCOPE_UNBOUND', 'Only Origin can list another group');
   const { memoryDir, scope, root } = group === undefined ? current : await memoryScope({ ...env, ZYLOS_SESSION_GROUP: group });
@@ -119,10 +119,16 @@ async function describeInputs({ env = process.env, group, now = Date.now } = {},
   const sessionsDir = path.join(memoryDir, 'sessions');
   const sessions = names(sessionsDir).filter(name => /^\d{4}-\d{2}-\d{2}\.md$/.test(name) && name.slice(0, 10) >= cutoff && name.slice(0, 10) <= today).sort()
     .map(name => describeFile(path.join(sessionsDir, name)));
-  return group === undefined ? { scope, statePath, segments, sessions } : { scope, sessions };
+  const result = group === undefined ? { scope, statePath, segments, sessions } : { scope, sessions };
+  return withDate ? { inputs: result, today } : result;
 }
 export async function list(settings = {}, deps = {}) {
   return describeInputs(settings, true, deps);
+}
+// The list result together with the date that ended its window, so a caller can
+// judge the list against the same date and timezone that produced it.
+export async function listWithDate(settings = {}, deps = {}) {
+  return describeInputs(settings, true, deps, true);
 }
 export async function checkpoint({ end, summary, batch, noContent = false, ...settings }, deps = {}) {
   return guard(settings, async ({ scope }) => {

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { fixture as storeFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { checkpoint, rotate, commit, list } from '../sync-files.js';
 import { createBatchReceipt, createOriginRawReceipt, createOriginSummaryReceipt } from '../../../comm-bridge/scripts/c4-sync-batch.js';
@@ -11,7 +12,7 @@ import { renderStateSkeleton } from '../state-format.js';
 import { advance } from '../origin-cursor.js';
 import { acquire, memoryScope } from '../sync-lock.js';
 import { loadTimezoneFromEnv, dateInTimeZone } from '../shared.js';
-async function fixture(t, group = 'origin') {
+async function fixture(t, group = 'origin', storeDependencies = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'model-workflow-progress-'));
   const env = { ...process.env, ZYLOS_DIR: root, ZYLOS_RUN_ID: 'progress-test' };
   delete env.ZYLOS_SESSION_GROUP; if (group !== null) env.ZYLOS_SESSION_GROUP = group;
@@ -20,7 +21,7 @@ async function fixture(t, group = 'origin') {
   const tokens = {};
   for (const kind of group === 'origin' ? ['origin', 'group'] : group === null ? ['global'] : ['group']) tokens[kind] = await acquire({ env, kind }, { currentRunId: async () => env.ZYLOS_RUN_ID });
   const token = tokens[group === null ? 'global' : 'group'];
-  const { db, store } = storeFixture(t, {}, path.join(root, 'fixture.db'));
+  const { db, store } = storeFixture(t, storeDependencies, path.join(root, 'fixture.db'));
   t.after(() => { if (db.open) db.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const seed = (id, sessionGroup = 'origin', status = 'delivered') => db.prepare("INSERT INTO conversations(id,direction,channel,content,status,session_group) VALUES(?,'in','system','test',?,?)").run(id, status, sessionGroup);
   const seedGroup = (group, count) => db.transaction(() => {
@@ -275,9 +276,9 @@ test('Origin advance rejects altered, stale or mismatched receipts and leaves bo
   await rejects({ ...with_('summary', { scope: 'telegram:other' }) }, 'INVALID_INPUT');
   await rejects({ ...p, extra: true }, 'INVALID_INPUT');
   await rejects({ ...p, raw: { ...p.raw, coverageEnd: 1 } }, 'INVALID_INPUT');
-  // session-log set: one more, one fewer, or another group's list
+  // session-log set: a listed log the script does not list, or another group's list
+  // (today's log missing from the worker's list is a log created after its list)
   await rejects({ ...p, inputs: { ...p.inputs, sessions: [...p.inputs.sessions, { path: `${log}.extra` }] } }, 'INPUT_CHANGED');
-  await rejects({ ...p, inputs: { ...p.inputs, sessions: [] } }, 'INPUT_CHANGED');
   await rejects({ ...p, inputs: await list({ env: f.settings.env, group: 'telegram:other' }, f.deps) }, 'INPUT_CHANGED');
   // content changed after the read
   const original = f.db.prepare('SELECT content FROM conversations WHERE id=?').get(records[3].id).content;
@@ -313,4 +314,121 @@ test('checkpoint rejects conversation edits after export without writing group o
     await assert.rejects(checkpoint({ ...f.settings, end: 1, summary: 'invalid', batch: { ...batch, sha256: 'bad' } }, f.deps), { code: 'INVALID_INPUT' });
     assert.equal(f.db.prepare('SELECT count(*) AS n FROM checkpoints').get().n, before);
   }
+});
+
+// Session logs around the advance date. The store and advance share one
+// injected clock; the timezone comes from the instance .env, as on a host.
+async function dayFixture(t, at) {
+  const clock = { now: Date.parse(at) };
+  const f = await fixture(t, 'origin', { now: () => clock.now });
+  fs.writeFileSync(path.join(f.root, '.env'), 'TZ=Asia/Singapore\n');
+  const group = 'telegram:day';
+  f.seedGroup(group, 3);
+  const scoped = await memoryScope({ ...f.settings.env, ZYLOS_SESSION_GROUP: group });
+  const dir = path.join(scoped.memoryDir, 'sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  const log = date => path.join(dir, `${date}.md`);
+  const now = () => clock.now;
+  const listed = () => list({ env: f.settings.env, group, now }, f.deps);
+  const read = async () => ({ ...(await originRead(f, group)).payload, inputs: await listed() });
+  const attempt = payload => advance({ ...f.settings, token: f.tokens.origin, group, input: payload }, { ...f.deps, now });
+  const sha = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  return { f, clock, group, log, listed, read, attempt, sha, cursor: () => cursorRow(f, group) };
+}
+const rejectsUnchanged = async (d, payload) => {
+  const before = d.cursor();
+  await assert.rejects(d.attempt(payload), { code: 'INPUT_CHANGED' });
+  assert.deepEqual(d.cursor(), before);
+};
+
+test("Origin advance accepts a log created today after the list, and the next list reads it", async t => {
+  const d = await dayFixture(t, '2026-03-10T12:00:00+08:00');
+  fs.writeFileSync(d.log('2026-03-09'), '# 03-09\n');
+  const payload = await d.read();
+  assert.deepEqual(payload.inputs.sessions.map(item => path.basename(item.path)), ['2026-03-09.md']);
+  fs.writeFileSync(d.log('2026-03-10'), '# first line of the day\n');
+  assert.equal((await d.attempt(payload)).advanced, true);
+  const next = await d.listed();
+  assert.deepEqual(next.sessions.map(item => [path.basename(item.path), item.sha256]), [['2026-03-10.md', d.sha(d.log('2026-03-10'))]]);
+});
+
+test("Origin advance accepts today's log growing after the list, and the next list reads the new content", async t => {
+  const d = await dayFixture(t, '2026-03-10T12:00:00+08:00');
+  fs.writeFileSync(d.log('2026-03-10'), '# morning\n');
+  const payload = await d.read();
+  fs.appendFileSync(d.log('2026-03-10'), '- afternoon line\n');
+  // A worker's stale hash for today's log is not a change either.
+  const stale = { ...payload, inputs: { ...payload.inputs, sessions: payload.inputs.sessions.map(item => ({ ...item, sha256: 'f'.repeat(64) })) } };
+  assert.equal((await d.attempt(stale)).advanced, true);
+  const [next] = (await d.listed()).sessions;
+  assert.equal(next.sha256, d.sha(d.log('2026-03-10')));
+  assert.notEqual(next.sha256, payload.inputs.sessions[0].sha256);
+});
+
+test('Origin advance rejects a log dated before today that grew after the list', async t => {
+  const d = await dayFixture(t, '2026-03-10T12:00:00+08:00');
+  fs.writeFileSync(d.log('2026-03-09'), '# 03-09\n');
+  fs.writeFileSync(d.log('2026-03-10'), '# 03-10\n');
+  const payload = await d.read();
+  fs.appendFileSync(d.log('2026-03-09'), '- late line\n');
+  await rejectsUnchanged(d, payload);
+  assert.equal(d.cursor(), null);
+});
+
+test('Origin advance rejects a log dated before today that appeared after the list', async t => {
+  const d = await dayFixture(t, '2026-03-10T12:00:00+08:00');
+  fs.writeFileSync(d.log('2026-03-10'), '# 03-10\n');
+  const payload = await d.read();
+  fs.writeFileSync(d.log('2026-03-08'), '# written late\n');
+  await rejectsUnchanged(d, payload);
+  assert.equal(d.cursor(), null);
+});
+
+test('Origin advance rejects a listed log that disappeared, whether dated today or earlier', async t => {
+  for (const date of ['2026-03-10', '2026-03-09']) {
+    const d = await dayFixture(t, '2026-03-10T12:00:00+08:00');
+    fs.writeFileSync(d.log('2026-03-09'), '# 03-09\n');
+    fs.writeFileSync(d.log('2026-03-10'), '# 03-10\n');
+    const payload = await d.read();
+    fs.unlinkSync(d.log(date));
+    await rejectsUnchanged(d, payload);
+    assert.equal(d.cursor(), null, date);
+  }
+});
+
+test('Origin advance compares earlier logs by path and hash, and rejects listed logs absent from its own list', async t => {
+  const d = await dayFixture(t, '2026-03-10T12:00:00+08:00');
+  fs.writeFileSync(d.log('2026-03-09'), '# 03-09\n');
+  fs.writeFileSync(d.log('2026-03-10'), '# 03-10\n');
+  const payload = await d.read();
+  const sessions = change => ({ ...payload, inputs: { ...payload.inputs, sessions: change(payload.inputs.sessions) } });
+  const earlier = payload.inputs.sessions[0];
+  await rejectsUnchanged(d, sessions(items => items.map(item => item === earlier ? { ...item, sha256: 'f'.repeat(64) } : item)));
+  await rejectsUnchanged(d, sessions(items => items.map(item => item === earlier ? { path: item.path } : item)));
+  await rejectsUnchanged(d, sessions(items => [...items, earlier]));
+  await rejectsUnchanged(d, sessions(items => [...items, { ...earlier, path: d.log('2026-03-11') }]));
+  await rejectsUnchanged(d, sessions(items => [...items, { path: path.join(path.dirname(earlier.path), 'notes.md') }]));
+  await rejectsUnchanged(d, sessions(() => null));
+  assert.equal(d.cursor(), null);
+  assert.equal((await d.attempt(payload)).advanced, true);
+});
+
+test('Origin advance across midnight treats the listed day as earlier and the new day as today', async t => {
+  // Listed at 23:59:50 on 03-10 Singapore time; advanced at 00:00:10 on 03-11,
+  // still 03-10 in UTC.
+  const grown = await dayFixture(t, '2026-03-10T23:59:50+08:00');
+  fs.writeFileSync(grown.log('2026-03-10'), '# 03-10\n');
+  let payload = await grown.read();
+  fs.appendFileSync(grown.log('2026-03-10'), '- 23:59:55 line\n');
+  grown.clock.now = Date.parse('2026-03-11T00:00:10+08:00');
+  await rejectsUnchanged(grown, payload);
+  assert.equal(grown.cursor(), null);
+
+  const unchanged = await dayFixture(t, '2026-03-10T23:59:50+08:00');
+  fs.writeFileSync(unchanged.log('2026-03-10'), '# 03-10\n');
+  payload = await unchanged.read();
+  unchanged.clock.now = Date.parse('2026-03-11T00:00:10+08:00');
+  fs.writeFileSync(unchanged.log('2026-03-11'), '# first line of 03-11\n');
+  assert.equal((await unchanged.attempt(payload)).advanced, true);
+  assert.deepEqual((await unchanged.listed()).sessions.map(item => path.basename(item.path)), ['2026-03-11.md']);
 });
