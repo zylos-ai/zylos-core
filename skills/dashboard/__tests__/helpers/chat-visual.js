@@ -128,12 +128,22 @@ export async function runVisualCase(t, sandbox) {
       // 52 drafts and the first conversation, after the Origin conversation pinned first.
       assert.equal(await page.locator('[data-conversation-id]').count(), 54);
       assert.equal(await page.locator('[data-conversation-id]').first().getAttribute('data-conversation-id'), ORIGIN_CONVERSATION_ID);
-      await page.locator(`[data-conversation-id="${first.receipt.conversationId}"]`).click();
+      const selectedConversation = page.locator(`[data-conversation-id="${first.receipt.conversationId}"]`);
+      // The list may already have auto-selected this conversation. Reselecting
+      // would start another initial question read behind the visible controls.
+      if (await selectedConversation.getAttribute('aria-current') !== 'true') await selectedConversation.click();
       await page.locator('#wb-chat .chat-message').first().waitFor();
       assert.equal(await page.locator('[data-action="loadOlder"]').count(), 0);
       assert.equal(await page.locator('[data-action="loadMore"]').isVisible(), false);
       await page.locator('[data-action="loadMoreQuestions"]').waitFor({ state: 'visible' });
-      await page.locator('[data-action="loadMoreQuestions"]').click();
+      // Check readiness and click in one page task: an in-flight initial read
+      // can disable the button after Playwright's actionability check.
+      await page.waitForFunction(selector => {
+        const button = document.querySelector(selector);
+        if (!button || button.hidden || button.disabled) return false;
+        button.click();
+        return true;
+      }, '[data-action="loadMoreQuestions"]');
       await page.locator('[data-action="loadMoreQuestions"]').waitFor({ state: 'hidden' });
       let older = 0;
       const end = page.locator('.conversation-history-start-label').filter({ hasText: /No earlier messages|没有更早的消息了/ });
