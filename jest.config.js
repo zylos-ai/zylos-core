@@ -1,6 +1,7 @@
 export default {
   transform: {},
   testPathIgnorePatterns: [
+    '/test/legacy-group-reads-browser.test.js',
     '<rootDir>/test/dashboard-object-api.integration.test.js',
     '<rootDir>/test/account-usage-cache.integration.test.js',
     '<rootDir>/test/dashboard-transcript-idle.integration.test.js',

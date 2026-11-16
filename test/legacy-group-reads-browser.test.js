@@ -3,23 +3,21 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import https from 'node:https';
-import os from 'node:os';
 import path from 'node:path';
 import * as childProcess from 'node:child_process';
-import Database from '../../comm-bridge/scripts/sqlite-driver.js';
-import { guardDatabase } from '../../comm-bridge/scripts/sqlite-schema.js';
-import * as schema from '../../comm-bridge/scripts/c4-schema.js';
-import { createStore } from '../../comm-bridge/scripts/c4-v2-store.js';
-import { createQueryHandlers } from '../../comm-bridge/scripts/c4-v2-cli.js';
-import { CoreState } from '../src/lib/core-state.js';
-import { Store } from '../src/lib/store.js';
-import { generateApiKey, hashApiKey, hashPassword } from '../src/lib/auth.js';
-import { createGroupSnapshot, systemSample } from '../src/lib/workbench/group-snapshot.js';
-import { loadCoreModule as originalLoadCoreModule } from '../src/lib/core-modules.js';
-import { readSessionModeStatus } from '../../../cli/lib/session-mode-status.js';
-import { SseHub } from '../src/lib/sse.js';
+import Database from '../skills/comm-bridge/scripts/sqlite-driver.js';
+import { guardDatabase } from '../skills/comm-bridge/scripts/sqlite-schema.js';
+import * as schema from '../skills/comm-bridge/scripts/c4-schema.js';
+import { createStore } from '../skills/comm-bridge/scripts/c4-v2-store.js';
+import { createQueryHandlers } from '../skills/comm-bridge/scripts/c4-v2-cli.js';
+import { CoreState } from '../skills/dashboard/src/lib/core-state.js';
+import { Store } from '../skills/dashboard/src/lib/store.js';
+import { generateApiKey, hashApiKey, hashPassword } from '../skills/dashboard/src/lib/auth.js';
+import { createGroupSnapshot, systemSample } from '../skills/dashboard/src/lib/workbench/group-snapshot.js';
+import { loadCoreModule as originalLoadCoreModule } from '../skills/dashboard/src/lib/core-modules.js';
+import { readSessionModeStatus } from '../cli/lib/session-mode-status.js';
 
-import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
+import { chatEnabled, createChatSandbox } from '../skills/dashboard/__tests__/helpers/chat-integration-harness.js';
 import { pathToFileURL } from 'node:url';
 
 // Real Dashboard entry/router, C4 history, event/usage store and mounted frontend.
@@ -27,7 +25,9 @@ import { pathToFileURL } from 'node:url';
 // and both DBs. Core/runtime/IPC adapters are deterministic; only loopback HTTP
 // and a private headless browser run. No live runtime, model, or channel starts.
 // Run for group-read validation and overview/conversation/sidebar consumers.
-test('catalog-backed Chinese and hyphen groups load real details and timelines at desktop and phone widths',
+// Skip only when those read contracts and consumers are unchanged, or when
+// browser prerequisites are unavailable (report the missing browser gate).
+test('catalog-backed Chinese, hyphen and percent groups load real details and timelines at desktop and phone widths',
   { skip: !chatEnabled(), timeout: 180000 }, async t => {
   const sandbox = createChatSandbox(t);
   const root = sandbox.paths.zylos;
@@ -38,9 +38,13 @@ test('catalog-backed Chinese and hyphen groups load real details and timelines a
   fs.writeFileSync(path.join(root, 'activity-monitor/restart-requests.json'), '[]');
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ auth: { enabled: true, password: hashPassword('fixture-password') }, chat: { allowRemote: true } }));
   const configFile = path.join(root, '.zylos/config.json');
-  let usageVersion = '1.0.0', usageModel = 'fixture-model', usageEffort = 'high', modeStatusReadable = true, originRun = 'fixture-run';
-  let mode = 'multi', clock = Date.now(), server, seedStore, catalogReadable = true;
+  const usageVersion = '1.0.0', usageModel = 'fixture-model', usageEffort = 'high', originRun = 'fixture-run';
+  let mode = 'multi', clock = Date.now(), server, seedStore;
   const actionCalls = [], cliCalls = [], records = [];
+  t.mock.method(Store.prototype, 'writeGroupDisplayName', (...args) => {
+    actionCalls.push({ nameWrite: args });
+    assert.fail('historical target reached display-name mutation');
+  });
   const savedRoot = process.env.ZYLOS_DIR;
   process.env.ZYLOS_DIR = root;
   const writeMode = next => { mode = next; clock += 3000; fs.writeFileSync(configFile, JSON.stringify({ session_mode: mode, runtime: 'claude' })); };
@@ -51,6 +55,8 @@ test('catalog-backed Chinese and hyphen groups load real details and timelines a
   c4.prepare('INSERT INTO conversations(id,timestamp,direction,channel,endpoint_id,content,session_group,status) VALUES(2,?,?,?,?,?,?,?)').run(new Date().toISOString().slice(0, 19).replace('T', ' '), 'out', 'telegram', 'fixture-hyphen', 'Hyphen legacy message', 'tg:-legacy-group', 'delivered');
   c4.prepare('INSERT INTO group_heads(session_group,head_id) VALUES(?,?)').run('tg:历史-项目', 1);
   c4.prepare('INSERT INTO group_heads(session_group,head_id) VALUES(?,?)').run('tg:-legacy-group', 2);
+  c4.prepare('INSERT INTO conversations(id,timestamp,direction,channel,endpoint_id,content,session_group,status) VALUES(3,?,?,?,?,?,?,?)').run(new Date(clock - 7 * 3600000).toISOString().slice(0, 19).replace('T', ' '), 'in', 'telegram', 'fixture-percent', 'Percent legacy message', 'tg:有%号', 'delivered');
+  c4.prepare('INSERT INTO group_heads(session_group,head_id) VALUES(?,?)').run('tg:有%号', 3);
   const query = createQueryHandlers(createStore(c4));
   const previousGet = https.get;
   https.get = () => {
@@ -98,25 +104,25 @@ test('catalog-backed Chinese and hyphen groups load real details and timelines a
   });
   t.mock.module('node:child_process', { namedExports: { ...childProcess, execFile: fakeExecute,
     execFileSync: () => { throw new Error('Synchronous child processes are forbidden in HTTP fixture'); } } });
-  t.mock.module('../src/lib/installed-versions.js', { namedExports: { createInstalledVersionReader: () => async () => ({ zylos: 'fixture', claude: '1.0.0', codex: '1.0.0' }) } });
-  const actions = await import('../src/lib/actions.js');
-  t.mock.module('../src/lib/actions.js', { namedExports: { ...actions,
+  t.mock.module('../skills/dashboard/src/lib/installed-versions.js', { namedExports: { createInstalledVersionReader: () => async () => ({ zylos: 'fixture', claude: '1.0.0', codex: '1.0.0' }) } });
+  const actions = await import('../skills/dashboard/src/lib/actions.js');
+  t.mock.module('../skills/dashboard/src/lib/actions.js', { namedExports: { ...actions,
     handleAction: async (action, body) => { actionCalls.push({ action, body }); return { ok: true, action }; } } });
-  t.mock.module('../src/lib/workbench/core-cli.js', { namedExports: { createCoreCli: () => cli } });
-  const names = await import('../src/lib/workbench/display-names.js');
-  t.mock.module('../src/lib/workbench/display-names.js', { namedExports: { ...names,
+  t.mock.module('../skills/dashboard/src/lib/workbench/core-cli.js', { namedExports: { createCoreCli: () => cli } });
+  const names = await import('../skills/dashboard/src/lib/workbench/display-names.js');
+  t.mock.module('../skills/dashboard/src/lib/workbench/display-names.js', { namedExports: { ...names,
     createDisplayNames: options => names.createDisplayNames({ ...options, runC4Db: cli.runC4Db }),
   } });
-  t.mock.module('../src/lib/workbench/group-actions.js', { namedExports: {
+  t.mock.module('../skills/dashboard/src/lib/workbench/group-actions.js', { namedExports: {
     createGroupActions: () => async (key, action, body) => { actionCalls.push({ key, action, body }); return { ok: true, action, submission: 'submitted' }; },
   } });
-  const deletion = await import('../src/lib/workbench/group-deletion.js');
-  t.mock.module('../src/lib/workbench/group-deletion.js', { namedExports: { ...deletion,
+  const deletion = await import('../skills/dashboard/src/lib/workbench/group-deletion.js');
+  t.mock.module('../skills/dashboard/src/lib/workbench/group-deletion.js', { namedExports: { ...deletion,
     createGroupDeletionRoutes: options => deletion.createGroupDeletionRoutes({ ...options, core: async (target, options) => {
       actionCalls.push({ deletion: target, preview: options.preview }); return { ok: true, preview: options.preview, operationId: 'fixture-operation', cutoffId: 1 };
     } }),
   } });
-  const reader = { readSessionState: async key => ({ identity: { present: key === null || ['origin', 'tg:历史-项目', 'tg:-legacy-group'].includes(key), ready: true,
+  const reader = { readSessionState: async key => ({ identity: { present: key === null || ['origin', 'tg:历史-项目', 'tg:-legacy-group', 'tg:有%号'].includes(key), ready: true,
     runtime: 'claude', runId: key === null || key === 'origin' ? originRun : 'fixture-run', sessionId: 'fixture-session', createdAt: clock / 1000 - 10, launchConfig: { runtime: 'claude', mode: 'default' } },
     status: { valid: true, sampledAt: clock, value: { state: key === 'tg:历史-项目' ? 'busy' : 'idle' } },
     usage: { valid: true, value: { version: usageVersion, effort: { level: usageEffort }, model: { id: usageModel }, context_window: { used_percentage: 25 } } } }),
@@ -124,11 +130,11 @@ test('catalog-backed Chinese and hyphen groups load real details and timelines a
   const core = async name => {
     if (name === 'am-sock-client.js') return { submit: async () => ({ kind: 'rejected', reply: { code: 'invalid_request' } }),
       lookupRestartRequest: async (requestId, options) => {
-        assert.ok(['tg:历史-项目', 'tg:-legacy-group'].includes(options.sessionGroup), 'restart lookup retains exact historical group');
+        assert.ok(['tg:历史-项目', 'tg:-legacy-group', 'tg:有%号'].includes(options.sessionGroup), 'restart lookup retains exact historical group');
         assert.equal(requestId, '11111111-1111-4111-8111-111111111111');
         return 'done';
       } };
-    if (name === 'session-mode-status.js') return { readSessionModeStatus: options => { if (!modeStatusReadable) throw Object.assign(new Error('fixture status failure'), { code: 'FIXTURE_UNREADABLE' }); return readSessionModeStatus({ ...options,
+    if (name === 'session-mode-status.js') return { readSessionModeStatus: options => { return readSessionModeStatus({ ...options,
       db: { getModeTransition: async () => ({ run_id: 'fixture-transition', source_mode: 'single', target_mode: 'multi', phase: 'draining', reason: 'fixture-block', created_at: clock - 1000, updated_at: clock }),
         getDrainFence: async () => null, getLastCompletedModeTransition: async () => null },
       readEvents: () => [{ run_id: 'fixture-transition', event: 'transition_blocked', reason: 'fixture-block', ts: clock - 1000 }],
@@ -136,42 +142,37 @@ test('catalog-backed Chinese and hyphen groups load real details and timelines a
     if (name === 'session-state-reader.js') return reader;
     return originalLoadCoreModule(name);
   };
-  t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: core } });
+  t.mock.module('../skills/dashboard/src/lib/core-modules.js', { namedExports: { loadCoreModule: core } });
   const originState = () => ({ state: 'IDLE', runtime: 'claude', ready: true, sampledAt: clock, sessionId: 'fixture-session', runId: 'fixture-run',
     running_tools: [], active_subagents: [], subagent_tools: [], source: {}, updated_at: new Date(clock).toISOString() });
   t.mock.method(CoreState.prototype, 'refresh', async () => originState());
   t.mock.method(CoreState.prototype, 'getState', originState);
   t.mock.method(CoreState.prototype, 'getUsageObservation', () => ({ valid: true, value: { model: { id: 'fixture-model' }, context_window: { used_percentage: 25 } } }));
-  t.mock.module('../src/lib/cgroup-resources.js', { namedExports: { createCgroupCollector: () => ({ sample() {}, read: () => ({}) }) } });
-  const { SystemCollector } = await import('../src/lib/collectors/system-collector.js');
+  t.mock.module('../skills/dashboard/src/lib/cgroup-resources.js', { namedExports: { createCgroupCollector: () => ({ sample() {}, read: () => ({}) }) } });
+  const { SystemCollector } = await import('../skills/dashboard/src/lib/collectors/system-collector.js');
   t.mock.method(SystemCollector.prototype, 'getLatestSystemData', () => ({ collectedAt: clock, resource_scope: 'container', cpu_source: 'container', mem_source: 'container', disk_total_bytes: 4096, cpu_pct: 20, cpu_count: 2, mem_pct: 25, mem_used_bytes: 256, mem_total_bytes: 1024, disk_used_pct: 40, disk_free_bytes: 2048 }));
-  const { collectStatus } = await import('../../../cli/lib/status-view.js');
-  t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: { systemSample,
+  const { collectStatus } = await import('../cli/lib/status-view.js');
+  t.mock.module('../skills/dashboard/src/lib/workbench/group-snapshot.js', { namedExports: { systemSample,
     createGroupSnapshot: options => createGroupSnapshot({ ...options, now: () => clock, cli,
       loadCoreModule: async name => name === 'status-view.js' ? { collectStatus: options => collectStatus({ ...options,
         mode: () => ({ mode }), resolveRoot: () => root, configIssue: () => null, requests: () => [], now: () => clock,
-        list: () => [{ sessionGroup: 'tg:历史-项目' }, { sessionGroup: 'tg:-legacy-group' }],
+        list: () => [{ sessionGroup: 'tg:历史-项目' }, { sessionGroup: 'tg:-legacy-group' }, { sessionGroup: 'tg:有%号' }],
         facts: () => ({ originNeed: null }), health: () => ({ health: 'rate_limited', cooldownUntil: clock / 1000 + 60 }),
       }) } : name === 'config.js' ? { readSessionMode: () => ({ mode }) }
         : name === 'session-pool-config.js' ? { readPoolCapacity: () => ({ k: 3, valid: true, fresh: true }) } : core(name),
     }),
   } });
-  const { createServer } = await import('../src/index.js');
+  const { createServer } = await import('../skills/dashboard/src/index.js');
   server = createServer();
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   seedStore = new Store(path.join(data, 'dashboard.db'));
   seedStore.insertEvent({ id: 'fixture-child', ingest_id: 'fixture-child', timestamp: new Date(clock - 1000).toISOString(), session_group: 'tg:-legacy-group', run_id: 'fixture-run',
     event_type: 'subagent_start', category: 'agent', metadata: { agent_id: 'fixture-child' } });
-  for (const [group, child] of [['origin', 'hook-child'], [null, 'legacy-child']]) seedStore.insertEvent({
-    id: 'fixture-origin-' + child, ingest_id: 'fixture-origin-' + child, timestamp: new Date(clock - 1500).toISOString(),
-    session_group: group, run_id: 'fixture-run', event_type: 'subagent_start', category: 'agent', metadata: { agent_id: child } });
-  seedStore.insertEvent({ id: 'fixture-failed-offline', ingest_id: 'fixture-failed-offline', timestamp: new Date(clock - 1000).toISOString(), session_group: 'telegram:offline-0',
-    event_type: 'activate_failed', category: 'session', metadata: { reason: 'fixture launch failure' } });
-  for (const [group, value] of [[null, 11], ['tg:历史-项目', 17], ['tg:-legacy-group', 23]]) seedStore.insertMetric({ metric_name: 'usage_event', metric_value: value, timestamp: new Date().toISOString(), runtime: 'claude',
+  for (const [group, value] of [[null, 11], ['tg:历史-项目', 17], ['tg:-legacy-group', 23], ['tg:有%号', 29]]) seedStore.insertMetric({ metric_name: 'usage_event', metric_value: value, timestamp: new Date().toISOString(), runtime: 'claude',
     session_group: group, source: 'fixture', dimensions: { total_input: value, output: 3, cache_read_input_tokens: 2, cost: value / 100, model: 'fixture-model' } });
   const tokens = {};
-  for (const scope of ['read', 'admin']) {
+  for (const scope of ['read']) {
     const key = generateApiKey(); seedStore.insertApiKey({ name: `fixture-${scope}`, keyHash: hashApiKey(key), scope });
     const response = await fetch(`${origin}/api/auth/token`, { method: 'POST', headers: { Authorization: `Bearer ${key}` } });
     assert.equal(response.status, 200); tokens[scope] = (await response.json()).token;
@@ -193,7 +194,8 @@ test('catalog-backed Chinese and hyphen groups load real details and timelines a
 
 
   seedStore.insertEvent({ id: 'legacy-chinese', ingest_id: 'legacy-chinese', timestamp: new Date(clock - 1000).toISOString(), session_group: 'tg:历史-项目', run_id: 'fixture-run', event_type: 'tool_start', category: 'tool', metadata: { tool: 'Read' } });
-  const groups = ['tg:历史-项目', 'tg:-legacy-group'];
+  seedStore.insertEvent({ id: 'legacy-percent', ingest_id: 'legacy-percent', timestamp: new Date(clock - 1000).toISOString(), session_group: 'tg:有%号', run_id: 'fixture-run', event_type: 'tool_start', category: 'tool', metadata: { tool: 'Read' } });
+  const groups = ['tg:历史-项目', 'tg:-legacy-group', 'tg:有%号'];
   for (const group of groups) {
     const base = '/api/groups/' + encodeURIComponent(group);
     const detail = await request(base);
@@ -211,15 +213,24 @@ test('catalog-backed Chinese and hyphen groups load real details and timelines a
     assert.equal(backlog.reason, 'backlog_failed');
     const usage = await request(base + '/usage');
     assert.equal(usage.group, group);
-    assert.equal(usage.today.inputTokens, group === 'tg:历史-项目' ? 17 : 23);
+    assert.equal(usage.today.inputTokens, group === 'tg:历史-项目' ? 17 : group === 'tg:-legacy-group' ? 23 : 29);
     assert.equal(usage.today.outputTokens, 3);
     const restart = await request(base + '/restarts/11111111-1111-4111-8111-111111111111');
     assert.equal(restart.group.id, group);
     for (const [suffix, method, body] of [['/config', 'PUT', { kind: 'runtime', value: 'claude' }], ['/name', 'PUT', { name: 'fixture' }],
-      ['/name', 'DELETE'], ['/actions/restart', 'POST', { runId: 'fixture-run' }], ['', 'DELETE', { confirmed: true }], ['/deletion-preview', 'GET']]) {
-      await request(base + suffix, { method, body, identity: 'cookie', expected: 400 });
+      ['/name', 'DELETE'], ['/actions/restart', 'POST', { runId: 'fixture-run' }], ['', 'DELETE', { confirmed: true, operationId: 'fixture-operation', cutoffId: 1 }], ['/deletion-preview', 'GET']]) {
+      const actionsBefore = actionCalls.length, cliBefore = cliCalls.length;
+      const denied = await request(base + suffix, { method, body, identity: 'cookie', expected: 400 });
+      assert.equal(denied.error.code, suffix === '/name' ? 'KEY_INVALID' : ['', '/deletion-preview'].includes(suffix) ? 'invalid_deletion_target' : 'SESSION_GROUP_INVALID');
+      assert.equal(actionCalls.length, actionsBefore, 'invalid target never reaches action or deletion execution');
+      assert.equal(cliCalls.length, cliBefore, 'invalid target never reaches config/name CLI');
     }
   }
+  const memory = await request('/api/workbench/memory/backlog', { identity: 'cookie' });
+  const percentMemory = memory.groups.find(row => row.sessionGroup === 'tg:有%号');
+  assert.equal(percentMemory.count, 1); assert.equal(percentMemory.aged, true);
+  assert.equal(percentMemory.syncing, null); assert.equal(percentMemory.reason, 'backlog_failed');
+  assert.equal(actionCalls.length, 0, 'all historical writes stopped before action execution');
   for (const suffix of ['', '/events', '/runs', '/messages', '/backlog', '/usage', '/restarts/11111111-1111-4111-8111-111111111111']) {
     const answer = await request('/api/groups/' + encodeURIComponent('tg:未登记-历史') + suffix, { expected: 400 });
     assert.equal(answer.error.code, 'SESSION_GROUP_INVALID');
@@ -261,6 +272,10 @@ test('catalog-backed Chinese and hyphen groups load real details and timelines a
     await context.close();
   }
   writeMode('single');
-  for (const group of groups) for (const suffix of ['', '/events', '/runs', '/messages', '/backlog', '/usage', '/restarts/11111111-1111-4111-8111-111111111111']) await request('/api/groups/' + encodeURIComponent(group) + suffix);
+  for (const group of groups) for (const suffix of ['', '/events', '/runs', '/messages', '/backlog', '/usage', '/restarts/11111111-1111-4111-8111-111111111111']) {
+    const hiddenDetail = suffix === '' || suffix.startsWith('/restarts/');
+    const answer = await request('/api/groups/' + encodeURIComponent(group) + suffix, { expected: hiddenDetail ? 404 : 200 });
+    if (hiddenDetail) assert.equal(answer.error.code, 'GROUP_NOT_FOUND');
+  }
   if (evidence) fs.writeFileSync(path.join(evidence, 'legacy-read-observations.json'), JSON.stringify(records, null, 2));
 });

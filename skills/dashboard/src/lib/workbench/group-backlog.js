@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { createCoreCli } from './core-cli.js';
+import { requireGroupReadShape } from './groups-api.js';
 import { parseSessionGroup } from '../../../../comm-bridge/scripts/c4-session-group.js';
 
 /** The shared per-group backlog cache; memory pages use this same reader. */
@@ -28,8 +29,10 @@ export function createGroupBacklog({ zylosDir, runC4Db, c4Reader,
     // counts use the read-only database; sync markers remain unobservable.
     if (!parseSessionGroup(key)) {
       let value;
-      try { value = { ...c4Reader.getGroupBacklog(key), syncing: null, reason: 'backlog_failed' }; }
-      catch { value = { count: null, firstAt: null, syncing: null, reason: 'backlog_failed' }; }
+      try {
+        requireGroupReadShape(key);
+        value = { ...c4Reader.getGroupBacklog(key), syncing: null, reason: 'backlog_failed' };
+      } catch { value = { count: null, firstAt: null, syncing: null, reason: 'backlog_failed' }; }
       cache.set(scope, { at: now(), value });
       return value;
     }

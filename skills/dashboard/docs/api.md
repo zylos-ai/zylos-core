@@ -288,9 +288,9 @@ Bare keys `counts`, `running`, `offline`, `search`, `activity`, `naming-prompt` 
 
 **Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_INCLUDE`; 404 `GROUP_NOT_FOUND`; 502 `GROUP_CATALOG_UNREADABLE` when an unknown group cannot be checked against the catalog or a historical key cannot be verified; common read errors. Detail for a current valid key remains readable when unrelated catalog collection fails. Individual Core configuration errors can also appear inside their configuration envelopes.
 
-Group observation reads (detail, usage, runs, messages, events, backlog and restart status) also accept historical imported group IDs outside the current write grammar, such as `telegram:运维群-测试`, only when a healthy instance C4 catalog contains that exact group with C4 evidence. They reuse the same request snapshot catalog as detail; status-only rows, queue-only rows, usage/event history and filesystem presence do not prove membership. IDs are decoded exactly once and must retain a valid namespace, a nonempty local name of at most 95 characters and total length at most 128. Control characters, DEL, slash, backslash, percent characters and dot-only traversal names (`.` or `..`) are rejected before catalog lookup. Malformed URL encoding returns 400 `SESSION_GROUP_INVALID`.
+Group observation reads (detail, usage, runs, messages, events, backlog and restart status) also accept historical imported group IDs outside the current write grammar, such as `telegram:运维群-测试`, only when a healthy instance C4 catalog contains that exact group with C4 evidence. They reuse the same request snapshot catalog as detail; status-only rows, queue-only rows, usage/event history and filesystem presence do not prove membership. IDs are decoded exactly once and must retain a valid namespace, a nonempty local name of at most 95 characters and total length at most 128. Control characters, DEL, slash, backslash and dot-only traversal names (`.` or `..`) are rejected before catalog lookup. A literal percent in an existing name is allowed after decoding; no second decode occurs. Malformed URL encoding returns 400 `SESSION_GROUP_INVALID`.
 
-Unknown historical IDs return 400 `SESSION_GROUP_INVALID`; an unreadable catalog returns 502 `GROUP_CATALOG_UNREADABLE`. Current valid IDs retain each route's existing empty-data/not-found behavior without requiring the catalog solely for validation. In single mode, a requested historical catalog group remains readable as an offline observation; running lists and counts still show only Origin. This read exception does not change config, name, action or deletion validation. Deletion preview is part of Core's deletion operation and retains the same strict target grammar as deletion. Optional raw/config readers retain their own field-level failures.
+Unknown historical IDs return 400 `SESSION_GROUP_INVALID`; an unreadable catalog returns 502 `GROUP_CATALOG_UNREADABLE`. Current valid IDs retain each route's existing empty-data/not-found behavior without requiring the catalog solely for validation. This read exception does not change config, name, action or deletion validation. Deletion preview is part of Core's deletion operation and retains the same strict target grammar as deletion. Optional raw/config readers retain their own field-level failures.
 
 Example historical observation: `GET /api/groups/telegram%3A%E8%BF%90%E7%BB%B4%E7%BE%A4-%E6%B5%8B%E8%AF%95/runs?limit=3`.
 
@@ -349,6 +349,16 @@ Returns `count:number|null`, `firstAt:string|null`, `syncing:boolean|null`, and 
 **Errors:** 400 `SESSION_GROUP_INVALID`; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; unavailable backlog evidence is returned as null fields and `reason`; common read errors.
 
 Example: `GET /api/groups/origin/backlog`.
+
+### GET /api/workbench/memory/backlog
+
+**Access:** Admin. **Parameters:** none.
+
+Returns `{groups:Array, originSync?:object, hasOlder:boolean, budgets:object|null}` from the shared backlog reader. Each group includes `sessionGroup`, `count:number|null`, `firstAt:string|null`, `aged:boolean`, `syncing:boolean|null`, `threshold:number|null`, and optional `reason`. Historical C4 groups with the same safe name shape accepted by group observation reads retain their counts and oldest time; an oldest message over six hours old sets `aged:true`. Their `syncing` remains `null` with `reason:"backlog_failed"`, because sync-marker paths retain Core's strict grammar. Unsafe name shapes return unknown backlog fields. The optional `originSync` row is a separate cross-group observation in multi mode.
+
+**Errors:** 503 `backlog_failed` if collection fails; common read errors.
+
+Example: `GET /api/workbench/memory/backlog`.
 
 ### PUT /api/groups/:id/config
 

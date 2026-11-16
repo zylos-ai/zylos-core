@@ -1049,28 +1049,26 @@ async function handleApi(req, res, pathname, url) {
 
   const groupEvents = pathname.match(/^\/api\/groups\/([^/]+)\/events$/);
   if (groupEvents) {
-    try {
-      const key = await groupsApi.readKey(workbenchGroupDetailKey(groupEvents[1]));
-      const since = url.searchParams.get('since') || undefined;
-      const until = url.searchParams.get('until') || undefined;
-      const types = url.searchParams.get('types')?.split(',').filter(Boolean) || undefined;
-      const sessionId = url.searchParams.get('session_id') || undefined;
-      const limit = parseInt(url.searchParams.get('limit') || '100', 10);
-      const offset = parseInt(url.searchParams.get('offset') || '0', 10);
-      const order = url.searchParams.get('order') === 'desc' ? 'desc' : 'asc';
-      const sessionGroup = key === 'origin' && readFleetSessionMode() === 'single' ? null : key;
-      const runId = url.searchParams.get('run_id') || undefined;
-      const runtime = url.searchParams.get('runtime') || undefined;
-      const afterSeq = Number(url.searchParams.get('after_seq'));
-      const events = await coreLogImporter.sanitizeEvents(store.queryEvents({ since, until, types, sessionId,
-        sessionGroup, includeLegacyOrigin: key === 'origin' && readFleetSessionMode() === 'single', runId, runtime, afterSeq, limit: Math.min(1000, limit), offset, order }));
-      const stream = url.searchParams.get('stream') || undefined;
-      const gapLimit = parseInt(url.searchParams.get('gap_limit') || '100', 10);
-      const gapOffset = parseInt(url.searchParams.get('gap_offset') || '0', 10);
-      const gaps = await coreLogImporter.sanitizeEvents(store.getHistoryDiagnostics({
-        sessionGroup, includeLegacyOrigin: key === 'origin' && readFleetSessionMode() === 'single', stream, limit: gapLimit, offset: gapOffset }));
-      sendJson(res, 200, { events, count: events.length, gaps });
-    } catch (error) { workbenchFailure(res, error); }
+    const key = await groupsApi.readKey(workbenchGroupDetailKey(groupEvents[1]));
+    const since = url.searchParams.get('since') || undefined;
+    const until = url.searchParams.get('until') || undefined;
+    const types = url.searchParams.get('types')?.split(',').filter(Boolean) || undefined;
+    const sessionId = url.searchParams.get('session_id') || undefined;
+    const limit = parseInt(url.searchParams.get('limit') || '100', 10);
+    const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+    const order = url.searchParams.get('order') === 'desc' ? 'desc' : 'asc';
+    const sessionGroup = key === 'origin' && readFleetSessionMode() === 'single' ? null : key;
+    const runId = url.searchParams.get('run_id') || undefined;
+    const runtime = url.searchParams.get('runtime') || undefined;
+    const afterSeq = Number(url.searchParams.get('after_seq'));
+    const events = await coreLogImporter.sanitizeEvents(store.queryEvents({ since, until, types, sessionId,
+      sessionGroup, includeLegacyOrigin: key === 'origin' && readFleetSessionMode() === 'single', runId, runtime, afterSeq, limit: Math.min(1000, limit), offset, order }));
+    const stream = url.searchParams.get('stream') || undefined;
+    const gapLimit = parseInt(url.searchParams.get('gap_limit') || '100', 10);
+    const gapOffset = parseInt(url.searchParams.get('gap_offset') || '0', 10);
+    const gaps = await coreLogImporter.sanitizeEvents(store.getHistoryDiagnostics({
+      sessionGroup, includeLegacyOrigin: key === 'origin' && readFleetSessionMode() === 'single', stream, limit: gapLimit, offset: gapOffset }));
+    sendJson(res, 200, { events, count: events.length, gaps });
     return true;
   }
 

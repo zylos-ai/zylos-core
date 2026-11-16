@@ -21,13 +21,13 @@ export function groupKey(id) {
 
 // Historical group names remain readable when proven by the instance's C4 catalog.
 // Live status, queue rows and filesystem paths alone do not establish membership.
-function requireReadShape(id) {
+export function requireGroupReadShape(id) {
   if (id === 'origin' || validKey(id)) return false;
   const colon = typeof id === 'string' ? id.indexOf(':') : -1;
   const name = colon > 0 ? id.slice(colon + 1) : '';
   if (typeof id !== 'string' || id.length > 128 || !validNamespace(id.slice(0, colon))
     || !name || name.length > 95 || name === '.' || name === '..'
-    || /[\u0000-\u001f\u007f/\\%]/.test(name)) groupKey(id);
+    || /[\u0000-\u001f\u007f/\\]/.test(name)) groupKey(id);
   return true;
 }
 
@@ -156,7 +156,7 @@ export function createGroupsApi({ workbench, groupConfig, getRuntimeInfo = () =>
   return {
     // Current keys retain their existing empty-data behavior without a catalog read.
     async readKey(id) {
-      if (!requireReadShape(id)) return id;
+      if (!requireGroupReadShape(id)) return id;
       return requireReadMembership(id, await workbench.getSnapshot());
     },
     counts: async () => groupCounts(await workbench.getSnapshot()),
@@ -201,17 +201,10 @@ export function createGroupsApi({ workbench, groupConfig, getRuntimeInfo = () =>
     async detail(id, { include = ['raw', 'config'] } = {}) {
       if (include instanceof URLSearchParams) include = include.has('include') ? include.get('include').split(',').filter(Boolean) : ['raw', 'config'];
       if (!Array.isArray(include) || include.some(value => !['raw', 'config'].includes(value))) throw failure('INVALID_INCLUDE', 'Include must contain raw or config');
-      const historical = requireReadShape(id);
+      const historical = requireGroupReadShape(id);
       const snapshot = await workbench.getSnapshot();
       if (historical) requireReadMembership(id, snapshot);
-      let row = rowsOf(snapshot).find(row => row.id === id);
-      // Single mode launches only Origin, while historical groups still own
-      // readable C4 and runtime history. Project only the requested catalog row.
-      const catalogRow = snapshot.groupEvidence?.catalog?.get(id);
-      if (!row && historical && snapshot.view === 'single' && catalogRow) row = projectGroup({
-        sessionGroup: id, presence: 'not_running', live: null, ...catalogRow,
-        target: { runtime: null, onlyMulti: true },
-      }, snapshot);
+      const row = rowsOf(snapshot).find(row => row.id === id);
       if (!row) { requireCatalog(snapshot); throw failure('GROUP_NOT_FOUND', 'Session group not found', 404); }
       const readExtra = async (name, read) => {
         if (!include.includes(name)) return {};

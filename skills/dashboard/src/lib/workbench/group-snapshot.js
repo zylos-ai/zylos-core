@@ -2,7 +2,7 @@ import { readThresholdPolicy, sessionThreshold } from '../session-threshold.js';
 import { loadCoreModule as defaultLoadCoreModule } from '../core-modules.js';
 import { Sanitizer } from '../sanitizer.js';
 import { createCoreCli } from './core-cli.js';
-import { mergeGroups, c4Meta, previewTaskIds, safePreview, safeRaw } from './group-merge.js';
+import { mergeGroups, previewTaskIds, safePreview, safeRaw } from './group-merge.js';
 import { readTaskNames as defaultReadTaskNames } from './schedule-read.js';
 import { waitingReason } from './waiting-reason.js';
 import { classify, durationOf, sortRows, countRows } from './group-state.js';
@@ -124,8 +124,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     if (c4.ok && Array.isArray(c4.data)) c4.data = { groups: c4.data, hasOlder: false };
     sources.c4 = source(c4); sources.q = source(q);
     const taskNames = c4.ok ? await namesOfTasks(c4.data.groups) : new Map();
-    const names = await displayNames.listAll();
-    const { rows, hasOlder } = mergeGroups({ status, c4, q, names, taskNames, statusError }, sanitizer);
+    const { rows, hasOlder } = mergeGroups({ status, c4, q, names: await displayNames.listAll(), taskNames, statusError }, sanitizer);
     const ov = await cli.readOverrides([...new Set([...rows.map(row => row.sessionGroup).filter(group => group !== null), 'origin'])]);
     sources.ov = source(ov);
     let baselineRuntime = null;
@@ -253,11 +252,8 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       overrides: ov.ok ? ov.data : null, sources };
     // Projection evidence is shared with the object APIs, but is not an extra
     // public copy of the event catalog or slot owners.
-    // Keep the full instance catalog even when single-mode lists show only Origin.
-    // Store safe observations only; this evidence is not a public list or cache.
-    const catalog = new Map((c4.ok ? c4.data.groups : []).map(item => [item.sessionGroup, {
-      c4: c4Meta(item), preview: safePreview(item, sanitizer, taskNames), name: names.get(item.sessionGroup) ?? null,
-    }]));
+    // Exact names establish membership even when single-mode lists show only Origin.
+    const catalog = new Set((c4.ok ? c4.data.groups : []).map(item => item.sessionGroup));
     Object.defineProperty(value, 'groupEvidence', { value: { activations, positions, owners, rawGroups, catalog } });
     const channels = new Set(rows.flatMap(row => row.c4?.componentName ? [row.c4.componentName] : []));
     if (services) services.channels = [...channels].map(channel => {

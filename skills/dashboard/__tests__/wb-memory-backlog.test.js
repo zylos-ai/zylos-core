@@ -332,3 +332,30 @@ test('memory backlog HTTP route shares the detail cache and enforces administrat
   ]);
   assert.ok(scoped.root.children.find(node => node.path === 'session-groups').children.some(node => node.name === 'bad name'));
 });
+
+// Real memory and group readers; in-memory catalog/backlog adapters only.
+// Run when historical name validation or shared backlog projection changes;
+// skip unrelated UI changes. No subprocess, socket, database or host file access.
+test('memory backlog retains safe historical counts and ages while rejecting unsafe names', async () => {
+  const keys = ['tg:历史-项目', 'tg:有%号', 'tg:..', 'tg:.', 'tg:群/组', 'tg:群\\组'];
+  const reads = [];
+  const groupBacklog = createGroupBacklog({ zylosDir: '/isolated-zylos', now: () => at,
+    runC4Db: async () => assert.fail('historical names never enter strict Core CLI'),
+    execute: async () => assert.fail('historical names never enter filesystem sync-lock commands'),
+    c4Reader: { getGroupBacklog: key => { reads.push(key); return { count: 21, firstAt: utcText(at - 7 * 3600000) }; } },
+  });
+  const result = await createMemoryBacklog({ ...defaults, groupBacklog,
+    getSnapshot: async () => ({ view: 'multi', rows: keys.map(sessionGroup => ({ sessionGroup })), hasOlder: false }),
+  })();
+  assert.deepEqual(reads, keys.slice(0, 2));
+  for (const row of result.groups.slice(0, 2)) {
+    assert.equal(row.count, 21); assert.equal(row.aged, true);
+    assert.equal(row.firstAt, utcText(at - 7 * 3600000));
+    assert.equal(row.syncing, null); assert.equal(row.reason, 'backlog_failed');
+  }
+  for (const row of result.groups.slice(2)) {
+    assert.equal(row.count, null); assert.equal(row.firstAt, null);
+    assert.equal(row.aged, false); assert.equal(row.syncing, null);
+    assert.equal(row.reason, 'backlog_failed');
+  }
+});
