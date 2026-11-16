@@ -1,6 +1,12 @@
 import { zonedDay, zonedInputValue } from './wb/instance-zone.js';
 import cjkFriendly from './markdown-it-cjk-friendly/index.js';
 import { countLabel } from './count-label.js';
+function historyTime(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || !Number.isFinite(date.getTime())) return '';
+  const [day, clock] = zonedInputValue(date).split('T');
+  return `${day.slice(0, 4) === zonedDay(Date.now()).slice(0, 4) ? day.slice(5) : day} ${clock}`;
+}
 // Read-only history UI. The controller never owns the terminal or its lease.
 export function escapeHistory(value) {
   return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -119,12 +125,7 @@ export class ObserverHistory {
   }
   error(error) { if (error.name !== 'AbortError') this.el('status').textContent = this.label('error') + ': ' + error.message; }
   sessionLabel(session) {
-    const date = session.startedAt ? new Date(session.startedAt) : null;
-    let time = '';
-    if (date && Number.isFinite(date.getTime())) {
-      const [day, clock] = zonedInputValue(date).split('T');
-      time = `${day.slice(0, 4) === zonedDay(Date.now()).slice(0, 4) ? day.slice(5) : day} ${clock}`;
-    }
+    const time = historyTime(session.startedAt);
     const title = session.title || session.startedAt || session.id;
     const body = session.title && time ? `${time} · ${title}` : title;
     return `${session.kind === 'subagent' ? '↳ ' : ''}${session.id === this.current ? this.label('current') + ' · ' : ''}${body}`;
@@ -206,7 +207,7 @@ export class ObserverHistory {
     const details = entry.kind === 'tool' || entry.kind === 'internal';
     const kindLabel = entry.channel === 'void' ? this.label('handoff') : this.label(entry.kind === 'internal' ? 'internal_record' : entry.kind);
     const status = ['running','success','failed','error'].includes(entry.status) ? this.label(entry.status === 'error' ? 'error_status' : entry.status) : entry.status;
-    const header = [kindLabel, entry.system ? this.label('system') : null, entry.name || entry.tool, entry.channel, entry.sender || entry.target, status, entry.ts].filter(Boolean).join(' · ');
+    const header = [kindLabel, entry.system ? this.label('system') : null, entry.name || entry.tool, entry.channel, entry.sender || entry.target, status, historyTime(entry.ts) || entry.ts].filter(Boolean).join(' · ');
     node.innerHTML = details ? `<details ${oldNode?.querySelector('details')?.open ? 'open' : ''}><summary>${escapeHistory(header)} ${escapeHistory(entry.summary || '')}</summary><div class="history-fields"></div></details>` : `<header>${escapeHistory(header)}</header><div class="history-fields"></div>`;
     const container = node.querySelector('.history-fields');
     if (details) node.querySelector('details').ontoggle = () => this.refreshOverflow();

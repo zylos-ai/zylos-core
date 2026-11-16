@@ -754,3 +754,21 @@ test('the backlog subtitle names the gathering threshold even when no group thre
   assert.match(nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0].textContent, /wb.memory.backlogHintOrigin \{"origin":50\}/);
   f.controller.destroy();
 });
+
+
+test('memory budget labels and tooltips use B KB MB with 1024 based values', async () => {
+  const f = fixture({ detail: () => 'technical', getTree: () => ({ root: dir('', [
+    file('identity.md', 1023), file('references.md', 1024), file('state.md', 1024 * 1024),
+  ]) }), request: async () => ({ groups: [], budgets: {
+    limits: { 'identity.md': 10240, 'references.md': 1536 }, warnings: { 'identity.md': 512 },
+  } }) });
+  await f.controller.load();
+  const values = nodesOfClass(f.chartsRoot, 'wb-memory-chart-value').map(node => node.textContent);
+  assert.deepEqual(values, ['1023 B / 10 KB', '1.0 KB / 1.5 KB', '1.0 MB']);
+  const warning = nodesOfClass(f.chartsRoot, 'wb-memory-threshold')[0];
+  assert.match(warning.title, /512 B/);
+  const tracks = nodesOfClass(f.chartsRoot, 'wb-memory-track');
+  assert.match(tracks[0].attributes['aria-label'], /1023 B.*10 KB/);
+  assert.doesNotMatch(f.chartsRoot.textContent, /KiB/);
+  f.controller.destroy();
+});

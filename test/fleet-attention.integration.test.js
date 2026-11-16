@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import { fleetGroupSummary, sanitizeFleetGroupSummary } from '../skills/dashboard/src/lib/workbench/fleet-summary.js';
 import { renderFleetAttention, renderAgentFleetHtml } from '../skills/dashboard/public/js/agent-fleet.js';
+import { setInstanceZone, instanceZoneReady, formatZoned } from '../skills/dashboard/public/js/wb/instance-zone.js';
 import { FleetPoller } from '../skills/dashboard/src/lib/fleet-poller.js';
 import { objectResponse } from '../skills/dashboard/__tests__/fixtures/fleet-object-api.js';
 
@@ -61,13 +62,29 @@ test('Fleet diagnostic reasons use text nodes and preserve group navigation', ()
       assert.equal(detail.includes('identity_mismatch'), level === 'technical');
     }
   }
-  renderFleetAttention(root, [{ kind: 'rate_limited', runtime: 'codex', until: Math.floor(Date.now() / 1000) + 3600 },
+  const until = Math.floor(Date.now() / 1000) + 3600;
+  assert.equal(instanceZoneReady(), false);
+  renderFleetAttention(root, [{ kind: 'rate_limited', runtime: 'codex', until }],
+    (key, values) => JSON.stringify({ key, ...values }));
+  const pending = JSON.parse(root.children[0].children[0].textContent);
+  assert.equal(pending.key, 'wb.attention.rate_limited_unknown');
+  assert.equal(pending.time, '', 'no provisional UTC clock before metadata arrives');
+  setInstanceZone('Asia/Singapore');
+  assert.equal(instanceZoneReady(), true);
+  renderFleetAttention(root, [{ kind: 'rate_limited', runtime: 'codex', until },
     { kind: 'rate_limited', runtime: 'codex', until: 0 }], (key, values) => JSON.stringify({ key, ...values }));
   const known = JSON.parse(root.children[0].children[0].textContent);
   const unknown = JSON.parse(root.children[1].children[0].textContent);
   assert.equal(known.key, 'wb.attention.rate_limited');
   assert.equal(known.runtime, 'Codex');
-  assert.ok(known.time.length > 0);
+  assert.equal(known.time, formatZoned(until * 1000, undefined, { hour: '2-digit', minute: '2-digit' }));
+  setInstanceZone(undefined);
+  assert.equal(instanceZoneReady(), true, 'older metadata without a zone enables the UTC fallback');
+  renderFleetAttention(root, [{ kind: 'rate_limited', runtime: 'codex', until }],
+    (key, values) => JSON.stringify({ key, ...values }));
+  const fallback = JSON.parse(root.children[0].children[0].textContent);
+  assert.equal(fallback.key, 'wb.attention.rate_limited');
+  assert.equal(fallback.time, formatZoned(until * 1000, undefined, { hour: '2-digit', minute: '2-digit' }, 'UTC'));
   assert.equal(unknown.key, 'wb.attention.rate_limited_unknown');
   assert.equal(unknown.time, '');
   renderFleetAttention(root, []);

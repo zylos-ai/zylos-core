@@ -238,6 +238,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
     const fields = element(document, 'div', undefined, 'wb-model-fields');
     const model = element(document, 'select', undefined, 'wb-input wb-select'); model.id = 'settings-model-' + runtime; model.setAttribute('aria-label', t('actions.model'));
     const custom = element(document, 'input'); custom.id = 'settings-model-custom-' + runtime; custom.placeholder = t('actions.model_placeholder'); custom.className = 'wb-input';
+    const effortField = element(document, 'label', undefined, 'wb-model-field');
     const effort = element(document, 'select', undefined, 'wb-input wb-select'); effort.id = 'settings-effort-' + runtime; effort.setAttribute('aria-label', t('actions.effort'));
     const threshold = element(document, 'input', undefined, 'wb-input wb-input-num'); threshold.id = 'settings-threshold-' + runtime;
     threshold.type = 'number'; threshold.min = '10'; threshold.step = '1'; threshold.setAttribute('aria-label', t('actions.threshold'));
@@ -252,7 +253,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
       const state = effortOptionState(meta, modelValue(), drafts[runtime].effort || meta.current_effort, value => effortText(value, t));
       effort.replaceChildren();
       for (const item of state.options) { const option = element(document, 'option', item.labelKey ? t(item.labelKey, item.labelParams) : effortText(item.value, t)); option.value = item.value; option.disabled = item.disabled; option.selected = item.selected; effort.append(option); }
-      effort.hidden = state.hidden;
+      effortField.hidden = state.hidden;
       const selected = state.options.find(item => item.selected);
       effort.value = selected?.value ?? '';
       drafts[runtime].effort = selected && !selected.disabled ? selected.value : '';
@@ -291,7 +292,8 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
     renderEffort(); drafts[runtime].effort = meta.current_effort ?? drafts[runtime].effort;
     const field = (label, ...children) => { const box = element(document, 'label', undefined, 'wb-model-field'); box.append(element(document, 'span', label, 'wb-fld-l'), ...children); return box; };
     const thresholdBox = element(document, 'span', undefined, 'wb-set-inline'); thresholdBox.append(threshold, element(document, 'span', '%'));
-    fields.append(field(t('actions.model'), wrapSelect(document, model), custom), field(t('actions.effort'), wrapSelect(document, effort)), field(t('actions.threshold'), thresholdBox), dirty);
+    effortField.append(element(document, 'span', t('actions.effort'), 'wb-fld-l'), wrapSelect(document, effort));
+    fields.append(field(t('actions.model'), wrapSelect(document, model), custom), effortField, field(t('actions.threshold'), thresholdBox), dirty);
     const users = modelFollowers(snapshot, runtime);
     const count = element(document, 'small', users == null ? t('wb.unknown') : users.length ? countLabel(t, 'wb.settings.modelFollowers', users.length) : t('wb.settings.noFollowers'), 'wb-pref-note');
     cell.append(fields, count);

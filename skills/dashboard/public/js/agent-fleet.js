@@ -1,7 +1,7 @@
 import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, quotaRecordedTime } from './wb/instance-strip.js';
 import { counted } from './count-label.js';
 import { recoveryTime } from './wb/cooldown.js';
-import { formatZoned } from './wb/instance-zone.js';
+import { formatZoned, instanceZoneReady } from './wb/instance-zone.js';
 
 import { fallbackName, platformOf } from './wb/plain-text.js';
 
@@ -459,7 +459,7 @@ export function renderFleetAttention(root, items = [], t = key => key) {
     const node = root.ownerDocument.createElement(item.group === undefined ? 'div' : 'button');
     node.className = 'wb-f-attention-item' + (item.kind === 'rate_limited' ? ' wb-txt-warn' : '');
     if (item.group !== undefined) { node.type = 'button'; node.dataset.fleetGroup = item.group; }
-    const at = item.kind === 'rate_limited' ? recoveryTime(item.until) : null;
+    const at = item.kind === 'rate_limited' && instanceZoneReady() ? recoveryTime(item.until) : null;
     const values = { channel: item.channel ?? '', count: item.count ?? item.count30m ?? '',
       service: item.service ?? '', runtime: item.runtime ? item.runtime.charAt(0).toUpperCase() + item.runtime.slice(1) : '',
       time: at === null ? '' : formatZoned(at, undefined, { hour: '2-digit', minute: '2-digit' }),

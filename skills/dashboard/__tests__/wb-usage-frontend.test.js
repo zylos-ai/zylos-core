@@ -541,3 +541,21 @@ test('host changing range, owner, detail level or reopening rebuilds the panel',
     set(); previousBody = f.root.querySelector('.wb-detail-body'); panel.close(); await panel.open(); reset('reopening starts at the top');
   } finally { panel.destroy(); }
 });
+
+
+test('cache rate keeps a single measured bucket visible including zero without filling missing buckets', () => {
+  for (const rate of [0, 0.623]) {
+    const f = fixture();
+    const view = renderUsage(f.root, { ...value, cache: [{ at: value.buckets[0], value: rate }] }, { ...f, level: 'technical' });
+    const dataset = f.configs.find(config => config.type === 'line').data.datasets[0];
+    assert.deepEqual(dataset.data, [rate * 100, null]);
+    assert.equal(dataset.pointRadius, 3); assert.equal(dataset.spanGaps, false);
+    view.destroy();
+  }
+  for (const cache of [[], value.buckets.map(at => ({ at, value: 0.5 }))]) {
+    const f = fixture();
+    const view = renderUsage(f.root, { ...value, cache }, { ...f, level: 'technical' });
+    assert.equal(f.configs.find(config => config.type === 'line').data.datasets[0].pointRadius, 0);
+    view.destroy();
+  }
+});

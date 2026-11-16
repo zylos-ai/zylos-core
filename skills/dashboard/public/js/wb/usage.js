@@ -230,8 +230,9 @@ export function renderUsage(root, value, { document = root.ownerDocument, t = ke
     ], stacked: true });
   if (level === 'technical') {
     const cached = new Map((value.cache ?? []).map(row => [row.at, row.value]));
+    const cacheData = buckets.map(at => cached.get(at) == null ? null : cached.get(at) * 100);
     add({ title: t('wb.usage.cacheRate'), iconName: 'layers', labels, type: 'line',
-      datasets: [{ label: t('wb.usage.cacheRate'), data: buckets.map(at => cached.get(at) == null ? null : cached.get(at) * 100) }],
+      datasets: [{ label: t('wb.usage.cacheRate'), data: cacheData, pointRadius: cacheData.filter(Number.isFinite).length === 1 ? 3 : 0 }],
       yFormat: amount => amount + '%' });
     const tokens = runtimeSeries('tokensByRuntime');
     const tokenChart = add({ title: t('wb.usage.tokens'), iconName: 'layers', labels, datasets: tokens, stacked: true, yFormat: amount => compactCount(amount, t),
