@@ -717,3 +717,35 @@ for (const held of ['list', 'detail']) test(`readiness catchup survives same-con
   assert.equal(f.state.snapshot().messages.find(row => row.id === 2)?.content, 'committed during admission');
   assert.equal(f.timer.now(), 1000);
 });
+
+test('readiness catchup does not follow selection into another conversation', { timeout: 2000 }, async t => {
+  const rows = { items: [{ id: 'g:AA' }, { id: 'g:BB' }], nextCursor: null };
+  let resolve, hold = false, heldOnce = false;
+  const pending = new Promise(done => { resolve = done; });
+  const f = fixture(t, u => {
+    if (u.pathname === '/api/chat/conversations') {
+      if (hold && !heldOnce) { heldOnce = true; return pending; }
+      return rows;
+    }
+    if (u.pathname === '/api/chat/conversations/g%3ABB') return {
+      conversation: { id: 'g:BB', state: 'active' }, conversationId: 'g:BB', stored: true
+    };
+  });
+  t.after(() => resolve(rows));
+  await f.open(); hold = true;
+  await f.event('chat_ready');
+  assert.equal(heldOnce, true, 'ready consumed its hint before the list read was suspended');
+  await f.state.select('g:BB'); await flush();
+  const counts = () => ({
+    list: f.calls.filter(call => call.u.pathname === '/api/chat/conversations').length,
+    detail: f.calls.filter(call => call.u.pathname === '/api/chat/conversations/g%3ABB').length,
+    messages: f.calls.filter(call => call.u.pathname === '/api/chat/conversations/g%3ABB/messages').length
+  });
+  assert.deepEqual(counts(), { list: 2, detail: 1, messages: 1 }, 'the new conversation has only its selection reads');
+  assert.equal(f.state.snapshot().selectedId, 'g:BB');
+  assert.equal(f.state.snapshot().historyLoaded, true);
+  resolve(rows); await flush(); await f.timer.advance(0);
+  assert.deepEqual(counts(), { list: 2, detail: 1, messages: 1 }, 'releasing the old pass must not force another list, detail or history read');
+  assert.equal(f.state.snapshot().selectedId, 'g:BB');
+  assert.equal(f.timer.now(), 1000, 'only immediately scheduled work was drained');
+});
