@@ -87,7 +87,7 @@ import { usageSummary, usagePricing } from './lib/workbench/usage-api.js';
 import { isSameOriginRequest } from './lib/request-origin.js';
 import { usageSeries } from './lib/workbench/usage-series.js';
 import { hostSeries } from './lib/workbench/host-series.js';
-import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText } from '../public/js/wb/auto-name.js';
+import { createNamingRequest } from './lib/workbench/naming-request.js';
 import { createGroupSnapshot } from './lib/workbench/group-snapshot.js';
 import { createScheduleRead, scheduleReadResponse } from './lib/workbench/schedule-read.js';
 import { createScheduleWrite } from './lib/workbench/schedule-write.js';
@@ -363,6 +363,7 @@ function recordDashboardInterrupt(record) {
   recordGroupInterrupt(store, record);
 }
 const groupAction = createGroupActions({ zylosDir: config.zylosDir, config, onInterrupt: recordDashboardInterrupt });
+const sendNamingPrompt = createNamingRequest({ zylosDir: config.zylosDir, readMode: () => loadZylosConfig(config.zylosDir).session_mode });
 
 function runtimeOverrideSearchTerm(q) {
   const term = String(q ?? '').trim();
@@ -1091,13 +1092,9 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
+  // Reserved for the POST that sends the naming prompt to Origin: a read is neither a prompt nor a group detail.
   if (pathname === '/api/groups/naming-prompt') {
-    try {
-      const todo = await displayNames.listNames({ unnamed: true, activeSinceMs: 3 * 86400000 });
-      const script = path.join(config.zylosDir, '.claude', 'skills', 'dashboard', 'scripts', 'group-name.js');
-      sendJson(res, 200, { text: namePromptText(script, NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH),
-        todo: todo.map(row => row.fallbackName) });
-    } catch (error) { workbenchFailure(res, error); }
+    sendJson(res, 405, { error: 'method_not_allowed' });
     return true;
   }
 
@@ -1579,6 +1576,13 @@ export function createServer() {
         sendJson(res, 200, result);
         if (result.ok) scheduleFleetStateBroadcast();
       } catch (error) { workbenchFailure(res, error); }
+      return;
+    }
+
+    // Automatic naming hands its prompt to Origin; the answer is whether C4 queued it, not the naming result.
+    if (pathname === '/api/groups/naming-prompt' && req.method === 'POST') {
+      try { sendJson(res, 200, await sendNamingPrompt()); }
+      catch (error) { workbenchFailure(res, error); }
       return;
     }
 

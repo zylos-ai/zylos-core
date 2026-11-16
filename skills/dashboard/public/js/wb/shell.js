@@ -5,8 +5,9 @@ import { boardController, renderBoard, renderDistribution } from './board.js';
 import { createBoardSearch } from './board-search.js';
 import { instanceStrip, accountRuntimes } from './instance-strip.js';
 import { renderAttention } from './attention-bar.js';
-import { createGroupDetail } from './detail.js';
-import { loadNamePrompt, renderAutoName } from './auto-name.js';
+import { confirmDialog, createGroupDetail } from './detail.js';
+import { namePromptResult, renderNameResult, sendNamePrompt } from './auto-name.js';
+import { fetchJson } from './group-config.js';
 import { createHostPanel } from './host-panel.js';
 import { element, icon } from './plain-text.js';
 import { watchRows } from './label-fit.js';
@@ -240,24 +241,17 @@ export function mountWorkbench({ document = globalThis.document, window = global
     nameRequest = new AbortController();
     const captured = identity(), signal = nameRequest.signal;
     const current = () => !stopped && !signal.aborted && captured === identity();
+    const close = () => { nameDialog.hidden = true; nameDialog.replaceChildren(); };
+    // Ask first: the prompt goes to Origin (the only session in single mode), which does the naming.
+    if (!await confirmDialog(document, { title: t('wb.name.auto'), body: t('wb.name.confirm'),
+      ok: t('wb.name.send'), cancel: t('wb.cancel'), danger: false }) || !current()) return;
     nameDialog.hidden = false;
-    nameDialog.replaceChildren(element(document, 'p', t('wb.name.loading')));
+    renderNameResult(nameDialog, 'sending', { document, t });
+    let value, failure;
     try {
-      const value = await loadNamePrompt({ request: async path => {
-        const response = await fetch(endpoint(path), { signal });
-        if (!response.ok) throw Error('read_failed');
-        return response.json();
-      } });
-      if (!current()) return;
-      renderAutoName(nameDialog, value, { document, t,
-        onClose: () => { nameDialog.hidden = true; nameDialog.replaceChildren(); } });
-    } catch (error) {
-      if (current()) {
-        const close = element(document, 'button', t('wb.close'));
-        close.type = 'button'; close.addEventListener('click', () => { nameDialog.hidden = true; });
-        nameDialog.replaceChildren(element(document, 'p', t('wb.readFailed')), close);
-      }
-    }
+      value = await sendNamePrompt({ request: (path, options) => fetchJson(fetch, endpoint(path), { ...options, signal }) });
+    } catch (error) { failure = error; }
+    if (current()) renderNameResult(nameDialog, namePromptResult(value, failure, t), { document, t, onClose: close });
   };
   nameButton?.addEventListener('click', autoName);
   const controller = boardController({

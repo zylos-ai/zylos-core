@@ -15,7 +15,6 @@ import { createGroupSnapshot } from '../../src/lib/workbench/group-snapshot.js';
 import { workbenchInstanceAnswer } from '../fixtures/workbench-browser-api.js';
 import { createGroupsApi } from '../../src/lib/workbench/groups-api.js';
 import { workbenchGroupDetailKey, workbenchFailure } from '../../src/lib/workbench/group-http.js';
-import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText } from '../../public/js/wb/auto-name.js';
 import { createDisplayNames } from '../../src/lib/workbench/display-names.js';
 import { createQueryHandlers } from '../../../comm-bridge/scripts/c4-v2-cli.js';
 import { ChatConversations, isChatLocalIdUsed } from '../../src/lib/chat/conversations.js';
@@ -165,10 +164,8 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
         sendJson(res, 200, await groupsApi[url.pathname.split('/').at(-1)](url.searchParams)); return;
       }
       if (req.method === 'GET' && url.pathname === '/api/groups/naming-prompt') {
-        const todo = await displayNames.listNames({ unnamed: true, activeSinceMs: 3 * 86400000 });
-        const script = path.join(zylos, '.claude', 'skills', 'dashboard', 'scripts', 'group-name.js');
-        sendJson(res, 200, { text: namePromptText(script, NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH),
-          todo: todo.map(row => row.fallbackName) }); return;
+        // As in the Dashboard: this resource only takes the POST that sends the prompt to Origin.
+        sendJson(res, 405, { error: 'method_not_allowed' }); return;
       }
       if (req.method === 'GET' && url.pathname === '/api/groups/runtime-overrides') {
         // This HTTP-only fixture has no runtime overrides or runtime CLI.

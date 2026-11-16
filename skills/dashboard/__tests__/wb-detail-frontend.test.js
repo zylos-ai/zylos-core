@@ -8,7 +8,7 @@ import { rawKey, renderOverview, detailNumbers, activeSubagents, detailEvidence,
 import { createTimelineLoader, attributeMessages, renderTimeline } from '../public/js/wb/detail-timeline.js';
 import { createGroupConfig as productGroupConfig, fetchJson, runningText, validConfigChange, renderGroupConfig, modelChoices, effortChoices, startingPair } from '../public/js/wb/group-config.js';
 import { saveGroupName, renderNameEditor } from '../public/js/wb/name-edit.js';
-import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText, renderAutoName } from '../public/js/wb/auto-name.js';
+import { namePromptResult, renderNameResult, sendNamePrompt } from '../public/js/wb/auto-name.js';
 import { displayTime, endReasonLabel, eventLabel } from '../public/js/wb/event-labels.js';
 import { eventChip, eventTypesFor, recentWindow } from '../public/js/wb/timeline-rows.js';
 import { setInstanceZone } from '../public/js/wb/instance-zone.js';
@@ -594,19 +594,42 @@ test('name edits use DELETE for blank names and show business or HTTP body error
   assert.match(editor.error.textContent, /NAME_INVALID/); assert.equal(allNodes(root).some(node => node.tagName === 'SCRIPT'), false);
 });
 
-test('auto naming preserves supplied words, substitutes only CLI path and copies without POST', async () => {
-  const path = '/tmp/fixture/.claude/skills/dashboard/scripts/group-name.js';
-  const text = namePromptText(path, NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH);
-  assert.equal(text.replace(path, ORIGINAL_GROUP_NAME_PATH), NAME_PROMPT);
-  assert.equal(namePromptText('/tmp/$&/group-name.js', ORIGINAL_GROUP_NAME_PATH + ' · ' + ORIGINAL_GROUP_NAME_PATH, ORIGINAL_GROUP_NAME_PATH),
-    '/tmp/$&/group-name.js · ' + ORIGINAL_GROUP_NAME_PATH, 'substitute exactly the first CLI path and retain literal replacement characters');
-  assert.match(text, /group-name.js set <组键> "名字"/);
-  const copied = [], document = createDocument(), root = document.createElement('div');
-  const controls = renderAutoName(root, { text, todo: ['<script>'] }, { document, t, clipboard: { writeText: async value => copied.push(value) } });
-  controls.copy.dispatch('click'); await tick();
-  assert.deepEqual(copied, [text]); assert.equal(controls.prompt.readOnly, true);
-  assert.equal(controls.prompt.value, text); assert.equal(controls.todo.textContent, '<script>');
+test('automatic naming posts once and says sent only for a queued prompt', async () => {
+  const requests = [];
+  const value = await sendNamePrompt({ request: async (path, options) => { requests.push({ path, options }); return { ok: true, controlId: 41 }; } });
+  assert.deepEqual(requests, [{ path: '/api/groups/naming-prompt',
+    options: { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' } }]);
+  assert.deepEqual(namePromptResult(value, undefined, t), { ok: true, text: 'wb.name.sent' });
+  // C4 refused it: the reason is shown, never "sent".
+  assert.deepEqual(namePromptResult({ ok: false, error: { code: 'CONTROL_TARGET_REQUIRED', message: 'during transition' } }, undefined, t),
+    { ok: false, text: 'wb.name.failed {"reason":"CONTROL_TARGET_REQUIRED · during transition"}' });
+  // The Dashboard refused the request (for example a read-only key).
+  const denied = Object.assign(new Error('insufficient_scope'), { body: { error: 'insufficient_scope', required: 'admin' }, status: 403 });
+  assert.deepEqual(namePromptResult(undefined, denied, t), { ok: false, text: 'wb.name.failed {"reason":"insufficient_scope"}' });
+  // Nobody can say whether it was queued: neither sent nor a plain failure.
+  assert.deepEqual(namePromptResult({ ok: false, unknown: true, error: { code: 'RESULT_UNKNOWN', message: 'timed out' } }, undefined, t),
+    { ok: false, text: 'wb.name.unknown {"reason":"RESULT_UNKNOWN · timed out"}' });
+  assert.deepEqual(namePromptResult(undefined, new Error('Failed to fetch'), t), { ok: false, text: 'wb.name.unknown {"reason":"Failed to fetch"}' });
+});
+
+test('automatic naming result dialog shows sending, then the outcome as plain text with a close button', () => {
+  const document = createDocument(), root = document.createElement('div');
+  const sending = renderNameResult(root, 'sending', { document, t });
+  assert.equal(sending.message.textContent, 'wb.name.sending');
+  assert.equal(sending.message.getAttribute('role'), 'status');
+  assert.equal(sending.close, null, 'nothing to close while the request runs');
+  let closed = 0;
+  const sent = renderNameResult(root, { ok: true, text: 'wb.name.sent' }, { document, t, onClose: () => closed++ });
+  assert.equal(sent.message.textContent, 'wb.name.sent');
+  assert.equal(sent.message.getAttribute('role'), 'status');
+  assert.equal(sent.close.focused, true);
+  sent.close.dispatch('click'); assert.equal(closed, 1);
+  const failed = renderNameResult(root, { ok: false, text: '<script>' }, { document, t });
+  assert.equal(failed.message.getAttribute('role'), 'alert');
+  assert.match(failed.message.className, /wb-name-failed/);
+  assert.equal(failed.message.textContent, '<script>');
   assert.equal(allNodes(root).some(node => node.tagName === 'SCRIPT'), false);
+  assert.equal(allNodes(root).some(node => ['TEXTAREA', 'UL'].includes(node.tagName)), false, 'no prompt text or group list is shown');
 });
 
 test('snapshot-driven detail refresh skips hidden pages, retains data on failure and recovers without a timer', async () => {

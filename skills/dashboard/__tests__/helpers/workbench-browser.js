@@ -18,6 +18,8 @@ const MEMORY_SHARE = 0.81;
 // (fixtures/workbench-browser-api.js). Dashboard actions are recorded and answered as done; nothing runs.
 export async function startPage(sandbox) {
   const actions = [], unserved = new Set(), reads = new Map();
+  // Automatic naming's answer; a case sets it before confirming.
+  const naming = { answer: { ok: true, controlId: 41, sessionGroup: 'origin' } };
   let offlineHold = null;
   const now = Date.now();
   const server = http.createServer(async (req, res) => {
@@ -32,6 +34,10 @@ export async function startPage(sandbox) {
           sendJson(res, 200, { ok: true });
         });
         return;
+      }
+      if (url.pathname === '/api/groups/naming-prompt' && req.method === 'POST') {
+        actions.push({ action: 'naming-prompt', body: null });
+        sendJson(res, 200, naming.answer); return;
       }
       if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
       if (url.pathname.startsWith('/api/')) {
@@ -50,7 +56,7 @@ export async function startPage(sandbox) {
     } catch (error) { sendJson(res, 500, { error: error.message }); }
   });
   const base = await sandbox.startHttp(server);
-  return { base, actions, unserved, reads, holdOffline() {
+  return { base, actions, unserved, reads, naming, holdOffline() {
     let release, started; const promise = new Promise(resolve => { release = resolve; });
     const waiting = new Promise(resolve => { started = resolve; });
     offlineHold = { promise, started };
@@ -114,7 +120,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
   const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
   if (evidence) fs.mkdirSync(evidence, { recursive: true });
   console.log('Workbench browser isolation:', JSON.stringify(sandbox.assertIsolation()));
-  const { base, actions, unserved, reads } = await startPage(sandbox);
+  const { base, actions, unserved, reads, naming } = await startPage(sandbox);
   const { chromium } = await import(pathToFileURL(modulePath));
   const browser = await chromium.launch({ executablePath, headless: true, env: sandbox.env,
     args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
@@ -253,6 +259,64 @@ export async function runWorkbenchBrowser(t, sandbox) {
   await step('asking before upgrading the CLI or switching the session mode, on a phone and a desktop screen', async () => {
     await settings(390, 844);
     await settings(1280, 800);
+  });
+
+  // Automatic naming: the in-page question first; cancelling sends nothing, confirming sends one request, and the
+  // answer says sent only when the prompt was queued for Origin, otherwise why not. The dialog fits the screen.
+  await step('automatic naming asks first, then says sent or why not, on a phone and a desktop screen', async () => {
+    const sent = () => actions.filter(item => item.action === 'naming-prompt').length;
+    for (const [width, height] of [[390, 844], [1280, 800]]) {
+      const { page, context, errors, shot } = await open(width, height, '/');
+      const button = page.locator('#wb-auto-name'), question = page.locator('.wb-modal[role="alertdialog"]');
+      const result = page.locator('#wb-auto-name-dialog');
+      const fits = async (locator, name) => {
+        const box = await locator.boundingBox();
+        assert.ok(box && box.x >= 16 - 0.5 && box.x + box.width <= width - 16 + 0.5 && box.y >= 0 && box.y + box.height <= height,
+          `${width} ${name}: the dialog sits inside the screen with its side margins (${JSON.stringify(box)})`);
+        if (width < 761) {
+          const layout = await page.evaluate(measure);
+          assert.deepEqual(layout.small, [], `${width} ${name}: no control under 36px`);
+          assert.equal(layout.documentWidth, width, `${width} ${name}: no sideways scrolling`);
+        }
+      };
+      await button.waitFor({ state: 'visible' });
+      const before = sent();
+      await button.click();
+      await question.waitFor();
+      assert.match(await question.textContent(), /发给 Origin/);
+      await fits(question, 'question');
+      await shot('auto-name-confirm');
+      await question.locator('.wb-modal-acts button').first().click();
+      await question.waitFor({ state: 'detached' });
+      await page.waitForTimeout(300);
+      assert.equal(sent(), before, `${width}: cancelling sends nothing`);
+      assert.equal(await result.isHidden(), true, `${width}: cancelling opens nothing`);
+
+      naming.answer = { ok: true, controlId: 41, sessionGroup: 'origin' };
+      await button.click();
+      await question.locator('.wb-modal-acts button').last().click();
+      await result.locator('[role="status"]', { hasText: '已发送给 Origin' }).waitFor();
+      assert.equal(sent(), before + 1, `${width}: confirming sends one request`);
+      await fits(result, 'sent');
+      await shot('auto-name-sent');
+      await result.locator('button').click();
+      await result.waitFor({ state: 'hidden' });
+
+      naming.answer = { ok: false, sessionGroup: 'origin', error: { code: 'CONTROL_TARGET_REQUIRED', message: 'A control target is required in multi or during transition' } };
+      await button.click();
+      await question.locator('.wb-modal-acts button').last().click();
+      const failure = result.locator('[role="alert"]');
+      await failure.waitFor();
+      assert.match(await failure.textContent(), /^发送失败：CONTROL_TARGET_REQUIRED/);
+      assert.doesNotMatch(await result.textContent(), /已发送/);
+      assert.equal(sent(), before + 2);
+      await fits(result, 'failed');
+      await shot('auto-name-failed');
+      await page.keyboard.press('Escape');
+      await result.waitFor({ state: 'hidden' });
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
   });
 
   await step('phone pages: 36px controls, no sideways scrolling, two-row detail header, memory list and file screens, schedule numbers 3+3', async () => {
