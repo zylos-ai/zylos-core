@@ -5,7 +5,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sendHtml, sendJson, serveStatic } from '../../src/lib/http.js';
-import { GROUP as SAMPLE_GROUP, workbenchAnswer } from '../fixtures/workbench-browser-api.js';
+import { GROUP as SAMPLE_GROUP, workbenchAnswer, workbenchSnapshot, workbenchSnapshotAnswer } from '../fixtures/workbench-browser-api.js';
 
 const currentPublic = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
 const GROUP = 'dashboard:mobile-browser', EXTERNAL = 'telegram:mobile-browser';
@@ -39,24 +39,29 @@ export async function startPage(sandbox, publicDir = currentPublic) {
       if (p.endsWith('/status') || p.endsWith('/questions')) return { items: [], nextCursor: null };
       return { conversation: conversation(id) };
     }
-    if (p === '/api/session-mode') return { ok: true, data: { sessionMode, transition: null } };
     if (p === '/api/settings/timezone') return { tz: 'UTC', writable: true, restart_status: 'known', restart_services: [] };
     if (p === '/api/observer/status' && observerBlocked) return { state: 'not_installed', startupError: 'teardown_failed' };
-    if (p === '/api/state') return { state: 'IDLE', agent: { name: 'luna' }, session_mode: 'multi', runtime_info: { runtime: 'claude', zylos_version: '1.0.0-beta.7' } };
+    if (p === '/api/instance') {
+      const value = workbenchAnswer(url, NOW);
+      return { ...value, agent: { name: 'luna' }, session_mode: { ...value.session_mode, sessionMode },
+        versions: { ...value.versions, zylos: { ...value.versions.zylos, installed: '1.0.0-beta.7' } } };
+    }
     if (p === '/api/fleet') return { agents: [{ name: 'luna', self: true, access: 'admin' }], updated_at: iso(0) };
     if (p === '/api/fleet/agents') return { self: { name: 'luna' }, agents: [] };
-    if (p === '/api/workbench/groups') {
-      const value = workbenchAnswer(url, NOW), row = value.rows.find(item => item.sessionGroup === SAMPLE_GROUP);
-      row.sessionGroup = GROUP; row.name = { displayName: title }; row.state = { kind: 'idle' }; row.tools = [];
+    if (p.startsWith('/api/groups/') && p.endsWith('/runs')) return { runs: [{ runId: 'run-tg', startAt: iso(-20 * 60000), endAt: iso(-30000), n: 2, endReason: 'running' }], totalRuns: 1, totalEvents: 2, unattributed: 0 };
+    if (p.startsWith('/api/groups/') && p.endsWith('/messages')) return { messages: [] };
+    if (p === '/api/groups/running' || p === '/api/groups/counts' || /^\/api\/groups\/[^/]+$/.test(p) && !['offline', 'search', 'activity', 'runtime-overrides', 'naming-prompt'].includes(p.split('/').at(-1))) {
+      const value = workbenchSnapshot(NOW), row = value.rows.find(item => item.sessionGroup === SAMPLE_GROUP);
+      value.mode = sessionMode;
+      row.sessionGroup = GROUP; row.name = { displayName: title }; row.state = { kind: scene === 'running' ? 'working' : 'idle' }; row.tools = []; row.flags = {};
       row.queue = { known: true, pending: { count: 0 }, running: { count: 0 }, fence: null };
       row.working = { on: scene === 'running', since: scene === 'running' ? NOW - 3 * 60000 : null, main: scene === 'running' ? { since: NOW - 3 * 60000 } : null, tools: 0, subagents: null };
-      value.rows = [row, { ...row, sessionGroup: 'origin', origin: true, name: null, working: { on: false, since: null, main: null, tools: 0, subagents: null } }];
-      value.instance.runtimeHealth = { claude: { health: 'ok' } };
-      value.counts = { busy: 0, idle: 2, waiting: 0, unknown: 0, error: 0, not_running: 0 };
-      return value;
+      value.rows = [row, { ...row, sessionGroup: 'origin', origin: true, name: null, state: { kind: 'idle' }, working: { on: false, since: null, main: null, tools: 0, subagents: null } }];
+      const result = workbenchSnapshotAnswer(url, value, NOW);
+      if (result?.id) result.config = workbenchAnswer(new URL('http://fixture/api/groups/' + encodeURIComponent(SAMPLE_GROUP)), NOW).config;
+      return result;
     }
-    if (p.startsWith('/api/workbench/groups/') && p.endsWith('/runs')) return { runs: [{ runId: 'run-tg', startAt: iso(-20 * 60000), endAt: iso(-30000), n: 2, endReason: 'running' }], totalRuns: 1, totalEvents: 2, unattributed: 0 };
-    if (p.startsWith('/api/workbench/groups/') && p.endsWith('/messages')) return { messages: [] };
+    if (p.endsWith('/events')) return { events: [] };
     return workbenchAnswer(url, NOW);
   };
   const server = http.createServer(async (req, res) => {
@@ -237,7 +242,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
         fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8').replaceAll('__BASE_PATH__', prefix)
           .replaceAll('__ASSET_ROOT__', prefix + '/_assets').replaceAll('__REMOTE_ACCESS__', 'admin') });
       const target = fixture.base + url.pathname.slice(prefix.length) + url.search;
-      if (url.pathname === prefix + '/api/state') {
+      if (url.pathname === prefix + '/api/instance') {
         remoteState.reads++;
         const response = await route.fetch({ url: target });
         return route.fulfill({ json: { ...await response.json(), chat_allow_remote: remoteState.allow } });
@@ -284,7 +289,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
       await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
       await page.locator('[data-mobile-tab="chat"]').waitFor({ state: 'hidden' });
       await checkColumns(4);
-      const polledState = page.waitForResponse(response => new URL(response.url()).pathname === '/fleet/phone/api/state');
+      const polledState = page.waitForResponse(response => new URL(response.url()).pathname === '/fleet/phone/api/instance');
       const readsBeforePoll = f.remoteState.reads;
       await page.clock.runFor(30_000);
       await polledState;

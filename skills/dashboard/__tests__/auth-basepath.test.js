@@ -12,10 +12,30 @@ import { migrateDashboardFile } from './helpers/explicit-migration.js';
 import { migrateSchema13 } from './fixtures/schema13.js';
 import { installMemoryScripts, memoryTestEnv, memoryTempRoot } from './fixtures/memory-installation.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
+import { objectResponse, isObjectApi } from './fixtures/fleet-object-api.js';
+import { createGroupSnapshot, systemSample } from '../src/lib/workbench/group-snapshot.js';
 import { CoreState } from '../src/lib/core-state.js';
 
 // HTTP/auth fixtures exercise actual product routing, not remote version hosts.
+assert.notEqual(process.env.HOME, os.userInfo().homedir, 'Run through the isolated Node test runner');
+process.env.TMUX_TMPDIR = path.join(os.tmpdir(), 'auth-tmux');
+fs.mkdirSync(process.env.TMUX_TMPDIR, { recursive: true });
 mock.method(VersionChecker.prototype, 'start', () => {});
+// These fixtures verify HTTP/auth and fleet behavior. The object APIs now need
+// a group catalog even for an empty instance; inject source observations while
+// retaining the real snapshot builder, projection and private Store.
+let buildAuthSnapshot = options => createGroupSnapshot({ ...options,
+    cli: { runC4Db: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
+      readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) },
+    loadCoreModule: async name => {
+      if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
+      if (name === 'session-state-reader.js') return { readAccountUsageSnapshot: async () => ({ live: null, recorded: null }) };
+      if (name === 'status-view.js') return { collectStatus: async () => ({ view: 'single', origin: { presence: 'not_running' }, groupListError: null, runtimeHealth: {} }) };
+      return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
+    } });
+mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
+  systemSample, createGroupSnapshot: options => buildAuthSnapshot(options),
+} });
 
 function writeConfig(zylosDir, password = 'secret', extra = {}) {
   const configDir = path.join(zylosDir, 'components', 'dashboard');
@@ -32,8 +52,12 @@ function writeConfig(zylosDir, password = 'secret', extra = {}) {
 async function makeServerWithDir(zylosDir) {
   const previousZylosDir = process.env.ZYLOS_DIR;
   const previousPort = process.env.DASHBOARD_PORT;
+  const previousTmux = process.env.TMUX_TMPDIR;
   process.env.ZYLOS_DIR = zylosDir;
   process.env.DASHBOARD_PORT = '0';
+  const privateTmux = path.join(zylosDir, 'tmux'); fs.mkdirSync(privateTmux, { recursive: true });
+  process.env.TMUX_TMPDIR = privateTmux;
+  console.log('Auth HTTP isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: zylosDir, PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, TMUX_TMPDIR: privateTmux, db: path.join(zylosDir, 'components/dashboard/dashboard.db') }));
 
   const moduleUrl = new URL(`../src/index.js?test=${Date.now()}-${Math.random()}`, import.meta.url);
   const { createServer } = await import(moduleUrl.href);
@@ -42,6 +66,7 @@ async function makeServerWithDir(zylosDir) {
   process.env.DASHBOARD_PORT = previousPort;
   if (previousZylosDir == null) delete process.env.ZYLOS_DIR;
   if (previousPort == null) delete process.env.DASHBOARD_PORT;
+  if (previousTmux == null) delete process.env.TMUX_TMPDIR; else process.env.TMUX_TMPDIR = previousTmux;
 
   const server = createServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -60,6 +85,7 @@ async function makeServer() {
 }
 
 async function closeServer(server) {
+  server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
 }
 
@@ -117,7 +143,7 @@ for (const auth of [undefined, { enabled: true }, { enabled: true, password: nul
     const running = await makeServerWithDir(root);
     server = running.server;
     const { origin } = running;
-    for (const route of ['/api/workbench/usage', '/api/chat/conversations', '/api/state', '/api/stream', '/observer/frame']) {
+    for (const route of ['/api/usage/series', '/api/chat/conversations', '/api/instance', '/api/stream', '/observer/frame']) {
       const response = await fetch(origin + route, { headers: { 'X-Forwarded-Prefix': '/dashboard' } });
       assert.equal(response.status, 401, route);
       await response.text();
@@ -333,7 +359,7 @@ test('logout succeeds without origin checks and respects forwarded prefix', asyn
     assert.equal(mismatched.status, 302);
     assert.equal(mismatched.headers.get('location'), '/dashboard/login');
     assert.equal(mismatched.headers.get('set-cookie'), clearCookie);
-    const revoked = await fetch(`${origin}/api/state`, { headers: { Cookie: cookie }, redirect: 'manual' });
+    const revoked = await fetch(`${origin}/api/instance`, { headers: { Cookie: cookie }, redirect: 'manual' });
     assert.notEqual(revoked.status, 200);
 
     const noHeaders = await logout({ Cookie: await loginCookie() });
@@ -399,13 +425,13 @@ test('legacy __Host- session cookie is revoked and cleared on any request', asyn
     const token = session.split(';')[0].split('=').slice(1).join('=');
 
     // A session presented under the legacy name is not accepted, and is revoked.
-    const legacy = await fetch(`${origin}/api/state`, {
+    const legacy = await fetch(`${origin}/api/instance`, {
       headers: { Cookie: `__Host-zylos_dashboard_session=${token}` }
     });
     assert.equal(legacy.status, 401);
     assert.deepEqual(legacy.headers.getSetCookie(), [legacyClear]);
 
-    const revoked = await fetch(`${origin}/api/state`, {
+    const revoked = await fetch(`${origin}/api/instance`, {
       headers: { Cookie: `__Secure-zylos_dashboard_session=${token}` }
     });
     assert.equal(revoked.status, 401);
@@ -426,7 +452,7 @@ test('legacy __Host- session cookie is revoked and cleared on any request', asyn
     assert.equal(cookies[0], legacyClear);
     const renewedSession = loginCookies(relogin, { base: '/dashboard', legacy: true });
 
-    const fresh = await fetch(`${origin}/api/state`, {
+    const fresh = await fetch(`${origin}/api/instance`, {
       headers: { Cookie: `__Host-zylos_dashboard_session=stale; ${renewedSession.split(';')[0]}` }
     });
     assert.equal(fresh.status, 200);
@@ -471,7 +497,7 @@ test('session cookie survives server restart (SQLite persistence)', async () => 
     cookie = login.headers.get('set-cookie');
     assert.ok(cookie);
 
-    const api1 = await fetch(`${origin1}/api/state`, { headers: { Cookie: cookie } });
+    const api1 = await fetch(`${origin1}/api/instance`, { headers: { Cookie: cookie } });
     assert.equal(api1.status, 200);
   } finally {
     await closeServer(server1);
@@ -479,17 +505,17 @@ test('session cookie survives server restart (SQLite persistence)', async () => 
 
   const { origin: origin2, server: server2 } = await makeServerWithDir(zylosDir);
   try {
-    const api2 = await fetch(`${origin2}/api/state`, { headers: { Cookie: cookie } });
+    const api2 = await fetch(`${origin2}/api/instance`, { headers: { Cookie: cookie } });
     assert.equal(api2.status, 200, 'session should survive restart');
 
-    const unauthed = await fetch(`${origin2}/api/state`);
+    const unauthed = await fetch(`${origin2}/api/instance`);
     assert.equal(unauthed.status, 401, 'request without cookie should be rejected');
   } finally {
     await closeServer(server2);
   }
 });
 
-test('/api/state exposes stable agent identity without fleet secrets', async () => {
+test('/api/instance exposes stable agent identity without fleet secrets', async () => {
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
   const legacyMarker = path.join(zylosDir, 'components', 'dashboard', 'upgrade-zylos-pending.json');
   writeConfig(zylosDir, 'secret', {
@@ -509,7 +535,7 @@ test('/api/state exposes stable agent identity without fleet secrets', async () 
 
   const { origin, server } = await makeServerWithDir(zylosDir);
   try {
-    const resp = await fetch(`${origin}/api/state`);
+    const resp = await fetch(`${origin}/api/instance`);
     assert.equal(resp.status, 200);
     const body = await resp.json();
     assert.equal(body.agent.name, 'Jinglever');
@@ -517,21 +543,23 @@ test('/api/state exposes stable agent identity without fleet secrets', async () 
     // Identity also carries the deterministic identity color/hue.
     assert.equal(typeof body.agent.color, 'string');
     assert.equal(typeof body.agent.hue, 'number');
-    assert.equal(body.new_session_threshold, null, 'without a running session the threshold is unknown');
-    assert.ok(body.runtime_info && typeof body.runtime_info === 'object');
-    assert.ok(body.system_metrics && typeof body.system_metrics === 'object');
-    assert.ok(Object.hasOwn(body.system_metrics, 'cpu_pct'));
-    assert.ok(Object.hasOwn(body.system_metrics, 'mem_pct'));
-    assert.ok(Object.hasOwn(body.system_metrics, 'disk_pct'));
-    assert.ok(Object.hasOwn(body, 'session_cost'));
-    assert.ok(Object.hasOwn(body, 'daily_cost'));
-    assert.ok(Object.hasOwn(body, 'weekly_cost'));
-    assert.ok(Object.hasOwn(body, 'context_pct'));
+    assert.equal(Object.hasOwn(body, 'new_session_threshold'), false, 'per-session threshold belongs to the group');
+    assert.equal(Object.hasOwn(body, 'runtime_info'), false);
+    assert.deepEqual(Object.keys(body.versions).sort(), ['claude', 'codex', 'zylos']);
+    for (const version of Object.values(body.versions)) assert.deepEqual(Object.keys(version).sort(), ['installed', 'latest', 'update']);
+    assert.ok(body.resources && typeof body.resources === 'object');
+    assert.ok(Object.hasOwn(body.resources, 'cpu_pct'));
+    assert.ok(Object.hasOwn(body.resources, 'mem_pct'));
+    assert.ok(Object.hasOwn(body.resources, 'disk_pct'));
+    assert.equal(Object.hasOwn(body, 'session_cost'), false);
+    assert.equal(Object.hasOwn(body, 'daily_cost'), false);
+    assert.equal(Object.hasOwn(body, 'weekly_cost'), false);
+    assert.equal(Object.hasOwn(body, 'context_pct'), false);
     for (const rawField of ['identity', 'status', 'usage', 'launchConfig', 'input']) {
       assert.equal(JSON.stringify(body).includes(`"${rawField}"`), false);
     }
-    assert.equal(Object.hasOwn(body.runtime_info, 'zylos_upgrade_result'), false);
-    assert.equal(Object.hasOwn(body, 'dashboard_version'), false, 'Dashboard has no version of its own; pages show runtime_info.zylos_version');
+    assert.equal(JSON.stringify(body).includes('zylos_upgrade_result'), false);
+    assert.equal(Object.hasOwn(body, 'dashboard_version'), false, 'Dashboard has no version of its own; pages show versions.zylos.installed');
     assert.equal(fs.existsSync(legacyMarker), true, 'Dashboard must not consume the legacy upgrade marker');
     assert.equal(JSON.stringify(body).includes('zylos_ak_secret'), false);
     assert.equal(JSON.stringify(body).includes('read_api_key'), false);
@@ -568,7 +596,7 @@ test('/api/fleet self record includes cost tiers from DB (#174)', async () => {
   }
 });
 
-test('/api/stream accepts Bearer API session and emits initial fleet_state', async () => {
+test('/api/stream accepts Bearer API session and emits initial instance', { timeout: 15000 }, async t => {
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
   writeConfig(zylosDir, 'secret', {
     auth: { enabled: true, password: 'secret' },
@@ -593,27 +621,28 @@ test('/api/stream accepts Bearer API session and emits initial fleet_state', asy
     const controller = new AbortController();
     const streamResp = await fetch(`${origin}/api/stream`, {
       headers: { Authorization: `Bearer ${token}` },
-      signal: controller.signal
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(3000), t.signal])
     });
     assert.equal(streamResp.status, 200);
     const reader = streamResp.body.getReader();
     const decoder = new TextDecoder();
     let body = '';
-    while (!body.includes('event: fleet_state')) {
+    for (let frame = 0; frame < 8 && !body.includes('event: instance'); frame++) {
       const { value, done } = await reader.read();
       if (done) break;
       body += decoder.decode(value, { stream: true });
+      assert.ok(body.length < 65536);
     }
     controller.abort();
     try { reader.releaseLock(); } catch { /* already released */ }
-    assert.match(body, /event: fleet_state/);
+    assert.match(body, /event: instance/);
     const dataLine = body.split('\n').find(line => line.startsWith('data: '));
-    assert.ok(dataLine, 'fleet_state should include a data line');
+    assert.ok(dataLine, 'instance should include a data line');
     const payload = JSON.parse(dataLine.slice('data: '.length));
     assert.equal(payload.agent.name, 'Jinglever');
-    assert.ok(Object.hasOwn(payload, 'context_pct'));
-    assert.ok(Object.hasOwn(payload, 'session_cost'));
-    assert.ok(Object.hasOwn(payload, 'system_metrics'));
+    assert.equal(Object.hasOwn(payload, 'context_pct'), false);
+    assert.equal(Object.hasOwn(payload, 'session_cost'), false);
+    assert.ok(Object.hasOwn(payload, 'resources'));
     assert.equal(body.includes(apiKey), false);
     assert.equal(body.includes(token), false);
   } finally {
@@ -780,7 +809,7 @@ test('proxied interrupt and chop-chop writes require consumer admin API scope or
       }));
       return;
     }
-    if (req.url === '/api/actions/interrupt' || req.url === '/api/actions/chop-chop') {
+    if (req.url === '/api/groups/origin/actions/interrupt' || req.url === '/api/groups/origin/actions/chop-chop') {
       actionHits += 1;
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
@@ -826,7 +855,7 @@ test('proxied interrupt and chop-chop writes require consumer admin API scope or
     const { token: readToken } = await readTokenResp.json();
     const { token: adminToken } = await adminTokenResp.json();
 
-    const readWrite = await fetch(`${origin}/fleet/Remote/api/actions/interrupt`, {
+    const readWrite = await fetch(`${origin}/fleet/Remote/api/groups/origin/actions/interrupt`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${readToken}`,
@@ -838,7 +867,7 @@ test('proxied interrupt and chop-chop writes require consumer admin API scope or
     assert.deepEqual(await readWrite.json(), { error: 'insufficient_scope', required: 'admin' });
     assert.equal(actionHits, 0);
 
-    const adminWrite = await fetch(`${origin}/fleet/Remote/api/actions/interrupt`, {
+    const adminWrite = await fetch(`${origin}/fleet/Remote/api/groups/origin/actions/interrupt`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${adminToken}`,
@@ -849,12 +878,12 @@ test('proxied interrupt and chop-chop writes require consumer admin API scope or
     assert.equal(adminWrite.status, 200);
     assert.equal(actionHits, 1);
 
-    const deniedChop = await fetch(`${origin}/fleet/Remote/api/actions/chop-chop`, {
+    const deniedChop = await fetch(`${origin}/fleet/Remote/api/groups/origin/actions/chop-chop`, {
       method: 'POST', headers: { Authorization: `Bearer ${readToken}`, 'Content-Type': 'application/json' }, body: '{}'
     });
     assert.equal(deniedChop.status, 403);
     assert.equal(actionHits, 1);
-    const allowedChop = await fetch(`${origin}/fleet/Remote/api/actions/chop-chop`, {
+    const allowedChop = await fetch(`${origin}/fleet/Remote/api/groups/origin/actions/chop-chop`, {
       method: 'POST', headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' }, body: '{}'
     });
     assert.equal(allowedChop.status, 200);
@@ -892,10 +921,10 @@ test('proxied interrupt and chop-chop writes require consumer admin API scope or
       redirect: 'manual'
     });
     const cookie = login.headers.get('set-cookie');
-    const browserWrite = await fetch(`${origin}/fleet/Remote/api/actions/interrupt`, {
+    const browserWrite = await fetch(`${origin}/fleet/Remote/api/groups/origin/actions/interrupt`, {
       method: 'POST',
       headers: {
-        Cookie: cookie,
+        Cookie: cookie, Origin: origin,
         'Content-Type': 'application/json'
       },
       body: '{}'
@@ -906,7 +935,7 @@ test('proxied interrupt and chop-chop writes require consumer admin API scope or
     const browserMemoryWrite = await fetch(`${origin}/fleet/Remote/api/memory/file?path=identity.md`, {
       method: 'PUT',
       headers: {
-        Cookie: cookie,
+        Cookie: cookie, Origin: origin,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({ text: '# Browser write\n', sha256: 'a'.repeat(64) })
@@ -1036,7 +1065,7 @@ test('API key management is admin-gated, show-once, and revoke invalidates activ
     });
     assert.equal(revokedExchange.status, 401);
 
-    const staleSessionUse = await fetch(`${origin}/api/state`, {
+    const staleSessionUse = await fetch(`${origin}/api/instance`, {
       headers: { Authorization: `Bearer ${createdToken}` }
     });
     assert.equal(staleSessionUse.status, 401, 'revoking a key should immediately invalidate existing session tokens');
@@ -1304,7 +1333,7 @@ test('API key lifecycle supports name reuse, rotate, permanent delete, and revok
       headers: { Authorization: `Bearer ${recreated.plaintext_key}` }
     });
     assert.equal(oldKeyResp.status, 401);
-    const staleSession = await fetch(`${origin}/api/state`, {
+    const staleSession = await fetch(`${origin}/api/instance`, {
       headers: { Authorization: `Bearer ${activeSessionBeforeRotate}` }
     });
     assert.equal(staleSession.status, 401);
@@ -1455,7 +1484,9 @@ test('/api/fleet exposes safe records without registry secrets', async () => {
 });
 
 test('fleet management API is admin-gated, masks keys, persists atomically, and hot-applies config', async () => {
-  const remote = await listen((req, res) => {
+  const remoteRequests = [];
+  const remote = await listen(async (req, res) => {
+    remoteRequests.push(req.url);
     if (req.url === '/api/auth/token') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({
@@ -1465,18 +1496,17 @@ test('fleet management API is admin-gated, masks keys, persists atomically, and 
       }));
       return;
     }
-    if (req.url === '/api/state') {
+    if (isObjectApi(req.url)) {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({
-        state: 'BUSY',
-        active_subagents: [{ last_activity: 'masked zylos_ak_...abcd in activity text' }],
-        runtime_info: { zylos_version: '0.3.0' }
-      }));
+      res.end(await objectResponse(req.url, { working: 1,
+        instance: { agent: { name: 'masked zylos_ak_...abcd in identity text' }, versions: { zylos: { installed: '0.3.0', latest: '0.4.0', update: '0.4.0' } } },
+        rows: [{ id: 'origin', displayName: 'Origin', runtime: 'claude', model: null, state: { kind: 'working' }, flags: { blocked: { reason: 'auth_failed' } } }],
+      }).text());
       return;
     }
     if (req.url === '/api/stream') {
       res.writeHead(200, { 'content-type': 'text/event-stream' });
-      res.end('event: fleet_state\ndata: {"state":"IDLE"}\n\n');
+      res.end('event: instance\ndata: {"state":"IDLE"}\n\n');
       return;
     }
     res.writeHead(404, { 'content-type': 'application/json' });
@@ -1583,15 +1613,16 @@ test('fleet management API is admin-gated, masks keys, persists atomically, and 
       });
       assert.equal(fleet.status, 200);
       fleetBody = await fleet.json();
-      if (fleetBody.agents.find(a => a.name === 'Remote')?.activity === 'masked [redacted] in activity text') break;
+      if (fleetBody.agents.find(a => a.name === 'Remote')?.health_reason === 'ok') break;
       await sleep(25);
     }
     assert.equal(fleetBody.agents.some(a => a.name === 'Remote'), true, 'hot-added agent should appear without restart');
     const remoteRecord = fleetBody.agents.find(a => a.name === 'Remote');
-    assert.equal(remoteRecord.activity, 'masked [redacted] in activity text');
+    for (const field of ['model', 'effort', 'context_pct', 'new_session_threshold']) assert.equal(Object.hasOwn(remoteRecord, field), false);
+    assert.equal(remoteRequests.some(route => /^\/api\/groups\/origin(?:[/?]|$)/.test(route)), false, 'Fleet never fetches Origin detail or another Origin resource');
     assert.equal(JSON.stringify(fleetBody).includes('zylos_ak_'), false);
 
-    const rename = await fetch(`${origin}/api/agent/name`, {
+    const rename = await fetch(`${origin}/api/instance/name`, {
       method: 'PUT',
       headers: {
         Authorization: `Bearer ${adminToken}`,
@@ -1638,9 +1669,9 @@ test('fleet management add rechecks duplicate names after slow probe', async () 
       }, 75);
       return;
     }
-    if (req.url === '/api/state') {
+    if (req.url === '/api/instance') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ state: 'IDLE', runtime_info: { zylos_version: '0.3.0' } }));
+      res.end(JSON.stringify({ session_mode: { sessionMode: 'single' }, versions: { zylos: { installed: '0.3.0', latest: '0.4.0', update: '0.4.0' } } }));
       return;
     }
     res.writeHead(404, { 'content-type': 'application/json' });
@@ -1697,9 +1728,9 @@ test('fleet test-connection API reports auth failures and reachable read scope w
       }));
       return;
     }
-    if (req.url === '/api/state') {
+    if (req.url === '/api/instance') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ state: 'IDLE', runtime_info: { zylos_version: '0.3.0' } }));
+      res.end(JSON.stringify({ session_mode: { sessionMode: 'single' }, versions: { zylos: { installed: '0.3.0', latest: '0.4.0', update: '0.4.0' } } }));
       return;
     }
     res.writeHead(404, { 'content-type': 'application/json' });
@@ -1781,11 +1812,11 @@ test('nested Dashboard login accepts any valid same-name cookie and logout clear
   assert.equal(ended.status, 302); await ended.text();
 });
 
-// HTTP integration: state header and self fleet record share actual sampled model
-// facts. Run for threshold/usage-to-state changes; skip rendering-only changes.
+// HTTP integration: group detail retains actual sampled model policy while Fleet omits session metadata.
+// Run for threshold/usage-to-state changes; skip rendering-only changes.
 // The official runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR and tmux.
 // Core observations are injected; the real HTTP server/DB are private and closed.
-test('state and fleet thresholds follow the actual session model across engine and window changes', { timeout: 15000 }, async t => {
+test('group thresholds follow actual session models while Fleet omits Origin session fields', { timeout: 15000 }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-threshold-state-'));
   let server;
   const stores = new Set(), timers = new Set();
@@ -1817,7 +1848,31 @@ test('state and fleet thresholds follow the actual session model across engine a
   t.mock.method(CoreState.prototype, 'getState', () => ({ runtime, state: 'IDLE', ready: true }));
   t.mock.method(CoreState.prototype, 'getUsageObservation', () => structuredClone(usage));
   t.mock.method(CoreState.prototype, 'getLaunchConfig', () => launchConfig ?? { runtime, mode: 'default' });
+  let snapshotClock = Date.now();
+  const previousSnapshotBuilder = buildAuthSnapshot;
+  t.after(() => { buildAuthSnapshot = previousSnapshotBuilder; });
+  buildAuthSnapshot = options => createGroupSnapshot({ ...options, now: () => snapshotClock,
+      cli: { runC4Db: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
+        readOverrides: async () => ({ ok: true, data: { baseline: { runtime }, runtime: [], model: [] } }) },
+      loadCoreModule: async name => {
+        if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
+        if (name === 'session-state-reader.js') return {
+          readSessionState: async () => ({ identity: { present: true, runtime, runId: 'threshold-run', sessionId: 'threshold-session', launchConfig: launchConfig ?? { runtime, mode: 'default' } },
+            status: { valid: true, value: { state: 'idle' } }, usage: structuredClone(usage) }),
+          readAccountUsageSnapshot: async () => ({ live: null, recorded: null }),
+        };
+        if (name === 'status-view.js') return { collectStatus: async ({ session }) => {
+          await session(null, {});
+          return { view: 'single', origin: { presence: 'running', runtime, runId: 'threshold-run', sessionId: 'threshold-session',
+            status: { valid: true, state: 'idle' } }, groupListError: null, runtimeHealth: {} };
+        } };
+        return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
+      } });
   const running = await makeServerWithDir(root); server = running.server;
+  const assertNoSessionFields = self => {
+    assert.ok(self);
+    for (const field of ['model', 'effort', 'context_pct', 'new_session_threshold']) assert.equal(Object.hasOwn(self, field), false);
+  };
   for (const [engine, sample, expected] of [
     ['claude', { model: { id: 'claude-sonnet-4-6' }, context_window: { context_window_size: 200000, used_percentage: 50 } }, 63],
     ['claude', { model: { id: 'claude-opus-4-6' }, context_window: { context_window_size: 1000000, used_percentage: 50 } }, 36],
@@ -1825,17 +1880,18 @@ test('state and fleet thresholds follow the actual session model across engine a
     ['claude', null, null],
   ]) {
     runtime = engine; usage = sample ? { valid: true, value: sample } : { valid: false };
-    const stateResponse = await fetch(running.origin + '/api/state', { signal: AbortSignal.timeout(3000) });
+    snapshotClock += 2100;
+    const stateResponse = await fetch(running.origin + '/api/groups/origin?include=', { signal: AbortSignal.timeout(3000) });
     assert.equal(stateResponse.status, 200);
-    assert.equal((await stateResponse.json()).new_session_threshold, expected);
+    assert.equal((await stateResponse.json()).rotationThreshold, expected);
     const fleetResponse = await fetch(running.origin + '/api/fleet', { signal: AbortSignal.timeout(3000) });
     assert.equal(fleetResponse.status, 200);
     const self = (await fleetResponse.json()).agents.find(agent => agent.self);
-    assert.ok(self); assert.equal(self.new_session_threshold, expected);
+    assertNoSessionFields(self);
   }
   fs.writeFileSync(path.join(root, '.claude/settings.json'), JSON.stringify({ model: 'opus[1m]' }));
   fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ model_rotation_thresholds: { claude: { 'opus[1m]': 30 } } }));
-  const metaResponse = await fetch(running.origin + '/api/actions/meta?runtime=claude&model=claude-opus-4-6%5B1m%5D', { signal: AbortSignal.timeout(3000) });
+  const metaResponse = await fetch(running.origin + '/api/instance/runtime-options?runtime=claude&model=claude-opus-4-6%5B1m%5D', { signal: AbortSignal.timeout(3000) });
   assert.equal(metaResponse.status, 200);
   const meta = await metaResponse.json();
   assert.equal(meta.model_thresholds['opus[1m]'], 30);
@@ -1845,11 +1901,11 @@ test('state and fleet thresholds follow the actual session model across engine a
     ['claude-opus-5-5', { runtime, mode: 'default' }, 30],
     ['claude-opus-4-6', { runtime, mode: 'override', model: 'claude-opus-4-6[1m]' }, 40],
   ]) {
-    launchConfig = launch;
+    launchConfig = launch; snapshotClock += 2100;
     usage = { valid: true, value: { model: { id: model }, context_window: { context_window_size: 1000000 } } };
-    const stateResponse = await fetch(running.origin + '/api/state', { signal: AbortSignal.timeout(3000) });
-    assert.equal((await stateResponse.json()).new_session_threshold, expected);
+    const stateResponse = await fetch(running.origin + '/api/groups/origin?include=', { signal: AbortSignal.timeout(3000) });
+    assert.equal((await stateResponse.json()).rotationThreshold, expected);
     const fleetResponse = await fetch(running.origin + '/api/fleet', { signal: AbortSignal.timeout(3000) });
-    assert.equal((await fleetResponse.json()).agents.find(agent => agent.self).new_session_threshold, expected);
+    assertNoSessionFields((await fleetResponse.json()).agents.find(agent => agent.self));
   }
 });

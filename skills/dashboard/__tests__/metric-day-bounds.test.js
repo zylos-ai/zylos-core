@@ -1,6 +1,7 @@
+import { usageSummary } from '../src/lib/workbench/usage-api.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dayBoundsUTC, MetricResolver } from '../src/lib/metric-resolver.js';
+import { dayBoundsUTC } from '../src/lib/metric-resolver.js';
 import { Store } from '../src/lib/store.js';
 
 for (const [zone, expected] of [
@@ -55,9 +56,8 @@ test('usage_event within the first second is consistently included in the daily 
     store.insertMetric({ timestamp, runtime: 'codex', metric_name: 'usage_event',
       metric_value: 100, dimensions: { cost }, source: 'jsonl_usage', confidence: 'actual' });
   }
-  const resolver = new MetricResolver(store, {}, { runtime: 'codex' });
   for (const ms of ['000', '562', '999']) {
     t.mock.timers.setTime(new Date(`2026-10-27T12:00:00.${ms}Z`).getTime());
-    assert.equal(resolver.resolveAggregated('cost').today, 2);
+    assert.equal(usageSummary(store, { tz: 'UTC' }).today.cost, 2);
   }
 });

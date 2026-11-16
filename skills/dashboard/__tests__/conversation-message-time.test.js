@@ -34,7 +34,7 @@ async function fixture(t, { tz, browser }) {
     let data;
     if (p.includes('/messages?')) data = withZone({ items: [ROW], nextCursor: null, afterCursor: 'after' });
     else if (p.includes('/questions?') || p.includes('/status?')) data = { items: [], nextCursor: null };
-    else if (p.includes('/api/session-mode')) data = { data: { sessionMode: 'multi' } };
+    else if (p.includes('/api/instance')) data = { session_mode: { sessionMode: 'multi' } };
     else if (/\/g%3AAA$/.test(p)) data = { conversation: { id: 'g:AA', state: 'active' } };
     else data = withZone({ items: [{ id: 'g:AA', stamp: listed / 86400000 + 2440587.5 }], nextCursor: null });
     return { ok: true, status: 200, json: async () => data };

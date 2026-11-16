@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createSessionReader } from '../../../../cli/lib/session-state-reader-async.js';
 import { createGroupSnapshot } from '../../src/lib/workbench/group-snapshot.js';
 import { sendHtml, sendJson, serveStatic } from '../../src/lib/http.js';
-import { workbenchAnswer } from '../fixtures/workbench-browser-api.js';
+import { workbenchSnapshotAnswer } from '../fixtures/workbench-browser-api.js';
 
 export async function runRecordedQuotaBrowser(sandbox) {
   console.log('Recorded quota browser isolation:', JSON.stringify(sandbox.assertIsolation()));
@@ -51,11 +51,9 @@ export async function runRecordedQuotaBrowser(sandbox) {
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
       if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
-      if (url.pathname === '/api/workbench/groups') return sendJson(res, 200, services.get(selected));
       if (url.pathname.startsWith('/api/')) {
-        let value = workbenchAnswer(url, now);
-        if (url.pathname === '/api/state') value = { ...value, state: selected === 'live' ? 'IDLE' : 'SLEEPING', tz: 'Asia/Shanghai' };
-        if (url.pathname === '/api/instance-status') value.data.origin.presence = selected === 'live' ? 'running' : 'not_running';
+        let value = workbenchSnapshotAnswer(url, services.get(selected), now);
+        if (url.pathname === '/api/instance') value = { ...value, state: selected === 'live' ? 'IDLE' : 'SLEEPING', tz: 'Asia/Shanghai' };
         if (value === undefined) throw new Error(`Unserved API: ${url.pathname}`);
         return sendJson(res, 200, value);
       }

@@ -33,7 +33,7 @@ export function createGroupDeletionBridge({ zylosDir, loadCoreModule = defaultLo
 }
 
 export function isGroupDeletionRoute(pathname) {
-  return /^\/api\/workbench\/groups\/[^/]+(?:\/deletion)?$/.test(pathname) ||
+  return /^\/api\/groups\/[^/]+(?:\/deletion-preview)?$/.test(pathname) ||
     /^\/api\/chat\/drafts\/[^/]+(?:\/deletion)?$/.test(pathname);
 }
 
@@ -46,7 +46,7 @@ export function canDeleteConversations(req, auth, config) {
 export function createGroupDeletionRoutes({ auth, config, conversations,
   core = createGroupDeletionBridge({ zylosDir: config.zylosDir }) } = {}) {
   return async (req, res, url) => {
-    const group = /^\/api\/workbench\/groups\/([^/]+)(\/deletion)?$/.exec(url.pathname);
+    const group = /^\/api\/groups\/([^/]+)(\/deletion-preview)?$/.exec(url.pathname);
     const draft = /^\/api\/chat\/drafts\/([^/]+)(\/deletion)?$/.exec(url.pathname);
     if (!group && !draft) return false;
     const preview = Boolean((group ?? draft)[2]);

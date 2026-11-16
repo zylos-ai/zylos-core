@@ -2,6 +2,7 @@
 // a memory tree with a long file, and settings. Shapes follow the dashboard's own routes; values are invented.
 // Every answer is computed from `now`, so the page's relative times stay stable within one run.
 
+import { projectGroup, projectListRow } from '../../src/lib/workbench/groups-api.js';
 import { runRestartEffect } from '../../public/js/wb/timeline-rows.js';
 
 const iso = ms => new Date(ms).toISOString();
@@ -17,26 +18,54 @@ function rows(now) {
     { sessionGroup: 'origin', origin: true, presence: 'running', name: null, state: { kind: 'idle' }, duration: 380, tools: [], queue: queue(), contextPct: 23,
       launchConfig: { runtime: 'claude', mode: 'default' }, target: { runtime: 'claude', model: 'default' }, desired: { runtime: 'claude', mode: 'default' },
       createdAt: sec(now - 3600e3), live: { runId: 'run-origin', sessionId: 's0' }, preview: { text: 'Daily health check done' }, c4: null },
-    { sessionGroup: GROUP, presence: 'running', name: { displayName: 'Telegram direct chat with a long display name' }, state: { kind: 'busy' }, duration: 252,
+    { sessionGroup: GROUP, presence: 'running', name: { displayName: 'Telegram direct chat with a long display name' }, state: { kind: 'working' }, flags: { queued: { count: 1 }, blocked: { reason: 'rate_limited' } }, duration: 252,
       tools: [{ name: 'Bash', detail: 'npm test', startedAt: now - 64e3 }], queue: queue(1, 1), contextPct: 64,
       launchConfig: { runtime: 'claude', mode: 'default' }, target: { runtime: 'claude', model: 'default' }, desired: { runtime: 'claude', mode: 'default' },
       createdAt: sec(now - 30 * 60e3), live: { runId: 'run-tg', sessionId: 's1' }, preview: { text: 'Run the tests again please' }, c4: { componentName: 'telegram', lastActivityAt: now - 60e3 } },
-    { sessionGroup: 'lark:oc_product', presence: 'not_running', name: { displayName: 'Product weekly' }, state: { kind: 'not_running' }, duration: null, tools: [], queue: queue(),
+    { sessionGroup: 'lark:oc_product', presence: 'not_running', name: { displayName: 'Product weekly' }, state: { kind: 'offline' }, duration: null, tools: [], queue: queue(),
       contextPct: null, launchConfig: null, target: { runtime: 'claude', model: 'default' }, desired: { runtime: 'claude', mode: 'default' },
       createdAt: null, live: null, preview: { text: 'Agenda is ready' }, c4: { componentName: 'lark', lastActivityAt: now - 7200e3 } },
   ];
 }
 
-function snapshot(now) {
+// Scenario rows may carry raw observations for detail cases. List answers always
+// pass through the real contract projection, so raw fixture fields cannot leak.
+function detailRow(row) {
+  const id = row.id ?? row.sessionGroup;
+  const offline = row.state?.kind === 'offline' || row.presence === 'not_running';
+  const noResponse = row.noResponse ? projectGroup(row, { readAt: 0 }).flags.noResponse : null;
+  return { ...row, id, side: offline ? 'offline' : 'running', flags: { ...row.flags, ...(noResponse ? { noResponse } : {}) },
+    displayName: row.displayName ?? row.name?.displayName ?? (id === 'origin' ? 'Origin' : id),
+    channel: row.channel ?? row.c4?.componentName ?? (id === 'origin' ? null : id.split(':')[0]),
+    runtime: row.runtime ?? row.target?.runtime ?? null, model: row.model ?? row.target?.model ?? null,
+    lastActivityAt: row.lastActivityAt ?? (row.c4?.lastActivityAt == null ? null : iso(row.c4.lastActivityAt)),
+    ...(offline ? {} : { mainAgent: row.mainAgent ?? (row.state?.kind === 'working' ? 'busy' : 'idle') }) };
+}
+const listRow = row => projectListRow(detailRow(row));
+
+export function workbenchSnapshot(now) {
   const list = rows(now);
-  const counts = { busy: 0, waiting: 0, error: 0, unknown: 0, idle: 0, not_running: 0 };
-  for (const row of list) counts[row.state.kind]++;
-  return { readAt: now, mode: 'multi', view: 'multi', rows: list, counts, hasOlder: false, listKnown: true, baselineRuntime: 'claude',
-    overrides: { runtime: [], model: [] },
+  return { readAt: now, mode: 'multi', view: 'multi', rows: list, listKnown: true, baselineRuntime: 'claude',
     instance: { runtimeHealth: { claude: { health: 'ok' }, codex: { health: 'ok' } }, accounts: { claude: { used_percentage: 42 }, codex: null },
       pool: { ready: 2, starting: 0, reclaiming: 0, waiting: 0, capacity: 4, used: 2 }, services: { online: 6, total: 6 },
-      system: { sampledAt: now - 12000, cpuPct: 23.4, cpuCount: 8, memUsedBytes: 2147483648, memTotalBytes: 17179869184, diskUsedPct: 61.6, diskFreeBytes: 43218108416 } },
-    sources: { status: { ok: true, readAt: now }, c4: { ok: true, readAt: now } }, attention: { ok: true, problems: [], reminders: [] } };
+      system: { sampledAt: now - 12000, cpuPct: 23.4, cpuCount: 8, memUsedBytes: 2147483648, memTotalBytes: 17179869184, diskUsedPct: 61.6, diskFreeBytes: 43218108416 } } };
+}
+
+export function workbenchInstanceAnswer(value, now) {
+  const raw = value.instance, system = raw.system ?? {}, resources = raw.resources ?? {
+    scope: 'host', cpu_pct: system.cpuPct ?? null, cpu_count: system.cpuCount ?? null, cpu_source: 'host',
+    mem_pct: system.memTotalBytes ? system.memUsedBytes / system.memTotalBytes * 100 : null,
+    mem_used_bytes: system.memUsedBytes ?? null, mem_total_bytes: system.memTotalBytes ?? null, mem_source: 'host',
+    disk_pct: system.diskUsedPct ?? null, disk_free_bytes: system.diskFreeBytes ?? null, disk_total_bytes: null,
+    sampledAt: system.sampledAt ?? null,
+  };
+  return { agent: { name: 'browser-case' }, color: null, tz: 'UTC', default_runtime: value.baselineRuntime ?? 'claude',
+    session_mode: { sessionMode: value.mode === 'unreadable' ? null : value.mode, transition: null, globalGate: null, blocked: null,
+      supervisor: 'reachable', lastCompleted: null, lastEvents: [] },
+    versions: { zylos: { installed: '0.9.4', latest: null, update: null }, claude: { installed: '2.1.80', latest: null, update: null }, codex: { installed: null, latest: null, update: null } },
+    defaults: { claude: { model: 'opus', effort: 'high', threshold: 70, model_thresholds: null, session_hot_ttl: null }, codex: { model: 'gpt-5.5', effort: 'high', threshold: 70, model_thresholds: null, session_hot_ttl: null } },
+    runtimeHealth: raw.runtimeHealth, accounts: raw.accounts, supervisorPaused: raw.supervisorPaused ?? false,
+    autoRestarts: raw.autoRestarts ?? 0, resources, services: { ...raw.services, channels: raw.services?.channels ?? [] } };
 }
 
 function schedule(now) {
@@ -120,7 +149,7 @@ function timeline(url, now) {
   return { events: events.slice(0, limit) };
 }
 function runs(url, now) {
-  const group = decodeURIComponent(url.pathname.split('/')[4] ?? ''), types = url.searchParams.get('types')?.split(',').filter(Boolean);
+  const group = decodeURIComponent(url.pathname.split('/')[3] ?? ''), types = url.searchParams.get('types')?.split(',').filter(Boolean);
   // As the server counts: the crash report an automatic restart causes is not shown, so it is not counted.
   const count = events => { const effect = runRestartEffect(events); return events.filter(event => (!types || types.includes(event.event_type)) && effect(event) !== 'exit').length; };
   if (group === STOPPED_GROUP) {
@@ -139,9 +168,21 @@ const meta = { runtime: 'claude', current_model: 'opus', current_effort: 'high',
 /** The JSON answer for a GET, or undefined when the case does not serve that path. */
 export function workbenchAnswer(url, now) {
   const p = url.pathname;
-  if (p === '/api/workbench/groups') return snapshot(now);
-  if (p === '/api/workbench/groups/search') return { rows: [] };
-  if (p === '/api/workbench/activity') return { start: now - 59 * 60e3, cellSeconds: 60, groups: {} };
+  if (p === '/api/groups/running') return { readAt: now, listKnown: true, rows: rows(now).filter(row => row.state.kind !== 'offline').map(listRow) };
+  if (p === '/api/groups/offline') {
+    const row = rows(now).find(row => row.state.kind === 'offline');
+    if (url.searchParams.has('flag')) return { readAt: now, listKnown: true, rows: row.flags?.[url.searchParams.get('flag')] ? [listRow(row)] : [], nextCursor: null };
+    return { readAt: now, listKnown: true, rows: (url.searchParams.has('cursor') ? [{ ...row, sessionGroup: 'lark:archived', name: { displayName: 'Archived room' } }] : [row]).map(listRow), nextCursor: url.searchParams.has('cursor') ? null : 'second' };
+  }
+  if (p === '/api/groups/counts') return { readAt: now, listKnown: true, running: { total: 2, states: { working: 1, idle: 1, starting: 0, stopping: 0, unknown: 0 }, flags: { queued: 1, blocked: 1, waitingSlot: 0, startFailed: 0, unreadable: 0, noResponse: 0 } }, offline: { total: 2, waitingSlot: 0, startFailed: 0 }, pool: { used: 2, capacity: 4 } };
+  if (/^\/api\/groups\/[^/]+$/.test(p) && !['search','activity','runtime-overrides','naming-prompt'].includes(p.split('/').at(-1))) {
+    const group = decodeURIComponent(p.split('/').at(-1));
+    const row = rows(now).find(row => row.sessionGroup === group);
+    if (!row) return undefined;
+    return { readAt: now, ...detailRow(row), raw: row.preview?.text ?? null, config: workbenchAnswer(new URL('http://fixture/api/groups/' + encodeURIComponent(group) + '/config'), now), effective: row.target };
+  }
+  if (p === '/api/groups/search') return { rows: [] };
+  if (p === '/api/groups/activity') return { start: now - 59 * 60e3, cellSeconds: 60, groups: {} };
   if (p === '/api/workbench/schedule') return schedule(now);
   if (p.startsWith('/api/workbench/schedule/') && p.endsWith('/history')) return { rows: [], next: null };
   if (p === '/api/memory/tree') return memoryTree(now);
@@ -161,25 +202,43 @@ export function workbenchAnswer(url, now) {
     return { runtime: { ok: true, data: { desired: { mode: 'inherit' }, resolved: pair, running: { status: 'applied', launchConfig: pair } } },
       model: { ok: true, data: { runtime: 'claude', desired: pair, resolved: pair, running: { status: 'applied', launchConfig: pair } } } };
   }
-  if (p === '/api/timeline') return timeline(url, now);
-  if (p === '/api/state') return { state: 'IDLE', agent: { name: 'browser-case' }, sessionGroup: 'origin', runId: 'run-origin', sessionId: 's0',
-    runtime_info: { runtime: 'claude', zylos_version: '0.9.4', cc_version: '2.1.80' } };
-  if (p === '/api/session-mode') return { ok: true, data: { sessionMode: 'multi', transition: null } };
-  if (p === '/api/instance-status') return { ok: true, data: { origin: { presence: 'running' }, view: 'multi', sessionMode: 'multi' } };
-  if (p === '/api/actions/meta') return meta;
+  if (p === '/api/instance') return workbenchInstanceAnswer(workbenchSnapshot(now), now);
+  if (p.endsWith('/events')) { const query = new URL(url); query.searchParams.set('session_group', decodeURIComponent(p.split('/')[3])); return timeline(query, now); }
+  if (p === '/api/instance/runtime-options') return meta;
   if (p === '/api/settings') return { active: 'claude', runtimes: { claude: { builtInModels: ['opus'], modelPrices: { opus: { input: 15, output: 75, cacheRead: 1.5, cacheCreation: 18.75 } },
     fastMode: { configuredMultiplier: null } },
   codex: { builtInModels: ['gpt-5.5'], modelPrices: { 'gpt-5.5': { input: 1.25, output: 10, cacheRead: 0.125, cacheCreation: 0 } },
     builtInPriorityModels: [], priorityModelPrices: {} } } };
-  if (p === '/api/workbench/pricing') return { models: [], unmatched: [] };
-  if (p === '/api/workbench/runtime-overrides') return { runtime: [], runtimeTotal: 0, nextAfter: null };
+  if (p === '/api/usage/pricing') return { models: [], unmatched: [] };
+  if (p === '/api/groups/runtime-overrides') return { runtime: [], runtimeTotal: 0, nextAfter: null };
   if (p === '/api/fleet') return { agents: [{ name: 'browser-case', self: true, access: 'admin' }], updated_at: iso(now) };
   if (p === '/api/fleet/agents') return { self: { name: 'browser-case' }, agents: [] };
   if (p === '/api/keys') return { keys: [] };
+  if (p === '/api/chat/conversations') return { items: [], nextCursor: null };
+  if (p === '/api/settings/timezone') return { tz: 'UTC' };
   if (p === '/api/chat/settings') return { allowRemote: false };
   if (p === '/api/observer/status') return { state: 'not_installed' };
-  if (p === '/api/workbench/usage') return { costSummary: { today: { total: 1.5 }, sevenDay: { total: 9.2 }, daily: [] } };
-  if (p === '/api/workbench/host') return { current: {}, pm2: { online: 6, total: 6 }, series: [] };
+  if (p === '/api/usage/summary' || p.endsWith('/usage')) return { today: { tokens: 1200, cost: 1.5, cacheHitRate: 0.7 }, sevenDay: { tokens: 8000, cost: 9.2, cacheHitRate: 0.65 } };
+  if (p === '/api/usage/series') return { tz: 'UTC', bucket: 'day', buckets: [iso(now)], totals: { tokens: 8000, cost: 9.2, messages: { in: 3, out: 2 }, costByRuntime: { claude: 9.2 }, cacheHitRate: 0.65 }, cost: [{ at: iso(now), runtime: 'claude', value: 9.2 }], tokensByRuntime: [], messages: [], rotations: [], tools: [], projects: { items: [] }, cache: [{ at: iso(now), value: 0.65 }] };
+  if (p === '/api/instance/resources') return { current: {}, pm2: { online: 6, total: 6 }, series: [] };
   if (p === '/api/health') return { status: 'ok' };
   return undefined;
+}
+
+// Project a scenario snapshot onto the independent object resources requested by the UI.
+export function workbenchSnapshotAnswer(url, value, now) {
+  const p = url.pathname;
+  if (p === '/api/groups/running') return { readAt: value.readAt, listKnown: value.listKnown, rows: value.rows.filter(row => detailRow(row).side === 'running').map(listRow) };
+  if (p === '/api/groups/offline') return { readAt: value.readAt, listKnown: value.listKnown, rows: value.rows.filter(row => detailRow(row).side === 'offline' && (!url.searchParams.has('flag') || row.flags?.[url.searchParams.get('flag')])).map(listRow), nextCursor: null };
+  if (p === '/api/groups/counts') {
+    const active = value.rows.map(detailRow).filter(row => row.side === 'running'), states = Object.fromEntries(['working', 'idle', 'starting', 'stopping', 'unknown'].map(key => [key, 0])), flags = Object.fromEntries(['queued', 'blocked', 'waitingSlot', 'startFailed', 'unreadable', 'noResponse'].map(key => [key, 0]));
+    for (const row of active) { states[row.state.kind] = (states[row.state.kind] ?? 0) + 1; for (const flag of Object.keys(row.flags ?? {})) flags[flag] = (flags[flag] ?? 0) + 1; }
+    return { readAt: value.readAt, listKnown: value.listKnown, running: { total: active.length, states, flags }, offline: { total: value.rows.length - active.length, waitingSlot: value.instance.pool?.waiting ?? 0, startFailed: value.rows.filter(row => detailRow(row).side === 'offline' && row.flags?.startFailed).length }, pool: value.instance.pool ? { used: value.instance.pool.used ?? null, capacity: value.instance.pool.capacity ?? null } : null };
+  }
+  if (p === '/api/instance') return workbenchInstanceAnswer(value, now);
+  if (/^\/api\/groups\/[^/]+$/.test(p) && !['search', 'activity', 'runtime-overrides', 'naming-prompt'].includes(p.split('/').at(-1))) {
+    const row = value.rows.find(row => row.sessionGroup === decodeURIComponent(p.split('/').at(-1)));
+    return row ? { ...workbenchAnswer(url, now), readAt: value.readAt, ...detailRow(row), raw: row.preview?.text ?? null, effective: row.target } : undefined;
+  }
+  return workbenchAnswer(url, now);
 }

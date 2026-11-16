@@ -50,12 +50,11 @@ export async function createAttachmentApiFixture(t, sandbox, { prototypeSource }
     if (url.pathname === '/approved-prototype.html' && prototypeSource) { sendHtml(res, 200, prototypeSource); return true; }
     if (url.pathname.startsWith('/api/chat/') || !url.pathname.startsWith('/api/')) return false;
     if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return true; }
-    const values = { '/api/session-mode': { data: { sessionMode: f.readMode() } },
-      '/api/state': { state: 'idle', runtime: 'claude', session_mode: f.readMode(), agent: { id: 'test', name: '隔离浏览器' }, runtime_info: {} },
-      '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' }, '/api/communication': {}, '/api/summary': {},
-      '/api/timeline': { items: [] }, '/api/instance-status': { status: 'ok' }, '/api/actions/meta': { actions: [] },
+    const values = {
+      '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: '隔离浏览器' } },
+      '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
       '/api/settings': { active: 'claude', runtimes: { claude: { modelPrices: {}, builtInModels: [], fastMode: {} }, codex: { modelPrices: {}, builtInModels: [], priorityModelPrices: {}, builtInPriorityModels: [] } } },
-      '/api/workbench/pricing': { models: [] }, '/api/workbench/runtime-overrides': { runtime: [], runtimeTotal: 0, nextAfter: null } };
+      '/api/usage/pricing': { models: [] }, '/api/groups/runtime-overrides': { runtime: [], runtimeTotal: 0, nextAfter: null } };
     sendJson(res, 200, values[url.pathname] || {}); return true;
   } });
   sandbox.assertIsolation();

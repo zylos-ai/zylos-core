@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 
 import {
   effortOptionState,
-  mergeRuntimeInfo,
   modelOptionState,
 } from '../public/js/runtime-ui.js';
 
@@ -77,18 +76,4 @@ test('effort options keep a chosen effort across model changes and disable when 
   assert.equal(effortOptionState(meta, 'b', 'high').options.find(o => o.value === 'high').selected, true);
   assert.equal(effortOptionState(meta, 'none', 'high').disabled, true);
   assert.equal(effortOptionState(meta, 'a', 'high').options.find(o => o.value === 'high').selected, true);
-});
-
-test('SSE runtime identity is retained for the same target and cleared on target change', () => {
-  const previous = {
-    session: { session_id: 'old' }, runtime_info: {
-      runtime: 'codex', model: 'old-model', model_id: 'old-model', effort: 'high',
-      service_tier: 'priority', configured_model: 'configured',
-    },
-  };
-  assert.equal(mergeRuntimeInfo(previous, { session: { session_id: 'old' } }), previous.runtime_info);
-  assert.deepEqual(mergeRuntimeInfo(previous, { session: { session_id: 'new' } }), {
-    runtime: 'unknown', model: null, model_id: null, effort: null, service_tier: null,
-    configured_model: 'configured',
-  });
 });

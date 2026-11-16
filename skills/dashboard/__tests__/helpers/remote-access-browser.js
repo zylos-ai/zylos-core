@@ -56,14 +56,18 @@ export async function runRemoteAccessBrowser(t, sandbox) {
       if (kind && kind === refuse.now) { refusals.push(apiPath); return route.fulfill({ status: 403, json: REFUSAL }); }
       if (apiPath === '/api/observer/status') return route.fulfill({ json: OBSERVER_STATUS });
       let value = workbenchAnswer(new URL(apiPath + url.search, 'http://fixture'), Date.now());
-      if (apiPath === '/api/workbench/groups' && value) value = { ...value, rows: value.rows.map(row => row.sessionGroup === GROUP
-        ? { ...row, tools: [], working: { on: false, since: null, main: null, tools: 0, subagents: null } } : row) };
-      if (apiPath === '/api/state' && value) value = { ...value, agent: { name: REMOTE }, chat_allow_remote: refuse.allow !== false };
+      if (apiPath === '/api/groups/running' && value) value = { ...value, rows: value.rows.map(row => row.id === GROUP
+        ? { ...row, state: { kind: 'idle', since: null }, flags: {} } : row) };
+      if (value?.sessionGroup === GROUP) value = { ...value, state: { kind: 'idle' }, flags: {}, tools: [], working: { on: false, since: null, main: null, tools: 0, subagents: null } };
+      if (apiPath === '/api/instance' && value) value = { ...value, agent: { name: REMOTE }, chat_allow_remote: refuse.allow !== false };
       return value === undefined ? route.fulfill({ status: 404, json: { error: 'not_found' } }) : route.fulfill({ json: value });
     });
     await page.goto(base + '/');
+    const instance = page.waitForResponse(response => new URL(response.url()).pathname === `/fleet/${REMOTE}/api/instance`);
     await page.locator(`#agent-fleet-root .agent-open[data-agent="${REMOTE}"]`).click();
+    await (await instance).finished();
     await page.waitForFunction(() => !document.querySelector('#agent-detail').hidden);
+    await page.locator('.tab[data-tab="chat"]').waitFor({ state: refuse.allow === false ? 'hidden' : 'visible' });
     return { page, context, errors, refusals, chatRequests };
   }
   const shown = (page, tab) => page.locator(`.tab[data-tab="${tab}"]`).isVisible();
@@ -82,7 +86,7 @@ export async function runRemoteAccessBrowser(t, sandbox) {
       const side = page.locator('#wb-side'), action = side.locator('[data-action="viewConversation"]');
       await side.waitFor();
       assert.equal(await action.count(), 0);
-      assert.equal(await side.locator('.wb-group-head .wb-idle').count(), 1, 'header follows idle working despite busy runtime state');
+      assert.equal(await side.locator('.wb-group-head .wb-state.wb-idle').count(), 1, 'header follows idle working despite busy runtime state');
       assert.match(await side.locator('.wb-now-title').first().innerText(), /Idle/, 'now card uses the same working state');
       assert.equal(chatRequests.length, 0, 'closed remote access makes no chat requests');
       const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
@@ -102,7 +106,7 @@ export async function runRemoteAccessBrowser(t, sandbox) {
       await action.waitFor({ state: 'detached' });
       const reopened = page.waitForRequest(request => {
         const pathname = new URL(request.url()).pathname;
-        return pathname.includes('/api/workbench/groups/') && pathname.endsWith('/runs');
+        return pathname.includes('/api/groups/') && pathname.endsWith('/runs');
       }, { timeout: 3000 });
       await stale.evaluate(el => el.click());
       await reopened;

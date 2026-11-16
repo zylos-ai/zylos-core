@@ -51,7 +51,7 @@ async function composerFixture(testContext, { touch = false, width = 1280, unpar
     if (path.endsWith('/send') && sendHeld) await sendHeld;
     if (path.endsWith('/send') && unparseableSend) return { ok: true, status: 200, json: async () => { throw new SyntaxError('invalid JSON'); } };
     const body = path.endsWith('/uploads/config') ? { maxUploadBytes: 20 * 1024 * 1024, maxAttachments: 10 }
-      : path.includes('session-mode') ? { data: { sessionMode: 'multi' } }
+      : path.includes('/api/instance') ? { session_mode: { sessionMode: 'multi' } }
       : path.includes('/messages') ? { items: [], nextCursor: null, afterCursor: 'after' }
       : path.includes('/status') ? { items: [] }
       : /conversations\/[^/]+$/.test(path) ? opened

@@ -4,7 +4,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sendHtml, sendJson, serveStatic } from '../../src/lib/http.js';
-import { GROUP, workbenchAnswer } from '../fixtures/workbench-browser-api.js';
+import { GROUP, workbenchAnswer, workbenchSnapshot, workbenchSnapshotAnswer } from '../fixtures/workbench-browser-api.js';
 import { openGroupDetail } from './browser-navigation.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
@@ -15,9 +15,10 @@ const ID = 'g:' + Buffer.from(GROUP).toString('hex').toUpperCase();
 async function startSummaryPage(sandbox) {
   const now = Date.now(), missing = new Set();
   const row = () => {
-    const value = workbenchAnswer(new URL('http://fixture/api/workbench/groups'), now).rows.find(item => item.sessionGroup === GROUP);
+    const value = workbenchSnapshot(now).rows.find(item => item.sessionGroup === GROUP);
     value.name = { displayName: '组详情示例' };
-    value.state = { kind: 'waiting' };
+    value.state = { kind: 'idle' };
+    value.flags = { blocked: { reason: 'rate_limited' }, queued: { count: 1 } };
     value.duration = 75;
     value.preview = { text: PREVIEW, timestamp: new Date(now - 90000).toISOString(), channel: 'telegram', source: { kind: 'channel' } };
     value.tools = [];
@@ -27,19 +28,14 @@ async function startSummaryPage(sandbox) {
     return value;
   };
   const answer = url => {
-    if (url.pathname === '/api/workbench/groups') {
-      const value = workbenchAnswer(url, now), group = row();
+    if (url.pathname.startsWith('/api/groups/') || url.pathname === '/api/instance') {
+      const value = workbenchSnapshot(now), group = row();
       value.rows = value.rows.map(item => item.sessionGroup === GROUP ? group : item);
-      value.counts = { idle: 1, busy: 0, waiting: 0, error: 0, unknown: 0, not_running: 1 };
-      value.counts[group.state.kind]++;
-      const ok = { ok: true, readAt: now };
-      value.sources = { status: { ...ok }, c4: { ok: false, reason: 'messages_unreadable', readAt: now },
-        q: { ...ok }, ov: { ...ok }, accounts: { claude: { ...ok }, codex: { ...ok } } };
       value.instance.runtimeHealth = { claude: { health: 'rate_limited', updatedAt: now - 360000, cooldownUntil: Math.floor(now / 1000) + 3600 }, codex: { health: 'ok', updatedAt: now - 360000 } };
-      return value;
+      return workbenchSnapshotAnswer(url, value, now);
     }
     if (url.pathname === '/api/observer/status') return { state: 'installed', desired: { enabled: true }, sessionMode: 'multi' };
-    if (url.pathname === '/api/timeline') return { events: [] };
+    if (url.pathname.startsWith('/api/groups/') && url.pathname.endsWith('/events')) return { events: [] };
     if (url.pathname === '/api/chat/settings') return { allowRemote: false };
     if (url.pathname === '/api/chat/conversations') return { items: [{ id: ID, session_group: GROUP, display_name: '组详情示例', channel: 'telegram' }], nextCursor: null, tz: 'UTC' };
     if (url.pathname.startsWith('/api/chat/conversations/')) {

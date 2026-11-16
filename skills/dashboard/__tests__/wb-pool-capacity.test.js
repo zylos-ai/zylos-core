@@ -79,7 +79,7 @@ function fixture(t, { record = freshRecord(), slots = [], groups = [], queues = 
 }
 
 // Integration boundary: Core's real capacity reader, a private SQLite occupancy
-// table, and real snapshot/wait/attention reducers. Run for capacity, occupancy,
+// table, and real snapshot and wait reducers. Run for capacity, occupancy,
 // queue-order or snapshot wiring changes; skip unrelated UI-only changes. The
 // official runner isolates HOME/ZYLOS_DIR; each fixture adds its own files/DB.
 // Core observations/CLI are injected; no sockets, PM2, tmux or child processes.
@@ -100,7 +100,7 @@ for (const mode of ['single', 'unreadable']) for (const hasSample of [true, fals
     assert.deepEqual(snapshot.instance.pool, hasSample
       ? { ...sample, capacity: null, used: 30 }
       : { ready: null, starting: null, reclaiming: null, waiting: null, capacity: null, used: null });
-    assert.equal(snapshot.attention.reminders.some(reminder => reminder.kind === 'pool_full'), false);
+    assert.equal(Object.hasOwn(snapshot, 'attention'), false);
     const waiting = snapshot.rows.find(row => row.sessionGroup === waitingGroup);
     assert.equal(waiting.presence, 'not_running');
     assert.equal(waiting.queue.pending.count, 1);
@@ -108,7 +108,7 @@ for (const mode of ['single', 'unreadable']) for (const hasSample of [true, fals
   });
 }
 
-test('snapshot joins real capacity and occupancy into inbound positions and one full reminder without writes', async t => {
+test('snapshot joins real capacity and occupancy into inbound positions without writes or reminder lists', async t => {
   const f = fixture(t, { slots: [{ group: 'used-a' }, { group: 'used-b' }, { group: 'used-c' }],
     queues: [pending('c', 2, 2), pending('origin', 0, 1), pending('b', 1, 9)] });
   const observer = new Database(path.join(f.root, 'comm-bridge/c4.db'), { readonly: true });
@@ -118,13 +118,12 @@ test('snapshot joins real capacity and occupancy into inbound positions and one 
   assert.equal(snapshot.instance.pool.capacity, 3);
   assert.equal(snapshot.instance.pool.used, 3);
   assert.equal(snapshot.instance.pool.waiting, 40);
-  assert.equal(snapshot.instance.pool.capacityRecord.source, 'auto');
-  assert.equal(snapshot.instance.pool.capacityRecord.fresh, true);
+  assert.equal(Object.hasOwn(snapshot.instance.pool, 'capacityRecord'), false);
   assert.equal(Object.hasOwn(snapshot.instance.pool, 'occupancy'), false);
   assert.deepEqual(snapshot.rows.find(row => row.sessionGroup === 'b').wait, { kind: 'pool_wait', position: 1 });
   assert.deepEqual(snapshot.rows.find(row => row.sessionGroup === 'c').wait, { kind: 'pool_wait', position: 2 });
   assert.notEqual(snapshot.rows.find(row => row.sessionGroup === 'origin').wait?.kind, 'pool_wait');
-  assert.deepEqual(snapshot.attention.reminders, [{ kind: 'pool_full', waiting: 2 }]);
+  assert.equal(Object.hasOwn(snapshot, 'attention'), false);
   assert.equal(observer.pragma('data_version', { simple: true }), beforeVersion);
   assert.equal(fs.readFileSync(f.file).equals(beforeFile), true);
   assert.equal(f.calls(), 1);
@@ -153,14 +152,14 @@ test('unexpired owners, present and activating groups do not consume inbound pos
   assert.equal(get('continuation').wait, null);
 });
 
-// Integration: queue fence joins snapshot waiting and attention. Run for fence
+// Integration: queue fence joins snapshot waiting observations. Run for fence
 // or pool-wait wiring changes; skip UI-only work. No external resources.
-test('global fence prevents all pool waits and full reminder even with full occupancy', async t => {
+test('global fence prevents all pool waits even with full occupancy', async t => {
   const f = fixture(t, { slots: [{ group: 'a' }, { group: 'b' }, { group: 'c' }], queues: [pending('waiting', 1, 2)],
     globalFence: { reason: 'mode_switch', createdAt: NOW / 1000 } });
   const snapshot = await f.service.getSnapshot();
   assert.equal(snapshot.rows.find(row => row.sessionGroup === 'waiting').wait.kind, 'fenced');
-  assert.equal(snapshot.attention.reminders.length, 0);
+  assert.equal(Object.hasOwn(snapshot, 'attention'), false);
 });
 
 // Integration: real readonly SQL and snapshot cover expiry boundaries. Run for
@@ -173,7 +172,7 @@ test('occupancy counts running and only held rows strictly beyond the current se
   const snapshot = await f.service.getSnapshot();
   assert.equal(snapshot.instance.pool.used, 2);
   assert.equal(snapshot.rows.find(row => row.sessionGroup === 'waiting').wait.reason, 'no_rule');
-  assert.equal(snapshot.attention.reminders.length, 0);
+  assert.equal(Object.hasOwn(snapshot, 'attention'), false);
 });
 
 // Integration: Core rereads fixture publication without a Dashboard cache. Run
@@ -186,15 +185,13 @@ test('shrinking capacity reports occupancy above the limit without clamping', as
   assert.equal(pool.capacity, 3); assert.equal(pool.used, 4);
 });
 
-// Integration: real Core freshness/baseline selection with preserved publication fields.
-// Run for capacity adapter changes; skip UI-only work. Private files/DB only.
-test('stale records use Core effective limit while preserving publication source and explanation', async t => {
-  const record = freshRecord({ k: 6, computedAt: NOW - 90000, kMemory: 3 });
-  const f = fixture(t, { record });
+// Integration: Core freshness still selects the effective limit. Run for
+// capacity adapter changes; skip UI-only work. Private files/DB only.
+test('stale records use Core effective limit without exposing publication provenance', async t => {
+  const f = fixture(t, { record: freshRecord({ k: 6, computedAt: NOW - 90000, kMemory: 3 }) });
   const pool = await f.read();
-  assert.equal(pool.capacity, 3); assert.equal(pool.capacityRecord.valid, true); assert.equal(pool.capacityRecord.fresh, false);
-  assert.equal(pool.capacityRecord.source, 'auto'); assert.deepEqual(pool.capacityRecord.memory, record.memory);
-  assert.equal(pool.capacityRecord.kMemory, 3);
+  assert.equal(pool.capacity, 3);
+  assert.equal(Object.hasOwn(pool, 'capacityRecord'), false);
 });
 
 // Integration: real Core missing/invalid record fallback with private baseline.
@@ -203,43 +200,17 @@ for (const [label, record] of [['missing', null], ['invalid JSON', '{'], ['inval
   test('Core baseline supplies capacity for ' + label, async t => {
     const f = fixture(t, { record });
     const pool = await f.read();
-    assert.equal(pool.capacity, 3); assert.equal(pool.capacityRecord.valid, false); assert.equal(pool.capacityRecord.fresh, false);
+    assert.equal(pool.capacity, 3);
   });
 }
 
-// Integration: actual publication field mapping through the capacity adapter.
-// Run for source/explanation changes; skip unrelated UI work. Private files/DB.
-test('fresh fixed and fallback explanations are carried only from the publication', async t => {
+// Integration: Core owns effective fixed and fallback limits. Run for capacity
+// adapter changes; skip unrelated UI work. Private files/DB only.
+test('fresh fixed and fallback records supply Core effective capacity', async t => {
   const f = fixture(t, { record: freshRecord({ source: 'fixed', k: 6, kMemory: 3 }) });
-  const fixed = await f.read();
-  assert.equal(fixed.capacity, 6); assert.equal(fixed.capacityRecord.source, 'fixed'); assert.equal(fixed.capacityRecord.kMemory, 3);
+  assert.equal((await f.read()).capacity, 6);
   f.publish(freshRecord({ source: 'fallback', k: 1, reason: 'memory_unreadable', memory: null, model: null }));
-  const fallback = await f.read();
-  assert.equal(fallback.capacity, 1); assert.equal(fallback.capacityRecord.fresh, true); assert.equal(fallback.capacityRecord.source, 'fallback');
-  assert.equal(fallback.capacityRecord.memory, null);
-});
-
-test('capacity adapter preserves the published decision and bucket evidence without calculating limits', async t => {
-  const model = { state: 'fitted', slopeBytes: 268435456, interceptBytes: 6141803233, windowDays: 7,
-    buckets: [{ n: 1, highBytes: 8010114007, hours: 7, samples: 2511 }] };
-  const f = fixture(t, { record: freshRecord({ k: 29, limitedBy: 'model', model }) });
-  const pool = await f.read();
-  assert.equal(pool.capacity, 29);
-  assert.equal(pool.capacityRecord.limitedBy, 'model');
-  assert.deepEqual(pool.capacityRecord.model, model);
-  assert.equal(Object.hasOwn(pool.capacityRecord, 'nModel'), false);
-  assert.equal(Object.hasOwn(pool.capacityRecord, 'nLive'), false);
-  for (const limitedBy of ['model', 'live']) {
-    f.publish(freshRecord({ k: 1, reason: 'floor', limitedBy, model }));
-    const floor = await f.read();
-    assert.equal(floor.capacity, 1);
-    assert.equal(floor.capacityRecord.reason, 'floor');
-    assert.equal(floor.capacityRecord.limitedBy, limitedBy);
-  }
-  f.publish(freshRecord({ limitedBy: 'live', computedAt: NOW - 90000 }));
-  const stale = await f.read();
-  assert.equal(stale.capacityRecord.limitedBy, 'live');
-  assert.equal(stale.capacityRecord.fresh, false);
+  assert.equal((await f.read()).capacity, 1);
 });
 
 // Integration: repeated reads cross Core freshness without publication changes.
@@ -249,13 +220,13 @@ test('capacity is reevaluated for freshness without a Dashboard cache', async t 
   assert.equal((await f.read()).capacity, 6);
   f.advance(60001);
   const pool = await f.read();
-  assert.equal(pool.capacity, 3); assert.equal(pool.capacityRecord.fresh, false); assert.equal(f.calls(), 2);
+  assert.equal(pool.capacity, 3); assert.equal(f.calls(), 2);
 });
 
 // Integration: missing private table fails through real reader to snapshot and
-// attention, preserving startup-failure priority. Run for occupancy error paths;
+// waiting observations, preserving startup-failure priority. Run for occupancy error paths;
 // skip UI-only work. The DROP affects only this test-owned database.
-test('unreadable occupancy is unknown and startup failure still wins without full reminder', async t => {
+test('unreadable occupancy is unknown and startup failure still wins without backend reminders', async t => {
   const f = fixture(t, { queues: [pending('waiting', 1, 1), pending('failed', 1, 2)],
     events: [{ session_group: 'failed', event_type: 'activate_failed', timestamp: NOW, metadata: { reason: 'ready_timeout' } }] });
   f.db.exec('DROP TABLE slot_occupancy');
@@ -264,7 +235,7 @@ test('unreadable occupancy is unknown and startup failure still wins without ful
   assert.equal(snapshot.instance.pool.reason, 'pool_occupancy_unreadable');
   assert.equal(snapshot.rows.find(row => row.sessionGroup === 'waiting').wait.reason, 'pool_occupancy_unreadable');
   assert.equal(snapshot.rows.find(row => row.sessionGroup === 'failed').wait.kind, 'start_failed');
-  assert.equal(snapshot.attention.reminders.length, 0);
+  assert.equal(Object.hasOwn(snapshot, 'attention'), false);
 });
 
 test('snapshot ranking uses priority before id and excludes only observed queue ineligibility', () => {

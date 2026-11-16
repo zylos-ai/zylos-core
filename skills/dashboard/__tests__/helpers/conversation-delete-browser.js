@@ -27,7 +27,7 @@ async function startPage(sandbox) {
         // Deliberately true for a Fleet response too: the app's local-view guard must still hide deletion.
         sendJson(res, 200, { items, nextCursor: null, tz: 'Asia/Singapore', deletionAllowed: state.deletionAllowed }); return;
       }
-      if ((route.startsWith('/api/workbench/groups/') || route.startsWith('/api/chat/drafts/')) && route.endsWith('/deletion')) {
+      if ((route.startsWith('/api/groups/') || route.startsWith('/api/chat/drafts/')) && (route.endsWith('/deletion-preview') || route.endsWith('/deletion'))) {
         if (state.previewFailure) {
           sendJson(res, 409, { ok: false, error: { code: 'group_delete_path_unavailable', message: '/private/do-not-render' } }); return;
         }
@@ -36,7 +36,7 @@ async function startPage(sandbox) {
         sendJson(res, 200, { ok: true, operationId: 'browser-operation', cutoffId: draftTarget ? 0 : 8,
           messages: 8, attachments: 2, draft: draftTarget }); return;
       }
-      if (req.method === 'DELETE' && (route.startsWith('/api/workbench/groups/') || route.startsWith('/api/chat/drafts/'))) {
+      if (req.method === 'DELETE' && (route.startsWith('/api/groups/') || route.startsWith('/api/chat/drafts/'))) {
         const body = await readJsonBody(req, 4096); writes.push({ route, body });
         if (state.deleteFailure) sendJson(res, 500, { ok: false, error: { code: 'cleanup_unavailable' } });
         else if (state.stale) sendJson(res, 409, { ok: false, error: { code: 'DELETION_PREVIEW_STALE' } });
@@ -58,7 +58,7 @@ async function startPage(sandbox) {
         sendJson(res, 200, { items: [], rounds: [], nextCursor: null, afterCursor: null, tz: 'Asia/Singapore' }); return;
       }
       if (route === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
-      if (route === '/api/workbench/usage') {
+      if (route === '/api/usage/series') {
         sendJson(res, 200, { tz: 'Asia/Singapore', buckets: [], bucket: 'day', totals: { cost: 0, costByRuntime: {}, messages: { in: 0, out: 0 } },
           costByRuntime: [], tokensByRuntime: [], messages: [], rotations: [], tools: [], projects: { items: [] } }); return;
       }
@@ -276,7 +276,7 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     await stale.waitFor();
     assert.equal(api.writes.length, 1, 'confirming sends exactly one DELETE');
     assert.equal(api.state.previews, previews + 1);
-    assert.match(api.writes[0].route, /^\/api\/workbench\/groups\//);
+    assert.match(api.writes[0].route, /^\/api\/groups\//);
     assert.deepEqual(api.writes[0].body, { confirmed: true, operationId: 'browser-operation', cutoffId: 8 });
     assert.equal(await remove(active).isVisible(), true, 'the row keeps its delete button shown with the status');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);

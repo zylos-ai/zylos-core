@@ -1,14 +1,18 @@
 /** A projection of the Workbench snapshot, never a second status or health reader. */
 export function fleetGroupSummary(snapshot) {
   if (snapshot?.mode !== 'multi' || !Array.isArray(snapshot.rows)) return null;
-  const rows = snapshot.rows.filter(row => row && ['running', 'starting'].includes(row.presence));
+  const rows = snapshot.rows.filter(row => row && ['running', 'starting', 'unknown'].includes(row.presence));
   const counts = { busy: 0, idle: 0, waiting: 0, unknown: 0, error: 0, no_response: 0 };
   const errors = [], silent = [];
   for (const row of rows) {
-    // Attention already applies runtime health to the groups it affects. Queue waits,
-    // stale samples and read failures are not themselves runtime errors.
-    const problem = row.attention?.find(item => ['auth_failed', 'start_failed'].includes(item?.kind));
-    const error = problem?.kind ?? (row.state?.kind === 'error' ? 'start_failed' : null);
+    // Compact flags carry the existing error observations. Queue waits, stale
+    // samples and read failures are not themselves runtime errors.
+    const runtime = row.runtime ?? row.target?.runtime ?? row.live?.runtime;
+    // Unknown activity does not erase an independently observed authentication failure.
+    const authFailed = row.flags?.blocked?.reason === 'auth_failed' ||
+      ['running', 'starting', 'unknown'].includes(row.presence) && snapshot.instance?.runtimeHealth?.[runtime]?.health === 'auth_failed';
+    const error = authFailed ? 'auth_failed'
+      : row.flags?.startFailed || row.state?.kind === 'error' ? 'start_failed' : null;
     // A group the supervisor reminded and that has not responded since; an error outranks it.
     const since = !error && Number.isFinite(row.noResponse?.since) ? row.noResponse.since : null;
     const reason = error ?? (since === null ? null : 'no_response');
@@ -26,7 +30,7 @@ export function fleetGroupSummary(snapshot) {
   return { running: rows.length, counts, problems: problems.slice(0, 2), problemCount: problems.length,
     listKnown: snapshot.listKnown === true,
     pool: { used: snapshot.instance?.pool?.used ?? null, capacity: snapshot.instance?.pool?.capacity ?? null },
-    noResponse: { count: counts.no_response },
+    noResponse: { count: Number.isSafeInteger(snapshot.groupCounts?.running?.flags?.noResponse) ? snapshot.groupCounts.running.flags.noResponse : counts.no_response },
     autoRestarts: Number.isSafeInteger(restarts) && restarts >= 0 ? { count: restarts } : null };
 }
 
@@ -42,6 +46,8 @@ export function sanitizeFleetGroupSummary(value) {
   if (keys.some(key => !count(value.counts[key])) || !count(silent) ||
       keys.reduce((total, key) => total + value.counts[key], silent) !== value.running ||
       value.problemCount !== value.counts.error + silent) return null;
+  const noResponseCount = value.noResponse?.count ?? silent;
+  if (!count(noResponseCount) || noResponseCount < silent || noResponseCount > value.running) return null;
   const problems = value.problems.slice(0, 2).filter(row => row && typeof row.sessionGroup === 'string' &&
     ['auth_failed', 'start_failed', 'no_response'].includes(row.reason)).map(row => ({
     sessionGroup: row.sessionGroup, displayName: text(row.displayName),
@@ -54,6 +60,6 @@ export function sanitizeFleetGroupSummary(value) {
   return { running: value.running, counts: { ...Object.fromEntries(keys.map(key => [key, value.counts[key]])), no_response: silent },
     problems, problemCount: value.problemCount, listKnown: value.listKnown === true,
     pool: { used: count(value.pool?.used) ? value.pool.used : null, capacity: count(value.pool?.capacity) ? value.pool.capacity : null },
-    noResponse: { count: silent },
+    noResponse: { count: noResponseCount },
     autoRestarts: count(value.autoRestarts?.count) ? { count: value.autoRestarts.count } : null };
 }

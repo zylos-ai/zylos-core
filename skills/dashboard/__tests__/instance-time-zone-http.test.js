@@ -1,3 +1,5 @@
+import { VersionChecker } from '../src/lib/version-checker.js';
+import { isolateInstanceObservations } from './fixtures/object-instance-observations.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -19,6 +21,8 @@ const clockOf = (iso, timeZone) => new Intl.DateTimeFormat('en-GB', { timeZone, 
 
 test('usage and state follow the .env time zone on every request, without a restart', { timeout: 30_000 }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'instance-tz-http-'));
+  isolateInstanceObservations(t, root);
+  t.mock.method(VersionChecker.prototype, 'start', () => {});
   const data = path.join(root, 'components/dashboard');
   fs.mkdirSync(data, { recursive: true });
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ auth: { enabled: true, password: 'fixture-password' } }));
@@ -53,31 +57,31 @@ test('usage and state follow the .env time zone on every request, without a rest
   };
   for (const zone of ['Asia/Shanghai', 'America/Los_Angeles', 'UTC']) {
     if (zone !== 'Asia/Shanghai') fs.writeFileSync(path.join(root, '.env'), `# instance settings\nTZ=${zone}\n`);
-    const series = await get('/api/workbench/usage?range=7d');
+    const series = await get('/api/usage/series?range=7d');
     assert.equal(series.tz, zone, `usage reads ${zone} from .env`);
     assert.equal(series.tzFallback, false);
     assert.equal(clockOf(series.since, zone), '00:00', 'the week starts at midnight in the instance zone');
-    const summary = (await get('/api/workbench/usage?summary=cost')).costSummary;
+    const summary = await get('/api/usage/summary');
     assert.equal(summary.tz, zone);
     const day = series.costByRuntime.find(row => row.value > 0);
     assert.ok(day, 'the cost falls in one day bucket');
     assert.equal(clockOf(day.at, zone), '00:00', 'day buckets start at midnight in the instance zone');
     assert.equal(dayOf(day.at, zone), dayOf(spent, zone), 'the cost is counted on its day in the instance zone');
-    assert.equal(summary.sevenDay.total, 1.5);
-    assert.equal((await get('/api/state')).tz, zone, 'the state reports the zone for every page');
-    const aggregate = await get('/api/metrics/aggregate?metric=cost&period=today');
-    assert.equal(clockOf(aggregate.since, zone), '00:00', 'the aggregate API counts today from midnight in the instance zone');
+    assert.equal(summary.sevenDay.cost, 1.5);
+    assert.equal((await get('/api/instance')).tz, zone, 'the state reports the zone for every page');
+    const aggregate = await get('/api/usage/summary');
+    assert.equal(clockOf(aggregate.today.since, zone), '00:00', 'the aggregate API counts today from midnight in the instance zone');
   }
   fs.writeFileSync(path.join(root, '.env'), 'TZ=Not/AZone\n');
-  const unknown = await get('/api/workbench/usage?range=7d');
+  const unknown = await get('/api/usage/series?range=7d');
   assert.equal(unknown.tz, 'UTC', 'an unusable zone reads UTC');
   assert.equal(unknown.tzFallback, true, 'and says so');
-  assert.equal((await get('/api/state')).tz, null);
+  assert.equal((await get('/api/instance')).tz, null);
   // Without a TZ line the scheduler runs in the process zone, or UTC; that is the instance zone, not a fallback.
   fs.writeFileSync(path.join(root, '.env'), '# instance settings\n');
   const processZone = new Intl.DateTimeFormat('en-US', { timeZone: process.env.TZ || 'UTC' }).resolvedOptions().timeZone;
-  const noLine = await get('/api/workbench/usage?range=7d');
+  const noLine = await get('/api/usage/series?range=7d');
   assert.equal(noLine.tz, processZone, 'an .env without TZ reads the zone the scheduler uses');
   assert.equal(noLine.tzFallback, false);
-  assert.equal((await get('/api/state')).tz, processZone);
+  assert.equal((await get('/api/instance')).tz, processZone);
 });

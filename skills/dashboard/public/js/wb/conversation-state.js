@@ -286,7 +286,7 @@ export function createConversationState({
     void poll({ dirty: true, admitted });
   }
   async function poll({ dirty = false, admitted = false } = {}) {
-    const e = epoch, navigation = selectedVersion, scope = streamScope;
+    const e = epoch, navigation = selectedVersion, scope = streamScope, subscription = chatSubscriptionKey(streamSubscription());
     readDirty ||= dirty;
     while (polling) {
       await polling;
@@ -367,6 +367,10 @@ export function createConversationState({
         }
       } finally {
         if (polling === task) {
+          // A same-conversation refresh can supersede this pass's navigation
+          // while metadata is in flight. It did not satisfy the consumed hint:
+          // preserve it for the selected subscription's next immediate pass.
+          if (valid(e) && selectedVersion !== navigation && subscription === chatSubscriptionKey(streamSubscription())) readDirty ||= passDirty;
           polling = null;
           if (valid(epoch)) {
             if (updateError) {
@@ -872,20 +876,22 @@ export function createConversationState({
     const stillCurrent = () => valid(e) && navigation === selectedVersion && version === current.groupPresenceVersion;
     record.promise = (async () => {
       try {
-        const data = await request('/api/workbench/groups', { signal: record.controller.signal });
+        const data = await request('/api/groups/' + encodeURIComponent(sessionGroup) + '?include=', { signal: record.controller.signal });
         if (!stillCurrent()) return;
-        // Origin's row is keyed `origin` in multi and has no group in single; both are marked `origin`.
         const origin = sessionGroup === 'origin';
-        const group = Array.isArray(data?.rows) ? data.rows.find(row => origin ? row.origin === true : row.sessionGroup === sessionGroup) : null;
-        const trusted = data?.listKnown === true && data?.sources?.status?.ok === true;
-        // Only Origin's row carries what was last handed to it, and only when that is a scheduled task.
+        const group = data;
+        const instance = await request('/api/instance', { signal: record.controller.signal });
+        if (!stillCurrent()) return;
+        const trusted = (group?.sessionGroup ?? group?.id) === sessionGroup && group?.state && ['running', 'not_running'].includes(group.presence) && Number.isFinite(data.readAt);
         current.groupProcessing = trusted && origin && group?.processing === 'scheduled_task' ? 'scheduled_task' : null;
-        applyGroupReading(current, trusted ? { readAt: data.sources.status.readAt, presence: group?.presence ?? null,
-          wait: group?.wait ?? null, health: data.instance?.runtimeHealth?.[group?.target?.runtime]?.health ?? null,
+        applyGroupReading(current, trusted ? { readAt: data.readAt, presence: group?.presence ?? null,
+          wait: group?.wait ?? null, health: instance?.runtimeHealth?.[group?.target?.runtime]?.health ?? null,
           working: group?.working ?? null } : null);
       } catch {
         if (!stillCurrent()) return;
-        // An unreadable optional source must not leave a stale running marker.
+        // GROUP_NOT_FOUND is normal for a new conversation not yet present in
+        // the group snapshot: no reading, and retry on the normal cadence.
+        // Other unreadable optional sources also clear a stale running marker.
         current.groupPresence = null;
         current.groupWorking = null;
         current.groupHealth = null;
@@ -1126,10 +1132,10 @@ export function createConversationState({
     listDepth = 1;
     nextCursor = null;
     emit();
-    await Promise.all([list(), run(() => request('/api/session-mode'), data => {
+    await Promise.all([list(), run(() => request('/api/instance'), data => {
       if (version === refreshVersion) {
-        const actual = data.data?.sessionMode;
-        mode = actual === null ? 'single' : ['single', 'multi'].includes(actual) ? actual : null;
+        const actual = data.session_mode?.sessionMode;
+        mode = ['single', 'multi'].includes(actual) ? actual : null;
         if (mode === null) error = 'chat_mode_unavailable';
         emit();
       }
@@ -1245,11 +1251,7 @@ export function createConversationState({
           // A read started before storage cannot describe the newly queued message.
           cancelGroupPresenceRead();
           if (visible()) {
-            storedWorkingTimer = delay(() => {
-              storedWorkingTimer = null;
-              if (valid(e) && navigation === selectedVersion) readGroupPresence(current, currentTab, e);
-            }, 2000);
-            storedWorkingTimer?.unref?.();
+            readGroupPresence(current, currentTab, e);
           }
         }
         await list();

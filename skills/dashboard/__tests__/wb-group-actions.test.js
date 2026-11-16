@@ -58,6 +58,21 @@ test('ordinary interruption binds the requested group and snapshot run/session i
   assert.equal(options.env.ZYLOS_SESSION_GROUP, undefined); assert.equal(options.env.RETAIN, 'yes');
 });
 
+test('ordinary group adapter takes scope only from the path and preserves the confirmed private run', async () => {
+  const f = fixture();
+  const body = Object.freeze({ sessionGroup: 'telegram:foreign', runId: 'private-selected-run', sessionId: 'private-selected-session' });
+  await f.action('telegram:selected', 'interrupt', body);
+  const args = f.calls[0].argv;
+  assert.equal(args[args.indexOf('--group') + 1], 'telegram:selected');
+  assert.equal(args[args.indexOf('--target-run') + 1], 'private-selected-run');
+  assert.equal(args[args.indexOf('--expected-session') + 1], 'private-selected-session');
+  assert.equal(args.includes('telegram:foreign'), false);
+  assert.equal(f.origin.length, 0, 'ordinary controls never reach the Origin adapter');
+  assert.deepEqual(f.interrupts.map(record => [record.sessionGroup, record.runId, record.sessionId]),
+    [['telegram:selected', 'private-selected-run', 'private-selected-session']]);
+  assert.equal(body.sessionGroup, 'telegram:foreign');
+});
+
 test('only a submitted group interrupt is recorded for the conversation page', async () => {
   const f = fixture();
   await f.action('dashboard:A', 'interrupt', target);

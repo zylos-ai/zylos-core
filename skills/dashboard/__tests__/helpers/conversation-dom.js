@@ -3,7 +3,7 @@ export { allNodes, tick, deferred } from '../fixtures/workbench-dom.js';
 
 // Inject DOM ownership, supported selectors and suppression of clicks on disabled controls.
 // Pixel layout belongs to the isolated browser test; unsupported selectors fail explicitly.
-export function createDocument() {
+export function createDocument({ nativeText = false } = {}) {
   const document = minimalDocument(), createElement = document.createElement;
   document.createElement = tag => {
     const node = createElement(tag);
@@ -14,11 +14,12 @@ export function createDocument() {
       firstElementChild: { get: () => node.children[0] ?? null },
       lastElementChild: { get: () => node.children.at(-1) ?? null },
       parentElement: { get: () => node.parentNode },
-      textContent: {
+      ...(!nativeText ? { textContent: {
         get: () => (node.text ?? '') + node.children.map(child => child.textContent).join(''),
         set(value) { node.text = String(value); node.children.forEach(child => { child.parentNode = null; }); node.children = []; }
-      }
+      } } : {})
     });
+    if (!nativeText) {
     node.remove = () => {
       if (node.parentNode) node.parentNode.children = node.parentNode.children.filter(child => child !== node);
       node.parentNode = null;
@@ -34,6 +35,10 @@ export function createDocument() {
     node.prepend = (...children) => children.slice().reverse().forEach(child => node.insertBefore(child, node.firstElementChild));
     node.replaceChildren = (...children) => { node.textContent = ''; node.append(...children); };
     node.replaceWith = replacement => { const parent = node.parentNode; if (parent) { parent.insertBefore(replacement, node); node.remove(); } };
+    } else {
+      node.prepend = (...children) => children.slice().reverse().forEach(child => node.insertBefore(child, node.firstChild));
+      node.replaceWith = replacement => { const parent = node.parentNode; if (parent) { parent.insertBefore(replacement, node); node.remove(); } };
+    }
     node.getAttribute = name => name.startsWith('data-') ? node.dataset[name.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] ?? null : node.attributes[name] ?? null;
     node.matches = selector => selectors(selector).some(part => matches(node, part));
     node.querySelectorAll = selector => {

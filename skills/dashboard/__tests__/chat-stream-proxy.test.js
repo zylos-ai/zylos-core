@@ -74,10 +74,10 @@ async function fixture(t, { beforeLocalListen = () => {} } = {}) {
     if (await localAuth.handle(req,res,url)) return;
     if (!await proxy.handle(req,res,url)) { res.writeHead(404);res.end(); }
   });
-  function open(identity='cookie',search='?chat=1&chat_tab=mine') {
+  function open(identity='cookie',search='?chat=1&chat_tab=mine',direct=false) {
     let text='',status,ended=false,error;
     const headers=identity==='cookie'?{cookie:`__Secure-zylos_dashboard_session=${cookie}`}:{authorization:`Bearer ${identity==='read'?read:token}`};
-    const req=http.get(local+'/fleet/Peer/api/stream'+search,{headers},res=>{
+    const req=http.get((direct ? remote + '/api/stream' : local + '/fleet/Peer/api/stream')+search,{headers},res=>{
       status=res.statusCode;
       res.on('data',chunk=>{text+=chunk.toString();if(text.length>16384){error=Error('SSE fixture log exceeded bound');req.destroy();}});
       res.on('end',()=>{ended=true;});res.on('close',()=>{ended=true;});
@@ -147,16 +147,24 @@ test('Fleet closes a chat relay when an unfinished record exceeds64KiB', gated, 
   await until(() => f.observer.subscriptions.size === 0);
 });
 
-test('Fleet preserves ordinary events when the producer chat budget is exhausted', gated, async t => {
+test('Fleet relays producer chat limits and preserves explicitly requested ordinary events', gated, async t => {
   const f = await fixture(t);
   f.hub.maxChatClients = 0;
-  const stream = f.open();
-  await until(() => stream.text().includes(': connected'));
-  assert.equal(stream.status(), 200);
+  const producer = f.open('admin', '?chat=1&chat_tab=mine', true);
+  await until(() => producer.ended());
+  assert.equal(producer.status(), 429);
+  assert.deepEqual(JSON.parse(producer.text()), { error: 'chat_connection_limit' });
+  const relayed = f.open();
+  await until(() => relayed.ended());
+  assert.equal(relayed.status(), 429);
+  assert.equal(relayed.text(), producer.text(), 'Fleet preserves the producer limit response');
   assert.equal(f.observer.subscriptions.size, 0);
   assert.equal(f.hub.chatClients.size, 0);
-  f.hub.broadcast('state_change', { state: 'idle' });
-  await until(() => stream.text().includes('event: state_change'));
+  const stream = f.open('cookie', '');
+  await until(() => stream.text().includes(': connected'));
+  assert.equal(stream.status(), 200);
+  f.hub.broadcast('instance', { sessionMode: 'multi' });
+  await until(() => stream.text().includes('event: instance'));
   assert.equal(stream.ended(), false);
   assert.doesNotMatch(stream.text(), /chat_ready|chat_connection_limit/);
 });

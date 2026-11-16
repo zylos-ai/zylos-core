@@ -36,7 +36,7 @@ async function call(handler, path, { method = 'GET', headers = owner, body } = {
 }
 
 test('deletion preview admits only password owner cookies including against admin API keys', async t => {
-  const f = fixture(t), path = '/api/workbench/groups/dashboard%3Aexample/deletion';
+  const f = fixture(t), path = '/api/groups/dashboard%3Aexample/deletion-preview';
   for (const headers of [{}, { authorization: `Bearer ${api}` }]) {
     assert.equal((await call(f.handler, path, { headers })).status, 403);
   }
@@ -52,7 +52,7 @@ test('deletion preview admits only password owner cookies including against admi
 });
 
 test('deletion requires same origin and explicit confirmation bound to an operation', async t => {
-  const f = fixture(t), path = '/api/workbench/groups/dashboard%3Aexample';
+  const f = fixture(t), path = '/api/groups/dashboard%3Aexample';
   const body = { confirmed: true, operationId: 'private-operation', ...boundary };
   assert.equal((await call(f.handler, path, { method: 'DELETE', body, headers: { cookie: owner.cookie, origin: 'https://foreign.invalid', host: 'local.invalid' } })).status, 403);
   for (const invalid of [{}, { operationId: 'private-operation' }, { confirmed: true }, { ...body, actor: 'somebody-else' }, { ...body, operationId: '' }]) {
@@ -66,7 +66,7 @@ test('deletion requires same origin and explicit confirmation bound to an operat
 });
 
 test('missing or malformed preview boundaries never reach the deletion child', async t => {
-  const f = fixture(t), path = '/api/workbench/groups/dashboard%3Aexample';
+  const f = fixture(t), path = '/api/groups/dashboard%3Aexample';
   const body = { confirmed: true, operationId: 'private-operation', ...boundary };
   for (const change of [{ cutoffId: undefined }, { cutoffId: -1 }, { cutoffId: 1.1 }, { cutoffId: Number.MAX_SAFE_INTEGER + 1 }]) {
     assert.equal((await call(f.handler, path, { method: 'DELETE', body: { ...body, ...change } })).status, 400);
@@ -76,9 +76,9 @@ test('missing or malformed preview boundaries never reach the deletion child', a
 
 test('Origin and malformed group targets never reach Core', async t => {
   const f = fixture(t);
-  assert.equal((await call(f.handler, '/api/workbench/groups/origin/deletion')).status, 403);
-  assert.equal((await call(f.handler, '/api/workbench/groups/%ZZ/deletion')).status, 400);
-  assert.equal((await call(f.handler, '/api/workbench/groups/bad%2Fgroup/deletion')).status, 400);
+  assert.equal((await call(f.handler, '/api/groups/origin/deletion-preview')).status, 403);
+  assert.equal((await call(f.handler, '/api/groups/%ZZ/deletion-preview')).status, 400);
+  assert.equal((await call(f.handler, '/api/groups/bad%2Fgroup/deletion-preview')).status, 400);
   assert.equal(f.calls.length, 0);
 });
 
@@ -92,15 +92,15 @@ test('draft targets let Core distinguish uploaded drafts from actual groups', as
 test('pending deletion and Core conflicts preserve their result envelope', async t => {
   const f = fixture(t); let value = { ok: true, pending: true, operationId: 'same-operation' };
   const handler = createGroupDeletionRoutes({ ...f, core: async () => value });
-  let res = await call(handler, '/api/workbench/groups/dashboard%3Aexample/deletion');
+  let res = await call(handler, '/api/groups/dashboard%3Aexample/deletion-preview');
   assert.equal(res.status, 202); assert.equal(res.body.operationId, 'same-operation');
   value = { ok: false, error: { code: 'FENCE_MISMATCH' } };
-  res = await call(handler, '/api/workbench/groups/dashboard%3Aexample/deletion');
+  res = await call(handler, '/api/groups/dashboard%3Aexample/deletion-preview');
   assert.equal(res.status, 409); assert.deepEqual(res.body, value);
   value = { ok: false, error: { code: 'TRANSITION_OPEN' } };
-  assert.equal((await call(handler, '/api/workbench/groups/dashboard%3Aexample/deletion')).status, 409);
+  assert.equal((await call(handler, '/api/groups/dashboard%3Aexample/deletion-preview')).status, 409);
   value = { ok: false, error: { code: 'transition_open' } };
-  assert.equal((await call(handler, '/api/workbench/groups/dashboard%3Aexample/deletion')).status, 409);
+  assert.equal((await call(handler, '/api/groups/dashboard%3Aexample/deletion-preview')).status, 409);
 });
 
 test('missing draft registration still reaches Core for an idempotent completed retry', async t => {
@@ -142,15 +142,17 @@ test('unknown child outcomes are never turned into successful deletion', async (
 });
 
 test('Fleet never relays group or draft deletion preview and writes', async () => {
-  let calls = 0;
-  const proxy = new FleetProxy({ config: { fleet: { agents: [] } }, poller: { getSessionToken: async () => 'private' }, fetch: async () => { calls++; throw new Error('must not relay'); } });
-  for (const suffix of ['/api/workbench/groups/dashboard%3Ax/deletion', '/api/workbench/groups/dashboard%3Ax', '/api/chat/drafts/x/deletion', '/api/chat/drafts/x']) {
-    const req = { method: suffix.endsWith('/deletion') ? 'GET' : 'DELETE', headers: owner, _authContext: { kind: 'cookie', scope: 'admin' } };
-    const res = { writeHead(status) { this.status = status; }, end() {} };
+  let calls = 0, tokenCalls = 0;
+  const proxy = new FleetProxy({ config: { fleet: { agents: [] } }, poller: { getSessionToken: async () => { tokenCalls++; return 'private'; } }, fetch: async () => { calls++; throw new Error('must not relay'); } });
+  for (const suffix of ['/api/groups/dashboard%3Ax/deletion-preview', '/api/groups/dashboard%3Ax', '/api/chat/drafts/x/deletion', '/api/chat/drafts/x']) {
+    const req = { method: (suffix.endsWith('/deletion-preview') || suffix.endsWith('/deletion')) ? 'GET' : 'DELETE', headers: owner, _authContext: { kind: 'cookie', scope: 'admin' } };
+    const res = { writeHead(status) { this.status = status; }, end(body) { this.body = JSON.parse(body); } };
     await proxy.proxyApi(req, res, { name: 'remote' }, suffix, '');
     assert.equal(res.status, 403);
+    assert.equal(res.body.error, 'remote_deletion_forbidden');
   }
   assert.equal(calls, 0);
+  assert.equal(tokenCalls, 0);
 });
 
 test('conversation list exposes deletion capability only to the local password owner', async t => {
@@ -166,7 +168,7 @@ test('conversation list exposes deletion capability only to the local password o
 
 test('unmatched group read routes fall through without deletion authorization or Core calls', async t => {
   const f = fixture(t);
-  for (const path of ['/api/workbench/groups/search', '/api/workbench/groups/telegram%3Aexample', '/api/chat/drafts/example']) {
+  for (const path of ['/api/groups/search', '/api/groups/telegram%3Aexample', '/api/chat/drafts/example']) {
     const req = { method: 'GET', headers: {} };
     const res = { writeHead() { assert.fail('Must leave the response to the existing read route'); } };
     assert.equal(await f.handler(req, res, new URL(path, 'http://fixture')), false);
@@ -194,7 +196,7 @@ test('completed Core retention fields pass through the child bridge and DELETE r
       loadCoreModule: async () => ({ groupDeletionCliPath: '/core/group-delete-cli.js' }),
       execute: async () => ({ stdout: JSON.stringify(receipt) }) });
     const handler = createGroupDeletionRoutes({ ...f, core: bridge });
-    const response = await call(handler, '/api/workbench/groups/dashboard%3Aexample', {
+    const response = await call(handler, '/api/groups/dashboard%3Aexample', {
       method: 'DELETE', body: { confirmed: true, operationId: 'completed-operation', ...boundary },
     });
     assert.equal(response.status, 200);

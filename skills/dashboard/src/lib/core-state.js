@@ -112,7 +112,6 @@ export class CoreState {
       const source = businessSource(projected, observation, accountUsage, accountRecord);
       this.observation = observation;
       this.accountUsage = accountUsage;
-      this.accountUsageRecord = accountRecord;
       const changed = !isDeepStrictEqual(source, this.lastSource);
       this.lastSource = source;
       this.snapshot = projected;
@@ -120,7 +119,6 @@ export class CoreState {
     } catch (error) {
       this.costKey = null;
       this.accountUsage = null;
-      this.accountUsageRecord = null;
       this.observation = null;
       const source = { error: { code: error.code || 'read_failed', message: error.message } };
       if (!isDeepStrictEqual(source, this.lastSource)) {

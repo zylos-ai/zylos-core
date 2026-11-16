@@ -51,66 +51,6 @@ function item(document, ...children) {
 }
 /** An item's name for screen readers: on screen its icon stands for it, and its title starts with it. */
 const spoken = (document, text) => element(document, 'span', text, 'wb-inst-word wb-vh');
-const finite = value => typeof value === 'number' && Number.isFinite(value);
-const gib = bytes => Number((bytes / 1073741824).toFixed(2));
-export function poolSource(pool, t) {
-  if (pool.capacity == null) return '';
-  const record = pool.capacityRecord;
-  if (record?.valid !== true) return t('wb.inst.poolUnavailable', { capacity: pool.capacity });
-  if (record.fresh !== true) return t('wb.inst.poolExpired', { capacity: pool.capacity });
-  if (record.source === 'fixed') return finite(record.kMemory) && pool.capacity > record.kMemory
-    ? t('wb.inst.poolFixedAdvice', { capacity: pool.capacity, recommended: record.kMemory }) : t('wb.inst.poolFixed');
-  if (record.source === 'auto') return t('wb.inst.poolAuto');
-  if (record.source === 'fallback') return t('wb.inst.poolFallback');
-  return '';
-}
-export function poolDecision(record, t) {
-  if (record?.valid !== true || record.fresh !== true) return '';
-  if (record.reason === 'floor') return '';
-  if (record.source === 'fixed') return t('wb.inst.poolDecisionFixed');
-  if (record.source === 'fallback') return '';
-  if (record.limitedBy === 'model') return t('wb.inst.poolDecisionModel');
-  if (record.limitedBy === 'live') return t('wb.inst.poolDecisionLive');
-  return '';
-}
-export function poolBuckets(record, t) {
-  if (!Array.isArray(record?.model?.buckets)) return [];
-  return record.model.buckets.filter(bucket => bucket != null && Number.isInteger(bucket.n) && bucket.n >= 0 &&
-    finite(bucket.highBytes) && bucket.highBytes >= 0 && Number.isInteger(bucket.hours) && bucket.hours >= 0 &&
-    Number.isInteger(bucket.samples) && bucket.samples >= 0)
-    .slice().sort((a, b) => a.n - b.n).map(bucket => countLabel(t, 'wb.inst.poolBucket', bucket.samples, {
-      count: bucket.n, amount: (bucket.highBytes / 1073741824).toFixed(2), hours: bucket.hours, samples: bucket.samples,
-    }).replace(/(\d) (?=个|GiB\b|h\b|samples?\b)/g, '$1\u00a0'));
-}
-export function poolAlgorithm(record, t) {
-  if (record?.valid !== true || record.fresh !== true || record.source !== 'auto') return '';
-  return ['fitted', 'default'].includes(record.model?.state) ? t('wb.inst.poolAlgorithm' +
-    (record.model.state === 'fitted' ? 'Fitted' : 'Default')) : '';
-}
-export function poolExplanation(record, t) {
-  const parts = [], memory = record?.memory, model = record?.model;
-  if (memory && typeof memory === 'object') {
-    const fields = [];
-    if (memory.source === 'host') fields.push(t('wb.inst.poolMemoryHost'));
-    if (memory.source === 'darwin') fields.push(t('wb.inst.poolMemoryDarwin'));
-    for (const [field, key] of [['limitBytes', 'poolMemoryLimit'], ['usedBytes', 'poolMemoryUsed'], ['reserveBytes', 'poolMemoryReserve']]) {
-      if (finite(memory[field]) && memory[field] >= 0) fields.push(t('wb.inst.' + key, { amount: gib(memory[field]) }));
-    }
-    if (fields.length) parts.push(fields.join(' · '));
-  }
-  if (model && typeof model === 'object' && ['default', 'fitted'].includes(model.state)) {
-    const fields = [];
-    if (model.state === 'default') fields.push(t('wb.inst.poolModelDefault'));
-    if (finite(model.slopeBytes) && model.slopeBytes > 0) fields.push(t('wb.inst.poolModelSession', { amount: gib(model.slopeBytes) }));
-    if (model.state === 'fitted' && finite(model.interceptBytes)) fields.push(t('wb.inst.poolModelFixed', { amount: gib(model.interceptBytes) }));
-    if (finite(model.windowDays) && model.windowDays > 0) fields.push(t('wb.inst.poolModelWindow', { days: model.windowDays }));
-    if (fields.length) parts.push(fields.join(' · '));
-  }
-  const decision = poolDecision(record, t);
-  if (decision) parts.push(decision);
-  if (record?.reason === 'floor') parts.push(t('wb.inst.poolFloor'));
-  return parts;
-}
 // The collector samples every 30 seconds; three missed rounds make the numbers stale rather than current.
 export const SYSTEM_STALE_MS = 90_000;
 const oneDecimal = bytes => (bytes / 1073741824).toFixed(1);
@@ -118,20 +58,20 @@ const oneDecimal = bytes => (bytes / 1073741824).toFixed(1);
 export function systemItems(document, system, { t = key => key, readAt } = {}) {
   // Group snapshots carry readAt; freshness uses the same snapshot clock as the sample.
   const stale = system != null && !(readAt - system.sampledAt <= SYSTEM_STALE_MS);
-  const memory = system && system.memTotalBytes > 0 && system.memUsedBytes != null ? system.memUsedBytes / system.memTotalBytes * 100 : null;
+  const memory = system && system.mem_total_bytes > 0 && system.mem_used_bytes != null ? system.mem_used_bytes / system.mem_total_bytes * 100 : null;
   const specs = [
-    ['cpu', 'cpu', system?.cpuPct, system?.cpuCount > 0 ? countLabel(t, 'wb.inst.cpuCores', system.cpuCount) : ''],
+    ['cpu', 'cpu', system?.cpu_pct, system?.cpu_count > 0 ? countLabel(t, 'wb.inst.cpuCores', system.cpu_count) : '', system?.cpu_source],
     ['memory', 'memory', memory, memory == null ? ''
-      : t('wb.inst.memoryUsed', { used: oneDecimal(system.memUsedBytes), total: oneDecimal(system.memTotalBytes) })],
-    ['disk', 'disk', system?.diskUsedPct, system?.diskFreeBytes != null ? t('wb.inst.diskFree', { free: oneDecimal(system.diskFreeBytes) }) : ''],
+      : t('wb.inst.memoryUsed', { used: oneDecimal(system.mem_used_bytes), total: oneDecimal(system.mem_total_bytes) }), system?.mem_source],
+    ['disk', 'disk', system?.disk_pct, system?.disk_free_bytes != null ? t('wb.inst.diskFree', { free: oneDecimal(system.disk_free_bytes) }) : ''],
   ];
-  return specs.map(([glyph, name, value, detail]) => {
+  return specs.map(([glyph, name, value, detail, source]) => {
     const label = t('wb.host.' + name), known = !stale && typeof value === 'number' && Number.isFinite(value);
     const amount = known ? Math.round(Math.max(0, Math.min(100, value))) + '%' : '—';
     const node = item(document, icon(document, glyph, 'xs'), element(document, 'span', label, 'wb-sys-word wb-vh'), element(document, 'b', amount));
     node.classList.add('wb-sys', 'wb-sys-' + name);
     if (stale) node.classList.add('wb-stale');
-    node.title = [label + ' ' + amount, known ? detail : '',
+    node.title = [label + ' ' + amount, ['host', 'container'].includes(source) ? t('wb.inst.resourceSource.' + source) : '', known ? detail : '',
       system == null ? t('wb.inst.systemUnknown') : stale ? t('wb.inst.systemStale', { time: clock(system.sampledAt) }) : ''].filter(Boolean).join(' · ');
     return node;
   });
@@ -182,7 +122,7 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
     root.append(box);
   }
   const pool = instance.pool ?? {}, multi = snapshot.mode === 'multi';
-  const used = multi ? pool.used : pool.ready == null ? null : pool.ready + pool.starting;
+  const used = multi ? pool.used : snapshot.groupCounts?.listKnown === false ? null : snapshot.groupCounts?.running?.total ?? null;
   const capacity = multi ? pool.capacity ?? null : null;
   const full = used != null && capacity != null && used >= capacity;
   // Pool, cost and services: icon and number on screen; the title starts with the item's name, then the details.
@@ -199,20 +139,19 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
   const occupancy = used == null ? null : capacity == null ? String(used) : `${used} / ${capacity}`;
   poolItem.append(element(document, 'b', occupancy ?? '—', full ? 'wb-txt-warn' : undefined));
   // A queue is a wait, so it stays on screen.
-  const queued = pool.waiting ? t(technical ? 'wb.inst.queuedTech' : 'wb.inst.queued', { count: pool.waiting }) : '';
+  const waiting = snapshot.groupCounts?.offline?.waitingSlot ?? 0;
+  const queued = waiting ? t(technical ? 'wb.inst.queuedTech' : 'wb.inst.queued', { count: waiting }) : '';
   if (queued) poolItem.append(element(document, 'span', '· ' + queued, 'wb-txt-warn'));
-  const source = multi ? poolSource(pool, t) : '';
-  const details = technical && multi ? poolExplanation(pool.capacityRecord, t) : [];
   poolItem.title = [poolName, occupancy == null ? t('wb.unknown') : technical || multi ? t('wb.inst.inUse') + ' ' + occupancy : occupancy,
-    source, queued, ...details, t('wb.inst.poolHint')].filter(Boolean).join(' · ');
-  root.append(poolItem, ...systemItems(document, instance.system ?? null, { t, readAt: snapshot.readAt }));
-  cost = costSummary?.today?.total ?? cost;
+    queued, t('wb.inst.poolHint')].filter(Boolean).join(' · ');
+  root.append(poolItem, ...systemItems(document, instance.resources ?? null, { t, readAt: snapshot.readAt }));
+  cost = costSummary?.today?.cost ?? cost;
   const costName = t(technical ? 'wb.inst.costTech' : 'wb.cost'), today = money(cost);
   const expense = item(document, icon(document, 'dollar', 'xs'), spoken(document, costName), element(document, 'b', today));
   expense.classList.add('wb-cost');
   // The title names the scope, so the cost never reads as one group's.
   if (technical) {
-    const week = costSummary == null ? '—' : money(costSummary.sevenDay?.total);
+    const week = costSummary == null ? '—' : money(costSummary.sevenDay?.cost);
     expense.append(element(document, 'span', '·'), element(document, 'b', week));
     expense.title = [costName, t('wb.inst.today') + ' ' + today, t('wb.usage.range.7d') + ' ' + week, t('wb.usage.allGroups')].join(' · ');
   } else expense.title = [costName, today, t('wb.usage.allGroups')].join(' · ');

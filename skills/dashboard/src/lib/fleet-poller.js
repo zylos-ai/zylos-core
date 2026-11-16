@@ -1,5 +1,5 @@
 import { agentColor } from './agent-color.js';
-import { sanitizeFleetGroupSummary } from './workbench/fleet-summary.js';
+import { sanitizeFleetGroupSummary, fleetGroupSummary } from './workbench/fleet-summary.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 3000;
 const DEFAULT_TIMEOUT_MS = 2500;
@@ -148,52 +148,8 @@ function hasUpgrade(runtimeInfo) {
   return Boolean(
     runtimeInfo?.zylos_update ||
     runtimeInfo?.cc_update ||
-    runtimeInfo?.cc_restart ||
-    runtimeInfo?.codex_update ||
-    runtimeInfo?.codex_restart ||
-    runtimeInfo?.pending_restart
+    runtimeInfo?.codex_update
   );
-}
-
-function hasSubagent(state) {
-  return Array.isArray(state?.active_subagents) && state.active_subagents.length > 0;
-}
-
-function subagentCount(state) {
-  return Array.isArray(state?.active_subagents) ? state.active_subagents.length : 0;
-}
-
-function deriveActivity(state) {
-  if (state?.running_tools?.length > 0) return state.running_tools[0].tool_detail || state.running_tools[0].tool_name || 'Running tool';
-  if (state?.active_subagents?.length > 0) return state.active_subagents[0].last_activity || state.active_subagents[0].description || 'Subagent active';
-  // The single-agent view shows the prompt line only transiently; its Current
-  // Activity body is the last assistant message. The producer clears
-  // last_message on each new prompt, so preferring it here reproduces those
-  // semantics: the prompt summary shows only while the turn is still open.
-  const msg = state?.last_message;
-  const msgText = typeof msg === 'string' ? msg : msg?.text;
-  return msgText || state?.last_prompt?.summary || state?.reason || null;
-}
-
-// Mirror of the single-agent Current Activity feed (renderToolFeed): running
-// tools first, a synthetic "thinking" entry when busy with no visible tool.
-// Falls back to [] so consumers can degrade to the single-line `activity`.
-function deriveActivityFeed(state) {
-  const feed = [];
-  const tools = Array.isArray(state?.running_tools) ? state.running_tools : [];
-  for (const tool of tools.slice(0, 3)) {
-    feed.push({
-      kind: 'tool',
-      label: tool.tool_detail
-        ? `${tool.tool_name || 'tool'}: ${tool.tool_detail}`
-        : (tool.tool_name || 'Running tool'),
-      started_at: tool.started_at || null
-    });
-  }
-  if (feed.length === 0 && String(state?.state || '').toUpperCase() === 'BUSY') {
-    feed.push({ kind: 'thinking', label: null, started_at: null });
-  }
-  return feed;
 }
 
 function percentile95(values) {
@@ -286,20 +242,12 @@ function sanitizeRecord(record) {
     rate_limit_7d_pct: record.rate_limit_7d_pct ?? null,
     rate_limit_7d_recorded_at: record.rate_limit_7d_recorded_at ?? null,
     rate_limit_7d_live: record.rate_limit_7d_live ?? null,
-    context_pct: record.context_pct,
-    cost: record.cost,
-    session_cost: record.session_cost,
     daily_cost: record.daily_cost,
     weekly_cost: record.weekly_cost,
-    model: record.model,
-    effort: record.effort,
-    new_session_threshold: record.new_session_threshold,
     cpu_pct: record.cpu_pct,
     mem_pct: record.mem_pct,
     disk_pct: record.disk_pct,
     has_upgrade: record.has_upgrade === true,
-    has_subagent: record.has_subagent === true,
-    subagent_count: Number.isFinite(record.subagent_count) ? record.subagent_count : 0,
     last_seen: record.last_seen,
     pulse_rate: record.pulse_rate,
     health_reason: record.health_reason,
@@ -342,26 +290,18 @@ export function stateToFleetRecord(agentConfig = {}, statePayload = {}, opts = {
     supervisor_paused: statePayload?.supervisor_paused,
     session_mode: statePayload?.session_mode,
     group_summary: statePayload?.group_summary,
-    activity: deriveActivity(statePayload),
-    activity_feed: deriveActivityFeed(statePayload),
+    activity: null,
+    activity_feed: [],
     rate_limit_pct: statePayload?.rate_limit_pct ?? null,
     rate_limit_7d_pct: statePayload?.rate_limit_7d_pct ?? null,
     rate_limit_7d_recorded_at: statePayload?.rate_limit_7d_recorded_at ?? null,
     rate_limit_7d_live: statePayload?.rate_limit_7d_live ?? null,
-    context_pct: statePayload?.context_pct ?? metricValue(statePayload, 'context_pct'),
-    cost: statePayload?.session_cost ?? statePayload?.daily_cost ?? statePayload?.weekly_cost ?? metricValue(statePayload, 'session_cost') ?? metricValue(statePayload, 'daily_cost'),
-    session_cost: statePayload?.session_cost ?? metricValue(statePayload, 'session_cost'),
     daily_cost: statePayload?.daily_cost ?? metricValue(statePayload, 'daily_cost'),
     weekly_cost: statePayload?.weekly_cost ?? null,
-    model: runtimeInfo?.model || runtimeInfo?.model_id || null,
-    effort: runtimeInfo?.effort || null,
-    new_session_threshold: statePayload?.new_session_threshold ?? null,
     cpu_pct: numberOrNull(systemMetrics?.cpu_pct),
     mem_pct: memPct(systemMetrics),
     disk_pct: numberOrNull(systemMetrics?.disk_pct ?? systemMetrics?.disk_used_pct),
     has_upgrade: hasUpgrade(runtimeInfo),
-    has_subagent: hasSubagent(statePayload),
-    subagent_count: subagentCount(statePayload),
     last_seen: nowIso(nowMs),
     pulse_rate: 1,
     health_reason: healthReason,
@@ -370,6 +310,44 @@ export function stateToFleetRecord(agentConfig = {}, statePayload = {}, opts = {
     self,
     access: opts.access
   });
+}
+
+// Assemble fleet presentation from the same object APIs used by the local UI.
+export function fleetStateFromObjects(instance, counts, usage, running) {
+  const stateKeys = ['working', 'idle', 'starting', 'stopping', 'unknown'];
+  const count = value => Number.isSafeInteger(value) && value >= 0;
+  const cost = value => value === null || typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  const mode = instance?.session_mode?.sessionMode;
+  if (!instance || ![null, 'single', 'multi'].includes(mode) ||
+      typeof counts?.listKnown !== 'boolean' || !counts?.running?.states || !count(counts.running.total) ||
+      stateKeys.some(key => !count(counts.running.states[key])) ||
+      stateKeys.reduce((sum, key) => sum + counts.running.states[key], 0) !== counts.running.total ||
+      !cost(usage?.today?.cost) || !cost(usage?.sevenDay?.cost) || !Array.isArray(running?.rows)) throw reasonError('bad_payload');
+  const states = counts.running.states;
+  const runtime = instance.default_runtime;
+  const account = instance.accounts?.[runtime];
+  // Compact catalog rows carry state and flags, never raw process observations.
+  // The established summary helper still owns precedence and bounded problems.
+  const summaryRows = running.rows.map(row => ({
+    sessionGroup: row.id, presence: row.state?.kind === 'unknown' ? 'unknown' : row.state?.kind === 'starting' ? 'starting' : 'running', runtime: row.runtime,
+    name: row.displayName ? { displayName: row.displayName } : null,
+    state: { kind: ({ working: 'busy', starting: 'waiting', stopping: 'waiting' }[row.state?.kind] ?? row.state?.kind) },
+    noResponse: row.flags?.noResponse && Number.isFinite(Date.parse(row.flags.noResponse.since)) ? { since: Date.parse(row.flags.noResponse.since) } : null,
+    flags: row.flags,
+  }));
+  return { agent: instance.agent, session_mode: mode,
+    state: mode === null || counts.listKnown === false ? 'UNKNOWN' : states.working > 0 ? 'BUSY' : states.unknown > 0 ? 'UNKNOWN' : 'IDLE',
+    supervisor_paused: instance.supervisorPaused,
+    runtime_info: {
+      zylos_update: instance.versions?.zylos?.update ?? null,
+      cc_update: instance.versions?.claude?.update ?? null,
+      codex_update: instance.versions?.codex?.update ?? null },
+    system_metrics: instance.resources,
+    group_summary: fleetGroupSummary({ mode, readAt: counts.readAt, listKnown: counts.listKnown,
+      rows: summaryRows, groupCounts: counts, instance: { pool: counts.pool, autoRestarts: instance.autoRestarts, runtimeHealth: instance.runtimeHealth } }),
+    rate_limit_7d_pct: account?.used_percentage ?? account?.usedPercentage ?? null,
+    rate_limit_7d_live: account?.live ?? null, rate_limit_7d_recorded_at: account?.recordedAt ?? null,
+    daily_cost: usage.today.cost, weekly_cost: usage.sevenDay.cost };
 }
 
 export class FleetPoller {
@@ -411,20 +389,12 @@ export class FleetPoller {
         hue: color.hue,
         state: 'UNKNOWN',
         activity: null,
-        context_pct: null,
-        cost: null,
-        session_cost: null,
         daily_cost: null,
         weekly_cost: null,
-        model: null,
-        effort: null,
-        new_session_threshold: null,
         cpu_pct: null,
         mem_pct: null,
         disk_pct: null,
         has_upgrade: false,
-        has_subagent: false,
-        subagent_count: 0,
         last_seen: null,
         pulse_rate: null,
         health_reason: 'not_polled',
@@ -481,20 +451,12 @@ export class FleetPoller {
       hue: color.hue,
       state: 'UNKNOWN',
       activity: null,
-      context_pct: null,
-      cost: null,
-      session_cost: null,
       daily_cost: null,
       weekly_cost: null,
-      model: null,
-      effort: null,
-      new_session_threshold: null,
       cpu_pct: null,
       mem_pct: null,
       disk_pct: null,
       has_upgrade: false,
-      has_subagent: false,
-      subagent_count: 0,
       last_seen: null,
       pulse_rate: null,
       health_reason: 'not_polled',
@@ -790,11 +752,16 @@ export class FleetPoller {
     this.onPoll?.(this.getFleet());
   }
 
-  _fetchState(agent, token) {
-    return fetchWithTimeout(this.fetch, joinUrl(agent.base_url, '/api/state'), {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${token}` }
-    }, this.timeoutMs);
+  async _fetchState(agent, token) {
+    const responses = await Promise.all(['/api/instance', '/api/groups/counts', '/api/usage/summary', '/api/groups/running'].map(apiPath =>
+      fetchWithTimeout(this.fetch, joinUrl(agent.base_url, apiPath), {
+        method: 'GET', headers: { Authorization: `Bearer ${token}` }
+      }, this.timeoutMs)));
+    const failed = responses.find(response => !response.ok);
+    if (failed) return failed;
+    const [instance, counts, usage, running] = await Promise.all(responses.map(response => readJsonOrBadPayload(response)));
+    const state = fleetStateFromObjects(instance, counts, usage, running);
+    return { ok: true, status: 200, json: async () => state };
   }
 
   _fetchHealth(agent, authorization) {
@@ -999,29 +966,24 @@ export class FleetPoller {
       err.reason = 'auth_expired';
       throw err;
     }
-    if (event.event !== 'fleet_state') return;
+    if (!['instance', 'groups'].includes(event.event)) return;
     const stream = this.streams.get(agent.name);
     if (stream) {
       stream.seenFleetState = true;
-      if (stream.compatibilityTimer) {
-        this.clearTimeout(stream.compatibilityTimer);
-        stream.compatibilityTimer = null;
+      if (stream.compatibilityTimer) { this.clearTimeout(stream.compatibilityTimer); stream.compatibilityTimer = null; }
+      if (stream.objectReadPending) { stream.objectReadDirty = true; return; }
+      stream.objectReadPending = true;
+    }
+    this._pollAgentAndNotify(agent).finally(() => {
+      if (stream) {
+        stream.objectReadPending = false;
+        if (stream.objectReadDirty && this._isCurrentAgent(agent, undefined, stream)) {
+          stream.objectReadDirty = false;
+          this._handleSseEvent(agent, { event: 'groups' });
+        }
       }
-    }
-    let state;
-    try {
-      state = JSON.parse(event.data || '{}');
-    } catch {
-      return;
-    }
-    try {
-      validateStatePayload(state);
-    } catch {
-      return;
-    }
-    this._setSuccess(agent, state);
+    });
     this._stopFallbackPolling(agent, 'sse-takeover');
-    this.onPoll?.(this.getFleet());
   }
 
   _startFallbackPolling(agent, trigger = 'unknown') {
@@ -1078,21 +1040,13 @@ export class FleetPoller {
       color: color.color,
       hue: color.hue,
       state: reason === 'version_unsupported' ? 'UNKNOWN' : 'OFFLINE',
-      activity: existing.activity || null,
-      context_pct: existing.context_pct ?? null,
-      cost: existing.cost ?? null,
-      session_cost: existing.session_cost ?? null,
+      activity: null,
       daily_cost: existing.daily_cost ?? null,
       weekly_cost: existing.weekly_cost ?? null,
-      model: existing.model ?? null,
-      effort: existing.effort ?? null,
-      new_session_threshold: existing.new_session_threshold ?? null,
       cpu_pct: existing.cpu_pct ?? null,
       mem_pct: existing.mem_pct ?? null,
       disk_pct: existing.disk_pct ?? null,
       has_upgrade: existing.has_upgrade === true,
-      has_subagent: existing.has_subagent === true,
-      subagent_count: Number.isFinite(existing.subagent_count) ? existing.subagent_count : 0,
       last_seen: existing.last_seen || null,
       pulse_rate: 0,
       health_reason: reason,

@@ -4,7 +4,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sendHtml, sendJson, serveStatic } from '../../skills/dashboard/src/lib/http.js';
-import { workbenchAnswer } from '../../skills/dashboard/__tests__/fixtures/workbench-browser-api.js';
+import { workbenchSnapshot, workbenchSnapshotAnswer } from '../../skills/dashboard/__tests__/fixtures/workbench-browser-api.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../skills/dashboard/public/', import.meta.url)));
 export async function runOverviewReadState(sandbox, scenario) {
@@ -19,13 +19,12 @@ export async function runOverviewReadState(sandbox, scenario) {
       res.write(': ready\n\n'); streams.add(res); res.on('close', () => streams.delete(res)); return;
     }
     if (url.pathname.startsWith('/api/')) {
-      let value = workbenchAnswer(url, Date.now());
-      if (url.pathname === '/api/workbench/groups') {
-        if (failGroups) return sendJson(res, 500, { error: 'fixture_read_failed' });
-        if (scenario.kind === 'empty') value = { ...value, rows: [], counts: {}, attention: { problems: [], reminders: [] } };
-        // An independent attention problem must survive a refresh error.
-        else value.attention.problems.push({ kind: 'channel_down', service: 'fixture-service' });
-      }
+      const now = Date.now(), snapshot = workbenchSnapshot(now);
+      if (url.pathname === '/api/groups/running' && failGroups) return sendJson(res, 500, { ok: false, error: { code: 'FIXTURE_READ_FAILED', message: 'Fixture read failed' } });
+      if (scenario.kind === 'empty') snapshot.rows = [];
+      // Independent channel health remains observable when the group read fails.
+      else snapshot.instance.services.channels = [{ channel: 'fixture', service: 'fixture-service', status: 'errored', down: true }];
+      const value = workbenchSnapshotAnswer(url, snapshot, now);
       return sendJson(res, value === undefined ? 404 : 200, value ?? { error: 'not_found' });
     }
     if (url.pathname === '/') return sendHtml(res, 200, fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8')

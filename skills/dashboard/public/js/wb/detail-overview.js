@@ -1,8 +1,8 @@
 import { countLabel } from '../count-label.js?v=1';
 import { listen } from './detail-update.js?v=158';
 import { element, icon, lastReceived, runtimeName } from './plain-text.js?v=106';
-import { annotateStatus, modelCell, pendingModel, shortDuration } from './board.js?v=156';
-import { toolLabel, waitText } from './view-mode.js?v=152';
+import { annotateStatus, modelCell, pendingModel, shortDuration } from './board.js?v=159';
+import { toolLabel, waitText } from './view-mode.js?v=153';
 import { displayTime, eventLabel, timeValue } from './event-labels.js?v=93';
 import { recentRows } from './timeline-rows.js?v=112';
 import { formatZoned, zonedDay } from './instance-zone.js?v=100';
@@ -188,15 +188,8 @@ function idleDuration(seconds, t) {
     remaining ? minuteText(remaining) : null].filter(Boolean).join(' ');
 }
 
-/** Busy/idle follow event-derived working, as in conversation headers; preserve exceptional runtime states. */
-export function detailDisplayRow(row, now = Date.now()) {
-  if (row.state?.stale || !['busy', 'idle'].includes(row.state?.kind)) return row;
-  const working = row.working;
-  const kind = working ? working.on ? 'busy' : 'idle' : 'unknown';
-  const duration = working?.on && Number.isFinite(working.since) ? Math.max(0, (now - working.since) / 1000)
-    : kind === 'idle' && row.state.kind === 'idle' ? row.duration : null;
-  return { ...row, state: { ...row.state, kind }, duration };
-}
+/** Display the primary status computed by the group resource without reclassifying it. */
+export function detailDisplayRow(row) { return row; }
 
 function nowCard(document, row, data, { level, t, snapshot, onRaw, showLastReceived, agents }) {
   const kind = row.state?.kind ?? 'unknown';
@@ -205,15 +198,15 @@ function nowCard(document, row, data, { level, t, snapshot, onRaw, showLastRecei
   card.append(title);
   const tools = row.tools ?? [];
   if (!technical(level)) {
-    const waiting = row.wait && ['waiting', 'unknown', 'error'].includes(kind);
+    const waiting = row.wait && (row.flags?.waitingSlot || row.flags?.blocked || row.flags?.startFailed || kind === 'unknown');
     const status = waiting ? waitText({ ...row.wait, pendingCount: row.queue?.pending?.count }, 'plain', t)
-      : kind === 'busy' ? [tools.length ? tools.map(tool => toolLabel(tool.name, 'plain', t)).join(t('wb.detail.toolSeparator')) : t('wb.state.busy'),
+      : kind === 'working' ? [tools.length ? tools.map(tool => toolLabel(tool.name, 'plain', t)).join(t('wb.detail.toolSeparator')) : t('wb.state.working'),
         agents.length ? countLabel(t, 'wb.detail.backgroundAgents', agents.length) : null].filter(Boolean).join(' · ')
-        : kind === 'not_running' ? t('wb.detail.standby') : t('wb.state.' + kind);
-    title.append(icon(document, kind === 'busy' ? 'tool' : kind === 'error' ? 'alert' : kind === 'unknown' ? 'help' : 'clock'), element(document, 'span', status));
+        : kind === 'offline' ? t('wb.detail.standby') : t('wb.state.' + kind);
+    title.append(icon(document, kind === 'working' ? 'tool' : row.flags?.startFailed ? 'alert' : kind === 'unknown' ? 'help' : 'clock'), element(document, 'span', status));
     if (kind === 'idle' && row.duration != null) title.append(element(document, 'span', ' · ' + t('wb.detail.idleElapsed', { duration: idleDuration(row.duration, t) }), 'wb-dur'));
-    if (kind === 'busy') card.classList.add('wb-now-work');
-    else if (['waiting', 'error', 'unknown'].includes(kind)) card.classList.add(kind === 'error' ? 'wb-now-err' : kind === 'unknown' ? 'wb-now-unk' : 'wb-now-wait');
+    if (kind === 'working') card.classList.add('wb-now-work');
+    else if (waiting || kind === 'unknown') card.classList.add(row.flags?.startFailed ? 'wb-now-err' : kind === 'unknown' ? 'wb-now-unk' : 'wb-now-wait');
   } else if (tools.length) {
     card.classList.add('wb-now-work');
     for (const [index, tool] of tools.entries()) {
@@ -229,15 +222,15 @@ function nowCard(document, row, data, { level, t, snapshot, onRaw, showLastRecei
       if (level === 'technical' && tool.detail) card.append(element(document, 'div', tool.detail, 'wb-args'));
     }
   } else if (row.wait) {
-    const failed = row.wait.kind === 'start_failed' || kind === 'error';
+    const failed = row.wait.kind === 'start_failed' || Boolean(row.flags?.startFailed);
     card.classList.add(failed ? 'wb-now-err' : kind === 'unknown' ? 'wb-now-unk' : 'wb-now-wait');
     title.append(icon(document, failed ? 'alert' : kind === 'unknown' ? 'help' : 'clock'), element(document, 'span', t('wb.state.' + kind)));
     card.append(element(document, 'p', waitText({ ...row.wait, pendingCount: row.queue?.pending?.count }, level, t), 'wb-now-sub'));
   } else {
-    if (kind === 'error') card.classList.add('wb-now-err');
-    const glyph = icon(document, kind === 'not_running' ? 'power' : kind === 'error' ? 'alert' : kind === 'unknown' ? 'help' : 'clock');
-    title.append(glyph, element(document, 'span', kind === 'not_running' ? t('wb.detail.standby') : t('wb.state.' + kind)));
-    if (row.duration != null && !['not_running', 'unknown'].includes(kind)) title.append(element(document, 'span', shortDuration(row.duration), 'wb-dur'));
+    if (row.flags?.startFailed) card.classList.add('wb-now-err');
+    const glyph = icon(document, kind === 'offline' ? 'power' : row.flags?.startFailed ? 'alert' : kind === 'unknown' ? 'help' : 'clock');
+    title.append(glyph, element(document, 'span', kind === 'offline' ? t('wb.detail.standby') : t('wb.state.' + kind)));
+    if (row.duration != null && !['offline', 'unknown'].includes(kind)) title.append(element(document, 'span', shortDuration(row.duration), 'wb-dur'));
   }
   annotateStatus(document, title, row, { t, now: data.now });
   if (showLastReceived && row.preview) card.append(element(document, 'p', lastReceived(row, t, { now: data.now }), 'wb-now-sub'));
@@ -254,11 +247,12 @@ function nowCard(document, row, data, { level, t, snapshot, onRaw, showLastRecei
       summary.append(icon(document, 'chev', 'xs'), element(document, 'span', t('wb.detail.rawMessage')));
       raw.append(summary);
       if (stored?.open) raw.append(stored.status === 'ok' && stored.text != null ? element(document, 'pre', stored.text, 'wb-mono')
-        : element(document, 'p', t(stored.status === 'loading' ? 'wb.detail.rawLoading' : 'wb.detail.rawUnavailable'), 'wb-now-raw-note'));
+        : element(document, 'p', [t(stored.status === 'loading' ? 'wb.detail.rawLoading' : 'wb.detail.rawUnavailable'), stored.status === 'error' ? stored.error : null].filter(Boolean).join(' · '), 'wb-now-raw-note'));
       listen(raw, 'toggle', event => onRaw(event.currentTarget.open));
       card.append(raw);
     }
-    if (['waiting', 'unknown', 'error'].includes(kind)) {
+    if (['starting', 'stopping', 'unknown'].includes(kind) ||
+        ['blocked', 'waitingSlot', 'startFailed', 'unreadable'].some(flag => row.flags?.[flag])) {
       const evidence = detailEvidence(row, snapshot);
       const details = element(document, 'details', undefined, 'wb-detail-evidence');
       details.open = false;

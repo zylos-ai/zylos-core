@@ -1,3 +1,4 @@
+import { createCgroupCollector } from '../src/lib/cgroup-resources.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,9 +10,11 @@ import { SystemCollector } from '../src/lib/collectors/system-collector.js';
 import { MetricResolver } from '../src/lib/metric-resolver.js';
 import { runMetricMaintenance } from '../src/lib/metric-maintenance.js';
 import { Store } from '../src/lib/store.js';
-import { buildSystemPayload } from '../src/lib/system-api.js';
+import { usageTokenRows, costRows } from '../src/lib/workbench/cost-query.js';
 
-function tmpDir(prefix = 'metric-aggregation-phase5-') {
+const cgroupCollector = createCgroupCollector({ readFile: () => { throw new Error('fixture: no cgroup'); } });
+
+function tmpDir(prefix = 'metric-collectors-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
@@ -63,7 +66,7 @@ test('PM2Collector writes one summary row and upserts per-process latest state',
 
 test('SystemCollector writes a single system_summary row', async () => {
   await withStore(async (store, dir) => {
-    const collector = new SystemCollector(store, { zylosDir: dir, runtime: 'codex' });
+    const collector = new SystemCollector(store, { zylosDir: dir, runtime: 'codex' }, { cgroupCollector });
     await collector.collect();
 
     const rows = store.queryMetrics({ name: 'system_summary' });
@@ -115,7 +118,6 @@ test('StatuslineCollector writes one statusline_summary row with capacity dimens
     assert.equal(rows[0].dimensions.rate_limit, undefined);
     assert.equal(rows[0].dimensions.rate_limit_7d, undefined);
     assert.equal(rows[0].dimensions.cache_hit_rate, 0.6);
-    assert.equal(collector.getRuntimeInfo().model_id, 'claude-opus-4-6');
   });
 });
 
@@ -283,53 +285,21 @@ test('usage_event aggregate readers compute cost, cache, tokens, series, and pro
   });
 
   assert.equal(store.aggregateCost({ sessionId: 'session-1' }), 0.42);
-  assert.deepEqual(store.aggregateTokens({ sessionId: 'session-1' }), {
-    input: 1000,
-    output: 200,
-    cache_read: 250,
-    cache_rate: 0.25
-  });
+  const bounds = { since: '2026-05-23T00:00:00.000Z', until: '2026-05-23T02:00:00.000Z', bucket: 'hour', tz: 'UTC' };
+  const tokens = usageTokenRows(store, bounds);
+  assert.equal(tokens.length, 1);
+  assert.equal(tokens[0].inputTokens, 1000);
+  assert.equal(tokens[0].outputTokens, 200);
+  assert.equal(tokens[0].cacheReadTokens, 250);
+  assert.equal(tokens[0].cacheReadTokens / tokens[0].inputTokens, 0.25);
   assert.equal(store.aggregateCacheRate({ sessionId: 'session-1' }), 0.25);
-  assert.equal(store.aggregateCostSeries({
-    since: '2026-05-23T00:00:00.000Z',
-    until: '2026-05-23T02:00:00.000Z',
-    bucketSeconds: 3600
-  })[0].cost_sum, 0.42);
+  assert.equal(costRows(store, bounds)[0].value, 0.42);
   assert.equal(store.getProjectDistribution({
     since: '2026-05-23T00:00:00.000Z',
     until: '2026-05-23T02:00:00.000Z'
   }).items[0].name, 'zylos-dashboard');
 }));
 
-test('/api/system payload uses DB-backed PM2 and system summary fallback after warmup cache is empty', () => {
-  const payload = buildSystemPayload({
-    pm2Data: null,
-    sysData: null,
-    pm2State: [
-      {
-        process_name: 'zylos-dashboard',
-        status: 'online',
-        memory_bytes: 123456,
-        uptime_ms: 5000,
-        updated_at: '2026-06-07T01:00:00.000Z'
-      }
-    ],
-    systemSummary: {
-      timestamp: '2026-06-07T01:01:00.000Z',
-      dimensions: { cpu_pct: 12.5, mem_used_bytes: 123456 }
-    },
-    scheduler: { running: true }
-  });
-
-  assert.equal(payload.pm2[0].name, 'zylos-dashboard');
-  assert.equal(payload.pm2[0].memory, 123456);
-  assert.equal(payload.pm2[0].uptime, 5000);
-  assert.equal(payload.pm2[0].process_name, undefined);
-  assert.equal(payload.system.cpu_pct, 12.5);
-  assert.equal(payload.scheduler.running, true);
-  assert.equal(payload.collected_at.pm2, '2026-06-07T01:00:00.000Z');
-  assert.equal(payload.collected_at.system, '2026-06-07T01:01:00.000Z');
-});
 
 for (const runtime of ['claude', 'codex']) test(`MetricResolver uses current ${runtime} account windows and never historical fallback`, () => {
   const future = Math.floor(Date.now() / 1000) + 3600;

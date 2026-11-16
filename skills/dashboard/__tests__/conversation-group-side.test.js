@@ -24,11 +24,11 @@ const sessionGroup = 'dashboard:42';
 const conversationId = 'g:' + Buffer.from(sessionGroup).toString('hex').toUpperCase();
 const otherGroup = 'dashboard:43';
 const otherId = 'g:' + Buffer.from(otherGroup).toString('hex').toUpperCase();
-const listedRow = { sessionGroup, name: { displayName: 'Release room' }, state: 'idle', presence: 'running',
+const listedRow = { id: sessionGroup, displayName: 'Release room', channel: 'dashboard', runtime: 'claude', model: null, mainAgent: 'idle', contextPct: null, lastActivityAt: null, duration: null, flags: {}, sessionGroup, name: { displayName: 'Release room' }, state: { kind: 'idle' }, presence: 'running',
   live: { runId: 'run-1', sessionId: 's-1' }, createdAt: 1, c4: { componentName: 'dashboard' } };
 
 function eventDocument() {
-  const document = createDocument();
+  const document = createDocument({ nativeText: true });
   const listeners = new Map();
   Object.assign(document, {
     visibilityState: 'visible',
@@ -61,15 +61,29 @@ async function fixture(testContext, { storage = memoryStorage(), open = true, gr
   const json = body => ({ ok: true, status: 200, json: async () => body });
   const fetch = async path => {
     reads.push(path);
-    if (path === '/api/workbench/groups') {
+    if (path === '/api/instance') return json({ session_mode: { sessionMode: 'multi' }, default_runtime: 'claude' });
+    if (path === '/api/groups/counts') {
+      const offline = groupRow.state.kind === 'offline';
+      return json({ readAt: 1000, listKnown: true, running: { total: offline ? 0 : 1,
+        states: Object.fromEntries(['working', 'idle', 'starting', 'stopping', 'unknown'].map(kind => [kind, groupRow.state.kind === kind ? 1 : 0])),
+        flags: Object.fromEntries(['queued', 'blocked', 'waitingSlot', 'startFailed', 'unreadable'].map(key => [key, !offline && groupRow.flags[key] ? 1 : 0])) },
+        offline: { total: offline ? 1 : 0, waitingSlot: offline && groupRow.flags.waitingSlot ? 1 : 0, startFailed: 0 }, pool: { used: 1, capacity: 12 } });
+    }
+    const url = new URL(path, 'http://fixture.invalid');
+    if (/^\/api\/groups\/[^/]+$/.test(url.pathname) && !['running','counts'].includes(url.pathname.split('/').at(-1))) {
+      const key = decodeURIComponent(url.pathname.split('/').at(-1));
+      return json(groupRow?.id === key ? { ...groupRow, readAt: 1000, run: { runId: 'run-1', sessionId: 's-1' } }
+        : { id: key, sessionGroup: key, displayName: null, channel: 'dashboard', flags: {}, state: { kind: 'offline' }, presence: 'not_running', live: null, run: null });
+    }
+    if (path === '/api/groups/running') {
       if (groupFailures > 0) { groupFailures--; return { ok: false, status: 500, json: async () => ({}) }; }
       if (groupHold) await groupHold.promise;
-      return json({ rows: [groupRow], listKnown: true });
+      return json({ rows: groupRow.state.kind === 'offline' ? [] : [Object.fromEntries(['id', 'displayName', 'channel', 'runtime', 'model', 'state', 'duration', 'flags', 'mainAgent', 'contextPct', 'lastActivityAt'].map(key => [key, groupRow[key]]))], readAt: 1000, listKnown: true });
     }
-    if (path.startsWith('/api/timeline')) return json({ events: [] });
+    if (path.includes('/events')) return json({ events: [] });
     if (path.includes('/backlog')) return json({ pending: 0 });
     if (path.includes('/runs')) return json({ totalEvents: 0, totalRuns: 0, unattributed: 0, runs: [] });
-    if (path.includes('session-mode')) return json({ data: { sessionMode: 'multi' } });
+
     if (path.startsWith('/api/chat/conversations?')) return json({ items: [
       { id: conversationId, sessionGroup, display_name: 'Release room', channel: 'dashboard' },
       { id: otherId, sessionGroup: otherGroup, display_name: 'Other room', channel: 'dashboard' },
@@ -113,7 +127,7 @@ test('the group detail opens beside the conversation, showing that group, and th
   assert.equal(f.pageNode().hidden, false, 'the conversation page is still shown');
   assert.ok(f.pageNode().classList.contains('conversation-has-side'), 'the conversation makes room for it');
   assert.equal(f.title(), 'Release room', 'it shows the group of the conversation');
-  assert.ok(f.reads.includes('/api/workbench/groups'), 'the panel read the group list itself');
+  assert.ok(f.reads.includes('/api/groups/running'), 'the panel read the group list itself');
   assert.equal(f.groupButton().attributes['aria-expanded'], 'true');
   assert.ok(f.document.activeElement === f.side(), 'the focus moved into the side panel');
 });
@@ -124,7 +138,7 @@ test('without the overview, a failed first group read still opens the group, and
   await f.openSide();
   assert.equal(f.side().hidden, false);
   assert.ok(f.title(), 'the panel is not blank');
-  assert.notEqual(f.title(), 'Release room', 'without the list the group is shown by its key');
+  assert.equal(f.title(), 'Release room', 'the group detail names the group even when its list read fails');
   assert.equal(allNodes(f.side()).some(node => node.classList.contains('wb-detail-error')), false, 'no read error is shown');
   await f.poll();
   assert.equal(f.title(), 'Release room', 'the next read shows the listed group');
@@ -136,7 +150,7 @@ test('while the first group read is still on its way the panel already shows the
   await f.openSide();
   assert.equal(f.side().hidden, false);
   assert.ok(f.title(), 'the panel is not blank while the list is read');
-  assert.notEqual(f.title(), 'Release room', 'before the list arrives the group is shown by its key');
+  assert.equal(f.title(), 'Release room', 'the independent group detail supplies the name before the list arrives');
   release();
   await tick(); await tick(); await tick();
   assert.equal(f.title(), 'Release room', 'the listed row replaces it once the read completes');
@@ -150,7 +164,7 @@ test('a group that is not on the known list shows as not running once the list a
   const release = f.holdGroupReads();
   await f.openSide();
   const standby = () => allNodes(f.side()).some(node => node.textContent === 'wb.detail.standby');
-  assert.equal(standby(), false, 'before the list arrives the state is not known');
+  assert.equal(standby(), true, 'the group detail can establish offline status before the running list arrives');
   release();
   await tick(); await tick(); await tick();
   assert.equal(standby(), true, 'the known list without this group means it is not running');
@@ -380,17 +394,17 @@ function summaryTranslation(locale) {
 // Content variants run through the actual overview renderer with both preview-origin policies. The mounted
 // sidebar tests above cover its wiring to that policy. The browser cases retain
 // navigation, viewport geometry and screenshots; this fixed twelve-case matrix needs no layout or browser.
-for (const locale of ['zh', 'en']) for (const level of ['plain', 'technical']) for (const scene of ['idle', 'busy', 'waiting']) {
+for (const locale of ['zh', 'en']) for (const level of ['plain', 'technical']) for (const scene of ['idle', 'working', 'waiting']) {
   test(`${locale} ${level} ${scene}: group summaries keep content and evidence in their intended regions`, () => {
     const now = Date.now(), preview = 'The received message must stay a subtitle';
     const translate = summaryTranslation(locale), zh = locale === 'zh';
-    const current = { ...listedRow, state: { kind: scene }, working: { on: scene === 'busy', since: scene === 'busy' ? now - 75000 : null }, duration: 75,
+    const current = { ...listedRow, state: { kind: scene === 'waiting' ? 'idle' : scene }, flags: scene === 'waiting' ? { queued: { count: 1 }, blocked: { reason: 'rate_limited', runtime: 'claude' } } : {}, working: { on: scene === 'working', since: scene === 'working' ? now - 75000 : null }, duration: 75,
       preview: { text: preview, timestamp: now - 90000, channel: 'dashboard', source: { kind: 'channel' } },
-      tools: scene === 'busy' ? [{ name: 'Read' }, { name: 'WebSearch' }] : [],
-      queue: { known: true, pending: { count: scene === 'waiting' ? 1 : 0 }, running: { count: scene === 'busy' ? 1 : 0 } },
+      tools: scene === 'working' ? [{ name: 'Read' }, { name: 'WebSearch' }] : [],
+      queue: { known: true, pending: { count: scene === 'waiting' ? 1 : 0 }, running: { count: scene === 'working' ? 1 : 0 } },
       wait: scene === 'waiting' ? { kind: 'rate_wait', runtime: 'claude', cooldownUntil: Math.floor(now / 1000) + 3600 } : null,
       live: { ...listedRow.live, status: { valid: true, state: scene === 'waiting' ? 'idle' : scene, sampledAt: now } } };
-    const events = scene === 'busy' ? [1, 2].map(id => ({ event_seq: id, event_type: 'subagent_start',
+    const events = scene === 'working' ? [1, 2].map(id => ({ event_seq: id, event_type: 'subagent_start',
       agent_id: 'helper-' + id, run_id: 'run-1', metadata: { name: 'Background helper ' + id } })) : [];
     const ok = { ok: true, readAt: now };
     const snapshot = { readAt: now, sources: { status: ok, c4: scene === 'waiting' ? { ok: false, reason: 'messages_unreadable', readAt: now } : ok,
@@ -414,7 +428,7 @@ for (const locale of ['zh', 'en']) for (const level of ['plain', 'technical']) f
         assert.equal(titles.length, 1);
         assert.equal(titles[0].textContent, level === 'plain' ? zh ? '空闲 · 已 1 分钟' : 'Idle · for 1 minute'
           : (zh ? '空闲' : 'Idle') + '1m15s');
-      } else if (scene === 'busy') {
+      } else if (scene === 'working') {
         if (level === 'plain') {
           assert.equal(titles[0].textContent, zh ? '读文件、搜索网页 · 后台子任务 2 个' : 'Read file, Search web · 2 background subtasks');
           assert.equal(nodes('.wb-subs').length, 0, 'the plain count replaces separate technical tags');
@@ -430,7 +444,7 @@ for (const locale of ['zh', 'en']) for (const level of ['plain', 'technical']) f
         assert.match(titles[0].textContent, zh ? /^额度已用完，.+恢复。1 条消息在等/ : /^Allowance exhausted; recovers at .+\. 1 message is waiting/);
         assert.doesNotMatch(titles[0].textContent, /恢复时间未知|recovery time unknown/);
       } else {
-        assert.equal(titles[0].textContent, zh ? '等待' : 'Waiting');
+        assert.equal(titles[0].textContent, zh ? '空闲' : 'Idle', 'technical view keeps canonical activity separate from the wait reason');
         assert.match(nodes('.wb-now-sub')[0].textContent, /rate_wait/);
       }
       const terminal = card.querySelectorAll('[data-observer-group]');
@@ -463,5 +477,27 @@ for (const locale of ['zh', 'en']) for (const level of ['plain', 'technical']) f
         assert.doesNotMatch(evidence.textContent, /messages_unreadable/);
       } else assert.equal(evidence, null, 'healthy waiting sources do not expose evidence in plain view either');
     }
+  });
+}
+
+// Waiting for capacity is an offline group with independent flags, not a
+// synthetic activity state. Keep its queue explanation in both view levels.
+for (const locale of ['zh', 'en']) for (const level of ['plain', 'technical']) {
+  test(`${locale} ${level}: offline waitingSlot keeps its queue position and evidence`, () => {
+    const document = eventDocument(), root = document.createElement('div');
+    const t = summaryTranslation(locale);
+    const current = { ...listedRow, state: { kind: 'offline' }, presence: 'not_running', live: null, duration: null,
+      flags: { queued: { count: 1 }, waitingSlot: { position: 3 } },
+      queue: { known: true, pending: { count: 1 }, running: { count: 0 } }, wait: { kind: 'pool_wait', position: 3 } };
+    renderOverview(root, current, {}, { document, t, level, showLastReceived: false,
+      snapshot: { readAt: 1000, sources: { status: { ok: true, readAt: 1000 } } } });
+    const title = root.querySelector('.wb-now-title');
+    if (level === 'plain') assert.equal(title.textContent, t('wb.wait.pool_wait', { position: 3 }));
+    else {
+      assert.equal(title.textContent, t('wb.state.offline'), 'activity stays offline while the wait reason is displayed separately');
+      assert.ok(root.querySelector('.wb-now-sub').textContent.includes(t('wb.wait.pool_waitTech', { position: 3 })));
+    }
+    assert.equal(Boolean(root.querySelector('.wb-detail-evidence')), level === 'technical');
+    assert.equal(root.querySelectorAll('.wb-now-work').length, 0, 'waiting for capacity is never presented as working');
   });
 }

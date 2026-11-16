@@ -5,7 +5,6 @@ import fs from 'node:fs';
 import { CoreState, projectOrigin } from '../src/lib/core-state.js';
 import { MetricResolver } from '../src/lib/metric-resolver.js';
 import { describeOrigin } from '../../../cli/lib/origin-presence.js';
-import { originSessionUnavailable } from '../public/js/state-presentation.js';
 import { stateMood, buildAgentFleetView, defaultAgentFleetLabels } from '../public/js/agent-fleet.js';
 
 const absent = () => ({ identity: { present: false, ready: false, runtime: 'unknown' }, status: { valid: false, reason: 'not_running' }, usage: { valid: false } });
@@ -70,13 +69,10 @@ test('Core state reads Origin facts only for absence or authentication and reads
   assert.deepEqual(accountCalls, ['codex']);
   assert.equal(core.accountUsage.fiveHour.usedPercentage, 37);
   assert.equal(core.accountUsage.sevenDay.usedPercentage, 61);
-  assert.equal(core.accountUsageRecord.live, true);
-  assert.equal(core.accountUsageRecord.recordedAt, 1000);
   const before = changes;
   await core.refresh(); assert.equal(changes, before);
   accountLive = false;
   await core.refresh(); assert.equal(changes, before + 1);
-  assert.equal(core.accountUsageRecord.live, false);
   const metrics = new MetricResolver({}, { statusline: { getAccountUsage: () => ({ runtime: 'codex', value: core.accountUsage }) } }, {});
   assert.equal(metrics.resolve('rate_limit').value, null);
   assert.equal(metrics.resolve('rate_limit').fallback_reason, 'Unknown metric: rate_limit');
@@ -120,7 +116,6 @@ test('Core state reads Origin facts only for absence or authentication and reads
   accountAvailable = true;
   assert.equal((await core.refresh()).state, 'OFFLINE');
   assert.equal(core.accountUsage.sevenDay.usedPercentage, 61);
-  assert.equal(core.accountUsageRecord.live, false);
 });
 
 test('Core state ignores live sample timestamps and notifies recorded provenance changes', async t => {
@@ -142,7 +137,6 @@ test('Core state ignores live sample timestamps and notifies recorded provenance
   record.recordedAt = 2000;
   await core.refresh();
   assert.equal(changes, 1, 'same live percentage with a new sample time does not broadcast');
-  assert.equal(core.accountUsageRecord.recordedAt, 2000, 'the current sample still updates');
   record.live = false;
   await core.refresh();
   assert.equal(changes, 2, 'same percentage switching to recorded evidence broadcasts');
@@ -159,18 +153,14 @@ test('Core state ignores live sample timestamps and notifies recorded provenance
   assert.equal(changes, 5, 'live percentage changes still broadcast');
 });
 
-test('Origin states have matching detail, Fleet and action availability presentation', () => {
+test('Origin states retain Fleet labels and reachability', () => {
   const labels = defaultAgentFleetLabels();
   for (const state of ['SLEEPING', 'WAKING', 'WAKE_OVERDUE', 'AUTH_WAIT', 'RATE_WAIT', 'RECLAIMING', 'SWITCHING']) {
     const agent = { name: 'Origin', state, pulse_rate: 1 };
     assert.equal(stateMood(agent), ['WAKE_OVERDUE', 'AUTH_WAIT'].includes(state) ? 'stuck' : 'idle');
     const tile = buildAgentFleetView({ agents: [agent] }).tiles[0];
     assert.equal(tile.offline, false); assert.equal(tile.stateLabel, labels[state.toLowerCase()]);
-    assert.equal(originSessionUnavailable(agent), true);
   }
-  assert.equal(originSessionUnavailable({ state: 'AUTH_WAIT', runId: 'current' }), false);
-  assert.equal(originSessionUnavailable({ sessionGroup: 'origin', state: 'UNKNOWN', runId: null }), true);
-  assert.equal(originSessionUnavailable({ sessionGroup: null, state: 'OFFLINE', runId: null }), false);
   for (const lang of ['en', 'zh']) {
     const dictionary = JSON.parse(fs.readFileSync(new URL(`../public/i18n/${lang}.json`, import.meta.url), 'utf8'));
     for (const key of ['sleeping', 'waking', 'wake_overdue', 'auth_wait', 'rate_wait', 'reclaiming', 'switching']) {

@@ -1,3 +1,4 @@
+import { usageTokenRows } from '../src/lib/workbench/cost-query.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -48,7 +49,6 @@ test('Codex collection visits every supplied mapping and preserves group attribu
     return { transcript_path: transcriptPath, session_id: `${group}-session`, session_group: group, run_id: `${group}-run` };
   });
   const transcripts = { snapshot: { listKnown: true },
-    currentOriginMapping: runtime => runtime === 'codex' ? mappings[0] : null,
     isOriginCurrent: row => row.session_group === 'origin', async collect(runtime, callback) {
     assert.equal(runtime, 'codex');
     let written = 0;
@@ -69,7 +69,6 @@ test('Codex collection visits every supplied mapping and preserves group attribu
   }
   // Group B's own rollout keeps its assistant words for its conversation page.
   assert.deepEqual(store.queryEvents({ types: ['assistant_message'] }).map(row => row.session_group).sort(), ['B', 'origin']);
-  assert.equal(collector.getRuntimeInfo().session_id, 'origin-session');
 });
 
 test('Codex duplicate usage fills only empty group attribution and retains charged cost', t => {
@@ -204,17 +203,9 @@ test('CodexRolloutCollector ingests rollout fixture metrics from hook-derived pa
       'gpt-5.3-codex': { input: 2, output: 8, cacheRead: 0.5, cacheCreation: 2 }
     }
   });
-  const runtimeUpdates = [];
-  collector._onRuntimeInfo = (info) => runtimeUpdates.push(info);
 
   const written = collectMapping(collector);
   assert.equal(written, 5);
-  assert.equal(runtimeUpdates.length, 1);
-  assert.equal(runtimeUpdates[0].model_id, 'gpt-5.3-codex');
-  assert.equal(runtimeUpdates[0].session_id, 'codex-session-1');
-  assert.equal(runtimeUpdates[0].cli_version, '0.130.0');
-  assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
-  assert.equal(collector.getRuntimeInfo().cli_version, '0.130.0');
 
   const tokens = usageEvents(store);
   assert.equal(tokens.length, 1);
@@ -235,20 +226,20 @@ test('CodexRolloutCollector ingests rollout fixture metrics from hook-derived pa
   assert.equal(tokens[0].dimensions.rollout_line, 3);
   assert.ok(tokens[0].dimensions.event_id.startsWith(`token_count-codex-session-1-${tokenOffset}-3-`));
 
-  const aggregateTokens = store.aggregateTokens({ sessionId: 'codex-session-1' });
-  assert.equal(aggregateTokens.input, 12000);
-  assert.equal(aggregateTokens.cache_read, 3000);
-  assert.equal(aggregateTokens.cache_rate, 0.25);
+  const aggregateTokens = usageTokenRows(store, { since: '2026-01-01T00:00:00.000Z', until: '2027-01-01T00:00:00.000Z', bucket: 'total' }).find(row => row.runtime === 'codex');
+  assert.equal(aggregateTokens.inputTokens, 12000);
+  assert.equal(aggregateTokens.cacheReadTokens, 3000);
+  assert.equal(aggregateTokens.cacheReadTokens / aggregateTokens.inputTokens, 0.25);
 
-  const tokenSeries = store.aggregateTokenSeries({
+  const tokenSeries = usageTokenRows(store, {
     since: '2026-05-23T00:00:00.000Z',
     until: '2026-05-23T02:00:00.000Z',
-    bucketSeconds: 3600
+    bucket: 'hour', tz: 'UTC'
   });
   assert.equal(tokenSeries.length, 1);
-  assert.equal(tokenSeries[0].input_sum, 12000);
-  assert.equal(tokenSeries[0].cache_read_sum, 3000);
-  assert.equal(tokenSeries[0].cache_rate, 0.25);
+  assert.equal(tokenSeries[0].inputTokens, 12000);
+  assert.equal(tokenSeries[0].cacheReadTokens, 3000);
+  assert.equal(tokenSeries[0].cacheReadTokens / tokenSeries[0].inputTokens, 0.25);
 
   assert.equal(tokens[0].dimensions.cache_hit_rate, 0.25);
   assert.equal(tokens[0].dimensions.cost_confidence, 'estimated');
@@ -382,208 +373,8 @@ test('CodexRolloutCollector advances cursor past oversized rollout lines', () =>
   assert.equal(skipHealth.extra.reason, 'oversized_line_skipped');
 
   assert.equal(collectMapping(collector), 0);
-  assert.equal(collector.getRuntimeInfo().cli_version, '0.130.0');
   const finalCursor = store.getCodexRolloutCursor(rolloutPath);
   assert.equal(finalCursor.byte_offset, fs.statSync(rolloutPath).size);
-
-  store.close();
-  fs.rmSync(dir, { recursive: true, force: true });
-});
-
-test('CodexRolloutCollector extracts cli_version from session_meta without a model', () => {
-  const dir = tmpDir();
-  const rolloutPath = path.join(dir, 'rollout-codex-session-1.jsonl');
-  fs.writeFileSync(
-    rolloutPath,
-    '{"type":"session_meta","timestamp":"2026-05-23T01:00:00.000Z","payload":{"id":"codex-session-1","cli_version":"0.130.0"}}\n'
-  );
-
-  const store = new Store(path.join(dir, 'dashboard.db'));
-  store.upsertCodexRolloutPath({
-    runtime: 'codex',
-    sessionId: 'codex-session-1',
-    transcriptPath: rolloutPath,
-    lastEventAt: '2026-05-23T01:00:00.000Z'
-  });
-
-  const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-  const runtimeUpdates = [];
-  collector._onRuntimeInfo = (info) => runtimeUpdates.push(info);
-
-  assert.equal(collectMapping(collector), 0);
-  assert.equal(runtimeUpdates.length, 1);
-  assert.equal(collector.getRuntimeInfo().cli_version, '0.130.0');
-  assert.equal(collector.getRuntimeInfo().model_id, undefined);
-
-  store.close();
-  fs.rmSync(dir, { recursive: true, force: true });
-});
-
-test('CodexRolloutCollector preserves cli_version when turn_context arrives later', () => {
-  const dir = tmpDir();
-  const rolloutPath = path.join(dir, 'rollout-codex-session-1.jsonl');
-  fs.writeFileSync(
-    rolloutPath,
-    [
-      '{"type":"session_meta","timestamp":"2026-05-23T01:00:00.000Z","payload":{"id":"codex-session-1","cli_version":"0.130.0"}}',
-      '{"type":"turn_context","timestamp":"2026-05-23T01:00:01.000Z","payload":{"model":"gpt-5.3-codex","service_tier":"priority"}}',
-      ''
-    ].join('\n')
-  );
-
-  const store = new Store(path.join(dir, 'dashboard.db'));
-  store.upsertCodexRolloutPath({
-    runtime: 'codex',
-    sessionId: 'codex-session-1',
-    transcriptPath: rolloutPath,
-    lastEventAt: '2026-05-23T01:00:01.000Z'
-  });
-
-  const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-  collectMapping(collector);
-
-  assert.equal(collector.getRuntimeInfo().cli_version, '0.130.0');
-  assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
-  assert.equal(collector.getRuntimeInfo().service_tier, 'priority');
-
-  store.close();
-  fs.rmSync(dir, { recursive: true, force: true });
-});
-
-test('CodexRolloutCollector preserves model and service tier when session_meta arrives later', () => {
-  const dir = tmpDir();
-  const rolloutPath = path.join(dir, 'rollout-codex-session-1.jsonl');
-  const firstLine = '{"type":"turn_context","timestamp":"2026-05-23T01:00:00.000Z","payload":{"model":"gpt-5.3-codex","service_tier":"priority"}}\n';
-  fs.writeFileSync(rolloutPath, firstLine);
-
-  const store = new Store(path.join(dir, 'dashboard.db'));
-  store.upsertCodexRolloutPath({
-    runtime: 'codex',
-    sessionId: 'codex-session-1',
-    transcriptPath: rolloutPath,
-    lastEventAt: '2026-05-23T01:00:00.000Z'
-  });
-
-  const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-  collectMapping(collector);
-  fs.appendFileSync(
-    rolloutPath,
-    '{"type":"session_meta","timestamp":"2026-05-23T01:00:01.000Z","payload":{"id":"codex-session-1","cli_version":"0.130.0"}}\n'
-  );
-
-  collectMapping(collector);
-
-  assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
-  assert.equal(collector.getRuntimeInfo().service_tier, 'priority');
-  assert.equal(collector.getRuntimeInfo().cli_version, '0.130.0');
-
-  store.close();
-  fs.rmSync(dir, { recursive: true, force: true });
-});
-
-test('CodexRolloutCollector backfills cli_version when cursor is already at EOF', () => {
-  const dir = tmpDir();
-  const rolloutPath = path.join(dir, 'rollout-codex-session-1.jsonl');
-  fs.writeFileSync(
-    rolloutPath,
-    '{"type":"session_meta","timestamp":"2026-05-23T01:00:00.000Z","payload":{"id":"codex-session-1","cli_version":"0.130.0"}}\n'
-  );
-
-  const store = new Store(path.join(dir, 'dashboard.db'));
-  store.upsertCodexRolloutPath({
-    runtime: 'codex',
-    sessionId: 'codex-session-1',
-    transcriptPath: rolloutPath,
-    lastEventAt: '2026-05-23T01:00:00.000Z'
-  });
-  store.upsertCodexRolloutCursor({
-    transcriptPath: rolloutPath,
-    byteOffset: fs.statSync(rolloutPath).size,
-    sessionId: 'codex-session-1'
-  });
-
-  const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-
-  assert.equal(collectMapping(collector), 0);
-  assert.equal(collector.getRuntimeInfo().cli_version, '0.130.0');
-
-  store.close();
-  fs.rmSync(dir, { recursive: true, force: true });
-});
-
-test('CodexRolloutCollector ignores session_meta without cli_version and keeps installed-version fallback available', () => {
-  const dir = tmpDir();
-  const rolloutPath = path.join(dir, 'rollout-codex-session-1.jsonl');
-  fs.writeFileSync(
-    rolloutPath,
-    [
-      '{"type":"session_meta","timestamp":"2026-05-23T01:00:00.000Z","payload":{"id":"codex-session-1"}}',
-      '{"type":"turn_context","timestamp":"2026-05-23T01:00:01.000Z","payload":{"model":"gpt-5.3-codex"}}',
-      ''
-    ].join('\n')
-  );
-
-  const store = new Store(path.join(dir, 'dashboard.db'));
-  store.upsertCodexRolloutPath({
-    runtime: 'codex',
-    sessionId: 'codex-session-1',
-    transcriptPath: rolloutPath,
-    lastEventAt: '2026-05-23T01:00:01.000Z'
-  });
-
-  const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-  collectMapping(collector);
-
-  assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
-  assert.equal(collector.getRuntimeInfo().cli_version, undefined);
-
-  store.close();
-  fs.rmSync(dir, { recursive: true, force: true });
-});
-
-test('CodexRolloutCollector does not carry cli_version across active session changes', () => {
-  const dir = tmpDir();
-  const rolloutAPath = path.join(dir, 'rollout-codex-session-a.jsonl');
-  const rolloutBPath = path.join(dir, 'rollout-codex-session-b.jsonl');
-  fs.writeFileSync(
-    rolloutAPath,
-    [
-      '{"type":"session_meta","timestamp":"2026-05-23T01:00:00.000Z","payload":{"id":"codex-session-a","cli_version":"0.130.0"}}',
-      '{"type":"turn_context","timestamp":"2026-05-23T01:00:01.000Z","payload":{"model":"gpt-5.3-codex"}}',
-      ''
-    ].join('\n')
-  );
-  fs.writeFileSync(
-    rolloutBPath,
-    '{"type":"turn_context","timestamp":"2026-05-23T01:01:00.000Z","payload":{"model":"gpt-5.5"}}\n'
-  );
-
-  const store = new Store(path.join(dir, 'dashboard.db'));
-  store.upsertCodexRolloutPath({
-    runtime: 'codex',
-    sessionId: 'codex-session-a',
-    transcriptPath: rolloutAPath,
-    lastEventAt: '2026-05-23T01:00:01.000Z'
-  });
-
-  const collector = new CodexRolloutCollector(store, { modelPrices: {} });
-  collectMapping(collector);
-
-  assert.equal(collector.getRuntimeInfo().session_id, 'codex-session-a');
-  assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
-  assert.equal(collector.getRuntimeInfo().cli_version, '0.130.0');
-
-  store.upsertCodexRolloutPath({
-    runtime: 'codex',
-    sessionId: 'codex-session-b',
-    transcriptPath: rolloutBPath,
-    lastEventAt: '2026-05-23T01:01:00.000Z'
-  });
-  collectMapping(collector);
-
-  assert.equal(collector.getRuntimeInfo().session_id, 'codex-session-b');
-  assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.5');
-  assert.equal(collector.getRuntimeInfo().cli_version, undefined);
 
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
@@ -632,9 +423,9 @@ test('CodexRolloutCollector deduplicates metrics when rollout cursor is replayed
   assert.equal(store.queryMetrics({ name: 'turn_duration' }).length, 1);
   assert.equal(store.queryEvents({ types: ['turn_complete'] }).length, 1);
 
-  const aggregateTokens = store.aggregateTokens({ sessionId: 'codex-session-1' });
-  assert.equal(aggregateTokens.input, 12000);
-  assert.equal(aggregateTokens.output, 800);
+  const aggregateTokens = usageTokenRows(store, { since: '2026-01-01T00:00:00.000Z', until: '2027-01-01T00:00:00.000Z', bucket: 'total' }).find(row => row.runtime === 'codex');
+  assert.equal(aggregateTokens.inputTokens, 12000);
+  assert.equal(aggregateTokens.outputTokens, 800);
 
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });

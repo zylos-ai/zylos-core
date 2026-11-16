@@ -37,7 +37,7 @@ export function sendHtml(res, status, body) {
   res.end(body);
 }
 
-export function readJsonBody(req, maxBytes = 64 * 1024) {
+export function readJsonBody(req, maxBytes = 64 * 1024, { allowEmpty = false } = {}) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
@@ -61,6 +61,7 @@ export function readJsonBody(req, maxBytes = 64 * 1024) {
         return;
       }
       const raw = Buffer.concat(chunks).toString('utf8');
+      if (allowEmpty && !raw.trim()) { resolve({}); return; }
       try {
         resolve(JSON.parse(raw));
       } catch {

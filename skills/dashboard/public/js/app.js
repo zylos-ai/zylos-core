@@ -1,36 +1,35 @@
+import { readGroupSnapshot, displayGroupRow, instanceActionRequest } from './wb/group-data.js?v=5';
 import { waitUntilDeadline } from './request-timeout.js?v=2';
 import { createConversationPush } from './wb/conversation-push.js?v=1';
 import { consumeDraftReset, createDraftRestoreStore, createComposeRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js?v=103';
 import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=3';
-import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=116';
-import { createPricingPanel } from './wb/settings-pricing.js?v=202';
+import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=121';
+import { createPricingPanel } from './wb/settings-pricing.js?v=205';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=106';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=106';
-import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=175';
+import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=180';
 import { coreVersion, renderBrandVersion, renderVersion } from './wb/settings-version.js?v=107';
-import { mountConversationPage } from './wb/conversation-page.js?v=201';
+import { mountConversationPage } from './wb/conversation-page.js?v=208';
 import { mountMobileNavigation } from './wb/mobile-navigation.js?v=3';
 import { mountChatSettings } from './wb/chat-settings.js?v=115';
-import { mountTimezoneSettings } from './wb/settings-timezone.js?v=7';
-import { mountWorkbench } from './wb/shell.js?v=209';
+import { mountTimezoneSettings } from './wb/settings-timezone.js?v=11';
+import { mountWorkbench } from './wb/shell.js?v=215';
 import { watchHeader } from './wb/header-fit.js?v=96';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=112';
-import { createRemoteAccess } from './wb/remote-access.js?v=1';
-import { groupObservable, instanceStatusText, markCurrentTab, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=152';
+import { createRemoteAccess } from './wb/remote-access.js?v=2';
+import { groupObservable, instanceStatusText, markCurrentTab, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=153';
 import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide, observerReturnPage } from './wb/observer-page.js?v=120';
 import { bindActionControls, createPageActions } from './wb/page-actions.js?v=112';
 import { mountSchedule } from './wb/schedule.js?v=148';
-import { createUsagePage } from './wb/usage.js?v=202';
+import { createUsagePage } from './wb/usage.js?v=206';
 import { ObserverHistory } from './observer-history.js?v=6';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=90';
-import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=203';
-import { createFleetSounds } from './fleet-sounds.js?v=203';
-import { refreshDashboardState } from './state-refresh.js?v=100';
+import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=208';
+import { createFleetSounds } from './fleet-sounds.js?v=208';
+import { refreshDashboardState } from './state-refresh.js?v=101';
 import { formatActionResult } from './action-result.js';
-import { originSessionUnavailable } from './state-presentation.js?v=98';
 import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from './origin-lock.js?v=114';
-import { mergeRuntimeInfo } from './runtime-ui.js?v=98';
 import { countLabel } from './count-label.js?v=1';
 
 const BASE_PATH = document.documentElement.dataset.basePath || '';
@@ -220,7 +219,6 @@ function agentFleetLabels() {
     groupStates: Object.fromEntries(['busy', 'waiting', 'error', 'idle', 'unknown', 'no_response'].map(key => [key, fleet('state.' + key)])),
     problemReasons: Object.fromEntries(['auth_failed', 'start_failed', 'no_response'].map(key => [key, fleet('reason.' + key)])),
     busy: t('agent_fleet.busy'),
-    thinking: t('agent_fleet.thinking'),
     idle: t('agent_fleet.idle'),
     unknown: t('value.unknown'),
     ...Object.fromEntries(['sleeping', 'waking', 'wake_overdue', 'auth_wait', 'rate_wait', 'reclaiming', 'switching'].map(key => [key, t(`agent_fleet.${key}`)])),
@@ -241,12 +239,8 @@ function agentFleetLabels() {
       stale: t('agent_fleet.stale_data')
     },
     noActivity: t('agent_fleet.no_activity'),
-    context: t('label.context'),
-    model: t('agent_fleet.model'),
-    sessionCost: t('cost.session'),
     dailyCost: t('cost.today'),
     weeklyCost: t('cost.7d'),
-    subagent: t('label.subagents')
   };
 }
 
@@ -261,7 +255,7 @@ function renderIdentityChrome() {
     nameEl.hidden = !name;
   }
   // dashboardState is the viewed instance's own state (cleared while switching), like the name above.
-  renderBrandVersion($('#tab-bar-core-version'), state.dashboardState?.runtime_info);
+  renderBrandVersion($('#tab-bar-core-version'), state.dashboardState?.versions);
   mobileNavigation?.sync();
 }
 
@@ -335,7 +329,7 @@ function renderFleet() {
 // Account quota metadata for this machine; group statistics are supplied by the Fleet API.
 async function refreshFleetSelf() {
   try {
-    state.fleetSelf = fleetSelfFromSnapshot(await fetchJson('/api/workbench/groups'));
+    state.fleetSelf = fleetSelfFromSnapshot(await readGroupSnapshot(fetchJson));
   } catch { state.fleetSelf = null; }
 }
 
@@ -1012,9 +1006,6 @@ async function refreshState() {
   if (!data) return;
   remoteAccess.noteState(data);
   state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
-  if (Object.hasOwn(data, 'new_session_threshold')) {
-    state.newSessionThreshold = data.new_session_threshold;
-  }
   renderInfoBar();
   renderObserverAvailability();
   renderObserverPage();
@@ -1061,7 +1052,7 @@ function renderObserverPage() {
   const row = observerGroupRow(state.observer.groups, group);
   const multi = status?.sessionMode === 'multi';
   const groupName = group === undefined && multi ? t('wb.observer.chooseGroup') : observerGroupName(row, group, t('wb.term.origin'), t);
-  const hasTarget = status && Object.hasOwn(status, 'target') ? Boolean(status.target) : !originSessionUnavailable(state.dashboardState);
+  const hasTarget = status && Object.hasOwn(status, 'target') ? Boolean(status.target) : Boolean(state.originGroup?.live);
   $('#observer-title').textContent = t(observerTitleKey({ focus, hasTarget, multi }), { name: groupName });
   const target = $('#observer-target');
   target.replaceChildren();
@@ -1600,7 +1591,7 @@ async function refreshAll() {
 }
 
 // ─── SSE ───
-let chatReconnectQueued = false, sseGeneration = 0;
+let chatReconnectQueued = false, sseGeneration = 0, sseAdmissionController = null;
 const chatPush = createConversationPush({
   onSubscriptionChange() {
     if (chatReconnectQueued) return;
@@ -1615,18 +1606,18 @@ function applySse(name, data) {
   if (!data || typeof data !== 'object') return;
   // A remote agent's stream describes its own fleet; never let it clobber ours.
   if (name === 'fleet' && state.remoteAgent) return;
-  if (name === 'state_change') {
+  if (name === 'instance') {
     const previousState = state.dashboardState;
-    const nextRuntimeInfo = mergeRuntimeInfo(previousState, data);
-    // The SSE state payload carries only raw state; /api/state adds the agent identity. Keep it across updates.
+    // Preserve the separately read Origin details while applying instance metadata.
     const prevAgent = state.dashboardState?.agent;
-    state.dashboardState = data;
+    state.dashboardState = { ...previousState, ...data };
     remoteAccess.noteState(data);
-    if (nextRuntimeInfo) state.dashboardState.runtime_info = nextRuntimeInfo;
     if (!data.agent && prevAgent) state.dashboardState.agent = prevAgent;
-    if (Object.hasOwn(data, 'new_session_threshold')) state.newSessionThreshold = data.new_session_threshold;
     state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
+    workbench?.applyInstance?.(data);
     renderInfoBar(); renderObserverAvailability(); renderObserverPage();
+  } else if (name === 'groups') {
+    void workbench?.refresh?.(data);
   } else if (name === 'fleet') {
     setFleet(data);
     clearFleetFallback();
@@ -1634,7 +1625,7 @@ function applySse(name, data) {
   }
 }
 
-function connectSse() {
+function connectSse({ ordinary = false } = {}) {
   if (!window.EventSource) return;
   sseGeneration++;
   chatPush.detach();
@@ -1643,29 +1634,59 @@ function connectSse() {
     state.eventSource = null;
   }
   clearTimeout(state.sseReconnectTimer);
+  sseAdmissionController?.abort();
+  sseAdmissionController = null;
 
-  const source = new EventSource(chatPush.streamUrl(api(agentPath('/api/stream'))));
+  const streamPath = api(agentPath('/api/stream'));
+  const source = new EventSource(ordinary ? streamPath : chatPush.streamUrl(streamPath));
+  let opened = false;
   state.eventSource = source;
 
   source.onopen = () => {
     if (state.eventSource !== source) return;
+    opened = true;
     state.sseRetries = 0;
     renderConnection('live');
     refreshState().catch(() => {});
   };
 
-  source.onerror = () => {
+  source.onerror = async () => {
     if (state.eventSource !== source) return;
     chatPage?.streamStatus('disconnected');
     chatPush.detach();
     source.close();
     state.eventSource = null;
+    clearTimeout(state.sseReconnectTimer);
     renderConnection('reconnecting');
+    if (!opened && !ordinary && chatPush.streamUrl(streamPath) !== streamPath) {
+      // EventSource does not expose the HTTP status. Only an explicit 429
+      // admission response proves the chat connection limit was reached.
+      // An established stream already passed admission; reconnect it directly.
+      const generation = sseGeneration;
+      const control = new AbortController();
+      sseAdmissionController = control;
+      let limited = false;
+      try {
+        const response = await fetch(chatPush.streamUrl(streamPath), {
+          cache: 'no-store', signal: AbortSignal.any([control.signal, AbortSignal.timeout(5000)]),
+        });
+        limited = response.status === 429;
+        await response.body?.cancel();
+      } catch { /* A network error is not proof of a connection limit. */ }
+      if (generation !== sseGeneration) return;
+      sseAdmissionController = null;
+      if (limited) {
+        connectSse({ ordinary: true });
+        // Keep ordinary updates live, but retry the desired chat subscription.
+        state.sseReconnectTimer = setTimeout(() => connectSse(), 30_000);
+        return;
+      }
+    }
     scheduleSseReconnect();
   };
 
-  chatPush.attach(source);
-  for (const ev of ['state_change', 'metric_update', 'system_update', 'health_update', 'fleet', 'history_changed']) {
+  if (!ordinary) chatPush.attach(source);
+  for (const ev of ['instance', 'groups', 'metric_update', 'fleet', 'history_changed']) {
     state.eventSource.addEventListener(ev, (e) => {
       if (state.eventSource !== source) return;
       try { applySse(ev, JSON.parse(e.data)); renderConnection('live'); }
@@ -1681,7 +1702,7 @@ function scheduleSseReconnect() {
   state.sseReconnectTimer = setTimeout(async () => {
     if (generation !== sseGeneration) return;
     try {
-      const r = await fetch(api(agentPath('/api/state')), { cache: 'no-store' });
+      const r = await fetch(api(agentPath('/api/instance')), { cache: 'no-store' });
       if (generation !== sseGeneration) return;
       if (r.status === 401) {
         window.location.href = api('/login');
@@ -1911,6 +1932,7 @@ function applyFleetMode(fleet) {
 // Clear all per-agent data and incremental DOM so two agents' panels never
 // mix while switching the detail view between self and a remote agent.
 function resetAgentData() {
+  state.originGroup = null;
   chatPage?.close();
   usagePage?.close();
   closeObserver({ release: true }).catch(() => {});
@@ -2364,7 +2386,7 @@ async function saveFleetSelfName() {
   const name = fleetManageModal.querySelector('#fleet-self-name').value.trim();
   fleetManageStatus(t('fleet_manage.saving'), 'running');
   try {
-    const resp = await fetch(api('/api/agent/name'), {
+    const resp = await fetch(api('/api/instance/name'), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name })
@@ -2538,12 +2560,18 @@ async function refreshObserverStatus({ quiet = false, signal } = {}) {
     try {
       const [resp, groups] = await Promise.all([
         fetch(endpoint, { cache: 'no-store', signal }),
-        fetch(observerEndpoint('/api/workbench/groups'), { cache: 'no-store', signal }).then(response => response.ok ? response.json() : null).catch(() => null)
+        fetch(observerEndpoint('/api/groups/running'), { cache: 'no-store', signal }).then(response => { if (!response.ok) throw Error('read_failed'); return response.json(); }).catch(() => null)
       ]);
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) throw observerRequestError(data, resp.status);
       if (state.observer.statusGeneration !== requestGeneration || observerTargetKey() !== targetKey) return null;
       state.observer.status = data;
+      if (state.observer.group !== undefined && groups && !groups.rows?.some(row => (row.id ?? row.sessionGroup) === state.observer.group)) {
+        const selected = await fetch(observerEndpoint('/api/groups/' + encodeURIComponent(state.observer.group) + '?include='), { cache: 'no-store', signal }).then(response => response.ok ? response.json() : null).catch(() => null);
+        if (state.observer.statusGeneration !== requestGeneration || observerTargetKey() !== targetKey) return null;
+        if (selected) groups.rows = [...(groups.rows ?? []), selected];
+      }
+      if (groups) groups.rows = (groups.rows ?? []).map(row => displayGroupRow(row));
       state.observer.groups = groups;
       renderObserverStatus(data);
       if (data && state.observer.intent && (data.desired?.enabled !== true || observerRecoveryReason(data))) {
@@ -2668,7 +2696,7 @@ function initSettingsPage() {
 
 function refreshSettingsVersion() {
   if (!settingsVersionRoot) return;
-  renderVersion(settingsVersionRoot, state.dashboardState?.runtime_info, { upgrade: settingsUpgrade, t, readOnly: remoteIsReadOnly(), onHint: toggleZylosUpdateHint });
+  renderVersion(settingsVersionRoot, state.dashboardState?.versions, { runtime: state.dashboardState?.default_runtime, upgrade: settingsUpgrade, t, readOnly: remoteIsReadOnly(), onHint: toggleZylosUpdateHint });
 }
 function refreshSettingsLocks() {
   if (!settingsPage) return;
@@ -2756,30 +2784,32 @@ async function refreshModeStatus() {
   const targetKey = observerTargetKey();
   if (pendingManualRestart) {
     try {
-      const result = await fetchJson(`/api/restart-status?requestId=${encodeURIComponent(pendingManualRestart.requestId)}`);
+      const result = await fetchJson(`/api/groups/origin/restarts/${encodeURIComponent(pendingManualRestart.requestId)}`);
       if (observerTargetKey() !== targetKey) return;
       const text = actionsModal?.querySelector('#action-restart-status');
-      const ready = result.origin?.ready && result.origin.runId !== pendingManualRestart.runId;
+      const ready = result.group?.ready && result.group.runId !== pendingManualRestart.runId;
       if (text) text.textContent = t('actions.restart_progress', { submission: pendingManualRestart.submission, completion: result.completion === 'deadline_exceeded' ? 'unknown' : result.completion, ready: ready ? t('actions.ready') : t('value.unknown') });
       if (result.completion === 'done' || ready) pendingManualRestart = null;
     } catch { if (observerTargetKey() !== targetKey) return; }
   }
   const text = actionsModal?.querySelector('#action-mode-status');
   try {
-    const result = await fetchJson('/api/session-mode');
+    const result = await fetchJson('/api/instance');
     if (observerTargetKey() !== targetKey) return;
-    if (!result?.ok) throw new Error(result?.error?.message || 'Unknown');
-    const data = result.data;
-    const mode = ['single', 'multi'].includes(data.sessionMode) ? data.sessionMode : null;
+    const data = result;
+    const status = data.session_mode;
+    const mode = ['single', 'multi'].includes(status?.sessionMode) ? status.sessionMode : null;
     if (mode) { const select = actionsModal.querySelector('#action-mode'); select.value = mode; select._current = mode; syncModeSegment(); }
-    text.textContent = [mode ? t('wb.settings.session.' + mode) : t('value.unknown'), data.transition?.phase, data.transition?.reason, data.supervisor === 'unreachable' ? t('actions.supervisor_unreachable') : '', data.blocked?.since ? t('actions.blocked_since', { time: data.blocked.since }) : ''].filter(Boolean).join(' · ');
+    text.textContent = [mode ? t('wb.settings.session.' + mode) : t('value.unknown'), status?.transition?.phase, status?.transition?.reason, status?.supervisor === 'unreachable' ? t('actions.supervisor_unreachable') : '', status?.blocked?.since ? t('actions.blocked_since', { time: status.blocked.since }) : '', status?.error ? [t('wb.readFailed'), status.error.message].filter(Boolean).join(' · ') : ''].filter(Boolean).join(' · ');
   } catch (error) { if (observerTargetKey() !== targetKey) return; if (text) text.textContent = error.message; }
   const instanceText = actionsModal?.querySelector('#action-instance-status');
   try {
-    const result = await fetchJson('/api/instance-status');
+    const result = await fetchJson('/api/instance');
     if (observerTargetKey() !== targetKey) return;
-    if (!result?.ok) throw new Error(result?.error?.message || 'Unknown');
-    const data = result.data || {};
+    const origin = await fetchJson('/api/groups/origin?include=');
+    const data = { ...result, origin };
+    if (observerTargetKey() !== targetKey) return;
+    state.originGroup = origin;
     if (instanceText) instanceText.textContent = instanceStatusText(data, document.documentElement.dataset.detail === 'technical' ? 'technical' : 'plain', t);
   } catch (error) { if (observerTargetKey() !== targetKey) return; if (instanceText) instanceText.textContent = error.message; }
 }
@@ -2857,7 +2887,7 @@ function pageActions() {
   return pageActions.value ??= createPageActions({
     t, send: sendAction, confirm: showConfirm, effortLabel,
     readOnly: () => Boolean(remoteIsReadOnly()), remoteTarget: viewedRemoteTarget,
-    shownSession: () => state.dashboardState, runtime: () => state.dashboardState?.runtime_info?.runtime,
+    shownSession: () => ({ sessionGroup: state.originGroup?.sessionGroup, runId: state.originGroup?.live?.runId, sessionId: state.originGroup?.live?.sessionId }), runtime: () => state.dashboardState?.default_runtime,
   });
 }
 
@@ -2868,8 +2898,7 @@ function execAction(action, body) {
 
 // Sends a dashboard action. Only the page actions call this, after they have checked access and asked when needed.
 async function sendAction(action, body) {
-  const actionPath = agentPath(`/api/actions/${action}`);
-  const healthPath = agentPath('/api/health');
+  const targetKey = observerTargetKey();
   const statusEl = actionsModal?.querySelector('#action-status');
   if (statusEl) {
     statusEl.hidden = false;
@@ -2878,10 +2907,19 @@ async function sendAction(action, body) {
   }
 
   try {
+    if (action === 'restart-session' && !body?.runId) {
+      const origin = await fetchJson('/api/groups/origin?include=');
+      if (observerTargetKey() !== targetKey) return false;
+      if (!origin.live?.runId) throw new Error(t('wb.actions.targetRequired'));
+      body = { ...body, sessionGroup: origin.sessionGroup, runId: origin.live.runId, sessionId: origin.live?.sessionId };
+    }
+    const request = instanceActionRequest(action, body);
+    const actionPath = agentPath(request.path);
+    const healthPath = agentPath('/api/health');
     const r = await fetch(api(actionPath), {
-      method: 'POST',
+      method: request.method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body || {})
+      body: JSON.stringify(request.body)
     });
     const result = await r.json();
     if (action === 'restart-session' && result.requestId) {
@@ -2907,7 +2945,21 @@ async function sendAction(action, body) {
     }
     if (result.refreshState) await refreshState();
     if (result.ok && result.requires_restart) {
+      let origin;
+      try { origin = await fetchJson('/api/groups/origin?include='); }
+      catch { /* The configuration was saved even if its current session cannot be read. */ }
+      if (observerTargetKey() !== targetKey) return false;
+      if (origin?.presence !== 'running' || !origin.live?.runId) {
+        if (statusEl) {
+          statusEl.hidden = false;
+          statusEl.className = 'modal-status success';
+          statusEl.textContent = t('actions.next_start');
+        }
+        return true;
+      }
+      state.originGroup = origin;
       await new Promise(r => setTimeout(r, 1500));
+      if (observerTargetKey() !== targetKey) return false;
       if (statusEl) statusEl.hidden = true;
       await execAction('restart-session');
     }
@@ -2973,6 +3025,7 @@ function startTimers() {
 }
 
 window.addEventListener('beforeunload', () => {
+  sseAdmissionController?.abort();
   clearInterval(state.pollTimer);
   clearFleetFallback();
   clearTimeout(state.sseReconnectTimer);
@@ -3041,7 +3094,7 @@ workbench = mountWorkbench({
   onObserve: openObserverFor,
   // The viewed instance's own Core version (a remote's comes from its state); none when it cannot be read.
   instanceInfo: () => {
-    const core = coreVersion(state.dashboardState?.runtime_info);
+    const core = coreVersion(state.dashboardState?.versions);
     return { name: viewedAgentName(), core: core ? 'core ' + core : null };
   },
 });

@@ -59,7 +59,7 @@ function fixture({ handle = () => undefined, mode = 'multi', identity } = {}) {
     calls.push({ path, options });
     const handled = handle(path, options);
     if (handled !== undefined) return handled;
-    if (path === '/api/session-mode') return { data: { sessionMode: mode } };
+    if (path === '/api/instance') return { session_mode: { sessionMode: mode } };
     if (path.includes('/messages?')) return { items: [{ id: 11, direction: 'out', content: 'Question' }], afterCursor: 'after', nextCursor: null };
     if (path.includes('/questions?')) return { items: [question()], nextCursor: null };
     if (path.endsWith('/answers')) return answerResult(options.body.action);

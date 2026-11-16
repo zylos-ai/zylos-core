@@ -171,7 +171,7 @@ test('header: the title uses the brand colour and the Core version follows the i
   assert.match(css, /^\.brand-inst::before, \.brand-ver::before \{ content: "· "; \}$/m);
   assert.match(css, /^\.brand-inst\[hidden\], \.brand-ver\[hidden\] \{ display: none; \}$/m);
   assert.match(phone, /\.brand-inst, \.brand-ver \{ display: none; \}/, 'phones hide the version with the instance name');
-  assert.match(app, /renderBrandVersion\(\$\('#tab-bar-core-version'\), state\.dashboardState\?\.runtime_info\)/,
+  assert.match(app, /renderBrandVersion\(\$\('#tab-bar-core-version'\), state\.dashboardState\?\.versions\)/,
     'the header reads the viewed instance\'s own state');
 });
 

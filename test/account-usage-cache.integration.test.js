@@ -75,8 +75,6 @@ test('CoreState and collector share real account scan until 30s expiry, preservi
   await Promise.all([core.refresh(), collector.collect()]);
   assert.equal(reader.counters.scans, 1, 'concurrent readers coalesce');
   assert.equal(core.accountUsage.seven_day.used_percentage, 12, 'Core keeps recorded selection');
-  assert.equal(core.accountUsageRecord.live, false);
-  assert.equal(core.accountUsageRecord.recordedAt, capturedAt + 500);
   assert.equal(collector.getAccountUsage().value.seven_day.used_percentage, 7, 'collector keeps live-only selection');
   for (let i = 1; i < 20; i++) { clock = i * 1000; await core.refresh(); if (i % 2 === 0) await collector.collect(); }
   assert.equal(reader.counters.scans, 1, 'unchanged polling reuses the account snapshot');
@@ -88,8 +86,6 @@ test('CoreState and collector share real account scan until 30s expiry, preservi
   await Promise.all([core.refresh(), collector.collect()]);
   assert.equal(reader.counters.scans, 2);
   assert.equal(core.accountUsage.seven_day.used_percentage, 23);
-  assert.equal(core.accountUsageRecord.recordedAt, capturedAt + 750);
-  assert.equal(core.accountUsageRecord.live, false);
   assert.equal(collector.getAccountUsage().value.seven_day.used_percentage, 7);
   const codex = await cache.read('codex', {allowRecorded:true}, reader);
   assert.equal(reader.counters.scans, 3, 'runtime cache entries stay separate');

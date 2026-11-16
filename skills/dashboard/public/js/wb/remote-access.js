@@ -1,5 +1,5 @@
 // "Allow remote access to conversations and terminal" as seen from a remote view: the viewed machine's
-// /api/state says the switch is off (`chat_allow_remote: false`), or one of its conversation or observer
+// /api/instance says the switch is off (`chat_allow_remote: false`), or one of its conversation or observer
 // requests was refused with `remote_chat_disabled`. An older machine without the field shows both tabs and
 // lets its own backend decide. The local machine never depends on the switch.
 export const REMOTE_ACCESS_REFUSED = 'remote_chat_disabled';

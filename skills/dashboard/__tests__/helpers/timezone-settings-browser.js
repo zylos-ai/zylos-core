@@ -41,7 +41,7 @@ async function startPage(sandbox) {
       if (route === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
       if (route.startsWith('/api/')) {
         let value = req.method === 'GET' ? workbenchAnswer(url, now) : undefined;
-        if (route === '/api/state') value = { ...value, tz: zones.get(prefix) ?? state.initialTimezone };
+        if (route === '/api/instance') value = { ...value, tz: zones.get(prefix) ?? state.initialTimezone };
         sendJson(res, value === undefined ? 404 : 200, value ?? { error: 'not_found' }); return;
       }
       if (['/', '/settings', '/usage', '/memory'].includes(route)) {

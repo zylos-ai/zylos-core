@@ -1,3 +1,4 @@
+import { createCgroupCollector } from '../src/lib/cgroup-resources.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import os from 'node:os';
@@ -24,6 +25,8 @@ Pages purgeable:                           40.
 Pages occupied by compressor:             700.
 `;
 
+const cgroupCollector = createCgroupCollector({ readFile: () => { throw new Error('fixture: no cgroup'); } });
+
 function stubStore() {
   const metrics = [];
   return { metrics, insertMetric: row => metrics.push(row), upsertSourceHealth() {} };
@@ -40,7 +43,7 @@ test('the collector writes memory used percent from MemAvailable on Linux', asyn
   const store = stubStore();
   const readFile = file => { assert.equal(file, '/proc/meminfo'); return MEMINFO; };
   const collector = new SystemCollector(store, { zylosDir: os.tmpdir(), runtime: 'claude' },
-    { readMemory: () => readMemory({ platform: 'linux', readFile }) });
+    { cgroupCollector, readMemory: () => readMemory({ platform: 'linux', readFile }) });
   await collector.collect();
   const dims = store.metrics[0].dimensions;
   assert.equal(dims.mem_used_pct, 12.6);
@@ -53,7 +56,7 @@ test('the collector writes memory used percent from MemAvailable on Linux', asyn
 test('an unreadable meminfo leaves memory unknown rather than falling back to free memory', async () => {
   const store = stubStore();
   const collector = new SystemCollector(store, { zylosDir: os.tmpdir(), runtime: 'claude' },
-    { readMemory: () => readMemory({ platform: 'linux', readFile: () => { throw new Error('EACCES'); } }) });
+    { cgroupCollector, readMemory: () => readMemory({ platform: 'linux', readFile: () => { throw new Error('EACCES'); } }) });
   await collector.collect();
   const dims = store.metrics[0].dimensions;
   assert.deepEqual([dims.mem_used_pct, dims.mem_used_bytes, dims.mem_total_bytes], [null, null, null]);
@@ -78,7 +81,7 @@ test('macOS reads vm_stat and uses reclaimable pages in stored and live memory s
   const memory = readMemory({ platform: 'darwin', execFile });
   assert.deepEqual(memory, { totalBytes: os.totalmem(), availableBytes: 370 * 4096 });
   const collector = new SystemCollector(store, { zylosDir: os.tmpdir(), runtime: 'claude' },
-    { readMemory: () => readMemory({ platform: 'darwin', execFile }) });
+    { cgroupCollector, readMemory: () => readMemory({ platform: 'darwin', execFile }) });
   await collector.collect();
   assert.equal(calls, 2);
   const dims = store.metrics[0].dimensions;

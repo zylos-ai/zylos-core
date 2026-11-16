@@ -414,7 +414,7 @@ export class Store {
   }
 
   queryEvents({ since, until, types, sessionId, sessionGroup, runId, runtime, afterSeq,
-    limit = 100, offset = 0, order = 'asc', sourceTime = false, agentScope, latestPerAgent = false } = {}) {
+    limit = 100, offset = 0, order = 'asc', sourceTime = false, agentScope, latestPerAgent = false, includeLegacyOrigin = false } = {}) {
     const clauses = sourceTime
       ? ['julianday(timestamp) >= julianday(@since)', 'julianday(timestamp) <= julianday(@until)']
       : ['timestamp >= @since', 'timestamp <= @until'];
@@ -423,6 +423,11 @@ export class Store {
       offset: Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0 };
     for (const [column, value] of Object.entries({ session_id: sessionId, session_group: sessionGroup,
       run_id: runId, runtime })) {
+      // Single-session hooks write origin; older single-session records use null.
+      if (column === 'session_group' && includeLegacyOrigin && (value === null || value === 'origin')) {
+        clauses.push("(session_group = 'origin' OR session_group IS NULL)");
+        continue;
+      }
       if (value === undefined) continue;
       if (value === null) clauses.push(`${column} IS NULL`);
       else { clauses.push(`${column} = @${column}`); params[column] = value; }
@@ -699,12 +704,14 @@ export class Store {
     }));
   }
 
-  getHistoryDiagnostics({ sessionGroup, stream, limit = 100, offset = 0 } = {}) {
+  getHistoryDiagnostics({ sessionGroup, stream, limit = 100, offset = 0, includeLegacyOrigin = false } = {}) {
     const conditions = ["signal_type='history'", "status!='healthy'"];
     const params = [];
     if (stream !== undefined) { conditions.push("json_extract(extra,'$.stream')=?"); params.push(stream); }
     if (sessionGroup !== undefined) {
-      if (sessionGroup === null) conditions.push("COALESCE(json_extract(extra,'$.stream'),'') NOT LIKE 'events:%'");
+      if (includeLegacyOrigin && (sessionGroup === null || sessionGroup === 'origin')) {
+        conditions.push("(json_extract(extra,'$.stream')='events:origin' OR COALESCE(json_extract(extra,'$.stream'),'') NOT LIKE 'events:%')");
+      } else if (sessionGroup === null) conditions.push("COALESCE(json_extract(extra,'$.stream'),'') NOT LIKE 'events:%'");
       else { conditions.push("json_extract(extra,'$.stream')=?"); params.push(`events:${sessionGroup}`); }
     }
     const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(1000, Math.trunc(limit))) : 100;
@@ -862,118 +869,6 @@ export class Store {
     const row = this.db.prepare(sql).get(params);
     if (!row || row.total_input === 0) return null;
     return row.cache_read / row.total_input;
-  }
-
-  aggregateTokens({ since, until, sessionId } = {}) {
-    const { clause, params } = this._metricBoundsWhere({ since, until, sessionId });
-    const sql = `
-      SELECT COALESCE(SUM(input), 0) AS input,
-             COALESCE(SUM(cache_read), 0) AS cache_read,
-             COALESCE(SUM(cache_creation), 0) AS cache_creation,
-             COALESCE(SUM(output), 0) AS output,
-             COALESCE(SUM(total_input), 0) AS total_input,
-             COUNT(*) AS cnt
-      FROM (
-        SELECT json_extract(dimensions, '$.input') AS input,
-               json_extract(dimensions, '$.cache_read') AS cache_read,
-               json_extract(dimensions, '$.cache_creation') AS cache_creation,
-               json_extract(dimensions, '$.output') AS output,
-               metric_value AS total_input
-        FROM metric_points WHERE metric_name = 'api_request_tokens'${clause}
-        UNION ALL
-        SELECT json_extract(dimensions, '$.input') AS input,
-               json_extract(dimensions, '$.cache_read') AS cache_read,
-               json_extract(dimensions, '$.cache_creation') AS cache_creation,
-               json_extract(dimensions, '$.output') AS output,
-               metric_value AS total_input
-        FROM metric_points WHERE metric_name = 'usage_event'${clause}
-      )`;
-    const row = this.db.prepare(sql).get(params);
-    if (!row || row.cnt === 0) return null;
-    return {
-      input: row.total_input,
-      output: row.output,
-      cache_read: row.cache_read,
-      cache_rate: row.total_input > 0 ? row.cache_read / row.total_input : 0
-    };
-  }
-
-  aggregateTokenSeries({ since, until, bucketSeconds = 3600 } = {}) {
-    const sql = `
-      SELECT (CAST(CAST(strftime('%s', timestamp) AS INTEGER) / @bucket AS INTEGER) * @bucket) AS bucket_start,
-             COALESCE(SUM(total_input), 0) AS input_sum,
-             COALESCE(SUM(output), 0) AS output_sum,
-             COALESCE(SUM(cache_read), 0) AS cache_read_sum,
-             COALESCE(SUM(total_input), 0) AS total_input_sum
-      FROM (
-        SELECT timestamp,
-               metric_value AS total_input,
-               json_extract(dimensions, '$.output') AS output,
-               json_extract(dimensions, '$.cache_read') AS cache_read
-        FROM metric_points
-        WHERE metric_name = 'api_request_tokens'
-          AND timestamp >= @since AND timestamp <= @until
-        UNION ALL
-        SELECT timestamp,
-               metric_value AS total_input,
-               json_extract(dimensions, '$.output') AS output,
-               json_extract(dimensions, '$.cache_read') AS cache_read
-        FROM metric_points
-        WHERE metric_name = 'usage_event'
-          AND timestamp >= @since AND timestamp <= @until
-      )
-      GROUP BY bucket_start ORDER BY bucket_start`;
-    const rows = this.db.prepare(sql).all({ since, until, bucket: bucketSeconds });
-    return rows.map(r => ({
-      ...r,
-      cache_rate: r.total_input_sum > 0 ? r.cache_read_sum / r.total_input_sum : null
-    }));
-  }
-
-  aggregateCostSeries({ since, until, bucketSeconds = 3600 } = {}) {
-    const sql = `
-      SELECT (CAST(CAST(strftime('%s', timestamp) AS INTEGER) / @bucket AS INTEGER) * @bucket) AS bucket_start,
-             SUM(cost) AS cost_sum,
-             COUNT(*) AS request_count
-      FROM (
-        SELECT timestamp, metric_value AS cost
-        FROM metric_points
-        WHERE metric_name = 'api_request_cost'
-          AND timestamp >= @since AND timestamp <= @until
-        UNION ALL
-        SELECT timestamp, json_extract(dimensions, '$.cost') AS cost
-        FROM metric_points
-        WHERE metric_name = 'usage_event'
-          AND json_extract(dimensions, '$.cost') IS NOT NULL
-          AND timestamp >= @since AND timestamp <= @until
-      )
-      GROUP BY bucket_start ORDER BY bucket_start`;
-    return this.db.prepare(sql).all({ since, until, bucket: bucketSeconds });
-  }
-
-  aggregateCacheRateSeries({ since, until, bucketSeconds = 3600 } = {}) {
-    const sql = `
-      SELECT (CAST(CAST(strftime('%s', timestamp) AS INTEGER) / @bucket AS INTEGER) * @bucket) AS bucket_start,
-             COALESCE(SUM(cache_read), 0) AS cache_read_sum,
-             COALESCE(SUM(total_input), 0) AS total_input_sum
-      FROM (
-        SELECT timestamp,
-               json_extract(dimensions, '$.cache_read') AS cache_read,
-               metric_value AS total_input
-        FROM metric_points
-        WHERE metric_name = 'api_request_tokens'
-          AND timestamp >= @since AND timestamp <= @until
-        UNION ALL
-        SELECT timestamp,
-               json_extract(dimensions, '$.cache_read') AS cache_read,
-               metric_value AS total_input
-        FROM metric_points
-        WHERE metric_name = 'usage_event'
-          AND timestamp >= @since AND timestamp <= @until
-      )
-      GROUP BY bucket_start ORDER BY bucket_start`;
-    const rows = this.db.prepare(sql).all({ since, until, bucket: bucketSeconds });
-    return rows.map(r => ({ ...r, rate: r.total_input_sum > 0 ? r.cache_read_sum / r.total_input_sum : null }));
   }
 
   getProjectDistribution({ since, until } = {}) {

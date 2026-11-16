@@ -2,6 +2,7 @@ import { openReadStore } from './c4-read-store.js';
 import net from 'node:net';
 import path from 'node:path';
 import os from 'node:os';
+import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { collectPm2Snapshot } from '../../skills/health-check/scripts/pm2-snapshot.js';
 import { ZYLOS_DIR, readSessionMode } from './config.js';
@@ -43,9 +44,25 @@ export async function readSupervisorPm2({ env = process.env, timeoutMs = 1000 } 
 }
 
 
-function readEvents(zylosDir) {
-  const reader = new EventLogReader(supervisorDiagnosticPath({ ZYLOS_DIR: zylosDir }));
-  try { return reader.read(); }
+let diagnosticsCache;
+function readEvents(zylosDir, runId) {
+  const file = supervisorDiagnosticPath({ ZYLOS_DIR: zylosDir });
+  const directory = path.dirname(file), stem = path.basename(file, '.jsonl');
+  // Include rotated files and inode identity so append, truncation, replacement,
+  // rotation and retention changes all invalidate the one cached run's view.
+  const signature = fs.readdirSync(directory).filter(name => name === path.basename(file) ||
+    name.startsWith(`${stem}.`) && /^\d+$/.test(name.slice(stem.length + 1, -6)) && name.endsWith('.jsonl'))
+    .sort().map(name => {
+      const stat = fs.statSync(path.join(directory, name), { bigint: true });
+      return [name, stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
+    }).join('|');
+  if (diagnosticsCache?.file === file && diagnosticsCache.runId === runId && diagnosticsCache.signature === signature) return diagnosticsCache.events;
+  const reader = new EventLogReader(file);
+  try {
+    const events = reader.read().filter(event => event.run_id === runId && transitionEvent(event.event));
+    diagnosticsCache = { file, runId, signature, events };
+    return events;
+  }
   finally { reader.close(); }
 }
 
@@ -83,7 +100,7 @@ export async function readSessionModeStatus(options = {}) {
   let events = [];
   if (runId) {
     try {
-      events = (await (options.readEvents ?? readEvents)(zylosDir))
+      events = (await (options.readEvents ?? readEvents)(zylosDir, runId))
         .filter(event => event.run_id === runId && transitionEvent(event.event));
     } catch { /* Missing/unreadable diagnostics never hide authoritative state. */ }
   }

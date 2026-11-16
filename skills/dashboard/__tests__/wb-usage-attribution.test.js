@@ -14,7 +14,6 @@ import { claudeProjectSlug } from '../src/lib/claude-project-path.js';
 import { StateEngine } from '../src/lib/state-engine.js';
 import { EventLoopMonitor } from '../src/lib/event-loop-monitor.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
-import { workbenchResponse } from '../src/lib/workbench/group-snapshot.js';
 import { CoreState } from '../src/lib/core-state.js';
 
 const at = Date.parse('2026-11-06T12:00:00.000Z');
@@ -118,7 +117,6 @@ test('dashboard constructs both usage collectors when configured for Claude', { 
   } });
   let snapshots = 0;
   t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
-    workbenchResponse,
     createGroupSnapshot: () => ({ getSnapshot: async (at, options) => {
       assert.deepEqual(options, { fresh: true }, 'usage lifecycle reads bypass the UI snapshot cache');
       snapshots++; return { listKnown: true, rows: [] };

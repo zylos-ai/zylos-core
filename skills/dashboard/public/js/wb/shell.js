@@ -1,19 +1,20 @@
+import { readGroupSnapshot, groupSnapshot, displayGroupRow } from './group-data.js?v=5';
 import { withRequestTimeout } from '../request-timeout.js?v=2';
-import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js?v=152';
-import { boardController, renderBoard, renderDistribution } from './board.js?v=156';
+import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js?v=153';
+import { boardController, renderBoard, renderDistribution } from './board.js?v=159';
 import { createBoardSearch } from './board-search.js?v=87';
-import { instanceStrip, accountRuntimes } from './instance-strip.js?v=202';
-import { renderAttention } from './attention-bar.js?v=194';
-import { createGroupDetail } from './detail.js?v=175';
-import { loadNamePrompt, renderAutoName } from './auto-name.js?v=106';
-import { createHostPanel } from './host-panel.js?v=202';
+import { instanceStrip, accountRuntimes } from './instance-strip.js?v=206';
+import { renderAttention } from './attention-bar.js?v=196';
+import { createGroupDetail } from './detail.js?v=181';
+import { loadNamePrompt, renderAutoName } from './auto-name.js?v=107';
+import { createHostPanel } from './host-panel.js?v=206';
 import { element, icon } from './plain-text.js?v=106';
 import { watchRows } from './label-fit.js?v=2';
 
 const REQUEST_TIMEOUT_MS = 30000;
 
 export function mountWorkbench({ document = globalThis.document, window = globalThis.window, t = key => key,
-  endpoint = path => path, identity = () => endpoint('/api/workbench/groups'),
+  endpoint = path => path, identity = () => endpoint('/api/groups/running'),
   observerStatus = () => null, observerAvailable = () => true, onObserve = () => {},
   writable = () => true, onMemory = () => {}, onConversation, conversationAvailable = () => true, instanceInfo = () => ({}),
   storage = globalThis.localStorage, fetch = globalThis.fetch } = {}) {
@@ -24,6 +25,10 @@ export function mountWorkbench({ document = globalThis.document, window = global
   const rangeInput = document.querySelector('#wb-range');
   const toggle = document.querySelector('#wb-detail-toggle');
   const nav = document.querySelector('#observer-tab');
+  let groupSide = 'running', offlineDepth = 1, pushedCounts = null, instanceRead = null;
+  const sides = element(document, 'div', undefined, 'wb-seg wb-group-sides');
+  sides.setAttribute('role', 'group'); sides.setAttribute('aria-label', t('wb.board.groupsLabel'));
+  board.parentNode?.insertBefore(sides, board);
   let groupDetail = null, hostPanel = null, nameRequest = null;
   const nameButton = document.querySelector('#wb-auto-name');
   const nameDialog = document.querySelector('#wb-auto-name-dialog');
@@ -34,7 +39,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   try {
     if (storage.getItem('zylos-dashboard-activity-range') === '6h') range = '6h';
   } catch {}
-  const read = async (path, { signal } = {}) => {
+  const readFresh = async (path, { signal } = {}) => {
     const captured = identity();
     const response = await fetch(endpoint(path), { signal });
     if (captured !== identity() || stopped) {
@@ -48,6 +53,15 @@ export function mountWorkbench({ document = globalThis.document, window = global
       throw Error('view_changed');
     }
     return value;
+  };
+  const read = (path, options = {}) => {
+    if (path !== '/api/instance') return readFresh(path, options);
+    if (!instanceRead || instanceRead.owner !== identity()) {
+      const record = { owner: identity(), promise: null };
+      record.promise = readFresh(path, options).catch(error => { if (instanceRead === record) instanceRead = null; throw error; });
+      instanceRead = record;
+    }
+    return instanceRead.promise;
   };
   const observerEntry = () => {
     const status = observerStatus();
@@ -98,6 +112,14 @@ export function mountWorkbench({ document = globalThis.document, window = global
         rangeInput.append(button);
       }
     }
+    sides.replaceChildren();
+    for (const side of ['running', 'offline']) {
+      const count = snapshot?.groupCounts?.[side]?.total;
+      const button = element(document, 'button', t('wb.groups.' + side) + (count == null ? '' : ' · ' + count));
+      button.type = 'button'; button.setAttribute('aria-pressed', String(groupSide === side));
+      button.addEventListener('click', () => { if (groupSide === side && searchRows === null) return; search.input(''); searchInput.value = ''; groupSide = side; offlineDepth = 1; snapshot = null; searchRows = null; controller.invalidate(); redraw(); void controller.refresh(); });
+      sides.append(button);
+    }
     const dist = document.querySelector('#wb-dist');
     if (dist) renderDistribution(dist, snapshot, { document, t, level });
     searchInput.placeholder = t('wb.search');
@@ -128,7 +150,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     renderBoard(board, snapshot, {
       rows, query: search.query(), activity, document, t, level,
       selected: groupDetail?.state.row ? groupDetail.state.row.sessionGroup : locatedGroup,
-      onSearch: () => searchInput.focus(),
+      onSearch: () => searchInput.focus(), onMore: loadMoreOffline,
       onSelect: selectRow,
     });
     if (focusedGroup !== undefined) [...board.querySelectorAll('.wb-row')].find(node => node.dataset.group === focusedGroup)?.focus({ preventScroll: true });
@@ -151,7 +173,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     overview?.classList.toggle('wb-has-side', Boolean(side && !side.hidden));
   }
   const search = createBoardSearch({
-    fetchRows: q => read('/api/workbench/groups/search?q=' + encodeURIComponent(q)),
+    fetchRows: async q => { const result = await read('/api/groups/search?q=' + encodeURIComponent(q)); return { ...result, rows: (result.rows ?? []).map(row => displayGroupRow(row)) }; },
     onRows: rows => {
       searchRows = rows;
       redraw();
@@ -184,6 +206,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     activityAt = 0;
     activityGen++;
     cost = null;
+    groupSide = 'running'; offlineDepth = 1;
     transition = null;
     error = null;
     for (const selector of ['#wb-board', '#wb-instance', '#wb-attention', '#wb-side']) {
@@ -239,7 +262,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   nameButton?.addEventListener('click', autoName);
   const controller = boardController({
     visible,
-    fetchSnapshot: () => withRequestTimeout(signal => read('/api/workbench/groups', { signal }), REQUEST_TIMEOUT_MS),
+    fetchSnapshot: () => withRequestTimeout(signal => readGroupSnapshot(read, { signal, side: groupSide, pages: offlineDepth, counts: pushedCounts, instance: pushedCounts ? snapshot?.instance : null }), REQUEST_TIMEOUT_MS),
     onSnapshot: value => {
       snapshot = value;
       groupDetail.updateSnapshot(snapshot);
@@ -257,15 +280,29 @@ export function mountWorkbench({ document = globalThis.document, window = global
   // Optional cost has its own pending request and generation, so neither read holds up the other.
   const costController = boardController({
     visible,
-    fetchSnapshot: () => withRequestTimeout(signal => read('/api/workbench/usage?summary=cost', { signal }), REQUEST_TIMEOUT_MS),
-    onSnapshot: value => { cost = value.costSummary ?? null; redraw(); },
+    fetchSnapshot: () => withRequestTimeout(signal => read('/api/usage/summary', { signal }), REQUEST_TIMEOUT_MS),
+    onSnapshot: value => { cost = value; redraw(); },
     onError: () => { cost = null; redraw(); },
   });
+  async function loadMoreOffline() {
+    if (groupSide !== 'offline' || !snapshot?.nextCursor) return;
+    const cursor = snapshot.nextCursor, captured = identity();
+    try {
+      const value = await read('/api/groups/offline?cursor=' + encodeURIComponent(cursor));
+      value.rows = (value.rows ?? []).map(row => displayGroupRow(row, 'offline'));
+      if (stopped || captured !== identity() || groupSide !== 'offline' || snapshot?.nextCursor !== cursor) return;
+      const known = new Set(snapshot.rows.map(row => row.sessionGroup));
+      controller.invalidate();
+      offlineDepth++;
+      snapshot = { ...snapshot, rows: [...snapshot.rows, ...(value.rows ?? []).filter(row => !known.has(row.sessionGroup))], nextCursor: value.nextCursor ?? null, hasOlder: value.nextCursor != null };
+      redraw();
+    } catch { error = true; redraw(); }
+  }
   async function refreshMode() {
     if (!visible()) return;
     try {
-      const value = await read('/api/session-mode');
-      transition = value?.data?.transition ?? null;
+      const value = await read('/api/instance');
+      transition = value?.session_mode?.transition ?? null;
     } catch {
       transition = null;
     }
@@ -275,7 +312,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     if (!force && Date.now() - activityAt < (range === '60m' ? 60000 : 300000)) return;
     const gen = ++activityGen;
     try {
-      const value = await read('/api/workbench/activity?range=' + range);
+      const value = await read('/api/groups/activity?range=' + range);
       if (gen !== activityGen) return;
       activity = value;
       activityAt = Date.now();
@@ -310,7 +347,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     event.preventDefault?.();
   };
   const visibility = () => {
-    if (document.visibilityState === 'visible') { controller.refresh(); costController.refresh(); }
+    if (document.visibilityState === 'visible') { instanceRead = null; controller.refresh(); costController.refresh(); }
   };
   // An installed-but-unavailable observer still opens its page, which explains why and links to settings.
   const observerClick = event => {
@@ -332,7 +369,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     const changed = resetOwner();
     const active = visible();
     syncNav();
-    if (active && (changed || !previousVisible)) { controller.refresh(); costController.refresh(); }
+    if (active && (changed || !previousVisible)) { instanceRead = null; controller.refresh(); costController.refresh(); }
     if (!pageActive()) hostPanel.close();
     previousVisible = active;
   }) : null;
@@ -346,7 +383,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   controller.start();
   costController.start();
   refreshMode();
-  const modeTimer = setInterval(refreshMode, 60000);
+  const modeTimer = setInterval(() => { if (visible()) instanceRead = null; return refreshMode(); }, 60000);
   function destroy() {
     stopped = true;
     controller.stop();
@@ -371,6 +408,17 @@ export function mountWorkbench({ document = globalThis.document, window = global
   }
   return {
     setViewDetail: redraw,
+    applyInstance(instance) {
+      instanceRead = { owner: identity(), promise: Promise.resolve(instance) };
+      transition = instance.session_mode?.transition ?? null;
+      if (snapshot) snapshot = groupSnapshot(instance, snapshot.groupCounts, snapshot);
+      redraw();
+    },
+    refresh(counts) {
+      pushedCounts = counts ?? null;
+      if (snapshot && counts) { snapshot = groupSnapshot(snapshot.instance, counts, snapshot); redraw(); }
+      return controller.refresh().finally(() => { pushedCounts = null; });
+    },
     selectedGroup: () => groupDetail?.state.row?.sessionGroup,
     async locateGroup(key) {
       if (stopped) return;
@@ -382,11 +430,22 @@ export function mountWorkbench({ document = globalThis.document, window = global
       searchRows = null;
       const captured = identity(), generation = ++locateGeneration;
       let groups;
-      try { groups = await read('/api/workbench/groups'); } catch { return; }
+      try {
+        if (key) {
+          const selected = displayGroupRow(await read('/api/groups/' + encodeURIComponent(key) + '?include='));
+          if (stopped || captured !== identity() || generation !== locateGeneration || !pageActive()) return;
+          const side = selected.state?.kind === 'offline' ? 'offline' : 'running';
+          if (side !== groupSide) offlineDepth = 1;
+          controller.invalidate();
+          groupSide = side;
+          if (groupSide === 'offline') { searchRows = [selected]; }
+        }
+        groups = await readGroupSnapshot(read, { side: groupSide, pages: offlineDepth });
+      } catch { return; }
       if (stopped || captured !== identity() || generation !== locateGeneration || !pageActive()) return;
       snapshot = groups;
       groupDetail.updateSnapshot(snapshot);
-      locatedGroup = key || snapshot?.rows.find(row => row.state?.kind === 'error' || row.attention?.some(item => ['auth_failed', 'start_failed'].includes(item.kind)))?.sessionGroup;
+      locatedGroup = key || snapshot?.rows.find(row => row.flags?.startFailed || row.flags?.blocked?.reason === 'auth_failed')?.sessionGroup;
       redraw();
       const row = [...board.querySelectorAll('.wb-row')].find(node => node.dataset.group === locatedGroup);
       row?.focus();
@@ -401,7 +460,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
       // opening detail, rather than permanently treating this selection as historical.
       if (!snapshot) {
         let groups;
-        try { groups = await read('/api/workbench/groups'); } catch { return; }
+        try { groups = await readGroupSnapshot(read, { side: groupSide, pages: offlineDepth }); } catch { return; }
         if (stopped || captured !== identity() || generation !== locateGeneration || !pageActive()) return;
         snapshot = groups;
       }

@@ -5,21 +5,22 @@ import test, { mock } from 'node:test';
 import { Store } from '../src/lib/store.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
 import { SystemCollector } from '../src/lib/collectors/system-collector.js';
+import { createGroupSnapshot, systemSample } from '../src/lib/workbench/group-snapshot.js';
 import { scheduleEnv } from './fixtures/schedule-env.js';
 
 mock.method(VersionChecker.prototype, 'start', () => {});
 
 // HTTP integration. Covers: the real server entry hands its own system collector to the overview snapshot, so
-// GET /api/workbench/groups carries the collector's latest CPU, memory and disk sample under instance.system.
+// GET /api/instance carries the collector's latest CPU, memory and disk sample under resources.
 // The snapshot's forwarding of an injected reader is covered by wb-groups-api; this case proves the server wiring.
 // The periodic collector loop only starts in the listening entry point, so the test asks the server's own
-// collector instance (the one /api/system reads) for one real sample instead of waiting for that loop.
+// collector instance (the one /api/instance reads) for one real sample instead of waiting for that loop.
 // Run when the server wiring, the overview snapshot or the system collector changes; changes limited to the
 // strip's drawing may skip it. Isolation: HOME, PM2_HOME and TMPDIR are isolated by the test runner; this test
 // points the process's ZYLOS_DIR at the temporary installation from scheduleEnv (asserted to stay under its root),
 // with a private dashboard.db inside it; no PM2 or tmux command runs. The server, timers and stores are closed,
 // ZYLOS_DIR restored and the root removed in teardown.
-test('the overview snapshot carries the server system collector sample', { timeout: 20_000 }, async t => {
+test('instance resources carry the server system collector sample', { timeout: 20_000 }, async t => {
   const install = scheduleEnv(t, { link: false });
   const { zylosDir } = install;
   assert.ok(zylosDir.startsWith(install.root + path.sep));
@@ -54,6 +55,20 @@ test('the overview snapshot carries the server system collector sample', { timeo
     for (const [key, value] of Object.entries(previous)) if (value == null) delete process.env[key]; else process.env[key] = value;
   });
 
+  let clock = Date.now();
+  t.mock.method(Date, 'now', () => clock);
+  t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
+    systemSample,
+    createGroupSnapshot: options => createGroupSnapshot({ ...options,
+      cli: { runC4Db: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
+        readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) },
+      loadCoreModule: async name => {
+        if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
+        if (name === 'session-state-reader.js') return { readAccountUsageSnapshot: async () => ({ live: null, recorded: null }) };
+        if (name === 'status-view.js') return { collectStatus: async () => ({ view: 'single', origin: { presence: 'not_running' }, groupListError: null, runtimeHealth: {} }) };
+        return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
+      } }),
+  } });
   const { createServer } = await import(new URL(`../src/index.js?overview-system=${Date.now()}`, import.meta.url).href);
   server = createServer();
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -71,16 +86,18 @@ test('the overview snapshot carries the server system collector sample', { timeo
     return body;
   };
 
-  await get('/api/system');
+  await get('/api/instance');
   assert.equal(collectors.size, 1, 'the server reads one system collector');
   const [collector] = collectors;
   await collector.collect();
   const sample = collector.getLatestSystemData();
   assert.equal(typeof sample.collectedAt, 'number');
 
-  const snapshot = await get('/api/workbench/groups');
-  assert.ok(snapshot.instance.system, 'the snapshot carries a host sample');
-  assert.equal(typeof snapshot.instance.system.sampledAt, 'number');
-  assert.equal(snapshot.instance.system.sampledAt, sample.collectedAt, 'the sample is the server collector\'s latest');
-  assert.equal(snapshot.instance.system.memTotalBytes, sample.mem_total_bytes ?? null);
+  clock += 2100;
+  const snapshot = await get('/api/instance');
+  assert.ok(snapshot.resources, 'the instance carries a resource sample');
+  assert.equal(typeof snapshot.resources.sampledAt, 'number');
+  assert.equal(snapshot.resources.sampledAt, sample.collectedAt, 'the sample is the server collector\'s latest');
+  assert.equal(snapshot.resources.mem_total_bytes, sample.mem_total_bytes ?? null);
+  assert.equal(Object.hasOwn(snapshot, 'system'), false, 'resources are the sole public system sample');
 });

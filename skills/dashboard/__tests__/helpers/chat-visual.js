@@ -27,11 +27,8 @@ export async function runVisualCase(t, sandbox) {
   const fixture = await createChatApiFixture(t, sandbox, { name: 'Visual conversation', extraHandler(req, res, url, f) {
     if (!url.pathname.startsWith('/api/') || url.pathname.startsWith('/api/chat/')) return false;
     const values = {
-      '/api/session-mode': { data: { sessionMode: f.readMode() } },
-      '/api/state': { state: 'idle', runtime: 'claude', session_mode: f.readMode(), agent: { id: 'test', name: 'Isolated browser' }, runtime_info: {} },
+      '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: 'Isolated browser' } },
       '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
-      '/api/communication': {}, '/api/summary': {}, '/api/timeline': { items: [] },
-      '/api/instance-status': { status: 'ok' }, '/api/actions/meta': { actions: [] },
     };
     if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return true; }
     sendJson(res, 200, values[url.pathname] || {}); return true;
@@ -85,6 +82,7 @@ export async function runVisualCase(t, sandbox) {
   const errors = [], screenshotPaths = [];
   let expectedChatDenial = false;
   const context = await browser.newContext();
+  await context.route('**/*', route => route.request().url().startsWith(fixture.base + '/') ? route.continue() : route.abort());
   await context.addCookies([{ name: '__Secure-zylos_dashboard_session', value: fixture.cookie,
     domain: '127.0.0.1', path: '/', secure: true }]);
   const page = await context.newPage();

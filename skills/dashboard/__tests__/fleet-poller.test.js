@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { objectResponse, isObjectApi, flushObjectReads } from './fixtures/fleet-object-api.js';
 import { agentColor } from '../src/lib/agent-color.js';
 import { FleetPoller, SseEventParser, stateToFleetRecord } from '../src/lib/fleet-poller.js';
 import { assertFleetPayloadSafe, buildFleetPayload, buildSafeFleetPayload, redactFleetPayload } from '../src/lib/fleet-payload.js';
@@ -62,22 +63,12 @@ test('fleet poller exchanges token and derives safe agent records', async () => 
       return jsonResponse({ token: 'zylos_st_secret', expires_at: new Date(120000).toISOString() });
     }
     assert.equal(options.headers.Authorization, 'Bearer zylos_st_secret');
-    return jsonResponse({
-      state: 'BUSY',
-      rate_limit_7d_pct: 4, rate_limit_7d_live: false, rate_limit_7d_recorded_at: 1000,
-      running_tools: [{ tool_name: 'Bash', tool_detail: 'npm test' }],
-      runtime_info: { model: 'GPT-5', effort: 'high', zylos_update: '1.2.3' },
-      new_session_threshold: 75,
-      system_metrics: { cpu_pct: 12, mem_pct: 34, disk_pct: 56 },
-      session_cost: 1.23,
-      daily_cost: 4.56,
-      weekly_cost: 7.89,
-      active_subagents: [{ last_activity: 'Worker running' }],
-      metrics: {
-        context_pct: { value: 42 },
-        session_cost: { value: 1.23 }
-      }
-    });
+    return objectResponse(url, { working: 1, todayCost: 4.56, sevenDayCost: 7.89,
+      rows: [{ id: 'origin', displayName: 'Origin', channel: 'dashboard', runtime: 'claude', model: 'GPT-5',
+        contextPct: 42, state: { kind: 'working' }, duration: null, mainAgent: 'busy', lastActivityAt: null, flags: {} }],
+      instance: { default_runtime: 'claude', accounts: { claude: { used_percentage: 4, live: false, recordedAt: 1000 } },
+        defaults: { claude: { model: 'configured', effort: 'high', threshold: 75 } }, versions: { zylos: { installed: '1.0.0', latest: '1.2.3', update: '1.2.3' } },
+        resources: { cpu_pct: 12, mem_pct: 34, disk_pct: 56 } } });
   };
 
   const poller = new FleetPoller(makeConfig([
@@ -94,31 +85,34 @@ test('fleet poller exchanges token and derives safe agent records', async () => 
   assert.equal(fleet.agents[0].rate_limit_7d_pct, 4);
   assert.equal(fleet.agents[0].rate_limit_7d_live, false);
   assert.equal(fleet.agents[0].rate_limit_7d_recorded_at, 1000);
-  assert.equal(fleet.agents[0].activity, 'npm test');
-  assert.equal(fleet.agents[0].context_pct, 42);
-  assert.equal(fleet.agents[0].cost, 1.23);
-  assert.equal(fleet.agents[0].session_cost, 1.23);
+  assert.equal(fleet.agents[0].activity, null, 'compact rows do not expose tool details');
+  assert.equal(Object.hasOwn(fleet.agents[0], 'context_pct'), false);
+  assert.equal(Object.hasOwn(fleet.agents[0], 'cost'), false);
+  assert.equal(Object.hasOwn(fleet.agents[0], 'session_cost'), false);
   assert.equal(fleet.agents[0].daily_cost, 4.56);
   assert.equal(fleet.agents[0].weekly_cost, 7.89);
-  assert.equal(fleet.agents[0].model, 'GPT-5');
-  assert.equal(fleet.agents[0].effort, 'high');
-  assert.equal(fleet.agents[0].new_session_threshold, 75);
+  assert.equal(Object.hasOwn(fleet.agents[0], 'model'), false);
+  assert.equal(Object.hasOwn(fleet.agents[0], 'effort'), false);
+  assert.equal(Object.hasOwn(fleet.agents[0], 'new_session_threshold'), false);
   assert.equal(fleet.agents[0].cpu_pct, 12);
   assert.equal(fleet.agents[0].mem_pct, 34);
   assert.equal(fleet.agents[0].disk_pct, 56);
   assert.equal(fleet.agents[0].has_upgrade, true);
-  assert.equal(fleet.agents[0].has_subagent, true);
+  assert.equal(Object.hasOwn(fleet.agents[0], 'has_subagent'), false, 'compact rows omit Origin child fields');
+  assert.equal(Object.hasOwn(fleet.agents[0], 'subagent_count'), false);
   assert.equal(fleet.agents[0].health_reason, 'ok');
   assert.equal(JSON.stringify(fleet).includes('zylos_ak_secret'), false);
   assert.equal(JSON.stringify(fleet).includes('zylos_st_secret'), false);
   assert.equal(calls[0].authorization, 'Bearer zylos_ak_secret');
   assert.equal(fleet.agents[0].self, false, 'external records must not be flagged self');
+  assert.deepEqual(calls.slice(1).map(call => new URL(call.url).pathname).sort(),
+    ['/dashboard/api/groups/counts', '/dashboard/api/groups/running', '/dashboard/api/instance', '/dashboard/api/usage/summary']);
 });
 
 test('fleet poller reports initial not-polled records without down link quality', () => {
   const poller = new FleetPoller(makeConfig([
     { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'zylos_ak_secret' }
-  ]), { fetch: async () => jsonResponse({ state: 'IDLE' }), now: () => 0 });
+  ]), { fetch: async url => objectResponse(url), now: () => 0 });
 
   const record = poller.getFleet().agents[0];
   assert.equal(record.health_reason, 'not_polled');
@@ -132,7 +126,7 @@ test('fleet poller captures token exchange scope as agent access', async () => {
     if (url.endsWith('/api/auth/token')) {
       return jsonResponse({ token: 'zylos_st_admin', expires_at: new Date(120000).toISOString(), scope: 'admin' });
     }
-    return jsonResponse({ state: 'IDLE' });
+    return objectResponse(url);
   };
 
   const poller = new FleetPoller(makeConfig([
@@ -151,7 +145,7 @@ test('fleet poller does not cache stale tokens after same-name remove and re-add
     if (url.endsWith('/api/auth/token')) {
       return new Promise(resolve => tokenRequests.push(resolve));
     }
-    return jsonResponse({ state: 'IDLE' });
+    return objectResponse(url);
   };
 
   const poller = new FleetPoller(makeConfig([
@@ -191,7 +185,7 @@ test('fleet poller treats missing or unknown scope as read access', async () => 
     if (url.endsWith('/api/auth/token')) {
       return jsonResponse({ token: 'zylos_st_read', expires_at: new Date(120000).toISOString(), scope: 'owner' });
     }
-    return jsonResponse({ state: 'IDLE' });
+    return objectResponse(url);
   };
 
   const poller = new FleetPoller(makeConfig([
@@ -212,9 +206,9 @@ test('fleet poller refreshes token after expiry and on state 401', async () => {
       tokenCount += 1;
       return jsonResponse({ token: `zylos_st_${tokenCount}`, expires_at: new Date(now + 120000).toISOString() });
     }
-    stateCount += 1;
-    if (stateCount === 3) return jsonResponse({ error: 'expired' }, 401);
-    return jsonResponse({ state: 'IDLE' });
+    if (url.endsWith('/api/instance')) stateCount += 1;
+    if (url.endsWith('/api/instance') && stateCount === 3) return jsonResponse({ error: 'expired' }, 401);
+    return objectResponse(url);
   };
 
   const poller = new FleetPoller(makeConfig([
@@ -239,7 +233,7 @@ test('fleet poller falls back to ttl when expires_at is invalid', async () => {
       tokenCount += 1;
       return jsonResponse({ token: `zylos_st_${tokenCount}`, expires_at: 'not-a-date', ttl_seconds: 3600 });
     }
-    return jsonResponse({ state: 'IDLE' });
+    return objectResponse(url);
   };
 
   const poller = new FleetPoller(makeConfig([
@@ -257,7 +251,7 @@ test('fleet poller maps token 404 and invalid key 401 without blocking other age
     if (url.includes('old.example.test')) return jsonResponse({ error: 'not_found' }, 404);
     if (url.includes('bad.example.test')) return jsonResponse({ error: 'invalid_api_key' }, 401);
     if (url.endsWith('/api/auth/token')) return jsonResponse({ token: 'zylos_st_ok', expires_at: new Date(120000).toISOString() });
-    return jsonResponse({ state: 'IDLE' });
+    return objectResponse(url);
   };
 
   const poller = new FleetPoller(makeConfig([
@@ -282,7 +276,7 @@ test('fleet poller keeps quiet records online — no event-rate staleness (#180)
   let now = 0;
   const fetchImpl = async (url) => {
     if (url.endsWith('/api/auth/token')) return jsonResponse({ token: 'zylos_st_ok', expires_at: new Date(120000).toISOString() });
-    return jsonResponse({ state: 'IDLE' });
+    return objectResponse(url);
   };
   const poller = new FleetPoller(makeConfig([
     { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'zylos_ak_secret' }
@@ -302,7 +296,7 @@ test('fleet poller marks agent OFFLINE on poll failure, recovers on success (#18
   const fetchImpl = async (url) => {
     if (fail) throw new Error('connection refused');
     if (url.endsWith('/api/auth/token')) return jsonResponse({ token: 'zylos_st_ok', expires_at: new Date(120000).toISOString() });
-    return jsonResponse({ state: 'IDLE' });
+    return objectResponse(url);
   };
   const poller = new FleetPoller(makeConfig([
     { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'zylos_ak_secret' }
@@ -351,9 +345,9 @@ test('fleet poller health probe triggers slow while SSE remains healthy without 
       now += 120;
       return jsonResponse({ ok: true });
     }
-    if (url.endsWith('/api/state')) {
+    if (url.endsWith('/api/instance')) {
       stateFetches += 1;
-      return jsonResponse({ state: 'IDLE' });
+      return objectResponse(url);
     }
     throw new Error(`unexpected URL ${url}`);
   };
@@ -361,9 +355,10 @@ test('fleet poller health probe triggers slow while SSE remains healthy without 
     { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'zylos_ak_secret' }
   ], { slow_threshold_ms: 50 }), { fetch: fetchImpl, now: () => now });
   const agent = poller.agents[0];
-  poller._handleSseEvent(agent, { event: 'fleet_state', data: '{"state":"BUSY"}' });
+  poller._setSuccess(agent, { state: 'BUSY' });
 
   for (let i = 0; i < 5; i += 1) await poller._probeAgentLatency(agent);
+  await flushObjectReads();
   const record = poller.getFleet().agents[0];
   assert.equal(record.state, 'BUSY');
   assert.equal(record.link.quality, 'slow');
@@ -577,14 +572,15 @@ test('fleet poller classifies 2xx invalid state payloads as bad_payload', async 
   }
 });
 
-test('fleet poller idle watchdog aborts half-open SSE and starts fallback polling (#180)', async () => {
+test('fleet poller idle watchdog aborts half-open SSE and starts fallback polling (#180)', async t => {
   const timers = [];
   let sseController;
+  t.after(() => { try { sseController?.close(); } catch { /* already closed */ } });
   const fetchImpl = async (url, options = {}) => {
     if (url.endsWith('/api/auth/token')) {
       return jsonResponse({ token: 'zylos_st_stream', expires_at: new Date(120000).toISOString() });
     }
-    if (url.endsWith('/api/state')) return jsonResponse({ state: 'IDLE' });
+    if (isObjectApi(url)) return objectResponse(url);
     if (url.endsWith('/api/stream')) {
       // Half-open connection: stream opens, then goes silent forever.
       return new Response(new ReadableStream({ start(c) { sseController = c; } }), {
@@ -608,6 +604,7 @@ test('fleet poller idle watchdog aborts half-open SSE and starts fallback pollin
   });
 
   const agent = poller.agents[0];
+  t.after(() => poller.stop());
   poller.running = true;
   const stream = poller._streamState(agent);
   const controller = new AbortController();
@@ -634,8 +631,8 @@ test('Fleet does not substitute service tier or configured identity for runtime 
   const record = stateToFleetRecord({ name: 'codex' }, {
     runtime_info: { runtime: 'codex', model: null, effort: null, service_tier: 'priority', configured_model: 'gpt-5.6-sol', configured_effort: 'high' },
   });
-  assert.equal(record.model, null);
-  assert.equal(record.effort, null);
+  assert.equal(Object.hasOwn(record, 'model'), false);
+  assert.equal(Object.hasOwn(record, 'effort'), false);
 });
 
 test('stateToFleetRecord produces a secret-free self record from local API state', () => {
@@ -665,20 +662,21 @@ test('stateToFleetRecord produces a secret-free self record from local API state
   assert.equal(record.color, agentColor(name).color);
   assert.equal(record.hue, agentColor(name).hue);
   assert.equal(record.state, 'BUSY');
-  assert.equal(record.activity, 'npm test');
-  assert.equal(record.context_pct, 42);
-  assert.equal(record.cost, 1.23);
-  assert.equal(record.session_cost, 1.23);
+  assert.equal(record.activity, null, 'Fleet ignores Origin tool details');
+  assert.equal(Object.hasOwn(record, 'context_pct'), false);
+  assert.equal(Object.hasOwn(record, 'cost'), false);
+  assert.equal(Object.hasOwn(record, 'session_cost'), false);
   assert.equal(record.daily_cost, 4.56);
   assert.equal(record.weekly_cost, 7.89);
-  assert.equal(record.model, 'Opus 4.6');
-  assert.equal(record.effort, 'high');
-  assert.equal(record.new_session_threshold, 75);
+  assert.equal(Object.hasOwn(record, 'model'), false);
+  assert.equal(Object.hasOwn(record, 'effort'), false);
+  assert.equal(Object.hasOwn(record, 'new_session_threshold'), false);
   assert.equal(record.cpu_pct, 12);
   assert.equal(record.mem_pct, 34);
   assert.equal(record.disk_pct, 56);
   assert.equal(record.has_upgrade, true);
-  assert.equal(record.has_subagent, true);
+  assert.equal(Object.hasOwn(record, 'has_subagent'), false, 'Fleet omits Origin child observations');
+  assert.equal(Object.hasOwn(record, 'subagent_count'), false);
   assert.equal(record.base_url, null);
   assert.equal(record.pulse_rate, 1);
   assert.equal(record.health_reason, 'ok');
@@ -687,7 +685,7 @@ test('stateToFleetRecord produces a secret-free self record from local API state
   assert.equal(JSON.stringify(record).includes('zylos_st_'), false);
 });
 
-test('stateToFleetRecord consumes API snake_case cost tiers directly (#174)', () => {
+test('stateToFleetRecord consumes daily and weekly costs without exposing a session cost', () => {
   const record = stateToFleetRecord({
     name: 'test',
     color: agentColor('test')
@@ -700,7 +698,7 @@ test('stateToFleetRecord consumes API snake_case cost tiers directly (#174)', ()
     self: true,
     nowMs: 0
   });
-  assert.equal(record.session_cost, 1.23);
+  assert.equal(Object.hasOwn(record, 'session_cost'), false);
   assert.equal(record.daily_cost, 4.56);
   assert.equal(record.weekly_cost, 7.89);
 });
@@ -820,18 +818,18 @@ test('redactFleetPayload leaves clean payloads and non-string leaves unchanged',
 test('SseEventParser handles events, ids, comments, CRLF, bare CR, and multi-line data', () => {
   const events = [];
   const parser = new SseEventParser((event) => events.push(event));
-  parser.push(': keepalive\r\nid: 7\r\nevent: fleet_state\r\ndata: {"state":"BUSY"');
+  parser.push(': keepalive\r\nid: 7\r\nevent: groups\r\ndata: {"state":"BUSY"');
   parser.push('\r\ndata: ,"context_pct":42}\r\n\r\n');
-  parser.push('event: fleet_state\rdata: {"state":"IDLE"}\r\r');
+  parser.push('event: groups\rdata: {"state":"IDLE"}\r\r');
   parser.flush();
   assert.deepEqual(events, [
     {
-      event: 'fleet_state',
+      event: 'groups',
       data: '{"state":"BUSY"\n,"context_pct":42}',
       id: '7'
     },
     {
-      event: 'fleet_state',
+      event: 'groups',
       data: '{"state":"IDLE"}',
       id: null
     }
@@ -841,28 +839,28 @@ test('SseEventParser handles events, ids, comments, CRLF, bare CR, and multi-lin
 test('SseEventParser preserves event type when CRLF splits across chunks', () => {
   const events = [];
   const parser = new SseEventParser((event) => events.push(event));
-  parser.push('event: fleet_state\r');
+  parser.push('event: groups\r');
   parser.push('\ndata: {"state":"BUSY"}\r\n\r\n');
   parser.flush();
   assert.deepEqual(events, [{
-    event: 'fleet_state',
+    event: 'groups',
     data: '{"state":"BUSY"}',
     id: null
   }]);
 });
 
-test('fleet poller SSE uses Bearer auth and fleet_state updates records', async () => {
+test('fleet poller SSE uses Bearer auth and groups updates records', async () => {
   const calls = [];
   const fetchImpl = async (url, options = {}) => {
     calls.push({ url, authorization: options.headers?.Authorization });
     if (url.endsWith('/api/auth/token')) {
       return jsonResponse({ token: 'zylos_st_stream', expires_at: new Date(120000).toISOString() });
     }
-    if (url.endsWith('/api/state')) return jsonResponse({ state: 'IDLE', context_pct: 1 });
+    if (isObjectApi(url)) return objectResponse(url, { working: 1 });
     if (url.endsWith('/api/stream')) {
       assert.equal(options.headers.Authorization, 'Bearer zylos_st_stream');
       assert.equal(url.includes('token='), false);
-      return streamResponse('event: fleet_state\ndata: {"state":"BUSY","context_pct":55,"session_cost":0.75}\n\n');
+      return streamResponse('event: groups\ndata: {"state":"BUSY","context_pct":55,"session_cost":0.75}\n\n');
     }
     throw new Error(`unexpected URL ${url}`);
   };
@@ -871,10 +869,11 @@ test('fleet poller SSE uses Bearer auth and fleet_state updates records', async 
   ]), { fetch: fetchImpl, now: () => 0 });
 
   await poller._runSse(poller.agents[0], poller._streamState(poller.agents[0]), new AbortController().signal).catch(() => {});
+  await flushObjectReads();
   const record = poller.getFleet().agents[0];
   assert.equal(record.state, 'BUSY');
-  assert.equal(record.context_pct, 55);
-  assert.equal(record.session_cost, 0.75);
+  assert.equal(Object.hasOwn(record, 'context_pct'), false);
+  assert.equal(Object.hasOwn(record, 'session_cost'), false);
   assert.ok(calls.some(c => c.url.endsWith('/api/stream') && c.authorization === 'Bearer zylos_st_stream'));
 });
 
@@ -886,12 +885,12 @@ test('fleet poller SSE auth_expired forces token refresh on reconnect', async ()
       tokenCount += 1;
       return jsonResponse({ token: `zylos_st_${tokenCount}`, expires_at: new Date(120000).toISOString() });
     }
-    if (url.endsWith('/api/state')) return jsonResponse({ state: 'IDLE' });
+    if (isObjectApi(url)) return objectResponse(url, { working: streamCount > 1 ? 1 : 0 });
     if (url.endsWith('/api/stream')) {
       streamCount += 1;
       return streamResponse(streamCount === 1
         ? 'event: auth_expired\ndata: {}\n\n'
-        : 'event: fleet_state\ndata: {"state":"BUSY"}\n\n');
+        : 'event: groups\ndata: {"state":"BUSY"}\n\n');
     }
     throw new Error(`unexpected URL ${url}`);
   };
@@ -905,17 +904,18 @@ test('fleet poller SSE auth_expired forces token refresh on reconnect', async ()
     /auth_expired/
   );
   await poller._runSse(agent, poller._streamState(agent), new AbortController().signal).catch(() => {});
+  await flushObjectReads();
   assert.equal(tokenCount, 2);
   assert.equal(poller.getFleet().agents[0].state, 'BUSY');
 });
 
-test('fleet poller stop aborts active SSE fetch streams', async () => {
+test('fleet poller stop aborts active SSE fetch streams', async t => {
   let signal;
   const fetchImpl = async (url, options = {}) => {
     if (url.endsWith('/api/auth/token')) {
       return jsonResponse({ token: 'zylos_st_stream', expires_at: new Date(120000).toISOString() });
     }
-    if (url.endsWith('/api/state')) return jsonResponse({ state: 'IDLE' });
+    if (isObjectApi(url)) return objectResponse(url);
     if (url.endsWith('/api/stream')) {
       signal = options.signal;
       return new Promise(() => {});
@@ -926,13 +926,14 @@ test('fleet poller stop aborts active SSE fetch streams', async () => {
     { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'zylos_ak_secret' }
   ]), { fetch: fetchImpl, now: () => 0 });
 
+  t.after(() => poller.stop());
   poller.start();
   await new Promise(resolve => setTimeout(resolve, 10));
   poller.stop();
   assert.equal(signal.aborted, true);
 });
 
-test('fleet poller SSE connect timeout clears connecting and starts recovery loops', async () => {
+test('fleet poller SSE connect timeout clears connecting and starts recovery loops', async t => {
   const timers = [];
   const warnings = [];
   const logs = [];
@@ -941,7 +942,7 @@ test('fleet poller SSE connect timeout clears connecting and starts recovery loo
     if (url.endsWith('/api/auth/token')) {
       return jsonResponse({ token: 'zylos_st_stream', expires_at: new Date(120000).toISOString() });
     }
-    if (url.endsWith('/api/state')) return jsonResponse({ state: 'IDLE' });
+    if (isObjectApi(url)) return objectResponse(url);
     if (url.endsWith('/api/stream')) {
       streamSignal = options.signal;
       return new Promise((_resolve, reject) => {
@@ -972,7 +973,8 @@ test('fleet poller SSE connect timeout clears connecting and starts recovery loo
   console.log = (msg) => logs.push(String(msg));
   try {
     const agent = poller.agents[0];
-    poller.running = true;
+    t.after(() => poller.stop());
+  poller.running = true;
     const stream = poller._streamState(agent);
     poller._connectSse(agent);
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -1043,7 +1045,7 @@ test('fleet poller caller abort during connect phase still wins over connect dea
   assert.equal(err.reason, undefined);
 });
 
-test('fleet poller resumes fallback polling when SSE has no fleet_state and stops after recovery', async () => {
+test('fleet poller resumes fallback polling when SSE has no groups and stops after recovery', async t => {
   const timers = [];
   const cleared = new Set();
   let stateFetches = 0;
@@ -1051,10 +1053,11 @@ test('fleet poller resumes fallback polling when SSE has no fleet_state and stop
     if (url.endsWith('/api/auth/token')) {
       return jsonResponse({ token: 'zylos_st_stream', expires_at: new Date(120000).toISOString() });
     }
-    if (url.endsWith('/api/state')) {
+    if (url.endsWith('/api/instance')) {
       stateFetches += 1;
-      return jsonResponse({ state: 'IDLE', context_pct: stateFetches });
+      return objectResponse(url);
     }
+    if (isObjectApi(url)) return objectResponse(url);
     if (url.endsWith('/api/stream')) {
       return streamResponse(': connected\n\n');
     }
@@ -1073,6 +1076,7 @@ test('fleet poller resumes fallback polling when SSE has no fleet_state and stop
     clearTimeout: (timer) => cleared.add(timer)
   });
   const agent = poller.agents[0];
+  t.after(() => poller.stop());
   poller.running = true;
   const stream = poller._streamState(agent);
   const run = poller._runSse(agent, stream, new AbortController().signal).catch(err => err);
@@ -1084,14 +1088,14 @@ test('fleet poller resumes fallback polling when SSE has no fleet_state and stop
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.ok(stream.pollTimer, 'compatibility fallback should start polling');
 
-  poller._handleSseEvent(agent, { event: 'fleet_state', data: '{"state":"BUSY"}' });
+  poller._handleSseEvent(agent, { event: 'groups', data: '{"state":"BUSY"}' });
   assert.equal(stream.pollTimer, null);
   assert.ok(cleared.has(compatibilityTimer));
   poller.running = false;
   await run;
 });
 
-test('fleet poller watchdog revives dead records and wedged connecting state', () => {
+test('fleet poller watchdog revives dead records and wedged connecting state', t => {
   let now = 0;
   const timers = [];
   const warnings = [];
@@ -1100,7 +1104,7 @@ test('fleet poller watchdog revives dead records and wedged connecting state', (
     { name: 'Dead', base_url: 'https://dead.example.test', read_api_key: 'zylos_ak_secret' },
     { name: 'Wedged', base_url: 'https://wedged.example.test', read_api_key: 'zylos_ak_secret' }
   ], { poll_interval_ms: 100, timeout_ms: 50, sse_reconnect_max_ms: 100 }), {
-    fetch: async () => jsonResponse({ state: 'IDLE' }),
+    fetch: async url => objectResponse(url),
     now: () => now,
     setTimeout: (fn, ms) => {
       const timer = { fn, ms, unref() {} };
@@ -1114,7 +1118,8 @@ test('fleet poller watchdog revives dead records and wedged connecting state', (
   console.warn = (msg) => warnings.push(String(msg));
   console.log = (msg) => logs.push(String(msg));
   try {
-    poller.running = true;
+    t.after(() => poller.stop());
+  poller.running = true;
     now = 301;
     poller._checkSelfHeal(poller.agents[0]);
     const deadStream = poller._streamState(poller.agents[0]);
@@ -1142,7 +1147,7 @@ test('fleet poller watchdog revives dead records and wedged connecting state', (
   }
 });
 
-test('fleet poller watchdog no-ops for active, recovering, and fresh records', () => {
+test('fleet poller watchdog no-ops for active, recovering, and fresh records', t => {
   let now = 0;
   const timers = [];
   const poller = new FleetPoller(makeConfig([
@@ -1150,7 +1155,7 @@ test('fleet poller watchdog no-ops for active, recovering, and fresh records', (
     { name: 'Recovering', base_url: 'https://recovering.example.test', read_api_key: 'zylos_ak_secret' },
     { name: 'Fresh', base_url: 'https://fresh.example.test', read_api_key: 'zylos_ak_secret' }
   ], { poll_interval_ms: 100 }), {
-    fetch: async () => jsonResponse({ state: 'IDLE' }),
+    fetch: async url => objectResponse(url),
     now: () => now,
     setTimeout: (fn, ms) => {
       const timer = { fn, ms, unref() {} };
@@ -1159,6 +1164,7 @@ test('fleet poller watchdog no-ops for active, recovering, and fresh records', (
     },
     clearTimeout: (timer) => { timer.cleared = true; }
   });
+  t.after(() => poller.stop());
   poller.running = true;
   now = 301;
   poller._streamState(poller.agents[0]).reading = true;
@@ -1175,10 +1181,10 @@ test('fleet poller watchdog no-ops for active, recovering, and fresh records', (
   assert.equal(timers.length, 0);
 });
 
-test('fleet poller self-heal watchdog timer is stopped cleanly', () => {
+test('fleet poller self-heal watchdog timer is stopped cleanly', t => {
   const timers = [];
   const poller = new FleetPoller(makeConfig([], { poll_interval_ms: 100 }), {
-    fetch: async () => jsonResponse({ state: 'IDLE' }),
+    fetch: async url => objectResponse(url),
     setTimeout: (fn, ms) => {
       const timer = { fn, ms, unref() {} };
       timers.push(timer);
@@ -1187,6 +1193,7 @@ test('fleet poller self-heal watchdog timer is stopped cleanly', () => {
     clearTimeout: (timer) => { timer.cleared = true; }
   });
 
+  t.after(() => poller.stop());
   poller.start();
   assert.equal(poller.watchdogTimer.ms, 100);
   poller.stop();
@@ -1200,7 +1207,7 @@ test('fleet poller onPoll receives safe remote fleet after poll cycle completion
     if (url.endsWith('/api/auth/token')) {
       return jsonResponse({ token: 'zylos_st_ok', expires_at: new Date(120000).toISOString() });
     }
-    return jsonResponse({ state: 'IDLE' });
+    return objectResponse(url);
   };
 
   const poller = new FleetPoller(makeConfig([
@@ -1218,7 +1225,7 @@ test('fleet poller onPoll receives safe remote fleet after poll cycle completion
   assert.equal(JSON.stringify(onPollFleet).includes('zylos_st_ok'), false);
 });
 
-test('fleet poller first add from empty fleet starts live polling and streaming', async () => {
+test('fleet poller first add from empty fleet starts live polling and streaming', async t => {
   const calls = [];
   let streamSignal = null;
   const fetchImpl = async (url, options = {}) => {
@@ -1226,7 +1233,7 @@ test('fleet poller first add from empty fleet starts live polling and streaming'
     if (url.endsWith('/api/auth/token')) {
       return jsonResponse({ token: 'zylos_st_added', expires_at: new Date(120000).toISOString(), scope: 'read' });
     }
-    if (url.endsWith('/api/state')) return jsonResponse({ state: 'IDLE', context_pct: 12 });
+    if (isObjectApi(url)) return objectResponse(url, { todayCost: 12 });
     if (url.endsWith('/api/stream')) {
       streamSignal = options.signal;
       return new Promise(() => {});
@@ -1240,6 +1247,7 @@ test('fleet poller first add from empty fleet starts live polling and streaming'
     onPoll: (fleet) => { pushedFleet = fleet; }
   });
 
+  t.after(() => poller.stop());
   poller.start();
   assert.equal(poller.running, true);
   assert.equal(poller.getFleet().count, 0);
@@ -1248,15 +1256,15 @@ test('fleet poller first add from empty fleet starts live polling and streaming'
 
   assert.equal(poller.running, true);
   assert.equal(poller.getFleet().agents[0].name, 'Remote');
-  assert.equal(poller.getFleet().agents[0].context_pct, 12);
-  assert.ok(calls.some(url => url.endsWith('/api/state')));
+  assert.equal(poller.getFleet().agents[0].daily_cost, 12);
+  for (const path of ['/api/instance', '/api/groups/counts', '/api/groups/running', '/api/usage/summary']) assert.ok(calls.some(url => url.endsWith(path)));
   assert.ok(calls.some(url => url.endsWith('/api/stream')));
   assert.ok(streamSignal, 'SSE stream should be opened for the first added agent');
   assert.equal(pushedFleet.agents.some(a => a.name === 'Remote'), true);
   poller.stop();
 });
 
-test('fleet poller remove prevents late SSE failures and stale reconnect timers from resurrecting agents', async () => {
+test('fleet poller remove prevents late SSE failures and stale reconnect timers from resurrecting agents', async t => {
   const timers = [];
   let rejectStream;
   let tokenCalls = 0;
@@ -1265,7 +1273,7 @@ test('fleet poller remove prevents late SSE failures and stale reconnect timers 
       tokenCalls += 1;
       return jsonResponse({ token: 'zylos_st_removed', expires_at: new Date(120000).toISOString() });
     }
-    if (url.endsWith('/api/state')) return jsonResponse({ state: 'IDLE' });
+    if (isObjectApi(url)) return objectResponse(url);
     if (url.endsWith('/api/stream')) {
       return new Promise((_resolve, reject) => { rejectStream = reject; });
     }
@@ -1284,6 +1292,7 @@ test('fleet poller remove prevents late SSE failures and stale reconnect timers 
     clearTimeout: (timer) => { timer.cleared = true; }
   });
   const agent = poller.agents[0];
+  t.after(() => poller.stop());
   poller.running = true;
   poller._connectSse(agent);
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -1303,7 +1312,7 @@ test('fleet poller remove prevents late SSE failures and stale reconnect timers 
   assert.equal(tokenCalls, 1, 'late paths must not exchange a fresh token after removal');
 });
 
-test('fleet poller reads top-level context_pct when metrics object is absent (#171)', async () => {
+test('fleet poller rejects a legacy state response instead of using its session metrics', async () => {
   const fetchImpl = async (url) => {
     if (url.endsWith('/api/auth/token')) {
       return jsonResponse({ token: 'zylos_st_ok', expires_at: new Date(120000).toISOString() });
@@ -1321,7 +1330,8 @@ test('fleet poller reads top-level context_pct when metrics object is absent (#1
 
   await poller.pollOnce();
   const record = poller.getFleet().agents[0];
-  assert.equal(record.context_pct, 63.5);
+  assert.equal(Object.hasOwn(record, 'context_pct'), false);
+  assert.equal(record.health_reason, 'bad_payload');
 });
 
 // --- Fleet tile iteration 2: name-keyed identity color, activity feed, rate limits ---
@@ -1353,27 +1363,24 @@ test('stateToFleetRecord still honours explicit per-agent color overrides from f
   assert.equal(record.hue, 42);
 });
 
-test('stateToFleetRecord derives activity_feed from running tools', () => {
-  const record = stateToFleetRecord({ name: 'a' }, {
-    state: 'BUSY',
-    running_tools: [
-      { tool_name: 'Bash', tool_detail: 'npm test', started_at: '2026-06-10T00:00:00Z' },
-      { tool_name: 'Read', tool_detail: 'foo.js', started_at: '2026-06-10T00:00:05Z' }
-    ]
-  }, { self: false, nowMs: 0 });
-
-  assert.equal(record.activity_feed.length, 2);
-  assert.deepEqual(record.activity_feed[0], {
-    kind: 'tool', label: 'Bash: npm test', started_at: '2026-06-10T00:00:00Z'
-  });
-  assert.deepEqual(record.activity_feed[1], {
-    kind: 'tool', label: 'Read: foo.js', started_at: '2026-06-10T00:00:05Z'
-  });
+test('Fleet does not read raw Origin activity or subagent observations', () => {
+  for (const state of ['BUSY', 'IDLE']) {
+    const input = { state };
+    for (const field of ['running_tools', 'active_subagents', 'subagent_count', 'last_message', 'last_prompt', 'reason']) {
+      Object.defineProperty(input, field, { get() { assert.fail(`raw Origin observation read: ${field}`); } });
+    }
+    const record = stateToFleetRecord({ name: 'a' }, input);
+    assert.equal(record.activity, null);
+    assert.equal(Object.hasOwn(record, 'has_subagent'), false);
+    assert.equal(Object.hasOwn(record, 'subagent_count'), false);
+    assert.deepEqual(record.activity_feed, []);
+  }
 });
 
-test('stateToFleetRecord activity_feed shows thinking when busy without tools, empty when idle', () => {
+test('stateToFleetRecord does not infer activity from an aggregate busy state', () => {
   const busy = stateToFleetRecord({ name: 'a' }, { state: 'BUSY', running_tools: [] }, { self: false, nowMs: 0 });
-  assert.deepEqual(busy.activity_feed, [{ kind: 'thinking', label: null, started_at: null }]);
+  assert.equal(busy.state, 'BUSY');
+  assert.deepEqual(busy.activity_feed, []);
 
   const idle = stateToFleetRecord({ name: 'a' }, { state: 'IDLE' }, { self: false, nowMs: 0 });
   assert.deepEqual(idle.activity_feed, []);
@@ -1394,35 +1401,6 @@ test('stateToFleetRecord passes rate limit percentages through, defaulting to nu
   assert.equal(without.rate_limit_7d_pct, null);
   assert.equal(without.rate_limit_7d_live, null);
   assert.equal(without.rate_limit_7d_recorded_at, null);
-});
-
-test('stateToFleetRecord idle activity prefers last assistant message over stale prompt', () => {
-  const record = stateToFleetRecord({ name: 'a' }, {
-    state: 'IDLE',
-    last_prompt: { source: 'hxa-connect (zylos01)', summary: 'Prompt from hxa-connect (zylos01)', timestamp: '2026-06-10T09:00:00.000Z' },
-    last_message: { text: 'Reviewed PR #186, conclusion CLEAN.', timestamp: '2026-06-10T09:01:00.000Z' }
-  }, { self: false, nowMs: 0 });
-  assert.equal(record.activity, 'Reviewed PR #186, conclusion CLEAN.');
-});
-
-test('stateToFleetRecord falls back to prompt summary while the turn is still open', () => {
-  // The producer clears last_message on user_prompt_submit, so an open turn
-  // has only the prompt summary — mirroring the single-agent transient line.
-  const record = stateToFleetRecord({ name: 'a' }, {
-    state: 'BUSY',
-    last_prompt: { summary: 'Prompt from lark', timestamp: '2026-06-10T09:00:00.000Z' },
-    last_message: null
-  }, { self: false, nowMs: 0 });
-  assert.equal(record.activity, 'Prompt from lark');
-});
-
-test('stateToFleetRecord accepts legacy string-form last_message', () => {
-  const record = stateToFleetRecord({ name: 'a' }, {
-    state: 'IDLE',
-    last_prompt: { summary: 'Prompt from lark' },
-    last_message: 'plain text reply'
-  }, { self: false, nowMs: 0 });
-  assert.equal(record.activity, 'plain text reply');
 });
 
 test('sleeping Origin remains online in Fleet', () => {
@@ -1486,5 +1464,167 @@ test('fleet keeps only boolean supervisor pause observations and clears on recov
   for (const mode of ['single', 'multi']) for (const value of [true, false, null, undefined, 'true', {}]) {
     const record = stateToFleetRecord({ name: 'fixture' }, { state: 'IDLE', session_mode: mode, supervisor_paused: value });
     assert.equal(record.supervisor_paused, typeof value === 'boolean' ? value : null);
+  }
+});
+
+test('object API fetch failures never fall back to a retired remote path', async () => {
+  for (const unavailable of ['/api/instance', '/api/groups/counts', '/api/groups/running', '/api/usage/summary']) {
+    const calls = [];
+    const poller = new FleetPoller(makeConfig([
+      { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'fixture-key' }
+    ]), { now: () => 0, fetch: async url => {
+      const route = new URL(url).pathname;
+      calls.push(route);
+      if (route === '/api/auth/token') return jsonResponse({ token: 'fixture-session' });
+      if (route === unavailable) return jsonResponse({ error: 'not_found' }, 404);
+      return objectResponse(url);
+    } });
+    await poller.pollOnce();
+    assert.equal(poller.getFleet().agents[0].health_reason, 'unreachable', unavailable);
+    assert.equal(calls.length, 5);
+    assert.equal(calls.some(route => route === '/api/state'), false);
+    for (const route of ['/api/instance', '/api/groups/counts', '/api/groups/running', '/api/usage/summary']) assert.equal(calls.filter(call => call === route).length, 1);
+  }
+});
+
+test('both instance and group events refresh all object observations without trusting event data', async () => {
+  const calls = [];
+  let working = 0, cost = 1;
+  const agent = { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'fixture-key' };
+  const poller = new FleetPoller(makeConfig([agent]), { now: () => 0, fetch: async url => {
+    const route = new URL(url).pathname;
+    calls.push(route);
+    if (route === '/api/auth/token') return jsonResponse({ token: 'fixture-session' });
+    return objectResponse(url, { working, todayCost: cost });
+  } });
+  await poller.pollOnce();
+  assert.equal(poller.getFleet().agents[0].state, 'IDLE');
+  for (const event of ['instance', 'groups']) {
+    calls.length = 0;
+    working++;
+    cost++;
+    poller._handleSseEvent(agent, { event, data: JSON.stringify({ state: 'OFFLINE', daily_cost: -100 }) });
+    await flushObjectReads();
+    const record = poller.getFleet().agents[0];
+    assert.equal(record.state, 'BUSY');
+    assert.equal(record.daily_cost, cost);
+    assert.deepEqual(calls.sort(), ['/api/groups/counts', '/api/groups/running', '/api/instance', '/api/usage/summary']);
+  }
+});
+
+test('object reads reject incomplete counts and usage as bad payloads', async () => {
+  for (const [path, body] of [
+    ['/api/groups/counts', { running: { states: {} } }],
+    ['/api/groups/running', { rows: null }],
+    ['/api/usage/summary', {}],
+    ['/api/usage/summary', { today: { cost: 'bad' }, sevenDay: { cost: 2 } }],
+  ]) {
+    const poller = new FleetPoller(makeConfig([
+      { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'fixture-key' }
+    ]), { now: () => 0, fetch: async url => {
+      if (url.endsWith('/api/auth/token')) return jsonResponse({ token: 'fixture-session' });
+      return url.endsWith(path) ? jsonResponse(body) : objectResponse(url);
+    } });
+    await poller.pollOnce();
+    assert.equal(poller.getFleet().agents[0].health_reason, 'bad_payload', path);
+  }
+});
+
+test('object events received during a Fleet read schedule one later read without losing the final change', async t => {
+  const poller = new FleetPoller(makeConfig([{ name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'fixture' }]));
+  t.after(() => poller.stop());
+  const agent = poller.agents[0], stream = poller._streamState(agent);
+  poller.running = true;
+  let reads = 0; const releases = [];
+  t.mock.method(poller, '_pollAgentAndNotify', async () => { reads++; await new Promise(resolve => releases.push(resolve)); });
+  poller._handleSseEvent(agent, { event: 'groups' });
+  poller._handleSseEvent(agent, { event: 'instance' });
+  poller._handleSseEvent(agent, { event: 'groups' });
+  assert.equal(reads, 1);
+  releases.shift()(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reads, 2, 'events during the held read require one follow-up after it');
+  poller._handleSseEvent(agent, { event: 'groups' });
+  releases.shift()(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reads, 3, 'a later event during the second read is not lost either');
+  releases.shift()(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reads, 3); assert.equal(stream.objectReadPending, false); assert.equal(stream.objectReadDirty, false);
+});
+
+// The adapter consumes the public compact list, even if a caller accidentally
+// retains a raw observation alongside it. Accessors make regressions observable.
+test('object adapter uses mode, versions and resources while omitting all Origin session metadata', async () => {
+  const { fleetStateFromObjects } = await import('../src/lib/fleet-poller.js');
+  const row = { id: 'origin', model: null, contextPct: 12, state: { kind: 'unknown' }, flags: {} };
+  for (const key of ['tools', 'working', 'rotationThreshold', 'presence', 'sessionGroup', 'noResponse', 'attention']) {
+    Object.defineProperty(row, key, { get() { assert.fail(`raw group field read: ${key}`); } });
+  }
+  const instance = { session_mode: { sessionMode: 'multi' }, default_runtime: 'codex',
+    defaults: { codex: { model: 'configured', effort: 'high', threshold: 80 } },
+    versions: { codex: { installed: '1', latest: '2', update: '2' } },
+    resources: { cpu_pct: 10, mem_pct: 20, disk_pct: 30, scope: 'mixed', cpu_source: 'container', mem_source: 'host' } };
+  const counts = { listKnown: true, running: { total: 1, states: { working: 0, idle: 0, starting: 0, stopping: 0, unknown: 1 } } };
+  const usage = { today: { cost: 1 }, sevenDay: { cost: 2 } };
+  const projected = fleetStateFromObjects(instance, counts, usage, { rows: [row] });
+  const record = stateToFleetRecord({}, projected);
+  assert.equal(record.session_mode, 'multi');
+  assert.equal(record.state, 'UNKNOWN');
+  assert.equal(record.group_summary.running, counts.running.total);
+  assert.equal(record.group_summary.counts.unknown, 1);
+  assert.equal(Object.hasOwn(record, 'context_pct'), false);
+  assert.equal(Object.hasOwn(record, 'model'), false);
+  assert.equal(Object.hasOwn(record, 'effort'), false);
+  assert.equal(Object.hasOwn(record, 'new_session_threshold'), false);
+  row.model = 'observed-model';
+  assert.equal(Object.hasOwn(stateToFleetRecord({}, fleetStateFromObjects(instance, counts, usage, { rows: [row] })), 'model'), false, 'Fleet omits even an observed Origin model');
+  assert.equal(record.has_upgrade, true);
+  assert.deepEqual([record.cpu_pct, record.mem_pct, record.disk_pct], [10, 20, 30]);
+  for (const session_mode of ['multi', null, {}, { sessionMode: 'invalid' }]) {
+    assert.throws(() => fleetStateFromObjects({ ...instance, session_mode }, counts, usage, { rows: [row] }), /bad_payload/);
+  }
+});
+
+
+test('Fleet object projection never reads Origin session information or fetches its detail', async () => {
+  const { fleetStateFromObjects } = await import('../src/lib/fleet-poller.js');
+  const row = { id: 'origin', displayName: 'Origin', state: { kind: 'working' }, flags: {} };
+  for (const key of ['model', 'effort', 'contextPct', 'rotationThreshold', 'currentAction']) {
+    Object.defineProperty(row, key, { get() { assert.fail(`Origin session field read: ${key}`); } });
+  }
+  const instance = { session_mode: { sessionMode: 'single' } };
+  const counts = { listKnown: true, running: { total: 1, states: { working: 1, idle: 0, starting: 0, stopping: 0, unknown: 0 } } };
+  const record = stateToFleetRecord({}, fleetStateFromObjects(instance, counts, { today: { cost: 0 }, sevenDay: { cost: 0 } }, { rows: [row] }));
+  for (const key of ['model', 'effort', 'context_pct', 'new_session_threshold']) assert.equal(Object.hasOwn(record, key), false);
+  assert.equal(record.activity, null);
+});
+
+// The object API exposes installed-version updates only. This pure projection
+// uses no services, sockets, timers or external requests.
+test('Fleet upgrade marker uses only installed-version update fields', () => {
+  for (const field of ['zylos_update', 'cc_update', 'codex_update']) {
+    assert.equal(stateToFleetRecord({}, { runtime_info: { [field]: '2.0.0' } }).has_upgrade, true, field);
+  }
+  const runtimeInfo = {};
+  for (const field of ['cc_restart', 'codex_restart', 'pending_restart']) {
+    Object.defineProperty(runtimeInfo, field, { get() { assert.fail(`retired restart observation read: ${field}`); } });
+  }
+  assert.equal(stateToFleetRecord({}, { runtime_info: runtimeInfo }).has_upgrade, false);
+});
+
+test('Fleet placeholder and failed records omit Origin child fields', () => {
+  const first = { name: 'first', base_url: 'https://first.example.test' };
+  const poller = new FleetPoller(makeConfig([first]), { now: () => 0 });
+  const check = () => {
+    for (const record of poller.getFleet().agents) {
+      assert.equal(Object.hasOwn(record, 'has_subagent'), false);
+      assert.equal(Object.hasOwn(record, 'subagent_count'), false);
+    }
+  };
+  check();
+  const second = { name: 'second', base_url: 'https://second.example.test' };
+  poller.addAgent(second);
+  check();
+  for (const reason of ['unreachable', 'version_unsupported']) {
+    poller._setFailure(first, reason);
+    check();
   }
 });

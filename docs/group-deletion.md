@@ -96,8 +96,8 @@ unfinished audit resumes; a completed audit returns its original result.
 
 | Method | Route | Result |
 | --- | --- | --- |
-| GET | `/api/workbench/groups/:group/deletion` | Preview and confirmed boundary |
-| DELETE | `/api/workbench/groups/:group` | Delete through the preview cutoff |
+| GET | `/api/groups/:group/deletion-preview` | Preview and confirmed boundary |
+| DELETE | `/api/groups/:group` | Delete through the preview cutoff |
 | GET | `/api/chat/drafts/:localId/deletion` | Preview the draft or its bound group |
 | DELETE | `/api/chat/drafts/:localId` | Delete that exact preview target |
 

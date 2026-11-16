@@ -1,16 +1,17 @@
 import { countLabel } from '../count-label.js?v=1';
 import { chatKind, element, fallbackName, icon, lastReceived, platformOf, runtimeName } from './plain-text.js?v=106';
-import { toolLabel, waitText } from './view-mode.js?v=152';
+import { toolLabel } from './view-mode.js?v=153';
 import { activityStrip } from './activity-strip.js?v=106';
 import { createFetchGuard } from './fetch-guard.js?v=85';
 const same = (a, b) => a.runtime === b.runtime && a.mode === b.mode &&
   (a.mode === 'default' || (a.model === b.model && a.effort === b.effort));
 export function modelCell(row, t = key => key) {
+  if (row.runtime) return [runtimeName(row.runtime), row.model].filter(Boolean).join(' · ');
   if (['running', 'starting'].includes(row.presence) && !row.launchConfig && row.target?.reason === 'launch_config_unreadable') {
     return [runtimeName(row.target.runtime), t('wb.unknown')].filter(Boolean).join(' · ');
   }
   const value = ['running', 'starting'].includes(row.presence) && row.launchConfig ? row.launchConfig : row.target?.runtime ? row.target : null;
-  return value ? [runtimeName(value.runtime), typeof value.model === 'object' ? value.model?.model : value.model ?? value.mode,
+  return value ? [runtimeName(value.runtime), row.model ?? (typeof value.model === 'object' ? value.model?.model : value.model ?? value.mode),
     value.effort ?? value.model?.effort].filter(Boolean).join(' · ') : '—';
 }
 export function pendingModel(row) {
@@ -27,16 +28,16 @@ export function shortDuration(seconds) {
 }
 /** Shared sampled-status annotation for the board, detail and settings. */
 export function statusAnnotation(row, { t = key => key, now = Date.now() } = {}) {
-  const status = row.live?.status;
-  const at = row.state?.sampledAt ?? status?.sampledAt;
+  const state = row.state ?? {};
+  const at = state.sampledAt;
   if (!Number.isFinite(at)) return { age: '', title: '' };
   const seconds = Math.max(0, Math.floor((now - at) / 1000));
   const unit = seconds < 3600 ? 'minutes' : seconds < 86400 ? 'hours' : 'days';
   const span = t('wb.schedule.span.' + unit, { n: Math.floor(seconds / (unit === 'minutes' ? 60 : unit === 'hours' ? 3600 : 86400)) });
   const age = seconds < 60 ? t('wb.detail.agoSeconds', { n: seconds }) : t('wb.detail.ago', { span });
   return { age: row.state?.stale ? age : '',
-    title: row.state?.kind === 'unknown' && status?.reason === 'stale' && status.lastState
-      ? t('wb.state.lastStatus', { state: t('wb.state.' + status.lastState), age }) : '' };
+    title: state.kind === 'unknown' && state.lastState
+      ? t('wb.state.lastStatus', { state: t('wb.state.' + (state.lastState === 'busy' ? 'working' : state.lastState)), age }) : '' };
 }
 export function annotateStatus(document, target, row, options = {}) {
   const annotation = statusAnnotation(row, options);
@@ -46,12 +47,25 @@ export function annotateStatus(document, target, row, options = {}) {
 }
 export function statePill(document, row, { t = key => key, level = 'plain', now = Date.now() } = {}) {
   const kind = row.state?.kind ?? 'unknown';
-  const pill = element(document, 'span', undefined, `wb-state wb-pill wb-${kind}`);
+  const tone = { working: 'busy', offline: 'not_running', stopping: 'waiting', starting: 'waiting' }[kind] ?? kind;
+  const pill = element(document, 'span', undefined, `wb-state wb-pill wb-${tone}`);
   pill.append(element(document, 'i', undefined, 'wb-dot'), element(document, 'span', t(`wb.state.${kind}`)));
-  if (!row.state?.stale && row.duration != null && !['not_running', 'unknown'].includes(kind)) pill.append(element(document, 'span', shortDuration(row.duration), 'wb-dur'));
+  if (!row.state?.stale && row.duration != null && !['offline', 'unknown'].includes(kind)) pill.append(element(document, 'span', shortDuration(row.duration), 'wb-dur'));
   if (level === 'technical') pill.title = [row.state?.reason ?? row.state?.reasonCode, row.state?.sampledAt].filter(v => v != null).join(' · ');
+  const stack = element(document, 'span', undefined, 'wb-state-stack wb-' + tone);
+  const flags = element(document, 'span', undefined, 'wb-state-flags');
+  stack.append(pill);
+  for (const [flag, value] of Object.entries(row.flags ?? {})) {
+    if (!value) continue;
+    const label = t('wb.flags.' + flag, { count: value.count ?? '', position: value.position ?? '' });
+    const mark = element(document, 'small', label, 'wb-tag');
+    mark.title = [value.reason, ...(value.reasons ?? []), value.recoveryAt, flag === 'noResponse' ? value.since : null].filter(Boolean).join(' · ');
+    flags.append(mark);
+  }
   annotateStatus(document, pill, row, { t, now });
-  return pill;
+  stack.title = pill.title;
+  if (flags.children.length) stack.append(flags);
+  return stack;
 }
 export const channelIcons = { origin: 'origin', telegram: 'send', lark: 'msg', feishu: 'msg', wechat: 'msg', 'web-console': 'monitor', openmax: 'hex' };
 export const channelIcon = row => row.sessionGroup == null || row.sessionGroup === 'origin' ? 'origin'
@@ -87,24 +101,24 @@ export function platformLabel(row, t, { describe = true } = {}) {
   return fallbackName({ ...row, sessionGroup: platform, name: null }, t) + (kind ? ' · ' + t('wb.chat.' + kind) : '');
 }
 function nowCell(document, row, { level, t }) {
-  const tool = row.tools?.[0];
+  const action = row.currentAction;
   const current = element(document, 'span', undefined, 'wb-current');
-  if (tool) {
+  if (action?.tool) {
     current.append(icon(document, 'tool', 'xs'));
-    const label = element(document, 'span', toolLabel(tool.name, level, t), level === 'technical' ? 'wb-tool wb-tool-label' : 'wb-tool-label');
+    const label = element(document, 'span', toolLabel(action.tool, level, t), level === 'technical' ? 'wb-tool wb-tool-label' : 'wb-tool-label');
     current.append(label);
-    if (level === 'technical' && tool.detail) current.append(element(document, 'span', ' · ' + tool.detail, 'wb-sub'));
-    else if (level !== 'technical' && row.preview?.text) current.append(element(document, 'span', ' · ' + t('wb.board.lastIn', { text: row.preview.text }), 'wb-sub'));
-    current.title = tool.name;
+    if (level !== 'technical' && action.message) current.append(element(document, 'span', ' · ' + t('wb.board.lastIn', { text: action.message }), 'wb-sub'));
+    current.title = action.tool;
     return current;
   }
-  const text = row.wait ? waitText({ ...row.wait, pendingCount: row.queue?.pending?.count }, level, t)
-    : row.preview ? lastReceived(row, t)
-      : row.state?.kind === 'not_running' && level !== 'technical' ? t('wb.board.standby') : '';
+  const text = action && (action.message || action.receivedAt) ? lastReceived({ ...row,
+    preview: { text: action.message, timestamp: action.receivedAt, channel: row.channel } }, t)
+    : row.state?.kind === 'offline' && level !== 'technical' ? t('wb.board.standby') : '';
   current.append(element(document, 'span', text));
   current.title = text;
   return current;
 }
+
 export function renderRow(row, { document, level = 'plain', activity, single = false, selected = false, t = key => key, onSelect = () => {} }) {
   const root = element(document, 'button', undefined, 'wb-row'); root.type = 'button';
   if (row.sessionGroup == null || row.sessionGroup === 'origin') root.classList.add('wb-row-origin');
@@ -114,7 +128,7 @@ export function renderRow(row, { document, level = 'plain', activity, single = f
     nowCell(document, row, { level, t }), activityStrip(document, activity, { inboundUnknown: activity?.inboundUnknown, t }));
   if (level === 'technical') {
     const queue = element(document, 'span', undefined, 'wb-queue');
-    if (!row.queue) queue.textContent = '—';
+    if (!row.queue) queue.textContent = row.flags?.queued?.count ?? '—';
     else if (row.queue.known === false) queue.textContent = t('wb.unknown');
     else queue.append(element(document, 'b', row.queue.pending?.count ?? 0), element(document, 'span', ` · ${row.queue.running?.count ?? 0}`));
     queue.title = t('wb.board.queueHint');
@@ -130,7 +144,7 @@ export function renderRow(row, { document, level = 'plain', activity, single = f
   return root;
 }
 export function renderBoard(root, snapshot, { rows = snapshot?.rows ?? [], query = '', document = root.ownerDocument,
-  t = key => key, activity, onSearch = () => {}, selected = undefined, ...options } = {}) {
+  t = key => key, activity, onSearch = () => {}, onMore = onSearch, selected = undefined, ...options } = {}) {
   root.replaceChildren();
   if (!rows.length) root.append(element(document, 'p', t(query ? 'wb.noMatch' : 'wb.noGroups'), 'wb-empty'));
   for (const row of rows) root.append(renderRow(row, { document, t, single: snapshot?.view === 'single',
@@ -138,22 +152,23 @@ export function renderBoard(root, snapshot, { rows = snapshot?.rows ?? [], query
     activity: activity ? { ...activity.groups?.[row.sessionGroup], start: activity.start, cellSeconds: activity.cellSeconds,
       inboundUnknown: Boolean(activity.inboundError) } : null, ...options }));
   if (snapshot?.hasOlder === true && !query) {
-    const older = element(document, 'button', t('wb.older'), 'wb-older'); older.type = 'button';
-    older.addEventListener('click', onSearch); root.append(older);
+    const older = element(document, 'button', t(snapshot?.nextCursor != null ? 'wb.groups.more' : 'wb.older'), 'wb-older'); older.type = 'button';
+    older.addEventListener('click', onMore); root.append(older);
   }
 }
-const distOrder = ['busy', 'waiting', 'error', 'unknown', 'idle', 'not_running'];
+const distOrder = ['working', 'idle', 'starting', 'stopping', 'unknown', 'offline'];
 /** Header summary: listed groups by state; only the listed active groups are counted. */
 export function renderDistribution(root, snapshot, { document = root.ownerDocument, t = key => key, level = 'plain' } = {}) {
   root.replaceChildren();
   if (!snapshot) return;
   const counts = snapshot.counts ?? {};
-  const total = (snapshot.rows ?? []).length;
+  const total = snapshot.groupCounts ? (snapshot.groupCounts.running?.total ?? 0) + (snapshot.groupCounts.offline?.total ?? 0) : (snapshot.rows ?? []).length;
   root.append(element(document, 'span', countLabel(t, 'wb.board.groups', total), 'wb-dist-total'));
   for (const kind of distOrder) {
     const count = counts[kind] ?? 0;
     if (!count) continue;
-    const item = element(document, 'span', undefined, 'wb-dist-item wb-' + kind);
+    const tone = { working: 'busy', offline: 'not_running', stopping: 'waiting', starting: 'waiting' }[kind] ?? kind;
+    const item = element(document, 'span', undefined, 'wb-dist-item wb-' + tone);
     // The state word is always in the label's accessible text. The technical view shows only the number;
     // the plain view drops the word visually when the row has to be compact (see label-fit.js).
     item.append(element(document, 'i', undefined, 'wb-dot'), element(document, 'span', String(count), 'wb-dist-n'),

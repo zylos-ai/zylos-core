@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { readSessionModeStatus, probeSupervisor, formatSessionModeStatus } from '../session-mode-status.js';
 
 const row = { run_id: 'switch-a', source_mode: 'single', target_mode: 'multi', phase: 'gating', cutoff: null,
@@ -9,6 +12,75 @@ const defaults = overrides => ({
   db: { getModeTransition: () => row, getDrainFence: group => { assert.equal(group, '*'); return { reason: null, runId: null }; }, getLastCompletedModeTransition: () => null },
   readMode: () => ({ mode: 'single', keyPresent: true }), readEvents: () => [], probeSupervisor: () => true,
   readPm2: () => { throw new Error('reachable socket must not query PM2'); }, ...overrides,
+});
+
+// Private temporary diagnostics only, with injected authoritative DB/socket/PM2.
+// Run when status diagnostics caching or rotation changes; skip UI-only changes.
+test('unchanged diagnostics avoid log reads while append, replacement, rotation and run changes stay visible', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-status-events-'));
+  t.after(() => fs.rmSync(root, { recursive: true }));
+  const directory = path.join(root, 'activity-monitor'); fs.mkdirSync(directory);
+  const file = path.join(directory, 'supervisor-events.jsonl');
+  const event = (ts, run = row.run_id) => JSON.stringify({ run_id: run, event: 'transition_blocked', reason: row.reason, ts }) + '\n';
+  fs.writeFileSync(file, event(3));
+  const input = defaults({ zylosDir: root }); delete input.readEvents;
+  let reads = 0; const read = fs.readSync;
+  t.mock.method(fs, 'readSync', (...args) => { reads++; return read(...args); });
+  assert.equal((await readSessionModeStatus(input)).blocked.since, 3);
+  const initialReads = reads; assert.ok(initialReads > 0);
+  assert.equal((await readSessionModeStatus(input)).lastEvents[0].ts, 3);
+  assert.equal(reads, initialReads, 'unchanged metadata does not parse the log again');
+  fs.appendFileSync(file, event(4));
+  assert.deepEqual((await readSessionModeStatus(input)).lastEvents.map(item => item.ts), [3, 4]);
+  fs.renameSync(file, path.join(directory, 'supervisor-events.100.jsonl'));
+  fs.writeFileSync(file, event(5));
+  fs.utimesSync(file, 1_700_000_000, 1_700_000_000);
+  assert.deepEqual((await readSessionModeStatus(input)).lastEvents.map(item => item.ts), [3, 4, 5]);
+  const beforeRewrite = fs.statSync(file);
+  fs.writeFileSync(file, event(600));
+  fs.utimesSync(file, beforeRewrite.atime, beforeRewrite.mtime);
+  const afterRewrite = fs.statSync(file);
+  assert.notEqual(afterRewrite.size, beforeRewrite.size);
+  assert.equal(afterRewrite.mtimeMs, beforeRewrite.mtimeMs);
+  assert.deepEqual((await readSessionModeStatus(input)).lastEvents.map(item => item.ts), [3, 4, 600]);
+  fs.appendFileSync(file, event(61));
+  assert.equal((await readSessionModeStatus(input)).lastEvents.at(-1).ts, 61);
+  fs.writeFileSync(file, event(6));
+  assert.deepEqual((await readSessionModeStatus(input)).lastEvents.map(item => item.ts), [3, 4, 6], 'truncation invalidates the cached view');
+  fs.unlinkSync(path.join(directory, 'supervisor-events.100.jsonl'));
+  fs.utimesSync(file, 1_700_000_000, 1_700_000_000);
+  assert.equal((await readSessionModeStatus(input)).blocked.since, 6);
+  const beforeReplacement = fs.statSync(file, { bigint: true });
+  const replacement = `${file}.replacement`;
+  fs.writeFileSync(replacement, event(7));
+  fs.utimesSync(replacement, 1_700_000_000, 1_700_000_000);
+  fs.renameSync(replacement, file);
+  const afterReplacement = fs.statSync(file, { bigint: true });
+  assert.equal(afterReplacement.size, beforeReplacement.size);
+  assert.equal(afterReplacement.mtimeNs, beforeReplacement.mtimeNs);
+  assert.notEqual(afterReplacement.ino, beforeReplacement.ino);
+  const replacementReads = reads;
+  assert.equal((await readSessionModeStatus(input)).blocked.since, 7);
+  assert.ok(reads > replacementReads, 'same-size replacement with restored mtime is read again');
+  // Populate the next run before warming the current run cache. Nothing is
+  // written between switching runs and observing its already-existing events.
+  fs.appendFileSync(file, event(8, 'switch-b'));
+  assert.deepEqual((await readSessionModeStatus(input)).lastEvents.map(item => item.ts), [7]);
+  const beforeSwitch = fs.statSync(file, { bigint: true });
+  const switchReads = reads;
+  input.db.getModeTransition = () => ({ ...row, run_id: 'switch-b' });
+  const switched = await readSessionModeStatus(input);
+  assert.equal(switched.blocked.since, 8);
+  assert.deepEqual(switched.lastEvents.map(item => item.ts), [8]);
+  assert.ok(reads > switchReads, 'run-key change rereads an unchanged file');
+  const afterSwitch = fs.statSync(file, { bigint: true });
+  for (const key of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs']) {
+    assert.equal(afterSwitch[key], beforeSwitch[key], `${key} stays unchanged across the run switch`);
+  }
+  fs.unlinkSync(file);
+  assert.deepEqual((await readSessionModeStatus(input)).lastEvents, []);
+  fs.writeFileSync(file, event(9, 'switch-b'));
+  assert.equal((await readSessionModeStatus(input)).blocked.since, 9);
 });
 
 test('status maps only authoritative transition/gate fields and does not submit requests', async () => {

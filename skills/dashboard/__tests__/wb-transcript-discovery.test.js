@@ -8,7 +8,6 @@ import { UsageTranscripts } from '../src/lib/collectors/usage-transcripts.js';
 import { ConversationCollector } from '../src/lib/collectors/conversation-collector.js';
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
 import { claudeProjectSlug } from '../src/lib/claude-project-path.js';
-import { latestCodexRolloutSessionBounds } from '../src/lib/metric-aggregate.js';
 import { CodexHistory } from '../src/lib/history/codex-history.js';
 
 // All cases use actual SQLite/files and collectors. Run for transcript discovery,
@@ -116,12 +115,12 @@ test('Codex discovery keeps only Origin rollout paths while collecting every gro
   assert.deepEqual(paths.map(row => row.session_id), ['session-null', 'session-origin']);
 });
 
-// SQLite/inventory/metric integration: newer non-Origin starts must not select the
-// session fallback. Run for discovery or fallback selection changes; skip UI-only
+// SQLite/inventory integration: newer non-Origin starts must not select the
+// current rollout. Run for discovery selection changes; skip UI-only
 // changes. Same isolated runner and temporary fixture cleanup as the case above.
-test('Codex session metric fallback selects the latest Origin despite a newer group', t => {
+test('Codex rollout discovery selects the latest Origin despite a newer group', t => {
   const f = codexGroups(t);
-  assert.equal(latestCodexRolloutSessionBounds(f.store).sessionId, 'session-origin');
+  assert.equal(f.store.latestCodexRolloutPath('codex').session_id, 'session-origin');
 });
 
 // SQLite/inventory/history integration: real rollout metadata under a private HOME.
@@ -311,60 +310,6 @@ test('historical groups cause no transcript file accesses', async t => {
   await collector.collect();
   assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM usage_transcripts').get().n, 3);
   assert.equal(stats.size, 3); assert.equal(reads.size, 3);
-});
-
-test('Codex runtime metadata clears when the Origin run changes or its file disappears', async t => {
-  const snapshot = { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: 'run-origin' } }] };
-  const f = fixture(t, snapshot), p = f.file('origin-codex');
-  fs.writeFileSync(p, JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-5.3-codex' } }) + '\n');
-  fs.utimesSync(p, new Date(f.now()), new Date(f.now()));
-  f.start(p, 'origin', 'codex');
-  const collector = new CodexRolloutCollector(f.store, { zylosDir: f.root }, { transcripts: f.inventory });
-  await collector.collect();
-  assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
-  f.advance(60000);
-  snapshot.rows[0].live.runId = 'replacement';
-  await collector.collect();
-  assert.equal(collector.getRuntimeInfo().session_id, null);
-  assert.equal(collector.getRuntimeInfo().model_id, undefined);
-  f.advance(60000);
-  snapshot.rows[0].live.runId = 'run-origin';
-  await collector.collect();
-  assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
-  fs.unlinkSync(p); await collector.collect();
-  assert.equal(collector.getRuntimeInfo().session_id, null);
-  assert.equal(collector.getRuntimeInfo().model_id, undefined);
-});
-
-test('failed snapshots retain established Codex runtime facts until current evidence returns', async t => {
-  const snapshot = { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: 'run-origin' } }] };
-  const f = fixture(t, snapshot), p = f.file('origin-metadata');
-  fs.writeFileSync(p, [
-    { type: 'session_meta', payload: { cli_version: '1.0.0' } },
-    { type: 'turn_context', payload: { model: 'gpt-5.3-codex', effort: 'high', service_tier: 'priority' } },
-  ].map(event => JSON.stringify(event)).join('\n') + '\n');
-  f.start(p, 'origin', 'codex');
-  const collector = new CodexRolloutCollector(f.store, { zylosDir: f.root }, { transcripts: f.inventory });
-  await collector.collect();
-  assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
-  assert.equal(collector.getRuntimeInfo().cli_version, '1.0.0');
-  f.inventory.getSnapshot = async () => { throw new Error('status unavailable'); };
-  f.inventory.getSnapshotKey = () => 'changed';
-  f.advance(5000);
-  await collector.collect();
-  assert.equal(f.inventory.snapshot, null);
-  const retained = collector.getRuntimeInfo();
-  assert.equal(retained.session_id, 'session-origin');
-  assert.equal(retained.model_id, 'gpt-5.3-codex');
-  assert.equal(retained.reasoning_effort, 'high');
-  assert.equal(retained.service_tier, 'priority');
-  assert.equal(retained.cli_version, '1.0.0');
-  f.inventory.getSnapshot = async () => snapshot;
-  snapshot.rows[0].live.runId = 'replacement';
-  f.advance(5000);
-  await collector.collect();
-  assert.equal(collector.getRuntimeInfo().model_id, undefined);
-  assert.equal(collector.getRuntimeInfo().session_id, null);
 });
 
 test('unchanged session identities reuse snapshots across discovery rounds until ten minutes', async t => {

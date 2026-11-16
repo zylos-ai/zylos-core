@@ -130,30 +130,25 @@ export async function runAccountQuotaBrowser(sandbox) {
       page.on('pageerror', error => { if (errors.length < 3) errors.push(error.message); });
       await page.route('**/api/**', async route => {
         const url = new URL(route.request().url());
-        if (url.pathname === '/api/state') {
-          // Overlap startup and SSE-open state reads, exposing timezone metadata lost with a stale reply.
-          // Only startup reads are delayed; page teardown cancels any unfinished wait.
-          if (initial) await page.waitForTimeout(300);
-          return route.fulfill({ json: { ...workbenchAnswer(url, now), tz: zone } });
-        }
-        if (url.pathname !== '/api/workbench/groups') return route.fallback();
-        const answer = workbenchAnswer(url, now);
+        if (url.pathname !== '/api/instance') return route.fallback();
+        // Overlap startup and SSE-open instance reads without losing timezone metadata.
+        if (initial) await page.waitForTimeout(300);
+        const answer = { ...workbenchAnswer(url, now), tz: zone };
         const stale = phase === 'stale';
         const accounts = {
           claude: { used_percentage: 21, resets_at: stale ? Math.floor(later / 1000) : new Date(future).toISOString(), live: !stale, recordedAt },
           codex: { usedPercentage: 42, resetsAt: stale ? new Date(later).toISOString() : Math.floor(future / 1000), live: !stale, recordedAt },
         };
         // Deliberately oppose the runtime order, then change both orders on refresh.
-        answer.instance.accounts = stale ? accounts : { codex: accounts.codex, claude: accounts.claude };
-        if (stale || phase === 'omitted-reverse') answer.baselineRuntime = 'codex';
+        answer.accounts = stale ? accounts : { codex: accounts.codex, claude: accounts.claude };
+        if (stale || phase === 'omitted-reverse') answer.default_runtime = 'codex';
         if (phase === 'omitted') {
-          answer.instance.accounts.claude.resets_at = Math.floor((now - 1000) / 1000);
-          delete answer.instance.accounts.codex.resetsAt;
+          answer.accounts.claude.resets_at = Math.floor((now - 1000) / 1000);
+          delete answer.accounts.codex.resetsAt;
         } else if (phase === 'omitted-reverse') {
-          delete answer.instance.accounts.claude.resets_at;
-          answer.instance.accounts.codex.resetsAt = new Date(now - 1000).toISOString();
+          delete answer.accounts.claude.resets_at;
+          answer.accounts.codex.resetsAt = new Date(now - 1000).toISOString();
         }
-        answer.instance.pool.capacityRecord = { valid: true, fresh: true, source: 'fixed' };
         return route.fulfill({ json: answer });
       });
       await page.goto(base + '/');

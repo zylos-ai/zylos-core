@@ -35,19 +35,26 @@ export class CodexRolloutCollector {
     this._waitCellByCallId = new Map();
     this._onEvent = null;
     this._onMetric = null;
-    this._onRuntimeInfo = null;
-    this._runtimeInfo = null;
-    this._runtimeMapping = null;
     this._sanitizer = config.sanitizer || new Sanitizer(config.zylosDir || process.cwd());
   }
 
   async collect() {
     const written = await this._transcripts.collect('codex', (mapping, isOriginCurrent) => {
-      if (isOriginCurrent) this._runtimeMapping = mapping;
       const written = this.collectMapping({ ...mapping, isOriginCurrent });
       return { written, byteOffset: this.store.getCodexRolloutCursor(mapping.transcript_path)?.byte_offset ?? 0 };
     });
-    this._checkRuntimeMapping();
+    // Current-file liveness is independent of whether this round had bytes to read.
+    const snapshot = this._transcripts.snapshot;
+    if (snapshot) {
+      const runId = snapshot.rows?.find(row => (row.sessionGroup ?? 'origin') === 'origin')?.live?.runId;
+      const current = runId == null ? null : this.store.currentOriginTranscript('codex', runId);
+      let readable = false;
+      try { readable = !!current && fs.statSync(current.transcript_path).isFile(); } catch { /* Missing current transcript. */ }
+      if (!readable) this._updateLiveness(null, 'unavailable', {
+        reason: current ? 'rollout_unreadable' : 'no_hook_transcript_path',
+        last_checked: new Date().toISOString()
+      });
+    }
     return written;
   }
 
@@ -65,7 +72,6 @@ export class CodexRolloutCollector {
     const now = new Date().toISOString();
 
     if (!mapping?.transcript_path) {
-      if (mapping?.isOriginCurrent) this._clearRuntimeInfo();
       this._updateLiveness(mapping, 'unavailable', {
         reason: 'no_hook_transcript_path',
         last_checked: now
@@ -77,7 +83,6 @@ export class CodexRolloutCollector {
     try {
       stat = fs.statSync(mapping.transcript_path);
     } catch (err) {
-      if (mapping.isOriginCurrent) this._clearRuntimeInfo(mapping.session_id);
       this._updateLiveness(mapping, 'unavailable', {
         reason: 'rollout_unreadable',
         error: err.code || err.message,
@@ -93,15 +98,6 @@ export class CodexRolloutCollector {
     if (stat.size < offset) offset = 0;
 
     const sessionMeta = { ...this._getTranscriptMetadata(mapping.transcript_path) };
-    if (mapping.isOriginCurrent) this._updateRuntimeInfo({
-      sessionId: mapping.session_id,
-      model: sessionMeta.model,
-      serviceTier: sessionMeta.serviceTier,
-      effort: sessionMeta.effort,
-      cliVersion: sessionMeta.cliVersion,
-      timestamp: sessionMeta.modelTimestamp || sessionMeta.cliVersionTimestamp || now,
-      replace: true
-    });
 
     if (stat.size === offset) {
       const backfilled = offset > 0 ? this._backfillRateLimits(mapping, sessionMeta) : 0;
@@ -199,8 +195,7 @@ export class CodexRolloutCollector {
       }
       written += this._ingestEvent(event, mapping, sessionMeta, {
         byteOffset: lineOffset,
-        lineIndex,
-        publishRuntimeInfo: false
+        lineIndex
       });
     }
 
@@ -273,28 +268,6 @@ export class CodexRolloutCollector {
     }
   }
 
-  getRuntimeInfo() {
-    this._checkRuntimeMapping();
-    return this._runtimeInfo;
-  }
-
-  _checkRuntimeMapping() {
-    // Unavailable snapshots carry no evidence that the current session changed.
-    if (!this._transcripts.snapshot) return;
-    const current = this._transcripts.currentOriginMapping('codex');
-    let readable = false;
-    try { readable = !!current && fs.statSync(current.transcript_path).isFile(); } catch { /* Missing current transcript. */ }
-    if (!readable || (this._runtimeMapping && (current.session_id !== this._runtimeMapping.session_id ||
-        current.transcript_path !== this._runtimeMapping.transcript_path))) {
-      this._runtimeMapping = null;
-      this._clearRuntimeInfo(current?.session_id);
-      if (!readable) this._updateLiveness(null, 'unavailable', {
-        reason: current ? 'rollout_unreadable' : 'no_hook_transcript_path',
-        last_checked: new Date().toISOString()
-      });
-    }
-  }
-
   _updateLiveness(mapping, status, extra) {
     if (mapping?.isOriginCurrent || !mapping) {
       this.store.upsertSourceHealth('codex_rollout', 'collector_liveness', status, extra);
@@ -304,28 +277,9 @@ export class CodexRolloutCollector {
   _ingestEvent(event, mapping, sessionMeta = {}, position = {}) {
     const payload = event.payload || {};
     if (event.type === 'session_meta' && subagentThreadMeta(payload)) sessionMeta.subagentThread = true;
-    if (event.type === 'session_meta' && payload.cli_version) {
-      sessionMeta.cliVersion = payload.cli_version;
-      if (mapping.isOriginCurrent && position.publishRuntimeInfo !== false) this._updateRuntimeInfo({
-        sessionId: mapping.session_id,
-        cliVersion: payload.cli_version,
-        timestamp: event.timestamp || new Date().toISOString()
-      });
-      return 0;
-    }
     if (event.type === 'turn_context') {
       sessionMeta.model = payload.model || undefined;
       sessionMeta.serviceTier = runtimeServiceTier(payload.service_tier ?? payload.serviceTier);
-      sessionMeta.effort = runtimeEffort(payload);
-      if (mapping.isOriginCurrent && position.publishRuntimeInfo !== false) this._updateRuntimeInfo({
-        sessionId: mapping.session_id,
-        model: sessionMeta.model,
-        serviceTier: sessionMeta.serviceTier,
-        effort: sessionMeta.effort,
-        cliVersion: sessionMeta.cliVersion,
-        replace: true,
-        timestamp: event.timestamp || new Date().toISOString()
-      });
       return 0;
     }
     // A subagent's own thread names its parent as the session; its turns, tools and words are not the parent's.
@@ -984,50 +938,6 @@ export class CodexRolloutCollector {
     return input + output + cacheRead + cacheCreation;
   }
 
-  _clearRuntimeInfo(sessionId) {
-    this._updateRuntimeInfo({ sessionId: sessionId ?? null, replace: true });
-  }
-
-  _updateRuntimeInfo({ sessionId, model, serviceTier, effort, cliVersion, timestamp, replace = false }) {
-    const prev = this._runtimeInfo;
-    const sessionChanged = sessionId && prev?.session_id && sessionId !== prev.session_id;
-    const next = replace || sessionChanged ? {} : { ...(prev || {}) };
-    let hasUpdate = replace;
-    if (replace || sessionChanged || serviceTier !== undefined) next.service_tier = serviceTier ?? null;
-    if (replace || sessionChanged || effort !== undefined) next.reasoning_effort = effort ?? null;
-    if (model != null) {
-      next.model = model;
-      next.model_id = model;
-      hasUpdate = true;
-    }
-    if (sessionId != null || replace) {
-      next.session_id = sessionId;
-      hasUpdate = true;
-    }
-    if (serviceTier != null) {
-      next.service_tier = serviceTier;
-      hasUpdate = true;
-    }
-    if (cliVersion != null) {
-      next.cli_version = cliVersion;
-      hasUpdate = true;
-    }
-    if (!hasUpdate) return;
-    next.updated_at = timestamp || new Date().toISOString();
-    if (
-      prev?.model_id === next.model_id &&
-      prev?.session_id === next.session_id &&
-      prev?.service_tier === next.service_tier &&
-      prev?.reasoning_effort === next.reasoning_effort &&
-      prev?.cli_version === next.cli_version
-    ) {
-      this._runtimeInfo = { ...prev, updated_at: next.updated_at };
-      return;
-    }
-    this._runtimeInfo = next;
-    if (this._onRuntimeInfo) this._onRuntimeInfo(next);
-  }
-
   _getTranscriptMetadata(transcriptPath) {
     const stat = fs.statSync(transcriptPath);
     const cached = this._metadataByPath.get(transcriptPath);
@@ -1048,14 +958,8 @@ export class CodexRolloutCollector {
         if (event.type === 'turn_context') {
           metadata.model = event.payload?.model || undefined;
           metadata.serviceTier = runtimeServiceTier(event.payload?.service_tier ?? event.payload?.serviceTier);
-          metadata.effort = runtimeEffort(event.payload || {});
-          metadata.modelTimestamp = event.timestamp || null;
         }
         if (event.type === 'session_meta' && subagentThreadMeta(event.payload)) metadata.subagentThread = true;
-        if (event.type === 'session_meta' && event.payload?.cli_version) {
-          metadata.cliVersion = event.payload.cli_version;
-          metadata.cliVersionTimestamp = event.timestamp || null;
-        }
         if (event.type === 'event_msg' && event.payload?.type === 'token_count' && event.payload.rate_limits) {
           metadata.rateLimits = event.payload.rate_limits;
           metadata.rateLimitTimestamp = event.timestamp || event.payload.timestamp || null;
@@ -1076,11 +980,6 @@ export class CodexRolloutCollector {
 
 function runtimeServiceTier(value) {
   return value === 'priority' || value === 'standard' ? value : null;
-}
-
-function runtimeEffort(payload) {
-  const value = payload.effort ?? payload.reasoning_effort;
-  return typeof value === 'string' && value.trim() ? value : null;
 }
 
 function numberOrNull(value) {

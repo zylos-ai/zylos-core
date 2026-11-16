@@ -113,10 +113,10 @@ await page.openGroup(${JSON.stringify(group)},{channel:'dashboard'});window.read
           return json(res, { stored: true, conversationId, deliveryState: 'pending' });
         }
         if (await handleChatHistory(req, res, url, { auth, config, history })) return;
-        if (url.pathname === '/api/session-mode') return json(res, { data: { sessionMode: 'multi' } });
+        if (url.pathname === '/api/instance') return json(res, { session_mode: { sessionMode: 'multi' }, runtimeHealth: {} });
         if (url.pathname.endsWith('/questions')) return json(res, { items: [question], nextCursor: null });
         if (url.pathname.endsWith('/uploads/config')) return json(res, { enabled: false });
-        if (url.pathname === '/api/workbench/groups') return json(res, { listKnown: false, rows: [] });
+        if (url.pathname.startsWith('/api/groups/')) return json(res, { sessionGroup: group, readAt: Date.now(), state: { kind: 'unknown' } });
         if (url.pathname === '/api/chat/conversations/' + encodeURIComponent(conversationId)) return json(res, { conversation: { id: conversationId, sessionGroup: group, channel: 'dashboard', displayName: 'Live conversation / 实时对话', state: 'active' }, conversationId, stored: true });
         return json(res, { error: 'fixture_unknown_endpoint' }, 404);
       }

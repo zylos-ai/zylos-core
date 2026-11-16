@@ -6,6 +6,7 @@ import test from 'node:test';
 import { Store } from '../src/lib/store.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
 import { EventLoopMonitor } from '../src/lib/event-loop-monitor.js';
+import { createGroupSnapshot, systemSample } from '../src/lib/workbench/group-snapshot.js';
 import { scheduleEnv } from './fixtures/schedule-env.js';
 
 // HTTP/SQLite integration for CoreState API wiring: run for state refresh, fleet,
@@ -29,7 +30,10 @@ test('state APIs await a fresh observation before answering idle requests', { ti
   const dashboardDir = path.join(install.zylosDir, 'components/dashboard');
   fs.mkdirSync(dashboardDir, { recursive: true });
   fs.writeFileSync(path.join(dashboardDir, 'config.json'), JSON.stringify({ auth: { enabled: true, password: 'secret' } }));
-  let sample = 0, nextRead, releaseRead, releaseActive;
+  let sample = 0, nextRead, releaseRead, releaseActive, snapshotClock = Date.now();
+  const observation = value => ({ identity: { present: true, ready: true, runtime: 'codex', runId: `run-${value}`, sessionId: `session-${value}` },
+    status: { valid: true, reason: null, value: { state: 'idle' } },
+    usage: { valid: true, value: { model: `model-${value}`, contextUsage: { used: value, ceiling: 100 } } } });
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
     if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
     if (name === 'session-state-reader.js') return {
@@ -37,14 +41,27 @@ test('state APIs await a fresh observation before answering idle requests', { ti
         const value = ++sample;
         nextRead?.();
         if (releaseRead) await releaseRead;
-        return new Map([[null, { identity: { present: true, ready: true, runtime: 'codex', runId: `run-${value}`, sessionId: `session-${value}` },
-          status: { valid: true, reason: null, value: { state: 'idle' } },
-          usage: { valid: true, value: { model: `model-${value}`, contextUsage: { used: value, ceiling: 100 } } } }]]);
+        return new Map([[null, observation(value)]]);
       },
       readAccountUsageSnapshot: async () => ({ live: null, recorded: null }),
     };
     return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
   } } });
+  t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
+    systemSample,
+    createGroupSnapshot: options => createGroupSnapshot({ ...options, now: () => snapshotClock,
+      cli: { runC4Db: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
+        readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'codex' }, runtime: [], model: [] } }) },
+      loadCoreModule: async name => {
+        if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
+        if (name === 'session-state-reader.js') return { readSessionState: async () => observation(sample), readAccountUsageSnapshot: async () => ({ live: null, recorded: null }) };
+        if (name === 'status-view.js') return { collectStatus: async ({ session }) => {
+          await session(null, {});
+          return { view: 'single', origin: { presence: 'running', runtime: 'codex', runId: `run-${sample}`, sessionId: `session-${sample}`, status: { valid: true, state: 'idle' } }, groupListError: null, runtimeHealth: {} };
+        } };
+        return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
+      } }),
+  } });
   t.mock.method(VersionChecker.prototype, 'start', () => {});
   t.mock.method(EventLoopMonitor.prototype, 'start', function () { return this; });
   const stores = new Set(), timers = new Set();
@@ -70,8 +87,14 @@ test('state APIs await a fresh observation before answering idle requests', { ti
   await login.text();
   assert.equal(login.status, 302);
   const cookie = login.headers.getSetCookie().find(value => value.startsWith('__Secure-zylos_dashboard_session=')).split(';')[0];
-  for (const route of ['/api/fleet', '/api/metrics/aggregate?metric=cost&period=session', '/api/actions/meta', '/api/stream']) {
-    const before = sample;
+  const beforeOptions = sample;
+  const runtimeOptions = await fetch(origin + '/api/instance/runtime-options', { headers: { cookie }, signal: t.signal });
+  assert.equal(runtimeOptions.status, 200);
+  const options = await runtimeOptions.json();
+  for (const key of ['running_model', 'running_effort']) assert.equal(Object.hasOwn(options, key), false);
+  assert.equal(sample, beforeOptions, 'runtime options do not collect Origin observations');
+  for (const route of ['/api/fleet', '/api/instance', '/api/stream']) {
+    const before = sample; snapshotClock += 2100;
     let entered, release;
     const began = new Promise(resolve => { entered = resolve; });
     nextRead = entered;
@@ -91,20 +114,36 @@ test('state APIs await a fresh observation before answering idle requests', { ti
       if (route === '/api/stream') {
         const reader = response.body.getReader();
         let frames = '';
-        for (let i = 0; i < 8 && !frames.includes('event: fleet_state'); i++) {
+        for (let i = 0; i < 8 && !frames.includes('event: instance'); i++) {
           const { value, done } = await reader.read();
           assert.equal(done, false);
           frames += new TextDecoder().decode(value);
           assert.ok(frames.length < 65536);
         }
-        assert.match(frames, new RegExp(`"runId":"run-${expected}"`));
+        assert.match(frames, /event: instance/);
+        const instanceFrame = frames.split('event: instance\ndata: ')[1]?.split('\n\n')[0];
+        const instance = JSON.parse(instanceFrame);
+        assert.equal(instance.session_mode.sessionMode, 'single');
+        assert.equal(Object.hasOwn(instance, 'runtime_info'), false, 'observed model belongs to group detail');
+        assert.equal(Object.hasOwn(instance, 'poolCapacityRecord'), false);
+        assert.deepEqual(Object.keys(instance.versions).sort(), ['claude', 'codex', 'zylos']);
         await reader.cancel();
       } else {
         const body = await response.json();
-        if (route === '/api/fleet') assert.equal(body.agents[0].context_pct, expected);
-        else if (route === '/api/actions/meta') assert.equal(body.running_model, `model-${expected}`);
-        else assert.equal(body.sessionId, `session-${expected}`);
+        if (route === '/api/fleet') for (const field of ['model', 'effort', 'context_pct', 'new_session_threshold']) assert.equal(Object.hasOwn(body.agents[0], field), false, 'Fleet omits Origin session metadata');
+        else {
+          assert.equal(body.session_mode.sessionMode, 'single');
+          assert.equal(Object.hasOwn(body, 'runtime_info'), false);
+          assert.equal(Object.hasOwn(body, 'poolCapacityRecord'), false);
+          assert.deepEqual(Object.keys(body.versions).sort(), ['claude', 'codex', 'zylos']);
+        }
       }
+      const detailResponse = await fetch(origin + '/api/groups/origin?include=', { headers: { cookie }, signal: t.signal });
+      assert.equal(detailResponse.status, 200);
+      const detail = await detailResponse.json();
+      assert.equal(detail.runtimeInfo.model, `model-${expected}`, 'the fresh observed model remains available on its group');
+      assert.equal(detail.run.runId, `run-${expected}`);
+      assert.equal(sample, expected, 'the detail read shares the captured observation without another Core refresh');
     } finally { release(); controller.abort(); streams.delete(controller); nextRead = null; releaseRead = null; releaseActive = null; }
   }
 });

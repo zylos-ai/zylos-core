@@ -33,7 +33,7 @@ function fixture(t, locale) {
       assert.ok(calls.length < 100, 'request history stays bounded'); calls.push(path);
       const url = new URL(path, 'http://fixture');
       let body;
-      if (path === '/api/session-mode') body = { data: { sessionMode: 'multi' } };
+      if (path === '/api/instance') body = { session_mode: { sessionMode: 'multi' } };
       else if (url.pathname === '/api/chat/conversations') {
         listReads++; body = { items: items(url.searchParams.get('tab')), nextCursor: null };
       } else if (url.pathname.endsWith('/messages')) {

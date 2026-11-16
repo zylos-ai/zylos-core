@@ -18,13 +18,13 @@ server.on('request', (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1');
   if (url.pathname === '/api/stream') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
-    res.write(`event: state_change\ndata: ${JSON.stringify({ state: 'IDLE', runId: 'run-origin', sessionId: 's0', updated_at: '2026-11-15T02:00:00Z' })}\n\n`);
+    res.write(`event: instance\ndata: ${JSON.stringify({ session_mode: { sessionMode: 'multi', transition: null, globalGate: null, blocked: null, supervisor: 'reachable', lastCompleted: null, lastEvents: [] }, agent: { name: 'browser-case' }, updated_at: '2026-11-15T02:00:00Z' })}\n\n`);
     streams.add(res); res.on('close', () => streams.delete(res)); return;
   }
   if (url.pathname.startsWith('/api/')) {
     const value = workbenchAnswer(url, Date.now());
-    if (url.pathname === '/api/workbench/groups') {
-      value.instance.accounts.claude = { used_percentage: 42, live: false, recordedAt: Date.parse('2026-11-14T15:59:00Z') };
+    if (url.pathname === '/api/instance') {
+      value.accounts.claude = { used_percentage: 42, live: false, recordedAt: Date.parse('2026-11-14T15:59:00Z') };
     }
     return sendJson(res, value === undefined ? 404 : 200, value ?? { error: 'not_found' });
   }

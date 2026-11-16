@@ -49,6 +49,10 @@ module.exports = myFunction;
 
 Before changing Dashboard CSS, HTML, or frontend components, read [the Dashboard visual design specification](skills/dashboard/docs/visual-design.md). Keep the specification in sync with visual changes and self-check the delivery against its review checklist. Values marked pending Howard's decision are proposals, not approved implementation requirements.
 
+## Dashboard HTTP API
+
+Any PR changing Dashboard HTTP routes, parameters, response fields, permissions or push events must update `skills/dashboard/docs/api.md` in the same PR. Check each documented method/path against the actual route, including its parameters, field types, errors and minimal example.
+
 ## Testing
 
 Tests never touch a live instance. The Node and Jest test runners set `HOME` and

@@ -5,7 +5,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sendHtml, sendJson, serveStatic } from '../../src/lib/http.js';
-import { GROUP as SAMPLE_GROUP, workbenchAnswer } from '../fixtures/workbench-browser-api.js';
+import { GROUP as SAMPLE_GROUP, workbenchAnswer, workbenchSnapshot, workbenchSnapshotAnswer } from '../fixtures/workbench-browser-api.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
 const GROUP = 'dashboard:working-browser';
@@ -17,7 +17,7 @@ const NOW = Date.UTC(2026, 10, 11, 10, 30);
 const iso = value => new Date(value).toISOString();
 
 async function startPage(sandbox) {
-  let scene = 'main', failGroups = false, title = '工作状态示例';
+  let scene = 'main', storedScene = null, failGroups = false, title = '工作状态示例';
   const counts = { groups: 0, sends: 0 }, missing = new Set(), streams = new Set();
   const isOrigin = () => scene.startsWith('scheduled-') || scene === 'asleep';
   const activeId = () => isOrigin() ? ORIGIN_ID : ID;
@@ -29,20 +29,20 @@ async function startPage(sandbox) {
     return { on: !!(main || subagents), since: main || subagents ? Math.min(...[main?.since, subagents?.since].filter(Number.isFinite)) : null, main, tools: 0, subagents };
   };
   const snapshot = url => {
-    const value = workbenchAnswer(url, NOW);
+    const value = workbenchSnapshot(NOW);
     const row = value.rows.find(item => item.sessionGroup === SAMPLE_GROUP);
     row.sessionGroup = group(); row.origin = isOrigin(); row.presence = scene === 'asleep' ? 'not_running' : 'running'; row.processing = scene.startsWith('scheduled-') ? 'scheduled_task' : null; row.name = { displayName: title }; row.state = { kind: 'idle' }; row.duration = 75;
     row.tools = []; row.queue = { known: true, pending: { count: 0 }, running: { count: 0 }, fence: null };
-    row.working = working(); row.preview = { text: '请继续整理这份资料', timestamp: iso(NOW - 4 * 60000), channel: 'dashboard' };
+    row.working = working(); row.state = { kind: row.presence === 'not_running' ? 'offline' : row.working?.on ? 'working' : 'idle' }; row.duration = row.working?.on ? (NOW - row.working.since) / 1000 : 75; row.preview = { text: '请继续整理这份资料', timestamp: iso(NOW - 4 * 60000), channel: 'dashboard' };
     row.wait = ({ queue: { kind: 'pool_wait' }, starting: { kind: 'starting' }, rate: { kind: 'rate_wait', cooldownUntil: NOW / 1000 + 3600 }, auth: { kind: 'auth_wait' } })[scene] ?? null;
-    value.rows = [row]; value.counts = { busy: 0, idle: 1, waiting: 0, unknown: 0, error: 0, not_running: 0 };
+    value.rows = [row];
     value.instance.runtimeHealth = { claude: { health: scene.startsWith('unknown-') ? null : ({ rate: 'rate_limited', auth: 'auth_failed' })[scene] ?? 'ok' } };
     return value;
   };
   const conversation = id => ({ id, localId: 'working-browser', sessionGroup: id === OTHER_ID ? OTHER : group(), channel: id === OTHER_ID ? 'telegram' : 'dashboard', state: 'active', origin: id === ORIGIN_ID, displayName: id === OTHER_ID ? '外部会话' : title });
   const answer = url => {
     const p = url.pathname;
-    if (p === '/api/workbench/groups') { counts.groups++; return snapshot(url); }
+    if (['/api/groups/running', '/api/groups/offline', '/api/groups/counts'].includes(p) || /^\/api\/groups\/[^/]+$/.test(p) && !['search', 'activity', 'counts', 'offline'].includes(p.split('/').at(-1)) || p === '/api/instance') { if (p === '/api/groups/' + encodeURIComponent(group())) counts.groups++; return workbenchSnapshotAnswer(url, snapshot(url), NOW); }
     if (p === '/api/chat/conversations') {
       const external = url.searchParams.get('tab') === 'external';
       return { items: [{ ...conversation(external ? OTHER_ID : activeId()), session_group: external ? OTHER : group(), display_name: external ? '外部会话' : title }], nextCursor: null, tz: 'UTC' };
@@ -54,9 +54,9 @@ async function startPage(sandbox) {
       if (p.endsWith('/status') || p.endsWith('/questions')) return { items: [], nextCursor: null };
       return { conversation: conversation(id), stored: true, conversationId: id, deliveryState: null, error: null };
     }
-    if (p.startsWith('/api/workbench/groups/') && p.endsWith('/runs')) return { runs: [{ runId: 'run-tg', startAt: iso(NOW - 20 * 60000), endAt: iso(NOW - 30000), n: 2, endReason: 'running' }], totalRuns: 1, totalEvents: 2, unattributed: 0 };
-    if (p.startsWith('/api/workbench/groups/') && p.endsWith('/messages')) return { messages: [] };
-    if (p === '/api/timeline') return { events: [{ id: 'working-1', event_seq: 1, event_type: 'user_prompt_submit', run_id: 'run-tg', session_group: GROUP, timestamp: iso(NOW - 3 * 60000), metadata: {} }] };
+    if (p.startsWith('/api/groups/') && p.endsWith('/runs')) return { runs: [{ runId: 'run-tg', startAt: iso(NOW - 20 * 60000), endAt: iso(NOW - 30000), n: 2, endReason: 'running' }], totalRuns: 1, totalEvents: 2, unattributed: 0 };
+    if (p.startsWith('/api/groups/') && p.endsWith('/messages')) return { messages: [] };
+    if (p.startsWith('/api/groups/') && p.endsWith('/events')) return { events: [{ id: 'working-1', event_seq: 1, event_type: 'user_prompt_submit', run_id: 'run-tg', session_group: GROUP, timestamp: iso(NOW - 3 * 60000), metadata: {} }] };
     return workbenchAnswer(url, NOW);
   };
   const server = http.createServer((req, res) => {
@@ -69,9 +69,9 @@ async function startPage(sandbox) {
         streams.add(res); res.on('close', () => streams.delete(res)); return;
       }
       if (url.pathname.startsWith('/api/')) {
-        if (url.pathname === '/api/workbench/groups' && failGroups) { counts.groups++; sendJson(res, 503, { error: 'fixture_unavailable' }); return; }
+        if (url.pathname === '/api/groups/' + encodeURIComponent(group()) && failGroups) { counts.groups++; sendJson(res, 503, { error: 'fixture_unavailable' }); return; }
         if (req.method === 'POST' && url.pathname.endsWith('/send')) {
-          counts.sends++; sendJson(res, 200, { stored: true, conversationId: ID, deliveryState: 'pending', error: null }); return;
+          counts.sends++; if (storedScene !== null) { scene = storedScene; storedScene = null; } sendJson(res, 200, { stored: true, conversationId: ID, deliveryState: 'pending', error: null }); return;
         }
         const value = req.method === 'GET' ? answer(url) : undefined;
         if (value === undefined && missing.size < 10) missing.add(`${req.method} ${url.pathname}`);
@@ -88,7 +88,7 @@ async function startPage(sandbox) {
     } catch (error) { sendJson(res, 500, { error: error.message }); }
   });
   sandbox.addCleanup(() => { for (const stream of streams) stream.end(); });
-  return { base: await sandbox.startHttp(server), counts, missing, activeId, setScene(value) { scene = value; }, setTitle(value) { title = value; }, fail(value) { failGroups = value; } };
+  return { base: await sandbox.startHttp(server), counts, missing, activeId, setScene(value) { scene = value; }, setStoredScene(value) { storedScene = value; }, setTitle(value) { title = value; }, fail(value) { failGroups = value; } };
 }
 
 export async function runConversationWorkingBrowser(t, sandbox) {
@@ -124,8 +124,8 @@ export async function runConversationWorkingBrowser(t, sandbox) {
     return { page, context, errors };
   };
   const indicator = page => page.locator('#wb-chat .conversation-running');
-  const wait = async (predicate, description) => {
-    const end = Date.now() + 7000;
+  const wait = async (predicate, description, timeoutMs = 7000) => {
+    const end = Date.now() + timeoutMs;
     while (!await predicate()) { assert.ok(Date.now() < end, description); await new Promise(resolve => setTimeout(resolve, 10)); }
   };
   const checkText = async (page, expected, locale = 'zh') => {
@@ -253,7 +253,7 @@ export async function runConversationWorkingBrowser(t, sandbox) {
           const side = f.page.locator('#wb-chat .wb-group-side');
           await side.locator('.wi-now').waitFor();
           assert.match(await side.locator('.wi-now').innerText(), /现在.*后台子任务 2 个/);
-          assert.match(await side.locator('.wb-d-sub .wb-state').innerText(), /忙碌\s*13m/);
+          assert.match(await side.locator('.wb-d-sub .wb-state').innerText(), /工作中\s*13m/);
           await shot(f.page, `${width}-${theme}-${scene}-timeline`);
         }
         assert.equal(f.errors.length, 0, f.errors[0]);
@@ -454,18 +454,23 @@ export async function runConversationWorkingBrowser(t, sandbox) {
       if (evidence) fs.writeFileSync(path.join(evidence, 'motion.json'), JSON.stringify({ before, after, intervalMs: 500 }, null, 2));
     } finally { await f.context.close(); }
   });
-  await t.test('a stored send refreshes healthy group state after two seconds', async () => {
+  await t.test('a stored send immediately refreshes healthy group state before the next poll', async () => {
     const f = await open({ clock: true, scene: 'idle' });
     try {
       await checkText(f.page, '空闲');
+      const before = fixture.counts.groups;
+      // The fixture becomes busy only when storage succeeds. The paused browser
+      // clock cannot reach a delayed refresh or the normal thirty-second poll.
+      fixture.setStoredScene('main');
       await f.page.locator('#wb-chat .conversation-input').fill('请继续核对');
       await f.page.locator('#wb-chat .conversation-composer').evaluate(form => form.requestSubmit());
       await wait(() => fixture.counts.sends > 0, 'message reaches the stored receipt');
+      await wait(() => fixture.counts.groups > before, 'post-store refresh runs immediately even with a healthy account', 1500);
       await wait(async () => await f.page.locator('#wb-chat .conversation-input').inputValue() === '', 'stored send clears input');
-      const before = fixture.counts.groups; fixture.setScene('main');
-      await f.page.clock.fastForward(1999); assert.equal(fixture.counts.groups, before);
-      await f.page.clock.fastForward(1); await wait(() => fixture.counts.groups > before, 'post-store refresh runs even healthy account');
       await checkText(f.page, '正在工作');
+      assert.equal(fixture.counts.groups, before + 1, 'storage causes exactly one fresh group read');
+      await f.page.clock.fastForward(2000);
+      assert.equal(fixture.counts.groups, before + 1, 'no duplicate delayed refresh before the busy poll');
     } finally { await f.context.close(); }
   });
   await t.test('leaving the selected local conversation cancels its working timer', async () => {

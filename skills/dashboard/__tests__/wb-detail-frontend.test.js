@@ -6,7 +6,7 @@ import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from '../public/js/orig
 import { createGroupDetail, resolveDetailRow, groupActionButtons, groupActionText, formatStartedAt } from '../public/js/wb/detail.js';
 import { rawKey, renderOverview, detailNumbers, activeSubagents, detailEvidence, sampleAge, toolEventLabel, configStatus, configText, groupEventCount } from '../public/js/wb/detail-overview.js';
 import { createTimelineLoader, attributeMessages, renderTimeline } from '../public/js/wb/detail-timeline.js';
-import { createGroupConfig, fetchJson, runningText, validConfigChange, renderGroupConfig, modelChoices, effortChoices, startingPair } from '../public/js/wb/group-config.js';
+import { createGroupConfig as productGroupConfig, fetchJson, runningText, validConfigChange, renderGroupConfig, modelChoices, effortChoices, startingPair } from '../public/js/wb/group-config.js';
 import { saveGroupName, renderNameEditor } from '../public/js/wb/name-edit.js';
 import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText, renderAutoName } from '../public/js/wb/auto-name.js';
 import { displayTime, endReasonLabel, eventLabel } from '../public/js/wb/event-labels.js';
@@ -25,10 +25,16 @@ setInstanceZone(ZONE);
 const t = (key, params) => key + (params ? ' ' + JSON.stringify(params) : '');
 const response = (value, status = 200) => ({ ok: status < 400, status, json: async () => value });
 const run = (id, start = 1000, end = 2000) => ({ runId: id, startAt: new Date(start).toISOString(), endAt: new Date(end).toISOString(), n: 2, endReason: 'ttl' });
-const row = (sessionGroup = 'telegram:a', extra = {}) => ({ sessionGroup, presence: 'running', state: { kind: 'busy' },
-  working: { on: (extra.state?.kind ?? 'busy') === 'busy', since: 900000 },
+const row = (sessionGroup = 'telegram:a', extra = {}) => ({ sessionGroup, presence: 'running', state: { kind: 'working' },
+  working: { on: (extra.state?.kind ?? 'working') === 'working', since: 900000 },
   live: { runId: 'run-a', sessionId: 'session-a' }, tools: [], queue: { pending: { count: 1 }, running: { count: 0 } },
   contextPct: 42, createdAt: 1000, launchConfig: { runtime: 'claude', mode: 'default' }, ...extra });
+// Fixture request adapters model the consolidated detail envelope; product code is imported directly.
+const createGroupConfig = options => productGroupConfig({ ...options, request: async (path, requestOptions) => {
+  const value = await options.request(path, requestOptions);
+  return !requestOptions?.method && !path.includes('/runtime-options') && !value?.config ? { config: value } : value;
+} });
+const isGroupDetail = path => /^\/api\/groups\/[^/?]+(?:\?include=)?$/.test(path);
 const emptyRuns = { runs: [], totalEvents: 17, totalRuns: 5, unattributed: 0 };
 function detailFixture(fetch, options = {}) {
   const document = createDocument(), root = document.createElement('aside'), timers = [];
@@ -38,9 +44,10 @@ function detailFixture(fetch, options = {}) {
 }
 function defaultRead(path) {
   if (path.includes('types=subagent_start')) return { events: [] };
-  if (path.startsWith('/api/timeline')) return { events: [{ event_type: 'stop', timestamp: 'recent' }] };
+  if (path.includes('/events')) return { events: [{ event_type: 'stop', timestamp: 'recent' }] };
   if (path.includes('/backlog')) return { count: 3, firstAt: 100, syncing: false };
   if (path.includes('/messages')) return { messages: [] };
+
   return emptyRuns;
 }
 
@@ -57,8 +64,8 @@ test('historical detail resolves board rows, named search and key-only jumps wit
   assert.match(f.root.textContent, /—/);
   assert.match(f.root.textContent, /wb.unknown/);
   assert.equal(allNodes(f.root).some(node => node.tagName === 'SCRIPT'), false);
-  assert.equal(calls.some(path => path.includes('/search') || (path.startsWith('/api/timeline') && path.includes('run_id='))), false);
-  const recent = calls.find(path => path.startsWith('/api/timeline'));
+  assert.equal(calls.some(path => path.includes('/search') || (path.includes('/events') && path.includes('run_id='))), false);
+  const recent = calls.find(path => path.includes('/events'));
   assert.equal(new URL(recent, 'http://fixture').searchParams.get('limit'), String(recentWindow), 'recent activity reads a window, not only the rows it shows');
   assert.equal(new URL(recent, 'http://fixture').searchParams.has('run_id'), false);
   assert.equal(f.controller.state.totalEvents, 17);
@@ -77,7 +84,7 @@ test('overview keeps safe text, section order, technical-only numbers and curren
     { run_id: 'r', event_type: 'subagent_stop', agent_id: 'finished', event_seq: 3 },
   ];
   assert.deepEqual(activeSubagents(events, 'r').map(agent => agent.id), ['<img>']);
-  const current = row('a', { state: { kind: 'waiting' }, live: { runId: 'r' }, queue: null, contextPct: null, tools: [{ name: 'Bash', detail: '<script>' }],
+  const current = row('a', { state: { kind: 'starting' }, live: { runId: 'r' }, queue: null, contextPct: null, tools: [{ name: 'Bash', detail: '<script>' }],
     wait: { kind: 'unknown', reasonCode: '<script>unknown' }, desired: { runtime: 'codex', mode: 'default' } });
   renderOverview(root, current, { recent: [{ timestamp: 'now', event_type: 'stop' }], currentEvents: events,
     totalEvents: 99, totalRuns: 5, backlog: { count: 3 } }, { document, t, level: 'technical', snapshot: { readAt: 42 } });
@@ -113,7 +120,7 @@ test('timeline pages current events, loads three older runs lazily, filters expa
   await loader.expand('r2');
   assert.equal(loader.state.events.has('r2'), true);
   const before = calls.length; await loader.setFilter('tools');
-  assert.equal(calls.slice(before).filter(path => path.includes('/api/timeline')).length, 3, 'current paginates twice, expanded older once');
+  assert.equal(calls.slice(before).filter(path => path.includes('/events')).length, 3, 'current paginates twice, expanded older once');
   assert.equal(calls.slice(before).every(path => new URL(path, 'http://fixture').searchParams.get('types').includes('post_tool_failure')), true);
   await loader.loadEarlier();
   assert.equal(loader.state.runs.length, 5);
@@ -360,15 +367,15 @@ test('the stored message is read once when its fold opens and stays with that pr
   const current = row('review-bot:a', { state: { kind: 'idle' }, preview: preview(1) });
   const f = detailFixture(async path => {
     calls.push(path);
-    return path.endsWith('/raw') ? response({ raw: stored }) : response(defaultRead(path));
+    return isGroupDetail(path) ? response({ raw: stored }) : response(defaultRead(path));
   }, { detail: () => 'technical' });
   await f.controller.open(current, { rows: [current], listKnown: true });
   const fold = () => allNodes(f.root).find(node => node.classList?.contains('wb-now-raw'));
-  const reads = () => calls.filter(path => path.endsWith('/raw'));
-  assert.deepEqual(reads(), [], 'opening the detail reads no stored message');
+  const reads = () => calls.filter(path => isGroupDetail(path));
+  assert.deepEqual(reads(), ['/api/groups/review-bot%3Aa'], 'the consolidated detail includes the original message');
   fold().open = true; fold().dispatch('toggle');
   await tick(); await tick();
-  assert.deepEqual(reads(), ['/api/workbench/groups/review-bot%3Aa/raw']);
+  assert.deepEqual(reads(), ['/api/groups/review-bot%3Aa']);
   assert.equal(allNodes(fold()).find(node => node.tagName?.toLowerCase() === 'pre').textContent, stored);
   fold().dispatch('toggle');
   await f.controller.updateSnapshot({ rows: [current], listKnown: true });
@@ -377,7 +384,7 @@ test('the stored message is read once when its fold opens and stays with that pr
   fold().open = false; fold().dispatch('toggle');
   fold().open = true; fold().dispatch('toggle');
   await tick();
-  assert.equal(reads().length, 1, 'reopening shows what was read');
+  assert.equal(reads().length, 2, 'reopening reuses the current consolidated detail without an extra request');
   const newer = { ...current, preview: preview(2) };
   await f.controller.updateSnapshot({ rows: [newer], listKnown: true });
   assert.equal(fold().open, false, 'a new message folds again');
@@ -388,22 +395,22 @@ test('a stored message that could not be read is read again when its fold reopen
   const calls = [], stored = '[Bot] line one\nline two';
   const current = row('review-bot:a', { state: { kind: 'idle' }, preview: { text: 'line one', channel: 'review-bot', timestamp: 1, source: { kind: 'channel' } } });
   const f = detailFixture(async path => {
-    if (!path.endsWith('/raw')) return response(defaultRead(path));
+    if (!isGroupDetail(path)) return response(defaultRead(path));
     calls.push(path);
-    return calls.length === 1 ? response({ error: 'group_raw_failed' }, 502) : response({ raw: stored });
+    return calls.length <= 2 ? response({ error: 'group_raw_failed' }, 502) : response({ raw: stored });
   }, { detail: () => 'technical' });
   await f.controller.open(current, { rows: [current], listKnown: true });
   const fold = () => allNodes(f.root).find(node => node.classList?.contains('wb-now-raw'));
   const pre = () => allNodes(fold()).find(node => node.tagName?.toLowerCase() === 'pre');
   fold().open = true; fold().dispatch('toggle');
   await tick(); await tick();
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
   assert.match(fold().textContent, /wb.detail.rawUnavailable/);
   assert.equal(pre(), undefined);
   fold().open = false; fold().dispatch('toggle');
   fold().open = true; fold().dispatch('toggle');
   await tick(); await tick();
-  assert.equal(calls.length, 2, 'the failed read is tried again');
+  assert.equal(calls.length, 3, 'the failed read is tried again');
   assert.equal(pre().textContent, stored);
   f.controller.destroy();
 });
@@ -453,7 +460,7 @@ test('recent activity lists newest first, dates events from another day, and cou
 
 test('the timeline tab counts events outside a run too, like the full-timeline link', async () => {
   const runs = { runs: [], totalEvents: 17, totalRuns: 5, unattributed: 4 };
-  const f = detailFixture(async path => response(path.startsWith('/api/workbench/groups/') && path.includes('/runs') ? runs : defaultRead(path)));
+  const f = detailFixture(async path => response(path.startsWith('/api/groups/') && path.includes('/runs') ? runs : defaultRead(path)));
   await f.controller.open(row('telegram:a'), { rows: [row('telegram:a')], listKnown: true });
   const tab = allNodes(f.root).find(node => node.attributes?.role === 'tab' && /wb\.detail\.timeline/.test(node.textContent));
   assert.match(tab.textContent, / 21$/);
@@ -560,7 +567,7 @@ test('config rejects a partial pair, preserves exact Core reasons and queries on
     await controller.save({ kind: 'model', runtime: 'codex', model: 'model' });
     assert.equal(calls.length, 0);
     await controller.save({ kind: 'model', runtime: 'codex', model: 'model', effort: 'high' });
-    assert.deepEqual(calls, ['POST', 'GET']);
+    assert.deepEqual(calls, ['PUT', 'GET']);
     assert.equal(controller.state.result, 'wb.config.resultUnknown');
   }
   const controller = createGroupConfig({ key: 'a', t, request: async () => ({ ok: false, error: { code: 'SESSION_GROUP_INVALID', message: '<text>' } }) });
@@ -607,7 +614,7 @@ test('snapshot-driven detail refresh skips hidden pages, retains data on failure
   const calls = [], f = detailFixture(async path => {
     calls.push(path);
     if (failing) throw Error('offline');
-    return response(path.includes('types=subagent_start') ? { events: [] } : path.startsWith('/api/timeline') ? { events: [{ event_type: 'stop', timestamp: String(version) }] } : defaultRead(path));
+    return response(path.includes('types=subagent_start') ? { events: [] } : path.includes('/events') ? { events: [{ event_type: 'stop', timestamp: String(version) }] } : defaultRead(path));
   }, { isVisible: () => visible });
   await f.controller.open('a', { rows: [], listKnown: true });
   const count = calls.length;
@@ -647,7 +654,7 @@ test('every group has bound action buttons and Origin translated wake replies pr
   assert.match(groupActionText({ result: 'stale_target', currentRunId: '<new>' }, t), /<new>/);
   const actions = [], f = detailFixture(async (path, options) => {
     if (options?.method === 'POST') { actions.push([path, JSON.parse(options.body)]); return response({ ok: true, result: 'accepted' }); }
-    return response(defaultRead(path));
+    return response(isGroupDetail(path) ? row('a') : defaultRead(path));
   }, { confirm: () => true });
   await f.controller.open(row('a'), { rows: [row('a')], listKnown: true });
   await f.controller.act('interrupt'); await f.controller.act('chop-chop'); await f.controller.act('restart');
@@ -657,13 +664,13 @@ test('every group has bound action buttons and Origin translated wake replies pr
 });
 
 test('single detail filters NULL events but sends actions through the Origin route', async () => {
-  const calls = [], f = detailFixture(async (path, options) => { calls.push([path, options]); return response(defaultRead(path)); });
+  const calls = [], f = detailFixture(async (path, options) => { calls.push([path, options]); return response(isGroupDetail(path) ? row(null) : defaultRead(path)); });
   const single = row(null);
   await f.controller.open(single, { rows: [single], view: 'single', listKnown: true });
-  const recent = new URL(calls.find(([path]) => path.startsWith('/api/timeline') && !path.includes('run_id'))[0], 'http://fixture');
+  const recent = new URL(calls.find(([path]) => path.includes('/events') && !path.includes('run_id'))[0], 'http://fixture');
   assert.equal(recent.searchParams.get('session_group'), '');
   await f.controller.act('interrupt');
-  assert.equal(calls.some(([path]) => path === '/api/workbench/groups/origin/actions/interrupt'), true);
+  assert.equal(calls.some(([path]) => path === '/api/groups/origin/actions/interrupt'), true);
   f.controller.destroy();
 });
 
@@ -706,7 +713,7 @@ test('overview restores a current subagent whose start predates the five recent 
   const current = row('a'), calls = [];
   const f = detailFixture(async path => {
     calls.push(path); const url = new URL(path, 'http://fixture');
-    if (url.pathname === '/api/timeline') {
+    if (url.pathname.endsWith('/events')) {
       if (url.searchParams.get('types') === 'subagent_start,subagent_stop') return response({ events: [
         { run_id: 'run-a', event_type: 'subagent_start', metadata: { agent_id: 'worker' }, event_seq: 1 },
       ] });
@@ -721,7 +728,7 @@ test('overview restores a current subagent whose start predates the five recent 
   assert.equal(subagentRead.searchParams.get('run_id'), 'run-a');
   assert.equal(subagentRead.searchParams.get('order'), 'asc');
   assert.equal(f.controller.timeline.state.open, false);
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 6);
   f.controller.destroy();
 });
 
@@ -730,7 +737,7 @@ test('overview consumes a subagent stop followed by more than five unrelated eve
   let stopped = false;
   const f = detailFixture(async path => {
     calls.push(path); const url = new URL(path, 'http://fixture');
-    if (url.pathname === '/api/timeline') {
+    if (url.pathname.endsWith('/events')) {
       if (url.searchParams.get('types') === 'subagent_start,subagent_stop') return response({ events: [
         { run_id: 'run-a', event_type: stopped ? 'subagent_stop' : 'subagent_start', metadata: { agent_id: 'worker' }, event_seq: stopped ? 2 : 1 },
       ] });
@@ -753,7 +760,7 @@ test('overview consumes a subagent stop followed by more than five unrelated eve
   const subagentRead = new URL(calls.find(path => path.includes('types=subagent_start')), 'http://fixture');
   assert.equal(subagentRead.searchParams.get('after_seq'), '1');
   assert.equal(f.controller.timeline.state.filter, 'tools');
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 6);
   f.controller.destroy();
 });
 
@@ -784,7 +791,7 @@ test('restart confirmation retains Origin wording and uses the approved immediat
   const prompts = [];
   for (const key of ['origin', null, 'a']) {
     const current = row(key);
-    const f = detailFixture(async path => response(defaultRead(path)), {
+    const f = detailFixture(async path => response(isGroupDetail(path) ? current : defaultRead(path)), {
       confirm: text => { prompts.push(text); return false; },
     });
     await f.controller.open(current, { rows: [current], listKnown: true });
@@ -822,7 +829,7 @@ test('current message range advances with the clock while ended runs keep exact 
   calls.length = 0;
   await loader.open('a', null); await loader.refresh();
   assert.equal(calls.filter(url => url.pathname.endsWith('/messages')).every(url => url.searchParams.get('until') === new Date(1100).toISOString()), true);
-  assert.equal(calls.some(url => url.pathname === '/api/timeline'), false, 'ended-only groups do not fetch current events');
+  assert.equal(calls.some(url => url.pathname.endsWith('/events')), false, 'ended-only groups do not fetch current events');
   loader.close();
 });
 
@@ -837,7 +844,7 @@ test('stopped Origin and single keep restart available with bound scope while or
     assert.equal(groupActionButtons(current, false).every(button => button.disabled), true);
     const f = detailFixture(async (path, options) => {
       if (options?.method === 'POST') { sent.push(JSON.parse(options.body)); return response({ result: 'accepted' }); }
-      return response(defaultRead(path));
+      return response(isGroupDetail(path) ? current : defaultRead(path));
     }, { confirm: () => true });
     await f.controller.open(current, { rows: [current], listKnown: true });
     await f.controller.act('restart'); f.controller.destroy();
@@ -867,7 +874,7 @@ test('snapshot rounds stay bounded with 5000 history events and append only one 
   let holdRecent = null;
   const f = detailFixture(async path => {
     calls.push(path); const url = new URL(path, 'http://fixture');
-    if (url.pathname === '/api/timeline') {
+    if (url.pathname.endsWith('/events')) {
       if (url.searchParams.get('types') === 'subagent_start,subagent_stop') return response({ events: [] });
       if (!url.searchParams.has('run_id')) {
         if (holdRecent) return holdRecent.promise;
@@ -882,10 +889,10 @@ test('snapshot rounds stay bounded with 5000 history events and append only one 
   });
   const snapshot = { rows: [current], listKnown: true };
   await f.controller.open(current, snapshot);
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 6);
   assert.equal(calls.some(path => path.includes('run_id=') && !path.includes('types=subagent_start')), false);
   calls.length = 0; await f.controller.updateSnapshot(snapshot);
-  assert.equal(calls.length, 4, 'overview round is independent of current event history');
+  assert.equal(calls.length, 6, 'overview round is independent of current event history');
   calls.length = 0; await f.controller.selectTab('timeline');
   assert.equal(f.controller.timeline.state.events.get('run-a').length, 5000);
   assert.equal(calls.filter(path => path.includes('run_id=')).length, 6, 'initial explicit opening paginates the entire run');
@@ -893,20 +900,20 @@ test('snapshot rounds stay bounded with 5000 history events and append only one 
   calls.length = 0;
   holdRecent = deferred();
   const one = f.controller.updateSnapshot(snapshot), two = f.controller.updateSnapshot(snapshot);
-  assert.equal(calls.length, 4, 'concurrent board updates share the same bounded refresh');
+  assert.equal(calls.length, 6, 'concurrent board updates share the same bounded refresh');
   holdRecent.resolve(response({ events: [] })); holdRecent = null;
   await Promise.all([one, two]);
-  assert.equal(calls.length, 6, 'timeline round adds one event page and one metadata-only message read');
+  assert.equal(calls.length, 8, 'timeline round adds one event page and one metadata-only message read');
   assert.equal(f.controller.timeline.state.events.get('run-a').length, 6000);
   const eventRead = new URL(calls.find(path => path.includes('run_id=') && !path.includes('types=subagent_start')), 'http://fixture');
   assert.equal(eventRead.searchParams.get('after_seq'), '5000');
   calls.length = 0; await f.controller.updateSnapshot(snapshot);
-  assert.equal(calls.length, 6);
+  assert.equal(calls.length, 8);
   assert.equal(f.controller.timeline.state.events.get('run-a').length, 6500);
   assert.equal(new URL(calls.find(path => path.includes('run_id=') && !path.includes('types=subagent_start')), 'http://fixture').searchParams.get('after_seq'), '6000');
   await f.controller.selectTab('overview');
   calls.length = 0; await f.controller.updateSnapshot(snapshot);
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 6);
   assert.equal(calls.some(path => path.includes('run_id=') && !path.includes('types=subagent_start')), false, 'overview never refreshes hidden full-current history');
   f.controller.destroy();
 });
@@ -974,13 +981,13 @@ test('filter reload excludes refresh append until the new filtered array is auth
   loader.close();
 });
 
-test('an active timeline discards the previous run and reads the replacement run after a board snapshot changes', async () => {
+test('an active timeline discards the previous run and reads the replacement run when canonical detail replaces a run behind an unchanged compact list', async () => {
   let current = row('a');
   const calls = [], signals = [];
   const f = detailFixture(async (path, options) => {
-    calls.push(path); const url = new URL(path, 'http://fixture');
+    calls.push(path); if (isGroupDetail(path)) return response(current); const url = new URL(path, 'http://fixture');
     if (url.pathname.endsWith('/runs')) return response({ runs: [run(current.live.runId)], totalRuns: 1, totalEvents: 1 });
-    if (url.pathname === '/api/timeline' && url.searchParams.has('run_id')) {
+    if (url.pathname.endsWith('/events') && url.searchParams.has('run_id')) {
       signals.push(options.signal);
       if (url.searchParams.has('types')) return response({ events: [] });
       return response({ events: [{ run_id: url.searchParams.get('run_id'), event_seq: 1,
@@ -993,14 +1000,14 @@ test('an active timeline discards the previous run and reads the replacement run
   assert.match(f.root.textContent, /old_run_event/);
   const oldSignals = [...signals]; calls.length = 0;
   current = row('a', { live: { runId: 'run-b', sessionId: 'session-b' } });
-  await f.controller.updateSnapshot({ rows: [current], listKnown: true });
+  await f.controller.updateSnapshot({ rows: [{ id: 'a', sessionGroup: 'a', displayName: 'A', channel: 'telegram', runtime: 'claude', model: 'actual', state: { kind: 'working' }, duration: 1, flags: {}, mainAgent: 'busy', contextPct: 42, lastActivityAt: null }], listKnown: true });
   assert.equal(oldSignals.every(signal => signal.aborted), true);
   assert.equal(f.controller.timeline.state.currentRunId, 'run-b');
   assert.equal(f.controller.timeline.state.events.has('run-a'), false);
   assert.equal(f.controller.timeline.state.events.get('run-b').length, 1);
   assert.match(f.root.textContent, /new_run_event/);
   assert.doesNotMatch(f.root.textContent, /old_run_event/);
-  assert.equal(calls.filter(path => path.includes('run_id=')).every(path => path.includes('run_id=run-b')), true);
+  assert.equal(calls.filter(path => path.includes('run_id=') && !path.includes('types=')).every(path => path.includes('run_id=run-b')), true, 'timeline appends only the replacement run after canonical reconciliation');
   f.controller.destroy();
 });
 
@@ -1198,7 +1205,7 @@ test('detail header gives the title its own row and keeps state and actions toge
   assert.deepEqual(top.children.map(child => child.className.split(' ')[0]), ['wb-ch', 'wb-d-title-wrap', 'wb-d-sub', 'wb-icon-btn']);
   assert.equal(top.children.at(-1).attributes['aria-label'], 'wb.close', 'closing stays on the title row');
   const sub = top.children[2];
-  assert.ok(sub.children[0].classList.contains('wb-pill'), 'the state comes first in the second row');
+  assert.ok(sub.children[0].classList.contains('wb-state-stack'), 'the state comes first in the second row');
   assert.ok(sub.children[1].classList.contains('wb-d-acts'), 'the actions follow the state');
   assert.deepEqual(allNodes(sub.children[1]).filter(node => node.dataset?.wbAction).map(node => node.dataset.wbAction), ['interrupt', 'chop-chop', 'restart']);
   f.controller.destroy();
@@ -1315,7 +1322,7 @@ test('a group on the default settings starts from nothing chosen, never the mach
   const open = async model => {
     const requests = [];
     const controller = createGroupConfig({ key: 'a', t, request: async (path, options) => { requests.push([path, options?.method ?? 'GET', options?.body]);
-      if (path.startsWith('/api/actions/meta')) return meta;
+      if (path.startsWith('/api/instance/runtime-options')) return meta;
       if (options?.method) return { ok: true, data: { running: { status: 'pending' } } };
       return { runtime: { ok: true, data: { desired: { mode: 'inherit' }, resolved: { runtime: 'claude' } } }, model: { ok: true, data: model } }; } });
     await controller.load(); await controller.loadMeta('claude');
@@ -1346,11 +1353,11 @@ test('the configuration editor offers engine, model and effort as dropdowns with
   const requests = [];
   const meta = { models: [{ id: 'opus', display_name: 'Opus' }, { id: 'sonnet' }], efforts_by_model: { opus: ['low', 'high', 'xhigh'], '*': ['low', 'medium', 'high'] } };
   const controller = createGroupConfig({ key: 'a', t, request: async (path, options) => { requests.push([path, options?.method ?? 'GET']);
-    if (path.startsWith('/api/actions/meta')) return meta;
+    if (path.startsWith('/api/instance/runtime-options')) return meta;
     if (options?.method) return { ok: true, data: { running: { status: 'pending' } } };
     return { runtime: { ok: true, data: { desired: { runtime: 'inherit' }, resolved: { runtime: 'claude' } } }, model: { ok: true, data: { desired: { runtime: 'claude', mode: 'override', model: 'opus', effort: 'high' } } } }; } });
   await controller.load(); await controller.loadMeta('claude'); await controller.loadMeta('claude');
-  assert.equal(requests.filter(([path]) => path.startsWith('/api/actions/meta')).length, 1, 'the catalog is read once per engine');
+  assert.equal(requests.filter(([path]) => path.startsWith('/api/instance/runtime-options')).length, 1, 'the catalog is read once per engine');
   const document = createDocument(), root = document.createElement('div'); let cancelled = 0;
   renderGroupConfig(root, controller, { document, t, onCancel: () => cancelled++ });
   const pair = allNodes(root).find(node => node.classList.contains('wb-cfg-controls'));
@@ -1364,7 +1371,7 @@ test('the configuration editor offers engine, model and effort as dropdowns with
   assert.equal(effort.value, 'high', 'an effort the new model also offers is kept');
   cancel.dispatch('click'); assert.equal(cancelled, 1);
   save.dispatch('click'); await tick();
-  assert.deepEqual(requests.at(-1), ['/api/workbench/groups/a/config', 'POST']);
+  assert.deepEqual(requests.at(-1), ['/api/groups/a/config', 'PUT']);
   const more = allNodes(root).find(node => node.classList.contains('wb-cfg-more'));
   assert.match(more.textContent, /wb\.config\.saveRuntime/); assert.match(more.textContent, /wb\.config\.resetModel/);
   assert.deepEqual(modelChoices(meta, 'custom-model').map(item => item.value), ['custom-model', 'opus', 'sonnet'], 'a saved model missing from the catalog stays selectable');
@@ -1498,11 +1505,11 @@ function detailScrollFixture(fetch, options = {}) {
 test('overview refresh updates mounted nodes without replacing the body or evidence fold', async context => {
   for (const open of [true, false]) await context.test(open ? 'open evidence' : 'closed evidence', async () => {
     const pending = deferred(); let delayed = false;
-    let current = row('a', { state: { kind: 'waiting' } });
+    let current = row('a', { state: { kind: 'starting' } });
     const stableEvent = { event_seq: 1, event_type: 'stop', timestamp: '2026-11-11T00:00:00Z' };
     const f = detailScrollFixture(async path => {
-      if (delayed && path.startsWith('/api/timeline')) return pending.promise;
-      return response(path.startsWith('/api/timeline') && !path.includes('types=subagent_start') ? { events: [stableEvent] } : defaultRead(path));
+      if (delayed && path.includes('/events')) return pending.promise;
+      return response(path.includes('/events') && !path.includes('types=subagent_start') ? { events: [stableEvent] } : defaultRead(path));
     }, { detail: () => 'technical' });
     try {
       await f.controller.open(current, { rows: [current], listKnown: true });
@@ -1533,7 +1540,7 @@ test('overview refresh updates mounted nodes without replacing the body or evide
 test('explicit detail tabs and another group start at the top without leaking evidence expansion', async () => {
   let level = 'technical';
   const f = detailScrollFixture(async path => response(defaultRead(path)), { detail: () => level });
-  const first = row('a', { state: { kind: 'waiting' } }), second = row('b', { state: { kind: 'waiting' } });
+  const first = row('a', { state: { kind: 'starting' } }), second = row('b', { state: { kind: 'starting' } });
   try {
     await f.controller.open(first, { rows: [first, second], listKnown: true });
     f.root.querySelector('.wb-detail-body').scrollTop = 175;
@@ -1566,8 +1573,8 @@ test('explicit detail tabs and another group start at the top without leaking ev
 
 test('evidence expansion survives a new preview while its stored-message fold keeps preview ownership', async () => {
   const preview = timestamp => ({ text: 'message', channel: 'telegram', timestamp, source: { kind: 'channel' } });
-  let current = row('a', { state: { kind: 'waiting' }, preview: preview(1) });
-  const f = detailScrollFixture(async path => response(path.endsWith('/raw') ? { raw: 'stored message' } : defaultRead(path)),
+  let current = row('a', { state: { kind: 'starting' }, preview: preview(1) });
+  const f = detailScrollFixture(async path => response(isGroupDetail(path) ? { raw: 'stored message' } : defaultRead(path)),
     { detail: () => 'technical' });
   try {
     await f.controller.open(current, { rows: [current], listKnown: true });
@@ -1593,7 +1600,7 @@ test('timeline refresh updates keyed run and activity nodes in the mounted body'
     const url = new URL(path, 'http://fixture');
     if (path.includes('types=subagent_start')) return response({ events: [] });
     if (url.pathname.endsWith('/runs')) return response({ runs: [{ ...run('run-a'), n: version }], totalEvents: version, totalRuns: 1 });
-    if (url.pathname === '/api/timeline') return response({ events: url.searchParams.has('after_seq') ? version === 2 ? [second] : [] : [first] });
+    if (url.pathname.endsWith('/events')) return response({ events: url.searchParams.has('after_seq') ? version === 2 ? [second] : [] : [first] });
     return response(defaultRead(path));
   }, { detail: () => 'technical' });
   try {
@@ -1618,11 +1625,11 @@ test('incremental configuration metadata and refresh keep save bound to the moun
   const configValue = { runtime: { data: { resolved: { runtime: 'claude' } } },
     model: { data: { desired: { mode: 'override', runtime: 'claude', model: 'opus', effort: 'low' } } } };
   const f = detailScrollFixture(async (path, options) => {
-    if (path.endsWith('/config') && options?.method === 'POST') {
+    if (path.endsWith('/config') && options?.method === 'PUT') {
       posts.push(JSON.parse(options.body)); return response({ ok: true, data: { running: { status: 'applied' } } });
     }
-    if (path.endsWith('/config')) return response(configValue);
-    if (path.startsWith('/api/actions/meta')) return meta.promise;
+    if (isGroupDetail(path)) return response({ config: configValue });
+    if (path.startsWith('/api/instance/runtime-options')) return meta.promise;
     return response(defaultRead(path));
   }, { detail: () => 'technical' });
   try {
@@ -1657,7 +1664,7 @@ test('timeline keeps event and message identity separate when numeric ids match 
     if (path.includes('types=subagent_start')) return response({ events: [] });
     if (url.pathname.endsWith('/runs')) return response({ runs: [run('run-a')], totalEvents: 1, totalRuns: 1 });
     if (url.pathname.endsWith('/messages')) return response({ messages: [{ id: 7, direction: 'in', timestamp: new Date(version === 1 ? 1800 : 1100).toISOString() }] });
-    if (url.pathname === '/api/timeline') return response({ events: url.searchParams.has('after_seq') ? [] : [eventValue] });
+    if (url.pathname.endsWith('/events')) return response({ events: url.searchParams.has('after_seq') ? [] : [eventValue] });
     return response(defaultRead(path));
   }, { detail: () => 'technical' });
   try {
@@ -1681,7 +1688,7 @@ test('inserting a newer timeline run keeps the existing expanded run section', a
     const url = new URL(path, 'http://fixture');
     if (path.includes('types=subagent_start')) return response({ events: [] });
     if (url.pathname.endsWith('/runs')) return response({ runs: includeNewer ? [newerRun, existingRun] : [existingRun], totalEvents: 1, totalRuns: includeNewer ? 2 : 1 });
-    if (url.pathname === '/api/timeline') return response({ events: url.searchParams.has('after_seq') ? [] : [event] });
+    if (url.pathname.endsWith('/events')) return response({ events: url.searchParams.has('after_seq') ? [] : [event] });
     return response(defaultRead(path));
   }, { detail: () => 'technical' });
   const sections = () => allNodes(f.root).filter(node => node.classList.contains('wb-timeline-run'));
@@ -1709,8 +1716,8 @@ test('an open configuration form becomes writable without retaining read-only ca
   const configValue = { runtime: { data: { resolved: { runtime: 'claude' } } },
     model: { data: { desired: { mode: 'override', runtime: 'claude', model: 'opus', effort: 'low' } } } };
   const f = detailScrollFixture(async path => {
-    if (path.endsWith('/config')) return response(configValue);
-    if (path.startsWith('/api/actions/meta')) return response({ models: [{ id: 'opus' }, { id: 'sonnet' }],
+    if (isGroupDetail(path)) return response({ config: configValue });
+    if (path.startsWith('/api/instance/runtime-options')) return response({ models: [{ id: 'opus' }, { id: 'sonnet' }],
       efforts_by_model: { '*': ['low', 'high'] }, model_thresholds: { opus: 70, sonnet: 60 } });
     return response(defaultRead(path));
   }, { detail: () => 'technical', writable: () => writable });
@@ -1763,7 +1770,7 @@ test('an open name editor follows permission changes with fresh controls', async
 
 test('account source evidence reads each runtime before deciding whether sources are healthy', () => {
   const accountSources = { claude: { ok: true, readAt: 1000 }, codex: { ok: true, readAt: 2000 } };
-  const current = row('telegram:accounts', { presence: 'not_running', live: null, target: { runtime: 'claude' }, state: { kind: 'waiting' }, wait: { kind: 'pool_wait', position: 2 } });
+  const current = row('telegram:accounts', { presence: 'not_running', live: null, target: { runtime: 'claude' }, state: { kind: 'starting' }, wait: { kind: 'pool_wait', position: 2 } });
   const healthy = detailEvidence(current, { sources: { status: { ok: true, readAt: 3000 }, accounts: accountSources } });
   const sources = healthy.samples.filter(item => item.source === 'sources' || item.source.startsWith('accounts'));
   assert.equal(sources.length, 1);
@@ -1783,7 +1790,7 @@ test('account source evidence reads each runtime before deciding whether sources
 });
 
 
-test('plain busy and waiting summaries stay on one current-state line', () => {
+test('plain working and offline summaries keep the primary state on one line', () => {
   const document = createDocument();
   const currentEvents = [
     { run_id: 'r', event_type: 'subagent_start', agent_id: 'first', event_seq: 1 },
@@ -1802,7 +1809,7 @@ test('plain busy and waiting summaries stay on one current-state line', () => {
     assert.equal(allNodes(now).some(node => node.classList.contains('wb-subs')), false, 'plain count replaces individual technical subagent tags');
   }
   const root = document.createElement('div');
-  renderOverview(root, row('telegram:wait', { presence: 'not_running', live: null, target: { runtime: 'claude' }, state: { kind: 'waiting' }, wait: { kind: 'pool_wait', position: 2, reasonCode: 'pool_capacity' } }), {}, { document, t });
+  renderOverview(root, row('telegram:wait', { presence: 'not_running', live: null, target: { runtime: 'claude' }, state: { kind: 'offline' }, flags: { waitingSlot: { position: 2 } }, wait: { kind: 'pool_wait', position: 2, reasonCode: 'pool_capacity' } }), {}, { document, t });
   const card = allNodes(root).find(node => node.classList.contains('wb-now-card'));
   const titles = allNodes(card).filter(node => node.classList.contains('wb-now-title'));
   assert.equal(titles.length, 1);
@@ -1816,7 +1823,7 @@ test('received previews and their raw fold are omitted together from conversatio
   for (const level of ['plain', 'technical']) {
     let rawReads = 0;
     const f = detailFixture(async path => {
-      if (path.endsWith('/raw')) { rawReads++; return response({ raw: 'explicitly requested stored history' }); }
+      if (isGroupDetail(path)) { rawReads++; return response({ raw: 'explicitly requested stored history' }); }
       return response(defaultRead(path));
     }, { detail: () => level, showLastReceived: false });
     tctx.after(() => f.controller.destroy());
@@ -1826,27 +1833,30 @@ test('received previews and their raw fold are omitted together from conversatio
     if (level === 'plain') assert.match(card.textContent, /wb\.detail\.idleElapsed/);
     assert.doesNotMatch(card.textContent, /lastReceived|already visible/);
     assert.equal(allNodes(card).some(node => node.classList.contains('wb-now-sub')), false);
-    assert.equal(rawReads, 0, 'hiding the subtitle does not eagerly read stored history');
+    assert.equal(rawReads, 1, 'the group detail is read once without a separate raw-history request');
     const raw = allNodes(card).find(node => node.classList.contains('wb-now-raw'));
     assert.equal(raw, undefined, 'no unlabelled original-message fold is offered in the conversation sidebar');
     assert.doesNotMatch(card.textContent, /wb\.detail\.rawMessage/);
     f.controller.setViewDetail(); await tick(); await tick();
-    assert.equal(rawReads, 0, 'redraw does not introduce a hidden stored-history request');
+    assert.equal(rawReads, 1, 'redraw does not introduce a hidden stored-history request');
   }
 });
 
-test('diagnostic evidence appears only in technical waiting unknown and error states', () => {
+test('diagnostic evidence follows lifecycle states and diagnostic flags only in technical detail', () => {
   const document = createDocument();
-  for (const level of ['plain', 'technical']) for (const kind of ['idle', 'busy', 'waiting', 'unknown', 'error', 'not_running']) {
-    const root = document.createElement('div');
-    renderOverview(root, row('telegram:evidence', { state: { kind } }), {}, { document, t, level });
-    const evidence = allNodes(root).filter(node => node.classList.contains('wb-detail-evidence'));
-    assert.equal(evidence.length, level === 'technical' && ['waiting', 'unknown', 'error'].includes(kind) ? 1 : 0, level + ' ' + kind);
+  for (const level of ['plain', 'technical']) for (const kind of ['idle', 'working', 'starting', 'stopping', 'unknown', 'offline']) {
+    for (const flag of [null, 'blocked', 'waitingSlot', 'startFailed', 'unreadable']) {
+      const root = document.createElement('div');
+      renderOverview(root, row('telegram:evidence', { state: { kind }, flags: flag ? { [flag]: { reason: 'fixture' } } : {} }), {}, { document, t, level });
+      const evidence = allNodes(root).filter(node => node.classList.contains('wb-detail-evidence'));
+      const diagnostic = ['starting', 'stopping', 'unknown'].includes(kind) || flag !== null;
+      assert.equal(evidence.length, level === 'technical' && diagnostic ? 1 : 0, level + ' ' + kind + ' ' + flag);
+    }
   }
 });
 
 test('source evidence condenses healthy reads and labels failed reads separately from session state', () => {
-  const document = createDocument(), current = row('telegram:sources', { state: { kind: 'waiting' },
+  const document = createDocument(), current = row('telegram:sources', { state: { kind: 'idle' }, flags: { blocked: { reason: 'rate_limited' } },
     live: { runId: 'run-a', sessionId: 'session-a', status: { valid: true, state: 'idle', sampledAt: 99000 } }, wait: { kind: 'rate_wait', runtime: 'claude' } });
   const sources = { status: { ok: true, readAt: 97000 }, c4: { ok: true, readAt: 96000 }, q: { ok: true, readAt: 95000 },
     ov: { ok: true, readAt: 94000 }, accounts: { claude: { ok: true, readAt: 93000 }, codex: { ok: true, readAt: 92000 } } };
@@ -1926,13 +1936,13 @@ test('plain active tools use the locale separator between their readable names',
 test('failed starts and unknown waits keep their full readable reason in the plain title', () => {
   const document = createDocument();
   for (const [locale, cases] of [
-    ['zh', [['error', 'start_failed', '会话启动失败，请查看技术细节中的原因。'],
+    ['zh', [['offline', 'start_failed', '会话启动失败，请查看技术细节中的原因。'],
       ['unknown', 'unknown', '正在等待，恢复条件未知，请查看技术细节。']]],
-    ['en', [['error', 'start_failed', 'Session start failed. Check technical details for the reason.'],
+    ['en', [['offline', 'start_failed', 'Session start failed. Check technical details for the reason.'],
       ['unknown', 'unknown', 'Waiting; the recovery condition is unknown. Check technical details.']]],
   ]) for (const [kind, wait, expected] of cases) {
     const root = document.createElement('div');
-    renderOverview(root, row('telegram:wait', { presence: kind === 'error' ? 'not_running' : 'unknown', live: null, target: { runtime: 'claude' }, state: { kind }, wait: { kind: wait } }), {},
+    renderOverview(root, row('telegram:wait', { presence: kind === 'offline' ? 'not_running' : 'unknown', live: null, target: { runtime: 'claude' }, state: { kind }, flags: wait === 'start_failed' ? { startFailed: { count: 1 } } : {}, wait: { kind: wait } }), {},
       { document, t: overviewTranslation(locale), level: 'plain' });
     const titles = allNodes(root).filter(node => node.classList.contains('wb-now-title'));
     assert.equal(titles.length, 1);
@@ -1981,18 +1991,18 @@ test('conversation availability redraws the group action when remote access chan
 });
 
 for (const level of ['plain', 'technical']) for (const working of [false, true]) {
-  test(`group header and now card share ${working ? 'busy' : 'idle'} working in ${level} detail`, async () => {
+  test(`group header and now card share ${working ? 'working' : 'idle'} working in ${level} detail`, async () => {
     const f = detailFixture(async path => response(defaultRead(path)), { detail: () => level, now: () => 900000 });
     try {
-      const current = row('telegram:a', { state: { kind: working ? 'idle' : 'busy' },
-        working: { on: working, since: working ? 840000 : null }, duration: 6 });
+      const current = row('telegram:a', { state: { kind: working ? 'working' : 'idle' },
+        working: { on: working, since: working ? 840000 : null }, duration: working ? 6 : null });
       await f.controller.open(current, { rows: [current], listKnown: true });
-      const kind = working ? 'busy' : 'idle';
+      const kind = working ? 'working' : 'idle';
       const header = allNodes(f.root).find(node => node.classList.contains('wb-group-head'));
-      assert.ok(allNodes(header).some(node => node.classList.contains('wb-' + kind)));
+      assert.ok(allNodes(header).some(node => node.classList.contains('wb-' + (kind === 'working' ? 'busy' : kind))));
       const now = allNodes(f.root).find(node => node.classList.contains('wb-now-title'));
       assert.match(now.textContent, new RegExp('wb.state.' + kind));
-      assert.doesNotMatch(now.textContent, new RegExp('wb.state.' + (working ? 'idle' : 'busy')));
+      assert.doesNotMatch(now.textContent, new RegExp('wb.state.' + (working ? 'idle' : 'working')));
       if (!working) {
         const card = allNodes(f.root).find(node => node.classList.contains('wb-now-card'));
         assert.equal(allNodes(header).some(node => node.classList.contains('wb-dur')), false,
@@ -2000,7 +2010,7 @@ for (const level of ['plain', 'technical']) for (const working of [false, true])
         assert.equal(allNodes(card).some(node => node.classList.contains('wb-dur')), false,
           'now card does not relabel the runtime busy duration as idle time');
       }
-      assert.equal(current.state.kind, working ? 'idle' : 'busy', 'runtime snapshot remains unchanged');
+      assert.equal(current.state.kind, working ? 'working' : 'idle', 'runtime snapshot remains unchanged');
     } finally { f.controller.destroy(); }
   });
 }
@@ -2009,12 +2019,103 @@ for (const level of ['plain', 'technical']) for (const working of [false, true])
 for (const level of ['plain', 'technical']) test(`group summaries agree on unknown when working is unavailable in ${level} detail`, async () => {
   const f = detailFixture(async path => response(defaultRead(path)), { detail: () => level });
   try {
-    const current = row('telegram:a', { state: { kind: 'busy' }, working: null });
+    const current = row('telegram:a', { state: { kind: 'unknown' }, working: null });
     await f.controller.open(current, { rows: [current], listKnown: true });
     const header = allNodes(f.root).find(node => node.classList.contains('wb-group-head'));
     assert.ok(allNodes(header).some(node => node.classList.contains('wb-unknown')));
     const now = allNodes(f.root).find(node => node.classList.contains('wb-now-title'));
     assert.match(now.textContent, /wb.state.unknown/);
-    assert.doesNotMatch(now.textContent, /wb.state.busy|wb.state.idle/);
+    assert.doesNotMatch(now.textContent, /wb.state.working|wb.state.idle/);
   } finally { f.controller.destroy(); }
+});
+
+test('group details keep authoritative offline flags after the running list no longer contains the group', async () => {
+  let actual = row('a', { state: { kind: 'idle' } });
+  const f = detailFixture(async path => response(isGroupDetail(path) ? actual : defaultRead(path)));
+  try {
+    await f.controller.open(actual, { rows: [actual], listKnown: true });
+    actual = row('a', { presence: 'not_running', live: null, state: { kind: 'offline' }, flags: { queued: { count: 2 }, waitingSlot: { position: 1 } } });
+    await f.controller.updateSnapshot({ rows: [], listKnown: true });
+    assert.equal(f.controller.state.row.state.kind, 'offline');
+    assert.equal(f.controller.state.row.flags.queued.count, 2);
+    assert.equal(f.controller.state.row.flags.waitingSlot.position, 1);
+    assert.match(f.root.textContent, /wb.flags.waitingSlot/);
+  } finally { f.controller.destroy(); }
+});
+
+test('periodic detail refresh skips stored-message and configuration extras without clearing an open raw fold', async tctx => {
+  const paths = [], current = row('telegram:extras', { preview: { text: 'preview', timestamp: 1, source: { kind: 'channel' } } });
+  const f = detailFixture(async path => {
+    paths.push(path);
+    if (isGroupDetail(path)) return response({ ...current, ...(path.includes('?include=') ? {} : { raw: 'stored original', config: { runtime: 'claude' } }) });
+    return response(defaultRead(path));
+  }, { detail: () => 'technical' });
+  tctx.after(() => f.controller.destroy());
+  await f.controller.open(current, { rows: [current], listKnown: true });
+  const fold = () => allNodes(f.root).find(node => node.classList.contains('wb-now-raw'));
+  fold().open = true; fold().dispatch('toggle'); await tick();
+  await f.controller.updateSnapshot({ rows: [current], listKnown: true });
+  assert.deepEqual(paths.filter(isGroupDetail), ['/api/groups/telegram%3Aextras', '/api/groups/telegram%3Aextras?include=']);
+  assert.equal(fold().open, true);
+  assert.match(fold().textContent, /stored original/);
+});
+
+
+test('canonical group detail displays CLI runtime evidence in both views without list hydration', async () => {
+  for (const level of ['plain', 'technical']) {
+    const detail = row('telegram:a', { runtimeInfo: { runtime: 'codex', model: 'actual-model', effort: 'high', runningVersion: '1.0', installedVersion: '1.1', update: '1.2', pendingRestart: true } });
+    const paths = [], f = detailFixture(async path => { paths.push(path); return response(isGroupDetail(path) ? detail : defaultRead(path)); }, { detail: () => level });
+    await f.controller.open({ sessionGroup: 'telegram:a' }, { rows: [], listKnown: true });
+    const meta = allNodes(f.root).find(node => node.className === 'wb-detail-meta');
+    assert.match(meta.textContent, /actual-model.*high.*runningCli.*1.0.*pendingRestart/);
+    assert.equal(meta.textContent.includes('installedCli'), level === 'technical');
+    assert.equal(meta.textContent.includes('cliUpdate'), level === 'technical');
+    assert.equal(paths.some(path => path.includes('/groups/running')), false);
+    f.controller.destroy();
+  }
+});
+
+
+test('canonical optional read failures keep detail available and expose their own source errors', async () => {
+  const config = productGroupConfig({ key: 'a', t, request: async () => ({ config: null, configError: { code: 'CORE_UNAVAILABLE', message: 'Config could not be read' } }) });
+  assert.equal(await config.load(), null);
+  assert.equal(config.state.value, null);
+  assert.match(config.state.error, /CORE_UNAVAILABLE.*Config could not be read/);
+  const current = row('a', { preview: { text: 'Summary', timestamp: 1, source: { kind: 'channel' } } });
+  let fail = true;
+  const f = detailFixture(async path => response(isGroupDetail(path) ? { ...current, raw: fail ? null : 'Recovered source', ...(fail ? { rawError: { code: 'RAW_UNAVAILABLE', message: 'Source could not be read' } } : {}) } : defaultRead(path)), { detail: 'technical' });
+  await f.controller.open(current, { rows: [current], listKnown: true });
+  assert.equal(f.controller.state.row.sessionGroup, 'a');
+  assert.equal(f.controller.state.error, null, 'an optional source failure does not fail the detail request');
+  assert.equal(f.controller.state.raw.status, 'error');
+  const fold = () => allNodes(f.root).find(node => node.classList?.contains('wb-now-raw'));
+  fold().open = true; await fold().dispatch('toggle'); await tick();
+  assert.match(fold().textContent, /wb.detail.rawUnavailable.*RAW_UNAVAILABLE.*Source could not be read/);
+  fold().open = false; await fold().dispatch('toggle');
+  fail = false; fold().open = true; await fold().dispatch('toggle'); await tick();
+  assert.equal(f.controller.state.raw.status, 'ok'); assert.match(fold().textContent, /Recovered source/);
+  assert.doesNotMatch(fold().textContent, /RAW_UNAVAILABLE/);
+  f.controller.destroy();
+});
+
+
+test('drawer actions wait for canonical detail and preserve stopped Origin scope after hydration', async () => {
+  for (const sessionGroup of [null, 'origin']) {
+    const pending = deferred(), sent = [];
+    const f = detailFixture(async (path, options) => {
+      if (options?.method === 'POST') { sent.push(JSON.parse(options.body)); return response({ result: 'accepted' }); }
+      if (isGroupDetail(path)) return pending.promise;
+      return response(defaultRead(path));
+    }, { confirm: () => true });
+    const compact = { sessionGroup: 'origin', id: 'origin', displayName: 'Origin', channel: null, runtime: 'claude', model: 'actual', state: { kind: 'working' }, duration: 1, flags: {}, mainAgent: 'busy', contextPct: 42, lastActivityAt: null };
+    const opened = f.controller.open(compact, { rows: [compact], listKnown: true });
+    assert.equal(allNodes(f.root).filter(node => node.dataset?.wbAction).every(node => node.disabled), true);
+    await f.controller.act('restart'); assert.equal(sent.length, 0, 'an unhydrated list row cannot issue an unbound restart');
+    pending.resolve(response(row(sessionGroup, { presence: 'not_running', live: null, state: { kind: 'offline' } })));
+    await opened;
+    assert.equal(f.controller.state.detailKnown, true);
+    assert.equal(allNodes(f.root).find(node => node.dataset?.wbAction === 'restart').disabled, false, 'confirmed stopped Origin keeps its established restart action');
+    await f.controller.act('restart'); assert.equal(sent.length, 1); assert.equal(sent[0].sessionGroup, sessionGroup);
+    f.controller.destroy();
+  }
 });

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
-import { workbenchAnswer } from './fixtures/workbench-browser-api.js';
+import { workbenchAnswer, workbenchSnapshot, workbenchSnapshotAnswer } from './fixtures/workbench-browser-api.js';
 import { startPage } from './helpers/workbench-browser.js';
 
 // Boundary: actual dashboard modules/styles and DOM in Chrome, fixed local HTTP APIs only.
@@ -91,26 +91,30 @@ test('background panel refresh preserves reading position and folds', { skip: !c
           }, theme);
           const page = await context.newPage(); page.setDefaultTimeout(10000);
           let boardReads = 0; const fixtureAt = Date.now();
-          await page.route('**/api/workbench/groups', route => {
-            const value = workbenchAnswer(new URL(route.request().url()), fixtureAt);
-            value.rows[1].contextPct = 60 + ++boardReads;
-            value.rows[1].preview.source = 'c4'; value.rows[1].preview.timestamp = fixtureAt;
-            // Evidence is diagnostic-only; keep this group waiting across refreshes to exercise its fold.
-            value.rows[1].state = { kind: 'waiting' };
-            value.rows[1].tools = [];
-            value.rows[1].queue.running.count = 0;
-            value.rows[1].queue.pending.oldestAt = fixtureAt - 60000;
-            value.rows[1].live.status = { valid: true, state: 'idle', sampledAt: fixtureAt };
+          await page.route('**/api/**', route => {
+            const url = new URL(route.request().url());
+            if (!url.pathname.startsWith('/api/groups/') && url.pathname !== '/api/instance') return route.fallback();
+            const snapshot = workbenchSnapshot(fixtureAt), row = snapshot.rows[1];
+            if (url.pathname === '/api/groups/running') boardReads++;
+            row.contextPct = 60 + boardReads;
+            row.preview.source = 'c4'; row.preview.timestamp = fixtureAt;
+            // The group is idle with queued work blocked on rate limiting; its evidence fold persists.
+            row.state = { kind: 'idle' }; row.flags = { queued: { count: 1 }, blocked: { reason: 'rate_limited', runtime: 'claude' } };
+            row.tools = []; row.queue.running.count = 0; row.queue.pending.oldestAt = fixtureAt - 60000;
+            row.live.status = { valid: true, state: 'idle', sampledAt: fixtureAt };
             const cooldownUntil = Math.floor(fixtureAt / 1000) + 3600;
-            value.rows[1].wait = { kind: 'rate_wait', runtime: 'claude', cooldownUntil };
-            value.instance.runtimeHealth.claude = { health: 'rate_limited', updatedAt: fixtureAt, cooldownUntil };
-            value.counts.busy--; value.counts.waiting++;
-            return route.fulfill({ json: value });
+            row.wait = { kind: 'rate_wait', runtime: 'claude', cooldownUntil };
+            snapshot.instance.runtimeHealth.claude = { health: 'rate_limited', updatedAt: fixtureAt, cooldownUntil };
+            const value = workbenchSnapshotAnswer(url, snapshot, fixtureAt);
+            if (/^\/api\/groups\/[^/]+$/.test(url.pathname) && value) {
+              value.raw = 'Stored fixture message\nsecond line';
+              value.config = { runtime: { ok: true, data: { resolved: { runtime: 'claude', model: 'default', effort: 'high' } } },
+                model: { ok: true, data: { resolved: { runtime: 'claude', model: 'default', effort: 'high' } } } };
+            }
+            return value === undefined ? route.fallback() : route.fulfill({ json: value });
           });
-          await page.route('**/api/workbench/groups/*/config', route => route.fulfill({ json: { runtime: { ok: true, data: { resolved: { runtime: 'claude', model: 'default', effort: 'high' } } }, model: { ok: true, data: { resolved: { runtime: 'claude', model: 'default', effort: 'high' } } } } }));
-          await page.route('**/api/actions/meta?*', route => route.fulfill({ json: { models: [{ id: 'default', display_name: 'Default' }], efforts_by_model: { '*': ['low', 'high'] }, current_model: 'default', model_thresholds: { default: 70 } } }));
-          await page.route('**/api/workbench/groups/*/raw', route => route.fulfill({ json: { raw: 'Stored fixture message\nsecond line' } }));
-          await page.route('**/api/workbench/host?*', route => route.fulfill({ json: { current: { cpu_pct: 35 }, pm2: { online: 6, total: 6 },
+          await page.route('**/api/instance/runtime-options?*', route => route.fulfill({ json: { models: [{ id: 'default', display_name: 'Default' }], efforts_by_model: { '*': ['low', 'high'] }, current_model: 'default', model_thresholds: { default: 70 } } }));
+          await page.route('**/api/instance/resources?*', route => route.fulfill({ json: { current: { cpu_pct: 35 }, pm2: { online: 6, total: 6 },
             series: Array.from({ length: 60 }, (_, i) => ({ at: Date.now() - i * 60000, cpu: { avg: 35, max: 42 } })) } }));
           await page.goto(base + '/');
           await page.locator('#wb-host-open').click();
@@ -181,6 +185,7 @@ test('background panel refresh preserves reading position and folds', { skip: !c
           // Opening a different group gets a fresh body rather than the previous group's position.
           await page.locator('.wb-detail-body').evaluate(node => { node.scrollTop = 200; });
           await page.locator('#wb-side .wb-d-top > button').last().evaluate(node => node.click());
+          await page.locator('.wb-group-sides button').nth(1).click();
           await page.locator('#wb-board .wb-row').filter({ hasText: 'Product weekly' }).click();
           assert.equal((await state()).top, 0, 'another group starts at top');
         } finally { await context.close(); }

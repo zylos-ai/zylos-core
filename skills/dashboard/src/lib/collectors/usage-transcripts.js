@@ -115,12 +115,6 @@ export class UsageTranscripts {
     return snapshot.rows?.find(item => (item.sessionGroup ?? 'origin') === group)?.live?.runId ?? null;
   }
 
-  currentOriginMapping(runtime) {
-    if (!this.snapshot) return null;
-    const runId = this._currentRun({ session_group: 'origin' }, this.snapshot);
-    return runId == null ? null : this.store.currentOriginTranscript(runtime, runId);
-  }
-
   async _newRound(at) {
     if (this._round && at < this._round.at) this._lastChecked.clear();
     const discoveryDue = this._lastDiscovery == null || at - this._lastDiscovery >= 60000 || at < this._lastDiscovery;

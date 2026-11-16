@@ -4,9 +4,9 @@ import { computeFleetTransitions, isWorkingMood } from '../public/js/fleet-sound
 
 const agent = (name, state, extra = {}) => ({ name, state, ...extra });
 
-test('working moods are busy and thinking only', () => {
+test('working mood is the aggregate busy state', () => {
   assert.equal(isWorkingMood('busy'), true);
-  assert.equal(isWorkingMood('thinking'), true);
+  assert.equal(isWorkingMood('thinking'), false);
   assert.equal(isWorkingMood('idle'), false);
   assert.equal(isWorkingMood('stuck'), false);
   assert.equal(isWorkingMood('offline'), false);
@@ -37,15 +37,15 @@ test('busy -> idle fires finish', () => {
   assert.deepEqual(finished, ['a']);
 });
 
-test('busy <-> thinking is not a transition', () => {
+test('repeated aggregate busy does not repeat a transition', () => {
   const prev = new Map([['a', 'busy']]);
-  const { started, finished } = computeFleetTransitions(prev, [agent('a', 'THINKING')]);
+  const { started, finished } = computeFleetTransitions(prev, [agent('a', 'BUSY')]);
   assert.deepEqual(started, []);
   assert.deepEqual(finished, []);
 });
 
 test('working to Core warning or offline does not fire finish', () => {
-  const prev = new Map([['a', 'busy'], ['b', 'thinking']]);
+  const prev = new Map([['a', 'busy'], ['b', 'busy']]);
   const { started, finished } = computeFleetTransitions(prev, [
     agent('a', 'WAKE_OVERDUE'),
     agent('b', 'OFFLINE')
@@ -111,7 +111,7 @@ test('same payload reprocessed is a no-op (hover-pause replay)', () => {
 });
 
 test('multiple simultaneous transitions are all reported', () => {
-  const prev = new Map([['a', 'idle'], ['b', 'busy'], ['c', 'thinking']]);
+  const prev = new Map([['a', 'idle'], ['b', 'busy'], ['c', 'busy']]);
   const { started, finished } = computeFleetTransitions(prev, [
     agent('a', 'BUSY'),
     agent('b', 'IDLE'),

@@ -2,16 +2,14 @@ import { readThresholdPolicy, sessionThreshold } from '../session-threshold.js';
 import { loadCoreModule as defaultLoadCoreModule } from '../core-modules.js';
 import { Sanitizer } from '../sanitizer.js';
 import { createCoreCli } from './core-cli.js';
-import { mergeGroups, previewTaskIds, safeRaw } from './group-merge.js';
+import { mergeGroups, previewTaskIds, safePreview, safeRaw } from './group-merge.js';
 import { readTaskNames as defaultReadTaskNames } from './schedule-read.js';
 import { waitingReason } from './waiting-reason.js';
 import { classify, durationOf, sortRows, countRows } from './group-state.js';
-import { buildAttention, createChannelDownCounter } from './attention.js';
+import { createChannelDownCounter } from './attention.js';
 import { activityBuckets } from './activity-buckets.js';
 import { workingHistory, END_TYPES, TOOL_TYPES, CHILD_TYPES, MAIN_ACTION_TYPES, MAIN_INPUT_TYPES, STOP_HOOK_LAG_MS } from './working.js';
 const { resolveSessionHotTtl } = await defaultLoadCoreModule('session-hot-ttl.js');
-import { searchGroups } from './group-search.js';
-import { validKey } from './display-names.js';
 import { readPool, poolPositions } from './pool-capacity.js';
 
 const emptyNames = { listAll: () => new Map(), search: () => [] };
@@ -22,6 +20,21 @@ const AUTO_RESTART_TYPES = ['no_response_restart', 'tool_timeout_restart'];
 // What the supervisor takes as the main agent responding: a tool call or words it wrote.
 const RESPONSE_TYPES = ['pre_tool_use', 'tool_call', 'assistant_message'];
 const AUTO_RESTART_WINDOW_MS = 3600_000;
+
+function singleQueue(groups) {
+  const queue = { pending: { count: 0, oldestAt: null, head: null }, running: { count: 0 },
+    fence: null };
+  for (const group of groups) {
+    const pending = group.pending;
+    queue.pending.count += pending.count;
+    queue.running.count += group.running.count;
+    if (pending.oldestAt !== null && (queue.pending.oldestAt === null || pending.oldestAt < queue.pending.oldestAt)) queue.pending.oldestAt = pending.oldestAt;
+    const head = pending.head;
+    if (head && (!queue.pending.head || head.priority < queue.pending.head.priority ||
+      (head.priority === queue.pending.head.priority && head.id < queue.pending.head.id))) queue.pending.head = head;
+  }
+  return queue;
+}
 
 
 function queryAllEvents(store, filter) {
@@ -72,9 +85,9 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     } finally { inflight = null; }
   }
   async function buildGroupSnapshot(at) {
-    const captured = new Map(), sources = {};
+    const captured = new Map(), sources = {}, rawGroups = new Map();
     let mode = 'unreadable', status = null, statusError = null, reader;
-    try { mode = (await loadCoreModule('config.js')).readSessionMode().mode; }
+    try { mode = (await loadCoreModule('config.js')).readSessionMode().mode ?? 'single'; }
     catch { mode = 'unreadable'; }
     try {
       reader = await loadCoreModule('session-state-reader.js');
@@ -91,10 +104,24 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       statusError = 'status_unreadable';
       sources.status = { ok: false, reason: statusError, readAt: now() };
     }
+    let sessionModeStatus;
+    try {
+      const { readSessionModeStatus } = await loadCoreModule('session-mode-status.js');
+      sessionModeStatus = await readSessionModeStatus({ zylosDir, readMode: () => ({ mode }),
+        readPm2: () => readPm2()?.processes?.find(process => process.name === 'activity-monitor')?.pm2_env?.status ?? 'unobservable' });
+      sessionModeStatus.sessionMode = ['single', 'multi'].includes(mode) ? mode : null;
+    } catch (error) {
+      sessionModeStatus = { sessionMode: ['single', 'multi'].includes(mode) ? mode : null,
+        transition: null, globalGate: null, blocked: null, supervisor: 'unknown', lastCompleted: null, lastEvents: [],
+        error: { code: error.code ?? 'READ_FAILED', message: 'Session mode status could not be read' } };
+    }
     const [c4, q] = await Promise.all([
-      cli.runC4Db(['groups', '--active-since', String(at - 7 * 86400000), '--json']),
+      cli.runC4Db(['groups', '--json']),
       cli.runC4Db(['group-queues', '--json']),
     ]);
+    // Counts and the offline page include the complete catalog, including groups
+    // older than the activity window. The public APIs select their own rows.
+    if (c4.ok && Array.isArray(c4.data)) c4.data = { groups: c4.data, hasOlder: false };
     sources.c4 = source(c4); sources.q = source(q);
     const taskNames = c4.ok ? await namesOfTasks(c4.data.groups) : new Map();
     const { rows, hasOlder } = mergeGroups({ status, c4, q, names: await displayNames.listAll(), taskNames, statusError }, sanitizer);
@@ -134,10 +161,19 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
         id: tool.id, name: tool.name, detail: sanitizer.sanitizeToolDetail(tool.name, tool.input), startedAt: tool.startedAt,
       })) : [];
       const usage = observation?.usage;
+      row.runningVersion = usage?.valid ? usage.value.version ?? usage.value.cliVersion ?? null : null;
       row.contextPct = usage?.valid ? usage.value.context_window?.used_percentage ??
         (usage.value.contextUsage?.ceiling > 0 ? usage.value.contextUsage.used / usage.value.contextUsage.ceiling * 100 : null) : null;
       if (observation && !usage?.valid) row.contextReason = 'usage_unreadable';
-      row.queue = q.ok ? q.data.groups.find(item => item.sessionGroup === row.sessionGroup) ??
+      // In single mode every channel feeds the one null-key Origin session.
+      const singleOrigin = status?.view === 'single' && row.sessionGroup === null;
+      if (singleOrigin && c4.ok) {
+        const latest = c4.data.groups.reduce((latest, item) => item.preview && (!latest ||
+          item.preview.timestamp > latest.preview.timestamp) ? item : latest, null);
+        row.preview = safePreview(latest, sanitizer, taskNames);
+        rawGroups.set('origin', latest?.sessionGroup ?? null);
+      }
+      row.queue = q.ok ? (singleOrigin ? singleQueue(q.data.groups) : q.data.groups.find(item => item.sessionGroup === row.sessionGroup)) ??
         { pending: { count: 0, oldestAt: null, head: null }, running: { count: 0 }, fence: null } : { known: false, reason: q.reason };
       row.fence = row.queue.known === false ? null : row.queue.fence ?? q.data.globalFence;
       const selectedRuntime = ov.ok ? ov.data.runtime.find(item => item.sessionGroup === row.sessionGroup)?.runtime ?? ov.data.baseline.runtime : null;
@@ -149,6 +185,9 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
         : ov.ok ? { runtime: selectedRuntime, model: selectedModel ? { model: selectedModel.model, effort: selectedModel.effort } : 'default' }
           : { runtime: null, reason: 'override_list_failed' };
       if (status?.view === 'single') row.target.onlyMulti = true;
+      row.model = usage?.valid ? (row.target.runtime === 'claude' ? usage.value.model?.id : usage.value.model) ?? null
+        : row.launchConfig?.mode === 'override' ? row.launchConfig.model ?? null : null;
+      row.effort = usage?.valid ? usage.value.effort?.level ?? usage.value.reasoningEffort ?? usage.value.reasoning_effort ?? null : row.launchConfig?.effort ?? null;
       row.desired = status?.view === 'single' || !ov.ok ? null : selectedModel
         ? { runtime: selectedRuntime, mode: 'override', model: selectedModel.model, effort: selectedModel.effort }
         : { runtime: selectedRuntime, mode: 'default' };
@@ -166,7 +205,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       row.working = null;
       row.noResponse = null;
       if (row.presence === 'running' && row.live?.runId && sources.status.ok === true) {
-        const filter = { sessionGroup: row.sessionGroup, runId: row.live.runId,
+        const filter = { sessionGroup: row.sessionGroup, includeLegacyOrigin: mode === 'single' && row.sessionGroup === null, runId: row.live.runId,
           until: new Date(at).toISOString(), sourceTime: true, order: 'desc' };
         const end = store.queryEvents({ ...filter, types: END_TYPES, agentScope: 'main', limit: 1 });
         // From shortly before its last stop: a queued message taken as that turn ended can be timed before the stop.
@@ -190,9 +229,9 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
         row.noResponse = since === null ? null : { since };
       }
       const events = row.state.kind === 'busy' && row.live?.runId ? queryAllEvents(store, {
-        sessionGroup: row.sessionGroup, runId: row.live.runId, types: ['user_prompt_submit', 'stop'], until: new Date(at).toISOString(),
+        sessionGroup: row.sessionGroup, includeLegacyOrigin: mode === 'single' && row.sessionGroup === null, runId: row.live.runId, types: ['user_prompt_submit', 'stop'], until: new Date(at).toISOString(),
       }) : [];
-      row.duration = durationOf(row, { now: at, events });
+      row.duration = durationOf(row, { now: at, events, includeLegacyOrigin: mode === 'single' && row.sessionGroup === null });
     }
     let pm2Data = null;
     try {
@@ -209,11 +248,17 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     const value = { readAt: at, mode, view: status?.view ?? null, rows, counts: countRows(rows), hasOlder,
       listKnown: status !== null && status.groupListError === null, baselineRuntime,
       instance: { runtimeHealth: status?.runtimeHealth ?? null, supervisorPaused: status?.supervisorPaused ?? null, accounts: accountsCache.accounts,
-        pool, services, system, autoRestarts: { count: restarts } },
+        pool, services, system, sessionModeStatus, autoRestarts: { count: restarts } },
       overrides: ov.ok ? ov.data : null, sources };
-    value.attention = buildAttention(value, { channelDownCounter, pm2Data });
-    for (const row of rows) row.attention = value.attention.problems.filter(problem =>
-      problem.group === row.sessionGroup || problem.groups?.includes(row.sessionGroup));
+    // Projection evidence is shared with the object APIs, but is not an extra
+    // public copy of the event catalog or slot owners.
+    Object.defineProperty(value, 'groupEvidence', { value: { activations, positions, owners, rawGroups } });
+    const channels = new Set(rows.flatMap(row => row.c4?.componentName ? [row.c4.componentName] : []));
+    if (services) services.channels = [...channels].map(channel => {
+      const service = 'zylos-' + channel;
+      return { channel, service, status: pm2Data.processes.find(process => process.name === service)?.pm2_env?.status ?? null,
+        down: channelDownCounter.get(service) >= 2 };
+    });
     value.rows = sortRows(rows);
     return value;
   }
@@ -251,34 +296,16 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
   }
   // One group's stored message start, read only when someone opens it in the technical view. Key search puts the
   // exact key first; a first row with another key means the group was not found.
-  async function raw(key) {
+  async function raw(key, snapshot) {
+    // Keep source selection tied to the detail request's snapshot generation.
+    const rawGroups = snapshot.groupEvidence?.rawGroups;
+    if (rawGroups?.has(key)) key = rawGroups.get(key);
+    if (key === null) return { raw: null };
     const result = await cli.runC4Db(['groups', '--key-match', key, '--limit', '1', '--raw', '--json']);
     if (!result.ok) throw Object.assign(new Error('Group read failed'), { statusCode: 502, code: 'group_raw_failed', reason: 'c4_groups_failed' });
     return { raw: safeRaw(result.data.find(item => item.sessionGroup === key)?.preview?.messageRaw, sanitizer) };
   }
-  return { getSnapshot, getCachedSnapshot: () => cache?.value ?? null, hotTtlMs: () => hotTtlMs, activity, channelDownCounter, raw,
-    search: (q, at = now()) => searchGroups(q, { now: at, runC4Db: cli.runC4Db, getSnapshot, displayNames, sanitizer, namesOfTasks }) };
+  return { getSnapshot, getCachedSnapshot: () => cache?.value ?? null, hotTtlMs: () => hotTtlMs, activity, channelDownCounter, raw };
 }
 
 function source({ ok, reason, detail, readAt }) { return { ok, ...(reason ? { reason } : {}), ...(detail ? { detail } : {}), readAt }; }
-
-const WORKBENCH_RAW = /^\/api\/workbench\/groups\/([^/]+)\/raw$/;
-
-/** Shared by the HTTP routes; authentication is owned by the existing API gate. */
-export async function workbenchResponse(service, pathname, searchParams) {
-  if (pathname === '/api/workbench/groups') {
-    const snapshot = await service.getSnapshot();
-    return searchParams.get('view') === 'summary' ? { readAt: snapshot.readAt, mode: snapshot.mode,
-      view: snapshot.view, counts: snapshot.counts, pool: { used: snapshot.instance.pool.used, capacity: snapshot.instance.pool.capacity }, hasOlder: snapshot.hasOlder } : snapshot;
-  }
-  if (pathname === '/api/workbench/groups/search') return service.search(searchParams.get('q'));
-  if (pathname === '/api/workbench/activity') return service.activity(searchParams.get('range'));
-  const raw = pathname.match(WORKBENCH_RAW);
-  if (raw) {
-    let key;
-    try { key = decodeURIComponent(raw[1]); } catch {}
-    if (key !== 'origin' && !validKey(key)) throw Object.assign(new Error('Invalid session group'), { statusCode: 400, code: 'SESSION_GROUP_INVALID' });
-    return service.raw(key);
-  }
-  return null;
-}

@@ -11,7 +11,7 @@ const publicDir = path.resolve(fileURLToPath(new URL('../../skills/dashboard/pub
 const primaryPath = '/_assets/i18n/zh.json';
 const workbenchPath = '/_assets/i18n/wb.zh.json';
 const observerPath = '/api/observer/status';
-const groupsPath = '/api/workbench/groups';
+const groupsPath = '/api/groups/running';
 const readPack = name => JSON.parse(fs.readFileSync(path.join(publicDir, 'i18n', name), 'utf8'));
 
 export async function runStartupTimeoutBrowser(sandbox, scenario) {

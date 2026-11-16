@@ -529,7 +529,7 @@ async function collectRollout(f, name, lines, { passes = 1 } = {}) {
   fs.writeFileSync(file, lines.map(line => JSON.stringify(line)).join('\n') + '\n');
   const mapping = { transcript_path: file, session_id: 'thread-1', session_group: GROUP, run_id: 'r1' };
   f.store.insertUsageTranscript({ ...mapping, runtime: 'codex' }, new Date(T0).toISOString());
-  const transcripts = { snapshot: { listKnown: true }, currentOriginMapping: () => null, isOriginCurrent: () => false,
+  const transcripts = { snapshot: { listKnown: true }, isOriginCurrent: () => false,
     async collect(runtime, callback) { return (await callback(mapping, false)).written; } };
   for (let pass = 0; pass < passes; pass++) await new CodexRolloutCollector(f.store, { modelPrices: {} }, { transcripts }).collect();
   return file;

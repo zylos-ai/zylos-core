@@ -72,20 +72,40 @@ export function usageBucketSql(intervals, column = 'timestamp') {
   return { sql: intervals.length ? branch(0, intervals.length - 1) : 'NULL', params };
 }
 
-export function costRows(store, { since, until, bucket = 'day', tz = 'UTC', byModel = false, intervals }) {
+export function costRows(store, { since, until, bucket = 'day', tz = 'UTC', byModel = false, intervals, group }) {
   const groups = usageBucketSql(bucket === 'total' ? [] : (intervals ?? usageIntervals({ since, until, bucket, tz })));
+  const filter = group === undefined ? '' : " AND COALESCE(NULLIF(session_group, ''), 'origin') = @group";
   return store.db.prepare(`
     SELECT runtime, ${groups.sql} AS at,
       ${byModel ? 'model,' : ''} SUM(cost) AS value
     FROM (
       SELECT runtime, timestamp, json_extract(dimensions, '$.model') AS model, metric_value AS cost FROM metric_points
-      WHERE metric_name = 'api_request_cost' AND timestamp BETWEEN @since AND @until
+      WHERE metric_name = 'api_request_cost' AND timestamp BETWEEN @since AND @until${filter}
       UNION ALL
       SELECT runtime, timestamp, json_extract(dimensions, '$.model') AS model, json_extract(dimensions, '$.cost') AS cost FROM metric_points
       WHERE metric_name = 'usage_event' AND json_extract(dimensions, '$.cost') IS NOT NULL
-        AND timestamp BETWEEN @since AND @until
+        AND timestamp BETWEEN @since AND @until${filter}
     ) GROUP BY runtime, at${byModel ? ', model' : ''} ORDER BY at, runtime${byModel ? ', model' : ''}
-  `).all({ since, until, ...groups.params });
+  `).all({ since, until, ...groups.params, ...(group === undefined ? {} : { group }) });
+}
+
+// Both stored forms represent request usage. Legacy rows have no group and
+// belong to Origin; token counts come from dimensions, never cache percentages.
+export function usageTokenRows(store, { since, until, bucket = 'day', tz = 'UTC', intervals, group }) {
+  const groups = usageBucketSql(bucket === 'total' ? [] : (intervals ?? usageIntervals({ since, until, bucket, tz })));
+  const filter = group === undefined ? '' : " AND COALESCE(NULLIF(session_group, ''), 'origin') = @group";
+  return store.db.prepare(`
+    SELECT runtime, ${groups.sql} AS at,
+      SUM(CASE WHEN metric_name = 'api_request_tokens'
+        THEN COALESCE(json_extract(dimensions, '$.total_input'), metric_value, 0)
+        ELSE COALESCE(json_extract(dimensions, '$.total_input'), 0) END) AS inputTokens,
+      SUM(COALESCE(json_extract(dimensions, '$.output'), 0)) AS outputTokens,
+      SUM(COALESCE(json_extract(dimensions, '$.cache_read'), 0)) AS cacheReadTokens
+    FROM metric_points
+    WHERE metric_name IN ('usage_event', 'api_request_tokens')
+      AND timestamp BETWEEN @since AND @until${filter}
+    GROUP BY runtime, at ORDER BY at, runtime
+  `).all({ since, until, ...groups.params, ...(group === undefined ? {} : { group }) });
 }
 
 export function summarizeCosts(rows) {
@@ -96,14 +116,4 @@ export function summarizeCosts(rows) {
     byRuntime[row.runtime] = (byRuntime[row.runtime] || 0) + row.value;
   }
   return { total, byRuntime };
-}
-
-export function costSummary(store, { tz, now = new Date() } = {}) {
-  const timezone = resolveUsageTimezone(tz);
-  tz = timezone.tz;
-  const weekBounds = usageBounds({ range: '7d', tz, now });
-  const intervals = usageIntervals(weekBounds);
-  const week = costRows(store, { ...weekBounds, intervals });
-  const todayAt = intervals.at(-1)?.at;
-  return { ...timezone, today: summarizeCosts(week.filter(row => row.at === todayAt)), sevenDay: summarizeCosts(week) };
 }

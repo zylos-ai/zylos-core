@@ -32,10 +32,9 @@ test('Core usage is accepted independently of missing status, legacy global file
   assert.equal(f.rows[0].dimensions.context_pct, 35);
   assert.equal(f.rows[0].dimensions.run_id, 'run1');
   assert.equal(f.rows[0].timestamp, new Date(f.sample.zylos.capturedAt).toISOString());
-  assert.equal(f.collector.getRuntimeInfo().model_id, 'model1');
 });
 
-for (const reason of ['missing', 'identity_mismatch', 'stale', 'identity_changed', 'not_running', 'starting']) test(`Core ${reason} usage never falls back to the global sample or cached runtime info`, async t => {
+for (const reason of ['missing', 'identity_mismatch', 'stale', 'identity_changed', 'not_running', 'starting']) test(`Core ${reason} usage never falls back to the global sample or cached usage`, async t => {
   const f = fixture(t); f.write(); await f.collector.collect();
   if (reason === 'missing') fs.unlinkSync(path.join(f.groupDir, 'statusline.json'));
   if (reason === 'identity_mismatch') { f.sample.zylos.runId = 'old-run'; f.write(); }
@@ -45,7 +44,6 @@ for (const reason of ['missing', 'identity_mismatch', 'stale', 'identity_changed
   if (reason === 'starting') f.identity.ready = false;
   assert.equal((await f.collector.collect()).written, 0);
   assert.equal(f.rows.length, 1);
-  assert.equal(f.collector.getRuntimeInfo(), null);
   assert.equal(f.health.at(-1)[3].reason, reason);
 });
 
@@ -69,7 +67,6 @@ test('Core reader selects live Codex rollout instead of Claude/global statusline
   assert.equal(f.rows[0].runtime, 'codex');
   assert.equal(f.rows[0].dimensions.context_pct, 20);
   assert.equal(f.rows[0].dimensions.rate_limit, undefined);
-  assert.equal(f.collector.getRuntimeInfo(), null);
 });
 
 test('default loader follows Core mode for single and multi observations rather than Dashboard baseline runtime', async t => {
@@ -111,17 +108,15 @@ test('stop waits for an in-flight Core read before the caller closes the store',
   assert.equal(finished, true);
 });
 
-test('transient invalid read preserves dedup and valid recovery restores runtime and liveness', async t => {
+test('transient invalid read preserves dedup and valid recovery restores liveness', async t => {
   const f = fixture(t); f.write();
   await f.collector.collect();
   f.setObserver(() => { throw new Error('temporary read failure'); });
   await f.collector.collect();
-  assert.equal(f.collector.getRuntimeInfo(), null);
   assert.equal(f.health.at(-1)[2], 'stale');
   f.setObserver(() => ({ ...f.identity }));
   assert.equal((await f.collector.collect()).written, 0);
   assert.equal(f.rows.length, 1);
-  assert.equal(f.collector.getRuntimeInfo().model_id, 'model1');
   assert.equal(f.health.at(-1)[2], 'healthy');
 });
 

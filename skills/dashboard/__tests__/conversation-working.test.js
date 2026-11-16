@@ -1,3 +1,4 @@
+import { conversationDetail } from './helpers/conversation-object-api.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
@@ -26,12 +27,10 @@ function fixture(t) {
     request: async path => {
       assert.ok(reads.length < 300, 'request capture is bounded'); reads.push({ path, at: time });
       const u = new URL(path, 'http://fixture');
-      if (path === '/api/session-mode') return { data: { sessionMode: 'multi' } };
-      if (u.pathname === '/api/workbench/groups') {
+      if (path === '/api/instance') return { session_mode: { sessionMode: 'multi' }, runtimeHealth: { claude: { health: 'ok' } } };
+      if (u.pathname === '/api/groups/dashboard%3Aa') {
         if (fail) throw new Error('offline');
-        return { listKnown: true, sources: { status: { ok: true, readAt: time } },
-          instance: { runtimeHealth: { claude: { health: 'ok' } } },
-          rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, working }] };
+        return conversationDetail({ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, working }, { readAt: time });
       }
       if (u.pathname.endsWith('/send')) return { stored: true, conversationId: 'g:A' };
       if (u.pathname === '/api/chat/conversations') return { items: [{ id: 'g:A', session_group: 'dashboard:a', stamp: 1 }], nextCursor: null };
@@ -41,7 +40,7 @@ function fixture(t) {
       return { conversation: { id: 'g:A', sessionGroup: 'dashboard:a', state: 'active' }, stored: false };
     } });
   t.after(() => { state.destroy(); assert.equal(tasks.size, 0); });
-  return { state, reads, tasks, document, groupReads: () => reads.filter(row => row.path === '/api/workbench/groups'),
+  return { state, reads, tasks, document, groupReads: () => reads.filter(row => row.path.split('?')[0] === '/api/groups/dashboard%3Aa'),
     setWorking: value => { working = value; }, setFailure: value => { fail = value; },
     async start() { await state.open(); await state.select('g:A'); await flush(); },
     async visibility(visible) { document.hidden = !visible; document.visibilityState = visible ? 'visible' : 'hidden'; for (const fn of listeners) fn(); await flush(); },
@@ -76,18 +75,18 @@ test('working reads stop while hidden or on another tab and resume on visibility
   await f.state.setTab('external'); await f.advance(40000); assert.equal(f.groupReads().length, 2);
 });
 
-test('working is refreshed two seconds after a stored send even with healthy runtime', async t => {
+test('working is refreshed immediately after a stored send and keeps the busy cadence', async t => {
   const f = fixture(t); await f.start(); f.state.setInput('hello');
   await f.state.send(); await flush();
-  assert.equal(f.groupReads().length, 1);
-  await f.advance(1999); assert.equal(f.groupReads().length, 1);
-  await f.advance(1); assert.equal(f.groupReads().length, 2);
+  assert.equal(f.groupReads().length, 2);
+  await f.advance(4999); assert.equal(f.groupReads().length, 2);
+  await f.advance(1); assert.equal(f.groupReads().length, 3);
 });
 
 test('working state opens detail on timeline before its first draw and leaves the board row unchanged', async t => {
   const document = createDocument(), root = document.createElement('div');
   const working = { on: true, since: 1000, main: null, tools: 0, subagents: { count: 2, since: 1000, lastActivityAt: 2000 } };
-  const row = { sessionGroup: 'dashboard:a', presence: 'running', live: { runId: 'run' }, state: { kind: 'idle' }, working };
+  const row = { sessionGroup: 'dashboard:a', presence: 'running', live: { runId: 'run' }, state: { kind: 'working' }, working };
   const detail = createGroupDetail({ root, document, fetch: async path => ({ ok: true, json: async () => path.includes('/runs')
     ? { runs: [], totalRuns: 0, totalEvents: 0 } : path.includes('/messages') ? { messages: [] } : { events: [] } }) });
   t.after(() => detail.destroy());
@@ -96,7 +95,7 @@ test('working state opens detail on timeline before its first draw and leaves th
   assert.equal(allNodes(root).some(node => node.classList.contains('wb-detail-timeline')), true);
   assert.equal(allNodes(root).some(node => node.classList.contains('wb-busy')), true);
   assert.equal(allNodes(root).some(node => node.classList.contains('wi-now')), true);
-  assert.equal(row.state.kind, 'idle');
+  assert.equal(row.state.kind, 'working');
   await opening;
 });
 
@@ -107,7 +106,7 @@ test('working timeline selection survives the side panel placeholder and reuses 
   const row = { sessionGroup: 'dashboard:a', presence: 'running', live: { runId: 'run' }, state: { kind: 'idle' },
     working: { on: false, since: null, main: null, tools: 0, subagents: null } };
   const side = createGroupSide({ document, setTimer: () => ++timers, clearTimer: () => {}, fetch: async path => ({ ok: true,
-    json: async () => path === '/api/workbench/groups' ? { rows: [row], listKnown: true }
+    json: async () => path.split('?')[0] === '/api/groups/dashboard%3Aa' ? conversationDetail(row)
       : path.includes('/runs') ? { runs: [], totalRuns: 0, totalEvents: 0 } : path.includes('/messages') ? { messages: [] } : { events: [] } }) });
   parent.append(side.element); t.after(() => side.destroy());
   await side.show('dashboard:a', { tab: 'timeline' });
@@ -135,14 +134,14 @@ test('working timeline summary retains each start time and disappears when work 
   assert.ok(line, 'busy timeline has a current-work summary');
   assert.equal(line.textContent, '现在：正在工作 · 00:20 起；后台子任务 2 个 · 00:10 起 · 最近一步 00:30');
   assert.equal(allNodes(line).some(node => node.classList.contains('wi-now-sub')), true);
-  await detail.updateSnapshot({ rows: [{ ...row, working: { on: false, since: null, main: null, tools: 0, subagents: null } }], listKnown: true });
+  await detail.updateSnapshot({ rows: [{ ...row, state: { kind: 'idle' }, duration: 777, working: { on: false, since: null, main: null, tools: 0, subagents: null } }], listKnown: true });
   assert.equal(allNodes(root).some(node => node.classList.contains('wi-now')), false, 'idle timeline has no green work summary');
 });
 
 test('working detail duration starts at the earliest current work without changing the board row', async t => {
   const { createDocument: detailDocument } = await import('./fixtures/workbench-dom.js');
   const document = detailDocument(), root = document.createElement('div');
-  const row = { sessionGroup: 'dashboard:a', presence: 'running', live: { runId: 'run' }, state: { kind: 'idle' }, duration: 777,
+  const row = { sessionGroup: 'dashboard:a', presence: 'running', live: { runId: 'run' }, state: { kind: 'working', since: new Date(120000).toISOString() }, duration: 780,
     working: { on: true, since: 120000, main: { since: 600000 }, tools: 0,
       subagents: { count: 1, since: 120000, lastActivityAt: 800000 } } };
   const detail = createGroupDetail({ root, document, now: () => 900000, fetch: async path => ({ ok: true,
@@ -150,9 +149,9 @@ test('working detail duration starts at the earliest current work without changi
   t.after(() => detail.destroy());
   await detail.open('dashboard:a', { rows: [row], listKnown: true });
   assert.equal(allNodes(root).find(node => node.classList.contains('wb-dur'))?.textContent, '13m');
-  assert.equal(row.duration, 777);
-  assert.equal(row.state.kind, 'idle');
-  await detail.updateSnapshot({ rows: [{ ...row, working: { on: false, since: null, main: null, tools: 0, subagents: null } }], listKnown: true });
+  assert.equal(row.duration, 780);
+  assert.equal(row.state.kind, 'working');
+  await detail.updateSnapshot({ rows: [{ ...row, state: { kind: 'idle' }, duration: 777, working: { on: false, since: null, main: null, tools: 0, subagents: null } }], listKnown: true });
   const head = allNodes(root).find(node => node.classList.contains('wb-group-head'));
   assert.equal(allNodes(head).find(node => node.classList.contains('wb-dur'))?.textContent, '12m');
 });

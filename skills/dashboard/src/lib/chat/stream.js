@@ -13,7 +13,7 @@ export function handleChatStream(req, res, url, { auth, config, hub, observer })
   try { subscription = parseChatSubscription(url.searchParams); }
   catch (err) { sendJson(res, err.statusCode || 400, { error: err.code || 'invalid_chat_subscription' }); return true; }
   const principal = `${req._authContext.kind}:${req._authContext.principalId}`;
-  if (!hub.canAddChatClient(principal)) return false;
+  if (!hub.canAddChatClient(principal)) { sendJson(res, 429, { error: 'chat_connection_limit' }); return true; }
   let unsubscribe;
   const client = hub.addClient(res, validate, { chatPrincipal: principal, onClose: () => unsubscribe?.() });
   unsubscribe = observer.subscribe(subscription, {

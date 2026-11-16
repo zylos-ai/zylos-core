@@ -11,7 +11,11 @@ import { AuthGate } from '../../src/lib/auth.js';
 import { C4Reader } from '../../src/lib/c4-reader.js';
 import { FleetProxy } from '../../src/lib/fleet-proxy.js';
 import { sendJson, sendHtml, serveStatic } from '../../src/lib/http.js';
-import { createGroupSnapshot, workbenchResponse } from '../../src/lib/workbench/group-snapshot.js';
+import { createGroupSnapshot } from '../../src/lib/workbench/group-snapshot.js';
+import { workbenchInstanceAnswer } from '../fixtures/workbench-browser-api.js';
+import { createGroupsApi } from '../../src/lib/workbench/groups-api.js';
+import { workbenchGroupDetailKey, workbenchFailure } from '../../src/lib/workbench/group-http.js';
+import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText } from '../../public/js/wb/auto-name.js';
 import { createDisplayNames } from '../../src/lib/workbench/display-names.js';
 import { createQueryHandlers } from '../../../comm-bridge/scripts/c4-v2-cli.js';
 import { ChatConversations, isChatLocalIdUsed } from '../../src/lib/chat/conversations.js';
@@ -124,17 +128,19 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
     if (args[0] === 'group-queues') return { ok: true, data: query.groupQueues() };
     if (args[0] !== 'groups') throw Error('Unexpected workbench Core query');
     return { ok: true, data: query.groups({ ...(argument('--active-since') ? { activeSince: Number(argument('--active-since')) } : {}),
-      ...(argument('--key-match') ? { keyMatch: argument('--key-match') } : {}), ...(argument('--limit') ? { limit: Number(argument('--limit')) } : {}) }) };
+      ...(argument('--key-match') ? { keyMatch: argument('--key-match') } : {}), ...(argument('--limit') ? { limit: Number(argument('--limit')) } : {}), ...(args.includes('--raw') ? { raw: true } : {}) }) };
   };
   // Runtime observation is deliberately unavailable in this HTTP-only fixture;
   // actual C4 queue/history, dashboard event store and sanitizer remain real.
+  const displayNames = createDisplayNames({ store, zylosDir: zylos, runC4Db });
   workbench = createGroupSnapshot({ zylosDir: zylos, store, c4Reader: reader,
     cli: { runC4Db, readOverrides: async () => ({ ok: false, reason: 'fixture_no_runtime' }) },
-    displayNames: createDisplayNames({ store, zylosDir: zylos, runC4Db }),
+    displayNames,
     loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => ({ mode: readMode() }) };
       throw Error('No runtime observations in this private HTTP fixture');
     }, readConfigRuntime: () => 'claude' });
+  const groupsApi = createGroupsApi({ workbench });
   const cookie = `private-${name}-${crypto.randomUUID()}-browser`;
   const tokens = { read: `zylos_st_${crypto.randomBytes(32).toString('hex')}`, admin: `zylos_st_${crypto.randomBytes(32).toString('hex')}` };
   store.insertSession(digest(cookie), Date.now());
@@ -155,8 +161,25 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
       if (await handleChatConversations(req, res, url, common)) return;
       if (await handleChatAnswers(req, res, url, common)) return;
       if (await handleChatHistory(req, res, url, common)) return;
-      if (req.method === 'GET' && ['/api/workbench/groups', '/api/workbench/groups/search', '/api/workbench/activity'].includes(url.pathname)) {
-        sendJson(res, 200, await workbenchResponse(workbench, url.pathname, url.searchParams)); return;
+      if (req.method === 'GET' && ['/api/groups/counts', '/api/groups/running', '/api/groups/offline', '/api/groups/search', '/api/groups/activity'].includes(url.pathname)) {
+        sendJson(res, 200, await groupsApi[url.pathname.split('/').at(-1)](url.searchParams)); return;
+      }
+      if (req.method === 'GET' && url.pathname === '/api/groups/naming-prompt') {
+        const todo = await displayNames.listNames({ unnamed: true, activeSinceMs: 3 * 86400000 });
+        const script = path.join(zylos, '.claude', 'skills', 'dashboard', 'scripts', 'group-name.js');
+        sendJson(res, 200, { text: namePromptText(script, NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH),
+          todo: todo.map(row => row.fallbackName) }); return;
+      }
+      if (req.method === 'GET' && url.pathname === '/api/groups/runtime-overrides') {
+        // This HTTP-only fixture has no runtime overrides or runtime CLI.
+        sendJson(res, 200, { ...(url.searchParams.has('q') ? {} : { runtimeTotal: 0 }), runtime: [], nextAfter: null }); return;
+      }
+      if (req.method === 'GET' && /^\/api\/groups\/[^/]+$/.test(url.pathname)) {
+        sendJson(res, 200, await groupsApi.detail(workbenchGroupDetailKey(url.pathname.split('/').at(-1)), { include: url.searchParams })); return;
+      }
+      if (req.method === 'GET' && url.pathname === '/api/instance') {
+        const snapshot = await workbench.getSnapshot();
+        sendJson(res, 200, { ...workbenchInstanceAnswer({ ...snapshot, mode: readMode() }, Date.now()), agent: { name: 'Fixture' } }); return;
       }
       if (await extraHandler?.(req, res, url, fixture)) return;
       if (['/', '/index.html', '/chat'].includes(url.pathname)) {
@@ -165,7 +188,7 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
       }
       if (serveStatic(req, res, publicDir)) return;
       sendJson(res, 404, { error: 'not_found' });
-    } catch (error) { sendJson(res, 500, { error: error.code || error.message }); }
+    } catch (error) { workbenchFailure(res, error); }
   });
   const address = await sandbox.startHttp(server);
   const base = typeof address === 'string' ? address : `http://127.0.0.1:${server.address().port}`;

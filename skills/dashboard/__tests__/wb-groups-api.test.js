@@ -5,10 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import Database from '../../comm-bridge/scripts/sqlite-driver.js';
+import { guardDatabase } from '../../comm-bridge/scripts/sqlite-schema.js';
+import * as c4Schema from '../../comm-bridge/scripts/c4-schema.js';
+import { createStore as createC4Store } from '../../comm-bridge/scripts/c4-v2-store.js';
 import { collectStatus } from '../../../cli/lib/status-view.js';
 import { RestartRequestStore } from '../../activity-monitor/scripts/restart-request-store.js';
-import { createGroupSnapshot, systemSample, workbenchResponse } from '../src/lib/workbench/group-snapshot.js';
+import { createGroupSnapshot, systemSample } from '../src/lib/workbench/group-snapshot.js';
 import { createCoreCli } from '../src/lib/workbench/core-cli.js';
+import { createGroupsApi, groupKey } from '../src/lib/workbench/groups-api.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
 import { AuthGate } from '../src/lib/auth.js';
 import { Store } from '../src/lib/store.js';
@@ -77,7 +81,119 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
     failUnexpected: value => { unexpected = value; }, now: () => clock };
 }
 
-// Real Core status -> Workbench projection/attention, isolated store and fake
+// Collection integration: actual C4 queue/catalog SQL over a private, read-only
+// SQLite connection -> actual snapshot and public API projections in both modes.
+// Run for queue, preview or group projection changes; skip unrelated UI edits.
+// The official runner supplies private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR.
+// No processes, timers, network or tmux sockets start; fixture teardown closes
+// the DB before removing its root, including on assertion failure.
+test('single Origin aggregates channel queues and latest inbound while multi groups stay isolated', async t => {
+  const f = fixture(t, { groupKeys: ['telegram:first', 'lark:second', 'origin'] });
+  const file = path.join(f.root, 'c4.db'), writer = new Database(file);
+  try {
+    guardDatabase(writer, c4Schema);
+    const seed = writer.prepare('INSERT INTO conversations(id,direction,channel,content,status,session_group,priority,timestamp) VALUES(?,?,?,?,?,?,?,?)');
+    for (const row of [
+      [1, 'in', 'telegram', 'Oldest queued', 'pending', 'telegram:first', 1, f.now() - 9000],
+      [2, 'in', 'lark', 'Second queued', 'pending', 'lark:second', 1, f.now() - 5000],
+      [3, 'in', 'lark', '[Release bot] Latest received ?token=private-value', 'delivered', 'lark:second', 3, f.now() - 1000],
+      [4, 'in', 'telegram', 'Being delivered', 'running', 'telegram:first', 3, f.now() - 3000],
+      [5, 'out', 'telegram', 'Newer outbound is not received', 'delivered', 'telegram:first', 3, f.now()],
+      [6, 'in', 'internal', 'Internal protocol is not a preview', 'delivered', 'origin', 3, f.now()],
+      [7, 'in', 'scheduler', '[Scheduled Task: origin-task] Origin queued', 'pending', 'origin', 3, f.now() - 2000],
+    ]) seed.run(...row.slice(0, -1), new Date(row.at(-1)).toISOString());
+    writer.exec('INSERT INTO group_heads(session_group,head_id) SELECT session_group,max(id) FROM conversations GROUP BY session_group');
+    createC4Store(writer).setDrainFence('*');
+  } finally { writer.close(); }
+  const before = fs.readFileSync(file), db = new Database(file, { readonly: true });
+  f.addCleanup(() => {
+    db.close();
+    assert.equal(fs.readFileSync(file).equals(before), true, 'collection leaves private C4 bytes unchanged');
+  });
+  assert.ok(f.root.startsWith(process.env.TMPDIR + path.sep));
+  for (const name of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
+    assert.ok(process.env[name]?.includes('zylos-tests-'), `${name} must belong to the official runner`);
+  }
+  console.log('Channel queue isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, database: file,
+    databaseMode: 'read-only after seed', socket: 'none', processes: 'none', timers: 'none' }));
+  const c4 = createC4Store(db);
+  f.cli.runC4Db = async args => {
+    const option = name => args.includes(name) ? args[args.indexOf(name) + 1] : undefined;
+    return { ok: true, data: args[0] === 'groups' ? c4.queries.listGroups({
+      keyMatch: option('--key-match'), limit: option('--limit') === undefined ? undefined : Number(option('--limit')),
+      raw: args.includes('--raw'),
+    }) : c4.listGroupQueues() };
+  };
+  f.live.set(null, f.live.get('telegram:first'));
+  f.setMode('single');
+  const api = createGroupsApi({ workbench: f.service });
+  const list = await api.running(), origin = list.rows[0], detail = await api.detail('origin', { include: ['raw'] });
+  const singleSnapshot = await f.service.getSnapshot();
+  assert.equal(list.rows.length, 1); assert.equal(origin.id, 'origin');
+  assert.equal(origin.flags.queued.count, 3);
+  assert.equal(origin.flags.queued.oldestAt, new Date(f.now() - 9000).toISOString());
+  assert.equal((await api.counts()).running.flags.queued, 1);
+  assert.equal(detail.queue.pending.count, 3); assert.equal(detail.queue.pending.oldestAt, f.now() - 9000);
+  assert.deepEqual(detail.queue.pending.head, { id: 1, priority: 1 }); assert.equal(detail.queue.running.count, 1);
+  assert.equal(detail.preview.text, 'Latest received ?token=[REDACTED]');
+  assert.deepEqual(detail.preview.source, { kind: 'channel' });
+  assert.equal(detail.raw, '[Release bot] Latest received ?token=[REDACTED]');
+  assert.deepEqual(detail.fence, c4.getDrainFence('*'));
+  assert.equal(detail.queue.fence, null);
+  assert.equal(detail.fence.sessionGroup, '*');
+  assert.equal(detail.state.kind, 'stopping');
+  for (const value of [singleSnapshot, list, detail]) assert.doesNotMatch(JSON.stringify(value), /rawGroups|groupEvidence|private-value/);
+  assert.equal(origin.currentAction.message, detail.preview.text);
+  assert.equal(origin.currentAction.receivedAt, new Date(f.now() - 1000).toISOString());
+  assert.deepEqual(detail.currentAction, origin.currentAction);
+  for (const [key, value] of Object.entries(origin)) assert.deepEqual(detail[key], value, `detail retains list field ${key}`);
+  f.setMode('multi'); f.advance(3000);
+  const multi = (await api.running()).rows;
+  assert.equal(multi.length, 3); assert.equal((await api.counts()).running.flags.queued, 3);
+  assert.equal((await f.service.raw('origin', singleSnapshot)).raw, detail.raw, 'source stays tied to the selected single snapshot after a new multi generation');
+  const multiOrigin = multi.find(row => row.id === 'origin');
+  assert.equal(multiOrigin.flags.queued.count, 1);
+  assert.equal(multiOrigin.currentAction.message, 'Origin queued');
+  for (const row of multi) {
+    const expanded = await api.detail(row.id, { include: [] });
+    assert.equal(row.flags.queued.count, 1); assert.equal(expanded.queue.pending.count, 1);
+    assert.deepEqual(expanded.currentAction, row.currentAction);
+    assert.equal(row.currentAction.message, row.id === 'telegram:first' ? 'Being delivered' : row.id === 'origin' ? 'Origin queued' : 'Latest received ?token=[REDACTED]');
+    assert.equal(expanded.queue.running.count, row.id === 'telegram:first' ? 1 : 0);
+  }
+});
+
+// Injected queue observations and private runner root; no DB or processes.
+// Run for aggregate queue head ordering; lower priority number wins before id.
+test('single Origin queue head uses priority before conversation id', async t => {
+  const f = fixture(t), original = f.cli.runC4Db;
+  f.setMode('single'); f.live.set(null, f.live.get('telegram:g0'));
+  f.cli.runC4Db = async args => args[0] === 'group-queues' ? { ok: true, data: { globalFence: null, groups: [
+    { sessionGroup: 'telegram:first', pending: { count: 1, oldestAt: f.now() - 2000, head: { id: 1, priority: 3 } }, running: { count: 0 } },
+    { sessionGroup: 'lark:second', pending: { count: 1, oldestAt: f.now() - 1000, head: { id: 2, priority: 1 } }, running: { count: 0 } },
+  ] } } : original(args);
+  const detail = await createGroupsApi({ workbench: f.service }).detail('origin', { include: [] });
+  assert.deepEqual(detail.queue.pending.head, { id: 2, priority: 1 });
+});
+
+// Injected channel catalog with no inbound preview, private runner root only.
+// Run for single Origin raw-source selection; no DB, processes or sockets.
+test('single Origin without a preview has no unrelated raw message', async t => {
+  const f = fixture(t), original = f.cli.runC4Db;
+  f.setMode('single'); f.live.set(null, f.live.get('telegram:g0'));
+  f.cli.runC4Db = async args => {
+    assert.equal(args.includes('--raw'), false, 'no raw source was selected');
+    const result = await original(args);
+    if (args[0] === 'groups') for (const row of result.data.groups) row.preview = null;
+    return result;
+  };
+  const detail = await createGroupsApi({ workbench: f.service }).detail('origin', { include: ['raw'] });
+  assert.equal(detail.preview, null); assert.equal(detail.raw, null);
+  assert.equal(Object.hasOwn(detail, 'rawError'), false);
+});
+
+// Real Core status -> Workbench observations, isolated store and fake
 // clock/CLI/scenes. Run for request-pause wiring; skip unrelated UI work. No
 // daemon, runtime, database or network; fixture removes its own files.
 test('request file pause crosses the status snapshot and clears after repair', async t => {
@@ -87,8 +203,8 @@ test('request file pause crosses the status snapshot and clears after repair', a
     const value = await f.service.getSnapshot(f.now(), { fresh: true });
     const paused = content !== '[]';
     assert.equal(value.instance.supervisorPaused, paused);
-    assert.equal(value.attention.reminders.some(item => item.kind === 'supervisor_paused'), paused);
-    assert.equal(value.attention.problems.some(item => item.kind === 'supervisor_paused'), false);
+    assert.equal(Object.hasOwn(value, 'attention'), false);
+    assert.ok(value.rows.every(row => !Object.hasOwn(row, 'attention')));
   }
 });
 
@@ -110,30 +226,32 @@ test('remote chat permission preserves workbench groups and search for all API s
       sessionGroupName: row.sessionGroup.split(':').slice(1).join(':'), preview: { ...row.preview, text: preview } }));
     return args.includes('--key-match') ? { ...value, data: groups } : { ...value, data: { ...value.data, groups } };
   };
-  const http = await chatHttpFixture(t, {}, { workbench: url => workbenchResponse(f.service, url.pathname, url.searchParams) });
+  const api = createGroupsApi({ workbench: f.service });
+  const http = await chatHttpFixture(t, {}, { workbench: url => api[url.pathname.split('/').at(-1)](url.searchParams) });
   for (const allowRemote of [false, true]) {
     http.config.chat.allowRemote = allowRemote;
     for (const identity of ['read', 'admin']) for (const fleet of [false, true]) {
-      const direct = await http.request({ method: 'GET', path: '/api/workbench/groups' }, { identity, fleet });
+      const direct = await http.request({ method: 'GET', path: '/api/groups/running' }, { identity, fleet });
       assert.equal(direct.status, 200);
       const value = JSON.parse(direct.text);
       for (const key of ['dashboard:local-chat', 'telegram:external']) {
-        const row = value.rows.find(row => row.sessionGroup === key);
+        const row = value.rows.find(row => row.id === key);
         assert.ok(row.state); assert.ok(Object.hasOwn(row, 'duration'));
-        assert.match(row.preview.text, /Visible summary/);
-        assert.match(row.preview.text, /REDACTED/);
-        assert.ok(row.preview.text.length > 0 && row.preview.text.length <= 80);
-        assert.doesNotMatch(row.preview.text, /sk-123456/);
+        assert.match(row.currentAction.message, /Visible summary/);
+        assert.match(row.currentAction.message, /REDACTED/);
+        assert.ok(row.currentAction.message.length > 0 && row.currentAction.message.length <= 80);
+        assert.doesNotMatch(row.currentAction.message, /sk-123456/);
+        for (const field of ['preview', 'tools', 'raw', 'live']) assert.equal(Object.hasOwn(row, field), false);
       }
-      const search = await http.request({ method: 'GET', path: '/api/workbench/groups/search?q=local-chat' }, { identity, fleet });
+      const search = await http.request({ method: 'GET', path: '/api/groups/search?q=local-chat' }, { identity, fleet });
       assert.equal(search.status, 200);
-      assert.ok(JSON.parse(search.text).rows.some(row => row.sessionGroup === 'dashboard:local-chat'));
-      assert.deepEqual(JSON.parse(search.text).rows.find(row => row.sessionGroup === 'dashboard:local-chat').preview,
-        value.rows.find(row => row.sessionGroup === 'dashboard:local-chat').preview);
-      const named = await http.request({ method: 'GET', path: '/api/workbench/groups/search?q=Private%20project' }, { identity, fleet });
+      assert.ok(JSON.parse(search.text).rows.some(row => row.id === 'dashboard:local-chat'));
+      assert.deepEqual(JSON.parse(search.text).rows.find(row => row.id === 'dashboard:local-chat').currentAction,
+        value.rows.find(row => row.id === 'dashboard:local-chat').currentAction);
+      const named = await http.request({ method: 'GET', path: '/api/groups/search?q=Private%20project' }, { identity, fleet });
       assert.equal(named.status, 200);
-      assert.ok(JSON.parse(named.text).rows.some(row => row.sessionGroup === 'dashboard:local-chat'));
-      const activity = await http.request({ method: 'GET', path: '/api/workbench/activity?range=60m' }, { identity, fleet });
+      assert.ok(JSON.parse(named.text).rows.some(row => row.id === 'dashboard:local-chat'));
+      const activity = await http.request({ method: 'GET', path: '/api/groups/activity?range=60m' }, { identity, fleet });
       assert.equal(activity.status, 200);
       assert.deepEqual(JSON.parse(activity.text), await f.service.activity('60m'));
     }
@@ -156,7 +274,7 @@ test('snapshot shares in-flight collection, caches from completion, and captures
   const results = await Promise.all([first, second, third]);
   assert.equal(results[0], results[1]); assert.equal(results[0], results[2]);
   assert.equal(f.calls.length, 3); assert.equal(f.observations.length, 2);
-  assert.deepEqual(f.calls.find(args => args[0] === 'groups'), ['groups', '--active-since', String(1800000000000 - 7 * 86400000), '--json']);
+  assert.deepEqual(f.calls.find(args => args[0] === 'groups'), ['groups', '--json']);
   assert.equal(f.calls.filter(args => args.includes('--key-match')).length, 0);
   f.advance(1000); assert.equal(await f.service.getSnapshot(), results[0]); assert.equal(f.calls.length, 3);
   f.advance(1100);
@@ -233,7 +351,7 @@ test('full and summary responses preserve metadata-only C4 and redact messages a
   console.log('Quota snapshot isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: f.root,
     PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, socket: path.join(f.root, 'tmux.sock'),
     storage: 'injected, no DB/PM2/tmux/network opened' }));
-  const value = await workbenchResponse(f.service, '/api/workbench/groups', new URLSearchParams());
+  const value = await f.service.getSnapshot();
   assert.equal(value.listKnown, true); assert.equal(value.baselineRuntime, 'claude');
   assert.equal(value.instance.pool.used, null); assert.equal(value.instance.pool.capacity, null);
   assert.equal(value.instance.pool.reason, 'pool_occupancy_unreadable');
@@ -247,9 +365,9 @@ test('full and summary responses preserve metadata-only C4 and redact messages a
   assert.equal(row.contextReason, 'usage_unreadable'); assert.equal(row.contextPct, null);
   assert.equal(JSON.stringify(value).includes('sk-123456789012345678901234'), false);
   assert.match(row.preview.text, /REDACTED/); assert.match(row.tools[0].detail, /REDACTED/);
-  const summary = await workbenchResponse(f.service, '/api/workbench/groups', new URLSearchParams('view=summary'));
-  assert.deepEqual(Object.keys(summary).sort(), ['counts', 'hasOlder', 'mode', 'pool', 'readAt', 'view']);
-  assert.deepEqual(summary.pool, { used: null, capacity: null });
+  const summary = await createGroupsApi({ workbench: f.service }).counts();
+  assert.deepEqual(Object.keys(summary).sort(), ['listKnown', 'offline', 'pool', 'readAt', 'running']);
+  assert.equal(summary.pool.used, null); assert.equal(summary.pool.capacity, null);
 });
 
 // Integration: shared PM2 snapshot projection and attention boundary. Run for
@@ -268,9 +386,10 @@ test('service totals and channel attention share exactly one PM2 sample per snap
   f.service.channelDownCounter.update(sample);
   const snapshot = await f.service.getSnapshot();
   assert.equal(reads, 1);
-  assert.deepEqual(snapshot.instance.services, { online: 1, total: 3 });
-  assert.equal(snapshot.attention.problems.find(item => item.kind === 'channel_down' && item.service === 'zylos-telegram').pm2Status, 'stopped');
-  const summary = await workbenchResponse(f.service, '/api/workbench/groups', new URLSearchParams('view=summary'));
+  assert.deepEqual(snapshot.instance.services, { online: 1, total: 3,
+    channels: [{ channel: 'telegram', service: 'zylos-telegram', status: 'stopped', down: true }] });
+  assert.equal(Object.hasOwn(snapshot, 'attention'), false);
+  const summary = await createGroupsApi({ workbench: f.service }).counts();
   assert.equal(reads, 1, 'summary uses the existing snapshot cache');
   assert.equal(Object.hasOwn(summary, 'services'), false);
   assert.equal(Object.hasOwn(summary, 'instance'), false);
@@ -278,8 +397,9 @@ test('service totals and channel attention share exactly one PM2 sample per snap
   f.advance(2100);
   const next = await f.service.getSnapshot();
   assert.equal(reads, 2);
-  assert.deepEqual(next.instance.services, { online: 2, total: 3 });
-  assert.equal(next.attention.problems.find(item => item.kind === 'channel_down' && item.service === 'zylos-telegram').pm2Status, 'online');
+  assert.deepEqual(next.instance.services, { online: 2, total: 3,
+    channels: [{ channel: 'telegram', service: 'zylos-telegram', status: 'online', down: true }] });
+  assert.equal(next.instance.services.channels[0].status, 'online');
 });
 
 // Integration: unknown PM2 samples cannot fabricate counts or break attention.
@@ -293,10 +413,11 @@ test('unreadable and malformed PM2 samples keep service counts unknown', async t
     const snapshot = await f.service.getSnapshot();
     assert.equal(calls, 1);
     assert.equal(snapshot.instance.services, null);
-    assert.equal(snapshot.attention.problems.find(item => item.kind === 'channel_down').pm2Status, null);
+    assert.equal(Object.hasOwn(snapshot, 'attention'), false);
   }
   const empty = fixture(t, { readPm2: () => ({ processes: [] }) });
-  assert.deepEqual((await empty.service.getSnapshot()).instance.services, { online: 0, total: 0 });
+  assert.deepEqual((await empty.service.getSnapshot()).instance.services, { online: 0, total: 0,
+    channels: [{ channel: 'telegram', service: 'zylos-telegram', status: null, down: false }] });
 });
 
 // Integration: the snapshot forwards the injected host sample reader. Run for overview snapshot or system sample
@@ -312,7 +433,7 @@ test('the instance carries the host sample read for this snapshot and stays unkn
   assert.deepEqual(snapshot.instance.system, systemSample(sample));
   assert.deepEqual(snapshot.instance.system, { sampledAt: 1799999990000, cpuPct: 37.5, cpuCount: 8, memUsedBytes: 2048,
     memTotalBytes: 8192, diskUsedPct: 61, diskFreeBytes: 4096 });
-  const summary = await workbenchResponse(f.service, '/api/workbench/groups', new URLSearchParams('view=summary'));
+  const summary = await createGroupsApi({ workbench: f.service }).counts();
   assert.equal(Object.hasOwn(summary, 'instance'), false, 'the summary view stays without host details');
   for (const read of [() => { throw new Error('read failed'); }, () => null]) {
     const unknown = fixture(t, { readSystem: read });
@@ -326,8 +447,8 @@ test('the instance carries the host sample read for this snapshot and stays unkn
 test('empty pool samples are valid snapshots and summaries with unknown occupancy', async t => {
   const f = fixture(t, { noSample: true });
   const value = await f.service.getSnapshot(); assert.equal(value.instance.pool.used, null);
-  const summary = await workbenchResponse(f.service, '/api/workbench/groups', new URLSearchParams('view=summary'));
-  assert.deepEqual(summary.pool, { used: null, capacity: null });
+  const summary = await createGroupsApi({ workbench: f.service }).counts();
+  assert.equal(summary.pool.used, null); assert.equal(summary.pool.capacity, null);
 });
 
 // Integration: per-source failure projection; run for snapshot source/error changes;
@@ -339,7 +460,9 @@ for (const failure of ['statusError', 'modeError', 'c4Error', 'queueError', 'ove
     if (failure === 'modeError') assert.equal(value.mode, 'unreadable');
     if (failure === 'statusError') {
       assert.ok(value.rows.every(row => row.state.kind === 'unknown'));
-      assert.ok(value.attention.problems.some(item => item.source === 'status_unreadable'));
+      assert.equal(value.sources.status.reason, 'status_unreadable');
+      const running = await createGroupsApi({ workbench: f.service }).running();
+      assert.ok(running.rows.every(row => row.flags.unreadable.reasons.includes('status_unreadable')));
     }
     if (failure === 'c4Error') { assert.equal(value.hasOlder, null); assert.equal(value.sources.c4.reason, 'c4_groups_failed'); }
     if (failure === 'queueError') assert.ok(value.rows.every(row => row.queue.known === false));
@@ -439,14 +562,13 @@ test('read-scoped API authentication permits new routes while unauthenticated re
     cleanupSessions() {}, cleanupExpiredApiSessions() {},
   });
   t.after(() => clearInterval(gate._cleanupTimer));
-  const service = { getSnapshot: async () => ({ rows: [] }), search: async () => ({ rows: [] }), raw: async () => ({ raw: null }) };
-  for (const pathname of ['/api/workbench/groups', '/api/workbench/groups/search', '/api/workbench/groups/telegram%3Ag0/raw']) {
+  for (const pathname of ['/api/groups/running', '/api/groups/search', '/api/groups/telegram%3Ag0']) {
     for (const authorized of [false, true]) {
       const res = { headers: {}, setHeader(key, value) { this.headers[key] = value; }, getHeader(key) { return this.headers[key]; },
         writeHead(status) { this.status = status; }, end(body) { this.body = body; } };
       const req = { method: 'GET', headers: authorized ? { authorization: `Bearer ${token}` } : {} };
       const handled = await gate.handle(req, res, new URL(`http://fixture${pathname}`));
-      if (!handled) { res.status = 200; res.body = JSON.stringify(await workbenchResponse(service, pathname, new URLSearchParams())); }
+      if (!handled) res.status = 200;
       assert.equal(res.status, authorized ? 200 : 401);
     }
   }
@@ -604,7 +726,7 @@ test('full snapshot and activity cycle leaves C4 and Dashboard event storage unc
 // Integration: source-envelope and row-enrichment boundaries. Run for Core input,
 // privacy or snapshot changes; skip rendering-only changes. Owned temporary roots,
 // injected CLI/reader adapters, no live tmux/PM2/network/children; fixture cleanup.
-test('snapshot keeps global fences and runtime authentication attention on affected rows', async t => {
+test('snapshot keeps global fences and instance authentication observations without reminder lists', async t => {
   const f = fixture(t), normal = f.cli.runC4Db;
   const globalFence = { reason: null, createdAt: f.now() / 1000 - 20 };
   f.cli.runC4Db = async args => args[0] === 'group-queues'
@@ -613,8 +735,11 @@ test('snapshot keeps global fences and runtime authentication attention on affec
   const snapshot = await f.service.getSnapshot(), row = snapshot.rows.find(item => item.sessionGroup === 'telegram:g0');
   assert.deepEqual(row.fence, globalFence);
   assert.equal(row.wait.kind, 'fenced'); assert.equal(row.wait.fenceReason, 'mode_switch');
-  assert.ok(row.attention.some(item => item.kind === 'auth_failed' && item.runtime === 'claude'));
-  assert.ok(row.attention.find(item => item.kind === 'auth_failed').groups.includes(row.sessionGroup));
+  assert.equal(snapshot.instance.runtimeHealth.claude.health, 'auth_failed');
+  const projected = (await createGroupsApi({ workbench: f.service }).running()).rows.find(item => item.id === row.sessionGroup);
+  assert.equal(projected.state.kind, 'stopping');
+  const detail = await createGroupsApi({ workbench: f.service }).detail(row.sessionGroup, { include: [] });
+  assert.equal(Object.hasOwn(detail, 'attention'), false);
 });
 
 // Integration: malformed tool input and live-error privacy boundaries. Run when
@@ -715,7 +840,7 @@ test('inbound read failures preserve cells, expose a source reason and remain un
   const recovered = await f.service.activity('60m');
   assert.ok(recovered.groups['telegram:g0']);
   assert.equal(Object.hasOwn(recovered, 'inboundError'), false);
-  await assert.rejects(workbenchResponse(f.service, '/api/workbench/activity', new URLSearchParams()), { code: 'invalid_range', statusCode: 400 });
+  await assert.rejects(f.service.activity(undefined), { code: 'invalid_range', statusCode: 400 });
 });
 
 // Integration: real Store queries plus snapshot-to-bucket projection. Run for
@@ -924,7 +1049,7 @@ for (const mode of ['multi', 'single']) test(`Origin read errors are redacted in
   const original = f.reader.readSessionState;
   const secret = 'sk-123456789012345678901234', raw = `Origin read failed ${secret} person@example.com`;
   f.reader.readSessionState = key => (mode === 'single' || key === 'origin') ? Promise.reject(new Error(raw)) : original(key);
-  const snapshot = await workbenchResponse(f.service, '/api/workbench/groups', new URLSearchParams());
+  const snapshot = await f.service.getSnapshot();
   const origin = snapshot.rows.find(row => row.origin);
   assert.equal(origin.live.error.code, 'READ_FAILED');
   assert.match(origin.live.error.message, /REDACTED/); assert.match(origin.live.error.message, /EMAIL/);
@@ -994,6 +1119,7 @@ test('group thresholds distinguish the default alias from a fixed version overri
 // per-group stored-message read or its route; skip rendering-only edits.
 test('a group\'s stored message is read on request, for that exact group, redacted', async t => {
   const f = fixture(t), secret = 'sk-' + 'r'.repeat(32), reads = [];
+  const snapshot = await f.service.getSnapshot();
   const stored = (sessionGroup, messageRaw) => ({ sessionGroup, preview: { message: 'x', messageSource: { kind: 'header' }, messageRaw } });
   // Key search puts the exact key first; without one, its single row is a newer group containing the key.
   const groups = { 'telegram:g1': stored('telegram:g1', '[Bot] line one\nuse ' + secret), origin: stored('origin', '[Scheduled Task: t1] check') };
@@ -1002,17 +1128,17 @@ test('a group\'s stored message is read on request, for that exact group, redact
     const key = args[args.indexOf('--key-match') + 1];
     return { ok: true, readAt: f.now(), data: [groups[key] ?? stored(key + '0', 'other group')] };
   };
-  const value = await workbenchResponse(f.service, '/api/workbench/groups/telegram%3Ag1/raw', new URLSearchParams());
+  const value = await f.service.raw('telegram:g1', snapshot);
   assert.deepEqual(value, { raw: '[Bot] line one\nuse [REDACTED]' });
   assert.deepEqual(reads, [['groups', '--key-match', 'telegram:g1', '--limit', '1', '--raw', '--json']]);
-  assert.deepEqual(await f.service.raw('telegram:g2'), { raw: null }, 'a group not found has no stored message');
+  assert.deepEqual(await f.service.raw('telegram:g2', snapshot), { raw: null }, 'a group not found has no stored message');
   // Scheduled tasks often land in the origin group, whose key is not a channel key.
-  assert.deepEqual(await workbenchResponse(f.service, '/api/workbench/groups/origin/raw', new URLSearchParams()), { raw: '[Scheduled Task: t1] check' });
+  assert.deepEqual(await f.service.raw('origin', snapshot), { raw: '[Scheduled Task: t1] check' });
   f.cli.runC4Db = async args => { reads.push(args); return { ok: false, reason: 'c4_groups_failed', readAt: f.now() }; };
-  await assert.rejects(f.service.raw('telegram:g1'), { statusCode: 502, code: 'group_raw_failed' });
+  await assert.rejects(f.service.raw('telegram:g1', snapshot), { statusCode: 502, code: 'group_raw_failed' });
   const before = reads.length;
   for (const bad of ['%E0%A4%A', '--x', 'a%20b', 'tg%3A']) {
-    await assert.rejects(workbenchResponse(f.service, `/api/workbench/groups/${bad}/raw`, new URLSearchParams()), { statusCode: 400, code: 'SESSION_GROUP_INVALID' });
+    assert.throws(() => { let key; try { key = decodeURIComponent(bad); } catch {} groupKey(key); }, { statusCode: 400, code: 'SESSION_GROUP_INVALID' });
   }
   assert.equal(reads.length, before, 'invalid keys never reach the CLI');
   // The polled snapshot never asks for stored messages.
@@ -1040,13 +1166,41 @@ function workingFixture(t, options = {}) {
       runtime: 'claude', session_group: 'telegram:g0', run_id: runId, event_type: type, category: 'activity', metadata });
   };
   const read = async () => {
-    const row = (await workbenchResponse(f.service, '/api/workbench/groups', new URLSearchParams())).rows
+    const row = (await f.service.getSnapshot()).rows
       .find(row => row.sessionGroup === 'telegram:g0');
     assert.ok(Object.hasOwn(row, 'working'), 'Groups API publishes the working field');
     return row;
   };
   return { f, store, add, read, queries };
 }
+
+// Real private Store and snapshot duration fallback. Run for current-run event
+// aliases or duration changes; skip UI-only edits. Injected Core/CLI observations,
+// no live tmux/PM2/network; fixture closes the DB and removes its owned root.
+test('single Origin duration fallback reads hook attribution without widening the current run', async t => {
+  const f = fixture(t), store = new Store(path.join(f.root, 'duration.db'));
+  f.addCleanup(() => store.close()); f.setMode('single');
+  const observation = structuredClone(f.live.get('telegram:g0'));
+  observation.identity.runId = 'single-run';
+  f.live.set(null, observation);
+  f.store.queryEvents = filter => store.queryEvents(filter);
+  const add = (id, group, run, event, ago) => store.insertEvent({ id, ingest_id: id, runtime: 'claude',
+    session_group: group, run_id: run, event_type: event, timestamp: new Date(f.now() - ago).toISOString(), category: 'activity' });
+  add('legacy-stop', null, 'single-run', 'stop', 7200000);
+  add('hook-prompt', 'origin', 'single-run', 'user_prompt_submit', 3600000);
+  add('other-group', 'telegram:other', 'single-run', 'stop', 1000);
+  add('other-run', 'origin', 'old-run', 'stop', 1000);
+  add('future-stop', 'origin', 'single-run', 'stop', -60000);
+  const value = await f.service.getSnapshot(), origin = value.rows[0];
+  assert.equal(origin.sessionGroup, null); assert.equal(origin.working.on, true);
+  assert.equal(origin.working.since, null, 'only the current command keeps work active');
+  assert.equal(origin.duration, 3600);
+  const detail = await createGroupsApi({ workbench: f.service }).detail('origin', { include: [] });
+  assert.equal(detail.state.kind, 'working'); assert.equal(detail.duration, 3600);
+  add('hook-stop', 'origin', 'single-run', 'stop', 100);
+  f.advance(2100);
+  assert.equal((await f.service.getSnapshot()).rows[0].duration, null, 'a current-run stop closes the fallback duration');
+});
 
 for (const kind of ['main', 'children', 'stale child']) test(`working API projects ${kind} events without changing Core board state`, async t => {
   const { f, add, read } = workingFixture(t), minute = 60000;

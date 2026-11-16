@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import * as childProcess from 'node:child_process';
-import { createGroupSnapshot, workbenchResponse } from '../src/lib/workbench/group-snapshot.js';
+import { createGroupSnapshot } from '../src/lib/workbench/group-snapshot.js';
 import { PM2Collector } from '../src/lib/collectors/pm2-collector.js';
 import { StateEngine } from '../src/lib/state-engine.js';
 import { EventLoopMonitor } from '../src/lib/event-loop-monitor.js';
@@ -27,6 +27,7 @@ test('workbench HTTP routes retain read authentication, method guards and source
   const previous = process.env.ZYLOS_DIR;
   t.after(async () => {
     if (previous === undefined) delete process.env.ZYLOS_DIR; else process.env.ZYLOS_DIR = previous;
+    server?.closeAllConnections();
     if (server?.listening) await new Promise(resolve => server.close(resolve));
     clearInterval(auth?._cleanupTimer);
     engine?.store.close();
@@ -51,7 +52,6 @@ test('workbench HTTP routes retain read authentication, method guards and source
     PM2Collector: class extends PM2Collector { constructor(...args) { super(...args); collector = this; } },
   } });
   t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
-    workbenchResponse,
     createGroupSnapshot: options => {
       service = createGroupSnapshot({ ...options, now: () => clock, c4Reader: { getInboundTimes: () => {
           if (failInbound) throw Object.assign(new Error('private inbound failure'), { statusCode: 502, code: 'READ_FAILED', reason: 'READ_FAILED' });
@@ -60,7 +60,7 @@ test('workbench HTTP routes retain read authentication, method guards and source
         cli: {
           runC4Db: async args => {
             if (args.includes('--key-match')) return { ok: !failSearch, reason: 'c4_groups_failed', data: [], readAt: clock };
-            return { ok: true, readAt: clock, data: args[0] === 'groups'
+            return { ok: args[0] === 'groups' ? !failSearch : true, reason: 'c4_groups_failed', readAt: clock, data: args[0] === 'groups'
               ? { groups: [{ sessionGroup: 'telegram:a', componentName: 'telegram', lastActivityAt: clock }], hasOlder: false }
               : { groups: [], globalFence: null } };
           },
@@ -78,7 +78,9 @@ test('workbench HTTP routes retain read authentication, method guards and source
       return service;
     },
   } });
+  t.mock.module('../src/lib/workbench/group-config.js', { namedExports: { createGroupConfig: () => ({ get: async () => ({ runtime: { ok: true }, model: null }) }) } });
   process.env.ZYLOS_DIR = root;
+  console.log('Workbench HTTP isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: root, PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, database: path.join(dashboardDir, 'dashboard.db'), transport: 'loopback; Core/CLI injected' }));
   const { createServer } = await import(`../src/index.js?workbench-http=${Date.now()}`);
   if (previous === undefined) delete process.env.ZYLOS_DIR; else process.env.ZYLOS_DIR = previous;
   server = createServer();
@@ -88,29 +90,31 @@ test('workbench HTTP routes retain read authentication, method guards and source
   const token = `zylos_st_${'b'.repeat(64)}`, key = engine.store.insertApiKey({ name: 'fixture-read', keyHash: hashApiKey(`zylos_ak_${'c'.repeat(64)}`), scope: 'read' });
   engine.store.insertApiSession({ apiKeyId: Number(key.lastInsertRowid), tokenHash: crypto.createHash('sha256').update(token).digest('hex'), createdAt: Date.now(), scope: 'read', expiresAt: Date.now() + 60000 });
   const request = (route, options = {}) => fetch(origin + route, { signal: AbortSignal.timeout(3000), headers: { Authorization: `Bearer ${token}` }, ...options });
-  for (const route of ['/api/workbench/groups', '/api/workbench/groups/search?q=', '/api/workbench/activity?range=60m', '/api/workbench/groups/telegram%3Aa/raw']) {
+  for (const route of ['/api/groups/running', '/api/groups/search?q=', '/api/groups/activity?range=60m', '/api/groups/telegram%3Aa']) {
     assert.equal((await request(route, { headers: {} })).status, 401, route);
-    assert.equal((await request(route, { method: 'POST' })).status, 405, route);
+    assert.equal((await request(route, { method: 'POST' })).status, 403, route);
   }
-  for (const query of ['?range=1d', '']) {
-    const response = await request('/api/workbench/activity' + query);
-    assert.equal(response.status, 400); assert.equal((await response.json()).error, 'invalid_range');
+  for (const query of ['?range=1d', '?range=bogus']) {
+    const response = await request('/api/groups/activity' + query);
+    assert.equal(response.status, 400); assert.equal((await response.json()).error.code, 'invalid_range');
   }
-  const empty = await request('/api/workbench/groups/search?q=');
+  const empty = await request('/api/groups/search?q=');
   assert.equal(empty.status, 200); assert.deepEqual(await empty.json(), { rows: [], truncated: false });
   // The server dispatches the per-group stored-message read; the fixture has no stored message for the group.
-  const stored = await request('/api/workbench/groups/telegram%3Aa/raw');
-  assert.equal(stored.status, 200); assert.deepEqual(await stored.json(), { raw: null });
-  const activity = await request('/api/workbench/activity?range=60m');
+  const stored = await request('/api/groups/telegram%3Aa');
+  assert.equal(stored.status, 200); const detail = await stored.json(); assert.equal(detail.raw, null); assert.equal(detail.id, 'telegram:a');
+  const activity = await request('/api/groups/activity?range=60m');
   assert.equal(activity.status, 200); assert.equal((await activity.json()).groups['telegram:a'].cells.length, 60);
   // Exercise real collector.collect -> index _onUpdate -> counter and state engine.
   t.mock.method(collector, '_execPm2Jlist', async () => JSON.stringify([{ name: 'zylos-telegram', pm2_env: { status: 'errored' } }]));
   await collector.collect(); assert.equal(service.channelDownCounter.get('zylos-telegram'), 1);
   assert.equal(engine._state.pm2, collector.getLatestPM2Data());
   clock += 2100;
-  assert.equal((await (await request('/api/workbench/groups')).json()).attention.problems.some(p => p.kind === 'channel_down'), false);
+  await request('/api/groups/running');
+  assert.equal((await (await request('/api/instance')).json()).services.channels.find(row => row.channel === 'telegram').down, false);
   await collector.collect(); clock += 2100;
-  assert.equal((await (await request('/api/workbench/groups')).json()).attention.problems.some(p => p.kind === 'channel_down'), true);
+  await request('/api/groups/running');
+  assert.equal((await (await request('/api/instance')).json()).services.channels.find(row => row.channel === 'telegram').down, true);
   // Counter failure must not suppress the existing PM2 state callback.
   const realUpdate = service.channelDownCounter.update;
   service.channelDownCounter.update = () => { throw new Error('fixture counter failure'); };
@@ -118,16 +122,17 @@ test('workbench HTTP routes retain read authentication, method guards and source
   assert.throws(() => collector._onUpdate(data), /fixture counter failure/);
   assert.equal(engine._state.pm2, data);
   service.channelDownCounter.update = realUpdate;
-  failSearch = true;
-  const failedSearch = await request('/api/workbench/groups/search?q=telegram');
-  assert.equal(failedSearch.status, 502); assert.deepEqual(await failedSearch.json(), { error: 'group_search_failed', reason: 'c4_groups_failed' });
+  failSearch = true; clock += 2100;
+  const failedSearch = await request('/api/groups/search?q=telegram');
+  assert.equal(failedSearch.status, 502); assert.equal((await failedSearch.json()).error.code, 'GROUP_CATALOG_UNREADABLE');
+  failSearch = false; clock += 2100;
   for (const [index, event_type] of ['user_prompt_submit', 'stop'].entries()) assert.equal(engine.store.insertEvent({
     id: `inbound-fixture-${index}`, ingest_id: `inbound-fixture:${index}`, timestamp: new Date(clock - 1000 + index * 500).toISOString(),
     event_type, category: 'turn', session_group: 'telegram:a', run_id: 'fixture-run',
     metadata: {}, source: 'hook',
   }).inserted, true);
   failInbound = true;
-  const failedInbound = await request('/api/workbench/activity?range=6h');
+  const failedInbound = await request('/api/groups/activity?range=6h');
   assert.equal(failedInbound.status, 200);
   const partial = await failedInbound.json();
   assert.equal(partial.inboundError, 'inbound_unreadable');
@@ -136,15 +141,15 @@ test('workbench HTTP routes retain read authentication, method guards and source
   assert.equal(Object.values(partial.groups).every(group => group.inbound.length === 0), true);
   assert.deepEqual(partial.groups['telegram:a'].inbound, []);
   failInbound = false;
-  const recoveredInbound = await request('/api/workbench/activity?range=6h');
+  const recoveredInbound = await request('/api/groups/activity?range=6h');
   assert.equal(recoveredInbound.status, 200);
   assert.equal(Object.hasOwn(await recoveredInbound.json(), 'inboundError'), false);
   // Store unexpected failures map to internal_error, without exception text.
   const realQuery = engine.store.queryEvents;
   engine.store.queryEvents = () => { throw new Error('private storage details'); };
   clock += 2100;
-  const unexpected = await request('/api/workbench/groups');
-  assert.equal(unexpected.status, 500); assert.deepEqual(await unexpected.json(), { error: 'internal_error' });
+  const unexpected = await request('/api/groups/running');
+  assert.equal(unexpected.status, 500); assert.deepEqual(await unexpected.json(), { ok: false, error: { code: 'internal_error', message: 'Request failed' } });
   engine.store.queryEvents = realQuery;
   assert.equal(childCalls.every(([, args]) => args.length === 1 && args[0] === '--version'), true);
 });

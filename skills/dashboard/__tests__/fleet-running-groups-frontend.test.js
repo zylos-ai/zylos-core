@@ -147,3 +147,22 @@ test('problem and more clicks carry their machine and group without opening the 
     assert.deepEqual(calls, ['prevented', [more ? 'problems' : 'group', { agent: 'remote fixture', self, group: 'problem-group' }]]);
   }
 });
+
+
+test('instance cards ignore Origin child observations while preserving aggregate busy state', () => {
+  for (const session_mode of ['single', 'multi']) {
+    const agent = machine({ session_mode, state: 'BUSY', has_subagent: true, subagent_count: 37 });
+    const view = buildAgentFleetView({ agents: [agent] });
+    assert.equal(view.counts.busy, 1);
+    assert.equal(Object.hasOwn(view.tiles[0], 'hasSubagent'), false);
+    assert.equal(Object.hasOwn(view.tiles[0], 'subagentCount'), false);
+    assert.equal(Object.hasOwn(view.labels, 'subagent'), false);
+    const html = render(agent);
+    assert.match(html, /1 Working/);
+    assert.doesNotMatch(html, /fleet-subagent-badge|⚡37|Subagent/);
+    if (session_mode === 'single') {
+      assert.match(html, /data-mood="busy"/);
+      assert.match(html, /Standing by/);
+    }
+  }
+});

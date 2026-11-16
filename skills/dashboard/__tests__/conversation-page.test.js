@@ -1,3 +1,4 @@
+import { conversationDetail } from './helpers/conversation-object-api.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -21,13 +22,15 @@ function healthPage(t, { locale = 'en', health = 'ok', runtime = 'claude', prese
   const translations = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
   const document = conversationDocument(), root = document.createElement('div');
   const sessionGroup = 'dashboard:health', id = 'g:AA';
+  let lastSnapshot;
   const page = mountConversationPage({ root, document, t: key => translations[key] ?? key, fetch: async path => {
-    const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
-      : path === '/api/workbench/groups' ? workbench?.() ?? { listKnown: true,
+    const body = path === '/api/instance' ? { session_mode: { sessionMode: 'multi' }, ...lastSnapshot?.instance }
+      : path.split('?')[0] === '/api/groups/' + encodeURIComponent(sessionGroup) ? (() => { lastSnapshot = workbench?.() ?? { listKnown: true,
         rows: [{ sessionGroup, presence, target: { runtime }, wait, working }],
         instance: { runtimeHealth: { claude: { health: 'rate_limited' }, codex: { health: 'auth_failed' },
           [runtime]: healthRecord ?? { health, ...(source ? { source } : {}) } } },
-        sources: { status: { ok: true, readAt: 1000 } } }
+        sources: { status: { ok: true, readAt: 1000 } } };
+        return conversationDetail(lastSnapshot.rows?.find(row => row.sessionGroup === sessionGroup), { readAt: lastSnapshot.sources?.status?.readAt, statusKnown: lastSnapshot.sources?.status?.ok !== false }); })()
       : path.startsWith('/api/chat/conversations?') ? { items: [{ id, sessionGroup }], nextCursor: null }
       : path.endsWith('/send') ? onSend?.() ?? { stored: true, conversationId: id }
       : path.includes('/messages?') ? { items: [...((typeof pending === 'function' ? pending() : pending) ? [{ id: 1, direction: 'in', status: 'pending', content: 'hello' }] : []),
@@ -41,7 +44,7 @@ function healthPage(t, { locale = 'en', health = 'ok', runtime = 'claude', prese
 }
 
 for (const locale of ['en', 'zh']) {
-  test(`sending to a healthy idle conversation keeps its idle header until the scheduled read in ${locale}`, { timeout: 2000 }, async t => {
+  test(`stored send immediately refreshes a healthy conversation header in ${locale}`, { timeout: 2000 }, async t => {
     let stored = false, groupReads = 0, sends = 0;
     const f = healthPage(t, { locale, health: 'ok', pending: () => stored,
       onSend: () => { stored = true; sends++; return { stored: true, conversationId: 'g:AA' }; },
@@ -62,11 +65,11 @@ for (const locale of ['en', 'zh']) {
     f.root.querySelector('.conversation-composer').dispatch('submit', { preventDefault() {} });
     await tick(); await tick();
     assert.equal(sends, 1);
-    assert.equal(groupReads, 1, 'healthy sends do not sample a transient idle queue');
+    assert.equal(groupReads, 2, 'a stored send refreshes authoritative group status immediately');
     assert.equal(header.hidden, false);
-    assert.equal(header.textContent, f.translations['wb.state.idle']);
+    assert.equal(header.textContent, f.translations['chat.page.waiting']);
     assert.equal(header.classList.contains('conversation-restricted'), false);
-    assert.equal(header.classList.contains('conversation-waiting'), false);
+    assert.equal(header.classList.contains('conversation-waiting'), true);
     assert.ok(f.root.querySelector('[data-message-id="1"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.pending']));
   });
   for (const [health, label] of [
@@ -260,7 +263,7 @@ function pageDocument() {
 for (const allowed of [false, true]) test(`conversation list ${allowed ? 'shows' : 'hides'} delete actions from the server permission`, async t => {
   const document = pageDocument(), root = document.createElement('div');
   const page = mountConversationPage({ root, document, local: () => true, fetch: async path => {
-    const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
+    const body = path === '/api/instance' ? { session_mode: { sessionMode: 'multi' } }
       : path.startsWith('/api/chat/conversations?') ? { items: [{ id: 'g:AA', sessionGroup: 'dashboard:owned' }], nextCursor: null, deletionAllowed: allowed }
       : { items: [], nextCursor: null };
     return { ok: true, status: 200, json: async () => body };
@@ -278,7 +281,7 @@ test('mounted conversation page forwards language headers without adding query p
     const sessionGroup = 'dashboard:locale-header', id = 'g:' + Buffer.from(sessionGroup).toString('hex').toUpperCase();
     const page = mountConversationPage({ root, document, fetch: async (path, options) => {
       if (path.startsWith('/api/chat/conversations?') || path.includes('/messages?')) reads.push({ path, options });
-      const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
+      const body = path === '/api/instance' ? { session_mode: { sessionMode: 'multi' } }
         : path.startsWith('/api/chat/conversations?') ? { items: [{ id, sessionGroup }], nextCursor: null }
         : /\/conversations\/[^/?]+$/.test(path) ? { conversation: { id, sessionGroup, state: 'active' } }
         : { items: [], nextCursor: null, afterCursor: 'after' };
@@ -301,7 +304,7 @@ for (const stop of ['close', 'destroy']) {
     const sessionGroup = 'dashboard:page-signal', id = 'g:' + Buffer.from(sessionGroup).toString('hex').toUpperCase();
     let signal, aborts = 0;
     const page = mountConversationPage({ root, document, fetch: async (path, options) => {
-      if (path === '/api/workbench/groups') {
+      if (path.split('?')[0] === '/api/groups/' + encodeURIComponent(sessionGroup)) {
         signal = options.signal;
         assert.ok(signal instanceof AbortSignal, 'the actual page request adapter passes an AbortSignal to fetch');
         return new Promise((resolve, reject) => signal.addEventListener('abort', () => {
@@ -309,7 +312,7 @@ for (const stop of ['close', 'destroy']) {
           reject(new Error('aborted'));
         }, { once: true }));
       }
-      const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
+      const body = path === '/api/instance' ? { session_mode: { sessionMode: 'multi' } }
         : path.startsWith('/api/chat/conversations?') ? { items: [{ id, sessionGroup }], nextCursor: null }
         : /\/conversations\/[^/?]+$/.test(path) ? { conversation: { id, sessionGroup, state: 'active' } }
         : { items: [], nextCursor: null, afterCursor: 'after' };
@@ -342,7 +345,7 @@ test('page reconciliation disposes charts owned by a message that leaves its sna
   ] });
   const removedRow = { id: 10, direction: 'out', content }, retainedRow = { id: 20, direction: 'out', content };
   const page = mountConversationPage({ root, document, fetch: async path => {
-    const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
+    const body = path === '/api/instance' ? { session_mode: { sessionMode: 'multi' } }
       : path.startsWith('/api/chat/conversations?') ? { items: [{ id: 'g:AA', displayName: 'Charts' }], nextCursor: null }
       : path.includes('/messages?') ? { items: [removedRow, retainedRow], nextCursor: null, afterCursor: 'after' }
       : /\/conversations\/[^/?]+$/.test(path) ? { conversation: { id: 'g:AA', state: 'active' } }
@@ -394,7 +397,7 @@ test('attachment metadata recovery retains the message anchor focused form and c
   const question = { c4Id: '10', messageId: envelope.messageId, interruptId: envelope.interruptId, questionSummary: envelope.questionSummary,
     status: 'paused', constraints: { block: form, interrupt: envelope.interrupt } };
   const page = mountConversationPage({ root, document, fetch: async path => {
-    const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
+    const body = path === '/api/instance' ? { session_mode: { sessionMode: 'multi' } }
       : path.startsWith('/api/chat/conversations?') ? { items: [{ id: 'g:AA', displayName: 'Media and form' }], nextCursor: null }
       : path.includes('/messages?') ? { items: [row], nextCursor: null, afterCursor: 'after' }
       : path.includes('/questions?') ? { items: [question], nextCursor: null }
@@ -429,7 +432,7 @@ for (const locale of ['en', 'zh']) test(`push updates preserve the editor and ol
   const original = { id: 1, direction: 'in', status: 'pending', content: 'first message' };
   const page = mountConversationPage({ root, document, t: key => translations[key] ?? key,
     onStreamSubscription: value => { subscription = value; }, fetch: async path => {
-      const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
+      const body = path === '/api/instance' ? { session_mode: { sessionMode: 'multi' } }
         : path.startsWith('/api/chat/conversations?') ? { items: [{ id: 'g:AA', displayName: 'Push fixture' }], nextCursor: null }
         : path.includes('/messages?') ? { items: updated ? [original, { id: 2, direction: 'out', status: 'delivered', content: 'new reply' }] : [original], afterCursor: 'after', nextCursor: null }
         : path.includes('/status?') ? { items: updated ? [{ ...original, status: 'delivered' }] : [] }
@@ -468,7 +471,7 @@ test('initial ready catchup releases the loading notice without manual header re
   const page = mountConversationPage({ root, document, onStreamSubscription: value => { subscription = value; }, fetch: async path => {
     let body;
     if (path.startsWith('/api/chat/conversations?')) body = await new Promise(resolve => { resolvers.push(resolve); });
-    else body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
+    else body = path === '/api/instance' ? { session_mode: { sessionMode: 'multi' } }
       : path.includes('/messages?') ? { items: [{ id: 1, direction: 'in', status: 'pending', content: 'hello' }], afterCursor: 'after', nextCursor: null }
       : /\/conversations\/[^/?]+$/.test(path) ? { conversation: { id: 'g:AA', state: 'active' } }
       : { items: [], nextCursor: null };
@@ -502,8 +505,8 @@ for (const locale of ['en', 'zh']) for (const retainedMessages of [0, 2]) for (c
       t: translate, confirm: async () => true, fetch: async (path, options = {}) => {
         let body;
         if (options.method === 'DELETE') { deleted = true; writes++; body = result; }
-        else body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
-          : path.endsWith('/deletion') ? { ok: true, operationId: 'retention-operation', cutoffId: 4, messages: 4, attachments: 0 }
+        else body = path === '/api/instance' ? { session_mode: { sessionMode: 'multi' } }
+          : path.endsWith('/deletion-preview') ? { ok: true, operationId: 'retention-operation', cutoffId: 4, messages: 4, attachments: 0 }
           : path.startsWith('/api/chat/conversations?') ? { items: deleted ? [] : [{ id: 'g:AA', sessionGroup: 'dashboard:retention' }],
             nextCursor: null, deletionAllowed: true }
           : { items: [], nextCursor: null };

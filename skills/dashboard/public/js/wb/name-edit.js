@@ -1,8 +1,8 @@
 import { element } from './plain-text.js?v=106';
-import { responseError } from './group-config.js?v=115';
+import { responseError } from './group-config.js?v=118';
 
 export async function saveGroupName(key, name, { request }) {
-  const path = `/api/workbench/groups/${encodeURIComponent(key)}/name`;
+  const path = `/api/groups/${encodeURIComponent(key)}/name`;
   const clear = name.trim() === '';
   const value = await request(path, clear ? { method: 'DELETE' } : {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),

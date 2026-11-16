@@ -11,7 +11,7 @@ export const NAME_PROMPT = `请给 Dashboard 里还没有名字的会话组起�
 
 
 export async function loadNamePrompt({ request }) {
-  return request('/api/workbench/name-prompt');
+  return request('/api/groups/naming-prompt');
 }
 
 export async function copyNamePrompt(text, clipboard = globalThis.navigator?.clipboard) {

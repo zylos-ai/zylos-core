@@ -39,7 +39,7 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
     if (thresholdRequests.has(id)) return;
     thresholdRequests.add(id);
     try {
-      const value = await request('/api/actions/meta?' + new URLSearchParams({ runtime, model }));
+      const value = await request('/api/instance/runtime-options?' + new URLSearchParams({ runtime, model }));
       if (!active() || !value?.model_thresholds) return;
       state.meta[runtime] = { ...state.meta[runtime], ...value, model_thresholds: { ...state.meta[runtime]?.model_thresholds, ...value.model_thresholds } };
       publish();
@@ -50,17 +50,19 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
     if (!['claude', 'codex'].includes(runtime) || runtime in state.meta) return state.meta[runtime];
     state.meta[runtime] = undefined;
     let value = null;
-    try { value = await request('/api/actions/meta?runtime=' + runtime); } catch {}
+    try { value = await request('/api/instance/runtime-options?runtime=' + runtime); } catch {}
     if (!active()) return null;
     state.meta[runtime] = Array.isArray(value?.models) ? value : null;
     publish();
     return state.meta[runtime];
   }
   async function load() {
-    const value = await request(`/api/workbench/groups/${encodeURIComponent(key)}/config`);
+    const detail = await request(`/api/groups/${encodeURIComponent(key)}`);
+    const value = detail.config;
     if (active()) {
       state.value = value;
-      state.error = value.runtime?.ok === false ? responseError(value.runtime) : value.model?.ok === false ? responseError(value.model) : null;
+      state.error = detail.configError ? responseError({ error: detail.configError }) : value == null ? t('wb.readFailed')
+        : value.runtime?.ok === false ? responseError(value.runtime) : value.model?.ok === false ? responseError(value.model) : null;
       publish();
     }
     return value;
@@ -80,8 +82,8 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
       try {
         let result;
         try {
-          result = await request(`/api/workbench/groups/${encodeURIComponent(key)}/config`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(change),
+          result = await request(`/api/groups/${encodeURIComponent(key)}/config`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(change),
           });
         } catch (error) {
           if (error.name === 'AbortError' || !active()) return;

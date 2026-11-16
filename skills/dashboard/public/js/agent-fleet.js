@@ -1,4 +1,4 @@
-import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, quotaRecordedTime } from './wb/instance-strip.js?v=202';
+import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, quotaRecordedTime } from './wb/instance-strip.js?v=206';
 import { counted } from './count-label.js?v=1';
 
 import { fallbackName, platformOf } from './wb/plain-text.js?v=106';
@@ -14,7 +14,7 @@ export function escapeHtml(value) {
     .replaceAll('"', '&quot;');
 }
 
-// Input is always a 0-100 percentage (context_pct, rate_limit_pct, cpu/mem/
+// Input is always a 0-100 percentage (rate_limit_pct, cpu/mem/
 // disk). Never infer fractions: a remote agent's genuine 1% weekly usage must
 // render as 1%, not a full red bar (#251).
 function pctValue(value) {
@@ -50,12 +50,9 @@ function reasonLabel(reason, labels) {
 export function stateMood(agent) {
   const state = String(agent?.state || 'UNKNOWN').toUpperCase();
   const reason = String(agent?.health_reason || '').toLowerCase();
-  const activity = String(agent?.activity || '').toLowerCase();
   if (state === 'OFFLINE' || reason === 'offline' || reason === 'unreachable' || reason === 'version_unsupported' || reason === 'auth_failed') return 'offline';
   if (state === 'AUTH_WAIT' || state === 'WAKE_OVERDUE') return 'stuck';
   if (state === 'IDLE') return 'idle';
-  if (state === 'BUSY' && (activity.includes('thinking') || activity.includes('思考'))) return 'thinking';
-  if (state === 'THINKING') return 'thinking';
   if (state === 'BUSY') return 'busy';
   if (state === 'UNKNOWN') return 'unknown';
   return 'idle';
@@ -74,7 +71,6 @@ function stateLabel(agent, labels, mood = stateMood(agent)) {
   const state = String(agent?.state || 'UNKNOWN').toUpperCase();
   if (['SLEEPING', 'WAKING', 'WAKE_OVERDUE', 'AUTH_WAIT', 'RATE_WAIT', 'RECLAIMING', 'SWITCHING'].includes(state)) return labels[state.toLowerCase()];
   if (mood === 'busy') return labels.busy;
-  if (mood === 'thinking') return labels.thinking;
   if (mood === 'stuck') return labels.stuck;
   if (mood === 'offline') return labels.offline;
   if (mood === 'unknown') return labels.unknown;
@@ -92,15 +88,6 @@ function sortAgents(agents) {
   const byName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''));
   const others = list.filter((agent) => agent?.self !== true).sort(byName);
   return [...self, ...others.filter(isOffline), ...others.filter((agent) => !isOffline(agent))];
-}
-
-// Mirrors the single-agent metric bars (barColor in app.js), used for the
-// context ring and the 5h/7d rate rows: <50 ok, 50–75 warning, >75 danger.
-function barLevel(pct) {
-  if (pct == null) return 'ok';
-  if (pct > 75) return 'danger';
-  if (pct >= 50) return 'warning';
-  return 'ok';
 }
 
 function latencyLabel(value) {
@@ -134,7 +121,6 @@ export function defaultAgentFleetLabels() {
     subtitle: 'Every machine you can view; the ones with a problem come first.',
     manage: 'Manage',
     busy: 'Working',
-    thinking: 'Thinking',
     idle: 'Idle',
     unknown: 'Unknown',
     sleeping: 'Sleeping', waking: 'Waking up', wake_overdue: 'Wake unsuccessful',
@@ -164,9 +150,6 @@ export function defaultAgentFleetLabels() {
     fixVersion: 'The other Dashboard needs an upgrade.',
     lastSeen: 'last reachable {time}',
     noActivity: 'Standing by',
-    context: 'Context',
-    model: 'Model',
-    sessionCost: 'Session',
     dailyCost: 'Today',
     weeklyCost: '7 days',
     todayWeek: 'Today / 7 days',
@@ -177,7 +160,6 @@ export function defaultAgentFleetLabels() {
     quotaUnknown: 'No data',
     quotaRecorded: 'Recorded {time}',
     quotaRecordedHint: 'No session is currently running; showing the most recent recorded quota.',
-    subagent: 'Subagent',
     self: 'This machine',
     modeMulti: 'Multi-session',
     modeSingle: 'Single session',
@@ -237,17 +219,10 @@ export function buildAgentFleetView(fleet, options = {}) {
   const ageText = options.ageText || ageLabel;
   const tiles = sortAgents(fleet?.agents).map((agent) => {
     const activityFeed = Array.isArray(agent.activity_feed) ? agent.activity_feed : [];
-    const baseMood = stateMood(agent);
-    // The legacy `activity` string never says "thinking" (it falls back to the
-    // last prompt summary), so use the structured feed signal for the state.
-    const mood = baseMood === 'busy' && activityFeed.some((entry) => entry?.kind === 'thinking')
-      ? 'thinking'
-      : baseMood;
+    const mood = stateMood(agent);
     const offline = isOffline(agent);
     const isSelf = agent.self === true;
-    const contextPct = pctValue(agent.context_pct);
-    const threshold = pctValue(agent.new_session_threshold);
-    const running = activityFeed.find((entry) => entry?.kind !== 'thinking' && entry?.label)?.label;
+    const running = activityFeed.find((entry) => entry?.label)?.label;
     const activity = compactText(running || agent.activity, labels.noActivity);
     const link = agent.link && typeof agent.link === 'object' ? agent.link : null;
     const linkChip = buildLinkChip(link, labels);
@@ -261,26 +236,17 @@ export function buildAgentFleetView(fleet, options = {}) {
       stateLabel: stateLabel(agent, labels, mood),
       problem: offline ? problemOf(agent, labels) : null,
       activity,
-      contextPct,
-      contextLevel: barLevel(contextPct),
-      threshold,
-      overThreshold: contextPct != null && threshold != null && contextPct >= threshold,
       linkQuality: String(link?.quality || 'ok').toLowerCase(),
       linkChip,
       latencyLabel: latencyLabel(link?.latency_ms),
-      model: labelText(agent.model),
-      effort: labelText(agent.effort),
       activityFeed,
       rate7dPct: pctValue(agent.rate_limit_7d_pct),
       rate7dRecord: { recordedAt: agent.rate_limit_7d_recorded_at, live: agent.rate_limit_7d_live },
-      sessionCostLabel: money(agent.session_cost ?? agent.cost),
       dailyCostLabel: money(agent.daily_cost),
       weeklyCostLabel: money(agent.weekly_cost),
       cpuPct: agent.cpu_pct,
       memPct: agent.mem_pct,
       diskPct: agent.disk_pct,
-      hasSubagent: agent.has_subagent === true,
-      subagentCount: Number.isFinite(agent.subagent_count) ? agent.subagent_count : 0,
       reason: agent.health_reason || '',
       showReason: REASON_BADGE_REASONS.has(String(agent.health_reason || '').toLowerCase()),
       baseUrl: agent.base_url || '',
@@ -298,9 +264,9 @@ export function buildAgentFleetView(fleet, options = {}) {
   const counts = tiles.reduce((acc, tile) => {
     acc[tile.mood] = (acc[tile.mood] || 0) + 1;
     return acc;
-  }, { busy: 0, thinking: 0, idle: 0, stuck: 0, offline: 0 });
+  }, { busy: 0, idle: 0, stuck: 0, offline: 0 });
 
-  // Fleet-wide totals of the same three cost tiers shown on each card.
+  // Fleet-wide totals of the same two cost tiers shown on each card.
   // null (rendered '--') when no agent reports that tier at all.
   const agents = Array.isArray(fleet?.agents) ? fleet.agents : [];
   const sumTier = (pick) => {
@@ -318,7 +284,6 @@ export function buildAgentFleetView(fleet, options = {}) {
     return total;
   };
   const costTotals = {
-    session: money(sumTier((a) => a.session_cost ?? a.cost)),
     daily: money(sumTier((a) => a.daily_cost)),
     weekly: money(sumTier((a) => a.weekly_cost))
   };
@@ -345,7 +310,7 @@ export function fleetSelfFromSnapshot(snapshot) {
 }
 
 // Card state pills share the board's colours: working, idle, waiting.
-const pillKind = { busy: 'busy', thinking: 'busy', idle: 'idle', stuck: 'waiting' };
+const pillKind = { busy: 'busy', idle: 'idle', stuck: 'waiting' };
 const pctText = (value) => value == null ? '--' : `${Number(value).toFixed(0)}%`;
 // Both views use remaining quota; remote rate_limit_7d_pct is still a used percentage.
 function quotaBar(label, value, labels, record) {
@@ -405,8 +370,8 @@ function renderTile(tile, labels, t) {
   const multi = tile.sessionMode === 'multi';
   const mode = multi ? labels.modeMulti : tile.sessionMode === 'single' ? labels.modeSingle : labels.modeUnknown;
   const sub = tile.isSelf
-    ? `<div class="wb-f-sub"><span class="wb-f-seg">${escapeHtml(labels.self)}</span><span class="wb-f-seg wb-tech">${escapeHtml(tile.model)} / ${escapeHtml(tile.effort)}</span></div>`
-    : `<div class="wb-f-sub wb-tech"><span class="wb-f-seg"><span class="wb-mono">${escapeHtml(tile.baseUrl)}</span></span>${tile.offline ? '' : `<span class="wb-f-seg">${escapeHtml(tile.model)} / ${escapeHtml(tile.effort)}</span>${tile.latencyLabel ? `<span class="wb-f-seg">${escapeHtml(labels.linkLatency)} ${escapeHtml(tile.latencyLabel)}</span>` : ''}`}${linkChip}</div>`;
+    ? `<div class="wb-f-sub"><span class="wb-f-seg">${escapeHtml(labels.self)}</span></div>`
+    : `<div class="wb-f-sub wb-tech"><span class="wb-f-seg"><span class="wb-mono">${escapeHtml(tile.baseUrl)}</span></span>${tile.offline ? '' : `${tile.latencyLabel ? `<span class="wb-f-seg">${escapeHtml(labels.linkLatency)} ${escapeHtml(tile.latencyLabel)}</span>` : ''}`}${linkChip}</div>`;
   if (tile.offline) {
     const seen = tile.lastSeenText;
     return `<div class="wb-f-card bad" ${data} data-state="${escapeHtml(tile.mood)}">
@@ -417,16 +382,11 @@ function renderTile(tile, labels, t) {
     <div class="wb-f-foot"><span class="wb-grow"></span><button class="wb-btn" type="button" data-fleet-action="settings">${escapeHtml(labels.toSettings)}</button><button class="wb-btn" type="button" data-fleet-action="refresh">${escapeHtml(labels.refresh)}</button></div>
   </div>`;
   }
-  const subagent = tile.subagentCount > 0
-    ? `<span class="fleet-subagent-badge" title="${escapeHtml(labels.subagent)}: ${tile.subagentCount}">⚡${tile.subagentCount}</span>`
-    : '';
   const act = multi ? groupStates(tile, labels, t)
-    : `<div class="wb-f-act"><span class="wb-pill wb-${escapeHtml(pillKind[tile.mood] ?? 'unknown')}" data-mood="${escapeHtml(tile.mood)}"><span class="wb-dot"></span>${escapeHtml(tile.stateLabel)}</span><span title="${escapeHtml(tile.activity)}">${escapeHtml(tile.activity)}</span>${subagent}</div>`;
+    : `<div class="wb-f-act"><span class="wb-pill wb-${escapeHtml(pillKind[tile.mood] ?? 'unknown')}" data-mood="${escapeHtml(tile.mood)}"><span class="wb-dot"></span>${escapeHtml(tile.stateLabel)}</span><span title="${escapeHtml(tile.activity)}">${escapeHtml(tile.activity)}</span></div>`;
   const pool = tile.groupSummary?.pool;
   const poolValue = pool?.used == null ? '--' : String(pool.used) + (pool.capacity == null ? '' : '/' + pool.capacity);
-  const second = multi
-    ? `<div>${escapeHtml(labels.pool)}<b>${escapeHtml(poolValue)}</b></div>`
-    : `<div title="${escapeHtml(labels.context)}${tile.threshold == null ? '' : ` / ${pctText(tile.threshold)}`}">${escapeHtml(labels.context)}<b class="${tile.overThreshold ? 'wb-txt-warn' : ''}">${pctText(tile.contextPct)}</b></div>`;
+  const second = multi ? `<div>${escapeHtml(labels.pool)}<b>${escapeHtml(poolValue)}</b></div>` : '';
   return `<div class="wb-f-card${tile.isSelf ? ' self' : ''}" ${data} data-state="${escapeHtml(tile.mood)}"${tile.linkQuality !== 'ok' ? ` data-link-quality="${escapeHtml(tile.linkQuality)}"` : ''}>
     <div class="wb-f-top"><span class="wb-hdot"></span><b title="${escapeHtml(tile.name)}">${escapeHtml(tile.name)}</b>${tile.isSelf ? `<span class="wb-tag">${escapeHtml(labels.self)}</span>` : ''}<span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
     ${sub}
@@ -434,7 +394,7 @@ function renderTile(tile, labels, t) {
     ${act}
     ${quotaBars(tile, labels)}
     <div class="wb-f-kv">
-      <div title="${escapeHtml(labels.sessionCost)} ${escapeHtml(tile.sessionCostLabel)}">${escapeHtml(labels.todayWeek)}<b>${escapeHtml(tile.dailyCostLabel)} / ${escapeHtml(tile.weeklyCostLabel)}</b></div>
+      <div>${escapeHtml(labels.todayWeek)}<b>${escapeHtml(tile.dailyCostLabel)} / ${escapeHtml(tile.weeklyCostLabel)}</b></div>
       ${second}
       <div>${escapeHtml(labels.host)}<b>${[tile.cpuPct, tile.memPct, tile.diskPct].map((value) => value == null ? '--' : Number(value).toFixed(0)).join(' · ')}%</b></div>
     </div>
@@ -444,7 +404,7 @@ function renderTile(tile, labels, t) {
 
 function renderAgentFleetViewHtml(view) {
   const { labels, t } = view;
-  const working = view.counts.busy + view.counts.thinking;
+  const working = view.counts.busy;
   const seg = (count, label, dot) =>
     `<span class="sum-seg${count === 0 ? ' is-zero' : ''}"><i class="sum-dot ${dot}"></i>${count} ${escapeHtml(label)}</span>`;
   const costCell = (label, value) => `<span><small>${escapeHtml(label)}</small> <strong>${escapeHtml(value)}</strong></span>`;
@@ -456,7 +416,6 @@ function renderAgentFleetViewHtml(view) {
         ${seg(view.counts.offline, labels.offline, 'dot-offline')}
       </span>
       <span class="sum-costs">
-        ${costCell(labels.sessionCost, view.costTotals.session)}
         ${costCell(labels.dailyCost, view.costTotals.daily)}
         ${costCell(labels.weeklyCost, view.costTotals.weekly)}
       </span>

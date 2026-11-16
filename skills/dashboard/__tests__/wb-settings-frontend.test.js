@@ -61,10 +61,10 @@ test('override search appends one batch and reports read failures without replac
 test('settings loader reads one group snapshot and one first batch on each open and invalidates stale opens', async () => {
   const paths = [], loads = [], pending = [];
   const loader = createSettingsLoader({ read: path => { paths.push(path); const item = deferred(); pending.push(item); return item.promise; }, onLoad: value => loads.push(value) });
-  const first = loader.open(); assert.equal(paths.filter(path => path === '/api/workbench/groups').length, 1); assert.equal(paths.filter(path => path === '/api/workbench/runtime-overrides').length, 1);
+  const first = loader.open(); assert.equal(paths.filter(path => path === '/api/groups/running').length, 1); assert.equal(paths.filter(path => path === '/api/groups/runtime-overrides').length, 1);
   loader.invalidate(); pending.forEach(item => item.resolve({ runtimeTotal: 100000, runtime: [], nextAfter: 'next' })); await first; assert.equal(loads.length, 0);
-  const second = loader.open(); pending.slice(6).forEach(item => item.resolve({ runtimeTotal: 100000, runtime: [], nextAfter: 'next' })); await second;
-  assert.equal(loads.length, 1); assert.equal(paths.length, 12); assert.equal(paths.some(path => path.includes('after=')), false);
+  const second = loader.open(); pending.slice(8).forEach(item => item.resolve({ runtimeTotal: 100000, runtime: [], nextAfter: 'next' })); await second;
+  assert.equal(loads.length, 1); assert.equal(paths.length, 16); assert.equal(paths.some(path => path.includes('after=')), false);
 });
 
 test('idle reclaim minutes reject invalid drafts and save one confirmed global action', async () => {
@@ -255,6 +255,30 @@ test('changing the default engine is a draft until saved and the undo restores t
 });
 
 const effortMeta = runtime => ({ runtime, current_model: 'one', current_effort: 'high', models: [{ id: 'one' }, { id: 'two' }], efforts_by_model: { one: ['high'], two: ['low', 'minimal'] } });
+
+test('the mounted default effort uses configured metadata and only saves a user change', async () => {
+  const document = documentFixture(), root = document.createElement('div'), calls = [], questions = [];
+  const data = snapshot();
+  data.rows[0] = { ...data.rows[0], runtimeInfo: { effort: 'high', model: 'one' }, effective: { runtime: 'claude', effort: 'high' } };
+  const meta = { runtime: 'claude', current_model: 'one', current_effort: 'low', models: [{ id: 'one' }], efforts_by_model: { one: ['low', 'high'] } };
+  const panel = renderDefaults(root, { snapshot: data, page: { runtimeTotal: 1 }, metadata: { claude: meta }, document, t,
+    confirm: async question => { questions.push(question); return true; }, read: async () => ({}),
+    execute: async (action, body) => { calls.push({ action, body }); return true; } });
+  try {
+    const effort = root.querySelector('#settings-effort-claude'), save = root.querySelector('#settings-save-models');
+    assert.equal(effort.value, 'low', 'the running Origin high effort is not the configured default');
+    assert.equal(save.hidden, true); assert.equal(save.disabled, true);
+    await save.dispatch('click');
+    assert.deepEqual(calls, []); assert.deepEqual(questions, []);
+    effort.value = 'low'; await effort.dispatch('change'); await save.dispatch('click');
+    assert.deepEqual(calls, [], 'reselecting the configured value is not a change');
+    effort.value = 'high'; await effort.dispatch('change');
+    assert.equal(save.hidden, false); assert.equal(save.disabled, false);
+    await save.dispatch('click');
+    assert.deepEqual(calls, [{ action: 'switch-effort', body: { runtime: 'claude', effort: 'high' } }]);
+    assert.equal(questions.length, 1); assert.equal(save.hidden, true);
+  } finally { panel.destroy(); }
+});
 async function draftBothEngines(root) {
   for (const runtime of ['claude', 'codex']) {
     const model = root.querySelector('#settings-model-' + runtime); model.value = 'two'; await model.dispatch('change');
@@ -473,9 +497,9 @@ test('settings relabel updates navigation without replacing controls or changing
 
 test('version panel reuses upgrade control, labels Codex and retains readonly reason and non-action core hint', async () => {
   const document = documentFixture(), root = document.createElement('div'), upgrade = node(document, 'button'); upgrade.append(node(document, 'span', 'action-cli-label'), node(document, 'span', 'action-cc-ver')); let called = 0, hints = 0; upgrade.addEventListener('click', () => called++);
-  renderVersion(root, { configured_runtime: 'codex', runtime: 'unknown', codex_running: '1', codex_update: '2', zylos_version: '3', zylos_update: '4' }, { document, upgrade, t, readOnly: true, onHint: () => hints++ });
+  renderVersion(root, { codex: { installed: '1', update: '2' }, zylos: { installed: '3', update: '4' } }, { document, upgrade, t, runtime: 'codex', readOnly: true, onHint: () => hints++ });
   assert.equal(upgrade.disabled, true); assert.equal(upgrade.title, 'remote.actions_read_only_tooltip'); assert.match(root.textContent, /Codex.*v1.*↑2/); await root.querySelector('#settings-zylos-update').dispatch('click'); assert.equal(hints, 1); assert.equal(called, 0);
-  renderVersion(root, { runtime: 'codex', codex_version: '1' }, { document, upgrade, t, readOnly: false }); await upgrade.dispatch('click'); assert.equal(called, 1); assert.equal(upgrade.disabled, false);
+  renderVersion(root, { codex: { installed: '1' } }, { document, upgrade, t, runtime: 'codex', readOnly: false }); await upgrade.dispatch('click'); assert.equal(called, 1); assert.equal(upgrade.disabled, false);
 });
 
 test('theme and language are segmented choices that forward the pressed value', async () => {
@@ -505,7 +529,7 @@ test('removed header entry selectors have no startup bindings and account contro
   const header = html.slice(html.indexOf('<header'), html.indexOf('</header>'));
   for (const id of ['fleet-sound-toggle', 'logout-btn', 'wb-detail-toggle']) { assert.equal(header.includes('id="' + id + '"'), false); assert.ok(html.indexOf('id="' + id + '"') > html.indexOf('id="tab-settings"')); }
   assert.equal(html.includes('id="locale-toggle"'), false, 'the language choice is built inside the settings page');
-  assert.match(app, /initSettingsPage\(\);\s*initTabs\(\)/); assert.match(html, /app\.js\?v=\d+/); assert.match(html, /style\.css\?v=64/);
+  assert.match(app, /initSettingsPage\(\);\s*initTabs\(\)/); assert.match(html, /app\.js\?v=\d+/); assert.match(html, /style\.css\?v=65/);
   const zh = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.zh.json', import.meta.url))), en = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
   const englishFragments = new Set(['chat.delete.messages', 'chat.delete.attachments']);
   for (const key of Object.keys(en)) {
@@ -575,12 +599,12 @@ test('default controls retain the restart lock after an accepted runtime change'
 
 test('the version row shows the Core version with its update hint and the engine CLI in both views, and no Dashboard version', () => {
   const document = documentFixture(), root = document.createElement('div'), upgrade = node(document, 'button');
-  renderVersion(root, { zylos_version: '1.0.0-beta.7', zylos_update: '1.0.0', cc_version: '2' }, { document, upgrade, t });
+  renderVersion(root, { zylos: { installed: '1.0.0-beta.7', update: '1.0.0' }, claude: { installed: '2' } }, { document, upgrade, t });
   assert.match(root.textContent, /zylos · v1\.0\.0-beta\.7/); assert.match(root.textContent, /CC · v2/);
   assert.doesNotMatch(root.textContent, /Dashboard/, 'Dashboard ships inside Core and has no version of its own');
   assert.ok(root.querySelector('#settings-zylos-update')); assert.equal(root.querySelector('button'), root.querySelector('#settings-zylos-update'));
   for (const zylos_version of [undefined, null, '', ' ', 'unknown']) {
-    renderVersion(root, { zylos_version, cc_version: '2' }, { document, upgrade, t });
+    renderVersion(root, { zylos: { installed: zylos_version }, claude: { installed: '2' } }, { document, upgrade, t });
     assert.match(root.textContent, /zylos · wb\.unknown/, JSON.stringify(zylos_version));
     assert.doesNotMatch(root.textContent, /zylos · v/, JSON.stringify(zylos_version));
   }
@@ -588,22 +612,22 @@ test('the version row shows the Core version with its update hint and the engine
 
 test('the header version follows the viewed instance and never falls back to an earlier one', () => {
   const document = documentFixture(), el = node(document, 'span'); el.hidden = true;
-  renderBrandVersion(el, { zylos_version: '1.0.0-beta.7' });
+  renderBrandVersion(el, { zylos: { installed: '1.0.0-beta.7' } });
   assert.equal(el.textContent, 'v1.0.0-beta.7'); assert.equal(el.hidden, false);
   // Switching to another instance: its state is cleared first, then arrives without a readable version.
-  for (const info of [undefined, { zylos_version: 'unknown' }, { runtime: 'claude' }]) {
+  for (const info of [undefined, { zylos: { installed: 'unknown' } }, { runtime: 'claude' }]) {
     renderBrandVersion(el, info);
     assert.equal(el.textContent, '', JSON.stringify(info)); assert.equal(el.hidden, true, JSON.stringify(info));
   }
-  renderBrandVersion(el, { zylos_version: '0.9.6' });
+  renderBrandVersion(el, { zylos: { installed: '0.9.6' } });
   assert.equal(el.textContent, 'v0.9.6', 'another instance shows its own version'); assert.equal(el.hidden, false);
-  assert.doesNotThrow(() => renderBrandVersion(null, { zylos_version: '1' }), 'a page without the header element is left alone');
+  assert.doesNotThrow(() => renderBrandVersion(null, { zylos: { installed: '1' } }), 'a page without the header element is left alone');
 });
 
-test('the Core version is read only from the instance\'s own runtime info', () => {
-  assert.equal(coreVersion({ zylos_version: '1.0.0-beta.7' }), '1.0.0-beta.7');
-  assert.equal(coreVersion({ zylos_version: ' 0.9.6\n' }), '0.9.6');
-  for (const info of [undefined, null, {}, { zylos_version: null }, { zylos_version: '' }, { zylos_version: 'unknown' }, { zylos_version: 7 }, { version: '1.0.0' }]) {
+test('the Core version is read only from the instance\'s own version record', () => {
+  assert.equal(coreVersion({ zylos: { installed: '1.0.0-beta.7' } }), '1.0.0-beta.7');
+  assert.equal(coreVersion({ zylos: { installed: ' 0.9.6\n' } }), '0.9.6');
+  for (const info of [undefined, null, {}, { zylos: { installed: null } }, { zylos: { installed: '' } }, { zylos: { installed: 'unknown' } }, { zylos: { installed: 7 } }, { version: '1.0.0' }]) {
     assert.equal(coreVersion(info), null, JSON.stringify(info));
   }
 });
@@ -814,7 +838,7 @@ test('a custom model requests its own threshold instead of showing the current m
   custom.value = 'large-custom'; await custom.dispatch('input');
   assert.equal(requests.length, 1);
   const requested = new URL(requests[0], 'http://fixture.invalid');
-  assert.equal(requested.pathname, '/api/actions/meta');
+  assert.equal(requested.pathname, '/api/instance/runtime-options');
   assert.equal(requested.searchParams.get('runtime'), 'codex');
   assert.equal(requested.searchParams.get('model'), 'large-custom');
   assert.equal(threshold.value, '', 'a different model must not inherit the current model threshold');
@@ -830,12 +854,11 @@ test('a custom model requests its own threshold instead of showing the current m
 test('settings group status labels include sample age and last-known status tooltip', () => {
   const document = documentFixture(), root = node(document, 'div');
   const data = snapshot(), sampledAt = Date.now() - 20000;
-  data.rows[0] = { ...data.rows[0], state: { kind: 'idle', stale: true, sampledAt },
-    live: { status: { valid: false, reason: 'stale', sampledAt, lastState: 'idle' } } };
+  data.rows[0] = { ...data.rows[0], state: { kind: 'idle', stale: true, sampledAt } };
   const options = { snapshot: data, page: { runtime: [], runtimeTotal: 1 }, document, t, metadata: {} };
   renderDefaults(root, options);
   assert.ok(root.querySelector('.wb-status-age'));
-  data.rows[0].state = { kind: 'unknown', sampledAt };
+  data.rows[0].state = { kind: 'unknown', reason: 'stale', sampledAt, lastState: 'idle' };
   renderDefaults(root, options);
   const labels = root.querySelectorAll('small');
   assert.ok(labels.some(label => label.title?.startsWith('wb.state.lastStatus:')));
@@ -850,5 +873,33 @@ test('pricing tabs render English for one and two running groups', () => {
     const panel = createPricingPanel({ ...fixture, snapshot: { rows: Array.from({ length: count }, () => ({ presence: 'running', target: { runtime: 'claude' } })) }, usage: { models: [] }, t: en, write: async () => {} });
     assert.ok(fixture.root.textContent.includes(count === 1 ? '1 running group uses these prices' : '2 running groups use these prices'));
     panel.destroy();
+  }
+});
+
+
+test('settings hydrates only the bounded running rows to recover explicit detail override provenance', async () => {
+  for (const failure of [false, true]) {
+    const paths = [], loads = [];
+    const loader = createSettingsLoader({ read: async path => {
+      paths.push(path);
+      if (path === '/api/instance') return { default_runtime: 'claude', session_mode: { sessionMode: 'multi' } };
+      if (path === '/api/groups/counts') return { running: { total: 2 }, offline: { total: 10000 }, pool: { used: 2, capacity: 4 } };
+      if (path === '/api/groups/running') return { rows: ['a', 'b'].map(id => ({ id, displayName: id, channel: 'telegram', runtime: 'codex', model: 'actual', state: { kind: 'working' }, flags: {}, duration: 1, mainAgent: 'busy', contextPct: 20, lastActivityAt: 1 })) };
+      if (path.startsWith('/api/groups/a?')) return { sessionGroup: 'a', runtimeOverridden: true, modelOverridden: false };
+      if (path.startsWith('/api/groups/b?')) {
+        if (failure) throw Error('detail_unreadable');
+        return { sessionGroup: 'b', runtimeOverridden: false, modelOverridden: true };
+      }
+      return {};
+    }, onLoad: value => loads.push(value) });
+    await loader.open();
+    assert.deepEqual(paths.filter(path => /^\/api\/groups\/[^/?]+\?include=$/.test(path)).sort(), ['/api/groups/a?include=', '/api/groups/b?include=']);
+    assert.equal(paths.some(path => path.startsWith('/api/groups/offline')), false);
+    assert.equal(loads.length, 1);
+    if (failure) assert.equal(loads[0].snapshot.overrides, null, 'failed detail reads keep provenance unknown');
+    else {
+      assert.deepEqual(loads[0].snapshot.overrides.runtime.map(row => row.sessionGroup), ['a']);
+      assert.deepEqual(loads[0].snapshot.overrides.model.map(row => row.sessionGroup), ['b']);
+    }
   }
 });

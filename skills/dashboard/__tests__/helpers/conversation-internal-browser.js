@@ -31,10 +31,8 @@ export async function runInternalConversationBrowser(t, sandbox) {
       return true;
     }
     const values = {
-      '/api/session-mode': { data: { sessionMode: f.readMode() } },
-      '/api/state': { state: 'idle', runtime: 'claude', session_mode: f.readMode(), agent: { id: 'test', name: 'Private browser' }, runtime_info: {} },
-      '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' }, '/api/communication': {}, '/api/summary': {},
-      '/api/timeline': { items: [] }, '/api/instance-status': { status: 'ok' }, '/api/actions/meta': { actions: [] },
+      '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: 'Private browser' } },
+      '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
     };
     sendJson(res, 200, values[url.pathname] || {}); return true;
   } });

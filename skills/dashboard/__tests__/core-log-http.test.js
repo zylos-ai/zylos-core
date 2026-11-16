@@ -9,8 +9,14 @@ import { CoreLogImporter } from '../src/lib/core-log-importer.js';
 
 // Exercise the real authenticated route, including filters before pagination and
 // output redaction for historical records that predate importer-side redaction.
-test('timeline HTTP preserves scoped pagination, unassigned history, cap and redacted gaps', async t => {
+// Run when event scope, filters, importer publication or redaction changes; skip
+// for unrelated UI changes. The official runner isolates HOME/ZYLOS_DIR/PM2_HOME
+// and TMPDIR; this case uses only its private DB/HTTP server and stops the importer.
+test('group events HTTP preserves scoped pagination, unassigned Origin history, cap and redacted gaps', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'core-log-http-'));
+  const modePath = path.join(root, '.zylos/config.json');
+  fs.mkdirSync(path.dirname(modePath), { recursive: true });
+  fs.writeFileSync(modePath, JSON.stringify({ session_mode: 'multi' }));
   const data = path.join(root, 'components/dashboard');
   fs.mkdirSync(data, { recursive: true });
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ auth: { enabled: true, password: 'fixture-password' } }));
@@ -40,7 +46,7 @@ test('timeline HTTP preserves scoped pagination, unassigned history, cap and red
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    assert.equal((await fetch(`${origin}/api/timeline`)).status, 401);
+    assert.equal((await fetch(`${origin}/api/groups/origin/events`)).status, 401);
     const login = await fetch(`${origin}/login`, { method: 'POST', redirect: 'manual',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ password: 'fixture-password' }) });
@@ -48,7 +54,12 @@ test('timeline HTTP preserves scoped pagination, unassigned history, cap and red
     const cookie = login.headers.get('set-cookie');
     assert.ok(cookie);
     const get = async query => {
-      const response = await fetch(`${origin}/api/timeline?${query}`, { headers: { Cookie: cookie } });
+      const params = new URLSearchParams(query);
+      const unassigned = params.has('session_group') && params.get('session_group') === '' || params.get('stream') === 'router';
+      const group = params.get('session_group') || 'origin';
+      params.delete('session_group');
+      fs.writeFileSync(modePath, JSON.stringify({ session_mode: unassigned ? 'single' : 'multi' }));
+      const response = await fetch(`${origin}/api/groups/${encodeURIComponent(group)}/events?${params}`, { headers: { Cookie: cookie } });
       assert.equal(response.status, 200);
       return response.json();
     };
@@ -61,12 +72,25 @@ test('timeline HTTP preserves scoped pagination, unassigned history, cap and red
     assert.equal((await get('session_group=other')).gaps.length, 0);
     assert.equal((await get('stream=router')).gaps.length, 0);
     assert.equal((await get('stream=events%3Aorigin')).gaps.length, 1);
+    // Single Origin combines current hook attribution and legacy null records
+    // before pagination; multi Origin still excludes legacy null records.
     const unassigned = await get('session_group=&limit=2');
-    assert.deepEqual(unassigned.events.map(row => row.id), ['event-0', 'event-2']);
-    assert.equal(unassigned.gaps.length, 0);
+    assert.deepEqual(unassigned.events.map(row => row.id), ['event-0', 'event-1']);
+    assert.deepEqual((await get('session_group=&limit=2&offset=2')).events.map(row => row.id), ['event-2', 'event-3']);
+    assert.deepEqual((await get('session_group=origin&limit=2')).events.map(row => row.id), ['event-1', 'event-3']);
+    assert.deepEqual((await get('session_group=&run_id=run-a&session_id=session-a&runtime=codex&types=x&limit=2&offset=2')).events.map(row => row.id), ['event-5', 'event-7']);
+    assert.deepEqual((await get('session_group=&until=2025-12-31T23:59:59Z')).events, []);
+    assert.equal(unassigned.gaps.length, 1);
+    assert.equal(unassigned.gaps[0].extra.stream, 'events:origin');
+    assert.equal(JSON.stringify(unassigned.gaps).includes(secret), false);
     assert.equal((await get('run_id=nonexistent')).count, 0);
     const after = await get('after_seq=1002');
-    assert.deepEqual(after.events.map(row => row.id), ['event-1002', 'event-1003']);
+    const unassignedAfter = await get('session_group=&after_seq=1002');
+    assert.deepEqual(unassignedAfter.events.map(row => row.id), ['event-1002', 'event-1003']);
+    assert.deepEqual(after.events.map(row => row.id), ['event-1003']);
+    // A group must itself exceed the cap now that the resource is group-scoped.
+    for (let i = 0; i < 1000; i++) store.insertEvent({ id: `cap-${i}`, ingest_id: `cap:${i}`, timestamp: '2026-01-02T00:00:00.000Z',
+      event_type: 'x', category: 'diagnostic', runtime: 'claude', session_group: 'origin', source: 'core-log' });
     const capped = await get('limit=10000');
     assert.equal(capped.count, 1000);
     store.upsertSourceHealth('core:fixture', 'history', 'healthy', { stream: 'events:origin' });

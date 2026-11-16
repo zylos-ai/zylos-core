@@ -130,7 +130,6 @@ export async function setupMemoryHttp(t) {
       getCachedSnapshot: () => cachedSnapshot,
       channelDownCounter: { update() {} },
     }),
-    workbenchResponse: () => assert.fail('detail requests must not dispatch another workbench read route'),
   } });
   t.mock.module('../../src/lib/core-modules.js', { namedExports: {
     loadCoreModule: async name => {

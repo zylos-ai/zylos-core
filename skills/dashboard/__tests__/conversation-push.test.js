@@ -47,7 +47,7 @@ function fixture(t, override = () => undefined) {
     const u = new URL(url, 'http://fixture');
     assert.ok(calls.length < 250, 'bounded request log'); calls.push({ url, u, options, at: timer.now() });
     const result = override(u, options, timer.now()); if (result !== undefined) return result;
-    if (url === '/api/session-mode') return { data: { sessionMode: 'multi' } };
+    if (url === '/api/instance') return { session_mode: { sessionMode: 'multi' } };
     if (u.pathname === '/api/chat/conversations') return { items: [{ id: 'g:AA' }], nextCursor: null };
     if (u.pathname.endsWith('/messages')) return { items: u.searchParams.get('direction') === 'before' ? [{ id: 1, direction: 'in', content: 'hello', status: 'pending' }] : [], afterCursor: 'cursor', nextCursor: null };
     if (u.pathname.endsWith('/questions') || u.pathname.endsWith('/status')) return { items: [], nextCursor: null };
@@ -689,4 +689,63 @@ test('a failed dirty list catchup retries that list at its backoff deadline', { 
   await f.timer.advance(1); assert.equal(lists, 3, 'failed dirty scope is retried without waiting for the thirty-second list interval');
   assert.equal(f.state.snapshot().updateError, null);
   assert.equal(f.calls.filter(call => call.u.pathname.endsWith('/send')).length, 0);
+});
+
+for (const held of ['list', 'detail']) test(`readiness catchup survives same-conversation selection while ${held} is pending`, { timeout: 2000 }, async t => {
+  let resolve, hold = false, heldOnce = false;
+  const pending = new Promise(done => { resolve = done; });
+  const f = fixture(t, u => {
+    if (hold && !heldOnce && (held === 'list' ? u.pathname === '/api/chat/conversations' : u.pathname === '/api/chat/conversations/g%3AAA')) {
+      heldOnce = true; return pending;
+    }
+    if (u.pathname.endsWith('/messages') && u.searchParams.get('direction') === 'after') return {
+      items: [{ id: 2, direction: 'out', content: 'committed during admission', status: 'delivered' }], afterCursor: 'cursor2'
+    };
+  });
+  await f.open(); hold = true;
+  await f.event('chat_ready');
+  assert.equal(heldOnce, true);
+  await f.state.select('g:AA');
+  assert.equal(f.reads().filter(call => call.u.searchParams.get('direction') === 'after').length, 0);
+  resolve(held === 'list' ? { items: [{ id: 'g:AA' }], nextCursor: null }
+    : { conversation: { id: 'g:AA', state: 'active' }, conversationId: 'g:AA', stored: true });
+  await flush(); await f.timer.advance(0);
+  assert.equal(f.state.snapshot().streamState, 'live');
+  assert.equal(f.state.snapshot().selectedId, 'g:AA');
+  assert.equal(f.reads().filter(call => call.u.searchParams.get('direction') === 'after').length, 1,
+    'canceled metadata pass must retain the admitted message read, without waiting thirty seconds');
+  assert.equal(f.state.snapshot().messages.find(row => row.id === 2)?.content, 'committed during admission');
+  assert.equal(f.timer.now(), 1000);
+});
+
+test('readiness catchup does not follow selection into another conversation', { timeout: 2000 }, async t => {
+  const rows = { items: [{ id: 'g:AA' }, { id: 'g:BB' }], nextCursor: null };
+  let resolve, hold = false, heldOnce = false;
+  const pending = new Promise(done => { resolve = done; });
+  const f = fixture(t, u => {
+    if (u.pathname === '/api/chat/conversations') {
+      if (hold && !heldOnce) { heldOnce = true; return pending; }
+      return rows;
+    }
+    if (u.pathname === '/api/chat/conversations/g%3ABB') return {
+      conversation: { id: 'g:BB', state: 'active' }, conversationId: 'g:BB', stored: true
+    };
+  });
+  t.after(() => resolve(rows));
+  await f.open(); hold = true;
+  await f.event('chat_ready');
+  assert.equal(heldOnce, true, 'ready consumed its hint before the list read was suspended');
+  await f.state.select('g:BB'); await flush();
+  const counts = () => ({
+    list: f.calls.filter(call => call.u.pathname === '/api/chat/conversations').length,
+    detail: f.calls.filter(call => call.u.pathname === '/api/chat/conversations/g%3ABB').length,
+    messages: f.calls.filter(call => call.u.pathname === '/api/chat/conversations/g%3ABB/messages').length
+  });
+  assert.deepEqual(counts(), { list: 2, detail: 1, messages: 1 }, 'the new conversation has only its selection reads');
+  assert.equal(f.state.snapshot().selectedId, 'g:BB');
+  assert.equal(f.state.snapshot().historyLoaded, true);
+  resolve(rows); await flush(); await f.timer.advance(0);
+  assert.deepEqual(counts(), { list: 2, detail: 1, messages: 1 }, 'releasing the old pass must not force another list, detail or history read');
+  assert.equal(f.state.snapshot().selectedId, 'g:BB');
+  assert.equal(f.timer.now(), 1000, 'only immediately scheduled work was drained');
 });

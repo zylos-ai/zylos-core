@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { workbenchAnswer } from '../../skills/dashboard/__tests__/fixtures/workbench-browser-api.js';
 
 export async function runInitialTimezoneBrowser(sandbox, scenario) {
   for (const file of [process.env.ZYLOS_CHAT_BROWSER_MODULE, process.env.ZYLOS_CHAT_BROWSER_BIN, process.env.ZYLOS_CHAT_CHART_ASSET]) {
@@ -56,11 +57,12 @@ export async function runInitialTimezoneBrowser(sandbox, scenario) {
       if (url.pathname === '/_assets/vendor/chart.umd.js') return route.fulfill({ path: process.env.ZYLOS_CHAT_CHART_ASSET, contentType: 'text/javascript' });
       // In reload cases A starts from refreshAll before SSE opens request B.
       if (url.pathname === '/api/stream' && scenario.kind === 'reload') await stateStarted;
-      if (url.pathname === '/api/state') {
+      if (url.pathname === '/api/instance' && releases.length < 2) {
         firstState();
         await new Promise(resolve => releases.push(resolve));
         return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-          state: 'BUSY', runId: 'run-origin', sessionId: 's0', updated_at: '2026-11-15T01:00:00Z', tz: 'Asia/Singapore',
+          ...workbenchAnswer(url, Date.now()), updated_at: '2026-11-15T01:00:00Z', tz: 'Asia/Singapore',
+          accounts: { claude: { used_percentage: 42, live: false, recordedAt: Date.parse('2026-11-14T15:59:00Z') } },
         }) });
       }
       return route.continue();
@@ -71,13 +73,13 @@ export async function runInitialTimezoneBrowser(sandbox, scenario) {
       const observations = window.__zoneObservations = { values: [], requests: [], sse: null };
       const fetch = window.fetch.bind(window);
       window.fetch = async (...args) => {
-        if (!String(args[0]).includes('/api/state')) return fetch(...args);
+        if (new URL(String(args[0]), location.href).pathname !== '/api/instance' || !new Error().stack.includes('refreshDashboardState')) return fetch(...args);
         const item = { start: performance.now(), end: null, source: new Error().stack.includes('refreshAll') ? 'startup' : 'sse-open' }; observations.requests.push(item);
         const result = await fetch(...args); item.end = performance.now(); return result;
       };
       const Source = window.EventSource;
       window.EventSource = class extends Source {
-        constructor(...args) { super(...args); this.addEventListener('state_change', () => { observations.sse ??= performance.now(); }); }
+        constructor(...args) { super(...args); this.addEventListener('instance', () => { observations.sse ??= performance.now(); }); }
       };
       const observer = new MutationObserver(() => {
         const text = document.querySelector('.wb-quota-recorded')?.textContent;

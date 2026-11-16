@@ -1,3 +1,4 @@
+import { readGroupSnapshot } from './group-data.js?v=5';
 import { element, icon } from './plain-text.js?v=106';
 import { createSettingsDrawer } from './settings-drawer.js?v=104';
 
@@ -129,8 +130,13 @@ export function createSettingsLoader({ read, onLoad }) {
   return {
     async open() {
       const current = ++generation;
-      const paths = ['/api/workbench/groups', '/api/workbench/runtime-overrides', '/api/settings?all=1', '/api/workbench/pricing', '/api/actions/meta?runtime=claude', '/api/actions/meta?runtime=codex'];
-      const values = await Promise.allSettled(paths.map(path => read(path)));
+      const paths = [null, '/api/groups/runtime-overrides', '/api/settings?all=1', '/api/usage/pricing', '/api/instance/runtime-options?runtime=claude', '/api/instance/runtime-options?runtime=codex'];
+      const values = await Promise.allSettled(paths.map(path => path === null ? readGroupSnapshot(read).then(async snapshot => {
+        const details = await Promise.allSettled(snapshot.rows.map(row => read('/api/groups/' + encodeURIComponent(row.sessionGroup) + '?include=')));
+        if (details.some(result => result.status === 'rejected')) return { ...snapshot, overrides: null };
+        const rows = details.map(result => result.value);
+        return { ...snapshot, rows, overrides: { runtime: rows.filter(row => row.runtimeOverridden === true), model: rows.filter(row => row.modelOverridden === true) } };
+      }) : read(path)));
       if (current !== generation) return;
       const value = index => values[index].status === 'fulfilled' ? values[index].value : null;
       onLoad({ snapshot: value(0), page: value(1), prices: value(2), usage: value(3), metadata: { claude: value(4), codex: value(5) } });

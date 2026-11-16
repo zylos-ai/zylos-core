@@ -175,7 +175,7 @@ test('fleet proxy injects session token for API and keeps token out of client re
     proxy.handle(req, res, url);
   });
   try {
-    const resp = await fetch(`${hub.origin}/fleet/Remote/api/state?x=1`);
+    const resp = await fetch(`${hub.origin}/fleet/Remote/api/instance?x=1`);
     assert.equal(resp.status, 200);
     assert.equal(resp.headers.get('set-cookie'), null);
     assert.equal(seenAuth, 'Bearer zylos_st_secret');
@@ -640,7 +640,7 @@ test('fleet proxy strips content-encoding from compressed upstream responses (#2
     proxy.handle(req, res, url);
   });
   try {
-    const resp = await fetch(`${hub.origin}/fleet/Remote/api/state`, {
+    const resp = await fetch(`${hub.origin}/fleet/Remote/api/instance`, {
       headers: { 'accept-encoding': 'gzip, deflate, br' }
     });
     assert.equal(resp.status, 200);
@@ -769,7 +769,7 @@ test('fleet proxy refreshes token once when upstream returns 401', async () => {
     proxy.handle(req, res, url);
   });
   try {
-    const resp = await fetch(`${hub.origin}/fleet/Remote/api/state`);
+    const resp = await fetch(`${hub.origin}/fleet/Remote/api/instance`);
     assert.equal(resp.status, 200);
     assert.deepEqual(tokenRequests, ['cached', 'force']);
     assert.deepEqual(seenAuth, ['Bearer zylos_st_cached', 'Bearer zylos_st_refreshed']);
@@ -796,7 +796,7 @@ test('fleet proxy rejects unsafe API methods before reaching upstream', async ()
     proxy.handle(req, res, url);
   });
   try {
-    const resp = await fetch(`${hub.origin}/fleet/Remote/api/state`, {
+    const resp = await fetch(`${hub.origin}/fleet/Remote/api/instance`, {
       method: 'PUT',
       body: 'this body must not be proxied'
     });
@@ -817,10 +817,10 @@ test('fleet proxy forwards SSE and whitelisted action POSTs with body', async ()
     if (req.url === '/api/stream') {
       sseAuth = req.headers.authorization;
       res.writeHead(200, { 'content-type': 'text/event-stream' });
-      res.end('event: state_change\ndata: {"ok":true}\n\n');
+      res.end('event: instance\ndata: {"ok":true}\n\n');
       return;
     }
-    if (req.url.startsWith('/api/actions/')) {
+    if (req.url.startsWith('/api/instance/actions/')) {
       actionAuth = req.headers.authorization;
       actionContentType = req.headers['content-type'];
       req.setEncoding('utf8');
@@ -841,16 +841,17 @@ test('fleet proxy forwards SSE and whitelisted action POSTs with body', async ()
   });
   const hub = await listen((req, res) => {
     const url = new URL(req.url, 'http://hub.test');
+    req._authContext = { kind: 'api', scope: 'admin' };
     proxy.handle(req, res, url);
   });
   try {
     const sse = await fetch(`${hub.origin}/fleet/Remote/api/stream`);
     assert.equal(sse.status, 200);
     assert.match(sse.headers.get('content-type'), /text\/event-stream/);
-    assert.equal(await sse.text(), 'event: state_change\ndata: {"ok":true}\n\n');
+    assert.equal(await sse.text(), 'event: instance\ndata: {"ok":true}\n\n');
     assert.equal(sseAuth, 'Bearer zylos_st_secret');
 
-    const action = await fetch(`${hub.origin}/fleet/Remote/api/actions/upgrade-cc`, {
+    const action = await fetch(`${hub.origin}/fleet/Remote/api/instance/actions/upgrade-runtime`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode: 'now' })
@@ -915,7 +916,7 @@ test('fleet proxy fail-closes consumer-local fleet management endpoints without 
       [`${hub.origin}/fleet/Remote/api/fleet/agents`, { method: 'GET' }],
       [`${hub.origin}/fleet/Remote/api/fleet/agents`, { method: 'POST', body: '{}' }],
       [`${hub.origin}/fleet/Remote/api/fleet/agents/test`, { method: 'POST', body: '{}' }],
-      [`${hub.origin}/fleet/Remote/api/agent/name`, { method: 'PUT', body: '{}' }],
+      [`${hub.origin}/fleet/Remote/api/instance/name`, { method: 'PUT', body: '{}' }],
       [`${hub.origin}/fleet/Remote/api/fleet/agents%2Ftest`, { method: 'POST', body: '{}' }],
       [`${hub.origin}/fleet/Remote/api/fleet%2Fagents`, { method: 'GET' }],
       [`${hub.origin}/fleet/Remote/api%2Fagent%2Fname`, { method: 'PUT', body: '{}' }],
@@ -1103,10 +1104,11 @@ test('fleet proxy refreshes token once for write 401 and reuses the request body
   });
   const hub = await listen((req, res) => {
     const url = new URL(req.url, 'http://hub.test');
+    req._authContext = { kind: 'api', scope: 'admin' };
     proxy.handle(req, res, url);
   });
   try {
-    const resp = await fetch(`${hub.origin}/fleet/Remote/api/actions/interrupt`, {
+    const resp = await fetch(`${hub.origin}/fleet/Remote/api/groups/origin/actions/interrupt`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{"reason":"test"}'
@@ -1136,10 +1138,11 @@ test('fleet proxy rejects oversized write bodies before upstream', async () => {
   });
   const hub = await listen((req, res) => {
     const url = new URL(req.url, 'http://hub.test');
+    req._authContext = { kind: 'api', scope: 'admin' };
     proxy.handle(req, res, url);
   });
   try {
-    const resp = await fetch(`${hub.origin}/fleet/Remote/api/actions/interrupt`, {
+    const resp = await fetch(`${hub.origin}/fleet/Remote/api/groups/origin/actions/interrupt`, {
       method: 'POST',
       body: 'x'.repeat(1024 * 1024 + 1)
     });
@@ -1219,7 +1222,7 @@ test('fleet proxy blocks reflected session token in SSE response headers', async
       'content-type': 'text/event-stream',
       'x-echo-auth': req.headers.authorization
     });
-    res.end('event: state_change\ndata: {"ok":true}\n\n');
+    res.end('event: instance\ndata: {"ok":true}\n\n');
   });
   const proxy = new FleetProxy({
     config: { fleet: { agents: [{ name: 'Remote', base_url: remote.origin, read_api_key: 'zylos_ak_secret' }] } },
@@ -1280,7 +1283,7 @@ test('fleet proxy survives an upstream SSE body failure without killing the serv
     assert.match(text, /hello/);
     // Without the fix the unhandled stream 'error' crashes the process before
     // this point. The hub must keep serving requests after the failed relay.
-    const after = await fetch(`${hub.origin}/fleet/Remote/api/state`);
+    const after = await fetch(`${hub.origin}/fleet/Remote/api/instance`);
     assert.equal(after.status, 200);
     assert.deepEqual(await after.json(), { ok: true });
   } finally {
@@ -1342,7 +1345,7 @@ test('fleet proxy maps a mid-body upstream failure on buffered responses to 502 
     proxy.handle(req, res, url);
   });
   try {
-    const resp = await fetch(`${hub.origin}/fleet/Remote/api/state`);
+    const resp = await fetch(`${hub.origin}/fleet/Remote/api/instance`);
     assert.equal(resp.status, 502);
     assert.deepEqual(await resp.json(), { error: 'upstream_body_error' });
   } finally {
@@ -1737,5 +1740,34 @@ test('fleet timezone writes retain local admin and cookie origin proof', async (
       assert.equal(res.status, allowed ? 200 : 403);
       assert.equal(calls - before, allowed ? 1 : 0);
     }
+  }
+});
+
+// Auth-disabled hubs have no local principal. Keep object actions usable while
+// retaining the explicit write allowlist and the cookie same-origin boundary.
+test('fleet object writes support auth-disabled hubs without widening admission', async () => {
+  const agent = { name: 'Remote', base_url: 'https://remote.invalid' };
+  let calls = 0;
+  const proxy = new FleetProxy({ config: { fleet: { agents: [agent] } }, authGate: { enabled: false },
+    poller: { getSessionToken: async () => 'remote-fixture' },
+    fetch: async () => { calls++; return new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } }); },
+  });
+  for (const [method, suffix, context, status] of [
+    ['PUT', '/api/instance/defaults', undefined, 200],
+    ['POST', '/api/instance/actions/switch-mode', undefined, 200],
+    ['PUT', '/api/groups/dashboard%3Aa/config', undefined, 200],
+    ['POST', '/api/groups/dashboard%3Aa/actions/interrupt', undefined, 200],
+    ['POST', '/api/groups/dashboard%3Aa/actions/unregistered', undefined, 403],
+    ['DELETE', '/api/groups/dashboard%3Aa', undefined, 403],
+    ['POST', '/api/groups/dashboard%3Aa/actions/interrupt', { scope: 'admin', kind: 'cookie' }, 403],
+  ]) {
+    const req = Readable.from([Buffer.from('{"confirmed":true}')]);
+    req.method = method; req.headers = { 'content-type': 'application/json' }; req._authContext = context;
+    const res = Object.assign(new EventEmitter(), { status: null,
+      writeHead(code) { this.status = code; }, end() { this.writableFinished = true; } });
+    const before = calls;
+    await proxy.proxyApi(req, res, agent, suffix, '');
+    assert.equal(res.status, status, `${method} ${suffix}`);
+    assert.equal(calls - before, status === 200 ? 1 : 0, 'rejected requests do not reach the producer');
   }
 });

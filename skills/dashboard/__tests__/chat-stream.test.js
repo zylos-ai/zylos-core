@@ -79,8 +79,8 @@ test('ordinary streams never opt in and chat events cannot be globally broadcast
   f.hub.broadcast('chat_unavailable', { conversationId: 'forbidden' });
   assert.equal(ordinary.text(), before);
   assert.doesNotMatch(ordinary.text(), /chat_ready|conversationId/);
-  f.hub.broadcast('state_change', { state: 'idle' });
-  assert.match(ordinary.text(), /state_change/); assert.match(chat.text(), /state_change/);
+  f.hub.broadcast('instance', { state: 'idle' });
+  assert.match(ordinary.text(), /instance/); assert.match(chat.text(), /instance/);
   assert.match(chat.text(), /chat_ready/);
   assert.doesNotMatch(chat.text(), /content|preview|attachment|token|password/);
 });
@@ -122,7 +122,7 @@ test('a slow or throwing client is removed once and cannot retain a pending even
   f.hub.closeAll(); assert.equal(closed, 1);
   const throwing = new Response(), second = f.hub.addClient(throwing, () => true, { onClose: () => closed++ });
   throwing.write = () => { throw Error('fixture write failed'); };
-  assert.equal(f.hub.sendTo(second, 'state_change', {}), false);
+  assert.equal(f.hub.sendTo(second, 'instance', {}), false);
   assert.equal(closed, 2); assert.equal(f.hub.clients.size, 0);
 });
 
@@ -142,14 +142,14 @@ test('chat sampling emission and keepalive revalidate cookies without extending 
   assert.equal(f.observer.subscriptions.size, 0); assert.equal(f.hub.chatClients.size, 0);
 });
 
-test('chat connection caps defer untouched responses to ordinary streaming and release capacity on close', t => {
+test('chat connection caps reject excess subscriptions and release capacity on close', t => {
   const f = fixture(t); f.config.chat.allowRemote = true;
   assert.equal(f.hub.maxChatClients, 100); assert.equal(f.hub.maxChatClientsPerPrincipal, 20);
   f.hub.maxChatClients = 2; f.hub.maxChatClientsPerPrincipal = 1;
   const cookie = f.request().res, before = f.reads();
   const duplicate = f.request();
-  assert.equal(duplicate.handled, false); assert.equal(duplicate.res.status, undefined);
-  assert.equal(duplicate.res.text(), '', 'cap fallback has not written headers or allocated a hub client');
+  assert.equal(duplicate.handled, true); assert.equal(duplicate.res.status, 429);
+  assert.equal(JSON.parse(duplicate.res.text()).error, 'chat_connection_limit');
   assert.equal(f.reads(), before); assert.equal(f.observer.subscriptions.size, 1);
   const admin = f.request('admin').res;
   assert.equal(admin.status, 200); assert.equal(f.hub.clients.size, 2);
@@ -166,7 +166,7 @@ test('the instance chat cap bounds different principals before snapshot work', t
   const f = fixture(t); f.config.chat.allowRemote = true;
   f.hub.maxChatClients = 1; f.hub.maxChatClientsPerPrincipal = 2;
   const first = f.request().res, reads = f.reads();
-  const over = f.request('admin'); assert.equal(over.handled, false); assert.equal(over.res.status, undefined);
+  const over = f.request('admin'); assert.equal(over.handled, true); assert.equal(over.res.status, 429);
   assert.equal(f.reads(), reads); assert.equal(f.hub.clients.size, 1);
   first.end(); assert.equal(f.request('admin').res.status, 200);
 });
@@ -183,8 +183,8 @@ for (const afterReady of [false, true]) for (const failure of ['database', 'conv
   assert.equal(f.hub.clients.size, 1); assert.equal(f.hub.chatClients.size, 0);
   assert.equal(f.observer.subscriptions.size, 0); assert.equal(f.observer.recoveries.size, 1);
   assert.notEqual(f.observer.timer, null);
-  for (const event of ['state_change', 'metric', 'fleet_state']) f.hub.broadcast(event, { state: 'idle' });
-  for (const event of ['state_change', 'metric', 'fleet_state']) assert.ok(res.text().includes(`event: ${event}\n`));
+  for (const event of ['instance', 'metric', 'groups']) f.hub.broadcast(event, { state: 'idle' });
+  for (const event of ['instance', 'metric', 'groups']) assert.ok(res.text().includes(`event: ${event}\n`));
   assert.equal(res.writableEnded, false);
   f.fail(null);
   const replacement = f.request().res;
@@ -203,9 +203,9 @@ for (const invalidation of ['revoke', 'idle', 'remotePolicy']) test(`a chat-deta
   if (invalidation === 'revoke') f.revoke();
   else if (invalidation === 'idle') f.session.last_activity_at = Date.now() - 3_600_001;
   else f.config.chat.allowRemote = false;
-  f.hub.broadcast('state_change', { state: 'not allowed' });
+  f.hub.broadcast('instance', { state: 'not allowed' });
   assert.equal(res.writableEnded, true); assert.match(res.text().slice(prior.length), /auth_expired/);
-  assert.doesNotMatch(res.text().slice(prior.length), /state_change|not allowed/);
+  assert.doesNotMatch(res.text().slice(prior.length), /instance|not allowed/);
   assert.equal(f.hub.clients.size, 0); assert.equal(f.hub.chatClients.size, 0);
   assert.equal(f.observer.recoveries.size, 0); assert.equal(f.observer.timer, null);
 });
@@ -233,8 +233,8 @@ test('missing database keeps ordinary events live through repeated samples and r
   }
   assert.equal(f.reads(), reads, 'recovery watches do not read conversation snapshots');
   assert.equal((res.text().match(/event: chat_unavailable\n/g) || []).length, 1);
-  f.hub.broadcast('state_change', { state: 'idle' });
-  assert.match(res.text(), /event: state_change/); assert.equal(res.writableEnded, false);
+  f.hub.broadcast('instance', { state: 'idle' });
+  assert.match(res.text(), /event: instance/); assert.equal(res.writableEnded, false);
   f.replace(); f.fail(null); f.tick();
   assert.equal(closes, 1); assert.equal(f.observer.recoveries.size, 0);
   assert.equal(f.observer.timer, null);
@@ -261,7 +261,7 @@ test('two cookie principals each receive their own default twenty chat subscript
   for (const identity of ['cookie', 'secondCookie']) {
     for (let i = 0; i < 20; i++) { const result = f.request(identity); assert.equal(result.handled, true); assert.equal(result.res.status, 200); open.push(result.res); }
     const extra = f.request(identity);
-    assert.equal(extra.handled, false); assert.equal(extra.res.status, undefined); assert.equal(extra.res.text(), '');
+    assert.equal(extra.handled, true); assert.equal(extra.res.status, 429); assert.equal(JSON.parse(extra.res.text()).error, 'chat_connection_limit');
   }
   assert.equal(f.observer.subscriptions.size, 40); assert.equal(f.hub.clients.size, 40);
   assert.equal(f.hub.chatClients.size, 2);

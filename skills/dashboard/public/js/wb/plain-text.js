@@ -14,7 +14,7 @@ export function icon(document, name, size) {
 export function platformOf(row) {
   const key = row.sessionGroup ?? '';
   const colon = key.indexOf(':');
-  return row.c4?.componentName ?? (colon < 0 ? key : key.slice(0, colon));
+  return row.channel ?? row.c4?.componentName ?? (colon < 0 ? key : key.slice(0, colon));
 }
 export function fallbackName(row, t = key => key) {
   const key = row.sessionGroup;

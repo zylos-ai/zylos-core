@@ -383,6 +383,41 @@ registerIntegrationCase('receive failures and lost receipts preserve commit evid
   } finally { await restartSandbox.close(); }
 });
 
+// Boundary: reserved group resources and detail parsing through the shared
+// product key/error helpers and real groups API. Run after group fixture route
+// changes; unrelated presentation changes may skip. Private HTTP/C4/Dashboard
+// paths are proved by the sandbox before allocation and reclaimed on teardown.
+registerIntegrationCase('group resources precede details and preserve include and failure responses', async (t, sandbox) => {
+  const api = await createChatApiFixture(t, sandbox);
+  const active = await api.createConversation();
+  const historical = 'telegram:运维群-测试';
+  const imported = api.c4.insertConversation('in', 'telegram', 'imported', 'Historical group message', { groupName: 'imported' });
+  // Seed an existing import without changing the current C4 write grammar.
+  api.db.prepare('UPDATE conversations SET session_group=? WHERE id=?').run(historical, imported.id);
+  api.db.prepare('UPDATE group_heads SET session_group=? WHERE session_group=?').run(historical, imported.session_group);
+  for (const path of ['/api/groups/runtime-overrides', '/api/groups/runtime-overrides?q=private', '/api/groups/naming-prompt']) {
+    const result = await api.request(path);
+    assert.equal(result.status, 200, path);
+    if (path.includes('runtime-overrides')) assert.equal(result.body.runtime.length, 0);
+    else assert.equal(typeof result.body.text, 'string');
+  }
+  const group = '/api/groups/' + encodeURIComponent('dashboard:' + active.draft.localId);
+  const compact = await api.request(group + '?include=');
+  assert.equal(compact.status, 200);
+  assert.equal(Object.hasOwn(compact.body, 'raw'), false);
+  assert.equal(Object.hasOwn(compact.body, 'config'), false);
+  const invalid = await api.request(group + '?include=unknown');
+  assert.equal(invalid.status, 400); assert.equal(invalid.body.error.code, 'INVALID_INCLUDE');
+  const missing = await api.request('/api/groups/dashboard%3Amissing?include=');
+  assert.equal(missing.status, 404); assert.equal(missing.body.error.code, 'GROUP_NOT_FOUND');
+  const historicalDetail = await api.request('/api/groups/' + encodeURIComponent(historical) + '?include=');
+  assert.equal(historicalDetail.status, 200); assert.equal(historicalDetail.body.id, historical);
+  const unknownHistorical = await api.request('/api/groups/' + encodeURIComponent('telegram:未导入群') + '?include=');
+  assert.equal(unknownHistorical.status, 400); assert.equal(unknownHistorical.body.error.code, 'SESSION_GROUP_INVALID');
+  const malformed = await api.request('/api/groups/%ZZ?include=');
+  assert.equal(malformed.status, 400); assert.equal(malformed.body.error.code, 'SESSION_GROUP_INVALID');
+});
+
 // Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.
 registerIntegrationCase('remote chat off, on and off enforces both direct and proxy authorization before private reads or writes', async (t, sandbox) => {
   const remoteSandbox = createChatSandbox(t);
@@ -416,20 +451,27 @@ registerIntegrationCase('remote chat off, on and off enforces both direct and pr
       for (const identity of ['read', 'admin']) for (const fleet of [false, true]) {
         const client = fleet ? local : remote;
         const options = { identity, ...(fleet ? { fleet: true } : {}) };
-        const overview = await client.request('/api/workbench/groups', options);
+        const overview = await client.request('/api/groups/offline', options);
         assert.equal(overview.status, 200);
-        const row = overview.body.rows.find(item => item.sessionGroup?.endsWith(':' + active.draft.localId));
-        assert.ok(row); assert.ok(row.state); assert.equal(row.queue.pending.count, 2);
-        assert.ok(row.preview.text.length <= 80); assert.ok(row.preview.text.includes('[REDACTED]'));
+        const running = await client.request('/api/groups/running', options);
+        assert.equal(running.status, 200);
+        const row = [...overview.body.rows, ...running.body.rows].find(item => item.id === 'dashboard:' + active.draft.localId);
+        assert.ok(row); assert.equal(row.flags.queued.count, 2);
+        const detail = await client.request('/api/groups/' + encodeURIComponent(row.id) + '?include=', options);
+        assert.equal(detail.status, 200); assert.ok(detail.body.state);
+        assert.equal(detail.body.queue.pending.count, 2);
+        assert.ok(detail.body.preview.text.length <= 80); assert.ok(detail.body.preview.text.includes('[REDACTED]'));
+        assert.ok(!detail.text.includes(fakeCredential));
         assert.ok(!overview.text.includes(fakeCredential));
-        const summary = await client.request('/api/workbench/groups?view=summary', options);
-        assert.equal(summary.status, 200); assert.ok(summary.body.counts);
-        const search = await client.request('/api/workbench/groups/search?q=' + active.draft.localId, options);
+        assert.ok(!running.text.includes(fakeCredential));
+        const summary = await client.request('/api/groups/counts', options);
+        assert.equal(summary.status, 200); assert.ok(summary.body.running);
+        const search = await client.request('/api/groups/search?q=' + active.draft.localId, options);
         assert.equal(search.status, 200); assert.equal(search.body.rows.length, 1);
         assert.ok(!search.text.includes(fakeCredential));
-        const activity = await client.request('/api/workbench/activity?range=60m', options);
-        assert.equal(activity.status, 200); assert.ok(activity.body.groups[row.sessionGroup]);
-        assert.equal(activity.body.groups[row.sessionGroup].inbound.length, 2);
+        const activity = await client.request('/api/groups/activity?range=60m', options);
+        assert.equal(activity.status, 200); assert.ok(activity.body.groups[row.id]);
+        assert.equal(activity.body.groups[row.id].inbound.length, 2);
       }
       for (const identity of ['read', 'admin', 'cookie']) {
         for (const route of reads) {

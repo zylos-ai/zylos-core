@@ -5,7 +5,7 @@ and runtime CLI version. Codex configuration and service tier remain available
 to the existing backend consumers but are omitted from this line. Missing runtime
 model or effort evidence is displayed as unknown rather than replaced by configuration.
 
-`POST /api/actions/chop-chop` uses the existing authenticated Actions route:
+`POST /api/groups/:group/actions/chop-chop` uses the authenticated group action route (use `origin` for the instance’s main conversation):
 
 1. Enqueue `[KEYSTROKE]Escape` through C4, as `interrupt` does.
 2. After that command succeeds, wait 500ms.
@@ -21,7 +21,7 @@ returns an error with `escape_enqueued: true` and `continue_enqueued: false`;
 the earlier Escape cannot be undone. A command failure or timeout can have an
 ambiguous enqueue outcome, so failure flags are not proof that C4 accepted no write.
 The existing two-second identical-request protection applies to this action.
-The old `interrupt` endpoint remains available; only its modal button is replaced.
+The group `interrupt` action remains available; only its modal button is replaced.
 
 Local and Fleet actions share the route and confirmation behavior. Tests use
 isolated fixture controls and must not send these commands to the live agent.
