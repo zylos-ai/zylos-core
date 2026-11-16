@@ -504,7 +504,7 @@ test('single Origin heatmaps combine current and legacy events with every channe
   for (const [id, key, direction, channel, time] of [
     [1, 'telegram:first', 'in', 'telegram', inbound[0]],
     [2, 'lark:second', 'in', 'lark', inbound[1]],
-    [3, null, 'in', 'legacy', inbound[2]],
+    [3, '', 'in', 'legacy', inbound[2]],
     [4, 'origin', 'in', 'internal', at - minute],
     [5, 'telegram:first', 'out', 'telegram', at - minute],
     [6, 'origin', 'in', 'dashboard', at + minute],
