@@ -380,7 +380,7 @@ export class FleetProxy {
     const chatStream = suffix === '/api/stream' && new URLSearchParams(search).has('chat');
     if (suffix.startsWith('/api/chat/') || chatStream) {
       const context = req._authContext;
-      if (!context || !['GET', 'HEAD'].includes(req.method) && context.scope !== 'admin' || chatStream && !this.authGate?.resolveAuthContext(req, { touch: false })) {
+      if (context?.scope !== 'admin' || chatStream && this.authGate?.resolveAuthContext(req, { touch: false })?.scope !== 'admin') {
         sendJson(res, 403, { error: 'admin_required' });
         return;
       }
@@ -396,7 +396,7 @@ export class FleetProxy {
         return;
       }
       const context = req._authContext;
-      if (!context || !['GET', 'HEAD'].includes(req.method) && context.scope !== 'admin') {
+      if (!context || suffix !== '/api/observer/status' && context.scope !== 'admin') {
         sendJson(res, 403, { error: 'admin_required' });
         return;
       }
@@ -483,7 +483,7 @@ export class FleetProxy {
       }
       res.writeHead(remoteResp.status, responseHeaders);
       const upstream = Readable.fromWeb(remoteResp.body);
-      const chatAuthorized = () => Boolean(this.authGate?.resolveAuthContext(req, { touch: false }));
+      const chatAuthorized = () => this.authGate?.resolveAuthContext(req, { touch: false })?.scope === 'admin';
       const guarded = chatStream ? guardedChatSseStream(guard, chatAuthorized) : guardedSseStream(guard, upstream, () => {
         process.stderr.write(`[fleet-proxy] blocked secret-bearing SSE response from ${agent.name}\n`);
       });
@@ -701,8 +701,7 @@ export class FleetProxy {
       if (now - lastLocalCheck < 1000) return true;
       const current = this.authGate?.revalidateAuthContext
         ? this.authGate.revalidateAuthContext(context) : context;
-      const allowed = (upload ? samePrincipal(current, context) : current && current.kind === context.kind &&
-        current.principalId === context.principalId && ['read', 'admin'].includes(current.scope)) && this.config.fleet?.agents?.some(candidate =>
+      const allowed = samePrincipal(current, context) && this.config.fleet?.agents?.some(candidate =>
         candidate.name === agent.name && candidate.base_url === agent.base_url);
       if (allowed) lastLocalCheck = now;
       return allowed;

@@ -69,10 +69,10 @@ test('schedule adapters expose only object routes and action subpaths', async ()
     body: { ok: false, error: { code: 'TASK_NOT_FOUND', message: 'Missing task' } } });
 });
 
-test('remote chat reads accept read scope while writes and settings mutation require admin', () => {
+test('remote chat content requires admin while the access setting remains readable', () => {
   let context = { kind: 'api', scope: 'read' };
   const auth = { enabled: true, resolveAuthContext(req) { req._authContext = context; return context; } };
-  assert.equal(requireChatAccess({ method: 'GET' }, auth, { chat: { allowRemote: true } }), null);
+  assert.equal(requireChatAccess({ method: 'GET' }, auth, { chat: { allowRemote: true } }).error, 'insufficient_scope');
   assert.equal(requireChatAccess({ method: 'GET' }, auth, { chat: { allowRemote: false } }).status, 403);
   assert.equal(requireChatAccess({ method: 'POST' }, auth, { chat: { allowRemote: true } }).error, 'insufficient_scope');
   assert.equal(requireChatSettingsAccess({ method: 'GET' }, auth), null);

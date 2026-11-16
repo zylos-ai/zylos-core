@@ -280,18 +280,18 @@ test('config and downloads require both data gates while downloading remains val
   const f = await fixture(t), uploaded = await f.upload();
   assert.equal(uploaded.status, 201); assert.equal((await f.send(uploaded.body.id)).status, 200);
   const suffix = '/attachments/' + uploaded.body.id;
-  for (const local of ['none']) {
+  for (const local of ['none', 'read']) {
     assert.equal((await f.request('/uploads/config', { headers: { 'x-fixture-local': local } })).status, 403);
     assert.equal((await f.request(suffix, { headers: { 'x-fixture-local': local } })).status, 403);
   }
-  assert.equal((await f.request('/uploads/config', { headers: { 'x-fixture-local': 'read' } })).status, 200);
-  assert.equal((await f.request(suffix, { headers: { 'x-fixture-local': 'read' } })).status, 200);
+  assert.equal((await f.request('/uploads/config', { headers: { 'x-fixture-local': 'read' } })).status, 403);
+  assert.equal((await f.request(suffix, { headers: { 'x-fixture-local': 'read' } })).status, 403);
   f.targetConfig.chat.allowRemote = false;
   assert.equal((await f.request('/uploads/config')).status, 403);
   assert.equal((await f.request(suffix)).status, 403);
   f.targetConfig.chat.allowRemote = true; f.setToken('fixture-read');
-  assert.equal((await f.request('/uploads/config')).status, 200);
-  assert.equal((await f.request(suffix)).status, 200);
+  assert.equal((await f.request('/uploads/config')).status, 403);
+  assert.equal((await f.request(suffix)).status, 403);
   f.setToken('fixture-admin-a'); f.setMode('single');
   assert.equal((await f.request('/uploads/config')).status, 403);
   const downloaded = await f.request(suffix);

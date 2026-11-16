@@ -1459,7 +1459,7 @@ test('fleet Observer cookie HTTP and WebSocket admission ignore forwarded protoc
   }
 });
 
-test('history GET routes admit read keys and retain secret response guard', async () => {
+test('history GET routes require admin and retain secret response guard', async () => {
   let responseBody = { entries: [{ fields: { body: { preview: '[redacted]' } } }] };
   const remote = await listen((_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(responseBody)); });
   const proxy = new FleetProxy({
@@ -1476,7 +1476,7 @@ test('history GET routes admit read keys and retain secret response guard', asyn
       assert.equal(response.status, 200, route); assert.equal(response.headers.get('cache-control'), 'no-store');
     }
     const denied = await fetch(`${hub.origin}/fleet/History/api/observer/history/sessions`, { headers: { 'x-test-scope': 'read' } });
-    assert.equal(denied.status, 200);
+    assert.equal(denied.status, 403);
     const unknown = await fetch(`${hub.origin}/fleet/History/api/observer/history/write`);
     assert.equal(unknown.status, 403);
     responseBody = { text: 'zylos_st_must_be_blocked' };
@@ -1793,9 +1793,18 @@ test('fleet migrates object writes and exposes remote chat policy to read caller
   });
   t.after(() => hub.close());
   const request = (route, method, headers = {}) => fetch(`${hub.origin}/fleet/Remote${route}`, { method, headers });
-  for (const route of ['/api/settings/chat', '/api/chat/conversations', '/api/observer/status', '/api/observer/history/sessions?session_group=telegram%3Ateam']) {
+  for (const route of ['/api/settings/chat', '/api/observer/status']) {
     const response = await request(route, 'GET', { 'x-test-scope': 'read' });
     assert.equal(response.status, 200, route);
+    assert.deepEqual(seen.at(-1), ['GET', route]);
+  }
+  for (const route of ['/api/chat/conversations', '/api/observer/history/sessions?session_group=telegram%3Ateam']) {
+    const count = seen.length;
+    const denied = await request(route, 'GET', { 'x-test-scope': 'read' });
+    assert.equal(denied.status, 403, route);
+    assert.equal(seen.length, count, 'read keys cannot forward content requests');
+    const accepted = await request(route, 'GET');
+    assert.equal(accepted.status, 200, route);
     assert.deepEqual(seen.at(-1), ['GET', route]);
   }
   for (const [method, route] of [

@@ -238,7 +238,7 @@ export class ObserverService {
         return true;
       }
 
-      const context = this._authContext(req, { requireOrigin: req.method !== 'GET' && req.method !== 'HEAD', requireAdmin: req.method !== 'GET' && req.method !== 'HEAD' });
+      const context = this._authContext(req, { requireOrigin: req.method !== 'GET' && req.method !== 'HEAD', requireAdmin: !(pathname === '/api/observer/status' && ['GET', 'HEAD'].includes(req.method)) });
       if (pathname.startsWith('/api/observer/history/')) {
         if (!this.historyService) throw new ObserverHttpError(404, 'not_found');
         // File history must never start/reconcile containment or acquire a lease.

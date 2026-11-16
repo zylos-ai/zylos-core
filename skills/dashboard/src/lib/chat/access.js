@@ -24,7 +24,7 @@ export function requireChatAccess(req, auth, config, options) {
   if (config.chat?.allowRemote !== true) {
     return { status: 403, error: 'remote_chat_disabled', message: '对方实例未允许远端访问对话和终端' };
   }
-  return ['GET', 'HEAD'].includes(req.method) || context.scope === 'admin' ? null : { status: 403, error: 'insufficient_scope', required: 'admin' };
+  return context.scope === 'admin' ? null : { status: 403, error: 'insufficient_scope', required: 'admin' };
 }
 
 /**
@@ -34,7 +34,6 @@ export function requireChatAccess(req, auth, config, options) {
 export function requireChatWritePreflight(req, auth, config) {
   const denied = requireChatAccess(req, auth, config);
   if (denied) return denied;
-  if (req._authContext.scope !== 'admin') return { status: 403, error: 'insufficient_scope', required: 'admin' };
   if (req._authContext.kind === 'cookie' && !isSameOriginRequest(req)) return { status: 403, error: 'same_origin_required' };
   return null;
 }

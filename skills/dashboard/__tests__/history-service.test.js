@@ -135,7 +135,7 @@ test('Observer auth protects all history routes without touching containment or 
     containment: { reconcilePersisted: forbidden }, manager: { createLease: forbidden },
     authGate: { enabled: true, resolveAuthContext: (req) => req.headers.authorization === 'Bearer admin' ? { kind: 'api', scope: 'admin' } : req.headers.cookie ? { kind: 'cookie', scope: 'admin' } : req.headers.authorization ? { kind: 'api', scope: 'read' } : null },
   });
-  for (const [headers, expected] of [[{}, 401], [{ authorization: 'Bearer read' }, 200], [{ authorization: 'Bearer admin' }, 200], [{ cookie: 'session=yes' }, 200]]) {
+  for (const [headers, expected] of [[{}, 401], [{ authorization: 'Bearer read' }, 403], [{ authorization: 'Bearer admin' }, 200], [{ cookie: 'session=yes' }, 200]]) {
     assert.equal((await request(observer, 'sessions', { headers })).status, expected);
   }
   assert.equal((await request(observer, 'sessions', { method: 'POST', headers: { authorization: 'Bearer admin' } })).status, 404);

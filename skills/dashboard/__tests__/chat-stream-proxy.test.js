@@ -157,7 +157,7 @@ test('Fleet relays producer chat limits and preserves explicitly requested ordin
   const relayed = f.open();
   await until(() => relayed.ended());
   assert.equal(relayed.status(), 429);
-  assert.equal(relayed.text(), producer.text(), 'Fleet preserves the producer limit response');
+  assert.deepEqual(JSON.parse(relayed.text()), JSON.parse(producer.text()), 'Fleet preserves the producer limit response object');
   assert.equal(f.observer.subscriptions.size, 0);
   assert.equal(f.hub.chatClients.size, 0);
   const stream = f.open('cookie', '');

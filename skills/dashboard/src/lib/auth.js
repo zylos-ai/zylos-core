@@ -322,14 +322,16 @@ function nextTarget(req, base) {
 function needsAdminApiAccess(pathname, method) {
   pathname = pathname.replace(/\/{2,}/g, '/');
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) return true;
-  if (/^\/api\/chat\/drafts\/[^/]+(?:\/deletion)?$/.test(pathname)) return true;
+  if (pathname.startsWith('/api/chat/') || pathname.startsWith('/api/observer/history/') ||
+      pathname === '/observer/frame' || pathname === '/observer/stream') return true;
   if (pathname === '/api/fleet/agents' || pathname.startsWith('/api/fleet/agents/')) return true;
   if (pathname === '/api/keys' || pathname.startsWith('/api/keys/')) return true;
   if (pathname === '/api/memory/file' || pathname === '/api/memory/git') return true;
   const proxied = pathname.match(/^\/fleet\/[^/]+(\/api\/.*)$/);
   if (!proxied) return false;
   const remotePath = proxied[1];
-  return remotePath === '/api/memory/file' || remotePath === '/api/memory/git';
+  return remotePath === '/api/memory/file' || remotePath === '/api/memory/git' ||
+    remotePath.startsWith('/api/chat/') || remotePath.startsWith('/api/observer/history/');
 }
 
 export function generateApiKey() {

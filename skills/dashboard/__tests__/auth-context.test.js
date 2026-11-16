@@ -77,7 +77,7 @@ test('missing password rejects existing cookie and API principals and their reva
 // Permission integration: real AuthGate with in-memory API sessions only. Run
 // for workbench proxy/admin classification; skip UI-only changes. No network,
 // DB or children; each gate's cleanup timer is removed in test teardown.
-test('proxied writes require local admin while public reads accept read scope', async t => {
+test('proxied writes and sensitive reads require admin while status reads accept read scope', async t => {
   const { workbenchWriteRoutes } = await import('./fixtures/workbench-write-routes.js');
   const now = Date.now(), token = `zylos_st_${'b'.repeat(64)}`;
   let scope = 'read';
@@ -99,9 +99,9 @@ test('proxied writes require local admin while public reads accept read scope', 
     const response = { status: null, body: null, setHeader() {}, writeHead(status) { this.status = status; }, end(body) { this.body = JSON.parse(body); } };
     const request = () => ({ method: route.method, url: url.pathname, headers: { authorization: `Bearer ${token}` } });
     scope = 'read';
-    const write = !['GET', 'HEAD', 'OPTIONS'].includes(route.method);
-    assert.equal(await gate.handle(request(), response, url), write);
-    if (write) {
+    const adminRequired = !['GET', 'HEAD', 'OPTIONS'].includes(route.method) || route.path.startsWith('/api/chat/');
+    assert.equal(await gate.handle(request(), response, url), adminRequired);
+    if (adminRequired) {
       assert.equal(response.status, 403);
       assert.equal(response.body.error.code, 'insufficient_scope');
     }

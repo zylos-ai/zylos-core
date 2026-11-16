@@ -10,7 +10,7 @@ Paths are relative to the Dashboard base URL. For example, with the default HTTP
 
 - **Public**: no login required.
 - **Read**: an authenticated browser session or an API session with `read` or `admin` scope. An API key must first be exchanged for an API session through the existing authentication API.
-- **Admin**: an authenticated administrator. Browser-cookie writes also require a same-origin request. Read-scope API sessions cannot write.
+- **Admin**: an authenticated administrator. Browser-cookie writes also require a same-origin request. Read-scope API sessions cannot write or read conversation content, attachments or full terminal history.
 - **Local owner**: an administrator logged in with the local password cookie. API keys do not grant deletion or deletion-preview access, even with admin scope.
 
 The existing auth gate may return HTTP 401 (unauthenticated) or 403 (`insufficient_scope`). Browser writes can return 403 `same_origin_required`. Invalid JSON returns 400 `invalid_json`, and oversized JSON bodies return 413 `payload_too_large`; body limits are route-specific (4 KiB for object actions/timezone/names/keys, 16 KiB for pricing/Fleet config, 64 KiB for schedule forms; chat and memory have their own limits). Removed routes and unsupported API method/path pairs return 404 `not_found` (including a known path called with the wrong method). Login/logout retain HTTP 405 for unsupported methods. JSON failures use the common envelope.
@@ -600,7 +600,7 @@ Schedule `nextRunAt`, `lastRunAt`, `updatedAt`, history `executedAt`/`completedA
 
 ## Chat
 
-The remote chat switch must be enabled for API-session access. GETs permit read scope; writes require admin and browser same origin. Local password sessions can read their own instance independently of the remote switch. Conversation IDs are opaque and must be URL-encoded; query parameters are validated per route.
+**Access:** Admin for all conversation content, metadata, attachment and chat push routes below. The remote chat switch must be enabled for API-session access. All conversation content and attachment reads require admin scope at both the local and destination instances; read keys receive 403. Writes also require admin and browser same origin. `GET /api/settings/chat` remains read-scoped because it exposes only the access setting. Local password sessions can read their own instance independently of the remote switch. Conversation IDs are opaque and must be URL-encoded; query parameters are validated per route.
 
 | Method/path | Contract and minimal example |
 |---|---|
@@ -624,7 +624,7 @@ Chat validation uses HTTP 400 (`invalid_chat_parameters`, invalid conversation/c
 
 ## Terminal Observer and History
 
-Read-scope callers can read observer status/history when remote access is enabled. Administration, terminal-size changes and leases require admin and browser same origin. `/observer/frame` and `/observer/stream` are lease-bound terminal resources, not read-key data APIs. Install/enable/disable/uninstall retain their existing coordinator semantics.
+**Access:** Read for observer status; Admin for every terminal-history route and live terminal resource. Read-scope callers can read observer status when remote access is enabled. All four terminal-history reads require admin at both the local and destination instances; read keys receive 403. Administration, terminal-size changes and leases require admin and browser same origin. `/observer/frame` and `/observer/stream` are lease-bound terminal resources, not read-key data APIs. Install/enable/disable/uninstall retain their existing coordinator semantics.
 
 | Method/path | Contract and minimal example |
 |---|---|
@@ -668,7 +668,7 @@ Fleet rejects unknown agents with 404, local-only/forbidden routes with 403, inv
 
 **Access:** Read for the ordinary stream. Chat subscriptions additionally use the existing chat-access rules (local owner or permitted remote chat access).
 
-**Parameters:** no parameters for ordinary instance events. Chat opt-in uses `chat=1`, optional `chat_tab=mine|external` (default mine) and `chat_conversation` (an encoded conversation ID); repeated subscription parameters and legacy `chat_ids` are invalid; invalid subscriptions are rejected rather than treated as an ordinary stream. Response is `text/event-stream`, not JSON.
+**Parameters:** no parameters for ordinary instance events. Chat opt-in requires admin at both instances and uses `chat=1`, optional `chat_tab=mine|external` (default mine) and `chat_conversation` (an encoded conversation ID); repeated subscription parameters and legacy `chat_ids` are invalid; invalid subscriptions are rejected rather than treated as an ordinary stream. Response is `text/event-stream`, not JSON.
 
 | SSE event | Data | Meaning |
 |---|---|---|

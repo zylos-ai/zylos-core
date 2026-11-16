@@ -479,14 +479,15 @@ registerIntegrationCase('remote chat off, on and off enforces both direct and pr
       for (const identity of ['read', 'admin', 'cookie']) {
         for (const route of reads) {
           const direct = await remote.request(route, { identity });
-          const allowed = identity === 'cookie' || allowRemote;
+          const allowed = identity === 'cookie' || identity === 'admin' && allowRemote;
           assert.equal(direct.status, allowed ? 200 : 403, `${identity} direct ${route} remote=${allowRemote}`);
           if (!allowed) assert.ok(!direct.text.includes('PRIVATE_REMOTE_TEXT'));
           const upstreamBefore = local.counts.upstream;
           const proxied = await local.request(route, { identity, fleet: true });
-          assert.equal(proxied.status, allowRemote ? 200 : 403);
-          assert.equal(local.counts.upstream, upstreamBefore + 1);
-          if (!allowRemote) assert.ok(!proxied.text.includes('PRIVATE_REMOTE_TEXT'));
+          const proxyAllowed = identity !== 'read' && allowRemote;
+          assert.equal(proxied.status, proxyAllowed ? 200 : 403);
+          assert.equal(local.counts.upstream, upstreamBefore + (identity === 'read' ? 0 : 1));
+          if (!proxyAllowed) assert.ok(!proxied.text.includes('PRIVATE_REMOTE_TEXT'));
         }
         // Forbidden callers must not reach receive or acceptance; the enabled
         // direct/proxy admin paths above use their own registered questions.
