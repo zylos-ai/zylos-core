@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { fork, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 mock.module('../skills/activity-monitor/scripts/core-modules.js', {
@@ -15,8 +16,11 @@ mock.module('../skills/comm-bridge/scripts/c4-db.js', {
 const { upgradeRuntime } = await import('../skills/upgrade-claude/scripts/upgrade.js');
 
 function readback() {
-  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
-    assert.ok(process.env[key]?.startsWith('/tmp/zylos-tests-'), `${key} must be isolated`);
+  const home = fs.realpathSync(process.env.HOME);
+  assert.notEqual(home, fs.realpathSync(os.userInfo().homedir), 'HOME must be isolated');
+  const isolated = path.dirname(home);
+  for (const key of ['ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
+    assert.ok(process.env[key]?.startsWith(isolated + path.sep), `${key} must be isolated`);
   }
   const socket = path.join(process.env.TMPDIR, 'tmux.sock');
   console.log(JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
