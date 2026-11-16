@@ -73,7 +73,7 @@ function assertResponse(bytes, status, reason, error) {
   const length = bytes.slice(0, boundary).match(/content-length: (\d+)/i);
   assert.ok(length);
   assert.equal(Buffer.byteLength(body), Number(length[1]));
-  assert.deepEqual(JSON.parse(body), { error });
+  assert.deepEqual(JSON.parse(body), { ok: false, error: { code: error, message: error } });
   assert.doesNotMatch(bytes, /ERR_INVALID_URL|TypeError|input|stack/);
 }
 
