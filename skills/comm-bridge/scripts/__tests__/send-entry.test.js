@@ -103,7 +103,8 @@ test('audit rollback prevents component; actual exit failure preserves audit', a
   db.exec('DROP TRIGGER reject_send');
   fs.writeFileSync(script, 'process.exit(1)');
   await assert.rejects(sendExternal(request, 'body', { api, skillsDir: dir }), { code: 'SEND_FAILED', exitCode: 1 });
-  assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='delivered'").get().n, 1);
+  assert.deepEqual(db.prepare('SELECT status,delivery_action FROM conversations').get(),
+    { status: 'failed', delivery_action: 'send_failed' });
 });
 
 test('absorbed reply reads transition and message atomically without reusing the stored group', t => {
@@ -135,14 +136,15 @@ test('real component receives maximum endpoint and preserves shell metacharacter
   assert.equal(db.prepare('SELECT count(*) n FROM conversations').get().n, 2);
 });
 
-test('actual E2BIG and a component disappearing before delivery preserve delivered rows', { timeout: 15000 }, async t => {
+test('actual E2BIG and a component disappearing before delivery preserve failed audits', { timeout: 15000 }, async t => {
   const { api, dir, script, marker, db } = setup(t);
   const argMax = Number(execFileSync('getconf', ['ARG_MAX'], { encoding: 'utf8', timeout: 5000 }).trim());
   assert.ok(Number.isSafeInteger(argMax) && argMax > 0, 'getconf must report a positive argument limit');
   // Exceed the platform's entire argv budget, not Linux's per-argument limit.
   await assert.rejects(sendExternal(request, 'x'.repeat(argMax + 1), { api, skillsDir: dir }),
     error => error.code === 'COMPONENT_SPAWN_FAILED' && error.message.includes('E2BIG'));
-  assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='delivered'").get().n, 1);
+  assert.deepEqual(db.prepare('SELECT status,delivery_action FROM conversations').get(),
+    { status: 'failed', delivery_action: 'spawn_failed' });
   assert.equal(fs.existsSync(marker), false);
   fs.writeFileSync(path.join(dir, 'demo', 'SKILL.md'), `---
 c4:
@@ -157,7 +159,10 @@ c4:
     process.stdout.write(JSON.stringify({version:1, decision:'continue'}));
   `);
   await assert.rejects(sendExternal(request, 'body', { api, skillsDir: dir }), { code: 'SEND_FAILED' });
-  assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='delivered'").get().n, 2);
+  assert.deepEqual(db.prepare('SELECT status,delivery_action FROM conversations ORDER BY id').all(), [
+    { status: 'failed', delivery_action: 'spawn_failed' },
+    { status: 'failed', delivery_action: 'send_failed' },
+  ]);
   assert.equal(fs.existsSync(script + '.removed'), true);
   assert.equal(fs.existsSync(marker), false);
 });

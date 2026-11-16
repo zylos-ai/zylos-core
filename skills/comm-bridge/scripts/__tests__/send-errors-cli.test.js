@@ -45,6 +45,14 @@ for (const absorbed of [false, true]) {
         }
         const bin = path.join(root, 'bin');
         fs.mkdirSync(bin);
+        fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+        const home = path.join(root, 'home'), tmp = path.join(root, 'tmp');
+        fs.mkdirSync(home);
+        fs.mkdirSync(tmp);
+        const env = { ...process.env, HOME: home, ZYLOS_DIR: root, PM2_HOME: path.join(home, '.pm2'),
+          TMPDIR: tmp, TMUX_TMPDIR: tmp, PATH: bin,
+          ZYLOS_PACKAGE_ROOT: path.resolve(import.meta.dirname, '../../../..') };
+        delete env.TMUX;
         const injectSpawnFault = ['EACCES', 'ENOENT', 'deleted'].includes(fault);
         if (fault === 'EACCES') fs.writeFileSync(path.join(bin, 'not-executable'), '#!/bin/sh\nexit 0\n', { mode: 0o600 });
         if (fault === 'missing') fs.unlinkSync(script);
@@ -56,7 +64,7 @@ for (const absorbed of [false, true]) {
         let result;
         try {
           result = spawnSync(process.execPath, [...(injectSpawnFault ? ['--import', spawnFault] : []), cli, ...args], {
-            env: { ...process.env, ZYLOS_DIR: root, ZYLOS_PACKAGE_ROOT: path.resolve(import.meta.dirname, '../../../..'),
+            env: { ...env,
               ...(injectSpawnFault ? { C4_TEST_SPAWN_TARGET: script, C4_TEST_SPAWN_FAULT: fault } : {}) },
             input: fault === 'E2BIG' ? 'x'.repeat(argMax + 1) : 'reply body', encoding: 'utf8', timeout: 12000,
           });
@@ -68,7 +76,9 @@ for (const absorbed of [false, true]) {
         assert.equal(rows.length, committed ? 1 : 0, fault);
         if (!committed) assert.deepEqual(counts(), before, 'precommit failure must not leak D1/D5/D6');
         if (committed) {
-          assert.equal(rows[0].status, 'delivered');
+          const spawnFailure = ['E2BIG', 'EACCES', 'ENOENT'].includes(fault);
+          assert.equal(rows[0].status, fault === 'success' ? 'delivered' : 'failed');
+          assert.equal(rows[0].delivery_action, fault === 'success' ? null : spawnFailure ? 'spawn_failed' : 'send_failed');
           assert.equal(rows[0].endpoint_id, endpoint);
           assert.equal(rows[0].content, fault === 'E2BIG' ? 'x'.repeat(argMax + 1) : 'reply body');
         }

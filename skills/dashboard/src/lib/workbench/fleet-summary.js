@@ -1,3 +1,5 @@
+import { groupAttention } from '../../../public/js/wb/group-data.js';
+
 /** A projection of the Workbench snapshot, never a second status or health reader. */
 export function fleetGroupSummary(snapshot) {
   if (snapshot?.mode !== 'multi' || !Array.isArray(snapshot.rows)) return null;
@@ -26,16 +28,33 @@ export function fleetGroupSummary(snapshot) {
       reason, durationSeconds: since === null || !Number.isFinite(snapshot.readAt) ? null : Math.max(0, Math.floor((snapshot.readAt - since) / 1000)) });
   }
   const problems = [...errors, ...silent];
+  const observations = groupAttention(snapshot.instance ?? {}, { ...snapshot.groupCounts, listKnown: snapshot.listKnown },
+    snapshot.rows, snapshot.failedRows ?? [], snapshot.attentionFailures ?? []);
+  const attention = [...observations.problems, ...observations.reminders]
+    .filter(item => ['channel_send_failed', 'channel_restarting', 'rate_limited', 'data_unreadable'].includes(item.kind) ||
+      item.kind === 'start_failed' && !rows.some(row => row.sessionGroup === item.group));
   const restarts = snapshot.instance?.autoRestarts?.count;
   return { running: rows.length, counts, problems: problems.slice(0, 2), problemCount: problems.length,
     listKnown: snapshot.listKnown === true,
     pool: { used: snapshot.instance?.pool?.used ?? null, capacity: snapshot.instance?.pool?.capacity ?? null },
     noResponse: { count: Number.isSafeInteger(snapshot.groupCounts?.running?.flags?.noResponse) ? snapshot.groupCounts.running.flags.noResponse : counts.no_response },
-    autoRestarts: Number.isSafeInteger(restarts) && restarts >= 0 ? { count: restarts } : null };
+    autoRestarts: Number.isSafeInteger(restarts) && restarts >= 0 ? { count: restarts } : null,
+    ...(attention.length ? { attention: sanitizeAttention(attention) } : {}) };
 }
 
 const count = value => Number.isSafeInteger(value) && value >= 0;
 const text = value => typeof value === 'string' ? value : null;
+const attentionKinds = new Set(['channel_send_failed', 'channel_restarting', 'rate_limited', 'data_unreadable', 'start_failed']);
+function sanitizeAttention(items) {
+  return items.slice(0, 100).filter(item => item && attentionKinds.has(item.kind)).map(item => ({
+    kind: item.kind,
+    ...Object.fromEntries(['group', 'displayName', 'runtime', 'channel', 'service', 'reasonCode', 'source'].filter(key => text(item[key]) !== null)
+      .map(key => [key, item[key].slice(0, 500)])),
+    ...(count(item.count) ? { count: item.count } : {}),
+    ...(count(item.count30m) ? { count30m: item.count30m } : {}),
+    ...(Number.isFinite(item.until) || text(item.until) !== null ? { until: item.until } : {}),
+  }));
+}
 
 /** Keep older remote payloads valid and project only the supported, bounded contract. */
 export function sanitizeFleetGroupSummary(value) {
@@ -57,9 +76,11 @@ export function sanitizeFleetGroupSummary(value) {
     reason: row.reason, durationSeconds: row.reason === 'no_response' && count(row.durationSeconds) ? row.durationSeconds : null,
   }));
   if (problems.length !== Math.min(2, value.problemCount)) return null;
+  if (value.attention !== undefined && !Array.isArray(value.attention)) return null;
   return { running: value.running, counts: { ...Object.fromEntries(keys.map(key => [key, value.counts[key]])), no_response: silent },
     problems, problemCount: value.problemCount, listKnown: value.listKnown === true,
     pool: { used: count(value.pool?.used) ? value.pool.used : null, capacity: count(value.pool?.capacity) ? value.pool.capacity : null },
     noResponse: { count: noResponseCount },
-    autoRestarts: count(value.autoRestarts?.count) ? { count: value.autoRestarts.count } : null };
+    autoRestarts: count(value.autoRestarts?.count) ? { count: value.autoRestarts.count } : null,
+    ...(value.attention !== undefined ? { attention: sanitizeAttention(value.attention) } : {}) };
 }

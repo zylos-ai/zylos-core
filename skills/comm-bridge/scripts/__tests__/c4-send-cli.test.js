@@ -223,7 +223,9 @@ describe('c4-send failed channel', () => {
       assert.equal(result.status, 3);
       assert.equal(result.stdout, '[C4] Failed to send message via bad-channel (exit code: 3)\n');
       assert.equal(result.stderr, '[C4] SEND_FAILED: Failed to send: component exit 3; audit retained; delivery unconfirmed\n');
-      assert.equal(dbRecent(env)[0].status, 'delivered');
+      const row = dbRecent(env)[0];
+      assert.equal(row.status, 'failed');
+      assert.equal(row.delivery_action, 'send_failed');
     });
   });
 

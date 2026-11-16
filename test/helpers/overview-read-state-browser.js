@@ -23,7 +23,7 @@ export async function runOverviewReadState(sandbox, scenario) {
       if (url.pathname === '/api/groups/running' && failGroups) return sendJson(res, 500, { ok: false, error: { code: 'FIXTURE_READ_FAILED', message: 'Fixture read failed' } });
       if (scenario.kind === 'empty') snapshot.rows = [];
       // Independent channel health remains observable when the group read fails.
-      else snapshot.instance.services.channels = [{ channel: 'fixture', service: 'fixture-service', status: 'errored', down: true }];
+      else snapshot.instance.services.channels = [{ channel: 'fixture', service: 'fixture-service', status: 'online', restarts10m: 0, lastSendFailed: true, consecutiveFailures: 2 }];
       const value = workbenchSnapshotAnswer(url, snapshot, now);
       return sendJson(res, value === undefined ? 404 : 200, value ?? { error: 'not_found' });
     }
@@ -82,7 +82,8 @@ export async function runOverviewReadState(sandbox, scenario) {
     const rows = await board.locator('.wb-row').allTextContents();
     const otherIssues = await attention.locator('.wb-attention-item').allTextContents();
     assert.equal(otherIssues.length, 1);
-    assert.ok(otherIssues[0].includes('fixture-service'));
+    assert.ok(otherIssues[0].includes('fixture'));
+    assert.ok(!otherIssues[0].includes('fixture-service'));
     failGroups = true;
     // Trigger the product's real refresh listener; do not replace its poller.
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));

@@ -3155,6 +3155,7 @@ document.addEventListener('dashboard-locale-change', chatLocaleChange);
 document.querySelector('#wb-detail-toggle')?.addEventListener('change', chatLocaleChange);
 const usageDetailChange = () => usagePage.setViewDetail();
 document.querySelector('#wb-detail-toggle')?.addEventListener('change', usageDetailChange);
+document.querySelector('#wb-detail-toggle')?.addEventListener('change', renderFleet);
 document.addEventListener('dashboard-locale-change', usageDetailChange);
 refreshUsage();
 refreshChat();
@@ -3163,5 +3164,6 @@ window.addEventListener('pagehide', () => { workbench.destroy(); closeSettingsMo
   document.removeEventListener('dashboard-locale-change', chatLocaleChange);
   document.querySelector('#wb-detail-toggle')?.removeEventListener('change', chatLocaleChange);
   document.querySelector('#wb-detail-toggle')?.removeEventListener('change', usageDetailChange);
+  document.querySelector('#wb-detail-toggle')?.removeEventListener('change', renderFleet);
   document.removeEventListener('dashboard-locale-change', usageDetailChange);
 });

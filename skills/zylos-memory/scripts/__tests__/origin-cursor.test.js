@@ -33,7 +33,7 @@ async function fixture(t, group = 'origin') {
   const batch = end => {
     const after = scope.scope === '*' ? store.getGlobalCoverageEnd() : store.getCoverageEnd(scope.scope);
     const rows = database.getConversationsByRange(after + 1, end)
-      .filter(row => row.status === 'delivered' && (scope.scope === '*' || row.session_group === scope.scope));
+      .filter(row => (row.direction === 'out' || row.status === 'delivered') && (scope.scope === '*' || row.session_group === scope.scope));
     return createBatchReceipt(rows.map(projectConversation), { scope: scope.scope, after, end });
   };
   return { root, ...scope, db, store, seed, seedGroup, batch, tokens, settings: { env, token }, deps: { database } };

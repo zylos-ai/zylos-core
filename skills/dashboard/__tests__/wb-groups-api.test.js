@@ -63,6 +63,7 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
     } };
   const c4Reader = { getInboundTimes: () => [] };
   const service = createGroupSnapshot({ zylosDir: root, store, cli, now: () => clock, readPm2, readSystem, displayNames,
+    readChannels: () => [{ channel: 'telegram', service: 'zylos-telegram' }],
     c4Reader, readConfigRuntime: () => { if (configFailure) throw new Error('config'); return configRuntime; }, loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => { if (modeError) throw new Error('config'); return { mode }; } };
       if (name === 'session-state-reader.js') return reader;
@@ -382,12 +383,10 @@ test('service totals and channel attention share exactly one PM2 sample per snap
     { name: 'zylos-other', pm2_env: { status: 'launching' } },
   ] };
   const f = fixture(t, { readPm2: () => { reads++; return sample; } });
-  f.service.channelDownCounter.update(sample);
-  f.service.channelDownCounter.update(sample);
   const snapshot = await f.service.getSnapshot();
   assert.equal(reads, 1);
   assert.deepEqual(snapshot.instance.services, { online: 1, total: 3,
-    channels: [{ channel: 'telegram', service: 'zylos-telegram', status: 'stopped', down: true }] });
+    channels: [{ channel: 'telegram', service: 'zylos-telegram', status: 'stopped', restarts10m: 0, lastSendFailed: null, consecutiveFailures: null }] });
   assert.equal(Object.hasOwn(snapshot, 'attention'), false);
   const summary = await createGroupsApi({ workbench: f.service }).counts();
   assert.equal(reads, 1, 'summary uses the existing snapshot cache');
@@ -398,7 +397,7 @@ test('service totals and channel attention share exactly one PM2 sample per snap
   const next = await f.service.getSnapshot();
   assert.equal(reads, 2);
   assert.deepEqual(next.instance.services, { online: 2, total: 3,
-    channels: [{ channel: 'telegram', service: 'zylos-telegram', status: 'online', down: true }] });
+    channels: [{ channel: 'telegram', service: 'zylos-telegram', status: 'online', restarts10m: 0, lastSendFailed: null, consecutiveFailures: null }] });
   assert.equal(next.instance.services.channels[0].status, 'online');
 });
 
@@ -408,8 +407,6 @@ test('unreadable and malformed PM2 samples keep service counts unknown', async t
   for (const sample of [null, {}, { processes: null }, { processes: {} }, { processes: [null] }, 'unreadable']) {
     let calls = 0;
     const f = fixture(t, { readPm2: () => { calls++; if (sample === 'unreadable') throw new Error('read failed'); return sample; } });
-    const down = { processes: [{ name: 'zylos-telegram', pm2_env: { status: 'stopped' } }] };
-    f.service.channelDownCounter.update(down); f.service.channelDownCounter.update(down);
     const snapshot = await f.service.getSnapshot();
     assert.equal(calls, 1);
     assert.equal(snapshot.instance.services, null);
@@ -417,7 +414,7 @@ test('unreadable and malformed PM2 samples keep service counts unknown', async t
   }
   const empty = fixture(t, { readPm2: () => ({ processes: [] }) });
   assert.deepEqual((await empty.service.getSnapshot()).instance.services, { online: 0, total: 0,
-    channels: [{ channel: 'telegram', service: 'zylos-telegram', status: null, down: false }] });
+    channels: [] });
 });
 
 // Integration: the snapshot forwards the injected host sample reader. Run for overview snapshot or system sample

@@ -31,7 +31,7 @@ export function verifyBatchReceipt(batch, { scope, end, database }) {
   if (batch.scope !== scope || batch.end !== end) invalid('Batch scope or end does not match the checkpoint');
   if (typeof batch.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(batch.sha256)) invalid('Batch sha256 must be a lowercase SHA-256 digest');
   const rows = database.getConversationsByRange(batch.after + 1, batch.end)
-    .filter(row => row.status === 'delivered' && (scope === '*' || row.session_group === scope))
+    .filter(row => (row.direction === 'out' || row.status === 'delivered') && (scope === '*' || row.session_group === scope))
     .map(projectConversation);
   const actual = createBatchReceipt(rows, batch);
   if (actual.sha256 !== batch.sha256) throw changed('Batch sha256 does not match the current projected conversation rows');

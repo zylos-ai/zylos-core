@@ -341,7 +341,8 @@ test('continue retains the original sender failure and its committed audit', asy
   await assert.rejects(sendExternal({ channel: 'x', endpoint: 'private-endpoint' }, message, f.options), { code: 'SEND_FAILED', exitCode: 7 });
   assert.equal(f.calls.insert, 1);
   const row = f.db.prepare('SELECT * FROM conversations').get();
-  assert.equal(row.channel, 'x'); assert.equal(row.content, message); assert.equal(row.status, 'delivered');
+  assert.equal(row.channel, 'x'); assert.equal(row.content, message); assert.equal(row.status, 'failed');
+  assert.equal(row.delivery_action, 'send_failed');
 });
 
 // Real installed command and private SQLite, with the same isolation and

@@ -82,7 +82,7 @@ async function commitProgress(f, scope, ids) {
     const after = scope === '*' ? f.store.getGlobalCoverageEnd() : f.store.getCoverageEnd(scope);
     const end = scope === '*' ? f.store.getGlobalDeliveredFrontier() : f.store.getDeliveredFrontier(scope);
     const rows = f.api.getConversationsByRange(after + 1, end)
-      .filter(row => row.status === 'delivered' && (scope === '*' || row.session_group === scope));
+      .filter(row => (row.direction === 'out' || row.status === 'delivered') && (scope === '*' || row.session_group === scope));
     const batch = createBatchReceipt(rows.map(projectConversation), { scope, after, end });
     const inputs = await list({ env });
     await checkpoint({ env, token, end, summary: 'Absorbed-message follow-up progress', batch }, { database: f.api });

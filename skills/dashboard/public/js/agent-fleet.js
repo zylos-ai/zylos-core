@@ -1,5 +1,7 @@
 import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, quotaRecordedTime } from './wb/instance-strip.js';
 import { counted } from './count-label.js';
+import { recoveryTime } from './wb/cooldown.js';
+import { formatZoned } from './wb/instance-zone.js';
 
 import { fallbackName, platformOf } from './wb/plain-text.js';
 
@@ -348,7 +350,7 @@ function groupStates(tile, labels, t) {
   const target = escapeHtml(problems[0]?.sessionGroup ?? '');
   const more = summary.problemCount > 2 ? `<button type="button" class="wb-f-more" data-fleet-problems data-group="${target}">${escapeHtml(fill(counted(labels, 'moreProblems', summary.problemCount - 2), { count: summary.problemCount - 2 }))}</button>` : '';
   const restart = summary.autoRestarts?.count > 0 ? `<button type="button" class="wb-f-more" data-fleet-problems data-group="${target}">${escapeHtml(fill(counted(labels, 'autoRestarts', summary.autoRestarts.count), { count: summary.autoRestarts.count }))}</button>` : '';
-  return `${status ? `<div class="wb-f-act">${status}</div>` : ''}<div class="wb-f-act wb-f-running" title="${escapeHtml(text)}">${escapeHtml(text)}</div>${bar}<div class="wb-f-problems">${summary.problemCount ? rows + more : `<span class="wb-f-normal">${escapeHtml(counts.unknown ? labels.summaryUnavailable : labels.allNormal)}</span>`}${restart}</div>`;
+  return `${status ? `<div class="wb-f-act">${status}</div>` : ''}<div class="wb-f-act wb-f-running" title="${escapeHtml(text)}">${escapeHtml(text)}</div>${bar}<div class="wb-f-problems">${summary.problemCount ? rows + more : summary.attention?.length ? '' : `<span class="wb-f-normal">${escapeHtml(counts.unknown ? labels.summaryUnavailable : labels.allNormal)}</span>`}${restart}</div>`;
 }
 
 function renderTile(tile, labels, t) {
@@ -381,6 +383,7 @@ function renderTile(tile, labels, t) {
     ${sub}
     ${tile.supervisorPaused === true ? `<div class="wb-f-reason wb-txt-warn" data-supervisor-paused>${escapeHtml(t('wb.attention.supervisor_paused'))}</div>` : ''}
     ${act}
+    ${multi ? '<div class="wb-f-attention" data-fleet-attention></div>' : ''}
     ${quotaBars(tile, labels)}
     <div class="wb-f-kv">
       <div>${escapeHtml(labels.todayWeek)}<b>${escapeHtml(tile.dailyCostLabel)} / ${escapeHtml(tile.weeklyCostLabel)}</b></div>
@@ -439,7 +442,44 @@ export function renderAgentFleet(container, fleet, options = {}) {
   if (!container) return null;
   const view = buildAgentFleetView(fleet, options);
   container.innerHTML = renderAgentFleetViewHtml(view);
+  const cards = container.querySelectorAll?.('.wb-f-card') ?? [];
+  for (const [index, card] of Array.from(cards).entries()) {
+    const root = card.querySelector('[data-fleet-attention]');
+    if (root) renderFleetAttention(root, view.tiles[index].groupSummary?.attention, view.t);
+  }
   return view;
+}
+
+/** Diagnostics are untrusted observations, so keep every value in a text node. */
+export function renderFleetAttention(root, items = [], t = key => key) {
+  root.replaceChildren();
+  const allowed = new Set(['channel_send_failed', 'channel_restarting', 'start_failed', 'rate_limited', 'data_unreadable']);
+  for (const item of items ?? []) {
+    if (!allowed.has(item?.kind)) continue;
+    const node = root.ownerDocument.createElement(item.group === undefined ? 'div' : 'button');
+    node.className = 'wb-f-attention-item' + (item.kind === 'rate_limited' ? ' wb-txt-warn' : '');
+    if (item.group !== undefined) { node.type = 'button'; node.dataset.fleetGroup = item.group; }
+    const at = item.kind === 'rate_limited' ? recoveryTime(item.until) : null;
+    const values = { channel: item.channel ?? '', count: item.count ?? item.count30m ?? '',
+      service: item.service ?? '', runtime: item.runtime ? item.runtime.charAt(0).toUpperCase() + item.runtime.slice(1) : '',
+      time: at === null ? '' : formatZoned(at, undefined, { hour: '2-digit', minute: '2-digit' }),
+      group: item.group ?? '', reason: item.reasonCode ?? item.source ?? '' };
+    const key = 'wb.attention.' + item.kind + (item.kind === 'rate_limited' && at === null ? '_unknown' : '');
+    const label = root.ownerDocument.createElement('span');
+    label.textContent = t(key, values);
+    node.append(label);
+    const technical = root.ownerDocument.documentElement?.dataset?.detail === 'technical';
+    const details = [item.displayName ?? item.group, item.kind === 'data_unreadable'
+      ? t('wb.flags.unreadable') : item.reasonCode ?? item.source].filter(Boolean);
+    if (item.kind === 'data_unreadable' && technical) details.push(item.reasonCode ?? item.source ?? '');
+    if (details.length) {
+      const reason = root.ownerDocument.createElement('span');
+      reason.className = 'wb-f-attention-detail';
+      reason.textContent = details.join(' · ');
+      node.append(reason);
+    }
+    root.append(node);
+  }
 }
 
 /** Renders the Machines page with the page's own options, including "how long ago" in the page language. */

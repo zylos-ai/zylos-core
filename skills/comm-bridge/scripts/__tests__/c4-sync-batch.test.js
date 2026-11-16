@@ -20,8 +20,8 @@ describe('Sync batch receipts', () => {
     assert.deepEqual(verifyBatchReceipt(batch, { scope: 'foo', end: 1, database: { getConversationsByRange: () => [raw] } }), batch);
   });
 
-  it('hashes only stable projected fields in id order and verifies scoped delivered rows', () => {
-    const raw = [row(1), row(2, 'bar'), row(3, 'foo', 'failed'), row(4)];
+  it('hashes only stable projected fields in id order and excludes failed input', () => {
+    const raw = [row(1), row(2, 'bar'), { ...row(3, 'foo', 'failed'), direction: 'in' }, row(4)];
     const batch = createBatchReceipt([raw[3], raw[0]].map(projectConversation), { scope: 'foo', after: 0, end: 4 });
     const database = { getConversationsByRange(begin, end) { assert.equal(begin, 1); assert.equal(end, 4); return raw; } };
     assert.deepEqual(verifyBatchReceipt(batch, { scope: 'foo', end: 4, database }), batch);

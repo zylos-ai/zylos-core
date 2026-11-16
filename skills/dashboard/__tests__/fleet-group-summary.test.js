@@ -43,6 +43,7 @@ test('existing runtime errors override busy and idle; full problem count survive
     name: { displayName: 'Saved <运维> name' }, createdAt: 123, c4: { componentName: 'lark' },
     reason: 'auth_failed', durationSeconds: null });
   assert.equal(result.problems[1].reason, 'start_failed');
+  assert.ok(!(result.attention ?? []).some(item => item.kind === 'start_failed' && item.group === 'start'));
 });
 
 test('sample age, long durations, queue waits and read errors never create runtime failures', () => {

@@ -63,6 +63,19 @@ export class C4Reader {
     } catch { throw failure(); }
   }
 
+  getChannelSendState(channel) {
+    const db = this._open();
+    if (!db) return null;
+    try {
+      const latest = db.prepare("SELECT status FROM conversations WHERE direction='out' AND channel=? ORDER BY id DESC LIMIT 1").get(channel);
+      if (latest?.status !== 'failed') return { lastSendFailed: false, consecutiveFailures: 0 };
+      const row = db.prepare(`SELECT COUNT(*) AS count FROM conversations
+        WHERE direction='out' AND channel=? AND status='failed' AND id > COALESCE(
+          (SELECT MAX(id) FROM conversations WHERE direction='out' AND channel=? AND status='delivered'), 0)`).get(channel, channel);
+      return { lastSendFailed: true, consecutiveFailures: row.count };
+    } catch { return null; }
+  }
+
   getInboundTimes({ since, groups }) {
     // Omitting groups reads the inbound stream consumed by single-session Origin.
     if (groups?.length === 0) return [];

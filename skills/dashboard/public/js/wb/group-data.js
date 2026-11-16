@@ -5,6 +5,8 @@ export function displayGroupRow(row, side) {
     ...(!row.state && (side === 'offline' || row.id != null) ? { state: { kind: 'offline' } } : {}) };
 }
 
+export const CHANNEL_RESTART_THRESHOLD = 3;
+
 export function groupAttention(instance, counts, rows, failedRows = [], failures = []) {
   const problems = [], reminders = [];
   if (instance.supervisorPaused === true) reminders.push({ kind: 'supervisor_paused' });
@@ -15,12 +17,22 @@ export function groupAttention(instance, counts, rows, failedRows = [], failures
   }
   const waiting = counts.offline?.waitingSlot ?? 0;
   if (waiting > 0 && counts.pool?.used != null && counts.pool.capacity != null && counts.pool.used >= counts.pool.capacity) reminders.push({ kind: 'pool_full', waiting });
-  for (const channel of instance.services?.channels ?? []) if (channel.down) problems.push({ kind: 'channel_down', service: channel.service, pm2Status: channel.status });
+  for (const channel of instance.services?.channels ?? []) {
+    if (channel.lastSendFailed) problems.push({ kind: 'channel_send_failed', channel: channel.channel, count: channel.consecutiveFailures });
+    if (channel.restarts10m >= CHANNEL_RESTART_THRESHOLD) problems.push({ kind: 'channel_restarting', channel: channel.channel, count: channel.restarts10m });
+  }
   const failed = new Map([...rows, ...failedRows].filter(row => row.flags?.startFailed).map(row => [row.sessionGroup, row]));
   for (const row of failed.values()) problems.push({ kind: 'start_failed', group: row.sessionGroup, count30m: row.flags.startFailed.count, lastAt: row.flags.startFailed.lastAt });
   const unreadable = new Set(failures);
   if (counts.listKnown === false) unreadable.add('groups');
-  for (const row of [...rows, ...failedRows]) for (const reason of row.flags?.unreadable?.reasons ?? []) unreadable.add(reason);
+  const seen = new Set();
+  for (const row of [...rows, ...failedRows]) for (const reasonCode of row.flags?.unreadable?.reasons ?? []) {
+    const group = row.sessionGroup ?? row.id;
+    const key = JSON.stringify([group, reasonCode]);
+    if (!seen.has(key)) problems.push({ kind: 'data_unreadable', group,
+      displayName: row.name?.displayName ?? row.displayName ?? group, reasonCode });
+    seen.add(key);
+  }
   for (const source of unreadable) problems.push({ kind: 'data_unreadable', source });
   return { problems, reminders };
 }

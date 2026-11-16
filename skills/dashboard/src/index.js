@@ -316,7 +316,7 @@ observerService.historyService = new HistoryService({ config, store, stateEngine
 // Wire collector updates to state engine
 pm2Collector._onUpdate = (data) => {
   stateEngine.onPM2Update(data);
-  workbench.channelDownCounter.update(data);
+  workbench.channelRestartCounter.update(data);
 };
 systemCollector._onUpdate = (data) => {
   stateEngine.onSystemUpdate(data);
@@ -463,7 +463,16 @@ async function refreshFleetGroupSummary() {
   try { await workbench.getSnapshot(); } catch { /* Optional observations cannot break the existing state API. */ }
 }
 
-function buildSelfFleetRecord(statePayload = fleetStateFromObjects(buildInstancePayload(), groupCounts(workbench.getCachedSnapshot() ?? { rows: [], readAt: Date.now(), listKnown: false }, { allowUnreadable: true }), usageSummary(store, { tz: instanceTz() }), { rows: (workbench.getCachedSnapshot()?.rows ?? []).map(row => projectGroup(row, workbench.getCachedSnapshot())).filter(row => row.side === 'running').map(projectListRow) })) {
+function buildSelfFleetRecord(statePayload) {
+  if (statePayload === undefined) {
+    const snapshot = workbench.getCachedSnapshot() ?? { rows: [], readAt: Date.now(), listKnown: false };
+    const rows = snapshot.rows.map(row => projectGroup(row, snapshot));
+    statePayload = fleetStateFromObjects(buildInstancePayload(), groupCounts(snapshot, { allowUnreadable: true }),
+      usageSummary(store, { tz: instanceTz() }), {
+        rows: rows.filter(row => row.side === 'running').map(projectListRow),
+        failedRows: rows.filter(row => row.side === 'offline' && row.flags?.startFailed).map(projectListRow),
+      });
+  }
   return stateToFleetRecord({
     name: config.agent?.name,
     color: agentColor(config.agent?.name)
