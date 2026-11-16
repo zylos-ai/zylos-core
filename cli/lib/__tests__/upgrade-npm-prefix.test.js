@@ -40,7 +40,7 @@ for (const kind of ['different root', 'missing destination', 'nonzero exit', 'mi
     const f = fixture(t), other = path.join(f.root, 'other');
     if (kind === 'different root') fs.mkdirSync(path.join(other, 'zylos'), {recursive:true});
     if (kind !== 'missing CLI') {
-      const script = kind === 'nonzero exit' ? 'console.log("private npm output");console.error("private npm error");process.exit(7);'
+      const script = kind === 'nonzero exit' ? `console.log(${JSON.stringify(path.dirname(f.coreDir))});console.error("private npm error");process.exit(7);`
         : kind === 'npm timeout' ? 'setTimeout(() => {}, 45000);'
         : kind === 'empty output' ? ''
         : kind === 'relative root' ? "console.log('relative');"
