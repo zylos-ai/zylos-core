@@ -16,11 +16,11 @@ export class SupervisorHealthObserver {
   constructor({ coordinator, listScenes, readIdentity, readState, readScreen, matchScreen,
     insertControl, getControlById, buildTargetBinding, stop, readMode,
     getModeTransition = () => null, getDrainFence = () => null, manualPending = () => false,
-    resolveToolRule = () => null, nudge, checkAuth, diagnostic = () => {}, now = Date.now,
+    readMaintenance = () => null, resolveToolRule = () => null, nudge, checkAuth, diagnostic = () => {}, now = Date.now,
     log = () => {}, recoveryDeadlineMs = 120000 } = {}) {
     Object.assign(this, { coordinator, listScenes, readIdentity, readState, readScreen, matchScreen,
       insertControl, getControlById, buildTargetBinding, stop, readMode, getModeTransition,
-      getDrainFence, manualPending, resolveToolRule, nudge, checkAuth, diagnostic, now, log, recoveryDeadlineMs });
+      getDrainFence, manualPending, readMaintenance, resolveToolRule, nudge, checkAuth, diagnostic, now, log, recoveryDeadlineMs });
     this.probes = new Map();
     this.scenes = new Map();
     this.verifications = new Map();
@@ -29,6 +29,11 @@ export class SupervisorHealthObserver {
     this.stopped = false;
   }
   probeInFlight(runtime) { return this.probes.has(runtime); }
+  /** An active no-response episode owns restarts of its run until AI work or its stop ends it. */
+  noResponseActive(scene) {
+    const state = this.scenes.get(scene?.sessionGroup);
+    return Boolean(state && sameRun(state, scene) && state.delivery?.recovery);
+  }
   sceneState(scene) {
     let state = this.scenes.get(scene.sessionGroup);
     if (!state || !sameRun(state, scene)) {
@@ -139,6 +144,8 @@ export class SupervisorHealthObserver {
     const forcedBusy = idleOnly && waitAt !== undefined && this.now()-waitAt >= RECOVERY_IDLE_WAIT_MS;
     let busy = false;
     for (const {scene} of candidates) {
+      // Single-session probes do not wait for idle; they leave a run under no-response recovery alone.
+      if (mode !== 'multi' && this.noResponseActive(scene)) continue;
       const binding = await this.buildTargetBinding(scene);
       // Binding construction may perform I/O; repeat identity and gates immediately before insertion.
       if (!await this.canAct(scene,{requireReady:true,requireOpen:true}) || this.stopped) continue;
@@ -295,7 +302,9 @@ export class SupervisorHealthObserver {
     return Number.isFinite(state?.lastResponseAt) && state.lastResponseAt<=this.now() ? state.lastResponseAt : 0;
   }
   async observeDelivery(scene,tracked,delivery,state,now) {
-    if(await this.readMode()!=='multi') {delivery.recovery=null;return false;}
+    const mode=await this.readMode();
+    // A mode change clears active recovery; the new mode cannot act on a stale deadline.
+    if(delivery.recovery && delivery.recovery.mode!==mode)delivery.recovery=null;
     // A pair must finish even when Escape creates Stop/idle or transcript writes.
     if(delivery.recovery?.pending)return true;
     if(delivery.recovery?.sessionId!==undefined && delivery.recovery.sessionId!==scene.sessionId)delivery.recovery=null;
@@ -311,15 +320,20 @@ export class SupervisorHealthObserver {
       else if(responseAt>delivery.silenceSince)delivery.silenceSince=delivery.pastedAt;
     }
     if(!delivery.noResponseEligible)return false;
+    if(mode!=='multi' && await this.singleHold(scene,recovery)) {
+      // Silence is measured again from the end of the hold.
+      delivery.recovery=null;delivery.silenceSince=Math.max(delivery.silenceSince,now);
+      return false;
+    }
     const activityAt=delivery.silenceSince;
     const silenceMs=Math.max(0,now-(recovery ? recovery.activityAt : activityAt));
     if(!recovery && (state.transcriptPending || silenceMs<NO_RESPONSE_SILENCE_MS))return false;
     if(!recovery && now<delivery.retryAt)return true;
-    const episode=recovery ?? {sessionId:scene.sessionId,activityAt,responseAt:now,pending:true,nudgedAt:null};
+    const episode=recovery ?? {mode,sessionId:scene.sessionId,activityAt,responseAt:now,pending:true,nudgedAt:null};
     const valid=async(current,{continuing=false}={})=>{
       if(current.sessionId!==episode.sessionId || this.scenes.get(scene.sessionGroup)!==tracked ||
-        tracked.delivery!==delivery || delivery.recovery!==episode || await this.readMode()!=='multi' ||
-        !await this.canRecover(current))return false;
+        tracked.delivery!==delivery || delivery.recovery!==episode || await this.readMode()!==episode.mode ||
+        !await this.canRecover(current) || (episode.mode!=='multi' && await this.maintenanceHeld(current)))return false;
       if(continuing)return true;
       const fresh=await this.readState(current);
       if(fresh?.sessionId!==current.sessionId || fresh.transcriptPending)return false;
@@ -360,6 +374,23 @@ export class SupervisorHealthObserver {
       }
     }
     return delivery.recovery!==null || now<delivery.retryAt;
+  }
+  // An unreadable maintenance state holds recovery; each distinct failure is logged once.
+  async maintenanceHeld(scene) {
+    try {
+      const reason=await this.readMaintenance(scene);
+      this.maintenanceError=null;
+      return Boolean(reason);
+    } catch(error) {
+      const code=error.code ?? error.message;
+      if(this.maintenanceError!==code) {this.maintenanceError=code;this.log(error);}
+      return true;
+    }
+  }
+  /** Single session: maintenance always holds observation; health recovery holds it only before an episode starts. */
+  async singleHold(scene,recovery) {
+    if(await this.maintenanceHeld(scene))return true;
+    return !recovery && (this.probes.has(scene.runtime) || this.coordinator.store(scene.runtime).read().health!=='ok');
   }
 
   async tick(scenes) {

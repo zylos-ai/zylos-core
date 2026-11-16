@@ -15,12 +15,12 @@ const deferred = () => {
 
 // Real composition, SessionActivity event reader, HealthStore and request store;
 // only scene operations and the C4 database boundary are in-memory fixtures.
-function fixture(t, { watchdog = false, runtime='claude', onControl = control => control } = {}) {
+function fixture(t, { watchdog = false, runtime='claude', mode = 'multi', syncReader = true, onControl = control => control } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-nudge-'));
   const runDir = path.join(root, 'run');
   fs.mkdirSync(runDir);
-  let clock = 1792000000000, fence = null, transition = null;
-  const scene = { runtime, sessionGroup: 'telegram:a', runId: 'run-a', sessionId: 'session-a',
+  let clock = 1792000000000, fence = null, transition = null, syncHeld = false, switchAt = null;
+  const scene = { runtime, sessionGroup: mode === 'single' ? 'origin' : 'telegram:a', runId: 'run-a', sessionId: 'session-a',
     runDir, createdAt: clock, present: true, ready: true, processRunning: true };
   let current = { ...scene };
   const controls = [], stops = [], errors = [], firstControl = deferred(), cleanup = [];
@@ -37,6 +37,7 @@ function fixture(t, { watchdog = false, runtime='claude', onControl = control =>
       return onControl(control);
     },
     getControlById: id => controls[id - 1],
+    latestSessionSwitchAt: target => { assert.deepEqual(target, { machine: true }); return switchAt; },
   };
   const scenes = {
     observe: async () => [current], readIdentity: async () => current,
@@ -45,8 +46,12 @@ function fixture(t, { watchdog = false, runtime='claude', onControl = control =>
     stop: async value => { stops.push(value); },
   };
   const supervisor = createSupervisor({ db, scenes, zylosDir: root, env: { ZYLOS_DIR: root }, now: () => clock,
-    requestStore, readConfiguration: async () => ({ mode: 'multi', runtime: 'claude', capacity: 3 }),
-    readMode: () => ({ mode: 'multi' }), resolveTargetRuntime: async () => runtime,
+    requestStore, readConfiguration: async () => ({ mode, runtime: 'claude', capacity: 3 }),
+    readMode: () => ({ mode }),
+    ...(syncReader ? { readSyncMarker: options => {
+      assert.deepEqual(options, { runDir, kind: 'global', currentRunId: scene.runId });
+      return { held: syncHeld, stale: false };
+    } } : {}), resolveTargetRuntime: async () => runtime,
     checkAuth: async () => ({ status: 'uncertain' }), matchScreen: async () => ({}),
     resolveToolRule: () => watchdog ? { watchdog: { enabled: true, maxRuntimeSec: 10, interruptGraceSec: 15, cooldownSec: 2 } } : null,
     log: error => errors.push(error),
@@ -79,8 +84,11 @@ function fixture(t, { watchdog = false, runtime='claude', onControl = control =>
     fence: () => { fence = { reason: 'test' }; }, transition: () => { transition = { phase: 'draining' }; },
     replaceRun: () => { current = { ...current, runId: 'replacement' }; },
     replaceSession: () => { current = { ...current, sessionId: 'replacement-session' }; },
-    manual: () => requestStore.write([{ requestId: 'manual-test', reason: 'manual_restart', mode: 'multi',
-      sessionGroup: scene.sessionGroup, expectedRunId: scene.runId, runIds: [scene.runId], acceptedAt: clock }]),
+    manual: () => requestStore.write([{ requestId: 'manual-test', reason: 'manual_restart', mode,
+      ...(mode === 'single' ? {} : { sessionGroup: scene.sessionGroup }), expectedRunId: scene.runId, runIds: [scene.runId], acceptedAt: clock }]),
+    clearManual: () => requestStore.write([]),
+    clearFence: () => { fence = null; }, clearTransition: () => { transition = null; },
+    sync: held => { syncHeld = held; }, sessionSwitch: at => { switchAt = at; },
     observe: () => supervisor.observer.observeScene(scene),
   };
 }
@@ -364,3 +372,93 @@ for (const runtime of ['claude', 'codex']) {
     }
   }
 }
+
+for (const runtime of ['claude', 'codex']) {
+  test(`single-session composed ${runtime} recovery nudges the machine target and stops the silent run once`, { timeout: 5000 }, async t => {
+    const f = fixture(t, { mode: 'single', runtime });
+    await f.observe();
+    assert.deepEqual(f.controls.map(control => [control.content, control.sessionGroup]), [['[KEYSTROKE]Escape', null], ['continue', null]]);
+    f.advance(NO_RESPONSE_GRACE_MS - 1); await f.observe();
+    assert.equal(f.stops.length, 0);
+    f.advance(1); await f.observe();
+    assert.equal(f.stops.length, 1);
+    assert.equal(f.stops[0].runId, f.scene.runId);
+    f.advance(NO_RESPONSE_SILENCE_MS + NO_RESPONSE_GRACE_MS); await f.observe();
+    assert.equal(f.stops.length, 1);
+    assert.equal(f.controls.length, 2);
+    assert.deepEqual(f.errors, []);
+  });
+}
+
+test('single-session composed tool work after the nudge cancels recovery', { timeout: 5000 }, async t => {
+  const f = fixture(t, { mode: 'single' });
+  await f.observe(); f.advance(1);
+  f.appendActivity('pre_tool', { tool: 'Read', tool_use_id: 'resumed-work' });
+  await f.observe();
+  assert.equal(f.supervisor.observer.sceneState(f.scene).delivery.noResponseEligible, false);
+  f.advance(NO_RESPONSE_SILENCE_MS + NO_RESPONSE_GRACE_MS); await f.observe();
+  assert.equal(f.stops.length, 0); assert.equal(f.controls.length, 2);
+});
+
+const holds = {
+  sync: [f => f.sync(true), f => f.sync(false)],
+  switch: [f => f.sessionSwitch(Math.floor(f.now() / 1000)), f => f.sessionSwitch(null)],
+  fence: [f => f.fence(), f => f.clearFence()],
+  transition: [f => f.transition(), f => f.clearTransition()],
+  manual: [f => f.manual(), f => f.clearManual()],
+};
+for (const [hold, [begin, end]] of Object.entries(holds)) {
+  test(`single-session composed ${hold} holds recovery and silence restarts when it ends`, { timeout: 5000 }, async t => {
+    const f = fixture(t, { mode: 'single' });
+    begin(f); await f.observe();
+    f.advance(NO_RESPONSE_SILENCE_MS - 1000); begin(f); f.advance(1000); await f.observe();
+    assert.equal(f.controls.length, 0);
+    end(f); await f.observe();
+    f.advance(NO_RESPONSE_SILENCE_MS - 1); await f.observe();
+    assert.equal(f.controls.length, 0);
+    f.advance(1); await f.observe();
+    assert.deepEqual(f.controls.map(control => control.content), ['[KEYSTROKE]Escape', 'continue']);
+    assert.deepEqual(f.errors, []);
+  });
+}
+
+for (const hold of ['sync', 'switch']) {
+  test(`single-session composed ${hold} starting between Escape and continue suppresses continue`, { timeout: 5000 }, async t => {
+    const f = fixture(t, { mode: 'single' }), observation = f.observe();
+    await f.firstControl.promise;
+    await f.supervisor.admission.serialize(() => { holds[hold][0](f); });
+    await observation;
+    assert.deepEqual(f.controls.map(control => control.content), ['[KEYSTROKE]Escape']);
+    f.advance(NO_RESPONSE_GRACE_MS); await f.observe();
+    assert.equal(f.stops.length, 0);
+    assert.deepEqual(f.errors, []);
+  });
+}
+
+test('single-session composed switch queued 15 minutes ago no longer holds recovery', { timeout: 5000 }, async t => {
+  const f = fixture(t, { mode: 'single' }), heldAt = f.now();
+  f.sessionSwitch(Math.floor(heldAt / 1000) - NO_RESPONSE_SILENCE_MS / 1000 + 1); await f.observe();
+  assert.equal(f.controls.length, 0);
+  f.advance(1000); await f.observe();
+  assert.equal(f.controls.length, 0, 'silence restarts from the last held observation');
+  f.advance(NO_RESPONSE_SILENCE_MS - 1001); await f.observe();
+  assert.equal(f.controls.length, 0);
+  f.advance(1); await f.observe();
+  assert.equal(f.now() - heldAt, NO_RESPONSE_SILENCE_MS, 'the switch stopped holding exactly 15 minutes after it was queued');
+  assert.equal(f.controls.length, 2);
+});
+
+test('single-session composed recovery holds and logs once without a Sync marker reader', { timeout: 5000 }, async t => {
+  const f = fixture(t, { mode: 'single', syncReader: false });
+  for (let i = 0; i < 3; i++) { f.advance(NO_RESPONSE_SILENCE_MS); await f.observe(); }
+  assert.equal(f.controls.length, 0);
+  assert.equal(f.errors.length, 1);
+  assert.equal(f.errors[0].code, 'DEPENDENCY_UNAVAILABLE');
+});
+
+test('multi-session composed recovery ignores the single-session Sync marker and switch hold', { timeout: 5000 }, async t => {
+  const f = fixture(t);
+  f.sync(true); f.sessionSwitch(Math.floor(f.now() / 1000));
+  await f.observe();
+  assert.equal(f.controls.length, 2);
+});

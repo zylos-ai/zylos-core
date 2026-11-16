@@ -118,90 +118,6 @@ After deferral resets the idle clock, the session returns at the next idle check
 result, record it in the handoff or arrange for the task itself to send a
 completion message back.
 
-In multi-session mode, an actually pasted conversation arms no-response
-observation from its paste time. Any actual AI work after that paste disarms
-this observation permanently; it does not reset a silence timer. This applies
-even when the work belongs to an older turn and the new message remains queued.
-Claude and Codex use the same rule. There is no dequeue, processed-input,
-start/Stop or completion correlation.
-
-Actual AI work is the validated current-run/session `lastResponseAt` fact:
-main/child pre-tool hooks, real Claude assistant text, thinking or tool_use,
-and Codex assistant output or function/custom-tool calls after matching rollout
-session identity. Prompt hooks, user rows, queue-operation/queued_command
-records, transcript mtime, Stop/idle, natural tool completion and child
-start/stop alone do not disarm or postpone observation. Synthetic/error and
-metadata output do not prove a response.
-
-If no actual AI work occurs for 15 minutes after the first unanswered paste,
-supervisor uses the same Escape → successful enqueue → 500 ms → exact
-`continue` helper as Dashboard. Active tools receive no exemption. Each enqueue
-rechecks identity, fences, transitions, shutdown, manual actions and paste
-ownership; the interval holds no admission lock. Escape's Stop/idle,
-interruption write, tool completion and the continue prompt do not suppress
-continuation or count as recovery.
-
-After successful continue enqueue, only actual AI work ends the 180-second
-recovery wait and disarms observation. With none, the same scene is stopped.
-A newer paste retains the unanswered silence anchor, retry cooldown and active
-recovery deadline; it can invalidate an in-flight pair's remaining enqueue
-without restarting the 15-minute wait. Failed nudges retry after 60 seconds;
-blocked admission emits no attempted-nudge event. Superseded and uncertain
-attempts are logged. Leaving multi-session mode clears active recovery;
-returning cannot stop the scene on that stale deadline. A changed run or
-session cannot inherit a stale recovery action.
-
-Health notification remains immediate, before lifecycle delivery, with the
-original payload. The already-accepted run metadata supplies the optional
-current-session timestamp: an older paste remains tracked for the five-second
-screen check but does not arm no-response recovery. Session changes do not
-silently discard delivery or its screen check. Background tasks alone never
-arm detection; a new unanswered paste during background waiting does.
-Single-session no-response behavior is unchanged.
-
-Once actual AI work disarms observation, a later stall is outside this rule.
-The existing tool watchdog covers only enabled Claude WebFetch/WebSearch:
-while runtime health is `ok`, a still-tracked tool reaching its configured
-timeout (default 3600 seconds) is nudged, then stopped if the same tool remains
-past its configured grace (default 15 seconds), subject to recovery admission
-gates. Other tools and Codex have no matching tool watchdog by default. The
-existing screen path samples once per delivered message after five seconds;
-persistent API-error text requires at least two delivery-triggered checks
-spanning 30 seconds to stop, while rate-limit/auth matches use their existing
-health validation. Recovery probes act on unhealthy/recovering runtime state,
-not as a periodic healthy-session stall detector. Without matching tool,
-screen or health evidence, a later API/tool hang has no universal automatic
-fallback in this PR. A new paste can arm a new no-response observation.
-
-Transcript parsing reads at most 256 KiB per sample in 64 KiB chunks, carries
-at most 1 MiB of a line and retains at most 256 recent tool-result IDs,
-including idle gaps before delayed native hooks. Assistant response metadata
-is parsed even without an active tool. Unread bytes defer decisions until sampled; a truncated EOF line does
-not prevent recovery forever. Oversized/malformed records do not establish
-work. Main busy/idle fields and child reclaim semantics remain separate.
-
-Before any AI response disarms observation, this rule includes legitimate
-foreground calls silent for 15 minutes; existing
-hooks/transcripts cannot distinguish every healthy long call from a hang.
-Codex busy Enter accepts steering before pending input is processed. Native
-exec yield/poll windows do not impose a 600-second process lifetime, and stdout
-streaming does not universally persist transcript activity.
-
-Web timeout also uses the shared nudge helper, preserving configured grace
-(default 15 seconds), cooldown and stop fallback while the same tool remains.
-New pastes can invalidate an in-flight pair but do not reset that tool's grace
-or cooldown. If the tracked tool disappears, its watchdog episode ends; a
-different tool starts a new episode with its own grace and cooldown. Web Escape
-does not establish an AI response. Active no-response recovery
-owns the scene while its pair or grace is pending, suppressing secondary screen
-recovery and the tool watchdog. No-response recovery takes precedence when both
-detectors are due. Four event
-reasons (`no_response_nudge`, `no_response_restart`, `tool_timeout_nudge`,
-`tool_timeout_restart`) include session group, run ID and observed silence.
-Enqueue success does not prove runtime delivery; failure does not prove that
-no partial write occurred. Existing health-probe and non-timeout stop policies
-retain their prior scope.
-
 Subagent events with `agent_id` are tracked separately for the current run and
 session as `activeSubagents` and `lastSubagentActivityAt`. A started, unended
 child blocks TTL and capacity eviction while its last event is less than one
@@ -267,6 +183,110 @@ A launch configuration change still sends a single control with its 5-minute
 ack deadline and the `ready_for_config_reclaim` flow. It names the
 configuration restart check, with the configuration change as the reason. Background work is recorded as interrupted, without deferral, before
 the readiness submission.
+
+## No-response Recovery
+
+Applies in both multi-session and single-session mode.
+
+In both session modes, an actually pasted conversation arms no-response
+observation from its paste time. Single-session mode includes an instance
+without a configured `session_mode`. Any actual AI work after that paste disarms
+this observation permanently; it does not reset a silence timer. This applies
+even when the work belongs to an older turn and the new message remains queued.
+Claude and Codex use the same rule. There is no dequeue, processed-input,
+start/Stop or completion correlation.
+
+Actual AI work is the validated current-run/session `lastResponseAt` fact:
+main/child pre-tool hooks, real Claude assistant text, thinking or tool_use,
+and Codex assistant output or function/custom-tool calls after matching rollout
+session identity. Prompt hooks, user rows, queue-operation/queued_command
+records, transcript mtime, Stop/idle, natural tool completion and child
+start/stop alone do not disarm or postpone observation. Synthetic/error and
+metadata output do not prove a response.
+
+If no actual AI work occurs for 15 minutes after the first unanswered paste,
+supervisor uses the same Escape → successful enqueue → 500 ms → exact
+`continue` helper as Dashboard. Active tools receive no exemption. Each enqueue
+rechecks identity, fences, transitions, shutdown, manual actions and paste
+ownership; the interval holds no admission lock. Escape's Stop/idle,
+interruption write, tool completion and the continue prompt do not suppress
+continuation or count as recovery.
+
+After successful continue enqueue, only actual AI work ends the 180-second
+recovery wait and disarms observation. With none, the same scene is stopped.
+A newer paste retains the unanswered silence anchor, retry cooldown and active
+recovery deadline; it can invalidate an in-flight pair's remaining enqueue
+without restarting the 15-minute wait. Failed nudges retry after 60 seconds;
+blocked admission emits no attempted-nudge event. Superseded and uncertain
+attempts are logged. A session mode change clears active recovery; the new
+mode cannot stop the scene on that stale deadline. A changed run or
+session cannot inherit a stale recovery action.
+
+Health notification remains immediate, before lifecycle delivery, with the
+original payload. The already-accepted run metadata supplies the optional
+current-session timestamp: an older paste remains tracked for the five-second
+screen check but does not arm no-response recovery. Session changes do not
+silently discard delivery or its screen check. Background tasks alone never
+arm detection; a new unanswered paste during background waiting does.
+
+Single-session mode uses the same rule, thresholds and actual-AI-work
+definition, with these additions:
+
+- **Maintenance holds.** While a mode transition is open, a manual restart is
+  pending, a `*` or `origin` drain fence exists, the global Memory Sync marker
+  is held, or a `/exit` or `/clear` control (rotation, runtime upgrade or
+  restart) queued less than 15 minutes ago is unfinished, no nudge or stop is
+  sent and active recovery is cleared. Silence is measured again from the end
+  of the hold. Each enqueue and the stop recheck these holds. An unreadable
+  hold source holds recovery and is logged once.
+- **Health recovery ownership.** Before an episode starts, runtime health other
+  than `ok` or a recovery probe in flight holds observation the same way.
+  Once an episode has started, it owns the run until actual AI work or its
+  stop: recovery probes skip that run, and the unfenced single-session auth
+  stop waits. A new run starts without recovery state.
+
+Once actual AI work disarms observation, a later stall is outside this rule.
+The existing tool watchdog covers only enabled Claude WebFetch/WebSearch:
+while runtime health is `ok`, a still-tracked tool reaching its configured
+timeout (default 3600 seconds) is nudged, then stopped if the same tool remains
+past its configured grace (default 15 seconds), subject to recovery admission
+gates. Other tools and Codex have no matching tool watchdog by default. The
+existing screen path samples once per delivered message after five seconds;
+persistent API-error text requires at least two delivery-triggered checks
+spanning 30 seconds to stop, while rate-limit/auth matches use their existing
+health validation. Recovery probes act on unhealthy/recovering runtime state,
+not as a periodic healthy-session stall detector. Without matching tool,
+screen or health evidence, a later API/tool hang has no universal automatic
+fallback in this PR. A new paste can arm a new no-response observation.
+
+Transcript parsing reads at most 256 KiB per sample in 64 KiB chunks, carries
+at most 1 MiB of a line and retains at most 256 recent tool-result IDs,
+including idle gaps before delayed native hooks. Assistant response metadata
+is parsed even without an active tool. Unread bytes defer decisions until sampled; a truncated EOF line does
+not prevent recovery forever. Oversized/malformed records do not establish
+work. Main busy/idle fields and child reclaim semantics remain separate.
+
+Before any AI response disarms observation, this rule includes legitimate
+foreground calls silent for 15 minutes; existing
+hooks/transcripts cannot distinguish every healthy long call from a hang.
+Codex busy Enter accepts steering before pending input is processed. Native
+exec yield/poll windows do not impose a 600-second process lifetime, and stdout
+streaming does not universally persist transcript activity.
+
+Web timeout also uses the shared nudge helper, preserving configured grace
+(default 15 seconds), cooldown and stop fallback while the same tool remains.
+New pastes can invalidate an in-flight pair but do not reset that tool's grace
+or cooldown. If the tracked tool disappears, its watchdog episode ends; a
+different tool starts a new episode with its own grace and cooldown. Web Escape
+does not establish an AI response. Active no-response recovery
+owns the scene while its pair or grace is pending, suppressing secondary screen
+recovery and the tool watchdog. No-response recovery takes precedence when both
+detectors are due. Four event
+reasons (`no_response_nudge`, `no_response_restart`, `tool_timeout_nudge`,
+`tool_timeout_restart`) include session group, run ID and observed silence.
+Enqueue success does not prove runtime delivery; failure does not prove that
+no partial write occurred. Existing health-probe and non-timeout stop policies
+retain their prior scope.
 
 ## Status File Format
 
