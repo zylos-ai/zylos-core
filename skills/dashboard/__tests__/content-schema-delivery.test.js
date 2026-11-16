@@ -11,13 +11,13 @@ import { COMPONENT_DEFINITIONS, REGISTERED_COMPONENT_KEYS, VIEW_SCHEMA, FORM_CON
 
 const publicRoot = path.resolve(fileURLToPath(new URL('../public/', import.meta.url)));
 const schemaPath = fileURLToPath(new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url));
-const appReference = source => /src="__ASSET_ROOT__\/(js\/app\.js\?v=\d+)"/.exec(source)?.[1];
+const appReference = source => /src="__ASSET_ROOT__\/(js\/app\.js)"/.exec(source)?.[1];
 const entrySource = fs.readFileSync(path.join(publicRoot, 'index.html'), 'utf8');
-const stylesheetReference = source => /href="__ASSET_ROOT__\/(css\/conversation\.css\?v=\d+)"/.exec(source)?.[1];
+const stylesheetReference = source => /href="__ASSET_ROOT__\/(css\/conversation\.css)"/.exec(source)?.[1];
 const currentStylesheetPath = stylesheetReference(entrySource);
-assert.ok(currentStylesheetPath, 'the source entry page versions its conversation stylesheet');
+assert.ok(currentStylesheetPath, 'the source entry page references its conversation stylesheet');
 const currentAppPath = appReference(entrySource);
-assert.ok(currentAppPath, 'the source entry page versions its application module');
+assert.ok(currentAppPath, 'the source entry page references its application module');
 function privateEnvironment() {
   const canonical = value => {
     let ancestor = path.resolve(value); const suffix = [];
@@ -62,7 +62,7 @@ async function rawRequest(origin, requestPath) {
 }
 
 // Static-delivery boundary only. Run after schema URL/source or serveStatic/fleet
-// changes, active browser cache versions or retiring active browser modules;
+// changes, the stable browser import graph or retiring active browser modules;
 // skip UI/business changes that do not alter those URLs.
 // No live DB/PM2/tmux/remote calls.
 test('shared schema is delivered at local base and fleet module URLs', { timeout: 15000 }, async t => {
@@ -79,9 +79,9 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     const entryPage = await fetch(origin + prefix + '/_assets/index.html');
     assert.equal(entryPage.status, 200);
     const pageText = await entryPage.text();
-    assert.equal(stylesheetReference(pageText), currentStylesheetPath, 'delivery preserves the current conversation stylesheet cache version');
+    assert.equal(stylesheetReference(pageText), currentStylesheetPath, 'delivery preserves the current conversation stylesheet URL');
     const appPath = appReference(pageText);
-    assert.equal(appPath, currentAppPath, 'delivery preserves the current entry page application cache version');
+    assert.equal(appPath, currentAppPath, 'delivery preserves the current entry page application URL');
     const cache = new Map();
     async function moduleAt(url) {
       if (cache.has(url)) return cache.get(url);
@@ -95,26 +95,25 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     // Keep failed import diagnostics bounded even for the large application module.
     const importLine = (source, name) => (source.split('\n').find(line => line.startsWith('import ') && line.includes(name)) || '').slice(0, 512);
     const appSource = await moduleAt(appUrl);
-    assert.match(importLine(appSource, 'markdown-config.js'), /from ['"]\.\/markdown-config\.js\?v=3['"]/);
-    assert.match(importLine(appSource, 'observer-history.js'), /from ['"]\.\/observer-history\.js\?v=6['"]/);
-    const observerUrl = new URL('./observer-history.js?v=6', appUrl).href;
+    assert.match(importLine(appSource, 'markdown-config.js'), /from ['"]\.\/markdown-config\.js['"]/);
+    assert.match(importLine(appSource, 'observer-history.js'), /from ['"]\.\/observer-history\.js['"]/);
+    const observerUrl = new URL('./observer-history.js', appUrl).href;
     const observerSource = await moduleAt(observerUrl);
-    assert.match(importLine(observerSource, 'markdown-it-cjk-friendly/index.js'), /from ['"]\.\/markdown-it-cjk-friendly\/index\.js\?v=1['"]/);
-    const markdownUrl = new URL('./markdown-config.js?v=3', appUrl).href;
+    assert.match(importLine(observerSource, 'markdown-it-cjk-friendly/index.js'), /from ['"]\.\/markdown-it-cjk-friendly\/index\.js['"]/);
+    const markdownUrl = new URL('./markdown-config.js', appUrl).href;
     const markdownSource = await moduleAt(markdownUrl);
-    assert.match(importLine(markdownSource, 'markdown-it-cjk-friendly/index.js'), /from ['"]\.\/markdown-it-cjk-friendly\/index\.js\?v=1['"]/);
-    const pluginUrl = new URL('./markdown-it-cjk-friendly/index.js?v=1', markdownUrl).href;
+    assert.match(importLine(markdownSource, 'markdown-it-cjk-friendly/index.js'), /from ['"]\.\/markdown-it-cjk-friendly\/index\.js['"]/);
+    const pluginUrl = new URL('./markdown-it-cjk-friendly/index.js', markdownUrl).href;
     assert.equal(await moduleAt(pluginUrl), fs.readFileSync(path.join(publicRoot, 'js/markdown-it-cjk-friendly/index.js'), 'utf8'));
     let parentUrl = appUrl;
     const activeModules = new Map();
-    // Follow the source's current versioned imports instead of duplicating its
-    // release numbers. Each local/fleet route must deliver that same graph.
+    // Follow the source's stable imports so local/fleet delivery exercises the shipped graph.
     const currentImport = (parent, name) => {
       const relative = new URL(parent).pathname.split('/_assets/')[1];
       const source = fs.readFileSync(path.join(publicRoot, relative), 'utf8');
       const specifier = [...source.matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)]
         .map(match => match[1]).find(value => value.split('?')[0].endsWith('/' + name + '.js'));
-      assert.ok(specifier && /\?v=\d+$/.test(specifier), `${name} has a current versioned source import`);
+      assert.ok(specifier && specifier.endsWith('.js'), `${name} has a stable source import`);
       return specifier;
     };
     for (const name of ['conversation-page', 'conversation-content', 'chat-blocks']) {
@@ -126,7 +125,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
       activeModules.set(name, parentUrl);
     }
     const pageUrl = activeModules.get('conversation-page');
-    assert.match(importLine(await moduleAt(activeModules.get('conversation-content')), 'markdown-it-cjk-friendly/index.js'), /from ['"]\.\.\/markdown-it-cjk-friendly\/index\.js\?v=1['"]/);
+    assert.match(importLine(await moduleAt(activeModules.get('conversation-content')), 'markdown-it-cjk-friendly/index.js'), /from ['"]\.\.\/markdown-it-cjk-friendly\/index\.js['"]/);
     const page = await moduleAt(pageUrl);
     for (const name of ['conversation-state', 'chat-questions', 'conversation-activity', 'conversation-delete', 'conversation-internal']) {
       const specifier = [...page.matchAll(/from ['"]([^'"]+)['"]/g)]
@@ -135,7 +134,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
       activeModules.set(name, new URL(specifier, pageUrl).href);
     }
     for (const moduleUrl of [pageUrl, activeModules.get('conversation-internal')]) {
-      assert.match(importLine(await moduleAt(moduleUrl), 'plain-text.js'), /from ['"]\.\/plain-text\.js\?v=106['"]/,
+      assert.match(importLine(await moduleAt(moduleUrl), 'plain-text.js'), /from ['"]\.\/plain-text\.js['"]/,
         'internal renderer and page share the post-merge plain-text module');
     }
     for (const [parent, names] of [[appUrl, ['chat-drafts']],
@@ -162,7 +161,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
         schemaImports++;
         const schemaUrl = new URL(match[1], moduleUrl);
         assert.equal(schemaUrl.pathname, prefix + '/_assets/chat-schema.js');
-        assert.equal(schemaUrl.search, '?v=107', 'the shipped renderer advances every shared schema cache key together');
+        assert.equal(schemaUrl.search, '', 'the shipped renderer uses a stable schema URL');
         schemaVersions.add(schemaUrl.search);
         const response = await fetch(schemaUrl);
         assert.equal(response.status, 200);
@@ -175,7 +174,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
         deliveryImports++;
         const deliveryUrl = new URL(match[1], moduleUrl);
         assert.equal(deliveryUrl.pathname, prefix + '/_assets/js/wb/chat-delivery-state.js');
-        assert.equal(deliveryUrl.search, '?v=100');
+        assert.equal(deliveryUrl.search, '');
         deliveryUrls.add(deliveryUrl.href);
         assert.equal(await moduleAt(deliveryUrl.href), fs.readFileSync(path.join(publicRoot, 'js/wb/chat-delivery-state.js'), 'utf8'));
       }

@@ -1,7 +1,7 @@
-import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, quotaRecordedTime } from './wb/instance-strip.js?v=206';
-import { counted } from './count-label.js?v=1';
+import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, quotaRecordedTime } from './wb/instance-strip.js';
+import { counted } from './count-label.js';
 
-import { fallbackName, platformOf } from './wb/plain-text.js?v=106';
+import { fallbackName, platformOf } from './wb/plain-text.js';
 
 const REASON_BADGE_REASONS = new Set(['unreachable', 'auth_failed', 'version_unsupported', 'timeout', 'conn_refused', 'bad_payload', 'offline']);
 const LINK_CHIP_QUALITIES = new Set(['slow', 'degraded', 'stale']);

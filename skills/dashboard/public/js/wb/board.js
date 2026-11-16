@@ -1,8 +1,8 @@
-import { countLabel } from '../count-label.js?v=1';
-import { chatKind, element, fallbackName, icon, lastReceived, platformOf, runtimeName } from './plain-text.js?v=106';
-import { toolLabel } from './view-mode.js?v=153';
-import { activityStrip } from './activity-strip.js?v=106';
-import { createFetchGuard } from './fetch-guard.js?v=85';
+import { countLabel } from '../count-label.js';
+import { chatKind, element, fallbackName, icon, lastReceived, platformOf, runtimeName } from './plain-text.js';
+import { toolLabel } from './view-mode.js';
+import { activityStrip } from './activity-strip.js';
+import { createFetchGuard } from './fetch-guard.js';
 const same = (a, b) => a.runtime === b.runtime && a.mode === b.mode &&
   (a.mode === 'default' || (a.model === b.model && a.effort === b.effort));
 export function modelCell(row, t = key => key) {

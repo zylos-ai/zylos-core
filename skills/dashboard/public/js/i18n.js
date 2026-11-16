@@ -1,5 +1,5 @@
-import { withRequestTimeout, waitUntilDeadline } from './request-timeout.js?v=2';
-import { initWbPack } from './wb/i18n-wb.js?v=86';
+import { withRequestTimeout, waitUntilDeadline } from './request-timeout.js';
+import { initWbPack } from './wb/i18n-wb.js';
 const SUPPORTED = ['en', 'zh'];
 const STORAGE_KEY = 'zylos-dashboard-locale';
 const PACK_CACHE_PREFIX = 'zylos-dashboard-i18n-';

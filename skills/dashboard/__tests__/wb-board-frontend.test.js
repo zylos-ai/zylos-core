@@ -10,7 +10,7 @@ import { renderAttention } from '../public/js/wb/attention-bar.js';
 import { waitText } from '../public/js/wb/view-mode.js';
 import { renderOverview } from '../public/js/wb/detail-overview.js';
 import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
-import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
+import { setInstanceZone } from '../public/js/wb/instance-zone.js';
 import { INSTANCE_TEST_ZONE } from './helpers/instance-test-zone.js';
 // Times are expected in the instance zone; INSTANCE_TEST_ZONE differs from the process zone (see the helper).
 const ZONE = INSTANCE_TEST_ZONE;

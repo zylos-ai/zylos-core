@@ -1,7 +1,7 @@
-import { element, icon } from './plain-text.js?v=106';
-import { money } from './instance-strip.js?v=206';
-import { dateField } from './date-field.js?v=106';
-import { instantFromInput } from './instance-zone.js?v=100';
+import { element, icon } from './plain-text.js';
+import { money } from './instance-strip.js';
+import { dateField } from './date-field.js';
+import { instantFromInput } from './instance-zone.js';
 
 const colors = ['#0d9488', '#6366f1', '#d97706'];
 export const usageRanges = ['24h', '7d', '30d', 'custom'];

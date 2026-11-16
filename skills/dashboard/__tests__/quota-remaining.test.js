@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, instanceStrip } from '../public/js/wb/instance-strip.js';
 import { fleetSelfFromSnapshot, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
-import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
+import { setInstanceZone } from '../public/js/wb/instance-zone.js';
 
 const fleet = { agents: [{ name: 'local', self: true, state: 'IDLE' }] };
 const pack = locale => JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));

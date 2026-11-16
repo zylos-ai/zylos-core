@@ -1,5 +1,5 @@
-import { element } from './plain-text.js?v=106';
-import { formatZoned } from './instance-zone.js?v=100';
+import { element } from './plain-text.js';
+import { formatZoned } from './instance-zone.js';
 const CLOCK_SECONDS = { hour: 'numeric', minute: '2-digit', second: '2-digit' };
 export function activityStrip(document, data, { inboundUnknown = false, t = key => key } = {}) {
   const root = element(document, 'div', undefined, 'wb-activity');

@@ -1,13 +1,13 @@
-import { listen, reconcileChildren } from './detail-update.js?v=158';
-import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=106';
-import { olderRow } from './older-row.js?v=86';
-import { channelIcon, platformLabel, statePill } from './board.js?v=159';
-import { detailDisplayRow, groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=177';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=181';
-import { eventTypesFor, recentWindow } from './timeline-rows.js?v=112';
-import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=118';
-import { renderNameEditor } from './name-edit.js?v=118';
-import { formatZoned, zonedDay } from './instance-zone.js?v=100';
+import { listen, reconcileChildren } from './detail-update.js';
+import { element, fallbackName, icon, runtimeName } from './plain-text.js';
+import { olderRow } from './older-row.js';
+import { channelIcon, platformLabel, statePill } from './board.js';
+import { detailDisplayRow, groupEventCount, rawKey, renderOverview } from './detail-overview.js';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js';
+import { eventTypesFor, recentWindow } from './timeline-rows.js';
+import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js';
+import { renderNameEditor } from './name-edit.js';
+import { formatZoned, zonedDay } from './instance-zone.js';
 
 export function resolveDetailRow(selection, snapshot = {}) {
   const item = typeof selection === 'string' || selection == null ? { sessionGroup: selection } : selection;

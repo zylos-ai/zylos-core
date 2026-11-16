@@ -1,4 +1,4 @@
-import { formatZoned } from './instance-zone.js?v=100';
+import { formatZoned } from './instance-zone.js';
 
 /** Shared caption parts; compact wording belongs only to the phone working pill.
  * `scheduled` is true only while Origin works on what the scheduler last handed it. */

@@ -1,11 +1,11 @@
-import { countLabel } from '../count-label.js?v=1';
-import { listen } from './detail-update.js?v=158';
-import { element, icon, lastReceived, runtimeName } from './plain-text.js?v=106';
-import { annotateStatus, modelCell, pendingModel, shortDuration } from './board.js?v=159';
-import { toolLabel, waitText } from './view-mode.js?v=153';
-import { displayTime, eventLabel, timeValue } from './event-labels.js?v=93';
-import { recentRows } from './timeline-rows.js?v=112';
-import { formatZoned, zonedDay } from './instance-zone.js?v=100';
+import { countLabel } from '../count-label.js';
+import { listen } from './detail-update.js';
+import { element, icon, lastReceived, runtimeName } from './plain-text.js';
+import { annotateStatus, modelCell, pendingModel, shortDuration } from './board.js';
+import { toolLabel, waitText } from './view-mode.js';
+import { displayTime, eventLabel, timeValue } from './event-labels.js';
+import { recentRows } from './timeline-rows.js';
+import { formatZoned, zonedDay } from './instance-zone.js';
 
 export function activeSubagents(events, runId) {
   const agents = new Map();

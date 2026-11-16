@@ -1,4 +1,4 @@
-import { element, icon } from './plain-text.js?v=106';
+import { element, icon } from './plain-text.js';
 
 const SECTIONS = [
   ['overview', 'wb.nav.overview', 'fleet'],

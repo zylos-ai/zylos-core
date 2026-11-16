@@ -5,7 +5,7 @@ import { eventChip, eventTypesFor, showsEvent, newestFirst, mergeRepeats, recent
   plainEventTypes, lifecycleEventTypes, toolEventTypes } from '../public/js/wb/timeline-rows.js';
 import { repeatRow } from '../public/js/wb/detail-overview.js';
 import { chipNames } from '../public/js/wb/detail-timeline.js';
-import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
+import { setInstanceZone } from '../public/js/wb/instance-zone.js';
 import { INSTANCE_TEST_ZONE } from './helpers/instance-test-zone.js';
 // Times are expected in the instance zone; INSTANCE_TEST_ZONE differs from the process zone (see the helper).
 const ZONE = INSTANCE_TEST_ZONE;

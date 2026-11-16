@@ -1,5 +1,5 @@
-import { beginStateRequest, applyStateResponse } from './response-order.js?v=98';
-import { setInstanceZone } from './wb/instance-zone.js?v=100';
+import { beginStateRequest, applyStateResponse } from './response-order.js';
+import { setInstanceZone } from './wb/instance-zone.js';
 
 export async function refreshDashboardState(state, fetchState) {
   const target = state.remoteAgent;

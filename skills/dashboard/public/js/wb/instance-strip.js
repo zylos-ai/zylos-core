@@ -1,7 +1,7 @@
-import { countLabel } from '../count-label.js?v=1';
-import { element, icon, runtimeName } from './plain-text.js?v=106';
-import { recoveryTime } from './cooldown.js?v=89';
-import { formatZoned, zonedDay } from './instance-zone.js?v=100';
+import { countLabel } from '../count-label.js';
+import { element, icon, runtimeName } from './plain-text.js';
+import { recoveryTime } from './cooldown.js';
+import { formatZoned, zonedDay } from './instance-zone.js';
 // Account quota samples are passed through as each runtime reports them: Claude uses
 // used_percentage (or utilization), Codex keeps its camelCase usedPercentage.
 export const accountUsedPercent = usage => usage?.used_percentage ?? usage?.utilization ?? usage?.usedPercentage ?? null;

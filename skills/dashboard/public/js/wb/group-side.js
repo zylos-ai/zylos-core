@@ -1,7 +1,7 @@
-import { readGroupSnapshot } from './group-data.js?v=5';
-import { createGroupDetail } from './detail.js?v=181';
-import { boardController } from './board.js?v=159';
-import { element, icon } from './plain-text.js?v=106';
+import { readGroupSnapshot } from './group-data.js';
+import { createGroupDetail } from './detail.js';
+import { boardController } from './board.js';
+import { element, icon } from './plain-text.js';
 
 /**
  * The overview's group detail, opened as a side panel on another page. It is the same component; the panel reads

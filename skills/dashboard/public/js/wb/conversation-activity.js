@@ -1,6 +1,6 @@
-import { countLabel } from '../count-label.js?v=1';
-import { element, icon } from './plain-text.js?v=106';
-import { formatZoned } from './instance-zone.js?v=100';
+import { countLabel } from '../count-label.js';
+import { element, icon } from './plain-text.js';
+import { formatZoned } from './instance-zone.js';
 
 /**
  * What the AI is doing right now, shown on the conversation page right below the latest message (a user message or a

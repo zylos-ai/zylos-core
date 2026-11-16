@@ -1,4 +1,4 @@
-import { createActionRunner } from './action-runner.js?v=1';
+import { createActionRunner } from './action-runner.js';
 
 /** The question the page asks before an action that changes the running agent. */
 export function actionConfirmText(action, body, { t, runtime = null, effortLabel = value => value }) {

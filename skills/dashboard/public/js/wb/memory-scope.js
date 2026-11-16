@@ -1,5 +1,5 @@
-import { countLabel } from '../count-label.js?v=1';
-import { element, fallbackName, icon, platformOf } from './plain-text.js?v=106';
+import { countLabel } from '../count-label.js';
+import { element, fallbackName, icon, platformOf } from './plain-text.js';
 
 // Scope metadata is validated by Core's parseSessionGroup on the server.
 /**

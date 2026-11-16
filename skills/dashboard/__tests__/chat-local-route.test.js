@@ -52,11 +52,11 @@ test('local chat route serves the application with base-prefixed module URLs', {
       assert.ok(html.includes(`${base}/_assets/`));
     }
     const entry = await fetch(`${origin}/chat`, { headers: { cookie } });
-    const appPath = /src="([^"]+\/js\/app\.js\?v=\d+)"/.exec(await entry.text())?.[1];
+    const appPath = /src="([^"]+\/js\/app\.js)"/.exec(await entry.text())?.[1];
     assert.ok(appPath, 'the actual local entry selects the application module');
     const app = await fetch(new URL(appPath, origin), { headers: { cookie } });
     assert.equal(app.status, 200);
-    const pageImport = /from ['"]([^'"]*\/conversation-page\.js\?v=\d+)['"]/.exec(await app.text())?.[1];
+    const pageImport = /from ['"]([^'"]*\/conversation-page\.js)['"]/.exec(await app.text())?.[1];
     assert.ok(pageImport, 'the actual application loads the dedicated conversation page');
     const pageUrl = new URL(pageImport, new URL(appPath, origin));
     assert.equal(pageUrl.pathname, '/_assets/js/wb/conversation-page.js');

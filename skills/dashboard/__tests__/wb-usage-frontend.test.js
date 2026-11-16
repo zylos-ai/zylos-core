@@ -5,7 +5,7 @@ import { createDocument, allNodes, deferred, tick, Node } from './fixtures/workb
 import { renderUsage, createUsagePage, usagePath, formatUsageCount, bucketLabels, compactCount } from '../public/js/wb/usage.js';
 import { renderHost, createHostPanel } from '../public/js/wb/host-panel.js';
 import { instanceStrip, quotaReset } from '../public/js/wb/instance-strip.js';
-import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
+import { setInstanceZone } from '../public/js/wb/instance-zone.js';
 import { markCurrentTab } from '../public/js/wb/view-mode.js';
 
 // Direct modules with injected DOM, charts and reads; no browser, network, storage or processes.

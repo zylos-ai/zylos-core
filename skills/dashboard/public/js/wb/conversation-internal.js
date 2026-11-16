@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=106';
+import { element } from './plain-text.js';
 
 /** Internal relays are context between sessions, never user/AI replies or interactive content. */
 export function renderInternalMessage({ document, row, t = key => key, onOpenPeer, timeText, timeIso,

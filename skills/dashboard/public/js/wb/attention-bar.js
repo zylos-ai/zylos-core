@@ -1,7 +1,7 @@
-import { countLabel } from '../count-label.js?v=1';
-import { element, fallbackName, icon } from './plain-text.js?v=106';
-import { recoveryTime } from './cooldown.js?v=89';
-import { formatZoned } from './instance-zone.js?v=100';
+import { countLabel } from '../count-label.js';
+import { element, fallbackName, icon } from './plain-text.js';
+import { recoveryTime } from './cooldown.js';
+import { formatZoned } from './instance-zone.js';
 const clock = at => formatZoned(at, undefined, { hour: '2-digit', minute: '2-digit' });
 function entry(document, { severity, glyph, text, sub, group, onSelect, t }) {
   const clickable = group !== undefined;

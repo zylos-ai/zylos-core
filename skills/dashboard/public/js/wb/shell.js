@@ -1,15 +1,15 @@
-import { readGroupSnapshot, groupSnapshot, displayGroupRow } from './group-data.js?v=5';
-import { withRequestTimeout } from '../request-timeout.js?v=2';
-import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js?v=153';
-import { boardController, renderBoard, renderDistribution } from './board.js?v=159';
-import { createBoardSearch } from './board-search.js?v=87';
-import { instanceStrip, accountRuntimes } from './instance-strip.js?v=206';
-import { renderAttention } from './attention-bar.js?v=196';
-import { createGroupDetail } from './detail.js?v=181';
-import { loadNamePrompt, renderAutoName } from './auto-name.js?v=107';
-import { createHostPanel } from './host-panel.js?v=207';
-import { element, icon } from './plain-text.js?v=106';
-import { watchRows } from './label-fit.js?v=2';
+import { readGroupSnapshot, groupSnapshot, displayGroupRow } from './group-data.js';
+import { withRequestTimeout } from '../request-timeout.js';
+import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js';
+import { boardController, renderBoard, renderDistribution } from './board.js';
+import { createBoardSearch } from './board-search.js';
+import { instanceStrip, accountRuntimes } from './instance-strip.js';
+import { renderAttention } from './attention-bar.js';
+import { createGroupDetail } from './detail.js';
+import { loadNamePrompt, renderAutoName } from './auto-name.js';
+import { createHostPanel } from './host-panel.js';
+import { element, icon } from './plain-text.js';
+import { watchRows } from './label-fit.js';
 
 const REQUEST_TIMEOUT_MS = 30000;
 

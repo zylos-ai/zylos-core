@@ -1,10 +1,10 @@
-import { formatZoned } from './instance-zone.js?v=100';
-import { workingNowText } from './working-display.js?v=5';
-import { listen } from './detail-update.js?v=158';
-import { element, icon } from './plain-text.js?v=106';
-import { endReasonLabel, timeValue } from './event-labels.js?v=93';
-import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=177';
-import { eventTypesFor, mergeRepeats, newestFirst, restartEffect, restartRows, showsEvent } from './timeline-rows.js?v=112';
+import { formatZoned } from './instance-zone.js';
+import { workingNowText } from './working-display.js';
+import { listen } from './detail-update.js';
+import { element, icon } from './plain-text.js';
+import { endReasonLabel, timeValue } from './event-labels.js';
+import { eventRow, eventTime, repeatRow } from './detail-overview.js';
+import { eventTypesFor, mergeRepeats, newestFirst, restartEffect, restartRows, showsEvent } from './timeline-rows.js';
 
 export { timeValue };
 

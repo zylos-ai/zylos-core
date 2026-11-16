@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import { createDocument, allNodes, visibleNodes, visibleText, tick, deferred } from './helpers/conversation-dom.js';
 import { CONTENT_PREFIX, parseC4Content, makeQuestionSummary, validateAnswer } from '../../comm-bridge/scripts/c4-content-schema.js';
-const browserSchema = new URL('../public/chat-schema.js?v=92', import.meta.url).href;
+const browserSchema = new URL('../public/chat-schema.js', import.meta.url).href;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
   if (context.parentURL && new URL(specifier, context.parentURL).pathname === new URL(browserSchema).pathname) return next(sourceSchema, context);

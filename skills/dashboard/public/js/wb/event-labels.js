@@ -1,4 +1,4 @@
-import { formatZoned } from './instance-zone.js?v=100';
+import { formatZoned } from './instance-zone.js';
 export function timeValue(value) {
   if (typeof value === 'number') return value < 100000000000 ? value * 1000 : value;
   if (typeof value !== 'string') return NaN;

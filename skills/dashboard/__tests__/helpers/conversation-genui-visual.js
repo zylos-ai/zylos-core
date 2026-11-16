@@ -79,7 +79,7 @@ export async function runConversationGenuiVisual(t, sandbox) {
     if(url.pathname === '/approved-prototype.html' && prototypeSource){sendHtml(res,200,prototypeSource);return true;}
     if (url.pathname === '/renderer-fallback') {
       sendHtml(res, 200, `<!doctype html><html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:15px/1.6 system-ui;margin:24px;background:#f4f7f8;color:#17222e}body.dark{background:#11191e;color:#e6edf2}main{max-width:900px;margin:auto}.chat-message-content{padding:20px;border:1px solid #86939d;border-radius:12px;margin:16px 0}.chat-block{margin:16px 0}h1{font-size:22px}</style><main><h1>兼容展示：完整 Content 顺序与无渲染器表单</h1><div id="fallback"></div></main><script type="module">
-      import {renderChatContent} from '/_assets/js/wb/chat-blocks.js?v=107';
+      import {renderChatContent} from '/_assets/js/wb/chat-blocks.js';
       const root=document.querySelector('#fallback');
       const columns=${JSON.stringify(columnsMessage())};
       const form=${JSON.stringify(formMessage('no-renderer'))};
@@ -376,7 +376,7 @@ export async function runConversationGenuiVisual(t, sandbox) {
   await page.goto('about:blank'); await context.clearCookies(); await page.goto(fixture.base+'/login');
   await page.locator('input[name="password"]').waitFor();
   const staleScope={authRoot:fixture.base,instance:fixture.base,conversationId:scenes.controls.receipt.conversationId,messageId:scenes.controls.envelope.messageId,blockId:'customer_form',schemaVersion:2};
-  assert.equal(await page.evaluate(async ({scope})=>{const {browserDraftStore}=await import('/_assets/js/wb/chat-drafts.js?v=103');return browserDraftStore.save(scope,{customer_type:'company',full_name:'stale login',email:'stale@example.com',company_name:'stale hidden'}).saved;},{scope:staleScope}),true);
+  assert.equal(await page.evaluate(async ({scope})=>{const {browserDraftStore}=await import('/_assets/js/wb/chat-drafts.js');return browserDraftStore.save(scope,{customer_type:'company',full_name:'stale login',email:'stale@example.com',company_name:'stale hidden'}).saved;},{scope:staleScope}),true);
   await page.locator('input[name="password"]').fill('isolated-login-password');
   await Promise.all([page.waitForURL(url=>url.pathname==='/'),page.locator('button[type="submit"]').click()]);
   await page.goto(fixture.base+'/chat'); await page.locator('#wb-chat [data-conversation-id]').first().waitFor(); root=await choose('controls');

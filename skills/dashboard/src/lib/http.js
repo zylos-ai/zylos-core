@@ -75,6 +75,29 @@ export function readJsonBody(req, maxBytes = 64 * 1024, { allowEmpty = false } =
   });
 }
 
+// Metadata validators are weak: they identify unchanged files without hashing bodies.
+function sendStaticFile(req, res, filePath, stat) {
+  const ext = path.extname(filePath);
+  const headers = {
+    'content-type': MIME_TYPES[ext] || 'application/octet-stream',
+    'cache-control': ext === '.html' ? 'no-store' : 'no-cache'
+  };
+  if (ext !== '.html') {
+    const tag = `"${stat.size.toString(16)}-${stat.mtimeMs.toString(16)}"`;
+    headers.etag = `W/${tag}`;
+    const validator = req.headers?.['if-none-match'];
+    if ((req.method === 'GET' || req.method === 'HEAD') && typeof validator === 'string'
+        && validator.split(',').some(value => value.trim() === '*' || value.trim().replace(/^W\//, '') === tag)) {
+      res.writeHead(304, headers);
+      res.end();
+      return;
+    }
+  }
+  res.writeHead(200, headers);
+  if (req.method === 'HEAD') res.end();
+  else fs.createReadStream(filePath).pipe(res);
+}
+
 export function serveStatic(req, res, rootDir) {
   let pathname;
   try {
@@ -88,12 +111,9 @@ export function serveStatic(req, res, rootDir) {
   if (pathname === '/_assets/chat-schema.js') {
     const schema = path.resolve(rootDir, '..', '..', 'comm-bridge', 'scripts', 'c4-content-schema.js');
     try {
-      if (!fs.statSync(schema).isFile()) return false;
-      res.writeHead(200, {
-        'content-type': MIME_TYPES['.js'],
-        'cache-control': 'public, max-age=60'
-      });
-      fs.createReadStream(schema).pipe(res);
+      const stat = fs.statSync(schema);
+      if (!stat.isFile()) return false;
+      sendStaticFile(req, res, schema, stat);
       return true;
     } catch {
       return false;
@@ -124,12 +144,7 @@ export function serveStatic(req, res, rootDir) {
   try {
     const fileStat = fs.statSync(filePath);
     if (!fileStat.isFile()) return false;
-    const ext = path.extname(filePath);
-    res.writeHead(200, {
-      'content-type': MIME_TYPES[ext] || 'application/octet-stream',
-      'cache-control': ext === '.html' ? 'no-store' : 'public, max-age=60'
-    });
-    fs.createReadStream(filePath).pipe(res);
+    sendStaticFile(req, res, filePath, fileStat);
     return true;
   } catch {
     return false;

@@ -76,14 +76,14 @@ test('the renderer keeps raw HTML escaped and falls back to the escaped raw view
   assert.match(markdownHtml(md, '**bold**', esc), /<strong>bold<\/strong>/);
 });
 
-test('index.html loads markdown-it before app.js and bumps cache versions', () => {
+test('index.html loads markdown-it before app.js using stable URLs', () => {
   const html = fs.readFileSync(new URL('../public/index.html', import.meta.url).pathname, 'utf8');
   const mdIdx = html.indexOf('js/markdown-it.min.js');
-  const appIdx = html.indexOf('js/app.js?v=');
+  const appIdx = html.indexOf('js/app.js');
   assert.ok(mdIdx > -1, 'markdown-it script tag present');
   assert.ok(mdIdx < appIdx, 'markdown-it loads before app.js');
-  assert.match(html, /app\.js\?v=\d+/);
-  assert.match(html, /style\.css\?v=65/);
+  assert.match(html, /app\.js/);
+  assert.match(html, /style\.css/);
 });
 
 test('stylesheet covers the newly rendered elements', () => {

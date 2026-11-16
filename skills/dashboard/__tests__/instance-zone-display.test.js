@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
 // The same module URL the page modules import, so the zone set here is the zone they read.
-import { setInstanceZone, instanceZone, formatZoned, zonedDay, zonedInputValue, instantFromInput } from '../public/js/wb/instance-zone.js?v=100';
+import { setInstanceZone, instanceZone, formatZoned, zonedDay, zonedInputValue, instantFromInput } from '../public/js/wb/instance-zone.js';
 import { unnamedConversation } from '../public/js/wb/plain-text.js';
 import { displayTime } from '../public/js/wb/event-labels.js';
 import { eventTime } from '../public/js/wb/detail-overview.js';

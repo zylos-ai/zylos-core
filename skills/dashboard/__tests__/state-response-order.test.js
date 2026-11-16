@@ -7,7 +7,7 @@ import {
   isStateRequestCurrent,
 } from '../public/js/response-order.js';
 import { refreshDashboardState } from '../public/js/state-refresh.js';
-import { instanceZone, setInstanceZone, formatZoned } from '../public/js/wb/instance-zone.js?v=100';
+import { instanceZone, setInstanceZone, formatZoned } from '../public/js/wb/instance-zone.js';
 
 test('an unrelated same-run SSE observation does not discard a newer full response', () => {
   const state = { navigationGeneration: 0, dashboardState: { runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:00Z' } };

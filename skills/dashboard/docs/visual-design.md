@@ -258,6 +258,6 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Approved] When changing mobile or responsive layouts, run the affected gated browser tests (`ZYLOS_CHAT_INTEGRATION=1`), covering at least 390 px. If they cannot run, state the specific reason and remaining checks; static checks cannot substitute for a passing result.
 
-[Approved] CSS changes also update the corresponding resource's `?v=` in [index.html](../public/index.html). Delivery records actual test files, commands, pass/fail counts, and exit codes. Keep inventory tables, retest tables, screenshots, and test logs in the PR; do not commit evidence artifacts to the repository.
+[Approved] JS and CSS use stable URLs with `Cache-Control: no-cache` and ETag validation; HTML remains `no-store`. Delivery records actual test files, commands, pass/fail counts, and exit codes. Keep inventory tables, retest tables, screenshots, and test logs in the PR; do not commit evidence artifacts to the repository.
 
 [Approved] Run only checks relevant to this revision's scope and proven to be isolated. Organize tests according to the repository AGENTS.md rules for locations, naming, and lifecycle; do not touch live resources. For documentation-only revisions, state that there are no product or responsive changes, and check links, rule statuses, and the complete PR diff.

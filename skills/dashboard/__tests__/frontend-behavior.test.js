@@ -1450,7 +1450,7 @@ test('Observer follows more than eight distinct same-target supersessions to a l
   assert.equal(h.sockets.length, 1);
 });
 
-test('memory browser is admin-scoped, agent-routed, and cache-busted', () => {
+test('memory browser is admin-scoped, agent-routed, with a stable entry URL', () => {
   const index = fs.readFileSync(new URL('../public/index.html', import.meta.url).pathname, 'utf8');
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
   const memoryScope = fs.readFileSync(new URL('../public/js/wb/memory-scope.js', import.meta.url).pathname, 'utf8');
@@ -1462,8 +1462,8 @@ test('memory browser is admin-scoped, agent-routed, and cache-busted', () => {
   assert.match(index, /id="tab-memory"/);
   assert.match(index, /id="memory-tree"/);
   assert.match(index, /id="memory-content"/);
-  assert.match(index, /app\.js\?v=\d+/);
-  assert.match(index, /style\.css\?v=65/);
+  assert.match(index, /app\.js/);
+  assert.match(index, /style\.css/);
 
   assert.match(app, /fetchAgentJson\('\/api\/memory\/tree'\)/);
   assert.match(app, /fetchAgentJson\(`\/api\/memory\/file\?path=\$\{encoded\}`\)/);
@@ -1538,7 +1538,7 @@ test('fleet management entry stays local and its controls are retained in settin
 
   assert.match(index, /id="fleet-manage-btn"/);
   assert.match(index, /data-i18n-title="fleet_manage\.open"/);
-  assert.match(index, /app\.js\?v=\d+/);
+  assert.match(index, /app\.js/);
   assert.match(index, /id="fleet-manage-btn"[^>]*><i class="wb-ico wb-ico-fleet" aria-hidden="true"><\/i>/);
   // The icon is shown on every page, a remote machine's own page included: it is the way back to the machines page.
   assert.doesNotMatch(app.slice(app.indexOf('function initFleetManageButton('), app.indexOf('function initTechButton(')), /hidden/);
@@ -1704,7 +1704,7 @@ test('i18n loader falls back to cache, heals both packs, and ignores stale recov
   assert.deepEqual(JSON.parse(values.get(primaryKey)), { 'btn.actions': '恢复操作' });
 
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  assert.match(app, /from '\.\/i18n\.js\?v=90'/);
+  assert.match(app, /from '\.\/i18n\.js'/);
 });
 
 test('overlapping initI18n calls: stale slow request cannot overwrite the newer locale (#211 review)', async () => {
@@ -2052,11 +2052,9 @@ test('Observer retries an attachment aborted by a concurrent Agent resize', asyn
   assert.equal(h.sockets.length, 1);
 });
 
-test('app.js busts the cached observer-size module whose exports it now needs', () => {
+test('app.js imports observer-size validation through its stable URL', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  // Static modules are cached for 60s; a new named import from an unversioned
-  // URL can bind to the previous copy and abort the whole module graph.
-  assert.match(app, /import \{ validAgentSize, validObserverSize \} from '\.\/observer-size\.js\?v=2';/);
+  assert.match(app, /import \{ validAgentSize, validObserverSize \} from '\.\/observer-size\.js';/);
 });
 
 test('usage and legacy trends paths share tab mapping across local and fleet history', () => {

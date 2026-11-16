@@ -1,4 +1,4 @@
-import { formatZoned, zonedDay } from './instance-zone.js?v=100';
+import { formatZoned, zonedDay } from './instance-zone.js';
 export function element(document, tag, text, className) {
   const node = document.createElement(tag);
   if (text !== undefined) node.textContent = String(text ?? '');

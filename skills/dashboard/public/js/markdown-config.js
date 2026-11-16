@@ -1,4 +1,4 @@
-import cjkFriendly from './markdown-it-cjk-friendly/index.js?v=1';
+import cjkFriendly from './markdown-it-cjk-friendly/index.js';
 
 // Memory content is semi-trusted (agent-written): html:false keeps raw HTML escaped,
 // and every link opens in a new tab without access to this page.

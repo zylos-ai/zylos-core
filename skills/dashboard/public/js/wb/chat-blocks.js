@@ -1,11 +1,11 @@
-import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=107';
-import { element } from './plain-text.js?v=106';
-import { attachmentDisplayText } from './chat-attachments.js?v=155';
-import { formatDuration } from './duration-format.js?v=1';
-import { answerDisplay } from './chat-answer.js?v=1';
+import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js';
+import { element } from './plain-text.js';
+import { attachmentDisplayText } from './chat-attachments.js';
+import { formatDuration } from './duration-format.js';
+import { answerDisplay } from './chat-answer.js';
 
 export { parseC4Content };
-export { validateAnswer } from '../../chat-schema.js?v=107';
+export { validateAnswer } from '../../chat-schema.js';
 
 const interactive = new Set(['choice', 'confirmation', 'form_intent']);
 const diagramIcons = new Map([

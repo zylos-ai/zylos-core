@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=106';
+import { element } from './plain-text.js';
 
 // The Core version an instance reports in versions (`zylos --version`). Dashboard ships inside Core and
 // has no version of its own. A missing answer, or the CLI's "unknown", is not a version.

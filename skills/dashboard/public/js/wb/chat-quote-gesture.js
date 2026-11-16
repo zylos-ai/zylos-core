@@ -1,4 +1,4 @@
-import { icon } from './plain-text.js?v=106';
+import { icon } from './plain-text.js';
 
 /** Swiping a message left by this far quotes it; the row follows the finger up to SWIPE_MAX. */
 export const SWIPE_DISTANCE = 56;

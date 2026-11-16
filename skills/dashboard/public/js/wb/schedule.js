@@ -1,8 +1,8 @@
-import { countLabel } from '../count-label.js?v=1';
-import { element, fallbackName, icon } from './plain-text.js?v=106';
-import { createFetchGuard } from './fetch-guard.js?v=85';
-import { cronText } from './cron-text.js?v=94';
-import { createForm, createPreviewer, formPayload, initialForm, intervalText, missText, previewPath, wrapSelect } from './schedule-form.js?v=106';
+import { countLabel } from '../count-label.js';
+import { element, fallbackName, icon } from './plain-text.js';
+import { createFetchGuard } from './fetch-guard.js';
+import { cronText } from './cron-text.js';
+import { createForm, createPreviewer, formPayload, initialForm, intervalText, missText, previewPath, wrapSelect } from './schedule-form.js';
 
 export { missText };
 

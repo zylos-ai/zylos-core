@@ -1,4 +1,4 @@
-import { withRequestTimeout, waitUntilDeadline } from '../request-timeout.js?v=2';
+import { withRequestTimeout, waitUntilDeadline } from '../request-timeout.js';
 const REQUEST_TIMEOUT_MS = 30000;
 export const WB_SENTINEL = 'wb.nav.overview';
 export const validWbPack = pack => pack !== null && typeof pack === 'object' &&

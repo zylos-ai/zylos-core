@@ -1,7 +1,7 @@
-import { parseC4Content, CONTENT_PREFIX, validateAnswer, evaluateFormState, validateFormFields } from '../../chat-schema.js?v=107';
-import { element } from './plain-text.js?v=106';
-import { receiptState } from './chat-delivery-state.js?v=100';
-import { instantFromInput, zonedInputValue } from './instance-zone.js?v=100';
+import { parseC4Content, CONTENT_PREFIX, validateAnswer, evaluateFormState, validateFormFields } from '../../chat-schema.js';
+import { element } from './plain-text.js';
+import { receiptState } from './chat-delivery-state.js';
+import { instantFromInput, zonedInputValue } from './instance-zone.js';
 
 const clone = value => JSON.parse(JSON.stringify(value));
 const referenceMatches = (question, envelope, block, row) => question && !question.questionError && row?.direction === 'out'

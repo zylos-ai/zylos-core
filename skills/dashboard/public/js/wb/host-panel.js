@@ -1,6 +1,6 @@
-import { element, icon, runtimeName } from './plain-text.js?v=106';
-import { formatZoned } from './instance-zone.js?v=100';
-import { accountRuntimes, accountUsedPercent, remainingQuotaPercent, quotaReset, quotaRecordedTime } from './instance-strip.js?v=206';
+import { element, icon, runtimeName } from './plain-text.js';
+import { formatZoned } from './instance-zone.js';
+import { accountRuntimes, accountUsedPercent, remainingQuotaPercent, quotaReset, quotaRecordedTime } from './instance-strip.js';
 
 const percent = value => value == null ? '—' : Number(value).toFixed(1) + '%';
 const defaultChart = (canvas, config) => new globalThis.Chart(canvas, config);

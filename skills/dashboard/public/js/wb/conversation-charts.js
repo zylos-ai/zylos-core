@@ -1,6 +1,6 @@
-import { element } from './plain-text.js?v=106';
-import { formatZoned, instanceZone, zonedInputValue } from './instance-zone.js?v=100';
-import { formatDuration } from './duration-format.js?v=1';
+import { element } from './plain-text.js';
+import { formatZoned, instanceZone, zonedInputValue } from './instance-zone.js';
+import { formatDuration } from './duration-format.js';
 
 const colors = ['#35a998', '#e1a33d', '#4f8cf7', '#e06b83', '#aa79e8', '#73859f'];
 const halfDay = 12 * 60 * 60 * 1000;

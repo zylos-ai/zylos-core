@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import '../public/js/markdown-it.min.js';
 import { ObserverHistory, createHistoryMarkdown, escapeHistory } from '../public/js/observer-history.js';
-import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
+import { setInstanceZone } from '../public/js/wb/instance-zone.js';
 
 function controller() {
   const history = Object.create(ObserverHistory.prototype);

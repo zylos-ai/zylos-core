@@ -9,6 +9,7 @@ const ROOT = process.cwd();
 const ROOT_NODE_TESTS = [
   'test/single-origin-activity.integration.test.js',
   'test/dashboard-object-api.integration.test.js',
+  'test/dashboard-static-cache-browser.integration.test.js',
   'test/account-usage-cache.integration.test.js',
   'test/dashboard-transcript-idle.integration.test.js',
   'test/session-batch-reader.integration.test.js',

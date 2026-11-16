@@ -78,7 +78,7 @@ test('static handler serves the local variable font with its browser MIME type',
   await finished(res);
   assert.equal(res.status, 200);
   assert.equal(res.headers['content-type'], 'font/woff2');
-  assert.equal(res.headers['cache-control'], 'public, max-age=60');
+  assert.equal(res.headers['cache-control'], 'no-cache');
 });
 
 // HTTP integration: real createServer page dispatch and index rendering. Run for

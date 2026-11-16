@@ -272,7 +272,7 @@ test('breakdown numeric tables contain values and shares and refresh with the ex
 });
 
 test('time table labels follow the tooltip instance zone and use UTC when their zone becomes unknown', async t => {
-  const { setInstanceZone } = await import('../public/js/wb/instance-zone.js?v=100');
+  const { setInstanceZone } = await import('../public/js/wb/instance-zone.js');
   setInstanceZone('Asia/Shanghai');
   t.after(() => setInstanceZone(null));
   const block = seriesBlock('datetime'), instant = '2026-11-01T16:30:00Z';
