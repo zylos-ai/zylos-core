@@ -1,8 +1,24 @@
 #!/usr/bin/env node
+import path from 'node:path';
 import { guard, memoryError, requireSyncToken } from './sync-lock.js';
 import { helpRequested, inputError, isMain, options, parseJson, readInput, runCli } from './sync-cli.js';
-import { list } from './sync-files.js';
+import { listWithDate } from './sync-files.js';
 import { verifyOriginReceipts } from '../../comm-bridge/scripts/c4-sync-batch.js';
+
+const logDate = file => /^(\d{4}-\d{2}-\d{2})\.md$/.exec(path.basename(file))?.[1] ?? null;
+const byPath = (a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+// After this advance the next list starts at today's date, so a log dated
+// before today is never listed again: it must match what was read, path and
+// content. Today's log is listed again next run, so it may appear or grow, but
+// a log that was listed must still be there.
+function sessionsUnchanged(listed, actual, today) {
+  if (!Array.isArray(listed) || listed.some(item => typeof item?.path !== 'string')) return false;
+  const earlier = item => { const date = logDate(item.path); return date !== null && date < today; };
+  const final = entries => JSON.stringify(entries.filter(earlier).map(item => [item.path, item.sha256 ?? null]).sort(byPath));
+  if (final(listed) !== final(actual)) return false;
+  const current = new Set(actual.filter(item => logDate(item.path) === today).map(item => item.path));
+  return listed.every(item => earlier(item) || current.has(item.path));
+}
 
 // Cursor values come only from receipts recomputed against the database and
 // from the script's own session-log listing; the worker supplies no numbers.
@@ -11,14 +27,17 @@ export async function advance({ group, input, ...settings }, deps = {}) {
     const payload = typeof input === 'string' ? parseJson(input) : input;
     if (!payload || typeof payload !== 'object' || Array.isArray(payload) || Object.keys(payload).some(key => !['summary', 'raw', 'inputs'].includes(key))) throw inputError('Expected {"summary":{...},"raw":{...}|null,"inputs":{...}}');
     const database = deps.database || await import('../../comm-bridge/scripts/c4-db.js');
-    const actual = await list({ env: settings.env, group, now: deps.now }, { database });
-    const paths = entries => Array.isArray(entries) ? entries.map(item => item?.path).sort() : null;
-    if (payload.inputs?.scope !== actual.scope || JSON.stringify(paths(payload.inputs?.sessions)) !== JSON.stringify(paths(actual.sessions))) {
+    // "Today" is this script's own date, from the same list call and timezone.
+    // The cursor is stamped with that same instant: the next list starts at
+    // the stamp's date, which must be the date the logs were judged against.
+    const at = (deps.now ?? Date.now)();
+    const { inputs: actual, today } = await listWithDate({ env: settings.env, group, now: () => at }, { database });
+    if (payload.inputs?.scope !== actual.scope || !sessionsUnchanged(payload.inputs?.sessions, actual.sessions, today)) {
       throw memoryError('INPUT_CHANGED', 'Session logs differ from list --group; list and read them again');
     }
     const cursor = verifyOriginReceipts(payload, { group, database });
     if (!cursor) return { advanced: false };
-    database.advanceOriginSyncCursor(group, cursor);
+    database.advanceOriginSyncCursor(group, { ...cursor, updatedAt: Math.floor(at / 1000) });
     return { advanced: true, ...cursor };
   });
 }
