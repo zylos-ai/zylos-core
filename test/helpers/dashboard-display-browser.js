@@ -20,8 +20,8 @@ export async function runDashboardDisplayBrowser(t, sandbox) {
   // No dependencies are installed by the test. Callers explicitly provision browser and Chart artifacts.
   const modulePath = process.env.ZYLOS_CHAT_BROWSER_MODULE;
   const executablePath = process.env.ZYLOS_CHAT_BROWSER_BIN;
-  const chartPath = process.env.ZYLOS_CHAT_CHART_MODULE || path.join(repo, 'node_modules/chart.js/dist/chart.umd.js');
-  for (const [name, value] of Object.entries({ ZYLOS_CHAT_BROWSER_MODULE: modulePath, ZYLOS_CHAT_BROWSER_BIN: executablePath, ZYLOS_CHAT_CHART_MODULE: chartPath })) {
+  const chartPath = process.env.ZYLOS_CHAT_CHART_ASSET;
+  for (const [name, value] of Object.entries({ ZYLOS_CHAT_BROWSER_MODULE: modulePath, ZYLOS_CHAT_BROWSER_BIN: executablePath, ZYLOS_CHAT_CHART_ASSET: chartPath })) {
     assert.ok(value && fs.existsSync(value), `${name} must name a provisioned artifact`);
   }
   const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
@@ -65,16 +65,22 @@ export async function runDashboardDisplayBrowser(t, sandbox) {
               attention: [{ kind: 'rate_limited', runtime: 'codex', until }] };
             value = { agents: [{ name: 'primary', self: true, state: 'IDLE', session_mode: 'multi', access: 'admin', group_summary },
               { name: 'peer', self: false, state: 'IDLE', session_mode: 'multi', access: 'read', group_summary }], updated_at: new Date(now).toISOString() };
-          } else if (url.pathname === '/api/settings/timezone') value = { tz: 'Asia/Singapore' };
+          } else if (url.pathname === '/api/settings/timezone') value = { tz: 'Asia/Singapore', writable: true, restart_status: 'known', restart_services: [] };
           else if (url.pathname === '/api/instance/runtime-options') {
             value = structuredClone(value); value.runtime = url.searchParams.get('runtime') || 'claude';
             if (value.runtime === 'claude') Object.assign(value, { current_model: 'haiku', models: [{ id: 'haiku', display_name: 'Haiku' }, { id: 'opus', display_name: 'Opus' }], efforts_by_model: { haiku: [], opus: ['low', 'medium', 'high'] } });
           } else if (url.pathname === '/api/observer/status') value = { state: 'installed', desired: { enabled: true }, agentSize: { cols: 100, rows: 30 } };
           else if (url.pathname === '/api/observer/history/sessions') value = { current: 'sample', sessions: [{ id: 'sample', kind: 'main', title: 'History sample', startedAt: recorded }] };
-          else if (url.pathname === '/api/observer/history/entries') value = { entries: [{ id: 'entry', kind: 'inbound', ts: recorded, fields: { body: { text: 'Example', total: 7 } } }], updates: [], hasOlder: false };
+          else if (url.pathname === '/api/observer/history/entries') value = { entries: [{ id: 'entry', kind: 'inbound', ts: recorded, fields: { body: { type: 'text', preview: 'Example history message', total: 23 } } }], updates: [], hasOlder: false };
           else if (url.pathname === '/api/memory/tree') {
             value = structuredClone(value);
             for (const node of value.root.children) if (node.type === 'file') node.size_bytes = ({ 'identity.md': 512, 'references.md': 2048, 'state.md': 2097152 })[node.path] ?? node.size_bytes;
+          } else if (url.pathname === '/api/memory/file') {
+            value = { ...value, size_bytes: ({ 'identity.md': 512, 'references.md': 2048, 'state.md': 2097152 })[url.searchParams.get('path')] ?? value.size_bytes };
+          } else if (url.pathname === '/api/usage/series') {
+            const at = new Date(now).toISOString();
+            value = { ...value, tz: 'Asia/Singapore', costByRuntime: [{ at, runtime: 'claude', value: 9.2 }],
+              tokensByRuntime: [{ at, runtime: 'claude', value: 8000 }], messages: [{ at, in: 3, out: 2 }] };
           } else if (url.pathname === '/api/memory/backlog') value = { ...value, budgets: { limits: { 'identity.md': 2048, 'references.md': 2097152 }, warnings: {} } };
           if (value !== undefined) return route.fulfill({ json: value });
           return route.continue();
@@ -98,7 +104,11 @@ export async function runDashboardDisplayBrowser(t, sandbox) {
         const shot = async name => {
           await page.mouse.move(0, 0);
           await page.evaluate(() => document.activeElement?.blur());
-          if (evidence) await page.screenshot({ path: path.join(evidence, `display-${width}-${language}-${theme}-${name}.png`), animations: 'disabled', fullPage: name.startsWith('settings') });
+          const fullPage = name.startsWith('settings');
+          // A fixed mobile nav repeats at viewport height in full-page captures. Hide only for the image.
+          if (fullPage && width === 390) await page.locator('.wb-mobile-tabs').evaluateAll(nodes => nodes.forEach(node => node.style.visibility = 'hidden'));
+          if (evidence) await page.screenshot({ path: path.join(evidence, `display-${width}-${language}-${theme}-${name}.png`), animations: 'disabled', fullPage });
+          if (fullPage && width === 390) await page.locator('.wb-mobile-tabs').evaluateAll(nodes => nodes.forEach(node => node.style.removeProperty('visibility')));
         };
         await page.goto(base + '/', { waitUntil: 'commit' });
         // The product must not invent a UTC clock while metadata is outstanding.
@@ -136,6 +146,8 @@ export async function runDashboardDisplayBrowser(t, sandbox) {
         await page.locator('[data-settings-section="defaults"]').click();
         await model.scrollIntoViewIfNeeded();
         await model.selectOption('haiku');
+        assert.equal(await page.locator('#settings-timezone-value').inputValue(), 'Asia/Singapore');
+        assert.equal(await page.locator('#settings-timezone-result').innerText(), '');
         const fieldState = () => page.locator('#settings-effort-claude').evaluate(node => {
           const label = node.closest('label'), rect = label.getBoundingClientRect();
           return { hidden: label.hidden, width: rect.width, height: rect.height, text: label.textContent };
@@ -165,6 +177,7 @@ export async function runDashboardDisplayBrowser(t, sandbox) {
         assert.match(session, /11-16 19:56/);
         assert.match(header, /19:56/);
         assert.doesNotMatch(header, /2026-11-16T11:56|\.612Z|11:56:57/);
+        assert.match(await page.locator('.history-fields').innerText(), /Example history message/);
         await shot('history');
 
         await openDashboardTab(page, 'memory');
@@ -176,6 +189,7 @@ export async function runDashboardDisplayBrowser(t, sandbox) {
           assert.match(text, /512\s*B/); assert.match(text, /2(?:\.0)?\s*KB/); assert.match(text, /2(?:\.0)?\s*MB/);
           assert.doesNotMatch(text, /[KMGT]iB/);
         }
+        assert.match(await page.locator('#memory-meta').innerText(), /512\s*B/);
         await shot('memory');
         await page.locator('.wb-memory-budgets').scrollIntoViewIfNeeded();
         await shot('memory-budgets');
@@ -188,10 +202,20 @@ export async function runDashboardDisplayBrowser(t, sandbox) {
         // The fixture's fixed Date keeps Chart's wall-clock animator at its first frame.
         // Settle through Chart's public API; retain the product dataset and point options.
         await page.evaluate(() => {
-          const canvas = [...document.querySelectorAll('#wb-usage canvas')].find(canvas => window.Chart.getChart(canvas)?.config.type === 'line');
-          const chart = window.Chart.getChart(canvas);
-          chart.stop(); chart.update('none');
+          for (const canvas of document.querySelectorAll('#wb-usage canvas')) {
+            const chart = window.Chart.getChart(canvas);
+            chart?.stop(); chart?.update('none');
+          }
         });
+        const daily = await page.evaluate(() => [...document.querySelectorAll('#wb-usage canvas')].map(canvas => {
+          const chart = window.Chart.getChart(canvas);
+          return chart?.data.datasets.flatMap(dataset => dataset.data);
+        }));
+        await page.locator('#wb-usage').scrollIntoViewIfNeeded();
+        await shot('usage-summary');
+        assert.ok(daily.some(values => values?.includes(9.2)), 'daily cost chart contains the summary cost');
+        assert.ok(daily.some(values => values?.includes(8000)), 'daily token chart contains the summary tokens');
+        assert.ok(daily.some(values => values?.includes(3) && values.includes(-2)), 'daily messages chart contains received and sent counts');
         const marker = await page.evaluate(() => {
           const canvas = [...document.querySelectorAll('#wb-usage canvas')].find(canvas => window.Chart.getChart(canvas)?.config.type === 'line');
           const chart = window.Chart.getChart(canvas), dataset = chart.data.datasets[0], index = dataset.data.findIndex(value => value != null);

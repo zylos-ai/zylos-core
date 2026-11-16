@@ -549,13 +549,32 @@ test('cache rate keeps a single measured bucket visible including zero without f
     const view = renderUsage(f.root, { ...value, cache: [{ at: value.buckets[0], value: rate }] }, { ...f, level: 'technical' });
     const dataset = f.configs.find(config => config.type === 'line').data.datasets[0];
     assert.deepEqual(dataset.data, [rate * 100, null]);
-    assert.equal(dataset.pointRadius, 3); assert.equal(dataset.spanGaps, false);
+    assert.deepEqual(dataset.pointRadius, [3, 0]); assert.equal(dataset.spanGaps, false);
     view.destroy();
   }
   for (const cache of [[], value.buckets.map(at => ({ at, value: 0.5 }))]) {
     const f = fixture();
     const view = renderUsage(f.root, { ...value, cache }, { ...f, level: 'technical' });
-    assert.equal(f.configs.find(config => config.type === 'line').data.datasets[0].pointRadius, 0);
+    assert.deepEqual(f.configs.find(config => config.type === 'line').data.datasets[0].pointRadius, [0, 0]);
+    view.destroy();
+  }
+});
+
+
+test('cache rate marks each isolated finite bucket while contiguous values stay lines', () => {
+  for (const [rates, radii] of [
+    [[0.05, null, 0.07], [3, 0, 3]],
+    [[null, 0, null], [0, 3, 0]],
+    [[0.05, 0.06, null, 0.07, null], [0, 0, 0, 3, 0]],
+    [[null, null, null], [0, 0, 0]],
+  ]) {
+    const f = fixture(), buckets = rates.map((_, index) => `2026-11-${10 + index}T00:00:00Z`);
+    const cache = rates.map((rate, index) => ({ at: buckets[index], value: rate }));
+    const view = renderUsage(f.root, { ...value, buckets, cache }, { ...f, level: 'technical' });
+    const dataset = f.configs.find(config => config.type === 'line').data.datasets[0];
+    assert.deepEqual(dataset.data, rates.map(rate => rate == null ? null : rate * 100));
+    assert.deepEqual(dataset.pointRadius, radii);
+    assert.equal(dataset.spanGaps, false);
     view.destroy();
   }
 });
