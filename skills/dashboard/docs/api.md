@@ -288,7 +288,11 @@ Bare keys `counts`, `running`, `offline`, `search`, `activity`, `naming-prompt` 
 
 **Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_INCLUDE`; 404 `GROUP_NOT_FOUND`; 502 `GROUP_CATALOG_UNREADABLE` when an unknown group cannot be checked against the catalog or a historical key cannot be verified; common read errors. Detail for a current valid key remains readable when unrelated catalog collection fails. Individual Core configuration errors can also appear inside their configuration envelopes.
 
-Canonical detail also reads historical imported group IDs outside the current write grammar, such as `telegram:运维群-测试`, only when a healthy C4 catalog contains that exact group with C4 evidence. These IDs must retain a valid namespace, a nonempty local name of at most 95 characters and total length at most 128; control characters, DEL, slash and backslash are rejected. Unknown historical IDs return `SESSION_GROUP_INVALID`; an unreadable catalog returns `GROUP_CATALOG_UNREADABLE`. This read exception does not change write validation or other group routes. Optional raw/config readers retain their own field-level failures.
+Group observation reads (detail, usage, runs, messages, events, backlog and restart status) also accept historical imported group IDs outside the current write grammar, such as `telegram:运维群-测试`, only when a healthy instance C4 catalog contains that exact group with C4 evidence. They reuse the same request snapshot catalog as detail; status-only rows, queue-only rows, usage/event history and filesystem presence do not prove membership. IDs are decoded exactly once and must retain a valid namespace, a nonempty local name of at most 95 characters and total length at most 128. Control characters, DEL, slash, backslash, percent characters and dot-only traversal names (`.` or `..`) are rejected before catalog lookup. Malformed URL encoding returns 400 `SESSION_GROUP_INVALID`.
+
+Unknown historical IDs return 400 `SESSION_GROUP_INVALID`; an unreadable catalog returns 502 `GROUP_CATALOG_UNREADABLE`. Current valid IDs retain each route's existing empty-data/not-found behavior without requiring the catalog solely for validation. In single mode, a requested historical catalog group remains readable as an offline observation; running lists and counts still show only Origin. This read exception does not change config, name, action or deletion validation. Deletion preview is part of Core's deletion operation and retains the same strict target grammar as deletion. Optional raw/config readers retain their own field-level failures.
+
+Example historical observation: `GET /api/groups/telegram%3A%E8%BF%90%E7%BB%B4%E7%BE%A4-%E6%B5%8B%E8%AF%95/runs?limit=3`.
 
 Conversation status is an optional consumer of this detail. A newly created chat group can be absent from the snapshot: `GROUP_NOT_FOUND` means no reading yet, with a retry on the existing status cadence. Chat remains usable without a status reading; other HTTP errors retain their existing failure semantics.
 
@@ -300,7 +304,7 @@ Example: `GET /api/groups/telegram%3Aexample?include=`.
 
 Returns the [usage summary](#usage-summary-fields) with `scope:"group"` and `group:string`. Historical records without group attribution count toward `origin`. An otherwise valid ID with no usage returns zero counts/cost and null cache rate.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`; common read errors.
+**Errors:** 400 `SESSION_GROUP_INVALID`; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; common read errors.
 
 Example: `GET /api/groups/origin/usage`.
 
@@ -310,7 +314,7 @@ Example: `GET /api/groups/origin/usage`.
 
 Returns `runs:Array<{runId:string,startAt:string,endAt:string,n:number,endReason:string}>`, `totalRuns:number`, `totalEvents:number`, and `unattributed:number`. `types` filters counts, not whether runs exist. `endReason` distinguishes the current run (`running`), reclaim/restart/rotation/crash reasons and `unknown`.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_ARGUMENT`; common read errors.
+**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_ARGUMENT`; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; common read errors.
 
 Example: `GET /api/groups/origin/runs?limit=3`.
 
@@ -320,7 +324,7 @@ Example: `GET /api/groups/origin/runs?limit=3`.
 
 Returns `{messages:Array<{id:number,direction:string,channel:string,timestamp:string}>}`. It excludes internal-channel messages and returns metadata rather than message bodies. Legacy single-mode Origin reads use the legacy null attribution.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_ARGUMENT`; 502 `READ_FAILED`; common read errors.
+**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_ARGUMENT`; 502 `READ_FAILED`, `GROUP_CATALOG_UNREADABLE` (when historical membership cannot be verified); common read errors.
 
 Example: `GET /api/groups/origin/messages?since=2026-11-01T00%3A00%3A00Z`.
 
@@ -332,7 +336,7 @@ Single-session Origin reads current hook records stored as `session_group:"origi
 
 Returns `events:object[]` (sanitized runtime-event records), `count:number`, and `gaps:object[]` (sanitized import diagnostics). Event records include `id`, `event_seq`, `timestamp`, `runtime`, `session_id`, `session_group`, `run_id`, `event_type`, `category`, `summary`, `duration_ms`, `metadata`, `source` and `confidence`, with nullable source fields. Filtering does not modify stored attribution.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`; source/database failures and common read errors.
+**Errors:** 400 `SESSION_GROUP_INVALID`; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; source/database failures and common read errors.
 
 Example: `GET /api/groups/origin/events?order=desc&limit=20`.
 
@@ -340,9 +344,9 @@ Example: `GET /api/groups/origin/events?order=desc&limit=20`.
 
 **Access:** Read. **Parameters:** encoded ID.
 
-Returns `count:number|null`, `firstAt:string|null`, `syncing:boolean|null`, and optional `reason:"backlog_failed"`. These are messages not yet included in scoped memory, not the pending delivery queue. The existing backlog reader may cache for 30 seconds.
+Returns `count:number|null`, `firstAt:string|null`, `syncing:boolean|null`, and optional `reason:"backlog_failed"`. These are messages not yet included in scoped memory, not the pending delivery queue. The existing backlog reader may cache for 30 seconds. Historical names use a read-only C4 database snapshot with the same checkpoint coverage and delivered-frontier rules as Core. Their `count` and `firstAt` remain available; `syncing` is null with `reason:"backlog_failed"` because Core sync-marker paths require the current strict group grammar.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`; unavailable backlog evidence is returned as null fields and `reason`; common read errors.
+**Errors:** 400 `SESSION_GROUP_INVALID`; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; unavailable backlog evidence is returned as null fields and `reason`; common read errors.
 
 Example: `GET /api/groups/origin/backlog`.
 
@@ -436,7 +440,7 @@ Example: `POST /api/groups/telegram%3Aexample/actions/restart` with `{"runId":"o
 
 Returns `requestId:string`, `completion:string` (supervisor lookup result, or `unknown`), and `group:{id:string,runId:string|null,sessionId:string|null,ready:boolean,state:object}`. This works for any group, including Origin; group identity and current state are observations, not proof that a particular restart caused them.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_REQUEST_ID`; 404 `GROUP_NOT_FOUND`; common read errors.
+**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_REQUEST_ID`; 404 `GROUP_NOT_FOUND`; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; common read errors.
 
 Example: `GET /api/groups/origin/restarts/00000000-0000-4000-8000-000000000001`.
 

@@ -79,6 +79,10 @@ test('Origin and malformed group targets never reach Core', async t => {
   assert.equal((await call(f.handler, '/api/groups/origin/deletion-preview')).status, 403);
   assert.equal((await call(f.handler, '/api/groups/%ZZ/deletion-preview')).status, 400);
   assert.equal((await call(f.handler, '/api/groups/bad%2Fgroup/deletion-preview')).status, 400);
+  const legacyPath = '/api/groups/' + encodeURIComponent('telegram:运维群-测试');
+  assert.equal((await call(f.handler, legacyPath + '/deletion-preview')).status, 400);
+  assert.equal((await call(f.handler, legacyPath, { method: 'DELETE',
+    body: { confirmed: true, operationId: 'private-operation', ...boundary } })).status, 400);
   assert.equal(f.calls.length, 0);
 });
 

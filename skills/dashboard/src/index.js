@@ -356,7 +356,7 @@ const instanceTimezone = createInstanceTimezone({ zylosDir: config.zylosDir,
 const getDetailSnapshot = () => workbench.getCachedSnapshot() ?? workbench.getSnapshot();
 const groupRuns = createRuns({ store, getSnapshot: getDetailSnapshot });
 const groupConfig = createGroupConfig({ zylosDir: config.zylosDir });
-const groupBacklog = createGroupBacklog({ zylosDir: config.zylosDir, getSnapshot: getDetailSnapshot });
+const groupBacklog = createGroupBacklog({ zylosDir: config.zylosDir, c4Reader, getSnapshot: getDetailSnapshot });
 const memoryBacklog = createMemoryBacklog({ zylosDir: config.zylosDir, getSnapshot: at => workbench.getSnapshot(at), groupBacklog,
   originBacklog: createOriginBacklog({ zylosDir: config.zylosDir }) });
 function recordDashboardInterrupt(record) {
@@ -1015,14 +1015,14 @@ async function handleApi(req, res, pathname, url) {
   const usageRoute = pathname.match(/^\/api\/groups\/([^/]+)\/usage$/);
   if (pathname === '/api/usage/summary' || usageRoute) {
     try { sendJson(res, 200, usageSummary(store, { tz: (await scheduleTz()).tz,
-      ...(usageRoute ? { group: workbenchGroupKey(usageRoute[1]) } : {}) })); }
+      ...(usageRoute ? { group: await groupsApi.readKey(workbenchGroupDetailKey(usageRoute[1])) } : {}) })); }
     catch (error) { workbenchFailure(res, error); }
     return true;
   }
   const restartRoute = pathname.match(/^\/api\/groups\/([^/]+)\/restarts\/([^/]+)$/);
   if (restartRoute) {
     try {
-      const key = workbenchGroupKey(restartRoute[1]);
+      const key = await groupsApi.readKey(workbenchGroupDetailKey(restartRoute[1]));
       const requestId = restartRoute[2];
       if (!/^[a-f0-9-]{36}$/i.test(requestId)) throw Object.assign(new Error('Invalid request ID'), { code: 'INVALID_REQUEST_ID', statusCode: 400 });
       const { lookupRestartRequest } = await loadCoreModule('am-sock-client.js');
@@ -1049,26 +1049,28 @@ async function handleApi(req, res, pathname, url) {
 
   const groupEvents = pathname.match(/^\/api\/groups\/([^/]+)\/events$/);
   if (groupEvents) {
-    const since = url.searchParams.get('since') || undefined;
-    const until = url.searchParams.get('until') || undefined;
-    const types = url.searchParams.get('types')?.split(',').filter(Boolean) || undefined;
-    const sessionId = url.searchParams.get('session_id') || undefined;
-    const limit = parseInt(url.searchParams.get('limit') || '100', 10);
-    const offset = parseInt(url.searchParams.get('offset') || '0', 10);
-    const order = url.searchParams.get('order') === 'desc' ? 'desc' : 'asc';
-    const key = workbenchGroupKey(groupEvents[1]);
-    const sessionGroup = key === 'origin' && readFleetSessionMode() === 'single' ? null : key;
-    const runId = url.searchParams.get('run_id') || undefined;
-    const runtime = url.searchParams.get('runtime') || undefined;
-    const afterSeq = Number(url.searchParams.get('after_seq'));
-    const events = await coreLogImporter.sanitizeEvents(store.queryEvents({ since, until, types, sessionId,
-      sessionGroup, includeLegacyOrigin: key === 'origin' && readFleetSessionMode() === 'single', runId, runtime, afterSeq, limit: Math.min(1000, limit), offset, order }));
-    const stream = url.searchParams.get('stream') || undefined;
-    const gapLimit = parseInt(url.searchParams.get('gap_limit') || '100', 10);
-    const gapOffset = parseInt(url.searchParams.get('gap_offset') || '0', 10);
-    const gaps = await coreLogImporter.sanitizeEvents(store.getHistoryDiagnostics({
-      sessionGroup, includeLegacyOrigin: key === 'origin' && readFleetSessionMode() === 'single', stream, limit: gapLimit, offset: gapOffset }));
-    sendJson(res, 200, { events, count: events.length, gaps });
+    try {
+      const key = await groupsApi.readKey(workbenchGroupDetailKey(groupEvents[1]));
+      const since = url.searchParams.get('since') || undefined;
+      const until = url.searchParams.get('until') || undefined;
+      const types = url.searchParams.get('types')?.split(',').filter(Boolean) || undefined;
+      const sessionId = url.searchParams.get('session_id') || undefined;
+      const limit = parseInt(url.searchParams.get('limit') || '100', 10);
+      const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+      const order = url.searchParams.get('order') === 'desc' ? 'desc' : 'asc';
+      const sessionGroup = key === 'origin' && readFleetSessionMode() === 'single' ? null : key;
+      const runId = url.searchParams.get('run_id') || undefined;
+      const runtime = url.searchParams.get('runtime') || undefined;
+      const afterSeq = Number(url.searchParams.get('after_seq'));
+      const events = await coreLogImporter.sanitizeEvents(store.queryEvents({ since, until, types, sessionId,
+        sessionGroup, includeLegacyOrigin: key === 'origin' && readFleetSessionMode() === 'single', runId, runtime, afterSeq, limit: Math.min(1000, limit), offset, order }));
+      const stream = url.searchParams.get('stream') || undefined;
+      const gapLimit = parseInt(url.searchParams.get('gap_limit') || '100', 10);
+      const gapOffset = parseInt(url.searchParams.get('gap_offset') || '0', 10);
+      const gaps = await coreLogImporter.sanitizeEvents(store.getHistoryDiagnostics({
+        sessionGroup, includeLegacyOrigin: key === 'origin' && readFleetSessionMode() === 'single', stream, limit: gapLimit, offset: gapOffset }));
+      sendJson(res, 200, { events, count: events.length, gaps });
+    } catch (error) { workbenchFailure(res, error); }
     return true;
   }
 
@@ -1123,7 +1125,7 @@ async function handleApi(req, res, pathname, url) {
   const detailRead = pathname.match(/^\/api\/groups\/([^/]+)\/(runs|messages|backlog)$/);
   if (detailRead) {
     try {
-      const key = workbenchGroupKey(detailRead[1]);
+      const key = await groupsApi.readKey(workbenchGroupDetailKey(detailRead[1]));
       let data;
       switch (detailRead[2]) {
         case 'runs':

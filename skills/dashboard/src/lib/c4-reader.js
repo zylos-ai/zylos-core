@@ -80,6 +80,25 @@ export class C4Reader {
     } catch { throw failure(); }
   }
 
+  // Read historical names without passing them through Core's write/path grammar.
+  // Match Core progressFunctions.range: checkpoint coverage, then the delivered
+  // frontier before the first unfinished inbound message, in one DB snapshot.
+  getGroupBacklog(key) {
+    const failure = () => Object.assign(new Error('Group backlog unavailable'), { code: 'READ_FAILED', statusCode: 502 });
+    const db = this._open();
+    if (!db) throw failure();
+    try {
+      return db.transaction(() => {
+        const baseline = db.prepare("SELECT COALESCE(end_conversation_id,0) AS n FROM checkpoints WHERE session_group='*' ORDER BY id DESC LIMIT 1").get()?.n ?? 0;
+        const covered = Math.max(baseline, db.prepare('SELECT COALESCE(MAX(end_conversation_id),0) AS n FROM checkpoints WHERE session_group=?').get(key).n);
+        const gap = db.prepare("SELECT MIN(id) AS n FROM conversations WHERE id>? AND session_group=? AND direction='in' AND status NOT IN ('delivered','failed','switch_absorbed')").get(covered, key).n;
+        const safeEnd = gap === null ? db.prepare('SELECT COALESCE(MAX(id),?) AS n FROM conversations WHERE id>? AND session_group=?').get(covered, covered, key).n : gap - 1;
+        const row = db.prepare("SELECT count(*) AS count,MIN(id) AS firstId FROM conversations WHERE id>? AND id<=? AND status='delivered' AND session_group=?").get(covered, safeEnd, key);
+        return { count: row.count, firstAt: row.count ? db.prepare('SELECT timestamp FROM conversations WHERE id=?').get(row.firstId).timestamp : null };
+      })();
+    } catch { throw failure(); }
+  }
+
   getGroupMessages(key, { since = 0, until = Date.now() } = {}) {
     const failure = () => Object.assign(new Error('Group messages unavailable'), { code: 'READ_FAILED', statusCode: 502 });
     const db = this._open();

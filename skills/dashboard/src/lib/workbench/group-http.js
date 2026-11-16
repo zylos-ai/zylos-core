@@ -1,7 +1,7 @@
 import { validKey } from './display-names.js';
 import { sendJson } from '../http.js';
 
-// Canonical detail owns read validation, including membership of historical keys.
+// Group observation reads own validation, including membership of historical names.
 export function workbenchGroupDetailKey(encoded) {
   try { return decodeURIComponent(encoded); }
   catch { throw Object.assign(new Error('Invalid session group'), { code: 'SESSION_GROUP_INVALID', statusCode: 400 }); }
