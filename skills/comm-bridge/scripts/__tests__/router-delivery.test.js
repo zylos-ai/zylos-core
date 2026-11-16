@@ -289,7 +289,7 @@ test('exact lifecycle /exit permits target disappearance only after successful E
   }
 });
 
-test('unverified /exit with a surviving pane retries Claude and preserves the Codex fallback', async t => {
+test('unverified /exit with a surviving pane completes for both runtimes', async t => {
   for (const runtime of ['claude', 'codex']) for (const state of ['live', 'offline']) {
     await t.test(`${runtime} ${state}`, async t => {
       const f = setup(t); f.target.runtime = runtime;
@@ -300,9 +300,9 @@ test('unverified /exit with a surviving pane retries Claude and preserves the Co
       };
       const row = f.control('/exit');
       await f.create().deliverControl(row);
-      assert.equal(row.status, runtime === 'claude' ? 'pending' : 'done');
+      assert.equal(row.status, 'done');
       assert(f.calls.some(c => c[0] === 'keys' && c[1].keys.includes('Enter')));
-      assert.equal(f.calls.some(c => c[0] === 'diagnostic' && c[1] === 'delivery_failed' && c[2].reason === 'ENTER_UNVERIFIED'), runtime === 'claude');
+      assert.equal(f.calls.some(c => c[0] === 'diagnostic' && c[1] === 'delivery_failed' && c[2].reason === 'ENTER_UNVERIFIED'), false);
     });
   }
 });

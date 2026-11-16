@@ -355,11 +355,8 @@ export function createDelivery(deps, configuration = {}) {
             }
             if (!verified) {
               const after = await readState();
-              // Claude /exit still needs verified submission when its pane survives.
-              // Preserve the existing Codex fallback for an unverified exit.
-              if (type === 'conversation' || (target.runtime === 'claude' && isExitLifecycleControl(item, target.runtime)) ||
-                ((after.proc?.alive === false || offline(after.state)) &&
-                  !(target.runtime === 'codex' && isExitLifecycleControl(item, target.runtime)))) throw failure('ENTER_UNVERIFIED');
+              if (type === 'conversation' || ((after.proc?.alive === false || offline(after.state)) &&
+                !(isExitLifecycleControl(item, target.runtime)))) throw failure('ENTER_UNVERIFIED');
             }
             schedulePeriodic();
             result = type === 'conversation' ? 'delivered' : content.includes('---- ack via:') ? 'submitted' : 'ack';
