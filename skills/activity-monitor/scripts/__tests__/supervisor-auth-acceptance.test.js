@@ -100,6 +100,18 @@ test('composed single auth preserves blocking through in-flight work and restart
   assert.equal(f.state.d8Writes, 0); assert.equal(f.state.fences.size, 0);
 });
 
+test('composed single auth stop waits while no-response recovery owns the run', async t => {
+  const f = fixture(t, { mode: 'single' }); await f.reopen(); f.seed(); f.add();
+  const owner = { sessionGroup: 'origin', runId: 'old-run', runtime: 'codex' };
+  f.supervisor.observer.notifyDelivered({ ...owner, pastedAt: f.state.now });
+  const delivery = f.supervisor.observer.sceneState(owner).delivery;
+  delivery.recovery = { mode: 'single', sessionId: 'old-run', activityAt: f.state.now, responseAt: f.state.now, pending: false, nudgedAt: f.state.now };
+  await f.tick(); await f.tick();
+  assert.deepEqual(f.state.stops, []); assert.equal(f.supervisor.health.store('codex').read().health, 'auth_failed');
+  delivery.recovery = null; await f.tick();
+  assert.deepEqual(f.state.stops, ['old-run']);
+});
+
 for (const [label, active, cooldown, expected] of [
   ['unexpired', true, 1500, 1500], ['expired', true, 900, 0], ['zero', true, 0, 0], ['no-limit', false, 0, 0],
 ]) test(`composed auth recovery after reopen retains ${label} rate-limit facts`, async t => {

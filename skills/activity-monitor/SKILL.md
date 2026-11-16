@@ -130,8 +130,9 @@ After deferral resets the idle clock, the session returns at the next idle check
 result, record it in the handoff or arrange for the task itself to send a
 completion message back.
 
-In multi-session mode, an actually pasted conversation arms no-response
-observation from its paste time. Any actual AI work after that paste disarms
+In both session modes, an actually pasted conversation arms no-response
+observation from its paste time. Single-session mode includes an instance
+without a configured `session_mode`. Any actual AI work after that paste disarms
 this observation permanently; it does not reset a silence timer. This applies
 even when the work belongs to an older turn and the new message remains queued.
 Claude and Codex use the same rule. There is no dequeue, processed-input,
@@ -159,8 +160,8 @@ A newer paste retains the unanswered silence anchor, retry cooldown and active
 recovery deadline; it can invalidate an in-flight pair's remaining enqueue
 without restarting the 15-minute wait. Failed nudges retry after 60 seconds;
 blocked admission emits no attempted-nudge event. Superseded and uncertain
-attempts are logged. Leaving multi-session mode clears active recovery;
-returning cannot stop the scene on that stale deadline. A changed run or
+attempts are logged. A session mode change clears active recovery; the new
+mode cannot stop the scene on that stale deadline. A changed run or
 session cannot inherit a stale recovery action.
 
 Health notification remains immediate, before lifecycle delivery, with the
@@ -169,7 +170,22 @@ current-session timestamp: an older paste remains tracked for the five-second
 screen check but does not arm no-response recovery. Session changes do not
 silently discard delivery or its screen check. Background tasks alone never
 arm detection; a new unanswered paste during background waiting does.
-Single-session no-response behavior is unchanged.
+
+Single-session mode uses the same rule, thresholds and actual-AI-work
+definition, with these additions:
+
+- **Maintenance holds.** While a mode transition is open, a manual restart is
+  pending, a `*` or `origin` drain fence exists, the global Memory Sync marker
+  is held, or a `/exit` or `/clear` control (rotation, runtime upgrade or
+  restart) queued less than 15 minutes ago is unfinished, no nudge or stop is
+  sent and active recovery is cleared. Silence is measured again from the end
+  of the hold. Each enqueue and the stop recheck these holds. An unreadable
+  hold source holds recovery and is logged once.
+- **Health recovery ownership.** Before an episode starts, runtime health other
+  than `ok` or a recovery probe in flight holds observation the same way.
+  Once an episode has started, it owns the run until actual AI work or its
+  stop: recovery probes skip that run, and the unfenced single-session auth
+  stop waits. A new run starts without recovery state.
 
 Once actual AI work disarms observation, a later stall is outside this rule.
 The existing tool watchdog covers only enabled Claude WebFetch/WebSearch:

@@ -7,7 +7,7 @@ import { ModeSwitchCoordinator } from './mode-switch.js';
 import { createModeSwitchConverter } from './mode-switch-convert.js';
 import { SupervisorLifecycle } from './supervisor-lifecycle.js';
 import { RuntimeHealthCoordinator, aggregateRuntimeDemand } from './runtime-health.js';
-import { SupervisorHealthObserver } from './supervisor-health-observer.js';
+import { SupervisorHealthObserver, NO_RESPONSE_SILENCE_MS } from './supervisor-health-observer.js';
 import { MessageRouter } from './message-router.js';
 import { SupervisorExits } from './supervisor-exits.js';
 import { SupervisorRunEndings } from './supervisor-run-endings.js';
@@ -84,6 +84,18 @@ export function createSupervisor(deps) {
       return true;
     }
   };
+  // Single session: work during which an unanswered message is not judged silent.
+  const readMaintenance=async scene=>{
+    if(await db.getModeTransition())return 'mode_transition';
+    if(manualPending('origin'))return 'manual_restart';
+    if(await db.getDrainFence('*') || await db.getDrainFence('origin'))return 'drain_fence';
+    if(typeof readSyncMarker!=='function')throw Object.assign(new Error('Sync marker reader is unavailable'),{code:'DEPENDENCY_UNAVAILABLE',dependency:'Sync marker reader'});
+    if((await readSyncMarker({runDir:scene.runDir,kind:'global',currentRunId:scene.runId}))?.held===true)return 'memory_sync';
+    // A queued rotation, upgrade or restart switch holds until delivered; one stuck behind the stall stops holding.
+    const switchAt=await db.latestSessionSwitchAt({machine:true});
+    if(Number.isFinite(switchAt) && now()-switchAt*1000<NO_RESPONSE_SILENCE_MS)return 'session_switch';
+    return null;
+  };
   const guardedAction=(scene,action,{requireOpen=false,validate=async()=>true}={})=>admission.serialize(async()=>{
     if(stopping || await db.getModeTransition() || !manualAllows(scene.sessionGroup))return false;
     if(requireOpen && (await db.getDrainFence('*') || await db.getDrainFence(scene.sessionGroup)))return false;
@@ -113,7 +125,7 @@ export function createSupervisor(deps) {
   observer=new SupervisorHealthObserver({coordinator:health,listScenes,readIdentity:group=>scenes.readIdentity(group),readState:scene=>({...readActivity(scene),healthIdentity:scene.healthIdentity}),
     readScreen:scene=>scenes.readScreen(scene),matchScreen:deps.matchScreen,insertControl:db.insertControl,getControlById:db.getControlById,
     buildTargetBinding:scene=>scenes.bindTarget(scene),stop:(scene,validate)=>guardedAction(scene,current=>stopScene(current),validate?{requireOpen:true,validate}:{}),
-    readMode:async()=>(await readMode()).mode,getModeTransition:db.getModeTransition,getDrainFence:db.getDrainFence,manualPending,
+    readMode:async()=>(await readMode()).mode,getModeTransition:db.getModeTransition,getDrainFence:db.getDrainFence,manualPending,readMaintenance,
     resolveToolRule:deps.resolveToolRule,nudge:(scene,validate)=>nudgeSession({enqueue:async content=>{
       let result={ok:false};
       const check=current=>validate(current,{continuing:content==='continue'});
@@ -282,6 +294,8 @@ export function createSupervisor(deps) {
               (row.mode==='single' ? target.sessionGroup===null || target.sessionGroup==='origin' : (row.sessionGroup ?? 'origin')===target.sessionGroup)))continue;
             const observed=fresh.scenes.find(scene=>scene.sessionGroup===target.sessionGroup || (scene.sessionGroup==='origin' && target.sessionGroup===null));
             if(!observed?.present || observed.runId!==target.runId || !observed.ready)continue;
+            // An unfenced single-session auth stop waits while no-response recovery owns the run.
+            if(fresh.configuration.mode==='single' && observer.noResponseActive({...observed,sessionGroup:observed.sessionGroup ?? 'origin'}))continue;
             if(fresh.configuration.mode==='single')await lifecycle.advanceReclaim({sessionGroup:null,reason:'auth',runId:target.runId},fresh,{unfenced:true,singleAuth:true});
             else await lifecycle.beginReclaim(observed,'auth',fresh);
           }
