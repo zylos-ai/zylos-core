@@ -64,7 +64,8 @@ export class C4Reader {
   }
 
   getInboundTimes({ since, groups }) {
-    if (!groups.length) return [];
+    // Omitting groups reads the inbound stream consumed by single-session Origin.
+    if (groups?.length === 0) return [];
     const failure = () => Object.assign(new Error('Inbound activity unavailable'), { code: 'READ_FAILED', reason: 'READ_FAILED', statusCode: 502 });
     const db = this._open();
     if (!db) throw failure();
@@ -72,8 +73,8 @@ export class C4Reader {
       return db.prepare(`SELECT session_group, timestamp FROM conversations
         WHERE direction='in' AND channel<>'internal'
           AND timestamp >= ?
-          AND session_group IN (${groups.map(() => '?').join(',')})
-        ORDER BY timestamp, id`).all(new Date(since).toISOString().slice(0, 19).replace('T', ' '), ...groups).map(row => ({
+          ${groups ? `AND session_group IN (${groups.map(() => '?').join(',')})` : ''}
+        ORDER BY timestamp, id`).all(new Date(since).toISOString().slice(0, 19).replace('T', ' '), ...(groups ?? [])).map(row => ({
           session_group: row.session_group,
           timestamp: Date.parse(row.timestamp.includes('T') ? row.timestamp : row.timestamp.replace(' ', 'T') + 'Z'),
         }));

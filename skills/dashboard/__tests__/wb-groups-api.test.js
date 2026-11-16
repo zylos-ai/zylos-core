@@ -477,13 +477,88 @@ for (const failure of ['statusError', 'modeError', 'c4Error', 'queueError', 'ove
 // Integration: Cross-module single-view boundary; run for view or activity query changes.
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live
 // tmux/PM2/network. Fixture cleanup closes owned resources; auth timer is stopped.
-test('single view has one null-key row and never queries activity events for it', async t => {
+test('single view keeps its null-key row and projects Origin activity', async t => {
   const f = fixture(t); f.setMode('single');
   const value = await f.service.getSnapshot();
   assert.equal(value.rows.length, 1); assert.equal(value.rows[0].sessionGroup, null); assert.equal(value.hasOlder, null);
   assert.equal(value.rows[0].desired, null);
   f.events.length = 0; const activity = await f.service.activity('60m');
-  assert.equal(f.events.length, 0); assert.deepEqual(activity.groups, {});
+  assert.ok(f.events.some(filter => filter.sessionGroup === 'origin' && filter.includeLegacyOrigin));
+  assert.deepEqual(Object.keys(activity.groups), ['origin']);
+});
+
+// Actual event/C4 databases, snapshot and authenticated loopback activity route.
+// Both ranges exercise source keys, window seeding and rejection of unrelated
+// events/internal/outbound messages. The official runner isolates all paths;
+// fixture teardown closes HTTP/auth/SQLite before removing its private root.
+test('single Origin heatmaps combine current and legacy events with every channel inbound', async t => {
+  const f = fixture(t); f.setMode('single');
+  const minute = 60000, at = Math.floor(f.now() / (5 * minute)) * 5 * minute + 30000;
+  f.setNow(at);
+  const store = new Store(path.join(f.root, 'dashboard.db'));
+  fs.mkdirSync(path.join(f.root, 'comm-bridge'));
+  const file = path.join(f.root, 'comm-bridge/c4.db'), writer = new Database(file);
+  writer.exec('CREATE TABLE conversations(id INTEGER PRIMARY KEY,session_group TEXT,direction TEXT,channel TEXT,timestamp TEXT)');
+  const inbound = [at - 2 * minute, at - 7 * minute, at - 65 * minute];
+  const seed = writer.prepare('INSERT INTO conversations VALUES(?,?,?,?,?)');
+  for (const [id, key, direction, channel, time] of [
+    [1, 'telegram:first', 'in', 'telegram', inbound[0]],
+    [2, 'lark:second', 'in', 'lark', inbound[1]],
+    [3, '', 'in', 'legacy', inbound[2]],
+    [4, 'origin', 'in', 'internal', at - minute],
+    [5, 'telegram:first', 'out', 'telegram', at - minute],
+    [6, 'origin', 'in', 'dashboard', at + minute],
+    [7, 'origin', 'in', 'dashboard', at - 7 * 60 * minute],
+  ]) seed.run(id, key, direction, channel, new Date(time).toISOString().slice(0, 19).replace('T', ' '));
+  writer.close();
+  const reader = new C4Reader(f.root);
+  f.addCleanup(() => { reader.close(); store.close(); });
+  assert.ok(f.root.startsWith(process.env.TMPDIR + path.sep));
+  console.log('Single heatmap isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, database: file, events: store.db.name, transport: 'loopback only', runtime: 'none' }));
+  const add = (id, key, run, type, time) => store.insertEvent({ id, ingest_id: id, timestamp: new Date(time).toISOString(),
+    runtime: 'claude', session_group: key, run_id: run, event_type: type, category: 'activity' });
+  add('old-start', null, 'old', 'user_prompt_submit', at - 70 * minute);
+  add('old-stop', 'origin', 'old', 'stop', at - 64 * minute);
+  add('start', 'origin', 'current', 'user_prompt_submit', at - 10 * minute);
+  add('stop', null, 'current', 'stop', at - 8 * minute);
+  add('unrelated', 'telegram:first', 'other', 'activate_failed', at - minute);
+  f.store.queryEvents = options => store.queryEvents(options);
+  f.c4Reader.getInboundTimes = options => reader.getInboundTimes(options);
+  const api = createGroupsApi({ workbench: f.service });
+  const http = await chatHttpFixture(t, {}, { workbench: url => api.activity(url.searchParams) });
+  const cell = (value, time) => value.groups.origin.cells[Math.floor((time - value.start) / (value.cellSeconds * 1000))];
+  for (const range of ['60m', '6h']) {
+    const reply = await http.request({ method: 'GET', path: '/api/groups/activity?range=' + range });
+    assert.equal(reply.status, 200);
+    const value = JSON.parse(reply.text), width = range === '60m' ? minute : 5 * minute;
+    assert.deepEqual(Object.keys(value.groups), ['origin']);
+    assert.equal(value.start, Math.floor(at / width) * width - (range === '60m' ? 59 : 71) * width);
+    assert.equal(value.groups.origin.cells.length, range === '60m' ? 60 : 72);
+    assert.equal(cell(value, at - 10 * minute), 'busy');
+    assert.equal(cell(value, at - minute), 'none', 'another group cannot paint single Origin');
+    if (range === '6h') assert.equal(cell(value, at - 65 * minute), 'busy');
+    assert.deepEqual(value.groups.origin.inbound, inbound.filter(time => time >= value.start).sort((a, b) => a - b));
+    console.log('Single heatmap API:', JSON.stringify(value));
+  }
+});
+
+for (const range of ['60m', '6h']) test(`single Origin ${range} seeds a legacy turn across the window edge`, async t => {
+  const f = fixture(t); f.setMode('single');
+  const width = range === '60m' ? 60000 : 300000;
+  const start = Math.floor(f.now() / width) * width - (range === '60m' ? 59 : 71) * width;
+  const store = new Store(path.join(f.root, 'dashboard.db'));
+  f.addCleanup(() => store.close());
+  for (const [id, key, type, time] of [
+    ['prompt', null, 'user_prompt_submit', start - width],
+    ['stop', 'origin', 'stop', start + width],
+  ]) store.insertEvent({ id, ingest_id: id, timestamp: new Date(time).toISOString(), runtime: 'claude',
+    session_group: key, run_id: 'historical', event_type: type, category: 'activity' });
+  f.store.queryEvents = filter => store.queryEvents(filter);
+  const value = await f.service.activity(range);
+  assert.equal(value.groups.origin.cells[0], 'busy');
+  assert.equal(value.groups.origin.cells[1], 'none');
+  assert.equal(value.groups.origin.cells[2], 'none');
 });
 
 test('Core CLI uses bounded argv children, exact envelopes, and serial current-row override batches', async () => {
@@ -548,6 +623,9 @@ test('inbound activity reads only active external inbound rows without changing 
   const rows = reader.getInboundTimes({ since: Date.parse('2026-01-01T00:00:00Z'), groups: ['tg:a'] });
   assert.equal(rows.length, 1); assert.equal(rows[0].session_group, 'tg:a');
   assert.equal(rows[0].timestamp, Date.parse('2026-01-01T00:00:00Z'));
+  assert.deepEqual(reader.getInboundTimes({ since: Date.parse('2026-01-01T00:00:00Z'), groups: [] }), []);
+  assert.deepEqual(reader.getInboundTimes({ since: Date.parse('2026-01-01T00:00:00Z') }).map(row => row.session_group), ['tg:a', 'tg:old']);
+  assert.deepEqual(reader.getInboundTimes({ since: Date.parse('2026-01-02T00:00:00Z') }), []);
   reader.close(); assert.equal(fs.readFileSync(file).equals(before), true);
 });
 
