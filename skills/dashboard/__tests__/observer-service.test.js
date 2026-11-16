@@ -1384,3 +1384,28 @@ test('Observer lease timestamps are ISO on the wire and numeric inside the lease
     fs.writeFileSync(process.env.DASHBOARD_OBSERVER_EVIDENCE, JSON.stringify(observations, null, 2));
   }
 });
+
+// Exercise the actual pre-upgrade admission path and wire serializer without
+// opening a socket or starting an Observer/runtime process. Run for handshake
+// authorization/error contract changes; skip unrelated terminal rendering.
+test('Observer admission rejects upgrades with structured JSON failures', async () => {
+  const { service, upstreams } = fixture();
+  try {
+    for (const [url, headers, status, code] of [
+      ['/observer/stream', {}, 401, 'unauthorized'],
+      ['/observer/stream', { cookie: 'admin=1' }, 403, 'same_origin_required'],
+      ['/observer/stream?extra=1', {}, 404, 'not_found'],
+    ]) {
+      let wire;
+      const socket = Object.assign(new EventEmitter(), {
+        destroyed: false, writableEnded: false,
+        destroy() { this.destroyed = true; },
+        end(value) { wire = value; this.writableEnded = true; },
+      });
+      await service.handleUpgrade({ url, headers }, socket, Buffer.alloc(0));
+      assert.match(wire, new RegExp(`^HTTP/1.1 ${status} `));
+      assert.deepEqual(JSON.parse(wire.split('\r\n\r\n')[1]), { ok: false, error: { code, message: code } });
+    }
+    assert.equal(upstreams.length, 0, 'Rejected upgrades never start an upstream terminal');
+  } finally { await service.shutdown(); }
+});

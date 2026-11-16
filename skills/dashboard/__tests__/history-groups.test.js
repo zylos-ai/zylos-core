@@ -14,11 +14,15 @@ import { assertSessionGroup } from '../../../cli/lib/session-group-paths.js';
 // Real parsers, imported attribution, group read validation and HTTP handlers;
 // session-mode and catalog snapshot inputs are isolated fixtures. Run for history scope/runtime/read changes. Fixtures live
 // under the runner's isolated HOME/ZYLOS_DIR, and no terminal or PM2 is opened.
+// Skip for changes outside history parsing, attribution, discovery or group validation.
 test('history isolates Origin, offline groups and cross-runtime sessions on every route', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'history-groups-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const zylosDir = path.join(root, 'zylos');
   await fs.mkdir(zylosDir);
+  console.log('History fixture paths:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, database: path.join(root, 'history.db'),
+    network: 'ephemeral loopback HTTP only', tmux: 'not used', pm2: 'not used' }));
   const store = new Store(path.join(root, 'history.db'));
   t.after(() => store.close());
   let mode = 'multi';
@@ -31,9 +35,10 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
   const record = text => JSON.stringify({ type: 'assistant', timestamp: 1700000000000, message: { content: [{ type: 'text', text }] } }) + '\n';
   const legacyGroup = 'telegram:运维群-测试';
   let catalogReadable = true;
-  const catalog = new Set([legacyGroup]);
+  const catalog = new Set(['origin', 'telegram:team', 'dashboard:codex', legacyGroup]);
   const groups = createGroupsApi({ workbench: { getSnapshot: async () => ({
-    sources: { c4: { ok: catalogReadable } }, groupEvidence: { catalog }
+    sources: { c4: { ok: catalogReadable } }, groupEvidence: { catalog },
+    rows: [...catalog].map(sessionGroup => ({ sessionGroup, presence: 'not_running' })), readAt: Date.now()
   }) } });
   for (const [id, group, runtime] of [['legacy-session', legacyGroup, 'claude'], ['origin-session', null, 'claude'], ['team-session', 'telegram:team', 'claude'], ['codex-session', 'dashboard:codex', 'codex']]) {
     store.insertEvent({ id, ingest_id: id, session_id: id, session_group: group, runtime,
@@ -51,7 +56,7 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
   await fs.writeFile(rollout, JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'codex needle' }] } }) + '\n');
   store.db.prepare('INSERT INTO codex_rollout_paths(runtime,session_id,transcript_path) VALUES(?,?,?)').run('codex', 'codex-session', rollout);
   const service = new HistoryService({ config, store, resolveScope: createHistoryScope({ config, store, load,
-    readCurrentSessionId: () => liveSingleSessionId, readGroupKey: key => groups.readKey(key) }) });
+    readCurrentSessionId: () => liveSingleSessionId, readGroupKey: key => groups.detail(key, { include: [] }) }) });
   t.after(() => service.close());
   const server = http.createServer((req, res) => { const url = new URL(req.url, 'http://fixture'); res.apiPath = url.pathname; return service.handle(req, res, url); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -184,6 +189,11 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
   assert.equal((await get('sessions', { session_group: 'telegram:team' })).body.current, 'team-session');
   assert.equal((await get('entries', { session: 'team-session' })).status, 404);
   assert.equal((await get('sessions', { session_group: '../escape' })).status, 400);
+  for (const route of ['sessions', 'entries', 'content', 'search']) {
+    const unknown = await get(route, { session_group: 'nosuch:group', session: 'team-session', entry: 'o:0', field: 'body', q: 'needle' });
+    assert.equal(unknown.status, 400);
+    assert.equal(unknown.body.error.code, 'invalid_session_group');
+  }
   mode = 'single';
   assert.equal((await get('sessions', { session_group: 'telegram:team' })).body.error.code, 'target_mismatch');
   const staleOrigin = path.join(zylosDir, 'activity-monitor', 'session-groups', 'origin');
@@ -207,6 +217,9 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
 test('history revisions track path changes and local deletion without invalidating on rollout timestamps', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'history-revisions-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
+  console.log('History fixture paths:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, database: path.join(root, 'history.db'),
+    network: 'ephemeral loopback HTTP only', tmux: 'not used', pm2: 'not used' }));
   const store = new Store(path.join(root, 'history.db'));
   t.after(() => store.close());
   store.insertEvent({ id: 'old', ingest_id: 'old', session_id: 'session', runtime: 'codex',

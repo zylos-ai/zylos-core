@@ -187,6 +187,13 @@ test('Core storage errors preserve their HTTP status through the bridge response
       error: { code: status === 404 ? 'chat_conversation_not_found' : 'group_delete_dashboard_unavailable', status } }) });
     const res = await call(handler, '/api/chat/drafts/missing/deletion');
     assert.equal(res.status, status);
+    assert.deepEqual(res.body.error, { code: status === 404 ? 'chat_conversation_not_found' : 'group_delete_dashboard_unavailable',
+      message: status === 404 ? 'chat_conversation_not_found' : 'group_delete_dashboard_unavailable' });
+    const deleted = await call(handler, '/api/chat/drafts/d%3Amissing', { method: 'DELETE',
+      body: { confirmed: true, operationId: 'private-operation', ...boundary } });
+    assert.equal(deleted.status, status);
+    assert.deepEqual(deleted.body, res.body);
+    assert.equal(Object.hasOwn(deleted.body.error, 'status'), false);
   }
 });
 
