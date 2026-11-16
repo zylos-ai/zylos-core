@@ -139,18 +139,28 @@ export function renderHostAccounts(section, accounts, { document = section.owner
     section.hidden = entries.length === 0;
     rows = keyedRows(grid, entries, rows, () => {
       const node = element(document, 'div'); node.style.display = 'contents';
-      const label = element(document, 'span'), detail = element(document, 'span');
-      detail.style.minWidth = '0'; detail.style.overflowWrap = 'anywhere'; node.append(label, detail);
-      return { node, label, detail };
+      const label = element(document, 'span'), detail = element(document, 'span', undefined, 'wb-host-quota');
+      const remaining = element(document, 'span'), resetLine = element(document, 'span', undefined, 'wb-host-quota-reset');
+      const duration = element(document, 'span'), time = element(document, 'span'), recorded = element(document, 'span');
+      const gap = document.createTextNode('');
+      resetLine.append(duration, gap, time);
+      detail.append(remaining, resetLine, recorded); node.append(label, detail);
+      return { node, label, remaining, duration, gap, time, recorded };
     }, (item, { runtime, usage, reset }) => {
       setText(item.label, runtimeName(runtime));
       const pct = remainingQuotaPercent(accountUsedPercent(usage));
-      const text = [pct == null ? t('wb.quotaUnknown') : t('wb.quotaRemaining', { pct: Math.round(pct) }), reset.text];
+      setText(item.remaining, pct == null ? t('wb.quotaUnknown') : t('wb.quotaRemaining', { pct: Math.round(pct) }));
+      // Keep the localized opening/closing parentheses with the formatted time.
+      const timeStart = reset.text.indexOf(reset.time) - 1;
+      const prefix = reset.text.slice(0, timeStart);
+      setText(item.duration, prefix.trimEnd());
+      setText(item.gap, prefix.slice(prefix.trimEnd().length));
+      setText(item.time, reset.text.slice(timeStart));
+      item.recorded.hidden = usage.live !== false;
       if (usage.live === false) {
         const time = quotaRecordedTime(usage, at);
-        text.push(t(time ? 'wb.quotaResetRecorded' : 'wb.quotaResetRecordedUnknown', { time }));
+        setText(item.recorded, t(time ? 'wb.quotaResetRecorded' : 'wb.quotaResetRecordedUnknown', { time }));
       }
-      setText(item.detail, text.join(' · '));
     });
   };
   refresh(accounts, now, accountOrder);

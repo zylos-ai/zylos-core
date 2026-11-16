@@ -518,6 +518,11 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-ip-card .wb-note { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .wb-host-svc { margin: 0 0 8px; }
 .wb-host-pool, .wb-host-accounts { margin-top: 10px; }
+.wb-host-quota { min-width: 0; }
+.wb-host-quota > span { display: block; white-space: nowrap; }
+.wb-host-quota > [hidden] { display: none; }
+.wb-host-quota > .wb-host-quota-reset { white-space: normal; }
+.wb-host-quota-reset > span { display: inline-block; white-space: nowrap; }
 .wb-host-chart + .wb-host-chart { margin-top: 6px; }
 .wb-host-chart h5 { display: flex; align-items: baseline; gap: 8px; margin: 0; color: var(--text-dim); font-size: 12px; font-weight: 550; }
 .wb-host-chart h5 b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }

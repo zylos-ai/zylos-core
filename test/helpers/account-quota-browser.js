@@ -72,6 +72,40 @@ async function assertDuration(card, duration, { width, language }) {
   }
 }
 
+async function assertQuotaLines(card, { width, stale }) {
+  const rows = await card.locator('.wb-host-quota').evaluateAll(items => items.map(item => {
+    const tops = node => {
+      const range = document.createRange();
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT), values = new Set();
+      while (walker.nextNode()) {
+        if (!walker.currentNode.textContent.trim()) continue;
+        range.selectNodeContents(walker.currentNode);
+        for (const rect of range.getClientRects()) if (rect.width > 0 && rect.height > 0) values.add(Math.round(rect.top));
+      }
+      return [...values];
+    };
+    const lines = [...item.children].filter(node => !node.hidden);
+    const reset = lines[1];
+    return { count: lines.length, text: item.textContent,
+      remaining: tops(lines[0]), recorded: lines[2] ? tops(lines[2]) : null,
+      parts: [...reset.children].map(node => ({ text: node.textContent, tops: tops(node) })),
+      reset: tops(reset), lineTops: lines.map(node => Math.round(node.getBoundingClientRect().top)) };
+  }));
+  assert.equal(rows.length, 2);
+  for (const row of rows) {
+    assert.equal(row.count, stale ? 3 : 2, 'exactly two live or three recorded logical lines');
+    assert.ok(!row.text.includes(' · '), 'no joined separators');
+    assert.equal(row.remaining.length, 1, 'remaining quota stays on one real text line');
+    if (stale) assert.equal(row.recorded.length, 1, 'recorded basis stays on one real text line');
+    assert.equal(row.parts.length, 2, 'reset has only a duration phrase and parenthesized timestamp');
+    assert.match(row.parts[1].text, /^[（(].*[）)]$/u, 'parentheses stay with the complete timestamp');
+    for (const part of row.parts) assert.equal(part.tops.length, 1, `${part.text} stays on one real text line`);
+    assert.ok(row.lineTops.every((top, index) => index === 0 || top > row.lineTops[index - 1]), 'logical lines stack vertically');
+    if (width === 1280) assert.equal(row.reset.length, 1, 'desktop reset occupies exactly one real text line');
+    else assert.ok(row.reset.length >= 1 && row.reset.length <= 2, 'phone reset wraps only between its two intact parts');
+  }
+}
+
 export async function runAccountQuotaBrowser(sandbox) {
   const modulePath = process.env.ZYLOS_CHAT_BROWSER_MODULE;
   const executablePath = process.env.ZYLOS_CHAT_BROWSER_BIN;
@@ -90,15 +124,16 @@ export async function runAccountQuotaBrowser(sandbox) {
   sandbox.addCleanup(() => stopBrowser(server));
   const browser = await chromium.connect(server.wsEndpoint(), { timeout: 15000 });
 
-  for (const width of [390, 1280]) for (const theme of ['light', 'dark']) for (const language of ['zh', 'en']) {
+  for (const width of [390, 1280]) for (const theme of ['light', 'dark']) for (const locale of ['zh-CN', 'en-GB', 'en-US']) {
+    const language = locale === 'zh-CN' ? 'zh' : 'en';
     const now = Math.floor(Date.now() / 1000) * 1000;
-    const future = now + (3 * 24 + 4) * 3600000, later = now + (4 * 24 + 5) * 3600000 + 8 * 60000;
-    const duration = language === 'en' ? '3d\u00a04h' : '3 天\u00a04 小时';
-    const laterDuration = language === 'en' ? '4d\u00a05h\u00a08m' : '4 天\u00a05 小时\u00a08 分钟';
+    const future = now + (6 * 24 + 23) * 3600000 + 59 * 60000, later = now + (6 * 24 + 22) * 3600000 + 58 * 60000;
+    const duration = language === 'en' ? '6d\u00a023h\u00a059m' : '6 天\u00a023 小时\u00a059 分钟';
+    const laterDuration = language === 'en' ? '6d\u00a022h\u00a058m' : '6 天\u00a022 小时\u00a058 分钟';
     const recordedAt = now - 3600000;
     let phase = 'live', initial = true;
     const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 },
-      locale: language === 'zh' ? 'zh-CN' : 'en-GB', timezoneId: 'America/Los_Angeles',
+      locale, timezoneId: 'America/Los_Angeles',
       ...(width === 390 ? { isMobile: true, hasTouch: true } : {}) });
     sandbox.addCleanup(() => context.close());
     let page;
@@ -210,11 +245,11 @@ export async function runAccountQuotaBrowser(sandbox) {
       }
       if (evidence) {
         const titles = await strip.evaluateAll(items => items.map(item => ({ text: item.innerText, title: item.title })));
-        fs.writeFileSync(path.join(evidence, `quota-${width}-${theme}-${language}-titles.json`), JSON.stringify(titles, null, 2) + '\n');
+        fs.writeFileSync(path.join(evidence, `quota-${width}-${theme}-${locale}-titles.json`), JSON.stringify(titles, null, 2) + '\n');
         await strip.filter({ hasText: 'Claude' }).hover();
         // Capture the real hover state; Chromium's native title popup may be outside page screenshots.
         await page.waitForTimeout(1200);
-        await page.screenshot({ path: path.join(evidence, `quota-${width}-${theme}-${language}-hover.png`), fullPage: true });
+        await page.screenshot({ path: path.join(evidence, `quota-${width}-${theme}-${locale}-hover.png`), fullPage: true });
       }
       await page.locator('#wb-host-open').click();
       await card.waitFor();
@@ -225,10 +260,15 @@ export async function runAccountQuotaBrowser(sandbox) {
       assert.match(liveText, resetWords);
       await assertAccountOrder(page, card, ['Claude', 'Codex']);
       await assertDuration(card, duration, { width, language });
+      await assertQuotaLines(card, { width, stale: false });
+      await card.evaluate(root => {
+        window.__quotaNodes = new Map([...root.querySelectorAll('.wb-kvs > div')].map(row =>
+          [row.firstChild.textContent, [row, ...row.querySelectorAll('span')]]));
+      });
       await assertFits(page, card, width);
       await page.evaluate(() => { document.activeElement?.blur(); return document.fonts.ready; });
       await page.mouse.move(0, 0);
-      if (evidence) await page.screenshot({ path: path.join(evidence, `quota-${width}-${theme}-${language}-live.png`), fullPage: true });
+      if (evidence) await page.screenshot({ path: path.join(evidence, `quota-${width}-${theme}-${locale}-live.png`), fullPage: true });
 
       await refresh('stale');
       await card.filter({ hasText: /record|记录/i }).waitFor();
@@ -240,10 +280,18 @@ export async function runAccountQuotaBrowser(sandbox) {
       }
       await assertAccountOrder(page, card, ['Codex', 'Claude']);
       await assertDuration(card, laterDuration, { width, language });
+      await assertQuotaLines(card, { width, stale: true });
+      assert.equal(await card.evaluate(root => [...root.querySelectorAll('.wb-kvs > div')].every(row => {
+        const before = window.__quotaNodes.get(row.firstChild.textContent);
+        return [row, ...row.querySelectorAll('span')].every((node, index) => node === before[index]);
+      })), true, 'refresh reorders retained rows and updates their retained line nodes');
       await assertFits(page, card, width);
       await page.evaluate(() => document.activeElement?.blur());
       await page.mouse.move(0, 0);
-      if (evidence) await page.screenshot({ path: path.join(evidence, `quota-${width}-${theme}-${language}-stale.png`), fullPage: true });
+      if (evidence) await page.screenshot({ path: path.join(evidence, `quota-${width}-${theme}-${locale}-stale.png`), fullPage: true });
+
+      await refresh('live');
+      await assertQuotaLines(card, { width, stale: false });
 
       for (const next of ['omitted', 'omitted-reverse']) {
         await refresh(next);
@@ -258,6 +306,7 @@ export async function runAccountQuotaBrowser(sandbox) {
       await card.waitFor();
       await assertAccountOrder(page, card, ['Claude', 'Codex']);
       await assertDuration(card, duration, { width, language });
+      await assertQuotaLines(card, { width, stale: false });
       await assertFits(page, card, width);
       await page.locator('#wb-host-close').click();
       await page.locator('#wb-side').waitFor({ state: 'hidden' });
@@ -267,7 +316,7 @@ export async function runAccountQuotaBrowser(sandbox) {
       await page.keyboard.press('Escape');
       await page.locator('#wb-side').waitFor({ state: 'hidden' });
       assert.equal(errors.length, 0, errors.join('\n'));
-      console.info(`Account quota browser: ${width}px ${theme} ${language}; live, stale, omitted both runtimes, refresh, close/reopen/Escape`);
+      console.info(`Account quota browser: ${width}px ${theme} ${locale}; live, stale, omitted both runtimes, retained lines, refresh, close/reopen/Escape`);
     } finally {
       try { await page?.unrouteAll({ behavior: 'ignoreErrors' }); } finally { await context.close(); }
     }
