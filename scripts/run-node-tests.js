@@ -10,6 +10,7 @@ const ROOT_NODE_TESTS = [
   'test/fleet-attention.integration.test.js',
   'test/fleet-attention-browser.test.js',
   'test/channel-delivery.integration.test.js',
+  'test/channel-sync.integration.test.js',
   'test/single-origin-activity.integration.test.js',
   'test/legacy-group-reads-browser.test.js',
   'test/dashboard-object-api.integration.test.js',

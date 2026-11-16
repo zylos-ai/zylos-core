@@ -9,9 +9,6 @@ import { fixture } from './c4-v2-test-helpers.js';
 import { parseSendArgs } from '../c4-send-args.js';
 import { sendExternal, recordVoid, senderSessionId, readAbsorbedReply } from '../c4-send-external.js';
 import { systemSendEnvironment } from '../c4-system-send-env.js';
-import { createBatchReceipt, verifyBatchReceipt } from '../c4-sync-batch.js';
-import { projectConversation } from '../c4-query-format.js';
-import { setTimeout as delay } from 'node:timers/promises';
 
 function setup(t) {
   const { db, store, filename } = fixture(t, {}, true);
@@ -41,73 +38,6 @@ test('system sends retain explicit notice provenance without changing ordinary r
   assert.equal(notice.delivery_action, 'system_notice');
   const ordinary = await sendExternal(request, 'reply', { api, skillsDir: dir, env: { ...process.env } });
   assert.equal(ordinary.delivery_action, null);
-});
-
-test('failed system notices preserve an unanswered human message', async t => {
-  const { api, db, dir, script } = setup(t);
-  api.insertConversation('in', 'demo', 'endpoint', 'human awaiting reply');
-  fs.writeFileSync(script, 'process.exitCode=1;');
-  await assert.rejects(sendExternal(request, 'system notice', { api, skillsDir: dir,
-    env: systemSendEnvironment(process.env, { notice: true }) }), { code: 'SEND_FAILED', exitCode: 1 });
-  const row = db.prepare("SELECT * FROM conversations WHERE direction='out'").get();
-  assert.equal(row.status, 'failed');
-  assert.equal(row.delivery_action, 'system_notice');
-  for (const group of ['demo', '*']) {
-    assert.equal(api.hasPendingStartupReply(group, { since: '2000-01-01T00:00:00Z' }), true);
-  }
-  fs.writeFileSync(script, 'process.exitCode=0;');
-  await sendExternal(request, 'human reply', { api, skillsDir: dir });
-  assert.equal(api.hasPendingStartupReply('demo', { since: '2000-01-01T00:00:00Z' }), false);
-});
-
-// Real component process plus private SQLite and Sync reads/receipts. Run for
-// outbound settlement or Sync selection changes; skip unrelated UI work. The
-// official runner isolates instance paths. The child exits within two seconds;
-// cleanup releases and awaits it even after an assertion failure.
-test('a send failing after export remains in scoped and global Sync batches', { timeout: 5000 }, async t => {
-  const { api, db, dir, script, store } = setup(t);
-  const started = path.join(dir, 'slow-started'), release = path.join(dir, 'release');
-  fs.writeFileSync(script, `const fs=require('node:fs');
-    fs.writeFileSync(${JSON.stringify(started)}, 'started');
-    setInterval(() => { if(fs.existsSync(${JSON.stringify(release)})) process.exit(1); }, 10);
-    setTimeout(() => process.exit(1), 2000);`);
-  const human = api.insertConversation('in', 'demo', 'endpoint', 'human');
-  db.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(human.id);
-  const sending = sendExternal(request, 'slow reply', { api, skillsDir: dir }).then(() => null, error => error);
-  try {
-    for (let attempt = 0; attempt < 100 && !fs.existsSync(started); attempt++) await delay(10);
-    assert.equal(fs.existsSync(started), true, 'real send must still be running at export');
-    const outbound = db.prepare("SELECT * FROM conversations WHERE direction='out'").get();
-    assert.equal(outbound.status, 'delivered');
-    const receipts = ['demo', '*'].map(group => {
-      const exported = store.queries.unsummarized({ group });
-      assert.equal(exported.rows.length, 2);
-      return createBatchReceipt(exported.rows.map(projectConversation), { scope: group, after: 0, end: exported.upTo });
-    });
-    fs.writeFileSync(release, 'release');
-    const error = await sending;
-    assert.equal(error?.code, 'SEND_FAILED');
-    assert.equal(error.exitCode, 1);
-    assert.equal(db.prepare('SELECT status FROM conversations WHERE id=?').get(outbound.id).status, 'failed');
-    for (const receipt of receipts) {
-      const group = receipt.scope;
-      assert.equal(verifyBatchReceipt(receipt, { scope: group, end: receipt.end,
-        database: { getConversationsByRange: (a, b) => db.prepare('SELECT * FROM conversations WHERE id>=? AND id<=?').all(a, b) } }).sha256, receipt.sha256);
-      const exported = store.queries.unsummarized({ group });
-      assert.equal(exported.rows.length, 2);
-      assert.equal(exported.rows[1].id, outbound.id);
-      assert.equal(exported.rows[1].status, 'failed');
-      const range = group === '*' ? api.getGlobalUnsummarizedRange() : api.getUnsummarizedRange(group);
-      assert.equal(range.count, 2);
-      const page = store.queries.unsummarized({ group, limit: 1 });
-      assert.equal(page.upTo, human.id, 'failed outbound remains on the next page');
-      assert.throws(() => verifyBatchReceipt({ ...receipt, sha256: '0'.repeat(64) },
-        { scope: group, end: receipt.end, database: { getConversationsByRange: () => exported.rows } }), { code: 'INPUT_CHANGED' });
-    }
-  } finally {
-    fs.writeFileSync(release, 'release');
-    await sending;
-  }
 });
 
 test('legacy trailing group option is discarded while preserving content', () => {
