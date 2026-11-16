@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 // Run for handoff/output changes; skip for unrelated installer/finalizer changes.
 // This is NOT an npm/global-install acceptance test. Success replaces only the
 // target's installer/protection/DB boundaries via the native module-mock fixture;
+// its fake npm answers only npm root -g for the installed package's parent.
 // failure uses the real target's admission error. No service, tmux or DB starts.
 for (const mode of ['human', 'json', 'legacy']) for (const outcome of ['success', 'failure']) {
   test(`self upgrade ${mode} ${outcome} preserves output and exit status`, t => {
@@ -31,7 +32,11 @@ for (const mode of ['human', 'json', 'legacy']) for (const outcome of ['success'
       warnings: [{ runtime: 'codex', code: 'RUNTIME_CLI_UNAVAILABLE', message: 'Optional CLI unavailable.' }] };
     fs.writeFileSync(path.join(installed, 'cli/lib/self-upgrade.js'), `export function runSelfUpgradeFinalize() { return ${JSON.stringify(expected)}; }\n`);
     const npmCli = path.join(root, 'npm-cli.js');
-    fs.writeFileSync(npmCli, 'throw Error("installer must stay inert");\n');
+    fs.writeFileSync(npmCli, outcome === 'success'
+      ? `import assert from 'node:assert/strict';
+assert.deepEqual(process.argv.slice(2), ['root', '-g']);
+process.stdout.write(${JSON.stringify(path.dirname(installed))});\n`
+      : 'throw Error("installer must stay inert");\n');
     fs.symlinkSync(npmCli, path.join(root, 'prefix/bin/npm'));
     if (outcome === 'failure') {
       // Real metadata mismatch rejects before any transaction or service action.
