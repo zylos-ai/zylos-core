@@ -601,7 +601,7 @@ test('single session: unreadable maintenance holds recovery and is logged once',
 test('multi session does not consult single-session maintenance',async t=>{
   const f=fixture(t);f.setMaintenance('memory_sync');f.delivered();f.advance(900000);await f.observer.tick();assert.equal(f.interrupts.length,1);
 });
-for(const owner of ['health','probe'])test(`single session: ${owner} recovery owns the run before an episode starts`,async t=>{
+for(const owner of ['health','probe'])test(`single session: ${owner} recovery owns the run before an episode starts`,{ timeout: 5000 },async t=>{
   const f=fixture(t);f.setMode('single');f.delivered();
   let probe;
   if(owner==='health')f.setHealth('unavailable');
@@ -612,7 +612,7 @@ for(const owner of ['health','probe'])test(`single session: ${owner} recovery ow
   f.advance(899999);await f.observer.tick();assert.equal(f.interrupts.length,0);
   f.advance(1);await f.observer.tick();assert.equal(f.interrupts.length,1);
 });
-test('single session: an active episode keeps ownership; probes skip its run and health changes do not cancel it',async t=>{
+test('single session: an active episode keeps ownership; probes skip its run and health changes do not cancel it',{ timeout: 5000 },async t=>{
   const f=fixture(t);f.setMode('single');f.delivered();f.advance(900000);await f.observer.tick();assert.equal(f.interrupts.length,1);
   assert.equal(f.observer.noResponseActive(f.scene()),true);
   f.setHealth('unavailable');const probe=f.observer.requestProbe('claude');await f.prepared();
@@ -620,7 +620,7 @@ test('single session: an active episode keeps ownership; probes skip its run and
   f.advance(180000);await f.observer.tick();assert.equal(f.stops.length,1);assert.equal(f.events.at(-1).event,'no_response_restart');
   assert.equal(f.observer.noResponseActive(f.scene()),false);
 });
-test('multi session probes are not skipped for an active no-response episode',async t=>{
+test('multi session probes are not skipped for an active no-response episode',{ timeout: 5000 },async t=>{
   const f=fixture(t);f.delivered();f.advance(900000);await f.observer.tick();assert.equal(f.observer.noResponseActive(f.scene()),true);
   f.setHealth('unavailable');f.setState({state:'idle'});const probe=f.observer.requestProbe('claude');await f.prepared();
   assert.equal(f.controls.length,1);f.controls[0].status='done';await f.observer.tick();assert.equal((await probe).recovered,true);
@@ -631,7 +631,7 @@ test('single session: a mode change between Escape and continue suppresses the r
   f.delivered();f.advance(900000);await f.observer.tick();
   assert.deepEqual(results,[false]);assert.equal(f.events[0].enqueued,false);
 });
-test('single session: a replacement run is not owned by the previous run\'s episode',async t=>{
+test('single session: a replacement run is not owned by the previous run\'s episode',{ timeout: 5000 },async t=>{
   const f=fixture(t);f.setMode('single');f.delivered();f.advance(900000);await f.observer.tick();assert.equal(f.interrupts.length,1);
   const replacement={...f.scene(),runId:randomUUID()};f.setScenes([replacement]);
   assert.equal(f.observer.noResponseActive(replacement),false);
