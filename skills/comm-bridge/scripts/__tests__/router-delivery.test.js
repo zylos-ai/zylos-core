@@ -260,15 +260,51 @@ test('bypass skips health but cannot bypass idle or READY', async t => {
   const unready = f.control('repair', { bypass_state: 1 }); f.target.ready = false; await d.deliverControl(unready); assert.equal(unready.status, 'pending');
 });
 
-test('Codex exact /exit permits target disappearance only after successful Enter', async t => {
-  for (const variant of ['exit', 'paste', 'enter', 'generation', 'other', 'claude']) await t.test(variant, async t => {
-    const f = setup(t); if (variant === 'claude') f.target.runtime = 'claude';
-    const row = f.control(variant === 'other' ? '/exit now' : '/exit');
-    if (variant === 'paste') f.adapter.sendText = async () => { throw error('PASTE_FAILED'); };
-    if (variant === 'enter') f.adapter.sendKeys = async () => { throw error('TARGET_GONE'); };
-    else f.connection.command = async () => { throw error(variant === 'generation' ? 'GENERATION_CHANGED' : 'TARGET_GONE'); };
-    await f.create().deliverControl(row); assert.equal(row.status, variant === 'exit' ? 'done' : 'pending');
-  });
+test('exact lifecycle /exit permits target disappearance only after successful Enter on the bound run', async t => {
+  for (const runtime of ['claude', 'codex']) for (const scope of ['single', 'origin', 'group']) {
+    for (const variant of ['exit', 'paste', 'before_enter', 'enter', 'generation', 'run', 'other']) {
+      await t.test(`${runtime} ${scope} ${variant}`, async t => {
+        const f = setup(t); f.target.runtime = runtime;
+        f.deps.getSessionMode = () => scope === 'single' ? 'single' : 'multi';
+        const group = scope === 'single' ? null : scope === 'origin' ? 'origin' : 'telegram-test';
+        const row = f.control(variant === 'other' ? '/exit now' : '/exit', { session_group: group });
+        if (variant === 'paste' || variant === 'before_enter') {
+          f.adapter.sendText = async () => { throw error(variant === 'paste' ? 'PASTE_FAILED' : 'TARGET_GONE'); };
+        }
+        if (variant === 'enter') f.adapter.sendKeys = async () => { throw error('TARGET_GONE'); };
+        else f.connection.command = async () => {
+          throw error(variant === 'generation' ? 'GENERATION_CHANGED' : variant === 'run' ? 'RUNID_MISMATCH' : 'TARGET_GONE');
+        };
+        await f.create().deliverControl(row);
+        assert.equal(row.status, variant === 'exit' ? 'done' : 'pending');
+        assert.equal(f.calls.find(c => c[0] === 'resolve')[1], group);
+        const entered = f.calls.some(c => c[0] === 'keys' && c[1].keys.includes('Enter'));
+        assert.equal(entered, !['paste', 'before_enter', 'enter'].includes(variant));
+        for (const [kind, args] of f.calls) if (['paste', 'keys'].includes(kind)) {
+          assert.equal(args.target, f.target); assert.equal(args.target.runId, 'r1');
+          assert.equal(args.connection, f.connection);
+        }
+      });
+    }
+  }
+});
+
+test('unverified /exit with a surviving pane completes for both runtimes', async t => {
+  for (const runtime of ['claude', 'codex']) for (const state of ['live', 'offline']) {
+    await t.test(`${runtime} ${state}`, async t => {
+      const f = setup(t); f.target.runtime = runtime;
+      f.connection.command = async () => '5';
+      f.adapter.sendText = async args => {
+        f.calls.push(['paste', args]);
+        if (state === 'offline') { f.state.proc.alive = false; f.state.state = 'offline'; }
+      };
+      const row = f.control('/exit');
+      await f.create().deliverControl(row);
+      assert.equal(row.status, 'done');
+      assert(f.calls.some(c => c[0] === 'keys' && c[1].keys.includes('Enter')));
+      assert.equal(f.calls.some(c => c[0] === 'diagnostic' && c[1] === 'delivery_failed' && c[2].reason === 'ENTER_UNVERIFIED'), false);
+    });
+  }
 });
 
 test('unverified conversation fails; live control accepted, dead control retried', async t => {

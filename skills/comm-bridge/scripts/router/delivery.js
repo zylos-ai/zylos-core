@@ -34,7 +34,7 @@ export function isRecoveryHeartbeatPhase(phase) { return phase === 'recovery' ||
 export function isBypassState(item) { return item.type === 'control' && item.bypass_state === 1; }
 export function isKeystrokeControl(item) { return item.type === 'control' && (item.content || '').startsWith('[KEYSTROKE]'); }
 export function parseKeystrokeKey(content) { return (content || '').slice('[KEYSTROKE]'.length).trim(); }
-export function isCodexExitLifecycleControl(item, runtime) { return item.type === 'control' && runtime === 'codex' && item.content === '/exit'; }
+export function isExitLifecycleControl(item, runtime) { return item.type === 'control' && ['claude', 'codex'].includes(runtime) && item.content === '/exit'; }
 export function shouldAutoAckHeartbeat({ item, agentState, procState, confirmedActive }) {
   return Boolean(item?.content?.includes('Heartbeat check') && !isRecoveryHeartbeatPhase(getHeartbeatPhase(item.content)) &&
     agentState?.healthy === true && !offline(agentState.state) && procState?.alive === true && confirmedActive);
@@ -348,15 +348,15 @@ export function createDelivery(deps, configuration = {}) {
             let verified;
             try { verified = await verify(); }
             catch (cause) {
-              // Exact Codex lifecycle command may remove its own pane after Enter.
+              // Exact lifecycle commands may remove their own pane after Enter.
               // A replacement server/run is never accepted as shutdown.
-              if (isCodexExitLifecycleControl(item, target.runtime) && entered && cause.code === 'TARGET_GONE') verified = true;
+              if (isExitLifecycleControl(item, target.runtime) && entered && cause.code === 'TARGET_GONE') verified = true;
               else throw cause;
             }
             if (!verified) {
               const after = await readState();
               if (type === 'conversation' || ((after.proc?.alive === false || offline(after.state)) &&
-                !(isCodexExitLifecycleControl(item, target.runtime)))) throw failure('ENTER_UNVERIFIED');
+                !(isExitLifecycleControl(item, target.runtime)))) throw failure('ENTER_UNVERIFIED');
             }
             schedulePeriodic();
             result = type === 'conversation' ? 'delivered' : content.includes('---- ack via:') ? 'submitted' : 'ack';

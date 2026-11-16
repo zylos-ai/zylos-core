@@ -48,6 +48,7 @@ const ROOT_NODE_TESTS = [
   'test/owned-removal-callers.integration.test.js',
   'test/test-environment-cleanup.test.js',
   'test/single-upgrade-check.integration.test.js',
+  'test/exit-control.integration.test.js',
   'test/session-release.integration.test.js',
   'test/component-source-record.integration.test.js',
 ];
