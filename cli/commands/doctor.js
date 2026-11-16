@@ -217,6 +217,20 @@ export function pgrepHint(reason) {
   return 'Single-session startup fails while pgrep cannot be run; check that procps works';
 }
 
+/** PM2 uses ps to discover descendants when stopping or restarting processes. */
+export function checkPs({ execute = execFileSync } = {}) {
+  try {
+    execute('ps', ['-p', String(process.pid)], { stdio: 'ignore', timeout: 5000 });
+    return { available: true };
+  } catch (error) {
+    return { available: false, reason: error.code === 'ENOENT' ? 'not_found' : String(error.code ?? `exit_${error.status}`) };
+  }
+}
+
+export function psHint() {
+  return 'Without ps, PM2 restarts may leave old processes running and cause duplicate message delivery; install procps';
+}
+
 function checkClaudeCli() {
   if (!commandExists('claude')) return { installed: false };
   let version = 'unknown';
@@ -302,7 +316,7 @@ export function formatDoctorSessionModeStatus(value) {
 }
 
 export async function collectDiagnostics(env, { resolve = resolveCliSession, network = checkNetwork,
-  pm2Check = checkPm2Installed, tmuxCheck = checkTmuxInstalled, pgrepCheck = checkPgrep, modeStatus = readDoctorSessionModeStatus } = {}) {
+  pm2Check = checkPm2Installed, tmuxCheck = checkTmuxInstalled, pgrepCheck = checkPgrep, psCheck = checkPs, modeStatus = readDoctorSessionModeStatus } = {}) {
   const selected = await resolve();
   const runtime = selected.runtime;
   const display = runtime === 'unknown' ? 'Unknown runtime' : runtime === 'codex' ? 'Codex' : 'Claude';
@@ -312,6 +326,7 @@ export async function collectDiagnostics(env, { resolve = resolveCliSession, net
   const tmux = tmuxCheck();
   const pm2 = pm2Check();
   const pgrep = pgrepCheck();
+  const ps = psCheck();
   const envFile = ensureEnvFilePrivate();
   const net = await networkPromise;
 
@@ -350,7 +365,7 @@ export async function collectDiagnostics(env, { resolve = resolveCliSession, net
 
   return {
     runtime, display, apiHost, sessionMode, sessionModeStatus, sessionGroup: selected.sessionGroup ?? null, origin, targetRuntime, originNeed,
-    system: { tmux, pm2, pgrep, network: net, envFile },
+    system: { tmux, pm2, pgrep, ps, network: net, envFile },
     ai: { cli, auth, authStatus, autonomous, networkSkipped: !net.reachable },
     services: { ...services, session },
   };
@@ -453,6 +468,10 @@ export function buildDiagnosticJson(diag, coreVersion) {
           pgrep: diag.system.pgrep?.available === false
             ? { ok: false, level: 'warning', reason: diag.system.pgrep.reason, hint: pgrepHint(diag.system.pgrep.reason) }
             : { ok: true },
+          // Warning level: an unusable ps never fails the group or the run.
+          ps: diag.system.ps?.available === false
+            ? { ok: false, level: 'warning', reason: diag.system.ps.reason, hint: psHint() }
+            : { ok: true },
           network: { ok: diag.system.network.reachable, host: diag.apiHost, proxy: diag.system.network.proxy || null },
           envFile: { ok: diag.system.envFile?.ok !== false, mode: diag.system.envFile?.mode ?? null,
             fixed: diag.system.envFile?.fixed === true },
@@ -498,6 +517,9 @@ function displaySystemGroup(diag, jsonGroup) {
     checks.push(red('PM2 not installed'));
   }
 
+  const ps = jsonGroup.checks.ps;
+  checks.push(ps.ok ? 'ps available'
+    : yellow(`ps ${ps.reason === 'not_found' ? 'not found' : `could not be run (${ps.reason})`}: ${ps.hint}`));
   const pgrep = jsonGroup.checks.pgrep;
   checks.push(pgrep.ok ? 'pgrep available'
     : yellow(`pgrep ${pgrep.reason === 'not_found' ? 'not found' : `could not be run (${pgrep.reason})`}: ${pgrep.hint}`));

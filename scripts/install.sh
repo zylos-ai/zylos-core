@@ -202,6 +202,26 @@ ensure_tmux() {
   ok "tmux: installed"
 }
 
+# ── Prerequisite: procps ──────────────────────────────────────
+ensure_procps() {
+  # macOS provides ps and pgrep; do not install a Homebrew replacement.
+  if [ "$OS" != "linux" ]; then
+    return
+  fi
+  if command -v ps &>/dev/null && command -v pgrep &>/dev/null; then
+    ok "procps: ps and pgrep available"
+    return
+  fi
+  local pkg="procps"
+  if ! command -v apt-get &>/dev/null; then
+    if command -v dnf &>/dev/null || command -v yum &>/dev/null; then
+      pkg="procps-ng"
+    fi
+  fi
+  install_system_package "$pkg"
+  ok "procps: installed"
+}
+
 # ── Prerequisite: Node.js (via nvm) ──────────────────────────
 ensure_node() {
   # Check if Node.js + npm exist and meet minimum version
@@ -422,6 +442,7 @@ echo ""
 ensure_curl
 ensure_git
 ensure_tmux
+ensure_procps
 ensure_node
 
 echo ""
