@@ -9,11 +9,14 @@ import { DAILY_UPGRADE_PROMPT, HEALTH_CHECK_PROMPT } from '../skills/activity-mo
 import { migrationPrompt, startupPrompt } from '../skills/activity-monitor/scripts/session-start-prompt.js';
 import { namingInstruction } from '../skills/dashboard/src/lib/chat/auto-name.js';
 
-// Claude Code wraps a single input longer than PASTE_CHAR_THRESHOLD (String length) as pasted
-// material, which the model reads as quoted data instead of an instruction. Conversation messages
-// over the threshold go to a file; control text is typed in whole, so every control must fit.
-// The router types a control as "Meanwhile, <content>" (comm-bridge router/delivery.js), and the
-// store may append an ack suffix naming the installed c4-control.js and the control id.
+// Claude Code folds a single input into pasted material when it is longer than
+// PASTE_CHAR_THRESHOLD (String length) or has more than two line breaks; the model then reads it
+// as quoted data instead of an instruction (Codex folds above 1000 characters, so 800 covers both).
+// Conversation messages over the threshold go to a file; control text is typed in whole, so every
+// control must stay within both limits. The router types a control as "Meanwhile, <content>"
+// (comm-bridge router/delivery.js), and the store may append an ack suffix naming the installed
+// c4-control.js and the control id.
+const MAX_LINE_BREAKS = 2;
 const LONG_INSTALL = `/Users/${'u'.repeat(32)}/zylos`;
 const LONG_GROUP = `telegram:${'g'.repeat(119)}`; // the 128-character session group limit
 const delivered = (content, suffix) => `Meanwhile, ${content}${suffix}`;
@@ -44,18 +47,20 @@ function controls() {
   ];
 }
 
-test('every control prompt is typed as an ordinary input, within the paste threshold with the longest ack suffix', t => {
+test('every control prompt is typed as an ordinary input: within the paste length and line-break limits with the longest ack suffix', t => {
   const suffix = longestAckSuffix(t);
   const list = controls();
   for (const name of ['GROUP_SYNC_PROMPT', 'ORIGIN_SYNC_PROMPT', 'PRE_RECLAIM_CHECK_PROMPT', 'CONFIG_RECLAIM_PROMPT',
-    'UPGRADE_RESTART_CHECK_PROMPT', 'SINGLE_UPGRADE_RESTART_CHECK_PROMPT', 'ROTATION_PROMPT', 'IDENTITY_ROTATION_PROMPT']) {
+    'UPGRADE_RESTART_CHECK_PROMPT', 'SINGLE_UPGRADE_RESTART_CHECK_PROMPT', 'ROTATION_PROMPT', 'IDENTITY_ROTATION_PROMPT', 'conversation naming']) {
     assert.ok(list.some(([key]) => key === name), `${name} is measured`);
   }
   const over = [];
   for (const [name, content] of list) {
     assert.ok(typeof content === 'string' && content.length > 0, name);
-    const length = delivered(content, suffix).length;
-    if (length > PASTE_CHAR_THRESHOLD) over.push(`${name}: ${length}`);
+    const text = delivered(content, suffix);
+    const breaks = text.match(/\r\n|\r|\n/g)?.length ?? 0;
+    if (text.length > PASTE_CHAR_THRESHOLD) over.push(`${name}: ${text.length} characters`);
+    if (breaks > MAX_LINE_BREAKS) over.push(`${name}: ${breaks} line breaks`);
   }
-  assert.equal(over.join('; '), '', `delivered controls over ${PASTE_CHAR_THRESHOLD} characters`);
+  assert.equal(over.join('; '), '', `delivered controls over ${PASTE_CHAR_THRESHOLD} characters or ${MAX_LINE_BREAKS} line breaks`);
 });
