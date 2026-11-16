@@ -75,19 +75,13 @@ interval after that latest activity.
 
 Every TTL reclaim, Origin included, is preceded by preparation controls bound
 to the current run, each require-idle, with the ack suffix and a 5-minute ack
-deadline. The first is always the pre-reclaim check. During this check, do not
-send messages to anyone. Only work this session started that is still running
-and whose result it needs (background command, Monitor, subagent or workflow)
-can hold reclaim. A Memory Sync is not such work: the supervisor already waits
-for it before reclaiming, so do not defer for it. Apply for a delay before
-acknowledging the control:
-
-```bash
-node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js defer-reclaim --reason "watching CI of my PR"
-```
-
-Confirm `ok:true`, then acknowledge. The command derives the session group and
-run ID from the current environment and uses the existing supervisor socket.
+deadline. The first is always the pre-reclaim check: a one-line control that
+names the idle reclaim check in
+[Reclaim and restart checks](references/session-checks.md), which holds what
+the session does during every reclaim and restart check. Only that idle check
+offers a deferral (`supervisor-request.js defer-reclaim`). The command derives
+the session group and run ID from the current environment and uses the
+existing supervisor socket.
 It rejects missing preparation, a different run, an already-started reclaim,
 a capacity check past its response deadline, or an upgrade/configuration restart.
 An accepted request cancels this reclaim or eviction preparation and resets the
@@ -96,14 +90,8 @@ must become idle for the configured eviction minimum before it can be selected
 again. Consecutive request counts and reasons live only in memory; a supervisor
 restart loses them.
 
-Otherwise write the handoff from current records, leaving completed items out.
-Waiting for people, reviews or decisions needs only that handoff: replies wake
-the group. Create a wake-up only for a step of this session's own ongoing task
-waiting on a system that will not message this group (such as its PR's CI).
-First use scheduler `list --json` to reuse a pending task covering the same
-check. Otherwise use scheduler `add` without a reply option and confirm
-`ok:true`; it saves the session's own group (Origin saves none and runs in
-Origin). Do not create tasks for other waits.
+A wake-up the check creates with scheduler `add` saves the session's own group
+(Origin saves none and runs in Origin).
 The PRE_RECLAIM Sync control follows when the group has unsummarized
 conversations, then for Origin the Origin Sync control when Origin has a Sync
 backlog, so Sync records the handoff and task the check left. Reclaim begins
@@ -254,7 +242,7 @@ expires it at the same deadline.
 
 An upgrade restart (`restart_all`) sends each running session listed in the
 request, Origin included, its own check control before that session's fence:
-the same narrow handoff and wake-up check, opening with the upgrade as the reason, bound to the
+the [upgrade restart check](references/session-checks.md), opening with the upgrade as the reason, bound to the
 current run, require-idle, with the ack suffix and a 60-second ack deadline.
 The check names any background work that will be interrupted so the next
 session can rerun or check it; it offers no deferral. The restart begins once
@@ -267,7 +255,7 @@ stop the restart before any check is sent.
 
 In steady single-session mode an upgrade restart (`zylos upgrade`,
 `upgrade-claude`, `restart-claude`) has no Supervisor step: the producer queues
-the same check, opening with a single-session reason, and then `/exit`. Both
+the single-session upgrade restart check, opening with a single-session reason, and then `/exit`. Both
 are priority 1 and require-idle; the check has the ack suffix and a 60-second
 ack deadline. The dispatcher delivers the check first and `/exit` only once the
 session is idle after the check's turn, or after the check expires unanswered
@@ -276,9 +264,8 @@ activity during the wait neither overtakes nor removes `/exit`. Each restart
 request queues one check, and the producer returns as soon as both are queued.
 
 A launch configuration change still sends a single control with its 5-minute
-ack deadline and the `ready_for_config_reclaim` flow. Its text now carries the
-same narrow handoff and wake-up check, with the configuration change as the
-reason. Background work is recorded as interrupted, without deferral, before
+ack deadline and the `ready_for_config_reclaim` flow. It names the
+configuration restart check, with the configuration change as the reason. Background work is recorded as interrupted, without deferral, before
 the readiness submission.
 
 ## Status File Format

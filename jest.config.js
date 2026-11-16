@@ -34,6 +34,7 @@ export default {
     '<rootDir>/test/group-deletion-storage.integration.test.js',
     // Node test-runner file; run by scripts/run-node-tests.js.
     '<rootDir>/test/test-location.test.js',
+    '<rootDir>/test/control-prompt-length.test.js',
     '<rootDir>/test/reference-memory-templates.test.js',
     '<rootDir>/test/owned-tree-deletion-policy.test.js',
     '<rootDir>/test/owned-removal-callers.integration.test.js',
