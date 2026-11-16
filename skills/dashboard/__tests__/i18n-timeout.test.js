@@ -137,9 +137,11 @@ test('main and workbench accept slow and late packs, reject stale locales, and h
   assert.equal(saved.getItem(mainKey), null); assert.equal(saved.getItem(wbKey), null); assert.equal(renders, beforeOld);
 
   // Only actual thirty-second failures enter retries and the existing heal loop.
+  // The workbench pack also fails while the server is down; healing must reload it,
+  // otherwise workbench labels stay raw keys after the main labels recover.
   saved.values.clear(); const failedSignals = []; let healthy = false;
   handler = (url, options) => {
-    if (url.includes('/wb.')) return Promise.resolve(response(wbPack('概览')));
+    if (url.includes('/wb.')) return Promise.resolve(healthy ? response(wbPack('概览')) : { ok: false, status: 503 });
     if (healthy) return Promise.resolve(response({ 'btn.actions': '自愈' }));
     failedSignals.push(options.signal); return hung();
   };
@@ -148,6 +150,7 @@ test('main and workbench accept slow and late packs, reject stale locales, and h
   assert.equal(main.t('btn.actions'), 'btn.actions'); assert.equal(failedSignals[0].aborted, false);
   for (const ms of [24000, 400, 30000, 800, 30000]) await advance(context, ms);
   assert.equal(failedSignals.length, 3); assert.ok(failedSignals.every(signal => signal.aborted));
+  assert.equal(main.t('wb.nav.overview'), 'wb.nav.overview');
   healthy = true; await advance(context, 5000);
   assert.equal(main.t('btn.actions'), '自愈'); assert.equal(main.t('wb.nav.overview'), '概览');
 });

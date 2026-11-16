@@ -64,38 +64,3 @@ test('translation loader tolerates storage writes failing after a fresh pack', a
   const load = createWbPackLoader({ storage: { getItem() { throw Error('blocked'); }, setItem() { throw Error('blocked'); } }, fetch: async () => response(pack('ok')) });
   await load('en', { translations }); assert.equal(translations['wb.sample'], 'ok');
 });
-
-// Actual main+workbench pack integration with in-memory storage, fetch and timers.
-// Run when either loader/merge/heal wiring changes; skip changes outside that boundary.
-// No browser, server or process is started. The runner must isolate HOME, ZYLOS_DIR,
-// PM2_HOME, short TMPDIR and a private tmux namespace, read back actual paths before
-// running, then clean up isolated resources; teardown restores all mocked globals.
-test('main translation healing keeps its cache primary-only and restores workbench labels', async context => {
-  const saved = storage(); let mainCalls = 0, workbenchCalls = 0;
-  context.mock.timers.enable({ apis: ['setTimeout'] });
-  const advance = async ms => {
-    context.mock.timers.tick(ms);
-    for (let i = 0; i < 30; i++) await Promise.resolve();
-  };
-  context.mock.method(globalThis, 'fetch', async url => {
-    if (url.endsWith('/i18n/en.json')) {
-      mainCalls++; return mainCalls <= 3 ? { ok: false, status: 404 } : response({ 'btn.actions': 'Actions' });
-    }
-    assert.equal(url, '/fixture/i18n/wb.en.json'); workbenchCalls++;
-    return response(pack(workbenchCalls === 1 ? 'cached-era' : 'fresh'));
-  });
-  const globals = { localStorage: saved, document: { documentElement: {}, querySelectorAll: () => [], dispatchEvent() {} } };
-  for (const [key, value] of Object.entries(globals)) {
-    const previous = Object.getOwnPropertyDescriptor(globalThis, key);
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-    context.after(() => { if (previous) Object.defineProperty(globalThis, key, previous); else Reflect.deleteProperty(globalThis, key); });
-  }
-  const main = await import('../public/js/i18n.js?workbench-heal');
-  main.setAssetRoot('/fixture'); const pending = main.initI18n('en');
-  await advance(0); await advance(400); await advance(800); await pending;
-  assert.equal(main.t('wb.sample'), 'cached-era');
-  await advance(5000);
-  assert.equal(main.t('btn.actions'), 'Actions'); assert.equal(main.t('wb.sample'), 'fresh');
-  const cachedPrimary = JSON.parse(saved.getItem('zylos-dashboard-i18n-en'));
-  assert.equal(cachedPrimary['btn.actions'], 'Actions'); assert.equal('wb.sample' in cachedPrimary, false);
-});
