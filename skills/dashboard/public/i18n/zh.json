@@ -199,7 +199,6 @@
   "agent_fleet.conn_refused": "连接失败",
   "agent_fleet.bad_payload": "响应异常",
   "agent_fleet.stale_data": "数据过旧",
-  "agent_fleet.no_activity": "待命中",
   "agent_fleet.sound_on": "提示音已开启 — 点击静音",
   "agent_fleet.sound_off": "提示音已静音 — 点击开启",
   "trends.tool_calls": "工具调用",

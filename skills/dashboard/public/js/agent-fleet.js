@@ -32,11 +32,6 @@ function money(value) {
   return `$${n.toFixed(2)}`;
 }
 
-function compactText(value, fallback) {
-  const text = String(value || '').replace(/\s+/g, ' ').trim();
-  return text || fallback;
-}
-
 function labelText(value, fallback = '--') {
   const text = String(value || '').trim();
   return text || fallback;
@@ -149,7 +144,6 @@ export function defaultAgentFleetLabels() {
     fixDown: 'The other Dashboard may be off or its address changed.',
     fixVersion: 'The other Dashboard needs an upgrade.',
     lastSeen: 'last reachable {time}',
-    noActivity: 'Standing by',
     dailyCost: 'Today',
     weeklyCost: '7 days',
     todayWeek: 'Today / 7 days',
@@ -218,12 +212,9 @@ export function buildAgentFleetView(fleet, options = {}) {
   const self = options.self || null;
   const ageText = options.ageText || ageLabel;
   const tiles = sortAgents(fleet?.agents).map((agent) => {
-    const activityFeed = Array.isArray(agent.activity_feed) ? agent.activity_feed : [];
     const mood = stateMood(agent);
     const offline = isOffline(agent);
     const isSelf = agent.self === true;
-    const running = activityFeed.find((entry) => entry?.label)?.label;
-    const activity = compactText(running || agent.activity, labels.noActivity);
     const link = agent.link && typeof agent.link === 'object' ? agent.link : null;
     const linkChip = buildLinkChip(link, labels);
     return {
@@ -235,11 +226,9 @@ export function buildAgentFleetView(fleet, options = {}) {
       hue: Number.isFinite(Number(agent.hue)) ? Number(agent.hue) : 0,
       stateLabel: stateLabel(agent, labels, mood),
       problem: offline ? problemOf(agent, labels) : null,
-      activity,
       linkQuality: String(link?.quality || 'ok').toLowerCase(),
       linkChip,
       latencyLabel: latencyLabel(link?.latency_ms),
-      activityFeed,
       rate7dPct: pctValue(agent.rate_limit_7d_pct),
       rate7dRecord: { recordedAt: agent.rate_limit_7d_recorded_at, live: agent.rate_limit_7d_live },
       dailyCostLabel: money(agent.daily_cost),
@@ -383,7 +372,7 @@ function renderTile(tile, labels, t) {
   </div>`;
   }
   const act = multi ? groupStates(tile, labels, t)
-    : `<div class="wb-f-act"><span class="wb-pill wb-${escapeHtml(pillKind[tile.mood] ?? 'unknown')}" data-mood="${escapeHtml(tile.mood)}"><span class="wb-dot"></span>${escapeHtml(tile.stateLabel)}</span><span title="${escapeHtml(tile.activity)}">${escapeHtml(tile.activity)}</span></div>`;
+    : `<div class="wb-f-act"><span class="wb-pill wb-${escapeHtml(pillKind[tile.mood] ?? 'unknown')}" data-mood="${escapeHtml(tile.mood)}"><span class="wb-dot"></span>${escapeHtml(tile.stateLabel)}</span></div>`;
   const pool = tile.groupSummary?.pool;
   const poolValue = pool?.used == null ? '--' : String(pool.used) + (pool.capacity == null ? '' : '/' + pool.capacity);
   const second = multi ? `<div>${escapeHtml(labels.pool)}<b>${escapeHtml(poolValue)}</b></div>` : '';

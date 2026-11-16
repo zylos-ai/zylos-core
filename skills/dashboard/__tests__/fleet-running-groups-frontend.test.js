@@ -162,7 +162,7 @@ test('instance cards ignore Origin child observations while preserving aggregate
     assert.doesNotMatch(html, /fleet-subagent-badge|⚡37|Subagent/);
     if (session_mode === 'single') {
       assert.match(html, /data-mood="busy"/);
-      assert.match(html, /Standing by/);
+      assert.doesNotMatch(html, /Standing by|<span title="/);
     }
   }
 });
