@@ -7,17 +7,27 @@ import { EventEmitter, once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { deliveryFixture } from './helpers/session-delivery-fixture.js';
 import { createLane } from '../router/lane.js';
+import Database from '../sqlite-driver.js';
+import { DATA_DIR } from '../c4-config.js';
+import { acquireDispatcherOwnership } from '../dispatcher-ownership.js';
 
 process.env.C4_DISPATCHER_DISABLE_MAIN = '1';
 const { main } = await import('../c4-dispatcher.js');
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+function assertOwnership(held) {
+  const probe = new Database(path.join(DATA_DIR, 'dispatcher-lock.db'), { timeout: 0 });
+  try {
+    if (held) assert.throws(() => probe.exec('BEGIN EXCLUSIVE'), { code: 'SQLITE_BUSY' });
+    else probe.exec('BEGIN EXCLUSIVE');
+  } finally { probe.close(); }
+}
 
 // this replaces extraction of the retired single-lane loop. Delivery
 // semantics are exercised directly in router-delivery{,-tmux,-pure}.test.js.
 test('production entry starts one factory and drains before closing DB on repeated signals', async () => {
   const signals = new EventEmitter(), drain = deferred(), events = [];
-  const controller = await main({ signals, log() {}, closeDatabase: () => events.push('close'),
-    create: () => { events.push('create'); return {
+  const controller = await main({ signals, log() {}, closeDatabase: () => { assertOwnership(true); events.push('close'); },
+    create: () => { assertOwnership(true); events.push('create'); return {
       start: async () => events.push('start'),
       stop: async () => { events.push('stop'); await drain.promise; events.push('drained'); },
     }; } });
@@ -25,9 +35,26 @@ test('production entry starts one factory and drains before closing DB on repeat
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(events, ['create','start','stop']);
   drain.resolve(); await controller.shutdown();
+  assertOwnership(false);
   assert.deepEqual(events, ['create','start','stop','drained','close']);
   assert.equal(signals.listenerCount('SIGTERM'), 0);
   assert.equal(signals.listenerCount('SIGINT'), 0);
+});
+
+test('a signal while waiting for ownership never starts recovery or releases the incumbent', { timeout: 5000 }, async () => {
+  const owner = await acquireDispatcherOwnership({ env: {} });
+  const signals = new EventEmitter(), events = [];
+  try {
+    const starting = main({ signals, log() {}, closeDatabase: () => events.push('close'),
+      create: () => { events.push('create'); throw Error('must not start'); } });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    signals.emit('SIGTERM');
+    const result = await starting;
+    assert.equal(result.dispatcher, undefined);
+    assert.deepEqual(events, ['close']);
+    assertOwnership(true);
+    assert.equal(signals.listenerCount('SIGTERM'), 0);
+  } finally { owner.release(); }
 });
 
 test('production startup failure stops owned work before closing DB', async () => {
@@ -67,10 +94,11 @@ test('PM2-style entry auto-starts and malformed stays alive/inert until signal',
 });
 
 test('signal during failed startup still drains once before closing DB', async () => {
-  const signals = new EventEmitter(), gate = deferred(), events = [];
+  const signals = new EventEmitter(), gate = deferred(), entered = deferred(), events = [];
   const starting = main({ signals, log() {}, closeDatabase: () => events.push('close'),
-    create: () => ({ start: async () => { await gate.promise; throw Error('late startup failure'); }, stop: async () => events.push('stop') }),
+    create: () => ({ start: async () => { entered.resolve(); await gate.promise; throw Error('late startup failure'); }, stop: async () => events.push('stop') }),
   });
+  await entered.promise;
   signals.emit('SIGTERM'); gate.resolve();
   await assert.rejects(starting, /late startup failure/);
   assert.deepEqual(events, ['stop','close']);

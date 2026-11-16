@@ -206,6 +206,22 @@ Any process with access to `c4-control.js` can enqueue keystroke controls. This 
 
 ## Service Management
 
+The dispatcher holds an exclusive SQLite transaction on
+`comm-bridge/dispatcher-lock.db` before creating the router or recovering running
+messages. This separate file stores no application data. Keep the file in place:
+unlinking it while a dispatcher is alive would break mutual exclusion. A crash or
+SIGKILL releases its system lock automatically.
+
+Under PM2, admission also requires the dispatcher's PID to match PM2's selected
+process. The usual observation is `pm_pid_path`; if PM2's duplicate stop callback
+removes that file, a bounded `pm2 jlist` read checks the actual slot (at most once
+per second). An untracked child exits without recovery; a previously admitted
+child notices replacement, stops scheduling, drains delivery, closes the C4
+database, then releases ownership. The selected child waits for that release in
+the same process rather than repeatedly exiting/restarting. Direct launches
+outside PM2 wait for the current owner to exit. No `ps` or process-tree setting
+is required for this ownership check.
+
 ```bash
 pm2 status c4-dispatcher
 pm2 logs c4-dispatcher
