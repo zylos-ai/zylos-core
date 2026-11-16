@@ -16,7 +16,7 @@ function setup(t) {
   fs.mkdirSync(path.dirname(script), { recursive: true });
   const marker = path.join(dir, 'component-started');
   fs.writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started')`);
-  return { ...result, dir, script, marker, api: result.store };
+  return { ...result, dir, script, marker, api: { ...result.store, getDb: () => result.db } };
 }
 const request = { channel: 'demo', endpoint: 'private-route-value' };
 
@@ -61,7 +61,8 @@ test('real OS ENOENT and EACCES retain committed audit without disclosing endpoi
       assert.equal(fs.existsSync(marker), false, 'component body must not execute');
     } finally { restore(); }
   }
-  assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='delivered'").get().n, 2);
+  assert.equal(db.prepare('SELECT count(*) n FROM conversations').get().n, 2);
+  assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='failed' AND delivery_action='spawn_failed'").get().n, 2);
 });
 
 test('actual aggregate argv/environment E2BIG keeps audit even when each argument is passable', async t => {
@@ -75,7 +76,8 @@ test('actual aggregate argv/environment E2BIG keeps audit even when each argumen
   } finally {
     keys.forEach((key, index) => { if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index]; });
   }
-  assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='delivered'").get().n, 1);
+  assert.equal(db.prepare('SELECT count(*) n FROM conversations').get().n, 1);
+  assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='failed' AND delivery_action='spawn_failed'").get().n, 1);
 });
 
 test('started syntax failure and signal termination are uncertain send failures with retained audits', async t => {
@@ -88,5 +90,6 @@ test('started syntax failure and signal termination are uncertain send failures 
       return true;
     });
   }
-  assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='delivered'").get().n, 2);
+  assert.equal(db.prepare('SELECT count(*) n FROM conversations').get().n, 2);
+  assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='failed' AND delivery_action='send_failed'").get().n, 2);
 });
