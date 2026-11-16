@@ -327,6 +327,9 @@ export function createMemoryScope({ document = globalThis.document, root, charts
   }
   function renderList() {
     if (!listRoot || stopped) return;
+    const focused = document.activeElement;
+    const focusPath = listRoot.contains(focused) ? focused.dataset.path : undefined;
+    const focusKey = listRoot.contains(focused) ? focused.dataset.collapseKey : undefined;
     const value = getTree();
     listRoot.replaceChildren();
     if (!value) { listRoot.append(element(document, 'p', t('memory.loading'), 'empty-state')); return; }
@@ -340,6 +343,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       if (files.length) {
         const section = element(document, 'div', undefined, 'wb-memory-section');
         const head = button(section, undefined, () => toggleCollapsed('shared'), 'wb-memory-section-h');
+        head.dataset.collapseKey = 'shared';
         head.setAttribute('aria-expanded', String(!isCollapsed('shared')));
         head.append(icon(document, 'chev', 'xs'), element(document, 'span', t('wb.memory.sharedTitle')));
         if (!isCollapsed('shared') || needle) {
@@ -364,6 +368,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
         const key = `session-groups/${group.sessionGroup}`;
         const block = element(document, 'div', undefined, 'wb-memory-group');
         const head = button(block, undefined, () => toggleCollapsed(key), 'wb-memory-group-h');
+        head.dataset.collapseKey = key;
         head.setAttribute('aria-expanded', String(!isCollapsed(key)));
         const name = element(document, 'span', undefined, 'wb-memory-group-name');
         name.append(element(document, 'b', label));
@@ -386,6 +391,14 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       }
     }
     if (!shown && needle) listRoot.append(element(document, 'p', t('wb.memory.noMatch'), 'empty-state'));
+    // Async file/backlog responses rebuild rows while the user may be tabbing.
+    const replacement = focusPath !== undefined
+      ? [...listRoot.querySelectorAll('.memory-file')].find(node => node.dataset.path === focusPath)
+      : focusKey !== undefined
+        ? [...listRoot.querySelectorAll('.wb-memory-section-h'), ...listRoot.querySelectorAll('.wb-memory-group-h')]
+          .find(node => node.dataset.collapseKey === focusKey)
+        : null;
+    replacement?.focus({ preventScroll: true });
   }
   function renderSummary() {
     if (!summaryRoot || stopped) return;
