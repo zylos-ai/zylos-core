@@ -35,12 +35,13 @@ for (const linked of ['npm root', 'installed root']) test(`prefix precheck accep
 
 // File/subprocess-only admission cases. The official runner isolates host paths;
 // no installation, service or tmux process runs. Rerun when npm admission changes.
-for (const kind of ['different root', 'missing destination', 'nonzero exit', 'missing CLI', 'empty output', 'relative root', 'spawn output failure']) {
-  test(`entry rejects ${kind} before opening a transaction`, async t => {
+for (const kind of ['different root', 'missing destination', 'nonzero exit', 'missing CLI', 'empty output', 'relative root', 'spawn output failure', 'npm timeout']) {
+  test(`entry rejects ${kind} before opening a transaction`, {timeout:35000}, async t => {
     const f = fixture(t), other = path.join(f.root, 'other');
     if (kind === 'different root') fs.mkdirSync(path.join(other, 'zylos'), {recursive:true});
     if (kind !== 'missing CLI') {
-      const script = kind === 'nonzero exit' ? 'process.exit(7);'
+      const script = kind === 'nonzero exit' ? 'console.log("private npm output");console.error("private npm error");process.exit(7);'
+        : kind === 'npm timeout' ? 'setTimeout(() => {}, 45000);'
         : kind === 'empty output' ? ''
         : kind === 'relative root' ? "console.log('relative');"
         : kind === 'spawn output failure' ? "process.stdout.write('x'.repeat(2 * 1024 * 1024));"
@@ -58,7 +59,16 @@ for (const kind of ['different root', 'missing destination', 'nonzero exit', 'mi
     assert.equal(result.code, 'UNSUPPORTED_INSTALL_LAYOUT');
     assert.match(result.error, /nothing was changed/);
     assert.ok(result.error.includes(f.coreDir));
-    if (kind === 'different root' || kind === 'missing destination') assert.ok(result.error.includes(path.join(other, 'zylos')));
+    if (kind === 'different root' || kind === 'missing destination') {
+      assert.ok(result.error.includes(path.join(other, 'zylos')));
+      assert.match(result.error, /Check npm root -g: remove or align the prefix setting in ~\/.npmrc or the npm_config_prefix environment variable, then run the upgrade again\./);
+    }
+    if (kind === 'nonzero exit') assert.match(result.error, /npm exited with code 7/);
+    if (kind === 'missing CLI') assert.match(result.error, /npm exited with code 1/);
+    if (kind === 'empty output' || kind === 'relative root') assert.match(result.error, /npm returned an empty or non-absolute global directory/);
+    if (kind === 'spawn output failure') assert.match(result.error, /npm execution failed \(ENOBUFS\)/);
+    if (kind === 'npm timeout') assert.match(result.error, /npm timed out after 30 seconds/);
+    assert.doesNotMatch(result.error, /private npm output|private npm error|\n\s+at /);
     assert.equal(result.transactionDir, undefined);
     assert.equal(result.rollback.attempted, false);
     assert.equal(result.recovery_required, false);
