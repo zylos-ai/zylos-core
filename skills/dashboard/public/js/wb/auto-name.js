@@ -14,7 +14,7 @@ export function namePromptResult(value, error, t = key => key, { single = false 
   // The Dashboard names the session it queued for: null is the only session of single mode.
   if (value?.ok === true) return { ok: true, text: t(value.sessionGroup === null ? 'wb.name.sentSingle' : 'wb.name.sent') };
   const body = error ? error.body : value;
-  const lone = body && 'sessionGroup' in body ? body.sessionGroup === null : single;
+  const lone = body && typeof body === 'object' && 'sessionGroup' in body ? body.sessionGroup === null : single;
   const detail = body ? responseError(body) : error?.message ?? '';
   if (body?.unknown || (error && !body)) return { ok: false, text: t(lone ? 'wb.name.unknownSingle' : 'wb.name.unknown'), detail };
   return { ok: false, text: t('wb.name.failed'), detail };
