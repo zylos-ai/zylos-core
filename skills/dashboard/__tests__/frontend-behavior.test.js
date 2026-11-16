@@ -2539,6 +2539,35 @@ test('workbench shell asks before sending automatic naming to Origin and reports
   assert.equal(requests.filter(item => item.options?.method === 'POST').every(item => item.path.endsWith('/naming-prompt')), true);
 });
 
+// Boundary: real mounted naming flow with injected DOM/transport/timers; no live I/O.
+// Run for naming completion or machine identity changes; unrelated layout/server changes may skip.
+test('automatic naming releases the dialog after returning to the original machine before polling', async context => {
+  const pending = wbDeferred();
+  const h = workbenchHarness(context, (path, fallback) => path.endsWith('/naming-prompt') ? pending.promise : fallback(path));
+  await wbTick(); await wbTick();
+  h.document.body = h.document.createElement('body');
+  const button = h.nodes.get('#wb-auto-name'), dialog = h.nodes.get('#wb-auto-name-dialog');
+  dialog.hidden = true;
+  button.dispatch('click'); await wbTick();
+  h.document.body.querySelectorAll('.wb-modal')[0].querySelectorAll('.wb-btn')[1].dispatch('click');
+  await wbTick(); await wbTick();
+  assert.match(dialog.textContent, /wb\.name\.sending/);
+  assert.equal(button.disabled, true);
+  h.setOwner('Other'); // No background refresh has observed the switch yet.
+  pending.resolve({ ok: true, controlId: 42, sessionGroup: 'origin' });
+  await wbTick(); await wbTick(); await wbTick();
+  h.setOwner('local');
+  h.mutate(); await wbTick();
+  assert.equal(dialog.hidden, true, 'the abandoned sending dialog is closed');
+  assert.equal(dialog.textContent, '');
+  assert.equal(button.disabled, false, 'automatic naming is available again');
+  button.dispatch('click'); await wbTick();
+  const question = h.document.body.querySelectorAll('.wb-modal')[0];
+  assert.ok(question, 'another naming run can start');
+  question.querySelectorAll('.wb-btn')[0].dispatch('click'); await wbTick();
+  assert.equal(button.disabled, false, 'cancelling the next run also releases the button');
+});
+
 // Single mode: the same flow names the only session, as the board does, in the question, while sending and after.
 test('workbench shell words automatic naming for the only session in single mode', async context => {
   const pending = wbDeferred();
