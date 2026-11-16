@@ -91,15 +91,28 @@ export async function sendExternal(request, message, { api, skillsDir, env = pro
   return new Promise((resolve, reject) => {
     let child;
     let inputError;
-    const spawnFailed = error => reject(sendError('COMPONENT_SPAWN_FAILED',
+    let settled = false;
+    const fail = (action, error) => {
+      if (settled) return;
+      settled = true;
+      try {
+        api.getDb().prepare("UPDATE conversations SET status='failed',delivery_action=? WHERE id=? AND direction='out'")
+          .run(action, record.id);
+      } catch (cause) {
+        error.cause = cause;
+      }
+      reject(error);
+    };
+    const spawnFailed = error => fail('spawn_failed', sendError('COMPONENT_SPAWN_FAILED',
       `Component did not start (${error.code || 'UNKNOWN'}); audit retained; not sent`));
     const args = stdinDelivery ? [script] : [script, ...(endpoint === null ? [] : [endpoint]), message];
     try { child = spawn(process.execPath, args, { env, stdio: stdinDelivery ? ['pipe', 'inherit', 'inherit'] : 'inherit' }); }
     catch (error) { spawnFailed(error); return; }
     child.once('error', spawnFailed);
     child.once('close', (code, signal) => {
-      if (code === 0 && !inputError) resolve(record);
-      else reject(Object.assign(sendError('SEND_FAILED', `Failed to send: ${inputError ? 'component stdin failed' : `component exit ${code ?? signal}`}; audit retained; delivery unconfirmed`), { exitCode: inputError && code === 0 ? 1 : code }));
+      if (settled) return;
+      if (code === 0 && !inputError) { settled = true; resolve(record); }
+      else fail('send_failed', Object.assign(sendError('SEND_FAILED', `Failed to send: ${inputError ? 'component stdin failed' : `component exit ${code ?? signal}`}; audit retained; delivery unconfirmed`), { exitCode: inputError && code === 0 ? 1 : code }));
     });
     if (stdinDelivery) {
       child.stdin.on('error', error => { inputError = error; });

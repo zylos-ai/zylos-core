@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createChannelDownCounter } from '../src/lib/workbench/attention.js';
+import { createChannelRestartCounter } from '../src/lib/workbench/attention.js';
 import { groupAttention } from '../public/js/wb/group-data.js';
 const row = (sessionGroup, runtime, flags = {}) => ({ sessionGroup, runtime, flags });
 
@@ -19,7 +19,7 @@ test('page authentication attention includes affected groups without guessing un
   const auth = result.problems.filter(problem => problem.kind === 'auth_failed');
   assert.equal(auth.length, 1); assert.deepEqual(auth[0].groups, ['running']);
   assert.deepEqual(result.problems.filter(problem => problem.kind === 'data_unreadable'),
-    [{ kind: 'data_unreadable', source: 'queue_summary_failed' }]);
+    [{ kind: 'data_unreadable', group: 'unknown-queue', displayName: 'unknown-queue', reasonCode: 'queue_summary_failed' }]);
 });
 test('page authentication includes blocked pending and starting rows but not quiet rows', () => {
   const result = groupAttention({ runtimeHealth: { claude: { health: 'auth_failed' } } }, {}, [
@@ -35,17 +35,14 @@ test('rate recovery is a page reminder and a clean sample has no reminder', () =
   }
   assert.deepEqual(groupAttention({}, {}, []), { problems: [], reminders: [] });
 });
-test('channel service needs two PM2 samples and resets after online without page-driven increments', () => {
-  const counter = createChannelDownCounter();
-  const data = status => ({ processes: [{ name: 'zylos-telegram', pm2_env: { status } }], collectedAt: 1 });
-  const instance = () => ({ services: { channels: [{ service: 'zylos-telegram', status: 'errored', down: counter.get('zylos-telegram') >= 2 }] } });
-  counter.update(data('errored'));
-  for (let i = 0; i < 3; i++) assert.deepEqual(groupAttention(instance(), {}, []).problems, []);
-  counter.update(data('errored'));
-  assert.deepEqual(groupAttention(instance(), {}, []).problems,
-    [{ kind: 'channel_down', service: 'zylos-telegram', pm2Status: 'errored' }]);
-  counter.update(data('online')); assert.equal(counter.get('zylos-telegram'), 0);
-  assert.deepEqual(groupAttention(instance(), {}, []).problems, []);
+test('channel attention uses send failures and restart threshold independently of groups', () => {
+  const channels = [{ channel: 'test', service: 'custom-service', status: 'online', lastSendFailed: true, consecutiveFailures: 3, restarts10m: 2 }];
+  assert.deepEqual(groupAttention({ services: { channels } }, {}, []).problems,
+    [{ kind: 'channel_send_failed', channel: 'test', count: 3 }]);
+  channels[0].restarts10m = 3;
+  assert.equal(groupAttention({ services: { channels } }, {}, []).problems[1].kind, 'channel_restarting');
+  channels[0].lastSendFailed = false; channels[0].restarts10m = 0; channels[0].status = 'stopped';
+  assert.equal(groupAttention({ services: { channels } }, {}, []).problems.length, 0);
 });
 test('page attention retains start failures and every distinct failed source', () => {
   const rows = [row('a', 'claude', { startFailed: { count: 3, lastAt: 5 }, unreadable: {
@@ -54,21 +51,18 @@ test('page attention retains start failures and every distinct failed source', (
   assert.equal(result.problems.length, 5); assert.equal(result.problems[0].count30m, 3);
   assert.equal(result.problems.filter(problem => problem.kind === 'data_unreadable').length, 4);
 });
-test('a service never observed in PM2 does not become a channel failure', () => {
-  const counter = createChannelDownCounter();
-  const online = { processes: [{ name: 'web-console', pm2_env: { status: 'online' } }] };
-  counter.update(online); counter.update(online);
-  assert.equal(counter.get('zylos-web-console'), 0);
-});
-test('an observed service disappearing from PM2 counts consecutive offline samples', () => {
-  const counter = createChannelDownCounter(), missing = { processes: [] };
-  counter.update({ processes: [{ name: 'zylos-telegram', pm2_env: { status: 'online' } }] });
-  counter.update(missing); assert.equal(counter.get('zylos-telegram'), 1);
-  counter.update(missing); assert.equal(counter.get('zylos-telegram'), 2);
-  counter.update({ processes: [{ name: 'zylos-telegram', pm2_env: { status: 'online' } }] });
-  assert.equal(counter.get('zylos-telegram'), 0);
-  counter.update(missing); assert.equal(counter.get('zylos-telegram'), 1);
-  counter.update(missing); assert.equal(counter.get('zylos-telegram'), 2);
+test('restart deltas start at zero and expire after ten minutes', () => {
+  const counter = createChannelRestartCounter();
+  const data = (at, restart_time) => ({ collectedAt: at, processes: [{ name: 'custom-service', pm2_env: { restart_time } }] });
+  counter.update(data(1000, 12)); assert.equal(counter.get('custom-service', 1000), 0);
+  counter.update(data(2000, 14)); assert.equal(counter.get('custom-service', 2000), 2);
+  counter.update(data(3000, 15)); assert.equal(counter.get('custom-service', 3000), 3);
+  counter.update(data(3000, 16)); assert.equal(counter.get('custom-service', 3000), 3);
+  assert.equal(counter.get('custom-service', 602000), 1);
+  assert.equal(counter.get('custom-service', 603000), 0);
+  counter.update(data(604000, 0)); counter.update(data(605000, 1));
+  assert.equal(counter.get('custom-service', 605000), 1);
+  assert.equal(createChannelRestartCounter().get('custom-service', 605000), 0);
 });
 test('page full-pool reminder counts current offline waits rather than a sampled wait count', () => {
   const counts = { pool: { used: 4, capacity: 3, waiting: 99 }, offline: { waitingSlot: 2 } };

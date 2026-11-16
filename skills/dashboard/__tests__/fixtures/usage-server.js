@@ -68,7 +68,7 @@ export async function usageServer(t, configBody = {}, { snapshot } = {}) {
     listener: '127.0.0.1:0', coreAndCli: 'mocked before import; no tmux or PM2 opened' }));
   if (snapshot) t.mock.module('../../src/lib/workbench/group-snapshot.js', { namedExports: {
     createGroupSnapshot: () => ({ getSnapshot: async () => snapshot(core), getCachedSnapshot: () => snapshot(core),
-      channelDownCounter: { update() {} }, hotTtlMs: () => 1800000 })
+      channelRestartCounter: { update() {} }, hotTtlMs: () => 1800000 })
   } });
   const { createServer } = await import(`../../src/index.js?usage=${Date.now()}-${Math.random()}`);
   server = createServer();

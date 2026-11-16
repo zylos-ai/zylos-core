@@ -340,7 +340,9 @@ export function fleetStateFromObjects(instance, counts, usage, running) {
       codex_update: instance.versions?.codex?.update ?? null },
     system_metrics: instance.resources,
     group_summary: fleetGroupSummary({ mode, readAt: counts.readAt, listKnown: counts.listKnown,
-      rows: summaryRows, groupCounts: counts, instance: { pool: counts.pool, autoRestarts: instance.autoRestarts, runtimeHealth: instance.runtimeHealth } }),
+      rows: summaryRows, groupCounts: counts, failedRows: running.failedRows?.map(row => ({ ...row, sessionGroup: row.id ?? row.sessionGroup })),
+      attentionFailures: running.attentionFailures,
+      instance: { ...instance, pool: counts.pool } }),
     rate_limit_7d_pct: account?.used_percentage ?? account?.usedPercentage ?? null,
     rate_limit_7d_live: account?.live ?? null, rate_limit_7d_recorded_at: account?.recordedAt ?? null,
     daily_cost: usage.today.cost, weekly_cost: usage.sevenDay.cost };
@@ -754,6 +756,26 @@ export class FleetPoller {
     const failed = responses.find(response => !response.ok);
     if (failed) return failed;
     const [instance, counts, usage, running] = await Promise.all(responses.map(response => readJsonOrBadPayload(response)));
+    if (running && counts?.offline?.startFailed > 0) {
+      try {
+        const failedRows = [], visited = new Set();
+        let cursor = null;
+        do {
+          const apiPath = '/api/groups/offline?flag=startFailed' + (cursor == null ? '' : '&cursor=' + encodeURIComponent(cursor));
+          const response = await fetchWithTimeout(this.fetch, joinUrl(agent.base_url, apiPath), {
+            method: 'GET', headers: { Authorization: `Bearer ${token}` }
+          }, this.timeoutMs);
+          if (!response.ok) throw reasonError('bad_payload');
+          const page = await readJsonOrBadPayload(response);
+          if (!Array.isArray(page.rows)) throw reasonError('bad_payload');
+          failedRows.push(...page.rows);
+          cursor = page.nextCursor ?? null;
+          if (cursor !== null && visited.has(cursor)) throw reasonError('bad_payload');
+          if (cursor !== null) visited.add(cursor);
+        } while (cursor !== null);
+        running.failedRows = failedRows;
+      } catch { running.attentionFailures = [...(running.attentionFailures ?? []), 'offline_start_failed']; }
+    }
     const state = fleetStateFromObjects(instance, counts, usage, running);
     return { ok: true, status: 200, json: async () => state };
   }

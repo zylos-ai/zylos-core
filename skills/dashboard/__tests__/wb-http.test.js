@@ -53,7 +53,8 @@ test('workbench HTTP routes retain read authentication, method guards and source
   } });
   t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
     createGroupSnapshot: options => {
-      service = createGroupSnapshot({ ...options, now: () => clock, c4Reader: { getInboundTimes: () => {
+      service = createGroupSnapshot({ ...options, now: () => clock,
+        readChannels: () => [{ channel: 'telegram', service: 'zylos-telegram' }], c4Reader: { getInboundTimes: () => {
           if (failInbound) throw Object.assign(new Error('private inbound failure'), { statusCode: 502, code: 'READ_FAILED', reason: 'READ_FAILED' });
           return [];
         } },
@@ -106,22 +107,28 @@ test('workbench HTTP routes retain read authentication, method guards and source
   const activity = await request('/api/groups/activity?range=60m');
   assert.equal(activity.status, 200); assert.equal((await activity.json()).groups['telegram:a'].cells.length, 60);
   // Exercise real collector.collect -> index _onUpdate -> counter and state engine.
-  t.mock.method(collector, '_execPm2Jlist', async () => JSON.stringify([{ name: 'zylos-telegram', pm2_env: { status: 'errored' } }]));
-  await collector.collect(); assert.equal(service.channelDownCounter.get('zylos-telegram'), 1);
+  let restarts = 12;
+  t.mock.method(collector, '_execPm2Jlist', async () => JSON.stringify([{ name: 'zylos-telegram', pm2_env: { status: 'online', restart_time: restarts } }]));
+  const collectPm2 = async () => {
+    const clockMock = t.mock.method(Date, 'now', () => clock);
+    try { await collector.collect(); } finally { clockMock.mock.restore(); }
+  };
+  await collectPm2(); assert.equal(service.channelRestartCounter.get('zylos-telegram', clock), 0);
   assert.equal(engine._state.pm2, collector.getLatestPM2Data());
   clock += 2100;
   await request('/api/groups/running');
-  assert.equal((await (await request('/api/instance')).json()).services.channels.find(row => row.channel === 'telegram').down, false);
-  await collector.collect(); clock += 2100;
+  assert.equal((await (await request('/api/instance')).json()).services.channels.find(row => row.channel === 'telegram').restarts10m, 0);
+  restarts = 15;
+  await collectPm2(); clock += 2100;
   await request('/api/groups/running');
-  assert.equal((await (await request('/api/instance')).json()).services.channels.find(row => row.channel === 'telegram').down, true);
+  assert.equal((await (await request('/api/instance')).json()).services.channels.find(row => row.channel === 'telegram').restarts10m, 3);
   // Counter failure must not suppress the existing PM2 state callback.
-  const realUpdate = service.channelDownCounter.update;
-  service.channelDownCounter.update = () => { throw new Error('fixture counter failure'); };
+  const realUpdate = service.channelRestartCounter.update;
+  service.channelRestartCounter.update = () => { throw new Error('fixture counter failure'); };
   const data = { processes: [] };
   assert.throws(() => collector._onUpdate(data), /fixture counter failure/);
   assert.equal(engine._state.pm2, data);
-  service.channelDownCounter.update = realUpdate;
+  service.channelRestartCounter.update = realUpdate;
   failSearch = true; clock += 2100;
   const failedSearch = await request('/api/groups/search?q=telegram');
   assert.equal(failedSearch.status, 502); assert.equal((await failedSearch.json()).error.code, 'GROUP_CATALOG_UNREADABLE');

@@ -105,7 +105,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     createGroupSnapshot: () => ({
       getSnapshot: async () => { snapshotReads++; cachedSnapshot = snapshot(); return cachedSnapshot; },
       getCachedSnapshot: () => cachedSnapshot,
-      channelDownCounter: { update() {} },
+      channelRestartCounter: { update() {} },
     }),
   } });
   t.mock.module('../src/lib/core-modules.js', { namedExports: {

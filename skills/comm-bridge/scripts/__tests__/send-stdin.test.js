@@ -68,9 +68,10 @@ function setup(t, { stdin = true, source } = {}) {
       C4_TEST_SPAWN_FAULT: fault } : {}) }, input: content, encoding: 'utf8', timeout: 5000, maxBuffer: 65536 }) };
 }
 
-function retained(f, count = 1) {
+function retained(f, count = 1, action = null) {
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM conversations').get().n, count);
-  assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations WHERE status='delivered'").get().n, count);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM conversations WHERE status=? AND delivery_action IS ?')
+    .get(action ? 'failed' : 'delivered', action).n, count);
 }
 
 test('stdin delivery preserves Unicode, quotes and a body too large for argv', { timeout: 10000 }, t => {
@@ -104,7 +105,7 @@ test('stdin declaration with an argv-only receiver fails after retaining its aud
   assert.ifError(result.error); assert.equal(result.status, 9);
   assert.match(result.stderr, /SEND_FAILED.*delivery unconfirmed/);
   assert.doesNotMatch(result.stdout, /Message sent/);
-  retained(f);
+  retained(f, 1, 'send_failed');
 });
 
 test('receiver failure after reading stdin remains an unconfirmed send', { timeout: 10000 }, t => {
@@ -112,7 +113,7 @@ test('receiver failure after reading stdin remains an unconfirmed send', { timeo
   const result = f.invoke('body');
   assert.ifError(result.error); assert.equal(result.status, 7);
   assert.match(result.stderr, /SEND_FAILED.*delivery unconfirmed/);
-  retained(f);
+  retained(f, 1, 'send_failed');
 });
 
 test('a receiver closing stdin cannot turn a broken pipe into success', { timeout: 10000 }, t => {
@@ -122,7 +123,7 @@ test('a receiver closing stdin cannot turn a broken pipe into success', { timeou
   assert.match(result.stderr, /SEND_FAILED.*component stdin failed.*delivery unconfirmed/);
   assert.doesNotMatch(result.stderr, /Unhandled 'error'/);
   assert.doesNotMatch(result.stdout, /Message sent/);
-  retained(f);
+  retained(f, 1, 'send_failed');
 });
 
 // Real OS launch faults are selected only for the test-owned receiver. Run for
@@ -143,7 +144,7 @@ test('stdin receiver spawn failure keeps the stored row without claiming deliver
     assert.match(result.stderr, /audit retained; not sent/);
     assert.doesNotMatch(result.stdout, /Message sent/);
     assert.equal(fs.existsSync(f.capture), false, 'receiver body must not execute');
-    retained(f, index + 1);
+    retained(f, index + 1, 'spawn_failed');
   }
 });
 
@@ -192,5 +193,5 @@ test('argv receiver signal exit retains the legacy null exit diagnostic', { time
   assert.ifError(result.error); assert.equal(result.status, 1);
   assert.match(result.stdout, /exit code: null/);
   assert.match(result.stderr, /component exit SIGTERM/);
-  retained(f);
+  retained(f, 1, 'send_failed');
 });

@@ -75,7 +75,7 @@ const compactOffline = (id, flags = {}) => ({ id, displayName: 'Offline ' + id, 
 test('canonical minimal rows compose attention from independent instance, counts and detail-free lists', () => {
   const instance = { default_runtime: 'codex', session_mode: { sessionMode: 'multi', transition: null, globalGate: null, blocked: false, supervisor: 'reachable', lastCompleted: null, lastEvents: [] },
     supervisorPaused: true, runtimeHealth: { codex: { health: 'auth_failed' }, claude: { health: 'rate_limited', cooldownUntil: 1234 } },
-    services: { online: 1, total: 2, channels: [{ channel: 'telegram', service: 'zylos-telegram', status: 'stopped', down: true }] } };
+    services: { online: 1, total: 2, channels: [{ channel: 'telegram', service: 'zylos-telegram', status: 'stopped', restarts10m: 3, lastSendFailed: true, consecutiveFailures: 2 }] } };
   const counts = { listKnown: false, running: { total: 2, states: { working: 2 } }, offline: { total: 2, waitingSlot: 1, startFailed: 1 }, pool: { used: 2, capacity: 2 } };
   const snapshot = groupSnapshot(instance, counts, { rows: [compactRunning('one', { blocked: { reason: 'auth_failed' } }), compactRunning('two', { blocked: { reason: 'auth_failed' }, unreadable: { reasons: ['status'] } })],
     failedRows: [compactOffline('failed', { startFailed: { count: 2, lastAt: 42 }, unreadable: { reasons: ['launch'] } })] });
@@ -84,8 +84,8 @@ test('canonical minimal rows compose attention from independent instance, counts
   assert.deepEqual(snapshot.attention.reminders.map(item => item.kind), ['supervisor_paused', 'rate_limited', 'pool_full']);
   const auth = snapshot.attention.problems.filter(item => item.kind === 'auth_failed');
   assert.equal(auth.length, 1); assert.deepEqual(auth[0].groups, ['one', 'two']);
-  assert.deepEqual(snapshot.attention.problems.filter(item => item.kind === 'data_unreadable').map(item => item.source), ['groups', 'status', 'launch']);
-  assert.equal(snapshot.attention.problems.find(item => item.kind === 'channel_down').service, 'zylos-telegram');
+  assert.deepEqual(snapshot.attention.problems.filter(item => item.kind === 'data_unreadable').map(item => item.reasonCode ?? item.source), ['status', 'launch', 'groups']);
+  assert.equal(snapshot.attention.problems.find(item => item.kind === 'channel_send_failed').channel, 'telegram');
   assert.equal(snapshot.attention.problems.find(item => item.kind === 'start_failed').group, 'failed');
   const document = createDocument(), root = document.createElement('div'), selected = [];
   renderAttention(root, snapshot, { document, onSelect: id => selected.push(id) });

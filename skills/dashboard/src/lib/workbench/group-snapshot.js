@@ -6,7 +6,7 @@ import { mergeGroups, previewTaskIds, safePreview, safeRaw } from './group-merge
 import { readTaskNames as defaultReadTaskNames } from './schedule-read.js';
 import { waitingReason } from './waiting-reason.js';
 import { classify, durationOf, sortRows, countRows } from './group-state.js';
-import { createChannelDownCounter } from './attention.js';
+import { createChannelRestartCounter, installedChannels } from './attention.js';
 import { activityBuckets } from './activity-buckets.js';
 import { workingHistory, END_TYPES, TOOL_TYPES, CHILD_TYPES, MAIN_ACTION_TYPES, MAIN_INPUT_TYPES, STOP_HOOK_LAG_MS } from './working.js';
 const { resolveSessionHotTtl } = await defaultLoadCoreModule('session-hot-ttl.js');
@@ -58,7 +58,8 @@ export function systemSample(sample) {
 /** No timers: collection happens only in response to a read request. */
 export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule = defaultLoadCoreModule,
   now = Date.now, cli = createCoreCli({ zylosDir }), sanitizer = new Sanitizer(zylosDir),
-  displayNames = emptyNames, readConfigRuntime = () => null, channelDownCounter = createChannelDownCounter(),
+  displayNames = emptyNames, readConfigRuntime = () => null, channelRestartCounter = createChannelRestartCounter(),
+  readChannels = () => installedChannels(zylosDir, loadCoreModule),
   readPm2 = () => null, readSystem = () => null, readTaskNames = ids => defaultReadTaskNames(zylosDir, ids) } = {}) {
   let cache = null, inflight = null, accountsCache = null;
   const activities = new Map();
@@ -255,12 +256,18 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     // Exact names establish membership even when single-mode lists show only Origin.
     const catalog = new Set((c4.ok ? c4.data.groups : []).map(item => item.sessionGroup));
     Object.defineProperty(value, 'groupEvidence', { value: { activations, positions, owners, rawGroups, catalog } });
-    const channels = new Set(rows.flatMap(row => row.c4?.componentName ? [row.c4.componentName] : []));
-    if (services) services.channels = [...channels].map(channel => {
-      const service = 'zylos-' + channel;
-      return { channel, service, status: pm2Data.processes.find(process => process.name === service)?.pm2_env?.status ?? null,
-        down: channelDownCounter.get(service) >= 2 };
-    });
+    if (services) {
+      let channels = [];
+      try { channels = await readChannels(); } catch { /* skill discovery unavailable */ }
+      services.channels = channels.flatMap(({ channel, service }) => {
+        const process = pm2Data.processes.find(process => process.name === service);
+        if (!process) return [];
+        const send = c4Reader?.getChannelSendState?.(channel);
+        return [{ channel, service, status: process.pm2_env?.status ?? null,
+          restarts10m: channelRestartCounter.get(service, at),
+          lastSendFailed: send?.lastSendFailed ?? null, consecutiveFailures: send?.consecutiveFailures ?? null }];
+      });
+    }
     value.rows = sortRows(rows);
     return value;
   }
@@ -313,7 +320,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     if (!result.ok) throw Object.assign(new Error('Group read failed'), { statusCode: 502, code: 'group_raw_failed', reason: 'c4_groups_failed' });
     return { raw: safeRaw(result.data.find(item => item.sessionGroup === key)?.preview?.messageRaw, sanitizer) };
   }
-  return { getSnapshot, getCachedSnapshot: () => cache?.value ?? null, hotTtlMs: () => hotTtlMs, activity, channelDownCounter, raw };
+  return { getSnapshot, getCachedSnapshot: () => cache?.value ?? null, hotTtlMs: () => hotTtlMs, activity, channelRestartCounter, raw };
 }
 
 function source({ ok, reason, detail, readAt }) { return { ok, ...(reason ? { reason } : {}), ...(detail ? { detail } : {}), readAt }; }

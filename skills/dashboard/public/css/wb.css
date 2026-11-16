@@ -1386,7 +1386,12 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 .wb-gbar-idle { background: var(--wb-idle); }
 .wb-gbar-unknown { background: var(--wb-off); }
 .wb-gbar-no_response { background: var(--wb-wait); }
-.wb-f-running { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-f-running { display: block; white-space: normal; overflow-wrap: anywhere; }
+.wb-f-attention:empty { display: none; }
+.wb-f-attention { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.wb-f-attention-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; max-width: 100%; margin: 0; padding: 0; border: 0; background: none; color: var(--wb-err); font: inherit; font-size: 12.5px; line-height: 20px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.wb-f-attention-item.wb-txt-warn { color: var(--wb-wait); }
+.wb-f-attention-detail { color: var(--text-dim); }
 .wb-f-problems { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 12.5px; }
 #fleet-view .wb-f-card .wb-f-problems > .wb-f-problem { min-height: 19px; height: 19px; display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; padding: 0; border: 0; background: none; color: var(--text); font: inherit; line-height: 19px; text-align: left; cursor: pointer; }
 .wb-f-problem .wb-dot { flex: none; background: var(--wb-err); }

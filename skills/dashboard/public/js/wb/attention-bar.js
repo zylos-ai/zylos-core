@@ -31,15 +31,16 @@ export function renderAttention(root, snapshot, { error, lastSuccess, now = Date
   };
   for (const [item, severity] of items) {
     const at = item.kind === 'rate_limited' ? recoveryTime(item.until, now) : null;
-    const values = { runtime: item.runtime ? item.runtime.charAt(0).toUpperCase() + item.runtime.slice(1) : '', count: item.groups?.length ?? item.count30m ?? '', service: item.service ?? '',
+    const values = { runtime: item.runtime ? item.runtime.charAt(0).toUpperCase() + item.runtime.slice(1) : '', count: item.count ?? item.groups?.length ?? item.count30m ?? '', channel: item.channel ?? '',
       time: at === null ? '' : clock(at), waiting: item.waiting ?? '' };
     const key = 'wb.attention.' + item.kind + (item.kind === 'rate_limited' && at === null ? '_unknown' : '');
     const group = item.group !== undefined ? item.group : item.groups?.length === 1 ? item.groups[0] : undefined;
     const subs = [];
-    if (item.group !== undefined) subs.push(nameOf(item.group));
+    if (item.group !== undefined) subs.push(item.displayName ?? nameOf(item.group));
+    if (item.kind === 'data_unreadable') subs.push(item.reasonCode ?? item.source ?? '');
     if (item.kind === 'auth_failed' && item.extraUnknown) subs.push(countLabel(t, 'wb.extraUnknown', item.extraUnknown).replace(/^\s*·\s*/, ''));
     const details = [item.reasonCode, item.source, item.pm2Status].filter(Boolean).join(' · ');
-    if (level === 'technical' && details) subs.push(details);
+    if (level === 'technical' && item.kind !== 'data_unreadable' && details) subs.push(details);
     root.append(entry(document, { severity, glyph: severity === 'reminder' ? 'clock' : 'alert', text: ['auth_failed', 'start_failed', 'pool_full'].includes(item.kind)
       ? countLabel(t, key, item.kind === 'pool_full' ? values.waiting : values.count, values) : t(key, values),
       sub: subs.join(' · '), group, onSelect, t }));

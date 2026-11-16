@@ -21,7 +21,7 @@ export function isolateInstanceObservations(t, root) {
   const snapshot={rows:[],mode:'single',view:'single',readAt:Date.now(),listKnown:true,instance:{},sources:{}};
   t.mock.module('../../src/lib/workbench/group-snapshot.js',{namedExports:{
     createGroupSnapshot:()=>({getSnapshot:async()=>snapshot,getCachedSnapshot:()=>snapshot,
-      channelDownCounter:{update(){}},hotTtlMs:()=>1800000}),
+      channelRestartCounter:{update(){}},hotTtlMs:()=>1800000}),
   }});
   t.after(()=>{for(const timer of intervals)clearInterval(timer);for(const reader of readers)reader.close();for(const store of stores)if(store.db.open)store.close();});
 }
