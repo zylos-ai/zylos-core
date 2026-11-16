@@ -107,6 +107,7 @@ for (const mode of ['npmrc-mismatch', 'env-mismatch', 'plain-match', 'env-overri
       assert.equal(report.result.code, 'UNSUPPORTED_INSTALL_LAYOUT');
       assert.ok(report.result.error.includes(f.installed));
       assert.ok(report.result.error.includes(path.join(f.expectedRoot, 'zylos')));
+      assert.match(report.result.error, /Check npm root -g: remove or align the prefix setting in ~\/.npmrc or the npm_config_prefix environment variable, then run the upgrade again\./);
       assert.doesNotMatch(report.result.error + child.stderr, /\n\s+at |Error:\n/);
       assert.equal(report.result.transactionDir, undefined);
       assert.equal(report.result.upgradeProtected, false);

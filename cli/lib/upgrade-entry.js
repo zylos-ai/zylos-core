@@ -38,9 +38,13 @@ export function validateUpgradeNpmPrefix(ctx) {
       if (fs.realpathSync(target) === fs.realpathSync(ctx.coreDir)) return;
     } catch {}
   }
+  const reason = result.error?.code === 'ETIMEDOUT' ? 'npm timed out after 30 seconds'
+    : result.error ? `npm execution failed (${result.error.code || 'unknown error'})`
+    : result.status !== 0 ? `npm exited with code ${result.status}`
+    : 'npm returned an empty or non-absolute global directory';
   const message = result.error || result.status !== 0 || !target
-    ? `Cannot determine where npm would install zylos (currently at ${ctx.coreDir}), so the upgrade was stopped and nothing was changed.`
-    : `npm would install zylos at ${target}, but zylos is currently at ${ctx.coreDir}; the directories do not match, so the upgrade was stopped and nothing was changed.`;
+    ? `Cannot determine where npm would install zylos (currently at ${ctx.coreDir}): ${reason}, so the upgrade was stopped and nothing was changed.`
+    : `npm would install zylos at ${target}, but zylos is currently at ${ctx.coreDir}; the directories do not match, so the upgrade was stopped and nothing was changed. Check npm root -g: remove or align the prefix setting in ~/.npmrc or the npm_config_prefix environment variable, then run the upgrade again.`;
   throw new UpgradeNpmPrefixError(message);
 }
 
