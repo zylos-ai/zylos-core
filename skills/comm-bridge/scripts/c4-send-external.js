@@ -96,7 +96,7 @@ export async function sendExternal(request, message, { api, skillsDir, env = pro
       if (settled) return;
       settled = true;
       try {
-        api.getDb().prepare("UPDATE conversations SET status='failed',delivery_action=? WHERE id=? AND direction='out'")
+        api.getDb().prepare("UPDATE conversations SET status='failed',delivery_action=CASE WHEN delivery_action='system_notice' THEN delivery_action ELSE ? END WHERE id=? AND direction='out'")
           .run(action, record.id);
       } catch (cause) {
         error.cause = cause;
