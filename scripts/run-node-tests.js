@@ -7,6 +7,7 @@ import { createTestEnvironment } from './test-environment.js';
 
 const ROOT = process.cwd();
 const ROOT_NODE_TESTS = [
+  'test/claude-upgrade-process.integration.test.js',
   'test/fleet-attention.integration.test.js',
   'test/fleet-attention-browser.test.js',
   'test/channel-delivery.integration.test.js',
@@ -61,6 +62,7 @@ const TEST_ROOTS = [
   path.join(ROOT, 'skills', 'comm-bridge', 'scripts', '__tests__'),
   path.join(ROOT, 'skills', 'scheduler', 'scripts', '__tests__'),
   path.join(ROOT, 'skills', 'zylos-memory', 'scripts', '__tests__'),
+  path.join(ROOT, 'skills', 'upgrade-claude', 'scripts', '__tests__'),
 ];
 
 function walk(dir, files = []) {
@@ -91,6 +93,7 @@ function isNodeTest(file) {
   if (rel.startsWith('skills/comm-bridge/scripts/__tests__/')) return true;
   if (rel.startsWith('skills/scheduler/scripts/__tests__/')) return true;
   if (rel.startsWith('skills/zylos-memory/scripts/__tests__/')) return true;
+  if (rel.startsWith('skills/upgrade-claude/scripts/__tests__/')) return true;
   return false;
 }
 

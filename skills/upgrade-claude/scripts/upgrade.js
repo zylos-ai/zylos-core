@@ -65,7 +65,7 @@ export function cancelExit(controls) {
 
 function isClaudeRunning() {
   try {
-    execSync('pgrep -f "claude.*--dangerously-skip-permissions" > /dev/null 2>&1');
+    execFileSync('pgrep', ['-u', String(process.getuid()), '-f', 'claude.*--dangerously-skip-permissions'], { stdio: 'ignore' });
     return true;
   } catch {
     return false;
