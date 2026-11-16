@@ -27,6 +27,9 @@ async function fixture(mode, root) {
   fs.writeFileSync(path.join(paths.zylos, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', session_mode: mode }));
   fs.symlinkSync(path.join(packageRoot, 'skills/comm-bridge'), path.join(skillsDir, 'comm-bridge'));
   fs.writeFileSync(path.join(channelDir, 'SKILL.md'), '---\nname: example\ntype: communication\nlifecycle:\n  service:\n    name: example-service\n---\n');
+  const lookalike = path.join(skillsDir, 'telegram-example');
+  fs.mkdirSync(lookalike);
+  fs.writeFileSync(path.join(lookalike, 'SKILL.md'), '---\nname: telegram-example\nlifecycle:\n  service:\n    name: telegram-example-service\n---\n');
   const sendScript = path.join(channelDir, 'scripts/send.js');
   fs.writeFileSync(sendScript, 'process.exit(1);');
   const serviceScript = path.join(paths.zylos, 'service.mjs');
@@ -83,7 +86,8 @@ async function fixture(mode, root) {
     return data;
   };
   try {
-    assert.deepEqual(await installedChannels(paths.zylos, loadCoreModule), [{ channel: 'example', service: 'example-service' }]);
+    assert.deepEqual(await installedChannels(paths.zylos, loadCoreModule), [{ channel: 'example', service: 'example-service' }],
+      'a channel-like name without type: communication is excluded');
     await pm2(['start', serviceScript, '--name', 'example-service', '--interpreter', process.execPath, '--no-autorestart'], process.env);
     await sample();
     assert.equal((await read()).value.instance.services.online, 1);
