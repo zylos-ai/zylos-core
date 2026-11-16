@@ -11,6 +11,9 @@ import { handleChatStream } from '../src/lib/chat/stream.js';
 const gated = { skip: process.env.ZYLOS_CHAT_INTEGRATION !== '1', timeout: 10000 };
 const hash = s => crypto.createHash('sha256').update(s).digest('hex');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Ignore SSE comments and empty separators, retaining every event/data line
+// (including incomplete lines) so heartbeat timing cannot mask record changes.
+const dataRecords = text => text.split(/\r?\n/).filter(line => line !== '' && !line.startsWith(':')).join('\n');
 async function until(check) {
   const end = Date.now() + 1500;
   while (Date.now() < end) { if (check()) return; await pause(5); }
@@ -136,14 +139,14 @@ test('Fleet closes a chat relay when an unfinished record exceeds64KiB', gated, 
   const f = await fixture(t), stream = f.open();
   await until(() => stream.text().includes('event: chat_ready'));
   f.quiet();
-  const before = stream.text();
+  const before = dataRecords(stream.text());
   f.rawChunk('data: ' + 'x'.repeat(32768));
   await pause(30);
   assert.equal(stream.ended(), false, 'an incomplete bounded record remains buffered');
-  assert.equal(stream.text(), before, 'no partial record is forwarded');
+  assert.equal(dataRecords(stream.text()), before, 'no partial record is forwarded');
   f.rawChunk('y'.repeat(32768));
   await until(() => stream.ended());
-  assert.equal(stream.text(), before, 'oversized incomplete record never reaches the browser');
+  assert.equal(dataRecords(stream.text()), before, 'oversized incomplete record never reaches the browser');
   await until(() => f.observer.subscriptions.size === 0);
 });
 
@@ -180,14 +183,14 @@ test('Fleet revalidates a revoked local browser while upstream is silent without
   const f = await fixture(t), stream = f.open();
   await until(() => stream.text().includes('event: chat_ready'));
   f.quiet();
-  const before = stream.text(), touches = f.touches();
+  const before = dataRecords(stream.text()), touches = f.touches();
   f.revoke();
   t.mock.timers.tick(14999);
   await pause(10);
   assert.equal(stream.ended(), false, 'no producer event or heartbeat triggers chunk revalidation');
   t.mock.timers.tick(1);
   await until(() => stream.ended());
-  assert.equal(stream.text(), before);
+  assert.equal(dataRecords(stream.text()), before);
   assert.equal(f.touches(), touches, 'independent idle relay check is readonly');
   await until(() => f.observer.subscriptions.size === 0);
 });
@@ -198,9 +201,9 @@ test('Fleet forwards each complete chat record promptly and stops after local cr
   const start=Date.now();f.change();
   await until(()=>stream.text().includes('event: chat_messages_changed'));
   assert.ok(Date.now()-start<1000,'no secret-guard tail waits for keepalive');
-  const before=stream.text();f.revoke();f.change();
+  const before=dataRecords(stream.text());f.revoke();f.change();
   await until(()=>stream.ended());
-  assert.equal(stream.text(),before,'revoked local browser receives no further chat metadata');
+  assert.equal(dataRecords(stream.text()),before,'revoked local browser receives no further chat metadata');
   await until(()=>f.observer.subscriptions.size===0);
 });
 
@@ -208,10 +211,10 @@ test('Fleet forwards each complete chat record promptly and stops after local cr
 test('Fleet chat framing rejects a secret split between transport chunks before forwarding the record',gated,async t=>{
   const f=await fixture(t),stream=f.open();
   await until(()=>stream.text().includes('event: chat_ready'));
-  const before=stream.text();
+  const before=dataRecords(stream.text());
   await f.leakSplitRecord();
   await until(()=>stream.ended());
-  assert.equal(stream.text(),before,'no part of the secret-bearing record reaches the browser');
+  assert.equal(dataRecords(stream.text()),before,'no part of the secret-bearing record reaches the browser');
 });
 
 test('Fleet chunk revalidation is readonly and rejects an idle-expired browser session',gated,async t=>{
@@ -224,9 +227,9 @@ test('Fleet chunk revalidation is readonly and rejects an idle-expired browser s
   }
   assert.equal(f.touches(),touches,'SSE data and keepalive records do not refresh the local cookie');
   assert.equal(f.session.last_activity_at,lastActivity);
-  const before=stream.text();f.session.last_activity_at=Date.now()-3_600_001;f.change();
+  const before=dataRecords(stream.text());f.session.last_activity_at=Date.now()-3_600_001;f.change();
   await until(()=>stream.ended());
-  assert.equal(stream.text(),before,'no data record crosses after local idle expiry');
+  assert.equal(dataRecords(stream.text()),before,'no data record crosses after local idle expiry');
   assert.equal(f.deletes(),0,'readonly stream validation never deletes a session row');
   await until(()=>f.observer.subscriptions.size===0);
 });
