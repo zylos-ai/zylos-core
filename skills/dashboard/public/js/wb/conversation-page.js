@@ -1756,6 +1756,7 @@ export function mountConversationPage({
     return !state.snapshot().error;
   }
   return {
+    blockRemote: state.blockRemote,
     streamSubscription: state.streamSubscription,
     streamStatus: state.streamStatus,
     streamEvent: state.streamEvent,

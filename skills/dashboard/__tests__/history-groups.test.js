@@ -56,10 +56,17 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
     if (sql.includes('GROUP BY session_id, runtime, session_group')) attributionScans++;
     return prepare(sql, ...args);
   });
+  let duringSubagentScan = null;
   const readdir = fs.readdir.bind(fs);
-  t.mock.method(fs, 'readdir', (...args) => {
+  t.mock.method(fs, 'readdir', async (...args) => {
     if (String(args[0]).startsWith(project)) directoryScans++;
-    return readdir(...args);
+    const files = await readdir(...args);
+    if (args[0] === subagents && duringSubagentScan) {
+      const insert = duringSubagentScan;
+      duringSubagentScan = null;
+      await insert();
+    }
+    return files;
   });
   const get = async (route, params = {}) => {
     const response = await fetch(`http://127.0.0.1:${server.address().port}/api/observer/history/${route}?${new URLSearchParams(params)}`);
@@ -67,13 +74,39 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
     observations.push({ mode, method: 'GET', route: '/api/observer/history/' + route, params, ...result });
     return result;
   };
+  const cold = await Promise.all(Array.from({ length: 6 }, () => get('entries', { session_group: 'telegram:team', session: 'team-session' })));
+  assert.ok(cold.every(result => result.status === 200));
+  assert.equal(directoryScans, 2, 'concurrent cold reads share one project/subagent scan');
   assert.deepEqual((await get('sessions')).body.sessions.map(row => row.id).sort(), ['origin-session', 'unattributed']);
   const team = await get('sessions', { session_group: 'telegram:team' });
   assert.deepEqual(team.body.sessions.map(row => row.id).sort(), ['team-session', 'team-session/agent-child']);
   assert.equal(team.body.current, null, 'offline groups need no live session');
+  const originalTeam = team.body.sessions.find(row => row.id === 'team-session');
+  await fs.appendFile(path.join(project, 'team-session.jsonl'), JSON.stringify({ type: 'ai-title', aiTitle: 'Updated title' }) + '\n');
+  await fs.utimes(path.join(project, 'team-session.jsonl'), new Date('2030-01-01'), new Date('2030-01-01'));
+  const updatedTeam = (await get('sessions', { session_group: 'telegram:team' })).body.sessions;
+  assert.equal(updatedTeam[0].id, 'team-session');
+  assert.equal(updatedTeam[0].title, 'Updated title');
+  assert.ok(updatedTeam[0].bytes > originalTeam.bytes);
+  assert.equal(updatedTeam[0].updatedAt, '2030-01-01T00:00:00.000Z');
   const codex = await get('sessions', { session_group: 'dashboard:codex' });
   assert.equal(codex.body.runtime, 'codex');
   assert.deepEqual(codex.body.sessions.map(row => row.id), ['codex-session']);
+  const otherRollout = path.join(codexRoot, 'rollout-history-other.jsonl');
+  await fs.copyFile(rollout, otherRollout);
+  t.after(() => fs.rm(otherRollout, { force: true }));
+  store.insertEvent({ id: 'other-codex', ingest_id: 'other-codex', session_id: 'other-codex', runtime: 'codex',
+    session_group: 'dashboard:codex', event_type: 'session_start', category: 'lifecycle', timestamp: '2026-01-01T00:00:00Z' });
+  store.upsertCodexRolloutPath({ sessionId: 'other-codex', transcriptPath: otherRollout, lastEventAt: '2026-01-01T00:00:00Z' });
+  assert.equal((await get('sessions', { session_group: 'dashboard:codex' })).body.sessions[0].id, 'other-codex');
+  const originalCodex = codex.body.sessions[0];
+  await fs.appendFile(rollout, JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } }) + '\n');
+  await fs.utimes(rollout, new Date('2030-01-02'), new Date('2030-01-02'));
+  store.upsertCodexRolloutPath({ sessionId: 'codex-session', transcriptPath: rollout, lastEventAt: '2030-01-02T00:00:00Z' });
+  const updatedCodex = (await get('sessions', { session_group: 'dashboard:codex' })).body.sessions[0];
+  assert.equal(updatedCodex.id, 'codex-session', 'last_event_at updates reorder a warm Codex list');
+  assert.ok(updatedCodex.bytes > originalCodex.bytes);
+  assert.equal(updatedCodex.updatedAt, '2030-01-02T00:00:00.000Z');
   for (const group of ['telegram:team', 'dashboard:codex']) {
     const session = group === 'telegram:team' ? 'team-session' : 'codex-session';
     for (const route of ['entries', 'content', 'search']) {
@@ -91,19 +124,31 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
   const scans = directoryScans;
   store.insertEvent({ id: 'ordinary-event', ingest_id: 'ordinary-event', session_id: 'team-session', session_group: 'telegram:team',
     runtime: 'claude', event_type: 'tool_use', category: 'tool', timestamp: '2026-01-02T00:00:00Z' });
-  await get('sessions', { session_group: 'telegram:team' });
+  await get('entries', { session_group: 'telegram:team', session: 'team-session' });
   assert.equal(attributionScans, 1, 'ordinary events reuse attribution');
   await get('entries', { session_group: 'telegram:team', session: 'team-session' });
   assert.equal(directoryScans, scans, 'warm requests reuse the scoped resolver paths');
   await fs.writeFile(path.join(project, 'new-team-session.jsonl'), record('new session needle'));
+  assert.equal((await get('entries', { session_group: 'telegram:team', session: 'new-team-session' })).status, 404,
+    'a file found before its event is excluded from the cached group snapshot');
   store.insertEvent({ id: 'new-team-event', ingest_id: 'new-team-event', session_id: 'new-team-session', session_group: 'telegram:team',
     runtime: 'claude', event_type: 'session_start', category: 'lifecycle', timestamp: '2026-01-02T00:00:00Z' });
+  assert.equal((await get('entries', { session_group: 'telegram:team', session: 'new-team-session' })).status, 200,
+    'the later attribution event invalidates the already discovered file snapshot');
   assert.ok((await get('sessions', { session_group: 'telegram:team' })).body.sessions.some(row => row.id === 'new-team-session'));
   assert.equal(attributionScans, 1, 'a new combination is added incrementally');
   assert.ok(directoryScans > scans, 'a new import refreshes transcript discovery');
   await fs.writeFile(path.join(subagents, 'agent-later.jsonl'), record('later child needle'));
   assert.ok((await get('sessions', { session_group: 'telegram:team' })).body.sessions.some(row => row.id === 'team-session/agent-later'),
     'new subagent files are discovered without any new attribution');
+  duringSubagentScan = async () => {
+    await fs.writeFile(path.join(subagents, 'agent-racing.jsonl'), record('racing child needle'));
+    await fs.utimes(subagents, new Date('2031-01-01'), new Date('2031-01-01'));
+  };
+  assert.equal((await get('sessions', { session_group: 'telegram:team' })).body.sessions.some(row => row.id === 'team-session/agent-racing'), false,
+    'this scan took its directory entries before the new child arrived');
+  assert.equal((await get('entries', { session_group: 'telegram:team', session: 'team-session/agent-racing' })).status, 200,
+    'the pre-scan directory version forces discovery on the next snapshot request');
   const external = new Store(path.join(root, 'history.db'));
   try {
     external.db.prepare('DELETE FROM runtime_events WHERE session_id = ?').run('new-team-session');

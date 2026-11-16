@@ -221,18 +221,35 @@ export class HistoryService {
         const scope = await this.resolveScope(url.searchParams);
         const key = `${url.searchParams.get('session_group') ?? 'origin'}:${scope.runtime}`;
         let cached = this.scopedParsers.get(key);
+        // A pending discovery is shared before checking its completed version.
+        const pending = cached?.pending;
+        if (cached) {
+          try { await cached.snapshot; }
+          catch (error) {
+            if (this.scopedParsers.get(key) === cached) this.scopedParsers.delete(key);
+            throw error;
+          }
+        }
         const discovery = cached?.parser.discoveryVersion ? await cached.parser.discoveryVersion() : null;
-        if (!cached || cached.revision !== scope.revision || cached.discovery !== discovery) {
+        // Another request may have published a replacement while this one awaited stat.
+        const latest = this.scopedParsers.get(key);
+        if (latest !== cached && latest?.revision === scope.revision) {
+          cached = latest;
+        } else if (!cached || cached.revision !== scope.revision || cached.discovery !== discovery
+            || (route === 'sessions' && !pending)) {
           const Parser = scope.runtime === 'codex' ? CodexHistory : ClaudeHistory;
           const parser = new Parser({ ...scope, zylosDir: this.config.zylosDir, store: this.store, indexCache: this.parser.indexCache });
           if (cached?.parser) {
             parser.metadataCache = cached.parser.metadataCache;
             if (parser.metadataLoads) parser.metadataLoads = cached.parser.metadataLoads;
           }
-          cached = { parser, revision: scope.revision, snapshot: parser.listSessions().then(async listing => {
-            cached.discovery = parser.discoveryVersion ? await parser.discoveryVersion() : null;
+          const next = { parser, revision: scope.revision, pending: true };
+          next.snapshot = parser.listSessions().then(listing => {
+            next.discovery = parser.discoverySnapshot ?? null;
+            next.pending = false;
             return { parser, listing, paths: parser.paths };
-          }) };
+          });
+          cached = next;
         }
         this.scopedParsers.delete(key);
         this.scopedParsers.set(key, cached);

@@ -148,7 +148,10 @@ const remoteAccess = createRemoteAccess({
   chatTab: () => document.querySelector('.tab[data-tab="chat"]'),
   activeTab: () => activeTabName(),
   openTab: name => activateTab?.(name),
-  onChange: () => workbench?.setViewDetail()
+  onChange: () => {
+    if (remoteAccess.closed()) chatPage?.blockRemote();
+    workbench?.setViewDetail();
+  }
 });
 
 function remoteIsReadOnly() {
@@ -1002,6 +1005,7 @@ async function resolveMemoryConflict(action) {
 
 let remoteAccessRequest = 0;
 async function refreshRemoteAccess() {
+  if (!viewedMachine().viewingRemote) return;
   const target = observerTargetKey(), request = ++remoteAccessRequest;
   try {
     const settings = await fetchAgentJson('/api/settings/chat');

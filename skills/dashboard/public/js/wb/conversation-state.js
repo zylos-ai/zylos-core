@@ -397,23 +397,29 @@ export function createConversationState({
     }
   };
   document?.addEventListener?.('visibilitychange', visibilityChanged);
+  function blockRemote() {
+    if (destroyed || blocked) return;
+    stopTimer();
+    resetStream();
+    cancelGroupPresenceRead();
+    updateError = null;
+    epoch++;
+    blocked = true;
+    cells.clear();
+    items = [];
+    nextCursor = null;
+    selectedId = null;
+    mode = null;
+    loading = false;
+    error = null;
+    emit();
+  }
   function failure(err, e, target = null) {
     if (!valid(e)) return;
     const code = err?.code || err?.payload?.error?.code || err?.message || 'chat_request_failed';
     if (code === 'remote_chat_disabled') {
-      stopTimer();
-      resetStream();
-      cancelGroupPresenceRead();
-      updateError = null;
-      epoch++;
-      blocked = true;
-      cells.clear();
-      items = [];
-      nextCursor = null;
-      selectedId = null;
-      mode = null;
-      loading = false;
-      error = null;
+      blockRemote();
+      return;
     } else if (target) {
       target.error = typeof code === 'string' ? code : 'chat_request_failed';
     } else {
@@ -952,7 +958,8 @@ export function createConversationState({
           && pollAt !== null && pollAt > now() + 2000 && !updateError) schedule(2000);
     } catch (err) {
       // Keep the last activity; the next poll asks again, unless this instance has no activity route at all.
-      if (err?.status === 404 && valid(e)) current.activity.unsupported = true;
+      if (err?.code === 'remote_chat_disabled') failure(err, e);
+      else if (err?.status === 404 && valid(e)) current.activity.unsupported = true;
     } finally {
       current.activity.reading = false;
     }
@@ -1307,6 +1314,7 @@ export function createConversationState({
     return outcome;
   }
   return {
+    blockRemote,
     snapshot,
     /** Expands or folds a subtask row; only expanded rows have their steps read, from now on every poll. */
     async toggleSubtask(key) {

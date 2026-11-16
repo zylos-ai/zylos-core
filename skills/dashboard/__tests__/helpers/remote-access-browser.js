@@ -34,6 +34,10 @@ export async function runRemoteAccessBrowser(t, sandbox) {
     await context.addInitScript(() => { try { localStorage.setItem('zylos-dashboard-locale', 'en'); localStorage.setItem('zylos-dashboard-detail-level', 'technical'); } catch {} });
     const page = await context.newPage();
     const errors = [], refusals = [], chatRequests = [];
+    let localSettingsReads = 0;
+    page.on('request', request => {
+      if (new URL(request.url()).pathname === '/api/settings/chat') localSettingsReads++;
+    });
     page.on('pageerror', error => { if (errors.length < 5) errors.push(error.message); });
     await page.route('**/*', async route => {
       const url = new URL(route.request().url());
@@ -65,6 +69,8 @@ export async function runRemoteAccessBrowser(t, sandbox) {
     });
     await page.goto(base + '/');
     const instance = page.waitForResponse(response => new URL(response.url()).pathname === `/fleet/${REMOTE}/api/instance`);
+    await page.locator(`#agent-fleet-root .agent-open[data-agent="${REMOTE}"]`).waitFor();
+    assert.equal(localSettingsReads, 0, 'local status refreshes do not read remote chat settings');
     await page.locator(`#agent-fleet-root .agent-open[data-agent="${REMOTE}"]`).click();
     await (await instance).finished();
     await page.waitForFunction(() => !document.querySelector('#agent-detail').hidden);

@@ -2237,3 +2237,32 @@ test('a new group absent from the snapshot has no status reading and recovers on
   assert.equal(reads, 2);
   assert.equal(f.state.snapshot().groupPresence, true);
 });
+
+
+test('remote settings revocation clears a mounted conversation even after it closes', async () => {
+  const f = await selected();
+  try {
+    f.state.setInput('private draft');
+    f.state.close();
+    f.state.blockRemote();
+    assert.equal(f.state.snapshot().blocked, true);
+    assert.equal(f.state.snapshot().messages.length, 0);
+    assert.equal(f.state.snapshot().items.length, 0);
+    assert.equal(f.state.snapshot().selectedId, null);
+    const reads = f.calls.length;
+    await f.timer.advance(90000);
+    assert.equal(f.calls.length, reads);
+  } finally { f.state.destroy(); }
+});
+
+test('remote refusal from optional activity clears the conversation', async () => {
+  let refuse = false;
+  const f = await selected(u => u.pathname.endsWith('/activity') && refuse
+    ? Promise.reject({ code: 'remote_chat_disabled' }) : undefined);
+  try {
+    refuse = true;
+    await f.timer.advance(5000);
+    assert.equal(f.state.snapshot().blocked, true);
+    assert.equal(f.state.snapshot().messages.length, 0);
+  } finally { f.state.destroy(); }
+});

@@ -22,7 +22,7 @@ export class CodexHistory extends HistoryParser {
   }
   async listSessions() {
     const rows = this.store?.listCodexRolloutPaths?.('codex') || this.store?.db?.prepare(
-      'SELECT * FROM codex_rollout_paths WHERE runtime = ? ORDER BY updated_at DESC'
+      'SELECT * FROM codex_rollout_paths WHERE runtime = ? ORDER BY last_event_at DESC, updated_at DESC, rowid DESC'
     ).all('codex') || [];
     const sessions = [], paths = new Map();
     const scanned = new Set();
