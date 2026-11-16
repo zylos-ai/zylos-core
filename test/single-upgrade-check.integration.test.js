@@ -48,7 +48,6 @@ test('single-session upgrade checks waiting work before /exit, at most 60 second
   const { SINGLE_UPGRADE_RESTART_CHECK_PROMPT } = await import('../skills/activity-monitor/scripts/reclaim-prompts.js');
   const checkPrefix = `Meanwhile, ${SINGLE_UPGRADE_RESTART_CHECK_PROMPT.split('\n')[0]}`;
   const checkNewlines = SINGLE_UPGRADE_RESTART_CHECK_PROMPT.split('\n').length - 1;
-  assert.ok(checkNewlines > 0, 'the approved check must retain its multiline formatting');
   // A recorder named claude in place of the runtime. tmux converts pasted
   // newlines to CRs with bracketed paste disabled. The known check's internal
   // separators belong to one input; only the separately sent Enter submits it.

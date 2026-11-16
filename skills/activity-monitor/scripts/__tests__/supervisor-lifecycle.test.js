@@ -1755,7 +1755,7 @@ test('configuration restart still sends one control with the check and the five 
   assert.equal(f.controls.length, 1);
   const [control] = f.controls;
   assert.equal(control.content, CONFIG_RECLAIM_PROMPT);
-  assert.match(control.content, /it will be interrupted by this restart[\s\S]*Create a wake-up only for a step of your own ongoing task[\s\S]*submit ready_for_config_reclaim/);
+  assert.match(control.content, /run its configuration restart check now\.$/);
   assert.equal(control.ackDeadlineAt, Math.floor((f.now + 300000) / 1000));
   assert.equal(control.appendAckSuffix, true); assert.equal(control.priority, 1); assert.equal(control.bypassState, true);
   assert.equal(f.fences.size, 0);

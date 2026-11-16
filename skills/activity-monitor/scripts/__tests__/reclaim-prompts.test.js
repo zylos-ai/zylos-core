@@ -11,68 +11,77 @@ import { migrateDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
 import { CONFIG_RECLAIM_PROMPT, PRE_RECLAIM_CHECK_PROMPT, SINGLE_UPGRADE_RESTART_CHECK_PROMPT, UPGRADE_RESTART_CHECK_PROMPT } from '../reclaim-prompts.js';
 
-const schedulerCli = fileURLToPath(new URL('../../../scheduler/scripts/cli.js', import.meta.url));
-const requestCli = fileURLToPath(new URL('../supervisor-request.js', import.meta.url));
-const ADD = /Otherwise run `node "([^"]+)" add "<self-contained check>" --in "<delay>" --json` in this session/;
-const LIST = /First run `node "([^"]+)" list --json`/;
-const PROMPTS = { idle: PRE_RECLAIM_CHECK_PROMPT, upgrade: UPGRADE_RESTART_CHECK_PROMPT,
-  config: CONFIG_RECLAIM_PROMPT, singleUpgrade: SINGLE_UPGRADE_RESTART_CHECK_PROMPT };
+const skillsDir = fileURLToPath(new URL('../../../', import.meta.url));
+const checks = fs.readFileSync(new URL('../../references/session-checks.md', import.meta.url), 'utf8');
+const normalized = checks.replace(/\s+/g, ' ');
+const section = heading => {
+  const from = normalized.indexOf(`## ${heading}`);
+  const to = normalized.indexOf(' ## ', from + 3);
+  assert.ok(from >= 0, `Missing section ${heading}`);
+  return normalized.slice(from, to < 0 ? undefined : to);
+};
+// Installed commands in the reference resolve to this checkout's skills.
+const installed = command => command.replace('~/zylos/.claude/skills/', skillsDir);
+const ADD = /Otherwise run `node (\S+) add "<self-contained check>" --in "<delay>" --json` in this session/;
+const LIST = /First run `node (\S+) list --json`/;
+const PROMPTS = {
+  'idle reclaim check': [PRE_RECLAIM_CHECK_PROMPT, 'This session group has been idle and will be reclaimed.'],
+  'upgrade restart check': [UPGRADE_RESTART_CHECK_PROMPT, 'This session group will be restarted for an upgrade.'],
+  'single-session upgrade restart check': [SINGLE_UPGRADE_RESTART_CHECK_PROMPT, 'This session will be restarted for an upgrade.'],
+  'configuration restart check': [CONFIG_RECLAIM_PROMPT, 'The launch configuration changed and this session group will be restarted with it.'],
+};
 
-// Exact approved reclaim wording; installed CLI paths are the only substitutions.
-const approvedIdle = `This session group has been idle and will be reclaimed. During this check, do not send messages to anyone.
-
-1. Only one thing can hold the reclaim: work this session itself started that is still running and whose result it is waiting for — a background command, a Monitor watcher, a background subagent or workflow. A Memory Sync is not such work: the supervisor already waits for it before reclaiming, so do not defer for it. If there is such work, run \`node "${requestCli}" defer-reclaim --reason "<what is still running>"\`, confirm it reports ok:true, then acknowledge this control.
-2. Otherwise write the session handoff: list open business items as they stand now, checking each against its current record and leaving out any that have finished. Replies, reviews or decisions you are waiting for from people or other sessions need nothing more: an incoming reply wakes this group again.
-3. Create a wake-up only for a step of your own ongoing task that waits on an external system whose result will not arrive as a message to this group (for example CI on a PR you opened, or a deployment rolling out). First run \`node "${schedulerCli}" list --json\`; if a pending task of this group already covers it, do not create another. Otherwise run \`node "${schedulerCli}" add "<self-contained check>" --in "<delay>" --json\` in this session without any --reply option, and confirm it reports ok:true. Do not create scheduled tasks for anything else.
-
-Then acknowledge.`;
-
-test('idle reclaim and capacity eviction use the approved narrow check', () => {
-  assert.equal(PRE_RECLAIM_CHECK_PROMPT, approvedIdle);
-  assert.ok(fs.statSync(requestCli).isFile());
+test('each check control states its reason and names its check in the activity-monitor reference', () => {
+  for (const [check, [prompt, reason]] of Object.entries(PROMPTS)) {
+    assert.equal(prompt, `${reason} Read references/session-checks.md in the activity-monitor skill and run its ${check} now.`);
+    assert.ok(normalized.toLowerCase().includes(`**${check}**`), `${check} is described in the reference`);
+    assert.doesNotMatch(prompt, /defer-reclaim|scheduler|handoff|send messages/, `${check} rules stay in the reference`);
+  }
+  assert.match(normalized, /In single-session mode it is the only session group and `\$ZYLOS_SESSION_GROUP` is unset\./);
 });
 
-test('restart checks describe interrupted background work without offering deferral', () => {
-  for (const [name, prompt] of Object.entries(PROMPTS).filter(([name]) => name !== 'idle')) {
-    assert.ok(prompt.includes('it will be interrupted by this restart: name it in the session handoff so the next session can rerun or check it.'), name);
-    assert.doesNotMatch(prompt, /defer-reclaim|Only one thing can hold the reclaim|A Memory Sync is not such work/, name);
-    assert.equal(prompt.slice(prompt.indexOf('2. '), prompt.indexOf('\n\nThen')),
-      approvedIdle.slice(approvedIdle.indexOf('2. '), approvedIdle.indexOf('\n\nThen')), name);
-  }
-  assert.ok(UPGRADE_RESTART_CHECK_PROMPT.startsWith('This session group will be restarted for an upgrade.'));
-  assert.ok(SINGLE_UPGRADE_RESTART_CHECK_PROMPT.startsWith('This session will be restarted for an upgrade.'));
-  assert.ok(SINGLE_UPGRADE_RESTART_CHECK_PROMPT.includes('$ZYLOS_SESSION_GROUP is unset.'));
-  assert.ok(CONFIG_RECLAIM_PROMPT.startsWith('The launch configuration changed and this session group will be restarted with it.'));
-  assert.ok(CONFIG_RECLAIM_PROMPT.endsWith('Then submit ready_for_config_reclaim through the supervisor. After acceptance, finish this control and the current turn.'));
+test('every check prohibits messages and requires a current-record handoff without completed items', () => {
+  assert.ok(normalized.includes('Run the named check now, following the steps below in order. During this check, do not send messages to anyone.'));
+  assert.equal(section('2. Handoff'), '## 2. Handoff Otherwise write the session handoff: list open business items as they stand now, '
+    + 'checking each against its current record and leaving out any that have finished. Replies, reviews or decisions you are waiting for '
+    + 'from people or other sessions need nothing more: an incoming reply wakes this group again.');
+  assert.doesNotMatch(normalized, /more than a day|tell the person responsible|handle each such item/);
 });
 
-test('all checks prohibit messages and require current-record handoff without completed items', () => {
-  for (const [name, prompt] of Object.entries(PROMPTS)) {
-    for (const phrase of ['During this check, do not send messages to anyone.', 'checking each against its current record',
-      'leaving out any that have finished', 'an incoming reply wakes this group again']) {
-      assert.ok(prompt.includes(phrase), `${name}: ${phrase}`);
-    }
-    assert.doesNotMatch(prompt, /more than a day|tell the person responsible|handle each such item/);
-  }
+test('only the idle reclaim check offers deferral; restart checks name interrupted work in the handoff', () => {
+  const running = section('1. Running work');
+  const [idle, restart] = running.split('- **Upgrade, single-session upgrade and configuration restart checks:**');
+  assert.ok(idle.includes('**Idle reclaim check:** Only one thing can hold the reclaim: work this session itself started that is still running '
+    + 'and whose result it is waiting for — a background command, a Monitor watcher, a background subagent or workflow. A Memory Sync is not '
+    + 'such work: the supervisor already waits for it before reclaiming, so do not defer for it. If there is such work, run '
+    + '`node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js defer-reclaim --reason "<what is still running>"`, '
+    + 'confirm it reports ok:true, then acknowledge this control.'));
+  assert.equal(restart.trim(), 'If work this session itself started is still running (a background command, a Monitor watcher, a background '
+    + 'subagent or workflow), it will be interrupted by this restart: name it in the session handoff so the next session can rerun or check it.');
+  assert.equal(normalized.match(/defer-reclaim/g).length, 1);
+  assert.ok(fs.statSync(installed('~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js')).isFile());
+  const finish = section('4. Finish');
+  assert.ok(finish.includes('**Idle reclaim, upgrade and single-session upgrade restart checks:** Then acknowledge.'));
+  assert.ok(finish.includes('**Configuration restart check:** Then submit ready_for_config_reclaim through the supervisor. '
+    + 'After acceptance, finish this control and the current turn.'));
 });
 
 test('wake-ups are limited to own tasks waiting on systems that do not message the group', () => {
-  for (const [name, prompt] of Object.entries(PROMPTS)) {
-    assert.ok(prompt.includes('only for a step of your own ongoing task'), name);
-    assert.ok(prompt.includes('whose result will not arrive as a message to this group'), name);
-    assert.ok(prompt.includes('Do not create scheduled tasks for anything else.'), name);
-    assert.ok(prompt.includes('if a pending task of this group already covers it, do not create another'), name);
-    assert.ok(prompt.search(LIST) < prompt.search(ADD), name);
-    assert.equal(prompt.match(LIST)?.[1], schedulerCli, name);
-    assert.equal(prompt.match(ADD)?.[1], schedulerCli, name);
-    assert.ok(prompt.includes('without any --reply option, and confirm it reports ok:true.'), name);
-  }
+  const wake = section('3. Wake-ups');
+  assert.ok(wake.includes('only for a step of your own ongoing task'));
+  assert.ok(wake.includes('whose result will not arrive as a message to this group'));
+  assert.ok(wake.includes('Do not create scheduled tasks for anything else.'));
+  assert.ok(wake.includes('if a pending task of this group already covers it, do not create another'));
+  assert.ok(wake.search(LIST) >= 0 && wake.search(LIST) < wake.search(ADD));
+  assert.equal(wake.match(LIST)[1], '~/zylos/.claude/skills/scheduler/scripts/cli.js');
+  assert.equal(wake.match(ADD)[1], '~/zylos/.claude/skills/scheduler/scripts/cli.js');
+  assert.ok(wake.includes('without any --reply option, and confirm it reports ok:true.'));
 });
 
-// Boundary: the prompt's own scheduler commands against the real scheduler CLI and a private
-// ZYLOS_DIR/HOME/TMPDIR (no service, tmux or live database). Run when the check prompt or the
+// Boundary: the reference's own scheduler commands against the real scheduler CLI and a private
+// ZYLOS_DIR/HOME/TMPDIR (no service, tmux or live database). Run when the check reference or the
 // scheduler's add/list/session-group binding changes; other changes may skip it.
-test('scheduler commands written in the check prompt save and list the task under the session group they run in', t => {
+test('scheduler commands written in the check reference save and list the task under the session group they run in', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reclaim-check-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, '.claude/skills/telegram'), { recursive: true });
@@ -81,9 +90,8 @@ test('scheduler commands written in the check prompt save and list the task unde
   t.after(() => c4.close());
   migrateDatabase(c4, c4Schema, { allowNew: true });
   createStore(() => c4, { validateComponent: () => true }).registerChannelNamespace('telegram', 'tg');
-  const [, addCli] = PRE_RECLAIM_CHECK_PROMPT.match(ADD);
-  const [, listCli] = PRE_RECLAIM_CHECK_PROMPT.match(LIST);
-  assert.deepEqual([SINGLE_UPGRADE_RESTART_CHECK_PROMPT.match(ADD)[1], SINGLE_UPGRADE_RESTART_CHECK_PROMPT.match(LIST)[1]], [addCli, listCli]);
+  const addCli = installed(normalized.match(ADD)[1]);
+  const listCli = installed(normalized.match(LIST)[1]);
   const run = (cli, args, group) => {
     const env = { PATH: process.env.PATH, HOME: root, ZYLOS_DIR: root, TMPDIR: root, PM2_HOME: path.join(root, '.pm2'), TZ: 'UTC',
       ...(group === undefined ? {} : { ZYLOS_SESSION_GROUP: group }) };

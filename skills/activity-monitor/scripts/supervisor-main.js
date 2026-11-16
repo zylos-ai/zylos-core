@@ -21,7 +21,7 @@ import { findMatchingToolRule } from './tool-rules.js';
 import { PoolCapacity } from './pool-capacity.js';
 import { messageForStatus } from '../../comm-bridge/scripts/status-notice-templates.js';
 import { systemSendEnvironment } from '../../comm-bridge/scripts/c4-system-send-env.js';
-import { CONFIG_RECLAIM_PROMPT, PRE_RECLAIM_CHECK_PROMPT, UPGRADE_RESTART_CHECK_PROMPT } from './reclaim-prompts.js';
+import { CONFIG_RECLAIM_PROMPT, PRE_RECLAIM_CHECK_PROMPT, ROTATION_PROMPT, UPGRADE_RESTART_CHECK_PROMPT } from './reclaim-prompts.js';
 const { readSessionMode, readZylosConfigOrThrow } = await loadCoreModule('config.js');
 const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
@@ -102,7 +102,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     pendingAlerts.add(pending);pending.finally(()=>pendingAlerts.delete(pending)).catch(log);return pending;
   };
   const prompts={
-    ROTATION_PROMPT:()=> 'Context usage has reached the session threshold. Complete required handoff and use the new-session skill to continue in a fresh session.',
+    ROTATION_PROMPT,
     CONFIG_RECLAIM_PROMPT,
     PRE_RECLAIM_CHECK_PROMPT,
     UPGRADE_RESTART_CHECK_PROMPT,

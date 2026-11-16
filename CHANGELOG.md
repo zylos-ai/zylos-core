@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Component shard declarations no longer claim or remove legacy SessionStart hooks. The retired `claimHooks` field is ignored with a warning without disabling the shard. Components migrating to shards must remove their own old hooks from both Claude and Codex settings in `post-upgrade`, then synchronize hooks.
 
+### Fixed
+- Memory Sync, idle reclaim, upgrade restart and configuration restart controls are now one-line instructions that point to the skill holding their rules, so Claude Code no longer receives them as pasted material (over 800 characters or more than two line breaks) and declines to act on them. The Dashboard conversation-naming control is now one line too. The reclaim and restart check rules moved unchanged into the activity-monitor `references/session-checks.md`; the Sync result rules stay in the zylos-memory skill's Parent result handling section. A contract test keeps every control prompt, as delivered with the longest ack suffix, within 800 characters and two line breaks.
+
 ### Internal
 - Allow the real-model memory test harness to run reference index rebuild, archive, and unarchive commands with fixture-bound arguments and environment.
 - Move Dashboard tests and fixtures to `skills/dashboard/__tests__/`, update test paths, and check repository test locations and exclusions.

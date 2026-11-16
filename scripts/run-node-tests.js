@@ -41,6 +41,7 @@ const ROOT_NODE_TESTS = [
   'test/chat-quote.integration.test.js',
   'test/origin-conversation.integration.test.js',
   'test/test-location.test.js',
+  'test/control-prompt-length.test.js',
   'test/group-deletion.integration.test.js',
   'test/group-deletion-storage.integration.test.js',
   'test/reference-memory-templates.test.js',

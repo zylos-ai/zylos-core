@@ -8,7 +8,10 @@ import { Store } from '../store.js';
 import { inspectDatabase, TARGET_SCHEMA_VERSION } from '../schema.js';
 import { ChatConversations } from './conversations.js';
 
-export const AUTO_NAME_PREFIX = '[Dashboard conversation naming]\n';
+// Controls are typed into the runtime whole, and Claude Code treats input with more than two
+// line breaks as pasted material, so the instruction is one line. The prefix (no trailing
+// newline) also matches naming controls queued before this change.
+export const AUTO_NAME_PREFIX = '[Dashboard conversation naming]';
 export const AUTO_NAME_DEADLINE_SECONDS = 300;
 const root = env => env.ZYLOS_DIR || path.join(env.HOME || os.homedir(), 'zylos');
 
@@ -31,8 +34,8 @@ function isReply(content) {
 export function namingInstruction(group, zylosDir) {
   const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
   const command = `node ${quote(path.join(zylosDir, '.claude/skills/dashboard/scripts/conversation-name.js'))} ${quote(group)} '<name>' --json`;
-  return AUTO_NAME_PREFIX + '根据这个对话的当前上下文起一个恰当的短名字（20 字以内，语言与对话一致）。\n'
-    + `用以下命令写回名称，将 <name> 替换为名称并正确转义 shell 参数：\n${command}\n`
+  return AUTO_NAME_PREFIX + ' 根据这个对话的当前上下文起一个恰当的短名字（20 字以内，语言与对话一致）。'
+    + `用以下命令写回名称，将 <name> 替换为名称并正确转义 shell 参数： ${command} `
     + '如果无法起名，用同一命令写入 unknown。名称已存在时保持现有名称。完成写回并确认结果后结束；不要在对话里回复用户。';
 }
 

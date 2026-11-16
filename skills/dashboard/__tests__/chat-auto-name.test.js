@@ -67,9 +67,23 @@ test('first committed Agent reply queues one control for its own group and later
   assert.match(control.raw_content, /20 字以内/);
   assert.match(control.raw_content, /conversation-name\.js/);
   assert.match(control.raw_content, /不要在对话里回复用户/);
+  assert.equal(control.raw_content.includes('\n'), false, 'one line, so the runtime does not fold it as pasted text');
   f.send(first); assert.equal(f.count(), 1, 'repeated channel delivery cannot duplicate work');
   f.send(f.out()); assert.equal(f.count(), 1, 'second reply never rechecks eligibility');
   assert.equal(f.core.prepare('SELECT COUNT(*) AS n FROM conversations').get().n, 3, 'control is absent from history');
+});
+
+// Same real channel/SQLite boundary and isolation as above. Run when the naming
+// prefix or its queue match changes; unrelated UI work can skip. A control queued
+// in the earlier multiline form still counts as this group's naming work.
+test('a naming control queued in the earlier multiline form still prevents a second one', gate, t => {
+  const f = fixture(t);
+  const now = Math.floor(Date.now() / 1000);
+  f.core.prepare(`INSERT INTO control_queue(raw_content,content,priority,status,retry_count,ack_deadline_at,created_at,updated_at,session_group)
+    VALUES(?,?,3,'pending',0,?,?,?,?)`).run('[Dashboard conversation naming]\n根据这个对话的当前上下文起名。',
+    '[Dashboard conversation naming]\n根据这个对话的当前上下文起名。', now + 300, now, now, group);
+  f.send(f.out());
+  assert.equal(f.count(), 1);
 });
 
 // Real naming transaction and private SQLite, with the enqueue boundary failing.
