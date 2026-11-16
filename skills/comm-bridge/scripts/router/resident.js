@@ -2,9 +2,17 @@ import { loadCoreModule } from './core-modules.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
+import { runCurrentUserPgrep } from '../process-check.js';
 const { LEGACY_TMUX_NAMES } = await loadCoreModule('session-group-paths.js');
 
 const exec = promisify(execFile);
+const nodeInvocation = '^([^[:space:]]*/)?[n]ode(js)?( --[^[:space:]]+)* ';
+const maintenancePatterns = [
+  `${nodeInvocation}([^[:space:]]*/)?restart-claude/scripts/restart[.]js([[:space:]]|$)`,
+  `${nodeInvocation}([^[:space:]]*/)?upgrade-claude/scripts/upgrade[.]js([[:space:]]|$)`,
+  '^([^[:space:]]*/)?[c]url[[:space:]]+(-[^[:space:]]+[[:space:]]+)*https://claude[.]ai/install[.]sh([[:space:]]|$)',
+  '^([^[:space:]]*/)?(ba)?sh -c curl -fsSL https://claude[.]ai/install[.]sh [|] bash([[:space:]]|$)',
+];
 /** Returns the first running maintenance pattern, or null. When pgrep cannot
  * be run at all, maintenance cannot be observed: that is reported through
  * `unavailable` and treated as none running, so it never blocks startup.
@@ -12,8 +20,8 @@ const exec = promisify(execFile);
  * accessible PATH directory (a PATH directory denies access) or is not
  * executable. Timeouts and other exit codes still reject. */
 export async function runningMaintenance({ execute = exec, unavailable = () => {} } = {}) {
-  for (const pattern of ['[r]estart-claude', '[u]pgrade-claude', '[c]laude.ai/install.sh']) {
-    try { await execute('pgrep', ['-f', pattern], { timeout: 500 }); return pattern; }
+  for (const pattern of maintenancePatterns) {
+    try { await runCurrentUserPgrep(pattern, execute, { timeout: 500 }); return pattern; }
     catch (error) {
       if (error.code === 1) continue;
       if (error.code === 'ENOENT' || error.code === 'EACCES') { unavailable(error); return null; }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { once } from 'node:events';
 import { spawn, spawnSync } from 'node:child_process';
 import { routerFixture } from './helpers/router-fixture.js';
 import { createSinglePreparation, createLegacyMigration, runningMaintenance } from '../router/resident.js';
@@ -18,8 +19,15 @@ test('single preparation waits at most 300 seconds, then cleanup and instruction
 
 test('maintenance scan is async argv-only and distinguishes no match from observation failure', async () => {
   const patterns = [], unavailable = [];
-  assert.equal(await runningMaintenance({ execute: async (_,args) => { patterns.push(args); if (patterns.length < 2) throw Object.assign(Error(),{code:1}); } }), '[u]pgrade-claude');
-  assert.deepEqual(patterns, [['-f','[r]estart-claude'],['-f','[u]pgrade-claude']]);
+  const match = await runningMaintenance({ execute: async (file,args,options) => {
+    assert.equal(file, 'pgrep');
+    assert.deepEqual(args.slice(0, 3), ['-u', String(process.getuid()), '-f']);
+    assert.deepEqual(options, { timeout: 500 });
+    patterns.push(args[3]);
+    if (patterns.length < 2) throw Object.assign(Error(), { code: 1 });
+  } });
+  assert.match(match, /upgrade-claude\/scripts\/upgrade/);
+  assert.equal(patterns.length, 2);
   assert.equal(await runningMaintenance({ execute: async () => { throw Object.assign(Error(),{code:1}); },
     unavailable: error => unavailable.push(error) }), null);
   await assert.rejects(runningMaintenance({ execute: async () => { throw Object.assign(Error('timeout'),{code:'ETIMEDOUT'}); },
@@ -96,12 +104,98 @@ test('single preparation with a PATH directory that denies access starts every t
 
 const hasPgrep = spawnSync('pgrep', ['-f', '[n]o-such-process-pattern']).status === 1;
 
+// Real pgrep and disposable processes only; run for maintenance matching changes,
+// skip unrelated edits. No live service, tmux socket or database is opened here.
+function isolationReadback() {
+  const home = fs.realpathSync(process.env.HOME);
+  assert.notEqual(home, fs.realpathSync(os.userInfo().homedir));
+  const root = path.dirname(home);
+  for (const key of ['ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
+    assert.ok(process.env[key]?.startsWith(root + path.sep), `${key} must be isolated`);
+  }
+  console.log(JSON.stringify({ HOME: home, ZYLOS_DIR: process.env.ZYLOS_DIR,
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR,
+    socket: path.join(process.env.TMPDIR, 'tmux.sock'), database: 'unused', uid: process.getuid() }));
+}
+
+async function maintenanceProcess(t, script, mentions = []) {
+  isolationReadback();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'maintenance-'));
+  const file = path.join(root, script);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.copyFileSync(new URL('./fixtures/maintenance-process.js', import.meta.url), file);
+  const child = spawn(process.execPath, [file, ...mentions], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+  const exited = once(child, 'exit');
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await exited;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const [ready] = await once(child, 'message', { signal: AbortSignal.timeout(5000) });
+  assert.equal(ready.ready, true);
+  return { child, exited };
+}
+
+// Covers same-UID incidental arguments, including the concurrent test runner.
+// Run for matching changes; skip unrelated work. Children are stopped and awaited.
+test('maintenance ignores same-user commands that only mention script words or test paths', { skip: !hasPgrep, timeout: 15000 }, async t => {
+  const grep = spawn('grep', ['upgrade-claude'], { stdio: ['pipe', 'ignore', 'ignore'] });
+  const grepExited = once(grep, 'exit');
+  t.after(async () => {
+    if (grep.exitCode === null && grep.signalCode === null) grep.kill('SIGKILL');
+    await grepExited;
+  });
+  await once(grep, 'spawn');
+  await maintenanceProcess(t, 'grep.js', ['upgrade-claude', 'restart-claude', 'https://claude.ai/install.sh']);
+  await maintenanceProcess(t, 'runner.js', ['skills/upgrade-claude/scripts/__tests__/process-check.test.js',
+    'skills/restart-claude/scripts/restart.js', 'skills/upgrade-claude/scripts/upgrade.js']);
+  assert.equal(await runningMaintenance(), null);
+});
+
+// Exact argv contract excludes other OS users without a privileged test fixture.
+// Real cross-user process acceptance runs on the review host.
+test('every maintenance pattern restricts pgrep to the current OS user', async () => {
+  let calls = 0;
+  assert.equal(await runningMaintenance({ execute: async (file, args) => {
+    assert.equal(file, 'pgrep');
+    assert.deepEqual(args.slice(0, 3), ['-u', String(process.getuid()), '-f']);
+    calls++;
+    throw Object.assign(Error('No current-user match'), { code: 1 });
+  } }), null);
+  assert.equal(calls, 4);
+});
+
+// Real upgrade script invocation remains observable. Run for maintenance matching;
+// no installer/control code runs, only a disposable fixture at the script path.
+test('maintenance recognizes a current-user upgrade script invocation', { skip: !hasPgrep, timeout: 15000 }, async t => {
+  await maintenanceProcess(t, 'upgrade-claude/scripts/upgrade.js');
+  assert.match(await runningMaintenance(), /upgrade-claude\/scripts\/upgrade/);
+});
+
+// Real pgrep filters a real script child by OS ownership. Only the observer UID
+// is substituted, so this needs no sudo, setuid or second-user process fixture.
+// Run for user-filter changes; actual second-user startup is review acceptance.
+test('maintenance excludes a real restart script process belonging to another observed UID', { skip: !hasPgrep, timeout: 15000 }, async t => {
+  const uid = process.getuid();
+  await maintenanceProcess(t, 'restart-claude/scripts/restart.js');
+  assert.match(await runningMaintenance(), /restart-claude\/scripts\/restart/);
+  t.mock.method(process, 'getuid', () => uid === 0 ? 65534 : 0);
+  assert.equal(await runningMaintenance(), null);
+});
+
+// Harmless fixture titles exercise real pgrep against the installer command-line
+// shapes; no curl, network or installer is executed. Run for pattern changes.
+for (const title of ['curl -fsSL https://claude.ai/install.sh',
+  '/bin/sh -c curl -fsSL https://claude.ai/install.sh | bash']) {
+  test(`maintenance recognizes the installer command line ${title}`, { skip: !hasPgrep, timeout: 15000 }, async t => {
+    await maintenanceProcess(t, 'held.js', ['--title', title]);
+    assert.match(await runningMaintenance(), /install/);
+  });
+}
+
 test('with pgrep, a running restart-claude process holds single preparation until it exits', { skip: !hasPgrep && 'pgrep is not installed', timeout: 15000 }, async t => {
-  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', 'restart-claude'], { stdio: 'ignore' });
-  const exited = new Promise(resolve => child.once('exit', resolve));
-  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
-  await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
-  assert.equal(await runningMaintenance(), '[r]estart-claude');
+  const { child, exited } = await maintenanceProcess(t, 'restart-claude/scripts/restart.js');
+  assert.match(await runningMaintenance(), /restart-claude\/scripts\/restart/);
   let now = 0; const waits = [], logs = [], calls = [];
   const prepare = createSinglePreparation({ now: () => now, log: line => logs.push(line),
     sleep: async ms => { waits.push(ms); now += ms; if (waits.length === 2) { child.kill('SIGTERM'); await exited; } },

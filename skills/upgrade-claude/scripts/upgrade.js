@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadCoreModule } from '../../activity-monitor/scripts/core-modules.js';
 import { getModeTransition } from '../../comm-bridge/scripts/c4-db.js';
+import { runCurrentUserPgrep } from '../../comm-bridge/scripts/process-check.js';
 const { requestRuntimeRestart, enqueueSingleUpgradeExit, SINGLE_UPGRADE_CHECK_ACK_DEADLINE_SECONDS } = await loadCoreModule('request-runtime-restart.js');
 const { readSessionMode } = await loadCoreModule('config.js');
 
@@ -65,7 +66,7 @@ export function cancelExit(controls) {
 
 function isClaudeRunning() {
   try {
-    execFileSync('pgrep', ['-u', String(process.getuid()), '-f', 'claude.*--dangerously-skip-permissions'], { stdio: 'ignore' });
+    runCurrentUserPgrep('claude.*--dangerously-skip-permissions', execFileSync, { stdio: 'ignore' });
     return true;
   } catch {
     return false;
