@@ -240,8 +240,9 @@ export async function runVisualCase(t, sandbox) {
       await page.locator('.chat-message').first().waitFor();
       expectedChatDenial = true;
       await toggle(false);
-      if (operation === 'switchGroup') await page.locator('[data-conversation-id^="d:"]').first().click();
-      else if (operation === 'refresh') await page.locator('[data-action="refresh"]').click();
+      // Polling may already have replaced the controls with the denial notice.
+      if (operation === 'switchGroup') await page.evaluate(sel => document.querySelector(sel)?.click(), '[data-conversation-id^="d:"]');
+      else if (operation === 'refresh') await page.evaluate(sel => document.querySelector(sel)?.click(), '[data-action="refresh"]');
       await page.waitForFunction(() => document.querySelector('#wb-chat')?.children.length === 1
         && document.querySelector('#wb-chat > .chat-notice'));
       assert.equal(await page.locator('#wb-chat [data-conversation-id], #wb-chat button, #wb-chat .chat-message').count(), 0);
