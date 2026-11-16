@@ -7,18 +7,20 @@ export function sendNamePrompt({ request }) {
 }
 
 /** What the person is told after confirming: sent only when C4 queued the prompt, otherwise why not. */
-export function namePromptResult(value, error, t = key => key) {
-  if (value?.ok === true) return { ok: true, text: t('wb.name.sent') };
+export function namePromptResult(value, error, t = key => key, { single = false } = {}) {
+  // The Dashboard names the session it queued for: null is the only session of single mode.
+  if (value?.ok === true) return { ok: true, text: t(value.sessionGroup === null ? 'wb.name.sentSingle' : 'wb.name.sent') };
   const body = error ? error.body : value;
-  if (body?.unknown || (error && !body)) return { ok: false, text: t('wb.name.unknown', { reason: body ? responseError(body) : error.message }) };
+  const lone = body && 'sessionGroup' in body ? body.sessionGroup === null : single;
+  if (body?.unknown || (error && !body)) return { ok: false, text: t(lone ? 'wb.name.unknownSingle' : 'wb.name.unknown', { reason: body ? responseError(body) : error.message }) };
   return { ok: false, text: t('wb.name.failed', { reason: responseError(body) }) };
 }
 
 /** The answer after confirming: sending, then sent or failed, with a close button. */
-export function renderNameResult(root, state, { document = root.ownerDocument, t = key => key, onClose = () => {} } = {}) {
+export function renderNameResult(root, state, { document = root.ownerDocument, t = key => key, onClose = () => {}, single = false } = {}) {
   root.replaceChildren();
   root.append(element(document, 'h3', t('wb.name.auto')));
-  const message = element(document, 'p', state === 'sending' ? t('wb.name.sending') : state.text,
+  const message = element(document, 'p', state === 'sending' ? t(single ? 'wb.name.sendingSingle' : 'wb.name.sending') : state.text,
     state === 'sending' ? 'wb-name-status' : state.ok ? 'wb-name-status wb-name-sent' : 'wb-name-status wb-name-failed');
   message.setAttribute('role', state !== 'sending' && !state.ok ? 'alert' : 'status');
   root.append(message);

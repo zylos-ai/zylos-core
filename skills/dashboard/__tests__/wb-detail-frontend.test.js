@@ -610,6 +610,13 @@ test('automatic naming posts once and says sent only for a queued prompt', async
   assert.deepEqual(namePromptResult({ ok: false, unknown: true, error: { code: 'RESULT_UNKNOWN', message: 'timed out' } }, undefined, t),
     { ok: false, text: 'wb.name.unknown {"reason":"RESULT_UNKNOWN · timed out"}' });
   assert.deepEqual(namePromptResult(undefined, new Error('Failed to fetch'), t), { ok: false, text: 'wb.name.unknown {"reason":"Failed to fetch"}' });
+  // Single mode: the Dashboard answers with no session group, and the text names the only session, as the board does.
+  assert.deepEqual(namePromptResult({ ok: true, controlId: 7, sessionGroup: null }, undefined, t), { ok: true, text: 'wb.name.sentSingle' });
+  assert.deepEqual(namePromptResult({ ok: true, controlId: 8, sessionGroup: 'origin' }, undefined, t, { single: true }), { ok: true, text: 'wb.name.sent' },
+    'the queued target decides, not the page\'s last view of the mode');
+  assert.deepEqual(namePromptResult({ ok: false, unknown: true, sessionGroup: null, error: { code: 'RESULT_UNKNOWN', message: 'timed out' } }, undefined, t),
+    { ok: false, text: 'wb.name.unknownSingle {"reason":"RESULT_UNKNOWN · timed out"}' });
+  assert.deepEqual(namePromptResult(undefined, new Error('Failed to fetch'), t, { single: true }), { ok: false, text: 'wb.name.unknownSingle {"reason":"Failed to fetch"}' });
 });
 
 test('automatic naming result dialog shows sending, then the outcome as plain text with a close button', () => {
@@ -618,6 +625,7 @@ test('automatic naming result dialog shows sending, then the outcome as plain te
   assert.equal(sending.message.textContent, 'wb.name.sending');
   assert.equal(sending.message.getAttribute('role'), 'status');
   assert.equal(sending.close, null, 'nothing to close while the request runs');
+  assert.equal(renderNameResult(root, 'sending', { document, t, single: true }).message.textContent, 'wb.name.sendingSingle');
   let closed = 0;
   const sent = renderNameResult(root, { ok: true, text: 'wb.name.sent' }, { document, t, onClose: () => closed++ });
   assert.equal(sent.message.textContent, 'wb.name.sent');

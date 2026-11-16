@@ -18,7 +18,7 @@ const MEMORY_SHARE = 0.81;
 // (fixtures/workbench-browser-api.js). Dashboard actions are recorded and answered as done; nothing runs.
 export async function startPage(sandbox) {
   const actions = [], unserved = new Set(), reads = new Map();
-  // Automatic naming's answer; a case sets it before confirming.
+  // Automatic naming's answer, or a promise of it to hold the reply; a case sets it before confirming.
   const naming = { answer: { ok: true, controlId: 41, sessionGroup: 'origin' } };
   let offlineHold = null;
   const now = Date.now();
@@ -37,7 +37,7 @@ export async function startPage(sandbox) {
       }
       if (url.pathname === '/api/groups/naming-prompt' && req.method === 'POST') {
         actions.push({ action: 'naming-prompt', body: null });
-        sendJson(res, 200, naming.answer); return;
+        sendJson(res, 200, await naming.answer); return;
       }
       if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
       if (url.pathname.startsWith('/api/')) {
@@ -262,8 +262,9 @@ export async function runWorkbenchBrowser(t, sandbox) {
   });
 
   // Automatic naming: the in-page question first; cancelling sends nothing, confirming sends one request, and the
-  // answer says sent only when the prompt was queued for Origin, otherwise why not. The dialog fits the screen.
-  await step('automatic naming asks first, then says sent or why not, on a phone and a desktop screen', async () => {
+  // answer says sent only when the prompt was queued for Origin, otherwise why not. While it sends and while the answer
+  // is shown the button is off, so a second click neither sends again nor hides the first answer. The dialog fits the screen.
+  await step('automatic naming asks first, sends once, then says sent or why not, on a phone and a desktop screen', async () => {
     const sent = () => actions.filter(item => item.action === 'naming-prompt').length;
     for (const [width, height] of [[390, 844], [1280, 800]]) {
       const { page, context, errors, shot } = await open(width, height, '/');
@@ -279,7 +280,8 @@ export async function runWorkbenchBrowser(t, sandbox) {
           assert.equal(layout.documentWidth, width, `${width} ${name}: no sideways scrolling`);
         }
       };
-      await button.waitFor({ state: 'visible' });
+      // The button is in the served page before the workbench wires it; the board's group count is drawn after.
+      await page.locator('#wb-dist .wb-dist-total').waitFor();
       const before = sent();
       await button.click();
       await question.waitFor();
@@ -292,15 +294,25 @@ export async function runWorkbenchBrowser(t, sandbox) {
       assert.equal(sent(), before, `${width}: cancelling sends nothing`);
       assert.equal(await result.isHidden(), true, `${width}: cancelling opens nothing`);
 
-      naming.answer = { ok: true, controlId: 41, sessionGroup: 'origin' };
+      let reply; naming.answer = new Promise(resolve => { reply = resolve; });
       await button.click();
       await question.locator('.wb-modal-acts button').last().click();
+      await result.locator('[role="status"]', { hasText: '正在发送给 Origin' }).waitFor();
+      assert.equal(await button.isDisabled(), true, `${width}: the button is off while sending`);
+      await button.click({ force: true });
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(300);
+      assert.equal(await question.count(), 0, `${width}: a click while sending asks nothing`);
+      assert.equal(await result.isVisible(), true, `${width}: Esc while sending keeps the dialog`);
+      reply({ ok: true, controlId: 41, sessionGroup: 'origin' });
       await result.locator('[role="status"]', { hasText: '已发送给 Origin' }).waitFor();
       assert.equal(sent(), before + 1, `${width}: confirming sends one request`);
+      assert.equal(await button.isDisabled(), true, `${width}: the button stays off while the answer is shown`);
       await fits(result, 'sent');
       await shot('auto-name-sent');
       await result.locator('button').click();
       await result.waitFor({ state: 'hidden' });
+      assert.equal(await button.isDisabled(), false, `${width}: closing the answer gives the button back`);
 
       naming.answer = { ok: false, sessionGroup: 'origin', error: { code: 'CONTROL_TARGET_REQUIRED', message: 'A control target is required in multi or during transition' } };
       await button.click();
