@@ -183,9 +183,11 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     assert.equal(anonymous.status, 401, 'a request without a login is refused');
     const readOnly = await naming('read');
     assert.equal(readOnly.status, 403);
-    assert.deepEqual(await readOnly.json(), { error: 'insufficient_scope', required: 'admin' });
+    assert.deepEqual(await readOnly.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
     const read = await naming('admin', { method: 'GET' });
-    assert.equal(read.status, 405, 'the old read of the prompt is gone');
+    assert.equal(read.status, 404, 'the old read of the prompt is gone');
+    assert.deepEqual(await read.json(), { ok: false, error: { code: 'not_found', message: 'not_found' } });
+    assert.equal((await naming('admin', { method: 'HEAD' })).status, 404);
     assert.equal(enqueues().length, before, 'refused requests never reach C4');
 
     const script = path.join(root, '.claude/skills/comm-bridge/scripts/c4-control.js');
@@ -213,7 +215,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     const logged = t.mock.method(console, 'error', () => {});
     try {
       const refused = await naming('admin');
-      assert.equal(refused.status, 200);
+      assert.equal(refused.status, 503);
       assert.deepEqual(await refused.json(), { ok: false, sessionGroup: 'origin',
         error: { code: 'CONTROL_TARGET_REQUIRED', message: 'C4 did not queue the naming prompt' } });
 
@@ -222,7 +224,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
         + `Error: Cannot find module '${root}/c4-db.js'\n    at Function._resolveFilename (node:internal/modules/cjs/loader:1225:15)`;
       controlFailure = Object.assign(new Error(crash), { code: 1, stdout: '', stderr: '' });
       const crashed = await naming('admin');
-      assert.equal(crashed.status, 200);
+      assert.equal(crashed.status, 502);
       const body = await crashed.text();
       assert.deepEqual(JSON.parse(body), { ok: false, unknown: true, sessionGroup: 'origin',
         error: { code: 'RESULT_UNKNOWN', message: 'Send command failed (exit 1)' } });

@@ -148,3 +148,22 @@ test('Core model validation and configuration storage failures retain their HTTP
     assert.equal(jsonResponse(200, { ok: false, error: { code } }, { command: true }).status, status);
   }
 });
+
+
+test('automatic naming command refusals keep their sanitized code and sentence with HTTP failure status', async () => {
+  const { createNamingRequest } = await import('../workbench/naming-request.js');
+  for (const [reply, code, message, status] of [
+    [{ ok: false, error: { code: 'CONTROL_TARGET_REQUIRED', message: '/private/core/path' } }, 'CONTROL_TARGET_REQUIRED', 'C4 did not queue the naming prompt', 503],
+    [{ ok: false, error: { code: 'OTHER_REJECTION', message: '/private/core/path' } }, 'OTHER_REJECTION', 'C4 did not queue the naming prompt', 502],
+    [null, 'RESULT_UNKNOWN', 'Core returned no result envelope', 502],
+  ]) {
+    const send = createNamingRequest({ zylosDir: '/isolated/instance', readMode: () => 'multi', log: () => {},
+      execute: async () => ({ stdout: JSON.stringify(reply) }) });
+    const res = { apiWrite: true, writeHead(status) { this.status = status; }, end(body) { this.body = JSON.parse(body); } };
+    sendCommandJson(res, 200, await send());
+    assert.equal(res.status, status);
+    assert.deepEqual(res.body.error, { code, message });
+    assert.equal(res.body.ok, false);
+    assert.equal(JSON.stringify(res.body).includes('/private'), false);
+  }
+});

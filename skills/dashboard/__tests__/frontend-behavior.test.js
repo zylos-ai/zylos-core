@@ -2506,7 +2506,7 @@ test('workbench shell asks before sending automatic naming to Origin and reports
   assert.equal(button.disabled, false, 'closing the answer gives the button back');
 
   // A refused enqueue shows its reason and never "sent".
-  answer = { ok: false, sessionGroup: 'origin', error: { code: 'CONTROL_TARGET_REQUIRED', message: 'during transition' } };
+  answer = { ok: false, status: 503, json: async () => ({ ok: false, sessionGroup: 'origin', error: { code: 'CONTROL_TARGET_REQUIRED', message: 'C4 did not queue the naming prompt' } }) };
   button.dispatch('click'); await wbTick();
   await choose('send');
   assert.equal(posts().length, 2);
@@ -2516,7 +2516,7 @@ test('workbench shell asks before sending automatic naming to Origin and reports
   dialog.querySelectorAll('.wb-btn')[0].dispatch('click');
 
   // The Dashboard itself refused the write.
-  answer = { ok: false, status: 403, json: async () => ({ error: 'insufficient_scope', required: 'admin' }) };
+  answer = { ok: false, status: 403, json: async () => ({ ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' }) };
   button.dispatch('click'); await wbTick();
   await choose('send');
   assert.match(dialog.textContent, /wb\.name\.failed/);

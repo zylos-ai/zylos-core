@@ -167,7 +167,7 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
       }
       if (req.method === 'GET' && url.pathname === '/api/groups/naming-prompt') {
         // As in the Dashboard: this resource only takes the POST that sends the prompt to Origin.
-        sendJson(res, 405, { error: 'method_not_allowed' }); return;
+        sendJson(res, 404, { error: 'not_found' }); return;
       }
       if (req.method === 'GET' && url.pathname === '/api/groups/runtime-overrides') {
         // This HTTP-only fixture has no runtime overrides or runtime CLI.

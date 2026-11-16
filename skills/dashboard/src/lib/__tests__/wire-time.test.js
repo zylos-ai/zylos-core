@@ -119,3 +119,22 @@ test('zero clocks are unknown and event, Git and preview fields normalize actual
   assert.equal(projectApiTimestamps('/api/memory/git', { commit: { author_date: '2026-11-16T10:03:04+08:00' } }).commit.author_date, iso);
   assert.equal(projectApiTimestamps('/api/schedules/preview', { iso: '2026-11-16T10:03:04+08:00' }).iso, iso);
 });
+
+
+test('Fleet attention recovery times use ISO in local and remote HTTP and SSE records', () => {
+  const record = { group_summary: { attention: [
+    { kind: 'rate_limited', until: at / 1000 },
+    { kind: 'rate_limited', until: 0 },
+    { kind: 'channel_restarting', count: 3 },
+  ] } };
+  const payload = { self: record, agents: [record] };
+  for (const result of [projectApiTimestamps('/api/fleet', payload), projectEventTimestamps('fleet', payload)]) {
+    for (const item of [result.self, result.agents[0]]) {
+      assert.equal(item.group_summary.attention[0].until, iso);
+      assert.equal(item.group_summary.attention[1].until, null);
+      assert.deepEqual(item.group_summary.attention[2], { kind: 'channel_restarting', count: 3 });
+    }
+  }
+  assert.equal(projectApiTimestamps('/api/fleet/agents/peer', record).group_summary.attention[0].until, iso);
+  assert.equal(record.group_summary.attention[0].until, at / 1000);
+});

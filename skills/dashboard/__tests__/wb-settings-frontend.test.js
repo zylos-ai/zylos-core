@@ -1,4 +1,4 @@
-import { formatZoned, setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
+import { formatZoned, setInstanceZone } from '../public/js/wb/instance-zone.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

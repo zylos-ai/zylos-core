@@ -1106,7 +1106,7 @@ async function handleApi(req, res, pathname, url) {
 
   // Reserved for the POST that sends the naming prompt to Origin: a read is neither a prompt nor a group detail.
   if (pathname === '/api/groups/naming-prompt') {
-    sendJson(res, 405, { error: 'method_not_allowed' });
+    sendJson(res, 404, { error: 'not_found' });
     return true;
   }
 
@@ -1593,7 +1593,7 @@ export function createServer() {
 
     // Automatic naming hands its prompt to Origin; the answer is whether C4 queued it, not the naming result.
     if (pathname === '/api/groups/naming-prompt' && req.method === 'POST') {
-      try { sendJson(res, 200, await sendNamingPrompt()); }
+      try { sendCommandJson(res, 200, await sendNamingPrompt()); }
       catch (error) { workbenchFailure(res, error); }
       return;
     }

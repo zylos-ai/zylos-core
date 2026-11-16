@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { sendHtml, sendJson, serveStatic } from '../../src/lib/http.js';
+import { sendHtml, sendJson, sendCommandJson, serveStatic } from '../../src/lib/http.js';
 import { GROUP, GROUP_FILE, LONG_FILE, workbenchAnswer } from '../fixtures/workbench-browser-api.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
@@ -38,7 +38,7 @@ export async function startPage(sandbox) {
       }
       if (url.pathname === '/api/groups/naming-prompt' && req.method === 'POST') {
         actions.push({ action: 'naming-prompt', body: null });
-        sendJson(res, 200, await naming.answer); return;
+        sendCommandJson(res, 200, await naming.answer); return;
       }
       if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
       if (url.pathname.startsWith('/api/')) {

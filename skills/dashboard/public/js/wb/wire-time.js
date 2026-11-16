@@ -61,7 +61,7 @@ const ACTIVITY = [
 ];
 const FLEET_RECORD = [
   ...ms('rate_limit_7d_recorded_at', 'updated_at', 'link.sampled_at', 'link.samples.*.at'),
-  ...seconds('group_summary.problems.*.createdAt'),
+  ...seconds('group_summary.problems.*.createdAt', 'group_summary.attention.*.until'),
   ...beneath('instance', INSTANCE), ...ms('system_metrics.sampledAt'), ...beneath('groups', ms('readAt')),
   ...beneath('group_summary.rows.*', GROUP),
 ];

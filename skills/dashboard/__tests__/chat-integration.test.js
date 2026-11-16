@@ -402,8 +402,8 @@ registerIntegrationCase('group resources precede details and preserve include an
   }
   // The naming resource only accepts the POST that sends its prompt; a read is never parsed as a group detail.
   const naming = await api.request('/api/groups/naming-prompt');
-  assert.equal(naming.status, 405);
-  assert.deepEqual(naming.body, { error: 'method_not_allowed' });
+  assert.equal(naming.status, 404);
+  assert.deepEqual(naming.body, { ok: false, error: { code: 'not_found', message: 'not_found' } });
   const group = '/api/groups/' + encodeURIComponent('dashboard:' + active.draft.localId);
   const compact = await api.request(group + '?include=');
   assert.equal(compact.status, 200);
