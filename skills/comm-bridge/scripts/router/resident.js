@@ -5,10 +5,18 @@ import { setTimeout as delay } from 'node:timers/promises';
 const { LEGACY_TMUX_NAMES } = await loadCoreModule('session-group-paths.js');
 
 const exec = promisify(execFile);
-export async function runningMaintenance({ execute = exec } = {}) {
+/** Returns the first running maintenance pattern, or null. A machine without
+ * pgrep cannot observe maintenance: that is reported through `unavailable`
+ * and treated as none running, so it never blocks startup. Other observation
+ * failures still reject. */
+export async function runningMaintenance({ execute = exec, unavailable = () => {} } = {}) {
   for (const pattern of ['[r]estart-claude', '[u]pgrade-claude', '[c]laude.ai/install.sh']) {
     try { await execute('pgrep', ['-f', pattern], { timeout: 500 }); return pattern; }
-    catch (error) { if (error.code !== 1) throw error; }
+    catch (error) {
+      if (error.code === 1) continue;
+      if (error.code === 'ENOENT') { unavailable(error); return null; }
+      throw error;
+    }
   }
   return null;
 }
@@ -20,9 +28,17 @@ export function createSinglePreparation({ checkMaintenance = runningMaintenance,
   for (const fn of [clearStaleState, resetToolLifecycle, buildInstructionFile]) {
     if (typeof fn !== 'function') throw new TypeError('Single preparation requires lifecycle and instruction providers');
   }
+  // One preparation exists per dispatcher process, so this reports a missing
+  // pgrep once per process rather than on every start attempt.
+  let unavailableLogged = false;
+  const unavailable = () => {
+    if (unavailableLogged) return;
+    unavailableLogged = true;
+    log('pgrep was not found; skipped the maintenance check (Claude restart/upgrade) before single-session startup. Install procps to restore it.');
+  };
   return async function prepareSingle(runtime) {
     const started = now();
-    while (await checkMaintenance()) {
+    while (await checkMaintenance({ unavailable })) {
       if (now() - started >= 300000) { log('Maintenance still active after 300 seconds; continuing startup'); break; }
       await sleep(Math.min(1000, 300000 - (now() - started)));
     }
