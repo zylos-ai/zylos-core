@@ -2242,9 +2242,13 @@ test('a new group absent from the snapshot has no status reading and recovers on
 test('remote settings revocation clears a mounted conversation even after it closes', async () => {
   const f = await selected();
   try {
+    const selectedId = f.state.snapshot().selectedId;
     f.state.setInput('private draft');
+    assert.equal(f.state.snapshot().input, 'private draft');
     f.state.close();
+    assert.equal(f.state.snapshot().input, 'private draft', 'closing alone retains the cached draft');
     f.state.blockRemote();
+    assert.equal(f.state.snapshot().input, '', 'revocation hides the previous draft');
     assert.equal(f.state.snapshot().blocked, true);
     assert.equal(f.state.snapshot().messages.length, 0);
     assert.equal(f.state.snapshot().items.length, 0);
@@ -2252,6 +2256,11 @@ test('remote settings revocation clears a mounted conversation even after it clo
     const reads = f.calls.length;
     await f.timer.advance(90000);
     assert.equal(f.calls.length, reads);
+    await f.state.open();
+    await f.state.select(selectedId);
+    await flush();
+    assert.equal(f.state.snapshot().selectedId, selectedId);
+    assert.equal(f.state.snapshot().input, '', 'revocation clears the cached draft before reopening');
   } finally { f.state.destroy(); }
 });
 
