@@ -2,8 +2,8 @@
 // Controls are typed into the runtime whole, and Claude Code treats input over 800 characters
 // as pasted material, so these stay short pointers: the result-handling rules live only in
 // the skill's "Parent result handling" section.
-export const GROUP_SYNC_PROMPT = 'Read the zylos-memory skill and start a background Sync as it specifies: group Sync when ZYLOS_SESSION_GROUP is set, otherwise global Sync. Continue your current work and handle the result as its Parent result handling section says.';
-export const ORIGIN_SYNC_PROMPT = 'Read the zylos-memory skill and start a background Origin Sync as it specifies. Continue your current work and handle the result as its Parent result handling section says.';
+export const GROUP_SYNC_PROMPT = 'Read the zylos-memory skill and start a background Sync as it specifies, then keep working and handle its result per its Parent result handling section.';
+export const ORIGIN_SYNC_PROMPT = 'Read the zylos-memory skill and start a background Origin Sync as it specifies, then keep working and handle its result per its Parent result handling section.';
 export const PRE_RECLAIM_SYNC_PROMPT = 'Read the zylos-memory skill and start a background group Sync subagent in this running session’s runtime. Wait for it to finish before acknowledging this control. Report any failure; do not acknowledge while the Sync is still running.';
 export const PRE_RECLAIM_ORIGIN_SYNC_PROMPT = 'Read the zylos-memory skill and start a background Origin Sync subagent in this running session’s runtime. Wait for it to finish before acknowledging this control. Report any failure; do not acknowledge while the Sync is still running.';
 export const IDENTITY_ROTATION_PROMPT = 'Identity has been updated. Follow the new-session procedure: merge and deduplicate unfinished items in the existing handoff with new unfinished work, write the current scope’s handoff.md via a temporary file and atomic replacement, then enqueue /clear for this Claude session or /exit for this Codex session. Do not rotate before the handoff is saved.';

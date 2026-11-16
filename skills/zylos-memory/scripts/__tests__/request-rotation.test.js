@@ -68,12 +68,10 @@ test('partial queue failure reports committed IDs and never retries', async () =
 });
 test('background Sync prompts point to the skill result rules; reclaim Sync and identity prompts keep their waits', () => {
   for (const prompt of [GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT]) {
-    assert.match(prompt, /^Read the zylos-memory skill and start a background (Origin )?Sync as it specifies[.:]/);
-    assert.match(prompt, /Continue your current work and handle the result as its Parent result handling section says\.$/);
+    assert.match(prompt, /^Read the zylos-memory skill and start a background (Origin )?Sync as it specifies, then keep working and handle its result per its Parent result handling section\.$/);
     // The rules themselves live once, in the skill's Parent result handling section.
     assert.doesNotMatch(prompt, /In Codex|Completed label|final result|owner|internal message|no longer exists/);
   }
-  assert.match(GROUP_SYNC_PROMPT, /group Sync when ZYLOS_SESSION_GROUP is set, otherwise global Sync/);
   assert.match(PRE_RECLAIM_SYNC_PROMPT, /Wait for it to finish before acknowledging/);
   assert.match(IDENTITY_ROTATION_PROMPT, /atomic replacement/);
   assert.match(IDENTITY_ROTATION_PROMPT, /\/clear.*\/exit/);
