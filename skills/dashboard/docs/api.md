@@ -354,7 +354,7 @@ Example: `GET /api/groups/origin/backlog`.
 
 **Access:** Admin. **Parameters:** none.
 
-Returns `{groups:Array, originSync?:object, hasOlder:boolean, budgets:object|null}` from the shared backlog reader. Each group includes `sessionGroup`, `count:number|null`, `firstAt:string|null`, `aged:boolean`, `syncing:boolean|null`, `threshold:number|null`, and optional `reason`. Historical C4 groups with the same safe name shape accepted by group observation reads retain their counts and oldest time; an oldest message over six hours old sets `aged:true`. Their `syncing` remains `null` with `reason:"backlog_failed"`, because sync-marker paths retain Core's strict grammar. Unsafe name shapes return unknown backlog fields. The optional `originSync` row is a separate cross-group observation in multi mode.
+Returns `{groups:Array, originSync?:object, hasOlder:boolean, budgets:object|null}` from the shared backlog reader. Each group includes `sessionGroup`, `count:number|null`, `firstAt:string|null`, `aged:boolean`, `syncing:boolean|null`, `threshold:number|null`, and optional `reason`. Historical C4 groups with the same safe name shape accepted by group observation reads retain their counts and oldest time. Historical names cannot participate in per-group memory sync, so they return `aged:false` and do not produce an overdue warning. Historical groups’ `syncing` remains `null` with `reason:"backlog_failed"`, because sync-marker paths retain Core's strict grammar. Syncable groups still set `aged:true` when the oldest message is over six hours old. Unsafe name shapes return unknown backlog fields. The optional `originSync` row is a separate cross-group observation in multi mode.
 
 **Errors:** 503 `backlog_failed` if collection fails; common read errors.
 

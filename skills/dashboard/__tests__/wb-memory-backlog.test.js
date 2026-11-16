@@ -336,7 +336,7 @@ test('memory backlog HTTP route shares the detail cache and enforces administrat
 // Real memory and group readers; in-memory catalog/backlog adapters only.
 // Run when historical name validation or shared backlog projection changes;
 // skip unrelated UI changes. No subprocess, socket, database or host file access.
-test('memory backlog retains safe historical counts and ages while rejecting unsafe names', async () => {
+test('memory backlog retains historical counts without age warnings and rejects unsafe names', async () => {
   const keys = ['tg:历史-项目', 'tg:有%号', 'tg:..', 'tg:.', 'tg:群/组', 'tg:群\\组'];
   const reads = [];
   const groupBacklog = createGroupBacklog({ zylosDir: '/isolated-zylos', now: () => at,
@@ -349,7 +349,7 @@ test('memory backlog retains safe historical counts and ages while rejecting uns
   })();
   assert.deepEqual(reads, keys.slice(0, 2));
   for (const row of result.groups.slice(0, 2)) {
-    assert.equal(row.count, 21); assert.equal(row.aged, true);
+    assert.equal(row.count, 21); assert.equal(row.aged, false);
     assert.equal(row.firstAt, utcText(at - 7 * 3600000));
     assert.equal(row.syncing, null); assert.equal(row.reason, 'backlog_failed');
   }
@@ -358,4 +358,15 @@ test('memory backlog retains safe historical counts and ages while rejecting uns
     assert.equal(row.aged, false); assert.equal(row.syncing, null);
     assert.equal(row.reason, 'backlog_failed');
   }
+});
+
+
+test('memory backlog still warns when a syncable group has old unsummarized messages', async () => {
+  const result = await createMemoryBacklog({ ...defaults,
+    getSnapshot: async () => ({ view: 'multi', rows: [{ sessionGroup: 'tg:current' }], hasOlder: false }),
+    groupBacklog: async () => ({ count: 21, firstAt: utcText(at - 7 * 3600000), syncing: false }),
+  })();
+  assert.equal(result.groups[0].count, 21);
+  assert.equal(result.groups[0].aged, true);
+  assert.equal(result.groups[0].syncing, false);
 });

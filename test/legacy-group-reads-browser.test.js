@@ -57,6 +57,8 @@ test('catalog-backed Chinese, hyphen and percent groups load real details and ti
   c4.prepare('INSERT INTO group_heads(session_group,head_id) VALUES(?,?)').run('tg:-legacy-group', 2);
   c4.prepare('INSERT INTO conversations(id,timestamp,direction,channel,endpoint_id,content,session_group,status) VALUES(3,?,?,?,?,?,?,?)').run(new Date(clock - 7 * 3600000).toISOString().slice(0, 19).replace('T', ' '), 'in', 'telegram', 'fixture-percent', 'Percent legacy message', 'tg:有%号', 'delivered');
   c4.prepare('INSERT INTO group_heads(session_group,head_id) VALUES(?,?)').run('tg:有%号', 3);
+  c4.prepare('INSERT INTO conversations(id,timestamp,direction,channel,endpoint_id,content,session_group,status) VALUES(4,?,?,?,?,?,?,?)').run(new Date(clock - 7 * 3600000).toISOString().slice(0, 19).replace('T', ' '), 'in', 'telegram', 'fixture-current', 'Syncable group message', 'tg:current', 'delivered');
+  c4.prepare('INSERT INTO group_heads(session_group,head_id) VALUES(?,?)').run('tg:current', 4);
   const query = createQueryHandlers(createStore(c4));
   const previousGet = https.get;
   https.get = () => {
@@ -156,7 +158,7 @@ test('catalog-backed Chinese, hyphen and percent groups load real details and ti
     createGroupSnapshot: options => createGroupSnapshot({ ...options, now: () => clock, cli,
       loadCoreModule: async name => name === 'status-view.js' ? { collectStatus: options => collectStatus({ ...options,
         mode: () => ({ mode }), resolveRoot: () => root, configIssue: () => null, requests: () => [], now: () => clock,
-        list: () => [{ sessionGroup: 'tg:历史-项目' }, { sessionGroup: 'tg:-legacy-group' }, { sessionGroup: 'tg:有%号' }],
+        list: () => [{ sessionGroup: 'tg:历史-项目' }, { sessionGroup: 'tg:-legacy-group' }, { sessionGroup: 'tg:有%号' }, { sessionGroup: 'tg:current' }],
         facts: () => ({ originNeed: null }), health: () => ({ health: 'rate_limited', cooldownUntil: clock / 1000 + 60 }),
       }) } : name === 'config.js' ? { readSessionMode: () => ({ mode }) }
         : name === 'session-pool-config.js' ? { readPoolCapacity: () => ({ k: 3, valid: true, fresh: true }) } : core(name),
@@ -228,8 +230,11 @@ test('catalog-backed Chinese, hyphen and percent groups load real details and ti
   }
   const memory = await request('/api/workbench/memory/backlog', { identity: 'cookie' });
   const percentMemory = memory.groups.find(row => row.sessionGroup === 'tg:有%号');
-  assert.equal(percentMemory.count, 1); assert.equal(percentMemory.aged, true);
+  assert.equal(percentMemory.count, 1); assert.equal(percentMemory.aged, false);
   assert.equal(percentMemory.syncing, null); assert.equal(percentMemory.reason, 'backlog_failed');
+  const currentMemory = memory.groups.find(row => row.sessionGroup === 'tg:current');
+  assert.equal(currentMemory.count, 1); assert.equal(currentMemory.aged, true);
+  assert.equal(currentMemory.syncing, false);
   assert.equal(actionCalls.length, 0, 'all historical writes stopped before action execution');
   for (const suffix of ['', '/events', '/runs', '/messages', '/backlog', '/usage', '/restarts/11111111-1111-4111-8111-111111111111']) {
     const answer = await request('/api/groups/' + encodeURIComponent('tg:未登记-历史') + suffix, { expected: 400 });

@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { parseSessionGroup } from '../../../../comm-bridge/scripts/c4-session-group.js';
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 const positive = value => Number.isSafeInteger(value) && value > 0 ? value : null;
@@ -54,7 +55,7 @@ export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog, origi
           sessionGroup, displayName: row.name?.displayName ?? null,
           c4: { componentName: row.c4?.componentName ?? null },
           count: backlog.count ?? null, firstAt,
-          aged: Number.isFinite(firstMillis) && at - firstMillis > SIX_HOURS_MS,
+          aged: parseSessionGroup(sessionGroup) !== null && Number.isFinite(firstMillis) && at - firstMillis > SIX_HOURS_MS,
           syncing: backlog.syncing ?? null,
           threshold: positive(threshold),
           ...(backlog.reason ? { reason: backlog.reason } : {}),
