@@ -41,6 +41,47 @@ test('human failure reports Error and optional Next without protocol fields', ()
   });
 });
 
+test('human recovery failure reports incomplete rollback and default recovery instructions', () => {
+  const result = { success: false, error: 'Skill dependency installation failed.', recovery_required: true,
+    rollback: { attempted: true, completed: false, recovery_required: true, error: 'EACCES' } };
+  const before = JSON.stringify(result);
+  for (const attempted of [true, false]) {
+    assert.deepEqual(capture({ ...result, rollback: { ...result.rollback, attempted } }, { jsonOutput: false }), {
+      stdout: '\n', stderr: 'Error: Skill dependency installation failed.\n'
+        + 'Upgrade warning: Rollback did not complete. Upgrade is blocked until recovery completes.\n'
+        + 'Next: Run zylos recovery status, then zylos recovery resume before upgrading.\n',
+    });
+  }
+  for (const options of [undefined, { jsonOutput: true }]) {
+    assert.deepEqual(capture(result, options), { stdout: before + '\n', stderr: '' });
+  }
+  assert.equal(JSON.stringify(result), before);
+});
+
+test('human recovery failure preserves supplied instructions without inventing a rollback', () => {
+  const result = { success: false, error: 'Recover the unfinished upgrade first.', recovery_required: true,
+    rollback: { attempted: false, completed: false, performed: false },
+    next: 'Run zylos recovery status to inspect the transaction.' };
+  assert.deepEqual(capture(result, { jsonOutput: false }), {
+    stdout: '\n', stderr: 'Error: Recover the unfinished upgrade first.\n'
+      + 'Upgrade warning: Upgrade is blocked until recovery completes.\n'
+      + `Next: ${result.next}\n`,
+  });
+});
+
+test('human success reports Dashboard follow-up instructions', () => {
+  const result = { success: true, from: '1.0.0', to: '1.1.0',
+    next: 'Dashboard is not ready. Fix the cause reported in dashboard.errors, run zylos init to retry.' };
+  const before = JSON.stringify(result);
+  assert.deepEqual(capture(result, { jsonOutput: false }), {
+    stdout: '\nzylos-core upgraded: 1.0.0 → 1.1.0.\n', stderr: `Next: ${result.next}\n`,
+  });
+  for (const options of [undefined, { jsonOutput: true }]) {
+    assert.deepEqual(capture(result, options), { stdout: before + '\n', stderr: '' });
+  }
+  assert.equal(JSON.stringify(result), before);
+});
+
 for (const success of [true, false]) test(`explicit and legacy JSON preserve every result field (${success})`, () => {
   const result = { action: 'self_upgrade', success, from: '1.0.0', to: success ? '1.1.0' : null,
     code: success ? undefined : 'UPGRADE_FAILED', error: success ? undefined : 'Installation failed.',

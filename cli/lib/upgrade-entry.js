@@ -175,8 +175,14 @@ export function outputUpgradeResult(result, { jsonOutput = true } = {}, output =
     if (result.success) output.stdout.write(`zylos-core upgraded: ${result.from} → ${result.to}.\n`);
     else {
       output.stderr.write(`Error: ${result.error || 'Core upgrade failed.'}\n`);
-      if (result.next) output.stderr.write(`Next: ${result.next}\n`);
     }
+    if (result.recovery_required) {
+      const rollbackNotice = result.rollback?.completed === false && (result.rollback.attempted || result.rollback.recovery_required)
+        ? 'Rollback did not complete. ' : '';
+      output.stderr.write(`Upgrade warning: ${rollbackNotice}Upgrade is blocked until recovery completes.\n`);
+    }
+    const next = result.next || (result.recovery_required ? 'Run zylos recovery status, then zylos recovery resume before upgrading.' : null);
+    if (next) output.stderr.write(`Next: ${next}\n`);
   }
   for(const warning of result.serviceWarnings || []) output.stderr.write(`Service warning: ${warning}\n`);
   // Runtime CLI preparation returns objects; finalization adds plain notices.
