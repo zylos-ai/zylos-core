@@ -13,6 +13,8 @@ const publicDir = fileURLToPath(new URL('../skills/dashboard/public/', import.me
 
 // Real serveStatic and FleetProxy with a copied public tree and a small page that
 // isolates the browser's CSS/module cache from unrelated Dashboard API fixtures.
+// Run for static cache headers, asset imports, or FleetProxy asset dispatch changes;
+// skip for API-only or unrelated UI behavior changes.
 // The official runner and sandbox prove private HOME, instance, PM2, temporary,
 // socket and database paths before any listener or browser is started.
 for (const fleet of [false, true]) {

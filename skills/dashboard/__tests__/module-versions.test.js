@@ -12,7 +12,7 @@ test('public assets use stable URLs without manual cache versions', () => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const filename = path.join(directory, entry.name);
       if (entry.isDirectory()) walk(filename);
-      else if (entry.isFile()) {
+      else if (entry.isFile() && /\.(js|css|html)$/.test(entry.name)) {
         checked++;
         assert.equal(fs.readFileSync(filename).includes(Buffer.from('?v=')), false,
           `${path.relative(publicRoot, filename)} must not contain a manual cache version`);

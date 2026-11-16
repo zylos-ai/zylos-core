@@ -3,11 +3,13 @@ const REQUEST_TIMEOUT_MS = 30000;
 export const WB_SENTINEL = 'wb.nav.overview';
 export const validWbPack = pack => pack !== null && typeof pack === 'object' &&
   [Object.prototype, null].includes(Object.getPrototypeOf(pack)) && typeof pack[WB_SENTINEL] === 'string';
-export function createWbPackLoader({ fetch = globalThis.fetch, storage = globalThis.localStorage,
+export function createWbPackLoader({ fetch: fetchOverride, storage: storageOverride,
   warn = console.warn, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   let seq = 0;
   const primaryKeys = new WeakMap();
   const load = async function initWbPack(locale, { assetRoot = '', translations = {}, deadline = Infinity, onMerge = () => {} } = {}) {
+    const fetch = fetchOverride ?? globalThis.fetch;
+    const storage = storageOverride ?? globalThis.localStorage;
     const current = ++seq, cacheKey = 'zylos-dashboard-i18n-wb-' + locale;
     if (!primaryKeys.has(translations)) primaryKeys.set(translations, new Set(Object.keys(translations)));
     const primary = primaryKeys.get(translations);

@@ -38,6 +38,13 @@ export async function runFleetCardBrowser(t, sandbox) {
           } catch {}
         }, { theme });
         const page = await context.newPage(), errors = [];
+        const assetHeaders = new Map();
+        page.on('response', response => {
+          const url = new URL(response.url());
+          if (url.pathname.startsWith('/_assets/') && /\.(js|css)$/.test(url.pathname) && assetHeaders.size < 200) {
+            assetHeaders.set(url.pathname + url.search, response.headers());
+          }
+        });
         page.setDefaultTimeout(10_000);
         page.on('pageerror', error => errors.push(error.message));
         await page.route('**/api/fleet', route => route.fulfill({ json: fleet }));
@@ -68,10 +75,13 @@ export async function runFleetCardBrowser(t, sandbox) {
           for (const row of card.status) assert.ok(row.scrollWidth <= row.clientWidth, 'no status clipping');
         }
         assert.deepEqual(errors, []);
-        // Inspect actual loaded resource entries, proving cache-busted import paths reach the browser.
+        // Verify loaded stable URLs and the actual static response cache contract.
         const assets = await page.evaluate(() => performance.getEntriesByType('resource').map(entry => new URL(entry.name).pathname + new URL(entry.name).search));
-        for (const asset of ['/js/app.js?v=233', '/js/agent-fleet.js?v=210', '/js/fleet-sounds.js?v=210', '/css/style.css?v=65', '/css/wb.css?v=72']) {
+        for (const asset of ['/js/app.js', '/js/agent-fleet.js', '/js/fleet-sounds.js', '/css/style.css', '/css/wb.css']) {
           assert.ok(assets.includes('/_assets' + asset), `loaded ${asset}`);
+          const headers = assetHeaders.get('/_assets' + asset);
+          assert.equal(headers?.['cache-control'], 'no-cache');
+          assert.match(headers?.etag ?? '', /^W\/"[^"]+"$/);
         }
         console.log('Fleet card geometry:', JSON.stringify({ width, theme, ...geometry }));
         if (evidence) {

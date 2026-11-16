@@ -139,14 +139,17 @@ for (const url of ['/app.js', '/vendor/chart.js', '/_assets/chat-schema.js']) {
   });
 }
 
-test('same-size asset edits invalidate a cached body when modification time changes', async t => {
+test('same-size asset edits invalidate a cached body after a one-millisecond modification', async t => {
   const { root, request } = await fixture(t);
-  const initial = await request('/app.js');
   const filename = path.join(root, 'app.js');
+  const timestamp = new Date(1700000000000);
+  fs.utimesSync(filename, timestamp, timestamp);
+  const initial = await request('/app.js');
   const stat = fs.statSync(filename);
   const replacement = Buffer.alloc(initial.body.length, 'x');
   fs.writeFileSync(filename, replacement);
-  fs.utimesSync(filename, stat.atime, new Date(stat.mtimeMs + 2000));
+  fs.utimesSync(filename, stat.atime, new Date(stat.mtimeMs + 1));
+  assert.equal(fs.statSync(filename).mtimeMs - stat.mtimeMs, 1);
   const changed = await request('/app.js', { headers: { 'if-none-match': initial.headers.etag } });
   assert.equal(changed.status, 200);
   assert.notEqual(changed.headers.etag, initial.headers.etag);

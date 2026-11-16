@@ -1,8 +1,8 @@
-import { parseC4Content } from '../../chat-schema.js?v=90';
-import { element } from './plain-text.js?v=85';
+import { parseC4Content } from '../../chat-schema.js';
+import { element } from './plain-text.js';
 
 export { parseC4Content };
-export { validateAnswer } from '../../chat-schema.js?v=90';
+export { validateAnswer } from '../../chat-schema.js';
 
 const interactive = new Set(['choice', 'confirmation', 'form_intent']);
 
