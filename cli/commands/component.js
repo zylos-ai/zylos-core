@@ -1318,7 +1318,7 @@ export async function upgradeSelfCore({ branch, beta = false, version, mode = 'm
     }
 
     const exitCode = (deps.runDownloadedUpgrade ?? runDownloadedUpgrade)({
-      schemaVersion: 1, fromVersion: check.current, tempDir,
+      schemaVersion: 1, fromVersion: check.current, tempDir, jsonOutput,
       installedRoot,
       zylosDir: deps.zylosDir ?? ZYLOS_DIR,
     });

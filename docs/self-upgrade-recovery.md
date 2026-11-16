@@ -8,6 +8,29 @@ command. Stable 0.9.3 and later sources, including 0.9.4 and 0.9.5, are supporte
 0.9.3 prereleases are not. An already current installation does not download or
 retry an upgrade.
 
+## Terminal and JSON output
+
+The CLI passes its `--json` choice as the optional boolean `jsonOutput` in the
+schema-version-1 handoff to the downloaded entry. With `jsonOutput: false`,
+success prints the source and target versions; failure prints `Error: <reason>`
+to stderr. Both print `Next: <command>` when available. When recovery is required,
+the output warns that upgrading is blocked, identifies a rollback reported as
+incomplete, and supplies default recovery instructions if `next` is absent.
+A leading newline separates the result from the changelog. Warnings remain on
+stderr, with runtime warning codes omitted from human output. With `jsonOutput: true`, stdout contains exactly one
+JSON result with the existing fields and no leading newline. Exit status remains
+0 for success and 1 for failure.
+
+Installed callers predating this preference (including the 0.9.4–0.9.6 bridges)
+inherit stdout/stderr and judge success by exit status. They do not forward their
+`--json` choice. An absent preference therefore preserves the original JSON
+output byte for byte, including no leading newline, so existing agent consumers
+can still parse the first upgrade. A manual upgrade from one of those callers
+also shows JSON once; human output applies after the upgraded CLI is in use.
+Conversely, a new CLI upgrading without `--json` (including with `--branch`) to
+an older target package that does not recognize this preference still shows one
+JSON result line from that target.
+
 <a id="first-adoption"></a>
 
 ## Before installation

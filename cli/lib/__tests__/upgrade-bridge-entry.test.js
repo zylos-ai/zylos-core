@@ -260,7 +260,7 @@ test('thin entry --yes skips only confirmation while retaining the preview', asy
     downloadCoreToTemp(){return {success:true,tempDir:download};},
     readCoreChangelog(){return 'release notes';},filterChangelog(value){return value;},detectCoreSkillChanges(){return [];},
     promptYesNo(){assert.fail('--yes prompted');},
-    runDownloadedUpgrade(){return 0;},
+    runDownloadedUpgrade(input){assert.equal(input.jsonOutput,false);return 0;},
     console:{log(value){output.push(String(value));},error(){assert.fail('successful handoff emitted an error');}},
   }),true);
   assert.ok(output.some(value=>value.includes('zylos-core')));
@@ -279,7 +279,7 @@ test('thin entry JSON output suppresses preview work for a valid handoff', async
     readCoreChangelog(){assert.fail('JSON mode read preview content');},
     detectCoreSkillChanges(){assert.fail('JSON mode inspected preview content');},
     promptYesNo(){assert.fail('--yes prompted');},
-    runDownloadedUpgrade(){return 0;},
+    runDownloadedUpgrade(input){assert.equal(input.jsonOutput,true);return 0;},
     console:{log(value){output.push(value);},error(){assert.fail('JSON handoff emitted an error');}},
   }),true);
   assert.deepEqual(output,[]);

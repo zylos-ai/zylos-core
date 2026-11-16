@@ -8,6 +8,7 @@ import { createTestEnvironment } from './test-environment.js';
 const ROOT = process.cwd();
 const ROOT_NODE_TESTS = [
   'test/dashboard-display-browser.test.js',
+  'test/self-upgrade-output.integration.test.js',
   'test/fleet-attention.integration.test.js',
   'test/fleet-attention-browser.test.js',
   'test/channel-delivery.integration.test.js',
