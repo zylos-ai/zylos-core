@@ -733,8 +733,8 @@ test('memory list redraws restore files and folding headers by stable identity w
       : nodesOfClass(listRoot, kind === 'shared' ? 'wb-memory-section-h' : 'wb-memory-group-h')[0];
     const original = target(); original.focus(); calls.length = 0;
     f.controller.renderList();
-    assert.notEqual(target(), original, 'rows were really rebuilt');
-    assert.equal(document.activeElement, target(), `${kind} focus follows its identity`);
+    assert.ok(target() !== original, `${kind} rows were really rebuilt`);
+    assert.ok(document.activeElement === target(), `${kind} focus follows its identity`);
     assert.equal(listRoot.contains(document.activeElement), true);
     assert.deepEqual(calls, [{ preventScroll: true }]);
     f.controller.destroy();
@@ -750,7 +750,7 @@ test('memory list redraws do not take focus from search or editor controls', () 
     external.dataset.collapseKey = 'shared';
     external.focus();
     f.controller.renderList();
-    assert.equal(document.activeElement, external);
+    assert.ok(document.activeElement === external, `${tag} focus stays outside the list`);
   }
   f.controller.destroy();
 });
@@ -770,7 +770,7 @@ test('memory list redraws do not redirect focus when the focused row disappears'
       f.controller.renderList();
     }
     assert.equal(listRoot.contains(original), false);
-    assert.equal(document.activeElement, original, 'injected DOM records no fallback focus call');
+    assert.ok(document.activeElement === original, `${reason}: injected DOM records no fallback focus call`);
     f.controller.destroy();
   }
 });
