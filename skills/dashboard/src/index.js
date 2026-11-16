@@ -43,7 +43,7 @@ import {
 } from './lib/config.js';
 import { projectEventTimestamps } from './lib/wire-time.js';
 import { isRetiredApiPath } from './lib/api-routes.js';
-import { readJsonBody, sendHtml, sendJson, sendText, serveStatic } from './lib/http.js';
+import { readJsonBody, sendHtml, sendJson, sendCommandJson, sendText, serveStatic } from './lib/http.js';
 import { Store } from './lib/store.js';
 import { Sanitizer } from './lib/sanitizer.js';
 import { CoreLogImporter } from './lib/core-log-importer.js';
@@ -313,7 +313,7 @@ const stateEngine = new StateEngine(store, collectors, config, {
 timeMethod(stateEngine, '_periodicSnapshot', 'state.snapshot');
 timeMethod(stateEngine, '_readAMHeartbeat', 'state.heartbeat');
 
-observerService.historyService = new HistoryService({ config, store, stateEngine });
+observerService.historyService = new HistoryService({ config, store, stateEngine, readCurrentSessionId: () => coreState.getState().sessionGroup === null ? coreState.getCurrentSessionId() : null });
 
 // Wire collector updates to state engine
 pm2Collector._onUpdate = (data) => {
@@ -672,7 +672,7 @@ async function handleFleetAgents(req, res) {
     return;
   }
   if (req.method !== 'POST') {
-    sendJson(res, 405, { error: 'method_not_allowed' });
+    sendJson(res, 404, { error: 'not_found' });
     return;
   }
   let body;
@@ -738,7 +738,7 @@ async function handleFleetAgents(req, res) {
 
 async function handleFleetAgentTest(req, res) {
   if (req.method !== 'POST') {
-    sendJson(res, 405, { error: 'method_not_allowed' });
+    sendJson(res, 404, { error: 'not_found' });
     return;
   }
   let body;
@@ -760,12 +760,14 @@ async function handleFleetAgentTest(req, res) {
     sendJson(res, 400, { error: 'missing_read_api_key' });
     return;
   }
-  sendJson(res, 200, await probeFleetAgent(baseUrl, readApiKey));
+  const probe = await probeFleetAgent(baseUrl, readApiKey);
+  // A failed destination probe is a failed write result, with the destination reason preserved.
+  sendJson(res, probe.reachable ? 200 : 502, probe);
 }
 
 async function handleFleetAgentDelete(req, res, pathname) {
   if (req.method !== 'DELETE') {
-    sendJson(res, 405, { error: 'method_not_allowed' });
+    sendJson(res, 404, { error: 'not_found' });
     return;
   }
   const encodedName = pathname.slice('/api/fleet/agents/'.length);
@@ -794,7 +796,7 @@ async function handleFleetAgentDelete(req, res, pathname) {
 
 async function handleAgentRename(req, res) {
   if (req.method !== 'PUT') {
-    sendJson(res, 405, { error: 'method_not_allowed' });
+    sendJson(res, 404, { error: 'not_found' });
     return;
   }
   let body;
@@ -830,7 +832,7 @@ async function handleApiKeys(req, res) {
     return;
   }
   if (req.method !== 'POST') {
-    sendJson(res, 405, { error: 'method_not_allowed' });
+    sendJson(res, 404, { error: 'not_found' });
     return;
   }
   let body;
@@ -873,7 +875,7 @@ async function handleApiKeys(req, res) {
 
 async function handleApiKeyRotate(req, res, pathname) {
   if (req.method !== 'POST') {
-    sendJson(res, 405, { error: 'method_not_allowed' });
+    sendJson(res, 404, { error: 'not_found' });
     return;
   }
   const encodedName = pathname.slice('/api/keys/'.length, -'/rotate'.length);
@@ -904,7 +906,7 @@ async function handleApiKeyRotate(req, res, pathname) {
 
 async function handleApiKeysPurge(req, res) {
   if (req.method !== 'POST') {
-    sendJson(res, 405, { error: 'method_not_allowed' });
+    sendJson(res, 404, { error: 'not_found' });
     return;
   }
   const purged = store.purgeRevokedApiKeys();
@@ -913,7 +915,7 @@ async function handleApiKeysPurge(req, res) {
 
 async function handleApiKeyDelete(req, res, pathname, url) {
   if (req.method !== 'DELETE') {
-    sendJson(res, 405, { error: 'method_not_allowed' });
+    sendJson(res, 404, { error: 'not_found' });
     return;
   }
   const encodedName = pathname.slice('/api/keys/'.length);
@@ -1375,7 +1377,7 @@ async function handleSettingsUpdate(req, res) {
 
 async function handleMemoryApi(req, res, pathname, url) {
   if (req.method !== 'GET' && req.method !== 'HEAD' && !(req.method === 'PUT' && pathname === '/api/memory/file')) {
-    sendJson(res, 405, { error: 'method_not_allowed' });
+    sendJson(res, 404, { error: 'not_found' });
     return true;
   }
   try {
@@ -1544,7 +1546,7 @@ export function createServer() {
         if (!action) { sendJson(res, 400, { ok: false, error: { code: 'INVALID_DEFAULT', message: 'Choose model, effort, threshold or session-hot-ttl' } }); return; }
         const result = await handleAction(action, body, { ...loadZylosConfig(config.zylosDir), zylosDir: config.zylosDir });
         if (result.ok && ['upgrade-cc', 'upgrade-zylos'].includes(action)) eventLoopMonitor.runTask('installed-versions.refresh', refreshInstalledVersions);
-        sendJson(res, result.status ?? 200, result);
+        sendCommandJson(res, result.status ?? 200, result);
         if (result.ok) scheduleFleetStateBroadcast();
       } catch (error) { workbenchFailure(res, error); }
       return;
@@ -1583,7 +1585,7 @@ export function createServer() {
         const result = detailWrite[2] === 'config'
           ? await groupConfig.submit(key, body)
           : await groupAction(key, detailWrite[3], body);
-        sendJson(res, 200, result);
+        sendCommandJson(res, 200, result);
         if (result.ok) scheduleFleetStateBroadcast();
       } catch (error) { workbenchFailure(res, error); }
       return;
@@ -1625,7 +1627,7 @@ export function createServer() {
       try {
         const outcome = await scheduleWriter.write(req.method, pathname, () => readJsonBody(req, 64 * 1024));
         if (outcome) sendJson(res, outcome.status, outcome.body);
-        else sendJson(res, 405, { error: 'method_not_allowed' });
+        else sendJson(res, 404, { error: 'not_found' });
       } catch (error) {
         if ((error.status === 400 && error.message === 'invalid_json') ||
           (error.status === 413 && error.message === 'payload_too_large')) {

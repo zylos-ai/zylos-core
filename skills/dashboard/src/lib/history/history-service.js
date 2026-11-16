@@ -58,10 +58,10 @@ function position(entries, index, cursor) {
 }
 
 export class HistoryService {
-  constructor({ config = {}, store, stateEngine, parser, redactor, resolveScope } = {}) {
+  constructor({ config = {}, store, stateEngine, parser, redactor, resolveScope, readCurrentSessionId } = {}) {
     this.config = config;
     this.store = store;
-    this.resolveScope = resolveScope || (parser ? null : createHistoryScope({ config, store }));
+    this.resolveScope = resolveScope || (parser ? null : createHistoryScope({ config, store, readCurrentSessionId }));
     this.scopedParsers = new Map();
     this.runtime = config.runtime || 'claude';
     const Parser = this.runtime === 'codex' ? CodexHistory : ClaudeHistory;
@@ -215,24 +215,37 @@ export class HistoryService {
     const route = url.pathname.slice('/api/observer/history/'.length);
     try {
       if (!ROUTES.has(route)) throw new HistoryError(404, 'not_found');
-      if (req.method !== 'GET') throw new HistoryError(405, 'method_not_allowed');
+      if (req.method !== 'GET') throw new HistoryError(404, 'not_found');
       let service = this;
       if (this.resolveScope) {
         const scope = await this.resolveScope(url.searchParams);
         const key = `${url.searchParams.get('session_group') ?? 'origin'}:${scope.runtime}`;
-        let parser = this.scopedParsers.get(key);
-        if (!parser) {
+        let cached = this.scopedParsers.get(key);
+        if (!cached || cached.revision !== scope.revision) {
           const Parser = scope.runtime === 'codex' ? CodexHistory : ClaudeHistory;
-          parser = new Parser({ zylosDir: this.config.zylosDir, store: this.store, indexCache: this.parser.indexCache });
+          const parser = new Parser({ ...scope, zylosDir: this.config.zylosDir, store: this.store, indexCache: this.parser.indexCache });
+          if (cached?.parser) {
+            parser.metadataCache = cached.parser.metadataCache;
+            if (parser.metadataLoads) parser.metadataLoads = cached.parser.metadataLoads;
+          }
+          cached = { parser, revision: scope.revision, snapshot: parser.listSessions().then(listing => ({ parser, listing, paths: parser.paths })) };
         }
         this.scopedParsers.delete(key);
-        this.scopedParsers.set(key, parser);
+        this.scopedParsers.set(key, cached);
         while (this.scopedParsers.size > 8) this.scopedParsers.delete(this.scopedParsers.keys().next().value);
+        let snapshot;
+        try { snapshot = await cached.snapshot; }
+        catch (error) {
+          if (this.scopedParsers.get(key) === cached) this.scopedParsers.delete(key);
+          throw error;
+        }
+        const { parser, listing, paths } = snapshot;
         service = Object.create(this);
         service.runtime = scope.runtime;
-        // Share warm metadata, but retain each request's attribution snapshot
-        // and path list so simultaneous group reads cannot widen one another.
-        service.parser = Object.assign(Object.create(parser), scope, { paths: new Map(), loads: new Map() });
+        // Discovery and paths belong to one group/runtime/import generation.
+        // Each request keeps that snapshot even while another import refreshes it.
+        service.parser = Object.assign(Object.create(parser), scope, { paths, loads: new Map(),
+          listSessions: async () => ({ ...listing, current: paths.has(scope.currentSessionId) ? scope.currentSessionId : null }) });
       }
       const result = route === 'sessions' ? await service.sessions() : await service[route](url.searchParams);
       if (result.binary) {

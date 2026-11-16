@@ -341,7 +341,7 @@ test('login keeps a next target inside the forwarded prefix', { timeout: 15_000 
 // HTTP integration: actual authenticated logout in runner-isolated installation;
 // run for logout/auth/browser-origin changes. The fixture has private DB, PM2_HOME
 // and tmux directory and disabled network version checks; loopback servers close.
-test('logout requires browser same origin and respects forwarded prefix', async () => {
+test('logout always clears browser sessions and respects forwarded prefix', async () => {
   const { origin, server } = await makeServer();
   const clearCookie = '__Secure-zylos_dashboard_session=; HttpOnly; Secure; SameSite=Strict; Path=/dashboard; Max-Age=0';
   const loginCookie = async () => (await fetch(`${origin}/login`, {
@@ -358,21 +358,17 @@ test('logout requires browser same origin and respects forwarded prefix', async 
   try {
     const cookie = await loginCookie();
     const mismatched = await logout({ Cookie: cookie, Origin: 'https://agent.example.com' });
-    assert.equal(mismatched.status, 403);
-    assert.equal((await mismatched.json()).error.code, 'same_origin_required');
-    assert.equal(mismatched.headers.get('set-cookie'), null);
-    const active = await fetch(`${origin}/api/instance`, { headers: { Cookie: cookie } });
-    assert.equal(active.status, 200);
-    const accepted = await logout({ Cookie: cookie, Origin: origin });
-    assert.equal(accepted.status, 302);
-    assert.equal(accepted.headers.get('location'), '/dashboard/login');
-    assert.equal(accepted.headers.get('set-cookie'), clearCookie);
+    assert.equal(mismatched.status, 302);
+    assert.equal(mismatched.headers.get('location'), '/dashboard/login');
+    assert.equal(mismatched.headers.get('set-cookie'), clearCookie);
     const revoked = await fetch(`${origin}/api/instance`, { headers: { Cookie: cookie }, redirect: 'manual' });
-    assert.notEqual(revoked.status, 200);
-
-    const noHeaders = await logout({ Cookie: await loginCookie() });
-    assert.equal(noHeaders.status, 403);
-    assert.equal(noHeaders.headers.get('set-cookie'), null);
+    assert.equal(revoked.status, 401);
+    for (const headers of [{ Origin: origin }, {}]) {
+      const accepted = await logout({ Cookie: await loginCookie(), ...headers });
+      assert.equal(accepted.status, 302);
+      assert.equal(accepted.headers.get('location'), '/dashboard/login');
+      assert.equal(accepted.headers.get('set-cookie'), clearCookie);
+    }
 
     const expired = await logout({ Cookie: '__Secure-zylos_dashboard_session=stale' });
     assert.equal(expired.status, 302);
@@ -1757,8 +1753,8 @@ test('fleet test-connection API reports auth failures and reachable read scope w
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ base_url: remote.origin, read_api_key: 'zylos_ak_bad' })
     });
-    assert.equal(bad.status, 200);
-    assert.deepEqual(await bad.json(), { reachable: false, error: 'auth_failed' });
+    assert.equal(bad.status, 502);
+    assert.deepEqual(await bad.json(), { ok: false, reachable: false, error: { code: 'auth_failed', message: 'auth_failed' } });
 
     const good = await fetch(`${origin}/api/fleet/agents/test`, {
       method: 'POST',
@@ -1766,7 +1762,7 @@ test('fleet test-connection API reports auth failures and reachable read scope w
       body: JSON.stringify({ base_url: remote.origin, read_api_key: 'zylos_ak_good' })
     });
     assert.equal(good.status, 200);
-    assert.deepEqual(await good.json(), { reachable: true, scope: 'read', version: '0.3.0' });
+    assert.deepEqual(await good.json(), { ok: true, reachable: true, scope: 'read', version: '0.3.0' });
 
     const saved = JSON.parse(fs.readFileSync(path.join(zylosDir, 'components', 'dashboard', 'config.json'), 'utf8'));
     assert.equal(saved.fleet, undefined, 'test-connection must not persist the submitted key');
@@ -1919,4 +1915,29 @@ test('group thresholds follow actual session models while Fleet omits Origin ses
     const fleetResponse = await fetch(running.origin + '/api/fleet', { signal: AbortSignal.timeout(3000) });
     assertNoSessionFields((await fleetResponse.json()).agents.find(agent => agent.self));
   }
+});
+
+
+// Actual HTTP auth and method dispatch: private installation and loopback only.
+// Run when API method routing or Fleet authentication changes; unrelated views may skip.
+test('unsupported API method path pairs return 404 and Fleet APIs require login', async () => {
+  const { origin, server } = await makeServer();
+  try {
+    for (const [method, url] of [['GET', '/fleet/Remote/api/instance'], ['POST', '/fleet/Remote/api/schedules']]) {
+      const reply = await fetch(origin + url, { method, redirect: 'manual' });
+      assert.equal(reply.status, 401, `${method} ${url}`);
+      assert.equal(reply.headers.get('location'), null);
+      assert.equal((await reply.json()).error.code, 'unauthorized');
+    }
+    const loggedIn = await fetch(`${origin}/login`, { method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: form({ password: 'secret' }), redirect: 'manual' });
+    const cookie = loggedIn.headers.get('set-cookie');
+    for (const [method, url] of [['PATCH', '/api/instance'], ['POST', '/api/usage/summary'],
+      ['POST', '/api/settings/chat'], ['POST', '/api/schedules/task/pause'],
+      ['PATCH', '/api/schedules/task'], ['POST', '/api/unknown']]) {
+      const reply = await fetch(origin + url, { method, headers: { Cookie: cookie, Origin: origin } });
+      assert.equal(reply.status, 404, `${method} ${url}`);
+      assert.equal((await reply.json()).error.code, 'not_found');
+    }
+  } finally { await closeServer(server); }
 });

@@ -17,7 +17,7 @@ export async function handleChatAttachments(req, res, url, { auth, config, sende
   if (denied) { const { status, ...body } = denied; sendJson(res, status, body); return true; }
   try {
     const upload = match[2] === 'uploads';
-    if (req.method !== (upload ? 'POST' : 'GET')) { sendJson(res, 405, { error: 'method_not_allowed' }); return true; }
+    if (req.method !== (upload ? 'POST' : 'GET')) { sendJson(res, 404, { error: 'not_found' }); return true; }
     if ([...url.searchParams].length) throw fail('invalid_chat_parameters');
     let id, attachmentId;
     try { id = decodeURIComponent(match[1]); attachmentId = match[3] && decodeURIComponent(match[3]); }

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { loadCoreModule as defaultLoadCoreModule } from '../core-modules.js';
-import { readJsonBody, sendJson } from '../http.js';
+import { readJsonBody, sendJson, sendCommandJson } from '../http.js';
 import { isSameOriginRequest } from '../request-origin.js';
 import { parseSessionGroup } from '../../../../comm-bridge/scripts/c4-session-group.js';
 
@@ -52,7 +52,7 @@ export function createGroupDeletionRoutes({ auth, config, conversations,
     const preview = Boolean((group ?? draft)[2]);
     if (!preview && req.method !== 'DELETE') return false;
     if (req.method !== (preview ? 'GET' : 'DELETE')) {
-      sendJson(res, 405, { error: 'method_not_allowed' }); return true;
+      sendJson(res, 404, { error: 'not_found' }); return true;
     }
     if (!canDeleteConversations(req, auth, config)) {
       sendJson(res, 403, { error: 'local_cookie_required' }); return true;
@@ -90,7 +90,7 @@ export function createGroupDeletionRoutes({ auth, config, conversations,
       const conflict = ['TRANSITION_OPEN', 'transition_open',
         'DELETION_IN_PROGRESS', 'DELETION_OWNERSHIP_MISMATCH', 'DELETION_INFLIGHT', 'DRAFT_BECAME_ACTIVE',
         'FENCE_MISMATCH', 'fence_conflict', 'group_delete_send_pending', 'DELETION_PREVIEW_STALE'].includes(code);
-      sendJson(res, result.ok ? result.pending ? 202 : 200 : result.pending ? 202 : denied ? 403 : conflict ? 409 : result.error?.status ?? 400, result);
+      sendCommandJson(res, result.ok ? result.pending ? 202 : 200 : result.pending ? 202 : denied ? 403 : conflict ? 409 : result.error?.status ?? 400, result);
     } catch (error) {
       sendJson(res, error.statusCode ?? error.status ?? 502, { ok: false, error: { code: error.code ?? 'deletion_unavailable' } });
     }

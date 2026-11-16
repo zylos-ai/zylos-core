@@ -6,6 +6,9 @@ import { inspectDatabase, migrateDatabase } from './schema.js';
 
 export class Store {
   constructor(dbPath) {
+    // History attribution and transcript discovery stay warm between imports.
+    // This generation is process-local; opening the store always starts cold.
+    this.historyRevision = 0;
     const dir = path.dirname(dbPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
@@ -410,6 +413,7 @@ export class Store {
       source: event.source || 'hook',
       confidence: event.confidence || 'actual'
     });
+    if (info.changes) this.historyRevision++;
     return { inserted: info.changes > 0, event_seq: seq };
   }
 
@@ -465,7 +469,9 @@ export class Store {
   }
 
   deleteEventsOlderThan(days, anchor = 'now') {
-    return this._deleteOldEvents.run({ days, anchor });
+    const result = this._deleteOldEvents.run({ days, anchor });
+    if (result.changes) this.historyRevision++;
+    return result;
   }
 
   insertMetric(point) {
@@ -782,6 +788,7 @@ export class Store {
       transcript_path: transcriptPath,
       last_event_at: lastEventAt || null
     });
+    if (info.changes) this.historyRevision++;
     return { changes: info.changes };
   }
 

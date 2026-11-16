@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { jsonResponse, sendJson } from '../http.js';
+import { jsonResponse, sendJson, sendCommandJson } from '../http.js';
 import { scheduleReadResponse } from '../workbench/schedule-read.js';
+import { configFunctions } from '../../../../comm-bridge/scripts/c4-store-config.js';
+import { createGroupConfig } from '../workbench/group-config.js';
+import { createGroupActions } from '../workbench/group-actions.js';
 import { createScheduleWrite } from '../workbench/schedule-write.js';
 import { requireChatAccess, requireChatSettingsAccess } from '../chat/access.js';
 
@@ -16,7 +19,7 @@ test('JSON failures retain diagnostics and map command rejection status', () => 
     [{ ok: false, error: { code: 'RESULT_UNKNOWN', message: 'No reply' }, requestId: 'request' }, 502],
   ];
   for (const [input, status] of cases) {
-    const result = jsonResponse(200, input);
+    const result = jsonResponse(200, input, { command: true });
     assert.equal(result.status, status);
     assert.equal(result.body.ok, false);
     assert.equal(typeof result.body.error.code, 'string');
@@ -34,7 +37,7 @@ test('JSON failures retain diagnostics and map command rejection status', () => 
 test('JSON reads retain direct data and writes always declare success', () => {
   assert.deepEqual(jsonResponse(202, { ok: true, pending: true }), { status: 202, body: { ok: true, pending: true } });
   assert.deepEqual(jsonResponse(200, { items: [] }), { status: 200, body: { items: [] } });
-  assert.deepEqual(jsonResponse(200, { result: 'done', data: { id: 'task' } }, { write: true }),
+  assert.deepEqual(jsonResponse(200, { result: 'done', data: { id: 'task' } }, { write: true, command: true }),
     { status: 200, body: { ok: true, data: { id: 'task' } } });
   const res = { apiWrite: true, writeHead(status, headers) { this.status = status; this.headers = headers; }, end(body) { this.body = JSON.parse(body); } };
   sendJson(res, 200, { changed: true });
@@ -76,4 +79,63 @@ test('remote chat reads accept read scope while writes and settings mutation req
   assert.equal(requireChatSettingsAccess({ method: 'PUT' }, auth).error, 'insufficient_scope');
   context = { kind: 'api', scope: 'admin' };
   assert.equal(requireChatSettingsAccess({ method: 'PUT' }, auth), null);
+});
+
+
+test('ordinary JSON data is not interpreted as a command result', () => {
+  const payload = { ok: false, result: 'rejected', error: 'diagnostic', code: 'example', reason: 'sample', status: 200 };
+  assert.deepEqual(jsonResponse(200, payload), { status: 200, body: payload });
+  assert.deepEqual(jsonResponse(200, { ok: true, status: 200, services: [] }, { write: true }),
+    { status: 200, body: { ok: true, services: [] } });
+  assert.deepEqual(jsonResponse(200, { result: 'done', status: 200, services: [] }, { write: true, command: true }),
+    { status: 200, body: { ok: true, services: [] } });
+  const missingTarget = jsonResponse(200, { ok: false, error: { code: 'CONTROL_TARGET_REQUIRED', message: 'Choose a control target' } }, { command: true });
+  assert.equal(missingTarget.status, 503);
+  assert.equal(missingTarget.body.error.code, 'CONTROL_TARGET_REQUIRED');
+});
+
+
+test('restart admission stale target reaches HTTP as a conflict with the current run', async () => {
+  const action = createGroupActions({ zylosDir: '/isolated/instance',
+    loadCoreModule: async name => name === 'config.js'
+      ? { readSessionMode: () => ({ mode: 'multi' }) }
+      : { submit: async () => ({ kind: 'rejected', reply: { ok: false, result: 'stale_target', currentRunId: 'current-run' } }) },
+  });
+  const outcome = await action('telegram:example', 'restart', { runId: 'previous-run' });
+  const res = { apiWrite: true, writeHead(status) { this.status = status; }, end(body) { this.body = JSON.parse(body); } };
+  sendCommandJson(res, 200, outcome);
+  assert.equal(res.status, 409);
+  assert.equal(res.body.ok, false);
+  assert.equal(res.body.error.code, 'stale_target');
+  assert.equal(res.body.currentRunId, 'current-run');
+});
+
+
+// Actual Core configuration validation and write-error conversion, with the child
+// transport injected; no filesystem, process, socket or live database is opened.
+test('Core model validation and configuration storage failures retain their HTTP categories', async () => {
+  const { api } = configFunctions({ dependencies: { validateModel: () => false },
+    write: () => { throw Object.assign(new Error('Private storage failure'), { code: 'DB_WRITE_FAILED' }); },
+  });
+  const cases = [
+    [() => api.setSessionModelConfig({ runtime: 'claude', model: '', effort: 'high' }), 'MODEL_PAIR_REQUIRED', 400],
+    [() => api.setSessionModelConfig({ runtime: 'claude', model: 'bad-model', effort: 'high' }), 'MODEL_CONFIG_INVALID', 400],
+    [() => api.setSessionRuntimeConfig({ runtime: 'claude', sessionGroup: 'origin' }), 'CONFIG_STORE_FAILED', 500],
+  ];
+  for (const [produce, code, status] of cases) {
+    const config = createGroupConfig({ zylosDir: '/isolated/instance', execute: async () => {
+      try { produce(); assert.fail('The real Core producer must reject'); }
+      catch (error) { return { stdout: JSON.stringify({ ok: false, error: { code: error.code, message: error.message } }) }; }
+    } });
+    const outcome = await config.submit('origin', { kind: 'runtime', value: 'claude' });
+    assert.equal(outcome.error.code, code);
+    const res = { apiWrite: true, writeHead(status) { this.status = status; }, end(body) { this.body = JSON.parse(body); } };
+    sendCommandJson(res, 200, outcome);
+    assert.equal(res.status, status);
+    assert.equal(res.body.ok, false);
+    assert.equal(res.body.error.code, code);
+  }
+  for (const [code, status] of [['SESSION_GROUP_INVALID', 400], ['SESSION_GROUP_TOO_LONG', 400], ['SESSION_GROUP_NOT_FOUND', 404]]) {
+    assert.equal(jsonResponse(200, { ok: false, error: { code } }, { command: true }).status, status);
+  }
 });

@@ -100,7 +100,7 @@ test('pending deletion and Core conflicts preserve their result envelope', async
   assert.equal(res.status, 202); assert.equal(res.body.operationId, 'same-operation');
   value = { ok: false, error: { code: 'FENCE_MISMATCH' } };
   res = await call(handler, '/api/groups/dashboard%3Aexample/deletion-preview');
-  assert.equal(res.status, 409); assert.deepEqual(res.body, value);
+  assert.equal(res.status, 409); assert.deepEqual(res.body, { ...value, error: { ...value.error, message: value.error.code } });
   value = { ok: false, error: { code: 'TRANSITION_OPEN' } };
   assert.equal((await call(handler, '/api/groups/dashboard%3Aexample/deletion-preview')).status, 409);
   value = { ok: false, error: { code: 'transition_open' } };
@@ -153,7 +153,7 @@ test('Fleet never relays group or draft deletion preview and writes', async () =
     const res = { writeHead(status) { this.status = status; }, end(body) { this.body = JSON.parse(body); } };
     await proxy.proxyApi(req, res, { name: 'remote' }, suffix, '');
     assert.equal(res.status, 403);
-    assert.equal(res.body.error, 'remote_deletion_forbidden');
+    assert.equal(res.body.error.code, 'remote_deletion_forbidden');
   }
   assert.equal(calls, 0);
   assert.equal(tokenCalls, 0);

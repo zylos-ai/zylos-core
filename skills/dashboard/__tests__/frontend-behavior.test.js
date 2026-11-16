@@ -198,7 +198,7 @@ function observerResponse(data, { ok = true, status = ok ? 200 : 503 } = {}) {
   // These lifecycle fixtures represent the modern single-session producer.
   const payload = data?.id && !Object.hasOwn(data, 'sessionGroup') ? { ...data, sessionGroup: null }
     : data?.state === 'installed' && !Object.hasOwn(data, 'sessionMode') ? { ...data, sessionMode: 'single' } : data;
-  return { ok, status, json: async () => payload, text: async () => '<html>renderer</html>' };
+  return { ok, status, json: async () => !ok && typeof payload?.error === 'string' ? { ...payload, ok: false, error: { code: payload.error, message: payload.error } } : payload, text: async () => '<html>renderer</html>' };
 }
 
 test('/api/instance exposes the agent identity colour for remote machines that still tint by it', () => {
@@ -809,7 +809,7 @@ test('remote Actions/Settings are gated by access and routed through the viewed 
   assert.match(app, /const REMOTE_ACCESS = document\.documentElement\.dataset\.remoteAccess === 'admin' \? 'admin' : 'read';/);
   assert.match(version, /upgrade\.disabled = readOnly/);
   assert.match(version, /remote\.actions_read_only_tooltip/);
-  assert.match(app, /write: body => requestAgentJson\('\/api\/settings'/);
+  assert.match(app, /write: body => requestAgentJson\('\/api\/settings\/pricing'/);
   assert.match(app, /applySettingsReadOnly\(remoteIsReadOnly\(\)\)/);
   // The action runner refuses to send for a read-only key (wb-action-runner tests); the app tells it when that is.
   assert.match(app, /readOnly: \(\) => Boolean\(remoteIsReadOnly\(\)\)/);
@@ -1559,7 +1559,7 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.doesNotMatch(app, /agentPath\('\/api\/instance\/name/);
   assert.doesNotMatch(app, /agentPath\('\/api\/keys/);
   assert.match(app, /function fleetManageError\(code, fallback\)/);
-  assert.match(app, /fleetManageStatus\(fleetManageError\(data\.error \|\| 'unreachable'/);
+  assert.match(app, /fleetManageStatus\(fleetManageError\(data\.error\?\.code \|\| 'unreachable'/);
   const render = app.slice(app.indexOf('function renderAll('), app.indexOf('// ─── Data fetching'));
   assert.doesNotMatch(render, /fleetManageModal\.remove\(\)/);
   assert.match(app, /settingsModal = root; fleetManageModal = root; actionsModal = settingsPage\.actionsScope/);

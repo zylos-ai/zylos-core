@@ -486,7 +486,7 @@ export class AuthGate {
       return false;
     }
 
-    if (pathname.startsWith('/api/') || observerResource) {
+    if (pathname.startsWith('/api/') || /^\/fleet\/[^/]+\/api(?:\/|$)/.test(pathname) || observerResource) {
       sendJson(res, 401, { error: 'unauthorized' });
       return true;
     }
@@ -559,10 +559,7 @@ export class AuthGate {
       return true;
     }
     const context = getSessionAuth(req);
-    if (context && !isSameOriginRequest(req)) {
-      sendJson(res, 403, { error: 'same_origin_required' });
-      return true;
-    }
+    // Logout must always clear the browser session, including stale or missing Origin.
     if (context) _store.deleteSession(context.credentialId);
     clearSessionCookie(res, base);
     redirect(res, browserPath(base, 'login'));

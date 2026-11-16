@@ -10,7 +10,7 @@ export async function handleChatSettings(req, res, url, { auth, config, onChange
     sendJson(res, 200, { chat_allow_remote: config.chat?.allowRemote === true });
     return true;
   }
-  if (req.method !== 'PUT') { sendJson(res, 405, { error: 'method_not_allowed' }); return true; }
+  if (req.method !== 'PUT') { sendJson(res, 404, { error: 'not_found' }); return true; }
   try {
     const body = await readJsonBody(req);
     if (!body || typeof body.chat_allow_remote !== 'boolean' || Object.keys(body).some(key => key !== 'chat_allow_remote')) {

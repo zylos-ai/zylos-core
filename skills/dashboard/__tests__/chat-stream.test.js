@@ -109,7 +109,7 @@ test('invalid chat query and methods are rejected before subscription', t => {
   for (const query of ['?chat=0', '?chat=1&chat=1', '?chat=1&chat_tab=other', '?chat=1&chat_ids=1', '?chat=1&chat_conversation=g:AA&chat_ids=1', '?chat=1&chat_conversation=d:1']) {
     const before = f.reads(); assert.equal(f.request('cookie', query).res.status, 400); assert.equal(f.reads(), before);
   }
-  assert.equal(f.request('cookie', '?chat=1', 'POST').res.status, 405);
+  assert.equal(f.request('cookie', '?chat=1', 'POST').res.status, 404);
 });
 
 test('a slow or throwing client is removed once and cannot retain a pending event queue', t => {
@@ -149,7 +149,7 @@ test('chat connection caps reject excess subscriptions and release capacity on c
   const cookie = f.request().res, before = f.reads();
   const duplicate = f.request();
   assert.equal(duplicate.handled, true); assert.equal(duplicate.res.status, 429);
-  assert.equal(JSON.parse(duplicate.res.text()).error, 'chat_connection_limit');
+  assert.equal(JSON.parse(duplicate.res.text()).error.code, 'chat_connection_limit');
   assert.equal(f.reads(), before); assert.equal(f.observer.subscriptions.size, 1);
   const admin = f.request('admin').res;
   assert.equal(admin.status, 200); assert.equal(f.hub.clients.size, 2);
@@ -261,7 +261,7 @@ test('two cookie principals each receive their own default twenty chat subscript
   for (const identity of ['cookie', 'secondCookie']) {
     for (let i = 0; i < 20; i++) { const result = f.request(identity); assert.equal(result.handled, true); assert.equal(result.res.status, 200); open.push(result.res); }
     const extra = f.request(identity);
-    assert.equal(extra.handled, true); assert.equal(extra.res.status, 429); assert.equal(JSON.parse(extra.res.text()).error, 'chat_connection_limit');
+    assert.equal(extra.handled, true); assert.equal(extra.res.status, 429); assert.equal(JSON.parse(extra.res.text()).error.code, 'chat_connection_limit');
   }
   assert.equal(f.observer.subscriptions.size, 40); assert.equal(f.hub.clients.size, 40);
   assert.equal(f.hub.chatClients.size, 2);

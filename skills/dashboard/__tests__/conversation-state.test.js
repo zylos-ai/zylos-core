@@ -1804,6 +1804,23 @@ test('while the group works the page refreshes every two seconds; once all work 
   f.state.destroy();
 });
 
+test('expanded subtask ISO step times retain their elapsed duration', async () => {
+  const start = Date.parse('2026-11-16T01:00:00Z'), end = start + 65000;
+  const f = await selected(u => {
+    if (u.pathname.endsWith('/activity')) return u.searchParams.has('subtask')
+      ? { now: new Date(end).toISOString(), subtask: { id: 'sync', start: new Date(start).toISOString(), end: null },
+        steps: [{ kind: 'tool', label: { key: 'tool' }, status: 'done', start: new Date(start).toISOString(), end: new Date(end).toISOString() }] }
+      : { now: new Date(end).toISOString(), working: { on: true }, steps: [], subtasks: [{ id: 'sync', start: new Date(start).toISOString() }], awaiting: null };
+  });
+  try {
+    await f.state.toggleSubtask('sync');
+    const detail = f.state.snapshot().activity.details.get('sync');
+    assert.equal(detail.now, end);
+    assert.equal(detail.subtask.start, start);
+    assert.equal(detail.steps[0].end - detail.steps[0].start, 65000);
+  } finally { f.state.destroy(); }
+});
+
 test('only an expanded subtask has its steps read, on every refresh until it is folded or ends', async () => {
   let subtasks = [{ id: 'sync', label: { key: 'memorySync' }, start: 0, steps: 3 }];
   const f = await selected(u => {

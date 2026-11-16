@@ -13,21 +13,23 @@ Paths are relative to the Dashboard base URL. For example, with the default HTTP
 - **Admin**: an authenticated administrator. Browser-cookie writes also require a same-origin request. Read-scope API sessions cannot write.
 - **Local owner**: an administrator logged in with the local password cookie. API keys do not grant deletion or deletion-preview access, even with admin scope.
 
-The existing auth gate may return HTTP 401 (unauthenticated) or 403 (`insufficient_scope`). Browser writes can return 403 `same_origin_required`. Invalid JSON returns 400 `invalid_json`, and oversized JSON bodies return 413 `payload_too_large`; body limits are route-specific (4 KiB for object actions/timezone/names/keys, 16 KiB for pricing/Fleet config, 64 KiB for schedule forms; chat and memory have their own limits). Removed routes return 404 `not_found`; unsupported methods return 405 `method_not_allowed`. JSON failures use the common envelope.
+The existing auth gate may return HTTP 401 (unauthenticated) or 403 (`insufficient_scope`). Browser writes can return 403 `same_origin_required`. Invalid JSON returns 400 `invalid_json`, and oversized JSON bodies return 413 `payload_too_large`; body limits are route-specific (4 KiB for object actions/timezone/names/keys, 16 KiB for pricing/Fleet config, 64 KiB for schedule forms; chat and memory have their own limits). Removed routes and unsupported API method/path pairs return 404 `not_found` (including a known path called with the wrong method). Login/logout retain HTTP 405 for unsupported methods. JSON failures use the common envelope.
 
 Read APIs return their data object directly. Successful JSON writes return `{ok:true,...result}`. All JSON failures, including Core rejections, use `{ok:false,error:{code:string,message:string}}` and an appropriate non-2xx status. Authentication exchange bootstraps API access with the supplied key; login/logout retain their HTML/redirect protocol. Binary downloads, HTML and upgraded streams retain their own content type. A successful submission is not proof that a session restarted or that an instruction was delivered. Do not automatically repeat a write whose result is unknown.
 
+HTTP handlers select their status explicitly. The common serializer normalizes bodies only when the HTTP status is already an error and adds `ok:true` to successful writes; it does not interpret diagnostic read fields as command outcomes. Numeric internal HTTP `status` fields are removed from write bodies. Command-envelope interpretation is opt-in at these adapter boundaries: instance/default actions, group configuration/actions, group/draft deletion, timezone service restart and scheduler writes. Those adapters recognize Core `{ok:false}` and scheduler `{result:"rejected"|"unknown"}` failures, map their declared codes to HTTP status, and convert scheduler `result:"done"` to write success. Supervisor restart `result:"stale_target"` becomes HTTP 409 `stale_target`, retaining `currentRunId`. Unknown command failures map to 502; `control_target_required` maps to 503. Read payload `status`, `result`, `reason`, `code` and `ok` fields otherwise remain data.
+
 Every public absolute timestamp is an ISO 8601 string with a timezone designator (UTC `Z`), or `null` when unknown. This includes `readAt`, `sampledAt`, activity starts, scheduler task/execution times and the equivalent push fields. Durations, counts and opaque continuation values retain their numeric types. Unknown measurements are `null`, rather than zero.
 
-The same ISO projection applies to HTTP and SSE. The declared absolute-time fields include:
+The same ISO projection applies to HTTP and SSE. Server serialization and browser calculation adapters share the explicit catalogue in `public/js/wb/wire-time.js`; zero and empty source clocks become `null`. The declared absolute-time fields include:
 
 | Family | ISO fields (nullable when the source is unknown) |
 |---|---|
 | Instance / health | `startedAt`, resource `sampledAt`, account `recordedAt` and reset time, runtime-health `cooldownUntil`/`updatedAt`, transition creation/update, blocked `since`, diagnostic `ts`, source-health `updated_at` |
-| Groups / activity | `readAt`, `lastActivityAt`, state `since`/`sampledAt`, lifecycle `createdAt`, fences, working/main/subagent times, pending queue `oldestAt`, wait `since`/`lastAt`/`cooldownUntil`, preview `timestamp`, name update, run start/end, event/message timestamps, heatmap `start` and inbound times |
-| Schedules | `readAt`, task `nextRunAt`/`lastRunAt`/`updatedAt`, execution `executedAt`/`completedAt`, preview and next-run arrays, returned CLI task time columns |
+| Groups / activity | `readAt`, `lastActivityAt`, state `since`/`sampledAt`, lifecycle `createdAt`, fences, working/main/subagent times, pending queue `oldestAt`, wait `since`/`lastAt`/`cooldownUntil`, preview `timestamp`, name update, run start/end, event/message timestamps (including event `metadata.pasted_at`), heatmap `start` and inbound times |
+| Schedules | `readAt`, task `nextRunAt`/`lastRunAt`/`updatedAt`, execution `executedAt`/`completedAt`, preview `iso` and next-run arrays, returned CLI task time columns |
 | Chat / terminal | Conversation creation/update, list `stamp`, message and quote timestamps, activity `now`/`from`/step/subtask/awaiting times, upload/lease `expiresAt`, transcript-session start/update and entry `ts` |
-| Fleet / keys / memory | Fleet observation/link/problem times and nested instance fields, key creation/use/revocation, file `mtime`, Git author date and backlog `firstAt` |
+| Fleet / keys / memory | Fleet observation/link/problem times and nested instance fields, key creation/use/revocation, file `mtime`, Git `commit.author_date` and backlog `firstAt` |
 
 The examples below show request methods, URLs and JSON bodies. Supply the appropriate cookie or API-session authorization header; example writes are illustrative and should only be issued with authorization for their effects.
 
@@ -383,7 +385,7 @@ Example: `GET /api/workbench/memory/backlog`.
 
 Returns `{ok:true,data?:object,...metadata}` on success; Core failures use the common error envelope and a non-2xx status. `RESULT_UNKNOWN` means the result could not be established; read the group detail before deciding whether any retry is needed.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`; `INVALID_ARGUMENT`, Core configuration rejection codes, or `RESULT_UNKNOWN` in the result; common write errors.
+**Errors:** 400 `SESSION_GROUP_INVALID`, `SESSION_GROUP_TOO_LONG`, `INVALID_ARGUMENT`, `MODEL_PAIR_REQUIRED`, `MODEL_CONFIG_INVALID` and other Core validation rejections; 404 `SESSION_GROUP_NOT_FOUND`; 500 `CONFIG_STORE_FAILED`; 502 `RESULT_UNKNOWN`; common write errors.
 
 Example: `PUT /api/groups/telegram%3Aexample/config` with `{"kind":"runtime","value":"inherit"}`.
 
@@ -594,7 +596,7 @@ Schedule `nextRunAt`, `lastRunAt`, `updatedAt`, history `executedAt`/`completedA
 | `DELETE /api/keys/:name` | Admin, local only. `permanent=1` permanently removes an already revoked key; otherwise revokes it. Returns `{ok:true,...}`. | 404 `unknown_key`; 409 `must_revoke_first`. Example: `DELETE /api/keys/reader`. |
 | `POST /api/keys/purge-revoked` | Admin, local only. Returns `{ok:true,purged,...keyMetadata}`. | Common write errors. Example: `POST /api/keys/purge-revoked`. |
 | `GET /login`, `POST /login` | Public password login form and submission (`application/x-www-form-urlencoded`, password, optional remember). Success redirects and sets the scoped secure session cookie. Failure renders HTML. | Invalid credentials/rate limit are rendered on the form. Example: `GET /login`. |
-| `POST /logout` | Browser session logout; clears cookie and redirects. | Browser same-origin requirement applies. Example: `POST /logout`. |
+| `POST /logout` | Browser session logout; clears cookie and redirects. | Always clears the session, including when Origin is missing or mismatched; no same-origin precondition. Example: `POST /logout`. |
 
 ## Chat
 
@@ -653,7 +655,7 @@ All four history routes use the same selected group. In single mode only Origin 
 | `GET /api/fleet` | Returns self/remote status records and update metadata. Example: `GET /api/fleet`. |
 | `GET /api/fleet/agents` | Returns `{self,agents}` configuration with credential material redacted. Example: `GET /api/fleet/agents`. |
 | `POST /api/fleet/agents` | JSON `{name,base_url,read_api_key}` → `{ok:true,...configuration}` after validation/probe. Example body: `{"name":"worker","base_url":"https://worker.example/dashboard","read_api_key":"<key>"}`. |
-| `POST /api/fleet/agents/test` | JSON `{base_url,read_api_key}` → `{ok:true,...probeResult}`. Example: same destination/key as an add request. |
+| `POST /api/fleet/agents/test` | JSON `{base_url,read_api_key}` → `{ok:true,reachable:true,scope,version}`. A failed destination probe returns HTTP 502 with `{ok:false,reachable:false,error:{code,message}}`; codes include `auth_failed`, `version_unsupported` and `unreachable`. Example: same destination/key as an add request. |
 | `DELETE /api/fleet/agents/:name` | Removes the configured remote → `{ok:true,self,agents}`. Example: `DELETE /api/fleet/agents/worker`. |
 | `GET /fleet/:name/*` | Proxies allowed read routes/assets using configured credentials. Example: `GET /fleet/worker/api/settings/chat`. |
 | `PUT`, `PATCH`, `POST`, `DELETE /fleet/:name/*` | Only explicit object-write allowlist entries are proxyable, with admin and browser same origin. Local-only name, key, Fleet config, deletion and chat-setting writes cannot be proxied. Example: `POST /fleet/worker/api/schedules/report/actions/pause`. |

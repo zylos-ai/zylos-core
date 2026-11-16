@@ -219,7 +219,7 @@ export class ObserverService {
     if (!pathname.startsWith('/api/observer') && !pathname.startsWith('/observer/')) return false;
     try {
       if (pathname === '/observer/frame') {
-        if (req.method !== 'GET' && req.method !== 'HEAD') throw new ObserverHttpError(405, 'method_not_allowed');
+        if (req.method !== 'GET' && req.method !== 'HEAD') throw new ObserverHttpError(404, 'not_found');
         await this._ready();
         const context = this._authContext(req);
         const leaseId = firstHeader(req.headers['x-observer-lease']);

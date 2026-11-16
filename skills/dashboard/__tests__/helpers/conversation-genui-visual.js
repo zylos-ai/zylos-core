@@ -330,7 +330,7 @@ export async function runConversationGenuiVisual(t, sandbox) {
   // instance's next history response is unauthorized; ordinary data still uses
   // the real fixture, so an unrelated background request cannot clear drafts.
   fixture.setProxy(fixture);
-  assert.equal((await fixture.request('/api/settings/chat', { method: 'PUT', body: { allowRemote: true } })).status, 200);
+  assert.equal((await fixture.request('/api/settings/chat', { method: 'PUT', body: { chat_allow_remote: true } })).status, 200);
   await page.goto(fixture.base + '/fleet/Remote/chat');
   await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
   root = await choose('controls'); await formValues(root); await chooseType(root, 'person');

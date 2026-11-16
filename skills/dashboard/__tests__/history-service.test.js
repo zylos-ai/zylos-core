@@ -138,7 +138,7 @@ test('Observer auth protects all history routes without touching containment or 
   for (const [headers, expected] of [[{}, 401], [{ authorization: 'Bearer read' }, 200], [{ authorization: 'Bearer admin' }, 200], [{ cookie: 'session=yes' }, 200]]) {
     assert.equal((await request(observer, 'sessions', { headers })).status, expected);
   }
-  assert.equal((await request(observer, 'sessions', { method: 'POST', headers: { authorization: 'Bearer admin' } })).status, 405);
+  assert.equal((await request(observer, 'sessions', { method: 'POST', headers: { authorization: 'Bearer admin' } })).status, 404);
   assert.equal((await request(observer, 'unknown', { headers: { authorization: 'Bearer admin' } })).status, 404);
   observer.coordinator.historyStatus = async () => ({ state: 'installed', desired: { enabled: false } });
   assert.equal((await request(observer, 'sessions', { headers: { authorization: 'Bearer admin' } })).status, 404);

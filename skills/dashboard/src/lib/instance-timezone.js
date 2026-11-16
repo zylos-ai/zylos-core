@@ -8,7 +8,7 @@ import { canonicalTimezoneName, timezoneOptions } from '../../public/js/wb/timez
 import { withConfigLock } from './config-mutation.js';
 import { createScheduleTz } from './workbench/schedule-tz.js';
 import { loadCoreModule } from './core-modules.js';
-import { readJsonBody, sendJson } from './http.js';
+import { readJsonBody, sendJson, sendCommandJson } from './http.js';
 import { isSameOriginRequest } from './request-origin.js';
 
 const { createPm2Helpers } = await loadCoreModule('pm2.js');
@@ -248,7 +248,7 @@ export async function handleInstanceTimezone(req, res, url, { auth, timezone }) 
   const context = auth.resolveAuthContext(req);
   if (!context) { sendJson(res, 401, { error: 'authentication_required' }); return true; }
   if (req.method === 'GET') { sendJson(res, 200, await timezone.get({ canWrite: context?.scope === 'admin' })); return true; }
-  if (req.method !== 'PUT') { sendJson(res, 405, { error: 'method_not_allowed' }); return true; }
+  if (req.method !== 'PUT') { sendJson(res, 404, { error: 'not_found' }); return true; }
   if (context?.scope !== 'admin') { sendJson(res, 403, { error: 'insufficient_scope', required: 'admin' }); return true; }
   if (context.kind === 'cookie' && !isSameOriginRequest(req)) { sendJson(res, 403, { error: 'same_origin_required' }); return true; }
   try { sendJson(res, 200, await timezone.save(await readJsonBody(req, 4096))); }
@@ -266,6 +266,6 @@ export async function handleInstanceTimezoneRestart(req, res, url, { auth, timez
   try { body = await readJsonBody(req, 4096); }
   catch (error) { sendJson(res, error.status || 400, { error: error.message }); return true; }
   const result = await (runAction ? runAction(body) : timezone.restart(body));
-  sendJson(res, result.status || (result.ok ? 200 : 400), result);
+  sendCommandJson(res, result.status || (result.ok ? 200 : 400), result);
   return true;
 }

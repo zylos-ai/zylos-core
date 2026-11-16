@@ -1,3 +1,4 @@
+import { formatZoned } from './wb/instance-zone.js';
 import { readGroupSnapshot, displayGroupRow, instanceActionRequest } from './wb/group-data.js';
 import { waitUntilDeadline } from './request-timeout.js';
 import { createConversationPush } from './wb/conversation-push.js';
@@ -2291,7 +2292,7 @@ async function testFleetAgent() {
       body: JSON.stringify({ base_url: body.base_url, read_api_key: body.read_api_key })
     });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error?.message || t('fleet_manage.test_failed'));
+    if (!resp.ok) throw new Error(fleetManageError(data.error?.code, data.error?.message || t('fleet_manage.test_failed')));
     if (data.reachable) {
       fleetManageStatus(t('fleet_manage.test_ok', { scope: data.scope || 'read' }), 'success');
     } else {
@@ -2809,7 +2810,7 @@ async function refreshModeStatus() {
     const status = data.session_mode;
     const mode = ['single', 'multi'].includes(status?.sessionMode) ? status.sessionMode : null;
     if (mode) { const select = actionsModal.querySelector('#action-mode'); select.value = mode; select._current = mode; syncModeSegment(); }
-    text.textContent = [mode ? t('wb.settings.session.' + mode) : t('value.unknown'), status?.transition?.phase, status?.transition?.reason, status?.supervisor === 'unreachable' ? t('actions.supervisor_unreachable') : '', status?.blocked?.since ? t('actions.blocked_since', { time: status.blocked.since }) : '', status?.error ? [t('wb.readFailed'), status.error.message].filter(Boolean).join(' · ') : ''].filter(Boolean).join(' · ');
+    text.textContent = [mode ? t('wb.settings.session.' + mode) : t('value.unknown'), status?.transition?.phase, status?.transition?.reason, status?.supervisor === 'unreachable' ? t('actions.supervisor_unreachable') : '', status?.blocked?.since ? t('actions.blocked_since', { time: formatZoned(status.blocked.since, getLocale()) }) : '', status?.error ? [t('wb.readFailed'), status.error.message].filter(Boolean).join(' · ') : ''].filter(Boolean).join(' · ');
   } catch (error) { if (observerTargetKey() !== targetKey) return; if (text) text.textContent = error.message; }
   const instanceText = actionsModal?.querySelector('#action-instance-status');
   try {

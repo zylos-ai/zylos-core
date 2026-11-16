@@ -15,14 +15,14 @@ test('explicit time units normalize numeric, SQLite and ISO values without guess
   assert.equal(isoTimestamp(at / 86400000 + 2440587.5, 'julian'), iso);
   assert.equal(isoTimestamp('2026-11-16 02:03:04'), iso);
   assert.equal(isoTimestamp('2026-11-16T10:03:04+08:00'), iso);
-  assert.equal(isoTimestamp(null), null);
+  for (const value of [null, undefined, '', 0, '0']) for (const unit of ['ms', 's', 'julian']) assert.equal(isoTimestamp(value, unit), null);
   assert.equal(isoTimestamp(Infinity), null);
   assert.equal(isoTimestamp('unreadable'), null);
 });
 
 test('instance and group projections convert exact evidence fields while preserving internal models', () => {
   const instance = { resources: { sampledAt: at, cpu_pct: 10 }, accounts: { codex: { recordedAt: at, resetsAt: at / 1000 } },
-    runtimeHealth: { codex: { cooldownUntil: at / 1000, updatedAt: at / 1000 } }, session_mode: {
+    runtimeHealth: { codex: { cooldownUntil: at / 1000, updatedAt: at } }, session_mode: {
       transition: { createdAt: at / 1000, updatedAt: at / 1000, cutoff: 1700000000 },
       blocked: { since: at }, lastCompleted: { updatedAt: at / 1000 }, lastEvents: [{ ts: at }] } };
   const result = projectApiTimestamps('/api/instance', instance);
@@ -30,6 +30,7 @@ test('instance and group projections convert exact evidence fields while preserv
   assert.equal(result.accounts.codex.resetsAt, iso);
   assert.equal(result.accounts.codex.recordedAt, iso);
   assert.equal(result.runtimeHealth.codex.cooldownUntil, iso);
+  assert.equal(result.runtimeHealth.codex.updatedAt, iso);
   assert.equal(result.session_mode.transition.createdAt, iso);
   assert.equal(result.session_mode.transition.cutoff, 1700000000);
   assert.equal(result.session_mode.blocked.since, iso);
@@ -104,4 +105,17 @@ test('HTTP and SSE use the same immutable wire projection', () => {
   assert.equal(data.readAt, at);
   assert.equal(projectEventTimestamps('metric_update', { timestamp: at }).timestamp, iso);
   assert.equal(projectEventTimestamps('metric_update', { dimensions: { rate_limit_7d_resets_at: at / 1000 } }).dimensions.rate_limit_7d_resets_at, iso);
+});
+
+test('zero clocks are unknown and event, Git and preview fields normalize actual producers', () => {
+  const instance = projectApiTimestamps('/api/instance', { runtimeHealth: { claude: { updatedAt: at, cooldownUntil: 0 } } });
+  assert.equal(instance.runtimeHealth.claude.updatedAt, iso);
+  assert.equal(instance.runtimeHealth.claude.cooldownUntil, null);
+  assert.equal(projectApiTimestamps('/api/chat/conversations', { items: [{ stamp: 0 }] }).items[0].stamp, null);
+  const event = projectApiTimestamps('/api/groups/origin/events', { events: [{ metadata: { pasted_at: at, source_time: 9, received_at: 8 } }] });
+  assert.equal(event.events[0].metadata.pasted_at, iso);
+  assert.equal(event.events[0].metadata.source_time, 9);
+  assert.equal(event.events[0].metadata.received_at, 8);
+  assert.equal(projectApiTimestamps('/api/memory/git', { commit: { author_date: '2026-11-16T10:03:04+08:00' } }).commit.author_date, iso);
+  assert.equal(projectApiTimestamps('/api/schedules/preview', { iso: '2026-11-16T10:03:04+08:00' }).iso, iso);
 });

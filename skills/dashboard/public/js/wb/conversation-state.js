@@ -960,7 +960,7 @@ export function createConversationState({
   /** One open subtask's steps; a failed read keeps the ones shown. */
   async function readSubtask(current, id, key, e) {
     try {
-      const data = await request(`${pathFor(id)}/activity?${query({ tab: 'mine', subtask: key })}`);
+      const data = activityTimes(await request(`${pathFor(id)}/activity?${query({ tab: 'mine', subtask: key })}`));
       if (valid(e) && current.activity.open.has(key) && Array.isArray(data?.steps)) current.activity.details.set(key, data);
     } catch { /* the next poll asks again */ }
   }

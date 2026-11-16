@@ -19,7 +19,7 @@ export async function handleChatConversations(req, res, url, { auth, config, con
       : requireChatWritePreflight(req, auth, config);
   if (preflight) { deniedResponse(res, preflight); return true; }
   const allowed = draft ? req.method === 'POST' : match[2] ? req.method === 'POST' : ['GET', 'PATCH'].includes(req.method);
-  if (!allowed) { sendJson(res, 405, { error: 'method_not_allowed' }); return true; }
+  if (!allowed) { sendJson(res, 404, { error: 'not_found' }); return true; }
   try {
     if ([...url.searchParams].length) {
       sendJson(res, 400, { error: 'invalid_chat_parameters' }); return true;

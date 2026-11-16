@@ -94,7 +94,7 @@ test('HTTP quote persists, delivers and replays the same source without reviving
       const beforeReject = api.db.prepare('SELECT COUNT(*) AS count FROM conversations').get().count;
       const rejected = await api.request(current.route + '/send', post({ content: 'Rejected.', quote: other.receipt.messageId }));
       assert.equal(rejected.status, 400);
-      assert.equal(rejected.body.error, 'invalid_chat_quote');
+      assert.equal(rejected.body.error.code, 'invalid_chat_quote');
       assert.equal(api.db.prepare('SELECT COUNT(*) AS count FROM conversations').get().count, beforeReject);
 
       const input = 'Please expand that.';
@@ -125,7 +125,7 @@ test('HTTP quote persists, delivers and replays the same source without reviving
       assert.equal(history.status, 200);
       const item = history.body.items.find(row => row.id === saved.id);
       assert.equal(item.content, saved.content);
-      assert.deepEqual(item.quote, { id: original.id, direction: 'out', timestamp: original.timestamp,
+      assert.deepEqual(item.quote, { id: original.id, direction: 'out', timestamp: new Date(original.timestamp.includes('T') ? original.timestamp : original.timestamp.replace(' ', 'T') + 'Z').toISOString(),
         internal: false, preview: 'Earlier <answer> & details.\n[文件] old.txt', available: true });
       const listing = await api.request('/api/chat/conversations?tab=mine');
       assert.equal(listing.body.items.find(row => row.id === result.body.conversationId).preview, input);

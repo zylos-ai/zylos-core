@@ -118,7 +118,7 @@ export function createScheduleWrite({ zylosDir, scheduleTz, schedulerCli = creat
       }
     }
     const outcome = await schedulerCli(args);
-    return jsonResponse(outcome.result === 'unknown' ? 502 : 200, outcome, { write: true });
+    return jsonResponse(outcome.result === 'unknown' ? 502 : 200, outcome, { write: true, command: true });
   }
   return { write };
 }

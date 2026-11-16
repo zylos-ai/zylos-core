@@ -61,3 +61,14 @@ test('browser fixture resources expose the actual ISO wire projection', () => {
   const schedule = projectApiTimestamps('/api/schedules', { tasks: [{ nextRunAt: seconds }], readAt: ms });
   assert.equal(scheduleTimes(schedule).tasks[0].nextRunAt, seconds);
 });
+
+test('shared time adapters leave undeclared nested content clocks opaque', () => {
+  const content = { start: iso, nextRunAt: iso, readAt: iso };
+  const activity = activityTimes(projectApiTimestamps('/api/chat/conversations/example/activity', { now: ms, steps: [{ start: ms, end: ms + 1000 }], content }));
+  assert.equal(activity.now, ms);
+  assert.equal(activity.steps[0].end - activity.steps[0].start, 1000);
+  assert.deepEqual(activity.content, content);
+  const schedule = scheduleTimes(projectApiTimestamps('/api/schedules', { readAt: ms, tasks: [{ nextRunAt: seconds }], content }));
+  assert.equal(schedule.tasks[0].nextRunAt, seconds);
+  assert.deepEqual(schedule.content, content);
+});

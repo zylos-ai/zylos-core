@@ -1043,7 +1043,7 @@ test('fleet proxy keeps encoded slash fail-closed for memory URL path', async ()
   }
 });
 
-test('fleet proxy passes through upstream insufficient_scope for whitelisted writes', async () => {
+test('fleet proxy normalizes upstream insufficient_scope for whitelisted writes', async () => {
   const remote = await listen((_req, res) => {
     res.writeHead(403, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: 'insufficient_scope', required: 'admin' }));
@@ -1065,7 +1065,7 @@ test('fleet proxy passes through upstream insufficient_scope for whitelisted wri
       body: '{}'
     });
     assert.equal(resp.status, 403);
-    assert.deepEqual(await resp.json(), { error: 'insufficient_scope', required: 'admin' });
+    assert.deepEqual(await resp.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
   } finally {
     await hub.close();
     await remote.close();
@@ -1561,7 +1561,7 @@ test('fleet forwards Observer Set size with its body and relays the producer ver
     producerScope = 'read';
     const readOnly = await post({ Origin: hub.origin });
     assert.equal(readOnly.status, 403);
-    assert.deepEqual(await readOnly.json(), { error: 'insufficient_scope' });
+    assert.deepEqual(await readOnly.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' } });
   } finally {
     await hub.close();
     await remote.close();
@@ -1828,4 +1828,73 @@ test('fleet migrates object writes and exposes remote chat policy to read caller
   assert.equal(localOnly.status, 403);
   assert.equal((await localOnly.json()).error.code, 'local_endpoint_not_proxyable');
   assert.equal(seen.length, count);
+});
+
+
+// Loopback HTTP proxy boundary; no real destination, credential or process is used.
+// Run when the Fleet schedule allowlist changes; unrelated UI work can skip.
+test('fleet schedule writes allow only exact object and action paths', async () => {
+  const seen = [];
+  const remote = await listen((req, res) => {
+    seen.push(`${req.method} ${req.url}`);
+    req.resume();
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"ok":true}');
+  });
+  const proxy = new FleetProxy({
+    config: { fleet: { agents: [{ name: 'Remote', base_url: remote.origin, read_api_key: 'fixture' }] } },
+    rootDir: publicDir(), poller: { getSessionToken: async () => 'fixture-session' }
+  });
+  const hub = await listen((req, res) => {
+    req._authContext = { kind: 'api', scope: 'admin', principalId: 'fixture' };
+    proxy.handle(req, res, new URL(req.url, 'http://hub.test'));
+  });
+  try {
+    const allowed = [['POST', '/api/schedules'], ['PUT', '/api/schedules/task'], ['DELETE', '/api/schedules/task'],
+      ['POST', '/api/schedules/task/actions/pause'], ['POST', '/api/schedules/task/actions/resume']];
+    const forbidden = [['POST', '/api/schedules/task/pause'], ['POST', '/api/schedules/task/actions/delete'],
+      ['POST', '/api/schedules/task/actions/pause/extra'], ['POST', '/api/schedules/task/history'],
+      ['POST', '/api/schedules/preview'], ['PUT', '/api/schedules/task/extra'], ['DELETE', '/api/schedules/task/actions/pause']];
+    for (const [method, suffix] of allowed) {
+      const reply = await fetch(`${hub.origin}/fleet/Remote${suffix}`, { method, body: '{}' });
+      assert.equal(reply.status, 200, `${method} ${suffix}`);
+      await reply.text();
+    }
+    assert.deepEqual(seen, allowed.map(([method, suffix]) => `${method} ${suffix}`));
+    const count = seen.length;
+    for (const [method, suffix] of forbidden) {
+      const reply = await fetch(`${hub.origin}/fleet/Remote${suffix}`, { method, body: '{}' });
+      assert.equal(reply.status, 403, `${method} ${suffix}`);
+      assert.equal((await reply.json()).error.code, 'read_only_proxy');
+      assert.equal(seen.length, count, 'rejected paths must not reach the destination');
+    }
+  } finally { await hub.close(); await remote.close(); }
+});
+
+
+// Loopback buffered-error relay boundary. Covers ordinary JSON and the separate
+// attachment/config paths; run for relay normalization changes, skip unrelated UI.
+test('fleet buffered attachment failures normalize JSON while binary failures keep their bytes', async () => {
+  const proxy = new FleetProxy({
+    config: { fleet: { agents: [{ name: 'Remote', base_url: 'http://fixture.invalid', read_api_key: 'fixture' }] } },
+    rootDir: publicDir(), poller: { getSessionToken: async () => 'fixture-session' },
+    fetch: async url => new Response(url.includes('binary') ? 'binary-error-body' : '{"error":"insufficient_scope","required":"admin"}',
+      { status: 403, headers: { 'content-type': url.includes('binary') ? 'application/octet-stream' : 'application/json' } }),
+  });
+  const hub = await listen((req, res) => {
+    req._authContext = { kind: 'api', scope: 'admin', principalId: 'fixture' };
+    proxy.handle(req, res, new URL(req.url, 'http://hub.test'));
+  });
+  try {
+    for (const [method, suffix] of [['GET', '/api/chat/conversations/example/attachments/file'],
+      ['POST', '/api/chat/conversations/example/uploads']]) {
+      const reply = await fetch(`${hub.origin}/fleet/Remote${suffix}`, { method });
+      assert.equal(reply.status, 403);
+      assert.deepEqual(await reply.json(), { ok: false, required: 'admin', error: { code: 'insufficient_scope', message: 'insufficient_scope' } });
+    }
+    const binary = await fetch(`${hub.origin}/fleet/Remote/api/chat/conversations/example/attachments/binary`);
+    assert.equal(binary.status, 403);
+    assert.equal(binary.headers.get('content-type'), 'application/octet-stream');
+    assert.equal(await binary.text(), 'binary-error-body');
+  } finally { await hub.close(); }
 });

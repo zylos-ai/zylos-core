@@ -149,7 +149,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       loadCoreModule: async name => name === 'status-view.js' ? { collectStatus: options => collectStatus({ ...options,
         mode: () => ({ mode }), resolveRoot: () => root, configIssue: () => null, requests: () => [], now: () => clock,
         list: () => [{ sessionGroup: 'telegram:working' }, { sessionGroup: 'telegram:child' }],
-        facts: () => ({ originNeed: null }), health: () => ({ health: 'rate_limited', cooldownUntil: clock / 1000 + 60 }),
+        facts: () => ({ originNeed: null }), health: () => ({ health: 'rate_limited', cooldownUntil: clock / 1000 + 60, updatedAt: clock }),
       }) } : name === 'config.js' ? { readSessionMode: () => ({ mode }) }
         : name === 'session-pool-config.js' ? { readPoolCapacity: () => ({ k: 3, valid: true, fresh: true }) } : core(name),
     }),
@@ -182,6 +182,18 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   const login = await fetch(`${origin}/login`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ password: 'fixture-password' }), redirect: 'manual' });
   assert.equal(login.status, 302);
   const cookie = login.headers.getSetCookie().find(value => value.startsWith('__Secure-zylos_dashboard_session=')).split(';')[0];
+  // Independent of the declared field catalogue: catch missed nested ISO clocks
+  // and unit errors in every actual HTTP/SSE response in both session modes.
+  const isoCounts = { single: 0, multi: 0 };
+  const assertIsoYears = (value, location) => {
+    if (typeof value === 'string' && /^(?:[+-]\d{6}|\d{4})-\d{2}-\d{2}T/.test(value)) {
+      const year = new Date(value).getUTCFullYear();
+      assert.ok(year >= 2000 && year <= 2100, `${location}: ISO year outside 2000–2100: ${value}`);
+      isoCounts[mode]++;
+    } else if (value && typeof value === 'object') {
+      for (const [key, child] of Object.entries(value)) assertIsoYears(child, `${location}.${key}`);
+    }
+  };
   const request = async (route, { method = 'GET', body, identity = 'read', expected = 200, originHeader = true } = {}) => {
     const headers = identity === 'cookie' ? { Cookie: cookie, ...(originHeader ? { Origin: origin } : {}) }
       : identity === 'none' ? {} : { Authorization: `Bearer ${tokens[identity]}` };
@@ -189,6 +201,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     const response = await fetch(`${origin}${route}`, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(5000) });
     const text = await response.text(); let value;
     try { value = JSON.parse(text); } catch { value = text; }
+    assertIsoYears(value, `${mode} ${method} ${route}`);
     records.push({ mode, method, route, identity, status: response.status, body: value });
     if (response.status >= 400) { assert.equal(value.ok, false); assert.equal(typeof value.error?.code, 'string'); assert.equal(typeof value.error?.message, 'string'); }
     assert.equal(response.status, expected, `${method} ${route}: ${text.slice(0, 300)}`);
@@ -351,12 +364,16 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       });
       const instance = events.find(event => event.type === 'instance'), groups = events.find(event => event.type === 'groups');
       assert.ok(instance); assert.ok(groups);
+      for (const event of events) assertIsoYears(event.data, `${mode} SSE ${event.type}`);
       const expectedInstance = await request('/api/instance'), expectedGroups = await request('/api/groups/counts');
       assert.equal(JSON.stringify(instance.data), JSON.stringify(expectedInstance)); assert.equal(JSON.stringify(groups.data), JSON.stringify(expectedGroups));
       assert.equal(events.some(event => ['state_change', 'fleet_state', 'system_update', 'health_update'].includes(event.type)), false);
       records.push({ mode, method: 'GET', route: '/api/stream', status: response.status, events });
     } finally { clearTimeout(timeout); await reader.cancel(); controller.abort(); }
     }
+  });
+  await t.test('real HTTP and SSE clocks have plausible years in both session modes', () => {
+    for (const mode of ['single', 'multi']) assert.ok(isoCounts[mode] > 0, `${mode} must expose ISO fields`);
   });
   await t.test('a catalog failure leaves Fleet and the ordinary stream available but keeps list reads explicit', async () => {
     catalogReadable = false; clock += 3000;

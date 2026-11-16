@@ -21,6 +21,7 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
   const store = new Store(path.join(root, 'history.db'));
   t.after(() => store.close());
   let mode = 'multi';
+  let liveSingleSessionId = null;
   const load = async name => name === 'config.js' ? { readSessionMode: () => ({ mode }) } : { assertSessionGroup };
   const config = { zylosDir, runtime: 'claude' };
   const project = path.join(os.homedir(), '.claude', 'projects', claudeProjectSlug(zylosDir));
@@ -42,12 +43,24 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
   t.after(() => fs.rm(rollout, { force: true }));
   await fs.writeFile(rollout, JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'codex needle' }] } }) + '\n');
   store.db.prepare('INSERT INTO codex_rollout_paths(runtime,session_id,transcript_path) VALUES(?,?,?)').run('codex', 'codex-session', rollout);
-  const service = new HistoryService({ config, store, resolveScope: createHistoryScope({ config, store, load }) });
+  const service = new HistoryService({ config, store, resolveScope: createHistoryScope({ config, store, load,
+    readCurrentSessionId: () => liveSingleSessionId }) });
   t.after(() => service.close());
   const server = http.createServer((req, res) => { const url = new URL(req.url, 'http://fixture'); res.apiPath = url.pathname; return service.handle(req, res, url); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
   const observations = [];
+  let attributionScans = 0, directoryScans = 0;
+  const prepare = store.db.prepare.bind(store.db);
+  t.mock.method(store.db, 'prepare', (sql, ...args) => {
+    if (sql.includes('GROUP BY session_id, runtime, session_group')) attributionScans++;
+    return prepare(sql, ...args);
+  });
+  const readdir = fs.readdir.bind(fs);
+  t.mock.method(fs, 'readdir', (...args) => {
+    if (String(args[0]).startsWith(project)) directoryScans++;
+    return readdir(...args);
+  });
   const get = async (route, params = {}) => {
     const response = await fetch(`http://127.0.0.1:${server.address().port}/api/observer/history/${route}?${new URLSearchParams(params)}`);
     const result = { status: response.status, body: await response.json() };
@@ -74,6 +87,17 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
   const parallel = await Promise.all(['telegram:team', 'dashboard:codex', 'origin'].map(session_group => get('sessions', { session_group })));
   assert.deepEqual(parallel.map(item => item.body.runtime), ['claude', 'codex', 'claude']);
   assert.equal(parallel[2].body.sessions.some(row => row.id.startsWith('team-session')), false);
+  assert.equal(attributionScans, 1, 'one attribution query serves all groups until the next import');
+  const scans = directoryScans;
+  await get('sessions', { session_group: 'telegram:team' });
+  await get('entries', { session_group: 'telegram:team', session: 'team-session' });
+  assert.equal(directoryScans, scans, 'warm requests reuse the scoped resolver paths');
+  await fs.writeFile(path.join(project, 'new-team-session.jsonl'), record('new session needle'));
+  store.insertEvent({ id: 'new-team-event', ingest_id: 'new-team-event', session_id: 'new-team-session', session_group: 'telegram:team',
+    runtime: 'claude', event_type: 'session_start', category: 'lifecycle', timestamp: '2026-01-02T00:00:00Z' });
+  assert.ok((await get('sessions', { session_group: 'telegram:team' })).body.sessions.some(row => row.id === 'new-team-session'));
+  assert.equal(attributionScans, 2, 'a new import invalidates attribution');
+  assert.ok(directoryScans > scans, 'a new import refreshes transcript discovery');
   const readyDir = path.join(zylosDir, 'activity-monitor', 'session-groups', 'telegram:team');
   await fs.mkdir(readyDir, { recursive: true });
   await fs.writeFile(path.join(readyDir, 'current-session.json'), JSON.stringify({ sessionId: 'team-session' }));
@@ -82,7 +106,12 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
   assert.equal((await get('sessions', { session_group: '../escape' })).status, 400);
   mode = 'single';
   assert.equal((await get('sessions', { session_group: 'telegram:team' })).body.error.code, 'target_mismatch');
-  await fs.writeFile(path.join(zylosDir, 'activity-monitor', 'statusline.json'), JSON.stringify({ session_id: 'origin-session' }));
+  const staleOrigin = path.join(zylosDir, 'activity-monitor', 'session-groups', 'origin');
+  await fs.mkdir(staleOrigin, { recursive: true });
+  await fs.writeFile(path.join(staleOrigin, 'current-session.json'), JSON.stringify({ sessionId: 'origin-session' }));
+  await fs.writeFile(path.join(zylosDir, 'activity-monitor', 'statusline.json'), JSON.stringify({ session_id: 'unattributed' }));
+  assert.equal((await get('sessions', { session_group: 'origin' })).body.current, null, 'single mode ignores a stale multi-session pointer');
+  liveSingleSessionId = 'origin-session';
   const single = await get('sessions', { session_group: 'origin' });
   assert.equal(single.status, 200);
   assert.equal(single.body.current, 'origin-session');

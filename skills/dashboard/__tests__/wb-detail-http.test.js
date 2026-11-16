@@ -151,7 +151,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     for (const { route, body } of writes) {
       const response = await request('/api/groups/telegram%3Aa' + route, 'read', body);
       assert.equal(response.status, 403, route);
-      assert.deepEqual(await response.json(), { error: 'insufficient_scope', required: 'admin' });
+      assert.deepEqual(await response.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
     }
     assert.equal(calls.length, before, 'denied writes must never reach a child transport');
     assert.equal(restarts.length, 0);
@@ -283,7 +283,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
       for (let round = 0; round < 2; round++) {
         const response = await request('/api/groups/origin/backlog');
         assert.equal(response.status, 200);
-        assert.deepEqual(await response.json(), { count, firstAt: 100, syncing });
+        assert.deepEqual(await response.json(), { count, firstAt: new Date(100).toISOString(), syncing });
         assert.equal(snapshotReads, before, 'backlog must not invoke the rebuilding getter with a cached view');
       }
     }
@@ -306,7 +306,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
       if (route === 'runs') {
         assert.deepEqual(value.runs.map(run => run.runId), ['single-run']);
         assert.equal(value.runs[0].endReason, 'running');
-      } else if (route === 'backlog') assert.deepEqual(value, { count: 3, firstAt: 100, syncing: true });
+      } else if (route === 'backlog') assert.deepEqual(value, { count: 3, firstAt: new Date(100).toISOString(), syncing: true });
       else assert.deepEqual(value.messages.map(row => row.id), [1]);
     };
     for (const first of ['runs', 'backlog', 'messages' + range]) {
@@ -324,7 +324,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     const before = snapshotReads;
     const response = await request('/api/groups/origin/backlog');
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { count: 7, firstAt: 100, syncing: true }, 'Origin reads its group sync lock, not the Origin Sync lock');
+    assert.deepEqual(await response.json(), { count: 7, firstAt: new Date(100).toISOString(), syncing: true }, 'Origin reads its group sync lock, not the Origin Sync lock');
     assert.deepEqual(calls.at(-2).args.slice(1), ['unsummarized', '--group', 'origin', '--json']);
     assert.deepEqual(calls.at(-1).args.slice(1), ['status', '--group', 'origin', '--json']);
     assert.equal(snapshotReads, before, 'a cached unreadable view must not trigger a new build');

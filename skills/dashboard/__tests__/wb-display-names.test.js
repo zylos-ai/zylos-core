@@ -135,10 +135,10 @@ test('local name routes require admin and publish human-owned names in group sna
   assert.equal((await request('/api/groups/origin/name', 'PUT', { name: 'bad' })).status, 400);
   response = await request(route, 'PUT', { name: '' }); assert.equal(response.status, 400); assert.equal((await response.json()).error.code, 'NAME_INVALID');
   response = await request(route, 'PUT', { name: 'x'.repeat(4096) });
-  assert.equal(response.status, 413); assert.deepEqual(await response.json(), { error: 'payload_too_large' });
+  assert.equal(response.status, 413); assert.deepEqual(await response.json(), { ok: false, error: { code: 'payload_too_large', message: 'payload_too_large' } });
   response = await fetch(origin + route, { method: 'PUT', signal: AbortSignal.timeout(3000),
     headers: { Authorization: `Bearer ${admin}`, 'Content-Type': 'application/json' }, body: '{' });
-  assert.equal(response.status, 400); assert.deepEqual(await response.json(), { error: 'invalid_json' });
+  assert.equal(response.status, 400); assert.deepEqual(await response.json(), { ok: false, error: { code: 'invalid_json', message: 'invalid_json' } });
   await t.test('unexpected name storage failures return a generic server error', async child => {
     const detail = 'private SQLite storage failure';
     const write = child.mock.method(engine.store, 'writeGroupDisplayName', () => {
@@ -150,7 +150,7 @@ test('local name routes require admin and publish human-owned names in group sna
         assert.equal(failed.status, 500);
         const body = await failed.text();
         assert.equal(body.includes(detail), false); assert.equal(body.includes('SQLITE_BUSY'), false);
-        assert.deepEqual(JSON.parse(body), { error: 'internal_error' });
+        assert.deepEqual(JSON.parse(body), { ok: false, error: { code: 'internal_error', message: 'internal_error' } });
       }
     } finally { write.mock.restore(); }
   });

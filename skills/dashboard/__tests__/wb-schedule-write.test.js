@@ -359,7 +359,7 @@ test('schedule HTTP routes read, write and map errors through the real server', 
   assert.equal(wrong.status, 409);
   assert.equal((await wrong.json()).error.code, 'TASK_WRONG_STATUS');
   assert.equal((await request(`/api/schedules/${id}`, { token: admin, method: 'DELETE' })).status, 200);
-  assert.equal((await request(`/api/schedules/${id}/unknown`, { token: admin, method: 'POST' })).status, 405);
+  assert.equal((await request(`/api/schedules/${id}/unknown`, { token: admin, method: 'POST' })).status, 404);
   for (const suffix of ['', '-wal', '-shm']) fs.rmSync(f.dbPath + suffix, { force: true });
   fs.writeFileSync(f.dbPath, 'not a database file');
   const unreadable = await request('/api/schedules');
