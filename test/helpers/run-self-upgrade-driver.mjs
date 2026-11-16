@@ -24,6 +24,7 @@ try {
     maintenance:{discover:() => ({candidates:[], diagnostics:[], marker:null})},
     inspect:() => ({tempDir, zylosDir, skillsDir, mode:'merge'}),
     resolveNpm:() => '/fixture/npm-cli.js',
+    validateNpmPrefix:() => {},
     begin(ctx) {
       ctx.upgradeProtected = true;
       ctx.transactionId = 'conflict-fixture';

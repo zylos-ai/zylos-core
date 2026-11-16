@@ -138,10 +138,12 @@ for(const kind of ['file','symlink','dangling'])test(`target entry rejects ${kin
 
 function pipeline(input, failAt) {
   const calls = [];
+  const npmCli = path.join(input.tempDir, 'npm-cli.js');
+  fs.writeFileSync(npmCli, `process.stdout.write(${JSON.stringify(path.dirname(input.installedRoot))});`);
   const ctx = {coreDir:input.installedRoot, tempDir:input.tempDir, zylosDir:input.zylosDir, skillsDir:path.join(input.zylosDir, '.claude/skills')};
   const step = name => () => {calls.push(name); if (name === failAt) throw Error(name);};
   const deps = {maintenance:{discover:() => ({candidates:[], diagnostics:[], marker:null})},
-    inspect:() => ctx, resolveNpm:() => '/fixture/npm-cli.js',
+    inspect:() => ctx, resolveNpm:() => npmCli,
     begin(context) {calls.push('begin'); context.transactionDir = '/fixture/transaction'; context.upgradeProtected = true;},
     savePackage:step('savePackage'), saveCode:step('saveCode'), prepare:step('prepare'), install:step('install'),
     finalize:() => {calls.push('finalize'); return {success:true};},
@@ -236,7 +238,7 @@ test('downloaded executable keeps malformed JSON classified as invalid handoff',
 // skip unrelated finalizer/service work. Runner HOME/ZYLOS_DIR/PM2_HOME/TMPDIR
 // are isolated, and the child receives fixture-owned paths plus a private tmux
 // namespace. Product entry files are copied unchanged; native module mocks stop
-// installer/protection/DB work. The bounded child cannot invoke npm or services.
+// installer/protection/DB work. The bounded child only permits npm root -g.
 test('downloaded executable prints Core package location warnings separately from runtime warnings', t => {
   const input = fixture(t), root = path.dirname(input.tempDir), source = path.resolve('.');
   const filter = file => !file.split(path.sep).includes('__tests__') && !file.split(path.sep).includes('node_modules');
@@ -252,7 +254,9 @@ test('downloaded executable prints Core package location warnings separately fro
   fs.writeFileSync(path.join(input.installedRoot, 'cli/lib/self-upgrade.js'),
     `export function runSelfUpgradeFinalize() { return ${JSON.stringify(result)}; }\n`);
   const bin = path.join(root, 'prefix/bin'), npmCli = path.join(root, 'npm-cli.js');
-  fs.writeFileSync(npmCli, 'throw Error("the fixture must never launch npm");\n');
+  fs.writeFileSync(npmCli, `import assert from 'node:assert/strict';
+assert.deepEqual(process.argv.slice(2), ['root', '-g']);
+process.stdout.write(${JSON.stringify(path.dirname(input.installedRoot))});\n`);
   fs.symlinkSync(npmCli, path.join(bin, 'npm'));
   const home = path.join(root, 'home'), tmp = path.join(root, 'tmp');
   fs.mkdirSync(home); fs.mkdirSync(tmp);

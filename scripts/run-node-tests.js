@@ -49,6 +49,7 @@ const ROOT_NODE_TESTS = [
   'test/test-environment-cleanup.test.js',
   'test/single-upgrade-check.integration.test.js',
   'test/exit-control.integration.test.js',
+  'test/upgrade-npm-prefix.integration.test.js',
   'test/session-release.integration.test.js',
   'test/component-source-record.integration.test.js',
 ];
