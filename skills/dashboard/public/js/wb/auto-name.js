@@ -6,14 +6,18 @@ export function sendNamePrompt({ request }) {
   return request('/api/groups/naming-prompt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
 }
 
-/** What the person is told after confirming: sent only when C4 queued the prompt, otherwise why not. */
+/**
+ * What the person is told after confirming: sent only when C4 queued the prompt. Otherwise one plain sentence, while
+ * the raw answer (error code, message, command output) is kept as `detail` for the technical-detail view only.
+ */
 export function namePromptResult(value, error, t = key => key, { single = false } = {}) {
   // The Dashboard names the session it queued for: null is the only session of single mode.
   if (value?.ok === true) return { ok: true, text: t(value.sessionGroup === null ? 'wb.name.sentSingle' : 'wb.name.sent') };
   const body = error ? error.body : value;
   const lone = body && 'sessionGroup' in body ? body.sessionGroup === null : single;
-  if (body?.unknown || (error && !body)) return { ok: false, text: t(lone ? 'wb.name.unknownSingle' : 'wb.name.unknown', { reason: body ? responseError(body) : error.message }) };
-  return { ok: false, text: t('wb.name.failed', { reason: responseError(body) }) };
+  const detail = body ? responseError(body) : error?.message ?? '';
+  if (body?.unknown || (error && !body)) return { ok: false, text: t(lone ? 'wb.name.unknownSingle' : 'wb.name.unknown'), detail };
+  return { ok: false, text: t('wb.name.failed'), detail };
 }
 
 /** The answer after confirming: sending, then sent or failed, with a close button. */
@@ -25,10 +29,17 @@ export function renderNameResult(root, state, { document = root.ownerDocument, t
   message.setAttribute('role', state !== 'sending' && !state.ok ? 'alert' : 'status');
   root.append(message);
   if (state === 'sending') return { message, close: null };
+  // The raw answer stays out of the sentence: folded, and shown only while technical detail is on.
+  let detail = null;
+  if (!state.ok && state.detail) {
+    detail = element(document, 'details', undefined, 'wb-tech wb-name-detail');
+    detail.append(element(document, 'summary', t('wb.detail')), element(document, 'pre', state.detail));
+    root.append(detail);
+  }
   const close = element(document, 'button', t('wb.close'), 'wb-btn'); close.type = 'button';
   close.addEventListener('click', onClose);
   const actions = element(document, 'div', undefined, 'wb-modal-acts'); actions.append(close);
   root.append(actions);
   close.focus?.();
-  return { message, close };
+  return { message, close, detail };
 }

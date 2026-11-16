@@ -600,23 +600,57 @@ test('automatic naming posts once and says sent only for a queued prompt', async
   assert.deepEqual(requests, [{ path: '/api/groups/naming-prompt',
     options: { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' } }]);
   assert.deepEqual(namePromptResult(value, undefined, t), { ok: true, text: 'wb.name.sent' });
-  // C4 refused it: the reason is shown, never "sent".
+  // C4 refused it: never "sent"; the sentence is plain and the raw answer is kept apart as detail.
   assert.deepEqual(namePromptResult({ ok: false, error: { code: 'CONTROL_TARGET_REQUIRED', message: 'during transition' } }, undefined, t),
-    { ok: false, text: 'wb.name.failed {"reason":"CONTROL_TARGET_REQUIRED · during transition"}' });
+    { ok: false, text: 'wb.name.failed', detail: 'CONTROL_TARGET_REQUIRED · during transition' });
   // The Dashboard refused the request (for example a read-only key).
   const denied = Object.assign(new Error('insufficient_scope'), { body: { error: 'insufficient_scope', required: 'admin' }, status: 403 });
-  assert.deepEqual(namePromptResult(undefined, denied, t), { ok: false, text: 'wb.name.failed {"reason":"insufficient_scope"}' });
+  assert.deepEqual(namePromptResult(undefined, denied, t), { ok: false, text: 'wb.name.failed', detail: 'insufficient_scope' });
   // Nobody can say whether it was queued: neither sent nor a plain failure.
   assert.deepEqual(namePromptResult({ ok: false, unknown: true, error: { code: 'RESULT_UNKNOWN', message: 'timed out' } }, undefined, t),
-    { ok: false, text: 'wb.name.unknown {"reason":"RESULT_UNKNOWN · timed out"}' });
-  assert.deepEqual(namePromptResult(undefined, new Error('Failed to fetch'), t), { ok: false, text: 'wb.name.unknown {"reason":"Failed to fetch"}' });
+    { ok: false, text: 'wb.name.unknown', detail: 'RESULT_UNKNOWN · timed out' });
+  assert.deepEqual(namePromptResult(undefined, new Error('Failed to fetch'), t), { ok: false, text: 'wb.name.unknown', detail: 'Failed to fetch' });
   // Single mode: the Dashboard answers with no session group, and the text names the only session, as the board does.
   assert.deepEqual(namePromptResult({ ok: true, controlId: 7, sessionGroup: null }, undefined, t), { ok: true, text: 'wb.name.sentSingle' });
   assert.deepEqual(namePromptResult({ ok: true, controlId: 8, sessionGroup: 'origin' }, undefined, t, { single: true }), { ok: true, text: 'wb.name.sent' },
     'the queued target decides, not the page\'s last view of the mode');
   assert.deepEqual(namePromptResult({ ok: false, unknown: true, sessionGroup: null, error: { code: 'RESULT_UNKNOWN', message: 'timed out' } }, undefined, t),
-    { ok: false, text: 'wb.name.unknownSingle {"reason":"RESULT_UNKNOWN · timed out"}' });
-  assert.deepEqual(namePromptResult(undefined, new Error('Failed to fetch'), t, { single: true }), { ok: false, text: 'wb.name.unknownSingle {"reason":"Failed to fetch"}' });
+    { ok: false, text: 'wb.name.unknownSingle', detail: 'RESULT_UNKNOWN · timed out' });
+  assert.deepEqual(namePromptResult(undefined, new Error('Failed to fetch'), t, { single: true }), { ok: false, text: 'wb.name.unknownSingle', detail: 'Failed to fetch' });
+});
+
+test('automatic naming failures read as one plain sentence in either language, without code, stack or command', () => {
+  const words = Object.fromEntries(['zh', 'en'].map(language =>
+    [language, JSON.parse(readFileSync(new URL(`../public/i18n/wb.${language}.json`, import.meta.url), 'utf8'))]));
+  // What Core can answer when the command itself breaks: the whole command line, the prompt and a Node stack.
+  const command = 'Command failed: /usr/bin/node /z/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content 请给 Dashboard 里还没有名字的会话组起个名字 --no-ack-suffix --json\n'
+    + "Error: Cannot find module '/z/.claude/skills/comm-bridge/scripts/c4-control.js'\n    at Function._resolveFilename (node:internal/modules/cjs/loader:1225:15)";
+  const answers = [
+    [{ ok: false, sessionGroup: 'origin', error: { code: 'CONTROL_TARGET_REQUIRED', message: 'A control target is required when configuration cannot be read' } }, undefined, 'failed'],
+    [{ ok: false, sessionGroup: null, error: { code: 'CONTROL_TARGET_REQUIRED', message: 'A control target is required when configuration cannot be read' } }, undefined, 'failed'],
+    [{ ok: false, unknown: true, sessionGroup: 'origin', error: { code: 'RESULT_UNKNOWN', message: command } }, undefined, 'unknown'],
+    [{ ok: false, unknown: true, sessionGroup: null, error: { code: 'RESULT_UNKNOWN', message: command } }, undefined, 'unknownSingle'],
+    [undefined, Object.assign(new Error('insufficient_scope'), { body: { error: 'insufficient_scope' }, status: 403 }), 'failed'],
+    [undefined, Object.assign(new Error('non_json'), { unknown: true }), 'unknown'],
+  ];
+  const raw = /CONTROL_TARGET_REQUIRED|RESULT_UNKNOWN|insufficient_scope|non_json|c4-control|--content|Cannot find module|_resolveFilename|node:internal|A control target|·/;
+  for (const [language, dictionary] of Object.entries(words)) {
+    const say = key => dictionary[key];
+    for (const [value, error, key] of answers) {
+      const result = namePromptResult(value, error, say);
+      assert.equal(result.text, dictionary['wb.name.' + key], `${language} ${key}: the sentence for this outcome`);
+      assert.doesNotMatch(result.text, raw, `${language} ${key}: no error code, stack or command in the sentence`);
+      assert.doesNotMatch(result.text, /\n|\{/, `${language} ${key}: one finished sentence, nothing left to fill in`);
+      const document = createDocument(), root = document.createElement('div');
+      const shown = renderNameResult(root, result, { document, t: say });
+      assert.equal(shown.message.textContent, result.text, `${language} ${key}: the dialog body is the sentence alone`);
+      assert.match(shown.detail.className, /\bwb-tech\b/, `${language} ${key}: the raw answer is in the technical-detail part`);
+      assert.equal(shown.detail.tagName, 'DETAILS', `${language} ${key}: folded`);
+    }
+  }
+  // Origin in multi mode, the only session in single mode; failing to send names nobody.
+  assert.match(words.zh['wb.name.unknown'], /Origin/); assert.match(words.zh['wb.name.unknownSingle'], /唯一会话/);
+  assert.match(words.en['wb.name.unknown'], /Origin/); assert.match(words.en['wb.name.unknownSingle'], /only session/);
 });
 
 test('automatic naming result dialog shows sending, then the outcome as plain text with a close button', () => {
@@ -630,12 +664,14 @@ test('automatic naming result dialog shows sending, then the outcome as plain te
   const sent = renderNameResult(root, { ok: true, text: 'wb.name.sent' }, { document, t, onClose: () => closed++ });
   assert.equal(sent.message.textContent, 'wb.name.sent');
   assert.equal(sent.message.getAttribute('role'), 'status');
+  assert.equal(sent.detail, null, 'a sent prompt has no technical part');
   assert.equal(sent.close.focused, true);
   sent.close.dispatch('click'); assert.equal(closed, 1);
-  const failed = renderNameResult(root, { ok: false, text: '<script>' }, { document, t });
+  const failed = renderNameResult(root, { ok: false, text: 'wb.name.failed', detail: '<script>' }, { document, t });
   assert.equal(failed.message.getAttribute('role'), 'alert');
   assert.match(failed.message.className, /wb-name-failed/);
-  assert.equal(failed.message.textContent, '<script>');
+  assert.equal(failed.message.textContent, 'wb.name.failed');
+  assert.equal(failed.detail.textContent, 'wb.detail<script>', 'the raw answer is plain text under the technical-detail label');
   assert.equal(allNodes(root).some(node => node.tagName === 'SCRIPT'), false);
   assert.equal(allNodes(root).some(node => ['TEXTAREA', 'UL'].includes(node.tagName)), false, 'no prompt text or group list is shown');
 });

@@ -319,8 +319,8 @@ export async function runWorkbenchBrowser(t, sandbox) {
       await question.locator('.wb-modal-acts button').last().click();
       const failure = result.locator('[role="alert"]');
       await failure.waitFor();
-      assert.match(await failure.textContent(), /^发送失败：CONTROL_TARGET_REQUIRED/);
-      assert.doesNotMatch(await result.textContent(), /已发送/);
+      assert.equal(await failure.textContent(), '没有发出去，可以稍后再试。');
+      assert.doesNotMatch(await result.innerText(), /已发送|CONTROL_TARGET_REQUIRED/);
       assert.equal(sent(), before + 2);
       await fits(result, 'failed');
       await shot('auto-name-failed');
@@ -328,6 +328,66 @@ export async function runWorkbenchBrowser(t, sandbox) {
       await result.waitFor({ state: 'hidden' });
       assert.deepEqual(errors, []);
       await context.close();
+    }
+  });
+
+  // Automatic naming that did not go out, or may not have: the dialog says one plain sentence in the page's language,
+  // naming Origin or, in single mode, the only session. The raw answer (code, English message, command and stack) is
+  // folded under technical detail and is not on screen while technical detail is off.
+  await step('automatic naming failures: one plain sentence per language and mode, raw answer only in technical detail', async () => {
+    const words = Object.fromEntries(['zh', 'en'].map(language =>
+      [language, JSON.parse(fs.readFileSync(path.join(publicDir, 'i18n', `wb.${language}.json`), 'utf8'))]));
+    const refused = { code: 'CONTROL_TARGET_REQUIRED', message: 'A control target is required when configuration cannot be read' };
+    const broken = { code: 'RESULT_UNKNOWN', message: 'Command failed: /usr/bin/node /home/agent/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue '
+      + '--content 请给 Dashboard 里还没有名字的会话组起个名字 --no-ack-suffix --json\nError: Cannot find module '
+      + "'/home/agent/zylos/.claude/skills/comm-bridge/scripts/c4-control.js'\n    at Function._resolveFilename (node:internal/modules/cjs/loader:1225:15)" };
+    const outcomes = [
+      ['failed-multi', { ok: false, sessionGroup: 'origin', error: refused }, 'wb.name.failed', refused.code],
+      ['failed-single', { ok: false, sessionGroup: null, error: refused }, 'wb.name.failed', refused.code],
+      ['unknown-multi', { ok: false, unknown: true, sessionGroup: 'origin', error: broken }, 'wb.name.unknown', 'Cannot find module'],
+      ['unknown-single', { ok: false, unknown: true, sessionGroup: null, error: broken }, 'wb.name.unknownSingle', 'Cannot find module'],
+    ];
+    const raw = /CONTROL_TARGET_REQUIRED|RESULT_UNKNOWN|A control target|c4-control|--content|Cannot find module|_resolveFilename|node:internal/;
+    for (const language of ['zh', 'en']) {
+      for (const [width, height] of [[1280, 800], [390, 844]]) {
+        const { page, context, errors, shot } = await open(width, height, '/', {}, language);
+        const button = page.locator('#wb-auto-name'), question = page.locator('.wb-modal[role="alertdialog"]');
+        const result = page.locator('#wb-auto-name-dialog'), detail = result.locator('.wb-name-detail');
+        await page.locator('#wb-dist .wb-dist-total').waitFor();
+        for (const [name, answer, key, original] of outcomes) {
+          const label = `${language} ${width} ${name}`;
+          naming.answer = answer;
+          await button.click();
+          await question.locator('.wb-modal-acts button').last().click();
+          const alert = result.locator('[role="alert"]');
+          await alert.waitFor();
+          assert.equal(await alert.textContent(), words[language][key], `${label}: the sentence for this outcome`);
+          assert.doesNotMatch(await result.innerText(), raw, `${label}: no code, English original, command or stack on screen`);
+          assert.equal(await detail.isVisible(), false, `${label}: the raw answer is hidden while technical detail is off`);
+          const box = await result.boundingBox();
+          assert.ok(box && box.x >= 16 - 0.5 && box.x + box.width <= width - 16 + 0.5 && box.y >= 0 && box.y + box.height <= height,
+            `${label}: the dialog sits inside the screen with its side margins (${JSON.stringify(box)})`);
+          if (width < 761) {
+            const layout = await page.evaluate(measure);
+            assert.deepEqual(layout.small, [], `${label}: no control under 36px`);
+            assert.equal(layout.documentWidth, width, `${label}: no sideways scrolling`);
+          }
+          await shot(`auto-name-${name}-${language}`);
+          // Technical detail on: the raw answer is there, folded, and opens to the original text.
+          await page.locator('#wb-tech-btn').evaluate(node => node.click());
+          await detail.waitFor({ state: 'visible' });
+          assert.equal(await detail.evaluate(node => node.open), false, `${label}: folded at first`);
+          await detail.locator('summary').click();
+          assert.match(await detail.locator('pre').innerText(), new RegExp(original), `${label}: technical detail shows the original answer`);
+          if (name === 'unknown-multi' && language === 'zh') await shot('auto-name-unknown-technical-zh');
+          await page.locator('#wb-tech-btn').evaluate(node => node.click());
+          await detail.waitFor({ state: 'hidden' });
+          await page.keyboard.press('Escape');
+          await result.waitFor({ state: 'hidden' });
+        }
+        assert.deepEqual(errors, []);
+        await context.close();
+      }
     }
   });
 
