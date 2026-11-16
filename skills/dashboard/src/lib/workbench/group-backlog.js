@@ -2,9 +2,11 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { createCoreCli } from './core-cli.js';
+import { requireGroupReadShape } from './groups-api.js';
+import { parseSessionGroup } from '../../../../comm-bridge/scripts/c4-session-group.js';
 
 /** The shared per-group backlog cache; memory pages use this same reader. */
-export function createGroupBacklog({ zylosDir, runC4Db,
+export function createGroupBacklog({ zylosDir, runC4Db, c4Reader,
   getSnapshot = async () => ({}), execute = promisify(execFile), env = process.env, now = Date.now } = {}) {
   const cache = new Map();
   const childEnv = { ...env, ZYLOS_DIR: zylosDir };
@@ -23,6 +25,17 @@ export function createGroupBacklog({ zylosDir, runC4Db,
     const groupArgs = scope === null ? [] : ['--group', scope];
     const saved = cache.get(scope);
     if (saved && now() - saved.at < 30000) return saved.value;
+    // Historical names cannot enter Core's strict scope/path commands. Their
+    // counts use the read-only database; sync markers remain unobservable.
+    if (!parseSessionGroup(key)) {
+      let value;
+      try {
+        requireGroupReadShape(key);
+        value = { ...c4Reader.getGroupBacklog(key), syncing: null, reason: 'backlog_failed' };
+      } catch { value = { count: null, firstAt: null, syncing: null, reason: 'backlog_failed' }; }
+      cache.set(scope, { at: now(), value });
+      return value;
+    }
     let result;
     try { result = await readBacklog(['unsummarized', ...groupArgs, '--json'], 'backlog_failed'); }
     catch { result = { ok: false }; }

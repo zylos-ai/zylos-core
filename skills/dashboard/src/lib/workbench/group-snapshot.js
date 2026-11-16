@@ -252,7 +252,9 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       overrides: ov.ok ? ov.data : null, sources };
     // Projection evidence is shared with the object APIs, but is not an extra
     // public copy of the event catalog or slot owners.
-    Object.defineProperty(value, 'groupEvidence', { value: { activations, positions, owners, rawGroups } });
+    // Exact names establish membership even when single-mode lists show only Origin.
+    const catalog = new Set((c4.ok ? c4.data.groups : []).map(item => item.sessionGroup));
+    Object.defineProperty(value, 'groupEvidence', { value: { activations, positions, owners, rawGroups, catalog } });
     const channels = new Set(rows.flatMap(row => row.c4?.componentName ? [row.c4.componentName] : []));
     if (services) services.channels = [...channels].map(channel => {
       const service = 'zylos-' + channel;

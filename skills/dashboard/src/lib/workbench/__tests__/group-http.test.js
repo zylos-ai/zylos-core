@@ -33,6 +33,8 @@ test('canonical detail decodes historic keys once while write key validation sta
   const key = 'telegram:运维群-测试';
   assert.equal(workbenchGroupDetailKey(encodeURIComponent(key)), key);
   assert.equal(workbenchGroupDetailKey('telegram%253Aold'), 'telegram%3Aold');
-  assert.throws(() => workbenchGroupDetailKey('%ZZ'), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
+  for (const malformed of ['%ZZ', '%', '%E8%BF', '%C0%AF']) {
+    assert.throws(() => workbenchGroupDetailKey(malformed), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
+  }
   assert.throws(() => workbenchGroupKey(encodeURIComponent(key)), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
 });

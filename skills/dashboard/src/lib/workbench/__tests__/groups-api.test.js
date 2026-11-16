@@ -145,7 +145,9 @@ test('real snapshot projects child-only work and an old offline catalog in both 
     PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, root, tmux: 'none', database: 'none', network: 'none' }));
   for (const mode of ['multi', 'single', null]) {
     const key = mode === 'multi' ? 'telegram:child' : null;
+    const historical = 'telegram:运维群-测试';
     const catalog = Array.from({ length: 57 }, (_, index) => ({ sessionGroup: `telegram:old-${index}`, lastActivityAt: now - 9 * 86400000 }));
+    catalog.push({ sessionGroup: historical, lastActivityAt: now - 86400000 });
     const observation = { identity: { present: true, ready: true, runId: 'run', runtime: 'claude', createdAt: now / 1000 - 10, launchConfig: { runtime: 'claude', mode: 'default' } },
       status: { valid: true, sampledAt: now, value: { state: 'idle' } }, usage: { valid: false } };
     const events = [{ session_group: key, run_id: 'run', event_type: 'subagent_start', timestamp: new Date(now - 1000).toISOString(), metadata: { agent_id: 'child' } }];
@@ -170,7 +172,11 @@ test('real snapshot projects child-only work and an old offline catalog in both 
     assert.equal(child.state.kind, 'working'); assert.equal(child.mainAgent, 'idle');
     assert.equal((await api.detail(child.id, { include: [] })).working.subagents.count, 1);
     assert.equal(Object.hasOwn(child, 'working'), false);
-    const counts = await api.counts(); assert.equal(Object.hasOwn(counts, 'mode'), false); assert.equal(counts.offline.total, mode === 'multi' ? 58 : 0);
+    assert.equal(await api.readKey(historical), historical);
+    if (mode === 'multi') assert.equal((await api.detail(historical, { include: [] })).side, 'offline');
+    else await assert.rejects(api.detail(historical, { include: [] }), { code: 'GROUP_NOT_FOUND', statusCode: 404 });
+    const counts = await api.counts(); assert.equal(Object.hasOwn(counts, 'mode'), false); assert.equal(counts.offline.total, mode === 'multi' ? 59 : 0);
+    if (mode !== 'multi') assert.equal(running.rows.length, 1);
     assert.equal(running.rows.some(row => row.state.kind === 'offline'), false);
   }
 });
@@ -282,10 +288,11 @@ test('existing no-response observation is an independent ISO flag counted on the
 test('canonical detail reads only bounded historic keys proven by the healthy catalog', async () => {
   const key = 'telegram:运维群-测试', row = { ...base('not_running'), sessionGroup: key, live: null };
   const value = snapshot([row]); value.sources.c4 = { ok: true };
+  Object.defineProperty(value, 'groupEvidence', { get: () => ({ catalog: new Set(row.c4 ? [row.sessionGroup] : []) }) });
   const api = createGroupsApi({ workbench: { getSnapshot: async () => value } });
   assert.equal((await api.detail(key, { include: [] })).id, key);
   assert.equal((await api.offline()).rows[0].id, key);
-  row.sessionGroup = 'telegram:遗留 群🧪';
+  row.sessionGroup = 'telegram:遗留 群🧪有%号';
   assert.equal((await api.detail(row.sessionGroup, { include: [] })).id, row.sessionGroup);
   row.sessionGroup = key;
   await assert.rejects(api.detail('telegram:另一群', { include: [] }), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
@@ -300,4 +307,35 @@ test('canonical detail reads only bounded historic keys proven by the healthy ca
     await assert.rejects(api.detail(bad, { include: [] }), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
   }
   await assert.rejects(api.detail('telegram:absent', { include: [] }), { code: 'GROUP_NOT_FOUND', statusCode: 404 });
+});
+
+
+test('all group readers accept only exact historical C4 membership and leave current empty scopes valid', async () => {
+  const key = 'telegram:运维群-测试';
+  const row = { ...base('not_running'), sessionGroup: key, live: null };
+  const value = snapshot([row]); value.sources.c4 = { ok: true };
+  Object.defineProperty(value, 'groupEvidence', { get: () => ({ catalog: new Set(row.c4 ? [row.sessionGroup] : []) }) });
+  let snapshots = 0;
+  const api = createGroupsApi({ workbench: { getSnapshot: async () => { snapshots++; return value; } } });
+  assert.equal(await api.readKey('origin'), 'origin');
+  assert.equal(await api.readKey('telegram:absent'), 'telegram:absent');
+  assert.equal(snapshots, 0);
+  assert.equal(await api.readKey(key), key);
+  await assert.rejects(api.readKey('telegram:运维群-不存在'), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
+  row.c4 = null;
+  await assert.rejects(api.readKey(key), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
+  row.c4 = {};
+  for (const source of [undefined, { ok: false }]) {
+    value.sources.c4 = source;
+    await assert.rejects(api.readKey(key), { code: 'GROUP_CATALOG_UNREADABLE', statusCode: 502 });
+  }
+  value.sources.c4 = { ok: true };
+  for (const bad of ['../bad', 'telegram:..', 'telegram:.', 'telegram:群/组', 'telegram:群\\组',
+    'telegram:群\u0000组', 'void:群', 'telegram:' + '群'.repeat(96)]) {
+    row.sessionGroup = bad;
+    const before = snapshots;
+    await assert.rejects(api.readKey(bad), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
+    await assert.rejects(api.detail(bad, { include: [] }), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
+    assert.equal(snapshots, before, 'unsafe shapes fail before reading catalog or optional fields');
+  }
 });

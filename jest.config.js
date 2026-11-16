@@ -2,6 +2,7 @@ export default {
   transform: {},
   testPathIgnorePatterns: [
     '<rootDir>/test/single-origin-activity.integration.test.js',
+    '<rootDir>/test/legacy-group-reads-browser.test.js',
     '<rootDir>/test/dashboard-object-api.integration.test.js',
     '<rootDir>/test/dashboard-static-cache-browser.integration.test.js',
     '<rootDir>/test/account-usage-cache.integration.test.js',
