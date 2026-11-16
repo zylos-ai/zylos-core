@@ -662,7 +662,7 @@ test('/api/stream accepts Bearer API session and emits initial instance', { time
 // Integration: real auth/routing and Core save, including the 1 MiB boundary.
 // Run when memory transport or auth changes; skip unrelated UI/collector edits.
 // All config/DB/memory is fixture-owned; Core uses a private short tmux socket.
-test('/api/memory is admin-gated and browser sessions can read tree', async () => {
+test('/api/memory tree accepts read keys while file contents require admin', async () => {
   const zylosDir = memoryTempRoot('wba-');
   installMemoryScripts(zylosDir);
   const isolatedEnv = memoryTestEnv(zylosDir);
@@ -702,8 +702,11 @@ test('/api/memory is admin-gated and browser sessions can read tree', async () =
     const readResp = await fetch(`${origin}/api/memory/tree`, {
       headers: { Authorization: `Bearer ${readToken}` }
     });
-    assert.equal(readResp.status, 403);
-    assert.deepEqual(await readResp.json(), { error: 'insufficient_scope', required: 'admin' });
+    assert.equal(readResp.status, 200);
+    assert.equal((await readResp.json()).root.type, 'directory');
+    const readFile = await fetch(`${origin}/api/memory/file?path=identity.md`, { headers: { Authorization: `Bearer ${readToken}` } });
+    assert.equal(readFile.status, 403);
+    assert.equal((await readFile.json()).error.code, 'insufficient_scope');
 
     const adminResp = await fetch(`${origin}/api/memory/tree`, {
       headers: { Authorization: `Bearer ${adminToken}` }
@@ -737,7 +740,7 @@ test('/api/memory is admin-gated and browser sessions can read tree', async () =
       body: JSON.stringify({ text: '# Read key write\n', sha256: browserBody.sha256 })
     });
     assert.equal(readWriteResp.status, 403);
-    assert.deepEqual(await readWriteResp.json(), { error: 'insufficient_scope', required: 'admin' });
+    assert.deepEqual(await readWriteResp.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
 
     const nullWriteResp = await fetch(`${origin}/api/memory/file?path=identity.md`, {
       method: 'PUT',
@@ -748,7 +751,7 @@ test('/api/memory is admin-gated and browser sessions can read tree', async () =
       body: 'null'
     });
     assert.equal(nullWriteResp.status, 400);
-    assert.deepEqual(await nullWriteResp.json(), { error: 'invalid_memory_write' });
+    assert.deepEqual(await nullWriteResp.json(), { ok: false, error: { code: 'invalid_memory_write', message: 'invalid_memory_write' } });
 
     const largeWriteResp = await fetch(`${origin}/api/memory/file?path=large.txt`, {
       method: 'PUT',
@@ -790,7 +793,7 @@ test('/api/memory is admin-gated and browser sessions can read tree', async () =
     });
     assert.equal(conflictResp.status, 409);
     const conflictBody = await conflictResp.json();
-    assert.equal(conflictBody.error, 'memory_conflict');
+    assert.equal(conflictBody.error.code, 'memory_conflict');
     assert.equal(conflictBody.current.sha256, adminWriteBody.sha256);
     assert.equal(conflictBody.current.text, '# Identity\nEdited\n');
     assert.equal(fs.readFileSync(path.join(zylosDir, 'memory', 'identity.md'), 'utf8'), '# Identity\nEdited\n');
@@ -872,7 +875,7 @@ test('proxied interrupt and chop-chop writes require consumer admin API scope or
       body: '{}'
     });
     assert.equal(readWrite.status, 403);
-    assert.deepEqual(await readWrite.json(), { error: 'insufficient_scope', required: 'admin' });
+    assert.deepEqual(await readWrite.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
     assert.equal(actionHits, 0);
 
     const adminWrite = await fetch(`${origin}/fleet/Remote/api/groups/origin/actions/interrupt`, {
@@ -907,7 +910,7 @@ test('proxied interrupt and chop-chop writes require consumer admin API scope or
       body: JSON.stringify({ text: '# Read key write\n', sha256: 'a'.repeat(64) })
     });
     assert.equal(readMemoryWrite.status, 403);
-    assert.deepEqual(await readMemoryWrite.json(), { error: 'insufficient_scope', required: 'admin' });
+    assert.deepEqual(await readMemoryWrite.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
     assert.equal(memoryWriteHits, 0);
 
     const adminMemoryWrite = await fetch(`${origin}/fleet/Remote/api/memory/file?path=identity.md`, {
@@ -987,7 +990,7 @@ test('API key management is admin-gated, show-once, and revoke invalidates activ
       headers: { Authorization: `Bearer ${readToken}` }
     });
     assert.equal(readList.status, 403);
-    assert.deepEqual(await readList.json(), { error: 'insufficient_scope', required: 'admin' });
+    assert.deepEqual(await readList.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
 
     const create = await fetch(`${origin}/api/keys`, {
       method: 'POST',
@@ -1023,7 +1026,7 @@ test('API key management is admin-gated, show-once, and revoke invalidates activ
       body: JSON.stringify({ name: 'producer-read', scope: 'read' })
     });
     assert.equal(duplicate.status, 400);
-    assert.deepEqual(await duplicate.json(), { error: 'duplicate_name' });
+    assert.deepEqual(await duplicate.json(), { ok: false, error: { code: 'duplicate_name', message: 'duplicate_name' } });
 
     const badScope = await fetch(`${origin}/api/keys`, {
       method: 'POST',
@@ -1034,7 +1037,7 @@ test('API key management is admin-gated, show-once, and revoke invalidates activ
       body: JSON.stringify({ name: 'bad-scope', scope: 'owner' })
     });
     assert.equal(badScope.status, 400);
-    assert.deepEqual(await badScope.json(), { error: 'invalid_scope' });
+    assert.deepEqual(await badScope.json(), { ok: false, error: { code: 'invalid_scope', message: 'invalid_scope' } });
 
     const createAdmin = await fetch(`${origin}/api/keys`, {
       method: 'POST',
@@ -1083,7 +1086,7 @@ test('API key management is admin-gated, show-once, and revoke invalidates activ
       headers: { Authorization: `Bearer ${adminToken}` }
     });
     assert.equal(secondRevoke.status, 404);
-    assert.deepEqual(await secondRevoke.json(), { error: 'unknown_key' });
+    assert.deepEqual(await secondRevoke.json(), { ok: false, error: { code: 'unknown_key', message: 'unknown_key' } });
   } finally {
     await closeServer(server);
     fs.rmSync(zylosDir, { recursive: true, force: true });
@@ -1312,7 +1315,7 @@ test('API key lifecycle supports name reuse, rotate, permanent delete, and revok
       body: JSON.stringify({ name: 'producer-read', scope: 'read' })
     });
     assert.equal(duplicate.status, 400);
-    assert.deepEqual(await duplicate.json(), { error: 'duplicate_name' });
+    assert.deepEqual(await duplicate.json(), { ok: false, error: { code: 'duplicate_name', message: 'duplicate_name' } });
 
     const beforeRotate = new Store(dbPath);
     const rowBefore = beforeRotate.getApiKeyByName('producer-read');
@@ -1332,7 +1335,7 @@ test('API key lifecycle supports name reuse, rotate, permanent delete, and revok
     const rotateBody = await rotate.json();
     assert.equal(rotateBody.key.name, 'producer-read');
     assert.equal(rotateBody.key.scope, rowBefore.scope);
-    assert.equal(rotateBody.key.created_at, rowBefore.created_at);
+    assert.equal(rotateBody.key.created_at, new Date(rowBefore.created_at.replace(' ', 'T') + 'Z').toISOString());
     assert.match(rotateBody.plaintext_key, /^zylos_ak_/);
     assert.equal(JSON.stringify(rotateBody).includes('key_hash'), false);
 
@@ -1424,7 +1427,7 @@ test('API key lifecycle supports name reuse, rotate, permanent delete, and revok
       headers: { Authorization: `Bearer ${adminToken}` }
     });
     assert.equal(activeHardDelete.status, 409);
-    assert.deepEqual(await activeHardDelete.json(), { error: 'must_revoke_first' });
+    assert.deepEqual(await activeHardDelete.json(), { ok: false, error: { code: 'must_revoke_first', message: 'must_revoke_first' } });
 
     await createKey('purge-revoked');
     const deleteNamedPurge = await fetch(`${origin}/api/keys/purge-revoked`, {
@@ -1552,7 +1555,7 @@ test('fleet management API is admin-gated, masks keys, persists atomically, and 
       headers: { Authorization: `Bearer ${readToken}` }
     });
     assert.equal(readList.status, 403);
-    assert.deepEqual(await readList.json(), { error: 'insufficient_scope', required: 'admin' });
+    assert.deepEqual(await readList.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
 
     const add = await fetch(`${origin}/api/fleet/agents`, {
       method: 'POST',
@@ -1586,7 +1589,7 @@ test('fleet management API is admin-gated, masks keys, persists atomically, and 
       })
     });
     assert.equal(duplicate.status, 400);
-    assert.deepEqual(await duplicate.json(), { error: 'duplicate_name' });
+    assert.deepEqual(await duplicate.json(), { ok: false, error: { code: 'duplicate_name', message: 'duplicate_name' } });
 
     const reserved = await fetch(`${origin}/api/fleet/agents`, {
       method: 'POST',
@@ -1601,7 +1604,7 @@ test('fleet management API is admin-gated, masks keys, persists atomically, and 
       })
     });
     assert.equal(reserved.status, 400);
-    assert.deepEqual(await reserved.json(), { error: 'reserved_name' });
+    assert.deepEqual(await reserved.json(), { ok: false, error: { code: 'reserved_name', message: 'reserved_name' } });
 
     const list = await fetch(`${origin}/api/fleet/agents`, {
       headers: { Authorization: `Bearer ${adminToken}` }
@@ -1706,7 +1709,7 @@ test('fleet management add rechecks duplicate names after slow probe', async () 
 
     const bodies = await Promise.all(responses.map(resp => resp.json()));
     assert.equal(bodies.some(body => body.ok === true && body.agent?.name === 'Remote'), true);
-    assert.equal(bodies.some(body => body.error === 'duplicate_name'), true);
+    assert.equal(bodies.some(body => body.error?.code === 'duplicate_name'), true);
 
     const saved = JSON.parse(fs.readFileSync(path.join(zylosDir, 'components', 'dashboard', 'config.json'), 'utf8'));
     assert.equal(saved.fleet.agents.filter(agent => agent.name === 'Remote').length, 1);

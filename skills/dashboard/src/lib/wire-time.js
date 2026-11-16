@@ -3,7 +3,7 @@ export function isoTimestamp(value, unit = 'ms') {
   if (value == null) return value;
   let milliseconds;
   if (typeof value === 'number' || typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value)) {
-    milliseconds = Number(value) * (unit === 's' ? 1000 : 1);
+    milliseconds = unit === 'julian' ? Math.round((Number(value) - 2440587.5) * 86400000) : Number(value) * (unit === 's' ? 1000 : 1);
   } else if (typeof value === 'string') {
     // SQLite's datetime() values are UTC, although they omit the timezone marker.
     const text = /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?$/.test(value) ? value.replace(' ', 'T') + 'Z' : value;
@@ -30,16 +30,16 @@ const GROUP = [
   ...beneath('working', WORKING),
 ];
 const INSTANCE = [
-  ...ms('startedAt', 'resources.sampledAt', 'accounts.*.recordedAt', 'accounts.*.resets_at', 'accounts.*.resetsAt',
+  ...ms('startedAt', 'resources.sampledAt', 'accounts.*.recordedAt',
     'session_mode.blocked.since', 'session_mode.lastEvents.*.ts'),
-  ...seconds('runtimeHealth.*.cooldownUntil', 'runtimeHealth.*.updatedAt',
+  ...seconds('accounts.*.resets_at', 'accounts.*.resetsAt', 'runtimeHealth.*.cooldownUntil', 'runtimeHealth.*.updatedAt',
     'session_mode.transition.createdAt', 'session_mode.transition.updatedAt', 'session_mode.lastCompleted.updatedAt'),
 ];
 const TASK = [
   ...seconds('nextRunAt', 'lastRunAt', 'updatedAt', 'recent.*.executedAt', 'recent.*.completedAt', 'nextRuns.runs.*', 'nextRuns.in24h.*'),
 ];
 const SCHEDULE = [
-  ...ms('readAt'), ...seconds('runs.*', 'rows.*.executedAt', 'rows.*.completedAt'),
+  ...ms('readAt'), ...seconds('nextRunAt', 'runs.*', 'rows.*.executedAt', 'rows.*.completedAt'),
   ...beneath('tasks.*', TASK), ...beneath('timelineTasks.*', TASK), ...beneath('task', TASK),
   // Scheduler CLI writes return its complete task row, whose time columns use seconds.
   ...seconds('data.task.next_run_at', 'data.task.last_run_at', 'data.task.created_at', 'data.task.updated_at',
@@ -48,8 +48,9 @@ const SCHEDULE = [
 const CHAT = [
   ...ms('createdAt', 'updatedAt', 'expiresAt', 'conversation.createdAt', 'conversation.updatedAt',
     'answer.createdAt', 'answer.updatedAt', 'items.*.createdAt', 'items.*.updatedAt', 'items.*.timestamp',
-    'items.*.lastActivityAt', 'items.*.lastMessageAt', 'items.*.answer.createdAt', 'messages.*.timestamp',
+    'items.*.quote.timestamp', 'items.*.lastActivityAt', 'items.*.lastMessageAt', 'items.*.answer.createdAt', 'messages.*.timestamp',
     'statuses.*.createdAt', 'statuses.*.updatedAt', 'statuses.*.timestamp', 'delivery.createdAt'),
+  ...fields('julian', ['items.*.stamp']),
 ];
 const ACTIVITY = [
   ...ms('now', 'from', 'header.readAt', 'steps.*.start', 'steps.*.end', 'steps.*.at',
@@ -60,7 +61,7 @@ const ACTIVITY = [
 const FLEET_RECORD = [
   ...ms('rate_limit_7d_recorded_at', 'updated_at', 'link.sampled_at', 'link.samples.*.at'),
   ...seconds('group_summary.problems.*.createdAt'),
-  ...beneath('instance', INSTANCE), ...beneath('groups', ms('readAt')),
+  ...beneath('instance', INSTANCE), ...ms('system_metrics.sampledAt'), ...beneath('groups', ms('readAt')),
   ...beneath('group_summary.rows.*', GROUP),
 ];
 const FLEET = [...beneath('self', FLEET_RECORD), ...beneath('agents.*', FLEET_RECORD)];
@@ -90,7 +91,7 @@ export function projectApiTimestamps(pathname, value) {
   const remote = pathname.match(/^\/fleet\/[^/]+(\/api\/.*)$/);
   if (remote) return projectApiTimestamps(remote[1], value);
   if (pathname === '/api/instance') return project(value, INSTANCE);
-  if (pathname === '/api/health') return project(value, ms('startedAt', 'source.*.lastEventAt', 'source.*.lastReadAt'));
+  if (pathname === '/api/health') return project(value, ms('startedAt', 'source.*.*.updated_at'));
   if (pathname === '/api/groups/activity') return project(value, ms('start', 'groups.*.inbound.*'));
   if (pathname.startsWith('/api/groups/')) {
     return project(value, [...GROUP, ...beneath('rows.*', GROUP), ...beneath('group', GROUP), ...EVENTS,
@@ -100,7 +101,7 @@ export function projectApiTimestamps(pathname, value) {
   if (pathname.startsWith('/api/memory/')) return project(value, MEMORY);
   if (pathname.startsWith('/api/usage/') || pathname === '/api/instance/resources') {
     return project(value, ms('since', 'until', 'messagesSampledAt', 'buckets.*', 'costByRuntime.*.at', 'tokensByRuntime.*.at',
-      'messages.*.at', 'rotations.*.at', 'cache.*.at', 'series.*.at', 'current.at', 'cpuPeak.at', 'services.at'));
+      'messages.*.at', 'rotations.*.at', 'cache.*.at', 'series.*.at', 'current.at', 'cpuPeak.at', 'pm2.at'));
   }
   if (pathname === '/api/auth/token') return project(value, ms('expires_at'));
   if (pathname === '/api/keys' || pathname.startsWith('/api/keys/')) return project(value,
@@ -118,7 +119,8 @@ export function projectEventTimestamps(event, value) {
   if (event === 'instance') return project(value, INSTANCE);
   if (event === 'groups') return project(value, ms('readAt'));
   if (event === 'fleet') return project(value, FLEET);
-  if (event === 'metric_update') return project(value, ms('timestamp', 'point.timestamp', 'point.at', 'data.timestamp'));
+  if (event === 'metric_update') return project(value, [...ms('timestamp', 'point.timestamp', 'point.at', 'data.timestamp'),
+    ...seconds('dimensions.resets_at', 'dimensions.rate_limit_7d_resets_at', 'dimensions.rate_limit_5h_resets_at')]);
   if (event.startsWith('chat_')) return project(value, [...CHAT, ...ACTIVITY]);
   return value;
 }

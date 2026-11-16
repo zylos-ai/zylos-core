@@ -257,8 +257,12 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     assert.equal(Object.hasOwn(instance, 'poolCapacityRecord'), false);
     assert.equal(instance.resources.cpu_source, 'container'); assert.equal(instance.resources.mem_source, 'container');
     assert.equal(instance.versions.claude.installed, '1.0.0');
+    assert.equal(instance.resources.sampledAt, new Date(clock).toISOString());
+    assert.equal(instance.session_mode.transition.createdAt, new Date((Math.floor(clock / 1000) - 1) * 1000).toISOString());
+    assert.equal(instance.session_mode.transition.updatedAt, new Date(Math.floor(clock / 1000) * 1000).toISOString());
+    assert.equal(Object.hasOwn(instance, 'chat_allow_remote'), false);
     assert.equal(instance.session_mode.transition.phase, 'draining'); assert.equal(instance.session_mode.blocked.reason, 'fixture-block');
-    assert.equal(instance.session_mode.blocked.since, clock - 1000); assert.equal(instance.session_mode.supervisor, 'unreachable');
+    assert.equal(instance.session_mode.blocked.since, new Date(clock - 1000).toISOString()); assert.equal(instance.session_mode.supervisor, 'unreachable');
     assert.equal(Object.hasOwn(instance, 'context_pct'), false); assert.equal(Object.hasOwn(instance, 'cost'), false);
     await request('/api/instance/resources?range=6h');
     const options = await request('/api/instance/runtime-options?runtime=claude');

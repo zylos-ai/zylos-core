@@ -140,6 +140,7 @@ function resetUpgrade(port, path, headers = {}) {
 
 async function startHttp(service) {
   const server = http.createServer(async (req, res) => {
+    res.apiPath = new URL(req.url, 'http://fixture').pathname;
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (!await service.handle(req, res, url)) {
       res.writeHead(404).end();
@@ -1339,3 +1340,47 @@ for (const viewer of ['remote', 'local']) {
     }
   });
 }
+
+// Real HTTP handler and lease manager. Auth identity, installation and terminal
+// target observation are injected; no terminal, service or live DB is accessed.
+test('Observer lease timestamps are ISO on the wire and numeric inside the lease manager', async () => {
+  const observations = [];
+  for (const mode of ['single', 'multi']) {
+    let clock = 1700000000000;
+    const selected = mode === 'multi' ? 'telegram:team' : 'origin';
+    const target = { sessionMode: mode, sessionGroup: mode === 'multi' ? selected : null,
+      runtime: 'claude', runId: 'fixture-run', tmuxName: groupPaths.tmuxNameForGroup(selected) };
+    const f = fixture({ managerFactory: deps => {
+      deps.containment.active.observerTarget = target;
+      return new ObserverManager({ ...deps, runtime: 'claude', now: () => clock,
+        sessionMode: async () => mode, resolveTarget: async () => target });
+    } });
+    const app = await startHttp(f.service);
+    try {
+      const call = async (pathname, body) => {
+        const response = await fetch(app.origin + pathname, { method: 'POST',
+          headers: { Authorization: 'Bearer admin-token', 'Content-Type': 'application/json' },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        });
+        const result = await response.json();
+        observations.push({ mode, method: 'POST', pathname, status: response.status, body: result,
+          fixtureBoundary: 'Real ObserverService and ObserverManager; injected auth identity, installation, terminal observation.' });
+        return { status: response.status, body: result };
+      };
+      const created = await call('/api/observer/leases', { sessionGroup: selected });
+      assert.equal(created.status, 201, JSON.stringify(created.body));
+      assert.equal(created.body.expiresAt, new Date(clock + f.service.manager.leaseTtlMs).toISOString());
+      assert.equal(f.service.manager.leases.get(created.body.id).expiresAt, clock + f.service.manager.leaseTtlMs);
+      clock += 1000;
+      const renewed = await call(`/api/observer/leases/${created.body.id}/renew`);
+      assert.equal(renewed.status, 200);
+      assert.equal(renewed.body.expiresAt, new Date(clock + f.service.manager.leaseTtlMs).toISOString());
+      assert.equal(typeof f.service.manager.leases.get(created.body.id).expiresAt, 'number');
+      await call(`/api/observer/leases/${created.body.id}/release`);
+    } finally { await f.service.shutdown(); await app.close(); }
+  }
+  if (process.env.DASHBOARD_OBSERVER_EVIDENCE) {
+    fs.mkdirSync(path.dirname(process.env.DASHBOARD_OBSERVER_EVIDENCE), { recursive: true });
+    fs.writeFileSync(process.env.DASHBOARD_OBSERVER_EVIDENCE, JSON.stringify(observations, null, 2));
+  }
+});

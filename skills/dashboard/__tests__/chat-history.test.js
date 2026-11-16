@@ -558,18 +558,22 @@ test('HTTP history routes enforce access before reading and reject ambiguous que
   f.history._query = (...args) => { reads++; return query(...args); };
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
+    res.apiPath = url.pathname;
     if (await auth.handle(req, res, url)) return;
     if (await handleChatHistory(req, res, url, { auth, config, history: f.history })) return;
     sendJson(res, 404, { error: 'not_found' });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { clearInterval(auth._cleanupTimer); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  const observations = [];
   const request = async (route, identity = 'cookie', locale) => {
     const headers = identity === 'cookie' ? { cookie: `__Secure-zylos_dashboard_session=${cookie}` } :
       tokens[identity] ? { authorization: `Bearer ${tokens[identity]}` } : {};
     if (locale !== undefined) headers['X-Zylos-Locale'] = locale;
     const response = await fetch(`http://127.0.0.1:${server.address().port}${route}`, { headers });
-    return { status: response.status, body: await response.json() };
+    const result = { status: response.status, body: await response.json() };
+    observations.push({ method: 'GET', route, identity, ...result, fixtureBoundary: 'Real AuthGate, ChatHistory, C4Reader and isolated SQLite databases; message/group fixtures.' });
+    return result;
   };
   const id = f.history.list({ tab: 'external' }).items[0].id;
   const routes = ['/api/chat/conversations?tab=external', `/api/chat/conversations/${id}/messages?tab=external`,
@@ -579,7 +583,7 @@ test('HTTP history routes enforce access before reading and reject ambiguous que
     for (const route of routes) for (const identity of ['none', 'read', 'admin', 'cookie']) {
       const before = reads;
       const response = await request(route, identity);
-      const permitted = identity === 'cookie' || identity === 'admin' && allow;
+      const permitted = identity === 'cookie' || ['admin', 'read'].includes(identity) && allow;
       assert.equal(response.status, permitted ? 200 : identity === 'none' ? 401 : 403);
       if (!permitted) { assert.equal(reads, before); assert.ok(!JSON.stringify(response.body).includes('PRIVATE_HISTORY')); }
       else assert.ok(reads > before);
@@ -601,6 +605,10 @@ test('HTTP history routes enforce access before reading and reject ambiguous que
   config.auth.enabled = false;
   const before = reads;
   assert.equal((await request(routes[0])).status, 403); assert.equal(reads, before);
+  if (process.env.DASHBOARD_CHAT_HISTORY_EVIDENCE) {
+    fs.mkdirSync(path.dirname(process.env.DASHBOARD_CHAT_HISTORY_EVIDENCE), { recursive: true });
+    fs.writeFileSync(process.env.DASHBOARD_CHAT_HISTORY_EVIDENCE, JSON.stringify(observations, null, 2));
+  }
 });
 
 // The conversation list and message routes report the instance time zone through the schedule page's reader (the real

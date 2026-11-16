@@ -1,3 +1,4 @@
+import { projectApiTimestamps } from '../../src/lib/wire-time.js';
 // Fixed API answers for the workbench browser case: one instance with a few session groups, scheduled tasks,
 // a memory tree with a long file, and settings. Shapes follow the dashboard's own routes; values are invented.
 // Every answer is computed from `now`, so the page's relative times stay stable within one run.
@@ -166,7 +167,7 @@ const meta = { runtime: 'claude', current_model: 'opus', current_effort: 'high',
   models: [{ id: 'opus', display_name: 'Opus' }, { id: 'sonnet', display_name: 'Sonnet' }], efforts_by_model: { '*': ['low', 'medium', 'high'] } };
 
 /** The JSON answer for a GET, or undefined when the case does not serve that path. */
-export function workbenchAnswer(url, now) {
+function workbenchAnswerData(url, now) {
   const p = url.pathname;
   if (p === '/api/groups/running') return { readAt: now, listKnown: true, rows: rows(now).filter(row => row.state.kind !== 'offline').map(listRow) };
   if (p === '/api/groups/offline') {
@@ -226,7 +227,7 @@ export function workbenchAnswer(url, now) {
 }
 
 // Project a scenario snapshot onto the independent object resources requested by the UI.
-export function workbenchSnapshotAnswer(url, value, now) {
+function workbenchSnapshotAnswerData(url, value, now) {
   const p = url.pathname;
   if (p === '/api/groups/running') return { readAt: value.readAt, listKnown: value.listKnown, rows: value.rows.filter(row => detailRow(row).side === 'running').map(listRow) };
   if (p === '/api/groups/offline') return { readAt: value.readAt, listKnown: value.listKnown, rows: value.rows.filter(row => detailRow(row).side === 'offline' && (!url.searchParams.has('flag') || row.flags?.[url.searchParams.get('flag')])).map(listRow), nextCursor: null };
@@ -241,4 +242,12 @@ export function workbenchSnapshotAnswer(url, value, now) {
     return row ? { ...workbenchAnswer(url, now), readAt: value.readAt, ...detailRow(row), raw: row.preview?.text ?? null, effective: row.target } : undefined;
   }
   return workbenchAnswer(url, now);
+}
+
+
+export function workbenchAnswer(url, now) {
+  return projectApiTimestamps(url.pathname, workbenchAnswerData(url, now));
+}
+export function workbenchSnapshotAnswer(url, value, now) {
+  return projectApiTimestamps(url.pathname, workbenchSnapshotAnswerData(url, value, now));
 }

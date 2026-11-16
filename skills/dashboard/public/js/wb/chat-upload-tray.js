@@ -1,4 +1,4 @@
-import { instantMs } from './api-time.js?v=1';
+import { instantMs } from './api-time.js?v=2';
 const SEND_WINDOW_MS = 25 * 60 * 1000;
 const CONFIG_REQUEST_TIMEOUT_MS = 120000;
 const scopeKey = scope => scope && typeof scope.instance === 'string' && scope.instance

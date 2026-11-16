@@ -314,7 +314,7 @@ test('memory backlog HTTP route shares the detail cache and accepts read scope',
   assert.equal(value.groups[0].count, 7);
   assert.equal(value.groups[0].syncing, true, 'Origin\'s own row reads its own sync lock');
   assert.equal(value.groups[0].threshold, 15);
-  assert.deepEqual(value.originSync, { count: 60, pendingSummaries: 2, firstAt: '2026-10-01 11:00:00',
+  assert.deepEqual(value.originSync, { count: 60, pendingSummaries: 2, firstAt: '2026-10-01T11:00:00.000Z',
     aged: true, syncing: false, threshold: 50 });
   assert.equal(value.budgets.limits['identity.md'], BUDGETS['identity.md']);
   assert.deepEqual(calls.slice(before).map(call => call.args[1]), [],

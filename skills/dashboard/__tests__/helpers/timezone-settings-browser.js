@@ -14,6 +14,7 @@ async function startPage(sandbox) {
   const server = http.createServer(async (req, res) => {
     try {
       const original = new URL(req.url, 'http://127.0.0.1');
+      res.apiPath = original.pathname;
       const prefix = original.pathname.match(/^\/fleet\/(admin|reader)/)?.[0] ?? '';
       const route = original.pathname.slice(prefix.length) || '/';
       const url = new URL(route + original.search, original.origin);

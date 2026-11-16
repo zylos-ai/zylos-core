@@ -229,7 +229,7 @@ export function mountConversationPage({
     autoSelectPending = false;
     // The most recently active conversation: Origin is pinned first but opens only when it is the latest,
     // except in single, where Origin is the only conversation that can be written to.
-    const latest = current.items.reduce((best, item) => conversationStampMs(item.stamp) > conversationStampMs(best.stamp) ? item : best, current.items[0]);
+    const latest = current.items.reduce((best, item) => (conversationStampMs(item.stamp) || 0) > (conversationStampMs(best.stamp) || 0) ? item : best, current.items[0]);
     const origin = current.mode === 'single' && current.tab === 'mine' ? current.items.find(item => isOriginConversation(item.id)) : null;
     await state.select((origin ?? latest).id);
   }

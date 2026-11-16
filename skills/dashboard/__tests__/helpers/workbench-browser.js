@@ -25,6 +25,7 @@ export async function startPage(sandbox) {
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
+      res.apiPath = url.pathname;
       if (url.pathname.startsWith('/api/instance/actions/') && req.method === 'POST') {
         let body = '';
         req.on('data', chunk => { body += chunk; if (body.length > 4096) req.destroy(); });

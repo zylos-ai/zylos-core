@@ -25,6 +25,7 @@ export async function runSchedulePaginationBrowser(t, sandbox) {
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
+      res.apiPath = url.pathname;
       if (url.pathname.startsWith('/api/schedules')) {
         if (req.method === 'GET') {
           if (reads.length < 100) reads.push(url.pathname + url.search);

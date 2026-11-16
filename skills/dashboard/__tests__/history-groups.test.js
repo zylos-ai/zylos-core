@@ -44,7 +44,7 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
   store.db.prepare('INSERT INTO codex_rollout_paths(runtime,session_id,transcript_path) VALUES(?,?,?)').run('codex', 'codex-session', rollout);
   const service = new HistoryService({ config, store, resolveScope: createHistoryScope({ config, store, load }) });
   t.after(() => service.close());
-  const server = http.createServer((req, res) => service.handle(req, res, new URL(req.url, 'http://fixture')));
+  const server = http.createServer((req, res) => { const url = new URL(req.url, 'http://fixture'); res.apiPath = url.pathname; return service.handle(req, res, url); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
   const observations = [];

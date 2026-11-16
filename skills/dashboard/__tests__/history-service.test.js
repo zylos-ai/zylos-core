@@ -32,7 +32,7 @@ function fixture(entries) {
 const params = (value) => new URLSearchParams({ session: 'session', ...value });
 
 async function request(service, suffix, { method = 'GET', headers = {} } = {}) {
-  const server = http.createServer((req, res) => service.handle(req, res, new URL(req.url, 'http://localhost')));
+  const server = http.createServer((req, res) => { const url = new URL(req.url, 'http://localhost'); res.apiPath = url.pathname; return service.handle(req, res, url); });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const response = await fetch(`http://127.0.0.1:${server.address().port}/api/observer/history/${suffix}`, { method, headers });

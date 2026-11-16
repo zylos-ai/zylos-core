@@ -17,7 +17,17 @@ The existing auth gate may return HTTP 401 (unauthenticated) or 403 (`insufficie
 
 Read APIs return their data object directly. Successful JSON writes return `{ok:true,...result}`. All JSON failures, including Core rejections, use `{ok:false,error:{code:string,message:string}}` and an appropriate non-2xx status. Authentication exchange bootstraps API access with the supplied key; login/logout retain their HTML/redirect protocol. Binary downloads, HTML and upgraded streams retain their own content type. A successful submission is not proof that a session restarted or that an instruction was delivered. Do not automatically repeat a write whose result is unknown.
 
-Unless stated otherwise, timestamps are ISO strings or `null`. Existing snapshot `readAt`, resource `sampledAt`, and activity `start` are Unix milliseconds; `createdAt` in raw lifecycle evidence can be Unix seconds. These observation fields retain their source units. Unknown measurements are `null`, rather than zero.
+Every public absolute timestamp is an ISO 8601 string with a timezone designator (UTC `Z`), or `null` when unknown. This includes `readAt`, `sampledAt`, activity starts, scheduler task/execution times and the equivalent push fields. Durations, counts and opaque continuation values retain their numeric types. Unknown measurements are `null`, rather than zero.
+
+The same ISO projection applies to HTTP and SSE. The declared absolute-time fields include:
+
+| Family | ISO fields (nullable when the source is unknown) |
+|---|---|
+| Instance / health | `startedAt`, resource `sampledAt`, account `recordedAt` and reset time, runtime-health `cooldownUntil`/`updatedAt`, transition creation/update, blocked `since`, diagnostic `ts`, source-health `updated_at` |
+| Groups / activity | `readAt`, `lastActivityAt`, state `since`/`sampledAt`, lifecycle `createdAt`, fences, working/main/subagent times, pending queue `oldestAt`, wait `since`/`lastAt`/`cooldownUntil`, preview `timestamp`, name update, run start/end, event/message timestamps, heatmap `start` and inbound times |
+| Schedules | `readAt`, task `nextRunAt`/`lastRunAt`/`updatedAt`, execution `executedAt`/`completedAt`, preview and next-run arrays, returned CLI task time columns |
+| Chat / terminal | Conversation creation/update, list `stamp`, message and quote timestamps, activity `now`/`from`/step/subtask/awaiting times, upload/lease `expiresAt`, transcript-session start/update and entry `ts` |
+| Fleet / keys / memory | Fleet observation/link/problem times and nested instance fields, key creation/use/revocation, file `mtime`, Git author date and backlog `firstAt` |
 
 The examples below show request methods, URLs and JSON bodies. Supply the appropriate cookie or API-session authorization header; example writes are illustrative and should only be issued with authorization for their effects.
 
@@ -61,7 +71,7 @@ Example: `GET /api/health/ready` → `{"ok":false,"error":{"code":"supervisor_un
 | `accounts` | object / null | Runtime-keyed weekly account quota objects or null; observations include used percentage, reset time, `recordedAt` and `live` |
 | `supervisorPaused` | boolean / null | Whether new supervisor actions are paused |
 | `autoRestarts` | object / null | `{count:number}` automatic restarts recorded during the past hour |
-| `resources` | object | One current resource sample: `scope:"host"\|"container"\|"mixed"`, `sampledAt:number\|null` (Unix milliseconds), `cpu_pct:number\|null`, `cpu_count:number\|null`, `cpu_source:"container"\|"host"`, `mem_pct:number\|null`, `mem_used_bytes:number\|null`, `mem_total_bytes:number\|null`, `mem_source:"container"\|"host"`, `disk_pct:number\|null`, `disk_free_bytes:number\|null`, `disk_total_bytes:number\|null` |
+| `resources` | object | One current resource sample: `scope:"host"\|"container"\|"mixed"`, `sampledAt:string\|null` (ISO), `cpu_pct:number\|null`, `cpu_count:number\|null`, `cpu_source:"container"\|"host"`, `mem_pct:number\|null`, `mem_used_bytes:number\|null`, `mem_total_bytes:number\|null`, `mem_source:"container"\|"host"`, `disk_pct:number\|null`, `disk_free_bytes:number\|null`, `disk_total_bytes:number\|null` |
 | `services` | object / null | PM2 counts `online:number`, `total:number`, plus `channels:Array<{channel:string,service:string,status:string\|null,restarts10m:number,lastSendFailed:boolean\|null,consecutiveFailures:number\|null}>`. Channels come from installed skill frontmatter `type: communication` and `lifecycle.service.name`, and must exist in the PM2 sample. `restarts10m` sums observed counter increases in the last ten minutes, beginning at zero on Dashboard startup. Send fields describe the latest C4 outbound status and failures after the latest successful outbound; null means the C4 read failed. |
 
 Each `defaults[runtime]` contains `model:string|null`, `effort:string|null`, `threshold:number`, `model_thresholds:Record<string,number>` and `session_hot_ttl:object` (effective mode, keepalive seconds and configuration/environment provenance). CPU and memory limits are resolved independently: a limited resource uses its container quota, while an explicitly unlimited resource uses host values and labels that resource’s source `host`. `scope` is `mixed` when the two sources differ, otherwise it is their common source; each resource’s source remains authoritative. An unreadable container limit keeps that resource’s source `container` with unknown measurements rather than implying unlimited host fallback. CPU percentages use the selected CPU capacity (which can be fractional); memory percentages use the selected total bytes. Disk describes the filesystem visible at the instance data directory and is independent of the CPU/memory scope. Unreadable observations remain null. There is no duplicate `system` sample or `runtime_info` object. Origin’s current model, effort, running CLI version and restart-to-apply status belong to group detail; instance versions and defaults describe installed software and configuration. Session context, cost and pool counts belong to the group and usage APIs.
@@ -73,14 +83,14 @@ Each `defaults[runtime]` contains `model:string|null`, `effort:string|null`, `th
 | `sessionMode` | `"single"\|"multi"\|null`; null means the configured mode could not be established |
 | `transition` | null or `{runId,sourceMode,targetMode,phase,cutoff,reason,createdAt,updatedAt}`, preserving Core's transition record |
 | `globalGate` | null or `{present:boolean,reason:string\|null,runId:string\|null}`; null is unknown, not an absent gate |
-| `blocked` | null or `{reason:string,since:number\|null}`; `since` is the matching diagnostic event's Unix milliseconds, when known |
+| `blocked` | null or `{reason:string,since:string\|null}`; `since` is the matching diagnostic event's ISO timestamp, when known |
 | `supervisor` | `"reachable"\|"unreachable"\|"unknown"`; socket reachability is separate from the authoritative transition and gate records |
 | `lastCompleted` | null or `{runId,sourceMode,targetMode,updatedAt}` from the most recent completed transition |
 | `lastEvents` | array of the last ten matching Core diagnostic events; unavailable diagnostics produce an empty array without hiding authoritative records |
 | `supervisorPm2` | optional `{status:string,error:{code:string,message:string}\|null}` alongside an unreachable supervisor |
 | `error` | optional `{code:string,message:string}` when mode-status collection failed |
 
-Transition and completion timestamps retain Core’s numeric source units. If authoritative status collection fails, Dashboard preserves the independently established `sessionMode`, sets `transition`, `globalGate`, `blocked` and `lastCompleted` to null, `lastEvents` to an empty array and `supervisor` to `unknown`, and includes `error`. These null fields do not prove that no transition, gate or block exists. These observations share the same object in GET and instance push; no separate transition endpoint exists.
+Transition `createdAt`/`updatedAt`, last-completion `updatedAt`, blocked `since`, and diagnostic-event `ts` are ISO timestamps at this boundary; Core storage units are not exposed. If authoritative status collection fails, Dashboard preserves the independently established `sessionMode`, sets `transition`, `globalGate`, `blocked` and `lastCompleted` to null, `lastEvents` to an empty array and `supervisor` to `unknown`, and includes `error`. These null fields do not prove that no transition, gate or block exists. These observations share the same object in GET and instance push; no separate transition endpoint exists.
 
 The overview composes reminders from `supervisorPaused`, runtime health/account limits, `services.channels`, group counts/pool, offline `flag=startFailed`, row `flags.unreadable`, `counts.listKnown` and request failures. It does not receive a second instance-level attention list.
 
@@ -187,7 +197,7 @@ Lists contain presentation observations only. Running rows have exactly these fi
 | `displayName` | string | Effective human-readable name or fallback |
 | `channel` | string / null | Channel namespace; Origin has no channel |
 | `runtime`, `model` | string / null | Current runtime and model observations |
-| `state` | `{kind:string,since:string\|null,stale?:boolean,sampledAt?:number,lastState?:"busy"\|"idle"}` | Mutually exclusive primary state and its known start; stale observations retain the last busy/idle classification for less than 60 seconds. Older samples become unknown while retaining sampledAt/lastState for an explicitly historical hint |
+| `state` | `{kind:string,since:string\|null,stale?:boolean,sampledAt?:string,lastState?:"busy"\|"idle"}` | Mutually exclusive primary state and its known start; stale observations retain the last busy/idle classification for less than 60 seconds. Older samples become unknown while retaining sampledAt/lastState for an explicitly historical hint |
 | `duration` | number / null | State duration in seconds; a tolerated stale idle sample retains its last recorded idle duration |
 | `flags` | object | Independent conditions, below |
 | `mainAgent` | `busy` / `idle` / `unknown` | Main Agent observation for instruction callers; UI does not display it |
@@ -225,7 +235,7 @@ Flags are independent: a working row can carry both `queued` and `blocked`. Miss
 
 **Access:** Read. **Parameters:** none.
 
-Returns `readAt:number`, `listKnown:boolean`, `running:{total:number,states:Record<PrimaryState,number>,flags:Record<Flag,number>}`, `offline:{total:number,waitingSlot:number,startFailed:number}`, and `pool:{used:number|null,capacity:number|null}|null`. Running state counts include working, idle, starting, stopping and unknown. `running.flags.noResponse` counts the independent no-response flag, including a row also flagged with an error. All count/pool observations are numeric or null; there are no rows, mode or capacity-provenance records. Session mode comes only from `/api/instance`. Pool capacity provenance is not exposed by instance or counts.
+Returns `readAt:string`, `listKnown:boolean`, `running:{total:number,states:Record<PrimaryState,number>,flags:Record<Flag,number>}`, `offline:{total:number,waitingSlot:number,startFailed:number}`, and `pool:{used:number|null,capacity:number|null}|null`. Running state counts include working, idle, starting, stopping and unknown. `running.flags.noResponse` counts the independent no-response flag, including a row also flagged with an error. All count/pool observations are numeric or null; there are no rows, mode or capacity-provenance records. Session mode comes only from `/api/instance`. Pool capacity provenance is not exposed by instance or counts.
 
 **Errors:** 502 `GROUP_CATALOG_UNREADABLE`; common read errors. Other source availability is represented by nullable observations. In counts, `listKnown` additionally requires a readable C4 catalog; running and offline responses expose the snapshot’s live-list availability directly. Offline and search still reject an unreadable C4 catalog even when the live list is known.
 
@@ -235,7 +245,7 @@ Example: `GET /api/groups/counts`.
 
 **Access:** Read. **Parameters:** none; this list is not paginated.
 
-Returns `{readAt:number,listKnown:boolean,rows:RunningRow[]}` with only the running fields listed above. Confirmed offline rows are excluded. Its practical size follows the session pool.
+Returns `{readAt:string,listKnown:boolean,rows:RunningRow[]}` with only the running fields listed above. Confirmed offline rows are excluded. Its practical size follows the session pool.
 
 **Errors:** common read errors.
 
@@ -245,7 +255,7 @@ Example: `GET /api/groups/running`.
 
 **Access:** Read. **Parameters:** optional `q:string` (trimmed, at most 64 characters), `flag:queued|blocked|waitingSlot|startFailed|unreadable|noResponse` (one flag), `cursor:string` (opaque cursor from the previous page), `limit:integer` (1–200, default 50).
 
-Returns `{readAt:number,listKnown:boolean,rows:OfflineRow[],nextCursor:string|null}` with only the five offline fields above. Rows are ordered by descending last activity and then ID. Text matches group ID/address and display name. A flag matches only when that key exists in the row’s flags; text and flag filters combine with AND before pagination. Pass the cursor unchanged with the same filters to continue.
+Returns `{readAt:string,listKnown:boolean,rows:OfflineRow[],nextCursor:string|null}` with only the five offline fields above. Rows are ordered by descending last activity and then ID. Text matches group ID/address and display name. A flag matches only when that key exists in the row’s flags; text and flag filters combine with AND before pagination. Pass the cursor unchanged with the same filters to continue.
 
 **Errors:** 400 `INVALID_LIMIT`, `INVALID_QUERY`, `INVALID_FLAG`, `INVALID_CURSOR`; 502 `GROUP_CATALOG_UNREADABLE`; common read errors.
 
@@ -265,7 +275,7 @@ Example: `GET /api/groups/search?q=team`.
 
 **Access:** Read. **Parameters:** `range=60m|6h` (default `6h`).
 
-Returns `{range:string,cellSeconds:number,start:number,groups:Record<string,{cells:string[],inbound:number[]}>,inboundError?:"inbound_unreadable"}`. Cells are activity classifications (`none`, `idle`, `busy`, `waiting`, `error`); inbound entries are message timestamps in milliseconds. This heatmap retains historical activity classifications, which are separate from the current primary-state vocabulary. If inbound timestamps cannot be read, the response includes `inboundError:"inbound_unreadable"` while retaining the event classifications.
+Returns `{range:string,cellSeconds:number,start:string,groups:Record<string,{cells:string[],inbound:string[]}>,inboundError?:"inbound_unreadable"}`. Cells are activity classifications (`none`, `idle`, `busy`, `waiting`, `error`); inbound entries are message ISO timestamps. This heatmap retains historical activity classifications, which are separate from the current primary-state vocabulary. If inbound timestamps cannot be read, the response includes `inboundError:"inbound_unreadable"` while retaining the event classifications.
 
 In single-session mode, `groups.origin` combines current `origin` and historical null-group events, including turn transitions before the window needed to seed its first cell. Its inbound markers include all external channel groups feeding the sole session; internal and outbound messages are excluded. Multi-session heatmaps retain each group's own event and inbound scope.
 
@@ -279,7 +289,7 @@ Example: `GET /api/groups/activity?range=6h`.
 
 **Access:** Read. **Parameters:** encoded group ID; optional `include=raw,config` (default both). An empty `include=` requests neither extra; either name can be selected independently.
 
-Returns the complete group observation, including the applicable list fields plus `sessionGroup:string|null`, `name:object|null`, `side:"running"|"offline"`, `presence:string`, `live:object|null`, `fence:object|null`, `working:object|null`, `queue:object|null`, `wait:object|null`, `target:object|null`, `launchConfig:object|null`, `createdAt:number|null`, `c4:object|null`, `tools:array`, and other source observations. `readAt:number` is the snapshot’s Unix milliseconds. `runtimeInfo` is the group-specific object `{runtime:string|null,model:string|null,effort:string|null,runningVersion:string|null,installedVersion:string|null,update:string|null,pendingRestart:boolean}`. Its runtime/model/effort and running version are observed group values; unavailable strings remain null. `installedVersion` is the installed version for that runtime; `update` is an available newer version string or null, using the same version comparison as `versions[runtime]`. `pendingRestart` is true only on the running side when known evidence identifies a newer installed CLI or a desired runtime/model/effort that differs from the current observation. False does not establish that unknown values match. This group-specific object does not appear in `/api/instance`.
+Returns the complete group observation, including the applicable list fields plus `sessionGroup:string|null`, `name:object|null`, `side:"running"|"offline"`, `presence:string`, `live:object|null`, `fence:object|null`, `working:object|null`, `queue:object|null`, `wait:object|null`, `target:object|null`, `launchConfig:object|null`, `createdAt:string|null`, `c4:object|null`, `tools:array`, and other source observations. `readAt:string` is the snapshot’s ISO observation timestamp. `runtimeInfo` is the group-specific object `{runtime:string|null,model:string|null,effort:string|null,runningVersion:string|null,installedVersion:string|null,update:string|null,pendingRestart:boolean}`. Its runtime/model/effort and running version are observed group values; unavailable strings remain null. `installedVersion` is the installed version for that runtime; `update` is an available newer version string or null, using the same version comparison as `versions[runtime]`. `pendingRestart` is true only on the running side when known evidence identifies a newer installed CLI or a desired runtime/model/effort that differs from the current observation. False does not establish that unknown values match. This group-specific object does not appear in `/api/instance`.
 
 Detail also includes `currentAction:{tool:string|null,message:string|null,receivedAt:string|null}` using the same bounded, sanitized projection as a running list row. Optional `include` extras do not change this field.
 
@@ -564,7 +574,7 @@ All reads allow read scope; all writes require admin and browser same origin. A 
 | `POST /api/schedules/:id/actions/pause` | No body. Pauses the named task. | 404 missing task; 409 invalid current state. Example: `POST /api/schedules/daily-report/actions/pause`. |
 | `POST /api/schedules/:id/actions/resume` | No body. Resumes the named task. | 404 missing task; 409 invalid current state. Example: `POST /api/schedules/daily-report/actions/resume`. |
 
-Schedule task/history and run-array timestamps retain Unix seconds; `readAt` retains Unix milliseconds. `duration` is milliseconds and `intervalSeconds` is a duration. Cursor fields are opaque continuation values, not display timestamps.
+Schedule `nextRunAt`, `lastRunAt`, `updatedAt`, history `executedAt`/`completedAt`, every `runs[]`/`in24h[]` entry and `readAt` are ISO strings (or null where the source is unknown). Scheduler CLI write results project task `created_at`, `updated_at`, `next_run_at`, `last_run_at` and completion/failure fields to ISO too. `duration` is a millisecond duration and `intervalSeconds` is a duration in seconds. Cursor fields are opaque continuation values, not display timestamps.
 
 ## Settings and Credentials
 

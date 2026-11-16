@@ -16,19 +16,19 @@ const MIME_TYPES = {
 // Explicit command outcomes from Dashboard actions, scheduler CLI and Core
 // supervisor admission. An unfamiliar command failure is an upstream failure.
 const FAILURE_STATUSES = new Map([
-  [400, ['invalid_runtime', 'invalid_model', 'invalid_effort', 'invalid_value', 'invalid_argument', 'invalid_args',
+  [400, ['invalid_runtime', 'invalid_mode', 'runtime_unsupported', 'invalid_model', 'invalid_effort', 'invalid_value', 'invalid_argument', 'invalid_args',
     'invalid_form', 'invalid_task', 'invalid_time', 'invalid_request', 'invalid_default', 'invalid_pricing',
     'prompt_starts_with_dashes', 'tz_unavailable', 'no_updates', 'reschedule_not_future', 'target_required', 'unknown_action']],
   [401, ['unauthorized', 'authentication_required', 'invalid_api_key']],
   [403, ['insufficient_scope', 'same_origin_required', 'local_cookie_required', 'origin_forbidden', 'auth_not_confirmed']],
   [404, ['task_not_found', 'group_not_found', 'unknown_key', 'unknown_agent', 'not_found']],
   [409, ['already_set', 'already_up_to_date', 'duplicate_request', 'environment_override', 'multi_session_required',
-    'task_wrong_status', 'task_ambiguous', 'transition_open', 'legacy_session_present', 'manual_restart_pending',
+    'task_wrong_status', 'runtime_not_installed', 'target_scope_mismatch', 'stale_target', 'task_ambiguous', 'transition_open', 'legacy_session_present', 'manual_restart_pending',
     'deletion_in_progress', 'request_conflict', 'single_mode', 'not_multi', 'fence_conflict', 'restart_all_pending',
     'run_changed', 'other_fence', 'deletion_preview_stale', 'deletion_ownership_mismatch', 'draft_became_active']],
-  [500, ['internal_error', 'db_write_failed', 'set_failed']],
-  [502, ['result_unknown', 'scheduler_cli_failed', 'group_delete_result_unknown', 'instance_root_mismatch', 'upgrade_failed', 'wake_failed', 'restart_failed']],
-  [503, ['service_discovery_unavailable', 'group_delete_supervisor_unavailable', 'unknown_model_capabilities', 'config_unreadable', 'requests_unreadable',
+  [500, ['internal_error', 'db_write_failed', 'credential_save_failed', 'set_failed']],
+  [502, ['result_unknown', 'no_reply', 'scheduler_cli_failed', 'group_delete_result_unknown', 'instance_root_mismatch', 'upgrade_failed', 'wake_failed', 'restart_failed']],
+  [503, ['hooks_not_ready', 'connect_failed', 'service_discovery_unavailable', 'group_delete_supervisor_unavailable', 'unknown_model_capabilities', 'config_unreadable', 'requests_unreadable',
     'identity_unavailable', 'dependency_unavailable', 'entry_not_open', 'not_ready', 'snapshot_unavailable', 'start_admission_closed']],
   [504, ['deadline_exceeded', 'timeout']],
 ].flatMap(([status, codes]) => codes.map(code => [code, status])));

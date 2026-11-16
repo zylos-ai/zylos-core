@@ -152,6 +152,8 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
+      res.apiPath = url.pathname;
+      res.apiWrite = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
       if (await auth.handle(req, res, url)) return;
       if (url.pathname.startsWith('/fleet/') && proxy && await proxy.handle(req, res, url)) return;
       const common = { auth, config, conversations, sender, history, activity, answers, delivery, attachments, readMode, instanceTz };
@@ -333,7 +335,7 @@ export async function createRemoteChatApiFixture(t, sandbox, { timeoutMs = 45000
       const response = await fetch(info.base + route, { method, headers, signal: AbortSignal.timeout(timeoutMs),
         ...(['GET', 'HEAD'].includes(method) ? {} : { body: JSON.stringify(body ?? {}) }) });
       const text = await response.text(); let value; try { value = JSON.parse(text); } catch { value = text; }
-      if (route === '/api/settings/chat' && response.ok) config.chat.allowRemote = value.allowRemote;
+      if (route === '/api/settings/chat' && response.ok) config.chat.allowRemote = value.chat_allow_remote;
       return { status: response.status, body: value, text };
     },
     async createConversation(content = 'isolated remote first text') {
