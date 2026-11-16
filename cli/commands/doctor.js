@@ -209,7 +209,13 @@ export function checkPgrep({ execute = execFileSync } = {}) {
   }
 }
 
-export const PGREP_WARNING = 'Maintenance check before single-session startup will be skipped; install procps';
+/** Hint for an unusable pgrep, by checkPgrep reason. Single-session startup
+ * skips the maintenance check for ENOENT/EACCES but still fails on others. */
+export function pgrepHint(reason) {
+  if (reason === 'not_found') return 'Maintenance check before single-session startup will be skipped; install procps';
+  if (reason === 'EACCES') return 'Maintenance check before single-session startup will be skipped; install procps and make every PATH directory accessible';
+  return 'Single-session startup fails while pgrep cannot be run; check that procps works';
+}
 
 function checkClaudeCli() {
   if (!commandExists('claude')) return { installed: false };
@@ -443,9 +449,9 @@ export function buildDiagnosticJson(diag, coreVersion) {
             sendKeysClientFlag: diag.system.tmux.useClientFlag ?? false,
             versionReason: diag.system.tmux.reason ?? null },
           pm2: { ok: diag.system.pm2.installed, version: diag.system.pm2.version || null },
-          // Warning level: a missing pgrep never fails the group or the run.
+          // Warning level: an unusable pgrep never fails the group or the run.
           pgrep: diag.system.pgrep?.available === false
-            ? { ok: false, level: 'warning', reason: diag.system.pgrep.reason, hint: PGREP_WARNING }
+            ? { ok: false, level: 'warning', reason: diag.system.pgrep.reason, hint: pgrepHint(diag.system.pgrep.reason) }
             : { ok: true },
           network: { ok: diag.system.network.reachable, host: diag.apiHost, proxy: diag.system.network.proxy || null },
           envFile: { ok: diag.system.envFile?.ok !== false, mode: diag.system.envFile?.mode ?? null,
@@ -494,7 +500,7 @@ function displaySystemGroup(diag, jsonGroup) {
 
   const pgrep = jsonGroup.checks.pgrep;
   checks.push(pgrep.ok ? 'pgrep available'
-    : yellow(`pgrep ${pgrep.reason === 'not_found' ? 'not found' : `unusable (${pgrep.reason})`}: ${PGREP_WARNING}`));
+    : yellow(`pgrep ${pgrep.reason === 'not_found' ? 'not found' : `could not be run (${pgrep.reason})`}: ${pgrep.hint}`));
 
   if (net.reachable) {
     let label = `network: ${diag.apiHost} reachable`;

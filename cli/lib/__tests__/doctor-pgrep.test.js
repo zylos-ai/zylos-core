@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { checkPgrep, collectDiagnostics, buildDiagnosticJson, PGREP_WARNING } from '../../commands/doctor.js';
+import { checkPgrep, collectDiagnostics, buildDiagnosticJson, pgrepHint } from '../../commands/doctor.js';
 
 const version = { success: true, version: '1.0.0' };
 const healthy = pgrep => ({
@@ -19,6 +19,16 @@ test('doctor probe reports pgrep missing from PATH as not_found', t => {
   process.env.PATH = dir;
   t.after(() => { process.env.PATH = saved; fs.rmSync(dir, { recursive: true, force: true }); });
   assert.deepEqual(checkPgrep(), { available: false, reason: 'not_found' });
+});
+
+// Without pgrep, a PATH directory the user cannot search turns ENOENT into
+// EACCES. Root bypasses the permission, so the case cannot be built as root.
+test('doctor probe reports EACCES when a PATH directory denies access', { skip: process.getuid?.() === 0 && 'root bypasses directory permissions' }, t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'doctor-locked-path-')), locked = path.join(dir, 'locked'), saved = process.env.PATH;
+  fs.mkdirSync(locked, { mode: 0o000 });
+  process.env.PATH = `${locked}${path.delimiter}${dir}`;
+  t.after(() => { process.env.PATH = saved; fs.chmodSync(locked, 0o700); fs.rmSync(dir, { recursive: true, force: true }); });
+  assert.deepEqual(checkPgrep(), { available: false, reason: 'EACCES' });
 });
 
 const hasPgrep = spawnSync('pgrep', ['-f', '[n]o-such-process-pattern']).status === 1;
@@ -45,9 +55,19 @@ test('missing pgrep is a doctor warning that does not fail the system group or t
   const json = buildDiagnosticJson(healthy(diag.system.pgrep), version);
   assert.equal(json.passed, true);
   assert.equal(json.groups.system.passed, true);
-  assert.deepEqual(json.groups.system.checks.pgrep, { ok: false, level: 'warning', reason: 'not_found', hint: PGREP_WARNING });
-  assert.match(PGREP_WARNING, /single-session startup will be skipped; install procps/);
+  assert.deepEqual(json.groups.system.checks.pgrep, { ok: false, level: 'warning', reason: 'not_found',
+    hint: 'Maintenance check before single-session startup will be skipped; install procps' });
   assert.equal(json.issues.some(issue => /pgrep/.test(issue.id + issue.label)), false);
+});
+
+test('doctor hint follows the pgrep failure: skipped for not_found and EACCES, startup failure otherwise', () => {
+  for (const reason of ['not_found', 'EACCES', 'ETIMEDOUT']) {
+    const json = buildDiagnosticJson(healthy({ available: false, reason }), version);
+    assert.equal(json.passed, true);
+    assert.deepEqual(json.groups.system.checks.pgrep, { ok: false, level: 'warning', reason, hint: pgrepHint(reason) });
+  }
+  assert.equal(pgrepHint('EACCES'), 'Maintenance check before single-session startup will be skipped; install procps and make every PATH directory accessible');
+  assert.equal(pgrepHint('ETIMEDOUT'), 'Single-session startup fails while pgrep cannot be run; check that procps works');
 });
 
 test('available pgrep passes the doctor check', () => {

@@ -5,16 +5,18 @@ import { setTimeout as delay } from 'node:timers/promises';
 const { LEGACY_TMUX_NAMES } = await loadCoreModule('session-group-paths.js');
 
 const exec = promisify(execFile);
-/** Returns the first running maintenance pattern, or null. A machine without
- * pgrep cannot observe maintenance: that is reported through `unavailable`
- * and treated as none running, so it never blocks startup. Other observation
- * failures still reject. */
+/** Returns the first running maintenance pattern, or null. When pgrep cannot
+ * be run at all, maintenance cannot be observed: that is reported through
+ * `unavailable` and treated as none running, so it never blocks startup.
+ * ENOENT means pgrep is not on PATH; EACCES means it was not found in an
+ * accessible PATH directory (a PATH directory denies access) or is not
+ * executable. Timeouts and other exit codes still reject. */
 export async function runningMaintenance({ execute = exec, unavailable = () => {} } = {}) {
   for (const pattern of ['[r]estart-claude', '[u]pgrade-claude', '[c]laude.ai/install.sh']) {
     try { await execute('pgrep', ['-f', pattern], { timeout: 500 }); return pattern; }
     catch (error) {
       if (error.code === 1) continue;
-      if (error.code === 'ENOENT') { unavailable(error); return null; }
+      if (error.code === 'ENOENT' || error.code === 'EACCES') { unavailable(error); return null; }
       throw error;
     }
   }
@@ -28,13 +30,15 @@ export function createSinglePreparation({ checkMaintenance = runningMaintenance,
   for (const fn of [clearStaleState, resetToolLifecycle, buildInstructionFile]) {
     if (typeof fn !== 'function') throw new TypeError('Single preparation requires lifecycle and instruction providers');
   }
-  // One preparation exists per dispatcher process, so this reports a missing
-  // pgrep once per process rather than on every start attempt.
+  // One preparation exists per dispatcher process, so this reports an
+  // unusable pgrep once per process rather than on every start attempt.
   let unavailableLogged = false;
-  const unavailable = () => {
+  const unavailable = error => {
     if (unavailableLogged) return;
     unavailableLogged = true;
-    log('pgrep was not found; skipped the maintenance check (Claude restart/upgrade) before single-session startup. Install procps to restore it.');
+    const problem = error.code === 'ENOENT' ? 'pgrep was not found (ENOENT)' : `pgrep could not be run (${error.code})`;
+    const fix = error.code === 'ENOENT' ? 'Install procps' : 'Install procps and make every PATH directory accessible';
+    log(`${problem}; skipped the maintenance check (Claude restart/upgrade) before single-session startup. ${fix} to restore it.`);
   };
   return async function prepareSingle(runtime) {
     const started = now();

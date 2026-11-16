@@ -27,10 +27,35 @@ test('maintenance scan is async argv-only and distinguishes no match from observ
   assert.equal(unavailable.length, 0);
 });
 
+test('pgrep that cannot be run (ENOENT or EACCES) is unavailable, other failures still reject', async () => {
+  for (const code of ['ENOENT', 'EACCES']) {
+    const unavailable = [];
+    assert.equal(await runningMaintenance({ execute: async () => { throw Object.assign(Error(), { code }); },
+      unavailable: error => unavailable.push(error.code) }), null);
+    assert.deepEqual(unavailable, [code]);
+  }
+  for (const failure of [{ code: 'ETIMEDOUT' }, { code: 2 }]) {
+    const unavailable = [];
+    await assert.rejects(runningMaintenance({ execute: async () => { throw Object.assign(Error('pgrep failed'), failure); },
+      unavailable: error => unavailable.push(error.code) }), /pgrep failed/);
+    assert.equal(unavailable.length, 0);
+  }
+});
+
 function withoutPgrep(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'no-pgrep-')), saved = process.env.PATH;
   process.env.PATH = dir;
   t.after(() => { process.env.PATH = saved; fs.rmSync(dir, { recursive: true, force: true }); });
+}
+
+// A PATH directory the current user cannot search makes Node report EACCES
+// instead of ENOENT when pgrep is absent. Root bypasses the permission.
+const runsAsRoot = process.getuid?.() === 0;
+function withLockedPathDirectory(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'locked-path-')), locked = path.join(dir, 'locked'), saved = process.env.PATH;
+  fs.mkdirSync(locked, { mode: 0o000 });
+  process.env.PATH = `${locked}${path.delimiter}${dir}`;
+  t.after(() => { process.env.PATH = saved; fs.chmodSync(locked, 0o700); fs.rmSync(dir, { recursive: true, force: true }); });
 }
 
 test('missing pgrep is reported as unavailable and treated as no maintenance', async t => {
@@ -50,7 +75,23 @@ test('single preparation without pgrep starts every time and logs the skipped ch
   await prepare('claude'); await prepare('claude'); await prepare('claude');
   assert.deepEqual(calls, ['clear','reset','instructions','clear','reset','instructions','clear','reset','instructions']);
   assert.equal(logs.length, 1);
-  assert.match(logs[0], /pgrep was not found; skipped the maintenance check .* single-session startup\. Install procps/);
+  assert.match(logs[0], /^pgrep was not found \(ENOENT\); skipped the maintenance check .* single-session startup\. Install procps to restore it\.$/);
+});
+
+test('single preparation with a PATH directory that denies access starts every time and logs EACCES once', { skip: runsAsRoot && 'root bypasses directory permissions' }, async t => {
+  withLockedPathDirectory(t);
+  const unavailable = [];
+  assert.equal(await runningMaintenance({ unavailable: error => unavailable.push(error.code) }), null);
+  assert.deepEqual(unavailable, ['EACCES']);
+  const calls = [], logs = [];
+  const prepare = createSinglePreparation({ sleep: async () => assert.fail('must not wait when pgrep cannot be run'), log: line => logs.push(line),
+    clearStaleState: async () => calls.push('clear'), resetToolLifecycle: async () => calls.push('reset'),
+    buildInstructionFile: async () => calls.push('instructions') });
+  await prepare('claude'); await prepare('claude');
+  assert.deepEqual(calls, ['clear','reset','instructions','clear','reset','instructions']);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /^pgrep could not be run \(EACCES\); skipped the maintenance check .* single-session startup\. Install procps and make every PATH directory accessible to restore it\.$/);
+  assert.doesNotMatch(logs[0], /not found/);
 });
 
 const hasPgrep = spawnSync('pgrep', ['-f', '[n]o-such-process-pattern']).status === 1;
