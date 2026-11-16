@@ -1,5 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
 import { routerFixture } from './helpers/router-fixture.js';
 import { createSinglePreparation, createLegacyMigration, runningMaintenance } from '../router/resident.js';
 
@@ -13,10 +17,100 @@ test('single preparation waits at most 300 seconds, then cleanup and instruction
 });
 
 test('maintenance scan is async argv-only and distinguishes no match from observation failure', async () => {
-  const patterns = [];
+  const patterns = [], unavailable = [];
   assert.equal(await runningMaintenance({ execute: async (_,args) => { patterns.push(args); if (patterns.length < 2) throw Object.assign(Error(),{code:1}); } }), '[u]pgrade-claude');
   assert.deepEqual(patterns, [['-f','[r]estart-claude'],['-f','[u]pgrade-claude']]);
-  await assert.rejects(runningMaintenance({ execute: async () => { throw Object.assign(Error('timeout'),{code:'ETIMEDOUT'}); } }), /timeout/);
+  assert.equal(await runningMaintenance({ execute: async () => { throw Object.assign(Error(),{code:1}); },
+    unavailable: error => unavailable.push(error) }), null);
+  await assert.rejects(runningMaintenance({ execute: async () => { throw Object.assign(Error('timeout'),{code:'ETIMEDOUT'}); },
+    unavailable: error => unavailable.push(error) }), /timeout/);
+  assert.equal(unavailable.length, 0);
+});
+
+test('pgrep that cannot be run (ENOENT or EACCES) is unavailable, other failures still reject', async () => {
+  for (const code of ['ENOENT', 'EACCES']) {
+    const unavailable = [];
+    assert.equal(await runningMaintenance({ execute: async () => { throw Object.assign(Error(), { code }); },
+      unavailable: error => unavailable.push(error.code) }), null);
+    assert.deepEqual(unavailable, [code]);
+  }
+  for (const failure of [{ code: 'ETIMEDOUT' }, { code: 2 }]) {
+    const unavailable = [];
+    await assert.rejects(runningMaintenance({ execute: async () => { throw Object.assign(Error('pgrep failed'), failure); },
+      unavailable: error => unavailable.push(error.code) }), /pgrep failed/);
+    assert.equal(unavailable.length, 0);
+  }
+});
+
+function withoutPgrep(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'no-pgrep-')), saved = process.env.PATH;
+  process.env.PATH = dir;
+  t.after(() => { process.env.PATH = saved; fs.rmSync(dir, { recursive: true, force: true }); });
+}
+
+// A PATH directory the current user cannot search makes Node report EACCES
+// instead of ENOENT when pgrep is absent. Root bypasses the permission.
+const runsAsRoot = process.getuid?.() === 0;
+function withLockedPathDirectory(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'locked-path-')), locked = path.join(dir, 'locked'), saved = process.env.PATH;
+  fs.mkdirSync(locked, { mode: 0o000 });
+  process.env.PATH = `${locked}${path.delimiter}${dir}`;
+  t.after(() => { process.env.PATH = saved; fs.chmodSync(locked, 0o700); fs.rmSync(dir, { recursive: true, force: true }); });
+}
+
+test('missing pgrep is reported as unavailable and treated as no maintenance', async t => {
+  withoutPgrep(t);
+  const unavailable = [];
+  assert.equal(await runningMaintenance({ unavailable: error => unavailable.push(error) }), null);
+  assert.equal(unavailable.length, 1);
+  assert.equal(unavailable[0].code, 'ENOENT');
+});
+
+test('single preparation without pgrep starts every time and logs the skipped check once', async t => {
+  withoutPgrep(t);
+  const calls = [], logs = [];
+  const prepare = createSinglePreparation({ sleep: async () => assert.fail('must not wait without pgrep'), log: line => logs.push(line),
+    clearStaleState: async () => calls.push('clear'), resetToolLifecycle: async () => calls.push('reset'),
+    buildInstructionFile: async () => calls.push('instructions') });
+  await prepare('claude'); await prepare('claude'); await prepare('claude');
+  assert.deepEqual(calls, ['clear','reset','instructions','clear','reset','instructions','clear','reset','instructions']);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /^pgrep was not found \(ENOENT\); skipped the maintenance check .* single-session startup\. Install procps to restore it\.$/);
+});
+
+test('single preparation with a PATH directory that denies access starts every time and logs EACCES once', { skip: runsAsRoot && 'root bypasses directory permissions' }, async t => {
+  withLockedPathDirectory(t);
+  const unavailable = [];
+  assert.equal(await runningMaintenance({ unavailable: error => unavailable.push(error.code) }), null);
+  assert.deepEqual(unavailable, ['EACCES']);
+  const calls = [], logs = [];
+  const prepare = createSinglePreparation({ sleep: async () => assert.fail('must not wait when pgrep cannot be run'), log: line => logs.push(line),
+    clearStaleState: async () => calls.push('clear'), resetToolLifecycle: async () => calls.push('reset'),
+    buildInstructionFile: async () => calls.push('instructions') });
+  await prepare('claude'); await prepare('claude');
+  assert.deepEqual(calls, ['clear','reset','instructions','clear','reset','instructions']);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /^pgrep could not be run \(EACCES\); skipped the maintenance check .* single-session startup\. Install procps and make every PATH directory accessible to restore it\.$/);
+  assert.doesNotMatch(logs[0], /not found/);
+});
+
+const hasPgrep = spawnSync('pgrep', ['-f', '[n]o-such-process-pattern']).status === 1;
+
+test('with pgrep, a running restart-claude process holds single preparation until it exits', { skip: !hasPgrep && 'pgrep is not installed', timeout: 15000 }, async t => {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', 'restart-claude'], { stdio: 'ignore' });
+  const exited = new Promise(resolve => child.once('exit', resolve));
+  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+  await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+  assert.equal(await runningMaintenance(), '[r]estart-claude');
+  let now = 0; const waits = [], logs = [], calls = [];
+  const prepare = createSinglePreparation({ now: () => now, log: line => logs.push(line),
+    sleep: async ms => { waits.push(ms); now += ms; if (waits.length === 2) { child.kill('SIGTERM'); await exited; } },
+    clearStaleState: async () => calls.push('clear'), resetToolLifecycle: async () => calls.push('reset'),
+    buildInstructionFile: async () => calls.push('instructions') });
+  await prepare('claude');
+  assert.deepEqual(waits.slice(0, 2), [1000, 1000]);
+  assert.deepEqual(calls, ['clear','reset','instructions']);
+  assert.equal(logs.some(line => /pgrep/.test(line)), false);
 });
 
 test('legacy waits idle, sends exit once, confirms disappearance; busy target forced at 300s by observed runtime', async () => {
