@@ -199,7 +199,6 @@
   "agent_fleet.conn_refused": "Connection refused",
   "agent_fleet.bad_payload": "Bad payload",
   "agent_fleet.stale_data": "Stale data",
-  "agent_fleet.no_activity": "Standing by",
   "agent_fleet.sound_on": "Sound cues on — click to mute",
   "agent_fleet.sound_off": "Sound cues muted — click to enable",
   "trends.tool_calls": "Tool Calls",

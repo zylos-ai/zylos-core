@@ -246,7 +246,6 @@ function fleetFixture() {
         color: agentColor('zylos02').color,
         hue: agentColor('zylos02').hue,
         state: 'IDLE',
-        activity: null,
         context_pct: 0.18,
         session_cost: 0.006,
         daily_cost: 0.04,
@@ -269,7 +268,6 @@ function fleetFixture() {
         color: agentColor('zylos01').color,
         hue: agentColor('zylos01').hue,
         state: 'BUSY',
-        activity: 'exec_command npm test',
         context_pct: 72,
         session_cost: 0.12,
         daily_cost: 0.4,
@@ -292,7 +290,6 @@ function fleetFixture() {
         color: agentColor('zylos0t').color,
         hue: agentColor('zylos0t').hue,
         state: 'AUTH_WAIT',
-        activity: 'no progress',
         context_pct: 0.91,
         session_cost: 0.03,
         daily_cost: 0.09,
@@ -314,7 +311,6 @@ function fleetFixture() {
         color: agentColor('zz-lab').color,
         hue: agentColor('zz-lab').hue,
         state: 'OFFLINE',
-        activity: 'last message',
         context_pct: null,
         session_cost: 0,
         daily_cost: null,
@@ -534,7 +530,7 @@ test('this machine opens its own workbench and others open through the fleet pat
     updated_at: '2026-06-07T15:20:00.000Z',
     agents: [
       { name: 'local', state: 'IDLE', last_seen: '2026-06-07T15:20:00.000Z', pulse_rate: 1, health_reason: 'idle', self: true },
-      { name: 'remote', state: 'BUSY', activity: 'work', last_seen: '2026-06-07T15:20:00.000Z', pulse_rate: 1, health_reason: 'ok', self: false }
+      { name: 'remote', state: 'BUSY', last_seen: '2026-06-07T15:20:00.000Z', pulse_rate: 1, health_reason: 'ok', self: false }
     ]
   };
   const view = buildAgentFleetView(selfFleet, { basePath: '/dash' });
@@ -629,22 +625,8 @@ test('fleet tile renders link quality chips and granular failure reasons', () =>
   assert.doesNotMatch(html, /Link latency 0ms/, 'an unmeasured link has no latency');
 });
 
-test('a reachable machine card shows its running tool as the current action', () => {
-  const html = renderAgentFleetHtml({
-    agents: [{ name: 'a', state: 'BUSY', activity: 'older summary', activity_feed: [{ kind: 'tool', label: 'Bash: npm test', started_at: null }] }]
-  });
-  assert.match(html, /<span title="Bash: npm test">Bash: npm test<\/span>/);
-});
-
-test('fleet tile activity feed falls back to legacy single-line activity', () => {
-  const html = renderAgentFleetHtml({
-    agents: [{ name: 'a', state: 'IDLE', activity: 'Prompt from lark', activity_feed: [] }]
-  });
-  assert.match(html, /Prompt from lark/);
-});
-
 test('Fleet aggregate busy keeps Working without inferring a thinking observation', () => {
-  const fleet = { agents: [{ name: 'a', state: 'BUSY', activity: 'Prompt from lark', activity_feed: [{ kind: 'thinking', label: null, started_at: null }] }] };
+  const fleet = { agents: [{ name: 'a', state: 'BUSY' }] };
   const view = buildAgentFleetView(fleet);
   assert.equal(view.tiles[0].mood, 'busy');
   assert.equal(view.tiles[0].stateLabel, 'Working');
@@ -659,16 +641,6 @@ test('fleet preserves Core authentication and wake warning moods', () => {
     const view = buildAgentFleetView({ agents: [{ name: 'a', state }] });
     assert.equal(view.tiles[0].mood, 'stuck');
   }
-});
-
-test('fleet tile thinking feed never overrides stuck/offline moods', () => {
-  const view = buildAgentFleetView({
-    agents: [{
-      name: 'a', state: 'AUTH_WAIT',
-      activity_feed: [{ kind: 'thinking', label: null, started_at: null }]
-    }]
-  });
-  assert.equal(view.tiles[0].mood, 'stuck');
 });
 
 test('Fleet omits Origin session metadata while weekly quota keeps the remaining percentage', () => {

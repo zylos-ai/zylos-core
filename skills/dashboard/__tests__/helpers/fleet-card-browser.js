@@ -47,7 +47,8 @@ export async function runFleetCardBrowser(t, sandbox) {
         assert.equal(await page.locator('html').getAttribute('data-theme'), theme);
         assert.equal(await page.locator('.fleet-subagent-badge').count(), 0);
         assert.match(await busy.innerText(), /Working/);
-        assert.match(await busy.innerText(), /Standing by/);
+        assert.doesNotMatch(await busy.innerText(), /Standing by/);
+        assert.equal(await busy.locator('.wb-f-act > :not(.wb-pill)').count(), 0);
         assert.equal(await busy.getAttribute('data-state'), 'busy');
         assert.match(await page.locator('.agent-fleet-summary').innerText(), /1 Working/);
         assert.doesNotMatch(await page.locator('#agent-fleet-root').innerText(), /Subagent|⚡37/);
@@ -57,19 +58,19 @@ export async function runFleetCardBrowser(t, sandbox) {
             const box = card.getBoundingClientRect();
             return { name: card.dataset.agent, left: box.left, right: box.right, width: box.width,
               scrollWidth: card.scrollWidth, clientWidth: card.clientWidth,
-              activity: [...card.querySelectorAll('.wb-f-act')].map(node => ({ scrollWidth: node.scrollWidth, clientWidth: node.clientWidth })) };
+              status: [...card.querySelectorAll('.wb-f-act')].map(node => ({ scrollWidth: node.scrollWidth, clientWidth: node.clientWidth })) };
           }),
         }));
         assert.ok(geometry.scrollWidth <= width, 'no page overflow');
         for (const card of geometry.cards) {
           assert.ok(card.left >= 0 && card.right <= width, 'card inside viewport');
           assert.ok(card.scrollWidth <= card.clientWidth, 'no card overflow');
-          for (const row of card.activity) assert.ok(row.scrollWidth <= row.clientWidth, 'no activity clipping');
+          for (const row of card.status) assert.ok(row.scrollWidth <= row.clientWidth, 'no status clipping');
         }
         assert.deepEqual(errors, []);
         // Inspect actual loaded resource entries, proving cache-busted import paths reach the browser.
         const assets = await page.evaluate(() => performance.getEntriesByType('resource').map(entry => new URL(entry.name).pathname + new URL(entry.name).search));
-        for (const asset of ['/js/app.js?v=230', '/js/agent-fleet.js?v=208', '/js/fleet-sounds.js?v=208', '/css/style.css?v=65', '/css/wb.css?v=71']) {
+        for (const asset of ['/js/app.js?v=232', '/js/agent-fleet.js?v=210', '/js/fleet-sounds.js?v=210', '/css/style.css?v=65', '/css/wb.css?v=71']) {
           assert.ok(assets.includes('/_assets' + asset), `loaded ${asset}`);
         }
         console.log('Fleet card geometry:', JSON.stringify({ width, theme, ...geometry }));

@@ -85,7 +85,7 @@ test('fleet poller exchanges token and derives safe agent records', async () => 
   assert.equal(fleet.agents[0].rate_limit_7d_pct, 4);
   assert.equal(fleet.agents[0].rate_limit_7d_live, false);
   assert.equal(fleet.agents[0].rate_limit_7d_recorded_at, 1000);
-  assert.equal(fleet.agents[0].activity, null, 'compact rows do not expose tool details');
+  assert.equal(Object.hasOwn(fleet.agents[0], 'activity'), false, 'compact rows do not expose tool details');
   assert.equal(Object.hasOwn(fleet.agents[0], 'context_pct'), false);
   assert.equal(Object.hasOwn(fleet.agents[0], 'cost'), false);
   assert.equal(Object.hasOwn(fleet.agents[0], 'session_cost'), false);
@@ -662,7 +662,7 @@ test('stateToFleetRecord produces a secret-free self record from local API state
   assert.equal(record.color, agentColor(name).color);
   assert.equal(record.hue, agentColor(name).hue);
   assert.equal(record.state, 'BUSY');
-  assert.equal(record.activity, null, 'Fleet ignores Origin tool details');
+  assert.equal(Object.hasOwn(record, 'activity'), false, 'Fleet ignores Origin tool details');
   assert.equal(Object.hasOwn(record, 'context_pct'), false);
   assert.equal(Object.hasOwn(record, 'cost'), false);
   assert.equal(Object.hasOwn(record, 'session_cost'), false);
@@ -757,7 +757,7 @@ test('redactFleetPayload masks string-leaf secrets and passes the safety guard',
     remoteFleet: {
       agents: [{
         name: 'remote',
-        activity: 'saw zylos_ak_secret123, zylos_ak_, zylos_st_, zylos_ak_...abcd, read_api_key, read_api_keys, and myread_session_token in output',
+        base_url: 'saw zylos_ak_secret123, zylos_ak_, zylos_st_, zylos_ak_...abcd, read_api_key, read_api_keys, and myread_session_token in output',
         context_pct: 7,
         self: false
       }],
@@ -770,7 +770,7 @@ test('redactFleetPayload masks string-leaf secrets and passes the safety guard',
   assert.throws(() => assertFleetPayloadSafe(unsafe), /fleet_secret_leak_guard/);
   const redacted = redactFleetPayload(unsafe);
   assert.doesNotThrow(() => assertFleetPayloadSafe(redacted));
-  assert.equal(redacted.agents[1].activity, 'saw [redacted], [redacted], [redacted], [redacted], [redacted], [redacted]s, and my[redacted] in output');
+  assert.equal(redacted.agents[1].base_url, 'saw [redacted], [redacted], [redacted], [redacted], [redacted], [redacted]s, and my[redacted] in output');
   assert.equal(redacted.agents[1].context_pct, 7);
 });
 
@@ -781,7 +781,7 @@ test('buildSafeFleetPayload redacts string-leaf leaks for shared HTTP and SSE pa
     remoteFleet: {
       agents: [{
         name: 'remote',
-        activity: 'mentions zylos_ak_ prefix and masked zylos_st_...abcd',
+        base_url: 'mentions zylos_ak_ prefix and masked zylos_st_...abcd',
         self: false
       }]
     },
@@ -789,7 +789,7 @@ test('buildSafeFleetPayload redacts string-leaf leaks for shared HTTP and SSE pa
   });
 
   assert.equal(result.redacted, true);
-  assert.equal(result.payload.agents[1].activity, 'mentions [redacted] prefix and masked [redacted]');
+  assert.equal(result.payload.agents[1].base_url, 'mentions [redacted] prefix and masked [redacted]');
   assert.doesNotThrow(() => assertFleetPayloadSafe(result.payload));
 });
 
@@ -1334,7 +1334,7 @@ test('fleet poller rejects a legacy state response instead of using its session 
   assert.equal(record.health_reason, 'bad_payload');
 });
 
-// --- Fleet tile iteration 2: name-keyed identity color, activity feed, rate limits ---
+// --- Fleet identity color and rate limits ---
 
 test('stateToFleetRecord keys color/hue to the configured display name, not remote self-identity', () => {
   const record = stateToFleetRecord({
@@ -1370,20 +1370,20 @@ test('Fleet does not read raw Origin activity or subagent observations', () => {
       Object.defineProperty(input, field, { get() { assert.fail(`raw Origin observation read: ${field}`); } });
     }
     const record = stateToFleetRecord({ name: 'a' }, input);
-    assert.equal(record.activity, null);
+    assert.equal(Object.hasOwn(record, 'activity'), false);
     assert.equal(Object.hasOwn(record, 'has_subagent'), false);
     assert.equal(Object.hasOwn(record, 'subagent_count'), false);
-    assert.deepEqual(record.activity_feed, []);
+    assert.equal(Object.hasOwn(record, 'activity_feed'), false);
   }
 });
 
 test('stateToFleetRecord does not infer activity from an aggregate busy state', () => {
   const busy = stateToFleetRecord({ name: 'a' }, { state: 'BUSY', running_tools: [] }, { self: false, nowMs: 0 });
   assert.equal(busy.state, 'BUSY');
-  assert.deepEqual(busy.activity_feed, []);
+  assert.equal(Object.hasOwn(busy, 'activity_feed'), false);
 
   const idle = stateToFleetRecord({ name: 'a' }, { state: 'IDLE' }, { self: false, nowMs: 0 });
-  assert.deepEqual(idle.activity_feed, []);
+  assert.equal(Object.hasOwn(idle, 'activity_feed'), false);
 });
 
 test('stateToFleetRecord passes rate limit percentages through, defaulting to null', () => {
@@ -1594,7 +1594,7 @@ test('Fleet object projection never reads Origin session information or fetches 
   const counts = { listKnown: true, running: { total: 1, states: { working: 1, idle: 0, starting: 0, stopping: 0, unknown: 0 } } };
   const record = stateToFleetRecord({}, fleetStateFromObjects(instance, counts, { today: { cost: 0 }, sevenDay: { cost: 0 } }, { rows: [row] }));
   for (const key of ['model', 'effort', 'context_pct', 'new_session_threshold']) assert.equal(Object.hasOwn(record, key), false);
-  assert.equal(record.activity, null);
+  assert.equal(Object.hasOwn(record, 'activity'), false);
 });
 
 // The object API exposes installed-version updates only. This pure projection
