@@ -5,8 +5,9 @@ import { boardController, renderBoard, renderDistribution } from './board.js';
 import { createBoardSearch } from './board-search.js';
 import { instanceStrip, accountRuntimes } from './instance-strip.js';
 import { renderAttention } from './attention-bar.js';
-import { createGroupDetail } from './detail.js';
-import { loadNamePrompt, renderAutoName } from './auto-name.js';
+import { confirmDialog, createGroupDetail } from './detail.js';
+import { namePromptResult, renderNameResult, sendNamePrompt } from './auto-name.js';
+import { fetchJson } from './group-config.js';
 import { createHostPanel } from './host-panel.js';
 import { element, icon } from './plain-text.js';
 import { watchRows } from './label-fit.js';
@@ -30,6 +31,8 @@ export function mountWorkbench({ document = globalThis.document, window = global
   sides.setAttribute('role', 'group'); sides.setAttribute('aria-label', t('wb.board.groupsLabel'));
   board.parentNode?.insertBefore(sides, board);
   let groupDetail = null, hostPanel = null, nameRequest = null;
+  // The automatic-naming run on screen, from the question until its answer is closed; the button stays off meanwhile.
+  let nameFlow = null;
   const nameButton = document.querySelector('#wb-auto-name');
   const nameDialog = document.querySelector('#wb-auto-name-dialog');
   // State counts compact before wrapping; instance strip items wrap whole without measurement.
@@ -86,7 +89,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     if (!hostPanel?.active) document.querySelector('#wb-side')?.setAttribute('aria-label', t('wb.detail.title'));
     if (nameButton) {
       nameButton.textContent = t('wb.name.auto');
-      nameButton.disabled = !writable();
+      nameButton.disabled = Boolean(nameFlow) || !writable();
       nameButton.title = writable() ? t('wb.name.autoHint') : t('wb.readOnly');
     }
     const level = mode.detailLevel();
@@ -195,7 +198,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     groupDetail?.close();
     hostPanel?.close();
     nameRequest?.abort();
-    if (nameDialog) { nameDialog.hidden = true; nameDialog.replaceChildren(); }
+    endNameFlow();
     controller.invalidate();
     costController.invalidate();
     search.input('');
@@ -234,30 +237,33 @@ export function mountWorkbench({ document = globalThis.document, window = global
     accounts: () => snapshot?.instance?.accounts,
     accountOrder: () => accountRuntimes(snapshot ?? {}),
     onUsage: () => document.querySelector('.tab[data-tab="trends"]')?.click?.() });
+  function endNameFlow(flow = nameFlow) {
+    if (!flow || flow !== nameFlow) return;
+    nameFlow = null;
+    if (nameDialog) { nameDialog.hidden = true; nameDialog.replaceChildren(); }
+    if (nameButton) nameButton.disabled = !writable();
+  }
   const autoName = async () => {
-    if (!writable() || !nameDialog) return;
-    nameRequest?.abort();
+    if (nameFlow || !writable() || !nameDialog) return;
+    // One run at a time: a request already sent is never cancelled by another click, so its answer is always shown.
+    const flow = nameFlow = { state: 'asking' };
+    if (nameButton) nameButton.disabled = true;
     nameRequest = new AbortController();
-    const captured = identity(), signal = nameRequest.signal;
-    const current = () => !stopped && !signal.aborted && captured === identity();
+    const captured = identity(), signal = nameRequest.signal, single = snapshot?.view === 'single';
+    const current = () => !stopped && !signal.aborted && captured === identity() && nameFlow === flow;
+    // Ask first: the prompt goes to Origin, or to the only session in single mode, which does the naming.
+    if (!await confirmDialog(document, { title: t('wb.name.auto'), body: t(single ? 'wb.name.confirmSingle' : 'wb.name.confirm'),
+      ok: t('wb.name.send'), cancel: t('wb.cancel'), danger: false }) || !current()) { endNameFlow(flow); return; }
+    flow.state = 'sending';
     nameDialog.hidden = false;
-    nameDialog.replaceChildren(element(document, 'p', t('wb.name.loading')));
+    renderNameResult(nameDialog, 'sending', { document, t, single });
+    let value, failure;
     try {
-      const value = await loadNamePrompt({ request: async path => {
-        const response = await fetch(endpoint(path), { signal });
-        if (!response.ok) throw Error('read_failed');
-        return response.json();
-      } });
-      if (!current()) return;
-      renderAutoName(nameDialog, value, { document, t,
-        onClose: () => { nameDialog.hidden = true; nameDialog.replaceChildren(); } });
-    } catch (error) {
-      if (current()) {
-        const close = element(document, 'button', t('wb.close'));
-        close.type = 'button'; close.addEventListener('click', () => { nameDialog.hidden = true; });
-        nameDialog.replaceChildren(element(document, 'p', t('wb.readFailed')), close);
-      }
-    }
+      value = await sendNamePrompt({ request: (path, options) => fetchJson(fetch, endpoint(path), { ...options, signal }) });
+    } catch (error) { failure = error; }
+    if (!current()) return;
+    flow.state = 'answered';
+    renderNameResult(nameDialog, namePromptResult(value, failure, t, { single }), { document, t, onClose: () => endNameFlow(flow) });
   };
   nameButton?.addEventListener('click', autoName);
   const controller = boardController({
@@ -332,7 +338,8 @@ export function mountWorkbench({ document = globalThis.document, window = global
   const keydown = event => {
     if (!visible() || event.defaultPrevented) return;
     if (event.key === 'Escape') {
-      if (nameDialog && !nameDialog.hidden) { nameDialog.hidden = true; nameDialog.replaceChildren(); return; }
+      // The answer closes with Esc; while sending it stays, so the result of the request is not lost.
+      if (nameDialog && !nameDialog.hidden) { if (nameFlow?.state === 'answered') endNameFlow(); return; }
       if (hostPanel.active) { hostPanel.close(); redraw(); return; }
       if (groupDetail.escape()) redraw();
       return;

@@ -2115,7 +2115,7 @@ function workbenchHarness(context, read, options = {}) {
   const makeSnapshot = workbenchSnapshot;
   const fallback = path => path.endsWith('/api/instance') ? { session_mode: { sessionMode: 'multi' } } : path.includes('/api/groups/running') ? makeSnapshot() :
     path.includes('/api/groups/activity') ? { start: 0, cellSeconds: 60, groups: { a: { cells: Array(60).fill('none'), inbound: [] } } } : {};
-  const mounted = mountWorkbench({ document, window, storage: saved, t: key => key,
+  const mounted = mountWorkbench({ document, window, storage: saved, t: options.t ?? (key => key),
     identity: () => owner, endpoint: path => owner === 'local' ? path : '/fleet/' + owner + path,
     observerStatus: options.observerStatus ?? (() => null), observerAvailable: options.observerAvailable ?? (() => true),
     openSettings: options.openSettings ?? (() => {}),
@@ -2436,34 +2436,127 @@ test('workbench shell opens selected detail and aborts its reads when agent chan
   await wbTick(); await wbTick();
   assert.equal(h.nodes.get('#wb-side').textContent, '');
 });
-// Auto-name mounting boundary: GET-only prompt and writable gate; injected DOM,
-// timers and transport as above, no clipboard write or external message is sent.
-test('workbench shell gates automatic naming and discards an old agent prompt', async context => {
-  let writable = false;
-  const pending = wbDeferred(), requests = [];
-  const h = workbenchHarness(context, (path, fallback) => path.endsWith('/naming-prompt')
-    ? pending.promise : fallback(path), { writable: () => writable,
-    onRequest: (path, options) => requests.push({ path, options }) });
+// Auto-name mounting boundary: writable gate, the in-page question before sending, one POST per confirmation and
+// the answer shown; injected DOM, timers and transport as above, nothing reaches Core or a session.
+test('workbench shell asks before sending automatic naming to Origin and reports whether it was queued', async context => {
+  let writable = false, answer = { ok: true, controlId: 41, sessionGroup: 'origin' };
+  const requests = [];
+  const h = workbenchHarness(context, (path, fallback) => path.endsWith('/naming-prompt') ? answer : fallback(path), {
+    writable: () => writable, onRequest: (path, options) => requests.push({ path, options }),
+    t: (key, params) => key + (params ? ' ' + JSON.stringify(params) : '') });
   await wbTick(); await wbTick();
+  const body = h.document.createElement('body'); h.document.body = body;
   const button = h.nodes.get('#wb-auto-name'), dialog = h.nodes.get('#wb-auto-name-dialog');
+  dialog.hidden = true; // as index.html serves it
+  const posts = () => requests.filter(item => item.path.endsWith('/naming-prompt'));
+  const question = () => body.querySelectorAll('.wb-modal')[0];
+  const choose = async which => {
+    const [no, yes] = question().querySelectorAll('.wb-btn');
+    (which === 'send' ? yes : no).dispatch('click');
+    await wbTick(); await wbTick(); await wbTick();
+  };
   assert.equal(button.disabled, true);
   assert.equal(button.title, 'wb.readOnly');
   button.dispatch('click'); await wbTick();
-  assert.equal(requests.some(item => item.path.endsWith('/naming-prompt')), false);
+  assert.equal(question(), undefined, 'read-only access asks nothing');
   writable = true; h.listeners.get('dashboard-locale-change')();
   assert.equal(button.disabled, false);
   assert.equal(button.title, 'wb.name.autoHint', 'redraw keeps the auto-name explanation as the tooltip');
+
+  // Cancelling sends nothing and opens nothing.
   button.dispatch('click'); await wbTick();
-  const prompt = requests.find(item => item.path.endsWith('/naming-prompt'));
-  assert.ok(prompt?.options?.signal);
+  assert.match(question().textContent, /wb\.name\.confirm/);
+  assert.doesNotMatch(question().textContent, /confirmSingle/);
+  assert.equal(question().getAttribute('role'), 'alertdialog');
+  assert.equal(button.disabled, true, 'the button is off while the question is open');
+  button.dispatch('click'); await wbTick();
+  assert.equal(body.querySelectorAll('.wb-modal').length, 1, 'a second click asks nothing more');
+  await choose('cancel');
+  assert.equal(question(), undefined);
+  assert.equal(posts().length, 0, 'cancelling sends nothing');
+  assert.equal(dialog.hidden, true);
+  assert.equal(button.disabled, false, 'cancelling gives the button back');
+
+  // Confirming sends exactly one POST and says sent once C4 queued it. Clicking again while it is sending, or while the
+  // answer is shown, neither cancels that request nor sends another.
+  const queued = wbDeferred();
+  answer = queued.promise;
+  button.dispatch('click'); await wbTick();
+  await choose('send');
+  assert.equal(posts().length, 1);
+  assert.equal(posts()[0].path, '/api/groups/naming-prompt');
+  assert.equal(posts()[0].options.method, 'POST');
   assert.equal(dialog.hidden, false);
+  assert.match(dialog.textContent, /wb\.name\.sending/);
+  assert.equal(button.disabled, true, 'the button is off while sending');
+  h.listeners.get('dashboard-locale-change')();
+  assert.equal(button.disabled, true, 'a redraw keeps it off');
+  button.dispatch('click'); await wbTick(); await wbTick();
+  assert.equal(posts().length, 1, 'a click while sending sends nothing more');
+  assert.equal(question(), undefined, 'and asks nothing');
+  assert.equal(posts()[0].options.signal.aborted, false, 'the request already sent keeps running');
+  queued.resolve({ ok: true, controlId: 41, sessionGroup: 'origin' });
+  await wbTick(); await wbTick(); await wbTick();
+  assert.match(dialog.textContent, /wb\.name\.sent/);
+  assert.equal(button.disabled, true, 'the button stays off while the answer is shown');
+  button.dispatch('click'); await wbTick();
+  assert.equal(question(), undefined); assert.equal(posts().length, 1);
+  dialog.querySelectorAll('.wb-btn')[0].dispatch('click');
+  assert.equal(dialog.hidden, true); assert.equal(dialog.textContent, '');
+  assert.equal(button.disabled, false, 'closing the answer gives the button back');
+
+  // A refused enqueue shows its reason and never "sent".
+  answer = { ok: false, sessionGroup: 'origin', error: { code: 'CONTROL_TARGET_REQUIRED', message: 'during transition' } };
+  button.dispatch('click'); await wbTick();
+  await choose('send');
+  assert.equal(posts().length, 2);
+  assert.match(dialog.textContent, /wb\.name\.failed/);
+  assert.match(dialog.textContent, /CONTROL_TARGET_REQUIRED/);
+  assert.doesNotMatch(dialog.textContent, /wb\.name\.sent/);
+  dialog.querySelectorAll('.wb-btn')[0].dispatch('click');
+
+  // The Dashboard itself refused the write.
+  answer = { ok: false, status: 403, json: async () => ({ error: 'insufficient_scope', required: 'admin' }) };
+  button.dispatch('click'); await wbTick();
+  await choose('send');
+  assert.match(dialog.textContent, /wb\.name\.failed/);
+  assert.match(dialog.textContent, /insufficient_scope/);
+  dialog.querySelectorAll('.wb-btn')[0].dispatch('click');
+
+  // Switching machines while the request runs discards its answer.
+  const pending = wbDeferred();
+  answer = pending.promise;
+  button.dispatch('click'); await wbTick();
+  await choose('send');
+  assert.match(dialog.textContent, /wb\.name\.sending/);
   h.setOwner('Other'); h.mutate();
-  assert.equal(prompt.options.signal.aborted, true);
-  pending.resolve({ text: 'old private prompt', todo: [] });
+  assert.equal(posts().at(-1).options.signal.aborted, true);
+  pending.resolve({ ok: true, controlId: 42 });
   await wbTick(); await wbTick();
   assert.equal(dialog.hidden, true);
   assert.equal(dialog.textContent, '');
-  assert.equal(requests.some(item => item.options?.method === 'POST'), false);
+  assert.equal(button.disabled, false, 'the other machine starts with the button available');
+  assert.equal(requests.filter(item => item.options?.method === 'POST').every(item => item.path.endsWith('/naming-prompt')), true);
+});
+
+// Single mode: the same flow names the only session, as the board does, in the question, while sending and after.
+test('workbench shell words automatic naming for the only session in single mode', async context => {
+  const pending = wbDeferred();
+  const h = workbenchHarness(context, (path, fallback) => path.endsWith('/api/instance') ? { session_mode: { sessionMode: 'single' } }
+    : path.endsWith('/naming-prompt') ? pending.promise : fallback(path));
+  await wbTick(); await wbTick();
+  const body = h.document.createElement('body'); h.document.body = body;
+  const button = h.nodes.get('#wb-auto-name'), dialog = h.nodes.get('#wb-auto-name-dialog');
+  button.dispatch('click'); await wbTick();
+  const question = body.querySelectorAll('.wb-modal')[0];
+  assert.match(question.textContent, /wb\.name\.confirmSingle/);
+  question.querySelectorAll('.wb-btn')[1].dispatch('click');
+  await wbTick(); await wbTick();
+  assert.match(dialog.textContent, /wb\.name\.sendingSingle/);
+  pending.resolve({ ok: true, controlId: 7, sessionGroup: null });
+  await wbTick(); await wbTick(); await wbTick();
+  assert.match(dialog.textContent, /wb\.name\.sentSingle/);
+  assert.doesNotMatch(dialog.textContent, /wb\.name\.sent(?!Single)/);
 });
 
 // Observer entry wiring: the real shell decides per group whether the drawer offers the live terminal.

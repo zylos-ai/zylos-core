@@ -36,6 +36,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
   let clock = 1800000000000;
   let engine, auth, reader, server, view = 'multi', snapshotReads = 0, cachedSnapshot = null;
   const calls = [], restarts = [];
+  let controlFailure = null;
   const previous = process.env.ZYLOS_DIR;
   t.after(async () => {
     if (previous === undefined) delete process.env.ZYLOS_DIR; else process.env.ZYLOS_DIR = previous;
@@ -67,6 +68,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
       return { stdout: JSON.stringify({ ok: true, data: { resolved: { runtime: 'claude' }, marker: 'configuration-handler' } }) };
     }
     if (args[0] === path.join(root, '.claude/skills/comm-bridge/scripts/c4-control.js')) {
+      if (controlFailure) throw controlFailure;
       return { stdout: JSON.stringify({ ok: true, data: { id: 41 } }) };
     }
     if (args[0] === path.join(root, '.claude/skills/comm-bridge/scripts/c4-db.js') && args[1] === 'groups') {
@@ -172,15 +174,61 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     assert.equal(restarts[0].expectedRunId, 'fixture-run');
   });
 
-  await t.test('automatic naming reads only unnamed groups active in the last three days', async () => {
-    assert.equal(engine.store.writeGroupDisplayName('telegram:named', 'Already named', 'human'), true);
-    const response = await request('/api/groups/naming-prompt');
-    assert.equal(response.status, 200);
-    const value = await response.json();
-    assert.deepEqual(value.todo, ['Telegram · recent']);
-    assert.ok(value.text.includes(path.join(root, '.claude/skills/dashboard/scripts/group-name.js')));
-    const call = calls.at(-1);
-    assert.deepEqual(call.args.slice(1), ['groups', '--active-since', String(clock - 3 * 86400000), '--json']);
+  await t.test('automatic naming is an admin POST that queues the prompt for Origin and reports refusals', async () => {
+    const naming = (scope, init = { method: 'POST' }) => fetch(origin + '/api/groups/naming-prompt', { signal: AbortSignal.timeout(3000),
+      ...init, headers: scope ? { Authorization: `Bearer ${tokens[scope]}` } : {} });
+    const enqueues = () => calls.filter(call => call.args[1] === 'enqueue');
+    const before = enqueues().length;
+    const anonymous = await naming(null);
+    assert.equal(anonymous.status, 401, 'a request without a login is refused');
+    const readOnly = await naming('read');
+    assert.equal(readOnly.status, 403);
+    assert.deepEqual(await readOnly.json(), { error: 'insufficient_scope', required: 'admin' });
+    const read = await naming('admin', { method: 'GET' });
+    assert.equal(read.status, 405, 'the old read of the prompt is gone');
+    assert.equal(enqueues().length, before, 'refused requests never reach C4');
+
+    const script = path.join(root, '.claude/skills/comm-bridge/scripts/c4-control.js');
+    const prompt = enqueue => enqueue.args[enqueue.args.indexOf('--content') + 1];
+    // The mode comes from this instance's own configuration file.
+    const configFile = path.join(root, '.zylos/config.json');
+    fs.mkdirSync(path.dirname(configFile), { recursive: true });
+    for (const [mode, target] of [['multi', ['--group', 'origin']], ['single', []]]) {
+      fs.writeFileSync(configFile, JSON.stringify({ session_mode: mode }));
+      const response = await naming('admin');
+      assert.equal(response.status, 200, mode);
+      assert.deepEqual(await response.json(), { ok: true, controlId: 41, sessionGroup: mode === 'multi' ? 'origin' : null });
+      const call = enqueues().at(-1);
+      assert.equal(call.file, process.execPath);
+      assert.deepEqual(call.args.filter(arg => arg !== prompt(call)),
+        [script, 'enqueue', '--content', '--no-ack-suffix', ...target, '--json'], mode);
+      assert.ok(prompt(call).includes(path.join(root, '.claude/skills/dashboard/scripts/group-name.js')), 'the prompt names the installed CLI');
+      assert.match(prompt(call), /^请给 Dashboard 里还没有名字的会话组起个名字/);
+    }
+    assert.equal(enqueues().length, before + 2, 'one control per confirmed request');
+
+    fs.writeFileSync(configFile, JSON.stringify({ session_mode: 'multi' }));
+    controlFailure = Object.assign(new Error('Command failed'), { stdout: JSON.stringify({ ok: false,
+      error: { code: 'CONTROL_TARGET_REQUIRED', message: 'A control target is required in multi or during transition' } }) });
+    const logged = t.mock.method(console, 'error', () => {});
+    try {
+      const refused = await naming('admin');
+      assert.equal(refused.status, 200);
+      assert.deepEqual(await refused.json(), { ok: false, sessionGroup: 'origin',
+        error: { code: 'CONTROL_TARGET_REQUIRED', message: 'C4 did not queue the naming prompt' } });
+
+      // The child crashed: the answer is a code and a fixed sentence; the command, prompt, path and stack are only logged.
+      const crash = `Command failed: ${process.execPath} ${path.join(root, '.claude/skills/comm-bridge/scripts/c4-control.js')} enqueue --content 请给 Dashboard 里还没有名字的会话组起个名字\n`
+        + `Error: Cannot find module '${root}/c4-db.js'\n    at Function._resolveFilename (node:internal/modules/cjs/loader:1225:15)`;
+      controlFailure = Object.assign(new Error(crash), { code: 1, stdout: '', stderr: '' });
+      const crashed = await naming('admin');
+      assert.equal(crashed.status, 200);
+      const body = await crashed.text();
+      assert.deepEqual(JSON.parse(body), { ok: false, unknown: true, sessionGroup: 'origin',
+        error: { code: 'RESULT_UNKNOWN', message: 'Send command failed (exit 1)' } });
+      for (const fragment of ['Command failed', 'c4-control', '请给', root, 'node:internal', ' at ']) assert.equal(body.includes(fragment), false, `no ${fragment} in the response`);
+      assert.ok(logged.mock.calls.some(call => String(call.arguments[0]).includes(crash)), 'the service log keeps the original');
+    } finally { controlFailure = null; logged.mock.restore(); fs.rmSync(configFile); }
   });
 
   await t.test('single message HTTP reads NULL attribution without exposing bodies or Origin rows', async () => {

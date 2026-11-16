@@ -408,15 +408,15 @@ Returns `runtime:Array<{sessionGroup:string,runtime:string,name:object|null}>`, 
 
 Example: `GET /api/groups/runtime-overrides?q=team`.
 
-### GET /api/groups/naming-prompt
+### POST /api/groups/naming-prompt
 
-**Access:** Read. **Parameters:** none.
+**Access:** Admin. **Parameters:** none; any JSON body is ignored.
 
-Returns `{text:string,todo:string[]}`: the naming instruction text and fallback names of recently active unnamed groups. This read does not assign names.
+Queues one C4 control that asks Origin to name recently active unnamed groups. The mode comes from this instance's `.zylos/config.json`: multi targets session group `origin`; otherwise the target stays empty, which C4 accepts only for the single session. The control text is the Dashboard naming prompt with the installed `group-name.js` path. Returns `{ok:true,controlId:number,sessionGroup:'origin'|null}` once C4 has queued it. Queued is the whole result: the response does not wait for delivery or naming, and nothing reports the names chosen.
 
-**Errors:** common read errors, including 500 `internal_error`.
+**Errors:** HTTP 200 `{ok:false,sessionGroup?:'origin'|null,error:{code:string,message:string}}` when C4 rejects the control, keeping C4's code (for example `CONTROL_TARGET_REQUIRED` during a mode transition, or when the configuration cannot be read without a multi-mode target); `unknown:true` with `RESULT_UNKNOWN` when the send command fails or Core's answer cannot be read, in which case do not repeat automatically. `message` is a fixed English sentence such as `Send command failed (exit 1)`; it never carries the command line, prompt, paths or stack, which are written to the Dashboard service log instead. GET and HEAD return 405 `method_not_allowed`. Common write errors.
 
-Example: `GET /api/groups/naming-prompt`.
+Example: `POST /api/groups/naming-prompt`.
 
 ### POST /api/groups/:id/actions/interrupt
 

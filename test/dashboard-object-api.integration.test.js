@@ -80,6 +80,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     let data;
     if (file === 'zylos' && args[0] === 'group' && args[1] === 'overrides') data = { baseline: { runtime: 'claude' }, runtime: [], model: [], runtimeTotal: 0, nextAfter: null };
     else if (file === 'zylos' && args[0] === 'group') data = { resolved: args[1] === 'runtime' ? { runtime: 'claude' } : { runtime: 'claude', mode: 'default' } };
+    else if (file === process.execPath && args[0]?.endsWith('/c4-control.js') && args[1] === 'enqueue') data = { id: 7 };
     else if (file === process.execPath && args[0]?.endsWith('/sync-lock.js')) { callback(null, JSON.stringify({ sync: { held: false } }), ''); return new EventEmitter(); }
     else throw new Error(`Unexpected child process in HTTP fixture: ${file} ${args[0]}`);
     callback(null, JSON.stringify({ ok: true, data }), ''); return new EventEmitter();
@@ -201,6 +202,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     ['/api/groups/telegram%3Aworking/name', 'PUT', { name: 'Fixture group' }], ['/api/groups/telegram%3Aworking/name', 'DELETE'],
     ...['interrupt', 'chop-chop', 'restart'].map(action => [`/api/groups/telegram%3Aworking/actions/${action}`, 'POST', { runId: 'fixture-run' }]),
     ['/api/groups/telegram%3Aworking', 'DELETE', { confirmed: true, operationId: 'fixture-operation', cutoffId: 1 }],
+    ['/api/groups/naming-prompt', 'POST'],
   ];
   await t.test('every object API write requires admin and every browser write requires same origin', async () => {
     const initial = actionCalls.length;
@@ -275,13 +277,19 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     }
     for (const route of ['/api/groups/offline?limit=10', '/api/groups/search?q=telegram', '/api/groups/activity?range=60m', `/api/groups/${encoded}`, `/api/groups/${encoded}/usage`,
       `/api/groups/${encoded}/runs`, `/api/groups/${encoded}/messages`, `/api/groups/${encoded}/events`, `/api/groups/${encoded}/backlog`,
-      '/api/groups/runtime-overrides', '/api/groups/naming-prompt', '/api/usage/summary', '/api/usage/pricing']) await request(route);
+      '/api/groups/runtime-overrides', '/api/usage/summary', '/api/usage/pricing']) await request(route);
     const restart = await request(`/api/groups/${encoded}/restarts/11111111-1111-4111-8111-111111111111`);
     assert.equal(restart.group.ready, true, 'a present ready replacement run is visible to restart callers');
     assert.equal(restart.completion, 'done');
     for (const range of ['24h', '7d', '30d']) await request(`/api/usage/series?range=${range}`);
     await request('/api/groups/telegram%3Aworking/deletion-preview', { identity: 'cookie' });
     for (const [route, method, body] of writes) await request(route, { method, body, identity: 'cookie' });
+    // Automatic naming reads the mode this instance is really in: Origin in multi, C4's only session in single.
+    const naming = records.filter(item => item.route === '/api/groups/naming-prompt' && item.mode === next).at(-1);
+    assert.deepEqual(naming.body, { ok: true, controlId: 7, sessionGroup: next === 'multi' ? 'origin' : null });
+    const enqueue = cliCalls.filter(call => call[1]?.endsWith('/c4-control.js')).at(-1);
+    assert.equal(enqueue.includes('--group'), next === 'multi');
+    if (next === 'multi') assert.equal(enqueue[enqueue.indexOf('--group') + 1], 'origin');
     const summary = await request('/api/usage/summary');
     const groups = await Promise.all(['origin', 'telegram:working', 'telegram:child'].map(group => request(`/api/groups/${encodeURIComponent(group)}/usage`)));
     assert.equal(groups.reduce((sum, group) => sum + group.today.tokens, 0), summary.today.tokens);

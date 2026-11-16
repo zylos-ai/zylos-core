@@ -18,6 +18,8 @@ const MEMORY_SHARE = 0.81;
 // (fixtures/workbench-browser-api.js). Dashboard actions are recorded and answered as done; nothing runs.
 export async function startPage(sandbox) {
   const actions = [], unserved = new Set(), reads = new Map();
+  // Automatic naming's answer, or a promise of it to hold the reply; a case sets it before confirming.
+  const naming = { answer: { ok: true, controlId: 41, sessionGroup: 'origin' } };
   let offlineHold = null;
   const now = Date.now();
   const server = http.createServer(async (req, res) => {
@@ -32,6 +34,10 @@ export async function startPage(sandbox) {
           sendJson(res, 200, { ok: true });
         });
         return;
+      }
+      if (url.pathname === '/api/groups/naming-prompt' && req.method === 'POST') {
+        actions.push({ action: 'naming-prompt', body: null });
+        sendJson(res, 200, await naming.answer); return;
       }
       if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
       if (url.pathname.startsWith('/api/')) {
@@ -50,7 +56,7 @@ export async function startPage(sandbox) {
     } catch (error) { sendJson(res, 500, { error: error.message }); }
   });
   const base = await sandbox.startHttp(server);
-  return { base, actions, unserved, reads, holdOffline() {
+  return { base, actions, unserved, reads, naming, holdOffline() {
     let release, started; const promise = new Promise(resolve => { release = resolve; });
     const waiting = new Promise(resolve => { started = resolve; });
     offlineHold = { promise, started };
@@ -114,7 +120,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
   const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
   if (evidence) fs.mkdirSync(evidence, { recursive: true });
   console.log('Workbench browser isolation:', JSON.stringify(sandbox.assertIsolation()));
-  const { base, actions, unserved, reads } = await startPage(sandbox);
+  const { base, actions, unserved, reads, naming } = await startPage(sandbox);
   const { chromium } = await import(pathToFileURL(modulePath));
   const browser = await chromium.launch({ executablePath, headless: true, env: sandbox.env,
     args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
@@ -253,6 +259,135 @@ export async function runWorkbenchBrowser(t, sandbox) {
   await step('asking before upgrading the CLI or switching the session mode, on a phone and a desktop screen', async () => {
     await settings(390, 844);
     await settings(1280, 800);
+  });
+
+  // Automatic naming: the in-page question first; cancelling sends nothing, confirming sends one request, and the
+  // answer says sent only when the prompt was queued for Origin, otherwise why not. While it sends and while the answer
+  // is shown the button is off, so a second click neither sends again nor hides the first answer. The dialog fits the screen.
+  await step('automatic naming asks first, sends once, then says sent or why not, on a phone and a desktop screen', async () => {
+    const sent = () => actions.filter(item => item.action === 'naming-prompt').length;
+    for (const [width, height] of [[390, 844], [1280, 800]]) {
+      const { page, context, errors, shot } = await open(width, height, '/');
+      const button = page.locator('#wb-auto-name'), question = page.locator('.wb-modal[role="alertdialog"]');
+      const result = page.locator('#wb-auto-name-dialog');
+      const fits = async (locator, name) => {
+        const box = await locator.boundingBox();
+        assert.ok(box && box.x >= 16 - 0.5 && box.x + box.width <= width - 16 + 0.5 && box.y >= 0 && box.y + box.height <= height,
+          `${width} ${name}: the dialog sits inside the screen with its side margins (${JSON.stringify(box)})`);
+        if (width < 761) {
+          const layout = await page.evaluate(measure);
+          assert.deepEqual(layout.small, [], `${width} ${name}: no control under 36px`);
+          assert.equal(layout.documentWidth, width, `${width} ${name}: no sideways scrolling`);
+        }
+      };
+      // The button is in the served page before the workbench wires it; the board's group count is drawn after.
+      await page.locator('#wb-dist .wb-dist-total').waitFor();
+      const before = sent();
+      await button.click();
+      await question.waitFor();
+      assert.match(await question.textContent(), /发给 Origin/);
+      await fits(question, 'question');
+      await shot('auto-name-confirm');
+      await question.locator('.wb-modal-acts button').first().click();
+      await question.waitFor({ state: 'detached' });
+      await page.waitForTimeout(300);
+      assert.equal(sent(), before, `${width}: cancelling sends nothing`);
+      assert.equal(await result.isHidden(), true, `${width}: cancelling opens nothing`);
+
+      let reply; naming.answer = new Promise(resolve => { reply = resolve; });
+      await button.click();
+      await question.locator('.wb-modal-acts button').last().click();
+      await result.locator('[role="status"]', { hasText: '正在发送给 Origin' }).waitFor();
+      assert.equal(await button.isDisabled(), true, `${width}: the button is off while sending`);
+      await button.click({ force: true });
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(300);
+      assert.equal(await question.count(), 0, `${width}: a click while sending asks nothing`);
+      assert.equal(await result.isVisible(), true, `${width}: Esc while sending keeps the dialog`);
+      reply({ ok: true, controlId: 41, sessionGroup: 'origin' });
+      await result.locator('[role="status"]', { hasText: '已发送给 Origin' }).waitFor();
+      assert.equal(sent(), before + 1, `${width}: confirming sends one request`);
+      assert.equal(await button.isDisabled(), true, `${width}: the button stays off while the answer is shown`);
+      await fits(result, 'sent');
+      await shot('auto-name-sent');
+      await result.locator('button').click();
+      await result.waitFor({ state: 'hidden' });
+      assert.equal(await button.isDisabled(), false, `${width}: closing the answer gives the button back`);
+
+      naming.answer = { ok: false, sessionGroup: 'origin', error: { code: 'CONTROL_TARGET_REQUIRED', message: 'C4 did not queue the naming prompt' } };
+      await button.click();
+      await question.locator('.wb-modal-acts button').last().click();
+      const failure = result.locator('[role="alert"]');
+      await failure.waitFor();
+      assert.equal(await failure.textContent(), '没有发出去，可以稍后再试。');
+      assert.doesNotMatch(await result.innerText(), /已发送|CONTROL_TARGET_REQUIRED/);
+      assert.equal(sent(), before + 2);
+      await fits(result, 'failed');
+      await shot('auto-name-failed');
+      await page.keyboard.press('Escape');
+      await result.waitFor({ state: 'hidden' });
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+  });
+
+  // Automatic naming that did not go out, or may not have: the dialog says one plain sentence in the page's language,
+  // naming Origin or, in single mode, the only session. The Dashboard's answer (error code and English message) is
+  // folded under technical detail and is not on screen while technical detail is off.
+  await step('automatic naming failures: one plain sentence per language and mode, raw answer only in technical detail', async () => {
+    const words = Object.fromEntries(['zh', 'en'].map(language =>
+      [language, JSON.parse(fs.readFileSync(path.join(publicDir, 'i18n', `wb.${language}.json`), 'utf8'))]));
+    // The Dashboard's answers: an error code and a fixed English sentence (the child's own output stays in its log).
+    const refused = { code: 'CONTROL_TARGET_REQUIRED', message: 'C4 did not queue the naming prompt' };
+    const broken = { code: 'RESULT_UNKNOWN', message: 'Send command failed (exit 1)' };
+    const outcomes = [
+      ['failed-multi', { ok: false, sessionGroup: 'origin', error: refused }, 'wb.name.failed', 'CONTROL_TARGET_REQUIRED · C4 did not queue the naming prompt'],
+      ['failed-single', { ok: false, sessionGroup: null, error: refused }, 'wb.name.failed', 'CONTROL_TARGET_REQUIRED · C4 did not queue the naming prompt'],
+      ['unknown-multi', { ok: false, unknown: true, sessionGroup: 'origin', error: broken }, 'wb.name.unknown', 'RESULT_UNKNOWN · Send command failed (exit 1)'],
+      ['unknown-single', { ok: false, unknown: true, sessionGroup: null, error: broken }, 'wb.name.unknownSingle', 'RESULT_UNKNOWN · Send command failed (exit 1)'],
+    ];
+    const raw = /CONTROL_TARGET_REQUIRED|RESULT_UNKNOWN|C4 did not queue|Send command/;
+    for (const language of ['zh', 'en']) {
+      for (const [width, height] of [[1280, 800], [390, 844]]) {
+        const { page, context, errors, shot } = await open(width, height, '/', {}, language);
+        const button = page.locator('#wb-auto-name'), question = page.locator('.wb-modal[role="alertdialog"]');
+        const result = page.locator('#wb-auto-name-dialog'), detail = result.locator('.wb-name-detail');
+        await page.locator('#wb-dist .wb-dist-total').waitFor();
+        for (const [name, answer, key, original] of outcomes) {
+          const label = `${language} ${width} ${name}`;
+          naming.answer = answer;
+          await button.click();
+          await question.locator('.wb-modal-acts button').last().click();
+          const alert = result.locator('[role="alert"]');
+          await alert.waitFor();
+          assert.equal(await alert.textContent(), words[language][key], `${label}: the sentence for this outcome`);
+          assert.doesNotMatch(await result.innerText(), raw, `${label}: no code, English original, command or stack on screen`);
+          assert.equal(await detail.isVisible(), false, `${label}: the raw answer is hidden while technical detail is off`);
+          const box = await result.boundingBox();
+          assert.ok(box && box.x >= 16 - 0.5 && box.x + box.width <= width - 16 + 0.5 && box.y >= 0 && box.y + box.height <= height,
+            `${label}: the dialog sits inside the screen with its side margins (${JSON.stringify(box)})`);
+          if (width < 761) {
+            const layout = await page.evaluate(measure);
+            assert.deepEqual(layout.small, [], `${label}: no control under 36px`);
+            assert.equal(layout.documentWidth, width, `${label}: no sideways scrolling`);
+          }
+          await shot(`auto-name-${name}-${language}`);
+          // Technical detail on: the raw answer is there, folded, and opens to the original text.
+          await page.locator('#wb-tech-btn').evaluate(node => node.click());
+          await detail.waitFor({ state: 'visible' });
+          assert.equal(await detail.evaluate(node => node.open), false, `${label}: folded at first`);
+          await detail.locator('summary').click();
+          assert.equal(await detail.locator('pre').innerText(), original, `${label}: technical detail shows the Dashboard's code and message`);
+          if (width === 390 && name.endsWith('-multi')) await shot(`auto-name-${name.split('-')[0]}-technical-${language}`);
+          await page.locator('#wb-tech-btn').evaluate(node => node.click());
+          await detail.waitFor({ state: 'hidden' });
+          await page.keyboard.press('Escape');
+          await result.waitFor({ state: 'hidden' });
+        }
+        assert.deepEqual(errors, []);
+        await context.close();
+      }
+    }
   });
 
   await step('phone pages: 36px controls, no sideways scrolling, two-row detail header, memory list and file screens, schedule numbers 3+3', async () => {

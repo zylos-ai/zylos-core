@@ -395,12 +395,15 @@ registerIntegrationCase('group resources precede details and preserve include an
   // Seed an existing import without changing the current C4 write grammar.
   api.db.prepare('UPDATE conversations SET session_group=? WHERE id=?').run(historical, imported.id);
   api.db.prepare('UPDATE group_heads SET session_group=? WHERE session_group=?').run(historical, imported.session_group);
-  for (const path of ['/api/groups/runtime-overrides', '/api/groups/runtime-overrides?q=private', '/api/groups/naming-prompt']) {
+  for (const path of ['/api/groups/runtime-overrides', '/api/groups/runtime-overrides?q=private']) {
     const result = await api.request(path);
     assert.equal(result.status, 200, path);
-    if (path.includes('runtime-overrides')) assert.equal(result.body.runtime.length, 0);
-    else assert.equal(typeof result.body.text, 'string');
+    assert.equal(result.body.runtime.length, 0);
   }
+  // The naming resource only accepts the POST that sends its prompt; a read is never parsed as a group detail.
+  const naming = await api.request('/api/groups/naming-prompt');
+  assert.equal(naming.status, 405);
+  assert.deepEqual(naming.body, { error: 'method_not_allowed' });
   const group = '/api/groups/' + encodeURIComponent('dashboard:' + active.draft.localId);
   const compact = await api.request(group + '?include=');
   assert.equal(compact.status, 200);

@@ -1,47 +1,45 @@
 import { element } from './plain-text.js';
+import { responseError } from './group-config.js';
 
-export const ORIGINAL_GROUP_NAME_PATH = '~/zylos/.claude/skills/dashboard/scripts/group-name.js';
-export const NAME_PROMPT = `请给 Dashboard 里还没有名字的会话组起个名字：
-
-1. 运行 node ~/zylos/.claude/skills/dashboard/scripts/group-name.js list --unnamed --active 3d，列出最近 3 天有活动、还没有名字的组。
-2. 给每个组找出一个人能认出来的名字：群聊用群名，私聊用对方的名字。不同渠道拿名字的办法不一样，你自己判断：有的消息开头就写着（比如「[TG GROUP:产品周会]」「howard said」），有的只有编号，要用这个渠道的工具或接口去查。实在查不到就先跳过，最后告诉我。
-3. 用 group-name.js set <组键> "名字" 设置。名字要短，让人一眼认出是哪个群、或者和谁的私聊。
-4. 已经有名字的组不要动。
-5. 做完列出你给每个组起的名字。`;
-
-
-export async function loadNamePrompt({ request }) {
-  return request('/api/groups/naming-prompt');
+/** Ask Origin to name the unnamed groups. Resolves to the Dashboard's answer; HTTP failures carry their body. */
+export function sendNamePrompt({ request }) {
+  return request('/api/groups/naming-prompt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
 }
 
-export async function copyNamePrompt(text, clipboard = globalThis.navigator?.clipboard) {
-  if (!clipboard?.writeText) throw new Error('clipboard_unavailable');
-  await clipboard.writeText(text);
+/**
+ * What the person is told after confirming: sent only when C4 queued the prompt. Otherwise one plain sentence, while
+ * the raw answer (error code, message, command output) is kept as `detail` for the technical-detail view only.
+ */
+export function namePromptResult(value, error, t = key => key, { single = false } = {}) {
+  // The Dashboard names the session it queued for: null is the only session of single mode.
+  if (value?.ok === true) return { ok: true, text: t(value.sessionGroup === null ? 'wb.name.sentSingle' : 'wb.name.sent') };
+  const body = error ? error.body : value;
+  const lone = body && 'sessionGroup' in body ? body.sessionGroup === null : single;
+  const detail = body ? responseError(body) : error?.message ?? '';
+  if (body?.unknown || (error && !body)) return { ok: false, text: t(lone ? 'wb.name.unknownSingle' : 'wb.name.unknown'), detail };
+  return { ok: false, text: t('wb.name.failed'), detail };
 }
 
-export function renderAutoName(root, value, { document = root.ownerDocument, t = key => key,
-  clipboard = globalThis.navigator?.clipboard, onClose = () => {} } = {}) {
+/** The answer after confirming: sending, then sent or failed, with a close button. */
+export function renderNameResult(root, state, { document = root.ownerDocument, t = key => key, onClose = () => {}, single = false } = {}) {
   root.replaceChildren();
   root.append(element(document, 'h3', t('wb.name.auto')));
-  const prompt = element(document, 'textarea'); prompt.value = value.text ?? ''; prompt.readOnly = true;
-  prompt.setAttribute('aria-label', t('wb.name.prompt'));
-  const todo = element(document, 'ul');
-  for (const name of value.todo ?? []) todo.append(element(document, 'li', name));
-  const copy = element(document, 'button', t('wb.name.copy')); copy.type = 'button';
-  const status = element(document, 'p', '');
-  copy.addEventListener('click', async () => {
-    try { await copyNamePrompt(value.text ?? '', clipboard); status.textContent = t('wb.name.copied'); }
-    catch (error) { status.textContent = error.message; }
-  });
-  const close = element(document, 'button', t('wb.close')); close.type = 'button'; close.addEventListener('click', onClose);
-  root.append(prompt, todo, copy, close, status);
-  return { copy, prompt, todo };
-}
-
-/** Preserve the supplied prompt verbatim apart from its known CLI path. */
-export function namePromptText(scriptPath, template, originalPath) {
-  if (typeof template !== 'string' || typeof originalPath !== 'string' || !originalPath || !template.includes(originalPath)) {
-    throw new Error('name_prompt_path_missing');
+  const message = element(document, 'p', state === 'sending' ? t(single ? 'wb.name.sendingSingle' : 'wb.name.sending') : state.text,
+    state === 'sending' ? 'wb-name-status' : state.ok ? 'wb-name-status wb-name-sent' : 'wb-name-status wb-name-failed');
+  message.setAttribute('role', state !== 'sending' && !state.ok ? 'alert' : 'status');
+  root.append(message);
+  if (state === 'sending') return { message, close: null };
+  // The raw answer stays out of the sentence: folded, and shown only while technical detail is on.
+  let detail = null;
+  if (!state.ok && state.detail) {
+    detail = element(document, 'details', undefined, 'wb-tech wb-name-detail');
+    detail.append(element(document, 'summary', t('wb.detail')), element(document, 'pre', state.detail));
+    root.append(detail);
   }
-  return template.replace(originalPath, () => scriptPath);
+  const close = element(document, 'button', t('wb.close'), 'wb-btn'); close.type = 'button';
+  close.addEventListener('click', onClose);
+  const actions = element(document, 'div', undefined, 'wb-modal-acts'); actions.append(close);
+  root.append(actions);
+  close.focus?.();
+  return { message, close, detail };
 }
