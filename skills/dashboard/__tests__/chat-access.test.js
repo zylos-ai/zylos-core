@@ -5,20 +5,20 @@ import { chatHttpFixture, chatRoutes } from './helpers/chat-http.js';
 // Integration: actual auth/proxy/access with two private loopback servers and
 // fixture-only sessions. Run when chat access or routes change; skip CSS-only
 // changes. No live DB/PM2/tmux; test teardown closes servers and auth timer.
-test('chat API keys require remote permission and admin at both instances', { timeout: 15000 }, async t => {
+test('chat reads require remote permission and writes require admin at both instances', { timeout: 15000 }, async t => {
   const f = await chatHttpFixture(t);
   for (const allowRemote of [false, true, false]) {
     f.config.chat.allowRemote = allowRemote;
     for (const fleet of [false, true]) for (const identity of ['read', 'admin']) for (const route of chatRoutes) {
       const before = { ...f.counts };
       const result = await f.request(route, { identity, fleet });
-      const allowed = identity === 'admin' && allowRemote;
+      const allowed = allowRemote && (identity === 'admin' || route.method === 'GET');
       assert.equal(result.status, allowed ? 200 : 403, JSON.stringify({ route, identity, fleet, allowRemote, result }));
       if (!allowed) {
         assert.doesNotMatch(result.text, /PRIVATE_|"count"|"questions"/);
         assert.equal(f.counts.reads, before.reads); assert.equal(f.counts.receives, before.receives);
       }
-      if (fleet && identity === 'read') assert.equal(f.counts.upstream, before.upstream);
+      if (fleet && identity === 'read' && route.method !== 'GET') assert.equal(f.counts.upstream, before.upstream);
     }
   }
 });
@@ -92,7 +92,7 @@ test('proxy refuses disabled local authentication before calling an enabled remo
   for (const identity of ['none', 'cookie', 'read', 'admin']) for (const route of chatRoutes) {
     const result = await f.request(route, { fleet: true, identity });
     assert.equal(result.status, 403);
-    assert.equal(JSON.parse(result.text).error, 'admin_required');
+    assert.equal(JSON.parse(result.text).error.code, 'admin_required');
     assert.deepEqual(f.counts, { reads: 0, receives: 0, upstream: 0 });
   }
   for (const identity of ['none', 'cookie']) {
@@ -117,7 +117,7 @@ test('proxy cookie writes require exact origin before upstream while API admin m
   for (const origin of [null, false, 'http://127.0.0.1:1']) for (const route of writes) {
     const result = await f.request(route, { fleet: true, origin, contentType: 'text/plain' });
     assert.equal(result.status, 403);
-    assert.equal(JSON.parse(result.text).error, 'origin_required');
+    assert.equal(JSON.parse(result.text).error.code, 'same_origin_required');
     assert.deepEqual(f.counts, { reads: 0, receives: 0, upstream: 0 });
   }
   for (const route of writes) {
@@ -135,20 +135,22 @@ test('proxy protects chat prefix for every method and retains explicit write all
   const paths = ['/api/chat/conversations', '/api/chat/conversations/', '/api/chat/future'];
   for (const method of ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) for (const path of paths) {
     const result = await f.request({ method, path }, { fleet: true, identity: 'read' });
-    assert.equal(result.status, 403, `${method} ${path}`);
-    assert.deepEqual(f.counts, { reads: 0, receives: 0, upstream: 0 });
+    const reading = ['GET', 'HEAD'].includes(method);
+    assert.equal(result.status, reading ? method === 'GET' && path === paths[0] ? 200 : 404 : 403, `${method} ${path}`);
+    assert.equal(f.counts.receives, 0);
   }
   for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) for (const path of paths) {
     const result = await f.request({ method, path }, { fleet: true });
     assert.equal(result.status, 403);
-    assert.equal(JSON.parse(result.text).error, 'read_only_proxy');
-    assert.deepEqual(f.counts, { reads: 0, receives: 0, upstream: 0 });
+    assert.equal(JSON.parse(result.text).error.code, 'read_only_proxy');
+    assert.equal(f.counts.receives, 0);
   }
+  const beforeHead = f.counts.upstream;
   assert.equal((await f.request({ method: 'HEAD', path: paths[0] }, { fleet: true })).status, 404);
-  assert.equal(f.counts.upstream, 1);
+  assert.equal(f.counts.upstream, beforeHead + 1);
   for (const method of ['GET', 'PUT']) {
     const before = f.counts.upstream;
-    assert.equal((await f.request({ method, path: '/api/chat/settings' }, { fleet: true })).status, 403);
-    assert.equal(f.counts.upstream, before);
+    assert.equal((await f.request({ method, path: '/api/settings/chat' }, { fleet: true })).status, method === 'GET' ? 200 : 403);
+    assert.equal(f.counts.upstream, before + (method === 'GET' ? 1 : 0));
   }
 });

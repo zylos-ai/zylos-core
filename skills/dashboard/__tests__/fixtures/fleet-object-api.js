@@ -1,3 +1,5 @@
+import { projectApiTimestamps } from '../../src/lib/wire-time.js';
+
 /** Complete object-API responses for injected Fleet transports; never uses a network. */
 export function objectResponse(url, { working = 0, idle = working ? 0 : 1, unknown = 0,
   instance = {}, counts = {}, rows = null, todayCost = 0, sevenDayCost = 0 } = {}) {
@@ -13,7 +15,7 @@ export function objectResponse(url, { working = 0, idle = working ? 0 : 1, unkno
         : url.endsWith('/api/usage/summary') ? { today: { cost: todayCost }, sevenDay: { cost: sevenDayCost } }
         : null;
   if (!payload) throw new Error(`Unexpected object API URL ${url}`);
-  return new Response(JSON.stringify(payload), { headers: { 'content-type': 'application/json' } });
+  return new Response(JSON.stringify(projectApiTimestamps(new URL(url).pathname.slice(new URL(url).pathname.lastIndexOf('/api/')), payload)), { headers: { 'content-type': 'application/json' } });
 }
 
 export const isObjectApi = url => ['/api/instance', '/api/groups/counts', '/api/groups/running', '/api/usage/summary'].some(path => url.endsWith(path));

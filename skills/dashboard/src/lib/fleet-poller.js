@@ -339,7 +339,7 @@ export function fleetStateFromObjects(instance, counts, usage, running) {
       cc_update: instance.versions?.claude?.update ?? null,
       codex_update: instance.versions?.codex?.update ?? null },
     system_metrics: instance.resources,
-    group_summary: fleetGroupSummary({ mode, readAt: counts.readAt, listKnown: counts.listKnown,
+    group_summary: fleetGroupSummary({ mode, readAt: Date.parse(counts.readAt), listKnown: counts.listKnown,
       rows: summaryRows, groupCounts: counts, failedRows: running.failedRows?.map(row => ({ ...row, sessionGroup: row.id ?? row.sessionGroup })),
       attentionFailures: running.attentionFailures,
       instance: { ...instance, pool: counts.pool } }),

@@ -1,7 +1,7 @@
 // One table shared by auth and proxy contract tests; add a route with its handler.
 export const workbenchWriteRoutes = [
   { method: 'PUT', path: '/api/settings/timezone', body: '{"tz":"Europe/London"}' },
-  { method: 'POST', path: '/api/actions/restart-timezone-services', body: '{"tz":"Europe/London","confirm":true}' },
+  { method: 'POST', path: '/api/settings/timezone/actions/restart-services', body: '{"tz":"Europe/London","confirm":true}' },
   { method: 'POST', path: '/api/chat/drafts', body: '{"displayName":"Private chat"}' },
   { method: 'PATCH', path: '/api/chat/conversations/d%3Alocal-chat', body: '{"displayName":"Renamed chat"}' },
   { method: 'POST', path: '/api/chat/conversations/local-chat/send', body: '{"content":"Hello"}' },
@@ -15,9 +15,9 @@ export const workbenchWriteRoutes = [
   ...['interrupt', 'chop-chop', 'restart'].map(action => ({ method: 'POST',
     path: `/api/groups/telegram%3Ateam/actions/${action}`,
     body: '{"runId":"private-run","sessionId":"private-session"}' })),
-  { method: 'POST', path: '/api/workbench/schedule', body: '{"prompt":"Check","schedule":{"kind":"every","value":"1h"}}' },
-  { method: 'PUT', path: '/api/workbench/schedule/task-fixture', body: '{"name":"Renamed"}' },
-  { method: 'DELETE', path: '/api/workbench/schedule/task-fixture', body: null },
-  { method: 'POST', path: '/api/workbench/schedule/task-fixture/pause', body: null },
-  { method: 'POST', path: '/api/workbench/schedule/task-fixture/resume', body: null },
+  { method: 'POST', path: '/api/schedules', body: '{"prompt":"Check","schedule":{"kind":"every","value":"1h"}}' },
+  { method: 'PUT', path: '/api/schedules/task-fixture', body: '{"name":"Renamed"}' },
+  { method: 'DELETE', path: '/api/schedules/task-fixture', body: null },
+  { method: 'POST', path: '/api/schedules/task-fixture/actions/pause', body: null },
+  { method: 'POST', path: '/api/schedules/task-fixture/actions/resume', body: null },
 ];

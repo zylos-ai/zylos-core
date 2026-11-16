@@ -221,7 +221,7 @@ test('confirmed restart uses only current owned candidates and preserves partial
   const calls = [];
   const f = fixture(t, { dependencies: { restartService: async (name, tz) => { calls.push([name, tz]); if (name === 'activity-monitor') throw Error('private output'); } } });
   const result = await f.timezone.restart({ tz: 'UTC', confirm: true, services: ALL_SERVICES });
-  assert.equal(result.ok, false); assert.equal(result.status, 200);
+  assert.equal(result.ok, false); assert.equal(result.status, 502); assert.equal(result.error, 'restart_failed');
   assert.deepEqual(result.restarted, ['scheduler', 'c4-dispatcher']);
   assert.deepEqual(result.failed, [{ name: 'activity-monitor', error: 'restart_failed' }]);
   assert.deepEqual(result.restart_services, [{ name: 'activity-monitor', status: 'online' }]);

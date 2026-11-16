@@ -183,8 +183,8 @@ export function workbenchAnswer(url, now) {
   }
   if (p === '/api/groups/search') return { rows: [] };
   if (p === '/api/groups/activity') return { start: now - 59 * 60e3, cellSeconds: 60, groups: {} };
-  if (p === '/api/workbench/schedule') return schedule(now);
-  if (p.startsWith('/api/workbench/schedule/') && p.endsWith('/history')) return { rows: [], next: null };
+  if (p === '/api/schedules') return schedule(now);
+  if (p.startsWith('/api/schedules/') && p.endsWith('/history')) return { rows: [], next: null };
   if (p === '/api/memory/tree') return memoryTree(now);
   if (p === '/api/memory/file') {
     const path = url.searchParams.get('path');
@@ -192,7 +192,7 @@ export function workbenchAnswer(url, now) {
       text: path === LONG_FILE ? longText : `# ${path}\n\nShort file.\n` };
   }
   if (p === '/api/memory/git') return { commit: null };
-  if (p === '/api/workbench/memory/backlog') return { groups: [{ sessionGroup: GROUP, displayName: 'Telegram direct chat', c4: { componentName: 'telegram' },
+  if (p === '/api/memory/backlog') return { groups: [{ sessionGroup: GROUP, displayName: 'Telegram direct chat', c4: { componentName: 'telegram' },
     count: 12, firstAt: null, aged: false, syncing: false, threshold: 15 }], hasOlder: false, budgets: { limits: {}, warnings: {} } };
   if (p.endsWith('/backlog')) return { count: 12, firstAt: null, syncing: false };
   if (p.endsWith('/runs')) return runs(url, now);
@@ -205,7 +205,7 @@ export function workbenchAnswer(url, now) {
   if (p === '/api/instance') return workbenchInstanceAnswer(workbenchSnapshot(now), now);
   if (p.endsWith('/events')) { const query = new URL(url); query.searchParams.set('session_group', decodeURIComponent(p.split('/')[3])); return timeline(query, now); }
   if (p === '/api/instance/runtime-options') return meta;
-  if (p === '/api/settings') return { active: 'claude', runtimes: { claude: { builtInModels: ['opus'], modelPrices: { opus: { input: 15, output: 75, cacheRead: 1.5, cacheCreation: 18.75 } },
+  if (p === '/api/settings/pricing') return { active: 'claude', runtimes: { claude: { builtInModels: ['opus'], modelPrices: { opus: { input: 15, output: 75, cacheRead: 1.5, cacheCreation: 18.75 } },
     fastMode: { configuredMultiplier: null } },
   codex: { builtInModels: ['gpt-5.5'], modelPrices: { 'gpt-5.5': { input: 1.25, output: 10, cacheRead: 0.125, cacheCreation: 0 } },
     builtInPriorityModels: [], priorityModelPrices: {} } } };
@@ -216,7 +216,7 @@ export function workbenchAnswer(url, now) {
   if (p === '/api/keys') return { keys: [] };
   if (p === '/api/chat/conversations') return { items: [], nextCursor: null };
   if (p === '/api/settings/timezone') return { tz: 'UTC' };
-  if (p === '/api/chat/settings') return { allowRemote: false };
+  if (p === '/api/settings/chat') return { chat_allow_remote: false };
   if (p === '/api/observer/status') return { state: 'not_installed' };
   if (p === '/api/usage/summary' || p.endsWith('/usage')) return { today: { tokens: 1200, cost: 1.5, cacheHitRate: 0.7 }, sevenDay: { tokens: 8000, cost: 9.2, cacheHitRate: 0.65 } };
   if (p === '/api/usage/series') return { tz: 'UTC', bucket: 'day', buckets: [iso(now)], totals: { tokens: 8000, cost: 9.2, messages: { in: 3, out: 2 }, costByRuntime: { claude: 9.2 }, cacheHitRate: 0.65 }, cost: [{ at: iso(now), runtime: 'claude', value: 9.2 }], tokensByRuntime: [], messages: [], rotations: [], tools: [], projects: { items: [] }, cache: [{ at: iso(now), value: 0.65 }] };

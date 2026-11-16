@@ -135,7 +135,7 @@ test('Observer auth protects all history routes without touching containment or 
     containment: { reconcilePersisted: forbidden }, manager: { createLease: forbidden },
     authGate: { enabled: true, resolveAuthContext: (req) => req.headers.authorization === 'Bearer admin' ? { kind: 'api', scope: 'admin' } : req.headers.cookie ? { kind: 'cookie', scope: 'admin' } : req.headers.authorization ? { kind: 'api', scope: 'read' } : null },
   });
-  for (const [headers, expected] of [[{}, 401], [{ authorization: 'Bearer read' }, 403], [{ authorization: 'Bearer admin' }, 200], [{ cookie: 'session=yes' }, 200]]) {
+  for (const [headers, expected] of [[{}, 401], [{ authorization: 'Bearer read' }, 200], [{ authorization: 'Bearer admin' }, 200], [{ cookie: 'session=yes' }, 200]]) {
     assert.equal((await request(observer, 'sessions', { headers })).status, expected);
   }
   assert.equal((await request(observer, 'sessions', { method: 'POST', headers: { authorization: 'Bearer admin' } })).status, 405);
@@ -242,4 +242,14 @@ test('HTTP remains available while a small history field stalls its redaction wo
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
   }
+});
+
+
+test('history metadata timestamps use ISO while transcript data remains unchanged', async () => {
+  const { service } = fixture([{ id: 'o:0', ts: 1700000000000, kind: 'text', fields: { body: { timestamp: 1700000000000, start: 12 } } }]);
+  const result = await request(service, 'entries?session=session');
+  assert.equal(result.status, 200);
+  assert.equal(result.json().entries[0].ts, '2023-11-14T22:13:20.000Z');
+  const content = await request(service, 'content?session=session&entry=o:0&field=body');
+  assert.deepEqual(JSON.parse(content.json().text), { timestamp: 1700000000000, start: 12 });
 });

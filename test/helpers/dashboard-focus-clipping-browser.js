@@ -87,7 +87,7 @@ export async function runFocusClippingBrowser(sandbox, { width, theme }) {
           origin.queue.pending.count = state === 'pending' ? 1 : 0;
         }
         const value = workbenchSnapshotAnswer(url, snapshot, now);
-        if (p === '/api/workbench/memory/backlog') {
+        if (p === '/api/memory/backlog') {
           const row = value.groups[0];
           value.groups.push({ ...row, sessionGroup: 'lark:oc_product', displayName: 'Product weekly', count: 18 },
             { ...row, sessionGroup: 'origin', displayName: 'Origin', count: 21 });
@@ -95,7 +95,7 @@ export async function runFocusClippingBrowser(sandbox, { width, theme }) {
           value.hasOlder = true;
           value.budgets = { limits: { 'identity.md': 8000, 'references.md': 8000 }, warnings: { 'identity.md': 7000, 'references.md': 7000 } };
         }
-        if (p === '/api/settings') {
+        if (p === '/api/settings/pricing') {
           // Normal saved custom rows stay visible without a show-unused action.
           for (const runtime of ['claude', 'codex']) value.runtimes[runtime].builtInModels = [];
         }

@@ -1,3 +1,5 @@
+import { projectEventTimestamps } from './wire-time.js';
+
 export class SseHub {
   constructor(keepaliveMs = 15_000, { maxChatClients = 100, maxChatClientsPerPrincipal = 20, onClientCountChange = () => {} } = {}) {
     this.keepaliveMs = keepaliveMs;
@@ -76,14 +78,14 @@ export class SseHub {
 
   sendTo(client, eventType, data) {
     if (!this.clients.has(client) || this._evictIfInvalid(client)) return false;
-    const payload = `id: ${++this.sequence}\nevent: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+    const payload = `id: ${++this.sequence}\nevent: ${eventType}\ndata: ${JSON.stringify(projectEventTimestamps(eventType, data))}\n\n`;
     return this._write(client, payload);
   }
 
   broadcast(eventType, data) {
     // Chat activity is opt-in and may only be sent to its authorized subscriber.
     if (eventType.startsWith('chat_')) return;
-    const payload = `id: ${++this.sequence}\nevent: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+    const payload = `id: ${++this.sequence}\nevent: ${eventType}\ndata: ${JSON.stringify(projectEventTimestamps(eventType, data))}\n\n`;
     for (const client of [...this.clients]) {
       if (!this._evictIfInvalid(client)) this._write(client, payload);
     }

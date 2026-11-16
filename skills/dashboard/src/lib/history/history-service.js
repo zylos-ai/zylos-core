@@ -1,6 +1,8 @@
 import { sendJson } from '../http.js';
+import { isoTimestamp } from '../wire-time.js';
 import { ClaudeHistory } from './claude-history.js';
 import { CodexHistory } from './codex-history.js';
+import { createHistoryScope } from './history-scope.js';
 import { createRedactor } from '../redaction/engine.js';
 
 const PREVIEW = 2000;
@@ -56,7 +58,11 @@ function position(entries, index, cursor) {
 }
 
 export class HistoryService {
-  constructor({ config = {}, store, stateEngine, parser, redactor } = {}) {
+  constructor({ config = {}, store, stateEngine, parser, redactor, resolveScope } = {}) {
+    this.config = config;
+    this.store = store;
+    this.resolveScope = resolveScope || (parser ? null : createHistoryScope({ config, store }));
+    this.scopedParsers = new Map();
     this.runtime = config.runtime || 'claude';
     const Parser = this.runtime === 'codex' ? CodexHistory : ClaudeHistory;
     this.parser = parser || new Parser({ zylosDir: config.zylosDir, store, stateEngine });
@@ -85,7 +91,7 @@ export class HistoryService {
     for (const key of ['ts', 'channel', 'sender', 'target', 'name', 'tool', 'summary', 'status', 'label', 'system']) {
       if (entry[key] === undefined) continue;
       if (typeof entry[key] === 'boolean') { out[key] = entry[key]; continue; }
-      const result = await this.safe(String(entry[key]), `${session}:${generation}:${entry.id}:meta:${key}`);
+      const result = await this.safe(key === 'ts' ? isoTimestamp(entry[key]) : String(entry[key]), `${session}:${generation}:${entry.id}:meta:${key}`);
       out[key] = result.text; add(result);
     }
     for (const [key, value] of Object.entries(entry.fields || {})) {
@@ -210,7 +216,25 @@ export class HistoryService {
     try {
       if (!ROUTES.has(route)) throw new HistoryError(404, 'not_found');
       if (req.method !== 'GET') throw new HistoryError(405, 'method_not_allowed');
-      const result = route === 'sessions' ? await this.sessions() : await this[route](url.searchParams);
+      let service = this;
+      if (this.resolveScope) {
+        const scope = await this.resolveScope(url.searchParams);
+        const key = `${url.searchParams.get('session_group') ?? 'origin'}:${scope.runtime}`;
+        let parser = this.scopedParsers.get(key);
+        if (!parser) {
+          const Parser = scope.runtime === 'codex' ? CodexHistory : ClaudeHistory;
+          parser = new Parser({ zylosDir: this.config.zylosDir, store: this.store, indexCache: this.parser.indexCache });
+        }
+        this.scopedParsers.delete(key);
+        this.scopedParsers.set(key, parser);
+        while (this.scopedParsers.size > 8) this.scopedParsers.delete(this.scopedParsers.keys().next().value);
+        service = Object.create(this);
+        service.runtime = scope.runtime;
+        // Share warm metadata, but retain each request's attribution snapshot
+        // and path list so simultaneous group reads cannot widen one another.
+        service.parser = Object.assign(Object.create(parser), scope, { paths: new Map(), loads: new Map() });
+      }
+      const result = route === 'sessions' ? await service.sessions() : await service[route](url.searchParams);
       if (result.binary) {
         const { data, mimeType } = result.binary;
         const mime = INLINE_MEDIA.has(mimeType) ? mimeType : 'application/octet-stream';
@@ -219,7 +243,8 @@ export class HistoryService {
       } else sendJson(res, 200, result);
     } catch (error) {
       // Never reflect exception text or record-controlled paths into errors.
-      sendJson(res, error instanceof HistoryError ? error.status : 503, { error: error instanceof HistoryError ? error.code : 'history_unavailable' });
+      const known = error instanceof HistoryError || ['invalid_session_group', 'target_mismatch'].includes(error.code);
+      sendJson(res, known ? error.status : 503, { error: known ? error.code : 'history_unavailable' });
     }
     return true;
   }

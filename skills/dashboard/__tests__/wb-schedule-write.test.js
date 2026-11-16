@@ -12,7 +12,7 @@ import { createScheduleRead } from '../src/lib/workbench/schedule-read.js';
 import { initialForm, formPayload } from '../public/js/wb/schedule-form.js';
 import { createScheduleTz } from '../src/lib/workbench/schedule-tz.js';
 import { AuthGate, hashApiKey } from '../src/lib/auth.js';
-import { deliveryLine, groupTasks, writeMessage } from '../public/js/wb/schedule.js';
+import { deliveryLine, groupTasks, writeMessage, writeOutcome } from '../public/js/wb/schedule.js';
 import { scheduleEnv, packTranslator } from './fixtures/schedule-env.js';
 
 const TZ_URL = new URL('../../scheduler/scripts/tz.js', import.meta.url).href;
@@ -106,10 +106,10 @@ test('scheduler writes report done or the scheduler rejection text', async conte
     if (this.name === d.dbPath) statements.push({ sql, readonly: this.readonly });
     return prepare.call(this, sql);
   });
-  const created = await d.write('POST', '/api/workbench/schedule', { name: 'Daily', prompt: 'Say hi',
+  const created = await d.write('POST', '/api/schedules', { name: 'Daily', prompt: 'Say hi',
     schedule: { kind: 'every', value: '2h' }, priority: '2', missThreshold: '120', requireIdle: true });
   assert.equal(created.status, 200);
-  assert.equal(created.body.result, 'done');
+  assert.equal(created.body.ok, true);
   const id = created.body.data.task.id;
   assert.match(id, /^task-/);
   const db = d.open();
@@ -118,42 +118,42 @@ test('scheduler writes report done or the scheduler rejection text', async conte
   assert.deepEqual([row.session_component, row.session_group_name, row.reply_channel, row.reply_endpoint], [null, null, null, null]);
   assert.equal(deliveryLine(await d.task(id), { t }), '在 Origin 执行 · 结果不另外发送');
 
-  const priority = await d.write('POST', '/api/workbench/schedule', { prompt: 'x', schedule: { kind: 'every', value: '1h' }, priority: '9' });
+  const priority = await d.write('POST', '/api/schedules', { prompt: 'x', schedule: { kind: 'every', value: '1h' }, priority: '9' });
   assert.equal(priority.status, 400);
-  assert.equal(priority.body.result, 'rejected');
-  assert.equal(priority.body.code, 'INVALID_ARGS');
-  assert.equal(writeMessage(priority.body, t), 'Priority must be 1-3 (1=urgent, 2=high, 3=normal)');
+  assert.equal(priority.body.ok, false);
+  assert.equal(priority.body.error.code, 'INVALID_ARGS');
+  assert.equal(writeMessage(writeOutcome(priority.status, priority.body), t), 'Priority must be 1-3 (1=urgent, 2=high, 3=normal)');
 
-  assert.equal((await d.write('POST', `/api/workbench/schedule/${id}/pause`)).body.result, 'done');
-  const again = await d.write('POST', `/api/workbench/schedule/${id}/pause`);
-  assert.deepEqual({ ...again.body, message: undefined }, { result: 'rejected', code: 'TASK_WRONG_STATUS', message: undefined, status: 'paused' });
-  assert.equal((await d.write('POST', `/api/workbench/schedule/${id}/resume`)).body.result, 'done');
-  assert.equal((await d.write('DELETE', `/api/workbench/schedule/${id}`)).body.result, 'done');
+  assert.equal((await d.write('POST', `/api/schedules/${id}/actions/pause`)).body.ok, true);
+  const again = await d.write('POST', `/api/schedules/${id}/actions/pause`);
+  assert.deepEqual({ ...again.body, error: { ...again.body.error, message: undefined } }, { ok: false, error: { code: 'TASK_WRONG_STATUS', message: undefined }, status: 'paused' });
+  assert.equal((await d.write('POST', `/api/schedules/${id}/actions/resume`)).body.ok, true);
+  assert.equal((await d.write('DELETE', `/api/schedules/${id}`)).body.ok, true);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n, 0);
   assert.ok(statements.some(item => item.readonly));
   assert.equal(statements.filter(item => /^\s*(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER)\b/i.test(item.sql)).length, 0);
-  const dashed = await d.write('POST', '/api/workbench/schedule', { name: '--- weekly ---', prompt: 'Weekly',
+  const dashed = await d.write('POST', '/api/schedules', { name: '--- weekly ---', prompt: 'Weekly',
     schedule: { kind: 'every', value: '1h' } });
   const dashedId = dashed.body.data.task.id;
-  assert.equal((await d.write('PUT', `/api/workbench/schedule/${dashedId}`, { prompt: '--reply-channel' })).body.result, 'done');
+  assert.equal((await d.write('PUT', `/api/schedules/${dashedId}`, { prompt: '--reply-channel' })).body.ok, true);
   const stored = db.prepare('SELECT name, prompt, reply_channel, session_component FROM tasks WHERE id=?').get(dashedId);
   assert.deepEqual({ ...stored }, { name: '--- weekly ---', prompt: '--reply-channel', reply_channel: null, session_component: null });
-  const positional = await d.write('POST', '/api/workbench/schedule', { name: 'Weekly', prompt: '--- weekly report ---',
+  const positional = await d.write('POST', '/api/schedules', { name: 'Weekly', prompt: '--- weekly report ---',
     schedule: { kind: 'every', value: '1h' } });
-  assert.deepEqual({ status: positional.status, result: positional.body.result, code: positional.body.code },
-    { status: 400, result: 'rejected', code: 'prompt_starts_with_dashes' });
-  assert.equal(writeMessage(positional.body, t), '新建任务的内容不能以 -- 开头');
-  const threshold = await d.write('POST', '/api/workbench/schedule', { prompt: 'x', missThreshold: '1.5',
+  assert.deepEqual({ status: positional.status, ok: positional.body.ok, code: positional.body.error.code },
+    { status: 400, ok: false, code: 'prompt_starts_with_dashes' });
+  assert.equal(writeMessage(writeOutcome(positional.status, positional.body), t), '新建任务的内容不能以 -- 开头');
+  const threshold = await d.write('POST', '/api/schedules', { prompt: 'x', missThreshold: '1.5',
     schedule: { kind: 'every', value: '1h' } });
-  assert.deepEqual({ status: threshold.status, code: threshold.body.code }, { status: 400, code: 'invalid_form' });
-  assert.equal(writeMessage(threshold.body, t), '表单内容不合规');
-  assert.equal((await d.write('POST', '/api/workbench/schedule/--json/pause')).body.code, 'invalid_task');
-  assert.equal(await d.write('PATCH', '/api/workbench/schedule/task-1'), null);
+  assert.deepEqual({ status: threshold.status, code: threshold.body.error.code }, { status: 400, code: 'invalid_form' });
+  assert.equal(writeMessage(writeOutcome(threshold.status, threshold.body), t), '表单内容不合规');
+  assert.equal((await d.write('POST', '/api/schedules/--json/actions/pause')).body.error.code, 'invalid_task');
+  assert.equal(await d.write('PATCH', '/api/schedules/task-1'), null);
 });
 
 test('an expired one-time task is re-enabled only for a future time and moves to enabled', async context => {
   const d = dashboard(context);
-  const created = await d.write('POST', '/api/workbench/schedule', { name: 'Once', prompt: 'Run once',
+  const created = await d.write('POST', '/api/schedules', { name: 'Once', prompt: 'Run once',
     schedule: { kind: 'at', value: future() } });
   const id = created.body.data.task.id;
   const db = d.open();
@@ -161,15 +161,15 @@ test('an expired one-time task is re-enabled only for a future time and moves to
   const expired = await d.task(id);
   assert.equal(expired.reenable, true);
   assert.deepEqual(groupTasks([expired], { t }).map(section => section.name), ['failed']);
-  const past = await d.write('PUT', `/api/workbench/schedule/${id}`, { name: 'Once', prompt: 'Run once',
+  const past = await d.write('PUT', `/api/schedules/${id}`, { name: 'Once', prompt: 'Run once',
     schedule: { kind: 'at', value: '2020-01-01T09:00' } });
-  assert.equal(past.body.result, 'rejected');
-  assert.equal(past.body.code, 'RESCHEDULE_NOT_FUTURE');
-  assert.match(writeMessage(past.body, t), /^时间必须在将来 · /);
+  assert.equal(past.body.ok, false);
+  assert.equal(past.body.error.code, 'RESCHEDULE_NOT_FUTURE');
+  assert.match(writeMessage(writeOutcome(past.status, past.body), t), /^时间必须在将来 · /);
   assert.equal(db.prepare('SELECT status FROM tasks WHERE id=?').get(id).status, 'failed');
-  const done = await d.write('PUT', `/api/workbench/schedule/${id}`, { name: 'Once', prompt: 'Run once',
+  const done = await d.write('PUT', `/api/schedules/${id}`, { name: 'Once', prompt: 'Run once',
     schedule: { kind: 'at', value: future() } });
-  assert.equal(done.body.result, 'done');
+  assert.equal(done.body.ok, true);
   assert.equal(done.body.data.reenabled, true);
   const row = db.prepare('SELECT status, failed_at, last_error FROM tasks WHERE id=?').get(id);
   assert.deepEqual({ ...row }, { status: 'pending', failed_at: null, last_error: null });
@@ -202,8 +202,8 @@ test('scheduler child output without an envelope is unknown and never retried', 
 
 test('a Dashboard process inside a session group still creates an unrouted task', async context => {
   const d = dashboard(context, { processEnv: { ZYLOS_SESSION_GROUP: 'telegram:x' } });
-  const created = await d.write('POST', '/api/workbench/schedule', { prompt: 'From dashboard', schedule: { kind: 'every', value: '1h' } });
-  assert.equal(created.body.result, 'done');
+  const created = await d.write('POST', '/api/schedules', { prompt: 'From dashboard', schedule: { kind: 'every', value: '1h' } });
+  assert.equal(created.body.ok, true);
   const row = d.open().prepare('SELECT session_component, session_group_name FROM tasks WHERE id=?').get(created.body.data.task.id);
   assert.deepEqual({ ...row }, { session_component: null, session_group_name: null });
 });
@@ -211,7 +211,7 @@ test('a Dashboard process inside a session group still creates an unrouted task'
 test('delivery stays read-only and follows agent changes in two parts', async context => {
   const rows = [{ sessionGroup: 'telegram:dm-5', c4: { componentName: 'telegram' } }];
   const d = dashboard(context, { snapshotRows: rows });
-  const id = (await d.write('POST', '/api/workbench/schedule', { name: 'Report', prompt: 'Report',
+  const id = (await d.write('POST', '/api/schedules', { name: 'Report', prompt: 'Report',
     schedule: { kind: 'cron', value: '0 8 * * *' } })).body.data.task.id;
   const line = async (level = 'plain') => deliveryLine(await d.task(id), { t, level });
   assert.equal(await line(), '在 Origin 执行 · 结果不另外发送');
@@ -226,9 +226,9 @@ test('delivery stays read-only and follows agent changes in two parts', async co
   assert.equal(await line(), '在 Telegram 执行 · 结果发到 Telegram');
   assert.equal(await line('technical'), '在 telegram 执行 · 结果发到 Telegram · 2002');
   const before = d.open().prepare('SELECT session_component, session_group_name, reply_channel, reply_endpoint FROM tasks WHERE id=?').get(id);
-  const edited = await d.write('PUT', `/api/workbench/schedule/${id}`, { name: 'Renamed', prompt: 'Report',
+  const edited = await d.write('PUT', `/api/schedules/${id}`, { name: 'Renamed', prompt: 'Report',
     schedule: { kind: 'cron', value: '0 9 * * *' } });
-  assert.equal(edited.body.result, 'done');
+  assert.equal(edited.body.ok, true);
   const after = d.open().prepare('SELECT name, cron_expression, session_component, session_group_name, reply_channel, reply_endpoint FROM tasks WHERE id=?').get(id);
   assert.deepEqual({ ...after, name: undefined, cron_expression: undefined }, { ...before, name: undefined, cron_expression: undefined });
   assert.deepEqual([after.name, after.cron_expression], ['Renamed', '0 9 * * *']);
@@ -254,15 +254,15 @@ test('local read keys cannot call schedule writes but can read', async context =
     const handled = await gate.handle({ method, url: url.pathname, headers: { authorization: `Bearer ${token}` } }, response, url);
     return { handled, response };
   };
-  for (const [method, route] of [['POST', '/api/workbench/schedule'], ['PUT', '/api/workbench/schedule/task-1'],
-    ['DELETE', '/api/workbench/schedule/task-1'], ['POST', '/api/workbench/schedule/task-1/pause'],
-    ['POST', '/api/workbench/schedule/task-1/resume']]) {
+  for (const [method, route] of [['POST', '/api/schedules'], ['PUT', '/api/schedules/task-1'],
+    ['DELETE', '/api/schedules/task-1'], ['POST', '/api/schedules/task-1/actions/pause'],
+    ['POST', '/api/schedules/task-1/actions/resume']]) {
     const { handled, response } = await call(method, route);
     assert.equal(handled, true, route);
     assert.equal(response.status, 403);
-    assert.deepEqual(response.body, { error: 'insufficient_scope', required: 'admin' });
+    assert.deepEqual(response.body, { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
   }
-  for (const route of ['/api/workbench/schedule', '/api/workbench/schedule/task-1/history', '/api/workbench/schedule/preview?kind=cron']) {
+  for (const route of ['/api/schedules', '/api/schedules/task-1/history', '/api/schedules/preview?kind=cron']) {
     assert.equal((await call('GET', route)).handled, false, route);
   }
 });
@@ -330,39 +330,41 @@ test('schedule HTTP routes read, write and map errors through the real server', 
     headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     ...(body === undefined ? {} : { body }),
   });
-  const missing = await request('/api/workbench/schedule');
+  const missing = await request('/api/schedules');
   assert.equal(missing.status, 200);
   assert.deepEqual(await missing.json(), { available: false, tasks: [] });
   const form = JSON.stringify({ name: 'HTTP', prompt: 'Over HTTP', schedule: { kind: 'every', value: '1h' } });
-  const denied = await request('/api/workbench/schedule', { method: 'POST', body: form });
+  const denied = await request('/api/schedules', { method: 'POST', body: form });
   assert.equal(denied.status, 403);
-  assert.deepEqual(await denied.json(), { error: 'insufficient_scope', required: 'admin' });
+  assert.deepEqual(await denied.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
   assert.equal(children.length, 0);
-  const badJson = await request('/api/workbench/schedule', { token: admin, method: 'POST', body: '{' });
+  const badJson = await request('/api/schedules', { token: admin, method: 'POST', body: '{' });
   assert.equal(badJson.status, 400);
-  assert.deepEqual(await badJson.json(), { error: 'invalid_json' });
-  const created = await request('/api/workbench/schedule', { token: admin, method: 'POST', body: form });
+  assert.deepEqual(await badJson.json(), { ok: false, error: { code: 'invalid_json', message: 'invalid_json' } });
+  const created = await request('/api/schedules', { token: admin, method: 'POST', body: form });
   assert.equal(created.status, 200);
   const id = (await created.json()).data.task.id;
-  const page = await (await request('/api/workbench/schedule')).json();
+  const page = await (await request('/api/schedules')).json();
   assert.equal(page.tz, 'Asia/Singapore');
   assert.deepEqual(page.tasks.map(task => [task.id, task.target.kind]), [[id, 'origin']]);
-  assert.deepEqual(await (await request(`/api/workbench/schedule/${id}/history`)).json(), { rows: [], next: null });
-  const limit = await request(`/api/workbench/schedule/${id}/history?limit=0`);
+  assert.deepEqual(await (await request(`/api/schedules/${id}/history`)).json(), { rows: [], next: null });
+  const limit = await request(`/api/schedules/${id}/history?limit=0`);
   assert.equal(limit.status, 400);
-  assert.deepEqual(await limit.json(), { error: 'invalid_limit' });
-  assert.deepEqual(await (await request('/api/workbench/schedule/preview?kind=cron&value=bad')).json(), { valid: false, error: 'invalid_cron' });
-  assert.equal((await request(`/api/workbench/schedule/${id}/pause`, { token: admin, method: 'POST' })).status, 200);
-  const wrong = await request(`/api/workbench/schedule/${id}/pause`, { token: admin, method: 'POST' });
-  assert.equal(wrong.status, 400);
-  assert.equal((await wrong.json()).code, 'TASK_WRONG_STATUS');
-  assert.equal((await request(`/api/workbench/schedule/${id}`, { token: admin, method: 'DELETE' })).status, 200);
-  assert.equal((await request(`/api/workbench/schedule/${id}/unknown`, { token: admin, method: 'POST' })).status, 405);
+  assert.deepEqual(await limit.json(), { ok: false, error: { code: 'invalid_limit', message: 'invalid_limit' } });
+  const previewError = await request('/api/schedules/preview?kind=cron&value=bad');
+  assert.equal(previewError.status, 400);
+  assert.deepEqual(await previewError.json(), { ok: false, error: { code: 'invalid_cron', message: 'invalid_cron' } });
+  assert.equal((await request(`/api/schedules/${id}/actions/pause`, { token: admin, method: 'POST' })).status, 200);
+  const wrong = await request(`/api/schedules/${id}/actions/pause`, { token: admin, method: 'POST' });
+  assert.equal(wrong.status, 409);
+  assert.equal((await wrong.json()).error.code, 'TASK_WRONG_STATUS');
+  assert.equal((await request(`/api/schedules/${id}`, { token: admin, method: 'DELETE' })).status, 200);
+  assert.equal((await request(`/api/schedules/${id}/unknown`, { token: admin, method: 'POST' })).status, 405);
   for (const suffix of ['', '-wal', '-shm']) fs.rmSync(f.dbPath + suffix, { force: true });
   fs.writeFileSync(f.dbPath, 'not a database file');
-  const unreadable = await request('/api/workbench/schedule');
+  const unreadable = await request('/api/schedules');
   assert.equal(unreadable.status, 503);
-  assert.deepEqual(await unreadable.json(), { error: 'scheduler_unreadable' });
+  assert.deepEqual(await unreadable.json(), { ok: false, error: { code: 'scheduler_unreadable', message: 'scheduler_unreadable' } });
   assert.equal(children.length, 4);
 });
 
@@ -375,9 +377,9 @@ test('schedule HTTP routes read, write and map errors through the real server', 
 test('an older editor changing priority cannot write a summary back over the full task content', async context => {
   const d = dashboard(context);
   const prompt = 'Full task content. '.repeat(40) + 'Retain this final instruction.';
-  const created = await d.write('POST', '/api/workbench/schedule', { name: 'Long task', prompt,
+  const created = await d.write('POST', '/api/schedules', { name: 'Long task', prompt,
     schedule: { kind: 'every', value: '2h' }, priority: '3' });
-  assert.equal(created.body.result, 'done');
+  assert.equal(created.body.ok, true);
   const id = created.body.data.task.id;
   const listed = (await d.reader.read()).tasks.find(task => task.id === id);
   assert.equal(Object.hasOwn(listed, 'prompt'), false);
@@ -388,8 +390,8 @@ test('an older editor changing priority cannot write a summary back over the ful
   assert.equal(original.prompt, '');
   const payload = formPayload({ ...original, priority: '1' }, original);
   assert.equal(payload.prompt, '');
-  const result = await d.write('PUT', `/api/workbench/schedule/${id}`, payload);
-  assert.equal(result.body.result, 'done');
+  const result = await d.write('PUT', `/api/schedules/${id}`, payload);
+  assert.equal(result.body.ok, true);
   const saved = d.open().prepare('SELECT priority, prompt FROM tasks WHERE id = ?').get(id);
   assert.equal(saved.priority, 1);
   assert.equal(saved.prompt, prompt);

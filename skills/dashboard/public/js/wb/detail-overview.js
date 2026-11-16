@@ -1,3 +1,4 @@
+import { instantSeconds } from './api-time.js';
 import { countLabel } from '../count-label.js';
 import { listen } from './detail-update.js';
 import { element, icon, lastReceived, runtimeName } from './plain-text.js';
@@ -51,7 +52,7 @@ export function detailEvidence(row, snapshot = {}) {
 }
 
 export function detailNumbers(row, { backlog, now = Date.now() } = {}, t = key => key) {
-  const minutes = Math.max(0, Math.floor((now - row.createdAt * 1000) / 60000));
+  const minutes = Math.max(0, Math.floor((now - instantSeconds(row.createdAt) * 1000) / 60000));
   return [
     { key: 'wb.detail.queue', value: row.queue == null ? '—' : row.queue.known === false ? t('wb.unknown') : `${row.queue.pending?.count ?? 0} · ${row.queue.running?.count ?? 0}`, note: 'wb.detail.queueNote' },
     { key: 'wb.detail.context', value: row.contextPct == null ? t('wb.unknown') : `${Math.round(row.contextPct)}%`, pct: row.contextPct, note: row.contextPct == null ? null : 'wb.detail.contextNote' },

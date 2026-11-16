@@ -31,7 +31,7 @@ export class ClaudeHistory extends HistoryParser {
     for (const file of files) {
       if (!file.isFile() || !file.name.endsWith('.jsonl')) continue;
       const id = file.name.slice(0, -6);
-      if (!SESSION_ID.test(id)) continue;
+      if (!SESSION_ID.test(id) || !this.includesSession(id)) continue;
       const filePath = path.join(root, file.name);
       const stat = await fs.stat(filePath);
       scanned.add(filePath);
@@ -42,7 +42,7 @@ export class ClaudeHistory extends HistoryParser {
     }
     // Include orphan subagent directories after /clear, even without .meta.json.
     for (const directory of files) {
-      if (!directory.isDirectory() || !SESSION_ID.test(directory.name)) continue;
+      if (!directory.isDirectory() || !SESSION_ID.test(directory.name) || !this.includesSession(directory.name)) continue;
       const subRoot = path.join(root, directory.name, 'subagents');
       let subFiles;
       try {
@@ -65,8 +65,8 @@ export class ClaudeHistory extends HistoryParser {
           startedAt: stat.birthtime.toISOString(), updatedAt: stat.mtime.toISOString(), bytes: stat.size });
       }
     }
-    let current = this.stateEngine?.getCurrentSessionId?.() || null;
-    if (!current) {
+    let current = this.currentSessionId ?? this.stateEngine?.getCurrentSessionId?.() ?? null;
+    if (!current && this.currentSessionId === undefined) {
       try { current = JSON.parse(await fs.readFile(path.join(this.zylosDir, 'activity-monitor', 'statusline.json'), 'utf8')).session_id || null; }
       catch { /* No active Claude session. */ }
     }

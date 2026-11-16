@@ -7,7 +7,7 @@ import path from 'node:path';
 import { GROUP } from '../fixtures/workbench-browser-api.js';
 
 const REMOTE = 'spark';
-const REFUSAL = { error: 'remote_chat_disabled', message: '对方实例未允许远端访问对话和终端' };
+const REFUSAL = { ok: false, error: { code: 'remote_chat_disabled', message: '对方实例未允许远端访问对话和终端' } };
 // An installed, enabled observer on the remote, so its observer entry is offered.
 const OBSERVER_STATUS = { state: 'installed', desired: { enabled: true, generation: 1, teardownFence: false }, sessionMode: 'multi',
   target: { sessionGroup: 'origin', runId: 'run-origin', runtime: 'claude' }, runtime: { state: 'idle' }, agentSize: { cols: 120, rows: 40 } };
@@ -59,7 +59,8 @@ export async function runRemoteAccessBrowser(t, sandbox) {
       if (apiPath === '/api/groups/running' && value) value = { ...value, rows: value.rows.map(row => row.id === GROUP
         ? { ...row, state: { kind: 'idle', since: null }, flags: {} } : row) };
       if (value?.sessionGroup === GROUP) value = { ...value, state: { kind: 'idle' }, flags: {}, tools: [], working: { on: false, since: null, main: null, tools: 0, subagents: null } };
-      if (apiPath === '/api/instance' && value) value = { ...value, agent: { name: REMOTE }, chat_allow_remote: refuse.allow !== false };
+      if (apiPath === '/api/instance' && value) value = { ...value, agent: { name: REMOTE } };
+      if (apiPath === '/api/settings/chat') value = { chat_allow_remote: refuse.allow !== false };
       return value === undefined ? route.fulfill({ status: 404, json: { error: 'not_found' } }) : route.fulfill({ json: value });
     });
     await page.goto(base + '/');
@@ -90,14 +91,14 @@ export async function runRemoteAccessBrowser(t, sandbox) {
       assert.match(await side.locator('.wb-now-title').first().innerText(), /Idle/, 'now card uses the same working state');
       assert.equal(chatRequests.length, 0, 'closed remote access makes no chat requests');
       const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
-      if (evidence && width === 390) {
+      if (evidence) {
         fs.mkdirSync(evidence, { recursive: true });
-        await page.screenshot({ path: path.join(evidence, 'remote-group-chat-closed-390.png') });
+        await page.screenshot({ path: path.join(evidence, `remote-group-chat-closed-${width}.png`) });
       }
       policy.allow = true;
       await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
       await action.waitFor();
-      if (evidence && width === 390) await page.screenshot({ path: path.join(evidence, 'remote-group-chat-open-390.png') });
+      if (evidence) await page.screenshot({ path: path.join(evidence, `remote-group-chat-open-${width}.png`) });
       // Retain a previously offered action to exercise a delayed callback after
       // permission closes, the same guard used when returning from observer.
       const stale = await action.elementHandle();

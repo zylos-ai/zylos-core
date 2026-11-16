@@ -53,7 +53,7 @@ export function wireSettingsConfirmations({ document, t, runner, keyPage, remote
     keyPage.status(t(request.status.running), 'running');
     try {
       const { ok, data } = await keyPage.request(request.method, request.path);
-      if (!ok) throw new Error(keyPage.errorText(data?.error, t(request.status.failed)));
+      if (!ok) throw new Error(keyPage.errorText(data?.error?.code, t(request.status.failed)));
       keyPage.renderKeys(data);
       if (request.showsNewKey) keyPage.renderCreated({ name: data.key?.name || name, plaintext_key: data.plaintext_key });
       else if (keyPage.createdKey()?.name === name) keyPage.renderCreated(null);

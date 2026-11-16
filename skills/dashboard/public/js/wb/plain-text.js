@@ -1,3 +1,4 @@
+import { instantSeconds } from './api-time.js';
 import { formatZoned, zonedDay } from './instance-zone.js';
 export function element(document, tag, text, className) {
   const node = document.createElement(tag);
@@ -33,7 +34,7 @@ export function fallbackName(row, t = key => key) {
  * New messages do not change that time, so the name stays put; without a running session it is just untitled.
  */
 export function unnamedConversation(row, t = key => key, { now = Date.now(), locale = globalThis.document?.documentElement?.lang || undefined } = {}) {
-  const at = row.createdAt == null ? null : row.createdAt * 1000;
+  const at = row.createdAt == null ? null : instantSeconds(row.createdAt) * 1000;
   const date = at == null ? null : new Date(at);
   if (!date || !Number.isFinite(date.getTime())) return t('chat.unnamed');
   const sameDay = zonedDay(date) === zonedDay(now);

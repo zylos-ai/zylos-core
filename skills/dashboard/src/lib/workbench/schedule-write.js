@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import path from 'node:path';
+import { jsonResponse } from '../http.js';
 import { localToOffsetIso } from './schedule-tz.js';
 
 const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -88,7 +89,7 @@ export function formToArgs(form, { id = null, tz = null } = {}) {
 
 export function createScheduleWrite({ zylosDir, scheduleTz, schedulerCli = createSchedulerCli({ zylosDir }) } = {}) {
   async function write(method, pathname, readBody) {
-    const route = pathname.match(/^\/api\/workbench\/schedule(?:\/([^/]+)(?:\/(pause|resume))?)?$/);
+    const route = pathname.match(/^\/api\/schedules(?:\/([^/]+)(?:\/actions\/(pause|resume))?)?$/);
     if (!route) return null;
     let id = null;
     if (route[1] !== undefined) {
@@ -97,7 +98,7 @@ export function createScheduleWrite({ zylosDir, scheduleTz, schedulerCli = creat
       } catch {
         id = '';
       }
-      if (!TASK_ID.test(id)) return { status: 400, body: { result: 'rejected', code: 'invalid_task', message: 'Invalid task id' } };
+      if (!TASK_ID.test(id)) return jsonResponse(400, { ok: false, error: { code: 'invalid_task', message: 'Invalid task id' } });
     }
     let args;
     if (method === 'POST' && id === null) args = 'add';
@@ -113,12 +114,11 @@ export function createScheduleWrite({ zylosDir, scheduleTz, schedulerCli = creat
         args = formToArgs(form, { id: args === 'add' ? null : id, tz });
       } catch (error) {
         if (!error.formCode) throw error;
-        return { status: 400, body: { result: 'rejected', code: error.formCode, message: error.message } };
+        return jsonResponse(400, { ok: false, error: { code: error.formCode, message: error.message } });
       }
     }
     const outcome = await schedulerCli(args);
-    const status = outcome.result === 'done' ? 200 : outcome.result === 'rejected' ? 400 : 502;
-    return { status, body: outcome };
+    return jsonResponse(outcome.result === 'unknown' ? 502 : 200, outcome, { write: true });
   }
   return { write };
 }

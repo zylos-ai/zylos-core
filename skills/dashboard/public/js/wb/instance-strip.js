@@ -1,3 +1,4 @@
+import { instantMs } from './api-time.js';
 import { countLabel } from '../count-label.js';
 import { element, icon, runtimeName } from './plain-text.js';
 import { recoveryTime } from './cooldown.js';
@@ -20,9 +21,9 @@ export function accountRuntimes(snapshot) {
 }
 const clock = at => formatZoned(at, undefined, { hour: '2-digit', minute: '2-digit' });
 export function quotaRecordedTime(usage, now = Date.now()) {
-  if (usage?.live !== false || !Number.isFinite(usage.recordedAt)) return null;
-  const sameDay = zonedDay(usage.recordedAt) === zonedDay(now);
-  return formatZoned(usage.recordedAt, undefined, { ...(sameDay ? {} : { month: '2-digit', day: '2-digit' }),
+  if (usage?.live !== false || !Number.isFinite(instantMs(usage.recordedAt))) return null;
+  const sameDay = zonedDay(instantMs(usage.recordedAt)) === zonedDay(now);
+  return formatZoned(instantMs(usage.recordedAt), undefined, { ...(sameDay ? {} : { month: '2-digit', day: '2-digit' }),
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 }
 export function quotaReset(usage, t, now = Date.now()) {
@@ -57,7 +58,7 @@ const oneDecimal = bytes => (bytes / 1073741824).toFixed(1);
 /** CPU, memory (used = total minus available) and disk percentages: icon and number on screen, the name read out, details in the title. */
 export function systemItems(document, system, { t = key => key, readAt } = {}) {
   // Group snapshots carry readAt; freshness uses the same snapshot clock as the sample.
-  const stale = system != null && !(readAt - system.sampledAt <= SYSTEM_STALE_MS);
+  const stale = system != null && !(instantMs(readAt) - instantMs(system.sampledAt) <= SYSTEM_STALE_MS);
   const memory = system && system.mem_total_bytes > 0 && system.mem_used_bytes != null ? system.mem_used_bytes / system.mem_total_bytes * 100 : null;
   const specs = [
     ['cpu', 'cpu', system?.cpu_pct, system?.cpu_count > 0 ? countLabel(t, 'wb.inst.cpuCores', system.cpu_count) : '', system?.cpu_source],

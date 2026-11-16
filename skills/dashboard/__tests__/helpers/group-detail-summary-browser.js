@@ -36,7 +36,7 @@ async function startSummaryPage(sandbox) {
     }
     if (url.pathname === '/api/observer/status') return { state: 'installed', desired: { enabled: true }, sessionMode: 'multi' };
     if (url.pathname.startsWith('/api/groups/') && url.pathname.endsWith('/events')) return { events: [] };
-    if (url.pathname === '/api/chat/settings') return { allowRemote: false };
+    if (url.pathname === '/api/settings/chat') return { allowRemote: false };
     if (url.pathname === '/api/chat/conversations') return { items: [{ id: ID, session_group: GROUP, display_name: '组详情示例', channel: 'telegram' }], nextCursor: null, tz: 'UTC' };
     if (url.pathname.startsWith('/api/chat/conversations/')) {
       if (url.pathname.endsWith('/messages')) return { items: [{ id: 1, direction: 'in', channel: 'telegram', content: PREVIEW, timestamp: new Date(now - 90000).toISOString() }], nextCursor: null, afterCursor: 'after-1', tz: 'UTC' };

@@ -157,7 +157,7 @@ test('Observer HTTP surface fails closed without Dashboard authentication', asyn
   try {
     const response = await fetch(`${app.origin}/api/observer/status`);
     assert.equal(response.status, 401);
-    assert.deepEqual(await response.json(), { error: 'auth_required' });
+    assert.deepEqual(await response.json(), { ok: false, error: { code: 'auth_required', message: 'auth_required' } });
   } finally { await app.close(); }
 });
 
@@ -649,7 +649,7 @@ test('recovery cannot clear a startup failure while persisted survivors remain',
       } else {
         const failed = await recover();
         assert.equal(failed.status, 503);
-        assert.equal(failed.body.error, recovery === 'disable' ? 'teardown_failed' : 'removal_failed');
+        assert.equal(failed.body.error.code, recovery === 'disable' ? 'teardown_failed' : 'removal_failed');
       }
       assert.equal(reconciliations, 2, 'recovery must retry persisted cleanup with active=null');
       assert.equal(service.startupError, failure);
@@ -661,7 +661,7 @@ test('recovery cannot clear a startup failure while persisted survivors remain',
       for (const route of ['enable', 'install', 'leases']) {
         const blocked = await request(route);
         assert.equal(blocked.status, 503);
-        assert.equal(blocked.body.error, 'teardown_failed');
+        assert.equal(blocked.body.error.code, 'teardown_failed');
       }
       assert.equal(starts, 0);
       cleanupAllowed = true;
@@ -681,7 +681,7 @@ test('recovery cannot clear a startup failure while persisted survivors remain',
       // Recovery clears the startup error, but never implicitly admits a viewer.
       const disabled = await request('leases');
       assert.equal(disabled.status, 404);
-      assert.equal(disabled.body.error, 'observer_disabled');
+      assert.equal(disabled.body.error.code, 'observer_disabled');
       assert.equal(starts, 0);
     } finally {
       await service.shutdown();
@@ -721,7 +721,7 @@ test('local Observer cookie HTTP admission ignores forwarded protocol and reject
     ]) {
       const response = await post(headers);
       assert.equal(response.status, 403);
-      assert.deepEqual(await response.json(), { error: 'origin_required' });
+      assert.deepEqual(await response.json(), { ok: false, error: { code: 'same_origin_required', message: 'same_origin_required' } });
     }
     assert.equal(created, 3, 'rejected requests must not create leases');
     const bearer = await fetch(`${app.origin}/api/observer/leases`, {
@@ -883,7 +883,7 @@ test('removed preset endpoint returns 404', async () => {
       method: 'POST', headers: { Cookie: 'admin=1', Origin: app.origin, 'Content-Type': 'application/json' }, body: '{"preset":"wide"}',
     });
     assert.equal(response.status, 404);
-    assert.deepEqual(await response.json(), { error: 'not_found' });
+    assert.deepEqual(await response.json(), { ok: false, error: { code: 'not_found', message: 'not_found' } });
   } finally { await app.close(); }
 });
 
@@ -1003,8 +1003,8 @@ test('Set size is an admin write guarded by origin and strict size validation', 
   try {
     const cases = [
       [{ cols: 120, rows: 50 }, {}, 401, 'unauthorized'],
-      [{ cols: 120, rows: 50 }, { Cookie: 'admin=1' }, 403, 'origin_required'],
-      [{ cols: 120, rows: 50 }, { Cookie: 'admin=1', Origin: 'https://evil.example' }, 403, 'origin_required'],
+      [{ cols: 120, rows: 50 }, { Cookie: 'admin=1' }, 403, 'same_origin_required'],
+      [{ cols: 120, rows: 50 }, { Cookie: 'admin=1', Origin: 'https://evil.example' }, 403, 'same_origin_required'],
       [{ cols: 120, rows: 50 }, { Authorization: 'Bearer read-token' }, 403, 'insufficient_scope'],
       [{ cols: 19, rows: 50 }, admin, 400, 'invalid_size'],
       [{ cols: 501, rows: 50 }, admin, 400, 'invalid_size'],
@@ -1020,7 +1020,7 @@ test('Set size is an admin write guarded by origin and strict size validation', 
     for (const [body, headers, status, error] of cases) {
       const response = await post(body, headers);
       assert.equal(response.status, status, JSON.stringify([body, headers]));
-      assert.deepEqual(await response.json(), { error });
+      assert.deepEqual(await response.json(), { ok: false, error: { code: error, message: error } });
     }
     assert.deepEqual(containment.agentResizes, []);
     assert.deepEqual(coordinator.savedAgentSizes, []);
@@ -1042,7 +1042,7 @@ test('Set size failures leave the remembered size unchanged', async () => {
         method: 'POST', headers: { Cookie: 'admin=1', Origin: app.origin }, body: JSON.stringify({ cols: 120, rows: 50 }),
       });
       assert.equal(response.status, status);
-      assert.deepEqual(await response.json(), { error: code, ...detail });
+      assert.deepEqual(await response.json(), { ok: false, error: { code, message: code }, ...detail });
       assert.deepEqual(coordinator.savedAgentSizes, []);
     } finally { await app.close(); }
   }
@@ -1056,7 +1056,7 @@ test('Set size refuses to race an Observer attachment in progress', async () => 
       method: 'POST', headers: { Cookie: 'admin=1', Origin: app.origin }, body: JSON.stringify({ cols: 120, rows: 50 }),
     });
     assert.equal(response.status, 409);
-    assert.deepEqual(await response.json(), { error: 'observer_starting' });
+    assert.deepEqual(await response.json(), { ok: false, error: { code: 'observer_starting', message: 'observer_starting' } });
     assert.deepEqual(containment.agentResizes, []);
   } finally { await app.close(); }
 });
@@ -1205,7 +1205,7 @@ test('observer routes carry the selected group through status, lease creation, a
     for (const body of [{ sessionGroup: 'telegram:42', target: 'forged-producer' }, { sessionGroup: 'telegram:42', runtime: 'claude' }]) {
       const denied = await fetch(`${app.origin}/api/observer/leases`, { method: 'POST', headers, body: JSON.stringify(body) });
       assert.equal(denied.status, 400);
-      assert.equal((await denied.json()).error, 'target_mismatch');
+      assert.equal((await denied.json()).error.code, 'target_mismatch');
       assert.equal(selected.length, 1, 'unknown request fields must be rejected before manager admission');
     }
     const resized = await fetch(`${app.origin}/api/observer/agent-size`, { method: 'POST', headers, body: JSON.stringify({ cols: 100, rows: 40, sessionGroup: 'telegram:42' }) });
@@ -1237,12 +1237,12 @@ test('observer status remains available when the selected Core target is unavail
       assert.equal(status.state, 'installed'); assert.equal(status.desired.enabled, true);
       assert.equal(status.sessionMode, 'multi'); assert.equal(status.target, null);
       const lease = await fetch(`${app.origin}/api/observer/leases`, { method: 'POST', headers, body: JSON.stringify({ sessionGroup: 'telegram:42' }) });
-      assert.equal(lease.status, 409); assert.equal((await lease.json()).error, 'agent_session_unavailable');
+      assert.equal(lease.status, 409); assert.equal((await lease.json()).error.code, 'agent_session_unavailable');
     }
     const invalid = await fetch(`${app.origin}/api/observer/status?session_group=invalid%20group`, { headers });
     assert.equal(invalid.status, 200); assert.equal((await invalid.json()).target, null);
     const lease = await fetch(`${app.origin}/api/observer/leases`, { method: 'POST', headers, body: JSON.stringify({ sessionGroup: 'invalid group' }) });
-    assert.equal(lease.status, 400); assert.equal((await lease.json()).error, 'target_mismatch');
+    assert.equal(lease.status, 400); assert.equal((await lease.json()).error.code, 'target_mismatch');
   } finally { await f.service.shutdown(); await app.close(); }
 });
 
@@ -1258,11 +1258,11 @@ test('remote observer access follows the conversation switch on every route and 
       ['/api/observer/history/sessions', 'GET']]) {
       const response = await fetch(`${app.origin}${path}`, { method, headers: bearer });
       assert.equal(response.status, 403, path);
-      assert.equal((await response.json()).error, 'remote_chat_disabled', path);
+      assert.equal((await response.json()).error.code, 'remote_chat_disabled', path);
     }
     // The switch is checked before the key scope, as for conversations: a read key learns the switch is off.
     const readWhileOff = await fetch(`${app.origin}/api/observer/status`, { headers: { Authorization: 'Bearer read-token' } });
-    assert.equal((await readWhileOff.json()).error, 'remote_chat_disabled');
+    assert.equal((await readWhileOff.json()).error.code, 'remote_chat_disabled');
     const frame = await fetch(`${app.origin}/observer/frame`, { headers: { ...bearer, 'X-Observer-Lease': LEASE_ID } });
     assert.equal(frame.status, 403);
     await assert.rejects(connectObserverWebSocket({ port: app.server.address().port, path: '/observer/stream',
@@ -1274,7 +1274,7 @@ test('remote observer access follows the conversation switch on every route and 
     config.chat = { allowRemote: true };
     assert.equal((await fetch(`${app.origin}/api/observer/leases`, { method: 'POST', headers: bearer })).status, 201);
     const readOnly = await fetch(`${app.origin}/api/observer/leases`, { method: 'POST', headers: { Authorization: 'Bearer read-token' } });
-    assert.equal((await readOnly.json()).error, 'insufficient_scope', 'a read key is still refused for its scope');
+    assert.equal((await readOnly.json()).error.code, 'insufficient_scope', 'a read key is still refused for its scope');
   } finally {
     await service.shutdown();
     await app.close();
@@ -1292,7 +1292,7 @@ test('a remote lease whose creation outlasts the switch being turned off is rele
   try {
     const remote = await fetch(`${app.origin}/api/observer/leases`, { method: 'POST', headers: { Authorization: 'Bearer admin-token' } });
     assert.equal(remote.status, 403);
-    assert.equal((await remote.json()).error, 'remote_chat_disabled');
+    assert.equal((await remote.json()).error.code, 'remote_chat_disabled');
     assert.deepEqual(released, [[LEASE_ID, 'api']]);
     const local = await fetch(`${app.origin}/api/observer/leases`, { method: 'POST', headers: { Cookie: 'admin=1', Origin: app.origin } });
     assert.equal(local.status, 201, 'the local browser keeps its lease');

@@ -519,7 +519,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     assert.equal(state.label, await label('defaults'), 'the button names the current section');
     assert.match(await page.locator('.wb-set-nav').evaluate(node => getComputedStyle(node).transitionDuration), /0\.2s/, 'the drawer slides');
     await shot('settings-drawer-closed');
-    const settingsReads = () => reads.get('/api/settings') ?? 0;
+    const settingsReads = () => reads.get('/api/settings/pricing') ?? 0;
     const readsBefore = settingsReads();
 
     await openDrawer(page);
@@ -608,7 +608,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await openDrawer(page);
     await page.locator('.wb-set-drawer-x').click();
     await closed(page);
-    const settingsReads = () => (reads.get('/api/settings') ?? 0) + (reads.get('/api/keys') ?? 0);
+    const settingsReads = () => (reads.get('/api/settings/pricing') ?? 0) + (reads.get('/api/keys') ?? 0);
     const before = settingsReads();
 
     await page.goForward();

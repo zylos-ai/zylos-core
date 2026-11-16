@@ -93,7 +93,7 @@ export function instanceActionRequest(action, body = {}) {
   if (groups[action]) return { method: 'POST', path: '/api/groups/origin/actions/' + groups[action], body };
   const actions = { 'switch-mode': 'switch-mode', 'switch-runtime': 'switch-runtime', 'upgrade-zylos': 'upgrade', 'upgrade-cc': 'upgrade-runtime' };
   if (actions[action]) return { method: 'POST', path: '/api/instance/actions/' + actions[action], body };
-  // Timezone service restart remains in the existing settings API.
-  if (action === 'restart-timezone-services') return { method: 'POST', path: '/api/actions/restart-timezone-services', body };
+  // Timezone service restart belongs to its settings resource.
+  if (action === 'restart-timezone-services') return { method: 'POST', path: '/api/settings/timezone/actions/restart-services', body };
   throw Error('unknown_action');
 }

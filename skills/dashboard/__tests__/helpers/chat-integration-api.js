@@ -333,7 +333,7 @@ export async function createRemoteChatApiFixture(t, sandbox, { timeoutMs = 45000
       const response = await fetch(info.base + route, { method, headers, signal: AbortSignal.timeout(timeoutMs),
         ...(['GET', 'HEAD'].includes(method) ? {} : { body: JSON.stringify(body ?? {}) }) });
       const text = await response.text(); let value; try { value = JSON.parse(text); } catch { value = text; }
-      if (route === '/api/chat/settings' && response.ok) config.chat.allowRemote = value.allowRemote;
+      if (route === '/api/settings/chat' && response.ok) config.chat.allowRemote = value.allowRemote;
       return { status: response.status, body: value, text };
     },
     async createConversation(content = 'isolated remote first text') {

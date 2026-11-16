@@ -232,7 +232,7 @@ export function createInstanceTimezone({ zylosDir, readTimezone,
         catch { failed.push({ name, error: 'restart_failed' }); }
       }
       log(`TZ services restart: ${restarted.join(',') || '(none)'}${failed.length ? '; failed=' + failed.map(item => item.name).join(',') : ''}`);
-      return { ok: failed.length === 0, status: 200, restarted, failed,
+      return { ok: failed.length === 0, status: failed.length ? 502 : 200, ...(failed.length ? { error: 'restart_failed' } : {}), restarted, failed,
         restart_services: failed.map(({ name }) => ({ name, status: 'online' })), restart_status: 'known' };
     } catch (error) {
       if (error instanceof TimezoneSettingsError) return { ok: false, error: error.code, status: error.status, restarted, failed,
@@ -258,7 +258,7 @@ export async function handleInstanceTimezone(req, res, url, { auth, timezone }) 
 
 /** The existing action path, with the same write proof as saving the setting. */
 export async function handleInstanceTimezoneRestart(req, res, url, { auth, timezone, runAction } = {}) {
-  if (url.pathname !== '/api/actions/restart-timezone-services' || req.method !== 'POST') return false;
+  if (url.pathname !== '/api/settings/timezone/actions/restart-services' || req.method !== 'POST') return false;
   const context = auth.resolveAuthContext(req);
   if (context?.scope !== 'admin') { sendJson(res, 403, { error: 'insufficient_scope', required: 'admin' }); return true; }
   if (context.kind === 'cookie' && !isSameOriginRequest(req)) { sendJson(res, 403, { error: 'same_origin_required' }); return true; }

@@ -1,3 +1,4 @@
+import { projectApiTimestamps } from './wire-time.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -12,8 +13,56 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon'
 };
 
+// Explicit command outcomes from Dashboard actions, scheduler CLI and Core
+// supervisor admission. An unfamiliar command failure is an upstream failure.
+const FAILURE_STATUSES = new Map([
+  [400, ['invalid_runtime', 'invalid_model', 'invalid_effort', 'invalid_value', 'invalid_argument', 'invalid_args',
+    'invalid_form', 'invalid_task', 'invalid_time', 'invalid_request', 'invalid_default', 'invalid_pricing',
+    'prompt_starts_with_dashes', 'tz_unavailable', 'no_updates', 'reschedule_not_future', 'target_required', 'unknown_action']],
+  [401, ['unauthorized', 'authentication_required', 'invalid_api_key']],
+  [403, ['insufficient_scope', 'same_origin_required', 'local_cookie_required', 'origin_forbidden', 'auth_not_confirmed']],
+  [404, ['task_not_found', 'group_not_found', 'unknown_key', 'unknown_agent', 'not_found']],
+  [409, ['already_set', 'already_up_to_date', 'duplicate_request', 'environment_override', 'multi_session_required',
+    'task_wrong_status', 'task_ambiguous', 'transition_open', 'legacy_session_present', 'manual_restart_pending',
+    'deletion_in_progress', 'request_conflict', 'single_mode', 'not_multi', 'fence_conflict', 'restart_all_pending',
+    'run_changed', 'other_fence', 'deletion_preview_stale', 'deletion_ownership_mismatch', 'draft_became_active']],
+  [500, ['internal_error', 'db_write_failed', 'set_failed']],
+  [502, ['result_unknown', 'scheduler_cli_failed', 'group_delete_result_unknown', 'instance_root_mismatch', 'upgrade_failed', 'wake_failed', 'restart_failed']],
+  [503, ['service_discovery_unavailable', 'group_delete_supervisor_unavailable', 'unknown_model_capabilities', 'config_unreadable', 'requests_unreadable',
+    'identity_unavailable', 'dependency_unavailable', 'entry_not_open', 'not_ready', 'snapshot_unavailable', 'start_admission_closed']],
+  [504, ['deadline_exceeded', 'timeout']],
+].flatMap(([status, codes]) => codes.map(code => [code, status])));
+
+function failureStatus(code) {
+  return FAILURE_STATUSES.get(code.toLowerCase()) ?? 502;
+}
+
+/** One wire contract for local handlers and core command results. */
+export function jsonResponse(status, payload, { write = false } = {}) {
+  const value = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : { data: payload };
+  const rejected = value.ok === false || value.result === 'rejected' || value.result === 'unknown';
+  if (status >= 400 || rejected) {
+    const detail = value.error && typeof value.error === 'object' ? value.error : {};
+    const rawCode = String(detail.code || (typeof value.error === 'string' ? value.error : null) || value.code || value.reason || (status >= 500 ? 'internal_error' : 'request_failed'));
+    const code = /^[a-z][a-z0-9_]*$/i.test(rawCode) ? rawCode : status >= 500 ? 'internal_error' : 'invalid_request';
+    const message = String(detail.message || value.message || rawCode);
+    const { error, ok, result, status: resultStatus, code: resultCode, message: resultMessage, ...metadata } = value;
+    return {
+      status: status >= 400 ? status : (Number.isInteger(resultStatus) && resultStatus >= 400 ? resultStatus : failureStatus(code)),
+      body: { ...metadata, ...(resultStatus !== undefined && !Number.isInteger(resultStatus) ? { status: resultStatus } : {}), ok: false, error: { ...detail, code, message } }
+    };
+  }
+  if (value.result === 'done') {
+    const { result, ...data } = value;
+    return { status, body: { ok: true, ...data } };
+  }
+  return { status, body: write ? { ...value, ok: true } : payload };
+}
+
 export function sendJson(res, status, payload) {
-  const body = JSON.stringify(payload, null, 2);
+  const response = jsonResponse(status, payload, { write: res.apiWrite === true });
+  status = response.status;
+  const body = JSON.stringify(projectApiTimestamps(res.apiPath, response.body), null, 2);
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store'

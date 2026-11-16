@@ -14,5 +14,5 @@ export function formatActionResult(result, t) {
     };
     lines.push(t(step.submission === 'rejected' ? 'result.control_step_rejected' : 'result.control_step', params));
   }
-  return lines.join('\n') || result?.message || null;
+  return lines.join('\n') || result?.error?.message || result?.message || null;
 }

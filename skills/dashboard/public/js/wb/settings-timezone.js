@@ -126,7 +126,7 @@ export function mountTimezoneSettings(root, { document = root.ownerDocument, t =
       const value = await restart({ tz, confirm: true, services: confirmedServices });
       if (!current(token, machine)) return;
       applyRestartProgress(value);
-      if (value.error) notice.textContent = errorText({ code: value.error }, 'restartError');
+      if (value.error) notice.textContent = errorText({ code: value.error.code }, 'restartError');
       else if (value.failed?.length) notice.textContent = t('wb.settings.timezone.restartFailed', { services: value.failed.map(service => serviceName(service.name)).join(', ') });
       else if (value.ok === false) notice.textContent = t('wb.settings.timezone.restartError');
       else { saved = false; notice.textContent = t('wb.settings.timezone.restarted'); }
@@ -134,7 +134,9 @@ export function mountTimezoneSettings(root, { document = root.ownerDocument, t =
       if (current(token, machine)) {
         const progress = error?.result;
         if (Array.isArray(progress?.restarted) && Array.isArray(progress?.failed) && Array.isArray(progress?.restart_services)) applyRestartProgress(progress);
-        notice.textContent = errorText(error, 'restartError');
+        notice.textContent = progress?.failed?.length
+          ? t('wb.settings.timezone.restartFailed', { services: progress.failed.map(service => serviceName(service.name)).join(', ') })
+          : errorText(error, 'restartError');
       }
     }
     finally { if (current(token, machine)) { busy = false; render(); } }

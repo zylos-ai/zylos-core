@@ -21,7 +21,7 @@ export async function runRuntimeAttachments({ api, sandbox, root, scenario, conf
   let gateway, gatewaySandbox;
   try {
     if (fleet) {
-      const enabled = await api.request('/api/chat/settings', { method: 'PUT', body: { allowRemote: true } });
+      const enabled = await api.request('/api/settings/chat', { method: 'PUT', body: { allowRemote: true } });
       check(enabled.status === 200, 'Target explicitly permits remote chat');
       gatewaySandbox = createChatSandbox(null);
       gateway = await createRemoteChatApiFixture(null, gatewaySandbox, { timeoutMs: 620000 });

@@ -338,7 +338,10 @@ test('login keeps a next target inside the forwarded prefix', { timeout: 15_000 
   assert.equal(login.headers.get('location'), next);
 });
 
-test('logout succeeds without origin checks and respects forwarded prefix', async () => {
+// HTTP integration: actual authenticated logout in runner-isolated installation;
+// run for logout/auth/browser-origin changes. The fixture has private DB, PM2_HOME
+// and tmux directory and disabled network version checks; loopback servers close.
+test('logout requires browser same origin and respects forwarded prefix', async () => {
   const { origin, server } = await makeServer();
   const clearCookie = '__Secure-zylos_dashboard_session=; HttpOnly; Secure; SameSite=Strict; Path=/dashboard; Max-Age=0';
   const loginCookie = async () => (await fetch(`${origin}/login`, {
@@ -353,18 +356,23 @@ test('logout succeeds without origin checks and respects forwarded prefix', asyn
     redirect: 'manual'
   });
   try {
-    // A proxy that rewrites Host (e.g. Cloudflare in front) makes Origin differ.
     const cookie = await loginCookie();
     const mismatched = await logout({ Cookie: cookie, Origin: 'https://agent.example.com' });
-    assert.equal(mismatched.status, 302);
-    assert.equal(mismatched.headers.get('location'), '/dashboard/login');
-    assert.equal(mismatched.headers.get('set-cookie'), clearCookie);
+    assert.equal(mismatched.status, 403);
+    assert.equal((await mismatched.json()).error.code, 'same_origin_required');
+    assert.equal(mismatched.headers.get('set-cookie'), null);
+    const active = await fetch(`${origin}/api/instance`, { headers: { Cookie: cookie } });
+    assert.equal(active.status, 200);
+    const accepted = await logout({ Cookie: cookie, Origin: origin });
+    assert.equal(accepted.status, 302);
+    assert.equal(accepted.headers.get('location'), '/dashboard/login');
+    assert.equal(accepted.headers.get('set-cookie'), clearCookie);
     const revoked = await fetch(`${origin}/api/instance`, { headers: { Cookie: cookie }, redirect: 'manual' });
     assert.notEqual(revoked.status, 200);
 
     const noHeaders = await logout({ Cookie: await loginCookie() });
-    assert.equal(noHeaders.status, 302);
-    assert.equal(noHeaders.headers.get('set-cookie'), clearCookie);
+    assert.equal(noHeaders.status, 403);
+    assert.equal(noHeaders.headers.get('set-cookie'), null);
 
     const expired = await logout({ Cookie: '__Secure-zylos_dashboard_session=stale' });
     assert.equal(expired.status, 302);
@@ -1805,7 +1813,7 @@ test('nested Dashboard login accepts any valid same-name cookie and logout clear
   }
   const rejected = await fetch(origin, { headers: { ...headers, cookie: `${invalid}; __Secure-zylos_dashboard_session=also-invalid` }, redirect: 'manual' });
   assert.equal(rejected.status, 302); assert.match(rejected.headers.get('location'), /^\/ib\/dashboard\/login/); await rejected.text();
-  const logout = await fetch(`${origin}/logout`, { method: 'POST', headers: { ...headers, cookie: `${valid}; ${invalid}` }, redirect: 'manual' });
+  const logout = await fetch(`${origin}/logout`, { method: 'POST', headers: { ...headers, origin, cookie: `${valid}; ${invalid}` }, redirect: 'manual' });
   await logout.text();
   assert.deepEqual(logout.headers.getSetCookie(), ['__Secure-zylos_dashboard_session=; HttpOnly; Secure; SameSite=Strict; Path=/ib/dashboard; Max-Age=0']);
   const ended = await fetch(origin, { headers: { ...headers, cookie: valid }, redirect: 'manual' });

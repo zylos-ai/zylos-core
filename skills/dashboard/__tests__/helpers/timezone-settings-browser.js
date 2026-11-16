@@ -28,7 +28,7 @@ async function startPage(sandbox) {
           sendJson(res, 200, { ok: true, changed: true, previous: 'UTC', ...settings() }); return;
         }
       }
-      if (route === '/api/actions/restart-timezone-services' && req.method === 'POST') {
+      if (route === '/api/settings/timezone/actions/restart-services' && req.method === 'POST') {
         const body = await readJsonBody(req, 4096); restarts.push({ path: original.pathname, body });
         if (state.unavailableAfterProgress) {
           state.unavailableAfterProgress = false;
@@ -174,7 +174,7 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
       await answer(page, false); assert.equal(api.restarts.length, restarts, 'Cancel keeps saved zone without restart');
       await page.locator('#settings-timezone-restart').click(); await answer(page, true);
       await page.locator('#settings-timezone-pending').waitFor({ state: 'hidden' });
-      assert.deepEqual(api.restarts.at(-1), { path: '/fleet/admin/api/actions/restart-timezone-services', body: { tz: 'Asia/Singapore', confirm: true, services: ['scheduler', 'activity-monitor', 'c4-dispatcher'] } });
+      assert.deepEqual(api.restarts.at(-1), { path: '/fleet/admin/api/settings/timezone/actions/restart-services', body: { tz: 'Asia/Singapore', confirm: true, services: ['scheduler', 'activity-monitor', 'c4-dispatcher'] } });
       assert.equal(api.restarts.length, restarts + 1); assert.deepEqual(errors, []);
     } finally { await context.close(); }
     const readOnly = await open(width, locale, '/fleet/reader');

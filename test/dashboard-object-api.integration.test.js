@@ -13,6 +13,7 @@ import { generateApiKey, hashApiKey, hashPassword } from '../skills/dashboard/sr
 import { createGroupSnapshot, systemSample } from '../skills/dashboard/src/lib/workbench/group-snapshot.js';
 import { loadCoreModule as originalLoadCoreModule } from '../skills/dashboard/src/lib/core-modules.js';
 import { readSessionModeStatus } from '../cli/lib/session-mode-status.js';
+import { populateSchedulePagination } from '../skills/dashboard/__tests__/fixtures/schedule-pagination.js';
 import { SseHub } from '../skills/dashboard/src/lib/sse.js';
 
 // Real HTTP, auth, SQLite, group projection and usage boundary. Run when these
@@ -42,6 +43,10 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     CREATE TABLE slot_occupancy(session_group TEXT,run_id TEXT,state TEXT,held_until INTEGER,created_at INTEGER);`);
   c4.prepare('INSERT INTO conversations VALUES(1,?,?,?,?,?,?,?)').run(new Date().toISOString(), 'in', 'telegram', 'fixture', 'Fixture message', 'telegram:working', 'delivered');
   c4.close();
+  fs.mkdirSync(path.join(root, 'memory')); fs.writeFileSync(path.join(root, 'memory/example.md'), '# Fixture memory\n');
+  fs.mkdirSync(path.join(root, 'scheduler'));
+  const scheduler = new Database(path.join(root, 'scheduler/scheduler.db'));
+  populateSchedulePagination(scheduler); scheduler.close();
   const previousGet = https.get;
   https.get = () => {
     const request = Object.assign(new EventEmitter(), { destroy() {}, end() {} });
@@ -81,6 +86,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     if (file === 'zylos' && args[0] === 'group' && args[1] === 'overrides') data = { baseline: { runtime: 'claude' }, runtime: [], model: [], runtimeTotal: 0, nextAfter: null };
     else if (file === 'zylos' && args[0] === 'group') data = { resolved: args[1] === 'runtime' ? { runtime: 'claude' } : { runtime: 'claude', mode: 'default' } };
     else if (file === process.execPath && args[0]?.endsWith('/c4-control.js') && args[1] === 'enqueue') data = { id: 7 };
+    else if (file === process.execPath && args[0]?.endsWith('/scheduler/scripts/cli.js')) { callback(null, JSON.stringify({ ok: true, data: { id: 'fixture-task' } }), ''); return new EventEmitter(); }
     else if (file === process.execPath && args[0]?.endsWith('/sync-lock.js')) { callback(null, JSON.stringify({ sync: { held: false } }), ''); return new EventEmitter(); }
     else throw new Error(`Unexpected child process in HTTP fixture: ${file} ${args[0]}`);
     callback(null, JSON.stringify({ ok: true, data }), ''); return new EventEmitter();
@@ -121,7 +127,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
         return 'done';
       } };
     if (name === 'session-mode-status.js') return { readSessionModeStatus: options => { if (!modeStatusReadable) throw Object.assign(new Error('fixture status failure'), { code: 'FIXTURE_UNREADABLE' }); return readSessionModeStatus({ ...options,
-      db: { getModeTransition: async () => ({ run_id: 'fixture-transition', source_mode: 'single', target_mode: 'multi', phase: 'draining', reason: 'fixture-block', created_at: clock - 1000, updated_at: clock }),
+      db: { getModeTransition: async () => ({ run_id: 'fixture-transition', source_mode: 'single', target_mode: 'multi', phase: 'draining', reason: 'fixture-block', created_at: Math.floor(clock / 1000) - 1, updated_at: Math.floor(clock / 1000) }),
         getDrainFence: async () => null, getLastCompletedModeTransition: async () => null },
       readEvents: () => [{ run_id: 'fixture-transition', event: 'transition_blocked', reason: 'fixture-block', ts: clock - 1000 }],
       probeSupervisor: async () => false }); } };
@@ -148,6 +154,11 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
         : name === 'session-pool-config.js' ? { readPoolCapacity: () => ({ k: 3, valid: true, fresh: true }) } : core(name),
     }),
   } });
+  const { writeMemory } = await import('../skills/zylos-memory/scripts/memory-write.js');
+  t.mock.module('../skills/dashboard/src/lib/workbench/memory-write.js', { namedExports: {
+    createMemoryWriter: () => (rel, { text, sha256 }) => writeMemory({ path: rel, sha256, content: text, env: { HOME: process.env.HOME, ZYLOS_DIR: root } }, { currentRunId: async () => null }),
+    executeMemoryWrite: () => { throw new Error('CLI transport is replaced by the real in-process memory writer in this fixture'); },
+  } });
   const { createServer } = await import('../skills/dashboard/src/index.js');
   server = createServer();
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -156,7 +167,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   seedStore.insertEvent({ id: 'fixture-child', ingest_id: 'fixture-child', timestamp: new Date(clock - 1000).toISOString(), session_group: 'telegram:child', run_id: 'fixture-run',
     event_type: 'subagent_start', category: 'agent', metadata: { agent_id: 'fixture-child' } });
   for (const [group, child] of [['origin', 'hook-child'], [null, 'legacy-child']]) seedStore.insertEvent({
-    id: 'fixture-origin-' + child, ingest_id: 'fixture-origin-' + child, timestamp: new Date(clock - 1500).toISOString(),
+    id: 'fixture-origin-' + child, ingest_id: 'fixture-origin-' + child, timestamp: new Date(clock - 10000).toISOString(),
     session_group: group, run_id: 'fixture-run', event_type: 'subagent_start', category: 'agent', metadata: { agent_id: child } });
   seedStore.insertEvent({ id: 'fixture-failed-offline', ingest_id: 'fixture-failed-offline', timestamp: new Date(clock - 1000).toISOString(), session_group: 'telegram:offline-0',
     event_type: 'activate_failed', category: 'session', metadata: { reason: 'fixture launch failure' } });
@@ -179,6 +190,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     const text = await response.text(); let value;
     try { value = JSON.parse(text); } catch { value = text; }
     records.push({ mode, method, route, identity, status: response.status, body: value });
+    if (response.status >= 400) { assert.equal(value.ok, false); assert.equal(typeof value.error?.code, 'string'); assert.equal(typeof value.error?.message, 'string'); }
     assert.equal(response.status, expected, `${method} ${route}: ${text.slice(0, 300)}`);
     return value;
   };
@@ -190,12 +202,20 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   const retired = ['/api/health?probe=ready', '/api/state', '/api/restart-status', '/api/session-mode', '/api/instance-status', '/api/timeline', '/api/system', '/api/summary', '/api/communication',
     '/api/metrics/history/cpu_pct', '/api/metrics/aggregate', '/api/metrics/cpu_pct', '/api/metrics/series', '/api/actions/meta', '/api/actions/interrupt', '/api/actions/chop-chop',
     '/api/workbench/groups', '/api/workbench/groups/search', '/api/workbench/activity', '/api/workbench/groups/telegram%3Aworking/raw', '/api/workbench/groups/telegram%3Aworking/config',
-    '/api/workbench/usage', '/api/workbench/host', '/api/workbench/pricing', '/api/workbench/name-prompt', '/api/workbench/runtime-overrides', '/api/agent/name', '/api/settings'];
+    '/api/workbench/usage', '/api/workbench/host', '/api/workbench/pricing', '/api/workbench/name-prompt', '/api/workbench/runtime-overrides', '/api/agent/name', '/api/settings', '/api/settings?all=1', '/api/workbench/schedule', '/api/workbench/schedule/preview', '/api/workbench/schedule/once', '/api/workbench/schedule/once/history', '/api/workbench/memory/backlog', '/api/chat/settings'];
   await t.test('retired reads and actions return 404', async () => {
     for (const route of retired) await request(route, { identity: 'cookie', expected: 404 });
-    for (const route of ['/api/actions/interrupt', '/api/actions/chop-chop']) for (const identity of ['cookie', 'read']) await request(route, { method: 'POST', body: {}, identity, expected: 404 });
+    for (const route of ['/api/actions/interrupt', '/api/actions/chop-chop', '/api/workbench/schedule', '/api/workbench/schedule/once/pause', '/api/workbench/schedule/once/resume', '/api/chat/settings', '/api/settings']) for (const identity of ['cookie', 'read']) await request(route, { method: 'POST', body: {}, identity, expected: 404 });
   });
   const writes = [
+    ['/api/settings/pricing', 'PUT', { runtimes: { claude: { fastModeMultiplier: 2.5 } } }],
+    ['/api/settings/chat', 'PUT', { chat_allow_remote: true }],
+    ['/api/settings/timezone', 'PUT', { tz: 'Asia/Singapore' }],
+    ['/api/settings/timezone/actions/restart-services', 'POST', {}],
+    ['/api/schedules', 'POST', { prompt: 'Fixture', schedule: { kind: 'every', value: '1h' } }],
+    ['/api/schedules/once', 'PUT', { name: 'Fixture' }],
+    ['/api/schedules/once', 'DELETE'],
+    ...['pause', 'resume'].map(action => [`/api/schedules/once/actions/${action}`, 'POST', {}]),
     ['/api/instance/defaults', 'PUT', { kind: 'model', model: 'fixture-model' }], ['/api/instance/name', 'PUT', { name: 'fixture-agent' }],
     ...['switch-mode', 'switch-runtime', 'upgrade', 'upgrade-runtime'].map(action => [`/api/instance/actions/${action}`, 'POST', {}]),
     ['/api/groups/telegram%3Aworking/config', 'PUT', { kind: 'runtime', value: 'claude' }],
@@ -206,7 +226,16 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   ];
   await t.test('every object API write requires admin and every browser write requires same origin', async () => {
     const initial = actionCalls.length;
-    for (const [route, method, body] of writes) {
+    const allWrites = [...writes,
+      ['/api/keys', 'POST', {}], ['/api/keys/reader/rotate', 'POST', {}], ['/api/keys/reader', 'DELETE'], ['/api/keys/purge-revoked', 'POST', {}],
+      ['/api/fleet/agents', 'POST', {}], ['/api/fleet/agents/test', 'POST', {}], ['/api/fleet/agents/remote-fixture', 'DELETE'],
+      ['/api/chat/drafts', 'POST', {}], ['/api/chat/conversations/origin', 'PATCH', {}], ['/api/chat/conversations/origin/send', 'POST', {}],
+      ['/api/chat/conversations/origin/answers', 'POST', {}], ['/api/chat/conversations/origin/uploads', 'POST', {}], ['/api/chat/drafts/fixture', 'DELETE', {}],
+      ...['install', 'enable', 'disable', 'agent-size', 'leases', 'leases/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/renew', 'leases/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/release']
+        .map(action => [`/api/observer/${action}`, 'POST', {}]), ['/api/observer/install', 'DELETE'],
+    ];
+    for (const [route, method, body] of allWrites) {
+      await request(route, { method, body, identity: 'none', expected: 401 });
       await request(route, { method, body, expected: 403 });
       await request(route, { method, body, identity: 'cookie', originHeader: false, expected: 403 });
     }
@@ -214,6 +243,13 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   });
   for (const next of ['single', 'multi']) await t.test(`${next} mode calls each object endpoint over HTTP`, async () => {
     writeMode(next);
+    for (const route of ['/api/memory/tree', '/api/memory/backlog', '/api/schedules', '/api/schedules/once', '/api/schedules/once/history', '/api/schedules/preview?kind=every&value=1h', '/api/settings/pricing', '/api/settings/timezone', '/api/settings/chat']) await request(route);
+    const file = await request('/api/memory/file?path=example.md', { identity: 'cookie' });
+    assert.equal(file.text, '# Fixture memory\n');
+    await request('/api/memory/git?path=example.md', { identity: 'cookie' });
+    for (const identity of ['none', 'read']) await request('/api/memory/file?path=example.md', { method: 'PUT', body: { text: 'denied', sha256: file.sha256 }, identity, expected: identity === 'none' ? 401 : 403 });
+    await request('/api/memory/file?path=example.md', { method: 'PUT', body: { text: file.text, sha256: file.sha256 }, identity: 'cookie', originHeader: false, expected: 403 });
+    await request('/api/memory/file?path=example.md', { method: 'PUT', body: { text: file.text, sha256: file.sha256 }, identity: 'cookie' });
     const key = 'origin', encoded = encodeURIComponent(key);
     for (const route of ['/api/health', '/api/health/ready']) await request(route, { identity: 'none' });
     const instance = await request('/api/instance'); assert.equal(instance.session_mode.sessionMode, next); assert.equal(instance.resources.scope, 'container');
@@ -349,7 +385,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   });
   await t.test('chat connection overflow is an explicit HTTP error', async () => {
     const mock = t.mock.method(SseHub.prototype, 'canAddChatClient', () => false);
-    try { const value = await request('/api/stream?chat=1', { identity: 'cookie', expected: 429 }); assert.equal(value.error, 'chat_connection_limit'); }
+    try { const value = await request('/api/stream?chat=1', { identity: 'cookie', expected: 429 }); assert.equal(value.error.code, 'chat_connection_limit'); }
     finally { mock.mock.restore(); }
   });
   assert.ok(actionCalls.some(call => call.action === 'upgrade-zylos'));

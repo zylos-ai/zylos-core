@@ -41,6 +41,8 @@ import {
   modelPricesForRuntime,
   publicDir
 } from './lib/config.js';
+import { projectEventTimestamps } from './lib/wire-time.js';
+import { isRetiredApiPath } from './lib/api-routes.js';
 import { readJsonBody, sendHtml, sendJson, sendText, serveStatic } from './lib/http.js';
 import { Store } from './lib/store.js';
 import { Sanitizer } from './lib/sanitizer.js';
@@ -445,8 +447,7 @@ function buildInstancePayload() {
     versions: Object.fromEntries(['zylos', 'claude', 'codex'].map(runtime => [runtime, runtimeVersionRecord(runtime)])),
     runtimeHealth: observed.runtimeHealth ?? null, accounts: observed.accounts ?? null,
     supervisorPaused: observed.supervisorPaused ?? null, autoRestarts: observed.autoRestarts ?? null,
-    resources, services: observed.services ?? null,
-    chat_allow_remote: config.chat?.allowRemote === true };
+    resources, services: observed.services ?? null };
 }
 
 // HTTP reads and existing coalesced SSE publications share Workbench
@@ -1082,7 +1083,7 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
-  if (pathname === '/api/workbench/memory/backlog') {
+  if (pathname === '/api/memory/backlog') {
     try { sendJson(res, 200, await memoryBacklog()); }
     catch { sendJson(res, 503, { error: 'backlog_failed' }); }
     return true;
@@ -1153,7 +1154,7 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
-  if (pathname === '/api/workbench/schedule' || pathname.startsWith('/api/workbench/schedule/')) {
+  if (pathname === '/api/schedules' || pathname.startsWith('/api/schedules/')) {
     try {
       const value = await scheduleReadResponse(scheduleReader, pathname, url.searchParams);
       if (value === undefined) return false;
@@ -1190,8 +1191,8 @@ async function handleApi(req, res, pathname, url) {
     const apiToken = req._apiToken;
     const validator = apiToken ? () => !!validateApiSession(apiToken) : null;
     sse.addClient(res, validator);
-    res.write(`event: instance\ndata: ${JSON.stringify(initialInstance)}\n\n`);
-    res.write(`event: groups\ndata: ${JSON.stringify(initialCounts)}\n\n`);
+    res.write(`event: instance\ndata: ${JSON.stringify(projectEventTimestamps('instance', initialInstance))}\n\n`);
+    res.write(`event: groups\ndata: ${JSON.stringify(projectEventTimestamps('groups', initialCounts))}\n\n`);
     return true;
   }
 
@@ -1311,7 +1312,7 @@ async function handleSettingsUpdate(req, res) {
     sendJson(res, 400, { error: 'Request body must be a JSON object' }); return;
   }
   const multiple = Object.hasOwn(body, 'runtimes');
-  const priceRuntime = activeRuntime === 'codex' ? 'codex' : 'claude';
+  if (!multiple) { sendJson(res, 400, { error: { code: 'invalid_pricing', message: 'runtimes must be an object' } }); return; }
   const errors = [];
   let updates;
   if (multiple) {
@@ -1325,7 +1326,7 @@ async function handleSettingsUpdate(req, res) {
         if (!['claude', 'codex'].includes(runtime)) errors.push(`Unknown keys not allowed: ${runtime}`);
       }
     }
-  } else updates = { [priceRuntime]: body };
+  } else updates = {};
   for (const [runtime, patch] of Object.entries(updates)) errors.push(...validateRuntimeSettings(patch, runtime));
   if (errors.length) { sendJson(res, 400, { error: errors.join('; ') }); return; }
 
@@ -1368,13 +1369,13 @@ async function handleSettingsUpdate(req, res) {
           codex: { ...(config.runtimeServiceTierModelPrices?.codex || {}), priority: patch.priorityModelPrices } };
       }
     }
-    sendJson(res, 200, multiple ? allSettingsPayload() : { ok: true, ...settingsPayload(priceRuntime) });
+    sendJson(res, 200, { ok: true, ...allSettingsPayload() });
   } catch (err) { sendJson(res, 500, { error: `Failed to save settings: ${err.message}` }); }
 }
 
 async function handleMemoryApi(req, res, pathname, url) {
   if (req.method !== 'GET' && req.method !== 'HEAD' && !(req.method === 'PUT' && pathname === '/api/memory/file')) {
-    sendText(res, 405, 'method not allowed');
+    sendJson(res, 405, { error: 'method_not_allowed' });
     return true;
   }
   try {
@@ -1446,6 +1447,7 @@ export function createServer() {
   }
 
   const server = http.createServer(async (req, res) => {
+    try {
     // Enforce at header emission so upstream Fleet headers cannot override it.
     const writeHead = res.writeHead;
     res.writeHead = function (statusCode, ...args) {
@@ -1463,6 +1465,8 @@ export function createServer() {
       return;
     }
     let pathname = url.pathname;
+    res.apiPath = pathname;
+    res.apiWrite = pathname.startsWith('/api/') && !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
 
     if (pathname === '/robots.txt') {
       sendText(res, 200, 'User-agent: *\nDisallow: /\n');
@@ -1473,10 +1477,8 @@ export function createServer() {
       return;
     }
 
-    const retired = /^\/api\/(?:state|restart-status|session-mode|instance-status|system|summary|communication|timeline|metrics(?:\/.*)?|actions(?:\/.*)?|agent\/name)$/.test(pathname) ||
-      /^\/api\/workbench\/(?:groups(?:\/.*)?|activity|usage|host|name-prompt|runtime-overrides|pricing)$/.test(pathname);
-    if (retired && pathname !== '/api/actions/restart-timezone-services') { sendJson(res, 404, { error: 'not_found' }); return; }
-    if ((pathname.startsWith('/api/instance/') || pathname.startsWith('/api/groups/')) && !['GET', 'HEAD'].includes(req.method)) {
+    if (isRetiredApiPath(pathname)) { sendJson(res, 404, { error: 'not_found' }); return; }
+    if ((pathname.startsWith('/api/') || pathname.startsWith('/fleet/')) && pathname !== '/api/auth/token' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       const context = auth.resolveAuthContext(req);
       if (auth.enabled && context?.scope !== 'admin') { sendJson(res, 403, { error: 'insufficient_scope', required: 'admin' }); return; }
       if (context?.kind === 'cookie' && !isSameOriginRequest(req)) { sendJson(res, 403, { error: 'same_origin_required' }); return; }
@@ -1542,19 +1544,18 @@ export function createServer() {
         if (!action) { sendJson(res, 400, { ok: false, error: { code: 'INVALID_DEFAULT', message: 'Choose model, effort, threshold or session-hot-ttl' } }); return; }
         const result = await handleAction(action, body, { ...loadZylosConfig(config.zylosDir), zylosDir: config.zylosDir });
         if (result.ok && ['upgrade-cc', 'upgrade-zylos'].includes(action)) eventLoopMonitor.runTask('installed-versions.refresh', refreshInstalledVersions);
-        sendJson(res, result.ok ? 200 : result.status ?? 400, result);
+        sendJson(res, result.status ?? 200, result);
         if (result.ok) scheduleFleetStateBroadcast();
       } catch (error) { workbenchFailure(res, error); }
       return;
     }
 
-    if (pathname === '/api/settings' && req.method === 'GET') {
-      if (url.searchParams.get('all') !== '1') { sendJson(res, 404, { error: 'not_found' }); return; }
+    if (pathname === '/api/settings/pricing' && req.method === 'GET') {
       sendJson(res, 200, allSettingsPayload());
       return;
     }
 
-    if (pathname === '/api/settings' && req.method === 'PUT') {
+    if (pathname === '/api/settings/pricing' && req.method === 'PUT') {
       await handleSettingsUpdate(req, res);
       return;
     }
@@ -1619,12 +1620,12 @@ export function createServer() {
       return;
     }
 
-    if ((pathname === '/api/workbench/schedule' || pathname.startsWith('/api/workbench/schedule/')) &&
+    if ((pathname === '/api/schedules' || pathname.startsWith('/api/schedules/')) &&
       ['POST', 'PUT', 'DELETE'].includes(req.method)) {
       try {
         const outcome = await scheduleWriter.write(req.method, pathname, () => readJsonBody(req, 64 * 1024));
         if (outcome) sendJson(res, outcome.status, outcome.body);
-        else sendText(res, 405, 'method not allowed');
+        else sendJson(res, 405, { error: 'method_not_allowed' });
       } catch (error) {
         if ((error.status === 400 && error.message === 'invalid_json') ||
           (error.status === 413 && error.message === 'payload_too_large')) {
@@ -1667,7 +1668,7 @@ export function createServer() {
     }
 
     if (req.method !== 'GET' && req.method !== 'HEAD') {
-      sendText(res, 405, 'method not allowed');
+      sendJson(res, pathname.startsWith('/api/') ? 404 : 405, { error: pathname.startsWith('/api/') ? 'not_found' : 'method_not_allowed' });
       return;
     }
 
@@ -1686,6 +1687,10 @@ export function createServer() {
 
     if (!serveStatic(req, res, rootDir)) {
       sendText(res, 404, 'not found');
+    }
+    } catch (error) {
+      if (!res.headersSent) workbenchFailure(res, error);
+      else if (!res.writableEnded) res.end();
     }
   });
   const collect = () => {

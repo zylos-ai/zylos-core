@@ -1,3 +1,4 @@
+import { instantMs } from './api-time.js';
 import { countLabel } from '../count-label.js';
 import { chatKind, element, fallbackName, icon, lastReceived, platformOf, runtimeName } from './plain-text.js';
 import { toolLabel } from './view-mode.js';
@@ -29,7 +30,7 @@ export function shortDuration(seconds) {
 /** Shared sampled-status annotation for the board, detail and settings. */
 export function statusAnnotation(row, { t = key => key, now = Date.now() } = {}) {
   const state = row.state ?? {};
-  const at = state.sampledAt;
+  const at = instantMs(state.sampledAt);
   if (!Number.isFinite(at)) return { age: '', title: '' };
   const seconds = Math.max(0, Math.floor((now - at) / 1000));
   const unit = seconds < 3600 ? 'minutes' : seconds < 86400 ? 'hours' : 'days';
