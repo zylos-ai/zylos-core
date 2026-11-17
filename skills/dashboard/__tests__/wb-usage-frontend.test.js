@@ -120,6 +120,22 @@ test('usage plain view shows costs and signed messages with runtime stacks and t
   assert.ok(f.root.textContent.includes('Claude $2.00 · Codex $3.00'));
   view.destroy(); assert.equal(f.destroyed(),2);
 });
+for (const locale of ['en', 'zh']) test(`the cost total names the part no group owns as Other, $0 included, in ${locale}`, () => {
+  const translations = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
+  const t = (key, params = {}) => Object.entries(params).reduce((text, [name, v]) => text.replaceAll(`{${name}}`, v), translations[key] ?? key);
+  const otherLine = totals => {
+    const f = fixture(); const view = renderUsage(f.root, { ...value, totals: { ...value.totals, ...totals } }, { ...f, t });
+    const cost = allNodes(f.root).find(node => node.classList.contains('wb-usage-total'));
+    const lines = allNodes(cost).filter(node => node.classList.contains('wb-usage-other')).map(node => node.textContent);
+    view.destroy();
+    return lines;
+  };
+  assert.deepEqual(otherLine({ otherCost: 1.5 }), [t('wb.usage.otherCost', { amount: '$1.50' })]);
+  assert.match(otherLine({ otherCost: 1.5 })[0], locale === 'zh' ? /^其中「其他」\$1\.50$/ : /^Including Other \$1\.50$/);
+  assert.deepEqual(otherLine({ otherCost: 0 }), [t('wb.usage.otherCost', { amount: '$0.0000' })], 'zero is still shown');
+  // A fleet member on an older version reports no such field: no line rather than a made-up $0.
+  assert.deepEqual(otherLine({}), []);
+});
 test('technical usage adds tokens rotations tools and output token projects without quotas', () => {
   const f=fixture(); renderUsage(f.root,value,{...f,level:'technical'});
   // Tools and projects are ranked bar lists, so only cost, messages, tokens and rotations are charts.

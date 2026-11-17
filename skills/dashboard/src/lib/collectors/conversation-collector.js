@@ -132,7 +132,7 @@ export class ConversationCollector {
         sessionId: mapping.session_id, group: mapping.session_group, runId: mapping.run_id,
         agentId: mapping.parent_path ? path.basename(file, '.jsonl').replace(/^agent-/, '') : null,
         usageOnly: Boolean(mapping.parent_path) || childTranscript(mapping) || !originCurrent && !groupMainTranscript(mapping),
-        origin: originCurrent,
+        origin: originCurrent, child: childTranscript(mapping),
         });
         messages += this._lastFileMessages;
         return { written, byteOffset: this._offsets.get(file) };
@@ -159,7 +159,7 @@ export class ConversationCollector {
     }).immediate();
   }
 
-  _collectCurrentFile(jsonlPath, { sessionId = null, agentId = null, usageOnly = false, group = null, runId = null, origin = true } = {}) {
+  _collectCurrentFile(jsonlPath, { sessionId = null, agentId = null, usageOnly = false, group = null, runId = null, origin = true, child = false } = {}) {
     this._lastFileMessages = 0;
     const startOffset = this._offsets.get(jsonlPath) || 0;
 
@@ -251,7 +251,7 @@ export class ConversationCollector {
         const speed = usage.speed || 'standard';
         usageWritten += this._ingestUsage(
           usage, model, rowSessionId, timestamp, uuid, speed, projects,
-          this._requestKeyFor(msg), agentId, group, runId
+          this._requestKeyFor(msg), agentId, group, runId, child
         );
       }
 
@@ -341,7 +341,7 @@ export class ConversationCollector {
     }
   }
 
-  _ingestUsage(usage, model, sessionId, timestamp, uuid, speed, projects = [], requestKey = null, agentId = null, group = null, runId = null) {
+  _ingestUsage(usage, model, sessionId, timestamp, uuid, speed, projects = [], requestKey = null, agentId = null, group = null, runId = null, child = false) {
     const inputTokens = usage.input_tokens || 0;
     const outputTokens = usage.output_tokens || 0;
     const cacheRead = usage.cache_read_input_tokens || 0;
@@ -387,6 +387,8 @@ export class ConversationCollector {
       uuid
     };
     dims.run_id = runId;
+    // A child runtime's sample keeps that fact after its transcript registration is pruned.
+    if (child) dims.child = true;
     if (agentId) dims.agent_id = agentId;
     if (projects.length > 0) dims.projects = projects;
 

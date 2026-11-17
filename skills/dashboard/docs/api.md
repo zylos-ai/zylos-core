@@ -518,7 +518,7 @@ Example: `DELETE /api/groups/telegram%3Aexample` with `{"confirmed":true,"operat
 
 ### Usage Summary Fields
 
-Instance and group summaries share the following schema. Tokens include input and output; input includes cached input. Cache rate is weighted by input volume, not an average of request percentages. Historical records without a group belong to Origin. Costs sum stored priced requests; consult pricing results for models whose cost could not be priced. After a switch from multi-session to single-session mode, historical usage belonging to other groups remains in the instance summary and is not reassigned to Origin; Origin usage can therefore be smaller than the instance summary.
+Instance and group summaries share the following schema. Tokens include input and output; input includes cached input. Cache rate is weighted by input volume, not an average of request percentages. Historical records without a group belong to Origin, except Other: samples of runtimes zylos starts itself (no group, no run, marked as a child) belong to no group: they count in instance-wide totals (the instance summary and `/api/usage/series`, whose `totals.otherCost` names them), never in a group summary. Costs sum stored priced requests; consult pricing results for models whose cost could not be priced. After a switch from multi-session to single-session mode, historical usage belonging to other groups remains in the instance summary and is not reassigned to Origin; Origin usage can therefore be smaller than the instance summary.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -547,7 +547,7 @@ Returns `range:string`, `since:string`, `until:string`, `tz:string`, `tzFallback
 
 | Field | Type | Meaning |
 |---|---|---|
-| `totals` | object | `tokens`, `inputTokens`, `cacheReadTokens`, `cacheHitRate`, `cost`, `costByRuntime`, `messages:{in,out}`, `rotations`, `tools`; unavailable items nullable |
+| `totals` | object | `tokens`, `inputTokens`, `cacheReadTokens`, `cacheHitRate`, `cost`, `costByRuntime`, `otherCost`, `messages:{in,out}`, `rotations`, `tools`; unavailable items nullable. `otherCost` is the part of `cost` spent by runtimes zylos starts itself (Other), counted in no group |
 | `costByRuntime`, `tokensByRuntime` | `{runtime:string,at:string,value:number}[]` | Bucketed runtime cost/token series |
 | `cache` | `{at:string,inputTokens:number,cacheReadTokens:number,value:number\|null}[]` | Bucket-aligned weighted cache rates |
 | `messages` | `{at:string,in:number\|null,out:number\|null}[]` | Inbound/outbound message buckets |

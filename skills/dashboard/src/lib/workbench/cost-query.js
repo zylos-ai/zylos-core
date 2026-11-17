@@ -72,9 +72,24 @@ export function usageBucketSql(intervals, column = 'timestamp') {
   return { sql: intervals.length ? branch(0, intervals.length - 1) : 'NULL', params };
 }
 
-export function costRows(store, { since, until, bucket = 'day', tz = 'UTC', byModel = false, intervals, group }) {
+// "Other": a runtime zylos starts itself (an upgrade evaluation, doctor's fixer,
+// an auth check) runs without a session group or run. Its samples belong to no
+// group, so they count in instance-wide totals only. A child an agent starts
+// keeps its run (and its group in multi-session mode) and stays in that group.
+// Null-safe comparisons only: the negated form must keep every other row.
+const OTHER_USAGE_SQL = "(COALESCE(session_group, '') = '' AND json_extract(dimensions, '$.child') IS 1"
+  + " AND json_extract(dimensions, '$.run_id') IS NULL)";
+
+// No scope reads the whole instance; `group` reads one group's view, where
+// groupless rows other than "Other" stay with Origin; `other` reads only "Other".
+function scopeFilter(group, other) {
+  if (other) return ` AND ${OTHER_USAGE_SQL}`;
+  return group === undefined ? '' : ` AND COALESCE(NULLIF(session_group, ''), 'origin') = @group AND NOT ${OTHER_USAGE_SQL}`;
+}
+
+export function costRows(store, { since, until, bucket = 'day', tz = 'UTC', byModel = false, intervals, group, other = false }) {
   const groups = usageBucketSql(bucket === 'total' ? [] : (intervals ?? usageIntervals({ since, until, bucket, tz })));
-  const filter = group === undefined ? '' : " AND COALESCE(NULLIF(session_group, ''), 'origin') = @group";
+  const filter = scopeFilter(group, other);
   return store.db.prepare(`
     SELECT runtime, ${groups.sql} AS at,
       ${byModel ? 'model,' : ''} SUM(cost) AS value
@@ -86,14 +101,14 @@ export function costRows(store, { since, until, bucket = 'day', tz = 'UTC', byMo
       WHERE metric_name = 'usage_event' AND json_extract(dimensions, '$.cost') IS NOT NULL
         AND timestamp BETWEEN @since AND @until${filter}
     ) GROUP BY runtime, at${byModel ? ', model' : ''} ORDER BY at, runtime${byModel ? ', model' : ''}
-  `).all({ since, until, ...groups.params, ...(group === undefined ? {} : { group }) });
+  `).all({ since, until, ...groups.params, ...(group === undefined || other ? {} : { group }) });
 }
 
 // Both stored forms represent request usage. Legacy rows have no group and
 // belong to Origin; token counts come from dimensions, never cache percentages.
 export function usageTokenRows(store, { since, until, bucket = 'day', tz = 'UTC', intervals, group }) {
   const groups = usageBucketSql(bucket === 'total' ? [] : (intervals ?? usageIntervals({ since, until, bucket, tz })));
-  const filter = group === undefined ? '' : " AND COALESCE(NULLIF(session_group, ''), 'origin') = @group";
+  const filter = scopeFilter(group, false);
   return store.db.prepare(`
     SELECT runtime, ${groups.sql} AS at,
       SUM(CASE WHEN metric_name = 'api_request_tokens'
