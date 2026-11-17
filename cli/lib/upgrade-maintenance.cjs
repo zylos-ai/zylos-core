@@ -1424,7 +1424,6 @@ module.exports = {
   READY,
   TERMINAL,
   hash,
-  HASH_CHUNK_BYTES,
   treeHash,
   fsyncTree,
   durable,

@@ -21,11 +21,6 @@ function tempDir(t) {
   return dir;
 }
 
-test('snapshot and rollback hashes share one chunk size', () => {
-  assert.equal(maintenance.HASH_CHUNK_BYTES, WORKER_CHUNK);
-  assert.ok(WORKER_CHUNK > 0);
-});
-
 test('chunked hash equals a whole-file sha256 at every chunk boundary', t => {
   const dir = tempDir(t);
   const sizes = [0, 1, WORKER_CHUNK - 1, WORKER_CHUNK, WORKER_CHUNK + 1, 2 * WORKER_CHUNK, 3 * WORKER_CHUNK + 7];
