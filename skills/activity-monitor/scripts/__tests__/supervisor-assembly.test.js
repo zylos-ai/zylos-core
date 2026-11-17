@@ -774,3 +774,121 @@ test('publication requires activity sampled for the current round even with a ma
   await f.supervisor.loop.deps.probeAndPublish(scene,context);
   assert.equal(fs.readFileSync(file,'utf8'),'prior state');
 });
+
+// Boundary: real supervisor admission -> activity facts -> shared nudge helper
+// -> control insertion. Scenes/DB/clock are private injected objects; no native
+// process, network or service is started. Run for quiet-turn/admission changes;
+// unrelated UI work may skip. The official runner isolates all runtime paths.
+for(const runtime of ['claude','codex'])test(`assembled ${runtime} quiet-turn interruption queues one Escape before allowing idle`,async t=>{
+ let now=1000;const controls=[];
+ const f=fixture(t,{now:()=>now,database:{insertControl:(content,options)=>{controls.push({content,...options});return {id:controls.length};}}});
+ const scene={sessionGroup:'a',runDir:f.root,runId:'r',sessionId:'s',runtime,createdAt:0,present:true,ready:true};
+ f.scenes.readIdentity=async()=>scene;
+ f.scenes.bindTarget=async()=>({expectedRunId:'r',tmuxTarget:{serverGeneration:'1:1',sessionId:'$1',paneId:'%1'}});
+ const file=path.join(f.root,'events.jsonl');
+ fs.writeFileSync(file,JSON.stringify({run_id:'r',session_id:'s',runtime,ts:1000,event:'prompt'})+'\n');
+ now=1000+20*60*1000-1;
+ assert.equal(await f.supervisor.interruptQuietTurn(scene),false);assert.equal(controls.length,0);
+ assert.equal(f.supervisor.readActivity(scene).state,'busy');
+ now++;
+ assert.equal(await f.supervisor.interruptQuietTurn(scene),true);
+ assert.equal(controls.length,1);assert.equal(controls[0].content,'[KEYSTROKE]Escape');
+ assert.equal(controls[0].priority,-1);assert.equal(controls[0].bypassState,true);assert.equal(controls[0].appendAckSuffix,false);
+ assert.equal(controls[0].targetBinding.expectedSessionId,'s');
+ const idle=f.supervisor.readActivity(scene);
+ assert.equal(idle.state,'idle');assert.equal(idle.turnOpen,false);assert.equal(idle.lastResponseAt,null);assert.equal(idle.lastActivityAt,1000);
+ for(let tick=0;tick<3;tick++){now+=1200000;assert.equal(await f.supervisor.interruptQuietTurn(scene),false);}
+ assert.equal(controls.length,1);
+ fs.appendFileSync(file,JSON.stringify({run_id:'r',session_id:'s',runtime,ts:now+1,event:'prompt'})+'\n');
+ now+=1200001;
+ assert.equal(await f.supervisor.interruptQuietTurn(scene),true);assert.equal(controls.length,2);
+});
+
+for(const outcome of ['throw','invalid-id','activity','replacement'])test(`assembled quiet-turn ${outcome} cannot close new work or repeat an unknown Escape`,async t=>{
+ let now=1201000,attempts=0;let f;
+ const file=()=>path.join(f.root,'events.jsonl');
+ f=fixture(t,{now:()=>now,database:{insertControl:()=>{
+  attempts++;
+  if(outcome==='throw')throw new Error('uncertain queue result');
+  if(outcome==='invalid-id')return {id:0};
+  if(outcome==='activity')fs.appendFileSync(file(),JSON.stringify({run_id:'r',session_id:'s',runtime:'claude',ts:now,event:'prompt'})+'\n');
+  return {id:1};
+ }}});
+ const scene={sessionGroup:'a',runDir:f.root,runId:'r',sessionId:'s',runtime:'claude',createdAt:0,present:true,ready:true};
+ f.scenes.readIdentity=async()=>outcome==='replacement'?{...scene,sessionId:'new'}:scene;
+ f.scenes.bindTarget=async()=>({expectedRunId:'r',tmuxTarget:{serverGeneration:'1:1',sessionId:'$1',paneId:'%1'}});
+ fs.writeFileSync(file(),JSON.stringify({run_id:'r',session_id:'s',runtime:'claude',ts:1000,event:'prompt'})+'\n');
+ if(outcome==='throw')await assert.rejects(f.supervisor.interruptQuietTurn(scene),/uncertain queue/);
+ else assert.equal(await f.supervisor.interruptQuietTurn(scene),false);
+ assert.equal(f.supervisor.readActivity(scene).state,'busy');
+ assert.equal(await f.supervisor.interruptQuietTurn(scene),false);
+ assert.equal(attempts,outcome==='replacement'?0:1);
+});
+
+for(const outcome of ['pending','done','unknown'])test(`quiet-turn ${outcome} admission is one-shot across supervisor restart`,async t=>{
+ let now=1201000,attempts=0,fail=outcome==='unknown';const controls=[];
+ const f=fixture(t,{now:()=>now,database:{insertControl:(content,options)=>{
+  attempts++;
+  if(fail)throw new Error('uncertain insertion');
+  const row={id:controls.length+1,status:outcome==='done'?'done':'pending',content,...options};controls.push(row);return row;
+ },getControlById:id=>controls.find(row=>row.id===id)}});
+ const scene={sessionGroup:'a',runDir:f.root,runId:'r',sessionId:'s',runtime:'claude',createdAt:0,present:true,ready:true};
+ f.scenes.readIdentity=async()=>scene;
+ f.scenes.bindTarget=async()=>({expectedRunId:'r',tmuxTarget:{serverGeneration:'1:1',sessionId:'$1',paneId:'%1'}});
+ const file=path.join(f.root,'events.jsonl');
+ const prompt=ts=>JSON.stringify({run_id:'r',session_id:'s',runtime:'claude',ts,event:'prompt'})+'\n';
+ fs.writeFileSync(file,prompt(1000));
+ if(fail)await assert.rejects(f.supervisor.interruptQuietTurn(scene),/uncertain insertion/);
+ else assert.equal(await f.supervisor.interruptQuietTurn(scene),true);
+ await f.supervisor.stop();
+ const restarted=createSupervisor({db:f.db,scenes:f.scenes,zylosDir:f.root,env:{ZYLOS_DIR:f.root},
+  readConfiguration:async()=>({mode:'multi',runtime:'claude',capacity:2}),readMode:()=>({mode:'multi'}),
+  resolveTargetRuntime:async()=> 'claude',requestStore:new RestartRequestStore({file:f.file}),
+  now:()=>now,loopOptions:{schedule:()=>1,cancel:()=>{}}});
+ t.after(()=>restarted.stop());
+ const recovered=restarted.readActivity(scene);
+ assert.equal(recovered.state,fail?'busy':'idle');assert.equal(recovered.lastActivityAt,1000);assert.equal(recovered.lastResponseAt,null);
+ for(let tick=0;tick<3;tick++){now+=1200000;assert.equal(await restarted.interruptQuietTurn(scene),false);}
+ assert.equal(attempts,1);
+ const facts=fs.readFileSync(file,'utf8').trim().split('\n').map(line=>JSON.parse(line));
+ assert.equal(facts.filter(row=>row.event==='quiet_turn_interrupt_attempt').length,1);
+ assert.equal(facts.filter(row=>row.event==='quiet_turn_interrupt').length,fail?0:1);
+ fail=false;
+ fs.appendFileSync(file,prompt(now+1));now+=1200001;
+ assert.equal(await restarted.interruptQuietTurn(scene),true);assert.equal(attempts,2);
+});
+
+for(const artifact of ['transcript-result','escape-artifact'])test(`quiet-turn ${artifact} restores one admitted close after supervisor restart`,async t=>{
+ let now=1202000,attempts=0;let transcript;
+ const f=fixture(t,{now:()=>now,database:{insertControl:()=>{
+  attempts++;
+  if(artifact==='escape-artifact'){
+   fs.appendFileSync(transcript,JSON.stringify({type:'system',sessionId:'s',timestamp:new Date(now).toISOString(),message:'interrupted'})+'\n');
+   fs.utimesSync(transcript,now/1000,now/1000);
+  }
+  return {id:attempts};
+ }}});
+ transcript=path.join(f.root,'transcript.jsonl');
+ const row=(event,ts,extra={})=>({run_id:'r',session_id:'s',runtime:'claude',event,ts,...extra});
+ const rows=[row('session_start',500,{transcript_path:transcript}),row('prompt',1000)];
+ const result=artifact==='transcript-result'?[{type:'user',sessionId:'s',timestamp:new Date(2000).toISOString(),
+  message:{role:'user',content:[{type:'tool_result',tool_use_id:'tool',content:'completed'}]}}]:[];
+ if(artifact==='transcript-result')rows.push(row('pre_tool',1500,{tool_use_id:'tool',tool:'Bash'}));
+ fs.writeFileSync(transcript,result.map(value=>JSON.stringify(value)+'\n').join(''));fs.utimesSync(transcript,2,2);
+ fs.writeFileSync(path.join(f.root,'events.jsonl'),rows.map(value=>JSON.stringify(value)+'\n').join(''));
+ const scene={sessionGroup:'a',runDir:f.root,runId:'r',sessionId:'s',runtime:'claude',createdAt:0,present:true,ready:true};
+ f.scenes.readIdentity=async()=>scene;
+ f.scenes.bindTarget=async()=>({expectedRunId:'r',tmuxTarget:{serverGeneration:'1:1',sessionId:'$1',paneId:'%1'}});
+ assert.equal(await f.supervisor.interruptQuietTurn(scene),true);
+ now+=3000;assert.equal(f.supervisor.readActivity(scene).state,'idle');
+ await f.supervisor.stop();
+ const restarted=createSupervisor({db:f.db,scenes:f.scenes,zylosDir:f.root,env:{ZYLOS_DIR:f.root},
+  readConfiguration:async()=>({mode:'multi',runtime:'claude',capacity:2}),readMode:()=>({mode:'multi'}),
+  resolveTargetRuntime:async()=> 'claude',requestStore:new RestartRequestStore({file:f.file}),
+  now:()=>now,loopOptions:{schedule:()=>1,cancel:()=>{}}});
+ t.after(()=>restarted.stop());
+ const recovered=restarted.readActivity(scene);
+ assert.equal(recovered.state,'idle');assert.equal(recovered.turnOpen,false);assert.equal(recovered.tools.length,0);
+ assert.equal(recovered.lastResponseAt,artifact==='transcript-result'?1500:null);
+ now+=2400000;assert.equal(await restarted.interruptQuietTurn(scene),false);assert.equal(attempts,1);
+});

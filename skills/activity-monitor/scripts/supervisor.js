@@ -106,6 +106,46 @@ export function createSupervisor(deps) {
     if(!await validate(current))return false;
     return await action(current) !== false;
   });
+  const interruptQuietTurn=async scene=>{
+    const sampled=readActivity(scene);
+    if(!sampled.quietTurnDue || observer.noResponseActive(scene))return false;
+    let interrupted=false;
+    await guardedAction(scene,async current=>{
+      if(current.sessionId!==scene.sessionId || observer.noResponseActive(current))return false;
+      const mode=(await readMode()).mode;
+      const targetBinding={...await scenes.bindTarget(current),expectedSessionId:current.sessionId};
+      if(!await observer.canAct(current,{requireReady:true,requireOpen:true}) || observer.noResponseActive(current))return false;
+      const fresh=readActivity(current),activity=activities.get(current.sessionGroup);
+      if(fresh.lastActivityAt!==sampled.lastActivityAt || !fresh.quietTurnDue ||
+         !activity.claimQuietTurn(sampled.lastActivityAt,now()))return false;
+      const interruptFact=(event,extra={})=>appendEvent(path.join(activity.runDir,'events.jsonl'),{
+        v:1,ts:now(),run_id:current.runId,session_id:current.sessionId,runtime:current.runtime,
+        session_group:current.sessionGroup,event,last_activity_at:sampled.lastActivityAt,
+        turn_started_at:sampled.turnStartedAt,last_native_activity_at:fresh.lastNativeActivityAt,
+        last_response_at:fresh.lastResponseAt,...extra});
+      // Record the one-shot attempt before an insertion whose outcome can be unknown.
+      interruptFact('quiet_turn_interrupt_attempt');
+      const result=await nudgeSession({continueAfterEscape:false,enqueue:async content=>{
+        const enqueuedAt=now();
+        // Escape precedes any pending idle-only control, including priority zero.
+        // The existing per-group C4 lane still owns every terminal write.
+        const control=await db.insertControl(content,{sessionGroup:mode==='single'?null:current.sessionGroup,
+          targetBinding,priority:-1,bypassState:true,appendAckSuffix:false});
+        return {ok:Number.isSafeInteger(control?.id) && control.id>0,controlId:control?.id ?? null,enqueuedAt};
+      }});
+      if(!result.ok)return false;
+      // Queue admission, rather than a runtime-stop confirmation, permits idle.
+      // Re-read facts so a new prompt/tool arriving during insertion stays busy.
+      const latest=readActivity(current);
+      if(latest.turnStartedAt===sampled.turnStartedAt && latest.lastNativeActivityAt===fresh.lastNativeActivityAt &&
+         latest.lastResponseAt===fresh.lastResponseAt && latest.turnOpen && !latest.transcriptPending && latest.tools.length===0) {
+        interruptFact('quiet_turn_interrupt',{control_id:result.controlId});
+        interrupted=readActivity(current).turnOpen===false;
+      }
+      return interrupted;
+    },{requireOpen:true});
+    return interrupted;
+  };
   const checkAuth=(runtime,{background=false}={})=>{
     if(stopping)return Promise.resolve({status:'uncertain',reason:'supervisor_stopping'});
     // Router, pane checks and pending demand share one actual adapter call.
@@ -222,8 +262,15 @@ export function createSupervisor(deps) {
         await deps.consumeHealthEvents?.(scene,health);
         if(!matches(await scenes.readIdentity(scene.sessionGroup)))return;
       }
+      const observeBeforePublication=activity.quietTurnDue;
+      if(observeBeforePublication) {
+        // Existing no-response recovery gets first ownership at its earlier deadline.
+        await observer.observeScene(scene);
+        if(scene.present===false)return;
+        if(await interruptQuietTurn(scene))activity=readActivity(scene);
+      }
       publishSessionStatus({statusFile:path.join(scene.runDir,'agent-status.json'),scene,activity,health:health.store(scene.runtime).read(),proc:scene.proc,now:now()});
-      await observer.observeScene(scene);
+      if(!observeBeforePublication)await observer.observeScene(scene);
     },
     writeMetricsAndMaintain:async context=>{
       const current=context.scenes.filter(scene=>scene.present!==false);
@@ -336,7 +383,7 @@ export function createSupervisor(deps) {
   const drainHealthWrites=async()=>{
     while(health.queues.size)await Promise.allSettled([...health.queues.values()]);
   };
-  return {loop,health,observer,router,admission,lifecycle,modeSwitch,connectionHandler,readActivity,drainHealthWrites,diagnostic,
+  return {loop,health,observer,router,admission,lifecycle,modeSwitch,connectionHandler,readActivity,interruptQuietTurn,drainHealthWrites,diagnostic,
     stop(){
       if(stopPromise)return stopPromise;
       stopping=true;admission.closeEntry();

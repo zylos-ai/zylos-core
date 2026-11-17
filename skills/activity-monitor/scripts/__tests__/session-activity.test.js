@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {SessionActivity,TRANSCRIPT_READ_BUDGET_BYTES,TRANSCRIPT_LINE_LIMIT_BYTES,RECENT_TOOL_RESULTS_LIMIT} from '../session-activity.js';
+import {SessionActivity,TRANSCRIPT_READ_BUDGET_BYTES,TRANSCRIPT_LINE_LIMIT_BYTES,RECENT_TOOL_RESULTS_LIMIT,OPEN_TURN_INACTIVITY_TIMEOUT_MS} from '../session-activity.js';
 import {handleHookActivity} from '../hook-activity.js';
 import {publishContextSample} from '../context-monitor.js';
 function fixture(t,runtime='claude') {
@@ -222,18 +222,62 @@ test('unknown recovered busy start uses run start and transcript-only activity u
  assert.equal(activity.read(8500).busySince,6000);
 });
 
-for(const runtime of ['claude','codex'])test(`quiet samples preserve an open ${runtime} turn until its closing hook`,t=>{
+for(const runtime of ['claude','codex'])test(`quiet samples keep an open ${runtime} turn busy until its closing hook`,t=>{
  const {activity,row}=fixture(t,runtime);
  activity.consume([row('prompt',{ts:6000}),row('pre_tool',{ts:6500,tool_use_id:'first'}),row('post_tool',{ts:7000,tool_use_id:'first'})]);
  assert.equal(activity.read(7500).busySince,6000);
  const quiet=activity.read(11000);
- assert.equal(quiet.state,'idle');assert.equal(quiet.turnOpen,true);assert.equal(quiet.busySince,6000);
+ assert.equal(quiet.state,'busy');assert.equal(quiet.turnOpen,true);assert.equal(quiet.busySince,6000);
+ assert.equal(quiet.idleSince,null);assert.equal(quiet.lastActivityAt,7000);assert.equal(quiet.lastResponseAt,6500);
  activity.consume([row('pre_tool',{ts:12000,tool_use_id:'request'}),row('post_tool',{ts:12600,tool_use_id:'request'})]);
  const reply=activity.read(18800);
- assert.equal(reply.state,'idle');assert.equal(reply.turnOpen,true);assert.equal(reply.busySince,6000);
+ assert.equal(reply.state,'busy');assert.equal(reply.turnOpen,true);assert.equal(reply.busySince,6000);
+ assert.equal(reply.tools.length,0);assert.equal(reply.idleSince,null);assert.equal(reply.lastResponseAt,12000);
  activity.consume([row(runtime==='claude'?'idle':'stop',{ts:19000})]);
  const closed=activity.read(23000);
- assert.equal(closed.turnOpen,false);assert.equal(closed.busySince,null);
+ assert.equal(closed.state,'idle');assert.equal(closed.turnOpen,false);assert.equal(closed.busySince,null);
+});
+
+for(const runtime of ['claude','codex'])test(`${runtime} model wait remains busy without manufacturing activity or response evidence`,t=>{
+ const {activity,row}=fixture(t,runtime);
+ activity.consume([row('prompt',{ts:6000})]);
+ for(const now of [9001,66000,305999]){
+  const waiting=activity.read(now);
+  assert.equal(waiting.state,'busy');assert.equal(waiting.turnOpen,true);
+  assert.equal(waiting.busySince,6000);assert.equal(waiting.idleSince,null);
+  assert.equal(waiting.lastActivityAt,6000);assert.equal(waiting.lastResponseAt,null);
+  assert.deepEqual(waiting.tools,[]);assert.equal(waiting.transcriptPending,false);
+ }
+ activity.consume([row('stop',{ts:307000})]);
+ assert.equal(activity.read(309999).state,'busy','closing hook retains the normal recent-activity window');
+ const closed=activity.read(310000);
+ assert.equal(closed.state,'idle');assert.equal(closed.turnOpen,false);assert.equal(closed.busySince,null);
+ assert.equal(closed.idleSince,310000);assert.equal(closed.lastResponseAt,null);
+});
+
+for(const runtime of ['claude','codex'])test(`${runtime} restart recovers quiet API wait and accepts only current main-agent closing hooks`,async t=>{
+ const {appendEvent,rotateEventLog}=await import('../../../../cli/lib/event-log.js');
+ for(const terminal of [false,true]){
+  const {root,activity,row}=fixture(t,runtime),log=path.join(root,'events.jsonl');
+  appendEvent(log,row('session_start',{ts:100}));
+  appendEvent(log,row('prompt',{ts:200}));appendEvent(log,row('stop',{ts:300}));
+  rotateEventLog(log,{maxBytes:0,now:1000});
+  appendEvent(log,row('prompt',{ts:6000}));
+  appendEvent(log,row('stop',{ts:7000,agent_id:'child'}));
+  appendEvent(log,row('stop',{ts:7100,session_id:'other'}));
+  if(terminal)appendEvent(log,row('stop',{ts:8000}));
+  const recovered=activity.read(66000);
+  assert.equal(recovered.state,terminal?'idle':'busy');assert.equal(recovered.turnOpen,!terminal);
+  assert.equal(recovered.busySince,terminal?null:6000);assert.equal(recovered.lastResponseAt,null);
+  assert.equal(recovered.lastActivityAt,terminal?8000:6000);
+  assert.deepEqual(recovered.tools,[]);
+  assert.equal(activity.read(126000).state,terminal?'idle':'busy');
+  if(!terminal){
+   appendEvent(log,row(runtime==='claude'?'idle':'stop',{ts:127000}));
+   const closed=activity.read(130000);
+   assert.equal(closed.state,'idle');assert.equal(closed.turnOpen,false);assert.equal(closed.busySince,null);
+  }
+ }
 });
 
 test('only AI work advances response time; Escape and continue artifacts do not',t=>{
@@ -565,4 +609,114 @@ test('AGY no-expiry status still rejects foreign identity, future and pre-activi
    zylos:{v:1,runId:'r',capturedAt:1000},...patch}));
   assert.equal(activity.read(72000).state,'busy',JSON.stringify(patch));
  }
+});
+
+// Boundary: inactivity eligibility derives from real hook/transcript files, with an
+// injected observation clock. Run for turn/timeout/transcript changes; skip UI.
+// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; no processes started.
+for(const runtime of ['claude','codex'])test(`${runtime} quiet turn waits twenty minutes and closes only after interrupt admission`,t=>{
+ const {activity,row}=fixture(t,runtime);
+ activity.consume([row('prompt',{ts:6000})]);
+ const deadline=6000+OPEN_TURN_INACTIVITY_TIMEOUT_MS;
+ assert.equal(activity.read(deadline-1).state,'busy');
+ assert.equal(activity.read(deadline).state,'busy');assert.equal(activity.read(deadline).quietTurnDue,true);
+ assert.equal(activity.claimQuietTurn(6000,deadline),true);
+ assert.equal(activity.claimQuietTurn(6000,deadline),false);
+ activity.consume([row('quiet_turn_interrupt',{ts:deadline,turn_started_at:6000,last_activity_at:6000,
+  last_native_activity_at:6000,last_response_at:null,control_id:7})]);
+ const expired=activity.read(deadline);
+ assert.equal(expired.state,'idle');assert.equal(expired.turnOpen,false);
+ assert.equal(expired.busySince,null);assert.equal(expired.idleSince,deadline);
+ assert.deepEqual(expired.tools,[]);assert.equal(expired.lastActivityAt,6000);
+ assert.equal(expired.lastResponseAt,null);
+ assert.equal(activity.read(deadline+10000).state,'idle');
+ activity.consume([row('pre_tool',{ts:8000,tool_use_id:'stale'})]);
+ assert.equal(activity.read(deadline+10001).state,'idle','late stale tool hook cannot resurrect expired work');
+ activity.consume([row('prompt',{ts:deadline+11000})]);
+ const next=activity.read(deadline+20000);
+ assert.equal(next.state,'busy');assert.equal(next.turnOpen,true);assert.equal(next.busySince,deadline+11000);
+});
+
+for(const runtime of ['claude','codex'])test(`${runtime} unfinished tools survive silent long turns and reader restart`,async t=>{
+ const {appendEvent}=await import('../../../../cli/lib/event-log.js');
+ const {root,activity,row}=fixture(t,runtime);
+ appendEvent(path.join(root,'events.jsonl'),row('prompt',{ts:6000}));
+ appendEvent(path.join(root,'events.jsonl'),row('pre_tool',{ts:7000,tool_use_id:'foreground',tool:'Bash'}));
+ const check=reader=>{
+  for(const now of [307000,1227000,2407000]) {
+   const observed=reader.read(now);
+   assert.equal(observed.state,'busy');assert.equal(observed.turnOpen,true);
+   assert.equal(observed.tools.length,1);assert.equal(observed.tools[0].id,'foreground');
+   assert.equal(observed.lastActivityAt,7000);assert.equal(observed.lastResponseAt,7000);
+   assert.equal(observed.quietTurnDue,false);assert.equal(reader.claimQuietTurn(7000,now),false);
+  }
+ };
+ check(activity);
+ const restarted=new SessionActivity({runDir:root,runId:'r',sessionId:'s',runtime,startedAt:100});
+ t.after(()=>restarted.close());check(restarted);
+ appendEvent(path.join(root,'events.jsonl'),row('post_tool',{ts:608000,tool_use_id:'foreground'}));
+ assert.equal(restarted.read(608000+OPEN_TURN_INACTIVITY_TIMEOUT_MS-1).state,'busy');
+ const due=restarted.read(608000+OPEN_TURN_INACTIVITY_TIMEOUT_MS);
+ assert.equal(due.state,'busy');assert.equal(due.tools.length,0);assert.equal(due.quietTurnDue,true);
+});
+
+for(const runtime of ['claude','codex'])test(`${runtime} hook and transcript activity each extend the open-turn deadline`,t=>{
+ const {root,activity,row}=fixture(t,runtime),transcript=path.join(root,'s.jsonl');
+ fs.writeFileSync(transcript,'');fs.utimesSync(transcript,0.1,0.1);
+ activity.consume([row('session_start',{transcript_path:transcript}),row('prompt',{ts:6000})]);
+ assert.equal(activity.read(305999).state,'busy');
+ activity.consume([row('post_tool',{ts:305999,tool_use_id:'done'})]);
+ assert.equal(activity.read(605998).state,'busy');
+ // Partial/unfinished native output still grows the file during streaming.
+ fs.appendFileSync(transcript,'{"streaming":');fs.utimesSync(transcript,605.998,605.998);
+ assert.equal(activity.read(605999).state,'busy');
+ assert.equal(activity.read(905997).state,'busy');
+ const due=activity.read(605998+OPEN_TURN_INACTIVITY_TIMEOUT_MS);
+ assert.equal(due.state,'busy');assert.equal(due.quietTurnDue,true);
+ assert.equal(due.lastActivityAt,605998);assert.equal(due.lastResponseAt,null);
+});
+
+for(const runtime of ['claude','codex'])test(`${runtime} restart retains the original quiet-turn deadline without declaring idle`,async t=>{
+ const {appendEvent}=await import('../../../../cli/lib/event-log.js');
+ const {root,activity,row}=fixture(t,runtime);
+ appendEvent(path.join(root,'events.jsonl'),row('prompt',{ts:6000}));
+ const due=activity.read(6000+OPEN_TURN_INACTIVITY_TIMEOUT_MS);
+ assert.equal(due.state,'busy');assert.equal(due.turnOpen,true);assert.equal(due.quietTurnDue,true);
+ assert.equal(due.lastActivityAt,6000);
+});
+
+for(const runtime of ['claude','codex'])test(`${runtime} changed native turn rejects an old quiet-turn admission`,t=>{
+ const {activity,row}=fixture(t,runtime),deadline=6000+OPEN_TURN_INACTIVITY_TIMEOUT_MS;
+ activity.consume([row('prompt',{ts:6000})]);activity.read(deadline);
+ assert.equal(activity.claimQuietTurn(6000,deadline),true);
+ activity.consume([row('prompt',{ts:deadline+1})]);
+ activity.consume([row('quiet_turn_interrupt',{ts:deadline+2,turn_started_at:6000,last_activity_at:6000,
+  last_native_activity_at:6000,last_response_at:null,control_id:7})]);
+ assert.equal(activity.read(deadline+2).state,'busy');
+ assert.equal(activity.claimQuietTurn(deadline+1,deadline+1+OPEN_TURN_INACTIVITY_TIMEOUT_MS),true);
+});
+
+for(const runtime of ['claude','codex'])test(`${runtime} recovered interrupt facts retain scope and cannot close newer native work`,async t=>{
+ const {appendEvent}=await import('../../../../cli/lib/event-log.js');
+ for(const newer of ['prompt','pre_tool']){
+  const {root,activity,row}=fixture(t,runtime),file=path.join(root,'events.jsonl');
+  appendEvent(file,row('prompt',{ts:6000}));
+  appendEvent(file,row('quiet_turn_interrupt_attempt',{ts:1206000,last_activity_at:6000,turn_started_at:6000,last_native_activity_at:6000,last_response_at:null}));
+  appendEvent(file,row(newer,{ts:1206001,tool_use_id:'new-tool'}));
+  appendEvent(file,row('quiet_turn_interrupt',{ts:1206002,last_activity_at:6000,turn_started_at:6000,last_native_activity_at:6000,last_response_at:null,control_id:7}));
+  const recovered=activity.read(1206003);
+  assert.equal(recovered.state,'busy');assert.equal(recovered.turnOpen,true);
+  assert.equal(recovered.lastActivityAt,1206001);
+  assert.equal(recovered.lastResponseAt,newer==='pre_tool'?1206001:null);
+  assert.equal(recovered.tools.length,newer==='pre_tool'?1:0);
+ }
+ const {root,activity,row}=fixture(t,runtime),file=path.join(root,'events.jsonl');
+ appendEvent(file,row('prompt',{ts:6000}));
+ for(const foreign of [{run_id:'other'},{session_id:'other'},{runtime:'other'},{agent_id:'child'}]){
+  appendEvent(file,row('quiet_turn_interrupt_attempt',{ts:1206000,last_activity_at:6000,turn_started_at:6000,last_native_activity_at:6000,last_response_at:null,...foreign}));
+  appendEvent(file,row('quiet_turn_interrupt',{ts:1206001,last_activity_at:6000,turn_started_at:6000,last_native_activity_at:6000,last_response_at:null,control_id:7,...foreign}));
+ }
+ const recovered=activity.read(1206002);
+ assert.equal(recovered.state,'busy');assert.equal(recovered.lastActivityAt,6000);assert.equal(recovered.lastResponseAt,null);
+ assert.equal(activity.claimQuietTurn(6000,1206002),true);
 });

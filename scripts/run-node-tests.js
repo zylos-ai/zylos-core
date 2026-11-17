@@ -22,6 +22,7 @@ const ROOT_NODE_TESTS = [
   'test/channel-delivery.integration.test.js',
   'test/channel-sync.integration.test.js',
   'test/self-upgrade-private-host.integration.test.js',
+  'test/require-idle-turn.integration.test.js',
   'test/single-origin-activity.integration.test.js',
   'test/dashboard-demand-poll.integration.test.js',
   'test/legacy-group-reads-browser.test.js',

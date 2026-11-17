@@ -142,7 +142,7 @@ complete native child lifecycle coverage is not available from that source.
 Capacity eviction skips even idle sessions whose latest activity is less than
 `session_evict_min_idle_seconds` ago. At the boundary they become eligible for
 the existing LRU selection; if all are too recent, new groups wait in the queue.
-This does not change the three-second busy/idle observation threshold.
+After the main turn closes, the existing three-second quiet threshold still applies.
 
 Capacity eviction (a waiting group needs a slot) and memory-pressure reclaim
 first send the same pre-reclaim check to the selected group: bound to the
@@ -346,9 +346,35 @@ pm2 list
    - Send recovery prompt via C4 after successful restart
 
 3. **Activity Detection**:
-   - Claude primary: Conversation file modification time (reliable)
-   - Codex / fallback: tmux window activity
-   - Threshold: 3 seconds without activity = idle
+   - Both runtimes: current-run native hook events and the associated session
+     transcript; child activity is tracked separately from main-agent state.
+   - A native submitted main turn remains busy until Stop (or Claude idle_prompt),
+     including quiet API/model waits with no active tool. After 20 minutes with
+     no unfinished tools and no hook/transcript activity, the supervisor queues
+     one `[KEYSTROKE]Escape` control through the existing nudge/control path,
+     then closes the abandoned turn. It does not check a runtime stop signal
+     and does not retry Escape in the same quiet turn, including after a supervisor
+     restart. Attempt/admission facts use the existing run event log and do not
+     count as AI activity. An unknown admission keeps the turn busy without
+     another attempt. The control uses the same
+     per-session delivery lane as ordinary messages, so it waits for any active
+     paste/Enter verification to finish before sending. It precedes pending
+     require-idle controls. No direct tmux key-sending path is added.
+   - Unfinished tools, including silent foreground Bash and foreground subagent
+     calls, stay busy without this time limit and receive no inactivity Escape.
+     Claude transcript tool results can clear interrupted tools even when the
+     closing tool hooks are absent; the 20-minute quiet limit then applies.
+   - The existing no-response recovery owns completely unanswered deliveries:
+     Escape plus continue after 15 minutes, then one restart at 18 minutes if
+     still silent. A stopped/replaced run cannot receive the 20-minute action.
+     Actual AI work disarms that recovery; if the turn later becomes quiet
+     without Stop, the 20-minute Escape ends it without a replacement continue.
+     The interrupted message receives no reply in that turn. This applies in
+     single and multi-session mode, including Origin and ordinary groups, and
+     adds no configuration.
+   - With no open main turn or active tool, 3 seconds without activity = idle.
+     The existing require-idle delivery gate waits on this state; no control
+     type, delivery semantics, or no-response recovery timer is changed.
 
 ## Heartbeat Liveness Detection
 

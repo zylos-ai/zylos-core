@@ -59,3 +59,13 @@ test('enqueue exceptions propagate without attempting another insertion', async 
     delay: async () => assert.fail('throwing Escape must not wait') }), error);
   assert.equal(calls, 1);
 });
+
+test('interrupt-only nudge queues exactly one Escape without delay or continue', async () => {
+  const calls = [];
+  const first = { ok: true, controlId: 7, enqueuedAt: 1000 };
+  const result = await nudgeSession({ continueAfterEscape: false,
+    enqueue: async content => { calls.push(content); return first; },
+    delay: async () => assert.fail('an interrupt-only nudge must not wait') });
+  assert.deepEqual(calls, ['[KEYSTROKE]Escape']);
+  assert.deepEqual(result, { ...first, control: 'escape', steps: [{ ...first, control: 'escape' }] });
+});
