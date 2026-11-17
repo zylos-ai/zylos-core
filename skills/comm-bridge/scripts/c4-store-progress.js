@@ -142,9 +142,14 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
       }
       return { total: groups.reduce((n, g) => n + g.count, 0), groups };
     }),
+    // Deleting a conversation group can remove the newest messages, leaving a
+    // checkpoint that ends past MAX(id) on ids that did exist. AUTOINCREMENT
+    // keeps the highest id ever assigned in sqlite_sequence; only an end past
+    // that id points at messages that never existed and needs repair.
     auditCheckpoints: () => snapshot(c => {
       const max = get(c, 'SELECT COALESCE(MAX(id),0) AS n FROM conversations').n;
-      return all(c, 'SELECT id,end_conversation_id FROM checkpoints WHERE end_conversation_id>? ORDER BY id', max).map(row => ({ checkpointId: row.id, end: row.end_conversation_id, maxConversationId: max, affected: { B: baseline(c), coverageAll: coverage(c, '*') }, repairRequired: true }));
+      const assigned = Math.max(max, get(c, "SELECT COALESCE(MAX(seq),0) AS n FROM sqlite_sequence WHERE name='conversations'").n);
+      return all(c, 'SELECT id,end_conversation_id FROM checkpoints WHERE end_conversation_id>? ORDER BY id', assigned).map(row => ({ checkpointId: row.id, end: row.end_conversation_id, maxConversationId: max, maxAssignedConversationId: assigned, affected: { B: baseline(c), coverageAll: coverage(c, '*') }, repairRequired: true }));
     }),
   };
   function originSummarySnapshot(c, group, afterCheckpointId) {

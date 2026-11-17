@@ -60,7 +60,7 @@ if (!selected) {
     try {
       expected = entry === 'transition'
         ? { ...independent.prepare('SELECT * FROM mode_transitions').get(), coverage_snapshot: null, absorbed_ids: null }
-        : [100, 101].map((checkpointId, i) => ({ checkpointId, end: i ? 1000 : 2000, maxConversationId: 7,
+        : [100, 101].map((checkpointId, i) => ({ checkpointId, end: i ? 1000 : 2000, maxConversationId: 7, maxAssignedConversationId: 7,
           affected: { B: 1000, coverageAll: 2000 }, repairRequired: true }));
     } finally { independent.close(); }
     assert.equal(opened.length, 1);
@@ -122,7 +122,7 @@ if (!selected) {
       assert.equal(code, 0); assert.equal(signal, null); writer = undefined;
       events.push({ event: 'writer-committed-and-exited', code });
       expected = entry === 'transition' ? { ...expected, reason: 'new-committed' }
-        : expected.map(row => ({ ...row, end: 3000, maxConversationId: 8, affected: { B: 3000, coverageAll: 3000 } }));
+        : expected.map(row => ({ ...row, end: 3000, maxConversationId: 8, maxAssignedConversationId: 8, affected: { B: 3000, coverageAll: 3000 } }));
     }
     assert.deepEqual(call(), expected, 'fresh read sees committed values / read recovers after controlled busy');
     assert.equal(api.getDb(), shared);

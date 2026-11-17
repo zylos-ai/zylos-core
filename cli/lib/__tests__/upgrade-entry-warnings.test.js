@@ -121,7 +121,7 @@ test('downloaded upgrade entry audits a real C4 database and warns for every rep
   const child=spawnSync(process.execPath,['--experimental-test-module-mocks',launcher],{env:{...process.env,npm_config_prefix:prefix},input:JSON.stringify(input),encoding:'utf8',timeout:15000});
   assert.equal(child.status,0,child.stderr+child.stdout);
   assert.deepEqual(JSON.parse(child.stdout),{success:true,warnings:[],checkpointAudit:{state:'complete',items:[{
-    checkpointId:100,end:2000,maxConversationId:7,affected:{B:2000,coverageAll:2000},repairRequired:true,
+    checkpointId:100,end:2000,maxConversationId:7,maxAssignedConversationId:7,affected:{B:2000,coverageAll:2000},repairRequired:true,
   }]},unchanged:{value:true}});
   assert.match(child.stderr,/^Checkpoint warning: checkpoint 100 exceeds the available conversation range and requires repair\.$/m);
 });
