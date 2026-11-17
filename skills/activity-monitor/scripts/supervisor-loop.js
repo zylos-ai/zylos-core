@@ -1,3 +1,5 @@
+import { tmuxClientArgs, isTmuxDirectoryError } from '../../comm-bridge/scripts/tmux-client-args.js';
+
 /** One non-overlapping observation/reconciliation loop. Socket I/O is independent. */
 export class SupervisorLoop {
   // Keep one-second observation: three-second idle confirmation, five-second
@@ -14,11 +16,13 @@ export class SupervisorLoop {
     this.configuration = null;
     this.configurationError = null;
     this.startupAlerted = false;
+    this.directoryError = null;
   }
 
   async start() {
     if (this.running) return;
     this.running = true;
+    if (!await this.directoryAvailable()) return;
     try {
       this.configuration = await this.deps.readConfiguration();
     } catch (error) {
@@ -54,26 +58,47 @@ export class SupervisorLoop {
   async each(items, action, phase) {
     for (const item of items) {
       try { await action(item); }
-      catch (error) { await this.deps.reportError(error, { phase, sessionGroup: item.sessionGroup }); }
+      catch (error) { await this.reportError(error, { phase, sessionGroup: item.sessionGroup }); }
+      if (this.directoryError) return;
     }
   }
 
+  async directoryAvailable() {
+    if (this.directoryError) return false;
+    try { tmuxClientArgs(); return true; }
+    catch (error) {
+      if (!isTmuxDirectoryError(error)) throw error;
+      await this.reportError(error, { phase: 'tmux-directory' });
+      return false;
+    }
+  }
+
+  async reportError(error, context) {
+    if (isTmuxDirectoryError(error)) {
+      if (this.directoryError) return;
+      this.directoryError = error;
+      context = { phase: 'tmux-directory', event: 'tmux_directory_unavailable' };
+    }
+    await this.deps.reportError(error, context);
+  }
+
   tick() {
-    if (!this.running || this.configurationError) return Promise.resolve();
+    if (!this.running || this.configurationError || this.directoryError) return Promise.resolve();
     if (this.inflight) return this.inflight;
     if (this.timer !== null) { this.cancel(this.timer); this.timer = null; }
-    this.inflight = this.runRound().catch(error => this.deps.reportError(error, { phase: 'round' }))
+    this.inflight = this.runRound().catch(error => this.reportError(error, { phase: 'round' }))
       .finally(async () => {
-        try { await this.deps.afterRound?.(); }
+        try { if (!this.directoryError) await this.deps.afterRound?.(); }
         catch (error) { await this.deps.reportError(error, { phase: 'after-round' }); }
         this.inflight = null;
-        if (this.running) this.timer = this.schedule(() => { this.timer = null; void this.tick(); }, this.intervalMs);
+        if (this.running && !this.directoryError) this.timer = this.schedule(() => { this.timer = null; void this.tick(); }, this.intervalMs);
       });
     return this.inflight;
   }
 
   async runRound() {
-    const d = this.deps;
+    if (!await this.directoryAvailable()) return;
+    const d = { ...this.deps, reportError: (error, context) => this.reportError(error, context) };
     d.beginRound?.();
     const authority = async read => {
       try { return await read(); }

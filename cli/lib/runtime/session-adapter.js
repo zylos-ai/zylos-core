@@ -9,6 +9,7 @@ import { settleLaunch } from './session-launch.js';
 import { applyUpgradePrompt, discoverUpgradeContext } from './upgrade-context.js';
 import { ZYLOS_DIR } from '../config.js';
 import { TMUX_COMMAND as C, TMUX_FORMAT as F, isIdentityError } from './tmux-protocol.js';
+import { isTmuxDirectoryError } from './tmux-client-args.js';
 
 export class SessionAdapter extends RuntimeAdapter {
   async dependencies() {
@@ -29,6 +30,7 @@ export class SessionAdapter extends RuntimeAdapter {
       if (!target.present) return {tmux:false, process:false};
       return {tmux:true, process:true};
     } catch (error) {
+      if (isTmuxDirectoryError(error)) throw error;
       if (['TMUX_NO_SERVER','TARGET_GONE'].includes(error.code)) return {tmux:false, process:false};
       if (error.code === 'TMUX_UNAVAILABLE') throw error;
       throw adapterError('TMUX_UNAVAILABLE','Cannot inspect session',error.cause === 'timeout' ? 'timeout':'error');
@@ -70,6 +72,7 @@ export class SessionAdapter extends RuntimeAdapter {
       }
       throw adapterError('STOP_UNCONFIRMED','Original session removal is not confirmed');
     } catch (error) {
+      if (isTmuxDirectoryError(error)) throw error;
       if (['RUNID_MISMATCH','STOP_UNCONFIRMED'].includes(error.code)) throw error;
       throw adapterError('STOP_UNCONFIRMED','Session termination could not be confirmed',error.cause);
     } finally { connection?.close(); }
@@ -87,7 +90,7 @@ export class SessionAdapter extends RuntimeAdapter {
       return await connection.command([C.sendKeys,'-t',target.paneId,...keys]);
     }
     catch (error) {
-      if (isIdentityError(error)) throw error;
+      if (isIdentityError(error) || isTmuxDirectoryError(error)) throw error;
       throw adapterError('ENTER_UNVERIFIED','Key delivery could not be confirmed',error.cause);
     }
   }
@@ -106,7 +109,7 @@ export class SessionAdapter extends RuntimeAdapter {
           [C.pasteBuffer,...(bracketedPaste ? ['-p'] : []),'-d','-b',buffer,'-t',target.paneId],
         ]);
       } catch (error) {
-        if (isIdentityError(error)) throw error;
+        if (isIdentityError(error) || isTmuxDirectoryError(error)) throw error;
         throw adapterError('PASTE_FAILED','Text delivery could not be confirmed',error.cause);
       }
     } finally {
@@ -145,6 +148,7 @@ export class SessionAdapter extends RuntimeAdapter {
       const script = writeSessionLaunchScript({command,args,env:cleanEnv,root,multi:sessionMode === 'multi'});
       return await settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,script,tmux:this.options.tmux});
     } catch (error) {
+      if (isTmuxDirectoryError(error)) throw error;
       if (['NAME_CONFLICT','RUNTIME_NOT_INSTALLED','MODEL_CONFIG_REJECTED','LAUNCH_FAILED'].includes(error.code)) throw error;
       throw adapterError('LAUNCH_FAILED','Launch preflight failed',error.cause);
     } finally { connection?.close(); }

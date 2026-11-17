@@ -1,5 +1,6 @@
 import { adapterError, shellQuote } from './session-command.js';
 import { openTmuxConnection, runTmuxCommand } from './tmux-connection.js';
+import { isTmuxDirectoryError } from './tmux-client-args.js';
 import { TMUX_COMMAND as C, TMUX_FORMAT as F, launchFormat, parseLaunchAddress,
   parseLaunchReceipt, parseExecReceipt } from './tmux-protocol.js';
 
@@ -72,7 +73,7 @@ export async function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,roo
       } catch { /* Unobservable server-side outcomes are handled by the caller. */ }
       finally { cleanup?.close(); }
     }
-    if (error.code === 'NAME_CONFLICT' || error.code === 'LAUNCH_FAILED') throw error;
+    if (isTmuxDirectoryError(error) || error.code === 'NAME_CONFLICT' || error.code === 'LAUNCH_FAILED') throw error;
     if (/duplicate session/.test(error.message)) throw adapterError('NAME_CONFLICT',error.message);
     throw adapterError('LAUNCH_FAILED',error.message,error.cause);
   } finally {

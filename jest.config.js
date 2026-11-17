@@ -1,6 +1,7 @@
 export default {
   transform: {},
   testPathIgnorePatterns: [
+    '<rootDir>/test/tmux-directory.integration.test.js',
     '<rootDir>/test/dispatcher-startup.integration.test.js',
     '<rootDir>/test/tmux-dashboard-reads.integration.test.js',
     '<rootDir>/test/claude-upgrade-process.integration.test.js',

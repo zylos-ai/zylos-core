@@ -15,6 +15,7 @@ import { SessionActivity } from './session-activity.js';
 import { publishSessionStatus } from './status-writer.js';
 import { createSupervisorConnectionHandler } from './router-socket.js';
 import { PENDING_MAX_AGE_SECONDS } from '../../comm-bridge/scripts/c4-config.js';
+import { isTmuxDirectoryError } from '../../comm-bridge/scripts/tmux-client-args.js';
 const { nudgeSession } = await loadCoreModule('session-nudge.js');
 const { appendEvent, rotateEventLog } = await loadCoreModule('event-log.js');
 const { writeSessionModeAtCutover } = await loadCoreModule('config.js');
@@ -31,8 +32,16 @@ export function createSupervisor(deps) {
   const originAuthAlerted=new Set();
   const missingDependencies=deps.missingDependencies ?? new Set();
   let restartRequestsUnreadable=false;
+  let directoryReported=false;
   const restartRequestsPath=()=>admission?.store.file ?? path.join(deps.zylosDir,'activity-monitor','restart-requests.json');
   const reportError=(error,context={})=>{
+    if(isTmuxDirectoryError(error)) {
+      if(directoryReported)return;
+      directoryReported=true;
+      diagnostic({event:'tmux_directory_unavailable',reason:error.code});
+      log({error:error.code,phase:'tmux-directory'});
+      return;
+    }
     if(error.code==='requests_unreadable') {
       if(restartRequestsUnreadable)return;
       // Restore and round reads belong to one episode until a read succeeds.

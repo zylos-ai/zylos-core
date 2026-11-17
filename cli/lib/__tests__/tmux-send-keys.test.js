@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import fs from 'node:fs';
-import vm from 'node:vm';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { buildDiagnosticJson } from '../../commands/doctor.js';
 import { createTmuxSender, parseTmuxVersion, describeTmuxSendKeys, tmuxFailureDetails } from '../../../skills/comm-bridge/scripts/tmux-send-keys.js';
-import { TMUX_COMMAND as C, TMUX_FORMAT as F, parseLegacyPanePid } from '../runtime/tmux-protocol.js';
+import { tmuxClientArgs } from '../runtime/tmux-client-args.js';
+import { tmuxNewSession } from '../runtime/tmux-helpers.js';
 
 for (const [version, enabled] of [['3.2a', false], ['3.3a', false], ['3.4', true], ['3.6a', true], ['3.7c', true], ['3.10', true], ['4.0', true], ['next-3.8', true], ['next-3.9', true]]) {
   test(`tmux ${version} version gate and cached execution`, () => {
@@ -20,7 +21,7 @@ for (const [version, enabled] of [['3.2a', false], ['3.3a', false], ['3.4', true
     assert.equal(calls.filter(c => c.args[0] === '-V').length, 1);
     assert.ok(calls.every(c => c.bin === '/test/tmux'));
     for (let i = 1; i <= 2; i++) {
-      assert.deepEqual(calls[i].args, ['send-keys', ...(enabled ? ['-c', 'zylos-no-client'] : []), '-t', 'agent', i === 1 ? 'Enter' : 'Escape']);
+      assert.deepEqual(calls[i].args, [...tmuxClientArgs({ utf8: false }), 'send-keys', ...(enabled ? ['-c', 'zylos-no-client'] : []), '-t', 'agent', i === 1 ? 'Enter' : 'Escape']);
       assert.equal(calls[i].opts, options);
     }
     assert.match(describeTmuxSendKeys(sender.getCapability()), enabled ? /-c enabled/ : /-c disabled/);
@@ -38,7 +39,7 @@ for (const failure of ['unparseable', 'error', 'openbsd-7.6']) {
     assert.equal(sender.getCapability().version, 'unknown');
     assert.ok(sender.getCapability().reason);
     assert.match(describeTmuxSendKeys(sender.getCapability()), /unknown .*legacy argv/);
-    assert.deepEqual(sends[0], ['send-keys', '-t', 's', 'Enter']);
+    assert.deepEqual(sends[0], [...tmuxClientArgs({ utf8: false }), 'send-keys', '-t', 's', 'Enter']);
     assert.ok(!warnings[0].includes('private'));
   });
 }
@@ -46,23 +47,18 @@ test('failure diagnostics contain stderr/status without command or user input', 
   const details = tmuxFailureDetails(Object.assign(new Error('send-keys PRIVATE_INPUT'), { status: 1, stderr: Buffer.from('client is read-only\n') }));
   assert.deepEqual(details, { status: 1, code: null, signal: null, stderr: 'client is read-only' });
 });
-test('runtime paste and trust-prompt key paths use the version-gated sender and preserve timeout', () => {
-  const source = fs.readFileSync(new URL('../runtime/tmux-helpers.js', import.meta.url), 'utf8');
-  for (const version of ['3.3a', '3.7c']) {
-    const calls = [];
-    const exec = (bin, args, options) => { if (args[0] === '-V') return `tmux ${version}`; calls.push({ args, options }); };
-    const context = vm.createContext({ execFileSync: exec, sendTmuxKeys: createTmuxSender({ exec }).sendKeys, C, F, parseLegacyPanePid });
-    vm.runInContext(source.replace(/^import .*;$/gm, '').replaceAll('export ', ''), context);
-    context.tmuxPasteBuffer('agent', '/tmp/input', 'buffer');
-    context.tmuxSendKeys('agent', '1', 'Enter');
-    const sends = calls.filter(c => c.args[0] === 'send-keys');
-    assert.equal(sends.length, 2);
-    for (const call of sends) {
-      assert.equal(call.args.includes('-c'), version === '3.7c');
-      assert.equal(call.options.timeout, 3000);
-    }
-    assert.deepEqual(Array.from(sends[1].args.slice(-2)), ['1', 'Enter']);
-  }
+test('runtime launch preserves socket selection, client environment and timeout', t => {
+  const calls = [];
+  t.mock.method(childProcess, 'execFileSync', (bin, args, options) => {
+    calls.push({ args, options });
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  tmuxNewSession(['new-session', '-d']);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, [...tmuxClientArgs({ utf8: false }), 'new-session', '-d']);
+  assert.equal(calls[0].options.timeout, 10000);
+  assert.equal(calls[0].options.env.ZYLOS_RUN_ID, undefined);
 });
 test('read-only rejection negative control discriminates legacy and protected argv', () => {
   const exec = (bin, args) => {
