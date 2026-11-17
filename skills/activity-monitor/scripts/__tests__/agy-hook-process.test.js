@@ -21,11 +21,8 @@ function fixture(t) {
   return { root, env };
 }
 
-// Isolated native Node entrypoints only: no agy, service, tmux or network.
-// Run for process lifetime/stdin/import changes; all subprocesses are synchronous,
-// bounded and reaped. The fallback timeout is a failure, never the expected stop.
-test('hook process deadline covers an import retaining a live handle', { timeout: 9000 }, t => {
-  const { root, env } = fixture(t), fake = path.join(root, 'core'), lib = path.join(fake, 'cli/lib');
+function coreWithInstructions(root, instructions) {
+  const fake = path.join(root, 'core'), lib = path.join(fake, 'cli/lib');
   fs.mkdirSync(path.join(lib, 'runtime'), { recursive: true });
   fs.writeFileSync(path.join(fake, 'package.json'), '{"type":"module"}');
   for (const name of fs.readdirSync(path.join(repo, 'cli/lib'))) {
@@ -33,9 +30,18 @@ test('hook process deadline covers an import retaining a live handle', { timeout
   }
   for (const name of fs.readdirSync(path.join(repo, 'cli/lib/runtime'))) {
     const source = name === 'instruction-builder.js'
-      ? fileURLToPath(new URL('./fixtures/hanging-instructions.js', import.meta.url)) : path.join(repo, 'cli/lib/runtime', name);
+      ? fileURLToPath(new URL(`./fixtures/${instructions}`, import.meta.url)) : path.join(repo, 'cli/lib/runtime', name);
     fs.symlinkSync(source, path.join(lib, 'runtime', name));
   }
+  return fake;
+}
+
+// Isolated native Node entrypoints only: no agy, service, tmux or network.
+// Run for process lifetime/stdin/import changes; all subprocesses are synchronous,
+// bounded and reaped. The fallback timeout is a failure, never the expected stop.
+test('hook process deadline covers an import retaining a live handle', { timeout: 9000 }, t => {
+  const { root, env } = fixture(t);
+  const fake = coreWithInstructions(root, 'hanging-instructions.js');
   const result = spawnSync(process.execPath, [entry, 'PreInvocation'], {
     env: { ...env, ZYLOS_PACKAGE_ROOT: fake }, input: '{}', encoding: 'utf8', timeout: 7000,
   });
@@ -44,6 +50,25 @@ test('hook process deadline covers an import retaining a live handle', { timeout
   assert.equal(result.status, 1);
   assert.deepEqual(JSON.parse(result.stdout), {});
   assert.match(result.stderr, /process deadline/);
+});
+
+// The import resolves, so the hook reaches JSON output while a referenced
+// interval remains live. Removing the explicit successful exit must hit timeout.
+test('hook exits after protocol output when a resolved module retains a live handle', { timeout: 9000 }, t => {
+  const { root, env } = fixture(t);
+  const fake = coreWithInstructions(root, 'retained-handle-instructions.js');
+  const started = performance.now();
+  const result = spawnSync(process.execPath, [entry, 'PreInvocation'], {
+    env: { ...env, ZYLOS_PACKAGE_ROOT: fake }, input: '{}', encoding: 'utf8', timeout: 7000,
+  });
+  const elapsed = performance.now() - started;
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.signal, null);
+  assert.deepEqual(JSON.parse(result.stdout), {});
+  assert.equal(result.stderr, '');
+  assert.ok(elapsed < 2000, `hook took ${elapsed.toFixed(1)} ms; expected less than 2000 ms`);
+  t.diagnostic(`resolved module with live interval: ${elapsed.toFixed(1)} ms (7000 ms subprocess timeout)`);
 });
 
 test('native hook entrypoints emit bounded protocol responses with measured wall time', { timeout: 12000 }, t => {

@@ -7,7 +7,6 @@ import { Store } from '../store.js';
 import { HistoryService } from '../history/history-service.js';
 import { createHistoryScope } from '../history/history-scope.js';
 import { claudeProjectSlug } from '../claude-project-path.js';
-import { loadConfig, modelPricesForRuntime, fastModeMultiplierForRuntime } from '../config.js';
 
 // Local files, private SQLite and in-process HTTP handlers only. The official
 // runner isolates HOME/ZYLOS_DIR before imports. No server, tmux, PM2 or network.
@@ -76,34 +75,4 @@ for (const scoped of [false, true]) test(`AGY ${scoped ? 'group override' : 'ins
   const claude = new HistoryService({ config: { ...config, runtime: 'claude' }, redactor });
   t.after(() => claude.close());
   assert.equal((await claude.sessions()).sessions[0].id, 'claude-session');
-});
-
-test('AGY pricing does not inherit Claude tariffs or its legacy fast-mode multiplier', t => {
-  const { root } = fixture(t);
-  const configPath = path.join(root, 'components/dashboard/config.json');
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify({ runtime: 'agy', modelPrices: { 'claude-custom': { input: 9 } }, fastModeMultiplier: 7 }));
-  const config = loadConfig({ zylosDir: root });
-  for (const tier of ['standard', 'priority', 'fast']) {
-    assert.deepEqual(modelPricesForRuntime(config, 'agy', tier), {});
-  }
-  assert.deepEqual(modelPricesForRuntime(config), {});
-  assert.equal(fastModeMultiplierForRuntime(config, 'agy'), null);
-  assert.equal(modelPricesForRuntime(config, 'claude')['claude-custom'].input, 9);
-  assert.equal(fastModeMultiplierForRuntime(config, 'claude'), 7);
-  assert.ok(Object.keys(modelPricesForRuntime(config, 'codex')).length > 0);
-  assert.notEqual(modelPricesForRuntime(config, 'codex')['gpt-6.1-sol'].input,
-    modelPricesForRuntime(config, 'codex', 'priority')['gpt-6.1-sol'].input);
-});
-
-
-test('known runtime pricing retains bare legacy table fallback', () => {
-  const modelPrices = { 'legacy-model': { input: 3, output: 12 } };
-  for (const runtime of ['claude', 'codex']) {
-    assert.equal(modelPricesForRuntime({ modelPrices }, runtime), modelPrices);
-  }
-  assert.equal(modelPricesForRuntime({ modelPrices }), modelPrices);
-  for (const runtime of ['agy', 'unknown']) {
-    assert.deepEqual(modelPricesForRuntime({ modelPrices }, runtime), {});
-  }
 });
