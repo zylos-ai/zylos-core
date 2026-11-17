@@ -2,6 +2,9 @@
   "model": "opus[1m]",
   "autoMemoryEnabled": false,
   "autoDreamEnabled": false,
+  "permissions": {
+    "deny": ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"]
+  },
   "statusLine": {
     "type": "command",
     "command": "node ~/zylos/.claude/skills/activity-monitor/scripts/context-monitor.js"
