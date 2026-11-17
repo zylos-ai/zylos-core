@@ -1,8 +1,6 @@
-/** Drain the durable external receipt queue through the existing status sender.
- * Each completed attempt is terminal, including a failure before spawn. This
- * queue does not retry failed receipts or generate a receipt for a receipt.
- * Channel transports do not offer a shared idempotency key.
- * Cooldown remains the shared status sender's six-tuple, including its 600s TTL.
+/** External admitted receipts remain retryable until success is confirmed.
+ * Cooldown suppresses other messages; durable admission lets this same receipt
+ * resume after a crash. Internal receipt creation remains atomic in the store.
  */
 export function createFailureReceiptDrainer({ db, sendStatusNotice, limit = 20 }) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new TypeError('Invalid receipt drain limit');
@@ -14,7 +12,9 @@ export function createFailureReceiptDrainer({ db, sendStatusNotice, limit = 20 }
       const receipt = await sendStatusNotice(row, { noticeKind: 'failure_receipt', health: 'unavailable',
         reason: row.reason, runtime: 'unknown' });
       const outcome = ['sent', 'suppressed', 'uncertain', 'failed'].includes(receipt.outcome) ? receipt.outcome : 'failed';
-      if (db.settleFailureReceipt(row.id, outcome)) result.settled++;
+      db.settleFailureReceipt(row.id, outcome);
+      if (outcome === 'sent' || outcome === 'suppressed') result.settled++;
+      else result.pending++;
     }
     return result;
   }

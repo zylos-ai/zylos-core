@@ -13,8 +13,8 @@ External receipts use the original channel and endpoint. The dispatcher drains
 at most 20 pending receipts each poll through the existing status sender,
 including after startup recovery. Its existing 600-second cooldown applies to
 channel, normalized endpoint, target group, runtime, health and failure reason.
-A burst sharing that key sends the first receipt and suppresses later ones.
-Internal receipts have no cooldown. No receipt copies the original body or
+A burst sharing that key admits the first receipt and suppresses other
+messages. Internal receipts have no cooldown. No receipt copies the original body or
 arbitrary exception text. No owner notification is added.
 
 Sources without a reply route (`system`, `void`, or no endpoint) have no
@@ -24,19 +24,31 @@ launch and continuation launch have no claimed message and create no receipt.
 Origin failures remain in Router logs/diagnostics; continuation failures retain
 their existing five-failure, 30-minute-cooled owner notification.
 
-## External crash boundary
+## Internal exactly once; external at least once
 
-Pending receipts survive restart between failure commit and sending. Each attempted send is terminal, including a sender that cannot start;
-receipts do not automatically retry. Sent, failed, suppressed and uncertain
-outcomes are persisted. The existing sender reserves cooldown before spawning.
+Internal receipt insertion commits exactly once with the original failure.
+External receipts use at-least-once sending: crash windows can produce a
+repeat, which is preferable to losing the undelivered-message notification.
+No channel idempotency mechanism is introduced.
 
-External transports have no shared durable idempotency key or transaction with
-C4. A crash after reservation but before sending may suppress an unsent
-receipt; a crash after sending but before settlement cannot prove whether it
-was sent. This retains the existing conservative behavior for uncertain sends
-and **does not guarantee exactly-once delivery across that window**. Accepting
-this boundary requires an explicit product decision. Internal receipt insertion
-has no cross-system window.
+Cooldown reservation and the receipt's `pending`→`queued` admission commit
+in one SQLite transaction. `queued` means this external receipt has durable
+permission to send. On restart, that same receipt bypasses cooldown, even
+when its old reservation still exists. Other messages remain subject to the
+600-second cooldown and can be classified `suppressed` before admission.
+
+Only confirmed successful sends mark admitted receipts `sent`. Failure or
+uncertain transport results keep the receipt retryable, update its attempt
+time, and produce no recursive receipt or owner alert. Bounded draining
+orders by attempt time then original ID so retries do not permanently block
+later work. Internal queued receipts are excluded from external draining.
+
+A crash after reservation but before spawn resends the original receipt.
+A crash after a successful external send but before queue settlement also
+resends it, potentially producing a duplicate. Repeated crashes in that
+window can produce further duplicates. Once success is durably settled,
+further polls do not send that receipt again. Original messages stay failed;
+only their notification is retried.
 
 ## Launch diagnostics
 

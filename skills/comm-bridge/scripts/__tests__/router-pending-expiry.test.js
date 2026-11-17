@@ -11,7 +11,7 @@ const { createPendingExpiryHandler } = await import('../router/expiry.js');
 after(() => { cooldownDb.close(); environment.cleanup(); });
 
 function transport(f, sent) {
-  const sendStatusNotice = createStatusNoticeSender({ db: cooldownDb, diagnostic: () => {}, log: () => {},
+  const sendStatusNotice = createStatusNoticeSender({ db: { reserveStatusNoticeCooldown: params => cooldownDb.reserveStatusNoticeCooldown(params, f.db) }, diagnostic: () => {}, log: () => {},
     spawn: (exe, argv) => {
       const child = new EventEmitter(); child.pid = 99; child.stdin = new EventEmitter();
       child.stdin.end = body => { sent.push({ argv, body }); queueMicrotask(() => child.emit('close', 0)); };

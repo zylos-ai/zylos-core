@@ -3,9 +3,10 @@ export default {
   testPathIgnorePatterns: [
     '<rootDir>/test/memory-budget-browser.test.js',
     '<rootDir>/test/memory-startup-budget.integration.test.js',
+    '<rootDir>/test/failure-receipt-restart.integration.test.js',
+    '<rootDir>/test/session-start-failure.integration.test.js',
     '<rootDir>/test/dispatcher-startup.integration.test.js',
     '<rootDir>/test/instruction-deployment.integration.test.js',
-    '<rootDir>/test/session-start-failure.integration.test.js',
     '<rootDir>/test/tmux-dashboard-reads.integration.test.js',
     '<rootDir>/test/claude-upgrade-process.integration.test.js',
     '<rootDir>/test/dashboard-display-browser.test.js',

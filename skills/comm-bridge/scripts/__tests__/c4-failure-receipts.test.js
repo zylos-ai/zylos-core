@@ -13,6 +13,14 @@ function record(id, extra = {}) {
   return { id, direction: 'in', channel: 'telegram', endpoint_id: 'receipt-room', session_group: 'telegram:receipt',
     reason: 'launch_failed', content: 'SECRET BODY', ...extra };
 }
+function persistedRecord(extra = {}) {
+  const row = record(1, extra), connection = db.getDb();
+  const id = Number(connection.prepare(`INSERT INTO conversations(direction,channel,endpoint_id,content,status,session_group)
+    VALUES('in',?,?,?,'failed',?)`).run(row.channel, row.endpoint_id, row.content, row.session_group).lastInsertRowid);
+  connection.prepare(`INSERT INTO failure_receipts(conversation_id,reason,state,created_at,updated_at)
+    VALUES(?,?,'pending',1,1)`).run(id, row.reason);
+  return { ...row, id };
+}
 function child(onBody, status = 0) {
   const result = new EventEmitter(); result.pid = 42;
   result.stdin = new EventEmitter();
@@ -24,7 +32,13 @@ function queue(rows) {
   const pending = new Map(rows.map(row => [row.id, row])), settled = [];
   return { settled, pending,
     listFailureReceipts: ({ limit }) => [...pending.values()].slice(0, limit),
-    settleFailureReceipt: (id, outcome) => { settled.push([id, outcome]); return pending.delete(id); },
+    settleFailureReceipt: (id, outcome) => {
+      settled.push([id, outcome]);
+      if (['sent', 'suppressed'].includes(outcome)) return pending.delete(id);
+      const row = pending.get(id);
+      if (row) { pending.delete(id); pending.set(id, row); }
+      return false;
+    },
   };
 }
 
@@ -47,17 +61,17 @@ test('external receipt reuses original endpoint and status cooldown across messa
   const send = createStatusNoticeSender({ db, now: () => clock, diagnostic: () => {}, log: () => {},
     render: () => assert.fail('failure receipt must use the metadata renderer'),
     spawn: (exe, argv) => child(body => calls.push({ argv, body })) });
-  const first = record(61, { endpoint_id: 'original-chat|msg:100' });
-  const second = record(62, { endpoint_id: 'original-chat|msg:101' });
+  const first = persistedRecord( { endpoint_id: 'original-chat|msg:100' });
+  const second = persistedRecord( { endpoint_id: 'original-chat|msg:101' });
   const transport = queue([first, second]);
   const drain = createFailureReceiptDrainer({ db: transport, sendStatusNotice: send });
   assert.deepEqual(await drain(), { attempted: 2, settled: 2, pending: 0 });
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0].argv.slice(1), ['telegram', first.endpoint_id]);
   assert.equal(calls[0].body, messageForFailureReceipt(first));
-  assert.deepEqual(transport.settled, [[61, 'sent'], [62, 'suppressed']]);
+  assert.deepEqual(transport.settled, [[first.id, 'sent'], [second.id, 'suppressed']]);
   clock += STATUS_NOTICE_TTL_SECONDS;
-  const next = queue([record(63, { endpoint_id: first.endpoint_id })]);
+  const next = queue([persistedRecord({ endpoint_id: first.endpoint_id })]);
   await createFailureReceiptDrainer({ db: next, sendStatusNotice: send })();
   assert.equal(calls.length, 2);
 });
@@ -72,14 +86,17 @@ test('a fresh drainer resumes persisted pending work and settles each receipt on
   assert.deepEqual(calls, [71]);
 });
 
-test('failed and uncertain receipt outcomes are terminal without automatic retry', async () => {
+test('failed and uncertain receipts remain eligible until a confirmed successful retry', async () => {
   const transport = queue([record(81), record(82)]);
   const drain = createFailureReceiptDrainer({ db: transport,
     sendStatusNotice: async row => ({ outcome: row.id === 81 ? 'failed' : 'uncertain' }) });
-  assert.deepEqual(await drain(), { attempted: 2, settled: 2, pending: 0 });
+  assert.deepEqual(await drain(), { attempted: 2, settled: 0, pending: 2 });
   assert.deepEqual(transport.settled, [[81, 'failed'], [82, 'uncertain']]);
-  const retry = createFailureReceiptDrainer({ db: transport, sendStatusNotice: async () => assert.fail('failed receipts must not retry') });
-  assert.equal((await retry()).attempted, 0);
+  const calls = [];
+  const retry = createFailureReceiptDrainer({ db: transport,
+    sendStatusNotice: async row => { calls.push(row.id); return { outcome: 'sent' }; } });
+  assert.deepEqual(await retry(), { attempted: 2, settled: 2, pending: 0 });
+  assert.deepEqual(calls, [81, 82]);
   assert.equal(transport.pending.size, 0);
 });
 
@@ -98,12 +115,44 @@ test('draining is bounded and overlapping calls share one transport operation', 
   assert.throws(() => createFailureReceiptDrainer({ db: transport, sendStatusNotice: () => {}, limit: 101 }), /limit/);
 });
 
-test('failed receipt targets cannot starve later receipts beyond a drain batch', async () => {
+test('failed receipt attempts rotate behind later work beyond a drain batch', async () => {
   const transport = queue([record(101), record(102), record(103)]), calls = [];
   const drain = createFailureReceiptDrainer({ db: transport, limit: 2,
     sendStatusNotice: async row => { calls.push(row.id); return { outcome: row.id < 103 ? 'failed' : 'sent' }; } });
-  assert.equal((await drain()).settled, 2);
-  assert.equal((await drain()).settled, 1);
-  assert.deepEqual(calls, [101, 102, 103]);
-  assert.equal(transport.pending.size, 0);
+  assert.deepEqual(await drain(), { attempted: 2, settled: 0, pending: 2 });
+  assert.deepEqual(await drain(), { attempted: 2, settled: 1, pending: 1 });
+  assert.deepEqual(calls, [101, 102, 103, 101]);
+  assert.equal(transport.pending.size, 2);
+});
+
+test('durable cooldown admission allows the same receipt again while suppressing another message', () => {
+  const first = persistedRecord({ endpoint_id: 'admission-chat' });
+  const second = persistedRecord({ endpoint_id: 'admission-chat' });
+  const reservation = { cooldownKey: 'failure-admission-test', channel: 'telegram', endpoint: 'admission-chat',
+    statusType: 'unavailable', reason: 'launch_failed', ttl: 600, now: 1800000000 };
+  assert.equal(db.reserveStatusNoticeCooldown({ ...reservation, receiptId: first.id }).suppressed, false);
+  assert.equal(db.getDb().prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(first.id).state, 'queued');
+  assert.equal(db.reserveStatusNoticeCooldown({ ...reservation, receiptId: first.id }).suppressed, false);
+  assert.equal(db.reserveStatusNoticeCooldown({ ...reservation, receiptId: second.id }).suppressed, true);
+  assert.equal(db.getDb().prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(second.id).state, 'suppressed');
+});
+
+for (const outcome of ['failed', 'uncertain']) test(`${outcome} external attempt keeps durable admission and retries through the sender`, async () => {
+  const row = persistedRecord({ endpoint_id: `retry-admission-${outcome}` });
+  const send = createStatusNoticeSender({ db, now: () => 1800000000, diagnostic: () => {}, log: () => {},
+    spawn: () => {
+      if (outcome === 'failed') throw new Error('No child was started');
+      return child(() => {}, 1);
+    } });
+  const route = { noticeKind: 'failure_receipt', health: 'unavailable', reason: row.reason, runtime: 'unknown' };
+  assert.equal((await send(row, route)).outcome, outcome);
+  db.settleFailureReceipt(row.id, outcome);
+  assert.equal(db.getDb().prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(row.id).state, 'queued');
+  const calls = [];
+  const retry = createStatusNoticeSender({ db, now: () => 1800000000, diagnostic: () => {}, log: () => {},
+    spawn: () => child(body => calls.push(body)) });
+  assert.equal((await retry(row, route)).outcome, 'sent');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0], messageForFailureReceipt(row));
+  assert.equal(db.settleFailureReceipt(row.id, 'sent'), true);
 });

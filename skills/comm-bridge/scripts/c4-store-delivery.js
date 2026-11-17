@@ -31,12 +31,14 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
       return all(c, `SELECT conversations.id,conversations.direction,conversations.channel,conversations.endpoint_id,
         conversations.session_group,failure_receipts.reason FROM failure_receipts
         JOIN conversations ON conversations.id=failure_receipts.conversation_id
-        WHERE failure_receipts.state='pending' ORDER BY conversation_id LIMIT ?`, limit);
+        WHERE failure_receipts.state IN ('pending','queued') AND conversations.channel<>'internal' ORDER BY failure_receipts.updated_at,conversation_id LIMIT ?`, limit);
     }),
     settleFailureReceipt: (id, outcome) => write(c => {
       if (!['sent','suppressed','uncertain','failed'].includes(outcome)) throw dataError('INVALID_ARGS', 'Invalid receipt outcome');
-      return run(c, "UPDATE failure_receipts SET state=?,updated_at=? WHERE conversation_id=? AND state='pending'",
-        outcome, seconds(), id).changes > 0;
+      const terminal = outcome === 'sent' || outcome === 'suppressed';
+      const changed = run(c, "UPDATE failure_receipts SET state=CASE WHEN ? THEN ? ELSE state END,updated_at=? WHERE conversation_id=? AND state IN ('pending','queued')",
+        terminal ? 1 : 0, outcome, seconds(), id).changes > 0;
+      return terminal && changed;
     }),
     getNextPending: ({ sessionGroups } = {}) => { const filter = groups(sessionGroups); return read(c => get(c, `SELECT * FROM conversations WHERE direction='in' AND status='pending' AND ${unfenced}${filter.sql} ORDER BY priority,id LIMIT 1`, ...filter.args) ?? null); },
     claimConversation: id => write(c => run(c, `UPDATE conversations SET status='running' WHERE id=? AND direction='in' AND status='pending' AND ${unfenced}`, id).changes > 0),

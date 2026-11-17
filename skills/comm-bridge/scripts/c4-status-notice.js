@@ -44,7 +44,7 @@ export function createStatusNoticeSender({ db = defaultDb, spawn = spawnChild,
     } catch (error) { warn('prepare', record, error); return { outcome: 'failed', code: 'UNHEALTHY_NOTIFY_FAILED' }; }
     let claim;
     try {
-      claim = db.reserveStatusNoticeCooldown({ cooldownKey: statusNoticeKey(record, normalized), channel: record.channel,
+      claim = db.reserveStatusNoticeCooldown({ ...(normalized.noticeKind === 'failure_receipt' ? { receiptId: record.id } : {}), cooldownKey: statusNoticeKey(record, normalized), channel: record.channel,
         endpoint: normalizeStatusEndpoint(record.endpoint_id), statusType: normalized.health, reason: normalized.reason,
         ttl: STATUS_NOTICE_TTL_SECONDS, now: now() });
     } catch (error) { warn('reserve', record, error); return { outcome: 'failed', code: 'UNHEALTHY_NOTIFY_FAILED' }; }
@@ -75,7 +75,7 @@ export function createStatusNoticeSender({ db = defaultDb, spawn = spawnChild,
         else finish({ outcome: 'failed', error });
       }
     });
-    if (result.outcome === 'failed') {
+    if (result.outcome === 'failed' && normalized.noticeKind !== 'failure_receipt') {
       try { db.clearStatusNoticeCooldownReservation(claim.key, claim.reservedAt); }
       catch (error) { warn('clear', record, error); }
     }

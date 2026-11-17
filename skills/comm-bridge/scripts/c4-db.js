@@ -78,6 +78,7 @@ function nowSeconds() { return Math.floor(Date.now() / 1000); }
  */
 export function reserveStatusNoticeCooldown({
   cooldownKey,
+  receiptId,
   channel,
   endpoint,
   statusType,
@@ -88,6 +89,15 @@ export function reserveStatusNoticeCooldown({
   const expiresAt = now + ttl;
 
   const tx = database.transaction(() => {
+    if (receiptId !== undefined) {
+      if (!Number.isSafeInteger(receiptId) || receiptId < 1) throw new TypeError('Invalid receipt ID');
+      const receipt = database.prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(receiptId);
+      if (!receipt) throw new Error('Failure receipt is missing');
+      // Admission is durable. A restart retries this same receipt regardless
+      // of a cooldown reservation left by this or a different message.
+      if (receipt.state === 'queued') return { suppressed: false, key: cooldownKey, ttl, reservedAt: now, expiresAt, resumed: true };
+      if (receipt.state !== 'pending') return { suppressed: true, key: cooldownKey, ttl };
+    }
     database.prepare('DELETE FROM status_notice_cooldowns WHERE expires_at <= ?').run(now);
 
     const insertResult = database.prepare(`
@@ -98,6 +108,10 @@ export function reserveStatusNoticeCooldown({
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(cooldownKey, channel, endpoint, statusType, reason, now, expiresAt, now);
 
+    if (receiptId !== undefined) {
+      database.prepare("UPDATE failure_receipts SET state=?,updated_at=? WHERE conversation_id=? AND state='pending'")
+        .run(insertResult.changes === 1 ? 'queued' : 'suppressed', now, receiptId);
+    }
     if (insertResult.changes === 1) {
       return { suppressed: false, key: cooldownKey, ttl, reservedAt: now, expiresAt };
     }
