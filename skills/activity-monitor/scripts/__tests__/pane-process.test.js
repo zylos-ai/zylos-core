@@ -135,7 +135,7 @@ test('missing evidence is undetermined, never a refusal', async t => {
   assert.deepEqual(classifyHookProcess({ env, dir, trigger: info(pane.pid) }), { verdict: 'unknown', reason: 'record_missing' });
 
   writePaneProcess(dir, { runId: 'run-0', runtime: 'claude', panePid: pane.pid, paneStart: info(pane.pid).start });
-  assert.equal(classifyHookProcess({ env, dir, trigger: info(pane.pid) }).reason, 'record_other_run');
+  assert.deepEqual(classifyHookProcess({ env, dir, trigger: info(pane.pid) }), { verdict: 'unknown', reason: 'record_other_run' });
 
   writePaneProcess(dir, { runId: 'run-1', runtime: 'codex', panePid: pane.pid, paneStart: info(pane.pid).start });
   const unreadableParent = classifyHookProcess({
