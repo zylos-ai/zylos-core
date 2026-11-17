@@ -55,8 +55,8 @@ These attempts do not fail the required step or release its token:
   `edit_memory`, then retry commit; the formal state has not been replaced.
 - `PATH_NOT_ALLOWED` for a temporary state file, when the error gives the
   expected temporary state path: retry with that path under the same two-retry
-  limit. Other `PATH_NOT_ALLOWED` errors still stop the Sync as required-step
-  failures.
+  limit. Other `PATH_NOT_ALLOWED` errors receive no retry; handle them under
+  the applicable failure rules.
 
 This allowance applies only where validation rejected the operation before
 publishing its target. It does not cover migration apply outside this Sync
@@ -119,7 +119,8 @@ Do not call a shell writer for this edit. The same token is required when
 creating the temporary state with `{"op":"create","path":"state.md.<token>.tmp","replacement":"<complete state document>","token":"<token>"}`;
 Group Sync uses `session-groups/<G>/state.md.<token>.tmp` instead.
 `<token>` is the exact token value printed by `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-lock.js acquire`: substitute
-it into both the filename and the JSON `token` field. `<G>` is this session's
+it into both the filename and the JSON `token` field. This is the same token
+called T above. `<G>` is this session's
 group name. Do not keep the placeholders or angle brackets in the call.
 
 Use the restricted tool name discovered and passed by the parent (Claude:
@@ -230,7 +231,7 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
    `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js checkpoint <batch-end> --token T --batch '<receipt JSON>'`.
    Checkpoint recomputes and verifies the receipt against the database rows.
    Only after success, use `edit_memory` to create/edit
-   `session-groups/G/state.md.T.tmp` relative to memory. Then send JSON
+   `session-groups/<G>/state.md.<token>.tmp` relative to memory. Then send JSON
    `{"followedUpIds":[],"batch":<receipt>,"inputs":<complete list object>}`
    on stdin to `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js commit --token T`, replacing the empty array only
    with proven followed-up IDs. Commit verifies the batch, checkpoint coverage,
@@ -421,7 +422,7 @@ state, commit, and failure sequence, with these differences:
   do not block checkpoint.
 - After a substantive identity write, request rotation. Failure is reported
   but checkpoint/state/release still proceed; do not claim it will retry itself.
-- The temporary file is `state.md.T.tmp` relative to memory. Preserve absorbed
+- The temporary file is `state.md.<token>.tmp` relative to memory. Preserve absorbed
   items by supplying only proven followedUpIds to commit, as in Group Sync.
 - Release once and report.
 

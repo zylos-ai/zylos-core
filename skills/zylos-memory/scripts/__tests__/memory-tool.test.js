@@ -46,6 +46,21 @@ test('local: temporary state path errors guide group and global retries', async 
   }
 });
 
+test('local: correct temporary paths rejected after symlink resolution give no retry hint', async () => {
+  const f = await fixture('group', 'telegram:alias');
+  const destination = path.join(f.dir, 'memory', 'aliased-group');
+  fs.mkdirSync(f.scope.memoryDir, { recursive: true });
+  fs.renameSync(f.scope.memoryDir, destination);
+  fs.symlinkSync(destination, f.scope.memoryDir);
+  for (const prefix of ['session-groups/telegram:alias/', 'session-groups/telegram:alias/./']) {
+    assert.deepEqual(await f.editor(create(f.token, `${prefix}state.md.${f.token}.tmp`)), {
+      ok: false, code: 'PATH_NOT_ALLOWED', message: 'Resolved memory path is not allowed',
+    });
+    assert.equal(fs.existsSync(path.join(destination, `state.md.${f.token}.tmp`)), false);
+    assert.equal(readMarker(f.scope.runDir, 'group').marker.token, f.token);
+  }
+});
+
 test('local: ordinary path rejections and Origin temporary rejections keep their messages', async () => {
   const group = await fixture('group', 'telegram:denied');
   const global = await fixture('global');
