@@ -118,6 +118,8 @@ Why: <one sentence the owning thread needs to judge the request>.
 EOF_INTERNAL
 ```
 
+If address ownership is unclear, use the group query or ask your user.
+
 The owning group may not exist yet; the internal message creates it and starts its thread. Find the owning group with `c4-db.js groups` (above). As a safeguard, c4-send refuses an address that another thread handles with `CROSS_SESSION_OUTBOUND`, sends and records nothing, and prints the owning group and this command. For an absorbed message (`--absorbed-reply R N`), put the reply text and that exact command in the internal message; the owning thread runs it. The send examples under Sending Messages work only from the thread that handles that address. `SESSION_GROUP_QUERY_FAILED` means the channel component could not answer; tell your user the message was not sent and report the error instead of retrying through another thread. Origin follows the same rule: morning reports and task updates for someone go through that person's thread.
 
 ### Receiving a Relay Request
