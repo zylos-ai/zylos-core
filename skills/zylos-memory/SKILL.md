@@ -60,9 +60,19 @@ the parent conversation. Record these facts as they arise with
 `memory-append.js inbox --kind fact`, `--kind decision`, or `--kind commitment`,
 rather than waiting until Sync to capture them.
 
-Select by the requested job and inherited environment: a nonempty
-`ZYLOS_SESSION_GROUP` means group Sync; only the `origin` group can run Origin
-Sync. No group with a `ZYLOS_RUN_ID` means single global Sync. Never invent or
+Select the job named in the control prompt, then check the inherited environment:
+
+- `group Sync` with a nonempty `ZYLOS_SESSION_GROUP` uses kind=group and
+  `zylos-group-sync`, including in `origin`: it syncs origin's own working state.
+- Only a prompt naming `Origin Sync` selects kind=origin and `zylos-origin-sync`;
+  this job can run only in the `origin` group.
+- `group Sync` with no group and a `ZYLOS_RUN_ID` uses single global Sync
+  (kind=global, `zylos-global-sync`).
+- If the prompt does not name a job (an old prompt queued before an upgrade,
+  or a user's manual request to sync memory), use group Sync when a group is
+  bound and global Sync when no group is bound; never infer Origin Sync.
+
+Never infer Origin Sync merely from being in origin. Never invent or
 replace these bindings. Read [the complete Sync procedures](references/sync-procedures.md)
 before taking a token; run only the selected procedure.
 

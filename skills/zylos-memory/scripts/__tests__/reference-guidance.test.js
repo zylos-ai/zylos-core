@@ -38,9 +38,27 @@ test('the skill holds the launch and selection rules the background Sync control
   }
   assert.ok(skill.includes('\n## Parent result handling\n'));
   assert.match(text, /Use the runtime in the current running session's immutable launch snapshot\./);
-  assert.match(text, /a nonempty `ZYLOS_SESSION_GROUP` means group Sync; only the `origin` group can run Origin Sync\. No group with a `ZYLOS_RUN_ID` means single global Sync\./);
+  assert.match(text, /Select the job named in the control prompt, then check the inherited environment/);
+  assert.match(text, /`group Sync` with a nonempty `ZYLOS_SESSION_GROUP` uses kind=group and `zylos-group-sync`, including in `origin`: it syncs origin's own working state/);
+  assert.match(text, /Only a prompt naming `Origin Sync` selects kind=origin and `zylos-origin-sync`; this job can run only in the `origin` group/);
+  assert.match(text, /`group Sync` with no group and a `ZYLOS_RUN_ID` uses single global Sync \(kind=global, `zylos-global-sync`\)/);
   assert.match(text, /Read \[the complete Sync procedures\]\(references\/sync-procedures\.md\) before taking a token/);
   assert.match(text, /Start a background subagent when requested and continue the current work, following the runtime-specific result handling below\./);
+});
+
+test('background Sync controls name distinct jobs', () => {
+  assert.ok(GROUP_SYNC_PROMPT.includes('group Sync'));
+  assert.ok(ORIGIN_SYNC_PROMPT.includes('Origin Sync'));
+  assert.ok(!GROUP_SYNC_PROMPT.includes('Origin'));
+});
+
+test('Sync procedures select the named job even in origin', () => {
+  const group = normalize(between(sync, '## Group Sync', '## Origin Sync'));
+  const origin = normalize(between(sync, '## Origin Sync', '## Single global Sync'));
+  assert.match(group, /control prompt names `group Sync` and a session group is bound, including `origin`; use `zylos-group-sync` in Claude/);
+  assert.match(group, /origin group's own working state\. Set kind=group/);
+  assert.match(origin, /only when the control prompt names `Origin Sync`; use `zylos-origin-sync` in Claude/);
+  assert.match(origin, /Being in origin does not select this job/);
 });
 
 test('Sync parents send owner reports only to addresses their thread handles', () => {

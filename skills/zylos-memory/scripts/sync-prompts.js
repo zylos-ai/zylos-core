@@ -2,7 +2,7 @@
 // Controls are typed into the runtime whole, and Claude Code treats input over 800 characters
 // as pasted material, so these stay short pointers: the result-handling rules live only in
 // the skill's "Parent result handling" section.
-export const GROUP_SYNC_PROMPT = 'Read the zylos-memory skill and start a background Sync as it specifies, then keep working and handle its result per its Parent result handling section.';
+export const GROUP_SYNC_PROMPT = 'Read the zylos-memory skill and start a background group Sync as it specifies, then keep working and handle its result per its Parent result handling section.';
 export const ORIGIN_SYNC_PROMPT = 'Read the zylos-memory skill and start a background Origin Sync as it specifies, then keep working and handle its result per its Parent result handling section.';
 export const PRE_RECLAIM_SYNC_PROMPT = 'Read the zylos-memory skill and start a background group Sync subagent in this running session’s runtime. Wait for it to finish before acknowledging this control. Report any failure; do not acknowledge while the Sync is still running.';
 export const PRE_RECLAIM_ORIGIN_SYNC_PROMPT = 'Read the zylos-memory skill and start a background Origin Sync subagent in this running session’s runtime. Wait for it to finish before acknowledging this control. Report any failure; do not acknowledge while the Sync is still running.';
