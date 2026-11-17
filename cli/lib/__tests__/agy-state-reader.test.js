@@ -24,10 +24,21 @@ test('single and batched AGY state readers use identity-bound statusLine context
   assert.equal((await reader.readSessionState(null,{freshnessMs:1000})).usage.reason,'identity_mismatch');
   assert.equal(closes,3);
 });
-test('upgrade preparation preserves the bounded AGY instruction entry',t=>{
-  const {root}=fixture(t);activateFreshSplitInstructions({zylosDir:root});
-  fs.writeFileSync(path.join(root,'.zylos/config.json'),JSON.stringify({runtime:'agy'}));
-  const result=prepareUpgradeRuntime({zylosDir:root},{stopFailureSupported:false,subagentHooksSupported:false});
-  const agents=result.replacements.find(item=>item.path==='AGENTS.md');
-  assert.ok(Buffer.byteLength(agents.content)<24000);assert.match(agents.content,/SessionStart hook injects/);
+test('upgrade preparation renders the same complete AGENTS for agy and Codex', t => {
+  const { root } = fixture(t);
+  activateFreshSplitInstructions({ zylosDir: root });
+  fs.appendFileSync(path.join(root, 'ZYLOS.md'), 'shared user rule '.repeat(3000) + '\nUPGRADE_USER_TAIL');
+  const config = path.join(root, '.zylos/config.json');
+  const options = { stopFailureSupported: false, subagentHooksSupported: false,
+    generatedAt: new Date('2026-01-01T00:00:00Z') };
+  const outputs = [];
+  for (const runtime of ['agy', 'codex']) {
+    fs.writeFileSync(config, JSON.stringify({ runtime }));
+    const result = prepareUpgradeRuntime({ zylosDir: root }, options);
+    const agents = result.replacements.find(item => item.path === 'AGENTS.md');
+    assert.ok(agents.content.includes('UPGRADE_USER_TAIL'));
+    assert.ok(agents.content.startsWith('<!-- zylos-generated:split-v1'));
+    outputs.push(Buffer.from(agents.content));
+  }
+  assert.ok(outputs[0].equals(outputs[1]), 'upgrade instruction bytes must not depend on runtime');
 });

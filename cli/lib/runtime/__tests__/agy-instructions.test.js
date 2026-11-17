@@ -3,37 +3,69 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { activateFreshSplitInstructions, buildInstructionFile, agyInstructionContext, assertInstructionReady } from '../instruction-builder.js';
+import { activateFreshSplitInstructions, buildInstructionFile, agyInstructionContext,
+  assertInstructionReady, instructionPaths } from '../instruction-builder.js';
 
-test('AGY instruction file stays below read limit and hook retains full user tail',t=>{
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'agy-instructions-'));
-  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
-  activateFreshSplitInstructions({zylosDir:root});
-  fs.appendFileSync(path.join(root,'ZYLOS.md'),'中'.repeat(16000)+'\nTAIL_RULE_MARKER');
-  const output=buildInstructionFile('agy',{zylosDir:root});
-  assert.ok(fs.statSync(output).size<24000);
-  assert.equal(assertInstructionReady('agy',{zylosDir:root}),true);
-  const context=agyInstructionContext({zylosDir:root});
-  assert.match(context,/TAIL_RULE_MARKER$/);assert.match(context,/Antigravity — Runtime-Specific Rules/);
-  assert.doesNotMatch(context,/--dangerously-bypass-approvals-and-sandbox/);
-});
-test('oversized legacy AGENTS fails with migration guidance',t=>{
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'agy-instructions-'));
-  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));fs.writeFileSync(path.join(root,'AGENTS.md'),'a'.repeat(24001));
-  assert.throws(()=>buildInstructionFile('agy',{zylosDir:root}),/split-instruction migration/);
-});
-
-test('switching instruction entries restores complete Codex rules and retains agy injection', t => {
+function fixture(t, { split = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-instructions-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  activateFreshSplitInstructions({ zylosDir: root });
-  fs.appendFileSync(path.join(root, 'ZYLOS.md'), 'user rule '.repeat(4000) + '\nSHARED_TAIL_RULE');
-  const file = buildInstructionFile('agy', { zylosDir: root });
-  assert.ok(fs.statSync(file).size < 24000);
-  buildInstructionFile('codex', { zylosDir: root });
-  assert.match(fs.readFileSync(file, 'utf8'), /SHARED_TAIL_RULE/);
-  assert.equal(assertInstructionReady('codex', { zylosDir: root }), true);
-  buildInstructionFile('agy', { zylosDir: root });
-  assert.ok(fs.statSync(file).size < 24000);
-  assert.match(agyInstructionContext({ zylosDir: root }), /SHARED_TAIL_RULE/);
+  if (split) activateFreshSplitInstructions({ zylosDir: root });
+  return root;
+}
+
+test('agy and Codex build byte-identical complete AGENTS in the same root', t => {
+  const root = fixture(t);
+  fs.appendFileSync(path.join(root, 'ZYLOS.md'), 'user rule '.repeat(4000) + '\nUSER_TAIL_MARKER');
+  const file = buildInstructionFile('codex', { zylosDir: root });
+  const codex = fs.readFileSync(file);
+  assert.ok(codex.includes(Buffer.from('USER_TAIL_MARKER')));
+  assert.equal(buildInstructionFile('agy', { zylosDir: root }), file);
+  assert.ok(codex.equals(fs.readFileSync(file)), 'agy must preserve the complete shared bytes');
+});
+
+test('alternating runtime builds keep Codex instructions ready across repeated rounds', t => {
+  const root = fixture(t);
+  const file = buildInstructionFile('codex', { zylosDir: root });
+  const original = fs.readFileSync(file);
+  for (let round = 0; round < 8; round++) {
+    for (const runtime of ['agy', 'codex']) {
+      buildInstructionFile(runtime, { zylosDir: root });
+      assert.equal(assertInstructionReady('codex', { zylosDir: root }), true);
+      assert.ok(original.equals(fs.readFileSync(file)), `${runtime} changed the shared bytes in round ${round}`);
+    }
+  }
+});
+
+test('agy injection retains full system and user tails with explicit runtime precedence', t => {
+  const root = fixture(t);
+  const paths = instructionPaths('codex', { zylosDir: root });
+  fs.appendFileSync(paths.systemPath, '\n' + 'system rule '.repeat(3000) + '\nSYSTEM_TAIL_MARKER');
+  fs.appendFileSync(paths.userPath, '\n' + '中'.repeat(16000) + '\nUSER_TAIL_MARKER');
+  buildInstructionFile('codex', { zylosDir: root, force: true });
+  const original = fs.readFileSync(paths.outputPath);
+  const content = agyInstructionContext({ zylosDir: root });
+  assert.match(content, /^This injection contains the complete Zylos instructions\./);
+  assert.ok(content.includes('this injection takes precedence.'));
+  assert.ok(content.includes('SYSTEM_TAIL_MARKER'));
+  assert.ok(content.includes('USER_TAIL_MARKER'));
+  assert.ok(content.includes('Antigravity — Runtime-Specific Rules'));
+  assert.ok(!content.includes('--dangerously-bypass-approvals-and-sandbox'));
+  assert.ok(original.equals(fs.readFileSync(paths.outputPath)), 'injection must not rewrite AGENTS');
+});
+
+test('legacy AGENTS above the native file limit stays unchanged and is injected completely', t => {
+  const root = fixture(t, { split: false });
+  const file = path.join(root, 'AGENTS.md');
+  const content = 'legacy system '.repeat(3000) + '\nLEGACY_SYSTEM_TAIL\n' +
+    'legacy user '.repeat(3000) + '\nLEGACY_USER_TAIL';
+  fs.writeFileSync(file, content);
+  const original = fs.readFileSync(file);
+  for (const runtime of ['agy', 'codex']) {
+    assert.equal(buildInstructionFile(runtime, { zylosDir: root }), file);
+    assert.equal(assertInstructionReady(runtime, { zylosDir: root }), true);
+    assert.ok(original.equals(fs.readFileSync(file)));
+  }
+  const injected = agyInstructionContext({ zylosDir: root });
+  assert.ok(injected.includes(content));
+  assert.ok(injected.startsWith('This injection contains the complete Zylos instructions.'));
 });

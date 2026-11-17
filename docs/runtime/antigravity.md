@@ -23,7 +23,9 @@ provider and workspace trust explicitly without changing global trust settings.
 
 A launch kick triggers SessionStart before the first model turn. SessionStart
 injects the complete system and user instructions as `injectSteps` JSON. The
-AGENTS.md entry stays under 24,000 bytes; complete rules arrive through the hook.
+shared AGENTS.md is the same complete file used by Codex; agy never replaces
+it with a runtime-specific entry. Injected instructions explicitly take precedence
+when runtime-specific directions differ from that auxiliary file.
 `/clear` receives another kick; `/exit` quits. Every message uses bracketed paste.
 The router requires an empty framed input before pasting, rejecting slash menus
 and trust choices. Claude and Codex retain their existing transport behavior.
@@ -38,13 +40,18 @@ This initial integration excludes model/effort overrides, dedicated screen-text
 health patterns, `/compact`, Dashboard history/cost views and transcript billing.
 Real-model acceptance must run in an isolated instance with a private tmux socket.
 
-## Mixed-runtime limitation under review
+## Shared instructions and native rule limits
 
-Codex and Antigravity currently share the root AGENTS.md. Starting Codex after
-Antigravity regenerates the full Codex entry; Antigravity still receives all
-instructions from its hook, but the shared file may then exceed 24,000 bytes.
-Conversely, Antigravity replaces it with its short entry. This implementation
-therefore proves the bounded-file requirement for an isolated agy instance,
-not simultaneous Codex/agy groups in one root. Resolve that ownership contract
-before approving mixed-runtime production use. No unverified instruction-file
-setting or additional workspace mirror is introduced.
+Both runtimes build the same full AGENTS.md from the same split layers and
+assembler. Before split activation, both leave the existing file unchanged.
+Zylos emits the complete instructions synchronously through SessionStart,
+regardless of the source file length. The same injection path accepts an existing
+legacy AGENTS.md larger than 24,000 bytes.
+
+Google's [rules documentation](https://antigravity.google/docs/rules) describes
+24,000-byte truncation per rule file and a 20,000-token total for always-on rules;
+the largest files become on-demand pointers when that total is exceeded. Whether
+hook injection avoids these native rule limits requires real-model acceptance.
+The release checks include a roughly 27KB injected tail marker and simultaneous
+Codex/agy groups in one root, each restarted for three rounds, followed by agy
+`/clear` and another tail-marker check.
