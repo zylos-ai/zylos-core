@@ -39,7 +39,7 @@ export async function main({ create = createDispatcher, closeDatabase = close,
 // Tests disable only this entry; production always uses the same factory.
 if (process.env.C4_DISPATCHER_DISABLE_MAIN !== '1') {
   main().catch(error => {
-    console.error(`Dispatcher startup error: ${error.stack ?? error.message}`);
-    process.exitCode = 1;
+    // stderr is asynchronous when piped by PM2; flush the full error before exiting.
+    process.stderr.write(`Dispatcher startup error: ${error.stack ?? error.message}\n`, () => process.exit(1));
   });
 }
