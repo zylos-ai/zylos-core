@@ -569,6 +569,10 @@ function cmdUpdate(taskId, options) {
   }
 
   const task = tasks[0];
+  if (task.type === 'one-time' && task.status === 'running'
+      && (options.in || options.at || options.cron || options.every)) {
+    reject('TASK_WRONG_STATUS', 'Wait for delivery to finish before rescheduling this one-time task', { status: task.status }, 1);
+  }
   const updates = {};
   const updatedFields = [];
 
@@ -660,7 +664,7 @@ function cmdUpdate(taskId, options) {
     reject('NO_UPDATES', 'No updates provided', {}, 0, 'Use --help to see available options');
   }
 
-  const reenabled = task.status === 'failed' && task.type === 'one-time' && scheduleUpdated;
+  const reenabled = ['failed', 'completed'].includes(task.status) && task.type === 'one-time' && scheduleUpdated;
   if (reenabled) {
     if (updates.next_run_at <= now()) {
       reject('RESCHEDULE_NOT_FUTURE', 'Rescheduled time must be in the future', { nextRunAt: updates.next_run_at }, 1);

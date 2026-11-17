@@ -635,16 +635,26 @@ for (const origin of ['window', 'dispatch']) test(`rescheduled ${origin} failure
 // default skip defers the two-minute process integration to the isolated reviewer run.
 // Private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/tmux socket/DB paths are logged above;
 // no live AM socket, runtime, reply sender or PM2 process is used, and the child/root are cleaned.
-test('real scheduler daemon dispatches a re-enabled task to its saved private C4 group', {
+for (const status of ['failed', 'completed']) test(`real scheduler daemon dispatches a re-enabled ${status} task to its saved private C4 group`, {
   skip: process.env.ZYLOS_RUN_SCHEDULER_DISPATCH_INTEGRATION !== '1', timeout: 155000,
 }, async t => {
   const f = scheduledFileFixture(t);
   const id = 'task-daemon-rescheduled', control = 'task-daemon-failed';
   f.failed(id, 'dispatch'); f.failed(control, 'window');
+  if (status === 'completed') {
+    f.db.prepare("UPDATE tasks SET status='pending' WHERE id=?").run(id);
+    const delivered = dispatchTask(f.db, f.read(id).task, { ...base, sendViaC4: () => ({ category: 'success' }) });
+    assert.equal(delivered.category, 'success');
+    assert.equal(f.read(id).task.status, 'completed');
+  }
   const previous = f.read(id).history, untouched = f.read(control);
-  const updated = f.cli(['update', id, '--in', '2 minutes']);
+  const updated = f.cli(['update', id, '--in', status === 'completed' ? '90 minutes' : '2 minutes']);
   assert.equal(updated.reenabled, true); assert.equal(updated.task.status, 'pending');
   assert.deepEqual(f.read(id).history, previous);
+  // Advance the private schedule to due time instead of waiting ninety minutes.
+  if (status === 'completed') f.db.prepare('UPDATE tasks SET next_run_at=? WHERE id=?').run(Math.floor(Date.now() / 1000), id);
+  const dueAt = f.read(id).task.next_run_at;
+  const expectedHistory = previous.length + 1;
   let output = '', spawnError;
   f.daemon = spawn(process.execPath, [fileURLToPath(new URL('../daemon.js', import.meta.url))],
     { env: f.env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -659,21 +669,25 @@ test('real scheduler daemon dispatches a re-enabled task to its saved private C4
     const after = f.read(id);
     inbound = f.c4db.prepare("SELECT * FROM conversations WHERE direction='in' AND instr(content,?)>0 ORDER BY id LIMIT 2")
       .all(updated.task.prompt);
-    if (after.history.length === 3 && inbound.length === 1) break;
-    assert.ok(after.history.length <= 3, output);
+    if (after.history.length === expectedHistory && inbound.length === 1) break;
+    assert.ok(after.history.length <= expectedHistory, output);
     assert.ok(inbound.length <= 1, output);
-    if (Math.floor(Date.now() / 1000) < updated.task.next_run_at) {
-      assert.equal(after.history.length, 2); assert.equal(inbound.length, 0);
+    if (Math.floor(Date.now() / 1000) < dueAt) {
+      assert.equal(after.history.length, previous.length); assert.equal(inbound.length, 0);
     }
     await new Promise(resolve => setTimeout(resolve, 250));
   }
   const after = f.read(id);
-  assert.equal(after.history.length, 3, output); assert.deepEqual(after.history.slice(0, 2), previous);
-  assert.equal(after.history[2].status, 'success', output);
-  assert.ok(after.history[2].executed_at >= updated.task.next_run_at);
+  assert.equal(after.history.length, expectedHistory, output); assert.deepEqual(after.history.slice(0, previous.length), previous);
+  assert.equal(after.history.at(-1).status, 'success', output);
+  assert.ok(after.history.at(-1).executed_at >= dueAt);
   assert.equal(inbound.length, 1, output); assert.equal(inbound[0].direction, 'in');
   assert.equal(inbound[0].session_group, 'telegram:dm-1001'); assert.equal(inbound[0].channel, 'telegram');
   assert.equal(inbound[0].status, 'pending');
-  assert.ok(inbound[0].content.startsWith(executionMarker(id, after.history[2].id) + '\n'));
+  assert.ok(inbound[0].content.startsWith(executionMarker(id, after.history.at(-1).id) + '\n'));
+  assert.equal(after.task.status, 'completed');
+  await new Promise(resolve => setTimeout(resolve, 5500));
+  assert.equal(f.read(id).history.length, expectedHistory);
+  assert.equal(f.c4db.prepare("SELECT count(*) AS n FROM conversations WHERE direction='in' AND instr(content,?)>0").get(updated.task.prompt).n, 1);
   assert.deepEqual(f.read(control), untouched);
 });
