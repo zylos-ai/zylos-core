@@ -17,7 +17,12 @@ const between = (text, start, end) => {
 };
 
 test('Sync procedures use a fixed temporary state name without path placeholders', () => {
-  assert.doesNotMatch(sync, /state\.md\.(?!tmp\b)[^\s`"/]+\.tmp|session-groups\/G\/state\.md/);
+  const format = read('state-format');
+  for (const source of [sync, format]) {
+    assert.doesNotMatch(source, /state\.md\.(?!tmp\b)[^\s`"/]+\.tmp|session-groups\/G\/state\.md/);
+  }
+  assert.match(normalize(format), /Use the restricted tool for `state\.md\.tmp` after checkpoint succeeds/);
+  assert.match(normalize(format), /The tool maps this fixed name to the current scope's temporary state file for the acquired token/);
   assert.match(sync, /"path":"state\.md\.tmp"/);
   for (const section of [between(sync, '## Group Sync', '## Origin Sync'),
     between(sync, '## Single global Sync', '## Moving from old files')]) {
