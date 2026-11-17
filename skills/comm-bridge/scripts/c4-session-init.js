@@ -174,7 +174,7 @@ export async function emitC4Conversations(payload, budget = null, {
     const instructions = [
       `Scope: ${scope.scope}. Working memory is not injected. Read the complete snapshot with: node ${path.join(scope.root, '.claude/skills/zylos-memory/scripts/read-work-memory.js')} --json`,
       fs.existsSync(handoffPath)
-        ? `Before resuming work, read ${handoffPath} in full, using successive file ranges when needed. Reading does not consume it; retain unfinished items.`
+        ? `Before resuming work, read ${handoffPath} in full, using successive file ranges when needed. Reading does not consume it; retain unfinished items. Also read and follow the handoff procedure in ${path.join(scope.root, '.claude/skills/comm-bridge/references/handoff-follow-up.md')}.`
         : `No handoff file is available for this scope (${handoffPath}).`,
     ];
     if (!isSubsession(payload)) instructions.push(await alertTargetInstruction());

@@ -7,6 +7,7 @@ import { createTestEnvironment } from './test-environment.js';
 
 const ROOT = process.cwd();
 const ROOT_NODE_TESTS = [
+  'test/instruction-deployment.integration.test.js',
   'test/tmux-dashboard-reads.integration.test.js',
   'test/claude-upgrade-process.integration.test.js',
   'test/dashboard-display-browser.test.js',

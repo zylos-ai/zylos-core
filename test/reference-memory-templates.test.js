@@ -20,10 +20,8 @@ function between(text, start, end) {
 
 function regions(text) {
   return {
-    tier: text.split('\n').find(line => line.startsWith('| **Reference** |')),
+    table: between(text, '### Memory Tiers and Loading', '\n### Custom Standing Directives'),
     state: between(text, '5. **state.md', '\n### Handoff Follow-up'),
-    classification: between(text, '### Classification Rules for reference/ Files', '\n### On-Demand Memory Loading'),
-    loading: between(text, '### On-Demand Memory Loading', '\n## Data Directories'),
   };
 }
 
@@ -45,52 +43,38 @@ test('reference navigation points decisions and projects to their INDEX', () => 
 
 for (const { runtime, text } of systems) {
   const blocks = regions(text);
-  // Baseline fails: Reference uses *.md with no directory/INDEX/page guidance.
-  test(`${runtime}: Reference tier describes per-project and per-topic directories`, () => {
-    assert.match(blocks.tier, /`memory\/reference\/`/);
-    assert.match(blocks.tier, /`projects\/` and `decisions\/`/);
-    assert.match(blocks.tier, /each with an INDEX; one project or decision topic per page/);
-    assert.match(blocks.tier, /`preferences\.md`, `ideas\.md`/);
-    assert.match(blocks.tier, /`legacy\/` holds the intact, read-only old projects.md\/decisions.md/);
-    assert.match(blocks.tier, /search it for old projects and decisions missing from the new directories/);
+  test(`${runtime}: memory table routes projects and decisions through relevant INDEX pages`, () => {
+    for (const [name, directory, purpose] of [
+      ['Projects', 'projects', 'Scoped work with a lifecycle'],
+      ['Decisions', 'decisions', 'Deliberate choices closing alternatives'],
+    ]) {
+      const row = blocks.table.split('\n').find(line => line.startsWith(`| ${name} |`));
+      assert.ok(row.includes(`memory/reference/${directory}/`));
+      assert.ok(row.includes(purpose));
+      assert.match(row, /read INDEX\.md/);
+      assert.match(row, /then only relevant topic pages/);
+    }
+    for (const location of ['preferences.md', 'ideas.md', 'memory/users/<id>/profile.md', 'memory/reference/legacy/']) {
+      assert.ok(blocks.table.includes(location), location);
+    }
+    assert.match(blocks.table, /Intact, read-only old projects.md\/decisions.md/);
+    assert.match(blocks.table, /old files at reference\/ are also read-only/);
+    assert.match(blocks.table, /For missing INDEX\/matches, follow zylos-memory skill to search old files/);
   });
 
-  // Baseline fails: completed narratives/rationale route to the old files and
-  // there is no dated-result limit or prohibition on copying state blocks.
-  test(`${runtime}: state routes concise dated results and decision rationale to pages`, () => {
-    assert.match(blocks.state, /completed work → 1–3 dated lines of results on the relevant project\s+page in `reference\/projects\/`/);
-    assert.match(blocks.state, /decision rationale → the relevant topic page in\s+`reference\/decisions\/`/);
-    assert.match(blocks.state, /Do not copy state\.md\s+status blocks verbatim into reference\//);
-    assert.doesNotMatch(blocks.state, /reference\/(?:projects|decisions)\.md/);
-  });
-
-  // Baseline fails: classification names .md records, omits INDEX-first reads,
-  // and does not declare legacy files read-only.
-  test(`${runtime}: classification checks INDEX first and preserves read-only history`, () => {
-    assert.match(blocks.classification, /\*\*decisions\/:\*\* deliberate choices[\s\S]*`reference\/decisions\/INDEX\.md` first, then the relevant topic page/);
-    assert.match(blocks.classification, /\*\*projects\/:\*\* work efforts[\s\S]*`reference\/projects\/INDEX\.md` first, then the relevant project page/);
-    assert.match(blocks.classification, /Old `reference\/projects\.md` and `reference\/decisions\.md`, if present, are\s+read-only history\./);
-    assert.match(blocks.classification, /After one-time reorganization they are in `reference\/legacy\/`;\s+search there for old projects and decisions missing from the new directories/);
-    assert.match(blocks.classification, /\*\*preferences\.md:\*\*/);
-    assert.match(blocks.classification, /\*\*ideas\.md:\*\*/);
-  });
-
-  // Baseline fails: on-demand triggers load monolithic files directly, with no
-  // relevant-page selection or skill-directed legacy fallback.
-  test(`${runtime}: on-demand loading selects relevant pages through INDEX`, () => {
-    assert.match(blocks.loading, /making a decision → `reference\/decisions\/INDEX\.md`/);
-    assert.match(blocks.loading, /starting\/resuming work → `reference\/projects\/INDEX\.md`/);
-    assert.match(blocks.loading, /read the corresponding\s+INDEX first and open only relevant pages/);
-    assert.match(blocks.loading, /If the INDEX is missing or has no matching entry, follow the zylos-memory skill\s+to search the old files/);
-    assert.doesNotMatch(blocks.loading, /`(?:reference\/)?(?:projects|decisions)\.md`/);
+  test(`${runtime}: state routes dated results, rationale and superseded detail outside working state`, () => {
+    assert.match(blocks.table, /Completed work → 1–3 dated result lines on its project page/);
+    assert.match(blocks.table, /Decision rationale belongs here/);
+    assert.match(blocks.table, /store superseded detail here/);
+    assert.match(blocks.state, /only the scope's Memory Sync maintains current focus, genuinely pending work and blockers/);
+    assert.match(blocks.state, /Route completed work\/decision rationale\/superseded detail per table/);
+    assert.match(blocks.state, /never copy state status blocks verbatim into reference\//);
   });
 }
 
-test('Claude and Codex use identical text in all four reference-memory regions', () => {
+test('Claude and Codex use identical consolidated reference-memory guidance', () => {
   const [claude, codex] = systems.map(({ text }) => regions(text));
-  for (const key of ['tier', 'state', 'classification', 'loading']) {
-    assert.equal(claude[key], codex[key], key);
-  }
+  for (const key of ['table', 'state']) assert.equal(claude[key], codex[key], key);
 });
 
 // Baseline fails: task recommendations and the completion write both depend on
@@ -109,22 +93,37 @@ test('onboarding contains task suggestions and records first-project results via
 test('both runtimes give identical voluntary release guidance and channel-neutral examples', () => {
   const blocks = systems.map(({ text }) => between(text, '## Voluntary Session Release', '\n## Security'));
   assert.equal(blocks[0], blocks[1]);
-  assert.match(blocks[0], /natural stopping point/);
+  assert.match(blocks[0], /you may request release at a natural stopping point/);
   assert.match(blocks[0], /examples, not fixed triggers/);
-  assert.match(blocks[0], /If you are uncertain[\s\S]*existing idle TTL/);
-  assert.match(blocks[0], /No minimum idle period is\s+required/);
+  assert.match(blocks[0], /no minimum idle time applies/);
+  assert.match(blocks[0], /If unsure, remain available for idle TTL/);
 });
 
-const releaseGuidance = [
-  ...systems.map(({ runtime, text }) => ({
-    name: runtime,
-    text: between(text, '## Voluntary Session Release', '\n## Security'),
-  })),
-  {
-    name: 'activity monitor',
-    text: between(read('skills/activity-monitor/SKILL.md'), 'A multi-session agent may request release', '\nThe supervisor reads these settings'),
-  },
-];
+for (const { runtime, text: system } of systems) {
+  const text = between(system, '## Voluntary Session Release', '\n## Security');
+  test(`${runtime}: release requests inherit identity and leave stopping to the supervisor`, () => {
+    assert.match(text, /`node ~\/zylos\/\.claude\/skills\/activity-monitor\/scripts\/supervisor-request\.js request-release --json`/);
+    for (const rule of [
+      'installed absolute path',
+      'inheriting `ZYLOS_SESSION_GROUP` and `ZYLOS_RUN_ID`',
+      "never supply another group's identity",
+      '`ok:true` records only an in-memory intent: finish the turn',
+      'Once idle with no subagent/Memory Sync running',
+      'supervisor performs the idle-reclaim pre-check',
+      'syncs unsummarized conversations, then reclaims',
+      'Work delivered before fencing cancels intent; you may request again after finishing it',
+      'Restart loses intent; idle TTL remains the fallback',
+      'Rejection/unknown result: keep running; never exit or assume release',
+      'Only the supervisor stops the session',
+    ]) assert.ok(text.includes(rule), rule);
+  });
+
+  test(`${runtime}: release requests do not duplicate supervisor preparation`, () => {
+    assert.doesNotMatch(text, /pending work|current records|handoff|scheduled tasks|wake-up|external.wait|Waiting for a person|reply, review or decision|Finish work you\s+started/i);
+  });
+}
+
+const releaseGuidance = [{ name: 'activity monitor', text: between(read('skills/activity-monitor/SKILL.md'), 'A multi-session agent may request release', '\nThe supervisor reads these settings') }];
 
 for (const { name, text } of releaseGuidance) {
   test(`${name}: release requests register intent through the installed command and inherited identity`, () => {
