@@ -720,3 +720,52 @@ for(const runtime of ['claude','codex'])test(`${runtime} recovered interrupt fac
  assert.equal(recovered.state,'busy');assert.equal(recovered.lastActivityAt,6000);assert.equal(recovered.lastResponseAt,null);
  assert.equal(activity.claimQuietTurn(6000,1206002),true);
 });
+
+// Bounded transcript reads must fence both eligibility and an admitted close.
+// Run for quiet-turn/transcript changes; skip unrelated UI. The official runner
+// and fixture isolate all files; no runtime, socket or service is contacted.
+for(const runtime of ['claude','codex'])test(`${runtime} unread transcript delays quiet-turn eligibility until the next bounded read`,t=>{
+ const {root,activity,row}=fixture(t,runtime),transcript=path.join(root,'s.jsonl');
+ fs.writeFileSync(transcript,'{}\n'.repeat(Math.ceil(TRANSCRIPT_READ_BUDGET_BYTES/3)+10));
+ fs.utimesSync(transcript,1,1);
+ activity.consume([row('session_start',{transcript_path:transcript}),row('prompt',{ts:6000})]);
+ const now=6000+OPEN_TURN_INACTIVITY_TIMEOUT_MS;
+ const pending=activity.read(now);
+ assert.equal(pending.transcriptPending,true);assert.ok(activity.transcriptOffset<fs.statSync(transcript).size);
+ assert.equal(pending.tools.length,0);assert.equal(pending.state,'busy');assert.equal(pending.quietTurnDue,false);
+ assert.equal(activity.claimQuietTurn(pending.lastActivityAt,now),false);
+ const drained=activity.read(now);
+ assert.equal(drained.transcriptPending,false);assert.equal(drained.quietTurnDue,true);
+ assert.equal(activity.claimQuietTurn(drained.lastActivityAt,now),true);
+});
+
+test('admitted quiet-turn close waits for the complete transcript even after an old tool result',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl');
+ const result=JSON.stringify({message:{content:[{type:'tool_result',tool_use_id:'old'}]}})+'\n';
+ fs.writeFileSync(transcript,result+'{}\n'.repeat(Math.ceil(TRANSCRIPT_READ_BUDGET_BYTES/3)+10));
+ fs.utimesSync(transcript,1,1);
+ activity.consume([row('session_start',{transcript_path:transcript}),row('prompt',{ts:6000}),
+  row('pre_tool',{ts:7000,tool_use_id:'old'}),
+  row('quiet_turn_interrupt',{ts:1207000,turn_started_at:6000,last_activity_at:7000,
+   last_native_activity_at:7000,last_response_at:7000,control_id:7})]);
+ const pending=activity.read(1207000);
+ assert.equal(pending.transcriptPending,true);assert.equal(pending.tools.length,0);
+ assert.equal(pending.state,'busy');assert.equal(pending.turnOpen,true);
+ assert.ok(activity.pendingQuietTurnClose);
+ const drained=activity.read(1207000);
+ assert.equal(drained.transcriptPending,false);assert.equal(drained.state,'idle');assert.equal(drained.turnOpen,false);
+ assert.equal(activity.pendingQuietTurnClose,null);
+});
+
+for(const runtime of ['claude','codex'])test(`${runtime} new native activity without an AI response rejects an admitted quiet-turn close`,t=>{
+ const {activity,row}=fixture(t,runtime);
+ activity.consume([row('prompt',{ts:6000}),
+  row('quiet_turn_interrupt',{ts:1206000,turn_started_at:6000,last_activity_at:6000,
+   last_native_activity_at:6000,last_response_at:null,control_id:7}),
+  row('post_tool',{ts:1206001,tool_use_id:'already-completed'})]);
+ const observed=activity.read(1206002);
+ assert.equal(observed.lastResponseAt,null);assert.equal(observed.turnStartedAt,6000);
+ assert.equal(observed.lastNativeActivityAt,1206001);assert.equal(observed.tools.length,0);
+ assert.equal(observed.state,'busy');assert.equal(observed.turnOpen,true);
+ assert.equal(activity.pendingQuietTurnClose,null);
+});

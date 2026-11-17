@@ -6,6 +6,7 @@ import path from 'node:path';
 import net from 'node:net';
 import { once } from 'node:events';
 import { createSupervisor } from '../supervisor.js';
+import { TRANSCRIPT_READ_BUDGET_BYTES } from '../session-activity.js';
 import { RestartRequestStore } from '../restart-request-store.js';
 import { groupRunDir } from '../../../../cli/lib/session-group-paths.js';
 function fixture(t,{batchIdentities,badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunchConfig=()=>({runtime:'claude',mode:'default'}),consumeHealthEvents,readConfiguration=async()=>({mode:'multi',runtime:'claude',capacity:2}),checkAuth=async()=>({status:'uncertain'}),alert,now=Date.now,database={},readSyncMarker,prepareReferenceReorg,prompts}={}) {
@@ -804,14 +805,14 @@ for(const runtime of ['claude','codex'])test(`assembled ${runtime} quiet-turn in
  assert.equal(await f.supervisor.interruptQuietTurn(scene),true);assert.equal(controls.length,2);
 });
 
-for(const outcome of ['throw','invalid-id','activity','replacement'])test(`assembled quiet-turn ${outcome} cannot close new work or repeat an unknown Escape`,async t=>{
+for(const outcome of ['throw','invalid-id','activity','tool','replacement'])test(`assembled quiet-turn ${outcome} cannot close new work or repeat an unknown Escape`,async t=>{
  let now=1201000,attempts=0;let f;
  const file=()=>path.join(f.root,'events.jsonl');
  f=fixture(t,{now:()=>now,database:{insertControl:()=>{
   attempts++;
   if(outcome==='throw')throw new Error('uncertain queue result');
   if(outcome==='invalid-id')return {id:0};
-  if(outcome==='activity')fs.appendFileSync(file(),JSON.stringify({run_id:'r',session_id:'s',runtime:'claude',ts:now,event:'prompt'})+'\n');
+  if(['activity','tool'].includes(outcome))fs.appendFileSync(file(),JSON.stringify({run_id:'r',session_id:'s',runtime:'claude',ts:now,event:outcome==='tool'?'pre_tool':'prompt',tool_use_id:'new-tool',tool:'Bash'})+'\n');
   return {id:1};
  }}});
  const scene={sessionGroup:'a',runDir:f.root,runId:'r',sessionId:'s',runtime:'claude',createdAt:0,present:true,ready:true};
@@ -823,6 +824,10 @@ for(const outcome of ['throw','invalid-id','activity','replacement'])test(`assem
  assert.equal(f.supervisor.readActivity(scene).state,'busy');
  assert.equal(await f.supervisor.interruptQuietTurn(scene),false);
  assert.equal(attempts,outcome==='replacement'?0:1);
+ const facts=fs.readFileSync(file(),'utf8').trim().split('\n').map(line=>JSON.parse(line));
+ assert.equal(facts.filter(row=>row.event==='quiet_turn_interrupt').length,0);
+ const observed=f.supervisor.readActivity(scene);
+ assert.equal(observed.turnOpen,true);assert.equal(observed.tools.length,outcome==='tool'?1:0);
 });
 
 for(const outcome of ['pending','done','unknown'])test(`quiet-turn ${outcome} admission is one-shot across supervisor restart`,async t=>{
@@ -891,4 +896,34 @@ for(const artifact of ['transcript-result','escape-artifact'])test(`quiet-turn $
  assert.equal(recovered.state,'idle');assert.equal(recovered.turnOpen,false);assert.equal(recovered.tools.length,0);
  assert.equal(recovered.lastResponseAt,artifact==='transcript-result'?1500:null);
  now+=2400000;assert.equal(await restarted.interruptQuietTurn(scene),false);assert.equal(attempts,1);
+});
+
+// Boundary: real bounded transcript reader -> supervisor interrupt -> queue.
+// Run for transcript eligibility/admission changes; skip unrelated UI. Official
+// runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; no native services or DB used.
+test('unread transcript prevents Escape admission until all bounded reads finish',async t=>{
+ const now=1206000,controls=[];
+ const f=fixture(t,{now:()=>now,database:{insertControl:content=>{controls.push(content);return {id:controls.length};}}});
+ const scene={sessionGroup:'a',runDir:f.root,runId:'r',sessionId:'s',runtime:'claude',createdAt:0,present:true,ready:true};
+ f.scenes.readIdentity=async()=>scene;
+ f.scenes.bindTarget=async()=>({expectedRunId:'r',tmuxTarget:{serverGeneration:'1:1',sessionId:'$1',paneId:'%1'}});
+ const transcript=path.join(f.root,'transcript.jsonl');
+ fs.writeFileSync(transcript,'{}\n'.repeat(Math.ceil(8*TRANSCRIPT_READ_BUDGET_BYTES/3)));
+ fs.utimesSync(transcript,1,1);
+ const row=(event,ts,extra={})=>({run_id:'r',session_id:'s',runtime:'claude',event,ts,...extra});
+ fs.writeFileSync(path.join(f.root,'events.jsonl'),[row('session_start',500,{transcript_path:transcript}),row('prompt',6000)].map(value=>JSON.stringify(value)+'\n').join(''));
+ for(const key of ['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR'])assert.ok(process.env[key]&&!path.resolve(process.env[key]).startsWith(path.resolve(os.userInfo().homedir)+path.sep));
+ t.diagnostic(JSON.stringify({HOME:process.env.HOME,ZYLOS_DIR:process.env.ZYLOS_DIR,PM2_HOME:process.env.PM2_HOME,TMPDIR:process.env.TMPDIR,runDir:f.root,transcript,database:'injected',tmux:'unused'}));
+ const pending=f.supervisor.readActivity(scene);
+ assert.equal(pending.transcriptPending,true);assert.equal(pending.tools.length,0);
+ assert.equal(await f.supervisor.interruptQuietTurn(scene),false);assert.equal(controls.length,0);
+ let drained=false;
+ for(let read=0;read<10;read++){
+  const observed=f.supervisor.readActivity(scene);
+  assert.equal(observed.state,'busy');
+  if(!observed.transcriptPending){drained=true;assert.equal(observed.quietTurnDue,true);break;}
+ }
+ assert.equal(drained,true);
+ assert.equal(await f.supervisor.interruptQuietTurn(scene),true);
+ assert.deepEqual(controls,['[KEYSTROKE]Escape']);assert.equal(f.supervisor.readActivity(scene).state,'idle');
 });
