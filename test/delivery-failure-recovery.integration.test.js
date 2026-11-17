@@ -1,20 +1,37 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
 import { once } from 'node:events';
-import * as database from '../skills/comm-bridge/scripts/c4-db.js';
-import { createDispatcher } from '../skills/comm-bridge/scripts/router/factory.js';
-import { createSupervisor } from '../skills/activity-monitor/scripts/supervisor.js';
-import { RestartRequestStore } from '../skills/activity-monitor/scripts/restart-request-store.js';
-import { ACTIVITY_MONITOR_DIR } from '../skills/comm-bridge/scripts/c4-config.js';
-import { CONFIG_FILE, SKILLS_DIR } from '../cli/lib/config.js';
+
+// The runner's environment is shared by concurrent files. Allocate this file's
+// config, socket and database before any product module captures its paths.
+const inheritedRoot = process.env.ZYLOS_DIR;
+assert.ok(inheritedRoot && process.env.TMPDIR, 'use the official isolated Node runner');
+const privateRoot = fs.mkdtempSync(path.join(process.env.TMPDIR, 'dr-'));
+process.env.HOME = path.join(privateRoot, 'h');
+process.env.ZYLOS_DIR = path.join(privateRoot, 'z');
+process.env.PM2_HOME = path.join(privateRoot, 'p');
+for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME']) fs.mkdirSync(process.env[key]);
+after(() => fs.rmSync(privateRoot, { recursive: true, force: true }));
+
+const database = await import('../skills/comm-bridge/scripts/c4-db.js');
+const { createDispatcher } = await import('../skills/comm-bridge/scripts/router/factory.js');
+const { createSupervisor } = await import('../skills/activity-monitor/scripts/supervisor.js');
+const { RestartRequestStore } = await import('../skills/activity-monitor/scripts/restart-request-store.js');
+const { ACTIVITY_MONITOR_DIR } = await import('../skills/comm-bridge/scripts/c4-config.js');
+const { CONFIG_FILE, SKILLS_DIR } = await import('../cli/lib/config.js');
+assert.notEqual(process.env.ZYLOS_DIR, inheritedRoot);
+assert.equal(CONFIG_FILE, path.join(privateRoot, 'z', '.zylos', 'config.json'));
+assert.equal(ACTIVITY_MONITOR_DIR, path.join(privateRoot, 'z', 'activity-monitor'));
+assert.ok(Buffer.byteLength(path.join(ACTIVITY_MONITOR_DIR, 'am.sock')) < 104);
 
 // Boundary: real factory defaults -> terminal ledger write -> notification IPC
 // -> assembled Supervisor -> activity/fence gates -> existing stop path. Run
 // for delivery recovery or its wiring; unrelated changes may skip. Official
-// runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR. Only private SQLite and
+// runner isolates short TMPDIR; this file owns HOME/ZYLOS_DIR/PM2_HOME beneath
+// it, independently of every concurrent test file. Only private SQLite and
 // Unix sockets are used; terminal/process boundaries are injected (no tmux/PM2).
 // Server, clients, dispatcher and Supervisor are drained on failure and timeout.
 for (const [mode, maintenance] of [['single', null], ['single', 'memory_sync'],
