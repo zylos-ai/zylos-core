@@ -946,6 +946,17 @@ export class SupervisorLifecycle {
       const failed = origin ? this.d.syncObserver.originResults.at(-1)?.status === 'error' : trigger?.attempts >= 3;
       if (code || failed) alerts.push({ ...candidate, ...(code ? { reason: code } : {}) });
     }
+    const completedSymptoms = [];
+    for (const alert of alerts) {
+      const scene = context.scenes.find(row => row.sessionGroup === alert.scope && row.present);
+      if (alert.type !== 'state_uncommitted' || alert.kind !== 'group' || !scene) { completedSymptoms.push(alert); continue; }
+      const trigger = [...this.d.syncObserver.groups.values()].find(row => row.kind === 'group' && row.scope === alert.scope && row.runId === scene.runId);
+      if (!trigger) continue;
+      const control = trigger.controlId ? await this.d.db.getControlById(trigger.controlId) : null;
+      const code = latestSyncFailure({ env: this.d.env, scene, target: { kind: 'group', scope: alert.scope }, startedAt: trigger.ts });
+      if (code || TERMINAL_CONTROLS.has(control?.status)) completedSymptoms.push({ ...alert, ...(code ? { reason: code } : {}) });
+    }
+    alerts = completedSymptoms;
     let resolved = this.d.syncObserver.resolved ?? [];
     if (this.d.syncMaintenance) {
       const repairs = await this.d.syncMaintenance.advance(alerts, context, this);

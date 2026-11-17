@@ -185,3 +185,26 @@ test('each timeout remains consumed after supervisor restart without a time wind
   await f.lifecycle.syncAlerts(f.context);
   assert.equal(f.alerts().length, 2, 'restart recovers handled timeout incidents from persistent episode state');
 });
+
+
+// Real diagnostic/control incident integration, same isolated boundary above.
+// Run for repair-first notification gates; unrelated UI may skip.
+test('active backlog waits for ordinary Sync failure before notifying', async t => {
+  const f = observableFixture(t);
+  await f.lifecycle.syncScope(f.scene, 'group', { count: 1000, firstAt: f.now(), nonempty: true }, f.context);
+  await f.lifecycle.syncAlerts(f.context); assert.equal(f.alerts().length, 0);
+  appendEvent(f.file, { v: 1, ts: f.now(), event: 'sync_result', kind: 'group', scope: 'origin', runId: f.scene.runId, status: 'error', code: 'INPUT_CHANGED' });
+  await f.lifecycle.syncAlerts(f.context);
+  assert.equal(f.alerts().filter(row => /type=backlog; kind=group/.test(row.content)).length, 1);
+});
+
+test('active old state gaps wait for an actual repair attempt before notifying', async t => {
+  const f = observableFixture(t);
+  const row = f.db.insertConversation('out', 'system', null, 'fixture result');
+  f.db.createCheckpoint('origin', row.id, 'fixture checkpoint');
+  await f.lifecycle.syncAlerts(f.context); assert.equal(f.alerts().length, 0);
+  await f.lifecycle.syncScope(f.scene, 'group', { count: 16, firstAt: f.now(), nonempty: true }, f.context);
+  appendEvent(f.file, { v: 1, ts: f.now(), event: 'sync_result', kind: 'group', scope: 'origin', runId: f.scene.runId, status: 'error', code: 'INPUT_CHANGED' });
+  await f.lifecycle.syncAlerts(f.context);
+  assert.equal(f.alerts().filter(row => /type=state_uncommitted/.test(row.content)).length, 1);
+});
