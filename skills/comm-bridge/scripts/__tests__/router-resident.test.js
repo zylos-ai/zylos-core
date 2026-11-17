@@ -148,7 +148,7 @@ test('maintenance ignores same-user commands that only mention script words or t
   });
   await once(grep, 'spawn');
   await maintenanceProcess(t, 'grep.js', ['upgrade-claude', 'restart-claude', 'https://claude.ai/install.sh']);
-  await maintenanceProcess(t, 'runner.js', ['skills/upgrade-claude/scripts/__tests__/process-check.test.js',
+  await maintenanceProcess(t, 'runner.js', ['skills/upgrade-claude/scripts/__tests__/upgrade-runtime.test.js',
     'skills/restart-claude/scripts/restart.js', 'skills/upgrade-claude/scripts/upgrade.js']);
   assert.equal(await runningMaintenance(), null);
 });

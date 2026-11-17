@@ -42,7 +42,7 @@ async function invoke(t, producer, response) {
     } else {
       const result = await upgradeRuntime({ readMode: () => ({ mode: 'multi' }), readTransition: () => null,
         install: () => f.trace.push('install'), requestRestart: restart,
-        enqueue: () => { throw new Error('must not enqueue'); }, waitForExit: () => { throw new Error('must not poll'); } });
+        enqueue: () => { throw new Error('must not enqueue'); } });
       output.push(JSON.stringify(result));
     }
   } finally {

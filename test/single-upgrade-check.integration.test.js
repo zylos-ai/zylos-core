@@ -4,14 +4,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { readyTmuxTarget } from './helpers/ready-tmux-target.js';
 
-// Boundary: a single-session upgrade restart from the real requestRuntimeRestart
+// Boundary: a single-session upgrade restart from the real upgradeRuntime
 // (default dependencies: the session mode file, the transition record, the
 // installed check prompt and c4-control enqueue) through the real Router
 // dispatcher, Claude session adapter and paste on a private tmux socket into a
 // input recorder that stands in for the runtime, on a private C4 database. It
-// shows the check is pasted before /exit and only once, /exit follows the
+// shows installation finishes before queueing, the check is pasted before /exit and only once, /exit follows the
 // acknowledged check, an unanswered check expires after 60 seconds and /exit
 // still follows, and a busy session or a new message never drops or overtakes
 // the queued /exit. Run for changes to the single-session restart producer, the
@@ -30,8 +31,8 @@ test('single-session upgrade checks waiting work before /exit, at most 60 second
   }
   const repository = fileURLToPath(new URL('../', import.meta.url));
   let dispatcher = null;
-  const f = readyTmuxTarget(t, { prefix: 'single-upgrade-', mode: 'single', runtime: 'claude', packageRoot: repository });
   t.after(() => dispatcher?.stop());
+  const f = readyTmuxTarget(t, { prefix: 'single-upgrade-', mode: 'single', runtime: 'claude', packageRoot: repository });
   const oldEnv = { ...process.env };
   t.after(() => {
     for (const key of Object.keys(process.env)) if (!Object.hasOwn(oldEnv, key)) delete process.env[key];
@@ -56,13 +57,14 @@ test('single-session upgrade checks waiting work before /exit, at most 60 second
   // to either the paste or the subsequent Enter.
   const lines = path.join(f.root, 'pasted.jsonl');
   const recorder = path.join(f.root, 'claude');
+  const exitEnabled = path.join(f.root, 'exit-enabled');
   fs.writeFileSync(recorder, `#!${process.execPath}\nconst fs=require('node:fs');let text='',input='',remaining=null;
 const prompt=()=>process.stdout.write('\\x1b[2J\\x1b[H\\u276f ');process.stdin.setRawMode(true);process.stdin.setEncoding('utf8');prompt();
 process.stdin.on('data',chunk=>{text+=chunk;let i;while((i=text.indexOf('\\r'))>=0){
 input+=text.slice(0,i).replace(/\\x1b\\[20[01]~/g,'');text=text.slice(i+1);
 if(remaining===null)remaining=input.startsWith(${JSON.stringify(checkPrefix)})?${checkNewlines}:0;
 if(remaining>0){input+='\\n';remaining--;continue;}
-fs.appendFileSync(${JSON.stringify(lines)},JSON.stringify(input)+'\\n');input='';remaining=null;prompt();}});
+fs.appendFileSync(${JSON.stringify(lines)},JSON.stringify(input)+'\\n');if(input==='/exit'&&fs.existsSync(${JSON.stringify(exitEnabled)}))setTimeout(()=>process.exit(0),100);input='';remaining=null;prompt();}});
 setInterval(()=>{},1000);\n`, { mode: 0o700 });
   f.tmux('set-option', '-g', 'remain-on-exit', 'off');
   f.tmux('respawn-pane', '-k', '-t', 'zylos-group-origin', recorder);
@@ -74,8 +76,9 @@ setInterval(()=>{},1000);\n`, { mode: 0o700 });
     env: Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR', 'TMUX'].map(key => [key, process.env[key]])) }));
   const db = await import('../skills/comm-bridge/scripts/c4-db.js');
   t.after(() => db.close());
-  const { requestRuntimeRestart } = await import('../cli/lib/request-runtime-restart.js');
+  const { upgradeRuntime } = await import('../skills/upgrade-claude/scripts/upgrade.js');
   const { createDispatcher } = await import('../skills/comm-bridge/scripts/router/factory.js');
+  const { getSessionAdapter } = await import('../cli/lib/runtime/index.js');
 
   // The real clock plus a test-controlled jump, so delivery's own short waits still elapse.
   let offset = 0;
@@ -88,14 +91,18 @@ setInterval(()=>{},1000);\n`, { mode: 0o700 });
   const endTurn = () => { turnsEnded = pasted().length; };
   const session = () => busy || pasted().length > turnsEnded ? { state: 'busy', idle_seconds: 0 } : { state: 'idle', idle_seconds: 10 };
   const ready = JSON.parse(fs.readFileSync(f.readyPath, 'utf8'));
+  const currentReady = () => JSON.parse(fs.readFileSync(f.readyPath, 'utf8'));
   dispatcher = createDispatcher({
     env: { ...process.env }, now: () => Date.now() + offset,
-    readSessionState: async () => ({ identity: { runId: ready.runId, runtime: 'claude', ready: true },
+    readSessionState: async () => ({ identity: { runId: currentReady().runId, runtime: 'claude', ready: true },
       status: { valid: true, value: { ...session(), health: 'ok', proc: { alive: true } } } }),
     readRuntimeHealth: () => ({ health: 'ok', publicHealth: 'ok' }),
     diagnostics: { diagnostic: (...a) => record(a), maintain() {} }, log: m => record(['log', m]), notifyDelivered() {},
     sendAlert: () => assert.fail('External send forbidden'),
-    submit: async () => assert.fail('a running single session needs no start_attempt'),
+    submit: async () => assert.fail('healthy single-session startup needs no supervisor start_attempt'),
+    getSessionAdapter: runtime => getSessionAdapter(runtime, { root: f.root, env: f.env,
+      tmux: { socketPath: f.socketPath, binary: f.binary, configFile: '/dev/null' },
+      runtimeExecutable: () => path.join(f.root, '.local/bin/claude') }),
     prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
   }, { tmux: { socketPath: f.socketPath, binary: f.binary, configFile: '/dev/null' },
     delivery: { periodicEnabled: false, verifyWaitMs: 20, idleHoldMs: 1, idleWaitMs: 50, idlePollMs: 1, gateBackoffBaseMs: 1, gateBackoffMaxMs: 5 } });
@@ -108,7 +115,12 @@ setInterval(()=>{},1000);\n`, { mode: 0o700 });
   const isCheck = line => line.startsWith(`Meanwhile, ${SINGLE_UPGRADE_RESTART_CHECK_PROMPT}`);
   const restart = async () => {
     const started = performance.now();
-    const result = await requestRuntimeRestart();
+    let installed = false;
+    const result = await upgradeRuntime({ install: async () => {
+      assert.equal(db.getDb().prepare('SELECT COUNT(*) AS count FROM control_queue WHERE status = ?').get('pending').count, 0);
+      installed = true;
+    } });
+    assert.equal(installed, true, 'the installer completes before controls are queued');
     assert.ok(performance.now() - started < 10000, 'the producer returns within its submission budget');
     assert.equal(result.ok, true, JSON.stringify(result)); assert.equal(result.data.result, 'exit_enqueued');
     const check = control(result.data.checkControlId), exit = control(result.data.exitControlId);
@@ -186,8 +198,48 @@ setInterval(()=>{},1000);\n`, { mode: 0o700 });
     assert.ok(pasted().findIndex(line => line.includes('new message while busy')) > 0);
     assert.equal(pasted().filter(isCheck).length, 0);
   }
+  // Replacement: the real dispatcher and session adapter launch the executable
+  // installed by the upgrade. READY and the model process are fixture boundaries;
+  // no Supervisor submission or authenticated Claude session is needed in single mode.
+  {
+    reset();
+    const executable = path.join(f.root, '.local/bin/claude');
+    const runtimeFixture = fileURLToPath(new URL('./fixtures/claude-installed-runtime.js', import.meta.url));
+    const upgraded = await upgradeRuntime({ install: async () => {
+      fs.mkdirSync(path.dirname(executable), { recursive: true });
+      fs.copyFileSync(runtimeFixture, `${executable}.mjs`);
+      fs.chmodSync(`${executable}.mjs`, 0o700);
+      fs.symlinkSync(`${executable}.mjs`, executable);
+    } });
+    assert.equal(upgraded.ok, true);
+    assert.equal(fs.existsSync(path.join(f.root, 'replacement-version.json')), false);
+    fs.writeFileSync(exitEnabled, 'enabled');
+    await run();
+    assert.ok(isCheck(pasted()[0]));
+    db.ackControl(upgraded.data.checkControlId);
+    endTurn();
+    await run();
+    assert.equal(pasted()[1], '/exit');
+    assert.equal(control(upgraded.data.exitControlId).status, 'done', 'exit delivery settles before replacement startup');
+    setClock(Date.now() + 6000);
+    const marker = path.join(f.root, 'replacement-version.json');
+    for (let n = 0; n < 30 && !fs.existsSync(marker); n++) {
+      await run(1);
+      await new Promise(resolve => setTimeout(resolve, 30));
+    }
+    assert.ok(fs.existsSync(marker), JSON.stringify(events));
+    const replacement = JSON.parse(fs.readFileSync(marker, 'utf8'));
+    assert.equal(replacement.version, 'Claude Code isolated-new');
+    assert.equal(execFileSync(executable, ['--version'], { env: f.env, encoding: 'utf8', timeout: 5000 }).trim(),
+      replacement.version, 'the replacement marker matches the installed executable version');
+    assert.notEqual(replacement.runId, ready.runId);
+    assert.equal(currentReady().runId, replacement.runId);
+    assert.equal(pasted().filter(line => line === '/exit').length, 1, 'the old runtime receives exit once');
+    assert.equal(control(upgraded.data.exitControlId).status, 'done', 'replacement does not retry the completed exit');
+    console.log('Installed replacement outcome:', JSON.stringify(replacement));
+  }
   const rows = db.getDb().prepare('SELECT raw_content FROM control_queue').all();
-  assert.equal(rows.filter(row => row.raw_content === SINGLE_UPGRADE_RESTART_CHECK_PROMPT).length, 3, 'one check per restart');
+  assert.equal(rows.filter(row => row.raw_content === SINGLE_UPGRADE_RESTART_CHECK_PROMPT).length, 4, 'one check per restart');
   console.log('Single upgrade check outcome:', JSON.stringify({ controls: db.getDb().prepare('SELECT id, raw_content = ? AS check_control, status FROM control_queue ORDER BY id')
     .all(SINGLE_UPGRADE_RESTART_CHECK_PROMPT) }));
 });

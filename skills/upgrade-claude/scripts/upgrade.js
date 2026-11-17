@@ -1,28 +1,21 @@
 #!/usr/bin/env node
 /**
  * Upgrade Claude Code Script (C4-integrated)
- * Uses Supervisor restart admission in multi/transition; retains single exit ordering.
+ * Installs first, then requests graceful replacement sessions.
  * Usage: node upgrade.js
  *
  * IMPORTANT: Run with nohup and redirect output to log file:
  *   nohup node ~/zylos/.claude/skills/upgrade-claude/scripts/upgrade.js >> ~/zylos/logs/upgrade.log 2>&1 &
  */
 
-import { execSync, execFileSync } from 'child_process';
-import path from 'path';
+import { execSync } from 'child_process';
 import os from 'os';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadCoreModule } from '../../activity-monitor/scripts/core-modules.js';
 import { getModeTransition } from '../../comm-bridge/scripts/c4-db.js';
-import { runCurrentUserPgrep } from '../../comm-bridge/scripts/process-check.js';
-const { requestRuntimeRestart, enqueueSingleUpgradeExit, SINGLE_UPGRADE_CHECK_ACK_DEADLINE_SECONDS } = await loadCoreModule('request-runtime-restart.js');
+const { requestRuntimeRestart, enqueueSingleUpgradeExit } = await loadCoreModule('request-runtime-restart.js');
 const { readSessionMode } = await loadCoreModule('config.js');
-
-const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
-// Up to 120 seconds for Claude to exit, after at most the check's acknowledgment window.
-const MAX_EXIT_WAIT = SINGLE_UPGRADE_CHECK_ACK_DEADLINE_SECONDS + 120;
 
 function ts() {
   return new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -36,10 +29,6 @@ function logError(msg) {
   console.error(`[${ts()}] [upgrade-claude] ${msg}`);
 }
 
-function sleep(seconds) {
-  execSync(`sleep ${seconds}`);
-}
-
 // The waiting-work check is queued ahead of /exit; see enqueueSingleUpgradeExit.
 async function enqueueExit() {
   try {
@@ -50,43 +39,6 @@ async function enqueueExit() {
     logError(`Failed to enqueue the check and /exit: ${err.message}`);
     throw err;
   }
-}
-
-export function cancelExit(controls) {
-  if (!controls) return;
-  for (const [name, id] of [['/exit', controls.exitControlId], ['check', controls.checkControlId]]) {
-    try {
-      execFileSync('node', [C4_CONTROL, 'ack', '--id', String(id)], { stdio: 'pipe' });
-      log(`Cancelled queued ${name} (id=${id})`);
-    } catch {
-      logError(`WARNING: Failed to cancel queued ${name} (id=${id})`);
-    }
-  }
-}
-
-function isClaudeRunning() {
-  try {
-    runCurrentUserPgrep('claude.*--dangerously-skip-permissions', execFileSync, { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function waitForClaudeExit() {
-  let waited = 0;
-
-  while (waited < MAX_EXIT_WAIT) {
-    if (!isClaudeRunning()) {
-      log('Claude process has exited');
-      return true;
-    }
-    sleep(2);
-    waited += 2;
-  }
-
-  logError(`ABORT: Claude still running after ${MAX_EXIT_WAIT}s, upgrade cancelled`);
-  return false;
 }
 
 function upgradeClaudeCode() {
@@ -116,23 +68,13 @@ function upgradeClaudeCode() {
 }
 
 export async function upgradeRuntime({ readMode = readSessionMode, readTransition = getModeTransition,
-  install = upgradeClaudeCode, requestRestart = requestRuntimeRestart,
-  enqueue = enqueueExit, waitForExit = waitForClaudeExit, cancel = cancelExit } = {}) {
+  install = upgradeClaudeCode, requestRestart = requestRuntimeRestart, enqueue = enqueueExit } = {}) {
   const mode = await readMode();
   const transition = await readTransition();
-  if (mode.mode === 'multi' || transition) {
-    // Runtime installers must preserve existing running processes. Validate this
-    // property for each supported installer before enabling a production upgrade.
-    await install();
-    return requestRestart();
-  }
-  const controls = await enqueue();
-  if (!await waitForExit()) {
-    await cancel(controls);
-    throw Object.assign(new Error('Runtime did not exit before upgrade deadline'), {code:'EXIT_UNCONFIRMED'});
-  }
   await install();
-  return {ok:true,data:{result:'installed_after_exit'}};
+  if (mode.mode === 'multi' || transition) return requestRestart();
+  const controls = await enqueue();
+  return {ok:true,data:{result:'exit_enqueued',mode:'single',...controls}};
 }
 
 async function main() {

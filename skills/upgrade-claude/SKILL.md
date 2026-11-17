@@ -64,18 +64,17 @@ nohup node ~/zylos/.claude/skills/upgrade-claude/scripts/upgrade.js >> ~/zylos/l
 
 ## How It Works
 
-In multi mode or during a mode transition, the script installs first and then
-submits `restart_all`. The runtime installer must preserve existing running
-processes; verify this for the installed runtime distribution before using that
-upgrade path. A refused or unknown restart result is reported without automatic
+The script installs Claude Code first in every mode. Installation failure is
+reported without queueing an exit or requesting a restart.
+
+In multi mode or during a mode transition, installation is followed by
+`restart_all`. A refused or unknown restart result is reported without automatic
 resubmission. Supervisor acceptance does not mean new sessions are ready: each
 running session first gets up to 60 seconds to check work waiting on external
 events before it is restarted.
 
-In steady single mode, the existing ordering remains:
+In steady single mode:
 
-
-1. **Enqueue the check, then /exit**: Puts the waiting-work check (priority=1, block_queue_until_idle, 60-second ack deadline) and then `/exit` (priority=1, block_queue_until_idle) into the control queue — dispatcher delivers the check first, `/exit` after the check's turn or its deadline, and handles idle detection and message blocking
-2. **Wait for exit**: Monitors Claude process until it exits (up to 180s: the 60-second check window plus 120s); aborts if timeout, cancelling both queued controls
-3. **Upgrade**: Runs native installer (`curl -fsSL https://claude.ai/install.sh | bash`)
-4. **Replacement**: the dispatcher starts replacement sessions after the old sessions exit
+1. **Install**: Runs the native installer (`curl -fsSL https://claude.ai/install.sh | bash`) and logs the installed version.
+2. **Enqueue the check, then /exit**: Puts the waiting-work check (priority=1, block_queue_until_idle, 60-second ack deadline) and then `/exit` (priority=1, block_queue_until_idle) into the control queue. The dispatcher delivers the check first and `/exit` after the check's turn or its deadline, respecting idle detection and message blocking.
+3. **Replacement**: The dispatcher starts the replacement session after the old session exits; the replacement uses the installed version. The upgrade script does not poll or wait for Claude processes to exit.
