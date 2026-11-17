@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, fork } from 'node:child_process';
+import { once } from 'node:events';
 import { readyTmuxTarget } from './helpers/ready-tmux-target.js';
 
 // Boundary: a single-session upgrade restart from the real upgradeRuntime
@@ -12,10 +13,13 @@ import { readyTmuxTarget } from './helpers/ready-tmux-target.js';
 // installed check prompt and c4-control enqueue) through the real Router
 // dispatcher, Claude session adapter and paste on a private tmux socket into a
 // input recorder that stands in for the runtime, on a private C4 database. It
-// shows installation finishes before queueing, the check is pasted before /exit and only once, /exit follows the
+// shows installation finishes before queueing, the check is pasted before /exit
+// and only once, /exit follows the
 // acknowledged check, an unanswered check expires after 60 seconds and /exit
 // still follows, and a busy session or a new message never drops or overtakes
-// the queued /exit. Run for changes to the single-session restart producer, the
+// the queued /exit. Replacement also uses real single-session preparation while
+// harmless restart/upgrade/installer-shaped processes remain alive. Run for
+// changes to single-session preparation or the upgrade restart producer, the
 // check prompt, control ordering, require-idle gating or control expiry; other
 // changes may skip. Session state is injected and the Router clock jumps (no real
 // minute is waited), the runtime is a recorder, and no authenticated model or
@@ -31,7 +35,14 @@ test('single-session upgrade checks waiting work before /exit, at most 60 second
   }
   const repository = fileURLToPath(new URL('../', import.meta.url));
   let dispatcher = null;
-  t.after(() => dispatcher?.stop());
+  const held = [];
+  t.after(async () => {
+    try { await dispatcher?.stop(); }
+    finally {
+      for (const { child } of held) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      await Promise.all(held.map(({ ended }) => ended));
+    }
+  });
   const f = readyTmuxTarget(t, { prefix: 'single-upgrade-', mode: 'single', runtime: 'claude', packageRoot: repository });
   const oldEnv = { ...process.env };
   t.after(() => {
@@ -79,6 +90,13 @@ setInterval(()=>{},1000);\n`, { mode: 0o700 });
   const { upgradeRuntime } = await import('../skills/upgrade-claude/scripts/upgrade.js');
   const { createDispatcher } = await import('../skills/comm-bridge/scripts/router/factory.js');
   const { getSessionAdapter } = await import('../cli/lib/runtime/index.js');
+  const { createSinglePreparation } = await import('../skills/comm-bridge/scripts/router/resident.js');
+  const preparation = [];
+  const prepareSingle = createSinglePreparation({
+    clearStaleState: async runtime => preparation.push(['clear', runtime]),
+    resetToolLifecycle: async runtime => preparation.push(['reset', runtime]),
+    buildInstructionFile: async runtime => preparation.push(['instructions', runtime]),
+  });
 
   // The real clock plus a test-controlled jump, so delivery's own short waits still elapse.
   let offset = 0;
@@ -103,7 +121,7 @@ setInterval(()=>{},1000);\n`, { mode: 0o700 });
     getSessionAdapter: runtime => getSessionAdapter(runtime, { root: f.root, env: f.env,
       tmux: { socketPath: f.socketPath, binary: f.binary, configFile: '/dev/null' },
       runtimeExecutable: () => path.join(f.root, '.local/bin/claude') }),
-    prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
+    prepareSingle, findLegacySessions: async () => [], advanceLegacy: async () => {},
   }, { tmux: { socketPath: f.socketPath, binary: f.binary, configFile: '/dev/null' },
     delivery: { periodicEnabled: false, verifyWaitMs: 20, idleHoldMs: 1, idleWaitMs: 50, idlePollMs: 1, gateBackoffBaseMs: 1, gateBackoffMaxMs: 5 } });
   await dispatcher.initialize(); await dispatcher.idle();
@@ -201,8 +219,26 @@ setInterval(()=>{},1000);\n`, { mode: 0o700 });
   // Replacement: the real dispatcher and session adapter launch the executable
   // installed by the upgrade. READY and the model process are fixture boundaries;
   // no Supervisor submission or authenticated Claude session is needed in single mode.
+  // Real held processes advertise legacy restart/upgrade/installer command shapes,
+  // but execute no maintenance or network action. Real createSinglePreparation
+  // must continue immediately; only its cleanup/instruction providers are fixtures.
+  // Run for single-session startup/upgrade ordering; skip for unrelated changes.
   {
     reset();
+    const titles = [
+      `node ${f.root}/restart-claude/scripts/restart.js`,
+      `node ${f.root}/upgrade-claude/scripts/upgrade.js`,
+      'curl -fsSL https://claude.ai/install.sh',
+    ];
+    for (const title of titles) {
+      const child = fork(new URL('./fixtures/held-process.js', import.meta.url), [title], {
+        env: f.env, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+      });
+      held.push({ child, ended: once(child, 'exit') });
+      const [ready] = await once(child, 'message', { signal: AbortSignal.timeout(5000) });
+      assert.equal(ready.ready, true);
+      assert.equal(ready.title, title);
+    }
     const executable = path.join(f.root, '.local/bin/claude');
     const runtimeFixture = fileURLToPath(new URL('./fixtures/claude-installed-runtime.js', import.meta.url));
     const upgraded = await upgradeRuntime({ install: async () => {
@@ -222,12 +258,19 @@ setInterval(()=>{},1000);\n`, { mode: 0o700 });
     assert.equal(pasted()[1], '/exit');
     assert.equal(control(upgraded.data.exitControlId).status, 'done', 'exit delivery settles before replacement startup');
     setClock(Date.now() + 6000);
+    const startupStarted = performance.now();
     const marker = path.join(f.root, 'replacement-version.json');
     for (let n = 0; n < 30 && !fs.existsSync(marker); n++) {
       await run(1);
       await new Promise(resolve => setTimeout(resolve, 30));
     }
     assert.ok(fs.existsSync(marker), JSON.stringify(events));
+    assert.ok(performance.now() - startupStarted < 5000, 'startup does not wait for maintenance-shaped processes');
+    assert.deepEqual(preparation, [['clear', 'claude'], ['reset', 'claude'], ['instructions', 'claude']]);
+    for (const { child } of held) {
+      assert.equal(child.exitCode, null, 'the held process remains alive after startup');
+      assert.equal(child.signalCode, null);
+    }
     const replacement = JSON.parse(fs.readFileSync(marker, 'utf8'));
     assert.equal(replacement.version, 'Claude Code isolated-new');
     assert.equal(execFileSync(executable, ['--version'], { env: f.env, encoding: 'utf8', timeout: 5000 }).trim(),
@@ -236,7 +279,8 @@ setInterval(()=>{},1000);\n`, { mode: 0o700 });
     assert.equal(currentReady().runId, replacement.runId);
     assert.equal(pasted().filter(line => line === '/exit').length, 1, 'the old runtime receives exit once');
     assert.equal(control(upgraded.data.exitControlId).status, 'done', 'replacement does not retry the completed exit');
-    console.log('Installed replacement outcome:', JSON.stringify(replacement));
+    console.log('Installed replacement outcome:', JSON.stringify({ ...replacement, heldProcessTitles: titles,
+      heldProcessesAlive: held.length, preparationSteps: preparation.length }));
   }
   const rows = db.getDb().prepare('SELECT raw_content FROM control_queue').all();
   assert.equal(rows.filter(row => row.raw_content === SINGLE_UPGRADE_RESTART_CHECK_PROMPT).length, 4, 'one check per restart');

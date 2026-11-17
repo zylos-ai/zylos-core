@@ -14,7 +14,7 @@ import { createSinglePreparation, createLegacyMigration } from './resident.js';
 const lifecycleCaches = ['tool-event-stream-state.json', 'session-tool-state.json', 'foreground-session.json'];
 
 export function createLifecycleProviders({ env = process.env, tmux = {}, now = Date.now,
-  diagnostic = () => {}, log = () => {}, checkMaintenance, sleep,
+  diagnostic = () => {}, log = () => {},
   open = openTmuxConnection, observe = observeSessionTarget, readProcessTree,
   adapter = runtime => getSessionAdapter(runtime, { env, tmux }),
   buildInstructions = runtime => buildInstructionFile(runtime, { zylosDir: zylosRoot(env) }),
@@ -29,7 +29,7 @@ export function createLifecycleProviders({ env = process.env, tmux = {}, now = D
     if (failure) throw failure.reason;
   }
   const prepareSingle = createSinglePreparation({
-    checkMaintenance, sleep, now, log,
+    log,
     clearStaleState: () => removeOriginFiles([RUN_FILES.AGENT_STATUS, RUN_FILES.STATUSLINE]),
     resetToolLifecycle: () => removeOriginFiles(lifecycleCaches),
     buildInstructionFile: buildInstructions,

@@ -1,59 +1,13 @@
 import { loadCoreModule } from './core-modules.js';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { setTimeout as delay } from 'node:timers/promises';
-import { runCurrentUserPgrep } from '../process-check.js';
 const { LEGACY_TMUX_NAMES } = await loadCoreModule('session-group-paths.js');
-
-const exec = promisify(execFile);
-const nodeInvocation = '^([^[:space:]]*/)?[n]ode(js)?( --[^[:space:]]+)* ';
-const maintenancePatterns = [
-  `${nodeInvocation}([^[:space:]]*/)?restart-claude/scripts/restart[.]js([[:space:]]|$)`,
-  `${nodeInvocation}([^[:space:]]*/)?upgrade-claude/scripts/upgrade[.]js([[:space:]]|$)`,
-  '^([^[:space:]]*/)?[c]url[[:space:]]+(-[^[:space:]]+[[:space:]]+)*https://claude[.]ai/install[.]sh([[:space:]]|$)',
-  '^([^[:space:]]*/)?(ba)?sh -c curl -fsSL https://claude[.]ai/install[.]sh [|] bash([[:space:]]|$)',
-];
-/** Returns the first running maintenance pattern, or null. When pgrep cannot
- * be run at all, maintenance cannot be observed: that is reported through
- * `unavailable` and treated as none running, so it never blocks startup.
- * ENOENT means pgrep is not on PATH; EACCES means it was not found in an
- * accessible PATH directory (a PATH directory denies access) or is not
- * executable. Timeouts and other exit codes still reject. */
-export async function runningMaintenance({ execute = exec, unavailable = () => {} } = {}) {
-  for (const pattern of maintenancePatterns) {
-    try { await runCurrentUserPgrep(pattern, execute, { timeout: 500 }); return pattern; }
-    catch (error) {
-      if (error.code === 1) continue;
-      if (error.code === 'ENOENT' || error.code === 'EACCES') { unavailable(error); return null; }
-      throw error;
-    }
-  }
-  return null;
-}
 
 /** Lifecycle cleanup is provided by the owner of the per-origin files, rather
  * than invoking the old machine-wide guardian reset during legacy migration. */
-export function createSinglePreparation({ checkMaintenance = runningMaintenance, clearStaleState,
-  resetToolLifecycle, buildInstructionFile, now = Date.now, sleep = delay, log = () => {} }) {
+export function createSinglePreparation({ clearStaleState, resetToolLifecycle, buildInstructionFile, log = () => {} }) {
   for (const fn of [clearStaleState, resetToolLifecycle, buildInstructionFile]) {
     if (typeof fn !== 'function') throw new TypeError('Single preparation requires lifecycle and instruction providers');
   }
-  // One preparation exists per dispatcher process, so this reports an
-  // unusable pgrep once per process rather than on every start attempt.
-  let unavailableLogged = false;
-  const unavailable = error => {
-    if (unavailableLogged) return;
-    unavailableLogged = true;
-    const problem = error.code === 'ENOENT' ? 'pgrep was not found (ENOENT)' : `pgrep could not be run (${error.code})`;
-    const fix = error.code === 'ENOENT' ? 'Install procps' : 'Install procps and make every PATH directory accessible';
-    log(`${problem}; skipped the maintenance check (Claude restart/upgrade) before single-session startup. ${fix} to restore it.`);
-  };
   return async function prepareSingle(runtime) {
-    const started = now();
-    while (await checkMaintenance({ unavailable })) {
-      if (now() - started >= 300000) { log('Maintenance still active after 300 seconds; continuing startup'); break; }
-      await sleep(Math.min(1000, 300000 - (now() - started)));
-    }
     // These are best-effort cleanups, as in the guardian being replaced.
     try { await clearStaleState(runtime); } catch (error) { log(`Stale-state cleanup: ${error.message}`); }
     try { await resetToolLifecycle(runtime); } catch (error) { log(`Tool lifecycle reset: ${error.message}`); }

@@ -30,7 +30,7 @@ test('single preparation cleans origin samples/caches, preserves history and leg
   write(path.join(dir, '.zylos/instructions/meta.json'), {});
   write(path.join(dir, '.zylos/instructions/codex-system.md'), 'System instructions');
   write(path.join(dir, 'ZYLOS.md'), 'Owner instructions');
-  const providers = createLifecycleProviders({ env, checkMaintenance: async () => null });
+  const providers = createLifecycleProviders({ env });
   await providers.prepareSingle('codex');
   for (const name of cleared) assert.equal(fs.existsSync(path.join(origin, name)), false);
   for (const base of [legacy, other]) for (const name of [...cleared, ...retained]) assert.equal(fs.readFileSync(path.join(base, name), 'utf8'), `${base}/${name}`);
@@ -41,29 +41,10 @@ test('single preparation cleans origin samples/caches, preserves history and leg
   assert.equal(fs.existsSync(path.join(origin, 'hook-state.json')), false);
 });
 
-test('lifecycle providers start single sessions on a machine without pgrep and log the skipped check once', async t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'router-lifecycle-')), bin = path.join(dir, 'empty-bin'), saved = process.env.PATH;
-  fs.mkdirSync(bin); process.env.PATH = bin;
-  t.after(() => { process.env.PATH = saved; fs.rmSync(dir, { recursive: true, force: true }); });
-  const env = { ZYLOS_DIR: dir }, logs = [];
-  write(path.join(dir, '.zylos/instructions/meta.json'), {});
-  write(path.join(dir, '.zylos/instructions/codex-system.md'), 'System instructions');
-  write(path.join(dir, 'ZYLOS.md'), 'Owner instructions');
-  write(path.join(groupRunDir('origin', env), 'agent-status.json'), 'stale');
-  const providers = createLifecycleProviders({ env, log: line => logs.push(line),
-    sleep: async () => assert.fail('must not wait for maintenance without pgrep') });
-  await providers.prepareSingle('codex');
-  assert.equal(fs.existsSync(path.join(groupRunDir('origin', env), 'agent-status.json')), false);
-  assert.match(fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8'), /System instructions/);
-  await providers.prepareSingle('codex');
-  assert.deepEqual(logs.filter(line => /pgrep/.test(line)).length, 1);
-  assert.match(logs[0], /Install procps/);
-});
-
 function tmuxFixture(t) {
   const f = isolatedTmux(t, { prefix: 'router-legacy-', env: { HOME: process.env.HOME, PATH: process.env.PATH, LANG: 'en_US.UTF-8' } });
   const env = { ZYLOS_DIR: f.dir, HOME: f.dir };
-  const diagnostics = [], options = { env, tmux: { socketPath: f.socketPath, binary: f.binary }, checkMaintenance: async () => null,
+  const diagnostics = [], options = { env, tmux: { socketPath: f.socketPath, binary: f.binary },
     diagnostic: (event, fields) => diagnostics.push({ event, ...fields }) };
   // A recorder process with the observed runtime name, not an authenticated CLI.
   const source = path.join(f.dir, 'recorder.c'), executable = path.join(f.dir, 'codex');
