@@ -23,6 +23,7 @@ const ROOT_NODE_TESTS = [
   'test/account-usage-cache.integration.test.js',
   'test/dashboard-transcript-idle.integration.test.js',
   'test/session-batch-reader.integration.test.js',
+  'test/tmux-client-environment.integration.test.js',
   'test/account-quota-browser.test.js',
   'test/dashboard-initial-timezone.integration.test.js',
   'test/skill-command-arguments.test.js',
@@ -147,7 +148,8 @@ const tmpdir = path.join(environment.root, 'tmp');
 let failed = true;
 try {
   fs.mkdirSync(tmpdir);
-  const env = { ...process.env, TMPDIR: tmpdir };
+  const env = { ...process.env, TMPDIR: tmpdir, TMUX_TMPDIR: tmpdir };
+  delete env.TMUX;
   // Runtime identity belongs to each fixture, never the agent running tests.
   for (const key of ['CLAUDE_SESSION_ID','CODEX_SESSION_ID','ZYLOS_RUN_ID','ZYLOS_SESSION_GROUP','ZYLOS_MODEL_CONFIG']) delete env[key];
   const reporter = patterns.length

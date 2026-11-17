@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import assert from 'node:assert/strict';
 
 // A private socket for every fixture; never targets the user's tmux server.
 export function isolatedTmux(t, { prefix = 'test-tmux-', parentDir = os.tmpdir(),
@@ -10,10 +11,21 @@ export function isolatedTmux(t, { prefix = 'test-tmux-', parentDir = os.tmpdir()
   const dir = fs.mkdtempSync(path.join(parentDir, prefix));
   const socketPath = path.join(dir, socketName);
   const binary = process.env.TEST_TMUX_BIN || 'tmux';
+  let started = false;
   const tmux = (...args) => {
+    const clientEnv = Object.fromEntries(Object.entries(env || process.env)
+      .filter(([key]) => !key.startsWith('ZYLOS_')));
     const output = execFileSync(binary, [...tmuxArgs, '-S', socketPath, ...args], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout, env,
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout, env: clientEnv,
     });
+    if (!started && args.includes('new-session')) {
+      const global = execFileSync(binary, ['-S', socketPath, '-N', 'show-environment', '-g'], {
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout, env: clientEnv,
+      });
+      assert(!/^(?:-)?ZYLOS_[^=\n]*(?:=|$)/m.test(global), 'Fixture server inherited ZYLOS_*');
+      started = true;
+    }
+    if (args.includes('kill-server')) started = false;
     return trim ? output.trim() : output;
   };
   t.after(async () => {

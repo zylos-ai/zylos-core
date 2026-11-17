@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { tmuxClientArgs } from './tmux-client-args.js';
+import { tmuxClientArgs, tmuxClientEnvironment } from './tmux-client-args.js';
 import { tmuxError, validateTmuxArgv as validateArgv, noServer, TMUX_COMMAND as C,
   TMUX_FORMAT as F, tmuxGuardCondition, tmuxGuardAction, validGeneration, validSessionId,
   validPaneId, unavailableCommand, parseGuardResponse, tmuxReadCommands, parseReadResponse } from './tmux-protocol.js';
@@ -12,7 +12,9 @@ export function runTmuxCommand(argv, { socketPath, socketName, binary = 'tmux', 
   const args = [...tmuxClientArgs({ socketPath, socketName }), ...(noServerStart ? ['-N'] : []),
     ...(configFile ? ['-f', configFile] : []), ...argv];
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    // A newly started server inherits this environment; identity belongs only
+    // to the session's explicit new-session -e bindings.
+    const child = spawn(binary, args, { env: tmuxClientEnvironment(), stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '', failure, settled = false;
     const stop = error => {
       failure ??= error;

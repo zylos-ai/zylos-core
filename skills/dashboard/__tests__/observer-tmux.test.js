@@ -5,10 +5,45 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import { TmuxObserverContainment } from '../src/lib/observer-containment-tmux.js';
 import { runStartupWorker } from '../src/lib/observer-tmux-worker.js';
-import { readReceipt, writeAtomic, exists, validateState, digest } from '../src/lib/observer-tmux-state.js';
+import { readReceipt, writeAtomic, exists, validateState, digest, privateEnvironment } from '../src/lib/observer-tmux-state.js';
 import { assertObserverTestIsolation } from './helpers/observer-isolation.js';
 
 assertObserverTestIsolation();
+
+test('private observer environment removes inherited identity and preserves unrelated values', t => {
+  const inherited = {
+    ZYLOS_RUN_ID: 'parent-run',
+    ZYLOS_MODEL_CONFIG: '{"runtime":"claude"}',
+    ZYLOS_SESSION_GROUP: 'parent-group',
+    ZYLOS_OBSERVER_ENV_FIXTURE: 'spaces $ and \\ remain literal',
+    ZYLOS_OBSERVER_EMPTY_FIXTURE: '',
+  };
+  const previous = Object.fromEntries(Object.keys(inherited).map(key => [key, process.env[key]]));
+  t.after(() => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+  Object.assign(process.env, inherited);
+  const before = { ...process.env };
+  const root = path.join(process.env.ZYLOS_DIR, 'observer-fixture');
+  const state = { root, socketRoot: path.join(root, 'sockets') };
+  const env = privateEnvironment(state);
+  const identityKeys = new Set(['ZYLOS_RUN_ID', 'ZYLOS_MODEL_CONFIG', 'ZYLOS_SESSION_GROUP']);
+  for (const key of identityKeys) {
+    assert.equal(Object.hasOwn(env, key), false, `${key} must not reach the private tmux server`);
+  }
+  const relocated = new Set(['HOME', 'TMPDIR', 'TMP', 'TEMP', 'TERM']);
+  for (const [key, value] of Object.entries(before)) {
+    if (identityKeys.has(key)) continue;
+    if (relocated.has(key) || key === 'TMUX' || key.startsWith('ZELLIJ') || key.startsWith('XDG_')) continue;
+    assert.equal(env[key], value, `${key} must be preserved`);
+  }
+  assert.equal(env.HOME, path.join(root, 'home'));
+  assert.equal(env.XDG_RUNTIME_DIR, state.socketRoot);
+  assert.deepEqual({ ...process.env }, before);
+});
 
 const role = (pid, command = 'fixture-process', ppid = 1) => ({ pid, ppid, start: `start-${pid}`, status: 'S', command });
 const fixtureScopes = new WeakMap();

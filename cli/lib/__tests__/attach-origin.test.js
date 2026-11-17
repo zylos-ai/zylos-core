@@ -3,6 +3,39 @@ import assert from 'node:assert/strict';
 import { attachCommand } from '../../commands/attach.js';
 
 const status = { view: 'multi', origin: { presence: 'not_running' }, originNeed: { inbound: 0, controls: 0, oldestAt: null }, runtimeHealth: {}, readAt: 1_000_000 };
+
+test('attach client removes inherited identity and forwards all other environment values', async t => {
+  const inherited = {
+    ZYLOS_RUN_ID: 'parent-run',
+    ZYLOS_MODEL_CONFIG: '{"runtime":"claude"}',
+    ZYLOS_SESSION_GROUP: 'parent-group',
+    ZYLOS_ATTACH_ENV_FIXTURE: 'spaces $ and \\ remain literal',
+  };
+  const previous = Object.fromEntries(Object.keys(inherited).map(key => [key, process.env[key]]));
+  t.after(() => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+  Object.assign(process.env, inherited);
+  const before = { ...process.env };
+  const calls = [];
+  await attachCommand({
+    resolve: async () => ({ sessionGroup: 'origin', runtime: 'codex', live: { tmuxName: 'zylos-group-origin' } }),
+    exec: (command, args, options) => { calls.push({ command, args, options }); },
+  });
+  assert.equal(calls.length, 3);
+  const attached = calls.at(-1);
+  assert.equal(attached.command, 'tmux');
+  assert.deepEqual(attached.args, ['attach', '-t', '=zylos-group-origin']);
+  assert.equal(attached.options.stdio, 'inherit');
+  const expected = { ...before };
+  for (const key of ['ZYLOS_RUN_ID', 'ZYLOS_MODEL_CONFIG', 'ZYLOS_SESSION_GROUP']) delete expected[key];
+  assert.deepEqual(attached.options.env, expected);
+  assert.deepEqual({ ...process.env }, before);
+});
+
 async function absentAttach(sessionGroup, data = status) {
   const originalError = console.error, originalExit = process.exit;
   const lines = [], calls = [];

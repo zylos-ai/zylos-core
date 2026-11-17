@@ -9,6 +9,7 @@ import { bold } from '../lib/colors.js';
 import { resolveCliSession } from '../lib/cli-session.js';
 import { tmuxSessionTarget } from '../lib/session-group-paths.js';
 import { TMUX_COMMAND as C, TMUX_FORMAT as F } from '../lib/runtime/tmux-protocol.js';
+import { tmuxClientEnvironment } from '../lib/runtime/tmux-client-args.js';
 
 export async function attachCommand({ resolve = resolveCliSession, exec = execFileSync, collect = collectStatus } = {}) {
   const { sessionGroup, live, runtime } = await resolve();
@@ -55,7 +56,7 @@ export async function attachCommand({ resolve = resolveCliSession, exec = execFi
 
   // Attach — hands over terminal to tmux
   try {
-    exec('tmux', [C.attach, '-t', SESSION], { stdio: 'inherit' });
+    exec('tmux', [C.attach, '-t', SESSION], { stdio: 'inherit', env: tmuxClientEnvironment() });
   } catch {
     // Normal exit when detaching
   }
