@@ -71,7 +71,7 @@ async function until(predicate) {
 for (const mode of ['create', 'start']) {
   test(`${mode} failure flushes a backpressured stack and exits with a held handle`, { timeout: 10000 }, async t => {
     const env = { ...environment(t), DISPATCHER_FIXTURE_MODE: mode };
-    const p = launch(t, env, ['--experimental-test-module-mocks', '--import', fixture]);
+    const p = launch(t, env, ['--no-warnings', '--experimental-test-module-mocks', '--import', fixture]);
     await delay(200);
     assert.equal(p.child.exitCode, null, 'stderr pipe must drain before exit');
     p.readErrors();
@@ -102,7 +102,7 @@ test('normal dispatcher remains running and SIGTERM exits successfully', { timeo
 // Run for entry lifecycle changes; skip unrelated delivery changes.
 test('shutdown rejection retains its error log and exitCode without forced exit', { timeout: 10000 }, async t => {
   const env = { ...environment(t), DISPATCHER_FIXTURE_MODE: 'shutdown' };
-  const p = launch(t, env, ['--experimental-test-module-mocks', '--import', fixture]); p.readErrors();
+  const p = launch(t, env, ['--no-warnings', '--experimental-test-module-mocks', '--import', fixture]); p.readErrors();
   await until(() => p.stdout().includes('C4 Session Router Started'));
   p.child.kill('SIGTERM');
   await until(() => p.stdout().includes('Dispatcher shutdown error: fixture shutdown failed'));
