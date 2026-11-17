@@ -173,6 +173,8 @@ before summarizing, checkpointing or advancing its cursor:
 
 ## Group Sync
 
+Select this procedure when the control prompt names `group Sync` and a session
+group is bound, including `origin`; use `zylos-group-sync` in Claude.
 This also applies to the origin group's own working state. Set kind=group;
 G is the inherited `ZYLOS_SESSION_GROUP`.
 
@@ -240,6 +242,8 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
 
 ## Origin Sync
 
+Select this procedure only when the control prompt names `Origin Sync`;
+use `zylos-origin-sync` in Claude. Being in origin does not select this job.
 This is a separate job from the origin group's working-state Sync. It only
 runs in the origin session, uses kind=origin. Its only sync-files operation is
 the read-only `list --group G` below; never run group cleanup/rotate/commit.
