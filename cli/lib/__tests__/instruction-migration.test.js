@@ -186,6 +186,45 @@ describe('shared migration apply engine and prompt', () => {
     return { baseline, original, analysis, conservation };
   }
 
+  it('migrates each runtime from its own system template and renders Codex instructions', t => {
+    const root = fixture();
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const input = aClassInput(root);
+    const templates = Object.fromEntries(['claude', 'codex'].map(runtime => [
+      runtime,
+      fs.readFileSync(path.join(TEMPLATES_DIR, `${runtime}-system.md`), 'utf8'),
+    ]));
+    const result = executeMigrationApply({
+      zylosDir: root,
+      templatesDir: TEMPLATES_DIR,
+      original: input.original,
+      analysis: input.analysis,
+      userContent: '',
+      conservation: input.conservation,
+    });
+    assert.equal(result.migrated, true);
+    for (const runtime of ['claude', 'codex']) {
+      assert.equal(
+        fs.readFileSync(instructionPaths(runtime, { zylosDir: root }).systemPath, 'utf8'),
+        templates[runtime],
+        `${runtime} system instructions must match their template`,
+      );
+    }
+
+    const headings = content => content.split('\n').filter(line => /^## /.test(line));
+    const codexHeadings = headings(templates.codex);
+    const claudeHeadings = headings(templates.claude);
+    const codexOnly = codexHeadings.filter(heading => !claudeHeadings.includes(heading));
+    const claudeOnly = claudeHeadings.filter(heading => !codexHeadings.includes(heading));
+    assert.ok(codexOnly.length > 0, 'Codex template must have a distinct heading');
+    assert.ok(claudeOnly.length > 0, 'Claude template must have a distinct heading');
+    const output = fs.readFileSync(instructionPaths('codex', { zylosDir: root }).outputPath, 'utf8');
+    assert.ok(output.includes(templates.codex));
+    const outputHeadings = headings(output);
+    for (const heading of codexOnly) assert.ok(outputHeadings.includes(heading), heading);
+    for (const heading of claudeOnly) assert.ok(!outputHeadings.includes(heading), heading);
+  });
+
   it('uses the conservation match, closes the prompt, writes v2 before A3 and returns structured success', () => {
     const root = fixture();
     const input = aClassInput(root);
