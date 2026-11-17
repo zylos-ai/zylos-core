@@ -55,11 +55,10 @@ export class SupervisorHealthObserver {
     return true;
   }
   async notifyDeliveryFailed(notification, observed = null) {
-    const {sessionGroup,runId,sessionId,runtime,pastedAt}=notification;
+    const {sessionGroup,runId,sessionId,pastedAt}=notification;
     if(this.stopped || !sessionGroup || !runId || !sessionId || !Number.isFinite(pastedAt))return false;
     const scene=observed ?? await this.readIdentity(sessionGroup);
     if(!sameRun(notification,scene) || scene.sessionId!==sessionId)return false;
-    const state=await this.readState(scene);
     const previous=this.deliveryFailureRestarts.get(sessionGroup);
     if(previous?.runId===runId)return false;
     const valid=async current=>{
