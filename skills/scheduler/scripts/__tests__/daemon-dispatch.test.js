@@ -41,7 +41,8 @@ test(`successful ${type} delivery ends its exact history and advances from deliv
     last_error: 'OLD_FAILURE', failed_at: start / 1000 - 99 });
   db.prepare("INSERT INTO task_history(task_id,executed_at,completed_at,status,error,duration_ms) VALUES(?,1,2,'failed','OLD_FAILURE',1000)").run(task.id);
   const previous = read().history[0];
-  const result = dispatchTask(db, task, { ...base, sendViaC4(message) {
+  const result = dispatchTask(db, task, { ...base, sendViaC4(message, options) {
+    assert.equal(options.taskName, task.name);
     const claimed = read();
     assert.equal(claimed.task.status, 'running');
     assert.equal(claimed.history.at(-1).status, 'started');

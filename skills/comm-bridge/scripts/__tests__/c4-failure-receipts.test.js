@@ -188,5 +188,7 @@ for (const outcome of ['failed', 'uncertain', 'throw']) test(`permanent ${outcom
   assert.equal(events[20].event, 'failure_receipt_exhausted');
   assert.equal(events[20].fields.conversation_id, row.id);
   assert.equal(JSON.stringify(events).includes('SECRET'), false);
+  assert.ok(events.every(event => Object.values(event.fields).every(value =>
+    value === null || ['string', 'number', 'boolean'].includes(typeof value))));
   assert.ok(updated > 0);
 });

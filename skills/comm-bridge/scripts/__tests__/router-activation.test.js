@@ -179,7 +179,7 @@ test('launch timing survives failed identity observation and is logged once per 
   f.deps.getSessionAdapter = () => ({ launch: async () => {
     observationFails = true;
     throw Object.assign(Error('private error'), { code: 'LAUNCH_FAILED', cause: 'timeout', launchTiming: {
-      new_session_ms: 10000, executor_init_ms: 0, exec_confirm_ms: 0, cleanup_ms: 1, total_ms: 10001,
+      preflight_ms: 8000, new_session_ms: 2000, executor_init_ms: 0, exec_confirm_ms: 0, cleanup_ms: 1, total_ms: 10001,
       timeout_ms: 10000, last_phase: 'new_session',
     } });
   }, stop: async () => assert.fail('observation must retain ownership') });
@@ -189,6 +189,7 @@ test('launch timing survives failed identity observation and is logged once per 
   const events = f.events.filter(event => event.event === 'session_launch_failed');
   assert.equal(events.length, 1);
   assert.equal(events[0].last_phase, 'new_session');
+  assert.equal(events[0].preflight_ms, 8000);
   assert.equal(events[0].cause, 'timeout');
   assert.equal(JSON.stringify(events).includes('private error'), false);
 });
@@ -198,7 +199,7 @@ test('READY timeout records launch phase durations under its separate budget', a
   const adapter = f.deps.getSessionAdapter;
   f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
     f.put(input.sessionGroup, { ready: false, runId: input.runId });
-    return { launchTiming: { new_session_ms: 20, executor_init_ms: 3, exec_confirm_ms: 40,
+    return { launchTiming: { preflight_ms: 7, new_session_ms: 20, executor_init_ms: 3, exec_confirm_ms: 40,
       cleanup_ms: 1, total_ms: 64, timeout_ms: 10000, last_phase: 'exec_confirm' } };
   } });
   await f.create().initialize(); await f.rounds(2);
@@ -209,6 +210,7 @@ test('READY timeout records launch phase durations under its separate budget', a
   assert.equal(event.last_phase, 'runtime_ready');
   assert.equal(event.timeout_ms, 1000);
   assert.equal(event.new_session_ms, 20);
+  assert.equal(event.preflight_ms, 7);
   assert.equal(event.cause, 'ready_timeout');
   assert.ok(event.total_ms >= 0);
 });

@@ -118,6 +118,44 @@ test('runtime exec delayed four seconds fits the launch confirmation budget', {t
   t.diagnostic(JSON.stringify({delayedExecMs:Math.round(elapsed)}));
 });
 
+// Adapter -> delayed real tmux preflight -> private tmux launch. Run when the
+// shared launch deadline changes; unrelated delivery/UI changes may skip.
+// setupLaunch owns the private socket and all processes/scripts through teardown.
+test('eight-second tmux preflight leaves only the remaining launch budget for exec confirmation', {timeout:15000}, async t => {
+  const f = await setupLaunch(t);
+  const {SessionAdapter} = await import('../session-adapter.js');
+  class Adapter extends SessionAdapter {get runtimeId(){return 'claude';}}
+  const command = path.join(f.dir,'slow-preflight-runtime');
+  await fs.writeFile(command, '#!/bin/sh\nwhile :; do :; done\n', {mode:0o700});
+  const wrapper = path.join(f.dir,'slow-preflight-tmux');
+  const {shellQuote} = await import('../session-command.js');
+  await fs.writeFile(wrapper, `#!/bin/sh
+case " $* " in *" =target: "*) sleep 8 ;; esac
+exec ${shellQuote(binary)} "$@"
+`, {mode:0o700});
+  const adapter = new Adapter({root:f.dir, runtimeExecutable:()=>command,
+    paths:{tmuxNameForGroup:()=> 'target'},
+    env:{PATH:process.env.PATH,HOME:f.dir},
+    tmux:{binary:wrapper,socketPath:f.socketPath,configFile:'/dev/null'}});
+  const start = performance.now();
+  let timing;
+  await assert.rejects(adapter.launch({sessionGroup:null,runId:'slow-preflight',sessionMode:'single',
+    launchConfig:{runtime:'claude',mode:'default'}}), error=>{
+    assert.equal(error.code,'LAUNCH_FAILED');
+    assert.equal(error.cause,'timeout');
+    timing=error.launchTiming;
+    assert.equal(timing.last_phase,'exec_confirm');
+    assert.ok(timing.preflight_ms>=7900);
+    assert.ok(timing.exec_confirm_ms>=1000 && timing.exec_confirm_ms<2200);
+    assert.ok(timing.total_ms>=LAUNCH_TIMEOUT_MS-100);
+    assert.ok(timing.total_ms<bound+500);
+    return true;
+  });
+  assert.ok(performance.now()-start<bound+500);
+  assert.equal(f.tmux('list-sessions','-F','#{session_name}').trim(),'keeper');
+  t.diagnostic(JSON.stringify({sharedLaunchBudget:timing}));
+});
+
 test('duplicate session is NAME_CONFLICT and retains the original pane', async t => {
   const f=await setupLaunch(t);
   const original=f.tmux('list-panes','-t','=keeper','-F','#{pane_id}:#{pane_pid}').trim();
@@ -200,7 +238,7 @@ esac
     assert.equal(timing.exec_confirm_ms,0);
     assert.ok(timing.cleanup_ms>=0);
     assert.ok(timing.total_ms>=timing.new_session_ms+timing.cleanup_ms);
-    assert.deepEqual(Object.keys(timing).sort(),['cleanup_ms','exec_confirm_ms','executor_init_ms','last_phase','new_session_ms','timeout_ms','total_ms']);
+    assert.deepEqual(Object.keys(timing).sort(),['cleanup_ms','exec_confirm_ms','executor_init_ms','last_phase','new_session_ms','preflight_ms','timeout_ms','total_ms']);
     t.diagnostic(JSON.stringify({delayedCreationFailure:timing}));
     return true;
   });

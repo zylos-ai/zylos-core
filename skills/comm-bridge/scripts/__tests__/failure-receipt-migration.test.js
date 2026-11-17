@@ -14,6 +14,7 @@ for (const name of historical) test(`failure receipt migration preserves histori
   assert.equal(db.pragma('user_version', { simple: true }), 5);
   assert.equal(db.prepare('SELECT count(*) AS n FROM failure_receipts').get().n, 0);
   assert.equal(db.prepare('SELECT count(*) AS n FROM conversations').get().n, count);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM conversations WHERE core_source IS NOT NULL OR task_name IS NOT NULL').get().n, 0);
   guardDatabase(db, owner);
 });
 
@@ -26,6 +27,8 @@ test('receipt migration preserves v1 deployment extensions and creates no histor
   assert.equal(db.prepare('SELECT deployment_value FROM conversations WHERE deployment_value IS NOT NULL').get().deployment_value, 'extension');
   assert.equal(db.prepare('SELECT value FROM deployment_notes').get().value, 'retained');
   assert.equal(db.prepare('SELECT count(*) AS n FROM failure_receipts').get().n, 0);
+  const legacy = db.prepare('SELECT core_source,task_name FROM conversations WHERE deployment_value IS NOT NULL').get();
+  assert.equal(legacy.core_source, null); assert.equal(legacy.task_name, null);
 });
 
 test('fresh schema executes receipt migration through the full chain', t => {

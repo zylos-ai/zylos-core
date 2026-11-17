@@ -129,11 +129,31 @@ test('launch preflight failures retain sanitized timing and close the executor',
     assert.equal(timing.last_phase,'preflight');
     assert.equal(timing.timeout_ms,10000);
     assert.ok(timing.total_ms>=15);
+    assert.equal(timing.preflight_ms,timing.total_ms);
     for(const key of ['new_session_ms','executor_init_ms','exec_confirm_ms','cleanup_ms'])assert.equal(timing[key],0);
     assert.equal(JSON.stringify(timing).includes('private'),false);
     return true;
   });
   assert.deepEqual(f.calls,[['close']]);
+});
+test('launch preflight commands receive the shared remaining deadline',async()=> {
+  const f=fixture({present:false});
+  f.adapter.options.paths={tmuxNameForGroup:()=> 'isolated'};
+  f.adapter.options.runtimeExecutable=()=>{throw error('RUNTIME_NOT_INSTALLED');};
+  f.dependencies.openTmuxConnection=async options=>{
+    assert.ok(options.timeoutMs>9000 && options.timeoutMs<=10000);
+    return f.connection;
+  };
+  f.connection.command=async (argv,options)=>{
+    assert.ok(options.timeoutMs>9000 && options.timeoutMs<=10000);
+    return '';
+  };
+  f.dependencies.observeSessionTarget=async ({connection})=>{
+    await connection.command(['list-sessions']);
+    return f.target;
+  };
+  await assert.rejects(f.adapter.launch({sessionGroup:null,runId:'r',sessionMode:'single',
+    launchConfig:{runtime:'claude',mode:'default'}}),{code:'RUNTIME_NOT_INSTALLED'});
 });
 test('unreadable executable identity fails preflight before creation',async()=> {
   const f=fixture({present:false});f.adapter.options.paths={tmuxNameForGroup:()=> 'isolated'};
@@ -177,6 +197,16 @@ test('runtime help leaves the event loop available and maps execution errors',as
     } finally {clearTimeout(timer);}
     await assert.rejects(runtimeHelpAsync(path.join(root,'missing')),{code:'LAUNCH_FAILED',cause:'error'});
   } finally {await fs.rm(root,{recursive:true,force:true});}
+});
+
+test('runtime capability query honors the remaining launch timeout',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'session-runtime-help-timeout-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const command=path.join(root,'runtime');
+  await fs.writeFile(command,`#!${process.execPath}\nsetTimeout(()=>console.log('--model MODEL'),2000);\n`,{mode:0o700});
+  const startedAt=performance.now();
+  await assert.rejects(runtimeHelpAsync(command,process.env,{timeoutMs:100}),{code:'LAUNCH_FAILED',cause:'timeout'});
+  assert.ok(performance.now()-startedAt<1000);
 });
 
 test('launch awaits runtime help and classifies invalid launch arguments as a launch failure',async()=>{

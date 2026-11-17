@@ -26,12 +26,12 @@ export function recordPaneProcess({runId,launchConfig,sessionGroup,root,panePid,
 }
 
 /** Submit once and bound all confirmation and local cleanup before return. */
-export async function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,script,tmux={}}) {
-  const startedAt = performance.now();
+export async function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,script,tmux={},
+  startedAt = performance.now(), preflightMs = 0}) {
   const deadline = startedAt + LAUNCH_TIMEOUT_MS;
-  const timing = { new_session_ms: 0, executor_init_ms: 0, exec_confirm_ms: 0,
+  const timing = { preflight_ms: preflightMs, new_session_ms: 0, executor_init_ms: 0, exec_confirm_ms: 0,
     cleanup_ms: 0, total_ms: 0, timeout_ms: LAUNCH_TIMEOUT_MS, last_phase: 'new_session' };
-  let phase = 'new_session', phaseStartedAt = startedAt, cleanupStartedAt, failure;
+  let phase = 'new_session', phaseStartedAt = performance.now(), cleanupStartedAt, failure;
   const finishPhase = () => { timing[`${phase}_ms`] += performance.now() - phaseStartedAt; };
   const enterPhase = next => { finishPhase(); phase = next; phaseStartedAt = performance.now(); };
   const remaining = () => {

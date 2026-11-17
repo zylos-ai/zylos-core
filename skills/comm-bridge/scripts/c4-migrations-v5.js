@@ -1,6 +1,8 @@
 /** Persist only new terminal delivery receipts; historical failures stay untouched. */
 export function migrateToV5(db) {
-  db.exec(`CREATE TABLE failure_receipts (
+  db.exec(`ALTER TABLE conversations ADD COLUMN core_source TEXT;
+  ALTER TABLE conversations ADD COLUMN task_name TEXT;
+  CREATE TABLE failure_receipts (
     conversation_id INTEGER PRIMARY KEY,
     reason TEXT NOT NULL,
     state TEXT NOT NULL CHECK(state IN ('pending','queued','sent','suppressed','uncertain','failed')),

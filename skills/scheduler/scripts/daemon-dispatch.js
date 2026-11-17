@@ -37,7 +37,7 @@ export function dispatchTask(db, candidate, dependencies = {}) {
   }
   if (!result) {
     const destination = resolveDispatchSessionGroup(db, task, historyId, dependencies);
-    result = send(prompt, { priority: task.priority, requireIdle: task.require_idle === 1,
+    result = send(prompt, { priority: task.priority, requireIdle: task.require_idle === 1, taskName: task.name,
       sessionComponent: destination.session_component, sessionGroupName: destination.session_group_name,
       replyChannel: task.reply_channel, replyEndpoint: task.reply_endpoint });
     if (result.category === 'U') {

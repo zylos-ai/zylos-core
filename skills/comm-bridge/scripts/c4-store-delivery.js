@@ -1,6 +1,6 @@
 import { dataError, requireGroup } from './c4-session-group.js';
 import { messageForFailureReceipt } from './failure-receipt-template.js';
-import { FAILURE_RECEIPT_RETRY_SECONDS, FAILURE_RECEIPT_LIFETIME_SECONDS } from './failure-receipt-policy.js';
+import { FAILURE_RECEIPT_RETRY_SECONDS, FAILURE_RECEIPT_LIFETIME_SECONDS, isScheduledFailureAlert } from './failure-receipt-policy.js';
 import { MAX_RETRIES } from './c4-config.js';
 export function deliveryFunctions({ read, write, snapshot, get, all, run, seconds, insert }) {
   const unfenced = "NOT EXISTS(SELECT 1 FROM drain_fences WHERE session_group=conversations.session_group OR session_group='*')";
@@ -11,13 +11,14 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
     return { sql: values.length ? ` AND session_group IN (${values.map(() => '?').join(',')})` : ' AND 0', args: values };
   }
   function enqueueReceipt(c, id, reason) {
-    const row = get(c, 'SELECT id,channel,endpoint_id,session_group,delivery_action FROM conversations WHERE id=?', id);
+    const row = get(c, 'SELECT id,channel,endpoint_id,session_group,delivery_action,core_source,task_name FROM conversations WHERE id=?', id);
+    const ownerAlert = row && isScheduledFailureAlert({ ...row, reason });
     if (!row || row.delivery_action === 'failure_receipt' ||
         get(c, 'SELECT 1 FROM failure_receipts WHERE receipt_conversation_id=?', id) ||
-        !row.endpoint_id || ['system', 'void'].includes(row.channel)) return;
+        (!ownerAlert && (!row.endpoint_id || ['system', 'void'].includes(row.channel)))) return;
     const queued = run(c, `INSERT OR IGNORE INTO failure_receipts(conversation_id,reason,state,created_at,updated_at)
       VALUES(?,?,'pending',?,?)`, id, reason, seconds(), seconds()).changes;
-    if (!queued || row.channel !== 'internal') return;
+    if (!queued || ownerAlert || row.channel !== 'internal') return;
     // The original sender is immutable routing metadata, never parsed from content.
     requireGroup(row.endpoint_id);
     const receipt = insert(c, 'in', 'internal', row.session_group,
@@ -30,9 +31,9 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
     listFailureReceipts: ({ limit = 20 } = {}) => read(c => {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw dataError('INVALID_ARGS', 'limit must be between 1 and 100');
       return all(c, `SELECT conversations.id,conversations.direction,conversations.channel,conversations.endpoint_id,
-        conversations.session_group,failure_receipts.reason,failure_receipts.created_at FROM failure_receipts
+        conversations.session_group,conversations.core_source,conversations.task_name,failure_receipts.reason,failure_receipts.created_at FROM failure_receipts
         JOIN conversations ON conversations.id=failure_receipts.conversation_id
-        WHERE failure_receipts.state IN ('pending','queued') AND conversations.channel<>'internal'
+        WHERE failure_receipts.state IN ('pending','queued') AND (conversations.channel<>'internal' OR (conversations.core_source='scheduler' AND failure_receipts.receipt_conversation_id IS NULL))
         AND ((failure_receipts.state='pending' AND failure_receipts.updated_at=failure_receipts.created_at)
           OR failure_receipts.updated_at+?<=? OR failure_receipts.created_at+?<=?)
         ORDER BY failure_receipts.updated_at,conversation_id LIMIT ?`,

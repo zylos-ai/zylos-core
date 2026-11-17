@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sendViaC4, RECEIVE_TIMEOUT_MS } from '../runtime.js';
 import { realReceive } from './fixtures/real-receive.js';
+import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 const fixture = fileURLToPath(new URL('./fixtures/receive-result.mjs', import.meta.url));
 
 for (const [label, options, route] of [
@@ -28,8 +29,34 @@ for (const [label, options, route] of [
   assert.equal(row.endpoint_id,options.replyEndpoint || null);
   assert.equal(row.session_group, options.sessionComponent ? options.sessionComponent + (options.sessionGroupName ? ':'+options.sessionGroupName : '') : options.replyChannel || 'origin');
   assert.equal(row.priority,2); assert.equal(row.require_idle,1);
+  assert.equal(row.core_source, 'scheduler'); assert.equal(row.task_name, null);
   assert.equal(result.receipt.id,row.id); assert.equal(result.receipt.sessionGroup,row.session_group);
 
+});
+
+// Real scheduler transport -> receive CLI -> SQLite provenance boundary. Run for
+// scheduler metadata/receive/schema changes; skip unrelated UI. The helper binds
+// a private tmux socket, temporary HOME/ZYLOS_DIR and SQLite, and reaps its child.
+test('scheduler metadata crosses real receive and survives database reopen', t => {
+  const real = realReceive(t);
+  const filename = real.db.pragma('database_list').find(row => row.name === 'main').file;
+  assert.equal(filename, path.join(real.root, 'comm-bridge', 'c4.db'));
+  assert.notEqual(real.root, process.env.HOME);
+  assert.ok(process.env.PM2_HOME.startsWith(process.env.HOME + path.sep));
+  assert.ok(process.env.TMPDIR.length < 80);
+  const taskName = 'Daily report $(literal) "name"';
+  const result = real.send('body has no scheduler marker', { replyChannel: 'telegram', replyEndpoint: 'target', taskName });
+  assert.equal(result.category, 'success', result.stdout + result.stderr);
+  const argv = real.calls[0].args;
+  assert.equal(argv[argv.indexOf('--core-source') + 1], 'scheduler');
+  assert.equal(argv[argv.indexOf('--task-name') + 1], taskName);
+  // The real receive process already closed its writer; read persisted values
+  // using a new connection rather than the helper's existing read connection.
+  const reopened = new Database(filename, { readonly: true });
+  t.after(() => reopened.close());
+  const row = reopened.prepare('SELECT core_source,task_name,content FROM conversations WHERE id=?').get(result.receipt.id);
+  assert.equal(row.core_source, 'scheduler'); assert.equal(row.task_name, taskName);
+  assert.equal(row.content, 'body has no scheduler marker');
 });
 
 for (const [label, options, code] of [

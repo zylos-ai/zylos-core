@@ -228,7 +228,10 @@ the tests. Otherwise the new database may be omitted from snapshots or checks.
 
 ## C4 delivery receipt queue
 
-C4 schema 4→5 creates `failure_receipts`. The migration does not enqueue
+C4 schema 4→5 creates `failure_receipts` and adds nullable TEXT
+`conversations.core_source` and `conversations.task_name`. Old rows retain NULL
+provenance and ordinary user-message receipt behavior. Scheduler handoff supplies
+source/name as explicit metadata; message bodies never classify provenance. The migration does not enqueue
 receipts for historical failed messages. New terminal failures write their
 receipt record in the same transaction; internal receipts also insert their
 inbound conversation and update its group head in that transaction. Normal

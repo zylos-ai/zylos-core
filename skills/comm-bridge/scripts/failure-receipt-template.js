@@ -27,3 +27,14 @@ export function messageForFailureReceipt({ id, session_group: group, reason, cha
   return `[${brand}] 消息 #${id} ${prefixZh}「${group}」：${zh}。请稍后重新发送。${suffixZh}\n` +
     `[${brand}] Message #${id} ${prefixEn} "${group}": ${en}. Please resend it later.${suffixEn}`;
 }
+
+/** Owner-only metadata summary; never renders the scheduler message body. */
+export function messageForScheduledFailureAlert(record) {
+  const clean = value => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 512) : '';
+  const name = clean(record.task_name) || '未命名定时任务 / unnamed scheduled task';
+  const [zh, en] = Object.hasOwn(REASONS, record.reason) ? REASONS[record.reason] : REASONS.delivery_failed;
+  return `定时任务「${name}」消息未送达：${zh}。\n` +
+    `目标会话组：${clean(record.session_group)}\n目标聊天：${clean(record.channel)}:${clean(record.endpoint_id) || '(无 endpoint)'}\n` +
+    `可以到该聊天里让对应会话排查原因。\n` +
+    `Scheduled task "${name}" was not delivered: ${en}. Ask the corresponding session in that chat to investigate.`;
+}

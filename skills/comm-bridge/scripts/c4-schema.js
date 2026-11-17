@@ -42,7 +42,9 @@ export const COLUMN_DEFINITIONS = {
     require_idle: { type: 'INTEGER', pk: false },
     retry_count: { type: 'INTEGER', pk: false },
     session_group: { type: 'TEXT', pk: false },
-    session_id: { type: 'TEXT', pk: false }
+    session_id: { type: 'TEXT', pk: false },
+    core_source: { type: 'TEXT', pk: false },
+    task_name: { type: 'TEXT', pk: false }
   },
   control_queue: {
     id: { type: 'INTEGER', pk: true },
@@ -158,6 +160,10 @@ export const TABLES = Object.fromEntries(
 export const MIGRATIONS = Object.freeze({
   4: Object.freeze({ to: 5, migrate: migrateToV5, changes: {
     addTables: { failure_receipts: COLUMN_DEFINITIONS.failure_receipts },
+    addColumns: { conversations: {
+      core_source: COLUMN_DEFINITIONS.conversations.core_source,
+      task_name: COLUMN_DEFINITIONS.conversations.task_name,
+    } },
   } }),
   3: Object.freeze({ to: 4, migrate: migrateToV4, changes: { rebuildTables: ['run_endings'] } }),
   2: Object.freeze({ to: 3, migrate: migrateToV3, changes: {

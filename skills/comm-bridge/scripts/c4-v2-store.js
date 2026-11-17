@@ -111,8 +111,8 @@ export function createStore(database, dependencies = {}) {
     }
   }
   function insert(c, direction, channel, endpointId, content, group, options = {}) {
-    const result = run(c, `INSERT INTO conversations(direction,channel,endpoint_id,content,status,delivery_action,priority,require_idle,session_group,session_id)
-      VALUES(?,?,?,?,?,?,?,?,?,?)`, direction, channel, endpointId ?? null, content, options.status ?? (direction === 'in' ? 'pending' : 'delivered'), options.deliveryAction ?? null, options.priority ?? 3, options.requireIdle ? 1 : 0, group, direction === 'out' ? options.sessionId ?? null : null);
+    const result = run(c, `INSERT INTO conversations(direction,channel,endpoint_id,content,status,delivery_action,priority,require_idle,session_group,session_id,core_source,task_name)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, direction, channel, endpointId ?? null, content, options.status ?? (direction === 'in' ? 'pending' : 'delivered'), options.deliveryAction ?? null, options.priority ?? 3, options.requireIdle ? 1 : 0, group, direction === 'out' ? options.sessionId ?? null : null, options.coreSource ?? null, options.taskName ?? null);
     const id = Number(result.lastInsertRowid);
     run(c, 'INSERT INTO group_heads(session_group,head_id) VALUES(?,?) ON CONFLICT(session_group) DO UPDATE SET head_id=max(head_id,excluded.head_id)', group, id);
     return get(c, 'SELECT * FROM conversations WHERE id=?', id);
@@ -134,8 +134,10 @@ export function createStore(database, dependencies = {}) {
     insertConversation: (direction, channel, endpointId, content, options = {}) => write(c => {
       if (!options || typeof options !== 'object' || Array.isArray(options)) throw dataError('INVALID_ARGS', 'Expected message options');
       if (typeof content !== 'string') throw dataError('INVALID_ARGS', 'Message content must be a string');
-      const allowed = new Set(['status', 'priority', 'requireIdle', 'deliveryAction', 'groupName', 'handoffGroup', 'wholeGroup', 'sessionId']);
+      const allowed = new Set(['status', 'priority', 'requireIdle', 'deliveryAction', 'groupName', 'handoffGroup', 'wholeGroup', 'sessionId', 'coreSource', 'taskName']);
       if (Object.keys(options).some(key => !allowed.has(key))) throw dataError('INVALID_ARGS', 'Unknown message option');
+      if (options.coreSource != null && options.coreSource !== 'scheduler') throw dataError('INVALID_ARGS', 'Unknown core source');
+      if (options.taskName != null && typeof options.taskName !== 'string') throw dataError('INVALID_ARGS', 'Task name must be a string');
       if (options.status !== undefined && !(direction === 'in' ? ['pending', 'failed'] : ['delivered']).includes(options.status)) throw dataError('INVALID_ARGS', 'Invalid initial message status');
       return insert(c, direction, channel, endpointId, content, resolve(c, direction, channel, endpointId, options), options);
     }),

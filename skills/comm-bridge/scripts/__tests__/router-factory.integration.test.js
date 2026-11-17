@@ -296,3 +296,28 @@ test('factory: permanent receipt failure backs off and terminates with structure
   assert.equal(sends, 1);
   assert.equal(f.calls.filter(call => call[0] === 'event' && call[1] === 'failure_receipt_exhausted').length, 1);
 });
+
+// Run for scheduler provenance/owner-alert composition; skip unrelated UI.
+// setup verifies private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and actual SQLite.
+// Only channel send is injected; the real shared supervisor policy chooses the
+// fallback. Runtime boundaries are inert fixtures, with no live tmux/network.
+test('factory: scheduled startup failure uses owner alert and Origin fallback exclusively', async t => {
+  const f = setup(t), row = f.add(f.a, 'SECRET scheduled body', { coreSource: 'scheduler', taskName: 'Nightly check' });
+  f.db.claimConversation(row.id);
+  f.db.failDelivery(row.id, { maxRetries: 1, reason: 'launch_failed' });
+  const sends = [];
+  f.overrides.readZylosConfigStrict = () => ({ state: 'ok', config: { alert_target: 'telegram:broken-owner-chat' } });
+  f.overrides.sendStatusNotice = async () => assert.fail('scheduled startup failure must not reply to original chat');
+  f.overrides.sendAlert = async (target, message) => { sends.push({ target, message });
+    if (target.channel === 'telegram') throw Error('SECRET transport failure'); };
+  const dispatcher = f.create(); await dispatcher.initialize(); await dispatcher.idle();
+  dispatcher.tick(); await dispatcher.idle();
+  assert.equal(sends.length, 2);
+  assert.deepEqual(sends.map(send => send.target), [
+    { channel: 'telegram', endpoint: 'broken-owner-chat' }, { channel: 'dashboard', endpoint: 'origin' } ]);
+  assert.ok(sends.every(send => send.message.includes('Nightly check') && send.message.includes(f.a) &&
+    send.message.includes(`endpoint-${f.a}`) && !send.message.includes('SECRET')));
+  assert.equal(f.db.getDb().prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(row.id).state, 'sent');
+  dispatcher.tick(); await dispatcher.idle();
+  assert.equal(sends.length, 2);
+});

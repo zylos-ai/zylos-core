@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { readZylosConfigStrict, SKILLS_DIR } from './config.js';
-import { parseServerAlertTarget } from '../../skills/activity-monitor/scripts/supervisor-server-observation.js';
+import { parseServerAlertTarget } from './supervisor-server-health.js';
 import { green, yellow } from './colors.js';
 
 const changeHint = 'zylos config set alert_target <channel>:<endpoint>';
