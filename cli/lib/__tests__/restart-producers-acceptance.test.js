@@ -40,9 +40,7 @@ async function invoke(t, producer, response) {
     if (producer === 'restart') {
       await restartMain(['--json'], { requestRestart: restart });
     } else {
-      const result = await upgradeRuntime({ readMode: () => ({ mode: 'multi' }), readTransition: () => null,
-        install: () => f.trace.push('install'), requestRestart: restart,
-        enqueue: () => { throw new Error('must not enqueue'); } });
+      const result = await upgradeRuntime({ install: () => f.trace.push('install'), requestRestart: restart });
       output.push(JSON.stringify(result));
     }
   } finally {

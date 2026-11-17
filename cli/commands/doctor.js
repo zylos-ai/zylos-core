@@ -197,26 +197,6 @@ async function checkNetwork(env, apiHost) {
   return results;
 }
 
-/** Single-session startup uses pgrep to wait for a Claude restart/upgrade.
- * Exit 0 (match) and 1 (no match) both prove that pgrep runs. */
-export function checkPgrep({ execute = execFileSync } = {}) {
-  try {
-    execute('pgrep', ['-f', '[r]estart-claude'], { stdio: 'ignore', timeout: 5000 });
-    return { available: true };
-  } catch (error) {
-    if (error.status === 1) return { available: true };
-    return { available: false, reason: error.code === 'ENOENT' ? 'not_found' : String(error.code ?? `exit_${error.status}`) };
-  }
-}
-
-/** Hint for an unusable pgrep, by checkPgrep reason. Single-session startup
- * skips the maintenance check for ENOENT/EACCES but still fails on others. */
-export function pgrepHint(reason) {
-  if (reason === 'not_found') return 'Maintenance check before single-session startup will be skipped; install procps';
-  if (reason === 'EACCES') return 'Maintenance check before single-session startup will be skipped; install procps and make every PATH directory accessible';
-  return 'Single-session startup fails while pgrep cannot be run; check that procps works';
-}
-
 /** PM2 uses ps to discover descendants when stopping or restarting processes. */
 export function checkPs({ execute = execFileSync } = {}) {
   try {
@@ -316,7 +296,7 @@ export function formatDoctorSessionModeStatus(value) {
 }
 
 export async function collectDiagnostics(env, { resolve = resolveCliSession, network = checkNetwork,
-  pm2Check = checkPm2Installed, tmuxCheck = checkTmuxInstalled, pgrepCheck = checkPgrep, psCheck = checkPs, modeStatus = readDoctorSessionModeStatus } = {}) {
+  pm2Check = checkPm2Installed, tmuxCheck = checkTmuxInstalled, psCheck = checkPs, modeStatus = readDoctorSessionModeStatus } = {}) {
   const selected = await resolve();
   const runtime = selected.runtime;
   const display = runtime === 'unknown' ? 'Unknown runtime' : runtime === 'codex' ? 'Codex' : 'Claude';
@@ -325,7 +305,6 @@ export async function collectDiagnostics(env, { resolve = resolveCliSession, net
 
   const tmux = tmuxCheck();
   const pm2 = pm2Check();
-  const pgrep = pgrepCheck();
   const ps = psCheck();
   const envFile = ensureEnvFilePrivate();
   const net = await networkPromise;
@@ -365,7 +344,7 @@ export async function collectDiagnostics(env, { resolve = resolveCliSession, net
 
   return {
     runtime, display, apiHost, sessionMode, sessionModeStatus, sessionGroup: selected.sessionGroup ?? null, origin, targetRuntime, originNeed,
-    system: { tmux, pm2, pgrep, ps, network: net, envFile },
+    system: { tmux, pm2, ps, network: net, envFile },
     ai: { cli, auth, authStatus, autonomous, networkSkipped: !net.reachable },
     services: { ...services, session },
   };
@@ -464,10 +443,6 @@ export function buildDiagnosticJson(diag, coreVersion) {
             sendKeysClientFlag: diag.system.tmux.useClientFlag ?? false,
             versionReason: diag.system.tmux.reason ?? null },
           pm2: { ok: diag.system.pm2.installed, version: diag.system.pm2.version || null },
-          // Warning level: an unusable pgrep never fails the group or the run.
-          pgrep: diag.system.pgrep?.available === false
-            ? { ok: false, level: 'warning', reason: diag.system.pgrep.reason, hint: pgrepHint(diag.system.pgrep.reason) }
-            : { ok: true },
           // Warning level: an unusable ps never fails the group or the run.
           ps: diag.system.ps?.available === false
             ? { ok: false, level: 'warning', reason: diag.system.ps.reason, hint: psHint() }
@@ -520,9 +495,6 @@ function displaySystemGroup(diag, jsonGroup) {
   const ps = jsonGroup.checks.ps;
   checks.push(ps.ok ? 'ps available'
     : yellow(`ps ${ps.reason === 'not_found' ? 'not found' : `could not be run (${ps.reason})`}: ${ps.hint}`));
-  const pgrep = jsonGroup.checks.pgrep;
-  checks.push(pgrep.ok ? 'pgrep available'
-    : yellow(`pgrep ${pgrep.reason === 'not_found' ? 'not found' : `could not be run (${pgrep.reason})`}: ${pgrep.hint}`));
 
   if (net.reachable) {
     let label = `network: ${diag.apiHost} reachable`;

@@ -9,6 +9,7 @@ import { once } from 'node:events';
 import { readyTmuxTarget } from './helpers/ready-tmux-target.js';
 
 // Boundary: a single-session upgrade restart from the real upgradeRuntime
+// through the shared requestRuntimeRestart producer
 // (default dependencies: the session mode file, the transition record, the
 // installed check prompt and c4-control enqueue) through the real Router
 // dispatcher, Claude session adapter and paste on a private tmux socket into a

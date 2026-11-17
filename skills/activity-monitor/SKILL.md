@@ -17,11 +17,10 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 1. **Activity Monitoring**: Tracks the agent's busy/idle state every second
 2. **Status File**: Writes `~/zylos/activity-monitor/agent-status.json` with current state (busy/idle, idle_seconds, health)
 3. **Guardian Mode**: Automatically restarts the agent if it stops or crashes
-4. **Maintenance Awareness**: Waits for restart/upgrade scripts to complete before starting the agent
-5. **Recovery Liveness Detection**: Sends C4 heartbeat probes during recovery and after restarts; healthy sessions have no periodic primary heartbeat
-6. **Health Check**: Periodically enqueues system health checks (PM2, disk, memory) via the C4 control queue
-7. **Daily Upgrade**: Enqueues a Claude Code upgrade via the C4 control queue at 5:00 AM local time daily (disabled by default; enable with `zylos config set daily_upgrade_enabled true`)
-8. **Context Monitoring**: Receives context usage data after every turn; triggers early memory sync and new-session handoff at thresholds read from `config.json` (`model_rotation_thresholds[engine][model]`) for the actual running model; defaults are 70% below 1M and 40% for 1M, with a shared 40% maximum for 1M
+4. **Recovery Liveness Detection**: Sends C4 heartbeat probes during recovery and after restarts; healthy sessions have no periodic primary heartbeat
+5. **Health Check**: Periodically enqueues system health checks (PM2, disk, memory) via the C4 control queue
+6. **Daily Upgrade**: Enqueues a Claude Code upgrade via the C4 control queue at 5:00 AM local time daily (disabled by default; enable with `zylos config set daily_upgrade_enabled true`)
+7. **Context Monitoring**: Receives context usage data after every turn; triggers early memory sync and new-session handoff at thresholds read from `config.json` (`model_rotation_thresholds[engine][model]`) for the actual running model; defaults are 70% below 1M and 40% for 1M, with a shared 40% maximum for 1M
 
 ## Component startup context
 
@@ -328,7 +327,6 @@ pm2 list
 
 - **Detection**: Checks if the agent is running every second
 - **Restart Delay**: Waits 5 seconds of continuous "not running" before restarting
-- **Maintenance Wait**: Detects restart/upgrade scripts and waits for completion
 - **Recovery Prompt**: Sends catch-up message via C4 after restart
 
 ## How It Works
@@ -342,7 +340,6 @@ pm2 list
 
 2. **Guardian Logic**:
    - If agent not running for 5+ seconds → restart
-   - Wait for maintenance scripts to complete
    - Send recovery prompt via C4 after successful restart
 
 3. **Activity Detection**:

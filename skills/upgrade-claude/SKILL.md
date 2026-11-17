@@ -77,6 +77,4 @@ In steady single mode:
 
 1. **Install**: Runs the native installer (`curl -fsSL https://claude.ai/install.sh | bash`) and logs the installed version.
 2. **Enqueue the check, then /exit**: Puts the waiting-work check (priority=1, block_queue_until_idle, 60-second ack deadline) and then `/exit` (priority=1, block_queue_until_idle) into the control queue. The dispatcher delivers the check first and `/exit` after the check's turn or its deadline, respecting idle detection and message blocking.
-3. **Replacement**: The dispatcher starts the replacement session after the old session exits; the replacement uses the installed version. The upgrade script does not poll or wait for Claude processes to exit.
-
-Single-session startup proceeds without waiting for restart scripts, upgrade scripts or installer processes.
+3. **Replacement**: The dispatcher starts the replacement session after the old session exits; the replacement uses the installed version.

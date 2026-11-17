@@ -7,10 +7,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
+import { SINGLE_UPGRADE_RESTART_CHECK_PROMPT } from '../skills/activity-monitor/scripts/reclaim-prompts.js';
 
 const repository = fileURLToPath(new URL('../', import.meta.url));
 
-function isolatedEnvironment(t, failed) {
+function isolatedEnvironment(t, failure = null) {
   const home = fs.realpathSync(process.env.HOME);
   assert.notEqual(home, fs.realpathSync(os.userInfo().homedir), 'HOME must be isolated by the test runner');
   const runnerRoot = path.dirname(home);
@@ -27,7 +28,8 @@ function isolatedEnvironment(t, failed) {
     ZYLOS_PACKAGE_ROOT: repository, PATH: `${bin}:/usr/bin:/bin`,
     TEST_INSTALL_NODE: process.execPath,
     TEST_INSTALL_FIXTURE: fileURLToPath(new URL('./fixtures/claude-installer.js', import.meta.url)),
-    TEST_INSTALL_FAIL: failed ? '1' : '0' };
+    TEST_INSTALL_FAIL: failure === 'install' ? '1' : '0',
+    TEST_CURL_FAIL: failure === 'download' ? '1' : '0' };
   for (const key of ['TMUX', 'ZYLOS_SESSION_GROUP', 'ZYLOS_RUN_ID', 'CLAUDE_SESSION_ID', 'CODEX_SESSION_ID']) delete env[key];
   fs.symlinkSync(process.execPath, path.join(bin, 'node'));
   const curl = path.join(bin, 'curl');
@@ -83,6 +85,8 @@ async function holdClaude(t, env) {
 }
 
 function controls(database) {
+  // Installation failures return before the restart producer opens the ledger.
+  if (!fs.existsSync(database)) return [];
   const db = new Database(database, { readonly: true });
   try { return db.prepare('SELECT id, raw_content, status FROM control_queue ORDER BY id LIMIT 3').all(); }
   finally { db.close(); }
@@ -92,10 +96,13 @@ function controls(database) {
 // private database, with a network-free curl fixture installing a version stub.
 // Run when install/enqueue order changes; skip for unrelated edits. No service or
 // tmux server is started; real authenticated replacement is a reviewer scenario.
+// Run only in isolation, never against live resources: isolate HOME, ZYLOS_DIR,
+// PM2_HOME and a short TMPDIR; reserve a private tmux socket and test database.
+// Read actual paths before starting and clean all processes/resources afterwards.
 for (const otherClaude of [false, true]) {
   test(`single-session upgrade installs before queueing exit${otherClaude ? ' while another Claude remains running' : ''}`,
     { timeout: 25000 }, async t => {
-      const fixture = isolatedEnvironment(t, false);
+      const fixture = isolatedEnvironment(t);
       const claude = otherClaude ? await holdClaude(t, fixture.env) : null;
       const started = performance.now(), result = await runUpgrade(t, fixture);
       assert.equal(result.code, 0, result.log);
@@ -104,10 +111,9 @@ for (const otherClaude of [false, true]) {
       const installed = result.log.indexOf('Upgrade completed successfully');
       const queued = result.log.indexOf('enqueued via control queue');
       assert.ok(installed >= 0 && queued > installed, result.log);
-      assert.doesNotMatch(result.log, /ABORT|waiting for.*exit|Claude process has exited|Cancelled queued/i);
       const rows = controls(fixture.database);
       assert.equal(rows.length, 2);
-      assert.match(rows[0].raw_content, /waiting|work|external/i);
+      assert.equal(rows[0].raw_content, SINGLE_UPGRADE_RESTART_CHECK_PROMPT);
       assert.equal(rows[1].raw_content, '/exit');
       assert.equal(rows[0].status, 'pending');
       assert.equal(rows[1].status, 'pending');
@@ -120,10 +126,8 @@ for (const otherClaude of [false, true]) {
     });
 }
 
-// Boundary: real installer failure through main's error handling and private C4
-// state; run for installation-error or exit-queue changes, skip unrelated edits.
-test('failed installation logs an error and leaves the running Claude without queued exit', { timeout: 25000 }, async t => {
-  const fixture = isolatedEnvironment(t, true), claude = await holdClaude(t, fixture.env);
+async function assertFailedUpgrade(t, failure) {
+  const fixture = isolatedEnvironment(t, failure), claude = await holdClaude(t, fixture.env);
   const result = await runUpgrade(t, fixture);
   assert.equal(result.code, 1, result.log);
   assert.match(result.log, /ERROR: Upgrade failed!/);
@@ -132,5 +136,24 @@ test('failed installation logs an error and leaves the running Claude without qu
   assert.equal(claude.exitCode, null);
   assert.equal(claude.signalCode, null);
   assert.equal(fs.existsSync(path.join(fixture.env.HOME, '.local/bin/claude')), false);
-  console.log('Upgrade failure outcome:', JSON.stringify({ code: result.code, queuedControls: 0, currentClaudeAlive: true }));
+  console.log('Upgrade failure outcome:', JSON.stringify({ failure, code: result.code, queuedControls: 0, currentClaudeAlive: true }));
+}
+
+// Boundary: real installer failure through main's error handling and private C4
+// state; run for installation-error or exit-queue changes, skip unrelated edits.
+// Run only in isolation, never against live resources: isolate HOME, ZYLOS_DIR,
+// PM2_HOME and a short TMPDIR; reserve a private tmux socket and test database.
+// Read actual paths before starting and clean all processes/resources afterwards.
+test('failed installation logs an error and leaves the running Claude without queued exit', { timeout: 25000 }, async t => {
+  await assertFailedUpgrade(t, 'install');
+});
+
+// Boundary: curl fails before writing any installer input; the real shell
+// pipeline/main must report failure and preserve the current runtime. Run for
+// native download/pipeline error handling; unrelated edits may skip.
+// Run only in isolation, never against live resources: isolate HOME, ZYLOS_DIR,
+// PM2_HOME and a short TMPDIR; reserve a private tmux socket and test database.
+// Read actual paths before starting and clean all processes/resources afterwards.
+test('failed download logs an error and leaves the running Claude without queued exit', { timeout: 25000 }, async t => {
+  await assertFailedUpgrade(t, 'download');
 });

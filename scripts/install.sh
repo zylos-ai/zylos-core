@@ -206,12 +206,12 @@ ensure_tmux() {
 
 # ── Prerequisite: procps ──────────────────────────────────────
 ensure_procps() {
-  # macOS provides ps and pgrep; do not install a Homebrew replacement.
+  # macOS provides ps; do not install a Homebrew replacement.
   if [ "$OS" != "linux" ]; then
     return
   fi
-  if command -v ps &>/dev/null && command -v pgrep &>/dev/null; then
-    ok "procps: ps and pgrep available"
+  if command -v ps &>/dev/null; then
+    ok "procps: ps available"
     return
   fi
   local pkg="procps"

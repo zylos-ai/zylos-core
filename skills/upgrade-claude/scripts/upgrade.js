@@ -8,14 +8,12 @@
  *   nohup node ~/zylos/.claude/skills/upgrade-claude/scripts/upgrade.js >> ~/zylos/logs/upgrade.log 2>&1 &
  */
 
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 import os from 'os';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadCoreModule } from '../../activity-monitor/scripts/core-modules.js';
-import { getModeTransition } from '../../comm-bridge/scripts/c4-db.js';
-const { requestRuntimeRestart, enqueueSingleUpgradeExit } = await loadCoreModule('request-runtime-restart.js');
-const { readSessionMode } = await loadCoreModule('config.js');
+const { requestRuntimeRestart } = await loadCoreModule('request-runtime-restart.js');
 
 function ts() {
   return new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -29,24 +27,12 @@ function logError(msg) {
   console.error(`[${ts()}] [upgrade-claude] ${msg}`);
 }
 
-// The waiting-work check is queued ahead of /exit; see enqueueSingleUpgradeExit.
-async function enqueueExit() {
-  try {
-    const controls = await enqueueSingleUpgradeExit();
-    log(`check (id=${controls.checkControlId}) and /exit (id=${controls.exitControlId}) enqueued via control queue`);
-    return controls;
-  } catch (err) {
-    logError(`Failed to enqueue the check and /exit: ${err.message}`);
-    throw err;
-  }
-}
-
 function upgradeClaudeCode() {
   log('Starting Claude Code upgrade...');
 
   try {
     process.chdir(os.homedir());
-    const output = execSync('curl -fsSL https://claude.ai/install.sh | bash', {
+    const output = execFileSync('bash', ['-o', 'pipefail', '-c', 'curl -fsSL https://claude.ai/install.sh | bash'], {
       encoding: 'utf8',
       stdio: 'pipe'
     });
@@ -67,20 +53,18 @@ function upgradeClaudeCode() {
   }
 }
 
-export async function upgradeRuntime({ readMode = readSessionMode, readTransition = getModeTransition,
-  install = upgradeClaudeCode, requestRestart = requestRuntimeRestart, enqueue = enqueueExit } = {}) {
-  const mode = await readMode();
-  const transition = await readTransition();
+export async function upgradeRuntime({ install = upgradeClaudeCode, requestRestart = requestRuntimeRestart } = {}) {
   await install();
-  if (mode.mode === 'multi' || transition) return requestRestart();
-  const controls = await enqueue();
-  return {ok:true,data:{result:'exit_enqueued',mode:'single',...controls}};
+  return requestRestart();
 }
 
 async function main() {
   log('Starting upgrade process');
   const result = await upgradeRuntime();
   if (!result.ok) throw Object.assign(new Error(result.error.message), {code:result.error.code});
+  if (result.data.result === 'exit_enqueued') {
+    log(`check (id=${result.data.checkControlId}) and /exit (id=${result.data.exitControlId}) enqueued via control queue`);
+  }
   log(`Upgrade result: ${result.data.result}; replacement sessions are started by the dispatcher`);
 }
 function isMainModule() {

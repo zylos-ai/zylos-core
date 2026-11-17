@@ -11,8 +11,8 @@ import { readyTmuxTarget } from './helpers/ready-tmux-target.js';
 // lifecycle delivery/settlement changes; unrelated changes may skip. The runner
 // isolates HOME, ZYLOS_DIR, PM2_HOME and TMPDIR. The fixture owns a private socket
 // and database, bounds replay attempts, and kills its server on failure/timeout.
-// Upgrade cases use the real queue producers; the check answer, process-exit
-// waiter and package installer are boundaries, so real account/install success
+// Upgrade cases use the real queue producers; the check answer and package
+// installer are boundaries, so real account/install success
 // remains a review acceptance check. Multi Origin/group exercise shared delivery.
 test('exit controls settle after pane removal and do not reach replacement runs', { timeout: 60000 }, async t => {
   const realHome = fs.realpathSync(os.userInfo().homedir);
@@ -101,16 +101,26 @@ const prompt=()=>process.stdout.write('\\x1b[2J\\x1b[H❯ ');prompt();process.st
       };
       if (source === 'runtime-upgrade') {
         let installed = false;
+        const order = [];
         const result = await upgradeRuntime({
-          waitForExit: async () => {
-            const pending = db.getDb().prepare("SELECT id FROM control_queue WHERE status='pending' ORDER BY id").all();
-            acknowledgeCheck({ checkControlId: pending[0].id, exitControlId: pending[1].id });
-            await deliverExit();
-            return count().length === 1;
+          install: () => {
+            assert.equal(db.getDb().prepare("SELECT COUNT(*) AS count FROM control_queue WHERE status='pending'").get().count, 0);
+            assert.equal(count().length, 0, 'the old runtime is still running during installation');
+            installed = true;
+            order.push('install');
           },
-          install: () => { installed = true; assert.equal(db.getControlById(row.id).status, 'done'); },
+          requestRestart: async () => {
+            assert.equal(installed, true);
+            order.push('restart');
+            return requestRuntimeRestart();
+          },
         });
         assert.equal(result.ok, true); assert.equal(installed, true);
+        assert.equal(result.data.result, 'exit_enqueued');
+        assert.deepEqual(order, ['install', 'restart']);
+        acknowledgeCheck(result.data);
+        await deliverExit();
+        assert.equal(count().length, 1, 'exit settles against the old run before replacement startup');
         await start();
       } else if (source === 'core-restart') {
         const result = await requestRuntimeRestart({ afterServiceRestart: true });

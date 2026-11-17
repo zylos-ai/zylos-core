@@ -172,9 +172,6 @@ test('check mode exits successfully when all diagnostics pass', () => {
   const result = runDoctor(['--check'], { state: 'pass' });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Everything is working\./);
-  // The fixture PATH has no pgrep: the text report shows the warning line.
-  assert.deepEqual(result.stdout.split(/\r?\n/).map(line => line.trim().replace(/^[├└│]\s*/, '')).filter(line => /pgrep/.test(line)),
-    ['pgrep not found: Maintenance check before single-session startup will be skipped; install procps']);
   assert.equal(result.repairs.length, 0);
   assert.equal(result.probes.length, 1);
   assert.equal(result.versions.length, 1);
