@@ -158,7 +158,13 @@ export function applyMemoryWriteAccess(edit, save, tree, path) {
   if (save) save.disabled = true;
 }
 
-const byteSize = value => `${(Number(value) / 1024).toFixed(1)} KiB`;
+const byteSize = value => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+};
 
 // C4 timestamps are UTC even when their SQLite text omits the offset.
 const millis = value => typeof value !== 'string' || !value ? NaN

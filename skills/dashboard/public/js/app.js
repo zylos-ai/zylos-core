@@ -1,4 +1,4 @@
-import { formatZoned } from './wb/instance-zone.js';
+import { formatZoned, instanceZone, instanceZoneReady } from './wb/instance-zone.js';
 import { readGroupSnapshot, displayGroupRow, instanceActionRequest } from './wb/group-data.js';
 import { waitUntilDeadline } from './request-timeout.js';
 import { createConversationPush } from './wb/conversation-push.js';
@@ -1017,7 +1017,11 @@ async function refreshRemoteAccess() {
 
 async function refreshState() {
   void refreshRemoteAccess();
+  const previousZone = instanceZone(), zoneWasReady = instanceZoneReady();
   const data = await refreshDashboardState(state, fetchJson);
+  // Time metadata corrects the visible clock immediately, even while pointer hover
+  // postpones ordinary Fleet payload repaints. It can survive a newer SSE snapshot.
+  if (instanceZoneReady() && (!zoneWasReady || previousZone !== instanceZone())) renderFleet();
   if (!data) return;
   state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
   renderInfoBar();

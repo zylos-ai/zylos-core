@@ -188,3 +188,20 @@ test('history errors display the structured response message', async () => {
   history.request = async () => ({ ok: false, json: async () => ({ error: { code: 'group_not_found', message: 'The selected group is unavailable' } }) });
   await assert.rejects(history.json('sessions'), { message: 'The selected group is unavailable' });
 });
+
+
+test('entry headers use the session label zoned date and minute format', () => {
+  const { history } = controller();
+  history.doc.createElement = () => ({ querySelector: () => ({ append() {} }) });
+  setInstanceZone('Asia/Singapore');
+  try {
+    const year = new Date().getUTCFullYear();
+    for (const ts of [`${year}-01-01T19:04:59Z`, `${year - 1}-12-31T15:59:59Z`]) {
+      const label = history.sessionLabel({ id: 'a', title: 'Title', startedAt: ts }).replace(' · Title', '');
+      const rendered = history.renderEntry({ kind: 'text', ts });
+      assert.ok(rendered.innerHTML.includes(` · ${label}</header>`));
+      assert.equal(rendered.innerHTML.includes(ts), false);
+    }
+    assert.match(history.renderEntry({ kind: 'text', ts: 'invalid' }).innerHTML, / · invalid<\/header>/);
+  } finally { setInstanceZone('UTC'); }
+});

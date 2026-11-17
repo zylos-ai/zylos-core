@@ -918,3 +918,21 @@ test('key table formats UTC key clocks in the instance timezone', () => {
     assert.doesNotMatch(row.textContent, /2026-02-03T04:05/);
   } finally { setInstanceZone(null); }
 });
+
+
+test('default model without effort options hides the whole field and restores it on model change', async () => {
+  const document = documentFixture(), root = node(document, 'div');
+  const meta = { runtime: 'claude', current_model: 'haiku', current_effort: 'high',
+    models: [{ id: 'haiku' }, { id: 'opus' }], efforts_by_model: { haiku: [], opus: ['high'] } };
+  const panel = renderDefaults(root, { snapshot: snapshot(), page: { runtimeTotal: 1 }, metadata: { claude: meta }, document, t });
+  const effort = root.querySelector('#settings-effort-claude'), field = effort.closest('label');
+  assert.equal(field.hidden, true);
+  assert.equal(field.children[0].textContent, 'actions.effort');
+  assert.equal(field.children[1].className, 'wb-select-wrap');
+  assert.equal(field.children[1].children.length, 2, 'select and decorative arrow share the hidden field');
+  const model = root.querySelector('#settings-model-claude');
+  model.value = 'opus'; await model.dispatch('change'); assert.equal(field.hidden, false);
+  assert.equal(effort.children.length, 1);
+  model.value = 'haiku'; await model.dispatch('change'); assert.equal(field.hidden, true);
+  panel.destroy();
+});
