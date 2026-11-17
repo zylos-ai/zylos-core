@@ -140,7 +140,7 @@ for (const mode of ['single', 'multi']) for (const runtime of ['claude', 'codex'
       test(`${mode} ${runtime} ${group ?? 'origin'} holds idle controls through ${output} and delivers once after ${ending}`, { timeout: 5000 }, async t => {
         const f = fixture(t, { mode, runtime, group });
         const controls = [runtime === 'codex' ? '/exit' : '/clear', 'Memory Sync requested']
-          .map(content => f.store.insertControl(content, { sessionGroup: group, priority: 0, requireIdle: true, appendAckSuffix: false }));
+          .map(content => f.store.insertControl(content, { sessionGroup: group, priority: 1, requireIdle: true, appendAckSuffix: false }));
         const hasTool = output.startsWith('foreground-') || output === 'escaped-tool';
         if (hasTool) f.hook('PreToolUse', { tool_use_id: 'foreground', tool_name: output === 'foreground-agent' ? 'Agent' : 'Bash' });
         if (output === 'foreground-agent') f.hook('SubagentStart', { agent_id: 'foreground-child' });
@@ -181,7 +181,7 @@ for (const mode of ['single', 'multi']) for (const runtime of ['claude', 'codex'
           assert.equal(escapes.length, 1); assert.equal(escapes[0].content, '[KEYSTROKE]Escape');
           assert.equal(escapes[0].require_idle, 0); assert.equal(escapes[0].bypass_state, 1);
           const filter = group === null ? undefined : { sessionGroups: [group] };
-          assert.equal(f.store.getNextPendingControl(Math.floor(f.now() / 1000), filter).id, escapes[0].id, 'Escape precedes even older priority-zero idle controls');
+          assert.equal(f.store.getNextPendingControl(Math.floor(f.now() / 1000), filter).id, escapes[0].id, 'Escape precedes older normal-priority idle controls');
           assert.equal((await f.deliver(escapes[0])).delivered, true);
           assert.equal(f.row(escapes[0].id).status, 'done');
           for (const elapsed of [1, 1000, OPEN_TURN_INACTIVITY_TIMEOUT_MS]) { f.advance(elapsed); await f.interrupt(); }
@@ -216,7 +216,7 @@ for (const runtime of ['claude', 'codex']) test(`${runtime} AI work followed by 
   assert.equal(f.read().lastResponseAt, f.now());
   const lastActivityAt = f.read().lastActivityAt;
   const controls = ['/clear', 'Memory Sync requested'].map(content => f.store.insertControl(content,
-    { sessionGroup: null, priority: 0, requireIdle: true, appendAckSuffix: false }));
+    { sessionGroup: null, priority: 1, requireIdle: true, appendAckSuffix: false }));
   for (const elapsed of [900000, 1080000, OPEN_TURN_INACTIVITY_TIMEOUT_MS - 1]) {
     f.at(lastActivityAt + elapsed); await f.observe();
     assert.equal(f.read().state, 'busy'); assert.equal(f.escapeRows().length, 0);
@@ -227,12 +227,21 @@ for (const runtime of ['claude', 'codex']) test(`${runtime} AI work followed by 
   assert.equal(tracked.delivery.recovery, null); assert.equal(f.stops.length, 0);
   const escape = f.store.getNextPendingControl(Math.floor(f.now() / 1000));
   assert.equal(escape.content, '[KEYSTROKE]Escape');
+  assert.equal(escape.priority, 0);
+  // Same-second insertion exercises the id tie-breaker in the real queue.
+  const laterControl = f.store.insertControl('Later idle control',
+    { sessionGroup: null, priority: 0, requireIdle: true, appendAckSuffix: false });
+  assert.equal(laterControl.created_at, escape.created_at);
+  assert.ok(laterControl.id > escape.id);
+  assert.equal(f.store.getNextPendingControl(Math.floor(f.now() / 1000)).id, escape.id);
   assert.equal((await f.deliver(escape)).delivered, true);
+  assert.equal(f.store.getNextPendingControl(Math.floor(f.now() / 1000)).id, laterControl.id);
+  assert.equal((await f.deliver(laterControl)).delivered, true);
   for (const control of controls) assert.equal((await f.deliver(control)).delivered, true);
   for (const elapsed of [1, 1000, OPEN_TURN_INACTIVITY_TIMEOUT_MS]) { f.advance(elapsed); await f.observe(); }
   assert.equal(f.escapeRows().length, 1); assert.equal(f.keys.filter(value => value[0] === 'Escape').length, 1);
-  assert.equal(f.pasted.length, controls.length);
-  for (const control of controls) assert.equal(f.store.claimControl(control.id), false);
+  assert.equal(f.pasted.length, controls.length + 1);
+  for (const control of [...controls, laterControl]) assert.equal(f.store.claimControl(control.id), false);
   assert.equal(f.database.prepare("SELECT count(*) AS count FROM control_queue WHERE raw_content='continue'").get().count, 0);
 });
 

@@ -794,7 +794,7 @@ for(const runtime of ['claude','codex'])test(`assembled ${runtime} quiet-turn in
  now++;
  assert.equal(await f.supervisor.interruptQuietTurn(scene),true);
  assert.equal(controls.length,1);assert.equal(controls[0].content,'[KEYSTROKE]Escape');
- assert.equal(controls[0].priority,-1);assert.equal(controls[0].bypassState,true);assert.equal(controls[0].appendAckSuffix,false);
+ assert.equal(controls[0].priority,0);assert.equal(controls[0].bypassState,true);assert.equal(controls[0].appendAckSuffix,false);
  assert.equal(controls[0].targetBinding.expectedSessionId,'s');
  const idle=f.supervisor.readActivity(scene);
  assert.equal(idle.state,'idle');assert.equal(idle.turnOpen,false);assert.equal(idle.lastResponseAt,null);assert.equal(idle.lastActivityAt,1000);

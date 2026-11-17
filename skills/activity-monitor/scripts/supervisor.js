@@ -127,10 +127,10 @@ export function createSupervisor(deps) {
       interruptFact('quiet_turn_interrupt_attempt');
       const result=await nudgeSession({continueAfterEscape:false,enqueue:async content=>{
         const enqueuedAt=now();
-        // Escape precedes any pending idle-only control, including priority zero.
+        // Use the shared recovery priority; equal-priority controls retain FIFO order.
         // The existing per-group C4 lane still owns every terminal write.
         const control=await db.insertControl(content,{sessionGroup:mode==='single'?null:current.sessionGroup,
-          targetBinding,priority:-1,bypassState:true,appendAckSuffix:false});
+          targetBinding,priority:0,bypassState:true,appendAckSuffix:false});
         return {ok:Number.isSafeInteger(control?.id) && control.id>0,controlId:control?.id ?? null,enqueuedAt};
       }});
       if(!result.ok)return false;

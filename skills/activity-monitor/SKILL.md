@@ -358,8 +358,10 @@ pm2 list
      count as AI activity. An unknown admission keeps the turn busy without
      another attempt. The control uses the same
      per-session delivery lane as ordinary messages, so it waits for any active
-     paste/Enter verification to finish before sending. It precedes pending
-     require-idle controls. No direct tmux key-sending path is added.
+     paste/Enter verification to finish before sending. It uses recovery priority
+     zero, ahead of normal require-idle controls (priority one or three). Equal
+     priorities keep the existing created-at/id order. No direct tmux key-sending
+     path is added.
    - Unfinished tools, including silent foreground Bash and foreground subagent
      calls, stay busy without this time limit and receive no inactivity Escape.
      Claude transcript tool results can clear interrupted tools even when the
