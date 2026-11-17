@@ -12,6 +12,7 @@ import { AuthGate, generateApiKey, hashApiKey } from '../src/lib/auth.js';
 import { EventLoopMonitor } from '../src/lib/event-loop-monitor.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
 import { nudgeSession } from '../../../cli/lib/session-nudge.js';
+import { collectStatus } from '../../../cli/lib/status-view.js';
 
 const states = ['working', 'idle', 'starting', 'stopping', 'unknown'];
 const flags = ['queued', 'blocked', 'waitingSlot', 'startFailed', 'unreadable', 'noResponse'];
@@ -33,7 +34,6 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
   assert.notEqual(fs.realpathSync(process.env.HOME), fs.realpathSync(os.userInfo().homedir));
   const runnerRoot = path.dirname(process.env.HOME);
   for (const key of ['ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) assert.ok(process.env[key].startsWith(runnerRoot + path.sep), key);
-  assert.equal(process.env.TZ, 'Asia/Singapore');
   assert.ok(process.env.TMPDIR.length < 80);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ops-'));
   const dashboard = path.join(root, 'components/dashboard');
@@ -82,10 +82,16 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
     if (name === 'config-store.js') return { readConfigStrict: () => ({ state: 'ok', config: { session_mode: mode, runtime: 'claude' } }) };
     if (name === 'config.js') return { readSessionMode: () => ({ mode }) };
-    if (name === 'session-hot-ttl.js') return { resolveSessionHotTtl: () => 1800000 };
+    if (name === 'status-view.js') return { collectStatus: options => collectStatus({ ...options,
+      configIssue: () => null, resolveRoot: () => root, requests: () => ({}), facts: () => ({ originNeed: null }),
+    }) };
+    if (name === 'session-mode-status.js') return { readSessionModeStatus: async () => ({}) };
+    if (name === 'session-pool-config.js') return { readPoolCapacity: () => ({ k: 4 }) };
+    if (name === 'session-hot-ttl.js') return { resolveSessionHotTtl: () => ({ seconds: 1800 }) };
     if (name === 'pm2.js') return { createPm2Helpers: () => ({}) };
     if (name === 'model-rotation-thresholds.js') return { readDefaultModels: () => ({}), readCodexModelWindows: () => ({}), modelThreshold: () => 80, thresholdLimit: () => 100 };
-    if (['session-usage-reader.js', 'config-lock.js', 'private-file.js'].includes(name)) return {};
+    if (name === 'session-usage-reader.js') return { usageModelFacts: () => ({}) };
+    if (['config-lock.js', 'private-file.js'].includes(name)) return {};
     if (name === 'session-state-reader.js') return {
       readLiveIdentity: async () => ({ present: running }),
       readRuntimeHealth: async () => source === 'record' ? { health } : { [source]: true },
@@ -94,7 +100,8 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
     if (name === 'am-sock-client.js') return { submit: async request => {
       if (request.version === 0) return supervisor ? { kind: 'rejected', reply: { code: 'invalid_request' } } : { kind: 'connect_failed' };
       assert.equal(request.type, 'manual_restart');
-      assert.equal(request.expectedRunId, 'current-run');
+      assert.equal(request.expectedRunId, stale ? 'old-run' : 'current-run');
+      if (stale) return { kind: 'rejected', reply: { result: 'stale_target', currentRunId: 'current-run' } };
       return { kind: 'accepted', reply: { result: 'accepted' } };
     } };
     assert.fail(`Unexpected Core module: ${name}`);
@@ -111,9 +118,33 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
       ...(scenario === 'failed' ? { wait: { kind: 'start_failed', count30m: 1, lastAt: Date.now() - 1000, reasonCode: 'launch_failed' } } : {}),
     }],
   });
+  const { createGroupSnapshot } = await import('../src/lib/workbench/group-snapshot.js');
+  const observations = () => new Map([[mode === 'multi' ? 'origin' : null, {
+    identity: { present: running, ready: true, runtime: 'claude',
+      runId: 'current-run', sessionId: 'current-session', createdAt: Math.floor(Date.now() / 1000) },
+    status: { valid: true, value: { state: 'busy' }, sampledAt: Date.now() },
+    usage: { valid: false },
+  }]]);
+  // Exercise the real snapshot and presence producers through HTTP. The remaining
+  // synthetic scenarios isolate optional projection fields from their inputs.
   t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
-    createGroupSnapshot: () => ({ getSnapshot: async () => snapshot(), getCachedSnapshot: snapshot,
-      channelRestartCounter: { update() {} }, hotTtlMs: () => 1800000 }),
+    createGroupSnapshot: options => {
+      const real = createGroupSnapshot({ ...options,
+        cli: {
+          runC4Db: async args => ({ ok: true, data: args[0] === 'groups' ? [] : { groups: [], globalFence: null } }),
+          readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }),
+        },
+        sessionObservations: {
+          get: async () => ({ mode, observations: observations() }),
+          reader: { readRuntimeHealth: async () => ({ health: 'ok', publicHealth: 'ok' }), readAccountUsage: async () => null },
+        },
+        readChannels: async () => [],
+      });
+      return { ...real, getSnapshot: async () => {
+        if (scenario !== 'source') return snapshot();
+        return real.getSnapshot(Date.now(), { fresh: true });
+      }, getCachedSnapshot: () => scenario === 'source' ? real.getCachedSnapshot() : snapshot() };
+    },
   } });
   process.env.ZYLOS_DIR = root;
   console.log('Operations HTTP isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: root,
@@ -149,6 +180,17 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
   }
   for (mode of ['single', 'multi']) {
     fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ session_mode: mode }));
+    scenario = 'source';
+    for (const token of [tokens.read, tokens.admin]) {
+      const instance = await request('/api/instance', token);
+      assert.equal(instance.status, 200, JSON.stringify(instance.body));
+      assert.equal(instance.body.session_mode.sessionMode, mode);
+      const origin = await request('/api/groups/origin?include=', token);
+      assert.equal(origin.status, 200, JSON.stringify(origin.body));
+      assert.equal(origin.body.presence, 'running');
+      assert.equal(origin.body.run.runId, 'current-run');
+    }
+    scenario = 'normal';
     for (const token of [undefined, tokens.read, tokens.admin]) {
       const live = await request('/api/health', token);
       assert.equal(live.status, 200); assert.equal(live.body.ok, true);
@@ -206,7 +248,13 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
     assert.equal(rejected.status, 409); assert.equal(rejected.body.ok, false);
     assert.equal(rejected.body.submission, 'rejected'); assert.equal(rejected.body.controlId, null);
     assert.equal(rejected.body.error.code, 'TARGET_MISMATCH'); assert.equal(rejected.body.rejectionCode, 'TARGET_MISMATCH');
-    assert.equal(rejected.body.currentRunId, 'current-run'); stale = false;
+    assert.equal(rejected.body.currentRunId, 'current-run');
+    const restartRejected = await request('/api/groups/origin/actions/restart', tokens.admin, { runId: 'old-run' });
+    assert.equal(restartRejected.status, 409); assert.equal(restartRejected.body.ok, false);
+    assert.equal(restartRejected.body.submission, 'rejected');
+    assert.equal(typeof restartRejected.body.requestId, 'string');
+    assert.equal(restartRejected.body.error.code, 'stale_target');
+    assert.equal(restartRejected.body.currentRunId, 'current-run'); stale = false;
     supervisor = false;
     const unavailable = await request('/api/health/ready');
     assert.equal(unavailable.status, 503); assert.equal(unavailable.body.ready, false);

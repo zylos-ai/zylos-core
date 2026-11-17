@@ -36,7 +36,7 @@ All paths below are relative to `data` and are present on a successful response.
 | --- | --- |
 | `sessionMode` | `"single"`, `"multi"`, or `null` when the mode cannot be read. A configuration without a `session_mode` key means `"single"`. |
 | `origin.presence` | `"running"`, `"starting"`, `"not_running"`, or `"unknown"`. A confirmed live session can still have an unreadable or stale status sample. |
-| `origin.runId` | String or `null`; the observed process generation, absent when no live identity was read. |
+| `origin.runId` | String or `null`; the observed process generation, `null` when no live identity was read. |
 | `origin.sessionId` | String or `null`; the observed runtime session identity. |
 | `origin.status.state` | String or `null`; the current valid runtime sample's state (for example `"idle"` or `"busy"`). `null` means there is no current valid sample; it must not be treated as idle. |
 | `runtimeHealth.claude.source`, `runtimeHealth.codex.source` | `"record"`, `"missing"`, or `"unreadable"`. |
