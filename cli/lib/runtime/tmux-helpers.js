@@ -153,24 +153,6 @@ export function getProcessName(pid) {
   }
 }
 
-/**
- * Check if a PID has a child matching a pattern.
- * @param {number} parentPid
- * @param {string} pattern
- * @returns {boolean}
- */
-export function hasChildProcess(parentPid, pattern) {
-  try {
-    execFileSync('pgrep', ['-P', String(parentPid), '-f', pattern], {
-      timeout: CMD_TIMEOUT,
-      stdio: 'ignore',
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function isTimeoutError(err) {
   return err?.code === 'ETIMEDOUT';
 }

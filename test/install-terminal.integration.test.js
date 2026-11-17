@@ -141,6 +141,9 @@ ${stubBody(name)}
     expect(path.resolve(value).startsWith(fixture + path.sep)).toBe(true);
   }
   for (const dir of Object.values(dirs)) expect(fs.realpathSync(dir)).toBe(dir);
+  console.log('Installer isolation:', JSON.stringify({ HOME: env.HOME, ZYLOS_DIR: env.ZYLOS_DIR,
+    PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR, PATH: env.PATH,
+    socket: path.join(env.TMPDIR, 'tmux.sock'), database: path.join(env.ZYLOS_DIR, 'comm-bridge/c4.db') }));
   env.INSTALL_TEST_VERSION = version;
   expect(fs.readdirSync(dirs.home)).toEqual([]);
   return { fixture, dirs, env, calls, bash };
@@ -263,9 +266,12 @@ suite('scripts/install.sh terminal handling', () => {
 // Boundary: real install.sh prerequisite selection and failure propagation, with
 // every package/install command recorded in a private PATH. Run when procps
 // detection or package selection changes; skip for unrelated installer changes.
-// makeFixture verifies HOME/NVM_DIR/TMPDIR and all writable paths before launch.
+// Only run in isolation: never use live resources. makeFixture verifies isolated
+// HOME, ZYLOS_DIR, PM2_HOME, short TMPDIR and all writable paths before launch.
+// No tmux or database is opened; any socket/database path stays under the fixture.
+// Commands are local stubs, bounded child groups are reaped, and fixtures removed.
 for (const manager of ['apt-get', 'dnf', 'yum']) {
-  for (const missing of [['ps'], ['pgrep'], ['ps', 'pgrep']]) {
+  for (const missing of [['ps'], ['ps', 'pgrep']]) {
     test(`installer selects ${manager} package when missing ${missing.join(' and ')}`, async () => {
       const context = makeFixture({ missing, manager });
       const result = await run(context.bash, [installer, '--branch', STUB_TAG, '--no-init'], {
@@ -281,15 +287,17 @@ for (const manager of ['apt-get', 'dnf', 'yum']) {
   }
 }
 
-test('installer reports existing procps without package installation', async () => {
-  const context = makeFixture();
-  const result = await run(context.bash, [installer, '--branch', STUB_TAG, '--no-init'], {
-    env: context.env, cwd: context.dirs.home,
-  });
-  expect(result.status).toBe(0);
-  expect(result.output.match(/procps: ps and pgrep available/g)).toHaveLength(1);
-  expect(readCalls(context.calls).some(call => /^(apt-get|dnf|yum|brew) /.test(call))).toBe(false);
-}, TEST_TIMEOUT_MS);
+for (const missing of [[], ['pgrep']]) {
+  test(`installer reports existing ps without package installation${missing.length ? ' when pgrep is absent' : ''}`, async () => {
+    const context = makeFixture({ missing });
+    const result = await run(context.bash, [installer, '--branch', STUB_TAG, '--no-init'], {
+      env: context.env, cwd: context.dirs.home,
+    });
+    expect(result.status).toBe(0);
+    expect(result.output.match(/procps: ps available/g)).toHaveLength(1);
+    expect(readCalls(context.calls).some(call => /^(apt-get|dnf|yum|brew) /.test(call))).toBe(false);
+  }, TEST_TIMEOUT_MS);
+}
 
 test('installer requires manual procps installation without root or sudo', async () => {
   const context = makeFixture({ missing: ['ps'], uid: '1000' });

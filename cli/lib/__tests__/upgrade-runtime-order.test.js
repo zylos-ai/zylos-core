@@ -1,59 +1,53 @@
 import assert from 'node:assert/strict';
-import { after, test } from 'node:test';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { test } from 'node:test';
+import { upgradeRuntime } from '../../../skills/upgrade-claude/scripts/upgrade.js';
+import { requestRuntimeRestart } from '../request-runtime-restart.js';
 
-// The boundary case below installs skills under ZYLOS_DIR. The runner gives every file of a batch the same
-// ZYLOS_DIR and runs them concurrently, so this file uses its own directory under the runner's TMPDIR,
-// removed when the file ends. Both modules read ZYLOS_DIR when they load, hence the dynamic imports after it.
-const privateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-runtime-order-'));
-after(() => fs.rmSync(privateRoot, { recursive: true, force: true }));
-process.env.ZYLOS_DIR = path.join(privateRoot, 'zylos');
-fs.mkdirSync(process.env.ZYLOS_DIR);
-const { upgradeRuntime, cancelExit } = await import('../../../skills/upgrade-claude/scripts/upgrade.js');
-const { enqueueSingleUpgradeExit } = await import('../request-runtime-restart.js');
-
-test('runtime upgrade multi/transition installs before one supervisor request, without global exit polling',async()=>{
-  for(const [mode,transition] of [['multi',null],['single',{phase:'gating'}]]) {
-    const calls=[];const result=await upgradeRuntime({readMode:()=>({mode}),readTransition:()=>transition,
-      install:()=>calls.push('install'),requestRestart:()=>{calls.push('restart');return {ok:false,error:{code:'restart_result_unknown'}};},
-      enqueue:()=>{throw new Error('must not enqueue');},waitForExit:()=>{throw new Error('must not poll');}});
-    assert.deepEqual(calls,['install','restart']);assert.equal(result.error.code,'restart_result_unknown');
+test('runtime upgrade completes installation before the shared restart producer selects its mode', async () => {
+  for (const [mode, transition] of [['single', null], ['multi', null], ['single', { phase: 'gating' }]]) {
+    const calls = [];
+    const controls = { checkControlId: 7, exitControlId: 8 };
+    const result = await upgradeRuntime({
+      install: async () => { calls.push('install'); await Promise.resolve(); calls.push('installed'); },
+      requestRestart: () => requestRuntimeRestart({
+        readMode: () => { calls.push('mode'); return { mode }; }, readTransition: () => transition,
+        enqueueExit: () => { calls.push('enqueue'); return controls; },
+        send: async () => { calls.push('restart_all'); return { kind: 'accepted', reply: { result: 'accepted' } }; },
+      }),
+    });
+    assert.deepEqual(calls, ['install', 'installed', 'mode', mode === 'single' && !transition ? 'enqueue' : 'restart_all']);
+    assert.equal(result.ok, true);
+    if (mode === 'single' && !transition) {
+      assert.equal(result.data.result, 'exit_enqueued');
+      assert.equal(result.data.checkControlId, controls.checkControlId);
+      assert.equal(result.data.exitControlId, controls.exitControlId);
+    } else assert.equal(result.data.result, 'accepted');
   }
 });
-test('runtime upgrade does not restart after install failure; steady single preserves exit-before-install',async()=>{
-  let restarts=0;await assert.rejects(upgradeRuntime({readMode:()=>({mode:'multi'}),readTransition:()=>null,install:()=>{throw new Error('install failed');},requestRestart:()=>restarts++}),/install failed/);assert.equal(restarts,0);
-  const calls=[];await upgradeRuntime({readMode:()=>({mode:'single'}),readTransition:()=>null,enqueue:()=>{calls.push('enqueue');return 1;},waitForExit:()=>{calls.push('wait');return true;},install:()=>calls.push('install')});
-  assert.deepEqual(calls,['enqueue','wait','install']);
-});
-test('steady single upgrade cancels both its queued check and /exit when the runtime does not exit',async()=>{
-  const controls={checkControlId:7,exitControlId:8};let cancelled,installs=0;
-  await assert.rejects(upgradeRuntime({readMode:()=>({mode:'single'}),readTransition:()=>null,enqueue:async()=>controls,
-    waitForExit:()=>false,cancel:received=>{cancelled=received;},install:()=>installs++}),{code:'EXIT_UNCONFIRMED'});
-  assert.deepEqual(cancelled,controls);assert.equal(installs,0);
+
+test('failed installation never requests a runtime restart', async () => {
+  await assert.rejects(upgradeRuntime({
+    install: () => { throw new Error('install failed'); },
+    requestRestart: () => assert.fail('failed installation must not restart'),
+  }), /install failed/);
 });
 
-// Boundary: the real queueing helper and the real cancellation, each running the installed c4-control script
-// against the C4 database in this file's private ZYLOS_DIR (the repository's skills are linked in as installed).
-// No session, tmux or service is involved.
-test('steady single upgrade giving up acknowledges both its queued check and /exit, and nothing else', async () => {
-  const zylosDir = fs.realpathSync(process.env.ZYLOS_DIR);
-  const realHome = fs.realpathSync(os.userInfo().homedir);
-  assert.ok(!zylosDir.startsWith(realHome + path.sep), 'ZYLOS_DIR must be isolated from the real home');
-  const skills = path.join(zylosDir, '.claude/skills'), repository = fileURLToPath(new URL('../../../', import.meta.url));
-  fs.mkdirSync(skills, { recursive: true });
-  for (const skill of ['comm-bridge', 'activity-monitor', 'scheduler']) {
-    fs.symlinkSync(path.join(repository, 'skills', skill), path.join(skills, skill));
+test('restart refusal or uncertain result is returned without another installation or submission', async () => {
+  for (const code of ['manual_restart_pending', 'restart_result_unknown']) {
+    let installs = 0, restarts = 0;
+    const result = { ok: false, error: { code } };
+    assert.equal(await upgradeRuntime({
+      install: () => { installs++; }, requestRestart: () => { restarts++; return result; },
+    }), result);
+    assert.equal(installs, 1); assert.equal(restarts, 1);
   }
-  const control = args => execFileSync(process.execPath, [path.join(skills, 'comm-bridge/scripts/c4-control.js'), ...args],
-    { encoding: 'utf8', timeout: 30000 }).trim();
-  const controls = await enqueueSingleUpgradeExit();
-  const other = JSON.parse(control(['enqueue', '--content', 'unrelated control', '--json'])).data.id;
-  const status = id => control(['get', '--id', String(id)]);
-  assert.deepEqual([controls.checkControlId, controls.exitControlId, other].map(status), ['status=pending', 'status=pending', 'status=pending']);
-  cancelExit(controls);
-  assert.deepEqual([controls.checkControlId, controls.exitControlId, other].map(status), ['status=done', 'status=done', 'status=pending']);
+});
+
+test('queue failure after installation does not retry installation or restart', async () => {
+  let installs = 0, restarts = 0;
+  await assert.rejects(upgradeRuntime({
+    install: () => { installs++; },
+    requestRestart: () => { restarts++; throw new Error('queue unavailable'); },
+  }), /queue unavailable/);
+  assert.equal(installs, 1); assert.equal(restarts, 1);
 });

@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
-import { describe, it, mock } from 'node:test';
-import { execFileSync } from 'node:child_process';
+import { describe, it } from 'node:test';
 
 // We test the module's behavior by importing it and verifying that
 // the functions handle various child_process outcomes correctly.
@@ -13,7 +12,6 @@ import {
   tmuxKillSession,
   tmuxCapturePaneText,
   getProcessName,
-  hasChildProcess,
   isTimeoutError,
 } from '../tmux-helpers.js';
 
@@ -42,10 +40,6 @@ describe('tmux-helpers integration (live calls to nonexistent sessions)', () => 
   it('getProcessName returns null for nonexistent PID', () => {
     assert.equal(getProcessName(999999999), null);
   });
-
-  it('hasChildProcess returns false for nonexistent parent', () => {
-    assert.equal(hasChildProcess(999999999, 'nope'), false);
-  });
 });
 
 describe('tmux-helpers timeout behavior', () => {
@@ -72,11 +66,6 @@ describe('tmux-helpers timeout behavior', () => {
   it('getProcessName returns null on error (does not throw)', () => {
     const result = getProcessName(-1);
     assert.equal(result, null);
-  });
-
-  it('hasChildProcess returns false on error (does not throw)', () => {
-    const result = hasChildProcess(-1, 'anything');
-    assert.equal(result, false);
   });
 });
 
