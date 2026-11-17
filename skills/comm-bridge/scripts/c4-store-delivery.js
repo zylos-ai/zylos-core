@@ -1,5 +1,6 @@
 import { dataError, requireGroup } from './c4-session-group.js';
 import { messageForFailureReceipt } from './failure-receipt-template.js';
+import { FAILURE_RECEIPT_RETRY_SECONDS, FAILURE_RECEIPT_LIFETIME_SECONDS } from './failure-receipt-policy.js';
 import { MAX_RETRIES } from './c4-config.js';
 export function deliveryFunctions({ read, write, snapshot, get, all, run, seconds, insert }) {
   const unfenced = "NOT EXISTS(SELECT 1 FROM drain_fences WHERE session_group=conversations.session_group OR session_group='*')";
@@ -29,15 +30,20 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
     listFailureReceipts: ({ limit = 20 } = {}) => read(c => {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw dataError('INVALID_ARGS', 'limit must be between 1 and 100');
       return all(c, `SELECT conversations.id,conversations.direction,conversations.channel,conversations.endpoint_id,
-        conversations.session_group,failure_receipts.reason FROM failure_receipts
+        conversations.session_group,failure_receipts.reason,failure_receipts.created_at FROM failure_receipts
         JOIN conversations ON conversations.id=failure_receipts.conversation_id
-        WHERE failure_receipts.state IN ('pending','queued') AND conversations.channel<>'internal' ORDER BY failure_receipts.updated_at,conversation_id LIMIT ?`, limit);
+        WHERE failure_receipts.state IN ('pending','queued') AND conversations.channel<>'internal'
+        AND ((failure_receipts.state='pending' AND failure_receipts.updated_at=failure_receipts.created_at)
+          OR failure_receipts.updated_at+?<=? OR failure_receipts.created_at+?<=?)
+        ORDER BY failure_receipts.updated_at,conversation_id LIMIT ?`,
+        FAILURE_RECEIPT_RETRY_SECONDS, seconds(), FAILURE_RECEIPT_LIFETIME_SECONDS, seconds(), limit);
     }),
     settleFailureReceipt: (id, outcome) => write(c => {
-      if (!['sent','suppressed','uncertain','failed'].includes(outcome)) throw dataError('INVALID_ARGS', 'Invalid receipt outcome');
-      const terminal = outcome === 'sent' || outcome === 'suppressed';
-      const changed = run(c, "UPDATE failure_receipts SET state=CASE WHEN ? THEN ? ELSE state END,updated_at=? WHERE conversation_id=? AND state IN ('pending','queued')",
-        terminal ? 1 : 0, outcome, seconds(), id).changes > 0;
+      if (!['sent','suppressed','uncertain','failed','expired'].includes(outcome)) throw dataError('INVALID_ARGS', 'Invalid receipt outcome');
+      const terminal = outcome === 'sent' || outcome === 'suppressed' || outcome === 'expired';
+      // Distinguish even a same-second failed attempt from untouched pending work.
+      const changed = run(c, "UPDATE failure_receipts SET state=CASE WHEN ? THEN ? ELSE state END,updated_at=MAX(?,created_at+1) WHERE conversation_id=? AND state IN ('pending','queued')",
+        terminal ? 1 : 0, outcome === 'expired' ? 'failed' : outcome, seconds(), id).changes > 0;
       return terminal && changed;
     }),
     getNextPending: ({ sessionGroups } = {}) => { const filter = groups(sessionGroups); return read(c => get(c, `SELECT * FROM conversations WHERE direction='in' AND status='pending' AND ${unfenced}${filter.sql} ORDER BY priority,id LIMIT 1`, ...filter.args) ?? null); },
@@ -52,7 +58,7 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
     }),
     failDelivery: (id, { maxRetries = MAX_RETRIES, reason = 'delivery_failed' } = {}) => write(c => {
       if (!Number.isSafeInteger(maxRetries) || maxRetries < 1) throw dataError('INVALID_ARGS', 'maxRetries must be positive');
-      if (!['delivery_failed', 'launch_failed', 'ready_timeout'].includes(reason)) throw dataError('INVALID_ARGS', 'Invalid delivery failure reason');
+      if (!['delivery_failed', 'launch_failed', 'ready_timeout', 'delivery_unverified'].includes(reason)) throw dataError('INVALID_ARGS', 'Invalid delivery failure reason');
       const row = get(c, "UPDATE conversations SET retry_count=retry_count+1,status=CASE WHEN retry_count+1>=? THEN 'failed' ELSE 'pending' END WHERE id=? AND direction='in' AND status='running' RETURNING status,retry_count AS retryCount", maxRetries, id);
       if (row?.status === 'failed') enqueueReceipt(c, id, reason);
       if (row) return { changed: true, ...row };

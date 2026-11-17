@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
+import { createStore } from '../../skills/comm-bridge/scripts/c4-v2-store.js';
 import * as db from '../../skills/comm-bridge/scripts/c4-db.js';
 import { createStatusNoticeSender } from '../../skills/comm-bridge/scripts/c4-status-notice.js';
 import { createFailureReceiptDrainer } from '../../skills/comm-bridge/scripts/c4-failure-receipts.js';
@@ -19,11 +20,15 @@ const sender = createStatusNoticeSender({ db, diagnostic() {}, log() {},
     return spawn(...args);
   },
 });
-const store = { ...db, settleFailureReceipt(id, outcome) {
+// Restart preserves the persisted schedule; advance only the injected clock
+// to the next eligible poll instead of waiting 30 seconds in this fixture.
+const now = () => Date.now() + (phase === 'resume' ? 31000 : 0);
+const durable = createStore(db.getDb(), { now });
+const store = { ...db, listFailureReceipts: durable.listFailureReceipts, settleFailureReceipt(id, outcome) {
   if (phase === 'sent' && outcome === 'sent') barrier('sent');
   return db.settleFailureReceipt(id, outcome);
 } };
 try {
-  const drain = createFailureReceiptDrainer({ db: store, sendStatusNotice: sender });
+  const drain = createFailureReceiptDrainer({ db: store, sendStatusNotice: sender, now: () => Math.floor(now() / 1000) });
   await drain();
 } finally { db.close(); }

@@ -105,3 +105,42 @@ for (const phase of ['reserved', 'sent']) {
       otherReceipt: 'suppressed', killedSignal: killed.signal }));
   });
 }
+
+// Run for external receipt retry policy or C4 sender integration; skip UI-only
+// changes. Read back private paths/DB before spawning the real c4-send. The local
+// channel fixture always exits 1 and cannot use network or live tmux. Every send
+// is awaited by the shared sender; the test environment owns fixture cleanup.
+test('permanently failing real channel stops receiving receipt attempts', { timeout: 20000 }, async t => {
+  proveIsolation();
+  const { createStore } = await import('../skills/comm-bridge/scripts/c4-v2-store.js');
+  const { createStatusNoticeSender } = await import('../skills/comm-bridge/scripts/c4-status-notice.js');
+  const { createFailureReceiptDrainer } = await import('../skills/comm-bridge/scripts/c4-failure-receipts.js');
+  const scriptDir = path.join(process.env.ZYLOS_DIR, '.claude', 'skills', namespace, 'scripts');
+  fs.mkdirSync(scriptDir, { recursive: true });
+  fs.writeFileSync(path.join(scriptDir, 'send.js'), "process.stdin.resume(); process.stdin.on('end', () => process.exit(1));\n");
+  const endpoint = `permanent-channel-${++sequence}`, original = fail(endpoint, 'private original body');
+  let clock = Math.floor(Date.now() / 1000);
+  const createdAt = db.getDb().prepare('SELECT created_at FROM failure_receipts WHERE conversation_id=?').get(original.id).created_at;
+  const store = createStore(db.getDb(), { now: () => clock * 1000 });
+  const events = [];
+  const drain = createFailureReceiptDrainer({ db: store, now: () => clock,
+    sendStatusNotice: createStatusNoticeSender({ db, diagnostic() {}, log() {} }),
+    diagnostic: (event, fields) => events.push({ event, fields }) });
+  const attempts = () => db.getDb().prepare("SELECT count(*) AS n FROM conversations WHERE direction='out' AND channel=? AND endpoint_id=? AND status='failed'").get(namespace, endpoint).n;
+  for (let elapsed = 0; elapsed < 600; elapsed += 31) {
+    clock = createdAt + elapsed;
+    assert.equal((await drain()).pending, 1);
+    assert.equal((await drain()).attempted, 0, 'another immediate poll obeys persisted backoff');
+  }
+  assert.equal(attempts(), 20);
+  clock = createdAt + 600;
+  assert.equal((await drain()).settled, 1);
+  clock += 3600;
+  assert.equal((await drain()).attempted, 0);
+  assert.equal(attempts(), 20);
+  assert.equal(db.getDb().prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(original.id).state, 'failed');
+  assert.equal(events.filter(row => row.event === 'failure_receipt_send_failed').length, 20);
+  assert.equal(events.filter(row => row.event === 'failure_receipt_exhausted').length, 1);
+  assert.equal(JSON.stringify(events).includes('private original body'), false);
+  t.diagnostic(JSON.stringify({ originalId: original.id, realFailedSends: attempts(), terminal: 'failed', laterSends: 0 }));
+});

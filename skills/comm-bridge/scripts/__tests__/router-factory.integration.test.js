@@ -18,7 +18,7 @@ async function until(predicate, message) { for (let i = 0; i < 2000; i++) { if (
 let sequence = 0;
 function configuration(mode = 'multi') {
   fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify({ runtime: 'codex', session_mode: mode }));
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify({ runtime: 'codex', session_mode: mode, statusNotices: { brand: 'Factory' } }));
 }
 // Factory composition boundary: run for dispatcher/slot fixture changes; skip unrelated UI.
 // createTestEnvironment owns the shared SQLite root; scene/runtime I/O is injected.
@@ -116,6 +116,7 @@ test('factory: real expiry + shared sender happen post-commit, then next fresh r
   assert.equal(f.row(fresh.id).status, 'delivered'); assert.equal(attempts.length, 1);
   assert.deepEqual(attempts[0].args.slice(1), [f.a, `endpoint-${f.a}`]);
   assert.equal(attempts[0].body, messageForFailureReceipt({ ...old, reason: 'pending_expired' }));
+  assert.match(attempts[0].body, /^\[Factory\]/);
   for (let i = 0; i < 3; i++) { dispatcher.tick(); await dispatcher.idle(); }
   assert.equal(attempts.length, 1, 'persistent receipt must not be sent again');
   assert.equal(f.db.getDb().prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(old.id).state, 'sent');
@@ -267,3 +268,31 @@ for (const runtime of ['claude', 'codex']) for (const outcome of ['timeout', 'bo
     }
   });
 }
+
+// Run for receipt retry scheduling/diagnostic composition; skip unrelated UI.
+// setup reads back isolated HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and actual SQLite.
+// Runtime and transport boundaries are injected; no tmux, account or network.
+test('factory: permanent receipt failure backs off and terminates with structured diagnostics', async t => {
+  const f = setup(t), row = f.add();
+  f.db.claimConversation(row.id);
+  f.db.failDelivery(row.id, { maxRetries: 1, reason: 'launch_failed' });
+  let sends = 0;
+  f.overrides.sendStatusNotice = async () => { sends++; return { outcome: 'uncertain' }; };
+  const dispatcher = f.create();
+  await dispatcher.initialize(); await dispatcher.idle();
+  dispatcher.tick(); await dispatcher.idle();
+  assert.equal(sends, 1);
+  assert.equal(f.calls.filter(call => call[0] === 'event' && call[1] === 'failure_receipt_send_failed').length, 1);
+  dispatcher.tick(); await dispatcher.idle();
+  assert.equal(sends, 1, 'polling cannot bypass persisted backoff');
+  f.db.getDb().prepare('UPDATE failure_receipts SET created_at=created_at-600 WHERE conversation_id=?').run(row.id);
+  dispatcher.tick(); await dispatcher.idle();
+  assert.equal(sends, 1);
+  assert.equal(f.db.getDb().prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(row.id).state, 'failed');
+  const terminal = f.calls.filter(call => call[0] === 'event' && call[1] === 'failure_receipt_exhausted');
+  assert.equal(terminal.length, 1);
+  assert.equal(terminal[0][2].conversation_id, row.id);
+  dispatcher.tick(); await dispatcher.idle();
+  assert.equal(sends, 1);
+  assert.equal(f.calls.filter(call => call[0] === 'event' && call[1] === 'failure_receipt_exhausted').length, 1);
+});

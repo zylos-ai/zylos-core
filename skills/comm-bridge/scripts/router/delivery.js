@@ -411,7 +411,8 @@ export function createDelivery(deps, configuration = {}) {
         else deps.db.requeueConversation(row.id);
       } else if (type === 'control') deps.db.retryOrFailControl(row.id, code, CONTROL_MAX_RETRIES);
       else {
-        const transition = deps.db.failDelivery(row.id, { maxRetries: MAX_RETRIES });
+        const transition = deps.db.failDelivery(row.id, { maxRetries: MAX_RETRIES,
+          reason: code === 'ENTER_UNVERIFIED' ? 'delivery_unverified' : 'delivery_failed' });
         if (!transition.changed) emit('conditional_write_lost', { operation: 'failDelivery' });
         else if (transition.status === 'failed' && code === 'ENTER_UNVERIFIED' && pastedAt !== null) {
           try { Promise.resolve(deps.notifyDeliveryFailed?.({ conversationId: row.id, sessionGroup: group,

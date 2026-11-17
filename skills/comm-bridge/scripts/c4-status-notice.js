@@ -39,7 +39,7 @@ export function createStatusNoticeSender({ db = defaultDb, spawn = spawnChild,
           typeof record.endpoint_id !== 'string' || record.endpoint_id.includes('\0') ||
           record.endpoint_id === '--stdin') throw Error('Invalid notice target');
       message = normalized.noticeKind === 'failure_receipt'
-        ? messageForFailureReceipt({ id: record.id, session_group: record.session_group, reason: normalized.reason })
+        ? messageForFailureReceipt({ id: record.id, session_group: record.session_group, reason: normalized.reason, channel: record.channel })
         : render(normalized);
     } catch (error) { warn('prepare', record, error); return { outcome: 'failed', code: 'UNHEALTHY_NOTIFY_FAILED' }; }
     let claim;

@@ -26,6 +26,7 @@ test('internal final failure atomically queues exactly one receipt to the record
   assert.equal(receipt.direction, 'in');
   assert.ok(receipt.content.includes(String(row.id)));
   assert.ok(receipt.content.includes('chat:b'));
+  assert.match(receipt.content, /系统回执，无需回复/);
   assert.equal(receipt.content.includes('private original text'), false);
   assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations WHERE delivery_action='failure_receipt'").get().n, 1);
   assert.equal(f.db.prepare("SELECT head_id FROM group_heads WHERE session_group='chat:a'").get().head_id, receipt.id);
@@ -88,40 +89,51 @@ test('old failed rows and nonreplyable system sources do not create receipts', t
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM failure_receipts').get().n, 0);
 });
 
-for (const state of ['pending', 'queued']) test(`external ${state} receipt remains retryable after failed and uncertain sends`, t => {
+for (const state of ['pending', 'queued']) test(`external ${state} receipt preserves backoff through restart`, t => {
   let clock = 1800000000000;
   const f = fixture(t, { now: () => clock }, true);
   const row = f.store.insertConversation('in', 'telegram', 'retry-chat', 'private body');
   exhaust(f.store, row);
   if (state === 'queued') f.db.prepare("UPDATE failure_receipts SET state='queued' WHERE conversation_id=?").run(row.id);
-  for (const outcome of ['failed', 'uncertain']) {
-    clock += 1000;
-    f.store.settleFailureReceipt(row.id, outcome);
-    const persisted = f.db.prepare('SELECT state,updated_at FROM failure_receipts WHERE conversation_id=?').get(row.id);
-    assert.equal(persisted.state, state);
-    assert.equal(persisted.updated_at, clock / 1000);
-    const retried = f.store.listFailureReceipts();
-    assert.equal(retried.length, 1);
-    assert.equal(retried[0].id, row.id);
-  }
+  f.store.settleFailureReceipt(row.id, 'uncertain');
+  assert.equal(f.store.listFailureReceipts().length, 0);
+  const before = f.db.prepare('SELECT * FROM failure_receipts WHERE conversation_id=?').get(row.id);
   f.db.close();
   const reopened = new Database(f.filename);
   t.after(() => reopened.close());
-  const restarted = createStore(reopened);
+  const restarted = createStore(reopened, { now: () => clock });
+  assert.equal(restarted.listFailureReceipts().length, 0);
+  assert.deepEqual(reopened.prepare('SELECT * FROM failure_receipts WHERE conversation_id=?').get(row.id), before);
+  clock += 31000;
   assert.equal(restarted.listFailureReceipts()[0].id, row.id);
   assert.equal(restarted.settleFailureReceipt(row.id, 'sent'), true);
   assert.equal(restarted.listFailureReceipts().length, 0);
-  assert.equal(reopened.prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(row.id).state, 'sent');
 });
 
-test('external retry ordering rotates attempted receipts behind older untouched work', t => {
+test('external retry backoff leaves untouched work immediately eligible', t => {
   let clock = 1800000000000;
   const f = fixture(t, { now: () => clock });
   const first = f.store.insertConversation('in', 'telegram', 'first-chat', 'first');
   const second = f.store.insertConversation('in', 'telegram', 'second-chat', 'second');
   exhaust(f.store, first); exhaust(f.store, second);
-  clock += 1000;
   f.store.settleFailureReceipt(first.id, 'failed');
-  assert.equal(f.store.listFailureReceipts({ limit: 1 })[0].id, second.id);
-  assert.equal(f.store.listFailureReceipts({ limit: 2 })[1].id, first.id);
+  assert.deepEqual(f.store.listFailureReceipts().map(row => row.id), [second.id]);
+  clock += 31000;
+  assert.deepEqual(f.store.listFailureReceipts().map(row => row.id), [second.id, first.id]);
+});
+
+for (const outcome of ['failed', 'uncertain']) test(`permanently ${outcome} external receipt stops after its persisted lifetime`, t => {
+  let clock = 1800000000000;
+  const f = fixture(t, { now: () => clock }, true);
+  const row = f.store.insertConversation('in', 'telegram', 'dead-chat', 'private body');
+  exhaust(f.store, row);
+  f.store.settleFailureReceipt(row.id, outcome);
+  // Even a future attempt timestamp cannot hide expired work from terminal settlement.
+  clock += 600000;
+  assert.equal(f.store.listFailureReceipts()[0].id, row.id);
+  assert.equal(f.store.settleFailureReceipt(row.id, 'expired'), true);
+  assert.equal(f.store.settleFailureReceipt(row.id, 'expired'), false);
+  assert.equal(f.store.listFailureReceipts().length, 0);
+  assert.equal(f.db.prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(row.id).state, 'failed');
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM failure_receipts').get().n, 1);
 });

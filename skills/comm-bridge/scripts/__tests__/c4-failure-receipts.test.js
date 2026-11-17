@@ -7,18 +7,19 @@ const db = await import('../c4-db.js');
 const { createStatusNoticeSender, STATUS_NOTICE_TTL_SECONDS } = await import('../c4-status-notice.js');
 const { createFailureReceiptDrainer } = await import('../c4-failure-receipts.js');
 const { messageForFailureReceipt } = await import('../failure-receipt-template.js');
+const { fixture } = await import('./c4-v2-test-helpers.js');
 after(() => { db.close(); environment.cleanup(); });
 
 function record(id, extra = {}) {
   return { id, direction: 'in', channel: 'telegram', endpoint_id: 'receipt-room', session_group: 'telegram:receipt',
-    reason: 'launch_failed', content: 'SECRET BODY', ...extra };
+    created_at: Math.floor(Date.now() / 1000), reason: 'launch_failed', content: 'SECRET BODY', ...extra };
 }
 function persistedRecord(extra = {}) {
   const row = record(1, extra), connection = db.getDb();
   const id = Number(connection.prepare(`INSERT INTO conversations(direction,channel,endpoint_id,content,status,session_group)
     VALUES('in',?,?,?,'failed',?)`).run(row.channel, row.endpoint_id, row.content, row.session_group).lastInsertRowid);
   connection.prepare(`INSERT INTO failure_receipts(conversation_id,reason,state,created_at,updated_at)
-    VALUES(?,?,'pending',1,1)`).run(id, row.reason);
+    VALUES(?,?,'pending',?,?)`).run(id, row.reason, row.created_at, row.created_at);
   return { ...row, id };
 }
 function child(onBody, status = 0) {
@@ -34,7 +35,7 @@ function queue(rows) {
     listFailureReceipts: ({ limit }) => [...pending.values()].slice(0, limit),
     settleFailureReceipt: (id, outcome) => {
       settled.push([id, outcome]);
-      if (['sent', 'suppressed'].includes(outcome)) return pending.delete(id);
+      if (['sent', 'suppressed', 'expired'].includes(outcome)) return pending.delete(id);
       const row = pending.get(id);
       if (row) { pending.delete(id); pending.set(id, row); }
       return false;
@@ -86,7 +87,7 @@ test('a fresh drainer resumes persisted pending work and settles each receipt on
   assert.deepEqual(calls, [71]);
 });
 
-test('failed and uncertain receipts remain eligible until a confirmed successful retry', async () => {
+test('failed and uncertain receipt attempts can settle on a later successful retry', async () => {
   const transport = queue([record(81), record(82)]);
   const drain = createFailureReceiptDrainer({ db: transport,
     sendStatusNotice: async row => ({ outcome: row.id === 81 ? 'failed' : 'uncertain' }) });
@@ -155,4 +156,37 @@ for (const outcome of ['failed', 'uncertain']) test(`${outcome} external attempt
   assert.equal(calls.length, 1);
   assert.equal(calls[0], messageForFailureReceipt(row));
   assert.equal(db.settleFailureReceipt(row.id, 'sent'), true);
+});
+
+for (const outcome of ['failed', 'uncertain', 'throw']) test(`permanent ${outcome} transport stops sending and emits a terminal diagnostic`, async t => {
+  let clock = 1800000000, sends = 0;
+  const f = fixture(t, { now: () => clock * 1000 });
+  const store = f.store, connection = f.db, events = [];
+  const row = { ...store.insertConversation('in', 'telegram', `permanent-${outcome}`, 'SECRET BODY'), created_at: clock };
+  store.claimConversation(row.id);
+  store.failDelivery(row.id, { maxRetries: 1, reason: 'launch_failed' });
+  const drain = createFailureReceiptDrainer({ db: store, now: () => clock,
+    diagnostic: (event, fields) => events.push({ event, fields }),
+    sendStatusNotice: async () => { sends++; if (outcome === 'throw') throw Error('SECRET'); return { outcome }; } });
+  assert.equal((await drain()).pending, 1);
+  assert.equal(sends, 1);
+  const updated = connection.prepare('SELECT updated_at FROM failure_receipts WHERE conversation_id=?').get(row.id).updated_at;
+  // Backoff is enforced by the real store, not an in-memory queue mock.
+  assert.equal(store.listFailureReceipts().some(item => item.id === row.id), false);
+  for (let elapsed = 31; elapsed < 600; elapsed += 31) {
+    clock = row.created_at + elapsed;
+    assert.equal((await drain()).pending, 1);
+  }
+  assert.equal(sends, 20);
+  clock = row.created_at + 600;
+  assert.equal((await drain()).settled, 1);
+  assert.equal(sends, 20);
+  assert.equal(connection.prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(row.id).state, 'failed');
+  assert.equal((await drain()).attempted, 0);
+  assert.equal(events.length, 21);
+  assert.equal(events[0].event, 'failure_receipt_send_failed');
+  assert.equal(events[20].event, 'failure_receipt_exhausted');
+  assert.equal(events[20].fields.conversation_id, row.id);
+  assert.equal(JSON.stringify(events).includes('SECRET'), false);
+  assert.ok(updated > 0);
 });

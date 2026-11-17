@@ -77,7 +77,7 @@ export function createDispatcher(overrides = {}, options = {}) {
     ...overrides,
   };
   const sendStatusNotice = overrides.sendStatusNotice ?? createStatusNoticeSender({ db, log });
-  const drainFailureReceipts = overrides.drainFailureReceipts ?? createFailureReceiptDrainer({ db, sendStatusNotice });
+  const drainFailureReceipts = overrides.drainFailureReceipts ?? createFailureReceiptDrainer({ db, sendStatusNotice, diagnostic, now: () => Math.floor(now() / 1000) });
   const handleExpired = overrides.handleExpired ?? createPendingExpiryHandler({ drainFailureReceipts });
   let router;
   const delivery = createDelivery({ ...providers, getSessionMode: () => router.state.mode,
