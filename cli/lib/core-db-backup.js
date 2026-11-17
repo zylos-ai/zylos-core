@@ -44,8 +44,8 @@ export function inspectCoreManagesDashboardDb(zylosDir, installedRoot, options={
 }
 function syncDir(dir){const fd=fs.openSync(dir,'r');try{maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}}
 function durableJson(file,value){const fd=fs.openSync(file,'wx',0o600);try{fs.writeFileSync(fd,JSON.stringify(value,null,2)+'\n');maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}syncDir(path.dirname(file));}
-export function runCoreDbWorker(payload,{workerPath=WORKER,nodePath=process.execPath,timeout=120000}={}) {
-  const result=spawnSync(nodePath,[workerPath,JSON.stringify(payload)],{encoding:'utf8',timeout,maxBuffer:4*1024*1024,windowsHide:true});
+export function runCoreDbWorker(payload,{workerPath=WORKER,nodePath=process.execPath}={}) {
+  const result=spawnSync(nodePath,[workerPath,JSON.stringify(payload)],{encoding:'utf8',maxBuffer:4*1024*1024,windowsHide:true});
   if(result.error||result.status!==0) {
     let failure;
     try {failure=JSON.parse(result.stdout).error;} catch {}
@@ -124,9 +124,9 @@ export function cleanupCoreDbRehearsals(zylosDir) {
   }
   return {removed};
 }
-// Run the downloaded release's real migration code against SQLite online
-// backup copies while services are still running. This is an early warning;
-// the stopped, snapshotted databases are migrated and checked again later.
+// Run the downloaded release's real migration code against SQLite backup
+// copies after writers stop. The protected source databases remain unchanged;
+// their installed migrations are applied and checked again later.
 export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills'),onCleanup,dashboardOwnerManaged=true}={}) {
   zylosDir=fs.realpathSync(zylosDir);
   const schemaRoot=path.join(tempDir,'skills');

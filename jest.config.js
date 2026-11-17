@@ -54,6 +54,7 @@ export default {
     '<rootDir>/test/single-upgrade-check.integration.test.js',
     '<rootDir>/test/exit-control.integration.test.js',
     '<rootDir>/test/upgrade-npm-prefix.integration.test.js',
+    '<rootDir>/test/upgrade-db-maintenance.integration.test.js',
     '<rootDir>/test/session-release.integration.test.js',
     '<rootDir>/test/component-source-record.integration.test.js',
   ],

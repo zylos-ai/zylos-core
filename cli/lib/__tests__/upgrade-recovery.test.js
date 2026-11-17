@@ -147,7 +147,8 @@ test('protected preparation checks an original deployment without a Dashboard ow
  fs.rmSync(path.join(f.dir,'sqlite-runtime'),{recursive:true});
  const before=fs.readFileSync(f.db('components/dashboard/dashboard.db'));
  const ctx={maintenance:f.m,journal:f.j,transactionDir:f.dir,transactionId:'tx',coreDir:path.resolve('.'),snapshotFormatVersion:3};
- assert.doesNotThrow(()=>prepareProtectedInstall(ctx));
+ // Rehearsal behavior has dedicated coverage; this fixture checks retained recovery ownership.
+ assert.doesNotThrow(()=>prepareProtectedInstall(ctx,{rehearse:()=>{}}));
  assert.equal(f.load().phase,'prepared');
  assert.equal(ctx.dbSnapshotVerified,true);
  assert.deepEqual(fs.readFileSync(f.db('components/dashboard/dashboard.db')),before);
@@ -173,7 +174,8 @@ for(const retainedDatabase of [false,true]) test(`migrating upgrade ignores reti
  fs.rmSync(f.snapshot.dbBackupDir,{recursive:true});
  fs.rmSync(path.join(f.dir,'sqlite-runtime'),{recursive:true});
  const ctx={maintenance:f.m,journal:f.load(),transactionDir:f.dir,transactionId:'tx',coreDir:path.resolve('.'),snapshotFormatVersion:3};
- assert.doesNotThrow(()=>prepareProtectedInstall(ctx));
+ // Rehearsal behavior has dedicated coverage; this fixture checks retained recovery ownership.
+ assert.doesNotThrow(()=>prepareProtectedInstall(ctx,{rehearse:()=>{}}));
  assert.equal(f.load().phase,'prepared');
  const original=f.m.preflight(f.dir,f.load(),null,{originalDeployment:true});
  assert.equal(original.databases.some(row=>row.source==='web-console/web-console.db'),false);

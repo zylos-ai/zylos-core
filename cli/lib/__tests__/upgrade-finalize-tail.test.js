@@ -202,7 +202,7 @@ for(const failing of [null,'registration','route','verify','dbCopy']) test(`Dash
   assert.equal(result.completion.dashboard,result.dashboard.state);
   assert.equal(result.dashboard.errors.length,failing?1:0);
   if(failing)assert.equal(result.dashboard.errors[0].item,failing==='verify'?'dashboard':failing);
-  if(failing){assert.match(result.next,/dashboard\.errors/);assert.match(result.next,/zylos init/);}
+  if(failing){assert.match(result.next,/denied/);assert.doesNotMatch(result.next,/zylos init/);}
   else assert.equal(result.next,null);
 });
 
@@ -355,8 +355,9 @@ test('required service failure still enters protected Core isolation',async t=>{
   assert.equal(calls.includes('restart'),false);
 });
 
-test('Dashboard absent from original running set is verified without starting',async t=>{
+test('Dashboard stopped before upgrade remains stopped',async t=>{
   const ctx=fixture(t),calls=[];
+  ctx.journal.dashboardWasStopped=true;
   ctx.servicesWereRunning=['c4-dispatcher'];
   let restoreCalls=0;
   const result=await completeUpgradeFinalization(ctx,deps(calls,{

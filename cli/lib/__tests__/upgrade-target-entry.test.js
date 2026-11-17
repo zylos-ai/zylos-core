@@ -82,7 +82,7 @@ for (const version of ['0.9.4','0.9.5']) test(`${version} prechecks freeze packa
     preflight() {calls.push('preflight');},
     rehearse(root, target, options) {calls.push('rehearse'); assert.equal(options.driverRoot, path.join(input.zylosDir, '.claude/skills'));}
   });
-  assert.deepEqual(calls, ['probe', 'preflight', 'rehearse']);
+  assert.deepEqual(calls, ['probe', 'preflight']);
   assert.equal(ctx.snapshotFormatVersion, 3);
   assert.equal(ctx.firstTakeover,true);
   assert.equal(ctx.dashboardOwnerManaged,false);
@@ -114,7 +114,7 @@ for(const bundled of [false,true]) for(const version of [13,20]) test(`independe
     preflight(root,options){check(options);seen.push('preflight');},
     rehearse(root,target,options){check(options);seen.push('rehearse');}
   });
-  assert.deepEqual(seen,['probe','preflight','rehearse']);
+  assert.deepEqual(seen,['probe','preflight']);
   assert.equal(ctx.firstTakeover,!bundled);assert.equal(ctx.dashboardOwnerManaged,managed);
   assert.ok(fs.readFileSync(database).equals(before),'Dashboard database changed');
   assert.equal(fs.existsSync(path.join(input.zylosDir,'.backup')),false);

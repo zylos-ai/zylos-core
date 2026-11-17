@@ -39,3 +39,27 @@ for(const item of ['dbCopy','registration','route','dashboard']) {
     if(item==='registration' || item==='route') assert.deepEqual(ctx.journal.dashboardInstall.items[item].lastError,error);
   });
 }
+
+for(const state of ['stopped','running','restore-failed','unregistered']) test(`Dashboard ${state} preserves upgrade service intent`,async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'dashboard-intent-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const calls=[];
+  const ctx={zylosDir:root,from:'old',to:'new',mergeConflicts:[],mergedFiles:[],
+    servicesWereRunning:['stopped','unregistered'].includes(state)?[]:['zylos-dashboard'],journal:{databaseMode:'migrate',erroredServices:[],dashboardWasStopped:state==='stopped'},
+    maintenance:{canRecognizeProcesses:()=>true}};
+  const result=await completeUpgradeFinalization(ctx,{
+    finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false}),ensureLogRotation:()=>({state:'present'}),
+    dashboardOwner:{restoreDashboardService(){calls.push('restore');return state==='restore-failed'
+      ? {state:'failed',error:{message:'port is occupied'}}:{state:'done'};},
+      verifyDashboard(){calls.push('verify');return {state:'ready',errors:[]};}},
+    updateConfig:()=>{},ensureMemoryMigration:()=>{},commitBaselines:()=>{},verifyPublicationForServices:()=>{},protectedSuccess:()=>{},
+    startServices:()=>({status:'done'}),verifyServices:()=>({status:'done'}),restartErroredServices:()=>({status:'done'}),
+    readModeStatus:()=>({sessionMode:'single',transition:null}),readMode:()=>({mode:'single'}),readTransition:()=>null,
+    restart:()=>({ok:true,data:{result:'exit_enqueued'}}),audit:()=>[],
+  });
+  assert.equal(result.success,true);
+  assert.equal(result.dashboard.state,state==='stopped'?'stopped':state==='restore-failed'?'degraded':'ready');
+  assert.deepEqual(calls,state==='stopped'?[]:state==='running'?['restore','verify']:state==='unregistered'?['verify']:['restore']);
+  if(state==='stopped') {assert.match(result.dashboard.message,/already stopped/);assert.equal(result.next,null);}
+  if(state==='restore-failed') {assert.match(result.next,/restore failed: port is occupied/);assert.doesNotMatch(result.next,/zylos init/);}
+});
