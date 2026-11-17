@@ -7,6 +7,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { sendTmuxKeys } from '../tmux-send-keys.js';
+import { tmuxClientEnvironment } from './tmux-client-args.js';
 import { TMUX_COMMAND as C, TMUX_FORMAT as F, parseLegacyPanePid } from './tmux-protocol.js';
 
 const CMD_TIMEOUT = 3000;
@@ -133,7 +134,7 @@ export function tmuxSendKeys(session, ...keys) {
  * @param {string[]} args - Full argument list for `tmux new-session`
  */
 export function tmuxNewSession(args) {
-  execFileSync('tmux', args, { timeout: LAUNCH_TIMEOUT });
+  execFileSync('tmux', args, { timeout: LAUNCH_TIMEOUT, env: tmuxClientEnvironment() });
 }
 
 /**

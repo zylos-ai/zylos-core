@@ -14,10 +14,11 @@ assert.equal(process.env.LC_ALL, undefined);
 assert.equal(process.env.LC_CTYPE, undefined);
 const binary = process.env.TEST_TMUX_BIN || 'tmux';
 const socketPath = path.join(dir, 's');
+const clientEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('ZYLOS_')));
 // Fixture operations force UTF-8 independently; the calls under test must do so
 // themselves. In particular, reader/list cases do not depend on launch passing.
 const tmux = (...args) => execFileSync(binary, ['-u', '-S', socketPath, ...args],
-  {encoding:'utf8', timeout:3000, stdio:['ignore','pipe','pipe']}).trim();
+  {env:clientEnv, encoding:'utf8', timeout:3000, stdio:['ignore','pipe','pipe']}).trim();
 const launchConfig = {runtime:'claude', mode:'default'};
 const sessionGroup = 'telegram:locale';
 const tmuxName = tmuxNameForGroup(sessionGroup);
@@ -25,6 +26,7 @@ const runId = 'locale-run';
 let connection, script;
 try {
   tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'keeper', '/bin/sleep 30');
+  assert(!/^(?:-)?ZYLOS_[^=\n]*(?:=|$)/m.test(tmux('show-environment', '-g')));
   if (scenario === 'launch-multi' || scenario === 'launch-single') {
     const group = scenario === 'launch-single' ? null : sessionGroup;
     const name = group === null ? 'origin' : tmuxName;

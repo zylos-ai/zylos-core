@@ -18,6 +18,7 @@ export default {
     '<rootDir>/test/account-usage-cache.integration.test.js',
     '<rootDir>/test/dashboard-transcript-idle.integration.test.js',
     '<rootDir>/test/session-batch-reader.integration.test.js',
+    '<rootDir>/test/tmux-client-environment.integration.test.js',
     '<rootDir>/test/account-quota-browser.test.js',
     '<rootDir>/test/dashboard-initial-timezone.integration.test.js',
     '<rootDir>/test/skill-command-arguments.test.js',

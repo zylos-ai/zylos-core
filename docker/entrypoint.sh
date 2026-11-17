@@ -172,7 +172,7 @@ if [ "${ZYLOS_RUNTIME}" = "codex" ]; then
     CODEX_ARGS="--dangerously-bypass-approvals-and-sandbox"
   fi
 
-  tmux new-session -d -s codex-main -x 220 -y 50 \
+  env -u ZYLOS_RUN_ID -u ZYLOS_MODEL_CONFIG -u ZYLOS_SESSION_GROUP tmux new-session -d -s codex-main -x 220 -y 50 \
     "cd ${ZYLOS_DIR} && source ${ENV_FILE} 2>/dev/null; exec codex ${CODEX_ARGS}"
 
   ok "Codex session started"
@@ -185,7 +185,7 @@ else
     CLAUDE_ARGS="--dangerously-skip-permissions"
   fi
 
-  tmux new-session -d -s claude-main -x 220 -y 50 \
+  env -u ZYLOS_RUN_ID -u ZYLOS_MODEL_CONFIG -u ZYLOS_SESSION_GROUP tmux new-session -d -s claude-main -x 220 -y 50 \
     "cd ${ZYLOS_DIR} && source ${ENV_FILE} 2>/dev/null; exec claude ${CLAUDE_ARGS}"
 
   ok "Claude Code session started"

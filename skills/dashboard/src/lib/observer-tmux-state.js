@@ -97,6 +97,7 @@ export async function readJson(file) {
 }
 export function privateEnvironment(state) {
   const env = { ...process.env };
+  for (const key of ['ZYLOS_RUN_ID', 'ZYLOS_MODEL_CONFIG', 'ZYLOS_SESSION_GROUP']) delete env[key];
   for (const key of Object.keys(env)) if (key === 'TMUX' || key.startsWith('ZELLIJ') || key.startsWith('XDG_')) delete env[key];
   const root = state.root;
   return { ...env, HOME: path.join(root, 'home'), XDG_CONFIG_HOME: path.join(root, 'config'),
