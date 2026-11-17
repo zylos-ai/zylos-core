@@ -13,17 +13,17 @@ import { SupervisorScenes } from '../../skills/activity-monitor/scripts/supervis
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 const fixturePath = name => fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url));
 
-export async function createGroupDeletionFixture(t, { group = 'telegram:room' } = {}) {
+export async function createGroupDeletionFixture(t, { group = 'telegram:room', timezone = 'UTC' } = {}) {
   const sandbox = createChatSandbox(t, { gateEnv: { ...process.env, ZYLOS_CHAT_INTEGRATION: '1' } });
   const root = sandbox.paths.zylos;
-  const env = { ...sandbox.env, TZ: 'UTC', ZYLOS_PACKAGE_ROOT: repo,
+  const env = { ...sandbox.env, TZ: timezone, ZYLOS_PACKAGE_ROOT: repo,
     GROUP_DELETION_TEST_SOCKET: sandbox.paths.socket, TMUX: `${sandbox.paths.socket},0,0` };
   console.log('Group deletion isolation:', JSON.stringify(sandbox.assertIsolation({ env })));
   fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
   fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ session_mode: 'multi', runtime: 'claude',
     session_pool_size: 4, session_hot_ttl: 3600, upgrade_check_enabled: false, daily_upgrade_enabled: false,
     usage_monitor_enabled: false, health_check_enabled: false, usage_alert_enabled: false }));
-  fs.writeFileSync(path.join(root, '.env'), 'TZ=UTC\n');
+  fs.writeFileSync(path.join(root, '.env'), `TZ=${timezone}\n`);
   // This executable is a terminal fixture, never a model client. Its comm name
   // enables the real process observer, and its stdin receipt proves actual I/O.
   const source = path.join(root, 'terminal.c');

@@ -145,9 +145,18 @@ export class ModeSwitchCoordinator {
       await this.db.expirePendingControls({ machine: true });
       await this.db.expirePendingControls({ allSessionGroups: true });
       await this.db.clearAllContinuations();
-      await this.unblock(row);
-      await this.db.setModeTransitionPhase(row.run_id, 'cutover');
-      this.event('transition_cutover', row, { phase: 'cutover', reason: null });
+      let committed;
+      try { committed = await this.db.setModeTransitionPhase(row.run_id, 'cutover'); }
+      catch (error) {
+        await this.block(row, `cutover_failed:${error.code ?? 'UNKNOWN'}`, 'transition_cutover_failed', { code: error.code ?? 'UNKNOWN' });
+        return null;
+      }
+      // The cutover transaction clears the reason. Do not clear it before an
+      // attempt that may fail again, or each tick would emit block/unblock.
+      if (row.reason !== null && row.reason !== undefined) this.event('transition_unblocked', committed, { reason: null });
+      this.lastReasons.set(row.run_id, null);
+      this.event('transition_cutover', committed, { phase: 'cutover', reason: null,
+        ...(committed.cutoverCoverage ? { ...committed.cutoverCoverage, checkpointWritten: false } : {}) });
       return null;
     }
     if (this.attempt?.runId === row.run_id) return this.attempt;
