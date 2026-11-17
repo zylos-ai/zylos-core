@@ -10,6 +10,7 @@ export default {
     '<rootDir>/test/fleet-attention-browser.test.js',
     '<rootDir>/test/channel-delivery.integration.test.js',
     '<rootDir>/test/channel-sync.integration.test.js',
+    '<rootDir>/test/self-upgrade-private-host.integration.test.js',
     '<rootDir>/test/single-origin-activity.integration.test.js',
     '<rootDir>/test/dashboard-demand-poll.integration.test.js',
     '<rootDir>/test/legacy-group-reads-browser.test.js',

@@ -774,10 +774,14 @@ function services(j) {
     script: p.pm2_env.pm_exec_path
   }));
 }
+function confirmServicesStopped(j) {
+  const running = services(j).filter(p => !['stopped', 'errored'].includes(p.status) || p.pid > 0);
+  if (running.length) throw Error('managed services not confirmed stopped: ' + running.map(p => `${p.name} (status=${p.status}, pid=${p.pid})`).join('; '));
+}
 function stop(j) {
   if (!canRecognizeProcesses()) return stopObserved(j);
   for (const p of services(j)) if (!['stopped', 'errored'].includes(p.status)) command('pm2', ['stop', p.name]);
-  if (services(j).some(p => !['stopped', 'errored'].includes(p.status) || p.pid > 0)) throw Error('managed services not confirmed stopped');
+  confirmServicesStopped(j);
   const processRows = command('ps', ['-eo', 'pid=,args=']).split('\n');
   const found = processRows.map(row => row.trim().match(/^(\d+)\s+(.*)$/)).filter(Boolean).filter(r => installWriter(j, r[2])).map(r => identity(Number(r[1]))).filter(p => p.pid !== process.pid && p.pid !== process.ppid);
   const known = [...(j.knownProcesses || []), ...found];
@@ -796,7 +800,7 @@ function stopObserved(j) {
     assertProcessView();
   }
   for (const p of services(j)) if (!['stopped', 'errored'].includes(p.status)) command('pm2', ['stop', p.name]);
-  if (services(j).some(p => !['stopped', 'errored'].includes(p.status) || p.pid > 0)) throw Error('managed services not confirmed stopped');
+  confirmServicesStopped(j);
   const deadline = Date.now() + 10000;
   for (;;) {
     const writers = command('ps', ['-eo', 'pid=,args=']).split('\n')
