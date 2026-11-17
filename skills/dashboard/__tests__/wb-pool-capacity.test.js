@@ -62,7 +62,6 @@ function fixture(t, { record = freshRecord(), slots = [], groups = [], queues = 
       return readPoolCapacity({ ...options, env: { HOME: root, ZYLOS_DIR: root } });
     } };
     if (name === 'config.js') return { readSessionMode: readMode };
-    if (name === 'session-state-reader.js') return sessionReader;
     if (name === 'status-view.js') return { collectStatus: options => collectStatus({ ...options,
       mode: statusMode ? () => ({ mode: statusMode }) : readMode, list: () => groups, resolveRoot: () => root,
       configIssue: () => null, facts: async () => ({ originNeed: null }), health: () => ({ missing: true }), now: () => clock }) };

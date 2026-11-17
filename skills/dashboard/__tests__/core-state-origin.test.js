@@ -78,7 +78,6 @@ test('Core state reads Origin facts only for absence or authentication and reads
   };
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
     if (name === 'config.js') return { readSessionMode: () => ({ mode }) };
-    if (name === 'session-state-reader.js') return reader;
     if (name === 'session-group-paths.js') return { listGroupTmuxSessions: async () => [{ sessionGroup: 'other' }] };
     if (name === 'origin-presence.js') return { describeOrigin, readOriginFacts: async ({ zylosDir, nowSec }) => {
       assert.equal(zylosDir, process.env.ZYLOS_DIR); assert.equal(Number.isSafeInteger(nowSec), true); factsReads++; return facts;
@@ -142,10 +141,6 @@ test('Core state ignores live sample timestamps and notifies recorded provenance
   let changes = 0;
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
     if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
-    if (name === 'session-state-reader.js') return {
-      readSessionStates: async groups => new Map(groups.map(group => [group, live()])),
-      readAccountUsageSnapshot: async () => ({ recorded: structuredClone(record) }),
-    };
     if (name === 'session-group-paths.js') return {};
     assert.fail(`Unexpected core module ${name}`);
   } } });

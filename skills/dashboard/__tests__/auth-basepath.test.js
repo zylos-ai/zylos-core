@@ -34,7 +34,6 @@ let buildAuthSnapshot = options => createGroupSnapshot({ ...options, sessionObse
       readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) },
     loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
-      if (name === 'session-state-reader.js') return { readAccountUsageSnapshot: async () => ({ live: null, recorded: null }) };
       if (name === 'status-view.js') return { collectStatus: async () => ({ view: 'single', origin: { presence: 'not_running' }, groupListError: null, runtimeHealth: {} }) };
       return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
     } });
@@ -1876,7 +1875,6 @@ test('group thresholds follow actual session models while Fleet omits Origin ses
         readOverrides: async () => ({ ok: true, data: { baseline: { runtime }, runtime: [], model: [] } }) },
       loadCoreModule: async name => {
         if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
-        if (name === 'session-state-reader.js') return { readSessionStates: async () => thresholdObservations.peek().observations, readAccountUsageSnapshot: async () => ({ live: null, recorded: null }) };
         if (name === 'status-view.js') return { collectStatus: async ({ session }) => {
           await session(null, {});
           return { view: 'single', origin: { presence: 'running', runtime, runId: 'threshold-run', sessionId: 'threshold-session',

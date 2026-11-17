@@ -30,7 +30,7 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
   const cleanup = [];
   t.after(async () => { for (const close of cleanup.reverse()) await close(); fs.rmSync(root, { recursive: true, force: true }); });
   let clock = 1800000000000, mode = 'multi', unexpected = false, configRuntime = 'codex', configFailure = false, healthRecord = { missing: true };
-  const calls = [], observations = [], events = [], reads = [];
+  const calls = [], observations = [], events = [], reads = [], statusReadErrors = new Map();
   const keys = groupKeys ?? Array.from({ length: count }, (_, index) => `telegram:g${index}`);
   const live = new Map(keys.map(key => [key, { identity: { present: true, ready: true, runtime: 'claude', runId: `run-${key}`,
     createdAt: clock / 1000 - 10, launchConfig: { runtime: 'claude', mode: 'default' } },
@@ -81,6 +81,10 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
       return { collectStatus: options => {
         if (statusError) throw new Error('status');
         return collectStatus({ ...options, mode: () => ({ mode }), now: () => clock, resolveRoot: () => root,
+          session: async (group, settings) => {
+            if (statusReadErrors.has(group)) throw statusReadErrors.get(group);
+            return options.session(group, settings);
+          },
           requests: () => new RestartRequestStore({ file: path.join(root, 'restart-requests.json') }).read(),
           list: () => { if (groupListError) throw new Error('list'); return keys.map(sessionGroup => ({ sessionGroup })); },
           health: () => healthRecord });
@@ -88,6 +92,7 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
     } });
   return { service, root, calls, observations, live, reads, events, reader, cli, store, c4Reader,
     addCleanup: close => cleanup.push(close),
+    failStatusRead: (group, error) => statusReadErrors.set(group, error),
     setHealth: value => { healthRecord = value; }, setConfigRuntime: value => { configRuntime = value; }, failConfig: value => { configFailure = value; },
     setNow: value => { clock = value; }, advance: value => { clock += value; }, setMode: value => { mode = value; },
     failUnexpected: value => { unexpected = value; }, now: () => clock };
@@ -1133,9 +1138,10 @@ test('activity with no events paints the current run idle from its actual start'
 // readers/CLI, no live resources or children; fixture cleanup is registered.
 for (const mode of ['multi', 'single']) test(`Origin read errors are redacted in ${mode} responses`, async t => {
   const f = fixture(t); f.setMode(mode);
-  const original = f.reader.readSessionState;
   const secret = 'sk-123456789012345678901234', raw = `Origin read failed ${secret} person@example.com`;
-  f.reader.readSessionState = key => (mode === 'single' || key === 'origin') ? Promise.reject(new Error(raw)) : original(key);
+  // Exercise the status projection's per-session error boundary. A rejected
+  // shared batch instead invalidates the entire status source.
+  f.failStatusRead(mode === 'single' ? null : 'origin', new Error(raw));
   const snapshot = await f.service.getSnapshot();
   const origin = snapshot.rows.find(row => row.origin);
   assert.equal(origin.live.error.code, 'READ_FAILED');

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { loadCoreModule } from '../../src/lib/core-modules.js';
 import { createSessionReader } from '../../../../cli/lib/session-state-reader-async.js';
 import { createGroupSnapshot } from '../../src/lib/workbench/group-snapshot.js';
 import { sendHtml, sendJson, serveStatic } from '../../src/lib/http.js';
@@ -30,7 +31,7 @@ export async function runRecordedQuotaBrowser(sandbox) {
       cli: { runC4Db: async args => ({ ok: true, data: args[0] === 'groups' ? { groups: [], hasOlder: false } : { groups: [], globalFence: null } }),
         readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) },
       loadCoreModule: async name => name === 'config.js' ? { readSessionMode: () => ({ mode: 'multi' }) }
-        : name === 'session-state-reader.js' ? reader : { collectStatus: async ({ session }) => {
+        : name === 'session-state-reader.js' ? reader : name !== 'status-view.js' ? loadCoreModule(name) : { collectStatus: async ({ session }) => {
           await session('origin', { freshnessMs: 5000 });
           return { view: 'multi', origin: { presence: state === 'live' ? 'running' : 'not_running',
             status: { valid: state === 'live', state: 'idle' } }, groups: [], groupListError: null,

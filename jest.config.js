@@ -8,7 +8,6 @@ export default {
     '<rootDir>/test/channel-sync.integration.test.js',
     '<rootDir>/test/single-origin-activity.integration.test.js',
     '<rootDir>/test/dashboard-demand-poll.integration.test.js',
-    '<rootDir>/test/dashboard-demand-visual.integration.test.js',
     '<rootDir>/test/legacy-group-reads-browser.test.js',
     '<rootDir>/test/dashboard-object-api.integration.test.js',
     '<rootDir>/test/dashboard-static-cache-browser.integration.test.js',

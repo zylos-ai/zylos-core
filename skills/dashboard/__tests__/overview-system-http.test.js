@@ -34,7 +34,7 @@ test('instance resources carry the server system collector sample', { timeout: 2
   const previous = { ZYLOS_DIR: process.env.ZYLOS_DIR, DASHBOARD_PORT: process.env.DASHBOARD_PORT };
   process.env.ZYLOS_DIR = zylosDir;
   process.env.DASHBOARD_PORT = '0';
-  let server;
+  let server, snapshotService;
   const stores = new Set(), timers = new Set(), collectors = new Set();
   const checkSchema = Store.prototype.checkSchema, schedule = globalThis.setInterval;
   const latest = SystemCollector.prototype.getLatestSystemData;
@@ -57,17 +57,29 @@ test('instance resources carry the server system collector sample', { timeout: 2
 
   let clock = Date.now();
   t.mock.method(Date, 'now', () => clock);
+  // Inject the shared observation boundary used by index.js, as well as the
+  // snapshot's Core projections, so status cannot silently fall back unreadable.
+  t.mock.module('../src/lib/session-observations.js', { namedExports: {
+    createSessionObservations: () => {
+      const group = null;
+      const reader = { readAccountUsageSnapshot: async () => ({ live: null, recorded: null }),
+        readRuntimeHealth: async () => ({ missing: true }) };
+      const batch = { mode: 'single', group, observations: new Map([[group, {
+        identity: { present: false }, status: { valid: false, reason: 'not_running' }, usage: { valid: false },
+      }]]), reader };
+      return { get: async () => batch, peek: () => batch, reader, resolveOfflineRuntime: async () => 'claude' };
+    },
+  } });
   t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
     systemSample,
-    createGroupSnapshot: options => createGroupSnapshot({ ...options,
+    createGroupSnapshot: options => (snapshotService = createGroupSnapshot({ ...options,
       cli: { runC4Db: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
         readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) },
       loadCoreModule: async name => {
         if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
-        if (name === 'session-state-reader.js') return { readAccountUsageSnapshot: async () => ({ live: null, recorded: null }) };
         if (name === 'status-view.js') return { collectStatus: async () => ({ view: 'single', origin: { presence: 'not_running' }, groupListError: null, runtimeHealth: {} }) };
         return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
-      } }),
+      } })),
   } });
   const { createServer } = await import(new URL(`../src/index.js?overview-system=${Date.now()}`, import.meta.url).href);
   server = createServer();
@@ -87,6 +99,7 @@ test('instance resources carry the server system collector sample', { timeout: 2
   };
 
   await get('/api/instance');
+  assert.equal((await snapshotService.getSnapshot()).sources.status.ok, true, 'the injected shared batch reaches status projection');
   assert.equal(collectors.size, 1, 'the server reads one system collector');
   const [collector] = collectors;
   await collector.collect();

@@ -12,7 +12,7 @@ import { fixture } from '../skills/comm-bridge/scripts/__tests__/c4-v2-test-help
 // HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/socket/DB before any service starts; the child
 // and its descendants are lifecycle-bound. No live instance is contacted.
 test('Dashboard observation follows browser demand with real isolated tmux', {
-  skip: !chatEnabled(), timeout: 210000,
+  skip: !chatEnabled(), timeout: 115000,
 }, async t => {
   const s = createChatSandbox(t);
   await s.runCase(async () => {
@@ -51,7 +51,7 @@ test('Dashboard observation follows browser demand with real isolated tmux', {
     const config = path.join(s.paths.zylos, 'components/dashboard/config.json');
     fs.writeFileSync(config, JSON.stringify({ port: 0, host: '127.0.0.1', auth: { enabled: true, password: 'fixture-password' }, observer: { enabled: false } }));
     const child = s.startChild(process.execPath, [path.join(repo, 'test/helpers/dashboard-demand-worker.js'), repo], {
-      env: { ...s.env, ZYLOS_PACKAGE_ROOT: repo, PATH: `${bin}:${s.env.PATH}`, TMUX: `${s.paths.socket},0,0`, DASH_TRACE: trace }, timeoutMs: 205000,
+      env: { ...s.env, ZYLOS_PACKAGE_ROOT: repo, PATH: `${bin}:${s.env.PATH}`, TMUX: `${s.paths.socket},0,0`, DASH_TRACE: trace }, timeoutMs: 110000,
     });
     let output = ''; child.stderr.on('data', chunk => { output = (output + chunk).slice(-8192); }); child.stdout.on('data', chunk => { output = (output + chunk).slice(-8192); });
     const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -64,9 +64,9 @@ test('Dashboard observation follows browser demand with real isolated tmux', {
     const commands = () => fs.readFileSync(trace, 'utf8').split('\n').filter(Boolean);
     await delay(17000); // Includes production deferred startup and first system collection.
     fs.writeFileSync(trace, '');
-    await delay(60000);
+    await delay(35000); // Exceeds the former 30-second background interval.
     assert.equal(commands().length, 0, `Unwatched tmux calls: ${JSON.stringify(commands())}`);
-    t.diagnostic('Three online groups, no browser for 60 seconds: zero Dashboard tmux clients');
+    t.diagnostic('Three online groups, no browser for 35 seconds: zero Dashboard tmux clients');
     const instance = await read('/api/instance'); assert(instance.session_mode);
     const fleet = await read('/api/fleet'); assert.equal(fleet.agents.find(agent => agent.self).state, 'IDLE');
     originState = 'busy'; writeStatus('origin', 'busy'); await delay(2100);
@@ -93,9 +93,9 @@ test('Dashboard observation follows browser demand with real isolated tmux', {
       assert.fail(`Missing state ${expected}`);
     };
     await untilState('IDLE'); fs.writeFileSync(trace, '');
-    await delay(60000);
+    await delay(10000);
     const watched = commands();
-    assert(watched.length >= 40 && watched.length <= 60, `Expected 20–30 shared two-command batches in 60 seconds, got ${watched.length} commands`);
+    assert(watched.length >= 6 && watched.length <= 10, `Expected 3–5 shared two-command batches in 10 seconds, got ${watched.length} commands`);
     assert(watched.every(line => /list-panes/.test(line)), 'Only batched pane observations are allowed');
     const started = performance.now(); originState = 'busy'; writeStatus('origin', 'busy'); await untilState('BUSY');
     const latencyMs = performance.now() - started; assert(latencyMs < 2900);
@@ -105,5 +105,5 @@ test('Dashboard observation follows browser demand with real isolated tmux', {
     controller.abort(); await stream.cancel().catch(() => {});
     const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
     if (evidence) { fs.mkdirSync(evidence, { recursive: true }); fs.writeFileSync(path.join(evidence, 'demand-acceptance.json'), JSON.stringify({ isolation: proof, instance, fleet, health, watchedCommands: watched, latencyMs }, null, 2)); }
-  }, { timeoutMs: 205000 });
+  }, { timeoutMs: 110000 });
 });

@@ -244,7 +244,7 @@ let lastInstancePublication = null, lastGroupsPublication = null;
 async function broadcastFleetState() {
   if (sse.clients.size === 0) return;
   try {
-    const snapshot = await workbench.getSnapshot(undefined, { fresh: true, cachedObservations: true });
+    const snapshot = await workbench.getSnapshot(undefined, { cachedObservations: true });
     const instance = buildInstancePayload();
     const counts = groupCounts(snapshot, { allowUnreadable: true });
     const running = snapshot.rows.map(row => projectGroup(row, snapshot)).filter(row => row.side === 'running').map(projectListRow);
@@ -458,7 +458,7 @@ function readFleetSessionMode() {
 
 async function refreshDashboardState({ fresh = false } = {}) {
   await coreState.refresh({ fresh });
-  return workbench.getSnapshot(undefined, { fresh: true, cachedObservations: true });
+  return workbench.getSnapshot(undefined, { cachedObservations: true });
 }
 
 function buildSelfFleetRecord(statePayload) {

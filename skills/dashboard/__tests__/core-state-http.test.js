@@ -7,6 +7,7 @@ import { Store } from '../src/lib/store.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
 import { EventLoopMonitor } from '../src/lib/event-loop-monitor.js';
 import { createGroupSnapshot, systemSample } from '../src/lib/workbench/group-snapshot.js';
+import { createSessionObservations } from '../src/lib/session-observations.js';
 import { scheduleEnv } from './fixtures/schedule-env.js';
 
 // HTTP/SQLite integration for CoreState API wiring: run for state refresh, fleet,
@@ -34,7 +35,7 @@ test('state APIs await a fresh observation before answering idle requests', { ti
   const observation = value => ({ identity: { present: true, ready: true, runtime: 'codex', runId: `run-${value}`, sessionId: `session-${value}` },
     status: { valid: true, reason: null, value: { state: 'idle' } },
     usage: { valid: true, value: { model: `model-${value}`, contextUsage: { used: value, ceiling: 100 } } } });
-  t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
+  const loadFixtureCore = async name => {
     if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
     if (name === 'session-state-reader.js') return {
       readSessionStates: async () => {
@@ -46,7 +47,10 @@ test('state APIs await a fresh observation before answering idle requests', { ti
       readAccountUsageSnapshot: async () => ({ live: null, recorded: null }),
     };
     return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
-  } } });
+  };
+  t.mock.module('../src/lib/session-observations.js', { namedExports: {
+    createSessionObservations: options => createSessionObservations({ ...options, loadCoreModule: loadFixtureCore }),
+  } });
   const snapshotObservations = {
     reader: { readAccountUsage: async () => null },
     get: async () => ({ mode: 'single', group: null, observations: new Map([[null, observation(sample)]]) }),
@@ -59,7 +63,6 @@ test('state APIs await a fresh observation before answering idle requests', { ti
         readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'codex' }, runtime: [], model: [] } }) },
       loadCoreModule: async name => {
         if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
-        if (name === 'session-state-reader.js') return { readSessionStates: async () => new Map([[null, observation(sample)]]), readAccountUsageSnapshot: async () => ({ live: null, recorded: null }) };
         if (name === 'status-view.js') return { collectStatus: async ({ session }) => {
           await session(null, {});
           return { view: 'single', origin: { presence: 'running', runtime: 'codex', runId: `run-${sample}`, sessionId: `session-${sample}`, status: { valid: true, state: 'idle' } }, groupListError: null, runtimeHealth: {} };

@@ -47,7 +47,6 @@ function fixture(t, { live = identity } = {}) {
     store: { latestEventByType: () => null, queryEvents: () => [] }, c4Reader: { getInboundTimes: () => [] },
     loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => ({ mode: 'multi' }) };
-      if (name === 'session-state-reader.js') return reader;
       return { collectStatus: options => collectStatus({ ...options, mode: () => ({ mode: 'multi' }), now: () => clock,
         resolveRoot: () => root, list: () => [{ sessionGroup: GROUP }], health: () => ({ missing: true }),
         facts: async () => ({ originNeed: null }), configIssue: () => null }) };

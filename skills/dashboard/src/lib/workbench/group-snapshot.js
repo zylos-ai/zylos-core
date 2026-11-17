@@ -1,6 +1,7 @@
 import { readThresholdPolicy, sessionThreshold } from '../session-threshold.js';
 import { loadCoreModule as defaultLoadCoreModule } from '../core-modules.js';
 import { Sanitizer } from '../sanitizer.js';
+import { isDeepStrictEqual } from 'node:util';
 import { createSessionObservations } from '../session-observations.js';
 import { createCoreCli } from './core-cli.js';
 import { mergeGroups, previewTaskIds, safePreview, safeRaw } from './group-merge.js';
@@ -79,21 +80,26 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       await inflight;
       return getSnapshot(at, { fresh, cachedObservations });
     }
-    if (!fresh && cache && at - cache.builtAt < 2000) return cache.value;
-    inflight = buildGroupSnapshot(at, { fresh, cachedObservations });
+    const batch = cachedObservations ? sessionObservations.peek() : null;
+    // A fresh Core read can reuse the current projection when its observations
+    // are unchanged. A changed run, state or usage must bypass the projection TTL.
+    const sameObservations = !cachedObservations || (batch && cache?.batch &&
+      batch.mode === cache.batch.mode && isDeepStrictEqual(batch.observations, cache.batch.observations));
+    if (!fresh && cache && at - cache.builtAt < 2000 && sameObservations) return cache.value;
+    inflight = buildGroupSnapshot(at, { fresh, cachedObservations, batch });
     try {
       const value = await inflight;
-      cache = { value, builtAt: now() };
+      cache = { value, builtAt: now(), batch: cachedObservations ? batch : sessionObservations.peek?.() ?? null };
       return value;
     } finally { inflight = null; }
   }
-  async function buildGroupSnapshot(at, { fresh = false, cachedObservations = false } = {}) {
+  async function buildGroupSnapshot(at, { fresh = false, cachedObservations = false, batch: capturedBatch = null } = {}) {
     const captured = new Map(), sources = {}, rawGroups = new Map();
     let mode = 'unreadable', status = null, statusError = null, reader;
     try { mode = (await loadCoreModule('config.js')).readSessionMode().mode ?? 'single'; }
     catch { mode = 'unreadable'; }
     try {
-      const batch = !cachedObservations ? await sessionObservations.get({ fresh }) : sessionObservations.peek();
+      const batch = !cachedObservations ? await sessionObservations.get({ fresh }) : capturedBatch;
       reader = sessionObservations.reader;
       if (!batch) throw new Error('Sessions have not been observed');
       mode = batch.mode;

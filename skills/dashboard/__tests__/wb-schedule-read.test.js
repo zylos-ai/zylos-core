@@ -302,7 +302,6 @@ test('target groups follow the dispatch rule using the group snapshot without na
     },
     loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => ({ mode: 'multi' }) };
-      if (name === 'session-state-reader.js') return { readAccountUsage: async () => null, readSessionStates: async () => new Map() };
       return { collectStatus: async () => ({ view: 'multi', origin: { presence: 'not_running' }, groups: [], groupListError: null, runtimeHealth: {} }) };
     },
   });
@@ -360,7 +359,6 @@ test('a group whose last message came from the scheduler is labelled with the ta
     },
     loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => ({ mode: 'multi' }) };
-      if (name === 'session-state-reader.js') return { readAccountUsage: async () => null, readSessionStates: async () => new Map() };
       return { collectStatus: async () => ({ view: 'multi', origin: { presence: 'not_running' }, groups: [], groupListError: null, runtimeHealth: {} }) };
     },
   });

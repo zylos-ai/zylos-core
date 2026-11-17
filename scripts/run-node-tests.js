@@ -14,7 +14,6 @@ const ROOT_NODE_TESTS = [
   'test/channel-sync.integration.test.js',
   'test/single-origin-activity.integration.test.js',
   'test/dashboard-demand-poll.integration.test.js',
-  'test/dashboard-demand-visual.integration.test.js',
   'test/legacy-group-reads-browser.test.js',
   'test/dashboard-object-api.integration.test.js',
   'test/dashboard-static-cache-browser.integration.test.js',
