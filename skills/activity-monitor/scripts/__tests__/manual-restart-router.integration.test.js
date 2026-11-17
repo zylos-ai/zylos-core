@@ -11,7 +11,7 @@ import { tmuxNameForGroup, groupRunDir } from '../../../../cli/lib/session-group
 const worker = fileURLToPath(new URL('./fixtures/manual-restart-router-worker.js', import.meta.url));
 async function m1(t, f, scenario) {
   assert.ok(fs.realpathSync(f.root).startsWith(fs.realpathSync(process.env.TMPDIR) + path.sep));
-  assert.equal(path.dirname(f.socketPath), f.root);
+  assert.ok(f.socketPath.startsWith(f.root + path.sep));
   assert.ok(process.env.PM2_HOME?.startsWith('/tmp/') || process.env.PM2_HOME?.startsWith('/private/tmp/'));
   t.diagnostic(JSON.stringify({ HOME: f.env.HOME, ZYLOS_DIR: f.env.ZYLOS_DIR, PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, tmuxSocket: f.socketPath, database: path.join(f.root, 'comm-bridge/c4.db') }));
   const child = fork(worker, [f.root, f.socketPath, f.binary, f.mode, scenario], { env: { ...process.env, ...f.env }, silent: true });

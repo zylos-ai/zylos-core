@@ -121,6 +121,7 @@ test('unavailable private directory cannot observe or mutate the dedicated user 
       } finally {
         if (defaultStarted) direct(defaultSocket, ['kill-server']);
         await waitStopped(defaultPid);
+        if (defaultStarted) fs.rmSync(defaultSocket, { force: true });
         if (previous === undefined) delete process.env.TMUX_TMPDIR; else process.env.TMUX_TMPDIR = previous;
       }
       fs.rmSync(root, { recursive: true, force: true });

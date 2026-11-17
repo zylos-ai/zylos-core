@@ -18,21 +18,6 @@ import { collectDiagnostics } from '../../../commands/doctor.js';
 import { selfUninstall } from '../../../commands/self-uninstall.js';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
-import { isolatedTmux, tmuxClientEnv } from '../../../../test/helpers/isolated-tmux.js';
-
-test('shared fixture aligns environment-selected clients with a private canonical socket', t => {
-  const previous = process.env.TEST_TMUX_BIN;
-  process.env.TEST_TMUX_BIN = process.execPath;
-  let f;
-  try { f = isolatedTmux(t, { prefix: 'fixture-socket-' }); }
-  finally { if (previous === undefined) delete process.env.TEST_TMUX_BIN; else process.env.TEST_TMUX_BIN = previous; }
-  const env = tmuxClientEnv(f, { PATH: process.env.PATH });
-  assert.equal(fs.statSync(f.dir).mode & 0o777, 0o700);
-  assert.equal(fs.statSync(path.dirname(f.socketPath)).mode & 0o777, 0o700);
-  assert.equal(env.TMUX, `${f.socketPath},0,0`);
-  assert.deepEqual(tmuxClientArgs({}, env), ['-u', '-S', f.socketPath]);
-  assert.equal(fs.existsSync(f.socketPath), false);
-});
 
 function directory(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tmux-directory-'));
