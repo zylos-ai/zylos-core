@@ -141,7 +141,7 @@ for (const [type, create, cadence] of [
   });
 }
 
-test('a delivery claimed while an update is prepared rejects its timing edit without writes', t => {
+test('a delivery claimed or finished while an update is prepared rejects its timing edit without writes', t => {
   const f = fixture(t);
   const component = path.join(f.zylos, '.claude/skills/telegram');
   fs.mkdirSync(path.join(component, 'scripts'), { recursive: true });
@@ -149,14 +149,23 @@ test('a delivery claimed while an update is prepared rejects its timing edit wit
   fs.copyFileSync(fileURLToPath(new URL('./fixtures/claim-during-query.js', import.meta.url)),
     path.join(component, 'scripts/session-group.js'));
   const driver = new URL('../../../comm-bridge/scripts/sqlite-driver.js', import.meta.url).href;
-  for (const create of [['--cron', '0 9 * * *'], ['--every', '30 minutes'], []]) {
-    const task = f.add('claimed during update', create);
-    fs.writeFileSync(path.join(component, 'claim.json'), JSON.stringify({ database: f.dbPath, taskId: task.id, driver }));
+  const cases = [
+    { create: ['--cron', '0 9 * * *'], from: 'pending', to: 'running' },
+    { create: ['--every', '30 minutes'], from: 'pending', to: 'running' },
+    { create: [], from: 'pending', to: 'running' },
+    { create: [], from: 'running', to: 'completed' },
+    { create: [], from: 'running', to: 'failed' },
+    { create: [], from: 'pending', to: 'completed' },
+  ];
+  for (const { create, from, to } of cases) {
+    const task = f.add(`${from} to ${to} during update`, create);
+    f.db.prepare('UPDATE tasks SET status=? WHERE id=?').run(from, task.id);
+    fs.writeFileSync(path.join(component, 'claim.json'), JSON.stringify({ database: f.dbPath, taskId: task.id, driver, status: to }));
     const before = f.row(task.id), history = f.history(task.id);
     const error = f.fail(['update', task.id, '--in', '30 minutes', '--reply-channel', 'telegram',
       '--reply-endpoint', 'chat-1'], 'TASK_WRONG_STATUS');
-    assert.equal(error.status, 'running');
-    assert.deepEqual(f.row(task.id), { ...before, status: 'running' });
+    assert.equal(error.status, to);
+    assert.deepEqual(f.row(task.id), { ...before, status: to });
     assert.deepEqual(f.history(task.id), history);
   }
 });

@@ -25,7 +25,7 @@ All `add` timing options (`--in`, `--at`, `--cron`, `--every`) plus:
 
 For recurring and interval tasks, `--at` / `--in` changes only `next_run_at`, keeping the type, cron expression, interval and saved schedule timezone. The requested time is parsed in the current configured TZ. After that occurrence is delivered, cron returns to the next matching time in its saved zone; intervals advance from delivery time. `--cron` / `--every` still replaces the periodic schedule/type and syncs the timezone to the current configured TZ. One-time tasks keep their existing timing and timezone behavior.
 
-Timing updates (`--at`, `--in`, `--cron`, `--every`) to a running task of any type are rejected with `TASK_WRONG_STATUS` (including the current `status`) and nothing is written, because delivery accounting would replace the new time. Wait for delivery to finish (the task returns to `pending`, or for a one-time task `completed`/`failed`) before retrying. Other edits, such as `--name` or `--prompt`, are still accepted while running.
+Timing updates (`--at`, `--in`, `--cron`, `--every`) to a running task of any type are rejected with `TASK_WRONG_STATUS` (including the current `status`) and nothing is written, because delivery accounting would replace the new time. Wait for delivery to finish (the task returns to `pending`, or for a one-time task `completed`/`failed`) before retrying. A timing update is rejected the same way, with the new `status`, if the task's status changes while the update is being prepared (a delivery is claimed or finishes); retry it. Other edits, such as `--name` or `--prompt`, are still accepted while running.
 
 ## Re-enable a failed or completed one-time task
 
