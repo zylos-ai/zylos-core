@@ -14,7 +14,6 @@ import path from 'path';
 import os from 'os';
 import { isMainModule } from './is-main-module.js';
 import { bootstrapScope } from './bootstrap-scope.js';
-import { readMaintenanceSession, claimMaintenanceStartup, maintenanceSyncPrompt } from './maintenance-session.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -151,32 +150,14 @@ export async function enqueueStartupPrompt(source, {
   scopeReader = bootstrapScope,
   recentReader = readStartupPendingReply,
   now = Date.now,
-  maintenanceReader = readMaintenanceSession,
-  startupClaimer = claimMaintenanceStartup,
 } = {}) {
   if (!['startup', 'clear'].includes(source)) return { skipped: true, reason: 'source', startupControlIds: [] };
   if (onboardingPending()) return { skipped: true, reason: 'onboarding_pending', startupControlIds: [] };
   const scope = await scopeReader();
 
   let activePrompt;
-  let maintenance;
-  try { maintenance = await maintenanceReader(); }
-  catch (error) {
-    if (error.code !== 'SYNC_MAINTENANCE_UNREADABLE') throw error;
-    console.error(`[sync-maintenance] startup observation unavailable: ${error.code}`);
-  }
-  if (maintenance) {
-    try {
-      if (!await startupClaimer(maintenance)) return { skipped: true, reason: 'maintenance_started', startupControlIds: [] };
-      activePrompt = maintenanceSyncPrompt;
-    } catch (error) {
-      if (error.code !== 'SYNC_MAINTENANCE_UNREADABLE') throw error;
-      console.error(`[sync-maintenance] startup claim unavailable: ${error.code}`);
-      maintenance = null;
-    }
-  }
-  if (!maintenance && migrationPending()) activePrompt = migrationPrompt;
-  else if (!maintenance) {
+  if (migrationPending()) activePrompt = migrationPrompt;
+  else {
     const handoff = !!scope.memoryDir && fs.existsSync(path.join(scope.memoryDir, 'handoff.md'));
     if (!handoff && !await hasPendingReply(scope, recentReader, now)) {
       return { skipped: true, reason: 'nothing_pending', startupControlIds: [] };
@@ -193,7 +174,7 @@ export async function enqueueStartupPrompt(source, {
     controlPath, 'enqueue',
     '--content', activePrompt,
     '--priority', '2',
-    ...(maintenance ? ['--ack-deadline', '900'] : ['--no-ack-suffix']), '--json',
+    '--no-ack-suffix', '--json',
     ...(scope.sessionGroup ? ['--group', scope.sessionGroup] : []),
   ], {
     timeout: childTimeoutMs,

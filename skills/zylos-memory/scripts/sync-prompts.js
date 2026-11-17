@@ -14,7 +14,7 @@ export const SYNC_BACKLOG_ALERT = (kind, backlog, lag, scope = kind === 'global'
     repair_failed: 'Memory Sync repair failed' }[type] ?? type;
   const reason = details.reason ?? ({ backlog: 'backlog persists after Sync attempts',
     state_uncommitted: 'state still trails the checkpoint', no_checkpoint: 'no checkpoint progress after repeated attempts' }[type] ?? 'durable Sync completion was not verified');
-  const attempt = { pre_reclaim_retry: 'pre-reclaim Sync plus one retry', maintenance: 'one dedicated maintenance Sync attempt' }[details.repairAttempt]
+  const attempt = { pre_reclaim_retry: 'pre-reclaim Sync plus one retry' }[details.repairAttempt]
     ?? (type === 'no_checkpoint' ? 'repeated ordinary Sync requests' : 'automatic Sync repair');
   const proof = kind === 'origin' ? 'cursor progress and a released Sync lock' : 'a covering checkpoint and committed state';
   const action = reason === 'activation_timeout' ? 'Check runtime availability and login, then ask the agent to rerun Sync for this scope.'

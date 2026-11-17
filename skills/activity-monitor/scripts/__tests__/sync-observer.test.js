@@ -26,7 +26,7 @@ function fixture(t) {
   f.create = () => { const observer = new SyncObserver({ env, now: () => clock }); t.after(() => observer.close()); return observer; };
   f.advance = ms => { clock += ms; };
   f.now = () => clock;
-  f.inspect = observer => observer.inspect(f.db, { mode: 'multi' });
+  f.inspect = observer => observer.inspect(f.db, { mode: 'multi', activeScopes: ['origin'] });
   return f;
 }
 
@@ -36,7 +36,9 @@ test('three requests without a checkpoint alert and a new checkpoint resets the 
   f.trigger(); assert.equal((await f.inspect(observer))[0].type, 'no_checkpoint');
   observer.close(); observer = f.create();
   assert.equal((await f.inspect(observer))[0].attempts, 3);
-  f.checkpoints.set('origin', { id: 1 });
+  f.checkpoints.set('origin', { id: 1, end_conversation_id: 0 });
+  const dir = path.join(f.root, 'memory/session-groups/origin'); fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'state.md'), renderStateSkeleton({ scope: 'origin', syncedAt: '2026-11-17T00:00:00Z' }).replace('coverage= |', 'coverage=0 |'));
   assert.equal((await f.inspect(observer)).length, 0);
   f.trigger({ checkpointId: 1 });
   assert.equal((await f.inspect(observer)).length, 0);
@@ -60,7 +62,7 @@ test('Origin idle alert needs more than five truly empty rounds out of ten', asy
   assert.equal((await f.inspect(observer))[0].type, 'origin_idle');
 });
 
-test('inactive groups are inspected at the configured lag boundary and timeouts retain their kind', async t => {
+test('inactive group lag stays silent while timeout diagnostics retain their kind', async t => {
   const f = fixture(t), observer = f.create();
   f.scopes = ['telegram:inactive', 'origin'];
   f.ranges.set('telegram:inactive', { count: 1, firstAt: f.now() - 21600000 });
@@ -68,8 +70,8 @@ test('inactive groups are inspected at the configured lag boundary and timeouts 
   f.advance(1);
   f.trigger({ scope: 'telegram:inactive', controlId: 17 }); f.controls.set(17, { status: 'timeout' });
   const alerts = await f.inspect(observer);
-  assert.equal(alerts.length, 2);
-  assert.ok(alerts.some(row => row.type === 'backlog' && row.kind === 'group' && row.scope === 'telegram:inactive'));
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts.some(row => row.type === 'backlog'), false);
   assert.ok(alerts.some(row => row.type === 'control_timeout' && row.controlId === 17));
   assert.equal((await f.inspect(observer)).filter(row => row.type === 'control_timeout').length, 1, 'blocked delivery retains evidence');
   observer.acknowledged(alerts.find(row => row.type === 'control_timeout'));
@@ -79,7 +81,7 @@ test('inactive groups are inspected at the configured lag boundary and timeouts 
 test('checkpoint-state gap alerts after marker release and clears after publication', async t => {
   const f = fixture(t), observer = f.create(); f.scopes = ['origin'];
   f.checkpoints.set('origin', { id: 3, end_conversation_id: 20 });
-  assert.equal((await observer.inspect(f.db, { mode: 'multi' }, () => true)).length, 0);
+  assert.equal((await observer.inspect(f.db, { mode: 'multi', activeScopes: ['origin'] }, () => true)).length, 0);
   assert.equal((await f.inspect(observer))[0].type, 'state_uncommitted');
   const dir = path.join(f.root, 'memory/session-groups/origin'); fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'state.md'), renderStateSkeleton({ scope: 'origin', syncedAt: '2026-11-17T00:00:00Z' }).replace('coverage= |', 'coverage=20 |'));
@@ -134,11 +136,11 @@ test('durable episode claims replace log-based timeout acknowledgments across re
   assert.ok(store.reconcile({ active: await f.inspect(observer) }).some(row => row.type === 'control_timeout' && row.controlId === 0));
 });
 
-test('maximum lag alerts only for scopes without a live session', async t => {
+test('maximum lag does not alert for active or inactive group scopes', async t => {
   const f = fixture(t), observer = f.create(); f.scopes = ['active', 'inactive'];
   for (const scope of f.scopes) f.ranges.set(scope, { count: 1, firstAt: f.now() - 21600001 });
   const alerts = await observer.inspect(f.db, { mode: 'multi', activeScopes: ['active'] });
-  assert.deepEqual(alerts.map(row => [row.type, row.scope]), [['backlog', 'inactive']]);
+  assert.deepEqual(alerts, []);
 });
 
 // Real diagnostic reader, episode file and state parser in private fixture roots.
@@ -174,7 +176,7 @@ test('backlog and state episodes require observed progress rather than a live se
   assert.equal(observer.resolved.some(row => row.type === 'state_uncommitted'), false);
   const dir = path.join(f.root, 'memory/session-groups/origin'); fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'state.md'), renderStateSkeleton({ scope: 'origin', syncedAt: '2026-11-17T00:00:00Z' }).replace('coverage= |', 'coverage=20 |'));
-  await observer.inspect(f.db, { mode: 'multi' }, () => true);
+  await observer.inspect(f.db, { mode: 'multi', activeScopes: ['origin'] }, () => true);
   assert.equal(observer.resolved.some(row => row.type === 'state_uncommitted'), true);
 });
 
@@ -200,4 +202,17 @@ test('old handled timeout controls stay suppressed without a diagnostic-log reco
   const store = new SyncAlertEpisodes({ env: f.env }), observer = f.create();
   const alerts = store.reconcile({ active: await f.inspect(observer), resolved: observer.resolved });
   assert.deepEqual(alerts.filter(row => row.type === 'control_timeout').map(row => row.controlId), [9]);
+});
+
+// Private event/state fixture only. Run for dormant-scope observation policy.
+test('dormant checkpoint and repeated requests stay silent until the group is active', async t => {
+  const f = fixture(t), observer = f.create();
+  const scope = 'telegram:dormant';
+  f.scopes = [scope];
+  f.checkpoints.set(scope, { id: 3, end_conversation_id: 20 });
+  f.ranges.set(scope, { count: 1, firstAt: f.now() - 21600001 });
+  for (let i = 0; i < 3; i++) f.trigger({ scope, checkpointId: 3 });
+  assert.deepEqual(await observer.inspect(f.db, { mode: 'multi', activeScopes: [] }), []);
+  const alerts = await observer.inspect(f.db, { mode: 'multi', activeScopes: [scope] });
+  assert.deepEqual(alerts.map(row => row.type).sort(), ['no_checkpoint', 'state_uncommitted']);
 });

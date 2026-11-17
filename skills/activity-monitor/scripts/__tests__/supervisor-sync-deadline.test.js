@@ -55,7 +55,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { SyncObserver } from '../sync-observer.js';
-import { SyncMaintenanceCoordinator } from '../sync-maintenance-coordinator.js';
 import { appendEvent } from '../../../../cli/lib/event-log.js';
 import { supervisorDiagnosticPath } from '../../../../cli/lib/session-group-paths.js';
 import { PRE_RECLAIM_CHECK_PROMPT } from '../reclaim-prompts.js';
@@ -74,7 +73,7 @@ function observableFixture(t) {
   const observer = new SyncObserver({ env, now: f.now }); t.after(() => observer.close());
   const scene = { sessionGroup: 'origin', present: true, ready: true, runtime: 'claude',
     runId: 'run', sessionId: 'session', runDir: path.join(root, 'run') };
-  const lifecycle = new SupervisorLifecycle({ env, db: f.db, syncObserver: observer, syncMaintenance: new SyncMaintenanceCoordinator({ env, now: f.now }),
+  const lifecycle = new SupervisorLifecycle({ env, db: f.db, syncObserver: observer,
     requests: { read: () => [] }, observeGroup: () => scene,
     bindTarget: () => ({ expectedRunId: 'run', tmuxTarget: { serverGeneration: '1:1', sessionId: '$1', paneId: '%1' } }), groupRunDir: () => scene.runDir,
     readSyncMarker: () => ({ held: false, stale: false }), prompts: { ...syncPrompts, PRE_RECLAIM_CHECK_PROMPT },
@@ -108,7 +107,7 @@ test('third unchanged group request queues a typed scoped alert once per unresol
   assert.equal(events.length, 3); assert.equal(events[0].backlog, 16); assert.ok(events[0].reason.includes('threshold'));
 });
 
-test('inactive group lag queues maintenance before alerting and distinguishes Origin lag', async t => {
+test('inactive group lag remains silent and distinguishes Origin lag', async t => {
   const f = observableFixture(t);
   const row = f.db.insertConversation('in', 'telegram', 'fixture', 'fixture', { groupName: 'inactive' });
   assert.equal(f.db.claimConversation(row.id), true);
@@ -117,7 +116,7 @@ test('inactive group lag queues maintenance before alerting and distinguishes Or
   f.context.scenes = [];
   await f.lifecycle.checkSync([], f.context);
   assert.equal(f.alerts().some(row => /kind=group; scope=telegram:inactive/.test(row.content)), false);
-  assert.equal((await f.lifecycle.d.syncMaintenance.store.listMaintenanceRequests())[0].sessionGroup, 'telegram:inactive');
+  assert.equal(f.alerts().length, 0);
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) FROM control_queue WHERE session_group='telegram:inactive'").pluck().get(), 0);
   await f.lifecycle.sendSyncAlert({ type: 'backlog', kind: 'origin', scope: 'origin', backlog: 1, lag: 50000 }, f.context);
   assert.ok(f.alerts().some(row => /kind=origin; scope=origin/.test(row.content)));
@@ -156,7 +155,7 @@ test('a fenced Origin cannot block timeout diagnostics or create owner controls'
 
 // Run for max-lag observation or active-session filtering changes; skip unrelated
 // UI changes. Uses the isolated real C4/Router fixture described above.
-test('a live group at maximum lag receives Sync while an absent group queues repair', async t => {
+test('a live group at maximum lag receives Sync while an absent group remains untouched', async t => {
   const f = observableFixture(t);
   for (const name of ['active', 'inactive']) {
     const row = f.db.insertConversation('in', 'telegram', name, 'fixture', { groupName: name });
@@ -170,7 +169,6 @@ test('a live group at maximum lag receives Sync while an absent group queues rep
   await f.lifecycle.checkSync([scene], f.context);
   assert.equal(f.alerts().filter(row => /kind=group; scope=telegram:active/.test(row.content)).length, 0);
   assert.equal(f.alerts().filter(row => /kind=group; scope=telegram:inactive/.test(row.content)).length, 0);
-  assert.ok((await f.lifecycle.d.syncMaintenance.store.listMaintenanceRequests()).some(row => row.sessionGroup === 'telegram:inactive'));
   const groupControls = f.sqlite.prepare("SELECT raw_content,session_group FROM control_queue WHERE session_group IN ('telegram:active','telegram:inactive')").all();
   assert.equal(groupControls.length, 1);
   assert.equal(groupControls[0].session_group, 'telegram:active');
@@ -343,14 +341,14 @@ test('active Sync marker prevents state notification even after its control ackn
 test('definite owner-control enqueue rejection remains pending across restart and is retried once', async t => {
   const f = observableFixture(t);
   const alert = { type: 'repair_failed', kind: 'group', scope: 'telegram:repair', reason: 'no_checkpoint',
-    repairAttempt: 'maintenance', checkpointId: null, checkpointEnd: 1 };
+    repairAttempt: 'pre_reclaim_retry', checkpointId: null, checkpointEnd: 1 };
   const insert = f.lifecycle.d.db.insertControl;
   f.lifecycle.d.db.insertControl = () => { throw Object.assign(new Error('isolated database busy'), { code: 'SQLITE_BUSY' }); };
   await assert.rejects(f.lifecycle.sendSyncAlert(alert, f.context), { code: 'SQLITE_BUSY' });
   assert.equal(f.alerts().length, 0);
   assert.equal(f.lifecycle.syncAlertEpisodes.entries().find(row => row.type === 'repair_failed').sent, false);
   await f.restart();
-  assert.equal(f.lifecycle.syncAlertEpisodes.entries().find(row => row.type === 'repair_failed').repairAttempt, 'maintenance');
+  assert.equal(f.lifecycle.syncAlertEpisodes.entries().find(row => row.type === 'repair_failed').repairAttempt, 'pre_reclaim_retry');
   f.lifecycle.d.db.insertControl = insert;
   await f.lifecycle.sendSyncAlert(alert, f.context);
   await f.lifecycle.sendSyncAlert(alert, f.context);
@@ -387,4 +385,18 @@ test('successful Origin rounds still notify overdue backlog once until resolutio
   await f.lifecycle.syncScope(f.scene, 'origin', range, f.context);
   await f.lifecycle.syncAlerts(f.context);
   assert.equal(notices().length, 2);
+});
+
+// Real C4/checkpoint, observer and lifecycle in the private fixture above.
+// Run when dormant-group alert filtering changes; no runtime is started.
+test('dormant checkpoint-state gaps and retained backlog candidates create no owner controls', async t => {
+  const f = observableFixture(t);
+  const scope = 'telegram:inactive';
+  const row = f.db.insertConversation('out', 'telegram', 'fixture', 'fixture', { groupName: 'inactive' });
+  f.db.createCheckpoint(scope, row.id, 'fixture checkpoint');
+  for (let i = 0; i < 3; i++) appendEvent(f.file, { v: 1, ts: f.now(), event: 'sync_triggered', kind: 'group', scope, checkpointId: 1 });
+  f.lifecycle.syncBacklogCandidates.set(JSON.stringify(['group', scope]), { type: 'backlog', kind: 'group', scope, backlog: 900, lag: 50000 });
+  await f.lifecycle.syncAlerts(f.context);
+  assert.equal(f.alerts().length, 0);
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) FROM control_queue').pluck().get(), 0);
 });

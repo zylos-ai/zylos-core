@@ -524,13 +524,12 @@ export class SupervisorLifecycle {
 
   async prepareRelease(scene, context, intent) {
     this.reclaimSyncFailures.delete(scene.sessionGroup);
-    if (intent.syncExhausted === true) this.reclaimSyncFailures.set(scene.sessionGroup, scene.runId);
     const group = scene.sessionGroup;
     const range = await this.d.db.getUnsummarizedRange(group);
     if (!Number.isInteger(range.count) || range.count < 0) throw error('INVALID_OBSERVATION', 'Invalid unsummarized count');
     const todo = ['PRE_RECLAIM_CHECK_PROMPT'];
-    if (!intent.skipSync && range.count > 0) todo.push('PRE_RECLAIM_SYNC_PROMPT');
-    if (!intent.skipSync && group === 'origin') {
+    if (range.count > 0) todo.push('PRE_RECLAIM_SYNC_PROMPT');
+    if (group === 'origin') {
       const backlog = await this.d.db.getOriginSyncBacklog();
       if (backlog.total > 0 || backlog.groups.some(item => item.pendingCheckpoints > 0)) todo.push('PRE_RECLAIM_ORIGIN_SYNC_PROMPT');
     }
@@ -582,7 +581,7 @@ export class SupervisorLifecycle {
       if (proof.reason === 'control_timeout' && this.now() < sync.deadline) return false;
       failures.push({ sync, reason: proof.reason });
     }
-    if (!failures.length) return preparation.syncExhausted === true || this.checkReclaimDependencies(scene, context);
+    if (!failures.length) return this.checkReclaimDependencies(scene, context);
     if (!preparation.syncRetried) {
       for (const { sync } of failures) {
         if (!await this.beforeWrite(scene.sessionGroup, context, scene)) return false;
@@ -627,13 +626,6 @@ export class SupervisorLifecycle {
     }
     await this.each([...this.releasePreparation.keys()].map(sessionGroup => ({ sessionGroup })), async ({ sessionGroup }) => {
       const intent = this.releasePreparation.get(sessionGroup), scene = this.scene(sessionGroup, context);
-      if (intent.maintenanceId && (await this.d.db.getNextPending?.({ sessionGroups: [sessionGroup] }) ||
-          !this.d.syncMaintenance?.owns(scene))) {
-        this.releasePreparation.delete(sessionGroup);
-        await this.d.syncMaintenance?.store.cancelMaintenance(sessionGroup, intent.runId);
-        await this.event('reclaim_cancelled', { session_group: sessionGroup, run_id: intent.runId, reason: 'new_work' });
-        return;
-      }
       if (!scene.present || !scene.ready || scene.runId !== intent.runId || modeOf(context) !== 'multi' || !this.allowed(sessionGroup, context)) {
         this.releasePreparation.delete(sessionGroup);
         await this.event('reclaim_cancelled', { session_group: sessionGroup, run_id: intent.runId,
@@ -644,7 +636,7 @@ export class SupervisorLifecycle {
       // An acknowledged check/Sync can still be finishing its turn or holding its
       // scoped marker; children and activity must drain through normal guards.
       if (scene.turnOpen === true || this.subagentReclaimBlocked(scene, 'release', context) ||
-          !await this.idle(scene, context, { ignoreSyncMarker: Boolean(intent.syncs?.length) || intent.syncExhausted === true })) return;
+          !await this.idle(scene, context, { ignoreSyncMarker: Boolean(intent.syncs?.length) })) return;
       if (!intent.prepared) await this.prepareRelease(scene, context, intent);
       if (!intent.prepared || intent.controlIds.length) {
         if (!await this.preparationControlsSettled(intent)) return;
@@ -656,7 +648,6 @@ export class SupervisorLifecycle {
   }
 
   async checkTtl(scene, context) {
-    if (this.d.syncMaintenance?.owns(scene)) return;
     if (scene.observationError) throw scene.observationError;
     const group = scene.sessionGroup;
     if (this.releasePreparation.has(group) && scene.turnOpen !== true) return;
@@ -822,7 +813,6 @@ export class SupervisorLifecycle {
   }
 
   async checkRotation(scene, context) {
-    if (this.d.syncMaintenance?.owns(scene)) return;
     if (scene.observationError) throw scene.observationError;
     if (!await this.allowed(scene.sessionGroup, context)) return;
     if (!scene.present || !scene.ready) return;
@@ -885,7 +875,7 @@ export class SupervisorLifecycle {
     await this.each(scenes, async scene => {
       if (scene.observationError) throw scene.observationError;
       if (!await this.allowed(scene.sessionGroup, context)) return;
-      if (!scene.present || !scene.ready || this.d.syncMaintenance?.owns(scene)) return;
+      if (!scene.present || !scene.ready) return;
       const kind = single ? 'global' : 'group';
       const range = single ? await this.d.db.getGlobalUnsummarizedRange() : await this.d.db.getUnsummarizedRange(scene.sessionGroup);
       const boundaries = single ? [scene.createdAt] : [endings.get(scene.sessionGroup), multiSince];
@@ -895,8 +885,7 @@ export class SupervisorLifecycle {
       await this.syncScope(scene, kind, { count: range.count, firstAt: range.firstAt,
         firstConversationId: range.firstConversationId, nonempty: range.count > 0, inherited }, context);
     });
-    if (modeOf(context) === 'multi' && this.allowed('origin', context) &&
-      !context.scenes.some(scene => scene.sessionGroup === 'origin' && this.d.syncMaintenance?.owns(scene))) {
+    if (modeOf(context) === 'multi' && this.allowed('origin', context)) {
       const origin = scenes.find(scene => scene.sessionGroup === 'origin' && scene.present && scene.ready);
       const originScene = { sessionGroup: 'origin', runDir: this.d.groupRunDir('origin'),
         runId: origin?.runId ?? null, sessionId: origin?.sessionId ?? null };
@@ -950,14 +939,15 @@ export class SupervisorLifecycle {
       if (candidate.kind === 'origin') { alerts.push(candidate); continue; }
       const trigger = [...this.d.syncObserver.groups.values()].find(row => row.kind === candidate.kind && row.scope === candidate.scope);
       const startedAt = trigger?.ts;
-      const scene = context.scenes.find(row => row.sessionGroup === candidate.scope);
+      const scene = context.scenes.find(row => (modeOf(context) === 'single' ? '*' : row.sessionGroup) === candidate.scope && row.present);
+      if (!scene) continue;
       const code = scene && startedAt != null ? latestSyncFailure({ env: this.d.env, scene,
         target: { kind: candidate.kind, scope: candidate.scope }, startedAt }) : null;
       const failed = trigger?.attempts >= 3;
       if (code || failed) alerts.push({ ...candidate, ...(code ? { reason: code } : {}) });
     }
     // Scheduling anomalies are engineering evidence, including timeouts owned
-    // by reclaim/maintenance. Record before those owners suppress symptoms;
+    // by reclaim. Record before those owners suppress symptoms;
     // no Origin control or session write gate is involved.
     for (const alert of alerts.filter(row => SYNC_DIAGNOSTIC_TYPES.has(row.type))) {
       if (await this.sendSyncAlert(alert, context)) this.d.syncObserver.acknowledged(alert);
@@ -975,11 +965,6 @@ export class SupervisorLifecycle {
     }
     alerts = completedSymptoms;
     let resolved = this.d.syncObserver.resolved ?? [];
-    if (this.d.syncMaintenance) {
-      const repairs = await this.d.syncMaintenance.advance(alerts, context, this);
-      alerts = [...repairs.alerts, ...repairs.failures];
-      resolved = [...resolved, ...(repairs.resolved ?? [])];
-    }
     alerts = alerts.filter(alert => alert.type !== 'state_uncommitted' ||
       ![...this.releasePreparation, ...this.ttlPreparation].some(([scope]) => scope === alert.scope));
     for (const episode of this.syncAlertEpisodes.entries().filter(row => row.type === 'repair_failed')) {
@@ -995,6 +980,7 @@ export class SupervisorLifecycle {
     }
     const resolvedKeys = new Set(resolved.map(row => JSON.stringify([row.scope, row.kind, row.type])));
     alerts.push(...this.syncAlertEpisodes.entries().filter(row => row.type === 'repair_failed' && !row.sent &&
+      (row.kind !== 'group' || context.scenes.some(scene => scene.sessionGroup === row.scope && scene.present)) &&
       !resolvedKeys.has(JSON.stringify([row.scope, row.kind, row.type]))));
     const activeKeys = new Set(alerts.map(alert => JSON.stringify([alert.scope, alert.kind, alert.type])));
     this.syncAlertEpisodes.reconcile({ active: alerts, resolved: resolved.filter(alert =>

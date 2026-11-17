@@ -511,8 +511,7 @@ never conversation content, receipts or Sync tokens.
 
 Trigger records include scope, kind (group/origin/global), backlog, lag in
 seconds, optional context percent and control/run/checkpoint identifiers.
-Reasons include threshold, max_lag, context, inherited, catch_up, pre_reclaim
-and state_repair for a dedicated repair of already-checkpointed state. Logging
+Reasons include threshold, max_lag, context, inherited, catch_up and pre_reclaim. Logging
 failure cannot change a protected operation or its control bookkeeping.
 
 Protected results include commit (checkpoint, verified first/last C4 IDs and
@@ -536,44 +535,11 @@ and persist one repair_failed incident with the latest matching result code or
 no_checkpoint, state_uncommitted or control_timeout. New real work cancels the
 preparation through the existing gates. Child/turn/identity checks still apply.
 
-Inactive groups with overdue backlog or checkpoint/state gaps first queue a
-maintenance request in `activity-monitor/sync-maintenance.json`. Router consumes
-this request through its normal activation, runtime/model resolution and pool
-admission. Full pools wait without evicting for maintenance. Origin keeps its
-normal resident activation semantics but maintenance also waits for free pool
-capacity. Single mode, deletion and drain fences block maintenance activation.
-
-The shared request ledger uses the existing kernel file lock plus atomic
-fsynced publication. One running or finishing maintenance request is allowed
-machine-wide. Each group's attempt time and configured maximum-interval window
-survive restart; waiting for capacity does not create extra attempts. Exact-run
-purpose is recorded before launch and a durable startup claim permits only one
-Sync control, even across clear or failed startup enqueue.
-
-The shared ledger is strict only for maintenance decisions and mutations.
-Ordinary ownership observations treat an unreadable ledger as no maintenance and
-record a diagnostic, so unrelated startup, delivery, sends, TTL and rotation
-continue. Send restrictions use the exact runtime's `maintenance-run.json`
-identity under its group run directory, independently of the shared ledger.
-Comm-bridge reads this identity locally without importing activity-monitor,
-Core library code or memory-lock modules. Real input publishes ordinary purpose
-even if the shared ledger is unreadable; a later recovered ledger cannot turn
-that run back into maintenance.
-
-Startup omits handoff and recent conversation work, waits for that one control,
-and instructs group Sync including state-only repair with no new conversations.
-External and internal C4 sends are refused while the exact run remains a
-maintenance session. Ordinary Sync, TTL and rotation producers skip it. A real
-message cancels maintenance purpose before normal delivery and invalidates a
-pending maintenance startup control; an already running worker may finish.
-
-Supervisor verifies actual checkpoint/state/marker facts, then requests normal
-release. The ordinary check, idle, child and run guards remain; no second
-pre-reclaim Sync is added after this dedicated attempt. Failed maintenance
-reports its reason once and cannot start again within its persisted window.
-Active readers continue using normal Sync triggers; backlog notices wait for
-actual failure evidence or three unchanged attempts. Pre-reclaim symptoms are
-recorded once as diagnostics; the retry verdict owns any final owner notification.
+Groups without a live session do not receive backlog or checkpoint/state-gap
+notifications and are not activated for repair. Their existing inherited Sync
+trigger applies when ordinary work next activates them. Active readers continue
+using normal Sync triggers. Pre-reclaim symptoms are recorded once as diagnostics;
+the retry verdict owns any final owner notification.
 
 ### Persistent notification incidents
 
@@ -590,7 +556,7 @@ alert control or notify the owner. Recording does not depend on Origin being
 available. External scripts that monitor these diagnostic signals are outside
 this mechanism.
 
-Unrepaired backlog, checkpoint/state gaps, three requests without a checkpoint,
+Online unrepaired backlog, checkpoint/state gaps, three requests without a checkpoint,
 and final automatic repair failures retain the existing owner notification
 route. Their text states the problem, the automatic repair attempted, the failure
 reason and a concrete action the owner can request. Final automatic repair
@@ -619,14 +585,6 @@ notifications and emits a diagnostic rather than repeatedly messaging owners.
 Sync marker expiration retains the baseline rule: a holder from a different run
 is immediately stale; a same-run marker retains its existing 30-minute expiry.
 Same-run worker failure recovery remains separate.
-
-Maintenance activation and completion retain the 900-second deadline even when
-the group is fenced. A timed-out absent run frees the global maintenance claim;
-a still-present finishing run keeps exclusion until normal reclaim can prove
-it safe to stop. No forced reclaim deadline bypasses open-turn, idle or child
-guards. A request waiting for pool capacity has no new queue deadline and does
-not count as a failed attempt. These waits can remain indefinite and require a
-separate policy choice before adding deadlines or another owner notification.
 
 The incident ledger deliberately remains closed after an unreadable/unwritable
 state failure; automatic reset would discard notification ownership and permit

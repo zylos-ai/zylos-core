@@ -135,23 +135,7 @@ test('late delivery of the original release Sync control does not cancel its ret
   assert.equal(f.lifecycle.releasePreparation.size, 1);
 });
 
-test('maintenance release keeps the normal check and skips already-proved Sync', async t => {
-  const f = fixture(t); await f.lifecycle.requestRelease(f.scene, f.context());
-  f.lifecycle.releasePreparation.get(f.scene.sessionGroup).skipSync = true;
-  f.db.getLatestContentCheckpoint = () => assert.fail('No new Sync target should be captured');
-  await f.tick(); assert.equal(f.controls.length, 1); assert.equal(f.controls[0].content, 'check');
-  f.settle(); await f.tick(); assert.equal(f.fences.size, 1);
-});
-
-test('failed maintenance release reclaims its exhausted marker after the normal check', async t => {
-  const f = fixture(t); await f.lifecycle.requestRelease(f.scene, f.context());
-  Object.assign(f.lifecycle.releasePreparation.get(f.scene.sessionGroup), { skipSync: true, syncExhausted: true });
-  f.marker(true); await f.tick(); assert.equal(f.controls.length, 1); assert.equal(f.controls[0].content, 'check');
-  f.settle(); await f.tick(); assert.equal(f.fences.size, 1); assert.equal(f.syncs().length, 0);
-  assert.equal(await f.lifecycle.advanceReclaim(f.fences.get(f.scene.sessionGroup), f.context()), 'done');
-});
-
-test('completion proof rejects an old checkpoint while maintenance state repair may use it', async t => {
+test('completion proof rejects an old checkpoint while resolved-episode proof may use it', async t => {
   const f = fixture(t); f.store.createCheckpoint(f.scene.sessionGroup, f.end, 'existing summary'); f.state(f.end);
   const target = await captureSyncTarget({ db: f.db, scene: f.scene });
   assert.equal(target.end, f.end, 'missing range uses the real delivered frontier');

@@ -3,7 +3,6 @@ import { pathToFileURL } from 'node:url';
 import { insertInternalMessage } from './c4-db.js';
 import { dataError } from './c4-session-group.js';
 import { resolveCoreConfigModule } from './core-config-loader.js';
-import { readMaintenanceSession } from './maintenance-session.js';
 
 export function parseInternalArgs(args) {
   if (args.length !== 2 || args[0] !== 'internal' || args[1].startsWith('--')) {
@@ -21,9 +20,7 @@ async function readSenderIdentity(group) {
 /** Internal writes use the sender's inherited group, never external route inference. */
 export async function sendInternal(args, readBody, {
   env = process.env, insertMessage = insertInternalMessage, readIdentity = readSenderIdentity,
-  maintenanceReader = readMaintenanceSession,
 } = {}) {
-  if (await maintenanceReader(env)) throw dataError('MAINTENANCE_SESSION', 'Maintenance sessions cannot send channel messages');
   const target = parseInternalArgs(args);
   const content = (await readBody()).trimEnd();
   if (!content) throw dataError('EMPTY_CONTENT', 'Message content is empty');

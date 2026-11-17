@@ -74,7 +74,7 @@ export class SyncObserver {
     for (const [key, row] of this.groups) {
       const checkpoint = await db.getLatestContentCheckpoint(row.scope);
       if (checkpoint && checkpoint.id > (row.checkpointId ?? 0)) { this.groups.delete(key); this.resolved.push({ type: 'no_checkpoint', kind: row.kind, scope: row.scope }); continue; }
-      if (row.attempts >= 3) alerts.push({ type: 'no_checkpoint', kind: row.kind, scope: row.scope, attempts: row.attempts, checkpointId: row.checkpointId });
+      if (activeScopes.includes(row.scope) && row.attempts >= 3) alerts.push({ type: 'no_checkpoint', kind: row.kind, scope: row.scope, attempts: row.attempts, checkpointId: row.checkpointId });
     }
     this.originTriggers = this.originTriggers.filter(ts => ts >= now - 3600000);
     if (this.originTriggers.length > 4) alerts.push({ type: 'origin_frequency', kind: 'origin', scope: 'origin', count: this.originTriggers.length });
@@ -88,15 +88,12 @@ export class SyncObserver {
       if (control?.status === 'timeout') alerts.push({ type: 'control_timeout', kind: row.kind, scope: row.scope, controlId: id });
       if (!control || ['done', 'failed', 'cancelled', 'superseded'].includes(control.status)) this.controls.delete(id);
     }
-    const scopes = mode === 'single' ? ['*'] : (await db.listGroupHeads()).map(row => row.sessionGroup);
+    const scopes = mode === 'single' ? ['*'] : activeScopes;
     for (const scope of scopes) {
       const kind = scope === '*' ? 'global' : 'group';
       const range = scope === '*' ? await db.getGlobalUnsummarizedRange() : await db.getUnsummarizedRange(scope);
       const first = range.firstAt == null ? null : typeof range.firstAt === 'number' ? range.firstAt : Date.parse(/(?:Z|[+-]\d\d:\d\d)$/.test(range.firstAt) ? range.firstAt : range.firstAt.replace(' ', 'T') + 'Z');
-      if (!activeScopes.includes(scope) && range.count > 0 && first !== null && now - first > syncMaxIntervalSeconds * 1000) {
-        alerts.push({ type: 'backlog', kind, scope, backlog: range.count, lag: Math.floor((now - first) / 1000) });
-      }
-      const resolvedLag = activeScopes.includes(scope) ? 2 * syncMaxIntervalSeconds : syncMaxIntervalSeconds;
+      const resolvedLag = 2 * syncMaxIntervalSeconds;
       if (range.count === 0 || (range.count <= 4 * syncBatchLimit && first !== null && now - first <= resolvedLag * 1000)) {
         this.resolved.push({ type: 'backlog', kind, scope });
       }
