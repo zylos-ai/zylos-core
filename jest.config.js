@@ -1,7 +1,6 @@
 export default {
   transform: {},
   testPathIgnorePatterns: [
-    '<rootDir>/test/default-tool-deny.integration.test.js',
     '<rootDir>/test/dispatcher-startup.integration.test.js',
     '<rootDir>/test/instruction-deployment.integration.test.js',
     '<rootDir>/test/tmux-dashboard-reads.integration.test.js',

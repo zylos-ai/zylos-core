@@ -67,6 +67,21 @@ test('default argv omits model and effort and both runtimes attach per-process M
     assert.match(args.join(' '),/memory-mcp-server/);
   }
 });
+for (const bypassPermissions of [true, false]) {
+  for (const mode of ['default', 'override']) {
+    test(`Claude disables interactive tools with bypassPermissions=${bypassPermissions} and ${mode} model`, () => {
+      const config = { runtime: 'claude', mode, ...(mode === 'override' ? { model: 'model name', effort: 'high' } : {}) };
+      const args = buildRuntimeArgs('claude', config, { root: '/isolated root', bypassPermissions });
+      assert.deepEqual(args.filter(arg => arg.startsWith('--disallowedTools')),
+        ['--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode']);
+      assert.equal(args.includes('--disallowedTools'), false);
+      assert.equal(args.includes('--dangerously-skip-permissions'), bypassPermissions);
+      const codexArgs = buildRuntimeArgs('codex', { ...config, runtime: 'codex' },
+        { root: '/isolated root', bypassPermissions });
+      assert.equal(codexArgs.some(arg => arg.startsWith('--disallowedTools')), false);
+    });
+  }
+}
 test('override preserves model as independent argv and rejects unsupported capability',()=> {
   const config={runtime:'claude',mode:'override',model:'model name',effort:'high'};
   assert.throws(()=>validateLaunchConfig('claude',config,''),{code:'MODEL_CONFIG_REJECTED'});

@@ -307,31 +307,6 @@ export function syncTemplateSetting(key, {
   return { changed: true };
 }
 
-export function syncTemplateDeniedTools({
-  templateSettings,
-  installedSettings,
-  dryRun = false,
-  log = console.log,
-} = {}) {
-  const permissions = installedSettings.permissions;
-  if (permissions !== undefined && (!permissions || typeof permissions !== 'object' || Array.isArray(permissions))) {
-    log('permissions is not an object; skipping default deny rules.');
-    return { changed: false };
-  }
-  if (permissions?.deny !== undefined && !Array.isArray(permissions.deny)) {
-    log('permissions.deny is not an array; skipping default deny rules.');
-    return { changed: false };
-  }
-  const deny = permissions?.deny ?? [];
-  const missing = templateSettings.permissions.deny.filter(tool => !deny.includes(tool));
-  if (missing.length === 0) return { changed: false };
-  if (!dryRun) {
-    installedSettings.permissions ??= {};
-    installedSettings.permissions.deny = [...deny, ...missing];
-  }
-  return { changed: true };
-}
-
 export function syncModelCoupledNewSessionThreshold({
   modelBackfilled = false,
   zylosDir = ZYLOS_DIR,
@@ -766,10 +741,6 @@ export function syncRuntimeHooks({
     if (result.changed) settingsBackfilled = true;
   }
 
-  const { changed: denyBackfilled } = syncTemplateDeniedTools({
-    templateSettings, installedSettings, dryRun, log: message => log(`  Warning: ${message}`),
-  });
-
   const codexSync = syncCodexConfig({ dryRun, projectDir: zylosDir });
   if (codexSync.fatal) {
     console.error(codexSync.error);
@@ -788,13 +759,13 @@ export function syncRuntimeHooks({
   }
   const result = { claude: { added, updated, removed }, codex: codexHooks, stopFailureSupported };
 
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !denyBackfilled && !codexSync.changed && !codexHooks.changed) {
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexSync.changed && !codexHooks.changed) {
     console.log('Settings hooks: all up to date (no changes).');
     return { ...result, changed: false };
   }
 
   if (dryRun) {
-    console.log(`Settings hooks (dry run): ${added} to add, ${updated} to update, ${removed} to remove${statusLineChanged ? ', statusLine to update' : ''}${modelSync.changed ? ', model to backfill' : ''}${settingsBackfilled ? ', settings to backfill' : ''}${denyBackfilled ? ', permissions.deny to backfill' : ''}${codexSync.changed ? ', codex config to refresh' : ''}.`);
+    console.log(`Settings hooks (dry run): ${added} to add, ${updated} to update, ${removed} to remove${statusLineChanged ? ', statusLine to update' : ''}${modelSync.changed ? ', model to backfill' : ''}${settingsBackfilled ? ', settings to backfill' : ''}${codexSync.changed ? ', codex config to refresh' : ''}.`);
     return { ...result, changed: true };
   }
 
@@ -806,12 +777,12 @@ export function syncRuntimeHooks({
     modelBackfilled: modelSync.changed,
   });
 
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !denyBackfilled && !codexHooks.changed) {
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexHooks.changed) {
     console.log(`Settings hooks: all up to date; Codex config ${codexSync.changed ? 'refreshed' : 'unchanged'}.`);
     return { ...result, changed: false };
   }
 
-  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${thresholdSync.changed ? ', new-session threshold paired' : ''}${settingsBackfilled ? ', settings backfilled' : ''}${denyBackfilled ? ', permissions.deny backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}${codexHooks.changed ? ', Codex hooks refreshed' : ''}.`);
+  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${thresholdSync.changed ? ', new-session threshold paired' : ''}${settingsBackfilled ? ', settings backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}${codexHooks.changed ? ', Codex hooks refreshed' : ''}.`);
 
   return { ...result, changed: true };
 }

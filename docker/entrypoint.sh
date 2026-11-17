@@ -180,9 +180,9 @@ else
   # Kill any stale Claude session
   tmux kill-session -t claude-main 2>/dev/null || true
 
-  CLAUDE_ARGS=""
+  CLAUDE_ARGS="--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode"
   if [ "${CLAUDE_BYPASS_PERMISSIONS:-true}" = "true" ]; then
-    CLAUDE_ARGS="--dangerously-skip-permissions"
+    CLAUDE_ARGS="${CLAUDE_ARGS} --dangerously-skip-permissions"
   fi
 
   env -u ZYLOS_RUN_ID -u ZYLOS_MODEL_CONFIG -u ZYLOS_SESSION_GROUP tmux new-session -d -s claude-main -x 220 -y 50 \

@@ -7,7 +7,6 @@ import { createTestEnvironment } from './test-environment.js';
 
 const ROOT = process.cwd();
 const ROOT_NODE_TESTS = [
-  'test/default-tool-deny.integration.test.js',
   'test/dispatcher-startup.integration.test.js',
   'test/instruction-deployment.integration.test.js',
   'test/tmux-dashboard-reads.integration.test.js',
