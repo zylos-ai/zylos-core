@@ -1,3 +1,5 @@
+import { maintenanceSyncPrompt } from '../../../activity-monitor/scripts/maintenance-session.js';
+
 /** One in-memory execution slot per group. No waiting lane owns another lane. */
 export function createLane(context, group) {
   const { state, deps, options, diagnostic, now } = context;
@@ -54,17 +56,23 @@ export function createLane(context, group) {
         });
       }
     }
-    const control = deps.db.getNextPendingControl(Math.floor(now() / 1000), filter);
+    let control = deps.db.getNextPendingControl(Math.floor(now() / 1000), filter);
     // Recovery controls are already priority-zero and bypass-gated by their
     // producers. They must not wait behind a health-blocked startup prompt.
     if (control?.bypass_state && !startupIds.includes(control.id)) {
       await sendControl(control, live); return;
     }
     const message = await nextMessage();
+    if (message) await deps.cancelMaintenance?.(group, live.runId);
     while (startupIds.length) {
       const id = startupIds[0];
       const row = deps.db.getControlById(id);
       if (!row || row.status !== 'pending') { startupIds.shift(); continue; }
+      if (message && row.raw_content === maintenanceSyncPrompt) {
+        deps.db.expireControlById(id); startupIds.shift();
+        if (control?.id === id) control = null;
+        continue;
+      }
       if (row.session_group !== group || (row.available_at !== null && row.available_at > Math.floor(now() / 1000))) return;
       const result = await sendControl(row, live, true);
       if (result.claimed && !result.blocked) startupIds.shift();
@@ -111,6 +119,11 @@ export function createLane(context, group) {
       if (group === 'origin') {
         const row = await nextMessage();
         if (!row) {
+          const maintenance = state.maintenance.get(group);
+          if (maintenance) {
+            if (context.availableCapacity() > 0) await context.activation.begin(group, maintenance);
+            return;
+          }
           const need = deps.db.getOriginNeed(Math.floor(now() / 1000));
           if (need.controls.count === 0 && !need.continuation?.pending) return;
         }
@@ -122,9 +135,16 @@ export function createLane(context, group) {
     const row = await nextMessage();
     if (!row) {
       if (state.continuations.has(group)) await context.activation.beginContinuation(group);
+      else if (state.maintenance.has(group)) {
+        const maintenance = state.maintenance.get(group);
+        if (!context.acquireOpportunity(group, maintenance)) return;
+        try { await context.activation.begin(group, maintenance); }
+        finally { context.releaseOpportunity(group); }
+      }
       else context.capacityWaits.clear(group);
       return;
     }
+    await deps.cancelMaintenance?.(group);
     if (context.availableCapacity() <= 0 && state.slots.get(group)?.state !== 'held') {
       if (deps.db.getDrainFence(group) !== null || deps.db.getDrainFence('*') !== null) {
         context.capacityWaits.clear(group); return;

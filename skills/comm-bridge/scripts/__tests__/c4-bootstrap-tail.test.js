@@ -2,6 +2,18 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { emitC4Conversations } from '../c4-session-init.js';
 
+test('maintenance startup omits conversation tails and handoff work', async () => {
+  const output = await emitC4Conversations({}, null, {
+    scopeReader: async () => ({ mode: 'multi', scope: 'quiet', sessionGroup: 'quiet' }),
+    maintenanceReader: () => ({ runId: 'maintenance-run' }),
+    withDb: async (_label, action) => action({ getCoverageEnd: () => assert.fail('maintenance must not load human work') }),
+    migrationReader: () => assert.fail('maintenance must not inspect migrations'),
+  });
+  assert.match(output, /MAINTENANCE SESSION/);
+  assert.match(output, /exactly one group Memory Sync/);
+  assert.doesNotMatch(output, /Before resuming work|RECENT CONVERSATIONS|read-work-memory/);
+});
+
 function fixture(mode) {
   const calls = [];
   let coverage = 41;

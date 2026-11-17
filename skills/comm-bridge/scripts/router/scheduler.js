@@ -27,12 +27,12 @@ export function createRouter(dependencies, configuration = {}) {
   const deps = dependencies;
   const now = deps.now ?? Date.now;
   const state = { mode: null, inert: false, ready: false, stopped: false, round: 0, sceneObservable: false,
-    slots: new Map(), live: new Map(), continuations: new Map(), activations: new Map(), lanes: new Map(), listed: new Set(), legacy: [],
+    slots: new Map(), live: new Map(), continuations: new Map(), maintenance: new Map(), activations: new Map(), lanes: new Map(), listed: new Set(), legacy: [],
     resident: { failures: 0, absentSince: null, readySince: null, fenced: false } };
   const tasks = new Set();
   const opportunities = new Set();
   const attemptedRound = new Map();
-  let sceneTask = null, legacyTask = null, maintenanceTask = null, timer = null, initialization = null;
+  let sceneTask = null, legacyTask = null, maintenanceTask = null, syncRequestTask = null, timer = null, initialization = null;
   let lastCleanup = -Infinity, lastDiagnostics = -Infinity, lastMismatch = -Infinity;
   const diagnostic = (event, fields = {}) => {
     try { Promise.resolve(deps.diagnostic?.(event, fields)).catch(error => deps.log?.(`Router diagnostic: ${error.message}`)); }
@@ -69,11 +69,13 @@ export function createRouter(dependencies, configuration = {}) {
       ...deps.db.listPendingContinuations().filter(row => !inboundGroups.has(row.sessionGroup))
         .sort((a, b) => a.endedAt - b.endedAt || (a.sessionGroup < b.sessionGroup ? -1 : a.sessionGroup > b.sessionGroup ? 1 : 0))
         .map(row => ({ ...row, candidateId: row.sessionGroup, continuation: true })),
+      ...[...state.maintenance.values()].filter(row => !inboundGroups.has(row.sessionGroup) && !state.continuations.has(row.sessionGroup))
+        .map(row => ({ ...row, candidateId: row.id, maintenance: true })),
     ];
     const eligible = candidates.filter(row => row.sessionGroup !== 'origin' && !state.slots.has(row.sessionGroup) &&
       !state.live.get(row.sessionGroup)?.present && !state.activations.has(row.sessionGroup) && !opportunities.has(row.sessionGroup) &&
       attemptedRound.get(row.sessionGroup) !== state.round);
-    const selected = eligible.slice(0, slots).some(row => row.sessionGroup === group && row.candidateId === candidate.id && row.continuation === Boolean(candidate.continuation));
+    const selected = eligible.slice(0, slots).some(row => row.sessionGroup === group && row.candidateId === candidate.id && Boolean(row.continuation) === Boolean(candidate.continuation) && Boolean(row.maintenance) === Boolean(candidate.maintenance));
     if (!selected) return false;
     opportunities.add(group); attemptedRound.set(group, state.round); return true;
   };
@@ -83,7 +85,7 @@ export function createRouter(dependencies, configuration = {}) {
     queueMicrotask(() => {
       if (state.stopped || !state.ready || state.mode !== 'multi') return;
       try {
-        for (const row of [...deps.db.listPendingSessionGroups(), ...deps.db.listPendingContinuations()]) {
+        for (const row of [...deps.db.listPendingSessionGroups(), ...deps.db.listPendingContinuations(), ...state.maintenance.values()]) {
           if (attemptedRound.get(row.sessionGroup) === state.round) continue;
           const current = state.lanes.get(row.sessionGroup);
           if (current && !current.working) track(current.kick());
@@ -211,15 +213,24 @@ export function createRouter(dependencies, configuration = {}) {
     if (state.mode === 'multi') { context.refreshSlots(); adoptReadySlots(); }
     const pending = state.mode === 'multi' ? deps.db.listPendingSessionGroups() : [];
     const continuations = state.mode === 'multi' ? deps.db.listPendingContinuations() : [];
+    if (state.mode !== 'multi') state.maintenance.clear();
+    else if (deps.listMaintenanceRequests && !syncRequestTask) {
+      syncRequestTask = track(Promise.resolve().then(() => deps.listMaintenanceRequests()).then(rows => {
+        state.maintenance = new Map(rows.map(row => [row.sessionGroup, { ...row, maintenance: true }]));
+      }).catch(error => {
+        state.maintenance.clear(); diagnostic('sync_maintenance_unavailable', { reason: error.code ?? error.message });
+      }).finally(() => { syncRequestTask = null; }));
+    }
+    const maintenance = [...state.maintenance.values()];
     state.continuations = new Map(continuations.map(row => [row.sessionGroup, row]));
-    context.capacityWaits.sweep(new Set([...pending, ...continuations].map(row => row.sessionGroup)));
+    context.capacityWaits.sweep(new Set([...pending, ...continuations, ...maintenance].map(row => row.sessionGroup)));
     // Lifecycle reconciliation also runs without queued work: resident restart,
     // stable READY backoff reset, absence timing, unowned starts and slot adoption
     // require observation. Each round uses one batch, never per-session polling.
-    if (!sceneTask) sceneTask = track(context.refreshScene([...pending, ...continuations].map(row => row.sessionGroup))
+    if (!sceneTask) sceneTask = track(context.refreshScene([...pending, ...continuations, ...maintenance].map(row => row.sessionGroup))
       .finally(() => { sceneTask = null; }));
     const wanted = new Set(state.mode === 'single' ? [null] : ['origin', ...state.listed,
-      ...pending.map(row => row.sessionGroup), ...continuations.map(row => row.sessionGroup), ...state.activations.keys()]);
+      ...pending.map(row => row.sessionGroup), ...continuations.map(row => row.sessionGroup), ...maintenance.map(row => row.sessionGroup), ...state.activations.keys()]);
     const ordered = state.mode === 'single' ? [null] : ['origin', ...pending.sort((a,b) => a.headPriority-b.headPriority || a.headId-b.headId).map(row => row.sessionGroup), ...continuations.sort((a,b) => a.endedAt-b.endedAt || (a.sessionGroup < b.sessionGroup ? -1 : a.sessionGroup > b.sessionGroup ? 1 : 0)).map(row => row.sessionGroup), ...wanted];
     for (const group of new Set(ordered)) {
       const active = state.activations.get(group);

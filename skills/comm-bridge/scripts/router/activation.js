@@ -71,6 +71,8 @@ export function createActivationManager(context) {
 
   async function begin(group, candidate) {
     const resident = group === null || group === 'origin';
+    const maintenance = candidate?.maintenance === true;
+    if (maintenance && state.mode !== 'multi') return;
     if (state.activations.has(group)) return;
     let requestRuntime;
     let token, slot, runId;
@@ -146,19 +148,28 @@ export function createActivationManager(context) {
         state.live.set(group, live);
         if (live.present) return;
         const current = deps.db.getNextPending({ sessionGroups: [group] });
-        if (!current || current.id !== candidate.id) return;
-        if (deps.db.expirePending(current.id, options.pendingMaxAgeSeconds)) {
+        if (maintenance ? Boolean(current) : !current || current.id !== candidate.id) return;
+        if (!maintenance && deps.db.expirePending(current.id, options.pendingMaxAgeSeconds)) {
           await deps.handleExpired(current, { sessionMode: state.mode, identity: live, launchConfig });
           return;
         }
-        if (!deps.db.claimConversation(current.id)) return;
+        if (!maintenance && !deps.db.claimConversation(current.id)) return;
       } else {
         const live = await deps.readLiveIdentity(group);
         state.live.set(group, live);
         if (live.present) return;
       }
       runId ??= uuid();
-      const activation = { group, runId, launchConfig, startedAt: now(), message: candidate ?? null,
+      // The same slot and provider admission precede maintenance ownership.
+      // A real message discovered during preflight always wins this run.
+      if (maintenance && (deps.db.getNextPending({ sessionGroups: [group] }) ||
+          deps.db.getDrainFence(group) !== null || deps.db.getDrainFence('*') !== null ||
+          !await deps.claimMaintenance?.(group, runId))) return;
+      if (maintenance && deps.db.getNextPending({ sessionGroups: [group] })) {
+        await deps.cancelMaintenance?.(group, runId); return;
+      }
+      const activation = { group, runId, launchConfig, startedAt: now(), message: maintenance ? null : candidate ?? null,
+        maintenance,
         resident, slotPrior: slot?.prior, slotTaken: slot?.taken === true, launchStarted: false, launchSettled: false, launchError: null };
       state.activations.set(group, activation);
       slot = null; // The activation now owns release/convergence.
@@ -179,7 +190,7 @@ export function createActivationManager(context) {
       } catch (error) { activation.launchError = error; }
       activation.launchSettled = true;
       if (activation.launchError?.code === 'NAME_CONFLICT') {
-        if (candidate) deps.db.requeueConversation(candidate.id);
+        if (activation.message) deps.db.requeueConversation(activation.message.id);
         releaseSlot(activation);
         state.activations.delete(group);
         diagnostic('launch_name_conflict', { session_group: group, runId, conversation_id: candidate?.id ?? null });

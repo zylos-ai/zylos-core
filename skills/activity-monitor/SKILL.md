@@ -502,54 +502,99 @@ write still performs its original durable publication and immediately refreshes
 the cache. Cleanup publishes only when it removes entries, without changing v1.
 
 
-## Memory Sync diagnostics
+## Memory Sync diagnostics and repair
 
 `activity-monitor/supervisor-events.jsonl` records `sync_triggered` and
-`sync_result` alongside existing supervisor decisions. Existing rotation and
-seven-day retention apply. Records contain metadata only, never conversation
-content, receipts or Sync tokens.
+`sync_result` alongside existing supervisor decisions. Existing log rotation
+and retention apply to diagnostic evidence only. Records contain metadata,
+never conversation content, receipts or Sync tokens.
 
-Trigger records include `scope`, `kind` (`group`, `origin`, `global`), a `reason`
-array (`threshold`, `max_lag`, `context`, `inherited`, `catch_up`,
-`pre_reclaim`), `backlog`, `lag` in seconds, optional `contextPercent`, and the
-control/run/checkpoint identifiers. Logging failures cannot change control
-bookkeeping or the protected memory operation's outcome.
+Trigger records include scope, kind (group/origin/global), backlog, lag in
+seconds, optional context percent and control/run/checkpoint identifiers.
+Reasons include threshold, max_lag, context, inherited, catch_up, pre_reclaim
+and state_repair for a dedicated repair of already-checkpointed state. Logging
+failure cannot change a protected operation or its control bookkeeping.
 
-Result actions include `commit` (checkpoint ID, actual first/last C4 IDs and
-count), `advance` (group and both cursor columns before/after), and
-`round_complete` (raw count, advanced groups, remaining quota, remaining
-backlog). Origin completes its round at the existing lock release boundary;
-interrupted rounds have no completion record. Structured errors contain a
-`code`, `kind`, `scope` and operation action. Each failed protected operation emits one error record; callers that own
-operation reporting disable the nested guard report. Standalone guards still
-report their own failures.
+Protected results include commit (checkpoint, verified first/last C4 IDs and
+count), advance (both cursor columns before/after), and round_complete (raw
+count, advanced groups, remaining quota/backlog). Commit eligibility matches
+receipt verification: outgoing rows or delivered incoming rows, filtered to
+the appropriate scope. Summary-only Origin progress counts as useful work.
+Each failed named operation emits one error record; nested guards delegate
+reporting to it. Standalone guards report their failures. Successful lock
+acquisition emits no result. Interrupted rounds have no completion result.
 
-The supervisor queues owner notices through the existing Sync alert control,
-with `type`, `kind` and `scope`, throttled for six hours per type/kind/scope:
+### Repair before notification
 
-- `no_checkpoint`: three consecutive requests without a new checkpoint.
-- `origin_frequency`: more than four Origin requests in one hour.
-- `origin_idle`: more than five of the latest ten completed rounds have no raw
-  rows and no cursor advancement. Summary-only progress counts as work.
-- `backlog`: the oldest unsummarized group row exceeds the configured maximum
-  interval and the group has no live session. Active groups use ordinary
-  maximum-lag Sync and the no-checkpoint alert. Existing large-backlog
-  and Origin lag alerts remain in place.
-- `control_timeout`: a Sync control timed out.
-- `state_uncommitted`: the latest content checkpoint is ahead of formal state,
-  after any live Sync marker releases or expires.
+Release and TTL preparation capture the requested range before dispatch. A
+terminal control is not proof of success. Group success requires a new content
+checkpoint covering that range, state coverage at least its end, and a released
+Sync marker. An Origin round proves durable cursor progress and marker release;
+its bounded round need not drain all groups. A failed preparation retries once
+with the same 900-second deadline. Two failed attempts permit normal reclaim
+and persist one repair_failed incident with the latest matching result code or
+no_checkpoint, state_uncommitted or control_timeout. New real work cancels the
+preparation through the existing gates. Child/turn/identity checks still apply.
 
-Inspection of inactive groups does not launch their sessions. Timeout evidence
-is retained until alert enqueue succeeds. Trigger/round evidence is recovered
-from retained diagnostic logs after restart. Earlier timeout controls are
-recovered separately from the last-three trigger window. Handled timeout IDs
-are recovered from `sync_alert` events, including rate-limited notices, so
-restarting the supervisor does not replay old timeout notices. Unreported
-timeouts remain eligible.
+Inactive groups with overdue backlog or checkpoint/state gaps first queue a
+maintenance request in `activity-monitor/sync-maintenance.json`. Router consumes
+this request through its normal activation, runtime/model resolution and pool
+admission. Full pools wait without evicting for maintenance. Origin keeps its
+normal resident activation semantics but maintenance also waits for free pool
+capacity. Single mode, deletion and drain fences block maintenance activation.
 
-Sync marker expiration retains the baseline rule: a holder from a different
-run is immediately stale; a same-run marker retains its existing 30-minute
-expiry. Same-run worker failure handling is deferred until result diagnostics
-provide more evidence. Daily memory snapshots exclude additions and edits to `*.tmp`, including
-content already staged before the snapshot. Deletions of tracked temporary
-files are committed so old accidental snapshots can be cleaned up.
+The shared request ledger uses the existing kernel file lock plus atomic
+fsynced publication. One running or finishing maintenance request is allowed
+machine-wide. Each group's attempt time and configured maximum-interval window
+survive restart; waiting for capacity does not create extra attempts. Exact-run
+purpose is recorded before launch and a durable startup claim permits only one
+Sync control, even across clear or failed startup enqueue.
+
+Startup omits handoff and recent conversation work, waits for that one control,
+and instructs group Sync including state-only repair with no new conversations.
+External and internal C4 sends are refused while the exact run remains a
+maintenance session. Ordinary Sync, TTL and rotation producers skip it. A real
+message cancels maintenance purpose before normal delivery and invalidates a
+pending maintenance startup control; an already running worker may finish.
+
+Supervisor verifies actual checkpoint/state/marker facts, then requests normal
+release. The ordinary check, idle, child and run guards remain; no second
+pre-reclaim Sync is added after this dedicated attempt. Failed maintenance
+reports its reason once and cannot start again within its persisted window.
+Active readers continue using normal Sync triggers; backlog notices wait for
+actual failure evidence or three unchanged attempts. Pre-reclaim symptoms are
+owned by the retry verdict instead of producing a second timeout notice.
+
+### Persistent notification incidents
+
+`activity-monitor/sync-alert-episodes.json` atomically records an incident by
+scope + kind + alert type. A timeout includes control ID, so each control is a
+separate permanent identity. There is no elapsed-time reset or retention cutoff
+for notification ownership. This replaces both duration-based throttling and
+handled-timeout recovery from rotated diagnostic logs. Existing alert controls,
+classification and destination remain unchanged.
+
+Resolution is explicit:
+
+- backlog: count and age have returned inside the applicable trigger limits;
+- state_uncommitted: valid state coverage reaches the checkpoint end;
+- no_checkpoint: a newer content checkpoint exists;
+- control_timeout: a different control is a different incident; the old ID is
+  never announced again;
+- origin_frequency: trailing-hour requests return to at most four;
+- origin_idle: ten known completed rounds contain at most five truly idle rounds;
+- repair_failed: durable checkpoint/state/marker or Origin cursor facts prove
+  the captured repair target is fixed.
+
+An unresolved incident sends once, including after restart or loss of trigger
+logs. Resolved incidents can recur. Notification ownership is persisted before
+enqueue; unknown enqueue outcomes keep ownership to avoid duplicates. A final
+repair failure blocked by an Origin fence remains durably pending and can send
+later without blocking reclaim. Unreadable or unwritable incident state stops
+notifications and emits a diagnostic rather than repeatedly messaging owners.
+
+Sync marker expiration retains the baseline rule: a holder from a different run
+is immediately stale; a same-run marker retains its existing 30-minute expiry.
+Same-run worker failure recovery remains separate. Daily snapshots exclude tmp
+additions and edits, including staged content, while committing deletions of
+tracked temporary files.

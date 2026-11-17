@@ -7,6 +7,17 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { fixture } from './c4-v2-test-helpers.js';
 import { sendInternal } from '../c4-send-internal.js';
+import { sendExternal } from '../c4-send-external.js';
+
+test('maintenance blocks internal and external channel sends before lookup or recording', async () => {
+  const maintenanceReader = () => ({ runId: 'maintenance-run' });
+  await assert.rejects(sendInternal(['internal', 'origin'], () => assert.fail('must not read message'), {
+    maintenanceReader, readIdentity: () => assert.fail('must not resolve recipient'),
+  }), { code: 'MAINTENANCE_SESSION' });
+  await assert.rejects(sendExternal({ channel: 'telegram', endpoint: 'unused' }, 'must stay private', {
+    maintenanceReader, api: {}, skillsDir: '/unused',
+  }), { code: 'MAINTENANCE_SESSION' });
+});
 const repository=fileURLToPath(new URL('../../../../',import.meta.url));
 const command=fileURLToPath(new URL('../c4-send.js',import.meta.url));
 const guard=fileURLToPath(new URL('./fixtures/internal-send-no-dispatch.js',import.meta.url));

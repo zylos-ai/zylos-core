@@ -1,10 +1,22 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { SupervisorLifecycle } from '../supervisor-lifecycle.js';
 
-// Unit fixture: all database, runtime and marker observations are in memory.
-// No processes, timers, files, live database, PM2 or tmux are started.
+// Unit fixture: database, runtime and marker observations are in memory.
+// Alert persistence has a private tree per case; no processes, timers, live
+// database, PM2 or tmux are started. Official runner isolates imports first.
+const roots = [];
+after(() => { for (const root of roots) fs.rmSync(root, { recursive: true, force: true }); });
 function fixture(mode = 'multi', configuration = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-catch-up-')); roots.push(root);
+  const env = { ...process.env, HOME: path.join(root, 'home'), ZYLOS_DIR: path.join(root, 'z'),
+    PM2_HOME: path.join(root, 'pm2'), TMPDIR: path.join(root, 'tmp') };
+  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
+    assert.ok(env[key].startsWith(root + path.sep)); fs.mkdirSync(env[key], { recursive: true });
+  }
   const f = {
     now: 2_000_000, firstAt: 2_000_000, endedAt: 2000, count: 500, first: 1, lastActivity: 0,
     scene: { sessionGroup: mode === 'single' ? null : 'a', present: true, ready: true,
@@ -17,6 +29,7 @@ function fixture(mode = 'multi', configuration = {}) {
   const range = () => ({ count: f.count, firstConversationId: f.count ? f.first : null,
     firstAt: f.count ? f.firstAt : null });
   const deps = {
+    env,
     db: {
       getModeTransition: () => f.transition,
       listRunEndings: groups => groups.map(sessionGroup => ({ sessionGroup, endedAt: f.endedAt })),
@@ -25,6 +38,8 @@ function fixture(mode = 'multi', configuration = {}) {
       getUnsummarizedRange: group => { f.rangeReads.push(group); return range(); },
       getGlobalUnsummarizedRange: () => { f.rangeReads.push('*'); return range(); },
       getOriginSyncBacklog: () => f.backlog,
+      getLatestContentCheckpoint: () => null,
+      getDeliveredFrontier: () => f.count ? f.first + f.count - 1 : 0,
       getLastActivity: () => ({ ts: f.lastActivity }),
       getControlById: id => f.controls.find(row => row.id === id),
       insertControl: (content, options) => {

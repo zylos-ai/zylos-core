@@ -14,6 +14,7 @@ import path from 'path';
 import os from 'os';
 import { isMainModule } from './is-main-module.js';
 import { bootstrapScope } from './bootstrap-scope.js';
+import { readMaintenanceSession, claimMaintenanceStartup, maintenanceSyncPrompt } from './maintenance-session.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -150,13 +151,20 @@ export async function enqueueStartupPrompt(source, {
   scopeReader = bootstrapScope,
   recentReader = readStartupPendingReply,
   now = Date.now,
+  maintenanceReader = readMaintenanceSession,
+  startupClaimer = claimMaintenanceStartup,
 } = {}) {
   if (!['startup', 'clear'].includes(source)) return { skipped: true, reason: 'source', startupControlIds: [] };
   if (onboardingPending()) return { skipped: true, reason: 'onboarding_pending', startupControlIds: [] };
   const scope = await scopeReader();
 
   let activePrompt;
-  if (migrationPending()) activePrompt = migrationPrompt;
+  const maintenance = await maintenanceReader();
+  if (maintenance) {
+    if (!await startupClaimer(maintenance)) return { skipped: true, reason: 'maintenance_started', startupControlIds: [] };
+    activePrompt = maintenanceSyncPrompt;
+  }
+  else if (migrationPending()) activePrompt = migrationPrompt;
   else {
     const handoff = !!scope.memoryDir && fs.existsSync(path.join(scope.memoryDir, 'handoff.md'));
     if (!handoff && !await hasPendingReply(scope, recentReader, now)) {
@@ -174,7 +182,7 @@ export async function enqueueStartupPrompt(source, {
     controlPath, 'enqueue',
     '--content', activePrompt,
     '--priority', '2',
-    '--no-ack-suffix', '--json',
+    ...(maintenance ? ['--ack-deadline', '900'] : ['--no-ack-suffix']), '--json',
     ...(scope.sessionGroup ? ['--group', scope.sessionGroup] : []),
   ], {
     timeout: childTimeoutMs,

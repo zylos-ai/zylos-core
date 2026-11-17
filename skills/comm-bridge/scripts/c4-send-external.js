@@ -8,6 +8,7 @@ import { safeEntryId } from './c4-entry-id.js';
 import { queryComponentSessionGroup, fixedAddressSessionGroup } from './c4-component-session-group.js';
 import { assertOutboundSession } from './c4-outbound-session.js';
 import { readChannelHookMetadata, runBeforeSendHook } from './c4-channel-hooks.js';
+import { readMaintenanceSession } from '../../activity-monitor/scripts/maintenance-session.js';
 
 const pathsModule = path.join(path.dirname(resolveCoreConfigModule()), 'session-group-paths.js');
 const { runDirFromEnv, legacyRunDir } = await import(pathToFileURL(pathsModule).href);
@@ -48,7 +49,8 @@ export function assertEndpointPassable(endpoint, id) {
   }
 }
 
-export async function sendExternal(request, message, { api, skillsDir, env = process.env } = {}) {
+export async function sendExternal(request, message, { api, skillsDir, env = process.env, maintenanceReader = readMaintenanceSession } = {}) {
+  if (await maintenanceReader(env)) throw sendError('MAINTENANCE_SESSION', 'Maintenance sessions cannot send channel messages');
   const { channel, endpoint } = request;
   if (typeof channel !== 'string' || !channel || channel.includes('..') || /[/\\\0]/.test(channel)) {
     throw sendError('INVALID_ARGS', 'Invalid channel');

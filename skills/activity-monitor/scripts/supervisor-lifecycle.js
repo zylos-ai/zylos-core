@@ -1,8 +1,10 @@
+import { SyncAlertEpisodes } from './sync-alert-episodes.js';
 import { isDeepStrictEqual } from 'node:util';
 import { validLaunchConfigSnapshot as validLaunchConfig } from './launch-config-shape.js';
 import { loadCoreModule } from './core-modules.js';
 const { modelThreshold } = await loadCoreModule('model-rotation-thresholds.js');
 import { MANUAL_WAKE_PROMPT } from './origin-prompts.js';
+import { captureSyncTarget, observeSyncCompletion, latestSyncFailure, repairRetryPrompt } from './sync-reclaim.js';
 
 const TERMINAL_CONTROLS = new Set(['done', 'timeout', 'superseded', 'failed', 'cancelled']);
 const CAPACITY_REASONS = new Set(['ttl', 'evict', 'upgrade', 'auth']);
@@ -72,6 +74,7 @@ export class SupervisorLifecycle {
     this.ttlPreparation = new Map();
     this.evictionPreparation = new Map();
     this.releasePreparation = new Map();
+    this.reclaimSyncFailures = new Map();
     this.deliveredWork = new Map();
     this.upgradePreparation = new Map();
     this.ttlReset = new Map();
@@ -82,7 +85,9 @@ export class SupervisorLifecycle {
     this.syncRuns = new Map();
     this.syncProgress = new Map();
     this.referenceReorgSent = new Map();
-    this.syncAlertSent = new Map();
+    this.syncBacklogCandidates = new Map();
+    this.syncAlertEpisodes = deps.syncAlertEpisodes ?? new SyncAlertEpisodes({ env: deps.env, now,
+      diagnostic: row => deps.diagnostic?.(row) });
     this.lastSyncCheck = null;
     this.warnings = new Set();
     this.runEndFailures = new Map();
@@ -150,6 +155,7 @@ export class SupervisorLifecycle {
   }
 
   stopped(scene, context) {
+    this.reclaimSyncFailures.delete(scene.sessionGroup);
     const current = context.scenes.find(item => item.runId === scene.runId &&
       (item.sessionGroup === scene.sessionGroup || scene.sessionGroup === null && item.sessionGroup === 'origin'));
     if (current) Object.assign(current, { present: false, ready: false, processRunning: false });
@@ -167,10 +173,10 @@ export class SupervisorLifecycle {
     return unheld;
   }
 
-  async idle(scene, context) {
+  async idle(scene, context, { ignoreSyncMarker = false } = {}) {
     if (!scene.present || !scene.ready || scene.processRunning !== true || scene.state !== 'idle' ||
         !finite(scene.idleSince) || this.now() - scene.idleSince < this.idleConfirmMs) return false;
-    return this.checkReclaimDependencies(scene, context);
+    return ignoreSyncMarker || this.checkReclaimDependencies(scene, context);
   }
 
   async alertOnce(key, event) {
@@ -206,6 +212,7 @@ export class SupervisorLifecycle {
   }
 
   async clear(fence, context) {
+    this.reclaimSyncFailures.delete(fence.sessionGroup);
     const current = await this.d.db.getDrainFence(fence.sessionGroup);
     if (!current) {
       context.fences = context.fences.filter(item => item.sessionGroup !== fence.sessionGroup);
@@ -303,7 +310,9 @@ export class SupervisorLifecycle {
         if (preparedTtl && this.activeSubagents(scene, context)) return 'waiting_idle';
         const childBlocked = this.subagentReclaimBlocked(scene, fence.reason, context);
         if (childBlocked ||
-            !await this.reclaimRead(fence, () => this.idle(scene, context))) {
+            !await this.reclaimRead(fence, () => this.idle(scene, context, {
+              ignoreSyncMarker: ['ttl', 'release'].includes(fence.reason) && this.reclaimSyncFailures.get(group) === scene.runId,
+            }))) {
           if (singleAuth || ['model_config', 'delete'].includes(fence.reason)) return 'waiting_idle';
           if (!unfenced) await this.clear(fence, context);
           if (fence.reason === 'ttl') this.ttlReset.set(group, { runId: fence.runId, at: this.now() });
@@ -513,12 +522,14 @@ export class SupervisorLifecycle {
   }
 
   async prepareRelease(scene, context, intent) {
+    this.reclaimSyncFailures.delete(scene.sessionGroup);
+    if (intent.syncExhausted === true) this.reclaimSyncFailures.set(scene.sessionGroup, scene.runId);
     const group = scene.sessionGroup;
     const range = await this.d.db.getUnsummarizedRange(group);
     if (!Number.isInteger(range.count) || range.count < 0) throw error('INVALID_OBSERVATION', 'Invalid unsummarized count');
     const todo = ['PRE_RECLAIM_CHECK_PROMPT'];
-    if (range.count > 0) todo.push('PRE_RECLAIM_SYNC_PROMPT');
-    if (group === 'origin') {
+    if (!intent.skipSync && range.count > 0) todo.push('PRE_RECLAIM_SYNC_PROMPT');
+    if (!intent.skipSync && group === 'origin') {
       const backlog = await this.d.db.getOriginSyncBacklog();
       if (backlog.total > 0 || backlog.groups.some(item => item.pendingCheckpoints > 0)) todo.push('PRE_RECLAIM_ORIGIN_SYNC_PROMPT');
     }
@@ -530,15 +541,82 @@ export class SupervisorLifecycle {
       if (!targetBinding) return;
       const now = this.now();
       const syncKind = prompt === 'PRE_RECLAIM_ORIGIN_SYNC_PROMPT' ? 'origin' : 'group';
-      const checkpointId = prompt === 'PRE_RECLAIM_CHECK_PROMPT' ? null : await this.syncCheckpoint(scene, syncKind);
+      const syncTarget = prompt === 'PRE_RECLAIM_CHECK_PROMPT' ? null :
+        await captureSyncTarget({ db: this.d.db, scene, kind: syncKind, range, now });
+      const checkpointId = syncTarget?.checkpointId ?? null;
       const control = await this.d.db.insertControl(this.prompt(prompt), {
         sessionGroup: group, targetBinding, requireIdle: true, appendAckSuffix: true,
         ackDeadlineAt: Math.floor((now + (prompt === 'PRE_RECLAIM_CHECK_PROMPT' ? this.ackTimeoutMs : PRE_RECLAIM_SYNC_ACK_TIMEOUT_MS)) / 1000), createdAt: Math.floor(now / 1000),
       });
       if (prompt !== 'PRE_RECLAIM_CHECK_PROMPT') await this.recordSyncTrigger(scene, syncKind, ['pre_reclaim'], range, control, checkpointId);
       intent.controlIds.push(control.id);
+      if (syncTarget) {
+        intent.syncs ??= [];
+        intent.syncs.push({ target: syncTarget, prompt, range, controlId: control.id, at: now, deadline: now + PRE_RECLAIM_SYNC_ACK_TIMEOUT_MS });
+      }
     }
     intent.prepared = true;
+  }
+
+  async preparationControlsSettled(preparation) {
+    for (const id of preparation.controlIds) {
+      if (preparation.settledSyncIds?.includes(id)) continue;
+      const control = await this.d.db.getControlById(id);
+      if (control && TERMINAL_CONTROLS.has(control.status)) continue;
+      // Expired Sync controls cannot stall a bounded preparation indefinitely,
+      // including when the dispatcher has not yet marked them timeout.
+      const sync = preparation.syncs?.find(row => row.controlId === id);
+      if (sync && this.now() >= sync.deadline) continue;
+      return false;
+    }
+    return true;
+  }
+
+  async advancePreparationSync(scene, context, preparation) {
+    const failures = [];
+    for (const sync of preparation.syncs ?? []) {
+      const proof = await observeSyncCompletion({ db: this.d.db, scene, target: sync.target,
+        readSyncMarker: this.d.readSyncMarker, env: this.d.env });
+      if (proof.ok) continue;
+      if (proof.reason === 'control_timeout' && this.now() < sync.deadline) return false;
+      failures.push({ sync, reason: proof.reason });
+    }
+    if (!failures.length) return preparation.syncExhausted === true || this.checkReclaimDependencies(scene, context);
+    if (!preparation.syncRetried) {
+      for (const { sync } of failures) {
+        if (!await this.beforeWrite(scene.sessionGroup, context, scene)) return false;
+        const targetBinding = await this.bindCurrentRun(scene);
+        if (!targetBinding) return false;
+        const at = this.now();
+        const control = await this.d.db.insertControl(repairRetryPrompt(this.prompt(sync.prompt), sync.target.kind), {
+          sessionGroup: scene.sessionGroup, targetBinding, requireIdle: true, appendAckSuffix: true,
+          ackDeadlineAt: Math.floor((at + PRE_RECLAIM_SYNC_ACK_TIMEOUT_MS) / 1000), createdAt: Math.floor(at / 1000),
+        });
+        // Retain every owned ID so late delivery of our own control never
+        // masquerades as new human work and cancels voluntary release.
+        preparation.settledSyncIds ??= [];
+        preparation.settledSyncIds.push(sync.controlId);
+        preparation.controlIds.push(control.id);
+        preparation.syncRetried = true;
+        Object.assign(sync, { controlId: control.id, at, deadline: at + PRE_RECLAIM_SYNC_ACK_TIMEOUT_MS });
+        await this.recordSyncTrigger(scene, sync.target.kind, ['pre_reclaim'], sync.range, control, sync.target.checkpointId ?? null);
+      }
+      return false;
+    }
+    this.reclaimSyncFailures.set(scene.sessionGroup, scene.runId);
+    if (!preparation.syncFailureAlerted) {
+      // One alert per preparation even when both group and Origin repair fail.
+      const { sync, reason } = failures[0];
+      const code = latestSyncFailure({ env: this.d.env, scene, target: sync.target, startedAt: sync.at });
+      const control = await this.d.db.getControlById(sync.controlId);
+      const alert = { type: 'repair_failed', kind: sync.target.kind, scope: scene.sessionGroup,
+        reason: code ?? (control?.status === 'timeout' ? 'control_timeout' : reason), controlId: sync.controlId,
+        checkpointId: sync.target.checkpointId, checkpointEnd: sync.target.end,
+        ...(sync.target.kind === 'origin' ? { cursors: sync.target.cursors } : {}) };
+      preparation.syncFailureAlerted = true;
+      await this.sendSyncAlert(alert, context);
+    }
+    return true;
   }
 
   async advanceReleases(context) {
@@ -554,26 +632,23 @@ export class SupervisorLifecycle {
           reason: scene.runId !== intent.runId ? 'run_changed' : 'other_fence' });
         return;
       }
-      for (const id of intent.controlIds) {
-        const control = await this.d.db.getControlById(id);
-        if (!control || !TERMINAL_CONTROLS.has(control.status)) return;
-      }
+      if (!await this.preparationControlsSettled(intent)) return;
       // An acknowledged check/Sync can still be finishing its turn or holding its
       // scoped marker; children and activity must drain through normal guards.
-      if (scene.turnOpen === true || this.subagentReclaimBlocked(scene, 'release', context) || !await this.idle(scene, context)) return;
+      if (scene.turnOpen === true || this.subagentReclaimBlocked(scene, 'release', context) ||
+          !await this.idle(scene, context, { ignoreSyncMarker: Boolean(intent.syncs?.length) || intent.syncExhausted === true })) return;
       if (!intent.prepared) await this.prepareRelease(scene, context, intent);
       if (!intent.prepared || intent.controlIds.length) {
-        for (const id of intent.controlIds) {
-          const control = await this.d.db.getControlById(id);
-          if (!control || !TERMINAL_CONTROLS.has(control.status)) return;
-        }
+        if (!await this.preparationControlsSettled(intent)) return;
         if (!intent.prepared) return;
       }
+      if (!await this.advancePreparationSync(scene, context, intent)) return;
       if (await this.beginReclaim(scene, 'release', context)) this.releasePreparation.delete(sessionGroup);
     });
   }
 
   async checkTtl(scene, context) {
+    if (this.d.syncMaintenance?.owns(scene)) return;
     if (scene.observationError) throw scene.observationError;
     const group = scene.sessionGroup;
     if (this.releasePreparation.has(group) && scene.turnOpen !== true) return;
@@ -591,12 +666,11 @@ export class SupervisorLifecycle {
     }
     if (now - last < ttl) return;
     if (preparation) {
-      for (const id of preparation.controlIds) {
-        const control = await this.d.db.getControlById(id);
-        if (!control || !TERMINAL_CONTROLS.has(control.status)) return;
-      }
-      if (!preparation.partial && (this.activeSubagents(scene, context) || !await this.idle(scene, context))) return;
+      if (!await this.preparationControlsSettled(preparation)) return;
+      if (!preparation.partial && (this.activeSubagents(scene, context) || !await this.idle(scene, context,
+        { ignoreSyncMarker: Boolean(preparation.syncs?.length) }))) return;
       if (preparation.partial) { this.ttlPreparation.delete(group); return; }
+      if (!await this.advancePreparationSync(scene, context, preparation)) return;
       // Keep the preparation cutoff through the fence's final activity recheck.
       await this.beginReclaim(scene, 'ttl', context);
       return;
@@ -612,21 +686,26 @@ export class SupervisorLifecycle {
       if (backlog.total > 0 || backlog.groups.some(item => item.pendingCheckpoints > 0)) todo.push('PRE_RECLAIM_ORIGIN_SYNC_PROMPT');
     }
     const controlIds = [];
+    const syncs = [];
+    this.reclaimSyncFailures.delete(group);
     let partial = false;
     for (const prompt of todo) {
       if (!await this.beforeWrite(group, context, scene)) { partial = controlIds.length > 0; break; }
       const targetBinding = await this.bindCurrentRun(scene);
       if (!targetBinding) { partial = controlIds.length > 0; break; }
       const syncKind = prompt === 'PRE_RECLAIM_ORIGIN_SYNC_PROMPT' ? 'origin' : 'group';
-      const checkpointId = prompt === 'PRE_RECLAIM_CHECK_PROMPT' ? null : await this.syncCheckpoint(scene, syncKind);
+      const syncTarget = prompt === 'PRE_RECLAIM_CHECK_PROMPT' ? null :
+        await captureSyncTarget({ db: this.d.db, scene, kind: syncKind, range, now });
+      const checkpointId = syncTarget?.checkpointId ?? null;
       const control = await this.d.db.insertControl(this.prompt(prompt), {
         sessionGroup: group, targetBinding, requireIdle: true, appendAckSuffix: true, ackDeadlineAt: Math.floor((now + (prompt === 'PRE_RECLAIM_CHECK_PROMPT' ? this.ackTimeoutMs : PRE_RECLAIM_SYNC_ACK_TIMEOUT_MS)) / 1000),
         createdAt: Math.floor(now / 1000),
       });
       if (prompt !== 'PRE_RECLAIM_CHECK_PROMPT') await this.recordSyncTrigger(scene, syncKind, ['pre_reclaim'], range, control, checkpointId);
       controlIds.push(control.id);
+      if (syncTarget) syncs.push({ target: syncTarget, prompt, range, controlId: control.id, at: now, deadline: now + PRE_RECLAIM_SYNC_ACK_TIMEOUT_MS });
     }
-    if (controlIds.length) this.ttlPreparation.set(group, { controlIds, runId: scene.runId, at: now, partial });
+    if (controlIds.length) this.ttlPreparation.set(group, { controlIds, syncs, runId: scene.runId, at: now, partial });
   }
 
   async checkEviction(scenes, context) {
@@ -735,6 +814,7 @@ export class SupervisorLifecycle {
   }
 
   async checkRotation(scene, context) {
+    if (this.d.syncMaintenance?.owns(scene)) return;
     if (scene.observationError) throw scene.observationError;
     if (!await this.allowed(scene.sessionGroup, context)) return;
     if (!scene.present || !scene.ready) return;
@@ -797,7 +877,7 @@ export class SupervisorLifecycle {
     await this.each(scenes, async scene => {
       if (scene.observationError) throw scene.observationError;
       if (!await this.allowed(scene.sessionGroup, context)) return;
-      if (!scene.present || !scene.ready) return;
+      if (!scene.present || !scene.ready || this.d.syncMaintenance?.owns(scene)) return;
       const kind = single ? 'global' : 'group';
       const range = single ? await this.d.db.getGlobalUnsummarizedRange() : await this.d.db.getUnsummarizedRange(scene.sessionGroup);
       const boundaries = single ? [scene.createdAt] : [endings.get(scene.sessionGroup), multiSince];
@@ -807,7 +887,8 @@ export class SupervisorLifecycle {
       await this.syncScope(scene, kind, { count: range.count, firstAt: range.firstAt,
         firstConversationId: range.firstConversationId, nonempty: range.count > 0, inherited }, context);
     });
-    if (modeOf(context) === 'multi' && this.allowed('origin', context)) {
+    if (modeOf(context) === 'multi' && this.allowed('origin', context) &&
+      !context.scenes.some(scene => scene.sessionGroup === 'origin' && this.d.syncMaintenance?.owns(scene))) {
       const origin = scenes.find(scene => scene.sessionGroup === 'origin' && scene.present && scene.ready);
       const originScene = { sessionGroup: 'origin', runDir: this.d.groupRunDir('origin'),
         runId: origin?.runId ?? null, sessionId: origin?.sessionId ?? null };
@@ -846,7 +927,8 @@ export class SupervisorLifecycle {
 
   async syncAlerts(context) {
     if (!this.d.syncObserver) return;
-    const alerts = await this.d.syncObserver.inspect(this.d.db, { ...context.configuration,
+    let alerts = await this.d.syncObserver.inspect(this.d.db, { ...context.configuration,
+      episodes: this.syncAlertEpisodes.entries(),
       activeScopes: context.scenes.filter(scene => scene.present || scene.observationError)
         .map(scene => modeOf(context) === 'single' ? '*' : scene.sessionGroup),
     }, async (scope, kind) => {
@@ -854,21 +936,71 @@ export class SupervisorLifecycle {
       const marker = await this.d.readSyncMarker({ runDir: scene?.runDir ?? this.d.groupRunDir(scope === '*' ? 'origin' : scope), kind, currentRunId: scene?.runId ?? null });
       return marker.held && !marker.stale;
     });
+    for (const candidate of this.syncBacklogCandidates.values()) {
+      const trigger = [...this.d.syncObserver.groups.values()].find(row => row.kind === candidate.kind && row.scope === candidate.scope);
+      const origin = candidate.kind === 'origin';
+      const startedAt = origin ? this.d.syncObserver.originTriggers[0] : trigger?.ts;
+      const scene = context.scenes.find(row => row.sessionGroup === candidate.scope);
+      const code = scene && startedAt != null ? latestSyncFailure({ env: this.d.env, scene,
+        target: { kind: candidate.kind, scope: candidate.scope }, startedAt }) : null;
+      const failed = origin ? this.d.syncObserver.originResults.at(-1)?.status === 'error' : trigger?.attempts >= 3;
+      if (code || failed) alerts.push({ ...candidate, ...(code ? { reason: code } : {}) });
+    }
+    let resolved = this.d.syncObserver.resolved ?? [];
+    if (this.d.syncMaintenance) {
+      const repairs = await this.d.syncMaintenance.advance(alerts, context, this);
+      alerts = [...repairs.alerts, ...repairs.failures];
+      resolved = [...resolved, ...(repairs.resolved ?? [])];
+    }
+    // Reclaim preparation owns its repair controls. A timeout from its first
+    // attempt must not escape as a second notification before retry completes.
+    const preparing = [...this.releasePreparation.values(), ...this.ttlPreparation.values()];
+    const ownedTimeout = alert => alert.type === 'control_timeout' && preparing.some(preparation =>
+      [...(preparation.controlIds ?? []), ...(preparation.ownControlIds ?? []), ...(preparation.settledSyncIds ?? []),
+        ...(preparation.syncs ?? []).map(sync => sync.controlId)].includes(alert.controlId));
+    for (const alert of alerts.filter(ownedTimeout)) {
+      // Its final repair verdict owns notification. Persist consumption in the
+      // same incident ledger so old control timeouts cannot reappear on reclaim.
+      this.syncAlertEpisodes.claim(alert);
+      this.d.syncObserver.acknowledged(alert);
+    }
+    alerts = alerts.filter(alert => !ownedTimeout(alert) && (alert.type !== 'state_uncommitted' ||
+      ![...this.releasePreparation, ...this.ttlPreparation].some(([scope]) => scope === alert.scope)));
+    for (const episode of this.syncAlertEpisodes.entries().filter(row => row.type === 'repair_failed')) {
+      if (episode.kind === 'global' || episode.kind === 'origin' && !episode.cursors) continue;
+      const scene = context.scenes.find(row => row.sessionGroup === episode.scope) ?? {
+        sessionGroup: episode.scope, runId: null, runDir: this.d.groupRunDir(episode.scope),
+      };
+      const proof = await observeSyncCompletion({ db: this.d.db, scene,
+        target: { kind: episode.kind, scope: episode.scope, end: episode.checkpointEnd ?? 0,
+          checkpointId: episode.checkpointId, cursors: episode.cursors },
+        readSyncMarker: this.d.readSyncMarker, env: this.d.env, requireNewCheckpoint: false });
+      if (proof.ok) resolved.push(episode);
+    }
+    const resolvedKeys = new Set(resolved.map(row => JSON.stringify([row.scope, row.kind, row.type])));
+    alerts.push(...this.syncAlertEpisodes.entries().filter(row => row.type === 'repair_failed' && !row.sent &&
+      !resolvedKeys.has(JSON.stringify([row.scope, row.kind, row.type]))));
+    const activeKeys = new Set(alerts.map(alert => JSON.stringify([alert.scope, alert.kind, alert.type])));
+    this.syncAlertEpisodes.reconcile({ active: alerts, resolved: resolved.filter(alert =>
+      !activeKeys.has(JSON.stringify([alert.scope, alert.kind, alert.type]))) });
     for (const alert of alerts) if (await this.sendSyncAlert(alert, context)) this.d.syncObserver.acknowledged(alert);
   }
 
   async sendSyncAlert(alert, context) {
-    const key = JSON.stringify([alert.type, alert.kind, alert.scope]), now = this.now();
-    if (this.syncAlertSent.has(key) && now - this.syncAlertSent.get(key) < 21600000) {
-      // Persist handled timeouts even when the current episode is rate limited.
-      if (alert.type === 'control_timeout') await this.event('sync_alert', { ...alert, suppressed: true });
-      return true;
+    this.syncAlertEpisodes.reconcile({ active: [alert] });
+    if (!await this.beforeWrite(modeOf(context) === 'single' ? null : 'origin', context)) return false;
+    if (!this.syncAlertEpisodes.available) return false;
+    if (!this.syncAlertEpisodes.claim(alert)) return true;
+    try {
+      await this.d.db.insertControl(this.prompt('SYNC_BACKLOG_ALERT', alert.kind, alert.backlog ?? 0, alert.lag ?? 0, alert.scope, alert.type, alert), {
+        sessionGroup: modeOf(context) === 'single' ? null : 'origin', appendAckSuffix: false,
+      });
+    } catch (cause) {
+      // SQLite admission failures are definite non-enqueues; an unknown result
+      // keeps its durable claim so supervisor restart cannot multiply messages.
+      if (/^(?:SQLITE_|DRAIN_|MODE_)/.test(cause.code ?? '')) this.syncAlertEpisodes.retry(alert);
+      throw cause;
     }
-    if (!await this.beforeWrite(modeOf(context) === 'single' ? null : 'origin', context)) return;
-    await this.d.db.insertControl(this.prompt('SYNC_BACKLOG_ALERT', alert.kind, alert.backlog ?? 0, alert.lag ?? 0, alert.scope, alert.type, alert), {
-      sessionGroup: modeOf(context) === 'single' ? null : 'origin', appendAckSuffix: false,
-    });
-    this.syncAlertSent.set(key, now);
     await this.event('sync_alert', alert);
     return true;
   }
@@ -912,8 +1044,14 @@ export class SupervisorLifecycle {
     const lag = range.firstAt === null || range.firstAt === undefined ? 0 : Math.max(0, now - activityTime(range.firstAt));
     const alertLag = kind === 'origin' ? (range.alertFirstAt === null || range.alertFirstAt === undefined ? 0 : Math.max(0, now - activityTime(range.alertFirstAt))) : lag;
     const alert = kind !== 'origin' && range.count > 4 * (config.syncBatchLimit ?? 200) || alertLag > 2 * max;
-    if (alert) await this.sendSyncAlert({ type: 'backlog', kind,
-      scope: kind === 'global' ? '*' : scene.sessionGroup, backlog: range.count, lag: Math.floor(alertLag / 1000) }, context);
+    const alertScope = kind === 'global' ? '*' : scene.sessionGroup;
+    const backlogKey = JSON.stringify([kind, alertScope]);
+    if (alert) this.syncBacklogCandidates.set(backlogKey, { type: 'backlog', kind, scope: alertScope,
+      backlog: range.count, lag: Math.floor(alertLag / 1000) });
+    else {
+      this.syncBacklogCandidates.delete(backlogKey);
+      this.syncAlertEpisodes.reconcile({ resolved: [{ type: 'backlog', kind, scope: alertScope }] });
+    }
     const previous = this.syncProgress.get(key);
     const catchingUp = kind !== 'origin' && !this.ttlPreparation.has(scene.sessionGroup) &&
       previous?.n0 > (config.syncBatchLimit ?? 200) && previous.runId === scene.runId &&

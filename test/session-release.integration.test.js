@@ -9,7 +9,8 @@ import { readyTmuxTarget } from './helpers/ready-tmux-target.js';
 
 // Boundary: real requestRelease client/socket -> startSupervisor admission and
 // lifecycle -> real C4 SQLite ending/slot transaction and run-guarded tmux stop.
-// CHECK and Sync execution use the real claim/ack APIs; no model, channel
+// CHECK and Sync execution use the real claim/ack APIs; Sync also runs the
+// protected acquire/checkpoint/state commit/release scripts. No model, channel
 // send, PM2 service or authenticated runtime is started. Cold incoming demand is
 // checked through actual C4 group routing and slot admission, not model launch.
 // Busy state represents the requester's current tool turn; the accepted intent

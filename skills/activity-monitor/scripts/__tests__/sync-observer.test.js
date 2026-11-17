@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { SyncObserver } from '../sync-observer.js';
+import { SyncAlertEpisodes } from '../sync-alert-episodes.js';
 import { appendEvent, rotateEventLog } from '../../../../cli/lib/event-log.js';
 import { supervisorDiagnosticPath } from '../../../../cli/lib/session-group-paths.js';
 import { renderStateSkeleton } from '../../../zylos-memory/scripts/state-format.js';
@@ -115,21 +116,22 @@ test('failed recovery observation retries retained evidence on the next poll', a
 
 // Run for timeout recovery/acknowledgment changes; skip unrelated UI or prompts.
 // These cases use the fixture's private event log and in-memory database only.
-test('restart does not replay delivered or rate limited timeout alerts but retains new failures', async t => {
+test('durable episode claims replace log-based timeout acknowledgments across restart', async t => {
   const f = fixture(t);
-  for (const [controlId, suppressed] of [[1, false], [2, true]]) {
-    f.trigger({ controlId }); f.controls.set(controlId, { status: 'timeout' });
-    f.event({ event: 'sync_alert', type: 'control_timeout', kind: 'group', scope: 'origin', controlId, suppressed });
-  }
-  let observer = f.create();
-  assert.equal((await f.inspect(observer)).filter(row => row.type === 'control_timeout').length, 0);
-  observer.close(); observer = f.create();
-  assert.equal((await f.inspect(observer)).filter(row => row.type === 'control_timeout').length, 0);
+  const createStore = () => new SyncAlertEpisodes({ env: f.env, now: f.now });
+  let store = createStore(), observer = f.create();
+  f.trigger({ controlId: 1 }); f.controls.set(1, { status: 'timeout' });
+  const alerts = await f.inspect(observer);
+  const timeout = alerts.find(row => row.type === 'control_timeout');
+  assert.equal(store.claim(timeout), true);
+  observer.acknowledged(timeout);
+  observer.close(); observer = f.create(); store = createStore();
+  assert.equal(store.reconcile({ active: await f.inspect(observer) }).filter(row => row.type === 'control_timeout').length, 0);
   f.trigger({ controlId: 3 }); f.controls.set(3, { status: 'timeout' });
-  assert.equal((await f.inspect(observer)).find(row => row.type === 'control_timeout').controlId, 3);
+  assert.equal(store.reconcile({ active: await f.inspect(observer) }).find(row => row.type === 'control_timeout').controlId, 3);
   // A lower-ID control may finish later; an ID watermark must not hide it.
   f.trigger({ controlId: 0 }); f.controls.set(0, { status: 'timeout' });
-  assert.ok((await f.inspect(observer)).some(row => row.type === 'control_timeout' && row.controlId === 0));
+  assert.ok(store.reconcile({ active: await f.inspect(observer) }).some(row => row.type === 'control_timeout' && row.controlId === 0));
 });
 
 test('maximum lag alerts only for scopes without a live session', async t => {
@@ -137,4 +139,65 @@ test('maximum lag alerts only for scopes without a live session', async t => {
   for (const scope of f.scopes) f.ranges.set(scope, { count: 1, firstAt: f.now() - 21600001 });
   const alerts = await observer.inspect(f.db, { mode: 'multi', activeScopes: ['active'] });
   assert.deepEqual(alerts.map(row => [row.type, row.scope]), [['backlog', 'inactive']]);
+});
+
+// Real diagnostic reader, episode file and state parser in private fixture roots.
+// Run for alert recovery/resolution changes; skip unrelated UI or prompts.
+test('missing trigger evidence never resolves a persisted no-checkpoint episode', async t => {
+  const f = fixture(t), store = new SyncAlertEpisodes({ env: f.env, now: f.now });
+  const alert = { type: 'no_checkpoint', kind: 'group', scope: 'origin', checkpointId: 3 };
+  assert.equal(store.claim(alert), true);
+  f.advance(9 * 86400000);
+  const observer = f.create();
+  f.checkpoints.set('origin', { id: 3 });
+  await observer.inspect(f.db, { mode: 'multi', episodes: store.entries() });
+  store.reconcile({ resolved: observer.resolved });
+  assert.equal(store.claim(alert), false);
+  f.checkpoints.delete('origin');
+  await observer.inspect(f.db, { mode: 'multi', episodes: store.entries() });
+  assert.equal(observer.resolved.some(row => row.type === 'no_checkpoint'), false);
+  f.checkpoints.set('origin', { id: 4 });
+  await observer.inspect(f.db, { mode: 'multi', episodes: store.entries() });
+  store.reconcile({ resolved: observer.resolved });
+  assert.equal(store.claim({ ...alert, checkpointId: 4 }), true);
+});
+
+test('backlog and state episodes require observed progress rather than a live session or held marker', async t => {
+  const f = fixture(t), observer = f.create(); f.scopes = ['origin'];
+  f.ranges.set('origin', { count: 900, firstAt: f.now() - 21600001 });
+  f.checkpoints.set('origin', { id: 3, end_conversation_id: 20 });
+  await observer.inspect(f.db, { mode: 'multi', activeScopes: ['origin'] }, () => true);
+  assert.equal(observer.resolved.some(row => ['backlog', 'state_uncommitted'].includes(row.type)), false);
+  f.ranges.set('origin', { count: 1, firstAt: f.now() });
+  await f.inspect(observer);
+  assert.equal(observer.resolved.some(row => row.type === 'backlog'), true);
+  assert.equal(observer.resolved.some(row => row.type === 'state_uncommitted'), false);
+  const dir = path.join(f.root, 'memory/session-groups/origin'); fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'state.md'), renderStateSkeleton({ scope: 'origin', syncedAt: '2026-11-17T00:00:00Z' }).replace('coverage= |', 'coverage=20 |'));
+  await observer.inspect(f.db, { mode: 'multi' }, () => true);
+  assert.equal(observer.resolved.some(row => row.type === 'state_uncommitted'), true);
+});
+
+test('Origin frequency and idle episodes resolve only when their observed windows recover', async t => {
+  const f = fixture(t), observer = f.create();
+  for (let i = 0; i < 5; i++) f.trigger({ kind: 'origin' });
+  for (let i = 0; i < 10; i++) f.event({ event: 'sync_result', kind: 'origin', action: 'round_complete', processedCount: 0, advancedGroups: 0 });
+  await f.inspect(observer);
+  assert.equal(observer.resolved.some(row => row.type.startsWith('origin_')), false);
+  f.advance(3600001);
+  for (let i = 0; i < 5; i++) f.event({ event: 'sync_result', kind: 'origin', action: 'round_complete', processedCount: 1, advancedGroups: 1 });
+  await f.inspect(observer);
+  assert.deepEqual(observer.resolved.filter(row => row.type.startsWith('origin_')).map(row => row.type), ['origin_frequency', 'origin_idle']);
+});
+
+test('old handled timeout controls stay suppressed without a diagnostic-log recovery cutoff', async t => {
+  const f = fixture(t);
+  f.trigger({ controlId: 10 }); f.controls.set(10, { status: 'timeout' });
+  f.trigger({ controlId: 9 }); f.controls.set(9, { status: 'timeout' });
+  const handled = { type: 'control_timeout', kind: 'group', scope: 'origin', controlId: 10 };
+  assert.equal(new SyncAlertEpisodes({ env: f.env }).claim(handled), true);
+  f.advance(9 * 86400000);
+  const store = new SyncAlertEpisodes({ env: f.env }), observer = f.create();
+  const alerts = store.reconcile({ active: await f.inspect(observer), resolved: observer.resolved });
+  assert.deepEqual(alerts.filter(row => row.type === 'control_timeout').map(row => row.controlId), [9]);
 });

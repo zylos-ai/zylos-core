@@ -12,17 +12,10 @@ export class SyncObserver {
     this.env = env; this.now = now;
     this.reader = new EventLogReader(supervisorDiagnosticPath(env), { warn });
     this.started = false; this.groups = new Map(); this.originTriggers = [];
-    this.originResults = []; this.controls = new Map(); this.timeoutAlerts = new Map();
+    this.originResults = []; this.controls = new Map(); this.resolved = [];
   }
   close() { this.reader.close(); }
   consume(row) {
-    if (row.event === 'sync_alert' && row.type === 'control_timeout') {
-      // Recover exact handled IDs within log retention: older pending controls
-      // may time out later, so a monotonically increasing watermark is unsafe.
-      this.timeoutAlerts.set(row.controlId, row.ts);
-      for (const [id, ts] of this.timeoutAlerts) if (ts < this.now() - 7 * 86400000) this.timeoutAlerts.delete(id);
-      this.controls.delete(row.controlId);
-    }
     if (row.event === 'sync_triggered') {
       if (row.kind === 'origin') {
         this.originTriggers.push(row.ts);
@@ -45,13 +38,11 @@ export class SyncObserver {
       // matter; reverse recovery keeps memory bounded per scope.
       const triggers = new Map(), results = [], timeouts = new Map(), pending = new Map();
       try { this.reader.recoverTail(row => {
-        if (row.ts < this.now() - 7 * 86400000) return { done: true };
-        if (row.event === 'sync_alert' && row.type === 'control_timeout') this.consume(row);
         if (row.event === 'sync_triggered') {
           const key = JSON.stringify([row.kind, row.scope]);
           if (Number.isSafeInteger(row.controlId)) {
             const control = db.getControlById(row.controlId);
-            if (control?.status === 'timeout' && !this.timeoutAlerts.has(row.controlId) && !timeouts.has(key)) timeouts.set(key, row);
+            if (control?.status === 'timeout') timeouts.set(row.controlId, row);
             if (control && !['done', 'timeout', 'failed', 'cancelled', 'superseded'].includes(control.status)) pending.set(row.controlId, row);
           }
           const rows = triggers.get(key) ?? [];
@@ -66,26 +57,35 @@ export class SyncObserver {
       for (const row of [...triggers.values()].flat().concat(results).sort((a, b) => a.ts - b.ts)) this.consume(row);
       // Timeout evidence is independent of the last-three trigger window.
       this.controls = pending;
-      for (const row of timeouts.values()) if (!this.timeoutAlerts.has(row.controlId)) this.controls.set(row.controlId, row);
+      for (const row of timeouts.values()) this.controls.set(row.controlId, row);
     } else for (const row of this.reader.read()) this.consume(row);
   }
   acknowledged(alert) { if (alert.type === 'control_timeout') this.controls.delete(alert.controlId); }
-  async inspect(db, { mode, syncMaxIntervalSeconds = 21600, activeScopes = [] }, markerHeld = async () => false) {
+  async inspect(db, { mode, syncMaxIntervalSeconds = 21600, activeScopes = [], episodes = [], syncBatchLimit = 200 }, markerHeld = async () => false) {
     this.read(db);
     const alerts = [], now = this.now();
+    this.resolved = [];
+    // A durable open episode survives loss of its trigger log. Only a newer
+    // checkpoint resolves it, including after supervisor/log rotation restarts.
+    for (const episode of episodes.filter(row => row.type === 'no_checkpoint')) {
+      const checkpoint = await db.getLatestContentCheckpoint(episode.scope);
+      if (checkpoint && checkpoint.id > (episode.checkpointId ?? 0)) this.resolved.push(episode);
+    }
     for (const [key, row] of this.groups) {
       const checkpoint = await db.getLatestContentCheckpoint(row.scope);
-      if ((checkpoint?.id ?? null) !== row.checkpointId) { this.groups.delete(key); continue; }
-      if (row.attempts >= 3) alerts.push({ type: 'no_checkpoint', kind: row.kind, scope: row.scope, attempts: row.attempts });
+      if (checkpoint && checkpoint.id > (row.checkpointId ?? 0)) { this.groups.delete(key); this.resolved.push({ type: 'no_checkpoint', kind: row.kind, scope: row.scope }); continue; }
+      if (row.attempts >= 3) alerts.push({ type: 'no_checkpoint', kind: row.kind, scope: row.scope, attempts: row.attempts, checkpointId: row.checkpointId });
     }
     this.originTriggers = this.originTriggers.filter(ts => ts >= now - 3600000);
     if (this.originTriggers.length > 4) alerts.push({ type: 'origin_frequency', kind: 'origin', scope: 'origin', count: this.originTriggers.length });
+    else this.resolved.push({ type: 'origin_frequency', kind: 'origin', scope: 'origin' });
     if (this.originResults.length === 10 && this.originResults.filter(row => row.processedCount === 0 && row.advancedGroups === 0).length > 5) {
       alerts.push({ type: 'origin_idle', kind: 'origin', scope: 'origin', empty: this.originResults.filter(row => row.processedCount === 0 && row.advancedGroups === 0).length, rounds: 10 });
     }
+    else if (this.originResults.length === 10) this.resolved.push({ type: 'origin_idle', kind: 'origin', scope: 'origin' });
     for (const [id, row] of this.controls) {
       const control = await db.getControlById(id);
-      if (control?.status === 'timeout' && !this.timeoutAlerts.has(id)) alerts.push({ type: 'control_timeout', kind: row.kind, scope: row.scope, controlId: id });
+      if (control?.status === 'timeout') alerts.push({ type: 'control_timeout', kind: row.kind, scope: row.scope, controlId: id });
       if (!control || ['done', 'failed', 'cancelled', 'superseded'].includes(control.status)) this.controls.delete(id);
     }
     const scopes = mode === 'single' ? ['*'] : (await db.listGroupHeads()).map(row => row.sessionGroup);
@@ -96,13 +96,19 @@ export class SyncObserver {
       if (!activeScopes.includes(scope) && range.count > 0 && first !== null && now - first > syncMaxIntervalSeconds * 1000) {
         alerts.push({ type: 'backlog', kind, scope, backlog: range.count, lag: Math.floor((now - first) / 1000) });
       }
+      const resolvedLag = activeScopes.includes(scope) ? 2 * syncMaxIntervalSeconds : syncMaxIntervalSeconds;
+      if (range.count === 0 || (range.count <= 4 * syncBatchLimit && first !== null && now - first <= resolvedLag * 1000)) {
+        this.resolved.push({ type: 'backlog', kind, scope });
+      }
       const checkpoint = await db.getLatestContentCheckpoint(scope);
-      if (!checkpoint || await markerHeld(scope, kind)) continue;
+      if (!checkpoint) continue;
       const state = scope === '*' ? path.join(zylosRoot(this.env), 'memory', 'state.md') : path.join(groupMemoryDir(scope, this.env), 'state.md');
       let text;
       try { text = fs.readFileSync(state, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; text = ''; }
       const header = parseStateHeader(text, { scope });
-      if (!header.valid || (header.coverage ?? 0) < checkpoint.end_conversation_id) {
+      if (header.valid && (header.coverage ?? 0) >= checkpoint.end_conversation_id) {
+        this.resolved.push({ type: 'state_uncommitted', kind, scope });
+      } else if (!await markerHeld(scope, kind)) {
         alerts.push({ type: 'state_uncommitted', kind, scope, checkpointId: checkpoint.id, coverage: header.coverage, checkpointEnd: checkpoint.end_conversation_id });
       }
     }

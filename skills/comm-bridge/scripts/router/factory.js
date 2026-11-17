@@ -7,6 +7,7 @@ const { readReadyIdentity } = await loadCoreModule('runtime/session-target.js');
 const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
 const { listGroupTmuxSessions } = await loadCoreModule('session-group-paths.js');
 const { readPoolCapacity } = await loadCoreModule('session-pool-config.js');
+const { createMaintenanceRequests } = await loadCoreModule('sync-maintenance.js');
 import { createRouter } from './scheduler.js';
 import { createDelivery } from './delivery.js';
 import { formatConversation } from './format.js';
@@ -67,6 +68,7 @@ export function createDispatcher(overrides = {}, options = {}) {
     })().catch(log);
   };
   const providers = {
+    ...createMaintenanceRequests({ env, now }),
     db, readSessionMode, ...reader, readCurrentSession: readReadyIdentity,
     listGroupTmuxSessions: () => listGroupTmuxSessions(tmux), readRuntimeHealth,
     getSessionAdapter: runtime => getSessionAdapter(runtime, { tmux }), submit,
