@@ -19,7 +19,7 @@ export function createObserverTargets({ load = loadCoreModule } = {}) {
     try { identity = await readLiveIdentity(group); } catch { throw unavailable(); }
     const expectedName = paths.tmuxNameForGroup(group ?? 'origin');
     if (!identity?.present || !identity.ready || !identity.runId ||
-        !['claude', 'codex'].includes(identity.runtime) || identity.tmuxName !== expectedName) throw unavailable();
+        !['claude', 'codex', 'agy'].includes(identity.runtime) || identity.tmuxName !== expectedName) throw unavailable();
     return { sessionMode, sessionGroup: group, tmuxName: identity.tmuxName, runId: identity.runId, runtime: identity.runtime };
   };
   return { mode, resolve };
@@ -31,7 +31,7 @@ export function sameObserverTarget(left, right) {
 }
 
 export async function validObserverBinding(binding, target, runId) {
-  if (!binding || !['claude', 'codex'].includes(binding.runtime) || typeof binding.runId !== 'string' || !binding.runId ||
+  if (!binding || !['claude', 'codex', 'agy'].includes(binding.runtime) || typeof binding.runId !== 'string' || !binding.runId ||
       binding.runId !== runId || binding.tmuxName !== target) return false;
   if (binding.sessionMode === 'single') return binding.sessionGroup === null && target === 'zylos-group-origin';
   if (binding.sessionMode !== 'multi' || typeof binding.sessionGroup !== 'string') return false;

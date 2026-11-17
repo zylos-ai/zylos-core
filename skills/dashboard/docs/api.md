@@ -72,7 +72,7 @@ For a local fallback, see [`zylos status --json`](../../../docs/status-json.md),
 
 **Access:** Public. **Parameters:** none.
 
-Returns `ok:boolean` (true), `service:string` (`zylos-dashboard`) and `bootId:string` (unique to this Dashboard process). Authenticated callers additionally receive `startedAt:string`, `uptimeSeconds:number`, `event_loop:object` (event-loop diagnostics) and `source:object` (Core source health). The source object contains `runtime_progress` (JSONL usage), `collector_liveness` (PM2, system, conversation and supervisor heartbeat), and an empty `platform` object. Legacy statusline health entries are omitted even when their database rows remain. Response varies by `Cookie` and `Authorization`. HTTP 200 means this HTTP service is alive; it does not establish runtime readiness.
+Returns `ok:boolean` (true), `service:string` (`zylos-dashboard`) and `bootId:string` (unique to this Dashboard process). Authenticated callers additionally receive `startedAt:string`, `uptimeSeconds:number`, `event_loop:object` (event-loop diagnostics) and `source:object` (Core source health). The source object contains `runtime_progress` (JSONL usage; Antigravity reports `fresh:false`, `age_s:null`, `status:"unsupported"`, `capability:"unsupported"`, `reason:"unsupported"`, `detail:"Not supported for this runtime"` because usage collection is not integrated), `collector_liveness` (PM2, system, conversation and supervisor heartbeat), and an empty `platform` object. Legacy statusline health entries are omitted even when their database rows remain. Response varies by `Cookie` and `Authorization`. HTTP 200 means this HTTP service is alive; it does not establish runtime readiness.
 
 **Errors:** 404 `not_found` for the retired `probe` query. Readiness is available only at `/api/health/ready`.
 
@@ -82,11 +82,11 @@ Example: `GET /api/health` → `{"ok":true,"service":"zylos-dashboard","bootId":
 
 **Access:** Public. **Parameters:** none.
 
-Returns `ready:boolean`, `reason:string|null`, `session_mode:"single"|"multi"|null`, `session_running:boolean|null`, and `runtime_health:object` keyed by runtime. Each runtime entry has `source:"record"|"missing"|"unreadable"` and `health:string|null`. A responsive supervisor establishes readiness unless the single-mode session is confirmed absent. Runtime health is diagnostic, not an admission gate.
+Returns `ready:boolean`, `reason:string|null`, `session_mode:"single"|"multi"|null`, `session_running:boolean|null`, and `runtime_health:object` keyed by `claude`, `codex` and `agy`. Each runtime entry has `source:"record"|"missing"|"unreadable"` and `health:string|null`. A responsive supervisor establishes readiness unless the single-mode session is confirmed absent. Runtime health is diagnostic, not an admission gate.
 
 **Errors:** HTTP 503 with `{ok:false,error:{code,message},...readiness}` when `ready:false`; `reason` is `supervisor_unavailable` or `session_not_running`. Unavailable observations remain null.
 
-Example: `GET /api/health/ready` → `{"ok":false,"error":{"code":"supervisor_unavailable","message":"supervisor_unavailable"},"ready":false,"reason":"supervisor_unavailable","session_mode":"multi","session_running":null,"runtime_health":{"claude":{"source":"missing","health":null},"codex":{"source":"missing","health":null}}}`.
+Example: `GET /api/health/ready` → `{"ok":false,"error":{"code":"supervisor_unavailable","message":"supervisor_unavailable"},"ready":false,"reason":"supervisor_unavailable","session_mode":"multi","session_running":null,"runtime_health":{"claude":{"source":"missing","health":null},"codex":{"source":"missing","health":null},"agy":{"source":"missing","health":null}}}`.
 
 ## Instance
 
@@ -101,13 +101,15 @@ Example: `GET /api/health/ready` → `{"ok":false,"error":{"code":"supervisor_un
 | `session_mode` | object | Core mode and transition state, described below |
 | `default_runtime` | string | Configured default runtime |
 | `defaults` | object | Runtime-keyed default objects described below |
-| `versions` | object | Runtime-keyed `zylos`, `claude`, `codex` objects: `{installed:string\|null,latest:string\|null,update:string\|null}`; `update` identifies an available newer version |
+| `versions` | object | Runtime-keyed `zylos`, `claude`, `codex`, `agy` objects: `{installed:string\|null,latest:string\|null,update:string\|null}`; `update` identifies an available newer version |
 | `runtimeHealth` | object / null | Runtime-keyed health observations, including health and cooldown evidence |
 | `accounts` | object / null | Runtime-keyed weekly account quota objects or null; observations include used percentage, reset time, `recordedAt` and `live` |
 | `supervisorPaused` | boolean / null | Whether new supervisor actions are paused |
 | `autoRestarts` | object / null | `{count:number}` automatic restarts recorded during the past hour |
 | `resources` | object | One current resource sample: `scope:"host"\|"container"\|"mixed"`, `sampledAt:string\|null` (ISO), `cpu_pct:number\|null`, `cpu_count:number\|null`, `cpu_source:"container"\|"host"`, `mem_pct:number\|null`, `mem_used_bytes:number\|null`, `mem_total_bytes:number\|null`, `mem_source:"container"\|"host"`, `disk_pct:number\|null`, `disk_free_bytes:number\|null`, `disk_total_bytes:number\|null` |
 | `services` | object / null | PM2 counts `online:number`, `total:number`, plus `channels:Array<{channel:string,service:string,status:string\|null,restarts10m:number,lastSendFailed:boolean\|null,consecutiveFailures:number\|null}>`. Channels come from installed skill frontmatter `type: communication` and `lifecycle.service.name`, and must exist in the PM2 sample. `restarts10m` sums observed counter increases in the last ten minutes, beginning at zero on Dashboard startup. Send fields describe the latest C4 outbound status and failures after the latest successful outbound; null means the C4 read failed. |
+
+The `defaults` keys are `claude`, `codex` and `agy`. Antigravity has no configurable model/effort override, so its default `model` and `effort` are null. Its rotation threshold follows the one-million-token policy (40% maximum). Installed Antigravity versions come from `agy --version`; unavailable versions are null and latest/update remain null until update discovery supports this runtime.
 
 Each `defaults[runtime]` contains `model:string|null`, `effort:string|null`, `threshold:number`, `model_thresholds:Record<string,number>` and `session_hot_ttl:object` (effective mode, keepalive seconds and configuration/environment provenance). CPU and memory limits are resolved independently: a limited resource uses its container quota, while an explicitly unlimited resource uses host values and labels that resource’s source `host`. `scope` is `mixed` when the two sources differ, otherwise it is their common source; each resource’s source remains authoritative. An unreadable container limit keeps that resource’s source `container` with unknown measurements rather than implying unlimited host fallback. CPU percentages use the selected CPU capacity (which can be fractional); memory percentages use the selected total bytes. Disk describes the filesystem visible at the instance data directory and is independent of the CPU/memory scope. Unreadable observations remain null. There is no duplicate `system` sample or `runtime_info` object. Origin’s current model, effort, running CLI version and restart-to-apply status belong to group detail; instance versions and defaults describe installed software and configuration. Session context, cost and pool counts belong to the group and usage APIs.
 
@@ -145,9 +147,9 @@ Example: `GET /api/instance/resources?range=24h`.
 
 ### GET /api/instance/runtime-options
 
-**Access:** Read. **Parameters:** `runtime=claude|codex` (default active runtime), optional `model` to include its threshold metadata.
+**Access:** Read. **Parameters:** `runtime=claude|codex|agy` (default active runtime), optional `model` to include its threshold metadata.
 
-Returns `runtime:string`, `current_model:string|null`, `current_effort:string|null`, `models:Array<{id:string,display_name?:string}>`, `efforts_by_model:Record<string,string[]>`, `model_thresholds:Record<string,number>`, `model_threshold_max:Record<string,number>`, `new_session_threshold:number`, `session_hot_ttl:object`, `zylos_version:string`, `runtime_cli:string`, and `cc_version:string|null`. Empty effort options mean capabilities are unknown or the model does not expose effort selection. Threshold values and maxima are percentages. These are configured defaults and available choices, not Origin runtime observations; the response never includes running_model or running_effort and does not collect Origin session evidence.
+Returns `runtime:string`, `current_model:string|null`, `current_effort:string|null`, `models:Array<{id:string,display_name?:string}>`, `efforts_by_model:Record<string,string[]>`, `model_thresholds:Record<string,number>`, `model_threshold_max:Record<string,number>`, `new_session_threshold:number`, `session_hot_ttl:object`, `zylos_version:string`, `runtime_cli:string`, and `cc_version:string|null`. For Antigravity, `current_model` and `current_effort` are null, `models` is empty and `efforts_by_model` is empty because this integration does not support model/effort overrides. `cc_version` carries the selected runtime's installed CLI version, including Antigravity; it is null when unavailable. Empty effort options mean capabilities are unknown or the model does not expose effort selection. Threshold values and maxima are percentages. These are configured defaults and available choices, not Origin runtime observations; the response never includes running_model or running_effort and does not collect Origin session evidence.
 
 **Errors:** 400 `INVALID_RUNTIME`; common read errors.
 
@@ -436,7 +438,7 @@ Example: `DELETE /api/groups/telegram%3Aexample/name`.
 
 **Access:** Read. **Parameters:** optional `q:string` (name/address search), `after:string` (Core's opaque pagination boundary).
 
-Returns `runtime:Array<{sessionGroup:string,runtime:string,name:object|null}>`, `nextAfter:string|null`, and `runtimeTotal:number` when querying the unfiltered list. Search results need not include a total. Only explicit runtime overrides are listed.
+Returns `runtime:Array<{sessionGroup:string,runtime:string,name:object|null}>`, `nextAfter:string|null`, and `runtimeTotal:number` when querying the unfiltered list. Search results need not include a total. Only explicit runtime overrides are listed; row `runtime` is `claude`, `codex` or `agy`.
 
 **Errors:** 502 `override_list_failed`; common read errors.
 
@@ -659,7 +661,7 @@ Chat validation uses HTTP 400 (`invalid_chat_parameters`, invalid conversation/c
 | `POST /api/observer/enable` | Enables installed observer; returns `{ok:true,...publicStatus}`. Example body: `{}`. |
 | `POST /api/observer/disable` | Revokes leases/streams, disables observer; returns `{ok:true,...publicStatus}`. Example body: `{}`. |
 | `DELETE /api/observer/install` | Uninstalls and revokes access; returns `{ok:true,...publicStatus}`. Example: `DELETE /api/observer/install`. |
-| `POST /api/observer/leases` | Optional JSON `{sessionGroup}`; returns `{ok:true,...lease}` (201). The lease binds identity and target. Example body: `{"sessionGroup":"origin"}`. |
+| `POST /api/observer/leases` | Optional JSON `{sessionGroup}`; returns `{ok:true,...lease}` (201). The lease binds identity and target. Managed Origin/group targets support `claude`, `codex` and `agy` with the same validated tmux target and run identity checks. Example body: `{"sessionGroup":"origin"}`. |
 | `POST /api/observer/leases/:id/renew` | Renews the same principal's lease → `{ok:true,...lease}`. Example: `POST /api/observer/leases/<id>/renew`. |
 | `POST /api/observer/leases/:id/release` | Releases owned lease → `{ok:true,released:true}`; missing owned lease is idempotent. Example: `POST /api/observer/leases/<id>/release`. |
 | `GET /observer/frame` | HTML terminal frame; `X-Observer-Lease` header required. HEAD is supported. Example: `GET /observer/frame` with lease header. |
@@ -668,6 +670,8 @@ Chat validation uses HTTP 400 (`invalid_chat_parameters`, invalid conversation/c
 | `GET /api/observer/history/entries` | Same group, required `session`, optional `before|after|around`, `limit=1..200`, `internal=0|1` → entries, updates and older/newer cursors. Example: `GET /api/observer/history/entries?session_group=origin&session=<id>`. |
 | `GET /api/observer/history/content` | Same group, required `session,entry,field`, optional text `offset` → UTF-16 text chunk `{text,offset,next,total}` or binary bytes. Example: `GET /api/observer/history/content?session_group=origin&session=<id>&entry=o:0&field=text`. |
 | `GET /api/observer/history/search` | Same group, required `session,q` (2–200 chars), optional `limit=1..200`, `before` and `internal=1` to include internal entries → `{matches:Array<{entry,snippet}>,before,hasMore}`. Example: `GET /api/observer/history/search?session_group=origin&session=<id>&q=hello`. |
+
+Antigravity scopes return `{runtime:"agy",current:null,sessions:[]}` because native transcript reading and collection are not integrated. Requests for an unavailable native session retain HTTP 404 `session_not_found`; they never fall back to Claude history.
 
 All four history routes use the same selected group. In single mode only Origin is valid; selecting any non-Origin group returns HTTP 400 `invalid_session_group` from group-detail validation, including groups that have readable history in multi mode. History supports offline groups through imported runtime-event attribution and transcript files, without acquiring a live terminal lease. A session outside the selected group returns 404. Missing/disabled observer history returns 404; invalid group/target/cursor/size returns 400; state conflicts return 409; inaccessible dependencies return 503. Rejected `/observer/stream` upgrades use the common JSON error envelope (including 401 `unauthorized`, 403 `same_origin_required` and 404 `not_found`); terminal stream failures close the connection after upgrade.
 

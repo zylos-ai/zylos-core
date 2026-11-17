@@ -77,7 +77,7 @@ test('health projection preserves known states and excludes every other record f
   for (const health of ['ok', 'auth_failed', 'rate_limited', 'unavailable', 'down', 'recovering']) {
     const result = await readReadiness(fixture({ health: { health, pid: 123, reason: '/private/path', runId: 'secret-run', hook: { tool: 'private-tool' } } }));
     assert.equal(result.ready, true);
-    assert.deepEqual(result.runtime_health, { claude: { source: 'record', health }, codex: { source: 'record', health } });
+    assert.deepEqual(result.runtime_health, { claude: { source: 'record', health }, codex: { source: 'record', health }, agy: { source: 'record', health } });
     assert.deepEqual(Object.keys(result).sort(), ['ready', 'reason', 'runtime_health', 'session_mode', 'session_running']);
     assert.doesNotMatch(JSON.stringify(result), /private|secret|pid|hook|tool|runId/);
   }
@@ -128,7 +128,7 @@ test('unreadable mode with an absent session remains ready without inspecting id
   assert.equal(f.calls.includes('identity'), false);
 });
 
-test('reader module loading failure retains both public runtime health entries', async () => {
+test('reader module loading failure retains all public runtime health entries', async () => {
   const f = fixture();
   const original = f.load;
   f.load = async name => {
@@ -140,6 +140,25 @@ test('reader module loading failure retains both public runtime health entries',
   assert.equal(result.reason, null);
   assert.equal(result.session_running, null);
   assert.deepEqual(result.runtime_health, {
-    claude: { source: 'unreadable', health: null }, codex: { source: 'unreadable', health: null },
+    claude: { source: 'unreadable', health: null }, codex: { source: 'unreadable', health: null }, agy: { source: 'unreadable', health: null },
   });
+});
+
+test('agy runtime health is read independently from Claude and Codex diagnostics', async () => {
+  const f = fixture();
+  const original = f.load;
+  const calls = [];
+  f.load = async name => name === 'session-state-reader.js' ? {
+    readLiveIdentity: async () => ({ present: true }),
+    readRuntimeHealth: async runtime => {
+      calls.push(runtime);
+      return runtime === 'agy' ? { health: 'auth_failed' } : { missing: true };
+    },
+  } : original(name);
+  const result = await readReadiness(f);
+  assert.equal(result.ready, true);
+  assert.deepEqual(calls, ['claude', 'codex', 'agy']);
+  assert.deepEqual(result.runtime_health.agy, { source: 'record', health: 'auth_failed' });
+  assert.deepEqual(result.runtime_health.claude, { source: 'missing', health: null });
+  assert.deepEqual(result.runtime_health.codex, { source: 'missing', health: null });
 });
