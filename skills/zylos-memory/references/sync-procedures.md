@@ -25,7 +25,7 @@ into a command. Group names come only from the inherited session binding.
 ## Common completion and failure rules
 
 Acquire with `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-lock.js acquire --kind <group|origin|global>`; retain the
-printed token T. An acquire exit 2 is a normal no-op only when stderr's first
+printed token T. `edit_memory` calls cannot read shell variables or files; the `token` field must contain the literal token printed by acquire. An acquire exit 2 is a normal no-op only when stderr's first
 line says `Error [SYNC_BUSY]`. `LOCK_TIMEOUT` is a failure. On any acquire
 failure, do not release because no token was acquired.
 
@@ -51,7 +51,7 @@ These attempts do not fail the required step or release its token:
   a unique expected fragment.
 - `EXISTS`: for a single-file create/archive/unarchive collision, reread the
   existing pages and choose another name or merge through the permitted writer.
-- `STATE_DOCUMENT_INVALID`: correct the token-named temporary state through
+- `STATE_DOCUMENT_INVALID`: correct `state.md.tmp` through
   `edit_memory`, then retry commit; the formal state has not been replaced.
 
 This allowance applies only where validation rejected the operation before
@@ -112,8 +112,9 @@ from the target (paths are relative to memory):
 ```
 
 Do not call a shell writer for this edit. The same token is required when
-creating the temporary state with `{"op":"create","path":"state.md.T.tmp","replacement":"<complete state document>","token":"T"}`;
-Group Sync uses `session-groups/G/state.md.T.tmp` instead.
+creating the temporary state with `{"op":"create","path":"state.md.tmp","replacement":"<complete state document>","token":"T"}`.
+For Group and Global Sync, the tool maps this fixed name to the current scope's
+token-named temporary file automatically; no group or token substitution in the path is needed.
 
 Use the restricted tool name discovered and passed by the parent (Claude:
 `mcp__zylos-memory__edit_memory`; Codex: `mcp__zylos_memory__edit_memory`). If
@@ -223,7 +224,7 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
    `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js checkpoint <batch-end> --token T --batch '<receipt JSON>'`.
    Checkpoint recomputes and verifies the receipt against the database rows.
    Only after success, use `edit_memory` to create/edit
-   `session-groups/G/state.md.T.tmp` relative to memory. Then send JSON
+   `state.md.tmp`; the tool selects this scope's token-named temporary file. Then send JSON
    `{"followedUpIds":[],"batch":<receipt>,"inputs":<complete list object>}`
    on stdin to `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js commit --token T`, replacing the empty array only
    with proven followed-up IDs. Commit verifies the batch, checkpoint coverage,
@@ -414,7 +415,7 @@ state, commit, and failure sequence, with these differences:
   do not block checkpoint.
 - After a substantive identity write, request rotation. Failure is reported
   but checkpoint/state/release still proceed; do not claim it will retry itself.
-- The temporary file is `state.md.T.tmp` relative to memory. Preserve absorbed
+- Use `state.md.tmp`; the tool selects this scope's token-named temporary file. Preserve absorbed
   items by supplying only proven followedUpIds to commit, as in Group Sync.
 - Release once and report.
 

@@ -16,6 +16,17 @@ const between = (text, start, end) => {
   return text.slice(from, to);
 };
 
+test('Sync procedures use a fixed temporary state name without path placeholders', () => {
+  assert.doesNotMatch(sync, /state\.md\.(?!tmp\b)[^\s`"/]+\.tmp|session-groups\/G\/state\.md/);
+  assert.match(sync, /"path":"state\.md\.tmp"/);
+  for (const section of [between(sync, '## Group Sync', '## Origin Sync'),
+    between(sync, '## Single global Sync', '## Moving from old files')]) {
+    assert.match(section, /`state\.md\.tmp`/);
+  }
+  assert.match(normalize(sync), /STATE_DOCUMENT_INVALID`: correct `state\.md\.tmp` through `edit_memory`/);
+  assert.match(normalize(sync), /`edit_memory` calls cannot read shell variables or files; the `token` field must contain the literal token printed by acquire/);
+});
+
 test('Sync parents consume Codex worker outcomes before ending their turn', () => {
   const parent = normalize(between(skill, '## Parent result handling', '## Writing rules'));
   assert.match(parent, /apply to group, Origin, and global Sync/);
