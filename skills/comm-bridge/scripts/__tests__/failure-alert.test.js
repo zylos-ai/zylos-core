@@ -160,7 +160,9 @@ test('failed owner and Origin sends remain queued until a successful bounded ret
 });
 
 // Real store and drainer with an injected clock and local owner sender. Run
-// when receipt eligibility, backoff or expiry changes; no runtime is launched.
+// when receipt eligibility, backoff or expiry changes; skip unrelated UI changes.
+// The official runner owns private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; the
+// fixture owns its in-memory DB. No runtime, socket, transport or service runs.
 test('internal failure receipts never enter the owner alert retry or expiry drain', async t => {
   const f = setup(t);
   f.store.insertConversation('in', 'chat', 'A', 'seed', { groupName: 'a' });

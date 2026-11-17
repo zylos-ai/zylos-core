@@ -200,6 +200,10 @@ for (const [name, args] of modes) for (const kind of ['file', 'image']) test(`${
 
 // Public history retains its existing shape even for populated alert metadata;
 // diagnosis and owner alerts read those fields through their dedicated APIs.
+// Run for history projection or alert-metadata changes; skip unrelated delivery
+// and UI changes. The official runner and fixture isolate HOME/ZYLOS_DIR/PM2_HOME,
+// short TMPDIR and SQLite, read back paths and close/delete the private DB.
+// No tmux, socket, transport, runtime or service runs.
 for (const [name, args] of modes) test(`${name} JSON omits private failure alert wording metadata`, t => {
   const f = fixture(t); seedValid(f);
   f.db.prepare("UPDATE conversations SET core_source='scheduler',task_name='Private task name' WHERE id>=100").run();
