@@ -478,7 +478,10 @@ export async function superviseDatabases(input, {spawnWorker=spawn, timeoutMs=DA
           if(expired) return reject(Error(`${item.source}: ${step} deadline exceeded (${timeoutMs/1000}s)`));
           let value;
           try {value=JSON.parse(output);} catch {}
-          if(status!==0 || !value || overflow) return reject(Object.assign(Error(`${item.source}: ${step} failed: ${value?.error?.message || (overflow?'worker output limit exceeded':`worker exit ${status}`)}`),{code:value?.error?.code}));
+          if(status!==0 || !value || overflow) {
+            const message=value?.error?.message || (overflow?'worker output limit exceeded':`worker exit ${status}`);
+            return reject(Object.assign(Error(message.startsWith(`${item.source}:`) ? message : `${item.source}: ${step} failed: ${message}`),{code:value?.error?.code}));
+          }
           resolve(value);
         });
       }).catch(error=>{
