@@ -3,7 +3,40 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import {recoverBeforeUpgrade} from '../upgrade-discovery.js';
+import {recoverBeforeUpgrade, runningUpgradeNotice} from '../upgrade-discovery.js';
+
+for (const kind of ['single live controller', 'multiple candidates', 'unrecognizable process identity']) {
+  test(`running upgrade notice requires certain ownership: ${kind}`, () => {
+    const owner = {pid:123, boot:'fixture-boot', start:'fixture-start'};
+    const candidates = [{dir:'/isolated/upgrade-one'}];
+    if (kind === 'multiple candidates') candidates.push({dir:'/isolated/upgrade-two'});
+    let reads = 0;
+    let aliveCalls = 0;
+    let ownerPath;
+    let checkedOwner;
+    const maintenance = {
+      discover:() => ({candidates, diagnostics:[]}),
+      canRecognizeProcesses:() => kind !== 'unrecognizable process identity',
+      read(file) { reads++; ownerPath = file; return owner; },
+      alive(value) { aliveCalls++; checkedOwner = value; return true; },
+    };
+    const notice = runningUpgradeNotice('/isolated', {maintenance});
+    if (kind === 'single live controller') {
+      assert.deepEqual(notice, {
+        error:'Another Core upgrade is still running.',
+        next:'Wait for it to finish, then retry the upgrade.',
+      });
+      assert.equal(reads, 1);
+      assert.equal(ownerPath, '/isolated/upgrade-one/controller.json');
+      assert.equal(aliveCalls, 1);
+      assert.equal(checkedOwner, owner);
+    } else {
+      assert.equal(notice, null);
+      assert.equal(reads, 0);
+      assert.equal(aliveCalls, 0);
+    }
+  });
+}
 
 function fixture() {
   let complete = false;
