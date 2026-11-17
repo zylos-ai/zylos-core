@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createScheduleRead, nextRuns } from '../src/lib/workbench/schedule-read.js';
 import { createScheduleTz, dateKey, localToOffsetIso } from '../src/lib/workbench/schedule-tz.js';
-import { dayBoundsUTC } from '../src/lib/metric-resolver.js';
+import { dayBoundsUTC } from '../src/lib/day-bounds.js';
 import { usageIntervals } from '../src/lib/workbench/cost-query.js';
 import { cachedFormatterCount, MAX_CACHED_FORMATTERS } from '../src/lib/date-format-cache.js';
 import { createCronIterator } from '../../scheduler/scripts/cron-utils.js';

@@ -13,9 +13,6 @@ export async function runMetricMaintenance(store, {
   store.deleteMetricsByNameAndSource('usage_event', '%', 90, anchor);
   store.deleteMetricsByNameAndSource('ttft%', '%', 90, anchor);
   store.deleteMetricsByNameAndSource('turn_duration%', '%', 90, anchor);
-  // The UI only shows the latest statusline row, and the metric resolver ignores
-  // rows older than 24h, so older history is never read. Keep one day.
-  store.deleteMetricsByNameAndSource('statusline_summary', '%', 1, anchor);
   store.deleteMetricsByNameAndSource('system_summary', '%', 14, anchor);
   store.deleteMetricsByNameAndSource('pm2_summary', '%', 7, anchor);
   store.deleteMetricsByNameAndSource('pm2_cpu', '%', 0, anchor);

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Store } from '../src/lib/store.js';
 import { UsageTranscripts } from '../src/lib/collectors/usage-transcripts.js';
+import { createTranscriptSnapshot } from '../src/lib/collectors/transcript-snapshot.js';
 import { ConversationCollector } from '../src/lib/collectors/conversation-collector.js';
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
 import { claudeProjectSlug } from '../src/lib/claude-project-path.js';
@@ -975,3 +976,36 @@ for (const [runtime, statusline, title] of [
     assert.equal(f.store.queryMetrics({ name: 'usage_event' }).length, 2);
   });
 }
+
+
+test('Origin assistant messages ingest from persisted hook ownership before any live observation', async t => {
+  const f = fixture(t), transcript = f.file('unwatched-origin');
+  f.start(transcript, 'origin');
+  const runDir = path.join(f.root, 'activity-monitor', 'session-groups', 'origin');
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(path.join(runDir, 'current-session.json'), JSON.stringify({
+    runId: 'run-origin', sessionId: 'session-origin', ts: f.now(), startupControlIds: [],
+  }));
+  f.inventory.getSnapshot = createTranscriptSnapshot({ zylosDir: f.root });
+  fs.appendFileSync(transcript, JSON.stringify({ type: 'assistant', uuid: 'unwatched-message', requestId: 'unwatched-response',
+    timestamp: new Date(f.now()).toISOString(), sessionId: 'session-origin',
+    message: { role: 'assistant', model: 'claude-sonnet-4-5', content: [{ type: 'text', text: 'Origin message without a viewer' }],
+      usage: { input_tokens: 100, output_tokens: 20 } } }) + '\n');
+  const collector = new ConversationCollector(f.store, { homeDir: f.root, zylosDir: f.root }, { transcripts: f.inventory });
+  await collector.collect();
+  const events = f.store.db.prepare("SELECT summary FROM runtime_events WHERE event_type='assistant_message'").all();
+  assert.equal(events.length, 1);
+  assert.equal(events[0].summary, 'Origin message without a viewer');
+  assert.equal(f.inventory.snapshot.transcriptIdentityOnly, true);
+  assert.equal(f.inventory.snapshot.rows[0].presence, 'unknown', 'hook ownership does not assert liveness');
+  assert.equal(f.store.getUsageTranscript(transcript).byte_offset, fs.statSync(transcript).size);
+});
+
+test('missing hook ownership cannot finish old transcript mappings', async t => {
+  const f = fixture(t), transcript = f.file('missing-owner');
+  f.start(transcript, 'origin');
+  f.inventory.getSnapshot = createTranscriptSnapshot({ zylosDir: f.root });
+  f.advance(31 * 60000);
+  await f.inventory.collect('claude', () => ({ byteOffset: 0 }));
+  assert.equal(f.store.getUsageTranscript(transcript).status, 'active');
+});

@@ -68,7 +68,17 @@ function fixture(t, { record = freshRecord(), slots = [], groups = [], queues = 
       configIssue: () => null, facts: async () => ({ originNeed: null }), health: () => ({ missing: true }), now: () => clock }) };
     throw new Error('Unexpected Core module: ' + name);
   };
-  const service = createGroupSnapshot({ zylosDir: root, c4Reader: reader, loadCoreModule, now: () => clock,
+  const sessionObservations = {
+    reader: sessionReader,
+    async get() {
+      const group = mode === 'single' ? null : 'origin';
+      const keys = new Set([group, ...groups.map(item => item.sessionGroup)]);
+      return { mode, group, observations: new Map(await Promise.all([...keys].map(async key =>
+        [key, await sessionReader.readSessionState(key)]))) };
+    },
+    peek() { return null; },
+  };
+  const service = createGroupSnapshot({ zylosDir: root, c4Reader: reader, loadCoreModule, now: () => clock, sessionObservations,
     cli: { runC4Db: async args => ({ ok: true, readAt: clock, data: args[0] === 'groups'
       ? { groups: [], hasOlder: false } : { groups: queues, globalFence } }),
     readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) },

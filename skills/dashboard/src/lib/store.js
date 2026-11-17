@@ -171,7 +171,7 @@ export class Store {
     this._deleteMetricsExcludingPatterns = this.db.prepare(`
       DELETE FROM metric_points
       WHERE timestamp < datetime(@anchor, '-' || @days || ' days')
-        AND metric_name NOT IN ('usage_event', 'statusline_summary', 'system_summary', 'pm2_summary', 'ttft', 'turn_duration')
+        AND metric_name NOT IN ('usage_event', 'system_summary', 'pm2_summary', 'ttft', 'turn_duration')
         AND metric_name NOT LIKE 'pm2_%'
         AND source NOT LIKE 'otel%'
     `);

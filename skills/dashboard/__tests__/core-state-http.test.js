@@ -47,14 +47,19 @@ test('state APIs await a fresh observation before answering idle requests', { ti
     };
     return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
   } } });
+  const snapshotObservations = {
+    reader: { readAccountUsage: async () => null },
+    get: async () => ({ mode: 'single', group: null, observations: new Map([[null, observation(sample)]]) }),
+    peek: () => ({ mode: 'single', group: null, observations: new Map([[null, observation(sample)]]) }),
+  };
   t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
     systemSample,
-    createGroupSnapshot: options => createGroupSnapshot({ ...options, now: () => snapshotClock,
+    createGroupSnapshot: options => createGroupSnapshot({ ...options, now: () => snapshotClock, sessionObservations: snapshotObservations,
       cli: { runC4Db: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
         readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'codex' }, runtime: [], model: [] } }) },
       loadCoreModule: async name => {
         if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
-        if (name === 'session-state-reader.js') return { readSessionState: async () => observation(sample), readAccountUsageSnapshot: async () => ({ live: null, recorded: null }) };
+        if (name === 'session-state-reader.js') return { readSessionStates: async () => new Map([[null, observation(sample)]]), readAccountUsageSnapshot: async () => ({ live: null, recorded: null }) };
         if (name === 'status-view.js') return { collectStatus: async ({ session }) => {
           await session(null, {});
           return { view: 'single', origin: { presence: 'running', runtime: 'codex', runId: `run-${sample}`, sessionId: `session-${sample}`, status: { valid: true, state: 'idle' } }, groupListError: null, runtimeHealth: {} };

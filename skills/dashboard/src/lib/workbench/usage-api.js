@@ -1,4 +1,4 @@
-import { dayBoundsUTC } from '../metric-resolver.js';
+import { dayBoundsUTC } from '../day-bounds.js';
 import { costRows, resolveUsageTimezone, usageBounds, usageTokenRows } from './cost-query.js';
 
 function emptyUsage() {

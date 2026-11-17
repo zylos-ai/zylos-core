@@ -77,7 +77,10 @@ test('Core state enforces readiness, freshness and runtime-specific account usag
     assert.fail(`Unexpected core module ${name}`);
   } } });
   const { CoreState } = await import(`../src/lib/core-state.js?contracts=${Date.now()}`);
-  const core = new CoreState({ zylosDir: process.env.ZYLOS_DIR });
+  const core = new CoreState({ zylosDir: process.env.ZYLOS_DIR, sessionObservations: {
+    reader, get: async () => ({ mode: 'multi', group: 'origin', reader, observations: await reader.readSessionStates(['origin'], { freshnessMs: 5000, includeAllLive: true }) }),
+    resolveOfflineRuntime: async () => 'codex',
+  } });
   const state = await core.refresh();
   assert.deepEqual(calls.find(call => call.type === 'state'), { type: 'state', groups: ['origin'], options: { freshnessMs: 5000, includeAllLive: true } });
   assert.deepEqual(calls.find(call => call.type === 'account'), { type: 'account', runtime: 'codex' });

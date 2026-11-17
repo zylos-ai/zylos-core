@@ -181,17 +181,19 @@ test('shutdown abort stops reclamation between chunks', async (t) => {
   assert.ok(store.spaceUsage().freePages > 0);
 });
 
-test('statusline_summary keeps one day while usage_event keeps 90 days', async (t) => {
+test('legacy statusline summaries use the general 90-day retention', async (t) => {
   const store = fixture(t);
   const insert = store.db.prepare(`INSERT INTO metric_points
     (timestamp, runtime, metric_name, metric_value, dimensions, source, confidence)
     VALUES (?, 'claude', ?, 0, '{}', ?, 'actual')`);
   insert.run('2026-06-07T12:00:00.000Z', 'statusline_summary', 'statusline');
   insert.run('2026-06-06T23:00:00.000Z', 'statusline_summary', 'statusline');
+  insert.run('2026-01-01T00:00:00.000Z', 'statusline_summary', 'statusline');
   insert.run('2026-06-06T23:00:00.000Z', 'usage_event', 'jsonl_usage');
   await runMetricMaintenance(store, { now: monday });
   const left = store.db.prepare(`SELECT metric_name, timestamp FROM metric_points ORDER BY metric_name, timestamp`).all();
   assert.deepEqual(left.map(r => `${r.metric_name}@${r.timestamp}`), [
+    'statusline_summary@2026-06-06T23:00:00.000Z',
     'statusline_summary@2026-06-07T12:00:00.000Z',
     'usage_event@2026-06-06T23:00:00.000Z',
   ]);

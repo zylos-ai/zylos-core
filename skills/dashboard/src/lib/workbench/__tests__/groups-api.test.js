@@ -151,8 +151,11 @@ test('real snapshot projects child-only work and an old offline catalog in both 
     const observation = { identity: { present: true, ready: true, runId: 'run', runtime: 'claude', createdAt: now / 1000 - 10, launchConfig: { runtime: 'claude', mode: 'default' } },
       status: { valid: true, sampledAt: now, value: { state: 'idle' } }, usage: { valid: false } };
     const events = [{ session_group: key, run_id: 'run', event_type: 'subagent_start', timestamp: new Date(now - 1000).toISOString(), metadata: { agent_id: 'child' } }];
-    const reader = { readSessionState: async group => group === key ? observation : { identity: { present: false }, status: { valid: false }, usage: { valid: false } }, readAccountUsage: async () => ({}) };
+    const absent = { identity: { present: false }, status: { valid: false }, usage: { valid: false } };
+    const reader = { readAccountUsage: async () => ({}), readRuntimeHealth: () => ({ missing: true }) };
+    const batch = { mode: mode ?? 'single', observations: new Map([[mode === 'multi' ? 'origin' : null, absent], [key, observation]]) };
     const service = createGroupSnapshot({ zylosDir: root, now: () => now,
+      sessionObservations: { get: async () => batch, reader },
       cli: { runC4Db: async args => ({ ok: true, data: args[0] === 'groups' ? catalog : { groups: [], globalFence: null } }),
         readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) },
       store: { latestEventByType: () => null, queryEvents: filter => events.filter(event => (!filter.types || filter.types.includes(event.event_type)) &&

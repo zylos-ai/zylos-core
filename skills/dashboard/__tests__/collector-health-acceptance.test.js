@@ -146,9 +146,6 @@ before(async () => {
       if (resp.ok) {
         const login = await fetch(BASE + '/login', { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ password: 'acceptance-private-password' }) });
         assert.equal(login.status, 302); cookie = login.headers.get('set-cookie'); assert.ok(cookie);
-        await waitFor('initial statusline health check',
-          () => sql("SELECT status FROM source_health WHERE name = 'statusline' AND signal_type = 'collector_liveness'"),
-          value => value === 'stale');
         writeCoreStatusline();
         statuslineTimer = setInterval(writeCoreStatusline, 1000);
         return;
@@ -313,32 +310,6 @@ test('Data integrity: WAL mode enabled', () => {
 });
 
 // --- StatusLine collection ---
-
-test('StatusLine: running service stores Core usage and reports fresh health', async () => {
-  let row;
-  try {
-    row = await waitFor('statusline collection',
-      () => sql("SELECT runtime, session_id, dimensions FROM metric_points WHERE metric_name = 'statusline_summary' AND source = 'statusline' ORDER BY id DESC LIMIT 1"),
-      value => value.length > 0);
-  } catch (error) {
-    error.message += `\nsource_health:\n${sql("SELECT name, signal_type, status, extra FROM source_health ORDER BY name, signal_type")}`;
-    throw error;
-  }
-  assert.ok(row.length > 0, 'statusline_summary metric not stored');
-  const [runtime, sessionId, dimensions] = row.split('|');
-  assert.equal(runtime, 'claude');
-  assert.equal(sessionId, SESSION_ID);
-  assert.deepEqual(JSON.parse(dimensions), {
-    run_id: RUN_ID,
-    context_pct: 42.5,
-    session_cost: 0.1234
-  });
-  const health = api('/api/health');
-  for (const entry of [health.source.platform.statusline, health.source.runtime_progress.statusline]) {
-    assert.equal(entry.status, 'healthy');
-    assert.equal(entry.fresh, true);
-  }
-});
 
 test('Metrics history: metric_points table queryable', () => {
   const count = parseInt(sql("SELECT COUNT(*) FROM metric_points"), 10);

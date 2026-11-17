@@ -281,7 +281,12 @@ test('target groups follow the dispatch rule using the group snapshot without na
   const origin = f.task({});
   const unknown = f.task({ session_component: 'lark', session_group_name: 'ops' });
   const calls = [];
-  const snapshot = createGroupSnapshot({ zylosDir: f.zylosDir, now: () => NOW_MS,
+  const sessionObservations = {
+    reader: { readAccountUsage: async () => null },
+    get: async () => ({ mode: 'multi', group: 'origin', observations: new Map() }),
+    peek: () => null,
+  };
+  const snapshot = createGroupSnapshot({ zylosDir: f.zylosDir, now: () => NOW_MS, sessionObservations,
     store: { latestEventByType: () => null, queryEvents: () => [] },
     cli: {
       runC4Db: async args => {
@@ -297,7 +302,7 @@ test('target groups follow the dispatch rule using the group snapshot without na
     },
     loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => ({ mode: 'multi' }) };
-      if (name === 'session-state-reader.js') return { readAccountUsage: async () => null, readSessionState: async () => null };
+      if (name === 'session-state-reader.js') return { readAccountUsage: async () => null, readSessionStates: async () => new Map() };
       return { collectStatus: async () => ({ view: 'multi', origin: { presence: 'not_running' }, groups: [], groupListError: null, runtimeHealth: {} }) };
     },
   });
@@ -341,7 +346,12 @@ test('a group whose last message came from the scheduler is labelled with the ta
     { sessionGroup: 'lark:oc_1', componentName: 'lark', lastActivityAt: NOW_MS, preview: { timestamp: NOW_MS, channel: 'lark', endpoint: 'oc_1',
       message: 'Review ready', text: '[Review bot] Review ready for 01a1c33d-7d4e-7a1b-9c2d-0123456789ab', messageSource: { kind: 'header' } } },
   ];
-  const snapshot = createGroupSnapshot({ zylosDir: f.zylosDir, now: () => NOW_MS,
+  const sessionObservations = {
+    reader: { readAccountUsage: async () => null },
+    get: async () => ({ mode: 'multi', group: 'origin', observations: new Map() }),
+    peek: () => null,
+  };
+  const snapshot = createGroupSnapshot({ zylosDir: f.zylosDir, now: () => NOW_MS, sessionObservations,
     store: { latestEventByType: () => null, queryEvents: () => [] },
     cli: {
       runC4Db: async args => ({ ok: true, readAt: NOW_MS, data:
@@ -350,7 +360,7 @@ test('a group whose last message came from the scheduler is labelled with the ta
     },
     loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => ({ mode: 'multi' }) };
-      if (name === 'session-state-reader.js') return { readAccountUsage: async () => null, readSessionState: async () => null };
+      if (name === 'session-state-reader.js') return { readAccountUsage: async () => null, readSessionStates: async () => new Map() };
       return { collectStatus: async () => ({ view: 'multi', origin: { presence: 'not_running' }, groups: [], groupListError: null, runtimeHealth: {} }) };
     },
   });

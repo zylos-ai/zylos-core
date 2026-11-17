@@ -5,9 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { PM2Collector } from '../src/lib/collectors/pm2-collector.js';
-import { StatuslineCollector } from '../src/lib/collectors/statusline-collector.js';
 import { SystemCollector } from '../src/lib/collectors/system-collector.js';
-import { MetricResolver } from '../src/lib/metric-resolver.js';
 import { runMetricMaintenance } from '../src/lib/metric-maintenance.js';
 import { Store } from '../src/lib/store.js';
 import { usageTokenRows, costRows } from '../src/lib/workbench/cost-query.js';
@@ -79,47 +77,6 @@ test('SystemCollector writes a single system_summary row', async () => {
   });
 });
 
-test('StatuslineCollector writes one statusline_summary row with capacity dimensions', async () => {
-  await withStore(async (store, dir) => {
-    const statusDir = path.join(dir, 'activity-monitor');
-    fs.mkdirSync(statusDir, { recursive: true });
-    const sample = {
-      session_id: 'claude-session-1',
-      model: { id: 'claude-opus-4-6', display_name: 'Opus' },
-      effort: { level: 'high' },
-      version: '1.2.3',
-      context_window: {
-        used_percentage: 42.5,
-        current_usage: {
-          input_tokens: 100,
-          cache_read_input_tokens: 300,
-          cache_creation_input_tokens: 100
-        }
-      },
-      cost: { total_cost_usd: 0.1234 },
-      rate_limits: {
-        five_hour: { used_percentage: 55, resets_at: 1779516000 },
-        seven_day: { used_percentage: 11, resets_at: 1780083600 }
-      }
-    };
-
-    const collector = new StatuslineCollector(store, { zylosDir: dir }, { read: async () => ({
-      identity: { present: true, ready: true, runtime: 'claude', runId: 'run-1', sessionId: sample.session_id },
-      usage: { valid: true, sampledAt: Date.now(), value: sample }
-    }) });
-    const result = await collector.collect();
-
-    assert.equal(result.written, 1);
-    const rows = store.queryMetrics({ name: 'statusline_summary' });
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0].session_id, 'claude-session-1');
-    assert.equal(rows[0].dimensions.context_pct, 42.5);
-    assert.equal(rows[0].dimensions.session_cost, 0.1234);
-    assert.equal(rows[0].dimensions.rate_limit, undefined);
-    assert.equal(rows[0].dimensions.rate_limit_7d, undefined);
-    assert.equal(rows[0].dimensions.cache_hit_rate, 0.6);
-  });
-});
 
 test('usage_event unique index deduplicates null-session replay keys atomically', () => withStore((store) => {
   const point = {
@@ -194,74 +151,7 @@ test('metric maintenance deletes legacy PM2 detail rows without deleting PM2 sum
   assert.equal(store.queryMetrics({ name: 'pm2_summary' }).length, 1);
 }));
 
-test('MetricResolver reads summaries first and preserves legacy fallback forms', () => withStore((store) => {
-  const now = new Date().toISOString();
-  store.insertMetric({
-    timestamp: now,
-    runtime: 'claude',
-    metric_name: 'statusline_summary',
-    metric_value: 0,
-    dimensions: {
-      context_pct: 42.5,
-      rate_limit: 55,
-      session_cost: 0.1234,
-      cache_hit_rate: 0.6
-    },
-    source: 'statusline',
-    confidence: 'actual'
-  });
-  store.insertMetric({
-    timestamp: now,
-    runtime: 'claude',
-    metric_name: 'system_summary',
-    metric_value: 12.5,
-    dimensions: {
-      cpu_pct: 12.5,
-      mem_used_bytes: 123456,
-      mem_total_bytes: 999999
-    },
-    source: 'system',
-    confidence: 'actual'
-  });
 
-  const resolver = new MetricResolver(store, {}, { metricStalenessSeconds: 120 });
-  assert.equal(resolver.resolve('context_pct').value, 42.5);
-  assert.equal(resolver.resolve('rate_limit').value, null);
-  assert.equal(resolver.resolve('session_cost').value, 0.1234);
-  assert.equal(resolver.resolve('cache_hit_rate').value, 0.6);
-  assert.equal(resolver.resolve('cpu_pct').value, 12.5);
-  assert.equal(resolver.resolve('mem_used_bytes').value, 123456);
-}));
-
-test('MetricResolver falls back to legacy individual metric rows when summaries are absent', () => withStore((store) => {
-  const now = new Date().toISOString();
-  for (const point of [
-    ['context_pct', 40, 'statusline'],
-    ['rate_limit', 50, 'statusline'],
-    ['session_cost', 0.2, 'statusline'],
-    ['cache_hit_rate', 0.7, 'statusline_current_usage'],
-    ['cpu_pct', 10, 'system'],
-    ['mem_used_bytes', 200000, 'system']
-  ]) {
-    store.insertMetric({
-      timestamp: now,
-      runtime: 'claude',
-      metric_name: point[0],
-      metric_value: point[1],
-      dimensions: null,
-      source: point[2],
-      confidence: 'actual'
-    });
-  }
-
-  const resolver = new MetricResolver(store, {}, { metricStalenessSeconds: 120 });
-  assert.equal(resolver.resolve('context_pct').value, 40);
-  assert.equal(resolver.resolve('rate_limit').value, null);
-  assert.equal(resolver.resolve('session_cost').value, 0.2);
-  assert.equal(resolver.resolve('cache_hit_rate').value, 0.7);
-  assert.equal(resolver.resolve('cpu_pct').value, 10);
-  assert.equal(resolver.resolve('mem_used_bytes').value, 200000);
-}));
 
 test('usage_event aggregate readers compute cost, cache, tokens, series, and project totals', () => withStore((store) => {
   store.insertMetric({
@@ -299,35 +189,3 @@ test('usage_event aggregate readers compute cost, cache, tokens, series, and pro
     until: '2026-05-23T02:00:00.000Z'
   }).items[0].name, 'zylos-dashboard');
 }));
-
-
-for (const runtime of ['claude', 'codex']) test(`MetricResolver uses current ${runtime} account windows and never historical fallback`, () => {
-  const future = Math.floor(Date.now() / 1000) + 3600;
-  const past = Date.now() - 1000;
-  const makeWindow = (value, resets) => runtime === 'claude'
-    ? { used_percentage: value, resets_at: resets } : { usedPercentage: value, resetsAt: resets };
-  const five = runtime === 'claude' ? 'five_hour' : 'fiveHour';
-  const seven = runtime === 'claude' ? 'seven_day' : 'sevenDay';
-  let account = { runtime, value: { [five]: makeWindow(73, future), [seven]: makeWindow(21, future) } };
-  const resolver = new MetricResolver({ latestMetric() { assert.fail('account limits must not query historical metrics'); } },
-    { statusline: { getAccountUsage: () => account } }, { runtime: runtime === 'claude' ? 'codex' : 'claude' });
-  assert.equal(resolver.resolve('rate_limit').fallback_reason, 'Unknown metric: rate_limit');
-  for (const [metric, expected] of [['rate_limit_7d', 21]]) {
-    const result = resolver.resolve(metric);
-    assert.equal(result.value, expected);
-    assert.equal(result.runtime, runtime, 'live reader runtime wins over baseline config');
-    assert.equal(result.selected_source, 'core_account_usage');
-    assert.equal(result.dimensions[`${metric}_resets_at`], future);
-    assert.equal(result.freshness, null, 'Core account reader does not provide sample timestamp');
-  }
-  account.value[five] = makeWindow(100, past);
-  assert.equal(resolver.resolve('rate_limit').value, null);
-  assert.equal(resolver.resolve('rate_limit_7d').value, 21);
-  account.value[seven] = makeWindow(100, Math.floor(past / 1000));
-  assert.equal(resolver.resolve('rate_limit_7d').value, null);
-  account = { runtime, value: null };
-  assert.equal(resolver.resolve('rate_limit').value, null);
-  assert.equal(resolver.resolve('rate_limit_7d').value, null);
-  account = null;
-  assert.equal(resolver.resolve('rate_limit').selected_source, null);
-});

@@ -6,7 +6,6 @@ import path from 'node:path';
 import test from 'node:test';
 import { Store } from '../src/lib/store.js';
 import { Sanitizer } from '../src/lib/sanitizer.js';
-import { MetricResolver } from '../src/lib/metric-resolver.js';
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
 import { DEFAULT_CODEX_MODEL_PRICES, DEFAULT_CODEX_PRIORITY_MODEL_PRICES } from '../src/lib/config.js';
 
@@ -594,118 +593,8 @@ test('CodexRolloutCollector does not backfill legacy rate-limit rows when cursor
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('MetricResolver does not fall back to historical rollout account data', () => {
-  const dir = tmpDir();
-  const store = new Store(path.join(dir, 'dashboard.db'));
-  const staleTimestamp = new Date(Date.now() - 2000).toISOString();
-  store.insertMetric({
-    timestamp: staleTimestamp,
-    runtime: 'codex',
-    session_id: 'codex-session-1',
-    metric_name: 'rate_limit',
-    metric_value: 37.5,
-    dimensions: { window_minutes: 300, resets_at: 1779516000 },
-    source: 'rollout',
-    confidence: 'actual'
-  });
 
-  const resolver = new MetricResolver(store, {}, { runtime: 'codex', metricStalenessSeconds: 1 });
-  const rate = resolver.resolve('rate_limit');
 
-  assert.equal(rate.value, null);
-  assert.equal(rate.selected_source, null);
-  assert.equal(rate.dimensions, undefined);
-  assert.equal(rate.fallback_reason, 'Unknown metric: rate_limit');
-
-  store.close();
-  fs.rmSync(dir, { recursive: true, force: true });
-});
-
-test('MetricResolver does not fall back to Claude statusline metrics while running Codex', () => {
-  const dir = tmpDir();
-  const store = new Store(path.join(dir, 'dashboard.db'));
-  const now = new Date().toISOString();
-  const staleCodexTimestamp = new Date(Date.now() - 2000).toISOString();
-  store.insertMetric({
-    timestamp: now,
-    runtime: 'claude',
-    session_id: 'claude-session',
-    metric_name: 'statusline_summary',
-    metric_value: 0,
-    dimensions: {
-      context_pct: 6,
-      rate_limit: 99,
-      session_cost: 1.23
-    },
-    source: 'statusline',
-    confidence: 'actual'
-  });
-  store.insertMetric({
-    timestamp: staleCodexTimestamp,
-    runtime: 'codex',
-    session_id: 'codex-session',
-    metric_name: 'rate_limit',
-    metric_value: 37.5,
-    dimensions: { window_minutes: 300 },
-    source: 'rollout',
-    confidence: 'actual'
-  });
-
-  const resolver = new MetricResolver(store, {}, {
-    runtime: 'codex',
-    metricStalenessSeconds: 1
-  });
-  const rate = resolver.resolve('rate_limit');
-  const context = resolver.resolve('context_pct');
-
-  assert.equal(rate.value, null);
-  assert.equal(rate.selected_source, null);
-  assert.equal(context.value, null);
-  assert.equal(context.selected_source, null);
-
-  store.close();
-  fs.rmSync(dir, { recursive: true, force: true });
-});
-
-test('MetricResolver exposes Codex rollout TTFT and turn duration', () => {
-  const dir = tmpDir();
-  const store = new Store(path.join(dir, 'dashboard.db'));
-  const timestamp = new Date().toISOString();
-  store.insertMetric({
-    timestamp,
-    runtime: 'codex',
-    session_id: 'codex-session-1',
-    metric_name: 'ttft',
-    metric_value: 987,
-    dimensions: null,
-    source: 'rollout',
-    confidence: 'actual'
-  });
-  store.insertMetric({
-    timestamp,
-    runtime: 'codex',
-    session_id: 'codex-session-1',
-    metric_name: 'turn_duration',
-    metric_value: 45123,
-    dimensions: null,
-    source: 'rollout',
-    confidence: 'actual'
-  });
-
-  const resolver = new MetricResolver(store, {}, { runtime: 'codex', metricStalenessSeconds: 120 });
-  const ttft = resolver.resolve('ttft');
-  const duration = resolver.resolve('turn_duration');
-
-  assert.equal(ttft.value, 987);
-  assert.equal(ttft.selected_source, 'rollout');
-  assert.equal(ttft.confidence, 'actual');
-  assert.equal(duration.value, 45123);
-  assert.equal(duration.selected_source, 'rollout');
-  assert.equal(duration.confidence, 'actual');
-
-  store.close();
-  fs.rmSync(dir, { recursive: true, force: true });
-});
 
 test('CodexRolloutCollector skips cost when model price is missing', () => {
   const dir = tmpDir();

@@ -3,7 +3,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { CoreState, projectOrigin } from '../src/lib/core-state.js';
-import { MetricResolver } from '../src/lib/metric-resolver.js';
 import { describeOrigin } from '../../../cli/lib/origin-presence.js';
 import { stateMood, buildAgentFleetView, defaultAgentFleetLabels } from '../public/js/agent-fleet.js';
 
@@ -25,23 +24,15 @@ test('captured model override is unavailable when the sampled session identity c
 
 test('single-session history ignores a multi-session sample until a fresh single-session observation arrives', async t => {
   let mode = 'multi', identityChanged = false;
-  t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
-    if (name === 'config.js') return { readSessionMode: () => ({ mode }) };
-    if (name === 'session-state-reader.js') return {
-      readSessionStates: async groups => new Map(groups.map(group => {
-        const observation = live();
-        observation.identity.sessionId = group === null ? 'single-session' : 'multi-session';
-        if (identityChanged) observation.status = { valid: false, reason: 'identity_changed' };
-        return [group, observation];
-      })),
-      resolveTargetRuntime: async () => 'claude',
-      readRuntimeHealth: async () => ({ health: 'ok' }),
-      readAccountUsageSnapshot: async () => ({ live: null, recorded: null }),
-    };
-    assert.fail(`Unexpected core module ${name}`);
-  } } });
-  const { CoreState } = await import(`../src/lib/core-state.js?single-history=${Date.now()}`);
-  const core = new CoreState({ accountUsageCache: new AccountUsageCache({ ttlMs: 0 }) });
+  const core = new CoreState({ accountUsageCache: { read: async () => null },
+    sessionObservations: { get: async () => {
+      const group = mode === 'multi' ? 'origin' : null;
+      const observation = live();
+      observation.identity.sessionId = group === null ? 'single-session' : 'multi-session';
+      if (identityChanged) observation.status = { valid: false, reason: 'identity_changed' };
+      return { mode, group, observations: new Map([[group, observation]]),
+        reader: { readRuntimeHealth: async () => ({ health: 'ok' }) } };
+    } } });
   assert.equal(core.getSingleSessionId(), null, 'no sample cannot mark a history session current');
   await core.refresh();
   assert.equal(core.getCurrentSessionId(), 'multi-session');
@@ -81,7 +72,7 @@ test('Core state reads Origin facts only for absence or authentication and reads
     readSessionStates: async groups => new Map(groups.map(group => [group, structuredClone(observation)])),
     readLiveIdentity: async () => ({ present: true, ready: true, runtime: 'codex', runId: 'other-run', sessionId: 'other-session' }),
     resolveTargetRuntime: async group => { assert.equal(group, mode === 'multi' ? 'origin' : null); return targetRuntime; },
-    readRuntimeHealth: async runtime => { assert.equal(runtime, targetRuntime); return health; },
+    readRuntimeHealth: async runtime => { assert.equal(runtime, observation.identity.present ? observation.identity.runtime : targetRuntime); return health; },
     readAccountUsageSnapshot: async runtime => { accountCalls.push(runtime); return { recorded: accountAvailable && runtime === 'codex'
       ? { value: { fiveHour: { usedPercentage: 37 }, sevenDay: { usedPercentage: 61 } }, live: accountLive, recordedAt: 1000 } : null }; },
   };
@@ -95,7 +86,10 @@ test('Core state reads Origin facts only for absence or authentication and reads
     assert.fail(`Unexpected core module ${name}`);
   } } });
   const { CoreState } = await import(`../src/lib/core-state.js?origin-facts=${Date.now()}`);
-  const core = new CoreState({ accountUsageCache: new AccountUsageCache({ ttlMs: 0 }), zylosDir: process.env.ZYLOS_DIR, onChange: () => { changes++; } });
+  const core = new CoreState({ accountUsageCache: new AccountUsageCache({ ttlMs: 0 }), zylosDir: process.env.ZYLOS_DIR, onChange: () => { changes++; },
+    sessionObservations: { get: async () => ({ mode, group: mode === 'multi' ? 'origin' : null, reader,
+      observations: new Map([[mode === 'multi' ? 'origin' : null, structuredClone(observation)]]) }),
+      resolveOfflineRuntime: async () => targetRuntime } });
   assert.equal((await core.refresh()).state, 'SLEEPING');
   assert.deepEqual(accountCalls, ['codex']);
   assert.equal(core.accountUsage.fiveHour.usedPercentage, 37);
@@ -104,10 +98,6 @@ test('Core state reads Origin facts only for absence or authentication and reads
   await core.refresh(); assert.equal(changes, before);
   accountLive = false;
   await core.refresh(); assert.equal(changes, before + 1);
-  const metrics = new MetricResolver({}, { statusline: { getAccountUsage: () => ({ runtime: 'codex', value: core.accountUsage }) } }, {});
-  assert.equal(metrics.resolve('rate_limit').value, null);
-  assert.equal(metrics.resolve('rate_limit').fallback_reason, 'Unknown metric: rate_limit');
-  assert.equal(metrics.resolve('rate_limit_7d').value, 61);
   assert.equal(factsReads, 3);
   observation = live();
   assert.equal((await core.refresh()).state, 'BUSY');
@@ -129,8 +119,6 @@ test('Core state reads Origin facts only for absence or authentication and reads
   accountAvailable = false; health = { health: 'ok' };
   assert.equal((await core.refresh()).state, 'SLEEPING');
   assert.equal(core.accountUsage, null);
-  assert.equal(metrics.resolve('rate_limit').value, null);
-  assert.equal(metrics.resolve('rate_limit_7d').value, null);
   facts.originNeed = { inbound: 0, controls: 0, continuation: true, oldestAt: Math.floor(Date.now() / 1000) };
   assert.equal((await core.refresh()).state, 'WAKING');
   facts.originNeed.oldestAt -= 400;
@@ -162,7 +150,9 @@ test('Core state ignores live sample timestamps and notifies recorded provenance
     assert.fail(`Unexpected core module ${name}`);
   } } });
   const { CoreState } = await import(`../src/lib/core-state.js?quota-notifications=${Date.now()}`);
-  const core = new CoreState({ accountUsageCache: new AccountUsageCache({ ttlMs: 0 }), zylosDir: process.env.ZYLOS_DIR, onChange: () => { changes++; } });
+  const core = new CoreState({ accountUsageCache: new AccountUsageCache({ ttlMs: 0 }), zylosDir: process.env.ZYLOS_DIR, onChange: () => { changes++; },
+    sessionObservations: { get: async () => ({ mode: 'single', group: null,
+      observations: new Map([[null, live()]]), reader: { readAccountUsageSnapshot: async () => ({ recorded: structuredClone(record) }) } }) } });
   await core.refresh();
   assert.equal(changes, 1);
   record.recordedAt = 2000;

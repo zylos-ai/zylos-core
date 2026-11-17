@@ -29,14 +29,21 @@ function fixture(t, { live = identity } = {}) {
   publishContextSample(JSON.stringify(statusLine), { env, now: writtenAt });
   let clock = writtenAt;
   const reader = createSessionReader({ env: { ZYLOS_DIR: root }, now: () => clock,
-    open: async () => ({ close: async () => {} }), observe: async () => live });
+    open: async () => ({ close: async () => {} }), observe: async () => live,
+    observeAll: async () => new Map([[GROUP, live]]) });
   const cli = {
     runC4Db: async args => args[0] === 'groups'
       ? { ok: true, readAt: clock, data: { groups: [{ sessionGroup: GROUP, componentName: 'dashboard', lastActivityAt: writtenAt }], hasOlder: false } }
       : { ok: true, readAt: clock, data: { groups: [], globalFence: null } },
     readOverrides: async () => ({ ok: true, readAt: clock, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }),
   };
-  const service = createGroupSnapshot({ zylosDir: root, now: () => clock, cli,
+  const sessionObservations = {
+    reader: { readAccountUsage: async () => null },
+    async get() { return { mode: 'multi', group: 'origin',
+      observations: await reader.readSessionStates(['origin', GROUP], { freshnessMs: 5000, usageFreshnessMs: Infinity }) }; },
+    peek() { return null; },
+  };
+  const service = createGroupSnapshot({ zylosDir: root, now: () => clock, cli, sessionObservations,
     store: { latestEventByType: () => null, queryEvents: () => [] }, c4Reader: { getInboundTimes: () => [] },
     loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => ({ mode: 'multi' }) };

@@ -6,7 +6,6 @@ import path from 'node:path';
 import { Store } from '../src/lib/store.js';
 import { migrateDashboardFile } from './helpers/explicit-migration.js';
 import { TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
-import { MetricResolver } from '../src/lib/metric-resolver.js';
 
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'latest-metric-'));
@@ -31,10 +30,7 @@ test('latestMetric preserves source/runtime/window and breaks timestamp ties by 
   assert.equal(store.latestMetric({ ...query, runtime: null }).metric_value, 3);
   assert.equal(store.latestMetric({ ...query, runtime: 'other' }), null);
   assert.equal(store.latestMetric({ ...query, since: '2090' }), null);
-  const resolver = new MetricResolver(store, {}, { runtime: 'codex' });
-  store.queryMetrics = () => { throw new Error('full scan must not be used'); };
-  assert.equal(resolver._getLatestMetric('context_pct', 'statusline').metric_value, 3);
-  assert.equal(resolver._getLatestMetric('context_pct', 'system').metric_value, 4);
+
 });
 
 // SQLite migration integration: run for schema/Store index changes; skip UI-only

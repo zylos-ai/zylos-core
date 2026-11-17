@@ -1779,12 +1779,6 @@ test('fleet sound cues use the marimba strike timbre Howard picked (#223)', () =
   assert.match(sounds, /strike\(ctx, \{ freq: 494, at: at \+ 0\.24, decay: 0\.4 \}\)/);
 });
 
-test('stale rate-limit windows stop painting after resets_at passes (#224)', () => {
-  const resolver = fs.readFileSync(new URL('../src/lib/metric-resolver.js', import.meta.url).pathname, 'utf8');
-  // The remaining weekly metric rejects expired account windows.
-  assert.match(resolver, /if \(metricName === 'rate_limit_7d'\)[\s\S]*?const valid = Number\.isFinite\(value\) && !rateLimitWindowExpired\(dimensions, metricName\)/);
-});
-
 test('memory tree has a collapse-all/expand-all toggle (#226)', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
   const html = fs.readFileSync(new URL('../public/index.html', import.meta.url).pathname, 'utf8');

@@ -5,7 +5,6 @@ import os from 'node:os';
 import path from 'node:path';
 import * as childProcess from 'node:child_process';
 import { StateEngine } from '../src/lib/state-engine.js';
-import { StatuslineCollector } from '../src/lib/collectors/statusline-collector.js';
 import { ConversationCollector } from '../src/lib/collectors/conversation-collector.js';
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
@@ -13,11 +12,11 @@ import { EventLoopMonitor } from '../src/lib/event-loop-monitor.js';
 
 // Entry-module integration; run for runtime selection or collector wiring changes,
 // and skip UI-only changes. The isolated runner owns HOME/ZYLOS_DIR/PM2_HOME,
-// short TMPDIR and a private tmux socket. No listener or runtime child starts;
+// short TMPDIR. No tmux connection, listener or runtime child starts;
 // every import-created interval and temporary file is cleaned by this case.
-test('Codex Dashboard startup wires both usage collectors and Core statusline into the state engine', { timeout: 15000 }, async t => {
+test('Codex Dashboard startup wires both usage collectors without a legacy statusline collector', { timeout: 15000 }, async t => {
   const realHome = fs.realpathSync(os.userInfo().homedir);
-  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR']) {
+  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
     const value = process.env[key];
     assert.ok(value && path.isAbsolute(value), `${key} must be set by the isolated runner`);
     const relative = path.relative(realHome, value);
@@ -62,8 +61,7 @@ test('Codex Dashboard startup wires both usage collectors and Core statusline in
   const { createServer } = await import('../src/index.js?runtime-startup');
   assert.equal(typeof createServer, 'function');
   assert.equal(engine._config.runtime, 'codex');
-  assert.ok(engine.collectors.statusline instanceof StatuslineCollector);
-  assert.equal(engine.collectors.statusline.store, engine.store);
+  assert.equal(Object.hasOwn(engine.collectors, 'statusline'), false);
   assert.ok(engine.collectors.conversation instanceof ConversationCollector);
   assert.ok(engine.collectors.codexRollout instanceof CodexRolloutCollector);
   assert.equal(engine.collectors.conversation.store, engine.store);

@@ -24,7 +24,6 @@ async function readSettings(server) {
   return all.runtimes[all.active];
 }
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
-import { StatuslineCollector } from '../src/lib/collectors/statusline-collector.js';
 import {
   DEFAULT_CODEX_MODEL_PRICES,
   DEFAULT_CODEX_PRIORITY_MODEL_PRICES,
@@ -82,7 +81,7 @@ function parseConfigFile(configPath) {
 async function makeSettingsServer(t, runtime = 'claude', configBody = {}, runCli) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'settings-server-'));
   const previous = process.env.ZYLOS_DIR;
-  let server, engine, ownedStore, reader, statusline, mutations = 0, closed = false;
+  let server, engine, ownedStore, reader, mutations = 0, closed = false;
   const timers = [], originalInterval = globalThis.setInterval;
   const close = async () => {
     if (closed) return;
@@ -125,9 +124,6 @@ async function makeSettingsServer(t, runtime = 'claude', configBody = {}, runCli
   t.mock.module('../src/lib/state-engine.js', { namedExports: {
     StateEngine: class extends StateEngine { constructor(...args) { super(...args); engine = this; } },
   } });
-  t.mock.module('../src/lib/collectors/statusline-collector.js', { namedExports: {
-    StatuslineCollector: class extends StatuslineCollector { constructor(...args) { super(...args); statusline = this; } },
-  } });
   t.mock.module('../src/lib/config-mutation.js', { namedExports: {
     mutateConfig: (...args) => { mutations++; return mutateConfig(...args); },
     withConfigLock,
@@ -150,7 +146,7 @@ async function makeSettingsServer(t, runtime = 'claude', configBody = {}, runCli
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   assert.equal(server.address().address, '127.0.0.1');
   assert.ok(engine.store.db.name.startsWith(dir + path.sep));
-  return { dir, configPath, store: engine.store, config: engine._config, statusline,
+  return { dir, configPath, store: engine.store, config: engine._config,
     mutations: () => mutations, origin: `http://127.0.0.1:${server.address().port}`, close };
 }
 
@@ -635,13 +631,6 @@ test('explicit runtime metadata reads saved defaults for active and inactive run
   fs.mkdirSync(path.join(server.dir, '.codex'), { recursive: true });
   fs.writeFileSync(path.join(server.dir, '.claude/settings.json'), JSON.stringify({ model: 'opus', effortLevel: 'low' }));
   fs.writeFileSync(path.join(server.dir, '.codex/config.toml'), 'model = "gpt-6-astra"\nmodel_reasoning_effort = "high"\n');
-  t.mock.method(server.statusline, '_read', async () => ({
-    identity: { runtime: 'claude', runId: 'running', sessionId: 'running-session' },
-    usage: { valid: true, sampledAt: Date.now(), value: {
-      model: { id: 'opus' }, effort: { level: 'high' }
-    } }
-  }));
-  await server.statusline.collect();
   for (const [runtime, effort] of [['claude', 'low'], ['codex', 'high']]) {
     const response = await fetch(server.origin + '/api/instance/runtime-options?runtime=' + runtime);
     assert.equal(response.status, 200);

@@ -213,7 +213,8 @@ export class UsageTranscripts {
             row.session_group == null && this._legacySessionId != null
             ? this._legacyStatusStale || row.session_id !== this._legacySessionId
             : row.run_id !== this._currentRun(row, snapshot));
-          if (snapshot && stat.size === offset && stat.mtimeMs < at - INACTIVE_MS && ended) status = 'finished';
+          const ownershipKnown = !snapshot?.transcriptIdentityOnly || this._currentRun(row, snapshot) !== null;
+          if (snapshot && ownershipKnown && stat.size === offset && stat.mtimeMs < at - INACTIVE_MS && ended) status = 'finished';
         } catch (error) {
           if (error.code === 'ENOENT') status = 'missing';
           else throw error;

@@ -62,7 +62,18 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
       events.push(filter); return [];
     } };
   const c4Reader = { getInboundTimes: () => [] };
-  const service = createGroupSnapshot({ zylosDir: root, store, cli, now: () => clock, readPm2, readSystem, displayNames,
+  const sessionObservations = {
+    reader,
+    async get() {
+      const group = mode === 'single' ? null : 'origin';
+      const groups = mode === 'single' ? [null] : [...new Set(['origin', ...keys])];
+      const values = await Promise.all(groups.map(async key =>
+        [key, structuredClone(await reader.readSessionState(key))]));
+      return { mode: modeError ? 'unreadable' : mode, group, observations: new Map(values) };
+    },
+    peek() { return null; },
+  };
+  const service = createGroupSnapshot({ zylosDir: root, store, cli, now: () => clock, readPm2, readSystem, displayNames, sessionObservations,
     readChannels: () => [{ channel: 'telegram', service: 'zylos-telegram' }],
     c4Reader, readConfigRuntime: () => { if (configFailure) throw new Error('config'); return configRuntime; }, loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => { if (modeError) throw new Error('config'); return { mode }; } };
@@ -709,11 +720,11 @@ test('unreadable mode still uses the collected view and bad fallback configurati
 // Integration: Cross-module per-reader failure boundary; run for observation handling changes.
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live
 // tmux/PM2/network. Fixture cleanup closes owned resources; auth timer is stopped.
-test('a failed per-group reader stays unknown instead of being projected idle', async t => {
+test('a failed session batch stays unknown instead of being projected idle', async t => {
   const f = fixture(t), read = f.reader.readSessionState;
   f.reader.readSessionState = key => key === 'telegram:g0' ? Promise.reject(new Error('broken group')) : read(key);
   const row = (await f.service.getSnapshot()).rows.find(item => item.sessionGroup === 'telegram:g0');
-  assert.equal(row.state.kind, 'unknown'); assert.equal(row.live.error.code, 'READ_FAILED');
+  assert.equal(row.state.kind, 'unknown'); assert.equal(row.state.reason, 'status_unreadable');
 });
 
 // Integration: actual Store with source timestamps arriving out of order. Run for
@@ -830,7 +841,8 @@ test('snapshot tolerates non-array tool details and redacts Core read failure te
     ? Promise.reject(new Error('failed Bearer secret123 and sk-123456789012345678901234')) : reader(key);
   f.advance(2100); snapshot = await f.service.getSnapshot();
   const row = snapshot.rows.find(item => item.sessionGroup === 'telegram:g0');
-  assert.equal(row.live.error.code, 'READ_FAILED'); assert.match(row.live.error.message, /REDACTED/);
+  assert.equal(row.state.kind, 'unknown'); assert.equal(row.state.reason, 'status_unreadable');
+  assert.equal(snapshot.sources.status.reason, 'status_unreadable');
   assert.equal(JSON.stringify(snapshot).includes('secret123'), false);
   assert.equal(JSON.stringify(snapshot).includes('sk-123456789012345678901234'), false);
   assert.equal('buildGroupSnapshot' in f.service, false);
