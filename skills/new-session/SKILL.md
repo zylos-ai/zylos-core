@@ -110,7 +110,7 @@ do not add a separate exit.
 3. **Enqueue switch command**: Puts the runtime-specific command into the control queue (`/clear` for Claude and Antigravity, `/exit` for Codex)
 4. **Deliver when idle**: Dispatcher delivers the command when idle
 5. **Session switches**:
-   - Claude and Antigravity (`agy`): `/clear` resets conversation context, session-start hooks fire, and background subagents continue independently
+   - Claude: `/clear` resets conversation context, session-start hooks fire, and background subagents continue independently
    - Antigravity: `/clear` resets context; the router sends a kick to fire SessionStart before the next turn
    - Codex: `/exit` exits the current session so a fresh one can start
 6. **New session**: Bootstrap supplies W4 and working-memory paths. READY permits

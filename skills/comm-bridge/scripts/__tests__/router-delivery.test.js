@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createRouterDiagnostics } from '../router/diagnostics.js';
 import { createJsonlStream } from '../../../../cli/lib/jsonl-stream.js';
 import assert from 'node:assert/strict';
+import { BRACKETED_PASTE_ENABLED } from '../c4-config.js';
 import { createDelivery, getDeliveryDelay, checkClaudeFallbackInputBox } from '../router/delivery.js';
 import { fixture } from './c4-v2-test-helpers.js';
 const error = code => Object.assign(new Error(code), { code });
@@ -634,7 +635,7 @@ test('no-paste controls and failed text paste never emit a delivery notification
 
 // Real router and store with isolated runner HOME/ZYLOS_DIR; no model or
 // process is launched. Run when agy delivery or input-frame rules change.
-for (const screen of ['empty', 'slash', 'trust', 'text', 'cursor']) test(`agy delivery gates ${screen} input and forces bracketed paste`, async t => {
+for (const screen of ['empty', 'slash', 'trust', 'text', 'cursor']) test(`agy delivery gates ${screen} input`, async t => {
   const f = setup(t), row = f.message(); f.target.runtime = 'agy';
   const rule = '─'.repeat(40);
   const body = screen === 'slash' ? '> /' : screen === 'trust' ? '> Trust\n  Cancel' : screen === 'text' ? '> draft' : '>';
@@ -644,7 +645,7 @@ for (const screen of ['empty', 'slash', 'trust', 'text', 'cursor']) test(`agy de
   assert.equal(f.row(row.id).status, screen === 'empty' ? 'delivered' : 'pending');
   const pastes = f.calls.filter(c => c[0] === 'paste');
   assert.equal(pastes.length, screen === 'empty' ? 1 : 0);
-  if (pastes.length) assert.equal(pastes[0][1].bracketedPaste, true);
+  if (pastes.length) assert.equal(pastes[0][1].bracketedPaste, BRACKETED_PASTE_ENABLED);
 });
 
 test('agy clear submits a kick after the reset and writes the clear source marker', async t => {
@@ -659,7 +660,26 @@ test('agy clear submits a kick after the reset and writes the clear source marke
   assert.equal(pastes.length, 2);
   assert.equal(pastes[0][1].text, '/clear');
   assert.match(pastes[1][1].text, /System startup trigger/);
-  assert(pastes.every(c => c[1].bracketedPaste));
+  assert(pastes.every(c => c[1].bracketedPaste === BRACKETED_PASTE_ENABLED));
   const { groupRunDir } = await import('../../../../cli/lib/session-group-paths.js');
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(groupRunDir('origin'), 'agy-session-source'), 'utf8')), { runId: 'r1', source: 'clear' });
 });
+
+// Real router/ledger and input-state code with a fake terminal under the
+// runner's isolated HOME/ZYLOS_DIR. Run for AGY input/Enter verification changes;
+// skip unrelated hooks or UI. No tmux/model/background process is launched.
+for (const [kind, body] of [['multiline', '> first line\n  second line\n  third line'], ['wrapped', '> one long line\n  wrapped remainder']]) {
+  test(`agy retries a lost first Enter for ${kind} input without repasting`, async t => {
+    const f=setup(t),row=f.message();f.target.runtime='agy';
+    const rule='─'.repeat(40);let pasted=false,enters=0;
+    f.deps.formatConversation=()=> 'first line\nsecond line\nthird line';
+    f.adapter.sendText=async args=>{pasted=true;f.calls.push(['paste',args]);};
+    f.adapter.sendKeys=async args=>{if(args.keys.includes('Enter'))enters++;f.calls.push(['keys',args]);};
+    f.adapter.captureScreen=async()=>[rule,pasted && enters<2?body:'>',rule].join('\n');
+    f.connection.command=async args=>args.at(-1)==='#{cursor_x}'?'2':String(pasted && enters<2?body.split('\n').length:1);
+    const d=f.create();t.after(()=>d.stop());await d.deliverConversation(row);
+    assert.equal(f.row(row.id).status,'delivered');assert.equal(f.row(row.id).retry_count,0);
+    assert.equal(f.calls.filter(call=>call[0]==='paste').length,1);assert.equal(enters,2);
+    assert.equal(f.calls.find(call=>call[0]==='paste')[1].text,'first line\nsecond line\nthird line');
+  });
+}

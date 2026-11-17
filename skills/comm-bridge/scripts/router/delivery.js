@@ -240,7 +240,7 @@ export function createDelivery(deps, configuration = {}) {
         else {
           await revalidate(bound());
           const y = Number.parseInt((await connection.command([C.displayMessage, '-p', '-t', target.paneId, F.cursorY])).trim(), 10);
-          const prompt = findPromptY(await adapter.captureScreen(bound()), target.runtime);
+          const prompt = findPromptY(await adapter.captureScreen(bound()));
           if (Number.isInteger(y) && y >= 0 && prompt >= 0) verdict = y === prompt ? 'empty' : 'has_content';
         }
       }
@@ -354,7 +354,7 @@ export function createDelivery(deps, configuration = {}) {
               await fs.mkdir(directory, { recursive: true });
               await fs.writeFile(path.join(directory, 'agy-session-source'), JSON.stringify({ runId: target.runId, source: 'clear' }), { mode: 0o600 });
             }
-            await io(() => adapter.sendText({ ...bound(), text: sanitized, bracketedPaste: target.runtime === 'agy' || BRACKETED_PASTE_ENABLED }));
+            await io(() => adapter.sendText({ ...bound(), text: sanitized, bracketedPaste: BRACKETED_PASTE_ENABLED }));
             pastedAt = now();
             try { Promise.resolve(deps.notifyDelivered({
               ...(type === 'conversation' ? { conversationId: row.id, channel: row.channel } : { controlId: row.id }),
@@ -381,7 +381,7 @@ export function createDelivery(deps, configuration = {}) {
             if (clearAgy) {
               // /clear itself does not fire SessionStart in agy. Its first
               // message does, so use the same internal sentinel as launch.
-              await io(() => adapter.sendText({ ...bound(), text: buildKickPrompt(), bracketedPaste: true }));
+              await io(() => adapter.sendText({ ...bound(), text: buildKickPrompt(), bracketedPaste: BRACKETED_PASTE_ENABLED }));
               await sleep(getDeliveryDelay(Buffer.byteLength(buildKickPrompt(), 'utf8')));
               if (!await verify()) throw failure('ENTER_UNVERIFIED');
             }

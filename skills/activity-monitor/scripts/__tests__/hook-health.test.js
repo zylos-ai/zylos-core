@@ -53,3 +53,17 @@ test('CLI collector fails open for malformed input without echoing sensitive tex
   assert.equal(result.status,0);assert.doesNotMatch(result.stdout+result.stderr,/PRIVATE/);
   assert.match(result.stderr,/could not be persisted/);
 });
+
+test('malformed optional model configuration preserves native health collection', t => {
+  const options = fixture(t);
+  for (const value of ['{ invalid optional metadata', 'null', '42']) {
+    const env = { ZYLOS_DIR: options.zylosDir, ZYLOS_MODEL_CONFIG: value };
+    const event = collectHealthHook(payload, { ...options, env });
+    assert.equal(event.runtime, 'claude');
+    assert.equal(event.event, 'stop_failure');
+    assert.equal(event.session_id, 'session');
+  }
+  const records = fs.readFileSync(path.join(options.zylosDir, 'activity-monitor/events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(records.length, 3);
+  assert.ok(records.every(event => event.runtime === 'claude'));
+});

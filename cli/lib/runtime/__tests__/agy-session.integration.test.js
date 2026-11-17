@@ -6,6 +6,7 @@ import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
 import { AgyAdapter } from '../agy.js';
 import { openTmuxConnection } from '../tmux-connection.js';
 import { resolveSessionTarget } from '../session-target.js';
+import { agyConfigurationPaths, isAgyConfigReady } from '../../agy-setup.js';
 
 // Integration boundary: real agy adapter launch, environment, identity and paste
 // through a private tmux socket, using a synthetic CLI and no model/API calls.
@@ -13,7 +14,7 @@ import { resolveSessionTarget } from '../session-target.js';
 // The official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR. This case reads
 // back every target path before launch; teardown closes clients, kills its own
 // server and reaps its fake runtime. No database, live runtime or PM2 is used.
-test('agy session launches and receives all lines inside one bracketed paste', { timeout: 10000 }, async t => {
+for (const sessionGroup of [null, 'telegram:agy']) test(`agy session launches with prepared configuration and receives one paste for group ${sessionGroup}`, { timeout: 10000 }, async t => {
   let connection;
   const f = isolatedTmux(t, { prefix: 'agy-session-', beforeCleanup: () => connection?.close() });
   const env = { HOME: f.dir, ZYLOS_DIR: f.dir, PM2_HOME: path.join(f.dir, 'pm2'), TMPDIR: f.dir,
@@ -24,10 +25,13 @@ test('agy session launches and receives all lines inside one bracketed paste', {
   const source = await fs.readFile(new URL('./fixtures/agy-cli.js', import.meta.url), 'utf8');
   await fs.writeFile(env.AGY_BIN, `#!${process.execPath}\n${source}`, { mode: 0o700 });
   await fs.writeFile(path.join(f.dir, 'AGENTS.md'), '# Isolated test instructions\n');
+  for (const file of Object.values(agyConfigurationPaths(f.dir))) await assert.rejects(fs.stat(file), { code: 'ENOENT' });
   const tmuxName = 'isolated-agy';
   const adapter = new AgyAdapter({ root: f.dir, env, tmux: { binary: f.binary, socketPath: f.socketPath, configFile: '/dev/null' }, paths: { tmuxNameForGroup: () => tmuxName } });
-  const launched = await adapter.launch({ sessionGroup: null, runId: 'agy-test-run', launchConfig: { runtime: 'agy', mode: 'default' }, sessionMode: 'single' });
+  const launched = await adapter.launch({ sessionGroup, runId: 'agy-test-run', launchConfig: { runtime: 'agy', mode: 'default' }, sessionMode: sessionGroup === null ? 'single' : 'multi' });
   assert.equal(launched.tmuxName, tmuxName);
+  assert.equal(isAgyConfigReady({ zylosDir: f.dir, home: f.dir }), true);
+  assert.equal(await fs.readFile(path.join(f.dir, 'AGENTS.md'), 'utf8'), '# Isolated test instructions\n');
   const deadline = performance.now() + 2000;
   let observed;
   while (!observed && performance.now() < deadline) {
@@ -40,7 +44,7 @@ test('agy session launches and receives all lines inside one bracketed paste', {
   assert.equal(observed.apiKeyPresent, true);
   assert.equal(observed.autoUpdate, 'true');
   assert.equal(observed.runId, 'agy-test-run');
-  assert.equal(observed.group, undefined);
+  assert.equal(observed.group, sessionGroup ?? undefined);
   assert.deepEqual(JSON.parse(observed.args[observed.args.indexOf('--settings') + 1]), { modelProvider: 'gemini', trustedWorkspaces: [f.dir] });
   assert.ok(observed.args.includes('-i'));
   connection = await openTmuxConnection({ binary: f.binary, socketPath: f.socketPath });

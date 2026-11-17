@@ -662,7 +662,7 @@ export async function enqueueRestartIfNeeded({
   }
 }
 
-export function syncRuntimeHooks({
+function syncSharedRuntimeHooks({
   zylosDir = ZYLOS_DIR,
   dryRun = false,
   stopFailureSupported = detectStopFailureSupport(),
@@ -758,10 +758,9 @@ export function syncRuntimeHooks({
   if (codexHooks.changed) {
     console.log('Codex hooks: updated; they take effect at the next Codex session start.');
   }
-  const agySync = hasAgyZylosHooks() ? syncAgyConfig({ zylosDir, dryRun }) : { changed: false };
-  const result = { claude: { added, updated, removed }, codex: codexHooks, agy: agySync, stopFailureSupported };
+  const result = { claude: { added, updated, removed }, codex: codexHooks, stopFailureSupported };
 
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexSync.changed && !codexHooks.changed && !agySync.changed) {
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexSync.changed && !codexHooks.changed) {
     console.log('Settings hooks: all up to date (no changes).');
     return { ...result, changed: false };
   }
@@ -779,7 +778,7 @@ export function syncRuntimeHooks({
     modelBackfilled: modelSync.changed,
   });
 
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexHooks.changed && !agySync.changed) {
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexHooks.changed) {
     console.log(`Settings hooks: all up to date; Codex config ${codexSync.changed ? 'refreshed' : 'unchanged'}.`);
     return { ...result, changed: false };
   }
@@ -787,6 +786,20 @@ export function syncRuntimeHooks({
   console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${thresholdSync.changed ? ', new-session threshold paired' : ''}${settingsBackfilled ? ', settings backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}${codexHooks.changed ? ', Codex hooks refreshed' : ''}.`);
 
   return { ...result, changed: true };
+}
+
+/** Antigravity synchronization reports separately and never requests a shared-runtime restart. */
+export function syncRuntimeHooks(options = {}) {
+  const result = syncSharedRuntimeHooks(options);
+  let agy = { changed: false };
+  if (hasAgyZylosHooks()) {
+    try { agy = syncAgyConfig({ zylosDir: options.zylosDir || ZYLOS_DIR, dryRun: options.dryRun || false }); }
+    catch (error) {
+      agy.error = { code: error.code || 'AGY_CONFIG_SYNC_FAILED', message: error.message };
+      console.error(`Antigravity configuration: ${agy.error.message}`);
+    }
+  }
+  return result ? { ...result, agy } : result;
 }
 
 export async function main(argv = process.argv.slice(2)) {

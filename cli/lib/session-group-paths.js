@@ -8,7 +8,7 @@ import { tmuxClientArgs } from './runtime/tmux-client-args.js';
 import { TMUX_COMMAND as C, TMUX_FORMAT as F, parseGroupSessionRows, groupListNoServer } from './runtime/tmux-protocol.js';
 
 export const GROUP_TMUX_PREFIX = 'zylos-group-';
-export const LEGACY_TMUX_NAMES = Object.freeze(['claude-main', 'codex-main', 'agy-main']);
+export const LEGACY_TMUX_NAMES = Object.freeze(['claude-main', 'codex-main']);
 export const SETUP_TMUX_NAME = 'zylos-setup';
 export const RUN_FILES = Object.freeze({
   CURRENT_SESSION: 'current-session.json', STATUSLINE: 'statusline.json',

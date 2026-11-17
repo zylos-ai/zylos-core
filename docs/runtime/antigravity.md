@@ -13,13 +13,16 @@ zylos runtime status
 Personal Google AI Pro/Ultra subscription login and Vertex are unsupported.
 Authentication validation uses the Gemini models HTTP endpoint; `agy models`
 does not establish that a key is valid. The HTTP probe sends its key in a header
-and returns only fixed status reasons. Do not paste keys into issue comments.
+and returns only fixed status reasons. The bounded curl probe uses the saved
+HTTPS_PROXY setting used for runtime launch. Do not paste keys into issue comments.
 
 The per-HOME setup merges Gemini provider settings, a Zylos statusLine command,
 Zylos hook entries with explicit 60-second timeouts and the memory MCP server.
 Other named hook and MCP entries are retained. Onboarding completion is prewritten
 and interaction data collection is disabled. Launch also selects the Gemini
 provider and workspace trust explicitly without changing global trust settings.
+Each launch prepares the agy configuration before tmux starts, including the first
+launch through a group runtime override. A missing API key fails before setup.
 
 A launch kick triggers SessionStart before the first model turn. SessionStart
 injects the complete system and user instructions as `injectSteps` JSON. The

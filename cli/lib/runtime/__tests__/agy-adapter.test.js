@@ -3,18 +3,37 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import { AgyAdapter } from '../agy.js';
 import { getSessionAdapter, SUPPORTED_RUNTIMES } from '../index.js';
 import { buildRuntimeArgs, launchEnvironment, validateLaunchConfig } from '../session-command.js';
 import { readTargetRuntime } from '../session-target.js';
 import { modelThreshold, thresholdLimit } from '../../model-rotation-thresholds.js';
 import { applyUpgradePrompt } from '../upgrade-context.js';
+import { agyConfigurationPaths, isAgyConfigReady } from '../../agy-setup.js';
+
+function probeExecutor({ status = 200, error = null, inspect = () => {} } = {}) {
+  return (command, args, options, callback) => {
+    const stdin = new PassThrough();
+    let input = '';
+    stdin.on('data', chunk => { input += chunk; });
+    stdin.on('finish', () => {
+      inspect({ command, args, options, input });
+      callback(error, String(status));
+    });
+    return { stdin };
+  };
+}
 
 async function fixture(t, contents = '') {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'agy-adapter-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   if (contents) await fs.writeFile(path.join(root, '.env'), contents);
-  return { root, env: { HOME: root, PATH: '/bin' } };
+  // Unit probes must never fall back to a real curl if their transport seam
+  // changes. Only explicitly injected executors can make a request here.
+  const bin = path.join(root, 'empty-bin');
+  await fs.mkdir(bin);
+  return { root, env: { HOME: root, PATH: bin } };
 }
 
 test('registry selects agy without changing existing runtime selection', () => {
@@ -67,27 +86,30 @@ test('agy environment accepts inherited API key and omits an unset proxy', async
 
 for (const status of [200, 400, 401, 403, 429, 500]) test(`agy auth classifies HTTP ${status} without exposing the credential`, async t => {
   const f = await fixture(t, 'GEMINI_API_KEY=test-secret\n');
-  let calls = 0, cancelled = false;
-  const adapter = new AgyAdapter({ ...f, fetch: async (url, options) => {
+  let calls = 0;
+  const adapter = new AgyAdapter({ ...f, execFile: probeExecutor({ status, inspect: ({ command, args, options, input }) => {
     calls++;
-    assert.equal(url, 'https://generativelanguage.googleapis.com/v1beta/models');
-    assert.equal(options.headers['x-goog-api-key'], 'test-secret');
-    assert.equal(options.method, 'GET');
-    assert.equal(options.redirect, 'error');
-    assert.ok(options.signal instanceof AbortSignal);
-    return { status, body: { cancel: async () => { cancelled = true; } } };
-  } });
+    assert.equal(command, 'curl');
+    assert.equal(args[0], '-q');
+    assert.equal(args[args.indexOf('--url') + 1], 'https://generativelanguage.googleapis.com/v1beta/models');
+    assert.equal(args[args.indexOf('--header') + 1], '@-');
+    assert.equal(args.includes('--location'), false);
+    assert.equal(JSON.stringify(args).includes('test-secret'), false);
+    assert.equal(input, 'x-goog-api-key: test-secret\n');
+    assert.equal(options.timeout, 11_000);
+    assert.equal(options.env.GEMINI_API_KEY, 'test-secret');
+    assert.equal(options.stdio[2], 'ignore');
+  } }) });
   const result = await adapter.checkAuth();
   assert.equal(result.status, status === 200 ? 'success' : [400, 401, 403].includes(status) ? 'failure' : 'uncertain');
   assert.equal(JSON.stringify(result).includes('test-secret'), false);
   assert.equal(calls, 1);
-  assert.equal(cancelled, true);
 });
 
 test('agy auth missing key, network failure and unreadable configuration are bounded and sanitized', async t => {
   const f = await fixture(t);
   let calls = 0;
-  const adapter = new AgyAdapter({ ...f, fetch: async () => { calls++; throw new Error('credential: test-secret'); } });
+  const adapter = new AgyAdapter({ ...f, execFile: probeExecutor({ error: new Error('credential: test-secret'), inspect: () => calls++ }) });
   assert.deepEqual(await adapter.checkAuth(), { status: 'failure', reason: 'api_key_missing' });
   assert.equal(calls, 0);
   await fs.writeFile(path.join(f.root, '.env'), 'GEMINI_API_KEY=test-secret\n');
@@ -101,6 +123,67 @@ test('agy launch refuses a missing API key before creating any tmux resource', a
   const f = await fixture(t);
   const adapter = new AgyAdapter({ ...f, dependencies: { openTmuxConnection: () => assert.fail('No tmux before credential preflight') } });
   await assert.rejects(adapter.launch({}), { code: 'LAUNCH_FAILED', message: 'Antigravity requires GEMINI_API_KEY; account login is not supported' });
+  await assert.rejects(fs.stat(path.join(f.root, '.gemini')), { code: 'ENOENT' });
+  await assert.rejects(fs.stat(path.join(f.root, 'AGENTS.md')), { code: 'ENOENT' });
+});
+
+test('agy group launch prepares its first HOME configuration before touching tmux', async t => {
+  const f = await fixture(t, 'GEMINI_API_KEY=test-key\n');
+  await fs.writeFile(path.join(f.root, 'AGENTS.md'), '# Shared complete instructions\n');
+  const adapter = new AgyAdapter({ ...f, paths: { tmuxNameForGroup: () => 'isolated-agy' }, dependencies: {
+    openTmuxConnection: async () => {
+      assert.equal(isAgyConfigReady({ home: f.root, zylosDir: f.root }), true);
+      const paths = agyConfigurationPaths(f.root);
+      const hooks = JSON.parse(await fs.readFile(paths.hooks, 'utf8'));
+      assert.ok(hooks.zylos.SessionStart);
+      assert.ok(hooks.zylos.PreInvocation);
+      assert.ok(hooks.zylos.Stop);
+      const mcp = JSON.parse(await fs.readFile(paths.mcp, 'utf8'));
+      assert.ok(mcp.mcpServers['zylos-memory']);
+      return { close() {} };
+    },
+    observeSessionTarget: async () => ({ present: true }),
+  } });
+  // A conflict proves preflight reached tmux only after preparing this new HOME.
+  await assert.rejects(adapter.launch({ sessionGroup: 'telegram:agy', runId: 'test-run', sessionMode: 'multi', launchConfig: { runtime: 'agy', mode: 'default' } }), { code: 'NAME_CONFLICT' });
+  assert.equal(await fs.readFile(path.join(f.root, 'AGENTS.md'), 'utf8'), '# Shared complete instructions\n');
+});
+
+test('agy group launch without a key rejects before setup or tmux', async t => {
+  const f = await fixture(t);
+  const adapter = new AgyAdapter({ ...f, dependencies: { openTmuxConnection: () => assert.fail('No tmux without a key') } });
+  await assert.rejects(adapter.launch({ sessionGroup: 'telegram:agy', runId: 'test-run', sessionMode: 'multi', launchConfig: { runtime: 'agy', mode: 'default' } }), { code: 'LAUNCH_FAILED' });
+  for (const file of Object.values(agyConfigurationPaths(f.root))) await assert.rejects(fs.stat(file), { code: 'ENOENT' });
+});
+
+test('agy launch rejects malformed configuration before any tmux work', async t => {
+  const f = await fixture(t, 'GEMINI_API_KEY=test-key\n');
+  const settings = agyConfigurationPaths(f.root).settings;
+  await fs.mkdir(path.dirname(settings), { recursive: true });
+  await fs.writeFile(settings, '{malformed');
+  const adapter = new AgyAdapter({ ...f, dependencies: { openTmuxConnection: () => assert.fail('No tmux with malformed settings') } });
+  await assert.rejects(adapter.launch({ sessionGroup: 'telegram:agy' }), { code: 'AGY_CONFIG_UNREADABLE' });
+  assert.equal(await fs.readFile(settings, 'utf8'), '{malformed');
+});
+
+test('agy auth gives curl the same saved proxy environment as runtime launch', async t => {
+  const f = await fixture(t, 'GEMINI_API_KEY=test-secret\nHTTPS_PROXY=http://saved-proxy.invalid:3128\n');
+  const env = { ...f.env, HTTPS_PROXY: 'http://inherited-proxy.invalid:8080', https_proxy: 'http://stale-alias.invalid:8080' };
+  let calls = 0;
+  const adapter = new AgyAdapter({ ...f, env, execFile: probeExecutor({ inspect: ({ options }) => {
+    calls++;
+    assert.equal(options.env.HTTPS_PROXY, launchEnvironment(f.root, env, { runtime: 'agy' }).HTTPS_PROXY);
+    assert.equal(options.env.HTTPS_PROXY, 'http://saved-proxy.invalid:3128');
+    assert.equal(options.env.https_proxy, 'http://saved-proxy.invalid:3128');
+  } }) });
+  assert.equal((await adapter.checkAuth()).status, 'success');
+  assert.equal(calls, 1);
+});
+
+test('agy auth rejects multiline key headers before starting a request', async t => {
+  const f = await fixture(t);
+  const adapter = new AgyAdapter({ ...f, env: { ...f.env, GEMINI_API_KEY: 'key\nInjected: value' }, execFile: () => assert.fail('No request for an invalid header') });
+  assert.deepEqual(await adapter.checkAuth(), { status: 'uncertain', reason: 'http_probe_network_error' });
 });
 
 test('agy always uses one guarded bracketed paste even when the caller disables it', async () => {

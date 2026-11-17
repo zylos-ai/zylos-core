@@ -11,6 +11,7 @@ const {
   isCoreManaged,
   persistInstalledSettingsAndSyncCoupledThreshold,
   syncCodexConfig,
+  syncRuntimeHooks,
   syncHooks,
   syncModelCoupledNewSessionThreshold,
   syncTemplateSetting,
@@ -1338,5 +1339,71 @@ describe('syncHooks forward pass', () => {
     // clear group should be cleaned up (empty after removal)
     const clearGroup = installed.hooks.SessionStart.find(g => g.matcher === 'clear');
     assert.equal(clearGroup, undefined); // empty group gets removed
+  });
+});
+
+
+describe('independent Antigravity hook synchronization', () => {
+  function isolatedHome(t) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-hook-sync-'));
+    const zylosDir = path.join(home, 'zylos');
+    const previous = process.env.HOME;
+    process.env.HOME = home;
+    t.after(() => {
+      if (previous === undefined) delete process.env.HOME;
+      else process.env.HOME = previous;
+      fs.rmSync(home, { recursive: true, force: true });
+    });
+    fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, '.claude/settings.json'), JSON.stringify({ hooks: {} }));
+    fs.mkdirSync(path.join(home, '.gemini/config'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.gemini/config/hooks.json'), JSON.stringify({ zylos: {} }));
+    return { home, zylosDir, settings: path.join(home, '.gemini/antigravity-cli/settings.json') };
+  }
+
+  it('saves Claude and Codex hooks when opted-in Antigravity configuration is malformed', t => {
+    const f = isolatedHome(t);
+    fs.mkdirSync(path.dirname(f.settings), { recursive: true });
+    fs.writeFileSync(f.settings, '{"modelProvider":"gemini",}');
+    const errors = [];
+    const originalError = console.error;
+    console.error = message => errors.push(message);
+    t.after(() => { console.error = originalError; });
+    const result = syncRuntimeHooks({ zylosDir: f.zylosDir, stopFailureSupported: false,
+      subagentHooksSupported: false, log: () => {} });
+    assert.equal(result.changed, true);
+    assert.ok(result.claude.added > 0);
+    const settings = JSON.parse(fs.readFileSync(path.join(f.zylosDir, '.claude/settings.json'), 'utf8'));
+    const commands = Object.values(settings.hooks).flatMap(groups => groups.flatMap(group => getCommandHooks(group)));
+    assert.ok(commands.some(hook => hook.command.includes('session-start-orchestrator.js')));
+    assert.ok(fs.existsSync(path.join(f.zylosDir, '.codex/hooks.json')));
+    assert.ok(fs.existsSync(path.join(f.home, '.codex/config.toml')));
+    assert.equal(result.agy.changed, false);
+    assert.equal(result.agy.error.code, 'AGY_CONFIG_UNREADABLE');
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /^Antigravity configuration:/);
+    assert.equal(fs.readFileSync(f.settings, 'utf8'), '{"modelProvider":"gemini",}');
+  });
+
+  it('repairs Antigravity-only drift without marking Claude or Codex changed', t => {
+    const f = isolatedHome(t);
+    const options = { zylosDir: f.zylosDir, stopFailureSupported: false, subagentHooksSupported: false, log: () => {} };
+    syncRuntimeHooks(options);
+    const settings = JSON.parse(fs.readFileSync(f.settings, 'utf8'));
+    settings.modelProvider = 'stale';
+    fs.writeFileSync(f.settings, JSON.stringify(settings));
+    const claudePath = path.join(f.zylosDir, '.claude/settings.json');
+    const claudeBefore = fs.readFileSync(claudePath, 'utf8');
+    const dryRun = syncRuntimeHooks({ ...options, dryRun: true });
+    assert.equal(dryRun.agy.changed, true);
+    assert.equal(dryRun.changed, false);
+    assert.equal(JSON.parse(fs.readFileSync(f.settings, 'utf8')).modelProvider, 'stale');
+    const result = syncRuntimeHooks(options);
+    assert.equal(result.agy.changed, true);
+    assert.equal(result.changed, false);
+    assert.equal(result.claude.added + result.claude.updated + result.claude.removed, 0);
+    assert.equal(result.codex.changed, false);
+    assert.equal(JSON.parse(fs.readFileSync(f.settings, 'utf8')).modelProvider, 'gemini');
+    assert.equal(fs.readFileSync(claudePath, 'utf8'), claudeBefore);
   });
 });

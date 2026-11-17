@@ -4,8 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { readZylosConfigOrThrow } from './local-config.js';
 import { runtimeRoot, isManagedClaudeProcess } from '../../activity-monitor/scripts/runtime-generation.js';
 function configuredSession() {
-  const runtime = readZylosConfigOrThrow().runtime;
-  return `${['claude', 'codex', 'agy'].includes(runtime) ? runtime : 'claude'}-main`;
+  return readZylosConfigOrThrow().runtime === 'codex' ? 'codex-main' : 'claude-main';
 }
 
 export function readDeliveryIdentity({ zylosDir = runtimeRoot(), session = configuredSession(),
