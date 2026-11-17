@@ -43,7 +43,16 @@ export function validateSnapshotManifest(manifest) {
   }
   return items;
 }
-const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+// Hash in fixed-size chunks: readFileSync rejects files over 2 GiB and would
+// hold a whole database in memory. The digest is identical to a whole-file read.
+export const HASH_CHUNK_BYTES = 1024 * 1024;
+export function hash(file) {
+  const digest = crypto.createHash('sha256'), buffer = Buffer.allocUnsafe(HASH_CHUNK_BYTES), fd = fs.openSync(file, 'r');
+  try {
+    for (let bytes; (bytes = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0;) digest.update(buffer.subarray(0, bytes));
+  } finally { fs.closeSync(fd); }
+  return digest.digest('hex');
+}
 function schemaError(message, code, cause) {
   return Object.assign(new Error(message), {code:cause?.code === 'SCHEMA_TOO_NEW' ? cause.code : code});
 }
