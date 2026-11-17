@@ -323,7 +323,8 @@ export function createSupervisor(deps) {
         lifecycle.messageDelivered(delivered);
       }
       await admission.serialize(()=>lifecycle.workDelivered(delivered));
-    },onHealthEvents:()=>{void loop.tick();},log});
+    },onDeliveryFailed:(notification,current)=>observer.notifyDeliveryFailed(notification,current),
+    onHealthEvents:()=>{void loop.tick();},log});
   const drainHealthWrites=async()=>{
     while(health.queues.size)await Promise.allSettled([...health.queues.values()]);
   };

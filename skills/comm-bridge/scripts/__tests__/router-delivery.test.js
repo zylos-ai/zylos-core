@@ -163,11 +163,13 @@ for (const outcome of ['fresh idle', 'deadline']) test(`idle settlement polls st
 test('binding failures do not retry business and terminate only directed control', async t => {
   for (const code of ['TARGET_GONE', 'GENERATION_CHANGED', 'RUNID_MISMATCH', 'TMUX_UNAVAILABLE']) await t.test(code, async t => {
     const f = setup(t), row = f.message(); f.deps.resolveSessionTarget = async () => { throw error(code); };
+    const notifications = []; f.deps.notifyDeliveryFailed = fact => notifications.push(fact);
     const d = f.create(); await d.deliverConversation(row);
     assert.equal(f.row(row.id).status, 'pending'); assert.equal(f.row(row.id).retry_count, 0);
     const directed = f.control('x', { target_binding: '{}' }), ordinary = f.control();
     await d.deliverControl(directed); await d.deliverControl(ordinary);
     assert.equal(directed.status, code === 'TMUX_UNAVAILABLE' ? 'pending' : 'timeout'); assert.equal(ordinary.status, 'pending');
+    assert.deepEqual(notifications, [], 'identity errors cannot request a delivery failure restart');
   });
 });
 
@@ -683,3 +685,36 @@ for (const [kind, body] of [['multiline', '> first line\n  second line\n  third 
     assert.equal(f.calls.find(call=>call[0]==='paste')[1].text,'first line\nsecond line\nthird line');
   });
 }
+
+test('only a committed terminal Enter failure notifies the supervisor with the pasted run identity', async t => {
+  const f = setup(t), row = f.message(), notifications = [];
+  f.adapter.sendKeys = async () => { throw error('ENTER_UNVERIFIED'); };
+  f.deps.notifyDeliveryFailed = fact => {
+    assert.equal(f.row(row.id).status, 'failed', 'the ledger transition commits before notification');
+    assert.equal(f.calls.at(-1)[0], 'failDelivery');
+    notifications.push(fact);
+    return Promise.reject(new Error('supervisor unavailable'));
+  };
+  const delivery = f.create();
+  await delivery.deliverConversation(row);
+  assert.deepEqual(notifications, [], 'a retryable failure cannot trigger a restart');
+  assert.equal(f.store.claimConversation(row.id), true);
+  await delivery.deliverConversation(row);
+  assert.deepEqual(notifications, [{ conversationId: row.id, sessionGroup: row.session_group,
+    runId: 'r1', sessionId: 's1', runtime: 'codex', pastedAt: f.calls.filter(c => c[0] === 'notify').at(-1)[1].pastedAt }]);
+  await delivery.deliverConversation(row);
+  assert.equal(notifications.length, 1, 'a lost conditional transition cannot repeat the notification');
+  assert.equal(f.row(row.id).retry_count, 2);
+});
+
+test('terminal paste failures cannot request an Enter failure restart', async t => {
+  const f = setup(t), row = f.message(), notifications = [];
+  f.adapter.sendText = async () => { throw error('PASTE_FAILED'); };
+  f.deps.notifyDeliveryFailed = fact => notifications.push(fact);
+  const delivery = f.create();
+  await delivery.deliverConversation(row);
+  f.store.claimConversation(row.id);
+  await delivery.deliverConversation(row);
+  assert.equal(f.row(row.id).status, 'failed');
+  assert.deepEqual(notifications, []);
+});

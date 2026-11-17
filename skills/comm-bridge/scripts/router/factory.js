@@ -11,7 +11,7 @@ import { createRouter } from './scheduler.js';
 import { createDelivery } from './delivery.js';
 import { formatConversation } from './format.js';
 import { resolveDashboardQuote } from '../dashboard-source.js';
-import { notifyDelivered } from './notify.js';
+import { notifyDelivered, notifyDeliveryFailed } from './notify.js';
 import { createStatusNoticeSender } from '../c4-status-notice.js';
 import { createPendingExpiryHandler } from './expiry.js';
 import { createRouterDiagnostics } from './diagnostics.js';
@@ -86,6 +86,7 @@ export function createDispatcher(overrides = {}, options = {}) {
       lookupQuote: current => resolveDashboardQuote(current, db.getDb()),
     })),
     notifyDelivered: overrides.notifyDelivered ?? notifyDelivered,
+    notifyDeliveryFailed: overrides.notifyDeliveryFailed ?? notifyDeliveryFailed,
   }, { ...options.delivery, tmux });
   router = createRouter({ ...providers, handleExpired, sendStatusNotice,
     canAttemptDelivery: delivery.canAttempt, finishDeliveryWait: delivery.finishWait, sweepDeliveryWaits: delivery.sweepWaits,

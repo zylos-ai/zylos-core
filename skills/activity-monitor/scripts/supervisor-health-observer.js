@@ -26,6 +26,8 @@ export class SupervisorHealthObserver {
     this.verifications = new Map();
     this.preparations = new Set();
     this.recoveryWaits = new Map();
+    // Process-local stop reservations deduplicate facts while a run is stopping.
+    this.deliveryFailureRestarts = new Map();
     this.stopped = false;
   }
   probeInFlight(runtime) { return this.probes.has(runtime); }
@@ -51,6 +53,35 @@ export class SupervisorHealthObserver {
         screenChecked:false, recovery:previous?.recovery ?? null, retryAt:previous?.retryAt ?? 0};
     }
     return true;
+  }
+  async notifyDeliveryFailed(notification, observed = null) {
+    const {sessionGroup,runId,sessionId,runtime,pastedAt}=notification;
+    if(this.stopped || !sessionGroup || !runId || !sessionId || !Number.isFinite(pastedAt))return false;
+    const scene=observed ?? await this.readIdentity(sessionGroup);
+    if(!sameRun(notification,scene) || scene.sessionId!==sessionId)return false;
+    const state=await this.readState(scene);
+    const previous=this.deliveryFailureRestarts.get(sessionGroup);
+    if(previous?.runId===runId)return false;
+    const valid=async current=>{
+      if(current.sessionId!==sessionId || !sameRun(scene,current) || !await this.canRecover(current))return false;
+      if(await this.readMode()!=='multi' && await this.maintenanceHeld({...scene,...current}))return false;
+      const fresh=await this.readState({...scene,...current});
+      return fresh?.sessionId===sessionId && !fresh.transcriptPending &&
+        this.responseAt(fresh)<=pastedAt && Array.isArray(fresh.tools) && fresh.tools.length===0 &&
+        !fresh.activeSubagents?.length;
+    };
+    if(!await valid(scene) || this.deliveryFailureRestarts.get(sessionGroup)!==previous)return false;
+    // Reserve before awaiting stop so simultaneous IPC facts cannot stop twice.
+    const reservation={runId};
+    this.deliveryFailureRestarts.set(sessionGroup,reservation);
+    // A thrown stop is uncertain and deliberately retains its reservation.
+    if(await this.stopScene(scene,'delivery_failure_restart',valid,{reason:'delivery_failure_restart',
+      conversation_id:notification.conversationId,pasted_at:pastedAt}))return true;
+    if(this.deliveryFailureRestarts.get(sessionGroup)===reservation) {
+      if(previous)this.deliveryFailureRestarts.set(sessionGroup,previous);
+      else this.deliveryFailureRestarts.delete(sessionGroup);
+    }
+    return false;
   }
   async canAct(scene, { requireReady = false, requireOpen = false } = {}) {
     if (this.stopped || await this.getModeTransition()) return false;
