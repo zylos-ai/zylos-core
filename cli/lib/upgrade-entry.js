@@ -167,10 +167,38 @@ export async function runUpgradeEntry(input, deps = {}) {
   }
 }
 
+// Missing preference preserves the stdout protocol of installed older callers.
+export function outputUpgradeResult(result, { jsonOutput = true } = {}, output = process) {
+  if (!jsonOutput) {
+    // Older previews may leave the changelog's final line unterminated.
+    output.stdout.write('\n');
+    if (result.success) output.stdout.write(`zylos-core upgraded: ${result.from} → ${result.to}.\n`);
+    else {
+      output.stderr.write(`Error: ${result.error || 'Core upgrade failed.'}\n`);
+    }
+    if (result.recovery_required) {
+      const rollbackNotice = result.rollback?.completed === false && (result.rollback.attempted || result.rollback.recovery_required)
+        ? 'Rollback did not complete. ' : '';
+      output.stderr.write(`Upgrade warning: ${rollbackNotice}Upgrade is blocked until recovery completes.\n`);
+    }
+    const next = result.next || (result.recovery_required ? 'Run zylos recovery status, then zylos recovery resume before upgrading.' : null);
+    if (next) output.stderr.write(`Next: ${next}\n`);
+  }
+  for(const warning of result.serviceWarnings || []) output.stderr.write(`Service warning: ${warning}\n`);
+  // Runtime CLI preparation returns objects; finalization adds plain notices.
+  for(const warning of result.warnings || []) output.stderr.write(typeof warning === 'string' ? `Upgrade warning: ${warning}\n` : `Runtime warning (${warning.runtime}): ${jsonOutput ? warning.code + ': ' : ''}${warning.message}\n`);
+  for(const warning of result.corePackageWarnings || []) output.stderr.write(`Core package location warning: ${warning.message}\n`);
+  for(const item of result.checkpointAudit?.items || []) {
+    if(item?.repairRequired === true) output.stderr.write(`Checkpoint warning: checkpoint ${item.checkpointId} exceeds the available conversation range and requires repair.\n`);
+  }
+  if(result.checkpointAudit?.state === 'incomplete') output.stderr.write('Checkpoint audit warning: audit incomplete; checkpoint consistency could not be verified.\n');
+  if (jsonOutput) output.stdout.write(JSON.stringify(result) + '\n');
+}
+
 if (process.argv[1] && fs.existsSync(process.argv[1]) && fs.realpathSync(process.argv[1]) === fs.realpathSync(new URL(import.meta.url))) {
-  let result;
+  let result, input;
   try {
-    const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+    input = JSON.parse(fs.readFileSync(0, 'utf8'));
     validateUpgradeHandoff(input);
     let targetRoot;
     try { targetRoot=fs.realpathSync(input.tempDir); }
@@ -181,14 +209,6 @@ if (process.argv[1] && fs.existsSync(process.argv[1]) && fs.realpathSync(process
   } catch (error) {
     result = {success:false, code:error instanceof SyntaxError ? 'INVALID_UPGRADE_HANDOFF' : upgradeFailureCode(error), error:upgradeFailureMessage(error), persisted:[]};
   }
-  for(const warning of result.serviceWarnings || []) process.stderr.write(`Service warning: ${warning}\n`);
-  // Runtime CLI preparation returns objects; finalization adds plain notices.
-  for(const warning of result.warnings || []) process.stderr.write(typeof warning === 'string' ? `Upgrade warning: ${warning}\n` : `Runtime warning (${warning.runtime}): ${warning.code}: ${warning.message}\n`);
-  for(const warning of result.corePackageWarnings || []) process.stderr.write(`Core package location warning: ${warning.message}\n`);
-  for(const item of result.checkpointAudit?.items || []) {
-    if(item?.repairRequired === true) process.stderr.write(`Checkpoint warning: checkpoint ${item.checkpointId} exceeds the available conversation range and requires repair.\n`);
-  }
-  if(result.checkpointAudit?.state === 'incomplete') process.stderr.write('Checkpoint audit warning: audit incomplete; checkpoint consistency could not be verified.\n');
-  process.stdout.write(JSON.stringify(result) + '\n');
+  outputUpgradeResult(result, { jsonOutput: input?.jsonOutput !== false });
   process.exitCode = result.success ? 0 : 1;
 }
