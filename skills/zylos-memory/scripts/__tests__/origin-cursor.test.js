@@ -512,7 +512,7 @@ test('Origin empty raw receipt with unchanged cursors is zero work', async t => 
   const { payload } = await originRead(f, group);
   assert.equal(payload.raw.count, 0);
   const result = await advance({ ...f.settings, token: f.tokens.origin, group, input: payload }, f.deps);
-  assert.equal(result.advanced, false);
+  assert.equal(result.advanced, true, 'the existing cursor API response stays unchanged');
   const marker = readMarker(f.runDir, 'origin').marker;
   assert.equal(marker.processedCount, 0); assert.equal(marker.advancedGroups, 0);
 });

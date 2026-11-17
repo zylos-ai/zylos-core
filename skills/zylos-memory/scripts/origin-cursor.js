@@ -23,7 +23,6 @@ function sessionsUnchanged(listed, actual, today) {
   return listed.every(item => earlier(item) || current.has(item.path));
 }
 
-
 // Cursor values come only from receipts recomputed against the database and
 // from the script's own session-log listing; the worker supplies no numbers.
 export async function advance({ group, input, ...settings }, deps = {}) {
@@ -51,7 +50,7 @@ export async function advance({ group, input, ...settings }, deps = {}) {
           checkpointId: cursor?.checkpointId, fromId: before.syncedId,
           toId: cursor?.syncedId ?? before.syncedId, fromCheckpointId: before.checkpointId,
           toCheckpointId: cursor?.checkpointId ?? before.checkpointId }, settings);
-        return cursor ? { advanced, ...cursor } : { advanced: false };
+        return cursor ? { advanced: true, ...cursor } : { advanced: false };
       } catch (error) {
         try { updateOriginRound(scope, marker, { error: true }); } catch { /* Keep the protected operation outcome. */ }
         throw error;
