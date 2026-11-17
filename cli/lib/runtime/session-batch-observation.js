@@ -1,6 +1,6 @@
 import { groupFromTmuxName } from '../session-group-paths.js';
 import { readReadyIdentity, readTargetRuntime, readProcessTree } from './session-target.js';
-import { parseTargetObservation, parseTmuxEnvironment, tmuxError, unavailableCommand, quoteTmux, tmuxGuardCondition } from './tmux-protocol.js';
+import { parseTargetObservation, parseTmuxEnvironment, tmuxError, unavailableCommand, isMissingTarget, tmuxReadCommands, parseReadResponse } from './tmux-protocol.js';
 
 const environmentKeys = ['ZYLOS_RUN_ID', 'ZYLOS_MODEL_CONFIG', 'ZYLOS_SESSION_GROUP'];
 // Escape the marker, backslash and dollar before tmux's print layer. In 3.4
@@ -66,23 +66,26 @@ export async function observeSessionTargets({ connection, readReady = readReadyI
     const global = parseTmuxEnvironment(output.slice(boundary + marker.length + 2));
     const collisions = rows.filter(row => environmentKeys.some(key => global[key] !== undefined && row.rawF2[key] === global[key]));
     if (collisions.length) {
-      // Exceptional global collisions still use one client for all sessions. The
-      // server checks each captured object before returning its session environment.
+      // Keep all collision reads in one client, checking each captured identity
+      // before exposing any session's environment to callers.
+      const binding = row => ({ serverGeneration:row.generation,
+        tmuxSessionId:row.tmuxSessionId, paneId:row.paneId });
       const commands = collisions.flatMap((row, index) => [
         ['display-message', '-p', `ZYLOS_BATCH_SESSION_${index}`],
-        ['if-shell', '-F', '-t', row.paneId, tmuxGuardCondition({ serverGeneration:row.generation,
-          tmuxSessionId:row.tmuxSessionId, paneId:row.paneId }, 'pane'),
-        ['show-environment', '-s', '-t', row.tmuxSessionId].map(quoteTmux).join(' '),
-        'display-message -p ZYLOS_BATCH_STALE'],
+        tmuxReadCommands([['show-environment', '-s', '-t', row.tmuxSessionId]], binding(row)),
       ]);
-      const text = await connection.command(['if-shell', '-F', '1', commands.map(argv => argv.map(quoteTmux).join(' ')).join(' ; ')]);
+      let text;
+      try { text = await connection.command(commands.flatMap((argv, index) => index ? [';', ...argv] : argv)); }
+      catch (error) {
+        if (isMissingTarget(error) || error.code === 'TMUX_NO_SERVER') throw tmuxError('TARGET_GONE', 'Batch target disappeared during observation');
+        throw error;
+      }
       const sections = text.split(/^ZYLOS_BATCH_SESSION_(\d+)\n/gm);
       if (sections[0] !== '' || sections.length !== collisions.length * 2 + 1) throw tmuxError('TMUX_RESPONSE_INVALID', 'Missing batch session environment');
       collisions.forEach((row, index) => {
         if (sections[index * 2 + 1] !== String(index)) throw tmuxError('TMUX_RESPONSE_INVALID', 'Invalid batch session environment order');
-        const section = sections[index * 2 + 2];
-        if (section.trim() === 'ZYLOS_BATCH_STALE') throw tmuxError('TARGET_GONE', 'Batch target disappeared during observation');
-        const local = parseTmuxEnvironment(section.trimEnd());
+        const section = sections[index * 2 + 2].replace(/\n$/, '');
+        const local = parseTmuxEnvironment(parseReadResponse(section, null, binding(row)));
         row.rawF2 = Object.fromEntries(environmentKeys.map(key => [key, local[key] ?? '']));
       });
     }

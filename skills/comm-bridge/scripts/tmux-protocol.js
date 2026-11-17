@@ -67,6 +67,35 @@ export const validGeneration = value => /^\d+:\d+$/.test(value);
 export const validSessionId = value => /^\$\d+$/.test(value);
 export const validPaneId = value => /^%\d+$/.test(value);
 
+// Read envelopes bracket payload with identities from the same client queue.
+// Fixed first/last lines keep marker-looking payload bytes unambiguous.
+export function tmuxReadCommands(commands, binding, kind = 'pane') {
+  const id = kind === 'session' ? binding.tmuxSessionId : binding.paneId;
+  const identity = [TMUX_COMMAND.displayMessage, '-p', '-t', id,
+    `${TMUX_FORMAT.generation}\t${TMUX_FORMAT.sessionId}\t${TMUX_FORMAT.paneId}`];
+  return [identity, ...commands, identity].flatMap((argv, index) => index ? [';', ...argv] : argv);
+}
+
+export function parseReadResponse(output, error, binding, kind = 'pane') {
+  if (error) {
+    if (error.code === 'TMUX_NO_SERVER' || isMissingTarget(error)) throw tmuxError('TARGET_GONE', 'Bound tmux object disappeared');
+    throw error;
+  }
+  const first = output.indexOf('\n'), last = output.lastIndexOf('\n');
+  if (first < 0) throw tmuxError('TMUX_UNAVAILABLE', 'Missing tmux read identity', 'error');
+  for (const line of [output.slice(0, first), output.slice(last + 1)]) {
+    const [generation, session, pane, ...extra] = line.split('\t');
+    if (extra.length || !validGeneration(generation)) throw tmuxError('TMUX_UNAVAILABLE', 'Invalid tmux read identity', 'error');
+    // A replacement server invalidates the read but cannot confirm that a stop
+    // removed the original session. Preserve that uncertainty for stop callers.
+    if (generation !== binding.serverGeneration) throw tmuxError('TARGET_GONE', 'Bound tmux server changed during read', 'error');
+    if (session !== binding.tmuxSessionId || (kind === 'pane' && pane !== binding.paneId)) {
+      throw tmuxError('TARGET_GONE', 'Bound tmux object changed during read');
+    }
+  }
+  return first === last ? '' : output.slice(first + 1, last);
+}
+
 export function parseTargetObservation(output, pinned) {
   if (!output.trim()) return null;
   const fields = output.split('\t');

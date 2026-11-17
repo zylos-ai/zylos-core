@@ -176,11 +176,37 @@ test('batch matches session-only environment when global values collide', { time
   f.commands.length = 0;
   const batch = await f.reader.readLiveIdentities(['absent', 'explicit', 'removed']);
   assert.equal(f.commands.length, 2, 'global collisions add one shared client, never one client per session');
+  assert.equal(f.commands.some(argv => argv.includes('if-shell')), false, 'collision reads never invoke the write guard');
   for (const group of ['absent', 'explicit', 'removed']) assert.deepEqual(batch.get(group), await f.reader.readLiveIdentity(group));
   assert.equal(batch.get('absent').runId, null);
   assert.equal(batch.get('removed').runId, null);
   assert.equal(batch.get('explicit').runId, 'global-run');
 });
+
+// Boundary: collision fallback must validate the identities captured by list-panes.
+// Run after fallback framing or identity changes; skip for scheduling/UI-only changes.
+for (const mutation of ['same-name replacement', 'server replacement']) {
+  test(`collision fallback rejects ${mutation} after the initial list`, { timeout: 20000 }, async t => {
+    const f = batchFixture(t);
+    f.add('origin'); f.add('keeper');
+    f.tmux('set-environment', '-g', 'ZYLOS_RUN_ID', 'run-origin');
+    let replaced = false;
+    f.setBeforeCommand(async argv => {
+      if (argv[0] === 'list-panes' || replaced) return;
+      assert(argv.includes('show-environment'), 'mutation must precede collision fallback');
+      replaced = true;
+      if (mutation === 'server replacement') {
+        f.tmux('kill-server');
+        await f.waitForServerExit();
+      } else f.tmux('kill-session', '-t', 'zylos-group-origin');
+      f.add('origin');
+    });
+    await assert.rejects(f.reader.readLiveIdentities(['origin']), { code:'TARGET_GONE' });
+    assert.equal(replaced, true);
+    assert.equal(f.commands.length, 2);
+    assert.equal(f.commands.some(argv => argv.includes('if-shell')), false);
+  });
+}
 
 // Boundary: each real list-panes sees multiple active panes/windows, only one is selected.
 // Run after active target filtering changes; skip for UI-only changes.
@@ -272,12 +298,17 @@ for (const corruption of ['missing boundary', 'invalid framed row', 'unordered s
     const f = batchFixture(t);
     f.add('origin');
     if (corruption === 'unordered session boundary') f.tmux('set-environment', '-g', 'ZYLOS_RUN_ID', 'run-origin');
+    let corrupted = false;
     f.setAfterCommand((argv, output) => {
       if (corruption === 'missing boundary' && argv[0] === 'list-panes') return output.replace('ZYLOS_BATCH_GLOBAL', 'MISSING');
       if (corruption === 'invalid framed row' && argv[0] === 'list-panes') return output.replace(/\t\d+:zylos-group-origin/, '\tbad:zylos-group-origin');
-      if (corruption === 'unordered session boundary' && argv[0] === 'if-shell') return output.replace('ZYLOS_BATCH_SESSION_0', 'ZYLOS_BATCH_SESSION_1');
+      if (corruption === 'unordered session boundary' && argv.some(arg => arg.includes('ZYLOS_BATCH_SESSION_0'))) {
+        corrupted = output.includes('ZYLOS_BATCH_SESSION_0');
+        return output.replace('ZYLOS_BATCH_SESSION_0', 'ZYLOS_BATCH_SESSION_1');
+      }
       return output;
     });
     await assert.rejects(f.reader.readLiveIdentities(['origin']), { code:'TMUX_UNAVAILABLE' });
+    if (corruption === 'unordered session boundary') assert.equal(corrupted, true);
   });
 }

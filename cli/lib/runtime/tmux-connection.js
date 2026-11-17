@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { tmuxClientArgs } from './tmux-client-args.js';
 import { tmuxError, validateTmuxArgv as validateArgv, noServer, TMUX_COMMAND as C,
   TMUX_FORMAT as F, tmuxGuardCondition, tmuxGuardAction, validGeneration, validSessionId,
-  validPaneId, unavailableCommand, parseGuardResponse } from './tmux-protocol.js';
+  validPaneId, unavailableCommand, parseGuardResponse, tmuxReadCommands, parseReadResponse } from './tmux-protocol.js';
 export { tmuxError } from './tmux-protocol.js';
 
 /** One ordinary client; timeout/cancellation waits for its exit and releases pipes. */
@@ -43,7 +43,10 @@ export function runTmuxCommand(argv, { socketPath, socketName, binary = 'tmux', 
   });
 }
 
-/** A socket-scoped executor. Bound commands are checked inside the receiving server. */
+const isRead = argv => !argv.includes(';') && (argv[0] === C.showEnvironment ||
+  ([C.displayMessage, C.capturePane].includes(argv[0]) && argv.includes('-p')));
+
+/** A socket-scoped executor. Writes are guarded; reads validate returned identities. */
 export async function openTmuxConnection(options = {}) {
   let closed = false, binding = null;
   const active = new Set();
@@ -85,6 +88,12 @@ export async function openTmuxConnection(options = {}) {
         return execute(commands[0], timeoutMs);
       }
       if (!['pane','session'].includes(kind)) throw new TypeError('Invalid guard target kind');
+      if (commands.every(isRead)) {
+        let output, error;
+        try { output = await execute(tmuxReadCommands(commands, binding, kind), timeoutMs); }
+        catch (caught) { error = caught; output = caught.stdout ?? ''; }
+        return parseReadResponse(output, error, binding, kind);
+      }
       const id = kind === 'session' ? binding.tmuxSessionId : binding.paneId;
       const condition = tmuxGuardCondition(binding, kind);
       const action = tmuxGuardAction(commands);

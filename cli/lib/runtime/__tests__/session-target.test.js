@@ -66,7 +66,7 @@ test('F3 malformed/mismatched is not READY; snapshots immutable', async t => {
   const good = await observeSessionTarget(options); assert.equal(good.ready,true);
   assert.throws(()=>{good.rawF2.ZYLOS_RUN_ID='evil';},TypeError); assert.throws(()=>{good.f3.startupControlIds.push(1);},TypeError);
 });
-test('configured observation reads identity and guarded environment once', async t => {
+test('configured observation reads identity and validated environment once', async t => {
   const {connection, options} = await fixture(t);
   const command = connection.command.bind(connection), calls = [];
   connection.command = async (argv, settings) => {
@@ -90,12 +90,12 @@ test('first binding adopts the observed server rather than the server at executo
   assert.notEqual(target.serverGeneration, original);
   assert.equal(await revalidateSessionTarget({connection, target}), true);
 });
-test('same socket restart fails its generation guard without replay', async t => {
+test('same socket restart invalidates its read identity without replay', async t => {
   const {connection,tmux,socketPath,options} = await fixture(t);
   const target = await resolveSessionTarget(options); tmux('kill-server');
   await new Promise(resolve=>setTimeout(resolve,100));
   tmux('-f','/dev/null','new-session','-d','-s','fixture','sleep','120');
-  await assert.rejects(revalidateSessionTarget({connection,target}),{code:'GENERATION_CHANGED'});
+  await assert.rejects(revalidateSessionTarget({connection,target}),{code:'TARGET_GONE'});
   const replacement = await openTmuxConnection({binary,socketPath}); assert.notEqual(await serverGeneration(replacement),target.serverGeneration); replacement.close();
 });
 test('absent server differs from unexecutable transport; missing generation rejected', async t => {
@@ -143,7 +143,7 @@ test('initial disappearance and generation change are detected before any sendin
   const commands=[];
   const held={bindTarget() {},command:async args=> {
     commands.push(args[0]);
-    if(generation!=='100:200') throw Object.assign(Error('Bound server changed'),{code:'GENERATION_CHANGED'});
+    if(generation!=='100:200') throw Object.assign(Error('Bound server changed'),{code:'TARGET_GONE'});
     if(args[0]==='show-environment') return String.raw`ZYLOS_RUN_ID="r1"; export ZYLOS_RUN_ID;
 ZYLOS_MODEL_CONFIG="{\"runtime\":\"claude\"}"; export ZYLOS_MODEL_CONFIG;`;
     return '100:200\t$1\t%1\t123\t10';
@@ -153,7 +153,7 @@ ZYLOS_MODEL_CONFIG="{\"runtime\":\"claude\"}"; export ZYLOS_MODEL_CONFIG;`;
   await revalidateSessionTarget({connection:held,target});
   assert.deepEqual(commands,['show-environment']);
   generation='101:201';
-  await assert.rejects(revalidateSessionTarget({connection:held,target}),{code:'GENERATION_CHANGED'});
+  await assert.rejects(revalidateSessionTarget({connection:held,target}),{code:'TARGET_GONE'});
   await assert.rejects(revalidateSessionTarget({connection:held,target:{...target}}),TypeError);
 });
 
