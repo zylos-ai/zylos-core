@@ -940,7 +940,7 @@ export class SupervisorLifecycle {
       activeScopes: context.scenes.filter(scene => scene.present || scene.observationError)
         .map(scene => modeOf(context) === 'single' ? '*' : scene.sessionGroup),
     }, async (scope, kind) => {
-      const scene = context.scenes.find(row => (row.sessionGroup ?? '*') === scope);
+      const scene = context.scenes.find(row => (modeOf(context) === 'single' ? '*' : row.sessionGroup) === scope);
       const marker = await this.d.readSyncMarker({ runDir: scene?.runDir ?? this.d.groupRunDir(scope === '*' ? 'origin' : scope), kind, currentRunId: scene?.runId ?? null });
       return marker.held && !marker.stale;
     });

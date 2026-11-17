@@ -154,7 +154,10 @@ export async function emitC4Conversations(payload, budget = null, {
     const { createMigration } = await loadCoreModule('memory-migration.js');
     return createMigration({ env: { ...process.env, ZYLOS_DIR: scope.root } }).status();
   },
-  maintenanceReader = async () => (await import('../../activity-monitor/scripts/maintenance-session.js')).readMaintenanceSession(),
+  maintenanceReader = async () => {
+    if (!process.env.ZYLOS_SESSION_GROUP || !process.env.ZYLOS_RUN_ID) return null;
+    return (await import('./maintenance-session.js')).readMaintenanceSession();
+  },
 } = {}) {
   return withDb('c4 conversations init', async db => {
     const { isSubsession } = await import('../../activity-monitor/scripts/bootstrap-identity.js');
@@ -162,7 +165,7 @@ export async function emitC4Conversations(payload, budget = null, {
     const scope = await readScope();
     await normalHelpers();
     if (await maintenanceReader()) {
-      const { maintenanceSessionContext } = await import('../../activity-monitor/scripts/maintenance-session.js');
+      const { maintenanceSessionContext } = await import('./maintenance-session.js');
       return formatSection('MAINTENANCE SESSION', maintenanceSessionContext);
     }
     const coverage = scope.mode === 'multi' ? db.getCoverageEnd(scope.sessionGroup) : db.getGlobalCoverageEnd();

@@ -159,13 +159,24 @@ export async function enqueueStartupPrompt(source, {
   const scope = await scopeReader();
 
   let activePrompt;
-  const maintenance = await maintenanceReader();
-  if (maintenance) {
-    if (!await startupClaimer(maintenance)) return { skipped: true, reason: 'maintenance_started', startupControlIds: [] };
-    activePrompt = maintenanceSyncPrompt;
+  let maintenance;
+  try { maintenance = await maintenanceReader(); }
+  catch (error) {
+    if (error.code !== 'SYNC_MAINTENANCE_UNREADABLE') throw error;
+    console.error(`[sync-maintenance] startup observation unavailable: ${error.code}`);
   }
-  else if (migrationPending()) activePrompt = migrationPrompt;
-  else {
+  if (maintenance) {
+    try {
+      if (!await startupClaimer(maintenance)) return { skipped: true, reason: 'maintenance_started', startupControlIds: [] };
+      activePrompt = maintenanceSyncPrompt;
+    } catch (error) {
+      if (error.code !== 'SYNC_MAINTENANCE_UNREADABLE') throw error;
+      console.error(`[sync-maintenance] startup claim unavailable: ${error.code}`);
+      maintenance = null;
+    }
+  }
+  if (!maintenance && migrationPending()) activePrompt = migrationPrompt;
+  else if (!maintenance) {
     const handoff = !!scope.memoryDir && fs.existsSync(path.join(scope.memoryDir, 'handoff.md'));
     if (!handoff && !await hasPendingReply(scope, recentReader, now)) {
       return { skipped: true, reason: 'nothing_pending', startupControlIds: [] };

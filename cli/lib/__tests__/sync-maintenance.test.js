@@ -104,7 +104,7 @@ test('real-message conversion cancels queued or active purpose and releases guar
   }
 });
 
-test('corrupt or contradictory persisted state fails closed for reads claims and outbound purpose', async t => {
+test('unreadable ledger blocks maintenance decisions while ordinary sends use only their own run purpose', async t => {
   const f = fixture(t), store = f.create();
   await store.queue(request('chat:one'));
   const row = await store.claimMaintenance('chat:one', 'run-one');
@@ -117,12 +117,58 @@ test('corrupt or contradictory persisted state fails closed for reads claims and
   for (const text of invalid) {
     fs.writeFileSync(f.file, text);
     assert.throws(() => f.create().read(), { code: 'SYNC_MAINTENANCE_UNREADABLE' });
-    assert.throws(() => readMaintenanceRun({ env }), { code: 'SYNC_MAINTENANCE_UNREADABLE' });
+    assert.equal(readMaintenanceRun({ env }), null);
+    assert.deepEqual(f.create().observe(), []);
     await assert.rejects(f.create().listMaintenanceRequests(), { code: 'SYNC_MAINTENANCE_UNREADABLE' });
     await assert.rejects(f.create().claimMaintenance('chat:one', 'new-run'), { code: 'SYNC_MAINTENANCE_UNREADABLE' });
     await assert.rejects(f.create().queue(request('chat:other')), { code: 'SYNC_MAINTENANCE_UNREADABLE' });
-    await assert.rejects(sendInternal(['internal', 'origin'], () => assert.fail('unreadable purpose cannot send'), { env }), { code: 'SYNC_MAINTENANCE_UNREADABLE' });
-    await assert.rejects(sendExternal({ channel: 'bad/channel' }, 'private', { env }), { code: 'SYNC_MAINTENANCE_UNREADABLE' });
+    await assert.rejects(sendInternal(['internal', 'origin'], () => assert.fail('maintenance purpose cannot send'), { env }), { code: 'MAINTENANCE_SESSION' });
+    await assert.rejects(sendExternal({ channel: 'bad/channel' }, 'private', { env }), { code: 'MAINTENANCE_SESSION' });
+    const ordinaryEnv = { ...env, ZYLOS_RUN_ID: 'ordinary-replacement' };
+    await assert.rejects(sendExternal({ channel: 'bad/channel' }, 'private', { env: ordinaryEnv }), { code: 'INVALID_ARGS' });
+    let inserted = 0;
+    await sendInternal(['internal', 'origin'], () => 'ordinary', { env: ordinaryEnv,
+      readIdentity: () => ({ runId: ordinaryEnv.ZYLOS_RUN_ID, sessionId: 'ordinary' }),
+      insertMessage: () => { inserted++; return { inRow: { id: 1 } }; },
+    });
+    assert.equal(inserted, 1);
     assert.equal(fs.readFileSync(f.file, 'utf8'), text);
   }
+});
+
+test('real input releases exact-run purpose even when the maintenance ledger is unreadable', async t => {
+  const f = fixture(t), store = f.create();
+  await store.queue(request('chat:one'));
+  await store.claimMaintenance('chat:one', 'run-one');
+  const env = { ...f.env, ZYLOS_SESSION_GROUP: 'chat:one', ZYLOS_RUN_ID: 'run-one' };
+  fs.writeFileSync(f.file, '{"v":2}');
+  await store.cancelMaintenanceForConversation('chat:one', 'different-run');
+  await assert.rejects(sendExternal({ channel: 'bad/channel' }, 'private', { env }), { code: 'MAINTENANCE_SESSION' });
+  await store.cancelMaintenanceForConversation('chat:one', 'run-one');
+  await assert.rejects(sendExternal({ channel: 'bad/channel' }, 'private', { env }), { code: 'INVALID_ARGS' });
+  assert.equal(fs.readFileSync(f.file, 'utf8'), '{"v":2}');
+});
+
+test('safe ledger observation reports one diagnostic per unreadable episode and resets on recovery', t => {
+  const f = fixture(t), events = [];
+  const store = createMaintenanceRequests({ env: f.env, diagnostic: (event, fields) => events.push({ event, ...fields }) });
+  fs.mkdirSync(path.dirname(store.file), { recursive: true });
+  fs.writeFileSync(store.file, '{"v":2}');
+  assert.deepEqual(store.observe(), []); assert.deepEqual(store.observe(), []);
+  assert.equal(events.length, 1);
+  fs.writeFileSync(store.file, '{"v":1,"groups":{}}');
+  assert.deepEqual(store.observe(), []);
+  fs.writeFileSync(store.file, '{"v":2}');
+  assert.deepEqual(store.observe(), []);
+  assert.equal(events.length, 2);
+});
+
+test('diagnostic failure cannot block safe observation or real-message conversion', async t => {
+  const f = fixture(t), store = createMaintenanceRequests({ env: f.env, diagnostic: () => { throw new Error('diagnostic unavailable'); } });
+  await store.queue(request('chat:one')); await store.claimMaintenance('chat:one', 'run-one');
+  fs.writeFileSync(store.file, '{"v":2}');
+  assert.deepEqual(store.observe(), []);
+  await store.cancelMaintenanceForConversation('chat:one', 'run-one');
+  const env = { ...f.env, ZYLOS_SESSION_GROUP: 'chat:one', ZYLOS_RUN_ID: 'run-one' };
+  await assert.rejects(sendExternal({ channel: 'bad/channel' }, 'private', { env }), { code: 'INVALID_ARGS' });
 });

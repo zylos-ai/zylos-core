@@ -74,3 +74,18 @@ test('failed maintenance enqueue retains its startup reservation across clear', 
   assert.equal((await enqueueStartupPrompt('clear', options)).reason, 'maintenance_started');
   assert.equal(enqueued, 1);
 });
+
+for (const failureAt of ['read', 'claim']) test(`unreadable maintenance ledger during startup ${failureAt} preserves ordinary startup`, async () => {
+  let ordinaryChecks = 0;
+  const unavailable = () => { throw Object.assign(new Error('unreadable ledger'), { code: 'SYNC_MAINTENANCE_UNREADABLE' }); };
+  const result = await enqueueStartupPrompt('startup', {
+    onboardingPending: () => false,
+    scopeReader: async () => ({ sessionGroup: 'quiet' }),
+    maintenanceReader: failureAt === 'read' ? unavailable : () => ({ runId: 'maintenance-run' }),
+    startupClaimer: unavailable,
+    migrationPending: () => false,
+    recentReader: () => { ordinaryChecks++; return null; },
+  });
+  assert.equal(result.reason, 'nothing_pending');
+  assert.equal(ordinaryChecks, 1);
+});

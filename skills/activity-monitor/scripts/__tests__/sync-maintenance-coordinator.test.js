@@ -20,7 +20,7 @@ function fixture(t, group = 'telegram:repair') {
   let clock = 1800000000000;
   const f = c4Fixture(t, { now: () => clock });
   const env = { ...process.env, ZYLOS_DIR: root };
-  const db = { ...f.store, getActiveDeletion: () => null,
+  const db = { ...f.store,
     getControlById: id => f.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id),
   };
   const row = group === 'origin' ? db.insertConversation('out', 'system', null, 'fixture')
@@ -106,7 +106,13 @@ test('single mode, fences, deletion and real input do not queue maintenance', as
     const f = fixture(t);
     if (reason === 'single') f.context.configuration.mode = 'single';
     if (reason === 'fence') f.context.fences = [{ sessionGroup: f.group, reason: 'delete' }];
-    if (reason === 'delete') f.db.getActiveDeletion = () => ({ status: 'started' });
+    if (reason === 'delete') {
+      const targetKey = JSON.stringify(['group', f.group]);
+      f.db.beginGroupDeletion(f.group, {
+        ...f.db.getDeletionPreviewBoundary(targetKey), operationId: 'fixture-delete', actor: 'password:owner', runId: null,
+      });
+      assert.equal(f.db.getActiveDeletion(f.group).status, 'started');
+    }
     if (reason === 'input') f.db.insertConversation('in', 'telegram', 'fixture', 'real input', { groupName: 'repair' });
     await f.inspect([f.alert]);
     assert.equal((await f.store.listMaintenanceRequests()).length, 0, reason);
@@ -175,7 +181,8 @@ test('real input arriving after maintenance finishes cancels release before fenc
 
 test('inactive Origin group maintenance never calls the deletion-only API that forbids Origin', async t => {
   const f = fixture(t, 'origin');
-  f.db.getActiveDeletion = f.store.getActiveDeletion;
+  assert.equal(typeof f.db.getActiveDeletion, 'function');
+  assert.throws(() => f.db.getActiveDeletion('origin'), { code: 'ORIGIN_DELETE_FORBIDDEN' });
   await f.inspect([f.alert]);
   assert.equal((await f.store.listMaintenanceRequests())[0].sessionGroup, 'origin');
 });
@@ -193,4 +200,113 @@ test('failed maintenance reports its single dedicated attempt and activation fai
   const notice = f.dbSqlite.prepare("SELECT content FROM control_queue WHERE content LIKE 'Memory Sync alert:%'").get();
   assert.match(notice.content, /one dedicated maintenance Sync attempt; failed because activation_timeout/);
   assert.match(notice.content, /Action: Check runtime availability and login/);
+});
+
+
+test('activation waits the full 900 seconds and then settles absent and unready runs', async t => {
+  for (const present of [false, true]) {
+    await t.test(present ? 'unready process' : 'absent process', async t => {
+      const f = fixture(t); await f.inspect([f.alert]); await f.run();
+      f.context.scenes[0].present = present; f.context.scenes[0].ready = false;
+      f.advance(899999);
+      assert.equal((await f.inspect([])).failures.length, 0);
+      assert.equal(f.store.read()[0].phase, 'running');
+      f.advance(1);
+      const outcome = await f.inspect([]);
+      assert.ok(outcome.failures.some(row => row.reason === 'activation_timeout'));
+      assert.equal(f.store.read()[0].phase, present ? 'finishing' : 'failed');
+      assert.equal(f.lifecycle.releasePreparation.size, 0);
+    });
+  }
+});
+
+test('a ready run waits 900 seconds for durable completion while its control remains pending', async t => {
+  const f = fixture(t); await f.inspect([f.alert]); const { control } = await f.run();
+  f.advance(899999);
+  assert.equal((await f.inspect([])).failures.length, 0);
+  assert.equal(f.store.read()[0].phase, 'running');
+  assert.equal(f.db.getControlById(control.id).status, 'pending');
+  f.advance(1);
+  assert.ok((await f.inspect([])).failures.some(row => row.reason === 'no_checkpoint'));
+  assert.equal(f.store.read()[0].phase, 'finishing');
+  assert.equal(f.lifecycle.releasePreparation.get(f.group).skipSync, true);
+});
+
+test('a pending control can complete from persisted Sync facts before its 900 second deadline', async t => {
+  const f = fixture(t); await f.inspect([f.alert]); const { control } = await f.run();
+  f.advance(6 * 60000); f.publish();
+  const outcome = await f.inspect([]);
+  assert.equal(outcome.failures.length, 0);
+  assert.equal(f.db.getControlById(control.id).status, 'pending');
+  assert.equal(f.store.read()[0].outcome, 'success');
+  assert.equal(f.lifecycle.releasePreparation.get(f.group).skipSync, true);
+});
+
+test('a fenced running attempt still times out and frees capacity only after its process disappears', async t => {
+  const f = fixture(t); await f.inspect([f.alert]); await f.run();
+  f.context.fences = [{ sessionGroup: f.group, reason: 'delete' }];
+  f.advance(900000);
+  const outcome = await f.inspect([]);
+  assert.ok(outcome.failures.some(row => row.reason === 'no_checkpoint'));
+  assert.equal(f.store.read()[0].phase, 'finishing');
+  assert.equal(f.lifecycle.releasePreparation.size, 0);
+  await f.store.queue({ sessionGroup: 'telegram:next', reason: 'backlog', target: {}, windowMs: 60000 });
+  assert.equal(await f.store.claimMaintenance('telegram:next', 'next-run'), null);
+  f.context.scenes = [];
+  await f.inspect([{ ...f.alert, scope: 'telegram:next' }]);
+  assert.equal(f.store.read().find(row => row.sessionGroup === f.group).phase, 'failed');
+  assert.equal((await f.store.claimMaintenance('telegram:next', 'next-run')).phase, 'running');
+});
+
+test('fenced activation timeout settles an absent process without waiting for the fence', async t => {
+  const f = fixture(t); await f.inspect([f.alert]); await f.run();
+  f.context.fences = [{ sessionGroup: f.group, reason: 'delete' }]; f.context.scenes = [];
+  f.advance(900000);
+  assert.ok((await f.inspect([])).failures.some(row => row.reason === 'activation_timeout'));
+  assert.equal(f.store.read()[0].phase, 'failed');
+  assert.equal(f.lifecycle.releasePreparation.size, 0);
+});
+
+test('finishing maintenance keeps the open-turn reclaim guard and global capacity exclusion', async t => {
+  const f = fixture(t); await f.inspect([f.alert]); await f.run(); f.publish();
+  await f.inspect([]);
+  const scene = f.context.scenes[0]; scene.turnOpen = true; scene.state = 'busy';
+  f.advance(900000);
+  await f.lifecycle.advanceReleases(f.context);
+  assert.equal(f.store.read()[0].phase, 'finishing');
+  assert.equal(f.db.getDrainFence(f.group), null);
+  await f.store.queue({ sessionGroup: 'telegram:next', reason: 'backlog', target: {}, windowMs: 60000 });
+  assert.equal(await f.store.claimMaintenance('telegram:next', 'next-run'), null);
+});
+
+test('real-message conversion remains ordinary after recovery of an older active ledger', async t => {
+  const f = fixture(t); await f.inspect([f.alert]); await f.run();
+  const scene = f.context.scenes[0];
+  assert.equal(f.coordinator.owns(scene), true);
+  const oldLedger = fs.readFileSync(f.store.file, 'utf8');
+  fs.writeFileSync(f.store.file, '{"v":2}');
+  assert.equal(f.coordinator.owns(scene), false, 'unreadable ledger grants no maintenance exemption');
+  await f.store.cancelMaintenanceForConversation(f.group, scene.runId);
+  fs.writeFileSync(f.store.file, oldLedger);
+  assert.equal(f.coordinator.owns(scene), false, 'exact-run ordinary purpose outlives ledger recovery');
+  assert.equal(await f.store.update(f.group, scene.runId, { phase: 'finishing', outcome: 'success' }), null,
+    'a late maintenance worker cannot restore restricted purpose');
+  f.publish(); f.advance(900000);
+  const outcome = await f.inspect([]);
+  assert.equal(outcome.failures.length, 0);
+  assert.equal(f.store.read()[0].phase, 'ordinary');
+  assert.equal(f.lifecycle.releasePreparation.size, 0);
+});
+
+for (const receipt of ['missing', 'unreadable']) test(`${receipt} own-run purpose preserves the active maintenance exclusion`, async t => {
+  const f = fixture(t); await f.inspect([f.alert]); await f.run();
+  const purposeFile = path.join(f.root, 'activity-monitor/session-groups', f.group, 'maintenance-run.json');
+  if (receipt === 'missing') fs.unlinkSync(purposeFile);
+  else fs.writeFileSync(purposeFile, '{');
+  assert.equal(f.coordinator.owns(f.context.scenes[0]), false, 'ordinary observation grants no maintenance exemption');
+  await assert.rejects(f.inspect([]), { code: 'SYNC_MAINTENANCE_PURPOSE_UNREADABLE' });
+  assert.equal(f.store.read()[0].phase, 'running');
+  await f.store.queue({ sessionGroup: 'telegram:next', reason: 'backlog', target: {}, windowMs: 60000 });
+  assert.equal(await f.store.claimMaintenance('telegram:next', 'next-run'), null);
+  assert.equal(f.lifecycle.releasePreparation.size, 0);
 });

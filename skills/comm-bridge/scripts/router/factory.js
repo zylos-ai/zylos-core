@@ -67,8 +67,10 @@ export function createDispatcher(overrides = {}, options = {}) {
       await guard.notify(message);
     })().catch(log);
   };
+  const maintenanceRequests = createMaintenanceRequests({ env, now, diagnostic });
   const providers = {
-    ...createMaintenanceRequests({ env, now }),
+    ...maintenanceRequests,
+    cancelMaintenance: maintenanceRequests.cancelMaintenanceForConversation,
     db, readSessionMode, ...reader, readCurrentSession: readReadyIdentity,
     listGroupTmuxSessions: () => listGroupTmuxSessions(tmux), readRuntimeHealth,
     getSessionAdapter: runtime => getSessionAdapter(runtime, { tmux }), submit,

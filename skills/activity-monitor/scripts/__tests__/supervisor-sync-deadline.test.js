@@ -297,3 +297,63 @@ test('Origin repair failure gives cursor and lock proof instead of group checkpo
   assert.match(f.alerts()[0].content, /verify cursor progress and a released Sync lock/);
   assert.doesNotMatch(f.alerts()[0].content, /covering checkpoint/);
 });
+
+
+// Actual marker parser + C4 + observer, isolated files only. Run when scene
+// scope mapping changes; no runtime or external process is started.
+test('single state observation preserves current run ownership of the global Sync marker', async t => {
+  const f = observableFixture(t);
+  f.context.configuration.mode = 'single';
+  f.scene.sessionGroup = 'legacy-single';
+  const row = f.db.insertConversation('out', 'system', null, 'global result');
+  f.db.createCheckpoint('*', row.id, 'global checkpoint');
+  const { readSyncMarker, markerPath } = await import('../../../zylos-memory/scripts/sync-lock.js');
+  fs.mkdirSync(f.scene.runDir, { recursive: true });
+  fs.writeFileSync(markerPath(f.scene.runDir, 'global'), JSON.stringify({ runId: f.scene.runId, kind: 'global',
+    token: 'a'.repeat(32), expiresAt: f.now() + 100000 }));
+  const calls = [];
+  f.lifecycle.d.readSyncMarker = args => { calls.push(args); return readSyncMarker(args, { now: f.now }); };
+  await f.lifecycle.syncAlerts(f.context);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].currentRunId, f.scene.runId);
+  assert.equal(calls[0].runDir, f.scene.runDir);
+  assert.equal(f.events('state_uncommitted').length, 0);
+  assert.equal(f.alerts().length, 0);
+});
+
+test('active Sync marker prevents state notification even after its control acknowledgment', async t => {
+  const f = observableFixture(t);
+  const row = f.db.insertConversation('out', 'system', null, 'group result');
+  f.db.createCheckpoint('origin', row.id, 'group checkpoint');
+  await f.lifecycle.syncScope(f.scene, 'group', { count: 16, firstAt: f.now(), nonempty: true }, f.context);
+  const { readSyncMarker, markerPath } = await import('../../../zylos-memory/scripts/sync-lock.js');
+  fs.mkdirSync(f.scene.runDir, { recursive: true });
+  fs.writeFileSync(markerPath(f.scene.runDir, 'group'), JSON.stringify({ runId: f.scene.runId, kind: 'group',
+    token: 'b'.repeat(32), expiresAt: f.now() + 100000 }));
+  f.lifecycle.d.readSyncMarker = args => readSyncMarker(args, { now: f.now });
+  f.sqlite.prepare("UPDATE control_queue SET status='done'").run();
+  await f.lifecycle.syncAlerts(f.context);
+  assert.equal(f.events('state_uncommitted').length, 0);
+  assert.equal(f.alerts().length, 0);
+  fs.unlinkSync(markerPath(f.scene.runDir, 'group'));
+  await f.lifecycle.syncAlerts(f.context);
+  assert.equal(f.alerts().filter(row => /type=state_uncommitted/.test(row.content)).length, 1);
+});
+
+test('definite owner-control enqueue rejection remains pending across restart and is retried once', async t => {
+  const f = observableFixture(t);
+  const alert = { type: 'repair_failed', kind: 'group', scope: 'telegram:repair', reason: 'no_checkpoint',
+    repairAttempt: 'maintenance', checkpointId: null, checkpointEnd: 1 };
+  const insert = f.lifecycle.d.db.insertControl;
+  f.lifecycle.d.db.insertControl = () => { throw Object.assign(new Error('isolated database busy'), { code: 'SQLITE_BUSY' }); };
+  await assert.rejects(f.lifecycle.sendSyncAlert(alert, f.context), { code: 'SQLITE_BUSY' });
+  assert.equal(f.alerts().length, 0);
+  assert.equal(f.lifecycle.syncAlertEpisodes.entries().find(row => row.type === 'repair_failed').sent, false);
+  await f.restart();
+  assert.equal(f.lifecycle.syncAlertEpisodes.entries().find(row => row.type === 'repair_failed').repairAttempt, 'maintenance');
+  f.lifecycle.d.db.insertControl = insert;
+  await f.lifecycle.sendSyncAlert(alert, f.context);
+  await f.lifecycle.sendSyncAlert(alert, f.context);
+  assert.equal(f.alerts().length, 1);
+  assert.equal(f.events('repair_failed').length, 1);
+});

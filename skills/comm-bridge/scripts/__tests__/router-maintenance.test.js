@@ -1,5 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createMaintenanceRequests } from '../../../../cli/lib/sync-maintenance.js';
+import { readMaintenanceSession } from '../maintenance-session.js';
 import { routerFixture, deferred, flush } from './helpers/router-fixture.js';
 import { maintenanceSyncPrompt } from '../../../activity-monitor/scripts/maintenance-session.js';
 
@@ -69,8 +74,11 @@ for (const reason of ['ttl', 'delete']) test(`maintenance cannot launch through 
 
 test('single mode never reads or claims group maintenance', async t => {
   const f = routerFixture(t, { mode: 'single' }); f.put(null); requests(f);
-  f.deps.listMaintenanceRequests = () => assert.fail('single mode must skip maintenance');
+  let maintenanceReads = 0;
+  f.deps.listMaintenanceRequests = () => { maintenanceReads++; return []; };
   const router = f.create(); await router.initialize(); await f.rounds(4);
+  await router.idle();
+  assert.equal(maintenanceReads, 0);
   assert.equal(launches(f).length, 0);
 });
 
@@ -116,4 +124,32 @@ test('real input expires a pending maintenance startup control before delivery',
   assert.equal(f.db.getControlById(startupId).status, 'timeout');
   assert.equal(f.calls.filter(row => row[0] === 'control').length, 0);
   assert.equal(f.calls.filter(row => row[0] === 'conversation').length, 1);
+});
+
+// Ordinary delivery across the real request ledger -> scheduler -> lane boundary.
+// Private request files, in-memory C4, injected runtime providers only; no socket,
+// service, external channel, or live database is contacted. Run for ledger
+// failure/cancellation changes; unrelated prompt edits can skip these cases.
+for (const live of [false, true]) test(`unreadable maintenance ledger preserves real input for an ${live ? 'online' : 'inactive'} group`, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'router-ledger-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const f = routerFixture(t); f.put('origin');
+  if (live) f.put('a');
+  const env = { ...process.env, ZYLOS_DIR: root };
+  const store = createMaintenanceRequests({ env, diagnostic: f.deps.diagnostic });
+  if (live) {
+    await store.queue({ sessionGroup: 'a', reason: 'inactive_lag', target: { end: 1 } });
+    await store.claimMaintenance('a', 'run-a');
+  }
+  fs.mkdirSync(path.dirname(store.file), { recursive: true });
+  fs.writeFileSync(store.file, '{"v":2}');
+  f.deps.listMaintenanceRequests = store.listMaintenanceRequests;
+  f.deps.cancelMaintenance = store.cancelMaintenanceForConversation;
+  const row = f.add('a');
+  const router = f.create(); await router.initialize(); await f.rounds(8);
+  assert.equal(f.row(row.id).status, 'delivered');
+  assert.equal(launches(f).length, live ? 0 : 1);
+  assert.ok(f.events.some(row => row.event === 'sync_maintenance_unavailable'));
+  if (live) assert.equal(readMaintenanceSession({ ...env, ZYLOS_SESSION_GROUP: 'a', ZYLOS_RUN_ID: 'run-a' }), null);
+  assert.equal(fs.readFileSync(store.file, 'utf8'), '{"v":2}');
 });

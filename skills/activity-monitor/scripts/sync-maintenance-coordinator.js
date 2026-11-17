@@ -1,3 +1,4 @@
+import { readMaintenanceSession, readMaintenancePurpose } from '../../comm-bridge/scripts/maintenance-session.js';
 import { loadCoreModule } from './core-modules.js';
 import { captureSyncTarget, observeSyncCompletion, latestSyncFailure } from './sync-reclaim.js';
 const { createMaintenanceRequests } = await loadCoreModule('sync-maintenance.js');
@@ -13,7 +14,8 @@ export class SyncMaintenanceCoordinator {
     this.diagnostic = diagnostic;
   }
   owns(scene) {
-    return this.store.read().some(row => active(row) && row.sessionGroup === scene.sessionGroup && row.runId === scene.runId);
+    return Boolean(readMaintenanceSession({ ...this.env, ZYLOS_SESSION_GROUP: scene.sessionGroup, ZYLOS_RUN_ID: scene.runId })) &&
+      this.store.observe().some(row => active(row) && row.sessionGroup === scene.sessionGroup && row.runId === scene.runId);
   }
   async advance(alerts, context, lifecycle) {
     const { db } = lifecycle.d, failures = [], resolved = [];
@@ -25,8 +27,18 @@ export class SyncMaintenanceCoordinator {
     for (const row of rows) {
       if (!active(row)) continue;
       const group = row.sessionGroup, scene = sceneFor(group);
+      // Real delivery can end this exact run's purpose while the shared ledger
+      // is unreadable. A later ledger recovery must not reclaim its real work.
+      const purpose = readMaintenancePurpose({ ...this.env, ZYLOS_SESSION_GROUP: group, ZYLOS_RUN_ID: row.runId });
+      if (purpose?.phase === 'ordinary') {
+        await this.store.cancelMaintenance(group, row.runId); continue;
+      }
+      if (!purpose || !active(purpose)) {
+        throw Object.assign(new Error('Maintenance run purpose is unavailable'), { code: 'SYNC_MAINTENANCE_PURPOSE_UNREADABLE' });
+      }
+      // Fences block launch/reclaim, not observation of the existing attempt.
+      // Its deadline must still settle while another operation owns the group.
       if (pending(group)) { await this.store.cancelMaintenance(group, row.runId); continue; }
-      if (blocked(group) && row.phase !== 'finishing') continue;
       if (scene?.observationError) continue;
       if (scene?.present && scene.runId !== row.runId) { await this.store.cancelMaintenance(group, row.runId); continue; }
       if (row.phase === 'finishing') {
@@ -62,7 +74,7 @@ export class SyncMaintenanceCoordinator {
       const updated = await this.store.update(group, row.runId, { phase: 'finishing', outcome: result.ok ? 'success' : 'error', failure: reason, finishedAt: this.now() });
       if (!updated) continue; // A real-message transition won the concurrent write.
       if (!result.ok) failures.push({ type: 'repair_failed', repairAttempt: 'maintenance', kind: 'group', scope: group, reason, checkpointId: row.target.checkpointId, checkpointEnd: row.target.end });
-      await this.release(updated, scene, context, lifecycle);
+      if (!blocked(group)) await this.release(updated, scene, context, lifecycle);
       await this.diagnostic({ event: 'sync_maintenance_finished', scope: group, runId: row.runId, status: updated.outcome, reason });
     }
     const eligible = new Set();

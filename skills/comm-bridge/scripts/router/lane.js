@@ -1,4 +1,4 @@
-import { maintenanceSyncPrompt } from '../../../activity-monitor/scripts/maintenance-session.js';
+import { maintenanceSyncPrompt } from '../maintenance-session.js';
 
 /** One in-memory execution slot per group. No waiting lane owns another lane. */
 export function createLane(context, group) {

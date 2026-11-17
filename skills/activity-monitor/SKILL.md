@@ -550,6 +550,16 @@ survive restart; waiting for capacity does not create extra attempts. Exact-run
 purpose is recorded before launch and a durable startup claim permits only one
 Sync control, even across clear or failed startup enqueue.
 
+The shared ledger is strict only for maintenance decisions and mutations.
+Ordinary ownership observations treat an unreadable ledger as no maintenance and
+record a diagnostic, so unrelated startup, delivery, sends, TTL and rotation
+continue. Send restrictions use the exact runtime's `maintenance-run.json`
+identity under its group run directory, independently of the shared ledger.
+Comm-bridge reads this identity locally without importing activity-monitor,
+Core library code or memory-lock modules. Real input publishes ordinary purpose
+even if the shared ledger is unreadable; a later recovered ledger cannot turn
+that run back into maintenance.
+
 Startup omits handoff and recent conversation work, waits for that one control,
 and instructs group Sync including state-only repair with no new conversations.
 External and internal C4 sends are refused while the exact run remains a
@@ -608,6 +618,24 @@ notifications and emits a diagnostic rather than repeatedly messaging owners.
 
 Sync marker expiration retains the baseline rule: a holder from a different run
 is immediately stale; a same-run marker retains its existing 30-minute expiry.
-Same-run worker failure recovery remains separate. Daily snapshots exclude tmp
+Same-run worker failure recovery remains separate.
+
+Maintenance activation and completion retain the 900-second deadline even when
+the group is fenced. A timed-out absent run frees the global maintenance claim;
+a still-present finishing run keeps exclusion until normal reclaim can prove
+it safe to stop. No forced reclaim deadline bypasses open-turn, idle or child
+guards. A request waiting for pool capacity has no new queue deadline and does
+not count as a failed attempt. These waits can remain indefinite and require a
+separate policy choice before adding deadlines or another owner notification.
+
+The incident ledger deliberately remains closed after an unreadable/unwritable
+state failure; automatic reset would discard notification ownership and permit
+repeated notices. Timeout identities have no retention cutoff, as required by
+the one-control/one-incident contract; their small persistent set grows and is
+rewritten atomically. This change does not add compaction or a recovery policy.
+Origin backlog owner notices still require observed failure evidence; the
+successful-but-lagging Origin case remains pending a separate owner decision.
+
+Daily snapshots exclude tmp
 additions and edits, including staged content, while committing deletions of
 tracked temporary files.

@@ -10,6 +10,8 @@ import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT } from '../../../zylos-memory/scripts/sync-prompts.js';
 import { PRE_RECLAIM_CHECK_PROMPT } from '../reclaim-prompts.js';
+import { groupMemoryDir } from '../../../../cli/lib/session-group-paths.js';
+import { renderStateSkeleton } from '../../../zylos-memory/scripts/state-format.js';
 
 function localFixture(t, Class = SupervisorLifecycle, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lifecycle-acceptance-'));
@@ -193,13 +195,14 @@ test('absent Origin Sync creates one real unbound demand and preserves deduplica
 
 // Boundary: real C4 binding, acknowledgment and drain-fence persistence; tmux is fake.
 // Run for Origin TTL preparation/reclaim changes; unrelated machine tasks may skip.
-test('Origin TTL persists the check before both Sync preparations and reclaims only after all terminate', async t => {
+test('Origin TTL persists its check and requires durable group and Origin repair before reclaim', async t => {
   const sql = databaseFixture(t), f = localFixture(t, SupervisorLifecycle, { db: sql.store });
+  f.deps.env = { ZYLOS_DIR: f.root };
   f.scene.createdAt = f.now - 2_000_000;
   f.db.getLastActivity = () => null;
   f.db.getControlById = id => sql.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id);
-  f.db.getUnsummarizedRange = () => ({ count: 1, firstAt: f.now - 2_000_000 });
-  f.db.getOriginSyncBacklog = () => ({ total: 1, groups: [{ count: 1, pendingCheckpoints: 0 }] });
+  const groupRow = sql.store.insertConversation('out', 'system', null, 'isolated group result');
+  const originRow = sql.store.insertConversation('out', 'telegram', 'fixture', 'isolated Origin input', { groupName: 'room' });
   f.deps.prompts = { PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT };
   let stops = 0; f.deps.stop = () => { stops++; f.scene = { ...f.scene, present: false, ready: false }; };
   await f.lifecycle.checkTtl(f.scene, f.context);
@@ -215,12 +218,28 @@ test('Origin TTL persists the check before both Sync preparations and reclaims o
     sql.db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(row.id);
     await f.lifecycle.checkTtl(f.scene, f.context); assert.equal(sql.store.getDrainFence('origin'), null);
   }
+  // Acknowledgments alone cannot prove publication. Publish group state against
+  // the real checkpoint; Origin's first failed round must still get one retry.
+  const checkpoint = sql.store.createCheckpoint('origin', groupRow.id, 'isolated summary');
+  const stateDir = groupMemoryDir('origin', { ZYLOS_DIR: f.root });
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(stateDir, 'state.md'), renderStateSkeleton({ scope: 'origin', syncedAt: new Date(f.now).toISOString() })
+    .replace('coverage= |', `coverage=${groupRow.id} |`));
+  assert.equal(checkpoint.end_conversation_id, groupRow.id);
+  f.deps.env = { ZYLOS_DIR: f.root };
   sql.db.prepare("UPDATE control_queue SET status='timeout' WHERE id=?").run(rows.at(-1).id);
+  await f.lifecycle.checkTtl(f.scene, f.context);
+  assert.equal(sql.store.getDrainFence('origin'), null);
+  const retry = sql.db.prepare('SELECT * FROM control_queue ORDER BY id DESC LIMIT 1').get();
+  assert.equal(retry.raw_content, PRE_RECLAIM_ORIGIN_SYNC_PROMPT);
+  assert.ok(retry.id > rows.at(-1).id);
+  sql.store.advanceOriginSyncCursor('telegram:room', { syncedId: originRow.id, checkpointId: 0 });
+  sql.db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(retry.id);
   await f.lifecycle.checkTtl(f.scene, f.context);
   const fence = sql.store.getDrainFence('origin'); assert.equal(fence.reason, 'ttl'); assert.equal(fence.runId, 'old-run');
   assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
   assert.equal(stops, 1); assert.equal(sql.store.getDrainFence('origin'), null);
-  assert.equal(sql.db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 3);
+  assert.equal(sql.db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 4);
   assert.equal(sql.store.getOriginNeed().controls.count, 0);
 });
 

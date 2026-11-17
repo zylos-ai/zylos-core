@@ -8,7 +8,7 @@ import { safeEntryId } from './c4-entry-id.js';
 import { queryComponentSessionGroup, fixedAddressSessionGroup } from './c4-component-session-group.js';
 import { assertOutboundSession } from './c4-outbound-session.js';
 import { readChannelHookMetadata, runBeforeSendHook } from './c4-channel-hooks.js';
-import { readMaintenanceSession } from '../../activity-monitor/scripts/maintenance-session.js';
+import { readMaintenanceSession } from './maintenance-session.js';
 
 const pathsModule = path.join(path.dirname(resolveCoreConfigModule()), 'session-group-paths.js');
 const { runDirFromEnv, legacyRunDir } = await import(pathToFileURL(pathsModule).href);

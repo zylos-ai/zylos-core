@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { insertInternalMessage } from './c4-db.js';
 import { dataError } from './c4-session-group.js';
 import { resolveCoreConfigModule } from './core-config-loader.js';
-import { readMaintenanceSession } from '../../activity-monitor/scripts/maintenance-session.js';
+import { readMaintenanceSession } from './maintenance-session.js';
 
 export function parseInternalArgs(args) {
   if (args.length !== 2 || args[0] !== 'internal' || args[1].startsWith('--')) {
