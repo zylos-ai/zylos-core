@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- `zylos status --json` now reports `readAt` as an ISO UTC string, missing runtime health/public health as `null`, an unreadable session mode as `null`, and a configuration without `session_mode` as `"single"`, matching Dashboard observations. Internal status values and text output retain their existing representation. Dashboard operations interfaces and the local JSON fallback now have documented compatibility expectations and contract tests; 1.0 beta does not guarantee immutable APIs.
 - Component shard declarations no longer claim or remove legacy SessionStart hooks. The retired `claimHooks` field is ignored with a warning without disabling the shard. Components migrating to shards must remove their own old hooks from both Claude and Codex settings in `post-upgrade`, then synchronize hooks.
 
 ### Fixed

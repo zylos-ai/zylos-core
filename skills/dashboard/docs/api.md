@@ -33,6 +33,39 @@ The same ISO projection applies to HTTP and SSE. Server serialization and browse
 
 The examples below show request methods, URLs and JSON bodies. Supply the appropriate cookie or API-session authorization header; example writes are illustrative and should only be issued with authorization for their effects.
 
+## Operations Interfaces
+
+These are the interfaces and fields intended for operations clients, including Fleet and OpenMax. During 1.0 beta there is no guarantee that APIs will remain unchanged. Starting with the next beta, the aim for this list is to add fields without removing, renaming or changing the types of existing fields, and to avoid major changes where possible. A necessary removal or incompatible change should first be marked **deprecated** here and recorded in CHANGELOG. Interfaces and fields outside this list may continue to change. This is a compatibility policy, not an immutability guarantee.
+
+Use the spelling below as returned: `session_mode` and `sessionMode` intentionally coexist. Read responses are data objects, not `{data:...}` wrappers. Nullable observations must not be interpreted as healthy or absent.
+
+| Method / path | Access | Operations fields |
+|---|---|---|
+| `GET /api/health/ready` | Public | `ready:boolean`, `reason:"supervisor_unavailable"\|"session_not_running"\|null`, `session_mode:"single"\|"multi"\|null`, `session_running:boolean\|null`; `runtime_health.claude` and `.codex` each contain `source:"record"\|"missing"\|"unreadable"`, `health:"ok"\|"auth_failed"\|"rate_limited"\|"unavailable"\|"down"\|"recovering"\|null` |
+| `GET /api/health` | Public | `ok:boolean`, `service:string`, `bootId:string` identifies this Dashboard process and changes when it restarts |
+| `POST /api/auth/token` | Public credential exchange | Bearer `zylos_ak_...` key returns `ok:true`, `token:string` (`zylos_st_...`), `expires_at:string` (ISO), `ttl_seconds:number` (86400), `scope:"read"\|"admin"` |
+| `GET /api/instance` | Read | `agent.name:string`, `default_runtime:string`, `session_mode:object` with `sessionMode:"single"\|"multi"\|null`; see [instance fields](#get-apiinstance) for additional observations |
+| `GET /api/groups/origin` | Read | `presence:"running"\|"starting"\|"not_running"\|"unknown"`, `state.kind:"working"\|"idle"\|"starting"\|"stopping"\|"offline"\|"unknown"`, `flags:object`, `run:{runId:string\|null,sessionId:string\|null,createdAt:string\|null}\|null` |
+| `POST /api/groups/origin/actions/interrupt` | Admin | JSON `{runId:string,sessionId?:string\|null}`; result fields described below |
+| `POST /api/groups/origin/actions/chop-chop` | Admin | Same target body as interrupt; result fields described below |
+| `POST /api/groups/origin/actions/restart` | Admin | JSON `{runId?:string,sessionId?:string\|null}`; result fields described below |
+| `GET /api/groups/counts` | Read | `readAt:string` (ISO), `listKnown:boolean`, `running:{total:number,states:object,flags:object}`, `offline:{total:number,waitingSlot:number,startFailed:number}`, `pool:{used:number\|null,capacity:number\|null}\|null` |
+| `GET /api/usage/summary` | Read | `tz:string`, `tzFallback:boolean`, `scope:"all_groups"`, `today:object`, `sevenDay:object`; period and runtime fields described below |
+
+Readiness returns **HTTP 503 when not ready**, with `ready:false`, `reason` and all the other listed readiness fields still present in the JSON body. Read this body as observation data even on 503. `session_running` is observed only in single mode and is null in multi mode. Runtime health is diagnostic and does not itself determine readiness; missing/unreadable health is null. `/api/health` only establishes HTTP liveness. Use `/api/health/ready`, never the retired `?probe=ready` query.
+
+Exchange the API key once and **cache/reuse the 24-hour session token** as `Authorization: Bearer zylos_st_...`. Every exchange creates a new session and compares the presented key against active keys; exchanging on every request adds unnecessary sessions and key verification work. An API key itself does not authorize data requests. Use a read key for observations and an admin key for Origin actions.
+
+Origin detail exposes `presence:"running"|"starting"|"not_running"|"unknown"`, `state.kind:"working"|"idle"|"starting"|"stopping"|"offline"|"unknown"`, `flags:object`, and `run:{runId:string|null,sessionId:string|null,createdAt:string|null}|null`. Origin flags are optional independent entries, not booleans; an absent entry means that flag was not observed. The supported entries are `queued:{count:number,oldestAt:string|null,waitSeconds:number|null}`, `blocked:{reason:"auth_failed"|"rate_limited",runtime:string|null,recoveryAt:string|null}`, `waitingSlot:{position:number}`, `startFailed:{count:number,lastAt:string|null,reason:string|null}`, `unreadable:{reasons:string[]}` and `noResponse:{since:string|null}`. Counts use numeric entries for every running state (`working`, `idle`, `starting`, `stopping`, `unknown`) and every flag (`queued`, `blocked`, `waitingSlot`, `startFailed`, `unreadable`, `noResponse`).
+
+Before interrupt or chop-chop, read Origin and send its current `run.runId`; both actions require a nonempty `runId` in both modes. If `run` or `runId` is null, a target has not been established. Passing the observed `sessionId` additionally binds the session. Restart allows an omitted `runId` (including a stopped Origin); pass the observed identity when targeting a particular run. Refresh after a target rejection. For example: `POST /api/groups/origin/actions/interrupt` with `{"runId":"observed-run","sessionId":"observed-session"}`.
+
+Action results expose `ok:boolean` and, **when applicable to that outcome**, `submission:string`, `requestId:string`, `controlId:number|null`, `currentRunId:string|null`, `rejectionCode:string|null`, and `error.code:string`. Interrupt/chop-chop use `submission:"submitted"|"rejected"|"unknown"`; restart uses `"accepted"|"rejected"|"not_submitted"|"unknown"`. Missing-target validation can return only the common error envelope. A stale run may return HTTP 409 `TARGET_MISMATCH` (controls) or `stale_target` (restart), retaining the current identity when available. `messageKey`, `messageParams` and `message` are UI text and **are not part of this compatibility list**, including `error.message`. Submission is not delivery or restart completion; do not blindly retry an unknown result.
+
+Each usage period contains `since:string`, `until:string` (ISO), `tokens:number`, `inputTokens:number`, `outputTokens:number`, `cacheReadTokens:number`, `cacheHitRate:number|null`, `cost:number`, and `byRuntime:object` with `claude` and `codex` entries containing the same numeric usage fields (without period boundaries). Windows follow the instance time zone. Unknown ratios are null, including an empty window.
+
+For a local fallback, see [`zylos status --json`](../../../docs/status-json.md), including its `{ok,data}` envelope and ISO `readAt`. It does not replace HTTP authentication or action submission.
+
 ## Health
 
 ### GET /api/health

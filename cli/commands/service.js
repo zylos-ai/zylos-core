@@ -104,7 +104,18 @@ export async function showStatus(args = [], { collect, host = collectHostStatus,
     }
   }
   const configurationIssue = result.data?.configurationIssue ?? result.configurationIssue;
-  if (json) console.log(JSON.stringify(result));
+  if (json) {
+    if (result.ok) {
+      const data = result.data;
+      result = { ...result, data: { ...data,
+        sessionMode: data.sessionMode === 'unreadable' ? null : data.sessionMode ?? 'single',
+        readAt: new Date(data.readAt).toISOString(),
+        runtimeHealth: Object.fromEntries(Object.entries(data.runtimeHealth).map(([runtime, record]) => [runtime,
+          record.source === 'missing' ? { ...record, health: null, publicHealth: null } : record])),
+      } };
+    }
+    console.log(JSON.stringify(result));
+  }
   else {
     if (configurationIssue) console.log(configurationIssue.notice);
     if (!result.ok) console.error(`Error [${result.error.code}]: ${result.error.message}`);
