@@ -38,7 +38,7 @@ function controls() {
   return [
     ...fixed,
     ['SYNC_BACKLOG_ALERT', syncPrompts.SYNC_BACKLOG_ALERT(LONG_GROUP, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)],
-    ...['backlog', 'state_uncommitted', 'no_checkpoint', 'repair_failed'].flatMap(type =>
+    ...['backlog', 'no_checkpoint', 'repair_failed'].flatMap(type =>
       ['pre_reclaim_retry'].map(repairAttempt => [`SYNC_BACKLOG_ALERT ${type} ${repairAttempt}`,
         syncPrompts.SYNC_BACKLOG_ALERT('group', Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, LONG_GROUP, type,
           { reason: 'control_timeout', repairAttempt })])),

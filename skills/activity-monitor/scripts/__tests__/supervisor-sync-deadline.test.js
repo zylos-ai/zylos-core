@@ -56,7 +56,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { SyncObserver } from '../sync-observer.js';
 import { appendEvent } from '../../../../cli/lib/event-log.js';
-import { supervisorDiagnosticPath } from '../../../../cli/lib/session-group-paths.js';
+import { supervisorDiagnosticPath, groupMemoryDir } from '../../../../cli/lib/session-group-paths.js';
 import { PRE_RECLAIM_CHECK_PROMPT } from '../reclaim-prompts.js';
 import * as syncPrompts from '../../../zylos-memory/scripts/sync-prompts.js';
 
@@ -208,15 +208,27 @@ test('active backlog waits for ordinary Sync failure before notifying', async t 
   assert.equal(f.alerts().filter(row => /type=backlog; kind=group/.test(row.content)).length, 1);
 });
 
-test('active old state gaps wait for an actual repair attempt before notifying', async t => {
+test('state gaps log once per persistent incident, resolve on catch-up and recur without controls', async t => {
   const f = observableFixture(t);
   const row = f.db.insertConversation('out', 'system', null, 'fixture result');
   f.db.createCheckpoint('origin', row.id, 'fixture checkpoint');
-  await f.lifecycle.syncAlerts(f.context); assert.equal(f.alerts().length, 0);
-  await f.lifecycle.syncScope(f.scene, 'group', { count: 16, firstAt: f.now(), nonempty: true }, f.context);
-  appendEvent(f.file, { v: 1, ts: f.now(), event: 'sync_result', kind: 'group', scope: 'origin', runId: f.scene.runId, status: 'error', code: 'INPUT_CHANGED' });
+  f.lifecycle.d.prompts = { ...f.lifecycle.d.prompts, SYNC_BACKLOG_ALERT: () => { assert.fail('state diagnostic requested owner prompt'); } };
+  f.db.setDrainFence('origin', { reason: 'ttl', runId: 'run' });
   await f.lifecycle.syncAlerts(f.context);
-  assert.equal(f.alerts().filter(row => /type=state_uncommitted/.test(row.content)).length, 1);
+  assert.equal(f.events('state_uncommitted').length, 1, 'state observation needs no repair attempt');
+  await f.lifecycle.syncAlerts(f.context); await f.restart(); await f.lifecycle.syncAlerts(f.context);
+  assert.equal(f.events('state_uncommitted').length, 1, 'restart preserves the unresolved diagnostic incident');
+  const directory = groupMemoryDir('origin', { ZYLOS_DIR: f.root });
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'state.md'), `<!-- zylos-state v1 | scope=origin | synced_at=2026-11-17T00:00:00Z | coverage=${row.id} | inbox_committed= -->\n`);
+  await f.lifecycle.syncAlerts(f.context);
+  assert.equal(f.lifecycle.syncAlertEpisodes.entries().some(row => row.type === 'state_uncommitted'), false);
+  await f.restart();
+  const next = f.db.insertConversation('out', 'system', null, 'later fixture result');
+  f.db.createCheckpoint('origin', next.id, 'later fixture checkpoint');
+  await f.lifecycle.syncAlerts(f.context); await f.lifecycle.syncAlerts(f.context);
+  assert.equal(f.events('state_uncommitted').length, 2);
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) FROM control_queue').pluck().get(), 0);
 });
 
 
@@ -262,9 +274,8 @@ test('reclaim-owned timeout logs once without requesting an owner prompt or addi
 
 for (const [type, reason, issue] of [
   ['backlog', 'INPUT_CHANGED', /27 messages remain unsynced/],
-  ['state_uncommitted', 'state_uncommitted', /checkpoint exists but state is not committed/],
   ['no_checkpoint', undefined, /repeated Sync requests produced no new checkpoint/],
-  ['repair_failed', 'activation_timeout', /Memory Sync repair failed/],
+  ['repair_failed', 'control_timeout', /Memory Sync repair failed/],
 ]) {
   test(`${type} owner control explains issue repair failure and a concrete next action`, async t => {
     const f = observableFixture(t);
@@ -276,9 +287,8 @@ for (const [type, reason, issue] of [
     assert.match(rows[0].content, /Automated repair: .*; failed because/);
     assert.match(rows[0].content, /Action: .*rerun Sync for this scope/);
     if (reason) assert.ok(rows[0].content.includes(reason));
-    if (reason === 'activation_timeout') assert.match(rows[0].content, /Check runtime availability and login/);
-    else if (reason === 'INPUT_CHANGED') assert.match(rows[0].content, /once current messages settle/);
-    else assert.match(rows[0].content, /verify a covering checkpoint and committed state/);
+    if (reason === 'INPUT_CHANGED') assert.match(rows[0].content, /once current messages settle/);
+    else assert.match(rows[0].content, /verify a covering checkpoint and a released Sync lock/);
     assert.equal(f.events(type).length, 1);
     await f.restart(); await f.lifecycle.sendSyncAlert({ type, kind: 'group', scope: 'telegram:help' }, f.context);
     assert.equal(f.alerts().length, 1);
@@ -335,13 +345,16 @@ test('active Sync marker prevents state notification even after its control ackn
   assert.equal(f.alerts().length, 0);
   fs.unlinkSync(markerPath(f.scene.runDir, 'group'));
   await f.lifecycle.syncAlerts(f.context);
-  assert.equal(f.alerts().filter(row => /type=state_uncommitted/.test(row.content)).length, 1);
+  assert.equal(f.events('state_uncommitted').length, 1);
+  assert.equal(f.alerts().length, 0);
 });
 
-test('definite owner-control enqueue rejection remains pending across restart and is retried once', async t => {
+test('rejected repair-failure notice replays through syncAlerts offline until checkpoint proof resolves it', async t => {
   const f = observableFixture(t);
-  const alert = { type: 'repair_failed', kind: 'group', scope: 'telegram:repair', reason: 'no_checkpoint',
-    repairAttempt: 'pre_reclaim_retry', checkpointId: null, checkpointEnd: 1 };
+  const scope = 'telegram:repair';
+  const row = f.db.insertConversation('out', 'telegram', 'fixture', 'repair target', { groupName: 'repair' });
+  const alert = { type: 'repair_failed', kind: 'group', scope, reason: 'no_checkpoint',
+    repairAttempt: 'pre_reclaim_retry', checkpointId: null, checkpointEnd: row.id };
   const insert = f.lifecycle.d.db.insertControl;
   f.lifecycle.d.db.insertControl = () => { throw Object.assign(new Error('isolated database busy'), { code: 'SQLITE_BUSY' }); };
   await assert.rejects(f.lifecycle.sendSyncAlert(alert, f.context), { code: 'SQLITE_BUSY' });
@@ -350,10 +363,26 @@ test('definite owner-control enqueue rejection remains pending across restart an
   await f.restart();
   assert.equal(f.lifecycle.syncAlertEpisodes.entries().find(row => row.type === 'repair_failed').repairAttempt, 'pre_reclaim_retry');
   f.lifecycle.d.db.insertControl = insert;
-  await f.lifecycle.sendSyncAlert(alert, f.context);
-  await f.lifecycle.sendSyncAlert(alert, f.context);
-  assert.equal(f.alerts().length, 1);
+  f.context.scenes = [];
+  f.lifecycle.d.observeGroup = () => null;
+  await f.lifecycle.syncAlerts(f.context);
+  await f.lifecycle.syncAlerts(f.context); await f.restart(); await f.lifecycle.syncAlerts(f.context);
+  assert.equal(f.alerts().length, 1, 'offline scope replays one durable notice without a new repair trigger');
   assert.equal(f.events('repair_failed').length, 1);
+  f.db.createCheckpoint(scope, row.id, 'repaired checkpoint');
+  const directory = groupMemoryDir(scope, { ZYLOS_DIR: f.root });
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'state.md'), `<!-- zylos-state v1 | scope=${scope} | synced_at=2026-11-17T00:00:00Z | coverage=0 | inbox_committed= -->\n`);
+  await f.lifecycle.syncAlerts(f.context);
+  assert.equal(f.lifecycle.syncAlertEpisodes.entries().some(row => row.type === 'repair_failed'), false,
+    'covering checkpoint and released lock resolve repair failure even while state remains behind');
+  assert.equal(f.alerts().length, 1);
+  const checkpoint = f.db.getLatestContentCheckpoint(scope);
+  const next = f.db.insertConversation('out', 'telegram', 'fixture', 'next repair target', { groupName: 'repair' });
+  await f.lifecycle.sendSyncAlert({ ...alert, checkpointId: checkpoint.id, checkpointEnd: next.id }, f.context);
+  await f.lifecycle.syncAlerts(f.context);
+  assert.equal(f.alerts().length, 2, 'resolution permits a later repair-failure incident');
+  assert.equal(f.events('repair_failed').length, 2);
 });
 
 
@@ -393,10 +422,13 @@ test('dormant checkpoint-state gaps and retained backlog candidates create no ow
   const f = observableFixture(t);
   const scope = 'telegram:inactive';
   const row = f.db.insertConversation('out', 'telegram', 'fixture', 'fixture', { groupName: 'inactive' });
-  f.db.createCheckpoint(scope, row.id, 'fixture checkpoint');
-  for (let i = 0; i < 3; i++) appendEvent(f.file, { v: 1, ts: f.now(), event: 'sync_triggered', kind: 'group', scope, checkpointId: 1 });
+  const checkpoint = f.db.createCheckpoint(scope, row.id, 'fixture checkpoint');
+  for (let i = 0; i < 3; i++) appendEvent(f.file, { v: 1, ts: f.now(), event: 'sync_triggered', kind: 'group', scope, checkpointId: checkpoint.id });
   f.lifecycle.syncBacklogCandidates.set(JSON.stringify(['group', scope]), { type: 'backlog', kind: 'group', scope, backlog: 900, lag: 50000 });
   await f.lifecycle.syncAlerts(f.context);
+  const evidence = f.lifecycle.d.syncObserver.groups.get(JSON.stringify(['group', scope]));
+  assert.equal(evidence.checkpointId, checkpoint.id);
+  assert.ok(evidence.attempts >= 3, 'retained backlog has enough failed-attempt evidence to notify if the live-scene gate is removed');
   assert.equal(f.alerts().length, 0);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) FROM control_queue').pluck().get(), 0);
 });

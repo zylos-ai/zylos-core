@@ -12,12 +12,6 @@ const command=fileURLToPath(new URL('../c4-send.js',import.meta.url));
 const guard=fileURLToPath(new URL('./fixtures/internal-send-no-dispatch.js',import.meta.url));
 const barrier=fileURLToPath(new URL('./fixtures/internal-send-barrier.js',import.meta.url));
 function setup(t) {
-  const children=new Set();
-  // Register before fixture() so children close before SQLite/files cleanup.
-  t.after(async()=>{
-    for(const record of children)record.stop(Error('Private internal-send CLI teardown'));
-    await Promise.allSettled([...children].map(record=>record.exited));
-  });
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'send-internal-'));
   fs.mkdirSync(path.join(root,'comm-bridge'));fs.mkdirSync(path.join(root,'.zylos'));
   fs.mkdirSync(path.join(root,'.claude/skills/chat'),{recursive:true});
@@ -29,40 +23,18 @@ function setup(t) {
   fs.writeFileSync(path.join(dir,'current-session.json'),JSON.stringify({runId:'run-a',sessionId:'session-a',ts:1,startupControlIds:[]}));
   // No cleanup until the connection from fixture() has closed.
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
-  return {...f,children,root,env:{...process.env,HOME:root,ZYLOS_DIR:root,ZYLOS_PACKAGE_ROOT:repository,ZYLOS_SESSION_GROUP:'chat:a',ZYLOS_RUN_ID:'run-a'}};
+  return {...f,root,env:{...process.env,HOME:root,ZYLOS_DIR:root,ZYLOS_PACKAGE_ROOT:repository,ZYLOS_SESSION_GROUP:'chat:a',ZYLOS_RUN_ID:'run-a'}};
 }
 function snapshot(f) {
   return {rows:f.db.prepare('SELECT * FROM conversations ORDER BY id').all(),heads:f.db.prepare('SELECT * FROM group_heads ORDER BY session_group').all()};
 }
-// Real CLI children own private SQLite and cannot dispatch. Keep every child
-// bounded and reap it before fixture files/SQLite are removed, including on a
-// failed IPC barrier or test timeout. Run for internal-send CLI changes.
-function startCli(f,args,options={}) {
-  const child=spawn(process.execPath,args,{env:f.env,stdio:['pipe','pipe','pipe'],...options});
-  let stdout='',stderr='',failure;
-  const stop=error=>{failure ||= error;if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');};
-  const timer=setTimeout(()=>stop(Error('Private internal-send CLI timed out')),10000);
-  const capture=key=>bytes=>{
-    const value=(key==='stdout'?stdout:stderr)+bytes;
-    if(Buffer.byteLength(value)>65536){stop(Error(`Private internal-send ${key} exceeded 65536 bytes`));return;}
-    if(key==='stdout')stdout=value;else stderr=value;
-  };
-  child.stdout.on('data',capture('stdout'));child.stderr.on('data',capture('stderr'));
-  child.stdin.on('error',error=>{if(error.code!=='EPIPE')stop(error);});
-  const exited=new Promise((resolve,reject)=>{
-    child.once('error',error=>{failure ||= error;});
-    child.once('close',(code,signal)=>{clearTimeout(timer);if(failure)reject(failure);else resolve({code,signal,stdout,stderr});});
-  });
-  // Observe rejection immediately; callers still receive the original failure.
-  exited.catch(()=>{});
-  const record={stop,exited};f.children.add(record);
-  exited.finally(()=>f.children.delete(record)).catch(()=>{});
-  return {child,exited};
-}
 function run(f,args=['internal','chat:b'],body='message\n',env={}) {
-  const {child,exited}=startCli(f,['--import',guard,command,...args],{env:{...f.env,...env}});
-  child.stdin.end(body);
-  return exited;
+  return new Promise((resolve,reject)=>{
+    const child=spawn(process.execPath,['--import',guard,command,...args],{env:{...f.env,...env},stdio:['pipe','pipe','pipe']});
+    let stdout='',stderr='';child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);
+    child.once('error',reject);child.once('close',(code,signal)=>resolve({code,signal,stdout,stderr}));
+    child.stdin.on('error',error=>{if(error.code!=='EPIPE')reject(error);});child.stdin.end(body);
+  });
 }
 function internalRows(f){return f.db.prepare("SELECT * FROM conversations WHERE channel='internal' ORDER BY id").all();}
 function assertPair(f,content,sender='chat:a',target='chat:b',sessionId='session-a') {
@@ -148,14 +120,19 @@ test('real CLI failure after outbound insert rolls back both rows and both heads
 test('concurrent real CLI A-to-B and B-to-A commit whole pairs and monotonic heads',{timeout:15000},async t=>{
   const f=setup(t);
   const workers=[['chat:a','chat:b','a-to-b'],['chat:b','chat:a','b-to-a']].map(([sender,target,body])=>{
-    const {child,exited}=startCli(f,['--import',guard,'--import',barrier,command,'internal',target],{
+    const child=spawn(process.execPath,['--import',guard,'--import',barrier,command,'internal',target],{
       env:{...f.env,ZYLOS_SESSION_GROUP:sender},stdio:['pipe','pipe','pipe','ipc'],
+    });
+    let stdout='',stderr='';child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);
+    const exited=new Promise((resolve,reject)=>{
+      child.once('error',reject);child.once('close',code=>resolve({code,stdout,stderr}));
     });
     const ready=Promise.race([
       new Promise(resolve=>child.once('message',message=>{assert.equal(message,'database-open');resolve();})),
       exited.then(result=>{throw new Error(`CLI exited before database barrier: ${result.stderr}`);}),
     ]);
     child.stdin.end(body);
+    t.after(()=>{if(child.exitCode===null)child.kill();});
     return {child,ready,exited};
   });
   await Promise.all(workers.map(worker=>worker.ready));

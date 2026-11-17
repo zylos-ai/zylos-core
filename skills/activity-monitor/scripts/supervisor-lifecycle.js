@@ -4,9 +4,9 @@ import { validLaunchConfigSnapshot as validLaunchConfig } from './launch-config-
 import { loadCoreModule } from './core-modules.js';
 const { modelThreshold } = await loadCoreModule('model-rotation-thresholds.js');
 import { MANUAL_WAKE_PROMPT } from './origin-prompts.js';
-import { captureSyncTarget, observeSyncCompletion, latestSyncFailure, repairRetryPrompt } from './sync-reclaim.js';
+import { captureSyncTarget, observeSyncCompletion, latestSyncFailure } from './sync-reclaim.js';
 
-const SYNC_DIAGNOSTIC_TYPES = new Set(['origin_frequency', 'origin_idle', 'control_timeout']);
+const SYNC_DIAGNOSTIC_TYPES = new Set(['origin_frequency', 'origin_idle', 'control_timeout', 'state_uncommitted']);
 const TERMINAL_CONTROLS = new Set(['done', 'timeout', 'superseded', 'failed', 'cancelled']);
 const CAPACITY_REASONS = new Set(['ttl', 'evict', 'upgrade', 'auth']);
 const RECLAIM_REASONS = new Set([...CAPACITY_REASONS, 'mode_switch', 'model_config', 'delete', 'release']);
@@ -588,7 +588,7 @@ export class SupervisorLifecycle {
         const targetBinding = await this.bindCurrentRun(scene);
         if (!targetBinding) return false;
         const at = this.now();
-        const control = await this.d.db.insertControl(repairRetryPrompt(this.prompt(sync.prompt), sync.target.kind), {
+        const control = await this.d.db.insertControl(this.prompt(sync.prompt), {
           sessionGroup: scene.sessionGroup, targetBinding, requireIdle: true, appendAckSuffix: true,
           ackDeadlineAt: Math.floor((at + PRE_RECLAIM_SYNC_ACK_TIMEOUT_MS) / 1000), createdAt: Math.floor(at / 1000),
         });
@@ -953,20 +953,7 @@ export class SupervisorLifecycle {
       if (await this.sendSyncAlert(alert, context)) this.d.syncObserver.acknowledged(alert);
     }
     alerts = alerts.filter(row => !SYNC_DIAGNOSTIC_TYPES.has(row.type));
-    const completedSymptoms = [];
-    for (const alert of alerts) {
-      const scene = context.scenes.find(row => row.sessionGroup === alert.scope && row.present);
-      if (alert.type !== 'state_uncommitted' || alert.kind !== 'group' || !scene) { completedSymptoms.push(alert); continue; }
-      const trigger = [...this.d.syncObserver.groups.values()].find(row => row.kind === 'group' && row.scope === alert.scope && row.runId === scene.runId);
-      if (!trigger) continue;
-      const control = trigger.controlId ? await this.d.db.getControlById(trigger.controlId) : null;
-      const code = latestSyncFailure({ env: this.d.env, scene, target: { kind: 'group', scope: alert.scope }, startedAt: trigger.ts });
-      if (code || TERMINAL_CONTROLS.has(control?.status)) completedSymptoms.push({ ...alert, reason: code ?? `control_${control.status}: state still trails checkpoint` });
-    }
-    alerts = completedSymptoms;
     let resolved = this.d.syncObserver.resolved ?? [];
-    alerts = alerts.filter(alert => alert.type !== 'state_uncommitted' ||
-      ![...this.releasePreparation, ...this.ttlPreparation].some(([scope]) => scope === alert.scope));
     for (const episode of this.syncAlertEpisodes.entries().filter(row => row.type === 'repair_failed')) {
       if (episode.kind === 'global' || episode.kind === 'origin' && !episode.cursors) continue;
       const scene = context.scenes.find(row => row.sessionGroup === episode.scope) ?? {
@@ -980,7 +967,6 @@ export class SupervisorLifecycle {
     }
     const resolvedKeys = new Set(resolved.map(row => JSON.stringify([row.scope, row.kind, row.type])));
     alerts.push(...this.syncAlertEpisodes.entries().filter(row => row.type === 'repair_failed' && !row.sent &&
-      (row.kind !== 'group' || context.scenes.some(scene => scene.sessionGroup === row.scope && scene.present)) &&
       !resolvedKeys.has(JSON.stringify([row.scope, row.kind, row.type]))));
     const activeKeys = new Set(alerts.map(alert => JSON.stringify([alert.scope, alert.kind, alert.type])));
     this.syncAlertEpisodes.reconcile({ active: alerts, resolved: resolved.filter(alert =>

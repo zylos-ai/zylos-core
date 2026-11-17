@@ -10,7 +10,7 @@ import { groupMemoryDir } from '../../../../cli/lib/session-group-paths.js';
 import { SYNC_BACKLOG_ALERT } from '../../../zylos-memory/scripts/sync-prompts.js';
 import { recordSyncResult } from '../../../../cli/lib/sync-observability.js';
 
-// Boundary: real lifecycle, completion proofs, state parser and private SQLite
+// Boundary: real lifecycle, completion proofs and private SQLite
 // checkpoints/cursors; deterministic control delivery and scene observation.
 // Run for pre-reclaim retry/proof changes; skip unrelated UI/runtime work.
 // Official runner isolates imports; every file belongs to a private fixture,
@@ -76,7 +76,7 @@ for (const route of ['release', 'ttl']) {
     const f = fixture(t, route); await f.start(); f.settle();
     await f.tick(); assert.equal(f.fences.size, 0); assert.equal(f.syncs().length, 2);
     const retry = f.syncs()[1]; assert.equal(retry.ackDeadlineAt - retry.createdAt, 900);
-    assert.match(retry.content, /authorizes the worker.*no new conversations/);
+    assert.equal(retry.content, f.syncs()[0].content, 'retry uses the ordinary Sync prompt without checkpointed-state repair authorization');
     f.store.createCheckpoint(f.scene.sessionGroup, f.end, 'committed summary'); f.state(f.end); f.settle();
     await f.tick(); assert.equal(f.fences.get(f.scene.sessionGroup)?.reason, route);
     assert.equal(f.alerts().length, 0); assert.equal(f.syncs().length, 2);
@@ -90,17 +90,22 @@ for (const route of ['release', 'ttl']) {
     await f.tick(); assert.equal(f.fences.size, 1); assert.equal(f.alerts().length, 0);
   });
 
-  test(`${route} retry can repair state for the checkpoint already published by the first attempt`, async t => {
-    const f = fixture(t, route); await f.start();
-    f.store.createCheckpoint(f.scene.sessionGroup, f.end, 'summary'); f.state(f.first); f.settle();
-    await f.tick(); assert.equal(f.syncs().length, 2); assert.equal(f.fences.size, 0);
-    f.state(f.end); f.settle(); await f.tick(); assert.equal(f.fences.size, 1); assert.equal(f.alerts().length, 0);
-  });
+  for (const state of ['missing', 'behind']) {
+    test(`${route} reclaims with covering checkpoint and released lock while state is ${state}`, async t => {
+      const f = fixture(t, route); await f.start();
+      f.store.createCheckpoint(f.scene.sessionGroup, f.end, 'summary');
+      if (state === 'behind') f.state(f.first);
+      f.settle(); f.marker(true); await f.tick();
+      assert.equal(f.fences.size, 0, 'covering checkpoint cannot complete while the Sync lock is held');
+      f.marker(false); await f.tick();
+      assert.equal(f.fences.size, 1); assert.equal(f.alerts().length, 0);
+      assert.equal(f.syncs().length, 1, 'checkpointed state does not authorize a repair retry');
+    });
+  }
 
-  for (const reason of ['no_checkpoint', 'state_uncommitted', 'INPUT_CHANGED']) {
+  for (const reason of ['no_checkpoint', 'INPUT_CHANGED']) {
     test(`${route} reclaims after two failed Sync attempts with one ${reason} repair alert`, async t => {
       const f = fixture(t, route); await f.start(); f.settle(); await f.tick();
-      if (reason === 'state_uncommitted') { f.store.createCheckpoint(f.scene.sessionGroup, f.end, 'summary'); f.state(f.first); }
       if (reason === 'INPUT_CHANGED') {
         recordSyncResult({ kind: 'group', scope: f.scene.sessionGroup, runId: f.scene.runId, status: 'error', code: reason },
           { env: f.env, now: f.time() });
@@ -166,6 +171,6 @@ test('exhausted pre-reclaim repair tells owner the actual retry method and faile
   const notice = f.controls.find(row => row.content.startsWith('Memory Sync alert:'));
   assert.ok(notice);
   assert.match(notice.content, /pre-reclaim Sync plus one retry; failed because no_checkpoint/);
-  assert.match(notice.content, /Action: Ask the agent to rerun Sync for this scope and verify a covering checkpoint and committed state/);
+  assert.match(notice.content, /Action: Ask the agent to rerun Sync for this scope and verify a covering checkpoint and a released Sync lock/);
   assert.equal(f.alerts()[0].repairAttempt, 'pre_reclaim_retry');
 });

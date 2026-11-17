@@ -527,12 +527,13 @@ acquisition emits no result. Interrupted rounds have no completion result.
 
 Release and TTL preparation capture the requested range before dispatch. A
 terminal control is not proof of success. Group success requires a new content
-checkpoint covering that range, state coverage at least its end, and a released
-Sync marker. An Origin round proves durable cursor progress and marker release;
+checkpoint covering that range and a released Sync marker. A lagging state
+header is diagnostic evidence only; it does not fail or retry reclaim Sync.
+An Origin round proves durable cursor progress and marker release;
 its bounded round need not drain all groups. A failed preparation retries once
 with the same 900-second deadline. Two failed attempts permit normal reclaim
 and persist one repair_failed incident with the latest matching result code or
-no_checkpoint, state_uncommitted or control_timeout. New real work cancels the
+no_checkpoint or control_timeout. New real work cancels the
 preparation through the existing gates. Child/turn/identity checks still apply.
 
 Groups without a live session do not receive backlog or checkpoint/state-gap
@@ -550,13 +551,13 @@ for notification ownership. This replaces both duration-based throttling and
 handled-timeout recovery from rotated diagnostic logs. The same ownership rule
 applies to diagnostic-only incidents.
 
-Origin frequency, Origin idle rounds and control confirmation timeouts emit one
-`sync_alert` record with type, scope, kind and evidence. They never enqueue an
+Origin frequency, Origin idle rounds, control confirmation timeouts and active
+checkpoint/state gaps emit one `sync_alert` record with type, scope, kind and evidence. They never enqueue an
 alert control or notify the owner. Recording does not depend on Origin being
 available. External scripts that monitor these diagnostic signals are outside
 this mechanism.
 
-Online unrepaired backlog, checkpoint/state gaps, three requests without a checkpoint,
+Online unrepaired backlog, three requests without a checkpoint,
 and final automatic repair failures retain the existing owner notification
 route. Their text states the problem, the automatic repair attempted, the failure
 reason and a concrete action the owner can request. Final automatic repair
@@ -572,15 +573,15 @@ Resolution is explicit:
   never announced again;
 - origin_frequency: trailing-hour requests return to at most four;
 - origin_idle: ten known completed rounds contain at most five truly idle rounds;
-- repair_failed: durable checkpoint/state/marker or Origin cursor facts prove
+- repair_failed: durable checkpoint/marker or Origin cursor facts prove
   the captured repair target is fixed.
 
 An unresolved incident records or notifies once, according to its type, including
 after restart or loss of trigger logs. Resolved incidents can recur. Notification ownership is persisted before
 enqueue; unknown enqueue outcomes keep ownership to avoid duplicates. A final
 repair failure blocked by an Origin fence remains durably pending and can send
-later without blocking reclaim. Unreadable or unwritable incident state stops
-notifications and emits a diagnostic rather than repeatedly messaging owners.
+later even after its group goes offline, without blocking reclaim. Unreadable or
+unwritable incident state stops notifications and emits a diagnostic rather than repeatedly messaging owners.
 
 Sync marker expiration retains the baseline rule: a holder from a different run
 is immediately stale; a same-run marker retains its existing 30-minute expiry.
