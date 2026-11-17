@@ -32,12 +32,9 @@ export function createSupervisor(deps) {
   const originAuthAlerted=new Set();
   const missingDependencies=deps.missingDependencies ?? new Set();
   let restartRequestsUnreadable=false;
-  let directoryReported=false;
   const restartRequestsPath=()=>admission?.store.file ?? path.join(deps.zylosDir,'activity-monitor','restart-requests.json');
   const reportError=(error,context={})=>{
     if(isTmuxDirectoryError(error)) {
-      if(directoryReported)return;
-      directoryReported=true;
       diagnostic({event:'tmux_directory_unavailable',reason:error.code});
       log({error:error.code,phase:'tmux-directory'});
       return;

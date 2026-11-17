@@ -14,6 +14,10 @@ import { targetArgs, outerArgs } from '../../../../skills/dashboard/src/lib/obse
 import { SessionAdapter } from '../session-adapter.js';
 import { settleLaunch } from '../session-launch.js';
 import { attachCommand } from '../../../commands/attach.js';
+import { collectDiagnostics } from '../../../commands/doctor.js';
+import { selfUninstall } from '../../../commands/self-uninstall.js';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 
 function directory(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tmux-directory-'));
@@ -58,8 +62,11 @@ test('directory owned by another user is rejected before socket preparation', { 
   assert.throws(() => tmuxClientArgs({}, { TMUX_TMPDIR: '/' }), { code: 'TMUX_DIR_UNSAFE' });
 });
 
-test('missing directory rejects every shared client before executing any binary', async t => {
-  environment(t, path.join(directory(t), 'missing'));
+for (const unsafe of [false, true]) test(`${unsafe ? 'unsafe' : 'missing'} directory rejects every shared client before executing any binary`, async t => {
+  const root = directory(t);
+  if (unsafe) fs.chmodSync(root, 0o777);
+  const code = unsafe ? 'TMUX_DIR_UNSAFE' : 'TMUX_DIR_MISSING';
+  environment(t, unsafe ? root : path.join(root, 'missing'));
   let calls = 0;
   const exec = () => { calls++; throw Error('must not execute'); };
   const sender = createTmuxSender({ exec });
@@ -72,27 +79,61 @@ test('missing directory rejects every shared client before executing any binary'
     () => isManagedClaudeProcess(123, { run: exec }),
     () => targetArgs({}, 'list-sessions'), () => outerArgs({ outerSocket: '/unused' }, 'kill-server'),
   ];
-  for (const action of sync) assert.throws(action, { code: 'TMUX_DIR_MISSING' });
-  await assert.rejects(async () => runTmuxCommand(['list-sessions'], { binary: '/must-not-execute' }), { code: 'TMUX_DIR_MISSING' });
-  await assert.rejects(listGroupTmuxSessions({ exec }), { code: 'TMUX_DIR_MISSING' });
+  for (const action of sync) assert.throws(action, { code });
+  await assert.rejects(async () => runTmuxCommand(['list-sessions'], { binary: '/must-not-execute' }), { code });
+  await assert.rejects(listGroupTmuxSessions({ exec }), { code });
   const adapter = new SessionAdapter({ tmux: { binary: '/must-not-execute' } });
-  await assert.rejects(adapter.isRunning({ tmuxName: 'test' }), { code: 'TMUX_DIR_MISSING' });
-  await assert.rejects(adapter.stop({ tmuxName: 'test' }), { code: 'TMUX_DIR_MISSING' });
-  await assert.rejects(adapter.launch({ sessionGroup: 'origin' }), { code: 'TMUX_DIR_MISSING' });
+  await assert.rejects(adapter.isRunning({ tmuxName: 'test' }), { code });
+  await assert.rejects(adapter.stop({ tmuxName: 'test' }), { code });
+  await assert.rejects(adapter.launch({ sessionGroup: 'origin' }), { code });
   let cleaned = false;
   await assert.rejects(settleLaunch({ tmuxName: 'test', runId: 'test', launchConfig: {}, sessionGroup: null,
-    root: '/unused', script: { file: '/unused', cleanup() { cleaned = true; } } }), { code: 'TMUX_DIR_MISSING' });
+    root: '/unused', script: { file: '/unused', cleanup() { cleaned = true; } } }), { code });
   assert.equal(cleaned, true);
-  await assert.rejects(attachCommand({ exec, resolve: async () => ({ sessionGroup: 'origin', runtime: 'claude', live: { tmuxName: 'test' } }) }), { code: 'TMUX_DIR_MISSING' });
+  await assert.rejects(attachCommand({ exec, resolve: async () => ({ sessionGroup: 'origin', runtime: 'claude', live: { tmuxName: 'test' } }) }), { code });
   assert.equal(calls, 0);
 });
 
-test('directory errors survive read, guard and group-absence classification', () => {
-  const error = Object.assign(Error('directory gone'), { code: 'TMUX_DIR_MISSING', status: 1,
+for (const code of ['TMUX_DIR_MISSING', 'TMUX_DIR_UNSAFE', 'TMUX_DIR_UNAVAILABLE']) test(`${code} survives read, guard and group-absence classification`, () => {
+  const error = Object.assign(Error('directory unavailable'), { code, status: 1,
     stderr: 'error connecting to /missing (No such file or directory)' });
   assert.equal(groupListNoServer(error), false);
   assert.throws(() => parseReadResponse('', error, {}), e => e === error);
   assert.throws(() => parseGuardResponse('', error, '1:2'), e => e === error);
+});
+
+test('failed client rechecks directory loss before classifying no server', async t => {
+  const root = directory(t), active = path.join(root, 'active');
+  fs.mkdirSync(active, { mode: 0o700 });
+  environment(t, active);
+  const binary = path.join(root, 'tmux.mjs');
+  fs.writeFileSync(binary, `#!${process.execPath}\nimport fs from 'node:fs';
+fs.renameSync(process.env.TMUX_TMPDIR, process.env.TMUX_TMPDIR + '-moved');
+process.stderr.write('no server running on fixture'); process.exit(1);\n`, { mode: 0o700 });
+  await assert.rejects(runTmuxCommand(['list-sessions'], { binary }), { code: 'TMUX_DIR_MISSING' });
+});
+
+for (const unsafe of [false, true]) test(`doctor and uninstall propagate ${unsafe ? 'unsafe' : 'missing'} directory before service actions`, async t => {
+  const root = directory(t);
+  if (unsafe) fs.chmodSync(root, 0o777);
+  environment(t, unsafe ? root : path.join(root, 'missing'));
+  const code = unsafe ? 'TMUX_DIR_UNSAFE' : 'TMUX_DIR_MISSING';
+  // All subprocesses are blocked even if an error-propagation regression occurs.
+  let calls = 0;
+  const forbidden = () => { calls++; throw Error('unexpected subprocess'); };
+  t.mock.method(childProcess, 'execFileSync', forbidden);
+  t.mock.method(childProcess, 'spawnSync', forbidden);
+  t.mock.method(console, 'log', () => {});
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  await assert.rejects(collectDiagnostics({}, {
+    resolve: async () => ({ runtime: 'unknown', live: { tmuxName: 'fixture' } }),
+    tmuxCheck: () => ({ installed: true }), pm2Check: () => ({ installed: false }),
+    psCheck: () => ({ installed: true }),
+    network: () => assert.fail('unknown runtime must skip network'),
+  }), { code });
+  await assert.rejects(selfUninstall(['--force']), { code });
+  assert.equal(calls, 0);
 });
 
 test('adapter capture and delivery preserve directory failures without writing', async () => {

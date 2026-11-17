@@ -10,6 +10,55 @@ import * as helpers from '../cli/lib/runtime/tmux-helpers.js';
 import { listGroupTmuxSessions } from '../cli/lib/session-group-paths.js';
 import { attachCommand } from '../cli/commands/attach.js';
 import { targetArgs } from '../skills/dashboard/src/lib/observer-tmux-state.js';
+import { fileURLToPath } from 'node:url';
+
+// Boundary: full Docker shell entrypoint and shared client policy, with private
+// fake zylos/PM2/sleep/tmux binaries. Run for Docker tmux-call changes; otherwise
+// skip. HOME/ZYLOS_DIR/PM2_HOME/TMPDIR are private; no server or DB is used.
+for (const runtime of ['claude', 'codex']) for (const mode of ['unset', 'private', 'missing']) {
+  test(`Docker ${runtime} entrypoint uses ${mode} directory policy for startup and shutdown`, { timeout: 10000 }, t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'docker-tmux-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const home = path.join(root, 'h'), bin = path.join(root, 'b'), tmp = path.join(root, 't');
+    for (const dir of [home, bin, tmp]) fs.mkdirSync(dir, { mode: 0o700 });
+    const zylos = path.join(home, 'zylos');
+    const skills = path.join(zylos, '.claude/skills'); fs.mkdirSync(skills, { recursive: true });
+    fs.symlinkSync(fileURLToPath(new URL('../skills/comm-bridge', import.meta.url)), path.join(skills, 'comm-bridge'));
+    const calls = path.join(root, 'calls.jsonl');
+    fs.writeFileSync(path.join(bin, 'package.json'), '{"type":"module"}');
+    fs.writeFileSync(path.join(bin, 'tmux'), `#!${process.execPath}\nimport fs from 'node:fs';
+fs.appendFileSync(process.env.TMUX_CALLS, JSON.stringify({args:process.argv.slice(2),
+identity:process.env.ZYLOS_RUN_ID})+'\\n');\n`, { mode: 0o700 });
+    for (const name of ['zylos', 'pm2', 'sleep']) fs.writeFileSync(path.join(bin, name),
+      '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: path.join(root, 'p'), TMPDIR: tmp,
+      PATH: `${bin}:${process.env.PATH}`, TMUX_CALLS: calls, ZYLOS_RUNTIME: runtime,
+      ZYLOS_RUN_ID: 'must-not-inherit', CODEX_API_KEY: 'fixture', OPENAI_API_KEY: '',
+      ANTHROPIC_API_KEY: '', CLAUDE_CODE_OAUTH_TOKEN: '' };
+    delete env.TMUX;
+    if (mode === 'unset') delete env.TMUX_TMPDIR;
+    else env.TMUX_TMPDIR = mode === 'private' ? tmp : path.join(tmp, 'missing');
+    t.diagnostic(JSON.stringify({ HOME: home, ZYLOS_DIR: zylos, PM2_HOME: env.PM2_HOME,
+      TMPDIR: tmp, TMUX_TMPDIR: env.TMUX_TMPDIR ?? null, binary: path.join(bin, 'tmux') }));
+    let error;
+    try { execFileSync('bash', [fileURLToPath(new URL('../docker/entrypoint.sh', import.meta.url))],
+      { env, timeout: 8000, stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch (caught) { error = caught; }
+    if (mode === 'missing') {
+      assert.equal(error?.status, 1);
+      assert.match(error.stderr.toString(), /TMUX_DIR_MISSING/);
+      assert.equal(fs.existsSync(calls), false);
+      return;
+    }
+    assert.equal(error, undefined, error?.stderr?.toString());
+    const rows = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(rows.length, 4, 'stale-session stop, launch and both shutdown stops');
+    const prefix = mode === 'private' ? ['-S', path.join(tmp, `tmux-${process.getuid()}`, 'default')] : [];
+    assert.deepEqual(rows.map(row => row.args.slice(0, prefix.length)), rows.map(() => prefix));
+    assert.deepEqual(rows.map(row => row.args[prefix.length]), ['kill-session', 'new-session', 'kill-session', 'kill-session']);
+    assert.ok(rows.every(row => row.identity === undefined));
+  });
+}
 
 const enabled = process.env.ZYLOS_TMUX_DIRECTORY_INTEGRATION === '1';
 

@@ -151,7 +151,8 @@ const environment = createTestEnvironment();
 const tmpdir = path.join(environment.root, 'tmp');
 let failed = true;
 try {
-  fs.mkdirSync(tmpdir);
+  fs.mkdirSync(tmpdir, { mode: 0o700 });
+  fs.chmodSync(tmpdir, 0o700);
   const env = { ...process.env, TMPDIR: tmpdir, TMUX_TMPDIR: tmpdir };
   delete env.TMUX;
   // Runtime identity belongs to each fixture, never the agent running tests.

@@ -124,14 +124,31 @@ upsert_env "CODEX_API_KEY" "${CODEX_API_KEY:-}"
 upsert_env "SYSTEM_PATH" "${PATH}"
 
 # ── Graceful shutdown ─────────────────────────────────────────────────────────
+# Validate through the same client policy as the CLI before every invocation.
+zylos_tmux() {
+  ZYLOS_DIR="${ZYLOS_DIR}" node --input-type=module - "$@" <<'NODE'
+import { pathToFileURL } from 'node:url';
+import { execFileSync } from 'node:child_process';
+const { tmuxClientArgs, tmuxClientEnvironment } = await import(pathToFileURL(
+  process.env.ZYLOS_DIR + '/.claude/skills/comm-bridge/scripts/tmux-client-args.js').href);
+try {
+  execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), ...process.argv.slice(2)],
+    { env: tmuxClientEnvironment(), stdio: 'inherit' });
+} catch (error) {
+  console.error(`${error.code ?? 'TMUX_COMMAND_FAILED'}: ${error.message}`);
+  process.exit(error.status || 1);
+}
+NODE
+}
+
 # docker stop sends SIGTERM to PID 1 (this script). Clean up tmux + PM2.
 SHUTTING_DOWN=false
 cleanup() {
   [ "${SHUTTING_DOWN}" = true ] && return
   SHUTTING_DOWN=true
   info "Shutting down..."
-  tmux kill-session -t claude-main 2>/dev/null || true
-  tmux kill-session -t codex-main 2>/dev/null || true
+  zylos_tmux kill-session -t claude-main || true
+  zylos_tmux kill-session -t codex-main || true
   pm2 kill 2>/dev/null || true
   # Kill the PM2 --no-daemon process directly in case pm2 kill didn't stop it
   [ -n "${PM2_PID:-}" ] && kill "${PM2_PID}" 2>/dev/null || true
@@ -165,27 +182,27 @@ step 4 "Starting ${ZYLOS_RUNTIME} agent..."
 
 if [ "${ZYLOS_RUNTIME}" = "codex" ]; then
   # Kill any stale Codex session
-  tmux kill-session -t codex-main 2>/dev/null || true
+  zylos_tmux kill-session -t codex-main || true
 
   CODEX_ARGS=""
   if [ "${CODEX_BYPASS_PERMISSIONS:-true}" = "true" ]; then
     CODEX_ARGS="--dangerously-bypass-approvals-and-sandbox"
   fi
 
-  env -u ZYLOS_RUN_ID -u ZYLOS_MODEL_CONFIG -u ZYLOS_SESSION_GROUP tmux new-session -d -s codex-main -x 220 -y 50 \
+  zylos_tmux new-session -d -s codex-main -x 220 -y 50 \
     "cd ${ZYLOS_DIR} && source ${ENV_FILE} 2>/dev/null; exec codex ${CODEX_ARGS}"
 
   ok "Codex session started"
 else
   # Kill any stale Claude session
-  tmux kill-session -t claude-main 2>/dev/null || true
+  zylos_tmux kill-session -t claude-main || true
 
   CLAUDE_ARGS=""
   if [ "${CLAUDE_BYPASS_PERMISSIONS:-true}" = "true" ]; then
     CLAUDE_ARGS="--dangerously-skip-permissions"
   fi
 
-  env -u ZYLOS_RUN_ID -u ZYLOS_MODEL_CONFIG -u ZYLOS_SESSION_GROUP tmux new-session -d -s claude-main -x 220 -y 50 \
+  zylos_tmux new-session -d -s claude-main -x 220 -y 50 \
     "cd ${ZYLOS_DIR} && source ${ENV_FILE} 2>/dev/null; exec claude ${CLAUDE_ARGS}"
 
   ok "Claude Code session started"

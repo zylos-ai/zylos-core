@@ -16,11 +16,16 @@ the session cannot be observed; they never prove that a session is absent.
 There is no retry on the default socket.
 
 The dispatcher and activity monitor latch directory failure and record one
-`tmux_directory_unavailable` diagnostic per process. Restore the configured
+`tmux_directory_unavailable` diagnostic per process. The dispatcher stays
+resident even when the directory is missing at startup, so a process manager
+does not turn that failure into a restart loop. Restore the configured
 directory with the correct owner and permissions, then deliberately restart
 the affected services to resume scheduling. Restoring the directory alone does
 not clear the latch. Installations without `TMUX_TMPDIR` retain their previous
 socket selection.
+
+Docker startup and shutdown use the same shared client policy. The entrypoint
+checks before each stale-session stop, runtime launch and shutdown stop.
 
 Real tmux validation must use a separate Unix user from every live Zylos
 instance. Isolate `HOME`, `ZYLOS_DIR`, `PM2_HOME`, short `TMPDIR`, socket paths,

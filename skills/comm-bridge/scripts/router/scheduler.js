@@ -248,8 +248,7 @@ export function createRouter(dependencies, configuration = {}) {
   }
   function initialize() { initialization ??= initializeRouter(context); return initialization; }
   async function start() {
-    if (!directoryAvailable()) return;
-    await initialize();
+    if (directoryAvailable()) await initialize();
     if (timer || state.stopped) return;
     timer = setInterval(() => { try { tick(); } catch (error) { diagnostic('scheduler_error', { reason: error.code ?? error.message }); } }, options.pollIntervalMs);
   }

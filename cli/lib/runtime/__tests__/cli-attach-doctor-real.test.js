@@ -8,6 +8,7 @@ import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { attachCommand } from '../../../commands/attach.js';
 import { collectDiagnostics, buildDiagnosticJson } from '../../../commands/doctor.js';
 import { resolveCliSession } from '../../cli-session.js';
+import { tmuxClientArgs } from '../tmux-client-args.js';
 
 test('review P2: attach installs a real client-attached hint for an unknown runtime', async t => {
   const f = readyTmuxTarget(t, { prefix: 'cli-attach-real-', ledger: false });
@@ -17,8 +18,9 @@ test('review P2: attach installs a real client-attached hint for an unknown runt
   let attached = false;
   await attachCommand({ resolve: async () => selected, exec: (command, argv) => {
     assert.equal(command, 'tmux');
-    if (argv[0] === 'attach') { attached = true; return ''; }
-    return execFileSync(f.binary, ['-S', f.socketPath, ...argv], { encoding: 'utf8' });
+    const commandArgs = argv.slice(tmuxClientArgs({ utf8: false }).length);
+    if (commandArgs[0] === 'attach') { attached = true; return ''; }
+    return execFileSync(f.binary, ['-S', f.socketPath, ...commandArgs], { encoding: 'utf8' });
   } });
   assert.equal(attached, true);
   assert.match(f.tmux('show-hooks', '-t', '=zylos-group-origin:'), /client-attached.*Ctrl\+B d to detach/);
