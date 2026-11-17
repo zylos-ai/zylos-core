@@ -68,6 +68,9 @@ Select the job named in the control prompt, then check the inherited environment
   this job can run only in the `origin` group.
 - `group Sync` with no group and a `ZYLOS_RUN_ID` uses single global Sync
   (kind=global, `zylos-global-sync`).
+- If the prompt does not name a job (an old prompt queued before an upgrade,
+  or a user's manual request to sync memory), use group Sync when a group is
+  bound and global Sync when no group is bound; never infer Origin Sync.
 
 Never infer Origin Sync merely from being in origin. Never invent or
 replace these bindings. Read [the complete Sync procedures](references/sync-procedures.md)
