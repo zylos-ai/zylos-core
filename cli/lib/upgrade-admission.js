@@ -10,10 +10,15 @@ export function upgradeFailureCode(error) {
 export function upgradeFailureMessage(error) {
   const lines = String(error?.message || error).split(/\r?\n/).map(line => line.trim());
   const useful = lines.filter(line => line && !/^(?:npm\s+(?:warn(?:ing)?|notice)\b|(?:warn(?:ing)?|deprecated)\b|at\s)/i.test(line));
-  const npmError = useful.find(line => /^npm\s+(?:error|err!)\s+/i.test(line)
-    && !/^npm\s+(?:error|err!)\s+(?:code|path|errno|syscall|command|stack|at|a complete log|log files?)\b/i.test(line));
-  const message = npmError || useful.find(line => !/^npm\s+(?:error|err!)(?:\s|$)/i.test(line));
-  return (message || 'Core upgrade failed. Check the npm debug log for details.')
+  const explicitError = useful.find(line => /^npm\s+(?:error|err!)\s+Error:\s*\S/i.test(line));
+  const npmError = useful.find(line => {
+    const detail = line.match(/^npm\s+(?:error|err!)\s+(.+)$/i)?.[1];
+    return detail && !/^[a-z][\w-]*\s+\S+$/.test(detail)
+      && !/^(?:command|stack|at|a complete log|log files?)\b/i.test(detail);
+  });
+  const message = explicitError?.replace(/^npm\s+(?:error|err!)\s+Error:\s*/i, '')
+    || npmError || useful.find(line => !/^npm\s+(?:error|err!)(?:\s|$)/i.test(line));
+  return (message || 'Core upgrade failed. Check the npm debug log in ~/.npm/_logs/ for details.')
     .replace(/(^|[\s('"`])(?:file:\/\/)?(?:[A-Za-z]:[\\/]|\/)[^\s'"`,;:)]+/g, '$1<path>');
 }
 

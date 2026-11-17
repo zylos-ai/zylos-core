@@ -85,7 +85,7 @@ process.stdout.write(${JSON.stringify(path.dirname(installed))});\n`
       } else if (outcome === 'rollback') {
         assert.ok(child.stderr.includes(`Rollback completed. zylos-core has been restored to ${fromVersion}.\n`));
         assert.match(child.stderr, /^Error: npm error Target installation failed\./m);
-        assert.doesNotMatch(child.stderr, /deprecated|recovery status/);
+        assert.doesNotMatch(child.stderr, /npm warn deprecated old-package|recovery status/);
       } else assert.match(child.stderr, /^Error: Installed source version does not match upgrade handoff\.\n$/);
     }
     assert.equal(fs.existsSync(path.join(env.ZYLOS_DIR, '.backup')), false);

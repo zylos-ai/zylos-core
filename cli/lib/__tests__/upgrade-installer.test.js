@@ -48,6 +48,41 @@ test('real npm warning before a lifecycle failure selects an error after install
  assert.equal(f.read().installerExitConfirmed,true);
  assert.equal(f.helper.members(f.read().installerPid).length,0);
 });
+// Boundary: real npm replaces a local global bin in an isolated prefix. Run for
+// npm failure selection changes; no registry, service, tmux or database access.
+test('real npm permission failure reports the error rather than rename metadata', t => {
+ const npmCli=resolveUpgradeNpmCli(),f=fixture(t,'// local installer material');
+ const prefix=path.join(f.root,'prefix'),bin=path.join(prefix,'bin');
+ const overrides={npm_config_userconfig:path.join(f.root,'user.npmrc'),npm_config_globalconfig:path.join(f.root,'global.npmrc'),
+  npm_config_cache:path.join(f.root,'npm-cache'),npm_config_audit:'false',npm_config_fund:'false',npm_config_update_notifier:'false'};
+ for(const key of ['npm_config_userconfig','npm_config_globalconfig'])fs.writeFileSync(overrides[key],'');
+ const previous=Object.fromEntries(Object.keys(overrides).map(key=>[key,process.env[key]]));
+ Object.assign(process.env,overrides);
+ t.after(()=>{for(const [key,value] of Object.entries(previous)){if(value===undefined)delete process.env[key];else process.env[key]=value;}});
+ for(const key of ['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR'])assert.ok(process.env[key]?.startsWith(path.dirname(process.env.HOME)+path.sep),`${key} is not isolated`);
+ assert.ok(prefix.startsWith(f.root+path.sep));
+ t.diagnostic(JSON.stringify({HOME:process.env.HOME,ZYLOS_DIR:process.env.ZYLOS_DIR,PM2_HOME:process.env.PM2_HOME,TMPDIR:process.env.TMPDIR,prefix,npmCli,services:[],databases:[]}));
+ const targets=['1.0.0','2.0.0'].map(version=>{
+  const target=path.join(f.root,version);fs.mkdirSync(target);
+  fs.writeFileSync(path.join(target,'package.json'),JSON.stringify({name:'upgrade-output-permission-fixture',version,bin:{'upgrade-output-permission':'bin.cjs'}}));
+  fs.writeFileSync(path.join(target,'bin.cjs'),'#!/usr/bin/env node\n',{mode:0o755});return target;
+ });
+ const install=target=>m.runInstaller(f.dir,f.j,{stage:'install',npmCli,args:['install','-g','--prefix',prefix,target],cwd:f.root,timeout:20000});
+ install(targets[0]);
+ let error;
+ fs.chmodSync(bin,0o500);
+ try{install(targets[1]);}catch(cause){error=cause;}finally{fs.chmodSync(bin,0o700);}
+ assert.ok(error,'read-only bin must reject the replacement');
+ assert.match(error.message,/npm error code EACCES/);
+ assert.match(error.message,/npm error Error: EACCES: permission denied, rename/);
+ const reason=upgradeFailureMessage(error);
+ assert.match(reason,/^EACCES: permission denied, rename /);
+ assert.doesNotMatch(reason,/npm error (?:dest|path|code)|\n/);
+ t.diagnostic(`Error: ${reason}`);
+ assert.equal(f.read().installerExitConfirmed,true);
+ assert.equal(f.helper.members(f.read().installerPid).length,0);
+});
+
 for(const ci of [undefined,'','0','false','xyz'])test(`protected npm preserves inherited CI=${ci} under original Node with durable started evidence`,t=>{
  const previous=process.env.CI;
  if(ci===undefined)delete process.env.CI;else process.env.CI=ci;
