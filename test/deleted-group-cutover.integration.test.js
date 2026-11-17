@@ -207,7 +207,7 @@ for (const entry of ['cli', 'dashboard']) {
   });
 }
 
-// Boundary: an actual immutable beta.12 package naturally fails and leaves D9
+// Boundary: an actual immutable beta.12 package naturally fails and leaves the transition
 // converting on disk; the current store+converter+coordinator resumes that same
 // record after code replacement, without SQL repair. Run for upgrade/recovery
 // or cutover changes; same explicit gate/isolation as the lifecycle cases above.
@@ -256,7 +256,7 @@ for (const checkpointSource of ['cutover', 'single']) test(`${checkpointSource} 
 });
 
 for (const code of ['CHECKPOINT_GAP', 'CUTOVER_COVERAGE_CONFLICT']) {
-  // Boundary: real frozen D9/store failure -> coordinator -> separate CLI
+  // Boundary: real frozen transition/store failure -> coordinator -> separate CLI
   // read-only connection and doctor output. Run for cutover safety/diagnostics;
   // skip unrelated changes unless explicitly enabled. Inject inconsistent data
   // only into this case's private SQLite after freeze; no product API is mocked.
@@ -281,7 +281,7 @@ for (const code of ['CHECKPOINT_GAP', 'CUTOVER_COVERAGE_CONFLICT']) {
       assert.deepEqual(checkpoints(f), before);
       assert.equal(events.filter(event => event.event === 'transition_cutover_failed').length, 1);
       assert.equal(events.some(event => event.event === 'transition_unblocked'), false);
-      // Actual public CLI subprocess reads persisted D9; it does not share the
+      // Actual public CLI subprocess reads the persisted transition; it does not share the
       // coordinator connection, diagnostics array or in-memory failure seam.
       const cli = await command(f, [path.join(repo, 'cli/zylos.js'), 'session-mode', 'status', '--json']);
       assert.equal(cli.ok, true);
