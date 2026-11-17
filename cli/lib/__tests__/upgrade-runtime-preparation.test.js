@@ -10,6 +10,7 @@ import { loadInstructionCatalog, migrationPromptPath, sha256 } from '../instruct
 import { isMigrationPending } from '../../../skills/activity-monitor/scripts/session-start-prompt.js';
 
 const packageRoot = path.resolve(import.meta.dirname, '../../..');
+const defaultDeniedTools = ['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode'];
 
 function publishRuntimePreparation({workDir, zylosDir, preparation}, options = {}) {
   const transactionId = 'runtime-preparation-test';
@@ -229,7 +230,7 @@ test('Claude settings preserve user settings, remove only exact Dashboard comman
     const result = f.prepare({ stopFailureSupported: supported, subagentHooksSupported: supported });
     const settings = JSON.parse(result.replacements.find(r => r.kind === 'claude_settings').content);
     assert.equal(settings.model, 'custom-model');
-    assert.deepEqual(settings.permissions, { allow: ['Read'] });
+    assert.deepEqual(settings.permissions, { allow: ['Read'], deny: defaultDeniedTools });
     assert.ok(JSON.stringify(settings).includes('--user'));
     assert.equal(settings.hooks.SessionStart.find(g => g.matcher === 'custom').hooks.length, 1);
     assert.equal(Boolean(settings.hooks.StopFailure?.length), supported);
@@ -237,6 +238,61 @@ test('Claude settings preserve user settings, remove only exact Dashboard comman
     for (const matcher of ['startup', 'clear', 'compact']) assert.ok(settings.hooks.SessionStart.find(group => group.matcher === matcher).hooks.some(hook => /hook-activity\.js$/.test(hook.command)));
   }
 });
+
+// Boundary: settings staged by real self-upgrade preparation, without publishing
+// or launching runtimes/services. Run for deny merging or upgrade staging changes;
+// unrelated changes may skip. The runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR.
+test('upgrade stages default denied tools when permissions are absent', t => {
+  const f = fixture(t);
+  f.write('.claude/settings.json', JSON.stringify({ model: 'custom-model' }));
+  const before = snapshot(f.zylosDir);
+  const result = f.prepare();
+  const staged = result.replacements.find(r => r.kind === 'claude_settings');
+  assert.equal(staged.path, '.claude/settings.json');
+  const settings = JSON.parse(staged.content);
+  assert.deepEqual(settings.permissions, { deny: defaultDeniedTools });
+  assert.equal(settings.model, 'custom-model');
+  assert.deepEqual(snapshot(f.zylosDir), before);
+});
+
+test('upgrade preserves user permission order and appends only missing denied tools', t => {
+  const f = fixture(t);
+  const permissions = { deny: ['Bash(rm -rf *)', 'EnterPlanMode'],
+    allow: ['Read'], ask: ['Bash'], defaultMode: 'default' };
+  f.write('.claude/settings.json', JSON.stringify({ permissions }));
+  const before = snapshot(f.zylosDir);
+  const result = f.prepare();
+  const settings = JSON.parse(result.replacements.find(r => r.kind === 'claude_settings').content);
+  assert.deepEqual(settings.permissions, { ...permissions,
+    deny: [...permissions.deny, 'AskUserQuestion', 'ExitPlanMode'] });
+  assert.deepEqual(snapshot(f.zylosDir), before);
+  f.write('.claude/settings.json', JSON.stringify(settings));
+  const repeated = f.prepare();
+  assert.equal(repeated.replacements.find(r => r.kind === 'claude_settings').content,
+    result.replacements.find(r => r.kind === 'claude_settings').content);
+});
+
+for (const [name, permissions, warning] of [
+  ['string permissions', 'invalid', 'permissions is not an object'],
+  ['array permissions', [], 'permissions is not an object'],
+  ['null permissions', null, 'permissions is not an object'],
+  ['string deny', { allow: ['Read'], deny: 'invalid' }, 'permissions.deny is not an array'],
+  ['null deny', { allow: ['Read'], deny: null }, 'permissions.deny is not an array'],
+]) {
+  test(`upgrade preserves ${name} and stages other settings with a warning`, t => {
+    const f = fixture(t);
+    f.write('.claude/settings.json', JSON.stringify({ permissions }));
+    const before = snapshot(f.zylosDir);
+    const result = f.prepare();
+    const settings = JSON.parse(result.replacements.find(r => r.kind === 'claude_settings').content);
+    assert.deepEqual(settings.permissions, permissions);
+    const template = JSON.parse(fs.readFileSync(path.join(packageRoot, 'templates/.claude/settings.json')));
+    assert.equal(settings.autoMemoryEnabled, template.autoMemoryEnabled);
+    assert.ok(settings.hooks.SessionStart.length > 0);
+    assert.equal(result.warnings.filter(message => message.includes(warning)).length, 1);
+    assert.deepEqual(snapshot(f.zylosDir), before);
+  });
+}
 
 test('legacy files and ZYLOS bytes are preserved with truthful pending migration', t => {
   const f = fixture(t); fs.unlinkSync(path.join(f.zylosDir, '.zylos/instructions/meta.json'));

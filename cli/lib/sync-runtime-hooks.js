@@ -307,6 +307,31 @@ export function syncTemplateSetting(key, {
   return { changed: true };
 }
 
+export function syncTemplateDeniedTools({
+  templateSettings,
+  installedSettings,
+  dryRun = false,
+  log = console.log,
+} = {}) {
+  const permissions = installedSettings.permissions;
+  if (permissions !== undefined && (!permissions || typeof permissions !== 'object' || Array.isArray(permissions))) {
+    log('  Warning: permissions is not an object; skipping default deny rules.');
+    return { changed: false };
+  }
+  if (permissions?.deny !== undefined && !Array.isArray(permissions.deny)) {
+    log('  Warning: permissions.deny is not an array; skipping default deny rules.');
+    return { changed: false };
+  }
+  const deny = permissions?.deny ?? [];
+  const missing = templateSettings.permissions.deny.filter(tool => !deny.includes(tool));
+  if (missing.length === 0) return { changed: false };
+  if (!dryRun) {
+    installedSettings.permissions ??= {};
+    installedSettings.permissions.deny = [...deny, ...missing];
+  }
+  return { changed: true };
+}
+
 export function syncModelCoupledNewSessionThreshold({
   modelBackfilled = false,
   zylosDir = ZYLOS_DIR,
@@ -741,21 +766,9 @@ export function syncRuntimeHooks({
     if (result.changed) settingsBackfilled = true;
   }
 
-  let denyBackfilled = false;
-  const permissions = installedSettings.permissions;
-  if (permissions !== undefined && (!permissions || typeof permissions !== 'object' || Array.isArray(permissions))) {
-    log('  Warning: permissions is not an object; skipping default deny rules.');
-  } else if (permissions?.deny !== undefined && !Array.isArray(permissions.deny)) {
-    log('  Warning: permissions.deny is not an array; skipping default deny rules.');
-  } else {
-    const deny = permissions?.deny ?? [];
-    const missing = templateSettings.permissions.deny.filter(tool => !deny.includes(tool));
-    denyBackfilled = missing.length > 0;
-    if (denyBackfilled && !dryRun) {
-      installedSettings.permissions ??= {};
-      installedSettings.permissions.deny = [...deny, ...missing];
-    }
-  }
+  const { changed: denyBackfilled } = syncTemplateDeniedTools({
+    templateSettings, installedSettings, dryRun, log,
+  });
 
   const codexSync = syncCodexConfig({ dryRun, projectDir: zylosDir });
   if (codexSync.fatal) {

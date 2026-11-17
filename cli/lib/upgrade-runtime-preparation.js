@@ -11,7 +11,7 @@ import { migrateClaudeMdToZylosMd } from './migrate.js';
 import { loadInstructionCatalog, classifyInstructionBaseline, verifyInstructionConservation,
   createMigrationBackup, renderMigrationReport, migrationPromptPath, writeMigrationPrompt } from './instruction-migration.js';
 import { desiredClaudeHooks, syncHooks, detectStopFailureSupport, detectSubagentHooksSupport,
-  syncTemplateModelSetting, syncTemplateSetting } from './sync-runtime-hooks.js';
+  syncTemplateModelSetting, syncTemplateSetting, syncTemplateDeniedTools } from './sync-runtime-hooks.js';
 import { removeLegacyDashboardHooks } from './upgrade-post-cutoff.js';
 import { readConfigStrict } from './config-store.js';
 import { commandExists } from './shell-utils.js';
@@ -255,6 +255,7 @@ export function prepareUpgradeRuntime(ctx, {
     for (const key of ['autoMemoryEnabled', 'autoDreamEnabled']) {
       syncTemplateSetting(key, { templateSettings, installedSettings: settings, log: () => {} });
     }
+    syncTemplateDeniedTools({ templateSettings, installedSettings: settings, log: message => warnings.push(message) });
     add('.claude/settings.json', JSON.stringify(settings, null, 2) + '\n', 'claude_settings', 't02');
 
     const agentsRoot = path.join(sourceRoot, 'skills/zylos-memory/agents');
