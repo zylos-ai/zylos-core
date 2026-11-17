@@ -38,6 +38,8 @@ test('internal exhausted delivery verification describes uncertainty rather than
 });
 
 test('owner failure alert uses the shared configured brand and safe default', () => {
+  fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify({ statusNotices: { brand: 'Factory' } }));
   const alert = { ...record, channel: 'telegram', endpoint_id: 'source' };
   assert.match(messageForFailureAlert(alert), /^\[Factory\]/);
   for (const brand of ['', 'unsafe\nbrand', 'unsafe\tbrand', 'x'.repeat(81), 42]) {

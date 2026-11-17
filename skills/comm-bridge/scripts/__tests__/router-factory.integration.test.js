@@ -146,6 +146,28 @@ test('factory: startup drains a persisted failure once without redelivering its 
   assert.equal(f.calls.filter(call => call[0] === 'paste').length, 1);
 });
 
+// Run for owner-alert rendering/config fallback changes; skip unrelated UI.
+// setup proves private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and SQLite. Only the
+// channel edge is recorded in memory; no tmux/network/account is contacted.
+test('factory: malformed configuration still drains an owner alert to Origin', async t => {
+  const f = setup(t);
+  const dispatcher = f.create();
+  await dispatcher.initialize(); await dispatcher.idle();
+  const original = f.add(f.a, 'private original input');
+  f.db.claimConversation(original.id);
+  f.db.failDelivery(original.id, { maxRetries: 1, reason: 'launch_failed' });
+  fs.writeFileSync(CONFIG_FILE, '{broken');
+  dispatcher.tick(); await dispatcher.idle();
+  const alerts = f.calls.filter(call => call[0] === 'owner_alert');
+  assert.equal(alerts.length, 1);
+  assert.deepEqual(alerts[0][1], { channel: 'dashboard', endpoint: 'origin' });
+  assert.match(alerts[0][2], /^\[Zylos\]/);
+  assert.ok(alerts[0][2].includes(`#${original.id}`));
+  assert.equal(alerts[0][2].includes('private original input'), false);
+  assert.equal(f.row(original.id).status, 'failed');
+  assert.equal(f.db.getDb().prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(original.id).state, 'sent');
+});
+
 test('factory: actual unreadable remains inert once, even if config repaired', async t => {
   const f = setup(t); fs.writeFileSync(CONFIG_FILE, '{broken');
   const alerts = []; f.overrides.alert = (...args) => alerts.push(args);

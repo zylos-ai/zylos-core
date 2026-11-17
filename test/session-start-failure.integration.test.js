@@ -1,13 +1,18 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { routerFixture } from '../skills/comm-bridge/scripts/__tests__/helpers/router-fixture.js';
+import { createTestEnvironment } from '../scripts/test-environment.js';
+
+const environment = createTestEnvironment();
+const { routerFixture } = await import('../skills/comm-bridge/scripts/__tests__/helpers/router-fixture.js');
+after(() => environment.cleanup());
 
 // Run for internal-send/failure settlement/router changes; skip unrelated UI.
-// Official runner isolates HOME, ZYLOS_DIR, PM2_HOME, TMPDIR before imports.
+// Official runner isolates TMPDIR; this file owns a further private
+// HOME/ZYLOS_DIR/PM2_HOME before product imports and cleans it after the router.
 // Only CLI and SQLite are real here; launch/scene are deterministic boundaries.
 // No tmux or channel transport is contacted. Real runtime startup is a separate gate.
 test('real internal send receives one terminal receipt and later work can deliver', { timeout: 10000 }, async t => {
@@ -17,7 +22,11 @@ test('real internal send receives one terminal receipt and later work can delive
   assert.ok(outsideHome.startsWith(`..${path.sep}`) || path.isAbsolute(outsideHome));
   assert.notEqual(process.env.HOME, os.userInfo().homedir);
   assert.equal(process.env.PM2_HOME, path.join(process.env.HOME, '.pm2'));
-  assert.ok(process.env.TMPDIR?.startsWith(path.dirname(process.env.HOME) + path.sep));
+  assert.ok(process.env.TMPDIR && environment.root.startsWith(process.env.TMPDIR + path.sep),
+    'private fixture must live beneath the runner temporary hierarchy');
+  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME']) {
+    assert.ok(process.env[key].startsWith(environment.root + path.sep), `${key} must belong to this file`);
+  }
   fs.mkdirSync(path.join(root, 'comm-bridge'), { recursive: true });
   fs.mkdirSync(path.join(root, '.claude/skills/chat'), { recursive: true });
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ runtime: 'claude', session_mode: 'multi' }));

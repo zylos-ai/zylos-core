@@ -89,7 +89,8 @@ test('NAME_CONFLICT requeues without retry and startup control invalidation prec
   const control = f.db.insertControl('old', { sessionGroup: 'a', appendAckSuffix: false });
   f.deps.getSessionAdapter = () => ({ launch: async () => {
     assert.equal(f.db.getControlById(control.id).last_error, 'SESSION_ENDED');
-    throw Object.assign(Error('exists'), { code: 'NAME_CONFLICT' }); }, stop: async () => assert.fail('no stop on name conflict') });
+    throw Object.assign(Error('exists'), { code: 'NAME_CONFLICT',
+      launchTiming: { new_session_ms: 1, total_ms: 1, last_phase: 'new_session' } }); }, stop: async () => assert.fail('no stop on name conflict') });
   const router = f.create(); await router.initialize(); await f.rounds(2);
   assert.equal(f.row(row.id).status, 'pending'); assert.equal(f.row(row.id).retry_count, 0);
   assert.ok(f.events.some(x => x.event === 'launch_name_conflict'));

@@ -34,8 +34,14 @@ export function messageForFailureReceipt({ id, session_group: group, reason, cha
     `[${brand}] Message #${id} ${prefixEn} "${group}": ${en}. Please resend it later.${suffixEn}`;
 }
 
+function failureAlertConfig() {
+  // Owner alerts must still reach Origin when configuration cannot be read.
+  try { return readZylosConfigOrThrow().statusNotices ?? {}; }
+  catch { return {}; }
+}
+
 /** Owner-only metadata summary; never renders the original message body. */
-export function messageForFailureAlert(record, config = readZylosConfigOrThrow().statusNotices ?? {}) {
+export function messageForFailureAlert(record, config = failureAlertConfig()) {
   const brand = noticeBrand(config);
   const clean = value => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 512) : '';
   const name = clean(record.task_name) || '未命名定时任务 / unnamed scheduled task';
