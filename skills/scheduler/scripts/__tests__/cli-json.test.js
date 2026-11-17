@@ -258,7 +258,7 @@ test('past rescheduling rejects without writes and non-schedule edits preserve f
 test('rescheduling other one-time states preserves their status and error', t => {
   const f = fixture(t);
   const future = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
-  for (const status of ['pending', 'paused', 'completed']) {
+  for (const status of ['pending', 'paused']) {
     const task = f.add(`retain ${status}`);
     f.db.prepare('UPDATE tasks SET status=?,last_error=? WHERE id=?').run(status, `retained ${status}`, task.id);
     const result = f.success(['update', task.id, '--at', future]);
@@ -267,6 +267,67 @@ test('rescheduling other one-time states preserves their status and error', t =>
     assert.equal(result.task.last_error, `retained ${status}`);
     assert.deepEqual(result.task, f.row(task.id));
   }
+});
+
+test('completed one-time tasks reenable for every future timing option', t => {
+  const initial = Date.parse('2030-01-01T00:00:00Z');
+  t.mock.timers.enable({ apis: ['Date'], now: initial });
+  const f = fixture(t, { time: initial });
+  for (const [flag, value, type] of [
+    ['--in', '90 minutes', 'one-time'], ['--at', '2030-01-01T01:30:00Z', 'one-time'],
+    ['--cron', '30 1 * * *', 'recurring'], ['--every', '90 minutes', 'interval'],
+  ]) {
+    const task = f.failed(`completed ${flag}`, 'dispatch');
+    f.db.prepare("UPDATE tasks SET status='completed' WHERE id=?").run(task.id);
+    const history = f.history(task.id);
+    const result = f.success(['update', task.id, flag, value]);
+    assert.equal(result.reenabled, true);
+    assert.equal(result.task.status, 'pending');
+    assert.equal(result.task.type, type);
+    assert.equal(result.task.next_run_at, initial / 1000 + 5400);
+    assert.equal(result.task.failed_at, null);
+    assert.equal(result.task.last_error, null);
+    assert.deepEqual(f.history(task.id), history);
+  }
+});
+
+test('completed timing rejects past and present without writes while name edits preserve status', t => {
+  const initial = Date.parse('2030-01-01T00:00:00Z');
+  const f = fixture(t, { time: initial });
+  const task = f.add('completed');
+  f.db.prepare("UPDATE tasks SET status='completed' WHERE id=?").run(task.id);
+  const before = f.row(task.id), history = f.history(task.id);
+  for (const time of ['2029-12-31T23:59:59Z', '2030-01-01T00:00:00Z']) {
+    f.fail(['update', task.id, '--at', time, '--name', 'must not write'], 'RESCHEDULE_NOT_FUTURE');
+    assert.deepEqual(f.row(task.id), before);
+    assert.deepEqual(f.history(task.id), history);
+  }
+  const renamed = f.success(['update', task.id, '--name', 'renamed']);
+  assert.equal(renamed.reenabled, false);
+  assert.equal(renamed.task.status, 'completed');
+  assert.equal(renamed.task.name, 'renamed');
+});
+
+test('running one-time timing edits reject without writes then receipt completes normally', t => {
+  const f = fixture(t), task = f.add('running receipt');
+  const result = dispatchTask(f.db, task, { getRecentConversations: () => [], sendViaC4: () => {
+    const before = f.row(task.id), history = f.history(task.id);
+    for (const timing of [['--in', '10 minutes'], ['--at', '2035-01-01T00:00:00Z'],
+      ['--cron', '0 9 * * *'], ['--every', '10 minutes']]) {
+      const error = f.fail(['update', task.id, ...timing, '--name', 'must not write'], 'TASK_WRONG_STATUS');
+      assert.equal(error.status, 'running');
+      assert.match(error.message, /Wait for delivery to finish/);
+      assert.deepEqual(f.row(task.id), before);
+      assert.deepEqual(f.history(task.id), history);
+    }
+    const rename = f.success(['update', task.id, '--name', 'still delivering']);
+    assert.equal(rename.task.status, 'running');
+    assert.equal(rename.reenabled, false);
+    return { category: 'success' };
+  } });
+  assert.equal(result.category, 'success');
+  assert.equal(f.row(task.id).status, 'completed');
+  assert.equal(f.history(task.id).at(-1).status, 'success');
 });
 
 test('empty cron never creates or reschedules tasks and empty names remain unchanged', t => {
