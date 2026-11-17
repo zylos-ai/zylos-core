@@ -73,7 +73,7 @@ export class SyncMaintenanceCoordinator {
         remaining.push(alert); continue;
       }
       eligible.add(alert.scope);
-      if (blocked(alert.scope) || await db.getActiveDeletion?.(alert.scope) || pending(alert.scope)) continue;
+      if (blocked(alert.scope) || (alert.scope !== 'origin' && await db.getActiveDeletion?.(alert.scope)) || pending(alert.scope)) continue;
       const range = await db.getUnsummarizedRange(alert.scope);
       const target = { ...await captureSyncTarget({ db, scene: { sessionGroup: alert.scope }, kind: 'group', range, now: this.now() }),
         backlog: range.count, firstAt: range.firstAt };

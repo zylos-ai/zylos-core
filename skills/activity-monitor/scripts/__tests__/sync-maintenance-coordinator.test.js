@@ -13,16 +13,17 @@ import { renderStateSkeleton } from '../../../zylos-memory/scripts/state-format.
 // durable files, with fixture runtime observations only. Run for repair admission,
 // completion, failure or release coordination; skip unrelated UI. Official runner
 // isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; no runtime, tmux or network is started.
-function fixture(t) {
+function fixture(t, group = 'telegram:repair') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-maint-coordinator-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   let clock = 1800000000000;
   const f = c4Fixture(t, { now: () => clock });
-  const env = { ...process.env, ZYLOS_DIR: root }, group = 'telegram:repair';
+  const env = { ...process.env, ZYLOS_DIR: root };
   const db = { ...f.store, getActiveDeletion: () => null,
     getControlById: id => f.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id),
   };
-  const row = db.insertConversation('out', 'telegram', 'fixture', 'fixture', { groupName: 'repair' });
+  const row = group === 'origin' ? db.insertConversation('out', 'system', null, 'fixture')
+    : db.insertConversation('out', 'telegram', 'fixture', 'fixture', { groupName: 'repair' });
   const context = { configuration: { mode: 'multi', syncMaxIntervalSeconds: 60 }, scenes: [], fences: [], restartRequests: [], transition: null };
   const store = createMaintenanceRequests({ env, now: () => clock });
   const coordinator = new SyncMaintenanceCoordinator({ env, now: () => clock, store });
@@ -168,4 +169,12 @@ test('real input arriving after maintenance finishes cancels release before fenc
   assert.equal(f.lifecycle.releasePreparation.has(f.group), false);
   assert.equal(f.store.read()[0].phase, 'ordinary');
   assert.equal(f.db.getDrainFence(f.group), null);
+});
+
+
+test('inactive Origin group maintenance never calls the deletion-only API that forbids Origin', async t => {
+  const f = fixture(t, 'origin');
+  f.db.getActiveDeletion = f.store.getActiveDeletion;
+  await f.inspect([f.alert]);
+  assert.equal((await f.store.listMaintenanceRequests())[0].sessionGroup, 'origin');
 });
