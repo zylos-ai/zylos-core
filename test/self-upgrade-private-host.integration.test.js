@@ -21,6 +21,7 @@ for (const scenario of ['stop-race', 'success']) test(`private real self-upgrade
   const env = {PATH:process.env.PATH,TZ:'Asia/Singapore', HOME:path.join(root,'h'), ZYLOS_DIR:path.join(root,'z'),
     PM2_HOME:path.join(root,'p'), TMPDIR:path.join(root,'t'), TMUX_TMPDIR:path.join(root,'t'),
     ZYLOS_ACCEPTANCE_PM2:process.env.ZYLOS_ACCEPTANCE_PM2,
+    ZYLOS_ACCEPTANCE_DASHBOARD_MODULES:process.env.ZYLOS_ACCEPTANCE_DASHBOARD_MODULES,
     ZYLOS_ACCEPTANCE_EVIDENCE:process.env.ZYLOS_ACCEPTANCE_EVIDENCE};
   for (const key of ['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR']) {
     fs.mkdirSync(env[key]); assert.equal(fs.realpathSync(env[key]), env[key]);
