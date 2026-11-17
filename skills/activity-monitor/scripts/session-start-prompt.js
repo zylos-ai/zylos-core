@@ -80,7 +80,7 @@ function readStdinSource() {
   });
 }
 
-const startupPrompt = handoff => [
+export const startupPrompt = handoff => [
   ...(handoff ? ['Continue the unfinished work listed in the supplied handoff.'] : []),
   'If your human partner may be waiting for a reply, use the injected context to decide whether to reply.',
   'Read working-memory paths on demand.',
@@ -108,7 +108,7 @@ async function hasPendingReply(scope, recentReader, now) {
   }
 }
 
-const migrationPrompt = [
+export const migrationPrompt = [
   'A pending instruction migration was injected into this session\'s startup context.',
   'Treat it as the active task for this turn and execute its Required action now.',
   'Do not merely acknowledge or summarize it.',

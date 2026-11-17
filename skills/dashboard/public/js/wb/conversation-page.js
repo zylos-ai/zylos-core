@@ -1,3 +1,4 @@
+import { conversationStampMs } from './api-time.js';
 import { countLabel } from '../count-label.js';
 import { workingParts, workingText } from './working-display.js';
 import { createUploadTray } from './chat-upload-tray.js';
@@ -149,7 +150,7 @@ export function mountConversationPage({
     }
     if (!response.ok) {
       throw {
-        code: payload.error ?? 'chat_request_failed',
+        code: payload.error?.code ?? 'chat_request_failed',
         status: response.status,
         payload
       };
@@ -228,7 +229,7 @@ export function mountConversationPage({
     autoSelectPending = false;
     // The most recently active conversation: Origin is pinned first but opens only when it is the latest,
     // except in single, where Origin is the only conversation that can be written to.
-    const latest = current.items.reduce((best, item) => Number(item.stamp || 0) > Number(best.stamp || 0) ? item : best, current.items[0]);
+    const latest = current.items.reduce((best, item) => (conversationStampMs(item.stamp) || 0) > (conversationStampMs(best.stamp) || 0) ? item : best, current.items[0]);
     const origin = current.mode === 'single' && current.tab === 'mine' ? current.items.find(item => isOriginConversation(item.id)) : null;
     await state.select((origin ?? latest).id);
   }
@@ -1539,7 +1540,7 @@ export function mountConversationPage({
       row.draft.hidden = !(item.draft || item.state === 'draft');
       row.button.classList.toggle('selected', item.id === s.selectedId);
       row.button.setAttribute('aria-current', item.id === s.selectedId ? 'true' : 'false');
-      const date = asDate(Number.isFinite(item.stamp) && item.stamp > 0 ? (item.stamp - 2440587.5) * 86400000 : null);
+      const date = asDate(Number.isFinite(conversationStampMs(item.stamp)) ? conversationStampMs(item.stamp) : null);
       text(row.time, date ? relativeTime(date) : '');
       if (date) {
         row.time.dateTime = date.toISOString();
@@ -1755,6 +1756,7 @@ export function mountConversationPage({
     return !state.snapshot().error;
   }
   return {
+    blockRemote: state.blockRemote,
     streamSubscription: state.streamSubscription,
     streamStatus: state.streamStatus,
     streamEvent: state.streamEvent,

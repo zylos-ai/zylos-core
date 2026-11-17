@@ -55,7 +55,7 @@ function focusGeometry(control) {
     width: rect.width, height: rect.height };
 }
 
-export async function runFocusClippingBrowser(sandbox, { width, theme }) {
+export async function runFocusClippingBrowser(sandbox, { width, theme, memoryRefresh = false, memoryFocus = 'file' }) {
   console.info('Focus browser isolation:', JSON.stringify(sandbox.assertIsolation()));
   const errors = [], streams = new Set(), observations = [];
   let closing = false, state = 'asleep';
@@ -87,7 +87,7 @@ export async function runFocusClippingBrowser(sandbox, { width, theme }) {
           origin.queue.pending.count = state === 'pending' ? 1 : 0;
         }
         const value = workbenchSnapshotAnswer(url, snapshot, now);
-        if (p === '/api/workbench/memory/backlog') {
+        if (p === '/api/memory/backlog') {
           const row = value.groups[0];
           value.groups.push({ ...row, sessionGroup: 'lark:oc_product', displayName: 'Product weekly', count: 18 },
             { ...row, sessionGroup: 'origin', displayName: 'Origin', count: 21 });
@@ -95,7 +95,7 @@ export async function runFocusClippingBrowser(sandbox, { width, theme }) {
           value.hasOlder = true;
           value.budgets = { limits: { 'identity.md': 8000, 'references.md': 8000 }, warnings: { 'identity.md': 7000, 'references.md': 7000 } };
         }
-        if (p === '/api/settings') {
+        if (p === '/api/settings/pricing') {
           // Normal saved custom rows stay visible without a show-unused action.
           for (const runtime of ['claude', 'codex']) value.runtimes[runtime].builtInModels = [];
         }
@@ -114,10 +114,14 @@ export async function runFocusClippingBrowser(sandbox, { width, theme }) {
   const context = await browser.newContext({ viewport: { width, height: 900 }, locale: 'zh-CN', reducedMotion: 'reduce' });
   sandbox.addCleanup(() => context.close());
   let requests = 0;
+  let releaseMemoryGit;
+  const memoryGitReady = memoryRefresh ? new Promise(resolve => { releaseMemoryGit = resolve; }) : null;
+  sandbox.addCleanup(() => releaseMemoryGit?.());
   await context.route('**/*', async route => {
     try {
       if (new URL(route.request().url()).origin !== base) return await route.abort();
       if (++requests > 600) { recordError('fixture request bound exceeded'); return await route.abort(); }
+      if (memoryRefresh && new URL(route.request().url()).pathname === '/api/memory/git') await memoryGitReady;
       await route.continue();
     } catch (error) { recordError(error); }
   });
@@ -133,6 +137,48 @@ export async function runFocusClippingBrowser(sandbox, { width, theme }) {
   await page.goto(base + '/');
   await page.locator('.wb-row[data-group]').first().waitFor();
   assert.equal(await page.locator('html').getAttribute('data-theme'), theme);
+
+  if (memoryRefresh) {
+    await openDashboardTab(page, 'memory');
+    const first = page.locator(memoryFocus === 'file' ? '.memory-file'
+      : memoryFocus === 'header' ? '.wb-memory-section-h' : '.wb-memory-search input').first();
+    await first.focus();
+    await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Tab');
+    const original = await first.elementHandle();
+    assert.ok(await original.evaluate(node => node === document.activeElement), 'the intended control has keyboard focus');
+    const filePath = await page.locator('.memory-file').first().getAttribute('data-path');
+    const collapseKey = await original.getAttribute('data-collapse-key');
+    const oldFile = await page.locator('.memory-file').first().elementHandle();
+    const response = page.waitForResponse(value => new URL(value.url()).pathname === '/api/memory/git');
+    releaseMemoryGit();
+    await response;
+    await page.waitForFunction(node => !node.isConnected && document.querySelector('#memory-status').hidden, oldFile);
+    const focus = await page.evaluate(() => ({ path: document.activeElement.dataset.path,
+      tag: document.activeElement.tagName,
+      inList: !!document.activeElement.closest('.memory-tree'),
+      key: document.activeElement.dataset.collapseKey,
+      header: document.activeElement.matches('.wb-memory-section-h'),
+      search: document.activeElement.matches('.wb-memory-search input'),
+      connected: document.activeElement.isConnected, file: document.activeElement.matches('.memory-file'),
+      visible: document.activeElement.matches(':focus-visible') }));
+    await original.dispose(); await oldFile.dispose();
+    if (memoryFocus !== 'search') assert.ok(focus.connected && focus.visible, 'the control keeps connected keyboard focus');
+    if (memoryFocus === 'file') {
+      assert.equal(focus.path, filePath, 'memory response preserves the focused file path after rebuilding the list');
+      assert.ok(focus.file, 'the replacement is a file button');
+      await screenshot('memory-refresh');
+      const nextPath = await page.locator('.memory-file').nth(1).getAttribute('data-path');
+      await page.keyboard.press('Tab');
+      assert.equal(await page.locator('.memory-file:focus').getAttribute('data-path'), nextPath,
+        'Tab continues to the next file after the response');
+    } else if (memoryFocus === 'header') {
+      assert.ok(focus.header, 'focus stays on the folding header');
+      assert.equal(focus.key, collapseKey, 'the same folding key keeps focus');
+    } else assert.equal(focus.inList, false, 'a response does not pull external search focus into the memory list');
+    assert.equal(errors.length, 0, errors.join('\n'));
+    console.info('Memory refresh focus:', JSON.stringify({ width, memoryFocus, ...focus }));
+    return;
+  }
 
   async function screenshot(name) {
     const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;

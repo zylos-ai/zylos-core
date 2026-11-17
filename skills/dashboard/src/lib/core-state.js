@@ -130,6 +130,7 @@ export class CoreState {
     return this.snapshot;
   }
   getCurrentSessionId() { return this.observation?.identity?.present && this.observation?.status?.reason !== 'identity_changed' ? this.observation.identity.sessionId : null; }
+  getSingleSessionId() { return this.snapshot.sessionGroup === null ? this.getCurrentSessionId() : null; }
   getState() { return structuredClone(this.snapshot); }
   getLaunchConfig() { return this.observation?.identity?.present && this.observation?.status?.reason !== 'identity_changed' && this.observation.identity.launchConfig ? structuredClone(this.observation.identity.launchConfig) : null; }
   getUsageObservation() { return this.observation?.usage ? structuredClone(this.observation.usage) : { valid: false }; }

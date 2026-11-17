@@ -241,7 +241,7 @@ test('fleet Observer HTTP allowlist binds remote leases to the local admin princ
     seen.push([req.method, req.url, req.headers.authorization, req.headers['x-observer-lease']]);
     if (req.method === 'POST' && req.url === '/api/observer/leases') {
       res.writeHead(201, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ id: leaseId, expiresAt: Date.now() + 30_000, preset: 'standard' }));
+      res.end(JSON.stringify({ id: leaseId, expiresAt: new Date(Date.now() + 30_000).toISOString(), preset: 'standard' }));
       return;
     }
     if (req.method === 'GET' && req.url === '/observer/frame') {
@@ -296,7 +296,7 @@ test('fleet Observer renewals advance the local lease fence and stale bindings a
     if (req.method === 'POST' && (req.url === '/api/observer/leases' || req.url.endsWith('/renew'))) {
       expiresAt += 30_000;
       res.writeHead(req.url.endsWith('/renew') ? 200 : 201, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ id: leaseId, expiresAt, preset: 'standard' }));
+      res.end(JSON.stringify({ id: leaseId, expiresAt: new Date(expiresAt).toISOString(), preset: 'standard' }));
       return;
     }
     res.writeHead(404).end();
@@ -333,7 +333,7 @@ test('fleet Observer WebSocket relays display only and closes on browser input',
   const remote = await listen((req, res) => {
     if (req.method === 'POST' && req.url === '/api/observer/leases') {
       res.writeHead(201, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ id: leaseId, expiresAt: Date.now() + 30_000, preset: 'standard' }));
+      res.end(JSON.stringify({ id: leaseId, expiresAt: new Date(Date.now() + 30_000).toISOString(), preset: 'standard' }));
       return;
     }
     res.writeHead(404).end();
@@ -929,7 +929,7 @@ test('fleet proxy fail-closes consumer-local fleet management endpoints without 
     for (const [url, init] of cases) {
       const resp = await fetch(url, init);
       assert.equal(resp.status, 403);
-      assert.deepEqual(await resp.json(), { error: 'local_endpoint_not_proxyable' });
+      assert.deepEqual(await resp.json(), { ok: false, error: { code: 'local_endpoint_not_proxyable', message: 'local_endpoint_not_proxyable' } });
     }
     assert.equal(remoteHit, false);
   } finally {
@@ -951,6 +951,7 @@ test('fleet proxy allows admin memory GETs and validates memory query paths cons
     poller: { getSessionToken: async () => 'zylos_st_secret' }
   });
   const hub = await listen((req, res) => {
+    req._authContext = { kind: 'api', scope: 'admin', principalId: 'fixture' };
     const url = new URL(req.url, 'http://hub.test');
     proxy.handle(req, res, url);
   });
@@ -981,7 +982,7 @@ test('fleet proxy allows admin memory GETs and validates memory query paths cons
 
     const unsafe = await fetch(`${hub.origin}/fleet/Remote/api/memory/file?path=..%2Fstate.md`);
     assert.equal(unsafe.status, 400);
-    assert.deepEqual(await unsafe.json(), { error: 'invalid_memory_path' });
+    assert.deepEqual(await unsafe.json(), { ok: false, error: { code: 'invalid_memory_path', message: 'invalid_memory_path' } });
 
     const unsafePut = await fetch(`${hub.origin}/fleet/Remote/api/memory/file?path=..%2Fstate.md`, {
       method: 'PUT',
@@ -989,14 +990,14 @@ test('fleet proxy allows admin memory GETs and validates memory query paths cons
       body: '{}'
     });
     assert.equal(unsafePut.status, 400);
-    assert.deepEqual(await unsafePut.json(), { error: 'invalid_memory_path' });
+    assert.deepEqual(await unsafePut.json(), { ok: false, error: { code: 'invalid_memory_path', message: 'invalid_memory_path' } });
 
     const write = await fetch(`${hub.origin}/fleet/Remote/api/memory/file?path=identity.md`, {
       method: 'POST',
       body: '{}'
     });
     assert.equal(write.status, 403);
-    assert.deepEqual(await write.json(), { error: 'read_only_proxy' });
+    assert.deepEqual(await write.json(), { ok: false, error: { code: 'read_only_proxy', message: 'read_only_proxy' } });
 
     assert.deepEqual(seen, [
       { method: 'GET', url: '/api/memory/tree' },
@@ -1033,37 +1034,9 @@ test('fleet proxy keeps encoded slash fail-closed for memory URL path', async ()
     ]) {
       const resp = await fetch(url);
       assert.equal(resp.status, 403);
-      assert.deepEqual(await resp.json(), { error: 'local_endpoint_not_proxyable' });
+      assert.deepEqual(await resp.json(), { ok: false, error: { code: 'local_endpoint_not_proxyable', message: 'local_endpoint_not_proxyable' } });
     }
     assert.equal(remoteHit, false);
-  } finally {
-    await hub.close();
-    await remote.close();
-  }
-});
-
-test('fleet proxy passes through upstream insufficient_scope for whitelisted writes', async () => {
-  const remote = await listen((_req, res) => {
-    res.writeHead(403, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ error: 'insufficient_scope', required: 'admin' }));
-  });
-  const proxy = new FleetProxy({
-    config: { fleet: { agents: [{ name: 'Remote', base_url: remote.origin, read_api_key: 'zylos_ak_secret' }] } },
-    rootDir: publicDir(),
-    poller: { getSessionToken: async () => 'zylos_st_secret' }
-  });
-  const hub = await listen((req, res) => {
-    const url = new URL(req.url, 'http://hub.test');
-    proxy.handle(req, res, url);
-  });
-  try {
-    const resp = await fetch(`${hub.origin}/fleet/Remote/api/settings`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}'
-    });
-    assert.equal(resp.status, 403);
-    assert.deepEqual(await resp.json(), { error: 'insufficient_scope', required: 'admin' });
   } finally {
     await hub.close();
     await remote.close();
@@ -1347,7 +1320,7 @@ test('fleet proxy maps a mid-body upstream failure on buffered responses to 502 
   try {
     const resp = await fetch(`${hub.origin}/fleet/Remote/api/instance`);
     assert.equal(resp.status, 502);
-    assert.deepEqual(await resp.json(), { error: 'upstream_body_error' });
+    assert.deepEqual(await resp.json(), { ok: false, error: { code: 'upstream_body_error', message: 'upstream_body_error' } });
   } finally {
     await hub.close();
     await remote.close();
@@ -1365,7 +1338,7 @@ test('fleet Observer cookie HTTP and WebSocket admission ignore forwarded protoc
       writes += 1;
       upstreamHeaders.push(req.headers);
       res.writeHead(201, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ id: writes > 3 ? bearerLeaseId : leaseId, expiresAt: Date.now() + 30_000, preset: 'standard' }));
+      res.end(JSON.stringify({ id: writes > 3 ? bearerLeaseId : leaseId, expiresAt: new Date(Date.now() + 30_000).toISOString(), preset: 'standard' }));
       return;
     }
     res.writeHead(404).end();
@@ -1425,7 +1398,7 @@ test('fleet Observer cookie HTTP and WebSocket admission ignore forwarded protoc
     ]) {
       const response = await post(extra);
       assert.equal(response.status, 403);
-      assert.deepEqual(await response.json(), { error: 'origin_required' });
+      assert.deepEqual(await response.json(), { ok: false, error: { code: 'same_origin_required', message: 'same_origin_required' } });
       await assert.rejects(connect(extra), /rejected \(404\)/);
     }
     assert.equal(writes, 3, 'rejected HTTP requests must not reach the producer');
@@ -1457,7 +1430,7 @@ test('fleet Observer cookie HTTP and WebSocket admission ignore forwarded protoc
   }
 });
 
-test('history GET routes pass Fleet admin gate and retain secret response guard', async () => {
+test('history GET routes require admin and retain secret response guard', async () => {
   let responseBody = { entries: [{ fields: { body: { preview: '[redacted]' } } }] };
   const remote = await listen((_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(responseBody)); });
   const proxy = new FleetProxy({
@@ -1479,7 +1452,7 @@ test('history GET routes pass Fleet admin gate and retain secret response guard'
     assert.equal(unknown.status, 403);
     responseBody = { text: 'zylos_st_must_be_blocked' };
     const leaked = await fetch(`${hub.origin}/fleet/History/api/observer/history/content`);
-    assert.equal(leaked.status, 502); assert.equal((await leaked.json()).error, 'secret_leak_blocked');
+    assert.equal(leaked.status, 502); assert.equal((await leaked.json()).error.code, 'secret_leak_blocked');
   } finally { await hub.close(); await remote.close(); }
 });
 
@@ -1532,7 +1505,7 @@ test('fleet forwards Observer Set size with its body and relays the producer ver
     res.writeHead(allowed ? 200 : 403, { 'content-type': 'application/json' });
     res.end(JSON.stringify(allowed
       ? { agentSize: JSON.parse(body), applied: { ...JSON.parse(body), statusLines: 1 } }
-      : { error: 'insufficient_scope' }));
+      : { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' } }));
   });
   const proxy = new FleetProxy({
     config: { fleet: { agents: [{ name: 'Remote', base_url: remote.origin }] } },
@@ -1559,7 +1532,7 @@ test('fleet forwards Observer Set size with its body and relays the producer ver
     producerScope = 'read';
     const readOnly = await post({ Origin: hub.origin });
     assert.equal(readOnly.status, 403);
-    assert.deepEqual(await readOnly.json(), { error: 'insufficient_scope' });
+    assert.deepEqual(await readOnly.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' } });
   } finally {
     await hub.close();
     await remote.close();
@@ -1576,7 +1549,7 @@ test('fleet Observer relay admits a rewritten-Host cookie handshake only with it
     if (req.method === 'POST' && (req.url === '/api/observer/leases' || renew)) {
       const id = renew ? renew[1] : `${'l'.repeat(31)}${(leases += 1)}`;
       res.writeHead(renew ? 200 : 201, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ id, expiresAt: Date.now() + 30_000, generation: 3, resource: 'frame', ticket: upstreamTicket }));
+      res.end(JSON.stringify({ id, expiresAt: new Date(Date.now() + 30_000).toISOString(), generation: 3, resource: 'frame', ticket: upstreamTicket }));
       return;
     }
     res.writeHead(404).end();
@@ -1725,7 +1698,7 @@ test('fleet timezone writes retain local admin and cookie origin proof', async (
     poller: { getSessionToken: async () => 'remote-fixture' },
     fetch: async () => { calls++; return new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } }); },
   });
-  for (const [method, suffix] of [['PUT', '/api/settings/timezone'], ['POST', '/api/actions/restart-timezone-services']]) {
+  for (const [method, suffix] of [['PUT', '/api/settings/timezone'], ['POST', '/api/settings/timezone/actions/restart-services']]) {
     for (const [kind, scope, sameOrigin, allowed] of [
       ['api', 'read', false, false], ['cookie', 'admin', false, false],
       ['cookie', 'admin', true, true], ['api', 'admin', false, true],
@@ -1770,4 +1743,110 @@ test('fleet object writes support auth-disabled hubs without widening admission'
     assert.equal(res.status, status, `${method} ${suffix}`);
     assert.equal(calls - before, status === 200 ? 1 : 0, 'rejected requests do not reach the producer');
   }
+});
+
+// Real proxy handlers with isolated loopback servers. Run for route migrations,
+// local-only paths or write authorization; no child process or live resource.
+test('fleet migrates object writes and exposes remote chat policy to read callers', async t => {
+  const seen = [];
+  const remote = await listen(async (req, res) => {
+    for await (const _chunk of req) { /* Consume fixture writes. */ }
+    seen.push([req.method, req.url]);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, chat_allow_remote: true }));
+  });
+  t.after(() => remote.close());
+  const proxy = new FleetProxy({ config: { fleet: { agents: [{ name: 'Remote', base_url: remote.origin }] } },
+    poller: { getSessionToken: async () => 'remote-fixture' } });
+  const hub = await listen((req, res) => {
+    req._authContext = { kind: req.headers['x-test-kind'] || 'api', scope: req.headers['x-test-scope'] || 'admin', principalId: 'fixture' };
+    proxy.handle(req, res, new URL(req.url, 'http://fixture'));
+  });
+  t.after(() => hub.close());
+  const request = (route, method, headers = {}) => fetch(`${hub.origin}/fleet/Remote${route}`, { method, headers });
+  for (const route of ['/api/settings/chat', '/api/observer/status']) {
+    const response = await request(route, 'GET', { 'x-test-scope': 'read' });
+    assert.equal(response.status, 200, route);
+    assert.deepEqual(seen.at(-1), ['GET', route]);
+  }
+  for (const route of ['/api/chat/conversations', '/api/observer/history/sessions?session_group=telegram%3Ateam']) {
+    const count = seen.length;
+    const denied = await request(route, 'GET', { 'x-test-scope': 'read' });
+    assert.equal(denied.status, 403, route);
+    assert.equal(seen.length, count, 'read keys cannot forward content requests');
+    const accepted = await request(route, 'GET');
+    assert.equal(accepted.status, 200, route);
+    assert.deepEqual(seen.at(-1), ['GET', route]);
+  }
+  for (const [method, route] of [
+    ['PUT', '/api/settings/pricing'], ['PUT', '/api/memory/file?path=identity.md'],
+    ['POST', '/api/schedules'], ['PUT', '/api/schedules/task'], ['DELETE', '/api/schedules/task'],
+    ['POST', '/api/schedules/task/actions/pause'], ['POST', '/api/schedules/task/actions/resume'],
+    ['POST', '/api/settings/timezone/actions/restart-services'],
+  ]) {
+    for (const [headers, code] of [
+      [{ 'x-test-scope': 'read' }, 'admin_required'],
+      [{ 'x-test-kind': 'cookie', Origin: 'https://evil.example' }, 'same_origin_required'],
+    ]) {
+      const count = seen.length;
+      const response = await request(route, method, headers);
+      assert.equal(response.status, 403);
+      assert.deepEqual(await response.json(), { ok: false, error: { code, message: code } });
+      assert.equal(seen.length, count);
+    }
+    const accepted = await request(route, method, { 'x-test-kind': 'cookie', Origin: hub.origin });
+    assert.equal(accepted.status, 200, route);
+    assert.deepEqual(seen.at(-1), [method, route]);
+  }
+  for (const route of ['/api/settings', '/api/workbench/schedule', '/api/actions/restart-timezone-services']) {
+    const response = await request(route, route === '/api/settings' ? 'PUT' : 'POST');
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).error.code, 'read_only_proxy');
+  }
+  const count = seen.length;
+  const localOnly = await request('/api/settings/chat', 'PUT');
+  assert.equal(localOnly.status, 403);
+  assert.equal((await localOnly.json()).error.code, 'local_endpoint_not_proxyable');
+  assert.equal(seen.length, count);
+});
+
+
+// Loopback HTTP proxy boundary; no real destination, credential or process is used.
+// Run when the Fleet schedule allowlist changes; unrelated UI work can skip.
+test('fleet schedule writes allow only exact object and action paths', async () => {
+  const seen = [];
+  const remote = await listen((req, res) => {
+    seen.push(`${req.method} ${req.url}`);
+    req.resume();
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"ok":true}');
+  });
+  const proxy = new FleetProxy({
+    config: { fleet: { agents: [{ name: 'Remote', base_url: remote.origin, read_api_key: 'fixture' }] } },
+    rootDir: publicDir(), poller: { getSessionToken: async () => 'fixture-session' }
+  });
+  const hub = await listen((req, res) => {
+    req._authContext = { kind: 'api', scope: 'admin', principalId: 'fixture' };
+    proxy.handle(req, res, new URL(req.url, 'http://hub.test'));
+  });
+  try {
+    const allowed = [['POST', '/api/schedules'], ['PUT', '/api/schedules/task'], ['DELETE', '/api/schedules/task'],
+      ['POST', '/api/schedules/task/actions/pause'], ['POST', '/api/schedules/task/actions/resume']];
+    const forbidden = [['POST', '/api/schedules/task/pause'], ['POST', '/api/schedules/task/actions/delete'],
+      ['POST', '/api/schedules/task/actions/pause/extra'], ['POST', '/api/schedules/task/history'],
+      ['POST', '/api/schedules/preview'], ['PUT', '/api/schedules/task/extra'], ['DELETE', '/api/schedules/task/actions/pause']];
+    for (const [method, suffix] of allowed) {
+      const reply = await fetch(`${hub.origin}/fleet/Remote${suffix}`, { method, body: '{}' });
+      assert.equal(reply.status, 200, `${method} ${suffix}`);
+      await reply.text();
+    }
+    assert.deepEqual(seen, allowed.map(([method, suffix]) => `${method} ${suffix}`));
+    const count = seen.length;
+    for (const [method, suffix] of forbidden) {
+      const reply = await fetch(`${hub.origin}/fleet/Remote${suffix}`, { method, body: '{}' });
+      assert.equal(reply.status, 403, `${method} ${suffix}`);
+      assert.equal((await reply.json()).error.code, 'read_only_proxy');
+      assert.equal(seen.length, count, 'rejected paths must not reach the destination');
+    }
+  } finally { await hub.close(); await remote.close(); }
 });

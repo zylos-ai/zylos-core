@@ -49,7 +49,7 @@ test('a search box shows one focus ring, drawn by the box, while typing',
           sandbox.addCleanup(() => context.close());
           try {
             await context.route('**/*', request => request.request().url().startsWith(base + '/') ? request.continue() : request.abort());
-            await context.route(base + '/api/workbench/memory/backlog*', request => request.fulfill({ json: backlog() }));
+            await context.route(base + '/api/memory/backlog*', request => request.fulfill({ json: backlog() }));
             await context.route(base + '/_assets/vendor/chart.umd.js', request => request.fulfill({ path: chartAsset, contentType: 'text/javascript' }));
             await context.addInitScript(value => {
               if (window.top !== window) return; // The overview's sandboxed preview frame has no storage.

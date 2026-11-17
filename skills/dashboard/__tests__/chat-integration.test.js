@@ -145,7 +145,7 @@ for (const example of conditionalFixtures.answers) {
     const result = await a.request(active.route + '/answers', post(body));
     if (!example.valid) {
       assert.equal(result.status, 400);
-      assert.deepEqual(result.body, { error: 'invalid_chat_answer',
+      assert.deepEqual(result.body, { ok: false, error: { code: 'invalid_chat_answer', message: 'invalid_chat_answer' },
         fields: expectedFieldErrors[example.name] });
       assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answers').get().n, 0);
       assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answer_deliveries').get().n, 0);
@@ -240,7 +240,7 @@ registerIntegrationCase('HTTP conditional answer keeps action authorization and 
     const body = structuredClone(invalid); change(body.action);
     const result = await a.request(active.route + '/answers', post(body));
     assert.equal(result.status, 400);
-    assert.deepEqual(result.body, { error: 'invalid_chat_answer' });
+    assert.deepEqual(result.body, { ok: false, error: { code: 'invalid_chat_answer', message: 'invalid_chat_answer' } });
   }
   const denied = await a.request(active.route + '/answers', { ...post(invalid), identity: 'read' });
   assert.equal(denied.status, 403); assert.equal(Object.hasOwn(denied.body, 'fields'), false);
@@ -251,12 +251,12 @@ registerIntegrationCase('HTTP conditional answer keeps action authorization and 
   assert.equal(result.status, 200); assert.equal(result.body.delivery.stored, true);
   const conflicted = structuredClone(valid); conflicted.action.payload.values.customer_type = 'partner';
   const conflict = await a.request(active.route + '/answers', post(conflicted));
-  assert.equal(conflict.status, 409); assert.deepEqual(conflict.body, { error: 'chat_answer_conflict' });
+  assert.equal(conflict.status, 409); assert.deepEqual(conflict.body, { ok: false, error: { code: 'chat_answer_conflict', message: 'chat_answer_conflict' } });
   const nonpaused = structuredClone(valid); nonpaused.action.id = 'http_other_answer';
   const closed = await a.request(active.route + '/answers', post(nonpaused));
-  assert.equal(closed.status, 409); assert.deepEqual(closed.body, { error: 'chat_question_not_paused' });
+  assert.equal(closed.status, 409); assert.deepEqual(closed.body, { ok: false, error: { code: 'chat_question_not_paused', message: 'chat_question_not_paused' } });
   const badClosed = await a.request(active.route + '/answers', post(invalid));
-  assert.equal(badClosed.status, 400); assert.deepEqual(badClosed.body, { error: 'invalid_chat_answer' });
+  assert.equal(badClosed.status, 400); assert.deepEqual(badClosed.body, { ok: false, error: { code: 'invalid_chat_answer', message: 'invalid_chat_answer' } });
   assert.equal(a.counts.receive, before + 1); assert.equal(a.answerRows(valid.action.id).length, 1);
   assert.equal(a.answers.question(row.session_group, question.interruptId).status, 'answered');
 });
@@ -275,7 +275,7 @@ registerIntegrationCase('HTTP conditional answer preserves legacy field errors a
   body.action.payload = { values: { customer_type: 'person' } };
   const before = a.counts.receive;
   const rejected = await a.request(active.route + '/answers', post(body));
-  assert.equal(rejected.status, 400); assert.deepEqual(rejected.body, { error: 'invalid_chat_answer' });
+  assert.equal(rejected.status, 400); assert.deepEqual(rejected.body, { ok: false, error: { code: 'invalid_chat_answer', message: 'invalid_chat_answer' } });
   const conditional = structuredClone(conditionalFixtures.formQuestion);
   conditional.messageId += '_free'; conditional.interruptId += '_free';
   conditional.interrupt.otherInput = false;
@@ -283,7 +283,7 @@ registerIntegrationCase('HTTP conditional answer preserves legacy field errors a
   a.addOutbound(active.draft.localId, questionContent(conditional));
   const free = a.answer(conditional, 'http_free_denied'); free.action.payload = { freeText: 'Please clarify' };
   const denied = await a.request(active.route + '/answers', post(free));
-  assert.equal(denied.status, 400); assert.deepEqual(denied.body, { error: 'invalid_chat_answer' });
+  assert.equal(denied.status, 400); assert.deepEqual(denied.body, { ok: false, error: { code: 'invalid_chat_answer', message: 'invalid_chat_answer' } });
   assert.equal(a.counts.receive, before);
   assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answers').get().n, 0);
   assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answer_deliveries').get().n, 0);
@@ -402,8 +402,8 @@ registerIntegrationCase('group resources precede details and preserve include an
   }
   // The naming resource only accepts the POST that sends its prompt; a read is never parsed as a group detail.
   const naming = await api.request('/api/groups/naming-prompt');
-  assert.equal(naming.status, 405);
-  assert.deepEqual(naming.body, { error: 'method_not_allowed' });
+  assert.equal(naming.status, 404);
+  assert.deepEqual(naming.body, { ok: false, error: { code: 'not_found', message: 'not_found' } });
   const group = '/api/groups/' + encodeURIComponent('dashboard:' + active.draft.localId);
   const compact = await api.request(group + '?include=');
   assert.equal(compact.status, 200);
@@ -435,7 +435,7 @@ registerIntegrationCase('remote chat off, on and off enforces both direct and pr
     const reads = ['/api/chat/conversations?tab=mine', active.route, active.route + '/messages?tab=mine', active.route + '/status?tab=mine&ids=1', active.route + '/questions'];
     const writes = [ ['/api/chat/drafts', {}], [active.route + '/send', { content: 'remote new text' }], [active.route + '/answers', remote.answer(q, 'remote-answer')] ];
     for (const allowRemote of [false, true, false]) {
-      const set = await remote.request('/api/chat/settings', { method: 'PUT', body: { allowRemote } });
+      const set = await remote.request('/api/settings/chat', { method: 'PUT', body: { chat_allow_remote: allowRemote } });
       assert.equal(set.status, 200); assert.equal(remote.config.chat.allowRemote, allowRemote);
       if (allowRemote) for (const fleet of [false, true]) {
         const client = fleet ? local : remote;
@@ -484,9 +484,10 @@ registerIntegrationCase('remote chat off, on and off enforces both direct and pr
           if (!allowed) assert.ok(!direct.text.includes('PRIVATE_REMOTE_TEXT'));
           const upstreamBefore = local.counts.upstream;
           const proxied = await local.request(route, { identity, fleet: true });
-          assert.equal(proxied.status, identity !== 'read' && allowRemote ? 200 : 403);
-          if (identity === 'read') assert.equal(local.counts.upstream, upstreamBefore);
-          if (!(identity !== 'read' && allowRemote)) assert.ok(!proxied.text.includes('PRIVATE_REMOTE_TEXT'));
+          const proxyAllowed = identity !== 'read' && allowRemote;
+          assert.equal(proxied.status, proxyAllowed ? 200 : 403);
+          assert.equal(local.counts.upstream, upstreamBefore + (identity === 'read' ? 0 : 1));
+          if (!proxyAllowed) assert.ok(!proxied.text.includes('PRIVATE_REMOTE_TEXT'));
         }
         // Forbidden callers must not reach receive or acceptance; the enabled
         // direct/proxy admin paths above use their own registered questions.
@@ -499,8 +500,9 @@ registerIntegrationCase('remote chat off, on and off enforces both direct and pr
           if (identity === 'read') assert.equal(local.counts.upstream, upstreamBefore);
         }
         if (identity !== 'cookie') for (const fleet of [false, true]) {
+          if (identity === 'admin' && !fleet) continue;
           const target = fleet ? local : remote;
-          assert.equal((await target.request('/api/chat/settings', { identity, fleet, method: 'PUT', body: { allowRemote: !allowRemote } })).status, 403);
+          assert.equal((await target.request('/api/settings/chat', { identity, fleet, method: 'PUT', body: { chat_allow_remote: !allowRemote } })).status, 403);
           assert.equal(remote.config.chat.allowRemote, allowRemote);
         }
       }
@@ -600,7 +602,7 @@ for (const fleet of [false, true]) attachmentCase(`${fleet ? 'fleet' : 'local'} 
   const target = fleet ? await createRemoteChatApiFixture(t, targetSandbox) : await createChatApiFixture(t, sandbox);
   const hub = fleet ? await createChatApiFixture(t, sandbox) : target;
   if (fleet) {
-    assert.equal((await target.request('/api/chat/settings', { method: 'PUT', body: { allowRemote: true } })).status, 200);
+    assert.equal((await target.request('/api/settings/chat', { method: 'PUT', body: { chat_allow_remote: true } })).status, 200);
     hub.setProxy(target);
   }
   const api = fleet ? {

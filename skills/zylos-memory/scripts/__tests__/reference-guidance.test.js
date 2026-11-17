@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { REFERENCE_REORG_PROMPT } from '../sync-prompts.js';
+import { GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT, REFERENCE_REORG_PROMPT } from '../sync-prompts.js';
 
 const read = name => fs.readFileSync(new URL(`../../references/${name}.md`, import.meta.url), 'utf8');
 const sync = read('sync-procedures');
@@ -29,6 +29,18 @@ test('Sync parents consume Codex worker outcomes before ending their turn', () =
   assert.match(parent, /If the result cannot be retrieved, report that failure/);
   assert.match(parent, /Successful Sync and the documented `SYNC_BUSY` no-op need no extra owner message/);
   assert.match(parent, /Do not restart Sync/);
+});
+
+test('the skill holds the launch and selection rules the background Sync controls point to', () => {
+  const text = normalize(skill);
+  for (const prompt of [GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT]) {
+    assert.ok(prompt.includes('Read the zylos-memory skill') && prompt.includes('Parent result handling'));
+  }
+  assert.ok(skill.includes('\n## Parent result handling\n'));
+  assert.match(text, /Use the runtime in the current running session's immutable launch snapshot\./);
+  assert.match(text, /a nonempty `ZYLOS_SESSION_GROUP` means group Sync; only the `origin` group can run Origin Sync\. No group with a `ZYLOS_RUN_ID` means single global Sync\./);
+  assert.match(text, /Read \[the complete Sync procedures\]\(references\/sync-procedures\.md\) before taking a token/);
+  assert.match(text, /Start a background subagent when requested and continue the current work, following the runtime-specific result handling below\./);
 });
 
 test('Sync parents send owner reports only to addresses their thread handles', () => {

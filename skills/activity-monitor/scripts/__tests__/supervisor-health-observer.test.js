@@ -8,7 +8,7 @@ import { RuntimeHealthCoordinator } from '../runtime-health.js';
 import { SupervisorHealthObserver } from '../supervisor-health-observer.js';
 function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-health-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
-  let clock=1792000000000,mode='multi',transition=null,manual=false,matches={},state={state:'idle',tools:[],sessionId:'session-a'},auth={status:'failure'};
+  let clock=1792000000000,mode='multi',transition=null,manual=false,maintenance=null,matches={},state={state:'idle',tools:[],sessionId:'session-a'},auth={status:'failure'};
   let scenes=[{sessionGroup:'telegram:a',runtime:'claude',runId:randomUUID(),ready:true,present:true,sessionId:'session-a'}];
   const controls=[],stops=[],events=[],interrupts=[],fences=new Map(),errors=[];
   const coordinator=new RuntimeHealthCoordinator({zylosDir:root,now:()=>clock,readMode:()=>mode,resolveTargetRuntime:()=> 'claude',listScenes:()=>scenes});
@@ -17,11 +17,12 @@ function fixture(t) {
     insertControl:(content,opts)=>{controls.push({id:controls.length+1,content,...opts,status:'pending'});return controls.at(-1);},
     getControlById:id=>controls[id-1],buildTargetBinding:s=>({runId:s.runId}),stop:async(s,validate)=>{if(!validate || await validate(s))stops.push(s);else return false;},
     getModeTransition:()=>transition,getDrainFence:g=>fences.get(g),manualPending:()=>manual,
+    readMaintenance:()=>{if(maintenance instanceof Error)throw maintenance;return maintenance;},
     resolveToolRule:()=>({watchdog:{enabled:true,maxRuntimeSec:10,interruptKey:'Escape',interruptGraceSec:5,cooldownSec:2}}),
     nudge:async(s,validate)=>{if(!await validate(s))return {ok:false};interrupts.push({s});return {ok:true};},checkAuth:()=>auth,diagnostic:e=>events.push(e),log:e=>errors.push(e)});
   coordinator.probeInFlight=r=>observer.probeInFlight(r);
   return {coordinator,observer,controls,stops,events,interrupts,fences,errors,now:()=>clock,advance:ms=>clock+=ms,
-    scene:()=>scenes[0],scenes:()=>scenes,setScenes:v=>scenes=v,setMode:v=>mode=v,setTransition:v=>transition=v,setManual:v=>manual=v,
+    scene:()=>scenes[0],scenes:()=>scenes,setScenes:v=>scenes=v,setMode:v=>mode=v,setMaintenance:v=>maintenance=v,setTransition:v=>transition=v,setManual:v=>manual=v,
     setState:v=>state={tools:[],sessionId:scenes[0]?.sessionId,state:v.tools?.length?'busy':'idle',...v},setMatches:v=>matches=v,setAuth:v=>auth=v,
     health:()=>coordinator.store('claude').read(),setHealth:health=>{const s=coordinator.store('claude').read();s.health=health;s.reason='';coordinator.store('claude').write(s);},
     delivered:(extra={})=>observer.notifyDelivered({...scenes[0],pastedAt:clock,...extra}),
@@ -186,9 +187,9 @@ test('silent active tools receive the same nudge and restart as an open quiet tu
   f.delivered();f.advance(900000);await f.observer.tick();assert.equal(f.interrupts.length,1);
   f.advance(180000);await f.observer.tick();assert.equal(f.stops.length,1);
 });
-test('single mode and completed background waits do not arm no-response recovery',async t=>{
-  for(const kind of ['single','completed','no-paste']) {
-    const f=fixture(t);if(kind==='single')f.setMode('single');
+test('completed background waits and background work without a paste do not arm no-response recovery',async t=>{
+  for(const kind of ['completed','no-paste']) {
+    const f=fixture(t);
     if(kind!=='no-paste')f.delivered();
     f.advance(1);if(kind==='completed')f.setState({lastResponseAt:f.now()});
     f.advance(1200000);await f.observer.tick();assert.equal(f.interrupts.length,0);assert.equal(f.stops.length,0);
@@ -514,10 +515,15 @@ test('work after an older paste but before the latest paste gives the latter its
   f.advance(899999);await f.observer.tick();assert.equal(f.interrupts.length,0);
   f.advance(1);await f.observer.tick();assert.equal(f.interrupts.length,1);
 });
-test('leaving multi clears recovery so re-entry cannot immediately execute the old stop',async t=>{
-  const f=fixture(t);f.delivered();f.advance(900000);await f.observer.tick();f.setMode('single');f.advance(180000);
-  await f.observer.tick();assert.equal(f.observer.sceneState(f.scene()).delivery.recovery,null);
-  f.setMode('multi');await f.observer.tick();assert.equal(f.stops.length,0);assert.equal(f.interrupts.length,2);
+test('a mode change clears recovery so neither mode executes the other mode\'s stop',async t=>{
+  const f=fixture(t);f.delivered();f.advance(900000);await f.observer.tick();
+  const original=f.observer.sceneState(f.scene()).delivery.recovery;assert.equal(original.mode,'multi');
+  f.setMode('single');f.advance(180000);await f.observer.tick();
+  const single=f.observer.sceneState(f.scene()).delivery.recovery;
+  assert.notEqual(single,original);assert.equal(single.mode,'single');assert.equal(f.stops.length,0);assert.equal(f.interrupts.length,2);
+  f.setMode('multi');f.advance(180000);await f.observer.tick();
+  assert.equal(f.observer.sceneState(f.scene()).delivery.recovery.mode,'multi');assert.equal(f.stops.length,0);assert.equal(f.interrupts.length,3);
+  f.advance(180000);await f.observer.tick();assert.equal(f.stops.length,1);
 });
 test('work at or before paste does not disarm but later work does',async t=>{
   const f=fixture(t),at=f.now();f.delivered();f.setState({lastResponseAt:at});await f.observer.tick();
@@ -549,4 +555,87 @@ test('future responses cannot disarm and foreign sessions cannot authorize recov
     if(evidence.sessionId){assert.equal(f.interrupts.length,0);f.setState({});f.advance(60000);await f.observer.tick();}
     assert.equal(f.interrupts.length,1);
   }
+});
+
+test('single session mode nudges after 15 minutes and stops once 180 seconds later',async t=>{
+  const f=fixture(t);f.setMode('single');f.setScenes([{...f.scene(),sessionGroup:'origin'}]);f.delivered();
+  f.advance(899999);await f.observer.tick();assert.equal(f.interrupts.length,0);
+  f.advance(1);await f.observer.tick();assert.equal(f.interrupts.length,1);assert.equal(f.events[0].event,'no_response_nudge');assert.equal(f.events[0].sessionGroup,'origin');
+  f.advance(179999);await f.observer.tick();assert.equal(f.stops.length,0);
+  f.advance(1);await f.observer.tick();assert.equal(f.stops.length,1);assert.equal(f.events.at(-1).event,'no_response_restart');
+  f.advance(1800000);await f.observer.tick();assert.equal(f.stops.length,1);assert.equal(f.interrupts.length,1);
+});
+test('single session: AI work after the nudge ends recovery without any further action',async t=>{
+  const f=fixture(t);f.setMode('single');f.delivered();f.advance(900000);await f.observer.tick();assert.equal(f.interrupts.length,1);
+  f.advance(1000);f.setState({lastResponseAt:f.now()});await f.observer.tick();
+  assert.equal(f.observer.sceneState(f.scene()).delivery.recovery,null);
+  f.advance(3600000);await f.observer.tick();assert.equal(f.interrupts.length,1);assert.equal(f.stops.length,0);
+});
+test('single session: a failed nudge retries after 60 seconds',async t=>{
+  const f=fixture(t);f.setMode('single');let fail=true;const nudge=f.observer.nudge;
+  f.observer.nudge=async(s,v)=>fail?{ok:false}:nudge(s,v);
+  f.delivered();f.advance(900000);await f.observer.tick();assert.equal(f.events[0].enqueued,false);
+  fail=false;f.advance(59999);await f.observer.tick();assert.equal(f.interrupts.length,0);
+  f.advance(1);await f.observer.tick();assert.equal(f.interrupts.length,1);
+});
+for(const reason of ['memory_sync','session_switch','drain_fence','manual_restart','mode_transition'])test(`single session: ${reason} holds observation and silence restarts when it ends`,async t=>{
+  const f=fixture(t);f.setMode('single');f.delivered();f.setMaintenance(reason);
+  f.advance(1200000);await f.observer.tick();assert.equal(f.interrupts.length,0);
+  f.setMaintenance(null);await f.observer.tick();
+  f.advance(899999);await f.observer.tick();assert.equal(f.interrupts.length,0);
+  f.advance(1);await f.observer.tick();assert.equal(f.interrupts.length,1);
+});
+test('single session: maintenance during the grace cancels the stop and restarts silence after it ends',async t=>{
+  const f=fixture(t);f.setMode('single');f.delivered();f.advance(900000);await f.observer.tick();assert.equal(f.interrupts.length,1);
+  f.advance(60000);f.setMaintenance('memory_sync');await f.observer.tick();
+  f.advance(300000);await f.observer.tick();assert.equal(f.stops.length,0);assert.equal(f.observer.sceneState(f.scene()).delivery.recovery,null);
+  f.setMaintenance(null);await f.observer.tick();assert.equal(f.stops.length,0);
+  f.advance(899999);await f.observer.tick();assert.equal(f.interrupts.length,1);
+  f.advance(1);await f.observer.tick();assert.equal(f.interrupts.length,2);
+});
+test('single session: unreadable maintenance holds recovery and is logged once',async t=>{
+  const f=fixture(t);f.setMode('single');f.delivered();f.setMaintenance(Object.assign(new Error('marker'),{code:'DEPENDENCY_UNAVAILABLE'}));
+  for(let i=0;i<3;i++){f.advance(900000);await f.observer.tick();}
+  assert.equal(f.interrupts.length,0);assert.equal(f.errors.length,1);
+});
+test('multi session does not consult single-session maintenance',async t=>{
+  const f=fixture(t);f.setMaintenance('memory_sync');f.delivered();f.advance(900000);await f.observer.tick();assert.equal(f.interrupts.length,1);
+});
+for(const owner of ['health','probe'])test(`single session: ${owner} recovery owns the run before an episode starts`,{ timeout: 5000 },async t=>{
+  const f=fixture(t);f.setMode('single');f.delivered();
+  let probe;
+  if(owner==='health')f.setHealth('unavailable');
+  else {f.setHealth('unavailable');probe=f.observer.requestProbe('claude');await f.prepared();f.setHealth('ok');}
+  f.advance(1200000);await f.observer.tick();assert.equal(f.interrupts.length,0);
+  if(owner==='health')f.setHealth('ok');
+  else {f.controls[0].status='done';await f.observer.tick();assert.equal((await probe).recovered,true);}
+  f.advance(899999);await f.observer.tick();assert.equal(f.interrupts.length,0);
+  f.advance(1);await f.observer.tick();assert.equal(f.interrupts.length,1);
+});
+test('single session: an active episode keeps ownership; probes skip its run and health changes do not cancel it',{ timeout: 5000 },async t=>{
+  const f=fixture(t);f.setMode('single');f.delivered();f.advance(900000);await f.observer.tick();assert.equal(f.interrupts.length,1);
+  assert.equal(f.observer.noResponseActive(f.scene()),true);
+  f.setHealth('unavailable');const probe=f.observer.requestProbe('claude');await f.prepared();
+  assert.equal((await probe).noTarget,true);assert.equal(f.controls.length,0);
+  f.advance(180000);await f.observer.tick();assert.equal(f.stops.length,1);assert.equal(f.events.at(-1).event,'no_response_restart');
+  assert.equal(f.observer.noResponseActive(f.scene()),false);
+});
+test('multi session probes are not skipped for an active no-response episode',{ timeout: 5000 },async t=>{
+  const f=fixture(t);f.delivered();f.advance(900000);await f.observer.tick();assert.equal(f.observer.noResponseActive(f.scene()),true);
+  f.setHealth('unavailable');f.setState({state:'idle'});const probe=f.observer.requestProbe('claude');await f.prepared();
+  assert.equal(f.controls.length,1);f.controls[0].status='done';await f.observer.tick();assert.equal((await probe).recovered,true);
+});
+test('single session: a mode change between Escape and continue suppresses the remaining enqueue',async t=>{
+  const f=fixture(t);f.setMode('single');const results=[];
+  f.observer.nudge=async(scene,validate)=>{f.setMode('multi');const ok=await validate(scene,{continuing:true});results.push(ok);return {ok};};
+  f.delivered();f.advance(900000);await f.observer.tick();
+  assert.deepEqual(results,[false]);assert.equal(f.events[0].enqueued,false);
+});
+test('single session: a replacement run is not owned by the previous run\'s episode',{ timeout: 5000 },async t=>{
+  const f=fixture(t);f.setMode('single');f.delivered();f.advance(900000);await f.observer.tick();assert.equal(f.interrupts.length,1);
+  const replacement={...f.scene(),runId:randomUUID()};f.setScenes([replacement]);
+  assert.equal(f.observer.noResponseActive(replacement),false);
+  f.setHealth('unavailable');const probe=f.observer.requestProbe('claude');await f.prepared();
+  assert.equal(f.controls.length,1);assert.equal(f.controls[0].targetBinding.runId,replacement.runId);
+  f.controls[0].status='done';await f.observer.tick();assert.equal((await probe).recovered,true);
 });

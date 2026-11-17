@@ -9,7 +9,7 @@ function fixture(options = {}) {
   const writes = [];
   const view = mountChatSettings(root, {
     local: () => true,
-    read: async () => ({ allowRemote: false }),
+    read: async () => ({ chat_allow_remote: false }),
     write: async body => { writes.push(body); return body; },
     ...options,
   });
@@ -25,14 +25,14 @@ test('local conversation setting loads saved state and saves through its indepen
   assert.equal(f.checkbox.disabled, false);
   f.checkbox.checked = true;
   await f.checkbox.dispatch('change');
-  assert.deepEqual(f.writes, [{ allowRemote: true }]);
+  assert.deepEqual(f.writes, [{ chat_allow_remote: true }]);
   assert.equal(f.checkbox.checked, true);
   assert.equal(f.status.textContent, 'wb.settings.chatSaved');
 });
 
 test('remote views neither load nor write local conversation settings', async () => {
   let reads = 0;
-  const f = fixture({ local: () => false, read: async () => { reads++; return { allowRemote: true }; } });
+  const f = fixture({ local: () => false, read: async () => { reads++; return { chat_allow_remote: true }; } });
   await f.view.refresh();
   f.checkbox.checked = true;
   await f.checkbox.dispatch('change');
@@ -55,7 +55,7 @@ test('conversation setting read failure leaves its control disabled', async () =
 
 test('conversation setting save failure restores the last saved value', async () => {
   for (const write of [async () => { throw Error('500'); }, async () => ({})]) {
-    const f = fixture({ read: async () => ({ allowRemote: true }), write });
+    const f = fixture({ read: async () => ({ chat_allow_remote: true }), write });
     await f.view.refresh();
     f.checkbox.checked = false;
     await f.checkbox.dispatch('change');
@@ -71,7 +71,7 @@ test('conversation settings invalidate delayed reads when leaving the local page
   const refresh = f.view.refresh();
   local = false;
   f.view.invalidate();
-  pending.resolve({ allowRemote: true });
+  pending.resolve({ chat_allow_remote: true });
   await refresh;
   assert.equal(f.root.querySelector('#settings-chat').hidden, true);
   assert.equal(f.checkbox.checked, false);
@@ -89,7 +89,7 @@ test('conversation setting serializes saves and ignores a delayed result after p
   await f.checkbox.dispatch('change');
   assert.equal(writes.length, 1);
   f.view.invalidate();
-  pending.resolve({ allowRemote: true });
+  pending.resolve({ chat_allow_remote: true });
   await save;
   assert.equal(f.root.querySelector('#settings-chat').hidden, true);
   assert.equal(f.checkbox.checked, false);

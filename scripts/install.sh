@@ -103,6 +103,8 @@ fail()  { printf "${RED}[zylos]${NC} %s\n" "$*" >&2; exit 1; }
 # probe by opening instead of testing for existence.
 _has_tty() { { : < /dev/tty; } 2>/dev/null; }
 
+REQUESTED_BRANCH="$BRANCH"
+
 # ── Resolve install ref ───────────────────────────────────────
 if [ -z "$BRANCH" ]; then
   # No --branch specified: resolve latest release tag (stable version).
@@ -200,6 +202,26 @@ ensure_tmux() {
   fi
   install_system_package tmux
   ok "tmux: installed"
+}
+
+# ── Prerequisite: procps ──────────────────────────────────────
+ensure_procps() {
+  # macOS provides ps and pgrep; do not install a Homebrew replacement.
+  if [ "$OS" != "linux" ]; then
+    return
+  fi
+  if command -v ps &>/dev/null && command -v pgrep &>/dev/null; then
+    ok "procps: ps and pgrep available"
+    return
+  fi
+  local pkg="procps"
+  if ! command -v apt-get &>/dev/null; then
+    if command -v dnf &>/dev/null || command -v yum &>/dev/null; then
+      pkg="procps-ng"
+    fi
+  fi
+  install_system_package "$pkg"
+  ok "procps: installed"
 }
 
 # ── Prerequisite: Node.js (via nvm) ──────────────────────────
@@ -303,7 +325,12 @@ install_zylos() {
   if command -v zylos &>/dev/null; then
     local current_version
     current_version="$(zylos --version 2>/dev/null || echo 'unknown')"
-    warn "zylos is already installed (${current_version}). Upgrading..."
+    local upgrade_command="zylos upgrade --self"
+    if [ -n "$REQUESTED_BRANCH" ]; then
+      upgrade_command="${upgrade_command} --branch ${REQUESTED_BRANCH}"
+    fi
+    warn "zylos is already installed (${current_version}). To upgrade, run: ${upgrade_command}"
+    return
   fi
 
   local install_url="${ZYLOS_REPO}#${BRANCH}"
@@ -422,6 +449,7 @@ echo ""
 ensure_curl
 ensure_git
 ensure_tmux
+ensure_procps
 ensure_node
 
 echo ""

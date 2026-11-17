@@ -4,6 +4,7 @@
  * server could not read) times read in UTC.
  */
 let current = null;
+let reported = false;
 const formats = new Map();
 
 function usable(zone) {
@@ -19,6 +20,12 @@ function usable(zone) {
 /** Records the zone the server reported; anything unusable reads as unknown. */
 export function setInstanceZone(zone) {
   current = usable(zone) ? zone : null;
+  reported = true;
+}
+
+/** Whether instance metadata has arrived, including an explicit UTC fallback for older instances. */
+export function instanceZoneReady() {
+  return reported;
 }
 
 /** The zone times are written in: the instance zone, or UTC while it is unknown. */

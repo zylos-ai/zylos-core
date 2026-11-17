@@ -32,7 +32,7 @@ function fixture(entries) {
 const params = (value) => new URLSearchParams({ session: 'session', ...value });
 
 async function request(service, suffix, { method = 'GET', headers = {} } = {}) {
-  const server = http.createServer((req, res) => service.handle(req, res, new URL(req.url, 'http://localhost')));
+  const server = http.createServer((req, res) => { const url = new URL(req.url, 'http://localhost'); res.apiPath = url.pathname; return service.handle(req, res, url); });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const response = await fetch(`http://127.0.0.1:${server.address().port}/api/observer/history/${suffix}`, { method, headers });
@@ -138,7 +138,7 @@ test('Observer auth protects all history routes without touching containment or 
   for (const [headers, expected] of [[{}, 401], [{ authorization: 'Bearer read' }, 403], [{ authorization: 'Bearer admin' }, 200], [{ cookie: 'session=yes' }, 200]]) {
     assert.equal((await request(observer, 'sessions', { headers })).status, expected);
   }
-  assert.equal((await request(observer, 'sessions', { method: 'POST', headers: { authorization: 'Bearer admin' } })).status, 405);
+  assert.equal((await request(observer, 'sessions', { method: 'POST', headers: { authorization: 'Bearer admin' } })).status, 404);
   assert.equal((await request(observer, 'unknown', { headers: { authorization: 'Bearer admin' } })).status, 404);
   observer.coordinator.historyStatus = async () => ({ state: 'installed', desired: { enabled: false } });
   assert.equal((await request(observer, 'sessions', { headers: { authorization: 'Bearer admin' } })).status, 404);
@@ -242,4 +242,14 @@ test('HTTP remains available while a small history field stalls its redaction wo
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
   }
+});
+
+
+test('history metadata timestamps use ISO while transcript data remains unchanged', async () => {
+  const { service } = fixture([{ id: 'o:0', ts: 1700000000000, kind: 'text', fields: { body: { timestamp: 1700000000000, start: 12 } } }]);
+  const result = await request(service, 'entries?session=session');
+  assert.equal(result.status, 200);
+  assert.equal(result.json().entries[0].ts, '2023-11-14T22:13:20.000Z');
+  const content = await request(service, 'content?session=session&entry=o:0&field=body');
+  assert.deepEqual(JSON.parse(content.json().text), { timestamp: 1700000000000, start: 12 });
 });

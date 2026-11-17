@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { sendHtml, sendJson, serveStatic } from '../../src/lib/http.js';
+import { sendHtml, sendJson, sendCommandJson, serveStatic } from '../../src/lib/http.js';
 import { GROUP, GROUP_FILE, LONG_FILE, workbenchAnswer } from '../fixtures/workbench-browser-api.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
@@ -25,6 +25,7 @@ export async function startPage(sandbox) {
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
+      res.apiPath = url.pathname;
       if (url.pathname.startsWith('/api/instance/actions/') && req.method === 'POST') {
         let body = '';
         req.on('data', chunk => { body += chunk; if (body.length > 4096) req.destroy(); });
@@ -37,7 +38,7 @@ export async function startPage(sandbox) {
       }
       if (url.pathname === '/api/groups/naming-prompt' && req.method === 'POST') {
         actions.push({ action: 'naming-prompt', body: null });
-        sendJson(res, 200, await naming.answer); return;
+        sendCommandJson(res, 200, await naming.answer); return;
       }
       if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
       if (url.pathname.startsWith('/api/')) {
@@ -519,7 +520,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     assert.equal(state.label, await label('defaults'), 'the button names the current section');
     assert.match(await page.locator('.wb-set-nav').evaluate(node => getComputedStyle(node).transitionDuration), /0\.2s/, 'the drawer slides');
     await shot('settings-drawer-closed');
-    const settingsReads = () => reads.get('/api/settings') ?? 0;
+    const settingsReads = () => reads.get('/api/settings/pricing') ?? 0;
     const readsBefore = settingsReads();
 
     await openDrawer(page);
@@ -608,7 +609,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await openDrawer(page);
     await page.locator('.wb-set-drawer-x').click();
     await closed(page);
-    const settingsReads = () => (reads.get('/api/settings') ?? 0) + (reads.get('/api/keys') ?? 0);
+    const settingsReads = () => (reads.get('/api/settings/pricing') ?? 0) + (reads.get('/api/keys') ?? 0);
     const before = settingsReads();
 
     await page.goForward();

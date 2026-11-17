@@ -4,7 +4,7 @@ import { DELIVERY_DELAY_BASE, DELIVERY_DELAY_PER_KB, DELIVERY_DELAY_MAX } from '
 import { sanitizeMessage } from '../c4-utils.js';
 import { findPromptY, isUsageOverlayCapture } from '../tmux-input-state.js';
 import { getDeliveryDelay, getClaudeInputBoxText, checkClaudeFallbackInputBox,
-  isBypassState, isKeystrokeControl, parseKeystrokeKey, isCodexExitLifecycleControl,
+  isBypassState, isKeystrokeControl, parseKeystrokeKey, isExitLifecycleControl,
   getHeartbeatPhase, isRecoveryHeartbeatPhase, shouldAutoAckHeartbeat } from '../router/delivery.js';
 
 // ── sanitizeMessage ─────────────────────────────────────────────────
@@ -412,42 +412,27 @@ describe('parseKeystrokeKey', () => {
   });
 });
 
-// ── isCodexExitLifecycleControl ─────────────────────────────────────
+// ── isExitLifecycleControl ──────────────────────────────────────────
 
-describe('isCodexExitLifecycleControl', () => {
-  it('matches only exact Codex /exit controls', () => {
-    assert.equal(
-      isCodexExitLifecycleControl({ type: 'control', content: '/exit' }, 'codex'),
-      true
-    );
+describe('isExitLifecycleControl', () => {
+  it('matches exact /exit controls for both supported runtimes', () => {
+    for (const runtime of ['claude', 'codex']) {
+      assert.equal(isExitLifecycleControl({ type: 'control', content: '/exit' }, runtime), true);
+    }
   });
 
-  it('does not match Codex /clear controls', () => {
-    assert.equal(
-      isCodexExitLifecycleControl({ type: 'control', content: '/clear' }, 'codex'),
-      false
-    );
+  it('rejects unsupported or missing runtimes', () => {
+    for (const runtime of ['unknown', 'other', '', null, undefined]) {
+      assert.equal(isExitLifecycleControl({ type: 'control', content: '/exit' }, runtime), false);
+    }
   });
 
-  it('does not match /exit outside the Codex runtime', () => {
-    assert.equal(
-      isCodexExitLifecycleControl({ type: 'control', content: '/exit' }, 'claude'),
-      false
-    );
-  });
-
-  it('does not match conversations or non-exact /exit text', () => {
-    assert.equal(
-      isCodexExitLifecycleControl({ type: 'conversation', content: '/exit' }, 'codex'),
-      false
-    );
-    assert.equal(
-      isCodexExitLifecycleControl({ type: 'control', content: ' /exit' }, 'codex'),
-      false
-    );
-    assert.equal(
-      isCodexExitLifecycleControl({ type: 'control', content: '/exit now' }, 'codex'),
-      false
-    );
+  it('rejects conversations, other slash commands and non-exact /exit text for both runtimes', () => {
+    for (const runtime of ['claude', 'codex']) {
+      assert.equal(isExitLifecycleControl({ type: 'conversation', content: '/exit' }, runtime), false);
+      for (const content of ['/clear', ' /exit', '/exit ', '/exit now', '/exit\n', '/exit\n---- ack via: test']) {
+        assert.equal(isExitLifecycleControl({ type: 'control', content }, runtime), false);
+      }
+    }
   });
 });

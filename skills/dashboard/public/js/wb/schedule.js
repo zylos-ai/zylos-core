@@ -1,3 +1,4 @@
+import { instantSeconds, scheduleTimes } from './api-time.js';
 import { countLabel } from '../count-label.js';
 import { element, fallbackName, icon } from './plain-text.js';
 import { createFetchGuard } from './fetch-guard.js';
@@ -64,6 +65,7 @@ export function median(values) {
 
 export function formatTime(epochSeconds, tz, locale = 'zh') {
   if (epochSeconds == null) return '—';
+  epochSeconds = instantSeconds(epochSeconds);
   return new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'zh-CN', {
     timeZone: tz ?? 'UTC', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
   }).format(new Date(epochSeconds * 1000));
@@ -71,6 +73,7 @@ export function formatTime(epochSeconds, tz, locale = 'zh') {
 
 export function relativeTime(epochSeconds, nowMs, t = key => key) {
   if (epochSeconds == null) return '';
+  epochSeconds = instantSeconds(epochSeconds);
   const diff = epochSeconds - Math.floor(nowMs / 1000);
   const span = Math.abs(diff);
   const amount = span < 3600 ? `${Math.max(1, Math.round(span / 60))}m` : span < 86400
@@ -81,6 +84,7 @@ export function relativeTime(epochSeconds, nowMs, t = key => key) {
 /** Countdown with minutes, as the list and detail show it: `4h39m后`, `2d3h后`. */
 export function untilText(epochSeconds, nowMs, t = key => key) {
   if (epochSeconds == null) return '';
+  epochSeconds = instantSeconds(epochSeconds);
   const diff = epochSeconds - Math.floor(nowMs / 1000);
   const span = Math.abs(diff);
   const minutes = Math.max(1, Math.round(span / 60));
@@ -91,6 +95,7 @@ export function untilText(epochSeconds, nowMs, t = key => key) {
 }
 
 function zoned(epochSeconds, tz) {
+  epochSeconds = instantSeconds(epochSeconds);
   const parts = {};
   for (const { type, value } of new Intl.DateTimeFormat('en-US', { timeZone: tz ?? 'UTC', hourCycle: 'h23',
     year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -101,6 +106,7 @@ function zoned(epochSeconds, tz) {
 /** `今天 23:45`, `明天 00:00`, `昨天 08:00`, otherwise `11-09 08:00`, all in the scheduler's time zone. */
 export function dayTime(epochSeconds, { tz = null, nowMs = Date.now(), t = key => key } = {}) {
   if (epochSeconds == null) return '—';
+  epochSeconds = instantSeconds(epochSeconds);
   const at = zoned(epochSeconds, tz);
   const clock = `${at.hour}:${at.minute}`;
   const key = part => `${part.year}-${part.month}-${part.day}`;
@@ -201,16 +207,17 @@ const EXPLAINED = new Set(['RESCHEDULE_NOT_FUTURE', 'TASK_WRONG_STATUS', 'tz_una
   'prompt_starts_with_dashes', 'invalid_json', 'payload_too_large', 'insufficient_scope', 'read_only_proxy', 'unauthorized']);
 // Form checks done by the Dashboard itself: the translated text is the whole message.
 const FORM_CODES = new Set(['invalid_form', 'prompt_starts_with_dashes', 'invalid_time', 'tz_unavailable']);
-const REFUSED = new Set(['invalid_json', 'payload_too_large', 'insufficient_scope', 'read_only_proxy', 'unauthorized']);
 
-/** Turns an HTTP reply into a write outcome; a definite refusal without an envelope is still rejected. */
+/** Keep confirmed writes, explicit refusals, and uncertain delivery separate. */
 export function writeOutcome(status, value) {
-  if (value?.result) return value;
-  if (status >= 400 && status < 500 && REFUSED.has(value?.error)) return { result: 'rejected', code: value.error, message: '' };
-  return { result: 'unknown', reason: value?.error ?? 'request_failed' };
+  if (status >= 200 && status < 300 && value?.ok === true) return { result: 'done', data: value.data };
+  if (status >= 400 && status < 500 && value?.error?.code) {
+    return { result: 'rejected', code: value.error.code, message: value.error.message || '' };
+  }
+  return { result: 'unknown', reason: value?.error?.code ?? 'request_failed' };
 }
 
-/** Write result to show in the form; anything without a scheduler envelope is "unknown". */
+/** Write result to show in the form; an unconfirmed response remains "unknown". */
 export function writeMessage(outcome, t = key => key) {
   if (outcome?.result === 'done') return null;
   if (outcome?.result === 'rejected') {
@@ -313,10 +320,10 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     const captured = identity();
     const response = await fetch(endpoint(path));
     if (captured !== identity() || stopped) throw Error('view_changed');
-    if (!response.ok) throw Error('read_failed');
     const value = await response.json();
+    if (!response.ok) throw Object.assign(new Error(value?.error?.message || 'read_failed'), { status: response.status, code: value?.error?.code });
     if (captured !== identity() || stopped) throw Error('view_changed');
-    return value;
+    return scheduleTimes(value);
   }
   const visible = () => {
     reset();
@@ -326,12 +333,12 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   const pagedList = () => !legacyServer && (filter.status === 'completed' ||
     (filter.status === 'all' && Boolean(filter.query.trim())));
   function listPath(cursor = null) {
-    if (legacyServer) return '/api/workbench/schedule';
+    if (legacyServer) return '/api/schedules';
     const query = new URLSearchParams();
     if (filter.status !== 'all') query.set('status', filter.status);
     if (filter.query.trim()) query.set('q', filter.query.trim());
     if (cursor !== null) query.set('cursor', cursor);
-    return '/api/workbench/schedule' + (query.size ? `?${query}` : '');
+    return '/api/schedules' + (query.size ? `?${query}` : '');
   }
   async function refresh({ force = false, more = false } = {}) {
     if (!force && !visible()) return;
@@ -389,7 +396,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       return;
     }
     try {
-      const value = await read(`/api/workbench/schedule/${encodeURIComponent(id)}`);
+      const value = await read(`/api/schedules/${encodeURIComponent(id)}`);
       if (gen !== detailGen || selected !== id) return;
       if (!value.task || value.task.id !== id) throw Error('invalid_detail');
       detailTask = value.task;
@@ -409,7 +416,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       query.set('beforeId', String(history.next.beforeId));
     }
     try {
-      const value = await read(`/api/workbench/schedule/${encodeURIComponent(task.id)}/history?${query}`);
+      const value = await read(`/api/schedules/${encodeURIComponent(task.id)}/history?${query}`);
       if (gen !== historyGen || selected !== task.id) return;
       history = { rows: more ? [...(history?.rows ?? []), ...value.rows] : value.rows, next: value.next,
         expanded: history?.expanded };
@@ -478,8 +485,8 @@ export function mountSchedule({ document = globalThis.document, window = globalT
         handle.setBusy(true);
         handle.setMessage('');
         const body = formPayload(state, creating ? null : original, { reenable });
-        const outcome = creating ? await write('POST', '/api/workbench/schedule', body)
-          : await write('PUT', `/api/workbench/schedule/${encodeURIComponent(task.id)}`, body);
+        const outcome = creating ? await write('POST', '/api/schedules', body)
+          : await write('PUT', `/api/schedules/${encodeURIComponent(task.id)}`, body);
         handle.setBusy(false);
         const message = writeMessage(outcome, t);
         if (message === null) {
@@ -500,8 +507,8 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   }
   async function act(task, action) {
     const outcome = action === 'remove'
-      ? await write('DELETE', `/api/workbench/schedule/${encodeURIComponent(task.id)}`)
-      : await write('POST', `/api/workbench/schedule/${encodeURIComponent(task.id)}/${action}`);
+      ? await write('DELETE', `/api/schedules/${encodeURIComponent(task.id)}`)
+      : await write('POST', `/api/schedules/${encodeURIComponent(task.id)}/actions/${action}`);
     confirmFor = null;
     notice = writeMessage(outcome, t);
     if (action === 'remove' && outcome.result === 'done') selected = null;

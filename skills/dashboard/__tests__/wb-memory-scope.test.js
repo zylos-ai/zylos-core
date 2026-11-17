@@ -719,6 +719,62 @@ test('the file list folds by section, keeps search results open and names the fo
   f.controller.destroy();
 });
 
+test('memory list redraws restore files and folding headers by stable identity without scrolling', () => {
+  for (const kind of ['file', 'shared', 'group']) {
+    const document = createDocument(), listRoot = document.createElement('div'), calls = [];
+    const create = document.createElement;
+    document.createElement = tag => {
+      const node = create(tag), focus = node.focus.bind(node);
+      node.focus = options => { calls.push(options); focus(); };
+      return node;
+    };
+    const f = fixture({ document, listRoot });
+    const target = () => kind === 'file' ? nodesOfClass(listRoot, 'memory-file')[1]
+      : nodesOfClass(listRoot, kind === 'shared' ? 'wb-memory-section-h' : 'wb-memory-group-h')[0];
+    const original = target(); original.focus(); calls.length = 0;
+    f.controller.renderList();
+    assert.ok(target() !== original, `${kind} rows were really rebuilt`);
+    assert.ok(document.activeElement === target(), `${kind} focus follows its identity`);
+    assert.equal(listRoot.contains(document.activeElement), true);
+    assert.deepEqual(calls, [{ preventScroll: true }]);
+    f.controller.destroy();
+  }
+});
+
+test('memory list redraws do not take focus from search or editor controls', () => {
+  const document = createDocument(), listRoot = document.createElement('div');
+  const f = fixture({ document, listRoot });
+  for (const tag of ['input', 'textarea']) {
+    const external = document.createElement(tag);
+    external.dataset.path = nodesOfClass(listRoot, 'memory-file')[0].dataset.path;
+    external.dataset.collapseKey = 'shared';
+    external.focus();
+    f.controller.renderList();
+    assert.ok(document.activeElement === external, `${tag} focus stays outside the list`);
+  }
+  f.controller.destroy();
+});
+
+test('memory list redraws do not redirect focus when the focused row disappears', () => {
+  for (const reason of ['filtered', 'collapsed', 'removed', 'missing-tree']) {
+    const document = createDocument(), listRoot = document.createElement('div'), collapsed = new Set();
+    const f = fixture({ document, listRoot, isCollapsed: key => collapsed.has(key) });
+    const original = nodesOfClass(listRoot, 'memory-file')[0]; original.focus();
+    if (reason === 'filtered') {
+      const search = allNodes(f.root).find(node => node.type === 'search');
+      search.value = 'no-matching-path'; search.dispatch('input');
+    } else {
+      if (reason === 'collapsed') collapsed.add('shared');
+      if (reason === 'removed') f.setTree({ root: dir('', []) });
+      if (reason === 'missing-tree') f.setTree(null);
+      f.controller.renderList();
+    }
+    assert.equal(listRoot.contains(original), false);
+    assert.ok(document.activeElement === original, `${reason}: injected DOM records no fallback focus call`);
+    f.controller.destroy();
+  }
+});
+
 test('later in the conflict dialog closes it and keeps the unsaved draft', () => {
   const memory = { conflict: { mine: 'a', theirs: { text: 'b' } }, draft: 'my draft', dirty: true, editing: true };
   leaveMemoryConflict(memory);
@@ -752,5 +808,23 @@ test('the backlog subtitle names the gathering threshold even when no group thre
     originSync: { count: 4, pendingSummaries: 0, firstAt: null, aged: false, syncing: false, threshold: 50 }, hasOlder: false }) });
   await f.controller.load();
   assert.match(nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0].textContent, /wb.memory.backlogHintOrigin \{"origin":50\}/);
+  f.controller.destroy();
+});
+
+
+test('memory budget labels and tooltips use B KB MB with 1024 based values', async () => {
+  const f = fixture({ detail: () => 'technical', getTree: () => ({ root: dir('', [
+    file('identity.md', 1023), file('references.md', 1024), file('state.md', 1024 * 1024),
+  ]) }), request: async () => ({ groups: [], budgets: {
+    limits: { 'identity.md': 10240, 'references.md': 1536 }, warnings: { 'identity.md': 512 },
+  } }) });
+  await f.controller.load();
+  const values = nodesOfClass(f.chartsRoot, 'wb-memory-chart-value').map(node => node.textContent);
+  assert.deepEqual(values, ['1023 B / 10 KB', '1.0 KB / 1.5 KB', '1.0 MB']);
+  const warning = nodesOfClass(f.chartsRoot, 'wb-memory-threshold')[0];
+  assert.match(warning.title, /512 B/);
+  const tracks = nodesOfClass(f.chartsRoot, 'wb-memory-track');
+  assert.match(tracks[0].attributes['aria-label'], /1023 B.*10 KB/);
+  assert.doesNotMatch(f.chartsRoot.textContent, /KiB/);
   f.controller.destroy();
 });

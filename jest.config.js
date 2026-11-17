@@ -2,6 +2,7 @@ export default {
   transform: {},
   testPathIgnorePatterns: [
     '<rootDir>/test/claude-upgrade-process.integration.test.js',
+    '<rootDir>/test/dashboard-display-browser.test.js',
     '<rootDir>/test/fleet-attention.integration.test.js',
     '<rootDir>/test/fleet-attention-browser.test.js',
     '<rootDir>/test/channel-delivery.integration.test.js',
@@ -35,6 +36,7 @@ export default {
     '<rootDir>/test/group-deletion-storage.integration.test.js',
     // Node test-runner file; run by scripts/run-node-tests.js.
     '<rootDir>/test/test-location.test.js',
+    '<rootDir>/test/control-prompt-length.test.js',
     '<rootDir>/test/reference-memory-templates.test.js',
     '<rootDir>/test/owned-tree-deletion-policy.test.js',
     '<rootDir>/test/owned-removal-callers.integration.test.js',
@@ -45,6 +47,8 @@ export default {
     '<rootDir>/test/web-console-process.integration.test.js',
     '<rootDir>/test/web-console-caddy.integration.test.js',
     '<rootDir>/test/single-upgrade-check.integration.test.js',
+    '<rootDir>/test/exit-control.integration.test.js',
+    '<rootDir>/test/upgrade-npm-prefix.integration.test.js',
     '<rootDir>/test/session-release.integration.test.js',
     '<rootDir>/test/component-source-record.integration.test.js',
   ],

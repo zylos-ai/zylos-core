@@ -456,6 +456,6 @@ test('sleeping Origin refuses an Observer lease without starting or waking a ses
   let status, body;
   const res = { writeHead: value => { status = value; }, end: value => { body = JSON.parse(value); } };
   const handled = await service.handle({ method: 'POST', headers: {}, _authContext: context }, res, new URL('http://isolated.test/api/observer/leases'));
-  assert.equal(handled, true); assert.equal(status, 409); assert.equal(body.error, 'agent_session_unavailable');
+  assert.equal(handled, true); assert.equal(status, 409); assert.equal(body.error.code, 'agent_session_unavailable');
   assert.equal(starts, 0); assert.equal(manager.leases.size, 0); assert.equal(containment.active, null);
 });

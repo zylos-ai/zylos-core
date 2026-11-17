@@ -218,8 +218,8 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
       count = expected;
       if (expected === 2) {
         now += 3000;
-        const changed = await fetch(`${origin}/api/chat/settings`, { method: 'PUT',
-          headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ allowRemote: true }) });
+        const changed = await fetch(`${origin}/api/settings/chat`, { method: 'PUT',
+          headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_allow_remote: true }) });
         assert.equal(changed.status, 200);
       } else {
         // Imports no longer build Fleet snapshots. Non-Origin changes are

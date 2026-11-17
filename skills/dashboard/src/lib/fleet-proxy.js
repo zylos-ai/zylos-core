@@ -75,16 +75,16 @@ function isSseResponse(resp) {
 }
 
 function isAllowedProxyWrite(method, suffix) {
-  return method === 'POST' && suffix === '/api/actions/restart-timezone-services' || method === 'PATCH' && /^\/api\/chat\/conversations\/[^/]+$/.test(suffix) ||
+  return method === 'POST' && suffix === '/api/settings/timezone/actions/restart-services' || method === 'PATCH' && /^\/api\/chat\/conversations\/[^/]+$/.test(suffix) ||
     method === 'POST' && (suffix === '/api/chat/drafts' || /^\/api\/chat\/conversations\/[^/]+\/(?:send|answers|uploads)$/.test(suffix)) ||
     ['PUT', 'DELETE'].includes(method) && /^\/api\/groups\/[^/]+\/name$/.test(suffix) ||
     method === 'PUT' && /^\/api\/groups\/[^/]+\/config$/.test(suffix) ||
     method === 'POST' && /^\/api\/groups\/[^/]+\/actions\/(?:interrupt|chop-chop|restart)$/.test(suffix) ||
-    method === 'POST' && /^\/api\/workbench\/schedule(?:\/[^/]+\/(?:pause|resume))?$/.test(suffix) ||
-    ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/schedule\/[^/]+$/.test(suffix) ||
+    method === 'POST' && /^\/api\/schedules(?:\/[^/]+\/actions\/(?:pause|resume))?$/.test(suffix) ||
+    ['PUT', 'DELETE'].includes(method) && /^\/api\/schedules\/[^/]+$/.test(suffix) ||
     method === 'POST' && /^\/api\/instance\/actions\/(?:switch-mode|switch-runtime|upgrade|upgrade-runtime)$/.test(suffix) ||
     method === 'PUT' && suffix === '/api/instance/defaults' ||
-    method === 'PUT' && (suffix === '/api/settings' || suffix === '/api/settings/timezone' || suffix === '/api/memory/file') ||
+    method === 'PUT' && (suffix === '/api/settings/pricing' || suffix === '/api/settings/timezone' || suffix === '/api/memory/file') ||
     method === 'POST' && (
       /^\/api\/observer\/(?:install|enable|disable|leases|agent-size)$/.test(suffix) ||
       /^\/api\/observer\/leases\/[A-Za-z0-9_-]{32}\/(?:renew|release)$/.test(suffix)
@@ -110,8 +110,8 @@ function observerLeaseId(req, suffix) {
   return suffix.match(/^\/api\/observer\/leases\/([A-Za-z0-9_-]{32})\//)?.[1] || null;
 }
 
-function isLocalOnlyEndpoint(suffix) {
-  return suffix === CHAT_SETTINGS_PATH || suffix === '/api/fleet/agents' ||
+function isLocalOnlyEndpoint(suffix, method) {
+  return suffix === CHAT_SETTINGS_PATH && method !== 'GET' || suffix === '/api/fleet/agents' ||
     suffix.startsWith('/api/fleet/agents/') ||
     suffix === '/api/instance/name' ||
     suffix === '/api/keys' ||
@@ -302,7 +302,7 @@ export class FleetProxy {
     }
 
     const normalizedSuffix = normalizeProxySuffix(suffix);
-    if (!normalizedSuffix || isLocalOnlyEndpoint(normalizedSuffix)) {
+    if (!normalizedSuffix || isLocalOnlyEndpoint(normalizedSuffix, req.method)) {
       sendJson(res, 403, { error: 'local_endpoint_not_proxyable' });
       return true;
     }
@@ -361,15 +361,7 @@ export class FleetProxy {
     if (isGroupDeletionRoute(suffix) && (req.method === 'DELETE' || suffix.endsWith('/deletion-preview') || suffix.endsWith('/deletion'))) {
       sendJson(res, 403, { error: 'remote_deletion_forbidden' }); return;
     }
-    if (req.method === 'PUT' && suffix === '/api/settings/timezone' ||
-        req.method === 'POST' && suffix === '/api/actions/restart-timezone-services') {
-      const context = req._authContext;
-      if (context?.scope !== 'admin') { sendJson(res, 403, { error: 'admin_required' }); return; }
-      if (context.kind === 'cookie' && !isSameOriginRequest(req)) {
-        sendJson(res, 403, { error: 'same_origin_required' }); return;
-      }
-    }
-    if ((suffix.startsWith('/api/instance/') || suffix.startsWith('/api/groups/')) && !['GET', 'HEAD'].includes(req.method)) {
+    if (!['GET', 'HEAD'].includes(req.method)) {
       const context = req._authContext;
       if (this.authGate?.enabled !== false && context?.scope !== 'admin') { sendJson(res, 403, { error: 'admin_required' }); return; }
       if (context?.kind === 'cookie' && !isSameOriginRequest(req)) { sendJson(res, 403, { error: 'same_origin_required' }); return; }
@@ -382,7 +374,7 @@ export class FleetProxy {
         return;
       }
       if (!['GET', 'HEAD'].includes(req.method) && context.kind === 'cookie' && !isSameOriginRequest(req)) {
-        sendJson(res, 403, { error: 'origin_required' });
+        sendJson(res, 403, { error: 'same_origin_required' });
         return;
       }
     }
@@ -393,12 +385,12 @@ export class FleetProxy {
         return;
       }
       const context = req._authContext;
-      if (!context || context.scope !== 'admin') {
+      if (!context || suffix !== '/api/observer/status' && context.scope !== 'admin') {
         sendJson(res, 403, { error: 'admin_required' });
         return;
       }
       if (!['GET', 'HEAD'].includes(req.method) && context.kind === 'cookie' && !isSameOriginRequest(req)) {
-        sendJson(res, 403, { error: 'origin_required' });
+        sendJson(res, 403, { error: 'same_origin_required' });
         return;
       }
       const leaseId = observerLeaseId(req, suffix);
@@ -542,7 +534,7 @@ export class FleetProxy {
               const binding = {
                 agentName: agent.name,
                 principal: req._authContext,
-                expiresAt: Number(lease.expiresAt),
+                expiresAt: Date.parse(lease.expiresAt),
               };
               this.observerLeases.set(lease.id, binding);
               // The browser presents this local ticket to the relay; any
@@ -749,7 +741,9 @@ export class FleetProxy {
         const configHeaders = responseHeaders(configResponse);
         const configBytes = await smallBody(configResponse);
         if (!configResponse.ok) {
-          res.writeHead(configResponse.status, configHeaders); res.end(configBytes); return;
+          res.writeHead(configResponse.status, configHeaders);
+          res.end(configBytes);
+          return;
         }
         let maximum;
         try { maximum = JSON.parse(configBytes.toString('utf8')).maxUploadBytes; } catch { throw fail('invalid_upload_config'); }
@@ -772,7 +766,8 @@ export class FleetProxy {
         const bytes = await smallBody(response);
         if (uploadError) throw uploadError;
         if (!localAccess()) throw fail('admin_required', 403);
-        res.writeHead(response.status, headers); res.end(bytes);
+        res.writeHead(response.status, headers);
+        res.end(bytes);
         return;
       }
 
@@ -780,7 +775,9 @@ export class FleetProxy {
       const headers = responseHeaders(response);
       if (!response.ok) {
         const bytes = await smallBody(response);
-        res.writeHead(response.status, headers); res.end(bytes); return;
+        res.writeHead(response.status, headers);
+        res.end(bytes);
+        return;
       }
       if (response.headers.get('content-encoding') && response.headers.get('content-encoding') !== 'identity') throw fail('unexpected_attachment_encoding');
       const declared = response.headers.get('content-length');

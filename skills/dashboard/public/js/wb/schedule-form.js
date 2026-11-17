@@ -1,3 +1,4 @@
+import { instantSeconds } from './api-time.js';
 import { element, icon } from './plain-text.js';
 import { createFetchGuard } from './fetch-guard.js';
 import { dateField } from './date-field.js';
@@ -7,6 +8,7 @@ const pad = value => String(value).padStart(2, '0');
 /** Local `YYYY-MM-DDTHH:MM` of an epoch second in `tz`, as a datetime-local input expects. */
 export function localInputValue(epochSeconds, tz) {
   if (epochSeconds == null) return '';
+  epochSeconds = instantSeconds(epochSeconds);
   const parts = {};
   const format = new Intl.DateTimeFormat('en-US', {
     timeZone: tz ?? 'UTC', hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric',
@@ -61,7 +63,7 @@ export function formPayload(state, original = null, { reenable = false } = {}) {
 export function previewPath(state, { reenable = false, locale = 'zh' } = {}) {
   const query = new URLSearchParams({ kind: state.kind, value: state.value, locale });
   if (reenable) query.set('reenable', '1');
-  return '/api/workbench/schedule/preview?' + query.toString();
+  return '/api/schedules/preview?' + query.toString();
 }
 
 /** A preview that is invalid blocks saving; an unknown preview leaves validation to the scheduler. */
@@ -84,8 +86,10 @@ export function createPreviewer({ fetchPreview, onResult, setTimer = setTimeout,
         let value;
         try {
           value = await fetchPreview(path);
-        } catch {
-          value = { valid: null, error: 'preview_unavailable' };
+        } catch (error) {
+          value = error?.status >= 400 && error.status < 500 && error.code
+            ? { valid: false, error: error.code }
+            : { valid: null, error: 'preview_unavailable' };
         }
         if (guard.current(gen)) onResult(value);
       }, 300);

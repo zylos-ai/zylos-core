@@ -1,3 +1,4 @@
+import { projectApiTimestamps } from '../src/lib/wire-time.js';
 import { conversationDetail } from './helpers/conversation-object-api.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,7 +15,7 @@ const { createGroupDetail } = await import('../public/js/wb/detail.js');
 const { createGroupSide } = await import('../public/js/wb/group-side.js');
 // Pure controllers and injected DOM: no browser, socket, database, storage, PM2 or tmux.
 const flush = async () => { for (let i = 0; i < 50; i++) await Promise.resolve(); };
-function fixture(t) {
+function fixture(t, { isoWire = false } = {}) {
   let time = 1000000, token = 0, fail = false;
   let working = { on: true, since: time - 60000, main: { since: time - 60000 }, tools: 0, subagents: null };
   const tasks = new Map(), reads = [], listeners = new Set();
@@ -30,7 +31,8 @@ function fixture(t) {
       if (path === '/api/instance') return { session_mode: { sessionMode: 'multi' }, runtimeHealth: { claude: { health: 'ok' } } };
       if (u.pathname === '/api/groups/dashboard%3Aa') {
         if (fail) throw new Error('offline');
-        return conversationDetail({ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, working }, { readAt: time });
+        const detail = conversationDetail({ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, working }, { readAt: time });
+        return isoWire ? projectApiTimestamps(u.pathname, detail) : detail;
       }
       if (u.pathname.endsWith('/send')) return { stored: true, conversationId: 'g:A' };
       if (u.pathname === '/api/chat/conversations') return { items: [{ id: 'g:A', session_group: 'dashboard:a', stamp: 1 }], nextCursor: null };
@@ -217,4 +219,15 @@ test('detail preserves stale sample classification despite contradictory working
   assert.equal(allNodes(head).some(node => node.classList.contains('wb-idle')), true);
   assert.equal(allNodes(head).some(node => node.classList.contains('wb-status-age')), true);
   assert.equal(allNodes(root).filter(node => node.classList.contains('wb-status-age')).length, 2);
+});
+
+
+test('ISO group sample clocks retain trusted working state and its busy polling cadence', async t => {
+  const f = fixture(t, { isoWire: true });
+  await f.start();
+  assert.equal(f.state.snapshot().groupPresence, true);
+  assert.equal(f.state.snapshot().groupWorking?.on, true);
+  await f.advance(5000);
+  assert.equal(f.groupReads().length, 2);
+  assert.equal(f.state.snapshot().groupWorking?.on, true);
 });

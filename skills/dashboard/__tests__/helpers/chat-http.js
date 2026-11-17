@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { AuthGate } from '../../src/lib/auth.js';
+import { HistoryService } from '../../src/lib/history/history-service.js';
+import { ObserverService } from '../../src/lib/observer-service.js';
 import { FleetProxy } from '../../src/lib/fleet-proxy.js';
 import { sendJson } from '../../src/lib/http.js';
 import { isChatDataRoute, requireChatAccess, requireChatWrite } from '../../src/lib/chat/access.js';
@@ -16,7 +18,7 @@ export const tokens = { read: `zylos_st_${'a'.repeat(64)}`, admin: `zylos_st_${'
 const cookie = 'isolated-browser-session';
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 
-export async function chatHttpFixture(t, config = {}, { workbench, localConfig = {} } = {}) {
+export async function chatHttpFixture(t, config = {}, { workbench, localConfig = {}, withHistory = false } = {}) {
   const store = {
     getSession: hash => hash === digest(cookie) ? { created_at: Date.now(), last_activity_at: Date.now() } : null,
     touchSession() {}, deleteSession() {}, cleanupSessions() {}, cleanupExpiredApiSessions() {},
@@ -36,7 +38,18 @@ export async function chatHttpFixture(t, config = {}, { workbench, localConfig =
   let record = { channel: 'dashboard', namespace: 'dashboard-owned', localId: 'local-chat' };
   // The server-resolved owner of the requested conversation.
   let owner = { namespace: 'dashboard-owned', localId: 'local-chat' };
-  let proxy;
+  let proxy, destinationIdentity = 'admin';
+  const observer = withHistory ? new ObserverService({ authGate: auth, config: settings,
+    coordinator: { historyStatus: async () => ({ state: 'installed', desired: { enabled: true } }),
+      reconcileStartup: async () => ({}), status: async () => ({ state: 'installed' }), agentSize: async () => null },
+    containment: { reconcilePersisted: async () => {} },
+    manager: { targetStatus: async () => ({}), runtimeStatus: () => null },
+    historyService: new HistoryService({ parser: {
+      listSessions: async () => ({ current: 'session', sessions: [{ id: 'session', title: 'PRIVATE_TERMINAL' }] }),
+      loadSession: async () => ({ generation: 1, entries: [{ id: 'o:0', kind: 'text', fields: { body: 'PRIVATE_TERMINAL' } }], index: { lines: [{ offset: 0 }] } }),
+    }, redactor: { redact: async text => ({ text, count: 0, kinds: [] }),
+      redactValue: async value => ({ value, count: 0, kinds: [] }) } }),
+  }) : null;
   const servers = [];
   async function start(isHub) {
     const server = http.createServer(async (req, res) => {
@@ -44,6 +57,7 @@ export async function chatHttpFixture(t, config = {}, { workbench, localConfig =
         const url = new URL(req.url, 'http://localhost');
         if (await (isHub ? hubAuth : auth).handle(req, res, url)) return;
         if (isHub) { await proxy.handle(req, res, url); return; }
+        if (observer && await observer.handle(req, res, url)) return;
         if (await handleChatSettings(req, res, url, { auth, config: settings, onChange: chat => settingsChanges.push(chat) })) return;
         if (workbench && ['/api/groups/running', '/api/groups/search', '/api/groups/activity'].includes(url.pathname)) {
           sendJson(res, 200, await workbench(url)); return;
@@ -66,7 +80,7 @@ export async function chatHttpFixture(t, config = {}, { workbench, localConfig =
   }
   const remote = await start(false);
   proxy = new FleetProxy({ config: { fleet: { agents: [{ name: 'Remote', base_url: remote }] } },
-    poller: { getSessionToken: async () => tokens.admin }, fetch: async (...args) => { counts.upstream++; return fetch(...args); } });
+    poller: { getSessionToken: async () => tokens[destinationIdentity] }, fetch: async (...args) => { counts.upstream++; return fetch(...args); } });
   const hub = await start(true);
   t.after(async () => {
     clearInterval(auth._cleanupTimer);
@@ -83,6 +97,6 @@ export async function chatHttpFixture(t, config = {}, { workbench, localConfig =
       method: route.method, headers, ...(['GET', 'HEAD'].includes(route.method) ? {} : { body }) });
     return { status: response.status, text: await response.text() };
   }
-  return { request, config: settings, localConfig: hubSettings, counts, settingsChanges, auth, setMode: value => { mode = value; }, setRecord: value => { record = value; },
+  return { request, setDestinationIdentity: value => { destinationIdentity = value; }, config: settings, localConfig: hubSettings, counts, settingsChanges, auth, setMode: value => { mode = value; }, setRecord: value => { record = value; },
     setOwner: value => { owner = value; } };
 }

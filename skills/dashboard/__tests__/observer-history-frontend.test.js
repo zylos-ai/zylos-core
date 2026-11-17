@@ -9,10 +9,11 @@ function controller() {
   const history = Object.create(ObserverHistory.prototype);
   const elements = {
     timeline: { scrollHeight: 1000, scrollTop: 920, clientHeight: 80 },
+    sessions: { replaceChildren() {} }, results: { replaceChildren() {} },
     internal: { checked: false }, older: {}, latest: {}, status: {},
-    entries: { append() {}, prepend() {} }
+    entries: { append() {}, prepend() {}, replaceChildren() {} }
   };
-  Object.assign(history, { active: true, generation: 0, session: 'current', current: 'current', controllers: new Set(), fields: new Map(), entries: new Map(), doc: { hidden: false }, el: key => elements[key], t: key => key });
+  Object.assign(history, { endpoint: path => path, group: () => undefined, active: true, generation: 0, session: 'current', current: 'current', controllers: new Set(), fields: new Map(), entries: new Map(), doc: { hidden: false }, el: key => elements[key], t: key => key });
   return { history, elements };
 }
 
@@ -144,4 +145,63 @@ test('history controls align the search row with the session select, not its lab
   assert.match(css, /\.history-controls \{[^}]*align-items: flex-end;/);
   assert.match(css, /\.history-controls select, \.history-controls input\[type="search"\] \{[^}]*height: 36px;/);
   assert.match(css, /\.history-controls label \{[^}]*min-height: 36px;/);
+});
+
+
+test('all history queries carry the selected group through Fleet without changing transcript parameters', async () => {
+  const { history } = controller();
+  history.endpoint = path => '/fleet/Remote' + path;
+  history.group = () => 'telegram:dm-42';
+  const paths = [];
+  history.request = async path => { paths.push(new URL(path, 'http://dashboard.test')); return { ok: true, json: async () => ({}) }; };
+  for (const route of ['sessions', 'entries', 'search', 'content']) await history.json(route, { session: 'run-1', q: 'needle' });
+  assert.deepEqual(paths.map(path => path.pathname), ['sessions', 'entries', 'search', 'content'].map(route => '/fleet/Remote/api/observer/history/' + route));
+  for (const path of paths) {
+    assert.equal(path.searchParams.get('session_group'), 'telegram:dm-42');
+    assert.equal(path.searchParams.get('session'), 'run-1');
+    assert.equal(path.searchParams.get('q'), 'needle');
+  }
+  history.group = () => undefined;
+  await history.json('sessions');
+  assert.equal(paths.at(-1).searchParams.has('session_group'), false);
+});
+
+test('switching history groups clears prior transcript state and cancels old work', () => {
+  const { history, elements } = controller();
+  let group = 'first';
+  history.group = () => group;
+  history.scope = history.endpoint('/api/observer/history/sessions') + '\0first';
+  history.session = 'old-run'; history.before = 'old-cursor';
+  history.entries.set('old-entry', {});
+  const abort = new AbortController(); history.controllers.add(abort);
+  group = 'second';
+  history.setActive(false);
+  assert.equal(abort.signal.aborted, true);
+  assert.equal(history.session, null);
+  assert.equal(history.before, null);
+  assert.equal(history.entries.size, 0);
+  assert.equal(elements.results.hidden, true);
+});
+
+test('history errors display the structured response message', async () => {
+  const { history } = controller();
+  history.request = async () => ({ ok: false, json: async () => ({ error: { code: 'group_not_found', message: 'The selected group is unavailable' } }) });
+  await assert.rejects(history.json('sessions'), { message: 'The selected group is unavailable' });
+});
+
+
+test('entry headers use the session label zoned date and minute format', () => {
+  const { history } = controller();
+  history.doc.createElement = () => ({ querySelector: () => ({ append() {} }) });
+  setInstanceZone('Asia/Singapore');
+  try {
+    const year = new Date().getUTCFullYear();
+    for (const ts of [`${year}-01-01T19:04:59Z`, `${year - 1}-12-31T15:59:59Z`]) {
+      const label = history.sessionLabel({ id: 'a', title: 'Title', startedAt: ts }).replace(' · Title', '');
+      const rendered = history.renderEntry({ kind: 'text', ts });
+      assert.ok(rendered.innerHTML.includes(` · ${label}</header>`));
+      assert.equal(rendered.innerHTML.includes(ts), false);
+    }
+    assert.match(history.renderEntry({ kind: 'text', ts: 'invalid' }).innerHTML, / · invalid<\/header>/);
+  } finally { setInstanceZone('UTC'); }
 });

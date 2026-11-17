@@ -29,10 +29,10 @@ export async function runObserverBrowser(t, sandbox, signal) {
   const now = Date.now();
   const chats = [['lark:oc_product', 'lark', 'Product weekly'], [GROUP, 'telegram', 'Telegram direct chat']].map(([group, channel, name]) => {
     const id = 'g:' + Buffer.from(group).toString('hex').toUpperCase();
-    return { row: { id, session_group: group, channel, display_name: name, draft: false, state: 'active', stamp: now, preview: 'Fixture message' },
+    return { row: { id, session_group: group, channel, display_name: name, draft: false, state: 'active', stamp: new Date(now).toISOString(), preview: 'Fixture message' },
       detail: { id, namespace: channel, sessionGroup: group, displayName: name, state: 'active', draft: false } };
   });
-  const record = (rows, value) => { assert.ok(rows.length < 1000, 'fixture trace is bounded'); rows.push(value); };
+  const record = (rows, value) => { assert.ok(rows.length < 2000, 'fixture trace is bounded across all group-history and settings cases'); rows.push(value); };
   const pause = ms => new Promise((resolve, reject) => {
     const wait = { timer: null, abort: () => { clearTimeout(wait.timer); waits.delete(wait); reject(new Error('observer browser case stopped')); } };
     wait.timer = setTimeout(() => { waits.delete(wait); if (signal.aborted) reject(new Error('observer browser case stopped')); else resolve(); }, ms);
@@ -77,6 +77,7 @@ export async function runObserverBrowser(t, sandbox, signal) {
   const server = http.createServer((req, res) => {
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
+      res.apiPath = url.pathname;
       if (req.method === 'GET' && url.pathname.startsWith('/api/')) record(reads, { path: url.pathname, search: url.search, scenario });
       if (req.method !== 'GET') {
         let body = '';
@@ -199,6 +200,18 @@ export async function runObserverBrowser(t, sandbox, signal) {
     await page.locator('#observer-history').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#observer-group-select').inputValue(), 'origin', 'history preserves the offline target');
   });
+  for (const width of [1280, 390]) await step(`history queries retain the selected group at ${width}px`, async page => {
+    await page.locator(`[data-group="${GROUP}"]`).click();
+    await page.locator(`button[data-observer-group="${GROUP}"]`).click();
+    await page.waitForFunction(() => window.__observerSockets.length > 0);
+    const first = reads.length;
+    await page.locator('[data-observer-view="history"]').click();
+    await page.locator('#observer-history').waitFor({ state: 'visible' });
+    await until(() => reads.slice(first).some(row => row.path === '/api/observer/history/sessions'), 'selected group history read');
+    const queries = reads.slice(first).filter(row => row.path === '/api/observer/history/sessions');
+    assert.ok(queries.every(row => new URLSearchParams(row.search).get('session_group') === GROUP));
+    if (evidence) await page.screenshot({ path: path.join(evidence, `observer-history-${width}.png`) });
+  }, width);
   await step('top observer entry clears a previously observed group after its detail closes', async page => {
     await page.locator(`[data-group="${GROUP}"]`).click();
     await page.locator(`button[data-observer-group="${GROUP}"]`).click();

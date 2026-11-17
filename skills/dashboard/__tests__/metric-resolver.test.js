@@ -76,13 +76,13 @@ test('usage and resource reads enforce auth while retired metric routes return 4
   let account = await readAccount();
   assert.equal(account.used_percentage, 21);
   assert.equal(account.live, false);
-  assert.equal(account.recordedAt, 1000);
+  assert.equal(account.recordedAt, new Date(1000).toISOString());
   assert.equal(Object.hasOwn(account, 'five_hour'), false);
   accountRecord = { recordedAt: 2000, live: true };
   account = await readAccount();
   assert.equal(account.used_percentage, 21);
   assert.equal(account.live, true);
-  assert.equal(account.recordedAt, 2000);
+  assert.equal(account.recordedAt, new Date(2000).toISOString());
   currentAccount = { runtime: 'claude', value: { seven_day: { used_percentage: 21, resets_at: Math.floor(Date.now() / 1000) + 3600 } } };
   const liveMetric = resolver.resolve('rate_limit_7d');
   assert.equal(liveMetric.value, 21);

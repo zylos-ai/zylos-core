@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { stateToFleetRecord } from '../../src/lib/fleet-poller.js';
 import { fleetGroupSummary } from '../../src/lib/workbench/fleet-summary.js';
 import { GROUP, workbenchSnapshot, workbenchSnapshotAnswer } from '../fixtures/workbench-browser-api.js';
+import { formatZoned } from '../../public/js/wb/instance-zone.js';
 import { startPage } from './workbench-browser.js';
 
 export async function runCurrentActionBrowser(sandbox, { width, locale }) {
@@ -82,7 +83,7 @@ export async function runCurrentActionBrowser(sandbox, { width, locale }) {
   assert.ok((await current.innerText()).includes(t('wb.board.lastIn', { text: 'Run the tests again please' })));
   const badge = boardRow.locator('.wb-state-flags .wb-tag').filter({ hasText: t('wb.flags.noResponse') });
   assert.equal(await badge.count(), 1);
-  assert.ok((await badge.getAttribute('title')).includes(new Date(since).toISOString()));
+  assert.ok((await badge.getAttribute('title')).includes(formatZoned(since, locale === 'zh' ? 'zh-CN' : 'en-US')));
   const overflow = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth, items: [...document.querySelectorAll('body *')].filter(el => el.getBoundingClientRect().right > innerWidth + 1).slice(0, 8).map(el => ({ tag: el.tagName, class: el.className, right: el.getBoundingClientRect().right })) }));
   assert.ok(overflow.scroll <= overflow.width, JSON.stringify(overflow));
   await shot('tool-message');

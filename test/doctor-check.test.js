@@ -12,7 +12,7 @@ const hints = ['Check: pm2 logs worker-a', 'Check: pm2 logs worker-b'];
 const cleanup = [];
 afterEach(() => { for (const clean of cleanup.splice(0)) clean(); });
 
-function runDoctor(args, { state = 'fail', network = 'up', mode = 'single', origin = 'sleeping', group = 'origin', runtime = 'claude', alertTarget, sender = false, sessionMode, capacity, web = '', coreConfig = {}, dashboardConfig, inheritedEnv = {} } = {}) {
+function runDoctor(args, { state = 'fail', network = 'up', mode = 'single', origin = 'sleeping', group = 'origin', runtime = 'claude', alertTarget, sender = false, sessionMode, capacity, web = '', coreConfig = {}, dashboardConfig, inheritedEnv = {}, ps = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'doc-')));
   cleanup.push(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, 'package.json'), '{"type":"module"}');
@@ -21,7 +21,7 @@ function runDoctor(args, { state = 'fail', network = 'up', mode = 'single', orig
   for (const dir of Object.values(dirs)) fs.mkdirSync(dir, { recursive: true });
   const bin = path.join(root, 'bin');
   fs.mkdirSync(bin);
-  for (const command of ['which', 'claude', 'codex', 'pm2', 'tmux', 'curl']) {
+  for (const command of ['which', 'claude', 'codex', 'pm2', 'tmux', 'curl', ...(ps ? ['ps'] : [])]) {
     const destination = path.join(bin, command);
     // Absolute Node interpreter keeps PATH restricted to the fixture commands.
     fs.writeFileSync(destination, fs.readFileSync(fakeCommand, 'utf8')
@@ -350,3 +350,24 @@ test('doctor lists no Dashboard row when PM2 has no Dashboard process', () => {
   const text = runDoctor(['--check'], { state: 'pass' });
   assert.equal(text.stdout.split(/\r?\n/).some(line => /^\s*[●○] Dashboard\b/.test(line)), false);
 });
+
+// Boundary: real doctor text/JSON with ps present or absent in a private PATH.
+// Run for ps diagnostics changes; skip otherwise. runDoctor verifies isolated
+// HOME/ZYLOS_DIR/PM2_HOME/TMPDIR, a private tmux socket and fake service commands.
+for (const ps of [false, true]) {
+  test(`doctor ps check is advisory with ps ${ps ? 'present' : 'absent'}`, () => {
+    const jsonResult = runDoctor(['--json'], { state: 'pass', ps });
+    assert.equal(jsonResult.status, 0, jsonResult.stderr);
+    const json = JSON.parse(jsonResult.stdout);
+    assert.equal(json.passed, true);
+    assert.equal(json.groups.system.passed, true);
+    assert.equal(json.groups.system.checks.ps.ok, ps);
+    if (!ps) {
+      assert.equal(json.groups.system.checks.ps.level, 'warning');
+      assert.match(json.groups.system.checks.ps.hint, /PM2.*old processes.*duplicate message delivery; install procps/);
+    }
+    const text = runDoctor(['--check'], { state: 'pass', ps });
+    assert.equal(text.status, 0, text.stderr);
+    assert.match(text.stdout, ps ? /ps available/ : /ps not found:.*install procps/);
+  });
+}

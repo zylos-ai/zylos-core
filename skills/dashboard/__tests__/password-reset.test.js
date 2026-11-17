@@ -136,7 +136,7 @@ test('password reset revokes remembered browser and API sessions while preservin
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ password: secret, ...(remember ? { remember: 'on' } : {}) }),
     });
-    assert.equal((await request('/api/workbench/usage')).status, 401);
+    assert.equal((await request('/api/usage/summary')).status, 401);
     const cookies = [];
     for (const remember of [false, true]) {
       const response = await login(password, remember);
@@ -149,7 +149,7 @@ test('password reset revokes remembered browser and API sessions while preservin
     const apiSession = exchangeApiKeyForToken(apiKey);
     assert.ok(apiSession);
     const oldHeaders = [...cookies.map(cookie => ({ cookie })), { authorization: `Bearer ${apiSession.token}` }];
-    for (const headers of oldHeaders) assert.equal((await request('/api/workbench/usage', { headers })).status, 200);
+    for (const headers of oldHeaders) assert.equal((await request('/api/usage/summary', { headers })).status, 200);
     assert.equal(store.db.prepare('SELECT count(*) FROM auth_sessions').pluck().get(), 2);
     assert.equal(store.db.prepare('SELECT sum(remember) FROM auth_sessions').pluck().get(), 1);
     const lateToken = 'late-restart-session';
@@ -167,10 +167,10 @@ try { const now=Date.now(); db.prepare('INSERT INTO auth_sessions(token_hash,cre
     const next = reset.stdout.match(/Password: ([a-f0-9]{32})/)?.[1];
     assert.ok(next);
     assert.equal(fs.readFileSync(lateMarker, 'utf8'), 'created');
-    assert.equal((await request('/api/workbench/usage', { headers: { cookie: `__Secure-zylos_dashboard_session=${lateToken}` } })).status, 401);
+    assert.equal((await request('/api/usage/summary', { headers: { cookie: `__Secure-zylos_dashboard_session=${lateToken}` } })).status, 401);
     // The already-open Store observes revocation before config reload; PM2 is
     // a command-boundary stub, so adoption is explicitly simulated below.
-    for (const headers of oldHeaders) assert.equal((await request('/api/workbench/usage', { headers })).status, 401);
+    for (const headers of oldHeaders) assert.equal((await request('/api/usage/summary', { headers })).status, 401);
     assert.equal(store.db.prepare('SELECT count(*) FROM auth_sessions').pluck().get(), 0);
     assert.equal(store.db.prepare('SELECT count(*) FROM api_sessions').pluck().get(), 0);
     assert.equal(store.listActiveApiKeys().length, 1);

@@ -1,3 +1,4 @@
+import { isRetiredApiPath } from './api-routes.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { browserBaseFromRequest, browserPath, browserRoot, isPathWithinBase } from './browser-base.js';
@@ -317,34 +318,19 @@ function nextTarget(req, base) {
   return isPathWithinBase(target, base) ? target : browserRoot(base);
 }
 
-function isScheduleWrite(method, pathname) {
-  return method === 'POST' && /^\/api\/workbench\/schedule(?:\/[^/]+\/(?:pause|resume))?$/.test(pathname) ||
-    ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/schedule\/[^/]+$/.test(pathname);
-}
-
 function needsAdminApiAccess(pathname, method) {
-  // Classify repeated-slash aliases under the same memory access policy.
   pathname = pathname.replace(/\/{2,}/g, '/');
-  if ((pathname.startsWith('/api/instance/') || pathname.startsWith('/api/groups/')) && !['GET', 'HEAD'].includes(method)) return true;
-  if (pathname === '/api/observer' || pathname.startsWith('/api/observer/')) return true;
-  if (pathname === '/api/actions/restart-timezone-services') return true;
-  if (/^\/api\/chat\/drafts\/[^/]+(?:\/deletion)?$/.test(pathname)) return true;
-  if (['/api/settings', '/api/settings/timezone'].includes(pathname) && method === 'PUT') return true;
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) return true;
+  if (pathname.startsWith('/api/chat/') || pathname.startsWith('/api/observer/history/') ||
+      pathname === '/observer/frame' || pathname === '/observer/stream') return true;
   if (pathname === '/api/fleet/agents' || pathname.startsWith('/api/fleet/agents/')) return true;
-  if (isScheduleWrite(method, pathname)) return true;
   if (pathname === '/api/keys' || pathname.startsWith('/api/keys/')) return true;
-  if (pathname === '/api/memory' || pathname.startsWith('/api/memory/')) return true;
-  if (pathname === '/api/workbench/memory' || pathname.startsWith('/api/workbench/memory/')) return true;
-  const proxiedWrite = pathname.match(/^\/fleet\/[^/]+\/api\/(.+)$/);
-  if (!proxiedWrite) return false;
-  const remotePath = `/api/${proxiedWrite[1]}`;
-  if ((remotePath.startsWith('/api/groups/') || remotePath.startsWith('/api/instance/')) && !['GET', 'HEAD'].includes(method)) return true;
-  if (remotePath.startsWith('/api/chat/')) return true;
-  if (remotePath === '/api/memory' || remotePath.startsWith('/api/memory/')) return true;
-  if (remotePath === '/api/workbench/memory' || remotePath.startsWith('/api/workbench/memory/')) return true;
-  return isScheduleWrite(method, remotePath) ||
-    method === 'POST' && remotePath === '/api/actions/restart-timezone-services' ||
-    method === 'PUT' && ['/api/settings', '/api/settings/timezone'].includes(remotePath);
+  if (pathname === '/api/memory/file' || pathname === '/api/memory/git') return true;
+  const proxied = pathname.match(/^\/fleet\/[^/]+(\/api\/.*)$/);
+  if (!proxied) return false;
+  const remotePath = proxied[1];
+  return remotePath === '/api/memory/file' || remotePath === '/api/memory/git' ||
+    remotePath.startsWith('/api/chat/') || remotePath.startsWith('/api/observer/history/');
 }
 
 export function generateApiKey() {
@@ -476,6 +462,10 @@ export class AuthGate {
     if (!this.enabled) return false;
 
     const authContext = this.resolveAuthContext(req);
+    if (authContext && isRetiredApiPath(pathname)) {
+      sendJson(res, 404, { error: 'not_found' });
+      return true;
+    }
     if (authContext?.kind === 'cookie') {
       res.setHeader('Cache-Control', 'no-store');
       return false;
@@ -484,7 +474,7 @@ export class AuthGate {
     const apiAuth = authContext?.kind === 'api' ? authContext : null;
     const observerResource = pathname === '/observer/frame' || pathname === '/observer/stream';
     if (apiAuth && (pathname.startsWith('/api/') || pathname.startsWith('/fleet/') || observerResource)) {
-      const needsAdmin = observerResource || needsAdminApiAccess(pathname, req.method);
+      const needsAdmin = needsAdminApiAccess(pathname, req.method);
       if (needsAdmin && apiAuth.scope !== 'admin') {
         sendJson(res, 403, { error: 'insufficient_scope', required: 'admin' });
         return true;
@@ -497,7 +487,7 @@ export class AuthGate {
       return false;
     }
 
-    if (pathname.startsWith('/api/') || observerResource) {
+    if (pathname.startsWith('/api/') || /^\/fleet\/[^/]+\/api(?:\/|$)/.test(pathname) || observerResource) {
       sendJson(res, 401, { error: 'unauthorized' });
       return true;
     }
@@ -569,9 +559,8 @@ export class AuthGate {
       sendText(res, 405, 'method not allowed');
       return true;
     }
-    // Logout must always succeed: no origin check (proxies may rewrite Host)
-    // and no session requirement. A forged logout only ends a session.
     const context = getSessionAuth(req);
+    // Logout must always clear the browser session, including stale or missing Origin.
     if (context) _store.deleteSession(context.credentialId);
     clearSessionCookie(res, base);
     redirect(res, browserPath(base, 'login'));

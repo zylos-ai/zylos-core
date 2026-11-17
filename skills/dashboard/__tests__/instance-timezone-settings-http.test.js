@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createChatSandbox } from './helpers/chat-integration-harness.js';
 const enabled = process.env.ZYLOS_TIMEZONE_INTEGRATION === '1';
 const repo = fileURLToPath(new URL('../../../', import.meta.url));
-const settingsPath = '/api/settings/timezone', restartPath = '/api/actions/restart-timezone-services';
+const settingsPath = '/api/settings/timezone', restartPath = '/api/settings/timezone/actions/restart-services';
 
 // Covers real HTTP auth/controller in a private PM2-hosted caller, actual
 // scheduler daemon/.env/database and ordinary named restart. Compares the full

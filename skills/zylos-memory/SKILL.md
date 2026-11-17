@@ -181,8 +181,9 @@ Shared knowledge classification:
 
 Read an existing target before generating its replacement fragment. Check
 references for duplicated configuration values or narrative history; move the
-information into an allowed topic file and replace it with a pointer. The shared
-identity/references budget is 16 KiB, with references audited at 8 KiB.
+information into an allowed topic file and replace it with a pointer. `identity.md`
+and `references.md` each have a separate 16 KiB budget. `references.md` has an
+8 KiB warning threshold; audit it on the next Memory Sync when it exceeds that threshold.
 `reference/projects/INDEX.md` and `reference/decisions/INDEX.md` each have a
 16 KiB warning threshold and 32 KiB budget. These indexes are optional until
 created: `memory-status.js` prints `not created yet` without a missing-file

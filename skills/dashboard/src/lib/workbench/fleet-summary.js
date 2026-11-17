@@ -71,7 +71,7 @@ export function sanitizeFleetGroupSummary(value) {
     ['auth_failed', 'start_failed', 'no_response'].includes(row.reason)).map(row => ({
     sessionGroup: row.sessionGroup, displayName: text(row.displayName),
     name: text(row.displayName) ? { displayName: row.displayName } : null,
-    createdAt: Number.isFinite(row.createdAt) ? row.createdAt : null,
+    createdAt: Number.isFinite(row.createdAt) || typeof row.createdAt === 'string' && Number.isFinite(Date.parse(row.createdAt)) ? row.createdAt : null,
     c4: text(row.c4?.componentName) ? { componentName: row.c4.componentName } : null,
     reason: row.reason, durationSeconds: row.reason === 'no_response' && count(row.durationSeconds) ? row.durationSeconds : null,
   }));

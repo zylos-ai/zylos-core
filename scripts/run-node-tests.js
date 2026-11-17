@@ -8,6 +8,7 @@ import { createTestEnvironment } from './test-environment.js';
 const ROOT = process.cwd();
 const ROOT_NODE_TESTS = [
   'test/claude-upgrade-process.integration.test.js',
+  'test/dashboard-display-browser.test.js',
   'test/fleet-attention.integration.test.js',
   'test/fleet-attention-browser.test.js',
   'test/channel-delivery.integration.test.js',
@@ -42,6 +43,7 @@ const ROOT_NODE_TESTS = [
   'test/chat-quote.integration.test.js',
   'test/origin-conversation.integration.test.js',
   'test/test-location.test.js',
+  'test/control-prompt-length.test.js',
   'test/group-deletion.integration.test.js',
   'test/group-deletion-storage.integration.test.js',
   'test/reference-memory-templates.test.js',
@@ -49,6 +51,8 @@ const ROOT_NODE_TESTS = [
   'test/owned-removal-callers.integration.test.js',
   'test/test-environment-cleanup.test.js',
   'test/single-upgrade-check.integration.test.js',
+  'test/exit-control.integration.test.js',
+  'test/upgrade-npm-prefix.integration.test.js',
   'test/session-release.integration.test.js',
   'test/component-source-record.integration.test.js',
 ];

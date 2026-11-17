@@ -1241,6 +1241,8 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-pref-c > .wb-set-inline { width: 100%; }
 .wb-model-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(100px, .55fr) 110px; align-items: end; gap: 10px; width: 100%; }
 .wb-model-field { display: flex; flex-direction: column; min-width: 0; gap: 6px; }
+.wb-model-field[hidden] { display: none; }
+.wb-model-field:nth-child(3) { grid-column: 3; }
 .wb-model-field .wb-select-wrap, .wb-model-field .wb-input { width: 100%; min-width: 0; max-width: 100%; }
 .wb-model-field .wb-input-num { width: 72px; }
 .wb-model-fields > .wb-dirty { grid-column: 1 / -1; }
@@ -1481,6 +1483,7 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   .wb-pref, .wb-fld { grid-template-columns: 1fr; gap: 6px; }
   .wb-model-fields { grid-template-columns: minmax(0, 1fr) 104px; }
   .wb-model-field:first-child { grid-column: 1 / -1; }
+  .wb-model-field:nth-child(3) { grid-column: 2; }
   .wb-fld > .wb-note { grid-column: 1; }
   .wb-addform { grid-template-columns: 1fr; }
   .wb-agent-row { grid-template-columns: 18px minmax(0, 1fr) auto; }

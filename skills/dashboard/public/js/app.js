@@ -1,3 +1,4 @@
+import { formatZoned, instanceZone, instanceZoneReady } from './wb/instance-zone.js';
 import { readGroupSnapshot, displayGroupRow, instanceActionRequest } from './wb/group-data.js';
 import { waitUntilDeadline } from './request-timeout.js';
 import { createConversationPush } from './wb/conversation-push.js';
@@ -144,11 +145,13 @@ function viewedMachine() {
 
 const remoteAccess = createRemoteAccess({
   viewingRemote: () => viewedMachine().viewingRemote,
-  dashboardState: () => state.dashboardState,
   chatTab: () => document.querySelector('.tab[data-tab="chat"]'),
   activeTab: () => activeTabName(),
   openTab: name => activateTab?.(name),
-  onChange: () => workbench?.setViewDetail()
+  onChange: () => {
+    if (remoteAccess.closed()) chatPage?.blockRemote();
+    workbench?.setViewDetail();
+  }
 });
 
 function remoteIsReadOnly() {
@@ -385,9 +388,9 @@ async function requestAgentJson(path, options = {}) {
   if (!r.ok) {
     let payload = {};
     try { payload = await r.json(); } catch { /* ignore non-json errors */ }
-    const err = new Error(payload.error || `${path} ${r.status}`);
+    const err = new Error(payload.error?.message || `${path} ${r.status}`);
     err.status = r.status;
-    err.code = payload.error || null;
+    err.code = payload.error?.code || null;
     err.current = payload.current || null;
     err.result = payload;
     throw err;
@@ -1000,10 +1003,26 @@ async function resolveMemoryConflict(action) {
   await saveMemoryDraftToServer({ text, sha256: conflict.theirs.sha256 });
 }
 
+let remoteAccessRequest = 0;
+async function refreshRemoteAccess() {
+  if (!viewedMachine().viewingRemote) return;
+  const target = observerTargetKey(), request = ++remoteAccessRequest;
+  try {
+    const settings = await fetchAgentJson('/api/settings/chat');
+    if (target !== observerTargetKey() || request !== remoteAccessRequest) return;
+    remoteAccess.noteState(settings);
+    remoteAccess.sync();
+  } catch { /* Request refusals still close the remote conversation and terminal entries. */ }
+}
+
 async function refreshState() {
+  void refreshRemoteAccess();
+  const previousZone = instanceZone(), zoneWasReady = instanceZoneReady();
   const data = await refreshDashboardState(state, fetchJson);
+  // Time metadata corrects the visible clock immediately, even while pointer hover
+  // postpones ordinary Fleet payload repaints. It can survive a newer SSE snapshot.
+  if (instanceZoneReady() && (!zoneWasReady || previousZone !== instanceZone())) renderFleet();
   if (!data) return;
-  remoteAccess.noteState(data);
   state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
   renderInfoBar();
   renderObserverAvailability();
@@ -1182,7 +1201,7 @@ async function applyObserverSize(event) {
     const data = await resp.json().catch(() => ({}));
     if (observerTargetKey() !== targetKey) return;
     if (!resp.ok || !validAgentSize(data.agentSize)) {
-      setObserverSizeStatus(observerSizeError(data.error || `http_${resp.status}`, data.maxRows), 'error');
+      setObserverSizeStatus(observerSizeError(data.error?.code || `http_${resp.status}`, data.maxRows), 'error');
       return;
     }
     if (state.observer.status) state.observer.status.agentSize = data.agentSize;
@@ -1216,8 +1235,8 @@ function releaseObserverLease(endpoints, lease) {
 }
 
 function observerRequestError(data, status) {
-  remoteAccess.noteError(data?.error);
-  return Object.assign(new Error(data.error || t('observer.connect_failed')), { code: data.error, status });
+  remoteAccess.noteError(data?.error?.code);
+  return Object.assign(new Error(data.error?.message || t('observer.connect_failed')), { code: data.error?.code, status });
 }
 
 function observerRetryable(error) {
@@ -1610,7 +1629,7 @@ function applySse(name, data) {
     // Preserve the separately read Origin details while applying instance metadata.
     const prevAgent = state.dashboardState?.agent;
     state.dashboardState = { ...previousState, ...data };
-    remoteAccess.noteState(data);
+    void refreshRemoteAccess();
     if (!data.agent && prevAgent) state.dashboardState.agent = prevAgent;
     state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
     workbench?.applyInstance?.(data);
@@ -1812,7 +1831,7 @@ function initTabs() {
 function initObserverControls() {
   const historyRoot = $('#observer-history');
   if (historyRoot) {
-    state.observer.history = new ObserverHistory({ root: historyRoot, endpoint: observerEndpoint, t });
+    state.observer.history = new ObserverHistory({ root: historyRoot, endpoint: observerEndpoint, group: () => state.observer.group, t });
     document.querySelectorAll('[data-observer-view]').forEach(button => {
       button.addEventListener('click', () => {
         const historyMode = button.dataset.observerView === 'history';
@@ -2263,7 +2282,7 @@ async function loadApiKeys() {
   try {
     const resp = await fetch(api('/api/keys'), { cache: 'no-store' });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(fleetManageError(data.error, t('fleet_manage.keys_load_failed')));
+    if (!resp.ok) throw new Error(fleetManageError(data.error?.code, t('fleet_manage.keys_load_failed')));
     renderApiKeys(data);
   } catch (err) {
     fleetManageStatus(err.message, 'error');
@@ -2281,11 +2300,11 @@ async function testFleetAgent() {
       body: JSON.stringify({ base_url: body.base_url, read_api_key: body.read_api_key })
     });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || t('fleet_manage.test_failed'));
+    if (!resp.ok) throw new Error(fleetManageError(data.error?.code, data.error?.message || t('fleet_manage.test_failed')));
     if (data.reachable) {
       fleetManageStatus(t('fleet_manage.test_ok', { scope: data.scope || 'read' }), 'success');
     } else {
-      fleetManageStatus(fleetManageError(data.error || 'unreachable', data.error || t('fleet_manage.test_failed')), 'error');
+      fleetManageStatus(fleetManageError(data.error?.code || 'unreachable', data.error?.message || t('fleet_manage.test_failed')), 'error');
     }
   } catch (err) {
     fleetManageStatus(err.message, 'error');
@@ -2305,7 +2324,7 @@ async function saveFleetAgent() {
       body: JSON.stringify(body)
     });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(fleetManageError(data.error, t('fleet_manage.save_failed')));
+    if (!resp.ok) throw new Error(fleetManageError(data.error?.code, t('fleet_manage.save_failed')));
     fleetManageModal.querySelector('#fleet-add-name').value = '';
     fleetManageModal.querySelector('#fleet-add-url').value = '';
     fleetManageModal.querySelector('#fleet-add-key').value = '';
@@ -2327,7 +2346,7 @@ async function removeFleetAgent(name) {
   try {
     const resp = await fetch(api(`/api/fleet/agents/${encodeURIComponent(name)}`), { method: 'DELETE' });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || t('fleet_manage.remove_failed'));
+    if (!resp.ok) throw new Error(data.error?.message || t('fleet_manage.remove_failed'));
     renderFleetManage(data);
     fleetManageStatus(t('fleet_manage.removed'), 'success');
     await refreshFleet();
@@ -2349,7 +2368,7 @@ async function createApiKey() {
       body: JSON.stringify(body)
     });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(fleetManageError(data.error, t('fleet_manage.key_save_failed')));
+    if (!resp.ok) throw new Error(fleetManageError(data.error?.code, t('fleet_manage.key_save_failed')));
     fleetManageModal.querySelector('#api-key-name').value = '';
     renderApiKeys(data);
     renderCreatedApiKey({ name: data.key?.name || body.name, plaintext_key: data.plaintext_key });
@@ -2368,7 +2387,7 @@ async function purgeRevokedApiKeys() {
   try {
     const resp = await fetch(api('/api/keys/purge-revoked'), { method: 'POST' });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(fleetManageError(data.error, t('fleet_manage.purge_revoked_failed')));
+    if (!resp.ok) throw new Error(fleetManageError(data.error?.code, t('fleet_manage.purge_revoked_failed')));
     renderApiKeys(data);
     if (fleetManageModal?._createdKey?.name && !data.keys?.some(key => key.name === fleetManageModal._createdKey.name)) {
       renderCreatedApiKey(null);
@@ -2391,7 +2410,7 @@ async function saveFleetSelfName() {
       body: JSON.stringify({ name })
     });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(fleetManageError(data.error, t('fleet_manage.save_failed')));
+    if (!resp.ok) throw new Error(fleetManageError(data.error?.code, t('fleet_manage.save_failed')));
     fleetManageStatus(t('fleet_manage.saved'), 'success');
     await refreshState();
     await refreshFleet();
@@ -2615,7 +2634,7 @@ async function runObserverLifecycle(action) {
     const resp = await fetch(endpoint, { method, headers: { 'Content-Type': 'application/json' } });
     const data = await resp.json().catch(() => ({}));
     if (!current()) return;
-    if (!resp.ok) throw new Error(data.error || t('observer.action_failed'));
+    if (!resp.ok) throw new Error(data.error?.message || t('observer.action_failed'));
     const refreshGeneration = state.observer.statusGeneration + 1;
     const refreshed = await refreshObserverStatus({ quiet: true });
     if (!current()) return;
@@ -2663,13 +2682,13 @@ function initSettingsPage() {
   const defaults = root.querySelector('#settings-defaults');
   settingsChat = mountChatSettings(settingsPage.sections.defaults, { t,
     local: () => !REMOTE_AGENT && !state.remoteAgent,
-    read: () => requestAgentJson('/api/chat/settings'),
-    write: body => requestAgentJson('/api/chat/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+    read: () => requestAgentJson('/api/settings/chat'),
+    write: body => requestAgentJson('/api/settings/chat', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   });
   settingsTimezone = mountTimezoneSettings(settingsPage.sections.defaults, { t,
     read: () => requestAgentJson('/api/settings/timezone'),
     write: body => requestAgentJson('/api/settings/timezone', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
-    restart: body => requestAgentJson('/api/actions/restart-timezone-services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+    restart: body => requestAgentJson('/api/settings/timezone/actions/restart-services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
     confirm: confirmSetting, writable: () => !remoteIsReadOnly(), available: () => countdownTimer === null,
     identity: observerTargetKey, target: viewedRemoteTarget, onSaved: () => refreshState().catch(() => {}),
   });
@@ -2681,7 +2700,7 @@ function initSettingsPage() {
     if (value.prices) {
       settingsPricing = createPricingPanel({ root: settingsPage.sections.pricing, host: root, snapshot: value.snapshot,
         data: value.prices, usage: value.usage, t, formatTokens: tok, writable: () => !remoteIsReadOnly(), onDirty: count => settingsPage.badge('pricing', count),
-        write: body => requestAgentJson('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) });
+        write: body => requestAgentJson('/api/settings/pricing', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) });
     } else { const status = root.querySelector('#settings-status'); status.hidden = false; status.textContent = t('wb.readFailed'); }
     refreshSettingsLocks(); refreshSettingsVersion();
   } });
@@ -2799,7 +2818,7 @@ async function refreshModeStatus() {
     const status = data.session_mode;
     const mode = ['single', 'multi'].includes(status?.sessionMode) ? status.sessionMode : null;
     if (mode) { const select = actionsModal.querySelector('#action-mode'); select.value = mode; select._current = mode; syncModeSegment(); }
-    text.textContent = [mode ? t('wb.settings.session.' + mode) : t('value.unknown'), status?.transition?.phase, status?.transition?.reason, status?.supervisor === 'unreachable' ? t('actions.supervisor_unreachable') : '', status?.blocked?.since ? t('actions.blocked_since', { time: status.blocked.since }) : '', status?.error ? [t('wb.readFailed'), status.error.message].filter(Boolean).join(' · ') : ''].filter(Boolean).join(' · ');
+    text.textContent = [mode ? t('wb.settings.session.' + mode) : t('value.unknown'), status?.transition?.phase, status?.transition?.reason, status?.supervisor === 'unreachable' ? t('actions.supervisor_unreachable') : '', status?.blocked?.since ? t('actions.blocked_since', { time: formatZoned(status.blocked.since, getLocale()) }) : '', status?.error ? [t('wb.readFailed'), status.error.message].filter(Boolean).join(' · ') : ''].filter(Boolean).join(' · ');
   } catch (error) { if (observerTargetKey() !== targetKey) return; if (text) text.textContent = error.message; }
   const instanceText = actionsModal?.querySelector('#action-instance-status');
   try {
@@ -2936,10 +2955,10 @@ async function sendAction(action, body) {
       return true;
     }
     if (statusEl) {
-      const isInfo = !result.ok && (result.error === 'already_up_to_date' || result.error === 'already_set');
+      const isInfo = !result.ok && (result.error?.code === 'already_up_to_date' || result.error?.code === 'already_set');
       statusEl.className = result.ok ? 'modal-status success' : isInfo ? 'modal-status success' : 'modal-status error';
       statusEl.style.whiteSpace = 'pre-line';
-      statusEl.textContent = formatActionResult(result, t) || (result.ok ? t('status.done') : result.error);
+      statusEl.textContent = formatActionResult(result, t) || (result.ok ? t('status.done') : result.error?.message);
       if (result.ok || isInfo) setTimeout(() => { statusEl.hidden = true; }, 5000);
     }
     if (result.refreshState) await refreshState();

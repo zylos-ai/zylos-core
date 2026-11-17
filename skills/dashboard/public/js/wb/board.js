@@ -1,3 +1,5 @@
+import { formatZoned } from './instance-zone.js';
+import { instantMs } from './api-time.js';
 import { countLabel } from '../count-label.js';
 import { chatKind, element, fallbackName, icon, lastReceived, platformOf, runtimeName } from './plain-text.js';
 import { toolLabel } from './view-mode.js';
@@ -29,7 +31,7 @@ export function shortDuration(seconds) {
 /** Shared sampled-status annotation for the board, detail and settings. */
 export function statusAnnotation(row, { t = key => key, now = Date.now() } = {}) {
   const state = row.state ?? {};
-  const at = state.sampledAt;
+  const at = instantMs(state.sampledAt);
   if (!Number.isFinite(at)) return { age: '', title: '' };
   const seconds = Math.max(0, Math.floor((now - at) / 1000));
   const unit = seconds < 3600 ? 'minutes' : seconds < 86400 ? 'hours' : 'days';
@@ -51,7 +53,7 @@ export function statePill(document, row, { t = key => key, level = 'plain', now 
   const pill = element(document, 'span', undefined, `wb-state wb-pill wb-${tone}`);
   pill.append(element(document, 'i', undefined, 'wb-dot'), element(document, 'span', t(`wb.state.${kind}`)));
   if (!row.state?.stale && row.duration != null && !['offline', 'unknown'].includes(kind)) pill.append(element(document, 'span', shortDuration(row.duration), 'wb-dur'));
-  if (level === 'technical') pill.title = [row.state?.reason ?? row.state?.reasonCode, row.state?.sampledAt].filter(v => v != null).join(' · ');
+  if (level === 'technical') pill.title = [row.state?.reason ?? row.state?.reasonCode, row.state?.sampledAt == null ? null : formatZoned(row.state.sampledAt)].filter(v => v != null).join(' · ');
   const stack = element(document, 'span', undefined, 'wb-state-stack wb-' + tone);
   const flags = element(document, 'span', undefined, 'wb-state-flags');
   stack.append(pill);
@@ -59,7 +61,7 @@ export function statePill(document, row, { t = key => key, level = 'plain', now 
     if (!value) continue;
     const label = t('wb.flags.' + flag, { count: value.count ?? '', position: value.position ?? '' });
     const mark = element(document, 'small', label, 'wb-tag');
-    mark.title = [value.reason, ...(value.reasons ?? []), value.recoveryAt, flag === 'noResponse' ? value.since : null].filter(Boolean).join(' · ');
+    mark.title = [value.reason, ...(value.reasons ?? []), value.recoveryAt == null ? null : formatZoned(value.recoveryAt), flag === 'noResponse' && value.since != null ? formatZoned(value.since) : null].filter(Boolean).join(' · ');
     flags.append(mark);
   }
   annotateStatus(document, pill, row, { t, now });

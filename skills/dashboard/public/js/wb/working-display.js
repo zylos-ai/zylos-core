@@ -1,3 +1,4 @@
+import { instantMs } from './api-time.js';
 import { formatZoned } from './instance-zone.js';
 
 /** Shared caption parts; compact wording belongs only to the phone working pill.
@@ -20,7 +21,7 @@ export function workingText(working, options = {}) {
 export function workingNowText(working, { t = key => key, locale } = {}) {
   if (!working?.on) return '';
   const clock = value => formatZoned(new Date(value), locale, { hour: '2-digit', minute: '2-digit' });
-  const since = value => Number.isFinite(value) ? t('chat.working.since', { time: clock(value) }) : null;
+  const since = value => Number.isFinite(instantMs(value)) ? t('chat.working.since', { time: clock(value) }) : null;
   const parts = [];
   if (working.main || !working.subagents) parts.push([
     t('chat.working.processing'), since(working.main?.since),

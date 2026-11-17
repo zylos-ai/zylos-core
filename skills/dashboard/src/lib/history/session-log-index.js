@@ -169,8 +169,12 @@ export class SessionLogIndexCache {
 }
 
 export class HistoryParser {
-  constructor({ indexCache = new SessionLogIndexCache() } = {}) {
+  constructor({ indexCache = new SessionLogIndexCache(), sessionIds = null, excludedSessionIds = new Set(), currentSessionId } = {}) {
+    this.sessionIds = sessionIds; this.excludedSessionIds = excludedSessionIds; this.currentSessionId = currentSessionId;
     this.indexCache = indexCache; this.paths = new Map(); this.loads = new Map();
+  }
+  includesSession(id) {
+    return !this.excludedSessionIds.has(id) && (this.sessionIds === null || this.sessionIds.has(id));
   }
   loadSession(id) {
     if (!this.loads.has(id)) this.loads.set(id, this._loadSession(id).finally(() => this.loads.delete(id)));

@@ -284,6 +284,8 @@ test('config and downloads require both data gates while downloading remains val
     assert.equal((await f.request('/uploads/config', { headers: { 'x-fixture-local': local } })).status, 403);
     assert.equal((await f.request(suffix, { headers: { 'x-fixture-local': local } })).status, 403);
   }
+  assert.equal((await f.request('/uploads/config', { headers: { 'x-fixture-local': 'read' } })).status, 403);
+  assert.equal((await f.request(suffix, { headers: { 'x-fixture-local': 'read' } })).status, 403);
   f.targetConfig.chat.allowRemote = false;
   assert.equal((await f.request('/uploads/config')).status, 403);
   assert.equal((await f.request(suffix)).status, 403);
@@ -438,11 +440,11 @@ test('a target upload 401 is never replayed and a lost successful reply is expli
   const f = await fixture(t);
   f.setUploadStatus(401);
   const denied = await f.upload();
-  assert.equal(denied.status, 401); assert.equal(f.uploads(), 1);
+  assert.equal(denied.status, 401, JSON.stringify(denied.body)); assert.equal(f.uploads(), 1);
   assert.equal(f.forcedRefreshes(), 0);
   f.setUploadStatus(null); f.setDropReply(true);
   const lost = await f.upload();
-  assert.equal(lost.status, 502); assert.equal(lost.body.error, 'upload_result_unknown');
+  assert.equal(lost.status, 502); assert.equal(lost.body.error.code, 'upload_result_unknown');
   assert.equal(Object.hasOwn(lost.body, 'id'), false);
   assert.equal(f.uploads(), 2);
   assert.equal(f.store.db.prepare('SELECT count(*) n FROM chat_attachments').get().n, 1);
@@ -477,7 +479,7 @@ test('expired tokens refresh once for safe config preflight and download GETs', 
   assert.equal(f.upstreamRequests.slice(beforeRetry).filter(row => row.path.endsWith('/uploads/config')).length, 2);
   const beforeDownloadRetry = f.upstreamRequests.length;
   const denied = await f.request('/attachments/' + uploaded.body.id);
-  assert.equal(denied.status, 401); await denied.arrayBuffer();
+  assert.equal(denied.status, 401, JSON.stringify(denied.body)); await denied.arrayBuffer();
   assert.equal(f.forcedRefreshes(), 4);
   assert.equal(f.upstreamRequests.slice(beforeDownloadRetry).filter(row => row.path.includes('/attachments/')).length, 2);
 });
@@ -583,15 +585,15 @@ test('download failures before headers are explicit and secret-bearing metadata 
   const f = await fixture(t);
   f.setSynthetic((req, res) => sendJson(res, 404, { error: 'fixture_missing_file' }));
   const missing = await f.request('/attachments/transport-file');
-  assert.equal(missing.status, 404); assert.equal((await missing.json()).error, 'fixture_missing_file');
+  assert.equal(missing.status, 404); assert.equal((await missing.json()).error.code, 'fixture_missing_file');
   f.setSynthetic((req, res) => {
     res.writeHead(200, { 'content-type': 'application/octet-stream', 'x-fixture': 'read_session_token' }); res.end('safe bytes');
   });
   const headerLeak = await f.request('/attachments/transport-file');
-  assert.equal(headerLeak.status, 502); assert.equal((await headerLeak.json()).error, 'secret_leak_blocked');
+  assert.equal(headerLeak.status, 502); assert.equal((await headerLeak.json()).error.code, 'secret_leak_blocked');
   f.setSynthetic((req, res) => sendJson(res, 403, { error: 'fixture-admin-a' }));
   const errorLeak = await f.request('/attachments/transport-file');
-  assert.equal(errorLeak.status, 502); assert.equal((await errorLeak.json()).error, 'secret_leak_blocked');
+  assert.equal(errorLeak.status, 502); assert.equal((await errorLeak.json()).error.code, 'secret_leak_blocked');
   const compressed = gzipSync(Buffer.from('valid gzip must never be decompressed into a successful attachment'));
   f.setSynthetic((req, res) => {
     res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-encoding': 'gzip', 'content-length': compressed.length });
@@ -599,7 +601,7 @@ test('download failures before headers are explicit and secret-bearing metadata 
   });
   const encoded = await f.request('/attachments/transport-file');
   assert.equal(encoded.status, 502);
-  assert.equal((await encoded.json()).error, 'unexpected_attachment_encoding');
+  assert.equal((await encoded.json()).error.code, 'unexpected_attachment_encoding');
 });
 
 for (const failure of ['disconnect', 'short', 'sensitive']) {
@@ -689,6 +691,6 @@ test('literal credential field words are downloadable locally but blocked by fle
     assert.equal(local.status, 200); assert.equal(await local.text(), 'ordinary prose ' + word);
     const remote = await f.request('/attachments/' + uploaded.body.id);
     if (remote.status === 200) await assert.rejects(() => remote.arrayBuffer());
-    else { assert.equal(remote.status, 502); assert.equal((await remote.json()).error, 'secret_leak_blocked'); }
+    else { assert.equal(remote.status, 502); assert.equal((await remote.json()).error.code, 'secret_leak_blocked'); }
   }
 });

@@ -105,8 +105,8 @@ test('draft create, open and rename use the registered record and reject caller 
   assert.equal(f.calls(), 1);
   const conflict = await f.request(route + '/send', { body: { content: 'conflicting' } });
   assert.equal(conflict.status, 409);
-  assert.deepEqual(conflict.body, { error: 'chat_conversation_started', conversationId: 'g:6F776E65643A6C6F63616C', preserveInput: true });
-  assert.equal((await f.request(route, { method: 'DELETE' })).status, 405);
+  assert.deepEqual(conflict.body, { ok: false, error: { code: 'chat_conversation_started', message: 'chat_conversation_started' }, conversationId: 'g:6F776E65643A6C6F63616C', preserveInput: true });
+  assert.equal((await f.request(route, { method: 'DELETE' })).status, 404);
   assert.equal((await f.request(route + '?channel=telegram', { method: 'GET' })).status, 400);
   assert.equal((await f.request('/api/chat/conversations/%ZZ', { method: 'GET' })).status, 400);
 });

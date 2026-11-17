@@ -252,7 +252,7 @@ test('single-file bounded uploads create no head, reject malformed requests and 
   assert.equal((await f.request('/uploads', { method: 'POST', body: extra })).status, 201);
   assert.equal((await f.request('/uploads', { method: 'POST', body: f.form(Buffer.alloc(1048577)) })).status, 413);
   assert.equal((await f.request('/uploads/config?bad=1')).status, 400);
-  assert.equal((await f.request('/uploads/config', { method: 'POST' })).status, 405);
+  assert.equal((await f.request('/uploads/config', { method: 'POST' })).status, 404);
 });
 
 test('multipart accepts eight bounded text fields and rejects excess counts or UTF-8 field and file names', async t => {
@@ -327,7 +327,7 @@ test('chunked multipart counts all bytes without Content-Length and enforces the
   const overflowing = Readable.from([body.subarray(0, body.length - 2), Buffer.alloc(1048576 + 65536)]);
   const response = await f.request('/uploads', { method: 'POST', body: overflowing, duplex: 'half', headers: { 'content-type': contentType } });
   assert.equal(response.status, 413);
-  assert.equal((await response.json()).error, 'chat_upload_too_large');
+  assert.equal((await response.json()).error.code, 'chat_upload_too_large');
   assert.equal(f.lastRequestHeaders()['content-length'], undefined);
   assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM chat_attachments').get().n, 1);
 });

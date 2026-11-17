@@ -263,7 +263,7 @@ test('failed lock status keeps count and failed count keeps lock status', async 
 
 // Permission integration uses only in-memory sessions, no DB/network/children.
 // Run for memory route or proxy authorization changes; skip UI-only changes.
-test('memory routes require admin locally and through repeated proxy slashes', async t => {
+test('memory backlog reads accept read scope while file writes require admin', async t => {
   const token = `zylos_st_${'e'.repeat(64)}`;
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
   let scope = 'read';
@@ -272,15 +272,17 @@ test('memory routes require admin locally and through repeated proxy slashes', a
     cleanupSessions() {}, cleanupExpiredApiSessions() {},
   });
   t.after(() => clearInterval(gate._cleanupTimer));
-  for (const [method, route] of [['GET', '/api/workbench/memory/backlog'], ['PUT', '/api/memory/file']]) {
+  for (const [method, route] of [['GET', '/api/memory/backlog'], ['PUT', '/api/memory/file']]) {
     for (const pathname of [route, `/fleet/Remote${route}`, `/fleet/Remote/${route}`]) {
       const url = new URL('http://hub.test'); url.pathname = pathname;
       const request = () => ({ method, url: pathname, headers: { authorization: `Bearer ${token}` } });
       const response = { status: null, body: null, setHeader() {}, writeHead(status) { this.status = status; }, end(body) { this.body = JSON.parse(body); } };
       scope = 'read';
-      assert.equal(await gate.handle(request(), response, url), true, pathname);
-      assert.equal(response.status, 403, pathname);
-      assert.deepEqual(response.body, { error: 'insufficient_scope', required: 'admin' });
+      assert.equal(await gate.handle(request(), response, url), method === 'PUT', pathname);
+      if (method === 'PUT') {
+        assert.equal(response.status, 403, pathname);
+        assert.equal(response.body.error.code, 'insufficient_scope');
+      }
       scope = 'admin';
       assert.equal(await gate.handle(request(), response, url), false, pathname);
     }
@@ -292,20 +294,19 @@ test('memory routes require admin locally and through repeated proxy slashes', a
 // HTTP integration covers route/auth dispatch, private SQLite display names and
 // the shared backlog cache. Run for route/metadata changes; skip UI-only work.
 // setupMemoryHttp owns isolated resources and registers bounded teardown.
-test('memory backlog HTTP route shares the detail cache and enforces administrator access', { timeout: 15000 }, async t => {
+test('memory backlog HTTP route shares the detail cache and accepts read scope', { timeout: 15000 }, async t => {
   const { root, engine, request, calls, versionCalls, snapshotReads } = await setupMemoryHttp(t);
-  const denied = await request('/api/workbench/memory/backlog');
-  assert.equal(denied.status, 403);
-  assert.deepEqual(await denied.json(), { error: 'insufficient_scope', required: 'admin' });
-  assert.equal(calls.length, 0);
+  const readable = await request('/api/memory/backlog');
+  assert.equal(readable.status, 200);
+  assert.equal((await readable.json()).groups[0].count, 7);
   assert.deepEqual(versionCalls, ['zylos', 'claude', 'codex'].map(file => ({ file, args: ['--version'] })),
-    'startup probes use the injected async transport; denied requests add no version calls');
+    'startup probes use the injected async transport; API reads add no version calls');
   const detail = await request('/api/groups/origin/backlog', 'admin');
   assert.equal(detail.status, 200);
   assert.equal((await detail.json()).count, 7);
   const before = calls.length;
   const snapshotBefore = snapshotReads();
-  const response = await request('/api/workbench/memory/backlog', 'admin');
+  const response = await request('/api/memory/backlog', 'admin');
   assert.equal(response.status, 200);
   const value = await response.json();
   assert.equal(value.groups.length, 1);
@@ -313,11 +314,11 @@ test('memory backlog HTTP route shares the detail cache and enforces administrat
   assert.equal(value.groups[0].count, 7);
   assert.equal(value.groups[0].syncing, true, 'Origin\'s own row reads its own sync lock');
   assert.equal(value.groups[0].threshold, 15);
-  assert.deepEqual(value.originSync, { count: 60, pendingSummaries: 2, firstAt: '2026-10-01 11:00:00',
+  assert.deepEqual(value.originSync, { count: 60, pendingSummaries: 2, firstAt: '2026-10-01T11:00:00.000Z',
     aged: true, syncing: false, threshold: 50 });
   assert.equal(value.budgets.limits['identity.md'], BUDGETS['identity.md']);
-  assert.deepEqual(calls.slice(before).map(call => call.args[1]), ['origin-sync', 'status'],
-    'memory and group detail share one group backlog cache; only the cross-group row reads again');
+  assert.deepEqual(calls.slice(before).map(call => call.args[1]), [],
+    'memory and group detail share the group and cross-group backlog caches');
   assert.equal(snapshotReads(), snapshotBefore + 1, 'memory asks the snapshot service to refresh active groups');
   assert.equal(engine.store.writeGroupDisplayName('telegram:dm-1001', 'Product notes', 'human'), true);
   const original = await new MemoryBrowser({ zylosDir: root }).tree();

@@ -22,6 +22,7 @@ async function startPage(sandbox) {
       const prefix = full.pathname.startsWith('/fleet/reader') ? '/fleet/reader' : '';
       const route = full.pathname.slice(prefix.length) || '/';
       const url = new URL(route + full.search, full.origin);
+      if (route === '/api/settings/chat') { sendJson(res, 200, { chat_allow_remote: true }); return; }
       if (route === '/api/chat/conversations') {
         const items = url.searchParams.get('tab') === 'external' ? [origin, external] : [active, draft].filter(item => !state.removed.has(item.id));
         // Deliberately true for a Fleet response too: the app's local-view guard must still hide deletion.

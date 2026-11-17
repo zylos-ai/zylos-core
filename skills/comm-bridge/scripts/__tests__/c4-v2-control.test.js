@@ -253,3 +253,23 @@ test('listRunningControlsWithoutDeadline is exposed through the public c4-db fac
   assert.equal(typeof facade.listRunningControlsWithoutDeadline, 'function');
   assert.deepEqual(facade.listRunningControlsWithoutDeadline({ machine: true }), []);
 });
+
+test('latestSessionSwitchAt reports the newest unfinished /exit or /clear for its target only', t => {
+  const { store: s, db } = fixture(t, single);
+  assert.equal(s.latestSessionSwitchAt({ machine: true }), null);
+  const setCreated = (id, at) => db.prepare('UPDATE control_queue SET created_at=? WHERE id=?').run(at, id);
+  const exit = add(s, null, '/exit'); setCreated(exit.id, NOW - 30);
+  const clear = add(s, null, '/clear'); setCreated(clear.id, NOW - 10);
+  setCreated(add(s, null, 'continue').id, NOW);
+  setCreated(add(s, null, '/exit now').id, NOW);
+  setCreated(add(s, 'a', '/clear').id, NOW);
+  assert.equal(s.latestSessionSwitchAt({ machine: true }), NOW - 10);
+  assert.equal(s.latestSessionSwitchAt({ sessionGroup: 'a' }), NOW);
+  s.claimControl(clear.id);
+  assert.equal(s.latestSessionSwitchAt({ machine: true }), NOW - 10, 'a delivered but unacknowledged switch still counts');
+  db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(clear.id);
+  assert.equal(s.latestSessionSwitchAt({ machine: true }), NOW - 30);
+  db.prepare("UPDATE control_queue SET status='timeout' WHERE id=?").run(exit.id);
+  assert.equal(s.latestSessionSwitchAt({ machine: true }), null);
+  assert.throws(() => s.latestSessionSwitchAt({}), { code: 'INVALID_ARGS' });
+});

@@ -157,11 +157,11 @@ test('schedule read failure paths: missing file, non-SQLite file, bad cron and m
   useZylosDir(t, missing.zylosDir);
   const empty = createScheduleRead({ zylosDir: missing.zylosDir, now: () => NOW_MS,
     scheduleTz: createScheduleTz({ zylosDir: missing.zylosDir, tzModule: `${TZ_URL}?case=${++importCase}` }) });
-  assert.deepEqual(await scheduleReadResponse(empty, '/api/workbench/schedule', new URLSearchParams()), { available: false, tasks: [] });
+  assert.deepEqual(await scheduleReadResponse(empty, '/api/schedules', new URLSearchParams()), { available: false, tasks: [] });
   fs.writeFileSync(missing.dbPath, 'not a database file');
-  await assert.rejects(scheduleReadResponse(empty, '/api/workbench/schedule', new URLSearchParams()),
+  await assert.rejects(scheduleReadResponse(empty, '/api/schedules', new URLSearchParams()),
     error => error.statusCode === 503 && error.code === 'scheduler_unreadable');
-  await assert.rejects(scheduleReadResponse(empty, '/api/workbench/schedule/task-1/history', new URLSearchParams()),
+  await assert.rejects(scheduleReadResponse(empty, '/api/schedules/task-1/history', new URLSearchParams()),
     error => error.statusCode === 503 && error.code === 'scheduler_unreadable');
 
   const f = fixture(t);
@@ -251,7 +251,7 @@ test('execution history pages by time and id without repeats or gaps', async t =
   const ids = [];
   for (let i = 0; i < 65; i++) ids.push(f.run(task.id, { executed_at: NOW - DAY + Math.floor(i / 2) * 60, status: 'success' }));
   const reader = f.reader();
-  const page = query => scheduleReadResponse(reader, `/api/workbench/schedule/${task.id}/history`, new URLSearchParams(query));
+  const page = query => scheduleReadResponse(reader, `/api/schedules/${task.id}/history`, new URLSearchParams(query));
   const first = await page({ limit: '30' });
   const second = await page({ limit: '30', before: String(first.next.before), beforeId: String(first.next.beforeId) });
   // A run recorded between page reads must not shift the next page.
@@ -418,7 +418,7 @@ test('completed tasks page stably while counts, timeline and week totals remain 
     f.run(task.id, { executed_at: NOW - HOUR, completed_at: NOW - HOUR + 1, status: i % 2 ? 'success' : 'failed' });
   }
   const reader = f.reader();
-  const page = query => scheduleReadResponse(reader, '/api/workbench/schedule', new URLSearchParams(query));
+  const page = query => scheduleReadResponse(reader, '/api/schedules', new URLSearchParams(query));
   const initial = await page({});
   assert.equal(initial.tasks.length, 19);
   assert.equal(Object.hasOwn(initial, 'timelineTasks'), false);
@@ -462,7 +462,7 @@ test('completed tasks page stably while counts, timeline and week totals remain 
   assert.equal(searched.tasks.length, 30);
   assert.equal(searched.counts.completed, 102);
   assert.equal((await page({ status: 'completed', q: 'äword' })).tasks.length, 30);
-  const detail = await scheduleReadResponse(reader, `/api/workbench/schedule/${completed[0].id}`, new URLSearchParams());
+  const detail = await scheduleReadResponse(reader, `/api/schedules/${completed[0].id}`, new URLSearchParams());
   assert.equal(detail.task.prompt, completed[0].prompt);
   assert.equal(detail.task.promptTruncated, false);
   const enabled = await page({ status: 'enabled' });

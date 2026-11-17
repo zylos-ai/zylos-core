@@ -12,7 +12,10 @@ for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
 fs.appendFileSync(path.join(root, 'calls.jsonl'), JSON.stringify({ command, args,
   socket: command === 'tmux' ? process.env.DOCTOR_TEST_TMUX_SOCKET : undefined }) + '\n');
 
-if (command === 'which') {
+if (command === 'ps') {
+  assert.equal(args[0], '-p');
+  assert.match(args[1], /^\d+$/);
+} else if (command === 'which') {
   const binary = path.join(process.env.PATH, args[0]);
   if (!fs.existsSync(binary)) process.exit(1);
   console.log(binary);

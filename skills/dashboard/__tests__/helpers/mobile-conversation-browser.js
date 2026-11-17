@@ -242,7 +242,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
         fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8').replaceAll('__BASE_PATH__', prefix)
           .replaceAll('__ASSET_ROOT__', prefix + '/_assets').replaceAll('__REMOTE_ACCESS__', 'admin') });
       const target = fixture.base + url.pathname.slice(prefix.length) + url.search;
-      if (url.pathname === prefix + '/api/instance') {
+      if (url.pathname === prefix + '/api/settings/chat') {
         remoteState.reads++;
         const response = await route.fetch({ url: target });
         return route.fulfill({ json: { ...await response.json(), chat_allow_remote: remoteState.allow } });
@@ -289,7 +289,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
       await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
       await page.locator('[data-mobile-tab="chat"]').waitFor({ state: 'hidden' });
       await checkColumns(4);
-      const polledState = page.waitForResponse(response => new URL(response.url()).pathname === '/fleet/phone/api/instance');
+      const polledState = page.waitForResponse(response => new URL(response.url()).pathname === '/fleet/phone/api/settings/chat');
       const readsBeforePoll = f.remoteState.reads;
       await page.clock.runFor(30_000);
       await polledState;

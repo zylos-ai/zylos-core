@@ -17,7 +17,7 @@ export async function handleChatAnswers(req, res, url, { auth, config, answers, 
   const preflight = read ? requireChatAccess(req, auth, config) : requireChatWritePreflight(req, auth, config);
   if (preflight) { respondDenied(res, preflight); return true; }
   if (req.method !== (read ? 'GET' : 'POST')) {
-    sendJson(res, 405, { error: 'method_not_allowed' }); return true;
+    sendJson(res, 404, { error: 'not_found' }); return true;
   }
   try {
     let id;

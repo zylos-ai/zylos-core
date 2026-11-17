@@ -7,13 +7,13 @@ function view({ remote = true, state = {} } = {}) {
   const f = { remote, state, chatTab: { hidden: false }, active: 'overview', changes: 0, deferred: [] };
   f.access = createRemoteAccess({
     viewingRemote: () => f.remote,
-    dashboardState: () => f.state,
-    chatTab: () => f.chatTab,
+        chatTab: () => f.chatTab,
     activeTab: () => f.active,
     openTab: name => { f.active = name; },
     onChange: () => { f.changes += 1; },
     defer: callback => f.deferred.push(callback)
   });
+  f.access.noteState(state);
   f.flush = () => { for (const callback of f.deferred.splice(0)) callback(); };
   return f;
 }
@@ -29,7 +29,7 @@ test('the local machine never depends on the remote access switch', () => {
   assert.equal(f.chatTab.hidden, false);
 });
 
-test('a remote machine whose state says the switch is off hides conversations and the observer', () => {
+test('a remote machine whose settings say the switch is off hides conversations and the observer', () => {
   const f = view({ state: { chat_allow_remote: false } });
   assert.equal(f.access.closed(), true);
   assert.equal(f.access.blocks('chat'), true);
@@ -46,7 +46,7 @@ test('a remote machine whose state says the switch is off hides conversations an
   assert.equal(f.active, 'memory', 'other tabs stay open');
 });
 
-test('an older machine without the field shows both tabs and lets its backend decide', () => {
+test('an unknown setting leaves request refusal detection active', () => {
   const f = view({ state: {} });
   assert.equal(f.access.closed(), false);
   f.chatTab.hidden = true;
@@ -73,7 +73,7 @@ test('a refusal met mid-browse hides the tabs once the current redraw is over', 
   assert.equal(f.active, 'overview');
 });
 
-test('a later state with the switch on, or switching machines, forgets a refusal', () => {
+test('later settings with the switch on, or switching machines, forgets a refusal', () => {
   const f = view({ state: {} });
   f.access.refuse(); f.flush();
   assert.equal(f.access.closed(), true);

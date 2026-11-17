@@ -28,7 +28,7 @@ async function fixture(t, { initialContent = content('First'), initialTz } = {})
   document.defaultView = { Chart, innerWidth: 390, addEventListener() {}, removeEventListener() {}, requestAnimationFrame: () => 1, cancelAnimationFrame() {} };
   const page = mountConversationPage({ root, document, fetch: async p => {
     let data;
-    if (blocked) return { ok: false, status: 403, json: async () => ({ error: 'remote_chat_disabled' }) };
+    if (blocked) return { ok: false, status: 403, json: async () => ({ ok: false, error: { code: 'remote_chat_disabled', message: 'remote_chat_disabled' } }) };
     if (p.includes('/messages?')) data = { items: [{ id: 12, direction: 'out', status: 'delivered', content: value }], nextCursor: null, afterCursor: 'after', ...(tz === undefined ? {} : { tz }) };
     else if (p.includes('/questions?') || p.includes('/status?')) data = { items: [], nextCursor: null };
     else if (p.includes('/api/instance')) data = { session_mode: { sessionMode: 'multi' } };

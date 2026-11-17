@@ -31,7 +31,7 @@ function fixture(t, remoteScope) {
         for await (const chunk of options.body) received += chunk.toString();
       } else received = options.body?.toString() || '';
       forwarded.push({ url, method: options.method || 'GET', body: received, headers: options.headers });
-      const body = remoteScope !== 'admin' ? { error: 'insufficient_scope', required: 'admin' }
+      const body = remoteScope !== 'admin' ? { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' }
         : url.endsWith('/uploads/config') ? { maxUploadBytes: 1024 * 1024 } : { ok: true, data: { accepted: true } };
       return new Response(JSON.stringify(body), { status: remoteScope === 'admin' ? 200 : 403,
         headers: { 'content-type': 'application/json', 'x-remote-result': 'preserved' } });
@@ -65,7 +65,7 @@ for (const route of workbenchWriteRoutes) {
     const adminRemote = fixture(t, 'admin');
     let response = await adminRemote.request(route, 'read');
     assert.equal(response.status, 403);
-    assert.deepEqual(JSON.parse(response.body), { error: 'insufficient_scope', required: 'admin' });
+    assert.deepEqual(JSON.parse(response.body), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
     assert.equal(adminRemote.forwarded.length, 0);
     response = await adminRemote.request(route);
     assert.equal(response.status, 200);
@@ -86,7 +86,7 @@ for (const route of workbenchWriteRoutes) {
     response = await readRemote.request(route);
     assert.equal(response.status, 403);
     assert.equal(readRemote.forwarded.length, 1);
-    assert.deepEqual(JSON.parse(response.body), { error: 'insufficient_scope', required: 'admin' });
+    assert.deepEqual(JSON.parse(response.body), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
     assert.equal(readRemote.forwarded[0].headers.authorization, 'Bearer remote-read-fixture');
   });
 }
@@ -99,7 +99,7 @@ test('workbench proxy rejects writes outside the registered table before upstrea
   ]) {
     const response = await f.request(route);
     assert.equal(response.status, 403);
-    assert.deepEqual(JSON.parse(response.body), { error: 'read_only_proxy' });
+    assert.deepEqual(JSON.parse(response.body), { ok: false, error: { code: 'read_only_proxy', message: 'read_only_proxy' } });
     assert.equal(f.forwarded.length, 0);
   }
 });
@@ -117,7 +117,7 @@ test('object proxy writes reject missing or cross-site browser origins before re
     for (const origin of [null,'https://another-site.invalid']) {
       const response = await f.request(route, 'admin', origin);
       assert.equal(response.status,403);
-      assert.deepEqual(JSON.parse(response.body),{error:'same_origin_required'});
+      assert.deepEqual(JSON.parse(response.body),{ ok: false, error: { code: 'same_origin_required', message: 'same_origin_required' } });
       assert.equal(f.forwarded.length,0);
       assert.equal(f.tokenReads(),0);
     }

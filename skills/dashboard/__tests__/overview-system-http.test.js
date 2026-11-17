@@ -96,8 +96,8 @@ test('instance resources carry the server system collector sample', { timeout: 2
   clock += 2100;
   const snapshot = await get('/api/instance');
   assert.ok(snapshot.resources, 'the instance carries a resource sample');
-  assert.equal(typeof snapshot.resources.sampledAt, 'number');
-  assert.equal(snapshot.resources.sampledAt, sample.collectedAt, 'the sample is the server collector\'s latest');
+  assert.equal(typeof snapshot.resources.sampledAt, 'string');
+  assert.equal(snapshot.resources.sampledAt, new Date(sample.collectedAt).toISOString(), 'the sample is the server collector\'s latest');
   assert.equal(snapshot.resources.mem_total_bytes, sample.mem_total_bytes ?? null);
   assert.equal(Object.hasOwn(snapshot, 'system'), false, 'resources are the sole public system sample');
 });

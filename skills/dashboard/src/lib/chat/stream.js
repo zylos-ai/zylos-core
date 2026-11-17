@@ -5,7 +5,7 @@ import { sendJson } from '../http.js';
 /** Ordinary streams keep their existing behavior; chat is an explicit opt-in. */
 export function handleChatStream(req, res, url, { auth, config, hub, observer }) {
   if (url.pathname !== '/api/stream' || !url.searchParams.has('chat')) return false;
-  if (req.method !== 'GET') { sendJson(res, 405, { error: 'method_not_allowed' }); return true; }
+  if (req.method !== 'GET') { sendJson(res, 404, { error: 'not_found' }); return true; }
   const validate = () => !requireChatAccess(req, auth, config, { touch: false });
   const denied = requireChatAccess(req, auth, config);
   if (denied) { sendJson(res, denied.status, denied); return true; }

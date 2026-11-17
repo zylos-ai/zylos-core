@@ -73,7 +73,7 @@ function assertResponse(bytes, status, reason, error) {
   const length = bytes.slice(0, boundary).match(/content-length: (\d+)/i);
   assert.ok(length);
   assert.equal(Buffer.byteLength(body), Number(length[1]));
-  assert.deepEqual(JSON.parse(body), { error });
+  assert.deepEqual(JSON.parse(body), { ok: false, error: { code: error, message: error } });
   assert.doesNotMatch(bytes, /ERR_INVALID_URL|TypeError|input|stack/);
 }
 
@@ -104,7 +104,7 @@ test('Dashboard entry rejects malformed Host on HTTP and both upgrade routes wit
       }
       const response = await httpRequest(port, host);
       assert.equal(response.status, 400);
-      assert.deepEqual(JSON.parse(response.body), { error: 'invalid_request' });
+      assert.deepEqual(JSON.parse(response.body), { ok: false, error: { code: 'invalid_request', message: 'invalid_request' } });
       const health = await fetch(`http://127.0.0.1:${port}/api/health`);
       assert.equal(health.status, 200);
       const payload = await health.json();

@@ -53,7 +53,7 @@ function errorStatus(error) {
     case 'auth_required': return 401;
     case 'admin_required':
     case 'insufficient_scope':
-    case 'origin_required': return 403;
+    case 'same_origin_required': return 403;
     case 'lease_not_found':
     case 'lease_expired':
     case 'lease_mismatch':
@@ -122,15 +122,15 @@ export class ObserverService {
     return this._startup;
   }
 
-  _authContext(req, { requireOrigin = false } = {}) {
+  _authContext(req, { requireOrigin = false, requireAdmin = true } = {}) {
     if (!this.authGate.enabled) throw new ObserverHttpError(401, 'auth_required');
     const context = req._authContext || this.authGate.resolveAuthContext(req);
     if (!context) throw new ObserverHttpError(401, 'unauthorized');
     // The switch is checked before the key scope, in the same order as conversation access.
     if (context.kind === 'api' && !this.remoteAllowed()) throw new ObserverHttpError(403, 'remote_chat_disabled');
-    if (context.scope !== 'admin') throw new ObserverHttpError(403, 'insufficient_scope');
+    if (requireAdmin && context.scope !== 'admin') throw new ObserverHttpError(403, 'insufficient_scope');
     if (requireOrigin && context.kind === 'cookie' && !isSameOriginRequest(req)) {
-      throw new ObserverHttpError(403, 'origin_required');
+      throw new ObserverHttpError(403, 'same_origin_required');
     }
     return context;
   }
@@ -219,7 +219,7 @@ export class ObserverService {
     if (!pathname.startsWith('/api/observer') && !pathname.startsWith('/observer/')) return false;
     try {
       if (pathname === '/observer/frame') {
-        if (req.method !== 'GET' && req.method !== 'HEAD') throw new ObserverHttpError(405, 'method_not_allowed');
+        if (req.method !== 'GET' && req.method !== 'HEAD') throw new ObserverHttpError(404, 'not_found');
         await this._ready();
         const context = this._authContext(req);
         const leaseId = firstHeader(req.headers['x-observer-lease']);
@@ -238,7 +238,7 @@ export class ObserverService {
         return true;
       }
 
-      const context = this._authContext(req, { requireOrigin: req.method !== 'GET' && req.method !== 'HEAD' });
+      const context = this._authContext(req, { requireOrigin: req.method !== 'GET' && req.method !== 'HEAD', requireAdmin: !(pathname === '/api/observer/status' && ['GET', 'HEAD'].includes(req.method)) });
       if (pathname.startsWith('/api/observer/history/')) {
         if (!this.historyService) throw new ObserverHttpError(404, 'not_found');
         // File history must never start/reconcile containment or acquire a lease.
@@ -373,7 +373,7 @@ export class ObserverService {
       if (context.kind === 'cookie' && !isSameOriginRequest(req) &&
           !(protocol?.ticket && !Object.hasOwn(req.headers, 'sec-fetch-site') &&
             this.manager.consumeTicket(protocol.ticket, protocol.leaseId, context))) {
-        throw new ObserverHttpError(403, 'origin_required');
+        throw new ObserverHttpError(403, 'same_origin_required');
       }
       if (!protocol) throw new ObserverHttpError(404, 'invalid_protocol');
       const { leaseId } = protocol;

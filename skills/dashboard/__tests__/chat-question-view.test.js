@@ -445,7 +445,7 @@ test('a mounted paused question preserves a definite invalid-data rejection afte
   const document = createDocument(), root = document.createElement('div');
   let posts = 0, reads = 0;
   const page = mountConversationPage({ document, root, t, fetch: async (path, options = {}) => {
-    if (path.endsWith('/answers')) { posts++; return { ok: false, status: 409, json: async () => ({ error: 'chat_question_unavailable' }) }; }
+    if (path.endsWith('/answers')) { posts++; return { ok: false, status: 409, json: async () => ({ ok: false, error: { code: 'chat_question_unavailable', message: 'chat_question_unavailable' } }) }; }
     const data = path.includes('/questions?') ? (reads++, { items: [base.question], nextCursor: null })
       : path.includes('/messages?') ? { items: [{ id: 12, direction: 'out', status: 'delivered', content: CONTENT_PREFIX + JSON.stringify(base.envelope) }], nextCursor: null, afterCursor: 'after' }
         : path.includes('/api/instance') ? { session_mode: { sessionMode: 'multi' } }
@@ -486,7 +486,7 @@ async function mountedQuestions(testContext, { mode = 'multi', saved = false, re
     if (path.endsWith('/answers')) { posts.push(JSON.parse(options.body)); throw new Error('response lost'); }
     if (path.includes('/questions?')) {
       questionReads++;
-      if (queryFailed) return { ok: false, status: 502, json: async () => ({ error: 'chat_question_unavailable' }) };
+      if (queryFailed) return { ok: false, status: 502, json: async () => ({ ok: false, error: { code: 'chat_question_unavailable', message: 'chat_question_unavailable' } }) };
       data = { items: [{ ...base.question, ...(saved ? { status: 'answered', answerId: action.id, action,
         delivery: { stored: false, retryAllowed } } : {}) }], nextCursor: null };
     } else if (path.includes('/messages?')) data = { items: [{ id: 12, direction: 'out', status: 'delivered', content: CONTENT_PREFIX + JSON.stringify(base.envelope) }, ...(queryFailed ? [{ id: 13, direction: 'out', status: 'delivered', content: 'A newly read message' }] : [])], nextCursor: null, afterCursor: 'after' };

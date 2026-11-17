@@ -75,19 +75,13 @@ interval after that latest activity.
 
 Every TTL reclaim, Origin included, is preceded by preparation controls bound
 to the current run, each require-idle, with the ack suffix and a 5-minute ack
-deadline. The first is always the pre-reclaim check. During this check, do not
-send messages to anyone. Only work this session started that is still running
-and whose result it needs (background command, Monitor, subagent or workflow)
-can hold reclaim. A Memory Sync is not such work: the supervisor already waits
-for it before reclaiming, so do not defer for it. Apply for a delay before
-acknowledging the control:
-
-```bash
-node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js defer-reclaim --reason "watching CI of my PR"
-```
-
-Confirm `ok:true`, then acknowledge. The command derives the session group and
-run ID from the current environment and uses the existing supervisor socket.
+deadline. The first is always the pre-reclaim check: a one-line control that
+names the idle reclaim check in
+[Reclaim and restart checks](references/session-checks.md), which holds what
+the session does during every reclaim and restart check. Only that idle check
+offers a deferral (`supervisor-request.js defer-reclaim`). The command derives
+the session group and run ID from the current environment and uses the
+existing supervisor socket.
 It rejects missing preparation, a different run, an already-started reclaim,
 a capacity check past its response deadline, or an upgrade/configuration restart.
 An accepted request cancels this reclaim or eviction preparation and resets the
@@ -96,14 +90,8 @@ must become idle for the configured eviction minimum before it can be selected
 again. Consecutive request counts and reasons live only in memory; a supervisor
 restart loses them.
 
-Otherwise write the handoff from current records, leaving completed items out.
-Waiting for people, reviews or decisions needs only that handoff: replies wake
-the group. Create a wake-up only for a step of this session's own ongoing task
-waiting on a system that will not message this group (such as its PR's CI).
-First use scheduler `list --json` to reuse a pending task covering the same
-check. Otherwise use scheduler `add` without a reply option and confirm
-`ok:true`; it saves the session's own group (Origin saves none and runs in
-Origin). Do not create tasks for other waits.
+A wake-up the check creates with scheduler `add` saves the session's own group
+(Origin saves none and runs in Origin).
 The PRE_RECLAIM Sync control follows when the group has unsummarized
 conversations, then for Origin the Origin Sync control when Origin has a Sync
 backlog, so Sync records the handoff and task the check left. Reclaim begins
@@ -130,8 +118,79 @@ After deferral resets the idle clock, the session returns at the next idle check
 result, record it in the handoff or arrange for the task itself to send a
 completion message back.
 
-In multi-session mode, an actually pasted conversation arms no-response
-observation from its paste time. Any actual AI work after that paste disarms
+Subagent events with `agent_id` are tracked separately for the current run and
+session as `activeSubagents` and `lastSubagentActivityAt`. A started, unended
+child blocks TTL and capacity eviction while its last event is less than one
+hot TTL old; at the TTL boundary it stops blocking. Child events also advance
+the reclaim activity clock, including the eviction minimum idle interval.
+They never change the main agent's `state`, `idleSince`, `tools`, or
+`lastActivityAt`, so require-idle delivery still uses only main-agent state.
+Child hook `transcript_path` is not treated as proof of an independent child
+transcript; no additional child transcript scanner changes reclaim activity.
+During TTL preparation, child activity is masked just like the preparing
+session's own activity: completed preparation is retained until children stop
+being active and the main agent is idle, without further preparation controls.
+Its cutoff remains available through the fence's final child-activity recheck
+and is cleared when reclaim completes; ordinary recent child activity still
+resets eligibility even if the child stops between observations.
+Other reclaim reasons are unchanged. Codex facts use the same reader when
+supplied, but current Codex hook subscriptions lack SubagentStart/Stop, so
+complete native child lifecycle coverage is not available from that source.
+
+Capacity eviction skips even idle sessions whose latest activity is less than
+`session_evict_min_idle_seconds` ago. At the boundary they become eligible for
+the existing LRU selection; if all are too recent, new groups wait in the queue.
+This does not change the three-second busy/idle observation threshold.
+
+Capacity eviction (a waiting group needs a slot) and memory-pressure reclaim
+first send the same pre-reclaim check to the selected group: bound to the
+current run, require-idle, with the ack suffix, but with a 60-second ack
+deadline and no Sync control. No fence is written while that check is pending
+or running. Once it is terminal, the group is evicted when the same run is
+still idle; when the deadline passes first, eviction continues without waiting
+for the answer. A new C4 message, a replaced run, or session or child activity
+after the deadline abandons that group's eviction, and candidates are selected
+again by the usual rules; the check's own activity up to its deadline is
+ignored. Each selected group gets one check, and while it waits it counts
+toward the slots being freed, so no further group is asked meanwhile. A
+delivered but unanswered check holds the fence as in-flight work until C4
+expires it at the same deadline.
+
+An upgrade restart (`restart_all`) sends each running session listed in the
+request, Origin included, its own check control before that session's fence:
+the [upgrade restart check](references/session-checks.md), opening with the upgrade as the reason, bound to the
+current run, require-idle, with the ack suffix and a 60-second ack deadline.
+The check names any background work that will be interrupted so the next
+session can rerun or check it; it offers no deferral. The restart begins once
+the check is terminal or the deadline passes. New
+activity does not cancel it, since the upgrade must restart every listed run.
+Each run is asked once, including when a busy session cancels and the restart
+begins again, and sessions do not wait for each other's answers. A run that
+cannot be bound as a target gets no check, and missing reclaim dependencies
+stop the restart before any check is sent.
+
+In steady single-session mode an upgrade restart (`zylos upgrade`,
+`upgrade-claude`, `restart-claude`) has no Supervisor step: the producer queues
+the single-session upgrade restart check, opening with a single-session reason, and then `/exit`. Both
+are priority 1 and require-idle; the check has the ack suffix and a 60-second
+ack deadline. The dispatcher delivers the check first and `/exit` only once the
+session is idle after the check's turn, or after the check expires unanswered
+or undelivered at its deadline. Queued controls go before new messages, so
+activity during the wait neither overtakes nor removes `/exit`. Each restart
+request queues one check, and the producer returns as soon as both are queued.
+
+A launch configuration change still sends a single control with its 5-minute
+ack deadline and the `ready_for_config_reclaim` flow. It names the
+configuration restart check, with the configuration change as the reason. Background work is recorded as interrupted, without deferral, before
+the readiness submission.
+
+## No-response Recovery
+
+Applies in both multi-session and single-session mode.
+
+In both session modes, an actually pasted conversation arms no-response
+observation from its paste time. Single-session mode includes an instance
+without a configured `session_mode`. Any actual AI work after that paste disarms
 this observation permanently; it does not reset a silence timer. This applies
 even when the work belongs to an older turn and the new message remains queued.
 Claude and Codex use the same rule. There is no dequeue, processed-input,
@@ -159,8 +218,8 @@ A newer paste retains the unanswered silence anchor, retry cooldown and active
 recovery deadline; it can invalidate an in-flight pair's remaining enqueue
 without restarting the 15-minute wait. Failed nudges retry after 60 seconds;
 blocked admission emits no attempted-nudge event. Superseded and uncertain
-attempts are logged. Leaving multi-session mode clears active recovery;
-returning cannot stop the scene on that stale deadline. A changed run or
+attempts are logged. A session mode change clears active recovery; the new
+mode cannot stop the scene on that stale deadline. A changed run or
 session cannot inherit a stale recovery action.
 
 Health notification remains immediate, before lifecycle delivery, with the
@@ -169,7 +228,22 @@ current-session timestamp: an older paste remains tracked for the five-second
 screen check but does not arm no-response recovery. Session changes do not
 silently discard delivery or its screen check. Background tasks alone never
 arm detection; a new unanswered paste during background waiting does.
-Single-session no-response behavior is unchanged.
+
+Single-session mode uses the same rule, thresholds and actual-AI-work
+definition, with these additions:
+
+- **Maintenance holds.** While a mode transition is open, a manual restart is
+  pending, a `*` or `origin` drain fence exists, the global Memory Sync marker
+  is held, or a `/exit` or `/clear` control (rotation, runtime upgrade or
+  restart) queued less than 15 minutes ago is unfinished, no nudge or stop is
+  sent and active recovery is cleared. Silence is measured again from the end
+  of the hold. Each enqueue and the stop recheck these holds. An unreadable
+  hold source holds recovery and is logged once.
+- **Health recovery ownership.** Before an episode starts, runtime health other
+  than `ok` or a recovery probe in flight holds observation the same way.
+  Once an episode has started, it owns the run until actual AI work or its
+  stop: recovery probes skip that run, and the unfenced single-session auth
+  stop waits. A new run starts without recovery state.
 
 Once actual AI work disarms observation, a later stall is outside this rule.
 The existing tool watchdog covers only enabled Claude WebFetch/WebSearch:
@@ -213,73 +287,6 @@ reasons (`no_response_nudge`, `no_response_restart`, `tool_timeout_nudge`,
 Enqueue success does not prove runtime delivery; failure does not prove that
 no partial write occurred. Existing health-probe and non-timeout stop policies
 retain their prior scope.
-
-Subagent events with `agent_id` are tracked separately for the current run and
-session as `activeSubagents` and `lastSubagentActivityAt`. A started, unended
-child blocks TTL and capacity eviction while its last event is less than one
-hot TTL old; at the TTL boundary it stops blocking. Child events also advance
-the reclaim activity clock, including the eviction minimum idle interval.
-They never change the main agent's `state`, `idleSince`, `tools`, or
-`lastActivityAt`, so require-idle delivery still uses only main-agent state.
-Child hook `transcript_path` is not treated as proof of an independent child
-transcript; no additional child transcript scanner changes reclaim activity.
-During TTL preparation, child activity is masked just like the preparing
-session's own activity: completed preparation is retained until children stop
-being active and the main agent is idle, without further preparation controls.
-Its cutoff remains available through the fence's final child-activity recheck
-and is cleared when reclaim completes; ordinary recent child activity still
-resets eligibility even if the child stops between observations.
-Other reclaim reasons are unchanged. Codex facts use the same reader when
-supplied, but current Codex hook subscriptions lack SubagentStart/Stop, so
-complete native child lifecycle coverage is not available from that source.
-
-Capacity eviction skips even idle sessions whose latest activity is less than
-`session_evict_min_idle_seconds` ago. At the boundary they become eligible for
-the existing LRU selection; if all are too recent, new groups wait in the queue.
-This does not change the three-second busy/idle observation threshold.
-
-Capacity eviction (a waiting group needs a slot) and memory-pressure reclaim
-first send the same pre-reclaim check to the selected group: bound to the
-current run, require-idle, with the ack suffix, but with a 60-second ack
-deadline and no Sync control. No fence is written while that check is pending
-or running. Once it is terminal, the group is evicted when the same run is
-still idle; when the deadline passes first, eviction continues without waiting
-for the answer. A new C4 message, a replaced run, or session or child activity
-after the deadline abandons that group's eviction, and candidates are selected
-again by the usual rules; the check's own activity up to its deadline is
-ignored. Each selected group gets one check, and while it waits it counts
-toward the slots being freed, so no further group is asked meanwhile. A
-delivered but unanswered check holds the fence as in-flight work until C4
-expires it at the same deadline.
-
-An upgrade restart (`restart_all`) sends each running session listed in the
-request, Origin included, its own check control before that session's fence:
-the same narrow handoff and wake-up check, opening with the upgrade as the reason, bound to the
-current run, require-idle, with the ack suffix and a 60-second ack deadline.
-The check names any background work that will be interrupted so the next
-session can rerun or check it; it offers no deferral. The restart begins once
-the check is terminal or the deadline passes. New
-activity does not cancel it, since the upgrade must restart every listed run.
-Each run is asked once, including when a busy session cancels and the restart
-begins again, and sessions do not wait for each other's answers. A run that
-cannot be bound as a target gets no check, and missing reclaim dependencies
-stop the restart before any check is sent.
-
-In steady single-session mode an upgrade restart (`zylos upgrade`,
-`upgrade-claude`, `restart-claude`) has no Supervisor step: the producer queues
-the same check, opening with a single-session reason, and then `/exit`. Both
-are priority 1 and require-idle; the check has the ack suffix and a 60-second
-ack deadline. The dispatcher delivers the check first and `/exit` only once the
-session is idle after the check's turn, or after the check expires unanswered
-or undelivered at its deadline. Queued controls go before new messages, so
-activity during the wait neither overtakes nor removes `/exit`. Each restart
-request queues one check, and the producer returns as soon as both are queued.
-
-A launch configuration change still sends a single control with its 5-minute
-ack deadline and the `ready_for_config_reclaim` flow. Its text now carries the
-same narrow handoff and wake-up check, with the configuration change as the
-reason. Background work is recorded as interrupted, without deferral, before
-the readiness submission.
 
 ## Status File Format
 

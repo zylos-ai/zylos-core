@@ -1,6 +1,12 @@
 import { zonedDay, zonedInputValue } from './wb/instance-zone.js';
 import cjkFriendly from './markdown-it-cjk-friendly/index.js';
 import { countLabel } from './count-label.js';
+function historyTime(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || !Number.isFinite(date.getTime())) return '';
+  const [day, clock] = zonedInputValue(date).split('T');
+  return `${day.slice(0, 4) === zonedDay(Date.now()).slice(0, 4) ? day.slice(5) : day} ${clock}`;
+}
 // Read-only history UI. The controller never owns the terminal or its lease.
 export function escapeHistory(value) {
   return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -19,8 +25,8 @@ export function createHistoryMarkdown(factory) {
   return text => md.render(String(text ?? ''));
 }
 export class ObserverHistory {
-  constructor({ root, endpoint, t, document: doc = document, fetch: request = fetch }) {
-    Object.assign(this, { root, endpoint, t, doc });
+  constructor({ root, endpoint, group = () => undefined, t, document: doc = document, fetch: request = fetch }) {
+    Object.assign(this, { root, endpoint, group, t, doc });
     this.request = (...args) => request(...args);
     this.active = false;
     this.generation = 0;
@@ -83,30 +89,43 @@ export class ObserverHistory {
     for (const field of this.fields.values()) { field.loading = false; field.more.disabled = false; field.all.disabled = false; }
   }
   setActive(active) {
+    const scope = this.endpoint('/api/observer/history/sessions') + '\0' + (this.group() ?? 'origin');
+    if (scope !== this.scope) {
+      this.scope = scope;
+      this.session = this.current = null;
+      this.sessions = null;
+      this.entries.clear(); this.fields.clear();
+      this.el('sessions').replaceChildren();
+      this.el('entries').replaceChildren();
+      this.el('results').replaceChildren();
+      this.el('results').hidden = true;
+      this.before = this.after = null;
+      this.hasOlder = false;
+      this.el('older').hidden = this.el('latest').hidden = true;
+    }
     this.active = active;
     this.cancel();
     if (active && !this.doc.hidden) this.start();
+  }
+  scopedParams(params) {
+    const group = this.group();
+    return { ...params, ...(group === undefined ? {} : { session_group: group }) };
   }
   async json(route, params = {}) {
     const controller = new AbortController();
     const generation = this.generation;
     this.controllers.add(controller);
     try {
-      const response = await this.request(this.endpoint(`/api/observer/history/${route}`) + '?' + new URLSearchParams(params), { cache: 'no-store', signal: controller.signal });
+      const response = await this.request(this.endpoint(`/api/observer/history/${route}`) + '?' + new URLSearchParams(this.scopedParams(params)), { cache: 'no-store', signal: controller.signal });
       const data = await response.json();
       if (generation !== this.generation) throw Object.assign(new Error('stale'), { name: 'AbortError' });
-      if (!response.ok) throw new Error(data.error || this.label('error'));
+      if (!response.ok) throw new Error(data.error?.message || this.label('error'));
       return data;
     } finally { this.controllers.delete(controller); }
   }
   error(error) { if (error.name !== 'AbortError') this.el('status').textContent = this.label('error') + ': ' + error.message; }
   sessionLabel(session) {
-    const date = session.startedAt ? new Date(session.startedAt) : null;
-    let time = '';
-    if (date && Number.isFinite(date.getTime())) {
-      const [day, clock] = zonedInputValue(date).split('T');
-      time = `${day.slice(0, 4) === zonedDay(Date.now()).slice(0, 4) ? day.slice(5) : day} ${clock}`;
-    }
+    const time = historyTime(session.startedAt);
     const title = session.title || session.startedAt || session.id;
     const body = session.title && time ? `${time} · ${title}` : title;
     return `${session.kind === 'subagent' ? '↳ ' : ''}${session.id === this.current ? this.label('current') + ' · ' : ''}${body}`;
@@ -188,7 +207,7 @@ export class ObserverHistory {
     const details = entry.kind === 'tool' || entry.kind === 'internal';
     const kindLabel = entry.channel === 'void' ? this.label('handoff') : this.label(entry.kind === 'internal' ? 'internal_record' : entry.kind);
     const status = ['running','success','failed','error'].includes(entry.status) ? this.label(entry.status === 'error' ? 'error_status' : entry.status) : entry.status;
-    const header = [kindLabel, entry.system ? this.label('system') : null, entry.name || entry.tool, entry.channel, entry.sender || entry.target, status, entry.ts].filter(Boolean).join(' · ');
+    const header = [kindLabel, entry.system ? this.label('system') : null, entry.name || entry.tool, entry.channel, entry.sender || entry.target, status, historyTime(entry.ts) || entry.ts].filter(Boolean).join(' · ');
     node.innerHTML = details ? `<details ${oldNode?.querySelector('details')?.open ? 'open' : ''}><summary>${escapeHistory(header)} ${escapeHistory(entry.summary || '')}</summary><div class="history-fields"></div></details>` : `<header>${escapeHistory(header)}</header><div class="history-fields"></div>`;
     const container = node.querySelector('.history-fields');
     if (details) node.querySelector('details').ontoggle = () => this.refreshOverflow();
@@ -201,7 +220,7 @@ export class ObserverHistory {
       const heading = this.doc.createElement('strong'); heading.textContent = ['body','input','output','raw'].includes(name) ? this.label('field_' + name) : name; wrapper.append(heading);
       if (field.type === 'binary') {
         const link = this.doc.createElement('a');
-        link.href = this.endpoint('/api/observer/history/content') + '?' + new URLSearchParams({ session: this.session, entry: entry.id, field: name });
+        link.href = this.endpoint('/api/observer/history/content') + '?' + new URLSearchParams(this.scopedParams({ session: this.session, entry: entry.id, field: name }));
         link.textContent = `${this.label('attachment')} · ${field.mimeType || ''} · ${field.bytes ?? field.total} B`;
         link.target = '_blank'; link.rel = 'noopener noreferrer'; wrapper.append(link);
       } else {

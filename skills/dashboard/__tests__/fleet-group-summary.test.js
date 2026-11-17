@@ -253,3 +253,14 @@ test('compact no-response flags restore silent durations while the independent c
   assert.equal(stateToFleetRecord({}, fleetStateFromObjects({ session_mode: { sessionMode: 'multi' } }, counts,
     { today: { cost: 0 }, sevenDay: { cost: 0 } }, { rows })).group_summary, null, 'an impossible independent count is not published');
 });
+
+
+test('remote summary preserves ISO creation instants and rejects invalid dates', () => {
+  const value = fleetGroupSummary({ mode: 'multi', readAt: Date.now(), listKnown: true, rows: [{
+    sessionGroup: 'telegram:team', presence: 'running', state: { kind: 'error' },
+    flags: { startFailed: {} }, createdAt: '2026-11-16T03:00:00.000Z',
+  }] });
+  assert.equal(sanitizeFleetGroupSummary(value).problems[0].createdAt, '2026-11-16T03:00:00.000Z');
+  value.problems[0].createdAt = 'not a date';
+  assert.equal(sanitizeFleetGroupSummary(value).problems[0].createdAt, null);
+});
