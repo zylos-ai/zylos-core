@@ -27,7 +27,7 @@ import { parse as parseDotEnv } from 'dotenv';
 import { parse as parseToml } from 'smol-toml';
 import { createRequire } from 'node:module';
 import { execSync, execFileSync, spawnSync, spawn } from 'node:child_process';
-import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, readZylosConfigOrThrow, updateZylosConfigLocked } from '../lib/config.js';
+import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, readZylosConfigOrThrow, readSessionMode, updateZylosConfigLocked } from '../lib/config.js';
 import { writeEnvFile } from '../lib/env.js';
 import { writePrivateFile } from '../lib/private-file.js';
 import { generateManifest, saveMergeBaseline } from '../lib/manifest.js';
@@ -605,6 +605,41 @@ function detectInstallState() {
   if (existing.length === 0) return 'fresh';
   if (existing.length === markers.length) return 'complete';
   return 'incomplete';
+}
+
+// ── Session mode selection ──────────────────────────────────────
+
+const INIT_SESSION_MODES = ['single', 'multi'];
+
+/**
+ * Check `--session-mode` against an installed instance before init changes anything.
+ * Only a complete install is checked; fresh and incomplete installs take the flag value.
+ * A missing session_mode key means single, as everywhere else that reads the mode.
+ * @returns {{code: string, message: string}|null} the refusal, or null to continue
+ */
+export function initSessionModeConflict(requested, installState, { readMode = readSessionMode } = {}) {
+  if (!requested || installState !== 'complete') return null;
+  let current;
+  try { current = readMode().mode ?? 'single'; }
+  catch (cause) {
+    return { code: 'CONFIG_UNREADABLE',
+      message: `Cannot read the current session mode (${cause.message}). zylos init made no changes.` };
+  }
+  if (current === requested) return null;
+  return { code: 'INIT_SESSION_MODE_MISMATCH',
+    message: `This instance is already installed in ${current} session mode; zylos init does not change the mode. ` +
+      `To change it, run: zylos session-mode switch ${requested}. zylos init made no changes.` };
+}
+
+/**
+ * Config update for session_mode before services start, or null for no write.
+ * Fresh and incomplete installs store an explicit `--session-mode`; without it a fresh
+ * install defaults to multi only when the key is absent. Complete installs never write here.
+ */
+export function initSessionModeUpdate(installState, requested) {
+  if (installState === 'complete') return null;
+  if (requested) return { set: { session_mode: requested } };
+  return installState === 'fresh' ? { setIfAbsent: { session_mode: 'multi' } } : null;
 }
 
 // ── State reset ─────────────────────────────────────────────────
@@ -1501,6 +1536,7 @@ export function parseInitFlags(args) {
     domain: null,
     https: null,   // null = not specified, true = --https, false = --no-https
     caddy: null,   // null = not specified, true = --caddy, false = --no-caddy
+    sessionMode: null, // 'single' | 'multi' — set via --session-mode
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -1529,10 +1565,15 @@ export function parseInitFlags(args) {
       case '--codex-api-key':
       case '--base-url':
       case '--codex-base-url':
-      case '--domain': {
+      case '--domain':
+      case '--session-mode': {
         const val = args[++i];
         if (!val || val.startsWith('-')) {
           console.error(`${error(`Error: ${arg} requires a value`)}`);
+          process.exit(1);
+        }
+        if (arg === '--session-mode' && !INIT_SESSION_MODES.includes(val)) {
+          console.error(`${error(`Error [INIT_SESSION_MODE_INVALID]: --session-mode must be single or multi (got "${val}")`)}`);
           process.exit(1);
         }
         if (arg === '--timezone') opts.timezone = val;
@@ -1544,6 +1585,7 @@ export function parseInitFlags(args) {
         else if (arg === '--base-url') opts.baseUrl = val;
         else if (arg === '--codex-base-url') opts.codexBaseUrl = val;
         else if (arg === '--domain') opts.domain = val;
+        else if (arg === '--session-mode') opts.sessionMode = val;
         break;
       }
       case '--https': opts.https = true; break;
@@ -2079,6 +2121,9 @@ Options:
   --domain <domain>          Configure Caddy with this domain
   --https / --no-https       Enable/disable HTTPS (default: https when domain set)
   --caddy / --no-caddy       Install/skip Caddy web server (default: install)
+  --session-mode <mode>      New install only: single or multi (default: multi).
+                             On an installed instance it must match the current
+                             mode; change modes with: zylos session-mode switch
 
 Non-interactive mode:
   Automatically enabled when stdin is not a TTY, or CI=true / NONINTERACTIVE=1
@@ -2114,6 +2159,12 @@ export async function initCommand(args) {
 
   // A damaged existing F1 must fail before auth, installers, or any other write.
   const existingConfig = readZylosConfigOrThrow();
+  // An installed instance keeps its mode; refuse a different --session-mode before any change.
+  const sessionModeConflict = initSessionModeConflict(opts.sessionMode, detectInstallState());
+  if (sessionModeConflict) {
+    console.error(`${error(`Error [${sessionModeConflict.code}]: ${sessionModeConflict.message}`)}`);
+    process.exit(1);
+  }
 
   // Resolve from environment variables
   resolveFromEnv(opts);
@@ -2264,7 +2315,8 @@ export async function initCommand(args) {
   createDirectoryStructure();
   const initialSkillSync = syncCoreSkills();
   if (initialSkillSync.error) preparation.failed.push({ item: 'core.skills', message: initialSkillSync.error });
-  if (installState === 'fresh') updateZylosConfigLocked({ setIfAbsent: { session_mode: 'multi' } });
+  const sessionModeUpdate = initSessionModeUpdate(installState, opts.sessionMode);
+  if (sessionModeUpdate) updateZylosConfigLocked(sessionModeUpdate);
   runMigrations({ zylosDir: ZYLOS_DIR, templatesDir: TEMPLATES_SRC });
   try { deployTemplates({ freshInstall: installState === 'fresh' }); }
   catch (error) { preparation.failed.push({ item: 'templates', message: error.message }); }

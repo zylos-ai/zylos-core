@@ -81,6 +81,7 @@ Automatically when no TTY is available — e.g. Docker containers (without `-it`
 | `--domain <domain>` | Domain for Caddy reverse proxy, e.g. `agent.example.com` | None |
 | `--https` / `--no-https` | Enable or disable HTTPS | `--https` when domain is set |
 | `--caddy` / `--no-caddy` | Install or skip Caddy web server | Install |
+| `--session-mode <mode>` | Session mode for a new install: `single` or `multi`. On an installed instance init only accepts the current mode and otherwise exits with `INIT_SESSION_MODE_MISMATCH` without changes; change the mode with `zylos session-mode switch <mode>` | `multi` |
 
 **Environment variables:**
 
