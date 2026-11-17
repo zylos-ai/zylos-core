@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {SessionAdapter} from '../session-adapter.js';
-const fault=(code,cause=code==='TARGET_GONE'?undefined:'error')=>Object.assign(new Error(code),{code,cause});
+const fault=(code,cause='error')=>Object.assign(new Error(code),{code,cause});
 function fixture({present=true,runId='r',openError,revalidateError,killError,confirmError=fault('TARGET_GONE'),confirmation='$1'}={}) {
   const calls=[],target={present,runId,tmuxSessionId:'$1',paneId:'%1',serverGeneration:'10:20'};
   const connection={close:()=>calls.push(['close']),
@@ -58,12 +58,6 @@ test('successful confirmation guard means session still exists regardless of act
   for(const confirmation of ['$1','$2','malformed','']){
     const f=fixture({confirmError:null,confirmation});
     await assert.rejects(f.stop(),{code:'STOP_UNCONFIRMED'});
-  }
-});
-test('invalidated read with uncertain server identity never confirms a stop',async()=>{
-  for(const phase of ['revalidateError','confirmError']){
-    const f=fixture({[phase]:fault('TARGET_GONE','error')});
-    await assert.rejects(f.stop(),{code:'STOP_UNCONFIRMED',cause:'error'});
   }
 });
 test('unobservable tmux cannot be treated as absence; preserve stable cause',async()=>{

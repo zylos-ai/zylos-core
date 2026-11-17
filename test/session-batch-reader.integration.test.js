@@ -201,7 +201,8 @@ for (const mutation of ['same-name replacement', 'server replacement']) {
       } else f.tmux('kill-session', '-t', 'zylos-group-origin');
       f.add('origin');
     });
-    await assert.rejects(f.reader.readLiveIdentities(['origin']), { code:'TARGET_GONE' });
+    await assert.rejects(f.reader.readLiveIdentities(['origin']),
+      { code:mutation === 'server replacement' ? 'GENERATION_CHANGED' : 'TARGET_GONE' });
     assert.equal(replaced, true);
     assert.equal(f.commands.length, 2);
     assert.equal(f.commands.some(argv => argv.includes('if-shell')), false);

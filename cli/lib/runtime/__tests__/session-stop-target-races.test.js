@@ -20,7 +20,7 @@ test('real same-socket server replacement does not reopen or act on the new serv
  const f=await fixture(t),key='same-server-run',independent=await service(f,key);
  f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
  const generation=f.command('display-message','-p','#{pid}:#{start_time}');let replacement,newOrigin,newGeneration,opens=0;
- const oldServerPid=Number(generation.split(':')[0]),injectionErrors=[];let oldServerExited=false;
+ const oldServerPid=Number(generation.split(':')[0]),injectionErrors=[];let oldServerExited=false,readCode,stopCode;
  assert.ok(Number.isSafeInteger(oldServerPid)&&oldServerPid>0);
  f.adapter.options.dependencies={...actualDependencies,
   openTmuxConnection:options=>{opens++;return actualDependencies.openTmuxConnection(options)},
@@ -40,13 +40,15 @@ test('real same-socket server replacement does not reopen or act on the new serv
     newOrigin=f.snapshot('origin');replacement=f.snapshot('target');newGeneration=f.command('display-message','-p','#{pid}:#{start_time}');
    } catch(error) {injectionErrors.push(error.stack||String(error));throw error;}
    // Only this product revalidation failure is expected to become STOP_UNCONFIRMED.
-   return actualDependencies.revalidateSessionTarget(options);
+   try {return await actualDependencies.revalidateSessionTarget(options);}
+   catch(error) {readCode=error.code;throw error;}
   },
  };
- await assert.rejects(f.adapter.stop({tmuxName:'target',expectedRunId:key}),{code:'STOP_UNCONFIRMED'});
+ await assert.rejects(f.adapter.stop({tmuxName:'target',expectedRunId:key}),error=>{stopCode=error.code;return stopCode==='STOP_UNCONFIRMED';});
+ assert.equal(readCode,'GENERATION_CHANGED');
  assert.deepEqual(injectionErrors,[],'Server-replacement injection must succeed independently of the expected stop error');
  assert.notEqual(newGeneration,generation);assert.equal(opens,1);assert.equal(f.snapshot('target'),replacement);assert.equal(f.snapshot('origin'),newOrigin);
- t.diagnostic(JSON.stringify({generation,newGeneration,oldServerPid,oldServerExited,injectionErrors,opens,replacementPreserved:true,newOriginUnchanged:true,service:await independent.verify()}));
+ t.diagnostic(JSON.stringify({generation,newGeneration,oldServerPid,oldServerExited,injectionErrors,readCode,stopCode,opens,replacementPreserved:true,newOriginUnchanged:true,service:await independent.verify()}));
 });
 
 for(const mode of ['command-failure','disconnect','target-remains'])test(`real transport ${mode}: no false stop success`,async t=>{

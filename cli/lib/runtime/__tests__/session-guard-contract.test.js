@@ -198,7 +198,7 @@ test('replacing the bound server blocks old text and keys from the new pane',asy
   f.tmux('kill-server');await delay(50);
   f.tmux('-f','/dev/null','new-session','-d','-s','keeper','sleep 120');
   f.tmux('new-session','-d','-s','zylos-group-origin','-e','ZYLOS_RUN_ID=guard-run',`exec cat > '${f.input}'`);
-  for(const method of ['sendText','sendKeys'])await assert.rejects(adapter[method]({connection,target,text:'must-not-arrive',keys:['Enter']}),{code:'TARGET_GONE'});
+  for(const method of ['sendText','sendKeys'])await assert.rejects(adapter[method]({connection,target,text:'must-not-arrive',keys:['Enter']}),{code:'GENERATION_CHANGED'});
   await assert.rejects(connection.command(['send-keys','-t',target.paneId,'Enter']),{code:'GENERATION_CHANGED'});
   await delay(25);assert.equal(await fs.readFile(f.input,'utf8'),'');
   // Direct ordinary commands below are a deliberately unsafe test control.

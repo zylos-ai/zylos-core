@@ -57,7 +57,7 @@ export class SessionAdapter extends RuntimeAdapter {
       } catch (error) {
         // Only session-level absence proves stop succeeded; observation above
         // uses pane guards and can lose a pane while its session survives.
-        if (error.code === 'TARGET_GONE' && !error.cause) return;
+        if (error.code === 'TARGET_GONE') return;
         throw error;
       }
       // A successful kill is not sufficient: confirm removal of the session,
@@ -65,7 +65,7 @@ export class SessionAdapter extends RuntimeAdapter {
       try {
         await connection.command([C.displayMessage,'-p','-t',target.tmuxSessionId,F.sessionId], {kind:'session'});
       } catch (error) {
-        if (error.code === 'TARGET_GONE' && !error.cause) return;
+        if (error.code === 'TARGET_GONE') return;
         throw error;
       }
       throw adapterError('STOP_UNCONFIRMED','Original session removal is not confirmed');

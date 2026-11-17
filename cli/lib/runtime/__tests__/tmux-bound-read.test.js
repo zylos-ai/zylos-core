@@ -17,7 +17,8 @@ test('read envelope checks both identity lines while preserving payload boundari
   assert.equal(parseReadResponse(`${identity}\n${payload}\n${identity}`, null, target), payload);
   for (const changed of ['999:456\t$1\t%2', '123:456\t$3\t%2', '123:456\t$1\t%4']) {
     for (const output of [`${changed}\n${payload}\n${identity}`, `${identity}\n${payload}\n${changed}`]) {
-      assert.throws(() => parseReadResponse(output, null, target), { code: 'TARGET_GONE' });
+      assert.throws(() => parseReadResponse(output, null, target),
+        { code: changed.startsWith('999:') ? 'GENERATION_CHANGED' : 'TARGET_GONE' });
     }
   }
   assert.equal(parseReadResponse(`${identity}\npayload\n123:456\t$1\t%4`, null, target, 'session'), 'payload');
@@ -90,12 +91,16 @@ test('same-socket server replacement discards reused-ID reads and rejects stale 
   assert.equal(f.tmux('display-message', '-p', '-t', '=fixture:', '#{pane_id}'), f.target.paneId);
   assert.equal(f.tmux('display-message', '-p', '-t', '=fixture:', '#{session_id}'), f.target.tmuxSessionId);
   assert.notEqual(f.tmux('display-message', '-p', '#{pid}:#{start_time}'), f.target.serverGeneration);
+  const readCodes = [];
   for (const kind of ['pane', 'session']) {
     await assert.rejects(connection.command(['show-environment', '-s', '-t', f.target.tmuxSessionId], { kind }),
-      { code: 'TARGET_GONE' });
+      error => { readCodes.push({ command: 'show-environment', kind, code: error.code }); return error.code === 'GENERATION_CHANGED'; });
     await assert.rejects(connection.command(['display-message', '-p', '-t', f.target.paneId, 'replacement'], { kind }),
-      { code: 'TARGET_GONE' });
+      error => { readCodes.push({ command: 'display-message', kind, code: error.code }); return error.code === 'GENERATION_CHANGED'; });
+    await assert.rejects(connection.command(['capture-pane', '-p', '-t', f.target.paneId], { kind }),
+      error => { readCodes.push({ command: 'capture-pane', kind, code: error.code }); return error.code === 'GENERATION_CHANGED'; });
   }
+  t.diagnostic(JSON.stringify({ realServerReplacement: true, readCodes }));
   await assert.rejects(connection.command(['set-environment', '-t', f.target.tmuxSessionId, 'READ_VALUE', 'stale-write']),
     { code: 'GENERATION_CHANGED' });
   assert.equal(f.tmux('show-environment', '-t', '=fixture', 'READ_VALUE'), 'READ_VALUE=replacement');

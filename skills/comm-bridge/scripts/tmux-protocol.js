@@ -86,9 +86,7 @@ export function parseReadResponse(output, error, binding, kind = 'pane') {
   for (const line of [output.slice(0, first), output.slice(last + 1)]) {
     const [generation, session, pane, ...extra] = line.split('\t');
     if (extra.length || !validGeneration(generation)) throw tmuxError('TMUX_UNAVAILABLE', 'Invalid tmux read identity', 'error');
-    // A replacement server invalidates the read but cannot confirm that a stop
-    // removed the original session. Preserve that uncertainty for stop callers.
-    if (generation !== binding.serverGeneration) throw tmuxError('TARGET_GONE', 'Bound tmux server changed during read', 'error');
+    if (generation !== binding.serverGeneration) throw tmuxError('GENERATION_CHANGED', 'Bound tmux server changed during read');
     if (session !== binding.tmuxSessionId || (kind === 'pane' && pane !== binding.paneId)) {
       throw tmuxError('TARGET_GONE', 'Bound tmux object changed during read');
     }
