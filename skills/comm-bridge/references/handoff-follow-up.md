@@ -20,4 +20,3 @@ SEND_FAILED means unknown delivery, so do not automatically resend.
 ENDPOINT_NOT_PASSABLE or COMPONENT_SPAWN_FAILED must be reported to the owner;
 continue other items. Preserve unfinished items on the next handoff. Sync removes
 followed-up Pending entries through its normal commit, without changing C4.
-
