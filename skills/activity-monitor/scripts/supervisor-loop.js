@@ -76,10 +76,12 @@ export class SupervisorLoop {
   async reportError(error, context) {
     if (isTmuxDirectoryError(error)) {
       if (this.directoryError) return;
-      this.directoryError = error;
       context = { phase: 'tmux-directory', event: 'tmux_directory_unavailable' };
     }
-    await this.deps.reportError(error, context);
+    // The assembled reporter shares this latch with workers outside the loop.
+    const reported = this.deps.reportError(error, context);
+    if (isTmuxDirectoryError(error)) this.directoryError ??= error;
+    await reported;
   }
 
   tick() {

@@ -28,7 +28,10 @@ function fromFile(t, environment = {}) {
   const env = { ...process.env, HOME: root, ZYLOS_DIR: root, ZYLOS_PACKAGE_ROOT: repository,
     PM2_HOME: path.join(root, 'pm2'), TMPDIR: path.join(root, 't'), TMUX_TMPDIR: path.join(root, 'm') };
   env.TMUX = `${path.join(env.TMUX_TMPDIR, 'private.sock')},0,0`;
-  for (const key of ['PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR']) fs.mkdirSync(env[key]);
+  for (const key of ['PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR']) {
+    fs.mkdirSync(env[key], { mode: 0o700 });
+    fs.chmodSync(env[key], 0o700);
+  }
   for (const key of envKeys) delete env[key];
   for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR']) {
     assert.ok(fs.realpathSync(env[key]) === root || fs.realpathSync(env[key]).startsWith(root + path.sep));

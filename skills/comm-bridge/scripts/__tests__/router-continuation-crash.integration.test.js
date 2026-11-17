@@ -41,7 +41,10 @@ for (const boundary of ['before-launch', 'before-ready', 'after-ready']) {
     const env = { ...process.env, HOME: path.join(directory, 'home'), ZYLOS_DIR: path.join(directory, 'home', 'zylos'),
       PM2_HOME: path.join(directory, 'pm2'), TMPDIR: path.join(directory, 'tmp'), TMUX_TMPDIR: path.join(directory, 'tmux') };
     delete env.TMUX;
-    for (const name of ['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR','TMUX_TMPDIR']) fs.mkdirSync(env[name], { recursive: true });
+    for (const name of ['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR','TMUX_TMPDIR']) {
+      fs.mkdirSync(env[name], { recursive: true, mode: 0o700 });
+      fs.chmodSync(env[name], 0o700);
+    }
     t.diagnostic(JSON.stringify({ worker, boundary, database: f.filename, HOME: env.HOME, ZYLOS_DIR: env.ZYLOS_DIR, PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR, TMUX_TMPDIR: env.TMUX_TMPDIR, tmuxInvoked: false }));
     const children = [];
     try {

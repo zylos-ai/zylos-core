@@ -19,7 +19,8 @@ import { CoreState } from '../src/lib/core-state.js';
 // HTTP/auth fixtures exercise actual product routing, not remote version hosts.
 assert.notEqual(process.env.HOME, os.userInfo().homedir, 'Run through the isolated Node test runner');
 process.env.TMUX_TMPDIR = path.join(os.tmpdir(), 'auth-tmux');
-fs.mkdirSync(process.env.TMUX_TMPDIR, { recursive: true });
+fs.mkdirSync(process.env.TMUX_TMPDIR, { recursive: true, mode: 0o700 });
+fs.chmodSync(process.env.TMUX_TMPDIR, 0o700);
 mock.method(VersionChecker.prototype, 'start', () => {});
 // These fixtures verify HTTP/auth and fleet behavior. The object APIs now need
 // a group catalog even for an empty instance; inject source observations while
@@ -59,7 +60,8 @@ async function makeServerWithDir(zylosDir) {
   const previousTmux = process.env.TMUX_TMPDIR;
   process.env.ZYLOS_DIR = zylosDir;
   process.env.DASHBOARD_PORT = '0';
-  const privateTmux = path.join(zylosDir, 'tmux'); fs.mkdirSync(privateTmux, { recursive: true });
+  const privateTmux = path.join(zylosDir, 'tmux'); fs.mkdirSync(privateTmux, { recursive: true, mode: 0o700 });
+  fs.chmodSync(privateTmux, 0o700);
   process.env.TMUX_TMPDIR = privateTmux;
   console.log('Auth HTTP isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: zylosDir, PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, TMUX_TMPDIR: privateTmux, db: path.join(zylosDir, 'components/dashboard/dashboard.db') }));
 

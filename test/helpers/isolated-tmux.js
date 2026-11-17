@@ -6,10 +6,14 @@ import assert from 'node:assert/strict';
 
 // A private socket for every fixture; never targets the user's tmux server.
 export function isolatedTmux(t, { prefix = 'test-tmux-', parentDir = os.tmpdir(),
-  socketName = 's', tmuxArgs = [], timeout = 3000, trim = true,
+  socketName, tmuxArgs = [], timeout = 3000, trim = true,
   env, beforeCleanup = () => {} } = {}) {
   const dir = fs.mkdtempSync(path.join(parentDir, prefix));
-  const socketPath = path.join(dir, socketName);
+  fs.chmodSync(dir, 0o700);
+  const socketDirectory = socketName ? dir : path.join(dir, `tmux-${process.getuid()}`);
+  fs.mkdirSync(socketDirectory, { recursive: true, mode: 0o700 });
+  fs.chmodSync(socketDirectory, 0o700);
+  const socketPath = path.join(socketDirectory, socketName || 'default');
   const binary = process.env.TEST_TMUX_BIN || 'tmux';
   let started = false;
   const tmux = (...args) => {
@@ -58,11 +62,15 @@ export async function waitForServerExit({ binary, socketPath, timeoutMs = 5000 }
 }
 
 // CLI consumers resolve `tmux` on PATH instead of accepting a binary option.
-export function tmuxClientEnv({dir,socketPath,binary}, env = process.env) {
+export function tmuxClientEnv({dir,socketPath,binary}, env = process.env, { privateDirectory = true } = {}) {
+  if (privateDirectory) assert.equal(socketPath, path.join(dir, `tmux-${process.getuid()}`, 'default'),
+    'Environment-selected clients require the canonical private socket');
   const binDir = path.join(dir, 'bin');
   fs.mkdirSync(binDir);
   const executable = execFileSync('sh', ['-c', 'command -v "$1"', 'sh', binary], {encoding:'utf8'}).trim();
   fs.symlinkSync(executable, path.join(binDir, 'tmux'));
-  return {...env, PATH:`${binDir}${path.delimiter}${env.PATH || ''}`,
+  const result = {...env, PATH:`${binDir}${path.delimiter}${env.PATH || ''}`,
     TMUX_TMPDIR:dir, TMUX:`${socketPath},0,0`};
+  if (!privateDirectory) delete result.TMUX_TMPDIR;
+  return result;
 }

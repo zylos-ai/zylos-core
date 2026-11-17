@@ -18,7 +18,8 @@ async function run(t, mode) {
     TMPDIR: tmp, TMUX_TMPDIR: tmp, ALERT_TRANSPORT_MODE: mode, ALERT_TRANSPORT_RECORDS: path.join(root, 'sends.jsonl'),
     ZYLOS_RUN_ID: 'stale-system-run', ZYLOS_SESSION_GROUP: 'telegram:unrelated' };
   for (const key of ['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR','TMUX_TMPDIR']) {
-    fs.mkdirSync(env[key], { recursive: true });
+    fs.mkdirSync(env[key], { recursive: true, mode: 0o700 });
+    fs.chmodSync(env[key], 0o700);
     assert.ok(env[key].startsWith(root + '/'));
   }
   const socket = path.join(tmp, 'tmux-1000', 'fixture');
