@@ -131,7 +131,7 @@ test('catalog-backed Chinese, hyphen and percent groups load real details and ti
     usage: { valid: true, value: { version: usageVersion, effort: { level: usageEffort }, model: { id: usageModel }, context_window: { used_percentage: 25 } } } }),
     readLiveIdentity: async () => ({ present: true, ready: true }), readRuntimeHealth: async () => ({ missing: true }), readAccountUsage: async () => null };
   reader.readSessionStates = async (groups, { includeAllLive }) => {
-    const keys = includeAllLive ? [...new Set([...groups, 'origin', 'tg:历史-项目', 'tg:-legacy-group', 'tg:有%号'])] : groups;
+    const keys = includeAllLive ? [...new Set([...groups, 'origin', 'tg:历史-项目', 'tg:-legacy-group', 'tg:有%号', 'tg:current'])] : groups;
     return new Map(await Promise.all(keys.map(async key => [key, await reader.readSessionState(key)])));
   };
   const core = async name => {
@@ -269,6 +269,10 @@ test('catalog-backed Chinese, hyphen and percent groups load real details and ti
     page.on('pageerror', error => errors.push(error.message));
     page.on('response', response => { if (response.url().includes('/api/groups/tg%3A') && response.status() >= 400) failedReads.push({ url: response.url(), status: response.status() }); });
     await page.goto(origin + '/');
+    await page.getByRole('button', { name: 'Running · 4', exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Offline · 1', exact: true }).count(), 1);
+    assert.equal(await page.locator('.wb-attention-item').filter({ hasText: /READ_FAILED|State unavailable|Could not read/i }).count(), 0,
+      'offline historical groups must not produce a status read failure banner');
     for (const group of groups) {
       await page.locator('#wb-board .wb-row').filter({ hasText: group }).click();
       await page.locator('#wb-side .wb-now-title').first().waitFor();
