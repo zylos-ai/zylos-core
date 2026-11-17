@@ -61,8 +61,15 @@ function snapshot(dir) {
   return rows.join('\n');
 }
 
-function runInit({ home, zylosDir }, args) {
-  const env = { ...process.env, HOME: home, ZYLOS_DIR: zylosDir, NO_COLOR: '1', CI: 'true' };
+// PATH holds only this node and system directories, and npm's global prefix is the
+// sandbox: if a refusal ever stopped working, init would stop at its missing-PM2
+// step instead of installing into or starting anything from the machine's real tools.
+function runInit({ root, home, zylosDir }, args) {
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  if (!fs.existsSync(path.join(bin, 'node'))) fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+  const env = { ...process.env, HOME: home, ZYLOS_DIR: zylosDir, PM2_HOME: path.join(root, 'pm2'),
+    PATH: `${bin}:/usr/bin:/bin`, NPM_CONFIG_PREFIX: path.join(root, 'npm'), NO_COLOR: '1', CI: 'true' };
   delete env.ZYLOS_UPSTREAM_CONFIG;
   return spawnSync(process.execPath, [CLI, 'init', ...args], { env, encoding: 'utf8', timeout: 30_000 });
 }
