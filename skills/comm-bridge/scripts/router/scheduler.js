@@ -32,7 +32,7 @@ export function createRouter(dependencies, configuration = {}) {
   const tasks = new Set();
   const opportunities = new Set();
   const attemptedRound = new Map();
-  let sceneTask = null, legacyTask = null, maintenanceTask = null, timer = null, initialization = null;
+  let sceneTask = null, legacyTask = null, maintenanceTask = null, timer = null, initialization = null, receiptTask = null;
   let lastCleanup = -Infinity, lastDiagnostics = -Infinity, lastMismatch = -Infinity;
   const diagnostic = (event, fields = {}) => {
     try { Promise.resolve(deps.diagnostic?.(event, fields)).catch(error => deps.log?.(`Router diagnostic: ${error.message}`)); }
@@ -188,6 +188,11 @@ export function createRouter(dependencies, configuration = {}) {
   function tick() {
     if (!state.ready || state.inert || state.stopped) return;
     state.round++;
+    if (!receiptTask && deps.drainFailureReceipts) {
+      receiptTask = track(Promise.resolve().then(deps.drainFailureReceipts)
+        .catch(error => diagnostic('failure_receipt_error', { reason: error.code ?? 'send_failed' }))
+        .finally(() => { receiptTask = null; }));
+    }
     const seconds = Math.floor(now() / 1000);
     deps.db.expireTimedOutControls(seconds);
     deps.sweepDeliveryWaits?.();

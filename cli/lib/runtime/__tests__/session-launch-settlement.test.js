@@ -25,7 +25,7 @@ test('shell wrapper execs runtime and settles within the confirmation budget', a
   t.diagnostic(JSON.stringify({wrapperSuccessMs:Math.round(elapsed)}));
 });
 
-test('server stopped before submission: bounded failure, natural caller exit and no client left', {timeout:10000}, async t => {
+test('server stopped before submission: bounded failure, natural caller exit and no client left', {timeout:15000}, async t => {
   const f = await setupLaunch(t);
   const wrapper = await f.clientWrapper();
   process.kill(f.server, 'SIGSTOP');
@@ -34,7 +34,7 @@ import {writeSessionLaunchScript} from ${JSON.stringify(new URL('../session-comm
 const script=writeSessionLaunchScript({command:'/bin/sleep',args:['30'],env:{PATH:process.env.PATH},root:${JSON.stringify(f.dir)},multi:false});
 const start=performance.now();
 try { await settleLaunch({tmuxName:'target',runId:'frozen-run',launchConfig:{runtime:'claude',mode:'default'},sessionGroup:null,root:${JSON.stringify(f.dir)},script,tmux:{binary:${JSON.stringify(wrapper.file)},socketPath:${JSON.stringify(f.socketPath)},configFile:'/dev/null'}}); process.exitCode=1; }
-catch(error) { console.log(JSON.stringify({code:error.code,elapsed:performance.now()-start})); if(error.code!=='LAUNCH_FAILED') process.exitCode=2; }`;
+catch(error) { console.log(JSON.stringify({code:error.code,elapsed:performance.now()-start,timing:error.launchTiming})); if(error.code!=='LAUNCH_FAILED') process.exitCode=2; }`;
   const child = spawn(process.execPath, ['--input-type=module','-e',program], {stdio:['ignore','pipe','pipe']});
   let stdout='',stderr=''; child.stdout.on('data',d=>stdout+=d); child.stderr.on('data',d=>stderr+=d);
   t.after(()=>{ if(child.exitCode===null && child.signalCode===null) child.kill('SIGKILL'); });
@@ -46,6 +46,12 @@ catch(error) { console.log(JSON.stringify({code:error.code,elapsed:performance.n
   assert.equal(report.code,'LAUNCH_FAILED');
   assert.ok(report.elapsed>=LAUNCH_TIMEOUT_MS-100);
   assert.ok(report.elapsed<bound+1000);
+  assert.equal(report.timing.last_phase,'new_session');
+  assert.equal(report.timing.timeout_ms,10000);
+  assert.ok(report.timing.new_session_ms>=LAUNCH_TIMEOUT_MS-100);
+  assert.equal(report.timing.executor_init_ms,0);
+  assert.equal(report.timing.exec_confirm_ms,0);
+  assert.ok(report.timing.total_ms>=report.timing.new_session_ms);
   assertGone(assert,Number(await fs.readFile(wrapper.pidFile,'utf8')));
   // The caller has exited while the server is still stopped: no resumed server
   // or test teardown is responsible for releasing its streams/child/timers.
@@ -63,19 +69,53 @@ test('immediate runtime exit fails and removes its retained dead session', async
   assertGone(assert,Number(await fs.readFile(wrapper.pidFile,'utf8')));
 });
 
-test('known session still in launch shell times out and is killed before rejection', {timeout:8000}, async t => {
+test('known session still in launch shell times out and is killed before rejection', {timeout:15000}, async t => {
   const f=await setupLaunch(t);
   const held=path.join(f.dir,'held-shell');
   await fs.writeFile(held,'#!/bin/sh\nwhile :; do :; done\n',{mode:0o700});
   const wrapper=await f.clientWrapper();
   const start=performance.now();
-  await assert.rejects(f.launch({command:held,args:[],tmuxBinary:wrapper.file}),{code:'LAUNCH_FAILED'});
+  let timing;
+  await assert.rejects(f.launch({command:held,args:[],tmuxBinary:wrapper.file}),error=>{
+    assert.equal(error.code,'LAUNCH_FAILED');
+    timing=error.launchTiming;
+    assert.equal(timing.last_phase,'exec_confirm');
+    assert.ok(timing.exec_confirm_ms>=LAUNCH_TIMEOUT_MS-1000);
+    assert.ok(timing.new_session_ms>=0);
+    assert.ok(timing.executor_init_ms>=0);
+    assert.ok(timing.cleanup_ms>=0);
+    assert.ok(timing.total_ms>=timing.exec_confirm_ms+timing.cleanup_ms);
+    assert.equal(timing.timeout_ms,10000);
+    return true;
+  });
   const elapsed=performance.now()-start;
   assert.ok(elapsed>=LAUNCH_TIMEOUT_MS-100);
   assert.ok(elapsed<bound+1000);
   assert.equal(f.tmux('list-sessions','-F','#{session_name}').trim(),'keeper','timeout must kill the created session, not just reject a Promise.race');
   assertGone(assert,Number(await fs.readFile(wrapper.pidFile,'utf8')));
-  t.diagnostic(JSON.stringify({knownSessionTimeoutMs:Math.round(elapsed),sessionKilled:true,clientGone:true}));
+  t.diagnostic(JSON.stringify({knownSessionTimeoutMs:Math.round(elapsed),sessionKilled:true,clientGone:true,timing}));
+});
+
+test('runtime exec delayed four seconds fits the launch confirmation budget', {timeout:8000}, async t => {
+  // Covers the launch confirmation boundary using a private socket. Run when
+  // changing launch deadlines or exec polling; unrelated delivery changes may skip.
+  const f=await setupLaunch(t);
+  const wrapper=path.join(f.dir,'delayed-runtime');
+  await fs.writeFile(wrapper,'#!/bin/sh\nsleep 4\nexec /bin/sleep 30\n',{mode:0o700});
+  const start=performance.now();
+  const result=await f.launch({command:wrapper,args:[]});
+  const elapsed=performance.now()-start;
+  assert.equal(LAUNCH_TIMEOUT_MS,10000);
+  assert.equal(result.tmuxName,'target');
+  assert.equal(result.launchTiming.last_phase,'exec_confirm');
+  assert.ok(result.launchTiming.exec_confirm_ms>=3900);
+  assert.ok(result.launchTiming.cleanup_ms>=0);
+  assert.ok(result.launchTiming.total_ms>=result.launchTiming.exec_confirm_ms+result.launchTiming.cleanup_ms);
+  assert.equal(result.launchTiming.timeout_ms,10000);
+  assert.ok(elapsed>=3900);
+  assert.ok(elapsed<LAUNCH_TIMEOUT_MS);
+  assert.equal(f.tmux('list-panes','-t','=target','-F','#{pane_current_command}').trim(),'sleep');
+  t.diagnostic(JSON.stringify({delayedExecMs:Math.round(elapsed)}));
 });
 
 test('duplicate session is NAME_CONFLICT and retains the original pane', async t => {
@@ -140,15 +180,29 @@ for (const locale of ['unset', 'C']) for (const scenario of ['launch-multi', 'la
 }
 
 test('creation receipt followed by client failure still cleans only the created session', async t => {
+  // Covers delayed new-session acknowledgement and retained-receipt cleanup on
+  // the fixture's private socket; run for launch phase/cleanup changes.
   const f = await setupLaunch(t);
   const wrapper = path.join(f.dir, 'receipt-error');
   const {shellQuote} = await import('../session-command.js');
   await fs.writeFile(wrapper, `#!/bin/sh
 case " $* " in
-  *" new-session "*) ${shellQuote(binary)} "$@"; echo 'fixture failure after receipt' >&2; exit 7 ;;
+  *" new-session "*) sleep 0.2; ${shellQuote(binary)} "$@"; echo 'fixture failure after receipt' >&2; exit 7 ;;
   *) exec ${shellQuote(binary)} "$@" ;;
 esac
 `, {mode:0o700});
-  await assert.rejects(f.launch({tmuxBinary:wrapper}), {code:'LAUNCH_FAILED'});
+  await assert.rejects(f.launch({tmuxBinary:wrapper}), error=>{
+    assert.equal(error.code,'LAUNCH_FAILED');
+    const timing=error.launchTiming;
+    assert.equal(timing.last_phase,'new_session');
+    assert.ok(timing.new_session_ms>=190);
+    assert.equal(timing.executor_init_ms,0);
+    assert.equal(timing.exec_confirm_ms,0);
+    assert.ok(timing.cleanup_ms>=0);
+    assert.ok(timing.total_ms>=timing.new_session_ms+timing.cleanup_ms);
+    assert.deepEqual(Object.keys(timing).sort(),['cleanup_ms','exec_confirm_ms','executor_init_ms','last_phase','new_session_ms','timeout_ms','total_ms']);
+    t.diagnostic(JSON.stringify({delayedCreationFailure:timing}));
+    return true;
+  });
   assert.equal(f.tmux('list-sessions','-F','#{session_name}').trim(),'keeper');
 });

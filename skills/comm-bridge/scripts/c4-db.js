@@ -439,6 +439,8 @@ export const claimConversation = (...args) => store.claimConversation(...args);
 export const requeueConversation = (...args) => store.requeueConversation(...args);
 export const markDelivered = (...args) => store.markDelivered(...args);
 export const expirePending = (...args) => store.expirePending(...args);
+export const listFailureReceipts = (...args) => store.listFailureReceipts(...args);
+export const settleFailureReceipt = (...args) => store.settleFailureReceipt(...args);
 export const failDelivery = (...args) => store.failDelivery(...args);
 export const recoverOrphanRunning = (...args) => store.recoverOrphanRunning(...args);
 export const listPendingSessionGroups = (...args) => store.listPendingSessionGroups(...args);

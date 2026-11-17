@@ -1,6 +1,7 @@
 import { dataError, requireGroup } from './c4-session-group.js';
+import { messageForFailureReceipt } from './failure-receipt-template.js';
 import { MAX_RETRIES } from './c4-config.js';
-export function deliveryFunctions({ read, write, snapshot, get, all, run, seconds }) {
+export function deliveryFunctions({ read, write, snapshot, get, all, run, seconds, insert }) {
   const unfenced = "NOT EXISTS(SELECT 1 FROM drain_fences WHERE session_group=conversations.session_group OR session_group='*')";
   function groups(values) {
     if (values === undefined) return { sql: '', args: [] };
@@ -8,18 +9,50 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
     values.forEach(value => requireGroup(value));
     return { sql: values.length ? ` AND session_group IN (${values.map(() => '?').join(',')})` : ' AND 0', args: values };
   }
+  function enqueueReceipt(c, id, reason) {
+    const row = get(c, 'SELECT id,channel,endpoint_id,session_group,delivery_action FROM conversations WHERE id=?', id);
+    if (!row || row.delivery_action === 'failure_receipt' ||
+        get(c, 'SELECT 1 FROM failure_receipts WHERE receipt_conversation_id=?', id) ||
+        !row.endpoint_id || ['system', 'void'].includes(row.channel)) return;
+    const queued = run(c, `INSERT OR IGNORE INTO failure_receipts(conversation_id,reason,state,created_at,updated_at)
+      VALUES(?,?,'pending',?,?)`, id, reason, seconds(), seconds()).changes;
+    if (!queued || row.channel !== 'internal') return;
+    // The original sender is immutable routing metadata, never parsed from content.
+    requireGroup(row.endpoint_id);
+    const receipt = insert(c, 'in', 'internal', row.session_group,
+      messageForFailureReceipt({ ...row, reason }), row.endpoint_id,
+      { deliveryAction: 'failure_receipt' });
+    run(c, "UPDATE failure_receipts SET state='queued',receipt_conversation_id=?,updated_at=? WHERE conversation_id=?",
+      receipt.id, seconds(), id);
+  }
   return {
+    listFailureReceipts: ({ limit = 20 } = {}) => read(c => {
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw dataError('INVALID_ARGS', 'limit must be between 1 and 100');
+      return all(c, `SELECT conversations.id,conversations.direction,conversations.channel,conversations.endpoint_id,
+        conversations.session_group,failure_receipts.reason FROM failure_receipts
+        JOIN conversations ON conversations.id=failure_receipts.conversation_id
+        WHERE failure_receipts.state='pending' ORDER BY conversation_id LIMIT ?`, limit);
+    }),
+    settleFailureReceipt: (id, outcome) => write(c => {
+      if (!['sent','suppressed','uncertain','failed'].includes(outcome)) throw dataError('INVALID_ARGS', 'Invalid receipt outcome');
+      return run(c, "UPDATE failure_receipts SET state=?,updated_at=? WHERE conversation_id=? AND state='pending'",
+        outcome, seconds(), id).changes > 0;
+    }),
     getNextPending: ({ sessionGroups } = {}) => { const filter = groups(sessionGroups); return read(c => get(c, `SELECT * FROM conversations WHERE direction='in' AND status='pending' AND ${unfenced}${filter.sql} ORDER BY priority,id LIMIT 1`, ...filter.args) ?? null); },
     claimConversation: id => write(c => run(c, `UPDATE conversations SET status='running' WHERE id=? AND direction='in' AND status='pending' AND ${unfenced}`, id).changes > 0),
     requeueConversation: id => write(c => run(c, "UPDATE conversations SET status='pending' WHERE id=? AND direction='in' AND status='running'", id).changes > 0),
     markDelivered: (id, { sessionId } = {}) => write(c => run(c, "UPDATE conversations SET status='delivered',session_id=? WHERE id=? AND direction='in' AND status='running'", sessionId ?? null, id).changes > 0),
     expirePending: (id, maxAgeSeconds) => write(c => {
       if (!Number.isSafeInteger(maxAgeSeconds) || maxAgeSeconds <= 0) throw dataError('INVALID_ARGS', 'maxAgeSeconds must be a positive integer');
-      return run(c, "UPDATE conversations SET status='failed',delivery_action='pending_expired' WHERE id=? AND direction='in' AND status='pending' AND ?-unixepoch(timestamp)>?", id, seconds(), maxAgeSeconds).changes > 0;
+      const changed = run(c, "UPDATE conversations SET status='failed',delivery_action='pending_expired' WHERE id=? AND direction='in' AND status='pending' AND ?-unixepoch(timestamp)>?", id, seconds(), maxAgeSeconds).changes > 0;
+      if (changed) enqueueReceipt(c, id, 'pending_expired');
+      return changed;
     }),
-    failDelivery: (id, { maxRetries = MAX_RETRIES } = {}) => write(c => {
+    failDelivery: (id, { maxRetries = MAX_RETRIES, reason = 'delivery_failed' } = {}) => write(c => {
       if (!Number.isSafeInteger(maxRetries) || maxRetries < 1) throw dataError('INVALID_ARGS', 'maxRetries must be positive');
+      if (!['delivery_failed', 'launch_failed', 'ready_timeout'].includes(reason)) throw dataError('INVALID_ARGS', 'Invalid delivery failure reason');
       const row = get(c, "UPDATE conversations SET retry_count=retry_count+1,status=CASE WHEN retry_count+1>=? THEN 'failed' ELSE 'pending' END WHERE id=? AND direction='in' AND status='running' RETURNING status,retry_count AS retryCount", maxRetries, id);
+      if (row?.status === 'failed') enqueueReceipt(c, id, reason);
       if (row) return { changed: true, ...row };
       return { changed: false, status: null, retryCount: null, ...get(c, 'SELECT status,retry_count AS retryCount FROM conversations WHERE id=?', id) };
     }),
@@ -34,6 +67,7 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
       for (const row of rows.sort((a,b) => a.id-b.id)) {
         const key = row.status === 'pending' ? 'requeued' : row.delivery_action === 'orphan_expired' ? 'ageExpired' : 'retryExhausted';
         result[key].ids.push(row.id); result[key].count++;
+        if (row.status === 'failed') enqueueReceipt(c, row.id, row.delivery_action);
       }
       return result;
     }),

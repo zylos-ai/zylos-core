@@ -225,3 +225,11 @@ The core database list is fixed at three in several places:
 
 Update these together, inspect other database-count assumptions, and extend
 the tests. Otherwise the new database may be omitted from snapshots or checks.
+
+## C4 delivery receipt queue
+
+C4 schema 4→5 creates `failure_receipts`. The migration does not enqueue
+receipts for historical failed messages. New terminal failures write their
+receipt record in the same transaction; internal receipts also insert their
+inbound conversation and update its group head in that transaction. Normal
+opens of an older database still require an explicit upgrade.

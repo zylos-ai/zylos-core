@@ -5,7 +5,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { RuntimeAdapter } from './base.js';
 import { adapterError, runtimeExecutable, runtimeHelpAsync, validateLaunchConfig, buildRuntimeArgs, launchEnvironment, writeSessionLaunchScript } from './session-command.js';
-import { settleLaunch } from './session-launch.js';
+import { settleLaunch, LAUNCH_TIMEOUT_MS } from './session-launch.js';
 import { applyUpgradePrompt, discoverUpgradeContext } from './upgrade-context.js';
 import { ZYLOS_DIR } from '../config.js';
 import { TMUX_COMMAND as C, TMUX_FORMAT as F, isIdentityError } from './tmux-protocol.js';
@@ -116,10 +116,11 @@ export class SessionAdapter extends RuntimeAdapter {
     }
   }
   async launch({sessionGroup,runId,launchConfig,sessionMode}) {
-    const {tmuxNameForGroup} = this.options.paths || await import('../session-group-paths.js');
-    const tmuxName = tmuxNameForGroup(sessionGroup ?? 'origin');
-    let connection;
+    const startedAt = performance.now();
+    let connection, failure;
     try {
+      const {tmuxNameForGroup} = this.options.paths || await import('../session-group-paths.js');
+      const tmuxName = tmuxNameForGroup(sessionGroup ?? 'origin');
       try {
         connection = await this.connection();
         const target = await (await this.dependencies()).observeSessionTarget({tmuxName,connection,readReady:async () => null});
@@ -147,8 +148,14 @@ export class SessionAdapter extends RuntimeAdapter {
       const script = writeSessionLaunchScript({command,args,env:cleanEnv,root,multi:sessionMode === 'multi'});
       return await settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,script,tmux:this.options.tmux});
     } catch (error) {
-      if (['NAME_CONFLICT','RUNTIME_NOT_INSTALLED','MODEL_CONFIG_REJECTED','LAUNCH_FAILED'].includes(error.code)) throw error;
-      throw adapterError('LAUNCH_FAILED','Launch preflight failed',error.cause);
-    } finally { connection?.close(); }
+      failure = ['NAME_CONFLICT','RUNTIME_NOT_INSTALLED','MODEL_CONFIG_REJECTED','LAUNCH_FAILED'].includes(error.code)
+        ? error : adapterError('LAUNCH_FAILED','Launch preflight failed',error.cause);
+      failure.launchTiming ??= { new_session_ms: 0, executor_init_ms: 0, exec_confirm_ms: 0,
+        cleanup_ms: 0, total_ms: 0, timeout_ms: LAUNCH_TIMEOUT_MS, last_phase: 'preflight' };
+      throw failure;
+    } finally {
+      connection?.close();
+      if (failure?.launchTiming.last_phase === 'preflight') failure.launchTiming.total_ms = performance.now() - startedAt;
+    }
   }
 }

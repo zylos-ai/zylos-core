@@ -5,6 +5,7 @@ import { normalizeStatusEndpoint } from './status-endpoint.js';
 import { messageForStatus } from './status-notice-templates.js';
 import { logStatusNotice } from './status-notice.js';
 import { systemSendEnvironment } from './c4-system-send-env.js';
+import { messageForFailureReceipt } from './failure-receipt-template.js';
 
 export { normalizeStatusEndpoint } from './status-endpoint.js';
 export const STATUS_NOTICE_TTL_SECONDS = 600;
@@ -37,7 +38,9 @@ export function createStatusNoticeSender({ db = defaultDb, spawn = spawnChild,
       if (typeof record.channel !== 'string' || !/^[a-z][a-z0-9_-]{0,31}$/.test(record.channel) ||
           typeof record.endpoint_id !== 'string' || record.endpoint_id.includes('\0') ||
           record.endpoint_id === '--stdin') throw Error('Invalid notice target');
-      message = render(normalized);
+      message = normalized.noticeKind === 'failure_receipt'
+        ? messageForFailureReceipt({ id: record.id, session_group: record.session_group, reason: normalized.reason })
+        : render(normalized);
     } catch (error) { warn('prepare', record, error); return { outcome: 'failed', code: 'UNHEALTHY_NOTIFY_FAILED' }; }
     let claim;
     try {

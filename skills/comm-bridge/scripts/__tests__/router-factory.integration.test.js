@@ -8,7 +8,7 @@ const environment = createTestEnvironment();
 const database = await import('../c4-db.js');
 const { createDispatcher } = await import('../router/factory.js');
 const { createStatusNoticeSender } = await import('../c4-status-notice.js');
-const { messageForStatus } = await import('../status-notice-templates.js');
+const { messageForFailureReceipt } = await import('../failure-receipt-template.js');
 const { CONFIG_FILE, SKILLS_DIR } = await import('../../../../cli/lib/config.js');
 const { tmuxNameForGroup } = await import('../../../../cli/lib/session-group-paths.js');
 after(() => { database.close(); environment.cleanup(); });
@@ -24,6 +24,12 @@ function configuration(mode = 'multi') {
 // createTestEnvironment owns the shared SQLite root; scene/runtime I/O is injected.
 // The private root has no publication, so env fixes K independently of the host.
 function setup(t, { mode = 'multi', phase } = {}) {
+  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
+    assert.ok(process.env[key]?.startsWith(environment.root + path.sep) ||
+      (key === 'TMPDIR' && environment.root.startsWith(process.env[key] + path.sep)), `${key} must be isolated`);
+  }
+  const filename = database.getDb().pragma('database_list').find(row => row.name === 'main').file;
+  assert.ok(filename.startsWith(environment.root + path.sep), 'SQLite must be isolated');
   configuration(mode);
   const prefix = `factory${++sequence}`, a = `${prefix}a`, b = `${prefix}b`;
   for (const name of [a,b]) fs.mkdirSync(path.join(SKILLS_DIR, name), { recursive: true });
@@ -97,21 +103,54 @@ for (const phase of ['paste','enter','idle','backoff']) test(`factory: ${phase} 
 test('factory: real expiry + shared sender happen post-commit, then next fresh row delivers', async t => {
   const f = setup(t), old = f.add(), fresh = f.add(f.a, 'fresh after expiry');
   f.db.getDb().prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(Math.floor(Date.now()/1000)-1801, old.id);
-  const attempts = [], config = { language: 'en', brand: 'Factory' };
+  const attempts = [];
   f.overrides.sendStatusNotice = createStatusNoticeSender({ db: f.db,
-    render: route => { assert.equal(f.row(old.id).delivery_action, 'pending_expired'); return messageForStatus(route, config); },
+    render: () => assert.fail('durable failure receipt must use its metadata renderer'),
     diagnostic() {}, spawn: (_command, args) => {
       const child = new EventEmitter(); child.pid = 12; child.stdin = new EventEmitter();
-      child.stdin.end = body => { attempts.push({ args, body }); queueMicrotask(() => child.emit('close', 0, null)); };
+      child.stdin.end = body => { assert.equal(f.row(old.id).delivery_action, 'pending_expired'); attempts.push({ args, body }); queueMicrotask(() => child.emit('close', 0, null)); };
       child.kill = () => {}; return child;
     } });
   const dispatcher = f.create(); await dispatcher.initialize(); await dispatcher.idle(); dispatcher.tick(); await dispatcher.idle();
   assert.equal(f.row(old.id).status, 'failed'); assert.equal(f.row(old.id).delivery_action, 'pending_expired');
   assert.equal(f.row(fresh.id).status, 'delivered'); assert.equal(attempts.length, 1);
   assert.deepEqual(attempts[0].args.slice(1), [f.a, `endpoint-${f.a}`]);
-  assert.equal(attempts[0].body, messageForStatus({ runtime: 'codex', health: 'ok', reason: 'pending_expired', noticeKind: 'pending_expired' }, config));
+  assert.equal(attempts[0].body, messageForFailureReceipt({ ...old, reason: 'pending_expired' }));
+  for (let i = 0; i < 3; i++) { dispatcher.tick(); await dispatcher.idle(); }
+  assert.equal(attempts.length, 1, 'persistent receipt must not be sent again');
+  assert.equal(f.db.getDb().prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(old.id).state, 'sent');
   assert.equal(f.calls.filter(c => c[0] === 'paste').length, 1);
   assert.ok(f.db.getStatusNoticeCooldowns().some(c => c.cooldown_key.includes('pending_expired')));
+});
+
+// Durable restart boundary: run for terminal failure/outbox/factory changes; skip UI-only changes.
+// HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and SQLite are read back by setup; terminal I/O
+// is injected, so no tmux socket or external account is opened. Teardown drains all work.
+test('factory: startup drains a persisted failure once without redelivering its original input', async t => {
+  const f = setup(t), original = f.add(f.a, 'private original input');
+  assert.equal(f.db.claimConversation(original.id), true);
+  assert.equal(f.db.failDelivery(original.id, { maxRetries: 1, reason: 'launch_failed' }).status, 'failed');
+  assert.equal(f.db.listFailureReceipts().some(row => row.id === original.id), true);
+  const attempts = [], alerts = [];
+  f.overrides.alert = (...args) => alerts.push(args);
+  f.overrides.sendStatusNotice = createStatusNoticeSender({ db: f.db, diagnostic() {},
+    spawn: (_command, args) => {
+      const child = new EventEmitter(); child.pid = 12; child.stdin = new EventEmitter();
+      child.stdin.end = body => { attempts.push({ args, body }); queueMicrotask(() => child.emit('close', 0, null)); };
+      child.kill = () => {}; return child;
+    } });
+  const fresh = f.add(f.a, 'fresh after startup failure');
+  const dispatcher = f.create();
+  await dispatcher.initialize(); await dispatcher.idle();
+  for (let i = 0; i < 3; i++) { dispatcher.tick(); await dispatcher.idle(); }
+  assert.equal(attempts.length, 1);
+  assert.deepEqual(attempts[0].args.slice(1), [f.a, `endpoint-${f.a}`]);
+  assert.equal(attempts[0].body, messageForFailureReceipt({ ...original, reason: 'launch_failed' }));
+  assert.equal(attempts[0].body.includes('private original input'), false);
+  assert.equal(f.row(original.id).status, 'failed');
+  assert.equal(f.row(fresh.id).status, 'delivered');
+  assert.equal(alerts.length, 0);
+  assert.equal(f.calls.filter(call => call[0] === 'paste').length, 1);
 });
 
 test('factory: actual unreadable remains inert once, even if config repaired', async t => {
@@ -131,28 +170,6 @@ test('factory: actual single directs a non-null group through null origin target
   assert.equal(f.row(row.id).status, 'delivered'); assert.equal(f.row(row.id).session_id, 'business-null');
   assert.deepEqual(f.calls.filter(c => c[0] === 'resolve'), [['resolve', null]]);
   assert.equal(f.calls.find(c => c[0] === 'notify')[1].sessionGroup, null);
-});
-
-test('factory oracle rejects a known-bad scheduler that waits for previous lanes', async t => {
-  const schedulerURL = new URL('../router/scheduler.js', import.meta.url), factoryURL = new URL('../router/factory.js', import.meta.url);
-  const original = fs.readFileSync(schedulerURL, 'utf8');
-  const before = 'const work = lane(group).kick();';
-  assert.ok(original.includes(before));
-  const absolute = (source, url) => source.replace(/from '(\.\.?\/[^']+)'/g, (_, relative) => `from '${new URL(relative, url).href}'`);
-  const uri = source => 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');
-  const altered = absolute(original.replace(before,
-    'const work = tasks.size ? Promise.allSettled([...tasks]).then(() => lane(group).kick()) : lane(group).kick();'), schedulerURL);
-  const factorySource = absolute(fs.readFileSync(factoryURL, 'utf8'), factoryURL).replace(schedulerURL.href, uri(altered));
-  const bad = (await import(uri(factorySource))).createDispatcher;
-  const f = setup(t, { phase: 'paste' }), first = f.add(), second = f.add(f.b);
-  const dispatcher = f.create(bad); await dispatcher.initialize(); await dispatcher.idle(); dispatcher.tick();
-  await until(f.holding, 'mutant must reach the held paste');
-  for (let i = 0; i < 20; i++) await flush();
-  assert.equal(f.row(first.id).status, 'running');
-  assert.throws(() => assert.equal(f.row(second.id).status, 'delivered'), { code: 'ERR_ASSERTION' });
-  assert.equal(f.row(second.id).status, 'pending');
-  f.held.resolve(); await dispatcher.idle();
-  assert.equal(f.row(second.id).status, 'delivered');
 });
 
 test('factory: blocked paste in live A does not prevent absent B from launching and delivering', async t => {

@@ -13,6 +13,7 @@ import { formatConversation } from './format.js';
 import { resolveDashboardQuote } from '../dashboard-source.js';
 import { notifyDelivered, notifyDeliveryFailed } from './notify.js';
 import { createStatusNoticeSender } from '../c4-status-notice.js';
+import { createFailureReceiptDrainer } from '../c4-failure-receipts.js';
 import { createPendingExpiryHandler } from './expiry.js';
 import { createRouterDiagnostics } from './diagnostics.js';
 import { createLifecycleProviders } from './lifecycle.js';
@@ -76,10 +77,8 @@ export function createDispatcher(overrides = {}, options = {}) {
     ...overrides,
   };
   const sendStatusNotice = overrides.sendStatusNotice ?? createStatusNoticeSender({ db, log });
-  const handleExpired = overrides.handleExpired ?? createPendingExpiryHandler({
-    resolveSessionLaunchConfig: input => db.resolveSessionLaunchConfig(input),
-    readRuntimeHealth: providers.readRuntimeHealth, sendStatusNotice,
-  });
+  const drainFailureReceipts = overrides.drainFailureReceipts ?? createFailureReceiptDrainer({ db, sendStatusNotice });
+  const handleExpired = overrides.handleExpired ?? createPendingExpiryHandler({ drainFailureReceipts });
   let router;
   const delivery = createDelivery({ ...providers, getSessionMode: () => router.state.mode,
     formatConversation: overrides.formatConversation ?? (row => formatConversation(row, {
@@ -88,7 +87,7 @@ export function createDispatcher(overrides = {}, options = {}) {
     notifyDelivered: overrides.notifyDelivered ?? notifyDelivered,
     notifyDeliveryFailed: overrides.notifyDeliveryFailed ?? notifyDeliveryFailed,
   }, { ...options.delivery, tmux });
-  router = createRouter({ ...providers, handleExpired, sendStatusNotice,
+  router = createRouter({ ...providers, handleExpired, sendStatusNotice, drainFailureReceipts,
     canAttemptDelivery: delivery.canAttempt, finishDeliveryWait: delivery.finishWait, sweepDeliveryWaits: delivery.sweepWaits,
     maybePeriodicEnter: delivery.maybePeriodicEnter, clearPeriodicEnter: delivery.clearPeriodicEnter,
     deliverControl: overrides.deliverControl ?? delivery.deliverControl,

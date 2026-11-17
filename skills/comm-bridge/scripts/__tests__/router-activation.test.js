@@ -167,3 +167,48 @@ for (const ready of [false, true]) {
     assert.equal(router.state.activations.has('a'), ready);
   });
 }
+
+test('launch timing survives failed identity observation and is logged once per attempt', async t => {
+  const f = routerFixture(t); f.put('origin'); const row = f.add('a');
+  let observationFails = false;
+  const read = f.deps.readLiveIdentity;
+  f.deps.readLiveIdentity = async group => {
+    if (observationFails && group === 'a') throw Object.assign(Error('unobservable'), { code: 'TMUX_UNAVAILABLE' });
+    return read(group);
+  };
+  f.deps.getSessionAdapter = () => ({ launch: async () => {
+    observationFails = true;
+    throw Object.assign(Error('private error'), { code: 'LAUNCH_FAILED', cause: 'timeout', launchTiming: {
+      new_session_ms: 10000, executor_init_ms: 0, exec_confirm_ms: 0, cleanup_ms: 1, total_ms: 10001,
+      timeout_ms: 10000, last_phase: 'new_session',
+    } });
+  }, stop: async () => assert.fail('observation must retain ownership') });
+  await f.create().initialize(); await f.rounds(5);
+  assert.equal(f.row(row.id).status, 'running');
+  assert.equal(f.row(row.id).retry_count, 0);
+  const events = f.events.filter(event => event.event === 'session_launch_failed');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].last_phase, 'new_session');
+  assert.equal(events[0].cause, 'timeout');
+  assert.equal(JSON.stringify(events).includes('private error'), false);
+});
+
+test('READY timeout records launch phase durations under its separate budget', async t => {
+  const f = routerFixture(t); f.put('origin'); const row = f.add('a');
+  const adapter = f.deps.getSessionAdapter;
+  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+    f.put(input.sessionGroup, { ready: false, runId: input.runId });
+    return { launchTiming: { new_session_ms: 20, executor_init_ms: 3, exec_confirm_ms: 40,
+      cleanup_ms: 1, total_ms: 64, timeout_ms: 10000, last_phase: 'exec_confirm' } };
+  } });
+  await f.create().initialize(); await f.rounds(2);
+  assert.equal(f.row(row.id).status, 'running');
+  f.advance(1000); await f.rounds(1);
+  assert.equal(f.row(row.id).retry_count, 1);
+  const event = f.events.find(event => event.event === 'session_launch_failed');
+  assert.equal(event.last_phase, 'runtime_ready');
+  assert.equal(event.timeout_ms, 1000);
+  assert.equal(event.new_session_ms, 20);
+  assert.equal(event.cause, 'ready_timeout');
+  assert.ok(event.total_ms >= 0);
+});

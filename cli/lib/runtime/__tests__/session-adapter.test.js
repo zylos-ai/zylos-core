@@ -115,6 +115,26 @@ test('launch rejects conflicts before binary/config, then missing binary before 
   await assert.rejects(f.adapter.launch(input),{code:'MODEL_CONFIG_REJECTED'});
   assert.equal(f.calls.some(c=>c[0]==='new-session'),false);
 });
+test('launch preflight failures retain sanitized timing and close the executor',async()=>{
+  const f=fixture({present:false});
+  f.adapter.options.paths={tmuxNameForGroup:()=> 'isolated'};
+  f.dependencies.observeSessionTarget=async()=>{
+    await new Promise(resolve=>setTimeout(resolve,20));
+    throw new Error('private preflight detail');
+  };
+  await assert.rejects(f.adapter.launch({sessionGroup:null,runId:'r',sessionMode:'single',
+    launchConfig:{runtime:'claude',mode:'default'}}),error=>{
+    assert.equal(error.code,'LAUNCH_FAILED');
+    const timing=error.launchTiming;
+    assert.equal(timing.last_phase,'preflight');
+    assert.equal(timing.timeout_ms,10000);
+    assert.ok(timing.total_ms>=15);
+    for(const key of ['new_session_ms','executor_init_ms','exec_confirm_ms','cleanup_ms'])assert.equal(timing[key],0);
+    assert.equal(JSON.stringify(timing).includes('private'),false);
+    return true;
+  });
+  assert.deepEqual(f.calls,[['close']]);
+});
 test('unreadable executable identity fails preflight before creation',async()=> {
   const f=fixture({present:false});f.adapter.options.paths={tmuxNameForGroup:()=> 'isolated'};
   f.adapter.options.runtimeExecutable=()=>'/fake';
