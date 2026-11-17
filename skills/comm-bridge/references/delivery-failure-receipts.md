@@ -1,116 +1,104 @@
-# Delivery failure receipts
+# Terminal delivery notifications
 
-New terminal failures from delivery attempts, orphan recovery and pending
-expiry enqueue a receipt in the same C4 transaction. Original messages stay
-failed and are never replayed. Historical failures are not backfilled.
+New terminal failures from initial auth/health rejection, delivery attempts,
+orphan recovery and pending expiry enqueue notification work in the same C4 transaction. Original messages
+stay failed and are never replayed. Historical failed messages are not backfilled.
+The existing `failure_receipts` table holds internal receipts and external
+owner-alert work; its name and schema are unchanged by the routing revision.
 
-Internal receipts use the original row's endpoint (the sender group), never
-its body. Their inbound conversation and group head commit with the original
-failure. Unique original and receipt conversation IDs prevent duplicate and
-recursive receipts, even after expiry overwrites the receipt's delivery action.
+## Internal receipts
 
-External receipts use the original channel and endpoint. The dispatcher drains
-at most 20 pending receipts each poll through the existing status sender,
-including after startup recovery. Its existing 600-second cooldown applies to
-channel, normalized endpoint, target group, runtime, health and failure reason.
-A burst sharing that key admits the first receipt and suppresses other
-messages. Internal receipts have no cooldown. No receipt copies the original body or
-arbitrary exception text. User-message failures do not notify the owner.
+Internal failures return exactly one receipt to the original sender group,
+using stored routing metadata rather than message-body parsing. The receipt's
+inbound row and group head commit with the original terminal failure. Unique
+original/receipt IDs prevent duplicates and recursion, even after expiry changes
+the receipt's delivery action. Internal text includes the original ID, target
+group, fixed reason and “系统回执，无需回复”. It honors statusNotices.brand.
+Unverified Enter delivery says that delivery could not be confirmed.
 
-## Scheduled-message failures
+## External owner alerts
+
+Every non-internal terminal delivery failure goes to the owner, for every
+fixed reason, including delivery_failed, delivery_unverified and
+orphan_retry_exhausted. It never sends a failure receipt to the original chat.
+Initial c4-receive auth/health rejections also insert the failure and owner
+notification atomically, using fixed auth_rejected/runtime_unavailable reasons
+instead of sending a status reply to the original chat. Receive reports the
+committed auth_rejected/failed action; delivery is deferred to the same queue.
+Rows without an original endpoint can still alert the owner. Source metadata
+only selects alert wording; it no longer selects a destination or reason scope.
 
 Scheduler handoff supplies `--core-source scheduler` and `--task-name`. C4
-persists them as nullable `conversations.core_source` and `task_name` in the
-unreleased 4→5 migration. Provenance never comes from a message-body prefix.
-Historical rows have null provenance and retain user-message receipt behavior;
-a missing scheduler task name uses an unnamed-task label.
+persists nullable TEXT conversations.core_source and task_name in the
+unreleased 4→5 migration. Scheduler alerts name the task, with an unnamed-task
+fallback. User alerts identify channel+endpoint and message #id. Both include
+target group, fixed failure classification and a suggestion to have the
+corresponding session investigate in that chat. Bodies and arbitrary exception
+text are never copied. Historical rows have NULL source and use user wording;
+a body prefix never establishes scheduler provenance.
 
-For scheduler messages, `launch_failed`, `ready_timeout`, `pending_expired` and
-`orphan_expired` notifications go to the owner instead of the original chat.
-The last category is expiry observed during restart recovery. Delivery/Enter
-verification failures and retry exhaustion of unknown cause retain their
-ordinary receipt path; they are outside the scheduled startup/readiness/expiry
-scope. No original message is replayed.
+The sender reuses the existing SQLite cooldown/admission mechanism, keyed by
+target session group and fixed reason. Different messages sharing that key
+admit at most one alert per 600 seconds, regardless of source or endpoint.
+Cooldown suppression is terminal for those other messages.
 
-`scheduled-failure-alert.js` reserves the existing durable cooldown/admission
-for the target session group and fixed reason, at most once per 600 seconds
-across different messages. It renders task name, fixed failure classification,
-target group and channel+endpoint, and asks the owner to have the corresponding
-session investigate in that chat. Original message bodies and arbitrary errors
-are never copied. The durable failure queue also works for scheduled messages
-with no reply endpoint.
+The activity-monitor's SupervisorServerHealth.notify implementation lives in
+cli/lib/supervisor-server-health.js. Activity-monitor re-exports the identical
+class and default destination. Comm-bridge uses its Core loader, without
+importing another skill. The routing sequence remains: valid alert_target first;
+unset/invalid target or a failed send falls back once to DEFAULT_ALERT_DESTINATION
+(Dashboard Origin). A configured Origin target is never sent to twice in one
+attempt. Existing continuation and server-health policies retain their routing.
 
-The activity-monitor's existing `SupervisorServerHealth.notify` implementation
-now lives in `cli/lib/supervisor-server-health.js`; activity-monitor re-exports
-the same class. Comm-bridge uses its Core module loader, without importing
-another skill. Both continuation alerts and scheduled-message alerts reuse
-that exact policy: valid `alert_target` first; unset/invalid target or send
-failure falls back once to `DEFAULT_ALERT_DESTINATION` (Dashboard Origin).
-The shared policy's outcome contract is unchanged, including a best-effort
-fallback when both destinations fail. Queue `sent` here means that shared
-notification policy completed; it is not independent transport confirmation.
+notify now returns true only when a channel-send promise resolves without
+throwing and without returning false, for either configured target or fallback.
+It returns false if both destinations fail (or the configured Origin fails).
+This is the existing transport's observable success, not an independent
+end-user read receipt. Other callers may continue ignoring the result.
 
-Non-scheduler sources without a reply route (`system`, `void`, or no endpoint)
-have no receipt. Scheduler control-queue work is outside this conversation-row
-failure path. Origin resident launch and continuation launch have no claimed
-message and create no receipt. Origin failures remain in Router diagnostics;
+## Persistent alert delivery and bounds
+
+External failure work commits as pending. Cooldown admission and transition to
+queued commit together; queued survives restart and bypasses cooldown for the
+same notification, while different messages are still suppressed.
+
+The sender marks an alert sent only on notify === true. False, missing results,
+throws or uncertain results leave it retryable. Failed attempts persist their
+time and wait at least 30 seconds; a same-second first failure may round to
+31 seconds. At age 600 seconds from created_at the work becomes terminal failed,
+without another send. A drain handles at most 20 eligible rows and is single
+flight. No retry counter or configuration option is added. With immediate
+transport failures and advancing 31-second polls, tests observe 20 attempts
+(40 channel sends when owner and Origin both fail), then zero further sends.
+Actual slow transport attempts reduce that count.
+
+A crash before sending is recoverable from the queue. A crash after sending
+but before durable settlement can duplicate the same owner alert. Crashes do
+not increment a retry counter; remaining lifetime and persisted backoff remain
+in force. Neither alert failure nor exhaustion recursively creates another
+notification. Original failed messages are never redelivered.
+
+The production drainer emits failure_receipt_send_failed and
+failure_receipt_exhausted in Router diagnostics. These existing event names
+are retained. They contain IDs, fixed classifications and numeric age/lifetime,
+never message bodies, exception text, credentials or environment values.
+
+Scheduler control-queue work is outside this conversation-row failure path.
+Origin resident startup and continuation launch have no claimed message, so
+create no per-message notification. Origin failures remain in Router diagnostics;
 continuation failures retain their existing five-failure, 30-minute-cooled
 owner notification.
 
-## Internal exactly once; external best effort within a bounded lifetime
-
-Internal receipt insertion commits exactly once with the original failure.
-External receipts are best effort for at most 600 seconds from their stored
-`created_at`. Crash windows can produce a repeat within that lifetime. No
-channel idempotency mechanism is introduced.
-
-Cooldown reservation and the receipt's `pending`→`queued` admission commit
-in one SQLite transaction. `queued` means this external receipt has durable
-permission to send. On restart, that same receipt bypasses cooldown, even
-when its old reservation still exists. Other messages remain subject to the
-600-second cooldown and can be classified `suppressed` before admission.
-
-Only confirmed successful sends mark admitted receipts `sent`. Failed or
-uncertain transport results update the attempt time and wait at least 30
-seconds before another send. Once 600 seconds have elapsed from `created_at`,
-the receipt becomes terminal `failed` and is never sent again. Crash recovery
-resumes durable admission without incrementing a retry counter; no retry
-counter is stored. Bounded draining orders by attempt time then original ID
-so retries do not permanently block later work. Internal queued receipts are
-excluded from external draining. No outcome creates a recursive receipt or
-additional owner alert.
-
-The production drainer reports failed or uncertain sends as structured
-`failure_receipt_send_failed` Router diagnostics and lifetime exhaustion as
-`failure_receipt_exhausted`. These events contain routing identifiers and
-fixed outcome classifications only, never message bodies, credentials, or
-arbitrary exception text.
-
-A crash after reservation but before spawn retries the original receipt within
-its remaining lifetime.
-A crash after a successful external send but before queue settlement also
-resends it within its remaining lifetime, potentially producing a duplicate.
-Repeated crashes in that window can produce further duplicates until the
-lifetime expires. Once success is durably settled,
-further polls do not send that receipt again. Original messages stay failed;
-only their notification is retried.
-
 ## Launch diagnostics
 
-Preflight, launch creation, executor initialization and exec confirmation share
-one monotonic 10-second budget starting at `SessionAdapter.launch`, with no
-configuration option. Preflight open/command I/O receives the remaining budget;
-its former independent 3000 ms timeout no longer truncates this launch path.
-Time spent in preflight is deducted from all later phases. Runtime capability
-queries are also bounded by the remaining time. Runtime READY still has its
-separate 30-second budget. Other tmux I/O defaults remain unchanged. Guarded
-cleanup retains its separate bounded allowance after launch failure.
+Preflight, capability queries, new-session, executor initialization and exec
+confirmation share one monotonic 10-second budget starting at SessionAdapter.launch,
+with no configuration option. Every launch operation gets the remaining budget.
+Other tmux I/O defaults and the separate 30-second runtime READY budget remain
+unchanged. Guarded cleanup has its separate bounded allowance.
 
-Launch settlement retains monotonic phase durations. For launch errors and
-READY timeout, Router emits `session_launch_failed` with
-`preflight_ms`, `new_session_ms`, `executor_init_ms`, `exec_confirm_ms`, `cleanup_ms`, `total_ms`,
-`timeout_ms`, `last_phase`, `attempt`, `run_id`, `conversation_id`, and `cause`.
-Only fixed classifications and durations enter that event. NAME_CONFLICT is
-uncounted, unconfirmed stop retains ownership, and observed READY wins over a
-launch error. Preflight failures identify their phase as `preflight`; READY timeout uses
-`runtime_ready` and the separate READY budget.
+session_launch_failed contains preflight_ms, new_session_ms, executor_init_ms,
+exec_confirm_ms, cleanup_ms, total_ms, timeout_ms, last_phase, attempt, run_id,
+conversation_id and cause. NAME_CONFLICT is uncounted, unconfirmed stop retains
+ownership and observed READY wins over launch error. Preflight failures identify
+preflight; READY timeout identifies runtime_ready and its separate budget.

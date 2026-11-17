@@ -15,7 +15,7 @@ import { resolveDashboardQuote } from '../dashboard-source.js';
 import { notifyDelivered, notifyDeliveryFailed } from './notify.js';
 import { createStatusNoticeSender } from '../c4-status-notice.js';
 import { createFailureReceiptDrainer } from '../c4-failure-receipts.js';
-import { createScheduledFailureAlertSender } from '../scheduled-failure-alert.js';
+import { createFailureAlertSender } from '../failure-alert.js';
 import { createPendingExpiryHandler } from './expiry.js';
 import { createRouterDiagnostics } from './diagnostics.js';
 import { createLifecycleProviders } from './lifecycle.js';
@@ -57,7 +57,7 @@ export function createDispatcher(overrides = {}, options = {}) {
   }));
   const ownerAlerts = new SupervisorServerHealth({
     readAlertTarget: () => parseServerAlertTarget(readConfig().alert_target), sendAlert, log });
-  const sendScheduledFailureAlert = overrides.sendScheduledFailureAlert ?? createScheduledFailureAlertSender({
+  const sendFailureAlert = overrides.sendFailureAlert ?? createFailureAlertSender({
     db, notifyOwner: message => ownerAlerts.notify(message), now: () => Math.floor(now() / 1000) });
   const alert = (event, fields) => {
     if (event !== 'continuation_start_failed') { log(`Router alert: ${event} ${JSON.stringify(fields)}`); return; }
@@ -79,7 +79,7 @@ export function createDispatcher(overrides = {}, options = {}) {
     ...overrides,
   };
   const sendStatusNotice = overrides.sendStatusNotice ?? createStatusNoticeSender({ db, log });
-  const drainFailureReceipts = overrides.drainFailureReceipts ?? createFailureReceiptDrainer({ db, sendStatusNotice, sendScheduledFailureAlert, diagnostic, now: () => Math.floor(now() / 1000) });
+  const drainFailureReceipts = overrides.drainFailureReceipts ?? createFailureReceiptDrainer({ db, sendFailureAlert, diagnostic, now: () => Math.floor(now() / 1000) });
   const handleExpired = overrides.handleExpired ?? createPendingExpiryHandler({ drainFailureReceipts });
   let router;
   const delivery = createDelivery({ ...providers, getSessionMode: () => router.state.mode,

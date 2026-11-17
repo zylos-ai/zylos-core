@@ -61,7 +61,7 @@ for (const mode of ['pending_expired', 'orphan_expired', 'orphan_retry_exhausted
   });
 }
 
-test('external receipt survives database close before send and settles once', t => {
+test('external owner alert survives database close before send and settles once', t => {
   const f = fixture(t, {}, true);
   const row = f.store.insertConversation('in', 'telegram', 'original-chat', 'private body');
   exhaust(f.store, row);
@@ -80,16 +80,17 @@ test('external receipt survives database close before send and settles once', t 
   assert.equal(store.listFailureReceipts().length, 0);
 });
 
-test('old failed rows and nonreplyable system sources do not create receipts', t => {
+test('old failed rows are not backfilled and new noninternal failures queue owner alerts without endpoints', t => {
   const f = fixture(t);
   f.store.insertConversation('in', 'telegram', 'chat', 'old', { status: 'failed' });
-  const system = f.store.insertConversation('in', 'system', 'scheduler', 'task');
+  const system = f.store.insertConversation('in', 'system', null, 'task');
   exhaust(f.store, system);
-  assert.equal(f.store.listFailureReceipts().length, 0);
-  assert.equal(f.db.prepare('SELECT count(*) AS n FROM failure_receipts').get().n, 0);
+  assert.equal(f.store.listFailureReceipts().length, 1);
+  assert.equal(f.store.listFailureReceipts()[0].id, system.id);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM failure_receipts').get().n, 1);
 });
 
-for (const state of ['pending', 'queued']) test(`external ${state} receipt preserves backoff through restart`, t => {
+for (const state of ['pending', 'queued']) test(`external ${state} alert preserves backoff through restart`, t => {
   let clock = 1800000000000;
   const f = fixture(t, { now: () => clock }, true);
   const row = f.store.insertConversation('in', 'telegram', 'retry-chat', 'private body');
@@ -122,7 +123,7 @@ test('external retry backoff leaves untouched work immediately eligible', t => {
   assert.deepEqual(f.store.listFailureReceipts().map(row => row.id), [second.id, first.id]);
 });
 
-for (const outcome of ['failed', 'uncertain']) test(`permanently ${outcome} external receipt stops after its persisted lifetime`, t => {
+for (const outcome of ['failed', 'uncertain']) test(`permanently ${outcome} owner alert stops after its persisted lifetime`, t => {
   let clock = 1800000000000;
   const f = fixture(t, { now: () => clock }, true);
   const row = f.store.insertConversation('in', 'telegram', 'dead-chat', 'private body');

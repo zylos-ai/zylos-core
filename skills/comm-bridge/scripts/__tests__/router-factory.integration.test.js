@@ -2,13 +2,11 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { EventEmitter } from 'node:events';
 import { createTestEnvironment } from '../../../../scripts/test-environment.js';
 const environment = createTestEnvironment();
 const database = await import('../c4-db.js');
 const { createDispatcher } = await import('../router/factory.js');
-const { createStatusNoticeSender } = await import('../c4-status-notice.js');
-const { messageForFailureReceipt } = await import('../failure-receipt-template.js');
+const { messageForFailureAlert } = await import('../failure-receipt-template.js');
 const { CONFIG_FILE, SKILLS_DIR } = await import('../../../../cli/lib/config.js');
 const { tmuxNameForGroup } = await import('../../../../cli/lib/session-group-paths.js');
 after(() => { database.close(); environment.cleanup(); });
@@ -44,6 +42,7 @@ function setup(t, { mode = 'multi', phase } = {}) {
   const db = { ...database };
   const overrides = {
     env: { ...process.env, ZYLOS_SESSION_POOL_SIZE: '2' },
+    sendAlert: async (target, message) => { calls.push(['owner_alert', target, message]); return true; },
     db, diagnostics: { diagnostic: (...args) => calls.push(['event', ...args]), maintain() {} }, log: message => calls.push(['log', message]),
     listGroupTmuxSessions: async () => keys.map(sessionGroup => ({ sessionGroup, ...scenes.get(sessionGroup) })),
     readLiveIdentities: async groups => new Map(groups.map(group => [group, scenes.get(group) ?? { present: false }])),
@@ -100,25 +99,23 @@ for (const phase of ['paste','enter','idle','backoff']) test(`factory: ${phase} 
   assert.ok(f.calls.find(c => c[0] === 'paste' && c[1] === f.a)[2].includes('---- reply via:'));
 });
 
-test('factory: real expiry + shared sender happen post-commit, then next fresh row delivers', async t => {
+test('factory: real expiry sends only an owner alert after commit, then fresh work delivers', async t => {
   const f = setup(t), old = f.add(), fresh = f.add(f.a, 'fresh after expiry');
   f.db.getDb().prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(Math.floor(Date.now()/1000)-1801, old.id);
   const attempts = [];
-  f.overrides.sendStatusNotice = createStatusNoticeSender({ db: f.db,
-    render: () => assert.fail('durable failure receipt must use its metadata renderer'),
-    diagnostic() {}, spawn: (_command, args) => {
-      const child = new EventEmitter(); child.pid = 12; child.stdin = new EventEmitter();
-      child.stdin.end = body => { assert.equal(f.row(old.id).delivery_action, 'pending_expired'); attempts.push({ args, body }); queueMicrotask(() => child.emit('close', 0, null)); };
-      child.kill = () => {}; return child;
-    } });
+  f.overrides.readZylosConfigStrict = () => ({ state: 'ok', config: { alert_target: 'owner-test:owner-private' } });
+  f.overrides.sendStatusNotice = async () => assert.fail('terminal expiry must not reply to the external chat');
+  f.overrides.sendAlert = async (target, body) => {
+    assert.equal(f.row(old.id).delivery_action, 'pending_expired');
+    attempts.push({ target, body }); return true;
+  };
   const dispatcher = f.create(); await dispatcher.initialize(); await dispatcher.idle(); dispatcher.tick(); await dispatcher.idle();
   assert.equal(f.row(old.id).status, 'failed'); assert.equal(f.row(old.id).delivery_action, 'pending_expired');
   assert.equal(f.row(fresh.id).status, 'delivered'); assert.equal(attempts.length, 1);
-  assert.deepEqual(attempts[0].args.slice(1), [f.a, `endpoint-${f.a}`]);
-  assert.equal(attempts[0].body, messageForFailureReceipt({ ...old, reason: 'pending_expired' }));
-  assert.match(attempts[0].body, /^\[Factory\]/);
+  assert.deepEqual(attempts[0].target, { channel: 'owner-test', endpoint: 'owner-private' });
+  assert.equal(attempts[0].body, messageForFailureAlert({ ...old, reason: 'pending_expired' }));
   for (let i = 0; i < 3; i++) { dispatcher.tick(); await dispatcher.idle(); }
-  assert.equal(attempts.length, 1, 'persistent receipt must not be sent again');
+  assert.equal(attempts.length, 1, 'settled owner alert must not be sent again');
   assert.equal(f.db.getDb().prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(old.id).state, 'sent');
   assert.equal(f.calls.filter(c => c[0] === 'paste').length, 1);
   assert.ok(f.db.getStatusNoticeCooldowns().some(c => c.cooldown_key.includes('pending_expired')));
@@ -132,25 +129,20 @@ test('factory: startup drains a persisted failure once without redelivering its 
   assert.equal(f.db.claimConversation(original.id), true);
   assert.equal(f.db.failDelivery(original.id, { maxRetries: 1, reason: 'launch_failed' }).status, 'failed');
   assert.equal(f.db.listFailureReceipts().some(row => row.id === original.id), true);
-  const attempts = [], alerts = [];
-  f.overrides.alert = (...args) => alerts.push(args);
-  f.overrides.sendStatusNotice = createStatusNoticeSender({ db: f.db, diagnostic() {},
-    spawn: (_command, args) => {
-      const child = new EventEmitter(); child.pid = 12; child.stdin = new EventEmitter();
-      child.stdin.end = body => { attempts.push({ args, body }); queueMicrotask(() => child.emit('close', 0, null)); };
-      child.kill = () => {}; return child;
-    } });
+  const attempts = [];
+  f.overrides.readZylosConfigStrict = () => ({ state: 'ok', config: { alert_target: 'owner-test:owner-private' } });
+  f.overrides.sendStatusNotice = async () => assert.fail('terminal user failure must not reply to the external chat');
+  f.overrides.sendAlert = async (target, body) => { attempts.push({ target, body }); return true; };
   const fresh = f.add(f.a, 'fresh after startup failure');
   const dispatcher = f.create();
   await dispatcher.initialize(); await dispatcher.idle();
   for (let i = 0; i < 3; i++) { dispatcher.tick(); await dispatcher.idle(); }
   assert.equal(attempts.length, 1);
-  assert.deepEqual(attempts[0].args.slice(1), [f.a, `endpoint-${f.a}`]);
-  assert.equal(attempts[0].body, messageForFailureReceipt({ ...original, reason: 'launch_failed' }));
+  assert.deepEqual(attempts[0].target, { channel: 'owner-test', endpoint: 'owner-private' });
+  assert.equal(attempts[0].body, messageForFailureAlert({ ...original, reason: 'launch_failed' }));
   assert.equal(attempts[0].body.includes('private original input'), false);
   assert.equal(f.row(original.id).status, 'failed');
   assert.equal(f.row(fresh.id).status, 'delivered');
-  assert.equal(alerts.length, 0);
   assert.equal(f.calls.filter(call => call[0] === 'paste').length, 1);
 });
 
@@ -269,31 +261,33 @@ for (const runtime of ['claude', 'codex']) for (const outcome of ['timeout', 'bo
   });
 }
 
-// Run for receipt retry scheduling/diagnostic composition; skip unrelated UI.
+// Run for owner-alert retry scheduling/diagnostic composition; skip unrelated UI.
 // setup reads back isolated HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and actual SQLite.
 // Runtime and transport boundaries are injected; no tmux, account or network.
-test('factory: permanent receipt failure backs off and terminates with structured diagnostics', async t => {
+test('factory: failed owner and Origin alerts back off and terminate with structured diagnostics', async t => {
   const f = setup(t), row = f.add();
   f.db.claimConversation(row.id);
   f.db.failDelivery(row.id, { maxRetries: 1, reason: 'launch_failed' });
   let sends = 0;
-  f.overrides.sendStatusNotice = async () => { sends++; return { outcome: 'uncertain' }; };
+  f.overrides.readZylosConfigStrict = () => ({ state: 'ok', config: { alert_target: 'owner-test:owner-private' } });
+  f.overrides.sendStatusNotice = async () => assert.fail('terminal failure must not reply to the external chat');
+  f.overrides.sendAlert = async () => { sends++; return false; };
   const dispatcher = f.create();
   await dispatcher.initialize(); await dispatcher.idle();
   dispatcher.tick(); await dispatcher.idle();
-  assert.equal(sends, 1);
+  assert.equal(sends, 2);
   assert.equal(f.calls.filter(call => call[0] === 'event' && call[1] === 'failure_receipt_send_failed').length, 1);
   dispatcher.tick(); await dispatcher.idle();
-  assert.equal(sends, 1, 'polling cannot bypass persisted backoff');
+  assert.equal(sends, 2, 'polling cannot bypass persisted backoff');
   f.db.getDb().prepare('UPDATE failure_receipts SET created_at=created_at-600 WHERE conversation_id=?').run(row.id);
   dispatcher.tick(); await dispatcher.idle();
-  assert.equal(sends, 1);
+  assert.equal(sends, 2);
   assert.equal(f.db.getDb().prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(row.id).state, 'failed');
   const terminal = f.calls.filter(call => call[0] === 'event' && call[1] === 'failure_receipt_exhausted');
   assert.equal(terminal.length, 1);
   assert.equal(terminal[0][2].conversation_id, row.id);
   dispatcher.tick(); await dispatcher.idle();
-  assert.equal(sends, 1);
+  assert.equal(sends, 2);
   assert.equal(f.calls.filter(call => call[0] === 'event' && call[1] === 'failure_receipt_exhausted').length, 1);
 });
 
@@ -309,7 +303,7 @@ test('factory: scheduled startup failure uses owner alert and Origin fallback ex
   f.overrides.readZylosConfigStrict = () => ({ state: 'ok', config: { alert_target: 'telegram:broken-owner-chat' } });
   f.overrides.sendStatusNotice = async () => assert.fail('scheduled startup failure must not reply to original chat');
   f.overrides.sendAlert = async (target, message) => { sends.push({ target, message });
-    if (target.channel === 'telegram') throw Error('SECRET transport failure'); };
+    if (target.channel === 'telegram') throw Error('SECRET transport failure'); return true; };
   const dispatcher = f.create(); await dispatcher.initialize(); await dispatcher.idle();
   dispatcher.tick(); await dispatcher.idle();
   assert.equal(sends.length, 2);

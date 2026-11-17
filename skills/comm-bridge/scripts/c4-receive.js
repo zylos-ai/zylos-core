@@ -2,7 +2,6 @@
 import fs from 'node:fs';
 import { isMainModule } from './is-main-module.js';
 import * as database from './c4-db.js';
-import { reserveStatusNotice, sendStatusNotice } from './status-notice.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
 import { validateGroupName, composeSessionGroup, dataError, isDataError } from './c4-session-group.js';
 import { appendEntryEvent } from './c4-entry-events.js';
@@ -63,8 +62,6 @@ export async function receive(args, dependencies = {}) {
   const db = dependencies.db ?? database;
   const routeQuery = dependencies.queryRoute ?? queryRoute;
   const append = dependencies.appendEntryEvent ?? appendEntryEvent;
-  const reserve = dependencies.reserveStatusNotice ?? reserveStatusNotice;
-  const send = dependencies.sendStatusNotice ?? sendStatusNotice;
   const diagnostic = dependencies.diagnostic ?? console.error;
   const receivedAt = (dependencies.now ?? Date.now)();
   const input = parseReceiveArgs(args, { diagnostic });
@@ -102,6 +99,7 @@ export async function receive(args, dependencies = {}) {
   try {
     record = db.insertConversation('in', channel, noReply ? null : endpoint, content, {
       status: pending ? 'pending' : 'failed', priority, requireIdle,
+      ...(!pending && channel !== 'internal' ? { failureReason: auth ? 'auth_rejected' : 'runtime_unavailable' } : {}),
       ...(coreSource !== undefined ? { coreSource } : {}),
       ...(taskName !== undefined ? { taskName } : {}),
       ...(auth ? { deliveryAction: 'auth_rejected' } : {}),
@@ -118,37 +116,13 @@ export async function receive(args, dependencies = {}) {
       channel: record.channel, endpoint: record.endpoint_id || '', session_group: record.session_group,
       runtime: route.runtime, reason_code: route.decision, received_at_ms: receivedAt, detail: '' });
   } catch { /* Diagnostic failure must not change an already committed receive. */ }
-  const result = { ok: true, action: pending ? 'queued' : auth ? 'auth_rejected' : 'delivered',
+  const result = { ok: true, action: pending ? 'queued' : auth ? 'auth_rejected' : 'failed',
     id: record.id, sessionGroup: record.session_group, runtime: route.runtime };
   if (auth) result.reasonLogged = await append({ event: 'auth_rejected', conversation_id: record.id,
     channel: record.channel, endpoint: record.endpoint_id || '', session_group: record.session_group,
     runtime: route.runtime, reason_code: route.auth.result === 'failed' ? 'auth_check_failed' : 'auth_check_unconfirmed',
     detail: route.auth.detail });
-  if (pending || noReply) return result;
-  const persisted = ['D1'];
-  let claim;
-  const finalRoute = { ...route, sessionGroup: record.session_group };
-  try { claim = reserve(channel, endpoint, finalRoute); }
-  catch {
-    diagnostic(`status notice reservation failed after conversation ${record.id} committed`);
-    throw dataError('UNHEALTHY_NOTIFY_FAILED', 'Inbound committed; status notice reservation failed. Do not resend.', { persisted, id: record.id });
-  }
-  if (claim.suppressed) {
-    if (!auth) {
-      try {
-        if (!db.markStatusNoticeSuppressed(record.id, { sessionGroup: record.session_group,
-          channel: record.channel, endpointId: record.endpoint_id, health: route.health || 'unavailable', reason: route.reason || route.health || 'unavailable' })) {
-          diagnostic(`status notice suppression did not match conversation ${record.id}`);
-        }
-      } catch { diagnostic(`status notice suppression update failed for conversation ${record.id}`); }
-      result.action = 'suppressed';
-    }
-    return result;
-  }
-  const sent = await send(claim, route.userMessage, finalRoute);
-  if (sent.outcome === 'sent') return result;
-  throw dataError(sent.outcome === 'failed' ? 'UNHEALTHY_NOTIFY_FAILED' : 'UNHEALTHY_NOTIFY_UNCERTAIN',
-    `Inbound committed; status notice ${sent.outcome}. Do not resend.`, { persisted, id: record.id });
+  return result;
 }
 
 export async function main(args = process.argv.slice(2)) {

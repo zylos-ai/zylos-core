@@ -9,9 +9,9 @@ const { messageForFailureReceipt } = await import('../failure-receipt-template.j
 const { CONFIG_FILE } = await import('../local-config.js');
 after(() => environment.cleanup());
 
-const record = { id: 51, session_group: 'chat:target', reason: 'launch_failed', channel: 'telegram' };
+const record = { id: 51, session_group: 'chat:target', reason: 'launch_failed', channel: 'internal' };
 
-test('failure receipt uses configured status notice brand with the same safe default', () => {
+test('internal failure receipt uses configured status notice brand with the same safe default', () => {
   fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify({ statusNotices: { brand: 'Factory' } }));
   assert.match(messageForFailureReceipt(record), /^\[Factory\]/);
@@ -22,14 +22,13 @@ test('failure receipt uses configured status notice brand with the same safe def
 });
 
 test('internal receipt explicitly says no reply is needed without quoting original content', () => {
-  const message = messageForFailureReceipt({ ...record, channel: 'internal', content: 'PRIVATE ORIGINAL' }, {});
+  const message = messageForFailureReceipt({ ...record, content: 'PRIVATE ORIGINAL' }, {});
   assert.match(message, /系统回执，无需回复/);
   assert.match(message, /System receipt; no reply is needed/);
   assert.equal(message.includes('PRIVATE ORIGINAL'), false);
-  assert.equal(messageForFailureReceipt(record, {}).includes('无需回复'), false);
 });
 
-test('exhausted delivery verification describes uncertainty rather than confirmed non-delivery', () => {
+test('internal exhausted delivery verification describes uncertainty rather than confirmed non-delivery', () => {
   const message = messageForFailureReceipt({ ...record, reason: 'delivery_unverified' }, {});
   assert.match(message, /消息 #51 未能确认送达会话组「chat:target」/);
   assert.match(message, /could not be confirmed delivered/);

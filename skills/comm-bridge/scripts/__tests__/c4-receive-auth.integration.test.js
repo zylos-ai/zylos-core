@@ -72,13 +72,20 @@ async function fixture(t) {
   const env = { ...process.env, HOME: path.join(root, 'home'), ZYLOS_DIR: root,
     PM2_HOME: path.join(root, 'pm2'), TMPDIR: path.join(root, 'tmp'), TMUX_TMPDIR: path.join(root, 'tmux') };
   delete env.TMUX;
+  for (const key of ['HOME', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR']) assert.ok(env[key].startsWith(root + path.sep));
+  assert.equal(env.ZYLOS_DIR, root);
   return { requests, errors, checks: () => checks,
     async receive(args) {
       const { stdout } = await run(process.execPath, [receiver, ...args, '--json', '--content', 'component task'],
         { env, timeout: 5000, killSignal: 'SIGKILL', maxBuffer: 65536 });
       const result = JSON.parse(stdout.trim().split('\n').at(-1));
       const db = new Database(path.join(root, 'comm-bridge/c4.db'));
-      try { return { result, row: db.prepare('SELECT * FROM conversations WHERE id=?').get(result.id) }; }
+      try {
+        assert.equal(db.pragma('database_list').find(row => row.name === 'main').file, path.join(root, 'comm-bridge/c4.db'));
+        return { result, row: db.prepare('SELECT * FROM conversations WHERE id=?').get(result.id),
+          notification: db.prepare('SELECT * FROM failure_receipts WHERE conversation_id=?').get(result.id),
+          outboundCount: db.prepare("SELECT count(*) n FROM conversations WHERE direction='out'").get().n };
+      }
       finally { db.close(); }
     } };
 }
@@ -96,9 +103,11 @@ for (const args of [['--channel', 'telegram', '--endpoint', 'ep1'],
   ['--channel', 'telegram', '--no-reply'], ['--channel', 'system', '--no-reply']]) {
   test(`explicit channel input remains authentication rejected: ${args.join(' ')}`, async t => {
     const f = await fixture(t);
-    const { result, row } = await f.receive(args);
+    const { result, row, notification, outboundCount } = await f.receive(args);
     assert.equal(result.action, 'auth_rejected'); assert.equal(row.status, 'failed');
     assert.equal(row.delivery_action, 'auth_rejected');
+    assert.equal(notification.reason, 'auth_rejected'); assert.equal(notification.state, 'pending');
+    assert.equal(outboundCount, 0);
     assert.equal(f.requests.length, 1); assert.equal(f.requests[0].componentName, args[1]);
     assert.equal(f.checks(), 1); assert.equal(f.errors.length, 0);
   });

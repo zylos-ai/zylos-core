@@ -70,13 +70,16 @@ for (const [label, options, code] of [
   assert.deepEqual(real.rows(),[]);
 });
 
-for (const [noticeExit,code] of [[undefined,'UNHEALTHY_NOTIFY_FAILED'],[7,'UNHEALTHY_NOTIFY_UNCERTAIN']])
- test(`real committed receipt: ${code}`, t => {
+for (const noticeExit of [undefined, 7])
+ test(`real terminal receive persists owner notification without channel send exit ${noticeExit ?? 'missing'}`, t => {
   const real=realReceive(t,{health:'unavailable',noticeExit});
   const result=real.send('x',{replyChannel:'telegram',replyEndpoint:'target'});
-  assert.equal(result.category,'C',result.stdout+result.stderr);
-  assert.equal(result.receipt.error.code,code); assert.deepEqual(result.receipt.error.persisted,['D1']);
+  assert.equal(result.category,'success',result.stdout+result.stderr);
+  assert.equal(result.receipt.action, 'failed');
   assert.equal(real.rows().filter(row=>row.direction==='in').length,1);
+  assert.equal(real.rows().filter(row=>row.direction==='out').length,0);
+  const notification = real.db.prepare('SELECT reason,state FROM failure_receipts WHERE conversation_id=?').get(result.receipt.id);
+  assert.equal(notification.reason, 'runtime_unavailable'); assert.equal(notification.state, 'pending');
 });
 
 for (const [mode, category] of [

@@ -134,12 +134,16 @@ export function createStore(database, dependencies = {}) {
     insertConversation: (direction, channel, endpointId, content, options = {}) => write(c => {
       if (!options || typeof options !== 'object' || Array.isArray(options)) throw dataError('INVALID_ARGS', 'Expected message options');
       if (typeof content !== 'string') throw dataError('INVALID_ARGS', 'Message content must be a string');
-      const allowed = new Set(['status', 'priority', 'requireIdle', 'deliveryAction', 'groupName', 'handoffGroup', 'wholeGroup', 'sessionId', 'coreSource', 'taskName']);
+      const allowed = new Set(['status', 'priority', 'requireIdle', 'deliveryAction', 'groupName', 'handoffGroup', 'wholeGroup', 'sessionId', 'coreSource', 'taskName', 'failureReason']);
       if (Object.keys(options).some(key => !allowed.has(key))) throw dataError('INVALID_ARGS', 'Unknown message option');
       if (options.coreSource != null && options.coreSource !== 'scheduler') throw dataError('INVALID_ARGS', 'Unknown core source');
       if (options.taskName != null && typeof options.taskName !== 'string') throw dataError('INVALID_ARGS', 'Task name must be a string');
       if (options.status !== undefined && !(direction === 'in' ? ['pending', 'failed'] : ['delivered']).includes(options.status)) throw dataError('INVALID_ARGS', 'Invalid initial message status');
-      return insert(c, direction, channel, endpointId, content, resolve(c, direction, channel, endpointId, options), options);
+      if (options.failureReason !== undefined && (direction !== 'in' || options.status !== 'failed' ||
+          !['auth_rejected', 'runtime_unavailable'].includes(options.failureReason))) throw dataError('INVALID_ARGS', 'Invalid initial failure reason');
+      const row = insert(c, direction, channel, endpointId, content, resolve(c, direction, channel, endpointId, options), options);
+      if (options.failureReason !== undefined) delivery.enqueueReceipt(c, row.id, options.failureReason);
+      return row;
     }),
     insertInternalMessage: (senderGroup, targetGroup, content, { sessionId } = {}) => write(c => {
       if (!senderGroup) throw dataError('NO_SENDER_GROUP', 'Sender session group is required');
@@ -156,7 +160,8 @@ export function createStore(database, dependencies = {}) {
   const config = configFunctions(context);
   const progress = progressFunctions(context);
   const transitions = transitionFunctions({ ...context, ...progress });
-  Object.assign(api, deletionFunctions(context), deliveryFunctions(context), config.api, progress.api, controlFunctions({ ...context, baseline: config.baseline }), transitions.api);
+  const delivery = deliveryFunctions(context);
+  Object.assign(api, deletionFunctions(context), delivery.api, config.api, progress.api, controlFunctions({ ...context, baseline: config.baseline }), transitions.api);
   api.buildTargetBinding = createTargetBindingBuilder({ ...context, baseline: config.baseline, resolveTarget: dependencies.resolveTarget });
   function listGroups({ match, limit, activeSince, keyMatch, raw } = {}) {
     if (match !== undefined && typeof match !== 'string') throw dataError('INVALID_ARGS', 'match must be a string');

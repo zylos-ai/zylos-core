@@ -1,9 +1,9 @@
-import { FAILURE_RECEIPT_LIFETIME_SECONDS, isScheduledFailureAlert } from './failure-receipt-policy.js';
+import { FAILURE_RECEIPT_LIFETIME_SECONDS } from './failure-receipt-policy.js';
 
 /** Durable admission survives crashes; elapsed lifetime and backoff bound sends.
  * Internal receipt creation remains atomic in the store and is never drained.
  */
-export function createFailureReceiptDrainer({ db, sendStatusNotice, sendScheduledFailureAlert, limit = 20,
+export function createFailureReceiptDrainer({ db, sendFailureAlert, limit = 20,
   now = () => Math.floor(Date.now() / 1000), diagnostic = () => {} }) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new TypeError('Invalid receipt drain limit');
   let running = null;
@@ -28,9 +28,7 @@ export function createFailureReceiptDrainer({ db, sendStatusNotice, sendSchedule
       result.attempted++;
       let receipt;
       try {
-        const send = isScheduledFailureAlert(row) ? sendScheduledFailureAlert : sendStatusNotice;
-        receipt = await send(row, { noticeKind: 'failure_receipt', health: 'unavailable',
-          reason: row.reason, runtime: 'unknown' });
+        receipt = await sendFailureAlert(row);
       } catch { receipt = { outcome: 'failed' }; }
       const outcome = ['sent', 'suppressed', 'uncertain', 'failed'].includes(receipt?.outcome) ? receipt.outcome : 'failed';
       if (outcome === 'sent' || outcome === 'suppressed') {

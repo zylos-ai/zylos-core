@@ -2,7 +2,7 @@
 
 Receives messages from external channels and queues them for delivery to Claude.
 
-Accepted work is written with `status='pending'`. Rejected work is recorded with `status='failed'`; a status reply does not deliver that work to the runtime.
+Accepted work is written with `status='pending'`. Rejected work and its durable owner-notification work are recorded atomically with `status='failed'`. No rejection reply is sent to the original chat.
 
 ## Usage
 
@@ -25,6 +25,7 @@ Accepted work is written with `status='pending'`. Rejected work is recorded with
 | `--json` | Output structured JSON instead of plain text |
 | `--session-group <name>` | Component-local group name; validated before routing or database writes |
 | `--core-source scheduler` | Mark a scheduler-originated call; other values are rejected |
+| `--task-name <name>` | Persist the scheduler task name for owner-alert wording; optional |
 
 `scripts/c4-receive-options.json`, next to the actual `c4-receive.js`, is the argument list used by the receiver itself. Its format is `{ "options": { "--channel": { "takesValue": true }, "--no-reply": { "takesValue": false } } }`; all accepted names, including aliases, are listed. `takesValue` specifies whether the next word is consumed as a value, even when it begins with `--`. A missing, unreadable or malformed manifest is an installation error: the receiver exits with `INTERNAL_ERROR` before queuing a message.
 
@@ -68,7 +69,7 @@ Inbound content is stored in the conversations DB exactly as received. `c4-recei
 
 ## Health Routing
 
-Before committing a message, `c4-receive.js` sends a v2 route request. An explicit pending decision takes precedence over health labels, including rate limiting and recovery waits. Authentication rejection writes a failed row with the permanent category `auth_rejected`. Other unrecovered routes also write failed rows. Replies, when enabled, use a cooldown scoped by channel, normalized endpoint, committed group, runtime, health and reason. A CLI action of `delivered` describes the status reply, not delivery of the inbound work to the runtime.
+Before committing a message, `c4-receive.js` sends a v2 route request. An explicit pending decision takes precedence over health labels, including rate limiting and recovery waits. Authentication rejection writes a failed row with the permanent category `auth_rejected` and returns action `auth_rejected`. Other unrecovered routes write failed rows classified `runtime_unavailable` and return action `failed`. Both atomically enqueue durable owner-alert work, including for no-reply inputs. The dispatcher sends the alert through the existing owner/Origin fallback path; the receive call never sends a failure status reply to the original chat. Notification failure does not roll back an already committed input or cause the scheduler to resend it. See [terminal delivery notifications](delivery-failure-receipts.md) for cooldown and bounded retry behavior.
 
 If IPC is unavailable or returns an invalid response, the entry resolves the target runtime and reads only its runtime-health record. An active mode transition, unknown runtime, missing/unreadable health record, or healthy/rate-limited runtime leaves the work pending. Authentication failure rejects external input; scheduler-originated input remains pending. The whole-agent status projection is not a routing source.
 
@@ -82,13 +83,15 @@ When `--json` is passed, all output uses structured JSON on stdout.
 {"ok": true, "action": "queued", "id": 42, "sessionGroup": "telegram", "runtime": "claude"}
 ```
 
+`ok:true` confirms that the inbound record and any required notification work committed. It does not mean the work reached the runtime. `action` is `queued`, `auth_rejected`, or `failed`; owner alert sending happens later.
+
 **Error:**
 
 ```json
 {"ok": false, "error": {"code": "INVALID_ARGS", "message": "--content is required", "persisted": []}}
 ```
 
-Errors include `INVALID_ARGS`, group validation codes, `DB_BUSY`, `INTERNAL_ERROR`, `UNHEALTHY_NOTIFY_FAILED` and `UNHEALTHY_NOTIFY_UNCERTAIN`. A postcommit notice error retains the inbound row and reports `persisted:["D1"]` with its id. An unknown commit state uses `persisted:null`. Do not automatically retry an uncertain or already committed inbound call.
+Errors include `INVALID_ARGS`, group validation codes, `DB_BUSY`, `DB_WRITE_FAILED` and `INTERNAL_ERROR`. If the atomic inbound/notification transaction fails, neither record is committed. An unknown commit state uses `persisted:null`. Do not automatically retry an uncertain or already committed inbound call.
 
 ## Fail-Open Behavior
 

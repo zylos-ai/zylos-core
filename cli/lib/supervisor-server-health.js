@@ -30,16 +30,16 @@ export class SupervisorServerHealth {
     return { status: 'unavailable' };
   }
   /** Sends to the owner's `channel:endpoint` when set; `default`, unset, invalid or a failed send uses the pinned
-   * Origin conversation in Dashboard, once. */
+   * Origin conversation in Dashboard, once. Returns whether a send succeeded. */
   async notify(message) {
     let target;
     try { target = await this.readAlertTarget(); } catch { target = null; }
     const valid = target && typeof target.channel === 'string' && target.channel && typeof target.endpoint === 'string' && target.endpoint;
     if (valid) {
-      try { if (await this.sendAlert(target, message) !== false) return; } catch (error) { this.log(error); }
-      if (target.channel === DEFAULT_ALERT_DESTINATION.channel && target.endpoint === DEFAULT_ALERT_DESTINATION.endpoint) return;
+      try { if (await this.sendAlert(target, message) !== false) return true; } catch (error) { this.log(error); }
+      if (target.channel === DEFAULT_ALERT_DESTINATION.channel && target.endpoint === DEFAULT_ALERT_DESTINATION.endpoint) return false;
     }
-    try { await this.sendAlert({ ...DEFAULT_ALERT_DESTINATION }, message); } catch (error) { this.log(error); }
+    try { return await this.sendAlert({ ...DEFAULT_ALERT_DESTINATION }, message) !== false; } catch (error) { this.log(error); return false; }
   }
   async advance({ socketKey = 'default' } = {}) {
     const episode = this.episodes.get(socketKey);

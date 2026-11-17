@@ -5,7 +5,6 @@ import { normalizeStatusEndpoint } from './status-endpoint.js';
 import { messageForStatus } from './status-notice-templates.js';
 import { logStatusNotice } from './status-notice.js';
 import { systemSendEnvironment } from './c4-system-send-env.js';
-import { messageForFailureReceipt } from './failure-receipt-template.js';
 
 export { normalizeStatusEndpoint } from './status-endpoint.js';
 export const STATUS_NOTICE_TTL_SECONDS = 600;
@@ -38,13 +37,11 @@ export function createStatusNoticeSender({ db = defaultDb, spawn = spawnChild,
       if (typeof record.channel !== 'string' || !/^[a-z][a-z0-9_-]{0,31}$/.test(record.channel) ||
           typeof record.endpoint_id !== 'string' || record.endpoint_id.includes('\0') ||
           record.endpoint_id === '--stdin') throw Error('Invalid notice target');
-      message = normalized.noticeKind === 'failure_receipt'
-        ? messageForFailureReceipt({ id: record.id, session_group: record.session_group, reason: normalized.reason, channel: record.channel })
-        : render(normalized);
+      message = render(normalized);
     } catch (error) { warn('prepare', record, error); return { outcome: 'failed', code: 'UNHEALTHY_NOTIFY_FAILED' }; }
     let claim;
     try {
-      claim = db.reserveStatusNoticeCooldown({ ...(normalized.noticeKind === 'failure_receipt' ? { receiptId: record.id } : {}), cooldownKey: statusNoticeKey(record, normalized), channel: record.channel,
+      claim = db.reserveStatusNoticeCooldown({ cooldownKey: statusNoticeKey(record, normalized), channel: record.channel,
         endpoint: normalizeStatusEndpoint(record.endpoint_id), statusType: normalized.health, reason: normalized.reason,
         ttl: STATUS_NOTICE_TTL_SECONDS, now: now() });
     } catch (error) { warn('reserve', record, error); return { outcome: 'failed', code: 'UNHEALTHY_NOTIFY_FAILED' }; }
@@ -75,7 +72,7 @@ export function createStatusNoticeSender({ db = defaultDb, spawn = spawnChild,
         else finish({ outcome: 'failed', error });
       }
     });
-    if (result.outcome === 'failed' && normalized.noticeKind !== 'failure_receipt') {
+    if (result.outcome === 'failed') {
       try { db.clearStatusNoticeCooldownReservation(claim.key, claim.reservedAt); }
       catch (error) { warn('clear', record, error); }
     }

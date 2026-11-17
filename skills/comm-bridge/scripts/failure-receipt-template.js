@@ -1,6 +1,8 @@
 import { readZylosConfigOrThrow } from './local-config.js';
 
 const REASONS = {
+  auth_rejected: ['入站认证未通过', 'inbound authentication was rejected'],
+  runtime_unavailable: ['运行时暂时不可用', 'the runtime was unavailable'],
   launch_failed: ['会话启动失败', 'session startup failed'],
   ready_timeout: ['会话未及时就绪', 'session readiness timed out'],
   delivery_failed: ['会话无法接收消息', 'the session could not receive the message'],
@@ -28,13 +30,18 @@ export function messageForFailureReceipt({ id, session_group: group, reason, cha
     `[${brand}] Message #${id} ${prefixEn} "${group}": ${en}. Please resend it later.${suffixEn}`;
 }
 
-/** Owner-only metadata summary; never renders the scheduler message body. */
-export function messageForScheduledFailureAlert(record) {
+/** Owner-only metadata summary; never renders the original message body. */
+export function messageForFailureAlert(record) {
   const clean = value => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 512) : '';
   const name = clean(record.task_name) || '未命名定时任务 / unnamed scheduled task';
   const [zh, en] = Object.hasOwn(REASONS, record.reason) ? REASONS[record.reason] : REASONS.delivery_failed;
-  return `定时任务「${name}」消息未送达：${zh}。\n` +
+  const scheduled = record.core_source === 'scheduler';
+  const subjectZh = scheduled ? `定时任务「${name}」消息` : `用户消息 #${record.id} `;
+  const subjectEn = scheduled ? `Scheduled task "${name}"` : `User message #${record.id}`;
+  const statusZh = record.reason === 'delivery_unverified' ? '未能确认送达' : '未送达';
+  const statusEn = record.reason === 'delivery_unverified' ? 'could not be confirmed delivered' : 'was not delivered';
+  return `${subjectZh}${statusZh}：${zh}。\n` +
     `目标会话组：${clean(record.session_group)}\n目标聊天：${clean(record.channel)}:${clean(record.endpoint_id) || '(无 endpoint)'}\n` +
     `可以到该聊天里让对应会话排查原因。\n` +
-    `Scheduled task "${name}" was not delivered: ${en}. Ask the corresponding session in that chat to investigate.`;
+    `${subjectEn} ${statusEn}: ${en}. Ask the corresponding session in that chat to investigate.`;
 }

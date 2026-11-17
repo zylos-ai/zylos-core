@@ -1,26 +1,25 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
 import { createTestEnvironment } from '../../../../scripts/test-environment.js';
 const environment = createTestEnvironment();
 const { fixture } = await import('./c4-v2-test-helpers.js');
 const cooldownDb = await import('../c4-db.js');
-const { createStatusNoticeSender } = await import('../c4-status-notice.js');
+const { createFailureAlertSender } = await import('../failure-alert.js');
+const { SupervisorServerHealth } = await import('../../../../cli/lib/supervisor-server-health.js');
 const { createFailureReceiptDrainer } = await import('../c4-failure-receipts.js');
 const { createPendingExpiryHandler } = await import('../router/expiry.js');
 after(() => { cooldownDb.close(); environment.cleanup(); });
 
 function transport(f, sent) {
-  const sendStatusNotice = createStatusNoticeSender({ db: { reserveStatusNoticeCooldown: params => cooldownDb.reserveStatusNoticeCooldown(params, f.db) }, diagnostic: () => {}, log: () => {},
-    spawn: (exe, argv) => {
-      const child = new EventEmitter(); child.pid = 99; child.stdin = new EventEmitter();
-      child.stdin.end = body => { sent.push({ argv, body }); queueMicrotask(() => child.emit('close', 0)); };
-      child.kill = () => child.emit('close', null, 'SIGKILL'); return child;
-    } });
-  return createPendingExpiryHandler({ drainFailureReceipts: createFailureReceiptDrainer({ db: f.store, sendStatusNotice }) });
+  const owner = new SupervisorServerHealth({ readAlertTarget: () => ({ channel: 'telegram', endpoint: 'owner' }),
+    sendAlert: async (target, body) => { sent.push({ target, body }); return true; } });
+  const sendFailureAlert = createFailureAlertSender({
+    db: { reserveStatusNoticeCooldown: params => cooldownDb.reserveStatusNoticeCooldown(params, f.db) },
+    notifyOwner: message => owner.notify(message) });
+  return createPendingExpiryHandler({ drainFailureReceipts: createFailureReceiptDrainer({ db: f.store, sendFailureAlert }) });
 }
 
-test('expiry drains only committed receipts and never resends the terminal row', async t => {
+test('expiry alerts only the owner after commit and never resends the terminal row', async t => {
   const f = fixture(t), sent = [];
   const row = f.store.insertConversation('in', 'telegram', 'expiry-original', 'private expired body');
   const handleExpired = transport(f, sent);
@@ -30,8 +29,9 @@ test('expiry drains only committed receipts and never resends the terminal row',
   assert.equal(f.store.expirePending(row.id, 1800), true);
   await handleExpired(row); await handleExpired(row);
   assert.equal(sent.length, 1);
-  assert.deepEqual(sent[0].argv.slice(1), ['telegram', 'expiry-original']);
-  assert.match(sent[0].body, new RegExp(`消息 #${row.id} 没有送达`));
+  assert.deepEqual(sent[0].target, { channel: 'telegram', endpoint: 'owner' });
+  assert.match(sent[0].body, /telegram:expiry-original/);
+  assert.ok(sent[0].body.includes(`#${row.id}`));
   assert.match(sent[0].body, /排队等待超时/);
   assert.equal(sent[0].body.includes('private expired body'), false);
   assert.equal(f.db.prepare('SELECT status FROM conversations WHERE id=?').get(row.id).status, 'failed');

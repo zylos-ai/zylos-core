@@ -4,7 +4,6 @@ import { pathToFileURL } from 'node:url';
 import { resolveCoreConfigModule } from './core-config-loader.js';
 import { ACTIVITY_MONITOR_DIR } from './c4-config.js';
 import { getModeTransition } from './c4-db.js';
-import { messageForStatus } from './status-notice-templates.js';
 
 const { resolveTargetRuntime, readRuntimeHealth } = await import(
   pathToFileURL(path.join(path.dirname(resolveCoreConfigModule()), 'session-state-reader.js')).href);
@@ -22,7 +21,6 @@ export function validRouteResponse(response, request) {
     if (response.recovered !== false || response.health !== 'auth_failed' || !['failed', 'unconfirmed'].includes(response.auth?.result) || typeof response.auth?.detail !== 'string') return false;
   }
   if (response.decision === undefined && response.recovered !== false) return false;
-  if (response.decision !== 'pending' && !request.noReply && (typeof response.userMessage !== 'string' || !response.userMessage)) return false;
   return true;
 }
 
@@ -76,8 +74,6 @@ export async function fallbackFileRoute(request, dependencies = {}) {
   const route = { runtime, recovered: false, health: health || 'unavailable', reason, transitionHold: false, fallback: true };
   if (health === 'auth_failed') Object.assign(route, { decision: 'auth_rejected', reason: 'router_unavailable',
     auth: { result: 'unconfirmed', detail: 'router_unavailable: health record auth_failed' } });
-  route.userMessage = messageForStatus({ health: route.health, reason: route.reason,
-    noticeCode: status.health_notice?.noticeCode, resetAt: status.health_notice?.resetAt });
   return route;
 }
 
