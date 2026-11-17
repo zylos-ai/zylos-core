@@ -8,20 +8,21 @@ import {migrateDatabase} from '../../skills/comm-bridge/scripts/sqlite-schema.js
 import * as c4Schema from '../../skills/comm-bridge/scripts/c4-schema.js';
 import * as schedulerSchema from '../../skills/scheduler/scripts/schema.js';
 
-const [root,scenario]=process.argv.slice(2), repo=path.resolve(import.meta.dirname,'../..');
+const [root,scenario,pm2Path,dashboardModules,evidence]=process.argv.slice(2), repo=path.resolve(import.meta.dirname,'../..');
 const reservation=net.createServer();await new Promise((resolve,reject)=>{reservation.once('error',reject);reservation.listen(0,'127.0.0.1',resolve);});
 const dashboardPort=reservation.address().port;assert.notEqual(dashboardPort,3470);await new Promise(resolve=>reservation.close(resolve));
 const z=process.env.ZYLOS_DIR, home=process.env.HOME, bin=path.join(root,'b'), prefix=path.join(root,'n');
 const core=path.join(prefix,'lib/node_modules/zylos'), target=path.join(root,'release');
-const pm2=fs.realpathSync(process.env.ZYLOS_ACCEPTANCE_PM2);
+const pm2=fs.realpathSync(pm2Path);
 const sourceModules=fs.realpathSync(path.join(repo,'node_modules'));
 const sqliteModules=fs.realpathSync(path.join(repo,'skills/comm-bridge/node_modules'));
 const modules=path.join(core,'node_modules'), skills=path.join(z,'.claude/skills');
 const npm=fs.realpathSync(path.join(path.dirname(process.execPath),'npm'));
-const env={...process.env,PATH:[bin,path.join(prefix,'bin'),path.dirname(process.execPath),'/usr/bin','/bin'].join(':'),
+const inherited=Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('ZYLOS_')));
+const env={...inherited,ZYLOS_DIR:z,PATH:[bin,path.join(prefix,'bin'),path.dirname(process.execPath),'/usr/bin','/bin'].join(':'),
   npm_config_prefix:prefix,npm_config_cache:path.join(root,'cache'),npm_config_offline:'true',
   npm_config_ignore_scripts:'true',npm_config_audit:'false',npm_config_fund:'false',npm_config_update_notifier:'false',
-  ZYLOS_PACKAGE_ROOT:core,NO_COLOR:'1',ZYLOS_GH_RETRY_DELAY_MS:''};
+  NO_COLOR:'1'};
 console.log('Exact child isolation:',JSON.stringify({cwd:root,env,pm2,core,skills,database:path.join(z,'comm-bridge/c4.db'),socket:path.join(root,'t/s')}));
 for(const k of ['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR']) assert.ok(env[k].startsWith(root+'/'));
 const write=(f,s)=>{fs.mkdirSync(path.dirname(f),{recursive:true});fs.writeFileSync(f,s);};
@@ -40,8 +41,8 @@ const metadata=dir=>{
 fs.mkdirSync(bin);copySource(core);metadata(core);copyModules(modules);
 fs.cpSync(path.join(core,'skills'),skills,{recursive:true});
 copyModules(path.join(skills,'comm-bridge/node_modules'));copyModules(path.join(skills,'dashboard/node_modules'));
-assert.ok(path.isAbsolute(process.env.ZYLOS_ACCEPTANCE_DASHBOARD_MODULES || ''),'provide preprovisioned Dashboard dependencies');
-fs.cpSync(fs.realpathSync(process.env.ZYLOS_ACCEPTANCE_DASHBOARD_MODULES),path.join(skills,'dashboard/node_modules'),{recursive:true,dereference:true});
+assert.ok(path.isAbsolute(dashboardModules || ''),'provide preprovisioned Dashboard dependencies');
+fs.cpSync(fs.realpathSync(dashboardModules),path.join(skills,'dashboard/node_modules'),{recursive:true,dereference:true});
 const original=JSON.parse(fs.readFileSync(path.join(core,'package.json'))).version;
 copySource(target);metadata(target);
 const pkg=JSON.parse(fs.readFileSync(path.join(target,'package.json')));pkg.version='1.0.0-beta.999';delete pkg.devDependencies;
@@ -65,7 +66,7 @@ write(path.join(z,'.claude/settings.json'),'{}');write(path.join(z,'ZYLOS.md'),'
 write(path.join(z,'components/dashboard/config.json'),JSON.stringify({host:'127.0.0.1',port:dashboardPort,auth:{enabled:false},observer:{enabled:false}}));
 assert.equal(JSON.parse(fs.readFileSync(path.join(z,'components/dashboard/config.json'))).port,dashboardPort);
 const dashboardScript=path.join(skills,'dashboard/src/index.js');
-write(path.join(z,'pm2/ecosystem.config.cjs'),'module.exports='+JSON.stringify({apps:[{name:'zylos-dashboard',script:dashboardScript,cwd:path.dirname(path.dirname(dashboardScript)),env:{HOME:home,ZYLOS_DIR:z,PM2_HOME:env.PM2_HOME,PATH:env.PATH,ZYLOS_PACKAGE_ROOT:core},autorestart:true}]})+';\n');
+write(path.join(z,'pm2/ecosystem.config.cjs'),'module.exports='+JSON.stringify({apps:[{name:'zylos-dashboard',script:dashboardScript,cwd:path.dirname(path.dirname(dashboardScript)),env:{HOME:home,ZYLOS_DIR:z,PM2_HOME:env.PM2_HOME,PATH:env.PATH},autorestart:true}]})+';\n');
 console.log('Private Dashboard target:',JSON.stringify({config:path.join(z,'components/dashboard/config.json'),port:dashboardPort,script:dashboardScript,pm2Home:env.PM2_HOME}));
 const Database=createRequire(path.join(core,'package.json'))('better-sqlite3');
 for(const [rel,owner]of [['comm-bridge/c4.db',c4Schema],['scheduler/scheduler.db',schedulerSchema]]){
@@ -84,7 +85,6 @@ assert.equal(listing().find(p=>p.name==='fixture-extra').pm2_env.HOME,home);
 const {verifyDashboard}=await import('../../cli/lib/dashboard-install.js');
 const priorEnv={...process.env};Object.assign(process.env,env);try{const ready=await verifyDashboard({zylosDir:z});assert.equal(ready.state,'ready',JSON.stringify(ready));}finally{for(const k of Object.keys(process.env))if(!Object.hasOwn(priorEnv,k))delete process.env[k];Object.assign(process.env,priorEnv);}
 const packed=JSON.parse(run(process.execPath,[npm,'pack','--dry-run','--json'],{cwd:target}).stdout);assert.ok(packed[0].files.some(f=>f.path==='node_modules/better-sqlite3/build/Release/better_sqlite3.node'),'fixture archive must preserve native SQLite addon');
-const evidence=process.env.ZYLOS_ACCEPTANCE_EVIDENCE;
 const record=(name,value)=>{if(evidence){fs.mkdirSync(evidence,{recursive:true});write(path.join(evidence,scenario+'-'+name+'.json'),JSON.stringify(value,null,2));}};
 const cli=(...args)=>run(process.execPath,[path.join(core,'cli/zylos.js'),...args],{failure:true,timeout:240000});
 try{
@@ -110,4 +110,4 @@ try{
  const db=new Database(path.join(z,'comm-bridge/c4.db'));assert.equal(db.prepare('SELECT COUNT(*) AS n FROM conversations WHERE content LIKE ?').get('%private acceptance after recovery%').n,1);db.close();
  record('outcome',{success:true,exclusions:['skill dependency downloads','npm install lifecycle scripts','authenticated runtime and C4 delivery'],original,target:pkg.version,dashboardPort,dashboardConfig:path.join(z,'components/dashboard/config.json'),report,service:{name:p.name,pid:p.pid,status:p.pm2_env.status},retiredBytesPreserved:fs.existsSync(retired)&&fs.readFileSync(retired).equals(retiredBytes)});
  console.log(JSON.stringify({scenario,success:true,error:report.error,version:JSON.parse(fs.readFileSync(path.join(core,'package.json'))).version}));
-}finally{try{run(pm2,['kill']);}finally{run('/usr/bin/tmux',['-S',path.join(root,'t/s'),'kill-server'],{failure:true});}}
+}finally{run('/usr/bin/tmux',['-S',path.join(root,'t/s'),'kill-server'],{failure:true});}
