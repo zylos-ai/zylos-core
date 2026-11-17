@@ -99,7 +99,7 @@ export function probeCoreDbVersions(zylosDir, tempDir, {driverRoot=path.join(zyl
   return runCoreDbWorker({action:'version-probe',zylosDir,schemaRoot,driverRoot,formatVersion:3,dashboardOwnerManaged});
 }
 // Clear a fixed-name rehearsal left by an interrupted upgrade, plus older
-// random-name copies. Refuse ambiguous paths before stopping services.
+// random-name copies. Refuse ambiguous paths before creating rehearsal copies.
 export function cleanupCoreDbRehearsals(zylosDir) {
   zylosDir=fs.realpathSync(zylosDir);
   const removed=[];
