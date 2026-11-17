@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { renderStateSkeleton } from '../skills/zylos-memory/scripts/state-format.js';
 
 const repo = fileURLToPath(new URL('..', import.meta.url));
 const driver = fileURLToPath(new URL('./helpers/instruction-deployment.js', import.meta.url));
@@ -34,5 +35,28 @@ for (const mode of ['fresh', 'refresh']) test(`${mode} instruction deployment pr
     assert.equal(initialized.status, 0, initialized.stderr);
     assert.ok(initialized.stdout.includes(path.join(env.ZYLOS_DIR, 'memory/handoff.md')));
     assert.ok(initialized.stdout.includes(path.join(env.ZYLOS_DIR, '.claude/skills/comm-bridge/references/handoff-follow-up.md')));
+
+    // A converted non-Origin group receives Pending entries but no handoff.
+    // The always-loaded generated instructions must still name the procedure
+    // for both that state entry and an absorbed-message internal notice.
+    const group = 'telegram:absorbed-pending';
+    const groupDir = path.join(env.ZYLOS_DIR, 'memory/session-groups', group);
+    fs.mkdirSync(groupDir, { recursive: true });
+    const state = renderStateSkeleton({ scope: group, syncedAt: '2026-01-01T00:00:00Z',
+      absorbed: { runId: 'absorbed-fixture', rows: [{ id: 7, channel: 'telegram', endpointId: 'fixture',
+        timestamp: '2026-01-01T00:00:00Z', content: 'unfinished group request' }] } });
+    fs.writeFileSync(path.join(groupDir, 'state.md'), state);
+    assert.match(state, /## Pending\n\n- \[Mode-switch messages\] run=absorbed-fixture/);
+    assert.equal(fs.existsSync(path.join(groupDir, 'handoff.md')), false);
+    fs.writeFileSync(path.join(env.ZYLOS_DIR, '.zylos/config.json'), JSON.stringify({ session_mode: 'multi' }));
+    const groupStart = spawnSync(process.execPath, [path.join(repo, 'skills/comm-bridge/scripts/c4-session-init.js')],
+      { env: { ...env, ZYLOS_SESSION_GROUP: group }, cwd: repo, encoding: 'utf8', timeout: 15000 });
+    assert.equal(groupStart.status, 0, groupStart.stderr);
+    assert.ok(groupStart.stdout.includes(`No handoff file is available for this scope (${path.join(groupDir, 'handoff.md')}).`));
+    assert.doesNotMatch(groupStart.stdout, /handoff-follow-up\.md/);
+    for (const output of ['CLAUDE.md', 'AGENTS.md']) {
+      const instructions = fs.readFileSync(path.join(env.ZYLOS_DIR, output), 'utf8');
+      assert.match(instructions, /when a handoff exists, state Pending lists Mode-switch messages, or an internal notice concerns absorbed messages, read and follow `~\/zylos\/\.claude\/skills\/comm-bridge\/references\/handoff-follow-up\.md`/);
+    }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
