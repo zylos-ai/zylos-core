@@ -112,6 +112,20 @@ test('Observer history excludes child sessions from every group', async t => {
   }
 });
 
+test('a child resuming a main session id leaves that session in Observer history', async t => {
+  const f = fixture(t);
+  f.store.insertUsageTranscript({ transcript_path: path.join(f.dir, 'main.jsonl'), runtime: 'claude', session_group: 'g1', session_id: 'main-1' }, timestamp);
+  f.store.insertUsageTranscript({ transcript_path: path.join(f.dir, 'resumed.jsonl'), runtime: 'claude', session_group: 'g1', session_id: 'main-1', kind: 'child' }, timestamp);
+  f.store.insertUsageTranscript({ transcript_path: path.join(f.dir, 'c.jsonl'), runtime: 'claude', session_group: 'g1', session_id: 'child-x', kind: 'child' }, timestamp);
+  assert.deepEqual(f.store.childSessionIds(), ['child-x']);
+  const load = async name => (name === 'config.js'
+    ? { readSessionMode: () => ({ mode: 'multi' }) }
+    : { assertSessionGroup: group => group });
+  const result = await createHistoryScope({ config: { zylosDir: f.dir }, store: f.store, load })(new URLSearchParams({ session_group: 'g1' }));
+  assert.equal(result.excludedSessionIds.has('main-1'), false);
+  assert.equal(result.excludedSessionIds.has('child-x'), true);
+});
+
 test('finished child rows outlive the finished-session retention', async t => {
   const f = fixture(t);
   for (const [name, kind] of [['session', 'session'], ['child', 'child']]) {

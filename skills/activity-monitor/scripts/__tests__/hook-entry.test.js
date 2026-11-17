@@ -123,13 +123,19 @@ test('a hook without a run id under a non-tmux parent is refused', async t => {
   const f = instance(t);
   const { ZYLOS_RUN_ID, ZYLOS_SESSION_GROUP, ...env } = f.env;
   // A plain node process stands between this test and the entry, so the trigger's parent is this (non-tmux) process.
-  const relay = `const c=require('child_process').spawn(process.execPath,${JSON.stringify([ENTRY, TARGET])},{stdio:'inherit'});c.on('exit',x=>process.exit(x))`;
+  // The relay stops the entry with itself, so a timeout leaves no process behind.
+  const relay = `const c=require('child_process').spawn(process.execPath,${JSON.stringify([ENTRY, TARGET])},{stdio:'inherit'});` +
+    "c.on('exit',x=>process.exit(x));process.on('SIGTERM',()=>{c.kill('SIGKILL');process.exit(143)})";
   const proc = spawn(process.execPath, ['-e', relay], { env, stdio: ['pipe', 'pipe', 'pipe'] });
-  t.after(() => proc.kill('SIGKILL'));
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; proc.kill('SIGTERM'); }, 15000);
+  t.after(() => { clearTimeout(timer); proc.kill('SIGTERM'); });
   let stdout = '';
   proc.stdout.on('data', chunk => { stdout += chunk; });
   proc.stdin.end('{}');
   const [code] = await once(proc, 'exit');
+  clearTimeout(timer);
+  assert.equal(timedOut, false, 'the entry under the relay did not finish within 15 s');
   assert.deepEqual([code, stdout], [0, '']);
   assert.deepEqual(lines(f.mark), []);
 });

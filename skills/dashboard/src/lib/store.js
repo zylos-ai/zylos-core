@@ -62,7 +62,10 @@ export class Store {
       WHERE status = 'active' AND runtime = ? AND run_id = ?
         AND (session_group = 'origin' OR session_group IS NULL) AND parent_path IS NULL AND kind = 'session'
       ORDER BY rowid DESC LIMIT 1`);
-    this._childSessionIds = this.db.prepare("SELECT DISTINCT session_id FROM usage_transcripts WHERE kind = 'child'");
+    // A child that resumes a session (`claude -p --resume`) shares its id; that session stays listed.
+    this._childSessionIds = this.db.prepare(`SELECT DISTINCT child.session_id FROM usage_transcripts child
+      WHERE child.kind = 'child' AND NOT EXISTS (
+        SELECT 1 FROM usage_transcripts own WHERE own.session_id = child.session_id AND own.kind = 'session')`);
     this._claudeMainTranscripts = this.db.prepare("SELECT * FROM usage_transcripts WHERE status = 'active' AND runtime = 'claude' AND parent_path IS NULL");
     this._missingUsageTranscripts = this.db.prepare("SELECT * FROM usage_transcripts WHERE status = 'missing'");
     this._restoreUsageTranscript = this.db.prepare("UPDATE usage_transcripts SET status = 'active' WHERE transcript_path = ? AND status = 'missing'");

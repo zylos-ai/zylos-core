@@ -18,7 +18,7 @@ import { PENDING_MAX_AGE_SECONDS } from '../../comm-bridge/scripts/c4-config.js'
 const { nudgeSession } = await loadCoreModule('session-nudge.js');
 const { appendEvent, rotateEventLog } = await loadCoreModule('event-log.js');
 const { writeSessionModeAtCutover } = await loadCoreModule('config.js');
-const { assertSessionGroup, groupRunDir, sessionGroupRunRoot, supervisorDiagnosticPath, poolMetricsPath } = await loadCoreModule('session-group-paths.js');
+const { assertSessionGroup, groupRunDir, sessionGroupRunRoot, supervisorDiagnosticPath, poolMetricsPath, hookErrorLogPath } = await loadCoreModule('session-group-paths.js');
 
 export const AUTH_DEMAND_RETRY_MS = 60000;
 
@@ -258,7 +258,7 @@ export function createSupervisor(deps) {
             }}));
           } catch(error) { reportError(error,{phase:'health-maintenance',runtime}); }
         }
-        const files=new Set([supervisorDiagnosticPath(deps.env),poolMetricsPath(deps.env),path.join(path.dirname(supervisorDiagnosticPath(deps.env)),'child-sessions.jsonl'),...current.map(s=>path.join(s.runDir,'events.jsonl'))]);
+        const files=new Set([supervisorDiagnosticPath(deps.env),poolMetricsPath(deps.env),hookErrorLogPath(deps.env),path.join(path.dirname(supervisorDiagnosticPath(deps.env)),'child-sessions.jsonl'),...current.map(s=>path.join(s.runDir,'events.jsonl'))]);
         try {
           const entries=await fs.readdir(sessionGroupRunRoot(deps.env),{withFileTypes:true});
           for(const entry of entries) {

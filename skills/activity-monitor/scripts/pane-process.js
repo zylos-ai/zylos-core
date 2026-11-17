@@ -4,8 +4,9 @@
  * The launcher records the tmux pane process of each run in
  * `<run dir>/pane-process.json` right after tmux confirms the pane. The pane
  * command execs the runtime, so the recorded pid and start time are the
- * runtime's own (Claude), or the launcher wrapper whose child is the native
- * runtime (Codex). Hooks never write this record.
+ * runtime's own: Claude, native Codex (the Codex launcher can replace itself
+ * with the native binary), or a Codex launcher wrapper that keeps running with
+ * the native runtime as its child. Hooks never write this record.
  *
  * Child runtimes started inside a session (an upgrade evaluation, an agent's
  * `claude -p` or `codex exec`) inherit the run variables and read the same
@@ -46,16 +47,30 @@ export function readPaneProcess(dir, { fsImpl = fs } = {}) {
 }
 
 /**
- * Whether a process identity `{pid, start, ppid, parentStart}` is the pane
- * process: the pane process itself, or for Codex its direct child (the native
- * runtime under the launcher wrapper).
+ * Whether a process name is the native Codex runtime (not its node launcher).
  */
-export function belongsToPane(identity, { runtime, panePid, paneStart = null }) {
+export const isNativeCodex = comm => typeof comm === 'string' && path.basename(comm).replace(/\.exe$/, '') === 'codex';
+
+/**
+ * Whether a Codex pane process is a launcher wrapper whose direct child is the
+ * native runtime. Only a pane process known not to be native Codex is one: a
+ * native Codex pane's direct children are processes it started (its shell tool
+ * runs `codex exec` or `claude -p` without an intermediate shell).
+ */
+export const isCodexWrapperPane = (runtime, paneComm) =>
+  runtime === 'codex' && typeof paneComm === 'string' && paneComm.length > 0 && !isNativeCodex(paneComm);
+
+/**
+ * Whether a process identity `{pid, start, ppid, parentStart}` is the pane
+ * process: the pane process itself, or the direct child of a Codex launcher
+ * wrapper pane (the native runtime).
+ */
+export function belongsToPane(identity, { runtime, panePid, paneStart = null, paneComm = null }) {
   if (!identity || !positive(panePid)) return false;
   // A start time missing on either side compares pids only.
   const sameStart = start => start == null || paneStart == null || start === paneStart;
   if (identity.pid === panePid) return sameStart(identity.start);
-  if (runtime === 'codex' && identity.ppid === panePid) return sameStart(identity.parentStart);
+  if (identity.ppid === panePid && isCodexWrapperPane(runtime, paneComm)) return sameStart(identity.parentStart);
   return false;
 }
 
@@ -79,7 +94,7 @@ export function classifyHookProcess({ env = process.env, dir, trigger, readInfo 
     const parent = firstNonShellAncestor(trigger.ppid, readInfo);
     if (!parent) return { verdict: 'unknown', reason: 'process_unreadable' };
     if (isTmux(parent)) return { verdict: 'main', reason: 'tmux_pane_process' };
-    if (trigger.comm === 'codex') {
+    if (isNativeCodex(trigger.comm) && !isNativeCodex(parent.comm)) {
       const grandparent = firstNonShellAncestor(parent.ppid, readInfo);
       if (!grandparent) return { verdict: 'unknown', reason: 'process_unreadable' };
       if (isTmux(grandparent)) return { verdict: 'main', reason: 'tmux_pane_process' };
@@ -96,9 +111,11 @@ export function classifyHookProcess({ env = process.env, dir, trigger, readInfo 
       : { verdict: 'child', reason: 'pane_pid_reused', record };
   }
   if (record.runtime === 'codex' && trigger.ppid === record.panePid) {
-    const parentStart = readInfo(record.panePid)?.start ?? null;
-    if (parentStart === null) return { verdict: 'unknown', reason: 'pane_unreadable', record };
-    return belongsToPane({ ...trigger, parentStart }, pane)
+    const paneInfo = readInfo(record.panePid);
+    if (!paneInfo) return { verdict: 'unknown', reason: 'pane_unreadable', record };
+    // A native Codex pane process started this one itself: it is a child runtime.
+    if (!isCodexWrapperPane(record.runtime, paneInfo.comm)) return { verdict: 'child', reason: 'not_pane_process', record };
+    return belongsToPane({ ...trigger, parentStart: paneInfo.start }, { ...pane, paneComm: paneInfo.comm })
       ? { verdict: 'main', reason: 'pane_process_child', record }
       : { verdict: 'child', reason: 'pane_pid_reused', record };
   }

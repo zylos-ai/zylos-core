@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { groupRunDir, tmuxNameForGroup } from '../session-group-paths.js';
-import { readProcessStart } from '../../../skills/activity-monitor/scripts/claude-pid.js';
+import { readProcessInfo } from '../../../skills/activity-monitor/scripts/claude-pid.js';
 import { belongsToPane } from '../../../skills/activity-monitor/scripts/pane-process.js';
 import { tmuxError, TMUX_COMMAND as C, TMUX_FORMAT as F, isTmuxError,
   isMissingTarget as missing, unavailableCommand, parseTargetObservation, parseTmuxEnvironment } from './tmux-protocol.js';
@@ -42,13 +42,13 @@ const acceptedReady = new Map();
  * pid, so it also covers panes started before pane-process records existed.
  * READY files from earlier versions name no publisher and are accepted as before.
  */
-export function paneReady(sessionGroup, f3, { runId, runtime, panePid, readStart = readProcessStart }) {
+export function paneReady(sessionGroup, f3, { runId, runtime, panePid, readInfo = readProcessInfo }) {
   if (!runId || !validReady(f3) || f3.runId !== runId) return f3;
   const key = sessionGroup ?? 'origin';
   if (Number.isSafeInteger(f3.runtimePid)) {
-    const paneStart = Number.isSafeInteger(panePid) && panePid > 0 ? readStart(panePid) : null;
+    const pane = Number.isSafeInteger(panePid) && panePid > 0 ? readInfo(panePid) : null;
     const publisher = { pid: f3.runtimePid, start: f3.runtimeStart, ppid: f3.runtimeParentPid, parentStart: f3.runtimeParentStart };
-    if (!belongsToPane(publisher, { runtime, panePid, paneStart })) {
+    if (!belongsToPane(publisher, { runtime, panePid, paneStart: pane?.start ?? null, paneComm: pane?.comm ?? null })) {
       const previous = acceptedReady.get(key);
       return previous?.runId === runId ? previous : null;
     }

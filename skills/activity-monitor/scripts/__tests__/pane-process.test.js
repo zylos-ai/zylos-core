@@ -17,13 +17,21 @@ function runDir(t) {
   return dir;
 }
 
-/** A real long-lived process, stopped with the test. With `child`, it also starts one child and reports its pid. */
-async function liveProcess(t, { child = false } = {}) {
+/**
+ * A real long-lived process, stopped with the test. With `child`, it also starts one child and reports its pid.
+ * `name` runs it through a link of that name, so its process name is `name` (a native Codex process).
+ */
+async function liveProcess(t, { child = false, name = null } = {}) {
   const script = child
     ? "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1e6)'],{stdio:'ignore'});" +
       "process.stdout.write(String(c.pid)+'\\n');process.on('SIGTERM',()=>{c.kill();process.exit(0)});setInterval(()=>{},1e6)"
     : "process.stdout.write('up\\n');setInterval(()=>{},1e6)";
-  const proc = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'ignore'] });
+  let binary = process.execPath;
+  if (name) {
+    binary = path.join(runDir(t), name);
+    fs.symlinkSync(process.execPath, binary);
+  }
+  const proc = spawn(binary, ['-e', script], { stdio: ['ignore', 'pipe', 'ignore'] });
   t.after(() => proc.kill('SIGTERM'));
   const [line] = await once(proc.stdout, 'data');
   return { pid: proc.pid, childPid: child ? Number(String(line).trim()) : null };
@@ -92,6 +100,19 @@ test('a Codex wrapper pane accepts its direct child and refuses other processes'
   assert.equal(classifyHookProcess({ env, dir, trigger: info(wrapper.childPid) }).verdict, 'child');
 });
 
+test('a native Codex pane process refuses its own direct child', async t => {
+  const dir = runDir(t);
+  const pane = await liveProcess(t, { child: true, name: 'codex' });
+  assert.equal(info(pane.pid).comm, 'codex');
+  writePaneProcess(dir, { runId: 'run-1', runtime: 'codex', panePid: pane.pid, paneStart: info(pane.pid).start });
+  const env = { ZYLOS_RUN_ID: 'run-1' };
+
+  assert.equal(classifyHookProcess({ env, dir, trigger: info(pane.pid) }).reason, 'pane_process');
+  // `codex exec` or `claude -p` run by the Codex shell tool without an intermediate shell.
+  const child = classifyHookProcess({ env, dir, trigger: info(pane.childPid) });
+  assert.deepEqual([child.verdict, child.reason], ['child', 'not_pane_process']);
+});
+
 test('missing evidence is undetermined, never a refusal', async t => {
   const dir = runDir(t);
   const pane = await liveProcess(t);
@@ -121,6 +142,11 @@ test('a hook without a run id is the pane process only under the tmux server', (
     23: { pid: 23, ppid: 22, start: '23', comm: 'codex' },
     30: { pid: 30, ppid: 1, start: '30', comm: 'bash' },
     31: { pid: 31, ppid: 30, start: '31', comm: 'claude' },
+    50: { pid: 50, ppid: 1, start: '50', comm: 'codex' },
+    51: { pid: 51, ppid: 50, start: '51', comm: 'codex' },
+    52: { pid: 52, ppid: 50, start: '52', comm: 'bash' },
+    53: { pid: 53, ppid: 52, start: '53', comm: 'codex' },
+    54: { pid: 54, ppid: 50, start: '54', comm: 'claude' },
   };
   const readInfo = pid => tree[pid] ?? null;
   const classify = pid => classifyHookProcess({ env: {}, trigger: tree[pid], readInfo });
@@ -129,6 +155,10 @@ test('a hook without a run id is the pane process only under the tmux server', (
   assert.equal(classify(21).verdict, 'main', 'native Codex under its launcher wrapper');
   assert.equal(classify(12).verdict, 'child', 'claude -p under a Claude pane');
   assert.equal(classify(23).verdict, 'child', 'codex exec under a Codex pane');
+  assert.equal(classify(50).verdict, 'main', 'native Codex as the pane process');
+  assert.equal(classify(51).verdict, 'child', 'codex exec started directly by a native Codex pane');
+  assert.equal(classify(53).verdict, 'child', 'codex exec through a shell of a native Codex pane');
+  assert.equal(classify(54).verdict, 'child', 'claude -p started directly by a native Codex pane');
   assert.deepEqual(classifyHookProcess({ env: {}, trigger: { pid: 40, ppid: 41, start: '1', comm: 'claude' }, readInfo }),
     { verdict: 'unknown', reason: 'process_unreadable' });
 });
@@ -140,8 +170,11 @@ test('pane membership compares start times only when both sides know them', () =
   assert.equal(belongsToPane({ pid: 5 }, pane), true);
   assert.equal(belongsToPane({ pid: 5, start: '101' }, { ...pane, paneStart: null }), true);
   assert.equal(belongsToPane({ pid: 6, ppid: 5, parentStart: '100' }, pane), false);
-  assert.equal(belongsToPane({ pid: 6, ppid: 5, parentStart: '100' }, { ...pane, runtime: 'codex' }), true);
-  assert.equal(belongsToPane({ pid: 6, ppid: 5, parentStart: '99' }, { ...pane, runtime: 'codex' }), false);
+  const wrapper = { ...pane, runtime: 'codex', paneComm: 'node' };
+  assert.equal(belongsToPane({ pid: 6, ppid: 5, parentStart: '100' }, wrapper), true);
+  assert.equal(belongsToPane({ pid: 6, ppid: 5, parentStart: '99' }, wrapper), false);
+  assert.equal(belongsToPane({ pid: 6, ppid: 5, parentStart: '100' }, { ...wrapper, paneComm: 'codex' }), false);
+  assert.equal(belongsToPane({ pid: 6, ppid: 5, parentStart: '100' }, { ...wrapper, paneComm: null }), false);
   assert.equal(belongsToPane({ pid: 5 }, { ...pane, panePid: null }), false);
 });
 

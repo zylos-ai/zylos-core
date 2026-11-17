@@ -34,7 +34,7 @@ test('a pane record that cannot be written never fails the launch', () => {
 
 test('READY from another process of the run keeps the last READY of the pane process', () => {
   const group = 'ready-unit';
-  const options = { runId: 'r1', runtime: 'claude', panePid: 100, readStart: pid => (pid === 100 ? '500' : null) };
+  const options = { runId: 'r1', runtime: 'claude', panePid: 100, readInfo: pid => (pid === 100 ? { start: '500', comm: 'claude' } : null) };
   const own = ready('main-1', { runtimePid: 100, runtimeStart: '500', runtimeParentPid: 1 });
   assert.equal(paneReady(group, own, options), own);
   const child = ready('child-1', { runtimePid: 222, runtimeStart: '900', runtimeParentPid: 100, runtimeParentStart: '500' });
@@ -47,21 +47,34 @@ test('READY from another process of the run keeps the last READY of the pane pro
   assert.equal(paneReady(group, cleared, options), cleared);
   // A new pane process (restart) is accepted for its own run.
   const restarted = { ...ready('main-3', { runtimePid: 300, runtimeStart: '700', runtimeParentPid: 1 }), runId: 'r2' };
-  assert.equal(paneReady(group, restarted, { ...options, runId: 'r2', panePid: 300, readStart: () => '700' }), restarted);
+  assert.equal(paneReady(group, restarted, { ...options, runId: 'r2', panePid: 300, readInfo: () => ({ start: '700', comm: 'claude' }) }), restarted);
   // A child READY in that run never falls back to the previous run's READY.
-  assert.equal(paneReady('ready-unit-2', { ...child, runId: 'r2' }, { ...options, runId: 'r2', panePid: 300, readStart: () => '700' }), null);
+  assert.equal(paneReady('ready-unit-2', { ...child, runId: 'r2' }, { ...options, runId: 'r2', panePid: 300, readInfo: () => ({ start: '700', comm: 'claude' }) }), null);
 });
 
 test('Codex READY from the native child of the pane wrapper is the pane process', () => {
-  const options = { runId: 'r1', runtime: 'codex', panePid: 100, readStart: () => '500' };
+  const options = { runId: 'r1', runtime: 'codex', panePid: 100, readInfo: () => ({ start: '500', comm: 'node' }) };
   const native = ready('codex-main', { runtimePid: 101, runtimeStart: '510', runtimeParentPid: 100, runtimeParentStart: '500' });
   assert.equal(paneReady('ready-codex', native, options), native);
   const exec = ready('codex-exec', { runtimePid: 150, runtimeStart: '600', runtimeParentPid: 140, runtimeParentStart: '590' });
   assert.equal(paneReady('ready-codex', exec, options), native);
 });
 
+test('a native Codex pane process ignores READY from its own direct child', () => {
+  const options = { runId: 'r1', runtime: 'codex', panePid: 100, readInfo: () => ({ start: '500', comm: 'codex' }) };
+  const main = ready('codex-main', { runtimePid: 100, runtimeStart: '500', runtimeParentPid: 1 });
+  assert.equal(paneReady('ready-native-codex', main, options), main);
+  // `codex exec` or `claude -p` run by the Codex shell tool without an intermediate shell.
+  const child = ready('codex-exec', { runtimePid: 150, runtimeStart: '600', runtimeParentPid: 100, runtimeParentStart: '500' });
+  assert.equal(paneReady('ready-native-codex', child, options), main);
+  // A pane process that cannot be read gives no parent rule either.
+  const unreadable = { ...options, readInfo: () => null };
+  const second = ready('codex-exec-2', { runtimePid: 151, runtimeStart: '601', runtimeParentPid: 100, runtimeParentStart: '500' });
+  assert.equal(paneReady('ready-native-codex', second, unreadable), main);
+});
+
 test('READY without a publisher, malformed or of another run is passed through unchanged', () => {
-  const options = { runId: 'r1', runtime: 'claude', panePid: 100, readStart: () => '500' };
+  const options = { runId: 'r1', runtime: 'claude', panePid: 100, readInfo: () => ({ start: '500', comm: 'claude' }) };
   const legacy = ready('legacy');
   assert.equal(paneReady('ready-legacy', legacy, options), legacy);
   const other = { ...ready('other', { runtimePid: 9 }), runId: 'r0' };
@@ -70,6 +83,11 @@ test('READY without a publisher, malformed or of another run is passed through u
   assert.equal(paneReady('ready-legacy', legacy, { ...options, runId: null }), legacy);
 });
 
+// Real tmux on a private socket (isolatedTmux: own TMUX_TMPDIR and socket, killed with the test).
+// Covers: observeSessionTarget reading the real tmux pane_pid for a pane without a
+// pane-process record and ignoring a READY from another process. Run when
+// session-target.js, paneReady/belongsToPane or the tmux observation format changes;
+// skip when tmux is not installed (other changes are covered by the unit cases above).
 test('a real pane without a pane record ignores READY published by another process', async t => {
   let connection;
   const { tmux, socketPath } = isolatedTmux(t, { prefix: 'pane-ready-', socketName: 'tmux.sock', beforeCleanup: () => connection?.close() });

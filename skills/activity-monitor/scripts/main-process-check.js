@@ -50,9 +50,10 @@ export async function checkMainProcess({
   // What the supervisor's READY check would conclude for a READY this process published.
   let runtime = null;
   try { runtime = JSON.parse(env.ZYLOS_MODEL_CONFIG).runtime ?? null; } catch { /* unknown */ }
+  const paneInfo = tmux.panePid !== null ? readInfo(tmux.panePid) : null;
   const tmuxPaneCheck = trigger && tmux.panePid !== null
     ? belongsToPane({ ...trigger, parentStart: readInfo(trigger.ppid)?.start ?? null },
-      { runtime, panePid: tmux.panePid, paneStart: readInfo(tmux.panePid)?.start ?? null })
+      { runtime, panePid: tmux.panePid, paneStart: paneInfo?.start ?? null, paneComm: paneInfo?.comm ?? null })
     : null;
   return {
     determinable: decision.verdict !== 'unknown',
