@@ -33,6 +33,7 @@ for(const item of ['dbCopy','registration','route','dashboard']) {
     });
     assert.equal(result.success,true);
     assert.equal(result.dashboard.state,'degraded');
+    assert.match(result.next,/zylos init to reapply Dashboard configuration and routing/);
     const reported=result.dashboard.errors.find(value=>value.item===item);
     assert.equal(reported.code,error.code);
     assert.equal(reported.message,error.message);

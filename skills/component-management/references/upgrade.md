@@ -148,19 +148,22 @@ lose user-created indexes or triggers. A same-count edit can change row meaning
 without being detected, so review dependent objects and relevant content.
 
 When migration is needed, protected self-upgrades rehearse
-the target migration chain on isolated SQLite backup copies before service stop.
-A passed rehearsal is only an early warning check. After service stop, the
-updater takes and verifies the authoritative snapshots and reruns the full
+the target migration chain on isolated SQLite backup copies after the existing
+service stop and before installation. A failed rehearsal restores services to
+their original state through pre-install recovery. A passed rehearsal is only an
+early warning check. While services remain stopped, the updater takes and
+verifies the authoritative snapshots and reruns the full
 checks and migrations against the actual databases. Each database's chain is
 atomic. If a later database fails, protected recovery restores all three from
 the verified snapshots and compensates protected code. Backup-only mode
 requires manual recovery. The downloaded target must include rehearsal code on
-this path or the upgrade is rejected before service stop; this applies to
-`--branch` targets that point at older releases. Rehearsal copies live under
+this path or rehearsal fails after service stop and pre-install recovery restores
+the original service state; this applies to `--branch` targets that point at older
+releases. Rehearsal copies live under
 private `.backup/db/.rehearsal` (0700). Normal exit or worker timeout removes
 it. The next upgrade checks and removes that directory and legacy
-`.rehearsal-*` copies before stopping services; a symlink, non-directory, or
-wrong-owner entry blocks cleanup. Formal snapshot groups are unaffected.
+`.rehearsal-*` copies after stopping services and before rehearsal; a symlink,
+non-directory, or wrong-owner entry blocks cleanup. Formal snapshot groups are unaffected.
 
 An installed older updater runs preflight before the target release is installed.
 It may reject extra tables or columns and cannot use the new release's rules.
@@ -238,7 +241,7 @@ Deploy templates according to the decisions made in Step 2:
 
 1. **If `mergeConflicts` exists**: Review each conflict. Read backup and installed versions, re-apply local changes.
 2. Read the CLI's completion and restart result. Protected Core upgrade submits its own restart request; follow any reported recovery action without submitting another restart.
-3. If `dashboard.state` is `degraded`, diagnose and repair Dashboard using `dashboard.errors` and `next`, then report what you fixed.
+3. If `completion.dashboard` (and `dashboard.state`) is `stopped`, Dashboard was already stopped before the upgrade and remains stopped intentionally; no repair or `zylos init` is needed. If it is `degraded`, diagnose and repair Dashboard using `dashboard.errors` and `next`, then report what you fixed. A restore failure requires fixing its reported cause and restarting the service; other setup failures may require `zylos init` as directed by `next`.
 4. Read `warnings` in the result JSON. After the upgrade completes, carry out every entry starting with `Agent action required:`, then report what you did and the result. Each `serviceWarnings` entry names a service that is not online after the upgrade (for example one that had exited on an older database): restart it with `pm2 restart <name>`, confirm it is online, and report it.
 
 ## C4 Mode — Component Upgrade
@@ -389,6 +392,6 @@ User: `upgrade zylos confirm`
 2. Deploy templates per user's decisions from Step 1 (new files: copy, changed: follow user choice, unchanged: skip)
 3. **If `mergeConflicts` in result**: Review and re-merge backed-up local changes
 4. Read the CLI completion and restart result; protected Core upgrade submits its own restart request. Follow its reported recovery action without submitting another restart.
-5. If `dashboard.state` is `degraded`, diagnose and repair Dashboard using `dashboard.errors` and `next`, then report what you fixed.
+5. If `completion.dashboard` (and `dashboard.state`) is `stopped`, Dashboard was already stopped before the upgrade and remains stopped intentionally; no repair or `zylos init` is needed. If it is `degraded`, diagnose and repair Dashboard using `dashboard.errors` and `next`, then report what you fixed. A restore failure requires fixing its reported cause and restarting the service; other setup failures may require `zylos init` as directed by `next`.
 6. Read `warnings` in the result JSON. After the upgrade completes, carry out every entry starting with `Agent action required:`, then report what you did and the result. Each `serviceWarnings` entry names a service that is not online after the upgrade (for example one that had exited on an older database): restart it with `pm2 restart <name>`, confirm it is online, and report it.
 7. Reply with version change and change summary

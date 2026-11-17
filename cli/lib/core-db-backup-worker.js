@@ -446,7 +446,8 @@ export async function superviseDatabases(input, {spawnWorker=spawn, timeoutMs=DA
     items=[{source:input.action==='probe'?'SQLite driver':'components/dashboard/dashboard.db'}];
   } else {
     const rows=input.manifest?.databases ?? input.expectedDatabases;
-    items=rows ? databasesForFormat(databaseFormatForRows(rows,input.manifest?.formatVersion ?? input.formatVersion)) : databasesForFormat(input.formatVersion ?? 3);
+    const formatVersion=input.manifest ? input.manifest.formatVersion : input.formatVersion;
+    items=rows ? databasesForFormat(databaseFormatForRows(rows,formatVersion)) : databasesForFormat(input.formatVersion ?? 3);
   }
   const databases=[];
   let single,cleanup;

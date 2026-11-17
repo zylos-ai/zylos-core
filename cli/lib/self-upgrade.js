@@ -987,7 +987,7 @@ function dashboardNext(dashboard) {
   const reasons=(dashboard.errors || []).map(error=>error.message).filter(Boolean).join('; ');
   return dashboard.restoreFailed
     ? `Dashboard restore failed: ${reasons}. Fix the cause, then restart zylos-dashboard with PM2.`
-    : `Dashboard is not ready: ${reasons || 'see dashboard.errors'}. Fix the reported setup or service failure.`;
+    : 'Dashboard is not ready. Fix the cause reported in dashboard.errors, run zylos init to reapply Dashboard configuration and routing and start ecosystem services, then report what you fixed.';
 }
 
 /** Shared by initial finalization and forward repair after publication is done. */
