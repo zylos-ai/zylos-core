@@ -30,8 +30,8 @@ test('alert target notices distinguish missing, default, invalid, missing sender
   }
 });
 
-test('status text adds only actionable or default notices and JSON preserves the original projection', async () => {
-  const data = { sessionMode: 'multi', origin: { sessionGroup: 'origin', presence: 'not_running', runtime: null, status: { valid: false } }, groups: [], runtimeHealth: {} };
+test('status text adds only actionable or default notices and JSON omits alert notices', async () => {
+  const data = { sessionMode: 'multi', origin: { sessionGroup: 'origin', presence: 'not_running', runtime: null, status: { valid: false } }, groups: [], runtimeHealth: {}, readAt: 2000 };
   const lines = [], original = console.log;
   console.log = line => lines.push(line);
   try {
@@ -45,8 +45,8 @@ test('status text adds only actionable or default notices and JSON preserves the
       lines.length = 0;
       const json = await showStatus(['--json'], { collect: () => data, host: () => assert.fail('JSON must not collect host data'), alertNotice: () => assert.fail('JSON must not read alert target') });
       assert.equal(lines.length, 1);
-      assert.deepEqual(JSON.parse(lines[0]), { ok: true, data });
-      assert.deepEqual(json, result);
+      assert.deepEqual(JSON.parse(lines[0]), { ok: true, data: { ...data, readAt: new Date(data.readAt).toISOString() } });
+      assert.deepEqual(json, JSON.parse(lines[0]));
     }
   } finally { console.log = original; }
 });
