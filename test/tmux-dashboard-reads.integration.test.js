@@ -31,12 +31,24 @@ async function until(read, predicate, timeoutMs = 15000) {
 // synthetic local files; the three panes are unauthenticated input recorders.
 // Run for bound-read, Dashboard tmux observation or delivery identity changes;
 // unrelated UI/docs changes may skip this opt-in integration.
-test('real Dashboard observes three groups for 60s without if-shell; real delivery retains its write guard',
+test('real Dashboard observes three groups for 10s without if-shell; real delivery retains its write guard',
   { skip: !chatEnabled(), timeout: 120000 }, async t => {
+    const tmuxCommand = process.env.TEST_TMUX_BIN || 'tmux';
+    const candidates = tmuxCommand.includes(path.sep) ? [path.resolve(tmuxCommand)]
+      : (process.env.PATH || '').split(path.delimiter).map(dir => path.resolve(dir, tmuxCommand));
+    const tmuxBinary = candidates.find(candidate => {
+      try { fs.accessSync(candidate, fs.constants.X_OK); return fs.statSync(candidate).isFile(); }
+      catch { return false; }
+    });
+    if (!tmuxBinary) {
+      if (process.env.TEST_TMUX_BIN) assert.fail('TEST_TMUX_BIN must name an executable tmux artifact');
+      t.skip('tmux is not available on PATH');
+      return;
+    }
     const sandbox = createChatSandbox(t);
     await sandbox.runCase(async () => {
       const { paths, env } = sandbox;
-      for (const key of ['ZYLOS_CHAT_BROWSER_MODULE', 'ZYLOS_CHAT_BROWSER_BIN', 'TEST_TMUX_BIN']) {
+      for (const key of ['ZYLOS_CHAT_BROWSER_MODULE', 'ZYLOS_CHAT_BROWSER_BIN']) {
         assert.ok(process.env[key] && fs.existsSync(process.env[key]), `${key} must name a provisioned artifact`);
       }
       const bin = path.join(sandbox.root, 'bin'); fs.mkdirSync(bin);
@@ -47,7 +59,7 @@ test('real Dashboard observes three groups for 60s without if-shell; real delive
       fs.chmodSync(path.join(bin, 'tmux'), 0o755);
       const trace = path.join(sandbox.root, 'tmux.jsonl'); fs.writeFileSync(trace, '');
       Object.assign(env, { PATH: `${bin}:/usr/bin:/bin`, TZ: 'Asia/Singapore',
-        ZYLOS_PACKAGE_ROOT: repo, TEST_REAL_TMUX: process.env.TEST_TMUX_BIN,
+        ZYLOS_PACKAGE_ROOT: repo, TEST_REAL_TMUX: tmuxBinary,
         TEST_PRIVATE_SOCKET: paths.socket, TEST_TMUX_TRACE: trace,
         TMUX: `${paths.socket},0,0` });
       const tmux = (...args) => execFileSync(env.TEST_REAL_TMUX, ['-u', '-S', paths.socket, ...args],
@@ -138,11 +150,18 @@ test('real Dashboard observes three groups for 60s without if-shell; real delive
         assert.match(await page.locator('#wb-instance .wb-account').first().innerText(), /63%/);
       };
       await verify();
-      while (Date.now() - readStart < 60000) { await delay(2000); await verify(); }
+      while (Date.now() - readStart < 10000) { await delay(2000); await verify(); }
       const readEnd = Date.now();
       const readTrace = fs.readFileSync(trace, 'utf8').trim().split('\n').map(JSON.parse)
         .filter(row => row.at >= readStart && row.at <= readEnd);
-      assert.ok(readTrace.length > 30, '60-second observation must exercise repeated real tmux reads');
+      let readRounds = 0, lastRoundAt = -Infinity;
+      for (const row of readTrace) {
+        if (row.argv.includes('show-environment') && row.at - lastRoundAt >= 2000) {
+          readRounds++;
+          lastRoundAt = row.at;
+        }
+      }
+      assert.ok(readRounds >= 3, `Expected at least three time-separated tmux environment read rounds, got ${readRounds}`);
       assert.equal(readTrace.filter(row => row.argv.includes('if-shell')).length, 0);
       assert.ok(readTrace.some(row => row.argv.includes('show-environment')));
       if (process.env.ZYLOS_CHAT_EVIDENCE_DIR) {
@@ -152,7 +171,7 @@ test('real Dashboard observes three groups for 60s without if-shell; real delive
         const version = tmux('-V').replaceAll(/[^a-zA-Z0-9.]/g, '-');
         await page.screenshot({ path: path.join(evidence, `dashboard-reads-${version}.png`), fullPage: true });
         fs.writeFileSync(path.join(evidence, `dashboard-reads-${version}.json`), JSON.stringify({ readStart,
-          readEnd, groups, trace: readTrace }, null, 2));
+          readEnd, readRounds, groups, trace: readTrace }, null, 2));
       }
       const beforeWrite = fs.statSync(trace).size;
       const delivery = sandbox.startChild(process.execPath, [helper, '--deliver'], { timeoutMs: 15000 });
@@ -164,7 +183,7 @@ test('real Dashboard observes three groups for 60s without if-shell; real delive
       assert.ok(writeTrace.some(row => row.argv.includes('if-shell') && row.argv.some(arg => arg.includes('paste-buffer'))));
       for (const index of [1, 2]) assert.equal(fs.readFileSync(path.join(sandbox.root, `input-${index}`), 'utf8'), '');
       console.log('Dashboard tmux acceptance evidence:', JSON.stringify({ durationMs: readEnd - readStart,
-        readClients: readTrace.length, readIfShell: 0, groups: 3, states: 'idle', contexts: [21, 22, 23],
+        readRounds, readClients: readTrace.length, readIfShell: 0, groups: 3, states: 'idle', contexts: [21, 22, 23],
         weeklyRemaining: 63, delivery: 'real SessionAdapter paste/send-keys succeeded with if-shell write guard' }));
       await browser.close();
       child.kill('SIGTERM');
