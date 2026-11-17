@@ -289,7 +289,7 @@ for (const [name, permissions, warning] of [
     const template = JSON.parse(fs.readFileSync(path.join(packageRoot, 'templates/.claude/settings.json')));
     assert.equal(settings.autoMemoryEnabled, template.autoMemoryEnabled);
     assert.ok(settings.hooks.SessionStart.length > 0);
-    assert.equal(result.warnings.filter(message => message.includes(warning)).length, 1);
+    assert.deepEqual(result.warnings, [`${warning}; skipping default deny rules.`]);
     assert.deepEqual(snapshot(f.zylosDir), before);
   });
 }

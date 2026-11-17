@@ -315,11 +315,11 @@ export function syncTemplateDeniedTools({
 } = {}) {
   const permissions = installedSettings.permissions;
   if (permissions !== undefined && (!permissions || typeof permissions !== 'object' || Array.isArray(permissions))) {
-    log('  Warning: permissions is not an object; skipping default deny rules.');
+    log('permissions is not an object; skipping default deny rules.');
     return { changed: false };
   }
   if (permissions?.deny !== undefined && !Array.isArray(permissions.deny)) {
-    log('  Warning: permissions.deny is not an array; skipping default deny rules.');
+    log('permissions.deny is not an array; skipping default deny rules.');
     return { changed: false };
   }
   const deny = permissions?.deny ?? [];
@@ -767,7 +767,7 @@ export function syncRuntimeHooks({
   }
 
   const { changed: denyBackfilled } = syncTemplateDeniedTools({
-    templateSettings, installedSettings, dryRun, log,
+    templateSettings, installedSettings, dryRun, log: message => log(`  Warning: ${message}`),
   });
 
   const codexSync = syncCodexConfig({ dryRun, projectDir: zylosDir });

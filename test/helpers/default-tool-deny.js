@@ -58,6 +58,10 @@ if (scenario === 'fresh') {
     assert.ok(logs.some(line => scenario === 'dry-run'
       ? line.includes('permissions.deny to backfill') : line.includes('Warning: permissions')));
     if (invalid) {
+      const warning = scenario.endsWith('-deny')
+        ? 'permissions.deny is not an array' : 'permissions is not an object';
+      assert.deepEqual(logs.filter(line => line.includes('Warning: permissions')),
+        [`  Warning: ${warning}; skipping default deny rules.`]);
       // An invalid permissions value must not prevent unrelated settings work.
       delete settings.autoMemoryEnabled;
       fs.writeFileSync(settingsPath, JSON.stringify(settings));
