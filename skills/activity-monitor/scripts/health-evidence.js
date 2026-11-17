@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { sanitizeHealthQuota } from './health-quota.js';
 import { classifyHealthNotice, sanitizeNoticeMatch } from './health-notice-classification.js';
 
-export const HOOK_ERRORS = new Set(['rate_limit', 'authentication_failed', 'billing_error', 'overloaded', 'server_error', 'model_not_found']);
+export const HOOK_ERRORS = new Set(['rate_limit', 'authentication_failed', 'billing_error', 'overloaded', 'server_error', 'network_error', 'model_not_found']);
 const id = value => typeof value === 'string' && /^[A-Za-z0-9._:-]{1,200}$/.test(value);
 const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value);
 export const HEALTH_EVENT_MAX_AGE_MS = 300000;
@@ -37,7 +37,7 @@ export function initialHealthEvidence(health = 'ok', reason = '') {
 
 export function safeHealthReason(health, reason) {
   if (health === 'ok') return '';
-  const allowed = new Set(['rate_limit_unclassified','rate_limit_five_hour','rate_limit_seven_day','authentication_failed','billing_error','overloaded','server_error','model_not_found','hook_evidence_unordered','health_storage_unavailable']);
+  const allowed = new Set(['rate_limit_unclassified','rate_limit_five_hour','rate_limit_seven_day','authentication_failed','billing_error','overloaded','server_error','network_error','model_not_found','hook_evidence_unordered','health_storage_unavailable']);
   if (allowed.has(reason)) return reason;
   if (health === 'ok') return '';
   if (health === 'rate_limited') return 'rate_limit_unclassified';

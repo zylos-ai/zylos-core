@@ -2,15 +2,25 @@
 /** Translate AGY's native hooks into the shared, run-scoped lifecycle. */
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadCoreModule } from './core-modules.js';
-import { handleHookActivity } from './hook-activity.js';
-import { collectHealthHook, wakeHealthMonitor } from './hook-health.js';
-import { runSessionStartOrchestrator, readStdinPayload, runStep, shardHeader } from './session-start-orchestrator.js';
-import { buildChain } from './shard-registry.js';
-import { handleSessionForeground } from './session-foreground.js';
-import { publishBootstrapReady } from './bootstrap-ready.js';
-import { enqueueStartupPrompt } from './session-start-prompt.js';
 import { isMainModule } from './is-main-module.js';
+// Install this before loading hook modules. Native timeout kills only sh -c,
+// and timed-out optional shard promises can otherwise retain this Node process.
+const main = isMainModule(import.meta.url);
+const deadline = main ? setTimeout(() => {
+  process.stdout.write('{}\n');
+  process.stderr.write('Zylos AGY hook exceeded its process deadline.\n');
+  process.exit(1);
+}, process.argv[2] === 'SessionStart' ? 55000 : 5000) : null;
+deadline?.unref();
+const [{ loadCoreModule }, { handleHookActivity }, { collectHealthHook, wakeHealthMonitor },
+  { runSessionStartOrchestrator, readStdinPayload, runStep, shardHeader }, { buildChain },
+  { handleSessionForeground }, { publishBootstrapReady }, { enqueueStartupPrompt },
+  { acceptAgyMainEvent, setAgyRulesPending }] = await Promise.all([
+  import('./core-modules.js'), import('./hook-activity.js'), import('./hook-health.js'),
+  import('./session-start-orchestrator.js'), import('./shard-registry.js'),
+  import('./session-foreground.js'), import('./bootstrap-ready.js'), import('./session-start-prompt.js'),
+  import('./agy-main-session.js'),
+]);
 const { runDirFromEnv } = await loadCoreModule('session-group-paths.js');
 const { agyInstructionContext } = await loadCoreModule('runtime/instruction-builder.js');
 
@@ -20,14 +30,22 @@ function agyStopError(error) {
   if (typeof error !== 'string') return 'server_error';
   const rejectedStatus = /\b(?:HTTP(?:\/\d(?:\.\d)?)?\s*|status(?:\s+code)?[\s:=]*)(?:401|403)\b|\b(?:401\s+Unauthorized|403\s+Forbidden)\b/i;
   const rejectedKey = /\bAPI_KEY_INVALID\b|\b(?:invalid|rejected)\s+API[ _-]?key\b|\bAPI[ _-]?key\s+(?:(?:is|was)\s+)?(?:not valid|invalid|rejected)\b/i;
-  return rejectedStatus.test(error) || rejectedKey.test(error) ? 'authentication_failed' : 'server_error';
+  if (rejectedStatus.test(error) || rejectedKey.test(error)) return 'authentication_failed';
+  return /proxyconnect|connection\s+refused|\b(?:ECONNREFUSED|ENETUNREACH|EHOSTUNREACH)\b/i.test(error) ? 'network_error' : 'server_error';
 }
 
 export function normalizeAgyHook(payload, eventName) {
   if (!payload || typeof payload !== 'object') return null;
   const event = eventName || payload.hookEventName || payload.hook_event_name;
   const session = payload.conversationId;
-  if (!['SessionStart', 'PreInvocation', 'Stop'].includes(event) || typeof session !== 'string' || !session) return null;
+  if (!['SessionStart', 'PreInvocation', 'Stop', 'PreToolUse', 'PostToolUse'].includes(event) || typeof session !== 'string' || !session) return null;
+  if (event === 'PreToolUse' || event === 'PostToolUse') {
+    if (payload.toolCall?.name !== 'run_command' || typeof payload.toolCall.id !== 'string' || !payload.toolCall.id) return null;
+    return { session_id: session, transcript_path: payload.transcriptPath,
+      hook_event_name: event === 'PostToolUse' && payload.error ? 'PostToolUseFailure' : event,
+      tool_name: 'run_command', tool_use_id: payload.toolCall.id, tool_input: payload.toolCall.args,
+      ...(event === 'PostToolUse' && payload.error ? { error: 'tool_error' } : {}) };
+  }
   if (event === 'PreInvocation' && payload.invocationNum !== 0) return null;
   if (event === 'Stop' && payload.fullyIdle !== true && String(payload.terminationReason).toUpperCase() !== 'ERROR') return null;
   return { ...payload, session_id: session, transcript_path: payload.transcriptPath,
@@ -74,13 +92,23 @@ export async function runAgySessionStart(payload, { env = process.env, chainBuil
 export async function handleAgyHook(payload, { eventName, env = process.env,
   orchestrate = runAgySessionStart, instructions = agyInstructionContext,
   activity = handleHookActivity, health = collectHealthHook, wake = wakeHealthMonitor } = {}) {
+  const event = eventName || payload?.hookEventName || payload?.hook_event_name;
+  if (!['SessionStart', 'PreInvocation', 'Stop', 'PreToolUse', 'PostToolUse'].includes(event)) return null;
+  const binding = acceptAgyMainEvent(payload, event, env);
+  if (!binding) return event === 'SessionStart' ? {} : null;
+  if (event === 'Stop' && String(payload.terminationReason).toUpperCase() === 'TERMINAL_CUSTOM_HOOK') setAgyRulesPending(binding, true);
+  let reinjection = null;
+  if (event === 'PreInvocation' && binding.record.rulesPending) {
+    reinjection = { injectSteps: [{ systemMessage: { systemMessage: instructions({ zylosDir: env.ZYLOS_DIR }) } }] };
+    setAgyRulesPending(binding, false);
+  }
   const normalized = normalizeAgyHook(payload, eventName);
-  if (!normalized) return null;
+  if (!normalized) return reinjection;
   if (normalized.hook_event_name === 'SessionStart') normalized.source = readAgySessionSource(env);
   activity(normalized.hook_event_name === 'StopFailure' ? { ...normalized, hook_event_name: 'Stop' } : normalized, { env });
   const evidence = health(normalized, { env, zylosDir: env.ZYLOS_DIR });
   if (evidence) await wake({ zylosDir: env.ZYLOS_DIR });
-  if (normalized.hook_event_name !== 'SessionStart') return null;
+  if (normalized.hook_event_name !== 'SessionStart') return reinjection;
   const chunks = [Buffer.from(instructions({ zylosDir: env.ZYLOS_DIR }))];
   await orchestrate(normalized, { env, stdout: { fd: 1 }, writeSync: (_fd, buffer, offset, length) => {
     chunks.push(Buffer.from(buffer.subarray(offset, offset + length)));
@@ -89,13 +117,19 @@ export async function handleAgyHook(payload, { eventName, env = process.env,
   return { injectSteps: [{ systemMessage: { systemMessage: Buffer.concat(chunks).toString('utf8') } }] };
 }
 
-if (isMainModule(import.meta.url)) {
+if (main) {
   try {
     const result = await handleAgyHook(await readStdinPayload(), { eventName: process.argv[2] });
-    if (result) process.stdout.write(JSON.stringify(result) + '\n');
+    fs.writeSync(1, JSON.stringify(result || {}) + '\n');
+    // An optional emitter may still have handles after its budget expired.
+    // The hook process owns this deadline and exits explicitly after output.
+    clearTimeout(deadline);
+    process.exit(0);
   } catch {
     // Hook output is a protocol: never include native payloads or credentials in errors.
     process.stderr.write('Zylos AGY hook failed.\n');
-    process.exitCode = 1;
+    fs.writeSync(1, '{}\n');
+    clearTimeout(deadline);
+    process.exit(1);
   }
 }

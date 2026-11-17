@@ -69,7 +69,7 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
           ...(sampleTarget ? { sampled:sample.sampled } : {}),
           ...(target.present && !stable ? { observationError:tmuxError('TARGET_GONE', 'Batch target changed during observation') } : {}),
           status:sampleResult(status, target, final, freshnessMs, now()),
-          usage:sampleResult(usage, target, final, usageFreshnessMs, now()) }];
+          usage:sampleResult(usage, target, final, target.runtime === 'agy' ? Infinity : usageFreshnessMs, now()) }];
       }));
     } finally { await connection.close(); }
   }
@@ -81,7 +81,9 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
   }
   async function readLiveIdentity(group) { return withConnection(group, async read => publicIdentity(await read())); }
   /** usageFreshnessMs bounds the usage sample's age separately (default: freshnessMs). The runtime writes that sample
-   * only after the session's own requests, so an idle session's last one is still its current usage. */
+   * only after the session's own requests, so an idle session's last one is still its current usage.
+   * AGY statusLine is change-driven: its usage sample has no age limit. Live target
+   * observations still bracket it, and run/session/version checks remain required. */
   async function readSessionState(group, { freshnessMs, usageFreshnessMs = freshnessMs } = {}) {
     if (!Number.isFinite(freshnessMs) || freshnessMs < 0) throw new TypeError('freshnessMs must be a nonnegative number');
     if (typeof usageFreshnessMs !== 'number' || Number.isNaN(usageFreshnessMs) || usageFreshnessMs < 0) {
@@ -104,7 +106,7 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
         last = absent(group);
       }
       return { identity: publicIdentity(first), status: sampleResult(status, first, last, freshnessMs, now()),
-        usage: sampleResult(usage, first, last, usageFreshnessMs, now()) };
+        usage: sampleResult(usage, first, last, first.runtime === 'agy' ? Infinity : usageFreshnessMs, now()) };
     });
   }
   async function readCodexUsageSample({ sessionGroup }) {

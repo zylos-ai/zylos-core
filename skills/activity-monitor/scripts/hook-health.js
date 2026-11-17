@@ -12,7 +12,7 @@ const { runDirFromEnv, RUN_FILES } = await loadCoreModule('session-group-paths.j
 import { runtimeRoot } from './runtime-generation.js';
 
 const EVENTS = { SessionStart: 'session_start', UserPromptSubmit: 'prompt_submit', StopFailure: 'stop_failure', Stop: 'stop' };
-const ERRORS = new Set(['rate_limit', 'authentication_failed', 'billing_error', 'overloaded', 'server_error', 'model_not_found']);
+const ERRORS = new Set(['rate_limit', 'authentication_failed', 'billing_error', 'overloaded', 'server_error', 'network_error', 'model_not_found']);
 const identifier = value => typeof value === 'string' && /^[A-Za-z0-9._:-]{1,200}$/.test(value) ? value : null;
 
 export function collectHealthHook(payload, { zylosDir = runtimeRoot(), nowMs = Date.now(), pid = getClaudePid(), env = process.env } = {}) {

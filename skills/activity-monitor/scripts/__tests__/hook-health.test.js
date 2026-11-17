@@ -67,3 +67,15 @@ test('malformed optional model configuration preserves native health collection'
   assert.equal(records.length, 3);
   assert.ok(records.every(event => event.runtime === 'claude'));
 });
+
+test('agy network failures retain a safe category without native connection details', t => {
+  const options = fixture(t);
+  const env = { ZYLOS_DIR: options.zylosDir, ZYLOS_MODEL_CONFIG: JSON.stringify({ runtime: 'agy' }) };
+  const event = collectHealthHook({ ...payload, error: 'network_error',
+    error_details: 'proxyconnect tcp: connection refused https://PRIVATE-PROXY/' }, { ...options, env });
+  assert.equal(event.runtime, 'agy');
+  assert.equal(event.error, 'network_error');
+  const raw = fs.readFileSync(path.join(options.zylosDir, 'activity-monitor/events.jsonl'), 'utf8');
+  assert.equal(JSON.parse(raw).error, 'network_error');
+  assert.doesNotMatch(raw, /PRIVATE|proxyconnect|connection refused/);
+});

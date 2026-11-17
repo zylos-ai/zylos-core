@@ -30,7 +30,7 @@ test('native hook normalization filters partial stops and later invocations',()=
 test('SessionStart returns JSON injection and consumes only the run clear marker',async t=>{
   const {dir,env}=fixture(t);fs.writeFileSync(path.join(dir,'agy-session-source'),JSON.stringify({runId:'run',source:'clear'}));
   let source;
-  const result=await handleAgyHook({conversationId:'session'}, {env,eventName:'SessionStart',activity:()=>null,health:()=>null,
+  const result=await handleAgyHook({conversationId:'session',lastUserInput:'System startup trigger, not a user message. Continue with startup context.'}, {env,eventName:'SessionStart',activity:()=>null,health:()=>null,
     instructions:()=> 'full tail rules\n',orchestrate:async (payload,{writeSync})=>{
       source=payload.source;const buffer=Buffer.from('startup marker');writeSync(1,buffer,0,buffer.length);
     }});
@@ -88,7 +88,7 @@ test('Esc idle fallback validates run/session and background work can resume',t=
   activity.consume([{event:'prompt',ts:200,runtime:'agy',run_id:'run',session_id:'session'}]);
   const write=(state,capturedAt,more={})=>fs.writeFileSync(path.join(dir,'statusline.json'),JSON.stringify({session_id:'session',agent_state:state,zylos:{v:1,runId:'run',capturedAt},...more}));
   write('idle',1000,{session_id:'other'});assert.equal(activity.read(2000).state,'busy');
-  write('idle',2100,{pending_input_count:1});assert.equal(activity.read(3000).state,'busy');
+  write('idle',2100,{task_count:1});assert.equal(activity.read(3000).state,'busy');
   write('idle',3100);assert.equal(activity.read(3300).state,'busy');assert.equal(activity.read(3600).state,'idle');
   write('working',4000);assert.equal(activity.read(4100).state,'busy');
 });
@@ -103,7 +103,7 @@ test('startup emits every declared shard before publishing readiness',async t=>{
 });
 test('startup capture preserves multibyte bytes across short writes',async t=>{
   const {env}=fixture(t);
-  const result=await handleAgyHook({conversationId:'session'}, {env,eventName:'SessionStart',activity:()=>null,health:()=>null,instructions:()=>'',
+  const result=await handleAgyHook({conversationId:'session',lastUserInput:'System startup trigger, not a user message. Continue with startup context.'}, {env,eventName:'SessionStart',activity:()=>null,health:()=>null,instructions:()=>'',
     orchestrate:async(_payload,{writeSync})=>{const bytes=Buffer.from('中');for(let offset=0;offset<bytes.length;offset++)writeSync(1,bytes,offset,1);}});
   assert.equal(result.injectSteps[0].systemMessage.systemMessage,'中');
 });

@@ -35,8 +35,14 @@ test('Antigravity setup merges user settings, hooks, MCP servers and onboarding 
   const hooks = read(files.hooks);
   assert.equal(hooks.custom.Stop[0].command, './keep.sh');
   assert.equal(hooks.zylos.PreToolUse[0].matcher, '^ask_question$');
-  assert.equal(hooks.zylos.PreToolUse[0].hooks[0].timeout, 60);
+  assert.equal(hooks.zylos.PreToolUse[0].hooks[0].timeout, 5);
   assert.match(hooks.zylos.PreToolUse[0].hooks[0].command, /agy-tool-guard\.js'$/);
+  for (const event of ['PreToolUse', 'PostToolUse']) {
+    const tool = hooks.zylos[event].find(group => group.matcher === '^run_command$');
+    assert.equal(tool.hooks.length, 1);
+    assert.equal(tool.hooks[0].timeout, 10);
+    assert.ok(tool.hooks[0].command.endsWith(`agy-hooks.js' ${event}`));
+  }
   for (const event of ['SessionStart', 'PreInvocation', 'Stop']) {
     assert.equal(hooks.zylos[event][0].timeout, 60);
     assert.match(hooks.zylos[event][0].command, new RegExp(`agy-hooks\\.js' ${event}$`));
@@ -46,6 +52,23 @@ test('Antigravity setup merges user settings, hooks, MCP servers and onboarding 
   assert.deepEqual(read(files.onboarding), { enterpriseOnboardingComplete: false, custom: true, consumerOnboardingComplete: true, onboardingComplete: true });
   assert.equal(syncAgyConfig(f).changed, false);
   assert.equal(isAgyConfigReady(f), true);
+});
+
+test('Antigravity setup registers hooks once globally and never creates workspace hooks', t => {
+  const f = fixture(t);
+  fs.mkdirSync(f.zylosDir, { recursive: true });
+  syncAgyConfig(f);
+  syncAgyConfig(f);
+  const global = agyConfigurationPaths(f.home).hooks;
+  assert.equal(global, path.join(f.home, '.gemini/config/hooks.json'));
+  assert.equal(fs.existsSync(path.join(f.zylosDir, '.agents/hooks.json')), false);
+  assert.equal(fs.existsSync(path.join(f.zylosDir, '.gemini')), false);
+  assert.equal(fs.existsSync(path.join(f.zylosDir, '.agents')), false);
+  const hooks = read(global).zylos;
+  for (const event of ['SessionStart', 'PreInvocation', 'Stop', 'PostToolUse']) assert.equal(hooks[event].length, 1);
+  assert.equal(hooks.PreToolUse.length, 2);
+  assert.equal(hooks.PreToolUse.filter(group => group.matcher === '^ask_question$').length, 1);
+  assert.equal(hooks.PreToolUse.filter(group => group.matcher === '^run_command$').length, 1);
 });
 
 test('Antigravity setup refuses malformed user JSON before any writes', t => {

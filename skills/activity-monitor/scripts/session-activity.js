@@ -175,15 +175,17 @@ export class SessionActivity {
     return stat.mtimeMs;
   }
   agyBusy(now) {
-    // A current, identity-bound statusLine closes Esc-interrupted turns, which
-    // emit no Stop. Native busy states can also resume without a new prompt.
+    // AGY publishes statusLine only on changes, with no heartbeat. A run/session
+    // bound sample remains authoritative until newer activity or a replacement
+    // sample. It also closes Esc-interrupted turns, which emit no Stop.
     let sample;
     try {sample=JSON.parse(fs.readFileSync(path.join(this.runDir,'statusline.json'),'utf8'));} catch {}
     const captured=sample?.zylos?.capturedAt;
     const current=sample?.zylos?.v===1 && sample.zylos.runId===this.runId && sample.session_id===this.sessionId &&
-      Number.isFinite(captured) && captured>=this.startedAt && captured>=this.lastActivityAt && captured<=now && now-captured<=30000;
+      Number.isFinite(captured) && captured>=this.startedAt && captured>=this.lastActivityAt && captured<=now;
     if(current) {
-      if(sample.agent_state==='idle' && !(sample.pending_input_count>0)) {
+      const runningSubagent=Array.isArray(sample.subagents) && sample.subagents.some(agent=>agent?.status==='running');
+      if(sample.agent_state==='idle' && !(sample.task_count>0) && !runningSubagent) {
         this.agyIdleSince ??= captured;
         if(now-this.agyIdleSince>=500) {
           this.turn=false;this.tools.clear();return false;
