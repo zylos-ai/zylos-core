@@ -76,7 +76,7 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 | `--domain <domain>` | Caddy 反向代理域名，如 `agent.example.com` | 无 |
 | `--https` / `--no-https` | 启用或禁用 HTTPS | 设置域名时默认 `--https` |
 | `--caddy` / `--no-caddy` | 安装或跳过 Caddy Web 服务器 | 安装 |
-| `--session-mode <mode>` | 新装时的会话模式：`single` 或 `multi`。已装好的实例只接受当前模式，不一致时以 `INIT_SESSION_MODE_MISMATCH` 报错退出、不做任何改动；改模式请用 `zylos session-mode switch <mode>` | `multi` |
+| `--session-mode <mode>` | 新装时的会话模式：`single` 或 `multi`。已装好且已记录模式的实例只接受该模式，不一致时以 `INIT_SESSION_MODE_MISMATCH` 报错退出、不做任何改动；改模式请用 `zylos session-mode switch <mode>`。已装好但没有记录模式的实例：`multi` 交给自动迁移（迁到多会话），`single` 会写入配置并保持单会话（模式切换进行中时以 `INIT_SESSION_MODE_SWITCH_IN_PROGRESS` 拒绝） | `multi` |
 
 **环境变量：**
 

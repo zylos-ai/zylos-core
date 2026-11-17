@@ -611,33 +611,60 @@ function detectInstallState() {
 
 const INIT_SESSION_MODES = ['single', 'multi'];
 
+/** The open (not complete) mode transition, or null. No C4 database means none can exist. */
+async function readOpenModeTransition({ zylosDir = ZYLOS_DIR } = {}) {
+  if (!fs.existsSync(path.join(zylosDir, 'comm-bridge', 'c4.db'))) return null;
+  const { openReadStore } = await import('../lib/c4-read-store.js');
+  const { store, close } = await openReadStore(zylosDir);
+  try { return await store.getModeTransition(); } finally { close(); }
+}
+
 /**
- * Check `--session-mode` against an installed instance before init changes anything.
- * Only a complete install is checked; fresh and incomplete installs take the flag value.
- * A missing session_mode key means single, as everywhere else that reads the mode.
- * @returns {{code: string, message: string}|null} the refusal, or null to continue
+ * Check `--session-mode` against an installed instance. Only a complete install is
+ * checked; fresh and incomplete installs take the flag value.
+ * With a session_mode key, the flag must equal it. Without the key, the supervisor's
+ * automatic migration moves the instance to multi: `multi` is left to that migration,
+ * and `single` is accepted (and later written) only while no mode switch is open.
+ * @returns {Promise<{code: string, message: string}|null>} the refusal, or null to continue
  */
-export function initSessionModeConflict(requested, installState, { readMode = readSessionMode } = {}) {
+export async function initSessionModeConflict(requested, installState,
+  { readMode = readSessionMode, readTransition = readOpenModeTransition } = {}) {
   if (!requested || installState !== 'complete') return null;
-  let current;
-  try { current = readMode().mode ?? 'single'; }
+  let value;
+  try { value = readMode(); }
   catch (cause) {
     return { code: 'CONFIG_UNREADABLE',
-      message: `Cannot read the current session mode (${cause.message}). zylos init made no changes.` };
+      message: `Cannot read the current session mode (${cause.message}). zylos init did not change the session mode.` };
   }
-  if (current === requested) return null;
-  return { code: 'INIT_SESSION_MODE_MISMATCH',
-    message: `This instance is already installed in ${current} session mode; zylos init does not change the mode. ` +
-      `To change it, run: zylos session-mode switch ${requested}. zylos init made no changes.` };
+  if (value.keyPresent) {
+    if (value.mode === requested) return null;
+    return { code: 'INIT_SESSION_MODE_MISMATCH',
+      message: `This instance is already installed in ${value.mode} session mode; zylos init does not change the mode. ` +
+        `To change it, run: zylos session-mode switch ${requested}. zylos init did not change the session mode.` };
+  }
+  if (requested === 'multi') return null;
+  let transition;
+  try { transition = await readTransition(); }
+  catch (cause) {
+    return { code: 'MODE_TRANSITION_UNREADABLE',
+      message: `Cannot read whether a session mode switch is in progress (${cause.message}). zylos init did not change the session mode.` };
+  }
+  if (!transition) return null;
+  return { code: 'INIT_SESSION_MODE_SWITCH_IN_PROGRESS',
+    message: `A session mode switch (${transition.source_mode} to ${transition.target_mode}) is in progress; zylos init did not change the session mode. ` +
+      'Wait until "zylos session-mode status" shows it finished, then run: zylos session-mode switch single.' };
 }
 
 /**
  * Config update for session_mode before services start, or null for no write.
  * Fresh and incomplete installs store an explicit `--session-mode`; without it a fresh
- * install defaults to multi only when the key is absent. Complete installs never write here.
+ * install defaults to multi only when the key is absent. A complete install writes only
+ * `single` into a config without the key, which keeps the automatic migration away.
  */
-export function initSessionModeUpdate(installState, requested) {
-  if (installState === 'complete') return null;
+export function initSessionModeUpdate(installState, requested, { keyPresent = true } = {}) {
+  if (installState === 'complete') {
+    return requested === 'single' && keyPresent === false ? { set: { session_mode: 'single' } } : null;
+  }
   if (requested) return { set: { session_mode: requested } };
   return installState === 'fresh' ? { setIfAbsent: { session_mode: 'multi' } } : null;
 }
@@ -2121,9 +2148,11 @@ Options:
   --domain <domain>          Configure Caddy with this domain
   --https / --no-https       Enable/disable HTTPS (default: https when domain set)
   --caddy / --no-caddy       Install/skip Caddy web server (default: install)
-  --session-mode <mode>      New install only: single or multi (default: multi).
-                             On an installed instance it must match the current
-                             mode; change modes with: zylos session-mode switch
+  --session-mode <mode>      New install: single or multi (default: multi).
+                             On an installed instance it must match the saved
+                             mode; change modes with: zylos session-mode switch.
+                             Installed without a saved mode: multi is left to the
+                             automatic migration; single is saved and kept.
 
 Non-interactive mode:
   Automatically enabled when stdin is not a TTY, or CI=true / NONINTERACTIVE=1
@@ -2160,7 +2189,7 @@ export async function initCommand(args) {
   // A damaged existing F1 must fail before auth, installers, or any other write.
   const existingConfig = readZylosConfigOrThrow();
   // An installed instance keeps its mode; refuse a different --session-mode before any change.
-  const sessionModeConflict = initSessionModeConflict(opts.sessionMode, detectInstallState());
+  const sessionModeConflict = await initSessionModeConflict(opts.sessionMode, detectInstallState());
   if (sessionModeConflict) {
     console.error(`${error(`Error [${sessionModeConflict.code}]: ${sessionModeConflict.message}`)}`);
     process.exit(1);
@@ -2315,7 +2344,17 @@ export async function initCommand(args) {
   createDirectoryStructure();
   const initialSkillSync = syncCoreSkills();
   if (initialSkillSync.error) preparation.failed.push({ item: 'core.skills', message: initialSkillSync.error });
-  const sessionModeUpdate = initSessionModeUpdate(installState, opts.sessionMode);
+  let sessionModeKeyPresent = true;
+  if (installState === 'complete' && opts.sessionMode) {
+    // The running supervisor may have opened a mode switch since the first check: check again right before writing.
+    const refusal = await initSessionModeConflict(opts.sessionMode, installState);
+    if (refusal) {
+      console.error(`${error(`Error [${refusal.code}]: ${refusal.message}`)}`);
+      process.exit(1);
+    }
+    sessionModeKeyPresent = readSessionMode().keyPresent;
+  }
+  const sessionModeUpdate = initSessionModeUpdate(installState, opts.sessionMode, { keyPresent: sessionModeKeyPresent });
   if (sessionModeUpdate) updateZylosConfigLocked(sessionModeUpdate);
   runMigrations({ zylosDir: ZYLOS_DIR, templatesDir: TEMPLATES_SRC });
   try { deployTemplates({ freshInstall: installState === 'fresh' }); }
