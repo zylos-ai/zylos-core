@@ -31,9 +31,10 @@ only selects alert wording; it no longer selects a destination or reason scope.
 Scheduler handoff supplies `--core-source scheduler` and `--task-name`. C4
 persists nullable TEXT conversations.core_source and task_name in the
 unreleased 4→5 migration. Scheduler alerts name the task, with an unnamed-task
-fallback. User alerts identify channel+endpoint and message #id. Both include
-target group, fixed failure classification and a suggestion to have the
-corresponding session investigate in that chat. Bodies and arbitrary exception
+fallback, and include the original message #id for diagnosis. User alerts identify channel+endpoint and message #id. Both provide complete Chinese and English sections containing target group,
+source channel/chat and fixed failure classification. Each section ends by
+asking whether the owner wants an investigation and can reply directly to the
+alert: “需要我排查原因吗？需要的话请直接回复这条消息。” Bodies and arbitrary exception
 text are never copied. Historical rows have NULL source and use user wording;
 a body prefix never establishes scheduler provenance.
 
@@ -102,3 +103,66 @@ exec_confirm_ms, cleanup_ms, total_ms, timeout_ms, last_phase, attempt, run_id,
 conversation_id and cause. NAME_CONFLICT is uncounted, unconfirmed stop retains
 ownership and observed READY wins over launch error. Preflight failures identify
 preflight; READY timeout identifies runtime_ready and its separate budget.
+
+## Investigating an alert
+
+This is an owner-authorized, read-only investigation. If a short owner reply
+such as “需要” is unclear, first follow the installed
+[short-reply rule](../SKILL.md#short-replies-to-owner-alerts). Read only this
+chat's recent records, including outbound delivery_action=system_notice rows:
+
+```bash
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js recent 20 --channel '<channel>' --endpoint '<endpoint>'
+```
+
+Use the incoming reply's exact channel and endpoint. The documented
+[recent command](c4-db.md#recent) normalizes message-level routing metadata but
+keeps actual topics/threads isolated. Match the owner's reply to the alert's
+question before acting; if it remains ambiguous, ask which alert they mean.
+A “yes” to the investigation question authorizes investigation, not a rerun.
+
+Take the original message #id from the alert body, not the alert's own outbound
+C4 row ID. Both scheduler and user alerts include that original ID. Replace ID
+below with its positive integer value:
+
+```bash
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-diagnose.js --id ID
+```
+
+The command reads the current schema in read-only mode and returns JSON:
+
+1. data.message contains id, status, retry_count, original channel/endpoint,
+   target session_group, source/task_name, fixed reason and alert_state. An old
+   failed row can have reason=null because historical failures were not
+   backfilled. Report that limitation; do not infer a cause from its body.
+2. data.launch_failures.events contains retained Router session_launch_failed
+   events matching conversation_id. Inspect preflight_ms, new_session_ms,
+   executor_init_ms, exec_confirm_ms, cleanup_ms, total_ms, timeout_ms,
+   last_phase, cause, attempt and run_id. Router writes them to
+   $ZYLOS_DIR/comm-bridge/router-events.jsonl (default ~/zylos/comm-bridge), with
+   timestamp rotations. The command reuses Core's event reader, caps scanning
+   at10000 records and returns at most20 matching events. limited=true means
+   the bounded scan stopped; unavailable=true means the log could not be read.
+   Empty events may mean log retention or a non-launch failure, not success.
+3. data.target comes from Core's current session reader. In multi mode it
+   observes the target group; in single mode the runtime target is Origin.
+   observation=unknown, present=null, ready=null or status_valid=false means
+   the current state could not be confirmed. Do not treat an unavailable tmux
+   server or stale/invalid status as proof that the session exited. Compare
+   present/ready/runtime/state/health only when the observation is valid.
+
+The diagnostic output excludes message bodies, arbitrary exceptions, launch
+configuration and environment values. NOT_FOUND means the ID is unavailable;
+DIAGNOSTIC_UNAVAILABLE means the database/schema or a required Core module
+could not be read safely. A target observation failure instead returns
+target.observation=unknown; a log read failure returns
+launch_failures.unavailable=true. Do not bypass those results with unprojected database text
+or another chat's history.
+
+After checking, explain the fixed failure category, retained timing evidence
+and current target state to the owner, including any missing evidence. The
+original message remains failed and will not replay automatically, even if
+the target is healthy now. Ask the owner whether to rerun a scheduled task
+manually or notify the original sender; investigate first and obtain that
+explicit decision before either action. Never silently replay a user message
+or change the failed row to pending.

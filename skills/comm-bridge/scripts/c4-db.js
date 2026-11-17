@@ -14,6 +14,7 @@ import { fileURLToPath } from 'url';
 import { DATA_DIR, DB_PATH, CONTROL_MAX_RETRIES } from './c4-config.js';
 import { buildReplyViaSuffix, hasLegacyReplyViaSuffix, truncateForDelivery } from './c4-utils.js';
 import { projectC4Content } from './c4-content-projection.js';
+import { normalizeStatusEndpoint } from './status-endpoint.js';
 import { dashboardSource, readOwnerName, resolveDashboardQuote } from './dashboard-source.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -345,12 +346,34 @@ export function getConversationsSince(since) {
   ).all(since);
 }
 
+// Feishu/Lark private chats never split into threads; bare proactive addresses
+// and typed reply routes identify the same DM. Group threads stay scoped.
+function historyEndpoint(channel, endpoint) {
+  const normalized = normalizeStatusEndpoint(endpoint);
+  if (!['feishu', 'lark'].includes(channel)) return normalized;
+  const [base, ...parts] = normalized.split('|');
+  const privateChat = parts.includes('type:p2p');
+  const wholeGroup = parts.includes('type:group') && !parts.some(part => /^(thread|topic):/.test(part));
+  return [base, ...parts.filter(part => !/^type:(p2p|group)$/.test(part) &&
+    !(privateChat && /^(root|thread):/.test(part)) && !(wholeGroup && /^root:/.test(part)))].join('|');
+}
+
 /**
  * Get recent conversations (for debugging/testing)
  * @param {number} limit - max records to return
  * @returns {array} - latest N conversation records in chronological order
  */
-export function getRecentConversations(limit = 20, db = getDb()) {
+export function getRecentConversations(limit = 20, db = getDb(), { channel, endpoint } = {}) {
+  if (channel !== undefined) {
+    const rows = [], chat = historyEndpoint(channel, endpoint);
+    // Match chat identity before limiting, including system_notice outbound rows.
+    for (const row of db.prepare('SELECT * FROM conversations WHERE channel=? ORDER BY timestamp DESC,id DESC').iterate(channel)) {
+      if (historyEndpoint(channel, row.endpoint_id) !== chat) continue;
+      rows.push(row);
+      if (rows.length >= limit) break;
+    }
+    return rows.reverse();
+  }
   return db.prepare(
     'SELECT * FROM (SELECT * FROM conversations ORDER BY timestamp DESC, id DESC LIMIT ?) ORDER BY timestamp ASC, id ASC'
   ).all(limit);

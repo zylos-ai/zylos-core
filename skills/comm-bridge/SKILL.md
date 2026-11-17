@@ -78,6 +78,25 @@ Do not send these blocks until the Core schema and Dashboard BeforeSend
 validator support them on all readers; registration alone does not add protocol
 support, and an incompatible Core rejects the entire envelope.
 
+## Short Replies to Owner Alerts
+
+Before responding to an unclear short reply in the owner's chat (for example,
+“需要” / “yes, please”), read that same chat's recent inbound and outbound
+history, including `system_notice` rows. Check whether the reply answers an
+alert's offer to investigate, then respond using that context. Keep the lookup
+within this chat; do not guess from another conversation.
+
+```bash
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js recent 20 --channel '<channel>' --endpoint '<endpoint>'
+```
+
+Replace the placeholders with this incoming message's exact channel and endpoint.
+The documented [recent query](references/c4-db.md#recent) matches chat identity
+while ignoring per-message reply metadata, includes `system_notice` outbound
+rows, and projects content before output. If it identifies an alert, follow
+[Investigating an alert](references/delivery-failure-receipts.md#investigating-an-alert).
+If the history does not resolve the reply, ask a brief clarifying question.
+
 ## Messages Between Session Threads
 
 In multi-session mode, use `internal` to ask another thread a question or tell

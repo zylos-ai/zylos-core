@@ -43,7 +43,7 @@ for (const coreSource of ['scheduler', null]) for (const reason of ['launch_fail
     assert.equal(f.alerts.some(alert => alert.destination.endpoint === 'target-chat'), false);
     assert.equal(f.alerts.length, 1);
     assert.deepEqual(f.alerts[0].destination, { channel: 'telegram', endpoint: 'owner' });
-    for (const expected of [coreSource ? 'Nightly backup' : `用户消息 #${row.id}`, row.session_group, 'telegram:target-chat', '可以到该聊天里让对应会话排查原因']) {
+    for (const expected of [coreSource ? 'Nightly backup' : `用户消息 #${row.id}`, row.session_group, 'telegram:target-chat', '需要我排查原因吗？需要的话请直接回复这条消息。']) {
       assert.ok(f.alerts[0].message.includes(expected));
     }
     assert.equal(f.alerts[0].message.includes('SECRET original body'), false);
@@ -110,15 +110,19 @@ test('failure alert has complete fixed scheduler and user text without message o
     session_group: 'telegram:target', channel: 'telegram', endpoint_id: 'target-chat',
     content: 'SECRET original body', error: 'SECRET exception' };
   assert.equal(messageForFailureAlert(record),
-    '定时任务「未命名定时任务 / unnamed scheduled task」消息未送达：会话启动失败。\n' +
+    '定时任务「未命名定时任务 / unnamed scheduled task」消息 #51 未送达：会话启动失败。\n' +
     '目标会话组：telegram:target\n目标聊天：telegram:target-chat\n' +
-    '可以到该聊天里让对应会话排查原因。\n' +
-    'Scheduled task "未命名定时任务 / unnamed scheduled task" was not delivered: session startup failed. Ask the corresponding session in that chat to investigate.');
+    '需要我排查原因吗？需要的话请直接回复这条消息。\n\n' +
+    'Scheduled task "未命名定时任务 / unnamed scheduled task", message #51 was not delivered: session startup failed.\n' +
+    'Target session group: telegram:target\nTarget chat: telegram:target-chat\n' +
+    'Would you like me to investigate? If so, please reply directly to this message.');
   assert.equal(messageForFailureAlert({ ...record, core_source: null }),
     '用户消息 #51 未送达：会话启动失败。\n' +
     '目标会话组：telegram:target\n目标聊天：telegram:target-chat\n' +
-    '可以到该聊天里让对应会话排查原因。\n' +
-    'User message #51 was not delivered: session startup failed. Ask the corresponding session in that chat to investigate.');
+    '需要我排查原因吗？需要的话请直接回复这条消息。\n\n' +
+    'User message #51 was not delivered: session startup failed.\n' +
+    'Target session group: telegram:target\nTarget chat: telegram:target-chat\n' +
+    'Would you like me to investigate? If so, please reply directly to this message.');
 });
 
 test('unverified delivery retains uncertainty and unknown reasons never render exception text', () => {

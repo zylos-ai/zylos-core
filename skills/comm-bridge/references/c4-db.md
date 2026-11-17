@@ -56,7 +56,23 @@ c4-db.js init
 Get the latest conversations (default: 20), printed in chronological order.
 
 ```bash
-c4-db.js recent [limit]
+c4-db.js recent [limit] [--channel CHANNEL --endpoint ENDPOINT]
+```
+
+Pass both `--channel` and `--endpoint` to read only that chat before applying
+`limit`. Endpoint matching ignores per-message `msg:`, `req:` and `parent:`
+attributes and attribute order, while retaining chat/topic `topic:`, `root:` and
+`thread:` identity. For Feishu/Lark, `type:p2p` and `type:group` are routing hints:
+a bare whole-chat address matches its typed form. Private chats do not split
+into threads, so their `root:`/`thread:` reply metadata is also ignored. Group
+`root:` without `thread:`/`topic:` is a quote/reply chain within the whole chat,
+so it also matches a bare whole-chat address. Group threads/topics remain
+distinct; a topic query does not fall back to whole-chat history. Omit both filters for global recent history. The query includes
+inbound and outbound rows, including `delivery_action: "system_notice"`; it does
+not filter on delivery status. Content always uses the public text projection.
+
+```bash
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js recent 20 --channel 'telegram' --endpoint '123|topic:456|msg:789'
 ```
 
 **Output:** JSON array of the latest conversation records, oldest to newest within the returned slice.

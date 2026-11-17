@@ -36,12 +36,15 @@ export function messageForFailureAlert(record) {
   const name = clean(record.task_name) || '未命名定时任务 / unnamed scheduled task';
   const [zh, en] = Object.hasOwn(REASONS, record.reason) ? REASONS[record.reason] : REASONS.delivery_failed;
   const scheduled = record.core_source === 'scheduler';
-  const subjectZh = scheduled ? `定时任务「${name}」消息` : `用户消息 #${record.id} `;
-  const subjectEn = scheduled ? `Scheduled task "${name}"` : `User message #${record.id}`;
+  const subjectZh = scheduled ? `定时任务「${name}」消息 #${record.id} ` : `用户消息 #${record.id} `;
+  const subjectEn = scheduled ? `Scheduled task "${name}", message #${record.id}` : `User message #${record.id}`;
   const statusZh = record.reason === 'delivery_unverified' ? '未能确认送达' : '未送达';
   const statusEn = record.reason === 'delivery_unverified' ? 'could not be confirmed delivered' : 'was not delivered';
+  const group = clean(record.session_group), channel = clean(record.channel), endpoint = clean(record.endpoint_id);
   return `${subjectZh}${statusZh}：${zh}。\n` +
-    `目标会话组：${clean(record.session_group)}\n目标聊天：${clean(record.channel)}:${clean(record.endpoint_id) || '(无 endpoint)'}\n` +
-    `可以到该聊天里让对应会话排查原因。\n` +
-    `${subjectEn} ${statusEn}: ${en}. Ask the corresponding session in that chat to investigate.`;
+    `目标会话组：${group}\n目标聊天：${channel}:${endpoint || '(无 endpoint)'}\n` +
+    `需要我排查原因吗？需要的话请直接回复这条消息。\n\n` +
+    `${subjectEn} ${statusEn}: ${en}.\n` +
+    `Target session group: ${group}\nTarget chat: ${channel}:${endpoint || '(no endpoint)'}\n` +
+    `Would you like me to investigate? If so, please reply directly to this message.`;
 }
