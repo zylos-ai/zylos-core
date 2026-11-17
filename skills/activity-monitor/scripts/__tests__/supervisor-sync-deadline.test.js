@@ -82,7 +82,15 @@ function observableFixture(t) {
   }, { now: f.now });
   const context = { configuration: { mode: 'multi' }, scenes: [scene], fences: [], restartRequests: [], transition: null };
   const alerts = () => f.sqlite.prepare("SELECT content,session_group FROM control_queue WHERE content LIKE 'Memory Sync alert:%'").all();
-  return { ...f, root, scene, lifecycle, context, observer, file, alerts };
+  const events = type => fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse)
+    .filter(row => row.event === 'sync_alert' && (!type || row.type === type)) : [];
+  const restart = async () => {
+    lifecycle.d.syncObserver.close();
+    const next = new SyncObserver({ env, now: f.now }); t.after(() => next.close());
+    lifecycle.d.syncObserver = next;
+    lifecycle.syncAlertEpisodes = new (await import('../sync-alert-episodes.js')).SyncAlertEpisodes({ env, now: f.now });
+  };
+  return { ...f, root, scene, lifecycle, context, observer, file, alerts, events, restart };
 }
 
 test('third unchanged group request queues a typed scoped alert once per unresolved episode', async t => {
@@ -129,20 +137,21 @@ test('pre-reclaim group and Origin Sync survive six minutes and expire after fif
   f.advance(541000); f.db.expireTimedOutControls(Math.floor(f.now() / 1000));
   for (const row of rows.slice(1)) assert.equal(f.db.getControlById(row.id).status, 'timeout');
   await f.lifecycle.syncAlerts(f.context);
-  assert.ok(f.alerts().some(row => /type=control_timeout; kind=group/.test(row.content)));
-  assert.ok(f.alerts().some(row => /type=control_timeout; kind=origin/.test(row.content)));
+  assert.equal(f.alerts().length, 0);
+  assert.deepEqual(f.events('control_timeout').map(row => row.kind).sort(), ['group', 'origin']);
   const reasons = fs.readFileSync(f.file, 'utf8').trim().split('\n').map(JSON.parse).filter(row => row.event === 'sync_triggered');
   assert.equal(reasons.length, 2); assert.ok(reasons.every(row => row.reason.includes('pre_reclaim')));
 });
 
-test('a temporarily fenced timeout alert is retained for successful later delivery', async t => {
+test('a fenced Origin cannot block timeout diagnostics or create owner controls', async t => {
   const f = observableFixture(t);
   await f.lifecycle.syncScope(f.scene, 'group', { count: 16, firstAt: f.now(), nonempty: true }, f.context);
   f.advance(301000); f.db.expireTimedOutControls(Math.floor(f.now() / 1000));
   f.db.setDrainFence('origin', { reason: 'ttl', runId: 'run' });
   await f.lifecycle.syncAlerts(f.context); assert.equal(f.alerts().length, 0);
+  assert.equal(f.events('control_timeout').length, 1);
   f.db.clearDrainFence('origin'); await f.lifecycle.syncAlerts(f.context);
-  assert.equal(f.alerts().length, 1); assert.match(f.alerts()[0].content, /type=control_timeout/);
+  assert.equal(f.alerts().length, 0); assert.equal(f.events('control_timeout').length, 1);
 });
 
 // Run for max-lag observation or active-session filtering changes; skip unrelated
@@ -173,17 +182,20 @@ test('each timeout remains consumed after supervisor restart without a time wind
   const range = { count: 16, firstAt: f.now(), nonempty: true };
   await f.lifecycle.syncScope(f.scene, 'group', range, f.context);
   f.advance(301000); f.db.expireTimedOutControls(Math.floor(f.now() / 1000));
-  await f.lifecycle.syncAlerts(f.context); assert.equal(f.alerts().length, 1);
+  await f.lifecycle.syncAlerts(f.context); assert.equal(f.alerts().length, 0);
+  assert.equal(f.events('control_timeout').length, 1);
   f.advance(300000); await f.lifecycle.syncScope(f.scene, 'group', range, f.context);
   f.advance(301000); f.db.expireTimedOutControls(Math.floor(f.now() / 1000));
-  await f.lifecycle.syncAlerts(f.context); assert.equal(f.alerts().length, 2);
+  await f.lifecycle.syncAlerts(f.context); assert.equal(f.alerts().length, 0);
+  assert.equal(f.events('control_timeout').length, 2);
   assert.ok(f.lifecycle.syncAlertEpisodes.entries().filter(row => row.type === 'control_timeout').every(row => row.sent));
   f.observer.close();
   const observer = new SyncObserver({ env: { ZYLOS_DIR: f.root }, now: f.now }); t.after(() => observer.close());
   f.lifecycle.d.syncObserver = observer;
   f.lifecycle.syncAlertEpisodes = new (await import('../sync-alert-episodes.js')).SyncAlertEpisodes({ env: { ZYLOS_DIR: f.root }, now: f.now });
   await f.lifecycle.syncAlerts(f.context);
-  assert.equal(f.alerts().length, 2, 'restart recovers handled timeout incidents from persistent episode state');
+  assert.equal(f.alerts().length, 0);
+  assert.equal(f.events('control_timeout').length, 2, 'restart recovers handled timeout incidents from persistent episode state');
 });
 
 
@@ -207,4 +219,81 @@ test('active old state gaps wait for an actual repair attempt before notifying',
   appendEvent(f.file, { v: 1, ts: f.now(), event: 'sync_result', kind: 'group', scope: 'origin', runId: f.scene.runId, status: 'error', code: 'INPUT_CHANGED' });
   await f.lifecycle.syncAlerts(f.context);
   assert.equal(f.alerts().filter(row => /type=state_uncommitted/.test(row.content)).length, 1);
+});
+
+
+// Product path: real rotated event reader, durable episode ledger and C4 queue.
+// Restart only replaces observer/ledger; no services or external processes start.
+for (const type of ['origin_frequency', 'origin_idle']) {
+  test(`${type} logs once, survives restart and logs a new resolved recurrence without controls`, async t => {
+    const f = observableFixture(t);
+    const emit = productive => appendEvent(f.file, { v: 1, ts: f.now(),
+      ...(type === 'origin_frequency' ? { event: 'sync_triggered', kind: 'origin', scope: 'origin' }
+        : { event: 'sync_result', kind: 'origin', action: 'round_complete', processedCount: productive ? 1 : 0, advancedGroups: productive ? 1 : 0 }) });
+    const trigger = () => { for (let i = 0; i < (type === 'origin_frequency' ? 5 : 10); i++) emit(false); };
+    // Any use of the owner prompt for a diagnostic is a regression, even if
+    // queue deduplication might otherwise hide it.
+    f.lifecycle.d.prompts = { ...f.lifecycle.d.prompts, SYNC_BACKLOG_ALERT: () => { assert.fail('diagnostic requested owner prompt'); } };
+    f.db.setDrainFence('origin', { reason: 'ttl', runId: 'run' });
+    trigger(); await f.lifecycle.syncAlerts(f.context);
+    assert.equal(f.events(type).length, 1);
+    await f.lifecycle.syncAlerts(f.context); await f.restart(); await f.lifecycle.syncAlerts(f.context);
+    assert.equal(f.events(type).length, 1);
+    if (type === 'origin_frequency') f.advance(3600001);
+    else for (let i = 0; i < 10; i++) emit(true);
+    await f.lifecycle.syncAlerts(f.context);
+    await f.restart(); trigger(); await f.lifecycle.syncAlerts(f.context);
+    assert.equal(f.events(type).length, 2);
+    assert.equal(f.sqlite.prepare('SELECT COUNT(*) FROM control_queue').pluck().get(), 0);
+  });
+}
+
+test('reclaim-owned timeout logs once without requesting an owner prompt or adding any control', async t => {
+  const f = observableFixture(t);
+  await f.lifecycle.syncScope(f.scene, 'group', { count: 16, firstAt: f.now(), nonempty: true }, f.context);
+  const id = f.sqlite.prepare('SELECT id FROM control_queue').pluck().get();
+  f.lifecycle.releasePreparation.set('origin', { runId: 'run', controlIds: [id] });
+  const count = f.sqlite.prepare('SELECT COUNT(*) FROM control_queue').pluck().get();
+  f.lifecycle.d.prompts = { ...f.lifecycle.d.prompts, SYNC_BACKLOG_ALERT: () => { assert.fail('timeout requested owner prompt'); } };
+  f.advance(301000); f.db.expireTimedOutControls(Math.floor(f.now() / 1000));
+  await f.lifecycle.syncAlerts(f.context); await f.lifecycle.syncAlerts(f.context);
+  await f.restart(); await f.lifecycle.syncAlerts(f.context);
+  assert.equal(f.events('control_timeout').length, 1);
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) FROM control_queue').pluck().get(), count);
+});
+
+for (const [type, reason, issue] of [
+  ['backlog', 'INPUT_CHANGED', /27 messages remain unsynced/],
+  ['state_uncommitted', 'state_uncommitted', /checkpoint exists but state is not committed/],
+  ['no_checkpoint', undefined, /repeated Sync requests produced no new checkpoint/],
+  ['repair_failed', 'activation_timeout', /Memory Sync repair failed/],
+]) {
+  test(`${type} owner control explains issue repair failure and a concrete next action`, async t => {
+    const f = observableFixture(t);
+    await f.lifecycle.sendSyncAlert({ type, kind: 'group', scope: 'telegram:help', backlog: 27, lag: 42,
+      ...(reason ? { reason } : {}) }, f.context);
+    const rows = f.alerts(); assert.equal(rows.length, 1);
+    assert.equal(rows[0].session_group, 'origin');
+    assert.match(rows[0].content, issue);
+    assert.match(rows[0].content, /Automated repair: .*; failed because/);
+    assert.match(rows[0].content, /Action: .*rerun Sync for this scope/);
+    if (reason) assert.ok(rows[0].content.includes(reason));
+    if (reason === 'activation_timeout') assert.match(rows[0].content, /Check runtime availability and login/);
+    else if (reason === 'INPUT_CHANGED') assert.match(rows[0].content, /once current messages settle/);
+    else assert.match(rows[0].content, /verify a covering checkpoint and committed state/);
+    assert.equal(f.events(type).length, 1);
+    await f.restart(); await f.lifecycle.sendSyncAlert({ type, kind: 'group', scope: 'telegram:help' }, f.context);
+    assert.equal(f.alerts().length, 1);
+  });
+}
+
+
+test('Origin repair failure gives cursor and lock proof instead of group checkpoint proof', async t => {
+  const f = observableFixture(t);
+  await f.lifecycle.sendSyncAlert({ type: 'repair_failed', kind: 'origin', scope: 'origin',
+    reason: 'no_checkpoint', repairAttempt: 'pre_reclaim_retry' }, f.context);
+  assert.equal(f.alerts().length, 1);
+  assert.match(f.alerts()[0].content, /pre-reclaim Sync plus one retry; failed because no_checkpoint/);
+  assert.match(f.alerts()[0].content, /verify cursor progress and a released Sync lock/);
+  assert.doesNotMatch(f.alerts()[0].content, /covering checkpoint/);
 });

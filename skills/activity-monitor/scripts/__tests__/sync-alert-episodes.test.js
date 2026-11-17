@@ -104,11 +104,12 @@ test('atomic episode files keep metadata only and publish with private permissio
 
 test('Origin repair episodes preserve typed cursor baselines across restart without nested content', t => {
   const f = fixture(t), store = f.create();
-  const row = alert('repair_failed', { kind: 'origin', cursors: [
+  const row = alert('repair_failed', { kind: 'origin', repairAttempt: 'pre_reclaim_retry', cursors: [
     { scope: 'chat:one', syncedId: 12, checkpointId: 7, content: 'private nested content' },
   ] });
   assert.equal(store.claim(row), true);
   const restored = f.create().entries()[0];
+  assert.equal(restored.repairAttempt, 'pre_reclaim_retry');
   assert.deepEqual(restored.cursors, [{ scope: 'chat:one', syncedId: 12, checkpointId: 7 }]);
   assert.equal(fs.readFileSync(store.file, 'utf8').includes('private nested content'), false);
   assert.equal(f.create().claim(row), false);

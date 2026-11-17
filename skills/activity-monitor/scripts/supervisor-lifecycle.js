@@ -6,6 +6,7 @@ const { modelThreshold } = await loadCoreModule('model-rotation-thresholds.js');
 import { MANUAL_WAKE_PROMPT } from './origin-prompts.js';
 import { captureSyncTarget, observeSyncCompletion, latestSyncFailure, repairRetryPrompt } from './sync-reclaim.js';
 
+const SYNC_DIAGNOSTIC_TYPES = new Set(['origin_frequency', 'origin_idle', 'control_timeout']);
 const TERMINAL_CONTROLS = new Set(['done', 'timeout', 'superseded', 'failed', 'cancelled']);
 const CAPACITY_REASONS = new Set(['ttl', 'evict', 'upgrade', 'auth']);
 const RECLAIM_REASONS = new Set([...CAPACITY_REASONS, 'mode_switch', 'model_config', 'delete', 'release']);
@@ -609,7 +610,7 @@ export class SupervisorLifecycle {
       const { sync, reason } = failures[0];
       const code = latestSyncFailure({ env: this.d.env, scene, target: sync.target, startedAt: sync.at });
       const control = await this.d.db.getControlById(sync.controlId);
-      const alert = { type: 'repair_failed', kind: sync.target.kind, scope: scene.sessionGroup,
+      const alert = { type: 'repair_failed', kind: sync.target.kind, scope: scene.sessionGroup, repairAttempt: 'pre_reclaim_retry',
         reason: code ?? (control?.status === 'timeout' ? 'control_timeout' : reason), controlId: sync.controlId,
         checkpointId: sync.target.checkpointId, checkpointEnd: sync.target.end,
         ...(sync.target.kind === 'origin' ? { cursors: sync.target.cursors } : {}) };
@@ -953,6 +954,13 @@ export class SupervisorLifecycle {
       const failed = origin ? this.d.syncObserver.originResults.at(-1)?.status === 'error' : trigger?.attempts >= 3;
       if (code || failed) alerts.push({ ...candidate, ...(code ? { reason: code } : {}) });
     }
+    // Scheduling anomalies are engineering evidence, including timeouts owned
+    // by reclaim/maintenance. Record before those owners suppress symptoms;
+    // no Origin control or session write gate is involved.
+    for (const alert of alerts.filter(row => SYNC_DIAGNOSTIC_TYPES.has(row.type))) {
+      if (await this.sendSyncAlert(alert, context)) this.d.syncObserver.acknowledged(alert);
+    }
+    alerts = alerts.filter(row => !SYNC_DIAGNOSTIC_TYPES.has(row.type));
     const completedSymptoms = [];
     for (const alert of alerts) {
       const scene = context.scenes.find(row => row.sessionGroup === alert.scope && row.present);
@@ -961,7 +969,7 @@ export class SupervisorLifecycle {
       if (!trigger) continue;
       const control = trigger.controlId ? await this.d.db.getControlById(trigger.controlId) : null;
       const code = latestSyncFailure({ env: this.d.env, scene, target: { kind: 'group', scope: alert.scope }, startedAt: trigger.ts });
-      if (code || TERMINAL_CONTROLS.has(control?.status)) completedSymptoms.push({ ...alert, ...(code ? { reason: code } : {}) });
+      if (code || TERMINAL_CONTROLS.has(control?.status)) completedSymptoms.push({ ...alert, reason: code ?? `control_${control.status}: state still trails checkpoint` });
     }
     alerts = completedSymptoms;
     let resolved = this.d.syncObserver.resolved ?? [];
@@ -970,20 +978,8 @@ export class SupervisorLifecycle {
       alerts = [...repairs.alerts, ...repairs.failures];
       resolved = [...resolved, ...(repairs.resolved ?? [])];
     }
-    // Reclaim preparation owns its repair controls. A timeout from its first
-    // attempt must not escape as a second notification before retry completes.
-    const preparing = [...this.releasePreparation.values(), ...this.ttlPreparation.values()];
-    const ownedTimeout = alert => alert.type === 'control_timeout' && preparing.some(preparation =>
-      [...(preparation.controlIds ?? []), ...(preparation.ownControlIds ?? []), ...(preparation.settledSyncIds ?? []),
-        ...(preparation.syncs ?? []).map(sync => sync.controlId)].includes(alert.controlId));
-    for (const alert of alerts.filter(ownedTimeout)) {
-      // Its final repair verdict owns notification. Persist consumption in the
-      // same incident ledger so old control timeouts cannot reappear on reclaim.
-      this.syncAlertEpisodes.claim(alert);
-      this.d.syncObserver.acknowledged(alert);
-    }
-    alerts = alerts.filter(alert => !ownedTimeout(alert) && (alert.type !== 'state_uncommitted' ||
-      ![...this.releasePreparation, ...this.ttlPreparation].some(([scope]) => scope === alert.scope)));
+    alerts = alerts.filter(alert => alert.type !== 'state_uncommitted' ||
+      ![...this.releasePreparation, ...this.ttlPreparation].some(([scope]) => scope === alert.scope));
     for (const episode of this.syncAlertEpisodes.entries().filter(row => row.type === 'repair_failed')) {
       if (episode.kind === 'global' || episode.kind === 'origin' && !episode.cursors) continue;
       const scene = context.scenes.find(row => row.sessionGroup === episode.scope) ?? {
@@ -1006,8 +1002,12 @@ export class SupervisorLifecycle {
 
   async sendSyncAlert(alert, context) {
     this.syncAlertEpisodes.reconcile({ active: [alert] });
-    if (!await this.beforeWrite(modeOf(context) === 'single' ? null : 'origin', context)) return false;
     if (!this.syncAlertEpisodes.available) return false;
+    if (SYNC_DIAGNOSTIC_TYPES.has(alert.type)) {
+      if (this.syncAlertEpisodes.claim(alert)) await this.event('sync_alert', alert);
+      return this.syncAlertEpisodes.available;
+    }
+    if (!await this.beforeWrite(modeOf(context) === 'single' ? null : 'origin', context)) return false;
     if (!this.syncAlertEpisodes.claim(alert)) return true;
     try {
       await this.d.db.insertControl(this.prompt('SYNC_BACKLOG_ALERT', alert.kind, alert.backlog ?? 0, alert.lag ?? 0, alert.scope, alert.type, alert), {

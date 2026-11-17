@@ -40,7 +40,7 @@ export class SyncMaintenanceCoordinator {
         // supervisor/Router restart; no replacement launch can bypass its window.
         if (this.now() - row.startedAt < 900000) continue;
         const updated = await this.store.update(group, row.runId, { phase: scene?.present ? 'finishing' : 'failed', outcome: 'error', failure: 'activation_timeout', finishedAt: this.now() });
-        if (updated) failures.push({ type: 'repair_failed', kind: 'group', scope: group, reason: 'activation_timeout', checkpointId: row.target.checkpointId, checkpointEnd: row.target.end });
+        if (updated) failures.push({ type: 'repair_failed', repairAttempt: 'maintenance', kind: 'group', scope: group, reason: 'activation_timeout', checkpointId: row.target.checkpointId, checkpointEnd: row.target.end });
         continue;
       }
       let controlId = row.controlId;
@@ -61,7 +61,7 @@ export class SyncMaintenanceCoordinator {
         ?? (control?.status === 'timeout' ? 'control_timeout' : result.reason);
       const updated = await this.store.update(group, row.runId, { phase: 'finishing', outcome: result.ok ? 'success' : 'error', failure: reason, finishedAt: this.now() });
       if (!updated) continue; // A real-message transition won the concurrent write.
-      if (!result.ok) failures.push({ type: 'repair_failed', kind: 'group', scope: group, reason, checkpointId: row.target.checkpointId, checkpointEnd: row.target.end });
+      if (!result.ok) failures.push({ type: 'repair_failed', repairAttempt: 'maintenance', kind: 'group', scope: group, reason, checkpointId: row.target.checkpointId, checkpointEnd: row.target.end });
       await this.release(updated, scene, context, lifecycle);
       await this.diagnostic({ event: 'sync_maintenance_finished', scope: group, runId: row.runId, status: updated.outcome, reason });
     }
@@ -89,8 +89,8 @@ export class SyncMaintenanceCoordinator {
       if (row.phase === 'failed' || row.phase === 'finishing' && row.outcome === 'error' || row.phase === 'complete') {
         const scene = sceneFor(row.sessionGroup) ?? { sessionGroup: row.sessionGroup, runId: row.runId, runDir: lifecycle.d.groupRunDir(row.sessionGroup) };
         const fixed = await observeSyncCompletion({ db, scene, target: row.target, readSyncMarker: lifecycle.d.readSyncMarker, env: this.env, requireNewCheckpoint: false });
-        if (fixed.ok) resolved.push({ type: 'repair_failed', kind: 'group', scope: row.sessionGroup });
-        else if (row.phase !== 'complete') failures.push({ type: 'repair_failed', kind: 'group', scope: row.sessionGroup, reason: row.failure ?? 'no_checkpoint', checkpointId: row.target.checkpointId, checkpointEnd: row.target.end });
+        if (fixed.ok) resolved.push({ type: 'repair_failed', repairAttempt: 'maintenance', kind: 'group', scope: row.sessionGroup });
+        else if (row.phase !== 'complete') failures.push({ type: 'repair_failed', repairAttempt: 'maintenance', kind: 'group', scope: row.sessionGroup, reason: row.failure ?? 'no_checkpoint', checkpointId: row.target.checkpointId, checkpointEnd: row.target.end });
       }
     }
     const ownedControls = new Set(this.store.read().map(row => row.controlId).filter(Number.isSafeInteger));

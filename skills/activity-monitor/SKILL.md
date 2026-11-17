@@ -505,7 +505,7 @@ the cache. Cleanup publishes only when it removes entries, without changing v1.
 ## Memory Sync diagnostics and repair
 
 `activity-monitor/supervisor-events.jsonl` records `sync_triggered` and
-`sync_result` alongside existing supervisor decisions. Existing log rotation
+`sync_result` and incident-level `sync_alert` alongside existing supervisor decisions. Existing log rotation
 and retention apply to diagnostic evidence only. Records contain metadata,
 never conversation content, receipts or Sync tokens.
 
@@ -563,7 +563,7 @@ pre-reclaim Sync is added after this dedicated attempt. Failed maintenance
 reports its reason once and cannot start again within its persisted window.
 Active readers continue using normal Sync triggers; backlog notices wait for
 actual failure evidence or three unchanged attempts. Pre-reclaim symptoms are
-owned by the retry verdict instead of producing a second timeout notice.
+recorded once as diagnostics; the retry verdict owns any final owner notification.
 
 ### Persistent notification incidents
 
@@ -571,8 +571,21 @@ owned by the retry verdict instead of producing a second timeout notice.
 scope + kind + alert type. A timeout includes control ID, so each control is a
 separate permanent identity. There is no elapsed-time reset or retention cutoff
 for notification ownership. This replaces both duration-based throttling and
-handled-timeout recovery from rotated diagnostic logs. Existing alert controls,
-classification and destination remain unchanged.
+handled-timeout recovery from rotated diagnostic logs. The same ownership rule
+applies to diagnostic-only incidents.
+
+Origin frequency, Origin idle rounds and control confirmation timeouts emit one
+`sync_alert` record with type, scope, kind and evidence. They never enqueue an
+alert control or notify the owner. Recording does not depend on Origin being
+available. External scripts that monitor these diagnostic signals are outside
+this mechanism.
+
+Unrepaired backlog, checkpoint/state gaps, three requests without a checkpoint,
+and final automatic repair failures retain the existing owner notification
+route. Their text states the problem, the automatic repair attempted, the failure
+reason and a concrete action the owner can request. Final automatic repair
+failures continue notifying the owner; suppressing them in a future release is
+not implemented here.
 
 Resolution is explicit:
 
@@ -586,8 +599,8 @@ Resolution is explicit:
 - repair_failed: durable checkpoint/state/marker or Origin cursor facts prove
   the captured repair target is fixed.
 
-An unresolved incident sends once, including after restart or loss of trigger
-logs. Resolved incidents can recur. Notification ownership is persisted before
+An unresolved incident records or notifies once, according to its type, including
+after restart or loss of trigger logs. Resolved incidents can recur. Notification ownership is persisted before
 enqueue; unknown enqueue outcomes keep ownership to avoid duplicates. A final
 repair failure blocked by an Origin fence remains durably pending and can send
 later without blocking reclaim. Unreadable or unwritable incident state stops

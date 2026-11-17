@@ -5,7 +5,7 @@ import { loadCoreModule } from './core-modules.js';
 const { zylosRoot, supervisorDiagnosticPath } = await loadCoreModule('session-group-paths.js');
 const { appendEvent } = await loadCoreModule('event-log.js');
 
-const fields = ['scope', 'kind', 'type', 'controlId', 'checkpointId', 'checkpointEnd', 'reason'];
+const fields = ['scope', 'kind', 'type', 'controlId', 'checkpointId', 'checkpointEnd', 'reason', 'repairAttempt'];
 const validCursors = cursors => Array.isArray(cursors) && cursors.every(row =>
   row && !Array.isArray(row) && typeof row.scope === 'string' && row.scope.length > 0 &&
   Number.isSafeInteger(row.syncedId) && row.syncedId >= 0 &&

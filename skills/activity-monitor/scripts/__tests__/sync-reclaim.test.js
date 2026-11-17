@@ -7,6 +7,7 @@ import { SupervisorLifecycle } from '../supervisor-lifecycle.js';
 import { captureSyncTarget, observeSyncCompletion } from '../sync-reclaim.js';
 import { fixture as c4Fixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { groupMemoryDir } from '../../../../cli/lib/session-group-paths.js';
+import { SYNC_BACKLOG_ALERT } from '../../../zylos-memory/scripts/sync-prompts.js';
 import { recordSyncResult } from '../../../../cli/lib/sync-observability.js';
 
 // Boundary: real lifecycle, completion proofs, state parser and private SQLite
@@ -172,4 +173,15 @@ test('Origin preparation retries an acknowledged round with no durable cursor pr
   assert.equal(f.syncs().length, 2); assert.equal(f.fences.size, 0);
   f.store.advanceOriginSyncCursor('chat:room', { syncedId: f.first, checkpointId: 0 });
   f.settle(); await f.tick(); assert.equal(f.fences.size, 1); assert.equal(f.alerts().length, 0);
+});
+
+
+test('exhausted pre-reclaim repair tells owner the actual retry method and failed proof', async t => {
+  const f = fixture(t); f.deps.prompts.SYNC_BACKLOG_ALERT = SYNC_BACKLOG_ALERT;
+  await f.start(); f.settle(); await f.tick(); f.settle(); await f.tick();
+  const notice = f.controls.find(row => row.content.startsWith('Memory Sync alert:'));
+  assert.ok(notice);
+  assert.match(notice.content, /pre-reclaim Sync plus one retry; failed because no_checkpoint/);
+  assert.match(notice.content, /Action: Ask the agent to rerun Sync for this scope and verify a covering checkpoint and committed state/);
+  assert.equal(f.alerts()[0].repairAttempt, 'pre_reclaim_retry');
 });

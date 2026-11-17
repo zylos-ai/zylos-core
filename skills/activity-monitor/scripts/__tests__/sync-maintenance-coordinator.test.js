@@ -7,6 +7,7 @@ import { SyncMaintenanceCoordinator } from '../sync-maintenance-coordinator.js';
 import { SupervisorLifecycle } from '../supervisor-lifecycle.js';
 import { createMaintenanceRequests } from '../../../../cli/lib/sync-maintenance.js';
 import { fixture as c4Fixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
+import { SYNC_BACKLOG_ALERT } from '../../../zylos-memory/scripts/sync-prompts.js';
 import { renderStateSkeleton } from '../../../zylos-memory/scripts/state-format.js';
 
 // Controller integration uses actual C4/receipt-range/checkpoint APIs and private
@@ -177,4 +178,19 @@ test('inactive Origin group maintenance never calls the deletion-only API that f
   f.db.getActiveDeletion = f.store.getActiveDeletion;
   await f.inspect([f.alert]);
   assert.equal((await f.store.listMaintenanceRequests())[0].sessionGroup, 'origin');
+});
+
+
+test('failed maintenance reports its single dedicated attempt and activation failure to owner', async t => {
+  const f = fixture(t); f.lifecycle.d.prompts.SYNC_BACKLOG_ALERT = SYNC_BACKLOG_ALERT;
+  await f.inspect([f.alert]); await f.run();
+  f.context.scenes[0].ready = false;
+  f.advance(900001);
+  const outcome = await f.inspect([f.alert]);
+  const failure = outcome.failures.find(row => row.reason === 'activation_timeout');
+  assert.equal(failure.repairAttempt, 'maintenance');
+  await f.lifecycle.sendSyncAlert(failure, f.context);
+  const notice = f.dbSqlite.prepare("SELECT content FROM control_queue WHERE content LIKE 'Memory Sync alert:%'").get();
+  assert.match(notice.content, /one dedicated maintenance Sync attempt; failed because activation_timeout/);
+  assert.match(notice.content, /Action: Check runtime availability and login/);
 });
