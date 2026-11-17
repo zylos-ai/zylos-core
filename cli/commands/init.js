@@ -44,6 +44,7 @@ import { runMigrations } from '../lib/migrate.js';
 import { ensureCodexHooksTrusted } from '../lib/codex-hooks.js';
 import { syncRuntimeHooks } from '../lib/sync-runtime-hooks.js';
 import { runtimeHooksReady } from './runtime.js';
+import { childRuntimeEnv } from '../lib/child-runtime-env.js';
 import {
   installGlobalPackage,
   installCodex,
@@ -487,7 +488,7 @@ function verifySetupToken() {
   try {
     const result = spawnSync('claude', ['-p', 'hi', '--max-turns', '1'], {
       timeout: 30000,
-      env: { ...process.env },
+      env: childRuntimeEnv(),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 

@@ -299,7 +299,7 @@ export function createGroupDeletionStorage({ zylosDir, homeDir = os.homedir(), s
         if (!preserveGroup) {
           records += db.prepare('DELETE FROM group_display_names WHERE session_group=?').run(sessionGroup).changes;
           records += db.prepare('DELETE FROM runtime_events WHERE session_group=?').run(sessionGroup).changes;
-          records += db.prepare('DELETE FROM core_log_cursors WHERE stream=?').run(`events:${sessionGroup}`).changes;
+          for (const stream of [`events:${sessionGroup}`, `children:${sessionGroup}`]) records += db.prepare('DELETE FROM core_log_cursors WHERE stream=?').run(stream).changes;
         }
       }
       if (localId && !preserveGroup) records += resolved.draft

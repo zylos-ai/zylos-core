@@ -12,6 +12,7 @@ The dashboard runs hourly retention cleanup:
 - `pm2_summary` and legacy `pm2_%`: 7 days
 - `otel_*` sources: preserved (sample data for future use)
 - other legacy metrics (including retained `statusline_summary` rows): 90 days
+- `usage_transcripts` (transcripts registered for usage collection): missing rows and finished session rows are removed 8 days after their last update. Finished child-runtime rows (`kind = 'child'`, schema version 28) stay while their transcript file exists, because they keep the child's session out of Observer history; once the file is gone they become missing rows and follow the same 8 days.
 - `runtime_events` (hook / rollout activity events): 7 days. The timeline reads the last 30 minutes and the state engine reads events after its last snapshot; for usage ranges longer than 7 days, the `runtime_events` tool-call weights used to attribute output tokens that carry no project cover only the stored 7 days (Codex rollout weights are read elsewhere and are unaffected).
 
 After each hourly cleanup, incremental reclamation runs in chunks of at most 1,000 pages, yielding to the event loop between chunks. Each run requests at most 10,000 pages (about 39 MiB at a 4 KiB page size); remaining free pages wait for later hourly runs. The page limit bounds work, not wall-clock latency, which depends on disk speed. WAL checkpointing makes the recovered space visible in the database file. Incremental vacuum frees completely empty pages; it does not repack partially empty pages.

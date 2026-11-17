@@ -21,6 +21,8 @@ Dashboard no longer infers current session state through its own runtime hooks. 
 
 Background transcript discovery uses Core hook `current-session.json` pointers to identify transcript ownership. These pointers do not establish runtime liveness and require no tmux reads.
 
+Child runtimes started inside a session (an upgrade evaluation, an agent's `claude -p` or `codex exec`) never reach Core hooks: the hook entry refuses them and records only one line per child in `child-sessions.jsonl` (group run directory, or the legacy `activity-monitor/` directory for children without a run). `CoreLogImporter` reads these files as the `children:<group>` and `children` streams and registers each transcript with `usage_transcripts.kind = 'child'`; it creates no `runtime_events`. Collectors read a child transcript for token usage only, under the child's own runtime: no `assistant_message`, tool step, turn or working state is written, a child is never a current or group main transcript, and Observer history excludes child session ids.
+
 Collectors write normalized historical samples to `dashboard.db`. Usage readers aggregate those samples; current session observations come directly from Core. See [Metric Model](metric-model.md).
 
 ## Other Read-Only Sources

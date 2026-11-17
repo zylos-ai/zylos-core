@@ -5,6 +5,8 @@ import path from 'node:path';
 import { execFileSync, execSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { writePaneProcess } from '../../../skills/activity-monitor/scripts/pane-process.js';
+import { readProcessStart } from '../../../skills/activity-monitor/scripts/claude-pid.js';
 
 const {
   desiredClaudeHooks,
@@ -139,7 +141,15 @@ describe('desiredClaudeHooks', () => {
     fs.utimesSync(paths.userPath, future, future);
     const clearGroup = desiredClaudeHooks({ zylosDir }).SessionStart.find(group => group.matcher === 'clear');
     const assemblerHook = clearGroup.hooks.find(hook => hook.command.includes('assembler.mjs'));
-    execSync(assemblerHook.command, { stdio: 'pipe' });
+    // The hook runs through the real entry as the run's pane process (this test process).
+    const repoRoot = path.join(__dirname, '..', '..', '..');
+    fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
+    fs.symlinkSync(path.join(repoRoot, 'skills'), path.join(zylosDir, '.claude', 'skills'));
+    writePaneProcess(path.join(zylosDir, 'activity-monitor', 'session-groups', 'origin'),
+      { runId: 'clear-hook-run', runtime: 'claude', panePid: process.pid, paneStart: readProcessStart(process.pid) });
+    execSync(assemblerHook.command, { stdio: 'pipe',
+      env: { ...process.env, ZYLOS_DIR: zylosDir, ZYLOS_RUN_ID: 'clear-hook-run', ZYLOS_PACKAGE_ROOT: repoRoot } });
+    assert.equal(fs.existsSync(path.join(zylosDir, 'activity-monitor', 'hook-activity-errors.log')), false);
     assert.match(fs.readFileSync(paths.outputPath, 'utf8'), /CLEAR_HOOK_SENTINEL/);
     fs.rmSync(zylosDir, { recursive: true, force: true });
   });

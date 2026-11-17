@@ -83,7 +83,7 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_latest ON state_snapshots(runtime, sess
 `;
 
 // Shared by the service and the side-effect-free schema owner.
-export const TARGET_SCHEMA_VERSION = 27;
+export const TARGET_SCHEMA_VERSION = 28;
 
 export function inspectDatabase(db) {
   const hasTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").get();
@@ -101,7 +101,7 @@ export function inspectDatabase(db) {
       metric_points: 'id timestamp runtime session_id metric_name metric_value dimensions source confidence session_group',
       group_display_names: 'session_group display_name source updated_at',
       chat_conversations: 'local_id namespace display_name state created_at updated_at first_message_id first_content pending_content last_message_id last_outcome',
-      usage_transcripts: 'transcript_path parent_path runtime session_group run_id session_id byte_offset status first_seen_at updated_at',
+      usage_transcripts: 'transcript_path parent_path runtime session_group run_id session_id byte_offset status first_seen_at updated_at kind',
       activity_facts: 'id timestamp fact_type runtime session_id project data',
       source_health: 'name signal_type status extra updated_at',
       state_snapshots: 'id runtime session_id running_tool open_turn pending_permission possibly_stuck_since last_progress_cursor snapshot_at last_message last_prompt last_progress_at',
@@ -568,6 +568,17 @@ export function migrateDatabase(db) {
           CREATE INDEX IF NOT EXISTS idx_events_group_type_ts ON runtime_events(session_group, event_type, timestamp);
           INSERT OR IGNORE INTO schema_migrations(version) VALUES(27);
         `);
+      })();
+    }
+    if (currentVersion < 28) {
+      db.transaction(() => {
+        // A child runtime started inside a session (`claude -p`, `codex exec`) is
+        // registered only so its tokens count: kind 'child' never yields messages,
+        // activity, working state or history.
+        if (!db.pragma('table_info(usage_transcripts)').some(column => column.name === 'kind')) {
+          db.exec("ALTER TABLE usage_transcripts ADD COLUMN kind TEXT NOT NULL DEFAULT 'session' CHECK(kind IN ('session','child'))");
+        }
+        db.exec('INSERT OR IGNORE INTO schema_migrations(version) VALUES(28)');
       })();
     }
 

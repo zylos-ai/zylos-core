@@ -258,7 +258,7 @@ export function createSupervisor(deps) {
             }}));
           } catch(error) { reportError(error,{phase:'health-maintenance',runtime}); }
         }
-        const files=new Set([supervisorDiagnosticPath(deps.env),poolMetricsPath(deps.env),...current.map(s=>path.join(s.runDir,'events.jsonl'))]);
+        const files=new Set([supervisorDiagnosticPath(deps.env),poolMetricsPath(deps.env),path.join(path.dirname(supervisorDiagnosticPath(deps.env)),'child-sessions.jsonl'),...current.map(s=>path.join(s.runDir,'events.jsonl'))]);
         try {
           const entries=await fs.readdir(sessionGroupRunRoot(deps.env),{withFileTypes:true});
           for(const entry of entries) {
@@ -266,6 +266,7 @@ export function createSupervisor(deps) {
             try { assertSessionGroup(entry.name); }
             catch { continue; }
             files.add(path.join(sessionGroupRunRoot(deps.env),entry.name,'events.jsonl'));
+            files.add(path.join(sessionGroupRunRoot(deps.env),entry.name,'child-sessions.jsonl'));
           }
         } catch(error) {
           if(error.code!=='ENOENT')reportError(error,{phase:'log-maintenance-discovery'});

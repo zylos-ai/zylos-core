@@ -4,6 +4,8 @@
 
 Collectors store usage events, system summaries, and PM2 summaries in Dashboard's database. Workbench usage readers aggregate cost, tokens, and cache usage for the requested session group and time range. Resource readers query system and PM2 summaries.
 
+Every usage sample carries the runtime that produced it (`metric_points.runtime`), and cost and token readers group by runtime. A child runtime started inside a session is counted under its own runtime and the group and run that started it, never under the session's runtime: a `codex exec` in a Claude session adds Codex cost to that group (see [Data Sources](data-sources.md)).
+
 Calendar-day bounds use `src/lib/day-bounds.js` and the requested instance time zone, including daylight-saving changes. The store performs the underlying historical aggregation.
 
 ## Current State
