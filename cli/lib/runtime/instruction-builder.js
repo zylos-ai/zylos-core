@@ -111,12 +111,8 @@ export function buildInstructionFile(runtime, { zylosDir = ZYLOS_DIR, force = fa
 
 export function agyInstructionContext({ zylosDir = ZYLOS_DIR } = {}) {
   const paths = instructionPaths('agy', { zylosDir });
-  const runtimeRules = '## Antigravity — Runtime-Specific Rules\n\n' +
-    'Use /clear to start a fresh session; Zylos sends the kick that triggers SessionStart injection. Use /exit to quit. ' +
-    'Approvals are bypassed with --dangerously-skip-permissions; this never waives the destructive-operation confirmation rule. ' +
-    'Use only tools actually exposed by this runtime, and keep long-running work responsive.\n\n';
   const split = fs.existsSync(paths.markerPath);
-  const system = fs.readFileSync(split ? paths.systemPath : paths.outputPath, 'utf8').replace(/## Codex — Runtime-Specific Rules[\s\S]*?(?=## Critical Reminders)/, runtimeRules);
+  const system = fs.readFileSync(split ? paths.systemPath : paths.outputPath, 'utf8');
   const precedence = 'This injection contains the complete Zylos instructions. If its runtime-specific instructions conflict with AGENTS.md in the working directory, this injection takes precedence.\n\n';
   return precedence + (split ? [system, fs.readFileSync(paths.userPath, 'utf8')].join('\n\n') : system);
 }

@@ -1344,7 +1344,7 @@ describe('syncHooks forward pass', () => {
 
 
 describe('independent Antigravity hook synchronization', () => {
-  function isolatedHome(t) {
+  function isolatedHome(t, { optedIn = true } = {}) {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-hook-sync-'));
     const zylosDir = path.join(home, 'zylos');
     const previous = process.env.HOME;
@@ -1356,10 +1356,22 @@ describe('independent Antigravity hook synchronization', () => {
     });
     fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
     fs.writeFileSync(path.join(zylosDir, '.claude/settings.json'), JSON.stringify({ hooks: {} }));
-    fs.mkdirSync(path.join(home, '.gemini/config'), { recursive: true });
-    fs.writeFileSync(path.join(home, '.gemini/config/hooks.json'), JSON.stringify({ zylos: {} }));
+    if (optedIn) {
+      fs.mkdirSync(path.join(home, '.gemini/config'), { recursive: true });
+      fs.writeFileSync(path.join(home, '.gemini/config/hooks.json'), JSON.stringify({ zylos: {} }));
+    }
     return { home, zylosDir, settings: path.join(home, '.gemini/antigravity-cli/settings.json') };
   }
+
+  it('leaves Antigravity unused without creating ~/.gemini', t => {
+    const f = isolatedHome(t, { optedIn: false });
+    for (const dryRun of [true, false]) {
+      const result = syncRuntimeHooks({ zylosDir: f.zylosDir, dryRun,
+        stopFailureSupported: false, subagentHooksSupported: false, log: () => {} });
+      assert.deepEqual(result.agy, { changed: false });
+      assert.equal(fs.existsSync(path.join(f.home, '.gemini')), false);
+    }
+  });
 
   it('saves Claude and Codex hooks when opted-in Antigravity configuration is malformed', t => {
     const f = isolatedHome(t);

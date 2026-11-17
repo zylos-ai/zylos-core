@@ -379,7 +379,7 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
     else {
       let auth;
       try { auth = await selected.checkAuth(); } catch { auth = { status: 'uncertain' }; }
-      if (auth.status !== 'success') return fail('AUTH_NOT_CONFIRMED', `${target} authentication not confirmed; run zylos auth ${target}`, { authStatus: auth.status === 'failure' ? 'failure' : 'uncertain' });
+      if (auth.status !== 'success') return fail(target === 'agy' && auth.status === 'failure' ? 'AUTH_FAILED' : 'AUTH_NOT_CONFIRMED', `${target} authentication not confirmed; run zylos auth ${target}`, { authStatus: auth.status === 'failure' ? 'failure' : 'uncertain' });
     }
     try {
       const saved = write({ set: { runtime: target } });

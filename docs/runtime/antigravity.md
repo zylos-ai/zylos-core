@@ -14,7 +14,15 @@ Personal Google AI Pro/Ultra subscription login and Vertex are unsupported.
 Authentication validation uses the Gemini models HTTP endpoint; `agy models`
 does not establish that a key is valid. The HTTP probe sends its key in a header
 and returns only fixed status reasons. The bounded curl probe uses the saved
-HTTPS_PROXY setting used for runtime launch. Do not paste keys into issue comments.
+HTTPS_PROXY setting used for runtime launch. Authentication checks require `curl`
+on `PATH`. If it is missing, the check returns `uncertain` and `zylos runtime agy`
+reports `AUTH_NOT_CONFIRMED`; make curl available before retrying. Do not paste
+keys into issue comments.
+
+An explicit key rejection returns `AUTH_FAILED` from both `zylos auth agy`
+and `zylos runtime agy`. A Stop hook reporting HTTP 401/403 or an explicit
+invalid API key error records `auth_failed`; other system errors remain
+`unavailable`.
 
 The per-HOME setup merges Gemini provider settings, a Zylos statusLine command,
 Zylos hook entries with explicit 60-second timeouts and the memory MCP server.
@@ -23,15 +31,20 @@ and interaction data collection is disabled. Launch also selects the Gemini
 provider and workspace trust explicitly without changing global trust settings.
 Each launch prepares the agy configuration before tmux starts, including the first
 launch through a group runtime override. A missing API key fails before setup.
+The `PreToolUse` hook denies `ask_question` with a plain-text questioning
+alternative, preventing an unattended session from opening a keyboard dialog.
 
 A launch kick triggers SessionStart before the first model turn. SessionStart
 injects the complete system and user instructions as `injectSteps` JSON. The
 shared AGENTS.md is the same complete file used by Codex; agy never replaces
-it with a runtime-specific entry. Injected instructions explicitly take precedence
+it with a runtime-specific entry. Its common body ends with separate Codex and
+Antigravity sections; each runtime follows only its own section. Injected
+instructions explicitly take precedence
 when runtime-specific directions differ from that auxiliary file.
 `/clear` receives another kick; `/exit` quits. Every message uses bracketed paste.
-The router requires an empty framed input before pasting, rejecting slash menus
-and trust choices. Claude and Codex retain their existing transport behavior.
+The router locates the framed input around the cursor, including when background
+task panels appear below it. It requires an empty input before pasting and rejects
+slash menus and trust choices. Claude and Codex retain their existing transport behavior.
 
 PreInvocation starts a busy turn and fully-idle Stop ends it. StatusLine state
 handles interrupted turns and background resumption, with a 500ms stability

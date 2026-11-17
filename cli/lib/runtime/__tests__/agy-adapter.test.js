@@ -98,7 +98,6 @@ for (const status of [200, 400, 401, 403, 429, 500]) test(`agy auth classifies H
     assert.equal(input, 'x-goog-api-key: test-secret\n');
     assert.equal(options.timeout, 11_000);
     assert.equal(options.env.GEMINI_API_KEY, 'test-secret');
-    assert.equal(options.stdio[2], 'ignore');
   } }) });
   const result = await adapter.checkAuth();
   assert.equal(result.status, status === 200 ? 'success' : [400, 401, 403].includes(status) ? 'failure' : 'uncertain');
@@ -180,10 +179,12 @@ test('agy auth gives curl the same saved proxy environment as runtime launch', a
   assert.equal(calls, 1);
 });
 
-test('agy auth rejects multiline key headers before starting a request', async t => {
+for (const separator of ['\r', '\n', '\r\n']) test(`agy auth rejects ${JSON.stringify(separator)} key headers before starting a request`, async t => {
   const f = await fixture(t);
-  const adapter = new AgyAdapter({ ...f, env: { ...f.env, GEMINI_API_KEY: 'key\nInjected: value' }, execFile: () => assert.fail('No request for an invalid header') });
+  let calls = 0;
+  const adapter = new AgyAdapter({ ...f, env: { ...f.env, GEMINI_API_KEY: `key${separator}Injected: value` }, execFile: () => { calls++; } });
   assert.deepEqual(await adapter.checkAuth(), { status: 'uncertain', reason: 'http_probe_network_error' });
+  assert.equal(calls, 0);
 });
 
 test('agy always uses one guarded bracketed paste even when the caller disables it', async () => {

@@ -192,11 +192,11 @@ Example: `POST /api/instance/actions/switch-mode` with `{"mode":"multi"}`.
 
 ### POST /api/instance/actions/switch-runtime
 
-**Access:** Admin. **Parameters:** JSON `{runtime:"claude"|"codex"}` plus any authentication-confirmation fields required by Core's runtime-switch flow.
+**Access:** Admin. **Parameters:** JSON `{runtime:"claude"|"codex"|"agy"}` plus any authentication-confirmation fields required by Core's runtime-switch flow.
 
 Returns `{ok:true,...CoreResult}` on success, with optional `data` and `message`; failures use the common envelope. An `AUTH_NOT_CONFIRMED` result can include authentication details; it is not a successful switch.
 
-**Errors:** `AUTH_NOT_CONFIRMED`, invalid runtime, supervisor/transition rejection codes, and common write errors.
+**Errors:** `AUTH_NOT_CONFIRMED`, `AUTH_FAILED` (explicit Antigravity key rejection), invalid runtime, supervisor/transition rejection codes, and common write errors.
 
 Example: `POST /api/instance/actions/switch-runtime` with `{"runtime":"codex"}`.
 

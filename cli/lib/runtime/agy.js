@@ -16,7 +16,6 @@ export function requestAgyModels({ env, key, execute = execFile }) {
       '--proto', '=https', '--max-time', '10', '--header', '@-', '--url', MODELS_URL];
     const child = execute('curl', args, {
       env: env.HTTPS_PROXY ? { ...env, https_proxy: env.HTTPS_PROXY } : env, encoding: 'utf8', timeout: 11_000, killSignal: 'SIGKILL', maxBuffer: 1024,
-      stdio: ['pipe', 'pipe', 'ignore'],
     }, (error, stdout) => {
       if (error) reject(new Error('API probe connection failed'));
       else resolve(/^\d{3}$/.test(stdout.trim()) ? Number(stdout.trim()) : 0);

@@ -445,6 +445,20 @@ describe('agy input frame', () => {
     assert.equal(checkAgyInputState(frame('>'), 3, 1), 'has_content');
     assert.equal(checkAgyInputState(frame('>'), 2, 0), 'indeterminate');
   });
+  it('uses the caret frame when a background tasks panel follows the prompt', () => {
+    const running = '  ● [18:51:32] sleep 20; echo TOOL-DONE running';
+    const native = frame('>') + '\n' + running + '\n' + '─'.repeat(40);
+    assert.equal(checkAgyInputState(native, 2, 1), 'empty');
+    assert.equal(checkAgyInputState(native.replace('>\n', '> draft\n'), 7, 1), 'has_content');
+    assert.equal(checkAgyInputState(frame(running), 2, 1), 'indeterminate');
+    const panel = frame('Background Tasks\n> running task\n  Esc to close');
+    assert.equal(checkAgyInputState(frame('>') + '\n' + panel, 2, 1), 'empty');
+    assert.equal(checkAgyInputState(frame('> draft') + '\n' + panel, 7, 1), 'has_content');
+    assert.equal(checkAgyInputState(frame('> first\n  second') + '\n' + panel, 8, 2), 'has_content');
+    // Moving into the panel must not make its highlighted task look empty.
+    assert.equal(checkAgyInputState(frame('>') + '\n' + panel, 2, 5), 'indeterminate');
+    assert.equal(checkAgyInputState(panel, 2, 2), 'indeterminate');
+  });
   it('recognizes multiline and wrapped unsubmitted input at its final caret row', () => {
     for (const body of ['> first\n  second\n  third', '> wrapped first\n  remainder', '> first\n\n> quoted line', '> [Pasted text #1 +3 lines]']) {
       assert.equal(checkAgyInputState(frame(body), 2, body.split('\n').length), 'has_content');

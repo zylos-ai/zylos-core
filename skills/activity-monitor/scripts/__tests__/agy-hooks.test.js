@@ -47,6 +47,26 @@ test('ERROR stops persist identity-bound unhealthy evidence without native error
   assert.equal(result.status,'processed');assert.equal(store.read().health,'unavailable');
   assert.equal(JSON.stringify(store.read()).includes('sensitive native text'),false);
 });
+test('ERROR stops classify explicit key rejection as auth failure without persisting native text', t => {
+  const {root,env}=fixture(t),now=10000;
+  for (const error of ['HTTP 401', 'HTTP/1.1 403', 'Request failed with status code 403',
+    '[403 Forbidden] rejected request', '401 Unauthorized', 'API key not valid. Please pass a valid API key.',
+    'API_KEY_INVALID', 'Invalid API key', 'API key was rejected']) {
+    const event=collectHealthHook(normalizeAgyHook({conversationId:'session',terminationReason:'ERROR',
+      error: error + ' private-native-key'},'Stop'),{zylosDir:root,env,nowMs:now,pid:123});
+    assert.equal(event.error,'authentication_failed',error);
+    const store=new HealthStore({runtime:'agy',zylosDir:root,now:()=>now});
+    store.consume(event,{identity:{runtime:'agy',session_id:'session',claude_pid:123}});
+    assert.equal(store.read().health,'auth_failed',error);
+  }
+  assert.equal(fs.readFileSync(path.join(root,'activity-monitor/session-groups/origin/events.jsonl'),'utf8').includes('private-native-key'),false);
+});
+test('ERROR stops keep network, server and ambiguous failures separate from authentication', () => {
+  for (const error of [undefined, {}, 403, 'upstream HTTP 503', 'Connection reset', 'request 403 bytes failed',
+    'API key lookup timed out', 'HTTP 4010', 'invalid model']) {
+    assert.equal(normalizeAgyHook({conversationId:'session',terminationReason:'ERROR',error},'Stop').error,'server_error',String(error));
+  }
+});
 test('AGY statusLine carries native context and ignores its invalid transcript path',t=>{
   const {env}=fixture(t);
   const sample=publishContextSample({conversationId:'session',agent_state:'idle',transcript_path:'/nonexistent/desktop',context_window:{used_percentage:20,context_window_size:1048576}},{env,now:1000});

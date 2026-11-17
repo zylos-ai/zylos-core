@@ -14,6 +14,15 @@ import { isMainModule } from './is-main-module.js';
 const { runDirFromEnv } = await loadCoreModule('session-group-paths.js');
 const { agyInstructionContext } = await loadCoreModule('runtime/instruction-builder.js');
 
+// Stop.error is an optional string in AGY's native hook schema. Keep only a
+// category: native text can contain request URLs, keys or other private data.
+function agyStopError(error) {
+  if (typeof error !== 'string') return 'server_error';
+  const rejectedStatus = /\b(?:HTTP(?:\/\d(?:\.\d)?)?\s*|status(?:\s+code)?[\s:=]*)(?:401|403)\b|\b(?:401\s+Unauthorized|403\s+Forbidden)\b/i;
+  const rejectedKey = /\bAPI_KEY_INVALID\b|\b(?:invalid|rejected)\s+API[ _-]?key\b|\bAPI[ _-]?key\s+(?:(?:is|was)\s+)?(?:not valid|invalid|rejected)\b/i;
+  return rejectedStatus.test(error) || rejectedKey.test(error) ? 'authentication_failed' : 'server_error';
+}
+
 export function normalizeAgyHook(payload, eventName) {
   if (!payload || typeof payload !== 'object') return null;
   const event = eventName || payload.hookEventName || payload.hook_event_name;
@@ -24,7 +33,7 @@ export function normalizeAgyHook(payload, eventName) {
   return { ...payload, session_id: session, transcript_path: payload.transcriptPath,
     hook_event_name: event === 'PreInvocation' ? 'UserPromptSubmit' :
       event === 'Stop' && String(payload.terminationReason).toUpperCase() === 'ERROR' ? 'StopFailure' : event,
-    ...(event === 'Stop' && String(payload.terminationReason).toUpperCase() === 'ERROR' ? { error: 'server_error' } : {}) };
+    ...(event === 'Stop' && String(payload.terminationReason).toUpperCase() === 'ERROR' ? { error: agyStopError(payload.error) } : {}) };
 }
 
 export function readAgySessionSource(env = process.env) {

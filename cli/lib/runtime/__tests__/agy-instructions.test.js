@@ -19,6 +19,10 @@ test('agy and Codex build byte-identical complete AGENTS in the same root', t =>
   const file = buildInstructionFile('codex', { zylosDir: root });
   const codex = fs.readFileSync(file);
   assert.ok(codex.includes(Buffer.from('USER_TAIL_MARKER')));
+  assert.ok(codex.includes(Buffer.from('## Codex — Runtime-Specific Rules')));
+  assert.ok(codex.includes(Buffer.from('## Antigravity — Runtime-Specific Rules')));
+  assert.ok(codex.includes(Buffer.from('**Never call `ask_question`.**')));
+  assert.ok(codex.includes(Buffer.from('Check `manage_task list` and `manage_subagents list` first')));
   assert.equal(buildInstructionFile('agy', { zylosDir: root }), file);
   assert.ok(codex.equals(fs.readFileSync(file)), 'agy must preserve the complete shared bytes');
 });
@@ -49,7 +53,10 @@ test('agy injection retains full system and user tails with explicit runtime pre
   assert.ok(content.includes('SYSTEM_TAIL_MARKER'));
   assert.ok(content.includes('USER_TAIL_MARKER'));
   assert.ok(content.includes('Antigravity — Runtime-Specific Rules'));
-  assert.ok(!content.includes('--dangerously-bypass-approvals-and-sandbox'));
+  assert.ok(content.includes('--dangerously-bypass-approvals-and-sandbox'));
+  assert.ok(content.includes('This section applies only to Codex; Antigravity must ignore it.'));
+  assert.ok(content.includes('This section applies only to Antigravity; Codex must ignore it.'));
+  assert.ok(content.includes(fs.readFileSync(paths.systemPath, 'utf8')), 'inject full unmodified system instructions');
   assert.ok(original.equals(fs.readFileSync(paths.outputPath)), 'injection must not rewrite AGENTS');
 });
 

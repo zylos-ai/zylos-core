@@ -27,8 +27,9 @@ Check for running background agents using the current runtime's available agent/
 Runtime behavior differs here:
 - **Claude**: ordinary background subagents can survive `/clear`.
 - **Codex**: `/exit` terminates background tasks. Before enqueueing `/exit`, make sure required background work has finished.
+- **Antigravity**: check both `manage_task list` and `manage_subagents list` and ensure all background tasks and subagents have finished before enqueueing `/clear`. Background work continues after `/clear`, but its results go to the old conversation and the new conversation never receives them. `/exit` kills background tasks.
 
-For configuration reclaim, both runtimes must first wait for necessary background
+For configuration reclaim, all runtimes must first wait for necessary background
 work. Do not acknowledge ready while it is still running.
 
 For each running task, note:

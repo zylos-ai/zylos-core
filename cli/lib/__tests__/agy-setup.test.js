@@ -34,6 +34,9 @@ test('Antigravity setup merges user settings, hooks, MCP servers and onboarding 
   assert.equal(read(files.settings).statusLine.stack_with_default, true);
   const hooks = read(files.hooks);
   assert.equal(hooks.custom.Stop[0].command, './keep.sh');
+  assert.equal(hooks.zylos.PreToolUse[0].matcher, '^ask_question$');
+  assert.equal(hooks.zylos.PreToolUse[0].hooks[0].timeout, 60);
+  assert.match(hooks.zylos.PreToolUse[0].hooks[0].command, /agy-tool-guard\.js'$/);
   for (const event of ['SessionStart', 'PreInvocation', 'Stop']) {
     assert.equal(hooks.zylos[event][0].timeout, 60);
     assert.match(hooks.zylos[event][0].command, new RegExp(`agy-hooks\\.js' ${event}$`));

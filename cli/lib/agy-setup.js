@@ -40,7 +40,11 @@ export function syncAgyConfig({ zylosDir = ZYLOS_DIR, home = os.homedir(), dryRu
   const desired = {
     settings: { ...current.settings, modelProvider: 'gemini', userDataCollectionForceDisabled: true,
       statusLine: { ...current.settings.statusLine, type: 'command', command: `node ${quote(path.join(root, '.claude/skills/activity-monitor/scripts/context-monitor.js'))}` } },
-    hooks: { ...current.hooks, zylos: Object.fromEntries(['SessionStart', 'PreInvocation', 'Stop'].map(event => [event, [{ type: 'command', command: command(event), timeout: 60 }]])) },
+    hooks: { ...current.hooks, zylos: {
+      ...Object.fromEntries(['SessionStart', 'PreInvocation', 'Stop'].map(event => [event, [{ type: 'command', command: command(event), timeout: 60 }]])),
+      PreToolUse: [{ matcher: '^ask_question$', hooks: [{ type: 'command',
+        command: `node ${quote(path.join(root, '.claude/skills/activity-monitor/scripts/agy-tool-guard.js'))}`, timeout: 60 }] }],
+    } },
     mcp: { ...current.mcp, mcpServers: { ...current.mcp.mcpServers, 'zylos-memory': { command: 'node', args: [path.join(root, '.claude/skills/zylos-memory/scripts/memory-mcp-server.js')] } } },
     onboarding: { ...current.onboarding, consumerOnboardingComplete: true, onboardingComplete: true },
   };
