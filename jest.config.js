@@ -40,6 +40,7 @@ export default {
     '<rootDir>/test/dashboard-readiness.integration.test.js',
     '<rootDir>/test/group-deletion.integration.test.js',
     '<rootDir>/test/group-deletion-storage.integration.test.js',
+    '<rootDir>/test/deleted-group-cutover.integration.test.js',
     // Node test-runner file; run by scripts/run-node-tests.js.
     '<rootDir>/test/test-location.test.js',
     '<rootDir>/test/control-prompt-length.test.js',

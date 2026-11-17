@@ -57,10 +57,23 @@ export function transitionFunctions({ read, write, snapshot, get, all, run, seco
     setModeTransitionPhase: (runId, phase, { reason = null } = {}) => write(c => {
       const row = required(c, runId);
       if (row.phase !== phase && !((row.phase === 'converting' && phase === 'cutover') || (row.phase === 'cutover' && phase === 'complete'))) throw dataError('PHASE_TRANSITION_INVALID', 'Invalid transition phase change');
-      if (row.phase !== phase && phase === 'cutover' && row.source_mode === 'multi') checkpoint(c, '*', row.cutoff, '', { cutover: true });
+      let cutoverCoverage;
+      if (row.phase !== phase && phase === 'cutover' && row.source_mode === 'multi') {
+        const covered = coverage(c, '*');
+        if (row.cutoff > covered) checkpoint(c, '*', row.cutoff, '', { cutover: true });
+        else {
+          // Deleted groups can leave the frozen cutoff below global coverage.
+          // A surviving row in that interval means this is not a deleted tail.
+          if (get(c, 'SELECT 1 FROM conversations WHERE id>? AND id<=? LIMIT 1', row.cutoff, covered)) {
+            throw dataError('CUTOVER_COVERAGE_CONFLICT', 'Conversations remain between the cutover cutoff and global coverage', { cutoff: row.cutoff, covered });
+          }
+          cutoverCoverage = { cutoff: row.cutoff, covered };
+        }
+      }
       if (row.phase !== phase && phase === 'complete') { onlyGlobal(c, true); run(c, "DELETE FROM drain_fences WHERE session_group='*'"); }
       run(c, 'UPDATE mode_transitions SET phase=?,reason=?,updated_at=? WHERE run_id=?', phase, reason, seconds(), runId);
-      return find(c, runId);
+      const result = find(c, runId);
+      return cutoverCoverage ? { ...result, cutoverCoverage } : result;
     }),
     getAbsorbedConversations: runId => snapshot(c => absorbed(c, required(c, runId)).map(({ id, session_group, channel, endpoint_id, timestamp, content }) => ({ id, session_group, channel, endpoint_id, timestamp, content }))),
   };

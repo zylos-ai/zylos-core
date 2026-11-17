@@ -52,6 +52,7 @@ const ROOT_NODE_TESTS = [
   'test/control-prompt-length.test.js',
   'test/group-deletion.integration.test.js',
   'test/group-deletion-storage.integration.test.js',
+  'test/deleted-group-cutover.integration.test.js',
   'test/reference-memory-templates.test.js',
   'test/owned-tree-deletion-policy.test.js',
   'test/owned-removal-callers.integration.test.js',
