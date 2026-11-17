@@ -129,13 +129,15 @@ zylos_tmux() {
   ZYLOS_DIR="${ZYLOS_DIR}" node --input-type=module - "$@" <<'NODE'
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
-const { tmuxClientArgs, tmuxClientEnvironment } = await import(pathToFileURL(
+const { tmuxClientArgs, tmuxClientEnvironment, isTmuxDirectoryError } = await import(pathToFileURL(
   process.env.ZYLOS_DIR + '/.claude/skills/comm-bridge/scripts/tmux-client-args.js').href);
+const args = process.argv.slice(2);
+const quietStop = args[0] === 'kill-session';
 try {
-  execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), ...process.argv.slice(2)],
-    { env: tmuxClientEnvironment(), stdio: 'inherit' });
+  execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), ...args],
+    { env: tmuxClientEnvironment(), stdio: quietStop ? ['ignore', 'inherit', 'pipe'] : 'inherit' });
 } catch (error) {
-  console.error(`${error.code ?? 'TMUX_COMMAND_FAILED'}: ${error.message}`);
+  if (!quietStop || isTmuxDirectoryError(error)) console.error(`${error.code ?? 'TMUX_COMMAND_FAILED'}: ${error.message}`);
   process.exit(error.status || 1);
 }
 NODE

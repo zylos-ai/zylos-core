@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { runTmuxCommand } from '../cli/lib/runtime/tmux-connection.js';
 import { SessionAdapter } from '../cli/lib/runtime/session-adapter.js';
 import * as helpers from '../cli/lib/runtime/tmux-helpers.js';
@@ -28,7 +28,8 @@ for (const runtime of ['claude', 'codex']) for (const mode of ['unset', 'private
     fs.writeFileSync(path.join(bin, 'package.json'), '{"type":"module"}');
     fs.writeFileSync(path.join(bin, 'tmux'), `#!${process.execPath}\nimport fs from 'node:fs';
 fs.appendFileSync(process.env.TMUX_CALLS, JSON.stringify({args:process.argv.slice(2),
-identity:process.env.ZYLOS_RUN_ID})+'\\n');\n`, { mode: 0o700 });
+identity:process.env.ZYLOS_RUN_ID})+'\\n');
+if (process.argv.includes('kill-session')) { console.error('fixture absent session'); process.exit(1); }\n`, { mode: 0o700 });
     for (const name of ['zylos', 'pm2', 'sleep']) fs.writeFileSync(path.join(bin, name),
       '#!/bin/sh\nexit 0\n', { mode: 0o700 });
     const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: path.join(root, 'p'), TMPDIR: tmp,
@@ -40,17 +41,18 @@ identity:process.env.ZYLOS_RUN_ID})+'\\n');\n`, { mode: 0o700 });
     else env.TMUX_TMPDIR = mode === 'private' ? tmp : path.join(tmp, 'missing');
     t.diagnostic(JSON.stringify({ HOME: home, ZYLOS_DIR: zylos, PM2_HOME: env.PM2_HOME,
       TMPDIR: tmp, TMUX_TMPDIR: env.TMUX_TMPDIR ?? null, binary: path.join(bin, 'tmux') }));
-    let error;
-    try { execFileSync('bash', [fileURLToPath(new URL('../docker/entrypoint.sh', import.meta.url))],
-      { env, timeout: 8000, stdio: ['ignore', 'pipe', 'pipe'] }); }
-    catch (caught) { error = caught; }
+    const result = spawnSync('bash', [fileURLToPath(new URL('../docker/entrypoint.sh', import.meta.url))],
+      { env, timeout: 8000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    assert.equal(result.error, undefined);
+    assert.equal(result.signal, null);
     if (mode === 'missing') {
-      assert.equal(error?.status, 1);
-      assert.match(error.stderr.toString(), /TMUX_DIR_MISSING/);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /TMUX_DIR_MISSING/);
       assert.equal(fs.existsSync(calls), false);
       return;
     }
-    assert.equal(error, undefined, error?.stderr?.toString());
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stderr, /fixture absent session/);
     const rows = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse);
     assert.equal(rows.length, 4, 'stale-session stop, launch and both shutdown stops');
     const prefix = mode === 'private' ? ['-S', path.join(tmp, `tmux-${process.getuid()}`, 'default')] : [];
