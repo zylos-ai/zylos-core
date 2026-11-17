@@ -155,3 +155,17 @@ test('maintenance owns its single Sync and prevents ordinary Sync, TTL and rotat
   assert.equal(f.dbSqlite.prepare('SELECT COUNT(*) AS n FROM control_queue WHERE session_group=?').get(f.group).n, 1);
   assert.equal(f.lifecycle.ttlPreparation.size, 0);
 });
+
+
+// A pending message must beat maintenance release even before Router has pasted
+// it and emitted the ordinary delivery cancellation signal.
+test('real input arriving after maintenance finishes cancels release before fencing', async t => {
+  const f = fixture(t); await f.inspect([f.alert]); await f.run(); f.publish();
+  await f.inspect([]);
+  assert.equal(f.lifecycle.releasePreparation.get(f.group).maintenanceId, f.store.read()[0].id);
+  f.db.insertConversation('in', 'telegram', 'fixture', 'new real work', { groupName: 'repair' });
+  await f.lifecycle.advanceReleases(f.context);
+  assert.equal(f.lifecycle.releasePreparation.has(f.group), false);
+  assert.equal(f.store.read()[0].phase, 'ordinary');
+  assert.equal(f.db.getDrainFence(f.group), null);
+});

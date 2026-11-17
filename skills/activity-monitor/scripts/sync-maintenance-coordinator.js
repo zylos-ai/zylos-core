@@ -103,6 +103,7 @@ export class SyncMaintenanceCoordinator {
     // This dedicated session has already used its one Sync attempt. The normal
     // CHECK/fence/idle/child gates remain; neither outcome adds another Sync.
     intent.skipSync = true;
+    intent.maintenanceId = row.id;
     if (row.outcome !== 'success') intent.syncExhausted = true;
     await this.store.update(scene.sessionGroup, row.runId, { releaseRequested: true });
   }

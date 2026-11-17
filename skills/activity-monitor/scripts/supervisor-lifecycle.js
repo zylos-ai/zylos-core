@@ -626,6 +626,13 @@ export class SupervisorLifecycle {
     }
     await this.each([...this.releasePreparation.keys()].map(sessionGroup => ({ sessionGroup })), async ({ sessionGroup }) => {
       const intent = this.releasePreparation.get(sessionGroup), scene = this.scene(sessionGroup, context);
+      if (intent.maintenanceId && (await this.d.db.getNextPending?.({ sessionGroups: [sessionGroup] }) ||
+          !this.d.syncMaintenance?.owns(scene))) {
+        this.releasePreparation.delete(sessionGroup);
+        await this.d.syncMaintenance?.store.cancelMaintenance(sessionGroup, intent.runId);
+        await this.event('reclaim_cancelled', { session_group: sessionGroup, run_id: intent.runId, reason: 'new_work' });
+        return;
+      }
       if (!scene.present || !scene.ready || scene.runId !== intent.runId || modeOf(context) !== 'multi' || !this.allowed(sessionGroup, context)) {
         this.releasePreparation.delete(sessionGroup);
         await this.event('reclaim_cancelled', { session_group: sessionGroup, run_id: intent.runId,
