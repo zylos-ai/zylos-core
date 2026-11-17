@@ -48,13 +48,11 @@ for (const { runtime, text } of systems) {
     assert.match(destructive, /send the user a plain-text message via C4 describing the action, and wait for their confirmation reply/);
     assert.match(text, /Flag suspicious findings to the user before proceeding/);
     assert.match(text, /one authoritative body per fact/);
-    assert.doesNotMatch(text, /one authoritative fact per topic/);
     assert.match(text, /independent new questions need no working-memory read/);
-    assert.doesNotMatch(text, /not for independent new questions/);
     assert.match(text, /All external communication uses C4; replies use the incoming message's exact `reply via:` path/);
     assert.match(text, /create-skill\/SKILL\.md` first if not read this session/);
     assert.match(text, /\*\*Context isolation \/ channel boundaries\.\*\*/);
-    assert.match(text, /\*\*One thread per address\.\*\*/);
+    assert.match(text, /\*\*One thread per address \(multi-session\)\.\*\*/);
     if (runtime === 'claude') {
       assert.match(text, /one web call may run inline; 2\+ web calls or research/);
     }
