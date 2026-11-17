@@ -11,9 +11,9 @@ single mode), `runId`, `sessionId` (the runtime session, not the tmux session),
 `runtime`, and `pastedAt` (Unix milliseconds). The receiver rejects malformed or
 stale identities. The supervisor rechecks the original run and runtime session,
 existing recovery fences, current activity, transcript backlog, and unfinished
-tools and active child agents immediately before stopping it. Any AI response after paste or unfinished
-tool prevents the fast stop. The stop uses the same path as the final
-no-response recovery step; normal supervisor demand starts the replacement.
+tools and active child agents immediately before stopping it. Any AI response
+after paste or unfinished tool prevents the fast stop. The stop uses the same path as the final
+no-response recovery step; normal dispatcher demand requests replacement startup.
 Other groups and queued messages keep their normal delivery policy.
 
 A process-local map reserves the current stopping run per group. Repeated facts
