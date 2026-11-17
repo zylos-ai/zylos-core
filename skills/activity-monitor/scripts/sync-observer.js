@@ -12,10 +12,17 @@ export class SyncObserver {
     this.env = env; this.now = now;
     this.reader = new EventLogReader(supervisorDiagnosticPath(env), { warn });
     this.started = false; this.groups = new Map(); this.originTriggers = [];
-    this.originResults = []; this.controls = new Map();
+    this.originResults = []; this.controls = new Map(); this.timeoutAlerts = new Map();
   }
   close() { this.reader.close(); }
   consume(row) {
+    if (row.event === 'sync_alert' && row.type === 'control_timeout') {
+      // Recover exact handled IDs within log retention: older pending controls
+      // may time out later, so a monotonically increasing watermark is unsafe.
+      this.timeoutAlerts.set(row.controlId, row.ts);
+      for (const [id, ts] of this.timeoutAlerts) if (ts < this.now() - 7 * 86400000) this.timeoutAlerts.delete(id);
+      this.controls.delete(row.controlId);
+    }
     if (row.event === 'sync_triggered') {
       if (row.kind === 'origin') {
         this.originTriggers.push(row.ts);
@@ -39,11 +46,12 @@ export class SyncObserver {
       const triggers = new Map(), results = [], timeouts = new Map(), pending = new Map();
       try { this.reader.recoverTail(row => {
         if (row.ts < this.now() - 7 * 86400000) return { done: true };
+        if (row.event === 'sync_alert' && row.type === 'control_timeout') this.consume(row);
         if (row.event === 'sync_triggered') {
           const key = JSON.stringify([row.kind, row.scope]);
           if (Number.isSafeInteger(row.controlId)) {
             const control = db.getControlById(row.controlId);
-            if (control?.status === 'timeout' && !timeouts.has(key)) timeouts.set(key, row);
+            if (control?.status === 'timeout' && !this.timeoutAlerts.has(row.controlId) && !timeouts.has(key)) timeouts.set(key, row);
             if (control && !['done', 'timeout', 'failed', 'cancelled', 'superseded'].includes(control.status)) pending.set(row.controlId, row);
           }
           const rows = triggers.get(key) ?? [];
@@ -58,11 +66,11 @@ export class SyncObserver {
       for (const row of [...triggers.values()].flat().concat(results).sort((a, b) => a.ts - b.ts)) this.consume(row);
       // Timeout evidence is independent of the last-three trigger window.
       this.controls = pending;
-      for (const row of timeouts.values()) this.controls.set(row.controlId, row);
+      for (const row of timeouts.values()) if (!this.timeoutAlerts.has(row.controlId)) this.controls.set(row.controlId, row);
     } else for (const row of this.reader.read()) this.consume(row);
   }
   acknowledged(alert) { if (alert.type === 'control_timeout') this.controls.delete(alert.controlId); }
-  async inspect(db, { mode, syncMaxIntervalSeconds = 21600 }, markerHeld = async () => false) {
+  async inspect(db, { mode, syncMaxIntervalSeconds = 21600, activeScopes = [] }, markerHeld = async () => false) {
     this.read(db);
     const alerts = [], now = this.now();
     for (const [key, row] of this.groups) {
@@ -77,7 +85,7 @@ export class SyncObserver {
     }
     for (const [id, row] of this.controls) {
       const control = await db.getControlById(id);
-      if (control?.status === 'timeout') alerts.push({ type: 'control_timeout', kind: row.kind, scope: row.scope, controlId: id });
+      if (control?.status === 'timeout' && !this.timeoutAlerts.has(id)) alerts.push({ type: 'control_timeout', kind: row.kind, scope: row.scope, controlId: id });
       if (!control || ['done', 'failed', 'cancelled', 'superseded'].includes(control.status)) this.controls.delete(id);
     }
     const scopes = mode === 'single' ? ['*'] : (await db.listGroupHeads()).map(row => row.sessionGroup);
@@ -85,7 +93,7 @@ export class SyncObserver {
       const kind = scope === '*' ? 'global' : 'group';
       const range = scope === '*' ? await db.getGlobalUnsummarizedRange() : await db.getUnsummarizedRange(scope);
       const first = range.firstAt == null ? null : typeof range.firstAt === 'number' ? range.firstAt : Date.parse(/(?:Z|[+-]\d\d:\d\d)$/.test(range.firstAt) ? range.firstAt : range.firstAt.replace(' ', 'T') + 'Z');
-      if (range.count > 0 && first !== null && now - first > syncMaxIntervalSeconds * 1000) {
+      if (!activeScopes.includes(scope) && range.count > 0 && first !== null && now - first > syncMaxIntervalSeconds * 1000) {
         alerts.push({ type: 'backlog', kind, scope, backlog: range.count, lag: Math.floor((now - first) / 1000) });
       }
       const checkpoint = await db.getLatestContentCheckpoint(scope);

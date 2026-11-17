@@ -520,8 +520,9 @@ count), `advance` (group and both cursor columns before/after), and
 `round_complete` (raw count, advanced groups, remaining quota, remaining
 backlog). Origin completes its round at the existing lock release boundary;
 interrupted rounds have no completion record. Structured errors contain a
-`code`, `kind`, `scope` and operation action. Invalid calls and failed guards
-can produce both guard and operation error records.
+`code`, `kind`, `scope` and operation action. Each failed protected operation emits one error record; callers that own
+operation reporting disable the nested guard report. Standalone guards still
+report their own failures.
 
 The supervisor queues owner notices through the existing Sync alert control,
 with `type`, `kind` and `scope`, throttled for six hours per type/kind/scope:
@@ -531,7 +532,8 @@ with `type`, `kind` and `scope`, throttled for six hours per type/kind/scope:
 - `origin_idle`: more than five of the latest ten completed rounds have no raw
   rows and no cursor advancement. Summary-only progress counts as work.
 - `backlog`: the oldest unsummarized group row exceeds the configured maximum
-  interval, including groups without a live session. Existing large-backlog
+  interval and the group has no live session. Active groups use ordinary
+  maximum-lag Sync and the no-checkpoint alert. Existing large-backlog
   and Origin lag alerts remain in place.
 - `control_timeout`: a Sync control timed out.
 - `state_uncommitted`: the latest content checkpoint is ahead of formal state,
@@ -540,10 +542,13 @@ with `type`, `kind` and `scope`, throttled for six hours per type/kind/scope:
 Inspection of inactive groups does not launch their sessions. Timeout evidence
 is retained until alert enqueue succeeds. Trigger/round evidence is recovered
 from retained diagnostic logs after restart. Earlier timeout controls are
-recovered separately from the last-three trigger window.
+recovered separately from the last-three trigger window. Handled timeout IDs
+are recovered from `sync_alert` events, including rate-limited notices, so
+restarting the supervisor does not replay old timeout notices. Unreported
+timeouts remain eligible.
 
-A changed session alone does not expire a Sync marker early. Before the
-existing 30-minute expiry, a different holder is reclaimed only when a matching
-run-ending record proves that run ended. Missing or unreadable evidence leaves
-ownership intact. Daily memory snapshots exclude `*.tmp`, including files
+Sync marker expiration retains the baseline rule: a holder from a different
+run is immediately stale; a same-run marker retains its existing 30-minute
+expiry. Same-run worker failure handling is deferred until result diagnostics
+provide more evidence. Daily memory snapshots exclude `*.tmp`, including files
 already staged before the snapshot.

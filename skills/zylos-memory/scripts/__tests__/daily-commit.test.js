@@ -6,13 +6,25 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-// Real daily snapshot CLI and git, entirely inside temporary HOME/ZYLOS_DIR.
+// Boundary: real daily snapshot CLI, Git index and commits, without services,
+// tmux, network or a database. Run when snapshot filtering/staging changes;
+// unrelated Supervisor or UI changes may skip. Use the official Node runner
+// for isolation before imports; each child gets its own HOME/ZYLOS_DIR,
+// PM2_HOME and TMPDIR below. t.after removes the entire owned fixture tree.
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-tmp-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home'), zylos = path.join(root, 'zylos'), memory = path.join(zylos, 'memory');
   fs.mkdirSync(home); fs.mkdirSync(memory, { recursive: true });
-  const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos,
+    PM2_HOME: path.join(root, 'pm2'), TMPDIR: path.join(root, 'tmp'),
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
+    assert.ok(env[key].startsWith(root + path.sep));
+    fs.mkdirSync(env[key], { recursive: true });
+  }
+  t.diagnostic(JSON.stringify({ paths: Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(key => [key, env[key]])),
+    tmux: 'unused', database: 'unused' }));
   const git = (...args) => execFileSync('git', args, { cwd: memory, env, encoding: 'utf8' }).trim();
   const write = (name, text) => {
     fs.mkdirSync(path.dirname(path.join(memory, name)), { recursive: true });

@@ -8,7 +8,6 @@ import { fork, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { writeMemory, appendMemory } from '../memory-write.js';
 import { MemoryBrowser } from '../../../dashboard/src/lib/memory-browser.js';
-import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 
 const digest = value => createHash('sha256').update(value).digest('hex');
 const liveRun = async () => 'live-run';
@@ -197,23 +196,14 @@ test('target content and symlinks are checked again after runtime observation', 
   assert.equal(fs.readFileSync(outside, 'utf8'), 'original\n');
 });
 
-test('group Sync blocks unexpired holders until their run is definitely ended', async t => {
+test('group Sync blocks only a live unexpired marker in that file scope', async t => {
   for (const [name, changes, busy] of [
-    ['active', {}, true], ['old run unknown', { runId: 'previous-run' }, true],
-    ['old run ended', { runId: 'previous-run' }, false],
+    ['active', {}, true], ['old run', { runId: 'previous-run' }, false],
     ['expired', { expiresAt: Date.now() - 1 }, false],
   ]) await t.test(name, async t => {
     const f = fixture(t);
     const settings = groupFile(f, 'lark:room');
     marker(f, 'lark:room', 'group', changes);
-    if (name === 'old run ended') {
-      const directory = path.join(f.env.ZYLOS_DIR, 'comm-bridge');
-      fs.mkdirSync(directory, { recursive: true });
-      const database = new Database(path.join(directory, 'c4.db'));
-      try {
-        database.exec("CREATE TABLE run_endings(session_group TEXT, run_id TEXT); INSERT INTO run_endings VALUES('lark:room','previous-run')");
-      } finally { database.close(); }
-    }
     const currentRunId = async scope => {
       assert.equal(scope.sessionGroup, 'lark:room');
       assert.equal(scope.runDir, runDir(f, 'lark:room'));

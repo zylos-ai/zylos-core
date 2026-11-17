@@ -1,7 +1,6 @@
-import { loadCoreModule } from '../../comm-bridge/scripts/router/core-modules.js';
-
 export async function recordResult(details, settings = {}) {
   try {
+    const { loadCoreModule } = await import('../../comm-bridge/scripts/router/core-modules.js');
     const { recordSyncResult } = await loadCoreModule('sync-observability.js');
     recordSyncResult({ scope: (settings.env || process.env).ZYLOS_SESSION_GROUP || '*',
       kind: ['group', 'origin', 'global'].includes(settings.kind) ? settings.kind : ((settings.env || process.env).ZYLOS_SESSION_GROUP ? 'group' : 'global'),

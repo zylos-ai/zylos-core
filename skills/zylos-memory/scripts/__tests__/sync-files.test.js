@@ -530,3 +530,24 @@ test('commit metadata uses first and last verified C4 rows without a second data
   assert.deepEqual([result.fromId, result.toId, result.count, result.checkpointId], [7, 19, 2, 8]);
   assert.equal(reads, 1);
 });
+
+// Real operation wrappers and ownership guard with private marker/state files.
+// Run for result ownership or Sync wrapper changes; unrelated changes may skip.
+// The fixture removes its root; the isolated runner prevents live resource access.
+test('each rejected Sync file operation emits one result under its operation name', async t => {
+  const f = await fixture(t);
+  const logfile = path.join(f.root, 'activity-monitor', 'supervisor-events.jsonl');
+  const errors = () => fs.readFileSync(logfile, 'utf8').trim().split('\n').map(JSON.parse)
+    .filter(row => row.event === 'sync_result' && row.status === 'error');
+  for (const [action, operation] of Object.entries({ cleanup, rotate, checkpoint, commit: guardedCommit })) {
+    for (const [token, code] of [['bad-token', 'INVALID_INPUT'], ['b'.repeat(32), 'TOKEN_MISMATCH']]) {
+      const before = errors().length;
+      await assert.rejects(operation({ ...f.settings, token }, f.deps), { code });
+      assert.deepEqual(errors().slice(before).map(row => [row.action, row.code]), [[action, code]]);
+    }
+  }
+  // A failure inside an admitted guard has the same single-result ownership.
+  const before = errors().length;
+  await assert.rejects(guardedCommit({ ...f.settings, input: {} }, f.deps), { code: 'INVALID_INPUT' });
+  assert.deepEqual(errors().slice(before).map(row => [row.action, row.code]), [['commit', 'INVALID_INPUT']]);
+});

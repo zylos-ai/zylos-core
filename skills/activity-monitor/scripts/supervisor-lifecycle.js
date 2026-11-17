@@ -846,7 +846,10 @@ export class SupervisorLifecycle {
 
   async syncAlerts(context) {
     if (!this.d.syncObserver) return;
-    const alerts = await this.d.syncObserver.inspect(this.d.db, context.configuration, async (scope, kind) => {
+    const alerts = await this.d.syncObserver.inspect(this.d.db, { ...context.configuration,
+      activeScopes: context.scenes.filter(scene => scene.present || scene.observationError)
+        .map(scene => modeOf(context) === 'single' ? '*' : scene.sessionGroup),
+    }, async (scope, kind) => {
       const scene = context.scenes.find(row => (row.sessionGroup ?? '*') === scope);
       const marker = await this.d.readSyncMarker({ runDir: scene?.runDir ?? this.d.groupRunDir(scope === '*' ? 'origin' : scope), kind, currentRunId: scene?.runId ?? null });
       return marker.held && !marker.stale;
@@ -856,7 +859,11 @@ export class SupervisorLifecycle {
 
   async sendSyncAlert(alert, context) {
     const key = JSON.stringify([alert.type, alert.kind, alert.scope]), now = this.now();
-    if (this.syncAlertSent.has(key) && now - this.syncAlertSent.get(key) < 21600000) return true;
+    if (this.syncAlertSent.has(key) && now - this.syncAlertSent.get(key) < 21600000) {
+      // Persist handled timeouts even when the current episode is rate limited.
+      if (alert.type === 'control_timeout') await this.event('sync_alert', { ...alert, suppressed: true });
+      return true;
+    }
     if (!await this.beforeWrite(modeOf(context) === 'single' ? null : 'origin', context)) return;
     await this.d.db.insertControl(this.prompt('SYNC_BACKLOG_ALERT', alert.kind, alert.backlog ?? 0, alert.lag ?? 0, alert.scope, alert.type, alert), {
       sessionGroup: modeOf(context) === 'single' ? null : 'origin', appendAckSuffix: false,

@@ -140,3 +140,43 @@ test('a temporarily fenced timeout alert is retained for successful later delive
   f.db.clearDrainFence('origin'); await f.lifecycle.syncAlerts(f.context);
   assert.equal(f.alerts().length, 1); assert.match(f.alerts()[0].content, /type=control_timeout/);
 });
+
+// Run for max-lag observation or active-session filtering changes; skip unrelated
+// UI changes. Uses the isolated real C4/Router fixture described above.
+test('a live group at maximum lag receives Sync while an absent group receives only an alert', async t => {
+  const f = observableFixture(t);
+  for (const name of ['active', 'inactive']) {
+    const row = f.db.insertConversation('in', 'telegram', name, 'fixture', { groupName: name });
+    assert.equal(f.db.claimConversation(row.id), true);
+    assert.equal(f.db.markDelivered(row.id, { sessionId: 'fixture' }), true);
+    f.sqlite.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(f.now() / 1000 - 21601, row.id);
+  }
+  const scene = { ...f.scene, sessionGroup: 'telegram:active' };
+  f.context.scenes = [scene];
+  f.lifecycle.d.observeGroup = group => group === scene.sessionGroup ? scene : null;
+  await f.lifecycle.checkSync([scene], f.context);
+  assert.equal(f.alerts().filter(row => /kind=group; scope=telegram:active/.test(row.content)).length, 0);
+  assert.equal(f.alerts().filter(row => /kind=group; scope=telegram:inactive/.test(row.content)).length, 1);
+  const groupControls = f.sqlite.prepare("SELECT raw_content,session_group FROM control_queue WHERE session_group IN ('telegram:active','telegram:inactive')").all();
+  assert.equal(groupControls.length, 1);
+  assert.equal(groupControls[0].session_group, 'telegram:active');
+  assert.equal(groupControls[0].raw_content, syncPrompts.GROUP_SYNC_PROMPT);
+});
+
+test('handled timeouts remain consumed after supervisor restart including rate limited controls', async t => {
+  const f = observableFixture(t);
+  const range = { count: 16, firstAt: f.now(), nonempty: true };
+  await f.lifecycle.syncScope(f.scene, 'group', range, f.context);
+  f.advance(301000); f.db.expireTimedOutControls(Math.floor(f.now() / 1000));
+  await f.lifecycle.syncAlerts(f.context); assert.equal(f.alerts().length, 1);
+  f.advance(300000); await f.lifecycle.syncScope(f.scene, 'group', range, f.context);
+  f.advance(301000); f.db.expireTimedOutControls(Math.floor(f.now() / 1000));
+  await f.lifecycle.syncAlerts(f.context); assert.equal(f.alerts().length, 1);
+  assert.ok(fs.readFileSync(f.file, 'utf8').trim().split('\n').map(JSON.parse).some(row => row.event === 'sync_alert' && row.suppressed));
+  f.observer.close();
+  const observer = new SyncObserver({ env: { ZYLOS_DIR: f.root }, now: f.now }); t.after(() => observer.close());
+  f.lifecycle.d.syncObserver = observer;
+  f.lifecycle.syncAlertSent.clear();
+  await f.lifecycle.syncAlerts(f.context);
+  assert.equal(f.alerts().length, 1, 'restart recovers handled timeout IDs from the diagnostic log');
+});

@@ -6,22 +6,12 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
-import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import { acquire, release, guard, memoryScope, readSyncMarker, MARKER_TTL_MS } from '../sync-lock.js';
 const fixture = group => ({ ZYLOS_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'sync-marker-')), ZYLOS_RUN_ID: 'run-1', ...(group ? { ZYLOS_SESSION_GROUP: group } : {}) });
 const currentRunId = async scope => scope.runId;
 
-function endRun(env, runId = env.ZYLOS_RUN_ID) {
-  const directory = path.join(env.ZYLOS_DIR, 'comm-bridge');
-  fs.mkdirSync(directory, { recursive: true });
-  const database = new Database(path.join(directory, 'c4.db'));
-  try {
-    database.exec('CREATE TABLE IF NOT EXISTS run_endings(session_group TEXT PRIMARY KEY, run_id TEXT)');
-    database.prepare('INSERT OR REPLACE INTO run_endings VALUES(?,?)').run(env.ZYLOS_SESSION_GROUP || 'origin', runId);
-  } finally { database.close(); }
-}
-
-// acquisition uses the real reader rather than trusting caller env.
+// Real CLI and isolated tmux identity; run for acquisition identity changes, skip
+// otherwise. readyTmuxTarget owns and removes its private socket and fixture root.
 test('CLI acquire checks the current isolated tmux identity', t => {
   const f = readyTmuxTarget(t, { prefix: 'sync-lock-live-', ledger: false });
   const env = { ...f.env, ZYLOS_RUN_ID: 'run-1' };
@@ -58,8 +48,6 @@ test('Sync lifecycle, independent origin marker, stale takeover and old release'
   let mutations = 0;
   await guard({ kind: 'group', token, env }, () => { mutations++; });
   const newer = { ...env, ZYLOS_RUN_ID: 'run-2' };
-  assert.equal(readSyncMarker({ runDir: scope.runDir, kind: 'group', currentRunId: 'run-2' }).held, true);
-  endRun(env);
   assert.equal(readSyncMarker({ runDir: scope.runDir, kind: 'group', currentRunId: 'run-2' }).stale, true);
   const next = await acquire({ kind: 'group', env: newer }, { currentRunId });
   await assert.rejects(guard({ kind: 'group', token, env }, () => { mutations++; }), { code: 'TOKEN_MISMATCH', exitCode: 3 });
@@ -85,7 +73,7 @@ test('expired markers, invalid marker warning, scope and current-run checks', as
   assert.ok(token);
 });
 
-// marker expiry permits a later takeover, never revokes a held .
+// Marker expiry permits a later takeover but cannot bypass an active mutation lock.
 test('expiry during a guarded operation cannot admit a contender', async () => {
   const env = fixture('lark:oc_b'); const scope = await memoryScope(env);
   const token = await acquire({ kind: 'group', env }, { currentRunId });
@@ -132,7 +120,6 @@ test('release after TOKEN_MISMATCH leaves the new owner marker; the owner releas
   const cli = (args, runtimeEnv) => spawnSync(process.execPath, [script, ...args], { env: { ...process.env, ...runtimeEnv }, encoding: 'utf8', timeout: 15000 });
   const a = await acquire({ kind: 'group', env }, { currentRunId });
   const newer = { ...env, ZYLOS_RUN_ID: 'run-2' };
-  endRun(env);
   const b = await acquire({ kind: 'group', env: newer }, { currentRunId });
   const owned = fs.readFileSync(file, 'utf8');
   assert.equal(JSON.parse(owned).token, b);
@@ -149,40 +136,21 @@ test('release after TOKEN_MISMATCH leaves the new owner marker; the owner releas
   assert.equal(fs.existsSync(file), false);
 });
 
-// Real marker, guard and read-only ending query. A changed tmux/session identity
-// cannot steal the old worker's token while its ending remains unknown.
-test('session change retains a live or ambiguous Sync holder until a matching ending or TTL', async t => {
-  const env = fixture('lark:oc_old_worker');
-  t.after(() => fs.rmSync(env.ZYLOS_DIR, { recursive: true, force: true }));
-  const scope = await memoryScope(env), file = path.join(scope.runDir, 'sync.lock');
-  const token = await acquire({ kind: 'group', env }, { currentRunId });
-  const held = fs.readFileSync(file, 'utf8');
-  const newer = { ...env, ZYLOS_RUN_ID: 'run-2' };
-  for (const state of ['missing database', 'unrelated ending', 'unreadable database']) {
-    if (state === 'unrelated ending') endRun(env, 'different-run');
-    if (state === 'unreadable database') fs.writeFileSync(path.join(env.ZYLOS_DIR, 'comm-bridge', 'c4.db'), 'not sqlite');
-    await assert.rejects(acquire({ kind: 'group', env: newer }, { currentRunId }), { code: 'SYNC_BUSY' });
-    assert.equal(fs.readFileSync(file, 'utf8'), held, state);
-    assert.equal(await guard({ kind: 'group', token, env }, ({ marker }) => marker.token), token);
-  }
-  // Unknown state keeps the existing TTL recovery behavior.
-  const next = await acquire({ kind: 'group', env: newer }, { currentRunId, now: () => JSON.parse(held).expiresAt });
-  assert.notEqual(next, token);
-});
-
-test('a matching ending reclaims only a different run and does not create or migrate a database', async t => {
-  const env = fixture('lark:oc_ended');
+// Real lock files and takeover without a database. Run for marker expiration
+// or acquisition changes; unrelated changes may skip. The fixture root is removed
+// after all guard actions finish; no live tmux, database or session is contacted.
+test('a changed run immediately expires its marker without consulting a database', async t => {
+  const env = fixture('lark:oc_changed');
   t.after(() => fs.rmSync(env.ZYLOS_DIR, { recursive: true, force: true }));
   const scope = await memoryScope(env);
   const token = await acquire({ kind: 'group', env }, { currentRunId });
-  assert.equal(fs.existsSync(path.join(env.ZYLOS_DIR, 'comm-bridge')), false);
-  endRun(env);
-  await assert.rejects(acquire({ kind: 'group', env }, { currentRunId }), { code: 'SYNC_BUSY' });
   const marker = readSyncMarker({ runDir: scope.runDir, kind: 'group', currentRunId: 'run-2' });
-  assert.equal(marker.reason, 'run_ended');
+  assert.equal(marker.reason, 'run_changed');
   assert.equal(marker.stale, true);
+  assert.equal(marker.held, false);
   const next = await acquire({ kind: 'group', env: { ...env, ZYLOS_RUN_ID: 'run-2' } }, { currentRunId });
   assert.notEqual(next, token);
+  assert.equal(fs.existsSync(path.join(env.ZYLOS_DIR, 'comm-bridge')), false);
 });
 
 test('acquisition and rejected malformed-token guards emit metadata without tokens', async t => {

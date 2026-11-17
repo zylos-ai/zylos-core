@@ -74,7 +74,7 @@ export async function cleanup(settings = {}, deps = {}) {
         fs.unlinkSync(path.join(memoryDir, name));
       }
     }
-  }));
+  }, { recordFailure: false }));
 }
 export async function rotate(settings = {}, deps = {}) {
   return withResult(settings, 'rotate', () => guard(settings, ({ memoryDir }) => {
@@ -87,7 +87,7 @@ export async function rotate(settings = {}, deps = {}) {
     while (fs.existsSync(path.join(memoryDir, `inbox.${chosen}.md`))) chosen = `${id}-${++suffix}`;
     fs.renameSync(inbox, path.join(memoryDir, `inbox.${chosen}.md`));
     return chosen;
-  }));
+  }, { recordFailure: false }));
 }
 const describeFile = file => {
   const content = fs.readFileSync(file);
@@ -139,7 +139,7 @@ export async function checkpoint({ end, summary, batch, noContent = false, ...se
     if (batch?.after !== coverage) throw memoryError('INPUT_CHANGED', 'Batch must start at current coverage');
     await verifyBatchReceipt(batch, { scope, end, database });
     return database.createCheckpoint(scope, end, noContent ? null : summary, { noContent });
-  }));
+  }, { recordFailure: false }));
 }
 export async function commit({ input, ...settings }, deps = {}) {
   return withResult(settings, 'commit', async () => {
@@ -179,7 +179,7 @@ export async function commit({ input, ...settings }, deps = {}) {
       deleteSegments(memoryDir, ids, deps.warning, true);
       await recordResult({ action: 'commit', status: 'success', scope, startedAt: marker.startedAt, checkpointId: latest.id, fromId: coveredIds[0] ?? null, toId: coveredIds.at(-1) ?? null, count }, settings);
       return { committed: true, inboxCommitted: ids };
-    });
+    }, { recordFailure: false });
   });
 }
 

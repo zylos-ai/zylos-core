@@ -470,6 +470,7 @@ test('Origin results persist verified counts and report round quota and remainin
   await completeOriginRound(f, marker, f.settings.env, f.deps);
   const log = fs.readFileSync(path.join(f.root, 'activity-monitor', 'supervisor-events.jsonl'), 'utf8');
   const rows = log.trim().split('\n').map(JSON.parse);
+  assert.deepEqual(rows.filter(row => row.event === 'sync_result' && row.status === 'error' && row.action !== 'round_complete').map(row => [row.action, row.code]), [['advance', 'INPUT_CHANGED']]);
   const success = rows.find(row => row.action === 'advance' && row.status === 'success');
   assert.equal(success.count, 2); assert.equal(success.group, group);
   assert.equal(success.fromId, 0); assert.equal(success.toId, payload.raw.end);
@@ -515,4 +516,15 @@ test('Origin empty raw receipt with unchanged cursors is zero work', async t => 
   assert.equal(result.advanced, true, 'the existing cursor API response stays unchanged');
   const marker = readMarker(f.runDir, 'origin').marker;
   assert.equal(marker.processedCount, 0); assert.equal(marker.advancedGroups, 0);
+});
+
+// Real Origin ownership guard and diagnostic writer in an isolated fixture.
+// Run for advance/guard result ownership changes; unrelated changes may skip.
+// fixture(t) closes its database and removes private files after the test.
+test('rejected Origin ownership emits one advance result', async t => {
+  const f = await fixture(t);
+  await assert.rejects(advance({ ...f.settings, group: 'results', token: 'b'.repeat(32), input: {} }, f.deps), { code: 'TOKEN_MISMATCH' });
+  const log = fs.readFileSync(path.join(f.root, 'activity-monitor', 'supervisor-events.jsonl'), 'utf8');
+  const errors = log.trim().split('\n').map(JSON.parse).filter(row => row.event === 'sync_result' && row.status === 'error');
+  assert.deepEqual(errors.map(row => [row.action, row.code]), [['advance', 'TOKEN_MISMATCH']]);
 });

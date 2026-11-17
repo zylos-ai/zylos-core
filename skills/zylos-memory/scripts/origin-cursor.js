@@ -55,7 +55,7 @@ export async function advance({ group, input, ...settings }, deps = {}) {
         try { updateOriginRound(scope, marker, { error: true }); } catch { /* Keep the protected operation outcome. */ }
         throw error;
       }
-    });
+    }, { recordFailure: false });
   });
 }
 if (isMain(import.meta.url)) await runCli(async () => {

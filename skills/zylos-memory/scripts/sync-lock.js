@@ -5,9 +5,6 @@ import { randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { resolveCoreConfigModule } from '../../comm-bridge/scripts/core-config-loader.js';
-import Database from '../../comm-bridge/scripts/sqlite-driver.js';
-import { assertTestDatabasePath } from '../../comm-bridge/scripts/c4-database-path.js';
-import { initializeOriginRound, completeOriginRound } from './origin-round.js';
 import { recordResult, withResult } from './sync-results.js';
 
 export const MARKER_TTL_MS = 1800000;
@@ -99,31 +96,13 @@ export function readMarker(runDir, kind, warn = message => process.stderr.write(
   return { marker: value, reason: null };
 }
 
-// A new session identity alone does not prove the old Sync worker has stopped.
-// Run endings are recorded by the supervisor after stopping/observing the old
-// session absent. Read only: a missing, unreadable or older schema is unknown.
-function holderRunEnded(runDir, runId) {
-  const root = path.resolve(runDir, '../../..');
-  const databasePath = path.join(root, 'comm-bridge', 'c4.db');
-  assertTestDatabasePath(databasePath);
-  let database;
-  try {
-    database = new Database(databasePath, { readonly: true, fileMustExist: true });
-    const row = database.prepare('SELECT run_id FROM run_endings WHERE session_group=?').get(path.basename(runDir));
-    return row?.run_id === runId;
-  } catch { return false; }
-  finally { database?.close(); }
-}
-
-export function readSyncMarker({ runDir, kind, currentRunId }, { now = Date.now, warn, runEnded = holderRunEnded } = {}) {
+export function readSyncMarker({ runDir, kind, currentRunId }, { now = Date.now, warn } = {}) {
   const { marker, reason } = readMarker(runDir, kind, warn);
   if (!marker) return { held: false, stale: false, runId: null, expiresAt: null, reason };
   const expired = now() >= marker.expiresAt;
-  const changed = marker.runId !== currentRunId;
-  const ended = changed && runEnded(runDir, marker.runId) === true;
-  const stale = expired || ended;
+  const stale = marker.runId !== currentRunId || expired;
   return { held: !stale, stale, runId: marker.runId, expiresAt: marker.expiresAt,
-    reason: ended ? 'run_ended' : expired ? 'expired' : 'held' };
+    reason: marker.runId !== currentRunId ? 'run_changed' : expired ? 'expired' : 'held' };
 }
 
 export async function memoryScope(env = process.env) {
@@ -179,7 +158,7 @@ async function acquireMarker({ kind, env = process.env, waitMs }, { currentRunId
     const token = randomBytes(16).toString('hex');
     const startedAt = now();
     const marker = { runId: scope.runId, kind, token, startedAt, expiresAt: startedAt + MARKER_TTL_MS,
-      ...(kind === 'origin' ? initializeOriginRound(scope.root, env) : {}) };
+      ...(kind === 'origin' ? (await import('./origin-round.js')).initializeOriginRound(scope.root, env) : {}) };
     const target = markerPath(scope.runDir, kind);
     const temp = `${target}.${token}.tmp`;
     fs.writeFileSync(temp, JSON.stringify(marker) + '\n', { mode: 0o600, flag: 'wx' });
@@ -199,7 +178,7 @@ async function releaseMarker({ kind, token, env = process.env, waitMs }) {
   return withMemoryLock(scope.runDir, async () => {
     const { marker } = readMarker(scope.runDir, kind);
     if (marker?.token === token) {
-      if (kind === 'origin') await completeOriginRound(scope, marker, env);
+      if (kind === 'origin') await (await import('./origin-round.js')).completeOriginRound(scope, marker, env);
       fs.unlinkSync(markerPath(scope.runDir, kind));
     }
   }, { waitMs });
@@ -212,8 +191,10 @@ export function requireSyncToken(token) {
   }
 }
 
-/** All guarded mutations check ownership and execute in the same F8 section. */
-export async function guard(settings, action) {
+/** All guarded mutations check ownership while holding the same file lock. */
+export async function guard(settings, action, { recordFailure = true } = {}) {
+  // Named operations log their own failures; standalone guards log here.
+  if (!recordFailure) return guardMarker(settings, action);
   return withResult(settings, 'guard', () => guardMarker(settings, action));
 }
 

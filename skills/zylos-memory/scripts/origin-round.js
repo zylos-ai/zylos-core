@@ -9,7 +9,7 @@ export function initializeOriginRound(root, env = process.env) {
   return { rawQuota: parseSupervisorConfiguration(config, env).originSyncThreshold,
     processedCount: 0, advancedGroups: 0, errorCount: 0 };
 }
-// Called only inside the same F8 guard that protects the cursor mutation.
+// Called only inside the same ownership lock that protects the cursor mutation.
 export function updateOriginRound(scope, marker, { count = 0, advanced = false, error = false } = {}) {
   const next = { ...initializeOriginRound(scope.root), ...marker,
     processedCount: (marker.processedCount || 0) + count,

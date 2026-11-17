@@ -112,3 +112,29 @@ test('failed recovery observation retries retained evidence on the next poll', a
   f.db.getControlById = get;
   assert.equal((await f.inspect(observer)).find(row => row.type === 'control_timeout').controlId, 1);
 });
+
+// Run for timeout recovery/acknowledgment changes; skip unrelated UI or prompts.
+// These cases use the fixture's private event log and in-memory database only.
+test('restart does not replay delivered or rate limited timeout alerts but retains new failures', async t => {
+  const f = fixture(t);
+  for (const [controlId, suppressed] of [[1, false], [2, true]]) {
+    f.trigger({ controlId }); f.controls.set(controlId, { status: 'timeout' });
+    f.event({ event: 'sync_alert', type: 'control_timeout', kind: 'group', scope: 'origin', controlId, suppressed });
+  }
+  let observer = f.create();
+  assert.equal((await f.inspect(observer)).filter(row => row.type === 'control_timeout').length, 0);
+  observer.close(); observer = f.create();
+  assert.equal((await f.inspect(observer)).filter(row => row.type === 'control_timeout').length, 0);
+  f.trigger({ controlId: 3 }); f.controls.set(3, { status: 'timeout' });
+  assert.equal((await f.inspect(observer)).find(row => row.type === 'control_timeout').controlId, 3);
+  // A lower-ID control may finish later; an ID watermark must not hide it.
+  f.trigger({ controlId: 0 }); f.controls.set(0, { status: 'timeout' });
+  assert.ok((await f.inspect(observer)).some(row => row.type === 'control_timeout' && row.controlId === 0));
+});
+
+test('maximum lag alerts only for scopes without a live session', async t => {
+  const f = fixture(t), observer = f.create(); f.scopes = ['active', 'inactive'];
+  for (const scope of f.scopes) f.ranges.set(scope, { count: 1, firstAt: f.now() - 21600001 });
+  const alerts = await observer.inspect(f.db, { mode: 'multi', activeScopes: ['active'] });
+  assert.deepEqual(alerts.map(row => [row.type, row.scope]), [['backlog', 'inactive']]);
+});
