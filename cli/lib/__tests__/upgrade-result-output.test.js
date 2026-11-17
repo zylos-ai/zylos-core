@@ -82,6 +82,19 @@ test('human success reports Dashboard follow-up instructions', () => {
   assert.equal(JSON.stringify(result), before);
 });
 
+test('only completed and attempted rollback reports the restored source version', () => {
+  const result = {success:false, from:'1.0.0-beta.11', error:'Target installation failed.',
+    rollback:{attempted:true, completed:true}};
+  const before = JSON.stringify(result);
+  assert.match(capture(result, {jsonOutput:false}).stderr, /Rollback completed\. zylos-core has been restored to 1\.0\.0-beta\.11\./);
+  for (const rollback of [{attempted:true, completed:false}, {attempted:false, completed:true}, {performed:false}]) {
+    assert.doesNotMatch(capture({...result, rollback}, {jsonOutput:false}).stderr, /has been restored/);
+  }
+  assert.doesNotMatch(capture({...result, from:undefined}, {jsonOutput:false}).stderr, /has been restored/);
+  assert.equal(capture(result).stdout, before + '\n');
+  assert.equal(JSON.stringify(result), before);
+});
+
 for (const success of [true, false]) test(`explicit and legacy JSON preserve every result field (${success})`, () => {
   const result = { action: 'self_upgrade', success, from: '1.0.0', to: success ? '1.1.0' : null,
     code: success ? undefined : 'UPGRADE_FAILED', error: success ? undefined : 'Installation failed.',

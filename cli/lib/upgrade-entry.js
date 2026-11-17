@@ -9,7 +9,10 @@ import { validateUpgradeHandoff, upgradeFailureCode, upgradeFailureMessage } fro
 import { probeCoreDbVersions, preflightCoreDbUpgrade, rehearseCoreDbUpgrade, inspectFirstDashboardTakeover, inspectCoreManagesDashboardDb, assertDashboardUninstalled } from './core-db-backup.js';
 import { beginUpgrade, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { saveOriginalPackage } from './upgrade-package.js';
-import { recoveryNext } from './upgrade-discovery.js';
+import { recoveryNext, runningUpgradeNotice } from './upgrade-discovery.js';
+
+// Keep local presentation context out of the legacy JSON result protocol.
+const humanResults = new WeakMap();
 
 class UpgradeNpmPrefixError extends Error {
   code = 'UNSUPPORTED_INSTALL_LAYOUT';
@@ -87,8 +90,9 @@ export function inspectUpgradeSource(input, deps = {}) {
   }
   for(const name of declaredSkills) {
     try {
-      const stat=fs.lstatSync(path.join(skillsDir,name,'node_modules'));
-      if(!stat.isDirectory())throw Object.assign(Error('Installed core skill node_modules must be a real directory or absent: '+name),{code:'INVALID_CORE_DEPENDENCIES'});
+      const dependencyPath=path.join(skillsDir,name,'node_modules');
+      const stat=fs.lstatSync(dependencyPath);
+      if(!stat.isDirectory())throw Object.assign(Error('Installed core skill node_modules must be a real directory or absent: '+name),{code:'INVALID_CORE_DEPENDENCIES',dependencyPath});
     } catch(error) {if(error.code!=='ENOENT')throw error;}
   }
   const firstTakeover = inspectFirstDashboardTakeover(coreDir);
@@ -131,12 +135,18 @@ async function finalizeTarget(ctx) {
 
 export async function runUpgradeEntry(input, deps = {}) {
   let ctx;
+  let running;
+  const present = (result, extra = {}) => {
+    humanResults.set(result, {from:input?.fromVersion, running, ...extra});
+    return result;
+  };
   try {
     validateUpgradeHandoff(input);
     if (!fs.existsSync(input.zylosDir)) throw Object.assign(Error('Zylos deployment directory is missing. Initialize this deployment before upgrading.'), {code:'ZYLOS_NOT_INITIALIZED'});
     const m = deps.maintenance ?? maintenance;
     const prior = m.discover(input.zylosDir);
     if (prior.candidates.length || prior.diagnostics.length || prior.marker) {
+      running = runningUpgradeNotice(input.zylosDir, {maintenance:m, found:prior});
       throw Object.assign(new Error('Unfinished upgrade requires recovery before another installation.'), {code:'UPGRADE_RECOVERY_REQUIRED', recovery_required:true,
         next:recoveryNext(prior, m, 'Run zylos recovery status, then zylos recovery resume before upgrading.')});
     }
@@ -151,37 +161,45 @@ export async function runUpgradeEntry(input, deps = {}) {
     const result = await (deps.finalize ?? finalizeTarget)(ctx);
     if (result.success === false) {
       const rollback = (deps.recover ?? recovery)(ctx);
-      return {...result, code:upgradeFailureCode(result), error:upgradeFailureMessage({message:result.error || 'Upgrade finalization failed.'}),
-        rollback:{...rollback, performed:rollback.attempted}, recovery_required:rollback.recovery_required};
+      return present({...result, code:upgradeFailureCode(result), error:upgradeFailureMessage({message:result.error || 'Upgrade finalization failed.'}),
+        rollback:{...rollback, performed:rollback.attempted}, recovery_required:rollback.recovery_required});
     }
     ctx.releaseControl?.();
     ctx.releaseControl = null;
     return result;
   } catch (error) {
     const rollback = ctx?.transactionDir ? (deps.recover ?? recovery)(ctx) : {attempted:false, completed:false, performed:false};
-    return {action:'self_upgrade', success:false, code:upgradeFailureCode(error),
+    return present({action:'self_upgrade', success:false, code:upgradeFailureCode(error),
       error:error instanceof UpgradeNpmPrefixError ? error.message : upgradeFailureMessage(error),
       next:error.next, persisted:error.persisted || [], upgradeProtected:!!ctx?.upgradeProtected,
       transactionDir:ctx?.transactionDir, rollback:{...rollback, performed:!!rollback.attempted},
-      recovery_required:rollback.recovery_required || error.recovery_required || false};
+      recovery_required:rollback.recovery_required || error.recovery_required || false}, {dependencyPath:error.dependencyPath});
   }
 }
 
 // Missing preference preserves the stdout protocol of installed older callers.
 export function outputUpgradeResult(result, { jsonOutput = true } = {}, output = process) {
   if (!jsonOutput) {
+    const human = humanResults.get(result) || {};
     // Older previews may leave the changelog's final line unterminated.
     output.stdout.write('\n');
     if (result.success) output.stdout.write(`zylos-core upgraded: ${result.from} → ${result.to}.\n`);
     else {
-      output.stderr.write(`Error: ${result.error || 'Core upgrade failed.'}\n`);
+      output.stderr.write(`Error: ${human.running?.error || result.error || 'Core upgrade failed.'}\n`);
+      const from = result.from || human.from;
+      if (result.rollback?.completed === true && (result.rollback.attempted || result.rollback.performed) && from) {
+        output.stderr.write(`Rollback completed. zylos-core has been restored to ${from}.\n`);
+      }
+      if (human.dependencyPath) output.stderr.write(`Dependency path: ${human.dependencyPath}\n`);
     }
-    if (result.recovery_required) {
+    if (result.recovery_required && !human.running) {
       const rollbackNotice = result.rollback?.completed === false && (result.rollback.attempted || result.rollback.recovery_required)
         ? 'Rollback did not complete. ' : '';
       output.stderr.write(`Upgrade warning: ${rollbackNotice}Upgrade is blocked until recovery completes.\n`);
     }
-    const next = result.next || (result.recovery_required ? 'Run zylos recovery status, then zylos recovery resume before upgrading.' : null);
+    const next = human.running?.next || (human.dependencyPath
+      ? 'Replace the invalid core skill node_modules entry with a real dependency directory, or move it aside, then retry the upgrade.'
+      : result.next || (result.recovery_required ? 'Run zylos recovery status, then zylos recovery resume before upgrading.' : null));
     if (next) output.stderr.write(`Next: ${next}\n`);
   }
   for(const warning of result.serviceWarnings || []) output.stderr.write(`Service warning: ${warning}\n`);
