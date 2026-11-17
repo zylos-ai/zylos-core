@@ -476,6 +476,7 @@ describe('c4-receive option manifest', () => {
     '--content': { value: '--literal-content', field: 'content', expected: '--literal-content' },
     '--session-group': { value: 'team', field: 'session_group', expected: 'manifest-channel:team' },
     '--core-source': { value: 'scheduler', field: 'status', expected: 'pending' },
+    '--task-name': { value: 'Nightly backup', field: 'task_name', expected: 'Nightly backup' },
   };
   const manifest = JSON.parse(fs.readFileSync(new URL('../c4-receive-options.json', import.meta.url), 'utf8'));
   // Boundary: the manifest lists exactly the options this receiver handles;

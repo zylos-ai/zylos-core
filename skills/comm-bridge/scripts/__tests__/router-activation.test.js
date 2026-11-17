@@ -93,6 +93,7 @@ test('NAME_CONFLICT requeues without retry and startup control invalidation prec
   const router = f.create(); await router.initialize(); await f.rounds(2);
   assert.equal(f.row(row.id).status, 'pending'); assert.equal(f.row(row.id).retry_count, 0);
   assert.ok(f.events.some(x => x.event === 'launch_name_conflict'));
+  assert.equal(f.events.some(x => x.event === 'session_launch_failed'), false);
 });
 
 test('branch validation rejects missing, forbidden, wrong units and mismatched identity', () => {

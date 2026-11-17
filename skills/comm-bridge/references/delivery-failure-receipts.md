@@ -32,11 +32,15 @@ Scheduler handoff supplies `--core-source scheduler` and `--task-name`. C4
 persists nullable TEXT conversations.core_source and task_name in the
 unreleased 4→5 migration. Scheduler alerts name the task, with an unnamed-task
 fallback, and include the original message #id for diagnosis. User alerts identify channel+endpoint and message #id. Both provide complete Chinese and English sections containing target group,
-source channel/chat and fixed failure classification. Each section ends by
+source channel/chat (labelled `Source chat`) and fixed failure classification.
+Both sections use the configured status-notice `[brand]` prefix with the same
+validated `Zylos` fallback as internal receipts. Each section ends by
 asking whether the owner wants an investigation and can reply directly to the
 alert: “需要我排查原因吗？需要的话请直接回复这条消息。” Bodies and arbitrary exception
 text are never copied. Historical rows have NULL source and use user wording;
-a body prefix never establishes scheduler provenance.
+a body prefix never establishes scheduler provenance. These two wording columns
+are excluded from public history projections; the dedicated read-only diagnosis
+command exposes the bounded task name and classified source when needed.
 
 The sender reuses the existing SQLite cooldown/admission mechanism, keyed by
 target session group and fixed reason. Different messages sharing that key

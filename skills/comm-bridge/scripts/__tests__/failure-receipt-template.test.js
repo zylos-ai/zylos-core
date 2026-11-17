@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createTestEnvironment } from '../../../../scripts/test-environment.js';
 
 const environment = createTestEnvironment();
-const { messageForFailureReceipt } = await import('../failure-receipt-template.js');
+const { messageForFailureReceipt, messageForFailureAlert } = await import('../failure-receipt-template.js');
 const { CONFIG_FILE } = await import('../local-config.js');
 after(() => environment.cleanup());
 
@@ -35,4 +35,15 @@ test('internal exhausted delivery verification describes uncertainty rather than
   assert.equal(message.includes('没有送达'), false);
   assert.equal(message.includes('was not delivered'), false);
   assert.match(messageForFailureReceipt(record, {}), /没有送达/);
+});
+
+test('owner failure alert uses the shared configured brand and safe default', () => {
+  const alert = { ...record, channel: 'telegram', endpoint_id: 'source' };
+  assert.match(messageForFailureAlert(alert), /^\[Factory\]/);
+  for (const brand of ['', 'unsafe\nbrand', 'unsafe\tbrand', 'x'.repeat(81), 42]) {
+    assert.match(messageForFailureAlert(alert, { brand }), /^\[Zylos\]/);
+  }
+  const message = messageForFailureAlert(alert, { brand: '  Factory  ' });
+  assert.match(message, /^\[Factory\]/);
+  assert.match(message, /\n\[Factory\] User message/);
 });

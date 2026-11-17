@@ -110,18 +110,18 @@ test('failure alert has complete fixed scheduler and user text without message o
     session_group: 'telegram:target', channel: 'telegram', endpoint_id: 'target-chat',
     content: 'SECRET original body', error: 'SECRET exception' };
   assert.equal(messageForFailureAlert(record),
-    '定时任务「未命名定时任务 / unnamed scheduled task」消息 #51 未送达：会话启动失败。\n' +
-    '目标会话组：telegram:target\n目标聊天：telegram:target-chat\n' +
+    '[Zylos] 定时任务「未命名定时任务 / unnamed scheduled task」消息 #51 未送达：会话启动失败。\n' +
+    '目标会话组：telegram:target\n来源聊天：telegram:target-chat\n' +
     '需要我排查原因吗？需要的话请直接回复这条消息。\n\n' +
-    'Scheduled task "未命名定时任务 / unnamed scheduled task", message #51 was not delivered: session startup failed.\n' +
-    'Target session group: telegram:target\nTarget chat: telegram:target-chat\n' +
+    '[Zylos] Scheduled task "未命名定时任务 / unnamed scheduled task", message #51 was not delivered: session startup failed.\n' +
+    'Target session group: telegram:target\nSource chat: telegram:target-chat\n' +
     'Would you like me to investigate? If so, please reply directly to this message.');
   assert.equal(messageForFailureAlert({ ...record, core_source: null }),
-    '用户消息 #51 未送达：会话启动失败。\n' +
-    '目标会话组：telegram:target\n目标聊天：telegram:target-chat\n' +
+    '[Zylos] 用户消息 #51 未送达：会话启动失败。\n' +
+    '目标会话组：telegram:target\n来源聊天：telegram:target-chat\n' +
     '需要我排查原因吗？需要的话请直接回复这条消息。\n\n' +
-    'User message #51 was not delivered: session startup failed.\n' +
-    'Target session group: telegram:target\nTarget chat: telegram:target-chat\n' +
+    '[Zylos] User message #51 was not delivered: session startup failed.\n' +
+    'Target session group: telegram:target\nSource chat: telegram:target-chat\n' +
     'Would you like me to investigate? If so, please reply directly to this message.');
 });
 
@@ -157,4 +157,28 @@ test('failed owner and Origin sends remain queued until a successful bounded ret
   assert.deepEqual(await f.drain(), { attempted: 1, settled: 1, pending: 0 });
   assert.equal(targets.length, 3);
   assert.equal(f.db.prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(row.id).state, 'sent');
+});
+
+// Real store and drainer with an injected clock and local owner sender. Run
+// when receipt eligibility, backoff or expiry changes; no runtime is launched.
+test('internal failure receipts never enter the owner alert retry or expiry drain', async t => {
+  const f = setup(t);
+  f.store.insertConversation('in', 'chat', 'A', 'seed', { groupName: 'a' });
+  f.store.insertConversation('in', 'chat', 'B', 'seed', { groupName: 'b' });
+  const row = f.store.insertInternalMessage('chat:a', 'chat:b', 'private original body').inRow;
+  f.fail(row);
+  const snapshot = () => f.db.prepare('SELECT * FROM failure_receipts WHERE conversation_id=?').get(row.id);
+  const before = snapshot();
+  assert.equal(before.state, 'queued');
+  assert.ok(before.receipt_conversation_id);
+  const receipt = () => f.db.prepare('SELECT * FROM conversations WHERE id=?').get(before.receipt_conversation_id);
+  const receiptBefore = receipt();
+  for (const elapsed of [31000, 569000]) {
+    f.advance(elapsed);
+    assert.deepEqual(await f.drain(), { attempted: 0, settled: 0, pending: 0 });
+    assert.equal(f.alerts.length, 0);
+    assert.deepEqual(snapshot(), before);
+    assert.deepEqual(receipt(), receiptBefore);
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM failure_receipts').get().n, 1);
+  }
 });

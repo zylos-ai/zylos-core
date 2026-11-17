@@ -285,7 +285,8 @@ test('global/group reads preserve scopes, checkpoint metadata and truncation upp
   const c = store.insertConversation('out', 'foo', 'e', 'c');
   store.insertConversation('in', 'foo', 'e', 'pending');
   store.insertConversation('out', 'bar', 'e', 'other');
-  assert.deepEqual(query.unsummarized({ group: 'foo', limit: 1 }), { rows: [b], checkpointEnd: a.id, checkpointSummary: 'summary', safeEnd: c.id, upTo: b.id });
+  const { core_source, task_name, ...publicB } = b;
+  assert.deepEqual(query.unsummarized({ group: 'foo', limit: 1 }), { rows: [publicB], checkpointEnd: a.id, checkpointSummary: 'summary', safeEnd: c.id, upTo: b.id });
   assert.deepEqual(query.unsummarized({ group: 'foo' }).rows.map(x => x.id), [b.id, c.id]);
   assert.equal(query.unsummarizedRange().safeEnd, c.id);
   assert.throws(() => query.unsummarizedRange({ group: '*' }), { code: 'SESSION_GROUP_INVALID' });
