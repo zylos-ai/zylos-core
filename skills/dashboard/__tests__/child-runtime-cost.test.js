@@ -6,7 +6,7 @@ import test from 'node:test';
 import Database from 'better-sqlite3';
 import { Store } from '../src/lib/store.js';
 import { CoreLogImporter, childTranscriptMapping } from '../src/lib/core-log-importer.js';
-import { UsageTranscripts } from '../src/lib/collectors/usage-transcripts.js';
+import { UsageTranscripts, groupMainTranscript } from '../src/lib/collectors/usage-transcripts.js';
 import { ConversationCollector } from '../src/lib/collectors/conversation-collector.js';
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
 import { createHistoryScope } from '../src/lib/history/history-scope.js';
@@ -94,8 +94,11 @@ test('child transcripts never become a current or group main transcript', async 
   const file = f.write('.claude/projects/p/child-origin.jsonl', [claudeLine('req-2', 'child-origin')]);
   f.store.insertUsageTranscript({ transcript_path: file, runtime: 'claude', session_group: 'origin', run_id: 'run-1', session_id: 'child-origin', kind: 'child' }, timestamp);
   assert.equal(f.store.currentOriginTranscript('claude', 'run-1'), null);
+  const groupFile = f.write('.claude/projects/p/child-g1.jsonl', [claudeLine('req-3', 'child-g1')]);
+  f.store.insertUsageTranscript({ transcript_path: groupFile, runtime: 'claude', session_group: 'g1', run_id: 'run-1', session_id: 'child-g1', kind: 'child' }, timestamp);
+  assert.equal(groupMainTranscript(f.store.getUsageTranscript(groupFile)), false);
   await f.claude.collect();
-  assert.equal(f.store.queryMetrics({ name: 'usage_event' }).length, 1);
+  assert.deepEqual(f.store.queryMetrics({ name: 'usage_event' }).map(point => point.session_id).sort(), ['child-g1', 'child-origin']);
   assert.equal(f.store.db.prepare("SELECT count(*) AS n FROM runtime_events WHERE event_type = 'assistant_message'").get().n, 0);
 });
 
