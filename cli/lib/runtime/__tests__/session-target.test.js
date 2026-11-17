@@ -66,7 +66,7 @@ test('F3 malformed/mismatched is not READY; snapshots immutable', async t => {
   const good = await observeSessionTarget(options); assert.equal(good.ready,true);
   assert.throws(()=>{good.rawF2.ZYLOS_RUN_ID='evil';},TypeError); assert.throws(()=>{good.f3.startupControlIds.push(1);},TypeError);
 });
-test('configured observation reads identity and guarded environment once', async t => {
+test('configured observation reads identity and validated environment once', async t => {
   const {connection, options} = await fixture(t);
   const command = connection.command.bind(connection), calls = [];
   connection.command = async (argv, settings) => {
@@ -90,7 +90,7 @@ test('first binding adopts the observed server rather than the server at executo
   assert.notEqual(target.serverGeneration, original);
   assert.equal(await revalidateSessionTarget({connection, target}), true);
 });
-test('same socket restart fails its generation guard without replay', async t => {
+test('same socket restart invalidates its read identity without replay', async t => {
   const {connection,tmux,socketPath,options} = await fixture(t);
   const target = await resolveSessionTarget(options); tmux('kill-server');
   await new Promise(resolve=>setTimeout(resolve,100));

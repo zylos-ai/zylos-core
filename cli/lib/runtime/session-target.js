@@ -184,7 +184,7 @@ export async function revalidateSessionTarget({ connection, target, kind = 'pane
   if (!['pane','session'].includes(kind)) throw new TypeError('Invalid target kind');
   let env;
   try {
-    // The bound command guards server generation and object identity atomically.
+    // The read returns server generation and object identity with its payload.
     env = await environment(connection, binding.tmuxSessionId, kind);
   } catch (error) { if (missing(error)) throw tmuxError('TARGET_GONE', 'Bound tmux object disappeared'); throw unavailableCommand(error); }
   if ((env.ZYLOS_RUN_ID || null) !== binding.runId) throw tmuxError('RUNID_MISMATCH', 'Target run ID changed');

@@ -1,6 +1,7 @@
 export default {
   transform: {},
   testPathIgnorePatterns: [
+    '<rootDir>/test/tmux-dashboard-reads.integration.test.js',
     '<rootDir>/test/dashboard-display-browser.test.js',
     '<rootDir>/test/self-upgrade-output.integration.test.js',
     '<rootDir>/test/fleet-attention.integration.test.js',

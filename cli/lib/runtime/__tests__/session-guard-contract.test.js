@@ -50,12 +50,12 @@ async function fixture(t){
   return {dir,tmux,input,flag,calls,options};
 }
 
-for(const position of ['initial','guarded-environment'])test(`hanging ${position} command keeps empty and preserves timeout cause`,async t=>{
+for(const position of ['initial','identity-environment'])test(`hanging ${position} command keeps empty and preserves timeout cause`,async t=>{
   const f=await fixture(t);
   if(position==='initial')await fs.writeFile(f.flag,'1');
   else {
     const source=await fs.readFile(f.options.binary,'utf8');
-    await fs.writeFile(f.options.binary,source.replace(`fs.existsSync(${JSON.stringify(f.flag)})`,`a.includes('if-shell')`));
+    await fs.writeFile(f.options.binary,source.replace(`fs.existsSync(${JSON.stringify(f.flag)})`,`a.includes('show-environment')`));
   }
   const observer=createCoreObserver({tmux:f.options});
   const {store,database}=bindingStore(t,observer);
@@ -63,7 +63,8 @@ for(const position of ['initial','guarded-environment'])test(`hanging ${position
   assert.equal(database.prepare('SELECT count(*) FROM control_queue').pluck().get(),0);
   const calls=(await fs.readFile(f.calls,'utf8')).trim().split('\n').map(JSON.parse);
   assert.equal(calls.some(a=>a.includes('send-keys')||a.includes('paste-buffer')),false);
-  if(position==='guarded-environment')assert.ok(calls.some(a=>a.includes('if-shell')));
+  if(position==='identity-environment')assert.ok(calls.some(a=>a.includes('show-environment')));
+  assert.equal(calls.some(a=>a.includes('if-shell')),false);
 });
 
 test('hanging command and unusable executable remain unknown; no server is absent',async t=>{
@@ -133,13 +134,13 @@ for(const scenario of ['absent','missing-run','timeout'])test(`first-resolution 
   }
 });
 
-test('replacement between atomic identity and first guarded read rejects with zero rows',async t=>{
+test('replacement between atomic identity and first identity read rejects with zero rows',async t=>{
   const f=await fixture(t),replaced=path.join(f.dir,'replaced');
   const beforeGeneration=f.tmux('display-message','-p','#{pid}:#{start_time}');
   const source=`#!${process.execPath}
 const fs=require('node:fs'),cp=require('node:child_process');const a=process.argv.slice(2);
 const invoke=(args)=>cp.spawnSync(${JSON.stringify(actualBinary)},['-u','-S',${JSON.stringify(f.options.socketPath)},...args],{encoding:'utf8'});
-if(a.includes('if-shell')&&!fs.existsSync(${JSON.stringify(replaced)})){
+if(a.includes('show-environment')&&!fs.existsSync(${JSON.stringify(replaced)})){
   invoke(['kill-server']);let result;
   for(let i=0;i<100;i++) {result=invoke(['-f','/dev/null','new-session','-d','-s','keeper','sleep 120']);if(result.status===0)break;Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);}
   if(result.status!==0)process.exit(90);
@@ -198,6 +199,7 @@ test('replacing the bound server blocks old text and keys from the new pane',asy
   f.tmux('-f','/dev/null','new-session','-d','-s','keeper','sleep 120');
   f.tmux('new-session','-d','-s','zylos-group-origin','-e','ZYLOS_RUN_ID=guard-run',`exec cat > '${f.input}'`);
   for(const method of ['sendText','sendKeys'])await assert.rejects(adapter[method]({connection,target,text:'must-not-arrive',keys:['Enter']}),{code:'GENERATION_CHANGED'});
+  await assert.rejects(connection.command(['send-keys','-t',target.paneId,'Enter']),{code:'GENERATION_CHANGED'});
   await delay(25);assert.equal(await fs.readFile(f.input,'utf8'),'');
   // Direct ordinary commands below are a deliberately unsafe test control.
   // Reused IDs demonstrate that the preceding zero-input assertion is useful.

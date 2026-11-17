@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { isolatedTmux } from './isolated-tmux.js';
 import { openTmuxConnection } from '../../cli/lib/runtime/tmux-connection.js';
@@ -7,13 +8,18 @@ import { createSessionReader } from '../../cli/lib/session-state-reader-async.js
 
 export function batchFixture(t) {
   const previous = process.env.ZYLOS_DIR;
-  const f = isolatedTmux(t, { parentDir: '/tmp', prefix: 'batch-', tmuxArgs: ['-f', '/dev/null'] });
+  const f = isolatedTmux(t, { parentDir: os.tmpdir(), prefix: 'batch-', tmuxArgs: ['-f', '/dev/null'] });
   const root = path.join(f.dir, 'zylos');
   fs.mkdirSync(root);
   process.env.ZYLOS_DIR = root;
   t.after(() => { process.env.ZYLOS_DIR = previous; });
-  for (const key of ['HOME', 'PM2_HOME', 'TMPDIR']) {
-    assert(process.env[key]?.startsWith('/tmp/'), `${key} must be runner-isolated`);
+  const realHome = fs.realpathSync(os.userInfo().homedir);
+  for (const [key, value] of Object.entries({ HOME:process.env.HOME, PM2_HOME:process.env.PM2_HOME,
+    TMPDIR:process.env.TMPDIR, ZYLOS_DIR:root, socketDir:f.dir })) {
+    assert(value && path.isAbsolute(value), `${key} must be runner-isolated`);
+    const resolved = fs.existsSync(value) ? fs.realpathSync(value) : path.join(fs.realpathSync(path.dirname(value)), path.basename(value));
+    const relative = path.relative(realHome, resolved);
+    assert(relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative), `${key} must be outside the real home`);
   }
   assert(f.socketPath.startsWith(f.dir + path.sep));
   assert(Buffer.byteLength(f.socketPath) < 90);

@@ -37,7 +37,7 @@ for (const mode of ['nonzero', 'stderr']) test(`guard OK marker takes priority o
   t.after(() => connection.close());
   connection.bindTarget({ serverGeneration: '123:456', tmuxSessionId: '$0', paneId: '%0' });
   await f.set(mode);
-  await assert.rejects(connection.command(['display-message', '-p', 'x']), { code: 'TMUX_COMMAND_FAILED', cause: 'error' });
+  await assert.rejects(connection.command(['send-keys', '-t', '%0', 'Enter']), { code: 'TMUX_COMMAND_FAILED', cause: 'error' });
 });
 
 test('guard marker-looking payload remains data; genuine no-server response means target gone', async t => {
@@ -45,9 +45,9 @@ test('guard marker-looking payload remains data; genuine no-server response mean
   const connection = await openTmuxConnection({ binary: f.binary });
   t.after(() => connection.close());
   connection.bindTarget({ serverGeneration: '123:456', tmuxSessionId: '$0', paneId: '%0' });
-  assert.equal(await connection.command(['capture-pane', '-p', '-t', '%0']), 'ZYLOS_STALE 999:1');
+  assert.equal(await connection.command(['send-keys', '-t', '%0', 'Enter']), 'ZYLOS_STALE 999:1');
   await f.set('absent');
-  await assert.rejects(connection.command(['capture-pane', '-p', '-t', '%0']), { code: 'TARGET_GONE' });
+  await assert.rejects(connection.command(['send-keys', '-t', '%0', 'Enter']), { code: 'TARGET_GONE' });
 });
 
 test('no-server words in a socket path do not turn permission failure into absence', async t => {
