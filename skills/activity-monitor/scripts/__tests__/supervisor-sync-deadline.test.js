@@ -357,3 +357,34 @@ test('definite owner-control enqueue rejection remains pending across restart an
   assert.equal(f.alerts().length, 1);
   assert.equal(f.events('repair_failed').length, 1);
 });
+
+
+// Real observer/incident/C4 queue, isolated fixture; bounded success rounds still
+// leave an overdue range. Run for Origin backlog notification policy changes.
+test('successful Origin rounds still notify overdue backlog once until resolution and recurrence', async t => {
+  const f = observableFixture(t);
+  const range = { count: 27, firstAt: f.now() - 50000000, alertFirstAt: f.now() - 50000000, nonempty: true };
+  for (let i = 0; i < 3; i++) {
+    appendEvent(f.file, { v: 1, ts: f.now(), event: 'sync_result', kind: 'origin', scope: 'origin',
+      action: 'round_complete', status: 'ok', processedCount: 1, advancedGroups: 1 });
+    await f.lifecycle.syncScope(f.scene, 'origin', range, f.context);
+    await f.lifecycle.syncAlerts(f.context);
+    assert.equal(f.lifecycle.d.syncObserver.originResults.at(-1).status, 'ok');
+    f.advance(600001);
+  }
+  const notices = () => f.alerts().filter(row => /type=backlog; kind=origin; scope=origin/.test(row.content));
+  assert.equal(notices().length, 1);
+  assert.match(notices()[0].content, /27 messages remain unsynced/);
+  assert.match(notices()[0].content, /ordinary Origin Sync; backlog remains above the limit/);
+  assert.doesNotMatch(notices()[0].content, /failed because/);
+  assert.match(notices()[0].content, /Action: .*cursor progress and a released Sync lock/);
+  await f.restart(); await f.lifecycle.syncAlerts(f.context);
+  assert.equal(notices().length, 1);
+  await f.lifecycle.syncScope(f.scene, 'origin', { count: 0, firstAt: null, alertFirstAt: null, nonempty: false }, f.context);
+  await f.lifecycle.syncAlerts(f.context);
+  appendEvent(f.file, { v: 1, ts: f.now(), event: 'sync_result', kind: 'origin', scope: 'origin',
+    action: 'round_complete', status: 'ok', processedCount: 1, advancedGroups: 1 });
+  await f.lifecycle.syncScope(f.scene, 'origin', range, f.context);
+  await f.lifecycle.syncAlerts(f.context);
+  assert.equal(notices().length, 2);
+});

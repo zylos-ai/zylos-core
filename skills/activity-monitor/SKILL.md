@@ -633,8 +633,10 @@ state failure; automatic reset would discard notification ownership and permit
 repeated notices. Timeout identities have no retention cutoff, as required by
 the one-control/one-incident contract; their small persistent set grows and is
 rewritten atomically. This change does not add compaction or a recovery policy.
-Origin backlog owner notices still require observed failure evidence; the
-successful-but-lagging Origin case remains pending a separate owner decision.
+Origin backlog owner notices retain their threshold-based behavior, including
+when every bounded Origin round succeeds but backlog remains above the limit.
+Other repair-first notification gates are unchanged. A successful Origin round
+is not described as a failed repair in its backlog notice.
 
 Daily snapshots exclude tmp
 additions and edits, including staged content, while committing deletions of

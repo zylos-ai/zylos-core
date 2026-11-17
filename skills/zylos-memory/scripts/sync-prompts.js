@@ -20,7 +20,10 @@ export const SYNC_BACKLOG_ALERT = (kind, backlog, lag, scope = kind === 'global'
   const action = reason === 'activation_timeout' ? 'Check runtime availability and login, then ask the agent to rerun Sync for this scope.'
     : reason === 'INPUT_CHANGED' ? 'Ask the agent to rerun Sync for this scope once current messages settle.'
     : `Ask the agent to rerun Sync for this scope and verify ${proof}.`;
-  return `Memory Sync alert: type=${type}; kind=${kind}; scope=${scope}. Tell the owner: Issue: ${issue}. Automated repair: ${attempt}; failed because ${reason}. Action: ${action} Do not automatically change Sync parameters.`;
+  const repair = kind === 'origin' && type === 'backlog'
+    ? 'ordinary Origin Sync; backlog remains above the limit'
+    : `${attempt}; failed because ${reason}`;
+  return `Memory Sync alert: type=${type}; kind=${kind}; scope=${scope}. Tell the owner: Issue: ${issue}. Automated repair: ${repair}. Action: ${action} Do not automatically change Sync parameters.`;
 };
 
 export const REFERENCE_REORG_PROMPT = 'Memory reorganization: the old memory/reference/projects.md or decisions.md still exists at its original path. Read the zylos-memory skill references/reference-reorg.md and follow it now. Start one background worker on a cheaper model: it rebuilds pages only for in-progress work listed in state files, then archives both old files unchanged into memory/reference/legacy/. If a reorganization worker you started is still running, do nothing. Do not wait for it.';

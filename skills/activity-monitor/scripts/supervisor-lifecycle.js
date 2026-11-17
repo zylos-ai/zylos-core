@@ -945,13 +945,15 @@ export class SupervisorLifecycle {
       return marker.held && !marker.stale;
     });
     for (const candidate of this.syncBacklogCandidates.values()) {
+      // Origin backlog retains threshold-based notification even when bounded
+      // rounds succeed; successful progress need not drain all pending work.
+      if (candidate.kind === 'origin') { alerts.push(candidate); continue; }
       const trigger = [...this.d.syncObserver.groups.values()].find(row => row.kind === candidate.kind && row.scope === candidate.scope);
-      const origin = candidate.kind === 'origin';
-      const startedAt = origin ? this.d.syncObserver.originTriggers[0] : trigger?.ts;
+      const startedAt = trigger?.ts;
       const scene = context.scenes.find(row => row.sessionGroup === candidate.scope);
       const code = scene && startedAt != null ? latestSyncFailure({ env: this.d.env, scene,
         target: { kind: candidate.kind, scope: candidate.scope }, startedAt }) : null;
-      const failed = origin ? this.d.syncObserver.originResults.at(-1)?.status === 'error' : trigger?.attempts >= 3;
+      const failed = trigger?.attempts >= 3;
       if (code || failed) alerts.push({ ...candidate, ...(code ? { reason: code } : {}) });
     }
     // Scheduling anomalies are engineering evidence, including timeouts owned
