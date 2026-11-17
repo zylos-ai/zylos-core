@@ -149,3 +149,13 @@ test('failed diagnostic metadata read never loses already inserted Sync bookkeep
   assert.equal(f.syncs().length, 1); assert.ok(f.lifecycle.syncSent.has(f.key));
   assert.equal(f.events.filter(row => row.event === 'sync_triggered').length, 1);
 });
+
+
+test('trigger checkpoint baseline precedes a worker publishing during enqueue', async () => {
+  const f = fixture(); f.count = 16; let checkpoint = { id: 4 };
+  f.lifecycle.d.db.getLatestContentCheckpoint = () => checkpoint;
+  const insert = f.lifecycle.d.db.insertControl;
+  f.lifecycle.d.db.insertControl = (...args) => { const result = insert(...args); checkpoint = { id: 5 }; return result; };
+  await f.check();
+  assert.equal(f.events.find(row => row.event === 'sync_triggered').checkpointId, 4);
+});

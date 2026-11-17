@@ -529,11 +529,13 @@ export class SupervisorLifecycle {
       const targetBinding = await this.bindCurrentRun(scene);
       if (!targetBinding) return;
       const now = this.now();
+      const syncKind = prompt === 'PRE_RECLAIM_ORIGIN_SYNC_PROMPT' ? 'origin' : 'group';
+      const checkpointId = prompt === 'PRE_RECLAIM_CHECK_PROMPT' ? null : await this.syncCheckpoint(scene, syncKind);
       const control = await this.d.db.insertControl(this.prompt(prompt), {
         sessionGroup: group, targetBinding, requireIdle: true, appendAckSuffix: true,
         ackDeadlineAt: Math.floor((now + (prompt === 'PRE_RECLAIM_CHECK_PROMPT' ? this.ackTimeoutMs : PRE_RECLAIM_SYNC_ACK_TIMEOUT_MS)) / 1000), createdAt: Math.floor(now / 1000),
       });
-      if (prompt !== 'PRE_RECLAIM_CHECK_PROMPT') await this.recordSyncTrigger(scene, prompt === 'PRE_RECLAIM_ORIGIN_SYNC_PROMPT' ? 'origin' : 'group', ['pre_reclaim'], range, control);
+      if (prompt !== 'PRE_RECLAIM_CHECK_PROMPT') await this.recordSyncTrigger(scene, syncKind, ['pre_reclaim'], range, control, checkpointId);
       intent.controlIds.push(control.id);
     }
     intent.prepared = true;
@@ -615,11 +617,13 @@ export class SupervisorLifecycle {
       if (!await this.beforeWrite(group, context, scene)) { partial = controlIds.length > 0; break; }
       const targetBinding = await this.bindCurrentRun(scene);
       if (!targetBinding) { partial = controlIds.length > 0; break; }
+      const syncKind = prompt === 'PRE_RECLAIM_ORIGIN_SYNC_PROMPT' ? 'origin' : 'group';
+      const checkpointId = prompt === 'PRE_RECLAIM_CHECK_PROMPT' ? null : await this.syncCheckpoint(scene, syncKind);
       const control = await this.d.db.insertControl(this.prompt(prompt), {
         sessionGroup: group, targetBinding, requireIdle: true, appendAckSuffix: true, ackDeadlineAt: Math.floor((now + (prompt === 'PRE_RECLAIM_CHECK_PROMPT' ? this.ackTimeoutMs : PRE_RECLAIM_SYNC_ACK_TIMEOUT_MS)) / 1000),
         createdAt: Math.floor(now / 1000),
       });
-      if (prompt !== 'PRE_RECLAIM_CHECK_PROMPT') await this.recordSyncTrigger(scene, prompt === 'PRE_RECLAIM_ORIGIN_SYNC_PROMPT' ? 'origin' : 'group', ['pre_reclaim'], range, control);
+      if (prompt !== 'PRE_RECLAIM_CHECK_PROMPT') await this.recordSyncTrigger(scene, syncKind, ['pre_reclaim'], range, control, checkpointId);
       controlIds.push(control.id);
     }
     if (controlIds.length) this.ttlPreparation.set(group, { controlIds, runId: scene.runId, at: now, partial });
@@ -819,10 +823,15 @@ export class SupervisorLifecycle {
     await this.syncAlerts(context);
   }
 
-  async recordSyncTrigger(scene, kind, reason, range, control) {
-    let checkpointId = null;
+  async syncCheckpoint(scene, kind) {
     try {
-      if (kind !== 'origin' && this.d.db.getLatestContentCheckpoint) checkpointId = (await this.d.db.getLatestContentCheckpoint(kind === 'global' ? '*' : scene.sessionGroup))?.id ?? null;
+      return kind !== 'origin' && this.d.db.getLatestContentCheckpoint
+        ? (await this.d.db.getLatestContentCheckpoint(kind === 'global' ? '*' : scene.sessionGroup))?.id ?? null : null;
+    } catch (cause) { this.d.reportError?.(cause, { phase: 'sync-trigger-metadata' }); return null; }
+  }
+
+  async recordSyncTrigger(scene, kind, reason, range, control, checkpointId) {
+    try {
       if (kind === 'origin') {
         const backlog = await this.d.db.getOriginSyncBacklog();
         const times = backlog.groups.flatMap(row => [row.firstAt, row.firstCheckpointAt]).filter(value => value != null).map(activityTime);
@@ -912,6 +921,7 @@ export class SupervisorLifecycle {
     if (!marker || typeof marker.held !== 'boolean' || typeof marker.stale !== 'boolean') throw error('INVALID_OBSERVATION', 'Invalid Sync marker result');
     if (marker.held && !marker.stale) return;
     if (!await this.beforeWrite(modeOf(context) === 'single' ? null : scene.sessionGroup, context, kind === 'origin' ? undefined : scene)) return;
+    const checkpointId = await this.syncCheckpoint(scene, kind);
     const control = await this.d.db.insertControl(this.prompt(kind === 'origin' ? 'ORIGIN_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT'), {
       sessionGroup: modeOf(context) === 'single' ? null : scene.sessionGroup, priority: 2, appendAckSuffix: false,
       ...(kind === 'origin' ? {} : { ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000), createdAt: Math.floor(now / 1000) }),
@@ -922,7 +932,7 @@ export class SupervisorLifecycle {
     if (kind !== 'origin' && this.syncRuns.get(key) !== scene.runId && range.inherited === true) reason.push('inherited');
     if (kind !== 'origin' && rotationThreshold !== null && finite(scene.usagePercent) && scene.usagePercent >= 0.8 * rotationThreshold) reason.push('context');
     if (catchingUp) reason.push('catch_up');
-    await this.recordSyncTrigger(scene, kind, reason, range, control);
+    await this.recordSyncTrigger(scene, kind, reason, range, control, checkpointId);
     this.syncSent.set(key, now);
     this.syncRuns.set(key, scene.runId);
     if (kind !== 'origin') this.syncProgress.set(key, { n0: range.count, f0: range.firstConversationId, runId: scene.runId });
