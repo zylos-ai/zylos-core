@@ -252,8 +252,14 @@ test('Sync guidance centralizes corrected-call retries and preserves partial wri
   assert.doesNotMatch(sync, /adding `--token` returns|Do not add `--token`/);
   const example = JSON.parse(/```json\n([^\n]+)\n```/.exec(sync)[1]);
   assert.equal(example.op, 'edit');
-  assert.equal(example.token, 'T');
+  assert.equal(example.token, '<token>');
   assert.ok(example.path && example.expected && example.replacement);
+  assert.match(rules, /`PATH_NOT_ALLOWED` for a temporary state file, when the error gives the expected temporary state path: retry with that path under the same two-retry limit/);
+  assert.match(rules, /Other `PATH_NOT_ALLOWED` errors still stop the Sync as required-step failures/);
+  assert.ok(sync.includes('"path":"state.md.<token>.tmp"'));
+  assert.ok(sync.includes('session-groups/<G>/state.md.<token>.tmp'));
+  assert.match(rules, /`<token>` is the exact token value printed by `node ~\/zylos\/\.claude\/skills\/zylos-memory\/scripts\/sync-lock.js acquire`: substitute it into both the filename and the JSON `token` field/);
+  assert.match(rules, /`<G>` is this session's group name/);
 });
 
 test('Sync commands use installed paths listed at the beginning of the procedure', () => {

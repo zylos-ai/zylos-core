@@ -26,6 +26,40 @@ async function fixture(kind, group, sharedRoot) {
 }
 const create = (token, file, replacement = 'content') => ({ op: 'create', path: file, replacement, token });
 
+test('local: temporary state path errors guide group and global retries', async () => {
+  for (const [kind, group, prefix] of [
+    ['group', 'telegram:retry', 'session-groups/telegram:retry/'],
+    ['global', undefined, ''],
+  ]) {
+    const f = await fixture(kind, group);
+    const expected = `${prefix}state.md.${f.token}.tmp`;
+    for (const wrong of [`${prefix}state.md.T.tmp`, `${prefix}state.md.<token>.tmp`,
+      `session-groups/telegram:other/state.md.${f.token}.tmp`]) {
+      const result = await f.editor(create(f.token, wrong));
+      assert.deepEqual(result, { ok: false, code: 'PATH_NOT_ALLOWED',
+        message: `Memory path is not allowed; expected temporary state path: ${expected}` });
+      assert.equal(fs.existsSync(path.join(f.dir, 'memory', wrong)), false);
+      assert.equal(readMarker(f.scope.runDir, kind).marker.token, f.token);
+    }
+    assert.deepEqual(await f.editor(create(f.token, expected)), { ok: true, path: expected, bytes: 7 });
+    assert.equal(fs.readFileSync(path.join(f.dir, 'memory', expected), 'utf8'), 'content');
+  }
+});
+
+test('local: ordinary path rejections and Origin temporary rejections keep their messages', async () => {
+  const group = await fixture('group', 'telegram:denied');
+  const global = await fixture('global');
+  const origin = await fixture('origin', 'origin');
+  for (const [f, target] of [[group, 'reference/preferences.md'], [group, 'state.md'],
+    [group, 'notes/state.md.T.tmp.bak'], [global, 'session-groups/other/state.md'],
+    [origin, 'session-groups/origin/state.md.T.tmp']]) {
+    assert.deepEqual(await f.editor(create(f.token, target)), {
+      ok: false, code: 'PATH_NOT_ALLOWED', message: 'Memory path is not allowed',
+    });
+    assert.equal(fs.existsSync(path.join(f.dir, 'memory', target)), false);
+  }
+});
+
 test('local: group, origin and global use marker-derived target scopes', async () => {
   const group = await fixture('group', 'telegram:g-1');
   const temporary = `session-groups/telegram:g-1/state.md.${group.token}.tmp`;

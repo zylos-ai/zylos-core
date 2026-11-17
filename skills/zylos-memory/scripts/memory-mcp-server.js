@@ -42,6 +42,9 @@ export function createMemoryEditor(env = process.env, { fragment = applyFragment
         };
         const resolved = resolveAllowedMemoryPath({ root: scope.root, path: input.path, allowed: candidate => {
           if (legacy(candidate)) throw memoryError('LEGACY_READ_ONLY', 'Legacy memory paths are read-only');
+          if (marker.kind !== 'origin' && !allowed(candidate) && /(^|\/)state\.md\.[^/]*\.tmp$/.test(candidate)) {
+            throw memoryError('PATH_NOT_ALLOWED', `Memory path is not allowed; expected temporary state path: ${temporary}`);
+          }
           return allowed(candidate);
         } });
         const result = fragment({ target: resolved.target, expected: input.op === 'create' ? null : input.expected,

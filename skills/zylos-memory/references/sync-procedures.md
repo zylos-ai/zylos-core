@@ -53,6 +53,10 @@ These attempts do not fail the required step or release its token:
   existing pages and choose another name or merge through the permitted writer.
 - `STATE_DOCUMENT_INVALID`: correct the token-named temporary state through
   `edit_memory`, then retry commit; the formal state has not been replaced.
+- `PATH_NOT_ALLOWED` for a temporary state file, when the error gives the
+  expected temporary state path: retry with that path under the same two-retry
+  limit. Other `PATH_NOT_ALLOWED` errors still stop the Sync as required-step
+  failures.
 
 This allowance applies only where validation rejected the operation before
 publishing its target. It does not cover migration apply outside this Sync
@@ -104,16 +108,19 @@ After any applicable corrected retries, audit failures are also report-only.
 The immediate-stop token rule above applies throughout every procedure.
 
 For example, an Origin/global worker calls the restricted `edit_memory` tool
-with the actual acquired token substituted for T and an exact fragment read
+with the actual acquired token substituted for `<token>` and an exact fragment read
 from the target (paths are relative to memory):
 
 ```json
-{"op":"edit","path":"reference/projects/example.md","expected":"- **Status:** planning","replacement":"- **Status:** active","token":"T"}
+{"op":"edit","path":"reference/projects/example.md","expected":"- **Status:** planning","replacement":"- **Status:** active","token":"<token>"}
 ```
 
 Do not call a shell writer for this edit. The same token is required when
-creating the temporary state with `{"op":"create","path":"state.md.T.tmp","replacement":"<complete state document>","token":"T"}`;
-Group Sync uses `session-groups/G/state.md.T.tmp` instead.
+creating the temporary state with `{"op":"create","path":"state.md.<token>.tmp","replacement":"<complete state document>","token":"<token>"}`;
+Group Sync uses `session-groups/<G>/state.md.<token>.tmp` instead.
+`<token>` is the exact token value printed by `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-lock.js acquire`: substitute
+it into both the filename and the JSON `token` field. `<G>` is this session's
+group name. Do not keep the placeholders or angle brackets in the call.
 
 Use the restricted tool name discovered and passed by the parent (Claude:
 `mcp__zylos-memory__edit_memory`; Codex: `mcp__zylos_memory__edit_memory`). If
