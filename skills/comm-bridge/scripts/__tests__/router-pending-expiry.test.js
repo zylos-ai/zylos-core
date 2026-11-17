@@ -1,9 +1,9 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { fixture } from './c4-v2-test-helpers.js';
 import { createTestEnvironment } from '../../../../scripts/test-environment.js';
 const environment = createTestEnvironment();
+const { fixture } = await import('./c4-v2-test-helpers.js');
 const cooldownDb = await import('../c4-db.js');
 const { createStatusNoticeSender } = await import('../c4-status-notice.js');
 const { createFailureReceiptDrainer } = await import('../c4-failure-receipts.js');
