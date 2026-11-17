@@ -10,6 +10,7 @@ import { createStore } from '../../skills/comm-bridge/scripts/c4-v2-store.js';
 import { requestRelease, deferReclaim } from '../../skills/activity-monitor/scripts/supervisor-request.js';
 import { tmuxNameForGroup, supervisorDiagnosticPath } from '../../cli/lib/session-group-paths.js';
 import { PRE_RECLAIM_SYNC_PROMPT } from '../../skills/zylos-memory/scripts/sync-prompts.js';
+import { parseStateHeader, renderStateSkeleton } from '../../skills/zylos-memory/scripts/state-format.js';
 import { PRE_RECLAIM_CHECK_PROMPT } from '../../skills/activity-monitor/scripts/reclaim-prompts.js';
 const Database = createRequire(new URL('../../skills/comm-bridge/package.json', import.meta.url))('better-sqlite3');
 const [socketPath, binary, group, scenario] = process.argv.slice(2);
@@ -32,7 +33,15 @@ try {
     tmux('set-environment', '-t', tmuxNameForGroup(group), 'ZYLOS_SESSION_GROUP', group);
     fs.renameSync(path.join(root, 'activity-monitor/session-groups/origin'), path.join(root, 'activity-monitor/session-groups', group));
     db.insertConversation('out', 'telegram', 'test-chat', 'completed result', { groupName: 'release' });
-    db.createCheckpoint(group, db.getDeliveredFrontier(group), 'already recorded');
+    const checkpoint = db.createCheckpoint(group, db.getDeliveredFrontier(group), 'already recorded');
+    // This fixture represents a completed Sync, including its published state.
+    // Keep all control assertions strict so unrelated alert pollution is visible.
+    const memoryDir = path.join(root, 'memory/session-groups', group);
+    fs.mkdirSync(memoryDir, { recursive: true });
+    const state = renderStateSkeleton({ scope: group, syncedAt: new Date(now).toISOString() })
+      .replace('coverage= |', `coverage=${checkpoint.end_conversation_id} |`);
+    fs.writeFileSync(path.join(memoryDir, 'state.md'), state);
+    assert.equal(parseStateHeader(state, { scope: group }).coverage, checkpoint.end_conversation_id);
     assert.equal(db.adoptSlot(group, { runId: 'run-1' }).adopted, true);
   }
   const initial = await scenes.observeGroup(group);

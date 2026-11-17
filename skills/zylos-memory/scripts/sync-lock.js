@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { resolveCoreConfigModule } from '../../comm-bridge/scripts/core-config-loader.js';
-import { recordResult, withResult } from './sync-results.js';
+import { withResult } from './sync-results.js';
 
 export const MARKER_TTL_MS = 1800000;
 import { helpRequested, memoryError, reportMemoryError, isMain, options, runCli } from './sync-cli.js';
@@ -139,11 +139,7 @@ export async function readCurrentRunId(scope, { tmux } = {}) {
 }
 
 export async function acquire(settings, deps = {}) {
-  return withResult(settings, 'acquire', async () => {
-    const token = await acquireMarker(settings, deps);
-    await recordResult({ action: 'acquire', status: 'success' }, settings);
-    return token;
-  });
+  return withResult(settings, 'acquire', () => acquireMarker(settings, deps));
 }
 
 async function acquireMarker({ kind, env = process.env, waitMs }, { currentRunId = readCurrentRunId, now = Date.now } = {}) {

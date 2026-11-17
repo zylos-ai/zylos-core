@@ -167,7 +167,7 @@ export async function commit({ input, ...settings }, deps = {}) {
       const latest = database.getLatestContentCheckpoint(scope);
       if (!latest || latest.end_conversation_id !== header.coverage) throw memoryError('INPUT_CHANGED', 'State coverage must match the completed checkpoint');
       // Reuse the receipt verifier's read; diagnostics never add a database read.
-      const coveredIds = coveredRows.filter(row => row.status === 'delivered' && (scope === '*' || row.session_group === scope)).map(row => row.id).sort((a, b) => a - b);
+      const coveredIds = coveredRows.filter(row => (row.direction === 'out' || row.status === 'delivered') && (scope === '*' || row.session_group === scope)).map(row => row.id).sort((a, b) => a - b);
       const count = coveredIds.length;
       const syncedAt = new Date((deps.now || Date.now)()).toISOString();
       const published = combined

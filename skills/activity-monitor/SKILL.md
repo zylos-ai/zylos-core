@@ -550,5 +550,6 @@ timeouts remain eligible.
 Sync marker expiration retains the baseline rule: a holder from a different
 run is immediately stale; a same-run marker retains its existing 30-minute
 expiry. Same-run worker failure handling is deferred until result diagnostics
-provide more evidence. Daily memory snapshots exclude `*.tmp`, including files
-already staged before the snapshot.
+provide more evidence. Daily memory snapshots exclude additions and edits to `*.tmp`, including
+content already staged before the snapshot. Deletions of tracked temporary
+files are committed so old accidental snapshots can be cleaned up.

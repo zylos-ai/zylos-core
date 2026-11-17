@@ -3,7 +3,8 @@
  * Daily memory commit helper.
  *
  * Creates a local commit in ~/zylos/memory/ if changes exist. Temporary *.tmp
- * files are excluded, including files already staged. Files larger than
+ * additions and edits are excluded, including files already staged; deletions
+ * of tracked temporary files are committed. Files larger than
  * MAX_FILE_BYTES are left out of the commit and listed in the output: git
  * streams files above core.bigFileThreshold (512 MB) into a pack while adding
  * them, and a failed add leaves that partial pack behind.
@@ -119,6 +120,21 @@ function main() {
     const excluded = [...oversized.map(file => file.path), ...paths.filter(file => file.endsWith('.tmp'))];
     if (excluded.length > 0) {
       execFileSync('git', ['reset', '-q', '--', ...new Set(excluded.map(file => `:(literal)${file}`))], {
+        cwd: MEMORY_DIR,
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+    }
+
+    // Resetting excluded paths also restores staged tmp deletions in the index.
+    // Stage only tracked paths missing from disk, so cleanup can remove old tmp
+    // blobs without adding or updating any temporary file content.
+    const deletedTmp = execFileSync('git', ['ls-files', '--deleted', '-z'], {
+      cwd: MEMORY_DIR,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    }).split('\0').filter(file => file.endsWith('.tmp'));
+    if (deletedTmp.length > 0) {
+      execFileSync('git', ['add', '-u', '--', ...deletedTmp.map(file => `:(literal)${file}`)], {
         cwd: MEMORY_DIR,
         stdio: ['ignore', 'pipe', 'pipe']
       });

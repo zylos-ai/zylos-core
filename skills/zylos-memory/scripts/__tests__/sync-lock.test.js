@@ -153,7 +153,7 @@ test('a changed run immediately expires its marker without consulting a database
   assert.equal(fs.existsSync(path.join(env.ZYLOS_DIR, 'comm-bridge')), false);
 });
 
-test('acquisition and rejected malformed-token guards emit metadata without tokens', async t => {
+test('only rejected acquisition and malformed-token guards emit metadata without tokens', async t => {
   const env = fixture('lark:oc_log');
   t.after(() => fs.rmSync(env.ZYLOS_DIR, { recursive: true, force: true }));
   const token = await acquire({ kind: 'group', env }, { currentRunId });
@@ -161,9 +161,9 @@ test('acquisition and rejected malformed-token guards emit metadata without toke
   await assert.rejects(guard({ kind: 'group', env, token: 'bad-token' }, () => assert.fail('invalid guard ran')), { code: 'INVALID_INPUT' });
   const text = fs.readFileSync(path.join(env.ZYLOS_DIR, 'activity-monitor', 'supervisor-events.jsonl'), 'utf8');
   const events = text.trim().split('\n').map(line => JSON.parse(line)).filter(row => row.event === 'sync_result');
-  assert.ok(events.some(row => row.action === 'acquire' && row.status === 'success'));
-  assert.ok(events.some(row => row.action === 'acquire' && row.code === 'SYNC_BUSY'));
-  assert.ok(events.some(row => row.action === 'guard' && row.code === 'INVALID_INPUT'));
+  assert.deepEqual(events.map(row => [row.action, row.status, row.code]), [
+    ['acquire', 'error', 'SYNC_BUSY'], ['guard', 'error', 'INVALID_INPUT'],
+  ]);
   assert.equal(text.includes(token), false);
   assert.equal(text.includes('bad-token'), false);
 });

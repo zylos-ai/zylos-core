@@ -16,7 +16,9 @@ import { readyTmuxTarget } from './helpers/ready-tmux-target.js';
 // waits for idle and child completion. Real socket notifications prove that new
 // conversation/control delivery cancels the unfenced intent. Supervisor recreation
 // proves that this intent is in memory only; ordinary TTL remains the fallback.
-// Run for release admission, lifecycle, ending/slot or Sync-order changes.
+// Run for release admission, lifecycle, ending/slot, Sync-order, or Sync alert
+// changes; unrelated UI and reporting-only changes may skip. The completed Sync
+// fixture publishes matching state so all-control assertions remain strict.
 // The official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR. Every case owns a
 // private database, socket, named native sleeper runtime and worker. Cleanup
 // waits for or kills the worker, closes SQLite and kills only its tmux server.
