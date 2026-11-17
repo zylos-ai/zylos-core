@@ -6,10 +6,10 @@ const root = process.env.UPGRADE_ENTRY_FIXTURE_ROOT;
 const jsonOutput = process.argv[2] === 'json';
 function runTarget(input) {
   return runDownloadedUpgrade(input, { spawn(node, args, options) {
-    const flags = process.argv[3] === 'success'
+    const flags = process.argv[3] !== 'failure'
       ? ['--experimental-test-module-mocks', '--import', path.resolve('cli/lib/__tests__/fixtures/upgrade-entry-output.js')]
       : [];
-    return spawnSync(node, [...flags, ...args], { ...options, timeout: 10000 });
+    return spawnSync(node, [...flags, ...args], { ...options, env:{...options.env, UPGRADE_OUTPUT_OUTCOME:process.argv[3]}, timeout: 10000 });
   } });
 }
 if (process.argv[2] === 'legacy') {

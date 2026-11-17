@@ -11,7 +11,9 @@ import { spawnSync } from 'node:child_process';
 // target's installer/protection/DB boundaries via the native module-mock fixture;
 // its fake npm answers only npm root -g for the installed package's parent.
 // failure uses the real target's admission error. No service, tmux or DB starts.
-for (const mode of ['human', 'json', 'legacy']) for (const outcome of ['success', 'failure']) {
+// Rollback exercises presentation of a mocked completed compensation result;
+// it does not establish real npm/package restoration.
+for (const mode of ['human', 'json', 'legacy']) for (const outcome of ['success', 'failure', 'rollback']) {
   test(`self upgrade ${mode} ${outcome} preserves output and exit status`, t => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-output-')));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -32,7 +34,7 @@ for (const mode of ['human', 'json', 'legacy']) for (const outcome of ['success'
       warnings: [{ runtime: 'codex', code: 'RUNTIME_CLI_UNAVAILABLE', message: 'Optional CLI unavailable.' }] };
     fs.writeFileSync(path.join(installed, 'cli/lib/self-upgrade.js'), `export function runSelfUpgradeFinalize() { return ${JSON.stringify(expected)}; }\n`);
     const npmCli = path.join(root, 'npm-cli.js');
-    fs.writeFileSync(npmCli, outcome === 'success'
+    fs.writeFileSync(npmCli, outcome !== 'failure'
       ? `import assert from 'node:assert/strict';
 assert.deepEqual(process.argv.slice(2), ['root', '-g']);
 process.stdout.write(${JSON.stringify(path.dirname(installed))});\n`
@@ -63,8 +65,16 @@ process.stdout.write(${JSON.stringify(path.dirname(installed))});\n`
       if (outcome === 'success') assert.deepEqual(result, expected);
       else {
         assert.equal(result.success, false);
-        assert.equal(result.code, 'INVALID_UPGRADE_HANDOFF');
-        assert.equal(result.error, 'Installed source version does not match upgrade handoff.');
+        if (outcome === 'rollback') {
+          assert.equal(result.code, 'UPGRADE_FAILED');
+          assert.equal(result.error, 'npm error Target installation failed.');
+          assert.deepEqual(result.rollback, {attempted:true, completed:true, recovery_required:false, performed:true});
+          assert.deepEqual(Object.keys(result).sort(), ['action', 'success', 'code', 'error', 'persisted', 'upgradeProtected', 'transactionDir', 'rollback', 'recovery_required'].sort());
+          assert.equal(result.recovery_required, false);
+        } else {
+          assert.equal(result.code, 'INVALID_UPGRADE_HANDOFF');
+          assert.equal(result.error, 'Installed source version does not match upgrade handoff.');
+        }
       }
     } else {
       assert.match(child.stdout, /Release notes without trailing newline\n/);
@@ -72,6 +82,10 @@ process.stdout.write(${JSON.stringify(path.dirname(installed))});\n`
       if (outcome === 'success') {
         assert.match(child.stdout, /\nzylos-core upgraded: 1\.0\.0-beta\.11 → 1\.0\.0\.\n$/);
         assert.match(child.stderr, /Runtime warning \(codex\): Optional CLI unavailable\./);
+      } else if (outcome === 'rollback') {
+        assert.ok(child.stderr.includes(`Rollback completed. zylos-core has been restored to ${fromVersion}.\n`));
+        assert.match(child.stderr, /^Error: npm error Target installation failed\./m);
+        assert.doesNotMatch(child.stderr, /deprecated|recovery status/);
       } else assert.match(child.stderr, /^Error: Installed source version does not match upgrade handoff\.\n$/);
     }
     assert.equal(fs.existsSync(path.join(env.ZYLOS_DIR, '.backup')), false);

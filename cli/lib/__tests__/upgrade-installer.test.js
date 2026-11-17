@@ -7,6 +7,7 @@ import {createRequire} from 'node:module';
 import {spawn} from 'node:child_process';
 import {resolveUpgradeNpmCli,installUpgradeTarget} from '../upgrade-entry.js';
 import {step6_installSkillDeps} from '../self-upgrade.js';
+import {upgradeFailureMessage} from '../upgrade-admission.js';
 const require=createRequire(import.meta.url),m=require('../upgrade-maintenance.cjs');
 const runInstaller=(ctx,options)=>m.runInstaller(ctx.transactionDir,ctx.journal,options);
 function fixture(t,body){
@@ -21,6 +22,32 @@ function fixture(t,body){
  t.after(()=>{try{const saved=m.read(path.join(dir,'journal.json'));if(saved.installerPid)process.kill(-saved.installerPid,'SIGKILL');}catch{}fs.rmSync(root,{recursive:true,force:true});});
  return {root,dir,j,npmCli,helper,ctx:{transactionDir:dir,journal:j},read:()=>m.read(path.join(dir,'journal.json'))};
 }
+
+// Boundary: actual protected installer + local npm lifecycle failure, no registry,
+// PM2, tmux or DB. Run for stderr selection/installer changes; skip unrelated UI.
+test('real npm warning before a lifecycle failure selects an error after installer exit', t => {
+ const npmCli=resolveUpgradeNpmCli(),f=fixture(t,'// local installer material');
+ const target=path.join(f.root,'local-package');fs.mkdirSync(target);
+ fs.writeFileSync(path.join(target,'package.json'),JSON.stringify({name:'upgrade-output-fixture',version:'1.0.0',scripts:{postinstall:'node fail.cjs'}}));
+ fs.writeFileSync(path.join(target,'fail.cjs'),"process.stderr.write('fixture lifecycle install failed\\n');process.exit(23);\n");
+ const overrides={npm_config_userconfig:path.join(f.root,'user.npmrc'),npm_config_globalconfig:path.join(f.root,'global.npmrc'),
+  npm_config_cache:path.join(f.root,'npm-cache'),npm_config_global_style:'true',npm_config_audit:'false',npm_config_fund:'false',npm_config_update_notifier:'false'};
+ fs.writeFileSync(overrides.npm_config_userconfig,'');fs.writeFileSync(overrides.npm_config_globalconfig,'');
+ const previous=Object.fromEntries(Object.keys(overrides).map(key=>[key,process.env[key]]));
+ Object.assign(process.env,overrides);
+ t.after(()=>{for(const [key,value] of Object.entries(previous)){if(value===undefined)delete process.env[key];else process.env[key]=value;}});
+ const prefix=path.join(f.root,'prefix');
+ for(const key of ['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR'])assert.ok(process.env[key]?.startsWith(path.dirname(process.env.HOME)+path.sep),`${key} is not isolated`);
+ assert.ok(prefix.startsWith(f.root+path.sep));
+ t.diagnostic(JSON.stringify({HOME:process.env.HOME,ZYLOS_DIR:process.env.ZYLOS_DIR,PM2_HOME:process.env.PM2_HOME,TMPDIR:process.env.TMPDIR,prefix,target,npmCli,services:[],databases:[]}));
+ let error;
+ try{m.runInstaller(f.dir,f.j,{stage:'install',npmCli,args:['install','-g','--prefix',prefix,target],cwd:target,timeout:20000});}catch(cause){error=cause;}
+ assert.ok(error);assert.match(error.message.split('\n')[0],/npm warn.*deprecated/);
+ assert.match(error.message,/npm error code 23/);
+ assert.equal(upgradeFailureMessage(error),'npm error fixture lifecycle install failed');
+ assert.equal(f.read().installerExitConfirmed,true);
+ assert.equal(f.helper.members(f.read().installerPid).length,0);
+});
 for(const ci of [undefined,'','0','false','xyz'])test(`protected npm preserves inherited CI=${ci} under original Node with durable started evidence`,t=>{
  const previous=process.env.CI;
  if(ci===undefined)delete process.env.CI;else process.env.CI=ci;

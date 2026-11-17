@@ -13,20 +13,27 @@ assert.equal(process.env.ZYLOS_DIR, path.join(root, 'deployment'));
 assert.equal(process.env.HOME, path.join(root, 'home'));
 const at = name => pathToFileURL(path.join(target, 'cli/lib', name)).href;
 const idle = () => {};
+const rollback = process.env.UPGRADE_OUTPUT_OUTCOME === 'rollback';
 const maintenance = {
   discover: () => ({ candidates: [], diagnostics: [], marker: null }),
   validateSupportedGlobalLayout: idle,
   runInstaller(_directory, _journal, options) {
     if (options.stage === 'pack-target') return JSON.stringify([{ filename: 'target.tgz' }]);
     assert.equal(options.stage, 'install');
+    if (rollback) throw Error('npm warn deprecated old-package\nnpm error code 23\nnpm error Target installation failed.\n    at install (fixture.js:1:1)');
     fs.writeFileSync(path.join(installed, 'package.json'), JSON.stringify({ name: 'zylos', type: 'module', version: '1.0.0' }));
     return '';
   },
 };
 mock.module(at('upgrade-protection.js'), { namedExports: {
-  maintenance, maintenanceFor: () => maintenance, beginUpgrade: idle,
+  maintenance, maintenanceFor: () => maintenance, beginUpgrade(ctx) {
+    if (rollback) {ctx.transactionDir = path.join(root, 'transaction'); ctx.upgradeProtected = true;}
+  },
   saveProtectedCode: idle, prepareProtectedInstall: idle, markInstallationIntent: idle,
-  recovery: () => assert.fail('successful output fixture must not recover'),
+  recovery: () => {
+    assert.ok(rollback, 'successful output fixture must not recover');
+    return {attempted:true, completed:true, recovery_required:false};
+  },
 } });
 mock.module(at('upgrade-package.js'), { namedExports: { saveOriginalPackage: idle } });
 mock.module(at('core-db-backup.js'), { namedExports: {

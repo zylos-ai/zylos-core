@@ -6,7 +6,7 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
-import { inspectUpgradeSource, runUpgradeEntry, installUpgradeTarget } from '../upgrade-entry.js';
+import { inspectUpgradeSource, runUpgradeEntry, installUpgradeTarget, outputUpgradeResult } from '../upgrade-entry.js';
 import {assertDashboardUninstalled} from '../core-db-backup.js';
 
 function fixture(t, version = '0.9.3') {
@@ -174,6 +174,44 @@ for (const failure of ['savePackage', 'saveCode', 'prepare', 'install']) test(`e
   assert.equal(result.rollback.completed, true);
   assert.equal(f.calls.includes('finalize'), false);
   assert.equal(f.calls.at(-1), 'recover');
+});
+
+for (const finalization of [false, true]) test(`entry retains source version for completed rollback presentation (finalization=${finalization})`, async t => {
+  const input = fixture(t, '1.0.0-beta.11'), f = pipeline(input, finalization ? undefined : 'install');
+  if (finalization) f.deps.finalize = () => ({success:false, error:'Target finalization failed.'});
+  const result = await runUpgradeEntry(input, f.deps);
+  const before = JSON.stringify(result);
+  let stderr = '', stdout = '';
+  const output = {stdout:{write:value => {stdout += value;}}, stderr:{write:value => {stderr += value;}}};
+  outputUpgradeResult(result, {jsonOutput:false}, output);
+  assert.match(stderr, /has been restored to 1\.0\.0-beta\.11\./);
+  outputUpgradeResult(result, {jsonOutput:true}, output);
+  assert.equal(stdout, '\n' + before + '\n');
+  assert.equal(JSON.stringify(result), before);
+  assert.equal(Object.hasOwn(result, 'from'), false);
+});
+
+for (const kind of ['symlink', 'dangling']) test(`dependency ${kind} gets a human path and Next without new JSON fields`, async t => {
+  const input = fixture(t), modules = path.join(input.zylosDir, '.claude/skills/comm-bridge/node_modules');
+  fs.mkdirSync(path.join(input.tempDir, 'skills/comm-bridge'), {recursive:true});
+  fs.mkdirSync(path.dirname(modules), {recursive:true});
+  const target = path.join(input.zylosDir, 'dependencies');
+  if (kind === 'symlink') fs.mkdirSync(target);
+  fs.symlinkSync(target, modules);
+  const result = await runUpgradeEntry(input, {probe() {assert.fail('invalid dependencies reached probe');}});
+  assert.equal(result.code, 'INVALID_CORE_DEPENDENCIES');
+  assert.equal(result.next, undefined);
+  assert.equal(result.error, 'Installed core skill node_modules must be a real directory or absent: comm-bridge');
+  const before = JSON.stringify(result);
+  let stderr = '', stdout = '';
+  const output = {stdout:{write:value => {stdout += value;}}, stderr:{write:value => {stderr += value;}}};
+  outputUpgradeResult(result, {jsonOutput:false}, output);
+  assert.ok(stderr.includes(`Dependency path: ${modules}\n`));
+  assert.match(stderr, /Next: .*real dependency directory.*retry/);
+  outputUpgradeResult(result, {jsonOutput:true}, output);
+  assert.equal(stdout, '\n' + before + '\n');
+  assert.equal(JSON.stringify(result), before);
+  assert.equal(fs.existsSync(path.join(input.zylosDir, '.backup')), false);
 });
 
 test('entry refuses ambiguous prior transactions without inspecting, installing, or recovering them', async t => {

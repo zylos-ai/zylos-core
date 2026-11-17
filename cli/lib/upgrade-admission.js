@@ -8,7 +8,12 @@ export function upgradeFailureCode(error) {
 }
 
 export function upgradeFailureMessage(error) {
-  return String(error?.message || error).split('\n')[0]
+  const lines = String(error?.message || error).split(/\r?\n/).map(line => line.trim());
+  const useful = lines.filter(line => line && !/^(?:npm\s+(?:warn(?:ing)?|notice)\b|(?:warn(?:ing)?|deprecated)\b|at\s)/i.test(line));
+  const npmError = useful.find(line => /^npm\s+(?:error|err!)\s+/i.test(line)
+    && !/^npm\s+(?:error|err!)\s+(?:code|path|errno|syscall|command|stack|at|a complete log|log files?)\b/i.test(line));
+  const message = npmError || useful.find(line => !/^npm\s+(?:error|err!)(?:\s|$)/i.test(line));
+  return (message || 'Core upgrade failed. Check the npm debug log for details.')
     .replace(/(^|[\s('"`])(?:file:\/\/)?(?:[A-Za-z]:[\\/]|\/)[^\s'"`,;:)]+/g, '$1<path>');
 }
 

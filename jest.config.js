@@ -3,6 +3,7 @@ export default {
   testPathIgnorePatterns: [
     '<rootDir>/test/dashboard-display-browser.test.js',
     '<rootDir>/test/self-upgrade-output.integration.test.js',
+    '<rootDir>/test/upgrade-running-output.integration.test.js',
     '<rootDir>/test/fleet-attention.integration.test.js',
     '<rootDir>/test/fleet-attention-browser.test.js',
     '<rootDir>/test/channel-delivery.integration.test.js',

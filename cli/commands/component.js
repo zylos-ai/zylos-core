@@ -27,7 +27,7 @@ import { fetchRawFile } from '../lib/github.js';
 import { promptYesNo } from '../lib/prompts.js';
 import { evaluateUpgrade } from '../lib/claude-eval.js';
 import { resumeFinalize } from '../lib/upgrade-resume.js';
-import { recoverBeforeUpgrade } from '../lib/upgrade-discovery.js';
+import { recoverBeforeUpgrade, runningUpgradeNotice } from '../lib/upgrade-discovery.js';
 import { upgradeFailureCode, upgradeFailureMessage } from '../lib/upgrade-admission.js';
 import { inspectDashboardRegistrationCleanup, cleanupDashboardRegistration } from '../lib/dashboard-registration-cleanup.js';
 
@@ -1247,7 +1247,10 @@ export async function upgradeSelfCore({ branch, beta = false, version, mode = 'm
     const output = deps.console ?? globalThis.console;
     if (jsonOutput) output.log(JSON.stringify({success:false, code:upgradeFailureCode(error), error:upgradeFailureMessage(error),
       persisted:error.persisted || [], recovery_required:error.recovery_required === true, ...(error.next ? {next:error.next} : {})}));
-    else outputSelfUpgradeFailure(output, error.message, error.next);
+    else {
+      const running = error.recovery_required && runningUpgradeNotice(deps.zylosDir ?? ZYLOS_DIR);
+      outputSelfUpgradeFailure(output, running?.error || error.message, running?.next || error.next);
+    }
     return false;
   }
   let check;
