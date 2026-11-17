@@ -84,8 +84,6 @@ describe('instruction format version protocol', () => {
 
 describe('split instruction assembler', () => {
   it('pins the system templates to the approved content-redraft bytes', () => {
-    // Reintroduction guard: any template edit must consciously update these
-    // pins alongside the reviewed content change (issue #722 content redraft).
     // Reintroduction guard: review the complete template diff before updating
     // a pin, and merge only after reviewers confirm the changed content.
     // Hashes cover the final template bytes after the managed header.

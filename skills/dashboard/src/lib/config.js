@@ -257,16 +257,16 @@ export function loadConfig({ zylosDir = getZylosDir() } = {}) {
 }
 
 export function modelPricesForRuntime(config, runtime = config?.runtime, serviceTier = 'standard') {
-  const rt = runtime ?? 'claude';
+  const rt = runtime === 'codex' ? 'codex' : 'claude';
   const tier = normalizeServiceTier(serviceTier);
   if (rt === 'codex' && tier === 'priority') {
     return config?.runtimeServiceTierModelPrices?.codex?.priority || DEFAULT_CODEX_PRIORITY_MODEL_PRICES;
   }
-  return config?.runtimeModelPrices?.[rt] || (['claude', 'codex'].includes(rt) ? config?.modelPrices : null) || {};
+  return config?.runtimeModelPrices?.[rt] || config?.modelPrices || {};
 }
 
 export function fastModeMultiplierForRuntime(config, runtime = config?.runtime, price = null) {
-  const rt = runtime ?? 'claude';
+  const rt = runtime === 'codex' ? 'codex' : 'claude';
   if (price) {
     const explicit = config?.configuredRuntimeFastModeMultipliers;
     const override = explicit !== undefined

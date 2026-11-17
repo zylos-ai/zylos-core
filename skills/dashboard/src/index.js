@@ -8,7 +8,8 @@ import { createReadinessCheck } from './lib/readiness.js';
 import { bootId, publishHealthProcess } from './lib/health-process.js';
 import { createCoalescedBroadcast } from './lib/coalesced-broadcast.js';
 import http from 'node:http';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -365,7 +366,7 @@ function recordDashboardInterrupt(record) {
 const groupAction = createGroupActions({ zylosDir: config.zylosDir, config, onInterrupt: recordDashboardInterrupt });
 const sendNamingPrompt = createNamingRequest({ zylosDir: config.zylosDir, readMode: () => loadZylosConfig(config.zylosDir).session_mode });
 
-const runtimeOverridesPage = createRuntimeOverridesReader({ zylosDir: config.zylosDir, displayNames });
+const runtimeOverridesPage = createRuntimeOverridesReader({ zylosDir: config.zylosDir, displayNames, run: promisify(execFile) });
 function installedVersions() {
   return { zylos: zylosVersion, claude: ccInstalledVersion, codex: codexInstalledVersion, agy: agyInstalledVersion };
 }

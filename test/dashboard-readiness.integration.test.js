@@ -235,7 +235,7 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
     assert.equal(response.body.reason, null);
     assert.equal(response.body.session_mode, 'single');
     assert.equal(response.body.session_running, true);
-    assert.deepEqual(response.body.runtime_health, { claude: { source: 'missing', health: null }, codex: { source: 'missing', health: null } });
+    assert.deepEqual(response.body.runtime_health, { claude: { source: 'missing', health: null }, codex: { source: 'missing', health: null }, agy: { source: 'missing', health: null } });
   });
   await t.test('confirmed single-session absence returns 503', async () => {
     present = false;

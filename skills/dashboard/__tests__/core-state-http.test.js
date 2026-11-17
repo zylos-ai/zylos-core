@@ -134,7 +134,7 @@ test('state APIs await a fresh observation before answering idle requests', { ti
         assert.equal(instance.session_mode.sessionMode, 'single');
         assert.equal(Object.hasOwn(instance, 'runtime_info'), false, 'observed model belongs to group detail');
         assert.equal(Object.hasOwn(instance, 'poolCapacityRecord'), false);
-        assert.deepEqual(Object.keys(instance.versions).sort(), ['claude', 'codex', 'zylos']);
+        assert.deepEqual(Object.keys(instance.versions).sort(), ['agy', 'claude', 'codex', 'zylos']);
         await reader.cancel();
       } else {
         const body = await response.json();
@@ -143,7 +143,7 @@ test('state APIs await a fresh observation before answering idle requests', { ti
           assert.equal(body.session_mode.sessionMode, 'single');
           assert.equal(Object.hasOwn(body, 'runtime_info'), false);
           assert.equal(Object.hasOwn(body, 'poolCapacityRecord'), false);
-          assert.deepEqual(Object.keys(body.versions).sort(), ['claude', 'codex', 'zylos']);
+          assert.deepEqual(Object.keys(body.versions).sort(), ['agy', 'claude', 'codex', 'zylos']);
         }
       }
       const detailResponse = await fetch(origin + '/api/groups/origin?include=', { headers: { cookie }, signal: t.signal });
