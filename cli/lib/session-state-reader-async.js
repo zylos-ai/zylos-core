@@ -50,7 +50,7 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
         const dir = groupRunDir(group ?? 'origin', env);
         const status = readJsonSample(path.join(dir, 'agent-status.json'), 'status');
         let usage = { error:'missing', sampledAt:null };
-        if (target.runtime === 'claude') usage = readJsonSample(path.join(dir, 'statusline.json'), 'usage');
+        if (['claude', 'agy'].includes(target.runtime)) usage = readJsonSample(path.join(dir, 'statusline.json'), 'usage');
         if (target.runtime === 'codex') {
           const found = readCodexSampleForIdentity({ sessionGroup:group, identity:target, env });
           if (found) usage = { value:found.sample, sampledAt:found.sample.capturedAt, identity:found.sample.identity };
@@ -92,7 +92,7 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
       const dir = groupRunDir(group ?? 'origin', env);
       const status = readJsonSample(path.join(dir, 'agent-status.json'), 'status');
       let usage = { error: 'missing', sampledAt: null };
-      if (first.runtime === 'claude') usage = readJsonSample(path.join(dir, 'statusline.json'), 'usage');
+      if (['claude', 'agy'].includes(first.runtime)) usage = readJsonSample(path.join(dir, 'statusline.json'), 'usage');
       if (first.runtime === 'codex') {
         const found = readCodexSampleForIdentity({ sessionGroup: group, identity: first, env });
         if (found) usage = { value: found.sample, sampledAt: found.sample.capturedAt, identity: found.sample.identity };

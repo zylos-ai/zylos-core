@@ -59,7 +59,7 @@ export function createLifecycleProviders({ env = process.env, tmux = {}, now = D
     } finally { await handle?.close(); }
   }
   async function sendExit(live) {
-    if (!['claude', 'codex'].includes(live.runtime)) throw tmuxError('RUNTIME_UNSUPPORTED', 'Legacy runtime is unknown');
+    if (!['claude', 'codex', 'agy'].includes(live.runtime)) throw tmuxError('RUNTIME_UNSUPPORTED', 'Legacy runtime is unknown');
     let connection;
     try {
       connection = await open(tmux);

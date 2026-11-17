@@ -49,7 +49,7 @@ export function createLegacyMigration({ readLegacy, readLegacyStatus, sendExit, 
           }
           return;
         }
-        if (!['claude', 'codex'].includes(live.runtime)) {
+        if (!['claude', 'codex', 'agy'].includes(live.runtime)) {
           diagnostic('stop_unconfirmed', { tmuxName: entry.tmuxName, reason: 'runtime_unknown' }); return;
         }
         if (!entry.exitForcedLogged) {

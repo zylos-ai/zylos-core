@@ -5,7 +5,7 @@ const PAGE = 100;
 export function configFunctions({ read, write, snapshot, get, all, run, knownGroup, dependencies }) {
   function runtime(value) {
     if (typeof value !== 'string' || !value) throw dataError('INVALID_ARGS', 'runtime is required');
-    const supported = dependencies.supportedRuntimes ?? ['claude', 'codex'];
+    const supported = dependencies.supportedRuntimes ?? ['claude', 'codex', 'agy'];
     if (!supported.includes(value)) throw dataError('RUNTIME_UNSUPPORTED', `Unsupported runtime: ${value}`);
     return value;
   }

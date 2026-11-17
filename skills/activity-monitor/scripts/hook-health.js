@@ -21,7 +21,9 @@ export function collectHealthHook(payload, { zylosDir = runtimeRoot(), nowMs = D
   if (!session || !Number.isSafeInteger(pid) || pid <= 0) return null;
   if (payload.hook_event_name === 'StopFailure' && !identifier(payload.error)) return null;
   const location = runDirFromEnv({...env, ZYLOS_DIR:zylosDir});
-  const event = { v:1, session_group:location.kind === 'legacy' ? null : (location.sessionGroup || 'origin'), run_id:env.ZYLOS_RUN_ID || null, schema_version: 1, event_id: randomUUID(), source: 'hook', runtime: 'claude',
+  const runtime = env.ZYLOS_MODEL_CONFIG ? JSON.parse(env.ZYLOS_MODEL_CONFIG).runtime : 'claude';
+  if (!['claude', 'agy'].includes(runtime)) return null;
+  const event = { v:1, session_group:location.kind === 'legacy' ? null : (location.sessionGroup || 'origin'), run_id:env.ZYLOS_RUN_ID || null, schema_version: 1, event_id: randomUUID(), source: 'hook', runtime,
     type: 'runtime_health', session_id: session, prompt_id: identifier(payload.prompt_id),
     event: EVENTS[payload.hook_event_name], error: payload.hook_event_name === 'StopFailure' ? (ERRORS.has(payload.error) ? payload.error : 'unknown') : null,
     received_at: nowMs, ts: nowMs, claude_pid: pid };

@@ -26,7 +26,7 @@ export async function readBootstrapIdentity(scope, { env = process.env, pid = pr
     const connection = await open();
     try {
       const target = await observe({ connection, tmuxName, sessionGroup: scope.sessionGroup, readReady: async () => null });
-      if (!target.present || !['claude', 'codex'].includes(target.runtime)) continue;
+      if (!target.present || !['claude', 'codex', 'agy'].includes(target.runtime)) continue;
       if (scope.kind !== 'legacy' && (target.runId !== env.ZYLOS_RUN_ID ||
         (target.rawF2.ZYLOS_SESSION_GROUP ?? null) !== (scope.sessionGroup ?? null))) continue;
       if (env.TMUX_PANE && env.TMUX_PANE !== target.paneId) continue;

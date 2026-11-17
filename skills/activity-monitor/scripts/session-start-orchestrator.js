@@ -220,6 +220,7 @@ export async function runSessionStartOrchestrator(payload = {}, {
   totalBudgetMs = DEFAULT_TOTAL_BUDGET_MS,
   budgets = STEP_BUDGETS_MS,
   stdout = process.stdout,
+  writeSync = fs.writeSync,
   hardBackstopTimer = null,
   actions = {
     memoryInject: runMemoryInject,
@@ -239,6 +240,7 @@ export async function runSessionStartOrchestrator(payload = {}, {
       action: () => actions.memoryInject(payload),
       writeStdout: true,
       stdout,
+      writeSync,
     });
 
     await runStep({
@@ -248,6 +250,7 @@ export async function runSessionStartOrchestrator(payload = {}, {
       action: () => actions.c4SessionInit(payload),
       writeStdout: true,
       stdout,
+      writeSync,
     });
 
     const sideEffects = [

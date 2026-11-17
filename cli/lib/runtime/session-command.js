@@ -24,6 +24,8 @@ export function validateLaunchConfig(runtime, config, help = '') {
   const keys = config.mode === 'default' ? ['runtime','mode'] : ['runtime','mode','model','effort'];
   if (Object.keys(config).some(k => !keys.includes(k))) throw adapterError('MODEL_CONFIG_REJECTED');
   if (config.mode === 'override') {
+    // agy model/effort overrides are not part of the verified core contract.
+    if (runtime === 'agy') throw adapterError('MODEL_CONFIG_REJECTED');
     if (![config.model, config.effort].every(v => typeof v === 'string' && v.trim() && !v.includes('\0'))) throw adapterError('MODEL_CONFIG_REJECTED');
     const efforts = runtime === 'claude' ? ['low','medium','high','max'] : ['none','minimal','low','medium','high','xhigh'];
     if (!efforts.includes(config.effort) || !/(?:^|\s)--model(?:\s|[,=])/m.test(help) || (runtime === 'claude' && !/(?:^|\s)--effort(?:\s|[,=])/m.test(help))) throw adapterError('MODEL_CONFIG_REJECTED');
@@ -37,6 +39,9 @@ export function buildRuntimeArgs(runtime, config, {root, help = '', bypassPermis
     if (bypassPermissions) args.push('--dangerously-skip-permissions');
     if (config.mode === 'override') args.push('--model', config.model, '--effort', config.effort);
     args.push('--mcp-config', JSON.stringify({mcpServers:{'zylos-memory':{type:'stdio', command:'node', args:[server]}}}));
+  } else if (runtime === 'agy') {
+    if (bypassPermissions) args.push('--dangerously-skip-permissions');
+    args.push('--settings', JSON.stringify({ modelProvider: 'gemini', trustedWorkspaces: [root] }), '-i', buildKickPrompt());
   } else {
     if (/(?:^|\s)--no-daemon(?:\s|$)/m.test(help)) args.push('--no-daemon');
     if (bypassPermissions) args.push('--dangerously-bypass-approvals-and-sandbox');
@@ -66,6 +71,14 @@ export function launchEnvironment(root, processEnv = process.env, { runtime } = 
   // after the manifest (clean and compat mode) so a manifest cannot drop it.
   if (runtime === 'claude') {
     for (const key of CLAUDE_BUILTIN_ENV_KEYS) if (dotenvVars[key]) env[key] = dotenvVars[key];
+  }
+  if (runtime === 'agy') {
+    for (const key of ['GEMINI_API_KEY', 'HTTPS_PROXY']) {
+      const value = Object.hasOwn(dotenvVars, key) ? dotenvVars[key] : processEnv[key];
+      if (value) env[key] = value;
+      else delete env[key];
+    }
+    env.AGY_CLI_DISABLE_AUTO_UPDATE = 'true';
   }
   for (const key of ['ZYLOS_RUN_ID','ZYLOS_SESSION_GROUP','ZYLOS_MODEL_CONFIG','CLAUDECODE','CLAUDE_CODE_ENTRYPOINT']) delete env[key];
   env.ZYLOS_DIR = root;

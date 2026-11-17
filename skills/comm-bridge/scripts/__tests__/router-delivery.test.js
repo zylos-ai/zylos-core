@@ -631,3 +631,35 @@ test('no-paste controls and failed text paste never emit a delivery notification
     assert.equal(f.calls.some(call => call[0] === 'notify'), false);
   });
 });
+
+// Real router and store with isolated runner HOME/ZYLOS_DIR; no model or
+// process is launched. Run when agy delivery or input-frame rules change.
+for (const screen of ['empty', 'slash', 'trust', 'text', 'cursor']) test(`agy delivery gates ${screen} input and forces bracketed paste`, async t => {
+  const f = setup(t), row = f.message(); f.target.runtime = 'agy';
+  const rule = '─'.repeat(40);
+  const body = screen === 'slash' ? '> /' : screen === 'trust' ? '> Trust\n  Cancel' : screen === 'text' ? '> draft' : '>';
+  f.adapter.captureScreen = async () => [rule, body, rule].join('\n');
+  f.connection.command = async args => args.at(-1) === '#{cursor_x}' ? screen === 'cursor' ? '3' : '2' : '1';
+  const d = f.create(); t.after(() => d.stop()); await d.deliverConversation(row);
+  assert.equal(f.row(row.id).status, screen === 'empty' ? 'delivered' : 'pending');
+  const pastes = f.calls.filter(c => c[0] === 'paste');
+  assert.equal(pastes.length, screen === 'empty' ? 1 : 0);
+  if (pastes.length) assert.equal(pastes[0][1].bracketedPaste, true);
+});
+
+test('agy clear submits a kick after the reset and writes the clear source marker', async t => {
+  const f = setup(t); f.target.runtime = 'agy';
+  const rule = '─'.repeat(40);
+  f.adapter.captureScreen = async () => [rule, '>', rule].join('\n');
+  f.connection.command = async args => args.at(-1) === '#{cursor_x}' ? '2' : '1';
+  const d = f.create(); t.after(() => d.stop());
+  const row = f.control('/clear'); await d.deliverControl(row);
+  assert.equal(row.status, 'done');
+  const pastes = f.calls.filter(c => c[0] === 'paste');
+  assert.equal(pastes.length, 2);
+  assert.equal(pastes[0][1].text, '/clear');
+  assert.match(pastes[1][1].text, /System startup trigger/);
+  assert(pastes.every(c => c[1].bracketedPaste));
+  const { groupRunDir } = await import('../../../../cli/lib/session-group-paths.js');
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(groupRunDir('origin'), 'agy-session-source'), 'utf8')), { runId: 'r1', source: 'clear' });
+});

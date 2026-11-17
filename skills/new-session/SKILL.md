@@ -1,13 +1,13 @@
 ---
 name: new-session
-description: Start a new session when context is high. Claude uses /clear, Codex uses /exit. Use when context is high or when a fresh session is needed.
+description: Start a new session when context is high. Claude and Antigravity use /clear, Codex uses /exit. Use when context is high or when a fresh session is needed.
 ---
 
 # New Session Skill
 
 Start a fresh session with graceful handoff.
 Use runtime-specific switch commands:
-- Claude: `/clear`
+- Claude and Antigravity (`agy`): `/clear`
 - Codex: `/exit`
 
 ## When to Use
@@ -85,7 +85,7 @@ arguments. For Codex:
 node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/exit" --priority 1 --block-queue-until-idle --no-ack-suffix ${ZYLOS_SESSION_GROUP:+--group} ${ZYLOS_SESSION_GROUP:+"$ZYLOS_SESSION_GROUP"} ${ZYLOS_RUN_ID:+--target-run} ${ZYLOS_RUN_ID:+"$ZYLOS_RUN_ID"}
 ```
 
-For Claude:
+For Claude and Antigravity:
 ```bash
 node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/clear" --priority 1 --block-queue-until-idle --no-ack-suffix ${ZYLOS_SESSION_GROUP:+--group} ${ZYLOS_SESSION_GROUP:+"$ZYLOS_SESSION_GROUP"} ${ZYLOS_RUN_ID:+--target-run} ${ZYLOS_RUN_ID:+"$ZYLOS_RUN_ID"}
 ```
@@ -107,10 +107,11 @@ do not add a separate exit.
 
 1. **Memory Sync** follows its own schedule; rotation and Bootstrap do not force it.
 2. **Pre-switch checks**: Inventory background tasks, read and atomically merge W4.
-3. **Enqueue switch command**: Puts the runtime-specific command into the control queue (`/clear` for Claude, `/exit` for Codex)
+3. **Enqueue switch command**: Puts the runtime-specific command into the control queue (`/clear` for Claude and Antigravity, `/exit` for Codex)
 4. **Deliver when idle**: Dispatcher delivers the command when idle
 5. **Session switches**:
-   - Claude: `/clear` resets conversation context, session-start hooks fire, and background subagents continue independently
+   - Claude and Antigravity (`agy`): `/clear` resets conversation context, session-start hooks fire, and background subagents continue independently
+   - Antigravity: `/clear` resets context; the router sends a kick to fire SessionStart before the next turn
    - Codex: `/exit` exits the current session so a fresh one can start
 6. **New session**: Bootstrap supplies W4 and working-memory paths. READY permits
    delivery; it does not prove the handoff has been read or followed up.

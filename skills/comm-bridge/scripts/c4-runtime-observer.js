@@ -37,7 +37,7 @@ export function createCoreObserver({ tmux = {} } = {}) {
         return {
           hasProcess: true,
           identityVerified: Boolean(scopeMatches && target.runId &&
-            ['claude', 'codex'].includes(target.runtime) && target.runtime === target.launchConfig?.runtime),
+            ['claude', 'codex', 'agy'].includes(target.runtime) && target.runtime === target.launchConfig?.runtime),
           ready: target.ready, launchConfig: target.launchConfig, runId: target.runId,
         };
       }

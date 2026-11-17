@@ -72,7 +72,7 @@ export function writeInstructionFormatVersion({
 }
 
 function assertRuntime(runtime) {
-  if (runtime !== 'claude' && runtime !== 'codex') {
+  if (runtime !== 'claude' && runtime !== 'codex' && runtime !== 'agy') {
     throw new TypeError(`Unsupported runtime: ${runtime}`);
   }
 }
@@ -86,7 +86,7 @@ export function instructionPaths(runtime, { zylosDir = ZYLOS_DIR } = {}) {
     markerPath: path.join(instructionsDir, 'meta.json'),
     assemblerPath: path.join(instructionsDir, 'assembler.mjs'),
     onboardingPath: path.join(instructionsDir, 'onboarding.md'),
-    systemPath: path.join(instructionsDir, `${runtime}-system.md`),
+    systemPath: path.join(instructionsDir, `${runtime === 'agy' ? 'codex' : runtime}-system.md`),
     userPath: path.join(root, 'ZYLOS.md'),
     outputPath: path.join(root, runtime === 'claude' ? 'CLAUDE.md' : 'AGENTS.md'),
   };
@@ -99,14 +99,46 @@ export function isSplitInstructionsActive({ zylosDir = ZYLOS_DIR } = {}) {
 export function needsRebuild(runtime, { zylosDir = ZYLOS_DIR } = {}) {
   const paths = instructionPaths(runtime, { zylosDir });
   if (!fs.existsSync(paths.markerPath)) return false;
-  return leafNeedsRebuild(paths);
+  return runtime === 'agy' ? !fs.existsSync(paths.outputPath) || fs.readFileSync(paths.outputPath, 'utf8') !== agyInstructionEntry(paths)
+    : leafNeedsRebuild(paths) || (runtime === 'codex' && isAgyInstructionEntry(paths));
 }
 
 export function buildInstructionFile(runtime, { zylosDir = ZYLOS_DIR, force = false } = {}) {
   const paths = instructionPaths(runtime, { zylosDir });
-  if (!fs.existsSync(paths.markerPath)) return paths.outputPath;
-  if (force || leafNeedsRebuild(paths)) assembleInstruction(paths);
+  if (!fs.existsSync(paths.markerPath)) {
+    if (runtime === 'agy') agyInstructionContext({ zylosDir });
+    return paths.outputPath;
+  }
+  if (runtime === 'agy') {
+    // AGY limits AGENTS.md to 24,000 bytes. Inject both complete split layers
+    // synchronously through SessionStart instead of depending on truncated reads.
+    atomicWrite(paths.outputPath, agyInstructionEntry(paths));
+  } else if (force || leafNeedsRebuild(paths) || (runtime === 'codex' && isAgyInstructionEntry(paths))) assembleInstruction(paths);
   return paths.outputPath;
+}
+
+function isAgyInstructionEntry(paths) {
+  return fs.existsSync(paths.outputPath) && fs.readFileSync(paths.outputPath, 'utf8').startsWith('<!-- zylos-generated:agy -->');
+}
+
+export function agyInstructionEntry(paths) {
+  return '<!-- zylos-generated:agy -->\n# Zylos instructions\n\nThe SessionStart hook injects the complete Zylos system instructions and user rules synchronously before the first response. Follow that injected content.\n' +
+    `System source: ${paths.systemPath}\nUser source: ${paths.userPath}\n`;
+}
+
+export function agyInstructionContext({ zylosDir = ZYLOS_DIR } = {}) {
+  const paths = instructionPaths('agy', { zylosDir });
+  if (!fs.existsSync(paths.markerPath)) {
+    const content = fs.readFileSync(paths.outputPath, 'utf8');
+    if (Buffer.byteLength(content) > 24000) throw new Error('AGY instructions require split-instruction migration before launch');
+    return content;
+  }
+  const runtimeRules = '## Antigravity — Runtime-Specific Rules\n\n' +
+    'Use /clear to start a fresh session; Zylos sends the kick that triggers SessionStart injection. Use /exit to quit. ' +
+    'Approvals are bypassed with --dangerously-skip-permissions; this never waives the destructive-operation confirmation rule. ' +
+    'Use only tools actually exposed by this runtime, and keep long-running work responsive.\n\n';
+  const system = fs.readFileSync(paths.systemPath, 'utf8').replace(/## Codex — Runtime-Specific Rules[\s\S]*?(?=## Critical Reminders)/, runtimeRules);
+  return [system, fs.readFileSync(paths.userPath, 'utf8')].join('\n\n');
 }
 
 export function assertInstructionReady(runtime, { zylosDir = ZYLOS_DIR } = {}) {
@@ -117,7 +149,9 @@ export function assertInstructionReady(runtime, { zylosDir = ZYLOS_DIR } = {}) {
     }
     return true;
   }
-  if (!fs.existsSync(paths.outputPath) || leafNeedsRebuild(paths)) {
+  if (!fs.existsSync(paths.outputPath) || (runtime === 'agy'
+    ? fs.readFileSync(paths.outputPath, 'utf8') !== agyInstructionEntry(paths)
+    : leafNeedsRebuild(paths) || (runtime === 'codex' && isAgyInstructionEntry(paths)))) {
     throw new Error(`${runtime} instruction file was not prepared before launch: ${paths.outputPath}`);
   }
   return true;

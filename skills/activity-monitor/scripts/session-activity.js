@@ -17,6 +17,7 @@ export class SessionActivity {
     this.busySince=null;this.lastIdleAt=null;this.lastResponseAt=null;
     this.transcriptPartial=Buffer.alloc(0);this.transcriptSkippingLine=false;this.transcriptPending=false;
     this.codexTranscriptMatches=false;
+    this.agyIdleSince=null;
   }
   close(){this.reader.close();if(this.transcriptFd!==null)fs.closeSync(this.transcriptFd);this.transcriptFd=null;}
   matches(row) {
@@ -77,7 +78,10 @@ export class SessionActivity {
         // A recovered tool can be midway through a turn whose prompt is gone.
         this.busySince=row.event==='prompt' || this.lastIdleAt!==null ? row.ts : this.startedAt;
       }
-      if(row.event==='prompt')this.turn=true;
+      if(row.event==='prompt') {
+        this.turn=true;
+        if(this.runtime==='agy') {this.agyIdleSince=null;this.lastResponseAt=Math.max(this.lastResponseAt ?? -Infinity,row.ts);}
+      }
       const nativeId=typeof row.tool_use_id==='string' && row.tool_use_id.length>0 ? row.tool_use_id : null;
       const id=nativeId ?? (row.event==='pre_tool' ? Symbol('unidentified tool') : null);
       if(row.event==='pre_tool' && id!==null && !this.completed.has(id) && !this.results.has(id) && row.ts>this.closedThrough) {
@@ -85,6 +89,7 @@ export class SessionActivity {
       }
       if(['post_tool','post_tool_failure'].includes(row.event) && typeof id==='string') {this.completed.add(id);this.tools.delete(id);}
       if(row.event==='stop' || (this.runtime==='claude' && row.event==='idle')) {
+        if(this.runtime==='agy')this.agyIdleSince=row.ts;
         this.turn=false;this.closedThrough=Math.max(this.closedThrough,row.ts);
         for(const [key,tool] of this.tools)if(tool.startedAt<=row.ts){this.completed.add(key);this.tools.delete(key);}
       }
@@ -169,15 +174,39 @@ export class SessionActivity {
     this.transcriptPending=this.transcriptOffset<stat.size;
     return stat.mtimeMs;
   }
+  agyBusy(now) {
+    // A current, identity-bound statusLine closes Esc-interrupted turns, which
+    // emit no Stop. Native busy states can also resume without a new prompt.
+    let sample;
+    try {sample=JSON.parse(fs.readFileSync(path.join(this.runDir,'statusline.json'),'utf8'));} catch {}
+    const captured=sample?.zylos?.capturedAt;
+    const current=sample?.zylos?.v===1 && sample.zylos.runId===this.runId && sample.session_id===this.sessionId &&
+      Number.isFinite(captured) && captured>=this.startedAt && captured>=this.lastActivityAt && captured<=now && now-captured<=30000;
+    if(current) {
+      if(sample.agent_state==='idle' && !(sample.pending_input_count>0)) {
+        this.agyIdleSince ??= captured;
+        if(now-this.agyIdleSince>=500) {
+          this.turn=false;this.tools.clear();return false;
+        }
+        return true;
+      }
+      this.agyIdleSince=null;this.turn=true;
+      this.lastActivityAt=Math.max(this.lastActivityAt,captured);
+      return true;
+    }
+    // Fully-idle Stop hooks are authoritative after a short stability interval,
+    // longer than AGY's approximately 240ms gap between queued requests.
+    return this.turn || this.tools.size>0 || this.agyIdleSince===null || now-this.agyIdleSince<500;
+  }
   read(now=Date.now(), {subagentTtlMs=1800000}={}) {
     const events=this.recovered?this.reader.read():this.recover();
     // Capture the incremental cursor first, so child events appended during
     // independent recovery are still seen by the next tail read.
     if(!this.recovered)this.recoverSubagents();
     this.consume(events);this.recovered=true;
-    const transcriptMtimeMs=this.readTranscript();
+    const transcriptMtimeMs=this.runtime==='agy'?null:this.readTranscript();
     if(Number.isFinite(transcriptMtimeMs))this.lastActivityAt=Math.max(this.lastActivityAt,transcriptMtimeMs);
-    const busy=this.tools.size>0 || now-this.lastActivityAt<3000;
+    const busy=this.runtime==='agy'?this.agyBusy(now):this.tools.size>0 || now-this.lastActivityAt<3000;
     if(busy){
       this.idleSince=null;
       // Transcript-only activity has no precise turn boundary. The last idle

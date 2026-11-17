@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createStore } from '../../skills/comm-bridge/scripts/c4-v2-store.js';
 import { renderInstruction } from './runtime/assembler.mjs';
 import { instructionPaths, readInstructionFormatVersion, CURRENT_INSTRUCTION_FORMAT_VERSION,
-  hasSplitTransactionResidue, activateMigratedSplitInstructions } from './runtime/instruction-builder.js';
+  hasSplitTransactionResidue, activateMigratedSplitInstructions, agyInstructionEntry } from './runtime/instruction-builder.js';
 import { migrateClaudeMdToZylosMd } from './migrate.js';
 import { loadInstructionCatalog, classifyInstructionBaseline, verifyInstructionConservation,
   createMigrationBackup, renderMigrationReport, migrationPromptPath, writeMigrationPrompt } from './instruction-migration.js';
@@ -41,20 +41,21 @@ export async function prepareUpgradeRuntimeClis(ctx, {
   if (config.state === 'error') throw config.error;
   const current = config.state === 'ok' ? config.config : {};
   const runtime = current.runtime ?? 'claude';
-  if (!['claude', 'codex'].includes(runtime)) throw Error('Unsupported preparation runtime');
+  if (!['claude', 'codex', 'agy'].includes(runtime)) throw Error('Unsupported preparation runtime');
   if (current.session_mode !== undefined && !['single', 'multi'].includes(current.session_mode)) throw Error('Unsupported preparation session mode');
   const required = new Set([runtime]);
   if (current.session_mode === 'multi') {
     const overrides = await listRuntimeOverrides(ctx);
     if (!Array.isArray(overrides)) throw Error('Invalid runtime overrides');
     for (const item of overrides) {
-      if (!['claude', 'codex'].includes(item?.runtime)) throw Error('Unsupported preparation group runtime');
+      if (!['claude', 'codex', 'agy'].includes(item?.runtime)) throw Error('Unsupported preparation group runtime');
       required.add(item.runtime);
     }
   }
   const prepareClis = prepare || (await import('../commands/init.js')).prepareInitRuntimeClis;
   const result = await prepareClis({
     exists,
+    runtimes: [...new Set(['claude', 'codex', ...required])],
     install: Object.fromEntries(['claude', 'codex'].map(runtime => [runtime, () => {
       return install[runtime]();
     }])),
@@ -95,7 +96,7 @@ export function prepareUpgradeRuntime(ctx, {
   const config = readConfigStrict(path.join(zylosDir, '.zylos/config.json'));
   if (config.state === 'error') throw config.error;
   const runtime = config.state === 'ok' ? config.config.runtime || 'claude' : 'claude';
-  if (!['claude', 'codex'].includes(runtime)) throw Error('Unsupported preparation runtime');
+  if (!['claude', 'codex', 'agy'].includes(runtime)) throw Error('Unsupported preparation runtime');
   const replacements = [];
   const warnings = [];
   const add = (relative, content, kind = 'instructions', id) => {
@@ -230,6 +231,13 @@ export function prepareUpgradeRuntime(ctx, {
           warnings.push(`Split instruction migration is pending${analysis ? ` (classification ${analysis.classification})` : ''}; legacy generated files and existing ZYLOS.md preserved`);
         }
       }
+    }
+
+    // AGY shares AGENTS.md with Codex but injects the complete split layers.
+    // Preserve its bounded entry when preparing regenerated instruction bytes.
+    if (runtime === 'agy' && replacements.some(item => item.path === '.zylos/instructions/meta.json')) {
+      const entry = replacements.find(item => item.path === 'AGENTS.md');
+      if (entry) entry.content = agyInstructionEntry(instructionPaths('agy', { zylosDir }));
     }
 
     const settingsBytes = readRegular(path.join(zylosDir, '.claude/settings.json'), { optional: true });

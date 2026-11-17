@@ -27,6 +27,7 @@ import { hookScriptKey, hookScriptBaseKey, getCommandHooks } from './hook-utils.
 import { readSessionMode } from './config.js';
 import { copyPrivateFile, writePrivateFile } from './private-file.js';
 import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig, resolveCodexBypassPermissions } from './runtime-setup.js';
+import { hasAgyZylosHooks, syncAgyConfig } from './agy-setup.js';
 import { installCoreCodexHook } from './codex-hooks.js';
 import {
   SIDE_EFFECT_NAMES,
@@ -757,9 +758,10 @@ export function syncRuntimeHooks({
   if (codexHooks.changed) {
     console.log('Codex hooks: updated; they take effect at the next Codex session start.');
   }
-  const result = { claude: { added, updated, removed }, codex: codexHooks, stopFailureSupported };
+  const agySync = hasAgyZylosHooks() ? syncAgyConfig({ zylosDir, dryRun }) : { changed: false };
+  const result = { claude: { added, updated, removed }, codex: codexHooks, agy: agySync, stopFailureSupported };
 
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexSync.changed && !codexHooks.changed) {
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexSync.changed && !codexHooks.changed && !agySync.changed) {
     console.log('Settings hooks: all up to date (no changes).');
     return { ...result, changed: false };
   }
@@ -777,7 +779,7 @@ export function syncRuntimeHooks({
     modelBackfilled: modelSync.changed,
   });
 
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexHooks.changed) {
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexHooks.changed && !agySync.changed) {
     console.log(`Settings hooks: all up to date; Codex config ${codexSync.changed ? 'refreshed' : 'unchanged'}.`);
     return { ...result, changed: false };
   }

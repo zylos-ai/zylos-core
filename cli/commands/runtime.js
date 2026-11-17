@@ -19,8 +19,9 @@ import { listGroupTmuxSessions } from '../lib/session-group-paths.js';
 import { readLiveIdentity } from '../lib/session-state-reader.js';
 import { submit, lookupRestartRequest } from '../lib/am-sock-client.js';
 import { desiredClaudeHooks, syncHooks, detectStopFailureSupport, detectSubagentHooksSupport } from '../lib/sync-runtime-hooks.js';
+import { syncAgyConfig, isAgyConfigReady } from '../lib/agy-setup.js';
 import { isCodexTrustValid, getCodexVersion } from '../lib/codex-hooks.js';
-import { isSplitInstructionsActive } from '../lib/runtime/instruction-builder.js';
+import { isSplitInstructionsActive, buildInstructionFile, assertInstructionReady } from '../lib/runtime/instruction-builder.js';
 import { commandExists } from '../lib/shell-utils.js';
 import {
   credentialFilePermissionWarnings,
@@ -35,6 +36,7 @@ import {
   relayLoginNotice,
   claudeSettingsOverrideNotice,
   saveCodexApiKey,
+  saveAgyApiKey,
   saveCodexBaseUrlToEnv,
   writeCodexConfig,
 } from '../lib/runtime-setup.js';
@@ -98,7 +100,7 @@ export async function runtimeCommand(args, { execute = executeRuntimeSwitch } = 
 function showStatus() {
   const cfg = readRuntimeConfig();
   const current = cfg.runtime ?? 'claude';
-  const label = current === 'codex' ? 'Codex (OpenAI)' : 'Claude Code (Anthropic)';
+  const label = { claude: 'Claude Code (Anthropic)', codex: 'Codex (OpenAI)', agy: 'Antigravity CLI (Google)' }[current] || current;
   console.log(`Current runtime: ${bold(label)}`);
 }
 
@@ -136,6 +138,10 @@ export function applyCredentials(target, creds, warnings = []) {
       warnUnrestrictedCredentialFiles(target, warnings);
       return true;
     }
+  } else if (target === 'agy') {
+    if (!creds.apiKey || !saveAgyApiKey(creds.apiKey)) return false;
+    warnUnrestrictedCredentialFiles(target, warnings);
+    return true;
   } else if (target === 'codex') {
     if (creds.apiKey) {
       if (!saveCodexApiKey(creds.apiKey)) return false;
@@ -186,6 +192,7 @@ export function validateRuntimeFlags(target, parsed) {
     seen.add(flag);
     if (valueFlags.has(flag)) index++;
   }
+  if (target === 'agy' && parsed.hasBaseUrl) return { error: '--save-base-url is not supported for agy' };
   if (target !== 'claude' && parsed.hasSetupToken) return { error: '--save-setup-token requires claude' };
   if (parsed.hasApiKey && parsed.hasSetupToken) return { error: 'Choose either API key or setup token' };
   if (parsed.hasApiKey && (!parsed.apiKey || parsed.apiKey.startsWith('--'))) {
@@ -224,9 +231,14 @@ export function validateRuntimeFlags(target, parsed) {
 // ── Switch ────────────────────────────────────────────────────────────────
 
 export async function runtimeHooksReady(target) {
-  const instruction = path.join(ZYLOS_DIR, target === 'codex' ? 'AGENTS.md' : 'CLAUDE.md');
+  const instruction = path.join(ZYLOS_DIR, target === 'claude' ? 'CLAUDE.md' : 'AGENTS.md');
   const pendingMigration = !isSplitInstructionsActive({ zylosDir: ZYLOS_DIR });
   if (!fs.existsSync(instruction)) return { ready: false, pendingMigration };
+  if (target === 'agy') {
+    try { assertInstructionReady('agy', { zylosDir: ZYLOS_DIR }); }
+    catch { return { ready: false, pendingMigration }; }
+    return { ready: isAgyConfigReady({ zylosDir: ZYLOS_DIR }), pendingMigration };
+  }
   if (target === 'codex') return { ready: isCodexTrustValid({ zylosDir: ZYLOS_DIR, projectDir: ZYLOS_DIR, codexVersion: getCodexVersion() }).valid, pendingMigration };
   try {
     const settings = JSON.parse(fs.readFileSync(path.join(ZYLOS_DIR, '.claude', 'settings.json'), 'utf8'));
@@ -354,6 +366,10 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
       if (override) warnings.push({ code: 'CLAUDE_SETTINGS_OVERRIDE', message: override });
     }
     try {
+      if (target === 'agy') {
+        syncAgyConfig({ zylosDir: ZYLOS_DIR });
+        buildInstructionFile('agy', { zylosDir: ZYLOS_DIR });
+      }
       const ready = await hooksReady(target);
       if (!ready.ready) return fail('HOOKS_NOT_READY', 'Runtime hooks/instructions not ready; run zylos init');
       if (ready.pendingMigration) warnings.push({ code: 'INSTRUCTION_PENDING_MIGRATION', message: 'Instruction migration pending; run zylos migrate-instructions' });
@@ -414,8 +430,10 @@ Usage:
 Supported runtimes:
   claude    Claude Code (Anthropic) — default
   codex     Codex CLI (OpenAI)
+  agy       Antigravity CLI (Google, Gemini API key only)
 
 Authentication options (if not already authenticated):
+  agy:     --save-apikey <key>             GEMINI_API_KEY (no personal subscription login)
   Claude:  --save-apikey <sk-ant-api...>   Anthropic API key
            --save-base-url <url>           Claude base URL
            --save-setup-token <sk-ant-oat...>  Setup token

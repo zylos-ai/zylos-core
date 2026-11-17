@@ -436,3 +436,20 @@ describe('isExitLifecycleControl', () => {
     }
   });
 });
+
+describe('agy input frame', () => {
+  const rule = '─'.repeat(40);
+  it('recognizes an empty framed prompt while preserving existing runtime prompt scans', () => {
+    const screen = ['> old answer', rule, '>', rule, 'status'].join('\n');
+    assert.equal(findPromptY(screen, 'agy'), 2);
+    assert.equal(findPromptY('› same\n❯ result', 'claude'), 1);
+    assert.equal(findPromptY('› same\n❯ result', 'codex'), 1);
+    assert.equal(findPromptY(screen), -1);
+  });
+  it('rejects slash menus, trust dialogs, input text and unframed choices', () => {
+    for (const body of ['> /', '> allow\n  reject', '> first\n> second', 'ordinary output']) {
+      assert.equal(findPromptY([rule, body, rule].join('\n'), 'agy'), -1);
+    }
+    assert.equal(findPromptY('> choose one', 'agy'), -1);
+  });
+});

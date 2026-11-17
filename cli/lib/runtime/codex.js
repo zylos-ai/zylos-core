@@ -72,6 +72,7 @@ export class CodexAdapter extends SessionAdapter {
       process.stderr.write(`${message}\n`);
       throw adapterError('LAUNCH_FAILED', message, cause);
     }
+    buildInstructionFile('codex', { zylosDir: root });
     return super.launch(options);
   }
 
