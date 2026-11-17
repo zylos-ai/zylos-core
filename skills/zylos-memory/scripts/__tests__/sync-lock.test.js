@@ -6,9 +6,20 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
+import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import { acquire, release, guard, memoryScope, readSyncMarker, MARKER_TTL_MS } from '../sync-lock.js';
 const fixture = group => ({ ZYLOS_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'sync-marker-')), ZYLOS_RUN_ID: 'run-1', ...(group ? { ZYLOS_SESSION_GROUP: group } : {}) });
 const currentRunId = async scope => scope.runId;
+
+function endRun(env, runId = env.ZYLOS_RUN_ID) {
+  const directory = path.join(env.ZYLOS_DIR, 'comm-bridge');
+  fs.mkdirSync(directory, { recursive: true });
+  const database = new Database(path.join(directory, 'c4.db'));
+  try {
+    database.exec('CREATE TABLE IF NOT EXISTS run_endings(session_group TEXT PRIMARY KEY, run_id TEXT)');
+    database.prepare('INSERT OR REPLACE INTO run_endings VALUES(?,?)').run(env.ZYLOS_SESSION_GROUP || 'origin', runId);
+  } finally { database.close(); }
+}
 
 // acquisition uses the real reader rather than trusting caller env.
 test('CLI acquire checks the current isolated tmux identity', t => {
@@ -47,6 +58,8 @@ test('Sync lifecycle, independent origin marker, stale takeover and old release'
   let mutations = 0;
   await guard({ kind: 'group', token, env }, () => { mutations++; });
   const newer = { ...env, ZYLOS_RUN_ID: 'run-2' };
+  assert.equal(readSyncMarker({ runDir: scope.runDir, kind: 'group', currentRunId: 'run-2' }).held, true);
+  endRun(env);
   assert.equal(readSyncMarker({ runDir: scope.runDir, kind: 'group', currentRunId: 'run-2' }).stale, true);
   const next = await acquire({ kind: 'group', env: newer }, { currentRunId });
   await assert.rejects(guard({ kind: 'group', token, env }, () => { mutations++; }), { code: 'TOKEN_MISMATCH', exitCode: 3 });
@@ -119,6 +132,7 @@ test('release after TOKEN_MISMATCH leaves the new owner marker; the owner releas
   const cli = (args, runtimeEnv) => spawnSync(process.execPath, [script, ...args], { env: { ...process.env, ...runtimeEnv }, encoding: 'utf8', timeout: 15000 });
   const a = await acquire({ kind: 'group', env }, { currentRunId });
   const newer = { ...env, ZYLOS_RUN_ID: 'run-2' };
+  endRun(env);
   const b = await acquire({ kind: 'group', env: newer }, { currentRunId });
   const owned = fs.readFileSync(file, 'utf8');
   assert.equal(JSON.parse(owned).token, b);
@@ -133,6 +147,57 @@ test('release after TOKEN_MISMATCH leaves the new owner marker; the owner releas
   const own = cli(['release', '--kind', 'group', '--token', b], newer);
   assert.equal(own.status, 0, own.stderr);
   assert.equal(fs.existsSync(file), false);
+});
+
+// Real marker, guard and read-only ending query. A changed tmux/session identity
+// cannot steal the old worker's token while its ending remains unknown.
+test('session change retains a live or ambiguous Sync holder until a matching ending or TTL', async t => {
+  const env = fixture('lark:oc_old_worker');
+  t.after(() => fs.rmSync(env.ZYLOS_DIR, { recursive: true, force: true }));
+  const scope = await memoryScope(env), file = path.join(scope.runDir, 'sync.lock');
+  const token = await acquire({ kind: 'group', env }, { currentRunId });
+  const held = fs.readFileSync(file, 'utf8');
+  const newer = { ...env, ZYLOS_RUN_ID: 'run-2' };
+  for (const state of ['missing database', 'unrelated ending', 'unreadable database']) {
+    if (state === 'unrelated ending') endRun(env, 'different-run');
+    if (state === 'unreadable database') fs.writeFileSync(path.join(env.ZYLOS_DIR, 'comm-bridge', 'c4.db'), 'not sqlite');
+    await assert.rejects(acquire({ kind: 'group', env: newer }, { currentRunId }), { code: 'SYNC_BUSY' });
+    assert.equal(fs.readFileSync(file, 'utf8'), held, state);
+    assert.equal(await guard({ kind: 'group', token, env }, ({ marker }) => marker.token), token);
+  }
+  // Unknown state keeps the existing TTL recovery behavior.
+  const next = await acquire({ kind: 'group', env: newer }, { currentRunId, now: () => JSON.parse(held).expiresAt });
+  assert.notEqual(next, token);
+});
+
+test('a matching ending reclaims only a different run and does not create or migrate a database', async t => {
+  const env = fixture('lark:oc_ended');
+  t.after(() => fs.rmSync(env.ZYLOS_DIR, { recursive: true, force: true }));
+  const scope = await memoryScope(env);
+  const token = await acquire({ kind: 'group', env }, { currentRunId });
+  assert.equal(fs.existsSync(path.join(env.ZYLOS_DIR, 'comm-bridge')), false);
+  endRun(env);
+  await assert.rejects(acquire({ kind: 'group', env }, { currentRunId }), { code: 'SYNC_BUSY' });
+  const marker = readSyncMarker({ runDir: scope.runDir, kind: 'group', currentRunId: 'run-2' });
+  assert.equal(marker.reason, 'run_ended');
+  assert.equal(marker.stale, true);
+  const next = await acquire({ kind: 'group', env: { ...env, ZYLOS_RUN_ID: 'run-2' } }, { currentRunId });
+  assert.notEqual(next, token);
+});
+
+test('acquisition and rejected malformed-token guards emit metadata without tokens', async t => {
+  const env = fixture('lark:oc_log');
+  t.after(() => fs.rmSync(env.ZYLOS_DIR, { recursive: true, force: true }));
+  const token = await acquire({ kind: 'group', env }, { currentRunId });
+  await assert.rejects(acquire({ kind: 'group', env }, { currentRunId }), { code: 'SYNC_BUSY' });
+  await assert.rejects(guard({ kind: 'group', env, token: 'bad-token' }, () => assert.fail('invalid guard ran')), { code: 'INVALID_INPUT' });
+  const text = fs.readFileSync(path.join(env.ZYLOS_DIR, 'activity-monitor', 'supervisor-events.jsonl'), 'utf8');
+  const events = text.trim().split('\n').map(line => JSON.parse(line)).filter(row => row.event === 'sync_result');
+  assert.ok(events.some(row => row.action === 'acquire' && row.status === 'success'));
+  assert.ok(events.some(row => row.action === 'acquire' && row.code === 'SYNC_BUSY'));
+  assert.ok(events.some(row => row.action === 'guard' && row.code === 'INVALID_INPUT'));
+  assert.equal(text.includes(token), false);
+  assert.equal(text.includes('bad-token'), false);
 });
 
 // each ownership predicate rejects independently; no live tmux read.

@@ -8,6 +8,8 @@ import { parseStateHeader, validateStateDocument, absorbedTitle, absorbedEntry, 
 import { helpRequested, inputError, isMain, options, parseJson, nonnegativeInteger, readInput, runCli } from './sync-cli.js';
 import { loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 
+import { recordResult, withResult } from './sync-results.js';
+
 const warn = message => console.error(`Warning: ${message}`);
 const lines = text => (text.match(/[^\n]*(?:\n|$)/g) || []).filter(Boolean).map(raw => ({ raw, text: raw.replace(/\r?\n$/, '') }));
 function readOptional(file) {
@@ -63,7 +65,7 @@ function deleteSegments(dir, ids, warning = warn, tolerateFailure = false) {
 }
 
 export async function cleanup(settings = {}, deps = {}) {
-  return guard(settings, ({ memoryDir, scope }) => {
+  return withResult(settings, 'cleanup', () => guard(settings, ({ memoryDir, scope }) => {
     const header = parseStateHeader(readOptional(path.join(memoryDir, 'state.md')), { scope });
     if (header.valid) { deleteSegments(memoryDir, header.inboxCommitted, deps.warning); }
     else (deps.warning || warn)('Invalid state header; all inbox segments retained');
@@ -72,10 +74,10 @@ export async function cleanup(settings = {}, deps = {}) {
         fs.unlinkSync(path.join(memoryDir, name));
       }
     }
-  });
+  }));
 }
 export async function rotate(settings = {}, deps = {}) {
-  return guard(settings, ({ memoryDir }) => {
+  return withResult(settings, 'rotate', () => guard(settings, ({ memoryDir }) => {
     const inbox = path.join(memoryDir, 'inbox.md');
     let stat;
     try { stat = fs.statSync(inbox); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
@@ -85,7 +87,7 @@ export async function rotate(settings = {}, deps = {}) {
     while (fs.existsSync(path.join(memoryDir, `inbox.${chosen}.md`))) chosen = `${id}-${++suffix}`;
     fs.renameSync(inbox, path.join(memoryDir, `inbox.${chosen}.md`));
     return chosen;
-  });
+  }));
 }
 const describeFile = file => {
   const content = fs.readFileSync(file);
@@ -131,44 +133,53 @@ export async function listWithDate(settings = {}, deps = {}) {
   return describeInputs(settings, true, deps, true);
 }
 export async function checkpoint({ end, summary, batch, noContent = false, ...settings }, deps = {}) {
-  return guard(settings, async ({ scope }) => {
+  return withResult(settings, 'checkpoint', () => guard(settings, async ({ scope }) => {
     const database = deps.database || await import('../../comm-bridge/scripts/c4-db.js');
     const coverage = scope === '*' ? database.getGlobalCoverageEnd() : database.getCoverageEnd(scope);
     if (batch?.after !== coverage) throw memoryError('INPUT_CHANGED', 'Batch must start at current coverage');
     await verifyBatchReceipt(batch, { scope, end, database });
     return database.createCheckpoint(scope, end, noContent ? null : summary, { noContent });
-  });
+  }));
 }
 export async function commit({ input, ...settings }, deps = {}) {
-  if (settings.group !== undefined) throw inputError('Group override is only supported by list');
-  return guard(settings, async ({ memoryDir, scope }) => {
-    const payload = typeof input === 'string' ? parseJson(input) : input;
-    if (!payload || Array.isArray(payload) || typeof payload !== 'object' || !Array.isArray(payload.followedUpIds) || payload.followedUpIds.some(id => !Number.isSafeInteger(id) || id <= 0)) throw inputError('Expected {followedUpIds:[positive integer IDs]}');
-    const officialPath = path.join(memoryDir, 'state.md'), temporaryPath = `${officialPath}.${settings.token}.tmp`;
-    const official = readOptional(officialPath);
-    let temporary;
-    try { temporary = fs.readFileSync(temporaryPath, 'utf8'); }
-    catch (error) { if (error.code === 'ENOENT') throw memoryError('STATE_DOCUMENT_INVALID', 'Temporary state is missing'); throw error; }
-    const combined = composeState(official, temporary, payload.followedUpIds, deps.warning);
-    if (!validateStateDocument(combined, { scope })) throw memoryError('STATE_DOCUMENT_INVALID', 'State header or required sections are invalid');
-    const header = parseStateHeader(combined, { scope });
-    const actual = await describeInputs(settings, false);
-    const segmentIdentity = entries => Array.isArray(entries) ? entries.map(item => [item?.id, item?.path, item?.sha256]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))) : null;
-    if (JSON.stringify(segmentIdentity(payload.inputs?.segments)) !== JSON.stringify(segmentIdentity(actual.segments))) throw memoryError('INPUT_CHANGED', 'Sync segments differ from list; read the current list and segments again');
-    const ids = actual.segments.map(item => item.id);
-    const database = deps.database || await import('../../comm-bridge/scripts/c4-db.js');
-    await verifyBatchReceipt(payload.batch, { scope, end: header.coverage, database });
-    const latest = database.getLatestContentCheckpoint(scope);
-    if (!latest || latest.end_conversation_id !== header.coverage) throw memoryError('INPUT_CHANGED', 'State coverage must match the completed checkpoint');
-    const syncedAt = new Date((deps.now || Date.now)()).toISOString();
-    const published = combined
-      .replace(/^(.*? \| inbox_committed=)[^|\r\n]*(?= \| | -->)/, (_, prefix) => prefix + ids.join(','))
-      .replace(/^(.*? \| synced_at=)[^|\r\n]*(?= \| | -->)/, (_, prefix) => prefix + syncedAt);
-    fs.writeFileSync(temporaryPath, published, 'utf8');
-    fs.renameSync(temporaryPath, officialPath);
-    // Publication is complete. A failed delete cannot roll back the state.
-    deleteSegments(memoryDir, ids, deps.warning, true);
-    return { committed: true, inboxCommitted: ids };
+  return withResult(settings, 'commit', async () => {
+    if (settings.group !== undefined) throw inputError('Group override is only supported by list');
+    return guard(settings, async ({ memoryDir, scope, marker }) => {
+      const payload = typeof input === 'string' ? parseJson(input) : input;
+      if (!payload || Array.isArray(payload) || typeof payload !== 'object' || !Array.isArray(payload.followedUpIds) || payload.followedUpIds.some(id => !Number.isSafeInteger(id) || id <= 0)) throw inputError('Expected {followedUpIds:[positive integer IDs]}');
+      const officialPath = path.join(memoryDir, 'state.md'), temporaryPath = `${officialPath}.${settings.token}.tmp`;
+      const official = readOptional(officialPath);
+      let temporary;
+      try { temporary = fs.readFileSync(temporaryPath, 'utf8'); }
+      catch (error) { if (error.code === 'ENOENT') throw memoryError('STATE_DOCUMENT_INVALID', 'Temporary state is missing'); throw error; }
+      const combined = composeState(official, temporary, payload.followedUpIds, deps.warning);
+      if (!validateStateDocument(combined, { scope })) throw memoryError('STATE_DOCUMENT_INVALID', 'State header or required sections are invalid');
+      const header = parseStateHeader(combined, { scope });
+      const actual = await describeInputs(settings, false);
+      const segmentIdentity = entries => Array.isArray(entries) ? entries.map(item => [item?.id, item?.path, item?.sha256]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))) : null;
+      if (JSON.stringify(segmentIdentity(payload.inputs?.segments)) !== JSON.stringify(segmentIdentity(actual.segments))) throw memoryError('INPUT_CHANGED', 'Sync segments differ from list; read the current list and segments again');
+      const ids = actual.segments.map(item => item.id);
+      const database = deps.database || await import('../../comm-bridge/scripts/c4-db.js');
+      let coveredRows;
+      await verifyBatchReceipt(payload.batch, { scope, end: header.coverage, database: {
+        getConversationsByRange: (...args) => (coveredRows = database.getConversationsByRange(...args)),
+      } });
+      const latest = database.getLatestContentCheckpoint(scope);
+      if (!latest || latest.end_conversation_id !== header.coverage) throw memoryError('INPUT_CHANGED', 'State coverage must match the completed checkpoint');
+      // Reuse the receipt verifier's read; diagnostics never add a database read.
+      const coveredIds = coveredRows.filter(row => row.status === 'delivered' && (scope === '*' || row.session_group === scope)).map(row => row.id).sort((a, b) => a - b);
+      const count = coveredIds.length;
+      const syncedAt = new Date((deps.now || Date.now)()).toISOString();
+      const published = combined
+        .replace(/^(.*? \| inbox_committed=)[^|\r\n]*(?= \| | -->)/, (_, prefix) => prefix + ids.join(','))
+        .replace(/^(.*? \| synced_at=)[^|\r\n]*(?= \| | -->)/, (_, prefix) => prefix + syncedAt);
+      fs.writeFileSync(temporaryPath, published, 'utf8');
+      fs.renameSync(temporaryPath, officialPath);
+      // Publication is complete. A failed delete cannot roll back the state.
+      deleteSegments(memoryDir, ids, deps.warning, true);
+      await recordResult({ action: 'commit', status: 'success', scope, startedAt: marker.startedAt, checkpointId: latest.id, fromId: coveredIds[0] ?? null, toId: coveredIds.at(-1) ?? null, count }, settings);
+      return { committed: true, inboxCommitted: ids };
+    });
   });
 }
 
@@ -180,8 +191,8 @@ if (isMain(import.meta.url)) await runCli(async () => {
   const [command, ...args] = process.argv.slice(2);
   const parsed = options(args, command === 'checkpoint' ? ['token', 'batch'] : command === 'list' ? ['token', 'group'] : ['token'], command === 'checkpoint' ? ['no-content'] : []);
   if (!['cleanup', 'rotate', 'list', 'checkpoint', 'commit'].includes(command) || parsed.positional.length !== (command === 'checkpoint' ? 1 : 0)) throw inputError('Invalid command or arguments');
-  if (command !== 'list') requireSyncToken(parsed.token);
   const settings = { token: parsed.token };
+  if (command !== 'list') await withResult(settings, command, () => requireSyncToken(parsed.token));
   let result;
   if (command === 'cleanup') result = await cleanup(settings);
   if (command === 'rotate') result = await rotate(settings);

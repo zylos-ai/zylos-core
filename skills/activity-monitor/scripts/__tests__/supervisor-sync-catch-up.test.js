@@ -245,3 +245,10 @@ test('Origin Sync retains its minimum interval and never records catch-up progre
   assert.equal(f.controls.length, 2);
   assert.equal(f.lifecycle.syncProgress.size, 0);
 });
+
+
+test('catch-up diagnostics include the batch-progress reason', async () => {
+  const f = fixture(), events = []; f.deps.diagnostic = row => events.push(row);
+  await f.check(0); f.count = 300; f.first = 201; await f.check();
+  assert.ok(events.filter(row => row.event === 'sync_triggered').at(-1).reason.includes('catch_up'));
+});

@@ -2,7 +2,8 @@
 /**
  * Daily memory commit helper.
  *
- * Creates a local commit in ~/zylos/memory/ if changes exist. Files larger than
+ * Creates a local commit in ~/zylos/memory/ if changes exist. Temporary *.tmp
+ * files are excluded, including files already staged. Files larger than
  * MAX_FILE_BYTES are left out of the commit and listed in the output: git
  * streams files above core.bigFileThreshold (512 MB) into a pack while adding
  * them, and a failed add leaves that partial pack behind.
@@ -108,15 +109,16 @@ function main() {
     const dateStr = dateInTimeZone(new Date(), tz);
     const message = `memory: daily snapshot ${dateStr}`;
 
-    execFileSync('git', ['add', '--', '.', ...oversized.map(file => `:(exclude,literal)${file.path}`)], {
+    execFileSync('git', ['add', '--', '.', ':(exclude,glob)**/*.tmp', ...oversized.map(file => `:(exclude,literal)${file.path}`)], {
       cwd: MEMORY_DIR,
       stdio: ['ignore', 'pipe', 'pipe']
     });
 
     // A file staged before this run (by hand, or by an earlier `git add .` whose commit failed) is still in the
     // index despite the exclude: put it back to its committed state so it is not committed either.
-    if (oversized.length > 0) {
-      execFileSync('git', ['reset', '-q', '--', ...oversized.map(file => `:(literal)${file.path}`)], {
+    const excluded = [...oversized.map(file => file.path), ...paths.filter(file => file.endsWith('.tmp'))];
+    if (excluded.length > 0) {
+      execFileSync('git', ['reset', '-q', '--', ...new Set(excluded.map(file => `:(literal)${file}`))], {
         cwd: MEMORY_DIR,
         stdio: ['ignore', 'pipe', 'pipe']
       });

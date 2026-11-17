@@ -5,6 +5,10 @@ import { randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { resolveCoreConfigModule } from '../../comm-bridge/scripts/core-config-loader.js';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
+import { assertTestDatabasePath } from '../../comm-bridge/scripts/c4-database-path.js';
+import { initializeOriginRound, completeOriginRound } from './origin-round.js';
+import { recordResult, withResult } from './sync-results.js';
 
 export const MARKER_TTL_MS = 1800000;
 import { helpRequested, memoryError, reportMemoryError, isMain, options, runCli } from './sync-cli.js';
@@ -95,13 +99,31 @@ export function readMarker(runDir, kind, warn = message => process.stderr.write(
   return { marker: value, reason: null };
 }
 
-export function readSyncMarker({ runDir, kind, currentRunId }, { now = Date.now, warn } = {}) {
+// A new session identity alone does not prove the old Sync worker has stopped.
+// Run endings are recorded by the supervisor after stopping/observing the old
+// session absent. Read only: a missing, unreadable or older schema is unknown.
+function holderRunEnded(runDir, runId) {
+  const root = path.resolve(runDir, '../../..');
+  const databasePath = path.join(root, 'comm-bridge', 'c4.db');
+  assertTestDatabasePath(databasePath);
+  let database;
+  try {
+    database = new Database(databasePath, { readonly: true, fileMustExist: true });
+    const row = database.prepare('SELECT run_id FROM run_endings WHERE session_group=?').get(path.basename(runDir));
+    return row?.run_id === runId;
+  } catch { return false; }
+  finally { database?.close(); }
+}
+
+export function readSyncMarker({ runDir, kind, currentRunId }, { now = Date.now, warn, runEnded = holderRunEnded } = {}) {
   const { marker, reason } = readMarker(runDir, kind, warn);
   if (!marker) return { held: false, stale: false, runId: null, expiresAt: null, reason };
   const expired = now() >= marker.expiresAt;
-  const stale = marker.runId !== currentRunId || expired;
+  const changed = marker.runId !== currentRunId;
+  const ended = changed && runEnded(runDir, marker.runId) === true;
+  const stale = expired || ended;
   return { held: !stale, stale, runId: marker.runId, expiresAt: marker.expiresAt,
-    reason: marker.runId !== currentRunId ? 'run_changed' : expired ? 'expired' : 'held' };
+    reason: ended ? 'run_ended' : expired ? 'expired' : 'held' };
 }
 
 export async function memoryScope(env = process.env) {
@@ -137,7 +159,15 @@ export async function readCurrentRunId(scope, { tmux } = {}) {
   } finally { connection?.close(); }
 }
 
-export async function acquire({ kind, env = process.env, waitMs }, { currentRunId = readCurrentRunId, now = Date.now } = {}) {
+export async function acquire(settings, deps = {}) {
+  return withResult(settings, 'acquire', async () => {
+    const token = await acquireMarker(settings, deps);
+    await recordResult({ action: 'acquire', status: 'success' }, settings);
+    return token;
+  });
+}
+
+async function acquireMarker({ kind, env = process.env, waitMs }, { currentRunId = readCurrentRunId, now = Date.now } = {}) {
   const scope = await memoryScope(env);
   checkKind(scope, kind);
   return withMemoryLock(scope.runDir, async () => {
@@ -148,7 +178,8 @@ export async function acquire({ kind, env = process.env, waitMs }, { currentRunI
     }
     const token = randomBytes(16).toString('hex');
     const startedAt = now();
-    const marker = { runId: scope.runId, kind, token, startedAt, expiresAt: startedAt + MARKER_TTL_MS };
+    const marker = { runId: scope.runId, kind, token, startedAt, expiresAt: startedAt + MARKER_TTL_MS,
+      ...(kind === 'origin' ? initializeOriginRound(scope.root, env) : {}) };
     const target = markerPath(scope.runDir, kind);
     const temp = `${target}.${token}.tmp`;
     fs.writeFileSync(temp, JSON.stringify(marker) + '\n', { mode: 0o600, flag: 'wx' });
@@ -157,13 +188,20 @@ export async function acquire({ kind, env = process.env, waitMs }, { currentRunI
   }, { waitMs });
 }
 
-export async function release({ kind, token, env = process.env, waitMs }) {
+export async function release(settings) {
+  return withResult(settings, 'release', () => releaseMarker(settings));
+}
+
+async function releaseMarker({ kind, token, env = process.env, waitMs }) {
   const scope = await memoryScope(env);
   checkKind(scope, kind);
   if (!/^[0-9a-f]{32}$/.test(token || '')) throw memoryError('INVALID_INPUT', 'Invalid Sync token');
-  return withMemoryLock(scope.runDir, () => {
+  return withMemoryLock(scope.runDir, async () => {
     const { marker } = readMarker(scope.runDir, kind);
-    if (marker?.token === token) fs.unlinkSync(markerPath(scope.runDir, kind));
+    if (marker?.token === token) {
+      if (kind === 'origin') await completeOriginRound(scope, marker, env);
+      fs.unlinkSync(markerPath(scope.runDir, kind));
+    }
   }, { waitMs });
 }
 
@@ -175,7 +213,11 @@ export function requireSyncToken(token) {
 }
 
 /** All guarded mutations check ownership and execute in the same F8 section. */
-export async function guard({ kind, token, env = process.env, waitMs }, action) {
+export async function guard(settings, action) {
+  return withResult(settings, 'guard', () => guardMarker(settings, action));
+}
+
+async function guardMarker({ kind, token, env = process.env, waitMs }, action) {
   let scope;
   try { scope = await memoryScope(env); }
   catch (error) {

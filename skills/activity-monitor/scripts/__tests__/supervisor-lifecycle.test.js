@@ -57,7 +57,7 @@ function fixture(Class = SupervisorLifecycle) {
     bindTarget: s => ({ expectedRunId: s.runId }),
     diagnostic: e => f.events.push(e),
     prompts: { PRE_RECLAIM_CHECK_PROMPT: 'check', UPGRADE_RESTART_CHECK_PROMPT: 'upgrade check', PRE_RECLAIM_SYNC_PROMPT: 'prepare', PRE_RECLAIM_ORIGIN_SYNC_PROMPT: 'prepare origin', GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync',
-      ROTATION_PROMPT: () => 'rotate', CONFIG_RECLAIM_PROMPT: () => 'config', SYNC_BACKLOG_ALERT: reader => `alert:${reader}` },
+      ROTATION_PROMPT: () => 'rotate', CONFIG_RECLAIM_PROMPT: () => 'config', SYNC_BACKLOG_ALERT: (kind, count, lag, scope) => `alert:${kind === 'group' ? scope : kind}` },
   };
   f.lifecycle = new Class(f.deps, { now: () => f.now });
   f.settle = (status = 'done') => { for (const control of f.controls) control.status = status; };
@@ -483,7 +483,7 @@ test('Origin TTL waits every preparation control and binds both Sync kinds to th
     for (const control of f.controls) {
       assert.equal(control.targetBinding.expectedRunId, 'run-origin');
       assert.equal(control.sessionGroup, 'origin'); assert.equal(control.requireIdle, true);
-      assert.equal(control.appendAckSuffix, true); assert.equal(control.ackDeadlineAt, Math.floor((f.now + 300000) / 1000));
+      assert.equal(control.appendAckSuffix, true); assert.equal(control.ackDeadlineAt, Math.floor((f.now + (control.content === 'check' ? 300000 : 900000)) / 1000));
     }
     await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
     for (const control of f.controls.slice(0, -1)) {
@@ -2195,3 +2195,25 @@ test('release check deferral cancels preparation and reuses TTL reset and consec
   assert.equal(f.events.filter(row => row.event === 'reclaim_deferred').length, 1);
  }
 });
+
+
+for (const path of ['ttl', 'release']) {
+  test(`${path} Sync metadata failure preserves controls and fifteen minute deadlines`, async () => {
+    const f = fixture(); f.unsummarized = 1;
+    f.db.getLatestContentCheckpoint = () => { throw new Error('diagnostic unavailable'); };
+    f.deps.reportError = () => {};
+    let preparation;
+    if (path === 'ttl') {
+      await f.lifecycle.checkTtl(f.scenes[0], f.context);
+      preparation = f.lifecycle.ttlPreparation.get('a');
+    } else {
+      preparation = { controlIds: [] };
+      await f.lifecycle.prepareRelease(f.scenes[0], f.context, preparation);
+    }
+    assert.equal(preparation.controlIds.length, 2);
+    const sync = f.controls.find(row => row.content === 'prepare');
+    assert.equal(sync.ackDeadlineAt, Math.floor(f.now / 1000) + 900);
+    const event = f.events.find(row => row.event === 'sync_triggered');
+    assert.ok(event.reason.includes('pre_reclaim')); assert.equal(event.backlog, 1);
+  });
+}

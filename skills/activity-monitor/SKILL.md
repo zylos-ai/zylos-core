@@ -99,6 +99,9 @@ ack deadline passes without an ack, `superseded`, `failed` or `cancelled`)
 and the same run is idle; while any is still pending or running the group is
 not reclaimed. If only some controls could be written, preparation restarts
 from the check after the written ones terminate.
+Pre-reclaim Group and Origin Sync controls have a 15-minute acknowledgement
+deadline. Ordinary periodic Group Sync retains its five-minute deadline;
+periodic Origin Sync remains without a deadline.
 
 Once the same run is preparing for TTL reclaim, its own preparation activity
 does not restart or cancel that preparation; a new C4 message still cancels it.
@@ -497,3 +500,50 @@ The sole health writer caches the decoded file, invalidating it on inode, size,
 mtime or ctime changes. Reads return independent snapshots; every successful
 write still performs its original durable publication and immediately refreshes
 the cache. Cleanup publishes only when it removes entries, without changing v1.
+
+
+## Memory Sync diagnostics
+
+`activity-monitor/supervisor-events.jsonl` records `sync_triggered` and
+`sync_result` alongside existing supervisor decisions. Existing rotation and
+seven-day retention apply. Records contain metadata only, never conversation
+content, receipts or Sync tokens.
+
+Trigger records include `scope`, `kind` (`group`, `origin`, `global`), a `reason`
+array (`threshold`, `max_lag`, `context`, `inherited`, `catch_up`,
+`pre_reclaim`), `backlog`, `lag` in seconds, optional `contextPercent`, and the
+control/run/checkpoint identifiers. Logging failures cannot change control
+bookkeeping or the protected memory operation's outcome.
+
+Result actions include `commit` (checkpoint ID, actual first/last C4 IDs and
+count), `advance` (group and both cursor columns before/after), and
+`round_complete` (raw count, advanced groups, remaining quota, remaining
+backlog). Origin completes its round at the existing lock release boundary;
+interrupted rounds have no completion record. Structured errors contain a
+`code`, `kind`, `scope` and operation action. Invalid calls and failed guards
+can produce both guard and operation error records.
+
+The supervisor queues owner notices through the existing Sync alert control,
+with `type`, `kind` and `scope`, throttled for six hours per type/kind/scope:
+
+- `no_checkpoint`: three consecutive requests without a new checkpoint.
+- `origin_frequency`: more than four Origin requests in one hour.
+- `origin_idle`: more than five of the latest ten completed rounds have no raw
+  rows and no cursor advancement. Summary-only progress counts as work.
+- `backlog`: the oldest unsummarized group row exceeds the configured maximum
+  interval, including groups without a live session. Existing large-backlog
+  and Origin lag alerts remain in place.
+- `control_timeout`: a Sync control timed out.
+- `state_uncommitted`: the latest content checkpoint is ahead of formal state,
+  after any live Sync marker releases or expires.
+
+Inspection of inactive groups does not launch their sessions. Timeout evidence
+is retained until alert enqueue succeeds. Trigger/round evidence is recovered
+from retained diagnostic logs after restart. Earlier timeout controls are
+recovered separately from the last-three trigger window.
+
+A changed session alone does not expire a Sync marker early. Before the
+existing 30-minute expiry, a different holder is reclaimed only when a matching
+run-ending record proves that run ended. Missing or unreadable evidence leaves
+ownership intact. Daily memory snapshots exclude `*.tmp`, including files
+already staged before the snapshot.

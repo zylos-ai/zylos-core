@@ -497,3 +497,36 @@ test('commit rejects a changed batch, wrong end, or missing completed checkpoint
     });
   }
 });
+
+test('commit emits metadata only after publication and preserves rejected error codes', async t => {
+  const f = await fixture(t); write(f);
+  await commit({ ...f.settings, input: { followedUpIds: [1] } }, f.deps);
+  await assert.rejects(guardedCommit({ ...f.settings, token: 'b'.repeat(32), input: 'private rejected input' }, f.deps), { code: 'TOKEN_MISMATCH' });
+  const log = fs.readFileSync(path.join(f.root, 'activity-monitor', 'supervisor-events.jsonl'), 'utf8');
+  const events = log.trim().split('\n').map(JSON.parse).filter(event => event.action === 'commit');
+  assert.equal(events.length, 2);
+  assert.deepEqual(events.map(row => [row.status, row.code]), [['success', undefined], ['error', 'TOKEN_MISMATCH']]);
+  assert.equal(events[0].scope, f.scope);
+  assert.equal(events[0].kind, 'group');
+  assert.equal(events[0].fromId, null); assert.equal(events[0].toId, null); assert.equal(events[0].count, 0);
+  assert.equal(log.includes(f.settings.token), false);
+  assert.equal(log.includes('private rejected input'), false);
+  assert.equal(log.includes('Updated'), false);
+});
+
+test('commit metadata uses first and last verified C4 rows without a second database read', async t => {
+  const { projectConversation } = await import('../../../comm-bridge/scripts/c4-query-format.js');
+  const f = await fixture(t);
+  const rows = [7, 19].map(id => ({ id, timestamp: '2026-10-19 05:30:02', direction: 'in', channel: 'telegram', endpoint_id: 'test', content: 'private row', session_group: f.scope, status: 'delivered' }));
+  const batch = createBatchReceipt(rows.map(projectConversation), { scope: f.scope, after: 5, end: 20 });
+  fs.writeFileSync(f.temporary, f.skeleton().replace('coverage=0 ', 'coverage=20 '));
+  let reads = 0;
+  const database = { getLatestContentCheckpoint: () => ({ id: 8, end_conversation_id: 20 }), getConversationsByRange: () => {
+    assert.equal(++reads, 1, 'Observability must reuse verified input rather than add a fallible read');
+    return rows;
+  } };
+  await guardedCommit({ ...f.settings, input: { followedUpIds: [], inputs: await list(f.settings), batch } }, { ...f.deps, database });
+  const result = fs.readFileSync(path.join(f.root, 'activity-monitor', 'supervisor-events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).find(row => row.action === 'commit');
+  assert.deepEqual([result.fromId, result.toId, result.count, result.checkpointId], [7, 19, 2, 8]);
+  assert.equal(reads, 1);
+});
