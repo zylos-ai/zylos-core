@@ -4,15 +4,14 @@ export function appendEvent(file,event) {
  fs.mkdirSync(path.dirname(file),{recursive:true});
  fs.appendFileSync(file,JSON.stringify(event)+'\n',{flag:'a',mode:0o600});
 }
-// Rotated copies keep the log's own extension: events.jsonl -> events.<stamp>.jsonl, errors.log -> errors.<stamp>.log.
 export function rotateEventLog(file,{now=Date.now(),maxBytes=10*1024*1024,retentionMs=7*86400000}={}) {
- const extension=path.extname(file)||'.jsonl',directory=path.dirname(file),stem=path.basename(file,extension);
+ const directory=path.dirname(file),stem=path.basename(file,'.jsonl');
  let names;try {names=fs.readdirSync(directory);}catch(e){if(e.code==='ENOENT')return null;throw e;}
- const rotated=names.map(name=>({name,stamp:name!==path.basename(file)&&name.startsWith(stem+'.')&&name.endsWith(extension)?Number(name.slice(stem.length+1,-extension.length)):NaN})).filter(x=>Number.isSafeInteger(x.stamp));
+ const rotated=names.map(name=>({name,stamp:name!==path.basename(file)&&name.startsWith(stem+'.')&&name.endsWith('.jsonl')?Number(name.slice(stem.length+1,-6)):NaN})).filter(x=>Number.isSafeInteger(x.stamp));
  const stamp=Math.max(now,...rotated.map(x=>x.stamp+1));
  let result=null;
  try {
-  if(fs.statSync(file).size>maxBytes){const destination=path.join(directory,`${stem}.${stamp}${extension}`);fs.renameSync(file,destination);result=destination;}
+  if(fs.statSync(file).size>maxBytes){const destination=path.join(directory,`${stem}.${stamp}.jsonl`);fs.renameSync(file,destination);result=destination;}
  } catch(error){if(error.code!=='ENOENT')throw error;}
  for(const old of rotated)if(old.stamp<now-retentionMs)try{fs.unlinkSync(path.join(directory,old.name));}catch(e){if(e.code!=='ENOENT')throw e;}
  return result;

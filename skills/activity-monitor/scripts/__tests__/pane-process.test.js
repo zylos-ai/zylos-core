@@ -19,22 +19,35 @@ function runDir(t) {
 
 /**
  * A real long-lived process, stopped with the test. With `child`, it also starts one child and reports its pid.
- * `name` runs it through a link of that name, so its process name is `name` (a native Codex process).
  */
-async function liveProcess(t, { child = false, name = null } = {}) {
+async function liveProcess(t, { child = false } = {}) {
   const script = child
     ? "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1e6)'],{stdio:'ignore'});" +
       "process.stdout.write(String(c.pid)+'\\n');process.on('SIGTERM',()=>{c.kill();process.exit(0)});setInterval(()=>{},1e6)"
     : "process.stdout.write('up\\n');setInterval(()=>{},1e6)";
-  let binary = process.execPath;
-  if (name) {
-    binary = path.join(runDir(t), name);
-    fs.symlinkSync(process.execPath, binary);
-  }
-  const proc = spawn(binary, ['-e', script], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const proc = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'ignore'] });
   t.after(() => proc.kill('SIGTERM'));
   const [line] = await once(proc.stdout, 'data');
   return { pid: proc.pid, childPid: child ? Number(String(line).trim()) : null };
+}
+
+/**
+ * A real process named `codex` (a native Codex pane process) with one direct child.
+ * The link points at /bin/sh, not node: Node 24 renames its main thread
+ * `MainThread`, so a node process started through a link keeps no link name.
+ * Both processes are stopped with the test.
+ */
+async function nativeCodexProcess(t) {
+  const binary = path.join(runDir(t), 'codex');
+  fs.symlinkSync('/bin/sh', binary);
+  const proc = spawn(binary, ['-c', 'sleep 1000 & echo $!; wait'], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const [line] = await once(proc.stdout, 'data');
+  const childPid = Number(String(line).trim());
+  t.after(() => {
+    try { process.kill(childPid, 'SIGKILL'); } catch {}
+    proc.kill('SIGKILL');
+  });
+  return { pid: proc.pid, childPid };
 }
 
 const info = pid => {
@@ -102,8 +115,9 @@ test('a Codex wrapper pane accepts its direct child and refuses other processes'
 
 test('a native Codex pane process refuses its own direct child', async t => {
   const dir = runDir(t);
-  const pane = await liveProcess(t, { child: true, name: 'codex' });
+  const pane = await nativeCodexProcess(t);
   assert.equal(info(pane.pid).comm, 'codex');
+  assert.equal(info(pane.childPid).ppid, pane.pid);
   writePaneProcess(dir, { runId: 'run-1', runtime: 'codex', panePid: pane.pid, paneStart: info(pane.pid).start });
   const env = { ZYLOS_RUN_ID: 'run-1' };
 

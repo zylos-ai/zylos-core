@@ -128,18 +128,3 @@ test('next read drains every deferred rotation and closes all old descriptors',t
  assert.deepEqual(reader.read(),[{n:4},{n:5},{n:6}]);assert.deepEqual(reader.read(),[]);
  for(const fd of deferred)assert.throws(()=>fs.fstatSync(fd),{code:'EBADF'});
 });
-
-test('a plain text log rotates by size under its own extension and old copies expire',t=>{
- const file=path.join(path.dirname(fixture(t)),'hook-activity-errors.log');
- fs.appendFileSync(file,'line 1\n');
- assert.equal(rotateEventLog(file,{maxBytes:1024,now:100}),null,'under the size limit nothing rotates');
- const first=rotateEventLog(file,{maxBytes:0,now:100});
- assert.equal(path.basename(first),'hook-activity-errors.100.log');
- assert.equal(fs.readFileSync(first,'utf8'),'line 1\n');
- assert.equal(fs.existsSync(file),false);
- fs.appendFileSync(file,'line 2\n');
- assert.equal(path.basename(rotateEventLog(file,{maxBytes:0,now:100})),'hook-activity-errors.101.log');
- fs.appendFileSync(file,'line 3\n');
- rotateEventLog(file,{maxBytes:1024,now:100+7*86400000+2});
- assert.deepEqual(fs.readdirSync(path.dirname(file)).sort(),['hook-activity-errors.log']);
-});

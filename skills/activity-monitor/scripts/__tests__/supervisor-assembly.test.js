@@ -251,6 +251,22 @@ test('assembly: maintenance retains current and recent logs while pruning absent
  assert.equal(fs.readFileSync(path.join(groups,'telegram:file'),'utf8'),'not a directory');
 });
 
+test('assembly: maintenance rotates the hook error log and child session records once they pass the size limit',async t=>{
+ const {supervisor,root}=fixture(t);await supervisor.loop.deps.readConfiguration();
+ const runDir=path.join(root,'activity-monitor'),group=path.join(runDir,'session-groups','telegram:active');
+ fs.mkdirSync(group,{recursive:true});
+ const files=[path.join(runDir,'hook-activity-errors.log'),path.join(runDir,'child-sessions.jsonl'),path.join(group,'child-sessions.jsonl')];
+ // Sparse files over the 10 MB limit: the size counts, no disk space is used.
+ for(const file of files){fs.writeFileSync(file,'line\n');fs.truncateSync(file,10*1024*1024+1);}
+ await supervisor.loop.deps.writeMetricsAndMaintain({scenes:[],fences:[]});
+ for(const file of files){
+  assert.equal(fs.existsSync(file),false,`${path.basename(file)} rotated away`);
+  const stem=path.basename(file,'.jsonl');
+  const rotated=fs.readdirSync(path.dirname(file)).filter(name=>name.startsWith(`${stem}.`)&&/\.\d+\.jsonl$/.test(name)&&Number.isSafeInteger(Number(name.slice(stem.length+1,-6))));
+  assert.equal(rotated.length,1,`${path.basename(file)} has one rotated copy`);
+ }
+});
+
 test('assembly: one failed probe poll cannot starve another runtime or auth recovery',async t=>{
  const {supervisor,calls}=fixture(t);
  await supervisor.loop.deps.readConfiguration();await capturedAuthRecovery(supervisor,'codex');
