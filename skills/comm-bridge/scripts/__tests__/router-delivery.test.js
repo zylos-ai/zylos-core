@@ -690,9 +690,7 @@ test('only a committed terminal Enter failure notifies the supervisor with the p
   const f = setup(t), row = f.message(), notifications = [];
   f.adapter.sendKeys = async () => { throw error('ENTER_UNVERIFIED'); };
   f.deps.notifyDeliveryFailed = fact => {
-    assert.equal(f.row(row.id).status, 'failed', 'the ledger transition commits before notification');
-    assert.equal(f.calls.at(-1)[0], 'failDelivery');
-    notifications.push(fact);
+    notifications.push({ fact, status: f.row(row.id).status, lastCall: f.calls.at(-1)[0] });
     return Promise.reject(new Error('supervisor unavailable'));
   };
   const delivery = f.create();
@@ -700,8 +698,9 @@ test('only a committed terminal Enter failure notifies the supervisor with the p
   assert.deepEqual(notifications, [], 'a retryable failure cannot trigger a restart');
   assert.equal(f.store.claimConversation(row.id), true);
   await delivery.deliverConversation(row);
-  assert.deepEqual(notifications, [{ conversationId: row.id, sessionGroup: row.session_group,
-    runId: 'r1', sessionId: 's1', runtime: 'codex', pastedAt: f.calls.filter(c => c[0] === 'notify').at(-1)[1].pastedAt }]);
+  assert.deepEqual(notifications, [{ status: 'failed', lastCall: 'failDelivery', fact: {
+    conversationId: row.id, sessionGroup: row.session_group, runId: 'r1', sessionId: 's1',
+    runtime: 'codex', pastedAt: f.calls.filter(c => c[0] === 'notify').at(-1)[1].pastedAt } }]);
   await delivery.deliverConversation(row);
   assert.equal(notifications.length, 1, 'a lost conditional transition cannot repeat the notification');
   assert.equal(f.row(row.id).retry_count, 2);
@@ -716,5 +715,22 @@ test('terminal paste failures cannot request an Enter failure restart', async t 
   f.store.claimConversation(row.id);
   await delivery.deliverConversation(row);
   assert.equal(f.row(row.id).status, 'failed');
+  assert.deepEqual(notifications, []);
+});
+
+// A successful paste alone is insufficient: only terminal Enter verification
+// failures may request recovery, even when an earlier attempt also pasted.
+test('terminal transport failure after paste does not notify delivery recovery', async t => {
+  const f = setup(t), row = f.message(), notifications = [];
+  let attempt = 0;
+  f.adapter.sendKeys = async () => { throw error(++attempt === 1 ? 'ENTER_UNVERIFIED' : 'TMUX_UNAVAILABLE'); };
+  f.deps.notifyDeliveryFailed = fact => notifications.push(fact);
+  const delivery = f.create();
+  await delivery.deliverConversation(row);
+  assert.equal(f.store.claimConversation(row.id), true);
+  await delivery.deliverConversation(row);
+  assert.equal(f.calls.filter(call => call[0] === 'paste').length, 2);
+  assert.equal(f.row(row.id).status, 'failed');
+  assert.equal(f.row(row.id).retry_count, 2);
   assert.deepEqual(notifications, []);
 });
