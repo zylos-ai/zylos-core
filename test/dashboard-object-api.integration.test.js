@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as childProcess from 'node:child_process';
 import Database from '../skills/comm-bridge/scripts/sqlite-driver.js';
+import { createSessionObservations } from '../skills/dashboard/src/lib/session-observations.js';
 import { CoreState } from '../skills/dashboard/src/lib/core-state.js';
 import { Store } from '../skills/dashboard/src/lib/store.js';
 import { generateApiKey, hashApiKey, hashPassword } from '../skills/dashboard/src/lib/auth.js';
@@ -120,6 +121,10 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     status: { valid: true, sampledAt: clock, value: { state: key === 'telegram:working' ? 'busy' : 'idle' } },
     usage: { valid: true, value: { version: usageVersion, effort: { level: usageEffort }, model: { id: usageModel }, context_window: { used_percentage: 25 } } } }),
     readLiveIdentity: async () => ({ present: true, ready: true }), readRuntimeHealth: async () => ({ missing: true }), readAccountUsage: async () => null };
+  reader.readSessionStates = async (groups, { includeAllLive }) => {
+    const keys = includeAllLive ? [...new Set([...groups, 'origin', 'telegram:working', 'telegram:child'])] : groups;
+    return new Map(await Promise.all(keys.map(async key => [key, await reader.readSessionState(key)])));
+  };
   const core = async name => {
     if (name === 'config.js') return { ...await originalLoadCoreModule(name), readSessionMode: () => ({ mode }) };
     if (name === 'am-sock-client.js') return { submit: async () => ({ kind: 'rejected', reply: { code: 'invalid_request' } }),
@@ -137,9 +142,17 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     return originalLoadCoreModule(name);
   };
   t.mock.module('../skills/dashboard/src/lib/core-modules.js', { namedExports: { loadCoreModule: core } });
+  // The real shared provider was imported before the module mock above. Inject
+  // its Core loader explicitly so the batch and HTTP routes share this fixture.
+  t.mock.module('../skills/dashboard/src/lib/session-observations.js', { namedExports: {
+    createSessionObservations: options => createSessionObservations({ ...options, loadCoreModule: core, now: () => clock }),
+  } });
   const originState = () => ({ state: 'IDLE', runtime: 'claude', ready: true, sampledAt: clock, sessionId: 'fixture-session', runId: 'fixture-run',
     running_tools: [], active_subagents: [], subagent_tools: [], source: {}, updated_at: new Date(clock).toISOString() });
-  t.mock.method(CoreState.prototype, 'refresh', async () => originState());
+  t.mock.method(CoreState.prototype, 'refresh', async function (options) {
+    await this.sessionObservations.get(options);
+    return originState();
+  });
   t.mock.method(CoreState.prototype, 'getState', originState);
   t.mock.method(CoreState.prototype, 'getUsageObservation', () => ({ valid: true, value: { model: { id: 'fixture-model' }, context_window: { used_percentage: 25 } } }));
   t.mock.module('../skills/dashboard/src/lib/cgroup-resources.js', { namedExports: { createCgroupCollector: () => ({ sample() {}, read: () => ({}) }) } });

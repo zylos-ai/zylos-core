@@ -1,6 +1,8 @@
 import { readThresholdPolicy, sessionThreshold } from '../session-threshold.js';
 import { loadCoreModule as defaultLoadCoreModule } from '../core-modules.js';
 import { Sanitizer } from '../sanitizer.js';
+import { isDeepStrictEqual } from 'node:util';
+import { createSessionObservations } from '../session-observations.js';
 import { createCoreCli } from './core-cli.js';
 import { mergeGroups, previewTaskIds, safePreview, safeRaw } from './group-merge.js';
 import { readTaskNames as defaultReadTaskNames } from './schedule-read.js';
@@ -60,7 +62,8 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
   now = Date.now, cli = createCoreCli({ zylosDir }), sanitizer = new Sanitizer(zylosDir),
   displayNames = emptyNames, readConfigRuntime = () => null, channelRestartCounter = createChannelRestartCounter(),
   readChannels = () => installedChannels(zylosDir, loadCoreModule),
-  readPm2 = () => null, readSystem = () => null, readTaskNames = ids => defaultReadTaskNames(zylosDir, ids) } = {}) {
+  readPm2 = () => null, readSystem = () => null, readTaskNames = ids => defaultReadTaskNames(zylosDir, ids),
+  sessionObservations = createSessionObservations({ zylosDir, loadCoreModule, now }) } = {}) {
   let cache = null, inflight = null, accountsCache = null;
   const activities = new Map();
   let hotTtlMs = 1800000;
@@ -69,37 +72,48 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     if (!ids.length) return new Map();
     try { return await readTaskNames(ids); } catch { return new Map(); }
   }
-  async function getSnapshot(at = now(), { fresh = false } = {}) {
+  async function getSnapshot(at = now(), { fresh = false, cachedObservations = false } = {}) {
     if (inflight) {
       if (!fresh) return inflight;
       // A lifecycle-triggered reader needs observations made after the pending
       // read, rather than reusing an old generation's in-flight snapshot.
       await inflight;
-      return getSnapshot(at, { fresh });
+      return getSnapshot(at, { fresh, cachedObservations });
     }
-    if (!fresh && cache && at - cache.builtAt < 2000) return cache.value;
-    inflight = buildGroupSnapshot(at);
+    const batch = cachedObservations ? sessionObservations.peek() : null;
+    // A fresh Core read can reuse the current projection when its observations
+    // are unchanged. A changed run, state or usage must bypass the projection TTL.
+    const sameObservations = !cachedObservations || (batch && cache?.batch &&
+      batch.mode === cache.batch.mode && isDeepStrictEqual(batch.observations, cache.batch.observations));
+    if (!fresh && cache && at - cache.builtAt < 2000 && sameObservations) return cache.value;
+    inflight = buildGroupSnapshot(at, { fresh, cachedObservations, batch });
     try {
       const value = await inflight;
-      cache = { value, builtAt: now() };
+      cache = { value, builtAt: now(), batch: cachedObservations ? batch : sessionObservations.peek?.() ?? null };
       return value;
     } finally { inflight = null; }
   }
-  async function buildGroupSnapshot(at) {
+  async function buildGroupSnapshot(at, { fresh = false, cachedObservations = false, batch: capturedBatch = null } = {}) {
     const captured = new Map(), sources = {}, rawGroups = new Map();
     let mode = 'unreadable', status = null, statusError = null, reader;
     try { mode = (await loadCoreModule('config.js')).readSessionMode().mode ?? 'single'; }
     catch { mode = 'unreadable'; }
     try {
-      reader = await loadCoreModule('session-state-reader.js');
+      const batch = !cachedObservations ? await sessionObservations.get({ fresh }) : capturedBatch;
+      reader = sessionObservations.reader;
+      if (!batch) throw new Error('Sessions have not been observed');
+      mode = batch.mode;
       const { collectStatus } = await loadCoreModule('status-view.js');
-      status = await collectStatus({ session: async (group, options) => {
-        // Context use stays the session's last sample however long it has been idle; the run and session
-        // identity checks still apply. The status sample keeps the status view's own freshness.
-        const observation = await reader.readSessionState(group, { ...options, usageFreshnessMs: Infinity });
-        captured.set(group, observation);
-        return observation;
-      } });
+      status = await collectStatus({ mode: () => ({ mode }),
+        list: () => [...batch.observations].filter(([, item]) => item.identity.present)
+          .map(([sessionGroup]) => ({ sessionGroup })),
+        health: runtime => reader.readRuntimeHealth(runtime),
+        session: async group => {
+          const observation = batch.observations.get(group);
+          if (!observation) throw new Error('Session missing from shared observation');
+          captured.set(group, observation);
+          return observation;
+        } });
       sources.status = { ok: true, readAt: now() };
     } catch {
       statusError = 'status_unreadable';
@@ -136,7 +150,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     const activations = queryAllEvents(store, { since: new Date(at - 30 * 60000).toISOString(), types: activationTypes });
     if (!accountsCache || at - accountsCache.at >= 30000) {
       const accounts = {}, accountSources = {};
-      if (!reader) { try { reader = await loadCoreModule('session-state-reader.js'); } catch {} }
+      if (!reader) reader = sessionObservations.reader;
       await Promise.all(['claude', 'codex'].map(async runtime => {
         try {
           const sample = await reader.readAccountUsage(runtime, { allowRecorded: true });

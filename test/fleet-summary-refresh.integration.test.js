@@ -1,3 +1,4 @@
+import { createSessionObservations } from '../skills/dashboard/src/lib/session-observations.js';
 import { CoreLogImporter } from '../skills/dashboard/src/lib/core-log-importer.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -59,13 +60,23 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
         groups: Array.from({ length: count }, (_, i) => ({ sessionGroup: `fixture-${i}`, presence: 'running',
           runtime: 'claude', status: { valid: true, state: i ? 'idle' : 'busy' } })), runtimeHealth: {}, supervisorPaused };
     } };
-    if (name === 'session-state-reader.js') return { readAccountUsage: async () => null };
+    if (name === 'session-state-reader.js') return {
+      readSessionStates: async groups => new Map(groups.map(group => [group, {
+        identity: { present: false, ready: false, runtime: null },
+        status: { valid: false, reason: 'not_running' }, usage: { valid: false },
+      }])),
+      readRuntimeHealth: () => ({ missing: true }),
+    };
+    if (name === 'session-usage-reader.js' || name === 'session-group-paths.js') return {};
+    if (name === 'recorded-account-usage.js') return { readRecordedAccountUsage: () => null };
     if (name === 'session-pool-config.js') return { readPoolCapacity: () => ({ k: 12, record: null, valid: true, fresh: true }) };
     throw new Error(`Unexpected Core module ${name}`);
   };
+  const observations = createSessionObservations({ zylosDir: root, loadCoreModule: coreModules, now: () => now });
+  t.mock.module('../skills/dashboard/src/lib/session-observations.js', { namedExports: { createSessionObservations: () => observations } });
   t.mock.module('../skills/dashboard/src/lib/workbench/group-snapshot.js', { namedExports: {
     systemSample,
-    createGroupSnapshot: options => createGroupSnapshot({ ...options, now: () => now, loadCoreModule: coreModules,
+    createGroupSnapshot: options => createGroupSnapshot({ ...options, now: () => now, loadCoreModule: coreModules, sessionObservations: observations,
       c4Reader: { listSlotOccupancy: () => [] },
       cli: { runC4Db: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
         readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) } }),

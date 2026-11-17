@@ -24,12 +24,16 @@ mock.method(VersionChecker.prototype, 'start', () => {});
 // These fixtures verify HTTP/auth and fleet behavior. The object APIs now need
 // a group catalog even for an empty instance; inject source observations while
 // retaining the real snapshot builder, projection and private Store.
-let buildAuthSnapshot = options => createGroupSnapshot({ ...options,
+const emptyAuthObservations = {
+  reader: { readAccountUsage: async () => null },
+  get: async () => ({ mode: 'single', group: null, observations: new Map() }),
+  peek: () => ({ mode: 'single', group: null, observations: new Map() }),
+};
+let buildAuthSnapshot = options => createGroupSnapshot({ ...options, sessionObservations: emptyAuthObservations,
     cli: { runC4Db: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
       readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) },
     loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
-      if (name === 'session-state-reader.js') return { readAccountUsageSnapshot: async () => ({ live: null, recorded: null }) };
       if (name === 'status-view.js') return { collectStatus: async () => ({ view: 'single', origin: { presence: 'not_running' }, groupListError: null, runtimeHealth: {} }) };
       return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
     } });
@@ -1858,16 +1862,19 @@ test('group thresholds follow actual session models while Fleet omits Origin ses
   let snapshotClock = Date.now();
   const previousSnapshotBuilder = buildAuthSnapshot;
   t.after(() => { buildAuthSnapshot = previousSnapshotBuilder; });
-  buildAuthSnapshot = options => createGroupSnapshot({ ...options, now: () => snapshotClock,
+  const thresholdObservations = {
+    reader: { readAccountUsage: async () => null },
+    get: async function () { return this.peek(); },
+    peek: () => ({ mode: 'single', group: null, observations: new Map([[null, {
+      identity: { present: true, runtime, runId: 'threshold-run', sessionId: 'threshold-session', launchConfig: launchConfig ?? { runtime, mode: 'default' } },
+      status: { valid: true, value: { state: 'idle' } }, usage: structuredClone(usage),
+    }]]) }),
+  };
+  buildAuthSnapshot = options => createGroupSnapshot({ ...options, now: () => snapshotClock, sessionObservations: thresholdObservations,
       cli: { runC4Db: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
         readOverrides: async () => ({ ok: true, data: { baseline: { runtime }, runtime: [], model: [] } }) },
       loadCoreModule: async name => {
         if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
-        if (name === 'session-state-reader.js') return {
-          readSessionState: async () => ({ identity: { present: true, runtime, runId: 'threshold-run', sessionId: 'threshold-session', launchConfig: launchConfig ?? { runtime, mode: 'default' } },
-            status: { valid: true, value: { state: 'idle' } }, usage: structuredClone(usage) }),
-          readAccountUsageSnapshot: async () => ({ live: null, recorded: null }),
-        };
         if (name === 'status-view.js') return { collectStatus: async ({ session }) => {
           await session(null, {});
           return { view: 'single', origin: { presence: 'running', runtime, runId: 'threshold-run', sessionId: 'threshold-session',

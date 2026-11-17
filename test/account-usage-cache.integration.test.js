@@ -6,13 +6,13 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { AccountUsageCache } from '../skills/dashboard/src/lib/account-usage-cache.js';
 
-// Boundary: real Core account reader → shared cache → CoreState + collector.
+// Boundary: real Core account reader → shared cache → CoreState + live-only cache reader.
 // Run when changing account selection, cache TTL/coalescing, or either consumer;
 // unrelated UI-only changes may skip this case. No optional tools/dependencies.
 // Isolation: runner-provided HOME/ZYLOS_DIR/PM2_HOME/TMPDIR are checked below;
 // all sample files use a nested fixture. Identity/tmux connections are injected,
 // so no real tmux process is exercised and a private tmux socket is N/A.
-test('CoreState and collector share real account scan until 30s expiry, preserving quota policies and provenance', async t => {
+test('CoreState and live-only reads share real account scan until 30s expiry, preserving quota policies and provenance', async t => {
   const runnerHome = fs.realpathSync(process.env.HOME);
   const realHome = fs.realpathSync(os.userInfo().homedir);
   assert.notEqual(runnerHome, realHome);
@@ -60,35 +60,36 @@ test('CoreState and collector share real account scan until 30s expiry, preservi
   process.env.ZYLOS_PACKAGE_ROOT = path.join(root, 'package');
   t.after(() => { if (prior === undefined) delete process.env.ZYLOS_PACKAGE_ROOT; else process.env.ZYLOS_PACKAGE_ROOT = prior; });
   const reader = await import(pathToFileURL(path.join(lib, 'session-state-reader.js')).href);
-  t.mock.module('../skills/dashboard/src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
-    if (name === 'config.js') return {readSessionMode: () => ({mode:'single'})};
-    if (name === 'session-state-reader.js') return reader;
-    if (name === 'session-group-paths.js') return {};
-    assert.fail(name);
-  } } });
   const { CoreState } = await import('../skills/dashboard/src/lib/core-state.js');
-  const { StatuslineCollector } = await import('../skills/dashboard/src/lib/collectors/statusline-collector.js');
   let clock = 0;
   const cache = new AccountUsageCache({now: () => clock});
-  const core = new CoreState({zylosDir:root,accountUsageCache:cache});
-  const collector = new StatuslineCollector({insertMetric(){},upsertSourceHealth(){}}, {zylosDir:root}, {accountUsageCache:cache});
-  await Promise.all([core.refresh(), collector.collect()]);
+  const sessionObservations = {
+    async get() {
+      return { mode: 'single', group: null,
+        observations: await reader.readSessionStates([null], { freshnessMs: 5000 }), reader };
+    },
+    async resolveOfflineRuntime() { return 'claude'; },
+  };
+  const core = new CoreState({ zylosDir: root, accountUsageCache: cache, sessionObservations });
+  const readLive = () => cache.read('claude', undefined, reader);
+  let live;
+  await Promise.all([core.refresh(), readLive().then(value => { live = value; })]);
   assert.equal(reader.counters.scans, 1, 'concurrent readers coalesce');
   assert.equal(core.accountUsage.seven_day.used_percentage, 12, 'Core keeps recorded selection');
-  assert.equal(collector.getAccountUsage().value.seven_day.used_percentage, 7, 'collector keeps live-only selection');
-  for (let i = 1; i < 20; i++) { clock = i * 1000; await core.refresh(); if (i % 2 === 0) await collector.collect(); }
+  assert.equal(live.seven_day.used_percentage, 7, 'live-only selection stays independent');
+  for (let i = 1; i < 20; i++) { clock = i * 1000; await core.refresh(); if (i % 2 === 0) await readLive(); }
   assert.equal(reader.counters.scans, 1, 'unchanged polling reuses the account snapshot');
   write('sleeping', 23, capturedAt + 750);
   clock = 29999;
   await core.refresh();
   assert.equal(core.accountUsage.seven_day.used_percentage, 12);
   clock = 30000;
-  await Promise.all([core.refresh(), collector.collect()]);
+  await Promise.all([core.refresh(), readLive().then(value => { live = value; })]);
   assert.equal(reader.counters.scans, 2);
   assert.equal(core.accountUsage.seven_day.used_percentage, 23);
-  assert.equal(collector.getAccountUsage().value.seven_day.used_percentage, 7);
+  assert.equal(live.seven_day.used_percentage, 7);
   const codex = await cache.read('codex', {allowRecorded:true}, reader);
   assert.equal(reader.counters.scans, 3, 'runtime cache entries stay separate');
   assert.equal(codex, null);
-  await core.stop(); await collector.stop();
+  await core.stop();
 });

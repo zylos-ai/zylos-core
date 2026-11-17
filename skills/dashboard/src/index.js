@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { createInstalledVersionReader } from './lib/installed-versions.js';
 import { CoreState } from './lib/core-state.js';
+import { createSessionObservations } from './lib/session-observations.js';
+import { createTranscriptSnapshot } from './lib/collectors/transcript-snapshot.js';
 import { loadCoreModule } from './lib/core-modules.js';
 import { createReadinessCheck } from './lib/readiness.js';
 import { bootId, publishHealthProcess } from './lib/health-process.js';
@@ -49,12 +51,10 @@ import { Sanitizer } from './lib/sanitizer.js';
 import { CoreLogImporter } from './lib/core-log-importer.js';
 import { PM2Collector } from './lib/collectors/pm2-collector.js';
 import { SystemCollector } from './lib/collectors/system-collector.js';
-import { StatuslineCollector } from './lib/collectors/statusline-collector.js';
 import { ConversationCollector } from './lib/collectors/conversation-collector.js';
 import { UsageTranscripts } from './lib/collectors/usage-transcripts.js';
 import { CodexRolloutCollector } from './lib/collectors/codex-rollout-collector.js';
 import { StateEngine } from './lib/state-engine.js';
-import { MetricResolver } from './lib/metric-resolver.js';
 import { runMetricMaintenance } from './lib/metric-maintenance.js';
 import { EventLoopMonitor } from './lib/event-loop-monitor.js';
 import { SseHub } from './lib/sse.js';
@@ -144,7 +144,8 @@ try {
 }
 
 let publishCoreStateChange = () => {};
-const coreState = new CoreState({ zylosDir: config.zylosDir, onChange: state => publishCoreStateChange(state) });
+const sessionObservations = createSessionObservations({ zylosDir: config.zylosDir });
+const coreState = new CoreState({ zylosDir: config.zylosDir, sessionObservations, onSample: () => publishCoreStateChange() });
 const auth = new AuthGate(config, store);
 const memoryBrowser = new MemoryBrowser({ zylosDir: config.zylosDir });
 const observerInstaller = new ObserverInstaller({ dataDir: config.dataDir });
@@ -206,9 +207,8 @@ const eventLoopMonitor = new EventLoopMonitor({
 // 5-6. Collectors
 const pm2Collector = new PM2Collector(store, config);
 const systemCollector = new SystemCollector(store, config);
-const statuslineCollector = new StatuslineCollector(store, config);
 const usageTranscripts = new UsageTranscripts(store, config, {
-  getSnapshot: at => workbench.getSnapshot(at, { fresh: true }),
+  getSnapshot: createTranscriptSnapshot({ zylosDir: config.zylosDir }),
   getSnapshotKey: () => coreState.costKey,
 });
 const conversationCollector = new ConversationCollector(store, config, { transcripts: usageTranscripts });
@@ -221,14 +221,13 @@ function timeMethod(target, method, name) {
   target[method] = (...args) => eventLoopMonitor.runTask(name, () => original(...args));
 }
 for (const [name, collector] of Object.entries({ pm2: pm2Collector, system: systemCollector,
-  statusline: statuslineCollector, conversation: conversationCollector, codexRollout: codexRolloutCollector })) {
+  conversation: conversationCollector, codexRollout: codexRolloutCollector })) {
   timeMethod(collector, 'collect', `collector.${name}`);
 }
 timeMethod(coreState, 'refresh', 'core-state.refresh');
 timeMethod(coreLogImporter, 'poll', 'core-log.import');
 
 const collectors = { pm2: pm2Collector, system: systemCollector };
-if (statuslineCollector) collectors.statusline = statuslineCollector;
 if (conversationCollector) collectors.conversation = conversationCollector;
 if (codexRolloutCollector) collectors.codexRollout = codexRolloutCollector;
 
@@ -245,7 +244,7 @@ let lastInstancePublication = null, lastGroupsPublication = null;
 async function broadcastFleetState() {
   if (sse.clients.size === 0) return;
   try {
-    const [, snapshot] = await Promise.all([coreState.refresh(), workbench.getSnapshot()]);
+    const snapshot = await workbench.getSnapshot(undefined, { cachedObservations: true });
     const instance = buildInstancePayload();
     const counts = groupCounts(snapshot, { allowUnreadable: true });
     const running = snapshot.rows.map(row => projectGroup(row, snapshot)).filter(row => row.side === 'running').map(projectListRow);
@@ -258,7 +257,7 @@ async function broadcastFleetState() {
     process.stderr.write(`[fleet] instance/groups SSE broadcast skipped: ${err.message}\n`);
   }
 }
-const scheduleFleetStateBroadcast = createCoalescedBroadcast(() => eventLoopMonitor.runTask('fleet.broadcast', broadcastFleetState));
+const scheduleFleetStateBroadcast = createCoalescedBroadcast(() => eventLoopMonitor.runTask('fleet.broadcast', broadcastFleetState), 0);
 publishCoreStateChange = () => scheduleFleetStateBroadcast();
 
 // 6b. Version checker (polls GitHub + npm registry every 12h)
@@ -343,13 +342,10 @@ if (codexRolloutCollector) {
   // synchronous UI/state broadcast path so transcript backfill cannot block HTTP.
 }
 
-// 8. Metric resolver
-const metricResolver = new MetricResolver(store, collectors, config);
-
 // 9b. C4 reader (read-only access to comm-bridge DB)
 const c4Reader = new C4Reader(config.zylosDir);
 const displayNames = createDisplayNames({ store, zylosDir: config.zylosDir, sanitizer });
-const workbench = createGroupSnapshot({ zylosDir: config.zylosDir, store, c4Reader, sanitizer, displayNames,
+const workbench = createGroupSnapshot({ zylosDir: config.zylosDir, store, c4Reader, sanitizer, displayNames, sessionObservations,
   readConfigRuntime: () => loadZylosConfig(config.zylosDir).runtime ?? null,
   readPm2: () => pm2Collector.getLatestPM2Data(), readSystem: () => systemCollector.getLatestSystemData() });
 const instanceTimezone = createInstanceTimezone({ zylosDir: config.zylosDir,
@@ -460,8 +456,9 @@ function readFleetSessionMode() {
   return ['single', 'multi'].includes(result.config.session_mode) ? result.config.session_mode : null;
 }
 
-async function refreshFleetGroupSummary() {
-  try { await workbench.getSnapshot(); } catch { /* Optional observations cannot break the existing state API. */ }
+async function refreshDashboardState({ fresh = false } = {}) {
+  await coreState.refresh({ fresh });
+  return workbench.getSnapshot(undefined, { cachedObservations: true });
 }
 
 function buildSelfFleetRecord(statePayload) {
@@ -954,11 +951,6 @@ async function runInitialCollectors() {
   try { await systemCollector.warmup(); } catch (err) {
     process.stderr.write(`[startup] System collector warmup failed: ${err.message}\n`);
   }
-  if (statuslineCollector) {
-    try { await statuslineCollector.collect(); } catch (err) {
-      process.stderr.write(`[startup] StatusLine collector initial run failed: ${err.message}\n`);
-    }
-  }
   if (conversationCollector) {
     try { await conversationCollector.collect(); } catch (err) {
       process.stderr.write(`[startup] Conversation collector initial run failed: ${err.message}\n`);
@@ -1014,7 +1006,7 @@ async function handleApi(req, res, pathname, url) {
   }
 
   if (pathname === '/api/instance') {
-    await Promise.all([coreState.refresh(), workbench.getSnapshot(), scheduleTz()]);
+    await Promise.all([refreshDashboardState({ fresh: true }), scheduleTz()]);
     sendJson(res, 200, buildInstancePayload());
     return true;
   }
@@ -1052,7 +1044,7 @@ async function handleApi(req, res, pathname, url) {
     try {
       // Remote records arrive through the existing poller/SSE lifecycle. A slow
       // or unreachable remote must not delay a local Fleet response.
-      await Promise.all([coreState.refresh(), refreshFleetGroupSummary()]);
+      await refreshDashboardState({ fresh: true });
       sendJson(res, 200, buildFullFleetPayload().payload);
     } catch (err) {
       sendJson(res, 500, { error: err.code || err.message });
@@ -1187,7 +1179,7 @@ async function handleApi(req, res, pathname, url) {
   }
 
   if (pathname === '/api/stream') {
-    await Promise.all([coreState.refresh(), refreshFleetGroupSummary()]);
+    await refreshDashboardState({ fresh: true });
     const initialCounts = groupCounts(await workbench.getSnapshot(), { allowUnreadable: true });
     const initialInstance = buildInstancePayload();
     const apiToken = req._apiToken;
@@ -1792,7 +1784,6 @@ if (isMain && process.argv.includes('--smoke')) {
         // Start periodic collectors
         pm2Collector.start(60_000);
         systemCollector.start(30_000);
-        if (statuslineCollector) statuslineCollector.start();
         if (conversationCollector) conversationCollector.start(5_000);
         if (codexRolloutCollector) codexRolloutCollector.start(5_000);
 
@@ -1830,7 +1821,6 @@ if (isMain && process.argv.includes('--smoke')) {
       const shutdownDeadline = performance.now() + 10_000;
       pm2Collector.stop();
       systemCollector.stop();
-      if (statuslineCollector) await statuslineCollector.stop();
       if (conversationCollector) conversationCollector.stop();
       if (codexRolloutCollector) codexRolloutCollector.stop();
       stateEngine.stopSnapshotTimer();

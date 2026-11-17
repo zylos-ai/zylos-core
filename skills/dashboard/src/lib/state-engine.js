@@ -806,7 +806,7 @@ export class StateEngine {
       const now = this._now();
 
       const currentRuntime = this._config.runtime || 'claude';
-      const formatEntry = (name, { runtimeScoped = false, expectedRuntime = currentRuntime, signalType = null, capability = 'supported', maxAgeS = 30, eventDriven = false, checkedWhenIdle = false } = {}) => {
+      const formatEntry = (name, { signalType = null, capability = 'supported', maxAgeS = 30, eventDriven = false, checkedWhenIdle = false } = {}) => {
         if (capability === 'unsupported') {
           return {
             fresh: false,
@@ -827,16 +827,6 @@ export class StateEngine {
             capability,
             reason: 'no_signal',
             detail: 'No source signal has been recorded yet'
-          };
-        }
-        if (runtimeScoped && h.extra?.runtime && h.extra.runtime !== expectedRuntime) {
-          return {
-            fresh: false,
-            age_s: null,
-            status: 'unknown',
-            capability,
-            reason: 'runtime_mismatch',
-            detail: `Last signal belongs to ${h.extra.runtime}, not ${expectedRuntime}`
           };
         }
         // Progress writers only report activity; silence is not a collector failure.
@@ -872,10 +862,7 @@ export class StateEngine {
         runtime_progress: {
           jsonl_usage: currentRuntime === 'codex'
             ? formatEntry('codex_rollout', { signalType: 'collector_liveness', checkedWhenIdle: true })
-            : formatEntry('jsonl_usage', { signalType: 'collector_liveness', eventDriven: true, maxAgeS: 60 }),
-          statusline: currentRuntime === 'claude'
-            ? formatEntry('statusline', { runtimeScoped: true, expectedRuntime: 'claude', signalType: 'runtime_progress', eventDriven: true, maxAgeS: 60 })
-            : formatEntry('statusline', { capability: 'unsupported' })
+            : formatEntry('jsonl_usage', { signalType: 'collector_liveness', eventDriven: true, maxAgeS: 60 })
         },
         collector_liveness: {
           pm2_reader: formatEntry('pm2_reader', { signalType: 'collector_liveness', maxAgeS: 180 }),
@@ -883,9 +870,7 @@ export class StateEngine {
           conversation_reader: formatEntry('conversation_reader', { signalType: 'collector_liveness', eventDriven: true, maxAgeS: 60 }),
           am_heartbeat: formatEntry('am_heartbeat', { signalType: 'collector_liveness', maxAgeS: 60 })
         },
-        platform: {
-          statusline: formatEntry('statusline', { signalType: 'collector_liveness' })
-        }
+        platform: {}
       };
     } catch {
       return {

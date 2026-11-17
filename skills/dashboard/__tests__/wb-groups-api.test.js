@@ -30,7 +30,7 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
   const cleanup = [];
   t.after(async () => { for (const close of cleanup.reverse()) await close(); fs.rmSync(root, { recursive: true, force: true }); });
   let clock = 1800000000000, mode = 'multi', unexpected = false, configRuntime = 'codex', configFailure = false, healthRecord = { missing: true };
-  const calls = [], observations = [], events = [], reads = [];
+  const calls = [], observations = [], events = [], reads = [], statusReadErrors = new Map();
   const keys = groupKeys ?? Array.from({ length: count }, (_, index) => `telegram:g${index}`);
   const live = new Map(keys.map(key => [key, { identity: { present: true, ready: true, runtime: 'claude', runId: `run-${key}`,
     createdAt: clock / 1000 - 10, launchConfig: { runtime: 'claude', mode: 'default' } },
@@ -62,7 +62,18 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
       events.push(filter); return [];
     } };
   const c4Reader = { getInboundTimes: () => [] };
-  const service = createGroupSnapshot({ zylosDir: root, store, cli, now: () => clock, readPm2, readSystem, displayNames,
+  const sessionObservations = {
+    reader,
+    async get() {
+      const group = mode === 'single' ? null : 'origin';
+      const groups = mode === 'single' ? [null] : [...new Set(['origin', ...keys])];
+      const values = await Promise.all(groups.map(async key =>
+        [key, structuredClone(await reader.readSessionState(key))]));
+      return { mode: modeError ? 'unreadable' : mode, group, observations: new Map(values) };
+    },
+    peek() { return null; },
+  };
+  const service = createGroupSnapshot({ zylosDir: root, store, cli, now: () => clock, readPm2, readSystem, displayNames, sessionObservations,
     readChannels: () => [{ channel: 'telegram', service: 'zylos-telegram' }],
     c4Reader, readConfigRuntime: () => { if (configFailure) throw new Error('config'); return configRuntime; }, loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => { if (modeError) throw new Error('config'); return { mode }; } };
@@ -70,6 +81,10 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
       return { collectStatus: options => {
         if (statusError) throw new Error('status');
         return collectStatus({ ...options, mode: () => ({ mode }), now: () => clock, resolveRoot: () => root,
+          session: async (group, settings) => {
+            if (statusReadErrors.has(group)) throw statusReadErrors.get(group);
+            return options.session(group, settings);
+          },
           requests: () => new RestartRequestStore({ file: path.join(root, 'restart-requests.json') }).read(),
           list: () => { if (groupListError) throw new Error('list'); return keys.map(sessionGroup => ({ sessionGroup })); },
           health: () => healthRecord });
@@ -77,6 +92,7 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
     } });
   return { service, root, calls, observations, live, reads, events, reader, cli, store, c4Reader,
     addCleanup: close => cleanup.push(close),
+    failStatusRead: (group, error) => statusReadErrors.set(group, error),
     setHealth: value => { healthRecord = value; }, setConfigRuntime: value => { configRuntime = value; }, failConfig: value => { configFailure = value; },
     setNow: value => { clock = value; }, advance: value => { clock += value; }, setMode: value => { mode = value; },
     failUnexpected: value => { unexpected = value; }, now: () => clock };
@@ -709,11 +725,11 @@ test('unreadable mode still uses the collected view and bad fallback configurati
 // Integration: Cross-module per-reader failure boundary; run for observation handling changes.
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live
 // tmux/PM2/network. Fixture cleanup closes owned resources; auth timer is stopped.
-test('a failed per-group reader stays unknown instead of being projected idle', async t => {
+test('a failed session batch stays unknown instead of being projected idle', async t => {
   const f = fixture(t), read = f.reader.readSessionState;
   f.reader.readSessionState = key => key === 'telegram:g0' ? Promise.reject(new Error('broken group')) : read(key);
   const row = (await f.service.getSnapshot()).rows.find(item => item.sessionGroup === 'telegram:g0');
-  assert.equal(row.state.kind, 'unknown'); assert.equal(row.live.error.code, 'READ_FAILED');
+  assert.equal(row.state.kind, 'unknown'); assert.equal(row.state.reason, 'status_unreadable');
 });
 
 // Integration: actual Store with source timestamps arriving out of order. Run for
@@ -830,7 +846,8 @@ test('snapshot tolerates non-array tool details and redacts Core read failure te
     ? Promise.reject(new Error('failed Bearer secret123 and sk-123456789012345678901234')) : reader(key);
   f.advance(2100); snapshot = await f.service.getSnapshot();
   const row = snapshot.rows.find(item => item.sessionGroup === 'telegram:g0');
-  assert.equal(row.live.error.code, 'READ_FAILED'); assert.match(row.live.error.message, /REDACTED/);
+  assert.equal(row.state.kind, 'unknown'); assert.equal(row.state.reason, 'status_unreadable');
+  assert.equal(snapshot.sources.status.reason, 'status_unreadable');
   assert.equal(JSON.stringify(snapshot).includes('secret123'), false);
   assert.equal(JSON.stringify(snapshot).includes('sk-123456789012345678901234'), false);
   assert.equal('buildGroupSnapshot' in f.service, false);
@@ -1121,9 +1138,10 @@ test('activity with no events paints the current run idle from its actual start'
 // readers/CLI, no live resources or children; fixture cleanup is registered.
 for (const mode of ['multi', 'single']) test(`Origin read errors are redacted in ${mode} responses`, async t => {
   const f = fixture(t); f.setMode(mode);
-  const original = f.reader.readSessionState;
   const secret = 'sk-123456789012345678901234', raw = `Origin read failed ${secret} person@example.com`;
-  f.reader.readSessionState = key => (mode === 'single' || key === 'origin') ? Promise.reject(new Error(raw)) : original(key);
+  // Exercise the status projection's per-session error boundary. A rejected
+  // shared batch instead invalidates the entire status source.
+  f.failStatusRead(mode === 'single' ? null : 'origin', new Error(raw));
   const snapshot = await f.service.getSnapshot();
   const origin = snapshot.rows.find(row => row.origin);
   assert.equal(origin.live.error.code, 'READ_FAILED');

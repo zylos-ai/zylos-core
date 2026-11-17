@@ -39,7 +39,7 @@ The examples below show request methods, URLs and JSON bodies. Supply the approp
 
 **Access:** Public. **Parameters:** none.
 
-Returns `ok:boolean` (true), `service:string` (`zylos-dashboard`) and `bootId:string` (unique to this Dashboard process). Authenticated callers additionally receive `startedAt:string`, `uptimeSeconds:number`, `event_loop:object` (event-loop diagnostics) and `source:object` (Core source health). Response varies by `Cookie` and `Authorization`. HTTP 200 means this HTTP service is alive; it does not establish runtime readiness.
+Returns `ok:boolean` (true), `service:string` (`zylos-dashboard`) and `bootId:string` (unique to this Dashboard process). Authenticated callers additionally receive `startedAt:string`, `uptimeSeconds:number`, `event_loop:object` (event-loop diagnostics) and `source:object` (Core source health). The source object contains `runtime_progress` (JSONL usage), `collector_liveness` (PM2, system, conversation and supervisor heartbeat), and an empty `platform` object. Legacy statusline health entries are omitted even when their database rows remain. Response varies by `Cookie` and `Authorization`. HTTP 200 means this HTTP service is alive; it does not establish runtime readiness.
 
 **Errors:** 404 `not_found` for the retired `probe` query. Readiness is available only at `/api/health/ready`.
 
@@ -668,6 +668,8 @@ Other forbidden routes return 403. Same-version peers return the common JSON err
 **Access:** Read for the ordinary stream. Chat subscriptions additionally use the existing chat-access rules (local owner or permitted remote chat access).
 
 **Parameters:** no parameters for ordinary instance events. Chat opt-in requires admin at both instances and uses `chat=1`, optional `chat_tab=mine|external` (default mine) and `chat_conversation` (an encoded conversation ID); repeated subscription parameters and legacy `chat_ids` are invalid; invalid subscriptions are rejected rather than treated as an ordinary stream. Response is `text/event-stream`, not JSON.
+
+Opening the stream samples current session state immediately. While at least one Dashboard stream is connected, session observations refresh every 2.5 seconds and are shared by Origin, group and Fleet projections. Closing the last stream stops periodic session reads. HTTP instance and Fleet reads still sample on demand.
 
 | SSE event | Data | Meaning |
 |---|---|---|

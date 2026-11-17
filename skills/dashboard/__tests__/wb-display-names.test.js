@@ -89,7 +89,7 @@ test('local name routes require admin and publish human-owned names in group sna
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'name-http-')), data = path.join(root, 'components/dashboard');
   fs.mkdirSync(data, { recursive: true });
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ auth: { enabled: true, password: 'fixture-password' } }));
-  let server, engine, auth, clock = 1800000000000;
+  let server, engine, auth, snapshotService, clock = 1800000000000;
   const previous = process.env.ZYLOS_DIR;
   t.after(async () => {
     if (previous === undefined) delete process.env.ZYLOS_DIR; else process.env.ZYLOS_DIR = previous;
@@ -101,14 +101,26 @@ test('local name routes require admin and publish human-owned names in group sna
   t.mock.module('node:child_process', { namedExports: { ...childProcess, execFileSync: () => '1.0.0', execFile: () => assert.fail('Core child forbidden') } });
   t.mock.module('../src/lib/state-engine.js', { namedExports: { StateEngine: class extends StateEngine { constructor(...args) { super(...args); engine = this; } } } });
   t.mock.module('../src/lib/auth.js', { namedExports: { ...await import('../src/lib/auth.js'), AuthGate: class extends AuthGate { constructor(...args) { super(...args); auth = this; } } } });
+  // Inject the shared observation boundary used by index.js, as well as the
+  // snapshot's Core projections, so status cannot silently fall back unreadable.
+  t.mock.module('../src/lib/session-observations.js', { namedExports: {
+    createSessionObservations: () => {
+      const group = 'origin';
+      const reader = { readAccountUsageSnapshot: async () => ({ live: null, recorded: null }),
+        readRuntimeHealth: async () => ({ missing: true }) };
+      const batch = { mode: 'multi', group, observations: new Map([[group, {
+        identity: { present: false }, status: { valid: false, reason: 'not_running' }, usage: { valid: false },
+      }]]), reader };
+      return { get: async () => batch, peek: () => batch, reader, resolveOfflineRuntime: async () => 'claude' };
+    },
+  } });
   t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
-    createGroupSnapshot: options => createGroupSnapshot({ ...options, now: () => clock,
+    createGroupSnapshot: options => (snapshotService = createGroupSnapshot({ ...options, now: () => clock,
       cli: { runC4Db: async args => ({ ok: true, data: args[0] === 'groups' ? { groups: [{ sessionGroup: 'telegram:a', componentName: 'telegram' }], hasOlder: false } : { groups: [], globalFence: null } }),
         readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) },
       loadCoreModule: async name => name === 'config.js' ? { readSessionMode: () => ({ mode: 'multi' }) }
-        : name === 'session-state-reader.js' ? { readAccountUsage: async () => null }
           : { collectStatus: async () => ({ view: 'multi', origin: { presence: 'not_running' }, groups: [], groupListError: null, runtimeHealth: {} }) },
-    }),
+    })),
   } });
   process.env.ZYLOS_DIR = root;
   const { createServer } = await import(`../src/index.js?display-name-http=${Date.now()}`);
@@ -129,6 +141,7 @@ test('local name routes require admin and publish human-owned names in group sna
   assert.deepEqual(await response.json(), { ok: true, data: { sessionGroup: 'telegram:a', displayName: '<script>', source: 'human' } });
   response = await request('/api/groups/offline'); assert.equal(response.status, 200);
   assert.equal((await response.json()).rows.find(row => row.id === 'telegram:a').displayName, '<script>');
+  assert.equal((await snapshotService.getSnapshot()).sources.status.ok, true, 'the injected shared batch reaches status projection');
   assert.deepEqual((await (await request('/api/groups/telegram%3Aa?include=')).json()).name, { sessionGroup: 'telegram:a', displayName: '<script>', source: 'human' });
   const names = createDisplayNames({ store: engine.store });
   assert.throws(() => names.setName('telegram:a', 'agent', 'agent'), { code: 'NAME_SET_BY_HUMAN' });

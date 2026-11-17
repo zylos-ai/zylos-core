@@ -77,6 +77,9 @@ function near(actual, expected) { assert.ok(Math.abs(actual - expected) < 1e-12,
 // snapshot reads are injected. All import-created intervals and files are owned
 // by this case and cleaned even when import or an assertion fails.
 test('dashboard constructs both usage collectors when configured for Claude', { timeout: 15000 }, async t => {
+  const previousTmuxTmpdir = process.env.TMUX_TMPDIR;
+  process.env.TMUX_TMPDIR = process.env.TMPDIR;
+  t.after(() => { if (previousTmuxTmpdir === undefined) delete process.env.TMUX_TMPDIR; else process.env.TMUX_TMPDIR = previousTmuxTmpdir; });
   const realHome = fs.realpathSync(os.userInfo().homedir);
   for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR']) {
     const value = process.env[key];
@@ -116,11 +119,10 @@ test('dashboard constructs both usage collectors when configured for Claude', { 
     CoreState: class extends CoreState { constructor(...args) { super(...args); coreState = this; } },
   } });
   let snapshots = 0;
-  t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
-    createGroupSnapshot: () => ({ getSnapshot: async (at, options) => {
-      assert.deepEqual(options, { fresh: true }, 'usage lifecycle reads bypass the UI snapshot cache');
-      snapshots++; return { listKnown: true, rows: [] };
-    } }),
+  t.mock.module('../src/lib/collectors/transcript-snapshot.js', { namedExports: {
+    createTranscriptSnapshot: () => async () => {
+      snapshots++; return { listKnown: true, transcriptIdentityOnly: true, rows: [] };
+    },
   } });
   fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
   fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude' }));

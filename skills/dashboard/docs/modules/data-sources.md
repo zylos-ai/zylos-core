@@ -6,7 +6,7 @@ Dashboard collects authoritative session state from Zylos Core, local runtime me
 
 ## Current State and Usage
 
-`src/lib/core-state.js` uses Core's `session-state-reader.js` to read the identity, state, active tools, context usage, and account usage of the current Origin (the current session in single-session mode). This path is the authoritative source for the page's current state, context, and rate limits, and refreshes every second by default.
+`src/lib/session-observations.js` reads one identity-validated Core batch shared by `CoreState`, workbench and Fleet projections. It covers every live group in multi-session mode, preserving per-group context and per-runtime account selection. The 2.5-second timer runs only while Dashboard SSE clients are connected; instance and Fleet HTTP reads observe on demand. Broadcasts project the existing batch without opening another tmux connection.
 
 Dashboard no longer infers current session state through its own runtime hooks. Core publishes session state and activity hooks; the upgrade process removes old Dashboard hooks.
 
@@ -16,11 +16,12 @@ Dashboard no longer infers current session state through its own runtime hooks. 
 |---|---|---|---|
 | `PM2Collector` | PM2 process list | Service state, CPU, memory, restart count | All |
 | `SystemCollector` | Local system samples | CPU, memory, disk | All |
-| `StatuslineCollector` | Core session state (session-state-reader) and account usage | Context, cost, cache, rate limits | All |
 | `ConversationCollector` | Claude conversation JSONL | Tokens, cost, tool and session history | Claude |
 | `CodexRolloutCollector` | Codex rollout JSONL | Tokens, context, turn and tool history | Codex |
 
-Collectors write normalized samples to `dashboard.db`. When pages display metrics, `MetricResolver` selects samples according to fixed source chains, runtime, and freshness; see [Metric Model](metric-model.md).
+Background transcript discovery uses Core hook `current-session.json` pointers to identify transcript ownership. These pointers do not establish runtime liveness and require no tmux reads.
+
+Collectors write normalized historical samples to `dashboard.db`. Usage readers aggregate those samples; current session observations come directly from Core. See [Metric Model](metric-model.md).
 
 ## Other Read-Only Sources
 

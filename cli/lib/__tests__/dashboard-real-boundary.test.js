@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createTestEnvironment } from '../../../scripts/test-environment.js';
 import { createPrivateFixture, runPrivateFixture, stopPrivateTmux } from '../../../test/helpers/private-instance-fixture.js';
 
 // Integration boundary: the real Core reader, control CLI and private tmux/Sock.
@@ -11,6 +12,10 @@ import { createPrivateFixture, runPrivateFixture, stopPrivateTmux } from '../../
 // private socket/DB targets are checked before the child imports product config.
 // The bounded child owns its Sock server; timeout cleanup stops private tmux.
 test('real Core reader, targeted control CLI and Sock retain Origin boundaries', { timeout: 35000 }, async t => {
+  // Keep the parent leak assertion private too: other test workers may install
+  // their own skill fixtures in the outer runner environment concurrently.
+  const environment = createTestEnvironment();
+  t.after(() => environment.cleanup());
   const sharedSkills = path.join(process.env.ZYLOS_DIR, '.claude/skills');
   assert.equal(fs.existsSync(sharedSkills), false, 'shared runner skills directory is clean before the dashboard fixture');
   const scope = createPrivateFixture(t);

@@ -51,6 +51,19 @@ test('workbench HTTP routes retain read authentication, method guards and source
   t.mock.module('../src/lib/collectors/pm2-collector.js', { namedExports: {
     PM2Collector: class extends PM2Collector { constructor(...args) { super(...args); collector = this; } },
   } });
+  // Inject the shared observation boundary used by index.js, as well as the
+  // snapshot's Core projections, so status cannot silently fall back unreadable.
+  t.mock.module('../src/lib/session-observations.js', { namedExports: {
+    createSessionObservations: () => {
+      const group = 'origin';
+      const reader = { readAccountUsageSnapshot: async () => ({ live: null, recorded: null }),
+        readRuntimeHealth: async () => ({ missing: true }) };
+      const batch = { mode: 'multi', group, observations: new Map([[group, {
+        identity: { present: false }, status: { valid: false, reason: 'not_running' }, usage: { valid: false },
+      }]]), reader };
+      return { get: async () => batch, peek: () => batch, reader, resolveOfflineRuntime: async () => 'claude' };
+    },
+  } });
   t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
     createGroupSnapshot: options => {
       service = createGroupSnapshot({ ...options, now: () => clock,
@@ -69,7 +82,6 @@ test('workbench HTTP routes retain read authentication, method guards and source
         },
         loadCoreModule: async name => {
           if (name === 'config.js') return { readSessionMode: () => ({ mode: 'multi' }) };
-          if (name === 'session-state-reader.js') return { readAccountUsage: async () => null };
           return { collectStatus: async () => {
             return { view: 'multi', origin: { presence: 'not_running' }, groups: [], groupListError: null,
               runtimeHealth: { claude: { health: 'ok' }, codex: { health: 'ok' } } };
@@ -103,7 +115,9 @@ test('workbench HTTP routes retain read authentication, method guards and source
   assert.equal(empty.status, 200); assert.deepEqual(await empty.json(), { rows: [], truncated: false });
   // The server dispatches the per-group stored-message read; the fixture has no stored message for the group.
   const stored = await request('/api/groups/telegram%3Aa');
-  assert.equal(stored.status, 200); const detail = await stored.json(); assert.equal(detail.raw, null); assert.equal(detail.id, 'telegram:a');
+  assert.equal(stored.status, 200);
+  assert.equal((await service.getSnapshot()).sources.status.ok, true, 'the injected shared batch reaches status projection');
+  const detail = await stored.json(); assert.equal(detail.raw, null); assert.equal(detail.id, 'telegram:a');
   const activity = await request('/api/groups/activity?range=60m');
   assert.equal(activity.status, 200); assert.equal((await activity.json()).groups['telegram:a'].cells.length, 60);
   // Exercise real collector.collect -> index _onUpdate -> counter and state engine.

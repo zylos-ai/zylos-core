@@ -1,4 +1,4 @@
-import { dayBoundsUTC } from '../metric-resolver.js';
+import { dayBoundsUTC } from '../day-bounds.js';
 
 export function resolveUsageTimezone(tz) {
   try {

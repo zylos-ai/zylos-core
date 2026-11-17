@@ -1,7 +1,7 @@
 import { usageSummary } from '../src/lib/workbench/usage-api.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dayBoundsUTC } from '../src/lib/metric-resolver.js';
+import { dayBoundsUTC } from '../src/lib/day-bounds.js';
 import { Store } from '../src/lib/store.js';
 
 for (const [zone, expected] of [

@@ -25,15 +25,18 @@ for (const range of ['60m', '6h']) test(`single Origin ${range} discovers a lega
     ['prompt', 'user_prompt_submit', start - width], ['stop', 'stop', start + width],
   ]) store.insertEvent({ id, ingest_id: id, timestamp: new Date(at).toISOString(), runtime: 'claude',
     session_group: null, run_id: 'legacy-only', event_type: type, category: 'activity' });
-  const reader = { readSessionState: async () => ({ identity: { present: false },
-    status: { valid: false, reason: 'not_running' }, usage: { valid: false } }), readAccountUsage: async () => null };
-  const service = createGroupSnapshot({ zylosDir: root, store, now: () => now,
+  const observation = { identity: { present: false },
+    status: { valid: false, reason: 'not_running' }, usage: { valid: false } };
+  const sessionObservations = {
+    get: async () => ({ mode: 'single', group: null, observations: new Map([[null, observation]]) }),
+    reader: { readRuntimeHealth: () => ({ missing: true }), readAccountUsage: async () => null },
+  };
+  const service = createGroupSnapshot({ zylosDir: root, store, now: () => now, sessionObservations,
     c4Reader: { getInboundTimes: () => [] },
     cli: { runC4Db: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
       readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) },
     loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
-      if (name === 'session-state-reader.js') return reader;
       if (name === 'status-view.js') return { collectStatus: options => collectStatus({ ...options,
         mode: () => ({ mode: 'single' }), resolveRoot: () => root, now: () => now,
         requests: () => ({}), configIssue: () => null, facts: () => ({ originNeed: null }),

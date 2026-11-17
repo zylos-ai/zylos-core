@@ -1,5 +1,6 @@
 import { accountUsageCache as sharedAccountUsageCache } from './account-usage-cache.js';
 import { loadCoreModule } from './core-modules.js';
+import { createSessionObservations } from './session-observations.js';
 import { Sanitizer } from './sanitizer.js';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -53,7 +54,9 @@ export function projectOrigin(sessionGroup, observation, sanitizer = new Sanitiz
 }
 
 export class CoreState {
-  constructor({ onChange = () => {}, zylosDir = process.env.ZYLOS_DIR || process.cwd(), accountUsageCache = sharedAccountUsageCache } = {}) {
+  constructor({ onChange = () => {}, zylosDir = process.env.ZYLOS_DIR || process.cwd(), accountUsageCache = sharedAccountUsageCache, sessionObservations = createSessionObservations({ zylosDir }), onSample = () => {} } = {}) {
+    this.sessionObservations = sessionObservations;
+    this.onSample = onSample;
     this.accountUsageCache = accountUsageCache;
     this.onChange = onChange;
     this.zylosDir = zylosDir;
@@ -66,19 +69,20 @@ export class CoreState {
     this.costKey = null; this.pending = null;
     this.watched = false; this.started = false;
   }
-  refresh() {
-    if (this.pending) return this.pending;
-    this.pending = this._read().finally(() => { this.pending = null; });
+  async refresh({ fresh = false } = {}) {
+    if (this.pending) {
+      if (!fresh) return this.pending;
+      await this.pending;
+      return this.refresh({ fresh: true });
+    }
+    this.pending = this._read({ fresh }).finally(() => { this.pending = null; });
     return this.pending;
   }
-  async _read() {
+  async _read({ fresh = false } = {}) {
     try {
-      const [{ readSessionMode }, reader] = await Promise.all([loadCoreModule('config.js'), loadCoreModule('session-state-reader.js')]);
-      const mode = readSessionMode().mode ?? 'single';
-      const group = mode === 'multi' ? 'origin' : null;
+      const { mode, group, observations, reader } = await this.sessionObservations.get({ fresh });
       this.lastSessionMode = mode;
       this.lastSessionGroup = group;
-      const observations = await reader.readSessionStates([group], { freshnessMs: 5000, includeAllLive: mode === 'multi' });
       const observation = observations.get(group);
       try {
         const identities = [...observations].filter(([sessionGroup, item]) => sessionGroup === group || item.identity.present)
@@ -91,7 +95,9 @@ export class CoreState {
       } catch { this.costKey = null; }
       let targetRuntime = observation.identity.runtime, facts = null, view = null;
       if (mode === 'multi') {
-        try { targetRuntime = await reader.resolveTargetRuntime('origin'); } catch { targetRuntime = null; }
+        if (!observation.identity.present) {
+          try { targetRuntime = await this.sessionObservations.resolveOfflineRuntime('origin'); } catch { targetRuntime = null; }
+        }
         let health = null;
         try { health = targetRuntime ? await reader.readRuntimeHealth(targetRuntime) : null; } catch { /* Unreadable health is not an authentication block. */ }
         if (!observation.identity.present || health?.health === 'auth_failed') {
@@ -102,8 +108,8 @@ export class CoreState {
             originNeed: facts.originNeed, runtimeHealth: { [targetRuntime]: health }, targetRuntime, nowSec });
         }
       }
-      if (mode !== 'multi' && !['claude', 'codex'].includes(targetRuntime)) {
-        try { targetRuntime = await reader.resolveTargetRuntime(null); } catch { targetRuntime = null; }
+      if (mode !== 'multi' && !observation.identity.present) {
+        try { targetRuntime = await this.sessionObservations.resolveOfflineRuntime(null); } catch { targetRuntime = null; }
       }
       const accountRecord = ['claude', 'codex'].includes(targetRuntime)
         ? await this.accountUsageCache.read(targetRuntime, { allowRecorded: true }, reader).catch(() => null) : null;
@@ -115,6 +121,7 @@ export class CoreState {
       const changed = !isDeepStrictEqual(source, this.lastSource);
       this.lastSource = source;
       this.snapshot = projected;
+      this.onSample(this.snapshot);
       if (changed) this.onChange(this.snapshot);
     } catch (error) {
       this.costKey = null;
@@ -126,6 +133,7 @@ export class CoreState {
         this.snapshot = { running_tools: [], active_subagents: [], subagent_tools: [], source: {}, state: 'UNKNOWN', reason: source.error.code, message: source.error.message, ready: false, runId: null, sessionId: null, sessionGroup: this.lastSessionMode === undefined ? undefined : this.lastSessionGroup };
         this.onChange(this.snapshot);
       }
+      this.onSample(this.snapshot);
     }
     return this.snapshot;
   }
@@ -135,7 +143,7 @@ export class CoreState {
   getLaunchConfig() { return this.observation?.identity?.present && this.observation?.status?.reason !== 'identity_changed' && this.observation.identity.launchConfig ? structuredClone(this.observation.identity.launchConfig) : null; }
   getUsageObservation() { return this.observation?.usage ? structuredClone(this.observation.usage) : { valid: false }; }
   async currentTarget() {
-    await this.refresh();
+    await this.refresh({ fresh: true });
     const identity = this.observation?.identity;
     if (!identity?.present || !identity.ready || !identity.runId || this.observation?.status?.reason === 'identity_changed') throw Object.assign(new Error('Current Origin identity is unavailable'), { code: 'target_unavailable' });
     return { ...publicIdentity(identity), sessionGroup: this.snapshot.sessionGroup };
@@ -147,14 +155,14 @@ export class CoreState {
   }
   _schedule() {
     clearTimeout(this.timer);
-    if (!this.started) return;
+    if (!this.started || !this.watched) return;
     this.timer = setTimeout(() => {
-      // Schedule from the observation start, retaining the one-second watched cadence.
+      // Schedule from observation start, sharing a bounded fleet sampling round.
       this._schedule();
       this.refresh();
-    }, this.watched ? 1000 : 30000);
+    }, 2500);
     this.timer.unref?.();
   }
-  start() { this.started = true; this._schedule(); return this.refresh(); }
+  start() { this.started = true; this._schedule(); return this.watched ? this.refresh() : Promise.resolve(this.snapshot); }
   async stop() { this.started = false; clearTimeout(this.timer); await this.pending; }
 }

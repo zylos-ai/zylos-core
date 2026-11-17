@@ -2,38 +2,12 @@ import { usageSummary } from '../src/lib/workbench/usage-api.js';
 import { Store } from '../src/lib/store.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import http from 'node:http';
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { MetricResolver } from '../src/lib/metric-resolver.js';
 import { hashApiKey, exchangeApiKeyForToken } from '../src/lib/auth.js';
 import { usageServer } from './fixtures/usage-server.js';
 
 const request = (origin, route, options = {}) => fetch(origin + route,
   { ...options, signal: AbortSignal.timeout(3000) });
 
-test('removed five-hour metric never reads current or historical samples while weekly remains', () => {
-  const future = Math.floor(Date.now() / 1000) + 3600;
-  for (const runtime of ['claude', 'codex']) {
-    let reads = 0;
-    const account = runtime === 'claude'
-      ? { five_hour: { used_percentage: 73 }, seven_day: { used_percentage: 21, resets_at: future } }
-      : { fiveHour: { usedPercentage: 73 }, sevenDay: { usedPercentage: 21, resetsAt: future } };
-    const resolver = new MetricResolver({ latestMetric() { assert.fail('historical metrics must not be read'); } },
-      { statusline: { getAccountUsage() { reads++; return { runtime, value: account }; } } }, { runtime });
-    const removed = resolver.resolve('rate_limit');
-    assert.equal(removed.value, null);
-    assert.equal(removed.fallback_reason, 'Unknown metric: rate_limit');
-    assert.equal(reads, 0);
-    const weekly = resolver.resolve('rate_limit_7d');
-    assert.equal(weekly.value, 21);
-    assert.equal(weekly.dimensions.rate_limit_7d_resets_at, future);
-    assert.equal(reads, 1);
-  }
-});
 
 // HTTP integration: real routes/AuthGate/Store on private random loopback;
 // mocked CLI/Core BEFORE index import, owned timers/DB/listener cleanup in
@@ -60,18 +34,6 @@ test('usage and resource reads enforce auth while retired metric routes return 4
   for (const route of ['/api/metrics/rate_limit', '/api/metrics/rate_limit_7d', '/api/metrics/context_pct', '/api/state']) {
     assert.equal((await request(f.origin, route, { headers })).status, 404, route);
   }
-  // Metric resolution remains an internal consumer. A recorded quota has no
-  // current sample and must not suppress a separately current context sample.
-  f.store.insertMetric({ timestamp: new Date().toISOString(), runtime: 'claude',
-    metric_name: 'statusline_summary', metric_value: 37, dimensions: { context_pct: 37 }, source: 'statusline', confidence: 'actual' });
-  let currentAccount = null;
-  const resolver = new MetricResolver(f.store, { statusline: { getAccountUsage: () => currentAccount } }, { runtime: 'claude' });
-  const recordedMetric = resolver.resolve('rate_limit_7d');
-  assert.equal(recordedMetric.value, null);
-  assert.equal(recordedMetric.confidence, 'none');
-  const context = resolver.resolve('context_pct');
-  assert.equal(context.value, 37, 'recorded weekly quota must not suppress the independent context metric');
-  assert.equal(context.confidence, 'actual');
   const readAccount = async () => (await (await request(f.origin, '/api/instance', { headers })).json()).accounts.claude;
   let account = await readAccount();
   assert.equal(account.used_percentage, 21);
@@ -83,16 +45,8 @@ test('usage and resource reads enforce auth while retired metric routes return 4
   assert.equal(account.used_percentage, 21);
   assert.equal(account.live, true);
   assert.equal(account.recordedAt, new Date(2000).toISOString());
-  currentAccount = { runtime: 'claude', value: { seven_day: { used_percentage: 21, resets_at: Math.floor(Date.now() / 1000) + 3600 } } };
-  const liveMetric = resolver.resolve('rate_limit_7d');
-  assert.equal(liveMetric.value, 21);
-  assert.equal(liveMetric.confidence, 'actual');
   f.core.accountUsage = null; accountRecord = null;
   assert.equal(await readAccount(), null);
-  currentAccount = null;
-  const emptyMetric = resolver.resolve('rate_limit_7d');
-  assert.equal(emptyMetric.value, null);
-  assert.equal(emptyMetric.confidence, 'none');
   assert.equal((await request(f.origin, '/api/groups/a/name', { method: 'PUT',
     body: JSON.stringify({ name: 'fixture' }), headers: { ...headers, 'content-type': 'application/json' } })).status, 403);
   assert.equal(f.store.queryMetrics({ name: 'account_quota' }).length, 0);
@@ -229,66 +183,6 @@ test('usage series periods include exactly seven or thirty natural days', async 
   const value = await fallback.json();
   assert.equal(value.since, '2026-10-31T00:00:00.000Z');
   assert.equal(value.tzFallback, true);
-});
-
-// Subprocess integration: real statusline CJS through stdin and an owned random
-// loopback recipient. Run when ingest extraction/transport changes; skip other
-// UI/query changes. Private config is written/read back BEFORE spawn; no default
-// port can be used. Private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; child timeout/kill,
-// bounded request payload and server connections are tied to this test cleanup.
-test('statusline ingest emits weekly dimensions and drops five-hour dimensions', { timeout: 5000 }, async t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-ingest-'));
-  let child, timer;
-  const server = http.createServer();
-  t.after(async () => {
-    clearTimeout(timer);
-    if (child && child.exitCode === null && child.signalCode === null) {
-      const exited = new Promise(resolve => child.once('exit', resolve));
-      child.kill('SIGKILL'); await exited;
-    }
-    server.closeAllConnections();
-    if (server.listening) await new Promise(resolve => server.close(resolve));
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-  const address = server.address();
-  assert.equal(address.address, '127.0.0.1');
-  const configPath = path.join(dir, 'components/dashboard/config.json');
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify({ port: address.port }));
-  assert.equal(JSON.parse(fs.readFileSync(configPath, 'utf8')).port, address.port);
-  const received = new Promise((resolve, reject) => {
-    timer = setTimeout(() => reject(new Error('statusline fixture received no request')), 2500);
-    server.on('request', (req, res) => {
-      let body = '';
-      req.on('data', chunk => { body += chunk; if (body.length > 65536) req.destroy(new Error('fixture payload too large')); });
-      req.on('error', reject);
-      req.on('end', () => {
-        try { resolve({ url: req.url, method: req.method, value: JSON.parse(body) }); }
-        catch (error) { reject(error); }
-        res.end('{}');
-      });
-    });
-  });
-  const env = { ...process.env, HOME: dir, ZYLOS_DIR: dir, PM2_HOME: path.join(dir, 'pm2'),
-    TMPDIR: dir, NODE_OPTIONS: '' };
-  delete env.ZYLOS_SESSION_GROUP; delete env.TMUX;
-  child = spawn(process.execPath, [fileURLToPath(new URL('../src/lib/statusline-ingest.cjs', import.meta.url))],
-    { env, stdio: ['pipe', 'ignore', 'pipe'], timeout: 2500, killSignal: 'SIGKILL' });
-  let errors = '';
-  child.stderr.on('data', chunk => { if (errors.length < 4096) errors += chunk; });
-  const exited = new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolve({ code, signal })); });
-  child.stdin.end(JSON.stringify({ session_id: 'fixture', rate_limits: {
-    five_hour: { used_percentage: 73, resets_at: 123 }, seven_day: { used_percentage: 21, resets_at: 456 }
-  } }));
-  const [requestData, exit] = await Promise.all([received, exited]);
-  clearTimeout(timer);
-  assert.equal(exit.code, 0, errors);
-  assert.equal(exit.signal, null);
-  assert.equal(requestData.url, '/api/ingest/statusline');
-  assert.equal(requestData.method, 'POST');
-  assert.equal(requestData.value.metrics.length, 1);
-  assert.deepEqual(requestData.value.metrics[0].dimensions, { rate_limit_7d: 21, rate_limit_7d_resets_at: 456 });
 });
 
 test('today and seven-day costs use the current requested instance time zone on every read', () => {

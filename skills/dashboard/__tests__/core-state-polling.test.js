@@ -13,23 +13,14 @@ async function fixture(t) {
     status: { valid: !unstable, reason: unstable ? 'identity_changed' : null, value: { state: 'idle' } },
     usage: { valid: false },
   });
-  t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
-    if (name === 'config.js') return { readSessionMode: () => ({ mode: 'multi' }) };
-    if (name === 'session-state-reader.js') return {
-      readSessionStates: async (groups, options) => {
-        reads++;
-        assert.deepEqual(groups, ['origin']);
-        assert.deepEqual(options, { freshnessMs: 5000, includeAllLive: true });
-        return new Map(['origin', 'other'].map(group => [group, observation(group)]));
-      },
-      resolveTargetRuntime: async () => 'codex',
-      readRuntimeHealth: async () => ({ health: 'ok' }),
-      readAccountUsageSnapshot: async () => ({ live: null, recorded: null }),
-    };
-    assert.fail(`Unexpected module: ${name}`);
-  } } });
-  const { CoreState } = await import(`../src/lib/core-state.js?polling=${Math.random()}`);
-  const core = new CoreState();
+  const { CoreState } = await import('../src/lib/core-state.js');
+  const core = new CoreState({ accountUsageCache: { read: async () => null },
+    sessionObservations: { get: async () => {
+      reads++;
+      return { mode: 'multi', group: 'origin',
+        observations: new Map(['origin', 'other'].map(group => [group, observation(group)])),
+        reader: { readRuntimeHealth: async () => ({ health: 'ok' }) } };
+    } } });
   t.after(() => core.stop());
   return { core, reads: () => reads, replace: () => { runId = 'second'; }, invalidate: () => { unstable = true; } };
 }
@@ -38,32 +29,30 @@ function response() {
   return Object.assign(new EventEmitter(), { writeHead() {}, write() { return true; }, end() {} });
 }
 
-test('local and fleet SSE viewers switch polling between one and thirty seconds', async t => {
+test('local and fleet SSE viewers sample every 2.5 seconds and stop completely after disconnect', async t => {
   const f = await fixture(t);
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const hub = new SseHub(15000, { onClientCountChange: count => f.core.setWatched(count > 0) });
   t.after(() => hub.closeAll());
   await f.core.start();
-  t.mock.timers.tick(29999); await f.core.pending;
-  assert.equal(f.reads(), 1);
-  t.mock.timers.tick(1); await f.core.pending;
-  assert.equal(f.reads(), 2);
+  t.mock.timers.tick(30000); await f.core.pending;
+  assert.equal(f.reads(), 0);
   const local = response(), fleet = response();
   hub.addClient(local); hub.addClient(fleet);
-  t.mock.timers.tick(999); await f.core.pending; assert.equal(f.reads(), 2);
-  t.mock.timers.tick(1); await f.core.pending; assert.equal(f.reads(), 3);
+  t.mock.timers.tick(2499); await f.core.pending; assert.equal(f.reads(), 0);
+  t.mock.timers.tick(1); await f.core.pending; assert.equal(f.reads(), 1);
   local.emit('close');
-  t.mock.timers.tick(1000); await f.core.pending; assert.equal(f.reads(), 4, 'fleet subscription keeps fast polling');
+  t.mock.timers.tick(2500); await f.core.pending; assert.equal(f.reads(), 2, 'fleet subscription keeps sampling');
   fleet.emit('close');
-  t.mock.timers.tick(29999); await f.core.pending; assert.equal(f.reads(), 4);
-  t.mock.timers.tick(1); await f.core.pending; assert.equal(f.reads(), 5);
+  t.mock.timers.tick(300000); await f.core.pending; assert.equal(f.reads(), 2);
   await f.core.stop();
-  t.mock.timers.tick(30000); assert.equal(f.reads(), 5);
+  t.mock.timers.tick(30000); assert.equal(f.reads(), 2);
 });
 
 test('idle current-target reads refresh immediately and cost identities share the batch', async t => {
   const f = await fixture(t);
   await f.core.start();
+  await f.core.refresh();
   assert.equal(f.core.getState().runId, 'first');
   assert.equal(JSON.parse(f.core.costKey).length, 2);
   f.replace();
