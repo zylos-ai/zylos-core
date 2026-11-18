@@ -118,11 +118,18 @@ async function fixture(mode, root) {
     assert.equal((await read()).problems.some(item => item.kind === 'channel_send_failed'), false);
     if (mode === 'native single') {
       // Native single records sends without a session environment under origin.
-      // These rows are shown by the Origin conversation page, not the external
-      // tab; the Dashboard chat change adds the Origin page assertions.
+      // The Origin conversation page shows them, failed ones included, each
+      // labelled with its own channel.
       const groups = c4.getDb().prepare("SELECT COUNT(*) AS total, SUM(session_group='origin') AS origin FROM conversations WHERE direction='out'").get();
       assert.equal(groups.total, 4);
       assert.equal(groups.origin, 4);
+      const { ORIGIN_CONVERSATION_ID } = await import('../skills/dashboard/src/lib/chat/origin.js');
+      const page = new ChatHistory({ c4Reader: reader }).messages(ORIGIN_CONVERSATION_ID, { locale: 'en' }).items;
+      assert.deepEqual(page.map(item => [item.direction, item.channel, item.endpoint_id, item.preview, item.deliveryState]), [
+        ...[1, 2, 3].map(count => ['out', 'example', 'fixture', `failure ${count}`, 'pending_reconciliation']),
+        ['out', 'example', 'fixture', 'success', 'stored'],
+      ]);
+      console.log('Native single Origin page: 3 failed and 1 delivered outbound rows, each labelled with channel example');
     } else {
       const history = new ChatHistory({ c4Reader: reader });
       const conversation = history.list({ tab: 'external' }).items.find(item => item.channel === 'example');
