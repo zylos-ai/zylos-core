@@ -1,3 +1,4 @@
+import { SyncObserver } from './sync-observer.js';
 import { loadCoreModule } from './core-modules.js';
 import path from 'node:path';
 import fs from 'node:fs/promises';
@@ -152,7 +153,8 @@ export function createSupervisor(deps) {
     modeSwitch:request=>modeSwitch.handle(request),startAttempt:request=>health.registerStartAttempt(request),diagnostic,now});
   const exits=new SupervisorExits({scenes:{observeGroup:group=>scenes.observeGroup(group),stop:stopScene},db,serialize:operation=>admission.serialize(operation),readMode,diagnostic,reportError,env:deps.env});
   const endings=new SupervisorRunEndings({db,readIdentity:group=>scenes.readIdentity(group),isObservable:()=>!scenes.guard?.episodes.has(scenes.socketKey),env:deps.env,alert:deps.alert,diagnostic,reportError,now});
-  lifecycle=new SupervisorLifecycle({db,observeGroup:group=>scenes.observeGroup(group),observe:listScenes,stop:stopScene,readSyncMarker,prepareReferenceReorg,prompts,
+  const syncObserver = new SyncObserver({ env: deps.env, now, warn: log });
+  lifecycle=new SupervisorLifecycle({syncObserver,env:deps.env,db,observeGroup:group=>scenes.observeGroup(group),observe:listScenes,stop:stopScene,readSyncMarker,prepareReferenceReorg,prompts,
     requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),groupRunDir:group=>groupRunDir(group,deps.env),diagnostic,reportError,
     readCurrentSession:async group=>{try{return await endings.currentSession(group);}catch{return null;}},
     intentionalStop:(group,runId)=>exits.forget(group===null?'origin':group,runId)},{now});
@@ -339,6 +341,7 @@ export function createSupervisor(deps) {
         await Promise.allSettled([...authChecks]);
         await connectionHandler.drain?.();await admission.tail;await drainHealthWrites();
         for(const activity of activities.values())activity.close();
+        syncObserver.close();
       })();
       return stopPromise;
     }};

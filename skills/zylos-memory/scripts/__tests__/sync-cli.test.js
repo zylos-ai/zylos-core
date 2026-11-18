@@ -107,7 +107,9 @@ test('list ignores optional tokens while write commands still require a token', 
     assert.equal(result.stderr, 'Error [INVALID_INPUT]: token is required: pass the T printed by sync-lock.js acquire\n');
     assert.equal(result.stdout, '');
   }
-  assert.deepEqual(fs.readdirSync(env.ZYLOS_DIR), ['memory']);
+  assert.deepEqual(fs.readdirSync(env.ZYLOS_DIR).sort(), ['activity-monitor', 'memory']);
+  const diagnostics = fs.readFileSync(path.join(env.ZYLOS_DIR, 'activity-monitor', 'supervisor-events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(diagnostics.map(row => [row.action, row.code]), ['cleanup', 'rotate', 'checkpoint', 'commit'].map(action => [action, 'INVALID_INPUT']));
   assert.deepEqual(fs.readdirSync(memoryDir).sort(), ['inbox.md', ...segments.map(id => `inbox.${id}.md`)].sort());
   for (const segment of segments) assert.equal(fs.readFileSync(path.join(memoryDir, `inbox.${segment}.md`), 'utf8'), segment);
   assert.equal(fs.readFileSync(path.join(memoryDir, 'inbox.md'), 'utf8'), 'active inbox');
@@ -248,7 +250,11 @@ test('Sync scripts report a missing or malformed --token as input before touchin
       assert.equal(result.stderr, 'Error [INVALID_INPUT]: token is required: pass the T printed by sync-lock.js acquire\n');
     }
   }
-  assert.deepEqual(fs.readdirSync(env.ZYLOS_DIR), []);
+  assert.deepEqual(fs.readdirSync(env.ZYLOS_DIR), ['activity-monitor']);
+  const diagnostics = fs.readFileSync(path.join(env.ZYLOS_DIR, 'activity-monitor', 'supervisor-events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(diagnostics.length, commands.length * 5);
+  assert.ok(diagnostics.every(row => row.event === 'sync_result' && row.status === 'error' && row.code === 'INVALID_INPUT'));
+  assert.ok(diagnostics.every(row => !Object.hasOwn(row, 'token')));
 });
 
 // Integration boundary: real CLI chain c4-fetch --origin-sync --out ->

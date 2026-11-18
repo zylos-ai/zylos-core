@@ -10,6 +10,11 @@ import { createStore } from '../../skills/comm-bridge/scripts/c4-v2-store.js';
 import { requestRelease, deferReclaim } from '../../skills/activity-monitor/scripts/supervisor-request.js';
 import { tmuxNameForGroup, supervisorDiagnosticPath } from '../../cli/lib/session-group-paths.js';
 import { PRE_RECLAIM_SYNC_PROMPT } from '../../skills/zylos-memory/scripts/sync-prompts.js';
+import { parseStateHeader, renderStateSkeleton } from '../../skills/zylos-memory/scripts/state-format.js';
+import { acquire, release } from '../../skills/zylos-memory/scripts/sync-lock.js';
+import { list, checkpoint, commit } from '../../skills/zylos-memory/scripts/sync-files.js';
+import { createBatchReceipt } from '../../skills/comm-bridge/scripts/c4-sync-batch.js';
+import { projectConversation } from '../../skills/comm-bridge/scripts/c4-query-format.js';
 import { PRE_RECLAIM_CHECK_PROMPT } from '../../skills/activity-monitor/scripts/reclaim-prompts.js';
 const Database = createRequire(new URL('../../skills/comm-bridge/package.json', import.meta.url))('better-sqlite3');
 const [socketPath, binary, group, scenario] = process.argv.slice(2);
@@ -32,7 +37,15 @@ try {
     tmux('set-environment', '-t', tmuxNameForGroup(group), 'ZYLOS_SESSION_GROUP', group);
     fs.renameSync(path.join(root, 'activity-monitor/session-groups/origin'), path.join(root, 'activity-monitor/session-groups', group));
     db.insertConversation('out', 'telegram', 'test-chat', 'completed result', { groupName: 'release' });
-    db.createCheckpoint(group, db.getDeliveredFrontier(group), 'already recorded');
+    const checkpoint = db.createCheckpoint(group, db.getDeliveredFrontier(group), 'already recorded');
+    // This fixture represents a completed Sync, including its published state.
+    // Keep all control assertions strict so unrelated alert pollution is visible.
+    const memoryDir = path.join(root, 'memory/session-groups', group);
+    fs.mkdirSync(memoryDir, { recursive: true });
+    const state = renderStateSkeleton({ scope: group, syncedAt: new Date(now).toISOString() })
+      .replace('coverage= |', `coverage=${checkpoint.end_conversation_id} |`);
+    fs.writeFileSync(path.join(memoryDir, 'state.md'), state);
+    assert.equal(parseStateHeader(state, { scope: group }).coverage, checkpoint.end_conversation_id);
     assert.equal(db.adoptSlot(group, { runId: 'run-1' }).adopted, true);
   }
   const initial = await scenes.observeGroup(group);
@@ -170,6 +183,24 @@ try {
       const sync = pending[1];
       assert.equal(db.claimControl(sync.id), true);
       assert.equal((await notify({ controlId: sync.id })).type, 'ack');
+      // Execute the protected checkpoint/state publication before ack. The
+      // lifecycle now proves these durable facts rather than trusting the ack.
+      const env = { ...process.env, ZYLOS_SESSION_GROUP: group, ZYLOS_RUN_ID: 'run-1' };
+      const token = await acquire({ kind: 'group', env }, {
+        currentRunId: async () => (await scenes.observeGroup(group)).runId, now: () => now,
+      });
+      const settings = { env, token };
+      const memoryDatabase = { ...db, getConversationsByRange: coreDb.getConversationsByRange };
+      try {
+        const inputs = await list(settings), after = db.getCoverageEnd(group), end = db.getDeliveredFrontier(group);
+        const rows = db.getUnsummarizedConversations(group, { upToConversationId: end }).map(projectConversation);
+        const batch = createBatchReceipt(rows, { scope: group, after, end });
+        await checkpoint({ ...settings, end, summary: 'fixture synchronized result', batch }, { database: memoryDatabase });
+        const stateFile = path.join(root, 'memory/session-groups', group, 'state.md');
+        fs.writeFileSync(`${stateFile}.${token}.tmp`, renderStateSkeleton({ scope: group, syncedAt: new Date(now).toISOString() })
+          .replace('coverage= |', `coverage=${end} |`));
+        assert.equal((await commit({ ...settings, input: { followedUpIds: [], inputs, batch } }, { database: memoryDatabase, now: () => now })).committed, true);
+      } finally { await release({ ...settings, kind: 'group' }); }
       assert.equal(coreDb.ackControl(sync.id).status, 'done');
     }
     await tick(); await stillRunning();

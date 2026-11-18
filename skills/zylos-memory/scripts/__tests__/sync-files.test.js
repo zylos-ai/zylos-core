@@ -497,3 +497,77 @@ test('commit rejects a changed batch, wrong end, or missing completed checkpoint
     });
   }
 });
+
+test('commit emits metadata only after publication and preserves rejected error codes', async t => {
+  const f = await fixture(t); write(f);
+  await commit({ ...f.settings, input: { followedUpIds: [1] } }, f.deps);
+  await assert.rejects(guardedCommit({ ...f.settings, token: 'b'.repeat(32), input: 'private rejected input' }, f.deps), { code: 'TOKEN_MISMATCH' });
+  const log = fs.readFileSync(path.join(f.root, 'activity-monitor', 'supervisor-events.jsonl'), 'utf8');
+  const events = log.trim().split('\n').map(JSON.parse).filter(event => event.action === 'commit');
+  assert.equal(events.length, 2);
+  assert.deepEqual(events.map(row => [row.status, row.code]), [['success', undefined], ['error', 'TOKEN_MISMATCH']]);
+  assert.equal(events[0].scope, f.scope);
+  assert.equal(events[0].kind, 'group');
+  assert.equal(events[0].fromId, null); assert.equal(events[0].toId, null); assert.equal(events[0].count, 0);
+  assert.equal(log.includes(f.settings.token), false);
+  assert.equal(log.includes('private rejected input'), false);
+  assert.equal(log.includes('Updated'), false);
+});
+
+test('commit metadata reports first and last verified C4 rows', async t => {
+  const { projectConversation } = await import('../../../comm-bridge/scripts/c4-query-format.js');
+  const f = await fixture(t);
+  const rows = [7, 19].map(id => ({ id, timestamp: '2026-10-19 05:30:02', direction: 'in', channel: 'telegram', endpoint_id: 'test', content: 'private row', session_group: f.scope, status: 'delivered' }));
+  const batch = createBatchReceipt(rows.map(projectConversation), { scope: f.scope, after: 5, end: 20 });
+  fs.writeFileSync(f.temporary, f.skeleton().replace('coverage=0 ', 'coverage=20 '));
+  const database = { getLatestContentCheckpoint: () => ({ id: 8, end_conversation_id: 20 }), getConversationsByRange: () => rows };
+  await guardedCommit({ ...f.settings, input: { followedUpIds: [], inputs: await list(f.settings), batch } }, { ...f.deps, database });
+  const result = fs.readFileSync(path.join(f.root, 'activity-monitor', 'supervisor-events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).find(row => row.action === 'commit');
+  assert.deepEqual([result.fromId, result.toId, result.count, result.checkpointId], [7, 19, 2, 8]);
+});
+
+// Real operation wrappers and ownership guard with private marker/state files.
+// Run for result ownership or Sync wrapper changes; unrelated changes may skip.
+// The fixture removes its root; the isolated runner prevents live resource access.
+test('each rejected Sync file operation emits one result under its operation name', async t => {
+  const f = await fixture(t);
+  const logfile = path.join(f.root, 'activity-monitor', 'supervisor-events.jsonl');
+  const errors = () => fs.existsSync(logfile) ? fs.readFileSync(logfile, 'utf8').trim().split('\n').map(JSON.parse)
+    .filter(row => row.event === 'sync_result' && row.status === 'error') : [];
+  for (const [action, operation] of Object.entries({ cleanup, rotate, checkpoint, commit: guardedCommit })) {
+    for (const [token, code] of [['bad-token', 'INVALID_INPUT'], ['b'.repeat(32), 'TOKEN_MISMATCH']]) {
+      const before = errors().length;
+      await assert.rejects(operation({ ...f.settings, token }, f.deps), { code });
+      assert.deepEqual(errors().slice(before).map(row => [row.action, row.code]), [[action, code]]);
+    }
+  }
+  // A failure inside an admitted guard has the same single-result ownership.
+  const before = errors().length;
+  await assert.rejects(guardedCommit({ ...f.settings, input: {} }, f.deps), { code: 'INVALID_INPUT' });
+  assert.deepEqual(errors().slice(before).map(row => [row.action, row.code]), [['commit', 'INVALID_INPUT']]);
+});
+
+// Real receipt verification, guarded state publication and emitted result.
+// Run for receipt eligibility/result range changes; unrelated changes may skip.
+// The fixture uses private files and the official runner isolates live resources.
+test('commit metadata includes failed outgoing receipt rows and excludes ineligible or other-scope rows', async t => {
+  const { projectConversation } = await import('../../../comm-bridge/scripts/c4-query-format.js');
+  for (const group of ['telegram:test', null]) {
+    const f = await fixture(t, group);
+    const row = (id, direction, status, session_group = 'telegram:test') => ({ id, direction, status, session_group,
+      timestamp: '2026-10-19 05:30:02', channel: 'telegram', endpoint_id: 'test', content: 'private receipt row' });
+    const rows = [row(6, 'out', 'failed', 'telegram:other'), row(7, 'out', 'failed'),
+      row(11, 'in', 'delivered'), row(15, 'in', 'failed'), row(19, 'out', 'failed'),
+      row(20, 'out', 'failed', 'telegram:other')];
+    const eligible = group === null ? [rows[0], rows[1], rows[2], rows[4], rows[5]] : [rows[1], rows[2], rows[4]];
+    const batch = createBatchReceipt(eligible.map(projectConversation), { scope: f.scope, after: 5, end: 20 });
+    fs.writeFileSync(f.temporary, f.skeleton().replace('coverage=0 ', 'coverage=20 '));
+    const database = { getLatestContentCheckpoint: () => ({ id: 8, end_conversation_id: 20 }), getConversationsByRange: () => rows };
+    await guardedCommit({ ...f.settings, input: { followedUpIds: [], inputs: await list(f.settings), batch } }, { ...f.deps, database });
+    const result = fs.readFileSync(path.join(f.root, 'activity-monitor', 'supervisor-events.jsonl'), 'utf8')
+      .trim().split('\n').map(JSON.parse).find(row => row.action === 'commit');
+    assert.deepEqual([result.status, result.scope, result.fromId, result.toId, result.count],
+      ['success', f.scope, group === null ? 6 : 7, group === null ? 20 : 19, eligible.length]);
+    assert.equal(parseStateHeader(fs.readFileSync(f.state, 'utf8'), { scope: f.scope }).coverage, 20);
+  }
+});

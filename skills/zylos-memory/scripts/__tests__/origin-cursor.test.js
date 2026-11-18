@@ -455,3 +455,76 @@ test('Origin advance stamps the cursor with the instant it judged today, even wh
   assert.deepEqual(next.sessions.map(item => [path.basename(item.path), item.sha256]), [['2026-03-10.md', d.sha(d.log('2026-03-10'))]]);
   assert.notEqual(next.sessions[0].sha256, payload.inputs.sessions[0].sha256);
 });
+
+test('Origin results persist verified counts and report round quota and remaining backlog', async t => {
+  const { completeOriginRound } = await import('../origin-round.js');
+  const { readMarker } = await import('../sync-lock.js');
+  const f = await fixture(t), group = 'results';
+  f.seedGroup(group, 3);
+  const { payload } = await originRead(f, group, { limit: 2 });
+  const settings = { ...f.settings, token: f.tokens.origin, group, input: payload };
+  await advance(settings, f.deps);
+  await assert.rejects(advance(settings, f.deps), { code: 'INPUT_CHANGED' });
+  const marker = readMarker(f.runDir, 'origin').marker;
+  assert.equal(marker.processedCount, 2); assert.equal(marker.advancedGroups, 1); assert.equal(marker.errorCount, 1);
+  await completeOriginRound(f, marker, f.settings.env, f.deps);
+  const log = fs.readFileSync(path.join(f.root, 'activity-monitor', 'supervisor-events.jsonl'), 'utf8');
+  const rows = log.trim().split('\n').map(JSON.parse);
+  assert.deepEqual(rows.filter(row => row.event === 'sync_result' && row.status === 'error' && row.action !== 'round_complete').map(row => [row.action, row.code]), [['advance', 'INPUT_CHANGED']]);
+  const success = rows.find(row => row.action === 'advance' && row.status === 'success');
+  assert.equal(success.count, 2); assert.equal(success.group, group);
+  assert.equal(success.fromId, 0); assert.equal(success.toId, payload.raw.end);
+  assert.equal(success.fromCheckpointId, 0); assert.equal(success.toCheckpointId, 0);
+  const round = rows.findLast(row => row.action === 'round_complete');
+  assert.equal(round.processedCount, 2); assert.equal(round.remainingQuota, 48);
+  assert.equal(round.hasRemaining, true); assert.equal(round.status, 'error');
+  assert.equal(log.includes(f.tokens.origin), false);
+  assert.equal(log.includes('"sha256"'), false);
+});
+
+test('Origin empty round reports zero work and configured quota without fabricating progress', async t => {
+  const { initializeOriginRound, completeOriginRound } = await import('../origin-round.js');
+  const f = await fixture(t);
+  const marker = { startedAt: 1000, ...initializeOriginRound(f.root, { ...f.settings.env, ZYLOS_ORIGIN_SYNC_THRESHOLD: '7' }) };
+  await completeOriginRound(f, marker, f.settings.env, f.deps);
+  const row = JSON.parse(fs.readFileSync(path.join(f.root, 'activity-monitor', 'supervisor-events.jsonl'), 'utf8').trim().split('\n').at(-1));
+  assert.equal(row.action, 'round_complete'); assert.equal(row.processedCount, 0);
+  assert.equal(row.remainingQuota, 7); assert.equal(row.hasRemaining, false); assert.equal(row.status, 'success');
+});
+
+test('summary-only Origin result reports both cursor columns before and after advancement', async t => {
+  const f = await fixture(t), group = 'summary-results';
+  const records = f.seedGroup(group, 3);
+  const cp = f.store.createCheckpoint(group, records.at(-1).id, 'private source summary');
+  const { payload } = await originRead(f, group, { raw: false });
+  await advance({ ...f.settings, token: f.tokens.origin, group, input: payload }, f.deps);
+  const log = fs.readFileSync(path.join(f.root, 'activity-monitor', 'supervisor-events.jsonl'), 'utf8');
+  const row = log.trim().split('\n').map(JSON.parse).findLast(row => row.action === 'advance');
+  assert.deepEqual([row.fromId, row.toId, row.fromCheckpointId, row.toCheckpointId], [0, records.at(-1).id, 0, cp.id]);
+  assert.equal(row.count, 0); assert.equal(row.advanced, true);
+  assert.equal(log.includes('private source summary'), false);
+});
+
+test('Origin empty raw receipt with unchanged cursors is zero work', async t => {
+  const { readMarker } = await import('../sync-lock.js');
+  const f = await fixture(t), group = 'no-change';
+  const rows = f.seedGroup(group, 1);
+  f.store.advanceOriginSyncCursor(group, { syncedId: rows[0].id, checkpointId: 0 });
+  const { payload } = await originRead(f, group);
+  assert.equal(payload.raw.count, 0);
+  const result = await advance({ ...f.settings, token: f.tokens.origin, group, input: payload }, f.deps);
+  assert.equal(result.advanced, true, 'the existing cursor API response stays unchanged');
+  const marker = readMarker(f.runDir, 'origin').marker;
+  assert.equal(marker.processedCount, 0); assert.equal(marker.advancedGroups, 0);
+});
+
+// Real Origin ownership guard and diagnostic writer in an isolated fixture.
+// Run for advance/guard result ownership changes; unrelated changes may skip.
+// fixture(t) closes its database and removes private files after the test.
+test('rejected Origin ownership emits one advance result', async t => {
+  const f = await fixture(t);
+  await assert.rejects(advance({ ...f.settings, group: 'results', token: 'b'.repeat(32), input: {} }, f.deps), { code: 'TOKEN_MISMATCH' });
+  const log = fs.readFileSync(path.join(f.root, 'activity-monitor', 'supervisor-events.jsonl'), 'utf8');
+  const errors = log.trim().split('\n').map(JSON.parse).filter(row => row.event === 'sync_result' && row.status === 'error');
+  assert.deepEqual(errors.map(row => [row.action, row.code]), [['advance', 'TOKEN_MISMATCH']]);
+});
