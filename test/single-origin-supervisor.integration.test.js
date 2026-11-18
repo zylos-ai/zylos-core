@@ -50,7 +50,10 @@ for (const legacy of [false, true]) test(`single Supervisor entry uses ${legacy 
       assert.equal(frozen.session_group,legacy?null:'origin');
       assert.equal(frozen.endpoint,legacy?'other-room':'origin-room');
       assert.equal(service.supervisor.health.freezeNotice({event:{event:'other'},result:{}}),null);
-    } finally { await service?.stop(); }
+    } finally {
+      try { await service?.stop(); }
+      finally { f.tmux('kill-server'); await f.waitForServerExit(); }
+    }
     const socket = path.join(f.root,'activity-monitor','am.sock');
     assert.equal((await import('node:fs')).existsSync(socket),false);
   });
