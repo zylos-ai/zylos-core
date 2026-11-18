@@ -308,6 +308,10 @@ describe('c4-session-init', () => {
       assert.equal(configured.status, 0, configured.stderr);
       assert.ok(configured.stdout.includes('About 8 messages unsummarized; latest 6 shown.'));
       assert.ok(!configured.stdout.includes('configured-02\n'));
+      const overridden = cli([], { ...quiet, ZYLOS_SYNC_THRESHOLD: '10' });
+      assert.equal(overridden.status, 0, overridden.stderr);
+      assert.ok(numbered(8, 'configured').every(content => overridden.stdout.includes(`${content}\n`)), 'environment 10 overrides config 5');
+      assert.doesNotMatch(overridden.stdout, OMITTED_MIDDLE);
     });
   });
 
