@@ -1724,9 +1724,16 @@ test('overlapping initI18n calls: stale slow request cannot overwrite the newer 
     value: { language: 'en' }, configurable: true
   });
   globalThis.document = { documentElement: { lang: '' }, querySelectorAll: () => [] };
+  // Primary packs stay pending until the test answers them; workbench packs answer at once.
   const pending = {};
-  globalThis.fetch = (url) => new Promise((resolve) => {
-    const locale = String(url).includes('/zh.json') ? 'zh' : 'en';
+  globalThis.fetch = (url, { signal } = {}) => new Promise((resolve, reject) => {
+    const workbench = String(url).match(/\/i18n\/wb\.(en|zh)\.json$/);
+    if (workbench) {
+      resolve({ ok: true, json: async () => ({ 'wb.nav.overview': `wb-${workbench[1]}` }) });
+      return;
+    }
+    const locale = String(url).match(/\/i18n\/(en|zh)\.json$/)[1];
+    signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
     pending[locale] = (pack) => resolve({ ok: true, json: async () => pack });
   });
 
