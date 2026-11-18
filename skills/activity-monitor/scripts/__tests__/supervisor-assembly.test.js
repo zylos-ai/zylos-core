@@ -9,6 +9,7 @@ import { createSupervisor } from '../supervisor.js';
 import { TRANSCRIPT_READ_BUDGET_BYTES } from '../session-activity.js';
 import { RestartRequestStore } from '../restart-request-store.js';
 import { groupRunDir } from '../../../../cli/lib/session-group-paths.js';
+import { tmuxClientArgs } from '../../../comm-bridge/scripts/tmux-client-args.js';
 function fixture(t,{batchIdentities,badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunchConfig=()=>({runtime:'claude',mode:'default'}),consumeHealthEvents,readConfiguration=async()=>({mode:'multi',runtime:'claude',capacity:2}),checkAuth=async()=>({status:'uncertain'}),alert,now=Date.now,database={},readSyncMarker,prepareReferenceReorg,prompts}={}) {
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-assembly-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const file=path.join(root,'requests.json');if(badRequests)fs.writeFileSync(file,'broken');
@@ -18,6 +19,53 @@ function fixture(t,{batchIdentities,badRequests=false,readMode=()=>({mode:'multi
  const supervisor=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},readConfiguration,readMode,resolveTargetRuntime:async()=> 'claude',requestStore:new RestartRequestStore({file}),consumeHealthEvents,checkAuth,alert,now,readSyncMarker,prepareReferenceReorg,prompts,log:item=>calls.push(item),loopOptions:{schedule:()=>1,cancel:()=>{}}});
  t.after(()=>supervisor.stop());return {supervisor,calls,file,root,scenes,db};
 }
+
+// Real assembly -> startup preflight -> shared reporter and loop latch.
+// Run for directory reporting changes; unrelated changes can skip. The official
+// runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fake scheduling and injected
+// scene/DB adapters avoid tmux, PM2 and network, and teardown stops the loop.
+test('assembled startup directory preflight emits one event', async t => {
+ const {supervisor,root,calls}=fixture(t);
+ const previous=process.env.TMUX_TMPDIR;
+ const directory=path.join(root,'private');
+ process.env.TMUX_TMPDIR=directory;
+ t.after(()=>{if(previous===undefined)delete process.env.TMUX_TMPDIR;else process.env.TMUX_TMPDIR=previous;});
+ t.diagnostic(JSON.stringify({HOME:process.env.HOME,ZYLOS_DIR:root,PM2_HOME:process.env.PM2_HOME,TMPDIR:process.env.TMPDIR,TMUX_TMPDIR:directory,tmux:'not invoked',database:'injected'}));
+ await supervisor.loop.start();
+ for(let i=0;i<100;i++)await supervisor.loop.tick();
+ assert.equal(supervisor.loop.directoryError?.code,'TMUX_DIR_MISSING');
+ assert.equal(calls.filter(row=>row.error==='TMUX_DIR_MISSING').length,1);
+ const rows=fs.readFileSync(path.join(root,'activity-monitor','supervisor-events.jsonl'),'utf8').trim().split('\n').map(JSON.parse);
+ assert.equal(rows.filter(row=>row.event==='tmux_directory_unavailable').length,1);
+});
+
+// Real assembly -> exit workers -> shared loop latch. Private files,
+// injected scene/DB adapters and fake scheduling; no tmux/PM2/network. Run for
+// directory reporting/assembly changes; unrelated UI work can skip. The official
+// runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and fixture teardown stops the loop.
+test('assembled exit directory loss emits one event across multiple groups', async t => {
+ const {supervisor,scenes,root,calls}=fixture(t);
+ const previous=process.env.TMUX_TMPDIR;
+ const directory=path.join(root,'private');fs.mkdirSync(directory,{mode:0o700});fs.chmodSync(directory,0o700);
+ process.env.TMUX_TMPDIR=directory;
+ t.after(()=>{if(previous===undefined)delete process.env.TMUX_TMPDIR;else process.env.TMUX_TMPDIR=previous;});
+ const groups=['telegram:first','telegram:second','telegram:third'];
+ let reads=0;
+ const unavailable=()=>{
+  if(reads++===0)fs.renameSync(directory,directory+'-gone');
+  tmuxClientArgs();assert.fail('directory check must reject');
+ };
+ scenes.observe=async()=>groups.map(sessionGroup=>({sessionGroup,runId:'run',sessionId:'session',runtime:'claude',present:true,ready:true,processRunning:false}));
+ scenes.observeGroup=async()=>unavailable();
+ t.diagnostic(JSON.stringify({HOME:process.env.HOME,ZYLOS_DIR:root,PM2_HOME:process.env.PM2_HOME,TMPDIR:process.env.TMPDIR,TMUX_TMPDIR:directory,tmux:'not invoked',database:'injected'}));
+ await supervisor.loop.start();
+ assert.ok(reads>=1);
+ assert.equal(supervisor.loop.directoryError?.code,'TMUX_DIR_MISSING');
+ for(let i=0;i<100;i++)await supervisor.loop.tick();
+ assert.equal(calls.filter(row=>row.error==='TMUX_DIR_MISSING').length,1);
+ const rows=fs.readFileSync(path.join(root,'activity-monitor','supervisor-events.jsonl'),'utf8').trim().split('\n').map(JSON.parse);
+ assert.equal(rows.filter(row=>row.event==='tmux_directory_unavailable').length,1);
+});
 
 // Exercise the real Supervisor assembly and socket dispatch, with private paths
 // and live-run scene data supplied by the existing isolated fixture.

@@ -21,7 +21,8 @@ import { signIn } from './helpers/dashboard-sign-in.js';
 // HTTP/auth fixtures exercise actual product routing, not remote version hosts.
 assert.notEqual(process.env.HOME, os.userInfo().homedir, 'Run through the isolated Node test runner');
 process.env.TMUX_TMPDIR = path.join(os.tmpdir(), 'auth-tmux');
-fs.mkdirSync(process.env.TMUX_TMPDIR, { recursive: true });
+fs.mkdirSync(process.env.TMUX_TMPDIR, { recursive: true, mode: 0o700 });
+fs.chmodSync(process.env.TMUX_TMPDIR, 0o700);
 mock.method(VersionChecker.prototype, 'start', () => {});
 // A test that waits forever must fail fast instead of holding the whole Node
 // batch until the outer runner timeout. Generous so a loaded host still passes.
@@ -69,7 +70,8 @@ async function makeServerWithDir(zylosDir) {
   const previousTmux = process.env.TMUX_TMPDIR;
   process.env.ZYLOS_DIR = zylosDir;
   process.env.DASHBOARD_PORT = '0';
-  const privateTmux = path.join(zylosDir, 'tmux'); fs.mkdirSync(privateTmux, { recursive: true });
+  const privateTmux = path.join(zylosDir, 'tmux'); fs.mkdirSync(privateTmux, { recursive: true, mode: 0o700 });
+  fs.chmodSync(privateTmux, 0o700);
   process.env.TMUX_TMPDIR = privateTmux;
   let createServer;
   try {

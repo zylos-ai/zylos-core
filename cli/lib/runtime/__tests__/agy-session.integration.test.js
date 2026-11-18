@@ -20,7 +20,7 @@ for (const sessionGroup of [null, 'telegram:agy']) test(`agy session launches wi
   const env = { HOME: f.dir, ZYLOS_DIR: f.dir, PM2_HOME: path.join(f.dir, 'pm2'), TMPDIR: f.dir,
     PATH: process.env.PATH, AGY_BIN: path.join(f.dir, 'agy'), GEMINI_API_KEY: 'isolated-fake-key' };
   for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) assert.ok(env[key] === f.dir || env[key].startsWith(f.dir + path.sep), key);
-  assert.equal(f.socketPath, path.join(f.dir, 's'));
+  assert.equal(f.socketPath, path.join(f.dir, `tmux-${process.getuid()}`, 'default'));
   console.log('isolated agy launch paths', JSON.stringify({ ...Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(k => [k, env[k]])), socketPath: f.socketPath }));
   const source = await fs.readFile(new URL('./fixtures/agy-cli.js', import.meta.url), 'utf8');
   await fs.writeFile(env.AGY_BIN, `#!${process.execPath}\n${source}`, { mode: 0o700 });

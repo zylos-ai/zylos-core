@@ -19,10 +19,10 @@ function fixture(t, { runtimeProcess = false } = {}) {
 }
 
 test('Core module loading retries after failure and caches success', async t => {
-  const { root, tmux, ready, binary } = fixture(t);
+  const { root, tmux, ready, binary, socketPath } = fixture(t);
   // A fresh module keeps this regression independent of other observer calls.
   const { createCoreObserver: createFreshObserver } = await import('../c4-runtime-observer.js?retry-test');
-  const observer = createFreshObserver({ tmux: { socketPath: path.join(root, 'tmux.sock'), binary } });
+  const observer = createFreshObserver({ tmux: { socketPath, binary } });
   const incomplete = path.join(root, 'incomplete-core');
   fs.mkdirSync(path.join(incomplete, 'cli/lib'), { recursive: true });
   fs.writeFileSync(path.join(incomplete, 'cli/lib/config.js'), '');
@@ -172,7 +172,7 @@ for (const json of [false, true]) for (const mode of ['single', 'multi']) test(`
 });
 
 for (const phase of ['pane-observation', 'final-revalidation']) test(`post-observation ${phase} command failure maps to TMUX_UNAVAILABLE`, async t => {
-  const {root,binary:requestedBinary} = fixture(t);
+  const {root,binary:requestedBinary,socketPath} = fixture(t);
   const binary = execFileSync('sh', ['-c', 'command -v "$1"', 'sh', requestedBinary], {encoding:'utf8'}).trim();
   const wrapper = path.join(root, 'tmux-error-wrapper');
   const count = path.join(root, 'environment-reads');
@@ -189,7 +189,7 @@ if (${JSON.stringify(phase)} === 'pane-observation' ? action.includes('#{pane_pi
 const result = cp.spawnSync(${JSON.stringify(binary)}, args, {stdio:'inherit'});
 process.exit(result.status ?? 1);
 `, {mode:0o700});
-  const observer = createCoreObserver({tmux:{socketPath:path.join(root,'tmux.sock'), binary:wrapper}});
+  const observer = createCoreObserver({tmux:{socketPath, binary:wrapper}});
   const method = phase === 'pane-observation' ? 'observeCoreRunning' : 'observeCoreTarget';
   await assert.rejects(observer[method]({sessionMode:'single'}), {code:'TMUX_UNAVAILABLE', cause:'error'});
   assert.equal(fs.existsSync(count) ? Number(fs.readFileSync(count, 'utf8')) : 0, phase === 'pane-observation' ? 0 : 2);

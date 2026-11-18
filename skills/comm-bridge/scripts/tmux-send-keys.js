@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { TMUX_COMMAND as C, parseTmuxVersion } from './tmux-protocol.js';
+import { tmuxClientArgs } from './tmux-client-args.js';
 
 // This deliberately cannot name a normal tmux client (/dev/pts/N or client-PID).
 export const NO_CLIENT = 'zylos-no-client';
@@ -16,6 +17,7 @@ export function createTmuxSender({ binary = 'tmux', prefix = [], exec = execFile
   warn = message => process.stderr.write(`${message}\n`) } = {}) {
   let capability;
   function getCapability() {
+    tmuxClientArgs();
     if (!capability) {
       try {
         capability = parseTmuxVersion(exec(binary, ['-V'], {
@@ -31,7 +33,7 @@ export function createTmuxSender({ binary = 'tmux', prefix = [], exec = execFile
   }
   function sendKeys(session, keys, options = {}) {
     const flags = getCapability().useClientFlag ? ['-c', NO_CLIENT] : [];
-    return exec(binary, [...prefix, C.sendKeys, ...flags, '-t', session, ...keys], options);
+    return exec(binary, [...tmuxClientArgs({ utf8: false }), ...prefix, C.sendKeys, ...flags, '-t', session, ...keys], options);
   }
   return { getCapability, sendKeys };
 }

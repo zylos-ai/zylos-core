@@ -7,7 +7,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { sendTmuxKeys } from '../tmux-send-keys.js';
-import { tmuxClientEnvironment } from './tmux-client-args.js';
+import { tmuxClientArgs, tmuxClientEnvironment, isTmuxDirectoryError } from './tmux-client-args.js';
 import { TMUX_COMMAND as C, TMUX_FORMAT as F, parseLegacyPanePid } from './tmux-protocol.js';
 
 const CMD_TIMEOUT = 3000;
@@ -20,12 +20,13 @@ const LAUNCH_TIMEOUT = 10_000;
  */
 export function tmuxHasSession(session) {
   try {
-    execFileSync('tmux', [C.hasSession, '-t', session], {
+    execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), C.hasSession, '-t', session], {
       timeout: CMD_TIMEOUT,
       stdio: 'ignore',
     });
     return true;
   } catch (err) {
+    if (isTmuxDirectoryError(err)) throw err;
     if (isTimeoutError(err)) _debugTimeout('tmux has-session', err);
     return false;
   }
@@ -38,13 +39,14 @@ export function tmuxHasSession(session) {
  */
 export function tmuxGetPanePid(session) {
   try {
-    const out = execFileSync('tmux', [C.listPanes, '-t', session, '-F', F.panePid], {
+    const out = execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), C.listPanes, '-t', session, '-F', F.panePid], {
       encoding: 'utf8',
       timeout: CMD_TIMEOUT,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     return parseLegacyPanePid(out);
   } catch (err) {
+    if (isTmuxDirectoryError(err)) throw err;
     if (isTimeoutError(err)) _debugTimeout('tmux list-panes', err);
     return 0;
   }
@@ -56,11 +58,11 @@ export function tmuxGetPanePid(session) {
  */
 export function tmuxKillSession(session) {
   try {
-    execFileSync('tmux', [C.killSession, '-t', session], {
+    execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), C.killSession, '-t', session], {
       timeout: CMD_TIMEOUT,
       stdio: 'ignore',
     });
-  } catch { /* session may not exist */ }
+  } catch (error) { if (isTmuxDirectoryError(error)) throw error; }
 }
 
 /**
@@ -72,11 +74,11 @@ export function tmuxKillSession(session) {
  * @param {string} bufferName - Unique tmux buffer name
  */
 export function tmuxPasteBuffer(session, tmpFile, bufferName) {
-  execFileSync('tmux', [C.loadBuffer, '-b', bufferName, tmpFile], {
+  execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), C.loadBuffer, '-b', bufferName, tmpFile], {
     timeout: CMD_TIMEOUT,
     stdio: 'ignore',
   });
-  execFileSync('tmux', [C.pasteBuffer, '-b', bufferName, '-t', session], {
+  execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), C.pasteBuffer, '-b', bufferName, '-t', session], {
     timeout: CMD_TIMEOUT,
     stdio: 'ignore',
   });
@@ -92,11 +94,11 @@ export function tmuxPasteBuffer(session, tmpFile, bufferName) {
  */
 export function tmuxDeleteBuffer(bufferName) {
   try {
-    execFileSync('tmux', [C.deleteBuffer, '-b', bufferName], {
+    execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), C.deleteBuffer, '-b', bufferName], {
       timeout: CMD_TIMEOUT,
       stdio: 'ignore',
     });
-  } catch { /* best-effort */ }
+  } catch (error) { if (isTmuxDirectoryError(error)) throw error; }
 }
 
 /**
@@ -106,12 +108,13 @@ export function tmuxDeleteBuffer(bufferName) {
  */
 export function tmuxCapturePaneText(session) {
   try {
-    return execFileSync('tmux', [C.capturePane, '-p', '-t', session], {
+    return execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), C.capturePane, '-p', '-t', session], {
       encoding: 'utf8',
       timeout: CMD_TIMEOUT,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
   } catch (err) {
+    if (isTmuxDirectoryError(err)) throw err;
     if (isTimeoutError(err)) _debugTimeout('tmux capture-pane', err);
     return null;
   }
@@ -134,7 +137,7 @@ export function tmuxSendKeys(session, ...keys) {
  * @param {string[]} args - Full argument list for `tmux new-session`
  */
 export function tmuxNewSession(args) {
-  execFileSync('tmux', args, { timeout: LAUNCH_TIMEOUT, env: tmuxClientEnvironment() });
+  execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), ...args], { timeout: LAUNCH_TIMEOUT, env: tmuxClientEnvironment() });
 }
 
 /**

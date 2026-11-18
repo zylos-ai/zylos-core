@@ -16,6 +16,7 @@ import { SessionActivity } from './session-activity.js';
 import { publishSessionStatus } from './status-writer.js';
 import { createSupervisorConnectionHandler } from './router-socket.js';
 import { PENDING_MAX_AGE_SECONDS } from '../../comm-bridge/scripts/c4-config.js';
+import { isTmuxDirectoryError } from '../../comm-bridge/scripts/tmux-client-args.js';
 const { nudgeSession } = await loadCoreModule('session-nudge.js');
 const { appendEvent, rotateEventLog } = await loadCoreModule('event-log.js');
 const { writeSessionModeAtCutover } = await loadCoreModule('config.js');
@@ -27,7 +28,7 @@ export const AUTH_DEMAND_RETRY_MS = 60000;
 export function createSupervisor(deps) {
   const { db, scenes, readConfiguration, readMode, readSyncMarker, prepareReferenceReorg, prompts, now=Date.now, log=()=>{} }=deps;
   const activities=new Map();let configuration;let lastMetrics=null;let lastMaintenance=0;
-  let observer,router,admission,lifecycle,modeSwitch,stopping=false,stopPromise,roundContext;
+  let observer,router,admission,lifecycle,modeSwitch,loop,stopping=false,stopPromise,roundContext;
   const authChecks=new Set(),authFlights=new Map(),authRetryAt=new Map();
   const startupAuthChecks=new Set();
   const originAuthAlerted=new Set();
@@ -35,6 +36,13 @@ export function createSupervisor(deps) {
   let restartRequestsUnreadable=false;
   const restartRequestsPath=()=>admission?.store.file ?? path.join(deps.zylosDir,'activity-monitor','restart-requests.json');
   const reportError=(error,context={})=>{
+    if(isTmuxDirectoryError(error)) {
+      if(loop.directoryError)return;
+      loop.directoryError=error;
+      diagnostic({event:'tmux_directory_unavailable',reason:error.code});
+      log({error:error.code,phase:'tmux-directory'});
+      return;
+    }
     if(error.code==='requests_unreadable') {
       if(restartRequestsUnreadable)return;
       // Restore and round reads belong to one episode until a read succeeds.
@@ -202,7 +210,7 @@ export function createSupervisor(deps) {
     convert:deps.convertModeTransition ?? createModeSwitchConverter({db,zylosDir:deps.zylosDir}),
     writeMode:deps.writeMode ?? writeSessionModeAtCutover,restart:deps.restartDispatcherConfirmation,diagnostic,now});
   const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','reconcileConfiguration','advanceReleases','advanceReclaim','checkRotation','checkTtl','checkEviction','checkSync'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
-  const loop=new SupervisorLoop({
+  loop=new SupervisorLoop({
     beginRound:()=>lifecycle.beginRound(),
     readConfiguration:async transition=>{
       roundContext=null;

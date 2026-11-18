@@ -36,7 +36,9 @@ export function runTmuxCommand(argv, { socketPath, socketName, binary = 'tmux', 
       settled = true; clearTimeout(timer); signal?.removeEventListener('abort', abort);
       const output = stdout.replace(/\r?\n$/, '');
       if (!failure && (code !== 0 || stderr.trim())) {
-        failure = tmuxError(noServer(stderr) ? 'TMUX_NO_SERVER' : 'TMUX_COMMAND_FAILED',
+        try { tmuxClientArgs({ socketPath, socketName }); }
+        catch (error) { failure = error; }
+        failure ??= tmuxError(noServer(stderr) ? 'TMUX_NO_SERVER' : 'TMUX_COMMAND_FAILED',
           stderr.trim() || `tmux command exited ${code ?? exitSignal}`, 'error');
       }
       if (failure) reject(Object.assign(failure, { stdout: output, stderr, exitCode: code }));

@@ -25,7 +25,7 @@ function environment(t) {
     DISPATCHER_FIXTURE_RESULT: path.join(dir, 'result.json') };
   delete env.TMUX;
   for (const name of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
-    fs.mkdirSync(env[name]);
+    fs.mkdirSync(env[name], { mode: 0o700 });
     assert.equal(fs.realpathSync(env[name]), env[name]);
     assert.ok(env[name].startsWith(dir + path.sep));
   }
@@ -94,6 +94,30 @@ test('normal dispatcher remains running and SIGTERM exits successfully', { timeo
   assert.match(p.stdout(), /C4 Session Router Started/);
   await delay(500); assert.equal(p.child.exitCode, null, p.stderr());
   assert.doesNotMatch(p.stderr(), /Dispatcher startup error/);
+  p.child.kill('SIGTERM');
+  assert.deepEqual(await p.closed, [0, null]);
+});
+
+// Boundary: production entry/router/SQLite with a missing private directory.
+// Run for tmux-directory startup/liveness changes; skip unrelated delivery work.
+// No real tmux: even a regressed guard can only reach the private fake binary.
+test('missing tmux directory keeps dispatcher resident with one event and no client calls', { timeout: 10000 }, async t => {
+  const env = environment(t);
+  const bin = path.join(env.HOME, 'bin'); fs.mkdirSync(bin);
+  const calls = path.join(env.HOME, 'tmux-calls');
+  fs.writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\necho called >> "$TMUX_CALLS"\nexit 1\n', { mode: 0o700 });
+  env.PATH = `${bin}:${env.PATH}`; env.TMUX_CALLS = calls;
+  env.TMUX_TMPDIR = path.join(env.TMPDIR, 'missing');
+  const eventsFile = path.join(env.ZYLOS_DIR, 'comm-bridge/router-events.jsonl');
+  const events = () => fs.existsSync(eventsFile) ? fs.readFileSync(eventsFile, 'utf8') : '';
+  const p = launch(t, env); p.readErrors();
+  await until(() => events().includes('tmux_directory_unavailable'));
+  await delay(2200);
+  assert.equal(p.child.exitCode, null, p.stderr());
+  assert.equal(p.child.signalCode, null);
+  const rows = events().trim().split('\n').map(JSON.parse);
+  assert.equal(rows.filter(row => row.event === 'tmux_directory_unavailable').length, 1);
+  assert.equal(fs.existsSync(calls), false);
   p.child.kill('SIGTERM');
   assert.deepEqual(await p.closed, [0, null]);
 });
