@@ -118,6 +118,15 @@ test('agy auth missing key, network failure and unreadable configuration are bou
   assert.deepEqual(await adapter.checkAuth(), { status: 'uncertain', reason: 'environment_unreadable' });
 });
 
+test('agy authentication stays uncertain when curl is unavailable', async t => {
+  const f = await fixture(t, 'GEMINI_API_KEY=fixture-invalid-key\n');
+  const adapter = new AgyAdapter({ ...f, execFile: probeExecutor({
+    error: Object.assign(new Error('spawn curl ENOENT'), { code: 'ENOENT' }),
+    inspect: ({ command }) => assert.equal(command, 'curl'),
+  }) });
+  assert.deepEqual(await adapter.checkAuth(), { status: 'uncertain', reason: 'http_probe_network_error' });
+});
+
 test('agy launch refuses a missing API key before creating any tmux resource', async t => {
   const f = await fixture(t);
   const adapter = new AgyAdapter({ ...f, dependencies: { openTmuxConnection: () => assert.fail('No tmux before credential preflight') } });

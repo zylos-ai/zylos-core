@@ -379,7 +379,7 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
     else {
       let auth;
       try { auth = await selected.checkAuth(); } catch { auth = { status: 'uncertain' }; }
-      if (auth.status !== 'success') return fail(target === 'agy' && auth.status === 'failure' ? 'AUTH_FAILED' : 'AUTH_NOT_CONFIRMED', `${target} authentication not confirmed; run zylos auth ${target}`, { authStatus: auth.status === 'failure' ? 'failure' : 'uncertain' });
+      if (auth.status !== 'success') return fail(auth.status === 'failure' ? 'AUTH_FAILED' : 'AUTH_NOT_CONFIRMED', `${target} authentication not confirmed; run zylos auth ${target}`, { authStatus: auth.status === 'failure' ? 'failure' : 'uncertain' });
     }
     try {
       const saved = write({ set: { runtime: target } });
@@ -449,7 +449,8 @@ Validation:
 
 Exit codes:
   0  Success
-  1  Failed; AUTH_NOT_CONFIRMED requires zylos auth <runtime>
+  1  Failed; AUTH_FAILED requires new credentials or login via zylos auth <runtime>;
+     AUTH_NOT_CONFIRMED requires checking network/proxy before retrying
 
 Examples:
   zylos runtime status

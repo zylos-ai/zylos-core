@@ -4,8 +4,11 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import http from 'node:http';
+import { once } from 'node:events';
 import { CodexAdapter } from '../codex.js';
 import { ClaudeAdapter } from '../claude.js';
+import { executeRuntimeSwitch, runtimeCommand } from '../../../commands/runtime.js';
 
 // Integration boundary: real adapters and execFile with a private fake CLI.
 // Run for CLI auth-result parsing changes; skip unrelated session lifecycle.
@@ -119,5 +122,65 @@ for (const [name, scenario, result] of [
   test(`Claude ${name} preserves its existing result`, async t => {
     const adapter = await fixture(t, 'claude', scenario);
     assert.deepEqual(await adapter.checkAuth(), result);
+  });
+}
+
+for (const termination of ['signal', 'timeout']) {
+  test(`Claude authentication text followed by ${termination} stays uncertain`, async t => {
+    const adapter = await fixture(t, 'claude', { stderr: 'authentication_error',
+      ...(termination === 'signal' ? { signal: 'SIGTERM' } : { wait: true }) },
+    termination === 'timeout' ? { timeout: 1000 } : {});
+    const result = await adapter.checkAuth();
+    assert.equal(result.status, 'uncertain');
+  });
+}
+
+async function assertSwitchRejected(target, adapter, status) {
+  const original = console.log, previousExit = process.exitCode;
+  const lines = [];
+  console.log = line => lines.push(line);
+  try {
+    const result = await runtimeCommand([target, '--json'], {
+      execute: (runtime, flags) => executeRuntimeSwitch(runtime, flags, {
+        read: () => ({ state: 'ok', config: { runtime: target === 'claude' ? 'codex' : 'claude' } }),
+        adapter: () => adapter, exists: () => true, hooksReady: () => ({ ready: true }),
+        write: () => assert.fail('rejected auth must not persist the runtime'),
+      }),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, status === 'failure' ? 'AUTH_FAILED' : 'AUTH_NOT_CONFIRMED');
+    assert.equal(result.error.authStatus, status);
+    assert.equal(process.exitCode, 1);
+    assert.deepEqual(lines.map(JSON.parse), [result]);
+    assert.deepEqual(result.error.persisted, []);
+  } finally { console.log = original; process.exitCode = previousExit; }
+}
+
+test('Codex API key rejection and unreachable endpoint reach the runtime command unchanged', async t => {
+  const adapter = await fixture(t, 'codex', {});
+  const server = http.createServer((req, res) => {
+    assert.equal(req.url, '/v1/models');
+    assert.equal(req.headers.authorization, 'Bearer fixture-invalid-key');
+    res.writeHead(401).end();
+  });
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const codexHome = adapter.options.env.CODEX_HOME;
+  await fs.mkdir(codexHome, { recursive: true });
+  await fs.writeFile(path.join(codexHome, 'auth.json'), JSON.stringify({
+    auth_mode: 'apikey', OPENAI_API_KEY: 'fixture-invalid-key',
+  }));
+  adapter.options.env.OPENAI_BASE_URL = `http://127.0.0.1:${server.address().port}/v1`;
+  await assertSwitchRejected('codex', adapter, 'failure');
+  server.closeAllConnections();
+  await new Promise(resolve => server.close(resolve));
+  await assertSwitchRejected('codex', adapter, 'uncertain');
+});
+
+for (const [output, status] of [['Not logged in', 'failure'], ['rate_limit_error', 'uncertain']]) {
+  test(`Claude ${output} reaches the runtime command as ${status}`, async t => {
+    const adapter = await fixture(t, 'claude', { stderr: output });
+    await assertSwitchRejected('claude', adapter, status);
   });
 }

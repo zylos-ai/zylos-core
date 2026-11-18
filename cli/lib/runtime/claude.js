@@ -161,9 +161,6 @@ export class ClaudeAdapter extends SessionAdapter {
       return { status: 'success', reason: 'cli_probe' };
     } catch (err) {
       const output = (err.stdout ?? '') + (err.stderr ?? '');
-      if (output.includes('authentication_error')) {
-        return { status: 'failure', reason: 'cli_probe_authentication_error' };
-      }
       const isTransient =
         output.includes('rate_limit_error') ||
         output.includes('api_error') ||
@@ -173,6 +170,9 @@ export class ClaudeAdapter extends SessionAdapter {
         err.killed;
       if (isTransient) {
         return { status: 'uncertain', reason: 'cli_probe_uncertain' };
+      }
+      if (typeof err.code === 'number' && output.includes('authentication_error')) {
+        return { status: 'failure', reason: 'cli_probe_authentication_error' };
       }
       if (typeof err.code === 'number' && output.includes('Not logged in')) {
         return { status: 'failure', reason: 'cli_probe_not_logged_in' };

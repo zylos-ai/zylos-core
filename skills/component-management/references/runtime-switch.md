@@ -1,16 +1,27 @@
 # Runtime Switch — Authentication Relay Playbook
 
 Read this when `zylos runtime <target>` exits with **code 1** and reports
-`AUTH_NOT_CONFIRMED`. Other exit-1 errors require their own remedy; do not
+`AUTH_FAILED` or `AUTH_NOT_CONFIRMED`. Other exit-1 errors require their own remedy; do not
 start authentication for every failure. Run `zylos init` for missing CLI or hooks.
 The switch command itself (confirmation etiquette, what it does, transition
 notice) is covered by the system instructions; this file holds the full
 per-target authentication relay scripts.
 
+## Choose the remedy by error code
+
+- `AUTH_FAILED` (`authStatus=failure`): credentials were explicitly rejected or
+  the runtime is not logged in (including a missing key in API-key mode).
+  Replace the credentials or log in again using the target's steps below.
+  Do not retry the same rejected credentials unchanged.
+- `AUTH_NOT_CONFIRMED` (`authStatus=uncertain`): authentication could not be
+  confirmed. Check network/proxy connectivity and CLI/tool availability first,
+  then retry `zylos runtime <target>`. This is not evidence of a bad key; use
+  the login steps below only if a fresh check establishes that login is needed.
+
 Credentials are always stored in **two places** so auth persists across
 restarts: the runtime's own credential store and `~/zylos/.env`.
 
-## Switching to Codex (`AUTH_NOT_CONFIRMED`)
+## Switching to Codex (`AUTH_FAILED`, or login required after an uncertain check)
 
 Ask the user which auth method they prefer. API key is fastest; device auth
 is a good fallback if the user has no API key. Example message:
@@ -27,7 +38,7 @@ is a good fallback if the user has no API key. Example message:
 
 Codex credentials live in `~/.codex/auth.json` and `~/zylos/.env`.
 
-## Switching to Claude Code (`AUTH_NOT_CONFIRMED`)
+## Switching to Claude Code (`AUTH_FAILED`, or login required after an uncertain check)
 
 Ask the user which auth method they prefer. API key is fastest; setup token
 is a good fallback for automated setups. Example message:
@@ -43,6 +54,14 @@ is a good fallback for automated setups. Example message:
 - **Option 3 — Browser OAuth**: run `claude auth login` in shell, capture the login URL, send to user via IM. After user confirms, retry `zylos runtime claude`.
 
 Claude credentials live in `~/.claude/settings.json` and `~/zylos/.env`.
+
+## Switching to Antigravity (`agy`)
+
+For `AUTH_FAILED`, replace the rejected or missing Gemini API key with a new
+key using `zylos runtime agy --save-apikey <key>`. Subscription login is not
+supported here. For `AUTH_NOT_CONFIRMED`, check network/proxy connectivity and
+that `curl` is available, then retry `zylos runtime agy` before replacing a key.
+See [Antigravity runtime](../../../docs/runtime/antigravity.md) for probe details.
 
 ## After authentication succeeds
 
