@@ -3,7 +3,7 @@ import { loadCoreConfigStore } from './core-config-loader.js';
 import { OPEN_MODE_TRANSITION } from './c4-transition-state.js';
 
 // Migration callbacks are synchronous. Load pure readers without importing
-// config.js; choose the instance path only when an ambiguous row needs F1.
+// config.js; choose the instance path only when an ambiguous row needs the configuration file.
 const { readConfigStrict, configUnreadable } = await loadCoreConfigStore();
 function sessionModeKeyPresent() {
   const root = process.env.ZYLOS_DIR || path.join(process.env.HOME, 'zylos');
