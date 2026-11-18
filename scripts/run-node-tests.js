@@ -9,6 +9,7 @@ const ROOT = process.cwd();
 const ROOT_NODE_TESTS = [
   'test/memory-budget-browser.test.js',
   'test/memory-startup-budget.integration.test.js',
+  'test/upgrade-confirmation.integration.test.js',
   'test/dispatcher-startup.integration.test.js',
   'test/instruction-deployment.integration.test.js',
   'test/tmux-dashboard-reads.integration.test.js',
