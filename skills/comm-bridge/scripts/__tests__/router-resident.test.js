@@ -131,6 +131,149 @@ for (const reason of ['exit_timeout', 'startup_timeout']) {
 }
 
 
+// Upgrade records as the router reads them: the marker that identified the
+// upgrade at discovery, and that transaction's journal.
+function upgradeRecords() {
+  const records = { marker: { transactionId: 'tx-current', transactionDir: '/zylos/.backup/self-upgrade/tx-current' },
+    journal: { transactionId: 'tx-current', phase: 'installing', cleanup: { complete: false } } };
+  return Object.assign(records, {
+    readUpgradeMarker: async () => { if (records.marker instanceof Error) throw records.marker; return records.marker; },
+    readUpgradeJournal: async dir => {
+      assert.equal(dir, '/zylos/.backup/self-upgrade/tx-current');
+      if (records.journal instanceof Error) throw records.journal; return records.journal;
+    },
+    finish() { records.journal = { transactionId: 'tx-current', phase: 'upgrade_complete', cleanup: { complete: true } }; records.marker = null; },
+  });
+}
+function upgradeMigration({ runtime, status = { state: 'busy', idle_seconds: 0 }, records = upgradeRecords() }) {
+  const clock = { now: 0 }, calls = [], events = [];
+  let present = true;
+  const migration = createLegacyMigration({ now: () => clock.now,
+    readLegacy: async name => ({ present: present && name === 'claude-main', tmuxName: name, runtime, runId: null }),
+    readLegacyStatus: async () => (typeof status === 'function' ? status() : status),
+    sendExit: async () => calls.push('exit'),
+    getSessionAdapter: name => ({ stop: async input => { calls.push(['stop', name, input]); present = false; } }),
+    readUpgradeMarker: records.readUpgradeMarker, readUpgradeJournal: records.readUpgradeJournal,
+    diagnostic: (event, fields) => events.push({ event, ...fields }) });
+  return { migration, clock, calls, events, records };
+}
+
+test('codex legacy session is stopped on the first round after the upgrade finishes', async () => {
+  const f = upgradeMigration({ runtime: 'codex', status: null });
+  const entries = await f.migration.findLegacySessions();
+  f.clock.now = 1000; await f.migration.advanceLegacy(entries);
+  assert.deepEqual(f.calls, []);
+  f.records.finish(); f.clock.now = 2000; await f.migration.advanceLegacy(entries);
+  assert.deepEqual(f.calls, [['stop', 'codex', { tmuxName: 'claude-main', expectedRunId: null }]]);
+  await f.migration.advanceLegacy(entries);
+  assert.equal(entries[0].stopped, true);
+  assert.deepEqual(f.events, [
+    { event: 'legacy_exit_forced', tmuxName: 'claude-main', reason: 'upgrade_complete' },
+    { event: 'legacy_tmux_stopped', tmuxName: 'claude-main', reason: 'forced' },
+  ]);
+});
+
+test('codex already sent exit is stopped once the upgrade finishes', async () => {
+  let idle = true;
+  const f = upgradeMigration({ runtime: 'codex', status: () => ({ state: idle ? 'idle' : 'busy', idle_seconds: 5 }) });
+  const entries = await f.migration.findLegacySessions();
+  await f.migration.advanceLegacy(entries); idle = false;
+  assert.deepEqual(f.calls, ['exit']);
+  f.records.finish(); f.clock.now = 1000; await f.migration.advanceLegacy(entries);
+  assert.deepEqual(f.calls.at(-1)[0], 'stop');
+  assert.equal(f.events[0].reason, 'upgrade_complete');
+});
+
+test('claude idle after the upgrade gets exit and keeps the sixty second exit deadline', async () => {
+  const f = upgradeMigration({ runtime: 'claude', status: { state: 'idle', idle_seconds: 3 } });
+  const entries = await f.migration.findLegacySessions();
+  f.records.finish(); f.clock.now = 1000; await f.migration.advanceLegacy(entries);
+  assert.deepEqual(f.calls, ['exit']);
+  f.clock.now = 60999; await f.migration.advanceLegacy(entries);
+  assert.deepEqual(f.calls, ['exit']);
+  f.clock.now = 61000; await f.migration.advanceLegacy(entries);
+  assert.deepEqual(f.calls.at(-1), ['stop', 'claude', { tmuxName: 'claude-main', expectedRunId: null }]);
+  assert.equal(f.events[0].reason, 'exit_timeout');
+});
+
+test('claude busy after the upgrade is stopped without exit', async () => {
+  const f = upgradeMigration({ runtime: 'claude', status: { state: 'busy', idle_seconds: 0 } });
+  const entries = await f.migration.findLegacySessions();
+  await f.migration.advanceLegacy(entries);
+  f.records.finish(); f.clock.now = 1000; await f.migration.advanceLegacy(entries);
+  assert.deepEqual(f.calls, [['stop', 'claude', { tmuxName: 'claude-main', expectedRunId: null }]]);
+  assert.equal(f.events[0].reason, 'upgrade_complete');
+});
+
+test('claude that received exit before the upgrade finished is not stopped early', async () => {
+  let idle = true;
+  const f = upgradeMigration({ runtime: 'claude', status: () => ({ state: idle ? 'idle' : 'busy', idle_seconds: 5 }) });
+  const entries = await f.migration.findLegacySessions();
+  await f.migration.advanceLegacy(entries); idle = false;
+  f.records.finish(); f.clock.now = 59999; await f.migration.advanceLegacy(entries);
+  assert.deepEqual(f.calls, ['exit']);
+  f.clock.now = 60000; await f.migration.advanceLegacy(entries);
+  assert.equal(f.calls.at(-1)[0], 'stop'); assert.equal(f.events[0].reason, 'exit_timeout');
+});
+
+const unfinished = {
+  'journal still installing': records => { records.marker = null; },
+  'complete journal while the marker is still published': records => {
+    records.journal = { transactionId: 'tx-current', phase: 'upgrade_complete', cleanup: { complete: true } };
+  },
+  'complete journal with cleanup pending': records => {
+    records.marker = null; records.journal = { transactionId: 'tx-current', phase: 'upgrade_complete', cleanup: { complete: false } };
+  },
+  'restored instead of upgraded': records => {
+    records.marker = null; records.journal = { transactionId: 'tx-current', phase: 'restored_complete', cleanup: { complete: true } };
+  },
+  'journal of another transaction': records => {
+    records.marker = null; records.journal = { transactionId: 'tx-other', phase: 'upgrade_complete', cleanup: { complete: true } };
+  },
+  'marker now names another upgrade': records => {
+    records.finish(); records.marker = { transactionId: 'tx-next', transactionDir: '/zylos/.backup/self-upgrade/tx-next' };
+  },
+  'unreadable journal': records => { records.marker = null; records.journal = new SyntaxError('broken'); },
+  'unreadable marker': records => { records.finish(); records.marker = new Error('EACCES'); },
+};
+for (const [name, change] of Object.entries(unfinished)) {
+  test(`${name}: legacy session waits for the 300 second deadline`, async () => {
+    const f = upgradeMigration({ runtime: 'codex', status: null });
+    const entries = await f.migration.findLegacySessions();
+    change(f.records);
+    f.clock.now = 299999; await f.migration.advanceLegacy(entries);
+    assert.deepEqual(f.calls, []);
+    f.clock.now = 300000; await f.migration.advanceLegacy(entries);
+    assert.equal(f.calls.at(-1)[0], 'stop'); assert.equal(f.events[0].reason, 'startup_timeout');
+  });
+}
+
+test('upgrade in progress still lets idle claude exit gracefully', async () => {
+  const f = upgradeMigration({ runtime: 'claude', status: { state: 'idle', idle_seconds: 3 } });
+  const entries = await f.migration.findLegacySessions();
+  await f.migration.advanceLegacy(entries);
+  assert.deepEqual(f.calls, ['exit']);
+});
+
+for (const [name, marker] of [['no active upgrade marker', null], ['unreadable active upgrade marker', new Error('broken')]]) {
+  test(`${name} at discovery keeps the 300 second deadline after a later completion`, async () => {
+    const records = upgradeRecords(); records.marker = marker;
+    const f = upgradeMigration({ runtime: 'codex', status: null, records });
+    const entries = await f.migration.findLegacySessions();
+    records.finish(); f.clock.now = 299999; await f.migration.advanceLegacy(entries);
+    assert.deepEqual(f.calls, []);
+    f.clock.now = 300000; await f.migration.advanceLegacy(entries);
+    assert.equal(f.events[0].reason, 'startup_timeout');
+  });
+}
+
+test('unknown runtime is not stopped early after the upgrade finishes', async () => {
+  const f = upgradeMigration({ runtime: 'unknown', status: null });
+  const entries = await f.migration.findLegacySessions();
+  f.records.finish(); f.clock.now = 1000; await f.migration.advanceLegacy(entries);
+  assert.deepEqual(f.calls, []); assert.deepEqual(f.events, []);
+});
+
 for (const health of ['ok', 'auth_failed']) {
   test(`single resident starts without queued work even when health is ${health}`, async t => {
     const f = routerFixture(t, { mode: 'single' });
@@ -193,6 +336,7 @@ test('legacy migration only observes the two runtimes that predate managed group
     readLegacyStatus: async () => assert.fail('Absent legacy session has no status'),
     sendExit: async () => assert.fail('No legacy session should be stopped'),
     getSessionAdapter: () => assert.fail('No legacy session should need an adapter'),
+    readUpgradeMarker: async () => assert.fail('Upgrade records are read only for found legacy sessions'),
   });
   assert.deepEqual(await migration.findLegacySessions(), []);
   assert.deepEqual(names, ['claude-main', 'codex-main']);

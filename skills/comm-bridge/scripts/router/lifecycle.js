@@ -11,6 +11,9 @@ import { createSinglePreparation, createLegacyMigration } from './resident.js';
 // Only stale derived samples and pre-existing lifecycle caches are reset.
 // The current-session sample remains until the startup hook replaces it;
 // lifecycle history belongs to the supervisor.
+// Same identifier rule the upgrade uses for its transaction directories.
+const UPGRADE_TRANSACTION_ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,95}$/;
+
 const lifecycleCaches = ['tool-event-stream-state.json', 'session-tool-state.json', 'foreground-session.json'];
 
 export function createLifecycleProviders({ env = process.env, tmux = {}, now = Date.now,
@@ -58,6 +61,26 @@ export function createLifecycleProviders({ env = process.env, tmux = {}, now = D
       throw error;
     } finally { await handle?.close(); }
   }
+  // Upgrade records are read-only here; the upgrade owns their lifecycle.
+  async function readRecord(file) {
+    let handle;
+    try {
+      handle = await fs.open(file, 'r');
+      if ((await handle.stat()).size > 1024 * 1024) throw new Error(`Upgrade record is too large: ${file}`);
+      return JSON.parse(await handle.readFile('utf8'));
+    } finally { await handle?.close(); }
+  }
+  async function readUpgradeMarker() {
+    const root = await fs.realpath(zylosRoot(env));
+    let marker;
+    try { marker = await readRecord(path.join(root, '.zylos', 'upgrade', 'active.json')); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    const id = marker?.transactionId;
+    if (marker?.formatVersion !== 1 || typeof id !== 'string' || !UPGRADE_TRANSACTION_ID.test(id)
+      || marker.transactionDir !== path.join(root, '.backup', 'self-upgrade', id)) throw new Error('Invalid active upgrade marker');
+    return { transactionId: id, transactionDir: marker.transactionDir };
+  }
+  const readUpgradeJournal = transactionDir => readRecord(path.join(transactionDir, 'journal.json'));
   async function sendExit(live) {
     if (!['claude', 'codex'].includes(live.runtime)) throw tmuxError('RUNTIME_UNSUPPORTED', 'Legacy runtime is unknown');
     let connection;
@@ -76,6 +99,6 @@ export function createLifecycleProviders({ env = process.env, tmux = {}, now = D
     } finally { await connection?.close(); }
   }
   const migration = createLegacyMigration({ readLegacy, readLegacyStatus: statusOverride ?? readLegacyStatus,
-    sendExit, getSessionAdapter: adapter, diagnostic, now });
+    sendExit, getSessionAdapter: adapter, readUpgradeMarker, readUpgradeJournal, diagnostic, now });
   return { prepareSingle, ...migration };
 }
