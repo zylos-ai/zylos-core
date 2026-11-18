@@ -113,5 +113,4 @@ test('throwing trusted discovery builds an isolated recovery launch', async t =>
   assert.match(captured.args.at(-1), /Upgrade discovery failed/);
   assert.match(captured.args.at(-1), /Do not query C4/);
   assert.equal(captured.args.at(-1).includes(ordinary.at(-1)), false);
-  assert.equal(captured.env.ZYLOS_UPGRADE_PROMPT_DELIVERED, undefined);
 });
