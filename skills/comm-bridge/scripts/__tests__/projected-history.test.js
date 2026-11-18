@@ -101,7 +101,7 @@ test('CLI fetch branches project full rows once in both JSON and default output'
 // remains inside the owned short TMPDIR fixture.
 test('absorbed pages, full fields and exports measure projected text without changing raw reconciliation', t => {
   const f = fixture(t), originals = seed(f, { pending: true });
-  const { runId } = f.store.beginModeTransition('single', 'multi');
+  const { runId } = f.store.beginModeTransition('single', 'multi', { kind: 'first_migration' });
   f.store.setDrainFence('*'); f.store.absorbForTransition(runId);
   const absorbed = originals.filter(row => row.direction === 'in');
   for (const json of [false, true]) {

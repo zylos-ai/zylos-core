@@ -46,7 +46,7 @@ for (const source of ['single', 'multi']) test(`${source} conversion projects ev
     fs.writeFileSync(path.join(dir, 'inbox.md'), 'existing plain inbox\n');
     fs.writeFileSync(path.join(dir, 'handoff.md'), 'existing plain handoff\n');
   }
-  const { runId } = store.beginModeTransition(source, source === 'single' ? 'multi' : 'single');
+  const { runId } = store.beginModeTransition(source, source === 'single' ? 'multi' : 'single', { kind: 'first_migration' });
   store.setDrainFence('*'); store.absorbForTransition(runId);
   const transition = store.getModeTransition({ runId });
   const original = db.prepare('SELECT id,content,status FROM conversations ORDER BY id').all();

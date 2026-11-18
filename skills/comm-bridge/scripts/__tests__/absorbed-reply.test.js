@@ -17,7 +17,7 @@ function setup(t, endpoint = 'route', options = { groupName: 'room' }) {
   fs.mkdirSync(path.dirname(script), { recursive: true });
   fs.writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(output)}, JSON.stringify(process.argv.slice(2)))`);
   const row = result.store.insertConversation('in', 'demo', endpoint, 'original', options);
-  const { runId } = result.store.beginModeTransition('single', 'multi');
+  const { runId } = result.store.beginModeTransition('single', 'multi', { kind: 'first_migration' });
   result.store.setDrainFence('*');
   result.store.absorbForTransition(runId);
   const api = { ...result.store, getDb: () => result.db,
