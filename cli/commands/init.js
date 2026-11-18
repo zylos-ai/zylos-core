@@ -733,9 +733,10 @@ function createDirectoryStructure() {
  * Recursively copy source files into dest directory, but only when missing.
  * Preserves user-managed files while ensuring nested template dirs exist.
  */
-function copyMissingTree(src, dest) {
+function copyMissingTree(src, dest, excludedNames = []) {
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    if (excludedNames.includes(entry.name)) continue;
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
@@ -801,11 +802,24 @@ export function deployTemplates({ freshInstall = false } = {}) {
     console.log(`  ${success('Split instruction files ready')}`);
   }
 
-  // memory/ templates — only create missing files
+  if (freshInstall) {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(CONFIG_DIR, 'onboarding-pending'), '', { flag: 'a', mode: 0o600 });
+  }
+
+  // Shared templates fill missing files, but global working state is never recreated.
   const memorySrc = path.join(TEMPLATES_SRC, 'memory');
   const memoryDest = path.join(ZYLOS_DIR, 'memory');
   if (fs.existsSync(memorySrc)) {
-    copyMissingTree(memorySrc, memoryDest);
+    copyMissingTree(memorySrc, memoryDest, ['state.md']);
+    if (freshInstall) {
+      const stateSrc = path.join(memorySrc, 'state.md');
+      const originDir = path.join(memoryDest, 'session-groups', 'origin');
+      fs.mkdirSync(originDir, { recursive: true });
+      const state = fs.readFileSync(stateSrc, 'utf8').replace('scope=*', 'scope=origin');
+      try { fs.writeFileSync(path.join(originDir, 'state.md'), state, { flag: 'wx' }); }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+    }
   }
 
   // .claude/ project settings (hooks, etc.) — only create missing files

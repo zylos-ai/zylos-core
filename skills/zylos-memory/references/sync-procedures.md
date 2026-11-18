@@ -343,7 +343,24 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
    then follow "Moving from old files" below before creating a page. Other
    shared files are read as before. Deduplicate facts and associate each
    necessary edit with its input groups.
-5. Apply necessary shared edits through `edit_memory`, limited to identity,
+5. Before writing any correlation's `notified` record, read the current mode
+   through Core's strict `readSessionMode()` (the same reader used by c4-send):
+   ```sh
+   node --input-type=module <<'EOF_MODE'
+   import os from 'node:os';
+   import path from 'node:path';
+   import { pathToFileURL } from 'node:url';
+   const root = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
+   const { resolveCoreConfigModule } = await import(pathToFileURL(path.join(root, '.claude/skills/comm-bridge/scripts/core-config-loader.js')).href);
+   const { readSessionMode } = await import(pathToFileURL(resolveCoreConfigModule()).href);
+   console.log(readSessionMode().mode);
+   EOF_MODE
+   ```
+   Only `multi` permits correlation records and sends. In `single`, or if the
+   read fails or returns anything else, skip both the `notified` records here
+   and the sends in step 8; continue the normal merge and cursor advancement.
+   Do not queue skipped correlations for a later switch back to multi.
+   Apply necessary shared edits through `edit_memory`, limited to identity,
    references, reference/** and users/**. Use a unique expected fragment, or
    create a missing file. Projects and decisions are written only to pages in
    their new directories, never to old files or `legacy/`. Update the page's
@@ -413,7 +430,10 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
    rejection and continue eligible groups under the common failure rules.
    `INPUT_CHANGED` receives no retry and stops later writes under the common
    terminal-input rule. Never replace a saved receipt to force advancement.
-8. Cross-group correlation prompts. Prompt only **strong** correlations: both
+8. Cross-group correlation prompts, only when step 5 read `multi`. In single,
+   Origin Sync still reads pre-switch increments from all groups, but neither
+   sends internal notices nor records them as notified; no later catch-up sends.
+   Prompt only **strong** correlations: both
    groups' records point to the same task, the same object, or the same person's
    same matter (including commitments that contradict each other). A similar
    topic is not enough. At most three prompts per run.
@@ -440,6 +460,8 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
    - Do not send to origin itself; correlations involving origin go into the
      report (step 9). A rejected send is reported without deleting the record or
      automatic retry. A crash between recording and sending can lose the prompt.
+     If mode switches to single after the record was written, c4-send rejects
+     with `INTERNAL_SINGLE_MODE`; retain the record and do not retry or backfill.
 9. Release once and report advanced/unadvanced groups, reasons, prompt recipients,
    and correlations involving origin for its running thread to decide on.
 

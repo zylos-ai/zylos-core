@@ -84,7 +84,7 @@ describe('emitCustomInject', () => {
     assert.equal(await emitCustomInject({ env: { ZYLOS_DIR: zylosDir } }), 'A\n\nC');
   });
 
-  it('multi injects only own rules and guidance; single has neither', () => {
+  it('group-bound sessions inject only their own rules regardless of mode', () => {
     const root = makeZylosDir();
     const configFile = path.join(root, '.zylos/config.json');
     fs.mkdirSync(path.dirname(configFile), { recursive: true });
@@ -110,7 +110,7 @@ describe('emitCustomInject', () => {
       assert.match(withoutOtherRules, /Save immediately/);
       assert.doesNotMatch(withoutOtherRules, /RULE FOR origin/);
       await assert.rejects(emitCustomInject({ env: { ...env, ZYLOS_SESSION_GROUP: '../other' } }));
-      await assert.rejects(emitCustomInject({ env: { ZYLOS_DIR: process.env.ZYLOS_DIR } }), { code: 'SCOPE_INVALID' });
+      assert.equal(await emitCustomInject({ env: { ZYLOS_DIR: process.env.ZYLOS_DIR } }), '');
       fs.unlinkSync(${JSON.stringify(path.join(root, 'memory/session-groups/origin/rules.md'))});
       const missingRules = await emitCustomInject({ env });
       assert.match(missingRules, /Save immediately/);
@@ -118,11 +118,12 @@ describe('emitCustomInject', () => {
       fs.writeFileSync(${JSON.stringify(configFile)}, JSON.stringify({ session_mode: 'single' }));
       fs.writeFileSync(${JSON.stringify(path.join(root, 'memory', 'rules.md'))}, 'SINGLE MUST NOT READ GROUP RULES');
       assert.equal(await emitCustomInject({ env: { ZYLOS_DIR: process.env.ZYLOS_DIR } }), '');
-      await assert.rejects(emitCustomInject({ env }), { code: 'SCOPE_INVALID' });
+      fs.writeFileSync(${JSON.stringify(path.join(root, 'memory/session-groups/origin/rules.md'))}, 'RULE FOR origin');
+      assert.equal(await emitCustomInject({ env }), result);
       fs.writeFileSync(${JSON.stringify(configFile)}, '{broken');
-      await assert.rejects(emitCustomInject({ env: { ZYLOS_DIR: process.env.ZYLOS_DIR } }), { code: 'CONFIG_UNREADABLE' });
+      assert.equal(await emitCustomInject({ env }), result);
       fs.writeFileSync(${JSON.stringify(configFile)}, JSON.stringify({ session_mode: 'bogus' }));
-      await assert.rejects(emitCustomInject({ env: { ZYLOS_DIR: process.env.ZYLOS_DIR } }), { code: 'CONFIG_UNREADABLE' });
+      assert.equal(await emitCustomInject({ env }), result);
       process.stdout.write(result);
     `;
     const result = execFileSync(process.execPath, ['--input-type=module', '-e', source],

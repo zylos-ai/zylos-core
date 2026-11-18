@@ -108,6 +108,7 @@ export function writeSessionLaunchScript({command,args,env,root,multi}) {
   const file = path.join(dir,'launch.sh');
   const bindings = Object.entries(env).map(([k,v]) => shellQuote(`${k}=${v}`));
   bindings.push('"ZYLOS_RUN_ID=$ZYLOS_RUN_ID"','"ZYLOS_MODEL_CONFIG=$ZYLOS_MODEL_CONFIG"');
+  // Group binding also applies to native single's Origin (the caller supplies it).
   if (multi) bindings.push('"ZYLOS_SESSION_GROUP=$ZYLOS_SESSION_GROUP"');
   const script = `#!/bin/sh\nset -eu\ncd ${shellQuote(root)}\nrm -- ${shellQuote(file)}\nrmdir -- ${shellQuote(dir)}\nexec env -i ${bindings.join(' ')} ${[command,...args].map(shellQuote).join(' ')}\n`;
   fs.writeFileSync(file,script,{mode:0o600});
