@@ -33,10 +33,9 @@ checks before each stale-session stop, runtime launch and shutdown stop.
 
 Real tmux validation must use a separate Unix user from every live Zylos
 instance. Isolate `HOME`, `ZYLOS_DIR`, `PM2_HOME`, short `TMPDIR`, socket paths,
-and any test database. The gated `test/tmux-directory.integration.test.js`
-requires `ZYLOS_TMUX_DIRECTORY_INTEGRATION=1` and an independently verified
-`ZYLOS_TEST_LIVE_UID` different from the test UID. It checks 15 product entry
-calls against a dedicated-user default-server sentinel after private-directory
-removal. It does not start the production dispatcher or activity monitor;
-their live deletion/event-count acceptance and the baseline negative control
-remain separate checks, alongside the matrix in `docs/tmux-matrix.md`.
+and any test database. Missing-directory rejection before client execution is
+covered by `cli/lib/runtime/__tests__/tmux-directory.test.js`; Docker startup
+and shutdown boundaries use fake clients in
+`test/tmux-directory.integration.test.js`. Real service deletion/event-count
+acceptance and the baseline negative control remain separate checks,
+alongside the matrix in `docs/tmux-matrix.md`.
