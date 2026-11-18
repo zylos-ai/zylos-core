@@ -38,7 +38,7 @@ test('fresh init seeds Origin once and rerun never recreates global working stat
   assert.equal(fs.existsSync(global),false);
 });
 
-test('onboarding reader uses Origin only with an Origin environment binding', () => {
+test('group-bound sessions use Origin onboarding while unbound sessions use global state', () => {
   const dir = path.join(root,'memory/session-groups/origin');
   fs.mkdirSync(dir,{recursive:true});
   const config = path.join(root,'.zylos/config.json');
@@ -51,7 +51,19 @@ test('onboarding reader uses Origin only with an Origin environment binding', ()
       const source=`import {isOnboardingPending} from ${JSON.stringify(prompt)}; console.log(isOnboardingPending());`;
       assert.equal(child(source,'origin'),String(pending));
       assert.equal(child(source,null),String(!pending));
-      assert.equal(child(source,'telegram:other'),String(!pending));
+      assert.equal(child(source,'telegram:other'),String(pending));
+      for (const group of pending ? ['origin','telegram:other'] : [null]) {
+        const skipSource = `import assert from 'node:assert/strict';
+          import {enqueueStartupPrompt} from ${JSON.stringify(prompt)};
+          const result = await enqueueStartupPrompt('startup', {
+            scopeReader: () => assert.fail('pending onboarding must skip before scope lookup'),
+            execFile: () => assert.fail('pending onboarding must not enqueue a prompt'),
+          });
+          console.log(JSON.stringify(result));`;
+        assert.deepEqual(JSON.parse(child(skipSource,group)), {
+          skipped:true, reason:'onboarding_pending', startupControlIds:[],
+        });
+      }
     }
   }
   for (const runtime of ['claude','codex']) {

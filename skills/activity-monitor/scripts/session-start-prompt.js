@@ -20,7 +20,7 @@ const execFileAsync = promisify(execFile);
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
 const STATE_PATH = path.join(ZYLOS_DIR, 'memory',
-  ...(process.env.ZYLOS_SESSION_GROUP === 'origin' ? ['session-groups', 'origin'] : []), 'state.md');
+  ...(Object.hasOwn(process.env, 'ZYLOS_SESSION_GROUP') ? ['session-groups', 'origin'] : []), 'state.md');
 const MIGRATION_PROMPT_PATH = path.join(ZYLOS_DIR, 'custom-hooks', 'session-start', '90-migration-prompt.md');
 const DEFAULT_CHILD_TIMEOUT_MS = 2500;
 let diagnosticModule;
