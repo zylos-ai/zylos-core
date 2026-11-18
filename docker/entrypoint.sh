@@ -180,7 +180,7 @@ else
   # Kill any stale Claude session
   tmux kill-session -t claude-main 2>/dev/null || true
 
-  CLAUDE_ARGS="--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode"
+  CLAUDE_ARGS="--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode,Artifact,ReportFindings,Workflow"
   if [ "${CLAUDE_BYPASS_PERMISSIONS:-true}" = "true" ]; then
     CLAUDE_ARGS="${CLAUDE_ARGS} --dangerously-skip-permissions"
   fi
