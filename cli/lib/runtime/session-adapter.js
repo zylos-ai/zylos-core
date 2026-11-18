@@ -135,6 +135,8 @@ export class SessionAdapter extends RuntimeAdapter {
       let args = buildRuntimeArgs(this.runtimeId, launchConfig, {root, help});
       const upgrade = discoverUpgradeContext(root);
       if (upgrade.blocked || (upgrade.active && !upgrade.controllerAlive && upgrade.prompt)) {
+        // Claude's variadic --mcp-config must end before the positional prompt.
+        if (this.runtimeId === 'claude' && upgrade.prompt) args.push('--');
         args = applyUpgradePrompt(
           args,
           upgrade.prompt,
