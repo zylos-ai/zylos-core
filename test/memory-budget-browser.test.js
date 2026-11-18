@@ -63,6 +63,15 @@ test('memory budget display shows both startup dimensions at phone and desktop w
           assert.ok(content.includes('8000/9759') && content.includes('2000/2139'), content);
           assert.ok(content.includes(locale === 'en' ? 'Exceeds startup display limit' : '超过启动显示上限'));
           assert.equal(await chart.locator('.excess').count(), 1);
+          const tracks = await chart.locator('.wb-memory-track').evaluateAll(nodes => nodes.map(node => {
+            const { x, width } = node.getBoundingClientRect(); return { x, width };
+          }));
+          assert.equal(tracks.length, 3);
+          for (const track of tracks) {
+            assert.ok(Math.abs(track.width - tracks[0].width) <= 1, `${width} ${locale} ${theme} bars have equal widths`);
+            assert.ok(Math.abs(track.x - tracks[0].x) <= 1, `${width} ${locale} ${theme} bars align`);
+          }
+          t.diagnostic(JSON.stringify({ viewport: width, locale, theme, tracks }));
           assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `${width} ${locale} ${theme} page fits`);
           const clipped = await chart.locator('.wb-memory-chart-value').evaluateAll(nodes => nodes.some(node => node.scrollWidth > node.clientWidth + 1));
           assert.equal(clipped, false, `${width} ${locale} ${theme} values fit`);

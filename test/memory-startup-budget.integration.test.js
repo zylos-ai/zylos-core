@@ -48,7 +48,7 @@ function lastPassing(predicate, sample) {
   return low;
 }
 
-// Boundary: file -> real memory emitter + startup composer, status and Sync report CLIs.
+// Boundary: file -> real memory emitter + startup composer, status CLI used by the Sync audit and standalone consolidation CLI.
 // Run for startup framing, estimator, budget or report changes; unrelated changes may skip.
 // Runner owns isolated HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; no tmux, DB or external sends.
 test('startup files report ok, warning and over while writes remain allowed', t => {

@@ -1,5 +1,11 @@
 # Candidate-text memory budget API
 
+Agents should run
+`node ~/zylos/.claude/skills/zylos-memory/scripts/memory-status.js` for files on
+disk. The shared-file Sync audit uses that command and includes `WARN` / `OVER`
+results in its report. The JS entry below is for component code measuring a
+candidate before writing it.
+
 ## Availability and entry point
 
 Components using this API must declare a minimum Core version of
