@@ -1,6 +1,7 @@
 export default {
   transform: {},
   testPathIgnorePatterns: [
+    '<rootDir>/test/single-origin-scheduler.test.js',
     '<rootDir>/test/dispatcher-startup.integration.test.js',
     '<rootDir>/test/instruction-deployment.integration.test.js',
     '<rootDir>/test/init-onboarding.integration.test.js',

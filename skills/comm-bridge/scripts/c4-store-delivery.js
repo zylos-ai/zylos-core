@@ -2,6 +2,7 @@ import { dataError, requireGroup } from './c4-session-group.js';
 import { MAX_RETRIES } from './c4-config.js';
 export function deliveryFunctions({ read, write, snapshot, get, all, run, seconds }) {
   const unfenced = "NOT EXISTS(SELECT 1 FROM drain_fences WHERE session_group=conversations.session_group OR session_group='*')";
+  const deliveryFence = mode => `${unfenced}${mode === 'single' ? " AND NOT EXISTS(SELECT 1 FROM drain_fences WHERE session_group='origin')" : ''}`;
   function groups(values) {
     if (values === undefined) return { sql: '', args: [] };
     if (!Array.isArray(values)) throw dataError('INVALID_ARGS', 'sessionGroups must be an array');
@@ -9,10 +10,15 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
     return { sql: values.length ? ` AND session_group IN (${values.map(() => '?').join(',')})` : ' AND 0', args: values };
   }
   return {
-    getNextPending: ({ sessionGroups } = {}) => { const filter = groups(sessionGroups); return read(c => get(c, `SELECT * FROM conversations WHERE direction='in' AND status='pending' AND ${unfenced}${filter.sql} ORDER BY priority,id LIMIT 1`, ...filter.args) ?? null); },
-    claimConversation: id => write(c => run(c, `UPDATE conversations SET status='running' WHERE id=? AND direction='in' AND status='pending' AND ${unfenced}`, id).changes > 0),
+    getNextPending: ({ sessionGroups, sessionMode } = {}) => { const filter = groups(sessionGroups); return read(c => get(c, `SELECT * FROM conversations WHERE direction='in' AND status='pending' AND ${deliveryFence(sessionMode)}${filter.sql} ORDER BY priority,id LIMIT 1`, ...filter.args) ?? null); },
+    claimConversation: (id, { sessionMode } = {}) => write(c => run(c, `UPDATE conversations SET status='running' WHERE id=? AND direction='in' AND status='pending' AND ${deliveryFence(sessionMode)}`, id).changes > 0),
     requeueConversation: id => write(c => run(c, "UPDATE conversations SET status='pending' WHERE id=? AND direction='in' AND status='running'", id).changes > 0),
-    markDelivered: (id, { sessionId } = {}) => write(c => run(c, "UPDATE conversations SET status='delivered',session_id=? WHERE id=? AND direction='in' AND status='running'", sessionId ?? null, id).changes > 0),
+    markDelivered: (id, { sessionId, sessionGroup } = {}) => write(c => {
+      if (sessionGroup !== undefined && sessionGroup !== 'origin') throw dataError('INVALID_ARGS', 'Delivery recording group must be origin');
+      const changed = run(c, `UPDATE conversations SET status='delivered',session_id=?${sessionGroup === 'origin' ? ",session_group='origin'" : ''} WHERE id=? AND direction='in' AND status='running'`, sessionId ?? null, id).changes > 0;
+      if (changed && sessionGroup === 'origin') run(c, "INSERT INTO group_heads(session_group,head_id) VALUES('origin',?) ON CONFLICT(session_group) DO UPDATE SET head_id=max(head_id,excluded.head_id)", id);
+      return changed;
+    }),
     expirePending: (id, maxAgeSeconds) => write(c => {
       if (!Number.isSafeInteger(maxAgeSeconds) || maxAgeSeconds <= 0) throw dataError('INVALID_ARGS', 'maxAgeSeconds must be a positive integer');
       return run(c, "UPDATE conversations SET status='failed',delivery_action='pending_expired' WHERE id=? AND direction='in' AND status='pending' AND ?-unixepoch(timestamp)>?", id, seconds(), maxAgeSeconds).changes > 0;

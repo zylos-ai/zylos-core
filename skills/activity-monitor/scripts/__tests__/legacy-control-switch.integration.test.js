@@ -64,8 +64,8 @@ test('public database facade completes legacy drain and preserves future deadlin
 // is opened. Fixture teardown stops router work and closes the database.
 for (const deadline of [null, 1800001000]) test(`router activation after legacy drain with ${deadline === null ? 'no' : 'future'} deadline`, async t => {
   const f = routerFixture(t); let mode = 'single';
-  f.dependencies.readConfig = () => ({ state: 'ok', config: { runtime: 'claude', session_mode: mode } });
-  f.deps.readSessionMode = () => ({ mode, keyPresent: true });
+  f.dependencies.readConfig = () => ({ state: 'ok', config: { runtime: 'claude', ...(mode === 'multi' ? { session_mode: mode } : {}) } });
+  f.deps.readSessionMode = () => ({ mode, keyPresent: mode === 'multi' });
   const id = Number(f.sqlite.prepare(`INSERT INTO control_queue(content,raw_content,status,created_at,updated_at,ack_deadline_at)
     VALUES('exit','exit','running',1700000000,1700000000,?)`).run(deadline).lastInsertRowid);
   const owner = new ModeSwitchCoordinator({ db: f.db, now: f.now,

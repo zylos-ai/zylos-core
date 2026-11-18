@@ -34,10 +34,10 @@ test('restricted admission reads only the runtime health projection', async t =>
   }
 });
 
-test('healthy Origin startup skips registration while single skips health admission', async t => {
+test('healthy Origin startup skips registration while legacy skips health admission', async t => {
   for (const mode of ['single', 'multi']) {
     await t.test(mode, async t => {
-      const f = routerFixture(t, { mode });
+      const f = routerFixture(t, { mode, keyPresent: mode !== 'single' });
       if (mode === 'multi') {
         f.db.insertControl('Origin work', { sessionGroup: 'origin', appendAckSuffix: false });
         f.deps.readRuntimeHealth = () => ({ health: 'ok', publicHealth: 'ok' });

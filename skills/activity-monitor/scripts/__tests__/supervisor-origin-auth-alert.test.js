@@ -147,6 +147,6 @@ test('native single Origin role demand checks authentication and reports impendi
   const readNeed=f.db.getOriginNeed;const modes=[];
   f.db.getOriginNeed=(now,options)=>{if(options)modes.push(options.sessionMode);return readNeed(now,options);};
   await f.tick();assert.equal(f.state.alerts.length,1);
-  assert.deepEqual(modes,['single']);
+  assert.deepEqual(modes,['single','single']);
   assert.equal(f.state.alerts[0].event,'origin_auth_blocked');
 });

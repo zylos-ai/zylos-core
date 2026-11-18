@@ -37,7 +37,7 @@ test('scope and transition checks happen before private resolver; caller cannot 
   await assert.rejects(() => s.buildTargetBinding(options), { code: 'TRANSITION_OPEN' });
   assert.equal(calls, 0);
   const single = fixture(t, { readConfig: () => ({ state: 'ok', config: { session_mode: 'single' } }), resolveTarget: () => { calls++; return target(); } }).store;
-  await assert.rejects(() => single.buildTargetBinding(options), { code: 'TARGET_SCOPE_MISMATCH' });
+  await assert.rejects(() => single.buildTargetBinding({ ...options, sessionGroup: 'other' }), { code: 'TARGET_SCOPE_MISMATCH' });
   assert.equal(calls, 0);
 });
 

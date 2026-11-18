@@ -2,6 +2,8 @@
 export function createLane(context, group) {
   const { state, deps, options, diagnostic, now } = context;
   const filter = group === null ? undefined : { sessionGroups: [group] };
+  const modeOptions = state.keyPresent || state.mode === 'multi' ? { sessionMode: state.mode } : {};
+  const conversationFilter = { ...(state.mode === 'multi' ? filter : {}), ...modeOptions };
   let working = null;
   let startupIdentity = null;
   let startupIds = [];
@@ -10,11 +12,11 @@ export function createLane(context, group) {
 
   async function nextMessage() {
     for (;;) {
-      const row = deps.db.getNextPending(filter);
+      const row = deps.db.getNextPending(conversationFilter);
       if (!row) return null;
       if (!deps.db.expirePending(row.id, options.pendingMaxAgeSeconds)) return row;
       deps.finishDeliveryWait?.(row, 'conversation', 'expired');
-      await deps.handleExpired(row, { sessionMode: state.mode, identity: state.live.get(group) });
+      await deps.handleExpired(row, { sessionMode: state.mode, sessionGroup: group, identity: state.live.get(group) });
       if (stopped) return null;
     }
   }
@@ -81,7 +83,7 @@ export function createLane(context, group) {
       return;
     }
     const row = message;
-    if (row && deps.canAttemptDelivery?.(row, 'conversation') !== false && deps.db.claimConversation(row.id)) await deps.deliverConversation(row, live);
+    if (row && deps.canAttemptDelivery?.(row, 'conversation') !== false && deps.db.claimConversation(row.id, modeOptions)) await deps.deliverConversation(row, live);
   }
   async function step() {
     const activation = state.activations.get(group);
@@ -111,7 +113,7 @@ export function createLane(context, group) {
       if (group === 'origin') {
         const row = await nextMessage();
         if (!row) {
-          const need = deps.db.getOriginNeed(Math.floor(now() / 1000));
+          const need = deps.db.getOriginNeed(Math.floor(now() / 1000), { sessionMode: state.mode });
           if (need.controls.count === 0 && !need.continuation?.pending) return;
         }
       }

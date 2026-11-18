@@ -111,7 +111,8 @@ test('native single shows other groups their multi configuration without samplin
   }
 });
 test('a pre-migration instance reports a null mode, baseline resolution and no running state', async t => {
-  const { store } = fixture(t);
+  const { store } = storeFixture(t, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude' } }) });
+  store.insertConversation('in', 'chat', 'e', 'hello', { groupName: 'A' });
   store.setSessionRuntimeConfig({ sessionGroup: 'chat:A', runtime: 'codex' });
   const forbidden = () => { throw new Error('must not sample'); };
   store.getDrainFence = forbidden;

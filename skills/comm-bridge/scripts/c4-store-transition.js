@@ -50,6 +50,11 @@ export function transitionFunctions({ read, write, snapshot, get, all, run, seco
       return read(c => decode(get(c, `SELECT * FROM mode_transitions WHERE ${predicates.join(' AND ')} ORDER BY updated_at DESC,created_at DESC,rowid DESC LIMIT 1`, ...(options.targetMode ? [options.targetMode] : []))));
     },
     listGroupHeads: () => read(c => all(c, 'SELECT session_group AS sessionGroup,head_id AS headId FROM group_heads ORDER BY session_group COLLATE BINARY')),
+    voidInternalForSingle: runId => write(c => {
+      const row = typeof runId === 'string' && runId ? find(c, runId) : null;
+      if (!row || row.kind !== 'switch' || row.phase !== 'cutover' || row.target_mode !== 'single') throw dataError('TRANSITION_PRECONDITION', 'Internal cleanup requires native single cutover');
+      return all(c, "UPDATE conversations SET status='failed',delivery_action='switch_voided' WHERE channel='internal' AND direction='in' AND status='pending' AND session_group<>'origin' RETURNING id");
+    }),
     absorbForTransition: runId => write(c => {
       const row = required(c, runId);
       if (row.kind === 'switch') throw dataError('TRANSITION_PRECONDITION', 'Native switches do not absorb conversations');

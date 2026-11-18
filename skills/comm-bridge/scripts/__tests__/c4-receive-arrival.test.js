@@ -78,3 +78,19 @@ test('arrival evidence is not reported as committed when inserting the message f
     { code: 'INTERNAL_ERROR' });
   assert.equal(f.events.length, 0);
 });
+
+for (const [mode, expected] of [[{ mode: 'single', keyPresent: true }, 'origin'],
+  [{ mode: null, keyPresent: false }, 'telegram'], [{ mode: 'multi', keyPresent: true }, 'telegram']]) {
+  test(`receive health route uses execution group for ${JSON.stringify(mode)}`, async t => {
+    const f = fixture(t); f.dependencies.readSessionMode = () => mode;
+    await receive(['--channel', 'telegram', '--endpoint', 'chat-1', '--content', 'queued'], f.dependencies);
+    assert.equal(f.request.sessionGroup, expected);
+    assert.equal(f.events[0].session_group, 'telegram:queue');
+  });
+}
+
+test('unreadable mode keeps inbound on the route-query persistence path', async t => {
+  const f = fixture(t); f.dependencies.readSessionMode = () => { throw Error('config unreadable'); };
+  const result = await receive(['--channel', 'telegram', '--endpoint', 'chat-1', '--content', 'queued'], f.dependencies);
+  assert.equal(result.action, 'queued'); assert.equal(f.inserted, 1);
+});

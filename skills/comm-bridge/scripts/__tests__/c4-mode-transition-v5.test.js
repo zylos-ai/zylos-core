@@ -248,9 +248,8 @@ for (const open of [false,true]) test(`cancelled history ${open?'with gating blo
   const {readSessionModeStatus}=await import('../../../../cli/lib/session-mode-status.js');
   const status=await readSessionModeStatus({db:store,readMode:()=>({mode:'single'}),probeSupervisor:()=>false,readPm2:()=> 'daemon_not_running',readEvents:()=>[]});
   assert.equal(status.transition?.runId??null,open?'open':null);
-  // Cancelled history does not block legacy NULL-control admission in single
-  // mode. Native single-session policy is handled by the coordinator follow-up.
-  const single=createStore(db,{readConfig:()=>({state:'ok',config:{session_mode:'single'}})});
+  // Cancelled history does not block legacy, unkeyed NULL-control admission.
+  const single=createStore(db,{readConfig:()=>({state:'ok',config:{}})});
   const control=()=>single.insertControl('machine',{appendAckSuffix:false});
   if(open) assert.throws(control,{code:'CONTROL_TARGET_REQUIRED'}); else assert.ok(control());
 });

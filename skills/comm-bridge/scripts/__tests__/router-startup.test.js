@@ -129,7 +129,7 @@ test('Origin demand retry is seconds not rounds, excludes pool capacity, never r
 });
 
 test('single uses null semantic scope and origin target; global fence prevents launch', async t => {
-  const f = routerFixture(t, { mode: 'single' }); f.deps.readSessionMode = () => ({ mode: null, keyPresent: false });
+  const f = routerFixture(t, { mode: 'single', keyPresent: false });
   f.db.setDrainFence('*'); const router = f.create(); await router.initialize(); await f.rounds(2);
   f.advance(9000); await f.rounds(2); assert.equal(f.calls.some(x => x[0] === 'launch'), false);
   // Read failure also holds the resident lane; no fallback launch.

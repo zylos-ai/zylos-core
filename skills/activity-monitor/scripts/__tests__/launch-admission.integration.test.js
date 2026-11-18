@@ -68,7 +68,7 @@ test('′ without incoming message early next round preserves bytes',{timeout:30
 });
 // Covers healthy, demanded Origin and single admission bypass. Run when resident admission changes; skip for unrelated routing changes.
 for(const mode of ['healthy','origin','single'])test(`${mode} bypasses start_attempt`,{timeout:30000},async t=>{
- const f=await fixture(t,{mode:mode==='single'?'single':'multi'});
+ const f=await fixture(t,{mode:mode==='single'?'single':'multi',keyPresent:mode!=='single'});
  if(mode==='healthy'){await f.m4.call('seed',{runtime:'codex',health:'ok'});await f.add();await f.m1.call('runtime',{group:'chat',runtime:'codex'});await f.launched()}
  else if(mode==='origin'){await f.m1.call('unfence',{group:'origin'});await f.add('origin');await f.launched('origin')}
  else await f.launched(null);

@@ -82,6 +82,7 @@ export function createDispatcher(overrides = {}, options = {}) {
   });
   let router;
   const delivery = createDelivery({ ...providers, getSessionMode: () => router.state.mode,
+    getSessionKeyPresent: () => router.state.keyPresent,
     formatConversation: overrides.formatConversation ?? (row => formatConversation(row, {
       lookupQuote: current => resolveDashboardQuote(current, db.getDb()),
     })),

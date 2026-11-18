@@ -488,6 +488,7 @@ export const listRunEndings = (...args) => store.listRunEndings(...args);
 export const listPendingContinuations = (...args) => store.listPendingContinuations(...args);
 export const clearContinuation = (...args) => store.clearContinuation(...args);
 export const clearAllContinuations = (...args) => store.clearAllContinuations(...args);
+export const clearContinuationsExceptOrigin = (...args) => store.clearContinuationsExceptOrigin(...args);
 export const insertControl = (...args) => store.insertControl(...args);
 export const getNextPendingControl = (...args) => store.getNextPendingControl(...args);
 export const claimControl = (...args) => store.claimControl(...args);
@@ -507,6 +508,7 @@ export const beginModeTransition = (...args) => store.beginModeTransition(...arg
 export const getLastCompletedModeTransition = (...args) => store.getLastCompletedModeTransition(...args);
 export const listGroupHeads = (...args) => store.listGroupHeads(...args);
 export const absorbForTransition = (...args) => store.absorbForTransition(...args);
+export const voidInternalForSingle = (...args) => store.voidInternalForSingle(...args);
 export const setModeTransitionPhase = (...args) => store.setModeTransitionPhase(...args);
 export const getAbsorbedConversations = (...args) => store.getAbsorbedConversations(...args);
 export const getModeTransition = (options = {}) => store.getModeTransition(options);

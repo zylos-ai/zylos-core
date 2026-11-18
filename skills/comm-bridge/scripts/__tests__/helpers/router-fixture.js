@@ -3,9 +3,9 @@ import { tmuxNameForGroup } from '../../../../../cli/lib/session-group-paths.js'
 import { createRouter } from '../../router/scheduler.js';
 export const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 export const flush = () => new Promise(resolve => setImmediate(resolve));
-export function routerFixture(t, { mode = 'multi', poolSize = 2, readyTimeoutMs = 1000 } = {}) {
+export function routerFixture(t, { mode = 'multi', keyPresent = true, poolSize = 2, readyTimeoutMs = 1000 } = {}) {
   let clock = 1800000000000;
-  const f = fixture(t, { now: () => clock, readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: mode } }) });
+  const f = fixture(t, { now: () => clock, readConfig: () => ({ state: 'ok', config: { runtime: 'claude', ...(keyPresent ? { session_mode: mode } : {}) } }) });
   const events = [], calls = [], scene = new Map(), current = new Map(), health = new Map();
   const db = { ...f.store,
     getControlById: id => f.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id),
@@ -20,7 +20,7 @@ export function routerFixture(t, { mode = 'multi', poolSize = 2, readyTimeoutMs 
     if (live.ready) current.set(group, { runId: live.runId, sessionId: live.sessionId, startupControlIds: [], ts: clock });
     return live;
   }
-  const deps = { db, now: () => clock, readSessionMode: () => { calls.push(['mode']); return { mode, keyPresent: true }; },
+  const deps = { db, now: () => clock, readSessionMode: () => { calls.push(['mode']); return { mode: keyPresent ? mode : null, keyPresent }; },
     readLiveIdentity: async group => scene.get(group) ?? { present: false, ready: false, tmuxName: tmuxNameForGroup(group ?? 'origin') },
     readCurrentSession: async group => current.get(group),
     listGroupTmuxSessions: async () => [...scene].filter(([,v]) => v.present).map(([sessionGroup,v]) => ({ sessionGroup, tmuxName: v.tmuxName, createdAt: v.createdAt })),

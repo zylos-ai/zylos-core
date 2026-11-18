@@ -132,8 +132,8 @@ for (const reason of ['exit_timeout', 'startup_timeout']) {
 
 
 for (const health of ['ok', 'auth_failed']) {
-  test(`single resident starts without queued work even when health is ${health}`, async t => {
-    const f = routerFixture(t, { mode: 'single' });
+  test(`legacy resident starts without queued work even when health is ${health}`, async t => {
+    const f = routerFixture(t, { mode: 'single', keyPresent: false });
     f.health.set('claude', { health });
     f.deps.readRuntimeHealth = () => assert.fail('single resident startup does not read runtime health');
     const router = f.create(); await router.initialize(); await f.rounds(2);

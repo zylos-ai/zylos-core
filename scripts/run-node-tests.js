@@ -7,6 +7,7 @@ import { createTestEnvironment } from './test-environment.js';
 
 const ROOT = process.cwd();
 const ROOT_NODE_TESTS = [
+  'test/single-origin-scheduler.test.js',
   'test/dispatcher-startup.integration.test.js',
   'test/instruction-deployment.integration.test.js',
   'test/init-onboarding.integration.test.js',

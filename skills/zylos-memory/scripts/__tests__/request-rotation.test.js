@@ -5,10 +5,10 @@ import { IDENTITY_ROTATION_PROMPT, GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT, PRE_RE
 function bindingFor(sessionGroup) {
   return JSON.stringify({ expectedRunId: `run-${sessionGroup}`, tmuxTarget: { serverGeneration: 'server', sessionId: '$1', paneId: '%2' } });
 }
-function fixture(mode, groups, transition = null) {
+function fixture(mode, groups, transition = null, keyPresent = mode !== null) {
   const calls = [];
   return { calls, d: {
-    readSessionMode: () => ({ mode, keyPresent: mode !== null }),
+    readSessionMode: () => ({ mode, keyPresent }),
     getModeTransition: () => transition,
     listGroupTmuxSessions: () => groups.map(sessionGroup => ({ sessionGroup })),
     readLiveIdentity: sessionGroup => ({ present: true, runId: `run-${sessionGroup}` }),
@@ -27,9 +27,9 @@ test('multi queues exactly each live group with idle, priority2 and no ack', asy
   assert.deepEqual(calls.map(call => call.options.sessionGroup), ['origin', 'telegram:one', 'lark:two']);
   for (const call of calls) assert.deepEqual(call, { text: IDENTITY_ROTATION_PROMPT, options: { sessionGroup: call.options.sessionGroup, targetBinding: bindingFor(call.options.sessionGroup), priority: 2, requireIdle: true, appendAckSuffix: false } });
 });
-test('single uses one NULL target only when its origin session exists', async () => {
+test('unkeyed single uses one NULL target only when its origin session exists', async () => {
   for (const mode of ['single', null]) {
-    const { calls, d } = fixture(mode, ['origin', 'telegram:old']);
+    const { calls, d } = fixture(mode, ['origin', 'telegram:old'], null, false);
     await requestRotation({}, d);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].options.sessionGroup, null);
@@ -40,7 +40,7 @@ test('single uses one NULL target only when its origin session exists', async ()
     assert.deepEqual(await requestRotation({}, d), { enqueued: [], skipped: [] });
     assert.equal(calls.length, 0);
   }
-  const { calls, d } = fixture('single', ['telegram:old']);
+  const { calls, d } = fixture('single', ['telegram:old'], null, false);
   await requestRotation({}, d);
   assert.equal(calls.length, 0);
 });
@@ -82,8 +82,8 @@ test('background Sync prompts point to the skill result rules; reclaim Sync and 
 
 test('real control transactions supersede repeat requests and preserve exact options', async t => {
   const { fixture: storeFixture } = await import('../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js');
-  for (const mode of ['multi', 'single']) {
-    const { store, db } = storeFixture(t, { readConfig: () => ({ state: 'ok', config: { session_mode: mode } }) });
+  for (const mode of ['multi', 'single', null]) {
+    const { store, db } = storeFixture(t, { readConfig: () => ({ state: 'ok', config: mode === null ? {} : { session_mode: mode } }) });
     const { d } = fixture(mode, mode === 'multi' ? ['origin', 'a', 'b'] : ['origin']);
     d.insertControl = store.insertControl;
     d.getModeTransition = store.getModeTransition;
@@ -94,9 +94,9 @@ test('real control transactions supersede repeat requests and preserve exact opt
     assert.equal(rows.filter(r => r.status === 'superseded').length, expected);
     const pending = rows.filter(r => r.status === 'pending');
     assert.equal(pending.length, expected);
-    assert.deepEqual(pending.map(r => r.session_group), mode === 'multi' ? ['origin', 'a', 'b'] : [null]);
+    assert.deepEqual(pending.map(r => r.session_group), mode === 'multi' ? ['origin', 'a', 'b'] : mode === 'single' ? ['origin'] : [null]);
     for (const r of pending) {
-      assert.equal(r.target_binding, mode === 'multi' ? bindingFor(r.session_group) : null);
+      assert.equal(r.target_binding, mode !== null ? bindingFor(r.session_group) : null);
       assert.equal(r.priority, 2);
       assert.equal(r.require_idle, 1);
       assert.equal(r.ack_deadline_at, null);
@@ -150,8 +150,8 @@ test('binding infrastructure errors abort with the IDs already committed', async
   }
 });
 
-test('single does not inspect or bind a live target', async () => {
-  const { calls, d } = fixture('single', ['origin']);
+test('unkeyed single does not inspect or bind a live target', async () => {
+  const { calls, d } = fixture('single', ['origin'], null, false);
   d.readLiveIdentity = d.buildTargetBinding = () => assert.fail('single identity rotation stays unbound');
   assert.deepEqual(await requestRotation({}, d), { enqueued: [{ sessionGroup: null, id: 1 }], skipped: [] });
   assert.equal(calls[0].options.targetBinding, null);
@@ -193,4 +193,22 @@ test('rotation CLI output reports each skipped group after the enqueue count', a
   lines.length = 0;
   printRotationResult({ enqueued: [], skipped: [] }, line => lines.push(line));
   assert.deepEqual(lines, ['OK: enqueued 0 rotation controls']);
+});
+
+test('native single queues one bound Origin control independent of the caller environment', async () => {
+  const { calls, d } = fixture('single', ['origin']);
+  Object.defineProperty(d, 'env', { get: () => assert.fail('rotation does not inspect caller environment') });
+  assert.deepEqual(await requestRotation({}, d), { enqueued: [{ sessionGroup: 'origin', id: 1 }], skipped: [] });
+  assert.deepEqual(calls, [{ text: IDENTITY_ROTATION_PROMPT, options: {
+    sessionGroup: 'origin', targetBinding: bindingFor('origin'), priority: 2, requireIdle: true, appendAckSuffix: false,
+  } }]);
+});
+
+test('keyed rotation does not require a caller group and uses every listed live group', async () => {
+  const { calls, d } = fixture('multi', ['origin', 'telegram:one']);
+  d.env = {};
+  assert.deepEqual(await requestRotation({}, d), {
+    enqueued: [{ sessionGroup: 'origin', id: 1 }, { sessionGroup: 'telegram:one', id: 2 }], skipped: [],
+  });
+  assert.equal(calls.length, 2);
 });

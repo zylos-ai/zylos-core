@@ -26,7 +26,7 @@ export function createRouter(dependencies, configuration = {}) {
   }
   const deps = dependencies;
   const now = deps.now ?? Date.now;
-  const state = { mode: null, inert: false, ready: false, stopped: false, round: 0, sceneObservable: false,
+  const state = { mode: null, keyPresent: false, inert: false, ready: false, stopped: false, round: 0, sceneObservable: false,
     slots: new Map(), live: new Map(), continuations: new Map(), activations: new Map(), lanes: new Map(), listed: new Set(), legacy: [],
     resident: { failures: 0, absentSince: null, readySince: null, fenced: false } };
   const tasks = new Set();
@@ -40,6 +40,7 @@ export function createRouter(dependencies, configuration = {}) {
   };
   function track(promise) { tasks.add(promise); promise.finally(() => tasks.delete(promise)).catch(() => {}); return promise; }
   const context = { deps, options, state, diagnostic, now, tmuxName: group => tmuxNameForGroup(group ?? 'origin') };
+  const residentGroup = () => state.mode === 'single' && !state.keyPresent ? null : 'origin';
   context.capacityWaits = createCapacityWaits({ ...context, track });
   context.continuationRestarts = createContinuationRestarts({ now, deps, diagnostic });
   context.refreshSlots = () => { state.slots = new Map(deps.db.listSlotOccupancy().map(row => [row.sessionGroup, row])); };
@@ -93,7 +94,7 @@ export function createRouter(dependencies, configuration = {}) {
   };
   context.deferOpportunity = group => { attemptedRound.set(group, state.round); context.releaseOpportunity(group); };
   context.clearContinuation = (group, live) => {
-    if (state.mode !== 'multi' || !live?.present || !live.ready || !live.runId) return;
+    if ((!state.keyPresent && state.mode !== 'multi') || !live?.present || !live.ready || !live.runId) return;
     try {
       const pending = deps.db.listRunEndings([group]).some(row => row.continuationPending);
       if (pending && deps.db.clearContinuation(group, { runId: live.runId }).cleared) {
@@ -119,10 +120,10 @@ export function createRouter(dependencies, configuration = {}) {
   context.refreshScene = async (requested = [], { startup = false } = {}) => {
     try {
       const sessions = state.mode === 'single' ? [] : await deps.listGroupTmuxSessions();
-      const groups = state.mode === 'single' ? new Set([null]) :
+      const groups = state.mode === 'single' ? new Set([residentGroup()]) :
         new Set(sessions.filter(row => groupFromTmuxName(row.tmuxName) === row.sessionGroup).map(row => row.sessionGroup));
       state.listed = groups;
-      const wanted = new Set([...groups, ...state.live.keys(), ...requested, state.mode === 'single' ? null : 'origin']);
+      const wanted = new Set([...groups, ...state.live.keys(), ...requested, residentGroup()]);
       const observation = Promise.resolve().then(() => deps.readLiveIdentities([...wanted])).then(identities => {
         for (const group of wanted) {
           if (!identities.get(group)) throw new Error('Batch identity observation is incomplete');
@@ -200,11 +201,16 @@ export function createRouter(dependencies, configuration = {}) {
         .catch(error => diagnostic('maintenance_error', { reason: error.message })).finally(() => { maintenanceTask = null; }));
     }
     if (now() - lastMismatch >= options.mismatchIntervalMs) {
-      const counts = deps.db.countNonTerminalControls(state.mode === 'multi' ? { machine: true } : { allSessionGroups: true });
+      let counts = deps.db.countNonTerminalControls(state.mode === 'multi' ? { machine: true } : { allSessionGroups: true });
+      if (state.mode === 'single' && state.keyPresent) {
+        const machine = deps.db.countNonTerminalControls({ machine: true });
+        const origin = deps.db.countNonTerminalControls({ sessionGroup: 'origin' });
+        counts = Object.fromEntries(Object.keys(counts).map(key => [key, counts[key] + machine[key] - origin[key]]));
+      }
       if (counts.pending) { diagnostic('mode_mismatch', { count: counts.pending, mode: state.mode }); deps.alert?.('mode_mismatch', counts); }
       lastMismatch = now();
     }
-    if (state.mode === 'single' && !legacyTask) {
+    if (state.mode === 'single' && !state.keyPresent && !legacyTask) {
       legacyTask = track(Promise.resolve().then(() => deps.advanceLegacy(state.legacy))
         .catch(error => diagnostic('legacy_error', { reason: error.message })).finally(() => { legacyTask = null; }));
     }
@@ -218,9 +224,9 @@ export function createRouter(dependencies, configuration = {}) {
     // require observation. Each round uses one batch, never per-session polling.
     if (!sceneTask) sceneTask = track(context.refreshScene([...pending, ...continuations].map(row => row.sessionGroup))
       .finally(() => { sceneTask = null; }));
-    const wanted = new Set(state.mode === 'single' ? [null] : ['origin', ...state.listed,
+    const wanted = new Set(state.mode === 'single' ? [residentGroup()] : ['origin', ...state.listed,
       ...pending.map(row => row.sessionGroup), ...continuations.map(row => row.sessionGroup), ...state.activations.keys()]);
-    const ordered = state.mode === 'single' ? [null] : ['origin', ...pending.sort((a,b) => a.headPriority-b.headPriority || a.headId-b.headId).map(row => row.sessionGroup), ...continuations.sort((a,b) => a.endedAt-b.endedAt || (a.sessionGroup < b.sessionGroup ? -1 : a.sessionGroup > b.sessionGroup ? 1 : 0)).map(row => row.sessionGroup), ...wanted];
+    const ordered = state.mode === 'single' ? [residentGroup()] : ['origin', ...pending.sort((a,b) => a.headPriority-b.headPriority || a.headId-b.headId).map(row => row.sessionGroup), ...continuations.sort((a,b) => a.endedAt-b.endedAt || (a.sessionGroup < b.sessionGroup ? -1 : a.sessionGroup > b.sessionGroup ? 1 : 0)).map(row => row.sessionGroup), ...wanted];
     for (const group of new Set(ordered)) {
       const active = state.activations.get(group);
       if (active && !active.launchSettled && now() - active.startedAt >= options.readyTimeoutMs && !active.warned) {

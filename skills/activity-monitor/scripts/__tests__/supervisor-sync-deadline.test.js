@@ -8,9 +8,9 @@ import { routerFixture } from '../../../comm-bridge/scripts/__tests__/helpers/ro
 // Run for Group Sync deadline/scope changes; unrelated UI may skip. The root
 // runner isolates HOME/ZYLOS_DIR/PM2_HOME/temp/socket paths before imports. No
 // process, tmux, PM2 or network is started; router/database teardown belongs to t.
-for (const [mode, kind, group] of [['multi', 'group', 'a'], ['single', 'global', null], ['multi', 'origin', 'origin']]) {
-  test(`${kind} Sync keeps its intended deadline scope and backlog alerts remain durable`, async t => {
-    const f = routerFixture(t, { mode });
+for (const [mode, kind, group] of [['multi', 'group', 'a'], ['single', 'global', null], ['multi', 'origin', 'origin'], ['single', 'group', 'origin']]) {
+  test(`${mode} ${kind} Sync keeps its intended deadline scope and backlog alerts remain durable`, async t => {
+    const f = routerFixture(t, { mode, keyPresent: kind !== 'global' });
     const scene = { sessionGroup: group, present: true, ready: true, runtime: 'claude',
       runId: 'sync-run', sessionId: 'sync-session', runDir: '/isolated/sync', state: 'idle' };
     const env = { ZYLOS_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'sync-deadline-')) }; t.after(() => fs.rmSync(env.ZYLOS_DIR, { recursive: true, force: true }));
@@ -18,7 +18,7 @@ for (const [mode, kind, group] of [['multi', 'group', 'a'], ['single', 'global',
       requests: { read: () => [] }, readSyncMarker: () => ({ held: false, stale: false }),
       prompts: { GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync', SYNC_BACKLOG_ALERT: () => 'sync backlog alert' },
     }, { now: f.now });
-    const context = { configuration: { mode, legacy: mode === 'single' }, scenes: [scene], fences: [], restartRequests: [], transition: null };
+    const context = { configuration: { mode, legacy: kind === 'global' }, scenes: [scene], fences: [], restartRequests: [], transition: null };
     const range = { count: 1000, nonempty: true, firstAt: f.now() - 100_000_000,
       alertFirstAt: f.now() - 100_000_000, firstConversationId: 1 };
     await lifecycle.sendSyncAlert({ type: 'backlog', kind, scope: kind === 'global' ? '*' : scene.sessionGroup, backlog: range.count, lag: 100000 }, context);
@@ -28,6 +28,8 @@ for (const [mode, kind, group] of [['multi', 'group', 'a'], ['single', 'global',
     const alert = rows.find(row => row.content === 'sync backlog alert');
     const sync = rows.find(row => row.content === (kind === 'origin' ? 'origin sync' : 'group sync'));
     assert.ok(alert); assert.ok(sync);
+    assert.equal(alert.session_group, kind === 'global' ? null : 'origin');
+    assert.equal(sync.session_group, group);
     assert.equal(alert.ack_deadline_at, null, 'backlog alerts retain their existing unbounded lifetime');
     assert.equal(sync.ack_deadline_at, kind === 'origin' ? null : Math.floor(f.now() / 1000) + 300);
     for (const row of rows) {

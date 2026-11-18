@@ -4,12 +4,12 @@ import Database from 'better-sqlite3';
 import { fixture } from './c4-v2-test-helpers.js';
 import { createStore } from '../c4-v2-store.js';
 const NOW = 1800000000;
-const single = { now: () => NOW * 1000, readConfig: () => ({ state: 'ok', config: { session_mode: 'single' } }) };
+const single = { now: () => NOW * 1000, readConfig: () => ({ state: 'ok', config: {} }) };
 const add = (s, sessionGroup, content = 'work', options = {}) => s.insertControl(content, { sessionGroup, appendAckSuffix: false, ...options });
 const row = (db, id) => db.prepare('SELECT * FROM control_queue WHERE id=?').get(id);
 const binding = run => ({ expectedRunId: run, tmuxTarget: { serverGeneration: 'gen', sessionId: '$1', paneId: '%2' } });
 
-test('NULL scope is allowed only in single, fails closed on bad and every open transition phase', t => {
+test('NULL scope is allowed only before migration, fails closed on bad and every open transition phase', t => {
   const { store: multi, db } = fixture(t);
   assert.throws(() => add(multi, null), { code: 'CONTROL_TARGET_REQUIRED' });
   assert.equal(db.prepare('SELECT count(*) n FROM control_queue').get().n, 0);

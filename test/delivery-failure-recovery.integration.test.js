@@ -41,7 +41,8 @@ for (const [mode, maintenance] of [['single', null], ['single', 'memory_sync'],
   test(`${mode === 'single' ? 'legacy single' : mode} terminal delivery recovery respects ${maintenance ?? 'open admission'}`, { timeout: 8000 }, async t => {
     for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
       assert.ok(process.env[key]);
-      assert.ok(path.resolve(process.env[key]).startsWith('/private/tmp/') || path.resolve(process.env[key]).startsWith('/tmp/'));
+      const allowedRoot = key === 'TMPDIR' ? path.dirname(privateRoot) : privateRoot;
+      assert.ok(path.resolve(process.env[key]) === allowedRoot || path.resolve(process.env[key]).startsWith(allowedRoot + path.sep));
     }
     const root = process.env.ZYLOS_DIR, group = mode === 'single' ? null : 'origin';
     const runDir = path.join(root, 'fixture-run');
