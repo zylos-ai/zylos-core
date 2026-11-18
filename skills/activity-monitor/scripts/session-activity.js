@@ -137,8 +137,12 @@ export class SessionActivity {
       // replaying older turns into the current tool and busy/idle state.
       if(row.event==='session_start' || Number.isFinite(row.ts) && row.ts<=this.startedAt)responseBoundary=true;
       if(this.runtime==='claude' && row.event==='stop' && Number.isFinite(row.ts))claudeCutoff ??= row.ts-STOP_HOOK_LAG_MS;
+      // Reverse recovery has not reached the fixed failure yet. Keep later
+      // turn boundaries so a long intervening round is not lost; its tool
+      // history still uses only the existing Stop-lag windows.
+      const fixedBoundary=this.fixedFailureEventId && failureCutoff===null && ['prompt','stop'].includes(row.event);
       const keep=Number.isFinite(row.ts) && row.ts>=this.startedAt && (this.runtime==='claude'?
-        claudeCutoff===null || row.ts>=claudeCutoff || failureCutoff!==null && row.ts>=failureCutoff && row.ts<=failureCutoff+STOP_HOOK_LAG_MS:!boundary);
+        fixedBoundary || claudeCutoff===null || row.ts>=claudeCutoff || failureCutoff!==null && row.ts>=failureCutoff && row.ts<=failureCutoff+STOP_HOOK_LAG_MS:!boundary);
       if(Number.isFinite(row.ts) && (row.ts<=this.startedAt ||
          this.runtime!=='claude' && ['prompt','stop'].includes(row.event)))boundary=true;
       return {keep,done:boundary && responseBoundary && this.transcriptPath!==null};

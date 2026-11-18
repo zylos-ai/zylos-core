@@ -967,3 +967,24 @@ test('Claude transcript rotation and unavailable records fall back to hook state
  activity.consume([row('prompt',{ts:10000})]);
  assert.equal(activity.read(14000).state,'busy');assert.equal(activity.turnStartedAt,10000);
 });
+
+// Boundary: a consumer rebuilding for an older fixed failure still observes
+// later hook-started rounds outside both five-second Stop windows. Run for
+// fixed-failure recovery changes; private event/transcript files only.
+test('Claude fixed failure recovery retains a later long hook-started turn after it stops',t=>{
+ const {root,row}=fixture(t),transcript=path.join(root,'s.jsonl');
+ fs.writeFileSync(transcript,'');fs.utimesSync(transcript,0.1,0.1);
+ const rows=[row('session_start',{ts:100,transcript_path:transcript}),row('prompt',{ts:200}),
+  row('stop_failure',{type:'runtime_health',source:'hook',schema_version:1,event_id:'first-failure',ts:10000}),
+  row('stop',{ts:10001,stop_reason:'failure'}),row('prompt',{ts:20000}),
+  row('stop_failure',{type:'runtime_health',source:'hook',schema_version:1,event_id:'next-failure',ts:70000}),
+  row('stop',{ts:70001,stop_reason:'failure'})];
+ fs.writeFileSync(path.join(root,'events.jsonl'),rows.map(value=>JSON.stringify(value)+'\n').join(''));
+ const reader=new SessionActivity({runDir:root,runId:'r',sessionId:'s',runtime:'claude',
+  startedAt:100,failureEventId:'first-failure'});t.after(()=>reader.close());
+ const result=reader.read(75000);
+ assert.equal(result.state,'idle');assert.equal(result.turnOpen,false);
+ assert.equal(result.failureActivity.failureEventId,'first-failure');
+ assert.equal(result.failureActivity.startedAfterFailure,true);
+ assert.equal(result.failureActivity.startedAt,20000);
+});
