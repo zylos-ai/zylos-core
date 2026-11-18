@@ -23,7 +23,7 @@ import os from 'os';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import { hookScriptKey, hookScriptBaseKey, getCommandHooks } from './hook-utils.js';
+import { hookScriptKey, hookScriptBaseKey, getCommandHooks, HOOK_ENTRY_SCRIPT } from './hook-utils.js';
 import { readSessionMode } from './config.js';
 import { copyPrivateFile, writePrivateFile } from './private-file.js';
 import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig, resolveCodexBypassPermissions } from './runtime-setup.js';
@@ -64,9 +64,19 @@ export function isCoreManaged(hook, { zylosDir = ZYLOS_DIR } = {}) {
     || key === path.resolve(zylosDir, '.zylos', 'instructions', 'assembler.mjs').replaceAll('\\', '/');
 }
 
+/**
+ * Every core hook runs through the hook entry, which lets only the run's pane
+ * main process reach the target script. `exec` replaces the runtime's shell,
+ * so the entry's parent is the runtime itself.
+ */
+export function hookEntryCommand(targetPath, zylosDir = ZYLOS_DIR, { quote = false } = {}) {
+  const entry = path.resolve(zylosDir, '.claude', HOOK_ENTRY_SCRIPT);
+  const word = value => quote ? JSON.stringify(value) : value;
+  return `exec node ${word(entry)} ${word(targetPath)}`;
+}
+
 function zylosClaudeScript(relativePath, zylosDir = ZYLOS_DIR) {
-  const scriptPath = path.resolve(zylosDir, '.claude', relativePath);
-  return `node ${scriptPath}`;
+  return hookEntryCommand(path.resolve(zylosDir, '.claude', relativePath), zylosDir);
 }
 
 function commandHook(relativePath, options = {}, zylosDir = ZYLOS_DIR) {
@@ -114,7 +124,7 @@ export function canonicalAssemblerEntry({ zylosDir = ZYLOS_DIR } = {}) {
   return {
     type: 'command',
     command: [
-      'node', JSON.stringify(path.join(instructionsDir, 'assembler.mjs')),
+      hookEntryCommand(path.join(instructionsDir, 'assembler.mjs'), root, { quote: true }),
       '--marker', JSON.stringify(path.join(instructionsDir, 'meta.json')),
       '--system', JSON.stringify(path.join(instructionsDir, 'claude-system.md')),
       '--user', JSON.stringify(path.join(root, 'ZYLOS.md')),

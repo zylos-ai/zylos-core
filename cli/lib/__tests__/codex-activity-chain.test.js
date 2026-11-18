@@ -21,7 +21,9 @@ it('installed Codex hooks connect native payloads to group activity; removal fai
     fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
     const scriptsDir = path.join(zylosDir, '.claude', 'skills', 'activity-monitor', 'scripts');
     fs.mkdirSync(scriptsDir, { recursive: true });
-    fs.copyFileSync(path.join(root, 'skills/activity-monitor/scripts/hook-activity.js'), path.join(scriptsDir, 'hook-activity.js'));
+    for (const name of ['hook-entry.js', 'claude-pid.js', 'pane-process.js', 'hook-activity.js']) {
+      fs.copyFileSync(path.join(root, 'skills/activity-monitor/scripts', name), path.join(scriptsDir, name));
+    }
     fs.copyFileSync(path.join(root, 'skills/activity-monitor/scripts/core-modules.js'), path.join(scriptsDir, 'core-modules.js'));
     fs.copyFileSync(path.join(root, 'skills/activity-monitor/scripts/is-main-module.js'), path.join(scriptsDir, 'is-main-module.js'));
     const bridgeDir = path.join(zylosDir, '.claude', 'skills', 'comm-bridge', 'scripts');

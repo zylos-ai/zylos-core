@@ -43,6 +43,8 @@ export function createHistoryScope({ config = {}, store, load = loadCoreModule, 
     const sessionIds = new Set(selected.filter(row => row.runtime === runtime).map(row => row.session_id));
     if (current) sessionIds.add(current);
     const excludedSessionIds = new Set(attribution.filter(row => !belongs(row) && row.runtime === runtime).map(row => row.session_id));
+    // Child runtimes started inside a session are counted for cost only, never listed.
+    for (const id of store?.childSessionIds?.() ?? []) excludedSessionIds.add(id);
     // Unattributed pre-multi-session transcripts belong to Origin. Other groups
     // require positive attribution, including parent ids for Claude subagents.
     return { revision, runtime, currentSessionId: current, sessionIds: group === 'origin' ? null : sessionIds, excludedSessionIds };

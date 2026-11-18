@@ -4,8 +4,10 @@ import { randomUUID } from 'node:crypto';
 import { bootstrapScope } from './bootstrap-scope.js';
 import { enqueueStartupPrompt } from './session-start-prompt.js';
 import { isSubsession, readBootstrapIdentity } from './bootstrap-identity.js';
+import { readHookTrigger } from './claude-pid.js';
+import { readyProcessFields } from './pane-process.js';
 
-export async function publishBootstrapReady(payload, { env = process.env, enqueue = enqueueStartupPrompt, scopeReader = bootstrapScope, identityReader = readBootstrapIdentity, now = Date.now, write = fs.writeFileSync, rename = fs.renameSync } = {}) {
+export async function publishBootstrapReady(payload, { env = process.env, enqueue = enqueueStartupPrompt, scopeReader = bootstrapScope, identityReader = readBootstrapIdentity, processReader = () => readyProcessFields(readHookTrigger()), now = Date.now, write = fs.writeFileSync, rename = fs.renameSync } = {}) {
   if (!['startup', 'clear'].includes(payload?.source) || isSubsession(payload)) return { skipped: true };
   if (!env.ZYLOS_RUN_ID || typeof payload.session_id !== 'string' || !payload.session_id) return { skipped: true, reason: 'identity_missing' };
   const scope = await scopeReader(env);
@@ -22,7 +24,8 @@ export async function publishBootstrapReady(payload, { env = process.env, enqueu
     console.error(`[bootstrap-ready] enqueue failed: ${error.message}`);
   }
   if (!Array.isArray(startupControlIds) || !startupControlIds.every(id => Number.isSafeInteger(id) && id > 0)) throw new Error('Invalid startup control ids');
-  const record = { runId: env.ZYLOS_RUN_ID, sessionId: payload.session_id, startupControlIds, startupPrompt, ts: now() };
+  // The publishing process lets the supervisor ignore a READY that is not the pane's own.
+  const record = { runId: env.ZYLOS_RUN_ID, sessionId: payload.session_id, startupControlIds, startupPrompt, ts: now(), ...processReader() };
   fs.mkdirSync(scope.dir, { recursive: true });
   const file = path.join(scope.dir, 'current-session.json');
   const temporary = `${file}.${randomUUID()}.tmp`;

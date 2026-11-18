@@ -450,6 +450,26 @@ Machine tasks use `SupervisorMachineTasks`:
 - **Persistence**: State files survive activity monitor restarts
 - **Usage**: Account health, configured intervals and active hours govern sampling/alerts; Origin presence, idle state, input state and pending-work gates are not required. Mode transitions defer usage work
 
+## Hook Entry: Pane Main Process Only
+
+Every Claude and Codex hook and the statusLine command that zylos installs, including component SessionStart shards, runs as `exec node <scripts>/hook-entry.js <target script> [args...]`. A child runtime started inside a session (an upgrade evaluation, an agent's `claude -p` or `codex exec`, in either runtime's pane) inherits the run variables and fires the same hooks; the entry lets only the run's pane main process reach the target:
+
+- **Main process**: the target runs in the entry's own process, with the argv and stdin of a direct invocation.
+- **Determinably another process**: nothing runs and nothing is printed (no activity, health or status write, no queue entry, no keystroke, no READY). For a refused SessionStart, `hook-activity.js` leaves one cost record in `child-sessions.jsonl` (child session id, transcript path, the child's own runtime, and the group and run it inherited) so the Dashboard counts the child's tokens. A child that zylos starts itself has no group or run: its record goes to `activity-monitor/child-sessions.jsonl` and its cost is not counted under the group it was started from.
+- **Undetermined** (no or another run's `pane-process.json`, unreadable process data): the target runs as before and the entry appends one line with the reason, pid, runtime, hook, group and run to `activity-monitor/hook-activity-errors.log`.
+
+The launcher writes `<run dir>/pane-process.json` (`runId`, `runtime`, `panePid`, `paneStart`) right after tmux confirms the pane. The hook's runtime is its first non-shell ancestor; it is the pane process when its pid and start time match the record, or for Codex when it is the direct child of the recorded launcher wrapper. A hook without `ZYLOS_RUN_ID` (zylos strips the run variables from the runtimes it starts itself) is the pane process only when the tmux server started it, or started its Codex wrapper.
+
+The supervisor checks READY independently: `current-session.json` names its publisher (`runtimePid`, `runtimeStart`, `runtimeParentPid`, `runtimeParentStart`), and a READY whose publisher is not the observed tmux pane process is ignored and never counts as a rotation; the run keeps the last READY its pane process published. Because it compares with tmux `pane_pid`, this also covers panes started before `pane-process.json` existed. A READY without publisher fields (written by an earlier version) is accepted as before.
+
+To see how the entry classifies a session, run this read-only check from the session's shell tool. It reads process information, the pane-process record and the tmux pane pid only; it writes no file and enqueues nothing:
+
+```bash
+node ~/zylos/.claude/skills/activity-monitor/scripts/main-process-check.js
+```
+
+It prints `determinable`, `mainProcess`, `verdict`, `reason` and the basis (trigger process, record, tmux pane pid, and `tmuxPaneCheck`: what the supervisor's READY check would conclude).
+
 ## Permission Auto-Approve
 
 When Claude Code shows a permission prompt (PermissionRequest event), the `hook-auth-prompt.js` hook automatically sends an Enter keystroke to approve it.
@@ -458,7 +478,7 @@ When Claude Code shows a permission prompt (PermissionRequest event), the `hook-
 
 ### How It Works
 
-1. Claude Code fires a PermissionRequest hook when a tool call requires user approval
+1. Claude Code fires a PermissionRequest hook when a tool call requires user approval (in the pane main process only; a child runtime's prompt is never answered from the session pane)
 2. `hook-auth-prompt.js` logs the event to `hook-timing.log`
 3. If `auto_approve_permission` is true (default), it enqueues a `[KEYSTROKE]Enter` control at priority 0 with bypass-state and 1-second delay
 4. The C4 dispatcher delivers the Enter keystroke to the tmux session, auto-confirming the prompt
