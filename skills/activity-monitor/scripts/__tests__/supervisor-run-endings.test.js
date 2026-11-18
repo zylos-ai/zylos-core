@@ -130,3 +130,38 @@ test('native switches do not hide an Origin crash behind a newer completion time
   await f.step();
   assert.equal(f.records().find(row=>row.sessionGroup==='origin')?.continuationPending,1);
 });
+
+// Reconciliation must retain the multi-conversion boundary across later native
+// completion. Real Store transitions, session file, occupancy and continuation query.
+test('an ordinary group crash remains eligible after a later native switch completes', async t => {
+  const f = await runEndingFixture(t);
+  const conversion = f.store.beginModeTransition('single', 'multi', { kind: 'first_migration' });
+  f.store.setDrainFence('*');
+  f.store.absorbForTransition(conversion.runId);
+  f.store.setModeTransitionPhase(conversion.runId, 'cutover');
+  f.store.setModeTransitionPhase(conversion.runId, 'complete');
+  const convertedAt = f.now;
+
+  f.now += 10000;
+  await f.add('test:a', 'crashed-run');
+  // No live identity exists, but reconciliation has not observed the crash yet.
+  assert.equal(f.records('test:a').length, 0);
+  assert.equal(f.store.listPendingContinuations().length, 0);
+  f.now += 10000;
+  const native = f.store.beginModeTransition('single', 'multi', { kind: 'switch' });
+  f.store.setDrainFence('*');
+  f.store.setModeTransitionPhase(native.runId, 'cutover');
+  const completed = f.store.setModeTransitionPhase(native.runId, 'complete');
+  assert.equal(completed.kind, 'switch');
+  assert.equal(completed.cutoff, null);
+  assert.ok(completed.updated_at * 1000 > convertedAt);
+
+  await f.step(31000);
+  const ending = f.records('test:a')[0];
+  assert.equal(ending?.runId, 'crashed-run');
+  assert.equal(ending.reason, 'unexpected');
+  assert.equal(ending.continuationPending, 1);
+  assert.deepEqual(f.store.listPendingContinuations(), [{ sessionGroup: 'test:a', endedAt: ending.endedAt }]);
+  assert.equal(f.slots().find(row => row.sessionGroup === 'test:a')?.state, 'held');
+  assert.deepEqual(f.errors, []);
+});
