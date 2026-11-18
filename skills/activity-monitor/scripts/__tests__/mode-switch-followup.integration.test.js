@@ -43,7 +43,7 @@ function fixture(source, { wholeGroup = false } = {}) {
   env.PATH = bin; env.PM2_HOME = path.join(root, 'pm2'); env.TMUX_TMPDIR = root;
   for (const key of Object.keys(env)) if (key === 'TMUX' || /(?:TOKEN|SECRET|PASSWORD|API_KEY)/.test(key)) delete env[key];
   const add = (body, endpoint, group = 'a') => store.insertConversation('in', 'demo', endpoint, body, wholeGroup ? { wholeGroup: true } : { groupName: group });
-  function convert() { const { runId } = store.beginModeTransition(source, target); store.setDrainFence('*'); store.absorbForTransition(runId); const row = store.getModeTransition(); const result = createModeSwitchConverter({ db: store, zylosDir: root })(row); store.setModeTransitionPhase(runId, 'cutover'); store.setModeTransitionPhase(runId, 'complete'); return { row, ...result }; }
+  function convert() { const { runId } = store.beginModeTransition(source, target, { kind: 'first_migration' }); store.setDrainFence('*'); store.absorbForTransition(runId); const row = store.getModeTransition(); const result = createModeSwitchConverter({ db: store, zylosDir: root })(row); store.setModeTransitionPhase(runId, 'cutover'); store.setModeTransitionPhase(runId, 'complete'); return { row, ...result }; }
   function cli(name, args, { input = '', group, shell = false } = {}) {
     const childEnv = { ...env }; if (group && group !== '*') childEnv.ZYLOS_SESSION_GROUP = group;
     const script = path.join(skills, 'comm-bridge/scripts', name + '.js');

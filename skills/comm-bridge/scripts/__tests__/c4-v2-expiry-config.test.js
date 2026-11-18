@@ -49,7 +49,7 @@ test('stale selected pending cannot expire after a second connection claims or a
   const next = s.insertConversation('in', 'chat', 'e', 'absorbed');
   db.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(NOW - 1801, next.id);
   assert.equal(s.getNextPending().id, next.id);
-  const { runId } = peer.beginModeTransition('single', 'multi'); peer.setDrainFence('*'); peer.absorbForTransition(runId);
+  const { runId } = peer.beginModeTransition('single', 'multi', { kind: 'first_migration' }); peer.setDrainFence('*'); peer.absorbForTransition(runId);
   const absorbed = getRow(db, next.id); assert.equal(absorbed.status, 'switch_absorbed');
   assert.equal(s.expirePending(next.id, 1800), false); assert.deepEqual(getRow(db, next.id), absorbed);
 });

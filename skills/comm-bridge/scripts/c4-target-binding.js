@@ -1,3 +1,4 @@
+import { hasOpenModeTransition } from './c4-transition-state.js';
 import { dataError, requireGroup } from './c4-session-group.js';
 export function normalizeTargetBinding(value) {
   if (value === null || value === undefined) return null;
@@ -26,7 +27,7 @@ export function createTargetBindingBuilder({ baseline, snapshot, knownGroup, get
         if (sessionGroup === null) throw dataError('CONTROL_TARGET_REQUIRED', 'Multi mode requires a group target');
         requireGroup(sessionGroup); knownGroup(c, sessionGroup);
       }
-      if (get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'")) throw dataError('TRANSITION_OPEN', 'A mode transition is in progress');
+      if (hasOpenModeTransition(c, get)) throw dataError('TRANSITION_OPEN', 'A mode transition is in progress');
     });
     if (typeof resolveTarget !== 'function') throw dataError('TARGET_SNAPSHOT_UNKNOWN', 'Core target resolver has not been connected');
     const target = await resolveTarget({ sessionGroup, sessionMode });
