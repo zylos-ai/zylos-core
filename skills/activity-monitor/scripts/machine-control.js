@@ -12,5 +12,5 @@ export async function enqueueMachineControl(args, {readMode = readSessionMode, r
   const {mode, keyPresent} = await readMode();
   if (!['single','multi'].includes(mode) && !(mode === null && keyPresent === false)) throw new Error('Invalid session mode');
   if (args.includes('--group')) throw new Error('Machine controls cannot override their target');
-  return run([...args,...(keyPresent ? ['--group','origin'] : [])]);
+  return run([...args,...(mode === 'multi' || keyPresent === true ? ['--group','origin'] : [])]);
 }

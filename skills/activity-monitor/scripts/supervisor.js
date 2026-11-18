@@ -127,7 +127,7 @@ export function createSupervisor(deps) {
   observer=new SupervisorHealthObserver({coordinator:health,listScenes,readIdentity:group=>scenes.readIdentity(group),readState:scene=>({...readActivity(scene),healthIdentity:scene.healthIdentity}),
     readScreen:scene=>scenes.readScreen(scene),matchScreen:deps.matchScreen,insertControl:db.insertControl,getControlById:db.getControlById,
     buildTargetBinding:scene=>scenes.bindTarget(scene),stop:(scene,validate)=>guardedAction(scene,current=>stopScene(current),validate?{requireOpen:true,validate}:{}),
-    readMode:async()=>(await readMode()).mode,readScopeMode:readMode,getModeTransition:db.getModeTransition,getDrainFence:db.getDrainFence,manualPending,readMaintenance,
+    readMode,getModeTransition:db.getModeTransition,getDrainFence:db.getDrainFence,manualPending,readMaintenance,
     resolveToolRule:deps.resolveToolRule,nudge:(scene,validate)=>nudgeSession({enqueue:async content=>{
       let result={ok:false};
       const check=current=>validate(current,{continuing:content==='continue'});
