@@ -47,14 +47,14 @@ export async function processFailureContinuation({store,scene,identity,bindTarge
     delete state.failure_retry;store.write(state,sessionGroup);return;
   }
   const control=retry.controlId ? getControl(retry.controlId) : null;
-  if(retry.controlId && (!control || ['timeout','superseded','failed','cancelled'].includes(control.status))) {
+  if(retry.controlId && (!control || ['timeout','superseded','failed'].includes(control.status))) {
     if(control?.status==='failed' && retry.notice)state.pending_notice=retry.notice;
     delete state.failure_retry;store.write(state,sessionGroup);return;
   }
   let native;try{native=readNativeActivity();}catch{/* Do not infer unobserved round history. */}
   const ownDelivery=control && ['running','done'].includes(control.status);
   const resumed=!ownDelivery && Number.isFinite(native?.turnStartedAt) && native.turnStartedAt>retry.failedAt;
-  const pending=now()>=retry.dueAt && control?.status!=='done' &&
+  const pending=now()>=retry.dueAt && (!control || control.status==='pending') &&
     getPending(scope===null?undefined:{sessionGroups:[scope]});
   if(resumed || pending) {
     if(retry.controlId)await expireControl(retry.controlId);

@@ -11,7 +11,7 @@ their existing behavior; quota/request/context/content diagnostics can veto retr
 ## AM owns observation and accounting
 
 AM uses the existing long-lived shared reader and its unchanged `turnStartedAt`.
-Before its control is sent, a start later than the failure cancels the pending
+Before its control is claimed, a start later than the failure cancels the pending
 Continue and commits the cleared state. `turnOpen` alone is not proof of a new
 round because the failed round's closing activity hook can arrive later than
 its health hook. Late old tools also do not prove a new round.
@@ -25,8 +25,9 @@ AM keeps attempts/deadlines and the frozen first recipient in its health file,
 so an AM restart can replay the terminal hook and continue from the same control.
 
 At the due time AM checks for ordinary pending input and silently cancels the
-Continue if present. There is no second pending-input check in C4. The existing
-AM delivery-notification path also clears retry state when an ordinary message
+Continue if present and its control has not yet been claimed. Running controls
+are left to standard delivery settlement. There is no second pending-input check
+in C4. The existing AM delivery-notification path also clears retry state when an ordinary message
 was pasted after the failure. A message pasted before failure does not cancel;
 notifications for controls do not clear their own continuation budget.
 
@@ -60,7 +61,10 @@ No extra idempotency or uncertain-paste replay prevention is added.
   does not provide exactly-once recovery for a completed row.
 - Input arriving after AM's due-time check but before paste can follow Continue.
 - If dispatcher crashes/restarts while delivering Continue, its running row can
-  remain unsettled. That failure neither retries nor notifies until a later
+  remain unsettled. All later terminal health hooks in that group wait behind
+  it, including rate-limit and authentication notices, and the observer skips
+  screen checks while continuation owns the screen. Processing resumes in queue
+  order after release. That failure neither retries nor notifies until a later
   ordinary message is delivered and AM receives its existing one-way hint.
   The hint is not durable and can be lost during AM restart; another later
   message is then needed. This PR does not change control startup recovery or
@@ -73,7 +77,8 @@ and the C4 fixture database to complete three failed continuations and send one
 ordinary service-error notice. A terminal failure arriving while control is
 running waits, then settles after done. Other cases cover persisted deadlines,
 frozen recipient, AM restart, successful Stop, eligibility, new-round and due
-pending-input cancellation, and a final transport failure with a waiting hook.
+pending-input cancellation, and a final transport failure without any subsequent
+hook.
 
 The native timing case observes dequeue at failure+0.2s, cancels at +1s before
 Stop at +25s and the +30s deadline, and never replays after state reopen.

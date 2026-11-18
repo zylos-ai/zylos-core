@@ -161,9 +161,12 @@ test('structured retryable error with context/request/content exclusion never re
 test('a later failed turn leaves at most one pending continuation in its scope',async t=>{
  const f=setup(t);f.write('stop_failure','server_error');await f.consume();await f.process();
  const first=f.store.read(f.group).failure_retry.controlId;
- f.write('stop_failure','network_error');await f.consume();await f.process();
+ f.advance(30000);
+ const later=f.write('stop_failure','network_error');await f.consume();await f.process();
  assert.equal(f.db.prepare('SELECT status FROM control_queue WHERE id=?').get(first).status,'timeout');
  assert.equal(f.db.prepare("SELECT count(*) n FROM control_queue WHERE status='pending'").get().n,1);
+ const retry=f.store.read(f.group).failure_retry;
+ assert.equal(retry.attempts,1);assert.equal(retry.dueAt,later.received_at+30000);
 });
 
 // Boundary: late old Stop before a new round → retry remains eligible.
@@ -185,6 +188,8 @@ test('ordinary input queued at the retry deadline cancels it permanently without
  const f=setup(t);f.write('stop_failure','server_error');await f.consume();await f.process();
  const retry=f.store.read(f.group).failure_retry;
  const input=f.c4.insertConversation('in','telegram','owner','new ordinary input');
+ await f.process();
+ assert.equal(f.store.read(f.group).failure_retry.controlId,retry.controlId,'pending input is checked only at the deadline');
  f.advance(30000);await f.process();
  assert.equal(f.store.read(f.group).failure_retry,undefined);assert.equal(f.store.read(f.group).pending_notice,undefined);
  assert.equal(f.db.prepare('SELECT status FROM control_queue WHERE id=?').get(retry.controlId).status,'timeout');
@@ -237,11 +242,81 @@ test('AM sees native successor at 0.2s and cancels before its 25s Stop and 30s d
 test('a control that fails delivery restores the original failure notice',async t=>{
  const f=setup(t);f.write('stop_failure','server_error');await f.consume();await f.process();
  const retry=f.store.read(f.group).failure_retry;
- f.c4.claimControl(retry.controlId);f.write('stop_failure','server_error');await f.consume();
- assert.equal(f.store.read(f.group).failure_retry.eventId,retry.eventId);
+ f.c4.claimControl(retry.controlId);
  f.db.prepare("UPDATE control_queue SET status='failed' WHERE id=?").run(retry.controlId);
  await f.consume();await f.process();
  assert.equal(f.store.read(f.group).failure_retry,undefined);
  assert.equal(f.store.read(f.group).pending_notice.event_id,retry.eventId);
  assert.equal(f.store.read(f.group).pending_notice.notice.noticeCode,'service_error');
+});
+
+// Boundary: pre-deadline terminal backlog consumed after done must not reset the
+// budget. Run for submitted-event accounting changes; isolated DB/files only.
+test('an old Stop read after delivery does not clear the continuation budget',async t=>{
+ const f=setup(t);f.write('stop_failure','server_error');await f.consume();await f.process();
+ const retry=f.store.read(f.group).failure_retry;
+ f.write('stop'); // Written before due, but the reader is stalled until after delivery.
+ f.advance(retry.dueAt-f.now());
+ f.db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(retry.controlId);
+ await f.consume();
+ assert.equal(f.store.read(f.group).failure_retry.eventId,retry.eventId);
+ f.write('stop_failure','server_error');await f.consume();
+ assert.equal(f.store.read(f.group).failure_retry.attempts,2);
+});
+
+// Boundary: missing main-prompt proof must not inject Continue. Run for retry
+// eligibility changes; real reducer/reader with isolated event files and DB.
+test('a failure without prompt proof waits for verification instead of retrying',async t=>{
+ const f=setup(t);f.write('stop_failure','server_error',{prompt_id:null});
+ const results=await f.consume();assert.equal(results[0].verify,true);await f.process();
+ assert.equal(f.store.read(f.group).failure_retry,undefined);
+ assert.equal(f.db.prepare('SELECT count(*) n FROM control_queue').get().n,0);
+});
+
+// Boundary: queued ordinary input after claim must not erase an already pasted
+// Continue's accounting. Run for due-time cancellation changes; isolated DB/files.
+test('ordinary pending input leaves a claimed continuation to settle normally',async t=>{
+ const f=setup(t);f.write('stop_failure','server_error');await f.consume();await f.process();
+ const retry=f.store.read(f.group).failure_retry;f.advance(retry.dueAt-f.now());
+ f.c4.claimControl(retry.controlId);
+ f.c4.insertConversation('in','telegram','owner','next request');
+ await f.process();
+ assert.equal(f.db.prepare('SELECT status FROM control_queue WHERE id=?').get(retry.controlId).status,'running');
+ assert.equal(f.store.read(f.group).failure_retry.eventId,retry.eventId);
+ f.db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(retry.controlId);
+ f.write('stop_failure','server_error');await f.consume();
+ assert.equal(f.store.read(f.group).failure_retry.attempts,2);
+});
+
+// Boundary: standard manual expiry ends the retry without a false failure
+// notice. Run for terminal-control settlement changes; isolated DB/files only.
+test('an expired continuation clears retry without restoring an error notice',async t=>{
+ const f=setup(t);f.write('stop_failure','server_error');await f.consume();await f.process();
+ const retry=f.store.read(f.group).failure_retry;
+ f.c4.expireControlById(retry.controlId);await f.process();
+ assert.equal(f.store.read(f.group).failure_retry,undefined);
+ assert.equal(f.store.read(f.group).pending_notice,undefined);
+});
+
+// Boundary: shared health cache must not make another group's terminal hook
+// wait on this group's running Continue. Run for group selection/reader changes;
+// isolated two-group event files and in-memory C4 DB, no runtime or tmux.
+test('a running continuation never blocks terminal hooks in another group',async t=>{
+ const f=setup(t);f.write('stop_failure','server_error');await f.consume();await f.process();
+ const retry=f.store.read(f.group).failure_retry;f.c4.claimControl(retry.controlId);
+ const other={...f.scene,sessionGroup:'telegram:other',runDir:path.join(f.root,'other-run')};
+ // Reopen selecting the first group to expose stale top-level cache projection
+ // as well as the reader's resulting stall in a different group.
+ const second=f.write('stop_failure','rate_limit');
+ appendEvent(path.join(other.runDir,'events.jsonl'),second);
+ const reopened=new RuntimeHealthCoordinator({zylosDir:f.root,now:f.now});
+ reopened.store('claude').read(f.group);
+ const reader=new HealthEventReader({coordinator:reopened,zylosDir:f.root,now:f.now,quota:()=>null,
+   getControl:id=>f.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id)});
+ t.after(()=>reader.close());
+ const results=await reader.consumeScene(other,f.identity);
+ assert.equal(results.length,1);assert.equal(results[0].status,'processed');
+ assert.equal(reopened.store('claude').read(other.sessionGroup).failure_retry,undefined);
+ assert.equal(reopened.store('claude').read(other.sessionGroup).last_processed.event_id,second.event_id);
+ assert.equal(reopened.store('claude').read(f.group).failure_retry.controlId,retry.controlId);
 });
