@@ -15,33 +15,30 @@ Unlike the former manual sequence, inbox rotation happens before the model reads
 ## Reconcile facts
 
 Reconcile old state, all difference summaries, this batch, segments, and logs
-   by facts. Prepare a checkpoint summary including every inbox item absorbed
-   this round, and state changes containing current focus, genuine pending work and blockers.
-   Reconcile changed statuses in their original entries: replace stale status
-   text instead of appending a contradictory "merged" or "completed" note for the
-   same work. Remove completed and superseded entries this round, including old
-   ones found during the full state read. When prepare returns rewrite, rebuild
-   a compact state from the fully read facts, aiming for <=20 KiB; do not carry
-   the old completed narrative into the new document. In edit mode, change only
-   the necessary fragments, including removing stale completed entries.
-   Target the 20 KiB soft budget (STATE_BUDGET_BYTES in sync-files.js). Before
-   removing each completed or superseded item, include one result line per item
-   in this round's checkpoint summary for Origin Sync to record on project pages;
-   group Sync still does not write shared references. Preserve all unresolved
-   work and pending absorbed messages even if they exceed the budget.
-   The commit script fills `inbox_committed` from this round's listed segments;
-   a prepared copy may retain its old value, while a newly created state leaves
-   it empty. Set coverage to the batch end; in edit mode change only that field.
-   Preserve a valid `synced_at` from the existing state/skeleton as a temporary
-   placeholder (or `1970-01-01T00:00:00Z` when neither exists); do not calculate
-   or round a new timestamp. Commit validates the
-   header format and overwrites this field with its actual UTC publication time.
+by facts. Prepare a checkpoint summary including every inbox item absorbed
+this round, and state changes containing current focus, genuine pending work and blockers.
+Reconcile changed statuses in their original entries: replace stale status
+text instead of appending a contradictory "merged" or "completed" note for the
+same work. Remove completed and superseded entries this round, including old
+ones found during the full state read. When prepare returns rewrite, rebuild
+a compact state from the fully read facts, aiming for <=20 KiB; do not carry
+the old completed narrative into the new document. In edit mode, change only
+the necessary fragments, including removing stale completed entries.
+Target the 20 KiB soft budget (STATE_BUDGET_BYTES in sync-files.js). Before
+removing each completed or superseded item, include one result line per item
+in this round's checkpoint summary for Origin Sync to record on project pages;
+group Sync still does not write shared references. Preserve all unresolved
+work and pending absorbed messages even if they exceed the budget.
+Preserve a valid `synced_at` from the existing state/skeleton as a temporary
+placeholder (or `1970-01-01T00:00:00Z` when neither exists); do not calculate
+or round a new timestamp. Commit validates the
+header format and overwrites this field with its actual UTC publication time.
 For any absorbed-message block in Pending, use actual progress and C4 source
-   messages to identify followed-up IDs. An outbound audit row alone does not
-   prove delivery; uncertain or failed sends are not completion evidence.
-   Do **not** rewrite or manually copy the block. Leave any script-copied
-   block unchanged; commit strips that copy and preserves the official lines. Keep a separate
-   `followedUpIds` array; no progress means an empty array.
+messages to identify followed-up IDs. An outbound audit row alone does not
+prove delivery; uncertain or failed sends are not completion evidence.
+Do **not** rewrite or manually copy the block. Leave any script-copied
+block unchanged; commit strips that copy and preserves the official lines. Keep a separate
+`followedUpIds` array; no progress means an empty array.
 
 ## Save summary and prepare state
 

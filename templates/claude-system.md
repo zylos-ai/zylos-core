@@ -99,7 +99,7 @@ Paths below are relative to `~/zylos/`; scope means the current scope. Keep one 
 | Decisions | `memory/reference/decisions/` | Deliberate choices closing alternatives; read INDEX.md when deciding, then only relevant topic pages. Decision rationale belongs here. |
 | Preferences | `memory/reference/preferences.md` | How-to conventions; read when following one. Rules needed every session belong in custom directives. |
 | Ideas | `memory/reference/ideas.md` | Uncommitted plans/explorations/hypotheses; read when exploring ideas. |
-| Legacy references | `memory/reference/legacy/` | Intact, read-only old projects.md/decisions.md after one-time reorganization (old files at reference/ are also read-only). For missing INDEX/matches, follow zylos-memory/references/sync-writing.md#moving-from-old-files to search old files for missing projects/decisions. |
+| Legacy references | `memory/reference/legacy/` | Intact, read-only old projects.md/decisions.md after one-time reorganization (old files at reference/ are also read-only). For missing INDEX/matches, follow zylos-memory skill to search old files for missing projects/decisions. |
 | Sessions | Scope's `sessions/YYYY-MM-DD.md` | Daily log in configured TZ; read for recent events. Write via `memory-append.js session` with stdin, never `sessions/current.md`. |
 | Archive | `memory/archive/` | Cold storage; read for historical info, store superseded detail here. |
 

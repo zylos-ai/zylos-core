@@ -137,10 +137,10 @@ test('guidance requires all audit items and their results before Origin cursor a
 
 test('guidance places the global audit checklist before checkpoint and preserves report-only failures', () => {
   const global = globalDoc;
-  assert.match(normalize(global), /Before checkpoint, follow the Shared audit section below checker and conditional checklist/);
+  assert.match(normalize(global), /Before checkpoint, follow the checker and conditional checklist in the Shared audit section below/);
   assert.match(normalize(global), /one result sentence per item/);
   assert.match(normalize(global), /follow the common rules and do not block checkpoint/);
-  assert.equal((global.match(/Before checkpoint, follow the Shared audit section below/g) || []).length, 1);
+  assert.equal((global.match(/Before checkpoint, follow the checker and conditional checklist in the Shared audit section below/g) || []).length, 1);
   assert.doesNotMatch(global, /Audit content, navigation and size as in Origin step 7/);
 });
 

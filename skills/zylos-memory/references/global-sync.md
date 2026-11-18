@@ -20,8 +20,7 @@ C4 chain. Follow the working-state steps below: read-before-cleanup, recovery, s
   means redirect the change to the corresponding page and continue, not a
   failed self-write. After applicable corrected retries, any other necessary self-write failure stops checkpoint,
   temporary state, and commit; release once and report. Already written
-  fragments remain. Before checkpoint, follow the Shared audit section below checker and
-  conditional checklist, and include one result sentence per item in the Sync
+  fragments remain. Before checkpoint, follow the checker and conditional checklist in the Shared audit section below, and include one result sentence per item in the Sync
   report. Audit errors, including rebuild failure, follow the common rules and
   do not block checkpoint.
 - After a substantive identity write, request rotation. Failure is reported
