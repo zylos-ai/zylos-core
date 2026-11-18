@@ -11,15 +11,35 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { randomUUID } from 'node:crypto';
 const require = createRequire(import.meta.url);
 function fixture(t, filename = ':memory:') {
   const { db, store } = storeFixture(t, {}, filename);
   const state = () => ({ transitions: db.prepare('SELECT * FROM mode_transitions ORDER BY rowid').all(), messages: db.prepare('SELECT * FROM conversations ORDER BY id').all(), checkpoints: db.prepare('SELECT * FROM checkpoints ORDER BY id').all(), fences: db.prepare('SELECT * FROM drain_fences ORDER BY session_group').all() });
   return { db, store, state };
 }
-function converting(store, source = 'single') {
-  const { runId } = store.beginModeTransition(source, source === 'single' ? 'multi' : 'single', { kind: 'first_migration' }); store.setDrainFence('*'); store.absorbForTransition(runId); return runId;
+function converting(store) {
+  const { runId } = store.beginModeTransition('single', 'multi', { kind: 'first_migration' }); store.setDrainFence('*'); store.absorbForTransition(runId); return runId;
 }
+for (const [source, target] of [['multi', 'single'], ['single', 'single'], ['multi', 'multi']]) test(`first migration rejects ${source} to ${target} before writing`, t => {
+  const { db, store, state } = fixture(t);
+  store.insertConversation('in', 'foo', 'e', 'pending');
+  const before = state(), changes = db.prepare('SELECT total_changes() AS n').get().n;
+  assert.throws(() => store.beginModeTransition(source, target, { kind: 'first_migration' }),
+    { code: source === target ? 'TRANSITION_SAME_MODE' : 'TRANSITION_PRECONDITION', persisted: [] });
+  assert.deepEqual(state(), before); assert.equal(db.prepare('SELECT total_changes() AS n').get().n, changes);
+});
+for (const phase of ['gating', 'converting']) test(`absorption rejects a persisted reverse first migration in ${phase} without writes`, t => {
+  const { db, store, state } = fixture(t);
+  const message = store.insertConversation('in', 'foo', 'e', 'pending');
+  const { runId } = store.beginModeTransition('single', 'multi', { kind: 'first_migration' }); store.setDrainFence('*');
+  // Persist a malformed historical record directly, without using a reverse writer.
+  db.prepare("UPDATE mode_transitions SET source_mode='multi',target_mode='single',phase=?,cutoff=?,coverage_snapshot=?,absorbed_ids=? WHERE run_id=?")
+    .run(phase, phase === 'gating' ? null : message.id, phase === 'gating' ? null : '{}', phase === 'gating' ? null : '[]', runId);
+  const before = state(), changes = db.prepare('SELECT total_changes() AS n').get().n;
+  assert.throws(() => store.absorbForTransition(runId), { code: 'TRANSITION_PRECONDITION', persisted: [] });
+  assert.deepEqual(state(), before); assert.equal(db.prepare('SELECT total_changes() AS n').get().n, changes);
+});
 test('absorption includes legacy empty scope, snapshots original coverage, and is replay stable', t => {
   const { db, store } = fixture(t);
   const a = store.insertConversation('out', 'foo', 'e', 'covered'); store.createCheckpoint('*', a.id, 'global');
@@ -79,8 +99,10 @@ test('begin enforces one open transition and all forbidden phase edges reject', 
 });
 test('cutover never writes a global checkpoint, including historical multi-source conversion rows', t => {
   const { db, store } = fixture(t);
-  store.insertConversation('in', 'foo', 'e', 'pending');
-  const runId = converting(store, 'multi');
+  const message = store.insertConversation('in', 'foo', 'e', 'pending');
+  const runId = randomUUID();
+  db.prepare("INSERT INTO mode_transitions(run_id,source_mode,target_mode,kind,phase,cutoff,coverage_snapshot,absorbed_ids,created_at,updated_at) VALUES(?,'multi','single','switch','converting',?,'{}',?,1,1)").run(runId, message.id, JSON.stringify([message.id]));
+  db.prepare("UPDATE conversations SET status='switch_absorbed' WHERE id=?").run(message.id);
   const before = db.prepare('SELECT * FROM checkpoints').all();
   store.setModeTransitionPhase(runId, 'cutover');
   store.setModeTransitionPhase(runId, 'cutover', { reason: 'retry' });

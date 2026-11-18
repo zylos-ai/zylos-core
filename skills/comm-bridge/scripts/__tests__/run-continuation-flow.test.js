@@ -62,40 +62,40 @@ test('a restarted supervisor resumes an absent group through the persistent cont
   assert.equal(f.db.listRunEndings([group])[0].continuationPending, 0);
 });
 
-// Cutover contract: the existing coordinator must clear persistent restart
-// markers through the real store. Run for marker clearing/cutover changes;
+// Cutover contract: the first-migration coordinator commits its phase before
+// changing persistent restart markers. Run for phase-ordering/marker changes;
 // all database state is fixture-local and conversion has no filesystem side effects.
-test('mode cutover clears pending restart markers through the normal coordinator', async t => {
+test('first migration enters cutover before changing persistent restart markers', async t => {
   const f = routerFixture(t);
   const message = f.add('team');
   f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(message.id);
   assert.deepEqual(f.db.recordRunEnd('team', { runId: 'old-run', reason: 'unexpected' }), { recorded: true });
   f.db.recordRunEnd('origin', { runId: 'old-origin', reason: 'unexpected' });
   assert.equal(f.db.listRunEndings(['team', 'origin']).filter(row => row.continuationPending).length, 2);
-  const { runId } = f.db.beginModeTransition('multi', 'single', { kind: 'first_migration' });
+  const { runId } = f.db.beginModeTransition('single', 'multi', { kind: 'first_migration' });
   f.db.setDrainFence('*');
   f.db.absorbForTransition(runId);
-  const coordinator = new ModeSwitchCoordinator({ db: f.db, readMode: () => ({ mode: 'multi' }),
+  const coordinator = new ModeSwitchCoordinator({ db: f.db, readMode: () => ({ mode: 'single', keyPresent: false }),
     convert: async () => {}, diagnostic: () => {}, now: f.now });
   await coordinator.advance();
   assert.equal(f.db.getModeTransition().phase, 'cutover');
   assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM control_queue').get().n, 0);
-  assert.deepEqual(f.db.listPendingContinuations(), []);
-  assert.ok(f.db.listRunEndings(['team', 'origin']).every(row => row.continuationPending === 0));
+  assert.equal(f.db.listPendingContinuations().length, 1);
+  assert.ok(f.db.listRunEndings(['team', 'origin']).every(row => row.continuationPending === 1));
 });
 
 
 // Real lifecycle/coordinator/store boundary: run for reclaim completion during
 // mode gating or continuation suppression/cutover changes. All C4 state is local
 // to the fixture; scene stop, conversion and dispatcher restart are injected I/O.
-test('upgrade reclaim finishes during gating without creating a continuation before cutover', async t => {
+test('native gating finishes an upgrade reclaim without conversion or premature continuation', async t => {
   const f = routerFixture(t);
   const message = f.add('gated-upgrade');
   f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(message.id);
   const group = message.session_group, runId = 'upgrade-run';
   f.put(group, { sessionGroup: group, runId, processRunning: false });
   f.db.setDrainFence(group, { reason: 'upgrade', runId });
-  const transition = f.db.beginModeTransition('multi', 'single', { kind: 'first_migration' });
+  f.db.beginModeTransition('multi', 'single');
   let mode = 'multi';
   const stops = [], conversions = [], writes = [], restarts = [];
   const observe = async () => [...f.scene.values()];
@@ -107,7 +107,7 @@ test('upgrade reclaim finishes during gating without creating a continuation bef
   const coordinator = new ModeSwitchCoordinator({
     db: f.db, lifecycle, readMode: () => ({ mode }), readConfiguration: async () => ({ runtime: 'claude' }),
     observe, readRequests: () => [],
-    convert: async row => { conversions.push(row.run_id); },
+    convert: async row => { conversions.push(row.run_id); assert.fail('Native switching must not convert memory'); },
     writeMode: async target => { writes.push(target); mode = target; },
     restart: { advance: async request => { restarts.push(request.runId); return { confirmed: true }; } },
     diagnostic: () => {}, now: f.now,
@@ -121,17 +121,9 @@ test('upgrade reclaim finishes during gating without creating a continuation bef
     reason: row.reason, continuationPending: row.continuationPending })),
   [{ sessionGroup: group, runId, reason: 'upgrade', continuationPending: 0 }]);
   assert.equal(groupControls(), 0);
-  assert.equal(f.db.getModeTransition().phase, 'converting', 'gating must finish after the existing upgrade reclaim');
-  await coordinator.advance();
-  assert.deepEqual(conversions, [transition.runId]);
-  assert.equal(f.db.getModeTransition().phase, 'cutover');
-  assert.equal(groupControls(), 0);
-  assert.equal(f.db.listPendingContinuations().length, 0);
-  await coordinator.advance();
-  assert.deepEqual(writes, ['single']);assert.deepEqual(restarts, [transition.runId]);
-  assert.equal(f.db.getModeTransition(), null);
-  assert.equal(f.db.getDrainFence('*'), null);
-  assert.equal(groupControls(), 0);
+  assert.equal(f.db.getModeTransition().phase, 'cutover', 'gating must finish after the existing upgrade reclaim');
+  assert.deepEqual(conversions, []); assert.deepEqual(writes, []); assert.deepEqual(restarts, []);
+  assert.equal(groupControls(), 0); assert.equal(f.db.listPendingContinuations().length, 0);
 });
 
 // Real Router/Store boundary with injected launch and terminal transport. Run for
