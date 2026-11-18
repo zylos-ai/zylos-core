@@ -31,6 +31,50 @@ function fixture(t) {
   return { root, memory, db, store, filename, deps, snapshot, owner: () => new GlobalMemoryHandoverCoordinator(deps) };
 }
 
+// Boundary: installation-template classification through real C4 and memory
+// append. Run when archive-only rules or template installation change; no
+// runtime or external service is started. Both Origin states and daily-record
+// variants must leave transition/queue data unchanged.
+for (const originExists of [false, true]) for (const daily of [false, true]) {
+  test(`installation template archives without delivery with Origin state ${originExists} and daily records ${daily}`, async t => {
+    const f = fixture(t), before = f.snapshot();
+    const template = fs.readFileSync(new URL('../templates/memory/state.md', import.meta.url), 'utf8');
+    fs.writeFileSync(path.join(f.memory, 'state.md'), template);
+    fs.unlinkSync(path.join(f.memory, 'inbox.md'));
+    const origin = path.join(f.memory, 'session-groups/origin');
+    fs.mkdirSync(origin, { recursive: true });
+    if (originExists) fs.writeFileSync(path.join(origin, 'state.md'), 'preserved Origin state');
+    fs.writeFileSync(path.join(origin, 'inbox.md'), 'preserved Origin inbox\n');
+    fs.writeFileSync(path.join(origin, 'handoff.md'), 'preserved Origin handoff');
+    if (daily) {
+      fs.mkdirSync(path.join(f.memory, 'sessions'));
+      fs.writeFileSync(path.join(f.memory, 'sessions/old.md'), 'daily history');
+    }
+    const owner = f.owner(), plan = await owner.advance();
+    assert.equal(plan.rule, 2); assert.equal(plan.deliver, false); assert.equal(plan.interval, undefined);
+    assert.equal(owner.pending(), false);
+    const archive = path.join(f.memory, 'mode-switch', plan.id, 'previous/_global');
+    assert.equal(fs.readFileSync(path.join(archive, 'state.md'), 'utf8'), template);
+    assert.equal(fs.existsSync(path.join(archive, '.done')), true);
+    assert.equal(fs.readFileSync(path.join(origin, 'state.md'), 'utf8'),
+      originExists ? 'preserved Origin state' : template.replace('scope=*', 'scope=origin'));
+    assert.equal(fs.readFileSync(path.join(origin, 'handoff.md'), 'utf8'), 'preserved Origin handoff');
+    const inbox = fs.readFileSync(path.join(origin, 'inbox.md'), 'utf8');
+    assert.doesNotMatch(inbox, /commitment:|onboarding|installation template/);
+    if (daily) {
+      assert.match(inbox, /^preserved Origin inbox\n/);
+      assert.equal([...inbox.matchAll(/ fact: /g)].length, 1);
+      assert.match(inbox, /daily records remain at/); assert.match(inbox, /not moved/);
+      assert.equal(fs.readFileSync(path.join(f.memory, 'sessions/old.md'), 'utf8'), 'daily history');
+    } else assert.equal(inbox, 'preserved Origin inbox\n');
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM control_queue').get().n, 0);
+    assert.deepEqual(f.snapshot(), before);
+    await owner.advance();
+    assert.equal(fs.readFileSync(path.join(origin, 'inbox.md'), 'utf8'), inbox);
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM control_queue').get().n, 0);
+  });
+}
+
 for (const point of ['before-plan', 'plan', 'rename', 'append', 'enqueue', 'before-done']) test(`actual SIGKILL after ${point} recovers through real C4 and memory append without transition writes`, async t => {
   const f = fixture(t), before = f.snapshot();
   const crashed = spawnSync(process.execPath, [worker, f.root, f.filename, point], { encoding: 'utf8', timeout: 10000 });

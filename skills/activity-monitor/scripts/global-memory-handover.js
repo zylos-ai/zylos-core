@@ -150,10 +150,10 @@ export class GlobalMemoryHandoverCoordinator {
     let rule = 3;
     if (conversion?.target_mode === 'multi' && !this.stat(path.join(this.root, conversion.run_id, 'previous', '_global', '.done')) &&
       files.every(file => file.mtime <= conversion.updated_at)) rule = 1;
-    else if (installationTemplate && !this.stat(path.join(this.memory, 'session-groups', 'origin', 'state.md'))) rule = 2;
+    else if (installationTemplate) rule = 2;
     const plan = { version: 1, id, files: files.map(({ name, mtime }) => ({ name, mtime })), rule, deliver: rule === 3,
       basis: { conversionRunId: conversion?.run_id ?? null, conversionUpdatedAt: conversion?.updated_at ?? null },
-      installationTemplate, dailyRecords: this.entries(path.join(this.memory, 'sessions')).length > 0 };
+      dailyRecords: this.entries(path.join(this.memory, 'sessions')).length > 0 };
     if (rule === 2) plan.template = this.io.readFileSync(currentTemplatePath(), 'utf8').replace('scope=*', 'scope=origin');
     if (plan.deliver && conversion?.target_mode === 'single') {
       plan.interval = { B: await this.db.getGlobalCoverageEnd(), M: await this.readMaxConversationId() };
@@ -191,7 +191,6 @@ export class GlobalMemoryHandoverCoordinator {
     return `Global memory handover ${plan.id}: archived at ${JSON.stringify(archive)}; files: ${JSON.stringify(plan.files.map(file => file.name))}. ` +
       `Daily records remain at ${JSON.stringify(daily)}; read when needed. Read all archived materials completely and verify actual progress before continuing. ` +
       'Record your own work in your own working memory; in multi use internal to relay other groups\' work to their threads, and in single take it over yourself. ' +
-      (plan.installationTemplate ? 'The global state was an installation template; onboarding may still be incomplete, so verify it. ' : '') +
       (plan.interval ? `C4 interval (${plan.interval.B}, ${plan.interval.M}]: rows recorded under origin are covered by Origin\'s own Sync (already or subsequently); rows under other groups were not organized into Origin memory. Read original text by id when needed.` : '');
   }
 }

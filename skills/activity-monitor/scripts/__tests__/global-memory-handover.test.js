@@ -83,11 +83,33 @@ test('rule 2 recognizes installation template and creates scoped current templat
   assert.equal(fs.existsSync(path.join(f.memory, 'session-groups/origin/inbox.md')), false);
 });
 
-for (const change of ['origin-exists', 'one-character']) test(`installation template only archives under exact rule 2: ${change}`, async t => {
-  const f = fixture(t); f.file('state.md', currentTemplate + (change === 'one-character' ? 'x' : ''));
-  if (change === 'origin-exists') f.file('session-groups/origin/state.md', 'existing');
-  const plan = await f.owner().advance(); assert.equal(plan.rule, 3);
-  if (change === 'origin-exists') { assert.match(f.inbox(), /installation template/); assert.match(f.inbox(), /onboarding may still be incomplete/); }
+for (const daily of [false, true]) test(`installation template only archives with existing Origin state and daily records ${daily}`, async t => {
+  const f = fixture(t); f.file('state.md', currentTemplate);
+  f.file('session-groups/origin/state.md', 'existing');
+  f.file('session-groups/origin/inbox.md', 'preserved inbox\n');
+  if (daily) f.file('sessions/old.md', 'daily record');
+  else f.deps.append = () => { assert.fail('archive-only template must not append an entry without daily records'); };
+  const owner = f.owner(), plan = await owner.advance();
+  assert.equal(plan.rule, 2); assert.equal(plan.deliver, false); assert.equal(plan.interval, undefined);
+  assert.equal(owner.pending(), false); assert.equal(f.controls.length, 0);
+  assert.equal(fs.readFileSync(path.join(f.memory, 'session-groups/origin/state.md'), 'utf8'), 'existing');
+  const archive = path.join(f.memory, 'mode-switch', plan.id, 'previous/_global');
+  assert.equal(fs.readFileSync(path.join(archive, 'state.md'), 'utf8'), currentTemplate);
+  assert.equal(fs.existsSync(path.join(archive, '.done')), true);
+  if (daily) {
+    assert.match(f.inbox(), /^preserved inbox\n/); assert.equal([...f.inbox().matchAll(/ fact: /g)].length, 1);
+    assert.doesNotMatch(f.inbox(), /commitment:|onboarding|installation template/);
+    assert.match(f.inbox(), /daily records remain at/); assert.match(f.inbox(), /not moved/);
+    assert.equal(fs.readFileSync(path.join(f.memory, 'sessions/old.md'), 'utf8'), 'daily record');
+  } else assert.equal(f.inbox(), 'preserved inbox\n');
+  await owner.advance(); assert.equal(f.controls.length, 0);
+});
+
+test('installation template changed by one character is handed to Origin', async t => {
+  const f = fixture(t); f.file('state.md', currentTemplate + 'x');
+  f.file('session-groups/origin/state.md', 'existing');
+  const plan = await f.owner().advance(); assert.equal(plan.rule, 3); assert.equal(plan.deliver, true);
+  assert.match(f.inbox(), /commitment:/); assert.equal(f.controls.length, 1);
 });
 
 test('single conversion interval is captured once in plan and survives retry without rereads', async t => {
