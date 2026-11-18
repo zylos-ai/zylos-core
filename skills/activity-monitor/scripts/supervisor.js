@@ -326,7 +326,7 @@ export function createSupervisor(deps) {
       if(configuration.legacy || context.transition || context.fences.some(fence=>fence.sessionGroup==='*'))return;
       const runtime=await deps.resolveTargetRuntime('origin');
       if(health.store(runtime).read().health!=='auth_failed') {originAuthAlerted.delete(runtime);return;}
-      const seconds=Math.floor(now()/1000),need=await db.getOriginNeed(seconds);
+      const seconds=Math.floor(now()/1000),need=await db.getOriginNeed(seconds,{sessionMode:configuration.mode});
       if(need.inbound.oldestAt!==null && seconds-need.inbound.oldestAt>=PENDING_MAX_AGE_SECONDS-300 && !originAuthAlerted.has(runtime)) {
         await deps.alert({event:'origin_auth_blocked',runtime,oldest_at:need.inbound.oldestAt});
         originAuthAlerted.add(runtime);
