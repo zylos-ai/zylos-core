@@ -18,13 +18,13 @@ export class SessionActivity {
     this.busySince=null;this.lastIdleAt=null;this.lastResponseAt=null;
     this.transcriptPartial=Buffer.alloc(0);this.transcriptSkippingLine=false;this.transcriptPending=false;
     this.codexTranscriptMatches=false;
-    this.agyIdleSince=null;
+    this.agyIdleSince=null;this.agyTasksRunning=false;
     this.quietTurnAttemptAt=null;
     this.turnStartedAt=null;this.lastNativeActivityAt=startedAt;this.pendingQuietTurnClose=null;
   }
   close(){this.reader.close();if(this.transcriptFd!==null)fs.closeSync(this.transcriptFd);this.transcriptFd=null;}
   quietTurnDue(now) {
-    return this.turn && this.tools.size===0 && !this.transcriptPending &&
+    return this.turn && this.tools.size===0 && !this.agyTasksRunning && !this.transcriptPending &&
       now-this.lastActivityAt>=OPEN_TURN_INACTIVITY_TIMEOUT_MS;
   }
   claimQuietTurn(expectedLastActivityAt,now) {
@@ -241,15 +241,15 @@ export class SessionActivity {
       Number.isFinite(captured) && captured>=this.startedAt && captured>=this.lastActivityAt && captured<=now;
     if(current) {
       // New statusLine samples are native activity; rereading one is not.
-      this.lastActivityAt=Math.max(this.lastActivityAt,captured);
       this.lastNativeActivityAt=Math.max(this.lastNativeActivityAt,captured);
     }
+    const runningSubagent=Array.isArray(sample?.subagents) && sample.subagents.some(agent=>agent?.status==='running');
+    this.agyTasksRunning=Boolean(current && captured>this.closedThrough && (sample.task_count>0 || runningSubagent));
     this.applyQuietTurnClose();
     // An admitted interrupt fences the preceding non-idle sample. Only a
     // newer native sample can reopen it; idle stability still takes 500ms.
     if(current && captured>this.closedThrough) {
-      const runningSubagent=Array.isArray(sample.subagents) && sample.subagents.some(agent=>agent?.status==='running');
-      if(sample.agent_state==='idle' && !(sample.task_count>0) && !runningSubagent) {
+      if(sample.agent_state==='idle' && !this.agyTasksRunning) {
         this.agyIdleSince ??= captured;
         if(now-this.agyIdleSince>=500) {
           this.turn=false;this.tools.clear();return false;

@@ -805,7 +805,7 @@ test('AGY admitted interrupt recovers without a stale busy status reopening the 
  assert.equal(observed.lastNativeActivityAt,2403000);assert.equal(observed.quietTurnDue,false);
 });
 
-test('AGY child events do not extend the main quiet-turn deadline',t=>{
+test('events carrying agent_id do not extend the AGY main quiet-turn deadline',t=>{
  const {root,activity,row}=fixture(t,'agy');
  activity.consume([row('prompt',{ts:1000})]);
  fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({session_id:'s',agent_state:'working',zylos:{v:1,runId:'r',capturedAt:2000}}));
@@ -814,4 +814,49 @@ test('AGY child events do not extend the main quiet-turn deadline',t=>{
  const observed=activity.read(1202000);
  assert.equal(observed.lastActivityAt,2000);assert.equal(observed.lastNativeActivityAt,2000);
  assert.equal(observed.turnStartedAt,1000);assert.equal(observed.quietTurnDue,true);
+});
+
+// Boundary: native idle samples update freshness without moving TTL activity.
+// Run for AGY sample accounting changes; no native process or database used.
+test('AGY idle samples preserve activity time while advancing native freshness',t=>{
+ const {root,activity,row}=fixture(t,'agy');
+ activity.consume([row('prompt',{ts:1000})]);
+ const write=(capturedAt,extra={})=>fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({
+  session_id:'s',agent_state:'idle',zylos:{v:1,runId:'r',capturedAt},...extra}));
+ write(2000);
+ let result=activity.read(2500);
+ assert.equal(result.state,'idle');assert.equal(result.lastActivityAt,1000);assert.equal(result.lastNativeActivityAt,2000);
+ write(3000);result=activity.read(3500);
+ assert.equal(result.state,'idle');assert.equal(result.lastActivityAt,1000);assert.equal(result.lastNativeActivityAt,3000);
+ write(4000,{agent_state:'working'});result=activity.read(4000);
+ assert.equal(result.state,'busy');assert.equal(result.lastActivityAt,4000);assert.equal(result.lastNativeActivityAt,4000);
+});
+
+// Boundary: a native boundary is appended after sampling a statusLine-only
+// turn but before its durable attempt. Run for recovery ordering changes;
+// private event/sample files only, no runtime, tmux or database is launched.
+for(const boundary of ['stop','prompt'])test(`AGY late attempt cannot replace a newer ${boundary} on restart`,async t=>{
+ const {root,activity,row}=fixture(t,'agy');
+ const {appendEvent}=await import('../../../../cli/lib/event-log.js');
+ const file=path.join(root,'events.jsonl');
+ fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({session_id:'s',agent_state:'working',zylos:{v:1,runId:'r',capturedAt:1000}}));
+ const sampled=activity.read(1201000);
+ assert.equal(sampled.turnStartedAt,1000);assert.equal(sampled.quietTurnDue,true);
+ appendEvent(file,row(boundary,{ts:1201500}));
+ appendEvent(file,row('quiet_turn_interrupt_attempt',{ts:1201501,turn_started_at:1000,
+  last_activity_at:1000,last_native_activity_at:1000,last_response_at:null}));
+ const restarted=new SessionActivity({runDir:root,runId:'r',sessionId:'s',runtime:'agy',startedAt:100});
+ t.after(()=>restarted.close());
+ let result=restarted.read(1202100);
+ assert.equal(result.state,boundary==='stop'?'idle':'busy');
+ assert.equal(result.turnOpen,boundary!=='stop');
+ if(boundary==='prompt') {
+  assert.equal(result.turnStartedAt,1201500);
+  result=restarted.read(2401500);
+  assert.equal(result.quietTurnDue,true);
+  assert.equal(restarted.claimQuietTurn(1201500,2401500),true);
+ } else {
+  result=restarted.read(3601500);
+  assert.equal(result.state,'idle');assert.equal(result.turnOpen,false);
+ }
 });

@@ -997,3 +997,35 @@ for(const outcome of ['admitted','unknown'])test(`AGY statusLine-only ${outcome}
  }
  assert.equal(attempts,2);
 });
+
+// Boundary: native AGY background work -> real supervisor eligibility -> queue.
+// Run for AGY busy/quiet-turn changes; skip unrelated UI. Official runner uses
+// private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; DB is injected, no tmux/runtime started.
+for(const kind of ['subagent','tasks'])test(`AGY ${kind} remain busy without Escape beyond twenty minutes`,async t=>{
+ let now=1000;const controls=[];
+ const f=fixture(t,{now:()=>now,database:{insertControl:content=>{controls.push(content);return {id:controls.length};}}});
+ const scene={sessionGroup:'a',runDir:f.root,runId:'r',sessionId:'s',runtime:'agy',createdAt:0,present:true,ready:true};
+ f.scenes.readIdentity=async()=>scene;
+ f.scenes.bindTarget=async()=>({expectedRunId:'r',tmuxTarget:{serverGeneration:'1:1',sessionId:'$1',paneId:'%1'}});
+ const events=path.join(f.root,'events.jsonl');
+ fs.writeFileSync(events,JSON.stringify({run_id:'r',session_id:'s',runtime:'agy',ts:500,event:'prompt'})+'\n');
+ if(kind==='tasks')fs.appendFileSync(events,JSON.stringify({run_id:'r',session_id:'s',runtime:'agy',ts:750,event:'stop'})+'\n');
+ const write=(capturedAt,extra)=>fs.writeFileSync(path.join(f.root,'statusline.json'),JSON.stringify({
+  session_id:'s',zylos:{v:1,runId:'r',capturedAt},...extra}));
+ write(1000,kind==='subagent'?{agent_state:'working',subagents:[{id:'child',status:'running'}]}:{agent_state:'idle',task_count:2});
+ for(const key of ['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR'])assert.ok(process.env[key]&&!path.resolve(process.env[key]).startsWith(path.resolve(os.userInfo().homedir)+path.sep));
+ t.diagnostic(JSON.stringify({HOME:process.env.HOME,ZYLOS_DIR:process.env.ZYLOS_DIR,PM2_HOME:process.env.PM2_HOME,TMPDIR:process.env.TMPDIR,runDir:f.root,database:'injected',tmux:'unused'}));
+ assert.equal(f.supervisor.readActivity(scene).state,'busy');
+ for(now of [1201000,2401000]) {
+  assert.equal(await f.supervisor.interruptQuietTurn(scene),false);
+  const result=f.supervisor.readActivity(scene);
+  assert.equal(result.state,'busy');assert.equal(result.turnOpen,true);assert.equal(result.quietTurnDue,false);
+  assert.equal(controls.length,0);
+ }
+ // Replacing the sample removes the exemption and uses the existing clock.
+ write(now,{agent_state:'working',task_count:0,subagents:[{id:'child',status:'completed'}]});
+ assert.equal(await f.supervisor.interruptQuietTurn(scene),false);
+ now+=1200000;
+ assert.equal(await f.supervisor.interruptQuietTurn(scene),true);
+ assert.deepEqual(controls,['[KEYSTROKE]Escape']);
+});
