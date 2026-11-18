@@ -6,7 +6,7 @@ import { guardDatabase } from './sqlite-schema.js';
 import * as schema from './c4-schema.js';
 import { loadCoreModule } from './router/core-modules.js';
 
-const REASONS = ['auth_rejected', 'runtime_unavailable', 'launch_failed', 'ready_timeout', 'delivery_failed',
+const REASONS = ['launch_failed', 'ready_timeout', 'delivery_failed',
   'delivery_unverified', 'pending_expired', 'orphan_expired', 'orphan_retry_exhausted'];
 const PHASES = ['preflight', 'new_session', 'executor_init', 'exec_confirm', 'runtime_ready'];
 const CAUSES = ['timeout', 'ready_timeout', 'launch_failed', 'LAUNCH_FAILED', 'RUNTIME_NOT_INSTALLED', 'MODEL_CONFIG_REJECTED'];
