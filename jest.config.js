@@ -3,6 +3,7 @@ export default {
   testPathIgnorePatterns: [
     ...(process.env.ZYLOS_SLOW_TESTS === '1' ? [] : ['\\.slow\\.test\\.js$']),
     '<rootDir>/test/failure-continuation.integration.test.js',
+    '<rootDir>/test/group-sync-run.integration.test.js',
     '<rootDir>/test/memory-budget-browser.test.js',
     '<rootDir>/test/memory-startup-budget.integration.test.js',
     '<rootDir>/test/session-start-failure.integration.test.js',

@@ -6,7 +6,7 @@ Record one work effort with a defined scope and lifecycle per page under
 `reference/projects/`. Read `reference/projects/INDEX.md` first, then the relevant
 pages; when no entry matches, Grep this directory including `archive/`, then
 consult the read-only old `reference/projects.md` or `reference/legacy/` before
-creating a page. See [moving from old files](sync-procedures.md#moving-from-old-files).
+creating a page. See [moving from old files](sync-writing.md#moving-from-old-files).
 
 Use a short ASCII filename containing lowercase letters, digits and hyphens,
 with a `.md` extension and at most 48 characters including the extension.

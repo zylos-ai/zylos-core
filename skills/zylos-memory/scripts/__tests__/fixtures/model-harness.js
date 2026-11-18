@@ -20,7 +20,7 @@ const digest = value => createHash('sha256').update(value).digest('hex');
 export const provenIds = [3, 17, 89, 144, 233, 377, 512, 688, 901, 997];
 const originalCount = 1000;
 const oldDate = '2026-10-20T08:00:00Z';
-const scripts = Object.fromEntries(['sync-lock', 'sync-files', 'origin-cursor', 'request-rotation', 'reference-index']
+const scripts = Object.fromEntries(['sync-run', 'sync-lock', 'sync-files', 'origin-cursor', 'request-rotation', 'reference-index']
   .map(name => [name, path.join(memoryScripts, `${name}.js`)]));
 Object.assign(scripts, Object.fromEntries(['c4-db', 'c4-fetch'].map(name => [name, path.join(bridgeScripts, `${name}.js`)])));
 
@@ -176,6 +176,9 @@ export async function createToolExecutor(f) {
       try {
         if (request.name === 'read_file') {
           const file = fixturePath(f, a.path), info = fs.statSync(file);
+          if (!injected && f.kind === 'group' && f.fault === 'read-failure' && path.basename(file) === 'batch.txt') {
+            injected = true; event.injection = f.fault; throw Object.assign(new Error('Injected required source read failure'), { code: 'READ_FAILED' });
+          }
           const startByte = a.startByte ?? 0, endByteExclusive = a.endByteExclusive ?? info.size;
           if (![startByte, endByteExclusive].every(Number.isSafeInteger) || startByte < 0 || endByteExclusive < startByte || endByteExclusive > info.size) throw new Error('Invalid byte range');
           if (endByteExclusive - startByte > 2 * 1024 * 1024) throw new Error('File exceeds read limit; request byte ranges');
@@ -186,7 +189,7 @@ export async function createToolExecutor(f) {
           result = { ok: true, path: a.path, content, startByte, endByteExclusive, bytes: info.size };
         } else if (request.name === 'list_files') result = { ok: true, entries: fs.readdirSync(fixturePath(f, a.path)).sort() };
         else if (request.name === 'edit_memory') {
-          if (!injected && /state\.md\..*\.tmp$/.test(a.path) && ['copy-block', 'temporary-bad-header', 'temporary-missing-section'].includes(f.fault)) {
+          if (!injected && /state\.md(?:\..*)?\.tmp$/.test(a.path) && ['copy-block', 'temporary-bad-header', 'temporary-missing-section'].includes(f.fault)) {
             if (f.fault === 'copy-block') {
               const block = extractAbsorbedBlock(f.original);
               a.replacement = a.replacement.replace('## Pending\n', '## Pending\n\n' + block.title + block.entries.map(item => item.raw).join(''));
@@ -223,12 +226,12 @@ export async function createToolExecutor(f) {
           if (!injected && f.fault === 'read-failure' && a.script === 'c4-fetch' && a.args.includes('--unsummarized')) {
             result = { status: 1, stdout: '', stderr: 'Error [READ_FAILED]: injected required source read failure\n' }; event.injection = f.fault; injected = true;
           }
-          if (!injected && f.fault === 'token-mismatch' && a.script === 'sync-files' && a.args[0] === 'cleanup') {
+          if (!injected && f.fault === 'token-mismatch' && ((a.script === 'sync-files' && a.args[0] === 'cleanup') || (a.script === 'sync-run' && a.args[0] === 'summarize'))) {
             const marker = path.join(f.runDir, 'sync.lock');
             const value = JSON.parse(fs.readFileSync(marker, 'utf8')); value.token = 'b'.repeat(32); fs.writeFileSync(marker, JSON.stringify(value));
             event.injection = f.fault; injected = true;
           }
-          if (!injected && f.fault === 'unknown-id' && a.script === 'sync-files' && a.args[0] === 'commit') {
+          if (!injected && f.fault === 'unknown-id' && ((a.script === 'sync-files' && a.args[0] === 'commit') || (a.script === 'sync-run' && a.args[0] === 'finish'))) {
             a.stdin = JSON.stringify({ ...JSON.parse(a.stdin), followedUpIds: [...JSON.parse(a.stdin).followedUpIds, 1000001] }); event.injection = f.fault; injected = true;
           }
           if (!injected && f.fault === 'release-failure' && a.script === 'sync-lock' && a.args[0] === 'release') {
@@ -238,6 +241,12 @@ export async function createToolExecutor(f) {
             result = { status: 1, stdout: '', stderr: 'Error [DB_WRITE_FAILED]: injected rotation queue failure\n' }; event.injection = f.fault; injected = true;
           }
           result ??= cli(f, a.script, a.args, a.stdin);
+          if (!injected && f.kind === 'group' && f.fault === 'release-failure' && a.script === 'sync-run' && a.args[0] === 'finish' && result.status === 0) {
+            // Model-facing terminal receipt fault: the real commit completed.
+            // Product cleanup behavior is exercised by the orchestration tests.
+            result.stdout = JSON.stringify({ ...JSON.parse(result.stdout), released: false, warnings: ['Injected release publication failure'] });
+            event.injection = f.fault; injected = true;
+          }
         } else throw new Error(`Unknown tool: ${request.name}`);
       } catch (error) { result = { ok: false, code: error.code || 'TOOL_PROTOCOL_ERROR', message: error.message }; }
       event.result = result; event.after = f.snapshot(); f.trace.push(event);
@@ -247,10 +256,10 @@ export async function createToolExecutor(f) {
 }
 
 export function promptFor(f) {
-  const skill = fs.readFileSync(path.join(repository, 'skills/zylos-memory/SKILL.md'), 'utf8');
-  const procedures = fs.readFileSync(path.join(repository, 'skills/zylos-memory/references/sync-procedures.md'), 'utf8');
+  const names = f.kind === 'group' ? ['sync-common', 'group-sync'] : ['sync-common', 'sync-writing', `${f.kind}-sync`];
+  const procedures = names.map(name => fs.readFileSync(path.join(repository, `skills/zylos-memory/references/${name}.md`), 'utf8')).join('\n\n');
   const format = fs.readFileSync(path.join(repository, 'skills/zylos-memory/references/state-format.md'), 'utf8');
-  return `Perform one ${f.kind} Memory Sync, using the production instructions below and only the provided tools. This is an isolated fixture with real scripts and a real restricted MCP tool. Do not access the filesystem outside the tools, and do not delegate again. The requesting supervisor has already launched you as its background worker. Resolve facts from the available inputs; do not infer progress from the scenario name. Report the outcome and any failure honestly in your final text.\n\nInherited environment: ZYLOS_DIR=${f.root}; ZYLOS_RUN_ID=${f.env.ZYLOS_RUN_ID}; ${f.scope === '*' ? 'ZYLOS_SESSION_GROUP is absent' : 'ZYLOS_SESSION_GROUP=' + f.scope}; TZ=UTC. Script names map directly to run_script. read_file/list_files paths are relative to ZYLOS_DIR; edit_memory paths are relative to memory as in the production tool. No native write tool is permitted.\n\n${skill}\n\n${procedures}\n\n${format}`;
+  return `Perform one ${f.kind} Memory Sync, using the production instructions below and only the provided tools. This is an isolated fixture with real scripts and a real restricted MCP tool. Do not access the filesystem outside the tools, and do not delegate again. The requesting supervisor has already launched you as its background worker. Resolve facts from the available inputs; do not infer progress from the scenario name. Report the outcome and any failure honestly in your final text.\n\nInherited environment: ZYLOS_DIR=${f.root}; ZYLOS_RUN_ID=${f.env.ZYLOS_RUN_ID}; ${f.scope === '*' ? 'ZYLOS_SESSION_GROUP is absent' : 'ZYLOS_SESSION_GROUP=' + f.scope}; TZ=UTC. Script names map directly to run_script. read_file/list_files paths are relative to ZYLOS_DIR; edit_memory paths are relative to memory as in the production tool. No native write tool is permitted.\n\n${procedures}\n\n${format}`;
 }
 
 export async function runDriver(f, scenarioId, { executable = process.env.MODEL_WORKFLOW_DRIVER, args = JSON.parse(process.env.MODEL_WORKFLOW_DRIVER_ARGS || '[]'), timeoutMs = 600000 } = {}) {
@@ -330,6 +339,7 @@ function assertCompleteReads(f, events, descriptor, after, before) {
 }
 
 export function assertSuccessfulSync(f, result, expectedIds, { copied = false } = {}) {
+  if (result.trace.some(event => isScript(event, 'sync-run'))) return assertRunSuccessful(f, result, expectedIds, { copied });
   const events = result.trace;
   const commits = events.filter(event => isScript(event, 'sync-files', 'commit'));
   assert.equal(commits.length, 1, 'Exactly one commit attempt');
@@ -340,7 +350,7 @@ export function assertSuccessfulSync(f, result, expectedIds, { copied = false } 
   assert.equal(result.snapshot.rowsHash, f.before.rowsHash, 'C4 source rows are immutable');
   assert.ok(validateStateDocument(result.snapshot.state, { scope: f.scope }));
   const checkpoints = events.filter(event => isScript(event, 'sync-files', 'checkpoint'));
-  const temporary = events.filter(event => event.request.name === 'edit_memory' && /state\.md\..*\.tmp$/.test(event.effective.path));
+  const temporary = events.filter(event => event.request.name === 'edit_memory' && /state\.md(?:\..*)?\.tmp$/.test(event.effective.path));
   assert.equal(checkpoints.length, 1); assert.equal(temporary.length, 1);
   assert.ok(statusOkay(checkpoints[0])); assert.equal(temporary[0].result.ok, true);
   assert.equal(extractAbsorbedBlock(temporary[0].request.arguments.replacement).entries.length, 0, 'The model must not copy the absorbed block');
@@ -394,7 +404,60 @@ export function assertSuccessfulSync(f, result, expectedIds, { copied = false } 
   }
 }
 
+function assertRunSuccessful(f, result, expectedIds, { copied }) {
+  const events = result.trace;
+  const starts = events.filter(event => isScript(event, 'sync-run', 'start'));
+  const summaries = events.filter(event => isScript(event, 'sync-run', 'summarize'));
+  const finishes = events.filter(event => isScript(event, 'sync-run', 'finish'));
+  assert.equal(starts.length, 1); assert.equal(summaries.length, 1); assert.equal(finishes.length, 1);
+  for (const event of [...starts, ...summaries, ...finishes]) assert.ok(statusOkay(event), JSON.stringify(event.result));
+  const manifest = JSON.parse(starts[0].result.stdout), outcome = JSON.parse(finishes[0].result.stdout);
+  assert.equal(outcome.committed, true);
+  assert.deepEqual(sorted(JSON.parse(finishes[0].effective.stdin).followedUpIds), sorted(expectedIds));
+  assert.deepEqual(Object.keys(JSON.parse(finishes[0].effective.stdin)), ['followedUpIds']);
+  assertPreserved(f.before.state, result.snapshot.state, expectedIds);
+  assert.equal(result.snapshot.rowsHash, f.before.rowsHash);
+  assert.ok(validateStateDocument(result.snapshot.state, { scope: f.scope }));
+  assert.equal(parseStateHeader(result.snapshot.state, { scope: f.scope }).coverage, manifest.end);
+  const temporary = events.filter(event => event.request.name === 'edit_memory' && /state\.md(?:\..*)?\.tmp$/.test(event.effective.path));
+  assert.ok(temporary.length > 0);
+  for (const edit of temporary) {
+    assert.ok(edit.sequence > summaries[0].sequence && edit.sequence < finishes[0].sequence);
+    assert.equal(edit.result.ok, true);
+    assert.equal(extractAbsorbedBlock(edit.request.arguments.replacement).entries.length, 0);
+  }
+  for (const descriptor of [manifest.batch, manifest.summaries, manifest.state, ...manifest.inputs.segments, ...manifest.inputs.sessions].filter(Boolean)) {
+    assertCompleteReads(f, events, descriptor, starts[0].sequence, summaries[0].sequence);
+  }
+  assert.equal(fs.existsSync(manifest.directory), false);
+  assert.ok(manifest.inputs.segments.every(item => !result.snapshot.segments.includes(`inbox.${item.id}.md`)));
+  assert.equal(events.filter(event => isScript(event, 'sync-lock', 'release') || isScript(event, 'sync-run', 'abort')).length, 0);
+  assert.ok(events.filter(event => event.sequence > finishes[0].sequence).every(event => event.request.name === 'read_file'));
+  if (f.fault !== 'release-failure') assert.equal(outcome.released, true);
+  if (copied) assert.match(finishes[0].result.stderr, /copied absorbed-message lines/);
+}
+
+function assertRunFailure(f, result, fault) {
+  const events = result.trace, starts = events.filter(event => isScript(event, 'sync-run', 'start'));
+  assert.equal(starts.length, 1);
+  if (['busy', 'acquire-failure'].includes(fault)) {
+    assert.notEqual(starts[0].result.status, 0);
+    assert.equal(events.at(-1), starts[0]);
+    assert.equal(events.filter(event => isScript(event, 'sync-run', 'abort')).length, 0);
+  } else {
+    const aborts = events.filter(event => isScript(event, 'sync-run', 'abort'));
+    assert.equal(aborts.length, 1); assert.equal(events.at(-1), aborts[0]); assert.ok(statusOkay(aborts[0]));
+    if (fault === 'read-failure') {
+      assert.equal(events.filter(event => isScript(event, 'sync-run', 'summarize') || isScript(event, 'sync-run', 'finish')).length, 0);
+    }
+    if (fault === 'token-mismatch') assert.equal(JSON.parse(fs.readFileSync(path.join(f.runDir, 'sync.lock'))).token, 'b'.repeat(32));
+  }
+  assert.equal(result.snapshot.stateHash, f.before.stateHash);
+  assert.equal(result.snapshot.rowsHash, f.before.rowsHash);
+}
+
 export function assertFailureFlow(f, result, fault) {
+  if (result.trace.some(event => isScript(event, 'sync-run'))) return assertRunFailure(f, result, fault);
   const events = result.trace, releases = events.filter(event => isScript(event, 'sync-lock', 'release'));
   const commits = events.filter(event => isScript(event, 'sync-files', 'commit'));
   if (fault === 'busy' || fault === 'acquire-failure') {

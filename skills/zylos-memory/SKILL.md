@@ -38,16 +38,9 @@ configuration. Origin Sync uses Origin's actual runtime.
   model (or inheritance) from the actual model verified by runtime evidence;
   if the actual model cannot be verified, report it as unverified.
   Give the worker a self-contained message instructing it to read
-  this skill and the matching procedure. Include their paths, the requested job,
+  only the files listed for that job under Worker procedures. Include their paths, the requested job,
   and all facts and environment bindings it needs; it cannot see the parent
   conversation.
-  In code mode, `functions.exec` has a default outer return cap of 10,000
-  tokens. Inner `exec_command.max_output_tokens` cannot raise that outer cap;
-  separately issued inner reads still accumulate in the same outer return.
-  Use one byte range per top-level tool call: a direct `exec_command` when
-  exposed, or, in code mode, its own `functions.exec` containing one
-  `exec_command`. Do not batch ranges in loops; truncated output is unread:
-  retry in a fresh top-level call under the procedure's bounded read retries.
 - Never use a new `codex exec`, PM2 service, or detached shell as a substitute.
   If background tools or the restricted memory tool are unavailable, report
   `TOOL_UNAVAILABLE` and stop; do not silently run an unrestricted writer.
@@ -59,13 +52,7 @@ passes its exact name in the worker message. Claude normally exposes
 tool ending in `edit_memory` before declaring `TOOL_UNAVAILABLE`. Never select
 an unrestricted writer as a substitute.
 
-For both runtimes, the parent must include a few lines in the worker's task
-message covering relevant facts from this period that are absent from the
-conversation: findings from code or logs, actions it took without mentioning
-them, and pitfalls it encountered. The worker reads C4 and inbox, but cannot see
-the parent conversation. Record these facts as they arise with
-`memory-append.js inbox --kind fact`, `--kind decision`, or `--kind commitment`,
-rather than waiting until Sync to capture them.
+Pass the exact restricted tool name, inherited bindings, selected procedure's installed absolute path, and relevant facts absent from C4/inbox (code findings, unmentioned actions and pitfalls). Capture these as they arise with memory-append.js rather than waiting for Sync. The worker cannot see the parent conversation.
 
 Select the job named in the control prompt, then check the inherited environment:
 
@@ -79,27 +66,15 @@ Select the job named in the control prompt, then check the inherited environment
   or a user's manual request to sync memory), use group Sync when a group is
   bound and global Sync when no group is bound; never infer Origin Sync.
 
-Never infer Origin Sync merely from being in origin. Never invent or
-replace these bindings. Read [the complete Sync procedures](references/sync-procedures.md)
-before taking a token; run only the selected procedure.
+Never infer Origin Sync merely from being in origin. Never invent or replace these bindings. The parent reads only this skill; the worker reads only the files listed under Worker procedures for its selected procedure: [group](references/group-sync.md), [Origin](references/origin-sync.md), or [global](references/global-sync.md), with the exact common-file list below. Pass these installed absolute paths in the worker task. Old queued prompts saying "Read the zylos-memory skill" use this same dispatch and result handling.
 
 ## Parent result handling
 
-These rules apply to group, Origin, and global Sync. The worker reports its
-result to the requesting parent; the parent owns any owner notification.
+These rules apply to group, Origin, and global Sync; the parent owns owner notification.
 
 - Claude: continue current work without waiting for an ordinary background
   Sync. Handle its completion notification and report failure to the owner.
-- Codex: continue useful current work after launching the worker, but **before
-  ending the parent turn**, use the exposed native agent wait/result tools to
-  read this worker's terminal result. Idle completion notifications can display
-  `Completed` without starting another parent turn. Do not rely on a later
-  notification to finish this obligation. A timeout or an empty wait is not a
-  terminal result; wait again while keeping the input channel responsive.
-  If the worker no longer exists, has been closed, or its result can no longer
-  be retrieved, stop waiting and treat it as a result that cannot be retrieved.
-  `Completed` describes worker execution, not successful Sync: inspect the
-  returned outcome, including checkpoint, state-commit and release failures.
+- Codex: continue useful current work after launching, but **before ending the parent turn**, use native agent wait/result tools to read this worker's terminal result. A timeout or an empty wait is not a terminal result; wait again while keeping the input channel responsive. If the worker no longer exists, has been closed, or its result can no longer be retrieved, stop waiting and treat it as a result that cannot be retrieved. `Completed` describes worker execution, not successful Sync: inspect checkpoint, state commit and release outcomes. Idle notifications may not trigger another turn; retrieve the result now.
 - Only the worker's final result decides whether Sync succeeded or failed.
   Messages the worker sends while it is still running are not a Sync outcome;
   do not report success or failure from them.
@@ -111,56 +86,6 @@ result to the requesting parent; the parent owns any owner notification.
   If the result cannot be retrieved, report that failure without claiming Sync
   succeeded. Successful Sync and the documented `SYNC_BUSY` no-op need no extra
   owner message. Do not restart Sync to obtain a successful result.
-
-## Writing rules
-
-All Sync content edits and new memory files use the discovered `edit_memory`
-tool passed by the parent.
-Origin and global Sync also run the documented `reference-index.js rebuild`,
-`archive`, and `unarchive` commands to maintain generated indexes and page locations.
-Read inputs with Read (offset/limit), Glob, or read-only Bash commands
-`grep -n`, `rg -n`, `sed -n '<a>,<b>p'`, and bounded `dd` byte reads; use Grep
-when available.
-For exported batches and listed inputs, read every byte in bounded ranges.
-Use reported byte counts only as byte-range read endpoints. Truncated
-output is unread: use the procedure's bounded retries, one range per top-level
-call; do not batch ranges into a single return. Do not infer
-completion from the first/last lines or a successful hash check alone. Use
-returned absolute paths; never synthesize export, segment or session paths.
-Follow the procedure's private export-directory cleanup and per-file byte-range
-ledger, including for a single long line. Follow the procedure's Complete
-byte-range reads steps. For every exported file and every listed input, run
-`tail -c 64 "<returned absolute path>" | od -An -v -c` after the full text read
-so trailing whitespace is visible in only a few lines.
-Remove only this run's private export directory with
-`rm -r "<absolute path of this run's private directory>"`; do not add `-f`.
-Origin obtains log paths through read-only `sync-files.js list --group G`,
-without reading state or segments.
-Origin exports both of its reads with `--out` and advances cursors only by
-passing the unchanged receipts and list result to `origin-cursor.js advance`.
-Do not read an entire old file into a script. Memory writes still use only the
-documented tools and scripts.
-Do not use native Edit/Write/patch, shell redirects into memory, or a fallback
-writer after a tool denial. The token is from `sync-lock.js acquire`, never
-from another worker. The tool infers permission from its own environment and
-the matching marker; a model-supplied group or role is not authorization.
-
-Group and global Sync first read the entire state, in all bounded byte ranges.
-Guarded `sync-files.js prepare` chooses the mode from actual bytes: above 20480,
-`mode:"rewrite"` makes no copy and the worker creates a compact complete state;
-at or below budget, `mode:"edit"` copies the state for unique-fragment edits.
-A missing state returns STATE_MISSING and needs a complete initial document.
-Use `edit_memory` for either mode. Group Sync writes only its temporary state and
-its guarded checkpoint/commit.
-Origin Sync writes shared self files; it does not read or write group state or
-inbox. Global Sync writes global temporary state and shared self files, and
-never reads `session-groups/`. Formal state replacement, input cleanup, and
-progress changes use the guarded scripts. Never call `c4-checkpoint.js create`
-or a raw origin cursor mutation.
-
-Sync does not write `ZYLOS.md`, group `rules.md`, `handoff.md`, or custom startup
-instructions. Do not copy rule text into state/inbox or clear a handoff because
-its conversations are covered by a checkpoint.
 
 ## Ordinary running-thread memory
 
@@ -178,62 +103,14 @@ thread editing does not share Sync's lock, so do not claim all writers are
 mutually protected. Cross-group requests are sent through the normal internal
 channel; do not write another group's files.
 
-External file editors can use the [locked memory writer](references/memory-write.md)
-to save an existing file with a content hash and refuse an active Sync. This
-does not replace the restricted Sync tool or authorize additional Sync writes.
+## Worker procedures
 
-## Content and formats
+Pass only these installed files to the worker; read them completely before taking a token:
 
-Keep only current focus, active work, pending items, and commitments in state.
-Target the 20 KiB soft state budget (STATE_BUDGET_BYTES in sync-files.js).
-Remove completed and superseded entries this round, including old ones found
-in the mandatory full state read. Rewrite mode compacts the whole document;
-edit mode changes only necessary fragments. Update a changed status in its
-original entry, never append a conflicting second status for the same work.
-Before removing each completed or superseded item, include one result line in
-this round’s checkpoint summary. In group Sync, Origin Sync records that result
-on its project page; group Sync never writes shared reference files. In single
-global Sync, write the result to its project page yourself before checkpoint. Commit reports published bytes
-and an over-budget flag without blocking publication. Never summarize away or drop pending absorbed
-messages to make the file smaller; commit preserves their exact remaining lines.
-Use the state header and four sections in [state format](references/state-format.md).
-Use [inbox format](references/inbox-format.md) and [session log format](references/session-log-format.md)
-for ordinary append operations.
+- Group: [group-sync.md](references/group-sync.md), [sync-common.md](references/sync-common.md), [state-format.md](references/state-format.md).
+- Origin: [origin-sync.md](references/origin-sync.md), [sync-common.md](references/sync-common.md), [sync-writing.md](references/sync-writing.md).
+- Global: [global-sync.md](references/global-sync.md), [sync-common.md](references/sync-common.md), [sync-writing.md](references/sync-writing.md), [state-format.md](references/state-format.md).
 
-Shared knowledge classification:
+Do not send sync-writing.md to group workers. [Common rules](references/sync-common.md) cover full byte reads and failures; [writing and content](references/sync-writing.md) covers restricted edits and shared-knowledge classification. The parent does not read these worker files to launch Sync.
 
-- `identity.md`: stable identity, principles, and durable behavior; avoid incident histories.
-- `references.md`: essential identity, boundaries, and navigation. Reuse topic files,
-  maintain content/path/read-when pointers, and keep a single source of truth.
-- `reference/decisions/`: an INDEX plus one page per decision topic, for committed choices and rationale.
-- `reference/projects/`: an INDEX plus one page per scoped project, for work and status.
-- Old `reference/projects.md`, `reference/decisions.md`, and `reference/legacy/` are read-only history. Start with the category INDEX, then Grep pages (including `archive/`), then consult old files or `legacy/` only when needed; see [Sync procedures](references/sync-procedures.md).
-- `reference/preferences.md`: standing shared preferences.
-- `reference/ideas.md`: uncommitted proposals.
-- `users/<id>/profile.md`: individual preferences and stable facts.
-
-Read an existing target before generating its replacement fragment. Check
-references for duplicated configuration values or narrative history; move the
-information into an allowed topic file and replace it with a pointer. `identity.md`
-and `references.md` each have the same startup display limits across all runtimes:
-check both characters and estimated tokens after reserving the worst-case startup
-framing. Agents: run
-`node ~/zylos/.claude/skills/zylos-memory/scripts/memory-status.js` after editing
-these files and during the shared-file Sync audit; include their `WARN` or `OVER`
-results in the Sync report. Components: call `measureMemoryText(file, candidateText)`
-through the [candidate-text budget API](references/memory-budget.md) before a write.
-Do not copy its estimator or limits. At 80% of either dimension, audit the file on
-the next Memory Sync. Do not send extra owner/system alerts or block writes.
-`reference/projects/INDEX.md` and `reference/decisions/INDEX.md` each have a
-16 KiB warning threshold and 32 KiB budget. These indexes are optional until
-created: `memory-status.js` prints `not created yet` without a missing-file
-health issue. Other reference files, including the read-only old files, have
-no size budget. Budget reporting does not block writes. Do not copy whole
-startup instructions into memory. References layout migration belongs to its dedicated migration command,
-not an improvised Sync write.
-
-`memory-status.js` and `consolidate.js` are read-only diagnostics; they do not
-replace Sync or its progress commits. `daily-commit.js` is an independent local
-Git backup; files over 50 MB are left out of it and listed in its output. `rotate-session.js` is only a one-time legacy-log migration during
-upgrade; it is not a Sync step. Existing format/example files in `references/`
-and `examples/` document each shared knowledge category.
+Component memory writers use the [memory-write API](references/memory-write.md). For unmatched legacy topics, follow [old-file lookup](references/sync-writing.md#moving-from-old-files).

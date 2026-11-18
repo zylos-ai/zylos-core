@@ -91,7 +91,7 @@ before summarizing, checkpointing or advancing its cursor:
    This supplements the text read and does not replace it.
 
 For the retry budget, failure gates and final range/recovery report, follow
-[zylos-memory's bounded read retries](../../zylos-memory/references/sync-procedures.md#bounded-read-retries-and-reporting).
+[zylos-memory's bounded read retries](../../zylos-memory/references/sync-common.md#bounded-read-retries-and-reporting).
 
 All message content is projected before text/JSON formatting, absorbed preview
 budgets or `--out` file writes. Valid structured content becomes fallbackText

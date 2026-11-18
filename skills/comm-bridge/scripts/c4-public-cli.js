@@ -1,5 +1,4 @@
-import { resolveDashboardQuotes, dashboardQuoteSender, readOwnerName } from './dashboard-source.js';
-import { quotePreview } from '../../dashboard/src/lib/chat/history.js';
+import { formatConversations, formatUnsummarized } from './c4-fetch-format.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -8,7 +7,7 @@ import * as db from './c4-db.js';
 import { createStore } from './c4-v2-store.js';
 import { createQueryHandlers } from './c4-v2-cli.js';
 import { dataError, requireGroup } from './c4-session-group.js';
-import { formatQueryError, replyVia, projectConversation, shellQuote } from './c4-query-format.js';
+import { formatQueryError, projectConversation, shellQuote } from './c4-query-format.js';
 import { queryRejection } from './c4-entry-events.js';
 import { createBatchReceipt, createOriginRawReceipt, createOriginSummaryReceipt } from './c4-sync-batch.js';
 
@@ -99,22 +98,8 @@ function historyNotes(rows) {
     `Note: ${count} ${count === 1 ? 'row above belongs' : 'rows above belong'} to session group ${group}; ${count === 1 ? 'it is' : 'they are'} history. For its current state, ask that thread:\ncat <<'EOF_INTERNAL' | node ${shellQuote(sendPath)} internal ${shellQuote(group)}\n<Fill in your question about the current state.>\nEOF_INTERNAL\n`
   ).join('');
 }
-function conversations(rows) {
-  const quoted = resolveDashboardQuotes(rows, () => db.getDb());
-  const owner = quoted.size ? readOwnerName() : null;
-  return rows.map(row => {
-    const route = row.direction === 'in' && row.endpoint_id !== null ? '\n' + replyVia(row, sendPath) : '';
-    const target = quoted.get(row.id);
-    let content = row.content;
-    if (target) {
-      const preview = `(quoting c4_id=${target.id} — ${dashboardQuoteSender(target, owner)}: ${quotePreview(target, { singleLine: true })})`;
-      const end = content.indexOf('\n');
-      content = end < 0 ? content + '\n' + preview
-        : content.slice(0, end + 1) + preview + '\n' + content.slice(end + 1);
-    }
-    return `[${row.timestamp}] ${row.direction === 'in' ? 'IN' : 'OUT'} (${row.channel}${row.endpoint_id ? ':' + row.endpoint_id : ''}):\n${content}${route}\n`;
-  }).join('\n');
-}
+const conversations = rows => formatConversations(rows, { getDatabase: db.getDb, sendPath });
+
 function checkpoint(args, positionalSummary = false) {
   const o = options(args, ['group', 'summary'], ['no-content', 'json']);
   if (o.positional.length < 1 || o.positional.length > (positionalSummary ? 2 : 1)) invalid('Checkpoint requires an end id');
@@ -249,7 +234,7 @@ export function fetchCli(args) {
   }
   if (mode === 'unsummarized') {
     const result = query.unsummarized({ group: o.group, upToConversationId: o['up-to'] === undefined ? undefined : number(o['up-to'], 'up-to'), limit: o.limit === undefined ? undefined : number(o.limit, 'limit', 1), afterConversationId: o.after === undefined ? undefined : number(o.after, 'after') });
-    const output = o.json ? json(result) : `unsummarized scope=${group(o)} checkpointEnd=${result.checkpointEnd}\n${result.checkpointSummary === null ? '' : '[Last Checkpoint Summary] ' + result.checkpointSummary + '\n'}${conversations(result.rows)}\ncount=${result.rows.length} upTo=${result.upTo} safeEnd=${result.safeEnd}\n`;
+    const output = o.json ? json(result) : formatUnsummarized(result, { scope: group(o), getDatabase: db.getDb, sendPath });
     if (o.out === undefined) return output;
     if (!o.out || o.out.includes('\0')) invalid('Invalid output path');
     const scope = group(o);
