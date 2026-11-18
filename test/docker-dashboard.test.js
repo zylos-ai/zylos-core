@@ -100,10 +100,22 @@ describe('Docker wiring for Dashboard', () => {
   });
 });
 
+describe('Docker Codex launch arguments', () => {
+  test('disables interactive tools before the permission bypass condition and preserves the setting when bypassing', () => {
+    const entrypoint = fs.readFileSync(path.join(root, 'docker/entrypoint.sh'), 'utf8');
+    expect(entrypoint).toContain('  CODEX_ARGS="-c tools.experimental_request_user_input.enabled=false -c features.goals=false -c features.apps=false"\n'
+      + '  if [ "${CODEX_BYPASS_PERMISSIONS:-true}" = "true" ]; then\n'
+      + '    CODEX_ARGS="${CODEX_ARGS} --dangerously-bypass-approvals-and-sandbox"\n'
+      + '  fi');
+    expect(entrypoint).toContain('exec codex ${CODEX_ARGS}');
+    expect(entrypoint.match(/tools\.experimental_request_user_input\.enabled=false/g)).toHaveLength(1);
+  });
+});
+
 describe('Docker Claude launch arguments', () => {
   test('disables interactive tools before the permission bypass condition and keeps the single-argument form', () => {
     const entrypoint = fs.readFileSync(path.join(root, 'docker/entrypoint.sh'), 'utf8');
-    expect(entrypoint).toContain('  CLAUDE_ARGS="--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode"\n'
+    expect(entrypoint).toContain('  CLAUDE_ARGS="--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode,Artifact,ReportFindings,Workflow"\n'
       + '  if [ "${CLAUDE_BYPASS_PERMISSIONS:-true}" = "true" ]; then\n'
       + '    CLAUDE_ARGS="${CLAUDE_ARGS} --dangerously-skip-permissions"\n'
       + '  fi');

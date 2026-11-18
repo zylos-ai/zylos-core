@@ -1,3 +1,4 @@
+// covers: cli/commands/group.js cli/lib/cli-session.js cli/zylos.js cli/commands/runtime.js skills/comm-bridge/scripts/__tests__/c4-v2-test-helpers.js
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawnSync } from 'node:child_process';

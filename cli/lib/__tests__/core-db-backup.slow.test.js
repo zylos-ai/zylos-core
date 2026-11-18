@@ -1,3 +1,4 @@
+// covers: cli/lib/upgrade-protection.js skills/comm-bridge/scripts/c4-schema.js skills/scheduler/scripts/schema.js cli/lib/core-db-backup.js skills/comm-bridge/scripts/sqlite-schema.js cli/lib/core-db-backup-worker.js cli/lib/upgrade-maintenance.cjs skills/comm-bridge/scripts/__tests__/fixtures/migration-history/c4-v0.1.0.sql skills/comm-bridge/scripts/__tests__/fixtures/migration-history/scheduler-v0.1.0.sql
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

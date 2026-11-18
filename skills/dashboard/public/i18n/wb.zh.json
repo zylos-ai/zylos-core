@@ -737,6 +737,7 @@
   "wb.usage.topTen": "调用最多的 10 个",
   "wb.usage.none": "没有数据",
   "wb.usage.cacheHit": "缓存命中 {pct}%",
+  "wb.usage.otherCost": "其中「其他」{amount}",
   "wb.memory.upkeepConflict": "这台实例有多个组在后台整理记忆，保存可能和后台整理冲突；冲突时会让你选择保留哪一份。",
   "chat.page.back": "返回对话列表",
   "chat.page.backToConversation": "返回对话",

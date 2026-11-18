@@ -8,13 +8,13 @@ const { createFailureAlertSender } = await import('../failure-alert.js');
 const { messageForFailureAlert } = await import('../failure-receipt-template.js');
 after(() => environment.cleanup());
 
-function setup(t, notifyResult) {
+function setup(t) {
   let clock = 1800000000;
   const f = fixture(t);
   const alerts = [];
   const makeSender = () => createFailureAlertSender({
     db: { reserveStatusNoticeCooldown: input => reserveStatusNoticeCooldown(input, f.db) },
-    notifyOwner: async message => { alerts.push(message); return notifyResult; },
+    notifyOwner: async message => { alerts.push(message); },
     now: () => clock,
   });
   return { ...f, alerts, makeSender, sender: makeSender(), advance: seconds => { clock += seconds; } };
@@ -49,13 +49,6 @@ test('unverified delivery retains uncertainty and unknown reasons never render e
   assert.match(messageForFailureAlert({ ...record, reason: 'delivery_unverified' }), /未能确认送达/);
   assert.match(messageForFailureAlert({ ...record, reason: 'delivery_unverified' }), /could not be confirmed delivered/);
   assert.equal(messageForFailureAlert({ ...record, reason: 'SECRET exception' }).includes('SECRET exception'), false);
-});
-
-test('owner notification is attempted once even when its return value is false', async t => {
-  const f = setup(t, false);
-  await f.sender(record);
-  await f.sender(record);
-  assert.deepEqual(f.alerts, [messageForFailureAlert(record)]);
 });
 
 test('internal messages and failure receipts never reserve owner alert cooldowns', async t => {

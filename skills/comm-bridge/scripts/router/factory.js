@@ -62,7 +62,7 @@ export function createDispatcher(overrides = {}, options = {}) {
     const guard = new SupervisorServerHealth({ readAlertTarget: () => parseServerAlertTarget(readConfig().alert_target), sendAlert, log });
     await guard.notify(message);
   };
-  const failureAlert = overrides.sendFailureAlert ?? createFailureAlertSender({
+  const failureAlert = createFailureAlertSender({
     db, notifyOwner, now: () => Math.floor(now() / 1000) });
   const sendFailureAlert = (row, reason) => {
     // No replay queue: a crash after the failure commit may lose this alert.

@@ -16,7 +16,8 @@ import { recordSyncResult } from '../../../../cli/lib/sync-observability.js';
 // Official runner isolates imports; every file belongs to a private fixture,
 // DB is in memory, and there are no sockets, tmux, PM2, network or background
 // loops. t.after closes SQLite and removes the fixture tree.
-function fixture(t, route = 'release', group = 'chat:room') {
+// Threshold 1 by default puts the two seeded messages above it, so reclaim prepares a Sync.
+function fixture(t, route = 'release', group = 'chat:room', { configuration = { syncThreshold: 1 }, messages = 2 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reclaim-sync-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const env = { ...process.env, HOME: path.join(root, 'home'), ZYLOS_DIR: path.join(root, 'z'),
@@ -29,7 +30,7 @@ function fixture(t, route = 'release', group = 'chat:room') {
   let now = 1_800_000_000_000, lastActivity = 0;
   const { store } = c4Fixture(t, { now: () => now });
   const seed = () => store.insertConversation('out', 'chat', 'fixture', 'fixture output', { groupName: 'room' });
-  const first = seed(), end = seed().id;
+  const seeded = Array.from({ length: messages }, seed), first = seeded[0], end = seeded.at(-1).id;
   const controls = [], events = [], fences = new Map(), stopped = [];
   let held = false;
   const scene = { sessionGroup: group, runId: 'fixture-run', sessionId: 'fixture-session', runtime: 'claude',
@@ -55,7 +56,7 @@ function fixture(t, route = 'release', group = 'chat:room') {
     prompts: { PRE_RECLAIM_CHECK_PROMPT: 'check', PRE_RECLAIM_SYNC_PROMPT: 'sync', PRE_RECLAIM_ORIGIN_SYNC_PROMPT: 'origin sync',
       SYNC_BACKLOG_ALERT: (kind, count, lag, scope, type, details) => `${type}:${details.reason}` } };
   const lifecycle = new SupervisorLifecycle(deps, { now: () => now });
-  const context = () => ({ configuration: { mode: 'multi', hotTtlSeconds: 1 }, scenes: [scene],
+  const context = () => ({ configuration: { mode: 'multi', hotTtlSeconds: 1, ...configuration }, scenes: [scene],
     transition: null, fences: [...fences.values()], restartRequests: [] });
   const tick = () => route === 'release' ? lifecycle.advanceReleases(context()) : lifecycle.checkTtl(scene, context());
   const start = async () => { if (route === 'release') await lifecycle.requestRelease(scene, context()); await tick(); };
@@ -174,3 +175,20 @@ test('exhausted pre-reclaim repair tells owner the actual retry method and faile
   assert.match(notice.content, /Action: Ask the agent to rerun Sync for this scope and verify a covering checkpoint and a released Sync lock/);
   assert.equal(f.alerts()[0].repairAttempt, 'pre_reclaim_retry');
 });
+
+// Reclaim with a backlog at or below the Sync threshold. Same private fixture and
+// in-memory C4 database as above; run for pre-reclaim trigger or threshold changes.
+for (const route of ['release', 'ttl']) {
+  test(`${route} reclaims a backlog at the default threshold without Sync and leaves it for Origin`, async t => {
+    const f = fixture(t, route, 'chat:room', { configuration: {}, messages: 15 });
+    await f.start(); f.advance(1000); await f.tick();
+    assert.deepEqual(f.controls.map(row => row.content), ['check']);
+    f.settle(); f.advance(1000); await f.tick();
+    assert.equal(f.fences.get('chat:room')?.reason, route);
+    assert.equal(f.syncs().length, 0);
+    assert.equal(f.events.some(row => row.event === 'sync_triggered'), false);
+    assert.equal(f.store.getUnsummarizedRange('chat:room').count, 15, 'the backlog stays in C4');
+    const backlog = f.store.getOriginSyncBacklog();
+    assert.equal(backlog.groups.find(row => row.sessionGroup === 'chat:room')?.count, 15, 'Origin Sync still reads the raw messages');
+  });
+}

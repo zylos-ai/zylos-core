@@ -224,6 +224,8 @@ for (const phase of ['check-throw','check-result','download-throw','download-res
 });
 
 test('thin entry previews the target before confirmation and cleans a declined download', async t => {
+  const { interactiveStdin } = await import('./helpers/interactive-stdin.js');
+  interactiveStdin(t);
   const {upgradeSelfCore}=await import('../../commands/component.js');
   const deployment=fixture(t), download=path.join(deployment,'download'), events=[];
   fs.mkdirSync(download);
@@ -287,6 +289,8 @@ test('thin entry JSON output suppresses preview work for a valid handoff', async
 });
 
 test('thin entry rejects an incomplete package before confirmation', async t => {
+  const { interactiveStdin } = await import('./helpers/interactive-stdin.js');
+  interactiveStdin(t);
   const {upgradeSelfCore}=await import('../../commands/component.js');
   const deployment=fixture(t), download=path.join(deployment,'download'), output=[];
   fs.mkdirSync(download);

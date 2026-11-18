@@ -64,6 +64,21 @@ or `npm test` only in an isolated environment: a separate Unix user, or temporar
 skills into `ZYLOS_DIR`. With lifecycle scripts disabled, provision required test
 dependencies separately in that isolated environment.
 
+Slow tests use `*.slow.test.js` and begin with `// covers: ` followed by
+space-separated repository-relative source files/directories and directly used
+test helpers or fixtures. Both default runners skip them. Set `ZYLOS_SLOW_TESTS=1` to include them, or pass an explicit
+slow path to `node scripts/run-node-tests.js` (Jest still requires the variable).
+Run `node scripts/select-slow-tests.js --since <git-ref>` to list slow tests whose
+own file or covered paths changed, including staged and unstaged changes.
+Developers and reviewers must run the selected tests when those boundaries change;
+before a
+release, select against the previous release ref and run only triggered tests.
+An empty selection requires no slow run. Keep covers paths aligned with the real
+imports, CLI entry points and direct test dependencies; directory coverage
+includes all descendants. Indirect dependencies are not automatically followed.
+Run selected integration tests only with isolated HOME, ZYLOS_DIR, PM2_HOME,
+short TMPDIR, private tmux sockets and fixture databases, and clean up afterward.
+
 ## tmux Compatibility
 
 Minimum supported tmux is **3.2a**. Version matrix: **3.2a, 3.3a, 3.4, 3.7c, 3.8**. 3.3a is the Debian 12 package, 3.4 the Ubuntu 24.04 package.

@@ -1,10 +1,11 @@
+// covers: skills/comm-bridge/scripts/sqlite-driver.js skills/dashboard/src/lib/auth.js skills/dashboard/src/lib/store.js skills/dashboard/src/lib/version-checker.js skills/dashboard/src/lib/workbench/group-snapshot.js skills/dashboard/src/lib/core-state.js skills/dashboard/src/index.js skills/dashboard/src/lib/ skills/dashboard/public/themes/ skills/dashboard/__tests__/helpers/explicit-migration.js skills/dashboard/__tests__/fixtures/schema13.js skills/dashboard/__tests__/fixtures/memory-installation.js skills/dashboard/__tests__/fixtures/fleet-object-api.js
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import test, { mock } from 'node:test';
+import test, { after, mock } from 'node:test';
 import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { generateApiKey, hashApiKey } from '../src/lib/auth.js';
 import { Store } from '../src/lib/store.js';
@@ -21,6 +22,15 @@ assert.notEqual(process.env.HOME, os.userInfo().homedir, 'Run through the isolat
 process.env.TMUX_TMPDIR = path.join(os.tmpdir(), 'auth-tmux');
 fs.mkdirSync(process.env.TMUX_TMPDIR, { recursive: true });
 mock.method(VersionChecker.prototype, 'start', () => {});
+// A test that waits forever must fail fast instead of holding the whole Node
+// batch until the outer runner timeout. Generous so a loaded host still passes.
+const TEST_TIMEOUT_MS = 60_000;
+// Every listening server is tracked so a test that fails before its own
+// cleanup cannot keep this file's process alive after the last test.
+const openServers = new Set();
+after(async () => {
+  for (const server of openServers) await closeServer(server);
+});
 // These fixtures verify HTTP/auth and fleet behavior. The object APIs now need
 // a group catalog even for an empty instance; inject source observations while
 // retaining the real snapshot builder, projection and private Store.
@@ -61,18 +71,21 @@ async function makeServerWithDir(zylosDir) {
   process.env.DASHBOARD_PORT = '0';
   const privateTmux = path.join(zylosDir, 'tmux'); fs.mkdirSync(privateTmux, { recursive: true });
   process.env.TMUX_TMPDIR = privateTmux;
-  console.log('Auth HTTP isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: zylosDir, PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, TMUX_TMPDIR: privateTmux, db: path.join(zylosDir, 'components/dashboard/dashboard.db') }));
-
-  const moduleUrl = new URL(`../src/index.js?test=${Date.now()}-${Math.random()}`, import.meta.url);
-  const { createServer } = await import(moduleUrl.href);
-
-  process.env.ZYLOS_DIR = previousZylosDir;
-  process.env.DASHBOARD_PORT = previousPort;
-  if (previousZylosDir == null) delete process.env.ZYLOS_DIR;
-  if (previousPort == null) delete process.env.DASHBOARD_PORT;
-  if (previousTmux == null) delete process.env.TMUX_TMPDIR; else process.env.TMUX_TMPDIR = previousTmux;
+  let createServer;
+  try {
+    console.log('Auth HTTP isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: zylosDir, PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, TMUX_TMPDIR: privateTmux, db: path.join(zylosDir, 'components/dashboard/dashboard.db') }));
+    const moduleUrl = new URL(`../src/index.js?test=${Date.now()}-${Math.random()}`, import.meta.url);
+    ({ createServer } = await import(moduleUrl.href));
+  } finally {
+    process.env.ZYLOS_DIR = previousZylosDir;
+    process.env.DASHBOARD_PORT = previousPort;
+    if (previousZylosDir == null) delete process.env.ZYLOS_DIR;
+    if (previousPort == null) delete process.env.DASHBOARD_PORT;
+    if (previousTmux == null) delete process.env.TMUX_TMPDIR; else process.env.TMUX_TMPDIR = previousTmux;
+  }
 
   const server = createServer();
+  openServers.add(server);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
   return {
@@ -89,18 +102,20 @@ async function makeServer() {
 }
 
 async function closeServer(server) {
+  openServers.delete(server);
   server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
 }
 
 async function listen(handler) {
   const server = http.createServer(handler);
+  openServers.add(server);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
   return {
     origin: `http://127.0.0.1:${port}`,
     server,
-    close: () => new Promise(resolve => server.close(resolve))
+    close: () => closeServer(server)
   };
 }
 
@@ -174,7 +189,7 @@ for (const auth of [undefined, { enabled: true }, { enabled: true, password: nul
   });
 }
 
-test('auth protects API and renders proxy-prefixed login URLs', async () => {
+test('auth protects API and renders proxy-prefixed login URLs', { timeout: TEST_TIMEOUT_MS }, async () => {
   const { origin, server } = await makeServer();
   try {
     const health = await fetch(`${origin}/api/health`);
@@ -204,7 +219,7 @@ test('auth protects API and renders proxy-prefixed login URLs', async () => {
   }
 });
 
-test('the login page takes its colours from the Dashboard theme files and picks the theme before the body', async () => {
+test('the login page takes its colours from the Dashboard theme files and picks the theme before the body', { timeout: TEST_TIMEOUT_MS }, async () => {
   const { origin, server } = await makeServer();
   try {
     const login = await fetch(`${origin}/login`);
@@ -237,7 +252,7 @@ test('the login page takes its colours from the Dashboard theme files and picks 
   }
 });
 
-test('login sets secure cookie and authenticated requests can reach API and SSE', async () => {
+test('login sets secure cookie and authenticated requests can reach API and SSE', { timeout: TEST_TIMEOUT_MS }, async () => {
   const { origin, server } = await makeServer();
   try {
     const login = await fetch(`${origin}/login`, {
@@ -345,7 +360,7 @@ test('login keeps a next target inside the forwarded prefix', { timeout: 15_000 
 // HTTP integration: actual authenticated logout in runner-isolated installation;
 // run for logout/auth/browser-origin changes. The fixture has private DB, PM2_HOME
 // and tmux directory and disabled network version checks; loopback servers close.
-test('logout always clears browser sessions and respects forwarded prefix', async () => {
+test('logout always clears browser sessions and respects forwarded prefix', { timeout: TEST_TIMEOUT_MS }, async () => {
   const { origin, server } = await makeServer();
   const clearCookie = '__Secure-zylos_dashboard_session=; HttpOnly; Secure; SameSite=Strict; Path=/dashboard; Max-Age=0';
   const loginCookie = async () => (await fetch(`${origin}/login`, {
@@ -386,7 +401,7 @@ test('logout always clears browser sessions and respects forwarded prefix', asyn
   }
 });
 
-test('session cookie path follows the forwarded prefix and falls back to root', async () => {
+test('session cookie path follows the forwarded prefix and falls back to root', { timeout: TEST_TIMEOUT_MS }, async () => {
   const { origin, server } = await makeServer();
   const loginWith = (headers, body = { password: 'secret' }) => fetch(`${origin}/login`, {
     method: 'POST',
@@ -419,7 +434,7 @@ test('session cookie path follows the forwarded prefix and falls back to root', 
   }
 });
 
-test('legacy __Host- session cookie is revoked and cleared on any request', async () => {
+test('legacy __Host- session cookie is revoked and cleared on any request', { timeout: TEST_TIMEOUT_MS }, async () => {
   const { origin, server, zylosDir } = await makeServer();
   const legacyClear = '__Host-zylos_dashboard_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0';
   try {
@@ -471,7 +486,7 @@ test('legacy __Host- session cookie is revoked and cleared on any request', asyn
   }
 });
 
-test('unsafe forwarded prefixes fall back to direct root paths', async () => {
+test('unsafe forwarded prefixes fall back to direct root paths', { timeout: TEST_TIMEOUT_MS }, async () => {
   const { origin, server } = await makeServer();
   try {
     const login = await fetch(`${origin}/login`, {
@@ -488,7 +503,7 @@ test('unsafe forwarded prefixes fall back to direct root paths', async () => {
   }
 });
 
-test('session cookie survives server restart (SQLite persistence)', async () => {
+test('session cookie survives server restart (SQLite persistence)', { timeout: TEST_TIMEOUT_MS }, async () => {
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
   writeConfig(zylosDir);
 
@@ -523,7 +538,7 @@ test('session cookie survives server restart (SQLite persistence)', async () => 
   }
 });
 
-test('/api/instance exposes stable agent identity without fleet secrets', async () => {
+test('/api/instance exposes stable agent identity without fleet secrets', { timeout: TEST_TIMEOUT_MS }, async () => {
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
   const legacyMarker = path.join(zylosDir, 'components', 'dashboard', 'upgrade-zylos-pending.json');
   writeConfig(zylosDir, 'secret', {
@@ -577,7 +592,7 @@ test('/api/instance exposes stable agent identity without fleet secrets', async 
   }
 });
 
-test('/api/fleet self record includes cost tiers from DB (#174)', async () => {
+test('/api/fleet self record includes cost tiers from DB (#174)', { timeout: TEST_TIMEOUT_MS }, async () => {
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
   writeConfig(zylosDir, 'secret', { auth: { enabled: false } });
 
@@ -662,24 +677,26 @@ test('/api/stream accepts Bearer API session and emits initial instance', { time
 // Integration: real auth/routing and Core save, including the 1 MiB boundary.
 // Run when memory transport or auth changes; skip unrelated UI/collector edits.
 // All config/DB/memory is fixture-owned; Core uses a private short tmux socket.
-test('/api/memory tree accepts read keys while file contents require admin', async () => {
+test('/api/memory tree accepts read keys while file contents require admin', { timeout: TEST_TIMEOUT_MS }, async () => {
   const zylosDir = memoryTempRoot('wba-');
   installMemoryScripts(zylosDir);
   const isolatedEnv = memoryTestEnv(zylosDir);
   const envKeys = ['HOME', 'ZYLOS_DIR', 'ZYLOS_PACKAGE_ROOT', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR', 'TMUX'];
   const previousEnv = new Map(envKeys.map(key => [key, process.env[key]]));
-  for (const key of envKeys) {
-    if (isolatedEnv[key] === undefined) delete process.env[key];
-    else process.env[key] = isolatedEnv[key];
-  }
-  writeConfig(zylosDir, 'secret', { auth: { enabled: true, password: 'secret' } });
-  fs.mkdirSync(path.join(zylosDir, 'memory'), { recursive: true });
-  fs.writeFileSync(path.join(zylosDir, 'memory', 'identity.md'), '# Identity\n');
-  const newlineText = '\n'.repeat(1024 * 1024);
-  fs.writeFileSync(path.join(zylosDir, 'memory', 'large.txt'), newlineText);
-
-  const { origin, server } = await makeServerWithDir(zylosDir);
+  let server;
   try {
+    for (const key of envKeys) {
+      if (isolatedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = isolatedEnv[key];
+    }
+    writeConfig(zylosDir, 'secret', { auth: { enabled: true, password: 'secret' } });
+    fs.mkdirSync(path.join(zylosDir, 'memory'), { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, 'memory', 'identity.md'), '# Identity\n');
+    const newlineText = '\n'.repeat(1024 * 1024);
+    fs.writeFileSync(path.join(zylosDir, 'memory', 'large.txt'), newlineText);
+
+    let origin;
+    ({ origin, server } = await makeServerWithDir(zylosDir));
     const dbPath = path.join(zylosDir, 'components', 'dashboard', 'dashboard.db');
     const store = new Store(dbPath);
     const readKey = generateApiKey();
@@ -798,16 +815,18 @@ test('/api/memory tree accepts read keys while file contents require admin', asy
     assert.equal(conflictBody.current.text, '# Identity\nEdited\n');
     assert.equal(fs.readFileSync(path.join(zylosDir, 'memory', 'identity.md'), 'utf8'), '# Identity\nEdited\n');
   } finally {
-    await closeServer(server);
-    fs.rmSync(zylosDir, { recursive: true, force: true });
+    // Restore first: later tests must not inherit this fixture's HOME/TMPDIR
+    // even if closing the server or removing the directory fails.
     for (const [key, value] of previousEnv) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    if (server) await closeServer(server);
+    fs.rmSync(zylosDir, { recursive: true, force: true });
   }
 });
 
-test('proxied interrupt and chop-chop writes require consumer admin API scope or browser session', async () => {
+test('proxied interrupt and chop-chop writes require consumer admin API scope or browser session', { timeout: TEST_TIMEOUT_MS }, async () => {
   let actionHits = 0;
   let memoryWriteHits = 0;
   const remote = await listen((req, res) => {
@@ -961,7 +980,7 @@ test('proxied interrupt and chop-chop writes require consumer admin API scope or
   }
 });
 
-test('API key management is admin-gated, show-once, and revoke invalidates active sessions', async () => {
+test('API key management is admin-gated, show-once, and revoke invalidates active sessions', { timeout: TEST_TIMEOUT_MS }, async () => {
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
   writeConfig(zylosDir, 'secret', { auth: { enabled: true, password: 'secret' } });
 
@@ -1093,7 +1112,7 @@ test('API key management is admin-gated, show-once, and revoke invalidates activ
   }
 });
 
-test('API key migration v11 preserves ids, sessions, and active-name uniqueness', () => {
+test('API key migration v11 preserves ids, sessions, and active-name uniqueness', { timeout: TEST_TIMEOUT_MS }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-key-migration-'));
   const dbPath = path.join(dir, 'dashboard.db');
   // Seed the pinned released schema, rather than retaining later migration DDL.
@@ -1162,7 +1181,7 @@ test('API key migration v11 preserves ids, sessions, and active-name uniqueness'
   }
 });
 
-test('API key migration v11 rolls back failed rebuild and can retry', () => {
+test('API key migration v11 rolls back failed rebuild and can retry', { timeout: TEST_TIMEOUT_MS }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-key-migration-retry-'));
   const dbPath = path.join(dir, 'dashboard.db');
   // Seed the pinned released schema, rather than retaining later migration DDL.
@@ -1241,7 +1260,7 @@ test('API key migration v11 rolls back failed rebuild and can retry', () => {
   }
 });
 
-test('API key lifecycle supports name reuse, rotate, permanent delete, and revoked purge', async () => {
+test('API key lifecycle supports name reuse, rotate, permanent delete, and revoked purge', { timeout: TEST_TIMEOUT_MS }, async () => {
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-key-lifecycle-'));
   writeConfig(zylosDir, 'secret', { auth: { enabled: true, password: 'secret' } });
 
@@ -1458,7 +1477,7 @@ test('API key lifecycle supports name reuse, rotate, permanent delete, and revok
   }
 });
 
-test('/api/fleet exposes safe records without registry secrets', async () => {
+test('/api/fleet exposes safe records without registry secrets', { timeout: TEST_TIMEOUT_MS }, async () => {
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
   writeConfig(zylosDir, 'secret', {
     auth: { enabled: false },
@@ -1494,7 +1513,7 @@ test('/api/fleet exposes safe records without registry secrets', async () => {
   }
 });
 
-test('fleet management API is admin-gated, masks keys, persists atomically, and hot-applies config', async () => {
+test('fleet management API is admin-gated, masks keys, persists atomically, and hot-applies config', { timeout: TEST_TIMEOUT_MS }, async () => {
   const remoteRequests = [];
   const remote = await listen(async (req, res) => {
     remoteRequests.push(req.url);
@@ -1665,7 +1684,7 @@ test('fleet management API is admin-gated, masks keys, persists atomically, and 
   }
 });
 
-test('fleet management add rechecks duplicate names after slow probe', async () => {
+test('fleet management add rechecks duplicate names after slow probe', { timeout: TEST_TIMEOUT_MS }, async () => {
   let tokenHits = 0;
   const remote = await listen((req, res) => {
     if (req.url === '/api/auth/token') {
@@ -1723,7 +1742,7 @@ test('fleet management add rechecks duplicate names after slow probe', async () 
   }
 });
 
-test('fleet test-connection API reports auth failures and reachable read scope without persisting secrets', async () => {
+test('fleet test-connection API reports auth failures and reachable read scope without persisting secrets', { timeout: TEST_TIMEOUT_MS }, async () => {
   const remote = await listen((req, res) => {
     if (req.url === '/api/auth/token') {
       if (req.headers.authorization !== 'Bearer zylos_ak_good') {
@@ -1777,7 +1796,7 @@ test('fleet test-connection API reports auth failures and reachable read scope w
   }
 });
 
-test('retired ingest endpoints accept neither local nor proxied writes', async () => {
+test('retired ingest endpoints accept neither local nor proxied writes', { timeout: TEST_TIMEOUT_MS }, async () => {
   const { origin, server } = await makeServer();
   try {
     for (const endpoint of ['/api/ingest', '/api/ingest/statusline']) {
@@ -1927,7 +1946,7 @@ test('group thresholds follow actual session models while Fleet omits Origin ses
 
 // Actual HTTP auth and method dispatch: private installation and loopback only.
 // Run when API method routing or Fleet authentication changes; unrelated views may skip.
-test('unsupported API method path pairs return 404 and Fleet APIs require login', async () => {
+test('unsupported API method path pairs return 404 and Fleet APIs require login', { timeout: TEST_TIMEOUT_MS }, async () => {
   const { origin, server } = await makeServer();
   try {
     for (const [method, url] of [['GET', '/fleet/Remote/api/instance'], ['POST', '/fleet/Remote/api/schedules']]) {

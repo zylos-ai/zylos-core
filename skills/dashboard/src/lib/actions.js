@@ -303,6 +303,37 @@ async function upgradeZylos(reqId, zylosDir) {
 
 async function upgradeRuntimeCli(reqId, config) {
   const runtime = config.runtime || process.env.ZYLOS_RUNTIME || 'claude';
+  if (runtime === 'agy') {
+    log(reqId, 'exec: agy update');
+    try {
+      const { readLaunchDotenv } = await loadCoreModule('runtime/session-command.js');
+      const dotenvVars = readLaunchDotenv(config.zylosDir || path.join(os.homedir(), 'zylos'));
+      const env = { ...process.env, AGY_CLI_DISABLE_AUTO_UPDATE: 'true' };
+      const proxy = Object.hasOwn(dotenvVars, 'HTTPS_PROXY') ? dotenvVars.HTTPS_PROXY : process.env.HTTPS_PROXY;
+      if (proxy) env.HTTPS_PROXY = proxy;
+      else delete env.HTTPS_PROXY;
+      const { stdout, stderr } = await execFileAsync('agy', ['update'], {
+        timeout: 300000, killSignal: 'SIGKILL', env,
+      });
+      log(reqId, `agy update done (${((stdout || '') + (stderr || '')).trim().slice(0, 200)})`);
+      return { ok: true, message: 'Antigravity updated. Restart session to apply.',
+        output: ((stdout || '') + (stderr || '')).trim(), requires_restart: true,
+        messageKey: 'result.agy_updated' };
+    } catch (err) {
+      log(reqId, `agy update failed: ${(err.stderr || err.stdout || err.message || '').slice(0, 200)}`);
+      if (err.killed || err.code === 'ETIMEDOUT') {
+        return { ok: false, error: 'deadline_exceeded', message: 'Antigravity upgrade did not complete within 5 minutes. Check the installed version before retrying.',
+          messageKey: 'result.agy_upgrade_incomplete' };
+      }
+      const error = err.stderr || err.stdout || err.message;
+      return { ok: false, error: 'upgrade_failed', message: `Antigravity upgrade failed: ${error}`,
+        messageKey: 'result.agy_upgrade_failed', messageParams: { error } };
+    }
+  }
+  if (runtime !== 'claude' && runtime !== 'codex') {
+    return { ok: false, error: 'runtime_unsupported', message: `CLI upgrade is not supported for runtime: ${runtime}`,
+      messageKey: 'result.runtime_upgrade_unsupported', messageParams: { runtime } };
+  }
   if (runtime === 'codex') {
     log(reqId, `exec: codex update`);
     try {

@@ -1,9 +1,11 @@
 export default {
   transform: {},
   testPathIgnorePatterns: [
+    ...(process.env.ZYLOS_SLOW_TESTS === '1' ? [] : ['\\.slow\\.test\\.js$']),
     '<rootDir>/test/memory-budget-browser.test.js',
     '<rootDir>/test/memory-startup-budget.integration.test.js',
     '<rootDir>/test/session-start-failure.integration.test.js',
+    '<rootDir>/test/upgrade-confirmation.integration.test.js',
     '<rootDir>/test/dispatcher-startup.integration.test.js',
     '<rootDir>/test/instruction-deployment.integration.test.js',
     '<rootDir>/test/tmux-dashboard-reads.integration.test.js',
@@ -75,6 +77,6 @@ export default {
   testMatch: [
     '<rootDir>/test/**/*.test.js',
     '<rootDir>/skills/activity-monitor/scripts/__tests__/mode-switch-admission.integration.test.js',
-    '<rootDir>/skills/activity-monitor/scripts/__tests__/mode-switch-followup.integration.test.js',
+    '<rootDir>/skills/activity-monitor/scripts/__tests__/mode-switch-followup.integration.slow.test.js',
   ],
 };

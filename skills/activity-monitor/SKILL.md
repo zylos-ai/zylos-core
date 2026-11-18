@@ -20,7 +20,7 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 4. **Recovery Liveness Detection**: Sends C4 heartbeat probes during recovery and after restarts; healthy sessions have no periodic primary heartbeat
 5. **Health Check**: Periodically enqueues system health checks (PM2, disk, memory) via the C4 control queue
 6. **Daily Upgrade**: Enqueues a Claude Code upgrade via the C4 control queue at 5:00 AM local time daily (disabled by default; enable with `zylos config set daily_upgrade_enabled true`)
-7. **Context Monitoring**: Receives context usage data after every turn; triggers early memory sync and new-session handoff at thresholds read from `config.json` (`model_rotation_thresholds[engine][model]`) for the actual running model; defaults are 70% below 1M and 40% for 1M, with a shared 40% maximum for 1M
+7. **Context Monitoring**: Receives context usage data after every turn; triggers the new-session handoff at thresholds read from `config.json` (`model_rotation_thresholds[engine][model]`) for the actual running model; defaults are 70% below 1M and 40% for 1M, with a shared 40% maximum for 1M
 
 ## Component startup context
 
@@ -40,8 +40,8 @@ conversations, leave release to idle TTL. Use the installed absolute path to
 An `ok:true` response registers a group/run-scoped in-memory intent, not a
 completed release. Finish the current turn. Once the session is idle and no subagent or memory
 sync is running, the supervisor follows the same steps as idle reclaim: it
-sends the pre-reclaim check prompt, runs a memory sync if there are
-unsummarized conversations, then reclaims the session.
+sends the pre-reclaim check prompt, runs a memory sync if the unsummarized
+conversations exceed the Sync threshold, then reclaims the session.
 New delivered work before fencing cancels the intent. Supervisor restart drops
 the intent; ordinary idle TTL remains the fallback. On rejection or an unknown
 result, keep the current run; do not exit or assume release succeeded.
@@ -54,6 +54,7 @@ the Zylos data directory, with valid environment values taking precedence:
 | `session_hot_ttl_seconds` | [`ZYLOS_SESSION_HOT_TTL_SECONDS`](https://github.com/zylos-ai/zylos-core/blob/main/README.md#idle-reclaim-environment) | 1800 seconds |
 | `session_evict_min_idle_seconds` | `ZYLOS_SESSION_EVICT_MIN_IDLE_SECONDS` | 300 seconds |
 | `session_reclaim_defer_alert_count` | `ZYLOS_SESSION_RECLAIM_DEFER_ALERT_COUNT` | 4 requests |
+| `sync_threshold` | `ZYLOS_SYNC_THRESHOLD` | 15 conversations |
 
 Values must be positive safe integers. An invalid environment value falls back
 to the config file; an invalid or missing config value falls back to the default.
@@ -66,6 +67,11 @@ mode or when the environment variable is present, and displays the effective
 value (including fallback when that environment value is invalid). The environment
 scope follows the [authoritative README rule](https://github.com/zylos-ai/zylos-core/blob/main/README.md#idle-reclaim-environment).
 The eviction minimum remains a startup setting and requires a restart to change.
+The Sync threshold is also a startup setting of the supervisor. A group Sync is due
+when a group's unsummarized conversations exceed it, and pre-reclaim Sync uses the
+same comparison. Session-start context and Dashboard resolve it from the same keys
+in their own process environment, so prefer the config key; an environment value
+must be set uniformly for the supervisor, Dashboard and the managed sessions.
 
 Both TTL and capacity eviction use the latest C4 message, runtime creation,
 same-run reclaim cancellation reset, or session activity (hooks/transcript).
@@ -91,8 +97,9 @@ restart loses them.
 
 A wake-up the check creates with scheduler `add` saves the session's own group
 (Origin saves none and runs in Origin).
-The PRE_RECLAIM Sync control follows when the group has unsummarized
-conversations, then for Origin the Origin Sync control when Origin has a Sync
+The PRE_RECLAIM Sync control follows when the group's unsummarized
+conversations exceed the Sync threshold; a smaller backlog stays in C4 and the
+group's next session receives it in its startup context. Then for Origin the Origin Sync control when Origin has a Sync
 backlog, so Sync records the handoff and task the check left. Reclaim begins
 only after every preparation control is terminal (`done`, `timeout` once the
 ack deadline passes without an ack, `superseded`, `failed` or `cancelled`)
@@ -423,14 +430,12 @@ Event-driven context monitoring via Claude Code's statusLine feature, replacing 
 
 - **Mechanism**: `context-monitor.js` runs as a statusLine command — Claude Code pipes context data to it via stdin after every turn (zero turn cost)
 - **Status file**: Writes `~/zylos/activity-monitor/statusline.json` with full context data (used_percentage, remaining_percentage, cost, session_id)
-- **Two thresholds**:
-  - **Early memory sync** at 80% of the configured threshold: Enqueues a prompt for Claude to run memory sync as a background task, so it completes well before the session switch. Only triggers when unsummarized conversation count exceeds the checkpoint threshold.
-  - **New-session handoff** at the threshold configured via `model_rotation_thresholds[engine][model]` in `config.json`: Enqueues the new-session trigger. The actual session model and context window select the value, including group overrides. Missing values default to 70% below 1M and 40% for 1M; 1M values are capped at 40%. Legacy engine values migrate once to the corresponding native default model without losing the stored number. Priority 1, 5-minute cooldown.
+- **New-session handoff** at the threshold configured via `model_rotation_thresholds[engine][model]` in `config.json`: Enqueues the new-session trigger. The actual session model and context window select the value, including group overrides. Missing values default to 70% below 1M and 40% for 1M; 1M values are capped at 40%. Legacy engine values migrate once to the corresponding native default model without losing the stored number. Priority 1, 5-minute cooldown.
 - **Delivery**: Enqueues via C4 control queue with bypass_state — ensures the trigger reaches Claude even during long tasks
 - **Two-stage design**: The trigger message instructs Claude to start the new-session handoff flow; the actual `/clear` is gated by block-queue-until-idle in the new-session skill's final step
 - **Log**: `~/zylos/activity-monitor/context-monitor.log`
 
-The early memory sync decouples memory sync from the session switch. Memory sync is also triggered by the new session's startup hook if unsummarized conversations exceed the threshold, so data is never lost.
+Context usage does not request Memory Sync; the early Sync at 80% of the rotation threshold is disabled. Memory Sync follows the backlog triggers only: unsummarized conversations above the Sync threshold, or an oldest unsummarized conversation older than `sync_max_interval_seconds` (default 6 hours). A smaller backlog carries over to the next session, whose startup context includes it in full when it fits the shard budget.
 
 ## Daily Memory Commit
 
@@ -531,7 +536,7 @@ never conversation content, receipts or Sync tokens.
 
 Trigger records include scope, kind (group/origin/global), backlog, lag in
 seconds, optional context percent and control/run/checkpoint identifiers.
-Reasons include threshold, max_lag, context, inherited, catch_up and pre_reclaim. Logging
+Reasons include threshold, max_lag, catch_up and pre_reclaim. Logging
 failure cannot change a protected operation or its control bookkeeping.
 
 Protected results include commit (checkpoint, verified first/last C4 IDs and
@@ -557,8 +562,8 @@ no_checkpoint or control_timeout. New real work cancels the
 preparation through the existing gates. Child/turn/identity checks still apply.
 
 Groups without a live session do not receive backlog or checkpoint/state-gap
-notifications and are not activated for repair. Their existing inherited Sync
-trigger applies when ordinary work next activates them. Active readers continue
+notifications and are not activated for repair. Their backlog follows the
+ordinary threshold and longest-wait triggers when ordinary work next activates them. Active readers continue
 using normal Sync triggers. Pre-reclaim symptoms are recorded once as diagnostics;
 the retry verdict owns any final owner notification.
 

@@ -18,7 +18,7 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
       messageForFailureReceipt({ ...row, reason }), row.endpoint_id,
       { deliveryAction: 'failure_receipt' });
   }
-  const api = {
+  return {
     getNextPending: ({ sessionGroups } = {}) => { const filter = groups(sessionGroups); return read(c => get(c, `SELECT * FROM conversations WHERE direction='in' AND status='pending' AND ${unfenced}${filter.sql} ORDER BY priority,id LIMIT 1`, ...filter.args) ?? null); },
     claimConversation: id => write(c => run(c, `UPDATE conversations SET status='running' WHERE id=? AND direction='in' AND status='pending' AND ${unfenced}`, id).changes > 0),
     requeueConversation: id => write(c => run(c, "UPDATE conversations SET status='pending' WHERE id=? AND direction='in' AND status='running'", id).changes > 0),
@@ -84,5 +84,4 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
       return run(c, `UPDATE conversations SET content=content||?,delivery_action='suppressed' WHERE id=? AND direction='in' AND status='failed' AND COALESCE(delivery_action,'') NOT IN ('auth_rejected','pending_expired','suppressed') AND session_group=? AND channel=? AND endpoint_id IS ?`, `\n\n[C4] Status notification suppressed by cooldown while health=${health} reason=${reason}.`, id, sessionGroup, channel, endpointId ?? null).changes > 0;
     }),
   };
-  return api;
 }

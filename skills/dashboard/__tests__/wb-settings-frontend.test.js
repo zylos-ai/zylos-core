@@ -936,3 +936,12 @@ test('default model without effort options hides the whole field and restores it
   model.value = 'haiku'; await model.dispatch('change'); assert.equal(field.hidden, true);
   panel.destroy();
 });
+
+test('Antigravity version panel and upgrade button never inherit Claude names', () => {
+  const document = documentFixture(), root = node(document, 'div'), upgrade = node(document, 'button');
+  const label = node(document, 'span', 'action-cli-label'); upgrade.append(label);
+  renderVersion(root, { agy: { installed: '1.5.11' }, claude: { installed: 'wrong' } }, { document, upgrade, t, runtime: 'agy' });
+  assert.match(root.textContent, /Antigravity · v1.5.11/);
+  assert.doesNotMatch(root.textContent, /CC|Claude|wrong/);
+  assert.equal(label.textContent, t('actions.upgrade_runtime', { runtime: 'Antigravity' }));
+});

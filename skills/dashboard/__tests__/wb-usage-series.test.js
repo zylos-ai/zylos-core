@@ -24,6 +24,7 @@ test('usage combines both runtimes and legacy costs while tokens use dimensions'
   assert.equal(result.scope, 'all_groups');
   assert.equal(result.totals.cost, 26);
   assert.deepEqual(result.totals.costByRuntime, { claude: 12, codex: 14 });
+  assert.equal(result.totals.otherCost, 0);
   assert.equal(result.totals.tokens, 2450);
   assert.equal(result.totals.rotations, 1);
   assert.equal(result.totals.cost, f.store.aggregateCost(result));

@@ -188,6 +188,7 @@ test('mixed runtime groups use their own prices and combine into one total', asy
   for (const row of codex) {
     assert.equal(row.session_group, 'B');
     assert.equal(row.dimensions.run_id, 'B-run');
+    assert.equal(row.dimensions.child, undefined);
   }
   const standardCost = (60 * 3 + 40 * 0.3 + 20 * 12) / 1e6;
   near(codex.find(row => row.dimensions.event_id === 'standard').dimensions.cost, standardCost);

@@ -17,7 +17,7 @@ function noticeBrand(config) {
 }
 
 /** Only stored routing metadata and fixed classifications enter this receipt. */
-export function messageForFailureReceipt({ id, session_group: group, reason, channel }, config = failureAlertConfig()) {
+export function messageForFailureReceipt({ id, session_group: group, reason }, config = failureAlertConfig()) {
   if (!Number.isSafeInteger(id) || id < 1 || typeof group !== 'string' || !group || /[\x00-\x1f\x7f]/.test(group)) {
     throw new TypeError('Invalid failure receipt metadata');
   }
@@ -26,10 +26,8 @@ export function messageForFailureReceipt({ id, session_group: group, reason, cha
   const uncertain = reason === 'delivery_unverified';
   const prefixZh = uncertain ? '未能确认送达会话组' : '没有送达会话组';
   const prefixEn = uncertain ? 'could not be confirmed delivered to session group' : 'was not delivered to session group';
-  const suffixZh = channel === 'internal' ? '系统回执，无需回复。' : '';
-  const suffixEn = channel === 'internal' ? ' System receipt; no reply is needed.' : '';
-  return `[${brand}] 消息 #${id} ${prefixZh}「${group}」：${zh}。请稍后重新发送。${suffixZh}\n` +
-    `[${brand}] Message #${id} ${prefixEn} "${group}": ${en}. Please resend it later.${suffixEn}`;
+  return `[${brand}] 消息 #${id} ${prefixZh}「${group}」：${zh}。请稍后重新发送。系统回执，无需回复。\n` +
+    `[${brand}] Message #${id} ${prefixEn} "${group}": ${en}. Please resend it later. System receipt; no reply is needed.`;
 }
 
 function failureAlertConfig() {

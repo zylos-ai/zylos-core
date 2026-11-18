@@ -73,12 +73,31 @@ for (const bypassPermissions of [true, false]) {
       const config = { runtime: 'claude', mode, ...(mode === 'override' ? { model: 'model name', effort: 'high' } : {}) };
       const args = buildRuntimeArgs('claude', config, { root: '/isolated root', bypassPermissions });
       assert.deepEqual(args.filter(arg => arg.startsWith('--disallowedTools')),
-        ['--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode']);
+        ['--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode,Artifact,ReportFindings,Workflow']);
       assert.equal(args.includes('--disallowedTools'), false);
       assert.equal(args.includes('--dangerously-skip-permissions'), bypassPermissions);
       const codexArgs = buildRuntimeArgs('codex', { ...config, runtime: 'codex' },
         { root: '/isolated root', bypassPermissions });
       assert.equal(codexArgs.some(arg => arg.startsWith('--disallowedTools')), false);
+    });
+    test(`Codex disables interactive tools with bypassPermissions=${bypassPermissions} and ${mode} model`, () => {
+      const settings = ['tools.experimental_request_user_input.enabled=false', 'features.goals=false', 'features.apps=false'];
+      const config = { runtime: 'codex', mode, ...(mode === 'override' ? { model: 'model name', effort: 'high' } : {}) };
+      const args = buildRuntimeArgs('codex', config, { root: '/isolated root', bypassPermissions });
+      for (const setting of settings) {
+        assert.equal(args.filter(arg => arg === setting).length, 1);
+        const index = args.indexOf(setting);
+        assert.equal(args[index - 1], '-c');
+        assert.ok(index < args.length - 1);
+      }
+      assert.match(args.at(-1), /System startup trigger/);
+      assert.equal(args.includes('--dangerously-bypass-approvals-and-sandbox'), bypassPermissions);
+      for (const runtime of ['claude', 'agy']) {
+        if (runtime === 'agy' && mode === 'override') continue;
+        const otherArgs = buildRuntimeArgs(runtime, { ...config, runtime }, { root: '/isolated root', bypassPermissions });
+        assert.equal(settings.some(setting => otherArgs.includes(setting)), false);
+        assert.equal(otherArgs.includes('-c'), false);
+      }
     });
   }
 }

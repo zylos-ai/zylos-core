@@ -112,8 +112,16 @@ from the target (paths are relative to memory):
 {"op":"edit","path":"reference/projects/example.md","expected":"- **Status:** planning","replacement":"- **Status:** active","token":"T"}
 ```
 
-Do not call a shell writer for this edit. The same token is required when
-creating the temporary state with `{"op":"create","path":"state.md.tmp","replacement":"<complete state document>","token":"T"}`.
+Do not call a shell writer for this edit. After checkpoint, run
+`node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js prepare --token T`.
+The script chooses from actual state bytes: `mode:"rewrite"` above 20480 bytes
+(no copy), or `mode:"edit"` at or below budget (exclusive byte-for-byte copy).
+Follow that returned mode, never choose it from a model estimate. For edit mode,
+use unique expected/replacement fragments at `state.md.tmp`. For rewrite mode,
+create a complete compact state with `edit_memory`; only current work, pending
+items and blockers remain. A missing state returns `reason:"STATE_MISSING"`
+and also needs a complete new document:
+`{"op":"create","path":"state.md.tmp","replacement":"<complete state document>","token":"T"}`.
 For Group and Global Sync, the tool maps this fixed name to the current scope's
 token-named temporary file automatically; no group or token substitution in the path is needed.
 
@@ -247,7 +255,10 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
    No token is needed; a supplied `--token` is ignored.
    Save the complete returned object as `inputs`:
    `{"scope":...,"statePath":"<absolute state path>","segments":[{"id":...,"path":"<absolute>","bytes":...,"sha256":...}],"sessions":[{"path":"<absolute>","bytes":...,"sha256":...}]}`.
-   Read state only at the returned `statePath`. Session selection starts at
+   Read the entire state at the returned `statePath`, in all bounded byte ranges
+   with no gaps, before reconciling or preparing changes. This is mandatory for
+   both rewrite and edit mode, even when only one fact changed. Apply the common
+   complete-read and visible-tail rules to state too. Session selection starts at
    state `synced_at`'s date; an unknown/invalid date selects the latest seven
    calendar days. The script returns the paths; never choose or glob them.
    Read each `sessions[].path` individually; do not glob the `sessions/` directory.
@@ -262,9 +273,22 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
    from only the latest summary; two interrupted runs may leave several.
 5. Reconcile old state, all difference summaries, this batch, segments, and logs
    by facts. Prepare a checkpoint summary including every inbox item absorbed
-   this round, and a new state containing current work. The commit script fills
-   `inbox_committed` from this round's listed segments; leave it empty in the
-   temporary state and do not copy it from old state. Put the batch end in coverage.
+   this round, and state changes containing current focus, genuine pending work and blockers.
+   Reconcile changed statuses in their original entries: replace stale status
+   text instead of appending a contradictory "merged" or "completed" note for the
+   same work. Remove completed and superseded entries this round, including old
+   ones found during the full state read. When prepare returns rewrite, rebuild
+   a compact state from the fully read facts, aiming for <=20 KiB; do not carry
+   the old completed narrative into the new document. In edit mode, change only
+   the necessary fragments, including removing stale completed entries.
+   Target the 20 KiB soft budget (STATE_BUDGET_BYTES in sync-files.js). Before
+   removing each completed or superseded item, include one result line per item
+   in this round's checkpoint summary for Origin Sync to record on project pages;
+   group Sync still does not write shared references. Preserve all unresolved
+   work and pending absorbed messages even if they exceed the budget.
+   The commit script fills `inbox_committed` from this round's listed segments;
+   a prepared copy may retain its old value, while a newly created state leaves
+   it empty. Set coverage to the batch end; in edit mode change only that field.
    Preserve a valid `synced_at` from the existing state/skeleton as a temporary
    placeholder (or `1970-01-01T00:00:00Z` when neither exists); do not calculate
    or round a new timestamp. Commit validates the
@@ -272,20 +296,46 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
 6. For any absorbed-message block in Pending, use actual progress and C4 source
    messages to identify followed-up IDs. An outbound audit row alone does not
    prove delivery; uncertain or failed sends are not completion evidence.
-   Do **not** copy the block into the temporary state. Keep a separate
+   Do **not** rewrite or manually copy the block. Leave any script-copied
+   block unchanged; commit strips that copy and preserves the official lines. Keep a separate
    `followedUpIds` array; no progress means an empty array.
 7. Send the summary on stdin to
    `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js checkpoint <batch-end> --token T --batch '<receipt JSON>'`.
    Checkpoint recomputes and verifies the receipt against the database rows.
-   Only after success, use `edit_memory` to create/edit
-   `state.md.tmp`; the tool selects this scope's token-named temporary file. Then send JSON
+   Only after success, run
+   `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js prepare --token T`.
+   Follow the structured result:
+   - `mode:"rewrite"`: the current state is over 20480 bytes. No temporary copy
+     was made. Use `edit_memory` to create a complete compact four-section
+     `state.md.tmp` from the fully read state and reconciled facts. Target <=20 KiB
+     by removing completed/superseded entries with the result lines already saved
+     in this checkpoint. For rules, lessons and pitfalls already saved elsewhere,
+     keep only a one-line pointer to their source file in state, not their full
+     text. Do not manually copy the absorbed block; commit restores
+     its remaining official lines.
+   - `mode:"edit"`: the script copied the state byte for byte into this token's
+     temporary file. Use `edit_memory` unique-fragment replacements at
+     `state.md.tmp`, including coverage; do not replace the whole document. Update
+     statuses in their original entries, not additional conflicting notes.
+   - `reason:"STATE_MISSING"`: create the complete initial state through
+     `edit_memory` at `state.md.tmp`.
+
+   All modes retain a valid existing timestamp or the fixed placeholder and
+   use this scope's valid header. Repair a damaged header through a unique
+   fragment in edit mode; in rewrite mode create a valid new header. Retain all
+   unresolved work. Existing drafts are never overwritten: EXISTS means inspect
+   the current draft under the common corrected-call rules. The restricted tool
+   selects this scope's token-named file. Then send JSON
    `{"followedUpIds":[],"batch":<receipt>,"inputs":<complete list object>}`
    on stdin to `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js commit --token T`, replacing the empty array only
    with proven followed-up IDs. Commit verifies the batch, checkpoint coverage,
    the exact current segment IDs, absolute paths and hashes, then writes those
    segment IDs into the published state header and sets `synced_at` from the
    script clock at publication, in UTC with milliseconds. The worker-supplied
-   timestamp is always overwritten. Session logs are read inputs,
+   timestamp is always overwritten. Commit outputs `stateBytes`,
+   `stateBudgetBytes` (20480), and `stateOverBudget` after publication, including
+   preserved absorbed lines. A true overflow flag is report-only: do not retry
+   or discard unresolved work to clear it. Session logs are read inputs,
    but are not immutable commit inputs: a main-session note appended during Sync
    must not reject commit.
    Handle mismatches under the common rules; never omit inputs or fabricate a receipt to retry.
@@ -477,7 +527,14 @@ state, commit, and failure sequence, with these differences:
   do not block checkpoint.
 - After a substantive identity write, request rotation. Failure is reported
   but checkpoint/state/release still proceed; do not claim it will retry itself.
-- Use `state.md.tmp`; the tool selects this scope's token-named temporary file. Preserve absorbed
+- Use the same guarded `prepare` mode selection (oversized rewrite or within-budget
+  fragment edits), complete state read, status reconciliation, soft budget and
+  per-item checkpoint result lines as Group Sync. For global Sync, record
+  completed/superseded results in project pages yourself through the required
+  shared edits before checkpoint; do not hand them off to Origin Sync, which
+  does not run in single mode. During a full rewrite, rules, lessons and pitfalls
+  already saved elsewhere get only a one-line pointer to their source file in
+  state, not their full text. Use `state.md.tmp`; the tool selects this scope's token-named temporary file. Preserve absorbed
   items by supplying only proven followedUpIds to commit, as in Group Sync.
 - Release once and report.
 

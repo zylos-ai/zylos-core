@@ -1,3 +1,4 @@
+// covers: skills/dashboard/src/lib/store.js skills/dashboard/src/lib/schema.js cli/lib/upgrade-entry.js cli/lib/core-db-backup.js cli/lib/core-db-backup-worker.js skills/dashboard/src/lib/schema-owner.js skills/dashboard/__tests__/fixtures/dashboard-history.js skills/dashboard/__tests__/fixtures/schema13.js skills/dashboard/__tests__/helpers/explicit-migration.js
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

@@ -3,31 +3,6 @@
 Terminal delivery failures leave the original conversation `failed`; they do
 not replay it. Historical failed messages are not backfilled.
 
-## Internal receipts
-
-An internal failure inserts a receipt for the sender group into `conversations`
-in the same transaction as the original failure. The receipt's own
-`delivery_action=failure_receipt` prevents recursive receipts. This uses the
-existing conversations table; no new table or schema migration is required.
-
-## External owner alerts
-
-An external terminal failure makes one best-effort owner-alert attempt through
-existing `SupervisorServerHealth` notification routing. Existing
-`status_notice_cooldowns` admit at most one alert per target session group and
-failure reason in 600 seconds. There is no send retry or persistent alert queue.
-A crash between committing the failure and sending the alert can lose the
-owner alert; this is a known limitation. The original message stays failed.
-
-Initial authorization and unhealthy-channel rejection replies remain unchanged.
-Scheduler control-queue work is outside this conversation-row failure path.
-
-## Launch diagnostics
-
-Tmux preflight and runtime exec share a 10-second launch budget. The separate
-30-second runtime READY budget is unchanged. Router diagnostics record
-`session_launch_failed` with the conversation ID, phase, cause and timings.
-
 ## Investigating an alert
 
 1. Resolve an unclear short owner reply using
@@ -40,7 +15,7 @@ Tmux preflight and runtime exec share a 10-second launch budget. The separate
    exact ID, use:
 
    ```bash
-   node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --begin ID --end ID
+   node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --begin ID --end ID --json
    ```
 
 3. Find `session_launch_failed` events with that `conversation_id` in Router

@@ -176,11 +176,17 @@ export function renderUsage(root, value, { document = root.ownerDocument, t = ke
     box.append(element(document, 'small', label), strong);
     if (sub) box.append(element(document, 'small', sub, 'wb-usage-sub'));
     summary.append(box);
+    return box;
   };
   const runtimeCost = runtime => `${runtime === 'claude' ? 'Claude' : 'Codex'} ${totals.costByRuntime?.[runtime] == null
     ? t('wb.unknown') : money(totals.costByRuntime[runtime])}`;
-  addTotal(t('wb.usage.cost'), totals.cost == null ? t('wb.unknown') : money(totals.cost),
+  const costBox = addTotal(t('wb.usage.cost'), totals.cost == null ? t('wb.unknown') : money(totals.cost),
     `${runtimeCost('claude')} · ${runtimeCost('codex')}`);
+  // The part of the total that runtimes zylos starts itself spent, shown even at $0.
+  // An instance without this field (an older fleet member) shows no line.
+  if (typeof totals.otherCost === 'number') {
+    costBox.append(element(document, 'small', t('wb.usage.otherCost', { amount: money(totals.otherCost) }), 'wb-usage-sub wb-usage-other'));
+  }
   addTotal(t('wb.usage.received'), formatUsageCount(totals.messages?.in, t),
     `${t('wb.usage.sent')} ${formatUsageCount(totals.messages?.out, t)}`);
   if (level === 'technical') {

@@ -26,7 +26,7 @@ function harness(t) {
   const db = {
     ...store,
     getLastActivity: () => ({ ts: 0 }),
-    getUnsummarizedRange: () => ({ count: 1, firstAt: null }),
+    getUnsummarizedRange: () => ({ count: 16, firstAt: null }), // above the default Sync threshold of 15
     getOriginSyncBacklog: () => ({ total: 0, groups: [] }),
     listSlotOccupancy: () => [{ sessionGroup: 'a', runId: 'run-a', state: 'running', heldUntil: null, createdAt: 0 }],
     listPendingSessionGroups: () => [{ sessionGroup: 'waiting' }],

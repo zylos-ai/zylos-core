@@ -26,11 +26,13 @@ export function renderVersion(root, info, { upgrade, document = root.ownerDocume
     hint.title = t('info.zylos_update_hint', { version: ri.zylos?.update }); hint.addEventListener('click', () => onHint(hint)); root.append(hint);
   }
   const codex = runtime === 'codex';
+  const name = runtime === 'agy' ? 'Antigravity' : runtime;
   const version = ri[runtime]?.installed;
   const update = ri[runtime]?.update;
-  root.append(element(document, 'p', `${codex ? 'Codex' : 'CC'} · ${version ? 'v' + version : t('wb.unknown')}${update ? ' ↑' + update : ''}`));
+  root.append(element(document, 'p', `${codex ? 'Codex' : runtime === 'claude' ? 'CC' : name} · ${version ? 'v' + version : t('wb.unknown')}${update ? ' ↑' + update : ''}`));
   if (upgrade) {
-    const label = upgrade.querySelector('#action-cli-label'); if (label) label.textContent = t(codex ? 'actions.upgrade_codex' : 'actions.upgrade_cc');
+    const label = upgrade.querySelector('#action-cli-label'); if (label) label.textContent = runtime === 'claude' || codex
+      ? t(codex ? 'actions.upgrade_codex' : 'actions.upgrade_cc') : t('actions.upgrade_runtime', { runtime: name });
     const badge = upgrade.querySelector('#action-cc-ver'); if (badge) { badge.textContent = version ? ' v' + version : ''; badge.classList.toggle('action-ver-dot', !!update); }
     upgrade.disabled = readOnly; upgrade.title = readOnly ? t('remote.actions_read_only_tooltip') : ''; root.append(upgrade);
   }

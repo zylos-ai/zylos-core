@@ -35,7 +35,7 @@ try {
   const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
   fs.writeFileSync(file, JSON.stringify({ ...raw, session_mode: 'single', session_hot_ttl_seconds: 999, session_evict_min_idle_seconds: 999,
     session_reclaim_defer_alert_count: 5,
-    new_session_threshold: 99, sync_min_interval_seconds: 999 }));
+    new_session_threshold: 99, sync_min_interval_seconds: 999, sync_threshold: 99 }));
   await service.supervisor.admission.handle({ version: 1, type: 'defer_reclaim', requestId: 'defer-worker-refreshed',
     sessionGroup: 'a', expectedRunId: 'run-a', reason: 'fresh configuration' });
   const refreshed = await service.supervisor.loop.deps.readConfiguration();

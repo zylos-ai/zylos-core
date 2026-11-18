@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { cleanup, rotate, list, commit as guardedCommit, checkpoint, extractAbsorbedBlock } from '../sync-files.js';
+import { cleanup, rotate, list, commit as guardedCommit, checkpoint, prepare, STATE_BUDGET_BYTES, extractAbsorbedBlock } from '../sync-files.js';
 import { createBatchReceipt } from '../../../comm-bridge/scripts/c4-sync-batch.js';
 import { parseStateHeader, renderStateSkeleton } from '../state-format.js';
 import { acquire, memoryScope } from '../sync-lock.js';
@@ -245,9 +245,9 @@ test('rotate skips missing/empty input; list returns sorted uncommitted segments
   fs.writeFileSync(f.state, 'broken'); assert.deepEqual((await list(f.settings)).segments.map(item => item.id), [id, segment].sort());
 });
 
-test('old token cannot commit, cleanup, rotate or checkpoint', async t => {
+test('old token cannot commit, cleanup, rotate, prepare or checkpoint', async t => {
   const f = await fixture(t), original = write(f), settings = { ...f.settings, token: 'b'.repeat(32) };
-  for (const operation of [() => cleanup(settings, f.deps), () => rotate(settings, f.deps), () => commit({ ...settings, input: { followedUpIds: [] } }, f.deps), () => checkpoint({ ...settings, end: 0, summary: 'x' }, { ...f.deps, database: { createCheckpoint() { assert.fail('old token wrote checkpoint'); } } })]) {
+  for (const operation of [() => prepare(settings), () => cleanup(settings, f.deps), () => rotate(settings, f.deps), () => commit({ ...settings, input: { followedUpIds: [] } }, f.deps), () => checkpoint({ ...settings, end: 0, summary: 'x' }, { ...f.deps, database: { createCheckpoint() { assert.fail('old token wrote checkpoint'); } } })]) {
     await assert.rejects(operation(), { code: 'TOKEN_MISMATCH' });
     assert.equal(fs.readFileSync(f.state, 'utf8'), original);
   }
@@ -360,7 +360,11 @@ test('commit publishes only listed segment IDs regardless of the temporary heade
           const result = await guardedCommit({ ...f.settings, input: {
             followedUpIds: [], inputs, batch: createBatchReceipt([], { scope: f.scope, after: 0, end: 0 }),
           } }, f.deps);
-          assert.deepEqual(result, { committed: true, inboxCommitted: ids });
+          assert.equal(result.committed, true);
+          assert.deepEqual(result.inboxCommitted, ids);
+          assert.equal(result.stateBytes, fs.statSync(f.state).size);
+          assert.equal(result.stateBudgetBytes, STATE_BUDGET_BYTES);
+          assert.equal(result.stateOverBudget, false);
           const published = fs.readFileSync(f.state, 'utf8');
           assert.deepEqual(parseStateHeader(published, { scope: f.scope }).inboxCommitted, ids);
           assert.equal(published, f.skeleton().replace('inbox_committed= ', `inbox_committed=${ids.join(',')} `));
@@ -570,4 +574,64 @@ test('commit metadata includes failed outgoing receipt rows and excludes ineligi
       ['success', f.scope, group === null ? 6 : 7, group === null ? 20 : 19, eligible.length]);
     assert.equal(parseStateHeader(fs.readFileSync(f.state, 'utf8'), { scope: f.scope }).coverage, 20);
   }
+});
+
+// Guarded filesystem boundary only: no processes or live database. Run when
+// preparing drafts or reporting state size changes; unrelated changes may skip.
+test('prepare copies exact state bytes without overwriting an edited draft', async t => {
+  const f = await fixture(t);
+  const original = f.skeleton([1, 2]).replaceAll('\n', '\r\n') + '漢字 trailing  \r\n';
+  fs.writeFileSync(f.state, original);
+  const result = await prepare(f.settings);
+  assert.deepEqual(result, { prepared: true, mode: 'edit', path: f.temporary, bytes: Buffer.byteLength(original) });
+  assert.equal(fs.readFileSync(f.temporary, 'utf8'), original);
+  fs.appendFileSync(f.temporary, 'edited draft');
+  await assert.rejects(prepare(f.settings), { code: 'EXISTS' });
+  assert.equal(fs.readFileSync(f.temporary, 'utf8'), original + 'edited draft');
+  assert.equal(fs.readFileSync(f.state, 'utf8'), original);
+});
+
+test('prepare leaves missing state for first-sync creation', async t => {
+  const f = await fixture(t);
+  assert.deepEqual(await prepare(f.settings), { prepared: false, reason: 'STATE_MISSING' });
+  assert.equal(fs.existsSync(f.temporary), false);
+  fs.writeFileSync(f.temporary, f.skeleton());
+  assert.equal((await commit({ ...f.settings, input: { followedUpIds: [] } }, f.deps)).committed, true);
+});
+
+test('prepare selects compaction above the byte budget and commit reports final UTF-8 size', async t => {
+  for (const extra of [-1, 0, 1]) {
+    const f = await fixture(t);
+    const base = f.skeleton();
+    const content = base + '漢' + 'x'.repeat(STATE_BUDGET_BYTES + extra - Buffer.byteLength(base) - 3);
+    fs.writeFileSync(f.state, content);
+    const prepared = await prepare(f.settings);
+    assert.equal(prepared.bytes, STATE_BUDGET_BYTES + extra);
+    assert.equal(prepared.mode, extra > 0 ? 'rewrite' : 'edit');
+    assert.equal(fs.existsSync(f.temporary), extra <= 0);
+    assert.equal(fs.readFileSync(f.state, 'utf8'), content);
+    if (extra > 0) fs.writeFileSync(f.temporary, content);
+    else assert.equal(fs.readFileSync(f.temporary, 'utf8'), content);
+    const result = await commit({ ...f.settings, input: { followedUpIds: [] } }, f.deps);
+    assert.equal(result.committed, true);
+    assert.equal(result.stateBytes, STATE_BUDGET_BYTES + extra);
+    assert.equal(result.stateBytes, fs.statSync(f.state).size);
+    assert.equal(result.stateBudgetBytes, 20480);
+    assert.equal(result.stateOverBudget, extra > 0);
+    assert.equal(fs.readFileSync(f.state, 'utf8'), content);
+  }
+});
+
+test('budget includes official absorbed lines restored at publication', async t => {
+  const f = await fixture(t);
+  fs.writeFileSync(f.state, f.skeleton(Array.from({ length: 600 }, (_, i) => i + 1)));
+  const before = extractAbsorbedBlock(fs.readFileSync(f.state, 'utf8'));
+  fs.writeFileSync(f.temporary, f.skeleton());
+  const result = await commit({ ...f.settings, input: { followedUpIds: [1] } }, f.deps);
+  const published = fs.readFileSync(f.state, 'utf8');
+  const after = extractAbsorbedBlock(published);
+  assert.equal(after.entries.length, 599);
+  assert.equal(entryDigest(after.entries), entryDigest(before.entries.slice(1)));
+  assert.equal(result.stateBytes, Buffer.byteLength(published));
+  assert.equal(result.stateOverBudget, true);
 });

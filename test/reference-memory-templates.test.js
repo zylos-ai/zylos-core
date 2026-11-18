@@ -124,7 +124,7 @@ for (const { runtime, text: system } of systems) {
       '`ok:true` records only an in-memory intent: finish the turn',
       'Once idle with no subagent/Memory Sync running',
       'supervisor performs the idle-reclaim pre-check',
-      'syncs unsummarized conversations, then reclaims',
+      'syncs unsummarized conversations when they exceed the Sync threshold, then reclaims',
       'Work delivered before fencing cancels intent; you may request again after finishing it',
       'Supervisor restart loses intent; idle TTL remains the fallback',
       'Rejection/unknown result: keep running; never exit or assume release',
@@ -158,7 +158,7 @@ for (const { name, text } of releaseGuidance) {
     assert.match(text, /inheriting\s+`ZYLOS_SESSION_GROUP` and `ZYLOS_RUN_ID`/);
     assert.match(text, /never supply\s+another group's identity/);
     assert.match(text, /`ok:true` response registers[\s\S]*in-memory intent,[\s\S]*not a\s+completed release/);
-    assert.ok(text.replace(/\s+/g, ' ').includes('Finish the current turn. Once the session is idle and no subagent or memory sync is running, the supervisor follows the same steps as idle reclaim: it sends the pre-reclaim check prompt, runs a memory sync if there are unsummarized conversations, then reclaims the session.'));
+    assert.ok(text.replace(/\s+/g, ' ').includes('Finish the current turn. Once the session is idle and no subagent or memory sync is running, the supervisor follows the same steps as idle reclaim: it sends the pre-reclaim check prompt, runs a memory sync if the unsummarized conversations exceed the Sync threshold, then reclaims the session.'));
     assert.match(text, /New delivered work before fencing cancels the intent/);
     assert.match(text, /Supervisor restart (?:loses|drops)[\s\S]*intent[\s\S]*idle TTL[\s\S]*fallback/);
     assert.match(text, /On rejection or an unknown\s+result, keep the current run; do not exit\s+or assume release succeeded/);

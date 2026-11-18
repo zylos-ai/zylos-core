@@ -258,22 +258,3 @@ for (const runtime of ['claude', 'codex']) for (const outcome of ['timeout', 'bo
     }
   });
 }
-
-// Best-effort owner-alert boundary: run for terminal alert wiring; skip UI.
-// setup verifies all private roots and SQLite. Only the channel edge is injected.
-test('factory: failed owner alert falls back to Origin once without retrying on ticks', async t => {
-  const f = setup(t), row = f.add(f.a, 'SECRET body');
-  f.db.claimConversation(row.id);
-  f.db.getDb().prepare('UPDATE conversations SET retry_count=1 WHERE id=?').run(row.id);
-  const sends = [];
-  f.overrides.readZylosConfigStrict = () => ({ state: 'ok', config: { alert_target: 'telegram:broken-owner-chat' } });
-  f.overrides.sendStatusNotice = async () => assert.fail('terminal failure must not reply to original chat');
-  f.overrides.sendAlert = async (target, message) => { sends.push({ target, message }); throw Error('SECRET transport failure'); };
-  const dispatcher = f.create(); await dispatcher.initialize(); await dispatcher.idle(); await flush();
-  for (let i = 0; i < 3; i++) { dispatcher.tick(); await dispatcher.idle(); }
-  assert.equal(sends.length, 2);
-  assert.deepEqual(sends.map(send => send.target), [
-    { channel: 'telegram', endpoint: 'broken-owner-chat' }, { channel: 'dashboard', endpoint: 'origin' } ]);
-  assert.ok(sends.every(send => send.message.includes(f.a) && send.message.includes(`endpoint-${f.a}`) && !send.message.includes('SECRET')));
-  assert.equal(f.row(row.id).status, 'failed');
-});

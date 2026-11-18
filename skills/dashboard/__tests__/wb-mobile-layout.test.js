@@ -108,6 +108,7 @@ test('stylesheet: on phones usage ranges fill the row, custom dates fold onto on
   assert.match(phone, /\.wb-usage-custom \{ display: none;/);
   assert.match(phone, /\.wb-usage-custom-open \.wb-usage-custom \{ display: flex; \}/);
   assert.match(phone, /\.wb-usage-total \{ grid-template-columns: minmax\(0, 1fr\) auto; grid-template-areas: "label value" "sub value";/);
+  assert.match(phone, /\.wb-usage-total \.wb-usage-other \{ grid-area: auto \/ 1; \}/, 'the Other line goes under the runtime line, not onto it');
   assert.match(phone, /\.wb-usage-head \.wb-usage-legend \{ flex-basis: 100%; \}/, 'legends go under chart titles');
   assert.match(phone, /\.wb-usage-table tbody th:first-child \{ white-space: normal; overflow-wrap: anywhere; \}/, 'long names wrap inside data tables');
 });
