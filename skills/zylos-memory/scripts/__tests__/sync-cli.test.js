@@ -10,9 +10,56 @@ import { fileURLToPath } from 'node:url';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { renderStateSkeleton } from '../state-format.js';
 import { createBatchReceipt } from '../../../comm-bridge/scripts/c4-sync-batch.js';
+import { createMemoryEditor } from '../memory-mcp-server.js';
 const rootPath = fileURLToPath(new URL('../../../../', import.meta.url));
 function run(script, args, env, input = '') {
   return spawnSync(process.execPath, [fileURLToPath(new URL(`../${script}.js`, import.meta.url)), ...args], { env, input, encoding: 'utf8', timeout: 15000 });
+}
+
+// Integration boundary: real MCP editor, checkpoint/list/commit CLIs, private
+// tmux identity and private C4 database. Run for temporary-state alias changes;
+// skip for unrelated changes. readyTmuxTarget reaps its session and removes the
+// fixture; each CLI has a timeout. Read back isolation before any Sync operation.
+for (const kind of ['group', 'global']) {
+  test(`fixed temporary state name reaches a successful ${kind} commit`, async t => {
+    const f = readyTmuxTarget(t, { prefix: 'state-alias-', mode: kind === 'group' ? 'multi' : 'single', packageRoot: rootPath });
+    const env = { ...f.env, ZYLOS_RUN_ID: f.ready.runId, TZ: 'Asia/Singapore',
+      PM2_HOME: path.join(f.root, 'pm2'), TMPDIR: path.join(f.root, 'tmp') };
+    if (kind === 'group') env.ZYLOS_SESSION_GROUP = 'origin';
+    for (const key of ['PM2_HOME', 'TMPDIR']) fs.mkdirSync(env[key]);
+    for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
+      assert.ok(path.resolve(env[key]).startsWith(path.resolve(os.tmpdir()) + path.sep));
+      assert.ok(fs.existsSync(env[key]));
+    }
+    assert.ok(f.socketPath.startsWith(f.root + path.sep));
+    console.log(JSON.stringify({ boundary: `${kind} temporary state commit`, HOME: env.HOME,
+      ZYLOS_DIR: env.ZYLOS_DIR, PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR,
+      TZ: env.TZ, socket: f.socketPath, database: f.db.name }));
+    const token = await acquire({ env, kind }, { currentRunId: async () => env.ZYLOS_RUN_ID });
+    const editor = createMemoryEditor(env), scope = kind === 'group' ? 'origin' : '*';
+    f.db.prepare("INSERT INTO conversations (id,timestamp,direction,channel,endpoint_id,content,status,session_group) VALUES (1,'2026-10-19 05:30:02','in','test','fixture','Private test message','delivered',?)").run(kind === 'group' ? scope : 'origin');
+    const rows = f.db.prepare('SELECT * FROM conversations WHERE id=1').all();
+    const batch = createBatchReceipt(rows, { scope, after: 0, end: 1 });
+    const checkpoint = run('sync-files', ['checkpoint', '1', '--token', token, '--batch', JSON.stringify(batch)], env, 'Private test summary.');
+    assert.equal(checkpoint.status, 0, checkpoint.stderr);
+    const listing = run('sync-files', ['list'], env);
+    assert.equal(listing.status, 0, listing.stderr);
+    const inputs = JSON.parse(listing.stdout), memoryDir = path.dirname(inputs.statePath);
+    const text = renderStateSkeleton({ scope, syncedAt: '2026-10-19T05:30:02Z' }).replace('coverage= |', 'coverage=1 |');
+    assert.equal((await editor({ op: 'create', path: 'state.md.tmp', replacement: text, token })).ok, true);
+    const temporary = path.join(memoryDir, `state.md.${token}.tmp`);
+    assert.equal(fs.readFileSync(temporary, 'utf8'), text);
+    assert.equal((await editor({ op: 'edit', path: 'state.md.tmp', expected: '## Headline\n',
+      replacement: '## Headline\nUpdated through the fixed name.\n', token })).ok, true);
+    const result = run('sync-files', ['commit', '--token', token], env, JSON.stringify({ followedUpIds: [], inputs, batch }));
+    assert.equal(result.status, 0, result.stderr);
+    const published = fs.readFileSync(inputs.statePath, 'utf8');
+    assert.match(published, /Updated through the fixed name\./);
+    assert.match(published, /coverage=1/);
+    assert.doesNotMatch(published, /synced_at=2026-10-19/);
+    assert.equal(fs.existsSync(temporary), false);
+    assert.equal(fs.existsSync(path.join(memoryDir, 'state.md.tmp')), false);
+  });
 }
 
 // Real CLI boundary: listing ignores supplied token values, while every write

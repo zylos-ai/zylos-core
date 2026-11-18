@@ -40,7 +40,8 @@ export function createMemoryEditor(env = process.env, { fragment = applyFragment
           return ['reference/projects.md', 'reference/decisions.md'].includes(lower) ||
             lower === 'reference/legacy' || lower.startsWith('reference/legacy/');
         };
-        const resolved = resolveAllowedMemoryPath({ root: scope.root, path: input.path, allowed: candidate => {
+        const requested = input.path === 'state.md.tmp' && marker.kind !== 'origin' ? temporary : input.path;
+        const resolved = resolveAllowedMemoryPath({ root: scope.root, path: requested, allowed: candidate => {
           if (legacy(candidate)) throw memoryError('LEGACY_READ_ONLY', 'Legacy memory paths are read-only');
           return allowed(candidate);
         } });
