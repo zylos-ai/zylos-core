@@ -177,6 +177,11 @@ export class ClaudeAdapter extends SessionAdapter {
       if (typeof err.code === 'number' && output.includes('Not logged in')) {
         return { status: 'failure', reason: 'cli_probe_not_logged_in' };
       }
+      if (typeof err.code === 'number' && [
+        'Invalid API key', 'Invalid auth token', 'Authentication required',
+      ].some(message => output.includes(message))) {
+        return { status: 'failure', reason: 'cli_probe_credentials_rejected' };
+      }
       return { status: 'uncertain', reason: 'cli_probe_unexpected_error' };
     }
   }

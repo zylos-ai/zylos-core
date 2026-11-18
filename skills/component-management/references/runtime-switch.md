@@ -41,6 +41,11 @@ Codex credentials live in `~/.codex/auth.json` and `~/zylos/.env`.
 
 ## Switching to Claude Code (`AUTH_FAILED`, or login required after an uncertain check)
 
+When the CLI probe exits normally with an error and prints `Invalid API key`,
+`Invalid auth token` or `Authentication required`, the switch reports
+`AUTH_FAILED`. For these phrases, a timeout, signal or transient API/rate-limit
+error remains `AUTH_NOT_CONFIRMED`, even if the rejection text was also printed.
+
 Ask the user which auth method they prefer. API key is fastest; setup token
 is a good fallback for automated setups. Example message:
 

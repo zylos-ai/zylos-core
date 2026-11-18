@@ -89,6 +89,41 @@ test('Claude exit one with logged-out stderr confirms failure', async t => {
   assert.deepEqual(await adapter.checkAuth(), { status: 'failure', reason: 'cli_probe_not_logged_in' });
 });
 
+const claudeRejections = [
+  'Invalid API key · Fix external API key',
+  'Invalid auth token · Fix external auth token',
+  'Authentication required · Sign in again to continue',
+];
+
+for (const output of claudeRejections) {
+  for (const stream of ['stdout', 'stderr']) {
+    test(`Claude exit one with ${output} on ${stream} confirms failure`, async t => {
+      const adapter = await fixture(t, 'claude', { [stream]: output });
+      assert.deepEqual(await adapter.checkAuth(), { status: 'failure', reason: 'cli_probe_credentials_rejected' });
+    });
+  }
+  for (const termination of ['signal', 'timeout']) {
+    test(`Claude ${output} followed by ${termination} stays uncertain`, async t => {
+      const trace = {};
+      const adapter = await fixture(t, 'claude', { stdout: output,
+        ...(termination === 'signal' ? { signal: 'SIGTERM' } : { wait: true }) },
+      { timeout: 1000, trace });
+      assert.equal((await adapter.checkAuth()).status, 'uncertain');
+      assert.equal(trace.stdout, output, 'rejection text must be captured before interruption');
+      assert.equal(typeof trace.code === 'number', false);
+      assert.equal(trace.signal, 'SIGTERM');
+      if (termination === 'timeout') assert.equal(trace.killed, true);
+    });
+  }
+}
+
+for (const transient of ['api_error', 'rate_limit_error']) {
+  test(`Claude explicit rejection mixed with ${transient} remains uncertain`, async t => {
+    const adapter = await fixture(t, 'claude', { stdout: claudeRejections[0], stderr: transient });
+    assert.deepEqual(await adapter.checkAuth(), { status: 'uncertain', reason: 'cli_probe_uncertain' });
+  });
+}
+
 for (const transient of ['rate_limit_error', 'api_error']) {
   test(`Claude ${transient} remains transient beside another tool's logged-out text`, async t => {
     const adapter = await fixture(t, 'claude', { stderr: `[mcp] github: Not logged in\n${transient}` });
@@ -152,6 +187,9 @@ async function assertSwitchRejected(target, adapter, status) {
     assert.equal(result.ok, false);
     assert.equal(result.error.code, status === 'failure' ? 'AUTH_FAILED' : 'AUTH_NOT_CONFIRMED');
     assert.equal(result.error.authStatus, status);
+    assert.equal(result.error.message, status === 'failure'
+      ? `${target} credentials rejected or not logged in; replace credentials or log in again with zylos auth ${target}`
+      : `${target} authentication could not be confirmed; check network/proxy connectivity, then retry zylos runtime ${target}`);
     assert.equal(process.exitCode, 1);
     assert.deepEqual(lines.map(JSON.parse), [result]);
     assert.deepEqual(result.error.persisted, []);
@@ -185,4 +223,15 @@ for (const [output, status] of [['Not logged in', 'failure'], ['rate_limit_error
     const adapter = await fixture(t, 'claude', { stderr: output });
     await assertSwitchRejected('claude', adapter, status);
   });
+}
+
+for (const output of claudeRejections) {
+  for (const interrupted of [false, true]) {
+    const status = interrupted ? 'uncertain' : 'failure';
+    test(`Claude ${output}${interrupted ? ' interrupted' : ''} reaches runtime code and remedy as ${status}`, async t => {
+      const adapter = await fixture(t, 'claude', { stdout: output,
+        ...(interrupted ? { signal: 'SIGTERM' } : {}) });
+      await assertSwitchRejected('claude', adapter, status);
+    });
+  }
 }
