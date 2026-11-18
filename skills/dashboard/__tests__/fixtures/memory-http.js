@@ -95,7 +95,7 @@ export async function setupMemoryHttp(t) {
   };
   const execFile = () => assert.fail('callback child invocation must not bypass the injected transport');
   execFile[promisify.custom] = async (file, args) => {
-    if (['zylos', 'claude', 'codex'].includes(file) && args.length === 1 && args[0] === '--version') {
+    if (['zylos', 'claude', 'codex', 'agy'].includes(file) && args.length === 1 && args[0] === '--version') {
       versionCalls.push({ file, args });
       return { stdout: '1.0.0' };
     }

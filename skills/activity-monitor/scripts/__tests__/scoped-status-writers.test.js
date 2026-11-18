@@ -41,3 +41,17 @@ test('grouped status publishes unavailable time only from an authoritative unava
  const limited=write({health:'rate_limited',scheduling:{unavailableSince:123,cooldownUntil:456,rateLimitResetTime:'later'}});
  assert.equal(limited.cooldown_until,456);assert.equal(limited.rate_limit_reset,'later');
 });
+
+test('malformed optional model configuration preserves native statusLine publication', t => {
+  const f = fixture(t);
+  const raw = { session_id: 's', conversation_id: 'untouched-native', transcript_path: '/native/transcript', context_window: { used_percentage: 42 } };
+  for (const value of ['{ invalid optional metadata', 'null', '42']) {
+    const sample = publishContextSample(raw, { env: { ...f.env, ZYLOS_MODEL_CONFIG: value }, now: 123 });
+    const { zylos, ...native } = sample;
+    assert.deepEqual(native, raw);
+    assert.equal(zylos.runId, 'r');
+    const published = JSON.parse(fs.readFileSync(path.join(f.runDir, 'statusline.json'), 'utf8'));
+    assert.equal(published.session_id, 's');
+    assert.equal(published.transcript_path, raw.transcript_path);
+  }
+});

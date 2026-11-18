@@ -155,7 +155,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     },
     resolveTargetRuntime,
     checkAuth:runtime=>getSessionAdapter(runtime).checkAuth(),
-    matchScreen:(runtime,screen)=>(runtime==='claude'?matchClaudeScreen:matchCodexScreen)(screen),
+    matchScreen:(runtime,screen)=>runtime==='agy'?{}:(runtime==='claude'?matchClaudeScreen:matchCodexScreen)(screen),
     resolveToolRule:(runtime,tool)=>findMatchingToolRule({runtimeId:runtime,toolName:tool.name,toolInput:tool.input,config:configuration}),
     prepareReferenceReorg:()=>prepareReferenceReorg({root,now:clock()}),
     readSyncMarker:options=>{if(!syncReader)throw unavailable('Sync marker reader');return syncReader(options);},prompts,

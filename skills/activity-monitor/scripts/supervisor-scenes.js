@@ -68,7 +68,7 @@ export class SupervisorScenes {
     if (sampled.identity.runId !== scene.runId || sampled.identity.sessionId !== scene.sessionId || !sampled.usage.valid) return;
     const value = sampled.usage.value;
     Object.assign(scene, usageModelFacts(value, scene.runtime, scene.launchConfig));
-    const percent = scene.runtime === 'claude' ? value.context_window?.used_percentage :
+    const percent = ['claude', 'agy'].includes(scene.runtime) ? value.context_window?.used_percentage :
       value.contextUsage?.ceiling > 0 ? 100 * value.contextUsage.used / value.contextUsage.ceiling : null;
     scene.usagePercent = Number.isFinite(percent) ? percent : null;
   }
@@ -93,7 +93,7 @@ export class SupervisorScenes {
       scene.runtimePid = target.runtimePid;
       if (Number.isSafeInteger(scene.runtimePid) && scene.runtimePid > 0) {
         scene.proc = { pid: scene.runtimePid, alive: true, last_sample_at: this.now() };
-        if (scene.ready && scene.runtime === 'claude') scene.healthIdentity = { runtime: scene.runtime, session_id: scene.sessionId, claude_pid: scene.runtimePid };
+        if (scene.ready && ['claude', 'agy'].includes(scene.runtime)) scene.healthIdentity = { runtime: scene.runtime, session_id: scene.sessionId, claude_pid: scene.runtimePid };
       }
       if (scene.ready) {
         if (this.readActivity) {

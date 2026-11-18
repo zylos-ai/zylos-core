@@ -400,7 +400,7 @@ export class Store {
     const version = this.db.pragma('data_version', { simple: true });
     if (!this._historyAttribution || version !== this._historyDataVersion) {
       const rows = this.db.prepare(`SELECT session_id, runtime, session_group, MAX(timestamp) AS latest_timestamp, MAX(event_seq) AS latest_seq FROM runtime_events
-        WHERE session_id IS NOT NULL AND runtime IN ('claude', 'codex')
+        WHERE session_id IS NOT NULL AND runtime IN ('claude', 'codex', 'agy')
         GROUP BY session_id, runtime, session_group ORDER BY MAX(timestamp) DESC, MAX(event_seq) DESC`).all();
       this._historyAttribution = new Map(rows.map(row => [JSON.stringify([row.session_id, row.runtime, row.session_group]), row]));
       this._historyDataVersion = version;
@@ -429,7 +429,7 @@ export class Store {
       source: event.source || 'hook',
       confidence: event.confidence || 'actual'
     });
-    if (info.changes && event.session_id && ['claude', 'codex'].includes(event.runtime || 'claude')) {
+    if (info.changes && event.session_id && ['claude', 'codex', 'agy'].includes(event.runtime || 'claude')) {
       const row = { session_id: event.session_id, runtime: event.runtime || 'claude', session_group: event.session_group ?? null };
       const key = JSON.stringify([row.session_id, row.runtime, row.session_group]);
       if (!this._historyAttribution?.has(key)) this.historyRevision++;

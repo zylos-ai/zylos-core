@@ -9,6 +9,7 @@ const ROOT = process.cwd();
 const ROOT_NODE_TESTS = [
   'test/tmux-directory.integration.test.js',
   'test/dispatcher-startup.integration.test.js',
+  'test/instruction-deployment.integration.test.js',
   'test/tmux-dashboard-reads.integration.test.js',
   'test/claude-upgrade-process.integration.test.js',
   'test/dashboard-display-browser.test.js',

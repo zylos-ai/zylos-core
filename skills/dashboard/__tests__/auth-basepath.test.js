@@ -555,7 +555,7 @@ test('/api/instance exposes stable agent identity without fleet secrets', async 
     assert.equal(typeof body.agent.hue, 'number');
     assert.equal(Object.hasOwn(body, 'new_session_threshold'), false, 'per-session threshold belongs to the group');
     assert.equal(Object.hasOwn(body, 'runtime_info'), false);
-    assert.deepEqual(Object.keys(body.versions).sort(), ['claude', 'codex', 'zylos']);
+    assert.deepEqual(Object.keys(body.versions).sort(), ['agy', 'claude', 'codex', 'zylos']);
     for (const version of Object.values(body.versions)) assert.deepEqual(Object.keys(version).sort(), ['installed', 'latest', 'update']);
     assert.ok(body.resources && typeof body.resources === 'object');
     assert.ok(Object.hasOwn(body.resources, 'cpu_pct'));

@@ -42,14 +42,14 @@ export async function readReadiness({ load = loadCoreModule } = {}) {
       }
       catch { /* Observation failure is distinct from confirmed absence. */ }
     }
-    for (const runtime of ['claude', 'codex']) {
+    for (const runtime of ['claude', 'codex', 'agy']) {
       let record;
       try { record = await reader.readRuntimeHealth(runtime); } catch { record = { unreadable: true }; }
       const source = record?.missing ? 'missing' : record?.unreadable || !HEALTH_STATES.has(record?.health) ? 'unreadable' : 'record';
       runtimeHealth[runtime] = { source, health: source === 'record' ? record.health : null };
     }
   } catch {
-    for (const runtime of ['claude', 'codex']) runtimeHealth[runtime] = { source: 'unreadable', health: null };
+    for (const runtime of ['claude', 'codex', 'agy']) runtimeHealth[runtime] = { source: 'unreadable', health: null };
   }
   const reason = !supervisor ? 'supervisor_unavailable'
     : sessionMode === 'single' && sessionRunning === false ? 'session_not_running' : null;

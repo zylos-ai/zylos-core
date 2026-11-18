@@ -85,7 +85,7 @@ export async function handleCoreAction(action, body, config) {
       messageParams: { value: body.mode, code: result.error?.code || 'unknown' } };
   }
   if (action === 'switch-runtime') {
-    if (!['claude', 'codex'].includes(body?.runtime)) return { ok: false, error: 'INVALID_RUNTIME', messageKey: 'result.invalid_runtime' };
+    if (!['claude', 'codex', 'agy'].includes(body?.runtime)) return { ok: false, error: 'INVALID_RUNTIME', messageKey: 'result.invalid_runtime' };
     const result = await command('zylos', ['runtime', body.runtime, '--json'], { timeout: 65000 });
     const saved = result.ok && result.data?.result === 'saved';
     const unchanged = result.ok && result.data?.result === 'unchanged';

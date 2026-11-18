@@ -2,14 +2,14 @@ import { createHash } from 'node:crypto';
 import { sanitizeHealthQuota } from './health-quota.js';
 import { classifyHealthNotice, sanitizeNoticeMatch } from './health-notice-classification.js';
 
-export const HOOK_ERRORS = new Set(['rate_limit', 'authentication_failed', 'billing_error', 'overloaded', 'server_error', 'model_not_found']);
+export const HOOK_ERRORS = new Set(['rate_limit', 'authentication_failed', 'billing_error', 'overloaded', 'server_error', 'network_error', 'model_not_found']);
 const id = value => typeof value === 'string' && /^[A-Za-z0-9._:-]{1,200}$/.test(value);
 const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value);
 export const HEALTH_EVENT_MAX_AGE_MS = 300000;
 export const QUOTA_MAX_AGE_MS = 60000;
 
 export function sanitizeHealthEvent(raw, fallbackId) {
-  if (!raw || raw.schema_version !== 1 || raw.source !== 'hook' || raw.runtime !== 'claude' || !uuid(raw.event_id) || !id(raw.session_id) || (raw.prompt_id !== null && !id(raw.prompt_id)) || !['session_start','prompt_submit','stop_failure','stop'].includes(raw.event) || !Number.isSafeInteger(raw.received_at) || !Number.isSafeInteger(raw.claude_pid) || raw.claude_pid <= 0 || (raw.event === 'stop_failure' && !id(raw.error))) {
+  if (!raw || raw.schema_version !== 1 || raw.source !== 'hook' || !['claude', 'agy'].includes(raw.runtime) || !uuid(raw.event_id) || !id(raw.session_id) || (raw.prompt_id !== null && !id(raw.prompt_id)) || !['session_start','prompt_submit','stop_failure','stop'].includes(raw.event) || !Number.isSafeInteger(raw.received_at) || !Number.isSafeInteger(raw.claude_pid) || raw.claude_pid <= 0 || (raw.event === 'stop_failure' && !id(raw.error))) {
     return { event_id: `invalid:${createHash('sha256').update(String(fallbackId)).digest('hex')}`, source: 'invalid', received_at: 0 };
   }
   const event = Object.fromEntries(['schema_version','event_id','source','runtime','session_id','prompt_id','event','received_at','claude_pid'].map(key => [key,raw[key]]));
@@ -37,7 +37,7 @@ export function initialHealthEvidence(health = 'ok', reason = '') {
 
 export function safeHealthReason(health, reason) {
   if (health === 'ok') return '';
-  const allowed = new Set(['rate_limit_unclassified','rate_limit_five_hour','rate_limit_seven_day','authentication_failed','billing_error','overloaded','server_error','model_not_found','hook_evidence_unordered','health_storage_unavailable']);
+  const allowed = new Set(['rate_limit_unclassified','rate_limit_five_hour','rate_limit_seven_day','authentication_failed','billing_error','overloaded','server_error','network_error','model_not_found','hook_evidence_unordered','health_storage_unavailable']);
   if (allowed.has(reason)) return reason;
   if (health === 'ok') return '';
   if (health === 'rate_limited') return 'rate_limit_unclassified';
@@ -48,7 +48,8 @@ export function safeHealthReason(health, reason) {
 export function reduceHealthEvidence(state, event, { identity, now, quota = null, maxAgeMs = HEALTH_EVENT_MAX_AGE_MS } = {}) {
   const ignored = reason => ({ state, status: 'ignored', reason });
   if (event.source === 'invalid') return ignored('invalid_event');
-  if (!identity || !identity.session_id || !Number.isSafeInteger(identity.claude_pid) || identity.claude_pid<=0 || identity.runtime !== 'claude') return ignored('missing_runtime_proof');
+  if (!identity || !identity.session_id || !Number.isSafeInteger(identity.claude_pid) || identity.claude_pid<=0 || !['claude', 'agy'].includes(identity.runtime)) return ignored('missing_runtime_proof');
+  if (event.runtime !== identity.runtime) return ignored('foreign_runtime_or_session');
   if (event.session_id !== identity.session_id || event.claude_pid !== identity.claude_pid) return ignored('foreign_runtime_or_session');
   if (now-event.received_at < 0 || now-event.received_at > maxAgeMs) return ignored('stale_event');
   let next = state;
@@ -66,11 +67,11 @@ export function reduceHealthEvidence(state, event, { identity, now, quota = null
     return {state:{...next,source:'hook',evidence_id:event.event_id,hook_ok:true,hook_prompt:null,hook_pid:event.claude_pid},status:'processed',reason:'hook_ok'};
   }
   if (event.event !== 'stop_failure') return { state: next, status: 'processed', reason: 'identity_observed' };
-  if (!event.prompt_id) return { state: next, status: 'processed', reason: 'missing_prompt', verify: true };
+  if (!event.prompt_id && event.runtime !== 'agy') return { state: next, status: 'processed', reason: 'missing_prompt', verify: true };
   next = {...next,recovered:null};
   const notice = classifyHealthNotice(event, now);
   const classification = notice.eligible ? notice.reason : event.error;
-  const health = event.error === 'rate_limit' ? 'rate_limited' : event.error === 'authentication_failed' ? 'auth_failed' : null;
+  const health = event.error === 'rate_limit' ? 'rate_limited' : event.error === 'authentication_failed' ? 'auth_failed' : event.runtime === 'agy' ? 'unavailable' : null;
   if (!health) return { state: next, status: 'processed', notice, reason: classification === 'unknown' ? 'unmapped_error' : classification };
   return { state: { ...next, health, reason: classification, notice, source: 'hook', hook_ok:false, hook_pid:event.claude_pid, hook_prompt: event.prompt_id, evidence_id: event.event_id,
     hook_failure:{event_id:event.event_id,error:event.error,observed_at:event.received_at},

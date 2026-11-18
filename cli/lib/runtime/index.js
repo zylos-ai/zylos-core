@@ -1,7 +1,8 @@
 /** Runtime selection is explicit: use the observed runtime or resolved configuration. */
 import { ClaudeAdapter } from './claude.js';
 import { CodexAdapter } from './codex.js';
-const REGISTRY = { claude: ClaudeAdapter, codex: CodexAdapter };
+import { AgyAdapter } from './agy.js';
+const REGISTRY = { claude: ClaudeAdapter, codex: CodexAdapter, agy: AgyAdapter };
 export const SUPPORTED_RUNTIMES = Object.freeze(Object.keys(REGISTRY));
 export function getSessionAdapter(runtime, options = {}) {
   const Adapter = REGISTRY[runtime];

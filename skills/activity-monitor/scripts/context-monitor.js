@@ -29,7 +29,14 @@ export function publishContextSample(raw, { env = process.env, now = Date.now() 
   const status = typeof raw === 'string' ? JSON.parse(raw) : raw;
   if (!status || typeof status !== 'object' || Array.isArray(status)) throw new Error('Invalid statusLine sample');
   const location = runDirFromEnv(env);
+  let runtime = 'claude';
+  try { runtime = JSON.parse(env.ZYLOS_MODEL_CONFIG || '{}')?.runtime || 'claude'; } catch { /* Preserve native Claude publication for malformed optional metadata. */ }
   const sample = { ...status };
+  if (runtime === 'agy') {
+    // Native statusLine transcript_path is not the CLI transcript. Hooks own that association.
+    delete sample.transcript_path;
+    sample.session_id = status.conversation_id ?? status.conversationId ?? status.session_id;
+  }
   if (location.kind === 'legacy') {
     // Pre-upgrade sessions have no authoritative run identity. Keep the native
     // sample at the legacy path without claiming a versioned run envelope.

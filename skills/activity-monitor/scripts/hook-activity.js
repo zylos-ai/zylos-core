@@ -10,6 +10,9 @@ const { runDirFromEnv, RUN_FILES, hookErrorLogPath } = await loadCoreModule('ses
 const EVENTS = { SessionStart:'session_start', UserPromptSubmit:'prompt', PreToolUse:'pre_tool', PostToolUse:'post_tool', PostToolUseFailure:'post_tool_failure', PermissionRequest:'permission_request', Stop:'stop', Notification:'idle', SubagentStart:'subagent_start', SubagentStop:'subagent_stop' };
 const INPUT_FIELDS = { Bash:['command','description'], Read:['file_path'], Edit:['file_path'], Write:['file_path'], Skill:['skill'], Agent:['description','subagent_type'], Task:['description','subagent_type'], WebSearch:['query'], WebFetch:['url'], view_image:['path'] };
 export function selectToolInput(tool, input) {
+  if (tool === 'run_command' && input && typeof input === 'object') {
+    return Object.fromEntries(['CommandLine', 'Cwd'].filter(key => Object.hasOwn(input, key)).map(key => [key, input[key]]));
+  }
   if (tool === 'apply_patch') {
     const patch = typeof input === 'string' ? input : input?.patch ?? input?.input;
     return typeof patch === 'string' ? { file_paths: [...patch.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)].map(match=>match[1]) } : undefined;
@@ -22,7 +25,7 @@ export function handleHookActivity(data, { nowMs=Date.now(), env=process.env } =
   if (!event || (event==='idle' && data.notification_type!=='idle_prompt')) return null;
   const location=runDirFromEnv(env);
   const runtime=env.ZYLOS_MODEL_CONFIG ? JSON.parse(env.ZYLOS_MODEL_CONFIG).runtime : 'claude';
-  if (!['claude','codex'].includes(runtime) || typeof data.session_id!=='string' || !data.session_id) return null;
+  if (!['claude','codex','agy'].includes(runtime) || typeof data.session_id!=='string' || !data.session_id) return null;
   const record={v:1,ts:nowMs,event,runtime,session_group:location.kind==='legacy'?null:(location.sessionGroup || 'origin'),run_id:env.ZYLOS_RUN_ID || null,session_id:data.session_id};
   for(const field of ['agent_id','agent_type','turn_id','model','permission_mode','transcript_path']) if(Object.hasOwn(data,field))record[field]=data[field];
   if(['pre_tool','post_tool','post_tool_failure','permission_request'].includes(event)) {

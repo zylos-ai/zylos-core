@@ -200,9 +200,10 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
         : ov.ok ? { runtime: selectedRuntime, model: selectedModel ? { model: selectedModel.model, effort: selectedModel.effort } : 'default' }
           : { runtime: null, reason: 'override_list_failed' };
       if (status?.view === 'single') row.target.onlyMulti = true;
-      row.model = usage?.valid ? (row.target.runtime === 'claude' ? usage.value.model?.id : usage.value.model) ?? null
+      row.model = usage?.valid ? (['claude', 'agy'].includes(row.target.runtime) ? usage.value.model?.id : usage.value.model) ?? null
         : row.launchConfig?.mode === 'override' ? row.launchConfig.model ?? null : null;
-      row.effort = usage?.valid ? usage.value.effort?.level ?? usage.value.reasoningEffort ?? usage.value.reasoning_effort ?? null : row.launchConfig?.effort ?? null;
+      row.effort = usage?.valid ? (row.target.runtime === 'agy' ? usage.value.model?.effort :
+        usage.value.effort?.level ?? usage.value.reasoningEffort ?? usage.value.reasoning_effort) ?? null : row.launchConfig?.effort ?? null;
       row.desired = status?.view === 'single' || !ov.ok ? null : selectedModel
         ? { runtime: selectedRuntime, mode: 'override', model: selectedModel.model, effort: selectedModel.effort }
         : { runtime: selectedRuntime, mode: 'default' };

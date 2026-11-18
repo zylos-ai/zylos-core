@@ -8,7 +8,7 @@ import { tmuxError, TMUX_COMMAND as C, TMUX_FORMAT as F, isTmuxError,
 
 const exec = promisify(execFile);
 const bindings = new WeakMap();
-const known = new Set(['claude', 'codex']);
+const known = new Set(['claude', 'codex', 'agy']);
 
 function validReady(value) {
   return value && typeof value.runId === 'string' && value.runId && typeof value.sessionId === 'string' && value.sessionId &&

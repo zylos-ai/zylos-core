@@ -99,8 +99,19 @@ function classifyCutoff(j) {
       !Number.isFinite(Date.parse(c.closedAt))) return 'untrusted';
   return 'closed';
 }
+// Hash in fixed-size chunks: rollback hashes databases, and readFileSync rejects
+// files over 2 GiB. The digest is identical to a whole-file read.
+const HASH_CHUNK_BYTES = 1024 * 1024;
 function hash(file) {
-  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  const digest = crypto.createHash('sha256'),
+    buffer = Buffer.allocUnsafe(HASH_CHUNK_BYTES),
+    fd = fs.openSync(file, 'r');
+  try {
+    for (let bytes; (bytes = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0;) digest.update(buffer.subarray(0, bytes));
+  } finally {
+    fs.closeSync(fd);
+  }
+  return digest.digest('hex');
 }
 function fsyncFd(fd) {
   // Use Node's platform synchronization contract. On macOS libuv attempts

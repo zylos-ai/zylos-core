@@ -58,10 +58,28 @@ test('unavailable Core observations use the public managed-session error', async
 
 test('single managed bindings reject historical runtime session names', async () => {
   const f = fixture(); f.setMode('single');
-  for (const runtime of ['claude', 'codex']) {
+  for (const runtime of ['claude', 'codex', 'agy']) {
     const identity = { ...live(null, runtime), tmuxName: `${runtime}-main` };
     f.groups.set(null, identity);
     await assert.rejects(f.resolve(), { code: 'agent_session_unavailable' });
     assert.equal(await validObserverBinding({ ...identity, sessionMode: 'single', sessionGroup: null }, identity.tmuxName, identity.runId), false);
+  }
+});
+
+
+test('agy managed sessions resolve and retain their identity binding in both session modes', async () => {
+  const f = fixture();
+  for (const mode of ['single', 'multi']) {
+    f.setMode(mode);
+    const group = mode === 'single' ? null : 'telegram:42';
+    f.groups.set(group, live(group, 'agy'));
+    const target = await f.resolve(group);
+    assert.equal(target.runtime, 'agy');
+    assert.equal(target.sessionGroup, group);
+    assert(await validObserverBinding(target, target.tmuxName, target.runId));
+    assert.equal(await validObserverBinding(target, target.tmuxName, 'replaced'), false);
+    assert.equal(await validObserverBinding({ ...target, runtime: 'foreign' }, target.tmuxName, target.runId), false);
+    f.groups.set(group, { ...live(group, 'agy'), tmuxName: 'foreign-session' });
+    await assert.rejects(f.resolve(group), { code: 'agent_session_unavailable' });
   }
 });

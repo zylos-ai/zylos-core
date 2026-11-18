@@ -42,6 +42,8 @@ import {
 import { deployManifestTemplate } from '../lib/runtime/tmux-env.js';
 import { runMigrations } from '../lib/migrate.js';
 import { ensureCodexHooksTrusted } from '../lib/codex-hooks.js';
+import { syncAgyConfig } from '../lib/agy-setup.js';
+import { getSessionAdapter } from '../lib/runtime/index.js';
 import { syncRuntimeHooks } from '../lib/sync-runtime-hooks.js';
 import { runtimeHooksReady } from './runtime.js';
 import {
@@ -80,13 +82,13 @@ const TEMPLATES_SRC = path.join(PACKAGE_ROOT, 'templates');
 const MIN_NODE_MAJOR = 20;
 const MIN_NODE_MINOR = 20;
 
-export async function prepareInitRuntimeClis({ exists = commandExists,
+export async function prepareInitRuntimeClis({ runtimes = ['claude', 'codex'], exists = commandExists,
   install = { claude: installClaude, codex: installCodex } } = {}) {
   const result = { completed: [], failed: [], installed: [] };
-  for (const runtime of ['claude', 'codex']) {
+  for (const runtime of runtimes) {
     try {
       if (!exists(runtime)) {
-        if (!await install[runtime]() || !exists(runtime)) throw new Error('CLI installation failed or command not on PATH');
+        if (!install[runtime] || !await install[runtime]() || !exists(runtime)) throw new Error('CLI installation failed or command not on PATH');
         result.installed.push(runtime);
       }
       result.completed.push(`${runtime}.cli`);
@@ -95,7 +97,7 @@ export async function prepareInitRuntimeClis({ exists = commandExists,
   return result;
 }
 
-export async function prepareInitRuntimeAssets({ result = { completed: [], failed: [] },
+export async function prepareInitRuntimeAssets({ runtimes = ['claude', 'codex'], result = { completed: [], failed: [] },
   instruction = runtime => buildInstructionFile(runtime, { zylosDir: ZYLOS_DIR }),
   hooks = { claude: async () => {
     if (!(await runtimeHooksReady('claude')).ready) throw new Error('Claude hooks/instructions not ready');
@@ -105,8 +107,8 @@ export async function prepareInitRuntimeAssets({ result = { completed: [], faile
       // Init does not start Codex; each Codex launch repeats the trust step and does not start Codex until it succeeds.
       throw new Error(`${error.message.replace(/\.+$/, '')}. Codex will not start until hook trust succeeds; each Codex launch tries it again.`, { cause: error });
     }
-  } }, exists = fs.existsSync } = {}) {
-  for (const runtime of ['claude', 'codex']) {
+  }, agy: () => syncAgyConfig({ zylosDir: ZYLOS_DIR }) }, exists = fs.existsSync } = {}) {
+  for (const runtime of runtimes) {
     for (const [item, prepare] of [['instructions', () => {
       const file = instruction(runtime);
       if (!exists(file)) throw new Error('Instruction file unavailable; run zylos migrate-instructions');
@@ -1656,8 +1658,8 @@ export function validateInitOptions(opts, { deferApiFormat = false } = {}) {
   }
 
   // Runtime validation
-  if (opts.runtime && !['claude', 'codex'].includes(opts.runtime)) {
-    return `Invalid runtime: "${opts.runtime}".\n  Supported: claude, codex\n  Example: zylos init --runtime codex`;
+  if (opts.runtime && !['claude', 'codex', 'agy'].includes(opts.runtime)) {
+    return `Invalid runtime: "${opts.runtime}".\n  Supported: claude, codex, agy\n  Example: zylos init --runtime codex`;
   }
 
   // Timezone validation
@@ -1808,6 +1810,7 @@ export async function runInitAuthentication(opts, {
   saveClaudeBase = saveClaudeBaseUrl, saveCodexBase = saveCodexBaseUrl,
   setupSave = saveSetupToken, setupVerify = verifySetupToken, setupRollback = rollbackSetupToken,
   nativeLogin = runInitNativeLogin, writeCodex = writeCodexConfig,
+  agyAuth = () => getSessionAdapter('agy').checkAuth(),
   log = console.log, reportError = console.error,
 } = {}) {
   let exitCode = 0, claudeApiAttempted = false, codexApiAttempted = false;
@@ -1854,6 +1857,14 @@ export async function runInitAuthentication(opts, {
     if (override) log(`  ${warn(override)}`);
     return result;
   };
+  if (selectedRuntime === 'agy') {
+    // Antigravity never enters native subscription login. The key is supplied by the environment or runtime save command.
+    let checked;
+    try { checked = await agyAuth(); } catch { checked = { status: 'uncertain' }; }
+    const agyAuthenticated = exists('agy') && checked.status === 'success';
+    if (!agyAuthenticated) reportError('Antigravity API key not confirmed. Run zylos runtime agy --save-apikey <key>.');
+    return { ...snapshot(), agyAuthenticated, exitCode: agyAuthenticated ? 0 : 1 };
+  }
   if (selectedRuntime === 'codex') {
     // ── Step 6 (Codex): auth + startup config ────────────────────────────
     if (exists('codex')) {
@@ -2068,7 +2079,7 @@ Options:
   Save a default explicitly: zylos upstream set <source>; remove it: zylos upstream clear.
   -y, --yes                  Force non-interactive mode (even with a TTY)
   -q, --quiet                Minimal output
-  --runtime <name>           Agent runtime: claude (default) or codex
+  --runtime <name>           Agent runtime: claude (default), codex, or agy (preinstalled)
   --timezone <tz>            Set timezone (IANA format, e.g., Asia/Shanghai)
   --setup-token <token>      Authenticate with Claude setup token
   --api-key <key>            Claude credential sent as x-api-key
@@ -2248,12 +2259,13 @@ export async function initCommand(args) {
     }
   }
   if (!quiet && !existingRuntime) {
-    const runtimeLabel = selectedRuntime === 'codex' ? 'Codex (OpenAI)' : 'Claude Code';
+    const runtimeLabel = { claude: 'Claude Code', codex: 'Codex (OpenAI)', agy: 'Antigravity CLI (Google)' }[selectedRuntime];
     console.log(`  ${success(`Runtime: ${runtimeLabel}`)}`);
   }
 
   // Prepare both CLIs, but authenticate only the selected runtime.
-  const preparation = await prepareInitRuntimeClis();
+  const preparedRuntimes = selectedRuntime === 'agy' ? ['claude', 'codex', 'agy'] : ['claude', 'codex'];
+  const preparation = await prepareInitRuntimeClis({ runtimes: preparedRuntimes });
   if (preparation.failed.length) exitCode = 1;
   reportInitPreparation(preparation);
   const installState = detectInstallState();
@@ -2268,7 +2280,7 @@ export async function initCommand(args) {
   runMigrations({ zylosDir: ZYLOS_DIR, templatesDir: TEMPLATES_SRC });
   try { deployTemplates({ freshInstall: installState === 'fresh' }); }
   catch (error) { preparation.failed.push({ item: 'templates', message: error.message }); }
-  await prepareInitRuntimeAssets({ result: preparation });
+  await prepareInitRuntimeAssets({ result: preparation, runtimes: preparedRuntimes });
   reportInitPreparation(preparation);
   if (preparation.failed.length) exitCode = 1;
   await ensureInitMemoryMigration({ freshInstall: installState === 'fresh' });
@@ -2454,14 +2466,17 @@ export async function initCommand(args) {
     }
 
     if (!quiet) {
-      const runtimeAuthOk = selectedRuntime === 'codex' ? codexAuthenticated : claudeAuthenticated;
+      const runtimeAuthOk = selectedRuntime === 'agy' ? authentication.agyAuthenticated : selectedRuntime === 'codex' ? codexAuthenticated : claudeAuthenticated;
       if (!runtimeAuthOk) {
         // Yellow warning box — same treatment regardless of whether a credential
         // was attempted or not. Auth is required; Next steps without it is misleading.
         console.log('');
         console.log(yellow('  ┌────────────────────────────────────────────────────────┐'));
         console.log(yellow('  │                                                        │'));
-        if (selectedRuntime === 'codex') {
+        if (selectedRuntime === 'agy') {
+          console.log(yellow('  │  Antigravity requires a valid GEMINI_API_KEY            │'));
+          console.log(yellow('  │  zylos runtime agy --save-apikey <key>                  │'));
+        } else if (selectedRuntime === 'codex') {
           console.log(yellow('  │  ⚠  Codex is not authenticated                         │'));
           console.log(yellow('  │                                                        │'));
           console.log(yellow('  │  Zylos is installed, but Codex will not work until     │'));

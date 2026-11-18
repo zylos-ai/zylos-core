@@ -43,7 +43,7 @@ function checkpoint(args, env = {}) {
 function withTmpDir(fn) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-session-init-'));
   const env = { HOME: path.join(tmpDir, 'home'), ZYLOS_DIR: tmpDir, PM2_HOME: path.join(tmpDir, 'pm2'),
-    TMPDIR: path.join(tmpDir, 'tmp'), TMUX_TMPDIR: path.join(tmpDir, 'tmp'),
+    TMPDIR: path.join(tmpDir, 'tmp'), TMUX_TMPDIR: path.join(tmpDir, 'tmp'), TZ: 'Asia/Singapore',
     ZYLOS_PACKAGE_ROOT: fileURLToPath(new URL('../../../../', import.meta.url)) };
   for (const directory of [env.HOME, env.PM2_HOME, env.TMPDIR]) fs.mkdirSync(directory);
   console.log('Session init isolation:', JSON.stringify({ ...env, database: path.join(tmpDir, 'comm-bridge/c4.db'),
@@ -70,6 +70,7 @@ describe('c4-session-init', () => {
       assert.ok(stdout.includes('read-work-memory.js'));
       assert.ok(stdout.includes('No handoff file is available for this scope'));
       assert.doesNotMatch(stdout, /Before resuming work, read .*handoff/);
+      assert.doesNotMatch(stdout, /handoff-follow-up\.md/);
       assert.ok(!stdout.includes('ACTION REQUIRED'));
     });
   });
@@ -82,6 +83,7 @@ describe('c4-session-init', () => {
       const { stdout, status } = cli([], env);
       assert.equal(status, 0);
       assert.ok(stdout.includes(`Before resuming work, read ${file} in full`));
+      assert.ok(stdout.includes(path.join(tmpDir, '.claude/skills/comm-bridge/references/handoff-follow-up.md')));
       assert.doesNotMatch(stdout, /No handoff file is available/);
       assert.equal(fs.readFileSync(file, 'utf8'), 'unfinished task');
     });
@@ -109,11 +111,13 @@ describe('c4-session-init', () => {
       assert.ok(stdout.includes(`Scope: ${group}. Working memory is not injected.`));
       if (present) {
         assert.ok(stdout.includes(`Before resuming work, read ${groupFile} in full, using successive file ranges when needed. Reading does not consume it; retain unfinished items.`));
+        assert.ok(stdout.includes(path.join(tmpDir, '.claude/skills/comm-bridge/references/handoff-follow-up.md')));
         assert.doesNotMatch(stdout, /No handoff file is available/);
         assert.equal(fs.readFileSync(groupFile, 'utf8'), 'unfinished group task');
       } else {
         assert.ok(stdout.includes(`No handoff file is available for this scope (${groupFile}).`));
         assert.doesNotMatch(stdout, /Before resuming work, read .*handoff/);
+        assert.doesNotMatch(stdout, /handoff-follow-up\.md/);
         assert.equal(fs.readFileSync(rootFile, 'utf8'), 'unrelated root task');
       }
       assert.ok(!stdout.includes(`read ${rootFile} in full`), 'root handoff never supplies the group instruction');

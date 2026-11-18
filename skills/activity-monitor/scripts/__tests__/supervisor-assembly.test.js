@@ -132,7 +132,7 @@ test('assembly: message health notification stays immediate while work delivery 
  assert.deepEqual(calls,[['health',notification],['message',notification],['work',notification]]);
 });
 test('assembly: restore health before admission; no-launch empty round executes',async t=>{
- const {supervisor}=fixture(t);assert.equal(supervisor.admission.open,false);await supervisor.loop.start();assert.equal(supervisor.admission.open,true);assert.equal(supervisor.health.stores.size,2);
+ const {supervisor}=fixture(t);assert.equal(supervisor.admission.open,false);await supervisor.loop.start();assert.equal(supervisor.admission.open,true);assert.deepEqual([...supervisor.health.stores.keys()].sort(),['agy','claude','codex']);
  const reply=await supervisor.admission.handle({version:1,type:'restart_all',requestId:'empty',reason:'upgrade'});assert.equal(reply.result,'done_empty');
 });
 test('assembly: damaged retained while existing lifecycle loop stays scheduled',async t=>{

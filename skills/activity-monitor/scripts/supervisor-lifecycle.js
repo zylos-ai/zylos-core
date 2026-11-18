@@ -19,7 +19,7 @@ export const EVICTION_CHECK_ACK_TIMEOUT_MS = 60000;
 export const UPGRADE_CHECK_ACK_TIMEOUT_MS = 60000;
 
 export function sceneRotationThreshold(scene, configuration) {
-  if (!['claude', 'codex'].includes(scene.runtime)) return null;
+  if (!['claude', 'codex', 'agy'].includes(scene.runtime)) return null;
   return modelThreshold(configuration.rotationPolicy ?? {}, {
     runtime: scene.runtime, model: scene.model, contextWindow: scene.contextWindow,
     launchConfig: scene.launchConfig,
