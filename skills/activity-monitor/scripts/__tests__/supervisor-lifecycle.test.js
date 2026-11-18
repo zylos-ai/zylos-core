@@ -175,7 +175,7 @@ test('Origin checks both Sync markers; stale markers permit reclaim', async () =
 });
 // no in single auth; deadline-less controls ignored and final race holds.
 test('single auth ignores only deadline-less controls and retries a final count race', async () => {
-  const f = fixture(); f.context.configuration.mode = 'single'; f.scenes = [scene(null)];
+  const f = fixture(); f.context.configuration.mode = 'single'; f.context.configuration.legacy = true; f.scenes = [scene(null)];
   f.runningControls = 1; f.withoutDeadline = 1;
   const row = { reason: 'auth', runId: 'run-null' }; let reads = 0;
   f.db.countGlobalRunningConversations = () => ++reads > 1 ? 1 : 0;
@@ -494,7 +494,7 @@ test('require_idle control delivers from unchanged main idle state while a backg
   assert.equal(result.delivered, true); assert.equal(sends, 1);
   assert.equal(c4.db.prepare('SELECT status FROM control_queue WHERE id=?').pluck().get(control.id), 'running');
 });
-test('Origin idle TTL without backlog writes only the check control, then fences and reclaims; single has no TTL', async () => {
+test('Origin idle TTL without backlog writes only the check control, then fences and reclaims; legacy has no TTL', async () => {
   const f = fixture(); f.scenes = [scene('origin')];
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   assert.deepEqual(f.controls.map(control => control.content), ['check']); assert.equal(f.fences.size, 0);
@@ -505,7 +505,7 @@ test('Origin idle TTL without backlog writes only the check control, then fences
   assert.equal(fence.reason, 'ttl'); assert.equal(fence.runId, 'run-origin');
   assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
   assert.deepEqual(f.stops, ['run-origin']); assert.equal(f.controls.length, 1); assert.equal(f.fences.size, 0);
-  const single = fixture(); single.context.configuration.mode = 'single'; single.scenes = [scene(null)];
+  const single = fixture(); single.context.configuration.mode = 'single'; single.context.configuration.legacy = true; single.scenes = [scene(null)];
   await single.lifecycle.checkTtl(single.scenes[0], single.context);
   assert.equal(await single.lifecycle.beginReclaim(single.scenes[0], 'ttl', single.context), false);
   assert.equal(single.controls.length, 0); assert.equal(single.fences.size, 0);
@@ -861,8 +861,8 @@ test('failed F9 deletion preserves restart and does not emit completion', async 
   f.deps.requests.remove = () => { throw new Error('disk full'); };
   await assert.rejects(f.lifecycle.advanceRestarts(f.context)); assert.equal(f.requests.length, 1); assert.equal(f.events.length, 0);
 });
-test('single manual intent blocks both scene aliases before any fence exists', () => {
-  const f = fixture(); f.context.configuration.mode = 'single';
+test('legacy manual intent blocks both scene aliases before any fence exists', () => {
+  const f = fixture(); f.context.configuration.mode = 'single'; f.context.configuration.legacy = true;
   f.requests = [{ reason: 'manual_restart', requestId: 'manual-single', mode: 'single', expectedRunId: 'run-origin' }];
   assert.equal(f.fences.size, 0);
   assert.equal(f.lifecycle.allowed('origin', f.context), false);
@@ -923,9 +923,9 @@ test('ordinary manual completion clears its own fence without an Origin wake', a
     clearFence: { expectedReason: 'manual_restart', expectedRunId: 'run-a' } }]);
   assert.deepEqual(f.controls, []); assert.equal(f.fences.size, 0); assert.deepEqual(f.requests, []);
 });
-test('single manual restart completes with no Origin wake', async () => {
+test('legacy manual restart completes with no Origin wake', async () => {
   for (const present of [false, true]) {
-    const f = fixture(); f.context.configuration.mode = 'single'; f.scenes = present ? [scene(null)] : [];
+    const f = fixture(); f.context.configuration.mode = 'single'; f.context.configuration.legacy = true; f.scenes = present ? [scene(null)] : [];
     f.requests = [{ reason: 'manual_restart', requestId: 'manual', mode: 'single', expectedRunId: 'run-null' }];
     f.db.insertControl = () => { throw new Error('single restart must not enqueue a wake'); };
     await f.lifecycle.advanceManual(f.context);
@@ -1336,7 +1336,7 @@ test('completed fenced reclaims record each reason while cancelled and single pa
     const cancelled = fixture(), row = cancelled.fence(reason); cancelled.scenes[0].state = 'busy';
     await cancelled.lifecycle.advanceReclaim(row, cancelled.context); assert.equal(cancelled.endings, undefined);
   }
-  const single = fixture(); single.context.configuration.mode = 'single'; single.scenes = [];
+  const single = fixture(); single.context.configuration.mode = 'single'; single.context.configuration.legacy = true; single.scenes = [];
   await single.lifecycle.advanceReclaim({ sessionGroup: null, runId: 'single', reason: 'auth' }, single.context, { unfenced: true });
   assert.equal(single.endings, undefined);
 });
@@ -2253,3 +2253,106 @@ for (const route of ['ttl', 'release']) {
     assert.equal(f.events.some(row => row.event === 'sync_triggered'), false);
   });
 }
+
+test('native single reclaims only after global conversations and Origin controls drain', async () => {
+  const f = fixture(); f.context.configuration.mode = 'single'; f.scenes = [scene('origin')];
+  let global = 1; const targets = [];
+  f.db.countRunningConversations = () => { throw new Error('must count every conversation'); };
+  f.db.countGlobalRunningConversations = () => global;
+  f.db.countNonTerminalControls = target => { targets.push(target); return {running:f.runningControls}; };
+  const fence = f.fence('upgrade', 'origin');
+  assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'waiting_inflight');
+  global = 0; f.runningControls = 1;
+  assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'waiting_inflight');
+  f.runningControls = 0;
+  assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
+  assert.ok(targets.every(target => target.sessionGroup === 'origin'));
+  assert.deepEqual(f.markerReads.map(row => row.kind), ['group','origin']);
+  assert.equal(f.endings[0].sessionGroup, 'origin');
+});
+test('native single rechecks global conversations immediately before stopping', async () => {
+  const f = fixture(); f.context.configuration.mode = 'single'; f.scenes = [scene('origin')];
+  let calls = 0; f.db.countGlobalRunningConversations = () => ++calls === 1 ? 0 : 1;
+  await assert.rejects(f.lifecycle.advanceReclaim(f.fence('ttl','origin'), f.context), {code:'RECLAIM_INFLIGHT'});
+  assert.equal(f.stops.length, 0);
+});
+test('native single TTL prepares both Origin Sync scopes before reclaim', async () => {
+  const f = fixture(); f.context.configuration.mode = 'single'; f.scenes = [scene('origin')];
+  f.unsummarized = 2; f.backlog = {total:3,groups:[{sessionGroup:'a',firstAt:1,pendingCheckpoints:1}]};
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.deepEqual(f.controls.map(row => row.content), ['check','prepare','prepare origin']);
+  assert.ok(f.controls.every(row => row.sessionGroup === 'origin' && row.targetBinding.expectedRunId === 'run-origin'));
+  f.publishSyncFacts(); f.settle();
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.fences.get('origin')?.reason, 'ttl');
+  assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('origin'), f.context), 'done');
+});
+test('native single regular Sync uses the Origin group and Origin aggregation without global reads', async () => {
+  const f = fixture(); f.context.configuration.mode = 'single'; f.scenes = [scene('origin')];
+  f.unsummarized = 100; f.backlog = {total:100,groups:[{firstAt:1,pendingCheckpoints:1}]};
+  f.db.getGlobalUnsummarizedRange = () => { throw new Error('global Sync must stay legacy'); };
+  await f.lifecycle.checkSync(f.scenes, f.context);
+  assert.deepEqual(f.controls.map(row => row.content), ['group sync','origin sync']);
+  assert.ok(f.controls.every(row => row.sessionGroup === 'origin'));
+  assert.deepEqual(f.markerReads.map(row => row.kind), ['group','origin']);
+});
+test('native single rotation and configuration controls target Origin', async () => {
+  const f = fixture(); f.context.configuration.mode = 'single'; f.scenes = [scene('origin',{usagePercent:100})];
+  await f.lifecycle.checkRotation(f.scenes[0], f.context);
+  f.expected = {runtime:'codex',mode:'default'};
+  await f.lifecycle.reconcileConfiguration(f.context);
+  assert.deepEqual(f.controls.map(row => row.content), ['rotate','config']);
+  assert.ok(f.controls.every(row => row.sessionGroup === 'origin'));
+});
+test('native single manual restart retains its Origin fence until global delivery ends then wakes Origin', async () => {
+  const f = fixture(); f.context.configuration.mode = 'single'; f.scenes = [scene('origin')];
+  f.requests = [{reason:'manual_restart',requestId:'manual',mode:'single',expectedRunId:'run-origin'}];
+  let global = 1; f.db.countGlobalRunningConversations = () => global;
+  f.db.countRunningConversations = () => { throw new Error('must use global delivery count'); };
+  await f.lifecycle.advanceManual(f.context);
+  assert.equal(f.fences.get('origin').reason, 'manual_restart'); assert.equal(f.controls.length, 0);
+  // Recreate the lifecycle owner after stop while durable intent and fence remain.
+  f.lifecycle = new SupervisorLifecycle(f.deps, {now:()=>f.now});
+  global = 0; await f.lifecycle.advanceManual(f.context);
+  assert.equal(f.fences.size, 0); assert.equal(f.requests.length, 0);
+  assert.equal(f.controls[0].content, MANUAL_WAKE_PROMPT); assert.equal(f.controls[0].sessionGroup, 'origin');
+  assert.equal(f.endings[0].sessionGroup, 'origin');
+});
+test('unscoped upgraded Origin receives no lifecycle controls and TTL reclaims directly', async () => {
+  const f = fixture(); f.context.configuration.mode = 'single';
+  f.scenes = [scene('origin',{sourceScope:null,usagePercent:100})]; f.unsummarized = 100;
+  f.expected = {runtime:'codex',mode:'default'}; f.backlog = {total:100,groups:[{firstAt:1}]};
+  f.deps.bindTarget = () => { throw new Error('unscoped run cannot receive controls'); };
+  await f.lifecycle.checkRotation(f.scenes[0], f.context);
+  await f.lifecycle.reconcileConfiguration(f.context);
+  await f.lifecycle.checkSync(f.scenes, f.context);
+  assert.equal(await f.lifecycle.prepareUpgrade(f.scenes[0], f.context), true);
+  assert.equal(f.controls.length, 0);
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.controls.length, 0); assert.equal(f.fences.get('origin').reason, 'ttl');
+  assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('origin'), f.context), 'done');
+});
+test('unscoped upgraded Origin upgrade restart skips its check and waits for idle', async () => {
+  const f = fixture(); f.context.configuration.mode = 'single';
+  f.scenes = [scene('origin',{sourceScope:null,state:'busy'})];
+  f.requests = [{reason:'upgrade',requestId:'upgrade',runIds:['run-origin']}];
+  await f.lifecycle.advanceRestarts(f.context);
+  assert.equal(f.controls.length, 0); assert.equal(f.fences.get('origin').reason, 'upgrade');
+  assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('origin'), f.context), 'cancelled');
+  f.scenes[0].state = 'idle'; await f.lifecycle.advanceRestarts(f.context);
+  assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('origin'), f.context), 'done');
+  assert.equal(f.endings[0].reason, 'upgrade'); assert.equal(f.controls.length, 0);
+});
+
+test('native single wakes a sleeping Origin for Origin Sync and targets backlog alerts at Origin', async () => {
+  const f=fixture(); f.context.configuration.mode='single'; f.scenes=[];
+  f.backlog={total:100,groups:[{firstAt:1}]};
+  await f.lifecycle.checkSync(f.scenes,f.context);
+  assert.equal(f.controls.length,1);assert.equal(f.controls[0].content,'origin sync');
+  assert.equal(f.controls[0].sessionGroup,'origin');assert.equal(f.controls[0].targetBinding,undefined);
+  await f.lifecycle.sendSyncAlert({type:'backlog',kind:'group',scope:'origin',backlog:1000,lag:1},f.context);
+  assert.equal(f.controls[1].sessionGroup,'origin');
+  const old=fixture();old.context.configuration.mode='single';old.scenes=[scene('origin',{sourceScope:null})];
+  assert.equal(await old.lifecycle.sendSyncAlert({type:'backlog',kind:'group',scope:'origin'},old.context),false);
+  assert.equal(old.controls.length,0);
+});

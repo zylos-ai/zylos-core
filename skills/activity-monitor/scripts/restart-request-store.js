@@ -21,7 +21,7 @@ export function validateRestartRequests(rows) {
           || row.runIds.length !== 1 || row.runIds[0] !== row.expectedRunId) return false;
       fields = [...fields, 'mode', 'expectedRunId'];
       if (Object.hasOwn(row, 'sessionGroup')) {
-        if (row.mode !== 'multi') return false;
+        if (row.mode === 'single' && row.sessionGroup !== 'origin') return false;
         try { assertSessionGroup(row.sessionGroup); } catch { return false; }
         fields.push('sessionGroup');
       }

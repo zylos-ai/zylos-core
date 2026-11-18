@@ -78,7 +78,7 @@ export class SupervisorLoop {
     const authority = async read => {
       try { return await read(); }
       catch (error) {
-        if (this.configuration?.mode === 'multi') await d.reconciliationReadFailed?.(error);
+        if (this.configuration && (this.configuration.mode === 'multi' || !this.configuration.legacy)) await d.reconciliationReadFailed?.(error);
         throw error;
       }
     };
@@ -141,10 +141,12 @@ export class SupervisorLoop {
       await this.each(context.fences, fence => d.advanceReclaim(fence, context), 'reclaim');
       if (transitionOpen) return;
       await this.each(context.scenes, scene => d.checkRotation(scene, context), 'rotation');
-      if (context.configuration.mode === 'multi') {
+      if (!context.configuration.legacy) {
         await this.each(context.scenes, scene => d.checkTtl(scene, context), 'ttl');
-        try { await d.checkEviction(context.scenes, context); }
-        catch (error) { await d.reportError(error, { phase: 'eviction' }); }
+        if (context.configuration.mode === 'multi') {
+          try { await d.checkEviction(context.scenes, context); }
+          catch (error) { await d.reportError(error, { phase: 'eviction' }); }
+        }
       }
       try { await d.checkSync(context.scenes, context); }
       catch (error) { await d.reportError(error, { phase: 'sync' }); }

@@ -48,7 +48,7 @@ export async function requestRuntimeRestart({ now = Date.now, deadlineAt, afterS
   if (now() >= deadline) return fail('deadline_exceeded','Restart budget was exhausted before submission');
   const transition = await readTransition();
   if (now() >= deadline) return fail('deadline_exceeded','Restart budget was exhausted before submission');
-  if (mode.mode === 'single' && !transition) {
+  if (mode.keyPresent === false && !transition) {
     const controls = await enqueueExit();
     return {ok:true,data:{result:'exit_enqueued',mode:'single',...controls}};
   }

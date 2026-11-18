@@ -42,7 +42,7 @@ test('missing pool/Sync dependencies preserve independent metrics and observatio
 });
 
 test('cutover refreshes mode before lifecycle actions; unreadable does not reuse stale mode',async()=>{
- let mode='single',bad=false;const f=fixture({readConfiguration:async()=>{if(bad)throw new Error('CONFIG_UNREADABLE');return {mode};}});
+ let mode='single',bad=false;const f=fixture({readConfiguration:async()=>{if(bad)throw new Error('CONFIG_UNREADABLE');return {mode,legacy:mode==='single'};}});
  await f.loop.start();assert.equal(f.calls.includes('ttl'),false);f.calls.length=0;
  mode='multi';await f.loop.tick();assert.ok(f.calls.includes('ttl'));assert.ok(f.calls.includes('evict'));f.calls.length=0;
  bad=true;await f.loop.tick();assert.deepEqual(f.calls,['error:round']);f.calls.length=0;
@@ -192,12 +192,25 @@ test('the post-migration transition reread reports reconciliation failure before
  assert.equal(f.timers.length,1);
 });
 
-test('single-mode authority failures skip the reconciliation failure callback',async t=>{
- const reported=[];const f=fixture({readConfiguration:async()=>({mode:'single'}),
+test('legacy authority failures skip the reconciliation failure callback',async t=>{
+ const reported=[];const f=fixture({readConfiguration:async()=>({mode:'single',legacy:true}),
   getModeTransition:async()=>{throw new Error('single authority unavailable');},
   reconciliationReadFailed:async error=>reported.push(error)});
  t.after(()=>f.loop.stop());
  await f.loop.start();await f.loop.tick();
  assert.deepEqual(reported,[]);assert.equal(f.timers.length,2);
  assert.equal(f.calls.filter(item=>item==='error:round').length,2);
+});
+
+for (const legacy of [false,true]) test(`single loop ${legacy?'excludes legacy TTL':'runs Origin TTL without eviction'}`, async () => {
+  const f = fixture({readConfiguration:async()=>({mode:'single',legacy}),observe:async()=>[{sessionGroup:'origin'}]});
+  await f.loop.start();
+  assert.equal(f.calls.includes('ttl'), !legacy); assert.equal(f.calls.includes('evict'), false);
+  await f.loop.stop();
+});
+for (const legacy of [false,true]) test(`single authority failure ${legacy?'retains legacy diagnostics':'reports reconciliation unavailable'}`, async () => {
+  let reported=0;
+  const f = fixture({readConfiguration:async()=>({mode:'single',legacy}),
+    listDrainFences:async()=>{throw new Error('unavailable');},reconciliationReadFailed:()=>{reported++;}});
+  await f.loop.start(); assert.equal(reported,legacy?0:1); await f.loop.stop();
 });
