@@ -1,4 +1,5 @@
-import test from 'node:test';
+import test, { beforeEach } from 'node:test';
+import { interactiveStdin } from './helpers/interactive-stdin.js';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -23,6 +24,7 @@ import { legacy as dashboardSchema13, schema20 as dashboardSchema20 } from '../.
 const repo = fileURLToPath(new URL('../../../', import.meta.url));
 const history = fileURLToPath(new URL('../../../skills/comm-bridge/scripts/__tests__/fixtures/migration-history/', import.meta.url));
 const VERSION = '1.0.0';
+beforeEach(interactiveStdin);
 
 function fixture(t, { installedDashboard = true } = {}) {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'same-version-upgrade-')));
@@ -30,6 +32,8 @@ function fixture(t, { installedDashboard = true } = {}) {
   const zylosDir = path.join(home, 'zylos');
   // The live skills provide the SQLite driver the probe opens databases with.
   fs.mkdirSync(path.join(zylosDir, '.claude/skills'), { recursive: true });
+  // Worker resolution starts from the installed path, before symlink resolution.
+  fs.symlinkSync(path.join(repo, 'node_modules'), path.join(zylosDir, '.claude/node_modules'));
   for (const owner of ['comm-bridge', 'scheduler']) fs.symlinkSync(path.join(repo, 'skills', owner), path.join(zylosDir, '.claude/skills', owner));
   // A minimal installed package: its schemas are the real ones.
   const installedRoot = path.join(home, 'prefix/lib/node_modules/zylos');
