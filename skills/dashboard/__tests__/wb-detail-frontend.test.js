@@ -6,7 +6,7 @@ import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from '../public/js/orig
 import { createGroupDetail, resolveDetailRow, groupActionButtons, groupActionText, formatStartedAt } from '../public/js/wb/detail.js';
 import { rawKey, renderOverview, detailNumbers, activeSubagents, detailEvidence, sampleAge, toolEventLabel, configStatus, configText, groupEventCount } from '../public/js/wb/detail-overview.js';
 import { createTimelineLoader, attributeMessages, renderTimeline } from '../public/js/wb/detail-timeline.js';
-import { createGroupConfig as productGroupConfig, fetchJson, runningText, validConfigChange, renderGroupConfig, modelChoices, effortChoices, startingPair } from '../public/js/wb/group-config.js';
+import { createGroupConfig as productGroupConfig, responseError, fetchJson, runningText, validConfigChange, renderGroupConfig, modelChoices, effortChoices, startingPair } from '../public/js/wb/group-config.js';
 import { saveGroupName, renderNameEditor } from '../public/js/wb/name-edit.js';
 import { namePromptResult, renderNameResult, sendNamePrompt } from '../public/js/wb/auto-name.js';
 import { displayTime, endReasonLabel, eventLabel } from '../public/js/wb/event-labels.js';
@@ -605,7 +605,7 @@ test('automatic naming posts once and says sent only for a queued prompt', async
     { ok: false, text: 'wb.name.failed', detail: 'CONTROL_TARGET_REQUIRED · during transition' });
   // The Dashboard refused the request (for example a read-only key).
   const denied = Object.assign(new Error('insufficient_scope'), { body: { error: 'insufficient_scope', required: 'admin' }, status: 403 });
-  assert.deepEqual(namePromptResult(undefined, denied, t), { ok: false, text: 'wb.name.failed', detail: 'insufficient_scope' });
+  assert.deepEqual(namePromptResult(undefined, denied, t), { ok: false, text: 'wb.schedule.error.insufficient_scope', detail: 'insufficient_scope' });
   // Nobody can say whether it was queued: neither sent nor a plain failure.
   assert.deepEqual(namePromptResult({ ok: false, unknown: true, error: { code: 'RESULT_UNKNOWN', message: 'timed out' } }, undefined, t),
     { ok: false, text: 'wb.name.unknown', detail: 'RESULT_UNKNOWN · timed out' });
@@ -630,7 +630,7 @@ test('automatic naming failures read as one plain sentence in either language, w
     [{ ok: false, sessionGroup: null, error: { code: 'CONTROL_TARGET_REQUIRED', message: 'A control target is required when configuration cannot be read' } }, undefined, 'failed'],
     [{ ok: false, unknown: true, sessionGroup: 'origin', error: { code: 'RESULT_UNKNOWN', message: command } }, undefined, 'unknown'],
     [{ ok: false, unknown: true, sessionGroup: null, error: { code: 'RESULT_UNKNOWN', message: command } }, undefined, 'unknownSingle'],
-    [undefined, Object.assign(new Error('insufficient_scope'), { body: { error: 'insufficient_scope' }, status: 403 }), 'failed'],
+    [undefined, Object.assign(new Error('insufficient_scope'), { body: { error: 'insufficient_scope' }, status: 403 }), 'wb.schedule.error.insufficient_scope'],
     [undefined, Object.assign(new Error('non_json'), { unknown: true }), 'unknown'],
   ];
   const raw = /CONTROL_TARGET_REQUIRED|RESULT_UNKNOWN|insufficient_scope|non_json|c4-control|--content|Cannot find module|_resolveFilename|node:internal|A control target|·/;
@@ -638,7 +638,7 @@ test('automatic naming failures read as one plain sentence in either language, w
     const say = key => dictionary[key];
     for (const [value, error, key] of answers) {
       const result = namePromptResult(value, error, say);
-      assert.equal(result.text, dictionary['wb.name.' + key], `${language} ${key}: the sentence for this outcome`);
+      assert.equal(result.text, dictionary[key.startsWith('wb.') ? key : 'wb.name.' + key], `${language} ${key}: the sentence for this outcome`);
       assert.doesNotMatch(result.text, raw, `${language} ${key}: no error code, stack or command in the sentence`);
       assert.doesNotMatch(result.text, /\n|\{/, `${language} ${key}: one finished sentence, nothing left to fill in`);
       const document = createDocument(), root = document.createElement('div');
@@ -2233,4 +2233,44 @@ test('drawer actions wait for canonical detail and preserve stopped Origin scope
     await f.controller.act('restart'); assert.equal(sent.length, 1); assert.equal(sent[0].sessionGroup, sessionGroup);
     f.controller.destroy();
   }
+});
+
+
+test('automatic naming explains permission refusals and other client rejections without retry advice', () => {
+  for (const language of ['zh', 'en']) {
+    const words = JSON.parse(readFileSync(new URL(`../public/i18n/wb.${language}.json`, import.meta.url), 'utf8'));
+    const say = key => { assert.equal(typeof words[key], 'string', key); return words[key]; };
+    for (const code of ['not_allowed_via_fleet', 'admin_required', 'insufficient_scope', 'same_origin_required', 'unauthorized']) {
+      for (const errorBody of [code, { code, message: 'raw permission detail' }]) {
+        const error = { status: code === 'unauthorized' ? 401 : 403, body: { error: errorBody } };
+        const result = namePromptResult(undefined, error, say);
+        assert.equal(result.ok, false);
+        assert.doesNotMatch(result.text, /稍后再试|try again later|raw permission detail|not_allowed_via_fleet/i);
+        assert.match(result.detail, new RegExp(code));
+        assert.notEqual(result.text, words['wb.name.rejected'], 'known permission has a specific explanation');
+      }
+    }
+    for (const code of ['invalid_json', 'not_found']) {
+      const result = namePromptResult(undefined, { status: 400, body: { error: { code } } }, say);
+      assert.equal(result.text, words['wb.name.rejected']);
+    }
+    assert.equal(namePromptResult(undefined, { status: 503, body: { error: { code: 'unavailable' } } }, say).text, words['wb.name.failed']);
+    assert.equal(namePromptResult(undefined, new Error('offline'), say).text, words['wb.name.unknown']);
+  }
+});
+
+
+test('shared response errors show matching code and message once while preserving distinct detail', async () => {
+  assert.equal(responseError({ error: { code: 'not_allowed_via_fleet', message: 'not_allowed_via_fleet' } }), 'not_allowed_via_fleet');
+  assert.equal(responseError({ error: { code: 'NAME_INVALID', message: 'Name is too long' } }), 'NAME_INVALID · Name is too long');
+  assert.equal(responseError({ error: 'insufficient_scope' }), 'insufficient_scope');
+  assert.equal(responseError({ error: { message: 'Only a message' } }), 'Only a message');
+  assert.equal(responseError(null), 'request_failed');
+  assert.equal(responseError({}, 'rejected'), 'rejected');
+  assert.equal(groupActionText({ ok: false, error: { code: 'admin_required', message: 'admin_required' } }), 'admin_required');
+  await assert.rejects(saveGroupName('group', 'name', { request: async () => ({ ok: false,
+    error: { code: 'NAME_INVALID', message: 'NAME_INVALID' } }) }), { message: 'NAME_INVALID' });
+  await assert.rejects(fetchJson(async () => ({ ok: false, status: 403, json: async () => ({ error: {
+    code: 'not_allowed_via_fleet', message: 'not_allowed_via_fleet' } }) }), '/api/groups/naming-prompt'),
+  { message: 'not_allowed_via_fleet', status: 403 });
 });

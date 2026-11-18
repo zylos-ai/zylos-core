@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -10,12 +10,24 @@ import { publishSessionStatus } from '../status-writer.js';
 import { fixture as c4Fixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { createDelivery } from '../../../comm-bridge/scripts/router/delivery.js';
 import { MANUAL_WAKE_PROMPT } from '../origin-prompts.js';
+import { groupMemoryDir } from '../../../../cli/lib/session-group-paths.js';
+
+// Each fixture owns its persistent alert ledger and published state files.
+// No fixture can inherit another case's incident claims or touch a live tree.
+const fixtureRoots = [];
+after(() => { for (const root of fixtureRoots) fs.rmSync(root, { recursive: true, force: true }); });
 
 const scene = (sessionGroup = 'a', extra = {}) => ({ sessionGroup, present: true, ready: true,
   runId: `run-${sessionGroup}`, runtime: 'claude', sessionId: 'session-1', createdAt: 0,
   processRunning: true, state: 'idle', idleSince: 0, runDir: '/isolated/run',
   launchConfig: { runtime: 'claude', mode: 'default' }, ...extra });
 function fixture(Class = SupervisorLifecycle) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lifecycle-')); fixtureRoots.push(root);
+  const env = { ...process.env, HOME: path.join(root, 'home'), ZYLOS_DIR: path.join(root, 'z'),
+    PM2_HOME: path.join(root, 'pm2'), TMPDIR: path.join(root, 'tmp') };
+  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
+    assert.ok(env[key].startsWith(root + path.sep)); fs.mkdirSync(env[key], { recursive: true });
+  }
   const f = { now: 2_000_000, scenes: [scene()], fences: new Map(), requests: [], controls: [], events: [], stops: [], forgotten: [],
     conversations: 0, runningControls: 0, withoutDeadline: 0, lastActivity: 0, unsummarized: 0,
     transition: null, pending: [], marker: { held: false, stale: false }, markerReads: [],
@@ -24,6 +36,7 @@ function fixture(Class = SupervisorLifecycle) {
   const configuration = f.context.configuration;
   Object.defineProperty(f, 'context', { get: () => ({ configuration, transition: f.transition,
     scenes: f.scenes.map(s => ({ ...s })), fences: [...f.fences].map(([sessionGroup, value]) => ({ sessionGroup, ...value })), restartRequests: [...f.requests] }) });
+  f.checkpoints = new Map(); f.cursors = new Map(); f.env = env;
   f.db = {
     listSlotOccupancy: () => f.slots ?? f.scenes.filter(s => s.sessionGroup !== 'origin' && s.present).map(s => ({ sessionGroup: s.sessionGroup, runId: s.runId, state: 'running', heldUntil: null, createdAt: 0 })),
     getModeTransition: () => f.transition,
@@ -39,15 +52,20 @@ function fixture(Class = SupervisorLifecycle) {
     countNonTerminalControls: () => ({ running: f.runningControls, runningWithoutDeadline: f.withoutDeadline }),
     expireStaleRunningControls: () => [],
     getLastActivity: () => ({ ts: f.lastActivity }),
-    getUnsummarizedRange: () => ({ count: f.unsummarized, firstAt: f.unsummarized ? 1_000_000 : null }),
+    getUnsummarizedRange: () => ({ count: f.unsummarized, firstAt: f.unsummarized ? 1_000_000 : null, lastConversationId: f.unsummarized || null }),
     getGlobalUnsummarizedRange: () => ({ count: f.unsummarized, firstAt: f.unsummarized ? 1_000_000 : null }),
-    getOriginSyncBacklog: () => f.backlog,
+    getLatestContentCheckpoint: scope => f.checkpoints.get(scope) ?? null,
+    getDeliveredFrontier: () => f.unsummarized,
+    getOriginSyncCursor: scope => f.cursors.get(scope) ?? null,
+    getOriginSyncBacklog: () => ({ ...f.backlog, groups: f.backlog.groups.map(row => ({
+      sessionGroup: 'fixture-source', cursorFrom: 0, checkpointFrom: 0, ...row,
+    })) }),
     listPendingSessionGroups: () => f.pending,
     getControlById: id => f.controls.find(c => c.id === id),
     insertControl: (content, options) => { const row = { id: f.controls.length + 1, content, ...options, status: 'pending' }; f.controls.push(row); return row; },
     resolveSessionLaunchConfig: () => f.expected,
   };
-  f.deps = { db: f.db, observe: () => f.scenes,
+  f.deps = { db: f.db, env, observe: () => f.scenes,
     observeGroup: group => f.scenes.find(s => s.sessionGroup === group || group === null && s.sessionGroup === 'origin') ?? { present: false },
     stop: s => { f.stops.push(s.runId); f.scenes = f.scenes.filter(x => x.runId !== s.runId); },
     intentionalStop: (group, runId) => { f.forgotten.push([group, runId]); },
@@ -57,9 +75,27 @@ function fixture(Class = SupervisorLifecycle) {
     bindTarget: s => ({ expectedRunId: s.runId }),
     diagnostic: e => f.events.push(e),
     prompts: { PRE_RECLAIM_CHECK_PROMPT: 'check', UPGRADE_RESTART_CHECK_PROMPT: 'upgrade check', PRE_RECLAIM_SYNC_PROMPT: 'prepare', PRE_RECLAIM_ORIGIN_SYNC_PROMPT: 'prepare origin', GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync',
-      ROTATION_PROMPT: () => 'rotate', CONFIG_RECLAIM_PROMPT: () => 'config', SYNC_BACKLOG_ALERT: reader => `alert:${reader}` },
+      ROTATION_PROMPT: () => 'rotate', CONFIG_RECLAIM_PROMPT: () => 'config', SYNC_BACKLOG_ALERT: (kind, count, lag, scope) => `alert:${kind === 'group' ? scope : kind}` },
   };
   f.lifecycle = new Class(f.deps, { now: () => f.now });
+  f.publishSyncFacts = () => {
+    // Model the persisted result separately from control settlement. The real
+    // proof reads these checkpoint/cursor observations and private state bytes.
+    for (const preparation of [...f.lifecycle.ttlPreparation.values(), ...f.lifecycle.releasePreparation.values()]) {
+      for (const { target } of preparation.syncs ?? []) {
+        if (target.kind === 'origin') {
+          for (const cursor of target.cursors) f.cursors.set(cursor.scope, {
+            syncedId: cursor.syncedId + 1, checkpointId: cursor.checkpointId + 1,
+          });
+          continue;
+        }
+        const checkpoint = { id: (target.checkpointId ?? 0) + 1, end_conversation_id: target.end };
+        f.checkpoints.set(target.scope, checkpoint);
+        const directory = groupMemoryDir(target.scope, env); fs.mkdirSync(directory, { recursive: true });
+        fs.writeFileSync(path.join(directory, 'state.md'), `<!-- zylos-state v1 | scope=${target.scope} | synced_at=2026-11-17T00:00:00Z | coverage=${target.end} | inbox_committed= -->\n`);
+      }
+    }
+  };
   f.settle = (status = 'done') => { for (const control of f.controls) control.status = status; };
   f.fence = (reason = 'ttl', group = 'a') => { const row = { sessionGroup: group, reason, runId: `run-${group}` }; f.fences.set(group, row); return row; };
   return f;
@@ -190,11 +226,11 @@ test('TTL preparation cancels on new messages or replaced run without fencing', 
 test('TTL preparation accepts terminal outcomes only after idle and same-run checks', async () => {
   for (const status of ['done', 'timeout', 'superseded', 'failed', 'cancelled']) {
     const f = fixture(); f.unsummarized = 1;
-    await f.lifecycle.checkTtl(f.scenes[0], f.context); f.settle(status);
+    await f.lifecycle.checkTtl(f.scenes[0], f.context); f.publishSyncFacts(); f.settle(status);
     await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.get('a')?.reason, 'ttl');
   }
   const f = fixture(); f.unsummarized = 1;
-  await f.lifecycle.checkTtl(f.scenes[0], f.context); f.settle(); f.scenes[0].state = 'busy';
+  await f.lifecycle.checkTtl(f.scenes[0], f.context); f.publishSyncFacts(); f.settle(); f.scenes[0].state = 'busy';
   await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
 });
 test('completed TTL preparation waits through busy activity and idle confirmation without another Sync', async () => {
@@ -202,7 +238,7 @@ test('completed TTL preparation waits through busy activity and idle confirmatio
     const f = fixture(); f.unsummarized = 1;
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     const preparation = f.lifecycle.ttlPreparation.get('a');
-    f.settle(status); f.scenes[0].state = 'busy';
+    f.publishSyncFacts(); f.settle(status); f.scenes[0].state = 'busy';
     for (const elapsed of [1, 10_000, 90_000]) {
       f.now = preparation.at + elapsed;
       f.scenes[0].lastActivityAt = f.now;
@@ -250,7 +286,7 @@ test('completed TTL preparation waits for every held Sync marker to release', as
       const f = fixture(); f.scenes = [scene(group)]; f.unsummarized = 1;
       await f.lifecycle.checkTtl(f.scenes[0], f.context);
       const preparation = f.lifecycle.ttlPreparation.get(group);
-      f.settle();
+      f.publishSyncFacts(); f.settle();
       f.deps.readSyncMarker = args => { f.markerReads.push(args); return { held: args.kind === heldKind, stale: false }; };
       for (const elapsed of [1, 90_000]) {
         f.now = preparation.at + elapsed; f.scenes[0].lastActivityAt = f.now;
@@ -336,7 +372,7 @@ test('pre-reclaim child activity retains completed preparation until child and m
   const f = fixture(); f.unsummarized = 1;
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   const preparation = f.lifecycle.ttlPreparation.get('a');
-  f.settle();
+  f.publishSyncFacts(); f.settle();
   for (const elapsed of [1, 90_000]) {
     f.now = preparation.at + elapsed;
     f.scenes[0].lastSubagentActivityAt = f.now;
@@ -362,7 +398,7 @@ test('pre-reclaim child activity retains completed preparation until child and m
 test('preparing Sync child starting after the TTL fence delays stop without resetting preparation', async () => {
   for (const phase of ['sample', 'final']) {
     const f = fixture(); f.unsummarized = 1;
-    await f.lifecycle.checkTtl(f.scenes[0], f.context); f.settle();
+    await f.lifecycle.checkTtl(f.scenes[0], f.context); f.publishSyncFacts(); f.settle();
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     const preparation = f.lifecycle.ttlPreparation.get('a'), fence = f.fences.get('a');
     f.now++;
@@ -483,14 +519,14 @@ test('Origin TTL waits every preparation control and binds both Sync kinds to th
     for (const control of f.controls) {
       assert.equal(control.targetBinding.expectedRunId, 'run-origin');
       assert.equal(control.sessionGroup, 'origin'); assert.equal(control.requireIdle, true);
-      assert.equal(control.appendAckSuffix, true); assert.equal(control.ackDeadlineAt, Math.floor((f.now + 300000) / 1000));
+      assert.equal(control.appendAckSuffix, true); assert.equal(control.ackDeadlineAt, Math.floor((f.now + (control.content === 'check' ? 300000 : 900000)) / 1000));
     }
     await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
     for (const control of f.controls.slice(0, -1)) {
       control.status = 'done';
       await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
     }
-    f.controls.at(-1).status = 'timeout';
+    f.publishSyncFacts(); f.controls.at(-1).status = 'timeout';
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     assert.equal(f.fences.get('origin')?.reason, 'ttl');
   }
@@ -519,7 +555,7 @@ test('partial Origin TTL preparation retries remaining Sync after all saved cont
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   assert.deepEqual(f.controls.map(control => control.content), ['check', 'prepare', 'check', 'prepare origin']);
   assert.equal(f.lifecycle.ttlPreparation.get('origin').partial, false);
-  f.settle();
+  f.publishSyncFacts(); f.settle();
   await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.get('origin')?.reason, 'ttl');
 });
 test('pre-reclaim database failure leaves preparation unsaved and retries from current backlog', async () => {
@@ -566,7 +602,7 @@ test('old C4 and session activity still prepare and reclaim after TTL', async ()
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   assert.deepEqual(f.controls.map(control => control.content), ['check', 'prepare']);
   assert.equal(f.fences.size, 0);
-  f.settle();
+  f.publishSyncFacts(); f.settle();
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   assert.equal(f.fences.get('a')?.reason, 'ttl');
 });
@@ -592,7 +628,7 @@ test('pre-reclaim Sync activity retains preparation and reclaims the same idle r
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     assert.equal(f.lifecycle.ttlPreparation.get('a'), preparation);
     assert.equal(f.controls.length, 2); assert.equal(f.fences.size, 0);
-    f.settle();
+    f.publishSyncFacts(); f.settle();
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     assert.equal(f.fences.get('a')?.reason, 'ttl');
     assert.equal(f.fences.get('a')?.runId, 'run-a');
@@ -772,17 +808,17 @@ test('Origin Sync blocks current ownership and accepts a stale marker', async ()
   f.now += 60000; f.marker.stale = true;
   await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(f.controls[0].content, 'origin sync');
 });
-test('absent Origin lag alert is unbound and repeats only after six hours', async () => {
+test('absent Origin overdue backlog requests ordinary Sync without a premature alert', async () => {
   const f = fixture(); f.scenes = []; f.now = 50_000_000;
   f.backlog = { total: 1, groups: [{ count: 1, firstAt: 1 }] };
-  const alerts = () => f.controls.filter(control => control.content === 'alert:origin');
   await f.lifecycle.checkSync(f.scenes, f.context);
-  assert.equal(alerts().length, 1); assert.equal(alerts()[0].sessionGroup, 'origin');
-  assert.equal(alerts()[0].targetBinding, undefined); assert.equal(alerts()[0].appendAckSuffix, false);
-  f.now += 21_599_999; await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(alerts().length, 1);
-  f.now += 60000; await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(alerts().length, 2);
+  const sync = f.controls.find(control => control.content === 'origin sync');
+  assert.equal(sync.sessionGroup, 'origin'); assert.equal(sync.targetBinding, undefined);
+  assert.equal(f.controls.some(control => control.content.startsWith('alert:')), false);
+  f.now += 13 * 3600000; await f.lifecycle.checkSync(f.scenes, f.context);
+  assert.equal(f.controls.some(control => control.content.startsWith('alert:')), false);
 });
-test('only present ready group readers produce their Sync and backlog alert', async () => {
+test('only present ready group readers produce ordinary Sync before any repair failure', async () => {
   for (const absent of [{ present: false }, { ready: false }]) {
     const f = fixture(); f.now = 50_000_000; f.unsummarized = 801; f.scenes = [scene('a', absent)];
     f.db.getOriginSyncBacklog = () => ({ total: 0, groups: [] });
@@ -791,21 +827,26 @@ test('only present ready group readers produce their Sync and backlog alert', as
     await f.lifecycle.checkSync(f.scenes, f.context); assert.deepEqual(f.controls, []);
     f.db.getUnsummarizedRange = read; f.scenes = [scene('a')]; f.now += 60000;
     await f.lifecycle.checkSync(f.scenes, f.context);
-    const alert = f.controls.find(control => control.content === 'alert:a');
-    assert.equal(alert.sessionGroup, 'origin'); assert.equal(alert.targetBinding, undefined);
     assert.ok(f.controls.some(control => control.content === 'group sync' && control.sessionGroup === 'a'));
+    assert.equal(f.controls.some(control => control.content.startsWith('alert:')), false);
     f.now += 600000; await f.lifecycle.checkSync(f.scenes, f.context);
-    assert.equal(f.controls.filter(control => control.content === 'alert:a').length, 1);
+    assert.equal(f.controls.some(control => control.content.startsWith('alert:')), false);
   }
 });
-test('backlog alert routes to Origin, dedupes six hours, and holds during manual restart', async () => {
-  const f = fixture(); f.unsummarized = 801; f.requests = [{ reason: 'manual_restart' }];
-  await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(f.controls.filter(c => c.content.startsWith('alert:')).length, 0);
-  f.requests = []; f.now += 60000; await f.lifecycle.checkSync(f.scenes, f.context);
-  const alerts = () => f.controls.filter(c => c.content.startsWith('alert:'));
+test('backlog notification routes to Origin, persists its episode, and permits recurrence after resolution', async () => {
+  const f = fixture(); f.requests = [{ reason: 'manual_restart' }];
+  const alert = { type: 'backlog', kind: 'group', scope: 'a', backlog: 801, lag: 1 };
+  const alerts = () => f.controls.filter(control => control.content.startsWith('alert:'));
+  await f.lifecycle.sendSyncAlert(alert, f.context); assert.equal(alerts().length, 0);
+  f.requests = []; await f.lifecycle.sendSyncAlert(alert, f.context);
   assert.equal(alerts().length, 1); assert.equal(alerts()[0].sessionGroup, 'origin');
-  f.now += 600000; await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(alerts().length, 1);
-  f.now += 21_600_000; await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(alerts().length, 2);
+  assert.equal(alerts()[0].targetBinding, undefined); assert.equal(alerts()[0].appendAckSuffix, false);
+  f.now += 13 * 3600000; await f.lifecycle.sendSyncAlert(alert, f.context); assert.equal(alerts().length, 1);
+  f.lifecycle = new SupervisorLifecycle(f.deps, { now: () => f.now });
+  await f.lifecycle.sendSyncAlert(alert, f.context); assert.equal(alerts().length, 1, 'restart preserves the episode');
+  // The observer supplies an explicit resolution; elapsed time alone cannot.
+  f.lifecycle.syncAlertEpisodes.reconcile({ resolved: [alert] });
+  await f.lifecycle.sendSyncAlert(alert, f.context); assert.equal(alerts().length, 2);
 });
 // immutable restart list and durable delete before diagnostic.
 test('upgrade waits startup and unknown inventory; new run never joins original restart list', async () => {
@@ -2025,7 +2066,7 @@ test('release waits bound check then Sync controls and their tail',async()=>{
   for(const control of f.controls.slice(1))control.status='done';
   await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0,'unfinished check blocks even after Sync completes');
   f.controls[0].status='running';await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);
-  f.settle();f.scenes[0].state='busy';await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);
+  f.publishSyncFacts(); f.settle();f.scenes[0].state='busy';await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);
   f.scenes[0].state='idle';f.marker={held:true,stale:false};await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);
   f.marker={held:false,stale:false};await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.get(group).reason,'release');
  }
@@ -2195,3 +2236,20 @@ test('release check deferral cancels preparation and reuses TTL reset and consec
   assert.equal(f.events.filter(row => row.event === 'reclaim_deferred').length, 1);
  }
 });
+
+
+for (const route of ['ttl', 'release']) {
+  test(`${route} unavailable checkpoint evidence blocks Sync dispatch without guessing success`, async () => {
+    const f = fixture(); f.unsummarized = 1;
+    f.db.getLatestContentCheckpoint = () => { throw new Error('checkpoint evidence unavailable'); };
+    const preparation = { controlIds: [] };
+    const dispatch = route === 'ttl'
+      ? () => f.lifecycle.checkTtl(f.scenes[0], f.context)
+      : () => f.lifecycle.prepareRelease(f.scenes[0], f.context, preparation);
+    await assert.rejects(dispatch(), /checkpoint evidence unavailable/);
+    assert.deepEqual(f.controls.map(row => row.content), ['check']);
+    assert.equal(f.lifecycle.ttlPreparation.has('a'), false);
+    assert.equal(f.fences.size, 0);
+    assert.equal(f.events.some(row => row.event === 'sync_triggered'), false);
+  });
+}

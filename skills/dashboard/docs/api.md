@@ -196,9 +196,9 @@ Example: `POST /api/instance/actions/switch-mode` with `{"mode":"multi"}`.
 
 **Access:** Admin. **Parameters:** JSON `{runtime:"claude"|"codex"|"agy"}` plus any authentication-confirmation fields required by Core's runtime-switch flow.
 
-Returns `{ok:true,...CoreResult}` on success, with optional `data` and `message`; failures use the common envelope. An `AUTH_NOT_CONFIRMED` result can include authentication details; it is not a successful switch.
+Returns `{ok:true,...CoreResult}` on success, with optional `data` and `message`; failures use the common envelope. `AUTH_FAILED` and `AUTH_NOT_CONFIRMED` results display the original authentication error details; neither is a successful switch. `AUTH_FAILED` means rejected or missing credentials; `AUTH_NOT_CONFIRMED` means the probe could not confirm authentication.
 
-**Errors:** `AUTH_NOT_CONFIRMED`, `AUTH_FAILED` (explicit Antigravity key rejection), invalid runtime, supervisor/transition rejection codes, and common write errors.
+**Errors:** HTTP 403 `AUTH_FAILED` (explicit credential rejection or logged-out status for any runtime) or `AUTH_NOT_CONFIRMED` (probe could not confirm authentication); invalid runtime, supervisor/transition rejection codes, and common write errors. The two authentication errors retain distinct `error.message` remedies: replace credentials/log in for `AUTH_FAILED` (agy: `zylos runtime agy --save-apikey <key>`); check network/proxy and retry for `AUTH_NOT_CONFIRMED`.
 
 Example: `POST /api/instance/actions/switch-runtime` with `{"runtime":"codex"}`.
 
@@ -446,7 +446,7 @@ Example: `GET /api/groups/runtime-overrides?q=team`.
 
 ### POST /api/groups/naming-prompt
 
-**Access:** Admin. **Parameters:** none; any JSON body is ignored.
+**Access:** Admin, including through Fleet. Local read-only credentials are rejected before forwarding; remote read-only credentials remain subject to the target’s admin gate. **Parameters:** none; any JSON body is ignored.
 
 Queues one C4 control that asks Origin to name recently active unnamed groups. The mode comes from this instance's `.zylos/config.json`: multi targets session group `origin`; otherwise the target stays empty, which C4 accepts only for the single session. The control text is the Dashboard naming prompt with the installed `group-name.js` path. Returns `{ok:true,controlId:number,sessionGroup:'origin'|null}` once C4 has queued it. Queued is the whole result: the response does not wait for delivery or naming, and nothing reports the names chosen.
 
@@ -693,7 +693,7 @@ Fleet rejects unknown agents with 404, invalid memory path queries with 400 `inv
 
 - Encoded slash `%2F` (case-insensitive), undecodable percent encoding, and paths whose decoded/normalized suffix reaches a local-only endpoint (including through `..`) return 403 `local_endpoint_not_proxyable`.
 - `/fleet/peer//api/...` bypasses API proxy dispatch and falls through to page serving: GET returns 404 plain text `not found`; POST returns 405 plain text `method not allowed`.
-- Encoded `%2e%2e` reaching another route is not rejected as `local_endpoint_not_proxyable`; a write outside the explicit proxy allowlist returns 403 `read_only_proxy`.
+- Encoded `%2e%2e` reaching another route is not rejected as `local_endpoint_not_proxyable`; a write outside the explicit proxy allowlist returns 403 `not_allowed_via_fleet` with message "This change can't be made when opening another agent from the fleet".
 - Encoded backslash `%5C` is forwarded unchanged in an otherwise allowed API request.
 
 Other forbidden routes return 403. Same-version peers return the common JSON error envelope, which the proxy relays unchanged. Attachment, observer WebSocket and SSE relays keep their streaming content types.
@@ -719,6 +719,8 @@ Opening the stream samples current session state immediately. While at least one
 | `auth_expired` | Existing expiry payload | Authorization expired; reconnect after authentication |
 
 Fleet shows instance and group summaries only. It does not fetch Origin group detail, read Origin session metadata, or expose `model`, `effort`, `context_pct` or `new_session_threshold` on Fleet records. These observations remain in group detail and runtime settings. Single-session cards show only the actual state pill. Fleet records do not include current-action text or feeds; aggregate `BUSY` retains the Working label without implying a thinking or tool-activity observation. A known runtime authentication failure remains an error for a running-list row whose activity state is unknown. Its independent no-response count comes from `counts.running.flags.noResponse`; problem durations use `flags.noResponse.since`. Error precedence still keeps the summary categories mutually exclusive, so its no-response category can be smaller than the independent no-response count.
+
+The self Fleet record's `daily_cost` and `weekly_cost` (in `GET /api/fleet` and the `fleet` event) are the `today.cost` and `sevenDay.cost` of `GET /api/usage/summary` at the time they are read. The self record may reuse them for up to 30 seconds; a new instance-local day or a time-zone change reads them again immediately. `GET /api/usage/summary` and group usage reads are not cached.
 
 Multi-session Fleet `group_summary` optionally includes `attention`, projected from the same observations as Overview. Supported kinds are `channel_send_failed`, `channel_restarting`, `start_failed`, `rate_limited` and `data_unreadable`. Items carry only applicable bounded text fields (`group`, `displayName`, `runtime`, `channel`, `service`, `reasonCode`, `source`), nonnegative `count`/`count30m`, and `until:string|null` (ISO UTC recovery time; null means unknown). Channel items have no group link. Group unreadability includes the group name/key and diagnostic reason; clients render reason text through text nodes. Existing running/counts/problems semantics remain unchanged, and older remote summaries without `attention` remain valid. Offline start failures use the existing filtered offline resource, including pagination; a failed read remains a diagnostic observation.
 

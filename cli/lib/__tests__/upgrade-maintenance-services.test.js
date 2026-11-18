@@ -2,11 +2,42 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import {spawnSync} from 'node:child_process';
+import cp, {spawnSync} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {serviceRestartFixture} from './helpers/service-restart-fixture.js';
 const require = createRequire(import.meta.url);
 const m = require('../upgrade-maintenance.cjs');
+
+for (const entry of ['stop', 'stopObserved']) {
+  for (const state of [
+    {status:'online',pid:4321},
+    {status:'stopped',pid:4321},
+    {status:'launching',pid:0},
+  ]) test(`${entry} identifies every service that fails stopped verification with status ${state.status}`, t => {
+    const f = serviceRestartFixture(t);
+    const spawn = cp.spawnSync;
+    let lists = 0;
+    cp.spawnSync = (file, args, options) => {
+      if (file !== 'pm2') return spawn(file, args, options);
+      assert.equal(args[0], 'jlist');
+      lists++;
+      const records = [f.record('scheduler'), f.record('custom-service')];
+      if (lists === 2) {
+        Object.assign(records[0], {pid:state.pid});
+        records[0].pm2_env.status = state.status;
+        records[1] = f.record('custom-service', 'online');
+        records.push({name:'unrelated',pid:9876,pm2_env:{status:'online',pm_exec_path:path.join(f.root,'outside.js')}});
+      }
+      return {status:0, stdout:JSON.stringify(records), stderr:''};
+    };
+    t.after(() => {cp.spawnSync = spawn;});
+    assert.throws(() => m[entry](f.j), error => {
+      assert.equal(error.message, `managed services not confirmed stopped: scheduler (status=${state.status}, pid=${state.pid}); custom-service (status=online, pid=123)`);
+      return true;
+    });
+    assert.equal(lists, 2);
+  });
+}
 
 // Real recovery entry points and bounded PM2 children in a private fixture.
 // Run for maintenance restart env changes; unrelated upgrade paths can skip.

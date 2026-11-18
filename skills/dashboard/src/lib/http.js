@@ -21,7 +21,7 @@ const FAILURE_STATUSES = new Map([
     'model_pair_required', 'model_config_invalid', 'session_group_invalid', 'session_group_too_long',
     'prompt_starts_with_dashes', 'tz_unavailable', 'no_updates', 'reschedule_not_future', 'target_required', 'unknown_action']],
   [401, ['unauthorized', 'authentication_required', 'invalid_api_key']],
-  [403, ['insufficient_scope', 'same_origin_required', 'local_cookie_required', 'origin_forbidden', 'auth_not_confirmed']],
+  [403, ['insufficient_scope', 'same_origin_required', 'local_cookie_required', 'origin_forbidden', 'auth_failed', 'auth_not_confirmed']],
   [404, ['task_not_found', 'group_not_found', 'session_group_not_found', 'unknown_key', 'unknown_agent', 'not_found']],
   [409, ['already_set', 'already_up_to_date', 'duplicate_request', 'environment_override', 'multi_session_required',
     'task_wrong_status', 'runtime_not_installed', 'target_scope_mismatch', 'target_mismatch', 'stale_target', 'task_ambiguous', 'transition_open', 'legacy_session_present', 'manual_restart_pending',

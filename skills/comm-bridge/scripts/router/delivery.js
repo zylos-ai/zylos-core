@@ -413,6 +413,10 @@ export function createDelivery(deps, configuration = {}) {
       else {
         const transition = deps.db.failDelivery(row.id, { maxRetries: MAX_RETRIES });
         if (!transition.changed) emit('conditional_write_lost', { operation: 'failDelivery' });
+        else if (transition.status === 'failed' && code === 'ENTER_UNVERIFIED' && pastedAt !== null) {
+          try { Promise.resolve(deps.notifyDeliveryFailed?.({ conversationId: row.id, sessionGroup: group,
+            runId: target.runId, sessionId: target.runtimeSessionId, runtime: target.runtime, pastedAt })).catch(() => {}); } catch {}
+        }
         else if (transition.status === 'pending') await sleep(options.retryBaseMs * 2 ** (transition.retryCount - 1));
       }
       return { delivered: false, blocked: true, state: state.state };

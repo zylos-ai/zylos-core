@@ -132,6 +132,53 @@ function unchanged(f) {
  f.m.worker=()=>{throw Error('database worker must not run');};
 }
 
+// Exercise the retained launcher through authenticated recovery preflight.
+// All descriptor/SQLite paths belong to fixture(); no PM2 or tmux is started.
+// Run when frozen-worker launch options change; skip for unrelated changes.
+test('frozen recovery preflight leaves deadlines to the database worker',async t=>{
+ const f=await fixture(t);
+ const descriptor=f.m.read(path.join(f.dir,'descriptor.json'));
+ const spawnSync=cp.spawnSync,calls=[];
+ t.mock.method(cp,'spawnSync',(node,args,options)=>{
+  if(args?.[0]===descriptor.workerPath){
+   calls.push({node,payload:JSON.parse(args[1]),options});
+  }
+  return spawnSync(node,args,options);
+ });
+ const result=f.m.preflight(f.dir,f.load(),null,{originalDeployment:true});
+ assert.equal(calls.length,1);
+ assert.equal(calls[0].node,descriptor.nodePath);
+ assert.equal(calls[0].payload.action,'offline-preflight');
+ assert.equal(Object.hasOwn(calls[0].options,'timeout'),false);
+ assert.ok(result.databases.some(row=>row.source==='comm-bridge/c4.db'));
+});
+
+test('unchanged upgrade records only an explicitly stopped Dashboard as stopped',async t=>{
+ for(const status of ['errored','launching','waiting restart','online','stopped']){
+  await t.test(status,t=>{
+   const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-dashboard-state-')));
+   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+   const coreDir=path.join(root,'package'),skillsDir=path.join(root,'.claude/skills');
+   fs.mkdirSync(path.join(coreDir,'skills/core'),{recursive:true});
+   fs.mkdirSync(path.join(coreDir,'cli/lib'),{recursive:true});
+   fs.mkdirSync(path.join(skillsDir,'core'),{recursive:true});
+   fs.writeFileSync(path.join(coreDir,'package.json'),'{}');
+   fs.copyFileSync(path.resolve('cli/lib/core-db-backup-worker.js'),path.join(coreDir,'cli/lib/core-db-backup-worker.js'));
+   t.mock.method(protectionMaintenance,'services',()=>[
+    {name:'zylos-dashboard',status,pid:status==='online'?11:0,script:path.join(skillsDir,'dashboard/index.js')},
+   ]);
+   const ctx={coreDir,tempDir:coreDir,from:'1.0.0',to:'1.0.0',firstTakeover:false,dashboardOwnerManaged:true,databaseMode:'unchanged'};
+   try {
+    beginUpgrade(ctx,{zylosDir:root,skillsDir});
+    const journal=ctx.maintenance.read(path.join(ctx.transactionDir,'journal.json'));
+    assert.equal(journal.databaseMode,'unchanged');
+    assert.equal(journal.dashboardWasStopped,status==='stopped');
+    assert.deepEqual(journal.erroredServices,[]);
+   } finally {ctx.releaseControl?.();}
+  });
+ }
+});
+
 async function originalDashboardTakeover(t) {
  const f=await fixture(t,{dashboard:true,dashboardVersion:20});
  fs.rmSync(f.dashboardRoot,{recursive:true});
@@ -147,7 +194,8 @@ test('protected preparation checks an original deployment without a Dashboard ow
  fs.rmSync(path.join(f.dir,'sqlite-runtime'),{recursive:true});
  const before=fs.readFileSync(f.db('components/dashboard/dashboard.db'));
  const ctx={maintenance:f.m,journal:f.j,transactionDir:f.dir,transactionId:'tx',coreDir:path.resolve('.'),snapshotFormatVersion:3};
- assert.doesNotThrow(()=>prepareProtectedInstall(ctx));
+ // Rehearsal behavior has dedicated coverage; this fixture checks retained recovery ownership.
+ assert.doesNotThrow(()=>prepareProtectedInstall(ctx,{rehearse:()=>{}}));
  assert.equal(f.load().phase,'prepared');
  assert.equal(ctx.dbSnapshotVerified,true);
  assert.deepEqual(fs.readFileSync(f.db('components/dashboard/dashboard.db')),before);
@@ -173,7 +221,8 @@ for(const retainedDatabase of [false,true]) test(`migrating upgrade ignores reti
  fs.rmSync(f.snapshot.dbBackupDir,{recursive:true});
  fs.rmSync(path.join(f.dir,'sqlite-runtime'),{recursive:true});
  const ctx={maintenance:f.m,journal:f.load(),transactionDir:f.dir,transactionId:'tx',coreDir:path.resolve('.'),snapshotFormatVersion:3};
- assert.doesNotThrow(()=>prepareProtectedInstall(ctx));
+ // Rehearsal behavior has dedicated coverage; this fixture checks retained recovery ownership.
+ assert.doesNotThrow(()=>prepareProtectedInstall(ctx,{rehearse:()=>{}}));
  assert.equal(f.load().phase,'prepared');
  const original=f.m.preflight(f.dir,f.load(),null,{originalDeployment:true});
  assert.equal(original.databases.some(row=>row.source==='web-console/web-console.db'),false);

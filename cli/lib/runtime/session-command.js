@@ -36,6 +36,7 @@ export function buildRuntimeArgs(runtime, config, {root, help = '', bypassPermis
   const server = path.join(root, '.claude/skills/zylos-memory/scripts/memory-mcp-server.js');
   const args = [];
   if (runtime === 'claude') {
+    args.push('--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode');
     if (bypassPermissions) args.push('--dangerously-skip-permissions');
     if (config.mode === 'override') args.push('--model', config.model, '--effort', config.effort);
     args.push('--mcp-config', JSON.stringify({mcpServers:{'zylos-memory':{type:'stdio', command:'node', args:[server]}}}));
@@ -110,7 +111,15 @@ export function writeSessionLaunchScript({command,args,env,root,multi}) {
   if (multi) bindings.push('"ZYLOS_SESSION_GROUP=$ZYLOS_SESSION_GROUP"');
   const script = `#!/bin/sh\nset -eu\ncd ${shellQuote(root)}\nrm -- ${shellQuote(file)}\nrmdir -- ${shellQuote(dir)}\nexec env -i ${bindings.join(' ')} ${[command,...args].map(shellQuote).join(' ')}\n`;
   fs.writeFileSync(file,script,{mode:0o600});
-  return {file, cleanup() { removeOwnedTree(temporaryRoot, dir); }};
+  return {file, cleanup() {
+    // launch.sh removes only itself and its directory. Retry once if its unlink
+    // wins the race, so the remaining empty directory is still removed. A
+    // second ENOENT means the shell also finished removing that directory.
+    try { removeOwnedTree(temporaryRoot, dir); return; }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    try { removeOwnedTree(temporaryRoot, dir); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }};
 }
 export function runtimeHelp(command, env = process.env) {
   try { return execFileSync(command,['--help'],{env,encoding:'utf8',timeout:10000,killSignal:'SIGKILL',stdio:'pipe'}); }

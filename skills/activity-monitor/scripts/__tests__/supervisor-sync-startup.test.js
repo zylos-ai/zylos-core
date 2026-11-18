@@ -7,7 +7,7 @@ import { SupervisorLifecycle } from '../supervisor-lifecycle.js';
 function fixture(mode = 'multi') {
   const start = Date.parse('2026-11-13T02:00:00Z');
   const f = { now: start + 120000, firstAt: '2026-11-13 02:00:01', count: 2,
-    endings: [], completed: null, reads: [], controls: [], errors: [], held: false,
+    endings: [], completed: null, reads: [], controls: [], errors: [], events: [], held: false,
     readError: new Error('read failed') };
   f.scene = { sessionGroup: mode === 'single' ? null : 'a', present: true, ready: true,
     runtime: 'claude', runId: 'run-a', sessionId: 'session-a', createdAt: start,
@@ -25,7 +25,7 @@ function fixture(mode = 'multi') {
   f.lifecycle = new SupervisorLifecycle({ db, requests: { read: () => [] },
     observeGroup: group => f.context.scenes.find(scene => scene.sessionGroup === group),
     readSyncMarker: () => ({ held: f.held, stale: false }), groupRunDir: () => '/isolated/origin',
-    prepareReferenceReorg: () => false,
+    prepareReferenceReorg: () => false, diagnostic: event => f.events.push(event),
     reportError: (cause, context) => f.errors.push({ cause, context }),
     prompts: { GROUP_SYNC_PROMPT: 'sync', ORIGIN_SYNC_PROMPT: 'origin', SYNC_BACKLOG_ALERT: () => 'alert',
       REFERENCE_REORG_PROMPT: 'reference proposal' },
@@ -116,4 +116,46 @@ test('fresh messages retain threshold longest-wait context and marker gates', as
   const context = fixture(); context.scene.usagePercent = 80; await context.check(); assert.equal(context.syncs().length, 1);
   const marker = fixture(); marker.count = 16; marker.held = true; await marker.check();
   assert.equal(marker.syncs().length, 0); assert.equal(marker.lifecycle.syncRuns.has(marker.key), false);
+});
+
+
+for (const [reason, setup] of [
+  ['threshold', f => { f.count = 16; }],
+  ['max_lag', f => { f.firstAt = f.start - 21600000; }],
+  ['context', f => { f.scene.usagePercent = 99; }],
+  ['inherited', f => { f.firstAt = f.start; f.endings = [{ sessionGroup: 'a', endedAt: f.start / 1000 }]; }],
+]) {
+  test(`Sync trigger records ${reason} with observed backlog and context`, async () => {
+    const f = fixture(); setup(f); await f.check();
+    const row = f.events.find(row => row.event === 'sync_triggered');
+    assert.ok(row.reason.includes(reason)); assert.equal(row.scope, 'a'); assert.equal(row.kind, 'group');
+    assert.equal(row.backlog, f.count); assert.equal(row.contextPercent, f.scene.usagePercent);
+    assert.ok(row.lag >= 0);
+  });
+}
+
+test('Sync records simultaneous reasons without changing threshold or minimum interval', async () => {
+  const f = fixture(); f.count = 16; f.firstAt = f.start - 21600000; f.scene.usagePercent = 99;
+  await f.check();
+  const row = f.events.find(row => row.event === 'sync_triggered');
+  assert.ok(['threshold', 'max_lag', 'context'].every(reason => row.reason.includes(reason)));
+  assert.equal(f.syncs().length, 1);
+});
+
+test('failed diagnostic metadata read never loses already inserted Sync bookkeeping', async () => {
+  const f = fixture(); f.count = 16;
+  f.lifecycle.d.db.getLatestContentCheckpoint = () => { throw new Error('diagnostic unavailable'); };
+  await f.check();
+  assert.equal(f.syncs().length, 1); assert.ok(f.lifecycle.syncSent.has(f.key));
+  assert.equal(f.events.filter(row => row.event === 'sync_triggered').length, 1);
+});
+
+
+test('trigger checkpoint baseline precedes a worker publishing during enqueue', async () => {
+  const f = fixture(); f.count = 16; let checkpoint = { id: 4 };
+  f.lifecycle.d.db.getLatestContentCheckpoint = () => checkpoint;
+  const insert = f.lifecycle.d.db.insertControl;
+  f.lifecycle.d.db.insertControl = (...args) => { const result = insert(...args); checkpoint = { id: 5 }; return result; };
+  await f.check();
+  assert.equal(f.events.find(row => row.event === 'sync_triggered').checkpointId, 4);
 });

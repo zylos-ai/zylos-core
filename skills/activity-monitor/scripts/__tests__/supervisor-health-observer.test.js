@@ -639,3 +639,113 @@ test('single session: a replacement run is not owned by the previous run\'s epis
   assert.equal(f.controls.length,1);assert.equal(f.controls[0].targetBinding.runId,replacement.runId);
   f.controls[0].status='done';await f.observer.tick();assert.equal((await probe).recovered,true);
 });
+
+
+const failedDelivery = f => ({ ...f.scene(), conversationId: 42, pastedAt: f.now() - 1 });
+
+test('terminal unverified delivery stops its silent run once, including concurrent duplicate facts', async t => {
+  const f = fixture(t), fact = failedDelivery(f);
+  const results = await Promise.all([f.observer.notifyDeliveryFailed(fact), f.observer.notifyDeliveryFailed(fact)]);
+  assert.equal(results.filter(Boolean).length, 1);
+  assert.equal(f.stops.length, 1);
+  assert.equal(await f.observer.notifyDeliveryFailed(fact), false);
+  assert.equal(f.stops.length, 1);
+  assert.equal(f.events.at(-1).event, 'delivery_failure_restart');
+  assert.equal(f.events.at(-1).conversation_id, 42);
+});
+
+for (const reason of ['output', 'tool', 'active-child', 'pending-transcript', 'stale-state-session', 'stale-run', 'stale-session']) {
+  test(`unverified delivery cannot stop a run with ${reason}`, async t => {
+    const f = fixture(t), fact = failedDelivery(f);
+    if (reason === 'output') f.setState({ lastResponseAt: f.now() });
+    if (reason === 'tool') f.setState({ tools: [{ name: 'Bash' }] });
+    if (reason === 'active-child') f.setState({ activeSubagents: [{ agentId: 'child', lastActivityAt: fact.pastedAt - 1 }] });
+    if (reason === 'pending-transcript') f.setState({ transcriptPending: true });
+    if (reason === 'stale-state-session') f.setState({ sessionId: 'old-session' });
+    if (reason === 'stale-run') fact.runId = randomUUID();
+    if (reason === 'stale-session') fact.sessionId = 'old-session';
+    assert.equal(await f.observer.notifyDeliveryFailed(fact), false);
+    assert.equal(f.stops.length, 0);
+  });
+}
+
+test('each silent replacement run may restart once without a preceding response', async t => {
+  const f = fixture(t);
+  for (let run = 0; run < 3; run++) {
+    if (run > 0) {
+      f.advance(1000);
+      f.setScenes([{ ...f.scene(), runId: randomUUID(), sessionId: `session-${run}`, currentSessionTs: f.now() }]);
+      f.setState({});
+    }
+    const fact = failedDelivery(f);
+    assert.equal(await f.observer.notifyDeliveryFailed(fact), true);
+    assert.equal(f.stops.length, run + 1);
+    assert.equal(await f.observer.notifyDeliveryFailed(fact), false, 'duplicates of this run stop only once');
+    assert.equal(f.stops.length, run + 1);
+  }
+});
+
+test('unverified delivery rechecks activity at the actual stop admission', async t => {
+  const f = fixture(t);
+  let stopAttempts = 0;
+  f.observer.stop = async (scene, validate) => {
+    stopAttempts++;
+    f.setState({ lastResponseAt: f.now() });
+    assert.equal(await validate(scene), false);
+    return false;
+  };
+  assert.equal(await f.observer.notifyDeliveryFailed(failedDelivery(f)), false);
+  assert.equal(stopAttempts, 1);
+  assert.equal(f.stops.length, 0);
+  assert.equal(f.events.length, 0);
+});
+
+
+test('unverified delivery keeps observed run metadata when stop revalidation supplies only identity', async t => {
+  const f = fixture(t), observed = { ...f.scene(), runDir: '/isolated/run', currentSessionTs: f.now() - 1000 };
+  let reads = 0;
+  f.observer.readState = scene => {
+    reads++;
+    assert.equal(scene.runDir, observed.runDir);
+    assert.equal(scene.currentSessionTs, observed.currentSessionTs);
+    return { sessionId: observed.sessionId, tools: [], lastResponseAt: 0 };
+  };
+  f.observer.stop = async (identity, validate) => validate({ sessionGroup: identity.sessionGroup,
+    runtime: identity.runtime, runId: identity.runId, sessionId: identity.sessionId });
+  assert.equal(await f.observer.notifyDeliveryFailed(failedDelivery(f), observed), true);
+  assert.ok(reads >= 3, 'initial observation, stop gate and stop admission all read activity');
+});
+
+
+test('a stale observed run cannot erase the replacement run restart reservation', async t => {
+  const f = fixture(t), oldScene = { ...f.scene(), currentSessionTs: f.now() - 1000 };
+  const staleFact = failedDelivery(f);
+  f.setScenes([{ ...f.scene(), runId: randomUUID(), sessionId: 'session-b' }]);
+  f.setState({});
+  assert.equal(await f.observer.notifyDeliveryFailed(failedDelivery(f)), true);
+  const reservation = f.observer.deliveryFailureRestarts.get(oldScene.sessionGroup);
+  f.observer.readState = scene => ({ sessionId: scene.sessionId, tools: [],
+    lastResponseAt: scene.runId === oldScene.runId ? staleFact.pastedAt - 1 : 0 });
+  assert.equal(await f.observer.notifyDeliveryFailed(staleFact, oldScene), false);
+  assert.equal(f.observer.deliveryFailureRestarts.get(oldScene.sessionGroup), reservation);
+  assert.equal(await f.observer.notifyDeliveryFailed(failedDelivery(f)), false);
+  assert.equal(f.stops.length, 1);
+});
+
+test('refused replacement stop restores the preceding reservation and allows replacement retry', async t => {
+  const f = fixture(t);
+  assert.equal(await f.observer.notifyDeliveryFailed(failedDelivery(f)), true);
+  const preceding = f.observer.deliveryFailureRestarts.get(f.scene().sessionGroup);
+  f.advance(1000);
+  f.setScenes([{ ...f.scene(), runId: randomUUID(), sessionId: 'session-b', currentSessionTs: f.now() - 500 }]);
+  f.setState({ lastResponseAt: f.now() - 100 });
+  let attempts = 0;
+  f.observer.stop = async () => { attempts++; return false; };
+  assert.equal(await f.observer.notifyDeliveryFailed(failedDelivery(f)), false);
+  assert.equal(attempts, 1);
+  assert.equal(f.observer.deliveryFailureRestarts.get(f.scene().sessionGroup), preceding);
+  f.setState({});
+  assert.equal(await f.observer.notifyDeliveryFailed(failedDelivery(f)), false);
+  assert.equal(attempts, 2, 'a different run remains eligible after its earlier stop was refused');
+  assert.equal(f.observer.deliveryFailureRestarts.get(f.scene().sessionGroup), preceding);
+});

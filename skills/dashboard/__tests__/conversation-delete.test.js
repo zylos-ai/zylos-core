@@ -180,3 +180,32 @@ test('a preview without a complete typed boundary cannot be confirmed', async ()
     assert.equal(deletes, 0); assert.equal(f.confirmations.length, 0);
   }
 });
+
+
+test('deletion preview permission refusals explain the cause without starting deletion', async () => {
+  for (const code of ['not_allowed_via_fleet', 'admin_required', 'insufficient_scope', 'same_origin_required',
+    'unauthorized', 'local_cookie_required', 'remote_deletion_forbidden', 'origin_deletion_forbidden']) {
+    for (const thrown of [false, true]) {
+      let requests = 0;
+      const f = fixture({ request: async () => {
+        requests++;
+        const payload = { ok: false, error: { code } };
+        if (thrown) throw { status: 403, payload };
+        return payload;
+      } });
+      await f.controller.remove(item);
+      const state = f.controller.status(item);
+      assert.equal(state.state, 'preview_error');
+      assert.notEqual(state.errorKey, 'chat.delete.previewError');
+      for (const language of ['zh', 'en']) {
+        const words = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${language}.json`, import.meta.url), 'utf8'));
+        assert.equal(typeof words[state.errorKey], 'string');
+        assert.doesNotMatch(words[state.errorKey], /稍后再试|try again later/i);
+      }
+      assert.equal(requests, 1); assert.equal(f.confirmations.length, 0); assert.equal(f.removed.length, 0);
+    }
+  }
+  const f = fixture({ request: async () => { throw { status: 403, payload: {} }; } });
+  await f.controller.remove(item);
+  assert.equal(f.controller.status(item).errorKey, 'chat.delete.previewDenied');
+});

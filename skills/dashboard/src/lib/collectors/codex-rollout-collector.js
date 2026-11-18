@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { DEFAULT_CODEX_MODEL_PRICES, DEFAULT_CODEX_PRIORITY_MODEL_PRICES, modelPricesForRuntime, normalizeServiceTier } from '../config.js';
 import { Sanitizer } from '../sanitizer.js';
-import { UsageTranscripts, groupMainTranscript } from './usage-transcripts.js';
+import { UsageTranscripts, groupMainTranscript, childTranscript } from './usage-transcripts.js';
 import { sameSourceFile } from '../source-file-identity.js';
 import { codexToolOutputFailed, codexToolOutputText } from '../codex-tool-outcome.js';
 
@@ -282,6 +282,8 @@ export class CodexRolloutCollector {
       sessionMeta.serviceTier = runtimeServiceTier(payload.service_tier ?? payload.serviceTier);
       return 0;
     }
+    // A child runtime started inside a session (`codex exec`) counts for cost only.
+    if (childTranscript(mapping) && !(event.type === 'event_msg' && payload.type === 'token_count')) return 0;
     // A subagent's own thread names its parent as the session; its turns, tools and words are not the parent's.
     // Only its token usage and turn timing metrics are kept.
     const subagentThread = sessionMeta.subagentThread === true;

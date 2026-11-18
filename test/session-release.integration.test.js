@@ -9,14 +9,17 @@ import { readyTmuxTarget } from './helpers/ready-tmux-target.js';
 
 // Boundary: real requestRelease client/socket -> startSupervisor admission and
 // lifecycle -> real C4 SQLite ending/slot transaction and run-guarded tmux stop.
-// CHECK and Sync execution use the real claim/ack APIs; no model, channel
+// CHECK and Sync execution use the real claim/ack APIs; Sync also runs the
+// protected acquire/checkpoint/state commit/release scripts. No model, channel
 // send, PM2 service or authenticated runtime is started. Cold incoming demand is
 // checked through actual C4 group routing and slot admission, not model launch.
 // Busy state represents the requester's current tool turn; the accepted intent
 // waits for idle and child completion. Real socket notifications prove that new
 // conversation/control delivery cancels the unfenced intent. Supervisor recreation
 // proves that this intent is in memory only; ordinary TTL remains the fallback.
-// Run for release admission, lifecycle, ending/slot or Sync-order changes.
+// Run for release admission, lifecycle, ending/slot, Sync-order, or Sync alert
+// changes; unrelated UI and reporting-only changes may skip. The completed Sync
+// fixture publishes matching state so all-control assertions remain strict.
 // The official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR. Every case owns a
 // private database, socket, named native sleeper runtime and worker. Cleanup
 // waits for or kills the worker, closes SQLite and kills only its tmux server.

@@ -997,7 +997,7 @@ test('fleet proxy allows admin memory GETs and validates memory query paths cons
       body: '{}'
     });
     assert.equal(write.status, 403);
-    assert.deepEqual(await write.json(), { ok: false, error: { code: 'read_only_proxy', message: 'read_only_proxy' } });
+    assert.deepEqual(await write.json(), { ok: false, error: { code: 'not_allowed_via_fleet', message: "This change can't be made when opening another agent from the fleet" } });
 
     assert.deepEqual(seen, [
       { method: 'GET', url: '/api/memory/tree' },
@@ -1801,7 +1801,7 @@ test('fleet migrates object writes and exposes remote chat policy to read caller
   for (const route of ['/api/settings', '/api/workbench/schedule', '/api/actions/restart-timezone-services']) {
     const response = await request(route, route === '/api/settings' ? 'PUT' : 'POST');
     assert.equal(response.status, 403);
-    assert.equal((await response.json()).error.code, 'read_only_proxy');
+    assert.equal((await response.json()).error.code, 'not_allowed_via_fleet');
   }
   const count = seen.length;
   const localOnly = await request('/api/settings/chat', 'PUT');
@@ -1845,7 +1845,7 @@ test('fleet schedule writes allow only exact object and action paths', async () 
     for (const [method, suffix] of forbidden) {
       const reply = await fetch(`${hub.origin}/fleet/Remote${suffix}`, { method, body: '{}' });
       assert.equal(reply.status, 403, `${method} ${suffix}`);
-      assert.equal((await reply.json()).error.code, 'read_only_proxy');
+      assert.equal((await reply.json()).error.code, 'not_allowed_via_fleet');
       assert.equal(seen.length, count, 'rejected paths must not reach the destination');
     }
   } finally { await hub.close(); await remote.close(); }

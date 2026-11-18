@@ -40,6 +40,10 @@ function fixture(t) {
     listSlotOccupancy: () => [], pruneSlots: () => ({ deletedHeld: 0, deletedOrphans: [] }),
     listPendingContinuations: () => [], listRunEndings: () => [], getLastCompletedModeTransition: () => null,
     listPendingSessionGroups: () => [], getControlById: () => null,
+    // All observed groups have no Sync backlog or committed checkpoint.
+    listGroupHeads: () => current.map(({ sessionGroup }) => ({ sessionGroup })),
+    getLatestContentCheckpoint: () => null,
+    getGlobalUnsummarizedRange: () => ({ count: 0, firstAt: null }),
     getLastActivity: () => now,
     getUnsummarizedRange: () => ({ count: 0, firstAt: null }),
     getOriginSyncBacklog: () => ({ total: 0, groups: [] }),

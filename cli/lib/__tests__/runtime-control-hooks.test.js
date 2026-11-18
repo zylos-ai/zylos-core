@@ -175,7 +175,7 @@ test('both-runtime preparation preserves unrelated hook identity', () => {
   assert.equal(isCoreCodexHook('node /instance/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js --shard identity', '/instance'), true);
   const desired = desiredClaudeHooks({ zylosDir: '/isolated-instance', existsSync: () => false });
   for (const groups of Object.values(desired)) for (const group of groups) for (const hook of group.hooks) {
-    assert.ok(hook.command.startsWith('node /isolated-instance/.claude/'), hook.command);
+    assert.ok(hook.command.startsWith('exec node /isolated-instance/.claude/'), hook.command);
   }
   const failed = syncCodexConfig({ projectDir: '/isolated-instance',
     readFileSync: () => 'malformed toml [', log: () => {}, writeConfig: () => false });

@@ -3,11 +3,28 @@ import { openTmuxConnection, runTmuxCommand } from './tmux-connection.js';
 import { isTmuxDirectoryError } from './tmux-client-args.js';
 import { TMUX_COMMAND as C, TMUX_FORMAT as F, launchFormat, parseLaunchAddress,
   parseLaunchReceipt, parseExecReceipt } from './tmux-protocol.js';
+import { groupRunDir } from '../session-group-paths.js';
+import { readProcessStart } from '../../../skills/activity-monitor/scripts/claude-pid.js';
+import { writePaneProcess } from '../../../skills/activity-monitor/scripts/pane-process.js';
 
 export const LAUNCH_TIMEOUT_MS = 3000;
 export const LAUNCH_CLEANUP_TIMEOUT_MS = 500;
 const EXEC_POLL_MS = 25;
 const startingCommands = new Set(['sh','dash','bash','zsh','ksh','ash','fish','env','tmux','tmux: server']);
+
+/**
+ * Record the pane process of this run before the runtime can fire a hook. The
+ * pane command execs the runtime, so pid and start time stay the runtime's.
+ * Without the record hooks cannot tell the pane process from a child runtime
+ * and keep running (with a logged reason), so a failed write never fails the launch.
+ */
+export function recordPaneProcess({runId,launchConfig,sessionGroup,root,panePid,readStart=readProcessStart,write=writePaneProcess}) {
+  try {
+    const paneStart = readStart(panePid);
+    if (paneStart === null) return null;
+    return write(groupRunDir(sessionGroup ?? 'origin',{ZYLOS_DIR:root}),{runId,runtime:launchConfig?.runtime,panePid,paneStart});
+  } catch { return null; }
+}
 
 /** Submit once and bound all confirmation and local cleanup before return. */
 export async function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,script,tmux={}}) {
@@ -41,6 +58,7 @@ export async function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,roo
     if (!Number.isSafeInteger(target.createdAt) || match[6] !== '1' || match[7] !== '1' || (sessionGroup !== null && match[8] !== '1')) {
       throw adapterError('LAUNCH_FAILED','Launch environment was not confirmed');
     }
+    recordPaneProcess({runId,launchConfig,sessionGroup,root,panePid:Number(match[4])});
     connection = await openTmuxConnection({...tmux,timeoutMs:remaining()});
     connection.bindTarget(target);
     const command = argv => connection.command(argv,{timeoutMs:remaining()});

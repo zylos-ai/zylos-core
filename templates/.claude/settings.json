@@ -4,6 +4,6 @@
   "autoDreamEnabled": false,
   "statusLine": {
     "type": "command",
-    "command": "node ~/zylos/.claude/skills/activity-monitor/scripts/context-monitor.js"
+    "command": "exec node ~/zylos/.claude/skills/activity-monitor/scripts/hook-entry.js ~/zylos/.claude/skills/activity-monitor/scripts/context-monitor.js"
   }
 }

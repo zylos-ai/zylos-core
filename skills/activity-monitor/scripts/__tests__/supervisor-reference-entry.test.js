@@ -41,6 +41,9 @@ for (const mode of ['single', 'multi']) for (const unreadable of [false, true]) 
       listSlotOccupancy: () => [], pruneSlots: () => ({ deletedHeld: 0, deletedOrphans: [] }),
       listPendingContinuations: () => [], listRunEndings: () => [], getLastCompletedModeTransition: () => null,
       listPendingSessionGroups: () => [], getControlById: () => null,
+      // Exercise the assembled Sync observer with no committed checkpoint yet.
+      listGroupHeads: () => mode === 'multi' ? [{ sessionGroup: 'origin' }] : [],
+      getLatestContentCheckpoint: () => null,
       getUnsummarizedRange: () => ({ count: 0, firstAt: null }),
       getGlobalUnsummarizedRange: () => range,
       getOriginSyncBacklog: () => ({ total: range.count,

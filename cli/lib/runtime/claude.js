@@ -23,6 +23,7 @@ import { SessionAdapter } from './session-adapter.js';
 import { buildInstructionFile } from './instruction-builder.js';
 import { ZYLOS_DIR } from '../config.js';
 import { claudeProbeEnvironment } from './session-command.js';
+import { childRuntimeEnv } from '../child-runtime-env.js';
 import { writePrivateFile } from '../private-file.js';
 
 
@@ -137,7 +138,7 @@ export class ClaudeAdapter extends SessionAdapter {
   async checkAuth() {
     // Build subprocess env: inherit current env, but take the built-in Claude
     // variables (CLAUDE_BUILTIN_ENV_KEYS) exactly as a new session gets them.
-    const injectedEnv = claudeProbeEnvironment(this.options.root || ZYLOS_DIR, this.options.env || process.env);
+    const injectedEnv = childRuntimeEnv(claudeProbeEnvironment(this.options.root || ZYLOS_DIR, this.options.env || process.env));
 
     // Strip vars that would make Claude refuse to start ("already running" guard).
     for (const v of ENV_VARS_TO_STRIP) delete injectedEnv[v];
@@ -160,7 +161,7 @@ export class ClaudeAdapter extends SessionAdapter {
       return { status: 'success', reason: 'cli_probe' };
     } catch (err) {
       const output = (err.stdout ?? '') + (err.stderr ?? '');
-      if (output.includes('authentication_error')) {
+      if (typeof err.code === 'number' && output.includes('authentication_error')) {
         return { status: 'failure', reason: 'cli_probe_authentication_error' };
       }
       const isTransient =
@@ -175,6 +176,11 @@ export class ClaudeAdapter extends SessionAdapter {
       }
       if (typeof err.code === 'number' && output.includes('Not logged in')) {
         return { status: 'failure', reason: 'cli_probe_not_logged_in' };
+      }
+      if (typeof err.code === 'number' && [
+        'Invalid API key', 'Invalid auth token', 'Authentication required',
+      ].some(message => output.includes(message))) {
+        return { status: 'failure', reason: 'cli_probe_credentials_rejected' };
       }
       return { status: 'uncertain', reason: 'cli_probe_unexpected_error' };
     }

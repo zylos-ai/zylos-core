@@ -34,6 +34,19 @@ const identifier = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]+$/.te
 const string = value => typeof value === 'string' && value.length > 0 ? value : null;
 
 /** Serial, restartable observer. Never drives current state or Core decisions. */
+/**
+ * A child runtime's cost record (written by the hook entry instead of any hook
+ * activity) becomes a cost-only transcript registration, never an event.
+ */
+export function childTranscriptMapping(row) {
+  const text = value => typeof value === 'string' && value ? value : null;
+  const transcript = text(row.transcript_path);
+  if (!['claude', 'codex'].includes(row.runtime) || !text(row.session_id) || !transcript ||
+    !path.isAbsolute(transcript) || !transcript.endsWith('.jsonl')) return { warning: 'invalid_record' };
+  return { mapping: { transcript_path: transcript, runtime: row.runtime, session_group: text(row.session_group),
+    run_id: text(row.run_id), session_id: row.session_id, kind: 'child' }, warning: row.v > 1 ? 'unknown_version' : null };
+}
+
 export class CoreLogImporter {
   constructor({ store, zylosDir, sanitizer = new Sanitizer(zylosDir), redactor,
     batchLines = 200, batchBytes = 256 * 1024, intervalMs = 1000,
@@ -117,8 +130,10 @@ export class CoreLogImporter {
       ['router', p.routerDiagnosticPath(env)], ['supervisor', p.supervisorDiagnosticPath(env)],
       ['pool', p.poolMetricsPath(env)], ['receive', p.receiveDiagnosticPath(env)],
     ].map(([stream, file]) => ({ stream, file }));
-    const groups = new Set(this.store.db.prepare("SELECT DISTINCT stream FROM core_log_cursors WHERE stream LIKE 'events:%'").all()
-      .map(row => row.stream.slice(7)));
+    const groups = new Set(this.store.db.prepare("SELECT DISTINCT stream FROM core_log_cursors WHERE stream LIKE 'events:%' OR stream LIKE 'children:%'").all()
+      .map(row => row.stream.slice(row.stream.indexOf(':') + 1)));
+    // Cost records of child runtimes refused by the hook entry; run-less children land in the legacy directory.
+    sources.push({ stream: 'children', file: path.join(p.legacyRunDir(env), p.RUN_FILES.CHILD_SESSIONS) });
     try {
       for (const item of await fs.readdir(path.dirname(p.groupRunDir('origin', env)), { withFileTypes: true })) {
         if (item.isDirectory()) groups.add(item.name);
@@ -128,6 +143,7 @@ export class CoreLogImporter {
       try { p.assertSessionGroup(group); }
       catch { continue; }
       sources.push({ stream: `events:${group}`, file: path.join(p.groupRunDir(group, env), p.RUN_FILES.EVENTS) });
+      sources.push({ stream: `children:${group}`, file: path.join(p.groupRunDir(group, env), p.RUN_FILES.CHILD_SESSIONS) });
     }
     return sources;
   }
@@ -302,6 +318,7 @@ export class CoreLogImporter {
     try { row = JSON.parse(text); } catch { return { warning: 'malformed_line' }; }
     if (!row || typeof row !== 'object' || Array.isArray(row) || !Number.isInteger(row.v) || row.v < 1 ||
       !Number.isSafeInteger(row.ts) || row.ts < 0 || Number.isNaN(new Date(row.ts).valueOf())) return { warning: 'invalid_record' };
+    if (stream === 'children' || stream.startsWith('children:')) return childTranscriptMapping(row);
     const healthEvent = stream.startsWith('events:') && row.type === 'runtime_health';
     const hook = stream.startsWith('events:') && !healthEvent ? HOOKS[row.event] : null;
     const safe = hook ? this.sanitizer.sanitizeHookPayload(hook[0], row) : { metadata: {}, summary: string(row.event) || 'Unknown event' };
@@ -428,6 +445,7 @@ export class CoreLogImporter {
           if (reason) this.mark.run('gap', stream, stat.dev, stat.ino, old.generation);
           for (const item of prepared) {
             if (item.event && this.store.insertEvent(item.event).inserted) { inserted++; types.add(item.event.event_type); }
+            if (item.mapping) this.store.insertUsageTranscript(item.mapping, new Date().toISOString());
             if (item.warning) this.diagnostic(stream, item.warning, { file_dev: stat.dev, file_ino: stat.ino,
               generation, byte_offset: item.offset }, `${stat.dev}:${stat.ino}:g${generation}:${item.warning}`);
           }

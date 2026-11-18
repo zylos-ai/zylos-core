@@ -15,8 +15,12 @@ const SESSION_LIFECYCLE_EVENTS = ['session_start', 'activate_new', 'start_always
 
 /** A non-origin group's own main transcript (not a subagent file): its assistant words belong to that group. */
 export function groupMainTranscript(mapping) {
-  return !mapping?.parent_path && typeof mapping?.session_group === 'string' && mapping.session_group !== 'origin';
+  return !mapping?.parent_path && mapping?.kind !== 'child' &&
+    typeof mapping?.session_group === 'string' && mapping.session_group !== 'origin';
 }
+
+/** A child runtime's transcript (and its subagents): counted for cost only. */
+export const childTranscript = mapping => mapping?.kind === 'child';
 
 export class UsageTranscripts {
   constructor(store, config, { getSnapshot, getSnapshotKey, now = Date.now } = {}) {
@@ -100,7 +104,7 @@ export class UsageTranscripts {
   }
 
   isOriginCurrent(row, snapshot) {
-    if (!snapshot || !['origin', null].includes(row.session_group)) return false;
+    if (!snapshot || childTranscript(row) || !['origin', null].includes(row.session_group)) return false;
     const current = this._currentRun(row, snapshot);
     if (row.runtime === 'codex' && row.run_id != null && row.run_id === current) {
       return this.store.currentOriginTranscript('codex', current)?.transcript_path === row.transcript_path;

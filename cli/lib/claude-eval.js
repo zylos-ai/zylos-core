@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { parseSkillMd } from './skill.js';
+import { childRuntimeEnv } from './child-runtime-env.js';
 
 const MAX_FILE_LINES = 500;
 const MAX_FILES = 10;
@@ -133,7 +134,7 @@ function callClaude(prompt) {
 
     const child = spawn('claude', ['--print', '--output-format', 'text'], {
       stdio: ['pipe', 'pipe', 'ignore'],
-      env: { ...process.env },
+      env: childRuntimeEnv(),
     });
 
     child.stdin.on('error', () => {}); // Ignore EPIPE if child exits early

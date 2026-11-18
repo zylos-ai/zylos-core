@@ -19,6 +19,7 @@ const ROOT_NODE_TESTS = [
   'test/fleet-attention-browser.test.js',
   'test/channel-delivery.integration.test.js',
   'test/channel-sync.integration.test.js',
+  'test/self-upgrade-private-host.integration.test.js',
   'test/single-origin-activity.integration.test.js',
   'test/dashboard-demand-poll.integration.test.js',
   'test/legacy-group-reads-browser.test.js',
@@ -31,6 +32,7 @@ const ROOT_NODE_TESTS = [
   'test/account-quota-browser.test.js',
   'test/dashboard-initial-timezone.integration.test.js',
   'test/skill-command-arguments.test.js',
+  'test/delivery-failure-recovery.integration.test.js',
   'test/pool-capacity-browser.test.js',
   'test/diagram-browser.integration.test.js',
   'test/diagram-components.integration.test.js',
@@ -62,8 +64,11 @@ const ROOT_NODE_TESTS = [
   'test/single-upgrade-check.integration.test.js',
   'test/exit-control.integration.test.js',
   'test/upgrade-npm-prefix.integration.test.js',
+  'test/upgrade-db-maintenance.integration.test.js',
   'test/session-release.integration.test.js',
+  'test/session-launch-cleanup.integration.test.js',
   'test/component-source-record.integration.test.js',
+  'test/runtime-auth-display.integration.test.js',
 ];
 const TEST_ROOTS = [
   path.join(ROOT, 'skills', 'dashboard', '__tests__'),

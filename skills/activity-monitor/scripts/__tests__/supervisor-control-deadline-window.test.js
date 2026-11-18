@@ -48,8 +48,8 @@ function harness(t) {
 }
 
 const SITES = [
-  ['release preparation', 300, ['check', 'prepare'], h => h.lifecycle.prepareRelease(h.scene, h.context, { controlIds: [] })],
-  ['TTL preparation', 300, ['check', 'prepare'], h => h.lifecycle.checkTtl(h.scene, h.context)],
+  ['release preparation', [300, 900], ['check', 'prepare'], h => h.lifecycle.prepareRelease(h.scene, h.context, { controlIds: [] })],
+  ['TTL preparation', [300, 900], ['check', 'prepare'], h => h.lifecycle.checkTtl(h.scene, h.context)],
   ['eviction check', 60, ['check'], h => h.lifecycle.checkEviction([h.scene], h.context)],
   ['configuration restart', 300, ['config'], h => h.lifecycle.reconcileConfiguration(h.context)],
   ['group Sync', 300, ['group sync'], h => h.lifecycle.syncScope(h.scene, 'group', { count: 60, nonempty: true, firstAt: null, firstConversationId: 1 }, h.context)],
@@ -57,12 +57,17 @@ const SITES = [
 ];
 
 for (const [name, seconds, contents, write] of SITES) {
-  test(`the supervisor ${name} keeps exactly its ${seconds} second window when the write crosses a whole second`, async t => {
+  const window = Array.isArray(seconds) ? `${seconds.join(' and ')} second windows` : `${seconds} second window`;
+  test(`the supervisor ${name} keeps exactly its ${window} when the write crosses a whole second`, async t => {
     const h = harness(t);
     await write(h);
     const rows = h.rows();
     assert.deepEqual(rows.map(row => [row.raw_content, row.session_group]), contents.map(content => [content, 'a']));
-    for (const row of rows) assert.equal(row.ack_deadline_at - row.created_at, seconds, JSON.stringify(row));
+    // Reclaim checks get five minutes; the following memory Sync gets fifteen.
+    // Match each window to its prompt, retaining the whole-second boundary check.
+    for (const [index, row] of rows.entries()) {
+      assert.equal(row.ack_deadline_at - row.created_at, Array.isArray(seconds) ? seconds[index] : seconds, JSON.stringify(row));
+    }
   });
 }
 

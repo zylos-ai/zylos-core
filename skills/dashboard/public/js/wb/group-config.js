@@ -2,7 +2,7 @@ import { element, runtimeName } from './plain-text.js';
 
 export function responseError(value, fallback = 'request_failed') {
   const error = value?.error;
-  return typeof error === 'string' ? error : [error?.code, error?.message].filter(Boolean).join(' · ') || fallback;
+  return typeof error === 'string' ? error : [...new Set([error?.code, error?.message].filter(Boolean))].join(' · ') || fallback;
 }
 
 export async function fetchJson(fetch, path, options = {}) {

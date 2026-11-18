@@ -16,6 +16,22 @@ const between = (text, start, end) => {
   return text.slice(from, to);
 };
 
+test('Sync procedures use a fixed temporary state name without path placeholders', () => {
+  const format = read('state-format');
+  for (const source of [sync, format]) {
+    assert.doesNotMatch(source, /state\.md\.(?!tmp\b)[^\s`"/]+\.tmp|session-groups\/G\/state\.md/);
+  }
+  assert.match(normalize(format), /Use the restricted tool for `state\.md\.tmp` after checkpoint succeeds/);
+  assert.match(normalize(format), /The tool maps this fixed name to the current scope's temporary state file for the acquired token/);
+  assert.match(sync, /"path":"state\.md\.tmp"/);
+  for (const section of [between(sync, '## Group Sync', '## Origin Sync'),
+    between(sync, '## Single global Sync', '## Moving from old files')]) {
+    assert.match(section, /`state\.md\.tmp`/);
+  }
+  assert.match(normalize(sync), /STATE_DOCUMENT_INVALID`: correct `state\.md\.tmp` through `edit_memory`/);
+  assert.match(normalize(sync), /`edit_memory` calls cannot read shell variables or files; the `token` field must contain the literal token printed by acquire/);
+});
+
 test('Sync parents consume Codex worker outcomes before ending their turn', () => {
   const parent = normalize(between(skill, '## Parent result handling', '## Writing rules'));
   assert.match(parent, /apply to group, Origin, and global Sync/);
@@ -166,7 +182,7 @@ test('export guidance shares bounded reading and visible-tail steps', () => {
     assert.match(text, /even when the final text range is 8192 bytes/);
     assert.match(text, /Repeat for every file; do not skip files or crop this display further/);
     assert.match(text, /Truncated output is unread and must be reread/);
-    assert.doesNotMatch(text, /skip=<final-start>|count=<final-count>|dd .*\| od/);
+    assert.doesNotMatch(text, /skip=<final-start>|count=<final-count>|`dd [^`]*\| od/);
     assert.match(text, /supplements the text read and does not replace it/);
     assert.doesNotMatch(text, /wc -c|shasum|report.*SHA-256/);
   }
@@ -180,7 +196,16 @@ test('Sync workers read complete byte ranges without manually checking file size
     assert.match(text, /Use reported byte counts only as byte-range read endpoints/);
     assert.doesNotMatch(text, /verify (?:its|the reported|each) (?:reported )?(?:byte count|bytes\/hash)|Read and verify all exported|read\/verify every listed|wc -c|sha256sum|shasum/);
     assert.match(text, /[Tt]runcated output is unread/);
+    assert.match(text, /one byte range per top-level tool call/);
+    assert.match(text, /[Dd]o not batch ranges in loops/);
+    assert.match(text, /(?:fresh|new) top-level call/);
+    assert.match(text, /[Bb]ounded read retries/);
     assert.match(text, /Complete byte-range reads/);
+  }
+  for (const source of [sync, skill, fetch]) {
+    const text = normalize(source);
+    assert.match(text, /direct `exec_command` when exposed/);
+    assert.match(text, /in code mode, (?:each range needs )?its own `functions.exec`(?: invocation)? containing one `exec_command`/);
   }
   const text = normalize(sync);
   assert.match(text, /Record every completely read half-open range `\[start,end\)`.*the ranges must cover every byte with no gap/);

@@ -13,6 +13,7 @@ export const SETUP_TMUX_NAME = 'zylos-setup';
 export const RUN_FILES = Object.freeze({
   CURRENT_SESSION: 'current-session.json', STATUSLINE: 'statusline.json',
   EVENTS: 'events.jsonl', AGENT_STATUS: 'agent-status.json',
+  CHILD_SESSIONS: 'child-sessions.jsonl',
 });
 
 export function assertSessionGroup(group) {

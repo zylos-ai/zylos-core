@@ -14,13 +14,16 @@ async function launch(t,f){
  const kill=async()=>{if(child.exitCode===null&&child.signalCode===null){const done=once(child,'exit');child.kill('SIGKILL');await done;}};t.after(kill);assert.equal((await next()).ready,true);
  return {child,next,kill,async command(value){child.send(value);const result=await next();assert.equal(result.error,undefined);return result;}};
 }
-test('single actual supervisor SIGKILL recaptures old run without ; finite control blocks while deadline-less permits cleanup',{timeout:20000},async t=>{
+// Covers startup auth recovery and finite/deadline-less controls through isolated
+// SQLite/tmux. Run when startup auth checks or retirement changes; skip unrelated changes.
+// readyTmuxTarget owns the private server/database and launch() reaps every worker.
+test('single actual supervisor SIGKILL recaptures old run; finite control blocks while deadline-less permits cleanup',{timeout:20000},async t=>{
  const f=readyTmuxTarget(t,{prefix:'single-auth-entry-',mode:'single',runtimeProcess:true});f.tmux('new-session','-d','-s','fixture-keeper','sleep','120');
  const store=new HealthStore({zylosDir:f.root,runtime:'claude'}),state=store.read();state.health='auth_failed';state.reason='authentication_failed';store.write(state);
  const first=await launch(t,f);await first.command('pending');let observed=await first.command('tick');
  assert.equal(observed.health,'auth_failed');assert.equal(observed.checks,1);assert.deepEqual(observed.targets,['run-1']);assert.equal(observed.present,true);assert.equal(observed.gates,0);assert.deepEqual(observed.fences,[]);
  await first.kill();assert.equal(store.read().health,'auth_failed');
- const next=await launch(t,f);observed=await next.command('pending');assert.equal(observed.checks,0);assert.deepEqual(observed.targets,[]);
+ const next=await launch(t,f);observed=await next.command('pending');assert.equal(observed.checks,1);assert.deepEqual(observed.targets,['run-1']);assert.equal(observed.health,'auth_failed');assert.equal(observed.present,true);
  observed=await next.command('tick');assert.equal(observed.checks,1);assert.deepEqual(observed.targets,['run-1']);assert.equal(observed.health,'auth_failed');
  await next.command('idle');await next.command('finite');observed=await next.command('tick');assert.equal(observed.health,'auth_failed');assert.equal(observed.present,true);
  await next.command('deadline-less');observed=await next.command('tick');assert.equal(observed.health,'ok');assert.equal(observed.present,false);assert.equal(observed.gates,0);assert.deepEqual(observed.fences,[]);

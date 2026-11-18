@@ -146,6 +146,26 @@ export function extractScriptPath(command) {
   return result ? expandHome(result) : command;
 }
 
+export const HOOK_ENTRY_SCRIPT = 'skills/activity-monitor/scripts/hook-entry.js';
+
+/**
+ * Target script of a command run through the zylos hook entry
+ * (`[exec] node <...>/hook-entry.js <target> [args]`), or null for any other
+ * command. The entry only decides whether the target may run, so a hook keeps
+ * the identity of its target script.
+ */
+export function hookEntryTarget(command) {
+  if (typeof command !== 'string') return null;
+  const lastSegment = commandSegments(command).at(-1) || command;
+  const tokens = shellTokens(lastSegment);
+  const interpreterIndex = tokens.findIndex(token => INTERPRETERS.has(interpreterName(token)));
+  if (interpreterIndex === -1) return null;
+  const rest = tokens.slice(interpreterIndex + 1).filter(token => !token.startsWith('-'));
+  const [entry, target] = rest;
+  if (!entry || path.basename(entry.replaceAll('\\', '/')) !== path.basename(HOOK_ENTRY_SCRIPT)) return null;
+  return target && looksLikeScript(target) ? expandHome(target) : null;
+}
+
 function zylosClaudeRoot() {
   const zylosDir = path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
   return `${path.resolve(zylosDir, '.claude').replaceAll('\\', '/').replace(/\/+$/, '')}/`;
@@ -170,7 +190,8 @@ export function extractShardArg(command) {
 }
 
 /**
- * Script-identity key without shard discrimination. This is the key used for
+ * Script-identity key without shard discrimination. A command run through the
+ * hook entry keys to its target, so upgrades update direct commands in place. This is the key used for
  * "is this a zylos-core-managed script" checks (CORE_MANAGED_HOOKS lists bare
  * script paths, and every `--shard` variant of a core script is core-managed).
  * Only hooks under the zylos-owned .claude directory are reduced to registry
@@ -179,7 +200,7 @@ export function extractShardArg(command) {
  */
 export function hookScriptBaseKey(command) {
   const scriptPath = normalizedAbsolutePath(
-    extractScriptPath(command).replaceAll('\\', '/').split(path.sep).join('/')
+    (hookEntryTarget(command) ?? extractScriptPath(command)).replaceAll('\\', '/').split(path.sep).join('/')
   );
   const root = zylosClaudeRoot();
   if (scriptPath.startsWith(root)) return scriptPath.slice(root.length);

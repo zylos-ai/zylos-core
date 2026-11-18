@@ -10,7 +10,8 @@ import { acquire, release, guard, memoryScope, readSyncMarker, MARKER_TTL_MS } f
 const fixture = group => ({ ZYLOS_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'sync-marker-')), ZYLOS_RUN_ID: 'run-1', ...(group ? { ZYLOS_SESSION_GROUP: group } : {}) });
 const currentRunId = async scope => scope.runId;
 
-// acquisition uses the real reader rather than trusting caller env.
+// Real CLI and isolated tmux identity; run for acquisition identity changes, skip
+// otherwise. readyTmuxTarget owns and removes its private socket and fixture root.
 test('CLI acquire checks the current isolated tmux identity', t => {
   const f = readyTmuxTarget(t, { prefix: 'sync-lock-live-', ledger: false });
   const env = { ...f.env, ZYLOS_RUN_ID: 'run-1' };
@@ -72,7 +73,7 @@ test('expired markers, invalid marker warning, scope and current-run checks', as
   assert.ok(token);
 });
 
-// marker expiry permits a later takeover, never revokes a held .
+// Marker expiry permits a later takeover but cannot bypass an active mutation lock.
 test('expiry during a guarded operation cannot admit a contender', async () => {
   const env = fixture('lark:oc_b'); const scope = await memoryScope(env);
   const token = await acquire({ kind: 'group', env }, { currentRunId });
@@ -133,6 +134,38 @@ test('release after TOKEN_MISMATCH leaves the new owner marker; the owner releas
   const own = cli(['release', '--kind', 'group', '--token', b], newer);
   assert.equal(own.status, 0, own.stderr);
   assert.equal(fs.existsSync(file), false);
+});
+
+// Real lock files and takeover without a database. Run for marker expiration
+// or acquisition changes; unrelated changes may skip. The fixture root is removed
+// after all guard actions finish; no live tmux, database or session is contacted.
+test('a changed run immediately expires its marker without consulting a database', async t => {
+  const env = fixture('lark:oc_changed');
+  t.after(() => fs.rmSync(env.ZYLOS_DIR, { recursive: true, force: true }));
+  const scope = await memoryScope(env);
+  const token = await acquire({ kind: 'group', env }, { currentRunId });
+  const marker = readSyncMarker({ runDir: scope.runDir, kind: 'group', currentRunId: 'run-2' });
+  assert.equal(marker.reason, 'run_changed');
+  assert.equal(marker.stale, true);
+  assert.equal(marker.held, false);
+  const next = await acquire({ kind: 'group', env: { ...env, ZYLOS_RUN_ID: 'run-2' } }, { currentRunId });
+  assert.notEqual(next, token);
+  assert.equal(fs.existsSync(path.join(env.ZYLOS_DIR, 'comm-bridge')), false);
+});
+
+test('only rejected acquisition and malformed-token guards emit metadata without tokens', async t => {
+  const env = fixture('lark:oc_log');
+  t.after(() => fs.rmSync(env.ZYLOS_DIR, { recursive: true, force: true }));
+  const token = await acquire({ kind: 'group', env }, { currentRunId });
+  await assert.rejects(acquire({ kind: 'group', env }, { currentRunId }), { code: 'SYNC_BUSY' });
+  await assert.rejects(guard({ kind: 'group', env, token: 'bad-token' }, () => assert.fail('invalid guard ran')), { code: 'INVALID_INPUT' });
+  const text = fs.readFileSync(path.join(env.ZYLOS_DIR, 'activity-monitor', 'supervisor-events.jsonl'), 'utf8');
+  const events = text.trim().split('\n').map(line => JSON.parse(line)).filter(row => row.event === 'sync_result');
+  assert.deepEqual(events.map(row => [row.action, row.status, row.code]), [
+    ['acquire', 'error', 'SYNC_BUSY'], ['guard', 'error', 'INVALID_INPUT'],
+  ]);
+  assert.equal(text.includes(token), false);
+  assert.equal(text.includes('bad-token'), false);
 });
 
 // each ownership predicate rejects independently; no live tmux read.

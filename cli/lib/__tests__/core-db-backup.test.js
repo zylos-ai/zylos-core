@@ -239,7 +239,7 @@ test('offline preflight accepts and reports archive tables and extra columns', {
 // Integration boundary: real SQLite/worker with temporary databases and copied
 // dependencies only; run for backup/driver-path changes, skip if unrelated.
 // Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fixture(t) cleans.
-test('upgrade preflight and rehearsal reject an unsafe extension before service stop', {skip:!Database},async t=>{
+test('upgrade preflight and rehearsal reject an unsafe extension', {skip:!Database},async t=>{
  const dir=fixture(t);skills(dir);
  const schemaRoot=path.resolve('skills');
  const {migrateDatabase,guardDatabase}=await import('../../../skills/comm-bridge/scripts/sqlite-schema.js');
@@ -261,7 +261,7 @@ test('upgrade preflight and rehearsal reject an unsafe extension before service 
 // Integration boundary: real SQLite/worker with temporary databases and copied
 // dependencies only; run for backup/driver-path changes, skip if unrelated.
 // Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fixture(t) cleans.
-test('target rehearsal migrates private copies before stop and leaves live databases unchanged', {skip:!Database},t=>{
+test('target rehearsal migrates private copies and leaves source databases unchanged', {skip:!Database},t=>{
  const dir=fixture(t),source=path.join(dir,'comm-bridge/c4.db');skills(dir);
  fs.mkdirSync(path.dirname(source),{recursive:true});
  const db=new Database(source);

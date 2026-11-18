@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { parse, stringify } from 'smol-toml';
 import { SIDE_EFFECT_NAMES, buildChain } from '../../skills/activity-monitor/scripts/shard-registry.js';
-import { extractScriptPath } from './hook-utils.js';
+import { extractScriptPath, hookEntryTarget, HOOK_ENTRY_SCRIPT } from './hook-utils.js';
 
 const SESSION_START = 'SessionStart';
 const CODEX_EVENT_KEYS = {
@@ -77,16 +77,14 @@ export function codexGlobalConfigPath(homeDir = os.homedir(), codexHome) {
   return path.join(codexHome || path.join(homeDir, '.codex'), 'config.toml');
 }
 
+/** Core Codex hooks run through the hook entry, like Claude's (see sync-runtime-hooks). */
+function coreHookCommand(zylosDir, script) {
+  const root = path.join(path.resolve(zylosDir), '.claude');
+  return `exec node ${path.join(root, HOOK_ENTRY_SCRIPT)} ${path.join(root, 'skills', 'activity-monitor', 'scripts', script)}`;
+}
+
 export function coreSessionStartCommand(zylosDir) {
-  const script = path.join(
-    path.resolve(zylosDir),
-    '.claude',
-    'skills',
-    'activity-monitor',
-    'scripts',
-    'session-start-orchestrator.js'
-  );
-  return `node ${script}`;
+  return coreHookCommand(zylosDir, 'session-start-orchestrator.js');
 }
 
 /**
@@ -117,7 +115,7 @@ export function isCoreCodexHook(command, zylosDir) {
     'scripts'
   );
   return typeof command === 'string' && ['session-start-orchestrator.js', 'hook-activity.js']
-    .some(name => path.resolve(extractScriptPath(command)) === path.join(scriptsDir, name));
+    .some(name => path.resolve(hookEntryTarget(command) ?? extractScriptPath(command)) === path.join(scriptsDir, name));
 }
 
 export function readCodexHooksConfig(filePath) {
@@ -163,8 +161,7 @@ export function installCoreCodexHook({ zylosDir, dryRun = false, onWrite = () =>
   // then install the full desired shard command set as one group. Config
   // order is injection order on Codex, so the group must stay contiguous
   // and chain-ordered.
-  const activityCommand = `node ${path.join(path.resolve(zylosDir), '.claude', 'skills',
-    'activity-monitor', 'scripts', 'hook-activity.js')}`;
+  const activityCommand = coreHookCommand(zylosDir, 'hook-activity.js');
   for (const event of Object.keys(CODEX_EVENT_KEYS)) {
     const existing = Array.isArray(config.hooks[event]) ? config.hooks[event] : [];
     const preserved = existing

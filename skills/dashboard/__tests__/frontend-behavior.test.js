@@ -2513,7 +2513,8 @@ test('workbench shell asks before sending automatic naming to Origin and reports
   answer = { ok: false, status: 403, json: async () => ({ ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' }) };
   button.dispatch('click'); await wbTick();
   await choose('send');
-  assert.match(dialog.textContent, /wb\.name\.failed/);
+  assert.match(dialog.textContent, /wb\.schedule\.error\.insufficient_scope/);
+  assert.doesNotMatch(dialog.textContent, /wb\.name\.failed/);
   assert.match(dialog.textContent, /insufficient_scope/);
   dialog.querySelectorAll('.wb-btn')[0].dispatch('click');
 

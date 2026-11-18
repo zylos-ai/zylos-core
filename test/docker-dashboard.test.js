@@ -99,3 +99,16 @@ describe('Docker wiring for Dashboard', () => {
     expect(entrypoint).not.toMatch(/WEB_CONSOLE_BIND|Web console:/);
   });
 });
+
+describe('Docker Claude launch arguments', () => {
+  test('disables interactive tools before the permission bypass condition and keeps the single-argument form', () => {
+    const entrypoint = fs.readFileSync(path.join(root, 'docker/entrypoint.sh'), 'utf8');
+    expect(entrypoint).toContain('  CLAUDE_ARGS="--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode"\n'
+      + '  if [ "${CLAUDE_BYPASS_PERMISSIONS:-true}" = "true" ]; then\n'
+      + '    CLAUDE_ARGS="${CLAUDE_ARGS} --dangerously-skip-permissions"\n'
+      + '  fi');
+    expect(entrypoint).not.toMatch(/--disallowedTools(?:\s|["'])/);
+    expect(entrypoint).toContain('exec claude ${CLAUDE_ARGS}');
+    expect(entrypoint.match(/--disallowedTools=/g)).toHaveLength(1);
+  });
+});

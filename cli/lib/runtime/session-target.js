@@ -3,6 +3,8 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { groupRunDir, tmuxNameForGroup } from '../session-group-paths.js';
+import { readProcessInfo } from '../../../skills/activity-monitor/scripts/claude-pid.js';
+import { belongsToPane } from '../../../skills/activity-monitor/scripts/pane-process.js';
 import { tmuxError, TMUX_COMMAND as C, TMUX_FORMAT as F, isTmuxError,
   isMissingTarget as missing, unavailableCommand, parseTargetObservation, parseTmuxEnvironment } from './tmux-protocol.js';
 
@@ -28,6 +30,31 @@ export async function readReadyIdentity(sessionGroup) {
     const value = JSON.parse(await fs.readFile(path.join(groupRunDir(sessionGroup ?? 'origin'), 'current-session.json'), 'utf8'));
     return validReady(value) ? value : null;
   } catch { return null; }
+}
+
+const acceptedReady = new Map();
+
+/**
+ * The READY of a run, as long as the pane process published it. A READY
+ * written by another process of the run (a child runtime started inside the
+ * session) is ignored: the run keeps the last READY its pane process wrote, so
+ * the child is never tracked as a rotation. This uses the observed tmux pane
+ * pid, so it also covers panes started before pane-process records existed.
+ * READY files from earlier versions name no publisher and are accepted as before.
+ */
+export function paneReady(sessionGroup, f3, { runId, runtime, panePid, readInfo = readProcessInfo }) {
+  if (!runId || !validReady(f3) || f3.runId !== runId) return f3;
+  const key = sessionGroup ?? 'origin';
+  if (Number.isSafeInteger(f3.runtimePid)) {
+    const pane = Number.isSafeInteger(panePid) && panePid > 0 ? readInfo(panePid) : null;
+    const publisher = { pid: f3.runtimePid, start: f3.runtimeStart, ppid: f3.runtimeParentPid, parentStart: f3.runtimeParentStart };
+    if (!belongsToPane(publisher, { runtime, panePid, paneStart: pane?.start ?? null, paneComm: pane?.comm ?? null })) {
+      const previous = acceptedReady.get(key);
+      return previous?.runId === runId ? previous : null;
+    }
+  }
+  acceptedReady.set(key, f3);
+  return f3;
 }
 
 // Snapshots whose Linux names still come from ps; each maps pid -> pending /proc name (null = exited).
@@ -152,7 +179,7 @@ export async function observeSessionTarget({ sessionGroup, tmuxName = tmuxNameFo
     const rawF2 = await environment(connection, tmuxSessionId);
     const runId = rawF2.ZYLOS_RUN_ID || null;
     const runtime = await readTargetRuntime({ connection, paneId, panePid, rawF2, readProcessTree: getTree });
-    const f3 = await readReady(sessionGroup);
+    const f3 = paneReady(sessionGroup, await readReady(sessionGroup), { runId, runtime: runtime.runtime, panePid });
     const ready = Boolean(runId && validReady(f3) && f3.runId === runId);
     const target = { present: true, tmuxName, runId, createdAt: Number(created), ...runtime, panePid,
       processRunning: true, runtimePid: panePid, ready, sessionId: ready ? f3.sessionId : null, runtimeSessionId: ready ? f3.sessionId : null, rawF2, f3: ready ? f3 : null, tmuxSessionId, paneId, serverGeneration: generation };

@@ -12,7 +12,7 @@ import { tmuxClientArgs } from '../../../comm-bridge/scripts/tmux-client-args.js
 function fixture(t,{batchIdentities,badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunchConfig=()=>({runtime:'claude',mode:'default'}),consumeHealthEvents,readConfiguration=async()=>({mode:'multi',runtime:'claude',capacity:2}),checkAuth=async()=>({status:'uncertain'}),alert,now=Date.now,database={},readSyncMarker,prepareReferenceReorg,prompts}={}) {
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-assembly-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const file=path.join(root,'requests.json');if(badRequests)fs.writeFileSync(file,'broken');
- const calls=[],db={getOriginNeed:()=>({controls:{count:0},inbound:{oldestAt:null}}),getModeTransition:()=>null,listDrainFences:()=>[],getDrainFence:()=>null,listSlotOccupancy:()=>[],pruneSlots:()=>({deletedHeld:0,deletedOrphans:[]}),listPendingContinuations:()=>[],listRunEndings:()=>[],getLastCompletedModeTransition:()=>null,listPendingSessionGroups:()=>[],getControlById:()=>null,resolveSessionLaunchConfig:resolveLaunchConfig,...database};
+ const calls=[],db={getOriginNeed:()=>({controls:{count:0},inbound:{oldestAt:null}}),getModeTransition:()=>null,listDrainFences:()=>[],getDrainFence:()=>null,listSlotOccupancy:()=>[],pruneSlots:()=>({deletedHeld:0,deletedOrphans:[]}),listPendingContinuations:()=>[],listRunEndings:()=>[],getLastCompletedModeTransition:()=>null,listPendingSessionGroups:()=>[],listGroupHeads:()=>[],getLatestContentCheckpoint:()=>null,getControlById:()=>null,resolveSessionLaunchConfig:resolveLaunchConfig,...database};
  const scenes={observe:async()=>[],readIdentity(group) { return this.observeGroup(group); }, observeGroup:async()=>({present:false}),listRuns:async()=>[],readRun:async()=>null};
  if(batchIdentities)scenes.readIdentities=batchIdentities;
  const supervisor=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},readConfiguration,readMode,resolveTargetRuntime:async()=> 'claude',requestStore:new RestartRequestStore({file}),consumeHealthEvents,checkAuth,alert,now,readSyncMarker,prepareReferenceReorg,prompts,log:item=>calls.push(item),loopOptions:{schedule:()=>1,cancel:()=>{}}});
@@ -311,6 +311,22 @@ test('assembly: maintenance retains current and recent logs while pruning absent
  assert.equal(fs.existsSync(path.join(valid,`events.${recent}.jsonl`)),true);assert.equal(fs.existsSync(path.join(valid,'events.jsonl')),true);
  assert.equal(fs.existsSync(path.join(invalid,`events.${expired}.jsonl`)),true);assert.equal(fs.existsSync(path.join(target,`events.${expired}.jsonl`)),true);
  assert.equal(fs.readFileSync(path.join(groups,'telegram:file'),'utf8'),'not a directory');
+});
+
+test('assembly: maintenance rotates the hook error log and child session records once they pass the size limit',async t=>{
+ const {supervisor,root}=fixture(t);await supervisor.loop.deps.readConfiguration();
+ const runDir=path.join(root,'activity-monitor'),group=path.join(runDir,'session-groups','telegram:active');
+ fs.mkdirSync(group,{recursive:true});
+ const files=[path.join(runDir,'hook-activity-errors.log'),path.join(runDir,'child-sessions.jsonl'),path.join(group,'child-sessions.jsonl')];
+ // Sparse files over the 10 MB limit: the size counts, no disk space is used.
+ for(const file of files){fs.writeFileSync(file,'line\n');fs.truncateSync(file,10*1024*1024+1);}
+ await supervisor.loop.deps.writeMetricsAndMaintain({scenes:[],fences:[]});
+ for(const file of files){
+  assert.equal(fs.existsSync(file),false,`${path.basename(file)} rotated away`);
+  const stem=path.basename(file,'.jsonl');
+  const rotated=fs.readdirSync(path.dirname(file)).filter(name=>name.startsWith(`${stem}.`)&&/\.\d+\.jsonl$/.test(name)&&Number.isSafeInteger(Number(name.slice(stem.length+1,-6))));
+  assert.equal(rotated.length,1,`${path.basename(file)} has one rotated copy`);
+ }
 });
 
 test('assembly: one failed probe poll cannot starve another runtime or auth recovery',async t=>{

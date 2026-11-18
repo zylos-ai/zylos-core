@@ -1,5 +1,5 @@
 import { groupFromTmuxName } from '../session-group-paths.js';
-import { readReadyIdentity, readTargetRuntime, readProcessTree } from './session-target.js';
+import { readReadyIdentity, readTargetRuntime, readProcessTree, paneReady } from './session-target.js';
 import { parseTargetObservation, parseTmuxEnvironment, tmuxError, unavailableCommand, isMissingTarget, tmuxReadCommands, parseReadResponse } from './tmux-protocol.js';
 
 const environmentKeys = ['ZYLOS_RUN_ID', 'ZYLOS_MODEL_CONFIG', 'ZYLOS_SESSION_GROUP'];
@@ -96,7 +96,7 @@ export async function observeSessionTargets({ connection, readReady = readReadyI
     const { sessionGroup, tmuxName, generation, tmuxSessionId, paneId, panePid, created, rawF2 } = row;
     const runId = rawF2.ZYLOS_RUN_ID || null;
     const runtime = await readTargetRuntime({ connection, paneId, panePid, rawF2, readProcessTree: sharedTree });
-    const f3 = await readReady(sessionGroup);
+    const f3 = paneReady(sessionGroup, await readReady(sessionGroup), { runId, runtime: runtime.runtime, panePid });
     const ready = Boolean(runId && f3?.runId === runId && typeof f3.sessionId === 'string' && f3.sessionId &&
       Number.isInteger(f3.ts) && Array.isArray(f3.startupControlIds) && f3.startupControlIds.every(Number.isInteger));
     return [sessionGroup, { present:true, tmuxName, runId, createdAt:Number(created), ...runtime, panePid,
