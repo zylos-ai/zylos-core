@@ -69,14 +69,14 @@ export function transitionFunctions({ read, write, snapshot, get, all, run, seco
       const row = required(c, runId);
       if (phase === 'cancelled') {
         const fence = get(c, "SELECT * FROM drain_fences WHERE session_group='*'");
-        if (row.phase !== 'gating' || row.kind !== 'switch' || row.cutoff !== null || (fence && (fence.reason !== null || fence.run_id !== null))) throw dataError('TRANSITION_PRECONDITION', 'Only a gating native switch without a conflicting global fence can be cancelled');
+        if (row.phase !== 'gating' || row.kind !== 'switch' || (fence && (fence.reason !== null || fence.run_id !== null))) throw dataError('TRANSITION_PRECONDITION', 'Only a gating native switch without a conflicting global fence can be cancelled');
         const resumedGroups = get(c, `SELECT count(*) AS n FROM run_endings WHERE ended_at>=? AND continuation_pending=0 AND ${CONTINUATION_REQUIRED}`, row.created_at).n;
         run(c, `UPDATE run_endings SET continuation_pending=CASE WHEN ${CONTINUATION_REQUIRED} THEN 1 ELSE 0 END WHERE ended_at>=?`, row.created_at);
         run(c, "DELETE FROM drain_fences WHERE session_group='*'");
         run(c, "UPDATE mode_transitions SET phase='cancelled',reason=?,updated_at=? WHERE run_id=?", reason, seconds(), runId);
         return { ...find(c, runId), resumedGroups };
       }
-      if (row.phase === 'cancelled' || (row.phase !== phase && !((row.kind === 'switch' && row.phase === 'gating' && row.cutoff === null && phase === 'cutover') || (row.phase === 'converting' && phase === 'cutover') || (row.phase === 'cutover' && phase === 'complete')))) throw dataError('PHASE_TRANSITION_INVALID', 'Invalid transition phase change');
+      if (row.phase === 'cancelled' || (row.phase !== phase && !((row.kind === 'switch' && row.phase === 'gating' && phase === 'cutover') || (row.phase === 'converting' && phase === 'cutover') || (row.phase === 'cutover' && phase === 'complete')))) throw dataError('PHASE_TRANSITION_INVALID', 'Invalid transition phase change');
       if (row.phase !== phase && phase === 'complete') { onlyGlobal(c, true); run(c, "DELETE FROM drain_fences WHERE session_group='*'"); }
       run(c, 'UPDATE mode_transitions SET phase=?,reason=?,updated_at=? WHERE run_id=?', phase, reason, seconds(), runId);
       return find(c, runId);

@@ -213,21 +213,3 @@ for (const checkpointSource of ['cutover', 'single']) test(`${checkpointSource} 
     await status(f, events);
   }, { timeoutMs: 75_000 });
 });
-
-// Boundary: cancelled history -> real status reader and NULL-control admission.
-// Run for transition terminal-state changes; no services/tmux/network are started.
-// The official runner and separate test user isolate HOME/ZYLOS_DIR/PM2_HOME/TMPDIR.
-for (const open of [false, true]) test(`cancelled history ${open ? 'with gating blocks' : 'alone permits'} legacy controls and reports status`, async t => {
-  const { fixture } = await import('../skills/comm-bridge/scripts/__tests__/c4-v2-test-helpers.js');
-  const { db, store } = fixture(t, { readConfig: () => ({ state: 'ok', config: { session_mode: 'single' } }) });
-  const { runId } = store.beginModeTransition('single', 'multi');
-  store.setDrainFence('*'); store.setModeTransitionPhase(runId, 'cancelled');
-  if (open) store.beginModeTransition('single', 'multi');
-  const value = await readSessionModeStatus({ db: store, readMode: () => ({ mode: 'single' }),
-    readEvents: () => [], probeSupervisor: () => false, readPm2: () => 'daemon_not_running' });
-  assert.equal(value.transition === null, !open);
-  const insert = () => store.insertControl('legacy machine control', { appendAckSuffix: false });
-  if (open) assert.throws(insert, { code: 'CONTROL_TARGET_REQUIRED' });
-  else assert.equal(insert().session_group, null);
-  assert.equal(db.prepare("SELECT phase FROM mode_transitions WHERE run_id=?").get(runId).phase, 'cancelled');
-});

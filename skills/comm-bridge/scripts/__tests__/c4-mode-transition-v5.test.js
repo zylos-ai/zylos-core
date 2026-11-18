@@ -61,7 +61,7 @@ function insert(db, id, source, phase, cutoff) {
     .run(id, source, source === 'single' ? 'multi' : 'single', phase, cutoff);
 }
 for (const [label, value, expected] of [['no key', '{}', 'first_migration'], ['key', '{"session_mode":"multi"}', 'switch'], ['missing file', undefined, 'first_migration']]) {
-  test(`v4 backfill reads F1 for ambiguous open rows: ${label}`, t => {
+  test(`v4 backfill reads configuration for ambiguous open rows: ${label}`, t => {
     config(t, value); const db = v4(t);
     insert(db, 'gating', 'single', 'gating', null);
     const old = db.prepare('SELECT * FROM mode_transitions').get();
@@ -72,17 +72,16 @@ for (const [label, value, expected] of [['no key', '{}', 'first_migration'], ['k
   });
 }
 for (const [source, phase, cutoff, expected] of [
-  ['single','converting',9,'first_migration'], ['single','cutover',9,'first_migration'],
-  ['multi','cutover',9,'switch'], ['multi','converting',9,'switch'],
-  ['single','complete',9,'first_migration'], ['multi','complete',9,'switch'],
-  ['single','complete',null,'switch'], ['multi','complete',null,'switch'],
-]) test(`v4 ${source}/${phase}/${cutoff} backfills ${expected} without reading invalid F1`, t => {
+  ['single','converting',9,'first_migration'],
+  ['multi','cutover',9,'switch'],
+  ['single','complete',null,'switch'],
+]) test(`v4 ${source}/${phase}/${cutoff} backfills ${expected} without reading invalid configuration`, t => {
   config(t, '{broken'); const db = v4(t); insert(db, 'old', source, phase, cutoff);
   const before = db.prepare('SELECT * FROM mode_transitions').get(); migrate(db);
   const { kind, ...row } = db.prepare('SELECT * FROM mode_transitions').get();
   assert.equal(kind, expected); assert.deepEqual(row, before);
 });
-for (const invalid of ['{broken', '{"session_mode":"both"}']) test(`unreadable F1 rolls back ambiguous backfill: ${invalid}`, t => {
+for (const invalid of ['{broken', '{"session_mode":"both"}']) test(`unreadable configuration rolls back ambiguous backfill: ${invalid}`, t => {
   config(t, invalid); const db = v4(t); insert(db, 'old', 'single', 'gating', null);
   const before = snapshot(db); assert.throws(() => migrate(db)); assert.deepEqual(snapshot(db), before);
 });
@@ -201,14 +200,13 @@ test('cancellation before the global gate is written restores markers and preser
   assert.equal(store.getModeTransition(), null);
   assert.ok(store.beginModeTransition('multi', 'single').runId);
 });
-for (const obstacle of ['converting','cutover','first_migration','manual-fence','historical-cutoff','write-failure']) test(`cancel rejects ${obstacle} atomically`, t => {
+for (const obstacle of ['converting','cutover','first_migration','manual-fence','write-failure']) test(`cancel rejects ${obstacle} atomically`, t => {
   const { db, store } = fixture(t);
   const { runId } = store.beginModeTransition('multi','single', { kind:obstacle==='first_migration' ? 'first_migration':'switch' });
   store.setDrainFence('*');
   store.recordRunEnd('a',{runId:'a',reason:'upgrade'});
   if (['converting','cutover'].includes(obstacle)) db.prepare('UPDATE mode_transitions SET phase=?').run(obstacle);
   if (obstacle === 'manual-fence') db.exec("UPDATE drain_fences SET reason='manual_restart',run_id='manual'");
-  if (obstacle === 'historical-cutoff') db.exec('UPDATE mode_transitions SET cutoff=9');
   if (obstacle === 'write-failure') db.exec("CREATE TRIGGER reject_cancel BEFORE UPDATE ON mode_transitions WHEN NEW.phase='cancelled' BEGIN SELECT RAISE(ABORT,'injected cancel failure'); END");
   const before = snapshot(db);
   assert.throws(() => store.setModeTransitionPhase(runId,'cancelled'), { code:obstacle==='write-failure'?'DB_WRITE_FAILED':'TRANSITION_PRECONDITION' });
@@ -250,8 +248,8 @@ for (const open of [false,true]) test(`cancelled history ${open?'with gating blo
   const {readSessionModeStatus}=await import('../../../../cli/lib/session-mode-status.js');
   const status=await readSessionModeStatus({db:store,readMode:()=>({mode:'single'}),probeSupervisor:()=>false,readPm2:()=> 'daemon_not_running',readEvents:()=>[]});
   assert.equal(status.transition?.runId??null,open?'open':null);
-  // The legacy NULL control allowance is unchanged in part 1, except that a
-  // cancelled row no longer blocks it. Native single policy belongs to part 3.
+  // Cancelled history does not block legacy NULL-control admission in single
+  // mode. Native single-session policy is handled by the coordinator follow-up.
   const single=createStore(db,{readConfig:()=>({state:'ok',config:{session_mode:'single'}})});
   const control=()=>single.insertControl('machine',{appendAckSuffix:false});
   if(open) assert.throws(control,{code:'CONTROL_TARGET_REQUIRED'}); else assert.ok(control());

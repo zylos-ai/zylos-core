@@ -155,8 +155,7 @@ export class ModeSwitchCoordinator {
       // attempt that may fail again, or each tick would emit block/unblock.
       if (row.reason !== null && row.reason !== undefined) this.event('transition_unblocked', committed, { reason: null });
       this.lastReasons.set(row.run_id, null);
-      this.event('transition_cutover', committed, { phase: 'cutover', reason: null,
-        ...(committed.cutoverCoverage ? { ...committed.cutoverCoverage, checkpointWritten: false } : {}) });
+      this.event('transition_cutover', committed, { phase: 'cutover', reason: null });
       return null;
     }
     if (this.attempt?.runId === row.run_id) return this.attempt;

@@ -191,41 +191,24 @@ test('cutover failure persists one blocked reason without unblocking on retries 
   const f = fixture(), owner = f.create();
   await owner.handle(request); await owner.advance();
   const set = f.db.setModeTransitionPhase;
-  let code = 'CHECKPOINT_GAP';
+  let code = 'DB_WRITE_FAILED';
   f.db.setModeTransitionPhase = (...args) => {
     if (args[1] === 'cutover' && code) throw error(code);
     return set(...args);
   };
   for (let tick = 0; tick < 3; tick++) await owner.advance();
   assert.equal(f.row.phase, 'converting');
-  assert.equal(f.row.reason, 'cutover_failed:CHECKPOINT_GAP');
+  assert.equal(f.row.reason, 'cutover_failed:DB_WRITE_FAILED');
   assert.equal(f.fences[0].sessionGroup, '*');
   assert.equal(f.calls.filter(call => call === 'converting').length, 1, 'persist the same blocked reason only once');
   assert.equal(f.events.filter(event => event.event === 'transition_cutover_failed').length, 1);
   assert.equal(f.events.filter(event => event.event === 'transition_unblocked').length, 0);
-  code = 'CUTOVER_COVERAGE_CONFLICT'; await owner.advance();
-  assert.equal(f.row.reason, 'cutover_failed:CUTOVER_COVERAGE_CONFLICT');
-  assert.equal(f.events.filter(event => event.event === 'transition_cutover_failed').length, 2);
   code = null; await owner.advance();
   assert.equal(f.row.phase, 'cutover'); assert.equal(f.row.reason, null);
   assert.equal(f.events.filter(event => event.event === 'transition_unblocked').length, 1);
   await owner.advance();
   assert.equal(f.row.phase, 'complete'); assert.deepEqual(f.fences, []);
   assert.equal(f.calls.filter(call => call === 'absorb').length, 1);
-});
-
-test('covered cutover diagnostic uses the committed coverage once', async () => {
-  const f = fixture(), owner = f.create(); await owner.handle(request); await owner.advance();
-  const set = f.db.setModeTransitionPhase;
-  f.db.setModeTransitionPhase = (...args) => {
-    const result = set(...args);
-    return args[1] === 'cutover' ? { ...result, cutoverCoverage: { cutoff: 3, covered: 8 } } : result;
-  };
-  await owner.advance(); await owner.advance();
-  const events = f.events.filter(event => event.event === 'transition_cutover');
-  assert.equal(events.length, 1);
-  assert.equal(events[0].cutoff, 3); assert.equal(events[0].covered, 8);
-  assert.equal(events[0].checkpointWritten, false);
 });
 
 test('observation errors and failed reads never become empty input', async () => {

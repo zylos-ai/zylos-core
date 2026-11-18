@@ -1,9 +1,8 @@
-import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createRequire } from 'node:module';
 import Database from 'better-sqlite3';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { guardDatabase } from '../sqlite-schema.js';
@@ -19,19 +18,6 @@ export function fixture(t, dependencies = {}, file = false, databaseOptions = {}
   const store = createStore(db, deps);
   t.after(() => { if (db.open) db.close(); if (dir) rmSync(dir, { recursive: true, force: true }); });
   return { db, store, filename, dependencies: deps };
-}
-
-export async function modifiedStore(moduleName, before, after) {
-  const moduleURL = new URL(`../${moduleName}`, import.meta.url);
-  const absoluteImports = (source, base) => source.replace(/from '(\.\/[^']+)'/g, (_, path) => `from '${new URL(path, base).href}'`);
-  const source = readFileSync(moduleURL, 'utf8');
-  assert.ok(source.includes(before), 'mutation anchor must exist');
-  const mutated = absoluteImports(source.replace(before, after), moduleURL);
-  const uri = source => 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');
-  const storeURL = new URL('../c4-v2-store.js', import.meta.url);
-  const storeSource = moduleName === 'c4-v2-store.js' ? mutated
-    : absoluteImports(readFileSync(storeURL, 'utf8'), storeURL).replace(moduleURL.href, uri(mutated));
-  return (await import(uri(storeSource))).createStore;
 }
 
 export function startHeldWriter(filename, sql) {

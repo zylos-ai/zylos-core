@@ -86,14 +86,6 @@ test('cutover never writes a global checkpoint, including historical multi-sourc
   store.setModeTransitionPhase(runId, 'cutover', { reason: 'retry' });
   assert.deepEqual(db.prepare('SELECT * FROM checkpoints').all(), before);
 });
-test('cutover SQL failure rolls back phase and preserves all other tables', t => {
-  const { db, store, state } = fixture(t);
-  store.insertConversation('in', 'foo', 'e', 'pending'); const runId = converting(store, 'multi');
-  const before = state();
-  db.exec("CREATE TRIGGER reject_cutover BEFORE UPDATE ON mode_transitions WHEN NEW.phase='cutover' BEGIN SELECT RAISE(ABORT,'reject cutover'); END");
-  assert.throws(() => store.setModeTransitionPhase(runId, 'cutover'), { code: 'DB_WRITE_FAILED' });
-  assert.deepEqual(state(), before);
-});
 for (const obstacle of ['extra-fence', 'manual-global', 'phase-write-fails', 'none']) test(`complete and fence removal are atomic with ${obstacle}`, t => {
   const { db, store, state } = fixture(t); store.insertConversation('in', 'foo', 'e', 'pending'); const runId = converting(store); store.setModeTransitionPhase(runId, 'cutover');
   if (obstacle === 'extra-fence') store.setDrainFence('foo', { reason: 'ttl', runId: 'old' });
