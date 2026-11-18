@@ -99,7 +99,7 @@ for(const failing of [false,true]) test(`finalization retains optional runtime w
     assert.equal(calls.includes('start'),false);
   }
 });
-test('tail preserves W1 and follows F1, W7, services and restart order',async t=>{
+test('tail keeps user-owned state and runs thresholds, memory migration, session rotation, services and restart in order',async t=>{
   const ctx=fixture(t),calls=[];
   const state='# Old user-owned state\n';
   fs.writeFileSync(path.join(ctx.zylosDir,'memory/state.md'),state);
