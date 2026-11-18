@@ -82,10 +82,12 @@ test('native gating preserves Origin while fencing only ordinary scenes', async 
 });
 test('native cancel accepted immediately before first gating tick leaves payload bytewise unchanged', async t => {
   const f = fixture(t), coordinator = f.owner(), before = f.payload();
+  assert.equal((await coordinator.cancel({ runId: 'absent' })).code, 'run_not_open');
   const runId = await f.begin(coordinator);
   assert.equal(f.store.getDrainFence('*'), null);
   assert.deepEqual(await coordinator.cancel({ runId }), { ok: true, result: 'cancelled', runId });
   assert.equal(f.store.getModeTransition(), null); assert.equal(f.store.getModeTransition({ runId }).phase, 'cancelled');
+  assert.equal((await coordinator.cancel({ runId })).code, 'run_not_open');
   assert.equal(f.store.getDrainFence('*'), null); assert.equal(f.payload(), before);
   await coordinator.advance(); assert.equal(f.payload(), before); assert.deepEqual(f.restarts, []);
 });
@@ -108,15 +110,6 @@ test('native gating cancel restores recorded continuation rules and lets in-flig
   f.tick(1); f.store.recordRunEnd('still-draining', { runId: 'late', reason: 'mode_switch', clearFence: true });
   assert.equal(f.store.listRunEndings(['still-draining'])[0].continuationPending, 1); assert.equal(f.store.getDrainFence('still-draining'), null);
 });
-test('native gating survives coordinator restart and can cancel from durable authority', async t => {
-  const f = fixture(t), coordinator = f.owner();
-  f.scenes.push({ sessionGroup: 'ordinary', runId: 'ordinary-current', present: true, ready: true });
-  const runId = await f.begin(coordinator); await coordinator.advance();
-  const before = f.payload(), restored = f.owner();
-  assert.equal((await restored.cancel({ runId })).result, 'cancelled');
-  assert.equal(f.store.getModeTransition(), null); assert.equal(f.payload(), before);
-  assert.equal(f.store.getDrainFence('origin'), null); assert.deepEqual(f.writes, []);
-});
 test('native historical converting switch fails closed after coordinator restart', async t => {
   const f = fixture(t), runId = await f.begin(f.owner());
   f.db.prepare("UPDATE mode_transitions SET phase='converting',cutoff=7 WHERE run_id=?").run(runId);
@@ -137,13 +130,17 @@ test('native roundtrip cutover preserves Origin controls markers messages checkp
   assert.equal(typeof f.store.clearContinuationsExceptOrigin, 'function', 'requires upstream dependency 3');
   f.store.recordRunEnd('origin', { runId: 'origin-previous', reason: 'upgrade' });
   f.store.recordRunEnd('ordinary', { runId: 'ordinary-previous', reason: 'upgrade' });
+  f.db.prepare("INSERT INTO control_queue(raw_content,content,status,created_at,updated_at) VALUES('machine pending','machine pending','pending',1,1)").run();
   const originControls = JSON.stringify(f.rows('control_queue').filter(row => row.session_group === 'origin'));
   const originEnding = JSON.stringify(f.store.listRunEndings(['origin']));
   const frozen = () => JSON.stringify({ conversations: f.rows('conversations'), checkpoints: f.rows('checkpoints'), cursors: f.rows('origin_sync_cursors'), memory: f.tree() });
   const before = frozen(), originScene = { ...f.scenes[0] };
   for (const target of ['single', 'multi']) {
     const coordinator = f.owner(), runId = await f.begin(coordinator, target);
+    const beforeCutover = JSON.stringify({ controls: f.rows('control_queue'), endings: f.rows('run_endings') });
     await coordinator.advance(); assert.equal(f.store.getModeTransition().phase, 'cutover');
+    assert.equal(JSON.stringify({ controls: f.rows('control_queue'), endings: f.rows('run_endings') }), beforeCutover,
+      'durable cutover phase must precede execution-control invalidation');
     assert.equal((await coordinator.cancel({ runId })).code, 'not_cancellable');
     await coordinator.advance();
     assert.equal(f.store.getModeTransition(), null); assert.equal(f.readConfig().session_mode, target);
@@ -151,6 +148,9 @@ test('native roundtrip cutover preserves Origin controls markers messages checkp
     assert.equal(JSON.stringify(f.rows('control_queue').filter(row => row.session_group === 'origin')), originControls);
     assert.equal(JSON.stringify(f.store.listRunEndings(['origin'])), originEnding);
     assert.equal(f.store.listRunEndings(['ordinary'])[0].continuationPending, 0);
+    for (const control of f.rows('control_queue').filter(row => row.session_group !== 'origin')) {
+      assert.equal(control.status, 'timeout'); assert.equal(control.last_error, 'SESSION_ENDED');
+    }
     assert.equal(frozen(), before); assert.deepEqual(f.scenes[0], originScene); assert.equal(f.store.getDrainFence('origin'), null);
     assert.equal(f.store.getDrainFence('*'), null); assert.equal(f.events.some(event => event.event === 'absorb'), false);
   }

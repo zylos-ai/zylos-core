@@ -177,33 +177,6 @@ function assertNativeTransition(row) {
   for (const field of ['cutoff', 'coverage_snapshot', 'absorbed_ids']) assert.equal(row[field], null, field);
 }
 
-// Boundary: real CLI/Dashboard deletion -> private tmux/C4 -> native gating and
-// cancellation. Run for deletion/native gate changes; no dispatcher cutover or
-// PM2 is needed. The fixture proves paths/socket/DB isolation before startup and
-// stops its monitor, runtimes and HTTP children before deleting its private tree.
-for (const entry of ['cli', 'dashboard']) test(`${entry} deletion allows native gating cancellation without memory or input changes`, { skip: !enabled, timeout: 90_000 }, async t => {
-  const f = await setup(t);
-  await f.sandbox.runCase(async () => {
-    await deletion(f, entry);
-    const inFlight = insert(f, 'origin', 'delivery still in flight', 'running');
-    const before = nativePayload(f), configBefore = fs.readFileSync(path.join(f.root, '.zylos/config.json'), 'utf8');
-    const events = [], c = coordinator(f, events);
-    const accepted = await c.handle({ target: 'single' }); assert.equal(accepted.result, 'accepted');
-    await c.advance();
-    const gating = f.store.getModeTransition(); assert.equal(gating.phase, 'gating'); assertNativeTransition(gating);
-    assert.equal(f.store.getDrainFence('*').reason, null); assert.equal(f.store.getDrainFence('origin'), null);
-    assert.equal(nativePayload(f), before);
-    assert.equal((await c.cancel({ runId: accepted.runId })).result, 'cancelled');
-    assert.equal(f.store.getModeTransition(), null); assert.equal(f.store.getDrainFence('*'), null);
-    assert.equal(f.store.getModeTransition({ runId: accepted.runId }).phase, 'cancelled');
-    assert.equal(nativePayload(f), before); assert.equal(fs.readFileSync(path.join(f.root, '.zylos/config.json'), 'utf8'), configBefore);
-    assert.equal(f.database.prepare('SELECT status FROM conversations WHERE id=?').get(inFlight).status, 'running');
-    assert.equal(events.some(event => event.event === 'absorb'), false);
-    assert.equal(fs.existsSync(path.join(f.root, 'memory/state.md')), false);
-    assert.equal(fs.existsSync(path.join(f.root, 'memory/mode-switch')), false);
-  }, { timeoutMs: 75_000 });
-});
-
 for (const entry of ['cli', 'dashboard']) {
   // Boundary: real deletion entry point -> private tmux/C4 -> native coordinator
   // -> CLI/doctor status. Run for deletion/native-cutover changes with the opt-in

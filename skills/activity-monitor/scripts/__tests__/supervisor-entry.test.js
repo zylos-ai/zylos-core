@@ -133,6 +133,7 @@ test('copied installed skills resolve the separate Core package and serve actual
   }
   fs.symlinkSync(fs.realpathSync(path.join(repository,'skills/comm-bridge/node_modules')),path.join(pkg,'skills/comm-bridge/node_modules'),'dir');
   fs.symlinkSync(fs.realpathSync(path.join(repository,'skills/comm-bridge/node_modules')),path.join(skills,'comm-bridge/node_modules'),'dir');
+  fs.symlinkSync(fs.realpathSync(path.join(repository,'skills/zylos-memory/node_modules')),path.join(skills,'zylos-memory/node_modules'),'dir');
   const w=launch(t,root,{entryFile:path.join(skills,'activity-monitor/scripts/supervisor-main.js'),packageRoot:pkg});
   assert.equal((await w.next()).admissionOpen,true);
   assert.equal((await request(root,{version:1,type:'restart_all',requestId:'installed',reason:'upgrade'})).result,'done_empty');await stop(w);

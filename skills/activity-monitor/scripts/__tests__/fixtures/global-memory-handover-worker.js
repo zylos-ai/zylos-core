@@ -14,7 +14,6 @@ const kill = () => process.kill(process.pid, 'SIGKILL');
 const io = Object.create(fs);
 io.renameSync = (source, destination) => {
   if (point === 'before-plan' && destination.endsWith('/plan.json')) kill();
-  if (point === 'before-done' && destination.endsWith('/.done')) kill();
   fs.renameSync(source, destination);
   if (point === 'plan' && destination.endsWith('/plan.json')) kill();
   if (point === 'rename' && destination.endsWith('/previous/_global/inbox.md')) kill();

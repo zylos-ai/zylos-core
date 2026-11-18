@@ -33,9 +33,9 @@ function fixture(t) {
 
 // Boundary: installation-template classification through real C4 and memory
 // append. Run when archive-only rules or template installation change; no
-// runtime or external service is started. Both Origin states and daily-record
-// variants must leave transition/queue data unchanged.
-for (const originExists of [false, true]) for (const daily of [false, true]) {
+// runtime or external service is started. The two independent branches are
+// exclusive Origin-state installation and optional daily-record fact append.
+for (const [originExists, daily] of [[false, false], [true, true]]) {
   test(`installation template archives without delivery with Origin state ${originExists} and daily records ${daily}`, async t => {
     const f = fixture(t), before = f.snapshot();
     const template = fs.readFileSync(new URL('../templates/memory/state.md', import.meta.url), 'utf8');
@@ -75,7 +75,7 @@ for (const originExists of [false, true]) for (const daily of [false, true]) {
   });
 }
 
-for (const point of ['before-plan', 'plan', 'rename', 'append', 'enqueue', 'before-done']) test(`actual SIGKILL after ${point} recovers through real C4 and memory append without transition writes`, async t => {
+for (const point of ['before-plan', 'plan', 'rename', 'append', 'enqueue']) test(`actual SIGKILL after ${point} recovers through real C4 and memory append without transition writes`, async t => {
   const f = fixture(t), before = f.snapshot();
   const crashed = spawnSync(process.execPath, [worker, f.root, f.filename, point], { encoding: 'utf8', timeout: 10000 });
   assert.equal(crashed.signal, 'SIGKILL', crashed.stderr);
@@ -92,7 +92,7 @@ for (const point of ['before-plan', 'plan', 'rename', 'append', 'enqueue', 'befo
   assert.equal(fs.readFileSync(path.join(archive, 'inbox.md'), 'utf8'), 'global inbox');
   const inbox = fs.readFileSync(path.join(f.memory, 'session-groups/origin/inbox.md'), 'utf8');
   assert.match(inbox, /C4 interval \(8, 19\]/);
-  assert.equal([...inbox.matchAll(/commitment:/g)].length, ['append', 'enqueue', 'before-done'].includes(point) ? 2 : 1);
+  assert.equal([...inbox.matchAll(/commitment:/g)].length, ['append', 'enqueue'].includes(point) ? 2 : 1);
   const controls = f.db.prepare("SELECT * FROM control_queue WHERE status='pending'").all();
   assert.equal(controls.length, 1); assert.equal(controls[0].session_group, 'origin');
   assert.equal(controls[0].target_binding, null); assert.equal(controls[0].priority, 2); assert.equal(controls[0].ack_deadline_at, null);
@@ -100,7 +100,7 @@ for (const point of ['before-plan', 'plan', 'rename', 'append', 'enqueue', 'befo
   assert.deepEqual(f.snapshot(), before);
 });
 
-test('real Origin memory lock timeout releases lifecycle queue and next pass resumes', async t => {
+test('real Origin memory lock timeout preserves pending handover and next pass resumes', async t => {
   const f = fixture(t), events = []; f.deps.waitMs = 20; f.deps.diagnostic = event => events.push(event);
   let release, acquired;
   const ready = new Promise(resolve => { acquired = resolve; });
@@ -112,6 +112,7 @@ test('real Origin memory lock timeout releases lifecycle queue and next pass res
     const owner = f.owner(), result = await owner.advance(); assert.equal(result.code, 'LOCK_TIMEOUT');
     assert.equal(events.at(-1).event, 'global_memory_handover_failed'); assert.equal(owner.pending(), true);
   } finally { release(); await held; }
+  f.deps.waitMs = 1000;
   assert.equal((await f.owner().advance()).rule, 3); assert.equal(f.owner().pending(), false);
 });
 

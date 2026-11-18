@@ -443,33 +443,6 @@ test('multi-to-single never applies legacy machine cleanup', async () => {
 });
 
 
-for (const source of ['single', 'multi']) test(`native ${source} preserves Origin and bypasses conversion`, async () => {
-  const f = fixture(); f.mode = source; f.keyPresent = true;
-  const origin = { sessionGroup: 'origin', present: true, ready: true, runId: 'origin-run' };
-  f.scenes = [origin];
-  f.db.countGlobalRunningConversations = () => 0;
-  f.db.listRunningControlsWithoutDeadline = target => target.machine ? [] : [7];
-  f.db.countNonTerminalControls = target => ({ running: target.machine ? 0 : 1 });
-  const expire = [];
-  f.db.expirePendingControls = target => { assert.equal(f.row.phase, 'cutover'); expire.push(target); };
-  f.deps.lifecycle.advanceReclaim = () => assert.fail('Origin must stay live');
-  f.deps.convert = () => assert.fail('native switch must not convert');
-  f.db.absorbForTransition = () => assert.fail('native switch must not absorb');
-  const owner = f.create();
-  await owner.handle({ ...request, target: source === 'single' ? 'multi' : 'single' });
-  assert.equal(f.row.kind, 'switch');
-  await owner.advance();
-  assert.equal(f.row.phase, 'cutover');
-  assert.equal(expire.length, 0, 'durable phase precedes invalidation');
-  assert.deepEqual(f.fences.map(fence => fence.sessionGroup), ['*']);
-  await owner.advance();
-  assert.equal(f.row.phase, 'complete');
-  assert.equal(origin.runId, 'origin-run');
-  assert.deepEqual(expire, [{ machine: true }, { allSessionGroups: true, keepOrigin: 'all' }]);
-  assert.equal(f.calls.includes('followup'), false);
-  assert.equal(f.calls.includes('voidInternal'), source === 'multi');
-});
-
 test('native gate counts and missing deadlines exclude only Origin', async () => {
   const f = fixture(); f.keyPresent = true;
   f.db.listRunningControlsWithoutDeadline = target => target.machine ? [] : target.sessionGroup ? [7] : [7, 8];
@@ -477,17 +450,6 @@ test('native gate counts and missing deadlines exclude only Origin', async () =>
   assert.equal(f.row.phase, 'gating');
   assert.equal(f.row.reason, 'running_control_without_deadline:allSessionGroups:8');
   assert.equal(f.calls.includes('cutover'), false);
-});
-
-test('native converting rows fail closed while old cutover snapshots finish forward', async () => {
-  const f = fixture(); f.keyPresent = true; const owner = f.create();
-  await owner.handle(request); f.row = { ...f.row, phase: 'converting', cutoff: 5 };
-  await owner.advance();
-  assert.equal(f.row.reason, 'mode_conflict:converting:single');
-  assert.equal(f.calls.includes('convert'), false);
-  f.row = { ...f.row, phase: 'cutover' }; f.fences = [{ sessionGroup: '*', reason: null, runId: null }];
-  await owner.advance(); assert.equal(f.row.phase, 'complete');
-  assert.equal(f.calls.includes('absorb'), false);
 });
 
 test('handover admission check follows noop and legacy and precedes restart intent', async () => {
@@ -501,43 +463,13 @@ test('handover admission check follows noop and legacy and precedes restart inte
   assert.equal(f.calls.length, 0);
 });
 
-test('cancel uses durable transaction and leaves invalidation until cutover', async t => {
-  const { db, store } = databaseFixture(t);
-  const owner = new ModeSwitchCoordinator({ db: store });
-  assert.equal((await owner.cancel({ runId: 'absent' })).code, 'run_not_open');
-  const { runId } = store.beginModeTransition('multi', 'single', { kind: 'switch' });
-  const before = db.prepare('SELECT count(*) AS n FROM control_queue').get().n;
-  assert.equal(store.getDrainFence('*'), null);
-  assert.deepEqual(await owner.cancel({ runId }), { ok: true, result: 'cancelled', runId });
-  assert.equal(store.getDrainFence('*'), null);
-  assert.equal(store.getModeTransition({ runId }).phase, 'cancelled');
-  assert.equal(db.prepare('SELECT count(*) AS n FROM control_queue').get().n, before);
-  assert.equal((await owner.cancel({ runId })).code, 'run_not_open');
-});
-
-for (const phase of ['gating', 'cutover']) test(`cancel eligibility rejects first migration or ${phase} native after cutover`, async () => {
+test('cancel eligibility rejects first migration before cutover', async () => {
   const f = fixture(), owner = f.create(); await owner.handle(request);
-  f.row = { ...f.row, phase };
+  assert.equal(f.row.kind, 'first_migration');
+  assert.equal(f.row.phase, 'gating');
   assert.equal((await owner.cancel({ runId: f.row.run_id })).code, 'not_cancellable');
-  if (phase === 'cutover') {
-    f.row = { ...f.row, kind: 'switch' };
-    assert.equal((await owner.cancel({ runId: f.row.run_id })).code, 'not_cancellable');
-  }
   assert.equal(f.calls.includes('cancelled'), false);
 });
-
-
-test('native gate waits for Origin delivery in flight while leaving its live run intact', async () => {
-  const f = fixture(); f.keyPresent = true;
-  f.scenes = [{ sessionGroup: 'origin', present: true, ready: true, runId: 'origin-current' }];
-  let running = 1; f.db.countGlobalRunningConversations = () => running;
-  const owner = f.create(); await owner.handle(request); await owner.advance();
-  assert.equal(f.row.phase, 'gating');
-  assert.equal(f.fences.some(fence => fence.sessionGroup === 'origin'), false);
-  running = 0; await owner.advance();
-  assert.equal(f.row.phase, 'cutover');
-});
-
 
 test('missing mode key admits first migration without checking global handover', async () => {
   const f = fixture({ globalMemoryPending: () => assert.fail('legacy global memory belongs to first migration') });

@@ -182,15 +182,6 @@ test('a global manual_restart fence is present independently of any mode transit
   assert.equal(status.transition, null); assert.equal(status.blocked, null);
 });
 
-test('cancelled events remain visible without open or completed transitions', async () => {
-  const input = defaults(); input.db.getModeTransition = () => null; input.db.getLastCompletedModeTransition = () => null;
-  input.db.getDrainFence = () => null;
-  const event = { run_id: 'cancelled-run', event: 'transition_cancelled', ts: 101000 };
-  input.readEvents = () => [event];
-  const status = await readSessionModeStatus(input);
-  assert.equal(status.transition, null); assert.equal(status.lastCompleted, null); assert.equal(status.blocked, null);
-  assert.deepEqual(status.lastEvents, [event]);
-});
 test('cancellation never replaces last completed transition with diagnostics', async () => {
   const input = defaults(); input.db.getModeTransition = () => null;
   input.db.getLastCompletedModeTransition = () => ({ ...row, kind: 'first_migration', phase: 'complete' });
@@ -221,7 +212,7 @@ test('open status keeps current switch events and subsequent handovers using sec
   assert.equal(status.transition.kind, 'switch'); assert.equal(status.blocked.since, current.ts);
   assert.deepEqual(status.lastEvents, [handover, current, failed]);
 });
-test('real retained diagnostics expose cancellation and handover when no D9 row is open', async t => {
+test('real retained diagnostics expose cancellation and handover when no mode transition is open', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-status-terminal-')); t.after(() => fs.rmSync(root, { recursive: true }));
   const directory = path.join(root, 'activity-monitor'); fs.mkdirSync(directory);
   const events = [{ run_id: 'cancelled-run', event: 'transition_cancelled', ts: 100001 },

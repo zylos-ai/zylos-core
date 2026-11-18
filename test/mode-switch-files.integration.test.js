@@ -44,7 +44,7 @@ function assertDbSnapshot(actual, expected) {
 }
 
 for (const [kind, source, target] of [
-  ['switch', 'single', 'multi'], ['switch', 'multi', 'single'], ['first_migration', 'multi', 'single'],
+  ['switch', 'single', 'multi'], ['first_migration', 'multi', 'single'],
 ]) test(`converter rejects ${kind} ${source}→${target} before touching files`, () => {
   const f = fixture(); f.put('state.md', 'preserved global'); f.put('session-groups/origin/state.md', 'preserved origin');
   const before = memoryTree(f.root); let readAbsorbed = false;

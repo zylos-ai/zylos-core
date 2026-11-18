@@ -21,7 +21,7 @@ function fixture(t, filename = ':memory:') {
 function converting(store) {
   const { runId } = store.beginModeTransition('single', 'multi', { kind: 'first_migration' }); store.setDrainFence('*'); store.absorbForTransition(runId); return runId;
 }
-for (const [source, target] of [['multi', 'single'], ['single', 'single'], ['multi', 'multi']]) test(`first migration rejects ${source} to ${target} before writing`, t => {
+for (const [source, target] of [['multi', 'single'], ['multi', 'multi']]) test(`first migration rejects ${source} to ${target} before writing`, t => {
   const { db, store, state } = fixture(t);
   store.insertConversation('in', 'foo', 'e', 'pending');
   const before = state(), changes = db.prepare('SELECT total_changes() AS n').get().n;

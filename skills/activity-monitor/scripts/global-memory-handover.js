@@ -7,16 +7,18 @@ import { inboxSegmentName } from '../../zylos-memory/scripts/state-format.js';
 
 const material = name => ['state.md', 'inbox.md', 'handoff.md'].includes(name) || inboxSegmentName.test(name);
 const hash = text => createHash('sha256').update(text.replace(/\s/gu, '')).digest('hex');
-// Published templates: Memory v5 (#53), onboarding (#291), scoped bootstrap.
+// Published templates: Memory v5 (#53), onboarding (#291), scoped bootstrap,
+// and the scoped state template with onboarding managed separately.
 const templateHashes = new Set([
   'ffe8dd581b5f119e30645cfd4468973d425aed1b43a42c6c9ad69eb69972642b',
   '404226132c72d05e9a41c9230314ff89ec63110526af646177224c4c0f3eac1a',
   '3c960faf449077fade3e4e1642c8738b21f19206cd0959e4c14283b2f21d2a28',
+  'f58d087fadd661a03cf0a81746d39252fbf3825e1e781f903d2169b82eac3e27',
 ]);
 const error = (code, message) => Object.assign(new Error(message), { code });
 const currentTemplatePath = () => path.resolve(path.dirname(resolveCoreConfigModule()), '../../templates/memory/state.md');
 
-/** Filesystem recovery record only; this coordinator never mutates D9 or gates.
+/** Filesystem recovery record only; this coordinator never mutates mode transitions or gates.
  * pending() is called inside admission's lifecycle queue. advance() takes that
  * same queue; callers already holding it use advanceLocked(). */
 export class GlobalMemoryHandoverCoordinator {

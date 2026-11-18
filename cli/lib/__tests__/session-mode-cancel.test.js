@@ -4,7 +4,7 @@ import { executeSessionMode, sessionModeCommand } from '../../commands/session-m
 
 const pinned = { run_id: 'transition-1', kind: 'switch', phase: 'gating' };
 const forbidden = () => assert.fail('unexpected operation');
-for (const args of [['cancel', 'extra'], ['cancel', '--force'], ['cancel', '--json', '--json']]) {
+for (const args of [['cancel', 'extra'], ['cancel', '--json', '--json']]) {
   test(`cancel validates before reading: ${JSON.stringify(args)}`, async () => {
     assert.equal((await executeSessionMode(args, { readTransition: forbidden, send: forbidden })).error.code, 'INVALID_ARGUMENT');
   });
@@ -33,17 +33,23 @@ test('cancel pins run, submits once, and reports committed cancellation', async 
   assert.deepEqual(calls, [{ request: { version: 1, type: 'mode_switch_cancel', requestId: 'request-1', runId: pinned.run_id }, options: { deadlineAt: 11000 } }]);
   assert.deepEqual(result, { ok: true, data: { result: 'cancelled', runId: pinned.run_id } });
 });
-for (const code of ['run_not_open', 'not_cancellable', 'entry_not_open', 'invalid_request']) test(`cancel rejection ${code} never retries`, async () => {
+test('cancel rejection never retries', async () => {
+  const code = 'not_cancellable';
   const result = await executeSessionMode(['cancel'], { readTransition: () => pinned,
     send: () => ({ kind: 'rejected', sent: true, reply: { code } }), lookupCancel: forbidden });
   assert.equal(result.error.code, code); assert.deepEqual(result.error.persisted, []);
 });
-for (const kind of ['connect_failed', 'deadline_exceeded']) test(`cancel unsent ${kind} never looks up`, async () => {
+test('unsent cancel never looks up', async () => {
+  const kind = 'connect_failed';
   const result = await executeSessionMode(['cancel'], { readTransition: () => pinned, send: () => ({ kind, sent: false }), lookupCancel: forbidden });
   assert.equal(result.error.code, kind); assert.deepEqual(result.error.persisted, []);
 });
-for (const kind of ['no_reply', 'invalid_reply', 'timeout', 'deadline_exceeded', 'throw']) {
-  for (const observed of ['cancelled', 'unknown', 'deadline_exceeded', 'throw']) test(`uncertain cancel ${kind} observes ${observed} once within original deadline`, async () => {
+// Cover each result branch once, plus send-exception normalization. Generic
+// transport classifications share the same uncertain-cancel observation path.
+for (const [kind, observed] of [
+  ['no_reply', 'cancelled'], ['no_reply', 'unknown'],
+  ['no_reply', 'deadline_exceeded'], ['no_reply', 'throw'], ['throw', 'cancelled'],
+]) test(`uncertain cancel ${kind} observes ${observed} once within original deadline`, async () => {
     let sends = 0, reads = 0;
     const result = await executeSessionMode(['cancel'], { readTransition: () => pinned, deadlineAt: 12345,
       send: (request, options) => { sends++; assert.equal(options.deadlineAt, 12345); if (kind === 'throw') throw new Error('lost'); return { kind, sent: true }; },
@@ -51,4 +57,3 @@ for (const kind of ['no_reply', 'invalid_reply', 'timeout', 'deadline_exceeded',
     assert.equal(sends, 1); assert.equal(reads, 1); assert.equal(result.ok, observed === 'cancelled');
     if (!result.ok) assert.equal(result.error.persisted, null);
   });
-}

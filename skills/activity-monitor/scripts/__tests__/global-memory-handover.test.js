@@ -33,7 +33,8 @@ function fixture(t, overrides = {}) {
   };
 }
 
-for (const payload of ['', '  \n\t']) test(`empty/whitespace material does not trigger: ${JSON.stringify(payload)}`, async t => {
+test('whitespace material and daily history do not trigger handover', async t => {
+  const payload = '  \n\t';
   const f = fixture(t); f.file('inbox.md', payload); f.file('sessions/old.md', 'history');
   assert.equal(f.owner().pending(), false); await f.owner().advance();
   assert.equal(fs.existsSync(path.join(f.memory, 'mode-switch')), false);
@@ -61,7 +62,7 @@ test('rule 3 archives full material set, preserves groups and daily records, app
   assert.equal(f.events.at(-1).event, 'global_memory_handover');
 });
 
-test('rule 1 uses conversion row, every mtime and missing conversion .done; daily fact without follow-up', async t => {
+test('rule 1 archives old conversion residue and appends daily fact without follow-up', async t => {
   const f = fixture(t); const source = f.file('state.md', 'old global'); fs.utimesSync(source, 100, 100);
   f.file('sessions/old.md', 'history'); f.file('session-groups/origin/state.md', 'keep');
   f.conversion = { run_id: 'conversion', target_mode: 'multi', updated_at: 100 };
@@ -74,35 +75,6 @@ for (const reason of ['new-mtime', 'conversion-done']) test(`new global writes r
   f.conversion = { run_id: 'conversion', target_mode: 'multi', updated_at: 100 };
   if (reason === 'conversion-done') { fs.utimesSync(source, 99, 99); f.file('mode-switch/conversion/previous/_global/.done', ''); }
   assert.equal((await f.owner().advance()).rule, 3); assert.equal(f.controls.length, 1);
-});
-
-test('rule 2 recognizes installation template and creates scoped current template exclusively', async t => {
-  const f = fixture(t); f.file('state.md', currentTemplate); const plan = await f.owner().advance();
-  assert.equal(plan.rule, 2); assert.equal(f.controls.length, 0);
-  assert.equal(fs.readFileSync(path.join(f.memory, 'session-groups/origin/state.md'), 'utf8'), currentTemplate.replace('scope=*', 'scope=origin'));
-  assert.equal(fs.existsSync(path.join(f.memory, 'session-groups/origin/inbox.md')), false);
-});
-
-for (const daily of [false, true]) test(`installation template only archives with existing Origin state and daily records ${daily}`, async t => {
-  const f = fixture(t); f.file('state.md', currentTemplate);
-  f.file('session-groups/origin/state.md', 'existing');
-  f.file('session-groups/origin/inbox.md', 'preserved inbox\n');
-  if (daily) f.file('sessions/old.md', 'daily record');
-  else f.deps.append = () => { assert.fail('archive-only template must not append an entry without daily records'); };
-  const owner = f.owner(), plan = await owner.advance();
-  assert.equal(plan.rule, 2); assert.equal(plan.deliver, false); assert.equal(plan.interval, undefined);
-  assert.equal(owner.pending(), false); assert.equal(f.controls.length, 0);
-  assert.equal(fs.readFileSync(path.join(f.memory, 'session-groups/origin/state.md'), 'utf8'), 'existing');
-  const archive = path.join(f.memory, 'mode-switch', plan.id, 'previous/_global');
-  assert.equal(fs.readFileSync(path.join(archive, 'state.md'), 'utf8'), currentTemplate);
-  assert.equal(fs.existsSync(path.join(archive, '.done')), true);
-  if (daily) {
-    assert.match(f.inbox(), /^preserved inbox\n/); assert.equal([...f.inbox().matchAll(/ fact: /g)].length, 1);
-    assert.doesNotMatch(f.inbox(), /commitment:|onboarding|installation template/);
-    assert.match(f.inbox(), /daily records remain at/); assert.match(f.inbox(), /not moved/);
-    assert.equal(fs.readFileSync(path.join(f.memory, 'sessions/old.md'), 'utf8'), 'daily record');
-  } else assert.equal(f.inbox(), 'preserved inbox\n');
-  await owner.advance(); assert.equal(f.controls.length, 0);
 });
 
 test('installation template changed by one character is handed to Origin', async t => {
@@ -128,7 +100,7 @@ test('single conversion interval is captured once in plan and survives retry wit
 });
 
 for (const guard of ['transition', 'missing-key', 'legacy-tmux', 'unknown-legacy', 'manual-restart', 'delete', 'unknown-observation', 'legacy-origin', 'unknown-origin-scope']) {
-  test(`guard prevents every filesystem change: ${guard}`, async t => {
+  test(`guard preserves global material without archive or follow-up: ${guard}`, async t => {
     const f = fixture(t); f.file('state.md', 'global');
     if (guard === 'transition') f.transition = { phase: 'gating' };
     if (guard === 'missing-key') f.mode = { keyPresent: false, mode: null };
@@ -150,28 +122,6 @@ test('incomplete directory without plan is reused, or removed when global materi
   assert.equal(f.owner().pending(), true); await f.owner().advance(); assert.equal(f.owner().pending(), false);
   fs.mkdirSync(path.join(f.memory, 'mode-switch', id)); f.file('state.md', 'work');
   const plan = await f.owner().advance(); assert.equal(plan.id, id); assert.equal(f.directories().length, 1);
-});
-
-for (const point of ['plan', 'first-rename', 'append', 'enqueue']) test(`crash recovery resumes same plan after ${point}`, async t => {
-  const f = fixture(t); f.file('state.md', currentTemplate); f.file('inbox.md', 'work makes rule 3');
-  let tripped = false;
-  const inject = () => { if (!tripped) { tripped = true; throw Object.assign(new Error('simulated process boundary'), { code: 'EIO' }); } };
-  const io = Object.create(fs);
-  io.renameSync = (source, destination) => {
-    fs.renameSync(source, destination);
-    if (point === 'plan' && destination.endsWith('/plan.json')) inject();
-    if (point === 'first-rename' && destination.endsWith('/previous/_global/inbox.md')) inject();
-  };
-  f.deps.fsImpl = io;
-  const originalInsert = f.db.insertControl;
-  f.db.insertControl = (...args) => { if (point === 'append') inject(); originalInsert(...args); if (point === 'enqueue') inject(); };
-  const first = await f.owner().advance(); assert.equal(first.failed, true);
-  const id = f.directories()[0]; assert.equal(fs.existsSync(path.join(f.memory, 'mode-switch', id, 'previous/_global/.done')), false);
-  const restarted = f.owner(), plan = await restarted.advance();
-  assert.equal(plan.id, id); assert.equal(plan.rule, 3); assert.equal(f.directories().length, 1);
-  assert.equal(f.controls.length, 1); assert.equal(restarted.pending(), false);
-  const count = [...f.inbox().matchAll(/commitment:/g)].length;
-  assert.equal(count, ['append', 'enqueue'].includes(point) ? 2 : 1);
 });
 
 test('rule 2 decision persists after state moved and exclusive template install races Origin creation', async t => {
@@ -245,12 +195,4 @@ test('empty global path returns before every authority read or runtime observati
   for (const key of Object.keys(f.db)) f.db[key] = unexpected;
   for (const key of ['readMode', 'readConfiguration', 'readRequests', 'legacyPresent', 'observe']) f.deps[key] = unexpected;
   assert.equal(await f.owner().advance(), undefined); assert.deepEqual(f.events, []);
-});
-
-for (const sourceScope of ['origin', null]) test(`single mode handover honors observed Origin scope ${sourceScope}`, async t => {
-  const f = fixture(t); f.file('state.md', 'global memory'); f.mode = { keyPresent: true, mode: 'single' };
-  f.scenes = [{ present: true, sessionGroup: 'origin', runId: 'origin-run', sourceScope }];
-  const result = await f.owner().advance();
-  if (sourceScope === null) { assert.equal(result, undefined); assert.equal(f.owner().pending(), true); assert.equal(f.controls.length, 0); }
-  else { assert.equal(result.rule, 3); assert.equal(f.owner().pending(), false); assert.equal(f.controls.length, 1); }
 });

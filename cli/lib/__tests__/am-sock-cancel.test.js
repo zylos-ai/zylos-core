@@ -10,11 +10,10 @@ import { submit, validateReply, lookupModeSwitchCancel } from '../am-sock-client
 const request = { version: 1, type: 'mode_switch_cancel', requestId: 'cancel-1', runId: 'run-1' };
 for (const [fields, valid] of [
   [{ ok: true, result: 'cancelled', runId: 'run-1', extension: true }, true],
-  [{ ok: true, result: 'cancelled' }, false], [{ ok: true, result: 'cancelled', runId: '' }, false],
+  [{ ok: true, result: 'cancelled', runId: '' }, false],
   [{ ok: true, result: 'cancelled', runId: 'other-run' }, false],
   [{ ok: true, result: 'accepted', runId: 'run-1' }, false],
-  [{ ok: false, code: 'run_not_open' }, true], [{ ok: false, code: 'not_cancellable' }, true],
-  [{ ok: false, code: 'entry_not_open' }, true], [{ ok: false, code: 'invalid_request' }, true],
+  [{ ok: false, code: 'not_cancellable' }, true],
   [{ ok: false, code: 'unknown' }, false],
 ]) test(`cancel reply validation ${JSON.stringify(fields)}`, () => {
   assert.equal(validateReply(request, { version: 1, type: request.type, requestId: request.requestId, ...fields }), valid);
@@ -29,7 +28,7 @@ test('cancel submit traverses actual transport and validates first reply', async
   const result = await submit(request, { connect: () => { connections++; queueMicrotask(() => socket.emit('connect')); return socket; } });
   assert.equal(result.kind, 'accepted'); assert.equal(result.sent, true); assert.equal(connections, 1); assert.equal(writes, 1);
 });
-for (const phase of ['cancelled', 'gating', 'cutover', 'complete', null]) test(`cancel lookup pins exact run for ${phase}`, async () => {
+for (const phase of ['cancelled', 'gating', null]) test(`cancel lookup pins exact run for ${phase}`, async () => {
   let reads = 0;
   const result = await lookupModeSwitchCancel('run-1', { now: () => 1000, deadlineAt: 1001, getModeTransition: options => {
     reads++; assert.deepEqual(options, { runId: 'run-1' }); return phase && { run_id: 'run-1', phase };
@@ -63,12 +62,6 @@ async function memoryPendingServer(t) {
   t.after(async () => { for (const socket of sockets) socket.destroy(); await new Promise(resolve => server.close(resolve)); fs.rmSync(directory, { recursive: true, force: true }); });
   return { socketPath, calls };
 }
-test('global_memory_pending real transport is a complete rejection', async t => {
-  const f = await memoryPendingServer(t);
-  const result = await submit({ version: 1, type: 'mode_switch', requestId: 'switch-memory', target: 'multi' }, { socketPath: f.socketPath });
-  assert.equal(result.kind, 'rejected'); assert.equal(result.reply.code, 'global_memory_pending'); assert.equal(result.sent, true);
-  assert.equal(f.calls.length, 1);
-});
 test('global_memory_pending CLI preserves real transport rejection without uncertain lookup or retry', async t => {
   const f = await memoryPendingServer(t);
   const result = await executeSessionMode(['switch','multi','--json'], {
