@@ -1514,7 +1514,7 @@ function healthRow(name, signal_type, timestamp = 1000000, status = 'healthy', e
 // has none. A confirmed absent Origin (reclaimed when idle) makes a silent
 // heartbeat idle instead of stale; an instance without the mode key keeps stale.
 for (const scenario of [
-  { mode: 'multi', rootAge: 120_000, originAge: 10_000, origin: true, expected: 'healthy', state: 'idle' },
+  { mode: 'multi', rootAge: 120_000, originAge: 50_000, origin: true, expected: 'healthy', state: 'idle' },
   { mode: 'multi', rootAge: 120_000, originAge: 90_000, origin: true, expected: 'stale', state: 'idle' },
   { mode: 'multi', rootAge: 10_000, originAge: 90_000, origin: false, expected: 'idle', state: 'idle' },
   { mode: 'multi', rootAge: 10_000, originAge: 90_000, origin: null, expected: 'stale', state: 'idle' },
@@ -1606,6 +1606,15 @@ test('AM heartbeat returns to stale once Origin is running again with a silent h
   engine._readAMHeartbeat();
   await engine._originProbe;
   assert.equal(engine.getSourceHealth().collector_liveness.am_heartbeat.status, 'stale');
+  running = false;
+  engine._readAMHeartbeat();
+  await engine._originProbe;
+  assert.equal(engine.getSourceHealth().collector_liveness.am_heartbeat.status, 'idle');
+  running = null;
+  engine._readAMHeartbeat();
+  await engine._originProbe;
+  assert.equal(engine.getSourceHealth().collector_liveness.am_heartbeat.status, 'stale',
+    'while it is unknown whether Origin is running the heartbeat stays stale');
 });
 
 test('source health omits retired sources even when their stored rows remain', () => {
