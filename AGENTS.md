@@ -171,7 +171,7 @@ column definition, or change existing rows as part of an upgrade — MUST:
 2. Register one new adjacent step `MIGRATIONS[N] = { to: N+1, changes, migrate }` with a complete change declaration. Never edit released steps, `init-db.sql` or the 0→1 callback to reach the new layout.
 3. Add migration tests from the historical fixtures and from a v1 database with user-added tables/columns.
 
-Rules, declaration keys and a worked example: `docs/sqlite-migrations.md`. Undeclared changes fail the migration; upgrade rehearsal catches them before services stop.
+Rules, declaration keys and a worked example: `docs/sqlite-migrations.md`. Undeclared changes fail the migration; upgrade rehearsal catches them after services stop and before installation.
 
 ## PM2 Process Management
 

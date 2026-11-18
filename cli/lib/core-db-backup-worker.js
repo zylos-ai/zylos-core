@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
+export const DATABASE_DEADLINE_MS = 600000;
 export const SNAPSHOT_FORMAT_VERSION = 3;
 export const ORIGINAL_DEPLOYMENT_FORMAT_VERSION = 2;
 export const LEGACY_CORE_DATABASES = Object.freeze([
@@ -185,6 +187,8 @@ export async function execute(input) {
   if(input.action==='offline-preflight' && (!input.manifest || databaseFormatForRows(input.manifest.databases,input.manifest.formatVersion)===3)) {
     databases=databases.filter(item=>item.owner!=='web-console');
   }
+  if(input.databaseSource) databases=databases.filter(item=>item.source===input.databaseSource);
+  const step=name=>process.send?.({step:name});
   const inspectDashboard=async (owner,db) => {
     const state=await owner.inspectSchema(db);
     if(!state||!Number.isInteger(state.targetVersion)||state.targetVersion<0||!Number.isInteger(state.currentVersion)||state.currentVersion<0||typeof state.needsMigration!=='boolean') throw Error('Invalid dashboard schema inspection');
@@ -256,7 +260,9 @@ export async function execute(input) {
         if(item.owner==='dashboard') {
           const before=await inspectDashboardFile(mod,source);
           const target=path.join(directory,'dashboard.db');
+          step('copy');
           const live=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});try {await live.backup(target);}finally{live.close();}
+          step('rehearsal');
           const copy=new Database(target,{fileMustExist:true,timeout:5000});
           let after;
           try {await mod.migrate(copy);after=await inspectDashboard(mod,copy);}
@@ -269,19 +275,22 @@ export async function execute(input) {
         if(absent && !mod.supportsNewDatabase) throw Error(`Owner cannot initialize missing database: ${item.owner}`);
         const target=path.join(directory,`${item.owner}.db`);
         if(!absent) {
+          step('copy');
           const live=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});
           try {await live.backup(target);} finally {live.close();}
         }
+        step('check');
         const copy=new Database(target,{fileMustExist:!absent,timeout:5000});
         try {
           inspectConnection(copy);
           const start=copy.pragma('user_version',{simple:true});
+          step('rehearsal');
           const result=engine.migrateDatabase(copy,mod,{allowNew:absent,strict:false});
           reports.push({source:item.source,status:absent?'missing':'present',fromVersion:start,toVersion:result.version,extensions:result.extensions});
         } catch(error) {throw schemaError(`${item.source}: rehearsal failed: ${error.message}`,'SCHEMA_MIGRATION_FAILED',error);} finally {copy.close();}
       }
       return {databases:reports};
-    } finally {removeOwnedTree(fs.realpathSync(path.dirname(directory)),directory);}
+    } finally {if(!input.databaseSource) removeOwnedTree(fs.realpathSync(path.dirname(directory)),directory);}
   }
   const plan=(db,mod,options={}) => {
     // A restored pre-chain owner still supplies its original readonly contract.
@@ -415,6 +424,7 @@ export async function execute(input) {
       rows.push({source:item.source,status:'present',...state});continue;
     }
     if(input.action!=='snapshot') throw new Error(`Unknown action: ${input.action}`);
+    step('copy');
     const file=`${item.owner}.db`, target=path.join(input.stagingDir,file);
     const db=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});
     try {if(typeof db.backup!=='function') throw new Error('SQLite backup API unavailable');await db.backup(target);}finally{db.close();}
@@ -425,6 +435,7 @@ export async function execute(input) {
     try {
       if (snapshot.pragma('journal_mode=DELETE', {simple:true}) !== 'delete') throw new Error('Snapshot journal mode normalization failed');
     } finally { snapshot.close(); }
+    step('check');
     const state=inspect(Database,target);
     const fd=fs.openSync(target,'r');try{fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
     rows.push({source:item.source,status:'backed_up',...state,file,bytes:fs.statSync(target).size,sha256:hash(target)});
@@ -436,9 +447,68 @@ function isMainModule() {
   try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); }
   catch { return false; }
 }
+// A separate process makes the deadline enforceable even while native SQLite
+// or synchronous owner migration code blocks the database child's event loop.
+export async function superviseDatabases(input, {spawnWorker=spawn, timeoutMs=DATABASE_DEADLINE_MS}={}) {
+  let items;
+  if(['probe','dashboard-state'].includes(input.action)) {
+    items=[{source:input.action==='probe'?'SQLite driver':'components/dashboard/dashboard.db'}];
+  } else {
+    const rows=input.manifest?.databases ?? input.expectedDatabases;
+    const formatVersion=input.manifest ? input.manifest.formatVersion : input.formatVersion;
+    items=rows ? databasesForFormat(databaseFormatForRows(rows,formatVersion)) : databasesForFormat(input.formatVersion ?? 3);
+  }
+  const databases=[];
+  let single,cleanup;
+  if(input.action==='rehearse') {
+    const directory=input.rehearsalDir;
+    const stat=fs.lstatSync(directory);
+    if(!stat.isDirectory()||stat.isSymbolicLink()) throw Error('Unsafe private rehearsal directory');
+    const {removeOwnedTree}=await import('../../skills/comm-bridge/scripts/remove-owned-tree.js');
+    cleanup=()=>removeOwnedTree(fs.realpathSync(path.dirname(directory)),directory);
+  }
+  try {
+    for(const item of items) {
+      let step='check';
+      const result=await new Promise((resolve,reject)=>{
+        const child=spawnWorker(process.execPath,[fileURLToPath(import.meta.url),JSON.stringify({...input,databaseSource:item.source})],{
+          stdio:['ignore','pipe','ignore','ipc'],windowsHide:true,
+        });
+        let output='',expired=false,overflow=false;
+        const timer=setTimeout(()=>{expired=true;child.kill('SIGKILL');},timeoutMs);
+        child.on('message',message=>{if(['check','copy','rehearsal'].includes(message?.step))step=message.step;});
+        child.stdout.on('data',data=>{
+          if(output.length+data.length>4*1024*1024) {overflow=true;child.kill('SIGKILL');}
+          else output+=data;
+        });
+        child.once('error',error=>{clearTimeout(timer);reject(error);});
+        child.once('close',status=>{
+          clearTimeout(timer);
+          if(expired) return reject(Error(`${item.source}: ${step} deadline exceeded (${timeoutMs/1000}s)`));
+          let value;
+          try {value=JSON.parse(output);} catch {}
+          if(status!==0 || !value || overflow) {
+            const message=value?.error?.message || (overflow?'worker output limit exceeded':`worker exit ${status}`);
+            return reject(Object.assign(Error(message.startsWith(`${item.source}:`) ? message : `${item.source}: ${step} failed: ${message}`),{code:value?.error?.code}));
+          }
+          resolve(value);
+        });
+      }).catch(error=>{
+        if(!error.message.startsWith(`${item.source}:`)) error.message=`${item.source}: ${step} failed: ${error.message}`;
+        throw error;
+      });
+      single=result;
+      if(result.databases) databases.push(...result.databases);
+    }
+    if(['probe','dashboard-state'].includes(input.action)) return single;
+    return input.action==='version-probe' ? {databases,needsMigration:databases.some(row=>row.needsMigration)} : {databases};
+  } finally {cleanup?.();}
+}
 if(isMainModule()) {
-  const timer=setTimeout(()=>{process.stdout.write(JSON.stringify(failureResult(Error('SQLite worker deadline exceeded')))+'\n');process.exit(1);},90000);
-  try {process.stdout.write(JSON.stringify(await execute(JSON.parse(process.argv[2]))));}
+  try {
+    const input=JSON.parse(process.argv[2]);
+    process.stdout.write(JSON.stringify(await (process.send && input.databaseSource ? execute(input) : superviseDatabases(input))));
+  }
   catch(error){process.stdout.write(JSON.stringify(failureResult(error))+'\n');process.exitCode=1;}
-  finally{clearTimeout(timer);}
+  finally {if(process.connected)process.disconnect();}
 }

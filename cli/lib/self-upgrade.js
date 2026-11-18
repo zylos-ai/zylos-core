@@ -983,9 +983,11 @@ function finalizationNext(ctx) {
 }
 
 function dashboardNext(dashboard) {
-  return dashboard.state==='degraded'
-    ? 'Dashboard is not ready. Fix the cause reported in dashboard.errors, run zylos init to reapply Dashboard configuration and routing and start ecosystem services, then report what you fixed.'
-    : null;
+  if(dashboard.state!=='degraded') return null;
+  const reasons=(dashboard.errors || []).map(error=>error.message).filter(Boolean).join('; ');
+  return dashboard.restoreFailed
+    ? `Dashboard restore failed: ${reasons}. Fix the cause, then restart zylos-dashboard with PM2.`
+    : 'Dashboard is not ready. Fix the cause reported in dashboard.errors, run zylos init to reapply Dashboard configuration and routing and start ecosystem services, then report what you fixed.';
 }
 
 /** Shared by initial finalization and forward repair after publication is done. */
@@ -1102,7 +1104,10 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
         if (pm2SavePending) setPm2SavePending(false);
       } catch(error) {restoreFailed=true;dashboardFailure('registration',{code:'registration_failed',message:error.message});}
     }
-    if(!restoreFailed)dashboard=await owner.verifyDashboard({zylosDir:root});
+    const originallyStopped=!ctx.firstDashboardTakeover && ctx.journal?.dashboardWasStopped===true && !(ctx.servicesWereRunning || []).includes('zylos-dashboard') && !dashboardErrored;
+    if(originallyStopped) dashboard={state:'stopped',message:'Dashboard was already stopped before the upgrade and remains stopped.',errors:[]};
+    else if(!restoreFailed) dashboard=await owner.verifyDashboard({zylosDir:root});
+    if(restoreFailed) dashboard={restoreFailed:true};
   } catch(error) {dashboardFailure('dashboard',error);}
   if (removal?.residue) (ctx.runtimeWarnings ||= []).push(webConsoleRemovalNotice({zylosDir:root,
     routed:ctx.firstDashboardTakeover ? dashboardRouted : dashboard?.checks?.route === true}));

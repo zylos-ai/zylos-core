@@ -38,7 +38,9 @@ JSON result line from that target.
 The updater refuses unresolved earlier transactions and requires standalone
 Dashboard to be uninstalled while retaining its data. It checks database versions
 and rejects databases newer than the target supports. Migration rehearsal runs
-on isolated copies when needed. Additional user tables and columns are supported;
+on isolated copies when needed, after the existing managed-service stop and
+before snapshots and installation. A rehearsal failure uses pre-install recovery
+to restore only services that were running before the attempt. Additional user tables and columns are supported;
 schema collisions and undeclared changes fail the rehearsal.
 
 Every attempt creates a private transaction under
@@ -49,7 +51,11 @@ and Dashboard, including a missing entry when Dashboard has no database. Formats
 1 and 2 retain their original Web Console entries for old recovery records.
 A missing Dashboard database remains absent
 until its owner's normal creation path. Matching schema versions skip migration
-work but still require snapshots.
+work but still require snapshots. Each database gets its own 600-second deadline
+for each worker operation; timeout errors identify the database and active step
+(check, copy or rehearsal). Dashboard stopped before the upgrade remains stopped;
+completion distinguishes that state from a failed service restore and reports the
+restore failure reason without a blanket instruction to run `zylos init`.
 
 There is one protected transaction flow. On Linux, trusted process identity and
 `flock` permit interrupted recovery. On macOS and restricted Linux, ordinary
