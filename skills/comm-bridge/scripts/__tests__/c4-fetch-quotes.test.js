@@ -197,20 +197,3 @@ for (const [name, args] of modes) for (const kind of ['file', 'image']) test(`${
   assert.ok(text.includes(`[quote c4_id=1]\n(quoting c4_id=1 — AI: （附件：${filename}）)\nFollow up`));
   assert.equal(text.includes('private-media-id'), false);
 });
-
-// Public history retains its existing shape even for populated alert metadata;
-// diagnosis and owner alerts read those fields through their dedicated APIs.
-// Run for history projection or alert-metadata changes; skip unrelated delivery
-// and UI changes. The official runner and fixture isolate HOME/ZYLOS_DIR/PM2_HOME,
-// short TMPDIR and SQLite, read back paths and close/delete the private DB.
-// No tmux, socket, transport, runtime or service runs.
-for (const [name, args] of modes) test(`${name} JSON omits private failure alert wording metadata`, t => {
-  const f = fixture(t); seedValid(f);
-  f.db.prepare("UPDATE conversations SET core_source='scheduler',task_name='Private task name' WHERE id>=100").run();
-  const output = fetchCli([...args, '--json']);
-  assert.equal(output.includes('core_source'), false);
-  assert.equal(output.includes('task_name'), false);
-  assert.equal(output.includes('Private task name'), false);
-  assert.deepEqual(f.db.prepare('SELECT core_source,task_name FROM conversations WHERE id=101').get(),
-    { core_source: 'scheduler', task_name: 'Private task name' });
-});

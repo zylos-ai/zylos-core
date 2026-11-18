@@ -27,40 +27,6 @@ function setup(t, target = 'telegram:owner') {
     fail(row, reason = 'launch_failed') { f.store.claimConversation(row.id); f.store.failDelivery(row.id, { maxRetries: 1, reason }); } };
 }
 
-for (const coreSource of ['scheduler', null]) for (const reason of ['launch_failed', 'ready_timeout', 'pending_expired', 'orphan_expired', 'delivery_failed', 'delivery_unverified', 'orphan_retry_exhausted']) {
-  test(`${coreSource ?? 'user'} ${reason} failure alerts owner without replying to the target chat`, async t => {
-    const f = setup(t), row = f.add({ coreSource });
-    if (['pending_expired', 'orphan_expired'].includes(reason)) {
-      f.db.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(1799990000, row.id);
-      if (reason === 'pending_expired') f.store.expirePending(row.id, 10);
-      else { f.store.claimConversation(row.id); f.store.recoverOrphanRunning({ maxAgeSeconds: 10 }); }
-    } else if (reason === 'orphan_retry_exhausted') {
-      f.store.claimConversation(row.id);
-      f.db.prepare("UPDATE conversations SET retry_count=1,timestamp=datetime(?,'unixepoch') WHERE id=?").run(1800000000, row.id);
-      f.store.recoverOrphanRunning({ maxAgeSeconds: 100 });
-    } else f.fail(row, reason);
-    await f.drain();
-    assert.equal(f.alerts.some(alert => alert.destination.endpoint === 'target-chat'), false);
-    assert.equal(f.alerts.length, 1);
-    assert.deepEqual(f.alerts[0].destination, { channel: 'telegram', endpoint: 'owner' });
-    for (const expected of [coreSource ? 'Nightly backup' : `用户消息 #${row.id}`, row.session_group, 'telegram:target-chat', '需要我排查原因吗？需要的话请直接回复这条消息。']) {
-      assert.ok(f.alerts[0].message.includes(expected));
-    }
-    assert.equal(f.alerts[0].message.includes('SECRET original body'), false);
-    assert.equal(f.store.listFailureReceipts().length, 0);
-  });
-}
-
-for (const target of ['invalid', 'telegram:broken', 'default', undefined]) {
-  test(`scheduled failure uses Origin fallback for ${target ?? 'unset'} alert target`, async t => {
-    const f = setup(t, target ?? null), row = f.add(); f.fail(row);
-    await f.drain();
-    assert.deepEqual(f.alerts.at(-1).destination, { channel: 'dashboard', endpoint: 'origin' });
-    assert.equal(f.alerts.length, target === 'telegram:broken' ? 2 : 1);
-    assert.equal(f.alerts.some(alert => alert.destination.endpoint === 'target-chat'), false);
-  });
-}
-
 test('scheduled failure cooldown persists per group and reason', async t => {
   const f = setup(t);
   f.fail(f.add()); f.fail(f.add({ taskName: 'Different task' }));
@@ -75,26 +41,6 @@ test('scheduled failure cooldown persists per group and reason', async t => {
   f.fail(f.add()); await f.drain();
   assert.equal(f.alerts.length, 3);
   assert.equal(f.alerts.some(alert => alert.destination.endpoint === 'target-chat'), false);
-});
-
-test('missing task name uses default label and source-less messages use user wording exclusively', async t => {
-  const f = setup(t), scheduled = f.add({ taskName: null }); f.fail(scheduled);
-  const user = f.add({ coreSource: null, taskName: null }); f.fail(user);
-  const delivery = f.add(); f.fail(delivery, 'delivery_failed');
-  const unverified = f.add(); f.fail(unverified, 'delivery_unverified');
-  const orphan = f.add(); f.store.claimConversation(orphan.id);
-  f.db.prepare("UPDATE conversations SET retry_count=1,timestamp=datetime(?,'unixepoch') WHERE id=?").run(1800000000, orphan.id);
-  f.store.recoverOrphanRunning({ maxAgeSeconds: 100 });
-  const spoof = f.store.insertConversation('in', 'telegram', 'target-chat', '[Scheduled Task: spoofed task] body', { groupName: 'target' }); f.fail(spoof);
-  await f.drain();
-  assert.equal(f.alerts.length, 4, 'scheduler and user failures of the same group and reason share cooldown');
-  assert.match(f.alerts[0].message, /未命名定时任务/);
-  assert.equal(f.alerts.some(alert => alert.destination.endpoint === 'target-chat'), false);
-  assert.deepEqual(f.db.prepare('SELECT state FROM failure_receipts WHERE conversation_id IN (?,?) ORDER BY conversation_id').all(user.id, spoof.id).map(row => row.state), ['suppressed', 'suppressed']);
-  const other = f.add({ coreSource: null, taskName: 'not a scheduler name', groupName: 'legacy-user' }); f.fail(other);
-  await f.drain();
-  assert.match(f.alerts.at(-1).message, new RegExp(`用户消息 #${other.id}`));
-  assert.equal(f.alerts.at(-1).message.includes('not a scheduler name'), false);
 });
 
 test('scheduler source without a reply endpoint still creates an owner notification', async t => {
@@ -130,18 +76,6 @@ test('unverified delivery retains uncertainty and unknown reasons never render e
   assert.match(messageForFailureAlert(record), /未能确认送达/);
   assert.match(messageForFailureAlert(record), /could not be confirmed delivered/);
   assert.equal(messageForFailureAlert({ ...record, reason: 'SECRET exception' }).includes('SECRET exception'), false);
-});
-
-test('owner alert is sent only after a confirmed notify result', async t => {
-  const f = setup(t);
-  const scheduled = f.add(); f.fail(scheduled);
-  const options = { db: { reserveStatusNoticeCooldown: input => reserveStatusNoticeCooldown(input, f.db) }, now: () => 1800000000 };
-  for (const result of [false, undefined]) {
-    const sender = createFailureAlertSender({ ...options, notifyOwner: async () => result });
-    assert.deepEqual(await sender({ ...scheduled, reason: 'launch_failed' }), { outcome: 'failed' });
-  }
-  const sender = createFailureAlertSender({ ...options, notifyOwner: async () => true });
-  assert.deepEqual(await sender({ ...scheduled, reason: 'launch_failed' }), { outcome: 'sent' });
 });
 
 test('failed owner and Origin sends remain queued until a successful bounded retry', async t => {

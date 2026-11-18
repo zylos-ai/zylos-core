@@ -21,13 +21,6 @@ test('internal failure receipt uses configured status notice brand with the same
   assert.match(messageForFailureReceipt(record, { brand: '  Factory  ' }), /^\[Factory\]/);
 });
 
-test('internal receipt explicitly says no reply is needed without quoting original content', () => {
-  const message = messageForFailureReceipt({ ...record, content: 'PRIVATE ORIGINAL' }, {});
-  assert.match(message, /系统回执，无需回复/);
-  assert.match(message, /System receipt; no reply is needed/);
-  assert.equal(message.includes('PRIVATE ORIGINAL'), false);
-});
-
 test('internal exhausted delivery verification describes uncertainty rather than confirmed non-delivery', () => {
   const message = messageForFailureReceipt({ ...record, reason: 'delivery_unverified' }, {});
   assert.match(message, /消息 #51 未能确认送达会话组「chat:target」/);

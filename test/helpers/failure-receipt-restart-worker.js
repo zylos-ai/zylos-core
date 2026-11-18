@@ -32,7 +32,6 @@ const owner = new SupervisorServerHealth({
 const now = () => Date.now() + (phase === 'resume' ? 31000 : 0);
 const durable = createStore(db.getDb(), { now });
 const store = { ...db, listFailureReceipts: durable.listFailureReceipts, settleFailureReceipt(id, outcome) {
-  if (phase === 'sent' && outcome === 'sent') barrier('sent');
   return db.settleFailureReceipt(id, outcome);
 } };
 try {
