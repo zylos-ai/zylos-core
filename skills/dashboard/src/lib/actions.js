@@ -309,10 +309,12 @@ async function upgradeRuntimeCli(reqId, config) {
       const { stdout, stderr } = await execFileAsync('agy', ['update'], {
         timeout: 300000, killSignal: 'SIGKILL', env: { ...process.env, AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
       });
+      log(reqId, `agy update done (${((stdout || '') + (stderr || '')).trim().slice(0, 200)})`);
       return { ok: true, message: 'Antigravity updated. Restart session to apply.',
         output: ((stdout || '') + (stderr || '')).trim(), requires_restart: true,
         messageKey: 'result.agy_updated' };
     } catch (err) {
+      log(reqId, `agy update failed: ${(err.stderr || err.stdout || err.message || '').slice(0, 200)}`);
       if (err.killed || err.code === 'ETIMEDOUT') {
         return { ok: false, error: 'deadline_exceeded', message: 'Antigravity upgrade did not complete within 5 minutes. Check the installed version before retrying.',
           messageKey: 'result.agy_upgrade_incomplete' };

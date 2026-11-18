@@ -12,6 +12,9 @@ import { VersionChecker } from '../src/lib/version-checker.js';
 
 // Opt in only in a separate OS account/container. Real browser fetch -> generated
 // Caddy reverse proxy -> actual Dashboard route -> private fake agy (65 seconds).
+// Run with ZYLOS_UPGRADE_INTEGRATION=1 when changing upgrade execution/deadlines,
+// the upgrade HTTP route, Dashboard socket timeouts, or generated Caddy proxy rules.
+// Unrelated UI copy, doctor, and documentation changes may skip this slow gate.
 test('Antigravity upgrade response survives more than sixty seconds through browser, proxy and Dashboard', {
   skip: process.env.ZYLOS_UPGRADE_INTEGRATION !== '1', timeout: 100000,
 }, async t => {

@@ -2,12 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import dns from 'node:dns/promises';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 test('doctor resolves actual instance configuration and uses the Antigravity adapter for a rejected key', async t => {
-  const root = process.env.ZYLOS_DIR, bin = path.join(root, 'bin');
+  const savedRoot = process.env.ZYLOS_DIR;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'doctor-default-')), bin = path.join(root, 'bin');
+  process.env.ZYLOS_DIR = root;
+  t.after(() => {
+    if (savedRoot === undefined) delete process.env.ZYLOS_DIR;
+    else process.env.ZYLOS_DIR = savedRoot;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
   fs.mkdirSync(bin, { recursive: true }); fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
   fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ session_mode: 'single', runtime: 'agy' }));
   fs.writeFileSync(path.join(root, '.env'), `GEMINI_API_KEY=invalid-fixture-key\nTZ=Asia/Singapore\nZYLOS_TMUX_PATH_PREPEND=${bin}\n`);
@@ -36,5 +44,9 @@ test('doctor resolves actual instance configuration and uses the Antigravity ada
   fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ session_mode: 'single', runtime: 'future' }));
   const unknown = await collectDiagnostics(new Map(), options);
   assert.equal(unknown.runtime, 'future');
+  const textRun = spawnSync(process.execPath, [fileURLToPath(new URL('../../zylos.js', import.meta.url)), 'doctor'], { env: process.env, encoding: 'utf8', timeout: 20000 });
+  assert.equal(textRun.status, 1);
+  assert.match(textRun.stdout, /network: skipped/);
+  assert.doesNotMatch(textRun.stdout, /DNS failed|Check your network connection/);
   assert.match(buildDiagnosticJson(unknown, { success: true }).issues.find(row => row.id === 'runtime_unknown').hint, /does not provide diagnostics/);
 });

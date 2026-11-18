@@ -412,7 +412,9 @@ export function buildDiagnosticJson(diag, coreVersion) {
   if (!diag.system.pm2.installed) {
     issues.push({ id: 'pm2_missing', label: 'PM2 not installed', hint: 'Run zylos init' });
   }
-  if (!runtimeDiagnostics(diag.runtime)) {
+  if (diag.runtime === 'unknown') {
+    issues.push({ id: 'runtime_unknown', label: 'Runtime identity unavailable', hint: 'Inspect the session launch identity before runtime-specific checks' });
+  } else if (!runtimeDiagnostics(diag.runtime)) {
     issues.push({ id: 'runtime_unknown', label: `Diagnostics unavailable for runtime: ${diag.runtime}`, hint: 'This runtime does not provide diagnostics' });
   } else if (!diag.system.network.reachable) {
     const net = diag.system.network;
@@ -538,7 +540,9 @@ function displaySystemGroup(diag, jsonGroup) {
   checks.push(ps.ok ? 'ps available'
     : yellow(`ps ${ps.reason === 'not_found' ? 'not found' : `could not be run (${ps.reason})`}: ${ps.hint}`));
 
-  if (net.reachable) {
+  if (!runtimeDiagnostics(diag.runtime)) {
+    checks.push(dim('network: skipped (runtime diagnostics unavailable)'));
+  } else if (net.reachable) {
     let label = `network: ${diag.apiHost} reachable`;
     if (net.proxy) label += dim(' (via proxy)');
     checks.push(label);
@@ -1051,7 +1055,7 @@ export async function doctorCommand(args, upstreamSource) {
   }
 
   // No auto-fix — bottom message based on network availability
-  if (!diag.system.network.reachable) {
+  if (runtimeDiagnostics(diag.runtime) && !diag.system.network.reachable) {
     console.log(`\n  ${yellow('Check your network connection and run')} ${bold('zylos doctor')} ${yellow('again.')}\n`);
   } else {
     console.log(`\n  ${yellow('Run')} ${bold('zylos init')} ${yellow('to set up your environment.')}\n`);

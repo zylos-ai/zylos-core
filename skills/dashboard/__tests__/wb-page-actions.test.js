@@ -165,7 +165,7 @@ test('restart fallback binds only a readable run on the same viewed machine', ()
 });
 
 test('Antigravity and unknown runtime confirmations name the viewed instance runtime', async () => {
-  for (const [runtime, name] of [['agy', 'Antigravity'], ['future', 'future']]) {
+  for (const [runtime, name] of [['agy', 'Antigravity'], ['future', 'future'], [null, 'wb.unknown'], ['', 'wb.unknown']]) {
     const a = actions({ runtime }); await a.run.exec('upgrade-cc');
     assert.deepEqual(a.asked, ['confirm.upgrade_runtime:' + JSON.stringify({ runtime: name })]);
     assert.equal(a.sent.length, 1);
