@@ -1,3 +1,8 @@
+export function actionFailureMessage(action, runtime, error, t) {
+  return action === 'upgrade-cc' && runtime === 'agy'
+    ? t('result.agy_upgrade_unknown') : t('status.failed', { error: error.message });
+}
+
 export function formatActionResult(result, t) {
   let summary = null;
   if (result?.messageKey) {

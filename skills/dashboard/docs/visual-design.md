@@ -237,6 +237,8 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] Automatic naming and deletion safety checks explain permission refusals without suggesting a retry. Naming retains its existing network/unknown-result and temporary-failure messages; raw error details remain folded in the technical view. These explanations share the scheduled-task permission mapping. Scheduled-task permission refusals show only the localized explanation, without appending the raw server message; other error details retain their existing formatting.
 
+[Current] The settings version panel and CLI upgrade confirmation use Antigravity for an `agy` instance; Claude and Codex retain their existing labels. CLI upgrade results identify Antigravity, and an unknown runtime receives an explicit unsupported result. Layout and control dimensions are unchanged.
+
 ## 8. Review Checklist and Browser Gates
 
 [Approved] Read this document before every visual change, check delivery against all eight sections, and update affected rules. The approved requirements in the decision list govern the 22 decisions; historical values help locate migrations. Documentation-only changes do not introduce product mechanisms or site-wide tests.

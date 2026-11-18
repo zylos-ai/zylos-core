@@ -218,7 +218,9 @@ Example: `POST /api/instance/actions/upgrade` with `{}`.
 
 Returns `ok:boolean`, optional `message:string`, `output:string`, `requires_restart:boolean` and localization fields. Restart applies the installed CLI to a session.
 
-**Errors:** 502 `upgrade_failed`; 409 `duplicate_request`; common write errors.
+**Runtime behavior:** Claude runs `claude update`, Codex runs `codex update`, and Antigravity runs `agy update` non-interactively (5-minute timeout, background auto-update disabled). An unknown runtime returns `runtime_unsupported` without executing a command. Antigravity success and failure messages name Antigravity; successful responses request a session restart. This action uses the instance default runtime, not a session-group override. A lost HTTP reply or an upstream 5xx without a confirmed upgrade outcome is displayed as an unknown Antigravity result; check the installed version before retrying because the update may still be running.
+
+**Errors:** 400 `runtime_unsupported`; 504 `deadline_exceeded` (Antigravity did not complete; verify the installed version before retrying); 502 `upgrade_failed`; 409 `duplicate_request`; common write errors.
 
 Example: `POST /api/instance/actions/upgrade-runtime` with `{}`.
 

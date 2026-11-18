@@ -9,7 +9,8 @@ export function actionConfirmText(action, body, { t, runtime = null, effortLabel
     'switch-model': () => t('confirm.switch_model', { value: body?.model }),
     'switch-effort': () => t('confirm.switch_effort', { value: effortLabel(body?.effort) }),
     'upgrade-zylos': () => t('confirm.upgrade_zylos'),
-    'upgrade-cc': () => runtime === 'codex' ? t('confirm.upgrade_codex') : t('confirm.upgrade_cc'),
+    'upgrade-cc': () => runtime === 'codex' ? t('confirm.upgrade_codex') : runtime === 'claude' ? t('confirm.upgrade_cc')
+      : t('confirm.upgrade_runtime', { runtime: runtime === 'agy' ? 'Antigravity' : runtime ?? 'Unknown runtime' }),
   };
   return labels[action]?.() || t('confirm.fallback', { action });
 }
