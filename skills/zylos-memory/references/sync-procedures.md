@@ -10,6 +10,7 @@ inherited absolute ZYLOS_DIR when different).
 | sync-files.js | `~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js` |
 | origin-cursor.js | `~/zylos/.claude/skills/zylos-memory/scripts/origin-cursor.js` |
 | reference-index.js | `~/zylos/.claude/skills/zylos-memory/scripts/reference-index.js` |
+| memory-status.js | `~/zylos/.claude/skills/zylos-memory/scripts/memory-status.js` |
 | memory-append.js | `~/zylos/.claude/skills/zylos-memory/scripts/memory-append.js` |
 | request-rotation.js | `~/zylos/.claude/skills/zylos-memory/scripts/request-rotation.js` |
 | c4-fetch.js | `~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js` |
@@ -377,8 +378,15 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
    needed" for that item and skip its manual inspection. If the check fails,
    report it and inspect both items manually; do not assume a zero count.
    Execute items 1 and 3 every run, including on the first Sync with no pages.
-   Check shared file
-   content/size as part of the audit. In the Sync report, write one result sentence
+   Check shared file content as part of the audit. Run
+   `node ~/zylos/.claude/skills/zylos-memory/scripts/memory-status.js` to measure
+   `identity.md` and `references.md` against both startup character and estimated-token
+   limits; do not infer their status from byte sizes. In the Sync report, explicitly
+   list either file reported as `WARN` or `OVER`, including its reported character
+   and estimated-token usage. If both files are `OK`, state that both are within
+   the warning thresholds. Report any missing file or command failure instead of
+   assuming the files fit. This is an audit result, not an extra owner/system alert, and does
+   not block writes. In the Sync report, write one result sentence
    for each item: what was done, why no action was needed, or what failed.
    1. Run `node ~/zylos/.claude/skills/zylos-memory/scripts/reference-index.js rebuild`.
    2. When `navigation.count` is nonzero, inspect the reported locations.

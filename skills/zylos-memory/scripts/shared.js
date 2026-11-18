@@ -11,22 +11,6 @@ export const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos
 export const MEMORY_DIR = path.join(ZYLOS_DIR, 'memory');
 export const SESSIONS_DIR = path.join(MEMORY_DIR, 'sessions');
 
-export const BUDGETS = {
-  'identity.md': 16 * 1024,
-  'references.md': 16 * 1024,
-  'reference/projects/INDEX.md': 32 * 1024,
-  'reference/decisions/INDEX.md': 32 * 1024
-};
-
-// Early-warning thresholds below the hard budget: a file over its warn
-// threshold is still within budget, but must be audited on the next
-// Memory Sync before the budgeted files grow further.
-export const WARN_THRESHOLDS = {
-  'references.md': 8 * 1024,
-  'reference/projects/INDEX.md': 16 * 1024,
-  'reference/decisions/INDEX.md': 16 * 1024
-};
-
 export const OPTIONAL_BUDGET_FILES = new Set([
   'reference/projects/INDEX.md',
   'reference/decisions/INDEX.md'

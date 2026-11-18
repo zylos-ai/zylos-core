@@ -59,6 +59,13 @@ export function memoryBudgetRows(tree, budgets) {
     if (!file) return [];
     const limit = path === 'state.md' ? null : budgets?.limits?.[path] ?? null;
     const warning = path === 'state.md' ? null : budgets?.warnings?.[path] ?? null;
+    if (limit && typeof limit === 'object') {
+      const check = budgets?.checks?.[path];
+      if (!check) return [{ path, size: file.size_bytes, limit: null, warning: null, over: null, warned: null }];
+      const usage = Math.max(check.chars / check.maxChars, check.estimatedTokens / check.maxTokens) * 100;
+      return [{ path, check, size: usage, limit: 100, warning: 80,
+        over: Math.max(0, usage - 100), warned: check.status !== 'ok' }];
+    }
     return [{ path, size: file.size_bytes, limit, warning,
       over: limit == null ? null : Math.max(0, file.size_bytes - limit),
       warned: warning == null ? null : file.size_bytes > warning }];
@@ -543,12 +550,12 @@ export function createMemoryScope({ document = globalThis.document, root, charts
         if (row.over > 0) {
           const excess = element(document, 'span', undefined, 'wb-memory-fill excess'); excess.style.width = `${100 * row.over / max}%`; track.append(excess);
         }
-        if (isNumber(row.warning)) { const warning = element(document, 'span', undefined, 'wb-memory-threshold'); warning.style.left = `${100 * row.warning / max}%`; warning.title = t('wb.memory.warnAt', { size: byteSize(row.warning) }); track.append(warning); }
-        track.setAttribute('aria-label', t('wb.memory.sizeBudget', { size: byteSize(row.size), budget: byteSize(row.limit) }));
+        if (isNumber(row.warning)) { const warning = element(document, 'span', undefined, 'wb-memory-threshold'); warning.style.left = `${100 * row.warning / max}%`; warning.title = row.check ? t('wb.memory.startupWarning') : t('wb.memory.warnAt', { size: byteSize(row.warning) }); track.append(warning); }
+        track.setAttribute('aria-label', row.check ? t('wb.memory.startupUsage', row.check) : t('wb.memory.sizeBudget', { size: byteSize(row.size), budget: byteSize(row.limit) }));
       }
-      item.append(track, element(document, 'span', byteSize(row.size) + (isNumber(row.limit) ? ' / ' + byteSize(row.limit) : ''), 'wb-memory-chart-value'));
+      item.append(track, element(document, 'span', row.check ? t('wb.memory.startupUsage', row.check) : byteSize(row.size) + (isNumber(row.limit) ? ' / ' + byteSize(row.limit) : ''), 'wb-memory-chart-value'));
       const flags = element(document, 'span', undefined, 'wb-memory-flags');
-      if (row.over > 0) flags.append(element(document, 'span', t('wb.memory.overBudget', { size: byteSize(row.over) }), 'wb-memory-warning'));
+      if (row.over > 0) flags.append(element(document, 'span', row.check ? t('wb.memory.startupOver') : t('wb.memory.overBudget', { size: byteSize(row.over) }), 'wb-memory-warning'));
       else if (row.warned) flags.append(element(document, 'span', t('wb.memory.warning'), 'wb-memory-warning'));
       item.append(flags);
       budgets.append(item);

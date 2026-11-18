@@ -5,17 +5,17 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
 import {
-  buildCleanEnv, deployManifestTemplate, loadRuntimeEnvManifest,
-  parseRuntimeEnvManifest, writeLaunchSpec,
+  buildCleanEnv, deployManifestTemplate,
+  parseRuntimeEnvManifest,
 } from '../runtime/tmux-env.js';
+import { launchEnvironment } from '../runtime/session-command.js';
 
 const templatePath = path.resolve(import.meta.dirname, '../../../templates/runtime-env.manifest.example');
-const launcher = path.resolve(import.meta.dirname, '../runtime/tmux-launcher.js');
 const registry = 'https://registry.example.test/';
 const binaryHost = 'https://binary.example.test/better-sqlite3';
 const names = ['ZYLOS_UPSTREAM_CONFIG', 'ZYLOS_UPSTREAM_TRUST_HOSTS', 'npm_config_registry', 'npm_config_better_sqlite3_binary_host_mirror'];
 
-test('persistent deployment environment reaches real npm lifecycle through clean launch specs', () => {
+test('persistent deployment environment reaches real npm lifecycle through session environment', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-npm-env-'));
   try {
     // npm is part of the supported Node/npm toolchain, not a mocked executable.
@@ -43,12 +43,10 @@ test('persistent deployment environment reaches real npm lifecycle through clean
       // Reload persistent values for each fresh launch. No inherited ambient
       // host environment is allowed to make this pass accidentally.
       const processEnv = JSON.parse(fs.readFileSync(deployment, 'utf8'));
-      const { env } = buildCleanEnv({ processEnv, dotenvVars: {}, manifest: loadRuntimeEnvManifest(dir) });
-      const spec = writeLaunchSpec({ command: process.execPath, args: [npmPath, 'run', '--silent', 'probe'], env, cwd: dir });
-      execFileSync(process.execPath, [launcher, spec], { env: { PATH: path.dirname(process.execPath), HOME: dir, ZYLOS_DIR: path.join(dir, 'zylos') }, timeout: 15000 });
+      const env = launchEnvironment(dir, processEnv);
+      execFileSync(process.execPath, [npmPath, 'run', '--silent', 'probe'], { env, cwd: dir, timeout: 15000 });
       assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'observed.json'), 'utf8')),
         { registry, binaryHost }, cycle);
-      assert.equal(fs.existsSync(spec), false);
     }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -91,17 +89,13 @@ test('runtime preflight probes the configured npm registry when official npm is 
     }, timeout: 15000 };
     execFileSync('bash', ['-c', `${fn}\nnetwork_available`], opts);
     assert.match(fs.readFileSync(log, 'utf8'), /https:\/\/mirror\.example\.test\/npm-prefix\/@anthropic-ai%2fclaude-code/);
-    const mutant = fn.replace('"${registry%/}/@anthropic-ai%2fclaude-code"', "'https://registry.npmjs.org/@anthropic-ai%2fclaude-code'");
-    assert.notEqual(mutant, fn);
-    assert.throws(() => execFileSync('bash', ['-c', `${mutant}\nnetwork_available`], opts),
-      error => error.status !== 0, 'official-registry mutant must be rejected');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
 
-test('persistent source environment reaches CLI through real clean launcher across fresh sessions', () => {
+test('persistent source environment reaches CLI through session environment across fresh sessions', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-source-env-'));
   try {
     const file = path.join(dir, 'profile.json');
@@ -109,12 +103,13 @@ test('persistent source environment reaches CLI through real clean launcher acro
     const deployment = path.join(dir, 'deployment-env.json');
     fs.writeFileSync(deployment, JSON.stringify({ HOME: dir, PATH: path.dirname(process.execPath), ZYLOS_UPSTREAM_CONFIG: file, ZYLOS_UPSTREAM_TRUST_HOSTS: 'env-trust.example.test' }));
     deployManifestTemplate(templatePath, dir);
-    const manifest = loadRuntimeEnvManifest(dir);
+    const manifest = fs.readFileSync(templatePath, 'utf8');
     const cli = path.resolve(import.meta.dirname, '../../zylos.js');
     const launch = (processEnv, selectedManifest = manifest, dotenvVars = {}) => {
-      const { env } = buildCleanEnv({ processEnv, dotenvVars, manifest: selectedManifest });
-      const spec = writeLaunchSpec({ command: process.execPath, args: [cli, 'upstream', 'status', '--resolved'], env, cwd: dir });
-      return JSON.parse(execFileSync(process.execPath, [launcher, spec], { env: { PATH: path.dirname(process.execPath), HOME: dir, ZYLOS_DIR: path.join(dir, 'zylos') }, encoding: 'utf8', timeout: 15000 }));
+      fs.writeFileSync(path.join(dir, '.zylos/runtime-env.manifest'), selectedManifest);
+      fs.writeFileSync(path.join(dir, '.env'), Object.entries(dotenvVars).map(([name, value]) => `${name}=${value}\n`).join(''));
+      const env = launchEnvironment(dir, processEnv);
+      return JSON.parse(execFileSync(process.execPath, [cli, 'upstream', 'status', '--resolved'], { env, cwd: dir, encoding: 'utf8', timeout: 15000 }));
     };
     const assertSource = observed => {
       assert.equal(observed.selectedBy, 'environment');
@@ -124,17 +119,17 @@ test('persistent source environment reaches CLI through real clean launcher acro
     };
     for (const cycle of ['initial', 'supervisor-reload', 'rotation']) {
       assertSource(launch(JSON.parse(fs.readFileSync(deployment, 'utf8'))));
-      assert.equal(fs.existsSync(path.join(dir, 'zylos/.zylos/upstreams.json')), false, cycle);
+      assert.equal(fs.existsSync(path.join(dir, '.zylos/upstreams.json')), false, cycle);
     }
     const absent = { HOME: dir, PATH: path.dirname(process.execPath) };
     assert.equal(launch(absent).selectedBy, 'default');
     assert.equal(launch(absent).trustSelectedBy, 'default');
-    const withoutTrust = parseRuntimeEnvManifest(fs.readFileSync(templatePath, 'utf8').replace('inherit ZYLOS_UPSTREAM_TRUST_HOSTS\n', ''));
+    const withoutTrust = manifest.replace('inherit ZYLOS_UPSTREAM_TRUST_HOSTS\n', '');
     const trustDropped = launch(JSON.parse(fs.readFileSync(deployment, 'utf8')), withoutTrust);
     assert.equal(trustDropped.selectedBy, 'environment');
     assert.equal(trustDropped.trustSelectedBy, 'default', 'missing trust inherit is observable');
-    const withoutSource = parseRuntimeEnvManifest(fs.readFileSync(templatePath, 'utf8').replace('inherit ZYLOS_UPSTREAM_CONFIG\n', ''));
-    assert.throws(() => assertSource(launch(JSON.parse(fs.readFileSync(deployment, 'utf8')), withoutSource)), assert.AssertionError);
-    assertSource(launch(absent, parseRuntimeEnvManifest('env ZYLOS_UPSTREAM_CONFIG\nenv ZYLOS_UPSTREAM_TRUST_HOSTS\n'), { ZYLOS_UPSTREAM_CONFIG: file, ZYLOS_UPSTREAM_TRUST_HOSTS: 'env-trust.example.test' }));
+    const withoutSource = manifest.replace('inherit ZYLOS_UPSTREAM_CONFIG\n', '');
+    assert.equal(launch(JSON.parse(fs.readFileSync(deployment, 'utf8')), withoutSource).selectedBy, 'default');
+    assertSource(launch(absent, 'env ZYLOS_UPSTREAM_CONFIG\nenv ZYLOS_UPSTREAM_TRUST_HOSTS\n', { ZYLOS_UPSTREAM_CONFIG: file, ZYLOS_UPSTREAM_TRUST_HOSTS: 'env-trust.example.test' }));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

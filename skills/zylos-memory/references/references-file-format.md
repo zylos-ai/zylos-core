@@ -11,10 +11,7 @@ Always loaded at session start via SessionStart hook.
 
 ## Size Guideline
 
-Target ≤8KB (warn threshold, reported as WARN by `memory-status.js`);
-hard budget 16KB. Pointer/index only, not prose. A healthy instance core
-is ~4-5KB — sustained growth past the warn threshold means narrative
-content is leaking in and the content rules below are being violated.
+Use the [startup display budget](memory-budget.md): both character and estimated-token limits apply, with an audit warning at 80% of either. Keep this file a pointer/index, not narrative prose. Audit growth at warning or over-limit status on the next Memory Sync. Writes are never blocked by the budget.
 
 ## Update Frequency
 
