@@ -836,7 +836,8 @@ export async function runWorkbenchBrowser(t, sandbox) {
       assert.match(top.first, /wb-usage-controls/);
       assert.ok(top.gap >= 8 && top.gap <= 40, `${width}: the controls sit just under the header (${top.gap}px)`);
       // The cost's "Other" line (the fixture's $1.25) sits under the runtime line inside the cost total, left of the
-      // number on phones, without sideways scrolling.
+      // number on phones, without sideways scrolling. The range buttons can appear before the usage data renders.
+      await page.locator('.wb-usage-total .wb-usage-other').first().waitFor();
       const other = await page.evaluate(() => {
         const line = document.querySelector('.wb-usage-total .wb-usage-other');
         const box = line?.closest('.wb-usage-total');
