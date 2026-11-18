@@ -491,7 +491,7 @@ test('missing, env-less and unparseable settings.json print nothing and every sa
 // failure result still carries the warning (error.warnings) and the text output
 // prints it before the error.
 for (const [name, changes, code] of [
-  ['the auth probe fails', { adapter: () => ({ checkAuth: async () => ({ status: 'failure' }) }) }, 'AUTH_NOT_CONFIRMED'],
+  ['the auth probe fails', { adapter: () => ({ checkAuth: async () => ({ status: 'failure' }) }) }, 'AUTH_FAILED'],
   ['hooks are not ready', { hooksReady: () => ({ ready: false }) }, 'HOOKS_NOT_READY'],
   ['the config write fails', { write: () => { throw Object.assign(new Error('config write failed'), { code: 'CONFIG_WRITE_FAILED' }); } }, 'CONFIG_WRITE_FAILED'],
 ]) test(`zylos runtime --save-apikey keeps the settings.json warning when ${name} after the save`, async () => {
@@ -519,7 +519,7 @@ test('zylos runtime text output prints the settings.json warning before the erro
   finally { console.error = original.error; console.log = original.log; process.exitCode = exitCode; }
   assert.equal(result.ok, false);
   const warning = errors.findIndex(line => line.startsWith(`Warning [${OVERRIDE}]: `));
-  const failure = errors.findIndex(line => line.startsWith('Error [AUTH_NOT_CONFIRMED]: '));
+  const failure = errors.findIndex(line => line.startsWith('Error [AUTH_FAILED]: '));
   assert.ok(warning >= 0, 'the warning is printed on stderr');
   assert.ok(failure > warning, 'the warning comes before the error');
   assert.deepEqual(overrideKeys(errors[warning].slice(`Warning [${OVERRIDE}]: `.length)), ['ANTHROPIC_API_KEY']);

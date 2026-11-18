@@ -161,7 +161,7 @@ export class ClaudeAdapter extends SessionAdapter {
       return { status: 'success', reason: 'cli_probe' };
     } catch (err) {
       const output = (err.stdout ?? '') + (err.stderr ?? '');
-      if (output.includes('authentication_error')) {
+      if (typeof err.code === 'number' && output.includes('authentication_error')) {
         return { status: 'failure', reason: 'cli_probe_authentication_error' };
       }
       const isTransient =
@@ -176,6 +176,11 @@ export class ClaudeAdapter extends SessionAdapter {
       }
       if (typeof err.code === 'number' && output.includes('Not logged in')) {
         return { status: 'failure', reason: 'cli_probe_not_logged_in' };
+      }
+      if (typeof err.code === 'number' && [
+        'Invalid API key', 'Invalid auth token', 'Authentication required',
+      ].some(message => output.includes(message))) {
+        return { status: 'failure', reason: 'cli_probe_credentials_rejected' };
       }
       return { status: 'uncertain', reason: 'cli_probe_unexpected_error' };
     }

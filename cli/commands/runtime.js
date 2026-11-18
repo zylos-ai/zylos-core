@@ -379,7 +379,16 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
     else {
       let auth;
       try { auth = await selected.checkAuth(); } catch { auth = { status: 'uncertain' }; }
-      if (auth.status !== 'success') return fail(target === 'agy' && auth.status === 'failure' ? 'AUTH_FAILED' : 'AUTH_NOT_CONFIRMED', `${target} authentication not confirmed; run zylos auth ${target}`, { authStatus: auth.status === 'failure' ? 'failure' : 'uncertain' });
+      if (auth.status !== 'success') {
+        const rejected = auth.status === 'failure';
+        const remedy = target === 'agy'
+          ? `replace the API key with zylos runtime agy --save-apikey <key>`
+          : `replace credentials or log in again with zylos auth ${target}`;
+        const message = rejected
+          ? `${target} credentials rejected or not logged in; ${remedy}`
+          : `${target} authentication could not be confirmed; check network/proxy connectivity, then retry zylos runtime ${target}`;
+        return fail(rejected ? 'AUTH_FAILED' : 'AUTH_NOT_CONFIRMED', message, { authStatus: rejected ? 'failure' : 'uncertain' });
+      }
     }
     try {
       const saved = write({ set: { runtime: target } });
@@ -449,7 +458,9 @@ Validation:
 
 Exit codes:
   0  Success
-  1  Failed; AUTH_NOT_CONFIRMED requires zylos auth <runtime>
+  1  Failed; AUTH_FAILED requires new credentials or login via zylos auth <runtime>
+     (agy: replace the key with zylos runtime agy --save-apikey <key>);
+     AUTH_NOT_CONFIRMED requires checking network/proxy before retrying
 
 Examples:
   zylos runtime status

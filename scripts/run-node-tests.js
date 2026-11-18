@@ -66,6 +66,7 @@ const ROOT_NODE_TESTS = [
   'test/upgrade-db-maintenance.integration.test.js',
   'test/session-release.integration.test.js',
   'test/component-source-record.integration.test.js',
+  'test/runtime-auth-display.integration.test.js',
 ];
 const TEST_ROOTS = [
   path.join(ROOT, 'skills', 'dashboard', '__tests__'),

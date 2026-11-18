@@ -133,7 +133,7 @@ export async function handleAction(action, body, config, { timezone } = {}) {
     result = { ok: false, error: 'internal_error', message: err.message, messageKey: 'result.internal_error', messageParams: { error: err.message } };
   }
 
-  if (action === 'switch-runtime' && !result.ok && result.error?.code === 'AUTH_NOT_CONFIRMED') {
+  if (action === 'switch-runtime' && !result.ok && ['AUTH_FAILED', 'AUTH_NOT_CONFIRMED'].includes(result.error?.code)) {
     result = { ...result, messageKey: null,
       message: [result.error.code, result.error.message].filter(Boolean).join(': ') };
   }
