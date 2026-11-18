@@ -240,3 +240,7 @@ actual refresh command in the component's own instructions.
 Keep cache reads small and bounded. Do not fall back to fetching the remote
 source inside `emit`: a missing cache should be obvious context, not another
 slow startup attempt.
+
+Over-budget shard notices appear immediately after the numbered header, before
+the retained body. They state the amount displayed and require reading the full
+copy at its spill path first. No separate system notification is sent.

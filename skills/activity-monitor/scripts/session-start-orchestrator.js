@@ -15,6 +15,8 @@
  */
 
 import fs from 'node:fs';
+import { shardHeader, predecessorWaitNote } from './shard-format.js';
+export { shardHeader } from './shard-format.js';
 import os from 'node:os';
 import path from 'node:path';
 import { isMainModule } from './is-main-module.js';
@@ -284,17 +286,6 @@ export async function runSessionStartOrchestrator(payload = {}, {
   }
 }
 
-/**
- * Numbered self-describing shard header. This is the fail-safe half of the
- * ordering design: a crashed shard leaves no trace in context at all (only a
- * transcript-level hook error), so a missing [k/N] number is the ONLY
- * in-context signal that a shard was lost. The header sits within the first
- * 2KB, so it survives the persisted-output preview if a budget is ever blown.
- */
-export function shardHeader({ position, total, name, waitNote = '' }) {
-  return `=== ZYLOS STARTUP CONTEXT [${position}/${total}] ${name}${waitNote ? ` (${waitNote})` : ''} ===`;
-}
-
 export function shardSpillPath(sessionId, shardName, { tmpdir = os.tmpdir() } = {}) {
   const cleaned = String(sessionId || 'nosession').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 128);
   return path.join(tmpdir, SPILL_ROOT_NAME, cleaned, `${shardName}.txt`);
@@ -314,14 +305,14 @@ export function composeShardOutput({ header, body, budget, spillPath }) {
   }
 
   const notice = keptChars =>
-    `\n[shard output truncated: first ${keptChars} of ${trimmedBody.length} chars inline; full section saved to: ${spillPath}]`;
-  const worstOverhead = `${header}${notice(trimmedBody.length)}\n`;
+    `[shard output truncated: exceeds startup display limit; showing ${keptChars} of ${trimmedBody.length} chars. Read the full copy first: ${spillPath}]`;
+  const worstOverhead = `${header}\n${notice(trimmedBody.length)}\n\n`;
   const fit = fitToBudget(trimmedBody, {
-    maxChars: Math.max(0, budget.maxChars - (worstOverhead.length + 1)),
+    maxChars: Math.max(0, budget.maxChars - worstOverhead.length),
     maxTokens: Math.max(0, budget.maxTokens - estimateTokens(worstOverhead)),
   });
   return {
-    output: `${header}\n${fit.text}${notice(fit.text.length)}\n`,
+    output: `${header}\n${notice(fit.text.length)}\n${fit.text}\n`,
     truncated: true,
     fullBody: trimmedBody,
   };
@@ -443,7 +434,7 @@ export async function runSessionStartShard(name, payload = {}, {
       ...sequencerOptions,
     });
     waitExtra = `wait=${wait.ok ? 'ok' : 'timeout'}:${wait.waitedMs}`;
-    if (!wait.ok) waitNote = `predecessor "${predecessor.name}" not ready after ${wait.waitedMs}ms, continued`;
+    if (!wait.ok) waitNote = predecessorWaitNote(predecessor.name, wait.waitedMs);
   } else if (!sessionId) {
     console.error(`[session-start-orchestrator] shard "${name}": no session_id in hook payload; emitting without serialization`);
   }

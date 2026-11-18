@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { BUDGETS, WARN_THRESHOLDS, measureMemoryText } from '../../zylos-memory/scripts/memory-budget.js';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createDocument, allNodes, deferred } from './fixtures/workbench-dom.js';
@@ -14,9 +15,10 @@ const file = (path, size_bytes = 100) => ({ path, name: path.split('/').at(-1), 
 const dir = (path, children) => ({ path, name: path.split('/').at(-1), type: 'directory', children });
 function tree() {
   const groups = dir('session-groups', [dir('session-groups/telegram:dm-1001', [file('session-groups/telegram:dm-1001/handoff.md')]), dir('session-groups/bad name', [file('session-groups/bad name/notes.md')])]);
-  const root = dir('', [file('identity.md', 17000), file('references.md', 9000), file('state.md', 33000), dir('users', [file('users/profile.md')]), groups]);
+  const root = dir('', [file('identity.md', 17000), file('references.md', 8000), file('state.md', 33000), dir('users', [file('users/profile.md')]), groups]);
   return { root, sessionGroups: groups.children.filter(child => parseSessionGroup(child.name)).map(child => ({ sessionGroup: child.name })) };
 }
+const startupBudgets = () => ({ limits: BUDGETS, warnings: WARN_THRESHOLDS, checks: { 'identity.md': measureMemoryText('identity.md', 'a'.repeat(17000)), 'references.md': measureMemoryText('references.md', 'a'.repeat(8000)) } });
 const nodesOfClass = (root, className) => allNodes(root).filter(node => node.className.split(' ').includes(className));
 function fixture(options = {}) {
   const document = createDocument(), root = document.createElement('div'), chartsRoot = document.createElement('div');
@@ -62,8 +64,8 @@ test('scope controls filter groups and group jumps select the directory without 
 });
 
 test('budget rows use Core supplied thresholds and give state size without a budget', () => {
-  const rows = memoryBudgetRows(tree(), { limits: { 'identity.md': 16384, 'references.md': 16384, 'state.md': 1 }, warnings: { 'references.md': 8192, 'state.md': 1 } });
-  assert.equal(rows[0].over, 616); assert.equal(rows[1].warned, true);
+  const rows = memoryBudgetRows(tree(), startupBudgets());
+  assert.ok(rows[0].over > 0); assert.equal(rows[1].warned, true);
   assert.equal(rows[2].limit, null); assert.equal(rows[2].warning, null); assert.equal(rows[2].size, 33000);
   assert.equal(memoryBudgetRows(tree(), null)[0].limit, null);
 });
@@ -74,14 +76,14 @@ test('technical charts show each threshold, unknown readings, age, Core budgets 
       { sessionGroup: 'telegram:dm-1001', count: 20, threshold: 15, syncing: true, aged: true },
       { sessionGroup: 'openmax:other', count: 3, threshold: 50, syncing: null },
       { sessionGroup: 'other', count: null, threshold: null, syncing: false, reason: '<script>' },
-    ], hasOlder: true, budgets: { limits: { 'identity.md': 16384, 'references.md': 16384 }, warnings: { 'references.md': 8192 } },
+    ], hasOlder: true, budgets: startupBudgets(),
   }) });
   await f.controller.load();
   assert.equal(f.chartsRoot.hidden, false);
   assert.match(f.chartsRoot.textContent, /wb.memory.aged/); assert.match(f.chartsRoot.textContent, /wb.memory.syncing/);
   assert.match(f.chartsRoot.textContent, /wb.memory.syncUnknown/); assert.match(f.chartsRoot.textContent, /wb.unknown/);
-  assert.match(f.chartsRoot.textContent, /wb.memory.overBudget/); assert.match(f.chartsRoot.textContent, /wb.memory.warning/);
-  assert.equal(nodesOfClass(f.chartsRoot, 'wb-memory-threshold').length, 3);
+  assert.match(f.chartsRoot.textContent, /wb.memory.startupOver/); assert.match(f.chartsRoot.textContent, /wb.memory.warning/);
+  assert.equal(nodesOfClass(f.chartsRoot, 'wb-memory-threshold').length, 4);
   assert.equal(nodesOfClass(f.chartsRoot, 'excess').length, 1);
   assert.equal(allNodes(f.chartsRoot).some(node => node.tagName === 'SCRIPT'), false);
   const buttons = allNodes(f.chartsRoot).filter(node => node.tagName === 'BUTTON');
@@ -505,12 +507,13 @@ test('post-save history readback requires the same applied file while allowing n
   assert.equal(memorySaveAppliedCurrent(captured, state, saved), false);
 });
 
-test('the references warning follows Core below, at and above the warning threshold', () => {
+test('the references warning follows Core on both sides of its token threshold', () => {
   const value = tree();
-  for (const size of [8191, 8192, 8193]) {
-    value.root.children.find(file => file.path === 'references.md').size_bytes = size;
-    const row = memoryBudgetRows(value, { limits: { 'references.md': 16384 }, warnings: { 'references.md': 8192 } }).find(row => row.path === 'references.md');
-    assert.equal(row.warned, size > 8192); assert.equal(row.over, 0);
+  const edge = Math.ceil(WARN_THRESHOLDS['references.md'].estimatedTokens);
+  for (const tokens of [edge - 1, edge, edge + 1]) {
+    const check = measureMemoryText('references.md', 'a'.repeat(tokens * 4));
+    const row = memoryBudgetRows(value, { limits: BUDGETS, warnings: WARN_THRESHOLDS, checks: { 'references.md': check } }).find(row => row.path === 'references.md');
+    assert.equal(row.warned, tokens >= edge); assert.equal(row.over, 0);
   }
 });
 

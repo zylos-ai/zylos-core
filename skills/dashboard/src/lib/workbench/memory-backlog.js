@@ -5,7 +5,7 @@ import { parseSessionGroup } from '../../../../comm-bridge/scripts/c4-session-gr
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 const positive = value => Number.isSafeInteger(value) && value > 0 ? value : null;
 const configurationModule = () => import('../../../../activity-monitor/scripts/supervisor-configuration.js');
-const budgetModule = () => import('../../../../zylos-memory/scripts/shared.js');
+const budgetModule = () => import('../../../../zylos-memory/scripts/memory-budget.js');
 
 function timestampMillis(value) {
   if (typeof value !== 'string' || !value) return NaN;
@@ -33,8 +33,14 @@ export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog, origi
   }
   async function budgets() {
     try {
-      const { BUDGETS, WARN_THRESHOLDS } = await loadBudgets();
-      return { limits: { ...BUDGETS }, warnings: { ...WARN_THRESHOLDS } };
+      const { BUDGETS, WARN_THRESHOLDS, measureMemoryText } = await loadBudgets();
+      const checks = {};
+      for (const file of ['identity.md', 'references.md']) {
+        try {
+          checks[file] = measureMemoryText(file, await fs.readFile(path.join(zylosDir, 'memory', file), 'utf8'));
+        } catch { checks[file] = null; }
+      }
+      return { limits: { ...BUDGETS }, warnings: { ...WARN_THRESHOLDS }, checks };
     } catch { return null; }
   }
   return async function getMemoryBacklog(at = now()) {
