@@ -40,7 +40,7 @@ test('in single the Origin conversation shows other conversations and external c
       } });
       const x = await fixture.createConversation('Started in multi');
       const xLocal = x.draft.localId, xGroup = `${x.receipt.namespace}:${xLocal}`;
-      await fixture.convertToSingle();
+      await fixture.switchToSingle();
       const post = content => ({ method: 'POST', body: { content } });
       const own = await fixture.request(`/api/chat/conversations/${ORIGIN_ID}/send`, post('Owner asks Origin'));
       assert.equal(own.status, 200, own.text);

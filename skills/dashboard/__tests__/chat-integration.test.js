@@ -538,11 +538,11 @@ registerIntegrationCase('native single switch retains both history tabs and reje
 });
 
 // Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.
-registerIntegrationCase('after the real conversion to single the Origin page shows internal rows under origin but its list preview does not', async (t, sandbox) => {
+registerIntegrationCase('after the native switch to single the Origin page shows internal rows under origin but its list preview does not', async (t, sandbox) => {
   const a = await createChatApiFixture(t, sandbox);
   const x = await a.createConversation('started in multi');
   const xGroup = `${x.receipt.namespace}:${x.draft.localId}`;
-  await a.convertToSingle();
+  await a.switchToSingle();
   assert.equal(a.readMode(), 'single');
   const originRoute = `/api/chat/conversations/${encodeURIComponent(ORIGIN_CONVERSATION_ID)}`;
   assert.equal((await a.request(`${originRoute}/send`, post({ content: 'owner asks Origin' }))).status, 200);

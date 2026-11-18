@@ -15,11 +15,10 @@ afterEach(async () => {
   workers.clear();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
-function root(mode = 'single') {
+function root() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-recovery-')); roots.push(dir);
-  fs.mkdirSync(path.join(dir, '.zylos')); fs.writeFileSync(path.join(dir, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', session_mode: mode }));
+  fs.mkdirSync(path.join(dir, '.zylos')); fs.writeFileSync(path.join(dir, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', session_mode: 'single' }));
   fs.mkdirSync(path.join(dir, 'memory'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'memory/state.md'), 'prior source state\n');
   return dir;
 }
 function launch(dir, fault = '', initialScenes = []) {
@@ -32,7 +31,11 @@ function launch(dir, fault = '', initialScenes = []) {
   const next = () => messages.length ? Promise.resolve(messages.shift()) : new Promise((resolve, reject) => waits.push({ resolve, reject }));
   const worker = { child, next, stderr: () => stderr, command: async value => { child.send(value); const answer = await next(); assert.equal(answer.error, undefined, answer.stack); return answer; } }; workers.add(worker); return worker;
 }
+// Keep startup explicit and empty, then admit the missing-key first migration
+// through the real socket before the next observation tick.
 async function request(dir, target = 'multi') {
+  fs.writeFileSync(path.join(dir, '.zylos/config.json'), JSON.stringify({ runtime: 'claude' }));
+  fs.writeFileSync(path.join(dir, 'memory/state.md'), 'prior source state\n');
   const socket = net.createConnection(path.join(dir, 'activity-monitor/am.sock')); await once(socket, 'connect');
   socket.end(JSON.stringify({ version: 1, type: 'mode_switch', requestId: 'mode-switch-integration', target }) + '\n');
   let text = ''; for await (const chunk of socket) text += chunk; return JSON.parse(text);
@@ -43,9 +46,9 @@ async function finish(worker) {
   for (let index = 0; index < 8; index++) { value = await worker.command('tick'); if (value.last?.phase === 'complete' && !value.row) return value; }
   throw new Error(`Transition failed to finish: ${JSON.stringify(value)}`);
 }
-for (const source of ['single', 'multi']) for (const phase of ['gating', 'converting', 'cutover']) test(`${source} real supervisor crash during ${phase} resumes same /cutoff and completes atomically`, async () => {
-  const target = source === 'single' ? 'multi' : 'single';
-  const dir = root(source); let worker = launch(dir); expect((await worker.next()).ready).toBe(true);
+for (const phase of ['gating', 'converting', 'cutover']) test(`first migration real supervisor crash during ${phase} resumes same /cutoff and completes atomically`, async () => {
+  const target = 'multi';
+  const dir = root(); let worker = launch(dir); expect((await worker.next()).ready).toBe(true);
   await worker.command({ seed: [{ content: 'pending source message' }] });
   const accepted = await request(dir, target); expect(accepted.result).toBe('accepted');
   if (phase !== 'gating') await worker.command('tick');
@@ -54,19 +57,20 @@ for (const source of ['single', 'multi']) for (const phase of ['gating', 'conver
   await kill(worker); worker = launch(dir); const restored = await worker.next(); expect(restored.ready).toBe(true);
   const done = await finish(worker); expect(done.last.run_id).toBe(accepted.runId); expect(done.last.cutoff).toBe(before.row.cutoff ?? 1);
   expect(done.fences).toEqual([]); expect(done.mode.mode).toBe(target);
-  if (source === 'single') expect(fs.readFileSync(path.join(dir, 'memory/state.md'), 'utf8')).toBe('prior source state\n');
+  expect(fs.existsSync(path.join(dir, 'memory/state.md'))).toBe(false);
+  expect(fs.readFileSync(path.join(dir, 'memory/mode-switch', accepted.runId, 'previous/_global/state.md'), 'utf8')).toBe('prior source state\n');
 }, 20000);
 
-for (const source of ['single','multi']) for (const point of ['before-config', 'after-config', 'before-confirm', 'before-complete', 'after-complete']) test(`${source} real supervisor SIGKILL ${point} preserves artifacts and recovers forward`, async () => {
-  const target=source==='single'?'multi':'single';
-  const dir = root(source); let worker = launch(dir, point); await worker.next();
+for (const point of ['before-config', 'after-config', 'before-confirm', 'before-complete', 'after-complete']) test(`first migration real supervisor SIGKILL ${point} preserves artifacts and recovers forward`, async () => {
+  const target='multi';
+  const dir = root(); let worker = launch(dir, point); await worker.next();
   await worker.command({ seed: [{ content: 'pending source message' }] });
   const accepted = await request(dir,target);
   await worker.command('tick'); await worker.command('tick');
   let signal = await worker.command('tick');
   if (!signal.boundary) signal = await worker.command('tick');
   expect(signal.boundary).toBe(point);
-  const state = path.join(dir, source==='single'?'memory/session-groups/origin/state.md':'memory/state.md');
+  const state = path.join(dir, 'memory/session-groups/origin/state.md');
   const written = fs.readFileSync(state, 'utf8');
   await kill(worker); worker = launch(dir); const first = await worker.next();
   const done = first.last?.phase === 'complete' ? first : await finish(worker);
@@ -74,9 +78,9 @@ for (const source of ['single','multi']) for (const point of ['before-config', '
   expect(fs.readFileSync(state, 'utf8')).toBe(written);
 }, 20000);
 
-for (const source of ['single','multi']) test(`${source} real reclaim waits starting runtime then ends exact source run`, async () => {
-  const dir=root(source), worker=launch(dir); await worker.next();
-  const target=source==='single'?'multi':'single';
+test(`first migration real reclaim waits starting runtime then ends exact source run`, async () => {
+  const dir=root(), worker=launch(dir); await worker.next();
+  const target='multi';
   await worker.command({scenes:[{sessionGroup:'origin',runId:'old-source',present:true,ready:false,processRunning:false}]});
   const accepted=await request(dir,target); expect(accepted.result).toBe('accepted');
   const waiting=await worker.command('tick'); expect(waiting.row.phase).toBe('gating'); expect(waiting.stoppedRuns).toEqual([]);
@@ -86,9 +90,9 @@ for (const source of ['single','multi']) test(`${source} real reclaim waits star
   const done=await finish(worker); expect(done.mode.mode).toBe(target); expect(done.fences).toEqual([]);
 },20000);
 
-for (const source of ['single','multi']) test(`${source} converting recovery keeps frozen cutoff and leaves later input pending`,async()=>{
- const dir=root(source); let worker=launch(dir); await worker.next();
- await worker.command({seed:[{content:'before cutoff'}]}); const accepted=await request(dir,source==='single'?'multi':'single');
+test(`first migration converting recovery keeps frozen cutoff and leaves later input pending`,async()=>{
+ const dir=root(); let worker=launch(dir); await worker.next();
+ await worker.command({seed:[{content:'before cutoff'}]}); const accepted=await request(dir,'multi');
  const absorbed=await worker.command('tick'); expect(absorbed.row.phase).toBe('converting'); expect(absorbed.row.cutoff).toBe(1);
  await worker.command({seed:[{content:'after cutoff'}]}); await kill(worker); worker=launch(dir); await worker.next();
  const done=await finish(worker); expect(done.last.run_id).toBe(accepted.runId); expect(done.last.cutoff).toBe(1); expect(done.last.absorbed_ids).toEqual([1]);
@@ -105,7 +109,7 @@ test('real supervisor conversion/config/PM2 failures persist reasons, dedup A-B-
  }
  expect(diagnostics(dir).filter(e=>e.event==='transition_convert_failed').map(e=>e.reason)).toEqual(['conversion_failed:export:EIO','conversion_failed:check:EIO','conversion_failed:export:EIO']);
  await worker.command({failure:''}); expect((await worker.command('tick')).row.phase).toBe('cutover');
- await worker.command({failure:'config'}); let state=await worker.command('tick'); expect(state.row.reason).toBe('config_write_failed:CONFIG_LOCK_TIMEOUT'); expect(state.mode.mode).toBe('single');
+ await worker.command({failure:'config'}); let state=await worker.command('tick'); expect(state.row.reason).toBe('config_write_failed:CONFIG_LOCK_TIMEOUT'); expect(state.mode).toMatchObject({ keyPresent: false, mode: null });
  await worker.command({failure:'pm2'}); state=await worker.command('tick'); expect(state.row.reason).toBe('dispatcher_restart_unconfirmed'); expect(state.mode.mode).toBe('multi'); expect(state.fences.map(f=>f.sessionGroup)).toEqual(['*']);
  await worker.command({failure:''}); const done=await finish(worker); expect(done.last.run_id).toBe(accepted.runId); expect(done.last.reason).toBeNull(); expect(done.fences).toEqual([]);
  expect(diagnostics(dir).filter(e=>e.event==='transition_unblocked').length).toBeGreaterThanOrEqual(2);
@@ -143,16 +147,16 @@ test('real supervisor missing deadlines and mode conflict remain blocked across 
 },20000);
 
 
-for (const source of ['single', 'multi']) test(`${source} real supervisor archive collision retains gate and completes after operator moves conflict`, async () => {
-  const dir = root(source), worker = launch(dir);
+test(`first migration real supervisor archive collision retains gate and completes after operator moves conflict`, async () => {
+  const dir = root(), worker = launch(dir);
   await worker.next();
   await worker.command({ seed: [{ content: 'pending source message' }] });
-  const target = source === 'single' ? 'multi' : 'single';
+  const target = 'multi';
   const accepted = await request(dir, target);
   const absorbed = await worker.command('tick');
   expect(absorbed.row.phase).toBe('converting');
-  const targetDir = path.join(dir, source === 'single' ? 'memory/session-groups/origin' : 'memory');
-  const previous = path.join(dir, 'memory/mode-switch', accepted.runId, 'previous', source === 'single' ? 'origin' : '_global');
+  const targetDir = path.join(dir, 'memory/session-groups/origin');
+  const previous = path.join(dir, 'memory/mode-switch', accepted.runId, 'previous', 'origin');
   fs.mkdirSync(targetDir, { recursive: true });
   fs.mkdirSync(previous, { recursive: true });
   fs.writeFileSync(path.join(targetDir, 'state.md'), 'old target state\n');
@@ -166,7 +170,7 @@ for (const source of ['single', 'multi']) test(`${source} real supervisor archiv
     expect(blocked.row.cutoff).toBe(absorbed.row.cutoff);
     expect(blocked.row.absorbed_ids).toEqual(absorbed.row.absorbed_ids);
     expect(blocked.fences.map(fence => fence.sessionGroup)).toEqual(['*']);
-    expect(blocked.mode.mode).toBe(source);
+    expect(blocked.mode).toMatchObject({ keyPresent: false, mode: null });
   }
   expect(fs.readFileSync(path.join(targetDir, 'state.md'), 'utf8')).toBe('old target state\n');
   expect(fs.existsSync(path.join(previous, '.done'))).toBe(false);
