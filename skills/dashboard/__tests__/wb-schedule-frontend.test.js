@@ -54,7 +54,7 @@ test('list sections order enabled tasks by next run and keep expired and complet
   assert.equal(writeMessage({ result: 'rejected', code: 'INVALID_ARGS', message: 'Priority must be 1-3' }, t), 'Priority must be 1-3');
   // Definite refusals without a scheduler envelope are rejections, not unknown results.
   for (const [status, error, text] of [[413, 'payload_too_large', '内容太长，未保存'], [400, 'invalid_json', '请求格式错误，未保存'],
-    [403, 'insufficient_scope', '当前密钥只读，不能修改定时任务'], [403, 'read_only_proxy', '经代理访问这台 agent 时不允许这项修改'],
+    [403, 'insufficient_scope', '当前密钥只读，不能进行这项修改'], [403, 'not_allowed_via_fleet', '经舰队打开别的 agent 时，不能做这项修改'],
     [401, 'unauthorized', '登录已失效，请重新登录']]) {
     const outcome = writeOutcome(status, { error: { code: error, message: '' } });
     assert.deepEqual(outcome, { result: 'rejected', code: error, message: '' });
@@ -68,6 +68,26 @@ test('list sections order enabled tasks by next run and keep expired and complet
   assert.equal(writeMessage({ result: 'rejected', code: 'prompt_starts_with_dashes', message: 'New task content cannot start with "--"' }, t),
     '新建任务的内容不能以 -- 开头');
   assert.equal(writeMessage({ result: 'rejected', code: 'invalid_task', message: 'Invalid task id' }, t), 'Invalid task id');
+});
+
+test('permission refusals show only translated text while other errors retain server details', () => {
+  const permissions = [
+    ['not_allowed_via_fleet', "This change can't be made when opening another agent from the fleet", '经舰队打开别的 agent 时，不能做这项修改'],
+    ['insufficient_scope', 'Administrator scope required', '当前密钥只读，不能进行这项修改'],
+    ['unauthorized', 'Authentication required', '登录已失效，请重新登录'],
+    ['admin_required', 'Administrator access required', '当前身份没有管理员权限，不能进行这项修改。'],
+    ['same_origin_required', 'Origin check failed', '请求来源未通过安全检查，请从这台 agent 的控制台重新操作。'],
+    ['local_cookie_required', 'Local cookie required', '这项操作需要在本机控制台登录后进行。'],
+    ['remote_deletion_forbidden', 'Remote deletion forbidden', '经舰队访问时不能删除对话，请打开目标 agent 的本机控制台。'],
+    ['origin_deletion_forbidden', 'Origin deletion forbidden', 'Origin 对话不能删除。'],
+  ];
+  for (const [code, message, expected] of permissions) {
+    const outcome = writeOutcome(403, { error: { code, message } });
+    assert.equal(writeMessage(outcome, t), expected);
+  }
+  const outcome = writeOutcome(400, { error: { code: 'TASK_WRONG_STATUS', message: 'Task already completed' } });
+  assert.equal(writeMessage(outcome, t), t('wb.schedule.error.TASK_WRONG_STATUS') + ' · Task already completed');
+  assert.equal(writeMessage(writeOutcome(400, { error: { code: 'invalid_task', message: 'Invalid task id' } }), t), 'Invalid task id');
 });
 
 test('the shared form has no delivery fields and saving follows the preview', () => {
