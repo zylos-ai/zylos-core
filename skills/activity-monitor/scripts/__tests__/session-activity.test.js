@@ -942,3 +942,28 @@ test('Claude dequeue after terminal closure supplies shared failure history acro
  assert.equal(result.state,'idle');assert.equal(result.failureActivity.startedAfterFailure,true,
   'a new turn that already stopped still cancels the old failure continuation');
 });
+
+// Boundary: a lost/replaced native transcript must not keep a cached dequeue
+// alive. Only this private fixture is renamed/removed; no native process runs.
+// Run for dequeue reader/rotation changes, skip unrelated hooks or UI.
+test('Claude transcript rotation and unavailable records fall back to hook state',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl');
+ const write=ts=>{
+  fs.writeFileSync(transcript,JSON.stringify({type:'queue-operation',operation:'dequeue',
+   sessionId:'s',timestamp:new Date(ts).toISOString()})+'\n');fs.utimesSync(transcript,ts/1000,ts/1000);
+ };
+ write(550);
+ activity.consume([row('session_start',{ts:100,transcript_path:transcript}),row('prompt'),row('stop',{ts:500})]);
+ assert.equal(activity.read(6000).turnOpen,true);
+ fs.renameSync(transcript,path.join(root,'rotated.jsonl'));
+ fs.writeFileSync(transcript,'');fs.utimesSync(transcript,0.6,0.6);
+ assert.equal(activity.read(6001).state,'idle');
+ write(700);assert.equal(activity.read(7000).turnOpen,true);
+ fs.rmSync(transcript);
+ assert.equal(activity.read(8000).state,'idle');assert.equal(activity.turn,false);
+ fs.mkdirSync(transcript);
+ assert.doesNotThrow(()=>assert.equal(activity.read(9000).state,'idle'));
+ // A genuine hook-open turn still remains busy when the native file is absent.
+ activity.consume([row('prompt',{ts:10000})]);
+ assert.equal(activity.read(14000).state,'busy');assert.equal(activity.turnStartedAt,10000);
+});

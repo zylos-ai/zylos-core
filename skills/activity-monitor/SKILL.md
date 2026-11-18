@@ -376,6 +376,9 @@ pm2 list
      Dequeue reuses Dashboard working.js inputAfterStop and STOP_HOOK_LAG_MS:
      a dequeue up to five seconds before a delayed Stop counts after that Stop
      when no other main action intervened. No promptId attribution is used.
+     A replaced, missing or unreadable transcript discards cached dequeue
+     authority and falls back to hook state, without manufacturing busy state;
+     a genuine hook-open turn or running tool still remains busy.
    - SessionActivity accepts optional failureEventId (health StopFailure event_id)
      and the run's actual startedAt. read().failureActivity exposes failureEventId
      and boolean startedAfterFailure, with startedAt when true. This means a new

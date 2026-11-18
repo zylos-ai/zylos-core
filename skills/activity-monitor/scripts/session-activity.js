@@ -24,7 +24,7 @@ export class SessionActivity {
     this.turnStartedAt=null;this.lastNativeActivityAt=startedAt;this.pendingQuietTurnClose=null;
     this.fixedFailureEventId=failureEventId;this.failureEventId=failureEventId;this.failureAt=null;
     this.failureStop=null;this.failureResumedAt=null;this.lastTurnStop=null;this.lastDequeue=null;this.recentTurnStops=[];
-    this.lastMainActionAt=-Infinity;
+    this.lastMainActionAt=-Infinity;this.lastHookStartAt=null;
   }
   failureMatches(row) {
     return this.runtime==='claude' && row.runtime==='claude' && row.run_id===this.runId &&
@@ -53,6 +53,13 @@ export class SessionActivity {
     if(ts>this.closedThrough && ts>(this.turnStartedAt ?? -Infinity)) {
       this.turn=true;this.turnStartedAt=ts;this.busySince=ts;this.quietTurnAttemptAt=null;this.pendingQuietTurnClose=null;
       this.lastActivityAt=Math.max(this.lastActivityAt,ts);this.lastNativeActivityAt=Math.max(this.lastNativeActivityAt,ts);
+    }
+  }
+  forgetDequeue() {
+    const startedAt=this.dequeueTime();this.lastDequeue=null;
+    if(this.runtime==='claude' && this.turn && this.turnStartedAt===startedAt) {
+      this.turn=this.lastHookStartAt!==null && this.lastHookStartAt>this.closedThrough;
+      if(this.turn){this.turnStartedAt=this.lastHookStartAt;this.busySince=this.lastHookStartAt;}
     }
   }
   close(){this.reader.close();if(this.transcriptFd!==null)fs.closeSync(this.transcriptFd);this.transcriptFd=null;}
@@ -185,7 +192,7 @@ export class SessionActivity {
         this.busySince=row.event==='prompt' || this.lastIdleAt!==null ? row.ts : this.startedAt;
       }
       if(startsPrompt) {
-        if(this.runtime==='claude')this.busySince=row.ts;
+        if(this.runtime==='claude'){this.busySince=row.ts;this.lastHookStartAt=row.ts;}
         this.turn=true;this.turnStartedAt=row.ts;this.quietTurnAttemptAt=null;this.pendingQuietTurnClose=null;
         if(this.runtime==='claude' && Number.isFinite(this.failureAt) && row.ts>this.failureAt)this.failureResumedAt ??= row.ts;
         if(this.runtime==='agy') {this.agyIdleSince=null;this.lastResponseAt=Math.max(this.lastResponseAt ?? -Infinity,row.ts);}
@@ -254,12 +261,15 @@ export class SessionActivity {
   }
   readTranscript() {
     this.transcriptPending=false;
-    if(!this.transcriptPath)return null;
-    let stat;try{stat=fs.statSync(this.transcriptPath);}catch(error){if(error.code==='ENOENT')return null;throw error;}
+    if(!this.transcriptPath){this.forgetDequeue();return null;}
+    let stat;try{stat=fs.statSync(this.transcriptPath);}catch(error){if(this.runtime!=='claude' && error.code!=='ENOENT')throw error;this.forgetDequeue();return null;}
     const identity=`${stat.dev}:${stat.ino}`;
     if(this.transcriptFd===null || identity!==this.transcriptIdentity || stat.size<this.transcriptOffset) {
+      this.forgetDequeue();
       if(this.transcriptFd!==null)fs.closeSync(this.transcriptFd);
-      this.transcriptFd=fs.openSync(this.transcriptPath,'r');this.transcriptOffset=0;this.transcriptIdentity=identity;
+      this.transcriptFd=null;
+      try{this.transcriptFd=fs.openSync(this.transcriptPath,'r');}catch(error){if(this.runtime!=='claude')throw error;this.forgetDequeue();return null;}
+      this.transcriptOffset=0;this.transcriptIdentity=identity;
       this.transcriptPartial=Buffer.alloc(0);this.transcriptSkippingLine=false;
       this.codexTranscriptMatches=false;
     }
@@ -268,7 +278,8 @@ export class SessionActivity {
     const trackResults=true;
     const buffer=Buffer.alloc(Math.min(64*1024,remaining));
     while(remaining>0) {
-      const count=fs.readSync(this.transcriptFd,buffer,0,Math.min(buffer.length,remaining),this.transcriptOffset);
+      let count;try{count=fs.readSync(this.transcriptFd,buffer,0,Math.min(buffer.length,remaining),this.transcriptOffset);}
+      catch(error){if(this.runtime!=='claude')throw error;this.forgetDequeue();return null;}
       if(!count)break;
       this.transcriptOffset+=count;remaining-=count;
       let start=0;
