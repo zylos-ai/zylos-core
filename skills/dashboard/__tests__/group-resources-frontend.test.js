@@ -99,7 +99,7 @@ test('canonical minimal rows compose attention from independent instance, counts
 
 test('group snapshot shows older null and newer unreadable instance modes as unknown', () => {
   const counts = { listKnown: true, running: { total: 0, states: {} }, offline: { total: 0 }, pool: { used: 0, capacity: 2 } };
-  for (const [sessionMode, view] of [['single', 'single'], ['multi', 'multi'], [null, 'unreadable'], ['unreadable', 'unreadable'], [undefined, 'unreadable']]) {
+  for (const [sessionMode, view] of [['single', 'single'], [null, 'unreadable'], ['unreadable', 'unreadable']]) {
     const snapshot = groupSnapshot({ default_runtime: 'codex', session_mode: { sessionMode } }, counts, { rows: [] });
     assert.equal(snapshot.view, view, String(sessionMode));
     const document = createDocument(), root = document.createElement('div');

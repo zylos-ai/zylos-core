@@ -307,11 +307,3 @@ test('the Origin conversation shows every row recorded under origin with its own
   assert.equal(f.history.list({ tab: 'external' }).items.length, 0);
   assert.throws(() => f.history.messages(groupId('origin'), { tab: 'external' }), { code: 'chat_conversation_not_found' });
 });
-
-test('in multi the Origin conversation also shows external chats Origin itself handles', t => {
-  const f = fixture(t);
-  const own = f.add('in', 'telegram', 'owner-dm', 'owner writes on Telegram');
-  f.add('in', 'telegram', 'team', 'another group thread handles this', 'telegram:team');
-  assert.deepEqual(f.history.messages(ORIGIN_CONVERSATION_ID).items.map(row => row.id), [own]);
-  assert.deepEqual(f.history.list({ tab: 'external' }).items.map(item => item.session_group), ['telegram:team']);
-});

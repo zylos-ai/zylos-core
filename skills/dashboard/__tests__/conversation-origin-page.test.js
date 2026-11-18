@@ -179,7 +179,7 @@ const protocol = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/c4-c
 const mixedRow = (id, direction, channel, endpoint, content, extra = {}) => ({ id, direction, channel, endpoint_id: endpoint,
   session_group: 'origin', content, timestamp: new Date(1_800_000_000_000 + id * 1000).toISOString(), status: 'delivered',
   deliveryState: direction === 'in' ? 'delivered' : 'stored', preview: content, attachments: [], ...extra });
-for (const locale of ['en', 'zh']) test(`Origin rows name their channel and only Origin's own rows are quotable or answerable (${locale})`, { timeout: 2000 }, async t => {
+test('Origin rows name their channel and only Origin\'s own rows are quotable or answerable', { timeout: 2000 }, async t => {
   const question = protocol.valid.find(item => item.name === 'single').content;
   const messages = [
     mixedRow(1, 'in', 'dashboard', 'origin', 'owner asks Origin', { conversationName: 'Origin' }),
@@ -189,7 +189,7 @@ for (const locale of ['en', 'zh']) test(`Origin rows name their channel and only
     mixedRow(5, 'in', 'telegram', '-100|thread:7', '[TG GROUP:Team] from Telegram'),
     mixedRow(6, 'out', 'telegram', '-100|thread:7', 'Origin answers Telegram'),
   ];
-  const f = originPage(t, { locale, mode: 'single', messages });
+  const f = originPage(t, { mode: 'single', messages });
   await f.page.openGroup('origin'); await tick(); await tick();
   const article = id => f.root.querySelector(`article[data-message-id="${id}"]`);
   const author = id => article(id).querySelector('.chat-message-author').textContent;

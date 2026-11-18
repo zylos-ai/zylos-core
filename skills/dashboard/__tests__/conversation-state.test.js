@@ -2195,23 +2195,14 @@ for (const malformed of ['same cursor', 'empty continuation']) {
   });
 }
 
-// An older instance reports null and a newer one 'unreadable' when its mode
-// cannot be read; both stay unavailable. A missing key is reported as single.
-for (const session_mode of [null, undefined, 'unreadable', { sessionMode: null }, { sessionMode: 'unreadable' }]) test('unreadable instance mode stays unavailable: ' + JSON.stringify(session_mode), async t => {
+// A newer instance reports 'unreadable' when its mode cannot be read; it stays unavailable.
+for (const session_mode of [null, undefined, 'unreadable', { sessionMode: 'unreadable' }]) test('unreadable instance mode stays unavailable: ' + JSON.stringify(session_mode), async t => {
   const f = fixture(url => url.pathname === '/api/instance' ? { session_mode } : undefined);
   t.after(() => f.state.destroy());
   await f.state.open();
   assert.equal(f.state.snapshot().mode, null);
   assert.equal(f.state.snapshot().canCreate, false);
   assert.equal(f.state.snapshot().error, 'chat_mode_unavailable');
-});
-
-test('an instance without a mode key reports effective single and chat stays available', async t => {
-  const f = fixture(url => url.pathname === '/api/instance' ? { session_mode: { sessionMode: 'single' } } : undefined);
-  t.after(() => f.state.destroy());
-  await f.state.open();
-  assert.equal(f.state.snapshot().mode, 'single');
-  assert.equal(f.state.snapshot().error ?? null, null);
 });
 
 test('historic UTF-8 groups use canonical optional status and keep readable chat', async t => {

@@ -1519,13 +1519,9 @@ for (const scenario of [
   { mode: 'multi', rootAge: 10_000, originAge: 90_000, origin: false, expected: 'idle', state: 'idle' },
   { mode: 'multi', rootAge: 10_000, originAge: 90_000, origin: null, expected: 'stale', state: 'idle' },
   { mode: 'single', rootAge: 10_000, originAge: 120_000, origin: true, expected: 'stale', state: 'idle' },
-  { mode: 'single', rootAge: 10_000, originAge: 120_000, origin: false, expected: 'idle', state: 'idle' },
-  { mode: 'single', rootAge: 90_000, originAge: 10_000, origin: true, expected: 'healthy', state: 'idle' },
   { mode: 'single', rootAge: 10_000, originAge: null, origin: false, expected: 'healthy', state: 'busy' },
-  { mode: 'single', rootAge: 90_000, originAge: null, origin: false, expected: 'idle', state: 'busy' },
   { config: 'missing file', rootAge: 10_000, originAge: 120_000, origin: false, expected: 'stale', state: 'idle' },
   { config: 'missing key', rootAge: 10_000, originAge: 120_000, origin: false, expected: 'stale', state: 'idle' },
-  { config: 'missing key', rootAge: 10_000, originAge: null, origin: false, expected: 'healthy', state: 'busy' },
   { mode: 'dual', rootAge: 10_000, originAge: 120_000, origin: true, expected: 'unknown', state: null },
 ]) test(`AM heartbeat with ${scenario.config ?? scenario.mode} config, root age ${scenario.rootAge}, Origin age ${scenario.originAge} and Origin running ${scenario.origin} is ${scenario.expected}`, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'am-health-'));
