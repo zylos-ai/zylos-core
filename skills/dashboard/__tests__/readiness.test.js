@@ -47,7 +47,7 @@ function fixture({ mode = 'single', present = true, health = { missing: true }, 
   const calls = [];
   return { calls, load: async name => {
     calls.push(name);
-    if (name === 'config.js') return { readSessionMode: () => ({ mode }) };
+    if (name === 'config.js') return { readSessionMode: () => ({ mode, keyPresent: mode !== null }) };
     if (name === 'am-sock-client.js') return { submit: async (request, options) => {
       assert.equal(request.version, 0);
       assert.equal(request.type, 'restart_all');
@@ -62,14 +62,17 @@ function fixture({ mode = 'single', present = true, health = { missing: true }, 
   } };
 }
 
-test('only supervisor response and confirmed single-session absence gate readiness', async () => {
-  for (const mode of ['single', 'multi']) for (const present of [true, false]) for (const responsive of [true, false]) {
+test('only supervisor response and confirmed absence of a pre-mode instance session gate readiness', async () => {
+  // A null mode is an instance without the session mode key; Origin is
+  // reclaimed when idle in single and multi, so neither reads its presence.
+  for (const mode of [null, 'single', 'multi']) for (const present of [true, false]) for (const responsive of [true, false]) {
     const f = fixture({ mode, present, responsive });
     const result = await readReadiness(f);
-    assert.equal(result.ready, responsive && (mode === 'multi' || present));
-    assert.equal(result.reason, !responsive ? 'supervisor_unavailable' : mode === 'single' && !present ? 'session_not_running' : null);
-    assert.equal(result.session_running, mode === 'single' ? present : null);
-    assert.equal(f.calls.includes('identity'), mode === 'single');
+    assert.equal(result.ready, responsive && (mode !== null || present));
+    assert.equal(result.reason, !responsive ? 'supervisor_unavailable' : mode === null && !present ? 'session_not_running' : null);
+    assert.equal(result.session_mode, mode ?? 'single');
+    assert.equal(result.session_running, mode === null ? present : null);
+    assert.equal(f.calls.includes('identity'), mode === null);
   }
 });
 
@@ -94,19 +97,19 @@ test('unreadable observations remain unknown without becoming a third rejection 
   };
   const result = await readReadiness(f);
   assert.equal(result.ready, true);
-  assert.equal(result.session_mode, null);
+  assert.equal(result.session_mode, 'unreadable');
   assert.equal(result.session_running, null);
   assert.deepEqual(result.runtime_health.claude, { source: 'unreadable', health: null });
   const absentMode = await readReadiness(fixture({ mode: null }));
   assert.equal(absentMode.session_mode, 'single');
-  const brokenReader = fixture();
+  const brokenReader = fixture({ mode: null });
   const original = brokenReader.load;
   brokenReader.load = async name => name === 'session-state-reader.js' ? {
     readLiveIdentity: () => { throw new Error('/private/identity'); }, readRuntimeHealth: () => ({ missing: true }),
   } : original(name);
   assert.equal((await readReadiness(brokenReader)).session_running, null);
   assert.equal((await readReadiness(brokenReader)).ready, true);
-  const incomplete = fixture({ present: undefined });
+  const incomplete = fixture({ mode: null, present: undefined });
   const incompleteLoad = incomplete.load;
   incomplete.load = async name => name === 'session-state-reader.js' ? {
     readLiveIdentity: () => ({}), readRuntimeHealth: () => ({ missing: true }),
@@ -123,7 +126,7 @@ test('unreadable mode with an absent session remains ready without inspecting id
   const result = await readReadiness(f);
   assert.equal(result.ready, true);
   assert.equal(result.reason, null);
-  assert.equal(result.session_mode, null);
+  assert.equal(result.session_mode, 'unreadable');
   assert.equal(result.session_running, null);
   assert.equal(f.calls.includes('identity'), false);
 });

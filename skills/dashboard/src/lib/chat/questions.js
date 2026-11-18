@@ -3,6 +3,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { inspectDatabase, TARGET_SCHEMA_VERSION } from '../schema.js';
 import { parseC4Content, makeQuestionSummary } from '../../../../comm-bridge/scripts/c4-content-schema.js';
+import { endpointConversationGroup } from './origin.js';
+
+/** Namespace Core bound to Dashboard, read only when a conversation has no record. */
+export const dashboardNamespaceReader = zylosDir => () => {
+  let db;
+  try {
+    db = new Database(path.join(zylosDir, 'comm-bridge', 'c4.db'), { readonly: true, fileMustExist: true });
+    return db.prepare("SELECT namespace FROM channel_namespaces WHERE component_name='dashboard'").get()?.namespace ?? null;
+  } finally { db?.close(); }
+};
 
 /** Register only a question from an already verified authoritative C4 row. */
 export function registerQuestion(row, { env = process.env } = {}) {
@@ -25,10 +35,14 @@ export function registerQuestion(row, { env = process.env } = {}) {
     if (inspectDatabase(db).currentVersion !== TARGET_SCHEMA_VERSION) {
       throw new Error('Dashboard database version does not match the code; complete the upgrade or restart Dashboard.');
     }
+    // Keyed by the conversation the row is sent to, not the group that
+    // recorded it, so one interruptId in two conversations never collides.
+    const sessionGroup = endpointConversationGroup(db, row.endpoint_id, dashboardNamespaceReader(zylosDir));
+    if (!sessionGroup) throw new Error('Dashboard conversation of the question is unknown.');
     db.prepare(`INSERT INTO chat_questions
       (c4_id, session_group, endpoint_id, message_id, interrupt_id, question_summary, constraints, status)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'paused') ON CONFLICT(c4_id) DO NOTHING`).run(
-      String(row.id), row.session_group, row.endpoint_id, envelope.messageId, envelope.interruptId,
+      String(row.id), sessionGroup, row.endpoint_id, envelope.messageId, envelope.interruptId,
       envelope.questionSummary, JSON.stringify({ block, interrupt: envelope.interrupt }));
     return db.prepare('SELECT * FROM chat_questions WHERE c4_id = ?').get(String(row.id));
   } catch (error) {

@@ -123,16 +123,19 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
     assert.equal(response.status, 200);
     return response.json();
   };
-  await t.test('instance endpoint reports effective default and preserves invalid or unreadable mode uncertainty', async () => {
+  // Real /api/instance over the shared snapshot: no key reports single, invalid or
+  // unreadable configuration reports 'unreadable'. Run for instance mode-reporting or
+  // snapshot changes; UI-only changes may skip. Same isolated server as this file.
+  await t.test('instance endpoint reports the effective mode: single without a key, unreadable for invalid or unreadable configuration', async () => {
     const cold = await fetch(`${origin}/api/fleet`, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
     assert.equal(cold.status, 200); assert.equal((await cold.json()).agents.find(agent => agent.self).state, 'BUSY', 'cold single Fleet collects its object snapshot before projection');
     assert.equal(statusReads, 1);
-    assert.equal((await readInstance()).session_mode.sessionMode, 'single');
+    assert.equal((await readInstance()).session_mode.sessionMode, 'single', 'no mode key reports the effective single mode, unlike zylos status --json');
     assert.equal(statusReads, 1, 'instance reuses the cold Fleet snapshot');
     writeMode({ session_mode: 'invalid' }); now += 3000;
-    assert.equal((await readInstance()).session_mode.sessionMode, null);
+    assert.equal((await readInstance()).session_mode.sessionMode, 'unreadable');
     fs.writeFileSync(coreConfig, '{ unreadable JSON'); now += 3000;
-    assert.equal((await readInstance()).session_mode.sessionMode, null);
+    assert.equal((await readInstance()).session_mode.sessionMode, 'unreadable');
   });
   // API -> real snapshot/cache -> remote Fleet projection in both modes. Run
   // when pause publication or snapshot refresh changes; isolated resources and

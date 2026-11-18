@@ -692,6 +692,19 @@ test('a suppressed later message replays the same stored receipt without another
   assert.equal(f.rows(active.draft.localId).length, 2);
 });
 
+// In single mode, delivery records a message queued before the switch under
+// `origin`; its conversation still finds the receipt by endpoint.
+test('a queued message recorded under origin at delivery keeps its conversation receipt', async t => {
+  const f = fixture(t), active = await activate(f);
+  const queued = await f.sender.send(active.id, { content: 'queued before single' });
+  assert.equal(queued.deliveryState, 'pending');
+  f.db.prepare("UPDATE conversations SET session_group='origin', status='delivered' WHERE id=?").run(queued.messageId);
+  const reopened = await f.makeSender().reconcile(active.id);
+  assert.equal(reopened.messageId, queued.messageId);
+  assert.equal(reopened.deliveryState, 'delivered');
+  assert.equal(reopened.needsReconciliation, false);
+});
+
 test('an absent authority row yields reconciliation state rather than pending delivery', async t => {
   const f = fixture(t), active = await activate(f);
   f.db.prepare('DELETE FROM conversations WHERE id=?').run(active.receipt.messageId);

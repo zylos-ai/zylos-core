@@ -205,9 +205,17 @@ export function mountConversationPage({
     };
     return known[channel] ?? channel;
   };
-  const messageAuthor = (row, s) => s.tab === 'external'
+  // The Origin conversation shows every row recorded under Origin, in single mode also other conversations' and
+  // external chats' rows, so each of its rows names its own channel: an external chat's row as the external page
+  // labels it, a Dashboard row with its conversation's name.
+  const originPage = s => s.tab === 'mine' && isOriginConversation(s.selectedId);
+  const externalRow = (row, s) => s.tab === 'external' || (originPage(s) && row.channel !== 'dashboard');
+  // Only the Origin conversation's own rows can be quoted or answered on its page.
+  const foreignRow = (row, s) => originPage(s) && !(row.channel === 'dashboard' && row.endpoint_id === 'origin');
+  const messageAuthor = (row, s) => externalRow(row, s)
     ? t(row.direction === 'in' ? 'chat.external.received' : 'chat.external.sent', { channel: channelLabel(row.channel ?? '') })
-    : t(row.direction === 'in' ? 'chat.page.you' : 'chat.page.ai');
+    : originPage(s) ? t('chat.page.dashboardRow', { channel: channelLabel('dashboard'), name: row.conversationName ?? t('chat.unnamed') })
+      : t(row.direction === 'in' ? 'chat.page.you' : 'chat.page.ai');
   const relativeTime = date => {
     const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
     if (seconds >= 3600 && seconds < 86400) {
@@ -801,7 +809,7 @@ export function mountConversationPage({
   }
   function messageAvatar(row, s) {
     if (row.direction !== 'in') return 'bot';
-    return s.tab === 'external'
+    return externalRow(row, s)
       ? Object.hasOwn(channelIcons, row.channel) ? channelIcons[row.channel] : 'msg'
       : 'monitor';
   }
@@ -842,7 +850,7 @@ export function mountConversationPage({
       t,
       showTechnicalDetails: technicalDetails() === true,
       chartTimeZone: () => instanceTimeZone,
-      attachmentContext: { conversationId: s.selectedId, endpoint, fetch: fetcher, external: s.tab === 'external', onLayout: preserveAttachmentLayout },
+      attachmentContext: { conversationId: s.selectedId, endpoint, fetch: fetcher, external: externalRow(row, s), onLayout: preserveAttachmentLayout },
       renderQuestion: ({
         envelope,
         block
@@ -913,7 +921,7 @@ export function mountConversationPage({
   function quoteMessage(id) {
     const s = state.snapshot();
     const row = s.messages.find(item => String(item.id) === String(id));
-    if (!row || !quotable(s)) return;
+    if (!row || !quotable(s) || foreignRow(row, s)) return;
     locateNotice = null;
     if (!state.setQuote({ id: String(row.id), direction: row.direction === 'out' ? 'out' : 'in',
       timestamp: String(row.timestamp ?? row.created_at ?? row.createdAt ?? ''), text: previewLine(readableText(row)),
@@ -1008,6 +1016,7 @@ export function mountConversationPage({
       canWrite: s.canWrite && s.questionsReady,
       stateAvailable: s.questionsReady && !s.questionError,
       readOnlyExternal: s.tab === 'external',
+      readOnlyOther: foreignRow(record.row, s),
       statePendingPage: !!s.questionCursor,
       otherAnswerDisclosure: true,
       formState: form,
@@ -1028,8 +1037,8 @@ export function mountConversationPage({
     if (record.time) text(record.time, clockText(record.date));
     if (record.quoteButton) {
       const quoted = s.tab === 'mine' && String(s.quote?.id ?? '') === String(row.id);
-      record.quoteButton.hidden = !quotable(s) && !quoted;
-      record.quoteButton.disabled = !quotable(s);
+      record.quoteButton.hidden = !(quotable(s) && !foreignRow(row, s)) && !quoted;
+      record.quoteButton.disabled = !quotable(s) || foreignRow(row, s);
       record.quoteButton.dataset.quoted = String(quoted);
       text(record.quoteButton.lastElementChild, t('chat.quote.button'));
       record.quoteButton.title = t('chat.quote.buttonTitle');
@@ -1044,7 +1053,7 @@ export function mountConversationPage({
       record.avatar.replaceChildren(icon(document, avatarSymbol));
       record.avatarSymbol = avatarSymbol;
     }
-    const delivery = s.tab === 'mine' && row.direction === 'in' ? messageState(row) : null;
+    const delivery = s.tab === 'mine' && !externalRow(row, s) && row.direction === 'in' ? messageState(row) : null;
     const status = delivery ? t(delivery === 'pending' && s.groupWait?.kind === 'rate_wait'
       ? s.groupHealth === 'recovering' ? 'chat.page.delivery.recovering' : 'chat.page.delivery.rateLimited'
       : 'chat.page.delivery.' + delivery) : '';

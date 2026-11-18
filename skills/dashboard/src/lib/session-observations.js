@@ -77,5 +77,12 @@ export function createSessionObservations({ loadCoreModule = defaultLoadCoreModu
     try { return store.resolveSessionLaunchConfig({ sessionGroup, sessionMode: sessionGroup === null ? 'single' : 'multi' }).runtime; }
     finally { close(); }
   }
-  return { get, peek: () => cache, reader, resolveOfflineRuntime, invalidate: () => { cache = null; } };
+  /** Whether Origin is running, from the shared batch's Origin entry (the null
+   * group in single, `origin` in multi); null when that cannot be established. */
+  async function originPresence() {
+    const { group, observations } = await get();
+    const present = observations.get(group)?.identity?.present;
+    return typeof present === 'boolean' ? present : null;
+  }
+  return { get, peek: () => cache, reader, resolveOfflineRuntime, originPresence, invalidate: () => { cache = null; } };
 }

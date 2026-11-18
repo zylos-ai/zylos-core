@@ -37,14 +37,14 @@ The examples below show request methods, URLs and JSON bodies. Supply the approp
 
 These are the interfaces and fields intended for operations clients, including Fleet and OpenMax. During 1.0 beta there is no guarantee that APIs will remain unchanged. Starting with the next beta, the aim for this list is to add fields without removing, renaming or changing the types of existing fields, and to avoid major changes where possible. A necessary removal or incompatible change should first be marked **deprecated** here and recorded in CHANGELOG. Interfaces and fields outside this list may continue to change. This is a compatibility policy, not an immutability guarantee.
 
-Use the spelling below as returned: `session_mode` and `sessionMode` intentionally coexist. Read responses are data objects, not `{data:...}` wrappers. Nullable observations must not be interpreted as healthy or absent.
+Use the spelling below as returned: `session_mode` and `sessionMode` intentionally coexist. Both Dashboard mode fields report the effective mode, so an instance without a `session_mode` key reports `"single"`; this intentionally differs from `zylos status --json`, which reports `null` for a missing key. Read responses are data objects, not `{data:...}` wrappers. Nullable observations must not be interpreted as healthy or absent.
 
 | Method / path | Access | Operations fields |
 |---|---|---|
-| `GET /api/health/ready` | Public | `ready:boolean`, `reason:"supervisor_unavailable"\|"session_not_running"\|null`, `session_mode:"single"\|"multi"\|null`, `session_running:boolean\|null`; `runtime_health.claude` and `.codex` each contain `source:"record"\|"missing"\|"unreadable"`, `health:"ok"\|"auth_failed"\|"rate_limited"\|"unavailable"\|"down"\|"recovering"\|null` |
+| `GET /api/health/ready` | Public | `ready:boolean`, `reason:"supervisor_unavailable"\|"session_not_running"\|null`, `session_mode:"single"\|"multi"\|"unreadable"`, `session_running:boolean\|null`; `runtime_health.claude` and `.codex` each contain `source:"record"\|"missing"\|"unreadable"`, `health:"ok"\|"auth_failed"\|"rate_limited"\|"unavailable"\|"down"\|"recovering"\|null` |
 | `GET /api/health` | Public | `ok:boolean`, `service:string`, `bootId:string` identifies this Dashboard process and changes when it restarts |
 | `POST /api/auth/token` | Public credential exchange | Bearer `zylos_ak_...` key returns `ok:true`, `token:string` (`zylos_st_...`), `expires_at:string` (ISO), `ttl_seconds:number` (86400), `scope:"read"\|"admin"` |
-| `GET /api/instance` | Read | `agent.name:string`, `default_runtime:string`, `session_mode:object` with `sessionMode:"single"\|"multi"\|null`; see [instance fields](#get-apiinstance) for additional observations |
+| `GET /api/instance` | Read | `agent.name:string`, `default_runtime:string`, `session_mode:object` with `sessionMode:"single"\|"multi"\|"unreadable"`; see [instance fields](#get-apiinstance) for additional observations |
 | `GET /api/groups/origin` | Read | `presence:"running"\|"starting"\|"not_running"\|"unknown"`, `state.kind:"working"\|"idle"\|"starting"\|"stopping"\|"offline"\|"unknown"`, `flags:object`, `run:{runId:string\|null,sessionId:string\|null,createdAt:string\|null}\|null` |
 | `POST /api/groups/origin/actions/interrupt` | Admin | JSON `{runId:string,sessionId?:string\|null}`; result fields described below |
 | `POST /api/groups/origin/actions/chop-chop` | Admin | Same target body as interrupt; result fields described below |
@@ -82,7 +82,7 @@ Example: `GET /api/health` → `{"ok":true,"service":"zylos-dashboard","bootId":
 
 **Access:** Public. **Parameters:** none.
 
-Returns `ready:boolean`, `reason:string|null`, `session_mode:"single"|"multi"|null`, `session_running:boolean|null`, and `runtime_health:object` keyed by `claude`, `codex` and `agy`. Each runtime entry has `source:"record"|"missing"|"unreadable"` and `health:string|null`. A responsive supervisor establishes readiness unless the single-mode session is confirmed absent. Runtime health is diagnostic, not an admission gate.
+Returns `ready:boolean`, `reason:string|null`, `session_mode:"single"|"multi"|"unreadable"`, `session_running:boolean|null`, and `runtime_health:object` keyed by `claude`, `codex` and `agy`. Each runtime entry has `source:"record"|"missing"|"unreadable"` and `health:string|null`. A responsive supervisor establishes readiness unless an instance without a `session_mode` key (from before session modes) has its session confirmed absent; `session_running` is reported only for such instances and is `null` otherwise. Runtime health is diagnostic, not an admission gate.
 
 **Errors:** HTTP 503 with `{ok:false,error:{code,message},...readiness}` when `ready:false`; `reason` is `supervisor_unavailable` or `session_not_running`. Unavailable observations remain null.
 
@@ -117,7 +117,7 @@ Each `defaults[runtime]` contains `model:string|null`, `effort:string|null`, `th
 
 | Field | Type / meaning |
 |---|---|
-| `sessionMode` | `"single"\|"multi"\|null`; null means the configured mode could not be established |
+| `sessionMode` | `"single"\|"multi"\|"unreadable"`: the effective mode. Without a `session_mode` key the instance runs as `"single"`; `"unreadable"` means the configured mode could not be established. Dashboard versions before this change reported `null` for unreadable, so readers treat `null` and `"unreadable"` alike as unknown |
 | `transition` | null or `{runId,sourceMode,targetMode,phase,cutoff,reason,createdAt,updatedAt}`, preserving Core's transition record |
 | `globalGate` | null or `{present:boolean,reason:string\|null,runId:string\|null}`; null is unknown, not an absent gate |
 | `blocked` | null or `{reason:string,since:string\|null}`; `since` is the matching diagnostic event's ISO timestamp, when known |

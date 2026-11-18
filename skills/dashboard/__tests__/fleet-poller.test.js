@@ -1583,6 +1583,26 @@ test('object adapter uses mode, versions and resources while omitting all Origin
   }
 });
 
+// A remote may be an older Dashboard (null = unreadable) or a newer one
+// ('unreadable'); both are an unknown mode, never a bad payload. A newer
+// instance without a mode key reports its effective single mode.
+test('Fleet shows older null and newer unreadable remote modes as unknown and keeps effective single', async () => {
+  const { fleetStateFromObjects } = await import('../src/lib/fleet-poller.js');
+  const { buildAgentFleetView, renderAgentFleetHtml, fleetSelfFromSnapshot } = await import('../public/js/agent-fleet.js');
+  const row = { id: 'origin', state: { kind: 'idle' }, flags: {} };
+  const counts = { listKnown: true, running: { total: 1, states: { working: 0, idle: 1, starting: 0, stopping: 0, unknown: 0 } } };
+  const usage = { today: { cost: 0 }, sevenDay: { cost: 0 } };
+  for (const [sessionMode, state, label] of [[null, 'UNKNOWN', 'Mode unknown'], ['unreadable', 'UNKNOWN', 'Mode unknown'], ['single', 'IDLE', 'Single session']]) {
+    const record = stateToFleetRecord({ name: 'remote', base_url: 'http://remote' }, fleetStateFromObjects({ session_mode: { sessionMode } }, counts, usage, { rows: [row] }));
+    assert.equal(record.state, state, String(sessionMode));
+    assert.equal(record.session_mode, sessionMode === 'single' ? 'single' : null, String(sessionMode));
+    const fleet = { agents: [record] };
+    assert.equal(buildAgentFleetView(fleet).tiles[0].sessionMode, record.session_mode);
+    assert.match(renderAgentFleetHtml(fleet), new RegExp(`wb-mode-tag">${label}<`), String(sessionMode));
+  }
+  for (const mode of [null, 'unreadable']) assert.equal(fleetSelfFromSnapshot({ mode }).mode, null);
+});
+
 
 test('Fleet object projection never reads Origin session information or fetches its detail', async () => {
   const { fleetStateFromObjects } = await import('../src/lib/fleet-poller.js');

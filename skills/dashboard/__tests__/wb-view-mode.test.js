@@ -69,4 +69,9 @@ test('instance status names Origin in plain words and keeps raw values for techn
   assert.equal(instanceStatusText({ origin: { presence: 'mystery_state' } }, 'plain', t), 'wb.term.origin · wb.state.unknown');
   assert.equal(instanceStatusText(data, 'technical', t),
     'actions.instance_status {"view":"multi","mode":"multi","origin":"not_running"}');
+  // Older instances report null and newer ones 'unreadable'; neither shows a raw value.
+  for (const sessionMode of [null, 'unreadable']) {
+    assert.equal(instanceStatusText({ session_mode: { sessionMode }, origin: { presence: 'running' } }, 'technical', t),
+      'actions.instance_status {"view":"value.unknown","mode":"value.unknown","origin":"running"}', String(sessionMode));
+  }
 });

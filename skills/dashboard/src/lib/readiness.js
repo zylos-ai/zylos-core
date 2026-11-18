@@ -25,17 +25,22 @@ export async function readReadiness({ load = loadCoreModule } = {}) {
     supervisor = result.kind === 'rejected' && result.reply?.code === 'invalid_request';
   } catch { /* An unavailable IPC peer cannot establish readiness. */ }
 
-  let sessionMode = null, sessionRunning = null;
+  // Origin is reclaimed when idle and started again on demand in multi and in
+  // single alike, so only an instance from before session modes (no mode key)
+  // still requires its only session to be running.
+  let sessionMode = 'unreadable', sessionRunning = null, legacySingle = false;
   try {
     const { readSessionMode } = await load('config.js');
-    const mode = readSessionMode().mode ?? 'single';
-    if (['single', 'multi'].includes(mode)) sessionMode = mode;
+    const { mode, keyPresent } = readSessionMode();
+    legacySingle = keyPresent === false;
+    const effective = mode ?? 'single';
+    if (['single', 'multi'].includes(effective)) sessionMode = effective;
   } catch { /* Unknown mode is not evidence that a single session is absent. */ }
 
   const runtimeHealth = {};
   try {
     const reader = await load('session-state-reader.js');
-    if (sessionMode === 'single') {
+    if (legacySingle) {
       try {
         const identity = await reader.readLiveIdentity(null);
         if (typeof identity?.present === 'boolean') sessionRunning = identity.present;
@@ -52,7 +57,7 @@ export async function readReadiness({ load = loadCoreModule } = {}) {
     for (const runtime of ['claude', 'codex', 'agy']) runtimeHealth[runtime] = { source: 'unreadable', health: null };
   }
   const reason = !supervisor ? 'supervisor_unavailable'
-    : sessionMode === 'single' && sessionRunning === false ? 'session_not_running' : null;
+    : legacySingle && sessionRunning === false ? 'session_not_running' : null;
   return { ready: reason === null, reason, session_mode: sessionMode,
     session_running: sessionRunning, runtime_health: runtimeHealth };
 }

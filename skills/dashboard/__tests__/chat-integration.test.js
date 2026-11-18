@@ -537,6 +537,34 @@ registerIntegrationCase('single mode conversion retains both history tabs and re
   assert.equal(a.readMode(), 'single');
 });
 
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.
+registerIntegrationCase('after the real conversion to single the Origin page shows internal rows under origin but its list preview does not', async (t, sandbox) => {
+  const a = await createChatApiFixture(t, sandbox);
+  const x = await a.createConversation('started in multi');
+  const xGroup = `${x.receipt.namespace}:${x.draft.localId}`;
+  await a.convertToSingle();
+  assert.equal(a.readMode(), 'single');
+  const originRoute = `/api/chat/conversations/${encodeURIComponent(ORIGIN_CONVERSATION_ID)}`;
+  assert.equal((await a.request(`${originRoute}/send`, post({ content: 'owner asks Origin' }))).status, 200);
+  const reply = a.addOutbound('origin', 'Origin answers the owner');
+  // Core's own internal-message insert, as `c4-send internal origin` stores it.
+  const relay = a.c4.insertInternalMessage(xGroup, 'origin', 'relay from X to Origin');
+  assert.equal(a.db.prepare('SELECT session_group FROM conversations WHERE id=?').get(relay.inRow.id).session_group, 'origin');
+  const page = await a.request(`${originRoute}/messages?tab=mine`);
+  assert.equal(page.status, 200, page.text);
+  const internal = page.body.items.filter(row => row.channel === 'internal');
+  assert.deepEqual(internal.map(row => [row.id, row.direction, row.internal?.peerSessionGroup, row.internal?.content]),
+    [[relay.inRow.id, 'in', xGroup, 'relay from X to Origin']]);
+  assert.equal(page.body.items.at(-1).id, relay.inRow.id, 'the internal row is the newest row on the Origin page');
+  const list = await a.request('/api/chat/conversations?tab=mine');
+  assert.equal(list.status, 200);
+  const [origin] = list.body.items;
+  assert.equal(origin.id, ORIGIN_CONVERSATION_ID);
+  assert.equal(origin.preview, 'Origin answers the owner', 'the list preview skips the internal row');
+  assert.equal(origin.count, 2, 'the summary counts no internal rows');
+  assert.ok(reply.id < relay.inRow.id);
+});
+
 // Consumer outlets run for projection/reader/component changes. Only the same
 // integration gate permits their private DB and child CLI setup.
 // Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.

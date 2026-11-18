@@ -97,8 +97,10 @@ export function deriveAgentState(signals) {
 }
 
 export class StateEngine {
-  constructor(store, collectors, config, { now = () => Date.now(), onStateChange = null } = {}) {
+  constructor(store, collectors, config, { now = () => Date.now(), onStateChange = null, readOriginPresence = async () => null } = {}) {
     this.store = store;
+    this._readOriginPresence = readOriginPresence;
+    this._originProbe = null;
     this.collectors = collectors;
     this._config = config;
     this._now = now;
@@ -115,6 +117,7 @@ export class StateEngine {
       lastProgressAt: null,
       pm2: null,
       amHeartbeat: null,
+      originDormant: false,
       lastSnapshotCursor: 0,
       mainSessionId: null,
       activeSubagents: new Map(),
@@ -698,11 +701,15 @@ export class StateEngine {
       if (modeConfig.state === 'error') throw modeConfig.error;
       const mode = modeConfig.config?.session_mode;
       if (mode != null && mode !== 'single' && mode !== 'multi') throw new Error('Invalid session mode');
-      const amStatusPath = path.join(this._config.zylosDir, 'activity-monitor',
-        ...(mode === 'multi' ? ['session-groups', 'origin'] : []), 'agent-status.json');
+      const keyPresent = modeConfig.state === 'ok' && Object.hasOwn(modeConfig.config ?? {}, 'session_mode');
+      // Every mode's Origin, and an instance's only session from before
+      // session modes, write the `origin` run directory. Only a baseline tmux
+      // left by an upgrade writes the root file, read only without the former.
+      const amDir = path.join(this._config.zylosDir, 'activity-monitor');
       // Core's snapshot reader binds JSON and mtime to the same open file.
       // Re-reading a silent producer must not manufacture a fresh heartbeat.
-      const sample = readJsonSample(amStatusPath, 'status');
+      let sample = readJsonSample(path.join(amDir, 'session-groups', 'origin', 'agent-status.json'), 'status');
+      if (sample.error === 'missing') sample = readJsonSample(path.join(amDir, 'agent-status.json'), 'status');
       if (sample.error) throw new Error(sample.error);
       const data = sample.value;
       this._state.amHeartbeat = {
@@ -716,9 +723,31 @@ export class StateEngine {
         agent_state: data.state,
         agent_health: data.health
       });
+      // Origin is reclaimed when idle in multi and single alike; a reclaimed
+      // Origin writes no heartbeat, so its silence is idleness, not a stale
+      // collector. Ask the shared session observation (injected; no tmux read
+      // here) whether Origin is running shortly before the file would turn
+      // stale, so the answer is ready when it does.
+      if (keyPresent && this._now() - sample.sampledAt >= AM_HEARTBEAT_STALE_MS - AM_HEARTBEAT_INTERVAL_MS) {
+        this._probeOriginPresence();
+      } else {
+        this._state.originDormant = false;
+      }
     } catch {
       this._state.amHeartbeat = null;
+      this._state.originDormant = false;
     }
+  }
+
+  _probeOriginPresence() {
+    if (this._originProbe) return this._originProbe;
+    this._originProbe = Promise.resolve()
+      .then(() => this._readOriginPresence())
+      // Only a confirmed absence is dormancy; an unreadable presence keeps the stale rule.
+      .then(present => { this._state.originDormant = present === false; },
+        () => { this._state.originDormant = false; })
+      .finally(() => { this._originProbe = null; });
+    return this._originProbe;
   }
 
   _broadcastStateChange() {
@@ -870,7 +899,8 @@ export class StateEngine {
           pm2_reader: formatEntry('pm2_reader', { signalType: 'collector_liveness', maxAgeS: 180 }),
           system_sampler: formatEntry('system_sampler', { signalType: 'collector_liveness', maxAgeS: 90 }),
           conversation_reader: formatEntry('conversation_reader', { signalType: 'collector_liveness', eventDriven: true, maxAgeS: 60 }),
-          am_heartbeat: formatEntry('am_heartbeat', { signalType: 'collector_liveness', maxAgeS: 60 })
+          am_heartbeat: formatEntry('am_heartbeat', { signalType: 'collector_liveness', maxAgeS: 60,
+            eventDriven: this._state.originDormant === true })
         },
         platform: {}
       };

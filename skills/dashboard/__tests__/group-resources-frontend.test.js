@@ -97,6 +97,17 @@ test('canonical minimal rows compose attention from independent instance, counts
   assert.deepEqual(empty.attention.problems.find(item => item.kind === 'auth_failed').groups, [], 'account authentication remains visible with no running groups');
 });
 
+test('group snapshot shows older null and newer unreadable instance modes as unknown', () => {
+  const counts = { listKnown: true, running: { total: 0, states: {} }, offline: { total: 0 }, pool: { used: 0, capacity: 2 } };
+  for (const [sessionMode, view] of [['single', 'single'], [null, 'unreadable'], ['unreadable', 'unreadable']]) {
+    const snapshot = groupSnapshot({ default_runtime: 'codex', session_mode: { sessionMode } }, counts, { rows: [] });
+    assert.equal(snapshot.view, view, String(sessionMode));
+    const document = createDocument(), root = document.createElement('div');
+    instanceStrip(root, snapshot, { document, t: key => key, level: 'technical' });
+    assert.equal(root.textContent.includes('wb.unknown'), view === 'unreadable', String(sessionMode));
+  }
+});
+
 test('offline failure attention follows filtered pagination and normalizes only minimal rows', async () => {
   const paths = [], instance = { session_mode: { sessionMode: 'single' } };
   const counts = { offline: { startFailed: 2 } };
