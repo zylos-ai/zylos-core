@@ -15,7 +15,6 @@ const warnings = {
   serviceWarnings: ['Restart the custom service manually.'],
   warnings: ['Run zylos init to finish cleanup.', { runtime: 'codex', code: 'RUNTIME_CLI_UNAVAILABLE', message: 'Optional CLI unavailable.' }],
   corePackageWarnings: [{ code: 'CORE_PACKAGE_LOCATION_WRITE_FAILED', message: 'Rerun zylos init to record the package.' }],
-  checkpointAudit: { state: 'incomplete', items: [{ checkpointId: 7, repairRequired: true }] },
 };
 
 test('human success starts a new line and reports versions and actionable warnings', () => {
@@ -26,8 +25,6 @@ test('human success starts a new line and reports versions and actionable warnin
   assert.match(stderr, /Upgrade warning: Run zylos init to finish cleanup\./);
   assert.match(stderr, /Runtime warning \(codex\): Optional CLI unavailable\./);
   assert.match(stderr, /Core package location warning: Rerun zylos init/);
-  assert.match(stderr, /checkpoint 7 .* requires repair/);
-  assert.match(stderr, /audit incomplete/);
   assert.doesNotMatch(stdout + stderr, /RUNTIME_CLI_UNAVAILABLE|CORE_PACKAGE_LOCATION_WRITE_FAILED|"success"|undefined/);
 });
 

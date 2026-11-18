@@ -20,7 +20,7 @@ insertControl getNextPendingControl claimControl expirePendingControls countNonT
 setDrainFence getDrainFence listDrainFences clearDrainFence getLastActivity
 beginModeTransition getModeTransition getLastCompletedModeTransition setModeTransitionPhase absorbForTransition getAbsorbedConversations listGroupHeads
 getSessionModelConfig setSessionModelConfig resetSessionModelConfig getSessionRuntimeConfig setSessionRuntimeConfig resetSessionRuntimeConfig resolveSessionLaunchConfig listGroupRuntimeOverrides
-auditCheckpoints getDb close`.split(/\s+/);
+getDb close`.split(/\s+/);
 function root(t) { const dir = mkdtempSync(join(tmpdir(), 'c4-stage-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; }
 function child(dir, code, env = {}) {
   return spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, ZYLOS_DIR: dir, ...env }, encoding: 'utf8' });

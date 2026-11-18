@@ -34,7 +34,7 @@ test('old configuration upgrade exposes the same model threshold in settings, mo
     startServices:()=>({status:'done'}),verifyServices:()=>({status:'done'}),
     dashboardOwner:{verifyDashboard:()=>({state:'degraded',errors:[]})},
     readModeStatus:()=>({sessionMode:'single',transition:null}),readMode:()=>({mode:'single',keyPresent:true}),readTransition:()=>null,
-    restart:()=>({ok:true,data:{result:'exit_enqueued'}}),audit:()=>[],
+    restart:()=>({ok:true,data:{result:'exit_enqueued'}}),
   });
   assert.equal(result.success,true);
   const config=JSON.parse(fs.readFileSync(file,'utf8'));
