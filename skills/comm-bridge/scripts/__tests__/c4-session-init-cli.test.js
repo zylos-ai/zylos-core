@@ -33,6 +33,30 @@ function receive(args, env = {}) {
   return delivered;
 }
 
+// Insert delivered rows in one child; returns the session group of the last row.
+function receiveMany(contents, env = {}, { channel = 'system', endpoint = null, groupName } = {}) {
+  const delivered = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    const db = await import(${JSON.stringify(new URL('../c4-db.js', import.meta.url).href)});
+    const {createStore} = await import(${JSON.stringify(new URL('../c4-v2-store.js', import.meta.url).href)});
+    const store = createStore(db.getDb(), {validateComponent:()=>true});
+    let group = null;
+    for (const content of ${JSON.stringify(contents)}) {
+      const row = store.insertConversation('in', ${JSON.stringify(channel)}, ${JSON.stringify(endpoint)}, content,
+        ${JSON.stringify(groupName ? { groupName } : {})});
+      store.claimConversation(row.id); store.markDelivered(row.id, {sessionId:'fixture'});
+      group = db.getDb().prepare('SELECT session_group FROM conversations WHERE id=?').pluck().get(row.id);
+    }
+    db.close();
+    process.stdout.write(JSON.stringify(group));
+  `], { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 15000 });
+  assert.equal(delivered.status, 0, delivered.stderr);
+  return JSON.parse(delivered.stdout);
+}
+
+const numbered = (count, prefix, size = 0) => Array.from({ length: count },
+  (_, i) => `${prefix}-${String(i + 1).padStart(2, '0')}${size ? ` ${'x'.repeat(size)}` : ''}`);
+const OMITTED_MIDDLE = /latest \d+ shown\. Before judging old tasks, promises or todos, inspect the omitted middle/;
+
 function checkpoint(args, env = {}) {
   return spawnSync('node', [CHECKPOINT_PATH, ...args], {
     env: { ...process.env, ...env },
@@ -239,6 +263,73 @@ describe('c4-session-init', () => {
       assert.ok(stdout.includes('msg26'));
       // msg1 should NOT be included (limited to recent)
       assert.ok(!stdout.match(/IN \(system\):\nmsg1\n/));
+    });
+  });
+
+  // Startup view of a backlog left for the next session. Run for session-init,
+  // Sync threshold or shard budget changes; same private-database isolation as above.
+  it('injects the whole unsummarized backlog at the Sync threshold and the latest six above it', () => {
+    withTmpDir(({ env }) => {
+      const quiet = { ...env, ZYLOS_SYNC_THRESHOLD: '' };
+      receiveMany(numbered(15, 'backlog'), quiet);
+      const at = cli([], quiet);
+      assert.equal(at.status, 0, at.stderr);
+      for (const content of numbered(15, 'backlog')) assert.ok(at.stdout.includes(`${content}\n`), content);
+      assert.doesNotMatch(at.stdout, OMITTED_MIDDLE);
+
+      receiveMany(['backlog-16'], quiet);
+      const above = cli([], quiet);
+      assert.equal(above.status, 0, above.stderr);
+      assert.ok(above.stdout.includes('About 16 messages unsummarized; latest 6 shown.'));
+      assert.ok(above.stdout.includes('backlog-11\n') && above.stdout.includes('backlog-16\n'));
+      assert.ok(!above.stdout.includes('backlog-10\n'));
+    });
+  });
+
+  it('falls back to the latest six with the omitted-middle notice when the whole backlog exceeds the shard budget', () => {
+    withTmpDir(({ env }) => {
+      const quiet = { ...env, ZYLOS_SYNC_THRESHOLD: '' };
+      receiveMany(numbered(10, 'long', 1200), quiet);
+      const { stdout, status, stderr } = cli([], quiet);
+      assert.equal(status, 0, stderr);
+      assert.ok(stdout.includes('About 10 messages unsummarized; latest 6 shown.'));
+      assert.ok(stdout.includes('long-05 ') && stdout.includes('long-10 '));
+      assert.ok(!stdout.includes('long-04 '));
+    });
+  });
+
+  it('applies a configured Sync threshold of 5 at session start', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const quiet = { ...env, ZYLOS_SYNC_THRESHOLD: '' };
+      receiveMany(numbered(8, 'configured'), quiet);
+      fs.mkdirSync(path.join(tmpDir, '.zylos'));
+      fs.writeFileSync(path.join(tmpDir, '.zylos/config.json'), JSON.stringify({ sync_threshold: 5 }));
+      const configured = cli([], quiet);
+      assert.equal(configured.status, 0, configured.stderr);
+      assert.ok(configured.stdout.includes('About 8 messages unsummarized; latest 6 shown.'));
+      assert.ok(!configured.stdout.includes('configured-02\n'));
+      const overridden = cli([], { ...quiet, ZYLOS_SYNC_THRESHOLD: '10' });
+      assert.equal(overridden.status, 0, overridden.stderr);
+      assert.ok(numbered(8, 'configured').every(content => overridden.stdout.includes(`${content}\n`)), 'environment 10 overrides config 5');
+      assert.doesNotMatch(overridden.stdout, OMITTED_MIDDLE);
+    });
+  });
+
+  it('a multi-session group injects only its own whole small backlog', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      fs.mkdirSync(path.join(tmpDir, '.zylos'));
+      fs.writeFileSync(path.join(tmpDir, '.zylos/config.json'), JSON.stringify({ session_mode: 'multi' }));
+      const quiet = { ...env, ZYLOS_SYNC_THRESHOLD: '' };
+      const earlier = numbered(9, 'earlier');
+      const group = receiveMany(earlier, quiet, { channel: 'telegram', endpoint: 'chat-1', groupName: 'room' });
+      receiveMany(['other group message'], quiet, { channel: 'telegram', endpoint: 'chat-2', groupName: 'other' });
+      assert.equal(receiveMany(['the new message'], quiet, { channel: 'telegram', endpoint: 'chat-1', groupName: 'room' }), group);
+      const { stdout, status, stderr } = cli([], { ...quiet, ZYLOS_SESSION_GROUP: group });
+      assert.equal(status, 0, stderr);
+      assert.ok(stdout.includes(`Scope: ${group}.`));
+      for (const content of [...earlier, 'the new message']) assert.ok(stdout.includes(content), content);
+      assert.ok(!stdout.includes('other group message'));
+      assert.doesNotMatch(stdout, OMITTED_MIDDLE);
     });
   });
 });

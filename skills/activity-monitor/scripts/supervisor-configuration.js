@@ -22,6 +22,6 @@ export function parseSupervisorConfiguration(config, env = process.env) {
     syncMaxIntervalSeconds: setting('sync_max_interval_seconds', 21600),
     originSyncThreshold: setting('origin_sync_threshold', 50),
     syncBatchLimit: setting('sync_batch_limit', 200),
-    syncThreshold: CHECKPOINT_THRESHOLD,
+    syncThreshold: setting('sync_threshold', CHECKPOINT_THRESHOLD),
   };
 }

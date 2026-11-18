@@ -159,33 +159,32 @@ test('TTL preparation leaves ordinary Sync conditions intact', async () => {
   assert.equal(f.syncs().length, 2, 'ordinary threshold plus interval still requests Sync');
 });
 
-test('replacement run waits for ordinary startup request before establishing its own catch-up record', async () => {
-  const f = fixture('multi', { syncThreshold: 1000 });
+test('replacement run neither reuses old progress nor requests Sync below the threshold', async () => {
+  const f = fixture('multi', { syncThreshold: 400 });
   await f.check(0);
+  assert.equal(f.syncs().length, 1, 'threshold request for 500 messages');
   f.scene.runId = 'replacement'; f.count = 300; f.first = 201;
-  await f.check();
-  assert.equal(f.syncs().length, 1, 'new run cannot reuse old progress to bypass the interval');
-  await f.check(540_000);
-  assert.equal(f.syncs().length, 2, 'new run startup condition requests below the configured threshold');
-  assert.deepEqual(f.lifecycle.syncProgress.get(f.key), { n0: 300, f0: 201, runId: 'replacement' });
+  await f.check(600_000);
+  assert.equal(f.syncs().length, 1, 'a replacement run with 300 messages waits for the threshold');
   f.count = 100; f.first = 401;
   await f.check();
-  assert.equal(f.syncs().length, 3, 'new run catches up below both interval and due threshold');
+  assert.equal(f.syncs().length, 1, 'the old run progress does not let the replacement catch up');
+  assert.deepEqual(f.lifecycle.syncProgress.get(f.key), { n0: 500, f0: 1, runId: 'run-a' });
 });
 
 test('supervisor restart drops progress and starts from ordinary conditions', async () => {
-  const f = fixture('multi', { syncThreshold: 1000 });
+  const f = fixture('multi', { syncThreshold: 400 });
   await f.check(0);
   f.count = 300; f.first = 201;
   f.restart();
   assert.equal(f.lifecycle.syncProgress.size, 0);
   assert.equal(f.lifecycle.syncSent.size, 0);
   await f.check();
-  assert.equal(f.syncs().length, 2, 'fresh startup permits one request below threshold');
-  assert.deepEqual(f.lifecycle.syncProgress.get(f.key), { n0: 300, f0: 201, runId: 'run-a' });
-  f.count = 100; f.first = 401;
+  assert.equal(f.syncs().length, 1, 'fresh supervisor does not request below the threshold');
+  f.count = 401;
   await f.check();
-  assert.equal(f.syncs().length, 3);
+  assert.equal(f.syncs().length, 2, 'the threshold applies without the old minimum interval');
+  assert.deepEqual(f.lifecycle.syncProgress.get(f.key), { n0: 401, f0: 201, runId: 'run-a' });
 });
 
 test('catch-up follows the existing batch limit and requires strictly greater previous backlog', async () => {

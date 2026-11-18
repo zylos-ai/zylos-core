@@ -89,8 +89,8 @@ describe('split instruction assembler', () => {
     // Hashes cover the final template bytes after the managed header.
     const managedHeader = '> **Zylos-managed system instructions.** Replaced during upgrades; put custom instructions in `~/zylos/ZYLOS.md`.\n\n';
     const expected = {
-      claude: 'e838dd8b7972040f39687b79a02c9114f1ec38a85621bedd24efb147742fe3e6',
-      codex: '67abc536ae9623bacf61e23d531d287b1d2241716c8cc0aef5ffddcb4150b5df',
+      claude: '6d978729bb125a9897f2f3491483d3ffca67aa26e94fceb913d71d7a479c1869',
+      codex: '571b7db3c923e44751371111e6d44607b627e52aab5331297d1edd8d8566b5f5',
     };
     for (const runtime of ['claude', 'codex']) {
       const content = fs.readFileSync(path.join(TEMPLATES_DIR, `${runtime}-system.md`), 'utf8');

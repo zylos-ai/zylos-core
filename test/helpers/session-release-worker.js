@@ -77,7 +77,8 @@ try {
     socket.once('end', () => { socket.destroy(); try { resolve(JSON.parse(response)); } catch (error) { reject(error); } });
   });
   service = await start();
-  if (scenario === 'sync') db.insertConversation('out', 'telegram', 'test-chat', 'new completed result', { groupName: 'release' });
+  // 16 new results exceed the default Sync threshold of 15.
+  if (scenario === 'sync') for (let n = 1; n <= 16; n++) db.insertConversation('out', 'telegram', 'test-chat', `new completed result ${n}`, { groupName: 'release' });
   if (scenario === 'child') children = [{ agentId: 'working-child', lastActivityAt: now }];
   if (scenario.endsWith('-before-intent')) {
     // The real socket hint has already been processed when the requester
