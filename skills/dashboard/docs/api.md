@@ -444,7 +444,7 @@ Example: `GET /api/groups/runtime-overrides?q=team`.
 
 ### POST /api/groups/naming-prompt
 
-**Access:** Admin. **Parameters:** none; any JSON body is ignored.
+**Access:** Admin, including through Fleet. Local read-only credentials are rejected before forwarding; remote read-only credentials remain subject to the target’s admin gate. **Parameters:** none; any JSON body is ignored.
 
 Queues one C4 control that asks Origin to name recently active unnamed groups. The mode comes from this instance's `.zylos/config.json`: multi targets session group `origin`; otherwise the target stays empty, which C4 accepts only for the single session. The control text is the Dashboard naming prompt with the installed `group-name.js` path. Returns `{ok:true,controlId:number,sessionGroup:'origin'|null}` once C4 has queued it. Queued is the whole result: the response does not wait for delivery or naming, and nothing reports the names chosen.
 
@@ -689,7 +689,7 @@ Fleet rejects unknown agents with 404, invalid memory path queries with 400 `inv
 
 - Encoded slash `%2F` (case-insensitive), undecodable percent encoding, and paths whose decoded/normalized suffix reaches a local-only endpoint (including through `..`) return 403 `local_endpoint_not_proxyable`.
 - `/fleet/peer//api/...` bypasses API proxy dispatch and falls through to page serving: GET returns 404 plain text `not found`; POST returns 405 plain text `method not allowed`.
-- Encoded `%2e%2e` reaching another route is not rejected as `local_endpoint_not_proxyable`; a write outside the explicit proxy allowlist returns 403 `read_only_proxy`.
+- Encoded `%2e%2e` reaching another route is not rejected as `local_endpoint_not_proxyable`; a write outside the explicit proxy allowlist returns 403 `not_allowed_via_fleet` with message "This change can't be made when opening another agent from the fleet".
 - Encoded backslash `%5C` is forwarded unchanged in an otherwise allowed API request.
 
 Other forbidden routes return 403. Same-version peers return the common JSON error envelope, which the proxy relays unchanged. Attachment, observer WebSocket and SSE relays keep their streaming content types.

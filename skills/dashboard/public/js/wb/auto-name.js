@@ -1,3 +1,4 @@
+import { permissionErrorKey } from './write-errors.js';
 import { element } from './plain-text.js';
 import { responseError } from './group-config.js';
 
@@ -16,6 +17,10 @@ export function namePromptResult(value, error, t = key => key, { single = false 
   const body = error ? error.body : value;
   const lone = body && typeof body === 'object' && 'sessionGroup' in body ? body.sessionGroup === null : single;
   const detail = body ? responseError(body) : error?.message ?? '';
+  const code = typeof body?.error === 'string' ? body.error : body?.error?.code;
+  const permission = permissionErrorKey(code);
+  if (permission) return { ok: false, text: t(permission), detail };
+  if (error?.status >= 400 && error.status < 500) return { ok: false, text: t('wb.name.rejected'), detail };
   if (body?.unknown || (error && !body)) return { ok: false, text: t(lone ? 'wb.name.unknownSingle' : 'wb.name.unknown'), detail };
   return { ok: false, text: t('wb.name.failed'), detail };
 }

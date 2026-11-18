@@ -1,3 +1,4 @@
+import { permissionErrorKey } from './write-errors.js';
 import { countLabel } from '../count-label.js';
 /** UI state only. The server resolves target ownership and Core owns the deletion. */
 export function deletionPath(item) {
@@ -60,7 +61,8 @@ export function createConversationDeletion({ request, confirm, t = key => key,
       const code = payload?.error?.code ?? payload?.error ?? error.code;
       if (!operationId) {
         update({ busy: false, state: 'preview_error', errorKey: code === 'group_delete_path_unavailable'
-          ? 'chat.delete.previewPathUnavailable' : 'chat.delete.previewError' });
+          ? 'chat.delete.previewPathUnavailable' : permissionErrorKey(code)
+            ?? ([401, 403].includes(error.status) ? 'chat.delete.previewDenied' : 'chat.delete.previewError') });
         return;
       }
       if (['DELETION_PREVIEW_STALE', 'DRAFT_BECAME_ACTIVE', 'DELETION_OWNERSHIP_MISMATCH'].includes(code)) {

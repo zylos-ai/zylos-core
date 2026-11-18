@@ -99,7 +99,7 @@ test('workbench proxy rejects writes outside the registered table before upstrea
   ]) {
     const response = await f.request(route);
     assert.equal(response.status, 403);
-    assert.deepEqual(JSON.parse(response.body), { ok: false, error: { code: 'read_only_proxy', message: 'read_only_proxy' } });
+    assert.deepEqual(JSON.parse(response.body), { ok: false, error: { code: 'not_allowed_via_fleet', message: "This change can't be made when opening another agent from the fleet" } });
     assert.equal(f.forwarded.length, 0);
   }
 });

@@ -141,7 +141,7 @@ test('proxy protects chat prefix for every method and retains explicit write all
   for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) for (const path of paths) {
     const result = await f.request({ method, path }, { fleet: true });
     assert.equal(result.status, 403);
-    assert.equal(JSON.parse(result.text).error.code, 'read_only_proxy');
+    assert.equal(JSON.parse(result.text).error.code, 'not_allowed_via_fleet');
     assert.equal(f.counts.receives, 0);
   }
   const beforeHead = f.counts.upstream;

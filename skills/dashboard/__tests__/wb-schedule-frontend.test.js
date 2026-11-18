@@ -54,7 +54,7 @@ test('list sections order enabled tasks by next run and keep expired and complet
   assert.equal(writeMessage({ result: 'rejected', code: 'INVALID_ARGS', message: 'Priority must be 1-3' }, t), 'Priority must be 1-3');
   // Definite refusals without a scheduler envelope are rejections, not unknown results.
   for (const [status, error, text] of [[413, 'payload_too_large', '内容太长，未保存'], [400, 'invalid_json', '请求格式错误，未保存'],
-    [403, 'insufficient_scope', '当前密钥只读，不能修改定时任务'], [403, 'read_only_proxy', '经代理访问这台 agent 时不允许这项修改'],
+    [403, 'insufficient_scope', '当前密钥只读，不能进行这项修改'], [403, 'not_allowed_via_fleet', '经舰队打开别的 agent 时，不能做这项修改'],
     [401, 'unauthorized', '登录已失效，请重新登录']]) {
     const outcome = writeOutcome(status, { error: { code: error, message: '' } });
     assert.deepEqual(outcome, { result: 'rejected', code: error, message: '' });
