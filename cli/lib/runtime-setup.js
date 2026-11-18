@@ -192,6 +192,7 @@ export function approveApiKey(keyOrToken) {
 export function credentialFiles(runtime) {
   const home = os.homedir();
   if (runtime === 'codex') return [path.join(home, '.codex', 'auth.json')];
+  if (runtime === 'agy') return [path.join(ZYLOS_DIR, '.env')];
   return [path.join(home, '.claude', 'settings.json'), path.join(home, '.claude.json')];
 }
 
@@ -616,7 +617,7 @@ export function renderCodexProjectConfig(existingContent = '', opts = {}) {
   obj.model_availability_nux = 'gpt-5.4';
 
   // Backfill: default only when the user has not configured a value.
-  if (obj.model === undefined) obj.model = 'gpt-6.1-sol';
+  if (obj.model === undefined) obj.model = 'gpt-6.2-sol';
   if (obj.model_reasoning_effort === undefined) obj.model_reasoning_effort = 'medium';
 
   obj.features = isTomlSectionValue(obj.features) ? obj.features : {};
@@ -783,4 +784,19 @@ export function saveCodexBaseUrlToEnv(baseUrl) {
   } catch {
     return false;
   }
+}
+
+/** Save the API-key-only Antigravity credential; keep it out of argv and native login files. */
+export function saveAgyApiKey(apiKey) {
+  const encoded = credentialEnvValue(apiKey);
+  if (encoded === null) return false;
+  try {
+    const envPath = path.join(ZYLOS_DIR, '.env');
+    let content = '';
+    try { content = fs.readFileSync(envPath, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    content = content.replace(/^[^\S\r\n]*(?:export[^\S\r\n]+)?GEMINI_API_KEY(?:[^\S\r\n]*=|:[^\S\r\n]+).*(?:\r?\n|$)/gm, '');
+    writeEnvFile(envPath, upsertEnvValue(content, 'GEMINI_API_KEY', encoded, 'Gemini API key for Antigravity CLI'));
+    process.env.GEMINI_API_KEY = apiKey;
+    return true;
+  } catch { return false; }
 }

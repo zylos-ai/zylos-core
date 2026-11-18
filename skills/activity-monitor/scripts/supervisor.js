@@ -1,3 +1,4 @@
+import { SyncObserver } from './sync-observer.js';
 import { loadCoreModule } from './core-modules.js';
 import path from 'node:path';
 import fs from 'node:fs/promises';
@@ -18,7 +19,7 @@ import { PENDING_MAX_AGE_SECONDS } from '../../comm-bridge/scripts/c4-config.js'
 const { nudgeSession } = await loadCoreModule('session-nudge.js');
 const { appendEvent, rotateEventLog } = await loadCoreModule('event-log.js');
 const { writeSessionModeAtCutover } = await loadCoreModule('config.js');
-const { assertSessionGroup, groupRunDir, sessionGroupRunRoot, supervisorDiagnosticPath, poolMetricsPath } = await loadCoreModule('session-group-paths.js');
+const { assertSessionGroup, groupRunDir, sessionGroupRunRoot, supervisorDiagnosticPath, poolMetricsPath, hookErrorLogPath } = await loadCoreModule('session-group-paths.js');
 
 export const AUTH_DEMAND_RETRY_MS = 60000;
 
@@ -153,7 +154,8 @@ export function createSupervisor(deps) {
     modeSwitch:request=>modeSwitch.handle(request),startAttempt:request=>health.registerStartAttempt(request),diagnostic,now});
   const exits=new SupervisorExits({scenes:{observeGroup:group=>scenes.observeGroup(group),stop:stopScene},db,serialize:operation=>admission.serialize(operation),readMode,diagnostic,reportError,env:deps.env});
   const endings=new SupervisorRunEndings({db,readIdentity:group=>scenes.readIdentity(group),isObservable:()=>!scenes.guard?.episodes.has(scenes.socketKey),env:deps.env,alert:deps.alert,diagnostic,reportError,now});
-  lifecycle=new SupervisorLifecycle({db,observeGroup:group=>scenes.observeGroup(group),observe:listScenes,stop:stopScene,readSyncMarker,prepareReferenceReorg,prompts,
+  const syncObserver = new SyncObserver({ env: deps.env, now, warn: log });
+  lifecycle=new SupervisorLifecycle({syncObserver,env:deps.env,db,observeGroup:group=>scenes.observeGroup(group),observe:listScenes,stop:stopScene,readSyncMarker,prepareReferenceReorg,prompts,
     requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),groupRunDir:group=>groupRunDir(group,deps.env),diagnostic,reportError,
     readCurrentSession:async group=>{try{return await endings.currentSession(group);}catch{return null;}},
     intentionalStop:(group,runId)=>exits.forget(group===null?'origin':group,runId)},{now});
@@ -175,7 +177,7 @@ export function createSupervisor(deps) {
     startupAlert:deps.alert,
     restore:async()=>{
       try{admission.restore();restartRequestsReadable();}catch(error){if(error.code!=='requests_unreadable')throw error;await reportError(error,{phase:'restart-requests'});}
-      for(const runtime of ['claude','codex']) {
+      for(const runtime of ['claude','codex','agy']) {
         if((await health.restore(runtime)).health==='auth_failed')startupAuthChecks.add(runtime);
       }
       router.clearLegacyCache(path.join(deps.zylosDir,'activity-monitor','message-router-probe-cache.json'));await deps.restoreTransition?.();
@@ -253,7 +255,7 @@ export function createSupervisor(deps) {
       if(now()-lastMaintenance>=60000) {
         const activeGroups=new Set([...current.map(scene=>scene.sessionGroup ?? 'origin'),
           ...pendingGroups.map(group=>group.sessionGroup),...continuationGroups.map(group=>group.sessionGroup)]);
-        for (const runtime of ['claude','codex']) {
+        for (const runtime of ['claude','codex','agy']) {
           try {
             await health.serial(runtime,()=>health.store(runtime).pruneGroups({activeGroups,isDeleted:async group=>{
               try { await fs.stat(groupRunDir(group,deps.env));return false; }
@@ -261,7 +263,7 @@ export function createSupervisor(deps) {
             }}));
           } catch(error) { reportError(error,{phase:'health-maintenance',runtime}); }
         }
-        const files=new Set([supervisorDiagnosticPath(deps.env),poolMetricsPath(deps.env),...current.map(s=>path.join(s.runDir,'events.jsonl'))]);
+        const files=new Set([supervisorDiagnosticPath(deps.env),poolMetricsPath(deps.env),hookErrorLogPath(deps.env),path.join(path.dirname(supervisorDiagnosticPath(deps.env)),'child-sessions.jsonl'),...current.map(s=>path.join(s.runDir,'events.jsonl'))]);
         try {
           const entries=await fs.readdir(sessionGroupRunRoot(deps.env),{withFileTypes:true});
           for(const entry of entries) {
@@ -269,6 +271,7 @@ export function createSupervisor(deps) {
             try { assertSessionGroup(entry.name); }
             catch { continue; }
             files.add(path.join(sessionGroupRunRoot(deps.env),entry.name,'events.jsonl'));
+            files.add(path.join(sessionGroupRunRoot(deps.env),entry.name,'child-sessions.jsonl'));
           }
         } catch(error) {
           if(error.code!=='ENOENT')reportError(error,{phase:'log-maintenance-discovery'});
@@ -279,7 +282,7 @@ export function createSupervisor(deps) {
         }
         lastMaintenance=now();
       }
-      for(const runtime of ['claude','codex']) {
+      for(const runtime of ['claude','codex','agy']) {
         // Consume before checking: failure, exceptions or changed health must not retry while idle.
         const startupCheck=startupAuthChecks.delete(runtime);
         if(health.store(runtime).read().health!=='auth_failed')continue;
@@ -328,7 +331,8 @@ export function createSupervisor(deps) {
         lifecycle.messageDelivered(delivered);
       }
       await admission.serialize(()=>lifecycle.workDelivered(delivered));
-    },onHealthEvents:()=>{void loop.tick();},log});
+    },onDeliveryFailed:(notification,current)=>observer.notifyDeliveryFailed(notification,current),
+    onHealthEvents:()=>{void loop.tick();},log});
   const drainHealthWrites=async()=>{
     while(health.queues.size)await Promise.allSettled([...health.queues.values()]);
   };
@@ -342,6 +346,7 @@ export function createSupervisor(deps) {
         await Promise.allSettled([...authChecks]);
         await connectionHandler.drain?.();await admission.tail;await drainHealthWrites();
         for(const activity of activities.values())activity.close();
+        syncObserver.close();
       })();
       return stopPromise;
     }};

@@ -8,8 +8,8 @@ import { createReadinessCheck } from './lib/readiness.js';
 import { bootId, publishHealthProcess } from './lib/health-process.js';
 import { createCoalescedBroadcast } from './lib/coalesced-broadcast.js';
 import http from 'node:http';
-import { promisify } from 'node:util';
 import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -85,7 +85,7 @@ import { createOriginBacklog } from './lib/workbench/origin-backlog.js';
 import { createGroupActions } from './lib/workbench/group-actions.js';
 import { createGroupDeletionRoutes } from './lib/workbench/group-deletion.js';
 import { createGroupsApi, groupCounts, projectGroup, projectListRow } from './lib/workbench/groups-api.js';
-import { usageSummary, usagePricing } from './lib/workbench/usage-api.js';
+import { usageSummary, usagePricing, createUsageCostReader } from './lib/workbench/usage-api.js';
 import { isSameOriginRequest } from './lib/request-origin.js';
 import { usageSeries } from './lib/workbench/usage-series.js';
 import { hostSeries } from './lib/workbench/host-series.js';
@@ -95,9 +95,10 @@ import { createScheduleRead, scheduleReadResponse } from './lib/workbench/schedu
 import { createScheduleWrite } from './lib/workbench/schedule-write.js';
 import { createScheduleTz } from './lib/workbench/schedule-tz.js';
 import { createInstanceTimezone, handleInstanceTimezone, handleInstanceTimezoneRestart } from './lib/instance-timezone.js';
-import { handleAction, getActionsMeta, readCodexRootString } from './lib/actions.js';
+import { handleAction, readCodexRootString } from './lib/actions.js';
 import { VersionChecker } from './lib/version-checker.js';
 import { isNewerVersion } from './lib/version-utils.js';
+import { DASHBOARD_RUNTIMES, createRuntimeOverridesReader, runtimeVersionRecord as projectRuntimeVersion, runtimeDefaults, handleRuntimeOptions } from './lib/runtime-api.js';
 
 const { readConfigStrict } = await loadCoreModule('config-store.js');
 const startedAt = new Date();
@@ -106,12 +107,14 @@ const MEMORY_WRITE_BODY_MAX_BYTES = 2 * 1024 * 1024 + 64 * 1024;
 let zylosVersion = null;
 let ccInstalledVersion = null;
 let codexInstalledVersion = null;
+let agyInstalledVersion = null;
 const installedVersionReader = createInstalledVersionReader();
 async function readInstalledVersions() {
   const versions = await installedVersionReader();
   zylosVersion = versions.zylos;
   ccInstalledVersion = versions.claude;
   codexInstalledVersion = versions.codex;
+  agyInstalledVersion = versions.agy ?? null;
 }
 await readInstalledVersions();
 
@@ -247,12 +250,15 @@ async function broadcastFleetState() {
     const snapshot = await workbench.getSnapshot(undefined, { cachedObservations: true });
     const instance = buildInstancePayload();
     const counts = groupCounts(snapshot, { allowUnreadable: true });
-    const running = snapshot.rows.map(row => projectGroup(row, snapshot)).filter(row => row.side === 'running').map(projectListRow);
+    const rows = snapshot.rows.map(row => projectGroup(row, snapshot));
+    const running = rows.filter(row => row.side === 'running').map(projectListRow);
     const instanceKey = publicationKey(instance), groupsKey = publicationKey({ counts, running });
     const instanceChanged = instanceKey !== lastInstancePublication, groupsChanged = groupsKey !== lastGroupsPublication;
     if (instanceChanged) { sse.broadcast('instance', instance); lastInstancePublication = instanceKey; }
     if (groupsChanged) { sse.broadcast('groups', counts); lastGroupsPublication = groupsKey; }
-    if ((instanceChanged || groupsChanged) && fleetPollerReady) broadcastFleet(fleetPoller.getFleet());
+    if ((instanceChanged || groupsChanged) && fleetPollerReady) {
+      broadcastFleet(fleetPoller.getFleet(), () => selfFleetState(instance, counts, rows, running));
+    }
   } catch (err) {
     process.stderr.write(`[fleet] instance/groups SSE broadcast skipped: ${err.message}\n`);
   }
@@ -363,50 +369,12 @@ function recordDashboardInterrupt(record) {
 const groupAction = createGroupActions({ zylosDir: config.zylosDir, config, onInterrupt: recordDashboardInterrupt });
 const sendNamingPrompt = createNamingRequest({ zylosDir: config.zylosDir, readMode: () => loadZylosConfig(config.zylosDir).session_mode });
 
-function runtimeOverrideSearchTerm(q) {
-  const term = String(q ?? '').trim();
-  return !term || term.length > 64 ? { none: true }
-    : { term, keyable: /^[A-Za-z0-9_.:-]+$/.test(term) && !term.startsWith('--') };
+const runtimeOverridesPage = createRuntimeOverridesReader({ zylosDir: config.zylosDir, displayNames, run: promisify(execFile) });
+function installedVersions() {
+  return { zylos: zylosVersion, claude: ccInstalledVersion, codex: codexInstalledVersion, agy: agyInstalledVersion };
 }
-async function runtimeOverridesPage(params) {
-  const childEnv = { ...process.env, ZYLOS_DIR: config.zylosDir };
-  delete childEnv.ZYLOS_SESSION_GROUP;
-  async function read(args) {
-    const { stdout } = await promisify(execFile)('zylos', ['group', 'overrides', ...args, '--json'], {
-      env: childEnv, timeout: 15000, maxBuffer: 1024 * 1024,
-    });
-    const envelope = JSON.parse(stdout);
-    const data = envelope?.data;
-    if (envelope?.ok !== true || !Array.isArray(data?.runtime) ||
-        data.runtime.some(row => !row || typeof row.sessionGroup !== 'string' || !['claude', 'codex'].includes(row.runtime)) ||
-        (data.nextAfter != null && typeof data.nextAfter !== 'string')) throw Error('override_list_failed');
-    return data;
-  }
-  const hasQuery = params.has('q');
-  const term = hasQuery ? runtimeOverrideSearchTerm(params.get('q')) : null;
-  if (term?.none) return { runtime: [], nextAfter: null };
-  const after = params.get('after');
-  const cursor = after === null ? [] : ['--after', after];
-  const names = await displayNames.listAll();
-  const named = row => ({ ...row, name: names.get(row.sessionGroup) ?? null });
-  if (!hasQuery) {
-    const page = await read(cursor);
-    if (!Number.isInteger(page.runtimeTotal) || page.runtimeTotal < 0) throw Error('override_list_failed');
-    return { runtimeTotal: page.runtimeTotal, runtime: page.runtime.map(named), nextAfter: page.nextAfter ?? null };
-  }
-  const hits = (await displayNames.search(term.term, 500)).map(row => row.sessionGroup);
-  const hitKeys = new Set(hits);
-  const nameRows = after === null && hits.length
-    ? (await read(hits.flatMap(key => ['--group', key]))).runtime.sort((a, b) => a.sessionGroup < b.sessionGroup ? -1 : a.sessionGroup > b.sessionGroup ? 1 : 0) : [];
-  const page = term.keyable ? await read(['--match', term.term, ...cursor]) : { runtime: [], nextAfter: null };
-  return { runtime: [...nameRows, ...page.runtime.filter(row => !hitKeys.has(row.sessionGroup))].map(named),
-    nextAfter: page.nextAfter ?? null };
-}
-
 function runtimeVersionRecord(runtime) {
-  const installed = ({ zylos: zylosVersion, claude: ccInstalledVersion, codex: codexInstalledVersion })[runtime] ?? null;
-  const latest = versionChecker.getLatest()[runtime === 'claude' ? 'cc' : runtime] ?? null;
-  return { installed, latest, update: installed && latest && isNewerVersion(latest, installed) ? latest : null };
+  return projectRuntimeVersion(runtime, { installed: installedVersions(), latest: versionChecker.getLatest() });
 }
 function groupRuntimeInfo(row) {
   const runtime = row.runtime ?? row.target?.runtime ?? null;
@@ -431,16 +399,11 @@ function buildInstancePayload() {
   const snapshot = workbench.getCachedSnapshot();
   const observed = snapshot?.instance ?? {};
   const zylosConfig = { ...loadZylosConfig(config.zylosDir), zylosDir: config.zylosDir };
-  const defaults = Object.fromEntries(['claude', 'codex'].map(runtime => {
-    const meta = getActionsMeta({ ...zylosConfig, runtime });
-    return [runtime, { model: meta.current_model, effort: meta.current_effort,
-      threshold: meta.new_session_threshold, model_thresholds: meta.model_thresholds,
-      session_hot_ttl: meta.session_hot_ttl }];
-  }));
+  const defaults = runtimeDefaults(zylosConfig);
   const resources = getSystemMetrics();
   return { agent: { ...config.agent, ...agentColor(config.agent?.name) }, tz: instanceTz(),
     session_mode: observed.sessionModeStatus ?? { sessionMode: readFleetSessionMode(), transition: null, globalGate: null, blocked: null, supervisor: 'unknown', lastCompleted: null, lastEvents: [] }, default_runtime: zylosConfig.runtime ?? activeRuntime, defaults,
-    versions: Object.fromEntries(['zylos', 'claude', 'codex'].map(runtime => [runtime, runtimeVersionRecord(runtime)])),
+    versions: Object.fromEntries(['zylos', ...DASHBOARD_RUNTIMES].map(runtime => [runtime, runtimeVersionRecord(runtime)])),
     runtimeHealth: observed.runtimeHealth ?? null, accounts: observed.accounts ?? null,
     supervisorPaused: observed.supervisorPaused ?? null, autoRestarts: observed.autoRestarts ?? null,
     resources, services: observed.services ?? null };
@@ -461,37 +424,44 @@ async function refreshDashboardState({ fresh = false } = {}) {
   return workbench.getSnapshot(undefined, { cachedObservations: true });
 }
 
-function buildSelfFleetRecord(statePayload) {
-  if (statePayload === undefined) {
-    const snapshot = workbench.getCachedSnapshot() ?? { rows: [], readAt: Date.now(), listKnown: false };
-    const rows = snapshot.rows.map(row => projectGroup(row, snapshot));
-    statePayload = fleetStateFromObjects(buildInstancePayload(), groupCounts(snapshot, { allowUnreadable: true }),
-      usageSummary(store, { tz: instanceTz() }), {
-        rows: rows.filter(row => row.side === 'running').map(projectListRow),
-        failedRows: rows.filter(row => row.side === 'offline' && row.flags?.startFailed).map(projectListRow),
-      });
-  }
+// Fleet records reuse a cost summary for at most 30 s; usage HTTP reads do not.
+const readFleetCost = createUsageCostReader(store);
+
+function selfFleetState(instance, counts, rows, running = rows.filter(row => row.side === 'running').map(projectListRow)) {
+  return fleetStateFromObjects(instance, counts, readFleetCost({ tz: instanceTz() }), {
+    rows: running,
+    failedRows: rows.filter(row => row.side === 'offline' && row.flags?.startFailed).map(projectListRow),
+  });
+}
+
+function cachedSelfFleetState() {
+  const snapshot = workbench.getCachedSnapshot() ?? { rows: [], readAt: Date.now(), listKnown: false };
+  return selfFleetState(buildInstancePayload(), groupCounts(snapshot, { allowUnreadable: true }),
+    snapshot.rows.map(row => projectGroup(row, snapshot)));
+}
+
+function buildSelfFleetRecord(buildState = cachedSelfFleetState) {
   return stateToFleetRecord({
     name: config.agent?.name,
     color: agentColor(config.agent?.name)
-  }, statePayload, {
+  }, buildState(), {
     self: true,
     base_url: null
   });
 }
 
-function buildFullFleetPayload(remoteFleet = fleetPoller.getFleet(), statePayload) {
+function buildFullFleetPayload(remoteFleet = fleetPoller.getFleet(), buildState) {
   return buildSafeFleetPayload({
     remoteFleet,
-    selfRecord: buildSelfFleetRecord(statePayload),
+    selfRecord: buildSelfFleetRecord(buildState),
     nowIso: new Date().toISOString()
   });
 }
 
-function broadcastFleet(remoteFleet, statePayload) {
+function broadcastFleet(remoteFleet, buildState) {
   if (sse.clients.size === 0) return;
   try {
-    const { payload, redacted } = buildFullFleetPayload(remoteFleet, statePayload);
+    const { payload, redacted } = buildFullFleetPayload(remoteFleet, buildState);
     sse.broadcast('fleet', payload);
     if (redacted) process.stderr.write('[fleet] SSE broadcast redacted: fleet_secret_leak_guard\n');
   } catch (err) {
@@ -1160,21 +1130,9 @@ async function handleApi(req, res, pathname, url) {
   }
 
   if (pathname === '/api/instance/runtime-options') {
-    const selectedRuntime = url.searchParams.get('runtime') ?? activeRuntime;
-    if (!['claude', 'codex'].includes(selectedRuntime)) {
-      sendJson(res, 400, { error: 'INVALID_RUNTIME' }); return true;
-    }
-    const zylosConfig = loadZylosConfig(config.zylosDir);
-    zylosConfig.zylosDir = config.zylosDir;
-    zylosConfig.runtime = selectedRuntime;
-    zylosConfig.thresholdModel = url.searchParams.get('model');
-    const meta = getActionsMeta(zylosConfig);
-    meta.zylos_version = zylosVersion;
-    meta.runtime_cli = selectedRuntime;
-    meta.cc_version = selectedRuntime === 'codex'
-      ? codexInstalledVersion || null
-      : ccInstalledVersion || null;
-    sendJson(res, 200, meta);
+    handleRuntimeOptions(url, res, { activeRuntime,
+      zylosConfig: { ...loadZylosConfig(config.zylosDir), zylosDir: config.zylosDir },
+      zylosVersion, installedVersions: installedVersions() });
     return true;
   }
 

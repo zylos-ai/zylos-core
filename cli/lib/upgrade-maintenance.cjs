@@ -981,8 +981,7 @@ function worker(dir, j, payload) {
     ...payload,
     driverPath: d.driverPath
   })], {
-    encoding:'utf8',
-    timeout: 120000
+    encoding:'utf8'
   });
   let response;
   try {response=JSON.parse(result.stdout);} catch {}

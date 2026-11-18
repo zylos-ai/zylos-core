@@ -62,6 +62,13 @@ function fixture(t, { core = true, config = '{}' } = {}) {
     // Core's session-group-paths imports its bundled comm-bridge, so retain both
     // the package's copy and the independently deployed skill copy.
     fs.cpSync(skill, path.join(packageRoot, 'skills/comm-bridge'), { recursive: true });
+    // The published package ships every skill (.npmignore drops only tests and
+    // node_modules). Core's runtime session target imports activity-monitor's
+    // process helpers, so include that skill the same way the package does.
+    fs.cpSync(path.join(sourceRoot, 'skills/activity-monitor'), path.join(packageRoot, 'skills/activity-monitor'), {
+      recursive: true,
+      filter: source => !['__tests__', 'node_modules'].includes(path.basename(source)),
+    });
     fs.symlinkSync(path.join(sourceRoot, 'node_modules'), path.join(packageRoot, 'node_modules'), 'dir');
   }
   // The development-checkout candidate must not accidentally satisfy the test.

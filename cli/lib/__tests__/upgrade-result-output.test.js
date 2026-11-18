@@ -108,3 +108,11 @@ for (const success of [true, false]) test(`explicit and legacy JSON preserve eve
   }
   assert.equal(JSON.stringify(result), before);
 });
+
+test('human success explains an intentionally stopped Dashboard without repair instructions',()=>{
+  const result={success:true,from:'old',to:'new',dashboard:{state:'stopped',message:'Dashboard was already stopped before the upgrade and remains stopped.'}};
+  const {stdout,stderr}=capture(result,{jsonOutput:false});
+  assert.match(stdout,/already stopped before the upgrade and remains stopped/);
+  assert.equal(stderr,'');
+  assert.doesNotMatch(stdout,/zylos init/);
+});

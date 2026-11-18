@@ -75,6 +75,8 @@ async function configScenario(t,mutant=''){
 test('actual supervisor SQLite commit-before-reply crash preserves one config gate across retry and input changes',{timeout:20000},async t=>{await configScenario(t);});
 test('config gate deletion on restart is detected by actual retry harness',{timeout:15000},async t=>{await assert.rejects(configScenario(t,'drop-config-gate'),{code:'ERR_ASSERTION'});});
 
+// Covers startup auth recovery with a persisted fence and busy old target through private
+// SQLite/tmux. Run when startup auth checks or retirement changes; skip unrelated changes.
 test('real supervisor SIGKILL after auth fence retains health, drains old target and rechecks credentials before clearing',{timeout:20000},async t=>{
  const f=readyTmuxTarget(t,{prefix:'auth-entry-',mode:'multi',runtimeProcess:true});f.tmux('new-session','-d','-s','fixture-keeper','sleep','120');
  const store=new HealthStore({zylosDir:f.root,runtime:'claude'}),state=store.read();state.health='auth_failed';state.reason='authentication_failed';store.write(state);
@@ -82,9 +84,9 @@ test('real supervisor SIGKILL after auth fence retains health, drains old target
  w.child.send('tick');assert.deepEqual(await w.next(),{barrier:'auth-fenced'});await w.kill();
  assert.equal(store.read().health,'auth_failed');
  const reopened=await launch(t,f,'',true);let observed=await reopened.command('release');
- assert.equal(observed.health.health,'auth_failed');assert.equal(observed.checks,0);assert.deepEqual(observed.authTargets,[]);assert.equal(observed.fences[0].reason,'auth');
+ assert.equal(observed.health.health,'auth_failed');assert.equal(observed.checks,1);assert.equal(observed.authTargets.length,1);assert.equal(observed.authTargets[0].runId,'run-1');assert.equal(observed.fences[0].reason,'auth');
  await reopened.command('pending');await reopened.command('busy');observed=await reopened.command('tick');
- assert.equal(observed.health.health,'auth_failed');assert.equal(observed.checks,0);assert.equal(observed.present,true);assert.equal(observed.fences.length,1);
+ assert.equal(observed.health.health,'auth_failed');assert.equal(observed.checks,1);assert.equal(observed.authTargets.length,1);assert.equal(observed.authTargets[0].runId,'run-1');assert.equal(observed.present,true);assert.equal(observed.fences.length,1);assert.equal(observed.fences[0].reason,'auth');
  await reopened.command('idle');observed=await reopened.command('tick');
  assert.equal(observed.present,false);assert.deepEqual(observed.fences,[]);assert.equal(observed.checks,1);assert.equal(observed.health.health,'ok');
  assert.equal(store.read().health,'ok');assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-keeper'));await reopened.command('stop');

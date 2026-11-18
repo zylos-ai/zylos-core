@@ -23,10 +23,11 @@ import os from 'os';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import { hookScriptKey, hookScriptBaseKey, getCommandHooks } from './hook-utils.js';
+import { hookScriptKey, hookScriptBaseKey, getCommandHooks, HOOK_ENTRY_SCRIPT } from './hook-utils.js';
 import { readSessionMode } from './config.js';
 import { copyPrivateFile, writePrivateFile } from './private-file.js';
 import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig, resolveCodexBypassPermissions } from './runtime-setup.js';
+import { hasAgyZylosHooks, syncAgyConfig } from './agy-setup.js';
 import { installCoreCodexHook } from './codex-hooks.js';
 import {
   SIDE_EFFECT_NAMES,
@@ -63,9 +64,19 @@ export function isCoreManaged(hook, { zylosDir = ZYLOS_DIR } = {}) {
     || key === path.resolve(zylosDir, '.zylos', 'instructions', 'assembler.mjs').replaceAll('\\', '/');
 }
 
+/**
+ * Every core hook runs through the hook entry, which lets only the run's pane
+ * main process reach the target script. `exec` replaces the runtime's shell,
+ * so the entry's parent is the runtime itself.
+ */
+export function hookEntryCommand(targetPath, zylosDir = ZYLOS_DIR, { quote = false } = {}) {
+  const entry = path.resolve(zylosDir, '.claude', HOOK_ENTRY_SCRIPT);
+  const word = value => quote ? JSON.stringify(value) : value;
+  return `exec node ${word(entry)} ${word(targetPath)}`;
+}
+
 function zylosClaudeScript(relativePath, zylosDir = ZYLOS_DIR) {
-  const scriptPath = path.resolve(zylosDir, '.claude', relativePath);
-  return `node ${scriptPath}`;
+  return hookEntryCommand(path.resolve(zylosDir, '.claude', relativePath), zylosDir);
 }
 
 function commandHook(relativePath, options = {}, zylosDir = ZYLOS_DIR) {
@@ -113,7 +124,7 @@ export function canonicalAssemblerEntry({ zylosDir = ZYLOS_DIR } = {}) {
   return {
     type: 'command',
     command: [
-      'node', JSON.stringify(path.join(instructionsDir, 'assembler.mjs')),
+      hookEntryCommand(path.join(instructionsDir, 'assembler.mjs'), root, { quote: true }),
       '--marker', JSON.stringify(path.join(instructionsDir, 'meta.json')),
       '--system', JSON.stringify(path.join(instructionsDir, 'claude-system.md')),
       '--user', JSON.stringify(path.join(root, 'ZYLOS.md')),
@@ -661,7 +672,7 @@ export async function enqueueRestartIfNeeded({
   }
 }
 
-export function syncRuntimeHooks({
+function syncSharedRuntimeHooks({
   zylosDir = ZYLOS_DIR,
   dryRun = false,
   stopFailureSupported = detectStopFailureSupport(),
@@ -785,6 +796,20 @@ export function syncRuntimeHooks({
   console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${thresholdSync.changed ? ', new-session threshold paired' : ''}${settingsBackfilled ? ', settings backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}${codexHooks.changed ? ', Codex hooks refreshed' : ''}.`);
 
   return { ...result, changed: true };
+}
+
+/** Antigravity synchronization reports separately and never requests a shared-runtime restart. */
+export function syncRuntimeHooks(options = {}) {
+  const result = syncSharedRuntimeHooks(options);
+  let agy = { changed: false };
+  if (hasAgyZylosHooks()) {
+    try { agy = syncAgyConfig({ zylosDir: options.zylosDir || ZYLOS_DIR, dryRun: options.dryRun || false }); }
+    catch (error) {
+      agy.error = { code: error.code || 'AGY_CONFIG_SYNC_FAILED', message: error.message };
+      console.error(`Antigravity configuration: ${agy.error.message}`);
+    }
+  }
+  return result ? { ...result, agy } : result;
 }
 
 export async function main(argv = process.argv.slice(2)) {

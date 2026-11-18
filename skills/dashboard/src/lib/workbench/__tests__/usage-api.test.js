@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Store } from '../../store.js';
-import { usageSummary, usagePricing } from '../usage-api.js';
+import { usageSummary, usagePricing, usageCostSummary, createUsageCostReader } from '../usage-api.js';
 import { usageSeries } from '../usage-series.js';
 
 function fixture(t) {
@@ -121,4 +121,87 @@ test('modern output-only and empty usage never invent input tokens from scalar v
   assert.equal(pricing.unmatched.length, 2);
   assert.equal(pricing.unmatched.find(row => row.model === 'output-only').tokens, 400);
   assert.equal(pricing.unmatched.find(row => row.model === 'legacy').tokens, 100);
+});
+
+// Same private in-memory Store. Run when cost rows, cost addition or the Fleet
+// cost reader change. Seeded rows cover both stored cost forms, groups, a third
+// runtime, day edges and costs whose sum depends on addition order; the first
+// differing bit stops the comparison.
+test('cost summary matches usage summary costs bit for bit', t => {
+  const { store, metric } = fixture(t);
+  let seed = 20261115;
+  const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const start = Date.parse('2026-11-05T00:00:00.000Z'), runtimes = ['claude', 'codex', 'gemini'];
+  for (let index = 0; index < 400; index++) {
+    const timestamp = new Date(start + Math.floor(random() * 11 * 86400000)).toISOString();
+    const runtime = runtimes[Math.floor(random() * runtimes.length)], cost = random() * 10 ** Math.floor(random() * 6 - 3);
+    const group = random() < 0.3 ? null : `telegram:group-${index % 5}`;
+    if (random() < 0.2) {
+      metric(timestamp, null, runtime, { total_input: 10 }, 'api_request_tokens', 10, `legacy-${index}`);
+      metric(timestamp, null, runtime, { model: 'legacy' }, 'api_request_cost', cost, `legacy-${index}`);
+    } else metric(timestamp, group, runtime, { total_input: 10, output: 1, cost });
+  }
+  let compared = 0;
+  for (const tz of ['Asia/Singapore', 'America/New_York', 'UTC', undefined]) {
+    for (const at of ['2026-11-12T03:00:00.000Z', '2026-11-14T15:59:59.999Z', '2026-11-14T16:00:00.000Z', '2026-11-16T23:00:00.000Z']) {
+      const now = new Date(at), costs = usageCostSummary(store, { tz, now }), summary = usageSummary(store, { tz, now });
+      assert.equal(costs.tz, summary.tz);
+      assert.equal(costs.tzFallback, summary.tzFallback);
+      for (const period of ['today', 'sevenDay']) {
+        assert.equal(costs[period].since, summary[period].since, `${tz} ${at} ${period} since`);
+        assert.ok(Object.is(costs[period].cost, summary[period].cost),
+          `${tz} ${at} ${period}: ${costs[period].cost} !== ${summary[period].cost}`);
+        if (summary[period].cost > 0) compared++;
+      }
+    }
+  }
+  assert.ok(compared >= 24, 'most windows contain cost rows');
+});
+
+// Same private in-memory Store with an injected clock. Run when the Fleet cost
+// reader or its window changes; usage HTTP reads must stay uncached.
+test('cost reader reuses one summary for less than 30 seconds', t => {
+  const { store, metric } = fixture(t), tz = 'Asia/Singapore';
+  let clock = Date.parse('2026-11-15T02:00:00.000Z');
+  const read = createUsageCostReader(store, { now: () => clock });
+  metric('2026-11-15T01:00:00.000Z', 'origin', 'claude', { total_input: 10, cost: 1.1 });
+  const first = read({ tz });
+  assert.equal(first.today.cost, 1.1);
+  metric('2026-11-15T02:00:00.000Z', 'telegram:alpha', 'codex', { total_input: 10, cost: 2.2 });
+  const summary = usageSummary(store, { tz, now: new Date(clock) });
+  assert.equal(summary.today.cost, 1.1 + 2.2, 'usage summary reads the new row immediately');
+  clock += 29_999;
+  assert.equal(read({ tz }), first, 'the cached summary is reused before 30 seconds');
+  clock += 1;
+  const second = read({ tz }), current = usageSummary(store, { tz, now: new Date(clock) });
+  assert.notEqual(second, first);
+  assert.ok(Object.is(second.today.cost, current.today.cost));
+  assert.ok(Object.is(second.sevenDay.cost, current.sevenDay.cost));
+  clock -= 1;
+  assert.notEqual(read({ tz }), second, 'a clock moved backwards reads again');
+});
+
+// Same private in-memory Store with an injected clock. Run when cache keys,
+// instance timezone handling or calendar boundaries change.
+test('cost reader reads again at a new local day or timezone', t => {
+  const { store, metric } = fixture(t), tz = 'Asia/Singapore';
+  let clock = Date.parse('2026-11-15T15:59:50.000Z');
+  const read = createUsageCostReader(store, { now: () => clock });
+  metric('2026-11-15T10:00:00.000Z', 'origin', 'claude', { total_input: 10, cost: 3 });
+  const evening = read({ tz });
+  assert.equal(evening.today.since, '2026-11-14T16:00:00.000Z');
+  assert.equal(evening.today.cost, 3);
+  clock = Date.parse('2026-11-15T16:00:00.000Z');
+  const midnight = read({ tz });
+  assert.equal(midnight.today.since, '2026-11-15T16:00:00.000Z', 'a new local day does not wait for 30 seconds');
+  assert.equal(midnight.today.cost, 0);
+  assert.equal(midnight.sevenDay.since, '2026-11-09T16:00:00.000Z');
+  assert.equal(midnight.sevenDay.cost, 3);
+  metric('2026-11-15T16:00:01.000Z', 'origin', 'claude', { total_input: 10, cost: 4 });
+  clock += 1000;
+  assert.equal(read({ tz }), midnight, 'the same local day reuses the new summary');
+  const utc = read({ tz: 'UTC' });
+  assert.equal(utc.tz, 'UTC');
+  assert.equal(utc.today.since, '2026-11-15T00:00:00.000Z');
+  assert.equal(utc.today.cost, 7, 'a timezone change reads again');
 });

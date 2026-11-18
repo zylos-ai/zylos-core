@@ -82,6 +82,48 @@ for (const model of ['gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.6']) {
   });
 }
 
+test('GPT-6.2 models lead the catalog with their Codex display names', () => {
+  assert.deepEqual(getCodexModels().slice(0, 3).map(({ id, display_name }) => [id, display_name]), [
+    ['gpt-6.2-sol', 'GPT-6.2-Sol'], ['gpt-6.2-astra', 'GPT-6.2-Astra'], ['gpt-6.1-sol', 'GPT-6.1-Sol']
+  ]);
+});
+
+test('GPT-6.1 Terra follows GPT-6.1-Sol under its Codex display name', () => {
+  const ids = getCodexModels().map(({ id }) => id);
+  assert.equal(ids.indexOf('gpt-6.1-terra'), ids.indexOf('gpt-6.1-sol') + 1);
+  assert.equal(getCodexModels().find(({ id }) => id === 'gpt-6.1-terra').display_name, 'GPT-6.1 Terra');
+});
+
+for (const model of ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-terra']) {
+  test(`${model} is selectable, saves ultra and rejects invalid effort`, async () => {
+    const { handleAction: isolatedAction } = await import(`../src/lib/actions.js?fixture=${model}`);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-codex-effort-'));
+    try {
+      fs.mkdirSync(path.join(dir, '.codex'));
+      const configPath = path.join(dir, '.codex', 'config.toml');
+      fs.writeFileSync(configPath, 'model = "gpt-6.1-sol"\nmodel_reasoning_effort = "high"\n');
+      const config = { runtime: 'codex', zylosDir: dir };
+      const meta = getActionsMeta(config, {});
+      assert.ok(meta.models.some(entry => entry.id === model));
+      assert.deepEqual(meta.efforts_by_model[model], ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+      const switched = await isolatedAction('switch-model', { model }, config);
+      assert.equal(switched.ok, true);
+      assert.match(fs.readFileSync(configPath, 'utf8'), new RegExp(`^model = "${model.replaceAll('.', '\\.')}"$`, 'm'));
+      const saved = await isolatedAction('switch-effort', { effort: 'ultra' }, config);
+      assert.equal(saved.ok, true);
+      const after = getActionsMeta(config, {});
+      assert.equal(after.current_model, model);
+      assert.equal(after.current_effort, 'ultra');
+      const beforeReject = fs.readFileSync(configPath, 'utf8');
+      const rejected = await isolatedAction('switch-effort', { effort: 'invented' }, config);
+      assert.equal(rejected.error, 'invalid_effort');
+      assert.equal(fs.readFileSync(configPath, 'utf8'), beforeReject);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
 test('production source has no client model cache reader', () => {
   const root = new URL('../src/', import.meta.url);
   for (const entry of fs.readdirSync(root, { recursive: true })) {

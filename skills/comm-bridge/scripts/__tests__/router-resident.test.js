@@ -185,3 +185,15 @@ test('a stable ready Origin clears failure backoff before an hour asleep and a f
   await f.rounds(1);
   assert.equal(f.calls.filter(row => row[0] === 'launch').length, count + 1);
 });
+
+test('legacy migration only observes the two runtimes that predate managed groups', async () => {
+  const names = [];
+  const migration = createLegacyMigration({
+    readLegacy: async tmuxName => { names.push(tmuxName); return { present: false }; },
+    readLegacyStatus: async () => assert.fail('Absent legacy session has no status'),
+    sendExit: async () => assert.fail('No legacy session should be stopped'),
+    getSessionAdapter: () => assert.fail('No legacy session should need an adapter'),
+  });
+  assert.deepEqual(await migration.findLegacySessions(), []);
+  assert.deepEqual(names, ['claude-main', 'codex-main']);
+});

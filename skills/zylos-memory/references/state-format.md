@@ -57,9 +57,11 @@ this block into temporary state. Give commit only IDs whose follow-up is
 confirmed by actual progress; an outbound audit row alone is not delivery
 proof. Commit preserves all other lines and the original title exactly.
 
-Use the restricted tool for `state.md.<token>.tmp` after checkpoint succeeds,
-then `sync-files.js commit` for formal replacement. A damaged header is a reader
-fallback, not permission to discard the body or uncommitted segments. See
+Use the restricted tool for `state.md.tmp` after checkpoint succeeds.
+The tool maps this fixed name to the current scope's temporary state file for
+the acquired token. Then use `sync-files.js commit` for formal replacement.
+A damaged header is a reader fallback, not permission to discard the body or
+uncommitted segments. See
 [the published-state example](../examples/state.md). Its `inbox_committed`
 value is filled by the commit script; leave that field empty when writing
 temporary state.

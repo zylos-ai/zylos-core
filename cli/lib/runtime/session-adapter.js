@@ -138,7 +138,7 @@ export class SessionAdapter extends RuntimeAdapter {
         args = applyUpgradePrompt(
           args,
           upgrade.prompt,
-          this.runtimeId === 'codex' ? args.length - 1 : undefined,
+          ['codex', 'agy'].includes(this.runtimeId) ? args.length - 1 : undefined,
           { append: !upgrade.blocked }
         );
       }

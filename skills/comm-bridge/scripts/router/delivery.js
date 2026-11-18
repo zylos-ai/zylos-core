@@ -1,11 +1,15 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { loadCoreModule } from './core-modules.js';
 import { TMUX_COMMAND as C, TMUX_FORMAT as F, isIdentityError, adapterError } from '../tmux-protocol.js';
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
+const { groupRunDir } = await loadCoreModule('session-group-paths.js');
+const { buildKickPrompt } = await loadCoreModule('runtime/kick-prompt.js');
 const { resolveSessionTarget, revalidateSessionTarget } = await loadCoreModule('runtime/session-target.js');
 import { PeriodicEnter } from '../periodic-enter.js';
 import { sanitizeMessage } from '../c4-utils.js';
-import { findPromptY, isUsageOverlayCapture } from '../tmux-input-state.js';
+import { findPromptY, isUsageOverlayCapture, checkAgyInputState } from '../tmux-input-state.js';
 import { saveEnterCapture } from '../c4-diagnostic.js';
 import { DELIVERY_DELAY_BASE, DELIVERY_DELAY_PER_KB, DELIVERY_DELAY_MAX, MAX_RETRIES, RETRY_BASE_MS,
   CONTROL_MAX_RETRIES, ENTER_VERIFY_MAX_RETRIES, ENTER_VERIFY_WAIT_MS, PERIODIC_ENTER_ENABLED,
@@ -34,7 +38,7 @@ export function isRecoveryHeartbeatPhase(phase) { return phase === 'recovery' ||
 export function isBypassState(item) { return item.type === 'control' && item.bypass_state === 1; }
 export function isKeystrokeControl(item) { return item.type === 'control' && (item.content || '').startsWith('[KEYSTROKE]'); }
 export function parseKeystrokeKey(content) { return (content || '').slice('[KEYSTROKE]'.length).trim(); }
-export function isExitLifecycleControl(item, runtime) { return item.type === 'control' && ['claude', 'codex'].includes(runtime) && item.content === '/exit'; }
+export function isExitLifecycleControl(item, runtime) { return item.type === 'control' && ['claude', 'codex', 'agy'].includes(runtime) && item.content === '/exit'; }
 export function shouldAutoAckHeartbeat({ item, agentState, procState, confirmedActive }) {
   return Boolean(item?.content?.includes('Heartbeat check') && !isRecoveryHeartbeatPhase(getHeartbeatPhase(item.content)) &&
     agentState?.healthy === true && !offline(agentState.state) && procState?.alive === true && confirmedActive);
@@ -102,7 +106,7 @@ export function createDelivery(deps, configuration = {}) {
       try {
         connection = await open(options.tmux ?? {});
         const target = await resolve({ sessionGroup: group, connection });
-        if (stopped || !target.ready || !['claude', 'codex'].includes(target.runtime)) throw failure('ENTER_UNVERIFIED');
+        if (stopped || !target.ready || !['claude', 'codex', 'agy'].includes(target.runtime)) throw failure('ENTER_UNVERIFIED');
         entry.fields = { ...entry.fields, runId: target.runId, runtime: target.runtime };
         const adapter = deps.getSessionAdapter(target.runtime);
         await captureBound({ target, connection, adapter }, entry.fields, 'before', { kind: 'periodic' });
@@ -224,6 +228,13 @@ export function createDelivery(deps, configuration = {}) {
       const rawX = await connection.command([C.displayMessage, '-p', '-t', target.paneId, F.cursorX]);
       const x = Number.parseInt(rawX.trim(), 10);
       let verdict = 'indeterminate';
+      if (target.runtime === 'agy') {
+        await revalidate(bound());
+        const y = Number.parseInt((await connection.command([C.displayMessage, '-p', '-t', target.paneId, F.cursorY])).trim(), 10);
+        verdict = checkAgyInputState(await adapter.captureScreen(bound()), x, y);
+        emit('input_check', { verdict });
+        return verdict;
+      }
       if (Number.isInteger(x) && x >= 0) {
         if (x > 2) verdict = 'has_content';
         else {
@@ -305,16 +316,18 @@ export function createDelivery(deps, configuration = {}) {
             (binding.expectedSessionId != null && binding.expectedSessionId !== target.runtimeSessionId)) throw failure('RUNID_MISMATCH');
         }
         if (!target.ready) { gateCode = 'wait_ready'; }
-        else if (!['claude', 'codex'].includes(target.runtime)) { gateCode = 'runtime_unknown'; try { deps.alert?.('runtime_unknown', fields); } catch {} }
+        else if (!['claude', 'codex', 'agy'].includes(target.runtime)) { gateCode = 'runtime_unknown'; try { deps.alert?.('runtime_unknown', fields); } catch {} }
         else {
         state = await readState();
         const item = { ...row, type };
         const bypass = isBypassState(item);
         const health = deps.readRuntimeHealth(target.runtime);
         const publicHealth = health.missing ? 'ok' : health.unreadable ? 'unavailable' : (health.publicHealth ?? health.health);
-        if ((!bypass && (offline(state.state) || (state.health ?? 'ok') !== 'ok' || publicHealth !== 'ok')) ||
+        if (target.runtime === 'agy') adapter = deps.getSessionAdapter(target.runtime);
+        const agyInputReady = target.runtime !== 'agy' || isKeystrokeControl(item) || await inputState() === 'empty';
+        if (!agyInputReady || (!bypass && (offline(state.state) || (state.health ?? 'ok') !== 'ok' || publicHealth !== 'ok')) ||
           (row.require_idle === 1 && (state.state !== 'idle' || !(Number.isFinite(state.idle_seconds) && state.idle_seconds >= REQUIRE_IDLE_MIN_SECONDS)))) {
-          gateCode = !bypass && offline(state.state) ? 'session_offline'
+          gateCode = !agyInputReady ? 'input_not_empty' : !bypass && offline(state.state) ? 'session_offline'
             : !bypass && (state.health ?? 'ok') !== 'ok' ? 'session_unhealthy'
             : !bypass && publicHealth !== 'ok' ? 'runtime_unavailable' : 'require_idle';
           gateReason = gateCode === 'session_unhealthy' ? `session_${state.health}`
@@ -334,6 +347,13 @@ export function createDelivery(deps, configuration = {}) {
             if (type === 'control' && content.startsWith('/')) periodic.reset('slash_control');
             const message = type === 'conversation' ? deps.formatConversation(row) : content.startsWith('/') ? content : `Meanwhile, ${content}`;
             const sanitized = sanitizeMessage(message);
+            const clearAgy = target.runtime === 'agy' && type === 'control' && content === '/clear';
+            if (clearAgy) {
+              await revalidate(bound());
+              const directory = groupRunDir(group ?? 'origin');
+              await fs.mkdir(directory, { recursive: true });
+              await fs.writeFile(path.join(directory, 'agy-session-source'), JSON.stringify({ runId: target.runId, source: 'clear' }), { mode: 0o600 });
+            }
             await io(() => adapter.sendText({ ...bound(), text: sanitized, bracketedPaste: BRACKETED_PASTE_ENABLED }));
             pastedAt = now();
             try { Promise.resolve(deps.notifyDelivered({
@@ -357,6 +377,13 @@ export function createDelivery(deps, configuration = {}) {
               const after = await readState();
               if (type === 'conversation' || ((after.proc?.alive === false || offline(after.state)) &&
                 !(isExitLifecycleControl(item, target.runtime)))) throw failure('ENTER_UNVERIFIED');
+            }
+            if (clearAgy) {
+              // /clear itself does not fire SessionStart in agy. Its first
+              // message does, so use the same internal sentinel as launch.
+              await io(() => adapter.sendText({ ...bound(), text: buildKickPrompt(), bracketedPaste: BRACKETED_PASTE_ENABLED }));
+              await sleep(getDeliveryDelay(Buffer.byteLength(buildKickPrompt(), 'utf8')));
+              if (!await verify()) throw failure('ENTER_UNVERIFIED');
             }
             schedulePeriodic();
             result = type === 'conversation' ? 'delivered' : content.includes('---- ack via:') ? 'submitted' : 'ack';
@@ -386,6 +413,10 @@ export function createDelivery(deps, configuration = {}) {
       else {
         const transition = deps.db.failDelivery(row.id, { maxRetries: MAX_RETRIES });
         if (!transition.changed) emit('conditional_write_lost', { operation: 'failDelivery' });
+        else if (transition.status === 'failed' && code === 'ENTER_UNVERIFIED' && pastedAt !== null) {
+          try { Promise.resolve(deps.notifyDeliveryFailed?.({ conversationId: row.id, sessionGroup: group,
+            runId: target.runId, sessionId: target.runtimeSessionId, runtime: target.runtime, pastedAt })).catch(() => {}); } catch {}
+        }
         else if (transition.status === 'pending') await sleep(options.retryBaseMs * 2 ** (transition.retryCount - 1));
       }
       return { delivered: false, blocked: true, state: state.state };

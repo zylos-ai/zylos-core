@@ -9,14 +9,16 @@ import { readBootstrapIdentity } from '../bootstrap-identity.js';
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-control-ready-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  return { env: { ZYLOS_RUN_ID: 'run' }, scopeReader: async () => ({ dir }), identityReader: async () => ({ runtime: 'codex' }), dir };
+  const processReader = () => ({ runtimePid: 10, runtimeStart: '100', runtimeParentPid: 1, runtimeParentStart: '50' });
+  return { env: { ZYLOS_RUN_ID: 'run' }, scopeReader: async () => ({ dir }), identityReader: async () => ({ runtime: 'codex' }), processReader, dir };
 }
 
 test('local publication follows enqueue and retains the exact control IDs', async t => {
   const f = fixture(t), file = path.join(f.dir, 'current-session.json');
   const result = await publishBootstrapReady({ source: 'startup', session_id: 's' }, { ...f, now: () => 42,
     enqueue: async () => { assert.equal(fs.existsSync(file), false); return { startupControlIds: [4, 7] }; } });
-  assert.deepEqual(JSON.parse(fs.readFileSync(file)), { runId: 'run', sessionId: 's', startupControlIds: [4, 7], startupPrompt: { state: 'enqueued' }, ts: 42 });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)), { runId: 'run', sessionId: 's', startupControlIds: [4, 7], startupPrompt: { state: 'enqueued' }, ts: 42,
+    runtimePid: 10, runtimeStart: '100', runtimeParentPid: 1, runtimeParentStart: '50' });
   assert.equal(result.sessionId, 's');
 });
 

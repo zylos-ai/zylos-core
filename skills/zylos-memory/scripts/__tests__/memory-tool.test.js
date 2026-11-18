@@ -26,6 +26,35 @@ async function fixture(kind, group, sharedRoot) {
 }
 const create = (token, file, replacement = 'content') => ({ op: 'create', path: file, replacement, token });
 
+test('local: fixed temporary state name creates and edits the bound group or global file', async () => {
+  for (const [kind, group] of [['group', 'telegram:temporary'], ['global', undefined]]) {
+    const f = await fixture(kind, group);
+    const relative = path.relative(path.join(f.dir, 'memory'), path.join(f.scope.memoryDir, `state.md.${f.token}.tmp`));
+    assert.deepEqual(await f.editor(create(f.token, 'state.md.tmp', 'before')),
+      { ok: true, path: relative, bytes: 6 });
+    assert.equal((await f.editor({ op: 'edit', path: 'state.md.tmp', expected: 'before', replacement: 'after', token: f.token })).ok, true);
+    assert.equal(fs.readFileSync(path.join(f.dir, 'memory', relative), 'utf8'), 'after');
+    assert.equal(fs.existsSync(path.join(f.scope.memoryDir, 'state.md.tmp')), false);
+    assert.equal(fs.existsSync(path.join(f.dir, 'memory/state.md')), false);
+  }
+});
+
+test('local: fixed temporary state name preserves token and path rejection results', async () => {
+  const f = await fixture('group', 'telegram:temporary');
+  assert.deepEqual(await f.editor(create('__TOKEN__', 'state.md.tmp')),
+    { ok: false, code: 'INVALID_INPUT', message: 'token is required: pass the T printed by sync-lock.js acquire' });
+  assert.equal((await f.editor(create('0'.repeat(32), 'state.md.tmp'))).code, 'TOKEN_MISMATCH');
+  assert.deepEqual(await f.editor(create(f.token, 'reference/preferences.md')),
+    { ok: false, code: 'PATH_NOT_ALLOWED', message: 'Memory path is not allowed' });
+  assert.equal((await f.editor(create(f.token, 'state.md.tmp'))).ok, true);
+  const origin = await fixture('origin', 'origin');
+  for (const op of ['create', 'edit']) {
+    assert.deepEqual(await origin.editor({ ...create(origin.token, 'state.md.tmp'), op, expected: 'content' }),
+      { ok: false, code: 'PATH_NOT_ALLOWED', message: 'Memory path is not allowed' });
+  }
+  assert.equal(fs.existsSync(path.join(origin.scope.memoryDir, `state.md.${origin.token}.tmp`)), false);
+});
+
 test('local: group, origin and global use marker-derived target scopes', async () => {
   const group = await fixture('group', 'telegram:g-1');
   const temporary = `session-groups/telegram:g-1/state.md.${group.token}.tmp`;

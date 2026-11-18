@@ -41,20 +41,21 @@ export async function prepareUpgradeRuntimeClis(ctx, {
   if (config.state === 'error') throw config.error;
   const current = config.state === 'ok' ? config.config : {};
   const runtime = current.runtime ?? 'claude';
-  if (!['claude', 'codex'].includes(runtime)) throw Error('Unsupported preparation runtime');
+  if (!['claude', 'codex', 'agy'].includes(runtime)) throw Error('Unsupported preparation runtime');
   if (current.session_mode !== undefined && !['single', 'multi'].includes(current.session_mode)) throw Error('Unsupported preparation session mode');
   const required = new Set([runtime]);
   if (current.session_mode === 'multi') {
     const overrides = await listRuntimeOverrides(ctx);
     if (!Array.isArray(overrides)) throw Error('Invalid runtime overrides');
     for (const item of overrides) {
-      if (!['claude', 'codex'].includes(item?.runtime)) throw Error('Unsupported preparation group runtime');
+      if (!['claude', 'codex', 'agy'].includes(item?.runtime)) throw Error('Unsupported preparation group runtime');
       required.add(item.runtime);
     }
   }
   const prepareClis = prepare || (await import('../commands/init.js')).prepareInitRuntimeClis;
   const result = await prepareClis({
     exists,
+    runtimes: [...new Set(['claude', 'codex', ...required])],
     install: Object.fromEntries(['claude', 'codex'].map(runtime => [runtime, () => {
       return install[runtime]();
     }])),
@@ -95,7 +96,7 @@ export function prepareUpgradeRuntime(ctx, {
   const config = readConfigStrict(path.join(zylosDir, '.zylos/config.json'));
   if (config.state === 'error') throw config.error;
   const runtime = config.state === 'ok' ? config.config.runtime || 'claude' : 'claude';
-  if (!['claude', 'codex'].includes(runtime)) throw Error('Unsupported preparation runtime');
+  if (!['claude', 'codex', 'agy'].includes(runtime)) throw Error('Unsupported preparation runtime');
   const replacements = [];
   const warnings = [];
   const add = (relative, content, kind = 'instructions', id) => {

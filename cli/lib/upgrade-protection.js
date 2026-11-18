@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker, SNAPSHOT_FORMAT_VERSION, ORIGINAL_DEPLOYMENT_FORMAT_VERSION } from './core-db-backup.js';
+import { rehearseCoreDbUpgrade, createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker, SNAPSHOT_FORMAT_VERSION, ORIGINAL_DEPLOYMENT_FORMAT_VERSION } from './core-db-backup.js';
 const require = createRequire(import.meta.url);
 export const maintenance = require('./upgrade-maintenance.cjs');
 // A live updater must survive replacement of its own installed package too.
@@ -117,6 +117,7 @@ export function beginUpgrade(ctx, {
     automaticResume: maintenance.canRecognizeProcesses(),
     coreManifest: manifest,
     originalServices: managedServices.filter(s => s.status === 'online'),
+    dashboardWasStopped: managedServices.some(s => s.name === 'zylos-dashboard' && s.status === 'stopped'),
     // Services refuse to start on a database older than their code, so PM2
     // leaves them errored (or still cycling) until the migration has run.
     // Forward completion restarts them; recovery never does.
@@ -253,6 +254,11 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
   maintenance.update(dir, j, {
     phase: 'offline'
   });
+  if (j.databaseMode !== 'unchanged') {
+    (overrides.rehearse ?? rehearseCoreDbUpgrade)(j.zylosDir, ctx.tempDir, {
+      driverRoot:j.skillsDir, dashboardOwnerManaged:j.dashboardOwnerManaged
+    });
+  }
   const verifySnapshot=overrides.verifySnapshot ?? runCoreDbWorker;
   const snapshot = (overrides.snapshot ?? createCoreDbSnapshot)({
     zylosDir: j.zylosDir,

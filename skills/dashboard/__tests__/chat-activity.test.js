@@ -692,10 +692,10 @@ test('the activity route uses the chat access rules and accepts only tab and sub
   }
 });
 
-test('a Dashboard database one version older gains the group, type and time index, and activity lookups use it', async t => {
+test('a Dashboard database from before the group, type and time index gains it, and activity lookups use it', async t => {
   const f = fixture(t, { now: at(30) });
   const db = f.store.db;
-  db.exec('DROP INDEX idx_events_group_type_ts; DELETE FROM schema_migrations WHERE version=27');
+  db.exec('DROP INDEX idx_events_group_type_ts; DELETE FROM schema_migrations WHERE version>=27');
   migrateDatabase(db);
   assert.equal(db.prepare('SELECT MAX(version) FROM schema_migrations').pluck().get(), TARGET_SCHEMA_VERSION);
   assert.deepEqual(db.pragma('index_info(idx_events_group_type_ts)').map(column => column.name), ['session_group', 'event_type', 'timestamp']);

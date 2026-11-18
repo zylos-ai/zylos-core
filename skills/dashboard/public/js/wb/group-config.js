@@ -2,7 +2,7 @@ import { element, runtimeName } from './plain-text.js';
 
 export function responseError(value, fallback = 'request_failed') {
   const error = value?.error;
-  return typeof error === 'string' ? error : [error?.code, error?.message].filter(Boolean).join(' · ') || fallback;
+  return typeof error === 'string' ? error : [...new Set([error?.code, error?.message].filter(Boolean))].join(' · ') || fallback;
 }
 
 export async function fetchJson(fetch, path, options = {}) {
@@ -23,7 +23,7 @@ export function runningText(data, kind, t = key => key) {
 }
 
 export function validConfigChange(change) {
-  return change?.kind === 'runtime' ? ['inherit', 'claude', 'codex'].includes(change.value)
+  return change?.kind === 'runtime' ? ['inherit', 'claude', 'codex', 'agy'].includes(change.value)
     : change?.kind === 'model' && ['claude', 'codex'].includes(change.runtime) &&
       (change.reset === true || (typeof change.model === 'string' && change.model.trim() !== '' &&
         typeof change.effort === 'string' && change.effort.trim() !== ''));
@@ -34,7 +34,7 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
   const publish = () => { if (active()) onChange(state); };
   const thresholdRequests = new Set();
   async function loadThreshold(runtime, model) {
-    if (!model || !['claude', 'codex'].includes(runtime) || Number.isFinite(state.meta[runtime]?.model_thresholds?.[model])) return;
+    if (!model || !['claude', 'codex', 'agy'].includes(runtime) || Number.isFinite(state.meta[runtime]?.model_thresholds?.[model])) return;
     const id = runtime + ':' + model;
     if (thresholdRequests.has(id)) return;
     thresholdRequests.add(id);
@@ -47,7 +47,7 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
   }
   // Model and effort choices per engine; without them the editor falls back to free text.
   async function loadMeta(runtime) {
-    if (!['claude', 'codex'].includes(runtime) || runtime in state.meta) return state.meta[runtime];
+    if (!['claude', 'codex', 'agy'].includes(runtime) || runtime in state.meta) return state.meta[runtime];
     state.meta[runtime] = undefined;
     let value = null;
     try { value = await request('/api/instance/runtime-options?runtime=' + runtime); } catch {}
@@ -156,7 +156,8 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
     node.value = value; node.disabled = locked; return node;
   };
   const resolved = state.value?.runtime?.data?.resolved?.runtime ?? 'claude';
-  const target = select(t('wb.config.targetRuntime'), ['claude', 'codex'].map(value => ({ value, label: runtimeName(value) })), state.draft.target ?? resolved);
+  const target = select(t('wb.config.targetRuntime'), ['claude', 'codex', 'agy'].map(value => ({ value, label: runtimeName(value) })), state.draft.target ?? resolved);
+  const supportsModelOverride = target.value !== 'agy';
   const meta = state.meta?.[target.value];
   const start = startingPair(state.value, target.value);
   const modelValue = state.draft.model ?? start.model;
@@ -176,6 +177,7 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
   };
   showThreshold();
   const effort = select(t('wb.term.effort'), effortChoices(meta, model.value, effortValue), effortValue, t('wb.config.pickEffort'));
+  if (!supportsModelOverride) { model.disabled = true; effort.disabled = true; }
   target.addEventListener('change', () => {
     state.draft = { ...state.draft, target: target.value, model: undefined, effort: undefined };
     void controller.loadMeta?.(target.value);
@@ -183,7 +185,7 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
   });
   const save = element(document, 'button', t('wb.config.save'), 'wb-btn wb-btn-primary wb-btn-sm'); save.type = 'button';
   // Saving writes this group's own pair, so both halves must be chosen on purpose.
-  const syncSave = () => { save.disabled = locked || !model.value.trim() || !effort.value; };
+  const syncSave = () => { save.disabled = locked || !supportsModelOverride || !model.value.trim() || !effort.value; };
   model.addEventListener(choices?.length ? 'change' : 'input', () => {
     state.draft.model = model.value;
     const kept = effort.value;
@@ -201,14 +203,14 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
   const form = element(document, 'div', undefined, 'wb-cfg-edit');
   const pair = element(document, 'div', undefined, 'wb-cfg-controls');
   pair.append(target, model, effort, save, cancel);
-  form.append(pair, threshold, element(document, 'p', t('wb.config.pairNote'), 'wb-note'));
+  form.append(pair, threshold, element(document, 'p', t(supportsModelOverride ? 'wb.config.pairNote' : 'wb.config.modelUnavailable'), 'wb-note'));
   // Less common: which engine this group runs on, and dropping its own model pair.
-  const runtime = select(t('wb.term.runtime'), ['inherit', 'claude', 'codex'].map(value => ({ value, label: value === 'inherit' ? t('wb.term.inherit') : runtimeName(value) })),
+  const runtime = select(t('wb.term.runtime'), ['inherit', 'claude', 'codex', 'agy'].map(value => ({ value, label: value === 'inherit' ? t('wb.term.inherit') : runtimeName(value) })),
     state.draft.runtime ?? state.value?.runtime?.data?.desired?.runtime ?? 'inherit');
   runtime.addEventListener('change', () => { state.draft.runtime = runtime.value; });
   const saveRuntime = element(document, 'button', t('wb.config.saveRuntime'), 'wb-btn wb-btn-sm'); saveRuntime.type = 'button'; saveRuntime.disabled = locked;
   saveRuntime.addEventListener('click', () => controller.save({ kind: 'runtime', value: runtime.value }));
-  const reset = element(document, 'button', t('wb.config.resetModel'), 'wb-link-btn'); reset.type = 'button'; reset.disabled = locked;
+  const reset = element(document, 'button', t('wb.config.resetModel'), 'wb-link-btn'); reset.type = 'button'; reset.disabled = locked || !supportsModelOverride;
   reset.addEventListener('click', () => controller.save({ kind: 'model', runtime: target.value, reset: true }));
   const more = element(document, 'div', undefined, 'wb-cfg-more');
   more.append(element(document, 'span', t('wb.term.runtime'), 'wb-cfg-label'), runtime, saveRuntime, reset);

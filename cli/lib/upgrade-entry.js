@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { validateUpgradeHandoff, upgradeFailureCode, upgradeFailureMessage } from './upgrade-admission.js';
-import { probeCoreDbVersions, preflightCoreDbUpgrade, rehearseCoreDbUpgrade, inspectFirstDashboardTakeover, inspectCoreManagesDashboardDb, assertDashboardUninstalled } from './core-db-backup.js';
+import { probeCoreDbVersions, preflightCoreDbUpgrade, inspectFirstDashboardTakeover, inspectCoreManagesDashboardDb, assertDashboardUninstalled } from './core-db-backup.js';
 import { beginUpgrade, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { saveOriginalPackage } from './upgrade-package.js';
 import { recoveryNext, runningUpgradeNotice } from './upgrade-discovery.js';
@@ -101,7 +101,6 @@ export function inspectUpgradeSource(input, deps = {}) {
   const versions = (deps.probe ?? probeCoreDbVersions)(zylosDir, tempDir, options);
   if (!versions || !Array.isArray(versions.databases) || versions.databases.length !== (dashboardOwnerManaged ? 3 : 2) || typeof versions.needsMigration !== 'boolean') throw new Error('Invalid database version probe result');
   (deps.preflight ?? preflightCoreDbUpgrade)(zylosDir, options);
-  if (versions.needsMigration) (deps.rehearse ?? rehearseCoreDbUpgrade)(zylosDir, tempDir, options);
   return {coreDir, tempDir, zylosDir, skillsDir, from:source.version, to:target.version, newVersion:target.version,
     firstTakeover, dashboardOwnerManaged, snapshotFormatVersion:3, databaseMode:versions.needsMigration ? 'migrate' : 'unchanged',
     databaseVersions:versions, mode:'merge', steps:[], servicesWereRunning:[], servicesStopped:[],
@@ -183,7 +182,10 @@ export function outputUpgradeResult(result, { jsonOutput = true } = {}, output =
     const human = humanResults.get(result) || {};
     // Older previews may leave the changelog's final line unterminated.
     output.stdout.write('\n');
-    if (result.success) output.stdout.write(`zylos-core upgraded: ${result.from} → ${result.to}.\n`);
+    if (result.success) {
+      output.stdout.write(`zylos-core upgraded: ${result.from} → ${result.to}.\n`);
+      if(result.dashboard?.state==='stopped') output.stdout.write(`Dashboard: ${result.dashboard.message}\n`);
+    }
     else {
       output.stderr.write(`Error: ${human.running?.error || result.error || 'Core upgrade failed.'}\n`);
       const from = result.from || human.from;

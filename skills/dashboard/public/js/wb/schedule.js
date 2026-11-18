@@ -1,3 +1,4 @@
+import { permissionErrorKey } from './write-errors.js';
 import { instantSeconds, scheduleTimes } from './api-time.js';
 import { countLabel } from '../count-label.js';
 import { element, fallbackName, icon } from './plain-text.js';
@@ -204,7 +205,7 @@ export function groupTasks(tasks, { status = 'all', target = 'all', query = '', 
 }
 
 const EXPLAINED = new Set(['RESCHEDULE_NOT_FUTURE', 'TASK_WRONG_STATUS', 'tz_unavailable', 'invalid_time', 'invalid_form',
-  'prompt_starts_with_dashes', 'invalid_json', 'payload_too_large', 'insufficient_scope', 'read_only_proxy', 'unauthorized']);
+  'prompt_starts_with_dashes', 'invalid_json', 'payload_too_large']);
 // Form checks done by the Dashboard itself: the translated text is the whole message.
 const FORM_CODES = new Set(['invalid_form', 'prompt_starts_with_dashes', 'invalid_time', 'tz_unavailable']);
 
@@ -221,7 +222,10 @@ export function writeOutcome(status, value) {
 export function writeMessage(outcome, t = key => key) {
   if (outcome?.result === 'done') return null;
   if (outcome?.result === 'rejected') {
-    const hint = EXPLAINED.has(outcome.code) ? t('wb.schedule.error.' + outcome.code) : null;
+    const permission = permissionErrorKey(outcome.code);
+    if (permission) return t(permission);
+    const key = EXPLAINED.has(outcome.code) ? 'wb.schedule.error.' + outcome.code : null;
+    const hint = key ? t(key) : null;
     if (hint && FORM_CODES.has(outcome.code)) return hint;
     return [hint, outcome.message].filter(Boolean).join(' · ') || outcome.code;
   }

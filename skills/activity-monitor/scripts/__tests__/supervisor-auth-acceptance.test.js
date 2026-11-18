@@ -174,7 +174,7 @@ test('auth preflight runs before fence', async t => {
 // scheduling/recovery changes; real CLI credentials and process replacement
 // require a separate isolated instance and are not exercised here.
 for (const mode of ['single', 'multi'])
-for (const runtime of ['claude', 'codex'])
+for (const runtime of ['claude', 'codex', 'agy'])
 test(`idle startup auth recovery retires the affected run: ${mode} ${runtime}`, async t => {
   const f = fixture(t, { mode, runtime });
   await f.reopen(); f.seed(); f.add(); f.state.pending = false;

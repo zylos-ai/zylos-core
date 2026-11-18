@@ -66,15 +66,32 @@ For every exported file and every listed input, complete these reading steps
 before summarizing, checkpointing or advancing its cursor:
 
 1. Read the entire file in bounded byte ranges and record every `[start,end)`.
-   Truncated output is unread; reduce the range and reread it.
+   Run **one byte range per top-level tool call**, returning that range's actual
+   text before requesting the next. Do not batch ranges in loops (shell or
+   JavaScript), parallel calls, or any wrapper that accumulates several reads
+   into one return. On Codex, use a direct `exec_command` when exposed as a
+   top-level tool; in code mode, each range needs its own `functions.exec`
+   invocation containing one `exec_command`. Separate inner calls inside one
+   outer invocation still share the outer output cap. On Claude, use one Bash
+   call containing one `dd` command per range. Use Bash byte reads for long
+   single-line JSON: Read's offset/limit select lines and cannot bound one long
+   line by bytes. Start at 8192 bytes in both runtimes; if the runtime has a
+   smaller configured output cap, start smaller. Preserve the four-byte overlap
+   when advancing: next start is the last completely read end minus four.
+   After reducing the size, keep that smaller size for the rest of the file.
+   Never advance from a truncated range or add it to the completed ledger.
 2. After the full text read, display the last 64 bytes of every exported file
    and every listed input with
    `tail -c 64 "<returned absolute path>" | od -An -v -c`.
    A file shorter than 64 bytes is displayed in full. This makes trailing spaces,
    tabs and newlines visible in only a few lines, even when the final text range
    is 8192 bytes. Repeat for every file; do not skip files or crop this display
-   further. Truncated output is unread and must be reread.
+   further. Truncated output is unread and must be reread in a fresh top-level
+   call under the bounded read-retry rules below.
    This supplements the text read and does not replace it.
+
+For the retry budget, failure gates and final range/recovery report, follow
+[zylos-memory's bounded read retries](../../zylos-memory/references/sync-procedures.md#bounded-read-retries-and-reporting).
 
 All message content is projected before text/JSON formatting, absorbed preview
 budgets or `--out` file writes. Valid structured content becomes fallbackText

@@ -75,7 +75,8 @@ function isSseResponse(resp) {
 }
 
 function isAllowedProxyWrite(method, suffix) {
-  return method === 'POST' && suffix === '/api/settings/timezone/actions/restart-services' || method === 'PATCH' && /^\/api\/chat\/conversations\/[^/]+$/.test(suffix) ||
+  return method === 'POST' && suffix === '/api/groups/naming-prompt' ||
+    method === 'POST' && suffix === '/api/settings/timezone/actions/restart-services' || method === 'PATCH' && /^\/api\/chat\/conversations\/[^/]+$/.test(suffix) ||
     method === 'POST' && (suffix === '/api/chat/drafts' || /^\/api\/chat\/conversations\/[^/]+\/(?:send|answers|uploads)$/.test(suffix)) ||
     ['PUT', 'DELETE'].includes(method) && /^\/api\/groups\/[^/]+\/name$/.test(suffix) ||
     method === 'PUT' && /^\/api\/groups\/[^/]+\/config$/.test(suffix) ||
@@ -402,7 +403,7 @@ export class FleetProxy {
         }
       }
     } else if (!['GET', 'HEAD'].includes(req.method) && !isAllowedProxyWrite(req.method, suffix)) {
-      sendJson(res, 403, { error: 'read_only_proxy' });
+      sendJson(res, 403, { error: { code: 'not_allowed_via_fleet', message: "This change can't be made when opening another agent from the fleet" } });
       return;
     }
 

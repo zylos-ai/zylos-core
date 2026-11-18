@@ -23,6 +23,7 @@ import { SessionAdapter } from './session-adapter.js';
 import { buildInstructionFile } from './instruction-builder.js';
 import { ZYLOS_DIR } from '../config.js';
 import { claudeProbeEnvironment } from './session-command.js';
+import { childRuntimeEnv } from '../child-runtime-env.js';
 import { writePrivateFile } from '../private-file.js';
 
 
@@ -137,7 +138,7 @@ export class ClaudeAdapter extends SessionAdapter {
   async checkAuth() {
     // Build subprocess env: inherit current env, but take the built-in Claude
     // variables (CLAUDE_BUILTIN_ENV_KEYS) exactly as a new session gets them.
-    const injectedEnv = claudeProbeEnvironment(this.options.root || ZYLOS_DIR, this.options.env || process.env);
+    const injectedEnv = childRuntimeEnv(claudeProbeEnvironment(this.options.root || ZYLOS_DIR, this.options.env || process.env));
 
     // Strip vars that would make Claude refuse to start ("already running" guard).
     for (const v of ENV_VARS_TO_STRIP) delete injectedEnv[v];

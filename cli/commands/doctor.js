@@ -33,6 +33,7 @@ import { alertTargetNotice, formatAlertTargetNotice } from '../lib/alert-target-
 import { readPoolCapacity } from '../lib/session-pool-config.js';
 import { dashboardAccessAddress } from '../lib/dashboard-access.js';
 import { readSessionModeStatus } from '../lib/session-mode-status.js';
+import { childRuntimeEnv } from '../lib/child-runtime-env.js';
 
 const LOG_DIR = path.join(ZYLOS_DIR, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'doctor.log');
@@ -723,6 +724,7 @@ function runClaudeFix(diagnosticJson) {
       : ['--dangerously-skip-permissions'];
     const proc = spawn('claude', ['-p', prompt, ...permArgs], {
       cwd: ZYLOS_DIR,
+      env: childRuntimeEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

@@ -29,6 +29,7 @@ import {
   DEFAULT_CODEX_PRIORITY_MODEL_PRICES,
   DEFAULT_RUNTIME_MODEL_PRICES,
   loadConfig,
+  fastModeMultiplierForRuntime,
   modelPricesForRuntime
 } from '../src/lib/config.js';
 
@@ -268,6 +269,25 @@ test('loadConfig separates Claude and Codex model price tables', () => {
     assert.equal(modelPricesForRuntime(config, 'claude')['gpt-5.5'], undefined);
     assert.equal(modelPricesForRuntime(config, 'codex')['claude-opus-4'], undefined);
   });
+});
+
+test('pricing helpers preserve the Claude fallback for other runtime values', () => {
+  const legacyPrices = { legacy: { input: 1 } };
+  const claudePrices = { claude: { input: 2 } };
+  const config = {
+    runtime: 'agy', modelPrices: legacyPrices, fastModeMultiplier: 6,
+    runtimeModelPrices: { claude: claudePrices, codex: { codex: { input: 3 } } },
+    runtimeFastModeMultipliers: { claude: 8, codex: 2 },
+  };
+  for (const runtime of ['agy', '', 'unknown', null, undefined]) {
+    assert.equal(modelPricesForRuntime(config, runtime), claudePrices);
+    assert.equal(fastModeMultiplierForRuntime(config, runtime), 8);
+    assert.equal(fastModeMultiplierForRuntime(config, runtime, { fastModeMultiplier: 4 }), 8);
+    assert.equal(fastModeMultiplierForRuntime({ ...config, configuredRuntimeFastModeMultipliers: {} }, runtime,
+      { fastModeMultiplier: 4 }), 4);
+    assert.equal(modelPricesForRuntime({ modelPrices: legacyPrices }, runtime), legacyPrices);
+    assert.equal(fastModeMultiplierForRuntime({ fastModeMultiplier: 6 }, runtime), 6);
+  }
 });
 
 test('loadConfig keeps Codex priority prices separate from standard prices', () => {

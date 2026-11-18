@@ -5,12 +5,15 @@ import path from 'node:path';
 import { execFileSync, execSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { writePaneProcess } from '../../../skills/activity-monitor/scripts/pane-process.js';
+import { readProcessStart } from '../../../skills/activity-monitor/scripts/claude-pid.js';
 
 const {
   desiredClaudeHooks,
   isCoreManaged,
   persistInstalledSettingsAndSyncCoupledThreshold,
   syncCodexConfig,
+  syncRuntimeHooks,
   syncHooks,
   syncModelCoupledNewSessionThreshold,
   syncTemplateSetting,
@@ -139,7 +142,15 @@ describe('desiredClaudeHooks', () => {
     fs.utimesSync(paths.userPath, future, future);
     const clearGroup = desiredClaudeHooks({ zylosDir }).SessionStart.find(group => group.matcher === 'clear');
     const assemblerHook = clearGroup.hooks.find(hook => hook.command.includes('assembler.mjs'));
-    execSync(assemblerHook.command, { stdio: 'pipe' });
+    // The hook runs through the real entry as the run's pane process (this test process).
+    const repoRoot = path.join(__dirname, '..', '..', '..');
+    fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
+    fs.symlinkSync(path.join(repoRoot, 'skills'), path.join(zylosDir, '.claude', 'skills'));
+    writePaneProcess(path.join(zylosDir, 'activity-monitor', 'session-groups', 'origin'),
+      { runId: 'clear-hook-run', runtime: 'claude', panePid: process.pid, paneStart: readProcessStart(process.pid) });
+    execSync(assemblerHook.command, { stdio: 'pipe',
+      env: { ...process.env, ZYLOS_DIR: zylosDir, ZYLOS_RUN_ID: 'clear-hook-run', ZYLOS_PACKAGE_ROOT: repoRoot } });
+    assert.equal(fs.existsSync(path.join(zylosDir, 'activity-monitor', 'hook-activity-errors.log')), false);
     assert.match(fs.readFileSync(paths.outputPath, 'utf8'), /CLEAR_HOOK_SENTINEL/);
     fs.rmSync(zylosDir, { recursive: true, force: true });
   });
@@ -1338,5 +1349,83 @@ describe('syncHooks forward pass', () => {
     // clear group should be cleaned up (empty after removal)
     const clearGroup = installed.hooks.SessionStart.find(g => g.matcher === 'clear');
     assert.equal(clearGroup, undefined); // empty group gets removed
+  });
+});
+
+
+describe('independent Antigravity hook synchronization', () => {
+  function isolatedHome(t, { optedIn = true } = {}) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-hook-sync-'));
+    const zylosDir = path.join(home, 'zylos');
+    const previous = process.env.HOME;
+    process.env.HOME = home;
+    t.after(() => {
+      if (previous === undefined) delete process.env.HOME;
+      else process.env.HOME = previous;
+      fs.rmSync(home, { recursive: true, force: true });
+    });
+    fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, '.claude/settings.json'), JSON.stringify({ hooks: {} }));
+    if (optedIn) {
+      fs.mkdirSync(path.join(home, '.gemini/config'), { recursive: true });
+      fs.writeFileSync(path.join(home, '.gemini/config/hooks.json'), JSON.stringify({ zylos: {} }));
+    }
+    return { home, zylosDir, settings: path.join(home, '.gemini/antigravity-cli/settings.json') };
+  }
+
+  it('leaves Antigravity unused without creating ~/.gemini', t => {
+    const f = isolatedHome(t, { optedIn: false });
+    for (const dryRun of [true, false]) {
+      const result = syncRuntimeHooks({ zylosDir: f.zylosDir, dryRun,
+        stopFailureSupported: false, subagentHooksSupported: false, log: () => {} });
+      assert.deepEqual(result.agy, { changed: false });
+      assert.equal(fs.existsSync(path.join(f.home, '.gemini')), false);
+    }
+  });
+
+  it('saves Claude and Codex hooks when opted-in Antigravity configuration is malformed', t => {
+    const f = isolatedHome(t);
+    fs.mkdirSync(path.dirname(f.settings), { recursive: true });
+    fs.writeFileSync(f.settings, '{"modelProvider":"gemini",}');
+    const errors = [];
+    const originalError = console.error;
+    console.error = message => errors.push(message);
+    t.after(() => { console.error = originalError; });
+    const result = syncRuntimeHooks({ zylosDir: f.zylosDir, stopFailureSupported: false,
+      subagentHooksSupported: false, log: () => {} });
+    assert.equal(result.changed, true);
+    assert.ok(result.claude.added > 0);
+    const settings = JSON.parse(fs.readFileSync(path.join(f.zylosDir, '.claude/settings.json'), 'utf8'));
+    const commands = Object.values(settings.hooks).flatMap(groups => groups.flatMap(group => getCommandHooks(group)));
+    assert.ok(commands.some(hook => hook.command.includes('session-start-orchestrator.js')));
+    assert.ok(fs.existsSync(path.join(f.zylosDir, '.codex/hooks.json')));
+    assert.ok(fs.existsSync(path.join(f.home, '.codex/config.toml')));
+    assert.equal(result.agy.changed, false);
+    assert.equal(result.agy.error.code, 'AGY_CONFIG_UNREADABLE');
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /^Antigravity configuration:/);
+    assert.equal(fs.readFileSync(f.settings, 'utf8'), '{"modelProvider":"gemini",}');
+  });
+
+  it('repairs Antigravity-only drift without marking Claude or Codex changed', t => {
+    const f = isolatedHome(t);
+    const options = { zylosDir: f.zylosDir, stopFailureSupported: false, subagentHooksSupported: false, log: () => {} };
+    syncRuntimeHooks(options);
+    const settings = JSON.parse(fs.readFileSync(f.settings, 'utf8'));
+    settings.modelProvider = 'stale';
+    fs.writeFileSync(f.settings, JSON.stringify(settings));
+    const claudePath = path.join(f.zylosDir, '.claude/settings.json');
+    const claudeBefore = fs.readFileSync(claudePath, 'utf8');
+    const dryRun = syncRuntimeHooks({ ...options, dryRun: true });
+    assert.equal(dryRun.agy.changed, true);
+    assert.equal(dryRun.changed, false);
+    assert.equal(JSON.parse(fs.readFileSync(f.settings, 'utf8')).modelProvider, 'stale');
+    const result = syncRuntimeHooks(options);
+    assert.equal(result.agy.changed, true);
+    assert.equal(result.changed, false);
+    assert.equal(result.claude.added + result.claude.updated + result.claude.removed, 0);
+    assert.equal(result.codex.changed, false);
+    assert.equal(JSON.parse(fs.readFileSync(f.settings, 'utf8')).modelProvider, 'gemini');
+    assert.equal(fs.readFileSync(claudePath, 'utf8'), claudeBefore);
   });
 });

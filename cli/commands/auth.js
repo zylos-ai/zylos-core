@@ -32,7 +32,7 @@ export async function executeAuth(args, { exists = commandExists, adapter = getS
   if (!SUPPORTED_RUNTIMES.includes(runtime)) return { ok: false, error: { code: 'RUNTIME_UNSUPPORTED', message: 'Unsupported runtime', persisted: [] } };
   if (!exists(runtime)) return { ok: false, error: { code: 'RUNTIME_NOT_INSTALLED', message: 'Run zylos init first', persisted: [] } };
   try {
-    const result = await spawn(runtime, runtime === 'claude' ? ['auth', 'login'] : ['login', ...(deviceCode ? ['--device-auth'] : [])], { stdio: ['inherit', 2, 2] });
+    const result = runtime === 'agy' ? { status: 0 } : await spawn(runtime, runtime === 'claude' ? ['auth', 'login'] : ['login', ...(deviceCode ? ['--device-auth'] : [])], { stdio: ['inherit', 2, 2] });
     if (result.signal || result.status === 130) return { ok: false, error: { code: 'AUTH_CANCELLED', message: 'Authentication cancelled', persisted: null, configChanged: false } };
     if (result.error || result.status !== 0) throw new Error('Native authentication failed');
     let checked;
@@ -43,7 +43,7 @@ export async function executeAuth(args, { exists = commandExists, adapter = getS
       // values zylos passed: name any key there that overrides them (read only).
       const override = runtime === 'claude' ? claudeSettingsOverrideNotice(claudeProbeEnvironment(ZYLOS_DIR, process.env)) : null;
       return { ok: false, error: { code: checked.status === 'failure' ? 'AUTH_FAILED' : 'AUTH_NOT_CONFIRMED',
-        message: 'Authentication was not confirmed', persisted: null, configChanged: false,
+        message: runtime === 'agy' ? 'Gemini API key was not confirmed; run zylos runtime agy --save-apikey <key>' : 'Authentication was not confirmed', persisted: null, configChanged: false,
         ...(override ? { warnings: [{ code: 'CLAUDE_SETTINGS_OVERRIDE', message: override }] } : {}) } };
     }
     // Subscription login: recompute the relay traffic setting from the saved state before the session restarts.

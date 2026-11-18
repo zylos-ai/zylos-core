@@ -138,7 +138,7 @@ export class TmuxObserverContainment extends EventEmitter {
 
   async _publish({ generation, binaryPath, runtime, observerTarget: selected }) {
     await this.verifyHelpers();
-    if (!['codex', 'claude'].includes(runtime)) throw failure('unsupported_runtime', 'Unsupported Observer runtime');
+    if (!['codex', 'claude', 'agy'].includes(runtime)) throw failure('unsupported_runtime', 'Unsupported Observer runtime');
     if (!Number.isSafeInteger(generation) || generation < 0) throw failure('unsafe_runtime_state', 'Invalid generation');
     const { target, tmuxSocket, originRunId, observerTarget } = await this._resolveTarget(runtime, selected);
     binaryPath = path.resolve(binaryPath);

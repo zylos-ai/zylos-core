@@ -53,22 +53,28 @@ export class Store {
     `);
     this._insertUsageTranscript = this.db.prepare(`
       INSERT OR IGNORE INTO usage_transcripts
-        (transcript_path, parent_path, runtime, session_group, run_id, session_id, byte_offset, first_seen_at, updated_at)
-      VALUES (@transcript_path, @parent_path, @runtime, @session_group, @run_id, @session_id, @byte_offset, @now, @now)
+        (transcript_path, parent_path, runtime, session_group, run_id, session_id, byte_offset, first_seen_at, updated_at, kind)
+      VALUES (@transcript_path, @parent_path, @runtime, @session_group, @run_id, @session_id, @byte_offset, @now, @now, @kind)
     `);
     this._getUsageTranscript = this.db.prepare('SELECT * FROM usage_transcripts WHERE transcript_path = ?');
     this._activeUsageTranscripts = this.db.prepare("SELECT * FROM usage_transcripts WHERE status = 'active' ORDER BY transcript_path LIMIT ?");
     this._currentOriginTranscript = this.db.prepare(`SELECT * FROM usage_transcripts
       WHERE status = 'active' AND runtime = ? AND run_id = ?
-        AND (session_group = 'origin' OR session_group IS NULL) AND parent_path IS NULL
+        AND (session_group = 'origin' OR session_group IS NULL) AND parent_path IS NULL AND kind = 'session'
       ORDER BY rowid DESC LIMIT 1`);
+    // A child that resumes a session (`claude -p --resume`) shares its id; that session stays listed.
+    this._childSessionIds = this.db.prepare(`SELECT DISTINCT child.session_id FROM usage_transcripts child
+      WHERE child.kind = 'child' AND NOT EXISTS (
+        SELECT 1 FROM usage_transcripts own WHERE own.session_id = child.session_id AND own.kind = 'session')`);
     this._claudeMainTranscripts = this.db.prepare("SELECT * FROM usage_transcripts WHERE status = 'active' AND runtime = 'claude' AND parent_path IS NULL");
     this._missingUsageTranscripts = this.db.prepare("SELECT * FROM usage_transcripts WHERE status = 'missing'");
     this._restoreUsageTranscript = this.db.prepare("UPDATE usage_transcripts SET status = 'active' WHERE transcript_path = ? AND status = 'missing'");
     this._updateUsageTranscript = this.db.prepare(`UPDATE usage_transcripts
       SET byte_offset = COALESCE(@byte_offset, byte_offset), status = @status, updated_at = @now
       WHERE transcript_path = @transcript_path`);
-    this._pruneUsageTranscripts = this.db.prepare("DELETE FROM usage_transcripts WHERE status IN ('finished','missing') AND updated_at < ?");
+    // Finished child rows stay while their file exists: they keep the child out of Observer history.
+    this._pruneUsageTranscripts = this.db.prepare(`DELETE FROM usage_transcripts
+      WHERE (status = 'missing' OR (status = 'finished' AND kind = 'session')) AND updated_at < ?`);
     this._getGroupDisplayName = this.db.prepare('SELECT session_group, display_name, source, updated_at FROM group_display_names WHERE session_group = ?');
     this._listGroupDisplayNames = this.db.prepare('SELECT session_group, display_name, source, updated_at FROM group_display_names ORDER BY updated_at DESC');
     this._searchGroupDisplayNames = this.db.prepare('SELECT session_group, display_name, source FROM group_display_names WHERE instr(lower(display_name), lower(?)) > 0 ORDER BY updated_at DESC LIMIT ?');
@@ -400,7 +406,7 @@ export class Store {
     const version = this.db.pragma('data_version', { simple: true });
     if (!this._historyAttribution || version !== this._historyDataVersion) {
       const rows = this.db.prepare(`SELECT session_id, runtime, session_group, MAX(timestamp) AS latest_timestamp, MAX(event_seq) AS latest_seq FROM runtime_events
-        WHERE session_id IS NOT NULL AND runtime IN ('claude', 'codex')
+        WHERE session_id IS NOT NULL AND runtime IN ('claude', 'codex', 'agy')
         GROUP BY session_id, runtime, session_group ORDER BY MAX(timestamp) DESC, MAX(event_seq) DESC`).all();
       this._historyAttribution = new Map(rows.map(row => [JSON.stringify([row.session_id, row.runtime, row.session_group]), row]));
       this._historyDataVersion = version;
@@ -429,7 +435,7 @@ export class Store {
       source: event.source || 'hook',
       confidence: event.confidence || 'actual'
     });
-    if (info.changes && event.session_id && ['claude', 'codex'].includes(event.runtime || 'claude')) {
+    if (info.changes && event.session_id && ['claude', 'codex', 'agy'].includes(event.runtime || 'claude')) {
       const row = { session_id: event.session_id, runtime: event.runtime || 'claude', session_group: event.session_group ?? null };
       const key = JSON.stringify([row.session_id, row.runtime, row.session_group]);
       if (!this._historyAttribution?.has(key)) this.historyRevision++;
@@ -824,13 +830,14 @@ export class Store {
   insertUsageTranscript(mapping, now) {
     return this._insertUsageTranscript.run({ ...mapping,
       parent_path: mapping.parent_path ?? null, session_group: mapping.session_group ?? null,
-      run_id: mapping.run_id ?? null, byte_offset: mapping.byte_offset ?? 0, now });
+      run_id: mapping.run_id ?? null, byte_offset: mapping.byte_offset ?? 0, kind: mapping.kind ?? 'session', now });
   }
 
   getUsageTranscript(file) { return this._getUsageTranscript.get(file) ?? null; }
   activeUsageTranscripts(limit = 50) { return this._activeUsageTranscripts.all(limit); }
   currentOriginTranscript(runtime, runId) { return this._currentOriginTranscript.get(runtime, runId) ?? null; }
   claudeMainTranscripts() { return this._claudeMainTranscripts.all(); }
+  childSessionIds() { return this._childSessionIds.all().map(row => row.session_id); }
   missingUsageTranscripts() { return this._missingUsageTranscripts.all(); }
   restoreUsageTranscript(file) { return this._restoreUsageTranscript.run(file); }
   updateUsageTranscript(file, { byte_offset = null, status = 'active', now }) {

@@ -103,7 +103,9 @@ for(const owner of ['comm-bridge','scheduler','dashboard']) test(`${owner} rehea
   }
   const rehearsalDir=path.join(root,'rehearsal');fs.mkdirSync(rehearsalDir);
   assert.throws(()=>runCoreDbWorker({...payload,action:'rehearse',rehearsalDir}),error=>{
-    assert.match(error.message,/fixture migration failed/);
+    const source=CORE_DATABASES.find(item=>item.owner===owner).source;
+    const detail=owner==='dashboard'?'SCHEMA_MIGRATION_FAILED dashboard rehearsal: ':'';
+    assert.equal(error.message,`${source}: rehearsal failed: ${detail}fixture migration failed at <path>`);
     assert.ok(!error.message.includes(root));
     return assertFailure(error,'SCHEMA_MIGRATION_FAILED');
   });

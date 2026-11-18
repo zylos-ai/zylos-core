@@ -5,6 +5,14 @@ import { CodexHistory } from './codex-history.js';
 import { createHistoryScope } from './history-scope.js';
 import { createRedactor } from '../redaction/engine.js';
 
+// Transcript readers exist only for these runtimes. Other runtimes have no
+// imported history yet and must never inherit another runtime's file reader.
+class EmptyHistory {
+  paths = new Map();
+  async listSessions() { return { current: null, sessions: [] }; }
+}
+const parserForRuntime = runtime => runtime === 'claude' ? ClaudeHistory : runtime === 'codex' ? CodexHistory : EmptyHistory;
+
 const PREVIEW = 2000;
 const CHUNK_BYTES = 256 * 1024;
 const SEARCH_BYTES = 20 * 1024 * 1024;
@@ -64,7 +72,7 @@ export class HistoryService {
     this.resolveScope = resolveScope || (parser ? null : createHistoryScope({ config, store, readCurrentSessionId, readGroupKey }));
     this.scopedParsers = new Map();
     this.runtime = config.runtime || 'claude';
-    const Parser = this.runtime === 'codex' ? CodexHistory : ClaudeHistory;
+    const Parser = parserForRuntime(this.runtime);
     this.parser = parser || new Parser({ zylosDir: config.zylosDir, store, stateEngine });
     this.redactor = redactor || createRedactor({ zylosDir: config.zylosDir, allowlist: config.history?.redactionAllowlist || [] });
   }
@@ -237,7 +245,7 @@ export class HistoryService {
           cached = latest;
         } else if (!cached || cached.revision !== scope.revision || cached.discovery !== discovery
             || (route === 'sessions' && !pending)) {
-          const Parser = scope.runtime === 'codex' ? CodexHistory : ClaudeHistory;
+          const Parser = parserForRuntime(scope.runtime);
           const parser = new Parser({ ...scope, zylosDir: this.config.zylosDir, store: this.store, indexCache: this.parser.indexCache });
           if (cached?.parser) {
             parser.metadataCache = cached.parser.metadataCache;

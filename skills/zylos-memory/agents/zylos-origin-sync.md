@@ -15,7 +15,10 @@ Claude normally uses `mcp__zylos-memory__edit_memory`, Codex
 `edit_memory` before reporting `TOOL_UNAVAILABLE`; never use native editing or
 shell writes as a fallback. Export both Origin reads with `--out` into a unique
 private directory and read each returned absolute path completely in byte
-ranges; truncated output is unread and must be reread in smaller ranges.
+ranges.
+Use one byte range per top-level tool call; do not batch ranges in loops;
+truncated output is unread: retry in a fresh top-level call under the
+procedure's bounded read retries.
 Use reported byte counts only as byte-range read endpoints. Use
 `sync-files.js list --group G` only to obtain candidate session-log absolute
 paths; do not read its state or segments. Advance cursors only by passing the

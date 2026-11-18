@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createRouterDiagnostics } from '../router/diagnostics.js';
 import { createJsonlStream } from '../../../../cli/lib/jsonl-stream.js';
 import assert from 'node:assert/strict';
+import { BRACKETED_PASTE_ENABLED } from '../c4-config.js';
 import { createDelivery, getDeliveryDelay, checkClaudeFallbackInputBox } from '../router/delivery.js';
 import { fixture } from './c4-v2-test-helpers.js';
 const error = code => Object.assign(new Error(code), { code });
@@ -162,11 +163,13 @@ for (const outcome of ['fresh idle', 'deadline']) test(`idle settlement polls st
 test('binding failures do not retry business and terminate only directed control', async t => {
   for (const code of ['TARGET_GONE', 'GENERATION_CHANGED', 'RUNID_MISMATCH', 'TMUX_UNAVAILABLE']) await t.test(code, async t => {
     const f = setup(t), row = f.message(); f.deps.resolveSessionTarget = async () => { throw error(code); };
+    const notifications = []; f.deps.notifyDeliveryFailed = fact => notifications.push(fact);
     const d = f.create(); await d.deliverConversation(row);
     assert.equal(f.row(row.id).status, 'pending'); assert.equal(f.row(row.id).retry_count, 0);
     const directed = f.control('x', { target_binding: '{}' }), ordinary = f.control();
     await d.deliverControl(directed); await d.deliverControl(ordinary);
     assert.equal(directed.status, code === 'TMUX_UNAVAILABLE' ? 'pending' : 'timeout'); assert.equal(ordinary.status, 'pending');
+    assert.deepEqual(notifications, [], 'identity errors cannot request a delivery failure restart');
   });
 });
 
@@ -630,4 +633,104 @@ test('no-paste controls and failed text paste never emit a delivery notification
     await f.create().deliverControl(row);
     assert.equal(f.calls.some(call => call[0] === 'notify'), false);
   });
+});
+
+// Real router and store with isolated runner HOME/ZYLOS_DIR; no model or
+// process is launched. Run when agy delivery or input-frame rules change.
+for (const screen of ['empty', 'slash', 'trust', 'text', 'cursor']) test(`agy delivery gates ${screen} input`, async t => {
+  const f = setup(t), row = f.message(); f.target.runtime = 'agy';
+  const rule = '─'.repeat(40);
+  const body = screen === 'slash' ? '> /' : screen === 'trust' ? '> Trust\n  Cancel' : screen === 'text' ? '> draft' : '>';
+  f.adapter.captureScreen = async () => [rule, body, rule].join('\n');
+  f.connection.command = async args => args.at(-1) === '#{cursor_x}' ? screen === 'cursor' ? '3' : '2' : '1';
+  const d = f.create(); t.after(() => d.stop()); await d.deliverConversation(row);
+  assert.equal(f.row(row.id).status, screen === 'empty' ? 'delivered' : 'pending');
+  const pastes = f.calls.filter(c => c[0] === 'paste');
+  assert.equal(pastes.length, screen === 'empty' ? 1 : 0);
+  if (pastes.length) assert.equal(pastes[0][1].bracketedPaste, BRACKETED_PASTE_ENABLED);
+});
+
+test('agy clear submits a kick after the reset and writes the clear source marker', async t => {
+  const f = setup(t); f.target.runtime = 'agy';
+  const rule = '─'.repeat(40);
+  f.adapter.captureScreen = async () => [rule, '>', rule].join('\n');
+  f.connection.command = async args => args.at(-1) === '#{cursor_x}' ? '2' : '1';
+  const d = f.create(); t.after(() => d.stop());
+  const row = f.control('/clear'); await d.deliverControl(row);
+  assert.equal(row.status, 'done');
+  const pastes = f.calls.filter(c => c[0] === 'paste');
+  assert.equal(pastes.length, 2);
+  assert.equal(pastes[0][1].text, '/clear');
+  assert.match(pastes[1][1].text, /System startup trigger/);
+  assert(pastes.every(c => c[1].bracketedPaste === BRACKETED_PASTE_ENABLED));
+  const { groupRunDir } = await import('../../../../cli/lib/session-group-paths.js');
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(groupRunDir('origin'), 'agy-session-source'), 'utf8')), { runId: 'r1', source: 'clear' });
+});
+
+// Real router/ledger and input-state code with a fake terminal under the
+// runner's isolated HOME/ZYLOS_DIR. Run for AGY input/Enter verification changes;
+// skip unrelated hooks or UI. No tmux/model/background process is launched.
+for (const [kind, body] of [['multiline', '> first line\n  second line\n  third line'], ['wrapped', '> one long line\n  wrapped remainder']]) {
+  test(`agy retries a lost first Enter for ${kind} input without repasting`, async t => {
+    const f=setup(t),row=f.message();f.target.runtime='agy';
+    const rule='─'.repeat(40);let pasted=false,enters=0;
+    f.deps.formatConversation=()=> 'first line\nsecond line\nthird line';
+    f.adapter.sendText=async args=>{pasted=true;f.calls.push(['paste',args]);};
+    f.adapter.sendKeys=async args=>{if(args.keys.includes('Enter'))enters++;f.calls.push(['keys',args]);};
+    f.adapter.captureScreen=async()=>[rule,pasted && enters<2?body:'>',rule].join('\n');
+    f.connection.command=async args=>args.at(-1)==='#{cursor_x}'?'2':String(pasted && enters<2?body.split('\n').length:1);
+    const d=f.create();t.after(()=>d.stop());await d.deliverConversation(row);
+    assert.equal(f.row(row.id).status,'delivered');assert.equal(f.row(row.id).retry_count,0);
+    assert.equal(f.calls.filter(call=>call[0]==='paste').length,1);assert.equal(enters,2);
+    assert.equal(f.calls.find(call=>call[0]==='paste')[1].text,'first line\nsecond line\nthird line');
+  });
+}
+
+test('only a committed terminal Enter failure notifies the supervisor with the pasted run identity', async t => {
+  const f = setup(t), row = f.message(), notifications = [];
+  f.adapter.sendKeys = async () => { throw error('ENTER_UNVERIFIED'); };
+  f.deps.notifyDeliveryFailed = fact => {
+    notifications.push({ fact, status: f.row(row.id).status, lastCall: f.calls.at(-1)[0] });
+    return Promise.reject(new Error('supervisor unavailable'));
+  };
+  const delivery = f.create();
+  await delivery.deliverConversation(row);
+  assert.deepEqual(notifications, [], 'a retryable failure cannot trigger a restart');
+  assert.equal(f.store.claimConversation(row.id), true);
+  await delivery.deliverConversation(row);
+  assert.deepEqual(notifications, [{ status: 'failed', lastCall: 'failDelivery', fact: {
+    conversationId: row.id, sessionGroup: row.session_group, runId: 'r1', sessionId: 's1',
+    runtime: 'codex', pastedAt: f.calls.filter(c => c[0] === 'notify').at(-1)[1].pastedAt } }]);
+  await delivery.deliverConversation(row);
+  assert.equal(notifications.length, 1, 'a lost conditional transition cannot repeat the notification');
+  assert.equal(f.row(row.id).retry_count, 2);
+});
+
+test('terminal paste failures cannot request an Enter failure restart', async t => {
+  const f = setup(t), row = f.message(), notifications = [];
+  f.adapter.sendText = async () => { throw error('PASTE_FAILED'); };
+  f.deps.notifyDeliveryFailed = fact => notifications.push(fact);
+  const delivery = f.create();
+  await delivery.deliverConversation(row);
+  f.store.claimConversation(row.id);
+  await delivery.deliverConversation(row);
+  assert.equal(f.row(row.id).status, 'failed');
+  assert.deepEqual(notifications, []);
+});
+
+// A successful paste alone is insufficient: only terminal Enter verification
+// failures may request recovery, even when an earlier attempt also pasted.
+test('terminal transport failure after paste does not notify delivery recovery', async t => {
+  const f = setup(t), row = f.message(), notifications = [];
+  let attempt = 0;
+  f.adapter.sendKeys = async () => { throw error(++attempt === 1 ? 'ENTER_UNVERIFIED' : 'TMUX_UNAVAILABLE'); };
+  f.deps.notifyDeliveryFailed = fact => notifications.push(fact);
+  const delivery = f.create();
+  await delivery.deliverConversation(row);
+  assert.equal(f.store.claimConversation(row.id), true);
+  await delivery.deliverConversation(row);
+  assert.equal(f.calls.filter(call => call[0] === 'paste').length, 2);
+  assert.equal(f.row(row.id).status, 'failed');
+  assert.equal(f.row(row.id).retry_count, 2);
+  assert.deepEqual(notifications, []);
 });

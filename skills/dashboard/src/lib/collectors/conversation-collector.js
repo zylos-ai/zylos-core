@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fastModeMultiplierForRuntime, modelPricesForRuntime } from '../config.js';
 import { Sanitizer } from '../sanitizer.js';
-import { UsageTranscripts, groupMainTranscript } from './usage-transcripts.js';
+import { UsageTranscripts, groupMainTranscript, childTranscript } from './usage-transcripts.js';
 import { sameSourceFile } from '../source-file-identity.js';
 
 const PER_MTOK = 1_000_000;
@@ -131,7 +131,7 @@ export class ConversationCollector {
         const written = this._collectFile(file, {
         sessionId: mapping.session_id, group: mapping.session_group, runId: mapping.run_id,
         agentId: mapping.parent_path ? path.basename(file, '.jsonl').replace(/^agent-/, '') : null,
-        usageOnly: Boolean(mapping.parent_path) || !originCurrent && !groupMainTranscript(mapping),
+        usageOnly: Boolean(mapping.parent_path) || childTranscript(mapping) || !originCurrent && !groupMainTranscript(mapping),
         origin: originCurrent,
         });
         messages += this._lastFileMessages;

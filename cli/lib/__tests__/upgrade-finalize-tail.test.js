@@ -355,8 +355,9 @@ test('required service failure still enters protected Core isolation',async t=>{
   assert.equal(calls.includes('restart'),false);
 });
 
-test('Dashboard absent from original running set is verified without starting',async t=>{
+test('Dashboard stopped before upgrade remains stopped',async t=>{
   const ctx=fixture(t),calls=[];
+  ctx.journal.dashboardWasStopped=true;
   ctx.servicesWereRunning=['c4-dispatcher'];
   let restoreCalls=0;
   const result=await completeUpgradeFinalization(ctx,deps(calls,{

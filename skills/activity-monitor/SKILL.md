@@ -99,6 +99,9 @@ ack deadline passes without an ack, `superseded`, `failed` or `cancelled`)
 and the same run is idle; while any is still pending or running the group is
 not reclaimed. If only some controls could be written, preparation restarts
 from the check after the written ones terminate.
+Pre-reclaim Group and Origin Sync controls have a 15-minute acknowledgement
+deadline. Ordinary periodic Group Sync retains its five-minute deadline;
+periodic Origin Sync remains without a deadline.
 
 Once the same run is preparing for TTL reclaim, its own preparation activity
 does not restart or cancel that preparation; a new C4 message still cancels it.
@@ -450,6 +453,26 @@ Machine tasks use `SupervisorMachineTasks`:
 - **Persistence**: State files survive activity monitor restarts
 - **Usage**: Account health, configured intervals and active hours govern sampling/alerts; Origin presence, idle state, input state and pending-work gates are not required. Mode transitions defer usage work
 
+## Hook Entry: Pane Main Process Only
+
+Every Claude and Codex hook and the statusLine command that zylos installs, including component SessionStart shards, runs as `exec node <scripts>/hook-entry.js <target script> [args...]`. A child runtime started inside a session (an upgrade evaluation, an agent's `claude -p` or `codex exec`, in either runtime's pane) inherits the run variables and fires the same hooks; the entry lets only the run's pane main process reach the target:
+
+- **Main process**: the target runs in the entry's own process, with the argv and stdin of a direct invocation.
+- **Determinably another process**: nothing runs and nothing is printed (no activity, health or status write, no queue entry, no keystroke, no READY). For a refused SessionStart, `hook-activity.js` leaves one cost record in `child-sessions.jsonl` (child session id, transcript path, the child's own runtime, and the group and run it inherited) so the Dashboard counts the child's tokens. A child that zylos starts itself has no group or run: its record goes to `activity-monitor/child-sessions.jsonl` and its cost is not counted under the group it was started from.
+- **Undetermined** (no or another run's `pane-process.json`, unreadable process data): the target runs as before and the entry appends one line with the reason, pid, runtime, hook, group and run to `activity-monitor/hook-activity-errors.log`.
+
+The launcher writes `<run dir>/pane-process.json` (`runId`, `runtime`, `panePid`, `paneStart`) right after tmux confirms the pane. The hook's runtime is its first non-shell ancestor; it is the pane process when its pid and start time match the record, or for Codex when it is the direct child of the recorded launcher wrapper. A hook without `ZYLOS_RUN_ID` (zylos strips the run variables from the runtimes it starts itself) is the pane process only when the tmux server started it, or started its Codex wrapper.
+
+The supervisor checks READY independently: `current-session.json` names its publisher (`runtimePid`, `runtimeStart`, `runtimeParentPid`, `runtimeParentStart`), and a READY whose publisher is not the observed tmux pane process is ignored and never counts as a rotation; the run keeps the last READY its pane process published. Because it compares with tmux `pane_pid`, this also covers panes started before `pane-process.json` existed. A READY without publisher fields (written by an earlier version) is accepted as before.
+
+To see how the entry classifies a session, run this read-only check from the session's shell tool. It reads process information, the pane-process record and the tmux pane pid only; it writes no file and enqueues nothing:
+
+```bash
+node ~/zylos/.claude/skills/activity-monitor/scripts/main-process-check.js
+```
+
+It prints `determinable`, `mainProcess`, `verdict`, `reason` and the basis (trigger process, record, tmux pane pid, and `tmuxPaneCheck`: what the supervisor's READY check would conclude).
+
 ## Permission Auto-Approve
 
 When Claude Code shows a permission prompt (PermissionRequest event), the `hook-auth-prompt.js` hook automatically sends an Enter keystroke to approve it.
@@ -458,7 +481,7 @@ When Claude Code shows a permission prompt (PermissionRequest event), the `hook-
 
 ### How It Works
 
-1. Claude Code fires a PermissionRequest hook when a tool call requires user approval
+1. Claude Code fires a PermissionRequest hook when a tool call requires user approval (in the pane main process only; a child runtime's prompt is never answered from the session pane)
 2. `hook-auth-prompt.js` logs the event to `hook-timing.log`
 3. If `auto_approve_permission` is true (default), it enqueues a `[KEYSTROKE]Enter` control at priority 0 with bypass-state and 1-second delay
 4. The C4 dispatcher delivers the Enter keystroke to the tmux session, auto-confirming the prompt
@@ -497,3 +520,103 @@ The sole health writer caches the decoded file, invalidating it on inode, size,
 mtime or ctime changes. Reads return independent snapshots; every successful
 write still performs its original durable publication and immediately refreshes
 the cache. Cleanup publishes only when it removes entries, without changing v1.
+
+
+## Memory Sync diagnostics and repair
+
+`activity-monitor/supervisor-events.jsonl` records `sync_triggered` and
+`sync_result` and incident-level `sync_alert` alongside existing supervisor decisions. Existing log rotation
+and retention apply to diagnostic evidence only. Records contain metadata,
+never conversation content, receipts or Sync tokens.
+
+Trigger records include scope, kind (group/origin/global), backlog, lag in
+seconds, optional context percent and control/run/checkpoint identifiers.
+Reasons include threshold, max_lag, context, inherited, catch_up and pre_reclaim. Logging
+failure cannot change a protected operation or its control bookkeeping.
+
+Protected results include commit (checkpoint, verified first/last C4 IDs and
+count), advance (both cursor columns before/after), and round_complete (raw
+count, advanced groups, remaining quota/backlog). Commit eligibility matches
+receipt verification: outgoing rows or delivered incoming rows, filtered to
+the appropriate scope. Summary-only Origin progress counts as useful work.
+Each failed named operation emits one error record; nested guards delegate
+reporting to it. Standalone guards report their failures. Successful lock
+acquisition emits no result. Interrupted rounds have no completion result.
+
+### Repair before notification
+
+Release and TTL preparation capture the requested range before dispatch. A
+terminal control is not proof of success. Group success requires a new content
+checkpoint covering that range and a released Sync marker. A lagging state
+header is diagnostic evidence only; it does not fail or retry reclaim Sync.
+An Origin round proves durable cursor progress and marker release;
+its bounded round need not drain all groups. A failed preparation retries once
+with the same 900-second deadline. Two failed attempts permit normal reclaim
+and persist one repair_failed incident with the latest matching result code or
+no_checkpoint or control_timeout. New real work cancels the
+preparation through the existing gates. Child/turn/identity checks still apply.
+
+Groups without a live session do not receive backlog or checkpoint/state-gap
+notifications and are not activated for repair. Their existing inherited Sync
+trigger applies when ordinary work next activates them. Active readers continue
+using normal Sync triggers. Pre-reclaim symptoms are recorded once as diagnostics;
+the retry verdict owns any final owner notification.
+
+### Persistent notification incidents
+
+`activity-monitor/sync-alert-episodes.json` atomically records an incident by
+scope + kind + alert type. A timeout includes control ID, so each control is a
+separate permanent identity. There is no elapsed-time reset or retention cutoff
+for notification ownership. This replaces both duration-based throttling and
+handled-timeout recovery from rotated diagnostic logs. The same ownership rule
+applies to diagnostic-only incidents.
+
+Origin frequency, Origin idle rounds, control confirmation timeouts and active
+checkpoint/state gaps emit one `sync_alert` record with type, scope, kind and evidence. They never enqueue an
+alert control or notify the owner. Recording does not depend on Origin being
+available. External scripts that monitor these diagnostic signals are outside
+this mechanism.
+
+Online unrepaired backlog, three requests without a checkpoint,
+and final automatic repair failures retain the existing owner notification
+route. Their text states the problem, the automatic repair attempted, the failure
+reason and a concrete action the owner can request. Final automatic repair
+failures continue notifying the owner; suppressing them in a future release is
+not implemented here.
+
+Resolution is explicit:
+
+- backlog: count and age have returned inside the applicable trigger limits;
+- state_uncommitted: valid state coverage reaches the checkpoint end;
+- no_checkpoint: a newer content checkpoint exists;
+- control_timeout: a different control is a different incident; the old ID is
+  never announced again;
+- origin_frequency: trailing-hour requests return to at most four;
+- origin_idle: ten known completed rounds contain at most five truly idle rounds;
+- repair_failed: durable checkpoint/marker or Origin cursor facts prove
+  the captured repair target is fixed.
+
+An unresolved incident records or notifies once, according to its type, including
+after restart or loss of trigger logs. Resolved incidents can recur. Notification ownership is persisted before
+enqueue; unknown enqueue outcomes keep ownership to avoid duplicates. A final
+repair failure blocked by an Origin fence remains durably pending and can send
+later even after its group goes offline, without blocking reclaim. Unreadable or
+unwritable incident state stops notifications and emits a diagnostic rather than repeatedly messaging owners.
+
+Sync marker expiration retains the baseline rule: a holder from a different run
+is immediately stale; a same-run marker retains its existing 30-minute expiry.
+Same-run worker failure recovery remains separate.
+
+The incident ledger deliberately remains closed after an unreadable/unwritable
+state failure; automatic reset would discard notification ownership and permit
+repeated notices. Timeout identities have no retention cutoff, as required by
+the one-control/one-incident contract; their small persistent set grows and is
+rewritten atomically. This change does not add compaction or a recovery policy.
+Origin backlog owner notices retain their threshold-based behavior, including
+when every bounded Origin round succeeds but backlog remains above the limit.
+Other repair-first notification gates are unchanged. A successful Origin round
+is not described as a failed repair in its backlog notice.
+
+Daily snapshots exclude tmp
+additions and edits, including staged content, while committing deletions of
+tracked temporary files.

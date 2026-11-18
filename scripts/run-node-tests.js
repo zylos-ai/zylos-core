@@ -30,6 +30,7 @@ const ROOT_NODE_TESTS = [
   'test/account-quota-browser.test.js',
   'test/dashboard-initial-timezone.integration.test.js',
   'test/skill-command-arguments.test.js',
+  'test/delivery-failure-recovery.integration.test.js',
   'test/pool-capacity-browser.test.js',
   'test/diagram-browser.integration.test.js',
   'test/diagram-components.integration.test.js',
@@ -61,6 +62,7 @@ const ROOT_NODE_TESTS = [
   'test/single-upgrade-check.integration.test.js',
   'test/exit-control.integration.test.js',
   'test/upgrade-npm-prefix.integration.test.js',
+  'test/upgrade-db-maintenance.integration.test.js',
   'test/session-release.integration.test.js',
   'test/component-source-record.integration.test.js',
 ];

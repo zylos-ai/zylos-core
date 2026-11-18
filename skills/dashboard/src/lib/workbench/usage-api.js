@@ -36,6 +36,43 @@ export function usageSummary(store, { tz, now = new Date(), group } = {}) {
     sevenDay: summarizePeriod(store, dayBoundsUTC(timezone.tz, 6, now), group) };
 }
 
+function periodCost(store, bounds) {
+  const byRuntime = { claude: 0, codex: 0 };
+  for (const row of costRows(store, { ...bounds, bucket: 'total' })) {
+    byRuntime[row.runtime] = (byRuntime[row.runtime] ?? 0) + row.value;
+  }
+  let cost = 0;
+  for (const value of Object.values(byRuntime)) cost += value;
+  return { since: bounds.since, until: bounds.until, cost };
+}
+
+function costSummary(store, timezone, today, sevenDay) {
+  return { ...timezone, today: periodCost(store, today), sevenDay: periodCost(store, sevenDay) };
+}
+
+// Fleet records publish only the two instance cost totals. They read the same
+// cost rows and add per runtime, then across runtimes, as usageSummary does.
+export function usageCostSummary(store, { tz, now = new Date() } = {}) {
+  const timezone = resolveUsageTimezone(tz);
+  return costSummary(store, timezone, dayBoundsUTC(timezone.tz, 0, now), dayBoundsUTC(timezone.tz, 6, now));
+}
+
+// A cost summary may be reused for maxAgeMs. The key holds the resolved
+// timezone and both period starts, so a new local day reads again immediately.
+export function createUsageCostReader(store, { now = Date.now, maxAgeMs = 30_000 } = {}) {
+  let cached = null;
+  return ({ tz } = {}) => {
+    const at = now(), date = new Date(at), timezone = resolveUsageTimezone(tz);
+    const today = dayBoundsUTC(timezone.tz, 0, date), sevenDay = dayBoundsUTC(timezone.tz, 6, date);
+    const key = [timezone.tz, timezone.tzFallback, today.since, sevenDay.since].join('\n');
+    const age = at - cached?.readAt;
+    if (cached?.key === key && age >= 0 && age < maxAgeMs) return cached.value;
+    const value = costSummary(store, timezone, today, sevenDay);
+    cached = { key, readAt: at, value };
+    return value;
+  };
+}
+
 export function usagePricing(store, { tz, now = new Date() } = {}) {
   const bounds = usageBounds({ range: '7d', tz, now });
   const models = costRows(store, { ...bounds, bucket: 'total', byModel: true })

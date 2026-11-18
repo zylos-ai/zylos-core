@@ -1,5 +1,6 @@
 // One table shared by auth and proxy contract tests; add a route with its handler.
 export const workbenchWriteRoutes = [
+  { method: 'POST', path: '/api/groups/naming-prompt', body: '{}' },
   { method: 'PUT', path: '/api/settings/timezone', body: '{"tz":"Europe/London"}' },
   { method: 'POST', path: '/api/settings/timezone/actions/restart-services', body: '{"tz":"Europe/London","confirm":true}' },
   { method: 'POST', path: '/api/chat/drafts', body: '{"displayName":"Private chat"}' },
