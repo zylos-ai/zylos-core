@@ -129,3 +129,39 @@ for (const entry of [
   if (entry.receipt) assert.equal(fs.readFileSync(receipt, 'utf8'), entry.receipt);
   else assert.equal(fs.existsSync(receipt), false, 'unselected or skipped bodies must not run');
 });
+
+
+// Discovery boundary: real runner children and temporary test modules only.
+// Run for slow-test selection changes; skip for unrelated changes. The outer
+// runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; no tmux, PM2 or DB is used.
+// Child deadlines and t.after bind all work and files to this test lifecycle.
+test('Node runner skips slow bodies by default and runs opted-in or explicit paths', t => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'node-slow-'));
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  copyRunnerSources(fixture);
+  fs.writeFileSync(path.join(fixture, 'package.json'), '{"type":"module"}');
+  const tests = path.join(fixture, 'cli/lib/__tests__');
+  fs.mkdirSync(tests, { recursive: true });
+  const receipt = path.join(fixture, 'executed.txt');
+  for (const name of ['ordinary.test.js', 'optional.slow.test.js']) {
+    fs.writeFileSync(path.join(tests, name), `
+      import test from 'node:test';
+      import fs from 'node:fs';
+      test('record execution', () => fs.appendFileSync(${JSON.stringify(receipt)}, ${JSON.stringify(name + '\n')}));
+    `);
+  }
+  for (const { slow, files, expected } of [
+    { slow: '0', files: [], expected: ['ordinary.test.js'] },
+    { slow: '1', files: [], expected: ['optional.slow.test.js', 'ordinary.test.js'] },
+    { slow: '0', files: ['cli/lib/__tests__/optional.slow.test.js'], expected: ['optional.slow.test.js'] },
+  ]) {
+    fs.writeFileSync(receipt, '');
+    const env = { ...process.env, ZYLOS_SLOW_TESTS: slow };
+    delete env.NODE_TEST_CONTEXT;
+    const result = spawnSync(process.execPath, [path.join(fixture, 'scripts/run-node-tests.js'), ...files], {
+      cwd: fixture, encoding: 'utf8', timeout: 30000, env,
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.deepEqual(fs.readFileSync(receipt, 'utf8').trim().split('\n').sort(), expected);
+  }
+});

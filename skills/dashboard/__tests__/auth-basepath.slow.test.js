@@ -1,3 +1,4 @@
+// covers: skills/comm-bridge/scripts/sqlite-driver.js skills/dashboard/src/lib/auth.js skills/dashboard/src/lib/store.js skills/dashboard/src/lib/version-checker.js skills/dashboard/src/lib/workbench/group-snapshot.js skills/dashboard/src/lib/core-state.js skills/dashboard/src/index.js skills/dashboard/src/lib/ skills/dashboard/public/themes/ skills/dashboard/__tests__/helpers/explicit-migration.js skills/dashboard/__tests__/fixtures/schema13.js skills/dashboard/__tests__/fixtures/memory-installation.js skills/dashboard/__tests__/fixtures/fleet-object-api.js
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';

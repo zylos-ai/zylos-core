@@ -1,3 +1,4 @@
+// covers: scripts/postinstall.js cli/commands/init.js
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';

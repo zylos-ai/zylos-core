@@ -34,7 +34,7 @@ The script creates a temporary fake home directory, a fake `pm2` binary, and a f
 
 Core self-upgrade now uses transaction recovery. The historical `rollbackSelf()`
 case was retired with the old parent orchestration. Its protected replacement is
-covered by `cli/lib/__tests__/upgrade-recovery.test.js` through the isolated Node
+covered by `cli/lib/__tests__/upgrade-recovery.slow.test.js` through the isolated Node
 runner; this manual harness does not verify upgrade recovery.
 
 ## Manual Review Notes
@@ -52,7 +52,7 @@ Run the node:test subset used for this change:
 ```bash
 node scripts/run-node-tests.js \
   cli/lib/__tests__/pm2.test.js \
-  cli/lib/__tests__/upgrade-recovery.test.js \
+  cli/lib/__tests__/upgrade-recovery.slow.test.js \
   cli/lib/__tests__/runtime-setup.test.js \
   cli/lib/__tests__/codex.test.js \
   cli/lib/__tests__/fs-utils.test.js \
