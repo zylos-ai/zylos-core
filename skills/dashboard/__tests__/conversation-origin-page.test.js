@@ -186,7 +186,7 @@ test('Origin rows name their channel and only Origin\'s own rows are quotable or
     mixedRow(2, 'in', 'dashboard', 'x1', 'queued in X', { conversationName: 'Project X' }),
     mixedRow(3, 'out', 'dashboard', 'x1', question, { conversationName: 'Project X' }),
     mixedRow(4, 'out', 'dashboard', 'y1', 'to an unnamed conversation', { conversationName: null }),
-    mixedRow(5, 'in', 'telegram', '-100|thread:7', '[TG GROUP:Team] from Telegram'),
+    mixedRow(5, 'in', 'telegram', '-100|thread:7', '[TG GROUP:Team] from Telegram\n[MEDIA:/private/photo.jpg]'),
     mixedRow(6, 'out', 'telegram', '-100|thread:7', 'Origin answers Telegram'),
   ];
   const f = originPage(t, { mode: 'single', messages });
@@ -209,5 +209,9 @@ test('Origin rows name their channel and only Origin\'s own rows are quotable or
   assert.ok(allNodes(card).some(node => node.textContent === f.translations['chat.question.otherConversationReadOnly']));
   assert.equal(allNodes(card).some(node => node.tagName === 'BUTTON' && !node.disabled), false, 'no answer control is enabled');
   assert.equal(article(5).querySelector('.chat-message-status').hidden, true, 'external rows show no Dashboard delivery state');
+  const telegramBody = article(5).querySelector('.chat-message-text').textContent;
+  assert.equal(telegramBody, `[TG GROUP:Team] from Telegram\n${f.translations['chat.attachment.externalMedia']}`,
+    'an external chat media line shows the original-channel label');
+  assert.equal(telegramBody.includes('/private/photo.jpg'), false, 'the local media path is not shown');
   assert.equal(f.root.querySelector('.conversation-input').disabled, false, 'the Origin conversation stays writable');
 });
