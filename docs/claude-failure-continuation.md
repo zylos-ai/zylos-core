@@ -87,6 +87,10 @@ and a subsequent failure can start a fresh retry. Delivery tests cover exact
 content, persisted cancellation and pre-paste error requeue. Shared reader and
 hook files are unchanged. Tests do not use live Claude, tmux or network services.
 
-Real-Claude reviewer execution covers disconnect, actual 30s/2m/5m delivery,
-ordinary error notification, user-input cancellation, AM/dispatcher restart and
-Esc. Synthetic hooks and injected adapters do not establish those live outcomes.
+Completed real-Claude reviewer execution covers one continuation 30 seconds
+after disconnect, cancellation by new or queued user input, existing 429/401
+notices, and Esc. The complete 30s/2m/5m sequence and AM/dispatcher restart or
+orphan-running release were not run with real Claude. Their behavior is covered
+by isolated fake-clock, state-reopen and private-notification tests; no further
+live execution is planned under the rule to reserve live testing for behavior
+that isolated tests cannot cover. These tests do not establish live outcomes.
