@@ -22,8 +22,8 @@ function setup(t, storeDependencies = {}) {
   const dependencies = { db: f.store,
     queryRoute: async () => pending,
     appendEntryEvent: async event => { assert.ok(f.db.prepare('SELECT id FROM conversations WHERE id=?').get(event.conversation_id)); order.push(event.event); events.push(event); return true; },
-    reserveStatusNotice: () => assert.fail('receive must defer notification admission'),
-    sendStatusNotice: () => assert.fail('receive must not send a chat reply'), diagnostic: () => {} };
+    reserveStatusNotice: (_channel, _endpoint, route) => { assert.ok(f.db.prepare('SELECT id FROM conversations WHERE session_group=?').get(route.sessionGroup)); order.push('reserve'); return { suppressed: false }; },
+    sendStatusNotice: () => { order.push('send'); return { outcome: 'sent' }; }, diagnostic: () => {} };
   return { ...f, events, order, dependencies };
 }
 
@@ -108,15 +108,15 @@ test('explicit pending/transition/rate-limit takes precedence; unavailable and n
   assert.equal(f.store.getNextPending({ sessionGroups: ['chat:New'] }), null);
 });
 
-test('auth final group and failure category commit with deferred owner notification despite event failure', async t => {
+test('auth final group and failure category survive event/cooldown/send failures after commit', async t => {
   const f = setup(t);
   for (const result of ['failed', 'unconfirmed']) {
     f.dependencies.queryRoute = async request => { assert.equal(request.sessionGroup, result === 'failed' ? null : 'chat:Team'); return auth(result); };
+    f.dependencies.reserveStatusNotice = (_c, _e, route) => { assert.equal(route.sessionGroup, 'chat:Team'); f.order.push('reserve'); return { suppressed: true }; };
     const reply = await receive([...input, '--session-group', 'Team'], f.dependencies);
     assert.equal(reply.action, 'auth_rejected'); assert.equal(reply.reasonLogged, true);
     const row = f.db.prepare('SELECT * FROM conversations WHERE id=?').get(reply.id);
     assert.equal(row.status, 'failed'); assert.equal(row.delivery_action, 'auth_rejected');
-    assert.equal(f.db.prepare('SELECT reason FROM failure_receipts WHERE conversation_id=?').get(reply.id).reason, 'auth_rejected');
     const [arrival, rejection] = f.events.slice(-2);
     assert.deepEqual({ ...arrival, received_at_ms: 0 }, {
       event: 'message_received', conversation_id: reply.id, channel: 'chat',
@@ -128,18 +128,19 @@ test('auth final group and failure category commit with deferred owner notificat
     assert.equal(rejection.conversation_id, reply.id);
     assert.equal(rejection.reason_code, 'auth_check_' + result);
   }
-  assert.deepEqual(f.order, ['message_received', 'auth_rejected', 'message_received', 'auth_rejected']);
+  assert.deepEqual(f.order, ['message_received', 'auth_rejected', 'reserve', 'message_received', 'auth_rejected', 'reserve']);
   assert.equal(f.events.filter(event => event.event === 'message_received').length, 2);
   assert.equal(f.events.filter(event => event.event === 'auth_rejected').length, 2);
   f.dependencies.queryRoute = async () => auth('failed');
   f.dependencies.appendEntryEvent = async () => false;
   const noReply = await receive([...input, '--no-reply'], f.dependencies);
   assert.equal(noReply.reasonLogged, false); assert.equal(noReply.action, 'auth_rejected');
-  assert.equal((await receive(input, f.dependencies)).action, 'auth_rejected');
+  f.dependencies.reserveStatusNotice = () => { throw new Error('busy'); };
+  await assert.rejects(receive(input, f.dependencies), { code: 'UNHEALTHY_NOTIFY_FAILED', persisted: ['D1'] });
   assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations WHERE status='failed' AND delivery_action='auth_rejected'").get().n, 4);
 });
 
-test('real rollback and DB_BUSY prevent storage while deferred notification avoids postcommit send errors', async t => {
+test('real rollback/DB_BUSY prevent and cooldown; postcommit uncertainty preserves failed row', async t => {
   const f = setup(t); f.dependencies.queryRoute = async () => auth('failed');
   f.db.exec("CREATE TRIGGER reject_inbound AFTER INSERT ON conversations BEGIN SELECT RAISE(ABORT,'injected'); END");
   await assert.rejects(receive(input, f.dependencies), { code: 'DB_WRITE_FAILED', persisted: [] });
@@ -150,9 +151,10 @@ test('real rollback and DB_BUSY prevent storage while deferred notification avoi
   try { await assert.rejects(receive(input, f.dependencies), { code: 'DB_BUSY', persisted: [] }); }
   finally { other.exec('ROLLBACK'); }
   assert.equal(f.events.length, 0); assert.equal(f.order.length, 0);
-  assert.equal((await receive(input, f.dependencies)).action, 'auth_rejected');
+  f.dependencies.sendStatusNotice = () => ({ outcome: 'uncertain' });
+  await assert.rejects(receive(input, f.dependencies), { code: 'UNHEALTHY_NOTIFY_UNCERTAIN', persisted: ['D1'] });
   assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations WHERE status='failed'").get().n, 1);
-  assert.deepEqual(f.order, ['message_received', 'auth_rejected']);
+  assert.deepEqual(f.order, ['message_received', 'auth_rejected', 'reserve']);
   assert.deepEqual(f.events.map(event => event.event), ['message_received', 'auth_rejected']);
   const row = f.db.prepare("SELECT * FROM conversations WHERE status='failed'").get();
   assert.equal(f.events[0].conversation_id, row.id);
@@ -161,7 +163,7 @@ test('real rollback and DB_BUSY prevent storage while deferred notification avoi
   assert.ok(Number.isFinite(f.events[0].received_at_ms));
   f.dependencies.db = { ...f.store, insertConversation: () => { throw new Error('unknown commit'); } };
   await assert.rejects(receive(input, f.dependencies), { code: 'INTERNAL_ERROR', persisted: null });
-  assert.deepEqual(f.order, ['message_received', 'auth_rejected']);
+  assert.deepEqual(f.order, ['message_received', 'auth_rejected', 'reserve']);
   assert.equal(f.events.length, 2, 'an unknown commit must not append events or reserve another notice');
 });
 
@@ -176,16 +178,16 @@ test('preserves data-layer contract errors and marks unexpected postcommit error
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM conversations').get().n, 1);
 });
 
-test('terminal entry preserves original content and leaves owner cooldown to the durable drainer', async t => {
+test('suppression conditional update is postcommit and retains terminal failed state', async t => {
   const f = setup(t); f.dependencies.queryRoute = async () => rejected;
+  f.dependencies.reserveStatusNotice = () => ({ suppressed: true });
   const reply = await receive(input, f.dependencies);
   const row = f.db.prepare('SELECT * FROM conversations WHERE id=?').get(reply.id);
-  assert.equal(reply.action, 'failed'); assert.equal(row.status, 'failed'); assert.equal(row.delivery_action, null);
-  assert.equal(row.content, 'hello');
+  assert.equal(reply.action, 'suppressed'); assert.equal(row.status, 'failed'); assert.equal(row.delivery_action, 'suppressed');
+  assert.match(row.content, /Status notification suppressed by cooldown while health=unavailable reason=down\./);
+  f.dependencies.db = { ...f.store, markStatusNoticeSuppressed: () => { throw new Error('busy'); } };
   const failed = await receive(input, f.dependencies);
-  assert.equal(failed.action, 'failed'); assert.equal(f.db.prepare('SELECT delivery_action AS a FROM conversations WHERE id=?').get(failed.id).a, null);
-  assert.equal(f.db.prepare("SELECT count(*) n FROM failure_receipts WHERE state='pending' AND reason='runtime_unavailable'").get().n, 2);
-  assert.equal(f.db.prepare('SELECT count(*) n FROM status_notice_cooldowns').get().n, 0);
+  assert.equal(failed.action, 'suppressed'); assert.equal(f.db.prepare('SELECT delivery_action AS a FROM conversations WHERE id=?').get(failed.id).a, null);
 });
 
 test('v2 correlation/branches reject malformed responses and fall back exactly once', async () => {
@@ -199,15 +201,15 @@ test('v2 correlation/branches reject malformed responses and fall back exactly o
   }
 });
 
-test('rejects unknown decisions but accepts terminal responses without unused reply text', async () => {
+test('rejects unknown decisions and missing reply text on otherwise valid rejection responses', async () => {
   const request = { type: 'route', requestId: 'rejection', noReply: false };
   const response = { version: 2, type: 'route', requestId: request.requestId, ...rejected };
   const authResponse = { ...response, ...auth('unconfirmed') };
-  for (const valid of [response, authResponse, { ...response, userMessage: undefined }, { ...authResponse, userMessage: undefined }]) {
+  for (const valid of [response, authResponse]) {
     assert.equal(validRouteResponse(valid, request), true);
     assert.equal(await queryRoute(request, { ipcRoute: async () => valid }), valid);
   }
-  const invalid = [{ ...response, decision: 'new' }];
+  const invalid = [{ ...response, decision: 'new' }, { ...response, userMessage: undefined }, { ...authResponse, userMessage: undefined }];
   for (const response of invalid) {
     let fallbacks = 0;
     assert.equal(validRouteResponse(response, request), false);

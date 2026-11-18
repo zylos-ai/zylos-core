@@ -134,16 +134,12 @@ export function createStore(database, dependencies = {}) {
     insertConversation: (direction, channel, endpointId, content, options = {}) => write(c => {
       if (!options || typeof options !== 'object' || Array.isArray(options)) throw dataError('INVALID_ARGS', 'Expected message options');
       if (typeof content !== 'string') throw dataError('INVALID_ARGS', 'Message content must be a string');
-      const allowed = new Set(['status', 'priority', 'requireIdle', 'deliveryAction', 'groupName', 'handoffGroup', 'wholeGroup', 'sessionId', 'coreSource', 'taskName', 'failureReason']);
+      const allowed = new Set(['status', 'priority', 'requireIdle', 'deliveryAction', 'groupName', 'handoffGroup', 'wholeGroup', 'sessionId', 'coreSource', 'taskName']);
       if (Object.keys(options).some(key => !allowed.has(key))) throw dataError('INVALID_ARGS', 'Unknown message option');
       if (options.coreSource != null && options.coreSource !== 'scheduler') throw dataError('INVALID_ARGS', 'Unknown core source');
       if (options.taskName != null && typeof options.taskName !== 'string') throw dataError('INVALID_ARGS', 'Task name must be a string');
       if (options.status !== undefined && !(direction === 'in' ? ['pending', 'failed'] : ['delivered']).includes(options.status)) throw dataError('INVALID_ARGS', 'Invalid initial message status');
-      if (options.failureReason !== undefined && (direction !== 'in' || options.status !== 'failed' ||
-          !['auth_rejected', 'runtime_unavailable'].includes(options.failureReason))) throw dataError('INVALID_ARGS', 'Invalid initial failure reason');
-      const row = insert(c, direction, channel, endpointId, content, resolve(c, direction, channel, endpointId, options), options);
-      if (options.failureReason !== undefined) delivery.enqueueReceipt(c, row.id, options.failureReason);
-      return row;
+      return insert(c, direction, channel, endpointId, content, resolve(c, direction, channel, endpointId, options), options);
     }),
     insertInternalMessage: (senderGroup, targetGroup, content, { sessionId } = {}) => write(c => {
       if (!senderGroup) throw dataError('NO_SENDER_GROUP', 'Sender session group is required');

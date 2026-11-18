@@ -1,8 +1,6 @@
 import { readZylosConfigOrThrow } from './local-config.js';
 
 const REASONS = {
-  auth_rejected: ['入站认证未通过', 'inbound authentication was rejected'],
-  runtime_unavailable: ['运行时暂时不可用', 'the runtime was unavailable'],
   launch_failed: ['会话启动失败', 'session startup failed'],
   ready_timeout: ['会话未及时就绪', 'session readiness timed out'],
   delivery_failed: ['会话无法接收消息', 'the session could not receive the message'],

@@ -210,7 +210,7 @@ The activity monitor writes `~/zylos/activity-monitor/agent-status.json` which i
 
 **Fail-open semantics**: If the status file is missing or malformed, health is assumed `ok` — intake is never blocked by a read failure.
 
-`c4-receive.js` asks the activity monitor for a route before committing inbound work. An explicit pending decision queues the message. Authentication rejection and unavailable routes atomically create terminal failed rows and durable owner-alert work, including for no-reply input. External failure notifications go to the owner/Origin fallback, never the original chat; a committed receive does not mean runtime delivery. If IPC is unavailable, the entry reads only the target runtime's health record; a missing or unreadable record leaves work pending.
+`c4-receive.js` asks the activity monitor for a route before committing inbound work. An explicit pending decision queues the message. Authentication rejection and unavailable routes create terminal failed rows, including when replies are suppressed or disabled. Status replies do not mean the inbound work was delivered. If IPC is unavailable, the entry reads only the target runtime's health record; a missing or unreadable record leaves work pending.
 
 ## Keystroke Delivery
 

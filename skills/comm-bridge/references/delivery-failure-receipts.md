@@ -1,6 +1,6 @@
 # Terminal delivery notifications
 
-New terminal failures from initial auth/health rejection, delivery attempts,
+New terminal failures from routing delivery attempts,
 orphan recovery and pending expiry enqueue notification work in the same C4 transaction. Original messages
 stay failed and are never replayed. Historical failed messages are not backfilled.
 The existing `failure_receipts` table holds internal receipts and external
@@ -21,12 +21,9 @@ Unverified Enter delivery says that delivery could not be confirmed.
 Every non-internal terminal delivery failure goes to the owner, for every
 fixed reason, including delivery_failed, delivery_unverified and
 orphan_retry_exhausted. It never sends a failure receipt to the original chat.
-Initial c4-receive auth/health rejections also insert the failure and owner
-notification atomically, using fixed auth_rejected/runtime_unavailable reasons
-instead of sending a status reply to the original chat. Receive reports the
-committed auth_rejected/failed action; delivery is deferred to the same queue.
-Rows without an original endpoint can still alert the owner. Source metadata
-only selects alert wording; it no longer selects a destination or reason scope.
+Initial c4-receive auth/health rejections retain the existing branded status reply
+with template overrides and the 600-second cooldown. They do not enqueue owner
+alerts. Status replies do not mean the inbound work reached the runtime.
 
 Scheduler handoff supplies `--core-source scheduler` and `--task-name`. C4
 persists nullable TEXT conversations.core_source and task_name in the
