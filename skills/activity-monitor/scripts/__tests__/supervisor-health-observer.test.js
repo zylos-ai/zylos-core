@@ -749,3 +749,16 @@ test('refused replacement stop restores the preceding reservation and allows rep
   assert.equal(attempts, 2, 'a different run remains eligible after its earlier stop was refused');
   assert.equal(f.observer.deliveryFailureRestarts.get(f.scene().sessionGroup), preceding);
 });
+
+test('pending failure continuation owns stale overloaded screen for the same run only',async t=>{
+ const f=fixture(t),scene=f.scene(),store=f.coordinator.store('claude');
+ f.setMatches({apiError:{detected:true}});
+ store.write({...store.read(scene.sessionGroup),failure_retry:{runId:scene.runId,sessionId:scene.sessionId,pid:123,
+  eventId:randomUUID(),failedAt:f.now(),dueAt:f.now()+30000,attempts:1,notice:null}},scene.sessionGroup);
+ for(const same of [true,false]) {
+  const delivery={screenChecked:false},tracked={delivery,sticky:{firstAt:f.now()-31000,count:1},rateHits:0};
+  if(!same) { const state=store.read(scene.sessionGroup); state.failure_retry.runId=randomUUID();store.write(state,scene.sessionGroup); }
+  await f.observer.checkDeliveredScreen(scene,tracked,delivery,{},f.now());
+  assert.equal(f.stops.length,same?0:1);
+ }
+});

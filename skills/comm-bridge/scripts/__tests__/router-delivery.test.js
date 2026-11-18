@@ -753,3 +753,26 @@ test('terminal transport failure after paste does not notify delivery recovery',
   assert.equal(f.row(row.id).retry_count, 2);
   assert.deepEqual(notifications, []);
 });
+
+// Boundary: bound idle Continue content and AM cancellation → existing executor.
+// Run for Continue delivery changes; injected terminal, no live tmux/runtime.
+test('bound idle Continue is exact, respects persisted cancellation and retries a pre-paste error',async t=>{
+ for(const scenario of ['deliver','cancelled','prepaste_error'])await t.test(scenario,async t=>{
+  const f=setup(t);f.target.runtime='claude';
+  const binding={expectedRunId:'r1',expectedSessionId:'s1',tmuxTarget:{serverGeneration:'1:1',sessionId:'$1',paneId:'%1'}};
+  const row=f.control('Continue',{target_binding:JSON.stringify(binding),require_idle:1});
+  let fail=scenario==='prepaste_error';
+  f.db.getControlById=()=>{if(fail){fail=false;throw error('ECONNRESET');}return row;};
+  if(scenario==='cancelled')row.status='timeout';
+  const d=f.create({idleHoldMs:0,idleWaitMs:0});t.after(()=>d.stop());
+  await d.deliverControl(row);
+  if(scenario==='prepaste_error') {
+   assert.equal(row.status,'pending');assert.equal(f.calls.filter(c=>c[0]==='paste').length,0);
+   row.status='running';await d.deliverControl(row);
+  }
+  const pastes=f.calls.filter(c=>c[0]==='paste');
+  assert.equal(pastes.length,scenario==='cancelled'?0:1);
+  if(pastes.length)assert.equal(pastes[0][1].text,'Continue');
+  assert.equal(row.status,scenario==='cancelled'?'timeout':'done');
+ });
+});

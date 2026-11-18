@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { initialHealthEvidence, reduceHealthEvidence, sanitizeHealthEvent, safeHealthReason } from './health-evidence.js';
 import { durableJson, runtimeRoot, syncDirectory } from './runtime-generation.js';
+import { reduceFailureContinuation } from './failure-continuation.js';
 import { currentOutageNotice } from './outage-notice.js';
 
 export const HEALTH_GROUP_IDLE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -23,7 +24,7 @@ function mapKeys(value, keyMap) {
 const encode = value => mapKeys(value,camel);
 const decode = value => mapKeys(value,key => snake[key] || key);
 
-const GROUP_FIELDS = ['last_processed', 'pending_notice', 'last_notice_outcome'];
+const GROUP_FIELDS = ['last_processed', 'pending_notice', 'last_notice_outcome', 'failure_retry'];
 function encodeGroup(state) {
   const group = {};
   if (state.last_processed) {
@@ -38,6 +39,7 @@ function encodeGroup(state) {
     group.pendingAttempt = {sessionId:p.session_id,pid:p.claude_pid,error:p.error,status:p.status,
       ...(p.updated_at===undefined?{}:{updatedAt:p.updated_at})};
   }
+  if (state.failure_retry) group.failureRetry = {...state.failure_retry,notice:encodeGroup({pending_notice:state.failure_retry.notice})};
   return group;
 }
 function decodeGroup(group, runtime, sessionGroup) {
@@ -53,14 +55,19 @@ function decodeGroup(group, runtime, sessionGroup) {
       session_id:attempt?.sessionId,claude_pid:attempt?.pid,error:attempt?.error,status:attempt?.status || 'pending',
       ...(attempt?.updatedAt===undefined?{}:{updated_at:attempt.updatedAt})};
   }
+  if (group.failureRetry) {
+    const r=group.failureRetry;
+    if(!r.runId || !r.sessionId || !/^[0-9a-f-]{36}$/i.test(r.eventId) || !Number.isSafeInteger(r.pid) || r.pid<=0 || !Number.isInteger(r.attempts) || r.attempts<1 || r.attempts>3 || !Number.isSafeInteger(r.failedAt) || !Number.isSafeInteger(r.dueAt)) throw new Error('Invalid failure retry');
+    state.failure_retry = {...r,notice:decodeGroup(r.notice,runtime,sessionGroup).pending_notice ?? null};
+  }
   return state;
 }
 function toFile(state, runtime, updatedAt, sessionGroup) {
-  const {version,health,reason,scheduling,rateLimitActive,groups={},pending_notice,last_processed,last_notice_outcome,
+  const {version,health,reason,scheduling,rateLimitActive,groups={},pending_notice,last_processed,last_notice_outcome,failure_retry,
     hook_failure,hook_pid,hook_process_start,hook_prompt,...bookkeeping}=state;
   const hook=encode(bookkeeping);
   hook.groups = Object.fromEntries(Object.entries(groups).map(([key,value]) => [key,encodeGroup(value)]));
-  const selected = encodeGroup({pending_notice,last_processed,last_notice_outcome});
+  const selected = encodeGroup({pending_notice,last_processed,last_notice_outcome,failure_retry});
   if (Object.keys(selected).length || Object.hasOwn(groups,sessionGroup)) hook.groups[sessionGroup] = selected;
   if(hook_failure)hook.lastFailure=encode(hook_failure);
   if(hook_pid!==undefined)hook.pid=hook_pid;
@@ -155,7 +162,7 @@ export class HealthStore {
     for (const [group, evidence] of Object.entries(state.groups)) {
       // Keep the replay marker until all notifications finish. Active and queued
       // groups are protected even if they have emitted no recent terminal hook.
-      if (group === 'origin' || activeGroups.has(group) || evidence.pending_notice) continue;
+      if (group === 'origin' || activeGroups.has(group) || evidence.pending_notice || evidence.failure_retry) continue;
       const last=Math.max(evidence.last_processed?.received_at ?? 0,evidence.last_notice_outcome?.observed_at ?? 0);
       const expired=last > 0 && this.now()-last >= HEALTH_GROUP_IDLE_MS;
       if (!expired && !await isDeleted(group)) continue;
@@ -186,9 +193,12 @@ export class HealthStore {
     } else this.write({ ...state, pending_notice: { ...state.pending_notice, ...patch } },sessionGroup);
     return true;
   }
-  consume(raw, { identity, quota, fallbackId, sessionGroup = 'origin' } = {}) {
+  consume(raw, { identity, quota, fallbackId, sessionGroup = 'origin', runId, retryControl, expireControl } = {}) {
     const event = sanitizeHealthEvent(raw, fallbackId);
     const prior = this.read(sessionGroup);
+    // A delivery notification queued ahead of this hook may have cleared or
+    // replaced the retry after its control was sampled outside this writer.
+    if(retryControl?.id!==prior.failure_retry?.controlId)retryControl=null;
     if (!['stop', 'stop_failure'].includes(event.event)) return { state: prior, status: 'ignored', reason: 'nonterminal_event' };
     if (event.received_at <= (prior.last_processed?.received_at ?? 0)) return { state: prior, status: 'ignored', reason: 'replay' };
     const result = reduceHealthEvidence(prior, event, { identity, quota, now: this.now() });
@@ -200,7 +210,11 @@ export class HealthStore {
         session_id:event.session_id, claude_pid:event.claude_pid } };
     const pending = this.freezeNotice({ runtime: this.runtime, state: result.state, identity, event, result, sessionGroup });
     if (pending) result.state.pending_notice = pending;
+    reduceFailureContinuation(result.state,{runtime:this.runtime,event,identity,runId,pending,control:retryControl,eligible:!result.verify && result.notice?.eligible});
     result.state.rateLimitActive = result.state.health === 'rate_limited' || (result.state.health !== 'ok' && prior.rateLimitActive);
+    // Expire an older pending retry before publishing this failure's replay
+    // marker, so a crash cannot lose its control id while leaving it executable.
+    if(event.event==='stop_failure' && retryControl?.status==='pending')expireControl?.(retryControl.id);
     this.write(result.state,sessionGroup);
     return result;
   }

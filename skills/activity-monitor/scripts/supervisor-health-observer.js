@@ -234,7 +234,9 @@ export class SupervisorHealthObserver {
     const recoveredScreen=screen!==null && health.recovered?.session_id===scene.sessionId && health.recovered?.screen_fingerprint === fingerprint(screen);
     const matches = health.health === 'ok' && !recoveredScreen ? await this.matchScreen(scene.runtime,screen) : {};
     if (tracked.delivery !== delivery) return false;
-    const authoritativeFailure=state.healthFailureCurrent || (state.healthIdentity && health.source==='hook' && !health.hook_ok &&
+    const retry=this.coordinator.store(scene.runtime).read(scene.sessionGroup ?? 'origin').failure_retry;
+    const continuationOwnsScreen=scene.runtime==='claude' && retry?.runId===scene.runId && retry.sessionId===scene.sessionId;
+    const authoritativeFailure=continuationOwnsScreen || state.healthFailureCurrent || (state.healthIdentity && health.source==='hook' && !health.hook_ok &&
       health.session_id===state.healthIdentity.session_id && health.hook_pid===state.healthIdentity.claude_pid);
     // Accepted current-process failure evidence outranks a pane that may still show older text.
     if (authoritativeFailure) tracked.sticky = null;

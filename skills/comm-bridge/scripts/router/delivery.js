@@ -173,6 +173,8 @@ export function createDelivery(deps, configuration = {}) {
 
   async function deliver(row, type) {
     const group = deps.getSessionMode() === 'single' ? null : row.session_group;
+    const binding=type==='control' && row.target_binding ? (typeof row.target_binding==='string'?JSON.parse(row.target_binding):row.target_binding) : null;
+    const continuation=type==='control' && row.content==='Continue' && row.require_idle===1 && binding?.expectedRunId && binding?.expectedSessionId;
     const fields = { session_group: group, [type === 'control' ? 'control_id' : 'conversation_id']: row.id };
     const emit = (event, details = {}) => diagnostic(event, { ...fields, ...details });
     const periodic = groupPeriodic(group, fields);
@@ -345,7 +347,7 @@ export function createDelivery(deps, configuration = {}) {
             result = 'ack';
           } else {
             if (type === 'control' && content.startsWith('/')) periodic.reset('slash_control');
-            const message = type === 'conversation' ? deps.formatConversation(row) : content.startsWith('/') ? content : `Meanwhile, ${content}`;
+            const message = type === 'conversation' ? deps.formatConversation(row) : content.startsWith('/') || continuation ? content : `Meanwhile, ${content}`;
             const sanitized = sanitizeMessage(message);
             const clearAgy = target.runtime === 'agy' && type === 'control' && content === '/clear';
             if (clearAgy) {
@@ -354,7 +356,10 @@ export function createDelivery(deps, configuration = {}) {
               await fs.mkdir(directory, { recursive: true });
               await fs.writeFile(path.join(directory, 'agy-session-source'), JSON.stringify({ runId: target.runId, source: 'clear' }), { mode: 0o600 });
             }
-            await io(() => adapter.sendText({ ...bound(), text: sanitized, bracketedPaste: BRACKETED_PASTE_ENABLED }));
+            await io(async () => {
+              if(continuation && deps.db.getControlById(row.id)?.status!=='running')throw failure('CONTROL_NOT_ACTIVE');
+              return adapter.sendText({ ...bound(), text: sanitized, bracketedPaste: BRACKETED_PASTE_ENABLED });
+            });
             pastedAt = now();
             try { Promise.resolve(deps.notifyDelivered({
               ...(type === 'conversation' ? { conversationId: row.id, channel: row.channel } : { controlId: row.id }),
@@ -405,6 +410,7 @@ export function createDelivery(deps, configuration = {}) {
     if (error) {
       const code = error.code ?? 'ENTER_UNVERIFIED';
       emit('delivery_failed', { reason: code });
+      if(code==='CONTROL_NOT_ACTIVE')return {delivered:false,blocked:true,state:state.state};
       if (isIdentityError(code) || (initial && code === 'TMUX_UNAVAILABLE')) {
         if (type === 'control' && row.target_binding != null && isIdentityError(code)) deps.db.failStaleTargetControl(row.id);
         else if (type === 'control') deps.db.requeueControl(row.id, code);

@@ -382,6 +382,12 @@ export function createSupervisor(deps) {
       if(notification.controlId===undefined){
         observer.notifyDelivered(delivered,{currentSessionTs:current?.currentSessionTs});
         lifecycle.messageDelivered(delivered);
+        if(notification.runtime==='claude')await health.serial('claude',()=>{
+          const store=health.store('claude'),state=store.read(delivered.sessionGroup),retry=state.failure_retry;
+          if(!retry || retry.runId!==delivered.runId || delivered.pastedAt<=retry.failedAt)return;
+          if(retry.controlId)try{db.expireControlById(retry.controlId);}catch(error){if(error.code!=='CONTROL_NOT_ACTIVE')throw error;}
+          delete state.failure_retry;delete state.pending_notice;store.write(state,delivered.sessionGroup);
+        });
       }
       await admission.serialize(()=>lifecycle.workDelivered(delivered));
     },onDeliveryFailed:(notification,current)=>observer.notifyDeliveryFailed(notification,current),
