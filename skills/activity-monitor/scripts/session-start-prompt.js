@@ -19,8 +19,7 @@ const execFileAsync = promisify(execFile);
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
-const STATE_PATH = path.join(ZYLOS_DIR, 'memory',
-  ...(Object.hasOwn(process.env, 'ZYLOS_SESSION_GROUP') ? ['session-groups', 'origin'] : []), 'state.md');
+const ONBOARDING_PENDING_PATH = path.join(ZYLOS_DIR, '.zylos', 'onboarding-pending');
 const MIGRATION_PROMPT_PATH = path.join(ZYLOS_DIR, 'custom-hooks', 'session-start', '90-migration-prompt.md');
 const DEFAULT_CHILD_TIMEOUT_MS = 2500;
 let diagnosticModule;
@@ -121,14 +120,10 @@ export const migrationPrompt = [
 ].join(' ');
 
 export function isOnboardingPending({
-  statePath = STATE_PATH,
-  readFileSync = fs.readFileSync,
+  pendingPath = ONBOARDING_PENDING_PATH,
+  existsSync = fs.existsSync,
 } = {}) {
-  try {
-    return /^-\s+Status:\s+pending\b/m.test(readFileSync(statePath, 'utf8'));
-  } catch {
-    return false;
-  }
+  return existsSync(pendingPath);
 }
 
 export function isMigrationPending({

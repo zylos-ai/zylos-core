@@ -169,9 +169,11 @@ test('split preparation changes no live bytes and stages both runtimes, assets a
     assert.ok(output.includes('user bytes\r\n  keep trailing'));
     assert.equal(output.includes('zylos-upgrade-render-'), false);
   }
-  for (const name of ['assembler.mjs', 'claude-system.md', 'codex-system.md', 'onboarding.md', 'meta.json']) {
+  for (const name of ['assembler.mjs', 'claude-system.md', 'codex-system.md', 'meta.json']) {
     assert.ok(prepared.replacements.find(r => r.path === `.zylos/instructions/${name}`));
   }
+  assert.equal(prepared.replacements.some(r => r.path === '.zylos/instructions/onboarding.md'), false);
+  assert.equal(prepared.replacements.some(r => r.path === '.zylos/onboarding-pending'), false);
   const agents = prepared.replacements.filter(item => item.path.startsWith('.claude/agents/'));
   assert.equal(agents.length, 3);
   for (const { path: name } of agents) {

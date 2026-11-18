@@ -802,6 +802,11 @@ export function deployTemplates({ freshInstall = false } = {}) {
     console.log(`  ${success('Split instruction files ready')}`);
   }
 
+  if (freshInstall) {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(CONFIG_DIR, 'onboarding-pending'), '', { flag: 'a', mode: 0o600 });
+  }
+
   // Shared templates fill missing files, but global working state is never recreated.
   const memorySrc = path.join(TEMPLATES_SRC, 'memory');
   const memoryDest = path.join(ZYLOS_DIR, 'memory');

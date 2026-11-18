@@ -65,6 +65,16 @@ export const CORE_SHARDS = Object.freeze([
     emit: async payload =>
       (await import('../../comm-bridge/scripts/c4-session-init.js')).emitC4Conversations(payload, DEFAULT_SHARD_BUDGET),
   },
+  {
+    name: 'onboarding',
+    order: 5,
+    emit: async () => {
+      if (!fs.existsSync(path.join(defaultZylosDir(), '.zylos', 'onboarding-pending'))) return '';
+      const { resolveCoreConfigModule } = await import('../../comm-bridge/scripts/core-config-loader.js');
+      const packageRoot = path.resolve(path.dirname(resolveCoreConfigModule()), '../..');
+      return fs.readFileSync(path.join(packageRoot, 'templates', 'onboarding.md'), 'utf8');
+    },
+  },
 ].map(Object.freeze));
 
 const RESERVED_NAMES = new Set([

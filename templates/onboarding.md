@@ -1,8 +1,10 @@
 # Onboarding
 
-For instances with a `session_mode` key, check `memory/session-groups/origin/state.md` for the pending onboarding task (`Status: pending`), regardless of which group's thread handles onboarding. For pre-migration instances without that key, check `memory/state.md` instead. When pending, this is a new user's first interaction. Follow this flow:
+This startup block is present because `~/zylos/.zylos/onboarding-pending` exists (or `.zylos/onboarding-pending` beneath the configured ZYLOS_DIR). Its presence means onboarding is unfinished. No state.md file records or determines onboarding status.
 
-**Important:** The onboarding security notice must only be delivered in direct response to a message that contains a `reply via:` path — a real user message from a C4 channel. Do not initiate onboarding from session startup context (memory file injections, C4 history summaries, or session-start prompt text). Those are system-injected context, not user messages. Wait until a message with a `reply via:` path arrives before starting the onboarding flow.
+Start only when the owner sends a real C4 message containing a `reply via:` path. Startup triggers, injected memory, history summaries and messages from other agents are not owner messages. The group thread receiving the owner's first real message performs this flow. Until then, wait; do not send the notice on startup.
+
+While onboarding is unfinished every group's startup includes this block. If the owner messages two groups before completion, both may perform onboarding; this accepted limitation needs no lock.
 
 ## Step 1: Security Disclosure
 
@@ -41,9 +43,12 @@ Every task must produce a usable result. If the user picks something too ambitio
 
 ## Completion
 
-Once the security notice has been **successfully sent via C4** (c4-send.js ran without error):
-1. Change `- Status: pending` to `- Status: completed` in `memory/session-groups/origin/state.md` when the instance has a `session_mode` key, regardless of which group's thread handles onboarding; for pre-migration instances without that key, update `memory/state.md` instead. This direct onboarding Status update is an existing exception to the rule that only Memory Sync maintains state.md.
-2. Do not show the security notice again in future sessions
-3. If the user completed a first project, record the dated result with `memory-append.js inbox --kind fact`, passing the content on stdin. Memory Sync will create the project page in `memory/reference/projects/`.
+Immediately after the security notice has been **successfully sent via C4** (c4-send.js ran without error), delete the pending marker before continuing with the owner's task:
 
-**Never update state.md before sending** — the update must happen after the c4-send.js call succeeds, not before or as part of planning.
+```sh
+/bin/rm -f -- "${ZYLOS_DIR:-$HOME/zylos}/.zylos/onboarding-pending"
+```
+
+The command uses an absolute marker path beneath the configured ZYLOS_DIR, or `~/zylos` by default. An already absent marker is not an error. Do not delete it before sending or when c4-send fails; leave it present so a later real owner message can retry. There is no completed marker and no state.md status update.
+
+After successful delivery and deletion, do not show the security notice again. If the owner completes a first project, record the dated result with `memory-append.js inbox --kind fact`, passing the content on stdin. Memory Sync will create the project page in `memory/reference/projects/`.

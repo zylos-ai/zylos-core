@@ -63,6 +63,7 @@ const CORE_SHARD_SEQUENCE = [
   'custom',
   'references',
   'c4-conversations',
+  'onboarding',
   'fg',
   'start-prompt',
 ];
@@ -930,7 +931,7 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
     });
 
     // Four injection shards, side effects and synchronous health registration.
-    assert.deepEqual(result, { added: 36, updated: 0, removed: 12 });
+    assert.deepEqual(result, { added: 39, updated: 0, removed: 12 });
     assertSessionStartUsesOrchestrator(installed);
   });
 
