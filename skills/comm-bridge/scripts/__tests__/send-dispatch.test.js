@@ -126,7 +126,7 @@ test('installed CLI checks absorbed external ownership and queues internal targe
   const create = spawnSync(process.execPath, ['--input-type=module', '-e', `
 import * as db from ${JSON.stringify(database)};
 const row = db.insertConversation('in', 'demo', 'a\\\'"$\x60\\\\\\nroute', 'original', {groupName:'room'});
-const {runId} = db.beginModeTransition('single','multi');
+const {runId} = db.beginModeTransition('single','multi', { kind: 'first_migration' });
 db.setDrainFence('*'); db.absorbForTransition(runId);
 console.log(JSON.stringify({id:String(row.id),runId})); db.close();
 `], { env: fixture.env, encoding: 'utf8', timeout: 3000 });

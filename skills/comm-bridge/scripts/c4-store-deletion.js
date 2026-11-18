@@ -1,3 +1,4 @@
+import { hasOpenModeTransition } from './c4-transition-state.js';
 import { dataError, requireGroup } from './c4-session-group.js';
 
 const terminalMessage = "(direction='out' OR direction='in' AND status NOT IN ('pending','running'))";
@@ -97,7 +98,7 @@ export function deletionFunctions({ read, write, snapshot, get, all, run, second
       if (before && (before.target_key !== targetKey || before.cutoff_id !== cutoffId)) throw dataError('DELETION_OWNERSHIP_MISMATCH', 'Confirmed deletion boundary does not match');
       draft(c, localId, targetKey);
       boundary(c, targetKey, cutoffId);
-      if (get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'")) throw dataError('TRANSITION_OPEN', 'Mode transition is in progress');
+      if (hasOpenModeTransition(c, get)) throw dataError('TRANSITION_OPEN', 'Mode transition is in progress');
       const active = get(c, "SELECT * FROM group_deletion_audit WHERE target_key=? AND status='started'", targetKey);
       if (active) {
         if (active.operation_id !== operationId) throw dataError('DELETION_OWNERSHIP_MISMATCH', 'Another deletion owns this target');
@@ -115,7 +116,7 @@ export function deletionFunctions({ read, write, snapshot, get, all, run, second
       // attempt. Recheck durable count confidence under the final writer lock.
       const countsEstimated = row.cleanup_attempts > 1;
       draft(c, localId, row.target_key);
-      if (get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'")) throw dataError('TRANSITION_OPEN', 'Mode transition is in progress');
+      if (hasOpenModeTransition(c, get)) throw dataError('TRANSITION_OPEN', 'Mode transition is in progress');
       const removed = cleanupNow(cleanup, c), n = amounts({ ...counts, ...removed });
       run(c, "UPDATE group_deletion_audit SET status='done',completed_at=?,deleted_messages=0,deleted_attachments=?,deleted_files=?,counts_estimated=? WHERE operation_id=?", seconds(), n.attachments, n.files, Number(countsEstimated), operationId);
       return decode(audit(c, operationId));
@@ -131,7 +132,7 @@ export function deletionFunctions({ read, write, snapshot, get, all, run, second
       const targetKey = JSON.stringify(['group', sessionGroup]);
       if (before && (before.target_key !== targetKey || before.cutoff_id !== cutoffId)) throw dataError('DELETION_OWNERSHIP_MISMATCH', 'Confirmed deletion boundary does not match');
       boundary(c, targetKey, cutoffId);
-      if (get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'") || get(c, "SELECT 1 FROM drain_fences WHERE session_group='*'")) throw dataError('TRANSITION_OPEN', 'Mode transition or global drain is in progress');
+      if (hasOpenModeTransition(c, get) || get(c, "SELECT 1 FROM drain_fences WHERE session_group='*'")) throw dataError('TRANSITION_OPEN', 'Mode transition or global drain is in progress');
       const fence = get(c, 'SELECT * FROM drain_fences WHERE session_group=?', sessionGroup);
       if (fence) {
         if (fence.reason !== 'delete' || !fence.operation_id) throw dataError('FENCE_MISMATCH', 'The group is owned by another operation');
@@ -154,7 +155,7 @@ export function deletionFunctions({ read, write, snapshot, get, all, run, second
       if (previous?.session_group === sessionGroup && previous.status === 'done') return decode(previous);
       const { row, fence } = owned(c, sessionGroup, operationId);
       const countsEstimated = row.cleanup_attempts > 1;
-      if (get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'")) throw dataError('TRANSITION_OPEN', 'Mode transition is in progress');
+      if (hasOpenModeTransition(c, get)) throw dataError('TRANSITION_OPEN', 'Mode transition is in progress');
       drained(c, sessionGroup);
       const removed = cleanupNow(cleanup, c), n = amounts({ ...counts, ...removed });
       const deleted = run(c, `DELETE FROM conversations WHERE session_group=? AND id<=? AND ${terminalMessage}`, sessionGroup, row.cutoff_id).changes;

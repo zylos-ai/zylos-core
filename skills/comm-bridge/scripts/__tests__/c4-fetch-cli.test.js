@@ -535,7 +535,7 @@ function withAbsorbed(fn) {
     const seed = spawnSync(process.execPath, ['--input-type=module', '-e', `
       import * as db from ${JSON.stringify(new URL('../c4-db.js', import.meta.url).href)};
       const rows = Array.from({ length: 23 }, (_, i) => db.insertConversation('in', 'system', 'route-' + i, '🚀'.repeat(301) + '\\n尾'));
-      const { runId } = db.beginModeTransition('single', 'multi');
+      const { runId } = db.beginModeTransition('single', 'multi', { kind: 'first_migration' });
       db.setDrainFence('*'); db.absorbForTransition(runId);
       console.log(JSON.stringify({ runId, ids: rows.map(row => row.id) })); db.close();
     `], childOptions(env));

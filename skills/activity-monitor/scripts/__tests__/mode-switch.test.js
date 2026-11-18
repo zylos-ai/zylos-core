@@ -146,7 +146,7 @@ test('cutover to single does not enqueue an Origin followup', async () => {
 for(const persistedMode of ['single','multi']) test(`real cutover resumed on ${persistedMode} converges to one pending followup after a completion crash`,async t=>{
   let mode=persistedMode,fail=true;
   const {db,store}=databaseFixture(t,{readConfig:()=>({state:'ok',config:{runtime:'claude',session_mode:mode}})});
-  const {runId}=store.beginModeTransition('single','multi');store.setDrainFence('*');store.absorbForTransition(runId);store.setModeTransitionPhase(runId,'cutover');
+  const {runId}=store.beginModeTransition('single','multi', { kind: 'first_migration' });store.setDrainFence('*');store.absorbForTransition(runId);store.setModeTransitionPhase(runId,'cutover');
   const deps={db:{...store,setModeTransitionPhase:(id,phase,options)=>{if(phase==='complete'&&fail)throw error('DB_BUSY');return store.setModeTransitionPhase(id,phase,options);}},
     readMode:()=>({mode}),writeMode:target=>{mode=target;},restart:{advance:()=>({confirmed:true})}};
   await assert.rejects(new ModeSwitchCoordinator(deps).advance(),{code:'DB_BUSY'});

@@ -171,9 +171,9 @@ export class SupervisorRunEndings {
       let records, lastDone;
       try {
         records = new Map((await this.db.listRunEndings(candidates.map(row => row.sessionGroup))).map(row => [row.sessionGroup, row]));
-        lastDone = await this.db.getLastCompletedModeTransition();
+        lastDone = await this.db.getLastCompletedModeTransition({ memoryConversion: true, targetMode: 'multi' });
       } catch (cause) { await this.failCandidates(candidates, cause); return; }
-      const multiSince = lastDone?.target_mode === 'multi' ? lastDone.updated_at * 1000 : null;
+      const convertedSince = lastDone ? lastDone.updated_at * 1000 : null;
       for (const row of candidates) {
         const group = row.sessionGroup;
         if (records.get(group)?.reason !== 'unexpected') this.reset(group);
@@ -181,7 +181,7 @@ export class SupervisorRunEndings {
         try { current = await this.currentSession(group); }
         catch (cause) { this.failure(group, row.runId ?? this.failures.get(group)?.runId ?? null, cause); continue; }
         if (!current || group !== 'origin' && current.runId !== row.runId ||
-          multiSince !== null && current.ts < multiSince || records.get(group)?.runId === current.runId) {
+          convertedSince !== null && current.ts < convertedSince || records.get(group)?.runId === current.runId) {
           this.clearFailure(group); continue;
         }
         // Origin has no slot identity; once readable, its F3 identifies the failure episode.

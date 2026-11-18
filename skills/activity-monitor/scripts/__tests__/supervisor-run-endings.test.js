@@ -112,3 +112,21 @@ test('an invalid session timestamp starts failure grace and is never recorded as
   assert.equal(f.failures().length, 1); assert.equal(f.failures()[0].slot_deleted, true);
   assert.equal(f.failures()[0].session_group, 'test:a');
 });
+
+// Cross-module boundary: real completed-transition query feeds real reconciliation.
+// Run for transition-history filters; no services or external resources are used.
+test('native switches do not hide an Origin crash behind a newer completion time', async t => {
+  const f = await runEndingFixture(t);
+  await f.write('origin');
+  const sessionTime = f.now / 1000;
+  f.db.prepare(`INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,cutoff,created_at,updated_at)
+    VALUES('old-conversion','single','multi','complete',0,?,?)`).run(sessionTime-20,sessionTime-10);
+  f.db.prepare(`INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,created_at,updated_at)
+    VALUES('new-switch','single','multi','complete',?,?)`).run(sessionTime+10,sessionTime+20);
+  // A newer conversion to single also must not obscure the older multi conversion.
+  f.db.prepare(`INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,cutoff,created_at,updated_at)
+    VALUES('single-conversion','multi','single','complete',0,?,?)`).run(sessionTime+30,sessionTime+40);
+  f.now += 60000; f.context.scenes=[];
+  await f.step();
+  assert.equal(f.records().find(row=>row.sessionGroup==='origin')?.continuationPending,1);
+});
