@@ -4,7 +4,7 @@
 // adapters, receipt loss and independent HTTP-process restart; run for recovery.
 // Remote access: real AuthGate + FleetProxy and data-instance settings; run for
 // auth/fleet/chat routes; unrelated block styles may skip.
-// Single: actual converter/coordinator with isolated restart acknowledgement,
+// Single: native coordinator with isolated restart acknowledgement,
 // then all three write APIs; run for mode/access/draft/answer changes.
 // Every case requires ZYLOS_CHAT_INTEGRATION=1 before DB/HTTP creation; absence
 // skips all work. No live history, PM2, tmux socket or model is used here.
@@ -511,12 +511,12 @@ registerIntegrationCase('remote chat off, on and off enforces both direct and pr
 });
 
 // Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.
-registerIntegrationCase('single mode conversion retains both history tabs and rejects draft, send and answer APIs', async (t, sandbox) => {
+registerIntegrationCase('native single switch retains both history tabs and rejects draft, send and answer APIs', async (t, sandbox) => {
   const a = await createChatApiFixture(t, sandbox);
   const active = await a.createConversation('multi history remains');
   const q = a.question(); a.addOutbound(active.draft.localId, questionContent(q));
   a.c4.insertConversation('in', 'telegram', 'external', 'external history remains', { groupName: 'external' });
-  const transition = await a.convertToSingle();
+  const transition = await a.switchToSingle();
   assert.equal(transition.target_mode, 'single');
   for (const tab of ['mine', 'external']) {
     const page = await a.request(`/api/chat/conversations?tab=${tab}`);
@@ -538,11 +538,11 @@ registerIntegrationCase('single mode conversion retains both history tabs and re
 });
 
 // Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.
-registerIntegrationCase('after the real conversion to single the Origin page shows internal rows under origin but its list preview does not', async (t, sandbox) => {
+registerIntegrationCase('after the native switch to single the Origin page shows internal rows under origin but its list preview does not', async (t, sandbox) => {
   const a = await createChatApiFixture(t, sandbox);
   const x = await a.createConversation('started in multi');
   const xGroup = `${x.receipt.namespace}:${x.draft.localId}`;
-  await a.convertToSingle();
+  await a.switchToSingle();
   assert.equal(a.readMode(), 'single');
   const originRoute = `/api/chat/conversations/${encodeURIComponent(ORIGIN_CONVERSATION_ID)}`;
   assert.equal((await a.request(`${originRoute}/send`, post({ content: 'owner asks Origin' }))).status, 200);

@@ -193,9 +193,15 @@ try {
     eq(database.prepare('SELECT content FROM conversations WHERE id=?').get(row.id).content, contents[1]);
   }
   outlets.push('direct insert text/JSON receipt');
-  // Genuine mode-switch absorption and conversion, without launching a runtime.
+  // First migration converts global materials without launching a runtime.
+  // Legacy ungrouped history exercises each content class in the real export.
+  const legacyRows = contents.map(content => {
+    const row = store.insertConversation('out', 'system', null, content);
+    database.prepare("UPDATE conversations SET session_group='' WHERE id=?").run(row.id);
+    return row;
+  });
   for (const content of [contents[1], contents[2], contents[3]]) store.insertConversation('in', 'dashboard', 'alpha', content, { groupName: 'alpha' });
-  const { runId } = store.beginModeTransition('multi', 'single', { kind: 'first_migration' }); store.setDrainFence('*'); store.absorbForTransition(runId);
+  const { runId } = store.beginModeTransition('single', 'multi', { kind: 'first_migration' }); store.setDrainFence('*'); store.absorbForTransition(runId);
   const absorbed = store.getAbsorbedConversations(runId);
   eq(absorbed.length, 3);
   for (const json of [false, true]) {
@@ -221,25 +227,20 @@ try {
   for (const file of conversion.materials) { ok(fs.statSync(file).isFile()); safe(fs.readFileSync(file, 'utf8'), 'conversion material'); }
   for (const file of exports) { const exported = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
     ok(exported.length > 0); for (const row of exported) { const raw = database.prepare('SELECT content FROM conversations WHERE id=?').get(row.id); eq(row.content, projectC4Content(raw.content, { c4Id: row.id })); } }
-  const state = fs.readFileSync(path.join(instance, 'memory/state.md'), 'utf8'); safe(state, 'converted state');
+  const state = fs.readFileSync(path.join(instance, 'memory/session-groups/dashboard:alpha/state.md'), 'utf8'); safe(state, 'converted state');
   for (const row of absorbed) ok(state.includes(String(row.id)));
   outlets.push('mode-switch state/handoff/material exports');
   store.setModeTransitionPhase(runId, 'cutover'); store.setModeTransitionPhase(runId, 'complete');
-  // A legacy ungrouped serialized row exercises the other conversion export
-  // branch. This is test-data setup, not a product insert bypass.
-  const legacy = store.insertConversation('out', 'system', null, contents[1]);
-  database.prepare("UPDATE conversations SET session_group='' WHERE id=?").run(legacy.id);
-  const reverse = store.beginModeTransition('single', 'multi', { kind: 'first_migration' }); store.setDrainFence('*'); store.absorbForTransition(reverse.runId);
-  const converted = createModeSwitchConverter({ db: store, zylosDir: instance })({ run_id: reverse.runId });
-  const ungrouped = path.join(instance, 'memory/mode-switch', reverse.runId, 'ungrouped.md');
-  ok(converted.materials.includes(ungrouped));
+  const ungrouped = path.join(instance, 'memory/mode-switch', runId, 'ungrouped.md');
+  ok(conversion.materials.includes(ungrouped));
   const exportedLegacy = fs.readFileSync(ungrouped, 'utf8').trim().split('\n').map(line => JSON.parse(line));
-  eq(exportedLegacy.length, 1); eq(exportedLegacy[0].id, legacy.id);
-  eq(exportedLegacy[0].content, projectC4Content(contents[1], { c4Id: legacy.id }));
-  for (const file of converted.materials) { ok(fs.statSync(file).isFile()); safe(fs.readFileSync(file, 'utf8'), 'reverse conversion materials'); }
-  safe(fs.readFileSync(converted.handoff, 'utf8'), 'reverse conversion handoff');
-  eq(database.prepare('SELECT content FROM conversations WHERE id=?').get(legacy.id).content, contents[1]);
-  outlets.push('single-to-multi legacy ungrouped export/material list');
+  eq(exportedLegacy.length, legacyRows.length);
+  for (const [index, row] of legacyRows.entries()) {
+    eq(exportedLegacy[index].id, row.id);
+    eq(exportedLegacy[index].content, projectC4Content(row.content, { c4Id: row.id }));
+    eq(database.prepare('SELECT content FROM conversations WHERE id=?').get(row.id).content, row.content);
+  }
+  outlets.push('first-migration legacy ungrouped export/material list');
   for (const before of rawBefore) eq(database.prepare('SELECT content FROM conversations WHERE id=?').get(before.id).content, before.content);
   outlets.push('raw SQLite preservation');
   db.close();

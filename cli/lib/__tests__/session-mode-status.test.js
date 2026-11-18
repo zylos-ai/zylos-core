@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { readSessionModeStatus, probeSupervisor, formatSessionModeStatus } from '../session-mode-status.js';
 
-const row = { run_id: 'switch-a', source_mode: 'single', target_mode: 'multi', phase: 'gating', cutoff: null,
+const row = { run_id: 'switch-a', kind: 'switch', source_mode: 'single', target_mode: 'multi', phase: 'gating', cutoff: null,
   reason: 'running_control_without_deadline:machine:17', created_at: 100, updated_at: 102 };
 const defaults = overrides => ({
   db: { getModeTransition: () => row, getDrainFence: group => { assert.equal(group, '*'); return { reason: null, runId: null }; }, getLastCompletedModeTransition: () => null },
@@ -86,7 +86,7 @@ test('unchanged diagnostics avoid log reads while append, replacement, rotation 
 test('status maps only authoritative transition/gate fields and does not submit requests', async () => {
   const status = await readSessionModeStatus(defaults());
   assert.deepEqual(status, {
-    sessionMode: 'single', transition: { runId: 'switch-a', sourceMode: 'single', targetMode: 'multi', phase: 'gating', cutoff: null,
+    sessionMode: 'single', transition: { runId: 'switch-a', kind: 'switch', sourceMode: 'single', targetMode: 'multi', phase: 'gating', cutoff: null,
       reason: row.reason, createdAt: 100, updatedAt: 102 },
     globalGate: { present: true, reason: null, runId: null }, blocked: { reason: row.reason, since: null },
     lastEvents: [], supervisor: 'reachable', lastCompleted: null,
@@ -146,7 +146,7 @@ test('no open transition reads latest completed row and never infers blocked fro
   const status = await readSessionModeStatus(input);
   assert.equal(status.transition, null); assert.equal(status.blocked, null);
   assert.deepEqual(status.globalGate, { present: false, reason: null, runId: null });
-  assert.deepEqual(status.lastCompleted, { runId: row.run_id, sourceMode: 'single', targetMode: 'multi', updatedAt: 110 });
+  assert.deepEqual(status.lastCompleted, { runId: row.run_id, kind: 'switch', sourceMode: 'single', targetMode: 'multi', updatedAt: 110 });
   assert.match(formatSessionModeStatus(status), /Last completed: switch-a/);
 });
 
@@ -180,4 +180,57 @@ test('a global manual_restart fence is present independently of any mode transit
   const status = await readSessionModeStatus(input);
   assert.deepEqual(status.globalGate, { present: true, reason: 'manual_restart', runId: 'restart-run' });
   assert.equal(status.transition, null); assert.equal(status.blocked, null);
+});
+
+test('cancellation never replaces last completed transition with diagnostics', async () => {
+  const input = defaults(); input.db.getModeTransition = () => null;
+  input.db.getLastCompletedModeTransition = () => ({ ...row, kind: 'first_migration', phase: 'complete' });
+  const cancelled = { run_id: 'later-cancel', event: 'transition_cancelled', ts: 101000 };
+  input.readEvents = () => [cancelled];
+  const status = await readSessionModeStatus(input);
+  assert.equal(status.lastCompleted.runId, row.run_id); assert.equal(status.lastCompleted.kind, 'first_migration');
+  assert.deepEqual(status.lastEvents, [cancelled]);
+});
+test('without an open transition status shows latest ten permitted events across runs and handovers', async () => {
+  const input = defaults(); input.db.getModeTransition = () => null; input.db.getLastCompletedModeTransition = () => null;
+  const events = Array.from({ length: 15 }, (_, i) => ({ run_id: `run-${i}`, event: i % 2 ? 'global_memory_handover' : 'global_memory_handover_failed', ts: i }));
+  input.readEvents = () => [...events, { event: 'unrelated' }];
+  const status = await readSessionModeStatus(input);
+  assert.deepEqual(status.lastEvents, events.slice(-10)); assert.equal(status.transition, null);
+});
+test('open status keeps current switch events and subsequent handovers using seconds to milliseconds', async () => {
+  const input = defaults();
+  const current = { run_id: row.run_id, event: 'transition_blocked', reason: row.reason, ts: 100001 };
+  const handover = { run_id: 'gm-1', event: 'global_memory_handover', ts: 100000 };
+  const failed = { run_id: 'gm-2', event: 'global_memory_handover_failed', reason: row.reason, ts: 100002 };
+  input.readEvents = () => [
+    { run_id: 'old', event: 'transition_cancelled', ts: 100003 },
+    { run_id: 'gm-old', event: 'global_memory_handover', ts: 99999 },
+    { run_id: 'gm-no-time', event: 'global_memory_handover' }, handover, current, failed,
+  ];
+  const status = await readSessionModeStatus(input);
+  assert.equal(status.transition.kind, 'switch'); assert.equal(status.blocked.since, current.ts);
+  assert.deepEqual(status.lastEvents, [handover, current, failed]);
+});
+test('real retained diagnostics expose cancellation and handover when no mode transition is open', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-status-terminal-')); t.after(() => fs.rmSync(root, { recursive: true }));
+  const directory = path.join(root, 'activity-monitor'); fs.mkdirSync(directory);
+  const events = [{ run_id: 'cancelled-run', event: 'transition_cancelled', ts: 100001 },
+    { run_id: 'gm-1', event: 'global_memory_handover', ts: 100002 }];
+  fs.writeFileSync(path.join(directory, 'supervisor-events.jsonl'), events.map(event => JSON.stringify(event) + '\n').join(''));
+  const input = defaults({ zylosDir: root }); delete input.readEvents;
+  input.db.getModeTransition = () => null; input.db.getLastCompletedModeTransition = () => null;
+  assert.deepEqual((await readSessionModeStatus(input)).lastEvents, events);
+});
+
+test('plain status shows cancellation and handover events while authoritative transition stays absent', async () => {
+  const input = defaults(); input.db.getModeTransition = () => null; input.db.getLastCompletedModeTransition = () => null;
+  input.readEvents = () => [{ event: 'transition_cancelled', run_id: 'cancel-1' },
+    { event: 'global_memory_handover', run_id: 'gm-1' }, { event: 'global_memory_handover_failed', run_id: 'gm-2' }];
+  const status = await readSessionModeStatus(input), text = formatSessionModeStatus(status);
+  assert.equal(status.transition, null); assert.equal(status.lastCompleted, null);
+  assert.match(text, /Transition: none/);
+  assert.match(text, /transition_cancelled \(cancel-1\)/);
+  assert.match(text, /global_memory_handover \(gm-1\)/);
+  assert.match(text, /global_memory_handover_failed \(gm-2\)/);
 });

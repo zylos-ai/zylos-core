@@ -9,8 +9,9 @@ import { ZYLOS_DIR, readSessionMode } from './config.js';
 import { supervisorDiagnosticPath } from './session-group-paths.js';
 import { EventLogReader } from './event-log.js';
 
+const handoverEvent = event => ['global_memory_handover', 'global_memory_handover_failed'].includes(event);
 const transitionEvent = event => typeof event === 'string'
-  && (event.startsWith('transition_') || event.startsWith('auto_migration_') || event === 'absorb');
+  && (event.startsWith('transition_') || event.startsWith('auto_migration_') || event === 'absorb' || handoverEvent(event));
 const errorView = error => ({ code: error.code ?? 'READ_FAILED', message: error.message ?? String(error) });
 
 /** Observe reachability without submitting even a read request to the supervisor. */
@@ -59,7 +60,7 @@ function readEvents(zylosDir, runId) {
   if (diagnosticsCache?.file === file && diagnosticsCache.runId === runId && diagnosticsCache.signature === signature) return diagnosticsCache.events;
   const reader = new EventLogReader(file);
   try {
-    const events = reader.read().filter(event => event.run_id === runId && transitionEvent(event.event));
+    const events = reader.read().filter(event => transitionEvent(event.event));
     diagnosticsCache = { file, runId, signature, events };
     return events;
   }
@@ -68,7 +69,7 @@ function readEvents(zylosDir, runId) {
 
 function transitionView(row) {
   return row === null ? null : {
-    runId: row.run_id, sourceMode: row.source_mode, targetMode: row.target_mode,
+    runId: row.run_id, kind: row.kind, sourceMode: row.source_mode, targetMode: row.target_mode,
     phase: row.phase, cutoff: row.cutoff, reason: row.reason,
     createdAt: row.created_at, updatedAt: row.updated_at,
   };
@@ -92,21 +93,21 @@ export async function readSessionModeStatus(options = {}) {
   } finally { owned?.close(); }
   const transition = transitionView(row);
   const lastCompleted = completed === null ? null : {
-    runId: completed.run_id, sourceMode: completed.source_mode,
+    runId: completed.run_id, kind: completed.kind, sourceMode: completed.source_mode,
     targetMode: completed.target_mode, updatedAt: completed.updated_at,
   };
   const globalGate = { present: fence !== null, reason: fence?.reason ?? null, runId: fence?.runId ?? null };
   const runId = transition?.runId ?? lastCompleted?.runId;
   let events = [];
-  if (runId) {
-    try {
-      events = (await (options.readEvents ?? readEvents)(zylosDir, runId))
-        .filter(event => event.run_id === runId && transitionEvent(event.event));
-    } catch { /* Missing/unreadable diagnostics never hide authoritative state. */ }
-  }
+  try {
+    events = (await (options.readEvents ?? readEvents)(zylosDir, runId))
+      .filter(event => transitionEvent(event.event) && (!transition ||
+        (handoverEvent(event.event) ? Number.isFinite(event.ts) && event.ts >= transition.createdAt * 1000
+          : event.run_id === transition.runId)));
+  } catch { /* Missing/unreadable diagnostics never hide authoritative state. */ }
   const blocked = transition?.reason ? {
     reason: transition.reason,
-    since: events.find(event => event.reason === transition.reason && Number.isFinite(event.ts))?.ts ?? null,
+    since: events.find(event => event.run_id === transition.runId && event.reason === transition.reason && Number.isFinite(event.ts))?.ts ?? null,
   } : null;
   const lastEvents = events.slice(-10);
   let reachable = false;
@@ -134,5 +135,9 @@ export function formatSessionModeStatus(data) {
   } else lines.push('Transition: none');
   if (data.blocked) lines.push(`Blocked: ${data.blocked.reason}${data.blocked.since === null ? '' : ` (since ${data.blocked.since})`}`);
   if (data.lastCompleted) lines.push(`Last completed: ${data.lastCompleted.runId} ${data.lastCompleted.sourceMode} -> ${data.lastCompleted.targetMode} (${data.lastCompleted.updatedAt})`);
+  if (data.lastEvents?.length) {
+    lines.push('Recent events:');
+    for (const event of data.lastEvents) lines.push(`  ${event.event}${event.run_id ? ` (${event.run_id})` : ''}`);
+  }
   return lines.join('\n');
 }

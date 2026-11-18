@@ -8,7 +8,9 @@ const db = new Database(path.join(root, 'c4.db'));
 const store = createStore(db);
 const fsImpl = { ...fs, renameSync(source, target) {
   fs.renameSync(source, target);
-  const match = point === 'archive' ? target.includes('/previous/') && !target.endsWith('/.done')
+  const match = point === 'global-archive' ? target.includes('/previous/_global/') && !target.endsWith('/.done')
+    : point === 'global-done' ? target.endsWith('/previous/_global/.done')
+    : point === 'archive' ? target.includes('/previous/') && !target.endsWith('/.done')
     : point === 'skeleton' ? target.endsWith('/state.md') && !target.includes('/previous/')
       : point === 'handoff' ? target.endsWith('/handoff.md') && !target.includes('/previous/') : false;
   if (match) process.kill(process.pid, 'SIGKILL');

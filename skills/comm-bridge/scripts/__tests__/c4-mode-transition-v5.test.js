@@ -202,7 +202,7 @@ test('cancellation before the global gate is written restores markers and preser
 });
 for (const obstacle of ['converting','cutover','first_migration','manual-fence','write-failure']) test(`cancel rejects ${obstacle} atomically`, t => {
   const { db, store } = fixture(t);
-  const { runId } = store.beginModeTransition('multi','single', { kind:obstacle==='first_migration' ? 'first_migration':'switch' });
+  const { runId } = store.beginModeTransition(obstacle==='first_migration' ? 'single':'multi', obstacle==='first_migration' ? 'multi':'single', { kind:obstacle==='first_migration' ? 'first_migration':'switch' });
   store.setDrainFence('*');
   store.recordRunEnd('a',{runId:'a',reason:'upgrade'});
   if (['converting','cutover'].includes(obstacle)) db.prepare('UPDATE mode_transitions SET phase=?').run(obstacle);
@@ -214,7 +214,11 @@ for (const obstacle of ['converting','cutover','first_migration','manual-fence',
 });
 test('kind validation, same-mode rejection and native absorption refusal are zero-write', t => {
   const { db, store } = fixture(t);
-  for (const kind of ['switch','first_migration']) assert.throws(() => store.beginModeTransition('single','single',{kind}), {code:'TRANSITION_SAME_MODE'});
+  const untouched = snapshot(db), changes = db.prepare('SELECT total_changes() AS n').get().n;
+  for (const kind of ['switch','first_migration']) {
+    assert.throws(() => store.beginModeTransition('single','single',{kind}), {code:'TRANSITION_SAME_MODE',persisted:[]});
+    assert.deepEqual(snapshot(db), untouched); assert.equal(db.prepare('SELECT total_changes() AS n').get().n, changes);
+  }
   for (const kind of ['other',null,1]) assert.throws(() => store.beginModeTransition('single','multi',{kind}),{code:'INVALID_ARGS'});
   const { runId }=store.beginModeTransition('single','multi');
   store.setDrainFence('*');

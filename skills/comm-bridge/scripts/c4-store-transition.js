@@ -23,6 +23,7 @@ export function transitionFunctions({ read, write, snapshot, get, all, run, seco
       if (!['switch', 'first_migration'].includes(kind)) throw dataError('INVALID_ARGS', 'Invalid transition kind');
       if (!['single','multi'].includes(source) || !['single','multi'].includes(target)) throw dataError('INVALID_ARGS', 'Invalid transition mode');
       if (source === target) throw dataError('TRANSITION_SAME_MODE', 'Source and target are equal');
+      if (kind === 'first_migration' && (source !== 'single' || target !== 'multi')) throw dataError('TRANSITION_PRECONDITION', 'First migration requires single-to-multi direction');
       if (find(c)) throw dataError('TRANSITION_OPEN', 'A transition is already open');
       if (get(c, "SELECT 1 FROM drain_fences WHERE reason='delete'")) throw dataError('DELETION_IN_PROGRESS', 'Group deletion must finish first');
       if (get(c, "SELECT 1 FROM drain_fences WHERE reason='manual_restart'")) throw dataError('MANUAL_RESTART_FENCE', 'Manual restart must finish first');
@@ -57,15 +58,13 @@ export function transitionFunctions({ read, write, snapshot, get, all, run, seco
     }),
     absorbForTransition: runId => write(c => {
       const row = required(c, runId);
-      if (row.kind === 'switch') throw dataError('TRANSITION_PRECONDITION', 'Native switches do not absorb conversations');
+      if (row.kind !== 'first_migration' || row.source_mode !== 'single' || row.target_mode !== 'multi') throw dataError('TRANSITION_PRECONDITION', 'Only first migration from single to multi may absorb conversations');
       if (row.phase !== 'gating' && row.cutoff !== null) return { cutoff: row.cutoff, coverageSnapshot: row.coverage_snapshot, absorbedIds: row.absorbed_ids };
       if (row.phase !== 'gating') throw dataError('PHASE_TRANSITION_INVALID', 'Transition is not gating');
       onlyGlobal(c);
       if (get(c, "SELECT 1 FROM conversations WHERE direction='in' AND status='running' LIMIT 1")) throw dataError('TRANSITION_PRECONDITION', 'Running input has not drained');
       const cutoff = get(c, 'SELECT COALESCE(MAX(id),0) AS n FROM conversations').n;
-      const coverageSnapshot = {};
-      if (row.source_mode === 'single') coverageSnapshot['*'] = coverage(c, '*');
-      else for (const head of all(c, 'SELECT * FROM group_heads ORDER BY session_group COLLATE BINARY')) { const end = coverage(c, head.session_group); if (head.head_id > end) coverageSnapshot[head.session_group] = end; }
+      const coverageSnapshot = { '*': coverage(c, '*') };
       const absorbedIds = all(c, "UPDATE conversations SET status='switch_absorbed' WHERE direction='in' AND status='pending' AND id<=? RETURNING id", cutoff).map(r => r.id).sort((a,b) => a-b);
       run(c, "UPDATE mode_transitions SET cutoff=?,coverage_snapshot=?,absorbed_ids=?,phase='converting',updated_at=? WHERE run_id=?", cutoff, JSON.stringify(coverageSnapshot), JSON.stringify(absorbedIds), seconds(), runId);
       return { cutoff, coverageSnapshot, absorbedIds };

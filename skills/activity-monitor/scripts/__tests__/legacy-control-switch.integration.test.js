@@ -28,7 +28,7 @@ test('public database facade completes legacy drain and preserves future deadlin
   let mode = 'single';
   const events = [];
   const owner = new ModeSwitchCoordinator({ db,
-    readMode: () => ({ mode, keyPresent: true }), readConfiguration: () => ({ mode }),
+    readMode: () => ({ mode, keyPresent: mode === 'multi' }), readConfiguration: () => ({ mode }),
     readRequests: () => [], legacyPresent: () => false, observe: () => [],
     lifecycle: { advanceReclaim: async () => {} }, convert: async () => {},
     writeMode: value => { mode = value; }, restart: { advance: async () => ({ confirmed: true }) },
@@ -69,7 +69,7 @@ for (const deadline of [null, 1800001000]) test(`router activation after legacy 
   const id = Number(f.sqlite.prepare(`INSERT INTO control_queue(content,raw_content,status,created_at,updated_at,ack_deadline_at)
     VALUES('exit','exit','running',1700000000,1700000000,?)`).run(deadline).lastInsertRowid);
   const owner = new ModeSwitchCoordinator({ db: f.db, now: f.now,
-    readMode: () => ({ mode, keyPresent: true }), readConfiguration: () => ({ mode }),
+    readMode: () => ({ mode, keyPresent: mode === 'multi' }), readConfiguration: () => ({ mode }),
     readRequests: () => [], legacyPresent: () => false, observe: () => [],
     lifecycle: { advanceReclaim: async () => {} }, convert: async () => {},
     writeMode: value => { mode = value; }, restart: { advance: async () => {

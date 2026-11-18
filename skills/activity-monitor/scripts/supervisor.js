@@ -4,6 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { SupervisorLoop } from './supervisor-loop.js';
 import { SupervisorAdmission } from './supervisor-admission.js';
+import { GlobalMemoryHandoverCoordinator } from './global-memory-handover.js';
 import { ModeSwitchCoordinator } from './mode-switch.js';
 import { createModeSwitchConverter } from './mode-switch-convert.js';
 import { SupervisorLifecycle } from './supervisor-lifecycle.js';
@@ -27,7 +28,7 @@ export const AUTH_DEMAND_RETRY_MS = 60000;
 export function createSupervisor(deps) {
   const { db, scenes, readConfiguration, readMode, readSyncMarker, prepareReferenceReorg, prompts, now=Date.now, log=()=>{} }=deps;
   const activities=new Map();let configuration;let lastMetrics=null;let lastMaintenance=0;
-  let observer,router,admission,lifecycle,modeSwitch,stopping=false,stopPromise,roundContext;
+  let observer,router,admission,lifecycle,modeSwitch,globalMemoryHandover,stopping=false,stopPromise,roundContext;
   const authChecks=new Set(),authFlights=new Map(),authRetryAt=new Map();
   const startupAuthChecks=new Set();
   const originAuthAlerted=new Set();
@@ -158,7 +159,7 @@ export function createSupervisor(deps) {
     preflightReclaim:(scene,context)=>lifecycle.checkReclaimDependencies(scene,context),
     requestRelease:async scene=>lifecycle.requestRelease(scene,{configuration:{...await (deps.readReclaimConfiguration ?? readConfiguration)(),mode:(await readMode()).mode},scenes:[scene]}),
     deferReclaim:async request=>lifecycle.deferReclaim(request,{configuration:await (deps.readReclaimConfiguration ?? readConfiguration)()}),
-    modeSwitch:request=>modeSwitch.handle(request),startAttempt:request=>health.registerStartAttempt(request),diagnostic,now});
+    modeSwitch:request=>modeSwitch.handle(request),modeSwitchCancel:request=>modeSwitch.cancel(request),startAttempt:request=>health.registerStartAttempt(request),diagnostic,now});
   const exits=new SupervisorExits({scenes:{observeGroup:group=>scenes.observeGroup(group),stop:stopScene},db,serialize:operation=>admission.serialize(operation),readMode,diagnostic,reportError,env:deps.env});
   const endings=new SupervisorRunEndings({db,readIdentity:group=>scenes.readIdentity(group),isObservable:()=>!scenes.guard?.episodes.has(scenes.socketKey),env:deps.env,alert:deps.alert,diagnostic,reportError,now});
   const syncObserver = new SyncObserver({ env: deps.env, now, warn: log });
@@ -166,8 +167,12 @@ export function createSupervisor(deps) {
     requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),groupRunDir:group=>groupRunDir(group,deps.env),diagnostic,reportError,
     readCurrentSession:async group=>{try{return await endings.currentSession(group);}catch{return null;}},
     intentionalStop:(group,runId)=>exits.forget(group===null?'origin':group,runId)},{now});
+  globalMemoryHandover=new GlobalMemoryHandoverCoordinator({db,zylosDir:deps.zylosDir,readMode,readConfiguration,
+    readRequests:()=>admission.readRequests(),legacyPresent:deps.legacyPresent,observe:context=>scenes.observe(context),
+    serialize:operation=>admission.serialize(operation),diagnostic,now});
   modeSwitch=new ModeSwitchCoordinator({db,readMode,readConfiguration,readRequests:()=>admission.readRequests(),
     legacyPresent:deps.legacyPresent,observe:context=>scenes.observe(context),lifecycle,serialize:operation=>admission.serialize(operation),
+    globalMemoryPending:()=>globalMemoryHandover.pending(),
     convert:deps.convertModeTransition ?? createModeSwitchConverter({db,zylosDir:deps.zylosDir}),
     writeMode:deps.writeMode ?? writeSessionModeAtCutover,restart:deps.restartDispatcherConfirmation,diagnostic,now});
   const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','reconcileConfiguration','advanceReleases','advanceReclaim','checkRotation','checkTtl','checkEviction','checkSync'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
@@ -191,6 +196,7 @@ export function createSupervisor(deps) {
     },openAdmission:()=>admission.openEntry(),reportError,getModeTransition:db.getModeTransition,listDrainFences:db.listDrainFences,readRestartRequests:()=>admission.readRequests(),restartRequestsReadable,
     advanceAutomaticMigration:()=>modeSwitch.automatic(),
     advanceTransition:()=>modeSwitch.advance(),
+    advanceGlobalMemoryHandover:()=>globalMemoryHandover.advance(),
     lifecycleSerial:operation=>admission.serialize(operation),checkManualFences:context=>lifecycle.checkManualFences(context),...lifecycleMethods,observe:context=>{roundContext=context;return listScenes();},
     observeExits:current=>exits.advance(current),
     updateCapacity:context=>deps.updateCapacity?.(context),
@@ -346,7 +352,7 @@ export function createSupervisor(deps) {
   const drainHealthWrites=async()=>{
     while(health.queues.size)await Promise.allSettled([...health.queues.values()]);
   };
-  return {loop,health,observer,router,admission,lifecycle,modeSwitch,connectionHandler,readActivity,drainHealthWrites,diagnostic,
+  return {loop,health,observer,router,admission,lifecycle,modeSwitch,globalMemoryHandover,connectionHandler,readActivity,drainHealthWrites,diagnostic,
     stop(){
       if(stopPromise)return stopPromise;
       stopping=true;admission.closeEntry();

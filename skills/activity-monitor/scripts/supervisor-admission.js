@@ -25,6 +25,7 @@ export function validSupervisorRequest(request) {
     case 'ready_for_config_reclaim': return validGroup(request.sessionGroup) && nonempty(request.expectedRunId);
     case 'defer_reclaim': return validGroup(request.sessionGroup) && nonempty(request.expectedRunId)
       && nonempty(request.reason) && request.reason.trim().length > 0;
+    case 'mode_switch_cancel': return nonempty(request.runId);
     case 'mode_switch': return ['single', 'multi'].includes(request.target);
     case 'start_attempt': return true; // The runtime owner validates its complete request in the runtime queue.
     default: return false;
@@ -34,8 +35,8 @@ export function validSupervisorRequest(request) {
 /** One queue is shared with lifecycle mutations; external waits must stay outside it. */
 export class SupervisorAdmission {
   constructor({ store = new RestartRequestStore(), db, readMode, listRuns, readRun,
-    resolveLaunchConfig, preflightReclaim, requestRelease, deferReclaim, modeSwitch, startAttempt, diagnostic = () => {}, now = Date.now } = {}) {
-    Object.assign(this, { store, db, readMode, listRuns, readRun, resolveLaunchConfig, preflightReclaim, requestRelease, deferReclaim, modeSwitch, startAttempt, diagnostic, now });
+    resolveLaunchConfig, preflightReclaim, requestRelease, deferReclaim, modeSwitch, modeSwitchCancel, startAttempt, diagnostic = () => {}, now = Date.now } = {}) {
+    Object.assign(this, { store, db, readMode, listRuns, readRun, resolveLaunchConfig, preflightReclaim, requestRelease, deferReclaim, modeSwitch, modeSwitchCancel, startAttempt, diagnostic, now });
     this.open = false; this.tail = Promise.resolve();
   }
   serialize(operation) {
@@ -61,6 +62,7 @@ export class SupervisorAdmission {
       try {
         // Mode switching has its own ordered checks; F9 is consulted only after
         // open transition, configuration, noop and legacy-session checks.
+        if (request.type === 'mode_switch_cancel') return reply(await this.modeSwitchCancel(request));
         if (request.type === 'mode_switch') {
           return reply(await this.modeSwitch(request));
         }

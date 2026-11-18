@@ -4,6 +4,7 @@ import { fixture as storeFixture } from './c4-v2-test-helpers.js';
 import { createQueryHandlers, runAbsorbedQuery } from '../c4-v2-cli.js';
 import { escapeText, formatQueryError, formatAbsorbedPage, replyVia } from '../c4-query-format.js';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs, { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,8 +12,17 @@ function fixture(t) {
   const { db, store } = storeFixture(t);
   return { db, store, query: createQueryHandlers(store) };
 }
-function absorb(store, from = 'single', to = 'multi') {
-  const { runId } = store.beginModeTransition(from, to, { kind: 'first_migration' }); store.setDrainFence('*'); store.absorbForTransition(runId); return runId;
+function absorb(store) {
+  const { runId } = store.beginModeTransition('single', 'multi', { kind: 'first_migration' }); store.setDrainFence('*'); store.absorbForTransition(runId); return runId;
+}
+// Historical reverse conversions remain readable; current writers only migrate forward.
+function historicalSingleTarget(db) {
+  const runId = randomUUID();
+  const ids = db.prepare("SELECT id FROM conversations WHERE direction='in' AND status='pending' ORDER BY id").all().map(row => row.id);
+  db.prepare("INSERT INTO mode_transitions(run_id,source_mode,target_mode,kind,phase,cutoff,coverage_snapshot,absorbed_ids,created_at,updated_at) VALUES(?,'multi','single','switch','complete',?,'{}',?,1,1)")
+    .run(runId, db.prepare('SELECT COALESCE(MAX(id),0) AS id FROM conversations').get().id, JSON.stringify(ids));
+  db.prepare("UPDATE conversations SET status='switch_absorbed' WHERE direction='in' AND status='pending'").run();
+  return runId;
 }
 const decodeE = text => text.replace(/\\(\\|n|r|t|x[0-9a-f]{2}|u[0-9a-f]{4})/g, (_, token) => ({ '\\': '\\', n: '\n', r: '\r', t: '\t' }[token] ?? String.fromCharCode(parseInt(token.slice(1), 16))));
 
@@ -194,8 +204,8 @@ test('limits and conflicting or removed query options are rejected', t => {
   assert.throws(() => query.absorbed({ runId: 'not-uuid' }), { code: 'INVALID_ARGS' });
   assert.throws(() => query.absorbed({ runId: 'ffffffff-ffff-ffff-ffff-ffffffffffff' }), { code: 'RUN_NOT_FOUND' });
 });
-test('gating is empty; summary scope order and single target aggregation follow D9', t => {
-  const { store, query } = fixture(t);
+test('gating is empty; forward summaries and historical reverse aggregation follow persisted transitions', t => {
+  const { db, store, query } = fixture(t);
   for (const groupName of ['z', 'A', 'z']) store.insertConversation('in', 'foo', 'e', 'x', { groupName });
   const { runId } = store.beginModeTransition('single', 'multi', { kind: 'first_migration' });
   assert.equal(JSON.parse(query.absorbed({ runId, json: true })).data.total, 0);
@@ -206,7 +216,7 @@ test('gating is empty; summary scope order and single target aggregation follow 
   assert.throws(() => query.absorbed({ runId, id: 10000 }), { code: 'ABSORBED_NOT_IN_RUN' });
   store.setModeTransitionPhase(runId, 'cutover'); store.setModeTransitionPhase(runId, 'complete');
   store.insertConversation('in', 'foo', 'e', 'next', { groupName: 'z' });
-  const single = absorb(store, 'multi', 'single');
+  const single = historicalSingleTarget(db);
   assert.deepEqual(JSON.parse(query.absorbed({ runId: single, summary: true, json: true })).data.items[0].bySourceGroup, { 'foo:z': 1 });
 });
 test('summary scope order and continuation use BINARY rather than locale collation', t => {
@@ -256,10 +266,10 @@ test('summary defaults to 50 scopes and paginates up to 200 in BINARY order with
   }
   assert.equal(db.prepare('SELECT total_changes() AS n').get().n, before); assert.equal(db.inTransaction, false);
 });
-test('single-target summary caps source group listing at 50 with remaining count', t => {
-  const { store, query } = fixture(t);
+test('historical single-target summary caps source group listing at 50 with remaining count', t => {
+  const { db, store, query } = fixture(t);
   for (let i = 0; i < 53; i++) store.insertConversation('in', 'foo', 'e', 'x', { groupName: `g${String(i).padStart(2, '0')}` });
-  const runId = absorb(store, 'multi', 'single');
+  const runId = historicalSingleTarget(db);
   const item = JSON.parse(query.absorbed({ runId, summary: true, json: true })).data.items[0];
   assert.equal(item.count, 53); assert.equal(Object.keys(item.bySourceGroup).length, 50);
   assert.deepEqual(Object.keys(item.bySourceGroup), Array.from({ length: 50 }, (_, i) => `foo:g${String(i).padStart(2, '0')}`));
@@ -304,11 +314,11 @@ test('ordering uses latest head while matching/preview use latest external input
   assert.equal(query.groups({ match: 'outgoing' }).length, 0);
   assert.equal(query.groups({ limit: 1 }).length, 1);
 });
-test('single-target summary counts legal constructor namespace in JSON and text', t => {
-  const { store, query } = fixture(t);
+test('historical single-target summary counts legal constructor namespace in JSON and text', t => {
+  const { db, store, query } = fixture(t);
   const rows = ['constructor', 'chat', 'constructor'].map(group =>
     store.insertConversation('in', group, 'e', 'x'));
-  const runId = absorb(store, 'multi', 'single');
+  const runId = historicalSingleTarget(db);
   const options = { runId, summary: true };
   const item = JSON.parse(query.absorbed({ ...options, json: true })).data.items[0];
   assert.deepEqual(item.bySourceGroup, { constructor: 2, chat: 1 });

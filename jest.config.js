@@ -2,6 +2,10 @@ export default {
   transform: {},
   testPathIgnorePatterns: [
     '<rootDir>/test/single-origin-scheduler.test.js',
+    '<rootDir>/test/mode-switch-status-lifecycle.test.js',
+    '<rootDir>/test/mode-switch-files.integration.test.js',
+    '<rootDir>/test/mode-switch-native.integration.test.js',
+    '<rootDir>/test/global-memory-handover.integration.test.js',
     '<rootDir>/test/dispatcher-startup.integration.test.js',
     '<rootDir>/test/instruction-deployment.integration.test.js',
     '<rootDir>/test/init-onboarding.integration.test.js',

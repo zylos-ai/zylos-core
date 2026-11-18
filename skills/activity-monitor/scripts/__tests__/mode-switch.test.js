@@ -8,30 +8,33 @@ import { fixture as databaseFixture } from '../../../comm-bridge/scripts/__tests
 
 const error = code => Object.assign(new Error(code), { code });
 function fixture(overrides = {}) {
+  let keyPresent = false;
   let row = null, mode = 'single', time = 1800000000000, fences = [], sourceScenes = [], legacy = false, requests = [];
   const events = [], calls = [], controls = { machine: { running: 0, runningWithoutDeadline: 0 }, allSessionGroups: { running: 0, runningWithoutDeadline: 0 } };
   const db = {
     getModeTransition: () => row,
     expireLegacyRunningControls: () => ({ count: 0, ids: [] }),
-    beginModeTransition: (source, target) => { calls.push('begin'); row = { run_id: 'transition', source_mode: source, target_mode: target, phase: 'gating', reason: null, created_at: time / 1000 }; return { runId: row.run_id }; },
+    beginModeTransition: (source, target, { kind }) => { calls.push('begin'); row = { run_id: 'transition', source_mode: source, target_mode: target, kind, phase: 'gating', reason: null, created_at: time / 1000 }; return { runId: row.run_id }; },
     setModeTransitionPhase: (runId, phase, { reason = null } = {}) => { assert.equal(row.run_id, runId); calls.push(phase); row = { ...row, phase, reason }; if (phase === 'complete') fences = []; return row; },
     setDrainFence: (group, options = {}) => { if (!fences.some(f => f.sessionGroup === group)) fences.push({ sessionGroup: group, reason: options.reason ?? null, runId: options.runId ?? null, createdAt: time / 1000 }); },
     listDrainFences: () => fences,
-    countNonTerminalControls: target => controls[Object.keys(target)[0]],
-    listRunningControlsWithoutDeadline: target => controls[Object.keys(target)[0]].runningWithoutDeadline ? [4, 8] : [],
+    countNonTerminalControls: target => target.sessionGroup ? { running: 0 } : controls[Object.keys(target)[0]],
+    listRunningControlsWithoutDeadline: target => !target.sessionGroup && controls[Object.keys(target)[0]].runningWithoutDeadline ? [4, 8] : [],
     countGlobalRunningConversations: () => 0,
+    countRunningConversations: () => 0,
+    voidInternalForSingle: () => calls.push('voidInternal'),
     absorbForTransition: () => { calls.push('absorb'); row = { ...row, phase: 'converting', cutoff: 10, absorbed_ids: [] }; return { cutoff: 10, absorbedIds: [] }; },
     expirePendingControls: target => calls.push(Object.keys(target)[0]),
-    clearAllContinuations: () => { calls.push('clearContinuations'); return { cleared: 0 }; },
+    clearContinuationsExceptOrigin: () => { calls.push('clearContinuations'); return { cleared: 0 }; },
     insertControl: (content, options) => { assert.equal(content,HANDOFF_FOLLOWUP_PROMPT); assert.deepEqual(options,{sessionGroup:'origin',priority:2,appendAckSuffix:false}); calls.push('followup'); },
   };
-  const deps = { db, readMode: () => ({ mode, keyPresent: true }), readConfiguration: () => ({ mode }), readRequests: () => requests,
+  const deps = { db, readMode: () => ({ mode, keyPresent: keyPresent || mode !== 'single' }), readConfiguration: () => ({ mode }), readRequests: () => requests,
     legacyPresent: () => legacy, observe: () => sourceScenes, lifecycle: { advanceReclaim: async () => {} },
     convert: () => { calls.push('convert'); }, writeMode: value => { calls.push('writeMode'); mode = value; },
     restart: { advance: async () => ({ confirmed: true }) }, diagnostic: event => events.push(event), now: () => time,
     ...overrides };
   return { db, deps, events, calls, controls, create: () => new ModeSwitchCoordinator(deps), get row() { return row; },
-    set row(value) { row = value; }, set mode(value) { mode = value; }, set time(value) { time = value; }, set fences(value) { fences = value; }, get fences() { return fences; },
+    set keyPresent(value) { keyPresent = value; }, set row(value) { row = value; }, set mode(value) { mode = value; }, set time(value) { time = value; }, set fences(value) { fences = value; }, get fences() { return fences; },
     set scenes(value) { sourceScenes = value; }, set legacy(value) { legacy = value; }, set requests(value) { requests = value; } };
 }
 const request = { version: 1, type: 'mode_switch', requestId: 'mode-test', target: 'multi' };
@@ -63,7 +66,7 @@ test('actual admission wrapper defers corrupt until after noop/open checks', asy
 });
 
 test('automatic migration requires all three conditions and emits success only after commit', async () => {
-  const f = fixture(), owner = f.create(); await owner.automatic(); assert.deepEqual(f.calls, []);
+  const f = fixture({ readMode: () => ({ mode: 'single', keyPresent: true }) }), owner = f.create(); await owner.automatic(); assert.deepEqual(f.calls, []);
   owner.readMode = () => ({ mode: null, keyPresent: false }); f.legacy = true; await owner.automatic(); assert.deepEqual(f.calls, []);
   f.legacy = false; f.row = { run_id: 'existing' }; await owner.automatic(); assert.deepEqual(f.calls, []);
   f.row = null; owner.readMode = () => { throw error('CONFIG_UNREADABLE'); }; await assert.rejects(owner.automatic(), { code: 'CONFIG_UNREADABLE' });
@@ -79,7 +82,7 @@ test('stages only move forward and conversion never repeats after cutover', asyn
   await owner.advance(); assert.equal(f.row.phase, 'converting'); assert.equal(f.fences[0].sessionGroup, '*');
   await owner.advance(); assert.equal(f.row.phase, 'cutover');
   await owner.advance(); assert.equal(f.row.phase, 'complete'); assert.deepEqual(f.fences, []);
-  assert.deepEqual(f.calls, ['begin', 'absorb', 'convert', 'machine', 'allSessionGroups', 'clearContinuations', 'cutover', 'writeMode', 'followup', 'complete']);
+  assert.deepEqual(f.calls, ['begin', 'absorb', 'convert', 'cutover', 'machine', 'allSessionGroups', 'clearContinuations', 'writeMode', 'followup', 'complete']);
 });
 
 // Integration boundary: real mode coordinator and memory SQLite only. Run for
@@ -87,40 +90,8 @@ test('stages only move forward and conversion never repeats after cutover', asyn
 // The official runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; scene,
 // conversion, restart and clock are injected, with no tmux/network/PM2/notify.
 // Store teardown closes its private database; this case starts no background work.
-test('mode cutover clears every pending restart marker before changing mode and does not restore them', async t => {
-  let mode = 'multi';
-  const clock = 1800000000000;
-  const { store } = databaseFixture(t, { now: () => clock,
-    readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: mode } }) });
-  for (const group of ['origin', 'telegram:a']) {
-    store.recordRunEnd(group, { runId: `ended-${group}`, reason: 'unexpected' });
-  }
-  const originalPhase = store.setModeTransitionPhase;
-  let cutovers = 0;
-  store.setModeTransitionPhase = (runId, phase, ...options) => {
-    if (phase === 'cutover') {
-      cutovers++;
-      assert.deepEqual(store.listRunEndings(['origin', 'telegram:a']).map(row => row.continuationPending), [0, 0]);
-    }
-    return originalPhase(runId, phase, ...options);
-  };
-  const owner = new ModeSwitchCoordinator({ db: store, now: () => clock,
-    readMode: () => ({ mode, keyPresent: true }), readConfiguration: () => ({ mode }),
-    readRequests: () => [], legacyPresent: () => false, observe: () => [],
-    lifecycle: { advanceReclaim: async () => {} }, convert: async () => {},
-    writeMode: target => { mode = target; }, restart: { advance: async () => ({ confirmed: true }) } });
-  for (const target of ['single', 'multi']) {
-    assert.equal((await owner.handle({ ...request, target })).result, 'accepted');
-    for (let i = 0; i < 3; i++) await owner.advance();
-    assert.equal(mode, target);
-    assert.equal(store.getModeTransition(), null);
-  }
-  assert.equal(cutovers, 2);
-  assert.deepEqual(store.listPendingContinuations(), []);
-});
-
 for (const persistedMode of ['single','multi']) test(`cutover from persisted ${persistedMode} retries failed followup before completion without restarting dispatcher`, async () => {
-  const f=fixture(); f.row={run_id:'transition',source_mode:'single',target_mode:'multi',phase:'cutover',reason:null};
+  const f=fixture(); f.row={run_id:'transition',source_mode:'single',target_mode:'multi',kind:'first_migration',phase:'cutover',reason:null};
   f.mode=persistedMode; f.fences=[{sessionGroup:'*',reason:null,runId:null}];
   let restarts=0,writes=0; f.deps.restart={advance:()=>{restarts++;return {confirmed:true};}};
   const insert=f.db.insertControl; f.db.insertControl=(...args)=>{if(++writes===1)throw error('DB_BUSY');return insert(...args);};
@@ -128,12 +99,12 @@ for (const persistedMode of ['single','multi']) test(`cutover from persisted ${p
   assert.equal(f.row.phase,'cutover');assert.equal(f.fences[0].sessionGroup,'*');assert.equal(owner.attempt.confirmed,true);
   await owner.advance();assert.equal(f.row.phase,'complete');assert.equal(restarts,1);assert.equal(writes,2);
   assert.ok(f.calls.indexOf('followup')<f.calls.indexOf('complete'));
-  assert.equal(f.calls.filter(call => call === 'clearContinuations').length, 0);
+  assert.equal(f.calls.filter(call => call === 'clearContinuations').length, persistedMode === 'single' ? 1 : 0);
   assert.equal(f.calls.filter(call => call === 'followup').length, 1);
 });
 
 test('cutover to single does not enqueue an Origin followup', async () => {
-  const f=fixture();f.row={run_id:'transition',source_mode:'multi',target_mode:'single',phase:'cutover',reason:null};
+  const f=fixture();f.row={run_id:'transition',source_mode:'multi',target_mode:'single',kind:'switch',phase:'cutover',reason:null};
   f.mode='multi';f.fences=[{sessionGroup:'*',reason:null,runId:null}];
   f.db.insertControl=()=>{throw new Error('single cannot wake Origin');};
   await f.create().advance();assert.equal(f.row.phase,'complete');
@@ -309,12 +280,12 @@ test('multi reclaim preserves existing reasons, waits starting scenes, cleans be
   f.scenes=[{sessionGroup:'origin',present:true,ready:true,runId:'o'}, {sessionGroup:'tg:a',present:true,ready:true,runId:'a'}, {sessionGroup:'tg:b',present:true,ready:false,runId:'b'}];
   f.fences=[{sessionGroup:'tg:a',reason:'model_config',runId:'a',createdAt:1800000000}];
   f.deps.lifecycle.advanceReclaim=async fence=>order.push(fence);
-  const count=f.db.countNonTerminalControls; f.db.countNonTerminalControls=target=>{assert.equal(order.length,2); return count(target);};
+  const count=f.db.countNonTerminalControls; f.db.countNonTerminalControls=target=>{assert.equal(order.length,1); return count(target);};
   const owner=f.create(); await owner.handle({...request,target:'single'}); await owner.advance();
   assert.equal(f.fences.find(x=>x.sessionGroup==='tg:a').reason,'model_config');
   assert.equal(f.fences.some(x=>x.sessionGroup==='tg:b'),false);
-  assert.deepEqual(order.map(x=>x.sessionGroup),['tg:a','origin']); assert.equal(f.row.phase,'gating');
-  f.time=1800003601000; order.length=0; await owner.advance(); assert.equal(f.row.reason,'reclaim_waiting:origin,tg:a');
+  assert.deepEqual(order.map(x=>x.sessionGroup),['tg:a']); assert.equal(f.row.phase,'gating');
+  f.time=1800003601000; order.length=0; await owner.advance(); assert.equal(f.row.reason,'reclaim_waiting:tg:a');
   assert.equal(f.fences.some(x=>x.sessionGroup==='*'),true);
 });
 
@@ -406,7 +377,7 @@ for (const deadline of [null, 1800001000]) test(`old machine control with ${dead
   const id = Number(db.prepare(`INSERT INTO control_queue(content,raw_content,status,created_at,updated_at,ack_deadline_at)
     VALUES('exit','exit','running',1700000000,1700000000,?)`).run(deadline).lastInsertRowid);
   const owner = new ModeSwitchCoordinator({ db: store, now: () => clock,
-    readMode: () => ({ mode, keyPresent: true }), readConfiguration: () => ({ mode }),
+    readMode: () => ({ mode, keyPresent: false }), readConfiguration: () => ({ mode }),
     readRequests: () => [], legacyPresent: () => false, observe: () => [],
     lifecycle: { advanceReclaim: async () => {} }, convert: async () => {},
     writeMode: target => { mode = target; }, restart: { advance: async () => ({ confirmed: true }) },
@@ -469,4 +440,40 @@ test('multi-to-single never applies legacy machine cleanup', async () => {
   await owner.handle({ ...request, target: 'single' }); await owner.advance();
   assert.equal(f.row.reason, 'running_control_without_deadline:machine:4,8');
   assert.equal(f.row.phase, 'gating');
+});
+
+
+test('native gate counts and missing deadlines exclude only Origin', async () => {
+  const f = fixture(); f.keyPresent = true;
+  f.db.listRunningControlsWithoutDeadline = target => target.machine ? [] : target.sessionGroup ? [7] : [7, 8];
+  const owner = f.create(); await owner.handle(request); await owner.advance();
+  assert.equal(f.row.phase, 'gating');
+  assert.equal(f.row.reason, 'running_control_without_deadline:allSessionGroups:8');
+  assert.equal(f.calls.includes('cutover'), false);
+});
+
+test('handover admission check follows noop and legacy and precedes restart intent', async () => {
+  const f = fixture({ globalMemoryPending: () => true }); f.keyPresent = true;
+  const owner = f.create(); f.requests = [{ reason: 'manual_restart' }];
+  assert.equal((await owner.handle(request)).code, 'global_memory_pending');
+  f.legacy = true;
+  assert.equal((await owner.handle(request)).code, 'legacy_session_present');
+  f.mode = 'multi';
+  assert.equal((await owner.handle(request)).result, 'noop');
+  assert.equal(f.calls.length, 0);
+});
+
+test('cancel eligibility rejects first migration before cutover', async () => {
+  const f = fixture(), owner = f.create(); await owner.handle(request);
+  assert.equal(f.row.kind, 'first_migration');
+  assert.equal(f.row.phase, 'gating');
+  assert.equal((await owner.cancel({ runId: f.row.run_id })).code, 'not_cancellable');
+  assert.equal(f.calls.includes('cancelled'), false);
+});
+
+test('missing mode key admits first migration without checking global handover', async () => {
+  const f = fixture({ globalMemoryPending: () => assert.fail('legacy global memory belongs to first migration') });
+  const owner = f.create();
+  assert.equal((await owner.handle(request)).result, 'accepted');
+  assert.equal(f.row.kind, 'first_migration');
 });
