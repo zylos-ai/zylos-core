@@ -21,7 +21,7 @@ import { renderStateSkeleton } from '../../../zylos-memory/scripts/state-format.
 const repo = path.resolve(new URL('../../../..', import.meta.url).pathname);
 const cleanups = [];
 afterEach(async () => { while (cleanups.length) await cleanups.pop()(); });
-function fixture(source, { wholeGroup = false } = {}) {
+function fixture({ wholeGroup = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-followup-'));
   cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'comm-bridge'), { recursive: true });
@@ -34,8 +34,7 @@ function fixture(source, { wholeGroup = false } = {}) {
   fs.writeFileSync(path.join(skills, 'demo/package.json'), JSON.stringify({ type: 'module' }));
   if (!wholeGroup) fs.writeFileSync(path.join(skills, 'demo/scripts/session-group.js'), "process.stdout.write('a\\n');");
   fs.writeFileSync(sender, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2).map(x => Buffer.from(x).toString('hex'))) + '\\n'); process.exit(process.argv[2] === 'fail-route' ? 1 : 0);`);
-  const target = source === 'single' ? 'multi' : 'single';
-  fs.mkdirSync(path.join(root, '.zylos'), { recursive: true }); fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', session_mode: target }));
+  fs.mkdirSync(path.join(root, '.zylos'), { recursive: true }); fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', session_mode: 'multi' }));
   const env = { ...process.env, HOME: root, ZYLOS_DIR: root, TMPDIR: root, ZYLOS_RUN_ID: 'fx-session-0' }; delete env.ZYLOS_SESSION_GROUP;
   const bin = path.join(root, 'bin'); fs.mkdirSync(bin);
   fs.symlinkSync(process.execPath, path.join(bin, 'node'));
@@ -43,9 +42,9 @@ function fixture(source, { wholeGroup = false } = {}) {
   env.PATH = bin; env.PM2_HOME = path.join(root, 'pm2'); env.TMUX_TMPDIR = root;
   for (const key of Object.keys(env)) if (key === 'TMUX' || /(?:TOKEN|SECRET|PASSWORD|API_KEY)/.test(key)) delete env[key];
   const add = (body, endpoint, group = 'a') => store.insertConversation('in', 'demo', endpoint, body, wholeGroup ? { wholeGroup: true } : { groupName: group });
-  function convert() { const { runId } = store.beginModeTransition(source, target, { kind: 'first_migration' }); store.setDrainFence('*'); store.absorbForTransition(runId); const row = store.getModeTransition(); const result = createModeSwitchConverter({ db: store, zylosDir: root })(row); store.setModeTransitionPhase(runId, 'cutover'); store.setModeTransitionPhase(runId, 'complete'); return { row, ...result }; }
+  function convert() { const { runId } = store.beginModeTransition('single', 'multi', { kind: 'first_migration' }); store.setDrainFence('*'); store.absorbForTransition(runId); const row = store.getModeTransition(); const result = createModeSwitchConverter({ db: store, zylosDir: root })(row); store.setModeTransitionPhase(runId, 'cutover'); store.setModeTransitionPhase(runId, 'complete'); return { row, ...result }; }
   function cli(name, args, { input = '', group, shell = false } = {}) {
-    const childEnv = { ...env }; if (group && group !== '*') childEnv.ZYLOS_SESSION_GROUP = group;
+    const childEnv = { ...env }; if (group) childEnv.ZYLOS_SESSION_GROUP = group;
     const script = path.join(skills, 'comm-bridge/scripts', name + '.js');
     const command = [process.execPath, script, ...args];
     const result = shell ? spawnSync('sh', ['-c', command.map(shellQuote).join(' ')], { env: childEnv, input, encoding: 'utf8', timeout: 5000, maxBuffer: 4 * 1024 * 1024 }) : spawnSync(command[0], command.slice(1), { env: childEnv, input, encoding: 'utf8', timeout: 5000, maxBuffer: 4 * 1024 * 1024 });
@@ -57,10 +56,10 @@ function inputSnapshot(f) { return f.db.prepare("SELECT * FROM conversations WHE
 function argv(f) { return fs.existsSync(f.argvFile) ? fs.readFileSync(f.argvFile, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : []; }
 function decodeEscapes(value) { return value.replace(/\\(u[0-9a-f]{4}|x[0-9a-f]{2}|[\\nrt])/g, (_, x) => x[0] === 'u' || x[0] === 'x' ? String.fromCharCode(parseInt(x.slice(1), 16)) : ({ '\\': '\\', n: '\n', r: '\r', t: '\t' })[x]); }
 async function boot(f, scope, run, expectedHandoff) {
-  const env = { ...f.env, ZYLOS_RUN_ID: run }; if (scope !== '*') env.ZYLOS_SESSION_GROUP = scope;
+  const env = { ...f.env, ZYLOS_RUN_ID: run }; if (scope) env.ZYLOS_SESSION_GROUP = scope;
   const memory = await memoryScope(env);
   const output = await emitC4Conversations({}, null, {
-    scopeReader: async () => ({ mode: scope === '*' ? 'single' : 'multi', scope, sessionGroup: scope === '*' ? null : scope, root: f.root, memoryDir: memory.memoryDir }),
+    scopeReader: async () => ({ mode: 'multi', scope, sessionGroup: scope, root: f.root, memoryDir: memory.memoryDir }),
     withDb: async (_label, action) => action({ ...f.store, formatConversationsForAgent }),
     migrationReader: async () => ({ state: 'done' }),
   });
@@ -69,20 +68,20 @@ async function boot(f, scope, run, expectedHandoff) {
   const complete = work.data.spill ? JSON.parse(fs.readFileSync(work.data.spill.path, 'utf8')).data : work.data;
   assert.match(complete.text, /# Working State/);
   const handoff = fs.readFileSync(expectedHandoff, 'utf8'); assert.match(handoff, /--absorbed-reply/);
-  // Group W4 is the retained main handoff referenced by the converter; all
+  // The retained main handoff is referenced by the converter; all
   // replacement sessions reread it and their own guarded work-memory snapshot.
   return { env, memory, work: complete };
 }
 async function commitProgress(f, scope, ids) {
-  const env = { ...f.env, ZYLOS_RUN_ID: 'sync-' + scope }; if (scope !== '*') env.ZYLOS_SESSION_GROUP = scope;
-  const memory = await memoryScope(env); const kind = scope === '*' ? 'global' : 'group';
+  const env = { ...f.env, ZYLOS_RUN_ID: 'sync-' + scope }; if (scope) env.ZYLOS_SESSION_GROUP = scope;
+  const memory = await memoryScope(env); const kind = 'group';
   const token = await acquire({ env, kind }, { currentRunId: async () => env.ZYLOS_RUN_ID });
   const state = path.join(memory.memoryDir, 'state.md'), before = fs.readFileSync(state, 'utf8');
   try {
-    const after = scope === '*' ? f.store.getGlobalCoverageEnd() : f.store.getCoverageEnd(scope);
-    const end = scope === '*' ? f.store.getGlobalDeliveredFrontier() : f.store.getDeliveredFrontier(scope);
+    const after = f.store.getCoverageEnd(scope);
+    const end = f.store.getDeliveredFrontier(scope);
     const rows = f.api.getConversationsByRange(after + 1, end)
-      .filter(row => (row.direction === 'out' || row.status === 'delivered') && (scope === '*' || row.session_group === scope));
+      .filter(row => (row.direction === 'out' || row.status === 'delivered') && row.session_group === scope);
     const batch = createBatchReceipt(rows.map(projectConversation), { scope, after, end });
     const inputs = await list({ env });
     await checkpoint({ env, token, end, summary: 'Absorbed-message follow-up progress', batch }, { database: f.api });
@@ -95,11 +94,11 @@ async function commitProgress(f, scope, ids) {
 
 // Isolated HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/tmux directory, private SQLite and
 // node/sh-only PATH, fixture channel/runtime providers; no real tmux/PM2/network.
-// Run these two cases for absorbed-send ownership/route changes; skip bulk
+// Run the route/body case for absorbed-send ownership/route changes; skip bulk
 // progress cases when Sync/progress algorithms are unchanged. CLI calls time out;
 // afterEach closes SQLite and removes all owned fixture paths.
-for (const source of ['single', 'multi']) test(`${source}: converted messages, replacement sessions, real query/send CLI and guarded Sync preserve route/body bytes`, async () => {
-  const f = fixture(source);
+test(`first migration: converted messages, replacement sessions, real query/send CLI and guarded Sync preserve route/body bytes`, async () => {
+  const f = fixture();
   console.log('Mode followup isolation:', JSON.stringify(Object.fromEntries(['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR','TMUX_TMPDIR','PATH'].map(key => [key, f.env[key]]))));
   const variants = [
     ['A', 'a'.repeat(65536), 'route-A'], ['H', 'hello', 'h'.repeat(20 * 1024)],
@@ -111,10 +110,10 @@ for (const source of ['single', 'multi']) test(`${source}: converted messages, r
   const rows = variants.map(([name, body, endpoint]) => ({ name, ...f.add(body, endpoint) }));
   for (let i = 0; i < 3; i++) { const row = f.add('unscoped-' + i, 'origin-' + i, 'legacy'); f.db.prepare("UPDATE conversations SET session_group='' WHERE id=?").run(row.id); rows.push({ name: 'C' + i, ...row, session_group: '' }); }
   const converted = f.convert(), before = inputSnapshot(f), runId = converted.row.run_id;
-  const scopes = source === 'single' ? ['origin', 'demo:a'] : ['*'];
+  const scopes = ['origin', 'demo:a'];
   const finished = new Map(scopes.map(g => [g, []]));
   await boot(f, scopes[0], 'fx-origin-0', converted.handoff);
-  if (source === 'single') {
+  {
     for (let replacement = 0; replacement < 2; replacement++) {
       await sendInternal(['internal', 'demo:a'], async () => `Read ${converted.handoff} and follow absorbed run ${runId}`, { env: { ...f.env, ZYLOS_SESSION_GROUP: 'origin' }, readIdentity: async () => null, insertMessage: f.store.insertInternalMessage });
     }
@@ -138,7 +137,7 @@ for (const source of ['single', 'multi']) test(`${source}: converted messages, r
   } while (after !== null);
   assert.deepEqual(pageIds, rows.map(r => r.id));
   for (const row of rows) {
-    const scope = source === 'single' ? row.session_group || 'origin' : '*';
+    const scope = row.session_group || 'origin';
     if (row.name === 'A') await boot(f, scope, 'fx-group-0', converted.handoff);
     const out = path.join(f.root, `full-${row.id}`);
     const args = ['--absorbed', '--run-id', runId, '--id', String(row.id)];
@@ -148,14 +147,14 @@ for (const source of ['single', 'multi']) test(`${source}: converted messages, r
     const fullJson = f.cli('c4-fetch', [...args, '--json']); assert.equal(fullJson.status, 0, fullJson.stderr); assert.equal(JSON.parse(fullJson.stdout).data.data, row.content);
     if (['J','K'].includes(row.name)) { const fullText = f.cli('c4-fetch', args); assert.equal(fullText.status, 0); const encoded = fullText.stdout.split('\ndata: ')[1].split('\nend id=')[0]; assert.equal(decodeEscapes(encoded), row.content); }
     const priorArgv = argv(f).length, priorOut = f.db.prepare("SELECT count(*) n FROM conversations WHERE direction='out'").get().n;
-    if (source === 'single' && scope === 'origin') {
+    if (scope === 'origin') {
       const refused = f.cli('c4-send', ['--absorbed-reply', runId, String(row.id)], { input: 'handled ' + row.name, group: scope });
       assert.equal(refused.status, 1, refused.stderr);
       assert.match(refused.stderr, /CROSS_SESSION_OUTBOUND/);
       assert.equal(argv(f).length, priorArgv);
       assert.equal(f.db.prepare("SELECT count(*) n FROM conversations WHERE direction='out'").get().n, priorOut);
     }
-    const sent = f.cli('c4-send', ['--absorbed-reply', runId, String(row.id)], { input: 'handled ' + row.name, group: source === 'single' ? 'demo:a' : scope, shell: row.name.startsWith('N') });
+    const sent = f.cli('c4-send', ['--absorbed-reply', runId, String(row.id)], { input: 'handled ' + row.name, group: 'demo:a', shell: row.name.startsWith('N') });
     if (row.name === 'O') {
       assert.equal(sent.status, 1); assert.match(sent.stderr, /ENDPOINT_NOT_PASSABLE/); assert.equal(argv(f).length, priorArgv); assert.equal(f.db.prepare("SELECT count(*) n FROM conversations WHERE direction='out'").get().n, priorOut); continue;
     }
@@ -179,17 +178,17 @@ for (const source of ['single', 'multi']) test(`${source}: converted messages, r
     if (remaining.entries.length) assert.equal(remaining.title, original.title);
   }
   assert.deepEqual(inputSnapshot(f), before);
-  const remainingScope = source === 'single' ? 'demo:a' : '*';
-  const remainingPath = remainingScope === '*' ? path.join(f.root, 'memory/state.md') : path.join(f.root, 'memory/session-groups', remainingScope, 'state.md');
+  const remainingScope = 'demo:a';
+  const remainingPath = path.join(f.root, 'memory/session-groups', remainingScope, 'state.md');
   assert.deepEqual(extractAbsorbedBlock(fs.readFileSync(remainingPath, 'utf8')).entries.map(e => e.id), rows.filter(r => ['O','FAILED'].includes(r.name)).map(r => r.id));
 }, 90000);
 
-for (const source of ['single','multi']) test(`B ${source}: 1000 converted entries, actual reply progress, 10→990→empty guarded commits`, async () => {
+test(`first migration: 1000 converted entries, actual reply progress, 10→990→empty guarded commits`, async () => {
   // Whole-channel providers have no ownership-query script. Component-query
   // providers remain covered by the route/body cases above.
-  const f = fixture(source, { wholeGroup: true }); for (let n = 0; n < 1000; n++) f.add('x', 'route-' + n);
-  const converted = f.convert(), runId = converted.row.run_id, before = inputSnapshot(f), scope = source === 'single' ? 'demo' : '*';
-  const env = { ...f.env }; if (scope !== '*') env.ZYLOS_SESSION_GROUP = scope;
+  const f = fixture({ wholeGroup: true }); for (let n = 0; n < 1000; n++) f.add('x', 'route-' + n);
+  const converted = f.convert(), runId = converted.row.run_id, before = inputSnapshot(f), scope = 'demo';
+  const env = { ...f.env }; if (scope) env.ZYLOS_SESSION_GROUP = scope;
   let stopped = false, pending;
   cleanups.push(async () => { stopped = true; await pending?.catch(() => {}); });
   const deadline = Date.now() + 120000;
@@ -242,7 +241,7 @@ for (const source of ['single','multi']) test(`B ${source}: 1000 converted entri
 }, 180000);
 
 test('unsafe-integer IDs are rejected without misrouting or sending', () => {
-  const f = fixture('single'), row = f.add('x', 'exact-route'), converted = f.convert(), runId = converted.row.run_id;
+  const f = fixture(), row = f.add('x', 'exact-route'), converted = f.convert(), runId = converted.row.run_id;
   const exact = '1000000000000000001'; f.db.prepare('UPDATE conversations SET id=? WHERE id=?').run(BigInt(exact), row.id);
   f.db.prepare('UPDATE mode_transitions SET absorbed_ids=? WHERE run_id=?').run(`[${exact}]`, runId);
   const query = f.cli('c4-fetch', ['--absorbed', '--run-id', runId, '--id', exact, '--json']); assert.equal(query.status, 1); assert.equal(JSON.parse(query.stdout).error.code, 'INVALID_ARGS');

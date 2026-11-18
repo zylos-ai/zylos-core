@@ -1,13 +1,19 @@
 import { randomUUID } from 'node:crypto';
-import { submit, lookupModeSwitch } from '../lib/am-sock-client.js';
+import { submit, lookupModeSwitch, lookupModeSwitchCancel } from '../lib/am-sock-client.js';
 
 const failure = (code, message, persisted = []) => ({ ok: false, error: { code, message, persisted } });
+const defaultReadTransition = async (options) => {
+  const [{ openReadStore }, { ZYLOS_DIR }] = await Promise.all([import('../lib/c4-read-store.js'), import('../lib/config.js')]);
+  const owned = await openReadStore(ZYLOS_DIR);
+  try { return await owned.store.getModeTransition(options); }
+  finally { owned.close(); }
+};
 const defaultReadStatus = async () => (await import('../lib/session-mode-status.js')).readSessionModeStatus();
 
 /** A switch submits once. A lost response can only be resolved by observation. */
 export async function executeSessionMode(args, {
   send = submit, lookup = lookupModeSwitch, now = Date.now, requestId = randomUUID,
-  deadlineAt, readStatus = defaultReadStatus,
+  deadlineAt, readStatus = defaultReadStatus, readTransition = defaultReadTransition, lookupCancel = lookupModeSwitchCancel,
 } = {}) {
   const jsonFlags = args.filter(arg => arg === '--json').length;
   const positional = args.filter(arg => arg !== '--json');
@@ -16,8 +22,11 @@ export async function executeSessionMode(args, {
     try { return { ok: true, data: await readStatus() }; }
     catch (error) { return failure(error.code ?? 'READ_FAILED', error.message ?? String(error)); }
   }
+  if (jsonFlags <= 1 && command === 'cancel' && positional.length === 1) {
+    return executeCancel({ send, lookupCancel, now, requestId, deadlineAt, readTransition });
+  }
   if (jsonFlags > 1 || command !== 'switch' || positional.length !== 2 || !['single', 'multi'].includes(target)) {
-    return failure('INVALID_ARGUMENT', 'Usage: zylos session-mode switch <single|multi> [--json] | status [--json]');
+    return failure('INVALID_ARGUMENT', 'Usage: zylos session-mode switch <single|multi> [--json] | status [--json] | cancel [--json]');
   }
   const deadline = deadlineAt ?? now() + 10000;
   let response;
@@ -33,7 +42,9 @@ export async function executeSessionMode(args, {
   }
   if (response.kind === 'rejected') {
     const { code, runId, target: openTarget } = response.reply;
-    const result = failure(code, `Mode switch rejected: ${code}`);
+    const result = failure(code, code === 'global_memory_pending'
+      ? 'The supervisor will automatically hand over global working memory first; retry the switch afterward. A legacy session must finish before handover.'
+      : `Mode switch rejected: ${code}`);
     if (code === 'transition_open') Object.assign(result.error, { runId, target: openTarget });
     return result;
   }
@@ -48,14 +59,39 @@ export async function executeSessionMode(args, {
   return failure(response.kind, 'Mode switch result unknown; inspect session-mode status before taking further action', null);
 }
 
+async function executeCancel({ send, lookupCancel, now, requestId, deadlineAt, readTransition }) {
+  const deadline = deadlineAt ?? now() + 10000;
+  let transition;
+  try { transition = await readTransition(); }
+  catch (error) { return failure(error.code ?? 'READ_FAILED', error.message ?? String(error)); }
+  if (!transition) return { ok: false, code: 'run_not_open' };
+  const runId = transition.run_id;
+  let response;
+  try {
+    response = await send({ version: 1, type: 'mode_switch_cancel', requestId: requestId(), runId }, { deadlineAt: deadline });
+  } catch (error) {
+    // Once submission was attempted, an exception cannot prove it did not commit.
+    response = { kind: error.code ?? 'no_reply', sent: true };
+  }
+  if (response.kind === 'accepted') return { ok: true, data: { result: response.reply.result, runId: response.reply.runId } };
+  if (response.kind === 'rejected') return failure(response.reply.code, `Mode switch cancellation rejected: ${response.reply.code}`);
+  if (!response.sent) return failure(response.kind, 'Mode switch cancellation was not submitted');
+  try {
+    const observed = await lookupCancel(runId, { deadlineAt: deadline });
+    if (observed === 'cancelled') return { ok: true, data: { result: 'cancelled', runId, observed: 'cancelled' } };
+  } catch { /* An unreadable transition leaves the submission uncertain. */ }
+  return failure(response.kind, 'Mode switch cancellation result unknown; inspect session-mode status before taking further action', null);
+}
+
 export async function sessionModeCommand(args, dependencies) {
   const result = await executeSessionMode(args, dependencies);
   if (args.includes('--json')) console.log(JSON.stringify(result));
-  else if (!result.ok) console.error(`Error [${result.error.code}]: ${result.error.message}`);
+  else if (!result.ok) console.error(result.code === 'run_not_open' ? '没有进行中的切换' : `Error [${result.error.code}]: ${result.error.message}`);
   else if (args.filter(arg => arg !== '--json')[0] === 'status') {
     const { formatSessionModeStatus } = await import('../lib/session-mode-status.js');
     console.log(formatSessionModeStatus(result.data));
   }
+  else if (args.filter(arg => arg !== '--json')[0] === 'cancel') console.log(`OK: mode switch cancelled (${result.data.runId})`);
   else if (result.data.observed) console.log(`OK: observed ${result.data.observed} for ${result.data.target}`);
   else console.log(`OK: mode switch ${result.data.result}${result.data.runId ? ` (${result.data.runId})` : ''}`);
   if (!result.ok) process.exitCode = 1;

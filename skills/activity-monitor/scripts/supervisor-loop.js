@@ -88,6 +88,10 @@ export class SupervisorLoop {
       try { await d.advanceTransition(transition); }
       catch (error) { await d.reportError(error, { phase: 'transition' }); }
     }
+    if (!transition) {
+      try { await d.advanceGlobalMemoryHandover?.(); }
+      catch (error) { await d.reportError(error, { phase: 'global-memory-handover' }); }
+    }
     let context;
     await d.lifecycleSerial(async () => {
       // Sample all round authorities and scenes while socket admission is excluded.

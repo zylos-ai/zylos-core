@@ -214,3 +214,26 @@ for (const legacy of [false,true]) test(`single authority failure ${legacy?'reta
     listDrainFences:async()=>{throw new Error('unavailable');},reconciliationReadFailed:()=>{reported++;}});
   await f.loop.start(); assert.equal(reported,legacy?0:1); await f.loop.stop();
 });
+
+test('global handover precedes ordinary lifecycle work and an open transition suppresses it', async () => {
+  let transition = null;
+  const f = fixture({ getModeTransition: async () => transition,
+    advanceGlobalMemoryHandover: async () => f.calls.push('handover') });
+  await f.loop.start();
+  assert.ok(f.calls.indexOf('handover') < f.calls.indexOf('observe'));
+  assert.ok(f.calls.indexOf('handover') < f.calls.indexOf('manual'));
+  f.calls.length = 0; transition = { run_id: 'switch' };
+  await f.loop.tick();
+  assert.equal(f.calls.includes('handover'), false);
+  assert.equal(f.calls.includes('transition'), true);
+  await f.loop.stop();
+});
+
+test('global handover failure reports its phase and preserves ordinary delivery observations', async () => {
+  const f = fixture({ advanceGlobalMemoryHandover: async () => { throw new Error('unavailable'); } });
+  await f.loop.start();
+  assert.ok(f.calls.includes('error:global-memory-handover'));
+  assert.ok(f.calls.includes('observe'));
+  assert.ok(f.calls.includes('probe:origin'));
+  await f.loop.stop();
+});

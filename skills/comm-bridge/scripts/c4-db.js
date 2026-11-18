@@ -307,12 +307,12 @@ export function cleanupControlQueue(cutoff) {
   return result.changes || 0;
 }
 
-/**
- * Get conversations by id range (inclusive)
- * @param {number} beginId - start conversation id
- * @param {number} endId - end conversation id
- * @returns {array} - conversation records in chronological order
- */
+/** Read the message head independently of timestamps or delivery state. */
+export function getMaxConversationId(db = getDb()) {
+  return db.prepare('SELECT COALESCE(MAX(id),0) AS id FROM conversations').get().id;
+}
+
+/** Get conversations by id range (inclusive), in id order. */
 export function getConversationsByRange(beginId, endId, db = getDb()) {
   return db.prepare(
     'SELECT * FROM conversations WHERE id >= ? AND id <= ? ORDER BY id ASC'

@@ -8,25 +8,30 @@ import { startSupervisor } from '../skills/activity-monitor/scripts/supervisor-m
 import { createModeSwitchConverter } from '../skills/activity-monitor/scripts/mode-switch-convert.js';
 import { readSessionModeStatus } from '../cli/lib/session-mode-status.js';
 
-test('real supervisor reason/events and readonly status agree through block, recovery and stopped supervisor', async () => {
+// Integration boundary: private SQLite/socket and real supervisor/converter/status;
+// run for first-migration conversion diagnostics or status recovery changes, and
+// skip for native-switch-only changes. The runner and fixture isolate paths;
+// finally stops the supervisor before closing SQLite and removing its root.
+test('first migration supervisor reason/events and readonly status agree through block, recovery and stopped supervisor', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-visible-')); const cleanup = [];
   const { db, store } = storeFixture({ after: fn => cleanup.push(fn) }, {}, path.join(root, 'c4.db'));
-  let mode = 'single', failExport = true, service;
-  const readMode = () => ({ mode, keyPresent: true });
+  let mode = 'single', keyPresent = false, failExport = true, service;
+  const readMode = () => ({ mode, keyPresent });
   const converter = createModeSwitchConverter({ db: store, zylosDir: root });
   const status = () => readSessionModeStatus({ db: store, zylosDir: root, readMode, readPm2: async () => 'stopped' });
   try {
     service = await startSupervisor({ env: { ...process.env, HOME: root, ZYLOS_DIR: root }, db: { ...store, getDb: () => db },
-      readMode, readConfig: () => ({ runtime: 'claude', session_mode: mode }), legacyPresent: () => false,
+      readMode, readConfig: () => ({ runtime: 'claude', ...(keyPresent ? { session_mode: mode } : {}) }), legacyPresent: () => false,
       scenes: { observe: async () => [], observeGroup: async () => ({ present: false }), readIdentity: async () => ({ present: false }), listRuns: async () => [], readRun: async () => null },
       legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} }, loopOptions: { schedule: () => 1, cancel() {} },
       readSyncMarker: () => ({ held: false, stale: false }),
       convertModeTransition: row => { if (failExport) throw Object.assign(new Error('export fixture failure'), { step: 'export', code: 'EIO' }); return converter(row); },
-      writeMode: target => { mode = target; }, restartDispatcherConfirmation: { advance: () => ({ confirmed: true }) },
+      writeMode: target => { mode = target; keyPresent = true; }, restartDispatcherConfirmation: { advance: () => ({ confirmed: true }) },
       sendAlert: () => { throw new Error('external notification forbidden'); }, log() {},
     });
     const reply = await service.supervisor.admission.handle({ version: 1, type: 'mode_switch', requestId: 'visible', target: 'multi' });
     assert.equal(reply.result, 'accepted');
+    assert.equal(store.getModeTransition().kind, 'first_migration');
     for (let n = 0; n < 3; n++) await service.supervisor.loop.tick();
     const blocked = await status();
     assert.equal(blocked.supervisor, 'reachable'); assert.equal(blocked.globalGate.present, true);
@@ -41,7 +46,7 @@ test('real supervisor reason/events and readonly status agree through block, rec
     const { ModeSwitchCoordinator } = await import('../skills/activity-monitor/scripts/mode-switch.js');
     failExport = false;
     const owner = new ModeSwitchCoordinator({ db: store, zylosDir: root, readMode,
-      convert: converter, writeMode: target => { mode = target; }, restart: { advance: () => ({ confirmed: true }) },
+      convert: converter, writeMode: target => { mode = target; keyPresent = true; }, restart: { advance: () => ({ confirmed: true }) },
     });
     await owner.advance(); await owner.advance();
     const done = await status(); assert.equal(done.transition, null); assert.equal(done.blocked, null);

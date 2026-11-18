@@ -13,9 +13,10 @@ const modes = new Set(['single', 'multi']);
 export class ModeSwitchCoordinator {
   constructor({ db, readMode, readConfiguration, readRequests, legacyPresent, observe,
     lifecycle, serialize = operation => operation(), convert, writeMode,
+    globalMemoryPending = async () => false,
     restart = new DispatcherRestartConfirmation(), diagnostic = () => {}, now = Date.now } = {}) {
     Object.assign(this, { db, readMode, readConfiguration, readRequests, legacyPresent,
-      observe, lifecycle, serialize, convert, writeMode, restart, diagnostic, now });
+      observe, lifecycle, serialize, convert, writeMode, globalMemoryPending, restart, diagnostic, now });
     this.lastReasons = new Map();
     this.lastAutoMigrationSkip = null;
     this.attempt = null;
@@ -44,23 +45,34 @@ export class ModeSwitchCoordinator {
   async handle(request) {
     const open = await this.db.getModeTransition();
     if (open) return { ok: false, code: 'transition_open', runId: open.run_id, target: open.target_mode };
-    let source;
-    try { source = modeOf(await this.readMode()); if (!modes.has(source)) throw failure('CONFIG_UNREADABLE', 'Invalid session mode'); }
+    let source, initial;
+    try { initial = await this.readMode(); source = modeOf(initial); if (!modes.has(source)) throw failure('CONFIG_UNREADABLE', 'Invalid session mode'); }
     catch { return { ok: false, code: 'config_unreadable' }; }
     if (source === request.target) return { ok: true, result: 'noop' };
     if (source === 'single' && request.target === 'multi' && await this.legacyPresent()) return { ok: false, code: 'legacy_session_present' };
+    if (await this.globalMemoryPending()) return { ok: false, code: 'global_memory_pending' };
     const requests = await this.readRequests();
     if (requests.some(row => row.reason === 'manual_restart')) return { ok: false, code: 'manual_restart_pending' };
-    let current;
-    try { current = modeOf(await this.readMode()); if (!modes.has(current)) throw failure('CONFIG_UNREADABLE', 'Invalid session mode'); }
+    let current, currentValue;
+    try { currentValue = await this.readMode(); current = modeOf(currentValue); if (!modes.has(current)) throw failure('CONFIG_UNREADABLE', 'Invalid session mode'); }
     catch { return { ok: false, code: 'config_unreadable' }; }
-    if (current !== source) throw failure('TRANSITION_PRECONDITION', 'Session mode changed before transition admission');
+    if (current !== source || currentValue.keyPresent !== initial.keyPresent) throw failure('TRANSITION_PRECONDITION', 'Session mode changed before transition admission');
     if ((await this.db.listDrainFences()).some(fence => fence.reason === 'delete')) return { ok: false, code: 'deletion_in_progress' };
     let runId;
-    try { ({ runId } = await this.db.beginModeTransition(source, request.target, { kind: 'first_migration' })); }
+    try { ({ runId } = await this.db.beginModeTransition(source, request.target, { kind: initial.keyPresent === false ? 'first_migration' : 'switch' })); }
     catch (error) { if (error.code === 'DELETION_IN_PROGRESS') return { ok: false, code: 'deletion_in_progress' }; throw error; }
-    this.event('transition_begin', { run_id: runId, phase: 'gating' }, { source, target: request.target });
+    this.event('transition_begin', { run_id: runId, phase: 'gating' }, { source, target: request.target, kind: initial.keyPresent === false ? 'first_migration' : 'switch' });
     return { ok: true, result: 'accepted', runId };
+  }
+
+  async cancel(request) {
+    const row = await this.db.getModeTransition();
+    if (!row || row.run_id !== request.runId) return { ok: false, code: 'run_not_open' };
+    if (row.kind !== 'switch' || row.phase !== 'gating') return { ok: false, code: 'not_cancellable' };
+    const result = await this.db.setModeTransitionPhase(row.run_id, 'cancelled');
+    this.event('transition_cancelled', result, { resumedGroups: result.resumedGroups });
+    this.lastReasons.delete(row.run_id);
+    return { ok: true, result: 'cancelled', runId: row.run_id };
   }
 
   recordConfigurationRead(error = null) {
@@ -77,7 +89,7 @@ export class ModeSwitchCoordinator {
     if ((await this.readRequests()).some(request => request.reason === 'manual_restart')) return;
     if ((await this.db.listDrainFences()).some(fence => fence.reason === 'delete')) return;
     const { runId } = await this.db.beginModeTransition('single', 'multi', { kind: 'first_migration' });
-    this.event('auto_migration_begin', { run_id: runId, phase: 'gating' });
+    this.event('auto_migration_begin', { run_id: runId, phase: 'gating' }, { kind: 'first_migration' });
   }
 
   async advance() {
@@ -109,7 +121,7 @@ export class ModeSwitchCoordinator {
       if (mode !== row.target_mode) { await this.block(row, `mode_conflict:${row.phase}:${mode}`); return; }
       if (!await this.onlyGlobal(row)) return;
       await this.unblock(row);
-      if (row.target_mode === 'multi') await this.db.insertControl(HANDOFF_FOLLOWUP_PROMPT, {
+      if (row.kind === 'first_migration') await this.db.insertControl(HANDOFF_FOLLOWUP_PROMPT, {
         sessionGroup: 'origin', priority: 2, appendAckSuffix: false,
       });
       // The store atomically verifies the global transition fence and removes it.
@@ -134,31 +146,23 @@ export class ModeSwitchCoordinator {
     let mode;
     try { mode = modeOf(await this.readMode()); if (!modes.has(mode)) throw failure('CONFIG_UNREADABLE', 'Invalid session mode'); }
     catch { await this.block(row, 'config_unreadable'); return null; }
-    if (!(['gating', 'converting'].includes(row.phase) && mode === row.source_mode || row.phase === 'cutover' && [row.source_mode, row.target_mode].includes(mode))) {
+    if (row.kind === 'switch' && row.phase === 'converting' || !(['gating', 'converting'].includes(row.phase) && mode === row.source_mode || row.phase === 'cutover' && [row.source_mode, row.target_mode].includes(mode))) {
       await this.block(row, `mode_conflict:${row.phase}:${mode}`); return null;
     }
     if (row.phase === 'gating') { await this.gate(row, mode); return null; }
     if (row.phase === 'converting') {
       try { await this.convert(row); }
       catch (error) { await this.block(row, `conversion_failed:${error.step ?? 'check'}:${error.code ?? 'UNKNOWN'}`, 'transition_convert_failed', { step: error.step ?? 'check', code: error.code ?? 'UNKNOWN' }); return null; }
-      if (!await this.onlyGlobal(row)) return null;
-      await this.db.expirePendingControls({ machine: true });
-      await this.db.expirePendingControls({ allSessionGroups: true });
-      await this.db.clearAllContinuations();
-      let committed;
-      try { committed = await this.db.setModeTransitionPhase(row.run_id, 'cutover'); }
-      catch (error) {
-        await this.block(row, `cutover_failed:${error.code ?? 'UNKNOWN'}`, 'transition_cutover_failed', { code: error.code ?? 'UNKNOWN' });
-        return null;
-      }
-      // The cutover transaction clears the reason. Do not clear it before an
-      // attempt that may fail again, or each tick would emit block/unblock.
-      if (row.reason !== null && row.reason !== undefined) this.event('transition_unblocked', committed, { reason: null });
-      this.lastReasons.set(row.run_id, null);
-      this.event('transition_cutover', committed, { phase: 'cutover', reason: null });
+      await this.enterCutover(row);
       return null;
     }
     if (this.attempt?.runId === row.run_id) return this.attempt;
+    if (mode === row.source_mode) {
+      await this.db.expirePendingControls({ machine: true });
+      await this.db.expirePendingControls({ allSessionGroups: true, keepOrigin: row.kind === 'switch' ? 'all' : 'role' });
+      await this.db.clearContinuationsExceptOrigin();
+      if (row.target_mode === 'single') await this.db.voidInternalForSingle(row.run_id);
+    }
     let writtenAt;
     try {
       if (mode === row.source_mode) await this.writeMode(row.target_mode);
@@ -169,16 +173,31 @@ export class ModeSwitchCoordinator {
     return this.attempt;
   }
 
+  async enterCutover(row) {
+    if (!await this.onlyGlobal(row)) return;
+    let committed;
+    try { committed = await this.db.setModeTransitionPhase(row.run_id, 'cutover'); }
+    catch (error) {
+      await this.block(row, `cutover_failed:${error.code ?? 'UNKNOWN'}`, 'transition_cutover_failed', { code: error.code ?? 'UNKNOWN' });
+      return;
+    }
+    if (row.reason !== null && row.reason !== undefined) this.event('transition_unblocked', committed, { reason: null });
+    this.lastReasons.set(row.run_id, null);
+    this.event('transition_cutover', committed, { phase: 'cutover', reason: null });
+  }
+
   async gate(row, mode) {
     await this.db.setDrainFence('*');
     const configuration = { ...await this.readConfiguration(), mode };
     const context = { configuration, transition: row, fences: await this.db.listDrainFences(), restartRequests: [], scenes: await this.observe({ configuration }) };
     if (context.scenes.some(scene => scene.observationError)) throw failure('INVALID_OBSERVATION', 'Source runtime observation is unknown');
-    if (mode === 'single') {
+    const native = row.kind === 'switch';
+    if (!native && mode === 'single') {
       const scene = context.scenes.find(scene => scene.present && (scene.sessionGroup === 'origin' || scene.sessionGroup === null));
       if (scene?.ready && scene.runId) await this.lifecycle.advanceReclaim({ sessionGroup: null, reason: 'mode_switch', runId: scene.runId }, context, { unfenced: true });
     } else {
       for (const scene of context.scenes) {
+        if (native && scene.sessionGroup === 'origin') continue;
         if (!scene.present || !scene.ready || !scene.runId || context.fences.some(fence => fence.sessionGroup === scene.sessionGroup)) continue;
         await this.db.setDrainFence(scene.sessionGroup, { reason: 'mode_switch', runId: scene.runId });
       }
@@ -191,7 +210,11 @@ export class ModeSwitchCoordinator {
     for (const scope of ['machine', 'allSessionGroups']) {
       missingDeadlines.push([scope, await this.db.listRunningControlsWithoutDeadline({ [scope]: true })]);
     }
-    if (row.source_mode === 'single' && row.target_mode === 'multi' && missingDeadlines[0][1].length) {
+    if (native) {
+      const originIds = new Set(await this.db.listRunningControlsWithoutDeadline({ sessionGroup: 'origin' }));
+      missingDeadlines[1][1] = missingDeadlines[1][1].filter(id => !originIds.has(id));
+    }
+    if (!native && row.source_mode === 'single' && row.target_mode === 'multi' && missingDeadlines[0][1].length) {
       const scenes = await this.observe({ configuration });
       if (scenes.some(scene => scene.observationError)) throw failure('INVALID_OBSERVATION', 'Source runtime observation is unknown');
       if (!scenes.some(scene => scene.present) && await this.legacyPresent() === false) {
@@ -220,10 +243,12 @@ export class ModeSwitchCoordinator {
     const scenes = await this.observe({ configuration });
     if (scenes.some(scene => scene.observationError)) throw failure('INVALID_OBSERVATION', 'Source runtime observation is unknown');
     const conversations = await this.db.countGlobalRunningConversations();
-    if (scenes.some(scene => scene.present) || conversations) return;
+    if (scenes.some(scene => scene.present && (!native || scene.sessionGroup !== 'origin')) || conversations > 0) return;
     for (const scope of ['machine', 'allSessionGroups']) {
-      if ((await this.db.countNonTerminalControls({ [scope]: true })).running) return;
+      const running = (await this.db.countNonTerminalControls({ [scope]: true })).running - (native && scope === 'allSessionGroups' ? (await this.db.countNonTerminalControls({ sessionGroup: 'origin' })).running : 0);
+      if (running > 0) return;
     }
+    if (native) { await this.enterCutover(row); return; }
     const result = await this.db.absorbForTransition(row.run_id);
     this.event('absorb', row, { phase: 'converting', reason: null, cutoff: result.cutoff, count: result.absorbedIds.length });
   }
