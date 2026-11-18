@@ -1,9 +1,20 @@
-import { loadCoreConfig } from './core-config-loader.js';
+import path from 'node:path';
+import { loadCoreConfigStore } from './core-config-loader.js';
 import { OPEN_MODE_TRANSITION } from './c4-transition-state.js';
 
-// Migration callbacks are synchronous. Resolve the strict reader before any
-// migration transaction starts, and read configuration only for ambiguous gating rows.
-const { readSessionMode } = await loadCoreConfig();
+// Migration callbacks are synchronous. Load pure readers without importing
+// config.js; choose the instance path only when an ambiguous row needs F1.
+const { readConfigStrict, configUnreadable } = await loadCoreConfigStore();
+function sessionModeKeyPresent() {
+  const root = process.env.ZYLOS_DIR || path.join(process.env.HOME, 'zylos');
+  const result = readConfigStrict(path.join(root, '.zylos', 'config.json'));
+  if (result.state === 'error') throw configUnreadable(result.error);
+  if (result.state === 'missing' || !Object.hasOwn(result.config, 'session_mode')) return false;
+  if (!['single', 'multi'].includes(result.config.session_mode)) {
+    throw configUnreadable(new TypeError('session_mode must be "single" or "multi"'));
+  }
+  return true;
+}
 const quote = value => `"${value.replaceAll('"', '""')}"`;
 
 export function migrateToV5(db) {
@@ -24,7 +35,7 @@ export function migrateToV5(db) {
   const objects = db.prepare("SELECT type,name,sql FROM sqlite_master WHERE tbl_name='mode_transitions' AND type IN ('index','trigger') AND sql IS NOT NULL ORDER BY type,name").all();
   const columns = db.prepare('PRAGMA table_xinfo(mode_transitions)').all().filter(row => row.hidden === 0).map(row => quote(row.name)).join(',');
   const needsConfig = Boolean(db.prepare(`SELECT 1 FROM mode_transitions WHERE ${OPEN_MODE_TRANSITION} AND cutoff IS NULL LIMIT 1`).get());
-  const missingKey = needsConfig && !readSessionMode().keyPresent;
+  const missingKey = needsConfig && !sessionModeKeyPresent();
   const kind = `CASE
     WHEN cutoff IS NOT NULL AND source_mode='single' THEN 'first_migration'
     WHEN ${OPEN_MODE_TRANSITION} AND cutoff IS NULL AND ? THEN 'first_migration'

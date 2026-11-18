@@ -162,6 +162,20 @@ test('gating cancellation restores normal endings, leaves active group fences an
   assert.equal(store.getLastCompletedModeTransition(), null);
   assert.ok(store.beginModeTransition('single','multi').runId);
 });
+test('cancellation excludes origin manual restarts from continuation markers and counts', t => {
+  const { db, store } = fixture(t);
+  const { runId } = store.beginModeTransition('multi', 'single');
+  store.setDrainFence('*');
+  for (const group of ['origin', 'ordinary']) {
+    store.recordRunEnd(group, { runId: `${group}-manual`, reason: 'manual_restart' });
+    assert.equal(store.listRunEndings([group])[0].continuationPending, 0);
+  }
+  const result = store.setModeTransitionPhase(runId, 'cancelled');
+  assert.equal(store.listRunEndings(['origin'])[0].continuationPending, 0);
+  assert.equal(store.listRunEndings(['ordinary'])[0].continuationPending, 1);
+  assert.equal(result.resumedGroups, 1);
+  assert.equal(db.prepare('SELECT SUM(continuation_pending) AS count FROM run_endings').get().count, 1);
+});
 test('cancellation before the global gate is written restores markers and preserves other tables', t => {
   let now = 100;
   const { db, store } = fixture(t, { now: () => now * 1000 });
@@ -205,6 +219,7 @@ test('kind validation, same-mode rejection and native absorption refusal are zer
   for (const kind of ['switch','first_migration']) assert.throws(() => store.beginModeTransition('single','single',{kind}), {code:'TRANSITION_SAME_MODE'});
   for (const kind of ['other',null,1]) assert.throws(() => store.beginModeTransition('single','multi',{kind}),{code:'INVALID_ARGS'});
   const { runId }=store.beginModeTransition('single','multi');
+  store.setDrainFence('*');
   const before=snapshot(db); assert.throws(()=>store.absorbForTransition(runId),{code:'TRANSITION_PRECONDITION'}); assert.deepEqual(snapshot(db),before);
   assert.throws(()=>db.exec("UPDATE mode_transitions SET kind='other'"),/CHECK/);
   assert.throws(()=>db.exec("UPDATE mode_transitions SET target_mode=source_mode"),/CHECK/);
