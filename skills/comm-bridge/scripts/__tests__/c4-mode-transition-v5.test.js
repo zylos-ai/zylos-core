@@ -134,13 +134,37 @@ test('gating cancellation restores normal endings, leaves active group fences an
   assert.equal(store.getLastCompletedModeTransition(), null);
   assert.ok(store.beginModeTransition('single','multi').runId);
 });
-for (const obstacle of ['converting','cutover','first_migration','missing-fence','manual-fence','historical-cutoff','write-failure']) test(`cancel rejects ${obstacle} atomically`, t => {
+test('cancellation before the global gate is written restores markers and preserves other tables', t => {
+  let now = 100;
+  const { db, store } = fixture(t, { now: () => now * 1000 });
+  const { runId } = store.beginModeTransition('multi', 'single');
+  store.insertConversation('in', 'demo', 'room', 'pending input');
+  store.insertControl('pending operation', { sessionGroup: 'origin', appendAckSuffix: false });
+  store.setDrainFence('still-draining', { reason: 'mode_switch', runId: 'old-run' });
+  store.recordRunEnd('a', { runId: 'a-run', reason: 'upgrade' });
+  store.recordRunEnd('cold', { runId: 'cold-run', reason: 'ttl' });
+  assert.equal(store.getDrainFence('*'), null);
+  const unchanged = () => Object.fromEntries(['drain_fences', 'conversations', 'control_queue', 'checkpoints']
+    .map(name => [name, db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all()]));
+  const before = unchanged();
+  const transitionBefore = store.getModeTransition({ runId });
+  const endingsBefore = store.listRunEndings(['a', 'cold']);
+  now++;
+  const { resumedGroups, ...transition } = store.setModeTransitionPhase(runId, 'cancelled');
+  assert.equal(resumedGroups, 1);
+  assert.deepEqual(transition, { ...transitionBefore, phase: 'cancelled', updated_at: now });
+  assert.deepEqual(store.listRunEndings(['a', 'cold']), endingsBefore.map(row =>
+    row.sessionGroup === 'a' ? { ...row, continuationPending: 1 } : row));
+  assert.deepEqual(unchanged(), before);
+  assert.equal(store.getModeTransition(), null);
+  assert.ok(store.beginModeTransition('multi', 'single').runId);
+});
+for (const obstacle of ['converting','cutover','first_migration','manual-fence','historical-cutoff','write-failure']) test(`cancel rejects ${obstacle} atomically`, t => {
   const { db, store } = fixture(t);
   const { runId } = store.beginModeTransition('multi','single', { kind:obstacle==='first_migration' ? 'first_migration':'switch' });
   store.setDrainFence('*');
   store.recordRunEnd('a',{runId:'a',reason:'upgrade'});
   if (['converting','cutover'].includes(obstacle)) db.prepare('UPDATE mode_transitions SET phase=?').run(obstacle);
-  if (obstacle === 'missing-fence') db.exec('DELETE FROM drain_fences');
   if (obstacle === 'manual-fence') db.exec("UPDATE drain_fences SET reason='manual_restart',run_id='manual'");
   if (obstacle === 'historical-cutoff') db.exec('UPDATE mode_transitions SET cutoff=9');
   if (obstacle === 'write-failure') db.exec("CREATE TRIGGER reject_cancel BEFORE UPDATE ON mode_transitions WHEN NEW.phase='cancelled' BEGIN SELECT RAISE(ABORT,'injected cancel failure'); END");

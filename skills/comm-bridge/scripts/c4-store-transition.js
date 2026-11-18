@@ -69,7 +69,7 @@ export function transitionFunctions({ read, write, snapshot, get, all, run, seco
       const row = required(c, runId);
       if (phase === 'cancelled') {
         const fence = get(c, "SELECT * FROM drain_fences WHERE session_group='*'");
-        if (row.phase !== 'gating' || row.kind !== 'switch' || row.cutoff !== null || !fence || fence.reason !== null || fence.run_id !== null) throw dataError('TRANSITION_PRECONDITION', 'Only a gating native switch with its transition fence can be cancelled');
+        if (row.phase !== 'gating' || row.kind !== 'switch' || row.cutoff !== null || (fence && (fence.reason !== null || fence.run_id !== null))) throw dataError('TRANSITION_PRECONDITION', 'Only a gating native switch without a conflicting global fence can be cancelled');
         const resumedGroups = get(c, `SELECT count(*) AS n FROM run_endings WHERE ended_at>=? AND continuation_pending=0 AND ${CONTINUATION_REQUIRED}`, row.created_at).n;
         run(c, `UPDATE run_endings SET continuation_pending=CASE WHEN ${CONTINUATION_REQUIRED} THEN 1 ELSE 0 END WHERE ended_at>=?`, row.created_at);
         run(c, "DELETE FROM drain_fences WHERE session_group='*'");
