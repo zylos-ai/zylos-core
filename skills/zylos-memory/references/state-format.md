@@ -79,7 +79,9 @@ measures actual state bytes and returns:
 - `mode:"rewrite", bytes:N` above 20480 bytes: no copy is made. Create a complete
   compact `state.md.tmp` through `edit_memory`, targeting <=20 KiB. Keep current
   focus, pending work and blockers; omit the completed/superseded narratives and
-  manually copied absorbed block. Commit restores the official remaining block.
+  manually copied absorbed block. For rules, lessons and pitfalls already saved
+  elsewhere, keep only a one-line pointer to their source file in state, not
+  their full text. Commit restores the official remaining block.
 - `mode:"edit", bytes:N` at or below budget: an exclusive byte-for-byte copy was
   made. Use restricted unique-fragment edits at `state.md.tmp` for changed text,
   including coverage, and leave any copied absorbed block untouched.

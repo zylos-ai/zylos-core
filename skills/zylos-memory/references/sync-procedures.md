@@ -308,7 +308,9 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
      was made. Use `edit_memory` to create a complete compact four-section
      `state.md.tmp` from the fully read state and reconciled facts. Target <=20 KiB
      by removing completed/superseded entries with the result lines already saved
-     in this checkpoint. Do not manually copy the absorbed block; commit restores
+     in this checkpoint. For rules, lessons and pitfalls already saved elsewhere,
+     keep only a one-line pointer to their source file in state, not their full
+     text. Do not manually copy the absorbed block; commit restores
      its remaining official lines.
    - `mode:"edit"`: the script copied the state byte for byte into this token's
      temporary file. Use `edit_memory` unique-fragment replacements at
@@ -522,7 +524,9 @@ state, commit, and failure sequence, with these differences:
   per-item checkpoint result lines as Group Sync. For global Sync, record
   completed/superseded results in project pages yourself through the required
   shared edits before checkpoint; do not hand them off to Origin Sync, which
-  does not run in single mode. Use `state.md.tmp`; the tool selects this scope's token-named temporary file. Preserve absorbed
+  does not run in single mode. During a full rewrite, rules, lessons and pitfalls
+  already saved elsewhere get only a one-line pointer to their source file in
+  state, not their full text. Use `state.md.tmp`; the tool selects this scope's token-named temporary file. Preserve absorbed
   items by supplying only proven followedUpIds to commit, as in Group Sync.
 - Release once and report.
 
