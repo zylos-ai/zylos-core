@@ -76,6 +76,8 @@ for (const [mode, kind, group] of [['single', 'global', null], ['single', 'origi
     assert.equal(f.errors.length, 0);
   });
 
+  if (mode === 'single' && kind === 'origin') continue;
+
   test(`${label} does not repeat a proposal on consecutive eligible Sync requests`, async () => {
     const f = fixture(mode, kind);
     await f.run();

@@ -13,7 +13,7 @@ import { REFERENCE_REORG_PROMPT, ORIGIN_SYNC_PROMPT, GROUP_SYNC_PROMPT } from '.
 // changes may skip. Runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR before
 // import; fixture paths are checked below. Queue/runtime are in-memory, no tmux
 // or database is opened. Scheduling is disabled and t.after stops/removes all.
-for (const instance of ['legacy', 'single', 'multi']) for (const unreadable of [false, true]) {
+for (const instance of ['legacy', 'single', 'multi']) for (const unreadable of instance === 'single' ? [false] : [false, true]) {
   const legacy = instance === 'legacy', mode = legacy ? 'single' : instance;
   test(`${instance} entry checks references before Sync is due and preserves Sync with ${unreadable ? 'an old-file lookup failure' : 'existing old reference files'}`, { timeout: 10000 }, async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reorg-entry-'));

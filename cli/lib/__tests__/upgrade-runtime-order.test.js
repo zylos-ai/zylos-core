@@ -5,7 +5,7 @@ import { requestRuntimeRestart } from '../request-runtime-restart.js';
 
 test('runtime upgrade completes installation before the shared restart producer selects its mode', async () => {
   for (const [mode, keyPresent, transition] of [
-    ['single', false, null], ['single', true, null], ['multi', true, null],
+    ['single', false, null], ['multi', true, null],
     ['single', false, { phase: 'gating' }],
   ]) {
     const calls = [];

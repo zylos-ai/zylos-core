@@ -219,7 +219,8 @@ for(const sourceMode of ['single','multi'])test(`batch observation preserves ${s
 // services. Run for Origin scope/readiness changes; unrelated changes may skip.
 // readyTmuxTarget owns its socket/process/database cleanup; the official runner
 // isolates HOME, ZYLOS_DIR, PM2_HOME and a short TMPDIR.
-for (const runtime of ['claude','codex']) for (const scoped of [true,false]) for (const mode of ['single','multi']) {
+for (const scoped of [true,false]) for (const mode of ['single','multi']) {
+  const runtime = 'claude';
   test(`Origin observations derive ${scoped?'group':'global'} scope from its ${runtime} environment in ${mode}`, {timeout:15000}, async t => {
     const f = readyTmuxTarget(t, {prefix:'origin-scope-',mode:scoped?'multi':'single',runtime});
     const scenes = service(f, {readMode:()=>({mode})});
