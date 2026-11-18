@@ -172,11 +172,13 @@ test('start failure removes private exports and releases without consuming inbox
 test('inherited global coverage and no-content checkpoints allow summary and publication', async t => {
   for (const noContent of [false, true]) {
     const f = await fixture(t, 4);
+    f.db.prepare("UPDATE conversations SET status='failed' WHERE id=4").run();
     f.database.createCheckpoint('*', 1, 'single-session baseline');
     if (noContent) f.database.createCheckpoint(f.scope, 2, null, { noContent: true });
     const run = await startRun({ env: f.env }, f.deps);
     const saved = JSON.parse(fs.readFileSync(path.join(run.directory, 'run.json')));
     assert.equal(saved.receipt.after, noContent ? 2 : 1);
+    assert.equal(run.end, 3, 'Checkpoint stops at last exported row, before the failed frontier row');
     const settings = await draft(f, run);
     assert.equal((await finishRun(settings, { followedUpIds: [] }, f.deps)).committed, true);
     assert.equal(f.database.getUnsummarizedRange(f.scope).count, 0);
