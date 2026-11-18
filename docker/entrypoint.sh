@@ -186,9 +186,9 @@ if [ "${ZYLOS_RUNTIME}" = "codex" ]; then
   # Kill any stale Codex session
   zylos_tmux kill-session -t codex-main || true
 
-  CODEX_ARGS=""
+  CODEX_ARGS="-c tools.experimental_request_user_input.enabled=false"
   if [ "${CODEX_BYPASS_PERMISSIONS:-true}" = "true" ]; then
-    CODEX_ARGS="--dangerously-bypass-approvals-and-sandbox"
+    CODEX_ARGS="${CODEX_ARGS} --dangerously-bypass-approvals-and-sandbox"
   fi
 
   zylos_tmux new-session -d -s codex-main -x 220 -y 50 \
