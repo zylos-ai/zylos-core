@@ -74,7 +74,7 @@ Query live data, never memory/state: `zylos --version` (core), `zylos list` (com
 
 ## Runtime Switching
 
-For a requested runtime switch, confirm via C4 first, warmly emphasizing preserved memory/context; run `zylos runtime <target>`, then send a one-line transition notice. Exit 1 with `AUTH_NOT_CONFIRMED`: follow `~/zylos/.claude/skills/component-management/references/runtime-switch.md`.
+For a requested runtime switch, confirm via C4 first, warmly emphasizing preserved memory/context; run `zylos runtime <target>`, then send a one-line transition notice. Exit 1 with `AUTH_FAILED` or `AUTH_NOT_CONFIRMED`: follow `~/zylos/.claude/skills/component-management/references/runtime-switch.md`.
 
 ## Memory System
 

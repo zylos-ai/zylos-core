@@ -42,7 +42,7 @@ test('runtime prechecks are ordered and stop before persistence', async () => {
   assert.deepEqual(invalid.calls, []);
 });
 
-test('review JSON: full-path credentials and failed precheck emit exactly the final envelope', async () => {
+test('JSON credentials and failed precheck emit exactly the final envelope', async () => {
   const original = console.log, previousExit = process.exitCode;
   const lines = []; console.log = text => lines.push(text);
   try {
@@ -66,37 +66,44 @@ test('auth failure is rejected by the runtime command with exit code 1', async (
   console.log = () => {};
   try {
     const result = await runtimeCommand(['codex', '--json'], { execute: (_runtime, flags) => f.run(flags) });
-    assert.equal(result.ok, false); assert.equal(result.error.code, 'AUTH_NOT_CONFIRMED');
+    assert.equal(result.ok, false); assert.equal(result.error.code, 'AUTH_FAILED');
     assert.equal(result.error.authStatus, 'failure'); assert.equal(process.exitCode, 1);
     assert.deepEqual(result.error.persisted, []); assert.deepEqual(f.calls, ['read', 'exists', 'hooks']);
   } finally { console.log = original; process.exitCode = previousExit; }
 });
 
-test('AGY runtime switch distinguishes rejected credentials from uncertain authentication', async () => {
-  for (const [status,code] of [['failure','AUTH_FAILED'], ['uncertain','AUTH_NOT_CONFIRMED'], ['throws','AUTH_NOT_CONFIRMED']]) {
-    const result=await executeRuntimeSwitch('agy', ['--save-apikey','fixture-key'], {
-      read:()=>({state:'ok',config:{runtime:'claude',session_mode:'multi'}}),
-      adapter:()=>({checkAuth:async()=>{if(status==='throws') throw new Error('private probe error'); return {status};}}),
-      exists:()=>true, credentials:()=>true, hooksReady:()=>({ready:true}),
-      write:()=>{assert.fail('must not save runtime after rejected or uncertain auth');},
-      observe:()=>{assert.fail('must not observe sessions after failed precheck');},
-    });
-    assert.equal(result.ok,false);assert.equal(result.error.code,code);
-    assert.equal(result.error.authStatus,status==='failure'?'failure':'uncertain');
-    assert.deepEqual(result.error.persisted,['apiKey']);
-  }
-});
-test('Claude and Codex runtime switches retain the existing auth failure contract', async () => {
-  for (const target of ['claude','codex']) {
-    const result=await executeRuntimeSwitch(target, [], {
-      read:()=>({state:'ok',config:{runtime:target==='claude'?'codex':'claude'}}),
-      adapter:()=>({checkAuth:async()=>({status:'failure'})}),exists:()=>true,hooksReady:()=>({ready:true}),
-      write:()=>{assert.fail('must not save rejected runtime');},
-    });
-    assert.equal(result.error.code,'AUTH_NOT_CONFIRMED');assert.equal(result.error.authStatus,'failure');
-    assert.deepEqual(result.error.persisted,[]);
-  }
-});
+for (const target of ['claude', 'codex', 'agy']) {
+  test(`${target} runtime switch distinguishes rejected credentials from uncertain authentication`, async () => {
+    const messages = [];
+    for (const [status, code] of [['failure', 'AUTH_FAILED'], ['uncertain', 'AUTH_NOT_CONFIRMED'], ['throws', 'AUTH_NOT_CONFIRMED']]) {
+      const result = await executeRuntimeSwitch(target, ['--save-apikey', 'fixture-key'], {
+        read: () => ({ state: 'ok', config: { runtime: target === 'claude' ? 'codex' : 'claude', session_mode: 'multi' } }),
+        adapter: () => ({ checkAuth: async () => {
+          if (status === 'throws') throw new Error('private probe error');
+          return { status };
+        } }),
+        exists: () => true, credentials: () => true, hooksReady: () => ({ ready: true }),
+        write: () => { assert.fail('must not save runtime after rejected or uncertain auth'); },
+        observe: () => { assert.fail('must not observe sessions after failed precheck'); },
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.error.code, code);
+      assert.equal(result.error.authStatus, status === 'failure' ? 'failure' : 'uncertain');
+      assert.deepEqual(result.error.persisted, ['apiKey']);
+      messages.push(result.error.message);
+      if (status === 'failure') {
+        assert.match(result.error.message, /credentials rejected or not logged in/);
+        assert.ok(result.error.message.includes(target === 'agy'
+          ? 'zylos runtime agy --save-apikey <key>' : `zylos auth ${target}`));
+      } else {
+        assert.match(result.error.message, /check network\/proxy connectivity, then retry/);
+        assert.doesNotMatch(result.error.message, /replace credentials|zylos auth|--save-apikey/);
+      }
+    }
+    assert.notEqual(messages[0], messages[1]);
+    assert.equal(messages[1], messages[2]);
+  });
+}
 
 test('unchanged skips install/hooks/auth/write; no-validate only skips auth', async () => {
   const same = fixture({ read: () => ({ state: 'ok', config: { runtime: 'codex' } }) });
