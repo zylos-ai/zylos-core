@@ -20,7 +20,7 @@ export async function provisionDashboardAuth(zylosDir, { reset = false } = {}) {
       }
       if (reset || !config.auth?.password) {
         password = crypto.randomBytes(16).toString('hex');
-        config.auth = { enabled: true, ...config.auth, ...(reset ? { enabled: true } : {}), password: hashPassword(password) };
+        config.auth = { ...config.auth, password: hashPassword(password) };
       }
     });
   }

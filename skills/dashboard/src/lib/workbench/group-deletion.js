@@ -37,8 +37,8 @@ export function isGroupDeletionRoute(pathname) {
     /^\/api\/chat\/drafts\/[^/]+(?:\/deletion)?$/.test(pathname);
 }
 
-export function canDeleteConversations(req, auth, config) {
-  const context = auth.enabled && config.auth?.password ? auth.resolveAuthContext(req) : null;
+export function canDeleteConversations(req, auth) {
+  const context = auth.resolveAuthContext(req);
   return context?.kind === 'cookie' && context.scope === 'admin';
 }
 
@@ -54,7 +54,7 @@ export function createGroupDeletionRoutes({ auth, config, conversations,
     if (req.method !== (preview ? 'GET' : 'DELETE')) {
       sendJson(res, 404, { error: 'not_found' }); return true;
     }
-    if (!canDeleteConversations(req, auth, config)) {
+    if (!canDeleteConversations(req, auth)) {
       sendJson(res, 403, { error: 'local_cookie_required' }); return true;
     }
     if (!preview && !isSameOriginRequest(req)) {

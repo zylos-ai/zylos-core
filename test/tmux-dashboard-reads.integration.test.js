@@ -9,6 +9,7 @@ import Database from '../skills/comm-bridge/scripts/sqlite-driver.js';
 import { guardDatabase } from '../skills/comm-bridge/scripts/sqlite-schema.js';
 import * as schema from '../skills/comm-bridge/scripts/c4-schema.js';
 import { tmuxNameForGroup } from '../cli/lib/session-group-paths.js';
+import { signIn } from '../skills/dashboard/__tests__/helpers/dashboard-sign-in.js';
 
 const repo = fileURLToPath(new URL('../', import.meta.url));
 const helper = fileURLToPath(new URL('./helpers/tmux-dashboard-reads-server.js', import.meta.url));
@@ -70,7 +71,7 @@ test('real Dashboard observes three groups for 10s without if-shell; real delive
       fs.writeFileSync(path.join(paths.zylos, '.env'), 'TZ=Asia/Singapore\n');
       fs.mkdirSync(path.join(paths.zylos, '.claude/skills'), { recursive: true });
       fs.symlinkSync(path.join(repo, 'skills/comm-bridge'), path.join(paths.zylos, '.claude/skills/comm-bridge'));
-      fs.writeFileSync(path.join(paths.zylos, 'components/dashboard/config.json'), JSON.stringify({ host: '127.0.0.1', auth: { enabled: false }, observer: { enabled: false } }));
+      fs.writeFileSync(path.join(paths.zylos, 'components/dashboard/config.json'), JSON.stringify({ host: '127.0.0.1', auth: { password: 'tmux-reads-password' }, observer: { enabled: false } }));
       const c4 = sandbox.openDatabase(paths.c4Db, filename => new Database(filename));
       guardDatabase(c4, schema);
       const groups = ['origin', 'dashboard:alpha', 'dashboard:beta'];
@@ -108,6 +109,7 @@ test('real Dashboard observes three groups for 10s without if-shell; real delive
       child.stderr.on('data', data => { stderr = (stderr + data).slice(-32768); });
       const base = await until(() => output.match(/DASHBOARD_URL=(http:\/\/127\.0\.0\.1:\d+)/)?.[1]
         ?? (child.exitCode !== null ? `EXIT ${child.exitCode} ${stderr}` : ''), value => value.startsWith('http://'));
+      const cookie = await signIn(base, 'tmux-reads-password');
       const { chromium } = await import(pathToFileURL(process.env.ZYLOS_CHAT_BROWSER_MODULE));
       // Keep Chromium inside the official runner's inherited data-size limit.
       const browser = await chromium.launch({ executablePath: process.env.ZYLOS_CHAT_BROWSER_BIN, env,
@@ -116,7 +118,9 @@ test('real Dashboard observes three groups for 10s without if-shell; real delive
           '--disable-gpu', '--no-zygote', '--single-process',
           '--js-flags=--max-old-space-size=256'] });
       sandbox.addCleanup(() => browser.close());
-      const page = await browser.newPage({ viewport: { width: 1400, height: 950 }, locale: 'en-GB' });
+      const context = await browser.newContext({ viewport: { width: 1400, height: 950 }, locale: 'en-GB' });
+      await context.addCookies([{ name: '__Secure-zylos_dashboard_session', value: cookie.split('=')[1], domain: '127.0.0.1', path: '/', secure: true }]);
+      const page = await context.newPage();
       const pageErrors = [];
       page.on('pageerror', error => { if (pageErrors.length < 10) pageErrors.push(error.message); });
       page.on('console', message => { if (message.type() === 'error' && pageErrors.length < 10) pageErrors.push(message.text()); });
@@ -131,7 +135,7 @@ test('real Dashboard observes three groups for 10s without if-shell; real delive
       catch (error) { throw new Error(`${error.message}; page errors: ${JSON.stringify(pageErrors)}; server: ${stderr}; body: ${(await page.locator('body').innerText()).slice(0, 3000)}`); }
       const readStart = Date.now();
       const request = async route => {
-        const response = await fetch(base + route);
+        const response = await fetch(base + route, { headers: { cookie } });
         assert.equal(response.status, 200, `${route}: ${stderr}`);
         return response.json();
       };

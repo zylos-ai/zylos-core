@@ -64,9 +64,6 @@ test('chat stream uses actual cookie and API chat admission before any snapshot'
       res.end();
     }
   }
-  f.config.auth.enabled = false;
-  const before = f.reads(), { res } = f.request('cookie');
-  assert.equal(res.status, 403); assert.equal(f.reads(), before);
 });
 
 test('ordinary streams never opt in and chat events cannot be globally broadcast', t => {

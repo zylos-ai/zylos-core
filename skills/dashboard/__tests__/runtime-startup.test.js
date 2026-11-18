@@ -41,7 +41,7 @@ test('Codex Dashboard startup wires both usage collectors without a legacy statu
   fs.mkdirSync(path.join(root, '.zylos'));
   fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ runtime: 'codex' }));
   fs.mkdirSync(path.join(root, 'components/dashboard'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'components/dashboard/config.json'), JSON.stringify({ auth: { enabled: false } }));
+  fs.writeFileSync(path.join(root, 'components/dashboard/config.json'), JSON.stringify({ auth: { password: 'scrypt:fixture' } }));
   t.mock.method(VersionChecker.prototype, 'start', () => {});
   t.mock.method(EventLoopMonitor.prototype, 'start', function () { return this; });
   t.mock.method(globalThis, 'setInterval', (...args) => {

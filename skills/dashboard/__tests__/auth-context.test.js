@@ -27,7 +27,7 @@ test('canonical auth context uses server session hash and stable API key id', t 
     cleanupSessions() {},
     cleanupExpiredApiSessions() {},
   };
-  const gate = new AuthGate({ auth: { enabled: true, password: 'scrypt:configured' } }, store);
+  const gate = new AuthGate({ auth: { password: 'scrypt:configured' } }, store);
   t.after(() => clearInterval(gate._cleanupTimer));
 
   const cookieReq = { headers: { cookie: `__Secure-zylos_dashboard_session=${cookieToken}` } };
@@ -47,14 +47,9 @@ test('canonical auth context uses server session hash and stable API key id', t 
   assert.deepEqual(validateApiSession(apiToken), apiReq._authContext);
 });
 
-test('auth-disabled mode has no canonical Observer principal', () => {
-  const gate = new AuthGate({ auth: { enabled: false, password: null } }, null);
-  assert.equal(gate.resolveAuthContext({ headers: {} }), null);
-});
-
 test('missing password rejects existing cookie and API principals and their revalidation', t => {
   const now = Date.now(), token = `zylos_st_${'c'.repeat(64)}`;
-  const config = { auth: { enabled: true, password: 'configured' } };
+  const config = { auth: { password: 'configured' } };
   const gate = new AuthGate(config, {
     getSession: () => ({ created_at: now, last_activity_at: now, remember: 0 }),
     touchSession() {},
@@ -66,7 +61,6 @@ test('missing password rejects existing cookie and API principals and their reva
     const context = gate.resolveAuthContext({ headers });
     assert.ok(context);
     config.auth.password = null;
-    assert.equal(gate.enabled, true);
     assert.equal(gate.isAuthenticated({ headers }), false);
     assert.equal(gate.resolveAuthContext({ headers }), null);
     assert.equal(gate.revalidateAuthContext(context), null);
@@ -81,7 +75,7 @@ test('proxied writes and sensitive reads require admin while status reads accept
   const { workbenchWriteRoutes } = await import('./fixtures/workbench-write-routes.js');
   const now = Date.now(), token = `zylos_st_${'b'.repeat(64)}`;
   let scope = 'read';
-  const gate = new AuthGate({ auth: { enabled: true, password: 'scrypt:fixture' } }, {
+  const gate = new AuthGate({ auth: { password: 'scrypt:fixture' } }, {
     getApiSession: hash => hash === sha256(token) ? { api_key_id: 7, scope, expires_at: now + 60_000, key_revoked_at: null } : null,
     cleanupSessions() {}, cleanupExpiredApiSessions() {},
   });
@@ -113,7 +107,7 @@ test('proxied writes and sensitive reads require admin while status reads accept
 test('readonly cookie resolution and revalidation do not touch or delete session rows', t => {
   const token = 'readonly-session', now = Date.now();
   const row = { created_at: now, last_activity_at: now }; let touched = 0, deleted = 0;
-  const gate = new AuthGate({ auth: { enabled: true, password: 'scrypt:configured' } }, {
+  const gate = new AuthGate({ auth: { password: 'scrypt:configured' } }, {
     getSession: hash => hash === sha256(token) ? row : null,
     touchSession() { touched++; }, deleteSession() { deleted++; },
     cleanupSessions() {}, cleanupExpiredApiSessions() {},

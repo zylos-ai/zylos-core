@@ -10,6 +10,9 @@ import { StateEngine } from '../../src/lib/state-engine.js';
 import { CoreState } from '../../src/lib/core-state.js';
 import { EventLoopMonitor } from '../../src/lib/event-loop-monitor.js';
 import { VersionChecker } from '../../src/lib/version-checker.js';
+import { signIn } from '../helpers/dashboard-sign-in.js';
+
+const LOGIN_PASSWORD = 'usage-fixture-password';
 
 // The runner must isolate HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/tmux before imports.
 // Only this fixture's random loopback port is opened. CLI and Core callbacks
@@ -55,7 +58,7 @@ export async function usageServer(t, configBody = {}, { snapshot } = {}) {
   fs.mkdirSync(path.join(dir, '.zylos'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.zylos/config.json'), JSON.stringify({ runtime: 'claude' }));
   fs.mkdirSync(path.join(dir, 'components/dashboard'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'components/dashboard/config.json'), JSON.stringify({ auth: { enabled: false }, ...configBody }));
+  fs.writeFileSync(path.join(dir, 'components/dashboard/config.json'), JSON.stringify({ auth: { password: LOGIN_PASSWORD }, ...configBody }));
   process.env.ZYLOS_DIR = dir;
   const runnerRoot = path.dirname(process.env.HOME);
   assert.match(path.basename(runnerRoot), /^zylos-tests-/);
@@ -75,5 +78,8 @@ export async function usageServer(t, configBody = {}, { snapshot } = {}) {
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   assert.equal(server.address().address, '127.0.0.1');
   assert.ok(store.db.name.startsWith(dir + path.sep));
-  return { store, reader, core, config: engine._config, origin: `http://127.0.0.1:${server.address().port}` };
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  // Callers that supply their own auth block test the signed-out path; the rest read as a signed-in owner.
+  const headers = configBody.auth ? {} : { cookie: await signIn(origin, LOGIN_PASSWORD) };
+  return { store, reader, core, config: engine._config, origin, headers };
 }

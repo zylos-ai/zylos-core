@@ -1716,22 +1716,25 @@ test('fleet timezone writes retain local admin and cookie origin proof', async (
   }
 });
 
-// Auth-disabled hubs have no local principal. Keep object actions usable while
-// retaining the explicit write allowlist and the cookie same-origin boundary.
-test('fleet object writes support auth-disabled hubs without widening admission', async () => {
+// Every hub signs in, so a write without a local principal is refused. Admin principals
+// keep the explicit write allowlist and the cookie same-origin boundary.
+test('fleet object writes need a local admin principal and keep the write allowlist', async () => {
   const agent = { name: 'Remote', base_url: 'https://remote.invalid' };
   let calls = 0;
-  const proxy = new FleetProxy({ config: { fleet: { agents: [agent] } }, authGate: { enabled: false },
+  const proxy = new FleetProxy({ config: { fleet: { agents: [agent] } },
     poller: { getSessionToken: async () => 'remote-fixture' },
     fetch: async () => { calls++; return new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } }); },
   });
+  const admin = { scope: 'admin', kind: 'api', principalId: 'local-fixture' };
   for (const [method, suffix, context, status] of [
-    ['PUT', '/api/instance/defaults', undefined, 200],
-    ['POST', '/api/instance/actions/switch-mode', undefined, 200],
-    ['PUT', '/api/groups/dashboard%3Aa/config', undefined, 200],
-    ['POST', '/api/groups/dashboard%3Aa/actions/interrupt', undefined, 200],
-    ['POST', '/api/groups/dashboard%3Aa/actions/unregistered', undefined, 403],
-    ['DELETE', '/api/groups/dashboard%3Aa', undefined, 403],
+    ['PUT', '/api/instance/defaults', undefined, 403],
+    ['POST', '/api/groups/dashboard%3Aa/actions/interrupt', undefined, 403],
+    ['PUT', '/api/instance/defaults', admin, 200],
+    ['POST', '/api/instance/actions/switch-mode', admin, 200],
+    ['PUT', '/api/groups/dashboard%3Aa/config', admin, 200],
+    ['POST', '/api/groups/dashboard%3Aa/actions/interrupt', admin, 200],
+    ['POST', '/api/groups/dashboard%3Aa/actions/unregistered', admin, 403],
+    ['DELETE', '/api/groups/dashboard%3Aa', admin, 403],
     ['POST', '/api/groups/dashboard%3Aa/actions/interrupt', { scope: 'admin', kind: 'cookie' }, 403],
   ]) {
     const req = Readable.from([Buffer.from('{"confirmed":true}')]);
