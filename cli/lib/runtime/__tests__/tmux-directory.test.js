@@ -111,10 +111,7 @@ test('missing directory rejects every shared client before executing any binary'
   const exec = () => { calls++; throw Error('must not execute'); };
   const sender = createTmuxSender({ exec });
   const sync = [
-    () => helpers.tmuxHasSession('test'), () => helpers.tmuxGetPanePid('test'),
-    () => helpers.tmuxKillSession('test'), () => helpers.tmuxCapturePaneText('test'),
-    () => helpers.tmuxPasteBuffer('test', '/unused', 'buffer'), () => helpers.tmuxDeleteBuffer('buffer'),
-    () => helpers.tmuxNewSession(['new-session', '-d']), () => helpers.tmuxSendKeys('test', 'Enter'),
+    () => helpers.tmuxCapturePaneText('test'),
     () => sender.getCapability(), () => sender.sendKeys('test', ['Enter']),
     () => isManagedClaudeProcess(123, { run: exec }),
     () => targetArgs({}, 'list-sessions'), () => outerArgs({ outerSocket: '/unused' }, 'kill-server'),

@@ -6,100 +6,10 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { sendTmuxKeys } from '../tmux-send-keys.js';
-import { tmuxClientArgs, tmuxClientEnvironment, isTmuxDirectoryError } from './tmux-client-args.js';
-import { TMUX_COMMAND as C, TMUX_FORMAT as F, parseLegacyPanePid } from './tmux-protocol.js';
+import { tmuxClientArgs, isTmuxDirectoryError } from './tmux-client-args.js';
+import { TMUX_COMMAND as C } from './tmux-protocol.js';
 
 const CMD_TIMEOUT = 3000;
-const LAUNCH_TIMEOUT = 10_000;
-
-/**
- * Check whether a tmux session exists.
- * @param {string} session
- * @returns {boolean}
- */
-export function tmuxHasSession(session) {
-  try {
-    execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), C.hasSession, '-t', session], {
-      timeout: CMD_TIMEOUT,
-      stdio: 'ignore',
-    });
-    return true;
-  } catch (err) {
-    if (isTmuxDirectoryError(err)) throw err;
-    if (isTimeoutError(err)) _debugTimeout('tmux has-session', err);
-    return false;
-  }
-}
-
-/**
- * Get the pane PID for a tmux session.
- * @param {string} session
- * @returns {number} PID or 0
- */
-export function tmuxGetPanePid(session) {
-  try {
-    const out = execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), C.listPanes, '-t', session, '-F', F.panePid], {
-      encoding: 'utf8',
-      timeout: CMD_TIMEOUT,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    return parseLegacyPanePid(out);
-  } catch (err) {
-    if (isTmuxDirectoryError(err)) throw err;
-    if (isTimeoutError(err)) _debugTimeout('tmux list-panes', err);
-    return 0;
-  }
-}
-
-/**
- * Kill a tmux session.
- * @param {string} session
- */
-export function tmuxKillSession(session) {
-  try {
-    execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), C.killSession, '-t', session], {
-      timeout: CMD_TIMEOUT,
-      stdio: 'ignore',
-    });
-  } catch (error) { if (isTmuxDirectoryError(error)) throw error; }
-}
-
-/**
- * Send text to a tmux session via the buffer-paste technique.
- * Handles special characters safely.
- *
- * @param {string} session
- * @param {string} tmpFile - Path to a temp file containing the text
- * @param {string} bufferName - Unique tmux buffer name
- */
-export function tmuxPasteBuffer(session, tmpFile, bufferName) {
-  execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), C.loadBuffer, '-b', bufferName, tmpFile], {
-    timeout: CMD_TIMEOUT,
-    stdio: 'ignore',
-  });
-  execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), C.pasteBuffer, '-b', bufferName, '-t', session], {
-    timeout: CMD_TIMEOUT,
-    stdio: 'ignore',
-  });
-  sendTmuxKeys(session, ['Enter'], {
-    timeout: CMD_TIMEOUT,
-    stdio: 'ignore',
-  });
-}
-
-/**
- * Delete a tmux buffer (best-effort).
- * @param {string} bufferName
- */
-export function tmuxDeleteBuffer(bufferName) {
-  try {
-    execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), C.deleteBuffer, '-b', bufferName], {
-      timeout: CMD_TIMEOUT,
-      stdio: 'ignore',
-    });
-  } catch (error) { if (isTmuxDirectoryError(error)) throw error; }
-}
 
 /**
  * Capture tmux pane content.
@@ -118,26 +28,6 @@ export function tmuxCapturePaneText(session) {
     if (isTimeoutError(err)) _debugTimeout('tmux capture-pane', err);
     return null;
   }
-}
-
-/**
- * Send keys to a tmux session.
- * @param {string} session
- * @param {...string} keys
- */
-export function tmuxSendKeys(session, ...keys) {
-  sendTmuxKeys(session, keys, {
-    timeout: CMD_TIMEOUT,
-    stdio: 'ignore',
-  });
-}
-
-/**
- * Create a new tmux session.
- * @param {string[]} args - Full argument list for `tmux new-session`
- */
-export function tmuxNewSession(args) {
-  execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), ...args], { timeout: LAUNCH_TIMEOUT, env: tmuxClientEnvironment() });
 }
 
 /**
