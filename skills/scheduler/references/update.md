@@ -25,9 +25,11 @@ All `add` timing options (`--in`, `--at`, `--cron`, `--every`) plus:
 
 For recurring and interval tasks, `--at` / `--in` changes only `next_run_at`, keeping the type, cron expression, interval and saved schedule timezone. The requested time is parsed in the current configured TZ. After that occurrence is delivered, cron returns to the next matching time in its saved zone; intervals advance from delivery time. `--cron` / `--every` still replaces the periodic schedule/type and syncs the timezone to the current configured TZ. One-time tasks keep their existing timing and timezone behavior.
 
+Timing updates (`--at`, `--in`, `--cron`, `--every`) to a running task of any type are rejected with `TASK_WRONG_STATUS` (including the current `status`) and nothing is written, because delivery accounting would replace the new time. Wait for delivery to finish (the task returns to `pending`, or for a one-time task `completed`/`failed`) before retrying. A timing update is rejected the same way, with the new `status`, if the task's status changes while the update is being prepared (a delivery is claimed or finishes); retry it. Other edits, such as `--name` or `--prompt`, are still accepted while running.
+
 ## Re-enable a failed or completed one-time task
 
-Give a failed or completed one-time task a new time (`--in`, `--at`, `--cron` or `--every`) that is in the future. The task returns to `pending`, its failure details are cleared, and the daemon dispatches it at the new time. A time that is not in the future is rejected with `RESCHEDULE_NOT_FUTURE` and nothing is written. An update without a new time leaves its status unchanged. Timing updates to a running one-time task are rejected with `TASK_WRONG_STATUS` (including the current `status`) and nothing is written; wait for delivery to finish before retrying.
+Give a failed or completed one-time task a new time (`--in`, `--at`, `--cron` or `--every`) that is in the future. The task returns to `pending`, its failure details are cleared, and the daemon dispatches it at the new time. A time that is not in the future is rejected with `RESCHEDULE_NOT_FUTURE` and nothing is written. An update without a new time leaves its status unchanged. Timing updates to a running task are rejected as described above.
 
 ## Clear the execution group
 
@@ -40,7 +42,7 @@ To send a task to Origin, add `--clear-reply` as well. The task then has no repl
 
 ## JSON results
 
-With `--json`, success prints `{"ok":true,"data":{"task":{...},"updatedFields":[...],"reenabled":false}}`. `nextRunOnly: true` is included only when a recurring/interval task receives a next-run-only `--at` / `--in` override; it explicitly means the cadence and saved zone were preserved. `task.next_run_at` is the requested next time; an update does not settle an in-flight delivery or change its history. Every failure prints `{"ok":false,"error":{"code":"...","message":"..."}}` and exits 1.
+With `--json`, success prints `{"ok":true,"data":{"task":{...},"updatedFields":[...],"reenabled":false}}`. `nextRunOnly: true` is included only when a recurring/interval task receives a next-run-only `--at` / `--in` override; it explicitly means the cadence and saved zone were preserved. `task.next_run_at` is the requested next time. An update never settles an in-flight delivery or changes its history. Every failure prints `{"ok":false,"error":{"code":"...","message":"..."}}` and exits 1.
 
 Use `--json` whenever you need to know the outcome. Without it, some validation errors still exit 0, so the exit code alone does not prove the update was applied.
 

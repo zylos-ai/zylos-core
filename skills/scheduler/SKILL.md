@@ -29,7 +29,7 @@ Write commands (`add`, `update`, `done`, `remove`, `pause`, `resume`) and `histo
 
 To re-enable a failed or completed one-time task or clear a task's execution group, use `update`; see `references/update.md`.
 
-For recurring and interval tasks, `update --at` or `--in` changes only the next run: the type, cron/interval and saved schedule timezone stay unchanged. After that occurrence is delivered, cron resumes at its next matching time; an interval resumes from delivery time. The requested time is parsed in the current configured TZ. Use `--cron` or `--every` to replace the cadence or periodic type. A running one-time task rejects timing updates until delivery finishes. Text output explicitly says only the next run changed; JSON includes `nextRunOnly: true`.
+For recurring and interval tasks, `update --at` or `--in` changes only the next run: the type, cron/interval and saved schedule timezone stay unchanged. After that occurrence is delivered, cron resumes at its next matching time; an interval resumes from delivery time. The requested time is parsed in the current configured TZ. Use `--cron` or `--every` to replace the cadence or periodic type. A running task of any type rejects timing updates (`--at`, `--in`, `--cron`, `--every`) with `TASK_WRONG_STATUS` until delivery finishes; retry after delivery finishes (the task is `pending` again, or `completed`/`failed` for a one-time task). Text output explicitly says only the next run changed; JSON includes `nextRunOnly: true`.
 
 `done` is a compatibility no-op for old prompts: it exits 0 and returns `alreadyCompleted: true` with `--json`, without changing the task or history. Delivery messages no longer ask the agent to call it.
 

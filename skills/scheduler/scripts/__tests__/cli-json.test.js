@@ -80,9 +80,94 @@ test('updating a delivery in flight does not settle its task or started history'
   f.db.prepare("UPDATE tasks SET status='running' WHERE id=?").run(task.id);
   f.db.prepare("INSERT INTO task_history(task_id,executed_at,status) VALUES(?,1,'started')").run(task.id);
   const history=f.history(task.id);
-  const result=f.success(['update',task.id,'--in','1 hour']);
+  const result=f.success(['update',task.id,'--prompt','edited while delivering']);
   assert.equal(result.task.status,'running');assert.equal(result.task.type,'recurring');
+  assert.equal(result.task.prompt,'edited while delivering');assert.equal(result.task.next_run_at,task.next_run_at);
   assert.equal('executionFinished' in result,false);assert.deepEqual(f.history(task.id),history);
+});
+
+// Real CLI against a receipt held open by the real dispatchTask; private fixture as below.
+for (const [type, create, cadence] of [
+  ['recurring', ['--cron', '0 9 * * *'], 9 * 3600], ['interval', ['--every', '30 minutes'], 1800],
+]) {
+  test(`running ${type} timing edits reject without writes and delivery keeps its cadence`, t => {
+    const initial = Date.parse('2030-01-01T00:00:00Z');
+    t.mock.timers.enable({ apis: ['Date'], now: initial });
+    const f = fixture(t, { time: initial });
+    const task = f.add(`running ${type}`, create);
+    let receipts = 0;
+    const result = dispatchTask(f.db, f.row(task.id), { getRecentConversations: () => [], sendViaC4: () => {
+      receipts++;
+      const before = f.row(task.id), history = f.history(task.id);
+      assert.equal(before.status, 'running');
+      for (const timing of [['--in', '30 minutes'], ['--at', '2030-01-01 05:00'],
+        ['--cron', '0 3 * * *'], ['--every', '7 hours']]) {
+        const error = f.fail(['update', task.id, ...timing, '--name', 'must not write'], 'TASK_WRONG_STATUS',
+          timing[0] === '--in' ? /Error: Wait for delivery to finish/ : undefined, 1);
+        assert.equal(error.status, 'running');
+        assert.deepEqual(f.row(task.id), before);
+        assert.deepEqual(f.history(task.id), history);
+      }
+      const renamed = f.success(['update', task.id, '--name', 'still delivering']);
+      assert.equal(renamed.task.status, 'running');
+      assert.equal(renamed.task.next_run_at, before.next_run_at);
+      return { category: 'success' };
+    } });
+    assert.equal(receipts, 1);
+    assert.equal(result.category, 'success');
+    const delivered = f.row(task.id);
+    assert.equal(delivered.status, 'pending');
+    assert.equal(delivered.name, 'still delivering');
+    assert.equal(delivered.next_run_at, initial / 1000 + cadence);
+    for (const key of ['type', 'cron_expression', 'interval_seconds', 'timezone']) assert.equal(delivered[key], task[key]);
+    assert.equal(f.history(task.id).at(-1).status, 'success');
+  });
+
+  test(`${type} next-run edits outside delivery keep their status and cadence`, t => {
+    const initial = Date.parse('2030-01-01T00:00:00Z');
+    const f = fixture(t, { time: initial });
+    for (const status of ['pending', 'paused']) for (const timing of [['--at', '2030-01-01 01:00'], ['--in', '1 hour']]) {
+      const task = f.add(`${status} ${type}`, create);
+      f.db.prepare('UPDATE tasks SET status=? WHERE id=?').run(status, task.id);
+      const before = f.row(task.id);
+      const result = f.success(['update', task.id, ...timing]);
+      assert.equal(result.nextRunOnly, true);
+      assert.equal(result.reenabled, false);
+      assert.equal(result.task.status, status);
+      assert.equal(result.task.next_run_at, initial / 1000 + 3600);
+      for (const key of ['type', 'cron_expression', 'interval_seconds', 'timezone']) assert.equal(result.task[key], before[key]);
+      assert.deepEqual(result.task, f.row(task.id));
+    }
+  });
+}
+
+test('a delivery claimed or finished while an update is prepared rejects its timing edit without writes', t => {
+  const f = fixture(t);
+  const component = path.join(f.zylos, '.claude/skills/telegram');
+  fs.mkdirSync(path.join(component, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(component, 'package.json'), '{"type":"module"}');
+  fs.copyFileSync(fileURLToPath(new URL('./fixtures/claim-during-query.js', import.meta.url)),
+    path.join(component, 'scripts/session-group.js'));
+  const driver = new URL('../../../comm-bridge/scripts/sqlite-driver.js', import.meta.url).href;
+  const cases = [
+    { create: ['--cron', '0 9 * * *'], from: 'pending', to: 'running' },
+    { create: ['--every', '30 minutes'], from: 'pending', to: 'running' },
+    { create: [], from: 'pending', to: 'running' },
+    { create: [], from: 'running', to: 'completed' },
+    { create: [], from: 'running', to: 'failed' },
+    { create: [], from: 'pending', to: 'completed' },
+  ];
+  for (const { create, from, to } of cases) {
+    const task = f.add(`${from} to ${to} during update`, create);
+    f.db.prepare('UPDATE tasks SET status=? WHERE id=?').run(from, task.id);
+    fs.writeFileSync(path.join(component, 'claim.json'), JSON.stringify({ database: f.dbPath, taskId: task.id, driver, status: to }));
+    const before = f.row(task.id), history = f.history(task.id);
+    const error = f.fail(['update', task.id, '--in', '30 minutes', '--reply-channel', 'telegram',
+      '--reply-endpoint', 'chat-1'], 'TASK_WRONG_STATUS');
+    assert.equal(error.status, to);
+    assert.deepEqual(f.row(task.id), { ...before, status: to });
+    assert.deepEqual(f.history(task.id), history);
+  }
 });
 
 // These cases cover the real CLI/store boundary, including private-file failures.
