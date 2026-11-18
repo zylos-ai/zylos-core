@@ -25,6 +25,15 @@ API documentation also lists `none`; this catalog preserves Dashboard's existing
 Codex reasoning controls, which start at low. Provider/account access remains
 subject to the configured connection; listing a model does not grant access.
 
+GPT-6.2-Sol (`gpt-6.2-sol`) and GPT-6.2-Astra (`gpt-6.2-astra`) are listed first
+and expose low through ultra. Codex CLI 0.169.1 is the first release that ships
+them, with the same effort levels and no startup notice. Their default prices
+come from [OpenAI API pricing](https://platform.openai.com/docs/pricing) and the
+[GPT-6.2 announcement](https://openai.com/index/introducing-gpt-6-2-astra-sol/),
+checked 2026-11-18: standard and Fast (priority) rows, with the same long-context
+rule as the other GPT-6 rows. The Codex default model written by `zylos init`
+remains `gpt-6.1-sol`.
+
 Configured and running IDs absent from the catalog remain visible in the settings
 options with an empty effort list. A custom model can still be selected; changing
 its effort is rejected until its capabilities are explicitly catalogued. Pricing
