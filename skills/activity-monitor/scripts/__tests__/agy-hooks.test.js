@@ -32,10 +32,29 @@ test('SessionStart returns JSON injection and consumes only the run clear marker
   let source;
   const result=await handleAgyHook({conversationId:'session',lastUserInput:'System startup trigger, not a user message. Continue with startup context.'}, {env,eventName:'SessionStart',activity:()=>null,health:()=>null,
     instructions:()=> 'full tail rules\n',orchestrate:async (payload,{writeSync})=>{
-      source=payload.source;const buffer=Buffer.from('startup marker');writeSync(1,buffer,0,buffer.length);
+      source=payload.source;const buffer=Buffer.from('RECENT CONVERSATIONS\nOUT: already answered');writeSync(1,buffer,0,buffer.length);
     }});
   assert.equal(source,'clear');assert.equal(fs.existsSync(path.join(dir,'agy-session-source')),false);
-  assert.equal(result.injectSteps[0].systemMessage.systemMessage,'full tail rules\nstartup marker');
+  const message = result.injectSteps[0].systemMessage.systemMessage;
+  const reminder = 'Messages in RECENT CONVERSATIONS that you have already replied to are finished: do not reply to them again.';
+  assert.equal(message, `full tail rules\nRECENT CONVERSATIONS\nOUT: already answered\n${reminder}\n`);
+  assert.equal(message.split(reminder).length - 1, 1);
+});
+test('startup SessionStart preserves injection without the answered-message reminder', async t => {
+  const { env } = fixture(t);
+  let source;
+  const result = await handleAgyHook({ conversationId: 'session',
+    lastUserInput: 'System startup trigger, not a user message. Continue with startup context.' }, {
+    env, eventName: 'SessionStart', activity: () => null, health: () => null,
+    instructions: () => 'full tail rules\n', orchestrate: async (payload, { writeSync }) => {
+      source = payload.source;
+      const buffer = Buffer.from('RECENT CONVERSATIONS\nOUT: already answered');
+      writeSync(1, buffer, 0, buffer.length);
+    },
+  });
+  assert.equal(source, 'startup');
+  assert.equal(result.injectSteps[0].systemMessage.systemMessage,
+    'full tail rules\nRECENT CONVERSATIONS\nOUT: already answered');
 });
 test('ERROR stops persist identity-bound unhealthy evidence without native error text',t=>{
   const {root,env}=fixture(t),now=10000;

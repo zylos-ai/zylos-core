@@ -117,6 +117,9 @@ export async function handleAgyHook(payload, { eventName, env = process.env,
     chunks.push(Buffer.from(buffer.subarray(offset, offset + length)));
     return length;
   } });
+  if (normalized.source === 'clear') {
+    chunks.push(Buffer.from('\nMessages in RECENT CONVERSATIONS that you have already replied to are finished: do not reply to them again.\n'));
+  }
   return { injectSteps: [{ systemMessage: { systemMessage: Buffer.concat(chunks).toString('utf8') } }] };
 }
 

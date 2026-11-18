@@ -88,14 +88,17 @@ test('current run statusLine can prove main identity but a stale run cannot', t 
 
 test('terminal custom hook ends normally and next main invocation restores rules once', async t => {
   const f = fixture(t); await f.kick();
+  fs.writeFileSync(path.join(f.dir, 'agy-session-source'), JSON.stringify({ runId: 'run', source: 'clear' }));
+  const cleared = await f.kick('new-parent');
+  assert.match(cleared.injectSteps[0].systemMessage.systemMessage, /do not reply to them again\./);
   const stop = { terminationReason: 'TERMINAL_CUSTOM_HOOK', fullyIdle: true };
   assert.equal(normalizeAgyHook({ conversationId: 'parent', ...stop }, 'Stop').hook_event_name, 'Stop');
-  await f.send('Stop', 'parent', stop);
+  await f.send('Stop', 'new-parent', stop);
   assert.equal(await f.send('PreInvocation', 'child', { invocationNum: 0 }), null);
-  const restored = await f.send('PreInvocation', 'parent', { invocationNum: 3 });
+  const restored = await f.send('PreInvocation', 'new-parent', { invocationNum: 3 });
   assert.equal(restored.injectSteps[0].systemMessage.systemMessage, 'COMPLETE_SYSTEM_AND_USER_RULES');
-  assert.equal(f.startups.length, 1, 'rule restore must not rerun startup orchestration');
-  assert.equal(await f.send('PreInvocation', 'parent', { invocationNum: 4 }), null);
+  assert.equal(f.startups.length, 2, 'rule restore must not rerun startup orchestration');
+  assert.equal(await f.send('PreInvocation', 'new-parent', { invocationNum: 4 }), null);
 });
 
 test('run_command native IDs track background tool start and completion only for the main session', async t => {
