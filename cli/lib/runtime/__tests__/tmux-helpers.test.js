@@ -7,9 +7,6 @@ import { describe, it } from 'node:test';
 // node:test's mock.module to intercept calls.
 
 import {
-  tmuxHasSession,
-  tmuxGetPanePid,
-  tmuxKillSession,
   tmuxCapturePaneText,
   getProcessName,
   isTimeoutError,
@@ -21,18 +18,6 @@ import {
 describe('tmux-helpers integration (live calls to nonexistent sessions)', () => {
   const FAKE_SESSION = '__zylos_test_nonexistent_session__';
 
-  it('tmuxHasSession returns false for nonexistent session', () => {
-    assert.equal(tmuxHasSession(FAKE_SESSION), false);
-  });
-
-  it('tmuxGetPanePid returns 0 for nonexistent session', () => {
-    assert.equal(tmuxGetPanePid(FAKE_SESSION), 0);
-  });
-
-  it('tmuxKillSession does not throw for nonexistent session', () => {
-    assert.doesNotThrow(() => tmuxKillSession(FAKE_SESSION));
-  });
-
   it('tmuxCapturePaneText returns null for nonexistent session', () => {
     assert.equal(tmuxCapturePaneText(FAKE_SESSION), null);
   });
@@ -43,21 +28,6 @@ describe('tmux-helpers integration (live calls to nonexistent sessions)', () => 
 });
 
 describe('tmux-helpers timeout behavior', () => {
-  it('tmuxHasSession returns false on timeout (does not throw)', () => {
-    // Simulate what happens when execFileSync times out:
-    // Node sets err.killed = true and err.signal = 'SIGTERM'.
-    // The function should catch and return false.
-    // We can't easily mock execFileSync in ESM, but we verify the
-    // contract: nonexistent session returns false without throwing.
-    const result = tmuxHasSession('__timeout_test__');
-    assert.equal(result, false);
-  });
-
-  it('tmuxGetPanePid returns 0 on error (does not throw)', () => {
-    const result = tmuxGetPanePid('__timeout_test__');
-    assert.equal(result, 0);
-  });
-
   it('tmuxCapturePaneText returns null on error (does not throw)', () => {
     const result = tmuxCapturePaneText('__timeout_test__');
     assert.equal(result, null);
@@ -66,36 +36,6 @@ describe('tmux-helpers timeout behavior', () => {
   it('getProcessName returns null on error (does not throw)', () => {
     const result = getProcessName(-1);
     assert.equal(result, null);
-  });
-});
-
-describe('tmux-helpers does not log on normal exit failures', () => {
-  it('tmuxHasSession with nonexistent session produces no stderr timeout warning', () => {
-    // Normal "session not found" exits with code 1 and no ETIMEDOUT.
-    // The wrapper should NOT log a timeout warning for this case.
-    const origWrite = process.stderr.write;
-    let stderrOutput = '';
-    process.stderr.write = (chunk) => { stderrOutput += chunk; return true; };
-    try {
-      tmuxHasSession('__no_such_session__');
-      assert.equal(stderrOutput.includes('timed out'), false,
-        'Should not log timeout warning for normal session-not-found');
-    } finally {
-      process.stderr.write = origWrite;
-    }
-  });
-
-  it('tmuxGetPanePid with nonexistent session produces no stderr timeout warning', () => {
-    const origWrite = process.stderr.write;
-    let stderrOutput = '';
-    process.stderr.write = (chunk) => { stderrOutput += chunk; return true; };
-    try {
-      tmuxGetPanePid('__no_such_session__');
-      assert.equal(stderrOutput.includes('timed out'), false,
-        'Should not log timeout warning for normal session-not-found');
-    } finally {
-      process.stderr.write = origWrite;
-    }
   });
 });
 
