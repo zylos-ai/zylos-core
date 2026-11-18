@@ -20,18 +20,18 @@ const damaged = '[C4-JSON]\n{"HOST_ONLY_DAMAGED":true';
 // TMPDIR; all DB/files below this case root are checked before opening/writing.
 // Run for conversion/projection/material-list changes; skip unrelated rendering.
 // No background work; DB and files are cleaned on assertion failure or success.
-for (const source of ['single', 'multi']) test(`${source} conversion projects every generated C4 material and leaves original records unchanged`, t => {
+test('first migration projects every generated C4 material and leaves original records unchanged', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'projected-convert-'));
   let testDb;
   t.after(() => { if (testDb?.open) testDb.close(); fs.rmSync(root, { recursive: true, force: true }); });
   assert.ok(root.startsWith(path.resolve(process.env.TMPDIR) + path.sep));
   const file = path.join(root, 'c4.db'); assert.ok(path.resolve(file).startsWith(root + path.sep));
   const { db, store } = storeFixture(t, {}, file); testDb = db;
-  const rows = [], groups = source === 'single' ? ['legacy'] : ['a', 'b'];
+  const rows = [], groups = ['legacy'];
   function add(direction, content, group, delivered = true) {
     const result = store.insertConversation(direction, 'demo', 'room-' + group, content, { groupName: group });
     if (direction === 'in' && delivered) db.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(result.id);
-    if (source === 'single' && delivered) db.prepare("UPDATE conversations SET session_group='' WHERE id=?").run(result.id);
+    if (delivered) db.prepare("UPDATE conversations SET session_group='' WHERE id=?").run(result.id);
     const record = db.prepare('SELECT * FROM conversations WHERE id=?').get(result.id); rows.push(record); return record;
   }
   for (const group of groups) {
@@ -39,20 +39,20 @@ for (const source of ['single', 'multi']) test(`${source} conversion projects ev
     add('in', marked, group, false); add('in', damaged, group, false); add('in', 'pending ordinary', group, false);
   }
   const memory = path.join(root, 'memory');
-  const sourceDirs = source === 'single' ? [memory] : ['origin', ...groups.map(g => 'demo:' + g)].map(group => path.join(memory, 'session-groups', group));
-  for (const dir of sourceDirs) {
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'state.md'), 'existing plain working state\n');
-    fs.writeFileSync(path.join(dir, 'inbox.md'), 'existing plain inbox\n');
-    fs.writeFileSync(path.join(dir, 'handoff.md'), 'existing plain handoff\n');
-  }
-  const { runId } = store.beginModeTransition(source, source === 'single' ? 'multi' : 'single', { kind: 'first_migration' });
+  fs.mkdirSync(memory, { recursive: true });
+  const sourceFiles = { 'state.md': 'existing plain working state\n', 'inbox.md': 'existing plain inbox\n', 'handoff.md': 'existing plain handoff\n' };
+  for (const [name, content] of Object.entries(sourceFiles)) fs.writeFileSync(path.join(memory, name), content);
+  const { runId } = store.beginModeTransition('single', 'multi', { kind: 'first_migration' });
   store.setDrainFence('*'); store.absorbForTransition(runId);
   const transition = store.getModeTransition({ runId });
   const original = db.prepare('SELECT id,content,status FROM conversations ORDER BY id').all();
   const absorbed = store.getAbsorbedConversations(runId);
   const convert = createModeSwitchConverter({ db: store, zylosDir: root });
   const result = convert(transition);
+  for (const [name, content] of Object.entries(sourceFiles)) {
+    assert.equal(fs.existsSync(path.join(memory, name)), false);
+    assert.equal(fs.readFileSync(path.join(memory, 'mode-switch', runId, 'previous', '_global', name), 'utf8'), content);
+  }
   const handoff = fs.readFileSync(result.handoff, 'utf8');
   const listed = handoff.split('\n').filter(line => line.startsWith('- material: ')).map(line => JSON.parse(line.slice(12)));
   assert.deepEqual(listed, result.materials);
@@ -78,7 +78,7 @@ for (const source of ['single', 'multi']) test(`${source} conversion projects ev
   }
   const states = [];
   for (const scope of result.scopes) {
-    const state = path.join(scope === '*' ? memory : path.join(memory, 'session-groups', scope), 'state.md');
+    const state = path.join(memory, 'session-groups', scope, 'state.md');
     const text = fs.readFileSync(state, 'utf8'); states.push(text);
     assert.equal(text.includes('HOST_ONLY_'), false);
     assert.equal(text.includes('[C4-JSON]'), false);
