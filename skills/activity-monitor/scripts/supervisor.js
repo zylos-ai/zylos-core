@@ -29,6 +29,7 @@ export function createSupervisor(deps) {
   const activities=new Map();let configuration;let lastMetrics=null;let lastMaintenance=0;
   let observer,router,admission,lifecycle,modeSwitch,stopping=false,stopPromise,roundContext;
   const authChecks=new Set(),authFlights=new Map(),authRetryAt=new Map();
+  const startupAuthChecks=new Set();
   const originAuthAlerted=new Set();
   const missingDependencies=deps.missingDependencies ?? new Set();
   let restartRequestsUnreadable=false;
@@ -176,7 +177,9 @@ export function createSupervisor(deps) {
     startupAlert:deps.alert,
     restore:async()=>{
       try{admission.restore();restartRequestsReadable();}catch(error){if(error.code!=='requests_unreadable')throw error;await reportError(error,{phase:'restart-requests'});}
-      for(const runtime of ['claude','codex','agy'])await health.restore(runtime);
+      for(const runtime of ['claude','codex','agy']) {
+        if((await health.restore(runtime)).health==='auth_failed')startupAuthChecks.add(runtime);
+      }
       router.clearLegacyCache(path.join(deps.zylosDir,'activity-monitor','message-router-probe-cache.json'));await deps.restoreTransition?.();
     },openAdmission:()=>admission.openEntry(),reportError,getModeTransition:db.getModeTransition,listDrainFences:db.listDrainFences,readRestartRequests:()=>admission.readRequests(),restartRequestsReadable,
     advanceAutomaticMigration:()=>modeSwitch.automatic(),
@@ -280,9 +283,11 @@ export function createSupervisor(deps) {
         lastMaintenance=now();
       }
       for(const runtime of ['claude','codex','agy']) {
+        // Consume before checking: failure, exceptions or changed health must not retry while idle.
+        const startupCheck=startupAuthChecks.delete(runtime);
         if(health.store(runtime).read().health!=='auth_failed')continue;
         if(!health.authRecoveries.has(runtime)) {
-          if(!demand.has(runtime))continue;
+          if(!startupCheck && !demand.has(runtime))continue;
           const result=await checkAuth(runtime,{background:true});
           if(result.status!=='success')continue;
         }
