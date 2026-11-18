@@ -8,6 +8,7 @@ import { createTestEnvironment } from './test-environment.js';
 const ROOT = process.cwd();
 const ROOT_NODE_TESTS = [
   'test/single-origin-scheduler.test.js',
+  'test/mode-switch-status-lifecycle.test.js',
   'test/mode-switch-files.integration.test.js',
   'test/mode-switch-native.integration.test.js',
   'test/global-memory-handover.integration.test.js',

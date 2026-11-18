@@ -146,3 +146,58 @@ test('composed supervisor defers global handover then socket switch and immediat
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// Boundary: real environment decoding, target observation, scene projection and
+// handover coordinator, with private C4/files. The bounded connection returns
+// environment readback instead of contacting tmux. These cases prove the
+// environment-to-scene contract, not observation of a real running runtime.
+for (const scoped of [true, false]) test(`observed single Origin environment ${scoped ? 'with group permits handover' : 'without group defers handover'}`, async t => {
+  const { SupervisorScenes } = await import('../skills/activity-monitor/scripts/supervisor-scenes.js');
+  const { observeSessionTarget } = await import('../cli/lib/runtime/session-target.js');
+  const f = fixture(t), before = f.snapshot();
+  const environment = String.raw`ZYLOS_RUN_ID="observed-origin-run"; export ZYLOS_RUN_ID;
+ZYLOS_MODEL_CONFIG="{\"runtime\":\"claude\"}"; export ZYLOS_MODEL_CONFIG;` +
+    (scoped ? '\nZYLOS_SESSION_GROUP="origin"; export ZYLOS_SESSION_GROUP;' : '');
+  let opens = 0, closes = 0, observations = 0;
+  const scenes = new SupervisorScenes({ env: { ZYLOS_DIR: f.root }, readMode: () => ({ keyPresent: true, mode: 'single' }),
+    readUsage: () => null, readActivity: () => ({ state: 'idle', idleSince: 1 }),
+    readProcessTree: () => { throw new Error('configured environment must not scan host processes'); },
+    open: async () => {
+      opens++;
+      let commands = 0;
+      return { bindTarget() {}, close() { closes++; }, command: async argv => {
+        assert.ok(++commands <= 3, 'one observation and its revalidation have bounded readback');
+        if (argv[0] === 'display-message') return '100:200\t$1\t%1\t123\t10';
+        assert.equal(argv[0], 'show-environment'); assert.ok(argv.includes('-s'));
+        return environment;
+      } };
+    },
+    observeTarget: options => {
+      observations++;
+      // Keep the real target's connection binding so observeGroup also runs
+      // its normal identity revalidation. No sourceScope is supplied here.
+      return observeSessionTarget({ ...options,
+        readReady: async () => ({ runId: 'observed-origin-run', sessionId: 'observed-origin-session', ts: 1, startupControlIds: [] }) });
+    },
+  });
+  const observed = await scenes.observeGroup('origin');
+  assert.equal(observed.present, true); assert.equal(observed.ready, true);
+  assert.equal(observed.sessionGroup, 'origin');
+  assert.equal(observed.sourceScope, scoped ? 'origin' : null);
+  f.deps.readMode = () => ({ keyPresent: true, mode: 'single' });
+  f.deps.observe = async () => [await scenes.observeGroup('origin')];
+  const owner = f.owner(), result = await owner.advance();
+  assert.deepEqual(f.snapshot(), before);
+  if (scoped) {
+    assert.equal(result.rule, 3); assert.equal(owner.pending(), false);
+    assert.match(fs.readFileSync(path.join(f.memory, 'session-groups/origin/inbox.md'), 'utf8'), /commitment: Global memory handover/);
+    assert.equal(f.db.prepare("SELECT count(*) AS n FROM control_queue WHERE status='pending' AND session_group='origin'").get().n, 1);
+  } else {
+    assert.equal(result, undefined); assert.equal(owner.pending(), true);
+    assert.equal(fs.readFileSync(path.join(f.memory, 'state.md'), 'utf8'), 'old single working state');
+    assert.equal(fs.readFileSync(path.join(f.memory, 'inbox.md'), 'utf8'), 'global inbox');
+    assert.equal(fs.existsSync(path.join(f.memory, 'mode-switch')), false);
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM control_queue').get().n, 0);
+  }
+  assert.equal(observations, 2); assert.equal(opens, 2); assert.equal(closes, 2);
+});
