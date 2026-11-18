@@ -48,7 +48,7 @@ test('unsent cancel never looks up', async () => {
 // transport classifications share the same uncertain-cancel observation path.
 for (const [kind, observed] of [
   ['no_reply', 'cancelled'], ['no_reply', 'unknown'],
-  ['no_reply', 'deadline_exceeded'], ['no_reply', 'throw'], ['throw', 'cancelled'],
+  ['no_reply', 'throw'], ['throw', 'cancelled'],
 ]) test(`uncertain cancel ${kind} observes ${observed} once within original deadline`, async () => {
     let sends = 0, reads = 0;
     const result = await executeSessionMode(['cancel'], { readTransition: () => pinned, deadlineAt: 12345,

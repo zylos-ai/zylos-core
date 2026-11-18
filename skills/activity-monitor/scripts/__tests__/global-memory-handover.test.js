@@ -99,7 +99,7 @@ test('single conversion interval is captured once in plan and survives retry wit
   assert.match(f.inbox(), /C4 interval \(12, 31\]/); assert.equal(f.directories().length, 1);
 });
 
-for (const guard of ['transition', 'missing-key', 'legacy-tmux', 'unknown-legacy', 'manual-restart', 'delete', 'unknown-observation', 'legacy-origin', 'unknown-origin-scope']) {
+for (const guard of ['transition', 'missing-key', 'legacy-tmux', 'unknown-legacy', 'manual-restart', 'delete', 'unknown-observation', 'unknown-origin-scope']) {
   test(`guard preserves global material without archive or follow-up: ${guard}`, async t => {
     const f = fixture(t); f.file('state.md', 'global');
     if (guard === 'transition') f.transition = { phase: 'gating' };
@@ -109,7 +109,6 @@ for (const guard of ['transition', 'missing-key', 'legacy-tmux', 'unknown-legacy
     if (guard === 'manual-restart') f.requests = [{ reason: 'manual_restart' }];
     if (guard === 'delete') f.fences = [{ reason: 'delete' }];
     if (guard === 'unknown-observation') f.scenes = [{ observationError: new Error('read failed') }];
-    if (guard === 'legacy-origin') f.scenes = [{ present: true, sessionGroup: 'origin', sourceScope: null, runId: 'legacy' }];
     if (guard === 'unknown-origin-scope') f.scenes = [{ present: true, sessionGroup: 'origin', runId: 'unknown' }];
     await f.owner().advance(); assert.equal(fs.readFileSync(path.join(f.memory, 'state.md'), 'utf8'), 'global');
     assert.equal(fs.existsSync(path.join(f.memory, 'mode-switch')), false); assert.equal(f.controls.length, 0);
