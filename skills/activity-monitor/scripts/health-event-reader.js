@@ -1,3 +1,4 @@
+import { continuationActivity } from './failure-continuation.js';
 import path from 'node:path';
 import { loadCoreModule } from './core-modules.js';
 const { EventLogReader } = await loadCoreModule('event-log.js');
@@ -22,7 +23,11 @@ export class HealthEventReader {
     while(stream.pending.length) {
       const event=stream.pending[0];
       if(event.type==='runtime_health' && event.runtime===scene.runtime) {
-        const result=await this.coordinator.consumeHook(scene.runtime,event,{identity,sessionGroup:scene.sessionGroup,quota:this.quota(identity,scene)});
+        const retry=scene.runtime==='claude' && ['stop','stop_failure'].includes(event.event)
+          ? this.coordinator.store?.(scene.runtime).read(scene.sessionGroup).failure_retry : null;
+        const retryActivity=retry ? continuationActivity(scene.runDir,retry,{throughEventId:event.event_id,includeEnd:false}) : null;
+        const result=await this.coordinator.consumeHook(scene.runtime,event,{identity,sessionGroup:scene.sessionGroup,quota:this.quota(identity,scene),runId:scene.runId,
+          retryActivity});
         results.push(result);
       }
       // A throwing atomic publication leaves this exact event at the head for retry.

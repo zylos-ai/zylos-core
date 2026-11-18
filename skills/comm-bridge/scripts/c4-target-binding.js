@@ -4,11 +4,12 @@ export function normalizeTargetBinding(value) {
   try {
     const v = typeof value === 'string' ? JSON.parse(value) : value;
     const text = x => typeof x === 'string' && x.length > 0;
-    if (!v || Array.isArray(v) || Object.keys(v).some(k => !['expectedRunId','tmuxTarget','expectedSessionId'].includes(k)) || !text(v.expectedRunId)) throw new Error('Invalid binding fields');
+    if (!v || Array.isArray(v) || Object.keys(v).some(k => !['expectedRunId','tmuxTarget','expectedSessionId','failureContinue'].includes(k)) || !text(v.expectedRunId)) throw new Error('Invalid binding fields');
     const t = v.tmuxTarget;
     if (!t || Array.isArray(t) || Object.keys(t).length !== 3 || Object.keys(t).some(k => !['serverGeneration','sessionId','paneId'].includes(k)) || !text(t.serverGeneration) || !/^\$\d+$/.test(t.sessionId) || !/^%\d+$/.test(t.paneId)) throw new Error('Invalid tmux identity');
     if (v.expectedSessionId != null && !text(v.expectedSessionId)) throw new Error('Invalid expected session');
-    return JSON.stringify({ expectedRunId: v.expectedRunId, tmuxTarget: { serverGeneration: t.serverGeneration, sessionId: t.sessionId, paneId: t.paneId }, ...(v.expectedSessionId == null ? {} : { expectedSessionId: v.expectedSessionId }) });
+    if(v.failureContinue && (!/^[0-9a-f-]{36}$/i.test(v.failureContinue.eventId) || !Number.isSafeInteger(v.failureContinue.failedAt) || v.failureContinue.failedAt<0 || !Number.isSafeInteger(v.failureContinue.pid) || v.failureContinue.pid<=0 || Object.keys(v.failureContinue).sort().join(',')!=='eventId,failedAt,pid' || !text(v.expectedSessionId))) throw new Error('Invalid failure continuation');
+    return JSON.stringify({ expectedRunId: v.expectedRunId, tmuxTarget: { serverGeneration: t.serverGeneration, sessionId: t.sessionId, paneId: t.paneId }, ...(v.expectedSessionId == null ? {} : { expectedSessionId: v.expectedSessionId }), ...(v.failureContinue ? {failureContinue:{eventId:v.failureContinue.eventId,failedAt:v.failureContinue.failedAt,pid:v.failureContinue.pid}} : {}) });
   } catch (cause) { throw dataError('TARGET_BINDING_INVALID', 'Invalid target binding', { cause }); }
 }
 

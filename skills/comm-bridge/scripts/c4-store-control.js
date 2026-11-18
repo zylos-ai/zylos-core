@@ -36,6 +36,13 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
     } else requireGroup(sessionGroup);
     if (sessionGroup !== null && (appendAckSuffix || / ---- ack via:/.test(content)) && ackDeadlineAt === null) throw dataError('ACK_DEADLINE_REQUIRED', 'Targeted acknowledged controls require a deadline');
     const binding = normalizeTargetBinding(targetBinding);
+    if (binding && JSON.parse(binding).failureContinue) {
+      if(content!=='Continue' || appendAckSuffix || !requireIdle || bypassState) throw dataError('INVALID_ARGS','Failure continuation requires a plain idle Continue');
+      const prior=get(c,'SELECT * FROM control_queue WHERE session_group IS ? AND target_binding=? ORDER BY id LIMIT 1',sessionGroup,binding);
+      if(prior)return {...prior,superseded_count:0};
+      // A newer failed turn replaces the one pending continuation for this scope.
+      run(c,"UPDATE control_queue SET status='superseded',updated_at=? WHERE status='pending' AND session_group IS ? AND json_extract(target_binding,'$.failureContinue') IS NOT NULL",current,sessionGroup);
+    }
     const superseded = run(c, "UPDATE control_queue SET status='superseded',updated_at=?,last_error=NULL WHERE status='pending' AND raw_content=? AND session_group IS ? AND target_binding IS ?", current, content, sessionGroup, binding).changes;
     const id = Number(run(c, `INSERT INTO control_queue(raw_content,content,priority,require_idle,bypass_state,ack_deadline_at,status,retry_count,available_at,last_error,created_at,updated_at,session_group,target_binding) VALUES(?,?,?,?,?,?,'pending',0,?,NULL,?,?,?,?)`, content, content, priority, requireIdle ? 1 : 0, bypassState ? 1 : 0, ackDeadlineAt, availableAt, current, current, sessionGroup, binding).lastInsertRowid);
     if (appendAckSuffix) run(c, 'UPDATE control_queue SET content=? WHERE id=?', `${content} ---- ack via: node ${fileURLToPath(new URL('./c4-control.js', import.meta.url))} ack --id ${id}`, id);

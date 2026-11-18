@@ -4,6 +4,7 @@ import net from 'node:net';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as defaultDb from '../../comm-bridge/scripts/c4-db.js';
+import { processFailureContinuation } from './failure-continuation.js';
 import { freezeFirstFailureNotice, drainFirstFailureNotices } from '../../comm-bridge/scripts/first-failure-notice.js';
 import { loadCoreModule } from './core-modules.js';
 import { createSupervisor } from './supervisor.js';
@@ -169,6 +170,12 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
       events ??= new HealthEventReader({coordinator,zylosDir:root,warn:log,quota:(identity,current)=>readScopedHealthQuota({runDir:current.runDir,runId:current.runId,identity})});
       const results=await events.consumeScene(scene,identity);
       if(results.some(result=>result?.verify))void supervisor.observer.requestVerification(scene.runtime);
+      if(scene.runtime==='claude') await coordinator.serial(scene.runtime,()=>processFailureContinuation({
+        store:coordinator.store(scene.runtime),scene,identity:()=>scenes.readIdentity(scene.sessionGroup),
+        bindTarget:()=>scenes.bindTarget(scene),insertControl:db.insertControl,getPending:db.getNextPending,getControl:db.getControlById,now:clock,
+        readNativeActivity:()=>supervisor.readActivity(scene),
+        expireControl:async id=>{try{await db.expireControlById(id);}catch(error){if(error.code!=='CONTROL_NOT_ACTIVE')throw error;}},
+        scope:configuration.mode==='single'?null:scene.sessionGroup}));
       const pending=drainFirstFailureNotices({store:coordinator.store(scene.runtime),sessionGroup:scene.sessionGroup ?? 'origin',
         identity:async()=>{const current=await scenes.readIdentity(scene.sessionGroup);return current.present && current.ready && current.runId===scene.runId && current.sessionId===scene.sessionId && current.runtime===scene.runtime?identity:null;},
         quota:current=>readScopedHealthQuota({runDir:scene.runDir,runId:scene.runId,identity:current}),mutate:fn=>coordinator.serial(scene.runtime,fn),database:db.getDb(),zylosDir:root});

@@ -9,6 +9,10 @@ export const NOTICE_TEMPLATES = Object.freeze({
     zh: '服务返回了计费错误，请联系该 Agent 的负责人检查账户计费状态后重试。',
     en: 'The service reported a billing error. Please contact the Agent owner to check the account billing status, then try again.',
   }),
+  service_error_retries_exhausted: Object.freeze({
+    zh: '服务返回了服务端错误或过载，已自动重试 3 次仍未成功，请稍后重新发送。',
+    en: 'The service reported a server error or overload. Automatic retries (3) did not succeed; please send your message again later.',
+  }),
   service_error: Object.freeze({
     zh: '服务返回了服务端错误或过载，请稍后重试。',
     en: 'The service reported a server error or overload. Please try again later.',

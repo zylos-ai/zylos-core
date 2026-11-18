@@ -7,6 +7,7 @@ const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js'
 const { groupRunDir } = await loadCoreModule('session-group-paths.js');
 const { buildKickPrompt } = await loadCoreModule('runtime/kick-prompt.js');
 const { resolveSessionTarget, revalidateSessionTarget } = await loadCoreModule('runtime/session-target.js');
+import { continuationActivity, markContinuationSubmission } from '../../../activity-monitor/scripts/failure-continuation.js';
 import { PeriodicEnter } from '../periodic-enter.js';
 import { sanitizeMessage } from '../c4-utils.js';
 import { findPromptY, isUsageOverlayCapture, checkAgyInputState } from '../tmux-input-state.js';
@@ -173,6 +174,8 @@ export function createDelivery(deps, configuration = {}) {
 
   async function deliver(row, type) {
     const group = deps.getSessionMode() === 'single' ? null : row.session_group;
+    const binding=type==='control' && row.target_binding ? (typeof row.target_binding==='string'?JSON.parse(row.target_binding):row.target_binding) : null;
+    const retry=binding?.failureContinue ? {...binding.failureContinue,runId:binding.expectedRunId,sessionId:binding.expectedSessionId} : null;
     const fields = { session_group: group, [type === 'control' ? 'control_id' : 'conversation_id']: row.id };
     const emit = (event, details = {}) => diagnostic(event, { ...fields, ...details });
     const periodic = groupPeriodic(group, fields);
@@ -319,6 +322,7 @@ export function createDelivery(deps, configuration = {}) {
         else if (!['claude', 'codex', 'agy'].includes(target.runtime)) { gateCode = 'runtime_unknown'; try { deps.alert?.('runtime_unknown', fields); } catch {} }
         else {
         state = await readState();
+        if(retry && deps.db.getNextPending(group===null?undefined:{sessionGroups:[group]}))throw failure('FAILURE_CONTINUE_CANCELLED');
         const item = { ...row, type };
         const bypass = isBypassState(item);
         const health = deps.readRuntimeHealth(target.runtime);
@@ -345,7 +349,7 @@ export function createDelivery(deps, configuration = {}) {
             result = 'ack';
           } else {
             if (type === 'control' && content.startsWith('/')) periodic.reset('slash_control');
-            const message = type === 'conversation' ? deps.formatConversation(row) : content.startsWith('/') ? content : `Meanwhile, ${content}`;
+            const message = type === 'conversation' ? deps.formatConversation(row) : content.startsWith('/') || retry ? content : `Meanwhile, ${content}`;
             const sanitized = sanitizeMessage(message);
             const clearAgy = target.runtime === 'agy' && type === 'control' && content === '/clear';
             if (clearAgy) {
@@ -354,7 +358,19 @@ export function createDelivery(deps, configuration = {}) {
               await fs.mkdir(directory, { recursive: true });
               await fs.writeFile(path.join(directory, 'agy-session-source'), JSON.stringify({ runId: target.runId, source: 'clear' }), { mode: 0o600 });
             }
-            await io(() => adapter.sendText({ ...bound(), text: sanitized, bracketedPaste: BRACKETED_PASTE_ENABLED }));
+            await io(async () => {
+              if(retry) {
+                await revalidate(bound());
+                const directory=groupRunDir(group ?? 'origin');
+                const activity=continuationActivity(directory,retry);
+                if(target.runtime!=='claude' || activity.cancelled || activity.attempted) throw failure('FAILURE_CONTINUE_CANCELLED');
+                if(deps.db.getNextPending(group===null?undefined:{sessionGroups:[group]}))throw failure('FAILURE_CONTINUE_CANCELLED');
+                if(deps.db.getControlById(row.id)?.status!=='running')throw failure('FAILURE_CONTINUE_CANCELLED');
+                // Persist before paste: an ambiguous transport result is never replayed.
+                markContinuationSubmission(directory,retry,now());
+              }
+              return adapter.sendText({ ...bound(), text: sanitized, bracketedPaste: BRACKETED_PASTE_ENABLED });
+            });
             pastedAt = now();
             try { Promise.resolve(deps.notifyDelivered({
               ...(type === 'conversation' ? { conversationId: row.id, channel: row.channel } : { controlId: row.id }),
@@ -405,7 +421,11 @@ export function createDelivery(deps, configuration = {}) {
     if (error) {
       const code = error.code ?? 'ENTER_UNVERIFIED';
       emit('delivery_failed', { reason: code });
-      if (isIdentityError(code) || (initial && code === 'TMUX_UNAVAILABLE')) {
+      if (retry) {
+        // Gate waits requeue above; once delivery starts, uncertainty must not
+        // paste a second Continue into a session that may already be running.
+        try{deps.db.expireControlById(row.id);}catch(cause){if(cause.code!=='CONTROL_NOT_ACTIVE')throw cause;}
+      } else if (isIdentityError(code) || (initial && code === 'TMUX_UNAVAILABLE')) {
         if (type === 'control' && row.target_binding != null && isIdentityError(code)) deps.db.failStaleTargetControl(row.id);
         else if (type === 'control') deps.db.requeueControl(row.id, code);
         else deps.db.requeueConversation(row.id);
