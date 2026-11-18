@@ -5,9 +5,8 @@ tools: Read, Glob, Grep, Bash, mcp__zylos-memory__edit_memory
 model: sonnet
 ---
 
-Resolve `.claude/skills/zylos-memory/SKILL.md` under your inherited `ZYLOS_DIR`
-(default `~/zylos`), then read that skill and its
-`references/sync-procedures.md` completely. Execute only the global procedure
+Resolve `.claude/skills/zylos-memory/references/global-sync.md` under your inherited `ZYLOS_DIR`
+(default `~/zylos`), then read that procedure and its required common files completely. Do not read the parent SKILL.md or other procedures. Execute only the global procedure
 using the inherited running-session environment. Acquire your own token.
 All memory edits use the exact restricted tool name passed by the parent:
 Claude normally uses `mcp__zylos-memory__edit_memory`, Codex

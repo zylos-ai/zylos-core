@@ -70,7 +70,7 @@ test('background Sync prompts point to the skill result rules; reclaim Sync and 
   assert.match(GROUP_SYNC_PROMPT, /background group Sync/);
   assert.match(ORIGIN_SYNC_PROMPT, /background Origin Sync/);
   for (const prompt of [GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT]) {
-    assert.match(prompt, /^Read the zylos-memory skill and start a background (group |Origin )Sync as it specifies, then keep working and handle its result per its Parent result handling section\.$/);
+    assert.match(prompt, /^Read only the zylos-memory SKILL\.md parent instructions and start a background (group |Origin )Sync as it specifies, then keep working and handle its result per its Parent result handling section\.$/);
     // The rules themselves live once, in the skill's Parent result handling section.
     assert.doesNotMatch(prompt, /In Codex|Completed label|final result|owner|internal message|no longer exists/);
   }
