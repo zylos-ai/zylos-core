@@ -52,7 +52,7 @@ describe('base URL support', () => {
 
     try {
       const envOnly = initModule.parseInitFlags([]);
-      initModule.resolveFromEnv(envOnly);
+      initModule.resolveFromEnv(envOnly, { authenticated: () => false });
       assert.equal(envOnly.baseUrl, 'https://claude-env.example.com');
       assert.equal(envOnly.codexBaseUrl, 'https://codex-env.example.com/v1');
 
@@ -60,7 +60,7 @@ describe('base URL support', () => {
         '--base-url', 'https://claude-flag.example.com',
         '--codex-base-url', 'https://codex-flag.example.com/v1',
       ]);
-      initModule.resolveFromEnv(explicitFlags);
+      initModule.resolveFromEnv(explicitFlags, { authenticated: () => false });
       assert.equal(explicitFlags.baseUrl, 'https://claude-flag.example.com');
       assert.equal(explicitFlags.codexBaseUrl, 'https://codex-flag.example.com/v1');
     } finally {
