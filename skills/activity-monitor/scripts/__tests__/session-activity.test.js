@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {SessionActivity,TRANSCRIPT_READ_BUDGET_BYTES,TRANSCRIPT_LINE_LIMIT_BYTES,RECENT_TOOL_RESULTS_LIMIT} from '../session-activity.js';
+import {SessionActivity,TRANSCRIPT_READ_BUDGET_BYTES,TRANSCRIPT_LINE_LIMIT_BYTES,RECENT_TOOL_RESULTS_LIMIT,OPEN_TURN_INACTIVITY_TIMEOUT_MS} from '../session-activity.js';
 import {handleHookActivity} from '../hook-activity.js';
 import {publishContextSample} from '../context-monitor.js';
 function fixture(t,runtime='claude') {
@@ -38,7 +38,7 @@ test('hook retains subagent facts and selected tool inputs without prompt/output
 });
 
 test('child activity stays separate from every main-agent idle and tool field',t=>{
- for(const runtime of ['claude','codex']){
+ for(const runtime of ['claude','codex','agy']){
   const main=fixture(t,runtime),child=fixture(t,runtime);
   const mainRows=[main.row('prompt',{ts:200}),main.row('stop',{ts:300})];
   main.activity.consume(mainRows);child.activity.consume(mainRows);
@@ -127,7 +127,7 @@ test('restart recovers child lifetimes across rotations and main turn boundaries
   if(terminal)appendEvent(log,row('subagent_stop',{agent_id:'worker',ts:150}));
   const result=activity.read(10000);
   assert.equal(activity.transcriptPath,transcript);
-  assert.deepEqual(result.events.map(event=>event.event),['stop']);
+  assert.deepEqual(result.events.map(event=>event.event),['prompt','stop']);
   assert.equal(result.state,'idle');assert.equal(result.lastActivityAt,130);
   assert.deepEqual(result.tools,[]);
   assert.deepEqual(result.activeSubagents,terminal?[]:[{agentId:'worker',lastActivityAt:140}]);
@@ -149,6 +149,7 @@ test('restart: recover latest turn across rotation and associate older session_s
  fs.writeFileSync(transcript,JSON.stringify({message:{content:[{type:'tool_result',tool_use_id:'done'}]}})+'\n');
  appendEvent(log,row('session_start',{ts:50,transcript_path:transcript}));
  appendEvent(log,row('pre_tool',{ts:110,tool_use_id:'obsolete'}));
+ appendEvent(log,row('stop',{ts:115}));
  rotateEventLog(log,{maxBytes:0,now:1000});
  appendEvent(log,row('prompt',{ts:120}));
  appendEvent(log,row('pre_tool',{ts:130,tool_use_id:'done',tool:'Read'}));
@@ -157,7 +158,7 @@ test('restart: recover latest turn across rotation and associate older session_s
  const result=activity.read(10000);
  assert.equal(activity.transcriptPath,transcript);assert.deepEqual(result.tools.map(tool=>tool.id),['live']);
  assert.equal(result.busySince,120);
- assert.deepEqual(result.events.map(event=>event.event),['prompt','pre_tool','pre_tool']);
+ assert.deepEqual(result.events.map(event=>event.event),['pre_tool','stop','prompt','pre_tool','pre_tool']);
  appendEvent(log,row('post_tool',{ts:150,tool_use_id:'live'}));assert.equal(activity.read(10000).tools.length,0);
 });
 
@@ -222,18 +223,62 @@ test('unknown recovered busy start uses run start and transcript-only activity u
  assert.equal(activity.read(8500).busySince,6000);
 });
 
-for(const runtime of ['claude','codex'])test(`quiet samples preserve an open ${runtime} turn until its closing hook`,t=>{
+for(const runtime of ['claude','codex'])test(`quiet samples keep an open ${runtime} turn busy until its closing hook`,t=>{
  const {activity,row}=fixture(t,runtime);
  activity.consume([row('prompt',{ts:6000}),row('pre_tool',{ts:6500,tool_use_id:'first'}),row('post_tool',{ts:7000,tool_use_id:'first'})]);
  assert.equal(activity.read(7500).busySince,6000);
  const quiet=activity.read(11000);
- assert.equal(quiet.state,'idle');assert.equal(quiet.turnOpen,true);assert.equal(quiet.busySince,6000);
+ assert.equal(quiet.state,'busy');assert.equal(quiet.turnOpen,true);assert.equal(quiet.busySince,6000);
+ assert.equal(quiet.idleSince,null);assert.equal(quiet.lastActivityAt,7000);assert.equal(quiet.lastResponseAt,6500);
  activity.consume([row('pre_tool',{ts:12000,tool_use_id:'request'}),row('post_tool',{ts:12600,tool_use_id:'request'})]);
  const reply=activity.read(18800);
- assert.equal(reply.state,'idle');assert.equal(reply.turnOpen,true);assert.equal(reply.busySince,6000);
- activity.consume([row(runtime==='claude'?'idle':'stop',{ts:19000})]);
+ assert.equal(reply.state,'busy');assert.equal(reply.turnOpen,true);assert.equal(reply.busySince,6000);
+ assert.equal(reply.tools.length,0);assert.equal(reply.idleSince,null);assert.equal(reply.lastResponseAt,12000);
+ activity.consume([row('stop',{ts:19000})]);
  const closed=activity.read(23000);
- assert.equal(closed.turnOpen,false);assert.equal(closed.busySince,null);
+ assert.equal(closed.state,'idle');assert.equal(closed.turnOpen,false);assert.equal(closed.busySince,null);
+});
+
+for(const runtime of ['claude','codex'])test(`${runtime} model wait remains busy without manufacturing activity or response evidence`,t=>{
+ const {activity,row}=fixture(t,runtime);
+ activity.consume([row('prompt',{ts:6000})]);
+ for(const now of [9001,66000,305999]){
+  const waiting=activity.read(now);
+  assert.equal(waiting.state,'busy');assert.equal(waiting.turnOpen,true);
+  assert.equal(waiting.busySince,6000);assert.equal(waiting.idleSince,null);
+  assert.equal(waiting.lastActivityAt,6000);assert.equal(waiting.lastResponseAt,null);
+  assert.deepEqual(waiting.tools,[]);assert.equal(waiting.transcriptPending,false);
+ }
+ activity.consume([row('stop',{ts:307000})]);
+ assert.equal(activity.read(309999).state,'busy','closing hook retains the normal recent-activity window');
+ const closed=activity.read(310000);
+ assert.equal(closed.state,'idle');assert.equal(closed.turnOpen,false);assert.equal(closed.busySince,null);
+ assert.equal(closed.idleSince,310000);assert.equal(closed.lastResponseAt,null);
+});
+
+for(const runtime of ['claude','codex'])test(`${runtime} restart recovers quiet API wait and accepts only current main-agent closing hooks`,async t=>{
+ const {appendEvent,rotateEventLog}=await import('../../../../cli/lib/event-log.js');
+ for(const terminal of [false,true]){
+  const {root,activity,row}=fixture(t,runtime),log=path.join(root,'events.jsonl');
+  appendEvent(log,row('session_start',{ts:100}));
+  appendEvent(log,row('prompt',{ts:200}));appendEvent(log,row('stop',{ts:300}));
+  rotateEventLog(log,{maxBytes:0,now:1000});
+  appendEvent(log,row('prompt',{ts:6000}));
+  appendEvent(log,row('stop',{ts:7000,agent_id:'child'}));
+  appendEvent(log,row('stop',{ts:7100,session_id:'other'}));
+  if(terminal)appendEvent(log,row('stop',{ts:8000}));
+  const recovered=activity.read(66000);
+  assert.equal(recovered.state,terminal?'idle':'busy');assert.equal(recovered.turnOpen,!terminal);
+  assert.equal(recovered.busySince,terminal?null:6000);assert.equal(recovered.lastResponseAt,null);
+  assert.equal(recovered.lastActivityAt,terminal?8000:6000);
+  assert.deepEqual(recovered.tools,[]);
+  assert.equal(activity.read(126000).state,terminal?'idle':'busy');
+  if(!terminal){
+   appendEvent(log,row('stop',{ts:127000}));
+   const closed=activity.read(130000);
+   assert.equal(closed.state,'idle');assert.equal(closed.turnOpen,false);assert.equal(closed.busySince,null);
+  }
+ }
 });
 
 test('only AI work advances response time; Escape and continue artifacts do not',t=>{
@@ -565,4 +610,349 @@ test('AGY no-expiry status still rejects foreign identity, future and pre-activi
    zylos:{v:1,runId:'r',capturedAt:1000},...patch}));
   assert.equal(activity.read(72000).state,'busy',JSON.stringify(patch));
  }
+});
+
+// Boundary: inactivity eligibility derives from real hook/transcript files, with an
+// injected observation clock. Run for turn/timeout/transcript changes; skip UI.
+// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; no processes started.
+for(const runtime of ['claude','codex'])test(`${runtime} quiet turn waits twenty minutes and closes only after interrupt admission`,t=>{
+ const {activity,row}=fixture(t,runtime);
+ activity.consume([row('prompt',{ts:6000})]);
+ const deadline=6000+OPEN_TURN_INACTIVITY_TIMEOUT_MS;
+ assert.equal(activity.read(deadline-1).state,'busy');
+ assert.equal(activity.read(deadline).state,'busy');assert.equal(activity.read(deadline).quietTurnDue,true);
+ assert.equal(activity.claimQuietTurn(6000,deadline),true);
+ assert.equal(activity.claimQuietTurn(6000,deadline),false);
+ activity.consume([row('quiet_turn_interrupt',{ts:deadline,turn_started_at:6000,last_activity_at:6000,
+  last_native_activity_at:6000,last_response_at:null,control_id:7})]);
+ const expired=activity.read(deadline);
+ assert.equal(expired.state,'idle');assert.equal(expired.turnOpen,false);
+ assert.equal(expired.busySince,null);assert.equal(expired.idleSince,deadline);
+ assert.deepEqual(expired.tools,[]);assert.equal(expired.lastActivityAt,6000);
+ assert.equal(expired.lastResponseAt,null);
+ assert.equal(activity.read(deadline+10000).state,'idle');
+ activity.consume([row('pre_tool',{ts:8000,tool_use_id:'stale'})]);
+ assert.equal(activity.read(deadline+10001).state,'idle','late stale tool hook cannot resurrect expired work');
+ activity.consume([row('prompt',{ts:deadline+11000})]);
+ const next=activity.read(deadline+20000);
+ assert.equal(next.state,'busy');assert.equal(next.turnOpen,true);assert.equal(next.busySince,deadline+11000);
+});
+
+for(const runtime of ['claude','codex'])test(`${runtime} unfinished tools survive silent long turns and reader restart`,async t=>{
+ const {appendEvent}=await import('../../../../cli/lib/event-log.js');
+ const {root,activity,row}=fixture(t,runtime);
+ appendEvent(path.join(root,'events.jsonl'),row('prompt',{ts:6000}));
+ appendEvent(path.join(root,'events.jsonl'),row('pre_tool',{ts:7000,tool_use_id:'foreground',tool:'Bash'}));
+ const check=reader=>{
+  for(const now of [307000,1227000,2407000]) {
+   const observed=reader.read(now);
+   assert.equal(observed.state,'busy');assert.equal(observed.turnOpen,true);
+   assert.equal(observed.tools.length,1);assert.equal(observed.tools[0].id,'foreground');
+   assert.equal(observed.lastActivityAt,7000);assert.equal(observed.lastResponseAt,7000);
+   assert.equal(observed.quietTurnDue,false);assert.equal(reader.claimQuietTurn(7000,now),false);
+  }
+ };
+ check(activity);
+ const restarted=new SessionActivity({runDir:root,runId:'r',sessionId:'s',runtime,startedAt:100});
+ t.after(()=>restarted.close());check(restarted);
+ appendEvent(path.join(root,'events.jsonl'),row('post_tool',{ts:608000,tool_use_id:'foreground'}));
+ assert.equal(restarted.read(608000+OPEN_TURN_INACTIVITY_TIMEOUT_MS-1).state,'busy');
+ const due=restarted.read(608000+OPEN_TURN_INACTIVITY_TIMEOUT_MS);
+ assert.equal(due.state,'busy');assert.equal(due.tools.length,0);assert.equal(due.quietTurnDue,true);
+});
+
+for(const runtime of ['claude','codex'])test(`${runtime} hook and transcript activity each extend the open-turn deadline`,t=>{
+ const {root,activity,row}=fixture(t,runtime),transcript=path.join(root,'s.jsonl');
+ fs.writeFileSync(transcript,'');fs.utimesSync(transcript,0.1,0.1);
+ activity.consume([row('session_start',{transcript_path:transcript}),row('prompt',{ts:6000})]);
+ assert.equal(activity.read(305999).state,'busy');
+ activity.consume([row('post_tool',{ts:305999,tool_use_id:'done'})]);
+ assert.equal(activity.read(605998).state,'busy');
+ // Partial/unfinished native output still grows the file during streaming.
+ fs.appendFileSync(transcript,'{"streaming":');fs.utimesSync(transcript,605.998,605.998);
+ assert.equal(activity.read(605999).state,'busy');
+ assert.equal(activity.read(905997).state,'busy');
+ const due=activity.read(605998+OPEN_TURN_INACTIVITY_TIMEOUT_MS);
+ assert.equal(due.state,'busy');assert.equal(due.quietTurnDue,true);
+ assert.equal(due.lastActivityAt,605998);assert.equal(due.lastResponseAt,null);
+});
+
+for(const runtime of ['claude','codex'])test(`${runtime} restart retains the original quiet-turn deadline without declaring idle`,async t=>{
+ const {appendEvent}=await import('../../../../cli/lib/event-log.js');
+ const {root,activity,row}=fixture(t,runtime);
+ appendEvent(path.join(root,'events.jsonl'),row('prompt',{ts:6000}));
+ const due=activity.read(6000+OPEN_TURN_INACTIVITY_TIMEOUT_MS);
+ assert.equal(due.state,'busy');assert.equal(due.turnOpen,true);assert.equal(due.quietTurnDue,true);
+ assert.equal(due.lastActivityAt,6000);
+});
+
+for(const runtime of ['claude','codex'])test(`${runtime} changed native turn rejects an old quiet-turn admission`,t=>{
+ const {activity,row}=fixture(t,runtime),deadline=6000+OPEN_TURN_INACTIVITY_TIMEOUT_MS;
+ activity.consume([row('prompt',{ts:6000})]);activity.read(deadline);
+ assert.equal(activity.claimQuietTurn(6000,deadline),true);
+ activity.consume([row('stop',{ts:deadline}),row('prompt',{ts:deadline+1})]);
+ activity.consume([row('quiet_turn_interrupt',{ts:deadline+2,turn_started_at:6000,last_activity_at:6000,
+  last_native_activity_at:6000,last_response_at:null,control_id:7})]);
+ assert.equal(activity.read(deadline+2).state,'busy');
+ assert.equal(activity.claimQuietTurn(deadline+1,deadline+1+OPEN_TURN_INACTIVITY_TIMEOUT_MS),true);
+});
+
+for(const runtime of ['claude','codex'])test(`${runtime} recovered interrupt facts retain scope and cannot close newer native work`,async t=>{
+ const {appendEvent}=await import('../../../../cli/lib/event-log.js');
+ for(const newer of ['prompt','pre_tool']){
+  const {root,activity,row}=fixture(t,runtime),file=path.join(root,'events.jsonl');
+  appendEvent(file,row('prompt',{ts:6000}));
+  appendEvent(file,row('quiet_turn_interrupt_attempt',{ts:1206000,last_activity_at:6000,turn_started_at:6000,last_native_activity_at:6000,last_response_at:null}));
+  appendEvent(file,row(newer,{ts:1206001,tool_use_id:'new-tool'}));
+  appendEvent(file,row('quiet_turn_interrupt',{ts:1206002,last_activity_at:6000,turn_started_at:6000,last_native_activity_at:6000,last_response_at:null,control_id:7}));
+  const recovered=activity.read(1206003);
+  assert.equal(recovered.state,'busy');assert.equal(recovered.turnOpen,true);
+  assert.equal(recovered.lastActivityAt,1206001);
+  assert.equal(recovered.lastResponseAt,newer==='pre_tool'?1206001:null);
+  assert.equal(recovered.tools.length,newer==='pre_tool'?1:0);
+ }
+ const {root,activity,row}=fixture(t,runtime),file=path.join(root,'events.jsonl');
+ appendEvent(file,row('prompt',{ts:6000}));
+ for(const foreign of [{run_id:'other'},{session_id:'other'},{runtime:'other'},{agent_id:'child'}]){
+  appendEvent(file,row('quiet_turn_interrupt_attempt',{ts:1206000,last_activity_at:6000,turn_started_at:6000,last_native_activity_at:6000,last_response_at:null,...foreign}));
+  appendEvent(file,row('quiet_turn_interrupt',{ts:1206001,last_activity_at:6000,turn_started_at:6000,last_native_activity_at:6000,last_response_at:null,control_id:7,...foreign}));
+ }
+ const recovered=activity.read(1206002);
+ assert.equal(recovered.state,'busy');assert.equal(recovered.lastActivityAt,6000);assert.equal(recovered.lastResponseAt,null);
+ assert.equal(activity.claimQuietTurn(6000,1206002),true);
+});
+
+// Bounded transcript reads must fence both eligibility and an admitted close.
+// Run for quiet-turn/transcript changes; skip unrelated UI. The official runner
+// and fixture isolate all files; no runtime, socket or service is contacted.
+for(const runtime of ['claude','codex'])test(`${runtime} unread transcript delays quiet-turn eligibility until the next bounded read`,t=>{
+ const {root,activity,row}=fixture(t,runtime),transcript=path.join(root,'s.jsonl');
+ fs.writeFileSync(transcript,'{}\n'.repeat(Math.ceil(TRANSCRIPT_READ_BUDGET_BYTES/3)+10));
+ fs.utimesSync(transcript,1,1);
+ activity.consume([row('session_start',{transcript_path:transcript}),row('prompt',{ts:6000})]);
+ const now=6000+OPEN_TURN_INACTIVITY_TIMEOUT_MS;
+ const pending=activity.read(now);
+ assert.equal(pending.transcriptPending,true);assert.ok(activity.transcriptOffset<fs.statSync(transcript).size);
+ assert.equal(pending.tools.length,0);assert.equal(pending.state,'busy');assert.equal(pending.quietTurnDue,false);
+ assert.equal(activity.claimQuietTurn(pending.lastActivityAt,now),false);
+ const drained=activity.read(now);
+ assert.equal(drained.transcriptPending,false);assert.equal(drained.quietTurnDue,true);
+ assert.equal(activity.claimQuietTurn(drained.lastActivityAt,now),true);
+});
+
+test('admitted quiet-turn close waits for the complete transcript even after an old tool result',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl');
+ const result=JSON.stringify({message:{content:[{type:'tool_result',tool_use_id:'old'}]}})+'\n';
+ fs.writeFileSync(transcript,result+'{}\n'.repeat(Math.ceil(TRANSCRIPT_READ_BUDGET_BYTES/3)+10));
+ fs.utimesSync(transcript,1,1);
+ activity.consume([row('session_start',{transcript_path:transcript}),row('prompt',{ts:6000}),
+  row('pre_tool',{ts:7000,tool_use_id:'old'}),
+  row('quiet_turn_interrupt',{ts:1207000,turn_started_at:6000,last_activity_at:7000,
+   last_native_activity_at:7000,last_response_at:7000,control_id:7})]);
+ const pending=activity.read(1207000);
+ assert.equal(pending.transcriptPending,true);assert.equal(pending.tools.length,0);
+ assert.equal(pending.state,'busy');assert.equal(pending.turnOpen,true);
+ assert.ok(activity.pendingQuietTurnClose);
+ const drained=activity.read(1207000);
+ assert.equal(drained.transcriptPending,false);assert.equal(drained.state,'idle');assert.equal(drained.turnOpen,false);
+ assert.equal(activity.pendingQuietTurnClose,null);
+});
+
+for(const runtime of ['claude','codex'])test(`${runtime} new native activity without an AI response rejects an admitted quiet-turn close`,t=>{
+ const {activity,row}=fixture(t,runtime);
+ activity.consume([row('prompt',{ts:6000}),
+  row('quiet_turn_interrupt',{ts:1206000,turn_started_at:6000,last_activity_at:6000,
+   last_native_activity_at:6000,last_response_at:null,control_id:7}),
+  row('post_tool',{ts:1206001,tool_use_id:'already-completed'})]);
+ const observed=activity.read(1206002);
+ assert.equal(observed.lastResponseAt,null);assert.equal(observed.turnStartedAt,6000);
+ assert.equal(observed.lastNativeActivityAt,1206001);assert.equal(observed.tools.length,0);
+ assert.equal(observed.state,'busy');assert.equal(observed.turnOpen,true);
+ assert.equal(activity.pendingQuietTurnClose,null);
+});
+
+// Boundary: change-driven AGY status, interrupt recovery and prompt resets.
+// The official runner owns all paths; no runtime or service is started.
+test('AGY prompt resets both idle stability and the quiet-turn attempt',t=>{
+ const {activity,row}=fixture(t,'agy');
+ activity.consume([row('prompt',{ts:1000})]);
+ assert.equal(activity.claimQuietTurn(1000,1201000),true);
+ activity.consume([row('stop',{ts:1201001}),row('prompt',{ts:1202000})]);
+ const result=activity.read(1202000);
+ assert.equal(activity.agyIdleSince,null);assert.equal(result.lastResponseAt,1202000);
+ assert.equal(result.turnStartedAt,1202000);assert.equal(activity.quietTurnAttemptAt,null);
+ assert.equal(result.quietTurnDue,false);
+});
+
+test('AGY admitted interrupt recovers without a stale busy status reopening the turn',async t=>{
+ const {appendEvent}=await import('../../../../cli/lib/event-log.js');
+ const {root,activity,row}=fixture(t,'agy');
+ const file=path.join(root,'events.jsonl');
+ appendEvent(file,row('prompt',{ts:1000}));
+ fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({session_id:'s',agent_state:'working',zylos:{v:1,runId:'r',capturedAt:2000}}));
+ let observed=activity.read(1202000);
+ assert.equal(observed.lastActivityAt,2000);assert.equal(observed.lastNativeActivityAt,2000);
+ assert.equal(observed.turnStartedAt,1000);assert.equal(observed.quietTurnDue,true);
+ appendEvent(file,row('quiet_turn_interrupt',{ts:1202000,turn_started_at:1000,last_activity_at:2000,last_native_activity_at:2000,last_response_at:1000,control_id:7}));
+ const restarted=new SessionActivity({runDir:root,runId:'r',sessionId:'s',runtime:'agy',startedAt:100});t.after(()=>restarted.close());
+ for(const reader of [activity,restarted]) {
+  observed=reader.read(1202499);assert.equal(observed.state,'busy');assert.equal(observed.turnOpen,false);
+  observed=reader.read(1202500);assert.equal(observed.state,'idle');assert.equal(observed.quietTurnDue,false);
+  assert.equal(reader.claimQuietTurn(2000,2402000),false);
+  assert.equal(reader.read(2402000).state,'idle');
+ }
+ fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({session_id:'s',agent_state:'working',zylos:{v:1,runId:'r',capturedAt:2403000}}));
+ observed=restarted.read(2403000);assert.equal(observed.state,'busy');assert.equal(observed.turnStartedAt,2403000);
+ assert.equal(observed.lastNativeActivityAt,2403000);assert.equal(observed.quietTurnDue,false);
+});
+
+test('events carrying agent_id do not extend the AGY main quiet-turn deadline',t=>{
+ const {root,activity,row}=fixture(t,'agy');
+ activity.consume([row('prompt',{ts:1000})]);
+ fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({session_id:'s',agent_state:'working',zylos:{v:1,runId:'r',capturedAt:2000}}));
+ activity.read(2000);
+ activity.consume([row('prompt',{ts:1201999,agent_id:'child'}),row('post_tool',{ts:1201999,agent_id:'child'})]);
+ const observed=activity.read(1202000);
+ assert.equal(observed.lastActivityAt,2000);assert.equal(observed.lastNativeActivityAt,2000);
+ assert.equal(observed.turnStartedAt,1000);assert.equal(observed.quietTurnDue,true);
+});
+
+// Boundary: native idle samples update freshness without moving TTL activity.
+// Run for AGY sample accounting changes; no native process or database used.
+test('AGY idle samples preserve activity time while advancing native freshness',t=>{
+ const {root,activity,row}=fixture(t,'agy');
+ activity.consume([row('prompt',{ts:1000})]);
+ const write=(capturedAt,extra={})=>fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({
+  session_id:'s',agent_state:'idle',zylos:{v:1,runId:'r',capturedAt},...extra}));
+ write(2000);
+ let result=activity.read(2500);
+ assert.equal(result.state,'idle');assert.equal(result.lastActivityAt,1000);assert.equal(result.lastNativeActivityAt,2000);
+ write(3000);result=activity.read(3500);
+ assert.equal(result.state,'idle');assert.equal(result.lastActivityAt,1000);assert.equal(result.lastNativeActivityAt,3000);
+ write(4000,{agent_state:'working'});result=activity.read(4000);
+ assert.equal(result.state,'busy');assert.equal(result.lastActivityAt,4000);assert.equal(result.lastNativeActivityAt,4000);
+});
+
+// Boundary: a native boundary is appended after sampling a statusLine-only
+// turn but before its durable attempt. Run for recovery ordering changes;
+// private event/sample files only, no runtime, tmux or database is launched.
+for(const boundary of ['stop','prompt'])test(`AGY late attempt cannot replace a newer ${boundary} on restart`,async t=>{
+ const {root,activity,row}=fixture(t,'agy');
+ const {appendEvent}=await import('../../../../cli/lib/event-log.js');
+ const file=path.join(root,'events.jsonl');
+ fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({session_id:'s',agent_state:'working',zylos:{v:1,runId:'r',capturedAt:1000}}));
+ const sampled=activity.read(1201000);
+ assert.equal(sampled.turnStartedAt,1000);assert.equal(sampled.quietTurnDue,true);
+ appendEvent(file,row(boundary,{ts:1201500}));
+ appendEvent(file,row('quiet_turn_interrupt_attempt',{ts:1201501,turn_started_at:1000,
+  last_activity_at:1000,last_native_activity_at:1000,last_response_at:null}));
+ const restarted=new SessionActivity({runDir:root,runId:'r',sessionId:'s',runtime:'agy',startedAt:100});
+ t.after(()=>restarted.close());
+ let result=restarted.read(1202100);
+ assert.equal(result.state,boundary==='stop'?'idle':'busy');
+ assert.equal(result.turnOpen,boundary!=='stop');
+ if(boundary==='prompt') {
+  assert.equal(result.turnStartedAt,1201500);
+  result=restarted.read(2401500);
+  assert.equal(result.quietTurnDue,true);
+  assert.equal(restarted.claimQuietTurn(1201500,2401500),true);
+ } else {
+  result=restarted.read(3601500);
+  assert.equal(result.state,'idle');assert.equal(result.turnOpen,false);
+ }
+});
+
+// Boundary: a closed turn fences task samples even when the next turn is quiet.
+// Run for AGY task exemption/close changes; private fixtures, no runtime or DB.
+test('AGY closed-turn task sample cannot exempt the next quiet turn',t=>{
+ const {root,activity,row}=fixture(t,'agy');
+ activity.consume([row('prompt',{ts:500})]);
+ fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({session_id:'s',agent_state:'working',
+  subagents:[{id:'child',status:'running'}],zylos:{v:1,runId:'r',capturedAt:1000}}));
+ assert.equal(activity.read(1000).state,'busy');assert.equal(activity.agyTasksRunning,true);
+ activity.consume([row('stop',{ts:2000})]);
+ assert.equal(activity.read(2500).state,'idle');assert.equal(activity.agyTasksRunning,false);
+ activity.consume([row('prompt',{ts:3000})]);
+ const result=activity.read(1203000);
+ assert.equal(result.state,'busy');assert.equal(result.quietTurnDue,true);
+ assert.equal(activity.claimQuietTurn(3000,1203000),true);
+});
+
+// Boundary: native StopFailure registration feeds the same terminal reducer as
+// Stop. Late hooks cannot start a turn; a currently running tool remains busy.
+// Run for Claude turn boundaries; private files, no runtime/tmux/database.
+test('Claude terminal hooks close one turn and late hooks do not start another',t=>{
+ for(const hook_event_name of ['Stop','StopFailure']) {
+  const {root,activity,row}=fixture(t);
+  activity.consume([row('prompt'),row('prompt',{ts:300})]);
+  assert.equal(activity.turnStartedAt,200,'input queued in the old turn is not a new start');
+  const terminal=handleHookActivity({hook_event_name,session_id:'s'},
+   {env:{ZYLOS_DIR:root,ZYLOS_RUN_ID:'r',ZYLOS_MODEL_CONFIG:'{"runtime":"claude"}'},nowMs:500});
+  assert.equal(terminal.event,'stop');
+  activity.consume([terminal]);
+  assert.equal(activity.closedThrough,500);assert.equal(activity.turn,false);
+  activity.consume([row('pre_tool',{ts:600,tool_use_id:'late'})]);
+  assert.equal(activity.read(4000).state,'busy');assert.equal(activity.turn,false);
+  activity.consume([row('post_tool',{ts:700,tool_use_id:'late'}),row('idle',{ts:710}),
+   row('stop',{ts:720})]);
+  assert.equal(activity.read(4000).state,'idle');assert.equal(activity.turn,false);
+  assert.equal(activity.claimQuietTurn(720,1200720),false);
+  activity.consume([row('prompt',{ts:5000})]);
+  assert.equal(activity.read(9000).turnOpen,true);assert.equal(activity.turnStartedAt,5000);
+ }
+});
+
+// Boundary: native dequeue starts a turn without a prompt hook and shares the
+// Dashboard's 5-second Stop lag rule across bounded reads/restart.
+// Run for turn/dequeue evidence changes; private files.
+test('Claude dequeue opens a turn across Stop lag, bounded reads and restart',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl');
+ const queue={type:'queue-operation',operation:'dequeue',sessionId:'s',timestamp:new Date(550).toISOString()};
+ fs.writeFileSync(transcript,'{}\n'.repeat(Math.ceil(TRANSCRIPT_READ_BUDGET_BYTES/3)+2)+JSON.stringify(queue)+'\n');
+ fs.utimesSync(transcript,0.55,0.55);
+ const file=path.join(root,'events.jsonl');
+ const rows=[row('session_start',{ts:100,transcript_path:transcript}),row('prompt'),row('prompt',{ts:300}),
+  row('pre_tool',{ts:350,tool_use_id:'old'}),row('stop',{ts:600}),
+  row('pre_tool',{ts:800,tool_use_id:'new'}),row('post_tool',{ts:900,tool_use_id:'new'})];
+ fs.writeFileSync(file,rows.map(value=>JSON.stringify(value)+'\n').join(''));
+ let result=activity.read(4000);
+ assert.equal(result.transcriptPending,true);
+ result=activity.read(4000);
+ assert.equal(result.state,'busy');assert.equal(result.turnOpen,true);assert.equal(result.turnStartedAt,601);
+ // Keep the existing admitted-close contract for a turn begun only by dequeue.
+ const deadline=result.lastActivityAt+OPEN_TURN_INACTIVITY_TIMEOUT_MS;
+ const admission=row('quiet_turn_interrupt',{ts:deadline,turn_started_at:601,
+  last_activity_at:result.lastActivityAt,last_native_activity_at:result.lastNativeActivityAt,
+  last_response_at:result.lastResponseAt,control_id:7});
+ fs.appendFileSync(file,JSON.stringify(admission)+'\n');
+ const recovered=new SessionActivity({runDir:root,runId:'r',sessionId:'s',runtime:'claude',startedAt:100});
+ t.after(()=>recovered.close());
+ recovered.read(deadline);result=recovered.read(deadline);
+ assert.equal(result.state,'idle');assert.equal(result.turnOpen,false);
+ assert.equal(recovered.claimQuietTurn(result.lastActivityAt,deadline+1200000),false);
+});
+
+// Boundary: a lost/replaced native transcript must not keep a cached dequeue
+// alive. Only this private fixture is renamed/removed; no native process runs.
+// Run for dequeue reader/rotation changes, skip unrelated hooks or UI.
+test('Claude transcript rotation and unavailable records fall back to hook state',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl');
+ const write=ts=>{
+  fs.writeFileSync(transcript,JSON.stringify({type:'queue-operation',operation:'dequeue',
+   sessionId:'s',timestamp:new Date(ts).toISOString()})+'\n');fs.utimesSync(transcript,ts/1000,ts/1000);
+ };
+ write(550);
+ activity.consume([row('session_start',{ts:100,transcript_path:transcript}),row('prompt'),row('stop',{ts:500})]);
+ assert.equal(activity.read(6000).turnOpen,true);
+ fs.renameSync(transcript,path.join(root,'rotated.jsonl'));
+ fs.writeFileSync(transcript,'');fs.utimesSync(transcript,0.6,0.6);
+ assert.equal(activity.read(6001).state,'idle');
+ write(700);assert.equal(activity.read(7000).turnOpen,true);
+ fs.rmSync(transcript);
+ assert.equal(activity.read(8000).state,'idle');assert.equal(activity.turn,false);
+ fs.mkdirSync(transcript);
+ assert.doesNotThrow(()=>assert.equal(activity.read(9000).state,'idle'));
+ // A genuine hook-open turn still remains busy when the native file is absent.
+ activity.consume([row('prompt',{ts:10000})]);
+ assert.equal(activity.read(14000).state,'busy');assert.equal(activity.turnStartedAt,10000);
 });
