@@ -2026,7 +2026,7 @@ export async function runInitAuthentication(opts, {
   } else {
     // ── Step 6 (Claude): auth check + guided login ────────────────────────
     if (exists('claude')) {
-      const explicit = !opts.authFromEnv && !!(opts.apiKey || opts.authToken);
+      const explicit = !opts.authFromEnv && !!(opts.setupToken || opts.apiKey || opts.authToken);
       claudeAuthenticated = !explicit && claudeStatus();
       if (claudeAuthenticated) {
         if (!quiet) log(`  ${success('Claude Code authenticated')}`);

@@ -407,17 +407,17 @@ for (const kind of ['apiKey', 'authToken']) test(`explicit ${kind} replaces an e
   assert.deepEqual(calls, ['api']);
 });
 
-test('explicit setup token preserves an existing Claude login without saving or verifying the replacement', async t => {
+test('invalid explicit setup token is verified and rolled back despite an existing Claude login', async t => {
   const home = isolatedCredentials(t), credential = 'sk-ant-oat-' + crypto.randomUUID(), calls = [];
   const file = path.join(home, '.claude/settings.json'); fs.mkdirSync(path.dirname(file));
   const previous = JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: crypto.randomUUID() } }); fs.writeFileSync(file, previous);
   const result = await runInitAuthentication(parseInitFlags(['--setup-token', credential]), { runtime: 'claude', skipConfirm: true, quiet: true, exists: () => true,
-    claudeStatus: () => true,
+    claudeStatus: () => assert.fail('explicit credentials must bypass the login check'),
     setupSave: () => { calls.push('save'); return true; }, setupVerify: () => { calls.push('verify'); return { valid: false, authError: true }; },
     setupRollback: () => { calls.push('rollback'); },
   });
-  assert.equal(result.failed, undefined); assert.equal(result.claudeAuthenticated, true); assert.equal(result.pendingSetupToken, null);
-  assert.deepEqual(calls, []); assert.equal(fs.readFileSync(file, 'utf8') === previous, true);
+  assert.equal(result.failed, undefined); assert.equal(result.claudeAuthenticated, false); assert.equal(result.pendingSetupToken, null); assert.equal(result.exitCode, 1);
+  assert.deepEqual(calls, ['save', 'verify', 'rollback']); assert.equal(fs.readFileSync(file, 'utf8') === previous, true);
 });
 
 test('Claude selection retains an explicit Codex base-only change even with an ambient OpenAI key', async t => {

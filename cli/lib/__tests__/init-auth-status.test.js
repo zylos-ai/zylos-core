@@ -128,17 +128,47 @@ for (const [flag, key, value, pending] of [
   ['--api-key', 'ANTHROPIC_API_KEY', 'sk-ant-explicit-placeholder', 'pendingApiKey'],
   ['--auth-token', 'ANTHROPIC_AUTH_TOKEN', 'explicit-bearer-placeholder', 'pendingAuthToken'],
   ['--setup-token', 'CLAUDE_CODE_OAUTH_TOKEN', 'sk-ant-oat-explicit-placeholder', 'pendingSetupToken'],
-]) test(`explicit ${flag} retains its established behavior with saved and ambient credentials`, async () => {
+]) test(`explicit ${flag} replaces saved and ambient credentials after verification`, async () => {
   fs.writeFileSync(envFile, 'ANTHROPIC_API_KEY=sk-ant-saved-placeholder\n');
   process.env[key] = value + '-ambient';
   const output = [], opts = parseInitFlags([flag, value]); resolveFromEnv(opts, { log: line => output.push(line) });
   const result = await runInitAuthentication(opts, { runtime: 'claude', skipConfirm: true, log: () => {},
     authClaude: async options => { assert.equal(options[key === 'ANTHROPIC_API_KEY' ? 'apiKey' : 'authToken'], value); return true; },
-    setupSave: () => assert.fail('an existing login retains the established setup-token behavior'),
+    setupSave: token => { assert.equal(token, value); return true; },
+    setupVerify: () => ({ valid: true }),
   });
   assert.equal(output.length, 0); assert.equal(opts.authFromEnv, false);
   assert.equal(result.claudeAuthenticated, true);
-  assert.equal(result[pending], flag === '--setup-token' ? null : value);
+  assert.equal(result[pending], value);
+});
+
+for (const login of ['saved credentials', 'subscription'])
+for (const accepted of [true, false]) test(`explicit setup token with ${login} ${accepted ? 'is verified and persisted' : 'rolls back after rejection'}`, async () => {
+  const previous = 'CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-saved-placeholder\n';
+  if (login === 'saved credentials') fs.writeFileSync(envFile, previous);
+  else subscription = true;
+  const value = 'sk-ant-oat-explicit-placeholder', calls = [], output = [];
+  const opts = parseInitFlags(['--setup-token', value]); resolveFromEnv(opts);
+  const result = await runInitAuthentication(opts, { runtime: 'claude', skipConfirm: true,
+    log: line => output.push(line), reportError: line => output.push(line),
+    setupSave: token => { assert.equal(token, value); calls.push('save'); return true; },
+    setupVerify: () => { calls.push('verify'); return { valid: accepted, authError: !accepted }; },
+    setupRollback: () => { calls.push('rollback'); },
+  });
+  assert.equal(probes.length, 0);
+  assert.deepEqual(calls, accepted ? ['save', 'verify'] : ['save', 'verify', 'rollback']);
+  assert.equal(result.claudeAuthenticated, accepted); assert.equal(result.exitCode, accepted ? 0 : 1);
+  assert.equal(result.pendingSetupToken, accepted ? value : null);
+  assert.doesNotMatch(output.join('\n'), /Claude Code authenticated/);
+  if (accepted) {
+    assert.equal(persistInitCredentials({ setupToken: result.pendingSetupToken }, { log: () => {} }), true);
+    assert.equal(claudeProbeEnvironment(ZYLOS_DIR, process.env).CLAUDE_CODE_OAUTH_TOKEN, value);
+    assert.equal(fs.statSync(envFile).mode & 0o777, 0o600);
+  } else {
+    assert.match(output.join('\n'), /invalid or expired/);
+    if (login === 'saved credentials') assert.equal(fs.readFileSync(envFile, 'utf8'), previous);
+    else assert.equal(fs.existsSync(envFile), false);
+  }
 });
 
 test('invalid ambient and explicit setup tokens return the same failure', async () => {
