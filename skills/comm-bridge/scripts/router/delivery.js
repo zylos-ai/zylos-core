@@ -172,7 +172,8 @@ export function createDelivery(deps, configuration = {}) {
   }
 
   async function deliver(row, type) {
-    const group = deps.getSessionMode() === 'single' ? null : row.session_group;
+    const nativeSingle = deps.getSessionMode() === 'single' && deps.getSessionKeyPresent?.() === true;
+    const group = deps.getSessionMode() === 'single' ? nativeSingle ? 'origin' : null : row.session_group;
     const fields = { session_group: group, [type === 'control' ? 'control_id' : 'conversation_id']: row.id };
     const emit = (event, details = {}) => diagnostic(event, { ...fields, ...details });
     const periodic = groupPeriodic(group, fields);
@@ -437,7 +438,7 @@ export function createDelivery(deps, configuration = {}) {
       }
       // A message that waits for the session to be idle is recorded long after it was typed in: the record carries when.
       if (type === 'control') emit('deliver', { sessionId, pasted_at: pastedAt });
-      else if (!deps.db.markDelivered(row.id, { sessionId })) emit('mark_delivered_stale', { sessionId });
+      else if (!deps.db.markDelivered(row.id, { sessionId, ...(nativeSingle ? { sessionGroup: 'origin' } : {}) })) emit('mark_delivered_stale', { sessionId });
       else emit('deliver', { sessionId, pasted_at: pastedAt });
     } else if (result === 'ack') deps.db.ackControl(row.id);
     return { delivered: result !== 'blocked', blocked: result === 'blocked', state: state.state };

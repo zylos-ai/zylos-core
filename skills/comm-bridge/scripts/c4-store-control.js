@@ -4,10 +4,19 @@ import { fileURLToPath } from 'node:url';
 export function controlFunctions({ read, write, get, all, run, seconds, baseline }) {
   const fenceColumns = 'session_group AS sessionGroup,reason,run_id AS runId,created_at AS createdAt';
   const unfenced = "NOT EXISTS(SELECT 1 FROM drain_fences WHERE session_group=control_queue.session_group OR session_group='*')";
-  function target(value) {
-    if (!value || Object.keys(value).length !== 1) throw dataError('INVALID_ARGS', 'Choose exactly one control target');
+  function target(value, { allowKeepOrigin = false } = {}) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw dataError('INVALID_ARGS', 'Choose exactly one control target');
+    const keys = Object.keys(value);
+    const hasKeepOrigin = Object.hasOwn(value, 'keepOrigin');
+    if (hasKeepOrigin && (!allowKeepOrigin || value.allSessionGroups !== true || !['all', 'role'].includes(value.keepOrigin))) throw dataError('INVALID_ARGS', 'Invalid Origin preservation option');
+    if (keys.length !== (hasKeepOrigin ? 2 : 1)) throw dataError('INVALID_ARGS', 'Choose exactly one control target');
     if (value.machine === true) return { sql: 'session_group IS NULL', args: [] };
-    if (value.allSessionGroups === true) return { sql: 'session_group IS NOT NULL', args: [] };
+    if (value.allSessionGroups === true) {
+      let sql = 'session_group IS NOT NULL';
+      if (value.keepOrigin === 'all') sql += " AND session_group<>'origin'";
+      if (value.keepOrigin === 'role') sql += " AND NOT (session_group='origin' AND target_binding IS NULL)";
+      return { sql, args: [] };
+    }
     requireGroup(value.sessionGroup); return { sql: 'session_group=?', args: [value.sessionGroup] };
   }
   const endingColumns = 'session_group AS sessionGroup,run_id AS runId,reason,ended_at AS endedAt,continuation_pending AS continuationPending';
@@ -32,7 +41,7 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
     const open = get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'");
     if (sessionGroup === null) {
       let config; try { config = baseline(); } catch (cause) { throw dataError('CONTROL_TARGET_REQUIRED', 'A control target is required when configuration cannot be read', { cause }); }
-      if (open || config.sessionMode !== 'single') throw dataError('CONTROL_TARGET_REQUIRED', 'A control target is required in multi or during transition');
+      if (open || config.keyPresent || config.sessionMode !== 'single') throw dataError('CONTROL_TARGET_REQUIRED', 'A control target is required after migration or during transition');
     } else requireGroup(sessionGroup);
     if (sessionGroup !== null && (appendAckSuffix || / ---- ack via:/.test(content)) && ackDeadlineAt === null) throw dataError('ACK_DEADLINE_REQUIRED', 'Targeted acknowledged controls require a deadline');
     const binding = normalizeTargetBinding(targetBinding);
@@ -60,7 +69,8 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
       const { runId, reason, clearFence = false } = options;
       if (typeof runId !== 'string' || !runId.trim() || !['ttl', 'evict', 'release', 'upgrade', 'auth', 'model_config', 'mode_switch', 'manual_restart', 'unexpected', 'delete'].includes(reason)) throw dataError('INVALID_ARGS', 'Invalid run ending identity or reason');
       if (typeof clearFence !== 'boolean' && (!clearFence || typeof clearFence !== 'object' || Array.isArray(clearFence) || Object.keys(clearFence).some(key => !['expectedReason', 'expectedRunId'].includes(key)) || typeof clearFence.expectedReason !== 'string' || typeof clearFence.expectedRunId !== 'string' || !clearFence.expectedRunId)) throw dataError('INVALID_ARGS', 'Invalid fence condition');
-      if (baseline().sessionMode !== 'multi') throw dataError('INVALID_ARGS', 'Run endings require multi mode');
+      const config = baseline();
+      if (!config.keyPresent || (config.sessionMode === 'single' && sessionGroup !== 'origin')) throw dataError('INVALID_ARGS', 'Run endings require an active migrated session scope');
       const previous = get(c, 'SELECT * FROM run_endings WHERE session_group=?', sessionGroup);
       const recorded = previous?.run_id !== runId;
       if (recorded) {
@@ -139,10 +149,12 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
     clearContinuation: (sessionGroup, options) => write(c => {
       requireGroup(sessionGroup); slotOptions(options, ['runId']);
       const { runId } = options; slotRun(runId);
-      if (baseline().sessionMode !== 'multi') throw dataError('INVALID_ARGS', 'Continuations require multi mode');
+      const config = baseline();
+      if (!config.keyPresent || (config.sessionMode === 'single' && sessionGroup !== 'origin')) throw dataError('INVALID_ARGS', 'Continuations require an active migrated session scope');
       return { cleared: run(c, 'UPDATE run_endings SET continuation_pending=0 WHERE session_group=? AND continuation_pending=1 AND run_id<>?', sessionGroup, runId).changes > 0 };
     }),
     clearAllContinuations: () => write(c => ({ cleared: run(c, 'UPDATE run_endings SET continuation_pending=0 WHERE continuation_pending=1').changes })),
+    clearContinuationsExceptOrigin: () => write(c => ({ cleared: run(c, "UPDATE run_endings SET continuation_pending=0 WHERE continuation_pending=1 AND session_group<>'origin'").changes })),
     getNextPendingControl: (current = seconds(), { sessionGroups } = {}) => {
       let sql = 'session_group IS NULL', args = [];
       if (sessionGroups !== undefined) {
@@ -152,11 +164,12 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
       }
       return read(c => get(c, `SELECT * FROM control_queue WHERE status='pending' AND (available_at IS NULL OR available_at<=?) AND ${sql} AND ${unfenced} ORDER BY priority,created_at,id LIMIT 1`, current, ...args) ?? null);
     },
-    getOriginNeed: (current = seconds()) => read(c => {
+    getOriginNeed: (current = seconds(), { sessionMode = 'multi' } = {}) => read(c => {
+      if (!['single', 'multi'].includes(sessionMode)) throw dataError('INVALID_ARGS', 'Invalid session mode');
       const ending = get(c, "SELECT ended_at AS endedAt FROM run_endings WHERE session_group='origin' AND continuation_pending=1");
       return {
         inbound: get(c, `SELECT COUNT(*) AS count, MIN(unixepoch(timestamp)) AS oldestAt
-          FROM conversations WHERE direction='in' AND status='pending' AND session_group='origin'`),
+          FROM conversations WHERE direction='in' AND status='pending' AND ${sessionMode === 'single' ? "NOT EXISTS(SELECT 1 FROM drain_fences WHERE drain_fences.session_group=conversations.session_group)" : "session_group='origin'"}`),
         controls: get(c, `SELECT COUNT(*) AS count, MIN(MAX(created_at, COALESCE(available_at, created_at))) AS oldestAt
           FROM control_queue WHERE status='pending' AND session_group='origin' AND target_binding IS NULL
             AND (available_at IS NULL OR available_at<=?)`, current),
@@ -165,7 +178,7 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
     }),
     claimControl: id => write(c => run(c, `UPDATE control_queue SET status='running',updated_at=? WHERE id=? AND status='pending' AND ${unfenced}`, seconds(), id).changes > 0),
     expirePendingControls: value => {
-      const t = target(value);
+      const t = target(value, { allowKeepOrigin: true });
       return write(c => all(c, `UPDATE control_queue SET status='timeout',last_error='SESSION_ENDED',updated_at=? WHERE status='pending' AND ${t.sql} RETURNING id,session_group,raw_content`, seconds(), ...t.args));
     },
     expireStaleRunningControls: (value, { deliveredBefore }) => {

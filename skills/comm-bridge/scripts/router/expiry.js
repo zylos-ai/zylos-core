@@ -3,14 +3,14 @@ import { validateChannel } from '../c4-validate.js';
 /** Called only after expirePending=true; the original D1 row supplies routing. */
 export function createPendingExpiryHandler({ resolveSessionLaunchConfig, readRuntimeHealth, sendStatusNotice,
   isComponent = channel => { try { validateChannel(channel, true); return true; } catch { return false; } } }) {
-  return async function handleExpired(row, { sessionMode, identity, launchConfig } = {}) {
+  return async function handleExpired(row, { sessionMode, sessionGroup, identity, launchConfig } = {}) {
     if (!row.endpoint_id || ['system', 'void', 'internal'].includes(row.channel) || !isComponent(row.channel)) {
       return { outcome: 'skipped' };
     }
     let runtime = 'unknown';
     if (identity?.present) runtime = identity.runtime || 'unknown';
     else if (identity?.present === false) {
-      try { runtime = (launchConfig ?? resolveSessionLaunchConfig({ sessionGroup: sessionMode === 'single' ? null : row.session_group,
+      try { runtime = (launchConfig ?? resolveSessionLaunchConfig({ sessionGroup: sessionGroup === undefined ? sessionMode === 'single' ? null : row.session_group : sessionGroup,
         sessionMode })).runtime || 'unknown'; } catch { /* Unknown remains unknown; no default runtime. */ }
     }
     let health = 'unavailable';

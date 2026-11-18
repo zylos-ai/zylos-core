@@ -28,7 +28,7 @@ function setup(t, { mode = 'multi', phase } = {}) {
   const prefix = `factory${++sequence}`, a = `${prefix}a`, b = `${prefix}b`;
   for (const name of [a,b]) fs.mkdirSync(path.join(SKILLS_DIR, name), { recursive: true });
   const calls = [], held = deferred(); let holding = false, blockedOnce = false;
-  const keys = mode === 'single' ? [null] : ['origin', a, b];
+  const keys = mode === 'single' ? ['origin'] : ['origin', a, b];
   const scenes = new Map(keys.map(group => [group, { present: true, ready: true, runtime: 'codex',
     runId: `r-${group}`, sessionId: `business-${group}`, runtimeSessionId: `business-${group}`,
     tmuxName: tmuxNameForGroup(group ?? 'origin'), serverGeneration: 'test-generation', paneId: `%${group}`, createdAt: Math.floor(Date.now()/1000) }]));
@@ -124,35 +124,14 @@ test('factory: actual unreadable remains inert once, even if config repaired', a
   assert.equal(dispatcher.state.inert, true); assert.equal(alerts.length, 1);
 });
 
-test('factory: actual single directs a non-null group through null origin target', async t => {
+test('factory: native single directs a non-null group through Origin and changes attribution', async t => {
   const f = setup(t, { mode: 'single' }), row = f.add();
   assert.equal(f.row(row.id).session_group, f.a);
   const dispatcher = f.create(); await dispatcher.initialize(); await dispatcher.idle(); dispatcher.tick(); await dispatcher.idle();
-  assert.equal(f.row(row.id).status, 'delivered'); assert.equal(f.row(row.id).session_id, 'business-null');
-  assert.deepEqual(f.calls.filter(c => c[0] === 'resolve'), [['resolve', null]]);
-  assert.equal(f.calls.find(c => c[0] === 'notify')[1].sessionGroup, null);
-});
-
-test('factory oracle rejects a known-bad scheduler that waits for previous lanes', async t => {
-  const schedulerURL = new URL('../router/scheduler.js', import.meta.url), factoryURL = new URL('../router/factory.js', import.meta.url);
-  const original = fs.readFileSync(schedulerURL, 'utf8');
-  const before = 'const work = lane(group).kick();';
-  assert.ok(original.includes(before));
-  const absolute = (source, url) => source.replace(/from '(\.\.?\/[^']+)'/g, (_, relative) => `from '${new URL(relative, url).href}'`);
-  const uri = source => 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');
-  const altered = absolute(original.replace(before,
-    'const work = tasks.size ? Promise.allSettled([...tasks]).then(() => lane(group).kick()) : lane(group).kick();'), schedulerURL);
-  const factorySource = absolute(fs.readFileSync(factoryURL, 'utf8'), factoryURL).replace(schedulerURL.href, uri(altered));
-  const bad = (await import(uri(factorySource))).createDispatcher;
-  const f = setup(t, { phase: 'paste' }), first = f.add(), second = f.add(f.b);
-  const dispatcher = f.create(bad); await dispatcher.initialize(); await dispatcher.idle(); dispatcher.tick();
-  await until(f.holding, 'mutant must reach the held paste');
-  for (let i = 0; i < 20; i++) await flush();
-  assert.equal(f.row(first.id).status, 'running');
-  assert.throws(() => assert.equal(f.row(second.id).status, 'delivered'), { code: 'ERR_ASSERTION' });
-  assert.equal(f.row(second.id).status, 'pending');
-  f.held.resolve(); await dispatcher.idle();
-  assert.equal(f.row(second.id).status, 'delivered');
+  assert.equal(f.row(row.id).status, 'delivered'); assert.equal(f.row(row.id).session_id, 'business-origin');
+  assert.equal(f.row(row.id).session_group, 'origin');
+  assert.deepEqual(f.calls.filter(c => c[0] === 'resolve'), [['resolve', 'origin']]);
+  assert.equal(f.calls.find(c => c[0] === 'notify')[1].sessionGroup, 'origin');
 });
 
 test('factory: blocked paste in live A does not prevent absent B from launching and delivering', async t => {

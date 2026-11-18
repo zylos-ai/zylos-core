@@ -13,7 +13,7 @@ import { listGroupTmuxSessions } from '../../../../cli/lib/session-group-paths.j
 
 // only the external runtime is replaced. Its READY file is a test
 // producer, not evidence of the hook or an authenticated runtime startup.
-async function setup(t, { mode = 'multi', group = 'chat', runtime = 'claude' } = {}) {
+async function setup(t, { mode = 'multi', group = 'chat', runtime = 'claude', keyPresent = true } = {}) {
   let router;
   let clock = Date.now();
   const tm = isolatedTmux(t, { prefix: 'router-launch-', beforeCleanup: () => router?.stop() });
@@ -23,7 +23,7 @@ async function setup(t, { mode = 'multi', group = 'chat', runtime = 'claude' } =
   t.after(() => { process.env.ZYLOS_DIR = previousRoot; });
   const configFile = path.join(tm.dir, 'config.json');
   const writeConfig = config => fs.writeFileSync(configFile, JSON.stringify(config));
-  writeConfig({ runtime, session_mode: mode });
+  writeConfig({ runtime, ...(keyPresent ? { session_mode: mode } : {}) });
   let configReads = 0;
   const f = fixture(t, { readConfig: () => {
     configReads++;
@@ -58,7 +58,7 @@ setInterval(()=>{},1000);
   };
   let beforeLaunch = () => {};
   const deps = { db, now: () => clock,
-    readSessionMode: () => ({ mode, keyPresent: true }),
+    readSessionMode: () => ({ mode, keyPresent }),
     readLiveIdentities: reader.readLiveIdentities,
     readLiveIdentity: reader.readLiveIdentity,
     readCurrentSession: readReadyIdentity,
@@ -141,10 +141,10 @@ for (const runtime of ['claude', 'codex']) for (const override of [false, true])
   });
 }
 
-test('single ignores origin overrides and omits group from runtime environment', async t => {
-  const f = await setup(t, { mode: 'single', group: null });
+test('legacy single ignores Origin overrides and omits group from runtime environment', async t => {
+  const f = await setup(t, { mode: 'single', group: null, keyPresent: false });
   f.db.setSessionRuntimeConfig({ sessionGroup: 'origin', runtime: 'codex' });
-  f.db.setSessionModelConfig({ sessionGroup: 'origin', runtime: 'codex', model: 'ignored', effort: 'high' });
+  f.db.setSessionModelConfig({ sessionGroup: 'origin', runtime: 'codex', model: 'origin-model', effort: 'high' });
   await f.run();
   assertLaunch(f.record(), await f.live(), { runtime: 'claude', mode: 'default' }, null);
   assert.equal(f.configReads, 1); assert.equal(f.launches.length, 1);
