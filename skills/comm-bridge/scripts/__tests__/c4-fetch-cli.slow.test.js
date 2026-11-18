@@ -1,3 +1,4 @@
+// covers: skills/comm-bridge/scripts/c4-sync-batch.js skills/comm-bridge/scripts/c4-fetch.js skills/comm-bridge/scripts/c4-db.js skills/comm-bridge/scripts/c4-checkpoint.js
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';

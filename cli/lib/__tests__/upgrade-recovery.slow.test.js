@@ -1,3 +1,4 @@
+// covers: cli/lib/core-db-backup.js cli/lib/runtime/upgrade-context.js cli/lib/upgrade-entry.js cli/lib/self-upgrade.js cli/lib/manifest.js cli/lib/upgrade-protection.js cli/lib/upgrade-resume.js skills/comm-bridge/scripts/c4-schema.js skills/scheduler/scripts/schema.js skills/comm-bridge/scripts/sqlite-schema.js cli/lib/upgrade-maintenance.cjs cli/lib/upgrade-installer.cjs cli/lib/core-db-backup-worker.js
 import nativeTest from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

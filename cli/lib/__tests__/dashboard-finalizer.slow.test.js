@@ -1,3 +1,4 @@
+// covers: cli/lib/self-upgrade.js cli/lib/dashboard-install.js skills/comm-bridge/scripts/sqlite-driver.js skills/dashboard/src/lib/store.js skills/dashboard/src/lib/schema.js
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

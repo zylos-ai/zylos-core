@@ -1,3 +1,4 @@
+// covers: skills/comm-bridge/scripts/sqlite-driver.js skills/comm-bridge/scripts/sqlite-schema.js skills/comm-bridge/scripts/c4-schema.js skills/scheduler/scripts/schema.js cli/zylos.js cli/lib/self-upgrade.js cli/lib/github.js
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';

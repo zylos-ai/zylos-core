@@ -102,7 +102,7 @@ function isNodeTest(file) {
   if (ROOT_NODE_TESTS.includes(rel)) return true;
   // These integration entries use Jest and are selected by jest.config.js.
   if (rel === 'skills/activity-monitor/scripts/__tests__/mode-switch-admission.integration.test.js'
-      || rel === 'skills/activity-monitor/scripts/__tests__/mode-switch-followup.integration.test.js') return false;
+      || rel === 'skills/activity-monitor/scripts/__tests__/mode-switch-followup.integration.slow.test.js') return false;
   if (rel.startsWith('skills/dashboard/__tests__/')) return true;
   if (rel.startsWith('skills/dashboard/src/lib/') && rel.includes('/__tests__/')) return true;
   if (rel.startsWith('cli/lib/__tests__/')) return true;
@@ -122,6 +122,8 @@ const discoveredFiles = [...ROOT_NODE_TESTS.map(file => path.join(ROOT, file)).f
   .sort()
   .map((file) => path.relative(ROOT, file));
 
+const defaultFiles = discoveredFiles.filter(file => process.env.ZYLOS_SLOW_TESTS === '1' || !file.endsWith('.slow.test.js'));
+
 // Explicit paths are selected only from the normal discovery roots.
 const arguments_ = process.argv.slice(2);
 if (arguments_.includes('--test-name-pattern')) {
@@ -139,7 +141,7 @@ if (requested.length === 1 && requested[0] === '--list') {
     console.error('--list cannot be combined with --test-name-pattern.');
     process.exit(1);
   }
-  console.log(discoveredFiles.join('\n'));
+  console.log(defaultFiles.join('\n'));
   process.exit(0);
 }
 const unknown = requested.filter(file => !discoveredFiles.includes(file));
@@ -147,7 +149,8 @@ if (unknown.length) {
   console.error(`Not a discovered Node test: ${unknown.join(', ')}`);
   process.exit(1);
 }
-const testFiles = requested.length ? discoveredFiles.filter(file => requested.includes(file)) : discoveredFiles;
+const testFiles = requested.length ? discoveredFiles.filter(file => requested.includes(file))
+  : defaultFiles;
 
 if (testFiles.length === 0) {
   console.error('No Node test files found.');

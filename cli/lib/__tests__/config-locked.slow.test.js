@@ -1,3 +1,4 @@
+// covers: cli/lib/config-store.js cli/lib/config-lock.js cli/lib/config.js
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import fs from 'node:fs';

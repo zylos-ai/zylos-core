@@ -1,3 +1,4 @@
+// covers: skills/zylos-memory/scripts/sync-lock.js skills/zylos-memory/scripts/memory-append.js
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

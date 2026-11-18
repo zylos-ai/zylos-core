@@ -1,3 +1,4 @@
+// covers: skills/comm-bridge/scripts/sqlite-driver.js skills/scheduler/scripts/daemon-dispatch.js skills/scheduler/scripts/cli.js skills/scheduler/scripts/database.js
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
