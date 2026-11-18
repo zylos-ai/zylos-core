@@ -142,7 +142,7 @@ The command reads the current schema in read-only mode and returns JSON:
    last_phase, cause, attempt and run_id. Router writes them to
    $ZYLOS_DIR/comm-bridge/router-events.jsonl (default ~/zylos/comm-bridge), with
    timestamp rotations. The command reuses Core's event reader, caps scanning
-   at10000 records and returns at most20 matching events. limited=true means
+   at 10000 records and returns at most 20 matching events. limited=true means
    the bounded scan stopped; unavailable=true means the log could not be read.
    Empty events may mean log retention or a non-launch failure, not success.
 3. data.target comes from Core's current session reader. In multi mode it
