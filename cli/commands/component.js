@@ -651,6 +651,10 @@ async function handleCheckOnly(component, { jsonOutput, branch, beta = false }) 
  * Does NOT call process.exit() — caller decides exit behavior.
  */
 async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval, branch, beta = false, mode = 'merge' }) {
+  if (!skipConfirm && !process.stdin.isTTY) {
+    reportUpgradeConfirmationRequired({ action: 'upgrade', component }, jsonOutput);
+    return false;
+  }
   const skillDir = path.join(SKILLS_DIR, component);
   let tempDir = null;
 
@@ -913,6 +917,11 @@ function cleanOldBackups(skillDir) {
  * Handle --all: upgrade all components
  */
 async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEval, beta = false, mode = 'merge' }) {
+  if (!checkOnly && !skipConfirm && !process.stdin.isTTY) {
+    reportUpgradeConfirmationRequired({ action: 'upgrade_all' }, jsonOutput);
+    process.exitCode = 1;
+    return;
+  }
   const components = loadComponents();
   const names = Object.keys(components).filter(name => name !== 'dashboard');
 
@@ -1202,6 +1211,15 @@ function outputSelfUpgradeFailure(output, message, next) {
   if (next) output.error(`Next: ${next}`);
 }
 
+function reportUpgradeConfirmationRequired(context, jsonOutput, output = console) {
+  const message = 'Upgrade requires confirmation in a non-interactive environment. Run again with --yes.';
+  if (jsonOutput) {
+    output.log(JSON.stringify({ ...context, success: false, error: 'confirmation_required', message, requiresConfirmation: true }));
+  } else {
+    output.error(`Error: ${message}`);
+  }
+}
+
 export async function upgradeSelfCore({ branch, beta = false, version, mode = 'merge', jsonOutput = false, skipConfirm = false } = {}, deps = {}) {
   const output = deps.console ?? globalThis.console;
   const installedRoot = deps.installedRoot ?? path.resolve(import.meta.dirname, '../..');
@@ -1281,6 +1299,10 @@ export async function upgradeSelfCore({ branch, beta = false, version, mode = 'm
         reply: pendingMigrationsReply(check.current, migrations) }));
       return true;
     }
+  }
+  if (!skipConfirm && !process.stdin.isTTY) {
+    reportUpgradeConfirmationRequired({ action: 'self_upgrade', target: 'zylos-core' }, jsonOutput, output);
+    return false;
   }
   let tempDir;
   try {
