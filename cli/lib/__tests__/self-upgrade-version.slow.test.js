@@ -1,4 +1,4 @@
-// covers: skills/comm-bridge/scripts/sqlite-driver.js skills/comm-bridge/scripts/sqlite-schema.js skills/comm-bridge/scripts/c4-schema.js skills/scheduler/scripts/schema.js cli/zylos.js cli/lib/self-upgrade.js cli/lib/github.js
+// covers: skills/comm-bridge/scripts/sqlite-driver.js skills/comm-bridge/scripts/sqlite-schema.js skills/comm-bridge/scripts/c4-schema.js skills/scheduler/scripts/schema.js cli/zylos.js cli/lib/self-upgrade.js cli/lib/github.js skills/comm-bridge/scripts/__tests__/fixtures/migration-history/c4-v0.9.0-v1.sql skills/comm-bridge/scripts/__tests__/fixtures/migration-history/scheduler-v0.9.0-v1.sql
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';

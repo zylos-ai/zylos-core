@@ -1,4 +1,4 @@
-// covers: cli/lib/runtime/instruction-builder.js cli/zylos.js cli/commands/add.js cli/commands/component.js cli/commands/init.js cli/commands/runtime.js cli/lib/registry.js cli/lib/upgrade.js cli/lib/download.js cli/lib/upstreams.js cli/lib/github.js cli/lib/self-upgrade.js
+// covers: cli/lib/runtime/instruction-builder.js cli/zylos.js cli/commands/add.js cli/commands/component.js cli/commands/init.js cli/commands/runtime.js cli/lib/registry.js cli/lib/upgrade.js cli/lib/download.js cli/lib/upstreams.js cli/lib/github.js cli/lib/self-upgrade.js test/helpers/codex-trust.js
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

@@ -1,4 +1,4 @@
-// covers: skills/comm-bridge/scripts/sqlite-driver.js skills/scheduler/scripts/daemon-dispatch.js skills/scheduler/scripts/cli.js skills/scheduler/scripts/database.js
+// covers: skills/comm-bridge/scripts/sqlite-driver.js skills/scheduler/scripts/daemon-dispatch.js skills/scheduler/scripts/cli.js skills/scheduler/scripts/database.js skills/scheduler/scripts/__tests__/helpers/scheduler-cli-clock.js skills/scheduler/scripts/__tests__/fixtures/claim-during-query.js
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';

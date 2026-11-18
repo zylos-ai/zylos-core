@@ -112,4 +112,6 @@ test('slow selection follows covered source changes and ignores documentation ch
   assert.equal(select('HEAD'), '');
   fs.unlinkSync(path.join(directory, 'src/entry.js'));
   assert.equal(select('HEAD'), 'entry.slow.test.js\nsource.slow.test.js\n');
+  fs.appendFileSync(path.join(directory, 'other.slow.test.js'), '// Updated test body\n');
+  assert.equal(select('HEAD'), 'entry.slow.test.js\nother.slow.test.js\nsource.slow.test.js\n');
 });

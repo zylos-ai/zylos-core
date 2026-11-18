@@ -1,4 +1,4 @@
-// covers: cli/lib/self-upgrade.js cli/lib/core-db-backup.js cli/lib/upgrade-runtime-preparation.js cli/lib/upgrade-post-cutoff.js cli/lib/upgrade-cutoff.js cli/lib/upgrade-resume.js skills/comm-bridge/scripts/sqlite-schema.js skills/comm-bridge/scripts/c4-schema.js skills/scheduler/scripts/schema.js cli/lib/upgrade-maintenance.cjs cli/lib/core-db-backup-worker.js
+// covers: cli/lib/self-upgrade.js cli/lib/core-db-backup.js cli/lib/upgrade-runtime-preparation.js cli/lib/upgrade-post-cutoff.js cli/lib/upgrade-cutoff.js cli/lib/upgrade-resume.js skills/comm-bridge/scripts/sqlite-schema.js skills/comm-bridge/scripts/c4-schema.js skills/scheduler/scripts/schema.js cli/lib/upgrade-maintenance.cjs cli/lib/core-db-backup-worker.js cli/lib/__tests__/fixtures/legacy-web-console-schema.js cli/lib/__tests__/helpers/legacy-web-console.js skills/comm-bridge/scripts/__tests__/fixtures/migration-history/
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

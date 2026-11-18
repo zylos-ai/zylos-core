@@ -22,7 +22,7 @@ try {
     const header = fs.readFileSync(path.join(root, file), 'utf8').split('\n', 1)[0];
     const covers = header.match(/^\/\/ covers:\s*(\S.*)$/)?.[1].trim().split(/\s+/);
     if (!covers?.length) throw new Error(`Missing covers header: ${file}`);
-    if (covers.some(source => changed.some(changedPath => {
+    if (changed.includes(file) || covers.some(source => changed.some(changedPath => {
       const prefix = source.replace(/\/$/, '');
       return changedPath === prefix || changedPath.startsWith(`${prefix}/`);
     }))) selected.push(file);
