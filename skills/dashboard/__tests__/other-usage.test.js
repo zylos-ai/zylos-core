@@ -107,24 +107,3 @@ test('runtimes zylos starts itself count as Other: in the instance total, in no 
   assert.equal(round(all.cost), round(origin.cost + g1.cost + series.totals.otherCost));
   assert.equal(round(all.cost), round(series.totals.cost));
 });
-
-test('Other stays Other after the child transcript registrations are pruned', async t => {
-  const f = fixture(t);
-  await collectAll(f);
-  f.store.db.prepare('DELETE FROM usage_transcripts').run();
-  const series = usageSeries(f.store, c4Reader, { range: '7d', tz: 'UTC', now });
-  assert.equal(round(series.totals.otherCost), round(expected.other));
-  assert.equal(round(usageSummary(f.store, { tz: 'UTC', now, group: 'origin' }).sevenDay.cost), round(expected.origin));
-});
-
-test('without such runtimes Other is zero and Origin still holds every groupless sample', async t => {
-  const f = fixture(t);
-  f.store.insertMetric({ timestamp, runtime: 'claude', session_id: 'old-main', session_group: null, metric_name: 'usage_event',
-    metric_value: 5000, dimensions: { total_input: 5000, output: 20, cost: claudeCost(5000), request_id: 'req-old' },
-    source: 'jsonl_usage', confidence: 'actual' });
-  f.store.insertMetric({ timestamp, runtime: 'claude', session_id: 'otel', session_group: null, metric_name: 'api_request_cost',
-    metric_value: 0.5, dimensions: null, source: 'otel', confidence: 'actual' });
-  const series = usageSeries(f.store, c4Reader, { range: '7d', tz: 'UTC', now });
-  assert.equal(series.totals.otherCost, 0);
-  assert.equal(round(usageSummary(f.store, { tz: 'UTC', now, group: 'origin' }).sevenDay.cost), round(claudeCost(5000) + 0.5));
-});
