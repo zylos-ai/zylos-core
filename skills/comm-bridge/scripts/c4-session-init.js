@@ -162,7 +162,7 @@ async function readSyncThreshold() {
  * whole oldest messages, and the notice points at the omitted middle.
  */
 export async function emitC4Conversations(payload, budget = null, {
-  scopeReader, withDb = withC4Db, thresholdReader = readSyncThreshold,
+  scopeReader, withDb = withC4Db,
   migrationReader = async scope => {
     const { loadCoreModule } = await import('../../activity-monitor/scripts/bootstrap-scope.js');
     const { createMigration } = await loadCoreModule('memory-migration.js');
@@ -212,7 +212,7 @@ export async function emitC4Conversations(payload, budget = null, {
     const packBudget = budget && { maxChars: Math.max(0, budget.maxChars - 200), maxTokens: Math.max(0, budget.maxTokens - 60) };
     let threshold = null;
     if (unsummarized?.count > 0) {
-      try { threshold = await thresholdReader(); } catch { /* unreadable configuration keeps the latest-messages view */ }
+      try { threshold = await readSyncThreshold(); } catch { /* unreadable configuration keeps the latest-messages view */ }
     }
     if (Number.isSafeInteger(threshold) && unsummarized.count <= threshold) {
       const covered = conversations.length && unsummarized.firstConversationId >= conversations[0].id;

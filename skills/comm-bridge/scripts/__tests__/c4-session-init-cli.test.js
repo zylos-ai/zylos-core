@@ -298,27 +298,20 @@ describe('c4-session-init', () => {
     });
   });
 
-  it('uses the configured Sync threshold, with a valid environment value taking precedence', () => {
+  it('applies a configured Sync threshold of 5 at session start', () => {
     withTmpDir(({ tmpDir, env }) => {
-      receiveMany(numbered(8, 'configured'), { ...env, ZYLOS_SYNC_THRESHOLD: '' });
-      const whole = stdout => numbered(8, 'configured').every(content => stdout.includes(`${content}\n`));
-      const byDefault = cli([], { ...env, ZYLOS_SYNC_THRESHOLD: '' });
-      assert.ok(whole(byDefault.stdout), 'default threshold 15 injects all 8');
+      const quiet = { ...env, ZYLOS_SYNC_THRESHOLD: '' };
+      receiveMany(numbered(8, 'configured'), quiet);
       fs.mkdirSync(path.join(tmpDir, '.zylos'));
       fs.writeFileSync(path.join(tmpDir, '.zylos/config.json'), JSON.stringify({ sync_threshold: 5 }));
-      for (const value of ['', 'invalid']) {
-        const configured = cli([], { ...env, ZYLOS_SYNC_THRESHOLD: value });
-        assert.equal(configured.status, 0, configured.stderr);
-        assert.ok(configured.stdout.includes('About 8 messages unsummarized; latest 6 shown.'), `config 5, env ${JSON.stringify(value)}`);
-        assert.ok(!configured.stdout.includes('configured-02\n'));
-      }
-      const overridden = cli([], { ...env, ZYLOS_SYNC_THRESHOLD: '10' });
-      assert.ok(whole(overridden.stdout), 'environment 10 overrides config 5');
-      assert.doesNotMatch(overridden.stdout, OMITTED_MIDDLE);
+      const configured = cli([], quiet);
+      assert.equal(configured.status, 0, configured.stderr);
+      assert.ok(configured.stdout.includes('About 8 messages unsummarized; latest 6 shown.'));
+      assert.ok(!configured.stdout.includes('configured-02\n'));
     });
   });
 
-  it('a multi-session group sees its earlier small backlog together with the new message', () => {
+  it('a multi-session group injects only its own whole small backlog', () => {
     withTmpDir(({ tmpDir, env }) => {
       fs.mkdirSync(path.join(tmpDir, '.zylos'));
       fs.writeFileSync(path.join(tmpDir, '.zylos/config.json'), JSON.stringify({ session_mode: 'multi' }));

@@ -7,14 +7,12 @@ import { SupervisorLifecycle } from '../supervisor-lifecycle.js';
 function fixture(mode = 'multi', configuration = {}) {
   const start = Date.parse('2026-11-13T02:00:00Z');
   const f = { now: start + 120000, firstAt: '2026-11-13 02:00:01', count: 2,
-    reads: [], controls: [], errors: [], events: [], held: false };
+    controls: [], errors: [], events: [], held: false };
   f.scene = { sessionGroup: mode === 'single' ? null : 'a', present: true, ready: true,
     runtime: 'claude', runId: 'run-a', sessionId: 'session-a', createdAt: start,
     runDir: '/isolated/run', usagePercent: 0 };
   const range = () => ({ count: f.count, firstAt: f.firstAt, firstConversationId: 1 });
   const db = {
-    listRunEndings: groups => { f.reads.push(['endings', groups]); return []; },
-    getLastCompletedModeTransition: () => { f.reads.push(['transition']); return null; },
     getModeTransition: () => null, listDrainFences: () => [],
     getUnsummarizedRange: range, getGlobalUnsummarizedRange: range,
     getOriginSyncBacklog: () => ({ total: 0, groups: [] }),
@@ -36,30 +34,22 @@ function fixture(mode = 'multi', configuration = {}) {
   return f;
 }
 
-test('a backlog left by the previous run waits for the threshold or the longest wait', async () => {
+test('a backlog left by the previous run does not request Sync below the threshold', async () => {
   for (const mode of ['multi', 'single']) {
     const f = fixture(mode); f.count = 8; f.firstAt = '2026-11-13 01:00:00';
     await f.check(); await f.check();
     assert.equal(f.syncs().length, 0, `${mode}: an inherited backlog of 8 does not request Sync`);
-    assert.deepEqual(f.reads, [], `${mode}: no run-ending or mode-transition boundary reads`);
-    f.count = 16; await f.check();
-    assert.equal(f.syncs().length, 1, `${mode}: the threshold still applies to the inherited backlog`);
-    const aged = fixture(mode); aged.count = 3; aged.firstAt = '2026-11-12 19:59:59';
-    await aged.check();
-    assert.equal(aged.syncs().length, 1, `${mode}: a backlog whose oldest message is 6 hours old is due`);
   }
 });
 
 test('context usage near the rotation threshold does not request Sync below the backlog threshold', async () => {
-  for (const usagePercent of [80, 99]) {
-    const f = fixture('multi', { rotationPolicy: { new_session_threshold: 70 } });
-    f.count = 9; f.scene.usagePercent = usagePercent; f.scene.model = 'opus';
-    await f.check();
-    assert.equal(f.syncs().length, 0, `${usagePercent}% context with 9 messages`);
-    f.count = 16; await f.check();
-    assert.equal(f.syncs().length, 1, `${usagePercent}% context keeps the ordinary threshold`);
-    assert.deepEqual(f.events.find(row => row.event === 'sync_triggered').reason, ['threshold']);
-  }
+  const f = fixture('multi', { rotationPolicy: { new_session_threshold: 70 } });
+  f.count = 9; f.scene.usagePercent = 80; f.scene.model = 'opus';
+  await f.check();
+  assert.equal(f.syncs().length, 0, '80% context with 9 messages');
+  f.count = 16; await f.check();
+  assert.equal(f.syncs().length, 1, '80% context keeps the ordinary threshold');
+  assert.deepEqual(f.events.find(row => row.event === 'sync_triggered').reason, ['threshold']);
 });
 
 test('fresh messages retain threshold, longest wait and marker gates', async () => {

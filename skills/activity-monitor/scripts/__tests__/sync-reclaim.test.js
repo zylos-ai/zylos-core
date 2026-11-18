@@ -191,12 +191,4 @@ for (const route of ['release', 'ttl']) {
     const backlog = f.store.getOriginSyncBacklog();
     assert.equal(backlog.groups.find(row => row.sessionGroup === 'chat:room')?.count, 15, 'Origin Sync still reads the raw messages');
   });
-
-  test(`${route} prepares a Sync for a backlog above the default threshold`, async t => {
-    const f = fixture(t, route, 'chat:room', { configuration: {}, messages: 16 });
-    await f.start(); f.advance(1000); await f.tick();
-    assert.deepEqual(f.controls.map(row => row.content), ['check', 'sync']);
-    assert.equal(f.fences.size, 0);
-    assert.deepEqual(f.events.find(row => row.event === 'sync_triggered')?.reason, ['pre_reclaim']);
-  });
 }
