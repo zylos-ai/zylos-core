@@ -11,7 +11,7 @@ import { getSessionAdapter } from '../../../../../cli/lib/runtime/index.js';
 const Database = createRequire(new URL('../../../../comm-bridge/package.json', import.meta.url))('better-sqlite3');
 const [root, socketPath, binary, mode, scenario] = process.argv.slice(2);
 const database = new Database(path.join(root, 'comm-bridge/c4.db'));
-const config = { runtime: 'claude', ...(mode === 'multi' ? { session_mode: mode } : {}) };
+const config = { runtime: 'claude', ...(mode === 'single' ? {} : { session_mode: mode }) };
 let offset = 0, releasePaste, held = false;
 const now = () => Date.now() + offset;
 const store = createStore(database, { now, readConfig: () => ({ state: 'ok', config }), validateComponent: () => true });
@@ -22,7 +22,7 @@ if (fs.existsSync(path.join(root, 'activity-monitor/pool-capacity.json'))) throw
 const env = { ...process.env, HOME: root, ZYLOS_DIR: root, ZYLOS_SESSION_POOL_SIZE: '4' }, tmux = { socketPath, binary, configFile: '/dev/null' };
 const reader = createSessionReader({ env, connectionOptions: tmux });
 const trace = (kind, fields = {}) => fs.appendFileSync(path.join(root, 'manual-router.jsonl'), JSON.stringify({ kind, ...fields }) + '\n');
-const router = createDispatcher({ env, db, now, readSessionMode: () => ({ mode, keyPresent: mode === 'multi' }),
+const router = createDispatcher({ env, db, now, readSessionMode: () => ({ mode: mode === 'single' ? null : mode, keyPresent: mode !== 'single' }),
   readZylosConfigStrict: () => ({ state: 'ok', config }),
   readSessionState: async group => ({ identity: await reader.readLiveIdentity(group), status: { valid: true, value: { state: 'idle', idle_seconds: 10, health: 'ok', proc: { alive: true } } } }),
   readRuntimeHealth: () => ({ missing: true }),

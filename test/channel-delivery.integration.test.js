@@ -16,7 +16,16 @@ async function pm2(args, env) {
   return execute(process.execPath, [pm2Cli, ...args], { env, timeout: 10000, maxBuffer: 1024 * 1024 });
 }
 
+// Config written per mode: pre-migration has no session_mode key; native single
+// and multi write it. Without the key the snapshot reports the effective single mode.
+const MODES = {
+  'pre-migration': { config: { runtime: 'claude' }, snapshotMode: 'single' },
+  'native single': { config: { runtime: 'claude', session_mode: 'single' }, snapshotMode: 'single' },
+  multi: { config: { runtime: 'claude', session_mode: 'multi' }, snapshotMode: 'multi' },
+};
+
 async function fixture(mode, root) {
+  const { config, snapshotMode } = MODES[mode];
   const sandbox = createChatSandbox(null, { existingRoot: root });
   console.log('Channel delivery child isolation:', JSON.stringify(sandbox.assertIsolation({ env: process.env })));
   const { paths } = sandbox;
@@ -24,7 +33,7 @@ async function fixture(mode, root) {
   const channelDir = path.join(skillsDir, 'example');
   fs.mkdirSync(path.join(channelDir, 'scripts'), { recursive: true });
   fs.mkdirSync(path.join(paths.zylos, '.zylos'));
-  fs.writeFileSync(path.join(paths.zylos, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', session_mode: mode }));
+  fs.writeFileSync(path.join(paths.zylos, '.zylos/config.json'), JSON.stringify(config));
   fs.symlinkSync(path.join(packageRoot, 'skills/comm-bridge'), path.join(skillsDir, 'comm-bridge'));
   fs.writeFileSync(path.join(channelDir, 'SKILL.md'), '---\nname: example\ntype: communication\nlifecycle:\n  service:\n    name: example-service\n---\n');
   const lookalike = path.join(skillsDir, 'telegram-example');
@@ -69,7 +78,7 @@ async function fixture(mode, root) {
     readPm2: () => collector.getLatestPM2Data() });
   const read = async (at = Date.now()) => {
     const value = await snapshot.getSnapshot(at, { fresh: true });
-    assert.equal(value.mode, mode);
+    assert.equal(value.mode, snapshotMode);
     assert.equal(value.sources.c4.ok, true, JSON.stringify(value.sources.c4));
     assert.equal(value.sources.q.ok, true, JSON.stringify(value.sources.q));
     return { value, problems: groupAttention(value.instance, value.counts, value.rows).problems };
@@ -107,20 +116,31 @@ async function fixture(mode, root) {
     ]);
     assert.deepEqual(reader.getChannelSendState('example'), { lastSendFailed: false, consecutiveFailures: 0 });
     assert.equal((await read()).problems.some(item => item.kind === 'channel_send_failed'), false);
-    const history = new ChatHistory({ c4Reader: reader });
-    const conversation = history.list({ tab: 'external' }).items.find(item => item.channel === 'example');
-    assert.ok(conversation);
-    const messages = history.messages(conversation.id, { tab: 'external' }).items;
-    assert.equal(messages.filter(item => item.content.startsWith('failure ')).length, 3);
-    const failureIds = c4.getDb().prepare("SELECT id FROM conversations WHERE direction='out' AND status='failed'").all().map(row => row.id);
-    const statuses = history.status(conversation.id, { tab: 'external', ids: failureIds }).items;
-    assert.ok(statuses.every(item => item.deliveryState === 'pending_reconciliation'));
-    console.log('Failed outbound Chat history: readable body; status pending_reconciliation; external history omits owned delivery badges');
+    if (mode === 'native single') {
+      // Native single records sends without a session environment under origin.
+      // These rows are shown by the Origin conversation page, not the external
+      // tab; the Dashboard chat change adds the Origin page assertions.
+      const groups = c4.getDb().prepare("SELECT COUNT(*) AS total, SUM(session_group='origin') AS origin FROM conversations WHERE direction='out'").get();
+      assert.equal(groups.total, 4);
+      assert.equal(groups.origin, 4);
+    } else {
+      const history = new ChatHistory({ c4Reader: reader });
+      const conversation = history.list({ tab: 'external' }).items.find(item => item.channel === 'example');
+      assert.ok(conversation);
+      const messages = history.messages(conversation.id, { tab: 'external' }).items;
+      assert.equal(messages.filter(item => item.content.startsWith('failure ')).length, 3);
+      const failureIds = c4.getDb().prepare("SELECT id FROM conversations WHERE direction='out' AND status='failed'").all().map(row => row.id);
+      const statuses = history.status(conversation.id, { tab: 'external', ids: failureIds }).items;
+      assert.ok(statuses.every(item => item.deliveryState === 'pending_reconciliation'));
+      console.log('Failed outbound Chat history: readable body; status pending_reconciliation; external history omits owned delivery badges');
+    }
     const argMax = Number((await execute('/usr/bin/getconf', ['ARG_MAX'], { timeout: 5000 })).stdout.trim());
     assert.ok(Number.isSafeInteger(argMax) && argMax > 0);
     await assert.rejects(sendExternal({ channel: 'example', endpoint: 'fixture' }, 'x'.repeat(argMax + 1),
       { api: c4, skillsDir }), { code: 'COMPONENT_SPAWN_FAILED' });
-    assert.equal(c4.getDb().prepare("SELECT delivery_action FROM conversations WHERE direction='out' ORDER BY id DESC LIMIT 1").get().delivery_action, 'spawn_failed');
+    const spawnRow = c4.getDb().prepare("SELECT delivery_action, session_group FROM conversations WHERE direction='out' ORDER BY id DESC LIMIT 1").get();
+    assert.equal(spawnRow.delivery_action, 'spawn_failed');
+    if (mode === 'native single') assert.equal(spawnRow.session_group, 'origin');
     assert.deepEqual((await read()).problems.filter(item => item.kind === 'channel_send_failed'),
       [{ kind: 'channel_send_failed', channel: 'example', count: 1 }]);
     await sendExternal({ channel: 'example', endpoint: 'fixture' }, 'recovered', { api: c4, skillsDir });
@@ -156,10 +176,13 @@ async function fixture(mode, root) {
 if (process.argv[2] === '--fixture') {
   await fixture(process.argv[3], process.argv[4]);
 } else {
-  for (const mode of ['single', 'multi']) {
+  for (const mode of Object.keys(MODES)) {
     // Real component process -> C4 writer/reader -> discovered channel -> group
     // snapshot -> attention. PM2 is a real daemon under this case's PM2_HOME;
     // its only process is a fixture timer. No network channel or runtime exists.
+    // Pre-migration (no session_mode key), native single and multi each run in
+    // their own sandbox; native single checks origin recording instead of the
+    // external Chat tab.
     // Gate + official runner required; both parent and child prove HOME, DBs,
     // PM2_HOME, short TMPDIR and private tmux socket before resource creation.
     // Run for send/discovery/restart-contract changes; unrelated UI-only edits

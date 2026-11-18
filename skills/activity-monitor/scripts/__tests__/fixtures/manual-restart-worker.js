@@ -10,7 +10,7 @@ const Database = createRequire(new URL('../../../../comm-bridge/package.json', i
 const [socketPath, binary, mode, variant = ''] = process.argv.slice(2);
 const root = process.env.ZYLOS_DIR, database = new Database(path.join(root, 'comm-bridge/c4.db'));
 const runtime = JSON.parse(fs.readFileSync(path.join(root, '.zylos/config.json'))).runtime;
-const store = createStore(database, { readConfig: () => ({ state: 'ok', config: { runtime, ...(mode === 'multi' ? { session_mode: mode } : {}) } }) });
+const store = createStore(database, { readConfig: () => ({ state: 'ok', config: { runtime, ...(mode === 'single' ? {} : { session_mode: mode }) } }) });
 let busy = false, syncHeld = false, stopped = [], events = [], pauseRead = false, releaseRead;
 const barrier = name => { if (variant === name) { process.send({ barrier: name }); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0); } };
 const requestStore = new RestartRequestStore({ file: path.join(root, 'activity-monitor/restart-requests.json') });
@@ -18,7 +18,7 @@ const publish = requestStore.publish;
 requestStore.publish = (file, rows) => {
   barrier(rows.length ? 'before-intent' : 'before-remove'); publish(file, rows); barrier(rows.length ? 'after-intent' : 'after-remove');
 };
-const scenes = new SupervisorScenes({ env: process.env, connectionOptions: { socketPath, binary }, readMode: () => ({ mode }),
+const scenes = new SupervisorScenes({ env: process.env, connectionOptions: { socketPath, binary }, readMode: () => ({ mode, keyPresent: mode !== 'single', legacy: mode === 'single' }),
   readActivity: () => ({ state: busy ? 'running' : 'idle', idleSince: busy ? null : 1 }), readUsage: () => null });
 const originalReadRun = scenes.readRun.bind(scenes);
 scenes.readRun = async group => {
@@ -58,8 +58,10 @@ if (variant === 'waiting') {
     return count;
   };
 }
+// This case holds the pre-migration instance steady; automatic migration is a separate boundary.
 const service = await startSupervisor({ env: process.env, db, scenes, requestStore,
-  readMode: () => ({ mode }), readConfiguration: () => ({ mode, runtime, capacity: 4 }), resolveTargetRuntime: () => runtime,
+  ...(mode === 'single' ? { legacyPresent: () => true } : {}),
+  readMode: () => ({ mode: mode === 'single' ? null : mode, keyPresent: mode !== 'single' }), readConfiguration: () => ({ mode, legacy: mode === 'single', runtime, capacity: 4 }), resolveTargetRuntime: () => runtime,
   readSyncMarker: () => ({ held: syncHeld, stale: false }), machineTasks: { tick() {}, stop() {} }, legacyStatus: { tick() {}, close() {} },
   restoreTransition: async () => { if (variant === 'clear-all') database.exec('DELETE FROM drain_fences'); },
   sendAlert: () => {}, log: event => events.push(event), loopOptions: { schedule: () => 1, cancel() {} } });

@@ -13,7 +13,9 @@ import { readyTmuxTarget } from './helpers/ready-tmux-target.js';
 // and database, bounds replay attempts, and kills its server on failure/timeout.
 // Upgrade cases use the real queue producers; the check answer and package
 // installer are boundaries, so real account/install success
-// remains a review acceptance check. Multi Origin/group exercise shared delivery.
+// remains a review acceptance check. Single cases retain the pre-migration
+// unscoped /exit chain; configured native single upgrades use Supervisor restart
+// admission instead. Multi Origin/group exercise shared delivery.
 test('exit controls settle after pane removal and do not reach replacement runs', { timeout: 60000 }, async t => {
   const realHome = fs.realpathSync(os.userInfo().homedir);
   for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
@@ -55,7 +57,7 @@ const prompt=()=>process.stdout.write('\\x1b[2J\\x1b[H❯ ');prompt();process.st
   const cases = ['claude', 'codex'].flatMap(runtime => ['single', 'origin', 'group'].map(scope => ({ runtime, scope, source: 'direct' })));
   cases.push({ runtime: 'claude', scope: 'single', source: 'runtime-upgrade' }, { runtime: 'claude', scope: 'single', source: 'core-restart' });
   for (const { runtime, scope, source } of cases) {
-    await t.test(`${runtime} ${scope} ${source}`, async t => {
+    await t.test(`${runtime} ${scope === 'single' ? 'legacy single' : scope} ${source}`, async t => {
       const mode = scope === 'single' ? 'single' : 'multi';
       const group = scope === 'group' ? 'telegram-exit-test' : 'origin';
       fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ runtime, ...(mode === 'multi' ? { session_mode: mode } : {}) }));

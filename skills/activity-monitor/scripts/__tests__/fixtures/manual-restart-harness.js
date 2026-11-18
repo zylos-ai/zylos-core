@@ -8,7 +8,8 @@ import { readyTmuxTarget } from '../../../../../test/helpers/ready-tmux-target.j
 import { submit } from '../../../../../cli/lib/am-sock-client.js';
 const worker = fileURLToPath(new URL('./manual-restart-worker.js', import.meta.url));
 export function fixture(t, mode = 'multi', runtime = 'claude') {
-  const f = readyTmuxTarget(t, { prefix: 'i2mr-', mode, keyPresent: mode === 'multi', runtime, runtimeProcess: true });
+  const f = readyTmuxTarget(t, { prefix: 'i2mr-', mode, runtime, runtimeProcess: true });
+  if (mode === 'single') fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ runtime }));
   for (const target of [f.root, f.socketPath, f.db.name]) {
     assert.ok(target.startsWith(process.env.TMPDIR + path.sep), 'manual fixture must stay inside the private test root');
   }

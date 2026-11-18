@@ -13,8 +13,9 @@ import { REFERENCE_REORG_PROMPT, ORIGIN_SYNC_PROMPT, GROUP_SYNC_PROMPT } from '.
 // changes may skip. Runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR before
 // import; fixture paths are checked below. Queue/runtime are in-memory, no tmux
 // or database is opened. Scheduling is disabled and t.after stops/removes all.
-for (const mode of ['single', 'multi']) for (const unreadable of [false, true]) {
-  test(`${mode} entry checks references before Sync is due and preserves Sync with ${unreadable ? 'an old-file lookup failure' : 'existing old reference files'}`, { timeout: 10000 }, async t => {
+for (const instance of ['legacy', 'single', 'multi']) for (const unreadable of instance === 'single' ? [false] : [false, true]) {
+  const legacy = instance === 'legacy', mode = legacy ? 'single' : instance;
+  test(`${instance} entry checks references before Sync is due and preserves Sync with ${unreadable ? 'an old-file lookup failure' : 'existing old reference files'}`, { timeout: 10000 }, async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reorg-entry-'));
     const env = { ...process.env, HOME: path.join(root, 'home'), ZYLOS_DIR: path.join(root, 'z'),
       PM2_HOME: path.join(root, 'pm2'), TMPDIR: path.join(root, 'tmp'), TMUX_TMPDIR: path.join(root, 'tmp') };
@@ -33,7 +34,7 @@ for (const mode of ['single', 'multi']) for (const unreadable of [false, true]) 
     let range = { count: 0, nonempty: false, firstAt: null, firstConversationId: null };
     let service;
     t.after(async () => { try { await service?.stop(); } finally { fs.rmSync(root, { recursive: true, force: true }); } });
-    const scene = { sessionGroup: mode === 'single' ? null : 'origin', present: true, ready: true,
+    const scene = { sessionGroup: legacy ? null : 'origin', present: true, ready: true,
       runtime: 'claude', runId: 'entry-run', sessionId: 'entry-session', runDir: root, state: 'idle', usagePercent: 0 };
     const db = {
       getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),
@@ -54,9 +55,11 @@ for (const mode of ['single', 'multi']) for (const unreadable of [false, true]) 
         rows.push({ content, ...options }); return { id: rows.length };
       },
     };
+    // Keep the legacy reference case pre-migration without inspecting a default tmux server.
     service = await startSupervisor({ env, now: () => now, db,
-      readMode: () => ({ mode, keyPresent: true }), readConfig: () => ({ session_mode: mode, runtime: 'claude' }),
-      readConfiguration: () => ({ mode, runtime: 'claude', capacity: 2 }), resolveTargetRuntime: () => 'claude',
+      ...(legacy ? { legacyPresent: () => true } : {}),
+      readMode: () => ({ mode: legacy ? null : mode, keyPresent: !legacy }), readConfig: () => ({ ...(legacy ? {} : { session_mode: mode }), runtime: 'claude' }),
+      readConfiguration: () => ({ mode, legacy, runtime: 'claude', capacity: 2 }), resolveTargetRuntime: () => 'claude',
       scenes: { observe: async () => [], observeGroup: async () => scene, readIdentity: async () => scene,
         listRuns: async () => [], readRun: async () => null },
       legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
@@ -72,20 +75,20 @@ for (const mode of ['single', 'multi']) for (const unreadable of [false, true]) 
       fs.writeFileSync(path.join(reference, 'projects.md'), 'legacy project');
     }
     now += 60_000;
-    const context = { configuration: { mode }, scenes: [scene], fences: [], restartRequests: [], transition: null };
+    const context = { configuration: { mode, legacy }, scenes: [scene], fences: [], restartRequests: [], transition: null };
     await service.supervisor.lifecycle.checkSync([scene], context);
     assert.deepEqual(rows.map(row => row.content), unreadable ? [] : [REFERENCE_REORG_PROMPT],
       'entry checks old files even when no ordinary Sync can be due');
     now += 60_000;
     range = { count: 60, nonempty: true, firstAt: now, firstConversationId: 1 };
     await service.supervisor.lifecycle.checkSync([scene], context);
-    const sync = mode === 'single' ? GROUP_SYNC_PROMPT : ORIGIN_SYNC_PROMPT;
+    const sync = legacy ? GROUP_SYNC_PROMPT : ORIGIN_SYNC_PROMPT;
     assert.deepEqual(rows.map(row => row.content), unreadable ? [sync] : [REFERENCE_REORG_PROMPT, sync]);
     assert.equal(rows.at(-1).priority, 2);
     if (unreadable) assert.ok(logs.some(row => row.phase === 'reference-reorganization' && row.error === 'ENOTDIR'));
     else {
       assert.equal(rows[0].priority, 3); assert.equal(rows[0].appendAckSuffix, false);
-      assert.equal(rows[0].sessionGroup, mode === 'single' ? null : 'origin');
+      assert.equal(rows[0].sessionGroup, legacy ? null : 'origin');
     }
   });
 }

@@ -54,7 +54,7 @@ test('async target observer returns exact real tmux identity and READY', async t
 
 test('a live pane with F2 identity reports process liveness', async t => {
   const { observer } = fixture(t);
-  const running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  const running = await observer.observeCoreRunning({ sessionMode: 'single' });
   assert.equal(running.hasProcess, true);
   assert.equal(running.identityVerified, true); assert.equal(running.ready, true);
   assert.deepEqual(running.launchConfig, { runtime: 'claude', mode: 'default' });
@@ -62,22 +62,33 @@ test('a live pane with F2 identity reports process liveness', async t => {
 
 test('real process observation, malformed READY and scope identity are distinct', async t => {
   const { observer, tmux, readyPath } = fixture(t, { runtimeProcess: true });
-  let running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  let running = await observer.observeCoreRunning({ sessionMode: 'single' });
   assert.equal(running.hasProcess, true); assert.equal(running.identityVerified, true);
   tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_MODEL_CONFIG', '{"runtime":"codex","mode":"default"}');
-  running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  running = await observer.observeCoreRunning({ sessionMode: 'single' });
   assert.equal(running.identityVerified, true); assert.equal(running.hasProcess, true);
   assert.equal(running.launchConfig.runtime, 'codex');
   tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_MODEL_CONFIG', '{');
-  running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  running = await observer.observeCoreRunning({ sessionMode: 'single' });
   assert.equal(running.identityVerified, false); assert.equal(running.hasProcess, true);
   tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_MODEL_CONFIG', '{"runtime":"claude","mode":"default"}');
   fs.writeFileSync(readyPath, '{}');
-  running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  running = await observer.observeCoreRunning({ sessionMode: 'single' });
   assert.equal(running.hasProcess, true); assert.equal(running.ready, false);
   tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_SESSION_GROUP', 'other');
   assert.equal((await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'multi' })).identityVerified, false);
   assert.equal((await observer.observeCoreTarget({ sessionGroup: 'origin', sessionMode: 'multi' })).sessionGroup, 'other');
+});
+
+test('native single observes Origin by its group and leaves an ungrouped session unverified', async t => {
+  const { observer, tmux } = fixture(t);
+  // A session started by older code has no group environment: Origin cannot claim it.
+  let running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  assert.equal(running.hasProcess, true); assert.equal(running.identityVerified, false);
+  tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_SESSION_GROUP', 'origin');
+  running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  assert.equal(running.identityVerified, true); assert.equal(running.ready, true); assert.equal(running.runId, 'run-1');
+  assert.equal((await observer.observeCoreRunning({ sessionMode: 'single' })).identityVerified, false);
 });
 
 test('missing run stays observable for ordered builder validation; absent differs from transport error', async t => {

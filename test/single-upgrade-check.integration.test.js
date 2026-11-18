@@ -8,7 +8,7 @@ import { execFileSync, fork } from 'node:child_process';
 import { once } from 'node:events';
 import { readyTmuxTarget } from './helpers/ready-tmux-target.js';
 
-// Boundary: a single-session upgrade restart from the real upgradeRuntime
+// Boundary: a legacy single-session upgrade restart from the real upgradeRuntime
 // through the shared requestRuntimeRestart producer
 // (default dependencies: the session mode file, the transition record, the
 // installed check prompt and c4-control enqueue) through the real Router
@@ -28,7 +28,7 @@ import { readyTmuxTarget } from './helpers/ready-tmux-target.js';
 // a short TMPDIR; the case checks them, owns one private root, tmux socket and
 // database, and stops the Router, kills the tmux server and removes the root on
 // success or failure.
-test('single-session upgrade checks waiting work before /exit, at most 60 seconds, and never drops /exit', { timeout: 60000 }, async t => {
+test('legacy single-session upgrade checks waiting work before /exit, at most 60 seconds, and never drops /exit', { timeout: 60000 }, async t => {
   const realHome = fs.realpathSync(os.userInfo().homedir);
   for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
     const value = process.env[key] && (fs.existsSync(process.env[key]) ? fs.realpathSync(process.env[key]) : path.resolve(process.env[key]));
@@ -44,7 +44,9 @@ test('single-session upgrade checks waiting work before /exit, at most 60 second
       await Promise.all(held.map(({ ended }) => ended));
     }
   });
-  const f = readyTmuxTarget(t, { prefix: 'single-upgrade-', mode: 'single', keyPresent: false, runtime: 'claude', packageRoot: repository });
+  const f = readyTmuxTarget(t, { prefix: 'single-upgrade-', mode: 'single', runtime: 'claude', packageRoot: repository });
+  // This unscoped run guards the pre-migration check + /exit chain.
+  fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude' }));
   const oldEnv = { ...process.env };
   t.after(() => {
     for (const key of Object.keys(process.env)) if (!Object.hasOwn(oldEnv, key)) delete process.env[key];

@@ -13,7 +13,7 @@ import { startSupervisor } from '../supervisor-main.js';
 
 function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'origin-auth-'));
-  const state={now:1800000000000,oldestAt:null,controls:0,pending:[],fences:[],transition:null,mode:'multi',scenes:[],checks:[],alerts:[],queued:[]};
+  const state={now:1800000000000,oldestAt:null,controls:0,pending:[],fences:[],transition:null,mode:'multi',legacy:false,scenes:[],checks:[],alerts:[],queued:[]};
   const db={getModeTransition:()=>state.transition,getDrainFence:group=>state.fences.find(f=>f.sessionGroup===group)??null,
     listDrainFences:()=>state.fences,listPendingSessionGroups:()=>state.pending,listPendingContinuations:()=>[],
     getOriginNeed:()=>({controls:{count:state.controls},inbound:{oldestAt:state.oldestAt}}),
@@ -21,7 +21,7 @@ function fixture(t) {
   const scenes={observe:()=>state.scenes,readIdentity:group=>state.scenes.find(s=>s.sessionGroup===group)??{present:false},
     observeGroup:()=>({present:false}),listRuns:()=>state.scenes,bindTarget:scene=>({runtime:scene.runtime,runId:scene.runId})};
   const owner=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},now:()=>state.now,
-    readMode:()=>({mode:state.mode}),readConfiguration:()=>({mode:state.mode,runtime:'claude'}),resolveTargetRuntime:()=> 'claude',
+    readMode:()=>({mode:state.mode,legacy:state.legacy}),readConfiguration:()=>({mode:state.mode,legacy:state.legacy,runtime:'claude'}),resolveTargetRuntime:()=> 'claude',
     requestStore:new RestartRequestStore({file:path.join(root,'requests.json')}),
     checkAuth:runtime=>{state.checks.push(runtime);return {status:'failure'};},alert:event=>state.alerts.push(event),
     loopOptions:{schedule:()=>1,cancel(){}}});
@@ -77,13 +77,13 @@ test('Origin authentication expiry alert includes its target runtime in the actu
   assert.ok(messages[0].message.includes(`oldest_at=${oldestAt}`));
 });
 
-test('role-only demand, rate limit, global fence, transition and single mode never emit an authentication expiry warning',async t=>{
+test('role-only demand, rate limit, global fence, transition and legacy mode never emit an authentication expiry warning',async t=>{
   const f=fixture(t);await f.start();f.state.controls=1;await f.tick();assert.equal(f.state.alerts.length,0);
   f.state.oldestAt=f.state.now/1000-PENDING_MAX_AGE_SECONDS;
   f.health('rate_limited');await f.tick();assert.equal(f.state.alerts.length,0);
   f.health('auth_failed');f.state.fences=[{sessionGroup:'*'}];await f.tick();
   f.state.fences=[];f.state.transition={phase:'gating'};await f.tick();
-  f.state.transition=null;f.state.mode='single';await f.start();await f.tick();assert.equal(f.state.alerts.length,0);
+  f.state.transition=null;f.state.mode='single';f.state.legacy=true;await f.start();await f.tick();assert.equal(f.state.alerts.length,0);
 });
 
 test('Origin role control demand retries authentication on the ordinary pending cadence and respects both fences',async t=>{
@@ -138,4 +138,15 @@ test('only an Origin restart marker drives authentication demand until clearing 
   assert.equal(store.clearContinuation('origin',{runId:'new-origin'}).cleared,true);
   f.state.now+=60000; await f.tick(); assert.equal(f.state.checks.length,3);
   assert.equal(f.state.alerts.length,0);
+});
+
+test('native single Origin role demand checks authentication and reports impending inbound expiry', async t => {
+  const f=fixture(t);f.state.mode='single';await f.start();
+  f.state.controls=1;await f.tick();assert.equal(f.state.checks.length,1);
+  f.state.oldestAt=f.state.now/1000-PENDING_MAX_AGE_SECONDS+300;
+  const readNeed=f.db.getOriginNeed;const modes=[];
+  f.db.getOriginNeed=(now,options)=>{if(options)modes.push(options.sessionMode);return readNeed(now,options);};
+  await f.tick();assert.equal(f.state.alerts.length,1);
+  assert.deepEqual(modes,['single','single']);
+  assert.equal(f.state.alerts[0].event,'origin_auth_blocked');
 });

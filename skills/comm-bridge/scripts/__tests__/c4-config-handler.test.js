@@ -80,6 +80,48 @@ test('four-state priority returns null before sampling single or non-current run
   check({}, 'applied');
   check({ kind: 'runtime', runtime: 'codex' }, 'applied');
 });
+test('native single observes Origin with its own fence and group target', async t => {
+  const resolved = { runtime: 'claude', mode: 'default' };
+  const observation = { hasProcess: true, identityVerified: true, ready: true, runId: 'run-o', launchConfig: resolved };
+  for (const [fence, expected] of [[null, 'applied'], [{ reason: 'model_config', runId: 'run-o' }, 'pending']]) {
+    const observed = [];
+    const { handler, store } = fixture(t, { readSessionMode: () => 'single', observeRunning: options => { observed.push(options); return observation; } });
+    if (fence) store.setDrainFence('origin', fence);
+    // A fence on another scope must not change Origin's state.
+    store.setDrainFence('chat:A', { reason: 'model_config', runId: 'run-a' });
+    const { data } = await handler('runtime', { action: 'get', sessionGroup: 'origin' });
+    assert.equal(data.sessionMode, 'single');
+    assert.deepEqual(data.resolved, resolved);
+    assert.equal(data.running.status, expected);
+    assert.deepEqual(observed, [{ sessionGroup: 'origin', sessionMode: 'single' }]);
+  }
+});
+test('native single shows other groups their multi configuration without sampling', async t => {
+  const { store } = fixture(t);
+  store.setSessionRuntimeConfig({ sessionGroup: 'chat:A', runtime: 'codex' });
+  store.setSessionModelConfig({ sessionGroup: 'chat:A', runtime: 'codex', model: 'm', effort: 'high' });
+  const forbidden = () => { throw new Error('must not sample'); };
+  store.getDrainFence = forbidden;
+  const handler = createConfigHandler({ store, validateComponent: () => true, readSessionMode: () => 'single', observeRunning: forbidden });
+  for (const [kind, request] of [['runtime', { action: 'get', sessionGroup: 'chat:A' }], ['model', { action: 'get', sessionGroup: 'chat:A', runtime: 'codex' }]]) {
+    const { data } = await handler(kind, request);
+    assert.equal(data.sessionMode, 'single');
+    assert.deepEqual(data.resolved, { runtime: 'codex', mode: 'override', model: 'm', effort: 'high' });
+    assert.equal(data.running, null);
+  }
+});
+test('a pre-migration instance reports a null mode, baseline resolution and no running state', async t => {
+  const { store } = storeFixture(t, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude' } }) });
+  store.insertConversation('in', 'chat', 'e', 'hello', { groupName: 'A' });
+  store.setSessionRuntimeConfig({ sessionGroup: 'chat:A', runtime: 'codex' });
+  const forbidden = () => { throw new Error('must not sample'); };
+  store.getDrainFence = forbidden;
+  const handler = createConfigHandler({ store, validateComponent: () => true, readSessionMode: () => null, observeRunning: forbidden });
+  const { data } = await handler('runtime', { action: 'get', sessionGroup: 'chat:A' });
+  assert.equal(data.sessionMode, null);
+  assert.deepEqual(data.resolved, { runtime: 'claude', mode: 'default' });
+  assert.equal(data.running, null);
+});
 test('postcommit resolution can see later writer without replacing saved desired', async t => {
   const { store } = fixture(t);
   const handler = createConfigHandler({ store, validateComponent: () => true,

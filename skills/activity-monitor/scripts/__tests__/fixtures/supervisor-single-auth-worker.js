@@ -6,12 +6,13 @@ import { createStore } from '../../../../comm-bridge/scripts/c4-v2-store.js';
 const Database=createRequire(new URL('../../../../comm-bridge/package.json',import.meta.url))('better-sqlite3');
 const [socketPath,binary]=process.argv.slice(2),root=process.env.ZYLOS_DIR;
 const database=new Database(path.join(root,'comm-bridge/c4.db'));
-const db=createStore(database,{readConfig:()=>({state:'ok',config:{runtime:'claude',session_mode:'single'}})});
+const db=createStore(database,{readConfig:()=>({state:'ok',config:{runtime:'claude'}})});
 let pending=false,running=1,controls=0,deadlineLess=0,checks=0,gates=0;
-const scenes=new SupervisorScenes({env:process.env,connectionOptions:{socketPath,binary},readMode:()=>({mode:'single'}),readActivity:()=>({state:'idle',idleSince:1}),readUsage:()=>null});
-const service=await startSupervisor({env:process.env,db:{...db,getDb:()=>database,listPendingSessionGroups:()=>pending?[{sessionGroup:null}]:[],
+const scenes=new SupervisorScenes({env:process.env,connectionOptions:{socketPath,binary},readMode:()=>({mode:'single',keyPresent:false,legacy:true}),readActivity:()=>({state:'idle',idleSince:1}),readUsage:()=>null});
+// Hold the pre-migration instance steady; this case tests auth recovery, not automatic migration.
+const service=await startSupervisor({env:process.env,legacyPresent:()=>true,db:{...db,getDb:()=>database,listPendingSessionGroups:()=>pending?[{sessionGroup:null}]:[],
  countGlobalRunningConversations:()=>running,countNonTerminalControls:()=>({running:controls,runningWithoutDeadline:deadlineLess}),setDrainFence:()=>{gates++;throw new Error('single auth must not write D8');}},scenes,
- readMode:()=>({mode:'single'}),readConfiguration:()=>({mode:'single',runtime:'claude'}),resolveTargetRuntime:()=> 'claude',checkAuth:async()=>{checks++;return {status:'success'};},readSyncMarker:()=>({held:false,stale:false}),
+ readMode:()=>({mode:null,keyPresent:false}),readConfiguration:()=>({mode:'single',legacy:true,runtime:'claude'}),resolveTargetRuntime:()=> 'claude',checkAuth:async()=>{checks++;return {status:'success'};},readSyncMarker:()=>({held:false,stale:false}),
  machineTasks:{tick(){},stop(){}},legacyStatus:{tick(){},close(){}},sendAlert:()=>{throw new Error('No external send');},log:()=>{},loopOptions:{schedule:()=>1,cancel:()=>{}}});
 process.send({ready:true});
 process.on('message',async command=>{try{

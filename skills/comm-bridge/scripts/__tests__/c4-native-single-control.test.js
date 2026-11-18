@@ -82,6 +82,9 @@ test('internal cleanup rejects absent or ineligible transitions without changing
   db.prepare("UPDATE mode_transitions SET kind='first_migration',phase='cutover' WHERE run_id=?").run(runId);
   assert.throws(() => store.voidInternalForSingle(runId), { code: 'TRANSITION_PRECONDITION' });
   assert.deepEqual(db.prepare('SELECT * FROM conversations').all(), before);
+  db.prepare("UPDATE mode_transitions SET kind='switch',phase='cutover',source_mode='single',target_mode='multi' WHERE run_id=?").run(runId);
+  assert.throws(() => store.voidInternalForSingle(runId), { code: 'TRANSITION_PRECONDITION' });
+  assert.deepEqual(db.prepare('SELECT * FROM conversations').all(), before);
 });
 
 test('native single cutover voids only other pending internal input and handles later arrivals', t => {

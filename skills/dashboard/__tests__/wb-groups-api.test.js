@@ -1141,7 +1141,8 @@ for (const mode of ['multi', 'single']) test(`Origin read errors are redacted in
   const secret = 'sk-123456789012345678901234', raw = `Origin read failed ${secret} person@example.com`;
   // Exercise the status projection's per-session error boundary. A rejected
   // shared batch instead invalidates the entire status source.
-  f.failStatusRead(mode === 'single' ? null : 'origin', new Error(raw));
+  // Native single status reads Origin too; its single-view row keeps sessionGroup null.
+  f.failStatusRead('origin', new Error(raw));
   const snapshot = await f.service.getSnapshot();
   const origin = snapshot.rows.find(row => row.origin);
   assert.equal(origin.live.error.code, 'READ_FAILED');

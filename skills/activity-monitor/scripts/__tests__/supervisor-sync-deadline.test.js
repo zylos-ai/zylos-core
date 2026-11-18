@@ -8,13 +8,8 @@ import { routerFixture } from '../../../comm-bridge/scripts/__tests__/helpers/ro
 // Run for Group Sync deadline/scope changes; unrelated UI may skip. The root
 // runner isolates HOME/ZYLOS_DIR/PM2_HOME/temp/socket paths before imports. No
 // process, tmux, PM2 or network is started; router/database teardown belongs to t.
-// Native single lifecycle is supplied by the supervisor companion PR. Enable
-// ZYLOS_NATIVE_SINGLE_INTEGRATION=1 after it merges into the integration branch.
 for (const [mode, kind, group] of [['multi', 'group', 'a'], ['single', 'global', null], ['multi', 'origin', 'origin'], ['single', 'group', 'origin']]) {
-  const nativeSingle = mode === 'single' && group === 'origin';
-  test(`${mode} ${kind} Sync keeps its intended deadline scope and backlog alerts remain durable`, {
-    skip: nativeSingle && process.env.ZYLOS_NATIVE_SINGLE_INTEGRATION !== '1' ? 'requires the supervisor companion on the integration branch' : false,
-  }, async t => {
+  test(`${mode} ${kind} Sync keeps its intended deadline scope and backlog alerts remain durable`, async t => {
     const f = routerFixture(t, { mode, keyPresent: kind !== 'global' });
     const scene = { sessionGroup: group, present: true, ready: true, runtime: 'claude',
       runId: 'sync-run', sessionId: 'sync-session', runDir: '/isolated/sync', state: 'idle' };
@@ -319,6 +314,7 @@ test('Origin repair failure gives cursor and lock proof instead of group checkpo
 test('single state observation preserves current run ownership of the global Sync marker', async t => {
   const f = observableFixture(t);
   f.context.configuration.mode = 'single';
+  f.context.configuration.legacy = true;
   f.scene.sessionGroup = 'legacy-single';
   const row = f.db.insertConversation('out', 'system', null, 'global result');
   f.db.createCheckpoint('*', row.id, 'global checkpoint');

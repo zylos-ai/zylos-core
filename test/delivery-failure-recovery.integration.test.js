@@ -34,9 +34,11 @@ assert.ok(Buffer.byteLength(path.join(ACTIVITY_MONITOR_DIR, 'am.sock')) < 104);
 // it, independently of every concurrent test file. Only private SQLite and
 // Unix sockets are used; terminal/process boundaries are injected (no tmux/PM2).
 // Server, clients, dispatcher and Supervisor are drained on failure and timeout.
+// Single cases cover the missing-key legacy Router's NULL notification target;
+// Native single Router dispatch requires integration after its dependency lands.
 for (const [mode, maintenance] of [['single', null], ['single', 'memory_sync'],
   ['single', 'session_switch'], ['multi', null]]) {
-  test(`${mode} terminal delivery recovery respects ${maintenance ?? 'open admission'}`, { timeout: 8000 }, async t => {
+  test(`${mode === 'single' ? 'legacy single' : mode} terminal delivery recovery respects ${maintenance ?? 'open admission'}`, { timeout: 8000 }, async t => {
     for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
       assert.ok(process.env[key]);
       const allowedRoot = key === 'TMPDIR' ? path.dirname(privateRoot) : privateRoot;
@@ -62,7 +64,8 @@ for (const [mode, maintenance] of [['single', null], ['single', 'memory_sync'],
     // Keep real requireGroup validation at both observer and stop admission.
     const db = { ...database, latestSessionSwitchAt: () => { switchReads++; return maintenance === 'session_switch' ? Math.floor(clock / 1000) : null; } };
     const supervisor = createSupervisor({ db, scenes, zylosDir: root, env: process.env,
-      readConfiguration: async () => ({ mode, runtime: 'codex', capacity: 1 }), readMode: () => ({ mode }),
+      readConfiguration: async () => ({ mode, legacy: mode === 'single', runtime: 'codex', capacity: 1 }),
+      readMode: () => ({ mode, legacy: mode === 'single', keyPresent: mode === 'multi' }),
       resolveTargetRuntime: async () => 'codex', now: () => clock,
       requestStore: new RestartRequestStore({ file: path.join(root, 'requests.json') }),
       readSyncMarker: async () => { syncReads++; return { held: maintenance === 'memory_sync' }; },

@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { insertInternalMessage } from './c4-db.js';
 import { dataError } from './c4-session-group.js';
 import { resolveCoreConfigModule } from './core-config-loader.js';
+import { isNativeSingle, readConfiguredSessionMode } from './c4-outbound-session.js';
 
 export function parseInternalArgs(args) {
   if (args.length !== 2 || args[0] !== 'internal' || args[1].startsWith('--')) {
@@ -20,12 +21,17 @@ async function readSenderIdentity(group) {
 /** Internal writes use the sender's inherited group, never external route inference. */
 export async function sendInternal(args, readBody, {
   env = process.env, insertMessage = insertInternalMessage, readIdentity = readSenderIdentity,
+  readSessionMode = readConfiguredSessionMode,
 } = {}) {
   const target = parseInternalArgs(args);
   const content = (await readBody()).trimEnd();
   if (!content) throw dataError('EMPTY_CONTENT', 'Message content is empty');
   const sender = env.ZYLOS_SESSION_GROUP;
   if (!sender) throw dataError('NO_SENDER_GROUP', 'Sender session group is required');
+  // Only Origin can be the sender in native single; other groups exist only in multi.
+  if (sender === 'origin' && await isNativeSingle(readSessionMode)) {
+    throw dataError('INTERNAL_SINGLE_MODE', 'Internal messages are unavailable in single-session mode: only the Origin thread runs, so no other thread can receive this. Nothing was sent or recorded.');
+  }
   const current = await readIdentity(sender);
   const sessionId = env.ZYLOS_RUN_ID && current?.runId === env.ZYLOS_RUN_ID ? current.sessionId : null;
   try {

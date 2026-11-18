@@ -68,13 +68,15 @@ export function createSupervisor(deps) {
     return activity.read(now(), {subagentTtlMs:(configuration?.hotTtlSeconds ?? 1800)*1000});
   };
   const listScenes=()=>scenes.observe({configuration});
+  const legacyMode=value=>value.legacy===true;
+  const oldUnique=(scene,value=configuration)=>!legacyMode(value) && scene.sessionGroup==='origin' && scene.sourceScope===null;
   const stopScene=async scene=>{
     await scenes.stop(scene);
     const group=value=>roundContext?.configuration?.mode==='single' && value===null?'origin':value;
     const sampled=roundContext?.scenes?.find(current=>group(current.sessionGroup)===group(scene.sessionGroup) && current.runId===scene.runId);
     if(sampled)Object.assign(sampled,{present:false,ready:false,processRunning:false});
   };
-  const health=new RuntimeHealthCoordinator({zylosDir:deps.zylosDir,now,readMode:async()=>(await readMode()).mode,
+  const health=new RuntimeHealthCoordinator({zylosDir:deps.zylosDir,now,readMode:async()=>legacyMode(await readMode())?'single':'multi',
     resolveTargetRuntime:deps.resolveTargetRuntime,listScenes,probeInFlight:runtime=>observer.probeInFlight(runtime),
     readNegativeCache:(runtime,state)=>router.readNegativeCache(runtime,state.health,state.reason),clearNegativeCache:runtime=>router.clearCache(runtime),freezeNotice:deps.freezeNotice,log});
   const manualPending=(group='origin')=>admission.readRequests().some(row=>row.reason==='manual_restart' &&
@@ -102,7 +104,7 @@ export function createSupervisor(deps) {
     if(stopping || await db.getModeTransition() || !manualAllows(scene.sessionGroup))return false;
     if(requireOpen && (await db.getDrainFence('*') || await db.getDrainFence(scene.sessionGroup)))return false;
     const current=await scenes.readIdentity(scene.sessionGroup);
-    if(!current.present || !current.ready || current.runId!==scene.runId || current.runtime!==scene.runtime)return false;
+    if(!current.present || !current.ready || current.runId!==scene.runId || current.runtime!==scene.runtime || oldUnique(current,await readMode()))return false;
     if(!await validate(current))return false;
     return await action(current) !== false;
   });
@@ -124,20 +126,25 @@ export function createSupervisor(deps) {
       authFlights.delete(runtime);authChecks.delete(task);
     }).catch(()=>{});return task;
   };
-  observer=new SupervisorHealthObserver({coordinator:health,listScenes,readIdentity:group=>scenes.readIdentity(group),readState:scene=>({...readActivity(scene),healthIdentity:scene.healthIdentity}),
+  observer=new SupervisorHealthObserver({coordinator:health,listScenes,readIdentity:async group=>{
+    const current=await scenes.readIdentity(group);
+    // Transitional unscoped runs remain observable for reclaim, but receive no health controls or keys.
+    return oldUnique(current,await readMode()) ? {...current,ready:false} : current;
+  },readState:scene=>({...readActivity(scene),healthIdentity:scene.healthIdentity}),
     readScreen:scene=>scenes.readScreen(scene),matchScreen:deps.matchScreen,insertControl:db.insertControl,getControlById:db.getControlById,
     buildTargetBinding:scene=>scenes.bindTarget(scene),stop:(scene,validate)=>guardedAction(scene,current=>stopScene(current),validate?{requireOpen:true,validate}:{}),
-    readMode,getModeTransition:db.getModeTransition,getDrainFence:db.getDrainFence,manualPending,readMaintenance,
+    // Migrated sessions share scoped recovery; targeting retains the injected mode snapshot.
+    readMode:async()=>legacyMode(await readMode())?'single':'multi',readScopeMode:readMode,getModeTransition:db.getModeTransition,getDrainFence:db.getDrainFence,manualPending,readMaintenance,
     resolveToolRule:deps.resolveToolRule,nudge:(scene,validate)=>nudgeSession({enqueue:async content=>{
       let result={ok:false};
       const check=current=>validate(current,{continuing:content==='continue'});
       await guardedAction(scene,async current=>{
-        const mode=(await readMode()).mode;
+        const legacy=legacyMode(await readMode());
         const targetBinding=await scenes.bindTarget(current);
         // Binding may await I/O; sample identity, activity and fences again before the write.
         if(!manualAllows(current.sessionGroup) || !await observer.canAct(current,{requireReady:true,requireOpen:true}) || !await check(current))return false;
         const enqueuedAt=now();
-        const control=await db.insertControl(content,{sessionGroup:mode==='single'?null:current.sessionGroup,
+        const control=await db.insertControl(content,{sessionGroup:legacy?null:current.sessionGroup,
           targetBinding,priority:0,bypassState:true,appendAckSuffix:false});
         result={ok:Number.isSafeInteger(control?.id) && control.id>0,controlId:control?.id ?? null,enqueuedAt};
       },{requireOpen:true,validate:check});
@@ -233,8 +240,11 @@ export function createSupervisor(deps) {
       }
       const pendingGroups=await db.listPendingSessionGroups();
       const continuationGroups=configuration.mode==='multi'?await db.listPendingContinuations():[];
-      const demand=await aggregateRuntimeDemand({mode:configuration.mode,pendingGroups:[...pendingGroups,...continuationGroups],fences:context.fences,resolveTargetRuntime:deps.resolveTargetRuntime,baselineRuntime:configuration.runtime});
-      if(configuration.mode==='multi' && !context.fences.some(fence=>['origin','*'].includes(fence.sessionGroup))) {
+      const pending=[...pendingGroups,...continuationGroups];
+      const baselineRuntime=configuration.mode==='single' && !configuration.legacy && pending.length
+        ? await deps.resolveTargetRuntime('origin') : configuration.runtime;
+      const demand=await aggregateRuntimeDemand({mode:configuration.mode,pendingGroups:pending,fences:context.fences,resolveTargetRuntime:deps.resolveTargetRuntime,baselineRuntime});
+      if(!configuration.legacy && !context.fences.some(fence=>['origin','*'].includes(fence.sessionGroup))) {
         const need=await db.getOriginNeed(Math.floor(now()/1000),{sessionMode:configuration.mode});
         if(need.controls.count>0 || need.continuation?.pending) {
           const runtime=await deps.resolveTargetRuntime('origin');
@@ -303,20 +313,20 @@ export function createSupervisor(deps) {
             const observed=fresh.scenes.find(scene=>scene.sessionGroup===target.sessionGroup || (scene.sessionGroup==='origin' && target.sessionGroup===null));
             if(!observed?.present || observed.runId!==target.runId || !observed.ready)continue;
             // An unfenced single-session auth stop waits while no-response recovery owns the run.
-            if(fresh.configuration.mode==='single' && observer.noResponseActive({...observed,sessionGroup:observed.sessionGroup ?? 'origin'}))continue;
-            if(fresh.configuration.mode==='single')await lifecycle.advanceReclaim({sessionGroup:null,reason:'auth',runId:target.runId},fresh,{unfenced:true,singleAuth:true});
+            if(fresh.configuration.legacy && observer.noResponseActive({...observed,sessionGroup:observed.sessionGroup ?? 'origin'}))continue;
+            if(fresh.configuration.legacy)await lifecycle.advanceReclaim({sessionGroup:null,reason:'auth',runId:target.runId},fresh,{unfenced:true,singleAuth:true});
             else await lifecycle.beginReclaim(observed,'auth',fresh);
           }
         });
         await health.completeAuthRecovery(runtime,{isGone:async target=>{
           const observed=await scenes.readIdentity(target.sessionGroup);
           return observed.present===false || (typeof observed.runId==='string' && observed.runId!==target.runId);
-        },hasAuthFence:async target=>configuration.mode==='multi' && (await db.getDrainFence(target.sessionGroup))?.reason==='auth'});
+        },hasAuthFence:async target=>!configuration.legacy && (await db.getDrainFence(target.sessionGroup))?.reason==='auth'});
       }
-      if(configuration.mode!=='multi' || context.transition || context.fences.some(fence=>fence.sessionGroup==='*'))return;
+      if(configuration.legacy || context.transition || context.fences.some(fence=>fence.sessionGroup==='*'))return;
       const runtime=await deps.resolveTargetRuntime('origin');
       if(health.store(runtime).read().health!=='auth_failed') {originAuthAlerted.delete(runtime);return;}
-      const seconds=Math.floor(now()/1000),need=await db.getOriginNeed(seconds);
+      const seconds=Math.floor(now()/1000),need=await db.getOriginNeed(seconds,{sessionMode:configuration.mode});
       if(need.inbound.oldestAt!==null && seconds-need.inbound.oldestAt>=PENDING_MAX_AGE_SECONDS-300 && !originAuthAlerted.has(runtime)) {
         await deps.alert({event:'origin_auth_blocked',runtime,oldest_at:need.inbound.oldestAt});
         originAuthAlerted.add(runtime);

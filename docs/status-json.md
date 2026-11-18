@@ -34,7 +34,8 @@ All paths below are relative to `data` and are present on a successful response.
 
 | Field | Type and meaning |
 | --- | --- |
-| `sessionMode` | `"single"`, `"multi"`, or `null` when the mode cannot be read. A configuration without a `session_mode` key means `"single"`. |
+| `sessionMode` | The `session_mode` value read from `config.json`: `"single"` (native single: only Origin runs), `"multi"`, `null` when the configuration has no `session_mode` key (an instance not yet migrated, which runs one session), or `"unreadable"` when `config.json` cannot be read or holds another value. This is the configured value, not the effective mode that the Dashboard reports. |
+| `view` | `"single"` for `"single"` and `null`, `"multi"` for `"multi"` and `"unreadable"`. A multi view lists Origin and every live group, so an unreadable mode never hides sessions. |
 | `origin.presence` | `"running"`, `"starting"`, `"not_running"`, or `"unknown"`. A confirmed live session can still have an unreadable or stale status sample. |
 | `origin.runId` | String or `null`; the observed process generation, `null` when no live identity was read. |
 | `origin.sessionId` | String or `null`; the observed runtime session identity. |
@@ -44,8 +45,9 @@ All paths below are relative to `data` and are present on a successful response.
 | `runtimeHealth.claude.publicHealth`, `runtimeHealth.codex.publicHealth` | Same nullable string type; legacy `"down"` and `"recovering"` records are projected as `"unavailable"`. Missing and unreadable records are `null`. |
 | `readAt` | ISO 8601 UTC string, for example `"2026-11-17T01:02:03.000Z"`; the time this local status read began. |
 
-In single mode, `origin` describes the single runtime session. In multi mode it
-describes the Origin group. A sleeping multi-mode Origin can legitimately be
+In the single view, `origin` describes Origin in native single and the one
+session of an instance not yet migrated; in both cases its `sessionGroup` is
+`null` and `groups` is empty. In the multi view it describes the Origin group. A sleeping multi-mode Origin can legitimately be
 `"not_running"`; presence alone is not a readiness check.
 
 The JSON output converts timestamps and missing/default values at the output

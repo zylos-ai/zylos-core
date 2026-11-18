@@ -10,6 +10,7 @@ import { submit } from '../../../../cli/lib/am-sock-client.js';
 const worker=fileURLToPath(new URL('./fixtures/supervisor-manual-session-worker.js',import.meta.url));
 async function fixture(t,mode='multi',variant=''){
  const f=readyTmuxTarget(t,{prefix:'manual-session-entry-',mode,runtimeProcess:true});f.tmux('new-session','-d','-s','fixture-keeper','sleep','120');
+    if (mode === 'single') fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude' }));
  const child=fork(worker,[f.socketPath,f.binary,mode,variant],{env:{...process.env,...f.env},silent:true});let stderr='';child.stderr.on('data',chunk=>stderr+=chunk);
  const inbox=[],waiters=[];child.on('message',m=>waiters.length?waiters.shift().resolve(m):inbox.push(m));
  child.on('exit',(code,signal)=>{for(const w of waiters.splice(0))w.reject(new Error(`Worker exited ${code??signal}: ${stderr}`));});

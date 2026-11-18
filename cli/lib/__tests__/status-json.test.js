@@ -27,12 +27,15 @@ async function capture(data, args) {
   } finally { console.log = log; }
 }
 
-for (const [name, overrides, expectedMode] of [
-  ['normal', {}, 'multi'],
+// sessionMode is the strictly read value: null for a configuration without session_mode
+// (pre-migration instance), 'unreadable' when it cannot be read; view lists sessions accordingly.
+for (const [name, overrides, expectedMode, expectedView] of [
+  ['normal', {}, 'multi', 'multi'],
   ['missing health', { health: runtime => runtime === 'codex' ? { missing: true }
-    : { health: 'auth_failed', publicHealth: 'auth_failed', cooldownUntil: null, updatedAt: time } }, 'multi'],
-  ['default session mode', { mode: () => ({ mode: null }) }, 'single'],
-  ['unreadable session mode', { mode: () => { throw Error('unreadable config'); } }, null],
+    : { health: 'auth_failed', publicHealth: 'auth_failed', cooldownUntil: null, updatedAt: time } }, 'multi', 'multi'],
+  ['pre-migration session mode', { mode: () => ({ mode: null }) }, null, 'single'],
+  ['native single session mode', { mode: () => ({ mode: 'single' }) }, 'single', 'single'],
+  ['unreadable session mode', { mode: () => { throw Error('unreadable config'); } }, 'unreadable', 'multi'],
 ]) {
   test(`status JSON projects ${name} without changing internal status or text`, async () => {
     const data = await collectStatus(fixture(overrides));
@@ -44,6 +47,7 @@ for (const [name, overrides, expectedMode] of [
     assert.deepEqual(wire, result);
     assert.equal(wire.ok, true);
     assert.equal(wire.data.sessionMode, expectedMode);
+    assert.equal(wire.data.view, expectedView);
     assert.equal(wire.data.readAt, '2026-11-17T01:02:03.000Z');
     assert.equal(wire.data.origin.presence, 'running');
     assert.equal(wire.data.origin.runId, 'run');
@@ -59,8 +63,6 @@ for (const [name, overrides, expectedMode] of [
     assert.equal(typeof data.readAt, 'number');
     assert.equal(Math.floor(data.readAt / 1000), 1794877323);
     if (name === 'missing health') assert.equal(data.runtimeHealth.codex.health, 'ok');
-    if (name === 'default session mode') assert.equal(data.sessionMode, null);
-    if (name === 'unreadable session mode') assert.equal(data.sessionMode, 'unreadable');
     assert.deepEqual((await capture(data, [])).lines, textBefore.lines);
   });
 }

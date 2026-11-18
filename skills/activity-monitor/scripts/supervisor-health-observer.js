@@ -14,12 +14,12 @@ const sameRun = (a, b) => Boolean(a && b && a.runtime === b.runtime && a.runId &
 /** Observation owns no process launcher and never waits for an acknowledgement in tick. */
 export class SupervisorHealthObserver {
   constructor({ coordinator, listScenes, readIdentity, readState, readScreen, matchScreen,
-    insertControl, getControlById, buildTargetBinding, stop, readMode = () => ({ mode: 'multi' }),
+    insertControl, getControlById, buildTargetBinding, stop, readMode = () => ({ mode: 'multi' }), readScopeMode,
     getModeTransition = () => null, getDrainFence = () => null, manualPending = () => false,
     readMaintenance = () => null, resolveToolRule = () => null, nudge, checkAuth, diagnostic = () => {}, now = Date.now,
     log = () => {}, recoveryDeadlineMs = 120000 } = {}) {
     Object.assign(this, { coordinator, listScenes, readIdentity, readState, readScreen, matchScreen,
-      insertControl, getControlById, buildTargetBinding, stop, readMode, getModeTransition,
+      insertControl, getControlById, buildTargetBinding, stop, readMode, readScopeMode, getModeTransition,
       getDrainFence, manualPending, readMaintenance, resolveToolRule, nudge, checkAuth, diagnostic, now, log, recoveryDeadlineMs });
     this.probes = new Map();
     this.scenes = new Map();
@@ -188,7 +188,8 @@ export class SupervisorHealthObserver {
       if (idleOnly && !forcedBusy && (await this.readState(scene))?.state !== 'idle') {busy = true;continue;}
       const sentAt = this.now();
       const deadline = sentAt + (probe.phase === 'recovery' ? this.recoveryDeadlineMs : 300000);
-      const scope = await this.modeSnapshot();
+      const scopeValue = await (this.readScopeMode ?? this.readMode)();
+      const scope = typeof scopeValue === 'string' ? { mode: scopeValue } : scopeValue ?? { mode: 'multi' };
       const control = await this.insertControl(`Heartbeat check. [phase=${probe.phase}]`, {
         sessionGroup:scope.mode === 'multi' || scope.keyPresent === true ? scene.sessionGroup : null, targetBinding:binding,
         priority:0,bypassState:true,ackDeadlineAt:Math.floor(deadline/1000),createdAt:Math.floor(sentAt/1000),

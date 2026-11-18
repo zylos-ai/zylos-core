@@ -79,13 +79,26 @@ setInterval(() => {}, 1000);
   return { live, record, events, launches };
 }
 
-// : actual supervisor admission/lifecycle, C4 ledger and tmux. The named
-// sleeper is a controlled runtime process; no authenticated model is used.
+// Boundary: legacy unscoped runtime switching through actual Supervisor, C4
+// ledger and private tmux, including stop-before-settlement and Router relaunch.
+// Run for runtime-switch admission/reclaim changes; unrelated edits may skip.
+// The official runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; the fixture
+// owns its socket/database and kills its server on failure or timeout. The named
+// sleeper is controlled; no authenticated runtime or external service is used.
 for (const json of [false, true]) {
-  test(`single ${json ? 'JSON' : 'text'} stops before ledger settlement and restarts on the new baseline`, { timeout: 30000 }, async t => {
-    const f = readyTmuxTarget(t, { prefix: 'rt-m4-', mode: 'single', keyPresent: false, runtimeProcess: true });
+  test(`legacy single ${json ? 'JSON' : 'text'} stops before ledger settlement and restarts on the new baseline`, { timeout: 30000 }, async t => {
+    const f = readyTmuxTarget(t, { prefix: 'rt-switch-', mode: 'single', runtimeProcess: true });
     f.tmux('new-session', '-d', '-s', 'fixture-keeper', 'sleep', '120');
+    f.env.PM2_HOME = path.join(f.root, 'pm2');
+    f.env.TMPDIR = process.env.TMPDIR;
+    t.diagnostic(JSON.stringify({ HOME: f.env.HOME, ZYLOS_DIR: f.env.ZYLOS_DIR,
+      PM2_HOME: f.env.PM2_HOME, TMPDIR: f.env.TMPDIR, socket: f.socketPath,
+      database: f.db.name }));
     const configFile = path.join(f.root, '.zylos/config.json');
+    // This fixture represents the pre-migration, unscoped runtime.
+    const legacyConfig = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    delete legacyConfig.session_mode;
+    fs.writeFileSync(configFile, JSON.stringify(legacyConfig));
     const readConfig = () => JSON.parse(fs.readFileSync(configFile, 'utf8'));
     const db = createStore(f.db, { readConfig: () => ({ state: 'ok', config: readConfig() }) });
     const conversation = db.insertConversation('in', 'system', 'runtime-switch-test', 'An unfinished conversation');
@@ -93,7 +106,7 @@ for (const json of [false, true]) {
     assert.equal(db.countGlobalRunningConversations(), 1);
     const scenes = new SupervisorScenes({ env: f.env,
       connectionOptions: { socketPath: f.socketPath, binary: f.binary },
-      readMode: () => ({ mode: 'single' }),
+      readMode: () => ({ mode: 'single', keyPresent: false }),
       readActivity: () => ({ state: 'busy', idleSince: null }), readUsage: () => null });
     const logs = [];
     const diagnostics = () => {
@@ -103,8 +116,10 @@ for (const json of [false, true]) {
       return source.trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
     };
     const service = await startSupervisor({ env: f.env, db: { ...db, getDb: () => f.db }, scenes,
-      readMode: () => ({ mode: 'single' }),
-      readConfiguration: () => ({ ...readConfig(), mode: 'single' }),
+      readMode: () => ({ mode: null, keyPresent: false }),
+      readConfiguration: () => ({ ...readConfig(), mode: 'single', legacy: true }),
+      // This case exercises pre-migration restart, not automatic migration.
+      legacyPresent: () => true,
       readSyncMarker: () => ({ held: false, stale: false }),
       machineTasks: { tick() {}, stop() {} }, legacyStatus: { tick() {}, close() {} },
       sendAlert: () => { throw new Error('External alerts are forbidden in this fixture'); },

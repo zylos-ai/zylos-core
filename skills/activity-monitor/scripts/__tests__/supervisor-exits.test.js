@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { SupervisorExits } from '../supervisor-exits.js';
 function fixture() {
  const events=[],stops=[];let transition=null,fence=null;
@@ -34,4 +35,17 @@ test('intentional forget removes only the exact observed run',async()=>{
  assert.equal(f.observer.previous.get(f.scene.sessionGroup)?.runId,'r1');
  assert.equal(f.observer.forget(f.scene.sessionGroup,'r1'),true);
  assert.equal(f.observer.previous.has(f.scene.sessionGroup),false);
+});
+
+test('Codex rotation reads scoped handoff for native single and multi, global handoff only for legacy', async () => {
+ for (const mode of [{mode:'single',keyPresent:true},{mode:'single',keyPresent:false},{mode:'multi',keyPresent:true}]) {
+  const f=fixture(); const root=process.env.ZYLOS_DIR;
+  f.observer.env={ZYLOS_DIR:root}; f.observer.readMode=()=>mode;
+  const expected=mode.keyPresent === false ? path.join(root,'memory','handoff.md')
+   : path.join(root,'memory','session-groups','origin','handoff.md');
+  const reads=[];
+  f.observer.stat=async file=>{reads.push(file);assert.equal(file,expected);return {mtimeMs:101};};
+  await f.observer.report({...f.scene,sessionGroup:'origin'});
+  assert.deepEqual(reads,[expected]); assert.equal(f.events[0].event,'rotate_done');
+ }
 });
