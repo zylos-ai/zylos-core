@@ -1,4 +1,4 @@
-import test, { afterEach, beforeEach, mock } from 'node:test';
+import test, { after, afterEach, beforeEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -8,7 +8,17 @@ const isolation = Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']
 const isolationRoot = path.dirname(isolation.TMPDIR || '');
 assert.match(path.basename(isolationRoot), /^zylos-tests-/);
 for (const value of Object.values(isolation)) assert.ok(value?.startsWith(isolationRoot + path.sep));
-console.log('Init status isolation:', JSON.stringify({ ...isolation, resources: 'injected child processes; no network, PM2, tmux or database' }));
+const fixtureRoot = fs.mkdtempSync(path.join(isolation.TMPDIR, 'init-status-'));
+for (const [key, relative] of Object.entries({ HOME: 'home', ZYLOS_DIR: 'home/zylos', PM2_HOME: 'home/.pm2', TMPDIR: 'tmp' })) {
+  process.env[key] = path.join(fixtureRoot, relative); fs.mkdirSync(process.env[key], { recursive: true });
+}
+const actual = Object.fromEntries(Object.keys(isolation).map(key => [key, process.env[key]]));
+for (const value of Object.values(actual)) assert.ok(value.startsWith(fixtureRoot + path.sep));
+console.log('Init status isolation:', JSON.stringify({ ...actual, resources: 'injected child processes; no network, PM2, tmux or database' }));
+after(() => {
+  for (const [key, value] of Object.entries(isolation)) process.env[key] = value;
+  fs.rmSync(fixtureRoot, { recursive: true, force: true });
+});
 
 let subscription = false;
 const probes = [];
