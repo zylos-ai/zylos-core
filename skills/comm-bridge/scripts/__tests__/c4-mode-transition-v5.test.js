@@ -2,15 +2,43 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import Database from 'better-sqlite3';
-import { seedV1, snapshot } from './helpers/c4-v2-fixtures.js';
-import { migrateToV2 } from '../c4-migrations-v2.js';
-import { migrateToV3 } from '../c4-migrations-v3.js';
-import { migrateToV4 } from '../c4-migrations-v4.js';
-import { migrateDatabase, guardDatabase } from '../sqlite-schema.js';
-import * as owner from '../c4-schema.js';
-import { CONFIG_FILE } from '../../../../cli/lib/config.js';
-import { fixture } from './c4-v2-test-helpers.js';
-import { createStore } from '../c4-v2-store.js';
+import os from 'node:os';
+import path from 'node:path';
+import { after } from 'node:test';
+
+// Concurrent test files share the runner's environment. Bind configuration to
+// this file's own paths before loading any module that captures them.
+const privateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-transition-config-'));
+const privateEnvironment = {
+  HOME: path.join(privateRoot, 'home'),
+  ZYLOS_DIR: path.join(privateRoot, 'instance'),
+  PM2_HOME: path.join(privateRoot, 'pm2'),
+  TMPDIR: path.join(privateRoot, 'tmp'),
+  TMUX_TMPDIR: path.join(privateRoot, 'tmp'),
+};
+const previousEnvironment = Object.fromEntries(Object.keys(privateEnvironment).map(key => [key, process.env[key]]));
+for (const [key, value] of Object.entries(privateEnvironment)) {
+  fs.mkdirSync(value, { recursive: true });
+  process.env[key] = value;
+}
+after(() => {
+  fs.rmSync(privateRoot, { recursive: true, force: true });
+  for (const [key, value] of Object.entries(previousEnvironment)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
+const { CONFIG_FILE } = await import('../../../../cli/lib/config.js');
+const owner = await import('../c4-schema.js');
+const { seedV1, snapshot } = await import('./helpers/c4-v2-fixtures.js');
+const { migrateToV2 } = await import('../c4-migrations-v2.js');
+const { migrateToV3 } = await import('../c4-migrations-v3.js');
+const { migrateToV4 } = await import('../c4-migrations-v4.js');
+const { migrateDatabase, guardDatabase } = await import('../sqlite-schema.js');
+const { fixture } = await import('./c4-v2-test-helpers.js');
+const { createStore } = await import('../c4-v2-store.js');
+assert.equal(CONFIG_FILE, path.join(privateEnvironment.ZYLOS_DIR, '.zylos', 'config.json'));
+console.log('Transition configuration isolation:', JSON.stringify({ ...privateEnvironment, CONFIG_FILE }));
 
 // Official runner + separate Unix user; synthetic DBs only, no services.
 function v4(t) {

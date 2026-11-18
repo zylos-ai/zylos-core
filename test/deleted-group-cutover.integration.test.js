@@ -180,8 +180,10 @@ for (const entry of ['cli', 'dashboard']) {
       assert.deepEqual(f.store.getGlobalUnsummarizedConversations({ upToConversationId: fresh }).map(row => row.id), [fresh]);
       f.store.createCheckpoint('*', fresh, 'Memory Sync fresh summary');
       assert.equal(f.store.getGlobalCoverageEnd(), fresh);
-      // The temporary first-migration coordinator path still absorbs new work,
-      // while storage cutover no longer manufactures global coverage.
+      // Transitional behavior: switch admission temporarily uses the first-
+      // migration path, including cutoff, absorption and global state output.
+      // When native admission stops absorbing, update these assertions together
+      // with that coordinator change. Storage cutover adds no global coverage.
       const multi = await c.handle({ target: 'multi' }); await finish(f, c, multi.runId);
       const next = insert(f, 'origin', 'new work beyond retained coverage', 'pending');
       assert.ok(next > f.covered);
