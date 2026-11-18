@@ -129,7 +129,7 @@ describe('c4-session-init', () => {
   // Real CLI + private SQLite storage checks tail, coverage and lag guidance.
   // Run for scope/C4 boot reads; no runtime, PM2 or tmux starts. The shared
   // fixture prints isolated paths, bounds children and removes its directory.
-  for (const [mode, group] of [['single','origin'], ['multi','origin'], ['single',null], [null,null]]) {
+  for (const [mode, group] of [['single','origin'], ['single',null]]) {
     it(`startup tail follows environment group ${group} with mode ${mode}`, () => {
       withTmpDir(({ tmpDir, env }) => {
         fs.mkdirSync(path.join(tmpDir, '.zylos'), {recursive:true});

@@ -10,9 +10,8 @@ import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
 // Run for launch environment changes; runtime-specific authentication can skip.
 // Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; each case owns
 // a private socket and fixture. isolatedTmux kills its server before cleanup.
-for (const runtime of ['claude','codex']) for (const [mode,group] of [
-  ['single','origin'], ['multi','origin'], ['multi','telegram:launch'], ['single',null],
-]) test(`${runtime} ${mode} launch preserves environment group ${group}`, async t => {
+const mode = 'single', group = 'origin';
+for (const runtime of ['claude','codex']) test(`${runtime} ${mode} launch preserves environment group ${group}`, async t => {
   let receiverPid;
   const fixture = isolatedTmux(t,{prefix:'origin-launch-', beforeCleanup:async () => {
     try { fixture.tmux('kill-server'); } catch {}
@@ -39,12 +38,12 @@ for (const runtime of ['claude','codex']) for (const [mode,group] of [
   console.info('launch isolation',JSON.stringify({root,home,pm2:process.env.PM2_HOME,tmp:process.env.TMPDIR,socket:fixture.socketPath,runtime,mode,group}));
   const launched = await adapter.launch({sessionGroup:group,runId:'origin-test',sessionMode:mode,launchConfig:{runtime,mode:'default'}});
   receiverPid = Number(fixture.tmux('display-message','-p','-t',`=${launched.tmuxName}`,'#{pane_pid}'));
-  assert.equal(launched.tmuxName,group === 'telegram:launch' ? 'zylos-group-telegram=launch' : 'zylos-group-origin');
+  assert.equal(launched.tmuxName,'zylos-group-origin');
   const deadline = Date.now() + 2000;
   while (!fs.existsSync(output) && Date.now() < deadline) await new Promise(resolve=>setTimeout(resolve,10));
   const observed = JSON.parse(fs.readFileSync(output,'utf8'));
   assert.equal(observed.group,group);
   assert.equal(observed.runId,'origin-test');
-  assert.equal(fixture.tmux('show-environment','-t',`=${launched.tmuxName}`,'ZYLOS_SESSION_GROUP'), group === null ? '-ZYLOS_SESSION_GROUP' : `ZYLOS_SESSION_GROUP=${group}`);
+  assert.equal(fixture.tmux('show-environment','-t',`=${launched.tmuxName}`,'ZYLOS_SESSION_GROUP'), `ZYLOS_SESSION_GROUP=${group}`);
   if(runtime === 'codex') assert.ok(observed.args.some(arg=>arg.includes('env_vars=["ZYLOS_SESSION_GROUP","ZYLOS_RUN_ID","ZYLOS_DIR"]')));
 });

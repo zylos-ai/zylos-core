@@ -56,15 +56,15 @@ const policies = [
   { name: 'C4 read failure with handoff', handoff: true, rows: null, sent: true },
 ];
 
-for (const mode of ['single', 'multi']) for (const source of ['startup', 'clear']) for (const sessionGroup of [null, 'origin', 'telegram:g-100123']) for (const policy of policies) {
-  test(`${mode} ${source} in ${sessionGroup ?? 'single'} handles ${policy.name}`, async t => {
+for (const source of ['startup', 'clear']) for (const sessionGroup of [null, 'origin', 'telegram:g-100123']) for (const policy of policies) {
+  test(`${source} in ${sessionGroup ?? 'single'} handles ${policy.name}`, async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-prompt-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const memoryDir = path.join(root, 'scope'); fs.mkdirSync(memoryDir);
     // An unrelated scope's handoff must not affect this scope's decision.
     fs.writeFileSync(path.join(root, 'handoff.md'), 'other scope');
     if (policy.handoff) fs.writeFileSync(path.join(memoryDir, 'handoff.md'), 'unfinished work');
-    const scope = { sessionGroup, memoryDir, mode };
+    const scope = { sessionGroup, memoryDir, mode: sessionGroup ? 'multi' : 'single' };
     const { db, store } = storeFixture(t);
     assert.equal(db.name, ':memory:');
     const insert = db.prepare(`INSERT INTO conversations
@@ -118,6 +118,20 @@ for (const mode of ['single', 'multi']) for (const source of ['startup', 'clear'
     else assert.doesNotMatch(prompt, /handoff|continue.*(?:ongoing|unfinished).*tasks/i);
   });
 }
+
+// Single-session Origin must query only its own unanswered conversations.
+// In-memory store only; the existing policy matrix covers timing and routing.
+test('single-session Origin pending replies are scoped by environment group', async t => {
+  const { db, store } = storeFixture(t);
+  const insert = db.prepare(`INSERT INTO conversations
+    (id,timestamp,direction,channel,endpoint_id,content,status,session_group)
+    VALUES (?,?,'in','telegram','private','question','delivered',?)`);
+  const scope = { mode: 'single', sessionGroup: 'origin' };
+  insert.run(1, new Date(clock - 60000).toISOString(), 'telegram:unrelated');
+  assert.equal(await startupPrompt.readStartupPendingReply(scope, clock, { database: store }), false);
+  insert.run(2, new Date(clock - 60000).toISOString(), 'origin');
+  assert.equal(await startupPrompt.readStartupPendingReply(scope, clock, { database: store }), true);
+});
 
 test('resume does not enqueue another startup prompt', async () => {
   const result = await enqueueStartupPrompt('resume', {
