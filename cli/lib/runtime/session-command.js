@@ -126,10 +126,10 @@ export function runtimeHelp(command, env = process.env) {
   try { return execFileSync(command,['--help'],{env,encoding:'utf8',timeout:10000,killSignal:'SIGKILL',stdio:'pipe'}); }
   catch (e) { throw adapterError('LAUNCH_FAILED', 'Runtime capability query failed', e.code === 'ETIMEDOUT' ? 'timeout':'error'); }
 }
-export async function runtimeHelpAsync(command, env = process.env) {
+export async function runtimeHelpAsync(command, env = process.env, { timeoutMs = 10000 } = {}) {
   try {
     const { stdout } = await promisify(execFile)(command, ['--help'], {
-      env, encoding:'utf8', timeout:10000, killSignal:'SIGKILL',
+      env, encoding:'utf8', timeout:timeoutMs, killSignal:'SIGKILL',
     });
     return stdout;
   } catch (error) {

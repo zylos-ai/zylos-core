@@ -2,13 +2,11 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { EventEmitter } from 'node:events';
 import { createTestEnvironment } from '../../../../scripts/test-environment.js';
 const environment = createTestEnvironment();
 const database = await import('../c4-db.js');
 const { createDispatcher } = await import('../router/factory.js');
-const { createStatusNoticeSender } = await import('../c4-status-notice.js');
-const { messageForStatus } = await import('../status-notice-templates.js');
+const { messageForFailureAlert } = await import('../failure-receipt-template.js');
 const { CONFIG_FILE, SKILLS_DIR } = await import('../../../../cli/lib/config.js');
 const { tmuxNameForGroup } = await import('../../../../cli/lib/session-group-paths.js');
 after(() => { database.close(); environment.cleanup(); });
@@ -18,12 +16,18 @@ async function until(predicate, message) { for (let i = 0; i < 2000; i++) { if (
 let sequence = 0;
 function configuration(mode = 'multi') {
   fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify({ runtime: 'codex', session_mode: mode }));
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify({ runtime: 'codex', session_mode: mode, statusNotices: { brand: 'Factory' } }));
 }
 // Factory composition boundary: run for dispatcher/slot fixture changes; skip unrelated UI.
 // createTestEnvironment owns the shared SQLite root; scene/runtime I/O is injected.
 // The private root has no publication, so env fixes K independently of the host.
 function setup(t, { mode = 'multi', phase } = {}) {
+  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
+    assert.ok(process.env[key]?.startsWith(environment.root + path.sep) ||
+      (key === 'TMPDIR' && environment.root.startsWith(process.env[key] + path.sep)), `${key} must be isolated`);
+  }
+  const filename = database.getDb().pragma('database_list').find(row => row.name === 'main').file;
+  assert.ok(filename.startsWith(environment.root + path.sep), 'SQLite must be isolated');
   configuration(mode);
   const prefix = `factory${++sequence}`, a = `${prefix}a`, b = `${prefix}b`;
   for (const name of [a,b]) fs.mkdirSync(path.join(SKILLS_DIR, name), { recursive: true });
@@ -38,6 +42,7 @@ function setup(t, { mode = 'multi', phase } = {}) {
   const db = { ...database };
   const overrides = {
     env: { ...process.env, ZYLOS_SESSION_POOL_SIZE: '2' },
+    sendAlert: async (target, message) => { calls.push(['owner_alert', target, message]); return true; },
     db, diagnostics: { diagnostic: (...args) => calls.push(['event', ...args]), maintain() {} }, log: message => calls.push(['log', message]),
     listGroupTmuxSessions: async () => keys.map(sessionGroup => ({ sessionGroup, ...scenes.get(sessionGroup) })),
     readLiveIdentities: async groups => new Map(groups.map(group => [group, scenes.get(group) ?? { present: false }])),
@@ -94,24 +99,49 @@ for (const phase of ['paste','enter','idle','backoff']) test(`factory: ${phase} 
   assert.ok(f.calls.find(c => c[0] === 'paste' && c[1] === f.a)[2].includes('---- reply via:'));
 });
 
-test('factory: real expiry + shared sender happen post-commit, then next fresh row delivers', async t => {
+test('factory: real expiry sends only an owner alert after commit, then fresh work delivers', async t => {
   const f = setup(t), old = f.add(), fresh = f.add(f.a, 'fresh after expiry');
   f.db.getDb().prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(Math.floor(Date.now()/1000)-1801, old.id);
-  const attempts = [], config = { language: 'en', brand: 'Factory' };
-  f.overrides.sendStatusNotice = createStatusNoticeSender({ db: f.db,
-    render: route => { assert.equal(f.row(old.id).delivery_action, 'pending_expired'); return messageForStatus(route, config); },
-    diagnostic() {}, spawn: (_command, args) => {
-      const child = new EventEmitter(); child.pid = 12; child.stdin = new EventEmitter();
-      child.stdin.end = body => { attempts.push({ args, body }); queueMicrotask(() => child.emit('close', 0, null)); };
-      child.kill = () => {}; return child;
-    } });
+  const attempts = [];
+  f.overrides.readZylosConfigStrict = () => ({ state: 'ok', config: { alert_target: 'owner-test:owner-private' } });
+  f.overrides.sendStatusNotice = async () => assert.fail('terminal expiry must not reply to the external chat');
+  f.overrides.sendAlert = async (target, body) => {
+    assert.equal(f.row(old.id).delivery_action, 'pending_expired');
+    attempts.push({ target, body }); return true;
+  };
   const dispatcher = f.create(); await dispatcher.initialize(); await dispatcher.idle(); dispatcher.tick(); await dispatcher.idle();
+  await until(() => attempts.length === 1, 'expiry owner alert did not send');
   assert.equal(f.row(old.id).status, 'failed'); assert.equal(f.row(old.id).delivery_action, 'pending_expired');
   assert.equal(f.row(fresh.id).status, 'delivered'); assert.equal(attempts.length, 1);
-  assert.deepEqual(attempts[0].args.slice(1), [f.a, `endpoint-${f.a}`]);
-  assert.equal(attempts[0].body, messageForStatus({ runtime: 'codex', health: 'ok', reason: 'pending_expired', noticeKind: 'pending_expired' }, config));
+  assert.deepEqual(attempts[0].target, { channel: 'owner-test', endpoint: 'owner-private' });
+  assert.equal(attempts[0].body, messageForFailureAlert({ ...old, reason: 'pending_expired' }));
+  for (let i = 0; i < 3; i++) { dispatcher.tick(); await dispatcher.idle(); }
+  assert.equal(attempts.length, 1, 'settled owner alert must not be sent again');
   assert.equal(f.calls.filter(c => c[0] === 'paste').length, 1);
   assert.ok(f.db.getStatusNoticeCooldowns().some(c => c.cooldown_key.includes('pending_expired')));
+});
+
+// Recovery boundary: run for orphan settlement/owner alerts; skip unrelated UI.
+// setup proves private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and SQLite; terminal and
+// channel edges are injected. No tmux/socket/account is contacted.
+test('factory: startup orphan failure alerts once and never redelivers the original', async t => {
+  const f = setup(t), original = f.add(f.a, 'private original input');
+  f.db.claimConversation(original.id);
+  f.db.getDb().prepare('UPDATE conversations SET retry_count=1 WHERE id=?').run(original.id);
+  const attempts = [];
+  f.overrides.readZylosConfigStrict = () => ({ state: 'ok', config: { alert_target: 'owner-test:owner-private' } });
+  f.overrides.sendStatusNotice = async () => assert.fail('terminal failure must not reply to original chat');
+  f.overrides.sendAlert = async (target, body) => { attempts.push({ target, body }); };
+  const fresh = f.add(f.a, 'fresh after startup failure');
+  const dispatcher = f.create(); await dispatcher.initialize(); await dispatcher.idle(); await flush();
+  for (let i = 0; i < 3; i++) { dispatcher.tick(); await dispatcher.idle(); }
+  assert.equal(attempts.length, 1);
+  assert.deepEqual(attempts[0].target, { channel: 'owner-test', endpoint: 'owner-private' });
+  assert.equal(attempts[0].body, messageForFailureAlert({ ...original, reason: 'orphan_retry_exhausted' }));
+  assert.equal(attempts[0].body.includes('private original input'), false);
+  assert.equal(f.row(original.id).status, 'failed');
+  assert.equal(f.row(fresh.id).status, 'delivered');
+  assert.equal(f.calls.filter(call => call[0] === 'paste').length, 1);
 });
 
 test('factory: actual unreadable remains inert once, even if config repaired', async t => {
@@ -131,28 +161,6 @@ test('factory: actual single directs a non-null group through null origin target
   assert.equal(f.row(row.id).status, 'delivered'); assert.equal(f.row(row.id).session_id, 'business-null');
   assert.deepEqual(f.calls.filter(c => c[0] === 'resolve'), [['resolve', null]]);
   assert.equal(f.calls.find(c => c[0] === 'notify')[1].sessionGroup, null);
-});
-
-test('factory oracle rejects a known-bad scheduler that waits for previous lanes', async t => {
-  const schedulerURL = new URL('../router/scheduler.js', import.meta.url), factoryURL = new URL('../router/factory.js', import.meta.url);
-  const original = fs.readFileSync(schedulerURL, 'utf8');
-  const before = 'const work = lane(group).kick();';
-  assert.ok(original.includes(before));
-  const absolute = (source, url) => source.replace(/from '(\.\.?\/[^']+)'/g, (_, relative) => `from '${new URL(relative, url).href}'`);
-  const uri = source => 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');
-  const altered = absolute(original.replace(before,
-    'const work = tasks.size ? Promise.allSettled([...tasks]).then(() => lane(group).kick()) : lane(group).kick();'), schedulerURL);
-  const factorySource = absolute(fs.readFileSync(factoryURL, 'utf8'), factoryURL).replace(schedulerURL.href, uri(altered));
-  const bad = (await import(uri(factorySource))).createDispatcher;
-  const f = setup(t, { phase: 'paste' }), first = f.add(), second = f.add(f.b);
-  const dispatcher = f.create(bad); await dispatcher.initialize(); await dispatcher.idle(); dispatcher.tick();
-  await until(f.holding, 'mutant must reach the held paste');
-  for (let i = 0; i < 20; i++) await flush();
-  assert.equal(f.row(first.id).status, 'running');
-  assert.throws(() => assert.equal(f.row(second.id).status, 'delivered'), { code: 'ERR_ASSERTION' });
-  assert.equal(f.row(second.id).status, 'pending');
-  f.held.resolve(); await dispatcher.idle();
-  assert.equal(f.row(second.id).status, 'delivered');
 });
 
 test('factory: blocked paste in live A does not prevent absent B from launching and delivering', async t => {

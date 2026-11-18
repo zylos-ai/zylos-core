@@ -78,6 +78,21 @@ Do not send these blocks until the Core schema and Dashboard BeforeSend
 validator support them on all readers; registration alone does not add protocol
 support, and an incompatible Core rejects the entire envelope.
 
+## Short Replies to Owner Alerts
+
+Before responding to an unclear short reply such as “需要” / “yes, please”,
+inspect this chat's recent records in the current session group:
+
+```bash
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --unsummarized --group '<current group>'
+```
+
+Outbound system alerts are stored in the chat's `session_group`. Match the
+reply to the alert's offer to investigate, keeping the lookup within this chat.
+If it matches, follow [Investigating an alert](references/delivery-failure-receipts.md#investigating-an-alert).
+If the alert has already been memory-synced and is no longer visible, or the
+reply remains unclear, ask a brief clarifying question.
+
 ## Messages Between Session Threads
 
 In multi-session mode, use `internal` to ask another thread a question or tell

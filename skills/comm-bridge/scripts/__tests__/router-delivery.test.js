@@ -206,6 +206,25 @@ test('Enter failure increments retry, invalid keystroke rejected; valid keystrok
   assert.equal(bad.status, 'pending'); assert.equal(good.status, 'done');
 });
 
+test('exhausted unverified Enter preserves uncertainty in the failure reason', async t => {
+  const f = setup(t), row = f.message();
+  f.adapter.sendKeys = async () => { throw error('ENTER_UNVERIFIED'); };
+  const alerts = [];
+  f.deps.sendFailureAlert = (failed, reason) => alerts.push({ id: failed.id, reason });
+  const delivery = f.create();
+  await delivery.deliverConversation(row);
+  assert.equal(f.row(row.id).status, 'pending');
+  assert.deepEqual(alerts, []);
+  assert.equal(f.store.claimConversation(row.id), true);
+  await delivery.deliverConversation(row);
+  assert.equal(f.row(row.id).status, 'failed');
+  assert.deepEqual(alerts, [{ id: row.id, reason: 'delivery_unverified' }]);
+  const failed = f.row(row.id);
+  assert.equal(failed.delivery_action, 'delivery_unverified');
+  const { messageForFailureReceipt } = await import('../failure-receipt-template.js');
+  assert.match(messageForFailureReceipt({ ...failed, reason: failed.delivery_action }, {}), /未能确认送达/);
+});
+
 test('normal active heartbeat autoacks, recovery and post_restart reach runtime', async t => {
   for (const phase of ['normal', 'recovery', 'post_restart']) await t.test(phase, async t => {
     const f = setup(t); f.state.active_tools = 1; const row = f.control(`Heartbeat check [phase=${phase}] ---- ack via: safe`, { bypass_state: 1 });

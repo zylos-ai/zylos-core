@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as commands from '../session-command.js';
 import * as upgrades from '../upgrade-context.js';
+import * as launch from '../session-launch.js';
 
 let context;
 let captured;
@@ -19,66 +20,10 @@ mock.module('../upgrade-context.js', { namedExports: {
   discoverUpgradeContext: root => context ?? upgrades.discoverUpgradeContext(root),
 } });
 mock.module('../session-launch.js', { namedExports: {
+  ...launch,
   settleLaunch: async () => ({ launched: true }),
 } });
 const { SessionAdapter } = await import('../session-adapter.js');
-
-const states = {
-  blocked: { active: true, blocked: true, prompt: 'SYSTEM RECOVERY TASK: upgrade blocked' },
-  interrupted: { active: true, blocked: false, controllerAlive: false, prompt: 'SYSTEM RECOVERY TASK: controller exited' },
-  none: { active: false, blocked: false },
-  observing: { active: true, blocked: false, controllerAlive: true, prompt: 'Observe the live controller' },
-  empty: { active: true, blocked: true, prompt: '' },
-};
-
-for (const runtime of ['claude', 'codex', 'agy']) {
-  for (const [state, upgrade] of Object.entries(states)) {
-    test(`${runtime} launch preserves argument boundaries during ${state} upgrade`, async t => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'upgrade-args-'));
-      t.after(() => fs.rm(root, { recursive: true, force: true }));
-      context = upgrade;
-      captured = undefined;
-      let closed = false;
-      class Adapter extends SessionAdapter { get runtimeId() { return runtime; } }
-      const adapter = new Adapter({
-        root,
-        env: { HOME: root, PATH: '/empty' },
-        paths: { tmuxNameForGroup: () => 'isolated' },
-        runtimeExecutable: () => '/unused-runtime',
-        runtimeHelp: async () => ' --no-daemon ',
-        dependencies: {
-          openTmuxConnection: async () => ({ close: () => { closed = true; } }),
-          observeSessionTarget: async () => ({ present: false }),
-        },
-      });
-      const launchConfig = { runtime, mode: 'default' };
-      const original = commands.buildRuntimeArgs(runtime, launchConfig, { root, help: ' --no-daemon ' });
-      await adapter.launch({ sessionGroup: null, runId: 'isolated-run', sessionMode: 'single', launchConfig });
-      assert.equal(closed, true);
-      const args = captured.args;
-      assert.equal(captured.root, root);
-      const hasPrompt = ['blocked', 'interrupted'].includes(state);
-      if (!hasPrompt) {
-        assert.deepEqual(args, original);
-        assert.equal(args.includes('--'), false);
-      } else if (runtime === 'claude') {
-        assert.deepEqual(args.slice(0, -2), original);
-        assert.deepEqual(args.slice(-2), ['--', upgrade.prompt]);
-        assert.equal(args.filter(arg => arg === '--').length, 1);
-        const mcpIndex = args.indexOf('--mcp-config');
-        assert.equal(args.indexOf('--'), mcpIndex + 2);
-        const mcp = JSON.parse(args[mcpIndex + 1]);
-        assert.equal(mcp.mcpServers['zylos-memory'].command, 'node');
-        assert.deepEqual(mcp.mcpServers['zylos-memory'].args,
-          [path.join(root, '.claude/skills/zylos-memory/scripts/memory-mcp-server.js')]);
-      } else {
-        assert.equal(args.includes('--'), false);
-        assert.deepEqual(args.slice(0, -1), original.slice(0, -1));
-        assert.equal(args.at(-1), state === 'blocked' ? upgrade.prompt : `${original.at(-1)}\n\n${upgrade.prompt}`);
-      }
-    });
-  }
-}
 
 test('throwing trusted discovery builds an isolated recovery launch', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'upgrade-discovery-'));

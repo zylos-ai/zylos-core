@@ -3,9 +3,9 @@ import { tmuxNameForGroup } from '../../../../../cli/lib/session-group-paths.js'
 import { createRouter } from '../../router/scheduler.js';
 export const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 export const flush = () => new Promise(resolve => setImmediate(resolve));
-export function routerFixture(t, { mode = 'multi', poolSize = 2, readyTimeoutMs = 1000 } = {}) {
-  let clock = 1800000000000;
-  const f = fixture(t, { now: () => clock, readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: mode } }) });
+export function routerFixture(t, { mode = 'multi', poolSize = 2, readyTimeoutMs = 1000, databaseFile = false, initialClock = 1800000000000 } = {}) {
+  let clock = initialClock;
+  const f = fixture(t, { now: () => clock, readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: mode } }) }, databaseFile);
   const events = [], calls = [], scene = new Map(), current = new Map(), health = new Map();
   const db = { ...f.store,
     getControlById: id => f.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id),

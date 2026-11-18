@@ -7,7 +7,7 @@ import { groupRunDir } from '../session-group-paths.js';
 import { readProcessStart } from '../../../skills/activity-monitor/scripts/claude-pid.js';
 import { writePaneProcess } from '../../../skills/activity-monitor/scripts/pane-process.js';
 
-export const LAUNCH_TIMEOUT_MS = 3000;
+export const LAUNCH_TIMEOUT_MS = 10000;
 export const LAUNCH_CLEANUP_TIMEOUT_MS = 500;
 const EXEC_POLL_MS = 25;
 const startingCommands = new Set(['sh','dash','bash','zsh','ksh','ash','fish','env','tmux','tmux: server']);
@@ -27,8 +27,14 @@ export function recordPaneProcess({runId,launchConfig,sessionGroup,root,panePid,
 }
 
 /** Submit once and bound all confirmation and local cleanup before return. */
-export async function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,script,tmux={}}) {
-  const deadline = performance.now() + LAUNCH_TIMEOUT_MS;
+export async function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,script,tmux={},
+  startedAt = performance.now(), preflightMs = 0}) {
+  const deadline = startedAt + LAUNCH_TIMEOUT_MS;
+  const timing = { preflight_ms: preflightMs, new_session_ms: 0, executor_init_ms: 0, exec_confirm_ms: 0,
+    cleanup_ms: 0, total_ms: 0, timeout_ms: LAUNCH_TIMEOUT_MS, last_phase: 'new_session' };
+  let phase = 'new_session', phaseStartedAt = performance.now(), cleanupStartedAt, failure;
+  const finishPhase = () => { timing[`${phase}_ms`] += performance.now() - phaseStartedAt; };
+  const enterPhase = next => { finishPhase(); phase = next; phaseStartedAt = performance.now(); };
   const remaining = () => {
     const ms = Math.ceil(deadline - performance.now());
     if (ms <= 0) throw adapterError('LAUNCH_FAILED','Launch confirmation timed out','timeout');
@@ -58,11 +64,13 @@ export async function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,roo
     if (!Number.isSafeInteger(target.createdAt) || match[6] !== '1' || match[7] !== '1' || (sessionGroup !== null && match[8] !== '1')) {
       throw adapterError('LAUNCH_FAILED','Launch environment was not confirmed');
     }
+    enterPhase('executor_init');
     recordPaneProcess({runId,launchConfig,sessionGroup,root,panePid:Number(match[4])});
     connection = await openTmuxConnection({...tmux,timeoutMs:remaining()});
     connection.bindTarget(target);
     const command = argv => connection.command(argv,{timeoutMs:remaining()});
     if (sessionGroup === null) await command([C.setEnvironment,'-r','-t',target.tmuxSessionId,'ZYLOS_SESSION_GROUP']);
+    enterPhase('exec_confirm');
     let lastCommand;
     while (true) {
       const output = await command([C.displayMessage,'-p','-t',target.paneId, F.exec]);
@@ -72,11 +80,18 @@ export async function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,roo
       }
       const name = observed[4];
       const started = name && !startingCommands.has(name.replace(/^-/,'').split('/').at(-1));
-      if (started && lastCommand === name) return {tmuxName,createdAt:target.createdAt};
+      if (started && lastCommand === name) {
+        finishPhase();
+        timing.last_phase = phase;
+        return {tmuxName,createdAt:target.createdAt,launchTiming:timing};
+      }
       lastCommand = started ? name : undefined;
       await new Promise(resolve => setTimeout(resolve,Math.min(EXEC_POLL_MS,remaining())));
     }
   } catch (error) {
+    finishPhase();
+    timing.last_phase = phase;
+    cleanupStartedAt = performance.now();
     connection?.close();
     // Use the creation receipt's identity, never a fresh lookup by name. A
     // replacement server fails the guard and cannot be cleaned up as our own.
@@ -91,11 +106,18 @@ export async function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,roo
       } catch { /* Unobservable server-side outcomes are handled by the caller. */ }
       finally { cleanup?.close(); }
     }
-    if (isTmuxDirectoryError(error) || error.code === 'NAME_CONFLICT' || error.code === 'LAUNCH_FAILED') throw error;
-    if (/duplicate session/.test(error.message)) throw adapterError('NAME_CONFLICT',error.message);
-    throw adapterError('LAUNCH_FAILED',error.message,error.cause);
+    failure = isTmuxDirectoryError(error) || error.code === 'NAME_CONFLICT' || error.code === 'LAUNCH_FAILED' ? error
+      : /duplicate session/.test(error.message) ? adapterError('NAME_CONFLICT',error.message)
+        : adapterError('LAUNCH_FAILED',error.message,error.cause);
+    // Only numeric durations and a fixed phase name leave this layer. In
+    // particular, script text, environment values and tmux output stay out.
+    failure.launchTiming = timing;
+    throw failure;
   } finally {
+    cleanupStartedAt ??= performance.now();
     connection?.close();
     script.cleanup();
+    timing.cleanup_ms = performance.now() - cleanupStartedAt;
+    timing.total_ms = performance.now() - startedAt;
   }
 }

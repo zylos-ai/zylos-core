@@ -89,10 +89,12 @@ test('NAME_CONFLICT requeues without retry and startup control invalidation prec
   const control = f.db.insertControl('old', { sessionGroup: 'a', appendAckSuffix: false });
   f.deps.getSessionAdapter = () => ({ launch: async () => {
     assert.equal(f.db.getControlById(control.id).last_error, 'SESSION_ENDED');
-    throw Object.assign(Error('exists'), { code: 'NAME_CONFLICT' }); }, stop: async () => assert.fail('no stop on name conflict') });
+    throw Object.assign(Error('exists'), { code: 'NAME_CONFLICT',
+      launchTiming: { new_session_ms: 1, total_ms: 1, last_phase: 'new_session' } }); }, stop: async () => assert.fail('no stop on name conflict') });
   const router = f.create(); await router.initialize(); await f.rounds(2);
   assert.equal(f.row(row.id).status, 'pending'); assert.equal(f.row(row.id).retry_count, 0);
   assert.ok(f.events.some(x => x.event === 'launch_name_conflict'));
+  assert.equal(f.events.some(x => x.event === 'session_launch_failed'), false);
 });
 
 test('branch validation rejects missing, forbidden, wrong units and mismatched identity', () => {
@@ -167,3 +169,63 @@ for (const ready of [false, true]) {
     assert.equal(router.state.activations.has('a'), ready);
   });
 }
+
+test('launch timing survives failed identity observation and is logged once per attempt', async t => {
+  const f = routerFixture(t); f.put('origin'); const row = f.add('a');
+  let observationFails = false;
+  const read = f.deps.readLiveIdentity;
+  f.deps.readLiveIdentity = async group => {
+    if (observationFails && group === 'a') throw Object.assign(Error('unobservable'), { code: 'TMUX_UNAVAILABLE' });
+    return read(group);
+  };
+  f.deps.getSessionAdapter = () => ({ launch: async () => {
+    observationFails = true;
+    throw Object.assign(Error('private error'), { code: 'LAUNCH_FAILED', cause: 'timeout', launchTiming: {
+      preflight_ms: 8000, new_session_ms: 2000, executor_init_ms: 0, exec_confirm_ms: 0, cleanup_ms: 1, total_ms: 10001,
+      timeout_ms: 10000, last_phase: 'new_session',
+    } });
+  }, stop: async () => assert.fail('observation must retain ownership') });
+  await f.create().initialize(); await f.rounds(5);
+  assert.equal(f.row(row.id).status, 'running');
+  assert.equal(f.row(row.id).retry_count, 0);
+  const events = f.events.filter(event => event.event === 'session_launch_failed');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].last_phase, 'new_session');
+  assert.equal(events[0].preflight_ms, 8000);
+  assert.equal(events[0].cause, 'timeout');
+  assert.equal(JSON.stringify(events).includes('private error'), false);
+});
+
+test('READY timeout records launch phase durations under its separate budget', async t => {
+  const f = routerFixture(t); f.put('origin'); const row = f.add('a');
+  const adapter = f.deps.getSessionAdapter;
+  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+    f.put(input.sessionGroup, { ready: false, runId: input.runId });
+    return { launchTiming: { preflight_ms: 7, new_session_ms: 20, executor_init_ms: 3, exec_confirm_ms: 40,
+      cleanup_ms: 1, total_ms: 64, timeout_ms: 10000, last_phase: 'exec_confirm' } };
+  } });
+  const alerts = [];
+  f.deps.sendFailureAlert = (failed, reason) => {
+    alerts.push({ id: failed.id, reason, status: f.row(failed.id).status });
+  };
+  f.options.maxRetries = 2;
+  await f.create().initialize(); await f.rounds(2);
+  assert.equal(f.row(row.id).status, 'running');
+  f.advance(1000); await f.rounds(1);
+  assert.equal(f.row(row.id).retry_count, 1);
+  assert.equal(f.row(row.id).status, 'pending');
+  assert.deepEqual(alerts, []);
+  await f.rounds(2);
+  assert.equal(f.row(row.id).status, 'running');
+  f.advance(1000); await f.rounds(1);
+  assert.equal(f.row(row.id).retry_count, 2);
+  assert.equal(f.row(row.id).delivery_action, 'ready_timeout');
+  assert.deepEqual(alerts, [{ id: row.id, reason: 'ready_timeout', status: 'failed' }]);
+  const event = f.events.find(event => event.event === 'session_launch_failed');
+  assert.equal(event.last_phase, 'runtime_ready');
+  assert.equal(event.timeout_ms, 1000);
+  assert.equal(event.new_session_ms, 20);
+  assert.equal(event.preflight_ms, 7);
+  assert.equal(event.cause, 'ready_timeout');
+  assert.ok(event.total_ms >= 0);
+});
