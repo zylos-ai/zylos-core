@@ -28,8 +28,9 @@ header is:
 <!-- zylos-state v1 | scope=telegram:example | synced_at=2026-10-19T05:30:02.123Z | coverage=42 | inbox_committed= -->
 ```
 
-The same empty marker is used when writing temporary state, regardless of the
-notes in this round; the commit script fills it during publication.
+For a newly created temporary state, use an empty marker regardless of this
+round’s notes. A script-prepared copy may retain its old marker; commit always
+replaces it during publication.
 
 With one new note `20261019T053002123Z`, only that ID appears, even if the old
 state named `20261019T053001123Z`:
@@ -50,8 +51,9 @@ The document then contains `# Working State` and all four headings:
 Sections may be empty. Target 20 KiB (20 * 1024 bytes), the soft budget defined
 by STATE_BUDGET_BYTES in sync-files.js. Keep only current focus, genuinely pending
 work and blockers. Before removing a completed or superseded item, put one
-result line per item in this round's checkpoint summary so Origin Sync can
-record it on a project page. Group Sync does not write shared reference files.
+result line per item in this round's checkpoint summary. Group Sync leaves
+project-page recording to Origin Sync and does not write shared references.
+Single global Sync records results in project pages itself before checkpoint.
 Never drop unresolved work or absorbed messages for size. Commit reports
 `stateBytes`, `stateBudgetBytes`, and `stateOverBudget` for the published UTF-8
 file, including its final header and preserved absorbed lines. Overflow does
@@ -66,18 +68,33 @@ whose follow-up is
 confirmed by actual progress; an outbound audit row alone is not delivery
 proof. Commit preserves all other lines and the original title exactly.
 
-After checkpoint succeeds, run `sync-files.js prepare --token T` to copy the
-current state byte for byte into its token-named temporary file. It refuses to
-overwrite an existing draft. For an existing draft, use the restricted tool's
-unique-fragment edits at `state.md.tmp` for changed text only. Update coverage to
-the batch end using the existing header format; retain the valid timestamp.
-Commit still validates the header, stamps synced_at, and fills inbox_committed.
-If prepare reports STATE_MISSING, create a complete four-section document with
-the restricted tool and the fixed timestamp placeholder described above.
+Read the entire existing state in bounded byte ranges before either mode.
+Update changed statuses in their original entries, rather than appending
+conflicting status notes. Remove completed/superseded entries this round and
+preserve their results as described above.
+
+After checkpoint succeeds, run `sync-files.js prepare --token T`. The script
+measures actual state bytes and returns:
+
+- `mode:"rewrite", bytes:N` above 20480 bytes: no copy is made. Create a complete
+  compact `state.md.tmp` through `edit_memory`, targeting <=20 KiB. Keep current
+  focus, pending work and blockers; omit the completed/superseded narratives and
+  manually copied absorbed block. Commit restores the official remaining block.
+- `mode:"edit", bytes:N` at or below budget: an exclusive byte-for-byte copy was
+  made. Use restricted unique-fragment edits at `state.md.tmp` for changed text,
+  including coverage, and leave any copied absorbed block untouched.
+- `reason:"STATE_MISSING"`: create a complete initial four-section document with
+  `edit_memory` and the fixed timestamp placeholder described above.
+
+Do not choose a mode from an estimated size or overwrite an existing draft.
+Use the existing header format, this scope and batch-end coverage, and retain
+a valid old timestamp (or the fixed placeholder). Newly created rewrite drafts
+leave inbox_committed empty; copied drafts can retain its old value. Commit
+validates the header, stamps synced_at and fills inbox_committed in every mode.
 The tool maps this fixed name to the current scope's temporary state file for
 the acquired token. Then use `sync-files.js commit` for formal replacement.
 A damaged header is a reader fallback, not permission to discard the body or
 uncommitted segments. See
 [the published-state example](../examples/state.md). Its `inbox_committed`
-value is filled by the commit script; leave that field empty when writing
-temporary state.
+value is filled by the commit script. Leave it empty when creating a missing
+state; a script-prepared copy may retain its old value until commit.

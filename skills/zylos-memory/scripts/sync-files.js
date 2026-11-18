@@ -91,19 +91,25 @@ export async function rotate(settings = {}, deps = {}) {
     return chosen;
   }, { recordFailure: false }));
 }
-// Seed a token-owned draft without asking the model to reproduce unchanged text.
+// Choose full compaction for oversized state; otherwise seed a draft for fragment edits.
 export async function prepare(settings = {}) {
   return withResult(settings, 'prepare', () => guard(settings, ({ memoryDir }) => {
     const statePath = path.join(memoryDir, 'state.md');
     const temporaryPath = `${statePath}.${settings.token}.tmp`;
+    let bytes;
+    try { bytes = fs.statSync(statePath).size; }
+    catch (error) {
+      if (error.code === 'ENOENT') return { prepared: false, reason: 'STATE_MISSING' };
+      throw error;
+    }
+    if (bytes > STATE_BUDGET_BYTES) return { prepared: false, mode: 'rewrite', bytes };
     try {
       fs.copyFileSync(statePath, temporaryPath, fs.constants.COPYFILE_EXCL);
     } catch (error) {
-      if (error.code === 'ENOENT' && !fs.existsSync(statePath)) return { prepared: false, reason: 'STATE_MISSING' };
       if (error.code === 'EEXIST') throw memoryError('EXISTS', 'Temporary state already exists; preserve its edits');
       throw error;
     }
-    return { prepared: true, path: temporaryPath, bytes: fs.statSync(temporaryPath).size };
+    return { prepared: true, mode: 'edit', path: temporaryPath, bytes };
   }, { recordFailure: false }));
 }
 const describeFile = file => {

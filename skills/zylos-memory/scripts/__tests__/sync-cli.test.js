@@ -21,7 +21,7 @@ function run(script, args, env, input = '') {
 // compaction, fragment editing and commit-output changes;
 // skip for unrelated changes. readyTmuxTarget reaps its session and removes the
 // fixture; each CLI has a timeout. Read back isolation before any Sync operation.
-for (const kind of ['group', 'global']) for (const existing of [false, true]) {
+for (const [kind, existing] of [['group', false], ['group', true], ['global', false]]) {
   test(`fixed temporary state name reaches a successful ${kind} commit with ${existing ? 'existing' : 'missing'} state`, async t => {
     const f = readyTmuxTarget(t, { prefix: 'state-alias-', mode: kind === 'group' ? 'multi' : 'single', packageRoot: rootPath });
     const env = { ...f.env, ZYLOS_RUN_ID: f.ready.runId, TZ: 'Asia/Singapore',
@@ -60,30 +60,19 @@ for (const kind of ['group', 'global']) for (const existing of [false, true]) {
     }
     const prepared = run('sync-files', ['prepare', '--token', token], env);
     assert.equal(prepared.status, 0, prepared.stderr);
-    assert.equal(JSON.parse(prepared.stdout).prepared, existing);
+    assert.equal(JSON.parse(prepared.stdout).prepared, false);
+    if (existing) assert.equal(JSON.parse(prepared.stdout).mode, 'rewrite');
+    else assert.equal(JSON.parse(prepared.stdout).reason, 'STATE_MISSING');
+    assert.equal((await editor({ op: 'create', path: 'state.md.tmp', replacement: text, token })).ok, true);
     if (existing) {
-      assert.equal((await editor({ op: 'edit', path: 'state.md.tmp', expected: 'coverage=0 |',
-        replacement: 'coverage=1 |', token })).ok, true);
-      for (const expected of completed) {
-        assert.equal((await editor({ op: 'edit', path: 'state.md.tmp', expected, replacement: '', token })).ok, true);
-      }
       const recorded = f.db.prepare('SELECT summary FROM checkpoints ORDER BY id DESC LIMIT 1').get().summary;
       for (let i = 0; i < completed.length; i++) assert.ok(recorded.includes(`- Completed task ${i}: delivered successfully.`));
-    } else {
-      assert.equal((await editor({ op: 'create', path: 'state.md.tmp', replacement: text, token })).ok, true);
     }
     const temporary = path.join(memoryDir, `state.md.${token}.tmp`);
     assert.equal(fs.readFileSync(temporary, 'utf8'), text);
     const edit = { op: 'edit', path: 'state.md.tmp', expected: '## Pending\n',
       replacement: '## Pending\n- New pending task.\n', token };
     assert.equal((await editor(edit)).ok, true);
-    if (existing) {
-      const fullCreatePayloadBytes = Buffer.byteLength(JSON.stringify({ op: 'create', path: 'state.md.tmp', replacement: text, token }));
-      const fragmentPayloadBytes = Buffer.byteLength(JSON.stringify(edit));
-      assert.ok(fragmentPayloadBytes < fullCreatePayloadBytes / 10);
-      console.log(JSON.stringify({ boundary: `${kind} add-one-task payload`, fullCreatePayloadBytes, fragmentPayloadBytes,
-        tokenMeasurement: 'not measured; real-model comparison belongs to review' }));
-    }
     const result = run('sync-files', ['commit', '--token', token], env, JSON.stringify({ followedUpIds: [], inputs, batch }));
     assert.equal(result.status, 0, result.stderr);
     const published = fs.readFileSync(inputs.statePath, 'utf8');

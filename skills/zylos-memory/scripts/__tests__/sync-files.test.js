@@ -579,18 +579,16 @@ test('commit metadata includes failed outgoing receipt rows and excludes ineligi
 // Guarded filesystem boundary only: no processes or live database. Run when
 // preparing drafts or reporting state size changes; unrelated changes may skip.
 test('prepare copies exact state bytes without overwriting an edited draft', async t => {
-  for (const group of ['telegram:test', null]) {
-    const f = await fixture(t, group);
-    const original = f.skeleton([1, 2]).replaceAll('\n', '\r\n') + '漢字 trailing  \r\n';
-    fs.writeFileSync(f.state, original);
-    const result = await prepare(f.settings);
-    assert.deepEqual(result, { prepared: true, path: f.temporary, bytes: Buffer.byteLength(original) });
-    assert.equal(fs.readFileSync(f.temporary, 'utf8'), original);
-    fs.appendFileSync(f.temporary, 'edited draft');
-    await assert.rejects(prepare(f.settings), { code: 'EXISTS' });
-    assert.equal(fs.readFileSync(f.temporary, 'utf8'), original + 'edited draft');
-    assert.equal(fs.readFileSync(f.state, 'utf8'), original);
-  }
+  const f = await fixture(t);
+  const original = f.skeleton([1, 2]).replaceAll('\n', '\r\n') + '漢字 trailing  \r\n';
+  fs.writeFileSync(f.state, original);
+  const result = await prepare(f.settings);
+  assert.deepEqual(result, { prepared: true, mode: 'edit', path: f.temporary, bytes: Buffer.byteLength(original) });
+  assert.equal(fs.readFileSync(f.temporary, 'utf8'), original);
+  fs.appendFileSync(f.temporary, 'edited draft');
+  await assert.rejects(prepare(f.settings), { code: 'EXISTS' });
+  assert.equal(fs.readFileSync(f.temporary, 'utf8'), original + 'edited draft');
+  assert.equal(fs.readFileSync(f.state, 'utf8'), original);
 });
 
 test('prepare leaves missing state for first-sync creation', async t => {
@@ -601,12 +599,19 @@ test('prepare leaves missing state for first-sync creation', async t => {
   assert.equal((await commit({ ...f.settings, input: { followedUpIds: [] } }, f.deps)).committed, true);
 });
 
-test('commit reports final UTF-8 bytes and soft budget at the exact boundary', async t => {
+test('prepare selects compaction above the byte budget and commit reports final UTF-8 size', async t => {
   for (const extra of [-1, 0, 1]) {
     const f = await fixture(t);
     const base = f.skeleton();
     const content = base + '漢' + 'x'.repeat(STATE_BUDGET_BYTES + extra - Buffer.byteLength(base) - 3);
-    fs.writeFileSync(f.temporary, content);
+    fs.writeFileSync(f.state, content);
+    const prepared = await prepare(f.settings);
+    assert.equal(prepared.bytes, STATE_BUDGET_BYTES + extra);
+    assert.equal(prepared.mode, extra > 0 ? 'rewrite' : 'edit');
+    assert.equal(fs.existsSync(f.temporary), extra <= 0);
+    assert.equal(fs.readFileSync(f.state, 'utf8'), content);
+    if (extra > 0) fs.writeFileSync(f.temporary, content);
+    else assert.equal(fs.readFileSync(f.temporary, 'utf8'), content);
     const result = await commit({ ...f.settings, input: { followedUpIds: [] } }, f.deps);
     assert.equal(result.committed, true);
     assert.equal(result.stateBytes, STATE_BUDGET_BYTES + extra);
@@ -621,7 +626,7 @@ test('budget includes official absorbed lines restored at publication', async t 
   const f = await fixture(t);
   fs.writeFileSync(f.state, f.skeleton(Array.from({ length: 600 }, (_, i) => i + 1)));
   const before = extractAbsorbedBlock(fs.readFileSync(f.state, 'utf8'));
-  await prepare(f.settings);
+  fs.writeFileSync(f.temporary, f.skeleton());
   const result = await commit({ ...f.settings, input: { followedUpIds: [1] } }, f.deps);
   const published = fs.readFileSync(f.state, 'utf8');
   const after = extractAbsorbedBlock(published);

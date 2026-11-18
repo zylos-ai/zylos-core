@@ -145,9 +145,12 @@ writer after a tool denial. The token is from `sync-lock.js acquire`, never
 from another worker. The tool infers permission from its own environment and
 the matching marker; a model-supplied group or role is not authorization.
 
-Group Sync prepares a temporary copy with guarded `sync-files.js prepare`,
-then edits only changed fragments with `edit_memory`; only a missing state
-needs a complete new document. Group Sync writes only its temporary state and
+Group and global Sync first read the entire state, in all bounded byte ranges.
+Guarded `sync-files.js prepare` chooses the mode from actual bytes: above 20480,
+`mode:"rewrite"` makes no copy and the worker creates a compact complete state;
+at or below budget, `mode:"edit"` copies the state for unique-fragment edits.
+A missing state returns STATE_MISSING and needs a complete initial document.
+Use `edit_memory` for either mode. Group Sync writes only its temporary state and
 its guarded checkpoint/commit.
 Origin Sync writes shared self files; it does not read or write group state or
 inbox. Global Sync writes global temporary state and shared self files, and
@@ -183,9 +186,14 @@ does not replace the restricted Sync tool or authorize additional Sync writes.
 
 Keep only current focus, active work, pending items, and commitments in state.
 Target the 20 KiB soft state budget (STATE_BUDGET_BYTES in sync-files.js).
+Remove completed and superseded entries this round, including old ones found
+in the mandatory full state read. Rewrite mode compacts the whole document;
+edit mode changes only necessary fragments. Update a changed status in its
+original entry, never append a conflicting second status for the same work.
 Before removing each completed or superseded item, include one result line in
-this round’s checkpoint summary for Origin Sync to record on its project page.
-Group Sync never writes shared reference files. Commit reports published bytes
+this round’s checkpoint summary. In group Sync, Origin Sync records that result
+on its project page; group Sync never writes shared reference files. In single
+global Sync, write the result to its project page yourself before checkpoint. Commit reports published bytes
 and an over-budget flag without blocking publication. Never summarize away or drop pending absorbed
 messages to make the file smaller; commit preserves their exact remaining lines.
 Use the state header and four sections in [state format](references/state-format.md).
