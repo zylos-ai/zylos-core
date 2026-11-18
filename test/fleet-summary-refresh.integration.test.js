@@ -51,7 +51,7 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
   t.mock.module('../skills/dashboard/src/lib/collectors/system-collector.js', { namedExports: { SystemCollector: class extends SystemCollector { constructor(...args) { super(...args); systemCollector = this; } } } });
   let importer;
   t.mock.module('../skills/dashboard/src/lib/core-log-importer.js', {namedExports:{CoreLogImporter: class extends CoreLogImporter { constructor(options) {super(options);importer=this;} }}});
-  let now = Date.now(), count = 1, statusReads = 0, supervisorPaused = false;
+  let now = Date.now(), count = 1, statusReads = 0, supervisorPaused = false, catalog = [];
   const coreModules = async name => {
     if (name === 'config.js') return { readSessionMode: () => ({ mode: (() => { try { return JSON.parse(fs.readFileSync(coreConfig)).session_mode ?? 'single'; } catch { return 'unreadable'; } })() }) };
     if (name === 'status-view.js') return { collectStatus: async () => {
@@ -78,7 +78,7 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
     systemSample,
     createGroupSnapshot: options => createGroupSnapshot({ ...options, now: () => now, loadCoreModule: coreModules, sessionObservations: observations,
       c4Reader: { listSlotOccupancy: () => [] },
-      cli: { runC4Db: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
+      cli: { runC4Db: async args => ({ ok: true, data: { groups: args[0] === 'groups' ? catalog : [], hasOlder: false } }),
         readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) } }),
   } });
   let pollCalls = 0, releasePoll;
@@ -247,5 +247,57 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
     }
     assert.equal(statusReads, initialReads + 2, 'one rebuild at each actual publication trigger, including non-Origin collector cadence');
     abort.abort();
+  });
+  // Actual publication -> self Fleet record built from the published snapshot.
+  // Run when publication reuse, offline start failures in Fleet attention or
+  // the Fleet cost reader change; skip for presentation-only work. Uses the
+  // parent's isolated installation, private database, held remote poll and
+  // teardown. Cost expiry and day changes use an injected clock in usage-api tests.
+  await t.test('published self record keeps offline start failures and reuses its cost total', async () => {
+    const store = [...stores].find(item => item.db.name === path.join(data, 'dashboard.db'));
+    assert.ok(store, 'the Dashboard opened its private database');
+    const readJson = async apiPath => {
+      const response = await fetch(`${origin}${apiPath}`, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
+      assert.equal(response.status, 200);
+      return response.json();
+    };
+    const usageBefore = await readJson('/api/usage/summary');
+    const fleetBefore = (await readJson('/api/fleet')).agents.find(agent => agent.self);
+    assert.equal(fleetBefore.weekly_cost, usageBefore.sevenDay.cost);
+    store.insertMetric({ timestamp: new Date(Date.now() - 1000).toISOString(), runtime: 'claude', session_group: 'origin',
+      session_id: 'fixture-cost', metric_name: 'usage_event', metric_value: 1, dimensions: { total_input: 10, cost: 1.25 },
+      source: 'jsonl_usage', confidence: 'actual' });
+    const usageAfter = await readJson('/api/usage/summary');
+    assert.equal(usageAfter.sevenDay.cost, usageBefore.sevenDay.cost + 1.25, 'usage summary reads the new cost immediately');
+    abort = new AbortController();
+    const stream = await fetch(`${origin}/api/stream`, { headers: { Cookie: cookie }, signal: abort.signal });
+    const reader = stream.body.getReader(), decoder = new TextDecoder();
+    now += 30000;
+    catalog = [{ sessionGroup: 'telegram:failed-offline', componentName: 'telegram', sessionGroupName: 'failed-offline', lastActivityAt: now - 1000 }];
+    store.insertEvent({ id: 'fixture-failed-offline', ingest_id: 'fixture-failed-offline', timestamp: new Date(now - 1000).toISOString(),
+      session_group: 'telegram:failed-offline', event_type: 'activate_failed', category: 'session', metadata: { reason: 'fixture launch failure' } });
+    const metricReadsBefore = metricReads;
+    systemCollector._onUpdate({});
+    let buffered = '', self = null;
+    const deadline = Date.now() + 5000;
+    while (!self) {
+      const end = buffered.indexOf('\n\n');
+      if (end >= 0) {
+        const block = buffered.slice(0, end); buffered = buffered.slice(end + 2);
+        if (block.match(/^event: (.*)$/m)?.[1] !== 'fleet') continue;
+        const record = JSON.parse(block.match(/^data: (.*)$/m)[1]).agents.find(agent => agent.self);
+        if (record.group_summary?.attention?.some(item => item.kind === 'start_failed' && item.group === 'telegram:failed-offline')) self = record;
+        continue;
+      }
+      let timer;
+      const result = await Promise.race([reader.read(), new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Fleet publication did not report the offline start failure')), Math.max(1, deadline - Date.now()));
+      })]).finally(() => clearTimeout(timer));
+      assert.equal(result.done, false);
+      buffered += decoder.decode(result.value, { stream: true });
+    }
+    abort.abort();
+    assert.equal(self.weekly_cost, fleetBefore.weekly_cost, 'the Fleet record reuses its cost total within 30 seconds');
+    assert.equal(metricReads, metricReadsBefore, 'the publication reads no usage rows while its cost total is current');
   });
 });
