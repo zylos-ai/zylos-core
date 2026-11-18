@@ -1068,6 +1068,8 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
   .wb-usage-total > small:first-child { grid-area: label; font-size: 12.5px; color: var(--text-dim); }
   .wb-usage-total strong { grid-area: value; font-size: 17px; text-align: right; }
   .wb-usage-total .wb-usage-sub { grid-area: sub; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The cost's "Other" line goes under its runtime line, still left of the number. */
+  .wb-usage-total .wb-usage-other { grid-area: auto / 1; }
   .wb-usage-chart { padding: 12px; }
   /* Chart titles keep their line; the legend goes under them. */
   .wb-usage-head .wb-usage-legend { flex-basis: 100%; }

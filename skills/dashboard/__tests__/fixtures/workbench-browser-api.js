@@ -220,7 +220,7 @@ function workbenchAnswerData(url, now) {
   if (p === '/api/settings/chat') return { chat_allow_remote: false };
   if (p === '/api/observer/status') return { state: 'not_installed' };
   if (p === '/api/usage/summary' || p.endsWith('/usage')) return { today: { tokens: 1200, cost: 1.5, cacheHitRate: 0.7 }, sevenDay: { tokens: 8000, cost: 9.2, cacheHitRate: 0.65 } };
-  if (p === '/api/usage/series') return { tz: 'UTC', bucket: 'day', buckets: [iso(now)], totals: { tokens: 8000, cost: 9.2, messages: { in: 3, out: 2 }, costByRuntime: { claude: 9.2 }, cacheHitRate: 0.65 }, cost: [{ at: iso(now), runtime: 'claude', value: 9.2 }], tokensByRuntime: [], messages: [], rotations: [], tools: [], projects: { items: [] }, cache: [{ at: iso(now), value: 0.65 }] };
+  if (p === '/api/usage/series') return { tz: 'UTC', bucket: 'day', buckets: [iso(now)], totals: { tokens: 8000, cost: 9.2, messages: { in: 3, out: 2 }, costByRuntime: { claude: 9.2 }, otherCost: 1.25, cacheHitRate: 0.65 }, cost: [{ at: iso(now), runtime: 'claude', value: 9.2 }], tokensByRuntime: [], messages: [], rotations: [], tools: [], projects: { items: [] }, cache: [{ at: iso(now), value: 0.65 }] };
   if (p === '/api/instance/resources') return { current: {}, pm2: { online: 6, total: 6 }, series: [] };
   if (p === '/api/health') return { status: 'ok' };
   return undefined;

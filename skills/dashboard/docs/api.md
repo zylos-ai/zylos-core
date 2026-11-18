@@ -354,7 +354,7 @@ Example: `GET /api/groups/telegram%3Aexample?include=`.
 
 **Access:** Read. **Parameters:** encoded group ID.
 
-Returns the [usage summary](#usage-summary-fields) with `scope:"group"` and `group:string`. Historical records without group attribution count toward `origin`. An otherwise valid ID with no usage returns zero counts/cost and null cache rate.
+Returns the [usage summary](#usage-summary-fields) with `scope:"group"` and `group:string`. Historical records without group attribution count toward `origin`, except Other: samples of runtimes zylos starts itself (no group, no run, marked as a child) count toward no group, including `origin` (see [usage summary](#usage-summary-fields)). An otherwise valid ID with no usage returns zero counts/cost and null cache rate.
 
 **Errors:** 400 `SESSION_GROUP_INVALID`; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; common read errors.
 
@@ -520,7 +520,7 @@ Example: `DELETE /api/groups/telegram%3Aexample` with `{"confirmed":true,"operat
 
 ### Usage Summary Fields
 
-Instance and group summaries share the following schema. Tokens include input and output; input includes cached input. Cache rate is weighted by input volume, not an average of request percentages. Historical records without a group belong to Origin. Costs sum stored priced requests; consult pricing results for models whose cost could not be priced. After a switch from multi-session to single-session mode, historical usage belonging to other groups remains in the instance summary and is not reassigned to Origin; Origin usage can therefore be smaller than the instance summary.
+Instance and group summaries share the following schema. Tokens include input and output; input includes cached input. Cache rate is weighted by input volume, not an average of request percentages. Historical records without a group belong to Origin, except Other: samples of runtimes zylos starts itself (no group, no run, marked as a child) belong to no group: they count in instance-wide totals (the instance summary and `/api/usage/series`, whose `totals.otherCost` names them), never in a group summary. Costs sum stored priced requests; consult pricing results for models whose cost could not be priced. After a switch from multi-session to single-session mode, historical usage belonging to other groups remains in the instance summary and is not reassigned to Origin; Origin usage can therefore be smaller than the instance summary.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -529,7 +529,7 @@ Instance and group summaries share the following schema. Tokens include input an
 | `group` | string, optional | Present only for per-group reads |
 | `today`, `sevenDay` | UsagePeriod | Current local day / seven local calendar days including today |
 
-A `UsagePeriod` contains `since:string`, `until:string`, `tokens:number`, `inputTokens:number`, `outputTokens:number`, `cacheReadTokens:number`, `cacheHitRate:number|null` (0–1; null with no input), `cost:number` (USD), and `byRuntime:Record<string,UsageTotals>`. `UsageTotals` has the same numeric/rate/cost fields, without bounds or another runtime breakdown. Both known runtimes are present with zero counts if no records exist. Sums of each group's count/cost fields equal the instance fields for the same time window; cache rates must be recomputed from summed cache/input tokens.
+A `UsagePeriod` contains `since:string`, `until:string`, `tokens:number`, `inputTokens:number`, `outputTokens:number`, `cacheReadTokens:number`, `cacheHitRate:number|null` (0–1; null with no input), `cost:number` (USD), and `byRuntime:Record<string,UsageTotals>`. `UsageTotals` has the same numeric/rate/cost fields, without bounds or another runtime breakdown. Both known runtimes are present with zero counts if no records exist. The sum of each group's `cost` plus Other's cost equals the instance `cost` for the same time window (Other's cost is `totals.otherCost` of `/api/usage/series`); Other's token counts are not returned separately; cache rates must be recomputed from summed cache/input tokens.
 
 ### GET /api/usage/summary
 
@@ -549,7 +549,7 @@ Returns `range:string`, `since:string`, `until:string`, `tz:string`, `tzFallback
 
 | Field | Type | Meaning |
 |---|---|---|
-| `totals` | object | `tokens`, `inputTokens`, `cacheReadTokens`, `cacheHitRate`, `cost`, `costByRuntime`, `messages:{in,out}`, `rotations`, `tools`; unavailable items nullable |
+| `totals` | object | `tokens`, `inputTokens`, `cacheReadTokens`, `cacheHitRate`, `cost`, `costByRuntime`, `otherCost`, `messages:{in,out}`, `rotations`, `tools`; unavailable items nullable. `otherCost` is the part of `cost` spent by runtimes zylos starts itself (Other), counted in no group |
 | `costByRuntime`, `tokensByRuntime` | `{runtime:string,at:string,value:number}[]` | Bucketed runtime cost/token series |
 | `cache` | `{at:string,inputTokens:number,cacheReadTokens:number,value:number\|null}[]` | Bucket-aligned weighted cache rates |
 | `messages` | `{at:string,in:number\|null,out:number\|null}[]` | Inbound/outbound message buckets |

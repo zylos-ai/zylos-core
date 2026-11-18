@@ -737,6 +737,7 @@
   "wb.usage.topTen": "Top 10 by calls",
   "wb.usage.none": "No data",
   "wb.usage.cacheHit": "Cache hits {pct}%",
+  "wb.usage.otherCost": "Including Other {amount}",
   "wb.memory.upkeepConflict": "Several groups on this instance tidy memory in the background, so a save may conflict with that; if it does, you choose which version to keep.",
   "chat.page.back": "Back to conversations",
   "chat.page.backToConversation": "Back to the conversation",
