@@ -368,9 +368,11 @@ pm2 list
    - AGY uses the same 20-minute, one-shot Escape rule while a turn is open.
      Its last-activity timestamp includes non-idle statusLine capture timestamps;
      native freshness includes every valid current sample. Rereading a sample
-     does not extend either timestamp. A current sample with running subagents
-     or `task_count > 0` exempts the turn from the deadline until a replacement
-     sample changes that state, without a separate timer or configuration. The prompt hook
+     does not extend either timestamp. A valid run/session-bound sample captured
+     after turn close with running subagents or `task_count > 0` exempts the turn
+     from the deadline even after later main-agent hooks. Turn close fences that
+     sample; a replacement re-evaluates task state. No separate timer or
+     configuration is added. The prompt hook
      starts the turn, or a non-idle sample starts it when no turn is open. An
      admitted interrupt fences older busy samples; newer samples reopen work.
      The resulting idle state still waits for the native 500ms stability period.

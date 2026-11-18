@@ -1029,3 +1029,34 @@ for(const kind of ['subagent','tasks'])test(`AGY ${kind} remain busy without Esc
  assert.equal(await f.supervisor.interruptQuietTurn(scene),true);
  assert.deepEqual(controls,['[KEYSTROKE]Escape']);
 });
+
+// Boundary: main hooks must not cancel native background-task protection.
+// Run for AGY task eligibility changes; private files and injected DB/scene only.
+// The official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; no tmux/runtime.
+test('AGY running subagent survives later main hooks until an idle replacement',async t=>{
+ let now=1000;const controls=[];
+ const f=fixture(t,{now:()=>now,database:{insertControl:content=>{controls.push(content);return {id:controls.length};}}});
+ const scene={sessionGroup:'a',runDir:f.root,runId:'r',sessionId:'s',runtime:'agy',createdAt:0,present:true,ready:true};
+ f.scenes.readIdentity=async()=>scene;
+ f.scenes.bindTarget=async()=>({expectedRunId:'r',tmuxTarget:{serverGeneration:'1:1',sessionId:'$1',paneId:'%1'}});
+ const event=(event,ts,extra={})=>({run_id:'r',session_id:'s',runtime:'agy',ts,event,...extra});
+ const events=path.join(f.root,'events.jsonl');
+ fs.writeFileSync(events,JSON.stringify(event('prompt',500))+'\n');
+ const write=(capturedAt,extra)=>fs.writeFileSync(path.join(f.root,'statusline.json'),JSON.stringify({
+  session_id:'s',zylos:{v:1,runId:'r',capturedAt},...extra}));
+ write(1000,{agent_state:'working',subagents:[{id:'child',status:'running'}]});
+ assert.equal(f.supervisor.readActivity(scene).state,'busy');
+ fs.appendFileSync(events,[event('pre_tool',2000,{tool:'run_command',tool_use_id:'main'}),
+  event('post_tool',2100,{tool_use_id:'main'})].map(row=>JSON.stringify(row)+'\n').join(''));
+ now=1202100;
+ assert.equal(await f.supervisor.interruptQuietTurn(scene),false);
+ let result=f.supervisor.readActivity(scene);
+ assert.equal(result.state,'busy');assert.equal(result.quietTurnDue,false);
+ assert.equal(result.lastActivityAt,2100);assert.equal(result.lastNativeActivityAt,2100);
+ assert.equal(controls.length,0);
+ write(now,{agent_state:'idle',task_count:0,subagents:[{id:'child',status:'completed'}]});
+ assert.equal(f.supervisor.readActivity(scene).state,'busy');now+=500;
+ result=f.supervisor.readActivity(scene);
+ assert.equal(result.state,'idle');assert.equal(result.turnOpen,false);
+ assert.equal(await f.supervisor.interruptQuietTurn(scene),false);assert.equal(controls.length,0);
+});

@@ -860,3 +860,19 @@ for(const boundary of ['stop','prompt'])test(`AGY late attempt cannot replace a 
   assert.equal(result.state,'idle');assert.equal(result.turnOpen,false);
  }
 });
+
+// Boundary: a closed turn fences task samples even when the next turn is quiet.
+// Run for AGY task exemption/close changes; private fixtures, no runtime or DB.
+test('AGY closed-turn task sample cannot exempt the next quiet turn',t=>{
+ const {root,activity,row}=fixture(t,'agy');
+ activity.consume([row('prompt',{ts:500})]);
+ fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({session_id:'s',agent_state:'working',
+  subagents:[{id:'child',status:'running'}],zylos:{v:1,runId:'r',capturedAt:1000}}));
+ assert.equal(activity.read(1000).state,'busy');assert.equal(activity.agyTasksRunning,true);
+ activity.consume([row('stop',{ts:2000})]);
+ assert.equal(activity.read(2500).state,'idle');assert.equal(activity.agyTasksRunning,false);
+ activity.consume([row('prompt',{ts:3000})]);
+ const result=activity.read(1203000);
+ assert.equal(result.state,'busy');assert.equal(result.quietTurnDue,true);
+ assert.equal(activity.claimQuietTurn(3000,1203000),true);
+});

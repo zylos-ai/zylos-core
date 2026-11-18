@@ -232,20 +232,22 @@ export class SessionActivity {
   }
   agyBusy(now) {
     // AGY publishes statusLine only on changes, with no heartbeat. A run/session
-    // bound sample remains authoritative until newer activity or a replacement
-    // sample. It also closes Esc-interrupted turns, which emit no Stop.
+    // bound task sample remains authoritative until turn close or replacement.
+    // Turn reopening and native freshness still require a post-activity sample.
+    // Idle samples also close Esc-interrupted turns, which emit no Stop.
     let sample;
     try {sample=JSON.parse(fs.readFileSync(path.join(this.runDir,'statusline.json'),'utf8'));} catch {}
     const captured=sample?.zylos?.capturedAt;
-    const current=sample?.zylos?.v===1 && sample.zylos.runId===this.runId && sample.session_id===this.sessionId &&
-      Number.isFinite(captured) && captured>=this.startedAt && captured>=this.lastActivityAt && captured<=now;
+    const valid=sample?.zylos?.v===1 && sample.zylos.runId===this.runId && sample.session_id===this.sessionId &&
+      Number.isFinite(captured) && captured>=this.startedAt && captured<=now;
+    const current=valid && captured>=this.lastActivityAt;
     if(current) {
       // New statusLine samples are native activity; rereading one is not.
       this.lastNativeActivityAt=Math.max(this.lastNativeActivityAt,captured);
     }
     const runningSubagent=Array.isArray(sample?.subagents) && sample.subagents.some(agent=>agent?.status==='running');
-    this.agyTasksRunning=Boolean(current && captured>this.closedThrough && (sample.task_count>0 || runningSubagent));
     this.applyQuietTurnClose();
+    this.agyTasksRunning=Boolean(valid && captured>this.closedThrough && (sample.task_count>0 || runningSubagent));
     // An admitted interrupt fences the preceding non-idle sample. Only a
     // newer native sample can reopen it; idle stability still takes 500ms.
     if(current && captured>this.closedThrough) {
