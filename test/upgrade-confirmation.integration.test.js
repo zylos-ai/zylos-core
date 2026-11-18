@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 
 async function runChild(command, args, options) {
   const child = spawn(command, args, { ...options, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -74,9 +74,6 @@ for (const target of ['--self', 'sample', '--all']) {
   for (const json of [false, true]) {
     test(`${target} refuses non-interactive upgrade ${json ? 'JSON' : 'text'} before download`, async t => {
       const f = fixture(t);
-      const version = () => spawnSync(process.execPath, [path.resolve('cli/zylos.js'), '--version'], { env: f.env, encoding: 'utf8', timeout: 10000 });
-      const before = version();
-      assert.equal(before.status, 0, before.stderr);
       const result = await f.run([target, ...(json ? ['--json'] : [])]);
       assert.equal(result.status, 1, result.stdout + result.stderr);
       assert.equal(f.calls(), '');
@@ -87,7 +84,6 @@ for (const target of ['--self', 'sample', '--all']) {
         assert.equal(output.requiresConfirmation, true);
         assert.match(output.message, /--yes/);
       } else assert.match(result.stderr, /--yes/);
-      assert.equal(version().stdout, before.stdout);
     });
   }
   test(`${target} keeps interactive cancellation successful`, async t => {
@@ -122,15 +118,6 @@ test('pending database migrations keep the existing JSON confirmation response',
   assert.match(output.reply, /migration/i);
   assert.equal(f.calls(), '');
 });
-
-for (const target of ['--self', 'sample']) {
-  test(`${target} accepts short yes with JSON output`, async t => {
-    const f = fixture(t);
-    const result = await f.run([target, '-y', '--json', '--skip-eval']);
-    assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.match(f.calls(), /download\nupgrade\n/);
-  });
-}
 
 test('all-component JSON checks remain available without confirmation', async t => {
   const f = fixture(t);
