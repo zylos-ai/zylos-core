@@ -780,7 +780,7 @@ test('publication requires activity sampled for the current round even with a ma
 // -> control insertion. Scenes/DB/clock are private injected objects; no native
 // process, network or service is started. Run for quiet-turn/admission changes;
 // unrelated UI work may skip. The official runner isolates all runtime paths.
-for(const runtime of ['claude','codex'])test(`assembled ${runtime} quiet-turn interruption queues one Escape before allowing idle`,async t=>{
+for(const runtime of ['claude','codex','agy'])test(`assembled ${runtime} quiet-turn interruption queues one Escape before allowing idle`,async t=>{
  let now=1000;const controls=[];
  const f=fixture(t,{now:()=>now,database:{insertControl:(content,options)=>{controls.push({content,...options});return {id:controls.length};}}});
  const scene={sessionGroup:'a',runDir:f.root,runId:'r',sessionId:'s',runtime,createdAt:0,present:true,ready:true};
@@ -788,6 +788,7 @@ for(const runtime of ['claude','codex'])test(`assembled ${runtime} quiet-turn in
  f.scenes.bindTarget=async()=>({expectedRunId:'r',tmuxTarget:{serverGeneration:'1:1',sessionId:'$1',paneId:'%1'}});
  const file=path.join(f.root,'events.jsonl');
  fs.writeFileSync(file,JSON.stringify({run_id:'r',session_id:'s',runtime,ts:1000,event:'prompt'})+'\n');
+ if(runtime==='agy')fs.writeFileSync(path.join(f.root,'statusline.json'),JSON.stringify({session_id:'s',agent_state:'working',zylos:{v:1,runId:'r',capturedAt:1000}}));
  now=1000+20*60*1000-1;
  assert.equal(await f.supervisor.interruptQuietTurn(scene),false);assert.equal(controls.length,0);
  assert.equal(f.supervisor.readActivity(scene).state,'busy');
@@ -796,8 +797,9 @@ for(const runtime of ['claude','codex'])test(`assembled ${runtime} quiet-turn in
  assert.equal(controls.length,1);assert.equal(controls[0].content,'[KEYSTROKE]Escape');
  assert.equal(controls[0].priority,0);assert.equal(controls[0].bypassState,true);assert.equal(controls[0].appendAckSuffix,false);
  assert.equal(controls[0].targetBinding.expectedSessionId,'s');
+ if(runtime==='agy') {assert.equal(f.supervisor.readActivity(scene).state,'busy');now+=500;}
  const idle=f.supervisor.readActivity(scene);
- assert.equal(idle.state,'idle');assert.equal(idle.turnOpen,false);assert.equal(idle.lastResponseAt,null);assert.equal(idle.lastActivityAt,1000);
+ assert.equal(idle.state,'idle');assert.equal(idle.turnOpen,false);assert.equal(idle.lastResponseAt,runtime==='agy'?1000:null);assert.equal(idle.lastActivityAt,1000);
  for(let tick=0;tick<3;tick++){now+=1200000;assert.equal(await f.supervisor.interruptQuietTurn(scene),false);}
  assert.equal(controls.length,1);
  fs.appendFileSync(file,JSON.stringify({run_id:'r',session_id:'s',runtime,ts:now+1,event:'prompt'})+'\n');
@@ -926,4 +928,72 @@ test('unread transcript prevents Escape admission until all bounded reads finish
  assert.equal(drained,true);
  assert.equal(await f.supervisor.interruptQuietTurn(scene),true);
  assert.deepEqual(controls,['[KEYSTROKE]Escape']);assert.equal(f.supervisor.readActivity(scene).state,'idle');
+});
+
+// Boundary: statusLine activity before and during queue admission. No runtime
+// process is launched; private fixture teardown stops the supervisor.
+for(const arrival of ['before','during'])test(`AGY new statusLine sample ${arrival} admission keeps the turn open`,async t=>{
+ let now=1201000;const controls=[];
+ const write=capturedAt=>fs.writeFileSync(path.join(f.root,'statusline.json'),JSON.stringify({
+  session_id:'s',agent_state:'working',zylos:{v:1,runId:'r',capturedAt}}));
+ const f=fixture(t,{now:()=>now,database:{insertControl:content=>{
+  controls.push(content);if(arrival==='during')write(now);return {id:controls.length};
+ }}});
+ const scene={sessionGroup:'a',runDir:f.root,runId:'r',sessionId:'s',runtime:'agy',createdAt:0,present:true,ready:true};
+ f.scenes.readIdentity=async()=>scene;
+ f.scenes.bindTarget=async()=>({expectedRunId:'r',tmuxTarget:{serverGeneration:'1:1',sessionId:'$1',paneId:'%1'}});
+ fs.writeFileSync(path.join(f.root,'events.jsonl'),JSON.stringify({run_id:'r',session_id:'s',runtime:'agy',ts:1000,event:'prompt'})+'\n');
+ write(1000);f.supervisor.readActivity(scene);
+ if(arrival==='before')write(now-1);
+ assert.equal(await f.supervisor.interruptQuietTurn(scene),false);
+ const activity=f.supervisor.readActivity(scene);
+ assert.equal(activity.turnOpen,true);assert.equal(activity.state,'busy');
+ assert.equal(activity.lastNativeActivityAt,arrival==='before'?now-1:now);
+ assert.equal(controls.length,arrival==='before'?0:1);
+ now+=1200000;
+ if(arrival==='during') {
+  assert.equal(await f.supervisor.interruptQuietTurn(scene),false);
+  assert.equal(controls.length,1,'an admitted Escape with new activity is still one-shot');
+ }
+ const facts=fs.readFileSync(path.join(f.root,'events.jsonl'),'utf8').trim().split('\n').map(JSON.parse);
+ assert.equal(facts.filter(row=>row.event==='quiet_turn_interrupt').length,0);
+});
+
+// Boundary: statusLine-only turns and durable one-shot facts across successive
+// supervisor lifetimes. Private fixtures only; no native runtime is launched.
+for(const outcome of ['admitted','unknown'])test(`AGY statusLine-only ${outcome} attempt survives two turns and restarts`,async t=>{
+ let now=1202000,attempts=0;
+ const f=fixture(t,{now:()=>now,database:{insertControl:()=>{
+  attempts++;if(outcome==='unknown')throw new Error('uncertain insertion');return {id:attempts};
+ }}});
+ const scene={sessionGroup:'a',runDir:f.root,runId:'r',sessionId:'s',runtime:'agy',createdAt:0,present:true,ready:true};
+ f.scenes.readIdentity=async()=>scene;
+ f.scenes.bindTarget=async()=>({expectedRunId:'r',tmuxTarget:{serverGeneration:'1:1',sessionId:'$1',paneId:'%1'}});
+ fs.writeFileSync(path.join(f.root,'events.jsonl'),JSON.stringify({run_id:'r',session_id:'s',runtime:'agy',ts:1000,event:'stop'})+'\n');
+ let supervisor=f.supervisor;
+ const restart=async()=>{
+  await supervisor.stop();
+  supervisor=createSupervisor({db:f.db,scenes:f.scenes,zylosDir:f.root,env:{ZYLOS_DIR:f.root},
+   readConfiguration:async()=>({mode:'multi',runtime:'agy',capacity:2}),readMode:()=>({mode:'multi'}),
+   resolveTargetRuntime:async()=> 'agy',requestStore:new RestartRequestStore({file:f.file}),
+   now:()=>now,loopOptions:{schedule:()=>1,cancel:()=>{}}});
+  t.after(()=>supervisor.stop());
+ };
+ for(const capturedAt of [2000,2403000]) {
+  fs.writeFileSync(path.join(f.root,'statusline.json'),JSON.stringify({session_id:'s',agent_state:'working',zylos:{v:1,runId:'r',capturedAt}}));
+  if(outcome==='unknown' && attempts>0) {
+   // A fresh prompt starts the next turn after an unknown admission.
+   fs.appendFileSync(path.join(f.root,'events.jsonl'),JSON.stringify({run_id:'r',session_id:'s',runtime:'agy',ts:capturedAt,event:'prompt'})+'\n');
+  }
+  now=capturedAt+1200000;
+  if(outcome==='unknown')await assert.rejects(supervisor.interruptQuietTurn(scene),/uncertain insertion/);
+  else assert.equal(await supervisor.interruptQuietTurn(scene),true);
+  now+=500;await restart();
+  const recovered=supervisor.readActivity(scene);
+  assert.equal(recovered.state,outcome==='unknown'?'busy':'idle');
+  assert.equal(recovered.turnOpen,outcome==='unknown');
+  assert.equal(await supervisor.interruptQuietTurn(scene),false);
+  await restart();assert.equal(await supervisor.interruptQuietTurn(scene),false);
+ }
+ assert.equal(attempts,2);
 });

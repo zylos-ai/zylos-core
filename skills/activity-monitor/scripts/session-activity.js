@@ -106,7 +106,18 @@ export class SessionActivity {
       if(['quiet_turn_interrupt_attempt','quiet_turn_interrupt'].includes(row.event)) {
         const activityAt=row.last_activity_at;
         if(!Number.isFinite(activityAt) || activityAt<this.startedAt || activityAt>row.ts ||
-           !Number.isFinite(row.turn_started_at) || row.turn_started_at!==this.turnStartedAt)continue;
+           !Number.isFinite(row.turn_started_at))continue;
+        // AGY can open a turn from statusLine without a prompt hook. Restore
+        // that boundary from the same durable attempt/admission facts before
+        // reading statusLine; newer prompt/Stop boundaries still take priority.
+        if(this.runtime==='agy' && Number.isFinite(row.last_native_activity_at) &&
+           row.turn_started_at>=this.startedAt && row.turn_started_at<=row.last_native_activity_at && row.last_native_activity_at<=activityAt &&
+           (row.last_response_at===null || Number.isFinite(row.last_response_at)) &&
+           (row.event==='quiet_turn_interrupt_attempt' || Number.isSafeInteger(row.control_id) && row.control_id>0) &&
+           row.turn_started_at>this.closedThrough && row.turn_started_at>(this.turnStartedAt ?? -Infinity)) {
+          this.turn=true;this.turnStartedAt=row.turn_started_at;this.pendingQuietTurnClose=null;
+        }
+        if(row.turn_started_at!==this.turnStartedAt)continue;
         this.quietTurnAttemptAt=row.turn_started_at;
         // These are supervisor queue facts, not native activity or AI responses.
         // Retain preceding native facts during recovery so a stale admission

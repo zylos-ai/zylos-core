@@ -38,7 +38,7 @@ test('hook retains subagent facts and selected tool inputs without prompt/output
 });
 
 test('child activity stays separate from every main-agent idle and tool field',t=>{
- for(const runtime of ['claude','codex']){
+ for(const runtime of ['claude','codex','agy']){
   const main=fixture(t,runtime),child=fixture(t,runtime);
   const mainRows=[main.row('prompt',{ts:200}),main.row('stop',{ts:300})];
   main.activity.consume(mainRows);child.activity.consume(mainRows);
@@ -768,4 +768,50 @@ for(const runtime of ['claude','codex'])test(`${runtime} new native activity wit
  assert.equal(observed.lastNativeActivityAt,1206001);assert.equal(observed.tools.length,0);
  assert.equal(observed.state,'busy');assert.equal(observed.turnOpen,true);
  assert.equal(activity.pendingQuietTurnClose,null);
+});
+
+// Boundary: change-driven AGY status, interrupt recovery and prompt resets.
+// The official runner owns all paths; no runtime or service is started.
+test('AGY prompt resets both idle stability and the quiet-turn attempt',t=>{
+ const {activity,row}=fixture(t,'agy');
+ activity.consume([row('prompt',{ts:1000})]);
+ assert.equal(activity.claimQuietTurn(1000,1201000),true);
+ activity.consume([row('stop',{ts:1201001}),row('prompt',{ts:1202000})]);
+ const result=activity.read(1202000);
+ assert.equal(activity.agyIdleSince,null);assert.equal(result.lastResponseAt,1202000);
+ assert.equal(result.turnStartedAt,1202000);assert.equal(activity.quietTurnAttemptAt,null);
+ assert.equal(result.quietTurnDue,false);
+});
+
+test('AGY admitted interrupt recovers without a stale busy status reopening the turn',async t=>{
+ const {appendEvent}=await import('../../../../cli/lib/event-log.js');
+ const {root,activity,row}=fixture(t,'agy');
+ const file=path.join(root,'events.jsonl');
+ appendEvent(file,row('prompt',{ts:1000}));
+ fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({session_id:'s',agent_state:'working',zylos:{v:1,runId:'r',capturedAt:2000}}));
+ let observed=activity.read(1202000);
+ assert.equal(observed.lastActivityAt,2000);assert.equal(observed.lastNativeActivityAt,2000);
+ assert.equal(observed.turnStartedAt,1000);assert.equal(observed.quietTurnDue,true);
+ appendEvent(file,row('quiet_turn_interrupt',{ts:1202000,turn_started_at:1000,last_activity_at:2000,last_native_activity_at:2000,last_response_at:1000,control_id:7}));
+ const restarted=new SessionActivity({runDir:root,runId:'r',sessionId:'s',runtime:'agy',startedAt:100});t.after(()=>restarted.close());
+ for(const reader of [activity,restarted]) {
+  observed=reader.read(1202499);assert.equal(observed.state,'busy');assert.equal(observed.turnOpen,false);
+  observed=reader.read(1202500);assert.equal(observed.state,'idle');assert.equal(observed.quietTurnDue,false);
+  assert.equal(reader.claimQuietTurn(2000,2402000),false);
+  assert.equal(reader.read(2402000).state,'idle');
+ }
+ fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({session_id:'s',agent_state:'working',zylos:{v:1,runId:'r',capturedAt:2403000}}));
+ observed=restarted.read(2403000);assert.equal(observed.state,'busy');assert.equal(observed.turnStartedAt,2403000);
+ assert.equal(observed.lastNativeActivityAt,2403000);assert.equal(observed.quietTurnDue,false);
+});
+
+test('AGY child events do not extend the main quiet-turn deadline',t=>{
+ const {root,activity,row}=fixture(t,'agy');
+ activity.consume([row('prompt',{ts:1000})]);
+ fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({session_id:'s',agent_state:'working',zylos:{v:1,runId:'r',capturedAt:2000}}));
+ activity.read(2000);
+ activity.consume([row('prompt',{ts:1201999,agent_id:'child'}),row('post_tool',{ts:1201999,agent_id:'child'})]);
+ const observed=activity.read(1202000);
+ assert.equal(observed.lastActivityAt,2000);assert.equal(observed.lastNativeActivityAt,2000);
+ assert.equal(observed.turnStartedAt,1000);assert.equal(observed.quietTurnDue,true);
 });
