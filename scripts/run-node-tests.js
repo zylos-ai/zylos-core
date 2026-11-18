@@ -30,6 +30,7 @@ const ROOT_NODE_TESTS = [
   'test/account-quota-browser.test.js',
   'test/dashboard-initial-timezone.integration.test.js',
   'test/skill-command-arguments.test.js',
+  'test/delivery-failure-recovery.integration.test.js',
   'test/pool-capacity-browser.test.js',
   'test/diagram-browser.integration.test.js',
   'test/diagram-components.integration.test.js',

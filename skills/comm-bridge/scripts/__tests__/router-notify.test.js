@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { EventEmitter, once } from 'node:events';
-import { notifyDelivered } from '../router/notify.js';
+import { notifyDelivered, notifyDeliveryFailed } from '../router/notify.js';
 
 const fields = { conversationId: 42, channel: 'telegram', sessionGroup: 'telegram:g-1', runId: 'observed-run', runtime: 'codex', pastedAt: 1792000003456 };
 
@@ -79,4 +79,16 @@ test('control paste uses the existing v2 wire envelope with one control identity
   assert.deepEqual(line, { version: 2, type: 'notify_delivered',
     requestId: `dispatcher-${process.pid}-${fields.pastedAt}`, controlId: 27, ...identity });
   assert.equal(Object.hasOwn(line, 'conversationId'), false);
+});
+
+
+test('terminal failure fact carries the runtime session over the existing transport', async () => {
+  const socket = new EventEmitter(); let line;
+  socket.destroy = () => {};
+  socket.end = (value, done) => { line = JSON.parse(value); done(); };
+  const fact = { ...fields, sessionId: 'runtime-session' };
+  const pending = notifyDeliveryFailed(fact, { createConnection: () => socket });
+  socket.emit('connect'); await pending;
+  assert.deepEqual(line, { version: 2, type: 'notify_delivery_failed',
+    requestId: `dispatcher-${process.pid}-${fields.pastedAt}`, ...fact });
 });

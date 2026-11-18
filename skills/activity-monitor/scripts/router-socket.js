@@ -29,7 +29,7 @@ export function createRouterReply(socket, log = () => {}) {
 
 /** Each connection consumes exactly one line; disconnects do not cancel durable work. */
 export function createSupervisorConnectionHandler({ admission, router, readRun, readMode,
-  onDelivered = () => {}, onHealthEvents = () => {}, isOpen = () => true, log = () => {} } = {}) {
+  onDelivered = () => {}, onDeliveryFailed = () => {}, onHealthEvents = () => {}, isOpen = () => true, log = () => {} } = {}) {
   const pendingRequests = new Set();
   const handler = socket => {
     const reply = createRouterReply(socket, log);
@@ -45,7 +45,7 @@ export function createSupervisorConnectionHandler({ admission, router, readRun, 
       catch { reply({ ok: false, code: 'invalid_request' }); return; }
       if (!request || typeof request !== 'object' || Array.isArray(request)) { reply({ ok: false, code: 'invalid_request' }); return; }
       try {
-        if (['route','health_events_ready','notify_delivered','auth_completed'].includes(request.type) && !isOpen()) { socket.destroy(); return; }
+        if (['route','health_events_ready','notify_delivered','notify_delivery_failed','auth_completed'].includes(request.type) && !isOpen()) { socket.destroy(); return; }
         if (request.type === 'route') { reply(await router.route(request)); return; }
         if (request.type === 'auth_completed') {
           if (!validAuthCompletedRequest(request)) { reply({ ok: false, code: 'invalid_request' }); return; }
@@ -55,6 +55,20 @@ export function createSupervisorConnectionHandler({ admission, router, readRun, 
         if (request.type === 'health_events_ready') {
           if (request.version !== 1 || typeof request.requestId !== 'string' || !request.requestId) { reply({ ok: false, code: 'invalid_request' }); return; }
           await onHealthEvents(request);
+          reply({ version: 1, type: 'ack', requestId: request.requestId }); return;
+        }
+        if (request.type === 'notify_delivery_failed') {
+          if (request.version !== 2 || typeof request.requestId !== 'string' || !request.requestId ||
+              !Number.isSafeInteger(request.conversationId) || request.conversationId <= 0 ||
+              !Number.isSafeInteger(request.pastedAt) || request.pastedAt < 0 ||
+              ['runId','sessionId','runtime'].some(key => typeof request[key] !== 'string' || !request[key])) {
+            reply({ ok: false, code: 'invalid_request' }); return;
+          }
+          if (request.sessionGroup !== null) assertSessionGroup(request.sessionGroup);
+          const live = await readRun(request.sessionGroup);
+          if (live?.runId === request.runId && live.sessionId === request.sessionId && live.runtime === request.runtime)
+            await onDeliveryFailed({ ...request, sessionGroup: request.sessionGroup ?? 'origin' }, live);
+          else log('Ignoring stale delivery failure notification');
           reply({ version: 1, type: 'ack', requestId: request.requestId }); return;
         }
         if (request.type === 'notify_delivered') {

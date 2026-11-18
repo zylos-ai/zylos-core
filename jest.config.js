@@ -24,6 +24,7 @@ export default {
     '<rootDir>/test/account-quota-browser.test.js',
     '<rootDir>/test/dashboard-initial-timezone.integration.test.js',
     '<rootDir>/test/skill-command-arguments.test.js',
+    '<rootDir>/test/delivery-failure-recovery.integration.test.js',
     '<rootDir>/test/pool-capacity-browser.test.js',
     '<rootDir>/test/diagram-browser.integration.test.js',
     '<rootDir>/test/diagram-components.integration.test.js',
