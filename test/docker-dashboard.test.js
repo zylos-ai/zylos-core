@@ -103,7 +103,7 @@ describe('Docker wiring for Dashboard', () => {
 describe('Docker Codex launch arguments', () => {
   test('disables interactive tools before the permission bypass condition and preserves the setting when bypassing', () => {
     const entrypoint = fs.readFileSync(path.join(root, 'docker/entrypoint.sh'), 'utf8');
-    expect(entrypoint).toContain('  CODEX_ARGS="-c tools.experimental_request_user_input.enabled=false"\n'
+    expect(entrypoint).toContain('  CODEX_ARGS="-c tools.experimental_request_user_input.enabled=false -c features.goals=false -c features.apps=false"\n'
       + '  if [ "${CODEX_BYPASS_PERMISSIONS:-true}" = "true" ]; then\n'
       + '    CODEX_ARGS="${CODEX_ARGS} --dangerously-bypass-approvals-and-sandbox"\n'
       + '  fi');
