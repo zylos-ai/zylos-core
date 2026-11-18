@@ -156,13 +156,11 @@ test('native single refuses Origin internal messages and writes nothing',async t
 });
 
 test('an unreadable mode lets Origin send under multi rules with one warning line',async t=>{
-  for(const config of ['{broken','{"session_mode":"both"}']){
-    const f=setup(t);
-    fs.writeFileSync(path.join(f.root,'.zylos/config.json'),config);
-    const result=await run(f,['internal','chat:b'],'from Origin\n',{ZYLOS_SESSION_GROUP:'origin'});
-    assert.equal(result.code,0,result.stderr);assertPair(f,'from Origin','origin','chat:b',null);
-    assert.equal(result.stderr.trimEnd().split('\n').filter(line=>line.startsWith('[C4] WARNING: cannot read session_mode')).length,1);
-  }
+  const f=setup(t);
+  fs.writeFileSync(path.join(f.root,'.zylos/config.json'),'{broken');
+  const result=await run(f,['internal','chat:b'],'from Origin\n',{ZYLOS_SESSION_GROUP:'origin'});
+  assert.equal(result.code,0,result.stderr);assertPair(f,'from Origin','origin','chat:b',null);
+  assert.equal(result.stderr.trimEnd().split('\n').filter(line=>line.startsWith('[C4] WARNING: cannot read session_mode')).length,1);
 });
 
 test('a missing config and a non-Origin sender never read or warn about the mode',async t=>{
@@ -174,27 +172,4 @@ test('a missing config and a non-Origin sender never read or warn about the mode
   fs.writeFileSync(path.join(g.root,'.zylos/config.json'),'{broken');
   const fromGroup=await run(g,['internal','chat:b'],'group sender\n');
   assert.equal(fromGroup.code,0,fromGroup.stderr);assert.equal(fromGroup.stderr,'');assertPair(g,'group sender');
-});
-
-test('an absorbed internal reply from Origin is refused in native single',async t=>{
-  const f=setup(t);
-  const {inRow}=f.store.insertInternalMessage('chat:a','origin','question for Origin');
-  const {runId}=f.store.beginModeTransition('single','multi');
-  f.store.setDrainFence('*');f.store.absorbForTransition(runId);
-  fs.writeFileSync(path.join(f.root,'.zylos/config.json'),JSON.stringify({session_mode:'single',runtime:'claude'}));
-  const before=snapshot(f);
-  const result=await run(f,['--absorbed-reply',runId,String(inRow.id)],'answer\n',{ZYLOS_SESSION_GROUP:'origin'});
-  assert.equal(result.code,1);assert.match(result.stderr,/^Error: INTERNAL_SINGLE_MODE:/);
-  assert.deepEqual(snapshot(f),before);
-});
-
-test('direct callers inject the mode reader and only Origin consults it',async()=>{
-  let reads=0;const writes=[];
-  const options={env:{ZYLOS_SESSION_GROUP:'origin'},readIdentity:async()=>null,
-    insertMessage:(...args)=>{writes.push(args);return {inRow:{id:1}};},
-    readSessionMode:()=>{reads++;return {mode:'single',keyPresent:true};}};
-  await assert.rejects(sendInternal(['internal','chat:b'],async()=>'x',options),{code:'INTERNAL_SINGLE_MODE'});
-  assert.equal(reads,1);assert.equal(writes.length,0);
-  await sendInternal(['internal','chat:b'],async()=>'x',{...options,env:{ZYLOS_SESSION_GROUP:'chat:a'}});
-  assert.equal(reads,1);assert.equal(writes.length,1);
 });

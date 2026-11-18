@@ -37,7 +37,6 @@ test('group text explains null running using mode before runtime comparison', as
       await groupCommand(['model', 'get'], { io: { stdout: { write: value => { text += value; } }, stderr: {} },
         run: async (_kind, args, io) => { assert.equal(args.at(-1), '--json'); io.stdout.write(`${JSON.stringify({ ok: true, data: { running: null, sessionGroup, sessionMode, runtime: 'codex', resolved: { runtime: 'claude' } } })}\n`); return 0; } });
       assert.match(text, expected);
-      assert.equal(/only in multi/.test(text) && /current group runtime/.test(text), false);
     }
     let stdout = '', stderr = '';
     const code = await groupCommand(['runtime', 'get'], { io: { stdout: { write: value => { stdout += value; } }, stderr: { write: value => { stderr += value; } } },

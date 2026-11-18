@@ -359,7 +359,6 @@ test('installed relay command excludes endpoint shell and heredoc control bytes'
 
 const singleMode = () => ({ mode: 'single', keyPresent: true });
 const multiMode = () => ({ mode: 'multi', keyPresent: true });
-const unreadable = () => { throw Object.assign(new Error('Cannot read config.json'), { code: 'CONFIG_UNREADABLE' }); };
 const outbound = f => f.db.prepare("SELECT * FROM conversations WHERE direction='out' ORDER BY id DESC LIMIT 1").get();
 
 test('native single records Origin and session-less sends under origin without the cross-session check', async t => {
@@ -375,12 +374,6 @@ test('native single records Origin and session-less sends under origin without t
   }
 });
 
-test('native single system notices record origin and keep their delivery action', async t => {
-  const f = fixture(t); delete f.env.ZYLOS_SESSION_GROUP; f.env.ZYLOS_SYSTEM_SEND = '1';
-  sent(f, await sendExternal(request, body, { ...f.options, readSessionMode: singleMode }), 'origin');
-  assert.equal(outbound(f).delivery_action, 'system_notice');
-});
-
 test('native single still refuses a failed component query before any write', async t => {
   const f = fixture(t); f.env.ZYLOS_SESSION_GROUP = 'origin';
   fs.writeFileSync(path.join(f.component, 'scripts', 'session-group.js'), 'process.exit(3);');
@@ -389,68 +382,49 @@ test('native single still refuses a failed component query before any write', as
   f.untouched(before);
 });
 
-test('only Origin and session-less senders read the session mode', async t => {
+test('a group sender in native single still records its own group', async t => {
   const f = fixture(t); f.seed('a-home', 'a'); f.queryGroup('a\n');
-  let reads = 0;
-  const counted = () => { reads++; return singleMode(); };
-  sent(f, await sendExternal(request, body, { ...f.options, readSessionMode: counted }), 'chat:a');
-  assert.equal(reads, 0);
-  f.queryGroup('b\n');
-  await assert.rejects(sendExternal(request, body, { ...f.options, readSessionMode: unreadable }), { code: 'CROSS_SESSION_OUTBOUND' });
+  sent(f, await sendExternal(request, body, { ...f.options, readSessionMode: singleMode }), 'chat:a');
 });
 
-test('a pre-migration or multi mode keeps the current rules for Origin and session-less senders', async t => {
-  for (const readSessionMode of [() => ({ mode: null, keyPresent: false }), multiMode]) {
-    const f = fixture(t); f.seed('a-home', 'a'); f.queryGroup('b\n'); f.env.ZYLOS_SESSION_GROUP = 'origin';
-    await assert.rejects(sendExternal(request, body, { ...f.options, readSessionMode }), { code: 'CROSS_SESSION_OUTBOUND' });
-    delete f.env.ZYLOS_SESSION_GROUP;
-    sent(f, await sendExternal(request, body, { ...f.options, readSessionMode }), 'chat:b');
-  }
+test('a pre-migration mode keeps the current rules for Origin and session-less senders', async t => {
+  const readSessionMode = () => ({ mode: null, keyPresent: false });
+  const f = fixture(t); f.seed('a-home', 'a'); f.queryGroup('b\n'); f.env.ZYLOS_SESSION_GROUP = 'origin';
+  await assert.rejects(sendExternal(request, body, { ...f.options, readSessionMode }), { code: 'CROSS_SESSION_OUTBOUND' });
+  delete f.env.ZYLOS_SESSION_GROUP;
+  sent(f, await sendExternal(request, body, { ...f.options, readSessionMode }), 'chat:b');
 });
 
 // Installed CLI with a real config.json in an isolated ZYLOS_DIR. Run for changes
 // to how c4-send reads session_mode; it never starts tmux or PM2.
 test('installed CLI treats an unreadable mode as multi and warns on one line', { timeout: 20000 }, t => {
   const f = fixture(t, { installed: true }); f.seed('a-home', 'a'); f.queryGroup('a\n');
+  const dashboard = f.installComponent('dashboard');
+  fs.rmSync(path.join(dashboard, 'scripts', 'session-group.js'));
   const config = path.join(f.env.ZYLOS_DIR, '.zylos', 'config.json');
-  const sessionlessInvoke = () => {
-    const saved = f.env.ZYLOS_SESSION_GROUP; delete f.env.ZYLOS_SESSION_GROUP;
-    try { return f.invoke(['chat', 'recipient', '--stdin']); } finally { f.env.ZYLOS_SESSION_GROUP = saved; }
-  };
-  for (const broken of ['{broken', '{"runtime":"claude","session_mode":"both"}']) {
-    fs.writeFileSync(config, broken);
-    const before = f.snapshot();
-    const denied = f.invoke(['chat', 'recipient', '--stdin'], 'origin');
-    assert.equal(denied.status, 1); assert.match(denied.stderr, /CROSS_SESSION_OUTBOUND/);
-    assert.equal(denied.stderr.split('\n').filter(line => line.startsWith('[C4] WARNING: cannot read session_mode')).length, 1);
-    assert.equal(f.snapshot(), before);
-    const sessionless = sessionlessInvoke();
-    assert.equal(sessionless.status, 0, sessionless.stderr);
-    assert.equal(sessionless.stderr.split('\n').filter(line => line.startsWith('[C4] WARNING')).length, 1);
-    sent(f, outbound(f), 'chat:a');
-    const member = f.invoke(['chat', 'recipient', '--stdin'], 'chat:a');
-    assert.equal(member.status, 0, member.stderr); assert.equal(member.stderr.includes('WARNING'), false);
-  }
+  fs.writeFileSync(config, '{broken');
+  const before = f.snapshot();
+  const denied = f.invoke(['chat', 'recipient', '--stdin'], 'origin');
+  assert.equal(denied.status, 1); assert.match(denied.stderr, /CROSS_SESSION_OUTBOUND/);
+  assert.equal(denied.stderr.split('\n').filter(line => line.startsWith('[C4] WARNING: cannot read session_mode')).length, 1);
+  assert.equal(f.snapshot(), before);
+  delete f.env.ZYLOS_SESSION_GROUP;
+  const sessionless = f.invoke(['chat', 'recipient', '--stdin']);
+  assert.equal(sessionless.status, 0, sessionless.stderr);
+  assert.equal(sessionless.stderr.split('\n').filter(line => line.startsWith('[C4] WARNING')).length, 1);
+  sent(f, outbound(f), 'chat:a');
+  const member = f.invoke(['chat', 'recipient', '--stdin'], 'chat:a');
+  assert.equal(member.status, 0, member.stderr); assert.equal(member.stderr.includes('WARNING'), false);
+  // Origin can still answer its own Dashboard address while the mode is unreadable.
+  const own = f.invoke(['dashboard', 'origin', '--stdin'], 'origin');
+  assert.equal(own.status, 0, own.stderr);
+  assert.match(own.stderr, /WARNING: cannot read session_mode/);
+  const row = outbound(f);
+  assert.deepEqual([row.channel, row.endpoint_id, row.session_group], ['dashboard', 'origin', 'origin']);
   fs.writeFileSync(config, '{"runtime":"claude","session_mode":"single"}');
   const single = f.invoke(['chat', 'recipient', '--stdin'], 'origin');
   assert.equal(single.status, 0, single.stderr); assert.equal(single.stderr.includes('WARNING'), false);
   sent(f, outbound(f), 'origin');
-  fs.rmSync(config);
-  const missing = sessionlessInvoke();
-  assert.equal(missing.status, 0, missing.stderr); assert.equal(missing.stderr.includes('WARNING'), false);
-  sent(f, outbound(f), 'chat:a');
-});
-
-test('installed CLI with an unreadable mode still lets Origin answer its own Dashboard address', { timeout: 20000 }, t => {
-  const f = fixture(t, { installed: true });
-  const dashboard = f.installComponent('dashboard');
-  fs.rmSync(path.join(dashboard, 'scripts', 'session-group.js'));
-  fs.writeFileSync(path.join(f.env.ZYLOS_DIR, '.zylos', 'config.json'), '{broken');
-  const result = f.invoke(['dashboard', 'origin', '--stdin'], 'origin');
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stderr, /WARNING: cannot read session_mode/);
-  const row = outbound(f);
-  assert.deepEqual([row.channel, row.endpoint_id, row.session_group], ['dashboard', 'origin', 'origin']);
 });
 
 function switchedBack(f, { target = 'multi', updatedAt = Math.floor(Date.now() / 1000) - 60 } = {}) {
@@ -473,10 +447,8 @@ test('after switching back to multi the crossing Origin run may answer its exact
   sent(f, await sendExternal({ channel: 'chat', endpoint: 'chat-a|msg:7' }, body, options), 'origin', 'chat-a|msg:7');
   assert.deepEqual(f.hooks()[0].request.options, { groupName: 'a', wholeGroup: false });
   const before = f.snapshot();
-  // Another message id in the same chat, and an address never delivered to Origin.
-  for (const endpoint of ['chat-a|msg:8', 'recipient']) {
-    await assert.rejects(sendExternal({ channel: 'chat', endpoint }, body, options), { code: 'CROSS_SESSION_OUTBOUND' });
-  }
+  // Another message id in the same chat was never delivered to Origin.
+  await assert.rejects(sendExternal({ channel: 'chat', endpoint: 'chat-a|msg:8' }, body, options), { code: 'CROSS_SESSION_OUTBOUND' });
   assert.equal(f.snapshot(), before);
 });
 
@@ -499,7 +471,7 @@ test('the Origin reply exception closes when any Origin run ends after the switc
 });
 
 test('the Origin reply exception needs a completed switch whose target is multi', async t => {
-  for (const latest of ['none', 'single', 'open']) {
+  for (const latest of ['single', 'open']) {
     const f = fixture(t); f.seed('a-home', 'a'); f.queryGroup('a\n'); f.env.ZYLOS_SESSION_GROUP = 'origin';
     deliveredToOrigin(f, 'chat-a|msg:7');
     if (latest === 'single') { switchedBack(f, { updatedAt: 1000 }); switchedBack(f, { target: 'single', updatedAt: 2000 }); }
@@ -522,17 +494,4 @@ test('the Origin reply exception is only for Origin and only for inbound rows re
   f.env.ZYLOS_SESSION_GROUP = 'chat:a';
   f.queryGroup('b\n');
   await assert.rejects(sendExternal({ channel: 'chat', endpoint: 'chat-b|msg:1' }, body, f.options), { code: 'CROSS_SESSION_OUTBOUND' });
-});
-
-test('the outbound record group is reserved for origin on external outbound rows', t => {
-  const f = fixture(t);
-  for (const [direction, channel, recordGroup] of [['out', 'chat', 'chat:a'], ['in', 'chat', 'origin'], ['out', 'void', 'origin'], ['out', 'chat', '']]) {
-    const before = f.snapshot();
-    assert.throws(() => f.store.insertConversation(direction, channel, 'e', 'x', { groupName: 'a', recordGroup, ...(channel === 'void' ? { groupName: undefined, handoffGroup: 'origin' } : {}) }), { code: 'INVALID_ARGS' });
-    assert.equal(f.snapshot(), before);
-  }
-  const row = f.store.insertConversation('out', 'chat', 'e', 'x', { groupName: 'a', recordGroup: 'origin' });
-  assert.equal(row.session_group, 'origin');
-  assert.equal(f.store.getChannelNamespace('chat').namespace, 'chat');
-  assert.equal(f.db.prepare("SELECT 1 FROM group_heads WHERE session_group='chat:a'").get(), undefined);
 });

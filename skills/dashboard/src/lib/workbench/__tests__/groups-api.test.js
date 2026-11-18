@@ -383,7 +383,6 @@ test('the shared observation gives status a live Origin row in every session mod
     assert.equal(value.sources.status.ok, true, `${mode}: status was read`);
     assert.equal(value.view, effective);
     const origin = value.rows.find(row => row.origin);
-    assert.notEqual(origin.presence, 'unknown', `${mode}: Origin row is observed`);
     assert.equal(origin.presence, 'running');
     assert.equal(origin.live.error, null, `${mode}: no READ_FAILED`);
     assert.equal(origin.live.runId, `run-${read}`);

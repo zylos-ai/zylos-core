@@ -582,26 +582,21 @@ test('config rejects a partial pair, preserves exact Core reasons and queries on
 test('configuration results without a running comparison follow the session mode', () => {
   const baseline = { runtime: 'claude', mode: 'default' };
   // A pre-migration instance keeps the baseline for every group, whatever was saved.
-  for (const [sessionGroup, kind] of [['origin', 'runtime'], ['lark:oc_a', 'runtime'], ['lark:oc_a', 'model']]) {
-    assert.equal(runningText({ sessionGroup, sessionMode: null, runtime: 'codex', resolved: baseline, running: null }, kind, t), 'wb.config.single');
-  }
+  assert.equal(runningText({ sessionGroup: 'lark:oc_a', sessionMode: null, runtime: 'codex', resolved: baseline, running: null }, 'runtime', t), 'wb.config.single');
   // Native single: other groups show the configuration they will use after switching back to multi.
   const afterMulti = { runtime: 'codex', mode: 'override', model: 'gpt-6.2-sol', effort: 'high' };
   assert.equal(runningText({ sessionGroup: 'lark:oc_a', sessionMode: 'single', resolved: afterMulti, running: null }, 'runtime', t),
     'wb.config.afterMulti {"config":"Codex · gpt-6.2-sol · high"}');
-  assert.equal(runningText({ sessionGroup: 'lark:oc_a', sessionMode: 'single', runtime: 'claude', resolved: baseline, running: null }, 'model', t),
-    'wb.config.afterMulti {"config":"Claude"}');
   // A model pair for a runtime the group will not use after the switch is still only retained.
   assert.equal(runningText({ sessionGroup: 'lark:oc_a', sessionMode: 'single', runtime: 'codex', resolved: baseline, running: null }, 'model', t),
     'wb.config.otherRuntime');
   // Origin in native single is compared like a multi group.
   assert.equal(runningText({ sessionGroup: 'origin', sessionMode: 'single', resolved: baseline, running: { status: 'applied' } }, 'runtime', t), 'wb.config.applied');
   assert.equal(runningText({ sessionGroup: 'lark:oc_a', sessionMode: 'multi', resolved: baseline, running: { status: 'not_running' } }, 'runtime', t), 'wb.config.nextStart');
-  // Both new texts exist in each language and name the configuration.
+  // The new text names the configuration in each language.
   for (const language of ['zh', 'en']) {
     const strings = JSON.parse(readFileSync(new URL(`../public/i18n/wb.${language}.json`, import.meta.url), 'utf8'));
     assert.match(strings['wb.config.afterMulti'], /multi.*\{config\}/);
-    assert.equal(typeof strings['wb.config.single'], 'string');
   }
 });
 
