@@ -1684,7 +1684,7 @@ export function resolveFromEnv(opts, { root = ZYLOS_DIR,
     const saved = readLaunchDotenv(root);
     if (CLAUDE_CREDENTIAL_KEYS.some(key => saved[key])
         && CLAUDE_CREDENTIAL_KEYS.some(key => process.env[key] && process.env[key] !== saved[key])) {
-      log('Claude credentials from environment variables were not adopted: .env already has credentials. Use CLI flags or edit .env to replace them.');
+      log('Claude credentials from environment variables were not adopted: .env already has credentials. Use --api-key/--auth-token or edit .env to replace them.');
     }
   }
   if (!hasCliAuth && !authenticated()) {
@@ -2026,7 +2026,7 @@ export async function runInitAuthentication(opts, {
   } else {
     // ── Step 6 (Claude): auth check + guided login ────────────────────────
     if (exists('claude')) {
-      const explicit = !opts.authFromEnv && !!(opts.setupToken || opts.apiKey || opts.authToken);
+      const explicit = !opts.authFromEnv && !!(opts.apiKey || opts.authToken);
       claudeAuthenticated = !explicit && claudeStatus();
       if (claudeAuthenticated) {
         if (!quiet) log(`  ${success('Claude Code authenticated')}`);
