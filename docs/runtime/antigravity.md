@@ -56,7 +56,11 @@ launch through a group runtime override. A missing API key fails before setup.
 The `PreToolUse` hook denies `ask_question` with a plain-text questioning
 alternative, preventing an unattended session from opening a keyboard dialog.
 Matching `run_command` PreToolUse/PostToolUse events track tool activity across
-background command execution using the shared tool-call ID.
+background command execution using the shared tool-call ID. The tracking
+PreToolUse entrypoint explicitly returns `{"decision":"allow"}` with exit code
+0 for main and child conversations, including lifecycle exceptions and its
+process deadline. Tracking failures must not block shell execution; the
+separate `ask_question` guard retains its denial policy.
 
 A launch kick triggers SessionStart before the first model turn. SessionStart
 injects the complete system and user instructions as `injectSteps` JSON. The

@@ -6,10 +6,13 @@ import { isMainModule } from './is-main-module.js';
 // Install this before loading hook modules. Native timeout kills only sh -c,
 // and timed-out optional shard promises can otherwise retain this Node process.
 const main = isMainModule(import.meta.url);
+// Tool tracking is observational. AGY treats an empty response or a failed
+// hook process as denial, so run_command must explicitly fail open.
+const preToolUse = process.argv[2] === 'PreToolUse';
 const deadline = main ? setTimeout(() => {
-  process.stdout.write('{}\n');
+  fs.writeSync(1, JSON.stringify(preToolUse ? { decision: 'allow' } : {}) + '\n');
   process.stderr.write('Zylos AGY hook exceeded its process deadline.\n');
-  process.exit(1);
+  process.exit(preToolUse ? 0 : 1);
 }, process.argv[2] === 'SessionStart' ? 55000 : 5000) : null;
 deadline?.unref();
 const [{ loadCoreModule }, { handleHookActivity }, { collectHealthHook, wakeHealthMonitor },
@@ -120,7 +123,7 @@ export async function handleAgyHook(payload, { eventName, env = process.env,
 if (main) {
   try {
     const result = await handleAgyHook(await readStdinPayload(), { eventName: process.argv[2] });
-    fs.writeSync(1, JSON.stringify(result || {}) + '\n');
+    fs.writeSync(1, JSON.stringify(preToolUse ? { decision: 'allow' } : result || {}) + '\n');
     // An optional emitter may still have handles after its budget expired.
     // The hook process owns this deadline and exits explicitly after output.
     clearTimeout(deadline);
@@ -128,8 +131,8 @@ if (main) {
   } catch {
     // Hook output is a protocol: never include native payloads or credentials in errors.
     process.stderr.write('Zylos AGY hook failed.\n');
-    fs.writeSync(1, '{}\n');
+    fs.writeSync(1, JSON.stringify(preToolUse ? { decision: 'allow' } : {}) + '\n');
     clearTimeout(deadline);
-    process.exit(1);
+    process.exit(preToolUse ? 0 : 1);
   }
 }

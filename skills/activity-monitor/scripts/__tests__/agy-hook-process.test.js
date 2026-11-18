@@ -52,6 +52,49 @@ test('hook process deadline covers an import retaining a live handle', { timeout
   assert.match(result.stderr, /process deadline/);
 });
 
+test('tool tracking allows a child conversation without binding it as main', t => {
+  const { root, env } = fixture(t);
+  acceptAgyMainEvent({ conversationId: 'parent', lastUserInput: buildKickPrompt() }, 'SessionStart', env);
+  const file = path.join(root, 'activity-monitor/session-groups/origin/agy-main-session.json');
+  const before = fs.readFileSync(file, 'utf8');
+  const result = spawnSync(process.execPath, [entry, 'PreToolUse'], {
+    env, input: JSON.stringify({ conversationId: 'child', toolCall: { id: 'child-command', name: 'run_command', args: {} } }),
+    encoding: 'utf8', timeout: 3000,
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.signal, null);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { decision: 'allow' });
+  assert.equal(result.stderr, '');
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+});
+
+test('tool tracking allows execution when an import reaches the process deadline', { timeout: 9000 }, t => {
+  const { root, env } = fixture(t);
+  const fake = coreWithInstructions(root, 'hanging-instructions.js');
+  const result = spawnSync(process.execPath, [entry, 'PreToolUse'], {
+    env: { ...env, ZYLOS_PACKAGE_ROOT: fake }, input: '{}', encoding: 'utf8', timeout: 7000,
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.signal, null);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { decision: 'allow' });
+  assert.match(result.stderr, /process deadline/);
+});
+
+test('tool tracking allows execution after a lifecycle exception', t => {
+  const { env } = fixture(t);
+  const result = spawnSync(process.execPath, [entry, 'PreToolUse'], {
+    env: { ...env, ZYLOS_SESSION_GROUP: '' }, input: '{"conversationId":"parent"}',
+    encoding: 'utf8', timeout: 3000,
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.signal, null);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { decision: 'allow' });
+  assert.match(result.stderr, /Zylos AGY hook failed/);
+});
+
 // The import resolves, so the hook reaches JSON output while a referenced
 // interval remains live. Removing the explicit successful exit must hit timeout.
 test('hook exits after protocol output when a resolved module retains a live handle', { timeout: 9000 }, t => {
@@ -95,7 +138,8 @@ test('native hook entrypoints emit bounded protocol responses with measured wall
       assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stderr);
       assert.equal(result.signal, null);
       assert.deepEqual(JSON.parse(result.stdout), name === 'guard'
-        ? { decision: 'deny', reason: 'Ask the user in plain text instead of calling ask_question.' } : {});
+        ? { decision: 'deny', reason: 'Ask the user in plain text instead of calling ask_question.' }
+        : name === 'PreToolUse' ? { decision: 'allow' } : {});
     }
     samples.sort((a, b) => a - b);
     t.diagnostic(`${name}: n=6 min=${samples[0].toFixed(1)} median=${((samples[2] + samples[3]) / 2).toFixed(1)} max=${samples.at(-1).toFixed(1)} ms (includes Node startup)`);
