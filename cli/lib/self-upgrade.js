@@ -990,6 +990,14 @@ function dashboardNext(dashboard) {
     : 'Dashboard is not ready. Fix the cause reported in dashboard.errors, run zylos init to reapply Dashboard configuration and routing and start ecosystem services, then report what you fixed.';
 }
 
+export const LEGACY_SESSION_RESTART='closed_by_system';
+export const LEGACY_SESSION_RESTART_NOTICE='Sessions started by the previous version are closed by the system. Do not restart them manually or run restart-claude.';
+
+/** A missing or unparsable source version keeps the ordinary restart request. */
+export function upgradedFromLegacyRelease(from) {
+  return parseTargetSemver(from)?.core[0]===0n;
+}
+
 /** Shared by initial finalization and forward repair after publication is done. */
 export async function completeUpgradeFinalization(ctx, deps = {}) {
   const root=ctx.zylosDir || ZYLOS_DIR;
@@ -1133,7 +1141,11 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
     ctx.modeStatus={state:'unavailable',error:{code:error.code || 'SESSION_MODE_STATUS_UNAVAILABLE',message:error.message}};
   }
   let mode,transition;
-  try {
+  if(upgradedFromLegacyRelease(ctx.from)) {
+    // The message router closes sessions started by 0.x; a queued /exit would reach the new Origin.
+    completion.sessionRestart=LEGACY_SESSION_RESTART;
+    ctx.restart={ok:true,data:{result:LEGACY_SESSION_RESTART,message:LEGACY_SESSION_RESTART_NOTICE}};
+  } else try {
     mode=await (deps.readMode || readSessionMode)();
     transition=await (deps.readTransition || (async()=> (await import('../../skills/comm-bridge/scripts/c4-db.js')).getModeTransition()))();
     const normalized=mode.mode===null ? {...mode,mode:'single'} : mode;

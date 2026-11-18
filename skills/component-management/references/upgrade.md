@@ -240,7 +240,7 @@ Deploy templates according to the decisions made in Step 2:
 ### Step 5: Review Conflicts + Completion
 
 1. **If `mergeConflicts` exists**: Review each conflict. Read backup and installed versions, re-apply local changes.
-2. Read the CLI's completion and restart result. Protected Core upgrade submits its own restart request; follow any reported recovery action without submitting another restart.
+2. Read the CLI's completion and restart result. Protected Core upgrade submits its own restart request; follow any reported recovery action without submitting another restart. When `completion.sessionRestart` is `closed_by_system` (upgrade from 0.x), the system closes the old sessions: do not restart them or run `restart-claude`.
 3. If `dashboard.state` is `degraded`, diagnose and repair Dashboard using `dashboard.errors` and `next`, then report what you fixed. A restore failure requires fixing its reported cause and restarting the service; other setup failures may require `zylos init` as directed by `next`. If `completion.dashboard` (and `dashboard.state`) is `stopped`, Dashboard was already stopped before the upgrade and remains stopped intentionally; no repair or `zylos init` is needed.
 4. Read `warnings` in the result JSON. After the upgrade completes, carry out every entry starting with `Agent action required:`, then report what you did and the result. Each `serviceWarnings` entry names a service that is not online after the upgrade (for example one that had exited on an older database): restart it with `pm2 restart <name>`, confirm it is online, and report it.
 
@@ -391,7 +391,7 @@ User: `upgrade zylos confirm`
    an incompatibility, resolve it before retrying; no schema-extension flag bypasses it.
 2. Deploy templates per user's decisions from Step 1 (new files: copy, changed: follow user choice, unchanged: skip)
 3. **If `mergeConflicts` in result**: Review and re-merge backed-up local changes
-4. Read the CLI completion and restart result; protected Core upgrade submits its own restart request. Follow its reported recovery action without submitting another restart.
+4. Read the CLI completion and restart result; protected Core upgrade submits its own restart request. Follow its reported recovery action without submitting another restart. When `completion.sessionRestart` is `closed_by_system` (upgrade from 0.x), the system closes the old sessions: do not restart them or run `restart-claude`.
 5. If `dashboard.state` is `degraded`, diagnose and repair Dashboard using `dashboard.errors` and `next`, then report what you fixed. A restore failure requires fixing its reported cause and restarting the service; other setup failures may require `zylos init` as directed by `next`. If `completion.dashboard` (and `dashboard.state`) is `stopped`, Dashboard was already stopped before the upgrade and remains stopped intentionally; no repair or `zylos init` is needed.
 6. Read `warnings` in the result JSON. After the upgrade completes, carry out every entry starting with `Agent action required:`, then report what you did and the result. Each `serviceWarnings` entry names a service that is not online after the upgrade (for example one that had exited on an older database): restart it with `pm2 restart <name>`, confirm it is online, and report it.
 7. Reply with version change and change summary
