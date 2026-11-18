@@ -889,7 +889,6 @@ test('Claude terminal hooks close one turn and late hooks do not start another',
   const terminal=handleHookActivity({hook_event_name,session_id:'s'},
    {env:{ZYLOS_DIR:root,ZYLOS_RUN_ID:'r',ZYLOS_MODEL_CONFIG:'{"runtime":"claude"}'},nowMs:500});
   assert.equal(terminal.event,'stop');
-  assert.equal(terminal.stop_reason,hook_event_name==='StopFailure'?'failure':undefined);
   activity.consume([terminal]);
   assert.equal(activity.closedThrough,500);assert.equal(activity.turn,false);
   activity.consume([row('pre_tool',{ts:600,tool_use_id:'late'})]);
@@ -904,27 +903,24 @@ test('Claude terminal hooks close one turn and late hooks do not start another',
 });
 
 // Boundary: native dequeue starts a turn without a prompt hook and shares the
-// Dashboard's 5-second Stop lag rule. Failure history survives a later Stop and
-// bounded reads/restart. Run for turn/failure evidence changes; private files.
-test('Claude dequeue after terminal closure supplies shared failure history across bounded reads and restart',t=>{
+// Dashboard's 5-second Stop lag rule across bounded reads/restart.
+// Run for turn/dequeue evidence changes; private files.
+test('Claude dequeue opens a turn across Stop lag, bounded reads and restart',t=>{
  const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl');
  const queue={type:'queue-operation',operation:'dequeue',sessionId:'s',timestamp:new Date(550).toISOString()};
  fs.writeFileSync(transcript,'{}\n'.repeat(Math.ceil(TRANSCRIPT_READ_BUDGET_BYTES/3)+2)+JSON.stringify(queue)+'\n');
  fs.utimesSync(transcript,0.55,0.55);
  const file=path.join(root,'events.jsonl');
- const failure=row('stop_failure',{type:'runtime_health',source:'hook',schema_version:1,event_id:'failed-event',ts:580});
  const rows=[row('session_start',{ts:100,transcript_path:transcript}),row('prompt'),row('prompt',{ts:300}),
-  row('pre_tool',{ts:350,tool_use_id:'old'}),failure,row('stop',{ts:600,stop_reason:'failure'}),
+  row('pre_tool',{ts:350,tool_use_id:'old'}),row('stop',{ts:600}),
   row('pre_tool',{ts:800,tool_use_id:'new'}),row('post_tool',{ts:900,tool_use_id:'new'})];
  fs.writeFileSync(file,rows.map(value=>JSON.stringify(value)+'\n').join(''));
  let result=activity.read(4000);
- assert.equal(result.failureActivity.startedAfterFailure,false);assert.equal(result.transcriptPending,true);
+ assert.equal(result.transcriptPending,true);
  result=activity.read(4000);
  assert.equal(result.state,'busy');assert.equal(result.turnOpen,true);assert.equal(result.turnStartedAt,601);
- assert.equal(result.failureActivity.startedAfterFailure,true);assert.equal(result.failureActivity.startedAt,601);
- assert.equal(result.failureActivity.failureEventId,'failed-event');
  // Keep the existing admitted-close contract for a turn begun only by dequeue.
- const original=fs.readFileSync(file,'utf8'),deadline=result.lastActivityAt+OPEN_TURN_INACTIVITY_TIMEOUT_MS;
+ const deadline=result.lastActivityAt+OPEN_TURN_INACTIVITY_TIMEOUT_MS;
  const admission=row('quiet_turn_interrupt',{ts:deadline,turn_started_at:601,
   last_activity_at:result.lastActivityAt,last_native_activity_at:result.lastNativeActivityAt,
   last_response_at:result.lastResponseAt,control_id:7});
@@ -934,13 +930,6 @@ test('Claude dequeue after terminal closure supplies shared failure history acro
  recovered.read(deadline);result=recovered.read(deadline);
  assert.equal(result.state,'idle');assert.equal(result.turnOpen,false);
  assert.equal(recovered.claimQuietTurn(result.lastActivityAt,deadline+1200000),false);
- fs.writeFileSync(file,original+JSON.stringify(row('stop',{ts:5000}))+'\n');
- const external=new SessionActivity({runDir:root,runId:'r',sessionId:'s',runtime:'claude',
-  startedAt:100,failureEventId:'failed-event'});t.after(()=>external.close());
- assert.equal(external.read(8000).failureActivity.startedAfterFailure,false);
- result=external.read(8000);
- assert.equal(result.state,'idle');assert.equal(result.failureActivity.startedAfterFailure,true,
-  'a new turn that already stopped still cancels the old failure continuation');
 });
 
 // Boundary: a lost/replaced native transcript must not keep a cached dequeue
@@ -966,25 +955,4 @@ test('Claude transcript rotation and unavailable records fall back to hook state
  // A genuine hook-open turn still remains busy when the native file is absent.
  activity.consume([row('prompt',{ts:10000})]);
  assert.equal(activity.read(14000).state,'busy');assert.equal(activity.turnStartedAt,10000);
-});
-
-// Boundary: a consumer rebuilding for an older fixed failure still observes
-// later hook-started rounds outside both five-second Stop windows. Run for
-// fixed-failure recovery changes; private event/transcript files only.
-test('Claude fixed failure recovery retains a later long hook-started turn after it stops',t=>{
- const {root,row}=fixture(t),transcript=path.join(root,'s.jsonl');
- fs.writeFileSync(transcript,'');fs.utimesSync(transcript,0.1,0.1);
- const rows=[row('session_start',{ts:100,transcript_path:transcript}),row('prompt',{ts:200}),
-  row('stop_failure',{type:'runtime_health',source:'hook',schema_version:1,event_id:'first-failure',ts:10000}),
-  row('stop',{ts:10001,stop_reason:'failure'}),row('prompt',{ts:20000}),
-  row('stop_failure',{type:'runtime_health',source:'hook',schema_version:1,event_id:'next-failure',ts:70000}),
-  row('stop',{ts:70001,stop_reason:'failure'})];
- fs.writeFileSync(path.join(root,'events.jsonl'),rows.map(value=>JSON.stringify(value)+'\n').join(''));
- const reader=new SessionActivity({runDir:root,runId:'r',sessionId:'s',runtime:'claude',
-  startedAt:100,failureEventId:'first-failure'});t.after(()=>reader.close());
- const result=reader.read(75000);
- assert.equal(result.state,'idle');assert.equal(result.turnOpen,false);
- assert.equal(result.failureActivity.failureEventId,'first-failure');
- assert.equal(result.failureActivity.startedAfterFailure,true);
- assert.equal(result.failureActivity.startedAt,20000);
 });

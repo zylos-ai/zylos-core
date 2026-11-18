@@ -372,21 +372,15 @@ pm2 list
      An unfinished individual tool still keeps the session busy.
    - Supported Claude versions register an activity hook alongside the existing
      StopFailure health hook during both hook sync and upgrade. The activity
-     record uses event='stop', stop_reason='failure'; normal Stop is unchanged.
+     record uses event='stop', the same as normal Stop.
      Dequeue reuses Dashboard working.js inputAfterStop and STOP_HOOK_LAG_MS:
      a dequeue up to five seconds before a delayed Stop counts after that Stop
      when no other main action intervened. No promptId attribution is used.
      A replaced, missing or unreadable transcript discards cached dequeue
      authority and falls back to hook state, without manufacturing busy state;
      a genuine hook-open turn or running tool still remains busy.
-   - SessionActivity accepts optional failureEventId (health StopFailure event_id)
-     and the run's actual startedAt. read().failureActivity exposes failureEventId
-     and boolean startedAfterFailure, with startedAt when true. This means a new
-     turn started after that failure even if it already stopped. Consumers reuse
-     the instance/read cursor and close it on replacement/shutdown. No evidence,
-     missing records or unread data means false; no third-state retry policy is
-     added. Known limitation: without a dequeue record, inter-tool gaps can be
-     idle and a continuation can be redundant (observed in 2 of 133 reviewed turns).
+   - Known limitation: without a dequeue record, inter-tool gaps can be idle
+     (observed in 2 of 133 reviewed turns). No substitute inference is added.
    - AGY uses the same 20-minute, one-shot Escape rule while a turn is open.
      Its last-activity timestamp includes non-idle statusLine capture timestamps;
      native freshness includes every valid current sample. Rereading a sample

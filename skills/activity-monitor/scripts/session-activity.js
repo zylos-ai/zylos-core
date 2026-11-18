@@ -9,7 +9,7 @@ export const RECENT_TOOL_RESULTS_LIMIT=256;
 export const OPEN_TURN_INACTIVITY_TIMEOUT_MS=20*60*1000;
 /** One current run/session, with no global latest-transcript fallback. */
 export class SessionActivity {
-  constructor({runDir, runId, sessionId, runtime, startedAt=0, failureEventId=null, warn=()=>{}}) {
+  constructor({runDir, runId, sessionId, runtime, startedAt=0, warn=()=>{}}) {
     Object.assign(this,{runDir,runId,sessionId,runtime,startedAt,warn});
     this.reader=new EventLogReader(path.join(runDir,'events.jsonl'),{warn});
     this.tools=new Map();this.completed=new Set();this.results=new Set();
@@ -22,26 +22,18 @@ export class SessionActivity {
     this.agyIdleSince=null;this.agyTasksRunning=false;
     this.quietTurnAttemptAt=null;
     this.turnStartedAt=null;this.lastNativeActivityAt=startedAt;this.pendingQuietTurnClose=null;
-    this.fixedFailureEventId=failureEventId;this.failureEventId=failureEventId;this.failureAt=null;
-    this.failureStop=null;this.failureResumedAt=null;this.lastTurnStop=null;this.lastDequeue=null;this.recentTurnStops=[];
+    this.lastTurnStop=null;this.lastDequeue=null;this.recentTurnStops=[];
     this.lastMainActionAt=-Infinity;this.lastHookStartAt=null;
-  }
-  failureMatches(row) {
-    return this.runtime==='claude' && row.runtime==='claude' && row.run_id===this.runId &&
-      row.session_id===this.sessionId && !row.agent_id && row.type==='runtime_health' &&
-      row.source==='hook' && row.schema_version===1 && row.event==='stop_failure' &&
-      typeof row.event_id==='string' && row.event_id && Number.isFinite(row.ts) && row.ts>=this.startedAt;
   }
   mainAction(ts) {
     this.lastMainActionAt=Math.max(this.lastMainActionAt,ts);
-    for(const stop of [...this.recentTurnStops,this.failureStop])if(stop && ts<=stop.ts)
+    for(const stop of this.recentTurnStops)if(stop && ts<=stop.ts)
       stop.actionAt=Math.max(stop.actionAt,ts);
   }
   dequeueTime() {
     if(this.lastDequeue===null)return -Infinity;
     const queue={type:'input_dequeue',ts:this.lastDequeue};
-    const stops=[this.failureStop,...this.recentTurnStops].filter((value,index,all)=>value && all.indexOf(value)===index);
-    const facts=[queue,...stops.flatMap(stop=>[
+    const facts=[queue,...this.recentTurnStops.flatMap(stop=>[
       ...(Number.isFinite(stop.actionAt)?[{type:'pre_tool_use',ts:stop.actionAt}]:[]),
       {type:'stop',ts:stop.ts}])].sort((a,b)=>a.ts-b.ts);
     return inputAfterStop(facts,{type:row=>row.type,at:row=>row.ts,child:()=>false})(queue);
@@ -49,7 +41,6 @@ export class SessionActivity {
   applyDequeue() {
     if(this.runtime!=='claude')return;
     const ts=this.dequeueTime();
-    if(Number.isFinite(this.failureAt) && ts>this.failureAt)this.failureResumedAt ??= ts;
     if(ts>this.closedThrough && ts>(this.turnStartedAt ?? -Infinity)) {
       this.turn=true;this.turnStartedAt=ts;this.busySince=ts;this.quietTurnAttemptAt=null;this.pendingQuietTurnClose=null;
       this.lastActivityAt=Math.max(this.lastActivityAt,ts);this.lastNativeActivityAt=Math.max(this.lastNativeActivityAt,ts);
@@ -124,12 +115,8 @@ export class SessionActivity {
     }
   }
   recover() {
-    let boundary=false,responseBoundary=false,claudeCutoff=null,failureCutoff=null;
+    let boundary=false,responseBoundary=false,claudeCutoff=null;
     return this.reader.recoverTail(row=>{
-      if(this.failureMatches(row)) {
-        this.failureEventId ??= row.event_id;
-        if(row.event_id===this.failureEventId) {failureCutoff=row.ts-STOP_HOOK_LAG_MS;return {keep:true};}
-      }
       if(!this.matches(row))return {};
       if(!this.transcriptPath)this.associateTranscript(row);
       if(Number.isFinite(row.ts) && row.ts>=this.startedAt && row.event==='pre_tool')this.lastResponseAt=Math.max(this.lastResponseAt ?? -Infinity,row.ts);
@@ -137,12 +124,8 @@ export class SessionActivity {
       // replaying older turns into the current tool and busy/idle state.
       if(row.event==='session_start' || Number.isFinite(row.ts) && row.ts<=this.startedAt)responseBoundary=true;
       if(this.runtime==='claude' && row.event==='stop' && Number.isFinite(row.ts))claudeCutoff ??= row.ts-STOP_HOOK_LAG_MS;
-      // Reverse recovery has not reached the fixed failure yet. Keep later
-      // turn boundaries so a long intervening round is not lost; its tool
-      // history still uses only the existing Stop-lag windows.
-      const fixedBoundary=this.fixedFailureEventId && failureCutoff===null && ['prompt','stop'].includes(row.event);
       const keep=Number.isFinite(row.ts) && row.ts>=this.startedAt && (this.runtime==='claude'?
-        fixedBoundary || claudeCutoff===null || row.ts>=claudeCutoff || failureCutoff!==null && row.ts>=failureCutoff && row.ts<=failureCutoff+STOP_HOOK_LAG_MS:!boundary);
+        claudeCutoff===null || row.ts>=claudeCutoff:!boundary);
       if(Number.isFinite(row.ts) && (row.ts<=this.startedAt ||
          this.runtime!=='claude' && ['prompt','stop'].includes(row.event)))boundary=true;
       return {keep,done:boundary && responseBoundary && this.transcriptPath!==null};
@@ -150,12 +133,6 @@ export class SessionActivity {
   }
   consume(rows) {
     for(const row of rows) {
-      if(this.failureMatches(row) && (!this.fixedFailureEventId || row.event_id===this.fixedFailureEventId) &&
-         (this.failureAt===null || row.ts>=this.failureAt)) {
-        if(row.event_id!==this.failureEventId)this.failureResumedAt=null;
-        this.failureEventId=row.event_id;this.failureAt=row.ts;
-        this.failureStop={ts:row.ts,actionAt:this.lastMainActionAt<=row.ts?this.lastMainActionAt:-Infinity};
-      }
       this.consumeSubagent(row);
       if(!this.matches(row))continue;
       this.associateTranscript(row);
@@ -198,7 +175,6 @@ export class SessionActivity {
       if(startsPrompt) {
         if(this.runtime==='claude'){this.busySince=row.ts;this.lastHookStartAt=row.ts;}
         this.turn=true;this.turnStartedAt=row.ts;this.quietTurnAttemptAt=null;this.pendingQuietTurnClose=null;
-        if(this.runtime==='claude' && Number.isFinite(this.failureAt) && row.ts>this.failureAt)this.failureResumedAt ??= row.ts;
         if(this.runtime==='agy') {this.agyIdleSince=null;this.lastResponseAt=Math.max(this.lastResponseAt ?? -Infinity,row.ts);}
       }
       const nativeId=typeof row.tool_use_id==='string' && row.tool_use_id.length>0 ? row.tool_use_id : null;
@@ -212,8 +188,6 @@ export class SessionActivity {
           this.lastTurnStop={ts:row.ts,actionAt:this.lastMainActionAt<=row.ts?this.lastMainActionAt:-Infinity};
           this.recentTurnStops=this.recentTurnStops.filter(stop=>stop.ts>=row.ts-STOP_HOOK_LAG_MS);
           this.recentTurnStops.push(this.lastTurnStop);
-          if(row.stop_reason==='failure' && Number.isFinite(this.failureAt) && row.ts>=this.failureAt && row.ts-this.failureAt<=STOP_HOOK_LAG_MS)
-            this.failureStop=this.lastTurnStop;
         }
         if(this.runtime==='agy')this.agyIdleSince=row.ts;
         this.turn=false;this.closedThrough=Math.max(this.closedThrough,row.ts);
@@ -370,9 +344,7 @@ export class SessionActivity {
     }
     const activeSubagents=[...this.subagents].filter(([,agent])=>agent.active && now-agent.lastActivityAt<subagentTtlMs)
       .map(([agentId,agent])=>({agentId,lastActivityAt:agent.lastActivityAt}));
-    const failureActivity={failureEventId:this.failureEventId,startedAfterFailure:this.failureResumedAt!==null,
-      ...(this.failureResumedAt!==null?{startedAt:this.failureResumedAt}:{})};
-    return {failureActivity,sessionId:this.sessionId,state:busy?'busy':'idle',busySince:this.busySince,turnOpen:this.turn,turnStartedAt:this.turnStartedAt,lastNativeActivityAt:this.lastNativeActivityAt,quietTurnDue:this.quietTurnDue(now),lastResponseAt:this.lastResponseAt,transcriptPending:this.transcriptPending,tools:[...this.tools.values()],lastActivityAt:this.lastActivityAt,transcriptMtimeMs,idleSince:this.idleSince,events,
+    return {sessionId:this.sessionId,state:busy?'busy':'idle',busySince:this.busySince,turnOpen:this.turn,turnStartedAt:this.turnStartedAt,lastNativeActivityAt:this.lastNativeActivityAt,quietTurnDue:this.quietTurnDue(now),lastResponseAt:this.lastResponseAt,transcriptPending:this.transcriptPending,tools:[...this.tools.values()],lastActivityAt:this.lastActivityAt,transcriptMtimeMs,idleSince:this.idleSince,events,
       activeSubagents,lastSubagentActivityAt:this.lastSubagentActivityAt};
   }
 }
