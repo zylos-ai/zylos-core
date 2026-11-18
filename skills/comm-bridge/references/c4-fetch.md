@@ -67,10 +67,11 @@ before summarizing, checkpointing or advancing its cursor:
 
 1. Read the entire file in bounded byte ranges and record every `[start,end)`.
    Run **one byte range per top-level tool call**, returning that range's actual
-   text before requesting the next. Do not combine ranges in a shell loop,
-   JavaScript loop, parallel calls, or any wrapper that accumulates several
-   reads into one return. On Codex, each range needs its own `functions.exec`
-   invocation containing one `exec_command`; separate inner calls inside one
+   text before requesting the next. Do not batch ranges in loops (shell or
+   JavaScript), parallel calls, or any wrapper that accumulates several reads
+   into one return. On Codex, use a direct `exec_command` when exposed as a
+   top-level tool; in code mode, each range needs its own `functions.exec`
+   invocation containing one `exec_command`. Separate inner calls inside one
    outer invocation still share the outer output cap. On Claude, use one Bash
    call containing one `dd` command per range. Use Bash byte reads for long
    single-line JSON: Read's offset/limit select lines and cannot bound one long

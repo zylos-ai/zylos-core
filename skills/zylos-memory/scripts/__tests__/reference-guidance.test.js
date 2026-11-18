@@ -180,7 +180,16 @@ test('Sync workers read complete byte ranges without manually checking file size
     assert.match(text, /Use reported byte counts only as byte-range read endpoints/);
     assert.doesNotMatch(text, /verify (?:its|the reported|each) (?:reported )?(?:byte count|bytes\/hash)|Read and verify all exported|read\/verify every listed|wc -c|sha256sum|shasum/);
     assert.match(text, /[Tt]runcated output is unread/);
+    assert.match(text, /one byte range per top-level tool call/);
+    assert.match(text, /[Dd]o not batch ranges in loops/);
+    assert.match(text, /(?:fresh|new) top-level call/);
+    assert.match(text, /[Bb]ounded read retries/);
     assert.match(text, /Complete byte-range reads/);
+  }
+  for (const source of [sync, skill, fetch]) {
+    const text = normalize(source);
+    assert.match(text, /direct `exec_command` when exposed/);
+    assert.match(text, /in code mode, (?:each range needs )?its own `functions.exec`(?: invocation)? containing one `exec_command`/);
   }
   const text = normalize(sync);
   assert.match(text, /Record every completely read half-open range `\[start,end\)`.*the ranges must cover every byte with no gap/);

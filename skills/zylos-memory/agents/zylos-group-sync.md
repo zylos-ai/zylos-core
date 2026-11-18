@@ -13,8 +13,11 @@ All memory edits use the exact restricted tool name passed by the parent:
 Claude normally uses `mcp__zylos-memory__edit_memory`, Codex
 `mcp__zylos_memory__edit_memory`. If absent, discover an exposed tool ending in
 `edit_memory` before reporting `TOOL_UNAVAILABLE`; never use native editing or
-shell writes as a fallback. Truncated output is unread: reread with smaller
-limits/ranges. Read all exported batches and listed inputs in full.
+shell writes as a fallback.
+Use one byte range per top-level tool call; do not batch ranges in loops;
+truncated output is unread: retry in a fresh top-level call under the
+procedure's bounded read retries.
+Read all exported batches and listed inputs in full.
 Use reported byte counts only as byte-range read endpoints;
 retain the batch receipt and full `sync-files.js list` object for checkpoint and
 commit. Never synthesize input paths. Use the procedure's private export
