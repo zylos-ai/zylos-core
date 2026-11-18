@@ -92,9 +92,33 @@ for (const [model, tier, usage, expected] of [
     closeTo(row.dimensions.cost, expected);
   });
 }
-test('GPT-6.2 dated snapshots inherit the built-in row; suffixed IDs do not', () => {
+// GPT-6.1 Terra, checked 2026-11-18 (https://developers.openai.com/api/docs/pricing):
+// standard 1 input / 0.05 cached / 1.25 cache write / 5 output; Fast 2 / 0.10 / 2.5 / 10.
+// Above 272K input the whole request pays standard 2 / 0.10 / 2.5 / 7.5, Fast 4 / 0.20 / 5 / 15.
+// Uncached input = input - cached - cache write.
+for (const [tier, usage, expected] of [
+  // 60000*1 + 100000*0.05 + 40000*1.25 + 11200*5 = 0.06 + 0.005 + 0.05 + 0.056
+  ['standard', { input_tokens: 200000, cached_input_tokens: 100000, cache_write_input_tokens: 40000, output_tokens: 11200 }, 0.171],
+  // 60000*2 + 100000*0.10 + 40000*2.5 + 11200*10 = 0.12 + 0.01 + 0.1 + 0.112
+  ['fast', { input_tokens: 200000, cached_input_tokens: 100000, cache_write_input_tokens: 40000, output_tokens: 11200 }, 0.342],
+  ['priority', { input_tokens: 200000, cached_input_tokens: 100000, cache_write_input_tokens: 40000, output_tokens: 11200 }, 0.342],
+  // 272000*1: exactly 272K stays on short-context prices
+  ['standard', { input_tokens: 272000, output_tokens: 0 }, 0.272],
+  // 272001*2
+  ['standard', { input_tokens: 272001, output_tokens: 0 }, 0.544002],
+  // 160000*2 + 100000*0.10 + 40000*2.5 + 10000*7.5 = 0.32 + 0.01 + 0.1 + 0.075
+  ['standard', { input_tokens: 300000, cached_input_tokens: 100000, cache_write_input_tokens: 40000, output_tokens: 10000 }, 0.505],
+  // 160000*4 + 100000*0.20 + 40000*5 + 10000*15 = 0.64 + 0.02 + 0.2 + 0.15
+  ['fast', { input_tokens: 300000, cached_input_tokens: 100000, cache_write_input_tokens: 40000, output_tokens: 10000 }, 1.01]
+]) {
+  test(`gpt-6.1-terra ${tier} cost for ${usage.input_tokens} input tokens and ${usage.output_tokens} output tokens`, t => {
+    const { row } = ingest(t, { model: 'gpt-6.1-terra', serviceTier: tier, usage });
+    closeTo(row.dimensions.cost, expected);
+  });
+}
+test('GPT-6.2 and GPT-6.1 Terra dated snapshots inherit the built-in row; suffixed IDs do not', () => {
   const collector = new CodexRolloutCollector({}, defaults);
-  for (const model of ['gpt-6.2-sol', 'gpt-6.2-astra']) {
+  for (const model of ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-terra']) {
     for (const tier of ['standard', 'priority']) {
       const builtIn = collector._resolveModelPrice(model, tier);
       assert.ok(builtIn);
@@ -103,8 +127,9 @@ test('GPT-6.2 dated snapshots inherit the built-in row; suffixed IDs do not', ()
     }
   }
 });
-test('saved custom price tables still receive GPT-6.2 default rows in both tiers', () => {
-  const legacy = ids => Object.fromEntries(Object.entries(ids).filter(([id]) => !id.startsWith('gpt-6.2-')));
+test('saved custom price tables still receive GPT-6.2 and GPT-6.1 Terra default rows in both tiers', () => {
+  const added = new Set(['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-terra']);
+  const legacy = ids => Object.fromEntries(Object.entries(ids).filter(([id]) => !added.has(id)));
   const custom = { input: 1, output: 1, cacheRead: 1, cacheCreation: 1 };
   withConfig({
     runtimeModelPrices: { codex: { ...legacy(DEFAULT_CODEX_MODEL_PRICES), 'gpt-6-astra': custom } },
@@ -115,11 +140,15 @@ test('saved custom price tables still receive GPT-6.2 default rows in both tiers
       const defaultsForTier = tier === 'priority' ? DEFAULT_CODEX_PRIORITY_MODEL_PRICES : DEFAULT_CODEX_MODEL_PRICES;
       assert.deepEqual(table['gpt-6.2-sol'], defaultsForTier['gpt-6.2-sol']);
       assert.deepEqual(table['gpt-6.2-astra'], defaultsForTier['gpt-6.2-astra']);
+      assert.deepEqual(table['gpt-6.1-terra'], defaultsForTier['gpt-6.1-terra']);
       assert.deepEqual(table['gpt-6-astra'], custom);
     }
     const collector = new CodexRolloutCollector({}, config);
     closeTo(collector._calculateCost({ input: 100000, output: 0, cache_read: 0, cache_creation: 0 }, collector._resolveModelPrice('gpt-6.2-astra')), 0.8);
     closeTo(collector._calculateCost({ input: 100000, output: 0, cache_read: 0, cache_creation: 0 }, collector._resolveModelPrice('gpt-6.2-astra', 'priority')), 1.6);
+    // 100000 input tokens * 1 (standard) and * 2 (Fast)
+    closeTo(collector._calculateCost({ input: 100000, output: 0, cache_read: 0, cache_creation: 0 }, collector._resolveModelPrice('gpt-6.1-terra')), 0.1);
+    closeTo(collector._calculateCost({ input: 100000, output: 0, cache_read: 0, cache_creation: 0 }, collector._resolveModelPrice('gpt-6.1-terra', 'priority')), 0.2);
   });
 });
 // GPT-5.5/5.4 standard requests above 272K bill the whole request at 2x input

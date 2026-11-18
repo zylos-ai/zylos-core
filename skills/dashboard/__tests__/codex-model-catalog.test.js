@@ -88,10 +88,16 @@ test('GPT-6.2 models lead the catalog with their Codex display names', () => {
   ]);
 });
 
-for (const model of ['gpt-6.2-sol', 'gpt-6.2-astra']) {
+test('GPT-6.1 Terra follows GPT-6.1-Sol under its Codex display name', () => {
+  const ids = getCodexModels().map(({ id }) => id);
+  assert.equal(ids.indexOf('gpt-6.1-terra'), ids.indexOf('gpt-6.1-sol') + 1);
+  assert.equal(getCodexModels().find(({ id }) => id === 'gpt-6.1-terra').display_name, 'GPT-6.1 Terra');
+});
+
+for (const model of ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-terra']) {
   test(`${model} is selectable, saves ultra and rejects invalid effort`, async () => {
     const { handleAction: isolatedAction } = await import(`../src/lib/actions.js?fixture=${model}`);
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-gpt62-effort-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-codex-effort-'));
     try {
       fs.mkdirSync(path.join(dir, '.codex'));
       const configPath = path.join(dir, '.codex', 'config.toml');

@@ -5,6 +5,7 @@ const CODEX_MODELS = [
   { id: 'gpt-6.2-sol', display_name: 'GPT-6.2-Sol', efforts: EXTENDED_EFFORTS },
   { id: 'gpt-6.2-astra', display_name: 'GPT-6.2-Astra', efforts: EXTENDED_EFFORTS },
   { id: 'gpt-6.1-sol', display_name: 'GPT-6.1-Sol', efforts: EXTENDED_EFFORTS },
+  { id: 'gpt-6.1-terra', display_name: 'GPT-6.1 Terra', efforts: EXTENDED_EFFORTS },
   { id: 'gpt-6-astra', display_name: 'GPT-6-Astra', efforts: EXTENDED_EFFORTS },
   { id: 'gpt-6-sol', display_name: 'GPT-6-Sol', efforts: EXTENDED_EFFORTS },
   { id: 'gpt-6-luna', display_name: 'GPT-6-Luna', efforts: MAX_EFFORTS },
