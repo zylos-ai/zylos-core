@@ -115,7 +115,7 @@ export function messageForStatus({ health, reason, noticeCode, resetAt, group, c
       : code ? NOTICE_TEMPLATES[code][locale] : (mode === 'failure' ? FAILURE_REASONS : DEFAULTS)[category][locale];
     const safeOverride = validText(override,2000) &&
       (!override.includes('{resetAt}') || (code === 'quota_exhausted_reset' && resetText));
-    const body = safeOverride ? override.trim() : mode === 'capacity' || code === 'service_error_retries_exhausted' ? description
+    const body = safeOverride ? override.trim() : mode === 'capacity' ? description
       : `${description}${locale === 'en' ? ' ' : ''}${SUFFIXES[mode][locale]}`;
     const rendered = code === 'quota_exhausted_reset' ? body.replaceAll('{resetAt}',resetText) : body;
     return `[${brand}] ${rendered}`;

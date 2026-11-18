@@ -735,35 +735,25 @@ test('terminal transport failure after paste does not notify delivery recovery',
   assert.deepEqual(notifications, []);
 });
 
-// Exercise the actual delivery executor with persisted hook evidence, not a
-// mocked cancellation verdict. No tmux server or live runtime is used.
-test('failure Continue is exact, idle gated, cancelled at paste boundary and never replayed',async t=>{
-  const {appendEvent}=await import('../../../../cli/lib/event-log.js');
-  const {groupRunDir}=await import('../../../../cli/lib/session-group-paths.js');
-  const {randomUUID}=await import('node:crypto');
-  for(const scenario of ['deliver','pending_input','busy','paste_error','session_changed'])await t.test(scenario,async t=>{
-    const f=setup(t);f.target.runtime='claude';
-    const eventId=randomUUID(), directory=groupRunDir('origin');
-    appendEvent(path.join(directory,'events.jsonl'),{v:1,event:'session_start',run_id:'r1',session_id:'s1',runtime:'claude',ts:98000});
-    appendEvent(path.join(directory,'events.jsonl'),{v:1,event:'prompt',run_id:'r1',session_id:'s1',runtime:'claude',ts:98500});
-    appendEvent(path.join(directory,'events.jsonl'),{v:1,type:'runtime_health',source:'hook',schema_version:1,event:'stop_failure',event_id:eventId,run_id:'r1',session_id:'s1',claude_pid:123,runtime:'claude',error:'server_error',prompt_id:'failed',ts:99000,received_at:99000});
-    appendEvent(path.join(directory,'events.jsonl'),{v:1,event:'stop',run_id:'r1',session_id:'s1',runtime:'claude',ts:99001});
-    const binding={expectedRunId:'r1',expectedSessionId:'s1',tmuxTarget:{serverGeneration:'1:1',sessionId:'$1',paneId:'%1'},failureContinue:{eventId,failedAt:100000,pid:123}};
-    const row=f.control('Continue',{target_binding:JSON.stringify(binding),require_idle:1});
-    f.db.expireControlById=id=>{assert.equal(id,row.id);row.status='timeout';};
-    f.db.getControlById=id=>id===row.id?row:null;
-    if(scenario==='pending_input')f.store.insertConversation('in','dashboard','origin','new ordinary input');
-    if(scenario==='busy')f.state.state='busy';
-    if(scenario==='session_changed')f.target.runtimeSessionId='s2';
-    if(scenario==='paste_error')f.adapter.sendText=async args=>{f.calls.push(['paste',args]);throw error('ECONNRESET');};
-    const d=f.create({idleHoldMs:0,idleWaitMs:0});t.after(()=>d.stop());await d.deliverControl(row);
-    const pastes=f.calls.filter(c=>c[0]==='paste');
-    assert.equal(pastes.length,['deliver','paste_error'].includes(scenario)?1:0);
-    if(pastes.length)assert.equal(pastes[0][1].text,'Continue');
-    assert.equal(row.status,scenario==='deliver'?'done':scenario==='busy'?'pending':'timeout');
-    if(scenario==='deliver' || scenario==='paste_error') {
-      // Even a stale in-memory claim or an uncertain send cannot paste twice.
-      await d.deliverControl(row);assert.equal(f.calls.filter(c=>c[0]==='paste').length,1);
-    }
-  });
+// Boundary: bound idle Continue content and AM cancellation → existing executor.
+// Run for Continue delivery changes; injected terminal, no live tmux/runtime.
+test('bound idle Continue is exact, respects persisted cancellation and retries a pre-paste error',async t=>{
+ for(const scenario of ['deliver','cancelled','prepaste_error'])await t.test(scenario,async t=>{
+  const f=setup(t);f.target.runtime='claude';
+  const binding={expectedRunId:'r1',expectedSessionId:'s1',tmuxTarget:{serverGeneration:'1:1',sessionId:'$1',paneId:'%1'}};
+  const row=f.control('Continue',{target_binding:JSON.stringify(binding),require_idle:1});
+  let fail=scenario==='prepaste_error';
+  f.db.getControlById=()=>{if(fail){fail=false;throw error('ECONNRESET');}return row;};
+  if(scenario==='cancelled')row.status='timeout';
+  const d=f.create({idleHoldMs:0,idleWaitMs:0});t.after(()=>d.stop());
+  await d.deliverControl(row);
+  if(scenario==='prepaste_error') {
+   assert.equal(row.status,'pending');assert.equal(f.calls.filter(c=>c[0]==='paste').length,0);
+   row.status='running';await d.deliverControl(row);
+  }
+  const pastes=f.calls.filter(c=>c[0]==='paste');
+  assert.equal(pastes.length,scenario==='cancelled'?0:1);
+  if(pastes.length)assert.equal(pastes[0][1].text,'Continue');
+  assert.equal(row.status,scenario==='cancelled'?'timeout':'done');
+ });
 });

@@ -167,7 +167,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     },
     consumeHealthEvents:async(scene,coordinator)=>{
       const identity=healthIdentity(scene);if(!identity)return;
-      events ??= new HealthEventReader({coordinator,zylosDir:root,warn:log,quota:(identity,current)=>readScopedHealthQuota({runDir:current.runDir,runId:current.runId,identity})});
+      events ??= new HealthEventReader({coordinator,zylosDir:root,warn:log,getControl:db.getControlById,expireControl:id=>{try{db.expireControlById(id);}catch(error){if(error.code!=='CONTROL_NOT_ACTIVE')throw error;}},quota:(identity,current)=>readScopedHealthQuota({runDir:current.runDir,runId:current.runId,identity})});
       const results=await events.consumeScene(scene,identity);
       if(results.some(result=>result?.verify))void supervisor.observer.requestVerification(scene.runtime);
       if(scene.runtime==='claude') await coordinator.serial(scene.runtime,()=>processFailureContinuation({

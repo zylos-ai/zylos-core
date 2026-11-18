@@ -193,7 +193,7 @@ export class HealthStore {
     } else this.write({ ...state, pending_notice: { ...state.pending_notice, ...patch } },sessionGroup);
     return true;
   }
-  consume(raw, { identity, quota, fallbackId, sessionGroup = 'origin', runId, retryActivity } = {}) {
+  consume(raw, { identity, quota, fallbackId, sessionGroup = 'origin', runId, retryControl, expireControl } = {}) {
     const event = sanitizeHealthEvent(raw, fallbackId);
     const prior = this.read(sessionGroup);
     if (!['stop', 'stop_failure'].includes(event.event)) return { state: prior, status: 'ignored', reason: 'nonterminal_event' };
@@ -207,8 +207,11 @@ export class HealthStore {
         session_id:event.session_id, claude_pid:event.claude_pid } };
     const pending = this.freezeNotice({ runtime: this.runtime, state: result.state, identity, event, result, sessionGroup });
     if (pending) result.state.pending_notice = pending;
-    reduceFailureContinuation(result.state,{runtime:this.runtime,event,identity,runId,pending,activity:retryActivity,eligible:!result.verify && result.notice?.eligible});
+    reduceFailureContinuation(result.state,{runtime:this.runtime,event,identity,runId,pending,control:retryControl,eligible:!result.verify && result.notice?.eligible});
     result.state.rateLimitActive = result.state.health === 'rate_limited' || (result.state.health !== 'ok' && prior.rateLimitActive);
+    // Expire an older pending retry before publishing this failure's replay
+    // marker, so a crash cannot lose its control id while leaving it executable.
+    if(event.event==='stop_failure' && retryControl?.status==='pending')expireControl?.(retryControl.id);
     this.write(result.state,sessionGroup);
     return result;
   }

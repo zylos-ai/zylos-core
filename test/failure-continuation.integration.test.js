@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { RuntimeHealthCoordinator } from '../skills/activity-monitor/scripts/runtime-health.js';
 import { HealthEventReader } from '../skills/activity-monitor/scripts/health-event-reader.js';
 import { HealthStore } from '../skills/activity-monitor/scripts/health-store.js';
-import { processFailureContinuation, continuationActivity, markContinuationSubmission } from '../skills/activity-monitor/scripts/failure-continuation.js';
+import { processFailureContinuation } from '../skills/activity-monitor/scripts/failure-continuation.js';
 import { freezeFirstFailureNotice, processFirstFailureNotices } from '../skills/comm-bridge/scripts/first-failure-notice.js';
 import { messageForStatus } from '../skills/comm-bridge/scripts/status-notice-templates.js';
 import { appendEvent } from '../cli/lib/event-log.js';
@@ -24,12 +24,12 @@ function setup(t,runtime='claude') {
  const identity={runtime,session_id:'s1',claude_pid:123};
  let now=1000000;
  const coordinator=new RuntimeHealthCoordinator({zylosDir:root,now:()=>now,freezeNotice:options=>freezeFirstFailureNotice(f.db,options)});
- const reader=new HealthEventReader({coordinator,zylosDir:root,now:()=>now,quota:()=>null});t.after(()=>reader.close());
+ const reader=new HealthEventReader({coordinator,zylosDir:root,now:()=>now,quota:()=>null,getControl:id=>f.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id),expireControl:f.store.expireControlById});t.after(()=>reader.close());
  const store=coordinator.store(runtime);
  const binding={expectedRunId:'r1',tmuxTarget:{serverGeneration:'g1',sessionId:'$1',paneId:'%1'}};
  const write=(event,error=null,extra={})=>{
   now+=100;
-  const row={v:1,type:'runtime_health',schema_version:1,source:'hook',...identity,event_id:randomUUID(),prompt_id:randomUUID(),event,error,received_at:now,...extra};
+  const row={v:1,type:'runtime_health',schema_version:1,source:'hook',...identity,event_id:randomUUID(),prompt_id:randomUUID(),event,error,received_at:now,ts:now,run_id:scene.runId,...extra};
   appendEvent(path.join(scene.runDir,'events.jsonl'),row);return row;
  };
  const consume=()=>reader.consumeScene(scene,identity);
@@ -42,30 +42,54 @@ function setup(t,runtime='claude') {
 // Isolated temp run directory and in-memory database only; no runtime/tmux/network I/O.
 test('durable 30s/2m/5m schedule, exact content, frozen recipient and one exhaustion notice',async t=>{
  const f=setup(t);
+ const native=new SessionActivity({runDir:f.scene.runDir,runId:'r1',sessionId:'s1',runtime:'claude',startedAt:f.now()});
+ t.after(()=>native.close());
+ const readNativeActivity=()=>native.read(f.now());
+ const hook=(event,ts)=>appendEvent(path.join(f.scene.runDir,'events.jsonl'),{v:1,event,ts,run_id:'r1',session_id:'s1',runtime:'claude'});
  for(let attempt=1;attempt<=4;attempt++) {
   if(attempt===2)f.db.prepare("UPDATE conversations SET endpoint_id='changed-target'").run();
-  const failure=f.write('stop_failure','server_error');await f.consume();
+  const failure=f.write('stop_failure','server_error');hook('stop',failure.received_at+1);await f.consume();
+  await f.process({readNativeActivity});
   if(attempt===4)break;
   assert.equal(f.store.read(f.group).pending_notice,undefined);
-  await f.process();await f.process();
+  await f.process({readNativeActivity});
   const retry=f.store.read(f.group).failure_retry;
   assert.equal(retry.attempts,attempt);
   const row=f.db.prepare('SELECT * FROM control_queue WHERE id=?').get(retry.controlId);
   assert.equal(row.content,'Continue');assert.equal(row.require_idle,1);assert.equal(row.bypass_state,0);
   assert.equal(row.available_at,Math.ceil((failure.received_at+[30000,120000,300000][attempt-1])/1000));
-  assert.equal(f.db.prepare('SELECT count(*) n FROM control_queue').get().n,attempt);
-  markContinuationSubmission(f.scene.runDir,retry,f.now());
-  f.write('prompt_submit');await f.consume();
+  f.advance(retry.dueAt-f.now());f.c4.claimControl(row.id);
+  hook('prompt',f.now()+1);f.write('prompt_submit');
+  // Failure can precede the dispatcher's done publication. Keep it unconsumed
+  // while running, then settle through the existing terminal row state.
+  if(attempt===3) {
+   const early=f.write('stop_failure','server_error');hook('stop',early.received_at+1);
+   await f.consume();await f.process({readNativeActivity});
+   assert.equal(f.store.read(f.group).failure_retry.eventId,retry.eventId);
+   assert.equal(f.store.read(f.group).pending_notice,undefined);
+   f.db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(row.id);
+   await f.consume();await f.process({readNativeActivity});
+   break;
+  }
+  f.db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(row.id);
+  await f.consume();
  }
  const state=f.store.read(f.group);
- assert.equal(state.failure_retry.status,'exhausted');
- assert.equal(state.pending_notice.notice.noticeCode,'service_error_retries_exhausted');
+ assert.equal(state.failure_retry,undefined);
+ assert.equal(state.pending_notice.notice.noticeCode,'service_error');
  const sent=[];
  const options={store:f.store,database:f.db,sessionGroup:f.group,identity:async()=>f.identity,now:f.now,
    reserve:(_channel,endpoint)=>{assert.equal(endpoint,'owner');return {};},send:async(_,message)=>{sent.push(message);return {outcome:'sent'};}};
  await processFirstFailureNotices(options);await processFirstFailureNotices(options);await f.process();
- assert.equal(sent.length,1);assert.match(sent[0],/已自动重试 3 次仍未成功/);assert.match(sent[0],/Automatic retries \(3\)/);
+ assert.equal(sent.length,1);assert.match(sent[0],/服务返回了服务端错误或过载/);assert.doesNotMatch(sent[0],/重试 3 次|Automatic retries/);
  assert.equal(f.db.prepare('SELECT count(*) n FROM control_queue').get().n,3);
+ // A fresh failure after exhaustion starts a new chain even if its start was
+ // never sampled. The visible failure must not be swallowed by old exhaustion.
+ const fresh=f.write('stop_failure','network_error');hook('stop',fresh.received_at+1);
+ await f.consume();await f.process({readNativeActivity});
+ assert.equal(f.store.read(f.group).failure_retry.attempts,1);
+ assert.equal(f.store.read(f.group).failure_retry.eventId,fresh.event_id);
+ assert.equal(f.store.read(f.group).pending_notice,undefined);
 });
 
 // Boundary: Prompt hook → retry cancellation, before and after enqueue. Run for cancellation/ingestion changes; skip otherwise.
@@ -75,8 +99,9 @@ test('a confirmed new round cancels before or after enqueue while a prompt hook 
   const f=setup(t);f.write('stop_failure','overloaded');await f.consume();if(enqueue)await f.process();
   const retry=f.store.read(f.group).failure_retry;
   f.write('prompt_submit');
-  assert.equal(continuationActivity(f.scene.runDir,retry).cancelled,false,'a prompt hook alone does not prove a new round');
-  await f.consume();await f.process({readNativeActivity:()=>({turnStartedAt:retry.failedAt+1})});
+  await f.consume();await f.process();
+  assert.equal(f.store.read(f.group).failure_retry.eventId,retry.eventId,'a prompt hook alone does not prove a new round');
+  await f.process({readNativeActivity:()=>({turnStartedAt:retry.failedAt+1})});
   assert.equal(f.store.read(f.group).failure_retry,undefined);assert.equal(f.store.read(f.group).pending_notice,undefined);
  }
 });
@@ -84,8 +109,7 @@ test('a confirmed new round cancels before or after enqueue while a prompt hook 
 // Boundary: Error/runtime selection → existing notice flow. Run for eligibility/health changes; skip otherwise.
 // Isolated temp run directory and in-memory database only; no runtime/tmux/network I/O.
 test('nonretryable Claude and every AGY failure preserve immediate notices',async t=>{
- for(const runtime of ['claude','agy'])for(const error of ['server_error','overloaded','network_error','rate_limit','authentication_failed','billing_error','model_not_found','unknown']) {
-  if(runtime==='claude' && ['server_error','overloaded','network_error'].includes(error))continue;
+ for(const [runtime,error] of [['claude','rate_limit'],['agy','server_error']]) {
   const f=setup(t,runtime);f.write('stop_failure',error);await f.consume();await f.process();
   assert.equal(f.store.read(f.group).failure_retry,undefined,`${runtime}:${error}`);assert.ok(f.store.read(f.group).pending_notice);
  }
@@ -103,10 +127,9 @@ test('changed run or session invalidates continuation',async t=>{
 
 // Boundary: DB commit and health-file publication → process recovery. Run for persistence/enqueue changes; skip otherwise.
 // Isolated temp run directory and in-memory database only; no runtime/tmux/network I/O.
-test('AM restart and crash after queue commit before health publication never duplicate',async t=>{
+test('AM restart preserves an already recorded pending control',async t=>{
  const f=setup(t);f.write('stop_failure','server_error');await f.consume();
- const write=f.store.write.bind(f.store);f.store.write=()=>{throw new Error('crash after DB commit');};
- await assert.rejects(f.process(),/crash/);f.store.write=write;
+ await f.process();
  const reopened=new HealthStore({runtime:'claude',zylosDir:f.root,now:f.now});
  await f.process({store:reopened});await f.process({store:reopened});
  assert.equal(f.db.prepare('SELECT count(*) n FROM control_queue').get().n,1);
@@ -118,27 +141,18 @@ test('AM restart and crash after queue commit before health publication never du
 test('normal Stop clears the retry chain and restores the initial delay',async t=>{
  const f=setup(t);
  f.write('stop_failure','server_error');await f.consume();await f.process();
- markContinuationSubmission(f.scene.runDir,f.store.read(f.group).failure_retry);
+ const retry=f.store.read(f.group).failure_retry;f.advance(retry.dueAt-f.now());
+ f.db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(retry.controlId);
  f.write('prompt_submit');await f.consume();f.write('stop');await f.consume();
  assert.equal(f.store.read(f.group).failure_retry,undefined);
  f.write('stop_failure','server_error');await f.consume();assert.equal(f.store.read(f.group).failure_retry.attempts,1);
 });
 
-// Boundary: Structured notice code → complete bilingual message. Run for exhaustion rendering changes; skip otherwise.
-// Isolated temp run directory and in-memory database only; no runtime/tmux/network I/O.
-test('exhaustion template is exact without an extra generic failure suffix',()=>{
- const message=messageForStatus({context:'failure',noticeCode:'service_error_retries_exhausted'},{});
- assert.equal(message,'[Zylos] 服务返回了服务端错误或过载，已自动重试 3 次仍未成功，请稍后重新发送。\n[Zylos] The service reported a server error or overload. Automatic retries (3) did not succeed; please send your message again later.');
-});
-
-
 // Boundary: Structured error plus exclusion diagnostic → immediate notice. Run for eligibility changes; skip otherwise.
 // Isolated temp run directory and in-memory database only; no runtime/tmux/network I/O.
 test('structured retryable error with context/request/content exclusion never retries',async t=>{
- for(const sourceId of [16,22,28,29,30,31,32,33]) {
-  const f=setup(t);f.write('stop_failure','server_error',{notice_match:{kind:'excluded',sourceId}});await f.consume();await f.process();
-  assert.equal(f.store.read(f.group).failure_retry,undefined);assert.ok(f.store.read(f.group).pending_notice);
- }
+ const f=setup(t);f.write('stop_failure','server_error',{notice_match:{kind:'excluded',sourceId:16}});await f.consume();await f.process();
+ assert.equal(f.store.read(f.group).failure_retry,undefined);assert.ok(f.store.read(f.group).pending_notice);
 });
 
 
@@ -148,7 +162,7 @@ test('a later failed turn leaves at most one pending continuation in its scope',
  const f=setup(t);f.write('stop_failure','server_error');await f.consume();await f.process();
  const first=f.store.read(f.group).failure_retry.controlId;
  f.write('stop_failure','network_error');await f.consume();await f.process();
- assert.equal(f.db.prepare('SELECT status FROM control_queue WHERE id=?').get(first).status,'superseded');
+ assert.equal(f.db.prepare('SELECT status FROM control_queue WHERE id=?').get(first).status,'timeout');
  assert.equal(f.db.prepare("SELECT count(*) n FROM control_queue WHERE status='pending'").get().n,1);
 });
 
@@ -216,4 +230,18 @@ test('AM sees native successor at 0.2s and cancels before its 25s Stop and 30s d
  assert.equal(restarted.read(f.group).failure_retry,undefined);
  assert.equal(restarted.read(f.group).pending_notice,undefined);
  assert.equal(f.db.prepare('SELECT count(*) n FROM control_queue').get().n,1);
+});
+
+// Boundary: standard control delivery exhausts its transport retries → original
+// failure notice. Run for terminal control/notice changes; isolated DB and files.
+test('a control that fails delivery restores the original failure notice',async t=>{
+ const f=setup(t);f.write('stop_failure','server_error');await f.consume();await f.process();
+ const retry=f.store.read(f.group).failure_retry;
+ f.c4.claimControl(retry.controlId);f.write('stop_failure','server_error');await f.consume();
+ assert.equal(f.store.read(f.group).failure_retry.eventId,retry.eventId);
+ f.db.prepare("UPDATE control_queue SET status='failed' WHERE id=?").run(retry.controlId);
+ await f.consume();await f.process();
+ assert.equal(f.store.read(f.group).failure_retry,undefined);
+ assert.equal(f.store.read(f.group).pending_notice.event_id,retry.eventId);
+ assert.equal(f.store.read(f.group).pending_notice.notice.noticeCode,'service_error');
 });

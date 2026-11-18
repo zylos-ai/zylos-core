@@ -1,4 +1,3 @@
-import { continuationActivity } from './failure-continuation.js';
 import path from 'node:path';
 import { loadCoreModule } from './core-modules.js';
 const { EventLogReader } = await loadCoreModule('event-log.js');
@@ -7,8 +6,8 @@ import { readScopedHealthQuota } from './health-quota.js';
 
 /** Keep an uncommitted batch in memory; process restart replays F6 against F10 markers. */
 export class HealthEventReader {
-  constructor({coordinator,zylosDir,now=Date.now,warn=()=>{},createReader=file=>new EventLogReader(file,{warn}),quota}={}) {
-    Object.assign(this,{coordinator,zylosDir,now,createReader});this.streams=new Map();
+  constructor({coordinator,zylosDir,now=Date.now,warn=()=>{},createReader=file=>new EventLogReader(file,{warn}),quota,getControl=()=>null,expireControl=()=>{}}={}) {
+    Object.assign(this,{coordinator,zylosDir,now,createReader,getControl,expireControl});this.streams=new Map();
     this.quota=quota??((identity,scene)=>readScopedHealthQuota({identity,runDir:scene.runDir,runId:scene.runId,nowMs:now()}));
   }
   async consumeScene(scene,identity) {
@@ -25,9 +24,12 @@ export class HealthEventReader {
       if(event.type==='runtime_health' && event.runtime===scene.runtime) {
         const retry=scene.runtime==='claude' && ['stop','stop_failure'].includes(event.event)
           ? this.coordinator.store?.(scene.runtime).read(scene.sessionGroup).failure_retry : null;
-        const retryActivity=retry ? continuationActivity(scene.runDir,retry,{throughEventId:event.event_id,includeEnd:false}) : null;
+        const control=retry?.controlId ? this.getControl(retry.controlId) : null;
+        // A claimed control can still be before paste. Keep this terminal hook
+        // at the queue head until delivery settles, including across AM restart.
+        if(control?.status==='running')break;
         const result=await this.coordinator.consumeHook(scene.runtime,event,{identity,sessionGroup:scene.sessionGroup,quota:this.quota(identity,scene),runId:scene.runId,
-          retryActivity});
+          retryControl:control,expireControl:this.expireControl});
         results.push(result);
       }
       // A throwing atomic publication leaves this exact event at the head for retry.
