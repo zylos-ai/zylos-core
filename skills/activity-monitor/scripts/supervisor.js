@@ -133,8 +133,8 @@ export function createSupervisor(deps) {
   },readState:scene=>({...readActivity(scene),healthIdentity:scene.healthIdentity}),
     readScreen:scene=>scenes.readScreen(scene),matchScreen:deps.matchScreen,insertControl:db.insertControl,getControlById:db.getControlById,
     buildTargetBinding:scene=>scenes.bindTarget(scene),stop:(scene,validate)=>guardedAction(scene,current=>stopScene(current),validate?{requireOpen:true,validate}:{}),
-    // Migrated sessions share scoped recovery; targeting retains the injected mode snapshot.
-    readMode:async()=>legacyMode(await readMode())?'single':'multi',readScopeMode:readMode,getModeTransition:db.getModeTransition,getDrainFence:db.getDrainFence,manualPending,readMaintenance,
+    // Scoped health behavior is shared by both modes; only pre-migration runs use the machine path.
+    readMode:async()=>legacyMode(await readMode())?'single':'multi',getModeTransition:db.getModeTransition,getDrainFence:db.getDrainFence,manualPending,readMaintenance,
     resolveToolRule:deps.resolveToolRule,nudge:(scene,validate)=>nudgeSession({enqueue:async content=>{
       let result={ok:false};
       const check=current=>validate(current,{continuing:content==='continue'});
