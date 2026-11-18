@@ -866,6 +866,7 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .wb-memory-chart-label.wb-memory-chart-label-static { cursor: default; }
 .wb-memory-chart-label.wb-memory-chart-label-static:hover { text-decoration: none; }
 .wb-memory-chart-value { font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.wb-memory-budgets .wb-memory-chart-value { white-space: normal; overflow-wrap: anywhere; }
 .wb-memory-track { position: relative; display: flex; height: 8px; border-radius: 3px; background: var(--wb-off); }
 .wb-memory-fill { height: 100%; border-radius: 3px 0 0 3px; background: var(--text-dim); }
 .wb-memory-fill.warning { background: var(--wb-wait); }
@@ -965,6 +966,12 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 @media (max-width: 760px) {
   .wb-memory-summary:not([hidden]), .wb-memory-charts:not([hidden]) { padding: 10px 12px; }
   .wb-memory-chart-row { grid-template-columns: minmax(70px, 96px) minmax(40px, 1fr) auto; }
+  .wb-memory-budgets .wb-memory-chart-row { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+  .wb-memory-budgets .wb-memory-chart-label { grid-area: 1 / 1; }
+  .wb-memory-budgets .wb-memory-chart-value { grid-area: 1 / 2; text-align: right; }
+  .wb-memory-budgets .wb-memory-track { grid-area: 2 / 1 / auto / -1; }
+  .wb-memory-budgets .wb-memory-flags { grid-area: 3 / 1 / auto / -1; }
+
   .wb-memory-flags { grid-column: 1 / -1; }
   /* Phones: name, short bar and count on one 40px line; a long name wraps instead of being cut, and badges
      drop under the name only when they do not fit beside it. */

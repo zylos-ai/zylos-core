@@ -71,7 +71,8 @@ describe('dateInTimeZone', () => {
 // ---------------------------------------------------------------------------
 describe('BUDGETS', () => {
   it('contains identity.md budget', () => {
-    assert.equal(BUDGETS['identity.md'], 16 * 1024);
+    assert.ok(BUDGETS['identity.md'].maxChars > 0);
+    assert.ok(BUDGETS['identity.md'].maxTokens > 0);
   });
 
   it('does not impose a state.md budget', () => {
@@ -79,17 +80,17 @@ describe('BUDGETS', () => {
   });
 
   it('contains references.md budget', () => {
-    assert.equal(BUDGETS['references.md'], 16 * 1024);
+    assert.deepEqual(BUDGETS['references.md'], BUDGETS['identity.md']);
   });
 
   it('budgets only the startup files and reference indexes', () => {
     assert.deepEqual(Object.keys(BUDGETS).sort(), ['identity.md', 'reference/decisions/INDEX.md', 'reference/projects/INDEX.md', 'references.md']);
   });
 
-  it('all budget values are positive numbers', () => {
+  it('budget values have positive limits', () => {
     for (const [key, value] of Object.entries(BUDGETS)) {
-      assert.equal(typeof value, 'number', `${key} should be a number`);
-      assert.ok(value > 0, `${key} should be positive`);
+      if (typeof value === 'number') assert.ok(value > 0);
+      else assert.ok(value.maxChars > 0 && value.maxTokens > 0);
     }
   });
 });
@@ -98,8 +99,11 @@ describe('BUDGETS', () => {
 // WARN_THRESHOLDS
 // ---------------------------------------------------------------------------
 describe('WARN_THRESHOLDS', () => {
-  it('warns for references.md at 8KB', () => {
-    assert.equal(WARN_THRESHOLDS['references.md'], 8 * 1024);
+  it('warns for both startup files at 80% of each limit', () => {
+    for (const name of ['identity.md', 'references.md']) {
+      assert.equal(WARN_THRESHOLDS[name].chars, BUDGETS[name].maxChars * 0.8);
+      assert.equal(WARN_THRESHOLDS[name].estimatedTokens, BUDGETS[name].maxTokens * 0.8);
+    }
   });
 
   it('does not warn on state.md size', () => {
@@ -109,7 +113,8 @@ describe('WARN_THRESHOLDS', () => {
   it('every warn threshold is below its hard budget', () => {
     for (const [key, value] of Object.entries(WARN_THRESHOLDS)) {
       assert.ok(BUDGETS[key] !== undefined, `${key} must also have a hard budget`);
-      assert.ok(value < BUDGETS[key], `${key} warn threshold must be below budget`);
+      if (typeof value === 'number') assert.ok(value < BUDGETS[key]);
+      else assert.ok(value.chars < BUDGETS[key].maxChars && value.estimatedTokens < BUDGETS[key].maxTokens);
     }
   });
 });

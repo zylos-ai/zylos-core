@@ -200,8 +200,12 @@ Shared knowledge classification:
 Read an existing target before generating its replacement fragment. Check
 references for duplicated configuration values or narrative history; move the
 information into an allowed topic file and replace it with a pointer. `identity.md`
-and `references.md` each have a separate 16 KiB budget. `references.md` has an
-8 KiB warning threshold; audit it on the next Memory Sync when it exceeds that threshold.
+and `references.md` share the strictest startup display limits across all runtimes:
+check both characters and estimated tokens after reserving the worst-case startup
+framing. Use the [candidate-text budget API](references/memory-budget.md) before
+writing; do not copy its estimator or limits. At 80% of either dimension, audit
+the file on the next Memory Sync. Report warning and over-limit files through
+the existing audit path; do not send extra owner/system alerts or block writes.
 `reference/projects/INDEX.md` and `reference/decisions/INDEX.md` each have a
 16 KiB warning threshold and 32 KiB budget. These indexes are optional until
 created: `memory-status.js` prints `not created yet` without a missing-file

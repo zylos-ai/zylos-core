@@ -33,8 +33,14 @@ export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog, origi
   }
   async function budgets() {
     try {
-      const { BUDGETS, WARN_THRESHOLDS } = await loadBudgets();
-      return { limits: { ...BUDGETS }, warnings: { ...WARN_THRESHOLDS } };
+      const { BUDGETS, WARN_THRESHOLDS, measureMemoryText } = await loadBudgets();
+      const checks = {};
+      for (const file of ['identity.md', 'references.md']) {
+        try {
+          checks[file] = measureMemoryText(file, await fs.readFile(path.join(zylosDir, 'memory', file), 'utf8'));
+        } catch { checks[file] = null; }
+      }
+      return { limits: { ...BUDGETS }, warnings: { ...WARN_THRESHOLDS }, checks };
     } catch { return null; }
   }
   return async function getMemoryBacklog(at = now()) {

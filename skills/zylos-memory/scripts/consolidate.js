@@ -9,7 +9,7 @@
 import fs from 'fs';
 import path from 'path';
 import { isMainModule } from './is-main-module.js';
-import { MEMORY_DIR, SESSIONS_DIR, BUDGETS, WARN_THRESHOLDS, REFERENCE_FILES, walkFiles, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
+import { MEMORY_DIR, SESSIONS_DIR, BUDGETS, WARN_THRESHOLDS, measureMemoryText, REFERENCE_FILES, walkFiles, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 
 export function parseSessionDate(fileName) {
   const match = fileName.match(/^(\d{4}-\d{2}-\d{2})(?:-\d+)?\.md$/);
@@ -52,21 +52,15 @@ function coreBudgetChecks() {
   for (const [name, budget] of Object.entries(BUDGETS)) {
     const filePath = path.join(MEMORY_DIR, name);
     if (!fs.existsSync(filePath)) {
-      checks.push({ file: name, exists: false, budgetBytes: budget, overBudget: false });
+      checks.push({ file: name, exists: false, ...(typeof budget === 'number' ? { budgetBytes: budget } : budget), overBudget: false });
       continue;
     }
 
     const stat = fs.statSync(filePath);
-    const warnAt = WARN_THRESHOLDS[name] ?? null;
+    const check = measureMemoryText(name, fs.readFileSync(filePath, 'utf8'));
     checks.push({
-      file: name,
-      exists: true,
-      sizeBytes: stat.size,
-      budgetBytes: budget,
-      warnBytes: warnAt,
-      overBudget: stat.size > budget,
-      nearBudget: warnAt !== null && stat.size > warnAt && stat.size <= budget,
-      budgetUsagePct: Math.round((stat.size / budget) * 100),
+      file: name, exists: true, ...check,
+      overBudget: check.status === 'over', nearBudget: check.status === 'warning',
       modifiedAt: stat.mtime.toISOString()
     });
   }

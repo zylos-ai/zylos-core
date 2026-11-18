@@ -6,7 +6,7 @@
 import fs from 'fs';
 import path from 'path';
 import { isMainModule } from './is-main-module.js';
-import { MEMORY_DIR, BUDGETS, WARN_THRESHOLDS, OPTIONAL_BUDGET_FILES, walkFiles } from './shared.js';
+import { MEMORY_DIR, BUDGETS, measureMemoryText, OPTIONAL_BUDGET_FILES, walkFiles } from './shared.js';
 
 export function formatBytes(bytes) {
   if (bytes < 1024) {
@@ -47,19 +47,15 @@ function main() {
       continue;
     }
 
-    const pct = Math.round((info.sizeBytes / budget) * 100);
-    const warnAt = WARN_THRESHOLDS[name];
-    let status = 'OK';
-    if (info.sizeBytes > budget) {
-      status = 'OVER';
-      overBudgetCount += 1;
-    } else if (warnAt && info.sizeBytes > warnAt) {
-      status = 'WARN';
-      warnCount += 1;
-    }
-
+    const check = measureMemoryText(name, fs.readFileSync(path.join(MEMORY_DIR, name), 'utf8'));
+    if (check.status === 'over') overBudgetCount += 1;
+    if (check.status === 'warning') warnCount += 1;
+    const usage = typeof budget === 'number'
+      ? `${formatBytes(info.sizeBytes)} / ${formatBytes(budget)}`
+      : `${check.chars} / ${check.maxChars} chars; ${check.estimatedTokens} / ${check.maxTokens} estimated tokens`;
     const modified = info.modifiedAt.toISOString().slice(0, 16).replace('T', ' ');
-    lines.push(`${name}: ${formatBytes(info.sizeBytes)} / ${formatBytes(budget)} (${pct}%) [${status}] updated ${modified}`);
+    const status = { ok: 'OK', warning: 'WARN', over: 'OVER' }[check.status];
+    lines.push(`${name}: ${usage} (${check.budgetUsagePct}%) [${status}] updated ${modified}`);
   }
 
   const allFiles = walkFiles(MEMORY_DIR);

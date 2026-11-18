@@ -1,6 +1,8 @@
 export default {
   transform: {},
   testPathIgnorePatterns: [
+    '<rootDir>/test/memory-budget-browser.test.js',
+    '<rootDir>/test/memory-startup-budget.integration.test.js',
     '<rootDir>/test/dispatcher-startup.integration.test.js',
     '<rootDir>/test/instruction-deployment.integration.test.js',
     '<rootDir>/test/tmux-dashboard-reads.integration.test.js',

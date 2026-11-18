@@ -44,7 +44,7 @@ test('memory backlog uses Core thresholds and UTC ages for active groups only', 
   assert.deepEqual(result.groups.map(group => group.aged), [true, false, false]);
   assert.deepEqual(result.groups.map(group => group.syncing), [true, false, null]);
   assert.equal(result.groups[2].reason, 'backlog_failed');
-  assert.deepEqual(result.budgets, { limits: BUDGETS, warnings: WARN_THRESHOLDS });
+  assert.deepEqual(result.budgets, { limits: BUDGETS, warnings: WARN_THRESHOLDS, checks: { 'identity.md': null, 'references.md': null } });
 });
 
 test('the configured Origin Sync threshold goes to the cross-group row, never to Origin\'s own row', async t => {
@@ -316,7 +316,7 @@ test('memory backlog HTTP route shares the detail cache and accepts read scope',
   assert.equal(value.groups[0].threshold, 15);
   assert.deepEqual(value.originSync, { count: 60, pendingSummaries: 2, firstAt: '2026-10-01T11:00:00.000Z',
     aged: true, syncing: false, threshold: 50 });
-  assert.equal(value.budgets.limits['identity.md'], BUDGETS['identity.md']);
+  assert.deepEqual(value.budgets.limits['identity.md'], BUDGETS['identity.md']);
   assert.deepEqual(calls.slice(before).map(call => call.args[1]), [],
     'memory and group detail share the group and cross-group backlog caches');
   assert.equal(snapshotReads(), snapshotBefore + 1, 'memory asks the snapshot service to refresh active groups');

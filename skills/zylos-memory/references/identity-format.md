@@ -13,7 +13,7 @@ Always loaded at session start via SessionStart hook.
 
 ## Size Guideline
 
-~16KB (always in context).
+Use the [startup display budget](memory-budget.md): both character and estimated-token limits apply, with an audit warning at 80% of either. Passing the check guarantees the file fits the startup block. Over-limit files remain writable, but startup may display only a prefix.
 
 ## Update Frequency
 
