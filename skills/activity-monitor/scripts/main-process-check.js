@@ -17,10 +17,12 @@ import { belongsToPane, classifyHookProcess, readPaneProcess } from './pane-proc
 import { isMainModule } from './is-main-module.js';
 import { loadCoreModule } from './core-modules.js';
 import { TMUX_FORMAT } from '../../comm-bridge/scripts/tmux-protocol.js';
+import { tmuxClientArgs } from '../../comm-bridge/scripts/tmux-client-args.js';
 
-function readTmuxPanePid(target, exec) {
+function readTmuxPanePid(target, exec, env) {
+  const args = tmuxClientArgs({}, env);
   try {
-    const out = exec('tmux', ['display-message', '-p', '-t', target, TMUX_FORMAT.panePid], {
+    const out = exec('tmux', [...args, 'display-message', '-p', '-t', target, TMUX_FORMAT.panePid], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 3000,
     }).trim();
     return /^\d+$/.test(out) ? { panePid: Number(out) } : { panePid: null, error: 'unexpected tmux output' };
@@ -46,7 +48,7 @@ export async function checkMainProcess({
   let tmuxTarget = env.TMUX_PANE || null;
   try { tmuxTarget ??= env.ZYLOS_RUN_ID ? tmuxPaneTarget(tmuxNameForGroup(env.ZYLOS_SESSION_GROUP ?? 'origin')) : null; }
   catch { tmuxTarget = null; }
-  const tmux = tmuxTarget ? readTmuxPanePid(tmuxTarget, exec) : { panePid: null, error: 'no tmux target' };
+  const tmux = tmuxTarget ? readTmuxPanePid(tmuxTarget, exec, env) : { panePid: null, error: 'no tmux target' };
   // What the supervisor's READY check would conclude for a READY this process published.
   let runtime = null;
   try { runtime = JSON.parse(env.ZYLOS_MODEL_CONFIG).runtime ?? null; } catch { /* unknown */ }

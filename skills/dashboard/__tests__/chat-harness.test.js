@@ -8,6 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { runtimeMessages, runtimeAnswer } from './helpers/chat-runtime-messages.js';
 import { parseC4Content, validateAnswer } from '../../comm-bridge/scripts/c4-content-schema.js';
 import { chatEnabled, createChatSandbox, chatResourceCounts } from './helpers/chat-integration-harness.js';
+import { tmuxClientArgs } from '../../comm-bridge/scripts/tmux-client-args.js';
 
 let assertionCalls = 0;
 const assert = new Proxy(strictAssert, { get(target, key) {
@@ -22,6 +23,19 @@ test.after(() => console.log(`Chat harness direct assertion calls: ${assertionCa
 // ordinary product-only changes may skip them together with integration cases.
 const enabled = chatEnabled();
 const loop = fileURLToPath(new URL('./helpers/chat-runtime-loop.js', import.meta.url));
+
+// Fixture-only: read back private paths and shared client selection without
+// starting tmux, HTTP or a database. Run after socket policy/fixture changes;
+// ordinary product-only changes may skip it with the chat integration gate.
+test('chat sandbox socket agrees with shared clients and has private permissions', { skip: !enabled }, t => {
+  const sandbox = createChatSandbox(t);
+  const socketDirectory = path.join(sandbox.paths.tmp, `tmux-${process.getuid()}`);
+  assert.equal(sandbox.assertIsolation().socket, path.join(socketDirectory, 'default'));
+  assert.equal(fs.statSync(socketDirectory).mode & 0o777, 0o700);
+  assert.deepEqual(tmuxClientArgs({}, sandbox.env), ['-u', '-S', sandbox.paths.socket]);
+  assert.equal(fs.existsSync(sandbox.paths.socket), false);
+  assert.throws(() => sandbox.assertIsolation({ socket: path.join(sandbox.root, 'tmux.sock') }), { code: 'ERR_ASSERTION' });
+});
 
 test('chat gates reject absent switches before fixture allocation', () => {
   const before = chatResourceCounts();

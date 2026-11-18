@@ -34,19 +34,23 @@ export function createChatSandbox(t, { runtime = false, gateEnv = process.env, e
     assert.ok(gateEnv.TMPDIR && path.isAbsolute(gateEnv.TMPDIR), 'An explicit runner TMPDIR is required');
     parentTmp = fs.realpathSync(gateEnv.TMPDIR);
     const prefix = path.join(parentTmp, 'c-');
-    assert.ok(Buffer.byteLength(prefix + 'XXXXXX/tmux.sock') < 100, 'Runner TMPDIR must allow a short private socket');
+    assert.ok(Buffer.byteLength(prefix + `XXXXXX/tmp/tmux-${process.getuid()}/default`) < 100, 'Runner TMPDIR must allow a short private socket');
     root = fs.realpathSync(fs.mkdtempSync(prefix));
     starts.roots++;
   }
   const paths = {
     home: path.join(root, 'home'), zylos: path.join(root, 'instance'),
-    pm2: path.join(root, 'pm2'), tmp: path.join(root, 'tmp'), socket: path.join(root, 'tmux.sock'), parentTmp,
+    pm2: path.join(root, 'pm2'), tmp: path.join(root, 'tmp'), parentTmp,
   };
+  const socketDirectory = path.join(paths.tmp, `tmux-${process.getuid()}`);
+  paths.socket = path.join(socketDirectory, 'default');
   paths.c4Db = path.join(paths.zylos, 'comm-bridge/c4.db');
   paths.dashboardDb = path.join(paths.zylos, 'components/dashboard/dashboard.db');
   for (const directory of [paths.home, paths.zylos, paths.pm2, paths.tmp,
     path.dirname(paths.c4Db), path.dirname(paths.dashboardDb),
     path.join(paths.home, '.codex'), path.join(paths.home, '.claude')]) fs.mkdirSync(directory, { recursive: true });
+  fs.mkdirSync(socketDirectory, { recursive: true, mode: 0o700 });
+  fs.chmodSync(socketDirectory, 0o700);
   const env = {
     PATH: gateEnv.PATH || '/usr/bin:/bin', HOME: paths.home, ZYLOS_DIR: paths.zylos,
     PM2_HOME: paths.pm2, TMPDIR: paths.tmp, TMUX_TMPDIR: paths.tmp,

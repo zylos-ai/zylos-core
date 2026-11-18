@@ -7,7 +7,8 @@ use the same private socket directory. Explicit socket paths remain explicit.
 
 The configured root must be an absolute path resolving to an existing directory.
 Root symlinks, group-writable roots and system-owned roots such as `/tmp` are
-accepted, matching tmux's root policy. Zylos prepares the `tmux-<uid>` child with
+accepted. Unlike tmux, relative roots are rejected because services with different
+working directories would otherwise select different sockets. Zylos prepares the `tmux-<uid>` child with
 mode `0700`. An existing child must be a directory owned by the current user
 and have no other permission bits (`mode & 0007` must be zero); group permissions
 are allowed. A child symlink is not a directory for this check.

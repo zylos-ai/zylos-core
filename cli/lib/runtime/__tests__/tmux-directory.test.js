@@ -10,6 +10,7 @@ import * as helpers from '../tmux-helpers.js';
 import { listGroupTmuxSessions } from '../../session-group-paths.js';
 import { createTmuxSender } from '../../../../skills/comm-bridge/scripts/tmux-send-keys.js';
 import { isManagedClaudeProcess } from '../../../../skills/activity-monitor/scripts/runtime-generation.js';
+import { checkMainProcess } from '../../../../skills/activity-monitor/scripts/main-process-check.js';
 import { targetArgs, outerArgs } from '../../../../skills/dashboard/src/lib/observer-tmux-state.js';
 import { SessionAdapter } from '../session-adapter.js';
 import { settleLaunch } from '../session-launch.js';
@@ -88,12 +89,14 @@ test('system temporary root accepts shared permissions without touching system s
 });
 
 test('empty directory preserves unset socket selection without filesystem access', t => {
-  for (const method of ['realpathSync', 'statSync', 'lstatSync', 'mkdirSync']) {
+  const methods = ['realpathSync', 'statSync', 'lstatSync', 'mkdirSync'];
+  for (const method of methods) {
     t.mock.method(fs, method, () => assert.fail('empty directory must use the unset path'));
   }
   for (const options of [{}, { utf8: false }, { socketName: 'test' }, { socketPath: '/explicit/socket' }]) {
     assert.deepEqual(tmuxClientArgs(options, { TMUX_TMPDIR: '' }), tmuxClientArgs(options, {}));
   }
+  for (const method of methods) assert.equal(fs[method].mock.callCount(), 0, method);
 });
 
 test('socket directory owned by another user is rejected', t => {
@@ -128,6 +131,8 @@ for (const unsafe of [false, true]) test(`${unsafe ? 'unsafe' : 'missing'} direc
     () => targetArgs({}, 'list-sessions'), () => outerArgs({ outerSocket: '/unused' }, 'kill-server'),
   ];
   for (const action of sync) assert.throws(action, { code });
+  await assert.rejects(checkMainProcess({ env: { TMUX_TMPDIR: process.env.TMUX_TMPDIR, TMUX_PANE: '%1' },
+    readTrigger: () => null, exec }), { code });
   await assert.rejects(async () => runTmuxCommand(['list-sessions'], { binary: '/must-not-execute' }), { code });
   await assert.rejects(listGroupTmuxSessions({ exec }), { code });
   const adapter = new SessionAdapter({ tmux: { binary: '/must-not-execute' } });
@@ -140,6 +145,23 @@ for (const unsafe of [false, true]) test(`${unsafe ? 'unsafe' : 'missing'} direc
   assert.equal(cleaned, true);
   await assert.rejects(attachCommand({ exec, resolve: async () => ({ sessionGroup: 'origin', runtime: 'claude', live: { tmuxName: 'test' } }) }), { code });
   assert.equal(calls, 0);
+});
+
+test('main process diagnostic selects the guarded socket and preserves ordinary tmux errors', async t => {
+  const root = directory(t);
+  const env = { TMUX_TMPDIR: root, TMUX_PANE: '%1' };
+  let calls = 0;
+  const report = await checkMainProcess({ env, readTrigger: () => null, exec: (binary, args) => {
+    calls++;
+    assert.equal(binary, 'tmux');
+    assert.deepEqual(args, [...tmuxClientArgs({}, env), 'display-message', '-p', '-t', '%1', '#{pane_pid}']);
+    return '123\n';
+  }, readInfo: () => null });
+  assert.equal(report.basis.tmuxPanePid, 123);
+  assert.equal(calls, 1);
+  const failed = await checkMainProcess({ env, readTrigger: () => null,
+    exec: () => { throw Object.assign(Error('client failed'), { code: 'ENOENT' }); } });
+  assert.equal(failed.basis.tmuxError, 'ENOENT');
 });
 
 for (const code of ['TMUX_DIR_MISSING', 'TMUX_DIR_UNSAFE', 'TMUX_DIR_UNAVAILABLE']) test(`${code} survives read, guard and group-absence classification`, () => {
