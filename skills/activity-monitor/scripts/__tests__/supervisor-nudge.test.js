@@ -1,11 +1,19 @@
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createSupervisor } from '../supervisor.js';
 import { RestartRequestStore } from '../restart-request-store.js';
 import { NO_RESPONSE_SILENCE_MS, NO_RESPONSE_GRACE_MS, NO_RESPONSE_RETRY_MS } from '../supervisor-health-observer.js';
+
+// The real Escape/continue pair; the 500 ms gap it requests ends on the next event-loop turn.
+const nudgeModule = new URL('../../../../cli/lib/session-nudge.js', import.meta.url).href;
+const { nudgeSession } = await import(nudgeModule);
+mock.module(nudgeModule, { namedExports: { nudgeSession: options => nudgeSession({ ...options, delay: async milliseconds => {
+  assert.equal(milliseconds, 500);
+  await new Promise(resolve => setImmediate(resolve));
+} }) } });
+const { createSupervisor } = await import('../supervisor.js');
 
 const deferred = () => {
   let resolve;

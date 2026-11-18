@@ -50,7 +50,18 @@ for (const kind of ['different root', 'missing destination', 'nonzero exit', 'mi
     }
     const input = {schemaVersion:1, fromVersion:'0.9.6', installedRoot:f.coreDir, tempDir:f.root, zylosDir:f.root};
     const never = () => assert.fail('mutating pipeline must not run');
-    const result = await runUpgradeEntry(input, {
+    let entry = runUpgradeEntry, npmDeadline;
+    if (kind === 'npm timeout') {
+      // The hung npm child runs for real; it is given a short deadline after recording the one the entry requested.
+      const actual = await import('node:child_process');
+      t.mock.module('node:child_process', {namedExports:{...actual, spawnSync:(file, args, settings) => {
+        if (args?.[0] !== f.protectedNpmCli) return actual.spawnSync(file, args, settings);
+        npmDeadline = settings.timeout;
+        return actual.spawnSync(file, args, {...settings, timeout:200});
+      }}});
+      ({runUpgradeEntry:entry} = await import('../upgrade-entry.js?npm-timeout'));
+    }
+    const result = await entry(input, {
       maintenance:{discover:() => ({candidates:[], diagnostics:[], marker:null})},
       inspect:() => ({coreDir:f.coreDir, zylosDir:f.root, tempDir:f.root}), resolveNpm:() => f.protectedNpmCli,
       begin:never, savePackage:never, saveCode:never, prepare:never, install:never, finalize:never, recover:never,
@@ -67,7 +78,10 @@ for (const kind of ['different root', 'missing destination', 'nonzero exit', 'mi
     if (kind === 'missing CLI') assert.match(result.error, /npm exited with code 1/);
     if (kind === 'empty output' || kind === 'relative root') assert.match(result.error, /npm returned an empty or non-absolute global directory/);
     if (kind === 'spawn output failure') assert.match(result.error, /npm execution failed \(ENOBUFS\)/);
-    if (kind === 'npm timeout') assert.match(result.error, /npm timed out after 30 seconds/);
+    if (kind === 'npm timeout') {
+      assert.equal(npmDeadline, 30000);
+      assert.match(result.error, /npm timed out after 30 seconds/);
+    }
     assert.doesNotMatch(result.error, /private npm output|private npm error|\n\s+at /);
     assert.equal(result.transactionDir, undefined);
     assert.equal(result.rollback.attempted, false);
