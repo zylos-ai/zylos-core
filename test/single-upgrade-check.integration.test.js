@@ -44,7 +44,7 @@ test('single-session upgrade checks waiting work before /exit, at most 60 second
       await Promise.all(held.map(({ ended }) => ended));
     }
   });
-  const f = readyTmuxTarget(t, { prefix: 'single-upgrade-', mode: 'single', runtime: 'claude', packageRoot: repository });
+  const f = readyTmuxTarget(t, { prefix: 'single-upgrade-', mode: 'single', keyPresent: false, runtime: 'claude', packageRoot: repository });
   const oldEnv = { ...process.env };
   t.after(() => {
     for (const key of Object.keys(process.env)) if (!Object.hasOwn(oldEnv, key)) delete process.env[key];

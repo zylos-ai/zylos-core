@@ -38,7 +38,7 @@ setInterval(() => {}, 1000);
   const router = createRouter({ db: { ...db,
     getControlById: id => f.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id),
     expireTimedOutControls: () => 0, cleanupControlQueue: () => 0 },
-    now: () => clock, readSessionMode: () => ({ mode: 'single', keyPresent: true }),
+    now: () => clock, readSessionMode: () => ({ mode: 'single', keyPresent: false }),
     readLiveIdentity: group => scenes.readIdentity(group), readLiveIdentities: groups => scenes.readIdentities(groups), readCurrentSession: scenes.readReady,
     listGroupTmuxSessions: () => assert.fail('single does not list groups'),
     readRuntimeHealth: () => ({ health: 'ok', publicHealth: 'ok' }),
@@ -83,7 +83,7 @@ setInterval(() => {}, 1000);
 // sleeper is a controlled runtime process; no authenticated model is used.
 for (const json of [false, true]) {
   test(`single ${json ? 'JSON' : 'text'} stops before ledger settlement and restarts on the new baseline`, { timeout: 30000 }, async t => {
-    const f = readyTmuxTarget(t, { prefix: 'rt-m4-', mode: 'single', runtimeProcess: true });
+    const f = readyTmuxTarget(t, { prefix: 'rt-m4-', mode: 'single', keyPresent: false, runtimeProcess: true });
     f.tmux('new-session', '-d', '-s', 'fixture-keeper', 'sleep', '120');
     const configFile = path.join(f.root, '.zylos/config.json');
     const readConfig = () => JSON.parse(fs.readFileSync(configFile, 'utf8'));

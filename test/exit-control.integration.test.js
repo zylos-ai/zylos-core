@@ -58,7 +58,7 @@ const prompt=()=>process.stdout.write('\\x1b[2J\\x1b[H❯ ');prompt();process.st
     await t.test(`${runtime} ${scope} ${source}`, async t => {
       const mode = scope === 'single' ? 'single' : 'multi';
       const group = scope === 'group' ? 'telegram-exit-test' : 'origin';
-      fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ runtime, session_mode: mode }));
+      fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ runtime, ...(mode === 'multi' ? { session_mode: mode } : {}) }));
       const name = tmuxNameForGroup(group);
       t.after(() => { try { f.tmux('kill-session', '-t', name); } catch {} });
       let run = 0, identity;

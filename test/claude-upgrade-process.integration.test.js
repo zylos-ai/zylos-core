@@ -41,7 +41,7 @@ function isolatedEnvironment(t, failure = null) {
     fs.symlinkSync(path.join(repository, 'skills', skill), path.join(skills, skill));
   }
   fs.mkdirSync(path.join(zylos, '.zylos'));
-  fs.writeFileSync(path.join(zylos, '.zylos/config.json'), JSON.stringify({ session_mode: 'single' }));
+  fs.writeFileSync(path.join(zylos, '.zylos/config.json'), JSON.stringify({}));
   const database = path.join(zylos, 'comm-bridge/c4.db');
   console.log('Upgrade isolation:', JSON.stringify({ HOME: env.HOME, ZYLOS_DIR: env.ZYLOS_DIR,
     PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR, socket: path.join(tmp, 'tmux.sock'),

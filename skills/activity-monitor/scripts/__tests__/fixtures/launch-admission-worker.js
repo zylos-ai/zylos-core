@@ -32,12 +32,12 @@ const db = { ...store, getDb: () => sqlite, getControlById: id => sqlite.prepare
 const env = { ...process.env, HOME: root, ZYLOS_DIR: root };
 const tmux = { socketPath: tmuxSocket, binary, configFile: '/dev/null' };
 const reader = createSessionReader({ env, connectionOptions: tmux });
-const readMode = () => ({ mode: config().session_mode, keyPresent: true });
+const readMode = () => ({ mode: config().session_mode ?? 'single', keyPresent: Object.hasOwn(config(), 'session_mode') });
 if (role === 'm4') {
   const scenes = new SupervisorScenes({ env, connectionOptions: tmux, readMode });
   service = await startSupervisor({ env, db, scenes, now: () => clock, readMode,
-    readConfiguration: () => ({ mode: config().session_mode, runtime: 'claude', capacity: 4 }),
-    resolveTargetRuntime: group => db.resolveSessionLaunchConfig({ sessionGroup: group, sessionMode: config().session_mode }).runtime,
+    readConfiguration: () => ({ mode: readMode().mode, runtime: 'claude', capacity: 4 }),
+    resolveTargetRuntime: group => db.resolveSessionLaunchConfig({ sessionGroup: group, sessionMode: readMode().mode }).runtime,
     machineTasks: { tick() {}, stop() {} }, legacyStatus: { tick() {}, close() {} },
     sendAlert: async () => { throw new Error('external send forbidden'); }, log: value => trace('log', { value }),
     loopOptions: { schedule: () => 1, cancel() {} } });

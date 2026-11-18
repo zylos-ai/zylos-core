@@ -71,7 +71,7 @@ export function configFunctions({ read, write, snapshot, get, all, run, knownGro
     }),
     resolveSessionLaunchConfig: ({ sessionGroup, sessionMode }) => {
       const base = baseline();
-      if (sessionMode === 'single' && !base.keyPresent) return { runtime: base.runtime, mode: 'default' };
+      if (sessionMode === 'single' && (!base.keyPresent || sessionGroup === null)) return { runtime: base.runtime, mode: 'default' };
       if (!['single', 'multi'].includes(sessionMode)) throw dataError('SESSION_GROUP_INVALID', 'Invalid session mode');
       requireGroup(sessionGroup);
       return snapshot(c => modelValue(c, sessionGroup, runtimeValue(c, sessionGroup).runtime ?? base.runtime));

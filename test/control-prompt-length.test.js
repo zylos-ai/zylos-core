@@ -23,7 +23,7 @@ const delivered = (content, suffix) => `Meanwhile, ${content}${suffix}`;
 
 function longestAckSuffix(t) {
   const { store } = fixture(t, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'single' } }) });
-  const row = store.insertControl('probe');
+  const row = store.insertControl('probe', { sessionGroup: 'origin', ackDeadlineAt: Math.floor(Date.now() / 1000) + 300 });
   const suffix = row.content.slice('probe'.length);
   const match = suffix.match(/^ ---- ack via: node (\S+\/c4-control\.js) ack --id (\d+)$/);
   assert.ok(match, `unexpected ack suffix: ${suffix}`);

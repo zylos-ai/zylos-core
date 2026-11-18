@@ -13,6 +13,8 @@ test('native single resolves Origin overrides and retains other group launch cho
     const { store, db } = fixture(t, { readConfig: () => config === null ? { state: 'missing' } : { state: 'ok', config } });
     db.exec("INSERT INTO group_runtime_overrides VALUES('origin','codex'),('other','agy'); INSERT INTO group_model_overrides VALUES('origin','codex','model','high')");
     assert.equal(store.readBaseline().keyPresent, config !== null && Object.hasOwn(config, 'session_mode'));
+    assert.deepEqual(store.resolveSessionLaunchConfig({ sessionGroup: null, sessionMode: 'single' }),
+      { runtime: 'claude', mode: 'default' });
     assert.deepEqual(store.resolveSessionLaunchConfig({ sessionGroup: 'origin', sessionMode: 'single' }), config?.session_mode ?
       { runtime: 'codex', mode: 'override', model: 'model', effort: 'high' } : { runtime: 'claude', mode: 'default' });
     if (config?.session_mode) {
@@ -21,6 +23,15 @@ test('native single resolves Origin overrides and retains other group launch cho
       assert.deepEqual(store.resolveSessionLaunchConfig({ sessionGroup: 'origin', sessionMode: 'single' }), { runtime: 'claude', mode: 'default' });
     }
   }
+});
+
+test('native single rejects malformed launch groups while null keeps the baseline runtime', t => {
+  const { store } = fixture(t, { readConfig: () => ({ state: 'ok', config: { session_mode: 'single', runtime: 'agy' } }) });
+  assert.deepEqual(store.resolveSessionLaunchConfig({ sessionGroup: null, sessionMode: 'single' }), { runtime: 'agy', mode: 'default' });
+  for (const sessionGroup of [undefined, '', 0]) {
+    assert.throws(() => store.resolveSessionLaunchConfig({ sessionGroup, sessionMode: 'single' }), { code: 'SESSION_GROUP_INVALID' });
+  }
+  assert.throws(() => store.resolveSessionLaunchConfig({ sessionGroup: null, sessionMode: 'multi' }), { code: 'SESSION_GROUP_INVALID' });
 });
 
 test('native single rejects NULL controls and records Origin endings; legacy alone accepts NULL', t => {

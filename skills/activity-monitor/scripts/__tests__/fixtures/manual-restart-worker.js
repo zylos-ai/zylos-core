@@ -10,7 +10,7 @@ const Database = createRequire(new URL('../../../../comm-bridge/package.json', i
 const [socketPath, binary, mode, variant = ''] = process.argv.slice(2);
 const root = process.env.ZYLOS_DIR, database = new Database(path.join(root, 'comm-bridge/c4.db'));
 const runtime = JSON.parse(fs.readFileSync(path.join(root, '.zylos/config.json'))).runtime;
-const store = createStore(database, { readConfig: () => ({ state: 'ok', config: { runtime, session_mode: mode } }) });
+const store = createStore(database, { readConfig: () => ({ state: 'ok', config: { runtime, ...(mode === 'multi' ? { session_mode: mode } : {}) } }) });
 let busy = false, syncHeld = false, stopped = [], events = [], pauseRead = false, releaseRead;
 const barrier = name => { if (variant === name) { process.send({ barrier: name }); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0); } };
 const requestStore = new RestartRequestStore({ file: path.join(root, 'activity-monitor/restart-requests.json') });

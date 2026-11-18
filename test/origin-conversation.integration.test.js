@@ -57,8 +57,10 @@ async function setup(t, { mode }) {
   assert.ok(SKILLS_DIR.startsWith(previousRoot + path.sep));
   fs.mkdirSync(path.join(SKILLS_DIR, 'dashboard'), { recursive: true });
   const configFile = path.join(tm.dir, 'config.json');
-  const setMode = value => fs.writeFileSync(configFile, JSON.stringify({ runtime: 'claude', session_mode: value }));
-  const readMode = () => JSON.parse(fs.readFileSync(configFile, 'utf8')).session_mode;
+  // This covers the pre-migration unique session across mode changes. Native
+  // single startup is accepted after the bootstrap/adapter companion PR merges.
+  const setMode = value => fs.writeFileSync(configFile, JSON.stringify({ runtime: 'claude', ...(value === 'multi' ? { session_mode: value } : {}) }));
+  const readMode = () => JSON.parse(fs.readFileSync(configFile, 'utf8')).session_mode ?? 'single';
   setMode(mode);
   const databasePath = path.join(tm.dir, 'comm-bridge', 'c4.db');
   const f = fixture(t, { validateComponent: name => name === 'dashboard',
@@ -99,7 +101,7 @@ setInterval(()=>{},1000);
     getControlById: id => f.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id),
     expireTimedOutControls: () => 0, cleanupControlQueue: () => 0 };
   const deps = { db, now: () => clock,
-    readSessionMode: () => ({ mode: readMode(), keyPresent: true }),
+    readSessionMode: () => ({ mode: readMode(), keyPresent: Object.hasOwn(JSON.parse(fs.readFileSync(configFile, 'utf8')), 'session_mode') }),
     readLiveIdentity: sessions.readLiveIdentity, readLiveIdentities: sessions.readLiveIdentities,
     readCurrentSession: readReadyIdentity,
     listGroupTmuxSessions: () => listGroupTmuxSessions(tmux),

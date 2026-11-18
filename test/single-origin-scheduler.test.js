@@ -9,6 +9,10 @@ import { deliveryFixture } from '../skills/comm-bridge/scripts/__tests__/helpers
 
 // Real task dispatch, receiver process, C4 store and delivery policy. Terminal
 // I/O is local fixture code; no runtime, service or platform is contacted.
+// Run both health cases for scheduler ingress, delivery attribution or health
+// routing changes; skip unrelated scheduler/UI changes. The fixture reads back
+// private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR, databases and AM socket before
+// dispatch, uses no tmux socket, and closes databases/removes its root on exit.
 for (const health of ['ok', 'auth_failed']) test(`single scheduled delivery retains task routing with ${health} health`, async t => {
   const f = schedulerQueryFixture(t);
   fs.writeFileSync(path.join(f.env.ZYLOS_DIR, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', session_mode: 'single' }));

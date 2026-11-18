@@ -9,8 +9,8 @@ export function runControl(args) {
     resolve({ok:!error,output:(stdout || stderr || error?.message || '').trim()})));
 }
 export async function enqueueMachineControl(args, {readMode = readSessionMode, run = runControl} = {}) {
-  const {mode} = await readMode();
-  if (!['single','multi'].includes(mode)) throw new Error('Invalid session mode');
+  const {mode, keyPresent} = await readMode();
+  if (!['single','multi'].includes(mode) && !(mode === null && keyPresent === false)) throw new Error('Invalid session mode');
   if (args.includes('--group')) throw new Error('Machine controls cannot override their target');
-  return run([...args,...(mode === 'multi' ? ['--group','origin'] : [])]);
+  return run([...args,...(keyPresent ? ['--group','origin'] : [])]);
 }

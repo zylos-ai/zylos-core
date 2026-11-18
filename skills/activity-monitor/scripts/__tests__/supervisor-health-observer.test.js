@@ -12,7 +12,7 @@ function fixture(t) {
   let scenes=[{sessionGroup:'telegram:a',runtime:'claude',runId:randomUUID(),ready:true,present:true,sessionId:'session-a'}];
   const controls=[],stops=[],events=[],interrupts=[],fences=new Map(),errors=[];
   const coordinator=new RuntimeHealthCoordinator({zylosDir:root,now:()=>clock,readMode:()=>mode,resolveTargetRuntime:()=> 'claude',listScenes:()=>scenes});
-  const observer=new SupervisorHealthObserver({coordinator,now:()=>clock,listScenes:()=>scenes,readMode:()=>mode,
+  const observer=new SupervisorHealthObserver({coordinator,now:()=>clock,listScenes:()=>scenes,readMode:()=>mode,readScopeMode:()=>({mode,keyPresent:true}),
     readIdentity:g=>scenes.find(s=>s.sessionGroup===g),readState:()=>state,readScreen:()=>'',matchScreen:()=>matches,
     insertControl:(content,opts)=>{controls.push({id:controls.length+1,content,...opts,status:'pending'});return controls.at(-1);},
     getControlById:id=>controls[id-1],buildTargetBinding:s=>({runId:s.runId}),stop:async(s,validate)=>{if(!validate || await validate(s))stops.push(s);else return false;},
@@ -33,6 +33,23 @@ test('runtime coalescing prefers Origin and binds finite priority-zero recovery'
   const a=f.observer.requestProbe('claude'),b=f.observer.requestProbe('claude');assert.equal(a,b);await f.prepared();
   assert.equal(f.controls.length,1);assert.equal(f.controls[0].sessionGroup,'origin');assert.equal(f.controls[0].priority,0);assert.equal(f.controls[0].bypassState,true);assert.equal(f.controls[0].ackDeadlineAt,f.now()/1000+120);
   f.controls[0].status='done';await f.observer.tick();assert.equal((await a).recovered,true);assert.equal(f.health().health,'ok');
+});
+
+for (const keyPresent of [false, true]) test(`${keyPresent ? 'native' : 'legacy'} single heartbeat uses its active control scope`, async t => {
+  const f = fixture(t);
+  t.after(() => f.observer.shutdown());
+  f.setMode('single');
+  f.setScenes([{ ...f.scene(), sessionGroup: 'origin' }]);
+  f.observer.readScopeMode = () => ({ mode: 'single', keyPresent });
+  f.setHealth('rate_limited');
+  const probe = f.observer.requestProbe('claude');
+  await f.prepared();
+  assert.equal(f.controls.length, 1);
+  assert.equal(f.controls[0].sessionGroup, keyPresent ? 'origin' : null);
+  assert.equal(f.controls[0].targetBinding.runId, f.scene().runId);
+  f.controls[0].status = 'done';
+  await f.observer.tick();
+  assert.equal((await probe).recovered, true);
 });
 
 test('a newly registered rate-limit recovery probes its ready run without a second backoff', async t => {

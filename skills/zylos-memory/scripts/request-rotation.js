@@ -20,15 +20,18 @@ async function defaultDependencies() {
 export async function requestRotation({ reason = 'identity' } = {}, dependencies) {
   if (reason !== 'identity') throw failure('INVALID_INPUT', 'Only identity rotation is supported');
   const d = dependencies ?? await defaultDependencies();
-  const { mode } = await d.readSessionMode();
+  const { keyPresent } = await d.readSessionMode();
   if (await d.getModeTransition()) throw failure('TRANSITION_OPEN', 'A mode transition is in progress');
   const sessions = await d.listGroupTmuxSessions();
-  const targets = mode === 'multi' ? sessions.map(session => session.sessionGroup) : sessions.some(session => session.sessionGroup === 'origin') ? [null] : [];
+  const sessionGroup = (d.env ?? process.env).ZYLOS_SESSION_GROUP;
+  if (!sessionGroup && keyPresent) throw failure('CONTROL_TARGET_REQUIRED', 'A session group environment is required');
+  const target = sessionGroup || null;
+  const targets = sessions.some(session => session.sessionGroup === (target ?? 'origin')) ? [target] : [];
   const enqueued = [], skipped = [];
   try {
     for (const sessionGroup of targets) {
       let targetBinding = null;
-      if (mode === 'multi') {
+      if (sessionGroup !== null) {
         const live = await d.readLiveIdentity(sessionGroup);
         if (!live.present || !live.runId) {
           skipped.push({ sessionGroup, code: 'TARGET_NOT_RUNNING' });
