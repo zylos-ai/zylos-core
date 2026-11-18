@@ -306,8 +306,14 @@ async function upgradeRuntimeCli(reqId, config) {
   if (runtime === 'agy') {
     log(reqId, 'exec: agy update');
     try {
+      const { readLaunchDotenv } = await loadCoreModule('runtime/session-command.js');
+      const dotenvVars = readLaunchDotenv(config.zylosDir || path.join(os.homedir(), 'zylos'));
+      const env = { ...process.env, AGY_CLI_DISABLE_AUTO_UPDATE: 'true' };
+      const proxy = Object.hasOwn(dotenvVars, 'HTTPS_PROXY') ? dotenvVars.HTTPS_PROXY : process.env.HTTPS_PROXY;
+      if (proxy) env.HTTPS_PROXY = proxy;
+      else delete env.HTTPS_PROXY;
       const { stdout, stderr } = await execFileAsync('agy', ['update'], {
-        timeout: 300000, killSignal: 'SIGKILL', env: { ...process.env, AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
+        timeout: 300000, killSignal: 'SIGKILL', env,
       });
       log(reqId, `agy update done (${((stdout || '') + (stderr || '')).trim().slice(0, 200)})`);
       return { ok: true, message: 'Antigravity updated. Restart session to apply.',

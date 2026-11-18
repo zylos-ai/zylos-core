@@ -52,3 +52,40 @@ test('lost Antigravity replies say result unknown while explicit timeout stays i
     assert.match(formatActionResult({ messageKey: 'result.agy_updated' }, t), /Antigravity/);
   }
 });
+
+// Exercise the real action/upgrade path, with a private executable recording only
+// the fixture proxy value. No network or live runtime is used.
+test('Antigravity upgrade uses the session HTTPS_PROXY precedence', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-upgrade-proxy-'));
+  const calls = path.join(root, 'calls');
+  const saved = { PATH: process.env.PATH, HTTPS_PROXY: process.env.HTTPS_PROXY };
+  t.after(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  fs.writeFileSync(path.join(root, 'agy'), `#!${process.execPath}\nimport fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({args:process.argv.slice(2), hasProxy:Object.hasOwn(process.env,'HTTPS_PROXY'), proxy:process.env.HTTPS_PROXY})+'\\n'); console.log('updated');`, { mode: 0o755 });
+  process.env.PATH = root;
+  const cases = [
+    { id: 'dotenv-only', dotenv: 'export HTTPS_PROXY="http://dotenv.invalid:8080" # fixture\n', expected: 'http://dotenv.invalid:8080' },
+    { id: 'dotenv-wins', dotenv: 'HTTPS_PROXY=http://dotenv.invalid:8080\n', inherited: 'http://process.invalid:8081', expected: 'http://dotenv.invalid:8080' },
+    { id: 'process-only', inherited: 'http://process.invalid:8081', expected: 'http://process.invalid:8081' },
+    { id: 'neither' },
+    { id: 'empty-dotenv', dotenv: 'HTTPS_PROXY=\n', inherited: 'http://process.invalid:8081' },
+  ];
+  for (const entry of cases) {
+    if (entry.dotenv === undefined) fs.rmSync(path.join(root, '.env'), { force: true });
+    else fs.writeFileSync(path.join(root, '.env'), entry.dotenv);
+    if (entry.inherited === undefined) delete process.env.HTTPS_PROXY;
+    else process.env.HTTPS_PROXY = entry.inherited;
+    const result = await handleAction('upgrade-cc', { case: entry.id }, { runtime: 'agy', zylosDir: root });
+    assert.equal(result.ok, true, entry.id);
+    const recorded = JSON.parse(fs.readFileSync(calls, 'utf8').trim().split('\n').at(-1));
+    assert.deepEqual(recorded.args, ['update']);
+    assert.equal(recorded.hasProxy, entry.expected !== undefined, entry.id);
+    assert.equal(recorded.proxy, entry.expected, entry.id);
+  }
+  assert.equal(fs.readFileSync(calls, 'utf8').trim().split('\n').length, cases.length);
+});
