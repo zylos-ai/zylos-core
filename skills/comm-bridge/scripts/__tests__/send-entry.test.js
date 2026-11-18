@@ -111,7 +111,7 @@ test('absorbed reply reads transition and message atomically without reusing the
   const { api, store, db } = setup(t);
   const endpoint = 'a\'"$`\\\nroute';
   const row = store.insertConversation('in', 'demo', endpoint, 'incoming', { groupName: 'group' });
-  const { runId } = store.beginModeTransition('single', 'multi');
+  const { runId } = store.beginModeTransition('single', 'multi', { kind: 'first_migration' });
   store.setDrainFence('*'); store.absorbForTransition(runId);
   const original = api.getModeTransition;
   api.getModeTransition = options => { assert.equal(db.inTransaction, true); return original(options); };

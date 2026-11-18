@@ -230,7 +230,7 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
     setLookupUnavailable: value => { lookupUnavailable = value; },
     async convertToSingle() {
       sandbox.assertIsolation();
-      const { runId } = c4.beginModeTransition('multi', 'single');
+      const { runId } = c4.beginModeTransition('multi', 'single', { kind: 'first_migration' });
       c4.setDrainFence('*'); c4.absorbForTransition(runId);
       const coordinator = new ModeSwitchCoordinator({ db: c4, readMode: () => ({ mode: readMode() }),
         convert: createModeSwitchConverter({ db: c4, zylosDir: zylos }),

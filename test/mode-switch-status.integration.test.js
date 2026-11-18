@@ -49,7 +49,7 @@ test('status observes completed through reader and new instance null without wri
   const { root, filename, database, store } = fixture();
   let data = await readSessionModeStatus(statusOptions(root));
   expect(data.transition).toBeNull(); expect(data.lastCompleted).toBeNull(); expect(data.globalGate.present).toBe(false);
-  const { runId } = store.beginModeTransition('single', 'multi'); store.setDrainFence('*');
+  const { runId } = store.beginModeTransition('single', 'multi', { kind: 'first_migration' }); store.setDrainFence('*');
   store.absorbForTransition(runId); store.setModeTransitionPhase(runId, 'cutover'); store.setModeTransitionPhase(runId, 'complete');
   database.close(); const before = fs.readFileSync(filename);
   data = await readSessionModeStatus(statusOptions(root));

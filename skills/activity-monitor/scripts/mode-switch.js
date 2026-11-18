@@ -57,7 +57,7 @@ export class ModeSwitchCoordinator {
     if (current !== source) throw failure('TRANSITION_PRECONDITION', 'Session mode changed before transition admission');
     if ((await this.db.listDrainFences()).some(fence => fence.reason === 'delete')) return { ok: false, code: 'deletion_in_progress' };
     let runId;
-    try { ({ runId } = await this.db.beginModeTransition(source, request.target)); }
+    try { ({ runId } = await this.db.beginModeTransition(source, request.target, { kind: 'first_migration' })); }
     catch (error) { if (error.code === 'DELETION_IN_PROGRESS') return { ok: false, code: 'deletion_in_progress' }; throw error; }
     this.event('transition_begin', { run_id: runId, phase: 'gating' }, { source, target: request.target });
     return { ok: true, result: 'accepted', runId };
@@ -76,7 +76,7 @@ export class ModeSwitchCoordinator {
     if (value.keyPresent !== false || modeOf(value) !== 'single' || await this.legacyPresent()) return;
     if ((await this.readRequests()).some(request => request.reason === 'manual_restart')) return;
     if ((await this.db.listDrainFences()).some(fence => fence.reason === 'delete')) return;
-    const { runId } = await this.db.beginModeTransition('single', 'multi');
+    const { runId } = await this.db.beginModeTransition('single', 'multi', { kind: 'first_migration' });
     this.event('auto_migration_begin', { run_id: runId, phase: 'gating' });
   }
 
@@ -155,8 +155,7 @@ export class ModeSwitchCoordinator {
       // attempt that may fail again, or each tick would emit block/unblock.
       if (row.reason !== null && row.reason !== undefined) this.event('transition_unblocked', committed, { reason: null });
       this.lastReasons.set(row.run_id, null);
-      this.event('transition_cutover', committed, { phase: 'cutover', reason: null,
-        ...(committed.cutoverCoverage ? { ...committed.cutoverCoverage, checkpointWritten: false } : {}) });
+      this.event('transition_cutover', committed, { phase: 'cutover', reason: null });
       return null;
     }
     if (this.attempt?.runId === row.run_id) return this.attempt;

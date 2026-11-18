@@ -24,7 +24,7 @@ function fixture(source = 'single', suffix = '') {
   db.pragma('journal_mode = WAL');
   const put = (relative, body) => { const file = path.join(root, 'memory', relative); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, body); return file; };
   const add = (group = 'a', body = 'message', endpoint = 'e') => store.insertConversation('in', 'foo', endpoint, body, { groupName: group });
-  const begin = () => { const { runId } = store.beginModeTransition(source, source === 'single' ? 'multi' : 'single'); store.setDrainFence('*'); store.absorbForTransition(runId); return store.getModeTransition(); };
+  const begin = () => { const { runId } = store.beginModeTransition(source, source === 'single' ? 'multi' : 'single', { kind: 'first_migration' }); store.setDrainFence('*'); store.absorbForTransition(runId); return store.getModeTransition(); };
   const read = relative => fs.readFileSync(path.join(root, 'memory', relative), 'utf8');
   return { root, db, store, put, add, begin, read, convert: options => createModeSwitchConverter({ db: store, zylosDir: root, ...options }) };
 }
@@ -149,7 +149,7 @@ test('successive reverse conversions retain old handoff entrypoints without clai
   const f = fixture(); f.add(); f.put('state.md', 'old single'); f.put('handoff.md', 'uncompleted single handoff');
   const first = f.begin(); const a = f.convert()(first);
   f.store.setModeTransitionPhase(first.run_id, 'cutover'); f.store.setModeTransitionPhase(first.run_id, 'complete');
-  const secondRun = f.store.beginModeTransition('multi', 'single'); f.store.setDrainFence('*'); f.store.absorbForTransition(secondRun.runId); const second = f.store.getModeTransition();
+  const secondRun = f.store.beginModeTransition('multi', 'single', { kind: 'first_migration' }); f.store.setDrainFence('*'); f.store.absorbForTransition(secondRun.runId); const second = f.store.getModeTransition();
   const b = f.convert()(second); assert.ok(b.materials.includes(a.handoff));
   assert.match(fs.readFileSync(b.handoff, 'utf8'), /fixed paths from multiple generations have ambiguous identities/);
   assert.equal(f.read(`mode-switch/${second.run_id}/previous/_global/handoff.md`), 'uncompleted single handoff');

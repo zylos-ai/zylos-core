@@ -12,7 +12,7 @@ function fixture(t) {
   return { db, store, query: createQueryHandlers(store) };
 }
 function absorb(store, from = 'single', to = 'multi') {
-  const { runId } = store.beginModeTransition(from, to); store.setDrainFence('*'); store.absorbForTransition(runId); return runId;
+  const { runId } = store.beginModeTransition(from, to, { kind: 'first_migration' }); store.setDrainFence('*'); store.absorbForTransition(runId); return runId;
 }
 const decodeE = text => text.replace(/\\(\\|n|r|t|x[0-9a-f]{2}|u[0-9a-f]{4})/g, (_, token) => ({ '\\': '\\', n: '\n', r: '\r', t: '\t' }[token] ?? String.fromCharCode(parseInt(token.slice(1), 16))));
 
@@ -197,7 +197,7 @@ test('limits and conflicting or removed query options are rejected', t => {
 test('gating is empty; summary scope order and single target aggregation follow D9', t => {
   const { store, query } = fixture(t);
   for (const groupName of ['z', 'A', 'z']) store.insertConversation('in', 'foo', 'e', 'x', { groupName });
-  const { runId } = store.beginModeTransition('single', 'multi');
+  const { runId } = store.beginModeTransition('single', 'multi', { kind: 'first_migration' });
   assert.equal(JSON.parse(query.absorbed({ runId, json: true })).data.total, 0);
   store.setDrainFence('*'); store.absorbForTransition(runId);
   const summary = JSON.parse(query.absorbed({ runId, summary: true, json: true })).data;

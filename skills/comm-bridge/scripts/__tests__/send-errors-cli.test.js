@@ -38,7 +38,7 @@ for (const absorbed of [false, true]) {
         let args = ['demo', endpoint, '--stdin'];
         if (absorbed) {
           const row = f.store.insertConversation('in', 'demo', endpoint, 'original request');
-          const { runId } = f.store.beginModeTransition('single', 'multi');
+          const { runId } = f.store.beginModeTransition('single', 'multi', { kind: 'first_migration' });
           f.store.setDrainFence('*');
           f.store.absorbForTransition(runId);
           args = ['--absorbed-reply', runId, String(row.id)];

@@ -30,7 +30,7 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
     }
     return gap === null ? get(c, `SELECT COALESCE(MAX(id),?) AS n FROM conversations WHERE id>?${f.sql}`, start, start, ...f.args).n : gap - 1;
   }
-  function checkpoint(c, group, end, summary, { noContent = false, cutover = false } = {}) {
+  function checkpoint(c, group, end, summary, { noContent = false } = {}) {
     requireGroup(group, { global: true });
     if (!Number.isSafeInteger(end) || end < 0) throw dataError('INVALID_ARGS', 'end must be a nonnegative integer');
     const covered = coverage(c, group), f = scope(group);
@@ -39,7 +39,7 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
     if (get(c, `SELECT 1 FROM conversations WHERE id>? AND id<=?${gapScope.sql} AND direction='in' AND status NOT IN ('delivered','failed','switch_absorbed') LIMIT 1`, covered, end, ...gapScope.args)) throw dataError('CHECKPOINT_GAP', 'Checkpoint crosses unfinished input');
     const head = get(c, `SELECT COALESCE(MAX(id),0) AS n FROM conversations WHERE 1${f.sql}`, ...f.args).n;
     if (end > head) throw dataError('CHECKPOINT_BEYOND_HEAD', 'Checkpoint exceeds message head');
-    if (noContent ? summary !== null && summary !== undefined : typeof summary !== 'string' || (!cutover && summary.length === 0)) throw dataError('SUMMARY_INVALID', 'Summary and noContent do not agree');
+    if (noContent ? summary !== null && summary !== undefined : typeof summary !== 'string' || summary.length === 0) throw dataError('SUMMARY_INVALID', 'Summary and noContent do not agree');
     const previous = get(c, 'SELECT COALESCE(end_conversation_id,0) AS n FROM checkpoints WHERE session_group=? ORDER BY id DESC LIMIT 1', group);
     const base = baseline(c);
     const start = group === '*' ? (previous?.n ?? 0) + 1 : previous && previous.n > base ? previous.n + 1 : get(c, 'SELECT MIN(id) AS n FROM conversations WHERE session_group=? AND id>?', group, base).n;

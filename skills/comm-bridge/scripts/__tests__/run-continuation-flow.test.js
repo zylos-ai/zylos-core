@@ -72,7 +72,7 @@ test('mode cutover clears pending restart markers through the normal coordinator
   assert.deepEqual(f.db.recordRunEnd('team', { runId: 'old-run', reason: 'unexpected' }), { recorded: true });
   f.db.recordRunEnd('origin', { runId: 'old-origin', reason: 'unexpected' });
   assert.equal(f.db.listRunEndings(['team', 'origin']).filter(row => row.continuationPending).length, 2);
-  const { runId } = f.db.beginModeTransition('multi', 'single');
+  const { runId } = f.db.beginModeTransition('multi', 'single', { kind: 'first_migration' });
   f.db.setDrainFence('*');
   f.db.absorbForTransition(runId);
   const coordinator = new ModeSwitchCoordinator({ db: f.db, readMode: () => ({ mode: 'multi' }),
@@ -95,7 +95,7 @@ test('upgrade reclaim finishes during gating without creating a continuation bef
   const group = message.session_group, runId = 'upgrade-run';
   f.put(group, { sessionGroup: group, runId, processRunning: false });
   f.db.setDrainFence(group, { reason: 'upgrade', runId });
-  const transition = f.db.beginModeTransition('multi', 'single');
+  const transition = f.db.beginModeTransition('multi', 'single', { kind: 'first_migration' });
   let mode = 'multi';
   const stops = [], conversions = [], writes = [], restarts = [];
   const observe = async () => [...f.scene.values()];

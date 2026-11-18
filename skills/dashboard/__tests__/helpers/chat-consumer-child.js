@@ -195,7 +195,7 @@ try {
   outlets.push('direct insert text/JSON receipt');
   // Genuine mode-switch absorption and conversion, without launching a runtime.
   for (const content of [contents[1], contents[2], contents[3]]) store.insertConversation('in', 'dashboard', 'alpha', content, { groupName: 'alpha' });
-  const { runId } = store.beginModeTransition('multi', 'single'); store.setDrainFence('*'); store.absorbForTransition(runId);
+  const { runId } = store.beginModeTransition('multi', 'single', { kind: 'first_migration' }); store.setDrainFence('*'); store.absorbForTransition(runId);
   const absorbed = store.getAbsorbedConversations(runId);
   eq(absorbed.length, 3);
   for (const json of [false, true]) {
@@ -229,7 +229,7 @@ try {
   // branch. This is test-data setup, not a product insert bypass.
   const legacy = store.insertConversation('out', 'system', null, contents[1]);
   database.prepare("UPDATE conversations SET session_group='' WHERE id=?").run(legacy.id);
-  const reverse = store.beginModeTransition('single', 'multi'); store.setDrainFence('*'); store.absorbForTransition(reverse.runId);
+  const reverse = store.beginModeTransition('single', 'multi', { kind: 'first_migration' }); store.setDrainFence('*'); store.absorbForTransition(reverse.runId);
   const converted = createModeSwitchConverter({ db: store, zylosDir: instance })({ run_id: reverse.runId });
   const ungrouped = path.join(instance, 'memory/mode-switch', reverse.runId, 'ungrouped.md');
   ok(converted.materials.includes(ungrouped));

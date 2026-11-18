@@ -79,7 +79,39 @@ test('internal cleanup rejects absent or ineligible transitions without changing
   const { runId } = store.beginModeTransition('multi', 'single');
   const before = db.prepare('SELECT * FROM conversations').all();
   for (const id of [undefined, null, '', 'absent', runId]) assert.throws(() => store.voidInternalForSingle(id), { code: 'TRANSITION_PRECONDITION' });
+  db.prepare("UPDATE mode_transitions SET kind='first_migration',phase='cutover' WHERE run_id=?").run(runId);
+  assert.throws(() => store.voidInternalForSingle(runId), { code: 'TRANSITION_PRECONDITION' });
   assert.deepEqual(db.prepare('SELECT * FROM conversations').all(), before);
+});
+
+test('native single cutover voids only other pending internal input and handles later arrivals', t => {
+  const { store, db } = fixture(t);
+  const { runId } = store.beginModeTransition('multi', 'single');
+  store.setModeTransitionPhase(runId, 'cutover');
+  const insert = db.prepare('INSERT INTO conversations(direction,channel,content,status,session_group) VALUES(?,?,?,?,?)');
+  const rows = [
+    ['in', 'internal', 'pending', 'a'],
+    ['in', 'internal', 'pending', 'b'],
+    ['in', 'internal', 'pending', 'origin'],
+    ['in', 'telegram', 'pending', 'a'],
+    ['out', 'internal', 'pending', 'a'],
+    ...['running', 'delivered', 'failed', 'switch_absorbed'].map(status => ['in', 'internal', status, 'a']),
+  ].map(([direction, channel, status, group], index) => {
+    const id = Number(insert.run(direction, channel, `message-${index}`, status, group).lastInsertRowid);
+    return db.prepare('SELECT * FROM conversations WHERE id=?').get(id);
+  });
+  const voided = rows.slice(0, 2).map(row => row.id);
+  assert.deepEqual(store.voidInternalForSingle(runId).map(row => row.id).sort((a, b) => a - b), voided);
+  for (const row of rows) {
+    assert.deepEqual(db.prepare('SELECT * FROM conversations WHERE id=?').get(row.id), voided.includes(row.id)
+      ? { ...row, status: 'failed', delivery_action: 'switch_voided' } : row);
+  }
+  assert.deepEqual(store.voidInternalForSingle(runId), []);
+  const later = Number(insert.run('in', 'internal', 'later', 'pending', 'c').lastInsertRowid);
+  assert.deepEqual(store.voidInternalForSingle(runId), [{ id: later }]);
+  assert.deepEqual(db.prepare('SELECT status,delivery_action FROM conversations WHERE id=?').get(later),
+    { status: 'failed', delivery_action: 'switch_voided' });
+  assert.deepEqual(store.voidInternalForSingle(runId), []);
 });
 
 for (const keepOrigin of ['all', 'role', undefined]) {

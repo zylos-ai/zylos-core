@@ -117,7 +117,7 @@ test('agent hint stays absent from stored messages, Dashboard history, search, e
     runC4Db: async () => ({ ok: true, data: query.groups() }) });
   const list = await names.listNames({ unnamed: true });
   assert.equal(list.length, 1); assert.equal(list[0].preview.text, before);
-  const { runId } = store.beginModeTransition('single', 'multi');
+  const { runId } = store.beginModeTransition('single', 'multi', { kind: 'first_migration' });
   // Absorb a fresh pending row to exercise the real full-field export path.
   const pending = store.insertConversation('in', 'dashboard', 'other', before, { groupName: 'other' });
   store.setDrainFence('*'); store.absorbForTransition(runId);
