@@ -602,9 +602,6 @@ test('HTTP history routes enforce access before reading and reject ambiguous que
   for (const suffix of ['tab=external&ids=1&ids=3', 'tab=external&ids=1,1', 'tab=external&ids=1x', 'tab=external&ids=', 'tab=external&ids=999'])
     assert.ok((await request(`/api/chat/conversations/${id}/status?${suffix}`)).status >= 400);
   assert.equal((await request('/api/chat/conversations/%E0%A4%A/messages?tab=external')).status, 400);
-  config.auth.enabled = false;
-  const before = reads;
-  assert.equal((await request(routes[0])).status, 403); assert.equal(reads, before);
   if (process.env.DASHBOARD_CHAT_HISTORY_EVIDENCE) {
     fs.mkdirSync(path.dirname(process.env.DASHBOARD_CHAT_HISTORY_EVIDENCE), { recursive: true });
     fs.writeFileSync(process.env.DASHBOARD_CHAT_HISTORY_EVIDENCE, JSON.stringify(observations, null, 2));

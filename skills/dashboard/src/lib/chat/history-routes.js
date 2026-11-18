@@ -26,7 +26,7 @@ export async function handleChatHistory(req, res, url, { auth, config, history, 
     if (match[2] === 'activity' && !activity) { sendJson(res, 404, { error: 'not_found' }); return true; }
     const result = match[2] === 'activity' ? await activity.activity(id, options) : match[2] ? history[match[2]](id, options) : history.list(options);
     if (!match[2] || match[2] === 'messages') result.tz = await readInstanceTz(instanceTz);
-    if (!match[2]) result.deletionAllowed = canDeleteConversations(req, auth, config);
+    if (!match[2]) result.deletionAllowed = canDeleteConversations(req, auth);
     sendJson(res, 200, result);
   } catch (error) {
     sendJson(res, error.statusCode || 502, { error: error.code || 'chat_history_unavailable' });

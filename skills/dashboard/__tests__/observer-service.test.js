@@ -18,7 +18,7 @@ import { shutdownDashboardTransports } from '../src/lib/dashboard-shutdown.js';
 const LEASE_ID = 'a'.repeat(32);
 
 // `config` defaults to remote access allowed, so API key cases elsewhere test their own concern.
-function fixture({ authEnabled = true, deferUpstream = false, initialDisplay = null, sizeMonitor, resizeAgent, starting = false, managerFactory,
+function fixture({ deferUpstream = false, initialDisplay = null, sizeMonitor, resizeAgent, starting = false, managerFactory,
   config = { chat: { allowRemote: true } } } = {}) {
   const context = { kind: 'cookie', principalId: 'browser', scope: 'admin' };
   const otherContext = { kind: 'cookie', principalId: 'other-browser', scope: 'admin' };
@@ -65,7 +65,6 @@ function fixture({ authEnabled = true, deferUpstream = false, initialDisplay = n
     async shutdown() { return { stopped: true }; },
   };
   const authGate = {
-    enabled: authEnabled,
     resolveAuthContext(req) {
       if (req.headers.cookie === 'admin=1') return context;
       if (req.headers.cookie === 'admin=2') return otherContext;
@@ -152,13 +151,13 @@ async function startHttp(service) {
   return { server, origin, close: () => new Promise((resolve) => server.close(resolve)) };
 }
 
-test('Observer HTTP surface fails closed without Dashboard authentication', async () => {
-  const { service } = fixture({ authEnabled: false });
+test('Observer HTTP surface fails closed without credentials', async () => {
+  const { service } = fixture();
   const app = await startHttp(service);
   try {
     const response = await fetch(`${app.origin}/api/observer/status`);
     assert.equal(response.status, 401);
-    assert.deepEqual(await response.json(), { ok: false, error: { code: 'auth_required', message: 'auth_required' } });
+    assert.deepEqual(await response.json(), { ok: false, error: { code: 'unauthorized', message: 'unauthorized' } });
   } finally { await app.close(); }
 });
 

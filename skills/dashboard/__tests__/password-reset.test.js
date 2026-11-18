@@ -187,10 +187,10 @@ try { const now=Date.now(); db.prepare('INSERT INTO auth_sessions(token_hash,cre
   }
 });
 
-// Official CLI/config/login integration; run for reset auth-enabled semantics,
+// Official CLI/config/login integration; run for reset or sign-in semantics,
 // skip unrelated UI. fixture owns HOME/ZYLOS_DIR/PM2_HOME/short temp/socket and
 // config; PM2 is private, HTTP closes per call, child has a 10-second deadline.
-test('password reset explicitly enables login for a previously disabled configuration', async t => {
+test('password reset on a config that still turns sign-in off sets a password that signs in', async t => {
   const f = fixture(t);
   writeConfig(f, { port: 3491, auth: { enabled: false }, extra: 'preserved' });
   const reset = spawnSync(process.execPath, [cli, 'dashboard', 'reset-password'], {
@@ -198,7 +198,7 @@ test('password reset explicitly enables login for a previously disabled configur
   assert.equal(reset.status, 0, reset.stderr);
   const password = reset.stdout.match(/Password: ([a-f0-9]{32})/)?.[1]; assert.ok(password);
   const config = JSON.parse(fs.readFileSync(f.config, 'utf8'));
-  assert.equal(config.auth.enabled, true); assert.equal(config.extra, 'preserved');
+  assert.equal(config.auth.enabled, false); assert.equal(config.extra, 'preserved');
   assert.equal(await passwordAccepted(f.env.ZYLOS_DIR, password), true);
   assertNoPlaintext(f.root, password);
 });

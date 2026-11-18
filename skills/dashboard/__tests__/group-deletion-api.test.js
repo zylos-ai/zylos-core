@@ -47,8 +47,6 @@ test('deletion preview admits only password owner cookies including against admi
   assert.equal(f.calls[0].options.actor, `dashboard:${sha(cookie)}`);
   f.config.auth.password = null;
   assert.equal((await call(f.handler, path)).status, 403);
-  f.config.auth.password = 'scrypt:configured'; f.config.auth.enabled = false;
-  assert.equal((await call(f.handler, path)).status, 403);
 });
 
 test('deletion requires same origin and explicit confirmation bound to an operation', async t => {

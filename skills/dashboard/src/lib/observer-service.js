@@ -123,7 +123,6 @@ export class ObserverService {
   }
 
   _authContext(req, { requireOrigin = false, requireAdmin = true } = {}) {
-    if (!this.authGate.enabled) throw new ObserverHttpError(401, 'auth_required');
     const context = req._authContext || this.authGate.resolveAuthContext(req);
     if (!context) throw new ObserverHttpError(401, 'unauthorized');
     // The switch is checked before the key scope, in the same order as conversation access.

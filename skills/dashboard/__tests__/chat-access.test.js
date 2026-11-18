@@ -73,40 +73,13 @@ test('the Origin conversation is writable in both modes and remotely only with t
   }
 });
 
-// Integration: private HTTP fixture, run for auth-disabled handling changes;
+// Integration: private HTTP fixture, run for sign-in handling changes;
 // skip visual changes. Resource lifecycle is owned by fixture teardown.
-test('missing authentication and disabled authentication never authorize chat', async t => {
+test('chat requires credentials even when the config still sets auth.enabled to false', async t => {
   const f = await chatHttpFixture(t);
-  for (const route of chatRoutes) assert.equal((await f.request(route, { identity: 'none' })).status, 401);
   f.config.auth.enabled = false;
-  for (const route of chatRoutes) assert.equal((await f.request(route)).status, 403);
+  for (const route of chatRoutes) assert.equal((await f.request(route, { identity: 'none' })).status, 401);
   assert.equal(f.counts.reads, 0); assert.equal(f.counts.receives, 0);
-});
-
-// Integration: independent local/remote AuthGates over private loopback. Run
-// for proxy authentication changes; skip UI-only edits. Fixture owns teardown.
-test('proxy refuses disabled local authentication before calling an enabled remote', async t => {
-  const f = await chatHttpFixture(t, { chat: { allowRemote: true } }, {
-    localConfig: { auth: { enabled: false, password: null } },
-  });
-  for (const identity of ['none', 'cookie', 'read', 'admin']) for (const route of chatRoutes) {
-    const result = await f.request(route, { fleet: true, identity });
-    assert.equal(result.status, 403);
-    assert.equal(JSON.parse(result.text).error.code, 'admin_required');
-    assert.deepEqual(f.counts, { reads: 0, receives: 0, upstream: 0 });
-  }
-  for (const identity of ['none', 'cookie']) {
-    for (const method of ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
-      for (const path of ['/api/chat/conversations', '/api/chat/conversations/', '/api/chat/future']) {
-        const result = await f.request({ method, path }, { fleet: true, identity });
-        assert.equal(result.status, 403, `${identity} ${method} ${path}`);
-        assert.deepEqual(f.counts, { reads: 0, receives: 0, upstream: 0 });
-      }
-    }
-  }
-  assert.equal((await f.request(chatRoutes[0], { identity: 'admin' })).status, 200);
-  assert.equal(f.counts.reads, 1);
-  assert.equal(f.counts.upstream, 0);
 });
 
 // Integration: actual proxy origin/allowlist checks and independent remote

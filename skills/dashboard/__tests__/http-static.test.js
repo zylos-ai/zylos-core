@@ -10,6 +10,7 @@ import { serveStatic } from '../src/lib/http.js';
 import { StateEngine } from '../src/lib/state-engine.js';
 import { EventLoopMonitor } from '../src/lib/event-loop-monitor.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
+import { signIn } from './helpers/dashboard-sign-in.js';
 
 const root = path.resolve(import.meta.dirname, '../public');
 
@@ -92,7 +93,7 @@ test('workbench local pages render index with the browser asset base', { timeout
   const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'page-http-'));
   const data = path.join(fixtureRoot, 'components/dashboard');
   fs.mkdirSync(data, { recursive: true });
-  fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ auth: { enabled: false } }));
+  fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ auth: { password: 'page-fixture-password' } }));
   const previousRoot = process.env.ZYLOS_DIR;
   let server, engine;
   const timers = [], originalInterval = globalThis.setInterval;
@@ -121,9 +122,10 @@ test('workbench local pages render index with the browser asset base', { timeout
   server = createServer();
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
+  const cookie = await signIn(origin, 'page-fixture-password');
   for (const route of ['/schedule', '/usage', '/settings', '/trends']) {
     const res = await fetch(origin + route, { signal: AbortSignal.timeout(3000),
-      headers: { 'x-forwarded-prefix': '/dashboard' } });
+      headers: { 'x-forwarded-prefix': '/dashboard', cookie } });
     assert.equal(res.status, 200);
     assert.match(res.headers.get('content-type'), /text\/html/);
     const html = await res.text();

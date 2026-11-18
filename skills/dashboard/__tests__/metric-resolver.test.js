@@ -5,8 +5,8 @@ import assert from 'node:assert/strict';
 import { hashApiKey, exchangeApiKeyForToken } from '../src/lib/auth.js';
 import { usageServer } from './fixtures/usage-server.js';
 
-const request = (origin, route, options = {}) => fetch(origin + route,
-  { ...options, signal: AbortSignal.timeout(3000) });
+const request = (f, route, options = {}) => fetch(f.origin + route,
+  { ...options, headers: { ...f.headers, ...options.headers }, signal: AbortSignal.timeout(3000) });
 
 
 // HTTP integration: real routes/AuthGate/Store on private random loopback;
@@ -15,26 +15,26 @@ const request = (origin, route, options = {}) => fetch(origin + route,
 // Runner must isolate HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/private tmux socket.
 test('usage and resource reads enforce auth while retired metric routes return 404', async t => {
   let accountRecord = { recordedAt: 1000, live: false };
-  const f = await usageServer(t, { auth: { enabled: true, password: 'scrypt:fixture' } }, { snapshot: core => ({
+  const f = await usageServer(t, { auth: { password: 'scrypt:fixture' } }, { snapshot: core => ({
     readAt: Date.now(), rows: [], sources: {}, instance: { accounts: { claude: core.accountUsage ? { ...core.accountUsage.seven_day, ...accountRecord } : null } }
   }) });
   f.core.accountUsage = { seven_day: { used_percentage: 21 }, five_hour: { used_percentage: 73 } };
   f.store.insertApiKey({ name: 'reader', keyHash: hashApiKey('zylos_ak_usage_fixture'), scope: 'read' });
   const headers = { Authorization: `Bearer ${exchangeApiKeyForToken('zylos_ak_usage_fixture').token}` };
   for (const route of ['/api/usage/series', '/api/instance/resources', '/api/instance', '/api/usage/summary']) {
-    assert.equal((await request(f.origin, route)).status, 401);
-    assert.equal((await request(f.origin, route, { headers })).status, 200);
+    assert.equal((await request(f, route)).status, 401);
+    assert.equal((await request(f, route, { headers })).status, 200);
   }
-  assert.equal((await request(f.origin, '/api/usage/series?range=custom&since=2026-01-01&until=2026-01-01', { headers })).status, 400);
+  assert.equal((await request(f, '/api/usage/series?range=custom&since=2026-01-01&until=2026-01-01', { headers })).status, 400);
   for (const range of ['1d', 'constructor', 'toString', '__proto__']) {
-    const invalid = await request(f.origin, '/api/instance/resources?range=' + range, { headers });
+    const invalid = await request(f, '/api/instance/resources?range=' + range, { headers });
     assert.equal(invalid.status, 400);
     assert.equal((await invalid.json()).error.code, 'invalid_range');
   }
   for (const route of ['/api/metrics/rate_limit', '/api/metrics/rate_limit_7d', '/api/metrics/context_pct', '/api/state']) {
-    assert.equal((await request(f.origin, route, { headers })).status, 404, route);
+    assert.equal((await request(f, route, { headers })).status, 404, route);
   }
-  const readAccount = async () => (await (await request(f.origin, '/api/instance', { headers })).json()).accounts.claude;
+  const readAccount = async () => (await (await request(f, '/api/instance', { headers })).json()).accounts.claude;
   let account = await readAccount();
   assert.equal(account.used_percentage, 21);
   assert.equal(account.live, false);
@@ -47,7 +47,7 @@ test('usage and resource reads enforce auth while retired metric routes return 4
   assert.equal(account.recordedAt, new Date(2000).toISOString());
   f.core.accountUsage = null; accountRecord = null;
   assert.equal(await readAccount(), null);
-  assert.equal((await request(f.origin, '/api/groups/a/name', { method: 'PUT',
+  assert.equal((await request(f, '/api/groups/a/name', { method: 'PUT',
     body: JSON.stringify({ name: 'fixture' }), headers: { ...headers, 'content-type': 'application/json' } })).status, 403);
   assert.equal(f.store.queryMetrics({ name: 'account_quota' }).length, 0);
 });
@@ -60,7 +60,7 @@ test('cost summary projection skips message and project aggregation', async t =>
   t.mock.method(f.store, 'getProjectDistribution', () => assert.fail('summary must not read projects'));
   f.store.insertMetric({ timestamp: new Date().toISOString(), runtime: 'claude',
     metric_name: 'api_request_cost', metric_value: 5, dimensions: {}, source: 'jsonl_usage', confidence: 'actual' });
-  const response = await request(f.origin, '/api/usage/summary');
+  const response = await request(f, '/api/usage/summary');
   assert.equal(response.status, 200);
   const result = await response.json();
   assert.equal(result.scope, 'all_groups');
@@ -97,7 +97,7 @@ test('pricing usage and strip costs share natural days and include legacy rows',
   metric('2026-11-06T04:00:00.001Z', 'codex', { model: 'outside-after', cost: 998 });
   metric('2026-11-06T04:00:00.001Z', 'codex', { model: 'unpriced-future', total_input: 9999 });
   const read = async route => {
-    const response = await request(f.origin, route);
+    const response = await request(f, route);
     assert.equal(response.status, 200, route);
     return response.json();
   };
@@ -139,11 +139,11 @@ test('custom usage requires both bounds and caps the selected span at 366 days',
     'since=2025-01-01&until=2026-01-03',
     'since=2025-01-01T00:00:00.000Z&until=2026-01-02T00:00:00.001Z',
   ]) {
-    const response = await request(f.origin, '/api/usage/series?range=custom&' + query);
+    const response = await request(f, '/api/usage/series?range=custom&' + query);
     assert.equal(response.status, 400, query);
     assert.equal((await response.json()).error.code, 'invalid_range', query);
   }
-  const accepted = await request(f.origin,
+  const accepted = await request(f,
     '/api/usage/series?range=custom&since=2025-01-01T00:00:00.000Z&until=2026-01-02T00:00:00.000Z');
   assert.equal(accepted.status, 200);
 });
@@ -158,14 +158,14 @@ test('usage series periods include exactly seven or thirty natural days', async 
   process.env.TZ = 'Asia/Singapore';
   t.after(() => { if (oldTimezone === undefined) delete process.env.TZ; else process.env.TZ = oldTimezone; });
   const f = await usageServer(t);
-  assert.equal((await request(f.origin, '/api/metrics/aggregate?metric=cost&period=7d')).status, 404);
+  assert.equal((await request(f, '/api/metrics/aggregate?metric=cost&period=7d')).status, 404);
   for (const [period, start] of [['7d', '2026-10-30T16:00:00.000Z'], ['30d', '2026-10-07T16:00:00.000Z']]) {
     const before = new Date(new Date(start).getTime() - 1).toISOString();
     for (const [timestamp, cost] of [[before, 1000], [start, 3], [now.toISOString(), 5]]) {
       f.store.insertMetric({ timestamp, runtime: 'claude', metric_name: 'usage_event', metric_value: cost,
         dimensions: { cost, total_input: cost, output: 1 }, source: 'jsonl_usage', confidence: 'actual' });
     }
-    const response = await request(f.origin, `/api/usage/series?range=${period}`);
+    const response = await request(f, `/api/usage/series?range=${period}`);
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.equal(body.since, start);
@@ -178,7 +178,7 @@ test('usage series periods include exactly seven or thirty natural days', async 
     f.store.db.prepare('DELETE FROM metric_points').run();
   }
   process.env.TZ = 'invalid-zone';
-  const fallback = await request(f.origin, '/api/usage/series?range=7d');
+  const fallback = await request(f, '/api/usage/series?range=7d');
   assert.equal(fallback.status, 200);
   const value = await fallback.json();
   assert.equal(value.since, '2026-10-31T00:00:00.000Z');

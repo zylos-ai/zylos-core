@@ -364,7 +364,7 @@ export class FleetProxy {
     }
     if (!['GET', 'HEAD'].includes(req.method)) {
       const context = req._authContext;
-      if (this.authGate?.enabled !== false && context?.scope !== 'admin') { sendJson(res, 403, { error: 'admin_required' }); return; }
+      if (context?.scope !== 'admin') { sendJson(res, 403, { error: 'admin_required' }); return; }
       if (context?.kind === 'cookie' && !isSameOriginRequest(req)) { sendJson(res, 403, { error: 'same_origin_required' }); return; }
     }
     const chatStream = suffix === '/api/stream' && new URLSearchParams(search).has('chat');

@@ -128,7 +128,7 @@ test('dashboard constructs both usage collectors when configured for Claude', { 
   fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude' }));
   fs.mkdirSync(path.join(root, 'components/dashboard'), { recursive: true });
   fs.writeFileSync(path.join(root, 'components/dashboard/config.json'), JSON.stringify({
-    auth: { enabled: false },
+    auth: { password: 'scrypt:fixture' },
     runtimeModelPrices: { codex: { 'gpt-5.3-codex': { input: 3, output: 12, cacheRead: 0.3, cacheCreation: 0 } } },
   }));
   process.env.HOME = root;

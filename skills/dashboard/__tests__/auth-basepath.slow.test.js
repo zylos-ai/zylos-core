@@ -1,4 +1,4 @@
-// covers: skills/comm-bridge/scripts/sqlite-driver.js skills/dashboard/src/lib/auth.js skills/dashboard/src/lib/store.js skills/dashboard/src/lib/version-checker.js skills/dashboard/src/lib/workbench/group-snapshot.js skills/dashboard/src/lib/core-state.js skills/dashboard/src/index.js skills/dashboard/src/lib/ skills/dashboard/public/themes/ skills/dashboard/__tests__/helpers/explicit-migration.js skills/dashboard/__tests__/fixtures/schema13.js skills/dashboard/__tests__/fixtures/memory-installation.js skills/dashboard/__tests__/fixtures/fleet-object-api.js
+// covers: skills/comm-bridge/scripts/sqlite-driver.js skills/dashboard/src/lib/auth.js skills/dashboard/src/lib/store.js skills/dashboard/src/lib/version-checker.js skills/dashboard/src/lib/workbench/group-snapshot.js skills/dashboard/src/lib/core-state.js skills/dashboard/src/index.js skills/dashboard/src/lib/ skills/dashboard/public/themes/ skills/dashboard/__tests__/helpers/explicit-migration.js skills/dashboard/__tests__/fixtures/schema13.js skills/dashboard/__tests__/fixtures/memory-installation.js skills/dashboard/__tests__/fixtures/fleet-object-api.js skills/dashboard/__tests__/helpers/dashboard-sign-in.js
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -16,6 +16,7 @@ import { VersionChecker } from '../src/lib/version-checker.js';
 import { objectResponse, isObjectApi } from './fixtures/fleet-object-api.js';
 import { createGroupSnapshot, systemSample } from '../src/lib/workbench/group-snapshot.js';
 import { CoreState } from '../src/lib/core-state.js';
+import { signIn } from './helpers/dashboard-sign-in.js';
 
 // HTTP/auth fixtures exercise actual product routing, not remote version hosts.
 assert.notEqual(process.env.HOME, os.userInfo().homedir, 'Run through the isolated Node test runner');
@@ -56,7 +57,6 @@ function writeConfig(zylosDir, password = 'secret', extra = {}) {
   fs.mkdirSync(configDir, { recursive: true });
   fs.writeFileSync(path.join(configDir, 'config.json'), `${JSON.stringify({
     auth: {
-      enabled: true,
       password
     },
     ...extra
@@ -145,7 +145,7 @@ function loginCookies(response, { base = '', markerBase = base, maxAge = 86400, 
 // Actual HTTP entry + loaded config + AuthGate. Run for authentication/config
 // changes; unrelated UI may skip. Runner must isolate HOME/ZYLOS_DIR/PM2_HOME,
 // short temp/tmux socket and DBs; each server/root is closed in teardown.
-for (const auth of [undefined, { enabled: true }, { enabled: true, password: null }, { enabled: true, password: '' }]) {
+for (const auth of [undefined, { enabled: false }, { password: null }, { password: '' }]) {
   test(`missing Dashboard password rejects protected HTTP requests (${JSON.stringify(auth)})`, { timeout: 15_000 }, async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-no-password-'));
     let server;
@@ -188,6 +188,42 @@ for (const auth of [undefined, { enabled: true }, { enabled: true, password: nul
     assert.equal((await fetch(`${origin}/api/health`)).status, 200);
   });
 }
+
+// Actual HTTP entry + loaded config + AuthGate, same isolation as the missing-password cases.
+// Run for authentication/config changes. A config file that still carries the removed
+// sign-in switch must not open any page or API; signing in then works as usual.
+test('a stored enabled:false auth setting still requires sign-in for pages and APIs', { timeout: 15_000 }, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-stored-off-'));
+  let server;
+  t.after(async () => {
+    if (server) { server.closeAllConnections(); await closeServer(server); }
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  writeConfig(root, 'secret', { auth: { enabled: false, password: 'secret' } });
+  const running = await makeServerWithDir(root);
+  server = running.server;
+  const { origin } = running;
+  const page = await fetch(`${origin}/`, { redirect: 'manual' });
+  assert.equal(page.status, 302);
+  assert.equal(page.headers.get('location'), '/login?next=%2F');
+  await page.text();
+  const loginPage = await fetch(`${origin}/login`, { redirect: 'manual' });
+  assert.equal(loginPage.status, 200);
+  assert.match(await loginPage.text(), /type="password"/);
+  for (const [method, route] of [['GET', '/api/settings/timezone'], ['PUT', '/api/settings/timezone'],
+    ['POST', '/api/settings/timezone/actions/restart-services'], ['GET', '/api/memory/tree'], ['GET', '/api/memory/file?path=state.md'],
+    ['GET', '/api/chat/conversations'], ['GET', '/api/stream'], ['GET', '/api/keys']]) {
+    const response = await fetch(origin + route, { method, headers: { Origin: origin } });
+    assert.equal(response.status, 401, `${method} ${route}`);
+    await response.text();
+  }
+  const cookie = await signIn(origin, 'secret');
+  for (const route of ['/api/settings/timezone', '/api/keys']) {
+    const response = await fetch(origin + route, { headers: { Cookie: cookie } });
+    assert.equal(response.status, 200, route);
+    await response.text();
+  }
+});
 
 test('auth protects API and renders proxy-prefixed login URLs', { timeout: TEST_TIMEOUT_MS }, async () => {
   const { origin, server } = await makeServer();
@@ -542,7 +578,6 @@ test('/api/instance exposes stable agent identity without fleet secrets', { time
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
   const legacyMarker = path.join(zylosDir, 'components', 'dashboard', 'upgrade-zylos-pending.json');
   writeConfig(zylosDir, 'secret', {
-    auth: { enabled: false },
     agent: { name: 'Jinglever', id: 'jinglever-main' },
     fleet: {
       agents: [
@@ -558,7 +593,7 @@ test('/api/instance exposes stable agent identity without fleet secrets', { time
 
   const { origin, server } = await makeServerWithDir(zylosDir);
   try {
-    const resp = await fetch(`${origin}/api/instance`);
+    const resp = await fetch(`${origin}/api/instance`, { headers: { Cookie: await signIn(origin, 'secret') } });
     assert.equal(resp.status, 200);
     const body = await resp.json();
     assert.equal(body.agent.name, 'Jinglever');
@@ -594,7 +629,7 @@ test('/api/instance exposes stable agent identity without fleet secrets', { time
 
 test('/api/fleet self record includes cost tiers from DB (#174)', { timeout: TEST_TIMEOUT_MS }, async () => {
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
-  writeConfig(zylosDir, 'secret', { auth: { enabled: false } });
+  writeConfig(zylosDir);
 
   const { origin, server } = await makeServerWithDir(zylosDir);
   try {
@@ -606,7 +641,7 @@ test('/api/fleet self record includes cost tiers from DB (#174)', { timeout: TES
       VALUES (?, 'usage_event', 1000, ?, 'jsonl_usage', 'actual')`).run(now, JSON.stringify({ cost: 2.34 }));
     db.close();
 
-    const resp = await fetch(`${origin}/api/fleet`);
+    const resp = await fetch(`${origin}/api/fleet`, { headers: { Cookie: await signIn(origin, 'secret') } });
     assert.equal(resp.status, 200);
     const body = await resp.json();
     const self = body.agents.find(a => a.self === true);
@@ -622,7 +657,7 @@ test('/api/fleet self record includes cost tiers from DB (#174)', { timeout: TES
 test('/api/stream accepts Bearer API session and emits initial instance', { timeout: 15000 }, async t => {
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
   writeConfig(zylosDir, 'secret', {
-    auth: { enabled: true, password: 'secret' },
+    auth: { password: 'secret' },
     agent: { name: 'Jinglever' }
   });
 
@@ -689,7 +724,7 @@ test('/api/memory tree accepts read keys while file contents require admin', { t
       if (isolatedEnv[key] === undefined) delete process.env[key];
       else process.env[key] = isolatedEnv[key];
     }
-    writeConfig(zylosDir, 'secret', { auth: { enabled: true, password: 'secret' } });
+    writeConfig(zylosDir, 'secret', { auth: { password: 'secret' } });
     fs.mkdirSync(path.join(zylosDir, 'memory'), { recursive: true });
     fs.writeFileSync(path.join(zylosDir, 'memory', 'identity.md'), '# Identity\n');
     const newlineText = '\n'.repeat(1024 * 1024);
@@ -856,7 +891,7 @@ test('proxied interrupt and chop-chop writes require consumer admin API scope or
   });
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
   writeConfig(zylosDir, 'secret', {
-    auth: { enabled: true, password: 'secret' },
+    auth: { password: 'secret' },
     fleet: {
       agents: [
         { name: 'Remote', base_url: remote.origin, read_api_key: 'zylos_ak_remote' }
@@ -982,7 +1017,7 @@ test('proxied interrupt and chop-chop writes require consumer admin API scope or
 
 test('API key management is admin-gated, show-once, and revoke invalidates active sessions', { timeout: TEST_TIMEOUT_MS }, async () => {
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
-  writeConfig(zylosDir, 'secret', { auth: { enabled: true, password: 'secret' } });
+  writeConfig(zylosDir, 'secret', { auth: { password: 'secret' } });
 
   const { origin, server } = await makeServerWithDir(zylosDir);
   try {
@@ -1262,7 +1297,7 @@ test('API key migration v11 rolls back failed rebuild and can retry', { timeout:
 
 test('API key lifecycle supports name reuse, rotate, permanent delete, and revoked purge', { timeout: TEST_TIMEOUT_MS }, async () => {
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-key-lifecycle-'));
-  writeConfig(zylosDir, 'secret', { auth: { enabled: true, password: 'secret' } });
+  writeConfig(zylosDir, 'secret', { auth: { password: 'secret' } });
 
   const { origin, server } = await makeServerWithDir(zylosDir);
   try {
@@ -1480,7 +1515,6 @@ test('API key lifecycle supports name reuse, rotate, permanent delete, and revok
 test('/api/fleet exposes safe records without registry secrets', { timeout: TEST_TIMEOUT_MS }, async () => {
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
   writeConfig(zylosDir, 'secret', {
-    auth: { enabled: false },
     fleet: {
       agents: [
         {
@@ -1494,7 +1528,7 @@ test('/api/fleet exposes safe records without registry secrets', { timeout: TEST
 
   const { origin, server } = await makeServerWithDir(zylosDir);
   try {
-    const resp = await fetch(`${origin}/api/fleet`);
+    const resp = await fetch(`${origin}/api/fleet`, { headers: { Cookie: await signIn(origin, 'secret') } });
     assert.equal(resp.status, 200);
     const body = await resp.json();
     // Self record is always injected first, followed by external agents.
@@ -1544,7 +1578,7 @@ test('fleet management API is admin-gated, masks keys, persists atomically, and 
   });
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
   writeConfig(zylosDir, 'secret', {
-    auth: { enabled: true, password: 'secret' },
+    auth: { password: 'secret' },
     agent: { name: 'Local' },
     preserved: { keep: true }
   });
@@ -1708,13 +1742,14 @@ test('fleet management add rechecks duplicate names after slow probe', { timeout
     res.end('{}');
   });
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
-  writeConfig(zylosDir, 'secret', { auth: { enabled: false } });
+  writeConfig(zylosDir);
 
   const { origin, server } = await makeServerWithDir(zylosDir);
   try {
+    const cookie = await signIn(origin, 'secret');
     const request = () => fetch(`${origin}/api/fleet/agents`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Cookie: cookie, Origin: origin },
       body: JSON.stringify({
         name: 'Remote',
         base_url: remote.origin,
@@ -1733,7 +1768,7 @@ test('fleet management add rechecks duplicate names after slow probe', { timeout
     const saved = JSON.parse(fs.readFileSync(path.join(zylosDir, 'components', 'dashboard', 'config.json'), 'utf8'));
     assert.equal(saved.fleet.agents.filter(agent => agent.name === 'Remote').length, 1);
 
-    const del = await fetch(`${origin}/api/fleet/agents/Remote`, { method: 'DELETE' });
+    const del = await fetch(`${origin}/api/fleet/agents/Remote`, { method: 'DELETE', headers: { Cookie: cookie, Origin: origin } });
     assert.equal(del.status, 200);
   } finally {
     await closeServer(server);
@@ -1767,13 +1802,14 @@ test('fleet test-connection API reports auth failures and reachable read scope w
     res.end('{}');
   });
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
-  writeConfig(zylosDir, 'secret', { auth: { enabled: false } });
+  writeConfig(zylosDir);
 
   const { origin, server } = await makeServerWithDir(zylosDir);
   try {
+    const cookie = await signIn(origin, 'secret');
     const bad = await fetch(`${origin}/api/fleet/agents/test`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Cookie: cookie, Origin: origin },
       body: JSON.stringify({ base_url: remote.origin, read_api_key: 'zylos_ak_bad' })
     });
     assert.equal(bad.status, 502);
@@ -1781,7 +1817,7 @@ test('fleet test-connection API reports auth failures and reachable read scope w
 
     const good = await fetch(`${origin}/api/fleet/agents/test`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Cookie: cookie, Origin: origin },
       body: JSON.stringify({ base_url: remote.origin, read_api_key: 'zylos_ak_good' })
     });
     assert.equal(good.status, 200);
@@ -1866,7 +1902,7 @@ test('group thresholds follow actual session models while Fleet omits Origin ses
     for (const store of stores) if (store.db.open) store.close();
     fs.rmSync(root, { recursive: true, force: true });
   });
-  writeConfig(root, 'secret', { auth: { enabled: false } });
+  writeConfig(root);
   for (const dir of ['.zylos', '.claude', '.codex']) fs.mkdirSync(path.join(root, dir), { recursive: true });
   fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', model_rotation_thresholds: {
     claude: { haiku: 81, 'claude-sonnet-4-6': 63, 'claude-opus-4-6[1m]': 36 }, codex: { 'actual-codex': 58, 'native-codex': 79 },
@@ -1902,6 +1938,7 @@ test('group thresholds follow actual session models while Fleet omits Origin ses
         return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
       } });
   const running = await makeServerWithDir(root); server = running.server;
+  const cookie = await signIn(running.origin, 'secret');
   const assertNoSessionFields = self => {
     assert.ok(self);
     for (const field of ['model', 'effort', 'context_pct', 'new_session_threshold']) assert.equal(Object.hasOwn(self, field), false);
@@ -1914,17 +1951,17 @@ test('group thresholds follow actual session models while Fleet omits Origin ses
   ]) {
     runtime = engine; usage = sample ? { valid: true, value: sample } : { valid: false };
     snapshotClock += 2100;
-    const stateResponse = await fetch(running.origin + '/api/groups/origin?include=', { signal: AbortSignal.timeout(3000) });
+    const stateResponse = await fetch(running.origin + '/api/groups/origin?include=', { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
     assert.equal(stateResponse.status, 200);
     assert.equal((await stateResponse.json()).rotationThreshold, expected);
-    const fleetResponse = await fetch(running.origin + '/api/fleet', { signal: AbortSignal.timeout(3000) });
+    const fleetResponse = await fetch(running.origin + '/api/fleet', { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
     assert.equal(fleetResponse.status, 200);
     const self = (await fleetResponse.json()).agents.find(agent => agent.self);
     assertNoSessionFields(self);
   }
   fs.writeFileSync(path.join(root, '.claude/settings.json'), JSON.stringify({ model: 'opus[1m]' }));
   fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ model_rotation_thresholds: { claude: { 'opus[1m]': 30 } } }));
-  const metaResponse = await fetch(running.origin + '/api/instance/runtime-options?runtime=claude&model=claude-opus-4-6%5B1m%5D', { signal: AbortSignal.timeout(3000) });
+  const metaResponse = await fetch(running.origin + '/api/instance/runtime-options?runtime=claude&model=claude-opus-4-6%5B1m%5D', { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
   assert.equal(metaResponse.status, 200);
   const meta = await metaResponse.json();
   assert.equal(meta.model_thresholds['opus[1m]'], 30);
@@ -1936,9 +1973,9 @@ test('group thresholds follow actual session models while Fleet omits Origin ses
   ]) {
     launchConfig = launch; snapshotClock += 2100;
     usage = { valid: true, value: { model: { id: model }, context_window: { context_window_size: 1000000 } } };
-    const stateResponse = await fetch(running.origin + '/api/groups/origin?include=', { signal: AbortSignal.timeout(3000) });
+    const stateResponse = await fetch(running.origin + '/api/groups/origin?include=', { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
     assert.equal((await stateResponse.json()).rotationThreshold, expected);
-    const fleetResponse = await fetch(running.origin + '/api/fleet', { signal: AbortSignal.timeout(3000) });
+    const fleetResponse = await fetch(running.origin + '/api/fleet', { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
     assertNoSessionFields((await fleetResponse.json()).agents.find(agent => agent.self));
   }
 });

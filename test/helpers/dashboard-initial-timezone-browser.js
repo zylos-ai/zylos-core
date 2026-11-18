@@ -4,6 +4,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { workbenchAnswer } from '../../skills/dashboard/__tests__/fixtures/workbench-browser-api.js';
+import { signIn } from '../../skills/dashboard/__tests__/helpers/dashboard-sign-in.js';
 
 export async function runInitialTimezoneBrowser(sandbox, scenario) {
   for (const file of [process.env.ZYLOS_CHAT_BROWSER_MODULE, process.env.ZYLOS_CHAT_BROWSER_BIN, process.env.ZYLOS_CHAT_CHART_ASSET]) {
@@ -38,6 +39,7 @@ export async function runInitialTimezoneBrowser(sandbox, scenario) {
     await new Promise(resolve => setTimeout(resolve, 25));
   }
   const { origin } = JSON.parse(fs.readFileSync(listener, 'utf8'));
+  const session = (await signIn(origin, 'initial-timezone-password')).split('=')[1];
   const { chromium } = await import(pathToFileURL(process.env.ZYLOS_CHAT_BROWSER_MODULE));
   const browser = await chromium.launch({ executablePath: process.env.ZYLOS_CHAT_BROWSER_BIN, headless: true, env: sandbox.env,
     args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
@@ -46,6 +48,7 @@ export async function runInitialTimezoneBrowser(sandbox, scenario) {
   for (let load = 0; load < scenario.loads; load++) {
     const context = await browser.newContext({ viewport: { width: 1280, height: 960 }, locale: 'zh-CN', timezoneId: 'America/Los_Angeles' });
     sandbox.addCleanup(() => context.close());
+    await context.addCookies([{ name: '__Secure-zylos_dashboard_session', value: session, domain: '127.0.0.1', path: '/', secure: true }]);
     const releases = [];
     let firstState;
     const stateStarted = new Promise(resolve => { firstState = resolve; });
