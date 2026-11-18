@@ -93,13 +93,13 @@ describe('c4-session-init', () => {
   // condition as a decoy. Run for handoff/scope changes; unrelated UI may skip.
   // withTmpDir logs the private environment, database and socket before bounded
   // children; no terminal/service starts and the fixture root is always removed.
-  for (const present of [true, false]) it(`multi-session startup uses its own handoff when ${present ? 'present' : 'absent'}`, () => {
+  for (const mode of ['single', 'multi']) for (const present of [true, false]) it(`${mode} group startup uses its own handoff when ${present ? 'present' : 'absent'}`, () => {
     withTmpDir(({ tmpDir, env }) => {
-      const group = 'telegram:handoff-check';
+      const group = mode === 'single' ? 'origin' : 'telegram:handoff-check';
       const groupFile = path.join(tmpDir, 'memory/session-groups', group, 'handoff.md');
       const rootFile = path.join(tmpDir, 'memory/handoff.md');
       fs.mkdirSync(path.join(tmpDir, '.zylos'));
-      fs.writeFileSync(path.join(tmpDir, '.zylos/config.json'), JSON.stringify({ session_mode: 'multi' }));
+      fs.writeFileSync(path.join(tmpDir, '.zylos/config.json'), JSON.stringify({ session_mode: mode }));
       fs.mkdirSync(path.dirname(groupFile), { recursive: true });
       if (present) fs.writeFileSync(groupFile, 'unfinished group task');
       else fs.writeFileSync(rootFile, 'unrelated root task');
@@ -125,6 +125,43 @@ describe('c4-session-init', () => {
       assert.equal(fs.existsSync(rootFile), !present);
     });
   });
+
+  // Real CLI + private SQLite storage checks tail, coverage and lag guidance.
+  // Run for scope/C4 boot reads; no runtime, PM2 or tmux starts. The shared
+  // fixture prints isolated paths, bounds children and removes its directory.
+  for (const [mode, group] of [['single','origin'], ['multi','origin'], ['single',null], [null,null]]) {
+    it(`startup tail follows environment group ${group} with mode ${mode}`, () => {
+      withTmpDir(({ tmpDir, env }) => {
+        fs.mkdirSync(path.join(tmpDir, '.zylos'), {recursive:true});
+        fs.writeFileSync(path.join(tmpDir,'.zylos/config.json'), JSON.stringify(mode ? {session_mode:mode} : {}));
+        const setup = spawnSync(process.execPath, ['--input-type=module','-e', `
+          const db = await import(${JSON.stringify(new URL('../c4-db.js',import.meta.url).href)});
+          const c = db.getDb();
+          for (let id=1; id<=11; id++) c.prepare("INSERT INTO conversations(id,direction,channel,content,status,session_group) VALUES(?,'out','system',?,'delivered',?)").run(id,id===11 ? 'OTHER-GROUP-TAIL' : 'ORIGIN-TAIL-'+id,id===11 ? 'telegram:other' : 'origin');
+          db.createCheckpoint('*',1,'GLOBAL SUMMARY MUST NOT LOAD');
+          db.createCheckpoint('origin',2,'ORIGIN SUMMARY MUST NOT LOAD');
+          db.close();
+        `], {env,encoding:'utf8',timeout:15000});
+        assert.equal(setup.status,0,setup.stderr);
+        const selectedEnv = {...env, ZYLOS_RUN_ID:'isolated-run'};
+        if (group) selectedEnv.ZYLOS_SESSION_GROUP = group;
+        const {stdout,stderr,status} = cli([],selectedEnv);
+        assert.equal(status,0,stderr);
+        assert.ok(stdout.includes(`Scope: ${group ?? '*'}.`));
+        assert.match(stdout,new RegExp('Checkpoint covers id '+(group ? 2 : 1)));
+        assert.match(stdout,/ORIGIN-TAIL-10/);
+        assert.doesNotMatch(stdout,/SUMMARY MUST NOT LOAD/);
+        if (group) {
+          assert.doesNotMatch(stdout,/OTHER-GROUP-TAIL/);
+          assert.match(stdout,/--unsummarized --group origin --limit 50/);
+        } else {
+          assert.match(stdout,/OTHER-GROUP-TAIL/);
+          assert.match(stdout,/--unsummarized --limit 50/);
+          assert.doesNotMatch(stdout,/--unsummarized --group/);
+        }
+      });
+    });
+  }
 
   it('loads delivered tail after coverage without checkpoint summary', () => {
     withTmpDir(({ env }) => {

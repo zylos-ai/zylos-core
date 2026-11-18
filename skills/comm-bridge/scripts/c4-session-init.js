@@ -160,13 +160,13 @@ export async function emitC4Conversations(payload, budget = null, {
     const readScope = scopeReader ?? (await import('../../activity-monitor/scripts/bootstrap-scope.js')).bootstrapScope;
     const scope = await readScope();
     await normalHelpers();
-    const coverage = scope.mode === 'multi' ? db.getCoverageEnd(scope.sessionGroup) : db.getGlobalCoverageEnd();
-    const conversations = scope.mode === 'multi'
+    const coverage = scope.sessionGroup ? db.getCoverageEnd(scope.sessionGroup) : db.getGlobalCoverageEnd();
+    const conversations = scope.sessionGroup
       ? db.getDeliveredSince(scope.sessionGroup, coverage, { limit: 6 })
       : db.getGlobalDeliveredSince(coverage, { limit: 6 });
     let unsummarized;
     try {
-      unsummarized = scope.mode === 'multi'
+      unsummarized = scope.sessionGroup
         ? await db.getUnsummarizedRange(scope.sessionGroup)
         : await db.getGlobalUnsummarizedRange();
     } catch { unsummarized = null; }
@@ -188,7 +188,7 @@ export async function emitC4Conversations(payload, budget = null, {
     const lagNotice = rows => {
       if (!unsummarized) return 'Unsummarized count temporarily unavailable.';
       if (unsummarized.count <= 0 || (rows.length && unsummarized.firstConversationId >= rows[0].id)) return '';
-      const command = `node ${path.join(scope.root, '.claude/skills/comm-bridge/scripts/c4-fetch.js')} --unsummarized${scope.mode === 'multi' ? ` --group ${scope.sessionGroup}` : ''} --limit 50`;
+      const command = `node ${path.join(scope.root, '.claude/skills/comm-bridge/scripts/c4-fetch.js')} --unsummarized${scope.sessionGroup ? ` --group ${scope.sessionGroup}` : ''} --limit 50`;
       const stop = rows.length ? `until the oldest shown id ${rows[0].id}` : 'through the delivered frontier (no tail shown)';
       return `Checkpoint covers id ${coverage}; state.md may lag (use its header coverage). About ${unsummarized.count} messages unsummarized; latest ${rows.length} shown. Before judging old tasks, promises or todos, inspect the omitted middle: ${command}. Continue with --after <previous output's round upper bound> ${stop}; reads stop at the delivered frontier.`;
     };

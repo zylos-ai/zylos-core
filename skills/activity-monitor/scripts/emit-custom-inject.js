@@ -13,7 +13,7 @@
  * - Files concatenate in lexicographic filename order (conf.d style:
  *   `10-rules.md`, `20-platform.md`, ... to control ordering).
  * - Dotfiles and non-.md entries are ignored.
- * - In single mode a missing directory or all-empty content emits nothing
+ * - Without a group binding, a missing directory or all-empty content emits nothing
  *   — the shard's [k/N] header still goes out, so the chain and numbering
  *   are unaffected (same empty semantics as the other content shards).
  * - Content is injected as-is (it is user-authored instruction text); the
@@ -62,7 +62,7 @@ export async function emitCustomInject({ env = process.env } = {}) {
     if (trimmed) parts.push(trimmed);
   }
 
-  if (scope.mode === 'multi') {
+  if (scope.sessionGroup) {
     const rules = path.join(scope.memoryDir, 'rules.md');
     parts.push(`## Rules for the current group (${scope.scope})\n\n` +
       `Save global user rules to ZYLOS.md and rules limited to this group to ${rules}. ` +

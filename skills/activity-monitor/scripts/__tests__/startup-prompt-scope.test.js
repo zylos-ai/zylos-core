@@ -56,15 +56,15 @@ const policies = [
   { name: 'C4 read failure with handoff', handoff: true, rows: null, sent: true },
 ];
 
-for (const source of ['startup', 'clear']) for (const sessionGroup of [null, 'origin', 'telegram:g-100123']) for (const policy of policies) {
-  test(`${source} in ${sessionGroup ?? 'single'} handles ${policy.name}`, async t => {
+for (const mode of ['single', 'multi']) for (const source of ['startup', 'clear']) for (const sessionGroup of [null, 'origin', 'telegram:g-100123']) for (const policy of policies) {
+  test(`${mode} ${source} in ${sessionGroup ?? 'single'} handles ${policy.name}`, async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-prompt-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const memoryDir = path.join(root, 'scope'); fs.mkdirSync(memoryDir);
     // An unrelated scope's handoff must not affect this scope's decision.
     fs.writeFileSync(path.join(root, 'handoff.md'), 'other scope');
     if (policy.handoff) fs.writeFileSync(path.join(memoryDir, 'handoff.md'), 'unfinished work');
-    const scope = { sessionGroup, memoryDir, mode: sessionGroup ? 'multi' : 'single' };
+    const scope = { sessionGroup, memoryDir, mode };
     const { db, store } = storeFixture(t);
     assert.equal(db.name, ':memory:');
     const insert = db.prepare(`INSERT INTO conversations

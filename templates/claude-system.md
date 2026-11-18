@@ -54,7 +54,7 @@ Browsers may be logged in: perform only explicitly requested actions, never visi
 
 ## Onboarding
 
-If `memory/state.md` has onboarding `Status: pending`, read and follow `~/zylos/.zylos/instructions/onboarding.md` before anything else. Start only on a real user message with `reply via:`, never system-injected context.
+If `memory/session-groups/origin/state.md` has onboarding `Status: pending`, read and follow `~/zylos/.zylos/instructions/onboarding.md` before anything else. Start only on a real user message with `reply via:`, never system-injected context.
 
 ## Communication
 
