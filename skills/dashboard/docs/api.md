@@ -82,7 +82,7 @@ Example: `GET /api/health` → `{"ok":true,"service":"zylos-dashboard","bootId":
 
 **Access:** Public. **Parameters:** none.
 
-Returns `ready:boolean`, `reason:string|null`, `session_mode:"single"|"multi"|"unreadable"`, `session_running:boolean|null`, and `runtime_health:object` keyed by `claude`, `codex` and `agy`. Each runtime entry has `source:"record"|"missing"|"unreadable"` and `health:string|null`. A responsive supervisor establishes readiness unless the single-mode session is confirmed absent. Runtime health is diagnostic, not an admission gate.
+Returns `ready:boolean`, `reason:string|null`, `session_mode:"single"|"multi"|"unreadable"`, `session_running:boolean|null`, and `runtime_health:object` keyed by `claude`, `codex` and `agy`. Each runtime entry has `source:"record"|"missing"|"unreadable"` and `health:string|null`. A responsive supervisor establishes readiness unless an instance without a `session_mode` key (from before session modes) has its session confirmed absent; `session_running` is reported only for such instances and is `null` otherwise. Runtime health is diagnostic, not an admission gate.
 
 **Errors:** HTTP 503 with `{ok:false,error:{code,message},...readiness}` when `ready:false`; `reason` is `supervisor_unavailable` or `session_not_running`. Unavailable observations remain null.
 
