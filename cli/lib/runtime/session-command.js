@@ -44,7 +44,7 @@ export function buildRuntimeArgs(runtime, config, {root, help = '', bypassPermis
     if (bypassPermissions) args.push('--dangerously-skip-permissions');
     args.push('--settings', JSON.stringify({ modelProvider: 'gemini', trustedWorkspaces: [root] }), '-i', buildKickPrompt());
   } else {
-    args.push('-c', 'tools.experimental_request_user_input.enabled=false');
+    args.push('-c', 'tools.experimental_request_user_input.enabled=false', '-c', 'features.goals=false', '-c', 'features.apps=false');
     if (/(?:^|\s)--no-daemon(?:\s|$)/m.test(help)) args.push('--no-daemon');
     if (bypassPermissions) args.push('--dangerously-bypass-approvals-and-sandbox');
     if (config.mode === 'override') args.push('--model', config.model, '-c', `model_reasoning_effort=${JSON.stringify(config.effort)}`);
