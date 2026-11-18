@@ -7,14 +7,12 @@ const { readReadyIdentity } = await loadCoreModule('runtime/session-target.js');
 const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
 const { listGroupTmuxSessions } = await loadCoreModule('session-group-paths.js');
 const { readPoolCapacity } = await loadCoreModule('session-pool-config.js');
-const { SupervisorServerHealth, parseServerAlertTarget } = await loadCoreModule('supervisor-server-health.js');
 import { createRouter } from './scheduler.js';
 import { createDelivery } from './delivery.js';
 import { formatConversation } from './format.js';
 import { resolveDashboardQuote } from '../dashboard-source.js';
 import { notifyDelivered, notifyDeliveryFailed } from './notify.js';
 import { createStatusNoticeSender } from '../c4-status-notice.js';
-import { createFailureReceiptDrainer } from '../c4-failure-receipts.js';
 import { createFailureAlertSender } from '../failure-alert.js';
 import { createPendingExpiryHandler } from './expiry.js';
 import { createRouterDiagnostics } from './diagnostics.js';
@@ -55,18 +53,31 @@ export function createDispatcher(overrides = {}, options = {}) {
       { env: systemSendEnvironment(env, { notice: true }), signal: alertController.signal, timeout: 30000, maxBuffer: 1024 * 1024 }, error => error ? reject(error) : resolve(true));
     child.stdin.on('error', reject); child.stdin.end(message + '\n');
   }));
-  const ownerAlerts = new SupervisorServerHealth({
-    readAlertTarget: () => parseServerAlertTarget(readConfig().alert_target), sendAlert, log });
-  const sendFailureAlert = overrides.sendFailureAlert ?? createFailureAlertSender({
-    db, notifyOwner: message => ownerAlerts.notify(message), now: () => Math.floor(now() / 1000) });
+  // Match the existing continuation alert's lazy supervisor imports and fallback.
+  const notifyOwner = async message => {
+    const [{ SupervisorServerHealth }, { parseServerAlertTarget }] = await Promise.all([
+      import('../../../activity-monitor/scripts/supervisor-server-health.js'),
+      import('../../../activity-monitor/scripts/supervisor-server-observation.js'),
+    ]);
+    const guard = new SupervisorServerHealth({ readAlertTarget: () => parseServerAlertTarget(readConfig().alert_target), sendAlert, log });
+    await guard.notify(message);
+  };
+  const failureAlert = overrides.sendFailureAlert ?? createFailureAlertSender({
+    db, notifyOwner, now: () => Math.floor(now() / 1000) });
+  const sendFailureAlert = (row, reason) => {
+    // No replay queue: a crash after the failure commit may lose this alert.
+    void Promise.resolve().then(() => {
+      const record = typeof row === 'number' ? db.getConversationsByRange(row, row)[0] : row;
+      if (record) return failureAlert({ ...record, reason });
+    }).catch(log);
+  };
   const alert = (event, fields) => {
     if (event !== 'continuation_start_failed') { log(`Router alert: ${event} ${JSON.stringify(fields)}`); return; }
     // Notification I/O must neither join scheduler lanes nor delay Router stop.
     void (async () => {
-      const guard = ownerAlerts;
       const message = messageForStatus({ context: 'repeated_failure', noticeCode: 'could_not_restart',
         group: fields.sessionGroup, count: fields.failures, reason: fields.reason, others: fields.others }, readConfig().statusNotices ?? {});
-      await guard.notify(message);
+      await notifyOwner(message);
     })().catch(log);
   };
   const providers = {
@@ -74,13 +85,12 @@ export function createDispatcher(overrides = {}, options = {}) {
     listGroupTmuxSessions: () => listGroupTmuxSessions(tmux), readRuntimeHealth,
     getSessionAdapter: runtime => getSessionAdapter(runtime, { tmux }), submit,
     ...lifecycle, diagnostic, log,
-    alert,
+    alert, sendFailureAlert,
     maintainDiagnostics: diagnostics.maintain,
     ...overrides,
   };
   const sendStatusNotice = overrides.sendStatusNotice ?? createStatusNoticeSender({ db, log });
-  const drainFailureReceipts = overrides.drainFailureReceipts ?? createFailureReceiptDrainer({ db, sendFailureAlert, diagnostic, now: () => Math.floor(now() / 1000) });
-  const handleExpired = overrides.handleExpired ?? createPendingExpiryHandler({ drainFailureReceipts });
+  const handleExpired = overrides.handleExpired ?? createPendingExpiryHandler({ sendFailureAlert });
   let router;
   const delivery = createDelivery({ ...providers, getSessionMode: () => router.state.mode,
     formatConversation: overrides.formatConversation ?? (row => formatConversation(row, {
@@ -89,7 +99,7 @@ export function createDispatcher(overrides = {}, options = {}) {
     notifyDelivered: overrides.notifyDelivered ?? notifyDelivered,
     notifyDeliveryFailed: overrides.notifyDeliveryFailed ?? notifyDeliveryFailed,
   }, { ...options.delivery, tmux });
-  router = createRouter({ ...providers, handleExpired, sendStatusNotice, drainFailureReceipts,
+  router = createRouter({ ...providers, handleExpired, sendStatusNotice,
     canAttemptDelivery: delivery.canAttempt, finishDeliveryWait: delivery.finishWait, sweepDeliveryWaits: delivery.sweepWaits,
     maybePeriodicEnter: delivery.maybePeriodicEnter, clearPeriodicEnter: delivery.clearPeriodicEnter,
     deliverControl: overrides.deliverControl ?? delivery.deliverControl,

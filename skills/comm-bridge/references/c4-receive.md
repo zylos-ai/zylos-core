@@ -25,7 +25,6 @@ Accepted work is written with `status='pending'`. Rejected work is recorded with
 | `--json` | Output structured JSON instead of plain text |
 | `--session-group <name>` | Component-local group name; validated before routing or database writes |
 | `--core-source scheduler` | Mark a scheduler-originated call; other values are rejected |
-| `--task-name <name>` | Persist the scheduler task name for owner-alert wording; optional |
 
 `scripts/c4-receive-options.json`, next to the actual `c4-receive.js`, is the argument list used by the receiver itself. Its format is `{ "options": { "--channel": { "takesValue": true }, "--no-reply": { "takesValue": false } } }`; all accepted names, including aliases, are listed. `takesValue` specifies whether the next word is consumed as a value, even when it begins with `--`. A missing, unreadable or malformed manifest is an installation error: the receiver exits with `INTERNAL_ERROR` before queuing a message.
 

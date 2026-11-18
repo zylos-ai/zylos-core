@@ -1,6 +1,5 @@
 import { dataError, requireGroup } from './c4-session-group.js';
 import { messageForFailureReceipt } from './failure-receipt-template.js';
-import { FAILURE_RECEIPT_RETRY_SECONDS, FAILURE_RECEIPT_LIFETIME_SECONDS } from './failure-receipt-policy.js';
 import { MAX_RETRIES } from './c4-config.js';
 export function deliveryFunctions({ read, write, snapshot, get, all, run, seconds, insert }) {
   const unfenced = "NOT EXISTS(SELECT 1 FROM drain_fences WHERE session_group=conversations.session_group OR session_group='*')";
@@ -11,55 +10,29 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
     return { sql: values.length ? ` AND session_group IN (${values.map(() => '?').join(',')})` : ' AND 0', args: values };
   }
   function enqueueReceipt(c, id, reason) {
-    const row = get(c, 'SELECT id,channel,endpoint_id,session_group,delivery_action,core_source,task_name FROM conversations WHERE id=?', id);
-    if (!row || row.delivery_action === 'failure_receipt' ||
-        get(c, 'SELECT 1 FROM failure_receipts WHERE receipt_conversation_id=?', id) ||
-        (row.channel === 'internal' && !row.endpoint_id)) return;
-    const queued = run(c, `INSERT OR IGNORE INTO failure_receipts(conversation_id,reason,state,created_at,updated_at)
-      VALUES(?,?,'pending',?,?)`, id, reason, seconds(), seconds()).changes;
-    if (!queued || row.channel !== 'internal') return;
+    const row = get(c, 'SELECT id,channel,endpoint_id,session_group,delivery_action FROM conversations WHERE id=?', id);
+    if (!row || row.channel !== 'internal' || !row.endpoint_id || row.delivery_action === 'failure_receipt') return;
     // The original sender is immutable routing metadata, never parsed from content.
     requireGroup(row.endpoint_id);
-    const receipt = insert(c, 'in', 'internal', row.session_group,
+    insert(c, 'in', 'internal', row.session_group,
       messageForFailureReceipt({ ...row, reason }), row.endpoint_id,
       { deliveryAction: 'failure_receipt' });
-    run(c, "UPDATE failure_receipts SET state='queued',receipt_conversation_id=?,updated_at=? WHERE conversation_id=?",
-      receipt.id, seconds(), id);
   }
   const api = {
-    listFailureReceipts: ({ limit = 20 } = {}) => read(c => {
-      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw dataError('INVALID_ARGS', 'limit must be between 1 and 100');
-      return all(c, `SELECT conversations.id,conversations.direction,conversations.channel,conversations.endpoint_id,
-        conversations.session_group,conversations.core_source,conversations.task_name,failure_receipts.reason,failure_receipts.created_at FROM failure_receipts
-        JOIN conversations ON conversations.id=failure_receipts.conversation_id
-        WHERE failure_receipts.state IN ('pending','queued') AND conversations.channel<>'internal'
-        AND ((failure_receipts.state='pending' AND failure_receipts.updated_at=failure_receipts.created_at)
-          OR failure_receipts.updated_at+?<=? OR failure_receipts.created_at+?<=?)
-        ORDER BY failure_receipts.updated_at,conversation_id LIMIT ?`,
-        FAILURE_RECEIPT_RETRY_SECONDS, seconds(), FAILURE_RECEIPT_LIFETIME_SECONDS, seconds(), limit);
-    }),
-    settleFailureReceipt: (id, outcome) => write(c => {
-      if (!['sent','suppressed','uncertain','failed','expired'].includes(outcome)) throw dataError('INVALID_ARGS', 'Invalid receipt outcome');
-      const terminal = outcome === 'sent' || outcome === 'suppressed' || outcome === 'expired';
-      // Distinguish even a same-second failed attempt from untouched pending work.
-      const changed = run(c, "UPDATE failure_receipts SET state=CASE WHEN ? THEN ? ELSE state END,updated_at=MAX(?,created_at+1) WHERE conversation_id=? AND state IN ('pending','queued')",
-        terminal ? 1 : 0, outcome === 'expired' ? 'failed' : outcome, seconds(), id).changes > 0;
-      return terminal && changed;
-    }),
     getNextPending: ({ sessionGroups } = {}) => { const filter = groups(sessionGroups); return read(c => get(c, `SELECT * FROM conversations WHERE direction='in' AND status='pending' AND ${unfenced}${filter.sql} ORDER BY priority,id LIMIT 1`, ...filter.args) ?? null); },
     claimConversation: id => write(c => run(c, `UPDATE conversations SET status='running' WHERE id=? AND direction='in' AND status='pending' AND ${unfenced}`, id).changes > 0),
     requeueConversation: id => write(c => run(c, "UPDATE conversations SET status='pending' WHERE id=? AND direction='in' AND status='running'", id).changes > 0),
     markDelivered: (id, { sessionId } = {}) => write(c => run(c, "UPDATE conversations SET status='delivered',session_id=? WHERE id=? AND direction='in' AND status='running'", sessionId ?? null, id).changes > 0),
     expirePending: (id, maxAgeSeconds) => write(c => {
       if (!Number.isSafeInteger(maxAgeSeconds) || maxAgeSeconds <= 0) throw dataError('INVALID_ARGS', 'maxAgeSeconds must be a positive integer');
-      const changed = run(c, "UPDATE conversations SET status='failed',delivery_action='pending_expired' WHERE id=? AND direction='in' AND status='pending' AND ?-unixepoch(timestamp)>?", id, seconds(), maxAgeSeconds).changes > 0;
+      const changed = run(c, "UPDATE conversations SET status='failed',delivery_action=CASE WHEN delivery_action='failure_receipt' THEN delivery_action ELSE 'pending_expired' END WHERE id=? AND direction='in' AND status='pending' AND ?-unixepoch(timestamp)>?", id, seconds(), maxAgeSeconds).changes > 0;
       if (changed) enqueueReceipt(c, id, 'pending_expired');
       return changed;
     }),
     failDelivery: (id, { maxRetries = MAX_RETRIES, reason = 'delivery_failed' } = {}) => write(c => {
       if (!Number.isSafeInteger(maxRetries) || maxRetries < 1) throw dataError('INVALID_ARGS', 'maxRetries must be positive');
       if (!['delivery_failed', 'launch_failed', 'ready_timeout', 'delivery_unverified'].includes(reason)) throw dataError('INVALID_ARGS', 'Invalid delivery failure reason');
-      const row = get(c, "UPDATE conversations SET retry_count=retry_count+1,status=CASE WHEN retry_count+1>=? THEN 'failed' ELSE 'pending' END WHERE id=? AND direction='in' AND status='running' RETURNING status,retry_count AS retryCount", maxRetries, id);
+      const row = get(c, "UPDATE conversations SET retry_count=retry_count+1,status=CASE WHEN retry_count+1>=? THEN 'failed' ELSE 'pending' END,delivery_action=CASE WHEN retry_count+1>=? AND COALESCE(delivery_action,'')<>'failure_receipt' THEN ? ELSE delivery_action END WHERE id=? AND direction='in' AND status='running' RETURNING status,retry_count AS retryCount", maxRetries, maxRetries, reason, id);
       if (row?.status === 'failed') enqueueReceipt(c, id, reason);
       if (row) return { changed: true, ...row };
       return { changed: false, status: null, retryCount: null, ...get(c, 'SELECT status,retry_count AS retryCount FROM conversations WHERE id=?', id) };
@@ -69,11 +42,11 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
       const result = { requeued: { ids: [], count: 0 }, ageExpired: { ids: [], count: 0 }, retryExhausted: { ids: [], count: 0 } };
       const rows = all(c, `UPDATE conversations SET
         status=CASE WHEN ?-unixepoch(timestamp)>? OR retry_count+1>=? THEN 'failed' ELSE 'pending' END,
-        delivery_action=CASE WHEN ?-unixepoch(timestamp)>? THEN 'orphan_expired' WHEN retry_count+1>=? THEN 'orphan_retry_exhausted' ELSE delivery_action END,
+        delivery_action=CASE WHEN delivery_action='failure_receipt' THEN delivery_action WHEN ?-unixepoch(timestamp)>? THEN 'orphan_expired' WHEN retry_count+1>=? THEN 'orphan_retry_exhausted' ELSE delivery_action END,
         retry_count=CASE WHEN ?-unixepoch(timestamp)>? THEN retry_count ELSE retry_count+1 END
-        WHERE direction='in' AND status='running' RETURNING id,status,delivery_action`, seconds(), maxAgeSeconds, MAX_RETRIES, seconds(), maxAgeSeconds, MAX_RETRIES, seconds(), maxAgeSeconds);
+        WHERE direction='in' AND status='running' RETURNING id,status,delivery_action,?-unixepoch(timestamp)>? AS expired`, seconds(), maxAgeSeconds, MAX_RETRIES, seconds(), maxAgeSeconds, MAX_RETRIES, seconds(), maxAgeSeconds, seconds(), maxAgeSeconds);
       for (const row of rows.sort((a,b) => a.id-b.id)) {
-        const key = row.status === 'pending' ? 'requeued' : row.delivery_action === 'orphan_expired' ? 'ageExpired' : 'retryExhausted';
+        const key = row.status === 'pending' ? 'requeued' : row.expired ? 'ageExpired' : 'retryExhausted';
         result[key].ids.push(row.id); result[key].count++;
         if (row.status === 'failed') enqueueReceipt(c, row.id, row.delivery_action);
       }
@@ -111,5 +84,5 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
       return run(c, `UPDATE conversations SET content=content||?,delivery_action='suppressed' WHERE id=? AND direction='in' AND status='failed' AND COALESCE(delivery_action,'') NOT IN ('auth_rejected','pending_expired','suppressed') AND session_group=? AND channel=? AND endpoint_id IS ?`, `\n\n[C4] Status notification suppressed by cooldown while health=${health} reason=${reason}.`, id, sessionGroup, channel, endpointId ?? null).changes > 0;
     }),
   };
-  return { api, enqueueReceipt };
+  return api;
 }

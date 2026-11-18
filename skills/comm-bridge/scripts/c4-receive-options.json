@@ -9,7 +9,6 @@
     "--json": { "takesValue": false },
     "--content": { "takesValue": true },
     "--session-group": { "takesValue": true },
-    "--core-source": { "takesValue": true },
-    "--task-name": { "takesValue": true }
+    "--core-source": { "takesValue": true }
   }
 }

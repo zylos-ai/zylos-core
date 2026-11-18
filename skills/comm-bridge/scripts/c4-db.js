@@ -14,7 +14,6 @@ import { fileURLToPath } from 'url';
 import { DATA_DIR, DB_PATH, CONTROL_MAX_RETRIES } from './c4-config.js';
 import { buildReplyViaSuffix, hasLegacyReplyViaSuffix, truncateForDelivery } from './c4-utils.js';
 import { projectC4Content } from './c4-content-projection.js';
-import { normalizeStatusEndpoint } from './status-endpoint.js';
 import { dashboardSource, readOwnerName, resolveDashboardQuote } from './dashboard-source.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -79,7 +78,6 @@ function nowSeconds() { return Math.floor(Date.now() / 1000); }
  */
 export function reserveStatusNoticeCooldown({
   cooldownKey,
-  receiptId,
   channel,
   endpoint,
   statusType,
@@ -90,15 +88,6 @@ export function reserveStatusNoticeCooldown({
   const expiresAt = now + ttl;
 
   const tx = database.transaction(() => {
-    if (receiptId !== undefined) {
-      if (!Number.isSafeInteger(receiptId) || receiptId < 1) throw new TypeError('Invalid receipt ID');
-      const receipt = database.prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(receiptId);
-      if (!receipt) throw new Error('Failure receipt is missing');
-      // Admission is durable. A restart retries this same receipt regardless
-      // of a cooldown reservation left by this or a different message.
-      if (receipt.state === 'queued') return { suppressed: false, key: cooldownKey, ttl, reservedAt: now, expiresAt, resumed: true };
-      if (receipt.state !== 'pending') return { suppressed: true, key: cooldownKey, ttl };
-    }
     database.prepare('DELETE FROM status_notice_cooldowns WHERE expires_at <= ?').run(now);
 
     const insertResult = database.prepare(`
@@ -109,10 +98,6 @@ export function reserveStatusNoticeCooldown({
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(cooldownKey, channel, endpoint, statusType, reason, now, expiresAt, now);
 
-    if (receiptId !== undefined) {
-      database.prepare("UPDATE failure_receipts SET state=?,updated_at=? WHERE conversation_id=? AND state='pending'")
-        .run(insertResult.changes === 1 ? 'queued' : 'suppressed', now, receiptId);
-    }
     if (insertResult.changes === 1) {
       return { suppressed: false, key: cooldownKey, ttl, reservedAt: now, expiresAt };
     }
@@ -346,34 +331,12 @@ export function getConversationsSince(since) {
   ).all(since);
 }
 
-// Feishu/Lark private chats never split into threads; bare proactive addresses
-// and typed reply routes identify the same DM. Group threads stay scoped.
-function historyEndpoint(channel, endpoint) {
-  const normalized = normalizeStatusEndpoint(endpoint);
-  if (!['feishu', 'lark'].includes(channel)) return normalized;
-  const [base, ...parts] = normalized.split('|');
-  const privateChat = parts.includes('type:p2p');
-  const wholeGroup = parts.includes('type:group') && !parts.some(part => /^(thread|topic):/.test(part));
-  return [base, ...parts.filter(part => !/^type:(p2p|group)$/.test(part) &&
-    !(privateChat && /^(root|thread):/.test(part)) && !(wholeGroup && /^root:/.test(part)))].join('|');
-}
-
 /**
  * Get recent conversations (for debugging/testing)
  * @param {number} limit - max records to return
  * @returns {array} - latest N conversation records in chronological order
  */
-export function getRecentConversations(limit = 20, db = getDb(), { channel, endpoint } = {}) {
-  if (channel !== undefined) {
-    const rows = [], chat = historyEndpoint(channel, endpoint);
-    // Match chat identity before limiting, including system_notice outbound rows.
-    for (const row of db.prepare('SELECT * FROM conversations WHERE channel=? ORDER BY timestamp DESC,id DESC').iterate(channel)) {
-      if (historyEndpoint(channel, row.endpoint_id) !== chat) continue;
-      rows.push(row);
-      if (rows.length >= limit) break;
-    }
-    return rows.reverse();
-  }
+export function getRecentConversations(limit = 20, db = getDb()) {
   return db.prepare(
     'SELECT * FROM (SELECT * FROM conversations ORDER BY timestamp DESC, id DESC LIMIT ?) ORDER BY timestamp ASC, id ASC'
   ).all(limit);
@@ -476,8 +439,6 @@ export const claimConversation = (...args) => store.claimConversation(...args);
 export const requeueConversation = (...args) => store.requeueConversation(...args);
 export const markDelivered = (...args) => store.markDelivered(...args);
 export const expirePending = (...args) => store.expirePending(...args);
-export const listFailureReceipts = (...args) => store.listFailureReceipts(...args);
-export const settleFailureReceipt = (...args) => store.settleFailureReceipt(...args);
 export const failDelivery = (...args) => store.failDelivery(...args);
 export const recoverOrphanRunning = (...args) => store.recoverOrphanRunning(...args);
 export const listPendingSessionGroups = (...args) => store.listPendingSessionGroups(...args);

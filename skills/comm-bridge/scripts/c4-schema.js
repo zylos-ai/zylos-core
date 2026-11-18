@@ -2,24 +2,15 @@ import { migrateSchema } from './c4-migrations.js';
 import { migrateToV2 } from './c4-migrations-v2.js';
 import { migrateToV3 } from './c4-migrations-v3.js';
 import { migrateToV4 } from './c4-migrations-v4.js';
-import { migrateToV5 } from './c4-migrations-v5.js';
 import { inspectLayout } from './sqlite-schema.js';
 import { rejectLegacySchemaProbe } from './upgrade-admission.js';
 
 rejectLegacySchemaProbe();
 
-export const SUPPORTED_SCHEMA_VERSION = 5;
+export const SUPPORTED_SCHEMA_VERSION = 4;
 export const supportsNewDatabase = true;
 
 export const COLUMN_DEFINITIONS = {
-  failure_receipts: {
-    conversation_id: { type: 'INTEGER', pk: true },
-    reason: { type: 'TEXT', pk: false },
-    state: { type: 'TEXT', pk: false },
-    receipt_conversation_id: { type: 'INTEGER', pk: false },
-    created_at: { type: 'INTEGER', pk: false },
-    updated_at: { type: 'INTEGER', pk: false }
-  },
   checkpoints: {
     id: { type: 'INTEGER', pk: true },
     timestamp: { type: 'DATETIME', pk: false },
@@ -42,9 +33,7 @@ export const COLUMN_DEFINITIONS = {
     require_idle: { type: 'INTEGER', pk: false },
     retry_count: { type: 'INTEGER', pk: false },
     session_group: { type: 'TEXT', pk: false },
-    session_id: { type: 'TEXT', pk: false },
-    core_source: { type: 'TEXT', pk: false },
-    task_name: { type: 'TEXT', pk: false }
+    session_id: { type: 'TEXT', pk: false }
   },
   control_queue: {
     id: { type: 'INTEGER', pk: true },
@@ -158,13 +147,6 @@ export const TABLES = Object.fromEntries(
 );
 
 export const MIGRATIONS = Object.freeze({
-  4: Object.freeze({ to: 5, migrate: migrateToV5, changes: {
-    addTables: { failure_receipts: COLUMN_DEFINITIONS.failure_receipts },
-    addColumns: { conversations: {
-      core_source: COLUMN_DEFINITIONS.conversations.core_source,
-      task_name: COLUMN_DEFINITIONS.conversations.task_name,
-    } },
-  } }),
   3: Object.freeze({ to: 4, migrate: migrateToV4, changes: { rebuildTables: ['run_endings'] } }),
   2: Object.freeze({ to: 3, migrate: migrateToV3, changes: {
     rebuildTables: ['run_endings'],

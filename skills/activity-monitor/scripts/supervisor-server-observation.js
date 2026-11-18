@@ -1,6 +1,12 @@
-import { loadCoreModule } from './core-modules.js';
-
-export const { parseServerAlertTarget } = await loadCoreModule('supervisor-server-health.js');
+/** `default` (the owner chose the default destination) or `channel:endpoint`; anything else is null. */
+export function parseServerAlertTarget(value) {
+  if (typeof value !== 'string') return null;
+  if (value.trim() === 'default') return { default: true };
+  const colon = value.indexOf(':');
+  if (colon <= 0 || colon === value.length - 1 || /[\0\r\n]/.test(value)) return null;
+  const channel = value.slice(0, colon).trim(), endpoint = value.slice(colon + 1).trim();
+  return channel && endpoint ? { channel, endpoint } : null;
+}
 
 /** Observe-only decorator. Cached occupancy is never a current identity or an
  * authorization to reclaim, deliver, publish status, or release capacity.

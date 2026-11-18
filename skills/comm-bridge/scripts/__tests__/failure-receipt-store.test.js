@@ -29,13 +29,12 @@ test('internal final failure atomically queues exactly one receipt to the record
   assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations WHERE delivery_action='failure_receipt'").get().n, 1);
   assert.equal(f.db.prepare("SELECT head_id FROM group_heads WHERE session_group='chat:a'").get().head_id, receipt.id);
   exhaust(f.store, receipt);
-  assert.equal(f.db.prepare('SELECT count(*) AS n FROM failure_receipts').get().n, 1);
-  assert.equal(f.store.listFailureReceipts().length, 0);
+  assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations WHERE delivery_action='failure_receipt'").get().n, 1);
 });
 
 test('receipt write failure rolls back final failure and retry count', t => {
   const f = fixture(t), row = internal(f);
-  f.db.exec("CREATE TRIGGER receipt_refusal BEFORE INSERT ON failure_receipts BEGIN SELECT RAISE(ABORT, 'receipt unavailable'); END");
+  f.db.exec("CREATE TRIGGER receipt_refusal BEFORE INSERT ON conversations WHEN NEW.delivery_action='failure_receipt' BEGIN SELECT RAISE(ABORT, 'receipt unavailable'); END");
   f.store.claimConversation(row.id);
   assert.throws(() => f.store.failDelivery(row.id, { maxRetries: 1 }), /receipt unavailable/);
   const original = f.db.prepare('SELECT status,retry_count FROM conversations WHERE id=?').get(row.id);
@@ -54,18 +53,6 @@ for (const mode of ['pending_expired', 'orphan_expired']) {
     f.db.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(Math.floor(now / 1000) - 1000, receipt.id);
     if (mode === 'pending_expired') f.store.expirePending(receipt.id, 10);
     else { f.store.claimConversation(receipt.id); f.store.recoverOrphanRunning({ maxAgeSeconds: 100 }); }
-    assert.equal(f.db.prepare('SELECT count(*) AS n FROM failure_receipts').get().n, 1);
+    assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations WHERE delivery_action='failure_receipt'").get().n, 1);
   });
 }
-
-test('external retry backoff leaves untouched work immediately eligible', t => {
-  let clock = 1800000000000;
-  const f = fixture(t, { now: () => clock });
-  const first = f.store.insertConversation('in', 'telegram', 'first-chat', 'first');
-  const second = f.store.insertConversation('in', 'telegram', 'second-chat', 'second');
-  exhaust(f.store, first); exhaust(f.store, second);
-  f.store.settleFailureReceipt(first.id, 'failed');
-  assert.deepEqual(f.store.listFailureReceipts().map(row => row.id), [second.id]);
-  clock += 31000;
-  assert.deepEqual(f.store.listFailureReceipts().map(row => row.id), [second.id, first.id]);
-});

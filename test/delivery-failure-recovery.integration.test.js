@@ -128,7 +128,6 @@ for (const [mode, maintenance] of [['single', null], ['single', 'memory_sync'],
     assert.equal(ownerAlerts.length, 1, 'owner alert and Supervisor recovery are independent');
     assert.deepEqual(ownerAlerts[0].target, { channel: 'dashboard', endpoint: 'origin' });
     assert.ok(ownerAlerts[0].message.includes(String(row.id)));
-    assert.equal(database.getDb().prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(row.id).state, 'sent');
     assert.equal(facts[0].sessionGroup, group);
     assert.equal(replies.some(reply => reply.code === 'invalid_request'), false);
     assert.equal(stops, maintenance ? 0 : 1, 'Supervisor default failure callback reaches the existing stop path');

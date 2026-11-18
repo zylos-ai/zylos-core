@@ -204,12 +204,18 @@ test('READY timeout records launch phase durations under its separate budget', a
     return { launchTiming: { preflight_ms: 7, new_session_ms: 20, executor_init_ms: 3, exec_confirm_ms: 40,
       cleanup_ms: 1, total_ms: 64, timeout_ms: 10000, last_phase: 'exec_confirm' } };
   } });
+  const alerts = [];
+  f.deps.sendFailureAlert = (failed, reason) => {
+    assert.equal(f.row(failed.id).status, 'failed', 'alert follows failure commit');
+    alerts.push({ id: failed.id, reason });
+  };
   f.options.maxRetries = 1;
   await f.create().initialize(); await f.rounds(2);
   assert.equal(f.row(row.id).status, 'running');
   f.advance(1000); await f.rounds(1);
   assert.equal(f.row(row.id).retry_count, 1);
-  assert.equal(f.sqlite.prepare('SELECT reason FROM failure_receipts WHERE conversation_id=?').get(row.id).reason, 'ready_timeout');
+  assert.equal(f.row(row.id).delivery_action, 'ready_timeout');
+  assert.deepEqual(alerts, [{ id: row.id, reason: 'ready_timeout' }]);
   const event = f.events.find(event => event.event === 'session_launch_failed');
   assert.equal(event.last_phase, 'runtime_ready');
   assert.equal(event.timeout_ms, 1000);

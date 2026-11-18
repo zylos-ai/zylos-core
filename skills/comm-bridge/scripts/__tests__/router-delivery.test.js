@@ -206,21 +206,19 @@ test('Enter failure increments retry, invalid keystroke rejected; valid keystrok
   assert.equal(bad.status, 'pending'); assert.equal(good.status, 'done');
 });
 
-test('exhausted unverified Enter preserves uncertainty in the durable failure receipt', async t => {
+test('exhausted unverified Enter preserves uncertainty in the failure reason', async t => {
   const f = setup(t), row = f.message();
   f.adapter.sendKeys = async () => { throw error('ENTER_UNVERIFIED'); };
   const delivery = f.create();
   await delivery.deliverConversation(row);
   assert.equal(f.row(row.id).status, 'pending');
-  assert.equal(f.store.listFailureReceipts().length, 0);
   assert.equal(f.store.claimConversation(row.id), true);
   await delivery.deliverConversation(row);
   assert.equal(f.row(row.id).status, 'failed');
-  const [receipt] = f.store.listFailureReceipts();
-  assert.equal(receipt.id, row.id);
-  assert.equal(receipt.reason, 'delivery_unverified');
+  const failed = f.row(row.id);
+  assert.equal(failed.delivery_action, 'delivery_unverified');
   const { messageForFailureReceipt } = await import('../failure-receipt-template.js');
-  assert.match(messageForFailureReceipt(receipt, {}), /未能确认送达/);
+  assert.match(messageForFailureReceipt({ ...failed, reason: failed.delivery_action }, {}), /未能确认送达/);
 });
 
 test('normal active heartbeat autoacks, recovery and post_restart reach runtime', async t => {

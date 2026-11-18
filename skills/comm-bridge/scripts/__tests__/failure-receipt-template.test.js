@@ -19,6 +19,8 @@ test('internal failure receipt uses configured status notice brand with the same
     assert.match(messageForFailureReceipt(record, { brand }), /^\[Zylos\]/);
   }
   assert.match(messageForFailureReceipt(record, { brand: '  Factory  ' }), /^\[Factory\]/);
+  fs.writeFileSync(CONFIG_FILE, '{broken');
+  assert.match(messageForFailureReceipt(record), /^\[Zylos\]/);
 });
 
 test('internal exhausted delivery verification describes uncertainty rather than confirmed non-delivery', () => {
@@ -40,5 +42,5 @@ test('owner failure alert uses the shared configured brand and safe default', ()
   }
   const message = messageForFailureAlert(alert, { brand: '  Factory  ' });
   assert.match(message, /^\[Factory\]/);
-  assert.match(message, /\n\[Factory\] User message/);
+  assert.match(message, /\n\[Factory\] Message/);
 });

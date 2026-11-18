@@ -11,7 +11,7 @@ import { readDefaultModels, setModelThreshold } from '../lib/model-rotation-thre
 
 import { readZylosConfigOrThrow, updateZylosConfigLocked } from '../lib/config.js';
 import { switchProtocol, isCaddyAvailable } from '../lib/caddy.js';
-import { parseServerAlertTarget } from '../lib/supervisor-server-health.js';
+import { parseServerAlertTarget } from '../../skills/activity-monitor/scripts/supervisor-server-observation.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 
 /** Keys that trigger side effects when changed */

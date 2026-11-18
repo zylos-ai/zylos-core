@@ -180,14 +180,12 @@ export function databaseCli(args) {
     return display(query.modeTransition({ runId: o['run-id'] }), o);
   }
   if (command === 'recent') {
-    const o = options(rest, ['channel', 'endpoint'], ['json']); if (o.positional.length > 1) invalid('Too many limits');
-    if ((o.channel !== undefined) !== (o.endpoint !== undefined) || o.channel === '' || o.endpoint === '') invalid('recent requires both nonempty --channel and --endpoint');
-    return display(db.getRecentConversations(o.positional.length ? number(o.positional[0], 'limit', 1) : 20,
-      db.getDb(), { channel: o.channel, endpoint: o.endpoint }).map(projectConversation), o);
+    const o = options(rest, [], ['json']); if (o.positional.length > 1) invalid('Too many limits');
+    return display(db.getRecentConversations(o.positional.length ? number(o.positional[0], 'limit', 1) : 20).map(projectConversation), o);
   }
   if (command === 'checkpoints') { const o = options(rest, [], ['json']); noPositionals(o); return display(db.getCheckpoints(), o); }
   if (command === 'init') { const o = options(rest); noPositionals(o); db.getDb(); return 'Database initialized\n'; }
-  if (!command || ['--help','-h'].includes(command)) return 'c4-db.js: init | insert <in|out> <channel> <endpoint> <content> [--session-group G] | checkpoint <end> (--summary TEXT|--no-content) | unsummarized [--group G] | groups [--match TEXT|--active-since MS|--key-match TEXT] [--limit N] [--raw] | group-queues [--json] | origin-sync backlog | mode-transition show | rejection --id ID [--json] | recent [limit] [--channel CHANNEL --endpoint ENDPOINT] | checkpoints\n';
+  if (!command || ['--help','-h'].includes(command)) return 'c4-db.js: init | insert <in|out> <channel> <endpoint> <content> [--session-group G] | checkpoint <end> (--summary TEXT|--no-content) | unsummarized [--group G] | groups [--match TEXT|--active-since MS|--key-match TEXT] [--limit N] [--raw] | group-queues [--json] | origin-sync backlog | mode-transition show | rejection --id ID [--json] | recent | checkpoints\n';
   invalid(`Unknown command ${command}`);
 }
 export function checkpointCli(args) {

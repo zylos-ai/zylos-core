@@ -1,7 +1,6 @@
-/** The store commits expiry and its receipt together. Use the same bounded
- * durable drain as startup/activation failures instead of a separate sender. */
-export function createPendingExpiryHandler({ drainFailureReceipts }) {
-  return async function handleExpired() {
-    return drainFailureReceipts();
+/** Failure is already committed; internal receipts are inserted by the store. */
+export function createPendingExpiryHandler({ sendFailureAlert }) {
+  return async function handleExpired(row) {
+    sendFailureAlert(row, 'pending_expired');
   };
 }

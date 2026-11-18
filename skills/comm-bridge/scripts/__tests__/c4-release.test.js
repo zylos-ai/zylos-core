@@ -39,7 +39,7 @@ for (const historical of ['c4-v0.1.0.sql', 'c4-v0.4.11.sql', 'c4-v0.5.2.sql', 'c
     db.exec("CREATE TABLE local_notes(note TEXT); INSERT INTO local_notes VALUES('retained'); ALTER TABLE conversations ADD COLUMN local_tag TEXT; UPDATE conversations SET local_tag='kept'");
     const tags = db.prepare('SELECT id,local_tag FROM conversations ORDER BY id').all();
     migrate(db);
-    assert.equal(owner.inspectSchema(db, { allowExtraTables: true, allowExtraColumns: true }).version, owner.SUPPORTED_SCHEMA_VERSION);
+    assert.equal(owner.inspectSchema(db, { allowExtraTables: true, allowExtraColumns: true }).version, 4);
     assertUnrestrictedReason(db);
     release(db);
     assert.equal(db.prepare('SELECT note FROM local_notes').get().note, 'retained');
@@ -61,11 +61,11 @@ function assertUnrestrictedReason(db) {
 test('new databases validate reason nullability but leave reason values to the writer', t => {
   const db = new Database(':memory:'); t.after(() => db.close());
   guardDatabase(db, owner); release(db);
-  assert.equal(db.pragma('user_version', { simple: true }), owner.SUPPORTED_SCHEMA_VERSION);
+  assert.equal(db.pragma('user_version', { simple: true }), 4);
   assertUnrestrictedReason(db);
 });
 
-test('a version three opener refuses a current database without changing it', t => {
+test('a version three opener refuses a version four database without changing it', t => {
   const { db } = fixture(t);
   const before = snapshot(db);
   const previous = { SUPPORTED_SCHEMA_VERSION: 3, inspectSchema: connection => inspectLayout(connection, 'c4', 3, owner.TABLES) };
@@ -82,7 +82,7 @@ test('version two migrates through both rebuilds and writes deletion and release
   seedV1(db, { extensions: true }); migrateToV2(db); db.pragma('user_version=2');
   db.exec("INSERT INTO run_endings(session_group,run_id,reason,ended_at) VALUES('old','run','ttl',1)");
   migrate(db);
-  assert.equal(db.pragma('user_version', { simple: true }), owner.SUPPORTED_SCHEMA_VERSION);
+  assert.equal(db.pragma('user_version', { simple: true }), 4);
   assert.equal(db.prepare("SELECT reason FROM run_endings WHERE session_group='old'").get().reason, 'ttl');
   db.exec("INSERT INTO run_endings(session_group,run_id,reason,ended_at) VALUES('deleted','run','delete',2)");
   release(db);
@@ -103,7 +103,7 @@ test('removing the v3 reason constraint preserves ending data, extensions, gener
   const rows = oldRows(db);
   const ending = db.prepare('SELECT * FROM run_endings').all();
   migrate(db);
-  assert.equal(db.pragma('user_version', { simple: true }), owner.SUPPORTED_SCHEMA_VERSION);
+  assert.equal(db.pragma('user_version', { simple: true }), 4);
   assertUnrestrictedReason(db);
   assert.deepEqual(oldRows(db), rows);
   assert.deepEqual(db.prepare('SELECT * FROM run_endings').all(), ending);

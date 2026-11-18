@@ -110,62 +110,38 @@ test('factory: real expiry sends only an owner alert after commit, then fresh wo
     attempts.push({ target, body }); return true;
   };
   const dispatcher = f.create(); await dispatcher.initialize(); await dispatcher.idle(); dispatcher.tick(); await dispatcher.idle();
+  await until(() => attempts.length === 1, 'expiry owner alert did not send');
   assert.equal(f.row(old.id).status, 'failed'); assert.equal(f.row(old.id).delivery_action, 'pending_expired');
   assert.equal(f.row(fresh.id).status, 'delivered'); assert.equal(attempts.length, 1);
   assert.deepEqual(attempts[0].target, { channel: 'owner-test', endpoint: 'owner-private' });
   assert.equal(attempts[0].body, messageForFailureAlert({ ...old, reason: 'pending_expired' }));
   for (let i = 0; i < 3; i++) { dispatcher.tick(); await dispatcher.idle(); }
   assert.equal(attempts.length, 1, 'settled owner alert must not be sent again');
-  assert.equal(f.db.getDb().prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(old.id).state, 'sent');
   assert.equal(f.calls.filter(c => c[0] === 'paste').length, 1);
   assert.ok(f.db.getStatusNoticeCooldowns().some(c => c.cooldown_key.includes('pending_expired')));
 });
 
-// Durable restart boundary: run for terminal failure/outbox/factory changes; skip UI-only changes.
-// HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and SQLite are read back by setup; terminal I/O
-// is injected, so no tmux socket or external account is opened. Teardown drains all work.
-test('factory: startup drains a persisted failure once without redelivering its original input', async t => {
+// Recovery boundary: run for orphan settlement/owner alerts; skip unrelated UI.
+// setup proves private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and SQLite; terminal and
+// channel edges are injected. No tmux/socket/account is contacted.
+test('factory: startup orphan failure alerts once and never redelivers the original', async t => {
   const f = setup(t), original = f.add(f.a, 'private original input');
-  assert.equal(f.db.claimConversation(original.id), true);
-  assert.equal(f.db.failDelivery(original.id, { maxRetries: 1, reason: 'launch_failed' }).status, 'failed');
-  assert.equal(f.db.listFailureReceipts().some(row => row.id === original.id), true);
+  f.db.claimConversation(original.id);
+  f.db.getDb().prepare('UPDATE conversations SET retry_count=1 WHERE id=?').run(original.id);
   const attempts = [];
   f.overrides.readZylosConfigStrict = () => ({ state: 'ok', config: { alert_target: 'owner-test:owner-private' } });
-  f.overrides.sendStatusNotice = async () => assert.fail('terminal user failure must not reply to the external chat');
-  f.overrides.sendAlert = async (target, body) => { attempts.push({ target, body }); return true; };
+  f.overrides.sendStatusNotice = async () => assert.fail('terminal failure must not reply to original chat');
+  f.overrides.sendAlert = async (target, body) => { attempts.push({ target, body }); };
   const fresh = f.add(f.a, 'fresh after startup failure');
-  const dispatcher = f.create();
-  await dispatcher.initialize(); await dispatcher.idle();
+  const dispatcher = f.create(); await dispatcher.initialize(); await dispatcher.idle(); await flush();
   for (let i = 0; i < 3; i++) { dispatcher.tick(); await dispatcher.idle(); }
   assert.equal(attempts.length, 1);
   assert.deepEqual(attempts[0].target, { channel: 'owner-test', endpoint: 'owner-private' });
-  assert.equal(attempts[0].body, messageForFailureAlert({ ...original, reason: 'launch_failed' }));
+  assert.equal(attempts[0].body, messageForFailureAlert({ ...original, reason: 'orphan_retry_exhausted' }));
   assert.equal(attempts[0].body.includes('private original input'), false);
   assert.equal(f.row(original.id).status, 'failed');
   assert.equal(f.row(fresh.id).status, 'delivered');
   assert.equal(f.calls.filter(call => call[0] === 'paste').length, 1);
-});
-
-// Run for owner-alert rendering/config fallback changes; skip unrelated UI.
-// setup proves private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and SQLite. Only the
-// channel edge is recorded in memory; no tmux/network/account is contacted.
-test('factory: malformed configuration still drains an owner alert to Origin', async t => {
-  const f = setup(t);
-  const dispatcher = f.create();
-  await dispatcher.initialize(); await dispatcher.idle();
-  const original = f.add(f.a, 'private original input');
-  f.db.claimConversation(original.id);
-  f.db.failDelivery(original.id, { maxRetries: 1, reason: 'launch_failed' });
-  fs.writeFileSync(CONFIG_FILE, '{broken');
-  dispatcher.tick(); await dispatcher.idle();
-  const alerts = f.calls.filter(call => call[0] === 'owner_alert');
-  assert.equal(alerts.length, 1);
-  assert.deepEqual(alerts[0][1], { channel: 'dashboard', endpoint: 'origin' });
-  assert.match(alerts[0][2], /^\[Zylos\]/);
-  assert.ok(alerts[0][2].includes(`#${original.id}`));
-  assert.equal(alerts[0][2].includes('private original input'), false);
-  assert.equal(f.row(original.id).status, 'failed');
-  assert.equal(f.db.getDb().prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(original.id).state, 'sent');
 });
 
 test('factory: actual unreadable remains inert once, even if config repaired', async t => {
@@ -283,57 +259,21 @@ for (const runtime of ['claude', 'codex']) for (const outcome of ['timeout', 'bo
   });
 }
 
-// Run for owner-alert retry scheduling/diagnostic composition; skip unrelated UI.
-// setup reads back isolated HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and actual SQLite.
-// Runtime and transport boundaries are injected; no tmux, account or network.
-test('factory: failed owner and Origin alerts back off and terminate with structured diagnostics', async t => {
-  const f = setup(t), row = f.add();
+// Best-effort owner-alert boundary: run for terminal alert wiring; skip UI.
+// setup verifies all private roots and SQLite. Only the channel edge is injected.
+test('factory: failed owner alert falls back to Origin once without retrying on ticks', async t => {
+  const f = setup(t), row = f.add(f.a, 'SECRET body');
   f.db.claimConversation(row.id);
-  f.db.failDelivery(row.id, { maxRetries: 1, reason: 'launch_failed' });
-  let sends = 0;
-  f.overrides.readZylosConfigStrict = () => ({ state: 'ok', config: { alert_target: 'owner-test:owner-private' } });
-  f.overrides.sendStatusNotice = async () => assert.fail('terminal failure must not reply to the external chat');
-  f.overrides.sendAlert = async () => { sends++; return false; };
-  const dispatcher = f.create();
-  await dispatcher.initialize(); await dispatcher.idle();
-  dispatcher.tick(); await dispatcher.idle();
-  assert.equal(sends, 2);
-  assert.equal(f.calls.filter(call => call[0] === 'event' && call[1] === 'failure_receipt_send_failed').length, 1);
-  dispatcher.tick(); await dispatcher.idle();
-  assert.equal(sends, 2, 'polling cannot bypass persisted backoff');
-  f.db.getDb().prepare('UPDATE failure_receipts SET created_at=created_at-600 WHERE conversation_id=?').run(row.id);
-  dispatcher.tick(); await dispatcher.idle();
-  assert.equal(sends, 2);
-  assert.equal(f.db.getDb().prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(row.id).state, 'failed');
-  const terminal = f.calls.filter(call => call[0] === 'event' && call[1] === 'failure_receipt_exhausted');
-  assert.equal(terminal.length, 1);
-  assert.equal(terminal[0][2].conversation_id, row.id);
-  dispatcher.tick(); await dispatcher.idle();
-  assert.equal(sends, 2);
-  assert.equal(f.calls.filter(call => call[0] === 'event' && call[1] === 'failure_receipt_exhausted').length, 1);
-});
-
-// Run for scheduler provenance/owner-alert composition; skip unrelated UI.
-// setup verifies private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and actual SQLite.
-// Only channel send is injected; the real shared supervisor policy chooses the
-// fallback. Runtime boundaries are inert fixtures, with no live tmux/network.
-test('factory: scheduled startup failure uses owner alert and Origin fallback exclusively', async t => {
-  const f = setup(t), row = f.add(f.a, 'SECRET scheduled body', { coreSource: 'scheduler', taskName: 'Nightly check' });
-  f.db.claimConversation(row.id);
-  f.db.failDelivery(row.id, { maxRetries: 1, reason: 'launch_failed' });
+  f.db.getDb().prepare('UPDATE conversations SET retry_count=1 WHERE id=?').run(row.id);
   const sends = [];
   f.overrides.readZylosConfigStrict = () => ({ state: 'ok', config: { alert_target: 'telegram:broken-owner-chat' } });
-  f.overrides.sendStatusNotice = async () => assert.fail('scheduled startup failure must not reply to original chat');
-  f.overrides.sendAlert = async (target, message) => { sends.push({ target, message });
-    if (target.channel === 'telegram') throw Error('SECRET transport failure'); return true; };
-  const dispatcher = f.create(); await dispatcher.initialize(); await dispatcher.idle();
-  dispatcher.tick(); await dispatcher.idle();
+  f.overrides.sendStatusNotice = async () => assert.fail('terminal failure must not reply to original chat');
+  f.overrides.sendAlert = async (target, message) => { sends.push({ target, message }); throw Error('SECRET transport failure'); };
+  const dispatcher = f.create(); await dispatcher.initialize(); await dispatcher.idle(); await flush();
+  for (let i = 0; i < 3; i++) { dispatcher.tick(); await dispatcher.idle(); }
   assert.equal(sends.length, 2);
   assert.deepEqual(sends.map(send => send.target), [
     { channel: 'telegram', endpoint: 'broken-owner-chat' }, { channel: 'dashboard', endpoint: 'origin' } ]);
-  assert.ok(sends.every(send => send.message.includes('Nightly check') && send.message.includes(f.a) &&
-    send.message.includes(`endpoint-${f.a}`) && !send.message.includes('SECRET')));
-  assert.equal(f.db.getDb().prepare('SELECT state FROM failure_receipts WHERE conversation_id=?').get(row.id).state, 'sent');
-  dispatcher.tick(); await dispatcher.idle();
-  assert.equal(sends.length, 2);
+  assert.ok(sends.every(send => send.message.includes(f.a) && send.message.includes(`endpoint-${f.a}`) && !send.message.includes('SECRET')));
+  assert.equal(f.row(row.id).status, 'failed');
 });

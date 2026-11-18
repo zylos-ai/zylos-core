@@ -80,22 +80,18 @@ support, and an incompatible Core rejects the entire envelope.
 
 ## Short Replies to Owner Alerts
 
-Before responding to an unclear short reply in the owner's chat (for example,
-“需要” / “yes, please”), read that same chat's recent inbound and outbound
-history, including `system_notice` rows. Check whether the reply answers an
-alert's offer to investigate, then respond using that context. Keep the lookup
-within this chat; do not guess from another conversation.
+Before responding to an unclear short reply such as “需要” / “yes, please”,
+inspect this chat's recent records in the current session group:
 
 ```bash
-node ~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js recent 20 --channel '<channel>' --endpoint '<endpoint>'
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --unsummarized --group '<current group>'
 ```
 
-Replace the placeholders with this incoming message's exact channel and endpoint.
-The documented [recent query](references/c4-db.md#recent) matches chat identity
-while ignoring per-message reply metadata, includes `system_notice` outbound
-rows, and projects content before output. If it identifies an alert, follow
-[Investigating an alert](references/delivery-failure-receipts.md#investigating-an-alert).
-If the history does not resolve the reply, ask a brief clarifying question.
+Outbound system alerts are stored in the chat's `session_group`. Match the
+reply to the alert's offer to investigate, keeping the lookup within this chat.
+If it matches, follow [Investigating an alert](references/delivery-failure-receipts.md#investigating-an-alert).
+If the alert has already been memory-synced and is no longer visible, or the
+reply remains unclear, ask a brief clarifying question.
 
 ## Messages Between Session Threads
 

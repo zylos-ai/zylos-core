@@ -1,10 +1,6 @@
 import { projectC4Content } from './c4-content-projection.js';
 import { dataError } from './c4-session-group.js';
-export function projectConversation(row) {
-  // Failure-alert wording metadata stays private to the alert and diagnosis APIs.
-  const { core_source, task_name, ...publicRow } = row;
-  return { ...publicRow, content: projectC4Content(row.content, { c4Id: row.id }) };
-}
+export const projectConversation = row => ({ ...row, content: projectC4Content(row.content, { c4Id: row.id }) });
 export const ARG_PAYLOAD_MAX = 131071;
 export const shellQuote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
 export function replyVia(row, scriptPath) {

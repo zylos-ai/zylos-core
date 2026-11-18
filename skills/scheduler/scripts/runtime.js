@@ -19,9 +19,8 @@ export function findC4ReceivePath() {
 
 export function buildReceiveArgs(message, options = {}, receivePath = findC4ReceivePath()) {
   const { sessionComponent = null, sessionGroupName = null, replyChannel = null,
-    replyEndpoint = null, priority = 3, requireIdle = false, taskName = null } = options;
+    replyEndpoint = null, priority = 3, requireIdle = false } = options;
   const args = [receivePath, '--core-source', 'scheduler', '--json'];
-  if (taskName != null) args.push('--task-name', taskName);
   if (!replyChannel) args.push('--no-reply');
   const channel = sessionComponent || replyChannel;
   if (channel) args.push('--channel', channel);

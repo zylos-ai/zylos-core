@@ -341,7 +341,11 @@ export function createActivationManager(context) {
       return;
     }
     releaseSlot(activation);
-    if (activation.message) deps.db.failDelivery(activation.message.id, { maxRetries: options.maxRetries, reason: activation.launchError ? 'launch_failed' : 'ready_timeout' });
+    if (activation.message) {
+      const reason = activation.launchError ? 'launch_failed' : 'ready_timeout';
+      const transition = deps.db.failDelivery(activation.message.id, { maxRetries: options.maxRetries, reason });
+      if (transition.changed && transition.status === 'failed') deps.sendFailureAlert?.(activation.message, reason);
+    }
     state.activations.delete(group);
     state.live.delete(group); // Observation must be refreshed, never fabricate READY.
     if (activation.resident) state.resident.absentSince = now();

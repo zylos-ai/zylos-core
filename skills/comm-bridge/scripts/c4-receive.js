@@ -31,7 +31,7 @@ export function parseReceiveArgs(args, { options = loadReceiveOptions(), diagnos
   const result = { channel: null, endpoint: null, content: null, priority: 3,
     noReply: false, requireIdle: false, json: false };
   const values = { '--channel': 'channel', '--endpoint': 'endpoint', '--content': 'content',
-    '--priority': 'priority', '--session-group': 'groupName', '--core-source': 'coreSource', '--task-name': 'taskName' };
+    '--priority': 'priority', '--session-group': 'groupName', '--core-source': 'coreSource' };
   const flags = { '--no-reply': 'noReply', '--json': 'json', '--require-idle': 'requireIdle', '--block-queue-until-idle': 'requireIdle' };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -68,7 +68,7 @@ export async function receive(args, dependencies = {}) {
   const diagnostic = dependencies.diagnostic ?? console.error;
   const receivedAt = (dependencies.now ?? Date.now)();
   const input = parseReceiveArgs(args, { diagnostic });
-  const { channel: rawChannel, endpoint, content, noReply, priority, requireIdle, groupName, coreSource, taskName } = input;
+  const { channel: rawChannel, endpoint, content, noReply, priority, requireIdle, groupName, coreSource } = input;
   if (endpoint !== null) {
     try { validateEndpoint(endpoint); }
     catch (error) { throw dataError('INVALID_ARGS', `invalid endpoint: ${error.message}`); }
@@ -102,8 +102,6 @@ export async function receive(args, dependencies = {}) {
   try {
     record = db.insertConversation('in', channel, noReply ? null : endpoint, content, {
       status: pending ? 'pending' : 'failed', priority, requireIdle,
-      ...(coreSource !== undefined ? { coreSource } : {}),
-      ...(taskName !== undefined ? { taskName } : {}),
       ...(auth ? { deliveryAction: 'auth_rejected' } : {}),
       ...(groupName !== undefined ? { groupName } : {}) });
   } catch (error) {
