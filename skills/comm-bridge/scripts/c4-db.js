@@ -512,7 +512,6 @@ export const voidInternalForSingle = (...args) => store.voidInternalForSingle(..
 export const setModeTransitionPhase = (...args) => store.setModeTransitionPhase(...args);
 export const getAbsorbedConversations = (...args) => store.getAbsorbedConversations(...args);
 export const getModeTransition = (options = {}) => store.getModeTransition(options);
-export const auditCheckpoints = () => store.auditCheckpoints();
 
 // CLI mode: import after the facade has initialized to avoid a module cycle.
 if (isMainModule(import.meta.url)) {

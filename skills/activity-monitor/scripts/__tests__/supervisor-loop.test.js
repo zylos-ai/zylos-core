@@ -1,12 +1,40 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SupervisorLoop } from '../supervisor-loop.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 function fixture(overrides={}) {
  const calls=[],timers=[]; const rec=n=>async()=>{calls.push(n);};
  const deps={readConfiguration:async()=>({mode:'multi'}),restore:rec('restore'),openAdmission:rec('open'),reportError:async(e,d)=>calls.push(`error:${d.phase}`),getModeTransition:async()=>null,listDrainFences:async()=>[],readRestartRequests:async()=>[],lifecycleSerial:fn=>fn(),advanceTransition:rec('transition'),advanceManual:rec('manual'),advanceRestarts:rec('restarts'),reconcileConfiguration:rec('config'),observe:async()=>{calls.push('observe');return [{sessionGroup:'origin'},{sessionGroup:'tg:one'}];},observeExits:rec('exits'),probeAndPublish:async s=>calls.push(`probe:${s.sessionGroup}`),advanceReclaim:rec('reclaim'),checkRotation:rec('rotation'),checkTtl:rec('ttl'),checkEviction:rec('evict'),checkSync:rec('sync'),writeMetricsAndMaintain:rec('metrics'),...overrides};
  return {calls,timers,deps,loop:new SupervisorLoop(deps,{schedule:(fn,ms)=>{timers.push({fn,ms});return timers.length;},cancel:()=>{}})};
 }
+
+test('directory loss halts supervisor rounds and emits one error without rescheduling', async t => {
+ const previous=process.env.TMUX_TMPDIR;
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'tmux-supervisor-'));
+ const active=path.join(root,'active');fs.mkdirSync(active,{mode:0o700});
+ process.env.TMUX_TMPDIR=active;
+ t.after(()=>{if(previous===undefined)delete process.env.TMUX_TMPDIR;else process.env.TMUX_TMPDIR=previous;fs.rmSync(root,{recursive:true,force:true});});
+ const f=fixture();t.after(()=>f.loop.stop());await f.loop.start();
+ const before=f.calls.length,timers=f.timers.length;
+ fs.renameSync(active,path.join(root,'moved'));
+ for(let i=0;i<100;i++)await f.loop.tick();
+ assert.equal(f.calls.length,before+1);assert.equal(f.calls.at(-1),'error:tmux-directory');
+ assert.equal(f.loop.directoryError.code,'TMUX_DIR_MISSING');assert.equal(f.timers.length,timers);
+});
 // supervisor-startup: configuration corruption cannot become single.
+test('directory failure during observation latches immediately without another round', async t => {
+ const f=fixture({observe:async()=>{throw Object.assign(new Error('directory disappeared'),{code:'TMUX_DIR_MISSING'});}});
+ t.after(()=>f.loop.stop());
+ await f.loop.start();
+ assert.equal(f.loop.directoryError.code,'TMUX_DIR_MISSING');
+ assert.equal(f.timers.length,0);
+ const before=f.calls.length;
+ for(let i=0;i<100;i++)await f.loop.tick();
+ assert.equal(f.calls.length,before);
+ assert.equal(f.calls.filter(call=>call==='error:tmux-directory').length,1);
+});
 test('bad F1 alerts once and does not restore, open admission, or schedule',async()=>{
  const f=fixture({readConfiguration:async()=>{throw Object.assign(new Error('bad config'),{code:'CONFIG_UNREADABLE'});},startupAlert:async event=>f.calls.push(`alert:${event.event}:${event.reason}`)});
  await f.loop.start();await f.loop.start();await f.loop.tick();

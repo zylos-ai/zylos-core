@@ -1433,7 +1433,7 @@ export function createServer() {
     if (isRetiredApiPath(pathname)) { sendJson(res, 404, { error: 'not_found' }); return; }
     if ((pathname.startsWith('/api/') || pathname.startsWith('/fleet/')) && pathname !== '/api/auth/token' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       const context = auth.resolveAuthContext(req);
-      if (auth.enabled && context?.scope !== 'admin') { sendJson(res, 403, { error: 'insufficient_scope', required: 'admin' }); return; }
+      if (context?.scope !== 'admin') { sendJson(res, 403, { error: 'insufficient_scope', required: 'admin' }); return; }
       if (context?.kind === 'cookie' && !isSameOriginRequest(req)) { sendJson(res, 403, { error: 'same_origin_required' }); return; }
     }
 

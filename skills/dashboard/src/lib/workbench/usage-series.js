@@ -40,10 +40,12 @@ export function usageSeries(store, c4Reader, options = {}) {
   const messages = messageSeries.points;
   const messageTotal = messageSeries.total;
   const costTotals = summarizeCosts(costs);
+  // Part of the instance total that no group owns; see costRows.
+  const otherCost = summarizeCosts(costRows(store, { ...bounds, bucket: 'total', other: true })).total;
   return { ...bounds, buckets: intervals.map(({ at }) => at), scope: 'all_groups',
     cache,
     totals: { inputTokens, cacheReadTokens, cacheHitRate: inputTokens > 0 ? cacheReadTokens / inputTokens : null, tokens: tokens.reduce((total, row) => total + row.value, 0), cost: costTotals.total,
-      costByRuntime: costTotals.byRuntime, messages: messageTotal,
+      costByRuntime: costTotals.byRuntime, otherCost, messages: messageTotal,
       rotations: rotations === null ? null : rotations.reduce((total, row) => total + row.value, 0), tools: toolTotal },
     costByRuntime: costs, tokensByRuntime: tokens, messages,
     messagesReason: messageSeries.reason ?? null, messagesSampledAt: messageSeries.sampledAt ?? null,

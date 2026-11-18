@@ -80,7 +80,7 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 
 **环境变量：**
 
-参数也可在 `zylos init` 时通过环境变量设置。优先级：CLI 参数 > 环境变量 > 已有 `.env` > 交互式提示。
+参数也可在 `zylos init` 时通过环境变量设置。优先级：CLI 参数 > 环境变量 > 已有 `.env` > 交互式提示。Claude 凭据例外：`.env` 已有凭据时，环境变量不覆盖。
 
 | 环境变量 | 对应参数 |
 |---------|---------|
@@ -100,7 +100,7 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 `ANTHROPIC_API_KEY`，使用 `x-api-key`；`--auth-token` 写入
 `ANTHROPIC_AUTH_TOKEN`，使用 `Authorization: Bearer`。这两个参数与
 `--setup-token` 互斥。只有显式 `--api-key` 或 `--auth-token` 会替换 Claude
-已有登录。已经登录时，`--setup-token` 保留原登录，不重新校验或保存传入的 token。
+已有登录。已经登录时（包括 `.env` 里已有 Claude 凭据），`--setup-token` 保留原登录，不重新校验或保存传入的 token。
 没有显式 API-key 或 Bearer 参数时，也会忽略凭据环境变量，即使这两个变量同时存在。
 未登录时，`--setup-token` 仍按既有流程保存并校验。环境变量保留既有 OAuth token
 的优先级；没有 OAuth token 时，同时设置 `ANTHROPIC_API_KEY` 和

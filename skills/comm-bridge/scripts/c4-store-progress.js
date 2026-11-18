@@ -159,10 +159,6 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
       }
       return { total: groups.reduce((n, g) => n + g.count, 0), groups };
     }),
-    auditCheckpoints: () => snapshot(c => {
-      const max = get(c, 'SELECT COALESCE(MAX(id),0) AS n FROM conversations').n;
-      return all(c, 'SELECT id,end_conversation_id FROM checkpoints WHERE end_conversation_id>? ORDER BY id', max).map(row => ({ checkpointId: row.id, end: row.end_conversation_id, maxConversationId: max, affected: { B: baseline(c), coverageAll: coverage(c, '*') }, repairRequired: true }));
-    }),
   };
   function originSummarySnapshot(c, group, afterCheckpointId) {
     const cursor = afterCheckpointId ?? originCursor(c, group)?.checkpoint_id ?? 0;

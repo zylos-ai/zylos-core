@@ -195,7 +195,7 @@ describe('shard budget (dual limit)', () => {
     assert.equal(estimateTokens(fit.text), DEFAULT_SHARD_BUDGET.maxTokens);
   });
 
-  it('composeShardOutput keeps header + trims body + appends the spill pointer', () => {
+  it('composeShardOutput keeps header + trims body + puts the spill notice before the body', () => {
     const header = shardHeader({ position: 3, total: 5, name: 'state' });
     const { output, truncated } = composeShardOutput({
       header,
@@ -205,7 +205,7 @@ describe('shard budget (dual limit)', () => {
     });
     assert.equal(truncated, true);
     assert.ok(output.startsWith(`${header}\n`));
-    assert.match(output, /\[shard output truncated: first \d+ of 20000 chars inline; full section saved to: \/tmp\/spill\/state\.txt\]/);
+    assert.match(output, /\n\[shard output truncated: exceeds startup display limit; showing \d+ of 20000 chars\. Read the full copy first: \/tmp\/spill\/state\.txt\]\n/);
     assert.ok(output.length <= DEFAULT_SHARD_BUDGET.maxChars);
     assert.ok(estimateTokens(output) <= DEFAULT_SHARD_BUDGET.maxTokens);
   });
@@ -322,7 +322,7 @@ describe('runSessionStartShard (content shards)', () => {
 
     const text = out.read();
     assert.ok(text.length <= DEFAULT_SHARD_BUDGET.maxChars);
-    const spillPath = text.match(/full section saved to: (\S+)\]/)?.[1];
+    const spillPath = text.match(/Read the full copy first: (\S+)\]/)?.[1];
     assert.ok(spillPath, 'truncation notice must name the spill file');
     assert.equal(fs.readFileSync(spillPath, 'utf8'), 'y'.repeat(15000));
     // Spill root is per-user for the same multi-user /tmp reason as flags.

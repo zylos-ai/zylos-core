@@ -41,7 +41,7 @@ test('post-install — fresh install generates secure config', () => {
   const stdout = runPostInstall(tmpDir);
   const config = JSON.parse(fs.readFileSync(configPath(tmpDir), 'utf8'));
 
-  assert.equal(config.auth.enabled, true);
+  assert.equal(Object.hasOwn(config.auth, 'enabled'), false);
   assert.ok(config.auth.password.startsWith('scrypt:'), 'password must be scrypt hash');
   assert.deepEqual(config.observer, { enabled: false });
   assert.equal(fs.existsSync(path.join(tmpDir, 'components', 'dashboard', 'observer')), false,
@@ -108,8 +108,8 @@ test('post-install — never downloads or changes an existing Observer installat
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-for (const auth of [undefined, { enabled: true }, { enabled: true, password: null },
-  { enabled: true, password: '', allowUrlTokenOnLocalhost: false }]) {
+for (const auth of [undefined, { enabled: false }, { password: null },
+  { password: '', allowUrlTokenOnLocalhost: false }]) {
   test(`post-install repairs a missing password while preserving configured fields (${JSON.stringify(auth)})`, t => {
     const tmpDir = freshTmpDir();
     t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
@@ -121,11 +121,10 @@ for (const auth of [undefined, { enabled: true }, { enabled: true, password: nul
     const bytes = fs.readFileSync(configPath(tmpDir), 'utf8');
     const saved = JSON.parse(bytes);
     assert.match(saved.auth.password, /^scrypt:[a-f0-9]{64}:[a-f0-9]{128}$/);
-    assert.equal(saved.auth.enabled, true);
     assert.equal(fs.statSync(configPath(tmpDir)).mode & 0o777, 0o600);
     assert.doesNotMatch(output, /scrypt:|[a-f0-9]{32}/);
     delete saved.auth.password;
-    const expected = { ...existing, auth: { enabled: true, ...auth } };
+    const expected = { ...existing, auth: { ...auth } };
     delete expected.auth.password;
     assert.deepEqual(saved, expected);
     runPostInstall(tmpDir);

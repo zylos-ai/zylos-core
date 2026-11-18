@@ -155,7 +155,7 @@ export function createStore(database, dependencies = {}) {
       return { outRow, inRow };
     }),
   };
-  const context = { read, write, snapshot, get, all, run, knownGroup, dependencies, seconds };
+  const context = { read, write, snapshot, get, all, run, knownGroup, dependencies, seconds, insert };
   const config = configFunctions(context);
   const progress = progressFunctions(context);
   const transitions = transitionFunctions({ ...context, ...progress });

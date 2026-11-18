@@ -24,7 +24,8 @@ function fixture(t) {
     TMUX_TMPDIR: path.join(root, 'tmp'), CODEX_HOME: path.join(home, '.codex'),
     ...(process.env.NODE_OPTIONS ? { NODE_OPTIONS: process.env.NODE_OPTIONS } : {}),
   };
-  for (const directory of [env.PATH, home, zylos, env.PM2_HOME, env.TMPDIR, env.CODEX_HOME]) fs.mkdirSync(directory, { recursive: true });
+  for (const directory of [env.PATH, home, zylos, env.PM2_HOME, env.TMPDIR, env.CODEX_HOME]) fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  fs.chmodSync(env.TMUX_TMPDIR, 0o700);
   const socket = path.join(root, 'tmux.sock');
   const databases = [path.join(zylos, 'comm-bridge/c4.db'), path.join(zylos, 'components/dashboard/dashboard.db')];
   assert.ok(Buffer.byteLength(socket) < 100);

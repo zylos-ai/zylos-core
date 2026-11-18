@@ -52,6 +52,7 @@ for (const [mode, maintenance] of [['single', null], ['single', 'memory_sync'],
     fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
     fs.writeFileSync(CONFIG_FILE, JSON.stringify({ runtime: 'codex', ...(mode === 'multi' ? { session_mode: mode } : {}) }));
     let clock = Date.now(), stops = 0, pastes = 0, syncReads = 0, switchReads = 0;
+    const ownerAlerts = [];
     const live = { sessionGroup: group, present: true, ready: true, runtime: 'codex',
       runId: 'silent-run', sessionId: 'runtime-session', runDir, currentSessionTs: clock - 10000 };
     const scenes = {
@@ -98,6 +99,7 @@ for (const [mode, maintenance] of [['single', null], ['single', 'memory_sync'],
     server.listen(socketPath); await once(server, 'listening');
     const target = { ...live, runtimeSessionId: live.sessionId, sessionId: '$1', serverGeneration: '1:1', paneId: '%1' };
     dispatcher = createDispatcher({ env: process.env, db, now: () => clock, log() {},
+      sendAlert: async (target, message) => { ownerAlerts.push({ target, message }); return true; },
       diagnostics: { diagnostic() {}, maintain() {} },
       listGroupTmuxSessions: async () => [{ ...live, sessionGroup: 'origin' }],
       readLiveIdentities: async groups => new Map(groups.map(scope => [scope, live])), readLiveIdentity: async () => live,
@@ -112,6 +114,8 @@ for (const [mode, maintenance] of [['single', null], ['single', 'memory_sync'],
       findLegacySessions: async () => [], advanceLegacy: async () => {}, prepareSingle: async () => {},
       submit: async () => assert.fail('run already READY'),
     }, { delivery: { periodicEnabled: false, retryBaseMs: 1, verifyWaitMs: 1 } });
+    // Each case starts with fresh notification admission in this private database.
+    database.getDb().prepare('DELETE FROM status_notice_cooldowns').run();
     const row = database.insertConversation('in', 'dashboard', 'origin', 'hello');
     await dispatcher.initialize(); await dispatcher.idle();
     for (let round = 0; round < 3; round++) { dispatcher.tick(); await dispatcher.idle(); }
@@ -125,6 +129,9 @@ for (const [mode, maintenance] of [['single', null], ['single', 'memory_sync'],
     await supervisor.connectionHandler.drain();
     const facts = received.filter(event => event.type === 'notify_delivery_failed');
     assert.equal(facts.length, 1, 'factory default failure notifier is connected');
+    assert.equal(ownerAlerts.length, 1, 'owner alert and Supervisor recovery are independent');
+    assert.deepEqual(ownerAlerts[0].target, { channel: 'dashboard', endpoint: 'origin' });
+    assert.ok(ownerAlerts[0].message.includes(String(row.id)));
     assert.equal(facts[0].sessionGroup, group);
     assert.equal(replies.some(reply => reply.code === 'invalid_request'), false);
     assert.equal(stops, maintenance ? 0 : 1, 'Supervisor default failure callback reaches the existing stop path');

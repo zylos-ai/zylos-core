@@ -1,0 +1,640 @@
+// covers: skills/comm-bridge/scripts/sqlite-driver.js skills/scheduler/scripts/daemon-dispatch.js skills/scheduler/scripts/cli.js skills/scheduler/scripts/database.js skills/scheduler/scripts/__tests__/helpers/scheduler-cli-clock.js skills/scheduler/scripts/__tests__/fixtures/claim-during-query.js
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
+import { runSchedulerIteration, mainLoop } from '../daemon-dispatch.js';
+import { dispatchTask } from '../daemon-dispatch.js';
+
+const clockCliPath = fileURLToPath(new URL('./helpers/scheduler-cli-clock.js', import.meta.url));
+const cliPath = fileURLToPath(new URL('../cli.js', import.meta.url));
+
+// Real CLI/private SQLite/daemon boundary. Run when update, delivery or done
+// semantics change; skip unrelated UI. Outer runner + fixture isolate all env
+// paths and DB; injected C4 query/send, no tmux/PM2/network. Child timeout15s;
+// fixture finally closes DB and removes private files.
+for (const [type, create] of [
+  ['recurring', ['--cron', '0 9 * * *']], ['interval', ['--every', '30 minutes']],
+]) for (const timing of [['--at', '2030-01-01 01:00'], ['--in', '1 hour']]) {
+  test(`${type} ${timing[0]} override returns to its original cadence after delivery without done`, t => {
+    const initial = Date.parse('2030-01-01T00:00:00Z');
+    t.mock.timers.enable({ apis: ['Date'], now: initial });
+    const f = fixture(t, { time: initial });
+    const task = f.add('periodic delivery', create);
+    f.db.prepare('UPDATE tasks SET timezone=? WHERE id=?').run('Asia/Shanghai', task.id);
+    const before = f.row(task.id);
+    const result = f.success(['update', task.id, ...timing, '--prompt', 'postponed delivery']);
+    assert.equal(result.nextRunOnly, true); assert.equal('executionFinished' in result, false);
+    for (const key of ['type', 'cron_expression', 'interval_seconds', 'timezone']) assert.equal(result.task[key], before[key]);
+    assert.equal(result.task.next_run_at, initial / 1000 + 3600);
+    assert.equal(result.task.status, 'pending'); assert.equal(result.updatedFields.includes('type'), false);
+    const text = f.run(['update', task.id, ...timing]);assert.equal(text.status, 0);
+    assert.match(text.stdout, /Only the next run changed; recurring schedule and timezone unchanged/);
+    const target = result.task.next_run_at;let sends = 0;
+    const deps = { getRecentConversations: () => [], sendViaC4: message => {
+      sends++; assert.doesNotMatch(message, /After completing this task|cli\.js done/);
+      t.mock.timers.tick(120000);return { category: 'success' };
+    } };
+    t.mock.timers.setTime(target * 1000 - 1000);runSchedulerIteration(f.db, deps);assert.equal(sends, 0);
+    t.mock.timers.setTime(target * 1000);runSchedulerIteration(f.db, deps);assert.equal(sends, 1);
+    const delivered = f.row(task.id), history = f.history(task.id);
+    assert.equal(history.at(-1).status, 'success');assert.equal(history.at(-1).duration_ms, 120000);
+    assert.equal(delivered.status, 'pending');
+    for (const key of ['type', 'cron_expression', 'interval_seconds', 'timezone']) assert.equal(delivered[key], before[key]);
+    assert.equal(delivered.next_run_at, type === 'recurring' ? initial / 1000 + 25 * 3600 : target + 120 + 1800);
+    const done = f.success(['done', task.id]);assert.equal(done.alreadyCompleted, true);
+    assert.deepEqual(f.row(task.id), delivered);assert.deepEqual(f.history(task.id), history);
+  });
+}
+
+for (const [type, create] of [ ['one-time', []], ['recurring', ['--cron', '*/30 * * * *']], ['interval', ['--every', '30 minutes']] ]) {
+  test(`legacy done never changes a ${type} task or history in any status`, t => {
+    const f = fixture(t);const task = f.add('compatibility', create);
+    for (const status of ['pending','running','completed','failed','paused']) {
+      f.db.prepare('UPDATE tasks SET status=?,last_error=? WHERE id=?').run(status, 'retained', task.id);
+      f.db.prepare("INSERT INTO task_history(task_id,executed_at,status,error) VALUES(?,1,'started','retained history')").run(task.id);
+      const before = f.row(task.id), history = f.history(task.id);
+      const result = f.success(['done', task.id]);assert.equal(result.alreadyCompleted, true);
+      assert.equal(result.reason, 'DELIVERY_COMPLETES_AUTOMATICALLY');assert.deepEqual(result.task, before);
+      const text = f.run(['done', task.id]);assert.equal(text.status, 0);assert.match(text.stdout,/任务送达时已自动结束，无需 done/);
+      assert.deepEqual(f.row(task.id),before);assert.deepEqual(f.history(task.id),history);
+    }
+  });
+}
+
+test('done during receipt cannot close the claimed delivery before its result', t => {
+  const f=fixture(t),task=f.add('in-flight compatibility');
+  const result=dispatchTask(f.db,task,{getRecentConversations:()=>[],sendViaC4:()=>{
+    const before=f.row(task.id),history=f.history(task.id);
+    f.success(['done',task.id]);assert.deepEqual(f.row(task.id),before);assert.deepEqual(f.history(task.id),history);
+    return {category:'success'};
+  }});
+  assert.equal(result.category,'success');assert.equal(f.row(task.id).status,'completed');assert.equal(f.history(task.id).at(-1).status,'success');
+});
+
+test('updating a delivery in flight does not settle its task or started history', t => {
+  const f=fixture(t),task=f.add('unresolved receipt',['--cron','0 9 * * *']);
+  f.db.prepare("UPDATE tasks SET status='running' WHERE id=?").run(task.id);
+  f.db.prepare("INSERT INTO task_history(task_id,executed_at,status) VALUES(?,1,'started')").run(task.id);
+  const history=f.history(task.id);
+  const result=f.success(['update',task.id,'--prompt','edited while delivering']);
+  assert.equal(result.task.status,'running');assert.equal(result.task.type,'recurring');
+  assert.equal(result.task.prompt,'edited while delivering');assert.equal(result.task.next_run_at,task.next_run_at);
+  assert.equal('executionFinished' in result,false);assert.deepEqual(f.history(task.id),history);
+});
+
+// Real CLI against a receipt held open by the real dispatchTask; private fixture as below.
+for (const [type, create, cadence] of [
+  ['recurring', ['--cron', '0 9 * * *'], 9 * 3600], ['interval', ['--every', '30 minutes'], 1800],
+]) {
+  test(`running ${type} timing edits reject without writes and delivery keeps its cadence`, t => {
+    const initial = Date.parse('2030-01-01T00:00:00Z');
+    t.mock.timers.enable({ apis: ['Date'], now: initial });
+    const f = fixture(t, { time: initial });
+    const task = f.add(`running ${type}`, create);
+    let receipts = 0;
+    const result = dispatchTask(f.db, f.row(task.id), { getRecentConversations: () => [], sendViaC4: () => {
+      receipts++;
+      const before = f.row(task.id), history = f.history(task.id);
+      assert.equal(before.status, 'running');
+      for (const timing of [['--in', '30 minutes'], ['--at', '2030-01-01 05:00'],
+        ['--cron', '0 3 * * *'], ['--every', '7 hours']]) {
+        const error = f.fail(['update', task.id, ...timing, '--name', 'must not write'], 'TASK_WRONG_STATUS',
+          timing[0] === '--in' ? /Error: Wait for delivery to finish/ : undefined, 1);
+        assert.equal(error.status, 'running');
+        assert.deepEqual(f.row(task.id), before);
+        assert.deepEqual(f.history(task.id), history);
+      }
+      const renamed = f.success(['update', task.id, '--name', 'still delivering']);
+      assert.equal(renamed.task.status, 'running');
+      assert.equal(renamed.task.next_run_at, before.next_run_at);
+      return { category: 'success' };
+    } });
+    assert.equal(receipts, 1);
+    assert.equal(result.category, 'success');
+    const delivered = f.row(task.id);
+    assert.equal(delivered.status, 'pending');
+    assert.equal(delivered.name, 'still delivering');
+    assert.equal(delivered.next_run_at, initial / 1000 + cadence);
+    for (const key of ['type', 'cron_expression', 'interval_seconds', 'timezone']) assert.equal(delivered[key], task[key]);
+    assert.equal(f.history(task.id).at(-1).status, 'success');
+  });
+
+  test(`${type} next-run edits outside delivery keep their status and cadence`, t => {
+    const initial = Date.parse('2030-01-01T00:00:00Z');
+    const f = fixture(t, { time: initial });
+    for (const status of ['pending', 'paused']) for (const timing of [['--at', '2030-01-01 01:00'], ['--in', '1 hour']]) {
+      const task = f.add(`${status} ${type}`, create);
+      f.db.prepare('UPDATE tasks SET status=? WHERE id=?').run(status, task.id);
+      const before = f.row(task.id);
+      const result = f.success(['update', task.id, ...timing]);
+      assert.equal(result.nextRunOnly, true);
+      assert.equal(result.reenabled, false);
+      assert.equal(result.task.status, status);
+      assert.equal(result.task.next_run_at, initial / 1000 + 3600);
+      for (const key of ['type', 'cron_expression', 'interval_seconds', 'timezone']) assert.equal(result.task[key], before[key]);
+      assert.deepEqual(result.task, f.row(task.id));
+    }
+  });
+}
+
+test('a delivery claimed or finished while an update is prepared rejects its timing edit without writes', t => {
+  const f = fixture(t);
+  const component = path.join(f.zylos, '.claude/skills/telegram');
+  fs.mkdirSync(path.join(component, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(component, 'package.json'), '{"type":"module"}');
+  fs.copyFileSync(fileURLToPath(new URL('./fixtures/claim-during-query.js', import.meta.url)),
+    path.join(component, 'scripts/session-group.js'));
+  const driver = new URL('../../../comm-bridge/scripts/sqlite-driver.js', import.meta.url).href;
+  const cases = [
+    { create: ['--cron', '0 9 * * *'], from: 'pending', to: 'running' },
+    { create: ['--every', '30 minutes'], from: 'pending', to: 'running' },
+    { create: [], from: 'pending', to: 'running' },
+    { create: [], from: 'running', to: 'completed' },
+    { create: [], from: 'running', to: 'failed' },
+    { create: [], from: 'pending', to: 'completed' },
+  ];
+  for (const { create, from, to } of cases) {
+    const task = f.add(`${from} to ${to} during update`, create);
+    f.db.prepare('UPDATE tasks SET status=? WHERE id=?').run(from, task.id);
+    fs.writeFileSync(path.join(component, 'claim.json'), JSON.stringify({ database: f.dbPath, taskId: task.id, driver, status: to }));
+    const before = f.row(task.id), history = f.history(task.id);
+    const error = f.fail(['update', task.id, '--in', '30 minutes', '--reply-channel', 'telegram',
+      '--reply-endpoint', 'chat-1'], 'TASK_WRONG_STATUS');
+    assert.equal(error.status, to);
+    assert.deepEqual(f.row(task.id), { ...before, status: to });
+    assert.deepEqual(f.history(task.id), history);
+  }
+});
+
+// These cases cover the real CLI/store boundary, including private-file failures.
+// Run for scheduler CLI/schema/routing changes; unrelated UI changes may skip them.
+// Children never call tmux/PM2; introducing those calls requires a private tmux socket.
+function fixture(t, { time } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduler-json-'));
+  const home = path.join(root, 'home');
+  const zylos = path.join(home, 'zylos');
+  const tmp = path.join(root, 'tmp');
+  const dbPath = path.join(zylos, 'scheduler/scheduler.db');
+  const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: path.join(home, '.pm2'),
+    TMPDIR: tmp, TMUX_TMPDIR: tmp, TZ: 'UTC', ZYLOS_SESSION_GROUP: 'origin' };
+  for (const key of ['TMUX', 'ZYLOS_RUN_ID', 'CLAUDE_SESSION_ID', 'CODEX_SESSION_ID']) delete env[key];
+  for (const dir of [tmp, path.join(zylos, 'scheduler'), path.join(zylos, '.claude/skills/telegram')]) fs.mkdirSync(dir, { recursive: true });
+  if (time !== undefined) { env.SCHEDULER_TEST_TIME = String(time); env.NODE_NO_WARNINGS = '1'; }
+  fs.writeFileSync(path.join(zylos, '.env'), 'TZ=UTC\n');
+  for (const target of [home, zylos, env.PM2_HOME, tmp, dbPath]) assert.ok(target.startsWith(root + path.sep));
+  console.log(JSON.stringify({ schedulerJsonFixture: root, HOME: home, ZYLOS_DIR: zylos,
+    PM2_HOME: env.PM2_HOME, TMPDIR: tmp, TMUX_TMPDIR: tmp, database: dbPath }));
+  let db;
+  t.after(() => {
+    fs.chmodSync(path.dirname(dbPath), 0o700);
+    if (fs.existsSync(dbPath)) fs.chmodSync(dbPath, 0o600);
+    if (db?.open) db.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const run = (args, merged = false) => {
+    const command = merged ? 'sh' : process.execPath;
+    const entry = env.SCHEDULER_TEST_TIME === undefined ? cliPath : clockCliPath;
+    const commandArgs = merged ? ['-c', 'exec "$@" 2>&1', 'scheduler-cli', process.execPath, entry, ...args] : [entry, ...args];
+    const result = spawnSync(command, commandArgs, { env, encoding: 'utf8', timeout: 15000 });
+    assert.equal(result.error, undefined);
+    return result;
+  };
+  const json = args => {
+    const result = run([...args, '--json']);
+    assert.equal(result.stdout.trim().split('\n').length, 1, result.stdout);
+    return { ...result, value: JSON.parse(result.stdout) };
+  };
+  assert.equal(run(['list']).status, 0);
+  db = new Database(dbPath);
+  const row = id => db.prepare('SELECT * FROM tasks WHERE id=?').get(id);
+  const history = id => db.prepare('SELECT * FROM task_history WHERE task_id=? ORDER BY id').all(id);
+  const success = args => {
+    const result = json(args);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    assert.equal(result.value.ok, true);
+    assert.deepEqual(Object.keys(result.value).sort(), ['data', 'ok']);
+    return result.value.data;
+  };
+  const add = (name, options = []) => success(['add', name,
+    ...(options.some(value => ['--in', '--at', '--cron', '--every'].includes(value)) ? [] : ['--in', '2 hours']), ...options]).task;
+  const fail = (args, code, text, textExitCode = 0) => {
+    const result = json(args);
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stderr, '');
+    assert.equal(result.value.ok, false);
+    assert.equal(result.value.error.code, code, result.stdout);
+    assert.equal(typeof result.value.error.message, 'string');
+    assert.equal('data' in result.value, false);
+    if (text) {
+      const human = run(args);
+      assert.equal(human.status, textExitCode);
+      assert.match(human.stderr, text);
+      assert.doesNotMatch(human.stdout, /"ok":/);
+    }
+    return result.value.error;
+  };
+  const failed = (name, source) => {
+    const task = add(name);
+    db.prepare('UPDATE tasks SET status=?,last_error=?,failed_at=? WHERE id=?').run(
+      'failed', source === 'missed' ? 'Missed execution window' : 'DISPATCH_REJECTED', source === 'missed' ? null : 123, task.id);
+    const insert = db.prepare('INSERT INTO task_history(task_id,executed_at,completed_at,status,duration_ms,error) VALUES(?,?,?,?,?,?)');
+    insert.run(task.id, 100, 105, 'success', 5000, null);
+    insert.run(task.id, 110, 111, 'failed', 1000, 'retained error');
+    return row(task.id);
+  };
+  return { root, home, zylos, dbPath, env, db, run, json, success, add, fail, failed, row, history };
+}
+
+test('scheduler write commands return one structured result and their persisted rows', t => {
+  const f = fixture(t);
+  const task = f.add('structured task');
+  assert.deepEqual(task, f.row(task.id));
+  const updated = f.success(['update', task.id, '--name', 'renamed', '--priority', '2']);
+  assert.deepEqual(updated.task, f.row(task.id));
+  assert.equal(updated.task.name, 'renamed');
+  assert.equal(updated.task.priority, 2);
+  assert.ok(updated.updatedFields.includes('name'));
+  assert.ok(updated.updatedFields.includes('priority'));
+  assert.equal(updated.reenabled, false);
+  const paused = f.success(['pause', task.id]);
+  assert.deepEqual(paused, { task: f.row(task.id) });
+  assert.equal(paused.task.status, 'paused');
+  const resumed = f.success(['resume', task.id]);
+  assert.deepEqual(resumed, { task: f.row(task.id) });
+  assert.equal(resumed.task.status, 'pending');
+  const done = f.success(['done', task.id]);
+  assert.deepEqual(done, { task: f.row(task.id), alreadyCompleted: true, reason: 'DELIVERY_COMPLETES_AUTOMATICALLY' });
+  assert.equal(done.task.status, 'pending');
+  assert.equal(JSON.parse(f.run(['list', '--json']).stdout)[0].id, task.id);
+  assert.deepEqual(f.success(['remove', task.id]), { id: task.id });
+  assert.equal(f.row(task.id), undefined);
+});
+
+test('failed one-time tasks from both failure sources are rescheduled without changing history', t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.zylos, '.env'), 'TZ=Asia/Tokyo\n');
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en', { timeZone: 'Asia/Tokyo',
+    year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(new Date()).map(part => [part.type, part.value]));
+  // Tokyo has no daylight-saving transition; local 09:00 is UTC midnight.
+  const tomorrow = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day) + 1) / 1000;
+  for (const source of ['missed', 'dispatch']) {
+    const task = f.failed(`${source} task`, source);
+    const history = f.history(task.id);
+    const result = f.success(['update', task.id, '--at', 'tomorrow 9am']);
+    assert.equal(result.reenabled, true);
+    assert.equal(result.task.status, 'pending');
+    assert.equal(result.task.next_run_at, tomorrow);
+    assert.equal(result.task.timezone, 'Asia/Tokyo');
+    assert.equal(result.task.failed_at, null);
+    assert.equal(result.task.last_error, null);
+    assert.deepEqual(result.task, f.row(task.id));
+    assert.deepEqual(f.history(task.id), history);
+  }
+});
+
+test('future duration and recurring schedules reenable the original failed one-time task', t => {
+  const f = fixture(t);
+  for (const [flag, schedule, type] of [['--in', '2 hours', 'one-time'], ['--cron', '0 9 * * *', 'recurring'], ['--every', '2 hours', 'interval']]) {
+    const task = f.failed(`retry ${type}`, 'missed');
+    const previousHistory = f.history(task.id);
+    const result = f.success(['update', task.id, flag, schedule]);
+    assert.equal(result.reenabled, true);
+    assert.equal(result.task.type, type);
+    assert.equal(result.task.status, 'pending');
+    assert.ok(result.task.next_run_at > Math.floor(Date.now() / 1000));
+    assert.equal(result.task.failed_at, null);
+    assert.equal(result.task.last_error, null);
+    assert.deepEqual(f.history(task.id), previousHistory);
+  }
+  const textTask = f.failed('text retry', 'dispatch');
+  const result = f.run(['update', textTask.id, '--in', '2 hours']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Task updated:/);
+  assert.match(result.stdout, /  Re-enabled: pending/);
+});
+
+test('past rescheduling rejects without writes and non-schedule edits preserve failed status', t => {
+  const f = fixture(t);
+  const task = f.failed('failed task', 'dispatch');
+  const history = f.history(task.id);
+  const before = JSON.stringify(f.row(task.id));
+  const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const error = f.fail(['update', task.id, '--at', past], 'RESCHEDULE_NOT_FUTURE', /Error:/, 1);
+  assert.ok(error.nextRunAt < Math.floor(Date.now() / 1000));
+  assert.equal(JSON.stringify(f.row(task.id)), before);
+  assert.deepEqual(f.history(task.id), history);
+  const rename = f.success(['update', task.id, '--name', 'still failed']);
+  assert.equal(rename.reenabled, false);
+  assert.equal(rename.task.status, 'failed');
+  assert.equal(rename.task.failed_at, task.failed_at);
+  assert.equal(rename.task.last_error, task.last_error);
+  f.db.prepare('UPDATE tasks SET type=?,cron_expression=? WHERE id=?').run('recurring', '0 8 * * *', task.id);
+  const recurring = f.success(['update', task.id, '--cron', '0 9 * * *']);
+  assert.equal(recurring.reenabled, false);
+  assert.equal(recurring.task.status, 'failed');
+  assert.deepEqual(f.history(task.id), history);
+});
+
+test('rescheduling other one-time states preserves their status and error', t => {
+  const f = fixture(t);
+  const future = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+  for (const status of ['pending', 'paused']) {
+    const task = f.add(`retain ${status}`);
+    f.db.prepare('UPDATE tasks SET status=?,last_error=? WHERE id=?').run(status, `retained ${status}`, task.id);
+    const result = f.success(['update', task.id, '--at', future]);
+    assert.equal(result.reenabled, false);
+    assert.equal(result.task.status, status);
+    assert.equal(result.task.last_error, `retained ${status}`);
+    assert.deepEqual(result.task, f.row(task.id));
+  }
+});
+
+test('completed one-time tasks reenable for every future timing option', t => {
+  const initial = Date.parse('2030-01-01T00:00:00Z');
+  t.mock.timers.enable({ apis: ['Date'], now: initial });
+  const f = fixture(t, { time: initial });
+  for (const [flag, value, type] of [
+    ['--in', '90 minutes', 'one-time'], ['--at', '2030-01-01T01:30:00Z', 'one-time'],
+    ['--cron', '30 1 * * *', 'recurring'], ['--every', '90 minutes', 'interval'],
+  ]) {
+    const task = f.failed(`completed ${flag}`, 'dispatch');
+    f.db.prepare("UPDATE tasks SET status='completed' WHERE id=?").run(task.id);
+    const history = f.history(task.id);
+    const result = f.success(['update', task.id, flag, value]);
+    assert.equal(result.reenabled, true);
+    assert.equal(result.task.status, 'pending');
+    assert.equal(result.task.type, type);
+    assert.equal(result.task.next_run_at, initial / 1000 + 5400);
+    assert.equal(result.task.failed_at, null);
+    assert.equal(result.task.last_error, null);
+    assert.deepEqual(f.history(task.id), history);
+  }
+});
+
+test('completed timing rejects past and present without writes while name edits preserve status', t => {
+  const initial = Date.parse('2030-01-01T00:00:00Z');
+  const f = fixture(t, { time: initial });
+  const task = f.add('completed');
+  f.db.prepare("UPDATE tasks SET status='completed' WHERE id=?").run(task.id);
+  const before = f.row(task.id), history = f.history(task.id);
+  for (const time of ['2029-12-31T23:59:59Z', '2030-01-01T00:00:00Z']) {
+    f.fail(['update', task.id, '--at', time, '--name', 'must not write'], 'RESCHEDULE_NOT_FUTURE');
+    assert.deepEqual(f.row(task.id), before);
+    assert.deepEqual(f.history(task.id), history);
+  }
+  const renamed = f.success(['update', task.id, '--name', 'renamed']);
+  assert.equal(renamed.reenabled, false);
+  assert.equal(renamed.task.status, 'completed');
+  assert.equal(renamed.task.name, 'renamed');
+});
+
+test('running one-time timing edits reject without writes then receipt completes normally', t => {
+  const f = fixture(t), task = f.add('running receipt');
+  const result = dispatchTask(f.db, task, { getRecentConversations: () => [], sendViaC4: () => {
+    const before = f.row(task.id), history = f.history(task.id);
+    for (const timing of [['--in', '10 minutes'], ['--at', '2035-01-01T00:00:00Z'],
+      ['--cron', '0 9 * * *'], ['--every', '10 minutes']]) {
+      const error = f.fail(['update', task.id, ...timing, '--name', 'must not write'], 'TASK_WRONG_STATUS');
+      assert.equal(error.status, 'running');
+      assert.match(error.message, /Wait for delivery to finish/);
+      assert.deepEqual(f.row(task.id), before);
+      assert.deepEqual(f.history(task.id), history);
+    }
+    const rename = f.success(['update', task.id, '--name', 'still delivering']);
+    assert.equal(rename.task.status, 'running');
+    assert.equal(rename.reenabled, false);
+    return { category: 'success' };
+  } });
+  assert.equal(result.category, 'success');
+  assert.equal(f.row(task.id).status, 'completed');
+  assert.equal(f.history(task.id).at(-1).status, 'success');
+});
+
+test('empty cron never creates or reschedules tasks and empty names remain unchanged', t => {
+  const f = fixture(t);
+  const count = () => f.db.prepare('SELECT count(*) AS n FROM tasks').get().n;
+  const beforeAdd = count();
+  f.fail(['add', 'empty cron', '--cron', ''], 'INVALID_ARGS', /Error: Must specify timing/);
+  assert.equal(count(), beforeAdd);
+  const pending = f.add('pending empty cron');
+  const failed = f.failed('failed empty cron', 'dispatch');
+  for (const task of [pending, failed]) {
+    const before = f.row(task.id), history = f.history(task.id);
+    f.fail(['update', task.id, '--cron', ''], 'NO_UPDATES', /Error: No updates provided/);
+    assert.deepEqual(f.row(task.id), before);
+    assert.deepEqual(f.history(task.id), history);
+  }
+  const beforeName = f.row(pending.id);
+  f.fail(['update', pending.id, '--name', ''], 'NO_UPDATES', /Error: No updates provided/);
+  assert.deepEqual(f.row(pending.id), beforeName);
+  const changed = f.success(['update', pending.id, '--name', '', '--priority', '2']);
+  assert.equal(changed.task.name, beforeName.name);
+  assert.equal(changed.updatedFields.includes('name'), false);
+  assert.equal(changed.task.priority, 2);
+});
+
+test('legacy option values retain dash text, integer prefixes and permissive parsing', t => {
+  const f = fixture(t);
+  const added = f.success(['add', 'legacy values', '--in', '2 hours', '--name', '--x',
+    '--priority', '2abc', '--miss-threshold', '60s']).task;
+  assert.equal(added.name, '--x'); assert.equal(added.priority, 2); assert.equal(added.miss_threshold, 60);
+  const updated = f.success(['update', added.id, '--prompt', '--x', '--name', '--x',
+    '--priority', '1abc', '--miss-threshold', '90s']).task;
+  assert.equal(updated.prompt, '--x'); assert.equal(updated.name, '--x');
+  assert.equal(updated.priority, 1); assert.equal(updated.miss_threshold, 90);
+  const list = f.run(['list', '--unknown']);
+  assert.equal(list.status, 0, list.stderr); assert.equal(list.stderr, '');
+  assert.match(list.stdout, /Tasks \(TZ:/);
+  const help = f.run(['add', '--help']);
+  assert.equal(help.status, 0); assert.match(help.stderr, /^Error: Prompt is required/);
+  assert.match(help.stdout, /Usage: cli.js add/);
+});
+
+test('session target clearing preserves reply address and rejects conflicting target flags without writes', t => {
+  const f = fixture(t);
+  const task = f.add('routing task');
+  const target = f.success(['update', task.id, '--reply-channel', 'telegram', '--reply-endpoint', '1001', '--reply-session-group', 'dm-1001']).task;
+  assert.equal(target.session_component, 'telegram');
+  assert.equal(target.session_group_name, 'dm-1001');
+  assert.deepEqual(f.row(task.id), target);
+  for (const flags of [
+    ['--reply-channel', 'telegram', '--reply-endpoint', '1001'],
+    ['--reply-channel', 'telegram'], ['--reply-endpoint', '1001'], ['--reply-session-group', 'dm-1001'],
+  ]) {
+    const before = JSON.stringify(f.row(task.id));
+    f.fail(['update', task.id, '--clear-session-group', ...flags], 'INVALID_ARGS', /Error:/, 1);
+    assert.equal(JSON.stringify(f.row(task.id)), before);
+  }
+  const cleared = f.success(['update', task.id, '--clear-session-group']).task;
+  assert.equal(cleared.session_component, null);
+  assert.equal(cleared.session_group_name, null);
+  assert.equal(cleared.reply_channel, 'telegram');
+  assert.equal(cleared.reply_endpoint, '1001');
+  const resetTarget = f.success(['update', task.id, '--reply-channel', 'telegram', '--reply-endpoint', '1001', '--reply-session-group', 'dm-1001']).task;
+  const clearReply = f.success(['update', task.id, '--clear-reply']).task;
+  assert.equal(clearReply.reply_channel, null);
+  assert.equal(clearReply.reply_endpoint, null);
+  assert.equal(clearReply.session_component, resetTarget.session_component);
+  assert.equal(clearReply.session_group_name, resetTarget.session_group_name);
+  f.success(['update', task.id, '--reply-channel', 'telegram', '--reply-endpoint', '1001', '--reply-session-group', 'dm-1001']);
+  const clearBoth = f.success(['update', task.id, '--clear-session-group', '--clear-reply']).task;
+  for (const column of ['session_component', 'session_group_name', 'reply_channel', 'reply_endpoint']) {
+    assert.equal(clearBoth[column], null);
+    assert.equal(f.row(task.id)[column], null);
+  }
+  f.fail(['update', task.id, '--reply-channel', 'telegram', '--reply-endpoint', '1001', '--reply-session-group', 'bad group'], 'SESSION_GROUP_INVALID', /Error: SESSION_GROUP_INVALID:/, 1);
+});
+
+test('write validation failures use JSON errors and preserve legacy text exits', t => {
+  const f = fixture(t);
+  const task = f.add('validation task');
+  const cases = [
+    [['unknown-command'], 'INVALID_ARGS', /^Unknown command: unknown-command/],
+    [['add', 'missing schedule'], 'INVALID_ARGS', /Error: Must specify timing/],
+    [['add', '--in', '2 hours'], 'INVALID_ARGS', /Error: Prompt is required/],
+    [['add', 'invalid priority', '--in', '2 hours', '--priority', '9'], 'INVALID_ARGS', /Error: Priority must be 1-3/],
+    [['add', 'invalid cron', '--cron', 'not a cron'], 'INVALID_ARGS', /Error: Invalid cron expression/],
+    [['add', 'invalid duration', '--in', 'nonsense'], 'INVALID_ARGS', /Error: Invalid duration/],
+    [['add', 'invalid interval', '--every', 'nonsense'], 'INVALID_ARGS', /Error: Invalid interval/],
+    [['add', 'invalid threshold', '--in', '2 hours', '--miss-threshold', '-1'], 'INVALID_ARGS', /Error: miss-threshold must be a positive integer/],
+    [['update', task.id], 'NO_UPDATES', /Error: No updates provided/],
+    [['update', task.id, '--priority', '9'], 'INVALID_ARGS', /Error: Priority must be 1-3/],
+    [['update', task.id, '--miss-threshold', '-1'], 'INVALID_ARGS', /Error: miss-threshold must be a positive integer/],
+    [['update', task.id, '--cron', 'not a cron'], 'INVALID_ARGS', /Error: Invalid cron expression/],
+    [['update', task.id, '--in', 'nonsense'], 'INVALID_ARGS', /Error: Invalid duration/],
+    [['update', task.id, '--every', 'nonsense'], 'INVALID_ARGS', /Error: Invalid interval/],
+    [['update', task.id, '--at', 'nonsense'], 'INVALID_ARGS', /Error: Could not parse time/],
+    [['update', 'absent', '--name', 'x'], 'TASK_NOT_FOUND', /Error: Task not found: absent/],
+    [['remove', 'absent'], 'TASK_NOT_FOUND', /Error: Task not found: absent/],
+    [['done', 'absent'], 'TASK_NOT_FOUND', /Error: Task not found: absent/],
+  ];
+  for (const [args, code, text] of cases) f.fail(args, code, text);
+  assert.match(f.run(['unknown-command']).stdout, /Usage:/);
+  for (const command of ['update', 'remove', 'done', 'pause', 'resume']) f.fail([command], 'INVALID_ARGS', /Error: Task ID is required/);
+  for (const command of ['pause', 'resume']) f.fail([command, 'absent'], 'TASK_NOT_FOUND', /Error: (?:Pending|Paused) task not found: absent/);
+  f.db.prepare('UPDATE tasks SET status=? WHERE id=?').run('running', task.id);
+  const pause = f.fail(['pause', task.id], 'TASK_WRONG_STATUS', /Error: Pending task not found:/);
+  assert.equal(pause.status, 'running');
+  const resume = f.fail(['resume', task.id], 'TASK_WRONG_STATUS', /Error: Paused task not found:/);
+  assert.equal(resume.status, 'running');
+  const other = f.add('second task');
+  for (const command of ['update', 'remove', 'done']) {
+    const args = command === 'update' ? [command, 'task-', '--name', 'x'] : [command, 'task-'];
+    const error = f.fail(args, 'TASK_AMBIGUOUS', /Error: Ambiguous task ID prefix 'task-'/);
+    assert.deepEqual(error.matches.sort(), [task.id, other.id].sort());
+  }
+});
+
+test('text errors precede their help hints in merged output', t => {
+  const f = fixture(t);
+  const task = f.add('merged output');
+  for (const [args, error, hint] of [
+    [['add'], 'Error: Prompt is required', 'Usage: cli.js add'],
+    [['add', 'p'], 'Error: Must specify timing (--in, --at, --cron, or --every)', 'Usage:'],
+    [['update', task.id], 'Error: No updates provided', 'Use --help to see available options'],
+    [['bogus'], 'Unknown command: bogus', 'Usage:'],
+  ]) {
+    const result = f.run(args, true);
+    assert.equal(result.status, 0);
+    assert.equal(result.stderr, '');
+    assert.ok(result.stdout.startsWith(error + '\n'), result.stdout);
+    assert.ok(result.stdout.indexOf(hint) > result.stdout.indexOf(error), result.stdout);
+  }
+});
+
+test('JSON errors remain a single envelope when the flag is consumed as an option value', t => {
+  const f = fixture(t);
+  const task = f.add('consumed JSON flag');
+  for (const [args, code] of [
+    [['--json'], 'INVALID_ARGS'],
+    [['add', 'p', '--name', '--json'], 'INVALID_ARGS'],
+    [['add', '--help', '--json'], 'INVALID_ARGS'],
+    [['update', task.id, '--help', '--json'], 'NO_UPDATES'],
+  ]) {
+    const result = f.run(args);
+    assert.equal(result.status, 1);
+    assert.equal(result.stderr, '');
+    assert.equal(result.stdout.trim().split('\n').length, 1, result.stdout);
+    const value = JSON.parse(result.stdout);
+    assert.equal(value.ok, false);
+    assert.equal(value.error.code, code);
+    assert.deepEqual(Object.keys(value).sort(), ['error', 'ok']);
+  }
+});
+
+test('pausing an already paused task preserves text compatibility and reports a JSON error', t => {
+  const f = fixture(t);
+  const task = f.add('already paused');
+  f.success(['pause', task.id]);
+  const before = f.row(task.id), history = f.history(task.id);
+  const text = f.run(['pause', task.id]);
+  assert.equal(text.status, 0);
+  assert.equal(text.stdout, '');
+  assert.equal(text.stderr, `Error: Pending task not found: ${task.id}\n`);
+  const error = f.fail(['pause', task.id], 'TASK_WRONG_STATUS');
+  assert.equal(error.status, 'paused');
+  assert.deepEqual(f.row(task.id), before);
+  assert.deepEqual(f.history(task.id), history);
+});
+
+test('history JSON is bounded, ordered deterministically and excludes prompt text', t => {
+  const f = fixture(t);
+  const task = f.add('private prompt');
+  const other = f.add('another private prompt');
+  const empty = f.success(['history']);
+  assert.deepEqual(empty, { rows: [], ambiguousPrefix: [] });
+  const insert = f.db.prepare('INSERT INTO task_history(task_id,executed_at,completed_at,status,duration_ms,error) VALUES(?,?,?,?,?,?)');
+  for (let i = 0; i < 25; i++) insert.run(task.id, 100 + Math.floor(i / 2), 200 + i, 'success', i * 1000, i === 2 ? 'retained error' : null);
+  insert.run(other.id, 500, 501, 'failed', 1000, 'other task history');
+  const expected = f.db.prepare(`SELECT h.id,h.task_id,t.name,h.executed_at,h.completed_at,h.status,h.duration_ms,h.error
+    FROM task_history h JOIN tasks t ON t.id=h.task_id ORDER BY h.executed_at DESC,h.id DESC`).all();
+  const result = f.success(['history']);
+  assert.deepEqual(result.rows, expected.slice(0, 20));
+  assert.deepEqual(result.ambiguousPrefix, []);
+  const all = f.success(['history', task.id, '--limit', '1000']);
+  assert.deepEqual(all.rows, expected.filter(row => row.task_id === task.id));
+  assert.equal(all.rows.length, 25);
+  assert.ok(all.rows.every(row => !Object.hasOwn(row, 'prompt')));
+  const ambiguous = f.success(['history', 'task-', '--limit', '1000']);
+  assert.deepEqual(ambiguous.ambiguousPrefix.sort(), [task.id, other.id].sort());
+  assert.deepEqual(ambiguous.rows, expected);
+  for (const limit of ['0', '1001', '1.5', 'nonsense']) f.fail(['history', '--limit', limit], 'INVALID_ARGS', /Error:/, 1);
+  const text = f.run(['history', task.id, '--limit', '1']);
+  assert.equal(text.status, 0, text.stderr);
+  assert.equal(text.stdout.split('\n').filter(line => /\| success\s*\|/.test(line)).length, 1);
+});
+
+test('timezone and SQLite write failures use the structured error envelope', t => {
+  const f = fixture(t);
+  const task = f.add('write failure task');
+  fs.writeFileSync(path.join(f.zylos, '.env'), 'TZ=Not/A_Timezone\n');
+  f.fail(['update', task.id, '--name', 'x'], 'INVALID_TZ', /Error \[INVALID_TZ\]:/, 1);
+  fs.writeFileSync(path.join(f.zylos, '.env'), 'TZ=UTC\n');
+  f.db.pragma('wal_checkpoint(TRUNCATE)');
+  f.db.close();
+  fs.chmodSync(f.dbPath, 0o400);
+  fs.chmodSync(path.dirname(f.dbPath), 0o500);
+  try {
+    const result = f.json(['update', task.id, '--name', 'x']);
+    assert.equal(result.status, 1);
+    assert.equal(result.value.ok, false);
+    assert.equal(result.value.error.code, 'DB_WRITE_FAILED');
+    assert.equal('data' in result.value, false);
+    const text = f.run(['update', task.id, '--name', 'x']);
+    assert.equal(text.status, 1);
+    assert.equal(text.stdout, '');
+    assert.match(text.stderr, /^Error: DB_WRITE_FAILED:/);
+  } finally {
+    fs.chmodSync(path.dirname(f.dbPath), 0o700);
+    fs.chmodSync(f.dbPath, 0o600);
+  }
+  const db = new Database(f.dbPath, { readonly: true });
+  try { assert.equal(db.prepare('SELECT name FROM tasks WHERE id=?').get(task.id).name, task.name); }
+  finally { db.close(); }
+});

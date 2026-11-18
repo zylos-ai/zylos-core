@@ -126,7 +126,8 @@ test('inactive group lag remains silent and distinguishes Origin lag', async t =
 
 test('pre-reclaim group and Origin Sync survive six minutes and expire after fifteen', async t => {
   const f = observableFixture(t);
-  f.db.getUnsummarizedRange = () => ({ count: 1, firstAt: f.now(), firstConversationId: 1 });
+  // 16 is above the default Sync threshold of 15, so release prepares a group Sync.
+  f.db.getUnsummarizedRange = () => ({ count: 16, firstAt: f.now(), firstConversationId: 1 });
   f.db.getOriginSyncBacklog = () => ({ total: 1, groups: [{ pendingCheckpoints: 0, firstAt: f.now() }] });
   const intent = { controlIds: [] };
   await f.lifecycle.prepareRelease(f.scene, f.context, intent);

@@ -7,14 +7,14 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const driver=fileURLToPath(new URL('../../../test/helpers/public-reader-driver.js',import.meta.url));
 async function fixture(t,{server=true}={}) {
-  const f=isolatedTmux(t,{prefix:'session-runtime-public-reader-',socketName:'private.sock'});
+  const f=isolatedTmux(t,{prefix:'session-runtime-public-reader-'});
   const {dir,tmux}=f;
   const env=tmuxClientEnv(f,{...process.env,ZYLOS_DIR:dir});
   if(server) tmux('-f','/dev/null','new-session','-d','-s','zylos-group-origin','-e','ZYLOS_RUN_ID=r1','-e','ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}','sleep','120');
   const run=path.join(dir,'activity-monitor','session-groups','origin'); await fs.mkdir(run,{recursive:true});
   const write=(name,value)=>fs.writeFile(path.join(run,name),JSON.stringify(value));
   const call=(method,args,extra={})=>JSON.parse(execFileSync(process.execPath,[driver],{encoding:'utf8',timeout:20000,env:{...env,...extra,SESSION_READER_CALL:JSON.stringify({method,args})}}));
-  return {dir,env,call,write,tmux};
+  return {dir,env,call,write,tmux,socketPath:f.socketPath};
 }
 test('public async reader returns live identity and valid real F2/F3/status/usage',async t=>{
   const {call,write}=await fixture(t);
@@ -28,11 +28,12 @@ test('public async reader returns live identity and valid real F2/F3/status/usag
   assert.deepEqual(call('resolveTargetRuntime',[null]),{value:'claude',promise:true});
 });
 test('public no-server observation is absent and status not_running without server creation',async t=>{
-  const {call,dir}=await fixture(t,{server:false});
+  const {call,dir,tmux,socketPath}=await fixture(t,{server:false});
   const live=call('readLiveIdentity',[null]); assert.equal(live.promise,true); assert.equal(live.value.present,false);
   const state=call('readSessionState',[null,{freshnessMs:5000}]); assert.equal(state.value.status.reason,'not_running');
   assert.equal(state.value.usage.reason,'not_running');
-  assert.equal((await fs.readdir(dir)).some(name=>name.startsWith('tmux-')),false);
+  await assert.rejects(fs.stat(socketPath), { code: 'ENOENT' });
+  assert.throws(() => tmux('-N', 'list-sessions'), /no server running|No such file/);
   // The connected provider resolves absent live targets from strict F1.
   assert.deepEqual(call('resolveTargetRuntime',[null]),{value:'claude',promise:true});
   await fs.mkdir(path.join(dir,'.zylos'),{recursive:true});

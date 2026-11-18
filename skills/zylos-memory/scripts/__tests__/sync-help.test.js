@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const packageRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 const scripts = [
   ['zylos-memory', 'sync-lock', ['status', 'acquire', 'release']],
-  ['zylos-memory', 'sync-files', ['list', 'cleanup', 'rotate', 'checkpoint', 'commit']],
+  ['zylos-memory', 'sync-files', ['list', 'cleanup', 'rotate', 'prepare', 'checkpoint', 'commit']],
   ['zylos-memory', 'origin-cursor', ['advance']],
   ['zylos-memory', 'reference-index', ['rebuild', 'check-navigation', 'create', 'move-old', 'archive', 'unarchive']],
   ['zylos-memory', 'memory-append', ['inbox', 'session']],

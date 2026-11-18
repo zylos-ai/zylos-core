@@ -32,7 +32,9 @@ function withoutPoolReader(root) {
   fs.cpSync(path.join(repository,'cli'),path.join(pkg,'cli'),{recursive:true,
     filter:file=>!['node_modules','__tests__','session-pool-config.js'].includes(path.basename(file))});
   fs.symlinkSync(fs.realpathSync(path.join(repository,'node_modules')),path.join(pkg,'node_modules'),'dir');
-  for(const name of ['activity-monitor','comm-bridge','zylos-memory']) {
+  for(const entry of fs.readdirSync(path.join(repository,'skills'),{withFileTypes:true})) {
+    if(!entry.isDirectory())continue;
+    const name=entry.name;
     fs.cpSync(path.join(repository,'skills',name),path.join(pkg,'skills',name),{recursive:true,
       filter:file=>!['node_modules','__tests__'].includes(path.basename(file))});
   }
@@ -127,7 +129,9 @@ test('copied installed skills resolve the separate Core package and serve actual
   const filter=file=>!['node_modules','__tests__'].includes(path.basename(file));
   fs.cpSync(path.join(repository,'cli'),path.join(pkg,'cli'),{recursive:true,filter});
   fs.symlinkSync(fs.realpathSync(path.join(repository,'node_modules')),path.join(pkg,'node_modules'),'dir');
-  for(const name of ['activity-monitor','comm-bridge','zylos-memory']) {
+  for(const entry of fs.readdirSync(path.join(repository,'skills'),{withFileTypes:true})) {
+    if(!entry.isDirectory())continue;
+    const name=entry.name;
     fs.cpSync(path.join(repository,'skills',name),path.join(skills,name),{recursive:true,filter});
     fs.cpSync(path.join(repository,'skills',name),path.join(pkg,'skills',name),{recursive:true,filter});
   }

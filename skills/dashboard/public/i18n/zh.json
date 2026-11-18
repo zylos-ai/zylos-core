@@ -414,5 +414,12 @@
   "result.mode_switch_unchanged": "当前会话模式已经是 {value}。",
   "result.mode_switch_rejected": "模式切换被拒绝（{code}）。",
   "result.mode_switch_unknown": "模式切换结果未知，请先查看当前模式再决定是否重试。",
-  "memory.conflict_later": "先不保存"
+  "memory.conflict_later": "先不保存",
+  "actions.upgrade_runtime": "升级 {runtime}",
+  "confirm.upgrade_runtime": "升级 {runtime}？",
+  "result.agy_updated": "Antigravity 已更新，重启会话后生效。",
+  "result.agy_upgrade_failed": "Antigravity 升级失败：{error}",
+  "result.runtime_upgrade_unsupported": "此 runtime 不支持一键升级：{runtime}",
+  "result.agy_upgrade_incomplete": "Antigravity 升级未在 5 分钟内完成，请先核对安装版本再重试。",
+  "result.agy_upgrade_unknown": "Antigravity 升级结果未知，请先核对安装版本再重试；后台更新可能仍在进行。"
 }

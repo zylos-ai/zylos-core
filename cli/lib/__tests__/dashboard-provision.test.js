@@ -29,7 +29,7 @@ test('new Dashboard auth is independent of Web Console and hook never prints cre
   const first = run(); assert.equal(first.status, 0, first.stderr);
   const file = path.join(root, 'components/dashboard/config.json');
   const before = fs.readFileSync(file, 'utf8'); const config = JSON.parse(before);
-  assert.equal(config.auth.enabled, true); assert.match(config.auth.password, /^scrypt:/);
+  assert.equal(config.auth.enabled, undefined); assert.match(config.auth.password, /^scrypt:/);
   assert.equal(matchesPassword(shared, config.auth.password), false);
   assert.doesNotMatch(first.stdout + first.stderr, /Dashboard password:|scrypt:|web-console-fixture-password/);
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);

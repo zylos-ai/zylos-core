@@ -5,6 +5,7 @@ import { loadCoreModule } from './core-modules.js';
 const { modelThreshold } = await loadCoreModule('model-rotation-thresholds.js');
 import { MANUAL_WAKE_PROMPT } from './origin-prompts.js';
 import { captureSyncTarget, observeSyncCompletion, latestSyncFailure } from './sync-reclaim.js';
+import { CHECKPOINT_THRESHOLD } from '../../comm-bridge/scripts/c4-config.js';
 
 const SYNC_DIAGNOSTIC_TYPES = new Set(['origin_frequency', 'origin_idle', 'control_timeout', 'state_uncommitted']);
 const TERMINAL_CONTROLS = new Set(['done', 'timeout', 'superseded', 'failed', 'cancelled']);
@@ -14,6 +15,7 @@ const error = (code, message) => Object.assign(new Error(message), { code });
 const modeOf = context => context.configuration.mode;
 const targetOf = group => group === null ? { machine: true } : { sessionGroup: group };
 const finite = value => Number.isFinite(value);
+const groupSyncThreshold = configuration => configuration.syncThreshold ?? CHECKPOINT_THRESHOLD;
 const legacy = context => context.configuration.legacy === true;
 const oldUnique = (scene, context) => !legacy(context) && scene.sessionGroup === 'origin' && scene.sourceScope === null;
 const manualGroup = (request, context) => legacy(context) && request.mode === 'single' ? '*' : request.sessionGroup ?? 'origin';
@@ -85,7 +87,6 @@ export class SupervisorLifecycle {
     this.rotationSent = new Map();
     this.configurationSent = new Map();
     this.syncSent = new Map();
-    this.syncRuns = new Map();
     this.syncProgress = new Map();
     this.referenceReorgSent = new Map();
     this.syncBacklogCandidates = new Map();
@@ -530,7 +531,8 @@ export class SupervisorLifecycle {
     const range = await this.d.db.getUnsummarizedRange(group);
     if (!Number.isInteger(range.count) || range.count < 0) throw error('INVALID_OBSERVATION', 'Invalid unsummarized count');
     const todo = ['PRE_RECLAIM_CHECK_PROMPT'];
-    if (range.count > 0) todo.push('PRE_RECLAIM_SYNC_PROMPT');
+    // A backlog at or below the Sync threshold stays in C4 for the group's next session.
+    if (range.count > groupSyncThreshold(context.configuration)) todo.push('PRE_RECLAIM_SYNC_PROMPT');
     if (group === 'origin') {
       const backlog = await this.d.db.getOriginSyncBacklog();
       if (backlog.total > 0 || backlog.groups.some(item => item.pendingCheckpoints > 0)) todo.push('PRE_RECLAIM_ORIGIN_SYNC_PROMPT');
@@ -682,7 +684,8 @@ export class SupervisorLifecycle {
     if (!Number.isInteger(range.count) || range.count < 0) throw error('INVALID_OBSERVATION', 'Invalid unsummarized count');
     // Every TTL reclaim first asks for a check of work waiting on external events; Sync, when due, follows it.
     const todo = ['PRE_RECLAIM_CHECK_PROMPT'];
-    if (range.count > 0) todo.push('PRE_RECLAIM_SYNC_PROMPT');
+    // A backlog at or below the Sync threshold stays in C4 for the group's next session.
+    if (range.count > groupSyncThreshold(context.configuration)) todo.push('PRE_RECLAIM_SYNC_PROMPT');
     if (group === 'origin') {
       const backlog = await this.d.db.getOriginSyncBacklog();
       if (backlog.total > 0 || backlog.groups.some(item => item.pendingCheckpoints > 0)) todo.push('PRE_RECLAIM_ORIGIN_SYNC_PROMPT');
@@ -862,32 +865,14 @@ export class SupervisorLifecycle {
     if (context.restartRequestsError || context.transition || context.fences.some(fence => fence.sessionGroup === '*')) return;
     this.lastSyncCheck = now;
     const single = legacy(context);
-    let endings = new Map(), multiSince = null;
-    const groups = scenes.filter(scene => !scene.observationError && scene.present && scene.ready &&
-      this.allowed(scene.sessionGroup, context)).map(scene => scene.sessionGroup);
-    if (!single && groups.length) {
-      try {
-        const [records, transition] = await Promise.all([
-          this.d.db.listRunEndings(groups), this.d.db.getLastCompletedModeTransition(),
-        ]);
-        endings = new Map(records.map(row => [row.sessionGroup, row.endedAt * 1000]));
-        if (transition?.target_mode === 'multi') multiSince = transition.updated_at * 1000;
-      } catch (cause) {
-        this.d.reportError?.(cause, { phase: 'sync-backlog-boundary' });
-      }
-    }
     await this.each(scenes, async scene => {
       if (scene.observationError) throw scene.observationError;
       if (!await this.allowed(scene.sessionGroup, context)) return;
       if (!scene.present || !scene.ready || oldUnique(scene, context)) return;
       const kind = single ? 'global' : 'group';
       const range = single ? await this.d.db.getGlobalUnsummarizedRange() : await this.d.db.getUnsummarizedRange(scene.sessionGroup);
-      const boundaries = single ? [scene.createdAt] : [endings.get(scene.sessionGroup), multiSince];
-      const known = boundaries.filter(finite);
-      const inherited = range.firstAt !== null && range.firstAt !== undefined && known.length > 0 &&
-        activityTime(range.firstAt) <= Math.max(...known);
       await this.syncScope(scene, kind, { count: range.count, firstAt: range.firstAt,
-        firstConversationId: range.firstConversationId, nonempty: range.count > 0, inherited }, context);
+        firstConversationId: range.firstConversationId, nonempty: range.count > 0 }, context);
     });
     if (!legacy(context) && this.allowed('origin', context) &&
         !scenes.some(scene => scene.sessionGroup === 'origin' &&
@@ -1041,7 +1026,7 @@ export class SupervisorLifecycle {
     const now = this.now(), config = context.configuration;
     const key = JSON.stringify([kind, scene.sessionGroup]);
     const min = (config.syncMinIntervalSeconds ?? 600) * 1000, max = (config.syncMaxIntervalSeconds ?? 21600) * 1000;
-    const threshold = kind === 'origin' ? (config.originSyncThreshold ?? 50) : (config.syncThreshold ?? 15);
+    const threshold = kind === 'origin' ? (config.originSyncThreshold ?? 50) : groupSyncThreshold(config);
     const lag = range.firstAt === null || range.firstAt === undefined ? 0 : Math.max(0, now - activityTime(range.firstAt));
     const alertLag = kind === 'origin' ? (range.alertFirstAt === null || range.alertFirstAt === undefined ? 0 : Math.max(0, now - activityTime(range.alertFirstAt))) : lag;
     const alert = kind !== 'origin' && range.count > 4 * (config.syncBatchLimit ?? 200) || alertLag > 2 * max;
@@ -1058,9 +1043,11 @@ export class SupervisorLifecycle {
       previous?.n0 > (config.syncBatchLimit ?? 200) && previous.runId === scene.runId &&
       range.firstConversationId > previous.f0;
     if (!range.nonempty || (!catchingUp && this.syncSent.has(key) && now - this.syncSent.get(key) < min)) return;
-    const rotationThreshold = sceneRotationThreshold(scene, config);
-    const due = range.count > threshold || lag >= max || kind !== 'origin' &&
-      (this.syncRuns.get(key) !== scene.runId && range.inherited === true || rotationThreshold !== null && finite(scene.usagePercent) && scene.usagePercent >= 0.8 * rotationThreshold);
+    // Early Sync at 80% of the rotation threshold is disabled: a smaller backlog reaches the next
+    // session through its startup context, and a larger one is already due by the threshold.
+    // const rotationThreshold = sceneRotationThreshold(scene, config);
+    // ... || kind !== 'origin' && rotationThreshold !== null && finite(scene.usagePercent) && scene.usagePercent >= 0.8 * rotationThreshold
+    const due = range.count > threshold || lag >= max;
     if (!catchingUp && !due) return;
     if (typeof this.d.readSyncMarker !== 'function') throw error('DEPENDENCY_UNAVAILABLE', 'Sync marker reader is unavailable');
     const marker = await this.d.readSyncMarker({ runDir: scene.runDir, kind, currentRunId: scene.runId });
@@ -1075,12 +1062,9 @@ export class SupervisorLifecycle {
     const reason = [];
     if (range.count > threshold) reason.push('threshold');
     if (lag >= max) reason.push('max_lag');
-    if (kind !== 'origin' && this.syncRuns.get(key) !== scene.runId && range.inherited === true) reason.push('inherited');
-    if (kind !== 'origin' && rotationThreshold !== null && finite(scene.usagePercent) && scene.usagePercent >= 0.8 * rotationThreshold) reason.push('context');
     if (catchingUp) reason.push('catch_up');
     await this.recordSyncTrigger(scene, kind, reason, range, control, checkpointId);
     this.syncSent.set(key, now);
-    this.syncRuns.set(key, scene.runId);
     if (kind !== 'origin') this.syncProgress.set(key, { n0: range.count, f0: range.firstConversationId, runId: scene.runId });
   }
 

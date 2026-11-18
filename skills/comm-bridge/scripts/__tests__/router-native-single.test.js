@@ -2,7 +2,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { routerFixture } from './helpers/router-fixture.js';
 import { deliveryFixture } from './helpers/session-delivery-fixture.js';
-import { createPendingExpiryHandler } from '../router/expiry.js';
 
 // Real scheduler/store and delivery policy; runtime and terminal I/O are fixtures.
 // The repository runner supplies isolated HOME/ZYLOS_DIR; no service is started.
@@ -59,15 +58,6 @@ test('single delivery uses Origin target and records Origin only after verified 
     assert.ok(f.calls.some(call => call[0] === 'paste' && call[1] === (keyPresent ? 'origin' : null)));
     assert.ok(f.events.some(event => event.event === 'deliver' && event.session_group === (keyPresent ? 'origin' : null)));
   });
-});
-
-test('single expiry resolves health from Origin while retaining the original notice route', async () => {
-  const row = { channel: 'telegram', endpoint_id: 'chat', session_group: 'telegram' };
-  const handler = createPendingExpiryHandler({ isComponent: () => true,
-    resolveSessionLaunchConfig: input => { assert.deepEqual(input, { sessionGroup: 'origin', sessionMode: 'single' }); return { runtime: 'codex' }; },
-    readRuntimeHealth: runtime => { assert.equal(runtime, 'codex'); return { health: 'ok' }; },
-    sendStatusNotice: record => { assert.equal(record, row); return { outcome: 'sent' }; } });
-  assert.deepEqual(await handler(row, { sessionMode: 'single', sessionGroup: 'origin', identity: { present: false } }), { outcome: 'sent' });
 });
 
 test('health-blocked single delivery retains source attribution and pending status', async t => {

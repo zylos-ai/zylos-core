@@ -29,7 +29,7 @@ import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js';
 import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js';
 import { createFleetSounds } from './fleet-sounds.js';
 import { refreshDashboardState } from './state-refresh.js';
-import { formatActionResult } from './action-result.js';
+import { formatActionResult, actionFailureMessage } from './action-result.js';
 import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from './origin-lock.js';
 import { countLabel } from './count-label.js';
 
@@ -2917,6 +2917,7 @@ function execAction(action, body) {
 // Sends a dashboard action. Only the page actions call this, after they have checked access and asked when needed.
 async function sendAction(action, body) {
   const targetKey = observerTargetKey();
+  const actionRuntime = state.dashboardState?.default_runtime;
   const statusEl = actionsModal?.querySelector('#action-status');
   if (statusEl) {
     statusEl.hidden = false;
@@ -2940,6 +2941,11 @@ async function sendAction(action, body) {
       body: JSON.stringify(request.body)
     });
     const result = await r.json();
+    if (action === 'upgrade-cc' && actionRuntime === 'agy' && r.status >= 500
+      && !['upgrade_failed', 'deadline_exceeded'].includes(result.error?.code ?? result.error)) {
+      result.messageKey = 'result.agy_upgrade_unknown';
+      result.messageParams = null;
+    }
     if (action === 'restart-session' && result.requestId) {
       pendingManualRestart = result.submission === 'unknown' ? { requestId: result.requestId, submission: result.submission, runId: body?.runId } : null;
       if (pendingManualRestart) refreshModeStatus();
@@ -2985,7 +2991,7 @@ async function sendAction(action, body) {
   } catch (err) {
     if (statusEl) {
       statusEl.className = 'modal-status error';
-      statusEl.textContent = t('status.failed', { error: err.message });
+      statusEl.textContent = actionFailureMessage(action, actionRuntime, err, t);
     }
     return false;
   }

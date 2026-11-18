@@ -12,11 +12,12 @@ for (const [key, leaf] of [['HOME', 'home'], ['ZYLOS_DIR', 'instance'], ['PM2_HO
   assert.equal(fs.realpathSync(process.env[key]), path.join(root, leaf));
 }
 assert.equal(process.env.TMUX_TMPDIR, path.join(root, 'tmp'));
-assert.equal(process.env.TMUX.split(',')[0], path.join(root, 'tmux.sock'));
+const socket = path.join(root, 'tmp', `tmux-${process.getuid()}`, 'default');
+assert.equal(process.env.TMUX.split(',')[0], socket);
 const db = path.join(process.env.ZYLOS_DIR, 'comm-bridge/c4.db');
 assert.equal(fs.realpathSync(db), db);
 console.info('activity-poll child isolation', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
-  PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, socket: path.join(root, 'tmux.sock'), db }));
+  PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, socket, db }));
 
 // Serve the real Dashboard entry without starting model/runtime collectors.
 // The real importer consumes its native private JSONL streams with its default

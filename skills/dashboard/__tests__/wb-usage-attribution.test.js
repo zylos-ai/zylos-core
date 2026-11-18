@@ -128,7 +128,7 @@ test('dashboard constructs both usage collectors when configured for Claude', { 
   fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude' }));
   fs.mkdirSync(path.join(root, 'components/dashboard'), { recursive: true });
   fs.writeFileSync(path.join(root, 'components/dashboard/config.json'), JSON.stringify({
-    auth: { enabled: false },
+    auth: { password: 'scrypt:fixture' },
     runtimeModelPrices: { codex: { 'gpt-5.3-codex': { input: 3, output: 12, cacheRead: 0.3, cacheCreation: 0 } } },
   }));
   process.env.HOME = root;
@@ -188,6 +188,7 @@ test('mixed runtime groups use their own prices and combine into one total', asy
   for (const row of codex) {
     assert.equal(row.session_group, 'B');
     assert.equal(row.dimensions.run_id, 'B-run');
+    assert.equal(row.dimensions.child, undefined);
   }
   const standardCost = (60 * 3 + 40 * 0.3 + 20 * 12) / 1e6;
   near(codex.find(row => row.dimensions.event_id === 'standard').dimensions.cost, standardCost);

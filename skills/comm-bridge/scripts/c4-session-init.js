@@ -10,11 +10,11 @@
  * Usage: node c4-session-init.js
  */
 
-let logHookTiming=()=>{},formatSection,withinBudget;
+let logHookTiming=()=>{},formatSection,withinBudget,DEFAULT_SHARD_BUDGET;
 async function normalHelpers(){
  if(formatSection)return;
  const [diagnostic,format,registry]=await Promise.all([import('./c4-diagnostic.js'),import('./session-format.js'),import('../../activity-monitor/scripts/shard-registry.js')]);
- logHookTiming=diagnostic.logHookTiming;formatSection=format.formatSection;withinBudget=registry.withinBudget;
+ logHookTiming=diagnostic.logHookTiming;formatSection=format.formatSection;withinBudget=registry.withinBudget;DEFAULT_SHARD_BUDGET=registry.DEFAULT_SHARD_BUDGET;
 }
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
@@ -146,7 +146,21 @@ async function alertTargetInstruction() {
   return `Alert target: ${value}. System alerts go there; change it only if the owner asks.`;
 }
 
-/** Pack complete projected messages; drop whole oldest messages to fit. */
+/** The group Sync threshold, resolved like the supervisor resolves it (env, then config.json, then default). */
+async function readSyncThreshold() {
+  const [{ readZylosConfigStrict }, { parseSupervisorConfiguration }] = await Promise.all([
+    import('./local-config.js'), import('../../activity-monitor/scripts/supervisor-configuration.js'),
+  ]);
+  const result = readZylosConfigStrict();
+  if (result.state === 'error') throw result.error;
+  return parseSupervisorConfiguration(result.state === 'ok' ? result.config : {}).syncThreshold;
+}
+
+/**
+ * A backlog at or below the Sync threshold is injected whole when it fits the
+ * shard budget; otherwise the latest messages are packed newest-first, dropping
+ * whole oldest messages, and the notice points at the omitted middle.
+ */
 export async function emitC4Conversations(payload, budget = null, {
   scopeReader, withDb = withC4Db,
   migrationReader = async scope => {
@@ -161,9 +175,10 @@ export async function emitC4Conversations(payload, budget = null, {
     const scope = await readScope();
     await normalHelpers();
     const coverage = scope.sessionGroup ? db.getCoverageEnd(scope.sessionGroup) : db.getGlobalCoverageEnd();
-    const conversations = scope.sessionGroup
-      ? db.getDeliveredSince(scope.sessionGroup, coverage, { limit: 6 })
-      : db.getGlobalDeliveredSince(coverage, { limit: 6 });
+    const delivered = limit => scope.sessionGroup
+      ? db.getDeliveredSince(scope.sessionGroup, coverage, { limit })
+      : db.getGlobalDeliveredSince(coverage, { limit });
+    const conversations = delivered(6);
     let unsummarized;
     try {
       unsummarized = scope.sessionGroup
@@ -194,8 +209,19 @@ export async function emitC4Conversations(payload, budget = null, {
     };
     const assemble = rows => formatSection('RECENT CONVERSATIONS',
       [...instructions, lagNotice(rows)].filter(Boolean).join('\n') + '\n\n' + db.formatConversationsForAgent(rows, { spill: false }));
-    let kept = conversations;
     const packBudget = budget && { maxChars: Math.max(0, budget.maxChars - 200), maxTokens: Math.max(0, budget.maxTokens - 60) };
+    let threshold = null;
+    if (unsummarized?.count > 0) {
+      try { threshold = await readSyncThreshold(); } catch { /* unreadable configuration keeps the latest-messages view */ }
+    }
+    if (Number.isSafeInteger(threshold) && unsummarized.count <= threshold) {
+      const covered = conversations.length && unsummarized.firstConversationId >= conversations[0].id;
+      const backlog = covered ? conversations : delivered(unsummarized.count);
+      const fullView = assemble(backlog);
+      if (backlog.length && unsummarized.firstConversationId >= backlog[0].id &&
+        withinBudget(fullView, packBudget ?? DEFAULT_SHARD_BUDGET)) return fullView;
+    }
+    let kept = conversations;
     while (kept.length && packBudget && !withinBudget(assemble(kept), packBudget)) kept = kept.slice(1);
     return assemble(kept);
   });

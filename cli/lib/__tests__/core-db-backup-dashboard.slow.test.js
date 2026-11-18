@@ -1,0 +1,429 @@
+// covers: skills/dashboard/src/lib/store.js skills/dashboard/src/lib/schema.js cli/lib/upgrade-entry.js cli/lib/core-db-backup.js cli/lib/core-db-backup-worker.js skills/dashboard/src/lib/schema-owner.js skills/dashboard/__tests__/fixtures/dashboard-history.js skills/dashboard/__tests__/fixtures/schema13.js skills/dashboard/__tests__/helpers/explicit-migration.js
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import {createRequire} from 'node:module';
+import {pathToFileURL} from 'node:url';
+import {legacy as dashboardSchema13} from '../../../skills/dashboard/__tests__/fixtures/dashboard-history.js';
+import {Store} from '../../../skills/dashboard/src/lib/store.js';
+import {TARGET_SCHEMA_VERSION} from '../../../skills/dashboard/src/lib/schema.js';
+import {migrateSchema13} from '../../../skills/dashboard/__tests__/fixtures/schema13.js';
+import {migrateDashboardFile} from '../../../skills/dashboard/__tests__/helpers/explicit-migration.js';
+import {inspectUpgradeSource} from '../upgrade-entry.js';
+import {createCoreDbSnapshot,runCoreDbWorker,validateSnapshotManifest,probeCoreDbVersions,rehearseCoreDbUpgrade,prepareRecoveryDependencies,inspectDashboardOwnerManaged,inspectCoreManagesDashboardDb} from '../core-db-backup.js';
+
+const installed=process.env.CORE_DB_TEST_SKILL || path.resolve('skills/comm-bridge');
+const Database=createRequire(path.join(installed,'package.json'))('better-sqlite3');
+const hash=file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+function fixture(t, {targetVersion=20,realDashboard=false}={}) {
+  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'dashboard-snapshot-')));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const driverRoot=path.join(root,'.claude/skills');
+  fs.mkdirSync(path.join(driverRoot,'comm-bridge'),{recursive:true});
+  fs.writeFileSync(path.join(driverRoot,'comm-bridge/package.json'),'{}');
+  fs.symlinkSync(path.join(installed,'node_modules'),path.join(driverRoot,'comm-bridge/node_modules'));
+  const target=path.join(root,'target'),schemaRoot=path.join(target,'skills');
+  fs.mkdirSync(schemaRoot,{recursive:true});
+  for(const name of ['comm-bridge','scheduler']) fs.symlinkSync(path.resolve('skills',name),path.join(schemaRoot,name));
+  fs.mkdirSync(path.join(target,'cli/lib'),{recursive:true});
+  fs.symlinkSync(path.resolve('cli/lib/core-db-backup-worker.js'),path.join(target,'cli/lib/core-db-backup-worker.js'));
+  const dashboardRoot=path.join(schemaRoot,'dashboard');fs.mkdirSync(path.join(dashboardRoot,'src/lib'),{recursive:true});
+  fs.writeFileSync(path.join(dashboardRoot,'package.json'),'{"type":"module"}');
+  fs.writeFileSync(path.join(dashboardRoot,'index.js'),`throw Error('service entry must not load');`);
+  // Pure owner deliberately has no driver dependency or node_modules.
+  if(realDashboard)fs.writeFileSync(path.join(dashboardRoot,'src/lib/schema-owner.js'),`export {dashboardSchemaOwner} from ${JSON.stringify(pathToFileURL(path.resolve('skills/dashboard/src/lib/schema-owner.js')).href)};\n`);
+  else fs.writeFileSync(path.join(dashboardRoot,'src/lib/schema-owner.js'),`
+    export const dashboardSchemaOwner={
+      inspectSchema(db){
+        if(typeof db.prepare!=='function')throw Error('owner requires an open handle');
+        const exists=db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").get();
+        const currentVersion=exists?db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version:null;
+        return {currentVersion,targetVersion:${targetVersion},needsMigration:currentVersion!==${targetVersion}};
+      },
+      migrate(db){db.transaction(()=>{db.exec('CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY)');db.prepare('INSERT OR IGNORE INTO schema_migrations VALUES (?)').run(${targetVersion});})();}
+    };
+  `);
+  const source=path.join(root,'components/dashboard/dashboard.db');
+  function database(version=12) {
+    fs.mkdirSync(path.dirname(source),{recursive:true});const db=new Database(source);
+    db.exec('CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY); CREATE TABLE events(value TEXT); PRAGMA user_version=7');
+    db.prepare('INSERT INTO schema_migrations VALUES (?)').run(version);return db;
+  }
+  const payload={zylosDir:root,schemaRoot,driverRoot};
+  return {root,target,schemaRoot,driverRoot,dashboardRoot,source,database,payload};
+}
+
+test('new snapshots contain current databases and released formats remain readable',t=>{
+  const {root}=fixture(t);
+  fs.mkdirSync(path.join(root,'web-console'));
+  const historical=path.join(root,'web-console/web-console.db');
+  fs.writeFileSync(historical,'historical bytes must not be opened');
+  fs.writeFileSync(historical+'-wal','historical WAL must not be opened');
+  const current=createCoreDbSnapshot({zylosDir:root,transactionId:'current'});
+  assert.equal(current.manifest.formatVersion,3);assert.equal(current.manifest.databases.length,3);
+  assert.equal(fs.readFileSync(historical,'utf8'),'historical bytes must not be opened');
+  assert.equal(fs.existsSync(path.join(current.dbBackupDir,'web-console.db')),false);
+  assert.equal(current.manifest.databases[2].source,'components/dashboard/dashboard.db');
+  const verify=manifest=>runCoreDbWorker({action:'verify',zylosDir:root,dbBackupDir:current.dbBackupDir,manifest});
+  assert.equal(verify(current.manifest).databases.length,3);
+  const missingWeb={source:'web-console/web-console.db',status:'missing',file:null,bytes:0,sha256:null,userVersion:null,integrityCheck:null};
+  const legacyRows=[...current.manifest.databases.slice(0,2),missingWeb];
+  for(const formatVersion of [1,2]) {
+    const databases=formatVersion===1?legacyRows:[...legacyRows,current.manifest.databases[2]];
+    assert.equal(verify({...current.manifest,formatVersion,databases}).databases.length,databases.length);
+    assert.equal(verify({...current.manifest,formatVersion:undefined,databases}).databases.length,databases.length);
+  }
+  assert.equal(verify({...current.manifest,formatVersion:undefined}).databases.length,3);
+  assert.throws(()=>verify({...current.manifest,databases:legacyRows}),/Invalid database collection/);
+  assert.throws(()=>verify({...current.manifest,formatVersion:undefined,databases:[...legacyRows.slice(0,2),legacyRows[0]]}),/Invalid database collection/);
+  assert.throws(()=>validateSnapshotManifest({...current.manifest,formatVersion:4}),/Unsupported/);
+  for(const formatVersion of [1,2]) {
+    assert.throws(()=>createCoreDbSnapshot({zylosDir:root,transactionId:'legacy',formatVersion}),/require formatVersion 3/);
+    assert.throws(()=>runCoreDbWorker({action:'snapshot',zylosDir:root,formatVersion}),/require formatVersion 3/);
+  }
+});
+
+test('Dashboard online snapshot includes WAL rows and normalizes only the copy',t=>{
+  const {root,source,database}=fixture(t),writer=database();t.after(()=>writer.close());
+  writer.pragma('journal_mode=WAL');writer.prepare('INSERT INTO events VALUES (?)').run('committed WAL');
+  const before=[source,source+'-wal'].map(file=>fs.readFileSync(file));
+  const result=createCoreDbSnapshot({zylosDir:root,transactionId:'wal-four'});
+  const row=result.manifest.databases[2],file=path.join(result.dbBackupDir,row.file);
+  assert.equal(row.userVersion,7);assert.equal(row.status,'backed_up');
+  assert.deepEqual([source,source+'-wal'].map(file=>fs.readFileSync(file)),before);
+  const db=new Database(file,{readonly:true,fileMustExist:true});
+  try {assert.equal(db.prepare('SELECT value FROM events').get().value,'committed WAL');assert.equal(db.pragma('journal_mode',{simple:true}),'delete');}finally{db.close();}
+  for(const suffix of ['-wal','-shm'])assert.equal(fs.existsSync(file+suffix),false);
+  assert.equal(runCoreDbWorker({action:'verify',zylosDir:root,dbBackupDir:result.dbBackupDir,manifest:result.manifest}).databases[2].sha256,hash(file));
+});
+
+test('Dashboard owner version rejects future schemas without writing the database',t=>{
+  const {root,target,source,database,driverRoot,payload}=fixture(t);database(99).close();const before=fs.readFileSync(source);
+  for(const run of [()=>probeCoreDbVersions(root,target,{driverRoot}),()=>runCoreDbWorker({...payload,action:'offline-preflight'})]) assert.throws(run,error=>{
+    assert.equal(error.code,'SCHEMA_TOO_NEW');
+    assert.match(error.message,/SCHEMA_TOO_NEW.*99.*20/);
+    assert.doesNotMatch(error.message,/\n|\/home\/|file:\/\//);
+    return true;
+  });
+  assert.deepEqual(fs.readFileSync(source),before);
+});
+
+for(const bundled of [false,true])for(const version of [13,20,99]) test(`real Dashboard owner selection bundled=${bundled} schema=${version}`,t=>{
+  const f=fixture(t);f.database(version).close();
+  const prefix=path.join(f.root,'npm-prefix'),installedRoot=path.join(prefix,'lib/node_modules/zylos');
+  fs.mkdirSync(installedRoot,{recursive:true});fs.mkdirSync(path.join(prefix,'bin'));
+  if(bundled)fs.mkdirSync(path.join(installedRoot,'skills/dashboard'),{recursive:true});
+  fs.writeFileSync(path.join(installedRoot,'package.json'),JSON.stringify({name:'zylos',version:'0.9.4'}));
+  fs.writeFileSync(path.join(f.target,'package.json'),JSON.stringify({name:'zylos',version:'1.0.0'}));
+  const input={schemaVersion:1,fromVersion:'0.9.4',installedRoot,tempDir:f.target,zylosDir:f.root};
+  const before=fs.readFileSync(f.source);
+  if(version===99) assert.throws(()=>inspectUpgradeSource(input),/SCHEMA_TOO_NEW.*99.*20/);
+  else {
+    const state=inspectUpgradeSource(input);
+    assert.equal(state.firstTakeover,!bundled);
+    assert.equal(state.dashboardOwnerManaged,version>=20||bundled);
+    assert.equal(state.databaseVersions.databases.length,version>=20||bundled?3:2);
+  }
+  assert.deepEqual(fs.readFileSync(f.source),before);
+  assert.equal(fs.existsSync(path.join(f.root,'.backup/self-upgrade')),false);
+});
+
+test('Dashboard rehearsal receives Core handles and migrates only the private copy',t=>{
+  const {root,target,source,database,driverRoot}=fixture(t,{targetVersion:22});database(20).close();const before=fs.readFileSync(source);
+  assert.deepEqual(probeCoreDbVersions(root,target,{driverRoot}).databases[2],{source:'components/dashboard/dashboard.db',status:'present',fromVersion:20,toVersion:22,needsMigration:true});
+  assert.equal(rehearseCoreDbUpgrade(root,target,{driverRoot}).databases[2].toVersion,22);
+  assert.deepEqual(fs.readFileSync(source),before);
+  const db=new Database(source);try {assert.equal(db.pragma('user_version',{simple:true}),7);}finally{db.close();}
+});
+
+test('all current owners use the explicitly frozen Core driver',t=>{
+  const {root,payload,database}=fixture(t);database().close();
+  const driverPath=path.join(root,'driver.cjs');
+  fs.writeFileSync(driverPath,`const Database=require(${JSON.stringify(path.join(installed,'node_modules/better-sqlite3'))});module.exports=function(file,options){if(String(file).includes('/components/dashboard/'))throw Error('frozen Core driver reached Dashboard');return new Database(file,options);};`);
+  assert.throws(()=>runCoreDbWorker({...payload,action:'version-probe',driverPath}),/frozen Core driver reached Dashboard/);
+});
+
+test('unmanaged Dashboard skips owner actions but still snapshots its bytes',t=>{
+  const {root,target,dashboardRoot,source,database,driverRoot,payload}=fixture(t);database(13).close();const before=fs.readFileSync(source);
+  fs.rmSync(dashboardRoot,{recursive:true});
+  assert.equal(probeCoreDbVersions(root,target,{driverRoot,dashboardOwnerManaged:false}).databases.length,2);
+  assert.equal(rehearseCoreDbUpgrade(root,target,{driverRoot,dashboardOwnerManaged:false}).databases.length,2);
+  assert.equal(runCoreDbWorker({...payload,action:'offline-preflight',dashboardOwnerManaged:false}).databases[2].ownerSkipped,true);
+  assert.equal(createCoreDbSnapshot({zylosDir:root,transactionId:'takeover'}).manifest.databases[2].status,'backed_up');
+  assert.deepEqual(fs.readFileSync(source),before);
+  assert.throws(()=>runCoreDbWorker({...payload,action:'ordinary-migrate'}),/Unknown action/);
+  assert.throws(()=>runCoreDbWorker({...payload,action:'upgrade-migrate'}),/requires transaction identity/);
+});
+
+test('first takeover rejects corrupt Dashboard bytes even without an owner',t=>{
+  const {source,payload}=fixture(t);fs.mkdirSync(path.dirname(source),{recursive:true});fs.writeFileSync(source,'invalid sqlite');
+  assert.throws(()=>runCoreDbWorker({...payload,action:'offline-preflight',dashboardOwnerManaged:false}),/not a database/);
+});
+
+test('standalone restored Dashboard is hash checked during first takeover',t=>{
+  const {root,source,database,payload}=fixture(t);database().close();
+  const snapshot=createCoreDbSnapshot({zylosDir:root,transactionId:'restore'});
+  fs.copyFileSync(path.join(snapshot.dbBackupDir,'dashboard.db'),source);
+  const request={...payload,action:'offline-preflight',manifest:snapshot.manifest,dashboardOwnerManaged:false};
+  assert.equal(runCoreDbWorker(request).databases[2].status,'present');
+  const db=new Database(source);db.exec("INSERT INTO events VALUES ('changed')");db.close();
+  assert.throws(()=>runCoreDbWorker(request),/hash mismatch/);
+});
+
+test('missing Dashboard stays absent before recovery and preserves a later generation',t=>{
+  const {root,target,source,driverRoot,payload}=fixture(t);
+  assert.equal(probeCoreDbVersions(root,target,{driverRoot}).databases[2].status,'missing');
+  assert.equal(rehearseCoreDbUpgrade(root,target,{driverRoot}).databases[2].status,'missing');
+  assert.equal(runCoreDbWorker({...payload,action:'offline-preflight'}).databases[2].status,'missing');
+  assert.equal(fs.existsSync(source),false);
+  const snapshot=createCoreDbSnapshot({zylosDir:root,transactionId:'missing-preserved'});
+  assert.equal(runCoreDbWorker({...payload,action:'offline-preflight',manifest:snapshot.manifest}).databases[2].status,'missing');
+  fs.mkdirSync(path.dirname(source),{recursive:true});fs.writeFileSync(source,'later Dashboard generation');
+  const later=fs.readFileSync(source);
+  assert.equal(runCoreDbWorker({...payload,action:'offline-preflight',manifest:snapshot.manifest}).databases[2].status,'present');
+  assert.deepEqual(fs.readFileSync(source),later);
+});
+
+function controlledMigration(t, dashboardOwnerManaged, options) {
+  const f=fixture(t, options),{root,schemaRoot,driverRoot}=f;
+  options?.prepare?.(f);
+  for(const name of ['comm-bridge','scheduler','dashboard'])fs.cpSync(path.join(schemaRoot,name),path.join(driverRoot,name),{recursive:true,dereference:true,filter:file=>!file.split(path.sep).includes('node_modules')});
+  const snapshot=createCoreDbSnapshot({zylosDir:root,transactionId:'deferred-dashboard'});
+  const m=createRequire(import.meta.url)('../upgrade-maintenance.cjs');
+  const transactionDir=path.join(root,'.backup/self-upgrade/deferred-dashboard'),digest='a'.repeat(64);
+  fs.mkdirSync(transactionDir,{recursive:true,mode:0o700});fs.mkdirSync(path.join(root,'.zylos/upgrade'),{recursive:true,mode:0o700});
+  fs.copyFileSync(path.resolve('cli/lib/upgrade-maintenance.cjs'),path.join(root,'.zylos/upgrade/maintenance.cjs'));fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/remove-owned-tree.js'),path.join(path.dirname(path.join(root,'.zylos/upgrade/maintenance.cjs')),'remove-owned-tree.mjs'));fs.chmodSync(path.join(root,'.zylos/upgrade/maintenance.cjs'),0o600);
+  const j={formatVersion:1,from:'0.9.4',firstTakeover:false,dashboardOwnerManaged,transactionId:'deferred-dashboard',zylosDir:root,skillsDir:driverRoot,phase:'installing',installationIntent:true,nodePath:process.execPath,
+    dbBackupDir:snapshot.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshot.dbBackupDir,'manifest.json')),originalServices:[],coreManifest:[{name:'comm-bridge',existedBefore:true,backedUp:true,originalHash:digest}],
+    initialIdentity:{nodePath:process.execPath,cliRoot:path.join(root,'package/cli'),cliHash:digest,packageJson:path.join(root,'package/package.json'),packageHash:digest,workerPath:path.join(root,'package/cli/lib/core-db-backup-worker.js'),workerHash:digest,ecosystemHash:null,databases:m.databasePaths(2).map(source=>({source,exists:false}))}};
+  m.durable(path.join(transactionDir,'journal.json'),j);m.marker(root,transactionDir,j);
+  return {...f, request:{action:'upgrade-migrate',zylosDir:root,schemaRoot:driverRoot,transactionDir,transactionId:j.transactionId}};
+}
+
+test('controlled upgrade leaves missing Dashboard creation to its first ordinary open',t=>{
+  const {root,source,driverRoot,request}=controlledMigration(t,true);
+  const result=runCoreDbWorker(request);
+  assert.equal(result.databases[2].status,'missing');assert.equal(result.databases[2].ownerSkipped,undefined);
+  assert.equal(fs.existsSync(source),false);
+  assert.equal(runCoreDbWorker({action:'offline-preflight',zylosDir:root,schemaRoot:driverRoot,requireCurrent:true}).databases[2].status,'missing');
+  assert.equal(fs.existsSync(source),false);
+});
+
+// A first takeover that could not migrate the standalone database leaves it at
+// 13 under a Core that ships Dashboard. It is Core's from then on: the probe,
+// rehearsal, snapshot, worker migration and readback carry it to the latest
+// version with the real Dashboard owner, as a same-version upgrade does.
+test('a Dashboard database left at 13 after the takeover goes through the protected migration to the latest version',t=>{
+  const f=controlledMigration(t,true,{realDashboard:true,prepare:({source})=>{fs.mkdirSync(path.dirname(source),{recursive:true});dashboardSchema13(source);}});
+  const {root,target,source,driverRoot,request}=f;
+  const installedRoot=path.join(root,'installed');fs.mkdirSync(path.join(installedRoot,'skills/dashboard'),{recursive:true});
+  const managed=inspectCoreManagesDashboardDb(root,installedRoot,{driverRoot});
+  assert.equal(managed,true);
+  const before=hash(source);
+  const probe=probeCoreDbVersions(root,target,{driverRoot,dashboardOwnerManaged:managed});
+  const row=probe.databases.find(item=>item.source==='components/dashboard/dashboard.db');
+  assert.deepEqual(row,{source:'components/dashboard/dashboard.db',status:'present',fromVersion:13,toVersion:TARGET_SCHEMA_VERSION,needsMigration:true});
+  assert.equal(probe.needsMigration,true);
+  const rehearsal=rehearseCoreDbUpgrade(root,target,{driverRoot,dashboardOwnerManaged:managed}).databases.find(item=>item.source==='components/dashboard/dashboard.db');
+  assert.equal(rehearsal.toVersion,TARGET_SCHEMA_VERSION);
+  assert.equal(hash(source),before,'probe and rehearsal leave the live database alone');
+  const migrated=runCoreDbWorker(request).databases.find(item=>item.source==='components/dashboard/dashboard.db');
+  const readback=runCoreDbWorker({action:'offline-preflight',zylosDir:root,schemaRoot:driverRoot,requireCurrent:true,dashboardOwnerManaged:true}).databases.find(item=>item.source==='components/dashboard/dashboard.db');
+  t.diagnostic(JSON.stringify({managed,probe:row,rehearsal,migrated,readback}));
+  assert.equal(readback.status,'present');
+  const snapshot=JSON.parse(fs.readFileSync(path.join(root,'.backup/db/deferred-dashboard/manifest.json'),'utf8')).databases.find(item=>item.source==='components/dashboard/dashboard.db');
+  const copy=new Database(path.join(root,'.backup/db/deferred-dashboard',snapshot.file),{readonly:true});
+  try {assert.equal(copy.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v,13,'the snapshot keeps the version-13 database');}
+  finally {copy.close();}
+  const store=new Store(source);
+  try {
+    assert.equal(store.db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v,TARGET_SCHEMA_VERSION);
+    assert.equal(store.db.prepare("SELECT id FROM runtime_events WHERE id='old'").get().id,'old');
+    assert.equal(store.db.prepare("SELECT token_hash FROM auth_sessions").get().token_hash,'retained');
+  } finally {store.close();}
+});
+
+test('controlled Dashboard migration preserves too-new rejection and classifies migration failure',t=>{
+  const {source,database,driverRoot,request}=controlledMigration(t,true,{targetVersion:22});
+  database(99).close();
+  const tooNew=fs.readFileSync(source);
+  assert.throws(()=>runCoreDbWorker(request),{code:'SCHEMA_TOO_NEW'});
+  assert.deepEqual(fs.readFileSync(source),tooNew);
+  const db=new Database(source);db.exec('DELETE FROM schema_migrations; INSERT INTO schema_migrations VALUES(20)');db.close();
+  const before=fs.readFileSync(source);
+  const owner=path.join(driverRoot,'dashboard/src/lib/schema-owner.js');
+  fs.appendFileSync(owner,"\ndashboardSchemaOwner.migrate=()=>{throw Object.assign(Error('fixture migration failed'),{code:'SQLITE_ERROR'});};\n");
+  assert.throws(()=>runCoreDbWorker(request),error=>{
+    assert.equal(error.code,'SCHEMA_MIGRATION_FAILED');
+    assert.match(error.message,/fixture migration failed/);
+    assert.doesNotMatch(error.message,/\n|\/home\/|file:\/\//);
+    return true;
+  });
+  assert.deepEqual(fs.readFileSync(source),before);
+});
+
+for(const managed of [false,true]) test(`controlled migration uses persisted Dashboard owner state ${managed} despite caller disagreement`,t=>{
+  const {source,database,driverRoot,request}=controlledMigration(t,managed,{targetVersion:22});
+  database(managed?20:13).close();
+  const before=fs.readFileSync(source);
+  const owner=path.join(driverRoot,'dashboard/src/lib/schema-owner.js');
+  const calls=path.join(driverRoot,'dashboard/migration-calls');
+  fs.appendFileSync(owner,`\nimport fs from 'node:fs';\nconst migrate=dashboardSchemaOwner.migrate;dashboardSchemaOwner.migrate=db=>{fs.appendFileSync(${JSON.stringify(calls)},'migrate\\n');return migrate(db);};\n`);
+  const result=runCoreDbWorker({...request,dashboardOwnerManaged:!managed});
+  const row=result.databases.find(item=>item.source==='components/dashboard/dashboard.db');
+  const db=new Database(source,{readonly:true,fileMustExist:true});
+  try {assert.equal(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version,managed?22:13);}
+  finally {db.close();}
+  assert.equal(row.ownerSkipped,managed?undefined:true);
+  assert.equal(fs.existsSync(calls),managed);
+  if(managed)assert.equal(fs.readFileSync(calls,'utf8'),'migrate\n');
+  else assert.deepEqual(fs.readFileSync(source),before);
+});
+
+test('missing Dashboard never loads its owner or creates a database before cutoff',t=>{
+  const {root,target,source,driverRoot,dashboardRoot,payload}=fixture(t);
+  fs.writeFileSync(path.join(dashboardRoot,'src/lib/schema-owner.js'),`throw Error('missing Dashboard must not load owner');`);
+  assert.equal(probeCoreDbVersions(root,target,{driverRoot}).databases[2].status,'missing');
+  assert.equal(rehearseCoreDbUpgrade(root,target,{driverRoot}).databases[2].status,'missing');
+  assert.equal(runCoreDbWorker({...payload,action:'offline-preflight'}).databases[2].status,'missing');
+  assert.equal(fs.existsSync(source),false);
+});
+
+for(const version of [0,13,19,20,21,22,99]) test(`Dashboard management uses schema_migrations ${version}, not user_version`,t=>{
+  const {root,source,database,driverRoot}=fixture(t);database(version).close();
+  const before=fs.readFileSync(source);
+  assert.equal(inspectDashboardOwnerManaged(root,{driverRoot}),version>=20);
+  assert.deepEqual(fs.readFileSync(source),before);
+});
+
+for(const bundled of [false,true])for(const version of [null,13,20]) test(`Core manages the Dashboard database: schema=${version ?? 'absent'} installed Core ships Dashboard=${bundled}`,t=>{
+  const {root,source,database,driverRoot}=fixture(t);
+  if(version!==null)database(version).close();
+  const installedRoot=path.join(root,'installed');fs.mkdirSync(installedRoot);
+  if(bundled)fs.mkdirSync(path.join(installedRoot,'skills/dashboard'),{recursive:true});
+  const before=version===null?null:hash(source);
+  // After the first takeover an existing database below the owner-managed
+  // baseline is still Core's to migrate; without Dashboard in Core it is not.
+  assert.equal(inspectCoreManagesDashboardDb(root,installedRoot,{driverRoot}),version!==null&&(version>=20||bundled));
+  if(version===null)assert.equal(fs.existsSync(source),false);
+  else assert.equal(hash(source),before);
+});
+
+test('Dashboard management handles absent database/table and rejects corrupt bytes',t=>{
+  const {root,source,driverRoot}=fixture(t);
+  assert.equal(inspectDashboardOwnerManaged(root,{driverRoot}),false);
+  assert.equal(fs.existsSync(source),false);
+  fs.mkdirSync(path.dirname(source),{recursive:true});
+  const db=new Database(source);db.exec('PRAGMA user_version=99');db.close();
+  assert.equal(inspectDashboardOwnerManaged(root,{driverRoot}),false);
+  fs.writeFileSync(source,'invalid sqlite');
+  assert.throws(()=>inspectDashboardOwnerManaged(root,{driverRoot}),/not a database/);
+});
+
+test('recovery closure freezes only Core driver without Dashboard dependencies',t=>{
+  const {root}=fixture(t),closure=prepareRecoveryDependencies(path.join(root,'transaction'),root);
+  assert.equal(fs.existsSync(closure.driverPath),true);
+  assert.equal(fs.existsSync(path.join(closure.driverClosureRoot,'dashboard-owner')),false);
+  assert.equal(runCoreDbWorker({action:'probe',driverPath:closure.driverPath},{workerPath:closure.workerPath}).ok,true);
+});
+
+test('orphan Dashboard sidecars and invalid bytes fail snapshots durably',t=>{
+  const {root,source}=fixture(t);fs.mkdirSync(path.dirname(source),{recursive:true});
+  for(const [id,prepare] of [['orphan',()=>fs.writeFileSync(source+'-wal','orphan')],['corrupt',()=>{fs.rmSync(source+'-wal');fs.writeFileSync(source,'invalid sqlite');}]]) {
+    prepare();assert.throws(()=>createCoreDbSnapshot({zylosDir:root,transactionId:id}),/Orphan SQLite|not a database/);
+    assert.equal(fs.existsSync(path.join(root,'.backup/db',id)),false);
+  }
+  const dirs=fs.readdirSync(path.join(root,'.backup/db')).filter(name=>name.startsWith('.staging-'));
+  assert.equal(dirs.length,2);
+  for(const dir of dirs)assert.equal(JSON.parse(fs.readFileSync(path.join(root,'.backup/db',dir,'failure.json'))).status,'failed');
+});
+
+function useRealDashboardOwner(root) {
+  // Copy only the pure schema modules: no Dashboard entry point or dependencies.
+  for (const name of ['schema-owner.js', 'schema.js']) {
+    fs.copyFileSync(path.resolve('skills/dashboard/src/lib', name), path.join(root, 'src/lib', name));
+  }
+}
+
+function legacyDashboard(file) {
+  fs.mkdirSync(path.dirname(file), {recursive:true});
+  const db = new Database(file);
+  migrateSchema13(db);
+  db.exec("INSERT INTO runtime_events(id,ingest_id,event_seq,timestamp,event_type,category) VALUES('retained','retained',1,'2026-01-01','prompt','activity')");
+  db.close();
+}
+
+// Migration integration: run for Dashboard schema/owner changes, skip UI-only.
+// Private roots/SQLite and bounded worker children; fixture owns cleanup, no live services.
+test('schema 13 skips all owner actions before cutoff; Store refuses it until the explicit takeover migration', t => {
+  const f = controlledMigration(t, false);
+  legacyDashboard(f.source);
+  const before = fs.readFileSync(f.source);
+  // Throwing modules prove that even loading an owner is forbidden on this path.
+  for (const root of [f.dashboardRoot, path.join(f.driverRoot, 'dashboard')]) {
+    fs.writeFileSync(path.join(root, 'src/lib/schema-owner.js'), "throw Error('unmanaged Dashboard owner must not load');");
+  }
+  const options = {driverRoot:f.driverRoot,dashboardOwnerManaged:false};
+  assert.equal(probeCoreDbVersions(f.root,f.target,options).databases.length,2);
+  assert.equal(rehearseCoreDbUpgrade(f.root,f.target,options).databases.length,2);
+  assert.equal(runCoreDbWorker({...f.payload,action:'offline-preflight',dashboardOwnerManaged:false}).databases[2].ownerSkipped,true);
+  assert.equal(runCoreDbWorker({...f.request,dashboardOwnerManaged:true}).databases[2].ownerSkipped,true);
+  assert.deepEqual(fs.readFileSync(f.source),before);
+  const beforeOpen = new Database(f.source,{readonly:true,fileMustExist:true});
+  assert.equal(beforeOpen.prepare('SELECT MAX(version) version FROM schema_migrations').get().version,13);
+  beforeOpen.close();
+  // An ordinary open no longer migrates: it refuses and leaves the file untouched.
+  assert.throws(() => new Store(f.source), error => error.code === 'SCHEMA_UPGRADE_REQUIRED'
+    && error.schemaVersion === 13 && error.supportedVersion === TARGET_SCHEMA_VERSION
+    && /zylos upgrade --self/.test(error.message) && /not migrated/.test(error.message));
+  assert.ok(fs.readFileSync(f.source).equals(before), `${f.source} changed`);
+  for (const suffix of ['-wal','-shm']) assert.equal(fs.existsSync(f.source+suffix),false);
+  migrateDashboardFile(f.source);
+  const store = new Store(f.source);
+  try {
+    assert.equal(store.db.prepare('SELECT MAX(version) version FROM schema_migrations').get().version,TARGET_SCHEMA_VERSION);
+    assert.equal(store.db.prepare('SELECT id FROM runtime_events').get().id,'retained');
+  } finally {store.close();}
+});
+
+// Same isolated migration boundary; verifies the current target through real Core handles.
+test('real current schema owner uses Core handles for probe rehearsal and controlled no-op', t => {
+  const f = controlledMigration(t,true);
+  for (const root of [f.dashboardRoot,path.join(f.driverRoot,'dashboard')]) useRealDashboardOwner(root);
+  const store = new Store(f.source);store.close();
+  const before=fs.readFileSync(f.source);
+  const options={driverRoot:f.driverRoot,dashboardOwnerManaged:true};
+  assert.deepEqual(probeCoreDbVersions(f.root,f.target,options).databases[2],{
+    source:'components/dashboard/dashboard.db',status:'present',fromVersion:TARGET_SCHEMA_VERSION,toVersion:TARGET_SCHEMA_VERSION,needsMigration:false,
+  });
+  assert.deepEqual(rehearseCoreDbUpgrade(f.root,f.target,options).databases[2],{
+    source:'components/dashboard/dashboard.db',status:'present',fromVersion:TARGET_SCHEMA_VERSION,toVersion:TARGET_SCHEMA_VERSION,
+  });
+  assert.deepEqual(fs.readFileSync(f.source),before);
+  const row=runCoreDbWorker(f.request).databases[2];
+  assert.equal(row.currentVersion,TARGET_SCHEMA_VERSION);assert.equal(row.needsMigration,false);
+  assert.deepEqual(fs.readFileSync(f.source),before);
+  assert.equal(fs.existsSync(path.join(f.dashboardRoot,'node_modules')),false);
+  const reopened = new Store(f.source);reopened.close();
+  assert.deepEqual(fs.readFileSync(f.source),before);
+});
+
+test('real owner rejects schema 99 with user_version zero before mutation', t => {
+  const f=controlledMigration(t,true);
+  for (const root of [f.dashboardRoot,path.join(f.driverRoot,'dashboard')]) useRealDashboardOwner(root);
+  const store=new Store(f.source);
+  store.db.exec('INSERT INTO schema_migrations(version) VALUES(99)');store.close();
+  const before=fs.readFileSync(f.source);
+  for (const run of [
+    () => probeCoreDbVersions(f.root,f.target,{driverRoot:f.driverRoot,dashboardOwnerManaged:true}),
+    () => rehearseCoreDbUpgrade(f.root,f.target,{driverRoot:f.driverRoot,dashboardOwnerManaged:true}),
+    () => runCoreDbWorker({...f.payload,action:'offline-preflight',dashboardOwnerManaged:true}),
+    () => runCoreDbWorker(f.request),
+  ]) assert.throws(run,{code:'SCHEMA_TOO_NEW'});
+  assert.deepEqual(fs.readFileSync(f.source),before);
+  const db=new Database(f.source,{readonly:true,fileMustExist:true});
+  try {assert.equal(db.pragma('user_version',{simple:true}),0);}finally{db.close();}
+});

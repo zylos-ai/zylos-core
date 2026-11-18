@@ -1,9 +1,9 @@
 import test from 'node:test';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
 
-// Boundary: the real workbench page (overview, group detail, memory, schedule, settings) in a local browser,
+// Boundary: the real workbench page (overview, group detail, memory, schedule, settings, the usage page's cost total) in a local browser,
 // with fixed API answers and recorded dashboard actions; no Core, runtime, PM2, tmux or database is started.
-// Run for changes to the workbench pages' layout, the app header (brand colour, the viewed machine's Core version), the machine panel's meta line, the header's machines icon (back to the machines page, machine settings without other machines), the phone stylesheet (portrait and a phone on its side), the page actions and their confirmation (automatic naming included),
+// Run for changes to the workbench pages' layout, the app header (brand colour, the viewed machine's Core version), the machine panel's meta line, the header's machines icon (back to the machines page, machine settings without other machines), the phone stylesheet (portrait and a phone on its side), the usage page's cost total and its Other line, the page actions and their confirmation (automatic naming included),
 // chat-stream admission error/timeout/retry behavior and established-stream reconnects without admission probes,
 // fleet problem navigation after offline pagination,
 // memory/detail navigation, the group timeline's event filtering and order, or the phone settings drawer and the page's history handling; skip for backend-only and conversation-page-only changes. Opt-in with the same

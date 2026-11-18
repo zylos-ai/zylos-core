@@ -866,6 +866,13 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .wb-memory-chart-label.wb-memory-chart-label-static { cursor: default; }
 .wb-memory-chart-label.wb-memory-chart-label-static:hover { text-decoration: none; }
 .wb-memory-chart-value { font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.wb-memory-budgets .wb-memory-chart-value { white-space: normal; overflow-wrap: anywhere; }
+.wb-memory-budgets .wb-memory-chart-row { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+.wb-memory-budgets .wb-memory-chart-label { grid-area: 1 / 1; }
+.wb-memory-budgets .wb-memory-chart-value { grid-area: 1 / 2; text-align: right; }
+.wb-memory-budgets .wb-memory-track { grid-area: 2 / 1 / auto / -1; }
+.wb-memory-budgets .wb-memory-flags { grid-area: 3 / 1 / auto / -1; }
+
 .wb-memory-track { position: relative; display: flex; height: 8px; border-radius: 3px; background: var(--wb-off); }
 .wb-memory-fill { height: 100%; border-radius: 3px 0 0 3px; background: var(--text-dim); }
 .wb-memory-fill.warning { background: var(--wb-wait); }
@@ -1061,6 +1068,8 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
   .wb-usage-total > small:first-child { grid-area: label; font-size: 12.5px; color: var(--text-dim); }
   .wb-usage-total strong { grid-area: value; font-size: 17px; text-align: right; }
   .wb-usage-total .wb-usage-sub { grid-area: sub; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The cost's "Other" line goes under its runtime line, still left of the number. */
+  .wb-usage-total .wb-usage-other { grid-area: auto / 1; }
   .wb-usage-chart { padding: 12px; }
   /* Chart titles keep their line; the legend goes under them. */
   .wb-usage-head .wb-usage-legend { flex-basis: 100%; }

@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readParentPidViaPs } from './claude-pid.js';
 import { TMUX_COMMAND as C, TMUX_FORMAT as F } from '../../comm-bridge/scripts/tmux-protocol.js';
+import { tmuxClientArgs, isTmuxDirectoryError } from '../../comm-bridge/scripts/tmux-client-args.js';
 
 export const runtimeRoot = () => process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 export function syncDirectory(directory) {
@@ -35,7 +36,7 @@ export function isManagedClaudeProcess(pid, { session = 'claude-main', platform 
   read = fs.readFileSync, run = execFileSync } = {}) {
   if (!Number.isSafeInteger(pid) || pid <= 1) return false;
   try {
-    const pane = Number(run('tmux', [C.displayMessage, '-p', '-t', session, F.panePid], {
+    const pane = Number(run('tmux', [...tmuxClientArgs({ utf8: false }), C.displayMessage, '-p', '-t', session, F.panePid], {
       encoding: 'utf8', timeout: 2000, stdio: 'pipe',
     }).trim());
     if(!Number.isSafeInteger(pane)||pane<=1)return false;
@@ -54,6 +55,6 @@ export function isManagedClaudeProcess(pid, { session = 'claude-main', platform 
       }
       ancestor=Number.isSafeInteger(parent)&&parent>0?parent:readParentPidViaPs(ancestor,{execFileSyncImpl:run});
     }
-  } catch { /* Missing process evidence cannot authorize a health event. */ }
+  } catch (error) { if (isTmuxDirectoryError(error)) throw error; }
   return false;
 }

@@ -11,7 +11,7 @@ import {isolatedTmux,tmuxClientEnv} from './isolated-tmux.js';
 export function readyTmuxTarget(t,{prefix='c4-target-',mode='single',runtime='claude',
   runId='run-1',sessionId='session-1',runtimeProcess=false,ledger=true,packageRoot,keyPresent=true}={}) {
   let db;
-  const f=isolatedTmux(t,{prefix,socketName:'tmux.sock',beforeCleanup:()=>db?.close()});
+  const f=isolatedTmux(t,{prefix,beforeCleanup:()=>db?.close()});
   const root=f.dir;
   const env=tmuxClientEnv(f,{PATH:process.env.PATH,HOME:root,ZYLOS_DIR:root,
     ZYLOS_PACKAGE_ROOT:packageRoot,LANG:'en_US.UTF-8'});

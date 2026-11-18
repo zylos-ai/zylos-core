@@ -31,7 +31,8 @@ export function memoryTestEnv(zylosDir) {
   for (const key of ['TMUX', 'ZYLOS_SESSION_GROUP', 'ZYLOS_RUN_ID', 'CLAUDE_SESSION_ID', 'CODEX_SESSION_ID']) delete env[key];
   for (const [key, name] of Object.entries({ HOME: 'h', PM2_HOME: 'p', TMPDIR: 't', TMUX_TMPDIR: 'm' })) {
     env[key] = path.join(zylosDir, name);
-    fs.mkdirSync(env[key], { recursive: true });
+    fs.mkdirSync(env[key], { recursive: true, mode: 0o700 });
+    fs.chmodSync(env[key], 0o700);
   }
   return env;
 }

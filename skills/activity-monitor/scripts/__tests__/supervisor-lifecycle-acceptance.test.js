@@ -134,7 +134,7 @@ async function syncScopeScenario(t, Class) {
     const insert = f.db.insertControl; let fail = true;
     f.db.insertControl = (...args) => { if (fail) throw new Error('injected write failure'); return insert(...args); };
     await assert.rejects(f.lifecycle.checkSync([f.scene], f.context), /injected write failure/);
-    assert.equal(f.lifecycle.syncSent.size, 0, 'failed Sync write marked the scope sent'); assert.equal(f.lifecycle.syncRuns.size, 0);
+    assert.equal(f.lifecycle.syncSent.size, 0, 'failed Sync write marked the scope sent');
     fail = false; f.now += 60000; await f.lifecycle.checkSync([f.scene], f.context);
     assert.deepEqual(f.markerCalls.map(c => c.kind), legacy ? ['global', 'global'] : ['group', 'group', 'origin']);
     assert.ok(f.markerCalls.every(c => c.currentRunId === 'old-run' && c.runDir === f.root));
@@ -203,6 +203,9 @@ test('Origin TTL persists its check and requires durable group and Origin repair
   f.scene.createdAt = f.now - 2_000_000;
   f.db.getLastActivity = () => null;
   f.db.getControlById = id => sql.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id);
+  // Threshold 1 with two Origin group rows keeps the group Sync due before reclaim.
+  f.context.configuration.syncThreshold = 1;
+  sql.store.insertConversation('out', 'system', null, 'isolated earlier group result');
   const groupRow = sql.store.insertConversation('out', 'system', null, 'isolated group result');
   const originRow = sql.store.insertConversation('out', 'telegram', 'fixture', 'isolated Origin input', { groupName: 'room' });
   f.deps.prompts = { PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT };

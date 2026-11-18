@@ -89,7 +89,13 @@ StatusLine is change-driven, not a heartbeat, so agy usage and busy-state sample
 have no age expiry. Run/session and live target checks remain in force. Busy
 means `agent_state` is not `idle`, `task_count > 0`, or any `subagents` entry has
 `status:"running"`; omitted zero-count fields and retained completed entries do
-not keep the session busy. Claude/Codex sample expiry is unchanged.
+not keep the session busy. An open turn with no activity for 20 minutes and no
+unfinished tool receives one Escape through the existing control queue. A valid
+run/session-bound sample captured after turn close with `task_count > 0` or a
+running subagent exempts the turn from this deadline, even after later main-agent
+hooks. Turn close fences that sample; a replacement re-evaluates task state.
+This has no separate timer or configuration. Only non-idle samples advance the last-activity time;
+all current samples advance native freshness. Claude/Codex sample expiry is unchanged.
 
 `TERMINAL_CUSTOM_HOOK` is a normal completion, including native `/compact`.
 After that completion, the next main PreInvocation reinjects the full system and

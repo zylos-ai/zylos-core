@@ -85,7 +85,7 @@ test('Dashboard entry rejects malformed Host on HTTP and both upgrade routes wit
   t.mock.method(VersionChecker.prototype, 'start', () => {});
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-invalid-request-'));
   fs.mkdirSync(path.join(dir, 'components/dashboard'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'components/dashboard/config.json'), JSON.stringify({ auth: { enabled: false } }));
+  fs.writeFileSync(path.join(dir, 'components/dashboard/config.json'), JSON.stringify({ auth: { password: 'scrypt:fixture' } }));
   const previous = process.env.ZYLOS_DIR;
   let createServer;
   try {

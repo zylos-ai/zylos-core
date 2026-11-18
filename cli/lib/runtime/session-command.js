@@ -36,7 +36,7 @@ export function buildRuntimeArgs(runtime, config, {root, help = '', bypassPermis
   const server = path.join(root, '.claude/skills/zylos-memory/scripts/memory-mcp-server.js');
   const args = [];
   if (runtime === 'claude') {
-    args.push('--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode');
+    args.push('--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode,Artifact,ReportFindings,Workflow');
     if (bypassPermissions) args.push('--dangerously-skip-permissions');
     if (config.mode === 'override') args.push('--model', config.model, '--effort', config.effort);
     args.push('--mcp-config', JSON.stringify({mcpServers:{'zylos-memory':{type:'stdio', command:'node', args:[server]}}}));
@@ -44,6 +44,7 @@ export function buildRuntimeArgs(runtime, config, {root, help = '', bypassPermis
     if (bypassPermissions) args.push('--dangerously-skip-permissions');
     args.push('--settings', JSON.stringify({ modelProvider: 'gemini', trustedWorkspaces: [root] }), '-i', buildKickPrompt());
   } else {
+    args.push('-c', 'tools.experimental_request_user_input.enabled=false', '-c', 'features.goals=false', '-c', 'features.apps=false');
     if (/(?:^|\s)--no-daemon(?:\s|$)/m.test(help)) args.push('--no-daemon');
     if (bypassPermissions) args.push('--dangerously-bypass-approvals-and-sandbox');
     if (config.mode === 'override') args.push('--model', config.model, '-c', `model_reasoning_effort=${JSON.stringify(config.effort)}`);
@@ -126,10 +127,10 @@ export function runtimeHelp(command, env = process.env) {
   try { return execFileSync(command,['--help'],{env,encoding:'utf8',timeout:10000,killSignal:'SIGKILL',stdio:'pipe'}); }
   catch (e) { throw adapterError('LAUNCH_FAILED', 'Runtime capability query failed', e.code === 'ETIMEDOUT' ? 'timeout':'error'); }
 }
-export async function runtimeHelpAsync(command, env = process.env) {
+export async function runtimeHelpAsync(command, env = process.env, { timeoutMs = 10000 } = {}) {
   try {
     const { stdout } = await promisify(execFile)(command, ['--help'], {
-      env, encoding:'utf8', timeout:10000, killSignal:'SIGKILL',
+      env, encoding:'utf8', timeout:timeoutMs, killSignal:'SIGKILL',
     });
     return stdout;
   } catch (error) {

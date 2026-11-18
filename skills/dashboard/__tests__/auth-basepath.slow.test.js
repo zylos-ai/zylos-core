@@ -1,0 +1,2008 @@
+// covers: skills/comm-bridge/scripts/sqlite-driver.js skills/dashboard/src/lib/auth.js skills/dashboard/src/lib/store.js skills/dashboard/src/lib/version-checker.js skills/dashboard/src/lib/workbench/group-snapshot.js skills/dashboard/src/lib/core-state.js skills/dashboard/src/index.js skills/dashboard/src/lib/ skills/dashboard/public/themes/ skills/dashboard/__tests__/helpers/explicit-migration.js skills/dashboard/__tests__/fixtures/schema13.js skills/dashboard/__tests__/fixtures/memory-installation.js skills/dashboard/__tests__/fixtures/fleet-object-api.js skills/dashboard/__tests__/helpers/dashboard-sign-in.js
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
+import test, { after, mock } from 'node:test';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
+import { generateApiKey, hashApiKey } from '../src/lib/auth.js';
+import { Store } from '../src/lib/store.js';
+import { migrateDashboardFile } from './helpers/explicit-migration.js';
+import { migrateSchema13 } from './fixtures/schema13.js';
+import { installMemoryScripts, memoryTestEnv, memoryTempRoot } from './fixtures/memory-installation.js';
+import { VersionChecker } from '../src/lib/version-checker.js';
+import { objectResponse, isObjectApi } from './fixtures/fleet-object-api.js';
+import { createGroupSnapshot, systemSample } from '../src/lib/workbench/group-snapshot.js';
+import { CoreState } from '../src/lib/core-state.js';
+import { signIn } from './helpers/dashboard-sign-in.js';
+
+// HTTP/auth fixtures exercise actual product routing, not remote version hosts.
+assert.notEqual(process.env.HOME, os.userInfo().homedir, 'Run through the isolated Node test runner');
+process.env.TMUX_TMPDIR = path.join(os.tmpdir(), 'auth-tmux');
+fs.mkdirSync(process.env.TMUX_TMPDIR, { recursive: true, mode: 0o700 });
+fs.chmodSync(process.env.TMUX_TMPDIR, 0o700);
+mock.method(VersionChecker.prototype, 'start', () => {});
+// A test that waits forever must fail fast instead of holding the whole Node
+// batch until the outer runner timeout. Generous so a loaded host still passes.
+const TEST_TIMEOUT_MS = 60_000;
+// Every listening server is tracked so a test that fails before its own
+// cleanup cannot keep this file's process alive after the last test.
+const openServers = new Set();
+after(async () => {
+  for (const server of openServers) await closeServer(server);
+});
+// These fixtures verify HTTP/auth and fleet behavior. The object APIs now need
+// a group catalog even for an empty instance; inject source observations while
+// retaining the real snapshot builder, projection and private Store.
+const emptyAuthObservations = {
+  reader: { readAccountUsage: async () => null },
+  get: async () => ({ mode: 'single', group: null, observations: new Map() }),
+  peek: () => ({ mode: 'single', group: null, observations: new Map() }),
+};
+let buildAuthSnapshot = options => createGroupSnapshot({ ...options, sessionObservations: emptyAuthObservations,
+    cli: { runC4Db: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
+      readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) },
+    loadCoreModule: async name => {
+      if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
+      if (name === 'status-view.js') return { collectStatus: async () => ({ view: 'single', origin: { presence: 'not_running' }, groupListError: null, runtimeHealth: {} }) };
+      return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
+    } });
+mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
+  systemSample, createGroupSnapshot: options => buildAuthSnapshot(options),
+} });
+
+function writeConfig(zylosDir, password = 'secret', extra = {}) {
+  const configDir = path.join(zylosDir, 'components', 'dashboard');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(path.join(configDir, 'config.json'), `${JSON.stringify({
+    auth: {
+      password
+    },
+    ...extra
+  }, null, 2)}\n`);
+}
+
+async function makeServerWithDir(zylosDir) {
+  const previousZylosDir = process.env.ZYLOS_DIR;
+  const previousPort = process.env.DASHBOARD_PORT;
+  const previousTmux = process.env.TMUX_TMPDIR;
+  process.env.ZYLOS_DIR = zylosDir;
+  process.env.DASHBOARD_PORT = '0';
+  const privateTmux = path.join(zylosDir, 'tmux'); fs.mkdirSync(privateTmux, { recursive: true, mode: 0o700 });
+  fs.chmodSync(privateTmux, 0o700);
+  process.env.TMUX_TMPDIR = privateTmux;
+  let createServer;
+  try {
+    console.log('Auth HTTP isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: zylosDir, PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, TMUX_TMPDIR: privateTmux, db: path.join(zylosDir, 'components/dashboard/dashboard.db') }));
+    const moduleUrl = new URL(`../src/index.js?test=${Date.now()}-${Math.random()}`, import.meta.url);
+    ({ createServer } = await import(moduleUrl.href));
+  } finally {
+    process.env.ZYLOS_DIR = previousZylosDir;
+    process.env.DASHBOARD_PORT = previousPort;
+    if (previousZylosDir == null) delete process.env.ZYLOS_DIR;
+    if (previousPort == null) delete process.env.DASHBOARD_PORT;
+    if (previousTmux == null) delete process.env.TMUX_TMPDIR; else process.env.TMUX_TMPDIR = previousTmux;
+  }
+
+  const server = createServer();
+  openServers.add(server);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  return {
+    origin: `http://127.0.0.1:${port}`,
+    server,
+    zylosDir
+  };
+}
+
+async function makeServer() {
+  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
+  writeConfig(zylosDir);
+  return makeServerWithDir(zylosDir);
+}
+
+async function closeServer(server) {
+  openServers.delete(server);
+  server.closeAllConnections();
+  await new Promise((resolve) => server.close(resolve));
+}
+
+async function listen(handler) {
+  const server = http.createServer(handler);
+  openServers.add(server);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  return {
+    origin: `http://127.0.0.1:${port}`,
+    server,
+    close: () => closeServer(server)
+  };
+}
+
+function form(body) {
+  return new URLSearchParams(body);
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Login sets a credential cookie and a readable, noncredential reset marker.
+function loginCookies(response, { base = '', markerBase = base, maxAge = 86400, legacy = false } = {}) {
+  const cookies = response.headers.getSetCookie();
+  assert.equal(cookies.length, legacy ? 3 : 2);
+  const session = cookies.find(cookie => cookie.startsWith('__Secure-zylos_dashboard_session='));
+  assert.ok(session, 'login must set its session cookie');
+  const [credential, ...attributes] = session.split('; ');
+  assert.match(credential, /^__Secure-zylos_dashboard_session=[^;]+$/);
+  assert.deepEqual(attributes, ['HttpOnly', 'Secure', 'SameSite=Strict', `Path=${base || '/'}`, `Max-Age=${maxAge}`]);
+  const marker = cookies.find(cookie => cookie.startsWith('zylos_dashboard_draft_reset_'));
+  assert.equal(marker, `zylos_dashboard_draft_reset_${encodeURIComponent(markerBase)}=1; Secure; SameSite=Strict; Path=${base || '/'}`);
+  assert.doesNotMatch(marker, /HttpOnly/);
+  return session;
+}
+
+// Actual HTTP entry + loaded config + AuthGate. Run for authentication/config
+// changes; unrelated UI may skip. Runner must isolate HOME/ZYLOS_DIR/PM2_HOME,
+// short temp/tmux socket and DBs; each server/root is closed in teardown.
+for (const auth of [undefined, { enabled: false }, { password: null }, { password: '' }]) {
+  test(`missing Dashboard password rejects protected HTTP requests (${JSON.stringify(auth)})`, { timeout: 15_000 }, async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-no-password-'));
+    let server;
+    t.after(async () => {
+      if (server) { server.closeAllConnections(); await closeServer(server); }
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+    const dir = path.join(root, 'components/dashboard');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ port: 3491, ...(auth ? { auth } : {}) }));
+    console.log('Missing-password HTTP isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: root,
+      PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, TMUX_TMPDIR: process.env.TMUX_TMPDIR,
+      db: path.join(dir, 'dashboard.db') }));
+    const running = await makeServerWithDir(root);
+    server = running.server;
+    const { origin } = running;
+    for (const route of ['/api/usage/series', '/api/chat/conversations', '/api/instance', '/api/stream', '/observer/frame']) {
+      const response = await fetch(origin + route, { headers: { 'X-Forwarded-Prefix': '/dashboard' } });
+      assert.equal(response.status, 401, route);
+      await response.text();
+    }
+    const store = new Store(path.join(dir, 'dashboard.db'));
+    const key = generateApiKey();
+    try { store.insertApiKey({ name: 'existing-admin', keyHash: hashApiKey(key), scope: 'admin' }); }
+    finally { store.close(); }
+    const token = await fetch(`${origin}/api/auth/token`, { method: 'POST', headers: { Authorization: `Bearer ${key}` } });
+    assert.equal(token.status, 401);
+    const page = await fetch(`${origin}/`, { redirect: 'manual', headers: { 'X-Forwarded-Prefix': '/dashboard' } });
+    assert.equal(page.status, 302);
+    assert.equal(page.headers.get('location'), '/dashboard/login?next=%2Fdashboard%2F');
+    const login = await fetch(`${origin}/login`);
+    assert.equal(login.status, 200);
+    const html = await login.text();
+    assert.match(html, /zylos dashboard reset-password/);
+    assert.doesNotMatch(html, /type="password"|type="submit"/);
+    const attempt = await fetch(`${origin}/login`, { method: 'POST', redirect: 'manual', body: form({ password: '' }) });
+    assert.equal(attempt.status, 503);
+    assert.equal(attempt.headers.get('set-cookie'), null);
+    assert.match(await attempt.text(), /zylos dashboard reset-password/);
+    assert.equal((await fetch(`${origin}/api/health`)).status, 200);
+  });
+}
+
+// Actual HTTP entry + loaded config + AuthGate, same isolation as the missing-password cases.
+// Run for authentication/config changes. A config file that still carries the removed
+// sign-in switch must not open any page or API; signing in then works as usual.
+test('a stored enabled:false auth setting still requires sign-in for pages and APIs', { timeout: 15_000 }, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-stored-off-'));
+  let server;
+  t.after(async () => {
+    if (server) { server.closeAllConnections(); await closeServer(server); }
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  writeConfig(root, 'secret', { auth: { enabled: false, password: 'secret' } });
+  const running = await makeServerWithDir(root);
+  server = running.server;
+  const { origin } = running;
+  const page = await fetch(`${origin}/`, { redirect: 'manual' });
+  assert.equal(page.status, 302);
+  assert.equal(page.headers.get('location'), '/login?next=%2F');
+  await page.text();
+  const loginPage = await fetch(`${origin}/login`, { redirect: 'manual' });
+  assert.equal(loginPage.status, 200);
+  assert.match(await loginPage.text(), /type="password"/);
+  for (const [method, route] of [['GET', '/api/settings/timezone'], ['PUT', '/api/settings/timezone'],
+    ['POST', '/api/settings/timezone/actions/restart-services'], ['GET', '/api/memory/tree'], ['GET', '/api/memory/file?path=state.md'],
+    ['GET', '/api/chat/conversations'], ['GET', '/api/stream'], ['GET', '/api/keys']]) {
+    const response = await fetch(origin + route, { method, headers: { Origin: origin } });
+    assert.equal(response.status, 401, `${method} ${route}`);
+    await response.text();
+  }
+  const cookie = await signIn(origin, 'secret');
+  for (const route of ['/api/settings/timezone', '/api/keys']) {
+    const response = await fetch(origin + route, { headers: { Cookie: cookie } });
+    assert.equal(response.status, 200, route);
+    await response.text();
+  }
+});
+
+test('auth protects API and renders proxy-prefixed login URLs', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const { origin, server } = await makeServer();
+  try {
+    const health = await fetch(`${origin}/api/health`);
+    assert.equal(health.status, 200);
+
+    const unauthed = await fetch(`${origin}/`, { redirect: 'manual' });
+    assert.equal(unauthed.status, 302);
+
+    const prefixed = await fetch(`${origin}/`, {
+      headers: { 'X-Forwarded-Prefix': '/dashboard' },
+      redirect: 'manual'
+    });
+    assert.equal(prefixed.status, 302);
+    assert.equal(prefixed.headers.get('location'), '/dashboard/login?next=%2Fdashboard%2F');
+
+    const login = await fetch(`${origin}/login?next=%2Fdashboard%2F`, {
+      headers: { 'X-Forwarded-Prefix': '/dashboard' },
+      redirect: 'manual'
+    });
+    assert.equal(login.status, 200);
+    const body = await login.text();
+    assert.match(body, /action="\/dashboard\/login"/);
+    assert.match(body, /Zylos/);
+    assert.match(body, /name="next" value="\/dashboard\/"/);
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test('the login page takes its colours from the Dashboard theme files and picks the theme before the body', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const { origin, server } = await makeServer();
+  try {
+    const login = await fetch(`${origin}/login`);
+    assert.equal(login.status, 200);
+    // No content security policy applies to this page, so its inline theme script and style run as before.
+    assert.equal(login.headers.get('content-security-policy'), null);
+    const html = await login.text();
+    assert.doesNotMatch(html, /http-equiv="Content-Security-Policy"/i);
+    const script = html.indexOf('<script>'), style = html.indexOf('<style>'), body = html.indexOf('<body>');
+    assert.ok(script > 0 && script < style && style < body, 'the saved theme is applied in the head, before the first paint');
+    assert.match(html.slice(script, style), /localStorage\.getItem\('zylos-dashboard-theme'\)/);
+    const css = html.slice(style, html.indexOf('</style>'));
+    const darkRules = css.slice(css.indexOf(':root[data-theme="dark"]'));
+    const darkDeclarations = fs.readFileSync(new URL('../public/themes/dark.css', import.meta.url), 'utf8').match(/--[a-z-]+:\s*[^;]+;/g);
+    const lightDeclarations = fs.readFileSync(new URL('../public/themes/light.css', import.meta.url), 'utf8').match(/--[a-z-]+:\s*[^;]+;/g);
+    assert.ok(darkDeclarations.length > 10 && lightDeclarations.length > 10);
+    for (const declaration of lightDeclarations) assert.ok(css.includes(declaration), declaration);
+    // Dark applies for a saved dark choice and, without a saved light choice, for a dark system setting.
+    const media = darkRules.indexOf('@media (prefers-color-scheme: dark) { :root:not([data-theme="light"])');
+    assert.ok(media > 0);
+    for (const declaration of darkDeclarations) {
+      assert.ok(darkRules.slice(0, media).includes(declaration), declaration);
+      assert.ok(darkRules.slice(media).includes(declaration), declaration);
+    }
+    // The page's own rules use the theme variables only, so no colour stays light in dark.
+    const ownRules = css.slice(css.indexOf('body {'));
+    assert.doesNotMatch(ownRules, /#[0-9a-f]{3,8}\b|rgba?\(/i);
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test('login sets secure cookie and authenticated requests can reach API and SSE', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const { origin, server } = await makeServer();
+  try {
+    const login = await fetch(`${origin}/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-Forwarded-Prefix': '/dashboard'
+      },
+      body: form({ password: 'secret', next: '/dashboard/' }),
+      redirect: 'manual'
+    });
+    assert.equal(login.status, 302);
+    assert.equal(login.headers.get('location'), '/dashboard/');
+
+    const cookie = loginCookies(login, { base: '/dashboard' });
+
+    const health = await fetch(`${origin}/api/health`, {
+      headers: { Cookie: cookie }
+    });
+    assert.equal(health.status, 200);
+    const json = await health.json();
+    assert.equal(json.ok, true);
+  } finally {
+    await closeServer(server);
+  }
+});
+
+// Post-login `next` targets outside the forwarded prefix fall back to the
+// Dashboard root, and the login page never echoes them as a hidden field.
+// Actual HTTP entry + loaded config + AuthGate. Run for login/redirect or
+// browser-base changes; unrelated UI may skip. Runner must isolate
+// HOME/ZYLOS_DIR/PM2_HOME, short temp/tmux socket and DBs; each server/root is
+// closed in teardown.
+const outsideNextTargets = [
+  'https://evil.test/x',
+  'https://evil.test/dashboard/',
+  '//evil.test',
+  '//evil.test/dashboard/',
+  '/\\evil.test',
+  '/\\evil.test/dashboard/',
+  '/dashboard/../admin',
+  '/dashboard/%2e%2e/admin',
+  '/admin',
+  '/dashboardx',
+  '/dashboardx/y'
+];
+
+test('login rejects next targets outside the forwarded prefix', { timeout: 15_000 }, async t => {
+  const { origin, server, zylosDir } = await makeServer();
+  t.after(async () => {
+    server.closeAllConnections();
+    await closeServer(server);
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  });
+  for (const next of outsideNextTargets) {
+    const page = await fetch(`${origin}/login?next=${encodeURIComponent(next)}`, {
+      headers: { 'X-Forwarded-Prefix': '/dashboard' },
+      redirect: 'manual'
+    });
+    assert.equal(page.status, 200, next);
+    assert.doesNotMatch(await page.text(), /name="next"/, next);
+
+    const login = await fetch(`${origin}/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-Forwarded-Prefix': '/dashboard'
+      },
+      body: form({ password: 'secret', next }),
+      redirect: 'manual'
+    });
+    assert.equal(login.status, 302, next);
+    assert.equal(login.headers.get('location'), '/dashboard/', next);
+  }
+});
+
+test('login keeps a next target inside the forwarded prefix', { timeout: 15_000 }, async t => {
+  const { origin, server, zylosDir } = await makeServer();
+  t.after(async () => {
+    server.closeAllConnections();
+    await closeServer(server);
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  });
+  const next = '/dashboard/memory?tab=files';
+  const page = await fetch(`${origin}/login?next=${encodeURIComponent(next)}`, {
+    headers: { 'X-Forwarded-Prefix': '/dashboard' },
+    redirect: 'manual'
+  });
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /name="next" value="\/dashboard\/memory\?tab=files"/);
+
+  const login = await fetch(`${origin}/login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'X-Forwarded-Prefix': '/dashboard'
+    },
+    body: form({ password: 'secret', next }),
+    redirect: 'manual'
+  });
+  assert.equal(login.status, 302);
+  assert.equal(login.headers.get('location'), next);
+});
+
+// HTTP integration: actual authenticated logout in runner-isolated installation;
+// run for logout/auth/browser-origin changes. The fixture has private DB, PM2_HOME
+// and tmux directory and disabled network version checks; loopback servers close.
+test('logout always clears browser sessions and respects forwarded prefix', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const { origin, server } = await makeServer();
+  const clearCookie = '__Secure-zylos_dashboard_session=; HttpOnly; Secure; SameSite=Strict; Path=/dashboard; Max-Age=0';
+  const loginCookie = async () => (await fetch(`${origin}/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: form({ password: 'secret' }),
+    redirect: 'manual'
+  })).headers.get('set-cookie');
+  const logout = headers => fetch(`${origin}/logout`, {
+    method: 'POST',
+    headers: { 'X-Forwarded-Prefix': '/dashboard', ...headers },
+    redirect: 'manual'
+  });
+  try {
+    const cookie = await loginCookie();
+    const mismatched = await logout({ Cookie: cookie, Origin: 'https://agent.example.com' });
+    assert.equal(mismatched.status, 302);
+    assert.equal(mismatched.headers.get('location'), '/dashboard/login');
+    assert.equal(mismatched.headers.get('set-cookie'), clearCookie);
+    const revoked = await fetch(`${origin}/api/instance`, { headers: { Cookie: cookie }, redirect: 'manual' });
+    assert.equal(revoked.status, 401);
+    for (const headers of [{ Origin: origin }, {}]) {
+      const accepted = await logout({ Cookie: await loginCookie(), ...headers });
+      assert.equal(accepted.status, 302);
+      assert.equal(accepted.headers.get('location'), '/dashboard/login');
+      assert.equal(accepted.headers.get('set-cookie'), clearCookie);
+    }
+
+    const expired = await logout({ Cookie: '__Secure-zylos_dashboard_session=stale' });
+    assert.equal(expired.status, 302);
+    assert.equal(expired.headers.get('location'), '/dashboard/login');
+    assert.equal(expired.headers.get('set-cookie'), clearCookie);
+
+    const get = await fetch(`${origin}/logout`, { redirect: 'manual' });
+    assert.equal(get.status, 405);
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test('session cookie path follows the forwarded prefix and falls back to root', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const { origin, server } = await makeServer();
+  const loginWith = (headers, body = { password: 'secret' }) => fetch(`${origin}/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers },
+    body: form(body),
+    redirect: 'manual'
+  });
+  try {
+    const direct = await loginWith({});
+    loginCookies(direct);
+
+    const trailing = await loginWith({ 'X-Forwarded-Prefix': '/dashboard/' });
+    loginCookies(trailing, { base: '/dashboard' });
+
+    const remembered = await loginWith({ 'X-Forwarded-Prefix': '/dashboard' }, { password: 'secret', remember: 'on' });
+    loginCookies(remembered, { base: '/dashboard', maxAge: 2592000 });
+
+    for (const prefix of ['/dash;Domain=evil.test', '/dashboard?x=1', '/../dashboard', '//evil.test']) {
+      const resp = await loginWith({ 'X-Forwarded-Prefix': prefix });
+      assert.equal(resp.status, 302, prefix);
+      const cookie = loginCookies(resp, { markerBase: prefix === '/dash;Domain=evil.test' ? prefix : '' });
+      assert.match(cookie, /; Path=\/; Max-Age=86400$/, prefix);
+      assert.doesNotMatch(cookie, /Domain|evil/, prefix);
+    }
+
+    const multi = await loginWith({ 'X-Forwarded-Prefix': '/dashboard, /other' });
+    loginCookies(multi, { base: '/dashboard' });
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test('legacy __Host- session cookie is revoked and cleared on any request', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const { origin, server, zylosDir } = await makeServer();
+  const legacyClear = '__Host-zylos_dashboard_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0';
+  try {
+    const login = await fetch(`${origin}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Forwarded-Prefix': '/dashboard' },
+      body: form({ password: 'secret' }),
+      redirect: 'manual'
+    });
+    const session = loginCookies(login, { base: '/dashboard' });
+    const token = session.split(';')[0].split('=').slice(1).join('=');
+
+    // A session presented under the legacy name is not accepted, and is revoked.
+    const legacy = await fetch(`${origin}/api/instance`, {
+      headers: { Cookie: `__Host-zylos_dashboard_session=${token}` }
+    });
+    assert.equal(legacy.status, 401);
+    assert.deepEqual(legacy.headers.getSetCookie(), [legacyClear]);
+
+    const revoked = await fetch(`${origin}/api/instance`, {
+      headers: { Cookie: `__Secure-zylos_dashboard_session=${token}` }
+    });
+    assert.equal(revoked.status, 401);
+
+    // Logging in with a legacy cookie still present sets the new one and clears the old one.
+    const relogin = await fetch(`${origin}/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-Forwarded-Prefix': '/dashboard',
+        Cookie: '__Host-zylos_dashboard_session=stale'
+      },
+      body: form({ password: 'secret' }),
+      redirect: 'manual'
+    });
+    assert.equal(relogin.status, 302);
+    const cookies = relogin.headers.getSetCookie();
+    assert.equal(cookies[0], legacyClear);
+    const renewedSession = loginCookies(relogin, { base: '/dashboard', legacy: true });
+
+    const fresh = await fetch(`${origin}/api/instance`, {
+      headers: { Cookie: `__Host-zylos_dashboard_session=stale; ${renewedSession.split(';')[0]}` }
+    });
+    assert.equal(fresh.status, 200);
+    assert.deepEqual(fresh.headers.getSetCookie(), [legacyClear]);
+  } finally {
+    await closeServer(server);
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  }
+});
+
+test('unsafe forwarded prefixes fall back to direct root paths', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const { origin, server } = await makeServer();
+  try {
+    const login = await fetch(`${origin}/login`, {
+      headers: { 'X-Forwarded-Prefix': '/dashboard?next=//evil.test' },
+      redirect: 'manual'
+    });
+    assert.equal(login.status, 200);
+    const body = await login.text();
+    assert.match(body, /action="\/login"/);
+    assert.match(body, /Zylos/);
+    assert.doesNotMatch(body, /evil\.test/);
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test('session cookie survives server restart (SQLite persistence)', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
+  writeConfig(zylosDir);
+
+  const { origin: origin1, server: server1 } = await makeServerWithDir(zylosDir);
+  let cookie;
+  try {
+    const login = await fetch(`${origin1}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form({ password: 'secret' }),
+      redirect: 'manual'
+    });
+    assert.equal(login.status, 302);
+    cookie = login.headers.get('set-cookie');
+    assert.ok(cookie);
+
+    const api1 = await fetch(`${origin1}/api/instance`, { headers: { Cookie: cookie } });
+    assert.equal(api1.status, 200);
+  } finally {
+    await closeServer(server1);
+  }
+
+  const { origin: origin2, server: server2 } = await makeServerWithDir(zylosDir);
+  try {
+    const api2 = await fetch(`${origin2}/api/instance`, { headers: { Cookie: cookie } });
+    assert.equal(api2.status, 200, 'session should survive restart');
+
+    const unauthed = await fetch(`${origin2}/api/instance`);
+    assert.equal(unauthed.status, 401, 'request without cookie should be rejected');
+  } finally {
+    await closeServer(server2);
+  }
+});
+
+test('/api/instance exposes stable agent identity without fleet secrets', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
+  const legacyMarker = path.join(zylosDir, 'components', 'dashboard', 'upgrade-zylos-pending.json');
+  writeConfig(zylosDir, 'secret', {
+    agent: { name: 'Jinglever', id: 'jinglever-main' },
+    fleet: {
+      agents: [
+        {
+          name: 'Remote',
+          base_url: 'https://remote.example.test/dashboard',
+          read_api_key: 'zylos_ak_secret'
+        }
+      ]
+    }
+  });
+  fs.writeFileSync(legacyMarker, JSON.stringify({ from: '0.5.1', to: '0.5.2', startedAt: '2026-01-01T00:00:00.000Z' }));
+
+  const { origin, server } = await makeServerWithDir(zylosDir);
+  try {
+    const resp = await fetch(`${origin}/api/instance`, { headers: { Cookie: await signIn(origin, 'secret') } });
+    assert.equal(resp.status, 200);
+    const body = await resp.json();
+    assert.equal(body.agent.name, 'Jinglever');
+    assert.equal(body.agent.id, 'jinglever-main');
+    // Identity also carries the deterministic identity color/hue.
+    assert.equal(typeof body.agent.color, 'string');
+    assert.equal(typeof body.agent.hue, 'number');
+    assert.equal(Object.hasOwn(body, 'new_session_threshold'), false, 'per-session threshold belongs to the group');
+    assert.equal(Object.hasOwn(body, 'runtime_info'), false);
+    assert.deepEqual(Object.keys(body.versions).sort(), ['agy', 'claude', 'codex', 'zylos']);
+    for (const version of Object.values(body.versions)) assert.deepEqual(Object.keys(version).sort(), ['installed', 'latest', 'update']);
+    assert.ok(body.resources && typeof body.resources === 'object');
+    assert.ok(Object.hasOwn(body.resources, 'cpu_pct'));
+    assert.ok(Object.hasOwn(body.resources, 'mem_pct'));
+    assert.ok(Object.hasOwn(body.resources, 'disk_pct'));
+    assert.equal(Object.hasOwn(body, 'session_cost'), false);
+    assert.equal(Object.hasOwn(body, 'daily_cost'), false);
+    assert.equal(Object.hasOwn(body, 'weekly_cost'), false);
+    assert.equal(Object.hasOwn(body, 'context_pct'), false);
+    for (const rawField of ['identity', 'status', 'usage', 'launchConfig', 'input']) {
+      assert.equal(JSON.stringify(body).includes(`"${rawField}"`), false);
+    }
+    assert.equal(JSON.stringify(body).includes('zylos_upgrade_result'), false);
+    assert.equal(Object.hasOwn(body, 'dashboard_version'), false, 'Dashboard has no version of its own; pages show versions.zylos.installed');
+    assert.equal(fs.existsSync(legacyMarker), true, 'Dashboard must not consume the legacy upgrade marker');
+    assert.equal(JSON.stringify(body).includes('zylos_ak_secret'), false);
+    assert.equal(JSON.stringify(body).includes('read_api_key'), false);
+  } finally {
+    await closeServer(server);
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  }
+});
+
+test('/api/fleet self record includes cost tiers from DB (#174)', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
+  writeConfig(zylosDir);
+
+  const { origin, server } = await makeServerWithDir(zylosDir);
+  try {
+    const dbPath = path.join(zylosDir, 'components', 'dashboard', 'dashboard.db');
+    const Database = (await import('../../comm-bridge/scripts/sqlite-driver.js')).default;
+    const db = new Database(dbPath);
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO metric_points (timestamp, metric_name, metric_value, dimensions, source, confidence)
+      VALUES (?, 'usage_event', 1000, ?, 'jsonl_usage', 'actual')`).run(now, JSON.stringify({ cost: 2.34 }));
+    db.close();
+
+    const resp = await fetch(`${origin}/api/fleet`, { headers: { Cookie: await signIn(origin, 'secret') } });
+    assert.equal(resp.status, 200);
+    const body = await resp.json();
+    const self = body.agents.find(a => a.self === true);
+    assert.ok(self, 'self record must exist');
+    assert.equal(typeof self.daily_cost, 'number');
+    assert.ok(self.daily_cost > 0, `daily_cost should be positive, got ${self.daily_cost}`);
+  } finally {
+    await closeServer(server);
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  }
+});
+
+test('/api/stream accepts Bearer API session and emits initial instance', { timeout: 15000 }, async t => {
+  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
+  writeConfig(zylosDir, 'secret', {
+    auth: { password: 'secret' },
+    agent: { name: 'Jinglever' }
+  });
+
+  const { origin, server } = await makeServerWithDir(zylosDir);
+  try {
+    const dbPath = path.join(zylosDir, 'components', 'dashboard', 'dashboard.db');
+    const store = new Store(dbPath);
+    const apiKey = generateApiKey();
+    store.insertApiKey({ name: 'test-key', keyHash: hashApiKey(apiKey), scope: 'read' });
+    store.close();
+
+    const tokenResp = await fetch(`${origin}/api/auth/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` }
+    });
+    assert.equal(tokenResp.status, 200);
+    const { token } = await tokenResp.json();
+
+    const controller = new AbortController();
+    const streamResp = await fetch(`${origin}/api/stream`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(3000), t.signal])
+    });
+    assert.equal(streamResp.status, 200);
+    const reader = streamResp.body.getReader();
+    const decoder = new TextDecoder();
+    let body = '';
+    for (let frame = 0; frame < 8 && !body.includes('event: instance'); frame++) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      body += decoder.decode(value, { stream: true });
+      assert.ok(body.length < 65536);
+    }
+    controller.abort();
+    try { reader.releaseLock(); } catch { /* already released */ }
+    assert.match(body, /event: instance/);
+    const dataLine = body.split('\n').find(line => line.startsWith('data: '));
+    assert.ok(dataLine, 'instance should include a data line');
+    const payload = JSON.parse(dataLine.slice('data: '.length));
+    assert.equal(payload.agent.name, 'Jinglever');
+    assert.equal(Object.hasOwn(payload, 'context_pct'), false);
+    assert.equal(Object.hasOwn(payload, 'session_cost'), false);
+    assert.ok(Object.hasOwn(payload, 'resources'));
+    assert.equal(body.includes(apiKey), false);
+    assert.equal(body.includes(token), false);
+  } finally {
+    await closeServer(server);
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  }
+});
+
+// Integration: real auth/routing and Core save, including the 1 MiB boundary.
+// Run when memory transport or auth changes; skip unrelated UI/collector edits.
+// All config/DB/memory is fixture-owned; Core uses a private short tmux socket.
+test('/api/memory tree accepts read keys while file contents require admin', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const zylosDir = memoryTempRoot('wba-');
+  installMemoryScripts(zylosDir);
+  const isolatedEnv = memoryTestEnv(zylosDir);
+  const envKeys = ['HOME', 'ZYLOS_DIR', 'ZYLOS_PACKAGE_ROOT', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR', 'TMUX'];
+  const previousEnv = new Map(envKeys.map(key => [key, process.env[key]]));
+  let server;
+  try {
+    for (const key of envKeys) {
+      if (isolatedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = isolatedEnv[key];
+    }
+    writeConfig(zylosDir, 'secret', { auth: { password: 'secret' } });
+    fs.mkdirSync(path.join(zylosDir, 'memory'), { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, 'memory', 'identity.md'), '# Identity\n');
+    const newlineText = '\n'.repeat(1024 * 1024);
+    fs.writeFileSync(path.join(zylosDir, 'memory', 'large.txt'), newlineText);
+
+    let origin;
+    ({ origin, server } = await makeServerWithDir(zylosDir));
+    const dbPath = path.join(zylosDir, 'components', 'dashboard', 'dashboard.db');
+    const store = new Store(dbPath);
+    const readKey = generateApiKey();
+    const adminKey = generateApiKey();
+    store.insertApiKey({ name: 'read-key', keyHash: hashApiKey(readKey), scope: 'read' });
+    store.insertApiKey({ name: 'admin-key', keyHash: hashApiKey(adminKey), scope: 'admin' });
+    store.close();
+
+    const readTokenResp = await fetch(`${origin}/api/auth/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${readKey}` }
+    });
+    const adminTokenResp = await fetch(`${origin}/api/auth/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminKey}` }
+    });
+    const { token: readToken } = await readTokenResp.json();
+    const { token: adminToken } = await adminTokenResp.json();
+
+    const readResp = await fetch(`${origin}/api/memory/tree`, {
+      headers: { Authorization: `Bearer ${readToken}` }
+    });
+    assert.equal(readResp.status, 200);
+    assert.equal((await readResp.json()).root.type, 'directory');
+    const readFile = await fetch(`${origin}/api/memory/file?path=identity.md`, { headers: { Authorization: `Bearer ${readToken}` } });
+    assert.equal(readFile.status, 403);
+    assert.equal((await readFile.json()).error.code, 'insufficient_scope');
+
+    const adminResp = await fetch(`${origin}/api/memory/tree`, {
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.equal(adminResp.status, 200);
+    const adminBody = await adminResp.json();
+    assert.equal(JSON.stringify(adminBody).includes('sha256'), false);
+    assert.equal(adminBody.root.children.some(node => node.path === 'identity.md'), true);
+
+    const login = await fetch(`${origin}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form({ password: 'secret', next: '/' }),
+      redirect: 'manual'
+    });
+    const cookie = login.headers.get('set-cookie');
+    const browserResp = await fetch(`${origin}/api/memory/file?path=identity.md`, {
+      headers: { Cookie: cookie }
+    });
+    assert.equal(browserResp.status, 200);
+    const browserBody = await browserResp.json();
+    assert.equal(browserBody.text, '# Identity\n');
+    assert.match(browserBody.sha256, /^[a-f0-9]{64}$/);
+
+    const readWriteResp = await fetch(`${origin}/api/memory/file?path=identity.md`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${readToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ text: '# Read key write\n', sha256: browserBody.sha256 })
+    });
+    assert.equal(readWriteResp.status, 403);
+    assert.deepEqual(await readWriteResp.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
+
+    const nullWriteResp = await fetch(`${origin}/api/memory/file?path=identity.md`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: 'null'
+    });
+    assert.equal(nullWriteResp.status, 400);
+    assert.deepEqual(await nullWriteResp.json(), { ok: false, error: { code: 'invalid_memory_write', message: 'invalid_memory_write' } });
+
+    const largeWriteResp = await fetch(`${origin}/api/memory/file?path=large.txt`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        text: newlineText,
+        sha256: crypto.createHash('sha256').update(newlineText).digest('hex')
+      })
+    });
+    assert.equal(largeWriteResp.status, 200);
+    const largeWriteBody = await largeWriteResp.json();
+    assert.equal(largeWriteBody.text.length, 1024 * 1024);
+    assert.equal(fs.readFileSync(path.join(zylosDir, 'memory', 'large.txt'), 'utf8'), newlineText);
+
+    const adminWriteResp = await fetch(`${origin}/api/memory/file?path=identity.md`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ text: '# Identity\nEdited\n', sha256: browserBody.sha256 })
+    });
+    assert.equal(adminWriteResp.status, 200);
+    const adminWriteBody = await adminWriteResp.json();
+    assert.equal(adminWriteBody.text, '# Identity\nEdited\n');
+    assert.notEqual(adminWriteBody.sha256, browserBody.sha256);
+    assert.equal(fs.readFileSync(path.join(zylosDir, 'memory', 'identity.md'), 'utf8'), '# Identity\nEdited\n');
+
+    const conflictResp = await fetch(`${origin}/api/memory/file?path=identity.md`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ text: '# Stale overwrite\n', sha256: browserBody.sha256 })
+    });
+    assert.equal(conflictResp.status, 409);
+    const conflictBody = await conflictResp.json();
+    assert.equal(conflictBody.error.code, 'memory_conflict');
+    assert.equal(conflictBody.current.sha256, adminWriteBody.sha256);
+    assert.equal(conflictBody.current.text, '# Identity\nEdited\n');
+    assert.equal(fs.readFileSync(path.join(zylosDir, 'memory', 'identity.md'), 'utf8'), '# Identity\nEdited\n');
+  } finally {
+    // Restore first: later tests must not inherit this fixture's HOME/TMPDIR
+    // even if closing the server or removing the directory fails.
+    for (const [key, value] of previousEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    if (server) await closeServer(server);
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  }
+});
+
+test('proxied interrupt and chop-chop writes require consumer admin API scope or browser session', { timeout: TEST_TIMEOUT_MS }, async () => {
+  let actionHits = 0;
+  let memoryWriteHits = 0;
+  const remote = await listen((req, res) => {
+    if (req.url === '/api/auth/token') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        token: 'zylos_st_remote_admin',
+        expires_at: new Date(Date.now() + 3600_000).toISOString(),
+        scope: 'admin'
+      }));
+      return;
+    }
+    if (req.url === '/api/groups/origin/actions/interrupt' || req.url === '/api/groups/origin/actions/chop-chop') {
+      actionHits += 1;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    if (req.url === '/api/memory/file?path=identity.md' && req.method === 'PUT') {
+      memoryWriteHits += 1;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, path: 'identity.md' }));
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
+  writeConfig(zylosDir, 'secret', {
+    auth: { password: 'secret' },
+    fleet: {
+      agents: [
+        { name: 'Remote', base_url: remote.origin, read_api_key: 'zylos_ak_remote' }
+      ]
+    }
+  });
+
+  const { origin, server } = await makeServerWithDir(zylosDir);
+  try {
+    const dbPath = path.join(zylosDir, 'components', 'dashboard', 'dashboard.db');
+    const store = new Store(dbPath);
+    const readKey = generateApiKey();
+    const adminKey = generateApiKey();
+    store.insertApiKey({ name: 'read-key', keyHash: hashApiKey(readKey), scope: 'read' });
+    store.insertApiKey({ name: 'admin-key', keyHash: hashApiKey(adminKey), scope: 'admin' });
+    store.close();
+
+    const readTokenResp = await fetch(`${origin}/api/auth/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${readKey}` }
+    });
+    const adminTokenResp = await fetch(`${origin}/api/auth/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminKey}` }
+    });
+    const { token: readToken } = await readTokenResp.json();
+    const { token: adminToken } = await adminTokenResp.json();
+
+    const readWrite = await fetch(`${origin}/fleet/Remote/api/groups/origin/actions/interrupt`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${readToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: '{}'
+    });
+    assert.equal(readWrite.status, 403);
+    assert.deepEqual(await readWrite.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
+    assert.equal(actionHits, 0);
+
+    const adminWrite = await fetch(`${origin}/fleet/Remote/api/groups/origin/actions/interrupt`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: '{}'
+    });
+    assert.equal(adminWrite.status, 200);
+    assert.equal(actionHits, 1);
+
+    const deniedChop = await fetch(`${origin}/fleet/Remote/api/groups/origin/actions/chop-chop`, {
+      method: 'POST', headers: { Authorization: `Bearer ${readToken}`, 'Content-Type': 'application/json' }, body: '{}'
+    });
+    assert.equal(deniedChop.status, 403);
+    assert.equal(actionHits, 1);
+    const allowedChop = await fetch(`${origin}/fleet/Remote/api/groups/origin/actions/chop-chop`, {
+      method: 'POST', headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' }, body: '{}'
+    });
+    assert.equal(allowedChop.status, 200);
+    assert.deepEqual(await allowedChop.json(), { ok: true });
+    assert.equal(actionHits, 2);
+
+    const readMemoryWrite = await fetch(`${origin}/fleet/Remote/api/memory/file?path=identity.md`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${readToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ text: '# Read key write\n', sha256: 'a'.repeat(64) })
+    });
+    assert.equal(readMemoryWrite.status, 403);
+    assert.deepEqual(await readMemoryWrite.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
+    assert.equal(memoryWriteHits, 0);
+
+    const adminMemoryWrite = await fetch(`${origin}/fleet/Remote/api/memory/file?path=identity.md`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ text: '# Admin write\n', sha256: 'a'.repeat(64) })
+    });
+    assert.equal(adminMemoryWrite.status, 200);
+    assert.deepEqual(await adminMemoryWrite.json(), { ok: true, path: 'identity.md' });
+    assert.equal(memoryWriteHits, 1);
+
+    const login = await fetch(`${origin}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form({ password: 'secret', next: '/' }),
+      redirect: 'manual'
+    });
+    const cookie = login.headers.get('set-cookie');
+    const browserWrite = await fetch(`${origin}/fleet/Remote/api/groups/origin/actions/interrupt`, {
+      method: 'POST',
+      headers: {
+        Cookie: cookie, Origin: origin,
+        'Content-Type': 'application/json'
+      },
+      body: '{}'
+    });
+    assert.equal(browserWrite.status, 200);
+    assert.equal(actionHits, 3);
+
+    const browserMemoryWrite = await fetch(`${origin}/fleet/Remote/api/memory/file?path=identity.md`, {
+      method: 'PUT',
+      headers: {
+        Cookie: cookie, Origin: origin,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ text: '# Browser write\n', sha256: 'a'.repeat(64) })
+    });
+    assert.equal(browserMemoryWrite.status, 200);
+    assert.deepEqual(await browserMemoryWrite.json(), { ok: true, path: 'identity.md' });
+    assert.equal(memoryWriteHits, 2);
+  } finally {
+    await closeServer(server);
+    await remote.close();
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  }
+});
+
+test('API key management is admin-gated, show-once, and revoke invalidates active sessions', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
+  writeConfig(zylosDir, 'secret', { auth: { password: 'secret' } });
+
+  const { origin, server } = await makeServerWithDir(zylosDir);
+  try {
+    const dbPath = path.join(zylosDir, 'components', 'dashboard', 'dashboard.db');
+    const store = new Store(dbPath);
+    const readKey = generateApiKey();
+    const adminKey = generateApiKey();
+    store.insertApiKey({ name: 'read-key', keyHash: hashApiKey(readKey), scope: 'read' });
+    store.insertApiKey({ name: 'admin-key', keyHash: hashApiKey(adminKey), scope: 'admin' });
+    store.close();
+
+    const readTokenResp = await fetch(`${origin}/api/auth/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${readKey}` }
+    });
+    const adminTokenResp = await fetch(`${origin}/api/auth/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminKey}` }
+    });
+    const { token: readToken } = await readTokenResp.json();
+    const { token: adminToken } = await adminTokenResp.json();
+
+    const readList = await fetch(`${origin}/api/keys`, {
+      headers: { Authorization: `Bearer ${readToken}` }
+    });
+    assert.equal(readList.status, 403);
+    assert.deepEqual(await readList.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
+
+    const create = await fetch(`${origin}/api/keys`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: 'producer-read', scope: 'read' })
+    });
+    assert.equal(create.status, 200);
+    const createBody = await create.json();
+    assert.equal(createBody.key.name, 'producer-read');
+    assert.equal(createBody.key.scope, 'read');
+    assert.equal(createBody.key.status, 'active');
+    assert.match(createBody.plaintext_key, /^zylos_ak_/);
+    assert.equal(JSON.stringify(createBody.keys).includes(createBody.plaintext_key), false);
+    assert.equal(JSON.stringify(createBody).includes('key_hash'), false);
+
+    const createdTokenResp = await fetch(`${origin}/api/auth/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${createBody.plaintext_key}` }
+    });
+    assert.equal(createdTokenResp.status, 200);
+    const { token: createdToken, scope } = await createdTokenResp.json();
+    assert.equal(scope, 'read');
+
+    const duplicate = await fetch(`${origin}/api/keys`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: 'producer-read', scope: 'read' })
+    });
+    assert.equal(duplicate.status, 400);
+    assert.deepEqual(await duplicate.json(), { ok: false, error: { code: 'duplicate_name', message: 'duplicate_name' } });
+
+    const badScope = await fetch(`${origin}/api/keys`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: 'bad-scope', scope: 'owner' })
+    });
+    assert.equal(badScope.status, 400);
+    assert.deepEqual(await badScope.json(), { ok: false, error: { code: 'invalid_scope', message: 'invalid_scope' } });
+
+    const createAdmin = await fetch(`${origin}/api/keys`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: 'producer-admin', scope: 'admin' })
+    });
+    assert.equal(createAdmin.status, 200);
+    const createAdminBody = await createAdmin.json();
+    assert.equal(createAdminBody.key.scope, 'admin');
+    assert.match(createAdminBody.plaintext_key, /^zylos_ak_/);
+
+    const list = await fetch(`${origin}/api/keys`, {
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.equal(list.status, 200);
+    const listBody = await list.json();
+    assert.equal(listBody.keys.some(k => k.name === 'producer-read' && k.status === 'active'), true);
+    assert.equal(JSON.stringify(listBody).includes(createBody.plaintext_key), false);
+    assert.equal(JSON.stringify(listBody).includes(createAdminBody.plaintext_key), false);
+    assert.equal(JSON.stringify(listBody).includes('key_hash'), false);
+
+    const revoke = await fetch(`${origin}/api/keys/producer-read`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.equal(revoke.status, 200);
+    const revokeBody = await revoke.json();
+    assert.equal(revokeBody.keys.some(k => k.name === 'producer-read' && k.status === 'revoked'), true);
+
+    const revokedExchange = await fetch(`${origin}/api/auth/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${createBody.plaintext_key}` }
+    });
+    assert.equal(revokedExchange.status, 401);
+
+    const staleSessionUse = await fetch(`${origin}/api/instance`, {
+      headers: { Authorization: `Bearer ${createdToken}` }
+    });
+    assert.equal(staleSessionUse.status, 401, 'revoking a key should immediately invalidate existing session tokens');
+
+    const secondRevoke = await fetch(`${origin}/api/keys/producer-read`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.equal(secondRevoke.status, 404);
+    assert.deepEqual(await secondRevoke.json(), { ok: false, error: { code: 'unknown_key', message: 'unknown_key' } });
+  } finally {
+    await closeServer(server);
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  }
+});
+
+test('API key migration v11 preserves ids, sessions, and active-name uniqueness', { timeout: TEST_TIMEOUT_MS }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-key-migration-'));
+  const dbPath = path.join(dir, 'dashboard.db');
+  // Seed the pinned released schema, rather than retaining later migration DDL.
+  const initialDb = new Database(dbPath);
+  migrateSchema13(initialDb);
+  initialDb.close();
+
+  const db = new Database(dbPath);
+  try {
+    db.exec(`
+      DELETE FROM api_sessions;
+      -- Migrations gate on MAX(version), so every row at or above 11 must go or
+      -- migration 11 is treated as already applied and never retried.
+      DELETE FROM schema_migrations WHERE version >= 11;
+      DROP INDEX IF EXISTS idx_api_keys_active_name;
+      DROP TABLE api_keys;
+      CREATE TABLE api_keys (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        key_hash TEXT NOT NULL,
+        scope TEXT NOT NULL DEFAULT 'read',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_used_at TEXT,
+        revoked_at TEXT
+      );
+      INSERT INTO api_keys (id, name, key_hash, scope, created_at, revoked_at)
+      VALUES
+        (7, 'active-key', 'active-hash', 'read', '2026-01-01 00:00:00', NULL),
+        (11, 'reusable-key', 'revoked-hash', 'admin', '2026-01-02 00:00:00', '2026-01-03 00:00:00');
+      INSERT INTO api_sessions (token_hash, api_key_id, scope, created_at, expires_at)
+      VALUES
+        ('active-session', 7, 'read', 1, 9999999999999),
+        ('revoked-session', 11, 'admin', 1, 9999999999999);
+    `);
+  } finally {
+    db.close();
+  }
+
+  assert.throws(() => new Store(dbPath), { code: 'SCHEMA_UPGRADE_REQUIRED' });
+  migrateDashboardFile(dbPath);
+  const store = new Store(dbPath);
+  try {
+    // Assert the v11 migration ran, not that it is the newest one — later
+    // migrations must not require editing this test.
+    assert.ok(store.db.prepare('SELECT 1 FROM schema_migrations WHERE version = 11').get());
+    assert.deepEqual(
+      store.db.prepare('SELECT id, name FROM api_keys ORDER BY id').all(),
+      [
+        { id: 7, name: 'active-key' },
+        { id: 11, name: 'reusable-key' }
+      ]
+    );
+    assert.equal(store.getApiSession('active-session')?.api_key_id, 7);
+    assert.equal(store.getApiSession('revoked-session')?.api_key_id, 11);
+    assert.equal(store.getApiSession('revoked-session')?.key_revoked_at, '2026-01-03 00:00:00');
+
+    store.insertApiKey({ name: 'reusable-key', keyHash: 'new-active-hash', scope: 'read' });
+    assert.equal(store.getApiKeyByName('reusable-key')?.key_hash, 'new-active-hash');
+    assert.throws(
+      () => store.insertApiKey({ name: 'reusable-key', keyHash: 'duplicate-active-hash', scope: 'read' }),
+      /UNIQUE constraint failed: api_keys\.name/
+    );
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('API key migration v11 rolls back failed rebuild and can retry', { timeout: TEST_TIMEOUT_MS }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-key-migration-retry-'));
+  const dbPath = path.join(dir, 'dashboard.db');
+  // Seed the pinned released schema, rather than retaining later migration DDL.
+  const initialDb = new Database(dbPath);
+  migrateSchema13(initialDb);
+  initialDb.close();
+
+  const db = new Database(dbPath);
+  try {
+    db.pragma('foreign_keys = OFF');
+    db.exec(`
+      DELETE FROM api_sessions;
+      -- Migrations gate on MAX(version), so every row at or above 11 must go or
+      -- migration 11 is treated as already applied and never retried.
+      DELETE FROM schema_migrations WHERE version >= 11;
+      DROP INDEX IF EXISTS idx_api_keys_active_name;
+      DROP TABLE api_keys;
+      CREATE TABLE api_keys (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        key_hash TEXT NOT NULL,
+        scope TEXT NOT NULL DEFAULT 'read',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_used_at TEXT,
+        revoked_at TEXT
+      );
+      INSERT INTO api_keys (id, name, key_hash, scope, created_at, revoked_at)
+      VALUES
+        (21, 'duplicate-active', 'active-hash-a', 'read', '2026-01-01 00:00:00', NULL),
+        (22, 'duplicate-active', 'active-hash-b', 'read', '2026-01-02 00:00:00', NULL);
+    `);
+  } finally {
+    db.close();
+  }
+
+  assert.throws(() => new Store(dbPath), { code: 'SCHEMA_UPGRADE_REQUIRED' });
+  assert.throws(
+    () => migrateDashboardFile(dbPath),
+    /UNIQUE constraint failed: api_keys\.name/
+  );
+
+  const inspectDb = new Database(dbPath);
+  try {
+    assert.deepEqual(
+      inspectDb.prepare('SELECT id, name, key_hash, revoked_at FROM api_keys ORDER BY id').all(),
+      [
+        { id: 21, name: 'duplicate-active', key_hash: 'active-hash-a', revoked_at: null },
+        { id: 22, name: 'duplicate-active', key_hash: 'active-hash-b', revoked_at: null }
+      ]
+    );
+    assert.equal(
+      inspectDb.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'api_keys_new'").get(),
+      undefined
+    );
+    assert.equal(
+      inspectDb.prepare('SELECT version FROM schema_migrations WHERE version = 11').get(),
+      undefined
+    );
+    inspectDb.prepare("UPDATE api_keys SET revoked_at = '2026-01-03 00:00:00' WHERE id = 22").run();
+  } finally {
+    inspectDb.close();
+  }
+
+  migrateDashboardFile(dbPath);
+  const store = new Store(dbPath);
+  try {
+    assert.equal(store.db.prepare('SELECT version FROM schema_migrations WHERE version = 11').get().version, 11);
+    assert.equal(store.getApiKeyByName('duplicate-active')?.id, 21);
+    assert.equal(
+      store.db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_api_keys_active_name'").get().name,
+      'idx_api_keys_active_name'
+    );
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('API key lifecycle supports name reuse, rotate, permanent delete, and revoked purge', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-key-lifecycle-'));
+  writeConfig(zylosDir, 'secret', { auth: { password: 'secret' } });
+
+  const { origin, server } = await makeServerWithDir(zylosDir);
+  try {
+    const dbPath = path.join(zylosDir, 'components', 'dashboard', 'dashboard.db');
+    const seedStore = new Store(dbPath);
+    const readKey = generateApiKey();
+    const adminKey = generateApiKey();
+    seedStore.insertApiKey({ name: 'read-key', keyHash: hashApiKey(readKey), scope: 'read' });
+    seedStore.insertApiKey({ name: 'admin-key', keyHash: hashApiKey(adminKey), scope: 'admin' });
+    seedStore.close();
+
+    const readTokenResp = await fetch(`${origin}/api/auth/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${readKey}` }
+    });
+    const adminTokenResp = await fetch(`${origin}/api/auth/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminKey}` }
+    });
+    const { token: readToken } = await readTokenResp.json();
+    const { token: adminToken } = await adminTokenResp.json();
+
+    async function createKey(name, scope = 'read') {
+      const resp = await fetch(`${origin}/api/keys`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${adminToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ name, scope })
+      });
+      const body = await resp.json();
+      assert.equal(resp.status, 200, JSON.stringify(body));
+      assert.equal(body.key.name, name);
+      assert.match(body.plaintext_key, /^zylos_ak_/);
+      return body;
+    }
+
+    const first = await createKey('producer-read');
+    const firstTokenResp = await fetch(`${origin}/api/auth/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${first.plaintext_key}` }
+    });
+    assert.equal(firstTokenResp.status, 200);
+    const { token: firstSession } = await firstTokenResp.json();
+
+    const revokeFirst = await fetch(`${origin}/api/keys/producer-read`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.equal(revokeFirst.status, 200);
+
+    const recreated = await createKey('producer-read');
+    assert.equal(recreated.keys.filter(key => key.name === 'producer-read' && key.status === 'revoked').length, 1);
+    assert.equal(recreated.keys.filter(key => key.name === 'producer-read' && key.status === 'active').length, 1);
+    const activeTokenResp = await fetch(`${origin}/api/auth/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${recreated.plaintext_key}` }
+    });
+    assert.equal(activeTokenResp.status, 200);
+    const { token: activeSessionBeforeRotate } = await activeTokenResp.json();
+
+    const duplicate = await fetch(`${origin}/api/keys`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: 'producer-read', scope: 'read' })
+    });
+    assert.equal(duplicate.status, 400);
+    assert.deepEqual(await duplicate.json(), { ok: false, error: { code: 'duplicate_name', message: 'duplicate_name' } });
+
+    const beforeRotate = new Store(dbPath);
+    const rowBefore = beforeRotate.getApiKeyByName('producer-read');
+    beforeRotate.close();
+
+    const rotateReadScope = await fetch(`${origin}/api/keys/producer-read/rotate`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${readToken}` }
+    });
+    assert.equal(rotateReadScope.status, 403);
+
+    const rotate = await fetch(`${origin}/api/keys/producer-read/rotate`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.equal(rotate.status, 200);
+    const rotateBody = await rotate.json();
+    assert.equal(rotateBody.key.name, 'producer-read');
+    assert.equal(rotateBody.key.scope, rowBefore.scope);
+    assert.equal(rotateBody.key.created_at, new Date(rowBefore.created_at.replace(' ', 'T') + 'Z').toISOString());
+    assert.match(rotateBody.plaintext_key, /^zylos_ak_/);
+    assert.equal(JSON.stringify(rotateBody).includes('key_hash'), false);
+
+    const oldKeyResp = await fetch(`${origin}/api/auth/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${recreated.plaintext_key}` }
+    });
+    assert.equal(oldKeyResp.status, 401);
+    const staleSession = await fetch(`${origin}/api/instance`, {
+      headers: { Authorization: `Bearer ${activeSessionBeforeRotate}` }
+    });
+    assert.equal(staleSession.status, 401);
+    const newKeyResp = await fetch(`${origin}/api/auth/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${rotateBody.plaintext_key}` }
+    });
+    assert.equal(newKeyResp.status, 200);
+
+    const afterRotate = new Store(dbPath);
+    const rowAfter = afterRotate.getApiKeyByName('producer-read');
+    afterRotate.close();
+    assert.equal(rowAfter.id, rowBefore.id);
+    assert.equal(rowAfter.scope, rowBefore.scope);
+    assert.equal(rowAfter.created_at, rowBefore.created_at);
+
+    const revokedRotate = await fetch(`${origin}/api/keys/missing-key/rotate`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.equal(revokedRotate.status, 404);
+
+    const namedRotate = await createKey('rotate');
+    const revokeNamedRotate = await fetch(`${origin}/api/keys/rotate`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.equal(revokeNamedRotate.status, 200);
+    assert.equal((await revokeNamedRotate.json()).keys.some(key => key.name === 'rotate' && key.status === 'revoked'), true);
+    const recreatedNamedRotate = await createKey('rotate');
+    const rotateNamedRotate = await fetch(`${origin}/api/keys/rotate/rotate`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.equal(rotateNamedRotate.status, 200);
+    const rotateNamedRotateBody = await rotateNamedRotate.json();
+    assert.equal(rotateNamedRotateBody.key.name, 'rotate');
+    assert.match(rotateNamedRotateBody.plaintext_key, /^zylos_ak_/);
+    const oldNamedRotateResp = await fetch(`${origin}/api/auth/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${recreatedNamedRotate.plaintext_key}` }
+    });
+    assert.equal(oldNamedRotateResp.status, 401);
+    assert.notEqual(namedRotate.plaintext_key, recreatedNamedRotate.plaintext_key);
+
+    await createKey('old-delete');
+    await fetch(`${origin}/api/keys/old-delete`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    await createKey('old-delete');
+    const deleteRevokedWhileActive = await fetch(`${origin}/api/keys/old-delete?permanent=1`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.equal(deleteRevokedWhileActive.status, 200);
+    const deleteRevokedWhileActiveBody = await deleteRevokedWhileActive.json();
+    assert.equal(deleteRevokedWhileActiveBody.deleted, 1);
+    assert.equal(deleteRevokedWhileActiveBody.keys.some(key => key.name === 'old-delete' && key.status === 'active'), true);
+    assert.equal(deleteRevokedWhileActiveBody.keys.some(key => key.name === 'old-delete' && key.status === 'revoked'), false);
+    await fetch(`${origin}/api/keys/old-delete`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    await createKey('old-delete');
+    await fetch(`${origin}/api/keys/old-delete`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    const hardDelete = await fetch(`${origin}/api/keys/old-delete?permanent=1`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.equal(hardDelete.status, 200);
+    assert.equal((await hardDelete.json()).deleted, 2);
+
+    await createKey('active-delete');
+    const activeHardDelete = await fetch(`${origin}/api/keys/active-delete?permanent=1`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.equal(activeHardDelete.status, 409);
+    assert.deepEqual(await activeHardDelete.json(), { ok: false, error: { code: 'must_revoke_first', message: 'must_revoke_first' } });
+
+    await createKey('purge-revoked');
+    const deleteNamedPurge = await fetch(`${origin}/api/keys/purge-revoked`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.equal(deleteNamedPurge.status, 200);
+    assert.equal((await deleteNamedPurge.json()).keys.some(key => key.name === 'purge-revoked' && key.status === 'revoked'), true);
+
+    const purgeReadScope = await fetch(`${origin}/api/keys/purge-revoked`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${readToken}` }
+    });
+    assert.equal(purgeReadScope.status, 403);
+
+    const purge = await fetch(`${origin}/api/keys/purge-revoked`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.equal(purge.status, 200);
+    const purgeBody = await purge.json();
+    assert.ok(purgeBody.purged >= 2);
+    assert.equal(purgeBody.keys.some(key => key.status === 'revoked'), false);
+    assert.equal(purgeBody.keys.some(key => key.name === 'active-delete' && key.status === 'active'), true);
+  } finally {
+    await closeServer(server);
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  }
+});
+
+test('/api/fleet exposes safe records without registry secrets', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
+  writeConfig(zylosDir, 'secret', {
+    fleet: {
+      agents: [
+        {
+          name: 'Remote',
+          base_url: 'https://remote.example.test/dashboard',
+          read_api_key: 'zylos_ak_secret'
+        }
+      ]
+    }
+  });
+
+  const { origin, server } = await makeServerWithDir(zylosDir);
+  try {
+    const resp = await fetch(`${origin}/api/fleet`, { headers: { Cookie: await signIn(origin, 'secret') } });
+    assert.equal(resp.status, 200);
+    const body = await resp.json();
+    // Self record is always injected first, followed by external agents.
+    assert.equal(body.count, 2);
+    assert.equal(body.agents[0].self, true);
+    assert.equal(body.agents[1].self, false);
+    assert.equal(body.agents[1].name, 'Remote');
+    assert.equal(body.agents[1].health_reason, 'not_polled');
+    const serialized = JSON.stringify(body);
+    assert.equal(serialized.includes('zylos_ak_secret'), false);
+    assert.equal(serialized.includes('read_api_key'), false);
+    assert.equal(serialized.includes('read_session_token'), false);
+  } finally {
+    await closeServer(server);
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  }
+});
+
+test('fleet management API is admin-gated, masks keys, persists atomically, and hot-applies config', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const remoteRequests = [];
+  const remote = await listen(async (req, res) => {
+    remoteRequests.push(req.url);
+    if (req.url === '/api/auth/token') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        token: 'zylos_st_remote_read',
+        expires_at: new Date(Date.now() + 3600_000).toISOString(),
+        scope: 'read'
+      }));
+      return;
+    }
+    if (isObjectApi(req.url)) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(await objectResponse(req.url, { working: 1,
+        instance: { agent: { name: 'masked zylos_ak_...abcd in identity text' }, versions: { zylos: { installed: '0.3.0', latest: '0.4.0', update: '0.4.0' } } },
+        rows: [{ id: 'origin', displayName: 'Origin', runtime: 'claude', model: null, state: { kind: 'working' }, flags: { blocked: { reason: 'auth_failed' } } }],
+      }).text());
+      return;
+    }
+    if (req.url === '/api/stream') {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end('event: instance\ndata: {"state":"IDLE"}\n\n');
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
+  writeConfig(zylosDir, 'secret', {
+    auth: { password: 'secret' },
+    agent: { name: 'Local' },
+    preserved: { keep: true }
+  });
+
+  const { origin, server } = await makeServerWithDir(zylosDir);
+  try {
+    const dbPath = path.join(zylosDir, 'components', 'dashboard', 'dashboard.db');
+    const store = new Store(dbPath);
+    const readKey = generateApiKey();
+    const adminKey = generateApiKey();
+    store.insertApiKey({ name: 'read-key', keyHash: hashApiKey(readKey), scope: 'read' });
+    store.insertApiKey({ name: 'admin-key', keyHash: hashApiKey(adminKey), scope: 'admin' });
+    store.close();
+
+    const readTokenResp = await fetch(`${origin}/api/auth/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${readKey}` }
+    });
+    const adminTokenResp = await fetch(`${origin}/api/auth/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminKey}` }
+    });
+    const { token: readToken } = await readTokenResp.json();
+    const { token: adminToken } = await adminTokenResp.json();
+
+    const readList = await fetch(`${origin}/api/fleet/agents`, {
+      headers: { Authorization: `Bearer ${readToken}` }
+    });
+    assert.equal(readList.status, 403);
+    assert.deepEqual(await readList.json(), { ok: false, error: { code: 'insufficient_scope', message: 'insufficient_scope' }, required: 'admin' });
+
+    const add = await fetch(`${origin}/api/fleet/agents`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        name: 'Remote',
+        base_url: remote.origin,
+        read_api_key: 'zylos_ak_supersecret1234'
+      })
+    });
+    assert.equal(add.status, 200);
+    const addBody = await add.json();
+    assert.equal(addBody.agent.name, 'Remote');
+    assert.equal(addBody.agent.key_masked, 'zylos_ak_...1234');
+    assert.equal(addBody.agent.access, 'read');
+    assert.equal(JSON.stringify(addBody).includes('supersecret'), false);
+
+    const duplicate = await fetch(`${origin}/api/fleet/agents`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        name: 'Remote',
+        base_url: remote.origin,
+        read_api_key: 'zylos_ak_other'
+      })
+    });
+    assert.equal(duplicate.status, 400);
+    assert.deepEqual(await duplicate.json(), { ok: false, error: { code: 'duplicate_name', message: 'duplicate_name' } });
+
+    const reserved = await fetch(`${origin}/api/fleet/agents`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        name: 'test',
+        base_url: remote.origin,
+        read_api_key: 'zylos_ak_other'
+      })
+    });
+    assert.equal(reserved.status, 400);
+    assert.deepEqual(await reserved.json(), { ok: false, error: { code: 'reserved_name', message: 'reserved_name' } });
+
+    const list = await fetch(`${origin}/api/fleet/agents`, {
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.equal(list.status, 200);
+    const listBody = await list.json();
+    assert.equal(listBody.self.name, 'Local');
+    assert.equal(listBody.agents[0].name, 'Remote');
+    assert.equal(listBody.agents[0].key_masked, 'zylos_ak_...1234');
+    assert.equal(listBody.agents[0].access, 'read');
+    assert.equal(JSON.stringify(listBody).includes('supersecret'), false);
+
+    let fleetBody = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const fleet = await fetch(`${origin}/api/fleet`, {
+        headers: { Authorization: `Bearer ${adminToken}` }
+      });
+      assert.equal(fleet.status, 200);
+      fleetBody = await fleet.json();
+      if (fleetBody.agents.find(a => a.name === 'Remote')?.health_reason === 'ok') break;
+      await sleep(25);
+    }
+    assert.equal(fleetBody.agents.some(a => a.name === 'Remote'), true, 'hot-added agent should appear without restart');
+    const remoteRecord = fleetBody.agents.find(a => a.name === 'Remote');
+    for (const field of ['model', 'effort', 'context_pct', 'new_session_threshold']) assert.equal(Object.hasOwn(remoteRecord, field), false);
+    assert.equal(remoteRequests.some(route => /^\/api\/groups\/origin(?:[/?]|$)/.test(route)), false, 'Fleet never fetches Origin detail or another Origin resource');
+    assert.equal(JSON.stringify(fleetBody).includes('zylos_ak_'), false);
+
+    const rename = await fetch(`${origin}/api/instance/name`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: 'LocalRenamed' })
+    });
+    assert.equal(rename.status, 200);
+    assert.deepEqual(await rename.json(), { ok: true, self: { name: 'LocalRenamed' } });
+
+    const del = await fetch(`${origin}/api/fleet/agents/Remote`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.equal(del.status, 200);
+    const delBody = await del.json();
+    assert.equal(delBody.agents.length, 0);
+
+    const configPath = path.join(zylosDir, 'components', 'dashboard', 'config.json');
+    const saved = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    assert.deepEqual(saved.preserved, { keep: true });
+    assert.equal(saved.agent.name, 'LocalRenamed');
+    assert.deepEqual(saved.fleet.agents, []);
+    assert.equal(fs.statSync(configPath).mode & 0o777, 0o600);
+  } finally {
+    await closeServer(server);
+    await remote.close();
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  }
+});
+
+test('fleet management add rechecks duplicate names after slow probe', { timeout: TEST_TIMEOUT_MS }, async () => {
+  let tokenHits = 0;
+  const remote = await listen((req, res) => {
+    if (req.url === '/api/auth/token') {
+      tokenHits += 1;
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          token: `zylos_st_remote_read_${tokenHits}`,
+          expires_at: new Date(Date.now() + 3600_000).toISOString(),
+          scope: 'read'
+        }));
+      }, 75);
+      return;
+    }
+    if (req.url === '/api/instance') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ session_mode: { sessionMode: 'single' }, versions: { zylos: { installed: '0.3.0', latest: '0.4.0', update: '0.4.0' } } }));
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
+  writeConfig(zylosDir);
+
+  const { origin, server } = await makeServerWithDir(zylosDir);
+  try {
+    const cookie = await signIn(origin, 'secret');
+    const request = () => fetch(`${origin}/api/fleet/agents`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie, Origin: origin },
+      body: JSON.stringify({
+        name: 'Remote',
+        base_url: remote.origin,
+        read_api_key: 'zylos_ak_supersecret1234'
+      })
+    });
+
+    const responses = await Promise.all([request(), request()]);
+    const statuses = responses.map(resp => resp.status).sort();
+    assert.deepEqual(statuses, [200, 400]);
+
+    const bodies = await Promise.all(responses.map(resp => resp.json()));
+    assert.equal(bodies.some(body => body.ok === true && body.agent?.name === 'Remote'), true);
+    assert.equal(bodies.some(body => body.error?.code === 'duplicate_name'), true);
+
+    const saved = JSON.parse(fs.readFileSync(path.join(zylosDir, 'components', 'dashboard', 'config.json'), 'utf8'));
+    assert.equal(saved.fleet.agents.filter(agent => agent.name === 'Remote').length, 1);
+
+    const del = await fetch(`${origin}/api/fleet/agents/Remote`, { method: 'DELETE', headers: { Cookie: cookie, Origin: origin } });
+    assert.equal(del.status, 200);
+  } finally {
+    await closeServer(server);
+    await remote.close();
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  }
+});
+
+test('fleet test-connection API reports auth failures and reachable read scope without persisting secrets', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const remote = await listen((req, res) => {
+    if (req.url === '/api/auth/token') {
+      if (req.headers.authorization !== 'Bearer zylos_ak_good') {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'invalid_api_key' }));
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        token: 'zylos_st_remote_read',
+        expires_at: new Date(Date.now() + 3600_000).toISOString(),
+        scope: 'read'
+      }));
+      return;
+    }
+    if (req.url === '/api/instance') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ session_mode: { sessionMode: 'single' }, versions: { zylos: { installed: '0.3.0', latest: '0.4.0', update: '0.4.0' } } }));
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-dashboard-test-'));
+  writeConfig(zylosDir);
+
+  const { origin, server } = await makeServerWithDir(zylosDir);
+  try {
+    const cookie = await signIn(origin, 'secret');
+    const bad = await fetch(`${origin}/api/fleet/agents/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie, Origin: origin },
+      body: JSON.stringify({ base_url: remote.origin, read_api_key: 'zylos_ak_bad' })
+    });
+    assert.equal(bad.status, 502);
+    assert.deepEqual(await bad.json(), { ok: false, reachable: false, error: { code: 'auth_failed', message: 'auth_failed' } });
+
+    const good = await fetch(`${origin}/api/fleet/agents/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie, Origin: origin },
+      body: JSON.stringify({ base_url: remote.origin, read_api_key: 'zylos_ak_good' })
+    });
+    assert.equal(good.status, 200);
+    assert.deepEqual(await good.json(), { ok: true, reachable: true, scope: 'read', version: '0.3.0' });
+
+    const saved = JSON.parse(fs.readFileSync(path.join(zylosDir, 'components', 'dashboard', 'config.json'), 'utf8'));
+    assert.equal(saved.fleet, undefined, 'test-connection must not persist the submitted key');
+  } finally {
+    await closeServer(server);
+    await remote.close();
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  }
+});
+
+test('retired ingest endpoints accept neither local nor proxied writes', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const { origin, server } = await makeServer();
+  try {
+    for (const endpoint of ['/api/ingest', '/api/ingest/statusline']) {
+      for (const proxied of [false, true]) {
+        const response = await fetch(`${origin}${endpoint}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(proxied ? { 'X-Forwarded-Prefix': '/dashboard' } : {})
+          },
+          body: JSON.stringify({ hook_event_name: 'Stop', ingest_id: 'retired-write', metrics: [] })
+        });
+        assert.equal(response.status, 401, 'retired endpoints pass through normal authentication');
+      }
+    }
+  } finally {
+    await closeServer(server);
+  }
+});
+
+// Real HTTP duplicate-cookie admission and current-prefix logout.
+test('nested Dashboard login accepts any valid same-name cookie and logout clears only its path', { timeout: 15_000 }, async t => {
+  const { origin, server, zylosDir } = await makeServer();
+  t.after(async () => { server.closeAllConnections(); await closeServer(server); fs.rmSync(zylosDir, { recursive: true, force: true }); });
+  const headers = { 'x-forwarded-prefix': '/ib/dashboard', 'Content-Type': 'application/x-www-form-urlencoded' };
+  const login = await fetch(`${origin}/login`, { method: 'POST', headers, body: form({ password: 'secret' }), redirect: 'manual' });
+  await login.text();
+  assert.equal(login.status, 302);
+  const valid = loginCookies(login, { base: '/ib/dashboard' }).split(';')[0];
+  const invalid = '__Secure-zylos_dashboard_session=old-parent-cookie';
+  for (const cookie of [`${valid}; ${invalid}`, `${invalid}; ${valid}`]) {
+    const home = await fetch(origin, { headers: { ...headers, cookie }, redirect: 'manual' });
+    assert.equal(home.status, 200); await home.text();
+    const signedIn = await fetch(`${origin}/login`, { headers: { ...headers, cookie }, redirect: 'manual' });
+    assert.equal(signedIn.status, 302); assert.equal(signedIn.headers.get('location'), '/ib/dashboard/'); await signedIn.text();
+  }
+  const rejected = await fetch(origin, { headers: { ...headers, cookie: `${invalid}; __Secure-zylos_dashboard_session=also-invalid` }, redirect: 'manual' });
+  assert.equal(rejected.status, 302); assert.match(rejected.headers.get('location'), /^\/ib\/dashboard\/login/); await rejected.text();
+  const logout = await fetch(`${origin}/logout`, { method: 'POST', headers: { ...headers, origin, cookie: `${valid}; ${invalid}` }, redirect: 'manual' });
+  await logout.text();
+  assert.deepEqual(logout.headers.getSetCookie(), ['__Secure-zylos_dashboard_session=; HttpOnly; Secure; SameSite=Strict; Path=/ib/dashboard; Max-Age=0']);
+  const ended = await fetch(origin, { headers: { ...headers, cookie: valid }, redirect: 'manual' });
+  assert.equal(ended.status, 302); await ended.text();
+});
+
+// HTTP integration: group detail retains actual sampled model policy while Fleet omits session metadata.
+// Run for threshold/usage-to-state changes; skip rendering-only changes.
+// The official runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR and tmux.
+// Core observations are injected; the real HTTP server/DB are private and closed.
+test('group thresholds follow actual session models while Fleet omits Origin session fields', { timeout: 15000 }, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-threshold-state-'));
+  let server;
+  const stores = new Set(), timers = new Set();
+  const checkSchema = Store.prototype.checkSchema, schedule = globalThis.setInterval;
+  t.mock.method(Store.prototype, 'checkSchema', function (...args) {
+    stores.add(this); return checkSchema.apply(this, args);
+  });
+  t.mock.method(globalThis, 'setInterval', (...args) => {
+    const timer = schedule(...args); timers.add(timer); return timer;
+  });
+  t.after(async () => {
+    for (const timer of timers) clearInterval(timer);
+    if (server) {
+      server.closeAllConnections(); await closeServer(server);
+      await server.closeAttachments();
+    }
+    for (const store of stores) if (store.db.open) store.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  writeConfig(root);
+  for (const dir of ['.zylos', '.claude', '.codex']) fs.mkdirSync(path.join(root, dir), { recursive: true });
+  fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', model_rotation_thresholds: {
+    claude: { haiku: 81, 'claude-sonnet-4-6': 63, 'claude-opus-4-6[1m]': 36 }, codex: { 'actual-codex': 58, 'native-codex': 79 },
+  } }));
+  fs.writeFileSync(path.join(root, '.claude/settings.json'), JSON.stringify({ model: 'haiku' }));
+  fs.writeFileSync(path.join(root, '.codex/config.toml'), 'model = "native-codex"\n');
+  let runtime = 'claude', usage = { valid: false }, launchConfig = null;
+  t.mock.method(CoreState.prototype, 'refresh', async function () { return this.getState(); });
+  t.mock.method(CoreState.prototype, 'getState', () => ({ runtime, state: 'IDLE', ready: true }));
+  t.mock.method(CoreState.prototype, 'getUsageObservation', () => structuredClone(usage));
+  t.mock.method(CoreState.prototype, 'getLaunchConfig', () => launchConfig ?? { runtime, mode: 'default' });
+  let snapshotClock = Date.now();
+  const previousSnapshotBuilder = buildAuthSnapshot;
+  t.after(() => { buildAuthSnapshot = previousSnapshotBuilder; });
+  const thresholdObservations = {
+    reader: { readAccountUsage: async () => null },
+    get: async function () { return this.peek(); },
+    peek: () => ({ mode: 'single', group: null, observations: new Map([[null, {
+      identity: { present: true, runtime, runId: 'threshold-run', sessionId: 'threshold-session', launchConfig: launchConfig ?? { runtime, mode: 'default' } },
+      status: { valid: true, value: { state: 'idle' } }, usage: structuredClone(usage),
+    }]]) }),
+  };
+  buildAuthSnapshot = options => createGroupSnapshot({ ...options, now: () => snapshotClock, sessionObservations: thresholdObservations,
+      cli: { runC4Db: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
+        readOverrides: async () => ({ ok: true, data: { baseline: { runtime }, runtime: [], model: [] } }) },
+      loadCoreModule: async name => {
+        if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
+        if (name === 'status-view.js') return { collectStatus: async ({ session }) => {
+          await session(null, {});
+          return { view: 'single', origin: { presence: 'running', runtime, runId: 'threshold-run', sessionId: 'threshold-session',
+            status: { valid: true, state: 'idle' } }, groupListError: null, runtimeHealth: {} };
+        } };
+        return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
+      } });
+  const running = await makeServerWithDir(root); server = running.server;
+  const cookie = await signIn(running.origin, 'secret');
+  const assertNoSessionFields = self => {
+    assert.ok(self);
+    for (const field of ['model', 'effort', 'context_pct', 'new_session_threshold']) assert.equal(Object.hasOwn(self, field), false);
+  };
+  for (const [engine, sample, expected] of [
+    ['claude', { model: { id: 'claude-sonnet-4-6' }, context_window: { context_window_size: 200000, used_percentage: 50 } }, 63],
+    ['claude', { model: { id: 'claude-opus-4-6' }, context_window: { context_window_size: 1000000, used_percentage: 50 } }, 36],
+    ['codex', { model: 'actual-codex', contextUsage: { used: 50000, ceiling: 258400 } }, 58],
+    ['claude', null, null],
+  ]) {
+    runtime = engine; usage = sample ? { valid: true, value: sample } : { valid: false };
+    snapshotClock += 2100;
+    const stateResponse = await fetch(running.origin + '/api/groups/origin?include=', { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
+    assert.equal(stateResponse.status, 200);
+    assert.equal((await stateResponse.json()).rotationThreshold, expected);
+    const fleetResponse = await fetch(running.origin + '/api/fleet', { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
+    assert.equal(fleetResponse.status, 200);
+    const self = (await fleetResponse.json()).agents.find(agent => agent.self);
+    assertNoSessionFields(self);
+  }
+  fs.writeFileSync(path.join(root, '.claude/settings.json'), JSON.stringify({ model: 'opus[1m]' }));
+  fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ model_rotation_thresholds: { claude: { 'opus[1m]': 30 } } }));
+  const metaResponse = await fetch(running.origin + '/api/instance/runtime-options?runtime=claude&model=claude-opus-4-6%5B1m%5D', { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
+  assert.equal(metaResponse.status, 200);
+  const meta = await metaResponse.json();
+  assert.equal(meta.model_thresholds['opus[1m]'], 30);
+  assert.equal(meta.model_thresholds['claude-opus-4-6[1m]'], 40);
+  runtime = 'claude';
+  for (const [model, launch, expected] of [
+    ['claude-opus-5-5', { runtime, mode: 'default' }, 30],
+    ['claude-opus-4-6', { runtime, mode: 'override', model: 'claude-opus-4-6[1m]' }, 40],
+  ]) {
+    launchConfig = launch; snapshotClock += 2100;
+    usage = { valid: true, value: { model: { id: model }, context_window: { context_window_size: 1000000 } } };
+    const stateResponse = await fetch(running.origin + '/api/groups/origin?include=', { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
+    assert.equal((await stateResponse.json()).rotationThreshold, expected);
+    const fleetResponse = await fetch(running.origin + '/api/fleet', { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
+    assertNoSessionFields((await fleetResponse.json()).agents.find(agent => agent.self));
+  }
+});
+
+
+// Actual HTTP auth and method dispatch: private installation and loopback only.
+// Run when API method routing or Fleet authentication changes; unrelated views may skip.
+test('unsupported API method path pairs return 404 and Fleet APIs require login', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const { origin, server } = await makeServer();
+  try {
+    for (const [method, url] of [['GET', '/fleet/Remote/api/instance'], ['POST', '/fleet/Remote/api/schedules']]) {
+      const reply = await fetch(origin + url, { method, redirect: 'manual' });
+      assert.equal(reply.status, 401, `${method} ${url}`);
+      assert.equal(reply.headers.get('location'), null);
+      assert.equal((await reply.json()).error.code, 'unauthorized');
+    }
+    const loggedIn = await fetch(`${origin}/login`, { method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: form({ password: 'secret' }), redirect: 'manual' });
+    const cookie = loggedIn.headers.get('set-cookie');
+    for (const [method, url] of [['PATCH', '/api/instance'], ['POST', '/api/usage/summary'],
+      ['POST', '/api/settings/chat'], ['POST', '/api/schedules/task/pause'],
+      ['PATCH', '/api/schedules/task'], ['POST', '/api/unknown']]) {
+      const reply = await fetch(origin + url, { method, headers: { Cookie: cookie, Origin: origin } });
+      assert.equal(reply.status, 404, `${method} ${url}`);
+      assert.equal((await reply.json()).error.code, 'not_found');
+    }
+  } finally { await closeServer(server); }
+});

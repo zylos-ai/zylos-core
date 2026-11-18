@@ -817,8 +817,8 @@ export async function runWorkbenchBrowser(t, sandbox) {
   });
 
   await step('the nav marks the current page for screen readers, and the usage page starts with its controls', async () => {
-    for (const width of [390, 1280]) for (const theme of ['light', 'dark']) {
-      const { page, context, errors, shot } = await open(width, width === 390 ? 844 : 900, '/');
+    for (const width of [390, 1280]) for (const theme of ['light', 'dark']) for (const language of ['zh', 'en']) {
+      const { page, context, errors, shot } = await open(width, width === 390 ? 844 : 900, '/', {}, language);
       if (theme === 'dark') { await page.evaluate(() => localStorage.setItem('zylos-dashboard-theme', 'dark')); await page.reload(); }
       const current = () => page.evaluate(() => [...document.querySelectorAll('.app-header .tab[aria-current]')]
         .map(tab => `${tab.dataset.tab}=${tab.getAttribute('aria-current')}`));
@@ -835,7 +835,25 @@ export async function runWorkbenchBrowser(t, sandbox) {
       assert.equal(top.headings, 0, `${width}: no page heading repeats the nav`);
       assert.match(top.first, /wb-usage-controls/);
       assert.ok(top.gap >= 8 && top.gap <= 40, `${width}: the controls sit just under the header (${top.gap}px)`);
-      await shot(`usage-top-${theme}`);
+      // The cost's "Other" line (the fixture's $1.25) sits under the runtime line inside the cost total, left of the
+      // number on phones, without sideways scrolling. The range buttons can appear before the usage data renders.
+      await page.locator('.wb-usage-total .wb-usage-other').first().waitFor();
+      const other = await page.evaluate(() => {
+        const line = document.querySelector('.wb-usage-total .wb-usage-other');
+        const box = line?.closest('.wb-usage-total');
+        if (!line) return null;
+        const rect = el => el.getBoundingClientRect();
+        const runtime = box.querySelector('.wb-usage-sub:not(.wb-usage-other)');
+        return { text: line.textContent, inCost: box === document.querySelector('.wb-usage-total'),
+          belowRuntime: rect(line).top >= rect(runtime).bottom - 1, leftOfValue: rect(line).right <= rect(box.querySelector('strong')).left + 1,
+          insideBox: rect(line).bottom <= rect(box).bottom + 1, documentWidth: document.documentElement.scrollWidth };
+      });
+      assert.ok(other, `${width}: the cost total has an Other line`);
+      assert.match(other.text, language === 'zh' ? /^其中「其他」\$1\.25$/ : /^Including Other \$1\.25$/, `${width} ${language}: the Other line shows the reported amount`);
+      assert.ok(other.inCost && other.belowRuntime && other.insideBox, `${width}: the Other line is under the runtime line in the cost total (${JSON.stringify(other)})`);
+      if (width === 390) assert.ok(other.leftOfValue, `${width}: the Other line stays left of the number`);
+      assert.equal(other.documentWidth, width, `${width}: no sideways scrolling`);
+      await shot(`usage-top-${language}-${theme}`);
       await section(page, 'settings');
       await page.locator('#tab-settings.active').waitFor();
       assert.deepEqual(await current(), ['settings=page'], `${width}: settings is current`);

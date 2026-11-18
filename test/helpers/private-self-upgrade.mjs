@@ -63,7 +63,7 @@ write(path.join(bin,'curl'),`#!${process.execPath}\nconst fs=require('node:fs'),
 for(const name of fs.readdirSync(bin))if(name!=='npm')fs.chmodSync(path.join(bin,name),0o700);
 write(path.join(z,'.zylos/config.json'),'{"runtime":"claude","session_mode":"single"}\n');
 write(path.join(z,'.claude/settings.json'),'{}');write(path.join(z,'ZYLOS.md'),'# Private acceptance fixture\n');
-write(path.join(z,'components/dashboard/config.json'),JSON.stringify({host:'127.0.0.1',port:dashboardPort,auth:{enabled:false},observer:{enabled:false}}));
+write(path.join(z,'components/dashboard/config.json'),JSON.stringify({host:'127.0.0.1',port:dashboardPort,observer:{enabled:false}}));
 assert.equal(JSON.parse(fs.readFileSync(path.join(z,'components/dashboard/config.json'))).port,dashboardPort);
 const dashboardScript=path.join(skills,'dashboard/src/index.js');
 write(path.join(z,'pm2/ecosystem.config.cjs'),'module.exports='+JSON.stringify({apps:[{name:'zylos-dashboard',script:dashboardScript,cwd:path.dirname(path.dirname(dashboardScript)),env:{HOME:home,ZYLOS_DIR:z,PM2_HOME:env.PM2_HOME,PATH:env.PATH},autorestart:true}]})+';\n');

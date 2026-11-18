@@ -394,10 +394,6 @@ export class AuthGate {
     }
   }
 
-  get enabled() {
-    return Boolean(this.config.auth?.enabled);
-  }
-
   getApiAuth(req) {
     const bearer = getBearerToken(req);
     if (!bearer) return null;
@@ -413,12 +409,11 @@ export class AuthGate {
   }
 
   isAuthenticated(req) {
-    if (!this.enabled) return true;
     return Boolean(this.resolveAuthContext(req));
   }
 
   resolveAuthContext(req, options) {
-    if (!this.enabled || !this.config.auth?.password) return null;
+    if (!this.config.auth?.password) return null;
     const cookieAuth = getSessionAuth(req, options);
     if (cookieAuth) {
       req._authContext = cookieAuth;
@@ -428,7 +423,7 @@ export class AuthGate {
   }
 
   revalidateAuthContext(context, options) {
-    if (!this.enabled || !this.config.auth?.password || !context || context.scope !== 'admin') return null;
+    if (!this.config.auth?.password || !context || context.scope !== 'admin') return null;
     if (context.kind === 'cookie') {
       const refreshed = validateSessionHash(context.principalId, options);
       return refreshed?.principalId === context.principalId ? refreshed : null;
@@ -458,8 +453,6 @@ export class AuthGate {
     if (pathname === '/logout') {
       return this.handleLogout(req, res, base);
     }
-
-    if (!this.enabled) return false;
 
     const authContext = this.resolveAuthContext(req);
     if (authContext && isRetiredApiPath(pathname)) {
@@ -498,11 +491,6 @@ export class AuthGate {
   }
 
   async handleLogin(req, res, base, url) {
-    if (!this.enabled) {
-      redirect(res, browserRoot(base));
-      return true;
-    }
-
     if (!this.config.auth?.password) {
       sendHtml(res, req.method === 'GET' || req.method === 'HEAD' ? 200 : 503,
         loginPageHtml(base, 'Dashboard password is not configured. Run "zylos dashboard reset-password" to set a password before signing in.', '', false));

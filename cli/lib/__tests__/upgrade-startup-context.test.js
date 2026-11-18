@@ -239,63 +239,6 @@ test('startup diagnostics preserve active READY availability despite unrelated d
   assert.equal(upgradeStartupPrompt(root), 'cleanup task');
 });
 
-test('tmux launcher preserves ordinary prompt for available databases and replaces it during isolation', t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-launcher-context-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const stable = path.join(root, '.zylos/upgrade');
-  fs.mkdirSync(stable, { recursive: true });
-  fs.chmodSync(stable, 0o700);
-  fs.writeFileSync(path.join(stable, 'active.json'), '{}', {mode: 0o600});
-  for (const file of ['maintenance.cjs']) fs.writeFileSync(path.join(stable, file), '// fixture dependency\n', {mode: 0o600});
-  for (const blocked of [false, true]) {
-    fs.writeFileSync(path.join(stable, 'bootstrap.cjs'), `exports.bootstrap = () => ({ active: true, blocked: ${blocked}, prompt: 'recovery prompt' });\n`);
-    fs.chmodSync(path.join(stable, 'bootstrap.cjs'), 0o600);
-    const specPath = path.join(root, 'spec.json');
-    fs.writeFileSync(specPath, JSON.stringify({
-      command: process.execPath,
-      args: ['-e', 'console.log(process.argv[1])', 'ordinary prompt'],
-      promptIndex: 2,
-      cwd: root,
-      env: { PATH: process.env.PATH, HOME: root, ZYLOS_DIR: root },
-    }));
-    const result = spawnSync(process.execPath, [path.resolve('cli/lib/runtime/tmux-launcher.js'), specPath], { encoding: 'utf8' });
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout.trim(), blocked ? 'recovery prompt' : 'ordinary prompt\n\nrecovery prompt');
-  }
-});
-
-test('tmux launcher handles history-only recovery outcomes before spawning', {skip:process.platform!=='linux'}, t => {
-  const launch = root => {
-    const specPath = path.join(root, 'spec.json');
-    fs.writeFileSync(specPath, JSON.stringify({
-      command: process.execPath,
-      args: ['-e', 'console.log(process.argv[1])', 'ordinary prompt'],
-      promptIndex: 2,
-      cwd: root,
-      env: { PATH: process.env.PATH, HOME: root, PM2_HOME: path.join(root, 'pm2'), TMPDIR: root, ZYLOS_DIR: root },
-    }));
-    return spawnSync(process.execPath, [path.resolve('cli/lib/runtime/tmux-launcher.js'), specPath], {encoding:'utf8'});
-  };
-
-  const failed=publishedTransaction(t,{fail:true}),failedResult=launch(failed.root);
-  assert.equal(failedResult.status,0,failedResult.stderr);
-  assert.match(failedResult.stdout,/SYSTEM RECOVERY TASK/);assert.doesNotMatch(failedResult.stdout,/ordinary prompt/);
-  assert.equal(fs.existsSync(failed.executed),true);
-
-  const succeeded=publishedTransaction(t),succeededResult=launch(succeeded.root);
-  assert.equal(succeededResult.status,0,succeededResult.stderr);assert.equal(succeededResult.stdout.trim(),'ordinary prompt');
-  assert.equal(fs.existsSync(succeeded.executed),true);
-
-  const observed=publishedTransaction(t,{controller:true}),observedResult=launch(observed.root);
-  assert.equal(observedResult.status,0,observedResult.stderr);assert.equal(observedResult.stdout.trim(),'ordinary prompt');
-  assert.equal(fs.existsSync(observed.executed),false);
-
-  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-launcher-ordinary-')));
-  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
-  const ordinaryResult=launch(root);
-  assert.equal(ordinaryResult.status,0,ordinaryResult.stderr);assert.equal(ordinaryResult.stdout.trim(),'ordinary prompt');
-});
-
 test('C4 delivered-tail hook reads normal context after READY but isolates blocked recovery', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-c4-context-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -366,24 +309,6 @@ test('writable stable modules load while symlinked modules remain isolated', t =
       assert.equal(fs.existsSync(sentinel), false, attack);
     }
   }
-});
-
-test('throwing trusted discovery still launches runtime with isolated prompt instead of aborting', t => {
-  const f = stableFixture(t, 'exports.bootstrap = () => {throw Error("discovery unavailable");};\n');
-  const spec = path.join(f.root, 'spec.json');
-  fs.writeFileSync(spec, JSON.stringify({
-    command: process.execPath,
-    args: ['-e', 'console.log(process.argv[1]); console.log(process.env.ZYLOS_UPGRADE_PROMPT_DELIVERED || "unset")', 'ordinary prompt'],
-    promptIndex: 2,
-    cwd: f.root,
-    env: {PATH: process.env.PATH, HOME: f.root, ZYLOS_DIR: f.root},
-  }));
-  const result = spawnSync(process.execPath, [path.resolve('cli/lib/runtime/tmux-launcher.js'), spec], {encoding: 'utf8'});
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Upgrade discovery failed/);
-  assert.match(result.stdout, /Do not query C4/);
-  assert.match(result.stdout, /\nunset\n$/);
-  assert.doesNotMatch(result.stdout, /ordinary prompt/);
 });
 
 test('direct delivered-tail export receives recovery before scope loading despite a stale runtime flag', t => {

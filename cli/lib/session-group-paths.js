@@ -110,6 +110,7 @@ export async function listGroupTmuxSessions({ exec = execTmuxFile, socketPath, s
   try {
     output = await exec(binary, args, { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (error) {
+    tmuxClientArgs({ socketPath, socketName });
     // tmux reports an absent or exited server with these diagnostics. Do not
     // swallow ENOENT (binary missing), timeout, permission or generic I/O errors.
     if (groupListNoServer(error)) return [];

@@ -16,8 +16,12 @@ export async function initializeRouter(context) {
   deps.log?.(`C4_PENDING_MAX_AGE_SECONDS=${options.pendingMaxAgeSeconds}`);
   deps.log?.(`C4_RECOVER_MAX_AGE_SECONDS=${options.recoverMaxAgeSeconds}`);
   const recovered = deps.db.recoverOrphanRunning({ maxAgeSeconds: options.recoverMaxAgeSeconds });
-  for (const id of recovered.ageExpired.ids) diagnostic('orphan_expired', { conversation_id: id });
-  for (const id of recovered.retryExhausted.ids) diagnostic('orphan_retry_exhausted', { conversation_id: id });
+  for (const [kind, reason] of [['ageExpired', 'orphan_expired'], ['retryExhausted', 'orphan_retry_exhausted']]) {
+    for (const id of recovered[kind].ids) {
+      diagnostic(reason, { conversation_id: id });
+      deps.sendFailureAlert?.(id, reason);
+    }
+  }
   const ids = [...recovered.requeued.ids, ...recovered.ageExpired.ids, ...recovered.retryExhausted.ids];
   diagnostic('orphan_recovery_summary', { ...recovered, oldestId: ids.length ? Math.min(...ids) : null });
   if (state.mode === 'single' && !state.keyPresent) state.legacy = await deps.findLegacySessions();

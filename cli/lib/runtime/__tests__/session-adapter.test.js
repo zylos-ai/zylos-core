@@ -73,12 +73,31 @@ for (const bypassPermissions of [true, false]) {
       const config = { runtime: 'claude', mode, ...(mode === 'override' ? { model: 'model name', effort: 'high' } : {}) };
       const args = buildRuntimeArgs('claude', config, { root: '/isolated root', bypassPermissions });
       assert.deepEqual(args.filter(arg => arg.startsWith('--disallowedTools')),
-        ['--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode']);
+        ['--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode,Artifact,ReportFindings,Workflow']);
       assert.equal(args.includes('--disallowedTools'), false);
       assert.equal(args.includes('--dangerously-skip-permissions'), bypassPermissions);
       const codexArgs = buildRuntimeArgs('codex', { ...config, runtime: 'codex' },
         { root: '/isolated root', bypassPermissions });
       assert.equal(codexArgs.some(arg => arg.startsWith('--disallowedTools')), false);
+    });
+    test(`Codex disables interactive tools with bypassPermissions=${bypassPermissions} and ${mode} model`, () => {
+      const settings = ['tools.experimental_request_user_input.enabled=false', 'features.goals=false', 'features.apps=false'];
+      const config = { runtime: 'codex', mode, ...(mode === 'override' ? { model: 'model name', effort: 'high' } : {}) };
+      const args = buildRuntimeArgs('codex', config, { root: '/isolated root', bypassPermissions });
+      for (const setting of settings) {
+        assert.equal(args.filter(arg => arg === setting).length, 1);
+        const index = args.indexOf(setting);
+        assert.equal(args[index - 1], '-c');
+        assert.ok(index < args.length - 1);
+      }
+      assert.match(args.at(-1), /System startup trigger/);
+      assert.equal(args.includes('--dangerously-bypass-approvals-and-sandbox'), bypassPermissions);
+      for (const runtime of ['claude', 'agy']) {
+        if (runtime === 'agy' && mode === 'override') continue;
+        const otherArgs = buildRuntimeArgs(runtime, { ...config, runtime }, { root: '/isolated root', bypassPermissions });
+        assert.equal(settings.some(setting => otherArgs.includes(setting)), false);
+        assert.equal(otherArgs.includes('-c'), false);
+      }
     });
   }
 }
@@ -114,6 +133,46 @@ test('launch rejects conflicts before binary/config, then missing binary before 
   f.adapter.options.runtimeExecutable=()=>'/fake';
   await assert.rejects(f.adapter.launch(input),{code:'MODEL_CONFIG_REJECTED'});
   assert.equal(f.calls.some(c=>c[0]==='new-session'),false);
+});
+test('launch preflight failures retain sanitized timing and close the executor',async()=>{
+  const f=fixture({present:false});
+  f.adapter.options.paths={tmuxNameForGroup:()=> 'isolated'};
+  f.dependencies.observeSessionTarget=async()=>{
+    await new Promise(resolve=>setTimeout(resolve,20));
+    throw new Error('private preflight detail');
+  };
+  await assert.rejects(f.adapter.launch({sessionGroup:null,runId:'r',sessionMode:'single',
+    launchConfig:{runtime:'claude',mode:'default'}}),error=>{
+    assert.equal(error.code,'LAUNCH_FAILED');
+    const timing=error.launchTiming;
+    assert.equal(timing.last_phase,'preflight');
+    assert.equal(timing.timeout_ms,10000);
+    assert.ok(timing.total_ms>=15);
+    assert.equal(timing.preflight_ms,timing.total_ms);
+    for(const key of ['new_session_ms','executor_init_ms','exec_confirm_ms','cleanup_ms'])assert.equal(timing[key],0);
+    assert.equal(JSON.stringify(timing).includes('private'),false);
+    return true;
+  });
+  assert.deepEqual(f.calls,[['close']]);
+});
+test('launch preflight commands receive the shared remaining deadline',async()=> {
+  const f=fixture({present:false});
+  f.adapter.options.paths={tmuxNameForGroup:()=> 'isolated'};
+  f.adapter.options.runtimeExecutable=()=>{throw error('RUNTIME_NOT_INSTALLED');};
+  f.dependencies.openTmuxConnection=async options=>{
+    assert.ok(options.timeoutMs>9000 && options.timeoutMs<=10000);
+    return f.connection;
+  };
+  f.connection.command=async (argv,options)=>{
+    assert.ok(options.timeoutMs>9000 && options.timeoutMs<=10000);
+    return '';
+  };
+  f.dependencies.observeSessionTarget=async ({connection})=>{
+    await connection.command(['list-sessions']);
+    return f.target;
+  };
+  await assert.rejects(f.adapter.launch({sessionGroup:null,runId:'r',sessionMode:'single',
+    launchConfig:{runtime:'claude',mode:'default'}}),{code:'RUNTIME_NOT_INSTALLED'});
 });
 test('unreadable executable identity fails preflight before creation',async()=> {
   const f=fixture({present:false});f.adapter.options.paths={tmuxNameForGroup:()=> 'isolated'};
@@ -159,12 +218,23 @@ test('runtime help leaves the event loop available and maps execution errors',as
   } finally {await fs.rm(root,{recursive:true,force:true});}
 });
 
+test('runtime capability query honors the remaining launch timeout',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'session-runtime-help-timeout-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const command=path.join(root,'runtime');
+  await fs.writeFile(command,`#!${process.execPath}\nsetTimeout(()=>console.log('--model MODEL'),2000);\n`,{mode:0o700});
+  const startedAt=performance.now();
+  await assert.rejects(runtimeHelpAsync(command,process.env,{timeoutMs:100}),{code:'LAUNCH_FAILED',cause:'timeout'});
+  assert.ok(performance.now()-startedAt<1000);
+});
+
 test('launch awaits runtime help and classifies invalid launch arguments as a launch failure',async()=>{
   const f=fixture({present:false});
   f.adapter.options.paths={tmuxNameForGroup:()=> 'isolated'};
   f.adapter.options.runtimeExecutable=()=>'/fake';
-  let queried=false;
-  f.adapter.options.runtimeHelp=async()=>{
+  let queried=false, helpOptions;
+  f.adapter.options.runtimeHelp=async(_command,_env,options)=>{
+    helpOptions=options;
     await new Promise(resolve=>setImmediate(resolve));
     queried=true;
     return ' --model MODEL --effort EFFORT ';
@@ -175,9 +245,10 @@ test('launch awaits runtime help and classifies invalid launch arguments as a la
     {sessionGroup:null,runId:'r',sessionMode:'invalid'},
     {sessionGroup:'group',runId:'r',sessionMode:'single'},
   ]){
-    queried=false;
+    queried=false; helpOptions=undefined;
     await assert.rejects(f.adapter.launch({...input,launchConfig}),{code:'LAUNCH_FAILED',cause:'error'});
     assert.equal(queried,true);
+    assert.ok(Number.isInteger(helpOptions?.timeoutMs) && helpOptions.timeoutMs > 0 && helpOptions.timeoutMs <= 10000);
   }
   f.adapter.options.runtimeHelp=()=>'';
   await assert.rejects(f.adapter.launch({sessionGroup:null,runId:'r',sessionMode:'single',launchConfig}),{code:'MODEL_CONFIG_REJECTED'});

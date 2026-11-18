@@ -267,7 +267,7 @@ export function desiredClaudeHooks({
       SubagentStart: [{ hooks: [{ ...activityHook }] }],
       SubagentStop: [{ hooks: [{ ...activityHook }] }],
     } : {}),
-    ...(stopFailureSupported ? { StopFailure: [{ hooks: [{ ...healthHook }] }] } : {}),
+    ...(stopFailureSupported ? { StopFailure: [{ hooks: [{ ...healthHook }, { ...activityHook }] }] } : {}),
     Notification: [
       {
         matcher: 'idle_prompt',

@@ -196,12 +196,13 @@ test('init hook sync generates both runtime assets idempotently without restart'
   const settingsPath = path.join(root, '.claude', 'settings.json');
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
   const userHook = { type: 'command', command: 'node /user/custom-hook.js' };
-  fs.writeFileSync(settingsPath, JSON.stringify({ model: 'user-model', hooks: { Stop: [{ hooks: [userHook] }] } }));
+  fs.writeFileSync(settingsPath, JSON.stringify({ model: 'user-model', hooks: { Stop: [{ hooks: [userHook] }], StopFailure: [{ hooks: [{ type: 'command', command: `exec node ${root}/.claude/skills/activity-monitor/scripts/hook-entry.js ${root}/.claude/skills/activity-monitor/scripts/hook-health.js`, async: false, timeout: 5 }] }] } }));
   syncRuntimeHooks({ zylosDir: root, stopFailureSupported: true, subagentHooksSupported: true, log: () => {} });
   const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
   assert.equal(settings.model, 'user-model');
   assert.ok(settings.hooks.Stop[0].hooks.some(h => h.command === userHook.command));
   assert.equal(settings.hooks.StopFailure[0].hooks[0].async, false);
+  assert.equal(settings.hooks.StopFailure[0].hooks.filter(h => /hook-activity\.js$/.test(h.command)).length, 1);
   for (const event of ['SubagentStart', 'SubagentStop']) assert.match(settings.hooks[event][0].hooks[0].command, /hook-activity\.js$/);
   for (const group of settings.hooks.SessionStart) assert.ok(group.hooks.some(hook => /hook-activity\.js$/.test(hook.command)));
   const codexPath = path.join(root, '.codex', 'hooks.json');

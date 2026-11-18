@@ -6,6 +6,12 @@ export default {
     '<rootDir>/test/mode-switch-files.integration.test.js',
     '<rootDir>/test/mode-switch-native.integration.test.js',
     '<rootDir>/test/global-memory-handover.integration.test.js',
+    ...(process.env.ZYLOS_SLOW_TESTS === '1' ? [] : ['\\.slow\\.test\\.js$']),
+    '<rootDir>/test/failure-continuation.integration.test.js',
+    '<rootDir>/test/memory-budget-browser.test.js',
+    '<rootDir>/test/memory-startup-budget.integration.test.js',
+    '<rootDir>/test/session-start-failure.integration.test.js',
+    '<rootDir>/test/upgrade-confirmation.integration.test.js',
     '<rootDir>/test/dispatcher-startup.integration.test.js',
     '<rootDir>/test/instruction-deployment.integration.test.js',
     '<rootDir>/test/init-onboarding.integration.test.js',
@@ -19,6 +25,7 @@ export default {
     '<rootDir>/test/channel-delivery.integration.test.js',
     '<rootDir>/test/channel-sync.integration.test.js',
     '<rootDir>/test/self-upgrade-private-host.integration.test.js',
+    '<rootDir>/test/require-idle-turn.integration.test.js',
     '<rootDir>/test/single-origin-activity.integration.test.js',
     '<rootDir>/test/single-origin-supervisor.integration.test.js',
     '<rootDir>/test/dashboard-demand-poll.integration.test.js',
@@ -79,6 +86,6 @@ export default {
   testMatch: [
     '<rootDir>/test/**/*.test.js',
     '<rootDir>/skills/activity-monitor/scripts/__tests__/mode-switch-admission.integration.test.js',
-    '<rootDir>/skills/activity-monitor/scripts/__tests__/mode-switch-followup.integration.test.js',
+    '<rootDir>/skills/activity-monitor/scripts/__tests__/mode-switch-followup.integration.slow.test.js',
   ],
 };

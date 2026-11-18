@@ -8,7 +8,7 @@ import { workbenchAnswer } from '../../skills/dashboard/__tests__/fixtures/workb
 // tunnel, so the real check() fails offline and its errors are swallowed.
 const root = process.env.ZYLOS_DIR;
 fs.writeFileSync(path.join(root, '.env'), 'TZ=Asia/Singapore\n');
-fs.writeFileSync(path.join(root, 'components/dashboard/config.json'), JSON.stringify({ auth: { enabled: false } }));
+fs.writeFileSync(path.join(root, 'components/dashboard/config.json'), JSON.stringify({ auth: { password: 'initial-timezone-password' } }));
 const { createServer } = await import('../../skills/dashboard/src/index.js');
 const server = createServer();
 const handler = server.listeners('request')[0];

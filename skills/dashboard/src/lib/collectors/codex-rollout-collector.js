@@ -365,6 +365,8 @@ export class CodexRolloutCollector {
     tokenDims.service_tier = serviceTier;
     tokenDims.event_id = eventId;
     tokenDims.run_id = mapping.run_id ?? null;
+    // A child runtime's sample keeps that fact after its transcript registration is pruned.
+    if (childTranscript(mapping)) tokenDims.child = true;
     tokenDims.rollout_offset = position.byteOffset ?? null;
     tokenDims.rollout_line = position.lineIndex ?? null;
 

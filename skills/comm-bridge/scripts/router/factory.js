@@ -13,6 +13,7 @@ import { formatConversation } from './format.js';
 import { resolveDashboardQuote } from '../dashboard-source.js';
 import { notifyDelivered, notifyDeliveryFailed } from './notify.js';
 import { createStatusNoticeSender } from '../c4-status-notice.js';
+import { createFailureAlertSender } from '../failure-alert.js';
 import { createPendingExpiryHandler } from './expiry.js';
 import { createRouterDiagnostics } from './diagnostics.js';
 import { createLifecycleProviders } from './lifecycle.js';
@@ -52,18 +53,31 @@ export function createDispatcher(overrides = {}, options = {}) {
       { env: systemSendEnvironment(env, { notice: true }), signal: alertController.signal, timeout: 30000, maxBuffer: 1024 * 1024 }, error => error ? reject(error) : resolve(true));
     child.stdin.on('error', reject); child.stdin.end(message + '\n');
   }));
+  // Match the existing continuation alert's lazy supervisor imports and fallback.
+  const notifyOwner = async message => {
+    const [{ SupervisorServerHealth }, { parseServerAlertTarget }] = await Promise.all([
+      import('../../../activity-monitor/scripts/supervisor-server-health.js'),
+      import('../../../activity-monitor/scripts/supervisor-server-observation.js'),
+    ]);
+    const guard = new SupervisorServerHealth({ readAlertTarget: () => parseServerAlertTarget(readConfig().alert_target), sendAlert, log });
+    await guard.notify(message);
+  };
+  const failureAlert = createFailureAlertSender({
+    db, notifyOwner, now: () => Math.floor(now() / 1000) });
+  const sendFailureAlert = (row, reason) => {
+    // No replay queue: a crash after the failure commit may lose this alert.
+    void Promise.resolve().then(() => {
+      const record = typeof row === 'number' ? db.getConversationsByRange(row, row)[0] : row;
+      if (record) return failureAlert({ ...record, reason });
+    }).catch(log);
+  };
   const alert = (event, fields) => {
     if (event !== 'continuation_start_failed') { log(`Router alert: ${event} ${JSON.stringify(fields)}`); return; }
     // Notification I/O must neither join scheduler lanes nor delay Router stop.
     void (async () => {
-      const [{ SupervisorServerHealth }, { parseServerAlertTarget }] = await Promise.all([
-        import('../../../activity-monitor/scripts/supervisor-server-health.js'),
-        import('../../../activity-monitor/scripts/supervisor-server-observation.js'),
-      ]);
-      const guard = new SupervisorServerHealth({ readAlertTarget: () => parseServerAlertTarget(readConfig().alert_target), sendAlert, log });
       const message = messageForStatus({ context: 'repeated_failure', noticeCode: 'could_not_restart',
         group: fields.sessionGroup, count: fields.failures, reason: fields.reason, others: fields.others }, readConfig().statusNotices ?? {});
-      await guard.notify(message);
+      await notifyOwner(message);
     })().catch(log);
   };
   const providers = {
@@ -71,15 +85,12 @@ export function createDispatcher(overrides = {}, options = {}) {
     listGroupTmuxSessions: () => listGroupTmuxSessions(tmux), readRuntimeHealth,
     getSessionAdapter: runtime => getSessionAdapter(runtime, { tmux }), submit,
     ...lifecycle, diagnostic, log,
-    alert,
+    alert, sendFailureAlert,
     maintainDiagnostics: diagnostics.maintain,
     ...overrides,
   };
   const sendStatusNotice = overrides.sendStatusNotice ?? createStatusNoticeSender({ db, log });
-  const handleExpired = overrides.handleExpired ?? createPendingExpiryHandler({
-    resolveSessionLaunchConfig: input => db.resolveSessionLaunchConfig(input),
-    readRuntimeHealth: providers.readRuntimeHealth, sendStatusNotice,
-  });
+  const handleExpired = overrides.handleExpired ?? createPendingExpiryHandler({ sendFailureAlert });
   let router;
   const delivery = createDelivery({ ...providers, getSessionMode: () => router.state.mode,
     getSessionKeyPresent: () => router.state.keyPresent,

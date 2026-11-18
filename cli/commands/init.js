@@ -27,8 +27,10 @@ import { parse as parseDotEnv } from 'dotenv';
 import { parse as parseToml } from 'smol-toml';
 import { createRequire } from 'node:module';
 import { execSync, execFileSync, spawnSync, spawn } from 'node:child_process';
-import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, readZylosConfigOrThrow, readSessionMode, updateZylosConfigLocked } from '../lib/config.js';
+import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, CLAUDE_CREDENTIAL_KEYS, getZylosConfig, readZylosConfigOrThrow, readSessionMode, updateZylosConfigLocked } from '../lib/config.js';
 import { writeEnvFile } from '../lib/env.js';
+import { claudeProbeEnvironment, readLaunchDotenv } from '../lib/runtime/session-command.js';
+import { parseClaudeAuthStatus } from '../lib/auth-parsers.js';
 import { writePrivateFile } from '../lib/private-file.js';
 import { generateManifest, saveMergeBaseline } from '../lib/manifest.js';
 import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.js';
@@ -51,7 +53,6 @@ import {
   installGlobalPackage,
   installCodex,
   installClaude,
-  isClaudeAuthenticated,
   isCodexAuthenticated,
   isValidBaseUrl,
   approveApiKey,
@@ -1676,16 +1677,30 @@ export function resolveInitBaseUrl(opts, runtime, { zylosDir = ZYLOS_DIR, home =
   if (runtime === 'codex' && opts.codexBaseUrl === null) opts.codexBaseUrl = savedInitBaseUrl('codex', { zylosDir, home });
 }
 
-/**
- * Fill in options from environment variables where CLI flags were not provided.
- * Resolution: CLI flag > env var > existing config > interactive prompt.
- *
- * @param {object} opts - Parsed CLI options (mutated in place)
- */
-export function resolveFromEnv(opts, { authenticated = () => commandExists('claude') && isClaudeAuthenticated() } = {}) {
+/** Check the credentials a new session would use, without validating their value. */
+export function isInitClaudeAuthenticated({ root = ZYLOS_DIR, env = process.env, spawn = spawnSync } = {}) {
+  const probeEnv = claudeProbeEnvironment(root, env);
+  if (CLAUDE_CREDENTIAL_KEYS.some(key => probeEnv[key])) return true;
+  try {
+    return parseClaudeAuthStatus(spawn('claude', ['auth', 'status', '--json'], {
+      env: probeEnv, stdio: 'pipe', encoding: 'utf8', timeout: 10000,
+    }).stdout);
+  } catch { return false; }
+}
+
+/** Fill missing CLI options from ambient inputs, preserving saved Claude credentials. */
+export function resolveFromEnv(opts, { root = ZYLOS_DIR,
+  authenticated = () => commandExists('claude') && isInitClaudeAuthenticated({ root }), log = console.log } = {}) {
   // An explicit Claude credential selects its kind and overrides ambient auth variables.
   // Preserve an existing login when credential variables are merely ambient.
   const hasCliAuth = opts.setupToken != null || opts.apiKey != null || opts.authToken != null;
+  if (!hasCliAuth) {
+    const saved = readLaunchDotenv(root);
+    if (CLAUDE_CREDENTIAL_KEYS.some(key => saved[key])
+        && CLAUDE_CREDENTIAL_KEYS.some(key => process.env[key] && process.env[key] !== saved[key])) {
+      log('Claude credentials from environment variables were not adopted: .env already has credentials. Use --api-key/--auth-token or edit .env to replace them.');
+    }
+  }
   if (!hasCliAuth && !authenticated()) {
     // Keep the existing OAuth environment priority; never infer a relay header kind.
     if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
@@ -1887,7 +1902,7 @@ export function consumeInitAuthenticationResult(authentication, exitCode = 0) {
 /** The selected runtime's real authentication step, before post-template persistence. */
 export async function runInitAuthentication(opts, {
   runtime: selectedRuntime, skipConfirm = false, quiet = false,
-  exists = commandExists, claudeStatus = isClaudeAuthenticated, codexStatus = isCodexAuthenticated,
+  exists = commandExists, claudeStatus = isInitClaudeAuthenticated, codexStatus = isCodexAuthenticated,
   authClaude = authenticateClaudeApiCredential, authCodex = authenticateCodexApiCredential,
   choose = promptChoice, secret = promptSecret, promptClaude = promptClaudeApiCredential,
   resolveBase = resolveInitBaseUrl, validate = validateInitOptions,
@@ -2160,6 +2175,7 @@ Usage: zylos init [options]
 Options:
   --upstream-config <source>  Local file, HTTPS profile URL, or direct (this run only)
   Source priority: CLI > environment > saved > direct.
+  Claude credential exception: environment variables do not override credentials already in .env.
   Save a default explicitly: zylos upstream set <source>; remove it: zylos upstream clear.
   -y, --yes                  Force non-interactive mode (even with a TTY)
   -q, --quiet                Minimal output
@@ -2192,6 +2208,7 @@ Environment variables:
   OPENAI_API_KEY (or CODEX_API_KEY), ZYLOS_DOMAIN, ZYLOS_PROTOCOL
 
   Resolution: CLI flag > env var > .env/config.json > interactive prompt
+  Claude credential exception: environment variables do not override credentials already in .env.
 
 Note: --setup-token, --api-key and --auth-token are mutually exclusive.
   Official Anthropic API keys require sk-ant-; custom endpoints accept other formats.

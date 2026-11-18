@@ -27,7 +27,8 @@ import { pathToFileURL } from 'node:url';
 export const DEFAULT_SHARD_BUDGET = Object.freeze({ maxChars: 10_000, maxTokens: 2_200 });
 export const COMPONENT_ORDER_MIN = 10;
 
-const SHARD_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+export const MAX_SHARD_NAME_LENGTH = 32;
+const SHARD_NAME_RE = new RegExp(`^[a-z0-9][a-z0-9_-]{0,${MAX_SHARD_NAME_LENGTH - 1}}$`);
 
 export const SIDE_EFFECT_NAMES = Object.freeze({
   foreground: 'fg',

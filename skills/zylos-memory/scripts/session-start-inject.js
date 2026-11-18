@@ -6,6 +6,8 @@
  */
 
 import fs from 'fs';
+import { MEMORY_PARTS } from './memory-budget.js';
+export { MEMORY_PARTS } from './memory-budget.js';
 import path from 'path';
 import { isMainModule } from './is-main-module.js';
 import { MEMORY_DIR } from './shared.js';
@@ -50,11 +52,6 @@ function section(label, filePath) {
   const content = result.ok ? (result.content || '') : `(${result.reason})`;
   return formatSection(label, content);
 }
-
-export const MEMORY_PARTS = Object.freeze({
-  identity: Object.freeze({ label: 'BOT IDENTITY', file: 'identity.md' }),
-  references: Object.freeze({ label: 'REFERENCES', file: 'references.md' }),
-});
 
 /**
  * Emit a single memory section. Used by the session-start shard orchestrator

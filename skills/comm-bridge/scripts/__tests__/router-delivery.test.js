@@ -206,6 +206,25 @@ test('Enter failure increments retry, invalid keystroke rejected; valid keystrok
   assert.equal(bad.status, 'pending'); assert.equal(good.status, 'done');
 });
 
+test('exhausted unverified Enter preserves uncertainty in the failure reason', async t => {
+  const f = setup(t), row = f.message();
+  f.adapter.sendKeys = async () => { throw error('ENTER_UNVERIFIED'); };
+  const alerts = [];
+  f.deps.sendFailureAlert = (failed, reason) => alerts.push({ id: failed.id, reason });
+  const delivery = f.create();
+  await delivery.deliverConversation(row);
+  assert.equal(f.row(row.id).status, 'pending');
+  assert.deepEqual(alerts, []);
+  assert.equal(f.store.claimConversation(row.id), true);
+  await delivery.deliverConversation(row);
+  assert.equal(f.row(row.id).status, 'failed');
+  assert.deepEqual(alerts, [{ id: row.id, reason: 'delivery_unverified' }]);
+  const failed = f.row(row.id);
+  assert.equal(failed.delivery_action, 'delivery_unverified');
+  const { messageForFailureReceipt } = await import('../failure-receipt-template.js');
+  assert.match(messageForFailureReceipt({ ...failed, reason: failed.delivery_action }, {}), /未能确认送达/);
+});
+
 test('normal active heartbeat autoacks, recovery and post_restart reach runtime', async t => {
   for (const phase of ['normal', 'recovery', 'post_restart']) await t.test(phase, async t => {
     const f = setup(t); f.state.active_tools = 1; const row = f.control(`Heartbeat check [phase=${phase}] ---- ack via: safe`, { bypass_state: 1 });
@@ -733,4 +752,27 @@ test('terminal transport failure after paste does not notify delivery recovery',
   assert.equal(f.row(row.id).status, 'failed');
   assert.equal(f.row(row.id).retry_count, 2);
   assert.deepEqual(notifications, []);
+});
+
+// Boundary: bound idle Continue content and AM cancellation → existing executor.
+// Run for Continue delivery changes; injected terminal, no live tmux/runtime.
+test('bound idle Continue is exact, respects persisted cancellation and retries a pre-paste error',async t=>{
+ for(const scenario of ['deliver','cancelled','prepaste_error'])await t.test(scenario,async t=>{
+  const f=setup(t);f.target.runtime='claude';
+  const binding={expectedRunId:'r1',expectedSessionId:'s1',tmuxTarget:{serverGeneration:'1:1',sessionId:'$1',paneId:'%1'}};
+  const row=f.control('Continue',{target_binding:JSON.stringify(binding),require_idle:1});
+  let fail=scenario==='prepaste_error';
+  f.db.getControlById=()=>{if(fail){fail=false;throw error('ECONNRESET');}return row;};
+  if(scenario==='cancelled')row.status='timeout';
+  const d=f.create({idleHoldMs:0,idleWaitMs:0});t.after(()=>d.stop());
+  await d.deliverControl(row);
+  if(scenario==='prepaste_error') {
+   assert.equal(row.status,'pending');assert.equal(f.calls.filter(c=>c[0]==='paste').length,0);
+   row.status='running';await d.deliverControl(row);
+  }
+  const pastes=f.calls.filter(c=>c[0]==='paste');
+  assert.equal(pastes.length,scenario==='cancelled'?0:1);
+  if(pastes.length)assert.equal(pastes[0][1].text,'Continue');
+  assert.equal(row.status,scenario==='cancelled'?'timeout':'done');
+ });
 });

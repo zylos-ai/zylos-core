@@ -18,7 +18,7 @@ export function createPrivateFixture(t) {
     assert.equal(fs.realpathSync(env[key]), env[key]);
     assert.equal(path.dirname(env[key]), root);
   }
-  assert.ok(Buffer.byteLength(path.join(env.TMPDIR, 'tm-XXXXXX/s')) < 100, 'private tmux socket must be short');
+  assert.ok(Buffer.byteLength(path.join(env.TMPDIR, 'tm-XXXXXX', `tmux-${process.getuid()}`, 'default')) < 100, 'private tmux socket must be short');
   const remove = () => fs.rmSync(root, { recursive: true, force: true });
   // Safety fallback runs after the caller's explicit cleanup assertion.
   t.after(remove);
@@ -29,7 +29,7 @@ export async function runPrivateFixture(scope, file, args = [], { nodeTest = fal
   const { env } = scope;
   console.log('private fixture isolation', JSON.stringify({ file, HOME: env.HOME, ZYLOS_DIR: env.ZYLOS_DIR,
     PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR, TMUX_TMPDIR: env.TMUX_TMPDIR,
-    socket: path.join(env.TMPDIR, 'tm-XXXXXX/s'),
+    socket: path.join(env.TMPDIR, 'tm-XXXXXX', `tmux-${process.getuid()}`, 'default'),
     database: path.join(env.ZYLOS_DIR, 'comm-bridge/c4.db'), pm2: 'not started' }));
   const child = spawn(process.execPath, [...(nodeTest ? ['--test', '--test-reporter=tap'] : []), file, ...args], {
     env, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'],
@@ -70,7 +70,7 @@ export function stopPrivateTmux({ env }) {
   const names = fs.readdirSync(env.TMPDIR).filter(name => name.startsWith('tm-'));
   assert.ok(names.length <= 1, 'the boundary fixture owns one tmux server');
   for (const name of names) {
-    try { execFileSync(env.TEST_TMUX_BIN || 'tmux', ['-S', path.join(env.TMPDIR, name, 's'), 'kill-server'], {
+    try { execFileSync(env.TEST_TMUX_BIN || 'tmux', ['-S', path.join(env.TMPDIR, name, `tmux-${process.getuid()}`, 'default'), 'kill-server'], {
       env, timeout: 1000, stdio: 'ignore',
     }); } catch (error) { if (error.status !== 1) throw error; }
   }

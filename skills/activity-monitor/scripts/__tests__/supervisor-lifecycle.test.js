@@ -21,6 +21,8 @@ const scene = (sessionGroup = 'a', extra = {}) => ({ sessionGroup, present: true
   runId: `run-${sessionGroup}`, runtime: 'claude', sessionId: 'session-1', createdAt: 0,
   processRunning: true, state: 'idle', idleSince: 0, runDir: '/isolated/run',
   launchConfig: { runtime: 'claude', mode: 'default' }, ...extra });
+// Above the default Sync threshold of 15, so a reclaim prepares a Sync.
+const SYNC_DUE = 16;
 function fixture(Class = SupervisorLifecycle) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lifecycle-')); fixtureRoots.push(root);
   const env = { ...process.env, HOME: path.join(root, 'home'), ZYLOS_DIR: path.join(root, 'z'),
@@ -214,7 +216,7 @@ test('ordinary final in-flight race records cancellation before cleanup and rema
 // reclaim-policy: TTL preparation is cancellable; all real terminal statuses recheck.
 test('TTL preparation cancels on new messages or replaced run without fencing', async () => {
   for (const change of ['message', 'replacement']) {
-    const f = fixture(); f.unsummarized = 2;
+    const f = fixture(); f.unsummarized = SYNC_DUE;
     await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
     assert.deepEqual(f.controls.map(control => control.content), ['check', 'prepare']);
     for (const control of f.controls) { assert.equal(control.requireIdle, true); assert.equal(control.appendAckSuffix, true); }
@@ -235,7 +237,7 @@ test('TTL preparation accepts terminal outcomes only after idle and same-run che
 });
 test('completed TTL preparation waits through busy activity and idle confirmation without another Sync', async () => {
   for (const status of ['done', 'timeout', 'superseded', 'failed', 'cancelled']) {
-    const f = fixture(); f.unsummarized = 1;
+    const f = fixture(); f.unsummarized = SYNC_DUE;
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     const preparation = f.lifecycle.ttlPreparation.get('a');
     f.publishSyncFacts(); f.settle(status); f.scenes[0].state = 'busy';
@@ -266,7 +268,7 @@ test('completed TTL preparation waits through busy activity and idle confirmatio
 });
 test('new C4 activity or a replacement run cancels completed TTL preparation while busy', async () => {
   for (const change of ['message', 'replacement']) {
-    const f = fixture(); f.unsummarized = 1;
+    const f = fixture(); f.unsummarized = SYNC_DUE;
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     f.settle(); f.scenes[0].state = 'busy';
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
@@ -283,7 +285,7 @@ test('new C4 activity or a replacement run cancels completed TTL preparation whi
 test('completed TTL preparation waits for every held Sync marker to release', async () => {
   for (const group of ['a', 'origin']) {
     for (const heldKind of group === 'origin' ? ['group', 'origin'] : ['group']) {
-      const f = fixture(); f.scenes = [scene(group)]; f.unsummarized = 1;
+      const f = fixture(); f.scenes = [scene(group)]; f.unsummarized = SYNC_DUE;
       await f.lifecycle.checkTtl(f.scenes[0], f.context);
       const preparation = f.lifecycle.ttlPreparation.get(group);
       f.publishSyncFacts(); f.settle();
@@ -369,7 +371,7 @@ test('stopped child permits eviction at the minimum idle boundary before hot TTL
   assert.deepEqual(f.stops, ['run-a']); assert.equal(f.fences.size, 0);
 });
 test('pre-reclaim child activity retains completed preparation until child and main agent are idle', async () => {
-  const f = fixture(); f.unsummarized = 1;
+  const f = fixture(); f.unsummarized = SYNC_DUE;
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   const preparation = f.lifecycle.ttlPreparation.get('a');
   f.publishSyncFacts(); f.settle();
@@ -397,7 +399,7 @@ test('pre-reclaim child activity retains completed preparation until child and m
 });
 test('preparing Sync child starting after the TTL fence delays stop without resetting preparation', async () => {
   for (const phase of ['sample', 'final']) {
-    const f = fixture(); f.unsummarized = 1;
+    const f = fixture(); f.unsummarized = SYNC_DUE;
     await f.lifecycle.checkTtl(f.scenes[0], f.context); f.publishSyncFacts(); f.settle();
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     const preparation = f.lifecycle.ttlPreparation.get('a'), fence = f.fences.get('a');
@@ -416,7 +418,7 @@ test('preparing Sync child starting after the TTL fence delays stop without rese
 });
 test('new C4 or replacement still cancels preparation while its child is active', async () => {
   for (const change of ['message', 'replacement']) {
-    const f = fixture(); f.unsummarized = 1;
+    const f = fixture(); f.unsummarized = SYNC_DUE;
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     f.settle(); f.now++;
     f.scenes[0].activeSubagents = [{ agentId: 'sync-child', lastActivityAt: f.now }];
@@ -511,7 +513,7 @@ test('Origin idle TTL without backlog writes only the check control, then fences
   assert.equal(single.controls.length, 0); assert.equal(single.fences.size, 0);
 });
 test('Origin TTL waits every preparation control and binds both Sync kinds to the same run', async () => {
-  for (const summarized of [0, 2]) {
+  for (const summarized of [0, SYNC_DUE]) {
     const f = fixture(); f.scenes = [scene('origin')]; f.unsummarized = summarized;
     f.backlog = { total: 1, groups: [{ count: 1, pendingCheckpoints: 0 }] };
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
@@ -538,7 +540,7 @@ test('Origin pending checkpoints alone require pre-reclaim Origin Sync', async (
   assert.deepEqual(f.controls.map(control => control.content), ['check', 'prepare origin']); assert.equal(f.fences.size, 0);
 });
 test('partial Origin TTL preparation retries remaining Sync after all saved controls terminate', async () => {
-  const f = fixture(); f.scenes = [scene('origin')]; f.unsummarized = 1;
+  const f = fixture(); f.scenes = [scene('origin')]; f.unsummarized = SYNC_DUE;
   f.backlog = { total: 1, groups: [{ count: 1 }] };
   let binds = 0;
   f.deps.bindTarget = current => {
@@ -559,7 +561,7 @@ test('partial Origin TTL preparation retries remaining Sync after all saved cont
   await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.get('origin')?.reason, 'ttl');
 });
 test('pre-reclaim database failure leaves preparation unsaved and retries from current backlog', async () => {
-  const f = fixture(); f.scenes = [scene('origin')]; f.unsummarized = 1;
+  const f = fixture(); f.scenes = [scene('origin')]; f.unsummarized = SYNC_DUE;
   f.backlog = { total: 1, groups: [{ count: 1 }] };
   const insert = f.db.insertControl;
   f.db.insertControl = (content, options) => { if (content === 'prepare origin') throw new Error('database unavailable'); return insert(content, options); };
@@ -597,7 +599,7 @@ test('recent session activity prevents TTL preparation during an idle tool gap',
   assert.equal(f.lifecycle.ttlPreparation.size, 0);
 });
 test('old C4 and session activity still prepare and reclaim after TTL', async () => {
-  const f = fixture(); f.unsummarized = 1;
+  const f = fixture(); f.unsummarized = SYNC_DUE;
   f.lastActivity = f.now - 1800001; f.scenes[0].lastActivityAt = f.lastActivity;
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   assert.deepEqual(f.controls.map(control => control.content), ['check', 'prepare']);
@@ -619,7 +621,7 @@ test('missing or non-finite session activity preserves existing TTL eligibility'
 });
 test('pre-reclaim Sync activity retains preparation and reclaims the same idle run', async () => {
   for (const offset of [0, 5000]) {
-    const f = fixture(); f.unsummarized = 1;
+    const f = fixture(); f.unsummarized = SYNC_DUE;
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     const preparation = f.lifecycle.ttlPreparation.get('a');
     f.now += 10000;
@@ -639,7 +641,7 @@ test('pre-reclaim Sync activity retains preparation and reclaims the same idle r
   }
 });
 test('new C4 activity still cancels preparation after pre-reclaim Sync activity', async () => {
-  const f = fixture(); f.unsummarized = 1;
+  const f = fixture(); f.unsummarized = SYNC_DUE;
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   const preparation = f.lifecycle.ttlPreparation.get('a');
   f.now += 10000; f.scenes[0].lastActivityAt = preparation.at + 5000;
@@ -754,10 +756,9 @@ test('configuration compares full input and never fabricates missing snapshot', 
   f.expected = { ...f.scenes[0].launchConfig }; f.now += 300001;
   await f.lifecycle.reconcileConfiguration(f.context); assert.equal(f.controls.length, 1);
 });
-// trigger conditions: count>0, per-scope marker, minimum interval, Origin checkpoint age.
-test('regular Sync new-run request obeys held marker and minimum interval', async () => {
-  const f = fixture(); f.unsummarized = 1; f.marker = { held: true, stale: false };
-  f.db.listRunEndings = () => [{ sessionGroup: 'a', endedAt: 1000 }];
+// trigger conditions: backlog above threshold, per-scope marker, minimum interval, Origin checkpoint age.
+test('regular Sync obeys held marker and minimum interval across a run replacement', async () => {
+  const f = fixture(); f.unsummarized = SYNC_DUE; f.marker = { held: true, stale: false };
   await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(f.controls.length, 0);
   f.marker.stale = true; f.now += 60000; await f.lifecycle.checkSync(f.scenes, f.context);
   assert.equal(f.controls.length, 1); assert.equal(f.controls[0].priority, 2); assert.equal(f.controls[0].appendAckSuffix, false);
@@ -1254,7 +1255,7 @@ test('rotation binds ordinary, Origin and single prompts to the observed run', a
 test('rejected runtime bindings leave rotation and TTL retryable on the next round', async () => {
   for (const method of ['checkRotation', 'checkTtl']) {
     const f = fixture(), reported = [];
-    f.unsummarized = 2; f.scenes[0].usagePercent = 90;
+    f.unsummarized = SYNC_DUE; f.scenes[0].usagePercent = 90;
     f.deps.reportError = cause => reported.push(cause.code);
     f.deps.bindTarget = () => { throw Object.assign(new Error('not ready'), { code: 'TARGET_NOT_READY' }); };
     await f.lifecycle.each(f.scenes, s => f.lifecycle[method](s, f.context));
@@ -1289,7 +1290,7 @@ test('persisted lifecycle prompts reject replacement runs and never count as Ori
   for (const producer of ['ttl', 'rotation']) await t.test(producer, async t => {
     const c4 = c4Fixture(t), f = fixture();
     const group = producer === 'ttl' ? 'a' : 'origin';
-    f.scenes = [scene(group, { usagePercent: 90 })]; f.unsummarized = 2;
+    f.scenes = [scene(group, { usagePercent: 90 })]; f.unsummarized = SYNC_DUE;
     const tmuxTarget = { serverGeneration: '1:1', sessionId: '$1', paneId: '%1' };
     f.deps.bindTarget = s => ({ expectedRunId: s.runId, tmuxTarget });
     f.db.insertControl = (...args) => c4.store.insertControl(...args);
@@ -1459,7 +1460,7 @@ test('two concurrent model windows rotate independently and a setting change aff
   assert.deepEqual(f.controls.map(row => row.sessionGroup), ['large', 'small']);
 });
 
-test('early sync follows the same actual model threshold after instance defaults change', async () => {
+test('context usage past 80% of the actual model threshold does not request Sync below the backlog threshold', async () => {
   const f=fixture();
   f.context.configuration.rotationPolicy={model_rotation_thresholds:{claude:{sonnet:70,'opus[1m]':40}}};
   f.context.configuration.defaultModels={claude:'haiku'};
@@ -1467,11 +1468,8 @@ test('early sync follows the same actual model threshold after instance defaults
   const large=scene('large',{model:'claude-opus-4-6',contextWindow:1000000,usagePercent:40});
   f.scenes=[small,large];
   const range={count:1,firstAt:f.now,firstConversationId:1,nonempty:true};
-  for(const item of [small,large]){
-    f.lifecycle.syncRuns.set(JSON.stringify(['group',item.sessionGroup]),item.runId);
-    await f.lifecycle.syncScope(item,'group',range,f.context);
-  }
-  assert.deepEqual(f.controls.map(row=>row.sessionGroup),['large']);
+  for(const item of [small,large]) await f.lifecycle.syncScope(item,'group',range,f.context);
+  assert.deepEqual(f.controls,[]);
 });
 
 test('rotation uses an alias threshold only for sessions launched through that alias', async () => {
@@ -2011,7 +2009,7 @@ test('release intent suppresses expired TTL preparation controls', async () => {
  assert.deepEqual(ordinary.controls.map(row => row.content), ['check']);
 });
 test('closed turn waiting for release Sync suppresses expired TTL preparation', async () => {
- const f = fixture(); f.scenes[0].turnOpen = false; f.unsummarized = 1;
+ const f = fixture(); f.scenes[0].turnOpen = false; f.unsummarized = SYNC_DUE;
  f.context.configuration.hotTtlSeconds = 1;
  await f.lifecycle.requestRelease(f.scenes[0], f.context);
  await f.lifecycle.advanceReleases(f.context);
@@ -2043,7 +2041,7 @@ test('open turn release intent permits normal TTL preparation and completes as t
  }
 });
 test('active children prevent release Sync insertion for unsummarized work', async () => {
- const f = fixture(); f.unsummarized = 1;
+ const f = fixture(); f.unsummarized = SYNC_DUE;
  f.scenes[0].activeSubagents = [{ lastActivityAt: f.now }];
  await f.lifecycle.requestRelease(f.scenes[0], f.context);
  await f.lifecycle.advanceReleases(f.context);
@@ -2057,7 +2055,7 @@ test('active children prevent release Sync insertion for unsummarized work', asy
 });
 test('release waits bound check then Sync controls and their tail',async()=>{
  for(const group of ['a','origin']){
-  const f=fixture();f.scenes=[scene(group)];f.unsummarized=1;if(group==='origin')f.backlog={total:0,groups:[{pendingCheckpoints:1}]};
+  const f=fixture();f.scenes=[scene(group)];f.unsummarized = SYNC_DUE;if(group==='origin')f.backlog={total:0,groups:[{pendingCheckpoints:1}]};
   await f.lifecycle.requestRelease(f.scenes[0],f.context);await f.lifecycle.advanceReleases(f.context);
   assert.deepEqual(f.controls.map(c=>c.content),group==='origin'?['check','prepare','prepare origin']:['check','prepare']);
   assert.equal(f.fences.size,0);
@@ -2183,7 +2181,7 @@ for(const runtime of ['claude','codex'])test(`work delivered before a quiet gap 
   const f=fixture();f.scenes[0].runtime=runtime;
   activity.consume([row('prompt',6000),row('pre_tool',6500),row('post_tool',7000)]);
   activity.read(7500);const quiet=activity.read(11000);
-  assert.equal(quiet.state,'idle');assert.equal(quiet.turnOpen,true);assert.equal(quiet.busySince,6000);
+  assert.equal(quiet.state,'busy');assert.equal(quiet.turnOpen,true);assert.equal(quiet.busySince,6000);
   await f.lifecycle.workDelivered({sessionGroup:'a',runId:'run-a',pastedAt:6200,conversationId:1});
   if(duringTool)activity.consume([row('pre_tool',12000,'request')]);
   f.now=duringTool?12500:11000;Object.assign(f.scenes[0],activity.read(f.now));
@@ -2195,7 +2193,7 @@ for(const runtime of ['claude','codex'])test(`work delivered before a quiet gap 
  }
 });
 
-for(const runtime of ['claude','codex'])test(`release waits through an idle-confirmed final ${runtime} reply until the turn closes`,async t=>{
+for(const runtime of ['claude','codex'])test(`release waits through a quiet final ${runtime} reply until the turn closes`,async t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'release-reply-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const activity=new SessionActivity({runDir:root,runId:'run-a',sessionId:'session-1',runtime,startedAt:0});t.after(()=>activity.close());
  const row=(event,ts)=>({run_id:'run-a',session_id:'session-1',runtime,event,ts,tool_use_id:'request'});
@@ -2206,11 +2204,11 @@ for(const runtime of ['claude','codex'])test(`release waits through an idle-conf
  activity.consume([row('post_tool',12600)]);
  for(const now of [15700,18800]){
   f.now=now;Object.assign(f.scenes[0],activity.read(now));
-  assert.equal(f.scenes[0].state,'idle');assert.equal(f.scenes[0].turnOpen,true);
+  assert.equal(f.scenes[0].state,'busy');assert.equal(f.scenes[0].turnOpen,true);
   await f.lifecycle.advanceReleases(f.context);
   assert.equal(f.fences.size,0);assert.equal(f.controls.length,0);assert.equal(f.lifecycle.releasePreparation.size,1);
  }
- assert.equal(await f.lifecycle.idle(f.scenes[0],f.context),true,'ordinary idle remains unchanged for other reclaim reasons');
+ assert.equal(await f.lifecycle.idle(f.scenes[0],f.context),false,'an unfinished turn also blocks ordinary idle reclaim');
  activity.consume([row('stop',19000)]);Object.assign(f.scenes[0],activity.read(19000));
  f.now=22001;Object.assign(f.scenes[0],activity.read(f.now));await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);
  f.now=25001;Object.assign(f.scenes[0],activity.read(f.now));assert.equal(f.scenes[0].turnOpen,false);
@@ -2219,7 +2217,7 @@ for(const runtime of ['claude','codex'])test(`release waits through an idle-conf
 });
 
 test('release check deferral cancels preparation and reuses TTL reset and consecutive history', async () => {
- for (const group of ['a', 'origin']) for (const unsummarized of [0, 1]) {
+ for (const group of ['a', 'origin']) for (const unsummarized of [0, SYNC_DUE]) {
   const f = fixture(); f.scenes = [scene(group)]; f.unsummarized = unsummarized;
   await f.lifecycle.requestRelease(f.scenes[0], f.context);
   await f.lifecycle.advanceReleases(f.context);
@@ -2240,7 +2238,7 @@ test('release check deferral cancels preparation and reuses TTL reset and consec
 
 for (const route of ['ttl', 'release']) {
   test(`${route} unavailable checkpoint evidence blocks Sync dispatch without guessing success`, async () => {
-    const f = fixture(); f.unsummarized = 1;
+    const f = fixture(); f.unsummarized = SYNC_DUE;
     f.db.getLatestContentCheckpoint = () => { throw new Error('checkpoint evidence unavailable'); };
     const preparation = { controlIds: [] };
     const dispatch = route === 'ttl'

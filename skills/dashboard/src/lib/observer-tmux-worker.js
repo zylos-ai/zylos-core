@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { tmuxClientArgs } from '../../../comm-bridge/scripts/tmux-client-args.js';
 import { constants, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,7 +53,7 @@ async function startPrivateServer(state, env) {
   const gate = 'permit=$1; cancelled=$2; shift 2; while [ ! -f "$permit" ]; do [ ! -e "$cancelled" ] || exit 0; sleep 0.05; done; [ ! -e "$cancelled" ] || exit 0; exec "$@"';
   const child = spawn('/bin/sh', ['-c', gate, 'observer-tmux-server',
     path.join(state.root, 'starting', 'server-permit.json'), path.join(state.root, 'recovery.json'),
-    state.tmuxPath, '-D', '-S', state.outerSocket, '-f', state.tmuxConfig], {
+    state.tmuxPath, '-D', ...tmuxClientArgs({ socketPath: state.outerSocket, utf8: false }), '-f', state.tmuxConfig], {
     stdio: 'ignore', env,
   });
   await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
@@ -148,7 +149,7 @@ export async function runStartupWorker(root, { exec = command, probe = (active) 
         return true;
       });
     }
-    await run(state.tmuxPath, [...(state.startupRecovery === 1 ? outerArgs(state) : ['-S', state.outerSocket, '-f', state.tmuxConfig]),
+    await run(state.tmuxPath, [...(state.startupRecovery === 1 ? outerArgs(state) : [...tmuxClientArgs({ socketPath: state.outerSocket, utf8: false }), '-f', state.tmuxConfig]),
       'new-session', '-d', '-s', 'observer', '-n', 'client', '-x', String(initialSize.cols), '-y', String(initialSize.rows),
       '/usr/bin/env', '-u', 'TMUX', '-u', 'ZELLIJ', state.binaryPath, ...zellijArgs(state, '--new-session-with-layout', state.layoutFile, '--session', state.sessionName)], { timeout: 0 });
     receipt.sessionIssued = true;

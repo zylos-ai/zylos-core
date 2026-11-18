@@ -145,7 +145,13 @@ writer after a tool denial. The token is from `sync-lock.js acquire`, never
 from another worker. The tool infers permission from its own environment and
 the matching marker; a model-supplied group or role is not authorization.
 
-Group Sync writes only its temporary state and its guarded checkpoint/commit.
+Group and global Sync first read the entire state, in all bounded byte ranges.
+Guarded `sync-files.js prepare` chooses the mode from actual bytes: above 20480,
+`mode:"rewrite"` makes no copy and the worker creates a compact complete state;
+at or below budget, `mode:"edit"` copies the state for unique-fragment edits.
+A missing state returns STATE_MISSING and needs a complete initial document.
+Use `edit_memory` for either mode. Group Sync writes only its temporary state and
+its guarded checkpoint/commit.
 Origin Sync writes shared self files; it does not read or write group state or
 inbox. Global Sync writes global temporary state and shared self files, and
 never reads `session-groups/`. Formal state replacement, input cleanup, and
@@ -179,7 +185,16 @@ does not replace the restricted Sync tool or authorize additional Sync writes.
 ## Content and formats
 
 Keep only current focus, active work, pending items, and commitments in state.
-There is no state length budget. Never summarize away or drop pending absorbed
+Target the 20 KiB soft state budget (STATE_BUDGET_BYTES in sync-files.js).
+Remove completed and superseded entries this round, including old ones found
+in the mandatory full state read. Rewrite mode compacts the whole document;
+edit mode changes only necessary fragments. Update a changed status in its
+original entry, never append a conflicting second status for the same work.
+Before removing each completed or superseded item, include one result line in
+this round’s checkpoint summary. In group Sync, Origin Sync records that result
+on its project page; group Sync never writes shared reference files. In single
+global Sync, write the result to its project page yourself before checkpoint. Commit reports published bytes
+and an over-budget flag without blocking publication. Never summarize away or drop pending absorbed
 messages to make the file smaller; commit preserves their exact remaining lines.
 Use the state header and four sections in [state format](references/state-format.md).
 Use [inbox format](references/inbox-format.md) and [session log format](references/session-log-format.md)
@@ -200,8 +215,15 @@ Shared knowledge classification:
 Read an existing target before generating its replacement fragment. Check
 references for duplicated configuration values or narrative history; move the
 information into an allowed topic file and replace it with a pointer. `identity.md`
-and `references.md` each have a separate 16 KiB budget. `references.md` has an
-8 KiB warning threshold; audit it on the next Memory Sync when it exceeds that threshold.
+and `references.md` each have the same startup display limits across all runtimes:
+check both characters and estimated tokens after reserving the worst-case startup
+framing. Agents: run
+`node ~/zylos/.claude/skills/zylos-memory/scripts/memory-status.js` after editing
+these files and during the shared-file Sync audit; include their `WARN` or `OVER`
+results in the Sync report. Components: call `measureMemoryText(file, candidateText)`
+through the [candidate-text budget API](references/memory-budget.md) before a write.
+Do not copy its estimator or limits. At 80% of either dimension, audit the file on
+the next Memory Sync. Do not send extra owner/system alerts or block writes.
 `reference/projects/INDEX.md` and `reference/decisions/INDEX.md` each have a
 16 KiB warning threshold and 32 KiB budget. These indexes are optional until
 created: `memory-status.js` prints `not created yet` without a missing-file

@@ -51,7 +51,6 @@ function fixture(t, config = {}) {
       assert.equal(Object.hasOwn(options,'deadlineAt'),false);
       return { ok: true, data: { result: 'exit_enqueued' } };
     },
-    audit: () => { calls.push('audit'); return []; },
   };
   return { ctx, deps, calls, configFile, read: () => JSON.parse(fs.readFileSync(configFile, 'utf8')) };
 }
@@ -201,7 +200,7 @@ test('caller uses the configured lock window and continues finalization', async 
   assert.equal(f.calls.includes('start'),true);
 });
 
-test('transition read uses ordinary DB limits before restart and audit', async t => {
+test('transition read uses ordinary DB limits before restart', async t => {
   const f = fixture(t);
   let readFinished = false;
   f.deps.readMode = () => ({ mode: 'single', keyPresent: true });
@@ -214,35 +213,17 @@ test('transition read uses ordinary DB limits before restart and audit', async t
   assert.equal(readFinished, true);
   assert.equal(result.success, true);
   assert.equal(result.completion.sessionRestart, 'single_exit_enqueued');
-  assert.equal(result.checkpointAudit.state, 'complete');
   assert.equal(f.calls.includes('restart'), true);
-  assert.equal(f.calls.includes('audit'), true);
-});
-
-test('controlled audit returns the actual findings after restart submission', async t => {
-  const f = fixture(t);
-  const findings = [{ code: 'CHECKPOINT_WARNING' }];
-  f.deps.audit = (...args) => {
-    assert.deepEqual(args, []);
-    return findings;
-  };
-  const result = await completeUpgradeFinalization(f.ctx, f.deps);
-  assert.equal(result.success, true);
-  assert.deepEqual(result.checkpointAudit, { state: 'complete', items: findings });
 });
 
 for (const read of ['readMode', 'readTransition']) {
-  for (const code of ['DB_BUSY', 'READ_FAILED']) test(`${read} ${code} prevents restart fallback and audit error stays incomplete`, async t => {
+  for (const code of ['DB_BUSY', 'READ_FAILED']) test(`${read} ${code} prevents restart fallback`, async t => {
     const f = fixture(t);
     f.deps[read] = () => { throw Object.assign(Error(`${read} ${code}`), { code }); };
-    f.deps.audit = () => { throw Object.assign(Error(`audit ${code}`), { code }); };
     const result = await completeUpgradeFinalization(f.ctx, f.deps);
     assert.equal(result.success, true);
     assert.equal(result.completion.sessionRestart, 'manual_required');
     assert.equal(result.sessionRestart.error.code, code);
     assert.equal(f.calls.includes('restart'), false);
-    assert.equal(result.checkpointAudit.state, 'incomplete');
-    assert.match(result.checkpointAudit.error, new RegExp(code));
-    assert.equal(Object.hasOwn(result.checkpointAudit, 'items'), false);
   });
 }

@@ -13,7 +13,6 @@ import { observeSessionTarget } from '../cli/lib/runtime/session-target.js';
 import { parseTmuxEnvironment } from '../cli/lib/runtime/tmux-protocol.js';
 import { runBeforeSendHook } from '../skills/comm-bridge/scripts/c4-channel-hooks.js';
 import { handleHookActivity } from '../skills/activity-monitor/scripts/hook-activity.js';
-import { tmuxNewSession } from '../cli/lib/runtime/tmux-helpers.js';
 
 const keys = ['ZYLOS_RUN_ID', 'ZYLOS_MODEL_CONFIG', 'ZYLOS_SESSION_GROUP'];
 const config = { runtime: 'claude', mode: 'default' };
@@ -153,16 +152,4 @@ test('external server identity collisions retain individual-read semantics', { t
   assert.equal(rows.get('absent').runtime, 'unknown');
   for (const key of keys) assert.equal(rows.get('absent').rawF2[key], '');
   t.diagnostic('batch fallbacks=1; equal/own/absent values match individual reads');
-});
-
-// Boundary: the legacy exported helper can still create a server although no
-// production caller currently uses it. Run for helper/client environment changes;
-// skip UI-only changes. Same private paths and server cleanup as the launch cases.
-test('legacy new-session helper also starts with identity-free globals', async t => {
-  const f = fixture(t);
-  await withCaller(async () => {
-    tmuxNewSession(['-S', f.socketPath, '-f', '/dev/null', 'new-session', '-d', '-s', 'keeper', 'sleep 120']);
-    const global = f.global();
-    for (const key of keys) assert.equal(Object.hasOwn(global, key), false, key);
-  });
 });

@@ -7,15 +7,10 @@ import { afterEach, describe, it } from 'node:test';
 const {
   buildCleanEnv, buildCompatEnv, parseManifest, parsePathManifest,
   parseRuntimeEnvManifest, loadRuntimeEnvManifest, deployManifestTemplate,
-  writeLaunchSpec, readAndDeleteSpec,
 } = await import('../runtime/tmux-env.js');
 
-const tmpFiles = [];
 const tmpDirs = [];
 afterEach(() => {
-  while (tmpFiles.length) {
-    try { fs.unlinkSync(tmpFiles.pop()); } catch { }
-  }
   while (tmpDirs.length) {
     try { fs.rmSync(tmpDirs.pop(), { recursive: true }); } catch { }
   }
@@ -548,23 +543,5 @@ describe('deployManifestTemplate', () => {
     tmpDirs.push(tmpDir);
     const status = deployManifestTemplate('/nonexistent/template', tmpDir);
     assert.equal(status, 'template_missing');
-  });
-});
-
-// ── writeLaunchSpec / readAndDeleteSpec ────────────────────────────────────
-
-describe('writeLaunchSpec / readAndDeleteSpec', () => {
-  it('writes 0600 file and reads it back', () => {
-    const spec = { command: 'node', args: ['test.js'], env: { FOO: 'bar' }, cwd: '/tmp' };
-    const specPath = writeLaunchSpec(spec);
-    tmpFiles.push(specPath);
-
-    const stat = fs.statSync(specPath);
-    assert.equal(stat.mode & 0o777, 0o600, 'File should have 0600 permissions');
-
-    const read = readAndDeleteSpec(specPath);
-    tmpFiles.pop(); // already deleted
-    assert.deepEqual(read, spec);
-    assert.ok(!fs.existsSync(specPath), 'File should be deleted after read');
   });
 });

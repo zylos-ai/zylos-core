@@ -7,7 +7,7 @@ import { isMainModule } from './is-main-module.js';
 const { appendEvent } = await loadCoreModule('event-log.js');
 const { runDirFromEnv, RUN_FILES, hookErrorLogPath } = await loadCoreModule('session-group-paths.js');
 
-const EVENTS = { SessionStart:'session_start', UserPromptSubmit:'prompt', PreToolUse:'pre_tool', PostToolUse:'post_tool', PostToolUseFailure:'post_tool_failure', PermissionRequest:'permission_request', Stop:'stop', Notification:'idle', SubagentStart:'subagent_start', SubagentStop:'subagent_stop' };
+const EVENTS = { SessionStart:'session_start', UserPromptSubmit:'prompt', PreToolUse:'pre_tool', PostToolUse:'post_tool', PostToolUseFailure:'post_tool_failure', PermissionRequest:'permission_request', Stop:'stop', StopFailure:'stop', Notification:'idle', SubagentStart:'subagent_start', SubagentStop:'subagent_stop' };
 const INPUT_FIELDS = { Bash:['command','description'], Read:['file_path'], Edit:['file_path'], Write:['file_path'], Skill:['skill'], Agent:['description','subagent_type'], Task:['description','subagent_type'], WebSearch:['query'], WebFetch:['url'], view_image:['path'] };
 export function selectToolInput(tool, input) {
   if (tool === 'run_command' && input && typeof input === 'object') {

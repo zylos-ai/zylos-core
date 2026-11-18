@@ -16,7 +16,7 @@ export function createLane(context, group) {
       if (!row) return null;
       if (!deps.db.expirePending(row.id, options.pendingMaxAgeSeconds)) return row;
       deps.finishDeliveryWait?.(row, 'conversation', 'expired');
-      await deps.handleExpired(row, { sessionMode: state.mode, sessionGroup: group, identity: state.live.get(group) });
+      await deps.handleExpired(row, { sessionMode: state.mode, identity: state.live.get(group) });
       if (stopped) return null;
     }
   }

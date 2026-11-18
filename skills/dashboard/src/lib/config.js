@@ -160,7 +160,6 @@ export function loadConfig({ zylosDir = getZylosDir() } = {}) {
     zylosDir,
     dataDir,
     auth: {
-      enabled: true,
       password: null,
       allowUrlTokenOnLocalhost: false
     },

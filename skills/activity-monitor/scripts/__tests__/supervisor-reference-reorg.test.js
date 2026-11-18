@@ -97,7 +97,6 @@ for (const [mode, kind, group] of [['single', 'global', null], ['single', 'origi
   test(`${label} periodic checks propose with no due Sync and deduplicate the current session`, async () => {
     const f = fixture(mode, kind);
     f.range = { count: 1, nonempty: true, firstAt: 2_000_000, firstConversationId: 1 };
-    f.lifecycle.syncRuns.set(JSON.stringify([kind, group]), f.scene.runId);
     if (kind === 'origin') {
       await f.lifecycle.checkTtl(f.scene, f.context);
       assert.deepEqual(f.controls.map(row => row.content), ['reclaim check', 'reclaim origin sync']);

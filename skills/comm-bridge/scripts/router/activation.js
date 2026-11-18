@@ -158,7 +158,7 @@ export function createActivationManager(context) {
         if (live.present) return;
       }
       runId ??= uuid();
-      const activation = { group, runId, launchConfig, startedAt: now(), message: candidate ?? null,
+      const activation = { group, runId, launchConfig, startedAt: now(), monotonicStartedAt: performance.now(), message: candidate ?? null,
         resident, slotPrior: slot?.prior, slotTaken: slot?.taken === true, launchStarted: false, launchSettled: false, launchError: null };
       state.activations.set(group, activation);
       slot = null; // The activation now owns release/convergence.
@@ -175,9 +175,10 @@ export function createActivationManager(context) {
           launchConfig, conversation_id: candidate?.id ?? null, backoffCount: state.resident.failures });
         // Publish the in-flight launch before releasing runtime admission.
         if (token && requests.get(requestRuntime) === token) requests.delete(requestRuntime);
-        await deps.getSessionAdapter(launchConfig.runtime).launch({ sessionGroup: group, runId, launchConfig, sessionMode: state.mode });
+        activation.launchTiming = (await deps.getSessionAdapter(launchConfig.runtime).launch({ sessionGroup: group, runId, launchConfig, sessionMode: state.mode }))?.launchTiming;
       } catch (error) { activation.launchError = error; }
       activation.launchSettled = true;
+      if (activation.launchError && activation.launchError.code !== 'NAME_CONFLICT') recordFailureTiming(activation);
       if (activation.launchError?.code === 'NAME_CONFLICT') {
         if (candidate) deps.db.requeueConversation(candidate.id);
         releaseSlot(activation);
@@ -225,7 +226,7 @@ export function createActivationManager(context) {
         return;
       }
       context.capacityWaits?.acquired(group);
-      activation = { group, runId, launchConfig, startedAt: now(), message: null,
+      activation = { group, runId, launchConfig, startedAt: now(), monotonicStartedAt: performance.now(), message: null,
         resident: false, continuation: true, slotTaken: true, slotPrior: slot.prior, launchStarted: false, launchSettled: false, launchError: null };
       state.activations.set(group, activation);
       slot = null; // The activation now owns release/convergence.
@@ -257,9 +258,10 @@ export function createActivationManager(context) {
         context.continuationRestarts.started(group);
         diagnostic('activate_continuation', { session_group: group, runId, runtime: launchConfig.runtime });
         if (token && requests.get(requestRuntime) === token) requests.delete(requestRuntime);
-        await deps.getSessionAdapter(launchConfig.runtime).launch({ sessionGroup: group, runId, launchConfig, sessionMode: state.mode });
+        activation.launchTiming = (await deps.getSessionAdapter(launchConfig.runtime).launch({ sessionGroup: group, runId, launchConfig, sessionMode: state.mode }))?.launchTiming;
       } catch (error) { activation.launchError = error; }
       activation.launchSettled = true;
+      if (activation.launchError && activation.launchError.code !== 'NAME_CONFLICT') recordFailureTiming(activation);
       await advance(group, { afterLaunch: true });
     } catch (error) {
       diagnostic('activate_failed', { session_group: group, reason: error.code ?? error.message });
@@ -273,6 +275,24 @@ export function createActivationManager(context) {
         releaseSlot(activation); state.activations.delete(group); context.releaseOpportunity(group);
       }
     }
+  }
+
+  function recordFailureTiming(activation) {
+    if (activation.timingLogged) return;
+    const timing = activation.launchError?.launchTiming ?? activation.launchTiming;
+    if (!timing) return;
+    activation.timingLogged = true;
+    const readyTimeout = !activation.launchError;
+    diagnostic('session_launch_failed', {
+      ...timing,
+      ...(readyTimeout ? { last_phase: 'runtime_ready', timeout_ms: options.readyTimeoutMs,
+        total_ms: performance.now() - activation.monotonicStartedAt } : {}),
+      attempt: (activation.message?.retry_count ?? 0) + 1,
+      run_id: activation.runId, conversation_id: activation.message?.id ?? null,
+      session_group: activation.group,
+      cause: readyTimeout ? 'ready_timeout' : activation.launchError.cause === 'timeout' ? 'timeout'
+        : activation.launchError.code ?? 'launch_failed',
+    });
   }
 
   function releaseSlot(activation) {
@@ -308,6 +328,7 @@ export function createActivationManager(context) {
         return;
       }
       if (!activation.launchError && now() - activation.startedAt < options.readyTimeoutMs) return;
+      recordFailureTiming(activation);
       await deps.getSessionAdapter(activation.launchConfig.runtime).stop({
         tmuxName: context.tmuxName(group), expectedRunId: activation.runId,
       });
@@ -320,7 +341,11 @@ export function createActivationManager(context) {
       return;
     }
     releaseSlot(activation);
-    if (activation.message) deps.db.failDelivery(activation.message.id, { maxRetries: options.maxRetries });
+    if (activation.message) {
+      const reason = activation.launchError ? 'launch_failed' : 'ready_timeout';
+      const transition = deps.db.failDelivery(activation.message.id, { maxRetries: options.maxRetries, reason });
+      if (transition.changed && transition.status === 'failed') deps.sendFailureAlert?.(activation.message, reason);
+    }
     state.activations.delete(group);
     state.live.delete(group); // Observation must be refreshed, never fabricate READY.
     if (activation.resident) state.resident.absentSince = now();

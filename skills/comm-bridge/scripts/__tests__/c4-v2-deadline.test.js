@@ -11,7 +11,7 @@ const self = fileURLToPath(import.meta.url);
 const selected = process.argv[2];
 
 // caller budget checks and the caller-entry portion of belong to
-// . These cases cover only the two C4 public reads and their shared DB.
+// . These cases cover only the C4 public mode-transition read and its shared DB.
 if (!selected) {
   test('records actual Node, driver and embedded SQLite versions', t => {
     const db = new Database(':memory:');
@@ -21,19 +21,17 @@ if (!selected) {
         sqlite: db.prepare('SELECT sqlite_version() AS v').get().v }));
     } finally { db.close(); }
   });
-  for (const entry of ['transition', 'audit']) {
-    for (const scenario of ['wal', 'shared', 'busy', 'started']) {
-      test(`public ${entry}: ${scenario}`, t => {
-        const child = spawnSync(process.execPath, ['--experimental-test-module-mocks', self, `${entry}:${scenario}`],
-          { encoding: 'utf8', timeout: 15000 });
-        t.diagnostic(child.stdout.trim());
-        assert.equal(child.error, undefined);
-        assert.equal(child.status, 0, child.stderr);
-      });
-    }
+  for (const scenario of ['wal', 'shared', 'busy', 'started']) {
+    test(`public transition: ${scenario}`, t => {
+      const child = spawnSync(process.execPath, ['--experimental-test-module-mocks', self, scenario],
+        { encoding: 'utf8', timeout: 15000 });
+      t.diagnostic(child.stdout.trim());
+      assert.equal(child.error, undefined);
+      assert.equal(child.status, 0, child.stderr);
+    });
   }
 } else {
-  const [entry, scenario] = selected.split(':');
+  const scenario = selected;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-shared-read-'));
   process.env.ZYLOS_DIR = path.join(root, 'isolated');
   const filename = path.join(process.env.ZYLOS_DIR, 'comm-bridge', 'c4.db');
@@ -47,21 +45,18 @@ if (!selected) {
   TrackedDatabase.prototype = Database.prototype;
   mock.module('better-sqlite3', { defaultExport: TrackedDatabase });
   const api = await import(new URL('../c4-db.js', import.meta.url));
-  const call = () => entry === 'transition' ? api.getModeTransition() : api.auditCheckpoints();
+  const call = () => api.getModeTransition();
   let writer;
   assert.equal((await import('../c4-config.js')).DB_PATH, filename, 'public reader must use the isolated fixture database');
   const shared = api.getDb();
   const originalPrepare = shared.prepare, originalPragma = shared.pragma;
   const pragmaWrites = [], queryConnections = new Set(), events = [];
   try {
-    shared.exec("INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,created_at,updated_at) VALUES('fixture','single','multi','gating',1,1); INSERT INTO conversations(id,direction,channel,content,status) VALUES(7,'out','foo','x','delivered'); INSERT INTO checkpoints(id,summary,end_conversation_id,session_group,no_content) VALUES(100,'old',2000,'*',0),(101,'last',1000,'*',0)");
+    shared.exec("INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,created_at,updated_at) VALUES('fixture','single','multi','gating',1,1)");
     const independent = new Database(filename, { readonly: true, fileMustExist: true });
     let expected;
     try {
-      expected = entry === 'transition'
-        ? { ...independent.prepare('SELECT * FROM mode_transitions').get(), coverage_snapshot: null, absorbed_ids: null }
-        : [100, 101].map((checkpointId, i) => ({ checkpointId, end: i ? 1000 : 2000, maxConversationId: 7,
-          affected: { B: 1000, coverageAll: 2000 }, repairRequired: true }));
+      expected = { ...independent.prepare('SELECT * FROM mode_transitions').get(), coverage_snapshot: null, absorbed_ids: null };
     } finally { independent.close(); }
     assert.equal(opened.length, 1);
     assert.equal(opened[0], shared);
@@ -71,8 +66,7 @@ if (!selected) {
       return originalPragma.call(this, sql, ...args);
     };
     let injected = false, slowCalls = 0, enteredAt;
-    const targetSql = sql => entry === 'transition' ? sql.startsWith('SELECT * FROM mode_transitions WHERE')
-      : sql === 'SELECT COALESCE(MAX(id),0) AS n FROM conversations';
+    const targetSql = sql => sql.startsWith('SELECT * FROM mode_transitions WHERE');
     shared.prepare = function(sql, ...args) {
       queryConnections.add(this);
       if (targetSql(sql) && !injected) {
@@ -87,8 +81,7 @@ if (!selected) {
             Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
             return 1;
           });
-          sql = entry === 'transition' ? sql.replace(' WHERE ', ' WHERE public_test_delay()=1 AND ')
-            : sql.replace(' AS n FROM', ' AS n, public_test_delay() AS delay FROM');
+          sql = sql.replace(' WHERE ', ' WHERE public_test_delay()=1 AND ');
         }
       }
       return originalPrepare.call(this, sql, ...args);
@@ -96,7 +89,7 @@ if (!selected) {
     if (scenario === 'wal') {
       // This helper also imports store/config modules: load it only after ZYLOS_DIR is set.
       const { startHeldWriter } = await import('./c4-v2-test-helpers.js');
-      writer = startHeldWriter(filename, "UPDATE mode_transitions SET reason='new-committed'; UPDATE checkpoints SET end_conversation_id=3000 WHERE id IN (100,101); INSERT INTO conversations(id,direction,channel,content,status) VALUES(8,'out','foo','new-committed','delivered')");
+      writer = startHeldWriter(filename, "UPDATE mode_transitions SET reason='new-committed'");
       const [held] = await writer.held;
       assert.deepEqual(held, { mode: 'normal', journal: 'wal', inTransaction: true });
       events.push({ event: 'writer-held', ...held });
@@ -105,7 +98,7 @@ if (!selected) {
     if (scenario === 'busy') {
       assert.throws(call, { code: 'DB_BUSY', persisted: [] });
       assert.equal(injected, true, 'controlled busy injection reached the driver edge');
-      assert.equal(shared.inTransaction, false, 'audit read transaction rolls back on failure');
+      assert.equal(shared.inTransaction, false, 'read transaction rolls back on failure');
     } else assert.deepEqual(call(), expected);
     const elapsed = performance.now() - start;
     if (scenario === 'started') {
@@ -121,8 +114,7 @@ if (!selected) {
       const [code, signal] = await writer.exited;
       assert.equal(code, 0); assert.equal(signal, null); writer = undefined;
       events.push({ event: 'writer-committed-and-exited', code });
-      expected = entry === 'transition' ? { ...expected, reason: 'new-committed' }
-        : expected.map(row => ({ ...row, end: 3000, maxConversationId: 8, affected: { B: 3000, coverageAll: 3000 } }));
+      expected = { ...expected, reason: 'new-committed' };
     }
     assert.deepEqual(call(), expected, 'fresh read sees committed values / read recovers after controlled busy');
     assert.equal(api.getDb(), shared);
