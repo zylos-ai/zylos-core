@@ -43,7 +43,7 @@ function fixture(t, { mode = 'multi', runtime = 'codex', checkAuth, create = cre
   const reopen = async () => {
     await supervisor?.stop();
     supervisor = create({ db, scenes, zylosDir: root, env: { ZYLOS_DIR: root }, now: () => state.now,
-      readMode: () => ({ mode }), readConfiguration: () => ({ mode, runtime, capacity: 4 }),
+      readMode: () => ({ mode, keyPresent: mode !== 'single', legacy: mode === 'single' }), readConfiguration: () => ({ mode, legacy: mode === 'single', runtime, capacity: 4 }),
       resolveTargetRuntime: () => runtime, requestStore: new RestartRequestStore({ file: path.join(root, 'requests.json') }),
       readSyncMarker: () => ({ held: false, stale: false }),
       checkAuth: async checked => { state.checks.push(checked); return checkAuth ? checkAuth(checked) : { status: 'success' }; },
@@ -89,7 +89,7 @@ test('composed multi auth captures only affected runtime, retains until old targ
   assert.equal(f.supervisor.health.store('codex').read().health, 'ok'); assert.equal(f.state.fences.size, 0);
 });
 
-test('composed single auth preserves blocking through in-flight work and restart; deadline-less control does not prevent cleanup', async t => {
+test('composed legacy single auth preserves blocking through in-flight work and restart; deadline-less control does not prevent cleanup', async t => {
   const f = fixture(t, { mode: 'single' }); await f.reopen(); f.seed(); f.add();
   f.state.running = 1; await f.tick();
   assert.equal(f.supervisor.health.store('codex').read().health, 'auth_failed'); assert.deepEqual(f.state.stops, []);
@@ -101,7 +101,7 @@ test('composed single auth preserves blocking through in-flight work and restart
   assert.equal(f.state.d8Writes, 0); assert.equal(f.state.fences.size, 0);
 });
 
-test('composed single auth stop waits while no-response recovery owns the run', async t => {
+test('composed legacy single auth stop waits while no-response recovery owns the run', async t => {
   const f = fixture(t, { mode: 'single' }); await f.reopen(); f.seed(); f.add();
   const owner = { sessionGroup: 'origin', runId: 'old-run', runtime: 'codex' };
   f.supervisor.observer.notifyDelivered({ ...owner, pastedAt: f.state.now });

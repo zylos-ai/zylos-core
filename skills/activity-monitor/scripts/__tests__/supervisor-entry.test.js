@@ -139,10 +139,10 @@ test('copied installed skills resolve the separate Core package and serve actual
 });
 
 test('entry freezes first-failure notice synchronously with correct single/multi SQL scope', {timeout:15000}, async t=>{
-  for(const mode of ['single','multi']) {
-    const root=prepare(t,{session_mode:mode,runtime:'claude'}),w=launch(t,root);await w.next();w.child.send('freeze');
+  for(const mode of ['legacy','single','multi']) {
+    const root=prepare(t,{...(mode==='legacy'?{}:{session_mode:mode}),runtime:'claude'}),w=launch(t,root);await w.next();w.child.send('freeze');
     const result=await w.next();assert.equal(result.notice.endpoint,'frozen');assert.equal(result.notice.reason,'authentication_failed');
-    assert.equal(result.noticeScope,mode==='single'?null:'origin');await stop(w);
+    assert.equal(result.noticeScope,mode==='legacy'?null:'origin');await stop(w);
     const stored=JSON.parse(fs.readFileSync(path.join(root,'activity-monitor/runtime-health/claude.json'),'utf8'));
     assert.equal(stored.hook.groups.origin.pendingNotice.endpoint,'frozen');
   }

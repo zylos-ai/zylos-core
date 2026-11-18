@@ -18,7 +18,7 @@ for (const [mode, kind, group] of [['multi', 'group', 'a'], ['single', 'global',
       requests: { read: () => [] }, readSyncMarker: () => ({ held: false, stale: false }),
       prompts: { GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync', SYNC_BACKLOG_ALERT: () => 'sync backlog alert' },
     }, { now: f.now });
-    const context = { configuration: { mode }, scenes: [scene], fences: [], restartRequests: [], transition: null };
+    const context = { configuration: { mode, legacy: mode === 'single' }, scenes: [scene], fences: [], restartRequests: [], transition: null };
     const range = { count: 1000, nonempty: true, firstAt: f.now() - 100_000_000,
       alertFirstAt: f.now() - 100_000_000, firstConversationId: 1 };
     await lifecycle.sendSyncAlert({ type: 'backlog', kind, scope: kind === 'global' ? '*' : scene.sessionGroup, backlog: range.count, lag: 100000 }, context);
@@ -312,6 +312,7 @@ test('Origin repair failure gives cursor and lock proof instead of group checkpo
 test('single state observation preserves current run ownership of the global Sync marker', async t => {
   const f = observableFixture(t);
   f.context.configuration.mode = 'single';
+  f.context.configuration.legacy = true;
   f.scene.sessionGroup = 'legacy-single';
   const row = f.db.insertConversation('out', 'system', null, 'global result');
   f.db.createCheckpoint('*', row.id, 'global checkpoint');

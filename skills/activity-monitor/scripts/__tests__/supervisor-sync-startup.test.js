@@ -21,7 +21,7 @@ function fixture(mode = 'multi') {
     getOriginSyncBacklog: () => ({ total: 0, groups: [] }),
     insertControl: (content, options) => { f.controls.push({ content, ...options }); },
   };
-  f.context = { configuration: { mode }, scenes: [f.scene], fences: [], restartRequests: [], transition: null };
+  f.context = { configuration: { mode, legacy: mode === 'single' }, scenes: [f.scene], fences: [], restartRequests: [], transition: null };
   f.lifecycle = new SupervisorLifecycle({ db, requests: { read: () => [] },
     observeGroup: group => f.context.scenes.find(scene => scene.sessionGroup === group),
     readSyncMarker: () => ({ held: f.held, stale: false }), groupRunDir: () => '/isolated/origin',

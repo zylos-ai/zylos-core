@@ -2356,3 +2356,24 @@ test('native single wakes a sleeping Origin for Origin Sync and targets backlog 
   assert.equal(await old.lifecycle.sendSyncAlert({type:'backlog',kind:'group',scope:'origin'},old.context),false);
   assert.equal(old.controls.length,0);
 });
+
+for (const mode of ['single', 'multi']) {
+  test(`${mode} Origin observation failure preserves its Sync and backlog alert policy`, async () => {
+    const f = fixture(); f.context.configuration.mode = mode;
+    const failure = new Error('Origin observation unavailable');
+    f.scenes = [scene('origin', { present: false, observationError: failure })];
+    f.backlog = { total: 100, groups: [{ firstAt: 1 }] };
+    const errors = []; f.deps.reportError = cause => errors.push(cause);
+    f.deps.prompts.REFERENCE_REORG_PROMPT = 'reference reorganization';
+    f.deps.prepareReferenceReorg = () => false;
+    let backlogReads = 0; const readBacklog = f.db.getOriginSyncBacklog;
+    f.db.getOriginSyncBacklog = () => { backlogReads++; return readBacklog(); };
+    await f.lifecycle.checkSync(f.scenes, f.context);
+    assert.deepEqual(errors, [failure]);
+    const alert = { type: 'backlog', kind: 'group', scope: 'origin', backlog: 1000, lag: 1 };
+    assert.equal(await f.lifecycle.sendSyncAlert(alert, f.context), mode === 'multi');
+    assert.equal(backlogReads > 0, mode === 'multi');
+    assert.deepEqual(f.controls.map(row => row.content), mode === 'multi' ? ['origin sync', 'alert:origin'] : []);
+    assert.ok(f.controls.every(row => row.sessionGroup === 'origin'));
+  });
+}

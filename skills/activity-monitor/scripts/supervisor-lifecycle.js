@@ -890,7 +890,8 @@ export class SupervisorLifecycle {
         firstConversationId: range.firstConversationId, nonempty: range.count > 0, inherited }, context);
     });
     if (!legacy(context) && this.allowed('origin', context) &&
-        !scenes.some(scene => scene.sessionGroup === 'origin' && (scene.observationError || scene.present && oldUnique(scene, context)))) {
+        !scenes.some(scene => scene.sessionGroup === 'origin' &&
+          (context.configuration.mode === 'single' && scene.observationError || scene.present && oldUnique(scene, context)))) {
       const origin = scenes.find(scene => scene.sessionGroup === 'origin' && scene.present && scene.ready);
       const originScene = { sessionGroup: 'origin', runDir: this.d.groupRunDir('origin'),
         runId: origin?.runId ?? null, sessionId: origin?.sessionId ?? null };
@@ -981,7 +982,8 @@ export class SupervisorLifecycle {
   }
 
   async sendSyncAlert(alert, context) {
-    if (context.scenes.some(scene => scene.sessionGroup === 'origin' && (scene.observationError || scene.present && oldUnique(scene, context)))) return false;
+    if (context.scenes.some(scene => scene.sessionGroup === 'origin' &&
+      (context.configuration.mode === 'single' && scene.observationError || scene.present && oldUnique(scene, context)))) return false;
     this.syncAlertEpisodes.reconcile({ active: [alert] });
     if (!this.syncAlertEpisodes.available) return false;
     if (SYNC_DIAGNOSTIC_TYPES.has(alert.type)) {

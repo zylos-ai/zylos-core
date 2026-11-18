@@ -30,6 +30,7 @@ async function launch(t,f,mode,pause=''){
 }
 async function scenario(t,mode,mutant=''){
  const f=readyTmuxTarget(t,{prefix:'manual-entry-',mode,runtimeProcess:true});f.tmux('new-session','-d','-s','fixture-keeper','sleep','120');
+ if(mode==='single')fs.writeFileSync(path.join(f.root,'.zylos/config.json'),JSON.stringify({runtime:'claude'}));
  const request={version:1,type:'manual_restart',requestId:'manual-lost-reply',expectedRunId:'run-1',expectedSessionId:'session-1'};
  const send=value=>submit(value,{socketPath:path.join(f.root,'activity-monitor/am.sock'),deadlineAt:Date.now()+10000});
  const first=await launch(t,f,mode,'commit');await first.command('release');

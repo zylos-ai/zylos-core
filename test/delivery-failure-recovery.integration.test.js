@@ -34,9 +34,11 @@ assert.ok(Buffer.byteLength(path.join(ACTIVITY_MONITOR_DIR, 'am.sock')) < 104);
 // it, independently of every concurrent test file. Only private SQLite and
 // Unix sockets are used; terminal/process boundaries are injected (no tmux/PM2).
 // Server, clients, dispatcher and Supervisor are drained on failure and timeout.
+// Single cases cover the missing-key legacy Router's NULL notification target;
+// Native single Router dispatch requires integration after its dependency lands.
 for (const [mode, maintenance] of [['single', null], ['single', 'memory_sync'],
   ['single', 'session_switch'], ['multi', null]]) {
-  test(`${mode} terminal delivery recovery respects ${maintenance ?? 'open admission'}`, { timeout: 8000 }, async t => {
+  test(`${mode === 'single' ? 'legacy single' : mode} terminal delivery recovery respects ${maintenance ?? 'open admission'}`, { timeout: 8000 }, async t => {
     for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
       assert.ok(process.env[key]);
       assert.ok(path.resolve(process.env[key]).startsWith('/private/tmp/') || path.resolve(process.env[key]).startsWith('/tmp/'));
@@ -47,7 +49,7 @@ for (const [mode, maintenance] of [['single', null], ['single', 'memory_sync'],
     fs.mkdirSync(path.join(SKILLS_DIR, 'dashboard'), { recursive: true });
     fs.mkdirSync(ACTIVITY_MONITOR_DIR, { recursive: true });
     fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify({ runtime: 'codex', session_mode: mode }));
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify({ runtime: 'codex', ...(mode === 'multi' ? { session_mode: mode } : {}) }));
     let clock = Date.now(), stops = 0, pastes = 0, syncReads = 0, switchReads = 0;
     const live = { sessionGroup: group, present: true, ready: true, runtime: 'codex',
       runId: 'silent-run', sessionId: 'runtime-session', runDir, currentSessionTs: clock - 10000 };
@@ -61,7 +63,8 @@ for (const [mode, maintenance] of [['single', null], ['single', 'memory_sync'],
     // Keep real requireGroup validation at both observer and stop admission.
     const db = { ...database, latestSessionSwitchAt: () => { switchReads++; return maintenance === 'session_switch' ? Math.floor(clock / 1000) : null; } };
     const supervisor = createSupervisor({ db, scenes, zylosDir: root, env: process.env,
-      readConfiguration: async () => ({ mode, runtime: 'codex', capacity: 1 }), readMode: () => ({ mode }),
+      readConfiguration: async () => ({ mode, legacy: mode === 'single', runtime: 'codex', capacity: 1 }),
+      readMode: () => ({ mode, legacy: mode === 'single', keyPresent: mode === 'multi' }),
       resolveTargetRuntime: async () => 'codex', now: () => clock,
       requestStore: new RestartRequestStore({ file: path.join(root, 'requests.json') }),
       readSyncMarker: async () => { syncReads++; return { held: maintenance === 'memory_sync' }; },
