@@ -192,7 +192,7 @@ for (const fails of [false, true]) test(`forward finalization and status retain 
     startServices:ctx=>step11_startCoreServices(ctx,{zylosDir:root,ecosystemPath:f.file}),
     verifyServices:ctx=>step12_verifyServices(ctx,{execSync:poll(f)}),
     dashboardOwner:{verifyDashboard:()=>({state:'ready',errors:[]})},readModeStatus:()=>({ok:true,data:{sessionMode:'single',transition:null}}),
-    readMode:()=>({mode:'single'}),readTransition:()=>null,restart:()=>({ok:true,data:{result:'accepted'}}),audit:()=>[],
+    readMode:()=>({mode:'single'}),readTransition:()=>null,restart:()=>({ok:true,data:{result:'accepted'}}),
     protectedSuccess:ctx=>m.update(dir,ctx.journal,{phase:'upgrade_complete'}),
   }))});
   assert.equal(result.ok,true,JSON.stringify(result));

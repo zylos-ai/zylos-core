@@ -208,10 +208,6 @@ export function outputUpgradeResult(result, { jsonOutput = true } = {}, output =
   // Runtime CLI preparation returns objects; finalization adds plain notices.
   for(const warning of result.warnings || []) output.stderr.write(typeof warning === 'string' ? `Upgrade warning: ${warning}\n` : `Runtime warning (${warning.runtime}): ${jsonOutput ? warning.code + ': ' : ''}${warning.message}\n`);
   for(const warning of result.corePackageWarnings || []) output.stderr.write(`Core package location warning: ${warning.message}\n`);
-  for(const item of result.checkpointAudit?.items || []) {
-    if(item?.repairRequired === true) output.stderr.write(`Checkpoint warning: checkpoint ${item.checkpointId} exceeds the available conversation range and requires repair.\n`);
-  }
-  if(result.checkpointAudit?.state === 'incomplete') output.stderr.write('Checkpoint audit warning: audit incomplete; checkpoint consistency could not be verified.\n');
   if (jsonOutput) output.stdout.write(JSON.stringify(result) + '\n');
 }
 

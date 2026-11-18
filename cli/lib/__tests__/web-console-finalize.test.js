@@ -146,7 +146,7 @@ function finalizationDeps(calls, extras = {}) {
     ensureLogRotation:()=>({state:'present'}),
     dashboardOwner:{verifyDashboard:() => {calls.push('dashboard'); return {state:'ready'};}},
     readModeStatus:()=>({sessionMode:'single', transition:null}), readMode:()=>({mode:'single'}), readTransition:()=>null,
-    restart:()=>({ok:true,data:{result:'exit_enqueued'}}), audit:()=>[],
+    restart:()=>({ok:true,data:{result:'exit_enqueued'}}),
     protectedSuccess:()=> {calls.push('terminal'); return {complete:true};},
     savePm2ProcessList:()=>{calls.push('save'); return true;},
     ...extras,

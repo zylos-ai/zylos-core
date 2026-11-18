@@ -66,7 +66,7 @@ function finalizationFixture(t) {
     dashboardOwner: { verifyDashboard: () => ({ state: 'ready', errors: [] }) },
     readModeStatus: () => ({ sessionMode: 'multi', transition: null }), readMode: () => ({ mode: 'multi' }), readTransition: () => null,
     restart: () => { calls.push('restart'); return { ok: true, data: { result: 'accepted' } }; },
-    audit: () => [], protectedSuccess: () => { calls.push('terminal'); },
+    protectedSuccess: () => { calls.push('terminal'); },
   };
   return { ctx, deps, calls };
 }

@@ -108,7 +108,7 @@ test('record publication failure remains a distinct JSON and readable warning wi
     dashboardOwner: { verifyDashboard: () => ({ state: 'ready', errors: [] }) },
     readModeStatus: () => ({ sessionMode: 'single', transition: null }),
     readMode: () => ({ mode: 'single' }), readTransition: () => null,
-    restart: () => ({ ok: true, data: { result: 'exit_enqueued' } }), audit: () => [], protectedSuccess() {},
+    restart: () => ({ ok: true, data: { result: 'exit_enqueued' } }), protectedSuccess() {},
   };
   const result = await completeUpgradeFinalization(ctx, finalizer);
   const json = JSON.parse(JSON.stringify(result));

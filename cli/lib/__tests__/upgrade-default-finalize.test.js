@@ -150,7 +150,6 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
     verifyServices: () => { calls.push('verify'); return { status: 'done' }; },
     readMode: () => ({ mode: 'single', keyPresent: true }), readTransition: () => null,
     restart: () => { calls.push('restart'); return { ok: true, data: { result: 'exit_enqueued' } }; },
-    audit: () => [],
   };
   const load = () => m.transaction(root, dir);
   const resume = (overrides = {}) => resumeUpgradeFinalization({ zylosDir: root, transactionDir: dir,
@@ -481,7 +480,7 @@ test('real finalizer stdout remains JSON when publication changes global Codex c
         startServices:()=>({status:'done'}),verifyServices:()=>({status:'done'}),
         dashboardOwner:{copyDashboardDb:()=>({ok:true}),applyDashboardRegistration:()=>({state:'done'}),applyDashboardRoute:()=>({state:'done'}),verifyDashboard:()=>({state:'ready',errors:[]})},
         readModeStatus:()=>({sessionMode:null,transition:null}),readMode:()=>({mode:null,keyPresent:false}),readTransition:()=>null,
-        restart:()=>({ok:true,data:{result:'exit_enqueued'}}),audit:()=>[],
+        restart:()=>({ok:true,data:{result:'exit_enqueued'}}),
       });
       process.stdout.write(JSON.stringify(result)+'\\n');
       process.exitCode=result.success?0:1;
