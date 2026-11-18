@@ -11,6 +11,7 @@ import { requireChatAccess, requireChatSettingsAccess } from '../chat/access.js'
 test('JSON failures retain diagnostics and map command rejection status', () => {
   const cases = [
     [{ ok: false, error: 'INVALID_RUNTIME' }, 400],
+    [{ ok: false, error: { code: 'AUTH_FAILED', message: 'Replace rejected runtime credentials' } }, 403],
     [{ ok: false, error: { code: 'AUTH_NOT_CONFIRMED', message: 'Confirm runtime authentication' } }, 403],
     [{ ok: false, error: 'new_upstream_failure' }, 502],
     [{ ok: false, code: 'TASK_NOT_FOUND', message: 'Task missing' }, 404],

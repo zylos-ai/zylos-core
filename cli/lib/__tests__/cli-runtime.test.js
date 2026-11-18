@@ -74,6 +74,7 @@ test('auth failure is rejected by the runtime command with exit code 1', async (
 
 for (const target of ['claude', 'codex', 'agy']) {
   test(`${target} runtime switch distinguishes rejected credentials from uncertain authentication`, async () => {
+    const messages = [];
     for (const [status, code] of [['failure', 'AUTH_FAILED'], ['uncertain', 'AUTH_NOT_CONFIRMED'], ['throws', 'AUTH_NOT_CONFIRMED']]) {
       const result = await executeRuntimeSwitch(target, ['--save-apikey', 'fixture-key'], {
         read: () => ({ state: 'ok', config: { runtime: target === 'claude' ? 'codex' : 'claude', session_mode: 'multi' } }),
@@ -89,7 +90,18 @@ for (const target of ['claude', 'codex', 'agy']) {
       assert.equal(result.error.code, code);
       assert.equal(result.error.authStatus, status === 'failure' ? 'failure' : 'uncertain');
       assert.deepEqual(result.error.persisted, ['apiKey']);
+      messages.push(result.error.message);
+      if (status === 'failure') {
+        assert.match(result.error.message, /credentials rejected or not logged in/);
+        assert.ok(result.error.message.includes(target === 'agy'
+          ? 'zylos runtime agy --save-apikey <key>' : `zylos auth ${target}`));
+      } else {
+        assert.match(result.error.message, /check network\/proxy connectivity, then retry/);
+        assert.doesNotMatch(result.error.message, /replace credentials|zylos auth|--save-apikey/);
+      }
     }
+    assert.notEqual(messages[0], messages[1]);
+    assert.equal(messages[1], messages[2]);
   });
 }
 

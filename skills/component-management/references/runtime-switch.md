@@ -15,8 +15,9 @@ per-target authentication relay scripts.
   Do not retry the same rejected credentials unchanged.
 - `AUTH_NOT_CONFIRMED` (`authStatus=uncertain`): authentication could not be
   confirmed. Check network/proxy connectivity and CLI/tool availability first,
-  then retry `zylos runtime <target>`. This is not evidence of a bad key; use
-  the login steps below only if a fresh check establishes that login is needed.
+  then retry `zylos runtime <target>`. This is not evidence of a bad key. If
+  network/proxy connectivity is confirmed healthy but the result remains
+  `AUTH_NOT_CONFIRMED`, follow the corresponding runtime's credential steps below.
 
 Credentials are always stored in **two places** so auth persists across
 restarts: the runtime's own credential store and `~/zylos/.env`.

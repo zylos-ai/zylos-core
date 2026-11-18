@@ -118,6 +118,8 @@ for (const [name, scenario, result] of [
   ['rate limit', { stderr: 'rate_limit_error' }, { status: 'uncertain', reason: 'cli_probe_uncertain' }],
   ['unknown error', { stderr: 'unknown failure' }, { status: 'uncertain', reason: 'cli_probe_unexpected_error' }],
   ['authentication error', { stderr: 'authentication_error' }, { status: 'failure', reason: 'cli_probe_authentication_error' }],
+  ['authentication and API errors', { stderr: 'authentication_error api_error' }, { status: 'failure', reason: 'cli_probe_authentication_error' }],
+  ['authentication and rate limit errors', { stderr: 'authentication_error rate_limit_error' }, { status: 'failure', reason: 'cli_probe_authentication_error' }],
 ]) {
   test(`Claude ${name} preserves its existing result`, async t => {
     const adapter = await fixture(t, 'claude', scenario);

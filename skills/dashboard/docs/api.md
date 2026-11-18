@@ -198,7 +198,7 @@ Example: `POST /api/instance/actions/switch-mode` with `{"mode":"multi"}`.
 
 Returns `{ok:true,...CoreResult}` on success, with optional `data` and `message`; failures use the common envelope. `AUTH_FAILED` and `AUTH_NOT_CONFIRMED` results display the original authentication error details; neither is a successful switch. `AUTH_FAILED` means rejected or missing credentials; `AUTH_NOT_CONFIRMED` means the probe could not confirm authentication.
 
-**Errors:** `AUTH_NOT_CONFIRMED`, `AUTH_FAILED` (explicit credential rejection or logged-out status for any runtime), invalid runtime, supervisor/transition rejection codes, and common write errors.
+**Errors:** HTTP 403 `AUTH_FAILED` (explicit credential rejection or logged-out status for any runtime) or `AUTH_NOT_CONFIRMED` (probe could not confirm authentication); invalid runtime, supervisor/transition rejection codes, and common write errors. The two authentication errors retain distinct `error.message` remedies: replace credentials/log in for `AUTH_FAILED` (agy: `zylos runtime agy --save-apikey <key>`); check network/proxy and retry for `AUTH_NOT_CONFIRMED`.
 
 Example: `POST /api/instance/actions/switch-runtime` with `{"runtime":"codex"}`.
 
