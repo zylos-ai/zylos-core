@@ -62,15 +62,13 @@ export async function waitForServerExit({ binary, socketPath, timeoutMs = 5000 }
 }
 
 // CLI consumers resolve `tmux` on PATH instead of accepting a binary option.
-export function tmuxClientEnv({dir,socketPath,binary}, env = process.env, { privateDirectory = true } = {}) {
-  if (privateDirectory) assert.equal(socketPath, path.join(dir, `tmux-${process.getuid()}`, 'default'),
+export function tmuxClientEnv({dir,socketPath,binary}, env = process.env) {
+  assert.equal(socketPath, path.join(dir, `tmux-${process.getuid()}`, 'default'),
     'Environment-selected clients require the canonical private socket');
   const binDir = path.join(dir, 'bin');
   fs.mkdirSync(binDir);
   const executable = execFileSync('sh', ['-c', 'command -v "$1"', 'sh', binary], {encoding:'utf8'}).trim();
   fs.symlinkSync(executable, path.join(binDir, 'tmux'));
-  const result = {...env, PATH:`${binDir}${path.delimiter}${env.PATH || ''}`,
+  return {...env, PATH:`${binDir}${path.delimiter}${env.PATH || ''}`,
     TMUX_TMPDIR:dir, TMUX:`${socketPath},0,0`};
-  if (!privateDirectory) delete result.TMUX_TMPDIR;
-  return result;
 }

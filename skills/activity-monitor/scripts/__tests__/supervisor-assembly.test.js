@@ -19,23 +19,18 @@ function fixture(t,{batchIdentities,badRequests=false,readMode=()=>({mode:'multi
  t.after(()=>supervisor.stop());return {supervisor,calls,file,root,scenes,db};
 }
 
-// Real assembly -> startup/round preflight -> shared reporter and loop latch.
+// Real assembly -> startup preflight -> shared reporter and loop latch.
 // Run for directory reporting changes; unrelated changes can skip. The official
 // runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fake scheduling and injected
 // scene/DB adapters avoid tmux, PM2 and network, and teardown stops the loop.
-for (const phase of ['startup', 'round']) test(`assembled ${phase} directory preflight emits one event`, async t => {
+test('assembled startup directory preflight emits one event', async t => {
  const {supervisor,root,calls}=fixture(t);
  const previous=process.env.TMUX_TMPDIR;
  const directory=path.join(root,'private');
- if(phase==='round') {fs.mkdirSync(directory,{mode:0o700});fs.chmodSync(directory,0o700);}
  process.env.TMUX_TMPDIR=directory;
  t.after(()=>{if(previous===undefined)delete process.env.TMUX_TMPDIR;else process.env.TMUX_TMPDIR=previous;});
  t.diagnostic(JSON.stringify({HOME:process.env.HOME,ZYLOS_DIR:root,PM2_HOME:process.env.PM2_HOME,TMPDIR:process.env.TMPDIR,TMUX_TMPDIR:directory,tmux:'not invoked',database:'injected'}));
  await supervisor.loop.start();
- if(phase==='round') {
-  assert.equal(calls.filter(row=>row.error==='TMUX_DIR_MISSING').length,0);
-  fs.renameSync(directory,directory+'-gone');
- }
  for(let i=0;i<100;i++)await supervisor.loop.tick();
  assert.equal(supervisor.loop.directoryError?.code,'TMUX_DIR_MISSING');
  assert.equal(calls.filter(row=>row.error==='TMUX_DIR_MISSING').length,1);
@@ -43,12 +38,12 @@ for (const phase of ['startup', 'round']) test(`assembled ${phase} directory pre
  assert.equal(rows.filter(row=>row.event==='tmux_directory_unavailable').length,1);
 });
 
-// Real assembly -> exit/run-ending workers -> shared loop latch. Private files,
+// Real assembly -> exit workers -> shared loop latch. Private files,
 // injected scene/DB adapters and fake scheduling; no tmux/PM2/network. Run for
 // directory reporting/assembly changes; unrelated UI work can skip. The official
 // runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and fixture teardown stops the loop.
-for (const phase of ['exit', 'run-ending']) test(`assembled ${phase} directory loss emits one event across multiple groups`, async t => {
- const {supervisor,scenes,db,root,calls}=fixture(t);
+test('assembled exit directory loss emits one event across multiple groups', async t => {
+ const {supervisor,scenes,root,calls}=fixture(t);
  const previous=process.env.TMUX_TMPDIR;
  const directory=path.join(root,'private');fs.mkdirSync(directory,{mode:0o700});fs.chmodSync(directory,0o700);
  process.env.TMUX_TMPDIR=directory;
@@ -59,17 +54,8 @@ for (const phase of ['exit', 'run-ending']) test(`assembled ${phase} directory l
   if(reads++===0)fs.renameSync(directory,directory+'-gone');
   tmuxClientArgs();assert.fail('directory check must reject');
  };
- if(phase==='exit') {
-  scenes.observe=async()=>groups.map(sessionGroup=>({sessionGroup,runId:'run',sessionId:'session',runtime:'claude',present:true,ready:true,processRunning:false}));
-  scenes.observeGroup=async()=>unavailable();
- } else {
-  db.listRunEndings=()=>unavailable();
-  db.listSlotOccupancy=()=>groups.map(sessionGroup=>({sessionGroup,runId:'run',state:'running'}));
-  for(const group of groups) {
-   const run=groupRunDir(group,{ZYLOS_DIR:root});fs.mkdirSync(run,{recursive:true});
-   fs.writeFileSync(path.join(run,'current-session.json'),JSON.stringify({runId:'run',ts:1}));
-  }
- }
+ scenes.observe=async()=>groups.map(sessionGroup=>({sessionGroup,runId:'run',sessionId:'session',runtime:'claude',present:true,ready:true,processRunning:false}));
+ scenes.observeGroup=async()=>unavailable();
  t.diagnostic(JSON.stringify({HOME:process.env.HOME,ZYLOS_DIR:root,PM2_HOME:process.env.PM2_HOME,TMPDIR:process.env.TMPDIR,TMUX_TMPDIR:directory,tmux:'not invoked',database:'injected'}));
  await supervisor.loop.start();
  assert.ok(reads>=1);

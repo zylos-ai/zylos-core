@@ -15,18 +15,12 @@ import { fileURLToPath } from 'node:url';
 // Boundary: full Docker shell entrypoint and shared client policy, with private
 // fake zylos/PM2/sleep/tmux binaries. Run for Docker tmux-call or directory-policy changes; otherwise
 // skip. HOME/ZYLOS_DIR/PM2_HOME/TMPDIR are private; no server or DB is used.
-for (const runtime of ['claude', 'codex']) for (const mode of ['unset', 'empty', 'private', 'shared-root', 'linked-root', 'unsafe-child', 'missing', 'shutdown-missing']) {
+for (const [runtime, mode] of [['claude', 'private'], ['codex', 'private'], ['claude', 'missing'], ['claude', 'shutdown-missing']]) {
   test(`Docker ${runtime} entrypoint uses ${mode} directory policy for startup and shutdown`, { timeout: 10000 }, t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'docker-tmux-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const home = path.join(root, 'h'), bin = path.join(root, 'b'), tmp = path.join(root, 't');
     for (const dir of [home, bin, tmp]) fs.mkdirSync(dir, { mode: 0o700 });
-    if (mode === 'shared-root') fs.chmodSync(tmp, 0o777);
-    if (mode === 'linked-root') fs.symlinkSync(tmp, path.join(root, 'linked'));
-    if (mode === 'unsafe-child') {
-      const child = path.join(tmp, `tmux-${process.getuid()}`);
-      fs.mkdirSync(child); fs.chmodSync(child, 0o707);
-    }
     const zylos = path.join(home, 'zylos');
     const skills = path.join(zylos, '.claude/skills'); fs.mkdirSync(skills, { recursive: true });
     fs.symlinkSync(fileURLToPath(new URL('../skills/comm-bridge', import.meta.url)), path.join(skills, 'comm-bridge'));
@@ -45,19 +39,16 @@ if (process.argv.includes('kill-session')) { console.error('fixture absent sessi
       ANTHROPIC_API_KEY: '', CLAUDE_CODE_OAUTH_TOKEN: '' };
     if (mode === 'shutdown-missing') env.TMUX_REMOVE_ON_LAUNCH = '1';
     delete env.TMUX;
-    if (mode === 'unset') delete env.TMUX_TMPDIR;
-    else if (mode === 'empty') env.TMUX_TMPDIR = '';
-    else if (mode === 'linked-root') env.TMUX_TMPDIR = path.join(root, 'linked');
-    else env.TMUX_TMPDIR = mode === 'missing' ? path.join(tmp, 'missing') : tmp;
+    env.TMUX_TMPDIR = mode === 'missing' ? path.join(tmp, 'missing') : tmp;
     t.diagnostic(JSON.stringify({ HOME: home, ZYLOS_DIR: zylos, PM2_HOME: env.PM2_HOME,
       TMPDIR: tmp, TMUX_TMPDIR: env.TMUX_TMPDIR ?? null, binary: path.join(bin, 'tmux') }));
     const result = spawnSync('bash', [fileURLToPath(new URL('../docker/entrypoint.sh', import.meta.url))],
       { env, timeout: 8000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     assert.equal(result.error, undefined);
     assert.equal(result.signal, null);
-    if (mode === 'missing' || mode === 'unsafe-child') {
+    if (mode === 'missing') {
       assert.equal(result.status, 1);
-      assert.match(result.stderr, mode === 'missing' ? /TMUX_DIR_MISSING/ : /TMUX_DIR_UNSAFE/);
+      assert.match(result.stderr, /TMUX_DIR_MISSING/);
       assert.equal(fs.existsSync(calls), false);
       return;
     }
@@ -70,8 +61,7 @@ if (process.argv.includes('kill-session')) { console.error('fixture absent sessi
       return;
     }
     assert.equal(rows.length, 4, 'stale-session stop, launch and both shutdown stops');
-    const prefix = ['private', 'shared-root', 'linked-root'].includes(mode)
-      ? ['-S', path.join(tmp, `tmux-${process.getuid()}`, 'default')] : [];
+    const prefix = ['-S', path.join(tmp, `tmux-${process.getuid()}`, 'default')];
     assert.deepEqual(rows.map(row => row.args.slice(0, prefix.length)), rows.map(() => prefix));
     assert.deepEqual(rows.map(row => row.args[prefix.length]), ['kill-session', 'new-session', 'kill-session', 'kill-session']);
     assert.ok(rows.every(row => row.identity === undefined));

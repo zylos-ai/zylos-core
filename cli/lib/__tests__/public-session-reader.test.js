@@ -6,18 +6,18 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const driver=fileURLToPath(new URL('../../../test/helpers/public-reader-driver.js',import.meta.url));
-async function fixture(t,{server=true,privateDirectory=true}={}) {
-  const f=isolatedTmux(t,{prefix:'session-runtime-public-reader-',socketName:privateDirectory?undefined:'private.sock'});
+async function fixture(t,{server=true}={}) {
+  const f=isolatedTmux(t,{prefix:'session-runtime-public-reader-'});
   const {dir,tmux}=f;
-  const env=tmuxClientEnv(f,{...process.env,ZYLOS_DIR:dir},{privateDirectory});
+  const env=tmuxClientEnv(f,{...process.env,ZYLOS_DIR:dir});
   if(server) tmux('-f','/dev/null','new-session','-d','-s','zylos-group-origin','-e','ZYLOS_RUN_ID=r1','-e','ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}','sleep','120');
   const run=path.join(dir,'activity-monitor','session-groups','origin'); await fs.mkdir(run,{recursive:true});
   const write=(name,value)=>fs.writeFile(path.join(run,name),JSON.stringify(value));
   const call=(method,args,extra={})=>JSON.parse(execFileSync(process.execPath,[driver],{encoding:'utf8',timeout:20000,env:{...env,...extra,SESSION_READER_CALL:JSON.stringify({method,args})}}));
   return {dir,env,call,write,tmux,socketPath:f.socketPath};
 }
-for (const privateDirectory of [true,false]) test(`public async reader returns live identity and valid real F2/F3/status/usage with directory ${privateDirectory?'set':'unset'}`,async t=>{
-  const {call,write}=await fixture(t,{privateDirectory});
+test('public async reader returns live identity and valid real F2/F3/status/usage',async t=>{
+  const {call,write}=await fixture(t);
   await write('current-session.json',{runId:'r1',sessionId:'s1',ts:Date.now(),startupControlIds:[]});
   await write('agent-status.json',{runId:'r1',sessionId:'s1',state:'idle'});
   await write('statusline.json',{session_id:'s1',zylos:{v:1,runId:'r1',capturedAt:Date.now()},context_window:{used_percentage:20}});

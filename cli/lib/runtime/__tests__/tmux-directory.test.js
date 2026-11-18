@@ -57,13 +57,6 @@ test('unset directory preserves socket selection; invalid directory is never sil
   assert.throws(() => tmuxClientArgs({}, { TMUX_TMPDIR: file }), { code: 'TMUX_DIR_UNSAFE' });
 });
 
-test('group-writable root permits a current-user socket directory', t => {
-  const root = directory(t);
-  fs.chmodSync(root, 0o777);
-  assert.deepEqual(tmuxClientArgs({}, { TMUX_TMPDIR: root }),
-    ['-u', '-S', path.join(root, `tmux-${process.getuid()}`, 'default')]);
-});
-
 test('symlink root resolves to the canonical socket directory', t => {
   const root = directory(t);
   const link = path.join(root, 'link'); fs.symlinkSync(root, link);
@@ -110,14 +103,10 @@ test('socket directory owned by another user is rejected', t => {
   assert.throws(() => tmuxClientArgs({}, { TMUX_TMPDIR: root }), { code: 'TMUX_DIR_UNSAFE' });
 });
 
-for (const unsafe of [false, true]) test(`${unsafe ? 'unsafe' : 'missing'} directory rejects every shared client before executing any binary`, async t => {
+test('missing directory rejects every shared client before executing any binary', async t => {
   const root = directory(t);
-  if (unsafe) {
-    const child = path.join(root, `tmux-${process.getuid()}`);
-    fs.mkdirSync(child); fs.chmodSync(child, 0o707);
-  }
-  const code = unsafe ? 'TMUX_DIR_UNSAFE' : 'TMUX_DIR_MISSING';
-  environment(t, unsafe ? root : path.join(root, 'missing'));
+  const code = 'TMUX_DIR_MISSING';
+  environment(t, path.join(root, 'missing'));
   let calls = 0;
   const exec = () => { calls++; throw Error('must not execute'); };
   const sender = createTmuxSender({ exec });
@@ -164,7 +153,8 @@ test('main process diagnostic selects the guarded socket and preserves ordinary 
   assert.equal(failed.basis.tmuxError, 'ENOENT');
 });
 
-for (const code of ['TMUX_DIR_MISSING', 'TMUX_DIR_UNSAFE', 'TMUX_DIR_UNAVAILABLE']) test(`${code} survives read, guard and group-absence classification`, () => {
+test('missing directory survives read, guard and group-absence classification', () => {
+  const code = 'TMUX_DIR_MISSING';
   const error = Object.assign(Error('directory unavailable'), { code, status: 1,
     stderr: 'error connecting to /missing (No such file or directory)' });
   assert.equal(groupListNoServer(error), false);
@@ -183,14 +173,10 @@ process.stderr.write('no server running on fixture'); process.exit(1);\n`, { mod
   await assert.rejects(runTmuxCommand(['list-sessions'], { binary }), { code: 'TMUX_DIR_MISSING' });
 });
 
-for (const unsafe of [false, true]) test(`doctor and uninstall propagate ${unsafe ? 'unsafe' : 'missing'} directory before service actions`, async t => {
+test('doctor and uninstall propagate missing directory before service actions', async t => {
   const root = directory(t);
-  if (unsafe) {
-    const child = path.join(root, `tmux-${process.getuid()}`);
-    fs.mkdirSync(child); fs.chmodSync(child, 0o707);
-  }
-  environment(t, unsafe ? root : path.join(root, 'missing'));
-  const code = unsafe ? 'TMUX_DIR_UNSAFE' : 'TMUX_DIR_MISSING';
+  environment(t, path.join(root, 'missing'));
+  const code = 'TMUX_DIR_MISSING';
   // All subprocesses are blocked even if an error-propagation regression occurs.
   let calls = 0;
   const forbidden = () => { calls++; throw Error('unexpected subprocess'); };

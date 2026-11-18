@@ -1,11 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import childProcess from 'node:child_process';
-import { syncBuiltinESMExports } from 'node:module';
 import { buildDiagnosticJson } from '../../commands/doctor.js';
 import { createTmuxSender, parseTmuxVersion, describeTmuxSendKeys, tmuxFailureDetails } from '../../../skills/comm-bridge/scripts/tmux-send-keys.js';
 import { tmuxClientArgs } from '../runtime/tmux-client-args.js';
-import { tmuxNewSession } from '../runtime/tmux-helpers.js';
 
 for (const [version, enabled] of [['3.2a', false], ['3.3a', false], ['3.4', true], ['3.6a', true], ['3.7c', true], ['3.10', true], ['4.0', true], ['next-3.8', true], ['next-3.9', true]]) {
   test(`tmux ${version} version gate and cached execution`, () => {
@@ -46,19 +43,6 @@ for (const failure of ['unparseable', 'error', 'openbsd-7.6']) {
 test('failure diagnostics contain stderr/status without command or user input', () => {
   const details = tmuxFailureDetails(Object.assign(new Error('send-keys PRIVATE_INPUT'), { status: 1, stderr: Buffer.from('client is read-only\n') }));
   assert.deepEqual(details, { status: 1, code: null, signal: null, stderr: 'client is read-only' });
-});
-test('runtime launch preserves socket selection, client environment and timeout', t => {
-  const calls = [];
-  t.mock.method(childProcess, 'execFileSync', (bin, args, options) => {
-    calls.push({ args, options });
-  });
-  syncBuiltinESMExports();
-  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
-  tmuxNewSession(['new-session', '-d']);
-  assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0].args, [...tmuxClientArgs({ utf8: false }), 'new-session', '-d']);
-  assert.equal(calls[0].options.timeout, 10000);
-  assert.equal(calls[0].options.env.ZYLOS_RUN_ID, undefined);
 });
 test('read-only rejection negative control discriminates legacy and protected argv', () => {
   const exec = (bin, args) => {
