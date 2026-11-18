@@ -36,6 +36,7 @@ export function buildRuntimeArgs(runtime, config, {root, help = '', bypassPermis
   const server = path.join(root, '.claude/skills/zylos-memory/scripts/memory-mcp-server.js');
   const args = [];
   if (runtime === 'claude') {
+    args.push('--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode');
     if (bypassPermissions) args.push('--dangerously-skip-permissions');
     if (config.mode === 'override') args.push('--model', config.model, '--effort', config.effort);
     args.push('--mcp-config', JSON.stringify({mcpServers:{'zylos-memory':{type:'stdio', command:'node', args:[server]}}}));
