@@ -200,7 +200,7 @@ Shared knowledge classification:
 Read an existing target before generating its replacement fragment. Check
 references for duplicated configuration values or narrative history; move the
 information into an allowed topic file and replace it with a pointer. `identity.md`
-and `references.md` share the strictest startup display limits across all runtimes:
+and `references.md` each have the same startup display limits across all runtimes:
 check both characters and estimated tokens after reserving the worst-case startup
 framing. Agents: run
 `node ~/zylos/.claude/skills/zylos-memory/scripts/memory-status.js` after editing
