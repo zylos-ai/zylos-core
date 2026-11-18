@@ -166,7 +166,7 @@ test('export guidance shares bounded reading and visible-tail steps', () => {
     assert.match(text, /even when the final text range is 8192 bytes/);
     assert.match(text, /Repeat for every file; do not skip files or crop this display further/);
     assert.match(text, /Truncated output is unread and must be reread/);
-    assert.doesNotMatch(text, /skip=<final-start>|count=<final-count>|dd .*\| od/);
+    assert.doesNotMatch(text, /skip=<final-start>|count=<final-count>|`dd [^`]*\| od/);
     assert.match(text, /supplements the text read and does not replace it/);
     assert.doesNotMatch(text, /wc -c|shasum|report.*SHA-256/);
   }

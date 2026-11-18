@@ -41,6 +41,11 @@ configuration. Origin Sync uses Origin's actual runtime.
   this skill and the matching procedure. Include their paths, the requested job,
   and all facts and environment bindings it needs; it cannot see the parent
   conversation.
+  For range reads, `functions.exec` has a default outer return cap of 10,000
+  tokens. Inner `exec_command.max_output_tokens` cannot raise that outer cap;
+  separately issued inner reads still accumulate in the same outer return.
+  Require one range per top-level invocation, with no other accumulated output,
+  and follow the procedure's bounded retries in fresh invocations.
 - Never use a new `codex exec`, PM2 service, or detached shell as a substitute.
   If background tools or the restricted memory tool are unavailable, report
   `TOOL_UNAVAILABLE` and stop; do not silently run an unrestricted writer.
@@ -116,7 +121,8 @@ Read inputs with Read (offset/limit), Glob, or read-only Bash commands
 when available.
 For exported batches and listed inputs, read every byte in bounded ranges.
 Use reported byte counts only as byte-range read endpoints. Truncated
-output is unread: retry with a smaller limit/range until complete. Do not infer
+output is unread: use the procedure's bounded retries, one range per top-level
+call; do not batch ranges into a single return. Do not infer
 completion from the first/last lines or a successful hash check alone. Use
 returned absolute paths; never synthesize export, segment or session paths.
 Follow the procedure's private export-directory cleanup and per-file byte-range

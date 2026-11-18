@@ -135,10 +135,10 @@ uses `ZYLOS_ORIGIN_SYNC_THRESHOLD` / `origin_sync_threshold` / 50. Keep the
 resolved values for this run; do not substitute the defaults for configured
 values in subsequent fetch commands.
 
-Truncated tool output is unread. Retry a fetch with a smaller `--limit`, or a
-file read with smaller byte ranges; read all required records before progress
-advances. For an exported batch or listed input, read the entire file in bounded
-byte ranges. Use reported byte counts only as byte-range read endpoints.
+Truncated tool output is unread. Recover it under the bounded read-retry rules
+below; read all required records before progress advances. For an exported
+batch or listed input, read the entire file in bounded byte ranges.
+Use reported byte counts only as byte-range read endpoints.
 A hash check or first/last markers do not replace reading the content. Keep
 export file hashes separate from batch receipt hashes: receipt `sha256` hashes
 the canonical projected database rows, not the rendered export file bytes.
@@ -148,8 +148,9 @@ Use byte ranges even when a file contains one very long line. For example,
 bytes [0,8192). Continue at skip=8188, then 16376, increasing by 8188 until the
 reported file size is reached; the four-byte overlap keeps UTF-8 characters
 readable across boundaries. Each command must return its actual text, not
-counts, grep matches, word frequencies, or a summary. If output is truncated,
-reduce the range and reread it. Record every completely read half-open range
+counts, grep matches, word frequencies, or a summary. Use one range per
+top-level tool call as specified below.
+Record every completely read half-open range
 `[start,end)` (end capped at file size); the ranges must cover every byte with
 no gap. Include this per-file range ledger in the Sync result. Never claim a
 full read from a hash match or analysis of an unread suffix. This byte method
@@ -161,15 +162,66 @@ For every exported file and every listed input, complete these reading steps
 before summarizing, checkpointing or advancing its cursor:
 
 1. Read the entire file in bounded byte ranges and record every `[start,end)`.
-   Truncated output is unread; reduce the range and reread it.
+   Run **one byte range per top-level tool call**, returning that range's actual
+   text before requesting the next. Do not combine ranges in a shell loop,
+   JavaScript loop, parallel calls, or any wrapper that accumulates several
+   reads into one return. On Codex, each range needs its own `functions.exec`
+   invocation containing one `exec_command`; separate inner calls inside one
+   outer invocation still share the outer output cap. On Claude, use one Bash
+   call containing one `dd` command per range. Use Bash byte reads for long
+   single-line JSON: Read's offset/limit select lines and cannot bound one long
+   line by bytes. Start at 8192 bytes in both runtimes; if the runtime has a
+   smaller configured output cap, start smaller. Preserve the four-byte overlap
+   when advancing: next start is the last completely read end minus four.
+   After reducing the size, keep that smaller size for the rest of the file.
+   Never advance from a truncated range or add it to the completed ledger.
 2. After the full text read, display the last 64 bytes of every exported file
    and every listed input with
    `tail -c 64 "<returned absolute path>" | od -An -v -c`.
    A file shorter than 64 bytes is displayed in full. This makes trailing spaces,
    tabs and newlines visible in only a few lines, even when the final text range
    is 8192 bytes. Repeat for every file; do not skip files or crop this display
-   further. Truncated output is unread and must be reread.
+   further. Truncated output is unread and must be reread in a fresh top-level
+   call under the bounded read-retry rules below.
    This supplements the text read and does not replace it.
+
+### Bounded read retries and reporting
+
+For a truncated byte-range response, retry from the same unread start in a
+**new top-level call**, halving the requested count (8192, 4096, 2048, 1024).
+Allow at most three retries at that unread start (four attempts including the
+initial read). If starting smaller, halve that count instead; stop if it would
+become four bytes or fewer, because overlap must still allow forward progress.
+After a complete range advances the ledger, the next start has its own retry
+budget. Do not reset the budget merely by splitting or renaming the same
+unread range. Truncation at either the inner or outer tool boundary counts as
+an unread attempt, even if the command exited zero. A truncation marker,
+persisted-output preview, omitted-line notice, or missing range text is not a
+complete read.
+
+For a truncated direct fetch, use at most three smaller-`--limit` retries in
+fresh top-level calls, halving to a minimum of one; stop if one still truncates.
+This does not authorize replacing an already saved export or receipt after
+`INPUT_CHANGED`. Tail displays may be retried at most three times in fresh
+calls, keeping all 64 bytes. A real I/O/tool error remains a read failure under
+the common rules; these truncation retries do not relax other failure rules.
+
+A truncated response becomes a read failure only after its retry budget is
+exhausted. Apply the selected procedure's existing failure handling, preserving
+its commit gates: no summary, checkpoint, state commit or cursor advance from
+incompletely read inputs.
+For a group/global conversation-batch read, failure also precedes input cleanup
+and rotation. Removing this run's private export directory and releasing its
+lock still follow the common rules. Do not change receipts, skip unread bytes,
+or restart Sync to make the run succeed.
+
+In the final Sync result, include each file's completed range ledger and report
+whether truncation occurred. When recovered, name the affected ranges, retry
+counts and successful range size, and continue the run normally; recovered
+truncation alone is not a failed Sync or a request for owner action. On failure,
+report the unread range, attempted sizes/count, and the I/O error or exhausted
+retry budget, together with any earlier committed steps. Do not claim a commit
+or full read that did not occur.
 
 ## Group Sync
 
@@ -185,8 +237,8 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
    receipt `{"scope":...,"after":...,"end":...,"sha256":...}`. Read the full
    batch file in byte ranges. Save its rows, latest summary, and the
    receipt unchanged. This batch's returned end, rather than a later observed
-   frontier, is the checkpoint target. A read
-   failure ends the run before any cleanup/rotation.
+   frontier, is the checkpoint target. Recover truncated output using the bounded
+   read retries above. A read failure ends the run before any cleanup/rotation.
 3. Run `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js cleanup --token T`, then `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js rotate --token T`.
    Run the read-only `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list`.
    No token is needed; a supplied `--token` is ignored.
@@ -260,8 +312,8 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
    Save the receipt unchanged; C is its `coverageEnd`. Read the whole file at
    the returned path by the byte-range rule above (8192-byte ranges with a
    four-byte overlap), including when it is one long JSON line. A truncated range
-   is unread: reread it in smaller ranges. If that group's export or read fails
-   after applicable corrected retries under the common rules,
+   is unread: use the bounded read retries above. If that group's export or read
+   fails after applicable read/corrected-call retries,
    skip its merge and cursor advance, record why, and continue other groups
    under the common failure rules. The immediate-stop token rule applies.
 3. If budget remains, export
@@ -269,9 +321,10 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
    using the saved C. Deduct the metadata `count`, save its raw `receipt`
    (`scope`, `after`, `end`, `count`, `sha256`) unchanged, and read the whole
    file the same way. A limited read's receipt ends at its last returned row;
-   the cursor cannot move past it. If this export or read fails after applicable
-   corrected retries under the common rules, neither cursor
-   for G advances. With budget exhausted, skip the raw export; the raw receipt
+   the cursor cannot move past it. If this export or read fails after the bounded
+   read retries or applicable corrected-call retries under the common rules,
+   neither cursor for G advances. With budget exhausted, skip the raw export;
+   the raw receipt
    is then `null`.
 4. For each group actually processed, run the read-only
    `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list --group G`
