@@ -13,10 +13,10 @@ const shown = (groups, channels) => `c.direction IN ('in','out') AND c.session_g
 // The `origin` group is shown only through the Origin conversation's range.
 const visible = shown("'origin','*'", "'void','internal','system','scheduler','control'");
 const messageVisible = shown("'origin','*'", "'void','system','scheduler','control'");
-// The Origin conversation shows no internal rows on its message page either:
-// those are Origin's exchanges with the group threads.
 const originVisible = shown("'*'", "'void','internal','system','scheduler','control'");
-const visibleIn = (range, messages = false) => range?.origin ? originVisible
+const originMessageVisible = shown("'*'", "'void','system','scheduler','control'");
+const visibleIn = (range, messages = false) => range?.origin
+  ? messages ? originMessageVisible : originVisible
   : messages ? messageVisible : visible;
 // The Origin conversation shows every row recorded under group `origin`: its
 // own address `dashboard origin`, and in single mode every conversation and

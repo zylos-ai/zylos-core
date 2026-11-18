@@ -74,7 +74,7 @@ function fixture(t) {
   return { root, zylos, db, c4, history, run, shell };
 }
 
-test('another session is refused on dashboard origin and its internal relay stays off the Origin conversation page', { timeout: 30000 }, t => {
+test('another session is refused on dashboard origin and its internal relay shows in the Origin conversation', { timeout: 30000 }, t => {
   const f = fixture(t);
   f.c4.insertConversation('in', 'telegram', 'x', 'owner asks elsewhere', { groupName: 'x' });
   const before = f.db.prepare('SELECT count(*) AS n FROM conversations').get().n;
@@ -94,11 +94,9 @@ test('another session is refused on dashboard origin and its internal relay stay
   assert.ifError(relay.error);
   assert.equal(relay.status, 0, relay.stderr);
 
-  const relayed = f.db.prepare("SELECT direction, session_group, endpoint_id FROM conversations WHERE channel='internal' ORDER BY id").all();
-  assert.deepEqual(relayed.map(row => [row.direction, row.session_group, row.endpoint_id]),
-    [['out', 'telegram:x', 'origin'], ['in', 'origin', 'telegram:x']]);
-  // Exchanges between Origin and the group threads are not part of the Origin conversation.
-  assert.deepEqual(f.history.messages(ORIGIN_CONVERSATION_ID).items, []);
+  const items = f.history.messages(ORIGIN_CONVERSATION_ID).items;
+  assert.deepEqual(items.map(row => [row.direction, row.channel, row.internal?.peerSessionGroup, row.internal?.content]),
+    [['in', 'internal', 'telegram:x', 'Please tell the owner in Origin: the export finished. Why: they asked here.']]);
 });
 
 test("Origin's attachment reply to dashboard origin passes the real BeforeSend hook and is delivered with its file", { timeout: 30000 }, t => {

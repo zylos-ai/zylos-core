@@ -117,8 +117,10 @@ test('in single the Origin conversation shows other conversations and external c
             const authors = await Promise.all(ordered.map(id => row(page, id).locator('.chat-message-author').innerText()));
             assert.deepEqual(authors, [dashboard('Origin'), dashboard('Origin'), dashboard('Project X'), dashboard('Project X'),
               fill(locale, 'chat.external.received', { channel: 'Telegram' }), fill(locale, 'chat.external.sent', { channel: 'Telegram' })]);
-            assert.equal(await row(page, relay.inRow.id).count(), 0, 'internal rows stay off the Origin conversation page');
-            assert.equal(await page.locator('#wb-chat .conversation-internal').count(), 0);
+            const internal = page.locator('#wb-chat .conversation-internal');
+            assert.deepEqual(await internal.evaluateAll(nodes => nodes.map(node => node.dataset.messageId)), [String(relay.inRow.id)],
+              'the internal row recorded under origin shows on the Origin page as an internal message');
+            assert.match(await internal.locator('.conversation-internal-content').innerText(), /Internal relay to Origin/);
             const card = row(page, xQuestion.id).locator('.chat-question');
             await card.waitFor();
             const note = card.locator('.chat-notice').filter({ hasText: translations[locale]['chat.question.otherConversationReadOnly'] });
@@ -130,7 +132,9 @@ test('in single the Origin conversation shows other conversations and external c
             assert.deepEqual(quoteHidden, [false, false, true, true, true, true], 'only Origin\'s own rows offer a quote');
             assert.equal(await page.locator('#wb-chat .conversation-input').isDisabled(), false, 'the Origin conversation stays writable');
             const item = page.locator(`#wb-chat [data-conversation-id="${ORIGIN_ID}"]`);
-            assert.match(await item.innerText(), /Origin answers Telegram/, 'the Origin list row previews its latest row');
+            const preview = await item.innerText();
+            assert.match(preview, /Origin answers Telegram/, 'the Origin list row previews its latest non-internal row');
+            assert.doesNotMatch(preview, /Internal relay to Origin/, 'the list preview never takes the internal row');
             const boxes = await page.locator('#wb-chat .conversation-message-list [data-message-id]').evaluateAll(nodes => nodes.map(node => {
               const box = node.getBoundingClientRect(); return { left: box.left, right: box.right, width: innerWidth };
             }));
