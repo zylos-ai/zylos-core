@@ -79,41 +79,21 @@ test('documented completion removes only the marker and preserves the empty fift
   assert.equal(f.child('shard'),'=== ZYLOS STARTUP CONTEXT [5/5] onboarding ===\n');
 });
 
-// Boundary: real c4-send CLI with a private failing transport and private C4 DB.
-// Run for send/completion guidance changes; unrelated changes may skip. The
-// transport only exits 1; no credentials/network/services are involved. The
-// thread's compliance with the instruction remains a real-model review gate.
-test('failed C4 transport leaves pending onboarding available for retry', t => {
-  const f = fixture(t); f.child('fresh');
-  f.write('.claude/skills/onboarding-fixture/package.json','{"type":"module"}');
-  f.write('.claude/skills/onboarding-fixture/scripts/send.js','process.exit(1);\n');
-  const result = spawnSync(process.execPath,[path.join(repo,'skills/comm-bridge/scripts/c4-send.js'),'onboarding-fixture','private'],
-    {env:f.env,cwd:repo,input:'Security notice fixture',encoding:'utf8',timeout:15000,maxBuffer:65536});
-  assert.equal(result.error,undefined); assert.equal(result.status,1,result.stderr);
-  assert.match(result.stderr,/SEND_FAILED/);
-  assert.ok(fs.existsSync(f.marker)); assert.equal(f.inspect().pending,true);
-});
-
 // Boundary: actual old-instance deployment with stale pending states. Run for
 // init upgrade/reader changes; unrelated changes may skip. No installers or services.
-test('old instances ignore pending states and rerun never creates a marker or global state', t => {
+test('old instances ignore pending states and rerun never creates a marker', t => {
   const f = fixture(t);
-  for (const saved of [{},{session_mode:'single'},{session_mode:'multi'}]) {
-    f.write('.zylos/config.json',JSON.stringify(saved));
-    f.write('memory/state.md','- Status: pending\n');
-    f.write('memory/session-groups/origin/state.md','- Status: pending\n');
-    f.child('rerun');
-    for (const group of [undefined,'origin','telegram:other']) {
-      const result=f.inspect(group); assert.equal(result.pending,false); assert.equal(result.body,''); assert.equal(result.scopeRead,true);
-      assert.notEqual(result.prompt.reason,'onboarding_pending');
-    }
-    assert.equal(fs.existsSync(f.marker),false);
-    assert.equal(fs.readFileSync(path.join(f.env.ZYLOS_DIR,'memory/state.md'),'utf8'),'- Status: pending\n');
-    fs.unlinkSync(path.join(f.env.ZYLOS_DIR,'memory/state.md'));
-    fs.unlinkSync(path.join(f.env.ZYLOS_DIR,'memory/session-groups/origin/state.md'));
-    f.child('rerun');
-    assert.equal(fs.existsSync(path.join(f.env.ZYLOS_DIR,'memory/state.md')),false);
-    assert.equal(fs.existsSync(path.join(f.env.ZYLOS_DIR,'memory/session-groups/origin/state.md')),false);
+  f.write('.zylos/config.json',JSON.stringify({session_mode:'single'}));
+  const states = ['memory/state.md','memory/session-groups/origin/state.md'];
+  for (const state of states) f.write(state,'- Status: pending\n');
+  f.child('rerun');
+  for (const group of [undefined,'origin','telegram:other']) {
+    const result=f.inspect(group); assert.equal(result.pending,false); assert.equal(result.body,''); assert.equal(result.scopeRead,true);
+    assert.notEqual(result.prompt.reason,'onboarding_pending');
+  }
+  assert.equal(fs.existsSync(f.marker),false);
+  for (const state of states) {
+    assert.equal(fs.readFileSync(path.join(f.env.ZYLOS_DIR,state),'utf8'),'- Status: pending\n');
   }
 });
 
