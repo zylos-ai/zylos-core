@@ -69,7 +69,8 @@ export async function groupCommand(args, { run, io = process } = {}) {
       const data = result.data;
       io.stdout.write(`OK: ${JSON.stringify(data)}\n`);
       if (data.running === null) {
-        if (data.sessionMode !== 'multi') io.stdout.write('Applies only in multi session mode.\n');
+        // In native single, Origin runs and is compared like a multi group.
+        if (data.sessionMode !== 'multi' && !(data.sessionMode === 'single' && data.sessionGroup === 'origin')) io.stdout.write('Applies only in multi session mode.\n');
         else if (kind === 'model' && data.runtime !== data.resolved?.runtime) io.stdout.write(`Saved configuration for ${data.runtime}; current group runtime is ${data.resolved?.runtime ?? 'unknown'}.\n`);
       }
     }

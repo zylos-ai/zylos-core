@@ -134,10 +134,15 @@ export function createStore(database, dependencies = {}) {
     insertConversation: (direction, channel, endpointId, content, options = {}) => write(c => {
       if (!options || typeof options !== 'object' || Array.isArray(options)) throw dataError('INVALID_ARGS', 'Expected message options');
       if (typeof content !== 'string') throw dataError('INVALID_ARGS', 'Message content must be a string');
-      const allowed = new Set(['status', 'priority', 'requireIdle', 'deliveryAction', 'groupName', 'handoffGroup', 'wholeGroup', 'sessionId']);
+      const allowed = new Set(['status', 'priority', 'requireIdle', 'deliveryAction', 'groupName', 'handoffGroup', 'wholeGroup', 'sessionId', 'recordGroup']);
       if (Object.keys(options).some(key => !allowed.has(key))) throw dataError('INVALID_ARGS', 'Unknown message option');
       if (options.status !== undefined && !(direction === 'in' ? ['pending', 'failed'] : ['delivered']).includes(options.status)) throw dataError('INVALID_ARGS', 'Invalid initial message status');
-      return insert(c, direction, channel, endpointId, content, resolve(c, direction, channel, endpointId, options), options);
+      // recordGroup is reserved for Core's outbound send: the address still
+      // resolves (and allocates its namespace binding) but the row is recorded under origin.
+      const { recordGroup, ...routing } = options;
+      if (recordGroup !== undefined && (recordGroup !== 'origin' || direction !== 'out' || channel === 'void')) throw dataError('INVALID_ARGS', 'recordGroup is reserved for Core outbound recording under origin');
+      const group = resolve(c, direction, channel, endpointId, routing);
+      return insert(c, direction, channel, endpointId, content, recordGroup ?? group, options);
     }),
     insertInternalMessage: (senderGroup, targetGroup, content, { sessionId } = {}) => write(c => {
       if (!senderGroup) throw dataError('NO_SENDER_GROUP', 'Sender session group is required');

@@ -22,11 +22,12 @@ export async function collectStatus({ mode = readSessionMode, list = listGroupTm
   try { sessionMode = mode().mode; if (![null, 'single', 'multi'].includes(sessionMode)) sessionMode = 'unreadable'; }
   catch { sessionMode = 'unreadable'; }
   const view = sessionMode === null || sessionMode === 'single' ? 'single' : 'multi';
-  async function item(sessionGroup) {
+  // readGroup is the session actually read; the row keeps sessionGroup as reported.
+  async function item(sessionGroup, readGroup = sessionGroup) {
     const empty = { sessionGroup, presence: 'unknown', runId: null, sessionId: null, runtime: null,
       status: { valid: false, reason: null, state: null, idleSeconds: null, lastState: null, lastIdleSeconds: null, sampledAt: null }, error: null };
     try {
-      const { identity, status } = await session(sessionGroup, { freshnessMs: 5000 });
+      const { identity, status } = await session(readGroup, { freshnessMs: 5000 });
       return { ...empty, presence: !identity.present ? 'not_running' : identity.ready ? 'running' : 'starting',
         runId: identity.present ? identity.runId : null, sessionId: identity.present ? identity.sessionId : null,
         runtime: identity.present ? identity.runtime : null,
@@ -36,12 +37,14 @@ export async function collectStatus({ mode = readSessionMode, list = listGroupTm
           lastState: status.lastValue?.state ?? null, lastIdleSeconds: status.lastValue?.idle_seconds ?? null } };
     } catch (error) { return { ...empty, error: readError(error) }; }
   }
-  const origin = await item(view === 'single' ? null : 'origin');
+  // Native single runs only Origin and reads it; a pre-migration instance reads its sole session.
+  // Both keep sessionGroup null in the single view.
+  const origin = view === 'multi' ? await item('origin') : await item(null, sessionMode === 'single' ? 'origin' : null);
   let groups = [], groupListError = null;
   if (view === 'multi') {
     try {
       const names = [...new Set((await list()).map(row => row.sessionGroup).filter(group => group !== 'origin'))].sort();
-      groups = await Promise.all(names.map(item));
+      groups = await Promise.all(names.map(name => item(name)));
     } catch (error) { groupListError = readError(error); }
   }
   const runtimeHealth = {};

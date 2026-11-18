@@ -161,6 +161,7 @@
   "wb.detail.syncing": "记忆整理中",
   "wb.detail.launchConfigUnreadable": "读不到启动配置",
   "wb.config.single": "已保存，仅 multi 生效；single 使用原生设置",
+  "wb.config.afterMulti": "已保存，切回 multi 后生效（{config}）",
   "wb.config.otherRuntime": "这对模型属于非本组目标 runtime；仍保留，切回时使用",
   "wb.config.unknown": "无法确认（{reason}）",
   "wb.config.nextStart": "下次正常启动时使用，不为设置而唤醒",
