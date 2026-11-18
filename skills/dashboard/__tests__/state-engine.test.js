@@ -1612,6 +1612,28 @@ test('AM heartbeat returns to stale once Origin is running again with a silent h
   assert.equal(engine.getSourceHealth().collector_liveness.am_heartbeat.status, 'stale');
 });
 
+test('without an injected shared presence reader a silent heartbeat stays stale', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'am-health-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ session_mode: 'single' }));
+  const now = 1_800_000_000_000;
+  const file = path.join(root, 'activity-monitor', 'session-groups', 'origin', 'agent-status.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ state: 'offline', health: 'ok' }));
+  fs.utimesSync(file, (now - 300_000) / 1000, (now - 300_000) / 1000);
+  let row;
+  const store = { ...makeMockStore(),
+    upsertSourceHealth: (name, signal_type, status, extra) => { row = { name, signal_type, status, extra }; },
+    getSourceHealth: () => row ? [row] : [],
+  };
+  // StateEngine opens no tmux connection of its own: presence comes only from the injected shared observation.
+  const engine = new StateEngine(store, {}, { zylosDir: root }, { now: () => now });
+  engine._readAMHeartbeat();
+  await engine._originProbe;
+  assert.equal(engine.getSourceHealth().collector_liveness.am_heartbeat.status, 'stale');
+});
+
 test('source health omits retired sources even when their stored rows remain', () => {
   const rows = [healthRow('hook_events', 'runtime_progress'),
     healthRow('hook_handler', 'collector_liveness'), healthRow('c4', 'collector_liveness'),

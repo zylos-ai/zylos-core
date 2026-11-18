@@ -495,7 +495,7 @@
   "chat.block.failed": "Content could not be produced.",
   "chat.question.stateUnavailable": "Question state is temporarily unavailable. Showing the last known state.",
   "chat.question.externalReadOnly": "Questions in external history are read only.",
-  "chat.question.otherConversationReadOnly": "This question comes from another conversation and is read only here; you can answer it in the Origin conversation directly.",
+  "chat.question.otherConversationReadOnly": "This question comes from another conversation and cannot be answered on the card. Reply to Origin in the message box below instead.",
   "chat.question.ended": "This question has already been answered or ended.",
   "chat.question.invalidData": "The question data is invalid. This question cannot be answered.",
   "chat.question.stateNotLoaded": "Question state has not been loaded.",

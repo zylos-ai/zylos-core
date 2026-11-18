@@ -310,6 +310,7 @@ function getSystemMetrics() {
 
 // 7. State engine
 const stateEngine = new StateEngine(store, collectors, config, {
+  readOriginPresence: () => sessionObservations.originPresence(),
   onStateChange: (st) => {
     scheduleFleetStateBroadcast();
   }

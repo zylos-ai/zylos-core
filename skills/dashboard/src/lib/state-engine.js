@@ -4,12 +4,6 @@ import { loadCoreModule } from './core-modules.js';
 const { readConfigStrict } = await loadCoreModule('config-store.js');
 const { readJsonSample } = await loadCoreModule('session-usage-reader.js');
 
-/** Whether Origin's session is running, from Core's live identity read. */
-async function readLiveOrigin() {
-  const identity = await (await loadCoreModule('session-state-reader.js')).readLiveIdentity('origin');
-  return typeof identity?.present === 'boolean' ? identity.present : null;
-}
-
 const STALE_TOOL_THRESHOLD_MS = 300_000;
 const STALE_SUBAGENT_THRESHOLD_MS = 1_800_000;
 const STALE_PERMISSION_THRESHOLD_MS = 600_000;
@@ -103,7 +97,7 @@ export function deriveAgentState(signals) {
 }
 
 export class StateEngine {
-  constructor(store, collectors, config, { now = () => Date.now(), onStateChange = null, readOriginPresence = readLiveOrigin } = {}) {
+  constructor(store, collectors, config, { now = () => Date.now(), onStateChange = null, readOriginPresence = async () => null } = {}) {
     this.store = store;
     this._readOriginPresence = readOriginPresence;
     this._originProbe = null;
@@ -731,8 +725,9 @@ export class StateEngine {
       });
       // Origin is reclaimed when idle in multi and single alike; a reclaimed
       // Origin writes no heartbeat, so its silence is idleness, not a stale
-      // collector. Ask Core whether Origin is running shortly before the file
-      // would turn stale, so the answer is ready when it does.
+      // collector. Ask the shared session observation (injected; no tmux read
+      // here) whether Origin is running shortly before the file would turn
+      // stale, so the answer is ready when it does.
       if (keyPresent && this._now() - sample.sampledAt >= AM_HEARTBEAT_STALE_MS - AM_HEARTBEAT_INTERVAL_MS) {
         this._probeOriginPresence();
       } else {

@@ -495,7 +495,7 @@
   "chat.block.failed": "内容生成失败。",
   "chat.question.stateUnavailable": "问题状态暂不可用，显示上次已知状态。",
   "chat.question.externalReadOnly": "外部历史中的问题只能查看。",
-  "chat.question.otherConversationReadOnly": "这个问题来自其他对话，这里只能查看；可以直接在 Origin 对话里回答。",
+  "chat.question.otherConversationReadOnly": "这个问题来自其他对话，不能在卡片上作答；请在下方输入框直接回复 Origin。",
   "chat.question.ended": "该问题已被回答或已结束。",
   "chat.question.invalidData": "问题数据无效，无法回答。",
   "chat.question.stateNotLoaded": "问题状态未加载。",

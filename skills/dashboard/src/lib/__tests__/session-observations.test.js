@@ -151,3 +151,29 @@ test('agy Origin state and runtime health remain available without account colle
   assert.equal(sampled, true);
   assert.deepEqual(await provider.reader.readRuntimeHealth('agy'), { health: 'ok' });
 });
+
+// The heartbeat's dormancy check reads Origin's entry from the shared batch
+// instead of opening its own tmux connection.
+test('Origin presence comes from the shared batch and reuses its cache', async () => {
+  const entry = present => ({ ...observation(), identity: { ...observation().identity, present } });
+  let present = true;
+  const { provider, batches } = fixture({ read: () => new Map([['origin', entry(present)]]) });
+  await provider.get();
+  assert.equal(await provider.originPresence(), true);
+  assert.equal(batches(), 1, 'presence reuses the cached batch');
+  // Native single reads Origin's live session; without the key the one null-group session is read.
+  const single = (value, mode = 'single') => createSessionObservations({ now: () => 1000, loadCoreModule: async name => ({
+    'config.js': { readSessionMode: () => { if (mode === 'unreadable') throw new Error('unreadable configuration'); return { mode }; } },
+    'session-state-reader.js': { readSessionStates: async groups => {
+      assert.deepEqual(groups, [mode === 'single' ? 'origin' : null]);
+      return new Map(value ? [[groups[0], value]] : []);
+    } },
+    'session-usage-reader.js': {}, 'session-group-paths.js': {},
+  })[name] });
+  assert.equal(await single(entry(false)).originPresence(), false);
+  assert.equal(await single(entry(true)).originPresence(), true);
+  assert.equal(await single(entry(true), null).originPresence(), true, 'an instance without the key reads its null-group session');
+  assert.equal(await single(null).originPresence(), null, 'a missing Origin entry is unknown, not absent');
+  await assert.rejects(single(null, 'unreadable').originPresence(), /unreadable configuration/,
+    'an unreadable observation rejects, which the heartbeat treats as unknown');
+});
