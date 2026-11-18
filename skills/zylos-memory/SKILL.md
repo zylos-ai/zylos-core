@@ -145,7 +145,10 @@ writer after a tool denial. The token is from `sync-lock.js acquire`, never
 from another worker. The tool infers permission from its own environment and
 the matching marker; a model-supplied group or role is not authorization.
 
-Group Sync writes only its temporary state and its guarded checkpoint/commit.
+Group Sync prepares a temporary copy with guarded `sync-files.js prepare`,
+then edits only changed fragments with `edit_memory`; only a missing state
+needs a complete new document. Group Sync writes only its temporary state and
+its guarded checkpoint/commit.
 Origin Sync writes shared self files; it does not read or write group state or
 inbox. Global Sync writes global temporary state and shared self files, and
 never reads `session-groups/`. Formal state replacement, input cleanup, and
@@ -179,7 +182,11 @@ does not replace the restricted Sync tool or authorize additional Sync writes.
 ## Content and formats
 
 Keep only current focus, active work, pending items, and commitments in state.
-There is no state length budget. Never summarize away or drop pending absorbed
+Target the 20 KiB soft state budget (STATE_BUDGET_BYTES in sync-files.js).
+Before removing each completed or superseded item, include one result line in
+this round’s checkpoint summary for Origin Sync to record on its project page.
+Group Sync never writes shared reference files. Commit reports published bytes
+and an over-budget flag without blocking publication. Never summarize away or drop pending absorbed
 messages to make the file smaller; commit preserves their exact remaining lines.
 Use the state header and four sections in [state format](references/state-format.md).
 Use [inbox format](references/inbox-format.md) and [session log format](references/session-log-format.md)

@@ -111,8 +111,10 @@ from the target (paths are relative to memory):
 {"op":"edit","path":"reference/projects/example.md","expected":"- **Status:** planning","replacement":"- **Status:** active","token":"T"}
 ```
 
-Do not call a shell writer for this edit. The same token is required when
-creating the temporary state with `{"op":"create","path":"state.md.tmp","replacement":"<complete state document>","token":"T"}`.
+Do not call a shell writer for this edit. After `sync-files.js prepare --token T` copies an existing state, use
+`op: "edit"` with unique expected/replacement fragments at `state.md.tmp`; do
+not output a full replacement document. Only when prepare reports STATE_MISSING
+is a complete new temporary state needed with `{"op":"create","path":"state.md.tmp","replacement":"<complete state document>","token":"T"}`.
 For Group and Global Sync, the tool maps this fixed name to the current scope's
 token-named temporary file automatically; no group or token substitution in the path is needed.
 
@@ -261,9 +263,15 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
    from only the latest summary; two interrupted runs may leave several.
 5. Reconcile old state, all difference summaries, this batch, segments, and logs
    by facts. Prepare a checkpoint summary including every inbox item absorbed
-   this round, and a new state containing current work. The commit script fills
-   `inbox_committed` from this round's listed segments; leave it empty in the
-   temporary state and do not copy it from old state. Put the batch end in coverage.
+   this round, and state changes containing current focus, genuine pending work and blockers.
+   Target the 20 KiB soft budget (STATE_BUDGET_BYTES in sync-files.js). Before
+   removing each completed or superseded item, include one result line per item
+   in this round's checkpoint summary for Origin Sync to record on project pages;
+   group Sync still does not write shared references. Preserve all unresolved
+   work and pending absorbed messages even if they exceed the budget.
+   The commit script fills `inbox_committed` from this round's listed segments;
+   a prepared copy may retain its old value, while a newly created state leaves
+   it empty. Put the batch end in coverage by editing only that header field.
    Preserve a valid `synced_at` from the existing state/skeleton as a temporary
    placeholder (or `1970-01-01T00:00:00Z` when neither exists); do not calculate
    or round a new timestamp. Commit validates the
@@ -271,20 +279,34 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
 6. For any absorbed-message block in Pending, use actual progress and C4 source
    messages to identify followed-up IDs. An outbound audit row alone does not
    prove delivery; uncertain or failed sends are not completion evidence.
-   Do **not** copy the block into the temporary state. Keep a separate
+   Do **not** rewrite or manually copy the block. Leave any script-copied
+   block unchanged; commit strips that copy and preserves the official lines. Keep a separate
    `followedUpIds` array; no progress means an empty array.
 7. Send the summary on stdin to
    `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js checkpoint <batch-end> --token T --batch '<receipt JSON>'`.
    Checkpoint recomputes and verifies the receipt against the database rows.
-   Only after success, use `edit_memory` to create/edit
-   `state.md.tmp`; the tool selects this scope's token-named temporary file. Then send JSON
+   Only after success, run
+   `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js prepare --token T`.
+   This guarded command copies the current state byte for byte into this token's
+   temporary file, exclusively (EXISTS means preserve the existing draft and
+   inspect it under the common corrected-call rules, never overwrite it).
+   Use `edit_memory` unique-fragment replacements at `state.md.tmp` to edit only
+   changed parts, including coverage. Do not replace the whole document. Repair a damaged first-line header
+   with a unique-fragment edit using this scope, the batch-end coverage and the
+   fixed timestamp placeholder; keep its body and all unresolved work.
+   If prepare returns `prepared:false, reason:STATE_MISSING`, use `edit_memory`
+   to create the complete initial state instead. The tool selects this scope's
+   token-named temporary file. Then send JSON
    `{"followedUpIds":[],"batch":<receipt>,"inputs":<complete list object>}`
    on stdin to `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js commit --token T`, replacing the empty array only
    with proven followed-up IDs. Commit verifies the batch, checkpoint coverage,
    the exact current segment IDs, absolute paths and hashes, then writes those
    segment IDs into the published state header and sets `synced_at` from the
    script clock at publication, in UTC with milliseconds. The worker-supplied
-   timestamp is always overwritten. Session logs are read inputs,
+   timestamp is always overwritten. Commit outputs `stateBytes`,
+   `stateBudgetBytes` (20480), and `stateOverBudget` after publication, including
+   preserved absorbed lines. A true overflow flag is report-only: do not retry
+   or discard unresolved work to clear it. Session logs are read inputs,
    but are not immutable commit inputs: a main-session note appended during Sync
    must not reject commit.
    Handle mismatches under the common rules; never omit inputs or fabricate a receipt to retry.
@@ -469,7 +491,8 @@ state, commit, and failure sequence, with these differences:
   do not block checkpoint.
 - After a substantive identity write, request rotation. Failure is reported
   but checkpoint/state/release still proceed; do not claim it will retry itself.
-- Use `state.md.tmp`; the tool selects this scope's token-named temporary file. Preserve absorbed
+- Use the same guarded `prepare` and fragment-edit sequence, soft budget and
+  per-item checkpoint result lines as Group Sync. Use `state.md.tmp`; the tool selects this scope's token-named temporary file. Preserve absorbed
   items by supplying only proven followedUpIds to commit, as in Group Sync.
 - Release once and report.
 

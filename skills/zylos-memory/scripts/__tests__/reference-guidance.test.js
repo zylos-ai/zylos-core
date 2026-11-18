@@ -21,7 +21,7 @@ test('Sync procedures use a fixed temporary state name without path placeholders
   for (const source of [sync, format]) {
     assert.doesNotMatch(source, /state\.md\.(?!tmp\b)[^\s`"/]+\.tmp|session-groups\/G\/state\.md/);
   }
-  assert.match(normalize(format), /Use the restricted tool for `state\.md\.tmp` after checkpoint succeeds/);
+  assert.match(normalize(format), /After checkpoint succeeds, run `sync-files\.js prepare --token T`/);
   assert.match(normalize(format), /The tool maps this fixed name to the current scope's temporary state file for the acquired token/);
   assert.match(sync, /"path":"state\.md\.tmp"/);
   for (const section of [between(sync, '## Group Sync', '## Origin Sync'),
@@ -98,13 +98,14 @@ test('state guidance assigns committed segment IDs to the commit script', () => 
   const group = normalize(between(sync, '## Group Sync', '## Origin Sync'));
   const global = normalize(between(sync, '## Single global Sync', '## Moving from old files'));
   assert.match(group, /The commit script fills `inbox_committed` from this round's listed segments/);
-  assert.match(group, /leave it empty in the temporary state and do not copy it from old state/);
+  assert.match(group, /a prepared copy may retain its old value, while a newly created state leaves it empty/);
   assert.match(group, /then writes those segment IDs into the published state header/);
   assert.doesNotMatch(group, /List all read segment IDs in its `inbox_committed` header|and the state's segment IDs/);
   assert.match(global, /Follow Group Sync's read-before-cleanup, recovery, summary, temporary state, commit, and failure sequence/);
   const format = normalize(read('state-format'));
   assert.match(format, /The commit script fills `inbox_committed` from this round's listed, verified segments/);
-  assert.ok(format.includes('Leave it empty in temporary state; do not copy it from old state.'));
+  assert.ok(format.includes('When creating a missing state, leave it empty.'));
+  assert.match(format, /commit always replaces it with the verified current IDs/);
   assert.match(format, /with no notes this round, the published header is:.*coverage=42 \| inbox_committed= -->/);
   assert.match(format, /With one new note `20261019T053002123Z`, only that ID appears, even if the old state named `20261019T053001123Z`:.*coverage=42 \| inbox_committed=20261019T053002123Z -->/);
 });

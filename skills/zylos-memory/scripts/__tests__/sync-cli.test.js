@@ -17,11 +17,12 @@ function run(script, args, env, input = '') {
 }
 
 // Integration boundary: real MCP editor, checkpoint/list/commit CLIs, private
-// tmux identity and private C4 database. Run for temporary-state alias changes;
+// tmux identity and private C4 database. Run for draft preparation, state
+// compaction, fragment editing and commit-output changes;
 // skip for unrelated changes. readyTmuxTarget reaps its session and removes the
 // fixture; each CLI has a timeout. Read back isolation before any Sync operation.
-for (const kind of ['group', 'global']) {
-  test(`fixed temporary state name reaches a successful ${kind} commit`, async t => {
+for (const kind of ['group', 'global']) for (const existing of [false, true]) {
+  test(`fixed temporary state name reaches a successful ${kind} commit with ${existing ? 'existing' : 'missing'} state`, async t => {
     const f = readyTmuxTarget(t, { prefix: 'state-alias-', mode: kind === 'group' ? 'multi' : 'single', packageRoot: rootPath });
     const env = { ...f.env, ZYLOS_RUN_ID: f.ready.runId, TZ: 'Asia/Singapore',
       PM2_HOME: path.join(f.root, 'pm2'), TMPDIR: path.join(f.root, 'tmp') };
@@ -40,21 +41,59 @@ for (const kind of ['group', 'global']) {
     f.db.prepare("INSERT INTO conversations (id,timestamp,direction,channel,endpoint_id,content,status,session_group) VALUES (1,'2026-10-19 05:30:02','in','test','fixture','Private test message','delivered',?)").run(kind === 'group' ? scope : 'origin');
     const rows = f.db.prepare('SELECT * FROM conversations WHERE id=1').all();
     const batch = createBatchReceipt(rows, { scope, after: 0, end: 1 });
-    const checkpoint = run('sync-files', ['checkpoint', '1', '--token', token, '--batch', JSON.stringify(batch)], env, 'Private test summary.');
+    const completed = existing ? Array.from({ length: 20 }, (_, i) => `- Completed task ${i}: ` + 'historic detail '.repeat(400) + '\n') : [];
+    const summary = existing ? completed.map((_, i) => `- Completed task ${i}: delivered successfully.`).join('\n') : 'Private test summary.';
+    const checkpoint = run('sync-files', ['checkpoint', '1', '--token', token, '--batch', JSON.stringify(batch)], env, summary);
     assert.equal(checkpoint.status, 0, checkpoint.stderr);
     const listing = run('sync-files', ['list'], env);
     assert.equal(listing.status, 0, listing.stderr);
     const inputs = JSON.parse(listing.stdout), memoryDir = path.dirname(inputs.statePath);
-    const text = renderStateSkeleton({ scope, syncedAt: '2026-10-19T05:30:02Z' }).replace('coverage= |', 'coverage=1 |');
-    assert.equal((await editor({ op: 'create', path: 'state.md.tmp', replacement: text, token })).ok, true);
+    const text = renderStateSkeleton({ scope, syncedAt: '2026-10-19T05:30:02Z' })
+      .replace('coverage= |', 'coverage=1 |')
+      .replace('## In Progress\n', '## In Progress\n- Active task: keep working.\n' + (existing ? 'Current task details. '.repeat(700) + '\n' : ''))
+      .replace('## Pending\n', '## Pending\n- Blocked on upstream approval.\n');
+    if (existing) {
+      fs.mkdirSync(memoryDir, { recursive: true });
+      const old = text.replace('coverage=1 |', 'coverage=0 |').replace('## In Progress\n', '## In Progress\n' + completed.join(''));
+      assert.ok(Buffer.byteLength(old) >= 120 * 1024);
+      fs.writeFileSync(inputs.statePath, old);
+    }
+    const prepared = run('sync-files', ['prepare', '--token', token], env);
+    assert.equal(prepared.status, 0, prepared.stderr);
+    assert.equal(JSON.parse(prepared.stdout).prepared, existing);
+    if (existing) {
+      assert.equal((await editor({ op: 'edit', path: 'state.md.tmp', expected: 'coverage=0 |',
+        replacement: 'coverage=1 |', token })).ok, true);
+      for (const expected of completed) {
+        assert.equal((await editor({ op: 'edit', path: 'state.md.tmp', expected, replacement: '', token })).ok, true);
+      }
+      const recorded = f.db.prepare('SELECT summary FROM checkpoints ORDER BY id DESC LIMIT 1').get().summary;
+      for (let i = 0; i < completed.length; i++) assert.ok(recorded.includes(`- Completed task ${i}: delivered successfully.`));
+    } else {
+      assert.equal((await editor({ op: 'create', path: 'state.md.tmp', replacement: text, token })).ok, true);
+    }
     const temporary = path.join(memoryDir, `state.md.${token}.tmp`);
     assert.equal(fs.readFileSync(temporary, 'utf8'), text);
-    assert.equal((await editor({ op: 'edit', path: 'state.md.tmp', expected: '## Headline\n',
-      replacement: '## Headline\nUpdated through the fixed name.\n', token })).ok, true);
+    const edit = { op: 'edit', path: 'state.md.tmp', expected: '## Pending\n',
+      replacement: '## Pending\n- New pending task.\n', token };
+    assert.equal((await editor(edit)).ok, true);
+    if (existing) {
+      const fullCreatePayloadBytes = Buffer.byteLength(JSON.stringify({ op: 'create', path: 'state.md.tmp', replacement: text, token }));
+      const fragmentPayloadBytes = Buffer.byteLength(JSON.stringify(edit));
+      assert.ok(fragmentPayloadBytes < fullCreatePayloadBytes / 10);
+      console.log(JSON.stringify({ boundary: `${kind} add-one-task payload`, fullCreatePayloadBytes, fragmentPayloadBytes,
+        tokenMeasurement: 'not measured; real-model comparison belongs to review' }));
+    }
     const result = run('sync-files', ['commit', '--token', token], env, JSON.stringify({ followedUpIds: [], inputs, batch }));
     assert.equal(result.status, 0, result.stderr);
     const published = fs.readFileSync(inputs.statePath, 'utf8');
-    assert.match(published, /Updated through the fixed name\./);
+    assert.equal(JSON.parse(result.stdout).stateBytes, Buffer.byteLength(published));
+    assert.equal(JSON.parse(result.stdout).stateOverBudget, false);
+    assert.ok(Buffer.byteLength(published) <= 20 * 1024);
+    assert.match(published, /Active task: keep working/);
+    assert.match(published, /Blocked on upstream approval/);
+    assert.match(published, /New pending task/);
+    assert.doesNotMatch(published, /Completed task/);
     assert.match(published, /coverage=1/);
     assert.doesNotMatch(published, /synced_at=2026-10-19/);
     assert.equal(fs.existsSync(temporary), false);
@@ -100,7 +139,7 @@ test('list ignores optional tokens while write commands still require a token', 
     assert.equal(result.stderr, '');
     assert.equal(result.stdout, baseline.stdout);
   }
-  for (const args of [['cleanup'], ['rotate'], ['checkpoint', '1', '--no-content'], ['commit']]) {
+  for (const args of [['prepare'], ['cleanup'], ['rotate'], ['checkpoint', '1', '--no-content'], ['commit']]) {
     const result = run('sync-files', args, env, 'not valid JSON');
     assert.equal(result.error, undefined);
     assert.equal(result.status, 1, result.stderr);
@@ -109,7 +148,7 @@ test('list ignores optional tokens while write commands still require a token', 
   }
   assert.deepEqual(fs.readdirSync(env.ZYLOS_DIR).sort(), ['activity-monitor', 'memory']);
   const diagnostics = fs.readFileSync(path.join(env.ZYLOS_DIR, 'activity-monitor', 'supervisor-events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.deepEqual(diagnostics.map(row => [row.action, row.code]), ['cleanup', 'rotate', 'checkpoint', 'commit'].map(action => [action, 'INVALID_INPUT']));
+  assert.deepEqual(diagnostics.map(row => [row.action, row.code]), ['prepare', 'cleanup', 'rotate', 'checkpoint', 'commit'].map(action => [action, 'INVALID_INPUT']));
   assert.deepEqual(fs.readdirSync(memoryDir).sort(), ['inbox.md', ...segments.map(id => `inbox.${id}.md`)].sort());
   for (const segment of segments) assert.equal(fs.readFileSync(path.join(memoryDir, `inbox.${segment}.md`), 'utf8'), segment);
   assert.equal(fs.readFileSync(path.join(memoryDir, 'inbox.md'), 'utf8'), 'active inbox');
@@ -241,7 +280,7 @@ test('Sync scripts report a missing or malformed --token as input before touchin
     PM2_HOME: path.join(dir, 'pm2'), TMPDIR: path.join(dir, 'tmp'),
     ZYLOS_RUN_ID: 'token-test', ZYLOS_SESSION_GROUP: 'origin' };
   for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) fs.mkdirSync(env[key], { recursive: true });
-  const commands = [['sync-files', ['cleanup']], ['sync-files', ['rotate']], ['sync-files', ['checkpoint', '1']],
+  const commands = [['sync-files', ['prepare']], ['sync-files', ['cleanup']], ['sync-files', ['rotate']], ['sync-files', ['checkpoint', '1']],
     ['sync-files', ['commit']], ['origin-cursor', ['advance', '--group', 'telegram:test']]];
   for (const [script, args] of commands) {
     for (const token of [null, '', 'B'.repeat(32), 'b'.repeat(31), 'g'.repeat(32)]) {
