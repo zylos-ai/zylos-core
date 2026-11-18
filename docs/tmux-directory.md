@@ -28,14 +28,9 @@ the affected services to resume scheduling. Restoring the directory alone does
 not clear the latch. An empty or unset `TMUX_TMPDIR` retains the previous socket
 selection and performs no private-directory validation.
 
-Docker startup and shutdown use the same shared client policy. The entrypoint
-checks before each stale-session stop, runtime launch and shutdown stop.
-
 Real tmux validation must use a separate Unix user from every live Zylos
 instance. Isolate `HOME`, `ZYLOS_DIR`, `PM2_HOME`, short `TMPDIR`, socket paths,
 and any test database. Missing-directory rejection before client execution is
-covered by `cli/lib/runtime/__tests__/tmux-directory.test.js`; Docker startup
-and shutdown boundaries use fake clients in
-`test/tmux-directory.integration.test.js`. Real service deletion/event-count
-acceptance and the baseline negative control remain separate checks,
+covered by `cli/lib/runtime/__tests__/tmux-directory.test.js`. Real service
+deletion/event-count acceptance and the baseline negative control remain separate checks,
 alongside the matrix in `docs/tmux-matrix.md`.

@@ -7,7 +7,6 @@ import { createTestEnvironment } from './test-environment.js';
 
 const ROOT = process.cwd();
 const ROOT_NODE_TESTS = [
-  'test/tmux-directory.integration.test.js',
   'test/memory-budget-browser.test.js',
   'test/memory-startup-budget.integration.test.js',
   'test/upgrade-confirmation.integration.test.js',
