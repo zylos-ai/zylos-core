@@ -123,7 +123,7 @@ export function createSupervisor(deps) {
     let interrupted=false;
     await guardedAction(scene,async current=>{
       if(current.sessionId!==scene.sessionId || observer.noResponseActive(current))return false;
-      const mode=(await readMode()).mode;
+      const legacy=legacyMode(await readMode());
       const targetBinding={...await scenes.bindTarget(current),expectedSessionId:current.sessionId};
       if(!await observer.canAct(current,{requireReady:true,requireOpen:true}) || observer.noResponseActive(current))return false;
       const fresh=readActivity(current),activity=activities.get(current.sessionGroup);
@@ -139,7 +139,7 @@ export function createSupervisor(deps) {
       const enqueuedAt=now();
       // Use the shared recovery priority; equal-priority controls retain FIFO order.
       // The existing per-group C4 lane still owns every terminal write.
-      const control=await db.insertControl('[KEYSTROKE]Escape',{sessionGroup:mode==='single'?null:current.sessionGroup,
+      const control=await db.insertControl('[KEYSTROKE]Escape',{sessionGroup:legacy?null:current.sessionGroup,
         targetBinding,priority:0,bypassState:true,appendAckSuffix:false});
       const result={ok:Number.isSafeInteger(control?.id) && control.id>0,controlId:control?.id ?? null,enqueuedAt};
       if(!result.ok)return false;

@@ -63,8 +63,10 @@ function fixture(t, { mode = 'single', runtime = 'claude', group = null, pausePa
     // This database belongs only to this file; each sequential case starts empty.
     for (const suffix of ['', '-wal', '-shm']) fs.rmSync(DB_PATH + suffix, { force: true });
   });
+  // Single without a group is the pre-migration instance (no mode key); single with 'origin' is native single.
+  const legacy = mode === 'single' && group === null;
   const store = { ...c4db, ...createStore(database, { now: () => now,
-    readConfig: () => ({ state: 'ok', config: { session_mode: mode, runtime } }),
+    readConfig: () => ({ state: 'ok', config: legacy ? { runtime } : { session_mode: mode, runtime } }),
     validateComponent: () => true, validateModel: () => true }) };
   const target = { present: true, ready: true, runtime, runId: env.ZYLOS_RUN_ID,
     runtimeSessionId: 'isolated-session', sessionId: '$1', paneId: '%1', serverGeneration: 'isolated' };
@@ -81,7 +83,7 @@ function fixture(t, { mode = 'single', runtime = 'claude', group = null, pausePa
     stop: async value => { stops.push(value.runId); present = false; scene.present = false; scene.ready = false; scene.processRunning = false; },
   };
   const supervisor = createSupervisor({ db: store, scenes, zylosDir: root, env,
-    readConfiguration: async () => ({ mode, runtime }), readMode: async () => ({ mode }), resolveTargetRuntime: async () => runtime,
+    readConfiguration: async () => ({ mode, legacy, runtime }), readMode: async () => ({ mode, legacy }), resolveTargetRuntime: async () => runtime,
     requestStore: new RestartRequestStore({ file: path.join(root, 'requests.json') }),
     readSyncMarker: async () => null, resolveToolRule: async () => null,
     matchScreen: async () => ({}), checkAuth: async () => ({ status: 'uncertain' }),
@@ -95,7 +97,7 @@ function fixture(t, { mode = 'single', runtime = 'claude', group = null, pausePa
   const pasteReady = new Promise(resolve => { pastedReady = resolve; });
   const pasteGate = new Promise(resolve => { releasePaste = resolve; });
   t.after(() => releasePaste());
-  const delivery = createDelivery({ db: store, getSessionMode: () => mode, now: () => now,
+  const delivery = createDelivery({ db: store, getSessionMode: () => mode, getSessionKeyPresent: () => !legacy, now: () => now,
     sleep: async ms => { now += ms; },
     openTmuxConnection: async () => ({ close: async () => {}, command: async () => '0' }),
     resolveSessionTarget: async ({ sessionGroup }) => { routed.push(sessionGroup); return target; },
@@ -134,10 +136,12 @@ function fixture(t, { mode = 'single', runtime = 'claude', group = null, pausePa
 // Official runner plus this file isolate HOME, ZYLOS_DIR, PM2_HOME, short TMPDIR
 // and database before imports; each fixture reserves a private unused tmux socket.
 for (const mode of ['single', 'multi']) for (const runtime of ['claude', 'codex']) {
-  for (const group of mode === 'single' ? [null] : ['origin', 'telegram:isolated']) {
-    const outputs = runtime === 'claude' ? ['quiet', ...(mode === 'single' ? ['streaming'] : []), 'foreground-bash', 'foreground-agent', 'escaped-tool'] : ['quiet'];
-    for (const output of outputs) for (const ending of output.startsWith('foreground-') || output === 'streaming' ? ['stop'] : output === 'escaped-tool' ? ['inactivity'] : runtime === 'codex' ? ['stop', 'inactivity', 'api-error'] : ['stop', 'inactivity']) {
-      test(`${mode} ${runtime} ${group ?? 'origin'} holds idle controls through ${output} and delivers once after ${ending}`, { timeout: 5000 }, async t => {
+  for (const group of mode === 'single' ? [null, 'origin'] : ['origin', 'telegram:isolated']) {
+    // Native single (Origin group) adds only the inactivity Escape path; the other paths match multi Origin.
+    const native = mode === 'single' && group !== null;
+    const outputs = native ? ['quiet'] : runtime === 'claude' ? ['quiet', ...(mode === 'single' ? ['streaming'] : []), 'foreground-bash', 'foreground-agent', 'escaped-tool'] : ['quiet'];
+    for (const output of outputs) for (const ending of native ? ['inactivity'] : output.startsWith('foreground-') || output === 'streaming' ? ['stop'] : output === 'escaped-tool' ? ['inactivity'] : runtime === 'codex' ? ['stop', 'inactivity', 'api-error'] : ['stop', 'inactivity']) {
+      test(`${native ? 'native single' : mode} ${runtime} ${group ?? 'origin'} holds idle controls through ${output} and delivers once after ${ending}`, { timeout: 5000 }, async t => {
         const f = fixture(t, { mode, runtime, group });
         const controls = [runtime === 'codex' ? '/exit' : '/clear', 'Memory Sync requested']
           .map(content => f.store.insertControl(content, { sessionGroup: group, priority: 1, requireIdle: true, appendAckSuffix: false }));

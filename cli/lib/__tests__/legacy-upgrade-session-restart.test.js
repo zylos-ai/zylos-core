@@ -29,7 +29,7 @@ function finalizationFixture(t, from) {
 }
 
 // The real restart request runs with recording stand-ins for the C4 control queue and the supervisor socket.
-function finalizationDeps(calls, { mode = 'single', transition = null } = {}) {
+function finalizationDeps(calls, { mode = null, transition = null } = {}) {
   return {
     updateConfig() {}, ensureMemoryMigration() {}, rotateSession() {}, verifyPublicationForServices() {}, protectedSuccess() {},
     startServices: () => ({ status: 'done' }), verifyServices: () => ({ status: 'done' }),
@@ -79,7 +79,8 @@ for (const from of ['0.9.6', '0.9.3', '0.10.0-beta.1']) test(`upgrade from ${fro
 });
 
 const routes = [
-  { name: 'single', mode: 'single', transition: null, completion: 'single_exit_enqueued', calls: ['readMode', 'readTransition', 'enqueueExit'] },
+  // Native single (mode key present) restarts its Origin like multi; only the pre-migration single queues /exit.
+  { name: 'single', mode: 'single', transition: null, completion: 'accepted', calls: ['readMode', 'readTransition', 'restart_all'] },
   { name: 'unset single', mode: null, transition: null, completion: 'single_exit_enqueued', calls: ['readMode', 'readTransition', 'enqueueExit'] },
   { name: 'multi', mode: 'multi', transition: null, completion: 'accepted', calls: ['readMode', 'readTransition', 'restart_all'] },
   { name: 'mode switch in progress', mode: 'single', transition: { phase: 'gating' }, completion: 'accepted', calls: ['readMode', 'readTransition', 'restart_all'] },

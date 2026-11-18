@@ -271,3 +271,41 @@ test('actual supervisor entry sends the retained-occupancy explanation after sus
  now+=1000;await service.supervisor.loop.tick();assert.equal(messages.length,1);
  await service.stop();assert.equal(service.server.listening,false);
 });
+
+// Boundary: actual entry wiring of Claude failure continuation under native single
+// (mode key present) against the real C4 store. Private ZYLOS_DIR, run directory and
+// in-memory database; fake scenes, no tmux, runtime or network.
+test('native single queues the failure Continue for Origin and cancels it on another group inbound', {timeout:15000}, async t => {
+  const root=prepare(t,{session_mode:'single',runtime:'claude'});
+  const runDir=path.join(root,'run');fs.mkdirSync(runDir,{recursive:true});
+  const {fixture:c4Fixture}=await import('../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js');
+  const c4=c4Fixture(t,{readConfig:()=>({state:'ok',config:{runtime:'claude',session_mode:'single'}})});
+  const getControlById=id=>c4.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id);
+  let now=1000000;
+  const scene={sessionGroup:'origin',present:true,ready:true,processRunning:true,runtime:'claude',runId:'r1',sessionId:'s1',runtimePid:123,runDir,createdAt:now-1};
+  const service=await startSupervisor({env:{...process.env,HOME:root,ZYLOS_DIR:root,PM2_HOME:path.join(root,'pm2')},now:()=>now,
+    readMode:()=>({mode:'single',keyPresent:true}),readConfig:()=>({session_mode:'single',runtime:'claude'}),
+    db:{...c4.store,getDb:()=>c4.db,getControlById},
+    scenes:{observe:async()=>[],readIdentity:async()=>({...scene}),bindTarget:async()=>({expectedRunId:'r1',tmuxTarget:{serverGeneration:'g',sessionId:'$1',paneId:'%1'}}),
+      observeGroup:async()=>({present:false}),listRuns:async()=>[],readRun:async()=>null},
+    legacyStatus:{tick(){},close(){}},machineTasks:{tick(){},stop(){}},readSyncMarker:()=>({held:false,stale:false}),
+    sendAlert:async()=>true,log:()=>{},loopOptions:{schedule:()=>1,cancel:()=>{}}});
+  t.after(()=>service.stop());
+  await service.supervisor.loop.tick();
+  const {appendEvent}=await import('../../../../cli/lib/event-log.js');
+  appendEvent(path.join(runDir,'events.jsonl'),{v:1,type:'runtime_health',schema_version:1,source:'hook',runtime:'claude',run_id:'r1',session_id:'s1',claude_pid:123,
+    event:'stop_failure',error:'server_error',event_id:'22222222-2222-4222-8222-222222222222',prompt_id:'p1',received_at:now,ts:now});
+  const context={configuration:{mode:'single',legacy:false,runtime:'claude'},scenes:[scene]};
+  await service.supervisor.loop.deps.probeAndPublish(scene,context);
+  const retry=service.supervisor.health.store('claude').read('origin').failure_retry;
+  const control=getControlById(retry.controlId);
+  assert.equal(control.content,'Continue');
+  // The Origin lane reads only Origin-targeted controls once the retry is due.
+  assert.equal(c4.store.getNextPendingControl(Math.ceil(retry.dueAt/1000),{sessionGroups:['origin']})?.id,control.id);
+  // Inbound from another conversation is delivered into Origin, so it replaces the Continue.
+  c4.store.insertConversation('in','telegram','other-chat','new question',{groupName:'other'});
+  now=retry.dueAt;
+  await service.supervisor.loop.deps.probeAndPublish(scene,context);
+  assert.notEqual(getControlById(control.id).status,'pending');
+  assert.equal(service.supervisor.health.store('claude').read('origin').failure_retry,undefined);
+});

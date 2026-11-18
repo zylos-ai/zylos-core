@@ -2276,7 +2276,7 @@ test('native single rechecks global conversations immediately before stopping', 
 });
 test('native single TTL prepares both Origin Sync scopes before reclaim', async () => {
   const f = fixture(); f.context.configuration.mode = 'single'; f.scenes = [scene('origin')];
-  f.unsummarized = 2; f.backlog = {total:3,groups:[{sessionGroup:'a',firstAt:1,pendingCheckpoints:1}]};
+  f.unsummarized = SYNC_DUE; f.backlog = {total:3,groups:[{sessionGroup:'a',firstAt:1,pendingCheckpoints:1}]};
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   assert.deepEqual(f.controls.map(row => row.content), ['check','prepare','prepare origin']);
   assert.ok(f.controls.every(row => row.sessionGroup === 'origin' && row.targetBinding.expectedRunId === 'run-origin'));

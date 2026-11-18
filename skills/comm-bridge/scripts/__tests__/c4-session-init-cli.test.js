@@ -167,7 +167,8 @@ describe('c4-session-init', () => {
           db.close();
         `], {env,encoding:'utf8',timeout:15000});
         assert.equal(setup.status,0,setup.stderr);
-        const selectedEnv = {...env, ZYLOS_RUN_ID:'isolated-run'};
+        // A Sync threshold below the backlog keeps the latest-tail view with its coverage line.
+        const selectedEnv = {...env, ZYLOS_RUN_ID:'isolated-run', ZYLOS_SYNC_THRESHOLD:'5'};
         if (group) selectedEnv.ZYLOS_SESSION_GROUP = group;
         const {stdout,stderr,status} = cli([],selectedEnv);
         assert.equal(status,0,stderr);
