@@ -126,7 +126,10 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     return new Map(await Promise.all(keys.map(async key => [key, await reader.readSessionState(key)])));
   };
   const core = async name => {
-    if (name === 'config.js') return { ...await originalLoadCoreModule(name), readSessionMode: () => ({ mode }) };
+    if (name === 'config.js') return { ...await originalLoadCoreModule(name), readSessionMode: () => {
+      if (mode === 'unreadable') throw Object.assign(new Error('fixture configuration unreadable'), { code: 'CONFIG_UNREADABLE' });
+      return { mode };
+    } };
     if (name === 'am-sock-client.js') return { submit: async () => ({ kind: 'rejected', reply: { code: 'invalid_request' } }),
       lookupRestartRequest: async (requestId, options) => {
         assert.equal(options.sessionGroup, 'origin', 'the request lookup is bound to the group named in the HTTP path');
@@ -150,7 +153,8 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   const originState = () => ({ state: 'IDLE', runtime: 'claude', ready: true, sampledAt: clock, sessionId: 'fixture-session', runId: 'fixture-run',
     running_tools: [], active_subagents: [], subagent_tools: [], source: {}, updated_at: new Date(clock).toISOString() });
   t.mock.method(CoreState.prototype, 'refresh', async function (options) {
-    await this.sessionObservations.get(options);
+    // Like the real refresh, a failed observation read is recorded, not thrown.
+    try { await this.sessionObservations.get(options); } catch { /* reported by the snapshot */ }
     return originState();
   });
   t.mock.method(CoreState.prototype, 'getState', originState);
@@ -501,6 +505,16 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     running = await request('/api/groups/running'); row = running.rows.find(row => row.id === 'origin');
     assert.equal(Object.hasOwn(row.flags, 'noResponse'), false, 'a prior run reminder cannot enter its replacement');
     assert.equal((await request('/api/groups/counts')).running.flags.noResponse, 0);
+  });
+  // Unreadable mode through the shared snapshot and real Core mode status to
+  // /api/instance reports 'unreadable', never null. Run for instance mode-reporting
+  // changes; UI-only changes may skip. Same isolated fixture as this file.
+  await t.test('unreadable mode configuration reports unreadable on the instance', async () => {
+    mode = 'unreadable'; clock += 3000;
+    try {
+      const value = (await request('/api/instance')).session_mode;
+      assert.equal(value.sessionMode, 'unreadable');
+    } finally { writeMode('multi'); }
   });
   await t.test('mode status read failure retains mode but reports transition uncertainty', async () => {
     modeStatusReadable = false; clock += 3000;

@@ -128,9 +128,9 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       const { readSessionModeStatus } = await loadCoreModule('session-mode-status.js');
       sessionModeStatus = await readSessionModeStatus({ zylosDir, readMode: () => ({ mode }),
         readPm2: () => readPm2()?.processes?.find(process => process.name === 'activity-monitor')?.pm2_env?.status ?? 'unobservable' });
-      sessionModeStatus.sessionMode = ['single', 'multi'].includes(mode) ? mode : null;
+      sessionModeStatus.sessionMode = ['single', 'multi'].includes(mode) ? mode : 'unreadable';
     } catch (error) {
-      sessionModeStatus = { sessionMode: ['single', 'multi'].includes(mode) ? mode : null,
+      sessionModeStatus = { sessionMode: ['single', 'multi'].includes(mode) ? mode : 'unreadable',
         transition: null, globalGate: null, blocked: null, supervisor: 'unknown', lastCompleted: null, lastEvents: [],
         error: { code: error.code ?? 'READ_FAILED', message: 'Session mode status could not be read' } };
     }

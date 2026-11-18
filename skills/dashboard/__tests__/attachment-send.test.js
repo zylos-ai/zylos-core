@@ -503,3 +503,36 @@ for (const state of ['missing', 'corrupt']) {
     assertAudit(f, before);
   });
 }
+
+// Boundary: the same private databases and the real post-storage receiver as
+// above. In single mode Core records every conversation's rows under `origin`
+// at delivery; a row still belongs to the conversation of its endpoint. Run for
+// attachment association, collection or download changes; UI-only edits may skip.
+test('an Origin reply recorded under origin links its attachment to the conversation it is sent to', async t => {
+  const f = fixture(t), registered = await f.register();
+  const row = f.add(content(block(registered)), { session_group: 'origin' });
+  assert.equal(row.endpoint_id, f.a.localId);
+  const delivered = (() => { try { acceptDelivery(packet(row), { env: f.env }); return 'delivered'; } catch (error) { return error.code; } })();
+  assert.equal(delivered, 'delivered');
+  assert.equal(f.count(), 1);
+  assert.equal(fs.readFileSync(f.attachments.download(f.a, registered.id).path, 'utf8'), 'agent bytes');
+  assert.throws(() => f.attachments.download(f.b, registered.id), { code: 'chat_attachment_unavailable' });
+  const [item] = f.attachments.metadata([row]).get(row.id);
+  assert.deepEqual([item.id, item.available], [registered.id, true]);
+});
+
+test('a user upload whose inbound row is recorded under origin stays downloadable, linked or collected', async t => {
+  const f = fixture(t);
+  const linked = await f.upload(), collected = await f.upload();
+  const annotation = record => `[attachment:file ${f.attachments.resolve(f.a, record.id)} name="user.txt" 10B]`;
+  const linkedRow = f.add(annotation(linked), { direction: 'in', session_group: 'origin' });
+  f.add(annotation(collected), { direction: 'in', session_group: 'origin' });
+  assert.deepEqual(f.attachments.linkRow(linkedRow).map(item => [item.id, item.available]), [[linked.id, true]]);
+  // The collector finds the inbound row of an upload nothing displayed yet.
+  f.store.db.prepare('UPDATE chat_attachments SET next_check_at=0 WHERE id=?').run(collected.id);
+  await f.attachments.gc();
+  assert.equal(f.store.db.prepare('SELECT count(*) n FROM chat_attachment_messages WHERE attachment_id=?').get(collected.id).n, 1);
+  for (const record of [linked, collected]) {
+    assert.equal(fs.readFileSync(f.attachments.download(f.a, record.id).path, 'utf8'), 'user bytes');
+  }
+});

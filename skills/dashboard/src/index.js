@@ -414,9 +414,9 @@ function buildInstancePayload() {
 function readFleetSessionMode() {
   const result = readConfigStrict(path.join(config.zylosDir, '.zylos', 'config.json'));
   if (result.state === 'missing') return 'single';
-  if (result.state !== 'ok') return null;
+  if (result.state !== 'ok') return 'unreadable';
   if (!Object.hasOwn(result.config, 'session_mode')) return 'single';
-  return ['single', 'multi'].includes(result.config.session_mode) ? result.config.session_mode : null;
+  return ['single', 'multi'].includes(result.config.session_mode) ? result.config.session_mode : 'unreadable';
 }
 
 async function refreshDashboardState({ fresh = false } = {}) {

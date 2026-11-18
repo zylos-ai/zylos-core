@@ -1510,25 +1510,36 @@ function healthRow(name, signal_type, timestamp = 1000000, status = 'healthy', e
   return { name, signal_type, status, extra: { last_success: new Date(timestamp).toISOString(), ...extra } };
 }
 
+// Origin's run directory is read in every mode; the root file only when Origin
+// has none. A confirmed absent Origin (reclaimed when idle) makes a silent
+// heartbeat idle instead of stale; an instance without the mode key keeps stale.
 for (const scenario of [
-  { mode: 'multi', rootAge: 120_000, originAge: 10_000, expected: 'healthy', state: 'idle' },
-  { mode: 'multi', rootAge: 120_000, originAge: 90_000, expected: 'stale', state: 'idle' },
-  { mode: 'single', rootAge: 10_000, originAge: 120_000, expected: 'healthy', state: 'busy' },
-  { mode: 'single', rootAge: 90_000, originAge: 10_000, expected: 'stale', state: 'busy' },
-  { config: 'missing file', rootAge: 10_000, originAge: 120_000, expected: 'healthy', state: 'busy' },
-  { config: 'missing key', rootAge: 10_000, originAge: 120_000, expected: 'healthy', state: 'busy' },
-  { mode: 'dual', rootAge: 10_000, originAge: 120_000, expected: 'unknown', state: null },
-]) test(`AM heartbeat uses ${scenario.config ?? scenario.mode} producer time with root age ${scenario.rootAge} and Origin age ${scenario.originAge}`, t => {
+  { mode: 'multi', rootAge: 120_000, originAge: 10_000, origin: true, expected: 'healthy', state: 'idle' },
+  { mode: 'multi', rootAge: 120_000, originAge: 90_000, origin: true, expected: 'stale', state: 'idle' },
+  { mode: 'multi', rootAge: 10_000, originAge: 90_000, origin: false, expected: 'idle', state: 'idle' },
+  { mode: 'multi', rootAge: 10_000, originAge: 90_000, origin: null, expected: 'stale', state: 'idle' },
+  { mode: 'single', rootAge: 10_000, originAge: 120_000, origin: true, expected: 'stale', state: 'idle' },
+  { mode: 'single', rootAge: 10_000, originAge: 120_000, origin: false, expected: 'idle', state: 'idle' },
+  { mode: 'single', rootAge: 90_000, originAge: 10_000, origin: true, expected: 'healthy', state: 'idle' },
+  { mode: 'single', rootAge: 10_000, originAge: null, origin: false, expected: 'healthy', state: 'busy' },
+  { mode: 'single', rootAge: 90_000, originAge: null, origin: false, expected: 'idle', state: 'busy' },
+  { config: 'missing file', rootAge: 10_000, originAge: 120_000, origin: false, expected: 'stale', state: 'idle' },
+  { config: 'missing key', rootAge: 10_000, originAge: 120_000, origin: false, expected: 'stale', state: 'idle' },
+  { config: 'missing key', rootAge: 10_000, originAge: null, origin: false, expected: 'healthy', state: 'busy' },
+  { mode: 'dual', rootAge: 10_000, originAge: 120_000, origin: true, expected: 'unknown', state: null },
+]) test(`AM heartbeat with ${scenario.config ?? scenario.mode} config, root age ${scenario.rootAge}, Origin age ${scenario.originAge} and Origin running ${scenario.origin} is ${scenario.expected}`, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'am-health-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
   if (scenario.config !== 'missing file') {
-    fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ session_mode: scenario.mode }));
+    fs.writeFileSync(path.join(root, '.zylos/config.json'),
+      JSON.stringify(scenario.config === 'missing key' ? { runtime: 'claude' } : { session_mode: scenario.mode }));
   }
   let now = 1_800_000_000_000;
   for (const [parts, state, age] of [
     [[], 'busy', scenario.rootAge], [['session-groups', 'origin'], 'idle', scenario.originAge],
   ]) {
+    if (age === null) continue;
     const file = path.join(root, 'activity-monitor', ...parts, 'agent-status.json');
     fs.mkdirSync(path.dirname(file), { recursive: true });
     // Content timestamps deliberately disagree: freshness comes from the actual
@@ -1536,29 +1547,68 @@ for (const scenario of [
     fs.writeFileSync(file, JSON.stringify({ state, health: 'ok', last_check: now / 1000, updated_at: now }));
     fs.utimesSync(file, (now - age) / 1000, (now - age) / 1000);
   }
-  let row;
+  let row, probes = 0;
   const store = { ...makeMockStore(),
     upsertSourceHealth: (name, signal_type, status, extra) => { row = { name, signal_type, status, extra }; },
     getSourceHealth: () => row ? [row] : [],
   };
-  const engine = new StateEngine(store, {}, { zylosDir: root }, { now: () => now });
+  const engine = new StateEngine(store, {}, { zylosDir: root }, { now: () => now, readOriginPresence: async () => {
+    probes++;
+    if (scenario.origin === null) throw new Error('presence unreadable');
+    return scenario.origin;
+  } });
   engine._readAMHeartbeat();
+  await engine._originProbe;
   const source = engine.getSourceHealth().collector_liveness.am_heartbeat;
-  const age = (scenario.mode === 'multi' ? scenario.originAge : scenario.rootAge) / 1000;
+  const age = (scenario.originAge ?? scenario.rootAge) / 1000;
   assert.equal(source.status, scenario.expected);
   assert.equal(source.fresh, scenario.expected === 'healthy');
   if (scenario.state === null) {
     assert.equal(source.age_s, null);
     assert.equal(engine._state.amHeartbeat, null, 'invalid mode must not select a heartbeat source');
     assert.equal(row, undefined, 'invalid mode must not publish successful evidence');
+    assert.equal(probes, 0);
     return;
   }
+  if (scenario.expected === 'idle') {
+    assert.equal(source.reason, 'no_recent_activity');
+    assert.equal(source.detail, 'No recent activity; this source reports only when activity occurs');
+  }
+  assert.equal(probes > 0, scenario.config !== 'missing file' && scenario.config !== 'missing key' && age >= 45,
+    'presence is read only for an instance with a mode key and an ageing heartbeat');
   assert.equal(source.age_s, age);
   assert.equal(engine._state.amHeartbeat.state, scenario.state, 'the existing internal heartbeat receives the selected source');
   const producerTime = row.extra.last_success;
   now += 60_000;
   engine._readAMHeartbeat();
+  await engine._originProbe;
   assert.equal(row.extra.last_success, producerTime, 'another read cannot renew producer evidence');
+  assert.equal(engine.getSourceHealth().collector_liveness.am_heartbeat.status, scenario.origin === false
+    && scenario.config === undefined ? 'idle' : 'stale');
+});
+
+test('AM heartbeat returns to stale once Origin is running again with a silent heartbeat', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'am-health-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ session_mode: 'multi' }));
+  const now = 1_800_000_000_000;
+  const file = path.join(root, 'activity-monitor', 'session-groups', 'origin', 'agent-status.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ state: 'offline', health: 'ok' }));
+  fs.utimesSync(file, (now - 300_000) / 1000, (now - 300_000) / 1000);
+  let row, running = false;
+  const store = { ...makeMockStore(),
+    upsertSourceHealth: (name, signal_type, status, extra) => { row = { name, signal_type, status, extra }; },
+    getSourceHealth: () => row ? [row] : [],
+  };
+  const engine = new StateEngine(store, {}, { zylosDir: root }, { now: () => now, readOriginPresence: async () => running });
+  engine._readAMHeartbeat();
+  await engine._originProbe;
+  assert.equal(engine.getSourceHealth().collector_liveness.am_heartbeat.status, 'idle');
+  running = true;
+  engine._readAMHeartbeat();
+  await engine._originProbe;
   assert.equal(engine.getSourceHealth().collector_liveness.am_heartbeat.status, 'stale');
 });
 

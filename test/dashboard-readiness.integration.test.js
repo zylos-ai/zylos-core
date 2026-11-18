@@ -57,6 +57,7 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
   fs.mkdirSync(path.join(root, 'components/dashboard'), { recursive: true });
   fs.writeFileSync(path.join(root, 'components/dashboard/config.json'), JSON.stringify({ auth: { enabled: true, password: 'fixture-password' } }));
   fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
+  // An undefined mode writes no session_mode key: an instance from before session modes.
   const setMode = mode => fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ session_mode: mode }));
   fs.mkdirSync(path.dirname(socketPath), { recursive: true });
   fs.mkdirSync(path.join(root, 'activity-monitor/runtime-health'));
@@ -67,7 +68,7 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
     restartFailureCount: 0, lastRecoveryAt: 0, lastDownCheckAt: 0, rateLimitResetTime: '',
     hook: { pid: 31337, promptId: 'private-prompt', groups: { origin: { runId: 'private-run' } } },
   }));
-  setMode('single');
+  setMode(undefined);
 
   let socketServer;
   const socketServers = new Set();
@@ -228,7 +229,7 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
       await Promise.allSettled(requests);
     }
   });
-  await t.test('single session exists even before startup readiness or login', async () => {
+  await t.test('a pre-mode instance session exists even before startup readiness or login', async () => {
     const response = await ready();
     assert.equal(response.status, 200);
     assert.equal(response.body.ready, true);
@@ -237,12 +238,20 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
     assert.equal(response.body.session_running, true);
     assert.deepEqual(response.body.runtime_health, { claude: { source: 'missing', health: null }, codex: { source: 'missing', health: null }, agy: { source: 'missing', health: null } });
   });
-  await t.test('confirmed single-session absence returns 503', async () => {
+  await t.test('confirmed absence of a pre-mode instance session returns 503', async () => {
     present = false;
     const response = await ready();
     assert.equal(response.status, 503);
     assert.equal(response.body.reason, 'session_not_running');
     assert.equal(response.body.session_running, false);
+  });
+  await t.test('native single needs no running Origin, which is reclaimed when idle', async () => {
+    setMode('single');
+    const reads = identityReads;
+    const response = await ready();
+    assert.equal(response.status, 200);
+    assert.deepEqual([response.body.ready, response.body.reason, response.body.session_mode, response.body.session_running], [true, null, 'single', null]);
+    assert.equal(identityReads, reads, 'no session presence is read');
   });
   await t.test('multi mode needs no Origin or other running sessions', async () => {
     setMode('multi');
@@ -252,6 +261,16 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
     assert.equal(response.body.session_mode, 'multi');
     assert.equal(response.body.session_running, null);
     assert.equal(identityReads, reads);
+  });
+  // Real config reader through HTTP: an unreadable mode is reported as such and
+  // gates nothing. Run for readiness or mode-reporting changes; UI-only changes may skip.
+  await t.test('unreadable mode configuration reports unreadable without a readiness gate', async () => {
+    const reads = identityReads;
+    fs.writeFileSync(path.join(root, '.zylos/config.json'), '{ unreadable JSON');
+    const response = await ready();
+    assert.equal(response.status, 200);
+    assert.deepEqual([response.body.ready, response.body.reason, response.body.session_mode, response.body.session_running], [true, null, 'unreadable', null]);
+    assert.equal(identityReads, reads, 'unknown mode reads no session presence');
   });
   for (const health of ['auth_failed', 'rate_limited', 'down', 'recovering']) {
     await t.test(`${health} is diagnostic in both session modes`, async () => {

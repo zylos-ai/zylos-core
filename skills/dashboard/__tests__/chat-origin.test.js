@@ -131,25 +131,26 @@ test('the Origin conversation is pinned first in "mine" with or without messages
   assert.equal(f.history.chatChangeSnapshot({ tab: 'mine' }, { afterId: highwater }).listChanged, true);
 });
 
-test('Origin messages show Dashboard and internal rows both ways but not system, scheduler, control or void rows', t => {
+test('Origin messages show its Dashboard rows but not internal, system, scheduler, control or void rows', t => {
   const f = fixture(t);
   const shown = [
     f.add('in', 'dashboard', 'origin', 'owner asks'),
     f.add('out', 'dashboard', 'origin', 'system alert'),
-    f.add('out', 'internal', 'telegram:chat', 'relay to Telegram'),
-    f.add('in', 'internal', 'telegram:chat', '[internal] Yourself, from your "telegram:chat" session group, said: relayed back'),
   ];
+  f.add('out', 'internal', 'telegram:chat', 'relay to Telegram');
+  f.add('in', 'internal', 'telegram:chat', '[internal] Yourself, from your "telegram:chat" session group, said: relayed back');
   for (const channel of ['system', 'scheduler', 'control', 'void']) f.add('in', channel, 'x', `${channel} row`);
   f.add('in', 'telegram', 'chat', 'Telegram words', 'telegram:chat');
   const items = f.history.messages(ORIGIN_CONVERSATION_ID).items;
   assert.deepEqual(items.map(row => row.id), shown);
-  assert.deepEqual(items.slice(2).map(row => [row.direction, row.internal.peerSessionGroup, row.internal.peerExists, row.internal.content]),
-    [['out', 'telegram:chat', true, 'relay to Telegram'], ['in', 'telegram:chat', true, 'relayed back']]);
+  assert.deepEqual(items.map(row => row.conversationName), ['Origin', 'Origin']);
   assert.equal(items[1].deliveryState, 'stored');
   const [origin] = f.history.list({ tab: 'mine' }).items;
-  assert.equal(origin.count, 2, 'summaries count Dashboard rows only');
+  assert.equal(origin.count, 2);
   assert.equal(origin.preview, 'system alert', 'summaries exclude internal messages');
   assert.deepEqual(f.history.status(ORIGIN_CONVERSATION_ID, { ids: [shown[0]] }).items.map(row => row.deliveryState), ['delivered']);
+  const { latestId } = f.history.chatChangeSnapshot({ tab: 'mine', conversationId: ORIGIN_CONVERSATION_ID });
+  assert.equal(latestId, shown[1], 'the newest internal row is not the Origin page position');
 });
 
 test('in single mode Origin accepts sends without a session group while other conversations stay read-only', async t => {
@@ -253,15 +254,62 @@ test('Origin answers, uploads and agent attachments work without a session group
   assert.equal(evaluateBeforeSend(input('elsewhere'), { env }).decision, 'abort');
 });
 
-test('an internal message to origin from another session appears in the Origin conversation', async t => {
+test('an internal message to origin from another session stays off the Origin conversation page', async t => {
   const f = fixture(t);
   const draft = f.conversations.create();
   const seed = await f.sender.send(draft.id, { content: 'work in another conversation' });
   const group = `${seed.namespace}:${draft.localId}`;
   // Core's own internal-message insert, as `c4-send internal origin` stores it.
   f.c4.insertInternalMessage(group, 'origin', 'please tell the owner in Origin');
-  const items = f.history.messages(ORIGIN_CONVERSATION_ID).items;
-  assert.deepEqual(items.map(row => [row.direction, row.channel, row.internal?.peerSessionGroup, row.internal?.content]),
-    [['in', 'internal', group, 'please tell the owner in Origin']]);
+  assert.deepEqual(f.history.messages(ORIGIN_CONVERSATION_ID).items, []);
   assert.equal(f.history.list({ tab: 'mine' }).items[0].preview, '', 'the summary still excludes internal messages');
+});
+
+// In single mode Core records the rows of every conversation and external chat
+// under `origin` when it delivers them; the Origin conversation shows them all.
+test('the Origin conversation shows every row recorded under origin with its own channel and conversation', async t => {
+  const f = fixture(t, { mode: 'single' });
+  const multi = f.authorizeAs(local, 'multi');
+  const named = f.conversations.create(), unnamed = f.conversations.create();
+  const seed = await f.sender.send(named.id, { content: 'before the switch' }, { authorize: multi });
+  await f.sender.send(unnamed.id, { content: 'another conversation' }, { authorize: multi });
+  const namedGroup = `${seed.namespace}:${named.localId}`;
+  f.store.writeGroupDisplayName(namedGroup, 'Project X', 'human');
+  const { highwater } = f.history.chatChangeSnapshot({ tab: 'mine' });
+  const shown = [
+    f.add('in', 'dashboard', 'origin', 'owner asks Origin'),
+    f.add('in', 'dashboard', named.localId, 'queued in X before the switch'),
+    f.add('out', 'dashboard', named.localId, 'Origin answers in X'),
+    f.add('out', 'dashboard', unnamed.localId, 'Origin answers the unnamed one'),
+    f.add('in', 'telegram', '-100|thread:7', '[TG GROUP:Team] from Telegram\n[MEDIA:/private/photo.jpg]'),
+  ];
+  f.add('out', 'internal', namedGroup, 'Origin to the X thread');
+  const latest = f.add('out', 'telegram', '-100|thread:7', 'Origin answers Telegram');
+  shown.push(latest);
+  const items = f.history.messages(ORIGIN_CONVERSATION_ID, { locale: 'en' }).items;
+  assert.deepEqual(items.map(row => row.id), shown);
+  assert.deepEqual(items.map(row => [row.channel, row.conversationName]), [
+    ['dashboard', 'Origin'], ['dashboard', 'Project X'], ['dashboard', 'Project X'], ['dashboard', null],
+    ['telegram', undefined], ['telegram', undefined]]);
+  // An external chat's row reads as on the external page.
+  assert.equal(items[4].preview, '[TG GROUP:Team] from Telegram\n[Media] Original-channel attachment');
+  const [origin] = f.history.list({ tab: 'mine' }).items;
+  assert.equal(origin.id, ORIGIN_CONVERSATION_ID);
+  assert.equal(origin.count, shown.length);
+  assert.equal(origin.preview, 'Origin answers Telegram');
+  assert.equal(origin.previewDirection, 'out');
+  assert.equal(f.history.chatChangeSnapshot({ tab: 'mine' }, { afterId: highwater }).listChanged, true);
+  assert.equal(f.history.chatChangeSnapshot({ tab: 'mine', conversationId: ORIGIN_CONVERSATION_ID }).latestId, latest);
+  // The other pages keep their rows: X shows only what is recorded in X's own group.
+  assert.deepEqual(f.history.messages(groupId(namedGroup)).items.map(row => row.content), ['before the switch']);
+  assert.equal(f.history.list({ tab: 'external' }).items.length, 0);
+  assert.throws(() => f.history.messages(groupId('origin'), { tab: 'external' }), { code: 'chat_conversation_not_found' });
+});
+
+test('in multi the Origin conversation also shows external chats Origin itself handles', t => {
+  const f = fixture(t);
+  const own = f.add('in', 'telegram', 'owner-dm', 'owner writes on Telegram');
+  f.add('in', 'telegram', 'team', 'another group thread handles this', 'telegram:team');
+  assert.deepEqual(f.history.messages(ORIGIN_CONVERSATION_ID).items.map(row => row.id), [own]);
+  assert.deepEqual(f.history.list({ tab: 'external' }).items.map(item => item.session_group), ['telegram:team']);
 });
