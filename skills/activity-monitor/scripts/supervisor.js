@@ -125,14 +125,12 @@ export function createSupervisor(deps) {
         last_response_at:fresh.lastResponseAt,...extra});
       // Record the one-shot attempt before an insertion whose outcome can be unknown.
       interruptFact('quiet_turn_interrupt_attempt');
-      const result=await nudgeSession({continueAfterEscape:false,enqueue:async content=>{
-        const enqueuedAt=now();
-        // Use the shared recovery priority; equal-priority controls retain FIFO order.
-        // The existing per-group C4 lane still owns every terminal write.
-        const control=await db.insertControl(content,{sessionGroup:mode==='single'?null:current.sessionGroup,
-          targetBinding,priority:0,bypassState:true,appendAckSuffix:false});
-        return {ok:Number.isSafeInteger(control?.id) && control.id>0,controlId:control?.id ?? null,enqueuedAt};
-      }});
+      const enqueuedAt=now();
+      // Use the shared recovery priority; equal-priority controls retain FIFO order.
+      // The existing per-group C4 lane still owns every terminal write.
+      const control=await db.insertControl('[KEYSTROKE]Escape',{sessionGroup:mode==='single'?null:current.sessionGroup,
+        targetBinding,priority:0,bypassState:true,appendAckSuffix:false});
+      const result={ok:Number.isSafeInteger(control?.id) && control.id>0,controlId:control?.id ?? null,enqueuedAt};
       if(!result.ok)return false;
       // Queue admission, rather than a runtime-stop confirmation, permits idle.
       // Re-read facts so a new prompt/tool arriving during insertion stays busy.

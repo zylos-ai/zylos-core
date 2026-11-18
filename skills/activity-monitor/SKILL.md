@@ -354,7 +354,7 @@ pm2 list
    - A submitted main turn remains busy until its terminal hook,
      including quiet API/model waits with no active tool. After 20 minutes with
      no unfinished tools and no native activity, the supervisor queues
-     one `[KEYSTROKE]Escape` control through the existing nudge/control path,
+     one `[KEYSTROKE]Escape` control through the existing control path,
      then closes the abandoned turn. It does not check a runtime stop signal
      and does not retry Escape in the same quiet turn, including after a supervisor
      restart. Attempt/admission facts use the existing run event log and do not

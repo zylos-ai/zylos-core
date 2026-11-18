@@ -776,8 +776,7 @@ test('publication requires activity sampled for the current round even with a ma
   assert.equal(fs.readFileSync(file,'utf8'),'prior state');
 });
 
-// Boundary: real supervisor admission -> activity facts -> shared nudge helper
-// -> control insertion. Scenes/DB/clock are private injected objects; no native
+// Boundary: real supervisor admission -> activity facts -> control insertion. Scenes/DB/clock are private injected objects; no native
 // process, network or service is started. Run for quiet-turn/admission changes;
 // unrelated UI work may skip. The official runner isolates all runtime paths.
 for(const runtime of ['claude','codex','agy'])test(`assembled ${runtime} quiet-turn interruption queues one Escape before allowing idle`,async t=>{
