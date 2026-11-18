@@ -6,8 +6,8 @@ import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { createGroupDeletionFixture } from './helpers/group-deletion-fixture.js';
+import { waitForServerExit } from './helpers/isolated-tmux.js';
 import { ModeSwitchCoordinator } from '../skills/activity-monitor/scripts/mode-switch.js';
-import { createModeSwitchConverter } from '../skills/activity-monitor/scripts/mode-switch-convert.js';
 import { createGroupDeletionBridge, createGroupDeletionRoutes } from '../skills/dashboard/src/lib/workbench/group-deletion.js';
 import { groupDeletionCliPath } from '../cli/lib/group-delete.js';
 import { readSessionModeStatus, formatSessionModeStatus } from '../cli/lib/session-mode-status.js';
@@ -21,7 +21,6 @@ function config(f) { return JSON.parse(fs.readFileSync(path.join(f.root, '.zylos
 function writeMode(f, mode) {
   fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ ...config(f), session_mode: mode }));
 }
-function checkpoints(f) { return f.database.prepare("SELECT * FROM checkpoints WHERE session_group='*' ORDER BY id").all(); }
 function insert(f, group, content, status = 'delivered') {
   const id = Number(f.database.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status,session_group) VALUES('in','dashboard',?,?,?,?)").run(group === 'origin' ? 'origin' : group.split(':')[1], content, status, group).lastInsertRowid);
   f.database.prepare('INSERT INTO group_heads(session_group,head_id) VALUES(?,?) ON CONFLICT(session_group) DO UPDATE SET head_id=excluded.head_id').run(group, id);
@@ -36,6 +35,11 @@ async function command(f, args, extraEnv = {}) {
 }
 async function stopMonitor(f) {
   f.monitor.kill('SIGTERM'); await f.monitor.completion;
+}
+async function stopRuntimes(f) {
+  try { f.tmux(['kill-server']); }
+  catch (error) { if (!/no server running|error connecting[^\n]*No such file/.test(String(error.stderr))) throw error; }
+  await waitForServerExit({ binary: 'tmux', socketPath: f.sandbox.paths.socket });
 }
 async function setup(t, { noCurrentMessages = false, checkpointSource = 'cutover' } = {}) {
   const f = await createGroupDeletionFixture(t, { group: 'dashboard:cutover-a', timezone: 'Asia/Singapore' });
@@ -60,11 +64,11 @@ async function setup(t, { noCurrentMessages = false, checkpointSource = 'cutover
   fs.mkdirSync(path.join(f.root, 'memory/session-groups/origin'), { recursive: true });
   fs.writeFileSync(path.join(f.root, 'memory/session-groups/origin/state.md'), 'Origin material must remain recoverable\n');
   // Retained pre-upgrade global coverage, independent of native switches.
-  await stopMonitor(f); f.tmux(['kill-server']);
+  await stopMonitor(f); await stopRuntimes(f);
   const end = f.database.prepare('SELECT MAX(id) AS n FROM conversations').get().n;
   f.store.createCheckpoint('*', end, checkpointSource === 'single' ? 'Legacy single-mode summary' : 'Legacy cutover boundary');
   f.covered = f.store.getGlobalCoverageEnd();
-  f.expectedCutoff = noCurrentMessages ? 0 : 1;
+  f.expectedHead = noCurrentMessages ? 0 : 1;
   f.startRuntime('origin');
   for (const group of f.groups) f.startRuntime(group);
   fs.rmSync(path.join(f.root, 'monitor-round.json'), { force: true });
@@ -74,9 +78,9 @@ async function setup(t, { noCurrentMessages = false, checkpointSource = 'cutover
 }
 async function deletion(f, entry) {
   for (const group of f.groups) await deleteOne(f, entry, group);
-  assert.equal(f.database.prepare('SELECT COALESCE(MAX(id),0) AS n FROM conversations').get().n, f.expectedCutoff);
+  assert.equal(f.database.prepare('SELECT COALESCE(MAX(id),0) AS n FROM conversations').get().n, f.expectedHead);
   assert.equal(f.store.getGlobalCoverageEnd(), f.covered);
-  await stopMonitor(f); f.tmux(['kill-server']);
+  await stopMonitor(f); await stopRuntimes(f);
 }
 async function deleteOne(f, entry, group) {
   const operationId = randomUUID();
@@ -118,11 +122,11 @@ async function deleteOne(f, entry, group) {
 }
 function coordinator(f, events) {
   return new ModeSwitchCoordinator({ db: f.store,
-    readMode: () => ({ mode: config(f).session_mode }), readConfiguration: () => config(f),
+    readMode: () => ({ mode: config(f).session_mode, keyPresent: true }), readConfiguration: () => config(f),
     readRequests: () => [], legacyPresent: () => false,
     // Deletion and private tmux shutdown above prove that no source executor remains.
     observe: () => [], lifecycle: { advanceReclaim: () => assert.fail('No runtime remains to reclaim') },
-    convert: createModeSwitchConverter({ db: f.store, zylosDir: f.root }),
+    convert: () => assert.fail('Native switching must not convert memory'),
     writeMode: mode => writeMode(f, mode),
     // PM2 is deliberately not started; its confirmation boundary is a receipt.
     restart: { advance: () => ({ confirmed: true, pending: false }) }, diagnostic: event => events.push(event) });
@@ -137,7 +141,7 @@ async function finish(f, coordinator, runId, maxTicks = 6) {
 }
 async function status(f, events) {
   const value = await readSessionModeStatus({ zylosDir: f.root, db: f.store,
-    readMode: () => ({ mode: config(f).session_mode }), readEvents: () => events,
+    readMode: () => ({ mode: config(f).session_mode, keyPresent: true }), readEvents: () => events,
     probeSupervisor: () => false, readPm2: () => 'daemon_not_running' });
   const cli = await command(f, [path.join(repo, 'cli/zylos.js'), 'session-mode', 'status', '--json']);
   assert.equal(cli.ok, true);
@@ -153,45 +157,83 @@ async function status(f, events) {
   return value;
 }
 
+function nativePayload(f) {
+  const memory = path.join(f.root, 'memory');
+  const files = [];
+  const visit = (directory, prefix = '') => {
+    for (const name of fs.readdirSync(directory).sort()) {
+      const file = path.join(directory, name), relative = path.join(prefix, name);
+      if (fs.statSync(file).isDirectory()) visit(file, relative);
+      else files.push([relative, fs.readFileSync(file).toString('base64')]);
+    }
+  };
+  visit(memory);
+  return JSON.stringify({ memory: files, tables: Object.fromEntries(
+    ['conversations', 'checkpoints', 'origin_sync_cursors'].map(table =>
+      [table, f.database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()])) });
+}
+function assertNativeTransition(row) {
+  assert.equal(row.kind, 'switch');
+  for (const field of ['cutoff', 'coverage_snapshot', 'absorbed_ids']) assert.equal(row[field], null, field);
+}
+
+// Boundary: real CLI/Dashboard deletion -> private tmux/C4 -> native gating and
+// cancellation. Run for deletion/native gate changes; no dispatcher cutover or
+// PM2 is needed. The fixture proves paths/socket/DB isolation before startup and
+// stops its monitor, runtimes and HTTP children before deleting its private tree.
+for (const entry of ['cli', 'dashboard']) test(`${entry} deletion allows native gating cancellation without memory or input changes`, { skip: !enabled, timeout: 90_000 }, async t => {
+  const f = await setup(t);
+  await f.sandbox.runCase(async () => {
+    await deletion(f, entry);
+    const inFlight = insert(f, 'origin', 'delivery still in flight', 'running');
+    const before = nativePayload(f), configBefore = fs.readFileSync(path.join(f.root, '.zylos/config.json'), 'utf8');
+    const events = [], c = coordinator(f, events);
+    const accepted = await c.handle({ target: 'single' }); assert.equal(accepted.result, 'accepted');
+    await c.advance();
+    const gating = f.store.getModeTransition(); assert.equal(gating.phase, 'gating'); assertNativeTransition(gating);
+    assert.equal(f.store.getDrainFence('*').reason, null); assert.equal(f.store.getDrainFence('origin'), null);
+    assert.equal(nativePayload(f), before);
+    assert.equal((await c.cancel({ runId: accepted.runId })).result, 'cancelled');
+    assert.equal(f.store.getModeTransition(), null); assert.equal(f.store.getDrainFence('*'), null);
+    assert.equal(f.store.getModeTransition({ runId: accepted.runId }).phase, 'cancelled');
+    assert.equal(nativePayload(f), before); assert.equal(fs.readFileSync(path.join(f.root, '.zylos/config.json'), 'utf8'), configBefore);
+    assert.equal(f.database.prepare('SELECT status FROM conversations WHERE id=?').get(inFlight).status, 'running');
+    assert.equal(events.some(event => event.event === 'absorb'), false);
+    assert.equal(fs.existsSync(path.join(f.root, 'memory/state.md')), false);
+    assert.equal(fs.existsSync(path.join(f.root, 'memory/mode-switch')), false);
+  }, { timeoutMs: 75_000 });
+});
+
 for (const entry of ['cli', 'dashboard']) {
-  // Boundary: real deletion entry point -> AM/tmux lifecycle -> C4 store ->
-  // transitional converter/coordinator -> CLI/doctor display. Run for deletion/cutover changes;
-  // skip unrelated changes unless ZYLOS_DELETED_GROUP_CUTOVER_INTEGRATION=1.
-  // Every subprocess/DB/HTTP server is fixture-owned; HOME, ZYLOS_DIR, PM2_HOME,
-  // short TMPDIR and the explicit private tmux socket are asserted before startup.
-  test(`${entry} deletion permits repeated multi/single cutovers with preserved coverage`, { skip: !enabled, timeout: 90_000 }, async t => {
+  // Boundary: real deletion entry point -> private tmux/C4 -> native coordinator
+  // -> CLI/doctor status. Run for deletion/native-cutover changes with the opt-in
+  // gate and a separate Unix user. Actual cutover requires the upstream control
+  // APIs that preserve Origin; until available, select only gating/cancel cases.
+  // Fixture teardown stops every service and child before removing private data.
+  test(`${entry} deletion permits repeated native cutovers with unchanged memory and coverage`, { skip: !enabled, timeout: 90_000 }, async t => {
     const f = await setup(t);
     await f.sandbox.runCase(async () => {
       await deletion(f, entry);
-      const before = checkpoints(f), events = [], c = coordinator(f, events);
+      const before = nativePayload(f), events = [], c = coordinator(f, events);
       for (const target of ['single', 'multi', 'single']) {
-        const accepted = await c.handle({ target }); assert.equal(accepted.ok, true);
-        const done = await finish(f, c, accepted.runId);
-        assert.equal(done.cutoff, f.expectedCutoff); assert.deepEqual(done.absorbed_ids, []);
-        assert.equal(config(f).session_mode, target);
-        assert.deepEqual(checkpoints(f), before, 'An already-covered cutoff must not append a checkpoint');
+        const accepted = await c.handle({ target }); assert.equal(accepted.result, 'accepted');
+        const done = await finish(f, c, accepted.runId); assertNativeTransition(done);
+        assert.equal(config(f).session_mode, target); assert.equal(nativePayload(f), before);
         const observed = await status(f, events); assert.equal(observed.lastCompleted.runId, accepted.runId);
       }
-      assert.equal(events.some(event => event.event === 'transition_cutover_failed'), false);
+      assert.equal(events.some(event => ['absorb', 'transition_cutover_failed'].includes(event.event)), false);
       assert.equal(f.database.prepare('SELECT content FROM conversations WHERE id=1').get().content, 'surviving old message');
-      assert.ok(fs.existsSync(path.join(f.root, 'memory/state.md')));
-      // Memory Sync reads only fresh unsummarized work after the covered skip.
-      const fresh = insert(f, 'origin', 'fresh Memory Sync input');
-      assert.deepEqual(f.store.getGlobalUnsummarizedConversations({ upToConversationId: fresh }).map(row => row.id), [fresh]);
-      f.store.createCheckpoint('*', fresh, 'Memory Sync fresh summary');
-      assert.equal(f.store.getGlobalCoverageEnd(), fresh);
-      // Transitional behavior: switch admission temporarily uses the first-
-      // migration path, including cutoff, absorption and global state output.
-      // When native admission stops absorbing, update these assertions together
-      // with that coordinator change. Storage cutover adds no global coverage.
-      const multi = await c.handle({ target: 'multi' }); await finish(f, c, multi.runId);
-      const next = insert(f, 'origin', 'new work beyond retained coverage', 'pending');
-      assert.ok(next > f.covered);
-      const single = await c.handle({ target: 'single' });
-      const completed = await finish(f, c, single.runId);
-      assert.deepEqual(completed.absorbed_ids, [next]);
-      assert.equal(f.store.getGlobalCoverageEnd(), fresh);
-      assert.equal(checkpoints(f).length, before.length + 1);
+      assert.equal(fs.existsSync(path.join(f.root, 'memory/state.md')), false);
+      assert.equal(fs.existsSync(path.join(f.root, 'memory/mode-switch')), false);
+      const pending = insert(f, 'dashboard:waiting', 'new work remains in its original group', 'pending');
+      const queued = nativePayload(f);
+      for (const target of ['multi', 'single']) {
+        const accepted = await c.handle({ target }); assert.equal(accepted.result, 'accepted');
+        assertNativeTransition(await finish(f, c, accepted.runId));
+        assert.equal(nativePayload(f), queued);
+      }
+      assert.deepEqual(f.database.prepare('SELECT status,session_group FROM conversations WHERE id=?').get(pending),
+        { status: 'pending', session_group: 'dashboard:waiting' });
       await status(f, events);
     }, { timeoutMs: 75_000 });
   });
@@ -199,16 +241,19 @@ for (const entry of ['cli', 'dashboard']) {
 
 // Boundary: physically empty current C4 after both Dashboard groups disappear,
 // while a retained legacy global checkpoint remains. Run for deletion /
-// zero-cutoff changes under the same opt-in gate and full sandbox isolation.
-for (const checkpointSource of ['cutover', 'single']) test(`${checkpointSource} checkpoint with no current messages permits cutoff zero`, { skip: !enabled, timeout: 90_000 }, async t => {
+// empty-history changes with actual Origin-preserving cutover APIs available,
+// under the same opt-in gate and full sandbox isolation; otherwise select gating.
+for (const checkpointSource of ['cutover', 'single']) test(`${checkpointSource} checkpoint with no current messages leaves native cutoff unset`, { skip: !enabled, timeout: 90_000 }, async t => {
   const f = await setup(t, { noCurrentMessages: true, checkpointSource });
   await f.sandbox.runCase(async () => {
     await deletion(f, 'cli');
     assert.equal(f.database.prepare('SELECT count(*) AS n FROM conversations').get().n, 0);
-    const before = checkpoints(f), events = [], c = coordinator(f, events);
+    const before = nativePayload(f), events = [], c = coordinator(f, events);
     const accepted = await c.handle({ target: 'single' });
     const done = await finish(f, c, accepted.runId);
-    assert.equal(done.cutoff, 0); assert.deepEqual(checkpoints(f), before);
+    assertNativeTransition(done); assert.equal(nativePayload(f), before);
+    assert.equal(fs.existsSync(path.join(f.root, 'memory/state.md')), false);
+    assert.equal(fs.existsSync(path.join(f.root, 'memory/mode-switch')), false);
     assert.equal(f.store.getGlobalCoverageEnd(), f.covered);
     await status(f, events);
   }, { timeoutMs: 75_000 });
