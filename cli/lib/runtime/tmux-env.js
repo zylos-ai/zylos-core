@@ -296,27 +296,3 @@ export function buildCompatEnv({ processEnv, dotenvVars }) {
 
   return { env };
 }
-
-/**
- * Write a launch spec to a temp JSON file with 0600 permissions.
- *
- * @param {object} spec - { command, args, env, cwd }
- * @returns {string} Path to the spec file
- */
-export function writeLaunchSpec(spec) {
-  const specPath = path.join(os.tmpdir(), `.zylos-launch-${process.pid}-${Date.now()}.json`);
-  fs.writeFileSync(specPath, JSON.stringify(spec), { mode: 0o600 });
-  return specPath;
-}
-
-/**
- * Read and immediately delete a spec file (unlink-before-spawn).
- *
- * @param {string} specPath
- * @returns {object} The parsed spec object
- */
-export function readAndDeleteSpec(specPath) {
-  const content = fs.readFileSync(specPath, 'utf8');
-  fs.unlinkSync(specPath);
-  return JSON.parse(content);
-}
