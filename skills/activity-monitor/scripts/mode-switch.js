@@ -50,7 +50,7 @@ export class ModeSwitchCoordinator {
     catch { return { ok: false, code: 'config_unreadable' }; }
     if (source === request.target) return { ok: true, result: 'noop' };
     if (source === 'single' && request.target === 'multi' && await this.legacyPresent()) return { ok: false, code: 'legacy_session_present' };
-    if (await this.globalMemoryPending()) return { ok: false, code: 'global_memory_pending' };
+    if (initial.keyPresent !== false && await this.globalMemoryPending()) return { ok: false, code: 'global_memory_pending' };
     const requests = await this.readRequests();
     if (requests.some(row => row.reason === 'manual_restart')) return { ok: false, code: 'manual_restart_pending' };
     let current, currentValue;

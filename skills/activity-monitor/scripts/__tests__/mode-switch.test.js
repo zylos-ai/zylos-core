@@ -537,3 +537,11 @@ test('native gate waits for Origin delivery in flight while leaving its live run
   running = 0; await owner.advance();
   assert.equal(f.row.phase, 'cutover');
 });
+
+
+test('missing mode key admits first migration without checking global handover', async () => {
+  const f = fixture({ globalMemoryPending: () => assert.fail('legacy global memory belongs to first migration') });
+  const owner = f.create();
+  assert.equal((await owner.handle(request)).result, 'accepted');
+  assert.equal(f.row.kind, 'first_migration');
+});

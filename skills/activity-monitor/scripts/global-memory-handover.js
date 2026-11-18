@@ -66,6 +66,7 @@ export class GlobalMemoryHandoverCoordinator {
   async advanceLocked() {
     let id = null, step = 'check';
     try {
+      if (!this.pending()) return;
       if (await this.db.getModeTransition()) return;
       const mode = await this.readMode();
       if (mode.keyPresent !== true || !['single', 'multi'].includes(mode.mode)) return;
@@ -128,7 +129,7 @@ export class GlobalMemoryHandoverCoordinator {
           env: { ZYLOS_DIR: this.zylosDir, ZYLOS_SESSION_GROUP: 'origin' }, waitMs: this.waitMs });
       }
       step = 'enqueue';
-      if (plan.deliver) await this.db.insertControl(`请按 inbox 中编号为 ${id} 的全局工作记忆移交条目跟进`, {
+      if (plan.deliver) await this.db.insertControl(`Please follow up on the global working-memory handover entry numbered ${id} in your inbox.`, {
         sessionGroup: 'origin', priority: 2, appendAckSuffix: false,
       });
       step = 'done';

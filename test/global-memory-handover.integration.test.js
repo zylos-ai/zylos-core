@@ -79,3 +79,70 @@ test('handover and ordinary concurrent Origin append share lock and preserve com
   assert.equal([...inbox.matchAll(/commitment:/g)].length, 1); assert.equal([...inbox.matchAll(/fact: ordinary Origin entry/g)].length, 1);
   assert.equal(inbox.split('\n').filter(line => line.startsWith('- ')).length, 2);
 });
+
+test('composed supervisor defers global handover then socket switch and immediate cancellation succeed', async () => {
+  const { startSupervisor } = await import('../skills/activity-monitor/scripts/supervisor-main.js');
+  const { submit } = await import('../cli/lib/am-sock-client.js');
+  // Keep this private socket below the Unix path limit even when the runner's
+  // temporary root is deeply nested. No tmux or PM2 process is started.
+  const root = fs.mkdtempSync('/tmp/gmh-'), cleanup = [];
+  const { db, store } = databaseFixture({ after: fn => cleanup.push(fn) }, {}, path.join(root, 'c4.db'));
+  const memory = path.join(root, 'memory'), configFile = path.join(root, 'config.json');
+  fs.mkdirSync(memory);
+  fs.writeFileSync(path.join(memory, 'state.md'), 'global work awaiting handover');
+  fs.writeFileSync(path.join(memory, 'inbox.md'), 'global commitment');
+  fs.writeFileSync(configFile, '{"runtime":"claude","session_mode":"multi"}\n');
+  const configBytes = fs.readFileSync(configFile);
+  const readConfig = () => JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  const readMode = () => ({ keyPresent: true, mode: readConfig().session_mode });
+  const socketPath = path.join(root, 'activity-monitor/am.sock');
+  const snapshot = () => Object.fromEntries(['mode_transitions', 'drain_fences', 'conversations', 'checkpoints', 'origin_sync_cursors', 'run_endings'].map(table =>
+    [table, db.prepare(`SELECT * FROM ${table}`).all()]));
+  let legacy = true, service;
+  try {
+    db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status,session_group) VALUES('in','test','a','already delivered','delivered','group-a')").run();
+    const before = snapshot();
+    service = await startSupervisor({ env: { ...process.env, HOME: root, ZYLOS_DIR: root },
+      db: { ...store, getDb: () => db, getMaxConversationId: () => getMaxConversationId(db) },
+      readMode, readConfig, legacyPresent: () => legacy, resolveTargetRuntime: () => 'claude',
+      checkAuth: async () => ({ status: 'authenticated' }),
+      scenes: { observe: async () => [], observeGroup: async () => ({ present: false }),
+        readIdentity: async () => ({ present: false }), listRuns: async () => [], readRun: async () => null },
+      legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
+      loopOptions: { schedule: () => 1, cancel() {} }, readSyncMarker: () => ({ held: false, stale: false }),
+      writeMode: () => { throw new Error('configuration write forbidden before acceptance/cancellation'); },
+      restartDispatcherConfirmation: { advance: () => { throw new Error('dispatcher restart forbidden'); } },
+      sendAlert: () => { throw new Error('external notification forbidden'); }, log() {},
+    });
+    assert.equal(service.server.listening, true);
+    assert.equal(service.supervisor.globalMemoryHandover.pending(), true);
+    assert.equal(fs.readFileSync(path.join(memory, 'state.md'), 'utf8'), 'global work awaiting handover');
+    assert.deepEqual(snapshot(), before);
+    const rejected = await submit({ version: 1, type: 'mode_switch', requestId: 'global-work-pending', target: 'single' }, { socketPath });
+    assert.equal(rejected.kind, 'rejected'); assert.equal(rejected.reply.ok, false);
+    assert.equal(rejected.reply.code, 'global_memory_pending'); assert.deepEqual(snapshot(), before);
+
+    legacy = false;
+    await service.supervisor.loop.tick();
+    assert.equal(service.supervisor.globalMemoryHandover.pending(), false);
+    const inbox = fs.readFileSync(path.join(memory, 'session-groups/origin/inbox.md'), 'utf8');
+    assert.match(inbox, /commitment: Global memory handover gm-/);
+    const pending = db.prepare("SELECT * FROM control_queue WHERE status='pending'").all();
+    assert.equal(pending.length, 1); assert.equal(pending[0].session_group, 'origin');
+    assert.equal(pending[0].target_binding, null); assert.equal(pending[0].ack_deadline_at, null);
+    assert.deepEqual(snapshot(), before); assert.deepEqual(fs.readFileSync(configFile), configBytes);
+
+    const accepted = await submit({ version: 1, type: 'mode_switch', requestId: 'after-global-handover', target: 'single' }, { socketPath });
+    assert.equal(accepted.kind, 'accepted'); assert.equal(accepted.reply.ok, true); assert.equal(accepted.reply.result, 'accepted');
+    assert.equal(store.getModeTransition().phase, 'gating');
+    const cancelled = await submit({ version: 1, type: 'mode_switch_cancel', requestId: 'cancel-before-next-tick', runId: accepted.reply.runId }, { socketPath });
+    assert.equal(cancelled.kind, 'accepted'); assert.equal(cancelled.reply.ok, true); assert.equal(cancelled.reply.result, 'cancelled');
+    assert.equal(store.getModeTransition(), null); assert.deepEqual(store.listDrainFences(), []);
+    assert.equal(store.getModeTransition({ runId: accepted.reply.runId }).phase, 'cancelled');
+    assert.deepEqual(fs.readFileSync(configFile), configBytes);
+  } finally {
+    if (service) { await service.stop(); assert.equal(service.server.listening, false); }
+    for (const close of cleanup.reverse()) close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

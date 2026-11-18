@@ -216,3 +216,19 @@ test('unplanned directory with unknown contents fails closed rather than removin
   assert.equal((await f.owner().advance()).failed, true);
   assert.equal(fs.readFileSync(file, 'utf8'), 'retain'); assert.equal(f.owner().pending(), true);
 });
+
+test('empty global path returns before every authority read or runtime observation', async t => {
+  const f = fixture(t);
+  const unexpected = () => { throw new Error('empty path must not read authorities or observe runtimes'); };
+  for (const key of Object.keys(f.db)) f.db[key] = unexpected;
+  for (const key of ['readMode', 'readConfiguration', 'readRequests', 'legacyPresent', 'observe']) f.deps[key] = unexpected;
+  assert.equal(await f.owner().advance(), undefined); assert.deepEqual(f.events, []);
+});
+
+for (const sourceScope of ['origin', null]) test(`single mode handover honors observed Origin scope ${sourceScope}`, async t => {
+  const f = fixture(t); f.file('state.md', 'global memory'); f.mode = { keyPresent: true, mode: 'single' };
+  f.scenes = [{ present: true, sessionGroup: 'origin', runId: 'origin-run', sourceScope }];
+  const result = await f.owner().advance();
+  if (sourceScope === null) { assert.equal(result, undefined); assert.equal(f.owner().pending(), true); assert.equal(f.controls.length, 0); }
+  else { assert.equal(result.rule, 3); assert.equal(f.owner().pending(), false); assert.equal(f.controls.length, 1); }
+});
