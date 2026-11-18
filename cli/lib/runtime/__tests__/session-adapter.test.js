@@ -232,8 +232,9 @@ test('launch awaits runtime help and classifies invalid launch arguments as a la
   const f=fixture({present:false});
   f.adapter.options.paths={tmuxNameForGroup:()=> 'isolated'};
   f.adapter.options.runtimeExecutable=()=>'/fake';
-  let queried=false;
-  f.adapter.options.runtimeHelp=async()=>{
+  let queried=false, helpOptions;
+  f.adapter.options.runtimeHelp=async(_command,_env,options)=>{
+    helpOptions=options;
     await new Promise(resolve=>setImmediate(resolve));
     queried=true;
     return ' --model MODEL --effort EFFORT ';
@@ -244,9 +245,10 @@ test('launch awaits runtime help and classifies invalid launch arguments as a la
     {sessionGroup:null,runId:'r',sessionMode:'invalid'},
     {sessionGroup:'group',runId:'r',sessionMode:'single'},
   ]){
-    queried=false;
+    queried=false; helpOptions=undefined;
     await assert.rejects(f.adapter.launch({...input,launchConfig}),{code:'LAUNCH_FAILED',cause:'error'});
     assert.equal(queried,true);
+    assert.ok(Number.isInteger(helpOptions?.timeoutMs) && helpOptions.timeoutMs > 0 && helpOptions.timeoutMs <= 10000);
   }
   f.adapter.options.runtimeHelp=()=>'';
   await assert.rejects(f.adapter.launch({sessionGroup:null,runId:'r',sessionMode:'single',launchConfig}),{code:'MODEL_CONFIG_REJECTED'});

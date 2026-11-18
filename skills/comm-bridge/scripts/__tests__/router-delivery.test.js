@@ -209,12 +209,16 @@ test('Enter failure increments retry, invalid keystroke rejected; valid keystrok
 test('exhausted unverified Enter preserves uncertainty in the failure reason', async t => {
   const f = setup(t), row = f.message();
   f.adapter.sendKeys = async () => { throw error('ENTER_UNVERIFIED'); };
+  const alerts = [];
+  f.deps.sendFailureAlert = (failed, reason) => alerts.push({ id: failed.id, reason });
   const delivery = f.create();
   await delivery.deliverConversation(row);
   assert.equal(f.row(row.id).status, 'pending');
+  assert.deepEqual(alerts, []);
   assert.equal(f.store.claimConversation(row.id), true);
   await delivery.deliverConversation(row);
   assert.equal(f.row(row.id).status, 'failed');
+  assert.deepEqual(alerts, [{ id: row.id, reason: 'delivery_unverified' }]);
   const failed = f.row(row.id);
   assert.equal(failed.delivery_action, 'delivery_unverified');
   const { messageForFailureReceipt } = await import('../failure-receipt-template.js');

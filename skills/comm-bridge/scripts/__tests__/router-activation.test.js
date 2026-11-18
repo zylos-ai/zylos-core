@@ -209,11 +209,17 @@ test('READY timeout records launch phase durations under its separate budget', a
     assert.equal(f.row(failed.id).status, 'failed', 'alert follows failure commit');
     alerts.push({ id: failed.id, reason });
   };
-  f.options.maxRetries = 1;
+  f.options.maxRetries = 2;
   await f.create().initialize(); await f.rounds(2);
   assert.equal(f.row(row.id).status, 'running');
   f.advance(1000); await f.rounds(1);
   assert.equal(f.row(row.id).retry_count, 1);
+  assert.equal(f.row(row.id).status, 'pending');
+  assert.deepEqual(alerts, []);
+  await f.rounds(2);
+  assert.equal(f.row(row.id).status, 'running');
+  f.advance(1000); await f.rounds(1);
+  assert.equal(f.row(row.id).retry_count, 2);
   assert.equal(f.row(row.id).delivery_action, 'ready_timeout');
   assert.deepEqual(alerts, [{ id: row.id, reason: 'ready_timeout' }]);
   const event = f.events.find(event => event.event === 'session_launch_failed');

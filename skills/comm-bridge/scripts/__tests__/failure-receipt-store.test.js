@@ -28,7 +28,10 @@ test('internal final failure atomically queues exactly one receipt to the record
   assert.equal(receipt.content.includes('private original text'), false);
   assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations WHERE delivery_action='failure_receipt'").get().n, 1);
   assert.equal(f.db.prepare("SELECT head_id FROM group_heads WHERE session_group='chat:a'").get().head_id, receipt.id);
+  const rowsBeforeReceiptFailure = f.db.prepare("SELECT count(*) AS n FROM conversations").get().n;
   exhaust(f.store, receipt);
+  assert.equal(f.db.prepare("SELECT delivery_action FROM conversations WHERE id=?").get(receipt.id).delivery_action, 'failure_receipt');
+  assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations").get().n, rowsBeforeReceiptFailure);
   assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations WHERE delivery_action='failure_receipt'").get().n, 1);
 });
 
@@ -51,8 +54,11 @@ for (const mode of ['pending_expired', 'orphan_expired']) {
     const receipt = f.db.prepare("SELECT * FROM conversations WHERE delivery_action='failure_receipt'").get();
     assert.ok(receipt);
     f.db.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(Math.floor(now / 1000) - 1000, receipt.id);
+    const rowsBeforeReceiptFailure = f.db.prepare("SELECT count(*) AS n FROM conversations").get().n;
     if (mode === 'pending_expired') f.store.expirePending(receipt.id, 10);
     else { f.store.claimConversation(receipt.id); f.store.recoverOrphanRunning({ maxAgeSeconds: 100 }); }
+    assert.equal(f.db.prepare("SELECT delivery_action FROM conversations WHERE id=?").get(receipt.id).delivery_action, 'failure_receipt');
+    assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations").get().n, rowsBeforeReceiptFailure);
     assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations WHERE delivery_action='failure_receipt'").get().n, 1);
   });
 }
