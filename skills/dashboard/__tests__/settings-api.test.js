@@ -14,8 +14,15 @@ import { mutateConfig, withConfigLock } from '../src/lib/config-mutation.js';
 import { Store } from '../src/lib/store.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
 import { hashApiKey, exchangeApiKeyForToken } from '../src/lib/auth.js';
+import { signIn } from './helpers/dashboard-sign-in.js';
 
-const fetch = (url, options = {}) => globalThis.fetch(url, { ...options, signal: AbortSignal.timeout(3000) });
+// Servers whose fixture signed in as the owner; requests to them carry that session and a same-origin header.
+const sessions = new Map();
+const fetch = (url, options = {}) => {
+  const origin = new URL(url).origin, cookie = sessions.get(origin);
+  const headers = cookie ? { cookie, origin, ...options.headers } : options.headers;
+  return globalThis.fetch(url, { ...options, headers, signal: AbortSignal.timeout(3000) });
+};
 
 async function readSettings(server) {
   const response = await fetch(server.origin + '/api/settings/pricing');
@@ -134,7 +141,7 @@ async function makeSettingsServer(t, runtime = 'claude', configBody = {}, runCli
   const dashboardDir = path.join(dir, 'components', 'dashboard');
   fs.mkdirSync(dashboardDir, { recursive: true });
   const configPath = path.join(dashboardDir, 'config.json');
-  fs.writeFileSync(configPath, JSON.stringify({ auth: { enabled: false }, ...configBody }));
+  fs.writeFileSync(configPath, JSON.stringify({ auth: { password: 'settings-fixture-password' }, ...configBody }));
   process.env.ZYLOS_DIR = dir;
   assert.notEqual(process.env.HOME, os.userInfo().homedir);
   assert.ok(process.env.PM2_HOME.startsWith(path.dirname(process.env.HOME) + path.sep));
@@ -147,8 +154,11 @@ async function makeSettingsServer(t, runtime = 'claude', configBody = {}, runCli
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   assert.equal(server.address().address, '127.0.0.1');
   assert.ok(engine.store.db.name.startsWith(dir + path.sep));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  // Callers that supply their own auth block test credentials themselves; the rest act as the signed-in owner.
+  if (!configBody.auth) sessions.set(origin, await signIn(origin, 'settings-fixture-password'));
   return { dir, configPath, store: engine.store, config: engine._config,
-    mutations: () => mutations, origin: `http://127.0.0.1:${server.address().port}`, close };
+    mutations: () => mutations, origin, close };
 }
 
 // HTTP integration via makeSettingsServer: actual route/config persistence;
@@ -673,7 +683,7 @@ test('explicit runtime metadata reads saved defaults for active and inactive run
 // runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
 test('override pages support read credentials and preserve bounded CLI arguments', async t => {
   const calls = [];
-  const server = await makeSettingsServer(t, 'claude', { auth: { enabled: true, password: 'scrypt:fixture' } }, (file, args, options) => {
+  const server = await makeSettingsServer(t, 'claude', { auth: { password: 'scrypt:fixture' } }, (file, args, options) => {
     calls.push({ file, args, options });
     return { ok: true, data: { runtimeTotal: 100000, runtime: [{ sessionGroup: 'chat:AbC', runtime: 'codex' }], nextAfter: 'chat:AbC' } };
   });
@@ -808,7 +818,7 @@ test('pricing usage aggregates dimension tokens and preserves old costs after pr
 // candidate-discovery/wiring changes, skip pure styles. Reuses makeSettingsServer
 // isolation and teardown; collector reads are injected, no real PM2 is spawned.
 test('timezone settings discover the fresh process list on every HTTP request', async t => {
-  const server = await makeSettingsServer(t, 'claude', { auth: { enabled: true, password: 'fixture' } });
+  const server = await makeSettingsServer(t, 'claude', { auth: { password: 'fixture' } });
   server.store.insertApiKey({ name: 'timezone-read-fixture', keyHash: hashApiKey('zylos_ak_timezone_fixture'), scope: 'read' });
   const token = exchangeApiKeyForToken('zylos_ak_timezone_fixture').token;
   const headers = { Authorization: `Bearer ${token}` };

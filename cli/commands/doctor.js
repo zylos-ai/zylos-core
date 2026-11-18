@@ -30,6 +30,7 @@ import { collectStatus } from '../lib/status-view.js';
 import { resolveTargetRuntime } from '../lib/session-state-reader.js';
 import { describeOrigin, formatOriginDescription } from '../lib/origin-presence.js';
 import { TMUX_COMMAND as C } from '../lib/runtime/tmux-protocol.js';
+import { tmuxClientArgs, isTmuxDirectoryError } from '../lib/runtime/tmux-client-args.js';
 import { alertTargetNotice, formatAlertTargetNotice } from '../lib/alert-target-notice.js';
 import { readPoolCapacity } from '../lib/session-pool-config.js';
 import { dashboardAccessAddress } from '../lib/dashboard-access.js';
@@ -287,11 +288,12 @@ function checkPm2Services() {
 
 function checkTmuxSession(session) {
   try {
-    execFileSync('tmux', [C.hasSession, '-t', `=${session}`], {
+    execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), C.hasSession, '-t', `=${session}`], {
       stdio: 'pipe', timeout: 30000,
     });
     return true;
-  } catch {
+  } catch (error) {
+    if (isTmuxDirectoryError(error)) throw error;
     return false;
   }
 }

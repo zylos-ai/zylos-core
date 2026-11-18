@@ -311,9 +311,9 @@ To generate a replacement password, run:
 zylos dashboard reset-password
 ```
 
-The command shows the new password once and stores only its hash. Reset enables
-Dashboard authentication even if it was explicitly disabled, so this recovery
-command always restores a protected login. It clears all existing browser and
+The command shows the new password once and stores only its hash. Dashboard
+always requires sign-in, so this recovery command always ends with a protected
+login. It clears all existing browser and
 API sessions, including remembered logins; users must sign in again. API keys
 remain configured. It restarts a
 running Dashboard so the replacement applies immediately; if Dashboard is not
@@ -392,7 +392,7 @@ The readiness response contains only these public facts:
 `GET /api/health` is public on this exact path. Without a valid Dashboard
 cookie or API session it returns only `ok`, `service` (`zylos-dashboard`) and
 `bootId` (a random UUID generated once per process start). Missing, invalid or
-expired credentials, and disabled authentication, receive the public response.
+expired credentials receive the public response.
 Authenticated cookies and read/admin API sessions also receive `startedAt`,
 `uptimeSeconds`, `event_loop` and `source`. Health authentication does not touch
 session activity or delete expired sessions. Responses are not cached and vary

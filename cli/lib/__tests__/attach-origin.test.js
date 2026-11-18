@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { attachCommand } from '../../commands/attach.js';
+import { tmuxClientArgs } from '../runtime/tmux-client-args.js';
 
 const status = { view: 'multi', origin: { presence: 'not_running' }, originNeed: { inbound: 0, controls: 0, oldestAt: null }, runtimeHealth: {}, readAt: 1_000_000 };
 
@@ -28,7 +29,7 @@ test('attach client removes inherited identity and forwards all other environmen
   assert.equal(calls.length, 3);
   const attached = calls.at(-1);
   assert.equal(attached.command, 'tmux');
-  assert.deepEqual(attached.args, ['attach', '-t', '=zylos-group-origin']);
+  assert.deepEqual(attached.args, [...tmuxClientArgs({ utf8: false }), 'attach', '-t', '=zylos-group-origin']);
   assert.equal(attached.options.stdio, 'inherit');
   const expected = { ...before };
   for (const key of ['ZYLOS_RUN_ID', 'ZYLOS_MODEL_CONFIG', 'ZYLOS_SESSION_GROUP']) delete expected[key];

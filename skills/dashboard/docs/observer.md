@@ -38,8 +38,7 @@ isolated native probe does not establish product lifecycle support.
 
 ## Viewing and access
 
-Use an authenticated administrator session. Observer is unavailable when
-Dashboard authentication is disabled; read-only accounts and Fleet credentials
+Use an authenticated administrator session. Read-only accounts and Fleet credentials
 without administrator scope cannot acquire a viewing lease or change its state.
 For a Fleet target, actions apply to the selected remote Dashboard and require
 that target's administrator credentials and Observer support. The target must

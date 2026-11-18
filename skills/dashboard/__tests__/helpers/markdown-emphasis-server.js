@@ -11,11 +11,12 @@ for (const [key, leaf] of [['HOME', 'home'], ['ZYLOS_DIR', 'instance'], ['PM2_HO
   assert.equal(fs.realpathSync(process.env[key]), path.join(root, leaf));
 }
 assert.equal(process.env.TMUX_TMPDIR, path.join(root, 'tmp'));
-assert.equal(process.env.TMUX.split(',')[0], path.join(root, 'tmux.sock'));
+const socket = path.join(root, 'tmp', `tmux-${process.getuid()}`, 'default');
+assert.equal(process.env.TMUX.split(',')[0], socket);
 const databases = ['comm-bridge/c4.db', 'components/dashboard/dashboard.db'].map(leaf => path.join(process.env.ZYLOS_DIR, leaf));
 for (const filename of databases) assert.equal(fs.realpathSync(filename), filename);
 console.info('markdown-emphasis child isolation', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
-  PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, socket: path.join(root, 'tmux.sock'), databases }));
+  PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, socket, databases }));
 mock.method(VersionChecker.prototype, 'start', () => {});
 const { createServer } = await import('../../src/index.js');
 const server = createServer();

@@ -9,7 +9,7 @@ import { bold } from '../lib/colors.js';
 import { resolveCliSession } from '../lib/cli-session.js';
 import { tmuxSessionTarget } from '../lib/session-group-paths.js';
 import { TMUX_COMMAND as C, TMUX_FORMAT as F } from '../lib/runtime/tmux-protocol.js';
-import { tmuxClientEnvironment } from '../lib/runtime/tmux-client-args.js';
+import { tmuxClientArgs, tmuxClientEnvironment, isTmuxDirectoryError } from '../lib/runtime/tmux-client-args.js';
 
 export async function attachCommand({ resolve = resolveCliSession, exec = execFileSync, collect = collectStatus } = {}) {
   const { sessionGroup, live, runtime } = await resolve();
@@ -17,8 +17,9 @@ export async function attachCommand({ resolve = resolveCliSession, exec = execFi
   const RUNTIME_LABEL = runtime;
   // Check if tmux session exists
   try {
-    exec('tmux', [C.hasSession, '-t', SESSION], { stdio: 'pipe' });
-  } catch {
+    exec('tmux', [...tmuxClientArgs({ utf8: false }), C.hasSession, '-t', SESSION], { stdio: 'pipe' });
+  } catch (error) {
+    if (isTmuxDirectoryError(error)) throw error;
     if (sessionGroup !== null && sessionGroup !== undefined) {
       if (sessionGroup === 'origin') {
         const data = await collect();
@@ -51,13 +52,14 @@ export async function attachCommand({ resolve = resolveCliSession, exec = execFi
 
   // Show detach hint inside tmux for 3 seconds on attach
   try {
-    exec('tmux', [C.setHook, '-t', `${SESSION}:`, 'client-attached', F.detachHint], { stdio: 'pipe' });
-  } catch (error) { console.error(`Detach hint unavailable: ${error.message}`); }
+    exec('tmux', [...tmuxClientArgs({ utf8: false }), C.setHook, '-t', `${SESSION}:`, 'client-attached', F.detachHint], { stdio: 'pipe' });
+  } catch (error) { if (isTmuxDirectoryError(error)) throw error; console.error(`Detach hint unavailable: ${error.message}`); }
 
   // Attach — hands over terminal to tmux
   try {
-    exec('tmux', [C.attach, '-t', SESSION], { stdio: 'inherit', env: tmuxClientEnvironment() });
-  } catch {
+    exec('tmux', [...tmuxClientArgs({ utf8: false }), C.attach, '-t', SESSION], { stdio: 'inherit', env: tmuxClientEnvironment() });
+  } catch (error) {
+    if (isTmuxDirectoryError(error)) throw error;
     // Normal exit when detaching
   }
 }

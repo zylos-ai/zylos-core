@@ -1,5 +1,6 @@
 import { adapterError, shellQuote } from './session-command.js';
 import { openTmuxConnection, runTmuxCommand } from './tmux-connection.js';
+import { isTmuxDirectoryError } from './tmux-client-args.js';
 import { TMUX_COMMAND as C, TMUX_FORMAT as F, launchFormat, parseLaunchAddress,
   parseLaunchReceipt, parseExecReceipt } from './tmux-protocol.js';
 import { groupRunDir } from '../session-group-paths.js';
@@ -105,7 +106,7 @@ export async function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,roo
       } catch { /* Unobservable server-side outcomes are handled by the caller. */ }
       finally { cleanup?.close(); }
     }
-    failure = error.code === 'NAME_CONFLICT' || error.code === 'LAUNCH_FAILED' ? error
+    failure = isTmuxDirectoryError(error) || error.code === 'NAME_CONFLICT' || error.code === 'LAUNCH_FAILED' ? error
       : /duplicate session/.test(error.message) ? adapterError('NAME_CONFLICT',error.message)
         : adapterError('LAUNCH_FAILED',error.message,error.cause);
     // Only numeric durations and a fixed phase name leave this layer. In

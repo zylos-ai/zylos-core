@@ -149,7 +149,8 @@ complete native child lifecycle coverage is not available from that source.
 Capacity eviction skips even idle sessions whose latest activity is less than
 `session_evict_min_idle_seconds` ago. At the boundary they become eligible for
 the existing LRU selection; if all are too recent, new groups wait in the queue.
-This does not change the three-second busy/idle observation threshold.
+After a Claude/Codex main turn closes, the existing three-second quiet threshold
+still applies. AGY keeps its native statusLine and 500ms idle stability rule.
 
 Capacity eviction (a waiting group needs a slot) and memory-pressure reclaim
 first send the same pre-reclaim check to the selected group: bound to the
@@ -353,9 +354,67 @@ pm2 list
    - Send recovery prompt via C4 after successful restart
 
 3. **Activity Detection**:
-   - Claude primary: Conversation file modification time (reliable)
-   - Codex / fallback: tmux window activity
-   - Threshold: 3 seconds without activity = idle
+   - Claude/Codex: current-run native hook events and the associated session
+     transcript; child activity is tracked separately from main-agent state.
+     AGY keeps run/session-bound statusLine authority and 500ms idle stability,
+     including closing Esc-interrupted turns without a Stop hook.
+   - A submitted main turn remains busy until its terminal hook,
+     including quiet API/model waits with no active tool. After 20 minutes with
+     no unfinished tools and no native activity, the supervisor queues
+     one `[KEYSTROKE]Escape` control through the existing control path,
+     then closes the abandoned turn. It does not check a runtime stop signal
+     and does not retry Escape in the same quiet turn, including after a supervisor
+     restart. Attempt/admission facts use the existing run event log and do not
+     count as AI activity. An unknown admission keeps the turn busy without
+     another attempt. The control uses the same
+     per-session delivery lane as ordinary messages, so it waits for any active
+     paste/Enter verification to finish before sending. It uses recovery priority
+     zero, ahead of normal require-idle controls (priorities one through three). Equal
+     priorities keep the existing created-at/id order. No direct tmux key-sending
+     path is added.
+   - Claude starts a turn only from UserPromptSubmit while outside a turn,
+     or native queue-operation dequeue in its associated transcript. Prompt
+     hooks for messages queued during an existing turn do not reset the turn.
+     Stop and StopFailure close it; late tool/idle/Stop hooks do not start one.
+     An unfinished individual tool still keeps the session busy.
+   - Supported Claude versions register an activity hook alongside the existing
+     StopFailure health hook during both hook sync and upgrade. The activity
+     record uses event='stop', the same as normal Stop.
+     Dequeue reuses Dashboard working.js inputAfterStop and STOP_HOOK_LAG_MS:
+     a dequeue up to five seconds before a delayed Stop counts after that Stop
+     when no other main action intervened. No promptId attribution is used.
+     A replaced, missing or unreadable transcript discards cached dequeue
+     authority and falls back to hook state, without manufacturing busy state;
+     a genuine hook-open turn or running tool still remains busy.
+   - Known limitation: without a dequeue record, inter-tool gaps can be idle
+     (observed in 2 of 133 reviewed turns). No substitute inference is added.
+   - AGY uses the same 20-minute, one-shot Escape rule while a turn is open.
+     Its last-activity timestamp includes non-idle statusLine capture timestamps;
+     native freshness includes every valid current sample. Rereading a sample
+     does not extend either timestamp. A valid run/session-bound sample captured
+     after turn close with running subagents or `task_count > 0` exempts the turn
+     from the deadline even after later main-agent hooks. Turn close fences that
+     sample; a replacement re-evaluates task state. No separate timer or
+     configuration is added. The prompt hook
+     starts the turn, or a non-idle sample starts it when no turn is open. An
+     admitted interrupt fences older busy samples; newer samples reopen work.
+     The resulting idle state still waits for the native 500ms stability period.
+   - Unfinished tools, including silent foreground Bash and foreground subagent
+     calls, stay busy without this time limit and receive no inactivity Escape.
+     Claude transcript tool results can clear interrupted tools even when the
+     closing tool hooks are absent; the 20-minute quiet limit then applies.
+   - The existing no-response recovery owns completely unanswered deliveries:
+     Escape plus continue after 15 minutes, then one restart at 18 minutes if
+     still silent. A stopped/replaced run cannot receive the 20-minute action.
+     Actual AI work disarms that recovery; if the turn later becomes quiet
+     without Stop, the 20-minute Escape ends it without a replacement continue.
+     The interrupted message receives no reply in that turn. This applies in
+     single and multi-session mode, including Origin and ordinary groups, and
+     adds no configuration.
+   - For Claude/Codex, with no open main turn or active tool, 3 seconds without
+     activity = idle. AGY uses its statusLine/Stop authority and 500ms stability.
+     The existing require-idle delivery gate waits on this state; no control
+     type, delivery semantics, or no-response recovery timer is changed.
 
 ## Heartbeat Liveness Detection
 

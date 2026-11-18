@@ -20,6 +20,7 @@ import { bold, dim, green, red, cyan, success, warn, heading } from '../lib/colo
 import { promptYesNo } from '../lib/prompts.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { TMUX_COMMAND as C } from '../lib/runtime/tmux-protocol.js';
+import { tmuxClientArgs, isTmuxDirectoryError } from '../lib/runtime/tmux-client-args.js';
 
 // Kill both known runtime sessions on uninstall regardless of which is active
 const TMUX_SESSIONS = ['claude-main', 'codex-main'];
@@ -176,9 +177,10 @@ export async function selfUninstall(args) {
 function killTmuxSession() {
   for (const session of TMUX_SESSIONS) {
     try {
-      execFileSync('tmux', [C.killSession, '-t', session], { stdio: 'pipe' });
+      execFileSync('tmux', [...tmuxClientArgs({ utf8: false }), C.killSession, '-t', session], { stdio: 'pipe' });
       console.log(`  Killed tmux session ${dim(session)}`);
-    } catch {
+    } catch (error) {
+      if (isTmuxDirectoryError(error)) throw error;
       // Session not found — normal
     }
   }

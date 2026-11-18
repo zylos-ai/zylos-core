@@ -24,6 +24,24 @@ function fixture(t, observer = { enabled: true, generation: 4 }) {
   return { root, dataDir, configPath };
 }
 
+// Runs an ownership attempt that must time out: the lock poll's real 25 ms sleeps
+// continue while a mocked clock is stepped past its deadline.
+async function pastLockDeadline(t, operation) {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  let settled = false;
+  const attempt = operation();
+  attempt.then(() => { settled = true; }, () => { settled = true; });
+  try {
+    while (!settled) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      t.mock.timers.tick(1_000);
+    }
+  } finally {
+    t.mock.timers.reset();
+  }
+  return attempt;
+}
+
 test('component pre-uninstall joins the running producer coordinator', async (t) => {
   const { dataDir, configPath } = fixture(t);
   let calls = 0;
@@ -237,10 +255,10 @@ test('an undiscovered producer mutex refuses offline teardown and a second coord
   t.after(() => producer.close());
   const before = fs.readFileSync(configPath, 'utf8');
   // An absent endpoint is not evidence that coordinator ownership is available.
-  await assert.rejects(runObserverPreUninstall({ dataDir, configPath }), { code: 'coordinator_active' });
+  await assert.rejects(pastLockDeadline(t, () => runObserverPreUninstall({ dataDir, configPath })), { code: 'coordinator_active' });
   const contender = new ObserverControlServer({ dataDir, onPreUninstall: async () => {} });
   t.after(() => contender.close());
-  await assert.rejects(contender.start(), { code: 'coordinator_active' });
+  await assert.rejects(pastLockDeadline(t, () => contender.start()), { code: 'coordinator_active' });
   await contender.close();
   assert.equal(fs.readFileSync(configPath, 'utf8'), before);
   await producer.close();
@@ -292,7 +310,7 @@ test('closing a failed contender preserves the owning producer control socket', 
   await owner.start();
   t.after(() => owner.close());
   const contender = new ObserverControlServer({ dataDir, onPreUninstall: async () => {} });
-  await assert.rejects(contender.start(), { code: 'coordinator_active' });
+  await assert.rejects(pastLockDeadline(t, () => contender.start()), { code: 'coordinator_active' });
   await contender.close();
   assert.equal(fs.existsSync(owner.socketPath), true);
   assert.deepEqual(await runObserverPreUninstall({ dataDir, configPath }), { mode: 'online' });
@@ -322,10 +340,10 @@ test('losing Dashboard shutdown and pre-uninstall cannot clean winner staging', 
     containment: { reconcilePersisted: async () => { mutations++; } },
     coordinator: { reconcileStartup: async () => {}, uninstall: async () => { mutations++; } },
     manager: { shutdown: async () => { mutations++; } } });
-  await service.startup();
+  await pastLockDeadline(t, () => service.startup());
   assert.equal(service.startupError.code, 'coordinator_active');
-  await assert.rejects(service.shutdown(), { code: 'coordinator_active' });
-  await assert.rejects(service.preUninstall(), { code: 'coordinator_active' });
+  await assert.rejects(pastLockDeadline(t, () => service.shutdown()), { code: 'coordinator_active' });
+  await assert.rejects(pastLockDeadline(t, () => service.preUninstall()), { code: 'coordinator_active' });
   assert.equal(mutations, 0); assert.ok(fs.existsSync(staging));
 });
 
@@ -346,7 +364,7 @@ test('SQLite ownership excludes another process and releases on its normal OS ex
   assert.equal(ready.toString(), 'owned\n');
   assert.equal(child.exitCode, null);
   const contender = new ObserverControlServer({ dataDir, onPreUninstall: async () => {} });
-  await assert.rejects(contender.acquire(), { code: 'coordinator_active' });
+  await assert.rejects(pastLockDeadline(t, () => contender.acquire()), { code: 'coordinator_active' });
   const lockPath = path.join(dataDir, 'observer/runtime/control/coordinator-lock.sqlite');
   const inode = fs.statSync(lockPath).ino;
   child.stdin.end('exit'); assert.deepEqual(await exited, [0, null]);

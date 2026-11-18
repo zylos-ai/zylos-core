@@ -16,6 +16,7 @@ import { SessionActivity } from './session-activity.js';
 import { publishSessionStatus } from './status-writer.js';
 import { createSupervisorConnectionHandler } from './router-socket.js';
 import { PENDING_MAX_AGE_SECONDS } from '../../comm-bridge/scripts/c4-config.js';
+import { isTmuxDirectoryError } from '../../comm-bridge/scripts/tmux-client-args.js';
 const { nudgeSession } = await loadCoreModule('session-nudge.js');
 const { appendEvent, rotateEventLog } = await loadCoreModule('event-log.js');
 const { writeSessionModeAtCutover } = await loadCoreModule('config.js');
@@ -27,7 +28,7 @@ export const AUTH_DEMAND_RETRY_MS = 60000;
 export function createSupervisor(deps) {
   const { db, scenes, readConfiguration, readMode, readSyncMarker, prepareReferenceReorg, prompts, now=Date.now, log=()=>{} }=deps;
   const activities=new Map();let configuration;let lastMetrics=null;let lastMaintenance=0;
-  let observer,router,admission,lifecycle,modeSwitch,stopping=false,stopPromise,roundContext;
+  let observer,router,admission,lifecycle,modeSwitch,loop,stopping=false,stopPromise,roundContext;
   const authChecks=new Set(),authFlights=new Map(),authRetryAt=new Map();
   const startupAuthChecks=new Set();
   const originAuthAlerted=new Set();
@@ -35,6 +36,13 @@ export function createSupervisor(deps) {
   let restartRequestsUnreadable=false;
   const restartRequestsPath=()=>admission?.store.file ?? path.join(deps.zylosDir,'activity-monitor','restart-requests.json');
   const reportError=(error,context={})=>{
+    if(isTmuxDirectoryError(error)) {
+      if(loop.directoryError)return;
+      loop.directoryError=error;
+      diagnostic({event:'tmux_directory_unavailable',reason:error.code});
+      log({error:error.code,phase:'tmux-directory'});
+      return;
+    }
     if(error.code==='requests_unreadable') {
       if(restartRequestsUnreadable)return;
       // Restore and round reads belong to one episode until a read succeeds.
@@ -106,6 +114,44 @@ export function createSupervisor(deps) {
     if(!await validate(current))return false;
     return await action(current) !== false;
   });
+  const interruptQuietTurn=async scene=>{
+    const sampled=readActivity(scene);
+    if(!sampled.quietTurnDue || observer.noResponseActive(scene))return false;
+    let interrupted=false;
+    await guardedAction(scene,async current=>{
+      if(current.sessionId!==scene.sessionId || observer.noResponseActive(current))return false;
+      const mode=(await readMode()).mode;
+      const targetBinding={...await scenes.bindTarget(current),expectedSessionId:current.sessionId};
+      if(!await observer.canAct(current,{requireReady:true,requireOpen:true}) || observer.noResponseActive(current))return false;
+      const fresh=readActivity(current),activity=activities.get(current.sessionGroup);
+      if(fresh.lastActivityAt!==sampled.lastActivityAt || !fresh.quietTurnDue ||
+         !activity.claimQuietTurn(sampled.lastActivityAt,now()))return false;
+      const interruptFact=(event,extra={})=>appendEvent(path.join(activity.runDir,'events.jsonl'),{
+        v:1,ts:now(),run_id:current.runId,session_id:current.sessionId,runtime:current.runtime,
+        session_group:current.sessionGroup,event,last_activity_at:sampled.lastActivityAt,
+        turn_started_at:sampled.turnStartedAt,last_native_activity_at:fresh.lastNativeActivityAt,
+        last_response_at:fresh.lastResponseAt,...extra});
+      // Record the one-shot attempt before an insertion whose outcome can be unknown.
+      interruptFact('quiet_turn_interrupt_attempt');
+      const enqueuedAt=now();
+      // Use the shared recovery priority; equal-priority controls retain FIFO order.
+      // The existing per-group C4 lane still owns every terminal write.
+      const control=await db.insertControl('[KEYSTROKE]Escape',{sessionGroup:mode==='single'?null:current.sessionGroup,
+        targetBinding,priority:0,bypassState:true,appendAckSuffix:false});
+      const result={ok:Number.isSafeInteger(control?.id) && control.id>0,controlId:control?.id ?? null,enqueuedAt};
+      if(!result.ok)return false;
+      // Queue admission, rather than a runtime-stop confirmation, permits idle.
+      // Re-read facts so a new prompt/tool arriving during insertion stays busy.
+      const latest=readActivity(current);
+      if(latest.turnStartedAt===sampled.turnStartedAt && latest.lastNativeActivityAt===fresh.lastNativeActivityAt &&
+         latest.lastResponseAt===fresh.lastResponseAt && latest.turnOpen && !latest.transcriptPending && latest.tools.length===0) {
+        interruptFact('quiet_turn_interrupt',{control_id:result.controlId});
+        interrupted=readActivity(current).turnOpen===false;
+      }
+      return interrupted;
+    },{requireOpen:true});
+    return interrupted;
+  };
   const checkAuth=(runtime,{background=false}={})=>{
     if(stopping)return Promise.resolve({status:'uncertain',reason:'supervisor_stopping'});
     // Router, pane checks and pending demand share one actual adapter call.
@@ -164,7 +210,7 @@ export function createSupervisor(deps) {
     convert:deps.convertModeTransition ?? createModeSwitchConverter({db,zylosDir:deps.zylosDir}),
     writeMode:deps.writeMode ?? writeSessionModeAtCutover,restart:deps.restartDispatcherConfirmation,diagnostic,now});
   const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','reconcileConfiguration','advanceReleases','advanceReclaim','checkRotation','checkTtl','checkEviction','checkSync'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
-  const loop=new SupervisorLoop({
+  loop=new SupervisorLoop({
     beginRound:()=>lifecycle.beginRound(),
     readConfiguration:async transition=>{
       roundContext=null;
@@ -222,8 +268,15 @@ export function createSupervisor(deps) {
         await deps.consumeHealthEvents?.(scene,health);
         if(!matches(await scenes.readIdentity(scene.sessionGroup)))return;
       }
+      const observeBeforePublication=activity.quietTurnDue;
+      if(observeBeforePublication) {
+        // Existing no-response recovery gets first ownership at its earlier deadline.
+        await observer.observeScene(scene);
+        if(scene.present===false)return;
+        if(await interruptQuietTurn(scene))activity=readActivity(scene);
+      }
       publishSessionStatus({statusFile:path.join(scene.runDir,'agent-status.json'),scene,activity,health:health.store(scene.runtime).read(),proc:scene.proc,now:now()});
-      await observer.observeScene(scene);
+      if(!observeBeforePublication)await observer.observeScene(scene);
     },
     writeMetricsAndMaintain:async context=>{
       const current=context.scenes.filter(scene=>scene.present!==false);
@@ -336,7 +389,7 @@ export function createSupervisor(deps) {
   const drainHealthWrites=async()=>{
     while(health.queues.size)await Promise.allSettled([...health.queues.values()]);
   };
-  return {loop,health,observer,router,admission,lifecycle,modeSwitch,connectionHandler,readActivity,drainHealthWrites,diagnostic,
+  return {loop,health,observer,router,admission,lifecycle,modeSwitch,connectionHandler,readActivity,interruptQuietTurn,drainHealthWrites,diagnostic,
     stop(){
       if(stopPromise)return stopPromise;
       stopping=true;admission.closeEntry();

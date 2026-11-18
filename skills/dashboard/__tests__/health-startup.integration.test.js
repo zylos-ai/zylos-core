@@ -50,7 +50,7 @@ test('real Dashboard startup binds its private process record to public health',
   const port = reservation.address().port;
   await new Promise(resolve => reservation.close(resolve));
   fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({
-    port, host: '127.0.0.1', auth: { enabled: false }, observer: { enabled: false },
+    port, host: '127.0.0.1', auth: { password: 'scrypt:fixture' }, observer: { enabled: false },
   }), { mode: 0o600 });
   const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: pm2,
     TMPDIR: tmp, TMUX_TMPDIR: tmp, TMUX: `${tmp}/private.sock,0,0`, ZELLIJ: '',

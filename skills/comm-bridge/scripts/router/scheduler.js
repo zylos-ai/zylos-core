@@ -5,6 +5,7 @@ import { createActivationManager } from './activation.js';
 import { createContinuationRestarts } from './continuation.js';
 import { createCapacityWaits } from './capacity-wait.js';
 import { initializeRouter } from './startup.js';
+import { tmuxClientArgs, isTmuxDirectoryError } from '../tmux-client-args.js';
 import { PENDING_MAX_AGE_SECONDS, RECOVER_MAX_AGE_SECONDS, MAX_RETRIES,
   CONTROL_CLEANUP_INTERVAL_MS, CONTROL_RETENTION_DAYS, READY_TIMEOUT_MS } from '../c4-config.js';
 
@@ -34,6 +35,19 @@ export function createRouter(dependencies, configuration = {}) {
   const attemptedRound = new Map();
   let sceneTask = null, legacyTask = null, maintenanceTask = null, timer = null, initialization = null;
   let lastCleanup = -Infinity, lastDiagnostics = -Infinity, lastMismatch = -Infinity;
+  let directoryFailed = false;
+  function directoryAvailable() {
+    if (directoryFailed) return false;
+    try { tmuxClientArgs(); return true; }
+    catch (error) {
+      if (!isTmuxDirectoryError(error)) throw error;
+      directoryFailed = true;
+      state.sceneObservable = false;
+      for (const current of state.lanes.values()) current.stop();
+      diagnostic('tmux_directory_unavailable', { reason: error.code });
+      return false;
+    }
+  }
   const diagnostic = (event, fields = {}) => {
     try { Promise.resolve(deps.diagnostic?.(event, fields)).catch(error => deps.log?.(`Router diagnostic: ${error.message}`)); }
     catch (error) { deps.log?.(`Router diagnostic: ${error.message}`); }
@@ -187,6 +201,7 @@ export function createRouter(dependencies, configuration = {}) {
   }
   function tick() {
     if (!state.ready || state.inert || state.stopped) return;
+    if (!directoryAvailable()) return;
     state.round++;
     const seconds = Math.floor(now() / 1000);
     deps.db.expireTimedOutControls(seconds);
@@ -233,7 +248,7 @@ export function createRouter(dependencies, configuration = {}) {
   }
   function initialize() { initialization ??= initializeRouter(context); return initialization; }
   async function start() {
-    await initialize();
+    if (directoryAvailable()) await initialize();
     if (timer || state.stopped) return;
     timer = setInterval(() => { try { tick(); } catch (error) { diagnostic('scheduler_error', { reason: error.code ?? error.message }); } }, options.pollIntervalMs);
   }

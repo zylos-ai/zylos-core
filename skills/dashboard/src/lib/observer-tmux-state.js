@@ -6,6 +6,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { ObserverContainmentError } from './observer-containment-error.js';
+import { tmuxClientArgs } from '../../../comm-bridge/scripts/tmux-client-args.js';
 
 export { ObserverContainmentError };
 export const runCommand = promisify(execFile);
@@ -112,9 +113,9 @@ export function zellijArgs(state, ...args) {
   return ['--data-dir', path.join(state.root, 'data'), '--config', state.configFile, ...args];
 }
 export function targetArgs(state, ...args) {
-  return ['-N', ...(state.tmuxSocket ? ['-S', state.tmuxSocket] : []), ...args];
+  return ['-N', ...tmuxClientArgs({ socketPath: state.tmuxSocket, utf8: false }), ...args];
 }
-export function outerArgs(state, ...args) { return ['-N', '-S', state.outerSocket, ...args]; }
+export function outerArgs(state, ...args) { return ['-N', ...tmuxClientArgs({ socketPath: state.outerSocket, utf8: false }), ...args]; }
 export async function command(file, args, options = {}) {
   return runCommand(file, args, { encoding: 'utf8', maxBuffer: 128 * 1024, timeout: 3000, ...options, env: { ...(options.env || process.env), LC_ALL: 'C' } });
 }

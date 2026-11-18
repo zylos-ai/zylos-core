@@ -23,6 +23,7 @@ const ROOT_NODE_TESTS = [
   'test/channel-delivery.integration.test.js',
   'test/channel-sync.integration.test.js',
   'test/self-upgrade-private-host.integration.test.js',
+  'test/require-idle-turn.integration.test.js',
   'test/single-origin-activity.integration.test.js',
   'test/dashboard-demand-poll.integration.test.js',
   'test/legacy-group-reads-browser.test.js',
@@ -163,7 +164,8 @@ const environment = createTestEnvironment();
 const tmpdir = path.join(environment.root, 'tmp');
 let failed = true;
 try {
-  fs.mkdirSync(tmpdir);
+  fs.mkdirSync(tmpdir, { mode: 0o700 });
+  fs.chmodSync(tmpdir, 0o700);
   const env = { ...process.env, TMPDIR: tmpdir, TMUX_TMPDIR: tmpdir };
   delete env.TMUX;
   // Runtime identity belongs to each fixture, never the agent running tests.
