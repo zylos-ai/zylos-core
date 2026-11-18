@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +21,7 @@ async function launch(t,f){
 // readyTmuxTarget owns the private server/database and launch() reaps every worker.
 test('single actual supervisor SIGKILL recaptures old run; finite control blocks while deadline-less permits cleanup',{timeout:20000},async t=>{
  const f=readyTmuxTarget(t,{prefix:'single-auth-entry-',mode:'single',runtimeProcess:true});f.tmux('new-session','-d','-s','fixture-keeper','sleep','120');
+ fs.writeFileSync(path.join(f.root,'.zylos/config.json'),JSON.stringify({runtime:'claude'}));
  const store=new HealthStore({zylosDir:f.root,runtime:'claude'}),state=store.read();state.health='auth_failed';state.reason='authentication_failed';store.write(state);
  const first=await launch(t,f);await first.command('pending');let observed=await first.command('tick');
  assert.equal(observed.health,'auth_failed');assert.equal(observed.checks,1);assert.deepEqual(observed.targets,['run-1']);assert.equal(observed.present,true);assert.equal(observed.gates,0);assert.deepEqual(observed.fences,[]);

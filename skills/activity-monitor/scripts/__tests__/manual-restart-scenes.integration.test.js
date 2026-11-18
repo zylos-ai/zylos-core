@@ -176,7 +176,7 @@ for (const mode of ['single', 'multi']) test(`${mode} actual supervisor transiti
   assertReply(await f.submit(otherManual), otherManual, 'rejected', { reason: 'manual_restart_pending' }, false);
   const upgrade = { version: 1, type: 'restart_all', requestId: 'upgrade-after-manual', reason: 'upgrade' };
   assert.deepEqual((await f.submit(upgrade)).reply, { version: 1, type: 'restart_all', requestId: upgrade.requestId, ok: false, code: 'manual_restart_pending' });
-  const db = createStore(f.db, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: mode } }) });
+  const db = createStore(f.db, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', ...(mode === 'single' ? {} : { session_mode: mode }) } }) });
   db.setDrainFence(mode === 'single' ? '*' : 'origin', { reason: 'manual_restart', runId: 'other-run' });
   const fenceBefore = db.listDrainFences();
   let state = await m4.command('tick'); assert.deepEqual(state.requests, accepted); assert.deepEqual(state.stopped, []); assert.deepEqual(db.listDrainFences(), fenceBefore);
@@ -236,7 +236,7 @@ test('actual supervisor manual restart targets ordinary group while Origin and a
   console.log(JSON.stringify({ HOME: f.env.HOME, ZYLOS_DIR: f.env.ZYLOS_DIR, PM2_HOME: f.env.PM2_HOME,
     TMPDIR: f.env.TMPDIR, TMUX_TMPDIR: f.env.TMUX_TMPDIR, TMUX: f.env.TMUX ?? null, socket: f.socketPath,
     database: path.join(f.root, 'comm-bridge/c4.db') }));
-  assert.ok(f.root.startsWith('/tmp/')); assert.ok(Buffer.byteLength(f.socketPath) < 100);
+  assert.ok(fs.realpathSync(f.root).startsWith(fs.realpathSync(process.env.TMPDIR) + path.sep)); assert.ok(Buffer.byteLength(f.socketPath) < 100);
   const put = (key, runId) => {
     const dir = groupRunDir(key, f.env); fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'current-session.json'), JSON.stringify({ runId, sessionId: runId, ts: Date.now(), startupControlIds: [] }));

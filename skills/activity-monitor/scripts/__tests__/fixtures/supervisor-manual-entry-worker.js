@@ -8,14 +8,15 @@ import { createStore } from '../../../../comm-bridge/scripts/c4-v2-store.js';
 const Database=createRequire(new URL('../../../../comm-bridge/package.json',import.meta.url))('better-sqlite3');
 const [socketPath,binary,mode,pause]=process.argv.slice(2),root=process.env.ZYLOS_DIR;
 const database=new Database(path.join(root,'comm-bridge/c4.db'));
-const db=createStore(database,{readConfig:()=>({state:'ok',config:{runtime:'claude',session_mode:mode}})});
+const db=createStore(database,{readConfig:()=>({state:'ok',config:{runtime:'claude',...(mode==='single'?{}:{session_mode:mode})}})});
 let holding=true;const alerts=[];
 const requests=new RestartRequestStore({file:path.join(root,'activity-monitor/restart-requests.json')}),publish=requests.publish;
 requests.publish=(...args)=>{if(pause==='before-remove'&&args[1].length===0){process.send({barrier:'before-remove'});Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);}publish(...args);if(pause==='after-remove'&&args[1].length===0){process.send({barrier:'after-remove'});Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);}if(pause==='commit'){process.send({barrier:'committed'});Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);}};
-const scenes=new SupervisorScenes({env:process.env,connectionOptions:{socketPath,binary},readMode:()=>({mode}),readActivity:()=>({state:'idle',idleSince:1}),readUsage:()=>null});
+const scenes=new SupervisorScenes({env:process.env,connectionOptions:{socketPath,binary},readMode:()=>({mode,keyPresent:mode!=='single',legacy:mode==='single'}),readActivity:()=>({state:'idle',idleSince:1}),readUsage:()=>null});
 const observe=scenes.observeGroup.bind(scenes);scenes.observeGroup=async group=>{const scene=await observe(group);return holding&&scene.present?{...scene,processRunning:undefined}:scene;};
-const service=await startSupervisor({env:process.env,db:{...db,getDb:()=>database,getModeTransition:()=>holding?{phase:'fixture_hold'}:db.getModeTransition()},scenes,requestStore:requests,
- readMode:()=>({mode}),readConfiguration:()=>({mode,runtime:'claude',capacity:2}),resolveTargetRuntime:()=> 'claude',readSyncMarker:()=>({held:false,stale:false}),
+// Hold pre-migration single steady; automatic migration is outside manual-restart coverage.
+const service=await startSupervisor({env:process.env,...(mode==='single'?{legacyPresent:()=>true}:{}),db:{...db,getDb:()=>database,getModeTransition:()=>holding?{phase:'fixture_hold'}:db.getModeTransition()},scenes,requestStore:requests,
+ readMode:()=>({mode:mode==='single'?null:mode,keyPresent:mode!=='single'}),readConfiguration:()=>({mode,legacy:mode==='single',runtime:'claude',capacity:2}),resolveTargetRuntime:()=> 'claude',readSyncMarker:()=>({held:false,stale:false}),
  machineTasks:{tick(){},stop(){}},legacyStatus:{tick(){},close(){}},sendAlert:(target,message)=>{alerts.push({target,message});},log:()=>{},loopOptions:{schedule:()=>1,cancel:()=>{}}});
 process.send({ready:true});
 process.on('message',async command=>{try{

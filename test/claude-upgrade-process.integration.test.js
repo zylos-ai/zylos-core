@@ -41,7 +41,7 @@ function isolatedEnvironment(t, failure = null) {
     fs.symlinkSync(path.join(repository, 'skills', skill), path.join(skills, skill));
   }
   fs.mkdirSync(path.join(zylos, '.zylos'));
-  fs.writeFileSync(path.join(zylos, '.zylos/config.json'), JSON.stringify({ session_mode: 'single' }));
+  fs.writeFileSync(path.join(zylos, '.zylos/config.json'), JSON.stringify({}));
   const database = path.join(zylos, 'comm-bridge/c4.db');
   console.log('Upgrade isolation:', JSON.stringify({ HOME: env.HOME, ZYLOS_DIR: env.ZYLOS_DIR,
     PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR, socket: path.join(tmp, 'tmux.sock'),
@@ -92,7 +92,7 @@ function controls(database) {
   finally { db.close(); }
 }
 
-// Boundary: real upgrade entry, native install pipeline and real C4 enqueue on a
+// Boundary: real upgrade entry, native install pipeline and legacy C4 enqueue on a
 // private database, with a network-free curl fixture installing a version stub.
 // Run when install/enqueue order changes; skip for unrelated edits. No service or
 // tmux server is started; real authenticated replacement is a reviewer scenario.
@@ -100,7 +100,7 @@ function controls(database) {
 // PM2_HOME and a short TMPDIR; reserve a private tmux socket and test database.
 // Read actual paths before starting and clean all processes/resources afterwards.
 for (const otherClaude of [false, true]) {
-  test(`single-session upgrade installs before queueing exit${otherClaude ? ' while another Claude remains running' : ''}`,
+  test(`legacy single-session upgrade installs before queueing exit${otherClaude ? ' while another Claude remains running' : ''}`,
     { timeout: 25000 }, async t => {
       const fixture = isolatedEnvironment(t);
       const claude = otherClaude ? await holdClaude(t, fixture.env) : null;

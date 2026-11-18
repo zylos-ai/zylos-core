@@ -45,7 +45,7 @@ function fixture(t) {
   const db = { getModeTransition: () => state.transition, getDrainFence: g => state.fences.get(g) ?? null,
     setDrainFence: (g,f) => { if (!state.fences.has(g)) state.fences.set(g,f); },
     insertControl: (content, options) => { state.wake = {content, ...options}; } };
-  const deps = { store, db, readMode: () => ({mode:state.mode}), listRuns: () => state.runs, readRun: () => state.run,
+  const deps = { store, db, readMode: () => ({mode:state.mode,legacy:state.keyPresent === false}), listRuns: () => state.runs, readRun: () => state.run,
     resolveLaunchConfig: () => state.expected, preflightReclaim: async () => {}, now: () => 1792000000123, diagnostic: event => state.events.push(event) };
   const admission = new SupervisorAdmission(deps); admission.openEntry();
   return { root, file, store, state, db, admission, deps };
@@ -63,7 +63,7 @@ test('restart empty writes only completion and steady single refuses', async t =
   const f = fixture(t); f.state.runs = [];
   assert.equal((await f.admission.handle(restart('empty'))).result, 'done_empty'); assert.equal(fs.existsSync(f.file), false);
   assert.deepEqual(f.state.events, [{event:'restart_done', requestId:'empty'}]);
-  f.state.mode = 'single'; assert.equal((await f.admission.handle(restart('single'))).code, 'single_mode');
+  f.state.mode = 'single'; f.state.keyPresent = false; assert.equal((await f.admission.handle(restart('single'))).code, 'single_mode');
   f.state.transition = {phase:'gating'}; f.state.runs = [{runId:'legacy'}];
   assert.equal((await f.admission.handle(restart('during-transition'))).result, 'accepted');
 });
@@ -139,7 +139,7 @@ test('absent Origin writes an unbound wake before replying and enqueue failure l
   f.db.insertControl = () => { throw new Error('write failed'); };
   assert.equal((await f.admission.handle(manual())).reason, 'wake_failed');
   assert.deepEqual(f.store.read(), []); assert.equal(fs.existsSync(f.file), false);
-  f.state.mode = 'single';
+  f.state.mode = 'single'; f.state.keyPresent = false;
   for (const expected of [true, false]) {
     const request = manual(); if (!expected) delete request.expectedRunId;
     assert.equal((await f.admission.handle(request)).result, 'already_stopped');
@@ -430,4 +430,46 @@ test('release mode and identity refusal precedes unrelated unreadable restart in
   assert.equal((await f.admission.handle(release())).reason,'not_multi');
   f.state.mode='multi';f.state.transition={};assert.equal((await f.admission.handle(release())).reason,'transition_open');
   f.state.transition=null;f.state.run=null;assert.equal((await f.admission.handle(release())).reason,'run_changed');
+});
+
+test('native single accepts upgrade snapshots and targets manual restart at Origin', async t => {
+  const f = fixture(t); f.state.mode = 'single';
+  assert.equal((await f.admission.handle(restart('native-upgrade'))).result, 'accepted');
+  assert.equal(f.store.read()[0].runIds.length, 3);
+  f.store.write([]);
+  const targets = []; f.admission.readRun = group => { targets.push(group); return f.state.run; };
+  const request = manual({sessionGroup:'origin'});
+  assert.equal((await f.admission.handle(request)).result, 'accepted');
+  assert.deepEqual(targets, ['origin']);
+  assert.equal((await f.admission.handle(request)).result, 'already_accepted');
+  assert.equal(validateRestartRequests(f.store.read()), true);
+  assert.equal(f.store.read()[0].sessionGroup,'origin');
+  const recovered = new SupervisorAdmission(f.deps); recovered.restore(); recovered.openEntry();
+  assert.equal((await recovered.handle(request)).result,'already_accepted');
+  f.store.write([]); f.state.run = null;
+  assert.equal((await f.admission.handle(manual())).result, 'already_stopped');
+  assert.equal(f.state.wake.sessionGroup, 'origin');
+});
+test('native single configuration reclaim accepts only Origin and fences its run', async t => {
+  const f = fixture(t); f.state.mode = 'single';
+  assert.equal((await f.admission.handle(config())).reason, 'not_multi');
+  assert.equal((await f.admission.handle(config({sessionGroup:'origin'}))).result, 'accepted');
+  assert.equal(f.state.fences.get('origin').reason, 'model_config');
+});
+
+test('single restart rows retain legacy shape and allow only explicit Origin', async t => {
+  const f=fixture(t); f.state.mode='single'; f.state.keyPresent=false;
+  assert.equal((await f.admission.handle(manual())).result,'accepted');
+  const bytes=fs.readFileSync(f.file,'utf8'), [legacy]=f.store.read();
+  assert.equal(Object.hasOwn(legacy,'sessionGroup'),false);
+  const restored=new RestartRequestStore({file:f.file}); assert.equal(restored.read()[0].mode,'single');
+  assert.equal(fs.readFileSync(f.file,'utf8'),bytes);
+  assert.equal(validateRestartRequests([{...legacy,sessionGroup:'origin'}]),true);
+  for(const sessionGroup of ['telegram:a','bad key',null,'']) {
+    assert.equal(validateRestartRequests([{...legacy,sessionGroup}]),false);
+  }
+  f.store.write([]);
+  assert.equal((await f.admission.handle(manual({sessionGroup:'origin'}))).reason,'not_multi');
+  f.state.keyPresent=true;
+  assert.equal((await f.admission.handle(manual({sessionGroup:'telegram:a'}))).reason,'not_multi');
 });

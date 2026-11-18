@@ -8,13 +8,13 @@ import { once } from 'node:events';
 import { createSupervisor } from '../supervisor.js';
 import { RestartRequestStore } from '../restart-request-store.js';
 import { groupRunDir } from '../../../../cli/lib/session-group-paths.js';
-function fixture(t,{batchIdentities,badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunchConfig=()=>({runtime:'claude',mode:'default'}),consumeHealthEvents,readConfiguration=async()=>({mode:'multi',runtime:'claude',capacity:2}),checkAuth=async()=>({status:'uncertain'}),alert,now=Date.now,database={},readSyncMarker,prepareReferenceReorg,prompts}={}) {
+function fixture(t,{batchIdentities,badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunchConfig=()=>({runtime:'claude',mode:'default'}),consumeHealthEvents,readConfiguration=async()=>({mode:'multi',runtime:'claude',capacity:2}),checkAuth=async()=>({status:'uncertain'}),alert,now=Date.now,database={},readSyncMarker,prepareReferenceReorg,prompts,resolveTargetRuntime=async()=> 'claude'}={}) {
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-assembly-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const file=path.join(root,'requests.json');if(badRequests)fs.writeFileSync(file,'broken');
  const calls=[],db={getOriginNeed:()=>({controls:{count:0},inbound:{oldestAt:null}}),getModeTransition:()=>null,listDrainFences:()=>[],getDrainFence:()=>null,listSlotOccupancy:()=>[],pruneSlots:()=>({deletedHeld:0,deletedOrphans:[]}),listPendingContinuations:()=>[],listRunEndings:()=>[],getLastCompletedModeTransition:()=>null,listPendingSessionGroups:()=>[],listGroupHeads:()=>[],getLatestContentCheckpoint:()=>null,getControlById:()=>null,resolveSessionLaunchConfig:resolveLaunchConfig,...database};
  const scenes={observe:async()=>[],readIdentity(group) { return this.observeGroup(group); }, observeGroup:async()=>({present:false}),listRuns:async()=>[],readRun:async()=>null};
  if(batchIdentities)scenes.readIdentities=batchIdentities;
- const supervisor=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},readConfiguration,readMode,resolveTargetRuntime:async()=> 'claude',requestStore:new RestartRequestStore({file}),consumeHealthEvents,checkAuth,alert,now,readSyncMarker,prepareReferenceReorg,prompts,log:item=>calls.push(item),loopOptions:{schedule:()=>1,cancel:()=>{}}});
+ const supervisor=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},readConfiguration,readMode,resolveTargetRuntime,requestStore:new RestartRequestStore({file}),consumeHealthEvents,checkAuth,alert,now,readSyncMarker,prepareReferenceReorg,prompts,log:item=>calls.push(item),loopOptions:{schedule:()=>1,cancel:()=>{}}});
  t.after(()=>supervisor.stop());return {supervisor,calls,file,root,scenes,db};
 }
 
@@ -685,10 +685,10 @@ test('a failed transition reread after automatic migration reaches the assembled
  assert.equal(notices[0].slot_deleted,false);assert.match(notices[0].message,/Occupancy rows remain/);
 });
 
-test('single-mode authority read failures never send occupancy reconciliation notifications',async t=>{
+test('legacy authority read failures never send occupancy reconciliation notifications',async t=>{
  let now=2_000_000;const notices=[];
  const {supervisor}=fixture(t,{now:()=>now,alert:event=>notices.push(event),readMode:()=>({mode:'single'}),
-  readConfiguration:async()=>({mode:'single',runtime:'claude'}),
+  readConfiguration:async()=>({mode:'single',legacy:true,runtime:'claude'}),
   database:{getModeTransition:()=>{throw new Error('single transition read failed');}}});
  await supervisor.loop.start();now+=60000;await supervisor.loop.tick();now+=1800000;await supervisor.loop.tick();
  assert.deepEqual(notices,[]);
@@ -773,4 +773,58 @@ test('publication requires activity sampled for the current round even with a ma
   const context={scenes:[scene],publicationIdentities:new Map([['a',scene]]),publicationActivities:new Map()};
   await f.supervisor.loop.deps.probeAndPublish(scene,context);
   assert.equal(fs.readFileSync(file,'utf8'),'prior state');
+});
+
+// Boundary: real Supervisor composition, injected scene/database/clock, private
+// files and fake scheduler. No runtime, daemon or external network is started.
+// Run for native Origin health-control or demand changes; unrelated UI may skip.
+for (const scoped of [true,false]) test(`single health ${scoped?'targets scoped Origin':'excludes an unscoped upgraded run'}`, async t => {
+  const controls=[];
+  const f=fixture(t,{readMode:()=>({mode:'single',keyPresent:true}),
+    readConfiguration:async()=>({mode:'single',legacy:false,runtime:'claude',capacity:2}),
+    database:{insertControl:(content,options)=>{const row={id:controls.length+1,content,...options};controls.push(row);return row;}}});
+  const scene={sessionGroup:'origin',sourceScope:scoped?'origin':null,runId:'r',runtime:'claude',
+    ready:true,present:true,sessionId:'s',processRunning:true,runDir:path.join(f.root,'run')};
+  f.scenes.observe=async()=>[scene]; f.scenes.observeGroup=async()=>scene;
+  f.scenes.bindTarget=async()=>({expectedRunId:'r'});
+  await f.supervisor.loop.deps.readConfiguration();
+  assert.equal(await f.supervisor.observer.readMode(), 'multi');
+  assert.equal(await f.supervisor.observer.canAct(scene,{requireReady:true}), scoped);
+  const pending=f.supervisor.observer.requestProbe('claude',{force:true});
+  await Promise.all([...f.supervisor.observer.preparations]);
+  if(scoped) {
+    assert.equal(controls.length,1); assert.equal(controls[0].sessionGroup,'origin');
+    f.supervisor.observer.finish(f.supervisor.observer.probes.get('claude'),{recovered:false});
+  } else { assert.equal(controls.length,0); }
+  await pending;
+});
+test('single health nudges target Origin and cannot enqueue for an unscoped upgraded run', async t => {
+  const controls=[];
+  const f=fixture(t,{readMode:()=>({mode:'single',keyPresent:true}),database:{
+    insertControl:(content,options)=>{const row={id:1,content,...options};controls.push(row);return row;}}});
+  const scene={sessionGroup:'origin',sourceScope:'origin',runId:'r',runtime:'claude',sessionId:'s',present:true,ready:true};
+  f.scenes.observeGroup=async()=>scene;f.scenes.bindTarget=async()=>({expectedRunId:'r'});
+  assert.equal((await f.supervisor.observer.nudge(scene,async()=>true)).ok,true);
+  assert.equal(controls.length,2);assert.ok(controls.every(row=>row.sessionGroup==='origin'));
+  assert.deepEqual(controls.map(row=>row.content),['[KEYSTROKE]Escape','continue']);
+  scene.sourceScope=null;
+  assert.equal((await f.supervisor.observer.nudge(scene,async()=>true)).ok,false);
+  assert.equal(controls.length,2);
+});
+
+for (const legacy of [false,true]) test(`single runtime demand uses ${legacy?'baseline runtime before migration':'Origin runtime after migration'}`, async t => {
+  const resolved=[];
+  const f=fixture(t,{readMode:()=>({mode:'single',legacy}),
+    readConfiguration:async()=>({mode:'single',legacy,runtime:'claude'}),
+    resolveTargetRuntime:async group=>{resolved.push(group);return 'codex';},
+    database:{listPendingSessionGroups:()=>[{sessionGroup:'chat:pending'}]}});
+  await f.supervisor.loop.deps.readConfiguration();
+  let demand;
+  f.supervisor.observer.reconcileRecoveryWaits=async observed=>{demand=observed;};
+  f.supervisor.observer.driveDemand=()=>{};
+  await f.supervisor.loop.deps.writeMetricsAndMaintain({scenes:[],fences:[],transition:null});
+  assert.equal(demand.size,1);assert.equal(demand.has(legacy?'claude':'codex'),true);
+  assert.deepEqual([...demand.get(legacy?'claude':'codex')],['origin']);
+  if(legacy) assert.equal(resolved.length,0);
+  else {assert.ok(resolved.length>0);assert.ok(resolved.every(group=>group==='origin'));}
 });

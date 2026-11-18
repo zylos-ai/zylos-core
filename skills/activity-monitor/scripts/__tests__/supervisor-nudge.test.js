@@ -46,8 +46,8 @@ function fixture(t, { watchdog = false, runtime='claude', mode = 'multi', syncRe
     stop: async value => { stops.push(value); },
   };
   const supervisor = createSupervisor({ db, scenes, zylosDir: root, env: { ZYLOS_DIR: root }, now: () => clock,
-    requestStore, readConfiguration: async () => ({ mode, runtime: 'claude', capacity: 3 }),
-    readMode: () => ({ mode }),
+    requestStore, readConfiguration: async () => ({ mode, legacy: mode === 'single', runtime: 'claude', capacity: 3 }),
+    readMode: () => ({ mode, keyPresent: mode !== 'single', legacy: mode === 'single' }),
     ...(syncReader ? { readSyncMarker: options => {
       assert.deepEqual(options, { runDir, kind: 'global', currentRunId: scene.runId });
       return { held: syncHeld, stale: false };
@@ -374,7 +374,7 @@ for (const runtime of ['claude', 'codex']) {
 }
 
 for (const runtime of ['claude', 'codex']) {
-  test(`single-session composed ${runtime} recovery nudges the machine target and stops the silent run once`, { timeout: 5000 }, async t => {
+  test(`legacy single-session composed ${runtime} recovery nudges the machine target and stops the silent run once`, { timeout: 5000 }, async t => {
     const f = fixture(t, { mode: 'single', runtime });
     await f.observe();
     assert.deepEqual(f.controls.map(control => [control.content, control.sessionGroup]), [['[KEYSTROKE]Escape', null], ['continue', null]]);
@@ -390,7 +390,7 @@ for (const runtime of ['claude', 'codex']) {
   });
 }
 
-test('single-session composed tool work after the nudge cancels recovery', { timeout: 5000 }, async t => {
+test('legacy single-session composed tool work after the nudge cancels recovery', { timeout: 5000 }, async t => {
   const f = fixture(t, { mode: 'single' });
   await f.observe(); f.advance(1);
   f.appendActivity('pre_tool', { tool: 'Read', tool_use_id: 'resumed-work' });
@@ -408,7 +408,7 @@ const holds = {
   manual: [f => f.manual(), f => f.clearManual()],
 };
 for (const [hold, [begin, end]] of Object.entries(holds)) {
-  test(`single-session composed ${hold} holds recovery and silence restarts when it ends`, { timeout: 5000 }, async t => {
+  test(`legacy single-session composed ${hold} holds recovery and silence restarts when it ends`, { timeout: 5000 }, async t => {
     const f = fixture(t, { mode: 'single' });
     begin(f); await f.observe();
     f.advance(NO_RESPONSE_SILENCE_MS - 1000); begin(f); f.advance(1000); await f.observe();
@@ -423,7 +423,7 @@ for (const [hold, [begin, end]] of Object.entries(holds)) {
 }
 
 for (const hold of ['sync', 'switch']) {
-  test(`single-session composed ${hold} starting between Escape and continue suppresses continue`, { timeout: 5000 }, async t => {
+  test(`legacy single-session composed ${hold} starting between Escape and continue suppresses continue`, { timeout: 5000 }, async t => {
     const f = fixture(t, { mode: 'single' }), observation = f.observe();
     await f.firstControl.promise;
     await f.supervisor.admission.serialize(() => { holds[hold][0](f); });
@@ -435,7 +435,7 @@ for (const hold of ['sync', 'switch']) {
   });
 }
 
-test('single-session composed switch queued 15 minutes ago no longer holds recovery', { timeout: 5000 }, async t => {
+test('legacy single-session composed switch queued 15 minutes ago no longer holds recovery', { timeout: 5000 }, async t => {
   const f = fixture(t, { mode: 'single' }), heldAt = f.now();
   f.sessionSwitch(Math.floor(heldAt / 1000) - NO_RESPONSE_SILENCE_MS / 1000 + 1); await f.observe();
   assert.equal(f.controls.length, 0);
@@ -448,7 +448,7 @@ test('single-session composed switch queued 15 minutes ago no longer holds recov
   assert.equal(f.controls.length, 2);
 });
 
-test('single-session composed recovery holds and logs once without a Sync marker reader', { timeout: 5000 }, async t => {
+test('legacy single-session composed recovery holds and logs once without a Sync marker reader', { timeout: 5000 }, async t => {
   const f = fixture(t, { mode: 'single', syncReader: false });
   for (let i = 0; i < 3; i++) { f.advance(NO_RESPONSE_SILENCE_MS); await f.observe(); }
   assert.equal(f.controls.length, 0);

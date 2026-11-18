@@ -33,12 +33,13 @@ function start(t, f, requestsFile, mode, pause) {
 for (const mode of ['single', 'multi']) for (const pause of ['after-intent', 'after-fence', 'after-stop', 'after-clear']) {
   test(`manual ${mode} resumes after SIGKILL ${pause} without stopping replacement`, { timeout: 15000 }, async t => {
     const f = readyTmuxTarget(t, { prefix: 'supervisor-manual-', mode });
+    if (mode === 'single') fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude' }));
     f.tmux('new-session', '-d', '-s', 'fixture-keeper', 'sleep', '120');
-    const db = createStore(f.db, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: mode } }) });
-    const scenes = new SupervisorScenes({ env: f.env, connectionOptions: { socketPath: f.socketPath, binary: f.binary }, readMode: () => ({ mode }) });
+    const db = createStore(f.db, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', ...(mode === 'single' ? {} : { session_mode: mode }) } }) });
+    const scenes = new SupervisorScenes({ env: f.env, connectionOptions: { socketPath: f.socketPath, binary: f.binary }, readMode: () => ({ mode, keyPresent: mode !== 'single', legacy: mode === 'single' }) });
     const file = path.join(f.root, 'activity-monitor/restart-requests.json');
     const store = new RestartRequestStore({ file });
-    const admission = new SupervisorAdmission({ store, db, readMode: () => ({ mode }), readRun: group => scenes.readRun(group) });
+    const admission = new SupervisorAdmission({ store, db, readMode: () => ({ mode, keyPresent: mode !== 'single', legacy: mode === 'single' }), readRun: group => scenes.readRun(group) });
     admission.openEntry();
     assert.equal((await admission.handle({ version: 1, type: 'manual_restart', requestId: 'manual-1', expectedRunId: 'run-1' })).result, 'accepted');
     const original = store.read()[0];
@@ -76,7 +77,7 @@ test('ordinary manual lifecycle stops only its target and retains intent until i
   console.log(JSON.stringify({ HOME: env.HOME, ZYLOS_DIR: env.ZYLOS_DIR, PM2_HOME: env.PM2_HOME,
     TMPDIR: env.TMPDIR, TMUX_TMPDIR: env.TMUX_TMPDIR, TMUX: env.TMUX ?? null, socket: f.socketPath,
     database: path.join(f.root, 'comm-bridge/c4.db') }));
-  assert.ok(f.root.startsWith('/tmp/')); assert.ok(Buffer.byteLength(f.socketPath) < 100);
+  assert.ok(fs.realpathSync(f.root).startsWith(fs.realpathSync(process.env.TMPDIR) + path.sep)); assert.ok(Buffer.byteLength(f.socketPath) < 100);
   const put = (key, runId, sessionId) => {
     const dir = groupRunDir(key, env); fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'current-session.json'), JSON.stringify({ runId, sessionId, ts: 1, startupControlIds: [] }));
@@ -146,7 +147,7 @@ for (const [group, pending] of [['fixture:a', false], ['fixture:a', true], ['ori
   console.log(JSON.stringify({ HOME: env.HOME, ZYLOS_DIR: env.ZYLOS_DIR, PM2_HOME: env.PM2_HOME,
     TMPDIR: env.TMPDIR, TMUX_TMPDIR: env.TMUX_TMPDIR, TMUX: env.TMUX ?? null, socket: f.socketPath,
     database: path.join(f.root, 'comm-bridge/c4.db') }));
-  assert.ok(f.root.startsWith('/tmp/')); assert.ok(Buffer.byteLength(f.socketPath) < 100);
+  assert.ok(fs.realpathSync(f.root).startsWith(fs.realpathSync(process.env.TMPDIR) + path.sep)); assert.ok(Buffer.byteLength(f.socketPath) < 100);
   const put = runId => {
     const dir = groupRunDir(group, env); fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'current-session.json'), JSON.stringify({ runId, sessionId: runId, ts: Date.now(), startupControlIds: [] }));

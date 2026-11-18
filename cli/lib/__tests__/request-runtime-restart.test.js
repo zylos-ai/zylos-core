@@ -5,13 +5,13 @@ import { SINGLE_UPGRADE_RESTART_CHECK_PROMPT } from '../../../skills/activity-mo
 
 const base={now:()=>100,deadlineAt:1000,requestId:'producer',readMode:()=>({mode:'multi'}),readTransition:()=>null,
   enqueueExit:()=>{throw new Error('wrong fallback');}};
-test('producer uses supervisor in multi and transition, single exit only in steady single',async()=>{
+test('producer uses supervisor in multi and transition, legacy exit only when the mode key is absent',async()=>{
   const sent=[];const send=async(...args)=>{sent.push(args);return {kind:'accepted',sent:true,reply:{result:'accepted',runCount:3}};};
   for(const [mode,transition] of [['multi',null],['single',{phase:'gating'}],[null,{phase:'gating'}]]) {
     const result=await requestRuntimeRestart({...base,readMode:()=>({mode}),readTransition:()=>transition,send});assert.equal(result.data.runCount,3);
   }
   assert.equal(sent.length,3);assert.deepEqual(sent[0],[{version:1,type:'restart_all',requestId:'producer',reason:'upgrade'},{deadlineAt:1000}]);
-  let exits=0;const single=await requestRuntimeRestart({...base,readMode:()=>({mode:'single'}),send:()=>{throw new Error('must not send');},enqueueExit:()=>{exits++;return 'control 1';}});
+  let exits=0;const single=await requestRuntimeRestart({...base,readMode:()=>({mode:'single',keyPresent:false}),send:()=>{throw new Error('must not send');},enqueueExit:()=>{exits++;return 'control 1';}});
   assert.equal(exits,1);assert.equal(single.data.result,'exit_enqueued');
 });
 test('producer never retries explicit refusal, connect failure or U; lookup reports facts only',async()=>{
@@ -27,7 +27,7 @@ test('producer never retries explicit refusal, connect failure or U; lookup repo
 });
 test('producer does not downgrade transition races or invalid config to single exit',async()=>{
   await assert.rejects(requestRuntimeRestart({...base,readMode:()=>{throw Object.assign(new Error('config'),{code:'CONFIG_UNREADABLE'});}}),{code:'CONFIG_UNREADABLE'});
-  await assert.rejects(requestRuntimeRestart({...base,readMode:()=>({mode:'single'}),enqueueExit:()=>{throw Object.assign(new Error('gate'),{code:'TRANSITION_OPEN'});}}),{code:'TRANSITION_OPEN'});
+  await assert.rejects(requestRuntimeRestart({...base,readMode:()=>({mode:'single',keyPresent:false}),enqueueExit:()=>{throw Object.assign(new Error('gate'),{code:'TRANSITION_OPEN'});}}),{code:'TRANSITION_OPEN'});
   let reads=0;const expired=await requestRuntimeRestart({...base,now:()=>1000,readMode:()=>{reads++;}});assert.equal(expired.error.code,'deadline_exceeded');assert.equal(reads,0);
 });
 
@@ -120,11 +120,18 @@ test('single upgrade returns once both controls are queued, inside every caller 
   // 60 second check window, so neither reports deadline_exceeded even when queueing itself is slow.
   for(const afterServiceRestart of [false,true]) {
     let now=100;const runs=[];
-    const result=await requestRuntimeRestart({...base,now:()=>now,deadlineAt:undefined,afterServiceRestart,readMode:()=>({mode:'single'}),
+    const result=await requestRuntimeRestart({...base,now:()=>now,deadlineAt:undefined,afterServiceRestart,readMode:()=>({mode:'single',keyPresent:false}),
       send:()=>{throw new Error('must not send');},
       enqueueExit:()=>enqueueSingleUpgradeExit({loadPrompt:async()=>SINGLE_UPGRADE_RESTART_CHECK_PROMPT,
         run:async args=>{runs.push(args[1]);now+=6000;return {id:runs.length};}})});
     assert.deepEqual(result,{ok:true,data:{result:'exit_enqueued',mode:'single',checkControlId:1,exitControlId:2}});
     assert.deepEqual(runs,[SINGLE_UPGRADE_RESTART_CHECK_PROMPT,'/exit']);
   }
+});
+
+test('native single upgrade submits restart_all without writing exit controls', async () => {
+  let sent = 0;
+  const result = await requestRuntimeRestart({ ...base, readMode: () => ({mode:'single', keyPresent:true}),
+    send: async request => { sent++; assert.equal(request.type, 'restart_all'); return {kind:'accepted', reply:{result:'accepted', runCount:1}}; } });
+  assert.equal(result.ok, true); assert.equal(sent, 1); assert.equal(result.data.runCount, 1);
 });

@@ -91,7 +91,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     return supervisor.lifecycle.checkCapacityPressure(context);
   });
   const targetReader=createSessionReader({env,connectionOptions:baseScenes.connectionOptions ?? {},resolveConfig:input=>db.resolveSessionLaunchConfig(input)});
-  const resolveTargetRuntime=async group=>targetReader.resolveTargetRuntime(group==='origin' && (await readMode()).mode==='single'?null:group);
+  const resolveTargetRuntime=async group=>targetReader.resolveTargetRuntime(group==='origin' && (await readMode()).legacy?null:group);
   const alert=event=>{
     const details=[event.requestId && `requestId=${event.requestId}`,event.reason && `reason=${event.reason}`,
       event.runtime && `runtime=${event.runtime}`,event.oldest_at!==undefined && `oldest_at=${event.oldest_at}`,event.message].filter(Boolean).join(' ');
@@ -160,9 +160,9 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     prepareReferenceReorg:()=>prepareReferenceReorg({root,now:clock()}),
     readSyncMarker:options=>{if(!syncReader)throw unavailable('Sync marker reader');return syncReader(options);},prompts,
     freezeNotice:options=>{
-      const mode=configuration?.mode ?? readMode().mode;
+      const {mode,legacy}=configuration ?? readMode();
       if(!['single','multi'].includes(mode))throw Object.assign(new Error('Notice mode is unavailable'),{code:'CONFIG_UNREADABLE'});
-      return freezeFirstFailureNotice(db.getDb(),{...options,sessionGroup:mode==='single'?null:options.sessionGroup});
+      return freezeFirstFailureNotice(db.getDb(),{...options,sessionGroup:legacy?null:options.sessionGroup});
     },
     consumeHealthEvents:async(scene,coordinator)=>{
       const identity=healthIdentity(scene);if(!identity)return;

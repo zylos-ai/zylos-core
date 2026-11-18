@@ -14,10 +14,11 @@ export class SupervisorExits {
     return true;
   }
   async report(scene) {
-    const mode = (await this.readMode()).mode;
+    const { mode, keyPresent } = await this.readMode();
+    const legacy = mode === 'single' && keyPresent === false;
     let rotated = false;
     if (scene.runtime === 'codex' && Number.isFinite(scene.currentSessionTs)) {
-      try { rotated = (await this.stat(handoffPath(mode === 'single' ? null : scene.sessionGroup, this.env))).mtimeMs > scene.currentSessionTs; }
+      try { rotated = (await this.stat(handoffPath(legacy ? null : scene.sessionGroup, this.env))).mtimeMs > scene.currentSessionTs; }
       catch { /* Handoff is diagnostic evidence only. */ }
     }
     this.diagnostic({ event: rotated ? 'rotate_done' : 'crash_detected', sessionGroup: scene.sessionGroup,

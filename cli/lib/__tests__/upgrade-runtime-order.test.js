@@ -4,20 +4,23 @@ import { upgradeRuntime } from '../../../skills/upgrade-claude/scripts/upgrade.j
 import { requestRuntimeRestart } from '../request-runtime-restart.js';
 
 test('runtime upgrade completes installation before the shared restart producer selects its mode', async () => {
-  for (const [mode, transition] of [['single', null], ['multi', null], ['single', { phase: 'gating' }]]) {
+  for (const [mode, keyPresent, transition] of [
+    ['single', false, null], ['multi', true, null],
+    ['single', false, { phase: 'gating' }],
+  ]) {
     const calls = [];
     const controls = { checkControlId: 7, exitControlId: 8 };
     const result = await upgradeRuntime({
       install: async () => { calls.push('install'); await Promise.resolve(); calls.push('installed'); },
       requestRestart: () => requestRuntimeRestart({
-        readMode: () => { calls.push('mode'); return { mode }; }, readTransition: () => transition,
+        readMode: () => { calls.push('mode'); return { mode, keyPresent }; }, readTransition: () => transition,
         enqueueExit: () => { calls.push('enqueue'); return controls; },
         send: async () => { calls.push('restart_all'); return { kind: 'accepted', reply: { result: 'accepted' } }; },
       }),
     });
-    assert.deepEqual(calls, ['install', 'installed', 'mode', mode === 'single' && !transition ? 'enqueue' : 'restart_all']);
+    assert.deepEqual(calls, ['install', 'installed', 'mode', !keyPresent && !transition ? 'enqueue' : 'restart_all']);
     assert.equal(result.ok, true);
-    if (mode === 'single' && !transition) {
+    if (!keyPresent && !transition) {
       assert.equal(result.data.result, 'exit_enqueued');
       assert.equal(result.data.checkControlId, controls.checkControlId);
       assert.equal(result.data.exitControlId, controls.exitControlId);
