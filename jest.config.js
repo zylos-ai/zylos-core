@@ -61,6 +61,7 @@ export default {
     '<rootDir>/test/upgrade-db-maintenance.integration.test.js',
     '<rootDir>/test/session-release.integration.test.js',
     '<rootDir>/test/component-source-record.integration.test.js',
+    '<rootDir>/test/runtime-auth-display.integration.test.js',
   ],
   globalSetup: '<rootDir>/scripts/jest-global-setup.js',
   globalTeardown: '<rootDir>/scripts/jest-global-teardown.js',

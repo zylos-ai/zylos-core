@@ -1,3 +1,12 @@
+// Coverage: real executeRuntimeSwitch results pass through handleAction (core-actions
+// is mocked), sendCommandJson and formatActionResult. No CLI subprocess, PM2,
+// tmux or service is started; real CLI/instance acceptance is reviewer-run.
+// Run only through scripts/run-node-tests.js, which isolates HOME and ZYLOS_DIR
+// before imports: the agy switch path writes $HOME/.gemini and ZYLOS_DIR even
+// on rejection. Direct node --test would write to the caller's real directories.
+// Run when the authentication-rejection branches in cli/commands/runtime.js,
+// skills/dashboard/src/lib/actions.js, the status-code table in http.js or
+// skills/dashboard/public/js/action-result.js change; otherwise it can be skipped.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { executeRuntimeSwitch } from '../cli/commands/runtime.js';
