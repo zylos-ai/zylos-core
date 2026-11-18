@@ -273,21 +273,6 @@ test('a failure without prompt proof waits for verification instead of retrying'
  assert.equal(f.db.prepare('SELECT count(*) n FROM control_queue').get().n,0);
 });
 
-// Boundary: queued ordinary input after claim must not erase an already pasted
-// Continue's accounting. Run for due-time cancellation changes; isolated DB/files.
-test('ordinary pending input leaves a claimed continuation to settle normally',async t=>{
- const f=setup(t);f.write('stop_failure','server_error');await f.consume();await f.process();
- const retry=f.store.read(f.group).failure_retry;f.advance(retry.dueAt-f.now());
- f.c4.claimControl(retry.controlId);
- f.c4.insertConversation('in','telegram','owner','next request');
- await f.process();
- assert.equal(f.db.prepare('SELECT status FROM control_queue WHERE id=?').get(retry.controlId).status,'running');
- assert.equal(f.store.read(f.group).failure_retry.eventId,retry.eventId);
- f.db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(retry.controlId);
- f.write('stop_failure','server_error');await f.consume();
- assert.equal(f.store.read(f.group).failure_retry.attempts,2);
-});
-
 // Boundary: standard manual expiry ends the retry without a false failure
 // notice. Run for terminal-control settlement changes; isolated DB/files only.
 test('an expired continuation clears retry without restoring an error notice',async t=>{

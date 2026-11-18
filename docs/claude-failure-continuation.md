@@ -11,7 +11,7 @@ their existing behavior; quota/request/context/content diagnostics can veto retr
 ## AM owns observation and accounting
 
 AM uses the existing long-lived shared reader and its unchanged `turnStartedAt`.
-Before its control is claimed, a start later than the failure cancels the pending
+Before its control is sent, a start later than the failure cancels the pending
 Continue and commits the cleared state. `turnOpen` alone is not proof of a new
 round because the failed round's closing activity hook can arrive later than
 its health hook. Late old tools also do not prove a new round.
@@ -25,9 +25,8 @@ AM keeps attempts/deadlines and the frozen first recipient in its health file,
 so an AM restart can replay the terminal hook and continue from the same control.
 
 At the due time AM checks for ordinary pending input and silently cancels the
-Continue if present and its control has not yet been claimed. Running controls
-are left to standard delivery settlement. There is no second pending-input check
-in C4. The existing AM delivery-notification path also clears retry state when an ordinary message
+Continue if present. There is no second pending-input check in C4. The existing
+AM delivery-notification path also clears retry state when an ordinary message
 was pasted after the failure. A message pasted before failure does not cancel;
 notifications for controls do not clear their own continuation budget.
 

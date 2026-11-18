@@ -54,7 +54,7 @@ export async function processFailureContinuation({store,scene,identity,bindTarge
   let native;try{native=readNativeActivity();}catch{/* Do not infer unobserved round history. */}
   const ownDelivery=control && ['running','done'].includes(control.status);
   const resumed=!ownDelivery && Number.isFinite(native?.turnStartedAt) && native.turnStartedAt>retry.failedAt;
-  const pending=now()>=retry.dueAt && (!control || control.status==='pending') &&
+  const pending=now()>=retry.dueAt && control?.status!=='done' &&
     getPending(scope===null?undefined:{sessionGroups:[scope]});
   if(resumed || pending) {
     if(retry.controlId)await expireControl(retry.controlId);
