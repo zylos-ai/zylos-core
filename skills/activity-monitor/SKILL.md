@@ -351,7 +351,7 @@ pm2 list
      transcript; child activity is tracked separately from main-agent state.
      AGY keeps run/session-bound statusLine authority and 500ms idle stability,
      including closing Esc-interrupted turns without a Stop hook.
-   - A submitted Claude/Codex main turn remains busy until Stop (or Claude idle_prompt),
+   - A submitted main turn remains busy until its terminal hook,
      including quiet API/model waits with no active tool. After 20 minutes with
      no unfinished tools and no native activity, the supervisor queues
      one `[KEYSTROKE]Escape` control through the existing nudge/control path,
@@ -365,6 +365,25 @@ pm2 list
      zero, ahead of normal require-idle controls (priorities one through three). Equal
      priorities keep the existing created-at/id order. No direct tmux key-sending
      path is added.
+   - Claude starts a turn only from UserPromptSubmit while outside a turn,
+     or native queue-operation dequeue in its associated transcript. Prompt
+     hooks for messages queued during an existing turn do not reset the turn.
+     Stop and StopFailure close it; late tool/idle/Stop hooks do not start one.
+     An unfinished individual tool still keeps the session busy.
+   - Supported Claude versions register an activity hook alongside the existing
+     StopFailure health hook during both hook sync and upgrade. The activity
+     record uses event='stop', stop_reason='failure'; normal Stop is unchanged.
+     Dequeue reuses Dashboard working.js inputAfterStop and STOP_HOOK_LAG_MS:
+     a dequeue up to five seconds before a delayed Stop counts after that Stop
+     when no other main action intervened. No promptId attribution is used.
+   - SessionActivity accepts optional failureEventId (health StopFailure event_id)
+     and the run's actual startedAt. read().failureActivity exposes failureEventId
+     and boolean startedAfterFailure, with startedAt when true. This means a new
+     turn started after that failure even if it already stopped. Consumers reuse
+     the instance/read cursor and close it on replacement/shutdown. No evidence,
+     missing records or unread data means false; no third-state retry policy is
+     added. Known limitation: without a dequeue record, inter-tool gaps can be
+     idle and a continuation can be redundant (observed in 2 of 133 reviewed turns).
    - AGY uses the same 20-minute, one-shot Escape rule while a turn is open.
      Its last-activity timestamp includes non-idle statusLine capture timestamps;
      native freshness includes every valid current sample. Rereading a sample

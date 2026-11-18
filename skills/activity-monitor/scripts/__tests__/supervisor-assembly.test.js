@@ -861,7 +861,7 @@ for(const outcome of ['pending','done','unknown'])test(`quiet-turn ${outcome} ad
  assert.equal(facts.filter(row=>row.event==='quiet_turn_interrupt_attempt').length,1);
  assert.equal(facts.filter(row=>row.event==='quiet_turn_interrupt').length,fail?0:1);
  fail=false;
- fs.appendFileSync(file,prompt(now+1));now+=1200001;
+ fs.appendFileSync(file,JSON.stringify({run_id:'r',session_id:'s',runtime:'claude',ts:now,event:'stop'})+'\n'+prompt(now+1));now+=1200001;
  assert.equal(await restarted.interruptQuietTurn(scene),true);assert.equal(attempts,2);
 });
 

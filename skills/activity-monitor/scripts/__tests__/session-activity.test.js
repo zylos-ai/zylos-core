@@ -127,7 +127,7 @@ test('restart recovers child lifetimes across rotations and main turn boundaries
   if(terminal)appendEvent(log,row('subagent_stop',{agent_id:'worker',ts:150}));
   const result=activity.read(10000);
   assert.equal(activity.transcriptPath,transcript);
-  assert.deepEqual(result.events.map(event=>event.event),['stop']);
+  assert.deepEqual(result.events.map(event=>event.event),['prompt','stop']);
   assert.equal(result.state,'idle');assert.equal(result.lastActivityAt,130);
   assert.deepEqual(result.tools,[]);
   assert.deepEqual(result.activeSubagents,terminal?[]:[{agentId:'worker',lastActivityAt:140}]);
@@ -149,6 +149,7 @@ test('restart: recover latest turn across rotation and associate older session_s
  fs.writeFileSync(transcript,JSON.stringify({message:{content:[{type:'tool_result',tool_use_id:'done'}]}})+'\n');
  appendEvent(log,row('session_start',{ts:50,transcript_path:transcript}));
  appendEvent(log,row('pre_tool',{ts:110,tool_use_id:'obsolete'}));
+ appendEvent(log,row('stop',{ts:115}));
  rotateEventLog(log,{maxBytes:0,now:1000});
  appendEvent(log,row('prompt',{ts:120}));
  appendEvent(log,row('pre_tool',{ts:130,tool_use_id:'done',tool:'Read'}));
@@ -157,7 +158,7 @@ test('restart: recover latest turn across rotation and associate older session_s
  const result=activity.read(10000);
  assert.equal(activity.transcriptPath,transcript);assert.deepEqual(result.tools.map(tool=>tool.id),['live']);
  assert.equal(result.busySince,120);
- assert.deepEqual(result.events.map(event=>event.event),['prompt','pre_tool','pre_tool']);
+ assert.deepEqual(result.events.map(event=>event.event),['pre_tool','stop','prompt','pre_tool','pre_tool']);
  appendEvent(log,row('post_tool',{ts:150,tool_use_id:'live'}));assert.equal(activity.read(10000).tools.length,0);
 });
 
@@ -233,7 +234,7 @@ for(const runtime of ['claude','codex'])test(`quiet samples keep an open ${runti
  const reply=activity.read(18800);
  assert.equal(reply.state,'busy');assert.equal(reply.turnOpen,true);assert.equal(reply.busySince,6000);
  assert.equal(reply.tools.length,0);assert.equal(reply.idleSince,null);assert.equal(reply.lastResponseAt,12000);
- activity.consume([row(runtime==='claude'?'idle':'stop',{ts:19000})]);
+ activity.consume([row('stop',{ts:19000})]);
  const closed=activity.read(23000);
  assert.equal(closed.state,'idle');assert.equal(closed.turnOpen,false);assert.equal(closed.busySince,null);
 });
@@ -273,7 +274,7 @@ for(const runtime of ['claude','codex'])test(`${runtime} restart recovers quiet 
   assert.deepEqual(recovered.tools,[]);
   assert.equal(activity.read(126000).state,terminal?'idle':'busy');
   if(!terminal){
-   appendEvent(log,row(runtime==='claude'?'idle':'stop',{ts:127000}));
+   appendEvent(log,row('stop',{ts:127000}));
    const closed=activity.read(130000);
    assert.equal(closed.state,'idle');assert.equal(closed.turnOpen,false);assert.equal(closed.busySince,null);
   }
@@ -689,7 +690,7 @@ for(const runtime of ['claude','codex'])test(`${runtime} changed native turn rej
  const {activity,row}=fixture(t,runtime),deadline=6000+OPEN_TURN_INACTIVITY_TIMEOUT_MS;
  activity.consume([row('prompt',{ts:6000})]);activity.read(deadline);
  assert.equal(activity.claimQuietTurn(6000,deadline),true);
- activity.consume([row('prompt',{ts:deadline+1})]);
+ activity.consume([row('stop',{ts:deadline}),row('prompt',{ts:deadline+1})]);
  activity.consume([row('quiet_turn_interrupt',{ts:deadline+2,turn_started_at:6000,last_activity_at:6000,
   last_native_activity_at:6000,last_response_at:null,control_id:7})]);
  assert.equal(activity.read(deadline+2).state,'busy');
@@ -875,4 +876,69 @@ test('AGY closed-turn task sample cannot exempt the next quiet turn',t=>{
  const result=activity.read(1203000);
  assert.equal(result.state,'busy');assert.equal(result.quietTurnDue,true);
  assert.equal(activity.claimQuietTurn(3000,1203000),true);
+});
+
+// Boundary: native StopFailure registration feeds the same terminal reducer as
+// Stop. Late hooks cannot start a turn; a currently running tool remains busy.
+// Run for Claude turn boundaries; private files, no runtime/tmux/database.
+test('Claude terminal hooks close one turn and late hooks do not start another',t=>{
+ for(const hook_event_name of ['Stop','StopFailure']) {
+  const {root,activity,row}=fixture(t);
+  activity.consume([row('prompt'),row('prompt',{ts:300})]);
+  assert.equal(activity.turnStartedAt,200,'input queued in the old turn is not a new start');
+  const terminal=handleHookActivity({hook_event_name,session_id:'s'},
+   {env:{ZYLOS_DIR:root,ZYLOS_RUN_ID:'r',ZYLOS_MODEL_CONFIG:'{"runtime":"claude"}'},nowMs:500});
+  assert.equal(terminal.event,'stop');
+  assert.equal(terminal.stop_reason,hook_event_name==='StopFailure'?'failure':undefined);
+  activity.consume([terminal]);
+  assert.equal(activity.closedThrough,500);assert.equal(activity.turn,false);
+  activity.consume([row('pre_tool',{ts:600,tool_use_id:'late'})]);
+  assert.equal(activity.read(4000).state,'busy');assert.equal(activity.turn,false);
+  activity.consume([row('post_tool',{ts:700,tool_use_id:'late'}),row('idle',{ts:710}),
+   row('stop',{ts:720})]);
+  assert.equal(activity.read(4000).state,'idle');assert.equal(activity.turn,false);
+  assert.equal(activity.claimQuietTurn(720,1200720),false);
+  activity.consume([row('prompt',{ts:5000})]);
+  assert.equal(activity.read(9000).turnOpen,true);assert.equal(activity.turnStartedAt,5000);
+ }
+});
+
+// Boundary: native dequeue starts a turn without a prompt hook and shares the
+// Dashboard's 5-second Stop lag rule. Failure history survives a later Stop and
+// bounded reads/restart. Run for turn/failure evidence changes; private files.
+test('Claude dequeue after terminal closure supplies shared failure history across bounded reads and restart',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl');
+ const queue={type:'queue-operation',operation:'dequeue',sessionId:'s',timestamp:new Date(550).toISOString()};
+ fs.writeFileSync(transcript,'{}\n'.repeat(Math.ceil(TRANSCRIPT_READ_BUDGET_BYTES/3)+2)+JSON.stringify(queue)+'\n');
+ fs.utimesSync(transcript,0.55,0.55);
+ const file=path.join(root,'events.jsonl');
+ const failure=row('stop_failure',{type:'runtime_health',source:'hook',schema_version:1,event_id:'failed-event',ts:580});
+ const rows=[row('session_start',{ts:100,transcript_path:transcript}),row('prompt'),row('prompt',{ts:300}),
+  row('pre_tool',{ts:350,tool_use_id:'old'}),failure,row('stop',{ts:600,stop_reason:'failure'}),
+  row('pre_tool',{ts:800,tool_use_id:'new'}),row('post_tool',{ts:900,tool_use_id:'new'})];
+ fs.writeFileSync(file,rows.map(value=>JSON.stringify(value)+'\n').join(''));
+ let result=activity.read(4000);
+ assert.equal(result.failureActivity.startedAfterFailure,false);assert.equal(result.transcriptPending,true);
+ result=activity.read(4000);
+ assert.equal(result.state,'busy');assert.equal(result.turnOpen,true);assert.equal(result.turnStartedAt,601);
+ assert.equal(result.failureActivity.startedAfterFailure,true);assert.equal(result.failureActivity.startedAt,601);
+ assert.equal(result.failureActivity.failureEventId,'failed-event');
+ // Keep the existing admitted-close contract for a turn begun only by dequeue.
+ const original=fs.readFileSync(file,'utf8'),deadline=result.lastActivityAt+OPEN_TURN_INACTIVITY_TIMEOUT_MS;
+ const admission=row('quiet_turn_interrupt',{ts:deadline,turn_started_at:601,
+  last_activity_at:result.lastActivityAt,last_native_activity_at:result.lastNativeActivityAt,
+  last_response_at:result.lastResponseAt,control_id:7});
+ fs.appendFileSync(file,JSON.stringify(admission)+'\n');
+ const recovered=new SessionActivity({runDir:root,runId:'r',sessionId:'s',runtime:'claude',startedAt:100});
+ t.after(()=>recovered.close());
+ recovered.read(deadline);result=recovered.read(deadline);
+ assert.equal(result.state,'idle');assert.equal(result.turnOpen,false);
+ assert.equal(recovered.claimQuietTurn(result.lastActivityAt,deadline+1200000),false);
+ fs.writeFileSync(file,original+JSON.stringify(row('stop',{ts:5000}))+'\n');
+ const external=new SessionActivity({runDir:root,runId:'r',sessionId:'s',runtime:'claude',
+  startedAt:100,failureEventId:'failed-event'});t.after(()=>external.close());
+ assert.equal(external.read(8000).failureActivity.startedAfterFailure,false);
+ result=external.read(8000);
+ assert.equal(result.state,'idle');assert.equal(result.failureActivity.startedAfterFailure,true,
+  'a new turn that already stopped still cancels the old failure continuation');
 });

@@ -7,7 +7,7 @@ import { isMainModule } from './is-main-module.js';
 const { appendEvent } = await loadCoreModule('event-log.js');
 const { runDirFromEnv, RUN_FILES, hookErrorLogPath } = await loadCoreModule('session-group-paths.js');
 
-const EVENTS = { SessionStart:'session_start', UserPromptSubmit:'prompt', PreToolUse:'pre_tool', PostToolUse:'post_tool', PostToolUseFailure:'post_tool_failure', PermissionRequest:'permission_request', Stop:'stop', Notification:'idle', SubagentStart:'subagent_start', SubagentStop:'subagent_stop' };
+const EVENTS = { SessionStart:'session_start', UserPromptSubmit:'prompt', PreToolUse:'pre_tool', PostToolUse:'post_tool', PostToolUseFailure:'post_tool_failure', PermissionRequest:'permission_request', Stop:'stop', StopFailure:'stop', Notification:'idle', SubagentStart:'subagent_start', SubagentStop:'subagent_stop' };
 const INPUT_FIELDS = { Bash:['command','description'], Read:['file_path'], Edit:['file_path'], Write:['file_path'], Skill:['skill'], Agent:['description','subagent_type'], Task:['description','subagent_type'], WebSearch:['query'], WebFetch:['url'], view_image:['path'] };
 export function selectToolInput(tool, input) {
   if (tool === 'run_command' && input && typeof input === 'object') {
@@ -27,6 +27,7 @@ export function handleHookActivity(data, { nowMs=Date.now(), env=process.env } =
   const runtime=env.ZYLOS_MODEL_CONFIG ? JSON.parse(env.ZYLOS_MODEL_CONFIG).runtime : 'claude';
   if (!['claude','codex','agy'].includes(runtime) || typeof data.session_id!=='string' || !data.session_id) return null;
   const record={v:1,ts:nowMs,event,runtime,session_group:location.kind==='legacy'?null:(location.sessionGroup || 'origin'),run_id:env.ZYLOS_RUN_ID || null,session_id:data.session_id};
+  if(data.hook_event_name==='StopFailure')record.stop_reason='failure';
   for(const field of ['agent_id','agent_type','turn_id','model','permission_mode','transcript_path']) if(Object.hasOwn(data,field))record[field]=data[field];
   if(['pre_tool','post_tool','post_tool_failure','permission_request'].includes(event)) {
     if(Object.hasOwn(data,'tool_name'))record.tool=data.tool_name;
