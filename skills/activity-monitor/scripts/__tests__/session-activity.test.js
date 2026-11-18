@@ -514,3 +514,55 @@ test('Codex custom tool calls are actual response records',t=>{
   payload:{type:'custom_tool_call',name:'apply_patch',input:'*** Begin Patch\n*** End Patch',call_id:'call'}});
  assert.equal(activity.lastResponseAt,400);
 });
+
+test('AGY change-driven idle and busy status remain current after seventy seconds', t => {
+ for(const state of ['idle','working']) {
+  const {root,activity,row}=fixture(t,'agy');
+  activity.consume([row('prompt')]);
+  fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({session_id:'s',agent_state:state,
+   zylos:{v:1,runId:'r',capturedAt:1000}}));
+  for(const now of [72000,145000]) {
+   assert.equal(activity.read(now).state,state==='idle'?'idle':'busy',`${state} at ${now}`);
+  }
+ }
+});
+
+test('AGY busy status includes active native tasks and running subagents', t => {
+ for(const [extra,busy] of [
+  [{},false],
+  [{task_count:0,subagents:[]},false],
+  [{task_count:1},true],
+  [{subagents:[{id:'child',status:'running'}]},true],
+  [{subagents:[{id:'done',status:'completed'},{id:'active',status:'running'}]},true],
+  [{subagents:[{id:'child',status:'completed'}]},false],
+ ]) {
+  const {root,activity,row}=fixture(t,'agy');activity.consume([row('prompt')]);
+  fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({session_id:'s',agent_state:'idle',...extra,
+   zylos:{v:1,runId:'r',capturedAt:1000}}));
+  assert.equal(activity.read(72000).state,busy?'busy':'idle',JSON.stringify(extra));
+ }
+});
+
+test('completed AGY subagent reorder and list growth do not restart idle stability', t => {
+ const {root,activity,row}=fixture(t,'agy');activity.consume([row('prompt')]);
+ const done=id=>({id,status:'completed'});
+ const write=(capturedAt,subagents)=>fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({
+  session_id:'s',agent_state:'idle',subagents,zylos:{v:1,runId:'r',capturedAt}}));
+ write(1000,[done('a'),done('b')]);assert.equal(activity.read(1000).state,'busy');
+ write(1200,[done('b'),done('a'),done('c')]);assert.equal(activity.read(1500).state,'idle');
+ write(72000,[done('c'),done('a'),done('d'),done('b')]);assert.equal(activity.read(72000).state,'idle');
+ assert.equal(activity.read(145000).state,'idle');
+});
+
+test('AGY no-expiry status still rejects foreign identity, future and pre-activity samples', t => {
+ for(const patch of [
+  {session_id:'other'}, {zylos:{v:1,runId:'other',capturedAt:1000}},
+  {zylos:{v:2,runId:'r',capturedAt:1000}}, {zylos:{v:1,runId:'r',capturedAt:73000}},
+  {zylos:{v:1,runId:'r',capturedAt:50}}, {zylos:{v:1,runId:'r',capturedAt:150}},
+ ]) {
+  const {root,activity,row}=fixture(t,'agy');activity.consume([row('prompt')]);
+  fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({session_id:'s',agent_state:'idle',
+   zylos:{v:1,runId:'r',capturedAt:1000},...patch}));
+  assert.equal(activity.read(72000).state,'busy',JSON.stringify(patch));
+ }
+});

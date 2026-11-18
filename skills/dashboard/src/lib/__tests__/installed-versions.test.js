@@ -9,13 +9,13 @@ test('version commands run concurrently and refreshes share pending work', async
     calls.push(command);
     assert.deepEqual(args, ['--version']);
     assert.equal(options.timeout, 5000);
-    return new Promise(resolve => releases.push(() => resolve({ stdout: command === 'codex' ? 'codex-cli 1.2.3\n' : '2.3.4 (CLI)\n' })));
+    return new Promise(resolve => releases.push(() => resolve({ stdout: command === 'codex' ? 'codex-cli 1.2.3\n' : command === 'agy' ? 'Antigravity CLI 1.5.10\n' : '2.3.4 (CLI)\n' })));
   } });
   const first = read();
   assert.equal(read(), first);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 4);
   releases.forEach(release => release());
-  assert.deepEqual(await first, { zylos: '2.3.4 (CLI)', claude: '2.3.4', codex: '1.2.3' });
+  assert.deepEqual(await first, { zylos: '2.3.4 (CLI)', claude: '2.3.4', codex: '1.2.3', agy: '1.5.10' });
 });
 
 test('failed version refreshes retain previous versions', async () => {
@@ -26,5 +26,5 @@ test('failed version refreshes retain previous versions', async () => {
   } });
   await read();
   fail = true;
-  assert.deepEqual(await read(), { zylos: '1.2.3', claude: '1.2.3', codex: '1.2.3' });
+  assert.deepEqual(await read(), { zylos: '1.2.3', claude: '1.2.3', codex: '1.2.3', agy: '1.2.3' });
 });

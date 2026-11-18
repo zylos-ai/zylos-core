@@ -9,7 +9,7 @@ export const { readLiveIdentity, readSessionState, readLiveIdentities, readSessi
   readCodexUsageSample, readAccountUsage, readAccountUsageSnapshot } = createSessionReader();
 
 export function readRuntimeHealth(runtime) {
-  if (!['claude','codex'].includes(runtime)) throw new TypeError('Unknown runtime');
+  if (!['claude','codex','agy'].includes(runtime)) throw new TypeError('Unknown runtime');
   let record;
   try { record = JSON.parse(fs.readFileSync(path.join(zylosRoot(), 'activity-monitor', 'runtime-health', `${runtime}.json`), 'utf8')); }
   catch (error) { return error.code === 'ENOENT' ? { missing: true } : { unreadable: true }; }

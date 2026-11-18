@@ -174,7 +174,7 @@ export function createSupervisor(deps) {
     startupAlert:deps.alert,
     restore:async()=>{
       try{admission.restore();restartRequestsReadable();}catch(error){if(error.code!=='requests_unreadable')throw error;await reportError(error,{phase:'restart-requests'});}
-      for(const runtime of ['claude','codex'])await health.restore(runtime);
+      for(const runtime of ['claude','codex','agy'])await health.restore(runtime);
       router.clearLegacyCache(path.join(deps.zylosDir,'activity-monitor','message-router-probe-cache.json'));await deps.restoreTransition?.();
     },openAdmission:()=>admission.openEntry(),reportError,getModeTransition:db.getModeTransition,listDrainFences:db.listDrainFences,readRestartRequests:()=>admission.readRequests(),restartRequestsReadable,
     advanceAutomaticMigration:()=>modeSwitch.automatic(),
@@ -250,7 +250,7 @@ export function createSupervisor(deps) {
       if(now()-lastMaintenance>=60000) {
         const activeGroups=new Set([...current.map(scene=>scene.sessionGroup ?? 'origin'),
           ...pendingGroups.map(group=>group.sessionGroup),...continuationGroups.map(group=>group.sessionGroup)]);
-        for (const runtime of ['claude','codex']) {
+        for (const runtime of ['claude','codex','agy']) {
           try {
             await health.serial(runtime,()=>health.store(runtime).pruneGroups({activeGroups,isDeleted:async group=>{
               try { await fs.stat(groupRunDir(group,deps.env));return false; }
@@ -276,7 +276,7 @@ export function createSupervisor(deps) {
         }
         lastMaintenance=now();
       }
-      for(const runtime of ['claude','codex']) {
+      for(const runtime of ['claude','codex','agy']) {
         if(health.store(runtime).read().health!=='auth_failed')continue;
         if(!health.authRecoveries.has(runtime)) {
           if(!demand.has(runtime))continue;

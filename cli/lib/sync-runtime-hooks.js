@@ -27,6 +27,7 @@ import { hookScriptKey, hookScriptBaseKey, getCommandHooks } from './hook-utils.
 import { readSessionMode } from './config.js';
 import { copyPrivateFile, writePrivateFile } from './private-file.js';
 import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig, resolveCodexBypassPermissions } from './runtime-setup.js';
+import { hasAgyZylosHooks, syncAgyConfig } from './agy-setup.js';
 import { installCoreCodexHook } from './codex-hooks.js';
 import {
   SIDE_EFFECT_NAMES,
@@ -661,7 +662,7 @@ export async function enqueueRestartIfNeeded({
   }
 }
 
-export function syncRuntimeHooks({
+function syncSharedRuntimeHooks({
   zylosDir = ZYLOS_DIR,
   dryRun = false,
   stopFailureSupported = detectStopFailureSupport(),
@@ -785,6 +786,20 @@ export function syncRuntimeHooks({
   console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${thresholdSync.changed ? ', new-session threshold paired' : ''}${settingsBackfilled ? ', settings backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}${codexHooks.changed ? ', Codex hooks refreshed' : ''}.`);
 
   return { ...result, changed: true };
+}
+
+/** Antigravity synchronization reports separately and never requests a shared-runtime restart. */
+export function syncRuntimeHooks(options = {}) {
+  const result = syncSharedRuntimeHooks(options);
+  let agy = { changed: false };
+  if (hasAgyZylosHooks()) {
+    try { agy = syncAgyConfig({ zylosDir: options.zylosDir || ZYLOS_DIR, dryRun: options.dryRun || false }); }
+    catch (error) {
+      agy.error = { code: error.code || 'AGY_CONFIG_SYNC_FAILED', message: error.message };
+      console.error(`Antigravity configuration: ${agy.error.message}`);
+    }
+  }
+  return result ? { ...result, agy } : result;
 }
 
 export async function main(argv = process.argv.slice(2)) {

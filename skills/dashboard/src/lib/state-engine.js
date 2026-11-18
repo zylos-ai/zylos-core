@@ -860,7 +860,9 @@ export class StateEngine {
 
       return {
         runtime_progress: {
-          jsonl_usage: currentRuntime === 'codex'
+          jsonl_usage: !['claude', 'codex'].includes(currentRuntime)
+            ? formatEntry('jsonl_usage', { capability: 'unsupported' })
+            : currentRuntime === 'codex'
             ? formatEntry('codex_rollout', { signalType: 'collector_liveness', checkedWhenIdle: true })
             : formatEntry('jsonl_usage', { signalType: 'collector_liveness', eventDriven: true, maxAgeS: 60 })
         },

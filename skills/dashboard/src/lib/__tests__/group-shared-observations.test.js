@@ -10,7 +10,10 @@ const item = runtime => ({ identity: { present: true, ready: true, runtime, runI
 test('fleet projects each shared observation without per-group session reads and broadcast uses cached observations', async () => {
   let reads = 0, observed = null;
   const observationOptions = [];
-  const batch = { mode: 'multi', observations: new Map([['origin', item('claude')], ['other', item('codex')]]) };
+  const agy = { ...item('agy'), usage: { valid: true, value: {
+    model: { id: 'gemini-native', effort: 'high' }, context_window: { used_percentage: 29 }, version: '1.5.10',
+  } } };
+  const batch = { mode: 'multi', observations: new Map([['origin', item('claude')], ['other', item('codex')], ['native', agy]]) };
   const provider = {
     get: async options => { reads++; observationOptions.push(options); return observed = batch; }, peek: () => observed,
     reader: { readRuntimeHealth: () => ({ missing: true }), readAccountUsage: async () => null },
@@ -33,8 +36,14 @@ test('fleet projects each shared observation without per-group session reads and
   const live = await workbench.getSnapshot();
   assert.equal(reads, 1);
   assert.equal(live.sources.status.ok, true);
-  assert.equal(live.rows.length, 2);
+  assert.equal(live.rows.length, 3);
   assert.equal(live.rows.find(row => row.sessionGroup === 'other').contextPct, 47);
+  const native = live.rows.find(row => row.sessionGroup === 'native');
+  assert.equal(native.target.runtime, 'agy');
+  assert.equal(native.model, 'gemini-native');
+  assert.equal(native.effort, 'high');
+  assert.equal(native.contextPct, 29);
+  assert.equal(native.runningVersion, '1.5.10');
   const broadcast = await workbench.getSnapshot(undefined, { cachedObservations: true });
   assert.equal(broadcast, live, 'one batch reuses the same projection within its TTL');
   observed = { ...batch, observations: new Map(batch.observations) };

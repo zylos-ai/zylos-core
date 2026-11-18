@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { DELIVERY_DELAY_BASE, DELIVERY_DELAY_PER_KB, DELIVERY_DELAY_MAX } from '../c4-config.js';
 import { sanitizeMessage } from '../c4-utils.js';
-import { findPromptY, isUsageOverlayCapture } from '../tmux-input-state.js';
+import { findPromptY, isUsageOverlayCapture, checkAgyInputState } from '../tmux-input-state.js';
 import { getDeliveryDelay, getClaudeInputBoxText, checkClaudeFallbackInputBox,
   isBypassState, isKeystrokeControl, parseKeystrokeKey, isExitLifecycleControl,
   getHeartbeatPhase, isRecoveryHeartbeatPhase, shouldAutoAckHeartbeat } from '../router/delivery.js';
@@ -434,5 +434,41 @@ describe('isExitLifecycleControl', () => {
         assert.equal(isExitLifecycleControl({ type: 'control', content }, runtime), false);
       }
     }
+  });
+});
+
+describe('agy input frame', () => {
+  const rule = '─'.repeat(40);
+  const frame = body => [rule, body, rule].join('\n');
+  it('recognizes only an empty framed prompt with its caret in place', () => {
+    assert.equal(checkAgyInputState(frame('>'), 2, 1), 'empty');
+    assert.equal(checkAgyInputState(frame('>'), 3, 1), 'has_content');
+    assert.equal(checkAgyInputState(frame('>'), 2, 0), 'indeterminate');
+  });
+  it('uses the caret frame when a background tasks panel follows the prompt', () => {
+    const running = '  ● [18:51:32] sleep 20; echo TOOL-DONE running';
+    const native = frame('>') + '\n' + running + '\n' + '─'.repeat(40);
+    assert.equal(checkAgyInputState(native, 2, 1), 'empty');
+    assert.equal(checkAgyInputState(native.replace('>\n', '> draft\n'), 7, 1), 'has_content');
+    assert.equal(checkAgyInputState(frame(running), 2, 1), 'indeterminate');
+    const panel = frame('Background Tasks\n> running task\n  Esc to close');
+    assert.equal(checkAgyInputState(frame('>') + '\n' + panel, 2, 1), 'empty');
+    assert.equal(checkAgyInputState(frame('> draft') + '\n' + panel, 7, 1), 'has_content');
+    assert.equal(checkAgyInputState(frame('> first\n  second') + '\n' + panel, 8, 2), 'has_content');
+    // Moving into the panel must not make its highlighted task look empty.
+    assert.equal(checkAgyInputState(frame('>') + '\n' + panel, 2, 5), 'indeterminate');
+    assert.equal(checkAgyInputState(panel, 2, 2), 'indeterminate');
+  });
+  it('recognizes multiline and wrapped unsubmitted input at its final caret row', () => {
+    for (const body of ['> first\n  second\n  third', '> wrapped first\n  remainder', '> first\n\n> quoted line', '> [Pasted text #1 +3 lines]']) {
+      assert.equal(checkAgyInputState(frame(body), 2, body.split('\n').length), 'has_content');
+    }
+  });
+  it('rejects unframed, slash-menu and trust-choice captures', () => {
+    for (const body of ['> /\n  /clear Clear session', '> Trust\n  Cancel', '> first\n> second', 'ordinary output']) {
+      assert.equal(checkAgyInputState(frame(body), 2, 1), 'indeterminate');
+    }
+    assert.equal(checkAgyInputState('> choose one', 2, 0), 'indeterminate');
+    assert.equal(checkAgyInputState(frame('> draft'), 2, 3), 'indeterminate');
   });
 });

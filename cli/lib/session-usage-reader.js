@@ -141,9 +141,9 @@ export function sampleResult(sample, first, last, freshnessMs, now) {
 /** Model facts share the caller's validated usage identity. A captured explicit
  * override is a fallback; the mutable instance default is never a session fact. */
 export function usageModelFacts(value, runtime, launchConfig) {
-  const actual = runtime === 'claude' ? value?.model?.id : value?.model;
+  const actual = runtime === 'claude' ? value?.model?.id : runtime === 'agy' ? value?.model?.id ?? value?.model : value?.model;
   const model = typeof actual === 'string' && actual ? actual :
     launchConfig?.mode === 'override' && launchConfig.runtime === runtime ? launchConfig.model : null;
-  const window = runtime === 'claude' ? value?.context_window?.context_window_size : value?.contextUsage?.ceiling;
+  const window = ['claude', 'agy'].includes(runtime) ? value?.context_window?.context_window_size ?? (runtime === 'agy' ? 1_048_576 : null) : value?.contextUsage?.ceiling;
   return { model, contextWindow: Number.isFinite(window) && window > 0 ? window : null };
 }

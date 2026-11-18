@@ -1438,6 +1438,32 @@ test('a group on the default settings starts from nothing chosen, never the mach
     'another engine\'s pair is not reused');
 });
 
+test('Antigravity configuration preserves its runtime and disables unavailable model overrides', async () => {
+  const writes = [], requests = [];
+  const controller = createGroupConfig({ key: 'native', t, request: async (path, options) => {
+    requests.push(path);
+    if (options?.method) { writes.push(JSON.parse(options.body)); return { ok: true, data: {} }; }
+    if (path.includes('/runtime-options')) return { models: [], efforts: [], current_model: null };
+    return { runtime: { ok: true, data: { desired: { runtime: 'agy' }, resolved: { runtime: 'agy' } } },
+      model: { ok: true, data: { runtime: 'agy', resolved: { runtime: 'agy', mode: 'default' } } } };
+  } });
+  await controller.load(); await controller.loadMeta('agy');
+  assert.ok(requests.includes('/api/instance/runtime-options?runtime=agy'));
+  const document = createDocument(), root = document.createElement('div');
+  renderGroupConfig(root, controller, { document, t });
+  const [target, model, effort, save] = allNodes(root).find(node => node.classList.contains('wb-cfg-controls')).children;
+  assert.equal(target.value, 'agy');
+  assert.ok(target.children.some(option => option.value === 'agy'));
+  assert.equal(model.disabled, true); assert.equal(effort.disabled, true); assert.equal(save.disabled, true);
+  assert.match(root.textContent, /wb.config.modelUnavailable/);
+  const more = allNodes(root).find(node => node.classList.contains('wb-cfg-more'));
+  const [, runtime, saveRuntime, reset] = more.children;
+  assert.equal(runtime.value, 'agy'); assert.equal(saveRuntime.disabled, false); assert.equal(reset.disabled, true);
+  saveRuntime.dispatch('click'); await tick();
+  assert.deepEqual(writes, [{ kind: 'runtime', value: 'agy' }]);
+  assert.equal(validConfigChange({ kind: 'model', runtime: 'agy', model: 'gemini', effort: 'high' }), false);
+});
+
 test('the configuration editor offers engine, model and effort as dropdowns with save and cancel, and keeps the engine switch and reset', async () => {
   const requests = [];
   const meta = { models: [{ id: 'opus', display_name: 'Opus' }, { id: 'sonnet' }], efforts_by_model: { opus: ['low', 'high', 'xhigh'], '*': ['low', 'medium', 'high'] } };

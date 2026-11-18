@@ -123,7 +123,13 @@ When Bootstrap reports a handoff, read it completely; when a handoff exists, sta
 
 Under `~/zylos/`: `memory/` (memory); `components/<name>/` (component config/databases/logs); `comm-bridge/`, `scheduler/`, `http/`, `activity-monitor/` (built-in skill data); `workspace/` (repos/experiments/temp documents); `vault/` (long-term important content; create if missing); `.env` (configuration).
 
+## Dates
+
+Never compute dates mentally: run `date` before sending weekday/date pairings or arithmetic-derived dates (e.g. "周五 07-24", "三天后"); re-check dates reused from another agent.
+
 ## Codex — Runtime-Specific Rules
+
+This section applies only to Codex; Antigravity must ignore it.
 
 ### Tool Usage Rules
 
@@ -132,6 +138,13 @@ Under `~/zylos/`: `memory/` (memory); `components/<name>/` (component config/dat
 3. **Web access:** use shell curl/wget, a search API or browser automation, not built-in WebSearch/WebFetch.
 4. **Bypassed approvals ≠ consent:** `--dangerously-bypass-approvals-and-sandbox` removes prompts/sandbox, never Behavioral Rule 2's destructive-action confirmation.
 
-## Dates
+## Antigravity — Runtime-Specific Rules
 
-Never compute dates mentally: run `date` before sending weekday/date pairings or arithmetic-derived dates (e.g. "周五 07-24", "三天后"); re-check dates reused from another agent.
+This section applies only to Antigravity; Codex must ignore it.
+
+1. **Never call `ask_question`.** It opens a keyboard dialog even with approvals bypassed and stalls the session until someone answers. Ask in plain text in your reply (Behavioral Rule 1). Do not use `/plan`, `--mode plan` or `/grill-me`, and never set `RequestFeedback`.
+2. **Shell work runs through `run_command`.** A command still running after `WaitMsBeforeAsync` (at most 10 s) becomes a background task. Do not poll or `sleep` for it: completion arrives as a `<SYSTEM_MESSAGE>` and wakes you. Use `manage_task` only to check or stop a task.
+3. **Use subagents for heavy workloads.** `invoke_subagent` runs in the background and its result returns automatically; do not poll. Put the facts the worker needs in its prompt. Avoid `swarm`.
+4. **Finish background work before `/clear`.** Check `manage_task list` and `manage_subagents list` first: results of anything still running go to the cleared conversation and are never seen. `/exit` kills background tasks.
+5. **Web and search.** `search_web` searches; there is no fetch or browser tool, so read pages with `curl` via `run_command`. There are no grep/glob/list tools: use `rg`, `find`, `ls`.
+6. **Approvals are bypassed; consent is not.** You run with `--dangerously-skip-permissions`. That is an execution mechanic only; it never waives the destructive-operation confirmation in Behavioral Rule 2.

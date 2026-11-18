@@ -86,3 +86,34 @@ test('atomic write failure leaves health and marker unchanged',t=>{
   f.store.write=()=>{throw new Error('injected write failure');};
   assert.throws(()=>f.consume(f.event()),/injected/);assert.deepEqual(f.store.read(),before);
 });
+
+test('agy network failures survive sanitization, persistence and public health projection', async t => {
+  const f = fixture(t);
+  const { sanitizeHealthEvent } = await import('../health-evidence.js');
+  const { classifyHealthNotice } = await import('../health-notice-classification.js');
+  const { publishSessionStatus } = await import('../status-writer.js');
+  const agyIdentity = { ...identity, runtime: 'agy' };
+  const raw = f.event({ ...agyIdentity, prompt_id: null, error: 'network_error', private: 'PRIVATE' });
+  const event = sanitizeHealthEvent(raw, 'network');
+  assert.equal(event.error, 'network_error');
+  assert.equal(Object.hasOwn(event, 'private'), false);
+  const notice = classifyHealthNotice(event, f.now());
+  assert.equal(notice.reason, 'network_error');
+  assert.equal(notice.noticeCode, 'unavailable');
+  const store = new HealthStore({ runtime: 'agy', zylosDir: f.zylosDir, now: f.now });
+  assert.equal(store.consume(event, { identity: agyIdentity }).reason, 'hook_failure');
+  const state = new HealthStore({ runtime: 'agy', zylosDir: f.zylosDir, now: f.now }).read();
+  assert.equal(state.health, 'unavailable');
+  assert.equal(state.reason, 'network_error');
+  assert.equal(state.hook_failure.error, 'network_error');
+  const persisted = JSON.parse(fs.readFileSync(store.file, 'utf8'));
+  assert.equal(persisted.v, 1);
+  assert.equal(persisted.reason, 'network_error');
+  const status = publishSessionStatus({ statusFile: path.join(f.zylosDir, 'status.json'),
+    scene: { ready: true, runId: 'run', sessionId: 'session', runtime: 'agy' },
+    activity: { sessionId: 'session', state: 'idle', lastActivityAt: 1, tools: [] },
+    health: state, now: f.now() });
+  assert.equal(status.health, 'unavailable');
+  assert.equal(status.unavailable_reason, 'network_error');
+  assert.doesNotMatch(JSON.stringify(state), /PRIVATE/);
+});

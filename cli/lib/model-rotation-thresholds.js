@@ -47,6 +47,7 @@ export function readCodexModelWindows({ home = os.homedir(), codexHome = process
 }
 
 function isLargeWindow({ runtime, model, contextWindow, codexModels = [] }) {
+  if (runtime === 'agy') return true;
   if (cleanModel(model).toLowerCase().includes('[1m]')) return true;
   if (Number(contextWindow) >= 1_000_000) return true;
   if (runtime !== 'codex') return false;
@@ -156,7 +157,7 @@ export function setModelThreshold({
   home = os.homedir(), codexHome = process.env.CODEX_HOME || path.join(home, '.codex'),
   codexModels = readCodexModelWindows({ home, codexHome }), updateConfig,
 } = {}) {
-  if (!Object.hasOwn(LEGACY_KEYS, runtime) || !cleanModel(model)) {
+  if ((!Object.hasOwn(LEGACY_KEYS, runtime) && runtime !== 'agy') || !cleanModel(model)) {
     throw Object.assign(new TypeError('runtime and model are required'), { code: 'INVALID_MODEL_THRESHOLD' });
   }
   const options = { runtime, model, contextWindow, codexModels };

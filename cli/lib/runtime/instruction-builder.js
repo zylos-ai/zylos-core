@@ -72,7 +72,7 @@ export function writeInstructionFormatVersion({
 }
 
 function assertRuntime(runtime) {
-  if (runtime !== 'claude' && runtime !== 'codex') {
+  if (runtime !== 'claude' && runtime !== 'codex' && runtime !== 'agy') {
     throw new TypeError(`Unsupported runtime: ${runtime}`);
   }
 }
@@ -86,7 +86,7 @@ export function instructionPaths(runtime, { zylosDir = ZYLOS_DIR } = {}) {
     markerPath: path.join(instructionsDir, 'meta.json'),
     assemblerPath: path.join(instructionsDir, 'assembler.mjs'),
     onboardingPath: path.join(instructionsDir, 'onboarding.md'),
-    systemPath: path.join(instructionsDir, `${runtime}-system.md`),
+    systemPath: path.join(instructionsDir, `${runtime === 'agy' ? 'codex' : runtime}-system.md`),
     userPath: path.join(root, 'ZYLOS.md'),
     outputPath: path.join(root, runtime === 'claude' ? 'CLAUDE.md' : 'AGENTS.md'),
   };
@@ -107,6 +107,14 @@ export function buildInstructionFile(runtime, { zylosDir = ZYLOS_DIR, force = fa
   if (!fs.existsSync(paths.markerPath)) return paths.outputPath;
   if (force || leafNeedsRebuild(paths)) assembleInstruction(paths);
   return paths.outputPath;
+}
+
+export function agyInstructionContext({ zylosDir = ZYLOS_DIR } = {}) {
+  const paths = instructionPaths('agy', { zylosDir });
+  const split = fs.existsSync(paths.markerPath);
+  const system = fs.readFileSync(split ? paths.systemPath : paths.outputPath, 'utf8');
+  const precedence = 'This injection contains the complete Zylos instructions. If its runtime-specific instructions conflict with AGENTS.md in the working directory, this injection takes precedence.\n\n';
+  return precedence + (split ? [system, fs.readFileSync(paths.userPath, 'utf8')].join('\n\n') : system);
 }
 
 export function assertInstructionReady(runtime, { zylosDir = ZYLOS_DIR } = {}) {

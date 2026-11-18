@@ -125,3 +125,29 @@ test('failed observations clear cached identities and notify fleet sampling with
   assert.equal(state.getState().state, 'UNKNOWN');
   assert.equal(samples, 2);
 });
+
+test('agy Origin state and runtime health remain available without account collection', async t => {
+  let sampled = false;
+  const provider = createSessionObservations({ loadCoreModule: async name => {
+    if (name === 'config.js') return { readSessionMode: () => ({ mode: 'multi' }) };
+    if (name === 'session-state-reader.js') return {
+      readSessionStates: async (_groups, options) => {
+        assert.equal(options.sampleTarget('origin', observation('agy').identity), null);
+        sampled = true;
+        return new Map([['origin', observation('agy')]]);
+      },
+      readRuntimeHealth: runtime => { assert.equal(runtime, 'agy'); return { health: 'ok' }; },
+    };
+    if (['session-usage-reader.js', 'session-group-paths.js'].includes(name)) return {};
+    assert.fail(`agy state must not load an account collector: ${name}`);
+  } });
+  const state = new CoreState({ sessionObservations: provider,
+    accountUsageCache: { read: () => assert.fail('agy has no account collection') } });
+  t.after(() => state.stop());
+  assert.equal((await state.refresh()).state, 'IDLE');
+  assert.equal(state.getState().runtime, 'agy');
+  assert.equal(state.accountUsage, null);
+  assert.equal((await state.currentTarget()).runtime, 'agy');
+  assert.equal(sampled, true);
+  assert.deepEqual(await provider.reader.readRuntimeHealth('agy'), { health: 'ok' });
+});
