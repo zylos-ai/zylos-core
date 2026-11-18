@@ -7,22 +7,26 @@ export const isTmuxDirectoryError = error => /^TMUX_DIR_/.test(error?.code ?? ''
 /** Validate before every client; an explicit socket prevents tmux's /tmp fallback. */
 export function tmuxClientArgs({ socketPath, socketName, utf8 = true } = {}, env = process.env) {
   if (socketPath && socketName) throw new TypeError('Choose one tmux socket');
-  if (Object.hasOwn(env, 'TMUX_TMPDIR')) {
-    const root = env.TMUX_TMPDIR;
+  if (env.TMUX_TMPDIR) {
+    let root = env.TMUX_TMPDIR;
     const uid = process.getuid();
     const check = (directory, privateDirectory = false) => {
       let stat;
-      try { stat = fs.lstatSync(directory); }
+      try { stat = privateDirectory ? fs.lstatSync(directory) : fs.statSync(directory); }
       catch (error) {
         throw tmuxError(error.code === 'ENOENT' ? 'TMUX_DIR_MISSING' : 'TMUX_DIR_UNAVAILABLE',
           `TMUX_TMPDIR directory unavailable: ${directory}`, error.code);
       }
-      if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== uid ||
-          (stat.mode & 0o700) !== 0o700 || (stat.mode & (privateDirectory ? 0o077 : 0o022))) {
+      if (!stat.isDirectory() || (privateDirectory && (stat.uid !== uid || (stat.mode & 0o007)))) {
         throw tmuxError('TMUX_DIR_UNSAFE', `TMUX_TMPDIR directory ownership or permissions invalid: ${directory}`);
       }
     };
-    if (!root || !path.isAbsolute(root)) throw tmuxError('TMUX_DIR_UNSAFE', 'TMUX_TMPDIR must be an absolute directory');
+    if (!path.isAbsolute(root)) throw tmuxError('TMUX_DIR_UNSAFE', 'TMUX_TMPDIR must be an absolute directory');
+    try { root = fs.realpathSync(root); }
+    catch (error) {
+      throw tmuxError(error.code === 'ENOENT' ? 'TMUX_DIR_MISSING' : 'TMUX_DIR_UNAVAILABLE',
+        `TMUX_TMPDIR directory unavailable: ${root}`, error.code);
+    }
     check(root);
     const directory = path.join(root, `tmux-${uid}`);
     try { fs.mkdirSync(directory, { mode: 0o700 }); }

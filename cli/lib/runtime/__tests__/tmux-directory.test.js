@@ -38,6 +38,8 @@ test('private directory selects an explicit default or named socket and validate
   assert.deepEqual(tmuxClientArgs({ socketName: 'test' }, env), ['-u', '-S', path.join(socketDirectory, 'test')]);
   assert.deepEqual(tmuxClientArgs({ socketPath: '/explicit/socket' }, env), ['-u', '-S', '/explicit/socket']);
   assert.equal(fs.statSync(socketDirectory).mode & 0o777, 0o700);
+  fs.chmodSync(socketDirectory, 0o770);
+  assert.deepEqual(tmuxClientArgs({}, env), ['-u', '-S', path.join(socketDirectory, 'default')]);
   fs.chmodSync(socketDirectory, 0o755);
   assert.throws(() => tmuxClientArgs({}, env), { code: 'TMUX_DIR_UNSAFE' });
 });
@@ -48,23 +50,69 @@ test('unset directory preserves socket selection; invalid directory is never sil
   assert.deepEqual(tmuxClientArgs({ utf8: false }, {}), []);
   assert.deepEqual(tmuxClientArgs({ socketPath: '/explicit/socket', utf8: false }, {}), ['-S', '/explicit/socket']);
   assert.deepEqual(tmuxClientArgs({ socketName: 'test' }, {}), ['-u', '-L', 'test']);
-  for (const value of ['', 'relative']) assert.throws(() => tmuxClientArgs({}, { TMUX_TMPDIR: value }), { code: 'TMUX_DIR_UNSAFE' });
+  assert.throws(() => tmuxClientArgs({}, { TMUX_TMPDIR: 'relative' }), { code: 'TMUX_DIR_UNSAFE' });
   assert.throws(() => tmuxClientArgs({}, { TMUX_TMPDIR: path.join(root, 'missing') }), { code: 'TMUX_DIR_MISSING' });
-  fs.chmodSync(root, 0o777);
-  assert.throws(() => tmuxClientArgs({}, { TMUX_TMPDIR: root }), { code: 'TMUX_DIR_UNSAFE' });
-  fs.chmodSync(root, 0o700);
-  const link = path.join(root, 'link'); fs.symlinkSync(root, link);
-  assert.throws(() => tmuxClientArgs({}, { TMUX_TMPDIR: link }), { code: 'TMUX_DIR_UNSAFE' });
+  const file = path.join(root, 'file'); fs.writeFileSync(file, 'not a directory');
+  assert.throws(() => tmuxClientArgs({}, { TMUX_TMPDIR: file }), { code: 'TMUX_DIR_UNSAFE' });
 });
 
-test('directory owned by another user is rejected before socket preparation', { skip: process.getuid() === 0 }, () => {
-  assert.equal(fs.statSync('/').uid, 0);
-  assert.throws(() => tmuxClientArgs({}, { TMUX_TMPDIR: '/' }), { code: 'TMUX_DIR_UNSAFE' });
+test('group-writable root permits a current-user socket directory', t => {
+  const root = directory(t);
+  fs.chmodSync(root, 0o777);
+  assert.deepEqual(tmuxClientArgs({}, { TMUX_TMPDIR: root }),
+    ['-u', '-S', path.join(root, `tmux-${process.getuid()}`, 'default')]);
+});
+
+test('symlink root resolves to the canonical socket directory', t => {
+  const root = directory(t);
+  const link = path.join(root, 'link'); fs.symlinkSync(root, link);
+  assert.deepEqual(tmuxClientArgs({}, { TMUX_TMPDIR: link }),
+    ['-u', '-S', path.join(root, `tmux-${process.getuid()}`, 'default')]);
+});
+
+test('system temporary root accepts shared permissions without touching system sockets', t => {
+  const root = directory(t), child = path.join(root, 'socket-directory');
+  const systemChild = path.join(fs.realpathSync('/tmp'), `tmux-${process.getuid()}`);
+  const mkdir = fs.mkdirSync, lstat = fs.lstatSync;
+  // Read the real /tmp root, but redirect all child access into the fixture.
+  t.mock.method(fs, 'mkdirSync', (target, options) => {
+    assert.equal(target, systemChild);
+    return mkdir(child, options);
+  });
+  t.mock.method(fs, 'lstatSync', target => {
+    assert.equal(target, systemChild);
+    return lstat(child);
+  });
+  assert.deepEqual(tmuxClientArgs({}, { TMUX_TMPDIR: '/tmp' }),
+    ['-u', '-S', path.join(systemChild, 'default')]);
+});
+
+test('empty directory preserves unset socket selection without filesystem access', t => {
+  for (const method of ['realpathSync', 'statSync', 'lstatSync', 'mkdirSync']) {
+    t.mock.method(fs, method, () => assert.fail('empty directory must use the unset path'));
+  }
+  for (const options of [{}, { utf8: false }, { socketName: 'test' }, { socketPath: '/explicit/socket' }]) {
+    assert.deepEqual(tmuxClientArgs(options, { TMUX_TMPDIR: '' }), tmuxClientArgs(options, {}));
+  }
+});
+
+test('socket directory owned by another user is rejected', t => {
+  const root = directory(t), child = path.join(root, `tmux-${process.getuid()}`);
+  fs.mkdirSync(child, { mode: 0o700 });
+  const lstat = fs.lstatSync;
+  t.mock.method(fs, 'lstatSync', target => {
+    assert.equal(target, child);
+    const stat = lstat(target); stat.uid = process.getuid() + 1; return stat;
+  });
+  assert.throws(() => tmuxClientArgs({}, { TMUX_TMPDIR: root }), { code: 'TMUX_DIR_UNSAFE' });
 });
 
 for (const unsafe of [false, true]) test(`${unsafe ? 'unsafe' : 'missing'} directory rejects every shared client before executing any binary`, async t => {
   const root = directory(t);
-  if (unsafe) fs.chmodSync(root, 0o777);
+  if (unsafe) {
+    const child = path.join(root, `tmux-${process.getuid()}`);
+    fs.mkdirSync(child); fs.chmodSync(child, 0o707);
+  }
   const code = unsafe ? 'TMUX_DIR_UNSAFE' : 'TMUX_DIR_MISSING';
   environment(t, unsafe ? root : path.join(root, 'missing'));
   let calls = 0;
@@ -115,7 +163,10 @@ process.stderr.write('no server running on fixture'); process.exit(1);\n`, { mod
 
 for (const unsafe of [false, true]) test(`doctor and uninstall propagate ${unsafe ? 'unsafe' : 'missing'} directory before service actions`, async t => {
   const root = directory(t);
-  if (unsafe) fs.chmodSync(root, 0o777);
+  if (unsafe) {
+    const child = path.join(root, `tmux-${process.getuid()}`);
+    fs.mkdirSync(child); fs.chmodSync(child, 0o707);
+  }
   environment(t, unsafe ? root : path.join(root, 'missing'));
   const code = unsafe ? 'TMUX_DIR_UNSAFE' : 'TMUX_DIR_MISSING';
   // All subprocesses are blocked even if an error-propagation regression occurs.
