@@ -15,7 +15,7 @@ C4 chain. Follow the working-state steps below: read-before-cleanup, recovery, s
   `inputs` to commit. Pass the unchanged batch receipt to checkpoint and commit
   as above.
 - After reading global state, segments, and dated logs, read shared self files
-  reading each complete category INDEX first, then relevant pages in full, then the old-file lookup below when unmatched. Complete necessary shared edits through `edit_memory` **before**
+  reading each complete category INDEX first, then relevant pages in full (a missing INDEX is an empty table), then the [old-file lookup](sync-writing.md#moving-from-old-files) when unmatched. Complete necessary shared edits through `edit_memory` **before**
   checkpoint, writing projects/decisions only into pages. `LEGACY_READ_ONLY`
   means redirect the change to the corresponding page and continue, not a
   failed self-write. After applicable corrected retries, any other necessary self-write failure stops checkpoint,
@@ -191,48 +191,4 @@ C4 chain. Follow the working-state steps below: read-before-cleanup, recovery, s
       Report if there are no such pointers or the old files remain in place.
 
 
-## Moving from old files
-
-When no matching project or decision topic appears in the category INDEX or
-Grep of its pages (including `archive/`):
-
-1. Search the old file if it still exists, otherwise `reference/legacy/`.
-   Search names and aliases with line numbers, then read from a matched heading
-   to the next heading at the same level. Search with `grep -n` or `rg -n`
-   (Grep is also allowed when available); read with Read offset/limit or
-   `sed -n '<a>,<b>p'`. Do not read an entire old file into a script.
-   Do not use `cat` or print an entire old file, and never write old files.
-   Read from the newest sections backward and stop when the current situation
-   is clear.
-2. Create a page with the current status (`completed` if the old text says it
-   has ended). Under a "Moved from old projects.md" section, retain only what
-   is still needed: current situation, unfinished work, key decisions and
-   rationale. Use original facts; preserve original wording when uncertain.
-   Record the old headings in `Moved from`, then append this round's progress.
-3. Put new decisions in a topic page. If creating that topic page, Grep the old
-   decisions file for the topic and bring over still-valid decisions directly
-   relevant to the new decision, marking those that have been superseded.
-4. Do not edit old files or mark their sections as moved. After a page has been
-   created and indexed, use it directly on later matches rather than rereading
-   the old file.
-
-This same lookup and page creation applies when the only source is in
-`reference/legacy/`: move the needed facts into a category page, record its old
-heading in `Moved from`, and rebuild. Never recreate the old projects.md or
-decisions.md path or write into legacy files.
-For ongoing work found only in legacy, create the corresponding project or
-decision category page with `Moved from`; do not write it into infrastructure.md
-or leave it in group state. Group Sync carries it in its checkpoint for Origin
-to perform this shared-page lookup and creation; it does not write shared pages.
-
-## Archive and restore
-
-The Sync Agent judges whether a project is done or abandoned and untouched for
-about a month, or all decisions in a topic have been superseded; use
-`node ~/zylos/.claude/skills/zylos-memory/scripts/reference-index.js archive --path reference/projects/<name>.md`, leave paused projects in place, and
-use `node ~/zylos/.claude/skills/zylos-memory/scripts/reference-index.js unarchive --path reference/projects/archive/<name>.md` when mentioned again.
-Every `--path` is relative to the memory directory and includes the category
-folder; decision-topic pages use `reference/decisions/<name>.md` or
-`reference/decisions/archive/<name>.md` instead.
-For an archive/unarchive `EXISTS` collision, both pages remain unchanged;
-use the common corrected-call retry rule before moving again.
+For old-file lookup and archive/restore, follow [writing rules](sync-writing.md#moving-from-old-files).

@@ -6,7 +6,7 @@ model: sonnet
 ---
 
 Resolve `.claude/skills/zylos-memory/references/group-sync.md` under your inherited `ZYLOS_DIR`
-(default `~/zylos`), then read that procedure and its required common files completely. Do not read the parent SKILL.md or other procedures. Execute only the group procedure
+(default `~/zylos`), then read that procedure and sync-common.md and state-format.md in the same references directory completely. Do not read the parent SKILL.md or other procedures. Execute only the group procedure
 using the inherited running-session environment. Acquire your own token through sync-run.js start.
 All memory edits use the exact restricted tool name passed by the parent:
 Claude normally uses `mcp__zylos-memory__edit_memory`, Codex

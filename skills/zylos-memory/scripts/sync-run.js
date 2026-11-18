@@ -8,6 +8,8 @@ import { parseStateHeader } from './state-format.js';
 import { options, inputError, isMain, runCli, readInput, parseJson, helpRequested } from './sync-cli.js';
 import { createQueryHandlers } from '../../comm-bridge/scripts/c4-v2-cli.js';
 import { createStore } from '../../comm-bridge/scripts/c4-v2-store.js';
+import { SKILLS_DIR } from '../../comm-bridge/scripts/c4-config.js';
+import { formatUnsummarized } from '../../comm-bridge/scripts/c4-fetch-format.js';
 import { createBatchReceipt } from '../../comm-bridge/scripts/c4-sync-batch.js';
 import { parseSupervisorConfiguration } from '../../activity-monitor/scripts/supervisor-configuration.js';
 
@@ -24,13 +26,13 @@ function save(dir, value) {
 }
 function exportFile(dir, name, value) {
   const file = path.join(dir, name);
-  fs.writeFileSync(file, JSON.stringify(value) + '\n', { mode: 0o600, flag: 'wx' });
+  fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value) + '\n', { mode: 0o600, flag: 'wx' });
   return describe(file);
 }
 async function database(deps) {
   if (deps.database) return deps.database;
   const db = await import('../../comm-bridge/scripts/c4-db.js');
-  return Object.assign(createStore(db.getDb), { getConversationsByRange: db.getConversationsByRange });
+  return Object.assign(createStore(db.getDb), { getDb: db.getDb, getConversationsByRange: db.getConversationsByRange });
 }
 const settingsFor = settings => ({ ...settings, kind: 'group' });
 
@@ -72,9 +74,10 @@ export async function startRun(settings = {}, deps = {}) {
       catch (error) { if (error.code !== 'ENOENT') throw error; }
       const batchLimit = parseSupervisorConfiguration(config, settings.env || process.env).syncBatchLimit;
       const batch = query.unsummarized({ group: scope.scope, upToConversationId: range.safeEnd, limit: batchLimit });
-      const receipt = createBatchReceipt(batch.rows, { scope: scope.scope, after: batch.checkpointEnd, end: batch.upTo });
+      const receipt = createBatchReceipt(batch.rows, { scope: scope.scope, after: store.getCoverageEnd(scope.scope), end: batch.rows.at(-1)?.id ?? batch.upTo });
       const value = { token, directory: dir, batchLimit, end: receipt.end,
-        batch: exportFile(dir, 'batch.json', batch), receipt };
+        batch: exportFile(dir, 'batch.txt', formatUnsummarized(batch, { scope: scope.scope, getDatabase: store.getDb,
+          sendPath: path.join(SKILLS_DIR, 'comm-bridge/scripts/c4-send.js') })), receipt };
       save(dir, value);
       return value;
     });

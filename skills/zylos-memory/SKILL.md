@@ -38,7 +38,7 @@ configuration. Origin Sync uses Origin's actual runtime.
   model (or inheritance) from the actual model verified by runtime evidence;
   if the actual model cannot be verified, report it as unverified.
   Give the worker a self-contained message instructing it to read
-  only the matching procedure and its required common files. Include their paths, the requested job,
+  only the files listed for that job under Worker procedures. Include their paths, the requested job,
   and all facts and environment bindings it needs; it cannot see the parent
   conversation.
 - Never use a new `codex exec`, PM2 service, or detached shell as a substitute.
@@ -66,7 +66,7 @@ Select the job named in the control prompt, then check the inherited environment
   or a user's manual request to sync memory), use group Sync when a group is
   bound and global Sync when no group is bound; never infer Origin Sync.
 
-Never infer Origin Sync merely from being in origin. Never invent or replace these bindings. The parent reads only this skill; the worker reads only its selected procedure: [group](references/group-sync.md), [Origin](references/origin-sync.md), or [global](references/global-sync.md), plus their required common files. Pass these installed absolute paths in the worker task. Old queued prompts saying "Read the zylos-memory skill" use this same dispatch and result handling.
+Never infer Origin Sync merely from being in origin. Never invent or replace these bindings. The parent reads only this skill; the worker reads only the files listed under Worker procedures for its selected procedure: [group](references/group-sync.md), [Origin](references/origin-sync.md), or [global](references/global-sync.md), with the exact common-file list below. Pass these installed absolute paths in the worker task. Old queued prompts saying "Read the zylos-memory skill" use this same dispatch and result handling.
 
 ## Parent result handling
 
@@ -105,4 +105,12 @@ channel; do not write another group's files.
 
 ## Worker procedures
 
-Workers must read their selected procedure completely before taking a token. [Common rules](references/sync-common.md) cover full byte reads and failures; [writing and content](references/sync-writing.md) covers restricted edits and shared-knowledge classification. The parent does not read these worker files to launch Sync.
+Pass only these installed files to the worker; read them completely before taking a token:
+
+- Group: [group-sync.md](references/group-sync.md), [sync-common.md](references/sync-common.md), [state-format.md](references/state-format.md).
+- Origin: [origin-sync.md](references/origin-sync.md), [sync-common.md](references/sync-common.md), [sync-writing.md](references/sync-writing.md).
+- Global: [global-sync.md](references/global-sync.md), [sync-common.md](references/sync-common.md), [sync-writing.md](references/sync-writing.md), [state-format.md](references/state-format.md).
+
+Do not send sync-writing.md to group workers. [Common rules](references/sync-common.md) cover full byte reads and failures; [writing and content](references/sync-writing.md) covers restricted edits and shared-knowledge classification. The parent does not read these worker files to launch Sync.
+
+Component memory writers use the [memory-write API](references/memory-write.md). For unmatched legacy topics, follow [old-file lookup](references/sync-writing.md#moving-from-old-files).

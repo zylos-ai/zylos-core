@@ -176,7 +176,7 @@ export async function createToolExecutor(f) {
       try {
         if (request.name === 'read_file') {
           const file = fixturePath(f, a.path), info = fs.statSync(file);
-          if (!injected && f.kind === 'group' && f.fault === 'read-failure' && path.basename(file) === 'batch.json') {
+          if (!injected && f.kind === 'group' && f.fault === 'read-failure' && path.basename(file) === 'batch.txt') {
             injected = true; event.injection = f.fault; throw Object.assign(new Error('Injected required source read failure'), { code: 'READ_FAILED' });
           }
           const startByte = a.startByte ?? 0, endByteExclusive = a.endByteExclusive ?? info.size;

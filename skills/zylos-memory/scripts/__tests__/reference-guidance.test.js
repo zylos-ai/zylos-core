@@ -30,7 +30,7 @@ test('Sync procedures use a fixed temporary state name without path placeholders
   assert.match(normalize(format), /The tool maps this fixed name to the current scope's temporary state file for the acquired token/);
   assert.match(sync, /"path":"state\.md\.tmp"/);
   for (const section of [between(sync, '## Group Sync', '## Origin Sync'),
-    between(sync, '## Single global Sync', '## Moving from old files')]) {
+    globalDoc]) {
     assert.match(section, /`state\.md\.tmp`/);
   }
   assert.match(normalize(sync), /STATE_DOCUMENT_INVALID`: correct `state\.md\.tmp` through `edit_memory`/);
@@ -65,7 +65,9 @@ test('the skill holds the launch and selection rules the background Sync control
   assert.match(text, /`group Sync` with no group and a `ZYLOS_RUN_ID` uses single global Sync \(kind=global, `zylos-global-sync`\)/);
   for (const kind of ['group', 'origin', 'global']) assert.ok(skill.includes(`references/${kind}-sync.md`));
   assert.ok(skill.includes('Old queued prompts'));
-  assert.ok(Buffer.byteLength(skill) < 7500);
+  // Parent-only launch/result rules plus explicit per-job file lists and API navigation.
+  // 9 KiB retains the small-parent budget without clipping required instructions.
+  assert.ok(Buffer.byteLength(skill) < 9 * 1024);
   assert.match(text, /Start a background subagent when requested and continue the current work, following the runtime-specific result handling below\./);
 });
 
@@ -103,7 +105,7 @@ test('Sync parents judge success or failure only from the worker final result', 
 
 test('state guidance assigns committed segment IDs to the commit script', () => {
   const group = normalize(between(sync, '## Group Sync', '## Origin Sync'));
-  const global = normalize(between(sync, '## Single global Sync', '## Moving from old files'));
+  const global = normalize(globalDoc);
   assert.match(group, /The commit script fills `inbox_committed` from this round's listed segments/);
   assert.match(group, /a prepared copy may retain its old value, while a newly created state leaves it empty/);
   assert.match(group, /then writes those segment IDs into the published state header/);
@@ -134,7 +136,7 @@ test('guidance requires all audit items and their results before Origin cursor a
 });
 
 test('guidance places the global audit checklist before checkpoint and preserves report-only failures', () => {
-  const global = between(sync, '## Single global Sync', '## Moving from old files');
+  const global = globalDoc;
   assert.match(normalize(global), /Before checkpoint, follow the Shared audit section below checker and conditional checklist/);
   assert.match(normalize(global), /one result sentence per item/);
   assert.match(normalize(global), /follow the common rules and do not block checkpoint/);

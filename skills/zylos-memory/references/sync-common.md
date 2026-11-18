@@ -24,6 +24,8 @@ quoted shell commands. Send summaries, JSON, and
 message bodies on stdin using a quoted heredoc. Never interpolate body text
 into a command. Group names come only from the inherited session binding.
 
+Never call `c4-checkpoint.js create` or directly mutate an Origin cursor; use only the guarded progress scripts for the selected procedure.
+
 ## Common completion and failure rules
 
 Group Sync uses sync-run.js start instead of manual acquire/export, summarize instead of checkpoint+prepare, finish instead of commit+release, and abort for terminal failure. The rules below still govern every outcome; only Origin/global run the manual commands. start releases on its own failure or no-input result, so do not release again. A summarize/finish validation error retains the token for the corrected-call rules; terminal failure requires abort exactly once. Report cleanup warnings returned by start/finish/abort, including after successful publication.

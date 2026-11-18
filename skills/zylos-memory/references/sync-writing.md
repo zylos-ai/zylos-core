@@ -75,7 +75,7 @@ Shared knowledge classification:
   maintain content/path/read-when pointers, and keep a single source of truth.
 - `reference/decisions/`: an INDEX plus one page per decision topic, for committed choices and rationale.
 - `reference/projects/`: an INDEX plus one page per scoped project, for work and status.
-- Old `reference/projects.md`, `reference/decisions.md`, and `reference/legacy/` are read-only history. Start with the category INDEX, then Grep pages (including `archive/`), then consult old files or `legacy/` only when needed; see [Sync procedures](sync-procedures.md).
+- Old `reference/projects.md`, `reference/decisions.md`, and `reference/legacy/` are read-only history. Start with the category INDEX, then Grep pages (including `archive/`), then consult old files or `legacy/` only when needed; see [moving from old files](#moving-from-old-files).
 - `reference/preferences.md`: standing shared preferences.
 - `reference/ideas.md`: uncommitted proposals.
 - `users/<id>/profile.md`: individual preferences and stable facts.

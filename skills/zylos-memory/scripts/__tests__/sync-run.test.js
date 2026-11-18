@@ -15,7 +15,7 @@ import { createMemoryEditor } from '../memory-mcp-server.js';
 // No tmux/PM2/server is launched (live identity is injected at acquire only).
 // Run for group Sync orchestration, receipt persistence or recovery changes;
 // skip for unrelated modules. Every root is reclaimed by the test lifecycle.
-async function fixture(t, count = 2) {
+async function fixture(t, count = 2, coverage = 0) {
   for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) assert.ok(process.env[key], key);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-run-'));
   const { db, store } = storeFixture(t);
@@ -26,20 +26,20 @@ async function fixture(t, count = 2) {
   assert.notEqual(root, process.env.ZYLOS_DIR);
   fs.mkdirSync(scope.memoryDir, { recursive: true });
   const state = path.join(scope.memoryDir, 'state.md'), inbox = path.join(scope.memoryDir, 'inbox.md');
-  const original = renderStateSkeleton({ scope: scope.scope, syncedAt: '2026-11-01T00:00:00Z' }).replace('coverage= ', 'coverage=0 ');
+  const original = renderStateSkeleton({ scope: scope.scope, syncedAt: '2026-11-01T00:00:00Z' }).replace('coverage= ', `coverage=${coverage} `);
   fs.writeFileSync(state, original); fs.writeFileSync(inbox, 'fact: keep rotated note\n');
   const insert = db.prepare("INSERT INTO conversations(id,direction,channel,content,status,session_group) VALUES(?,'in','telegram',?,'delivered',?)");
   for (let id = 1; id <= count; id++) insert.run(id, `message ${id}`, scope.scope);
-  const database = Object.assign(store, { getConversationsByRange: (begin, end) => db.prepare('SELECT * FROM conversations WHERE id BETWEEN ? AND ? ORDER BY id').all(begin, end) });
+  const database = Object.assign(store, { getDb: () => db, getConversationsByRange: (begin, end) => db.prepare('SELECT * FROM conversations WHERE id BETWEEN ? AND ? ORDER BY id').all(begin, end) });
   const deps = { database, currentRunId: async () => env.ZYLOS_RUN_ID };
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  return { ...scope, root, env, deps, database, db, state, inbox, original, editor: createMemoryEditor(env) };
+  return { ...scope, coverage, root, env, deps, database, db, state, inbox, original, editor: createMemoryEditor(env) };
 }
 async function draft(f, run, coverage = run.end) {
   const settings = { env: f.env, token: run.token };
   const prepared = await summarizeRun(settings, 'Every message and rotated note reconciled.', f.deps);
   const result = await f.editor({ op: prepared.prepared ? 'edit' : 'create', path: 'state.md.tmp', token: run.token,
-    ...(prepared.prepared ? { expected: 'coverage=0 ', replacement: `coverage=${coverage} ` } : { replacement: f.original.replace('coverage=0 ', `coverage=${coverage} `) }) });
+    ...(prepared.prepared ? { expected: `coverage=${f.coverage} `, replacement: `coverage=${coverage} ` } : { replacement: f.original.replace(`coverage=${f.coverage} `, `coverage=${coverage} `) }) });
   assert.equal(result.ok, true);
   return settings;
 }
@@ -58,10 +58,12 @@ test('no backlog releases without cleaning drafts, rotating inbox or creating ex
 
 test('bounded batch and saved inputs publish through the restricted editor without copied receipts', async t => {
   const f = await fixture(t, 3);
-  f.env.ZYLOS_SYNC_BATCH_LIMIT = '2';
+  fs.mkdirSync(path.join(f.root, '.zylos'));
+  fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ sync_batch_limit: 2 }));
   const run = await startRun({ env: f.env }, f.deps);
   assert.equal(run.end, 2); assert.equal(run.batchLimit, 2); assert.equal(run.receipt, undefined);
-  assert.equal(JSON.parse(fs.readFileSync(run.batch.path)).rows.length, 2);
+  assert.match(fs.readFileSync(run.batch.path, 'utf8'), /count=2 upTo=2/);
+  assert.doesNotMatch(fs.readFileSync(run.batch.path, 'utf8'), /message 3/);
   for (const item of [run.batch, run.summaries, run.state, ...run.inputs.segments]) {
     const bytes = fs.readFileSync(item.path);
     assert.equal(bytes.length, item.bytes);
@@ -79,9 +81,12 @@ test('bounded batch and saved inputs publish through the restricted editor witho
 });
 
 test('expired interrupted runs recover all summaries and rotated notes and remove stale drafts and exports', async t => {
-  const f = await fixture(t, 3); f.env.ZYLOS_SYNC_BATCH_LIMIT = '1';
+  const f = await fixture(t, 4, 1);
+  fs.mkdirSync(path.join(f.root, '.zylos'));
+  fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ sync_batch_limit: 1 }));
+  f.database.createCheckpoint(f.scope, 1, 'already in state');
   let previous;
-  for (let end = 1; end <= 2; end++) {
+  for (let end = 2; end <= 3; end++) {
     const run = await startRun({ env: f.env }, f.deps);
     assert.equal(run.end, end);
     if (previous) assert.equal(fs.existsSync(previous.directory), false);
@@ -94,7 +99,7 @@ test('expired interrupted runs recover all summaries and rotated notes and remov
   assert.equal(fs.existsSync(previous.directory), false);
   assert.equal(fs.existsSync(`${f.state}.${previous.token}.tmp`), false);
   const summaries = JSON.parse(fs.readFileSync(run.summaries.path));
-  assert.equal(summaries.length, 2); assert.equal(summaries[0].summary, 'recovered summary 1'); assert.equal(summaries[1].summary, 'recovered summary 2');
+  assert.equal(summaries.length, 2); assert.equal(summaries[0].summary, 'recovered summary 2'); assert.equal(summaries[1].summary, 'recovered summary 3');
   assert.equal(run.inputs.segments.length, 1);
   assert.equal(fs.readFileSync(run.inputs.segments[0].path, 'utf8'), 'fact: keep rotated note\n');
   const settings = await draft(f, run);
@@ -160,4 +165,19 @@ test('start failure removes private exports and releases without consuming inbox
   assert.equal(fs.readdirSync(f.runDir).some(name => name.startsWith('group-sync-')), false);
   assert.equal(fs.readFileSync(f.inbox, 'utf8'), 'fact: keep rotated note\n');
   assert.equal(f.database.getContentCheckpointsSince(f.scope, 0).length, 0);
+});
+
+test('inherited global coverage and no-content checkpoints allow summary and publication', async t => {
+  for (const noContent of [false, true]) {
+    const f = await fixture(t, 4);
+    f.database.createCheckpoint('*', 1, 'single-session baseline');
+    if (noContent) f.database.createCheckpoint(f.scope, 2, null, { noContent: true });
+    const run = await startRun({ env: f.env }, f.deps);
+    const saved = JSON.parse(fs.readFileSync(path.join(run.directory, 'run.json')));
+    assert.equal(saved.receipt.after, noContent ? 2 : 1);
+    const settings = await draft(f, run);
+    assert.equal((await finishRun(settings, { followedUpIds: [] }, f.deps)).committed, true);
+    assert.equal(f.database.getUnsummarizedRange(f.scope).count, 0);
+    assert.equal(fs.existsSync(run.inputs.segments[0].path), false);
+  }
 });

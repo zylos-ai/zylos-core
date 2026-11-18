@@ -35,7 +35,12 @@ test('group run CLI saves receipts and publishes a missing state with one call p
   assert.equal(started.status, 0, started.stderr);
   const manifest = JSON.parse(started.stdout);
   assert.equal(manifest.state, null); assert.equal(manifest.end, 1);
-  assert.equal(JSON.parse(fs.readFileSync(manifest.batch.path)).rows[0].content, 'Retain the open task');
+  assert.match(fs.readFileSync(manifest.batch.path, 'utf8'), /Retain the open task/);
+  const fetched = spawnSync(process.execPath, [path.join(rootPath, 'skills/comm-bridge/scripts/c4-fetch.js'),
+    '--unsummarized', '--group', 'origin', '--up-to', '1', '--limit', String(manifest.batchLimit)],
+    { env, encoding: 'utf8', timeout: 15000 });
+  assert.equal(fetched.status, 0, fetched.stderr);
+  assert.equal(fs.readFileSync(manifest.batch.path, 'utf8'), fetched.stdout);
   const summarized = run('sync-run', ['summarize', '--token', manifest.token], env, 'Task remains open.');
   assert.equal(summarized.status, 0, summarized.stderr);
   assert.equal(JSON.parse(summarized.stdout).reason, 'STATE_MISSING');
