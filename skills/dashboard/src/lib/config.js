@@ -31,6 +31,9 @@ export const DEFAULT_CLAUDE_MODEL_PRICES = {
 // the entire request uses long-context prices, including cached/write input.
 // Sol's current promotional price is available at least through 2026-11-21.
 // GPT-6.1 Sol checked 2026-09-30: cached input is 0.05x input, not 0.1x.
+// GPT-6.2 Sol/Astra and GPT-6.1 Terra checked 2026-11-18 against the pricing page
+// above (GPT-6.2 also https://openai.com/index/introducing-gpt-6-2-astra-sol/):
+// cached input is 0.05x input; Fast (priority) is 2x standard.
 function codexPrice(input, output, cacheRead, cacheCreation) {
   return {
     input, output, cacheRead, cacheCreation,
@@ -43,8 +46,11 @@ function codexPrice(input, output, cacheRead, cacheCreation) {
 }
 
 export const DEFAULT_CODEX_MODEL_PRICES = {
+  'gpt-6.2-sol': codexPrice(2, 10, 0.1, 2.5),
+  'gpt-6.2-astra': codexPrice(8, 40, 0.4, 10),
   'gpt-6-astra': codexPrice(10, 50, 1, 12.5),
   'gpt-6.1-sol': codexPrice(2, 10, 0.1, 2.5),
+  'gpt-6.1-terra': codexPrice(1, 5, 0.05, 1.25),
   'gpt-6-sol': codexPrice(2, 10, 0.2, 2.5),
   'gpt-6-luna': codexPrice(0.1, 0.5, 0.01, 0.125),
   'gpt-5.6-sol': codexPrice(4, 20, 0.4, 5),
@@ -82,8 +88,11 @@ export const DEFAULT_CODEX_MODEL_PRICES = {
 };
 
 export const DEFAULT_CODEX_PRIORITY_MODEL_PRICES = {
+  'gpt-6.2-sol': codexPrice(4, 20, 0.2, 5),
+  'gpt-6.2-astra': codexPrice(16, 80, 0.8, 20),
   'gpt-6-astra': codexPrice(20, 100, 2, 25),
   'gpt-6.1-sol': codexPrice(4, 20, 0.2, 5),
+  'gpt-6.1-terra': codexPrice(2, 10, 0.1, 2.5),
   'gpt-6-sol': codexPrice(4, 20, 0.4, 5),
   'gpt-6-luna': codexPrice(0.2, 1, 0.02, 0.25),
   'gpt-5.6-sol': codexPrice(8, 40, 0.8, 10),

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Dashboard offers the Codex models GPT-6.2-Sol, GPT-6.2-Astra and GPT-6.1 Terra (reasoning effort low through ultra) and prices them by default: Sol 2 / 0.10 cached / 10 output / 2.5 cache write per million tokens, Astra 8 / 0.40 / 40 / 10, Terra 1 / 0.05 / 5 / 1.25, Fast (priority) at twice those rates, and long-context pricing above 272K input tokens like the other GPT-6 models. Saved custom price tables keep their rows and receive the new defaults.
+
 ### Changed
 - `zylos status --json` now reports `readAt` as an ISO UTC string, missing runtime health/public health as `null`, an unreadable session mode as `null`, and a configuration without `session_mode` as `"single"`, matching Dashboard observations. Internal status values and text output retain their existing representation. Dashboard operations interfaces and the local JSON fallback now have documented compatibility expectations and contract tests; 1.0 beta does not guarantee immutable APIs.
 - Component shard declarations no longer claim or remove legacy SessionStart hooks. The retired `claimHooks` field is ignored with a warning without disabling the shard. Components migrating to shards must remove their own old hooks from both Claude and Codex settings in `post-upgrade`, then synchronize hooks.
