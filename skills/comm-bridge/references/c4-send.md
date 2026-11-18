@@ -84,8 +84,9 @@ while malformed placement still fails `INVALID_ARGS`. Generated reply-via omits
 it. `--group` is not accepted. Use stdin for literal option tokens in content.
 
 In native single mode (`session_mode: "single"` in `config.json`) only Origin runs
-and it handles every address. Origin and senders without the key read
-`session_mode` strictly on every send; a missing file or key keeps the rules
+and it handles every address. Origin and senders without a session environment
+(no `ZYLOS_SESSION_GROUP`) read `session_mode` strictly on every send; a missing
+file or key keeps the rules
 above, and senders with any other group never read it. In native single no
 comparison is made and every outbound row, including system notices, is recorded
 under `origin`. The component is still queried: its answer only feeds the

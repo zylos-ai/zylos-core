@@ -32,13 +32,14 @@ test('real text status uses the default PM2 collector without crashing', { timeo
   assert.doesNotMatch(result.stderr, /ReferenceError/);
 });
 
-test('single/null uses only null reader and preserves absent/running states', async () => {
-  for (const mode of ['single', null]) {
+test('single view reads Origin in native single, the null session before migration, and preserves absent/running states', async () => {
+  for (const [mode, read] of [['single', 'origin'], [null, null]]) {
     for (const row of [absent, live()]) {
       const calls = [];
       const view = await collectStatus(fixture({ mode: () => ({ mode }), session: (group, options) => { calls.push([group, options]); return row; },
         list: () => { throw new Error('single must not list'); } }));
-      assert.equal(view.view, 'single'); assert.deepEqual(calls, [[null, { freshnessMs: 5000 }]]); assert.deepEqual(view.groups, []);
+      assert.equal(view.view, 'single'); assert.deepEqual(calls, [[read, { freshnessMs: 5000 }]]); assert.deepEqual(view.groups, []);
+      assert.equal(view.origin.sessionGroup, null);
       assert.equal(view.origin.presence, row.identity.present ? 'running' : 'not_running');
       if (!row.identity.present) assert.equal(view.origin.runtime, null);
     }

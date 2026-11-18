@@ -32,9 +32,14 @@ export function createSessionObservations({ loadCoreModule = defaultLoadCoreModu
       loadCoreModule('config.js'), loadCoreModule('session-state-reader.js'),
       loadCoreModule('session-usage-reader.js'), loadCoreModule('session-group-paths.js'),
     ]);
-    const mode = config.readSessionMode().mode ?? 'single';
+    // mode stays the effective mode (no key = single) for existing readers; sessionMode is the raw value.
+    const sessionMode = config.readSessionMode().mode;
+    const mode = sessionMode ?? 'single';
     const group = mode === 'multi' ? 'origin' : null;
-    const observations = await sessions.readSessionStates([group], {
+    // Native single runs only Origin, so its live session is read; an instance without the key
+    // still runs its one null-group session. Single-mode readers keep it under the null key.
+    const read = mode === 'single' && sessionMode !== null ? 'origin' : group;
+    const observed = await sessions.readSessionStates([read], {
       freshnessMs: 5000, usageFreshnessMs: Infinity, includeAllLive: mode === 'multi',
       sampleTarget(sessionGroup, identity) {
         if (!identity.present || !identity.ready) return null;
@@ -49,7 +54,8 @@ export function createSessionObservations({ loadCoreModule = defaultLoadCoreModu
         return { value: sample.value.rate_limits, mtime: sample.mtime, recordedAt: sample.sampledAt ?? sample.mtime };
       },
     });
-    const value = { mode, group, observations, reader, sampledAt: now() };
+    const observations = read === group ? observed : new Map([[group, observed.get(read)]]);
+    const value = { mode, sessionMode, group, observations, reader, sampledAt: now() };
     cache = value;
     return value;
   }

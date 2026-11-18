@@ -108,7 +108,6 @@ export async function showStatus(args = [], { collect, host = collectHostStatus,
     if (result.ok) {
       const data = result.data;
       result = { ...result, data: { ...data,
-        sessionMode: data.sessionMode === 'unreadable' ? null : data.sessionMode ?? 'single',
         readAt: new Date(data.readAt).toISOString(),
         runtimeHealth: Object.fromEntries(Object.entries(data.runtimeHealth).map(([runtime, record]) => [runtime,
           record.source === 'missing' ? { ...record, health: null, publicHealth: null } : record])),

@@ -84,7 +84,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     // A fresh Core read can reuse the current projection when its observations
     // are unchanged. A changed run, state or usage must bypass the projection TTL.
     const sameObservations = !cachedObservations || (batch && cache?.batch &&
-      batch.mode === cache.batch.mode && isDeepStrictEqual(batch.observations, cache.batch.observations));
+      batch.mode === cache.batch.mode && batch.sessionMode === cache.batch.sessionMode && isDeepStrictEqual(batch.observations, cache.batch.observations));
     if (!fresh && cache && at - cache.builtAt < 2000 && sameObservations) return cache.value;
     inflight = buildGroupSnapshot(at, { fresh, cachedObservations, batch });
     try {
@@ -104,11 +104,15 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       if (!batch) throw new Error('Sessions have not been observed');
       mode = batch.mode;
       const { collectStatus } = await loadCoreModule('status-view.js');
-      status = await collectStatus({ mode: () => ({ mode }),
+      // Status gets the raw mode (null without the key). In native single it reads Origin, which the
+      // shared batch and the single-view row both keep under the null key.
+      const sessionMode = batch.sessionMode === undefined ? batch.mode : batch.sessionMode;
+      status = await collectStatus({ mode: () => ({ mode: sessionMode }),
         list: () => [...batch.observations].filter(([, item]) => item.identity.present)
           .map(([sessionGroup]) => ({ sessionGroup })),
         health: runtime => reader.readRuntimeHealth(runtime),
-        session: async group => {
+        session: async requested => {
+          const group = sessionMode === 'single' && requested === 'origin' ? null : requested;
           const observation = batch.observations.get(group);
           if (!observation) throw new Error('Session missing from shared observation');
           captured.set(group, observation);

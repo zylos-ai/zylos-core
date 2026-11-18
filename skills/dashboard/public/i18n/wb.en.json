@@ -161,6 +161,7 @@
   "wb.detail.syncing": "Memory sync in progress",
   "wb.detail.launchConfigUnreadable": "Launch configuration unreadable",
   "wb.config.single": "Saved; applies only in multi mode. Single mode uses native settings.",
+  "wb.config.afterMulti": "Saved; takes effect after switching back to multi mode ({config}).",
   "wb.config.otherRuntime": "This model pair belongs to another runtime. It is retained for when this group switches back.",
   "wb.config.unknown": "Cannot confirm ({reason})",
   "wb.config.nextStart": "Used at the next normal start; saving does not wake the group.",

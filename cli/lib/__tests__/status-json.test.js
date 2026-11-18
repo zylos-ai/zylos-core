@@ -27,12 +27,16 @@ async function capture(data, args) {
   } finally { console.log = log; }
 }
 
-for (const [name, overrides, expectedMode] of [
-  ['normal', {}, 'multi'],
+// sessionMode is the strictly read value: null for a configuration without session_mode
+// (pre-migration instance), 'unreadable' when it cannot be read; view lists sessions accordingly.
+for (const [name, overrides, expectedMode, expectedView] of [
+  ['normal', {}, 'multi', 'multi'],
   ['missing health', { health: runtime => runtime === 'codex' ? { missing: true }
-    : { health: 'auth_failed', publicHealth: 'auth_failed', cooldownUntil: null, updatedAt: time } }, 'multi'],
-  ['default session mode', { mode: () => ({ mode: null }) }, 'single'],
-  ['unreadable session mode', { mode: () => { throw Error('unreadable config'); } }, null],
+    : { health: 'auth_failed', publicHealth: 'auth_failed', cooldownUntil: null, updatedAt: time } }, 'multi', 'multi'],
+  ['pre-migration session mode', { mode: () => ({ mode: null }) }, null, 'single'],
+  ['native single session mode', { mode: () => ({ mode: 'single' }) }, 'single', 'single'],
+  ['unreadable session mode', { mode: () => { throw Error('unreadable config'); } }, 'unreadable', 'multi'],
+  ['invalid session mode', { mode: () => ({ mode: 'dual' }) }, 'unreadable', 'multi'],
 ]) {
   test(`status JSON projects ${name} without changing internal status or text`, async () => {
     const data = await collectStatus(fixture(overrides));
@@ -44,6 +48,7 @@ for (const [name, overrides, expectedMode] of [
     assert.deepEqual(wire, result);
     assert.equal(wire.ok, true);
     assert.equal(wire.data.sessionMode, expectedMode);
+    assert.equal(wire.data.view, expectedView);
     assert.equal(wire.data.readAt, '2026-11-17T01:02:03.000Z');
     assert.equal(wire.data.origin.presence, 'running');
     assert.equal(wire.data.origin.runId, 'run');
@@ -59,8 +64,6 @@ for (const [name, overrides, expectedMode] of [
     assert.equal(typeof data.readAt, 'number');
     assert.equal(Math.floor(data.readAt / 1000), 1794877323);
     if (name === 'missing health') assert.equal(data.runtimeHealth.codex.health, 'ok');
-    if (name === 'default session mode') assert.equal(data.sessionMode, null);
-    if (name === 'unreadable session mode') assert.equal(data.sessionMode, 'unreadable');
     assert.deepEqual((await capture(data, [])).lines, textBefore.lines);
   });
 }
@@ -117,4 +120,43 @@ test('status JSON failure envelope includes a machine-readable code', async () =
     assert.equal('data' in result, false);
     assert.equal(process.exitCode, 1);
   } finally { process.exitCode = exit; console.log = log; }
+});
+
+test('the single view reads Origin in native single and the sole session before migration', async () => {
+  for (const [mode, expectedRead] of [['single', 'origin'], [null, null]]) {
+    const reads = [], listed = [];
+    const data = await collectStatus(fixture({ mode: () => ({ mode }), list: () => { listed.push(true); return [{ sessionGroup: 'chat:a' }]; },
+      session: group => {
+        reads.push(group);
+        // Only the session the mode designates is running, so a wrong read shows as not_running.
+        return group === expectedRead
+          ? { identity: { present: true, ready: true, runtime: 'claude', runId: `run-${group}`, sessionId: 's' },
+            status: { valid: true, reason: null, sampledAt: time, value: { state: 'busy', idle_seconds: 0 } } }
+          : { identity: { present: false }, status: { valid: false, reason: 'not_running', sampledAt: null } };
+      } }));
+    assert.deepEqual(reads, [expectedRead]);
+    assert.deepEqual(listed, [], 'the single view lists no groups');
+    assert.equal(data.view, 'single');
+    assert.equal(data.origin.sessionGroup, null, 'the single-view row keeps sessionGroup null');
+    assert.equal(data.origin.presence, 'running');
+    assert.equal(data.origin.runId, `run-${expectedRead}`);
+    assert.deepEqual(data.groups, []);
+    assert.equal(data.groupListError, null);
+    const { lines } = await capture(data, ['--json']);
+    const wire = JSON.parse(lines[0]).data;
+    assert.equal(wire.sessionMode, mode);
+    assert.equal(wire.origin.sessionGroup, null);
+    assert.equal(wire.origin.runId, `run-${expectedRead}`);
+  }
+});
+
+test('an unreadable mode lists Origin and groups in the multi view', async () => {
+  const reads = [];
+  const data = await collectStatus(fixture({ mode: () => { throw Error('unreadable config'); }, list: () => [{ sessionGroup: 'origin' }, { sessionGroup: 'chat:a' }],
+    session: group => { reads.push(group); return { identity: { present: false }, status: { valid: false, reason: 'not_running', sampledAt: null } }; } }));
+  assert.equal(data.sessionMode, 'unreadable');
+  assert.equal(data.view, 'multi');
+  assert.deepEqual(reads, ['origin', 'chat:a']);
+  assert.equal(data.origin.sessionGroup, 'origin');
+  assert.deepEqual(data.groups.map(row => row.sessionGroup), ['chat:a']);
 });
