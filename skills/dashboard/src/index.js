@@ -85,7 +85,7 @@ import { createOriginBacklog } from './lib/workbench/origin-backlog.js';
 import { createGroupActions } from './lib/workbench/group-actions.js';
 import { createGroupDeletionRoutes } from './lib/workbench/group-deletion.js';
 import { createGroupsApi, groupCounts, projectGroup, projectListRow } from './lib/workbench/groups-api.js';
-import { usageSummary, usagePricing } from './lib/workbench/usage-api.js';
+import { usageSummary, usagePricing, createUsageCostReader } from './lib/workbench/usage-api.js';
 import { isSameOriginRequest } from './lib/request-origin.js';
 import { usageSeries } from './lib/workbench/usage-series.js';
 import { hostSeries } from './lib/workbench/host-series.js';
@@ -250,12 +250,15 @@ async function broadcastFleetState() {
     const snapshot = await workbench.getSnapshot(undefined, { cachedObservations: true });
     const instance = buildInstancePayload();
     const counts = groupCounts(snapshot, { allowUnreadable: true });
-    const running = snapshot.rows.map(row => projectGroup(row, snapshot)).filter(row => row.side === 'running').map(projectListRow);
+    const rows = snapshot.rows.map(row => projectGroup(row, snapshot));
+    const running = rows.filter(row => row.side === 'running').map(projectListRow);
     const instanceKey = publicationKey(instance), groupsKey = publicationKey({ counts, running });
     const instanceChanged = instanceKey !== lastInstancePublication, groupsChanged = groupsKey !== lastGroupsPublication;
     if (instanceChanged) { sse.broadcast('instance', instance); lastInstancePublication = instanceKey; }
     if (groupsChanged) { sse.broadcast('groups', counts); lastGroupsPublication = groupsKey; }
-    if ((instanceChanged || groupsChanged) && fleetPollerReady) broadcastFleet(fleetPoller.getFleet());
+    if ((instanceChanged || groupsChanged) && fleetPollerReady) {
+      broadcastFleet(fleetPoller.getFleet(), () => selfFleetState(instance, counts, rows, running));
+    }
   } catch (err) {
     process.stderr.write(`[fleet] instance/groups SSE broadcast skipped: ${err.message}\n`);
   }
@@ -421,37 +424,44 @@ async function refreshDashboardState({ fresh = false } = {}) {
   return workbench.getSnapshot(undefined, { cachedObservations: true });
 }
 
-function buildSelfFleetRecord(statePayload) {
-  if (statePayload === undefined) {
-    const snapshot = workbench.getCachedSnapshot() ?? { rows: [], readAt: Date.now(), listKnown: false };
-    const rows = snapshot.rows.map(row => projectGroup(row, snapshot));
-    statePayload = fleetStateFromObjects(buildInstancePayload(), groupCounts(snapshot, { allowUnreadable: true }),
-      usageSummary(store, { tz: instanceTz() }), {
-        rows: rows.filter(row => row.side === 'running').map(projectListRow),
-        failedRows: rows.filter(row => row.side === 'offline' && row.flags?.startFailed).map(projectListRow),
-      });
-  }
+// Fleet records reuse a cost summary for at most 30 s; usage HTTP reads do not.
+const readFleetCost = createUsageCostReader(store);
+
+function selfFleetState(instance, counts, rows, running = rows.filter(row => row.side === 'running').map(projectListRow)) {
+  return fleetStateFromObjects(instance, counts, readFleetCost({ tz: instanceTz() }), {
+    rows: running,
+    failedRows: rows.filter(row => row.side === 'offline' && row.flags?.startFailed).map(projectListRow),
+  });
+}
+
+function cachedSelfFleetState() {
+  const snapshot = workbench.getCachedSnapshot() ?? { rows: [], readAt: Date.now(), listKnown: false };
+  return selfFleetState(buildInstancePayload(), groupCounts(snapshot, { allowUnreadable: true }),
+    snapshot.rows.map(row => projectGroup(row, snapshot)));
+}
+
+function buildSelfFleetRecord(buildState = cachedSelfFleetState) {
   return stateToFleetRecord({
     name: config.agent?.name,
     color: agentColor(config.agent?.name)
-  }, statePayload, {
+  }, buildState(), {
     self: true,
     base_url: null
   });
 }
 
-function buildFullFleetPayload(remoteFleet = fleetPoller.getFleet(), statePayload) {
+function buildFullFleetPayload(remoteFleet = fleetPoller.getFleet(), buildState) {
   return buildSafeFleetPayload({
     remoteFleet,
-    selfRecord: buildSelfFleetRecord(statePayload),
+    selfRecord: buildSelfFleetRecord(buildState),
     nowIso: new Date().toISOString()
   });
 }
 
-function broadcastFleet(remoteFleet, statePayload) {
+function broadcastFleet(remoteFleet, buildState) {
   if (sse.clients.size === 0) return;
   try {
-    const { payload, redacted } = buildFullFleetPayload(remoteFleet, statePayload);
+    const { payload, redacted } = buildFullFleetPayload(remoteFleet, buildState);
     sse.broadcast('fleet', payload);
     if (redacted) process.stderr.write('[fleet] SSE broadcast redacted: fleet_secret_leak_guard\n');
   } catch (err) {
