@@ -5,7 +5,7 @@ import { parseSessionGroup } from '../../../../comm-bridge/scripts/c4-session-gr
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 const positive = value => Number.isSafeInteger(value) && value > 0 ? value : null;
 const configurationModule = () => import('../../../../activity-monitor/scripts/supervisor-configuration.js');
-const budgetModule = () => import('../../../../zylos-memory/scripts/shared.js');
+const budgetModule = () => import('../../../../zylos-memory/scripts/memory-budget.js');
 
 function timestampMillis(value) {
   if (typeof value !== 'string' || !value) return NaN;

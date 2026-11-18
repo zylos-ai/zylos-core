@@ -284,7 +284,7 @@ test('Sync guidance centralizes corrected-call retries and preserves partial wri
 test('Sync commands use installed paths listed at the beginning of the procedure', () => {
   const table = between(sync, '| Script | Installed path |', 'The zylos-memory scripts');
   const paths = [...table.matchAll(/`(~\/zylos\/\.claude\/skills\/[^`]+\.js)`/g)].map(match => match[1]);
-  assert.equal(paths.length, 9);
+  assert.equal(paths.length, 10);
   const commands = [...sync.matchAll(/`node ([^`\s]+\.js)(?:\s|`)/g)];
   assert.ok(commands.length > 20);
   for (const [, command] of commands) assert.ok(paths.includes(command), command);

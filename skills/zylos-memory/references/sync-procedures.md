@@ -10,6 +10,7 @@ inherited absolute ZYLOS_DIR when different).
 | sync-files.js | `~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js` |
 | origin-cursor.js | `~/zylos/.claude/skills/zylos-memory/scripts/origin-cursor.js` |
 | reference-index.js | `~/zylos/.claude/skills/zylos-memory/scripts/reference-index.js` |
+| memory-status.js | `~/zylos/.claude/skills/zylos-memory/scripts/memory-status.js` |
 | memory-append.js | `~/zylos/.claude/skills/zylos-memory/scripts/memory-append.js` |
 | request-rotation.js | `~/zylos/.claude/skills/zylos-memory/scripts/request-rotation.js` |
 | c4-fetch.js | `~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js` |

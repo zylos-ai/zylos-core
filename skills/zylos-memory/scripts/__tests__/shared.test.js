@@ -1,6 +1,7 @@
+import { BUDGETS, WARN_THRESHOLDS } from '../memory-budget.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { dateInTimeZone, BUDGETS, WARN_THRESHOLDS, ZYLOS_DIR, MEMORY_DIR, SESSIONS_DIR } from '../shared.js';
+import { dateInTimeZone, ZYLOS_DIR, MEMORY_DIR, SESSIONS_DIR } from '../shared.js';
 import path from 'path';
 
 // ---------------------------------------------------------------------------

@@ -11,8 +11,6 @@ export const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos
 export const MEMORY_DIR = path.join(ZYLOS_DIR, 'memory');
 export const SESSIONS_DIR = path.join(MEMORY_DIR, 'sessions');
 
-export { BUDGETS, WARN_THRESHOLDS, measureMemoryText } from './memory-budget.js';
-
 export const OPTIONAL_BUDGET_FILES = new Set([
   'reference/projects/INDEX.md',
   'reference/decisions/INDEX.md'

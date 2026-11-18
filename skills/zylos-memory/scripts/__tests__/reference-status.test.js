@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import * as shared from '../shared.js';
+import { BUDGETS, WARN_THRESHOLDS } from '../memory-budget.js';
 import * as prompts from '../sync-prompts.js';
 
 const indexes = ['reference/projects/INDEX.md', 'reference/decisions/INDEX.md'];
@@ -30,13 +31,13 @@ function fixture(t) {
 
 test('reference indexes have optional 32 KiB budgets and 16 KiB warnings', () => {
   for (const name of indexes) {
-    assert.equal(shared.BUDGETS[name], 32 * 1024);
-    assert.equal(shared.WARN_THRESHOLDS[name], 16 * 1024);
+    assert.equal(BUDGETS[name], 32 * 1024);
+    assert.equal(WARN_THRESHOLDS[name], 16 * 1024);
     assert.equal(shared.OPTIONAL_BUDGET_FILES.has(name), true);
     assert.equal(shared.REFERENCE_FILES.includes(name), true);
   }
   for (const name of ['reference/projects.md', 'reference/decisions.md']) {
-    assert.equal(shared.BUDGETS[name], undefined);
+    assert.equal(BUDGETS[name], undefined);
     assert.equal(shared.REFERENCE_FILES.includes(name), false);
   }
 });

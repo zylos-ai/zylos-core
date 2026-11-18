@@ -10,7 +10,7 @@ import { createOriginBacklog } from '../src/lib/workbench/origin-backlog.js';
 import { AuthGate } from '../src/lib/auth.js';
 import { MemoryBrowser } from '../src/lib/memory-browser.js';
 import { setupMemoryHttp } from './fixtures/memory-http.js';
-import { BUDGETS, WARN_THRESHOLDS } from '../../zylos-memory/scripts/shared.js';
+import { BUDGETS, WARN_THRESHOLDS } from '../../zylos-memory/scripts/memory-budget.js';
 
 const at = Date.UTC(2026, 0, 10, 12);
 const utcText = value => new Date(value).toISOString().slice(0, 19).replace('T', ' ');

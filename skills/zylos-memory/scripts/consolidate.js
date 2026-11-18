@@ -8,8 +8,9 @@
 
 import fs from 'fs';
 import path from 'path';
+import { BUDGETS, WARN_THRESHOLDS, measureMemoryText } from './memory-budget.js';
 import { isMainModule } from './is-main-module.js';
-import { MEMORY_DIR, SESSIONS_DIR, BUDGETS, WARN_THRESHOLDS, measureMemoryText, REFERENCE_FILES, walkFiles, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
+import { MEMORY_DIR, SESSIONS_DIR, REFERENCE_FILES, walkFiles, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 
 export function parseSessionDate(fileName) {
   const match = fileName.match(/^(\d{4}-\d{2}-\d{2})(?:-\d+)?\.md$/);

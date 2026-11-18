@@ -5,8 +5,9 @@
 
 import fs from 'fs';
 import path from 'path';
+import { BUDGETS, measureMemoryText } from './memory-budget.js';
 import { isMainModule } from './is-main-module.js';
-import { MEMORY_DIR, BUDGETS, measureMemoryText, OPTIONAL_BUDGET_FILES, walkFiles } from './shared.js';
+import { MEMORY_DIR, OPTIONAL_BUDGET_FILES, walkFiles } from './shared.js';
 
 export function formatBytes(bytes) {
   if (bytes < 1024) {
