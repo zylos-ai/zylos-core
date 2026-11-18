@@ -10,6 +10,8 @@ import { loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 
 import { recordResult, withResult } from './sync-results.js';
 
+export const STATE_BUDGET_BYTES = 20 * 1024;
+
 const warn = message => console.error(`Warning: ${message}`);
 const lines = text => (text.match(/[^\n]*(?:\n|$)/g) || []).filter(Boolean).map(raw => ({ raw, text: raw.replace(/\r?\n$/, '') }));
 function readOptional(file) {
@@ -87,6 +89,27 @@ export async function rotate(settings = {}, deps = {}) {
     while (fs.existsSync(path.join(memoryDir, `inbox.${chosen}.md`))) chosen = `${id}-${++suffix}`;
     fs.renameSync(inbox, path.join(memoryDir, `inbox.${chosen}.md`));
     return chosen;
+  }, { recordFailure: false }));
+}
+// Choose full compaction for oversized state; otherwise seed a draft for fragment edits.
+export async function prepare(settings = {}) {
+  return withResult(settings, 'prepare', () => guard(settings, ({ memoryDir }) => {
+    const statePath = path.join(memoryDir, 'state.md');
+    const temporaryPath = `${statePath}.${settings.token}.tmp`;
+    let bytes;
+    try { bytes = fs.statSync(statePath).size; }
+    catch (error) {
+      if (error.code === 'ENOENT') return { prepared: false, reason: 'STATE_MISSING' };
+      throw error;
+    }
+    if (bytes > STATE_BUDGET_BYTES) return { prepared: false, mode: 'rewrite', bytes };
+    try {
+      fs.copyFileSync(statePath, temporaryPath, fs.constants.COPYFILE_EXCL);
+    } catch (error) {
+      if (error.code === 'EEXIST') throw memoryError('EXISTS', 'Temporary state already exists; preserve its edits');
+      throw error;
+    }
+    return { prepared: true, mode: 'edit', path: temporaryPath, bytes };
   }, { recordFailure: false }));
 }
 const describeFile = file => {
@@ -178,24 +201,27 @@ export async function commit({ input, ...settings }, deps = {}) {
       // Publication is complete. A failed delete cannot roll back the state.
       deleteSegments(memoryDir, ids, deps.warning, true);
       await recordResult({ action: 'commit', status: 'success', scope, startedAt: marker.startedAt, checkpointId: latest.id, fromId: coveredIds[0] ?? null, toId: coveredIds.at(-1) ?? null, count }, settings);
-      return { committed: true, inboxCommitted: ids };
+      const stateBytes = Buffer.byteLength(published, 'utf8');
+      return { committed: true, inboxCommitted: ids, stateBytes,
+        stateBudgetBytes: STATE_BUDGET_BYTES, stateOverBudget: stateBytes > STATE_BUDGET_BYTES };
     }, { recordFailure: false });
   });
 }
 
 if (isMain(import.meta.url)) await runCli(async () => {
   if (helpRequested(process.argv.slice(2), ['token', 'group', 'batch'])) {
-    console.log('Usage: sync-files.js list [--token T] [--group G] | cleanup --token T | rotate --token T | checkpoint END --token T --batch JSON [--no-content] < summary | commit --token T < JSON');
+    console.log('Usage: sync-files.js list [--token T] [--group G] | cleanup --token T | rotate --token T | prepare --token T | checkpoint END --token T --batch JSON [--no-content] < summary | commit --token T < JSON');
     return;
   }
   const [command, ...args] = process.argv.slice(2);
   const parsed = options(args, command === 'checkpoint' ? ['token', 'batch'] : command === 'list' ? ['token', 'group'] : ['token'], command === 'checkpoint' ? ['no-content'] : []);
-  if (!['cleanup', 'rotate', 'list', 'checkpoint', 'commit'].includes(command) || parsed.positional.length !== (command === 'checkpoint' ? 1 : 0)) throw inputError('Invalid command or arguments');
+  if (!['cleanup', 'rotate', 'prepare', 'list', 'checkpoint', 'commit'].includes(command) || parsed.positional.length !== (command === 'checkpoint' ? 1 : 0)) throw inputError('Invalid command or arguments');
   const settings = { token: parsed.token };
   if (command !== 'list') await withResult(settings, command, () => requireSyncToken(parsed.token));
   let result;
   if (command === 'cleanup') result = await cleanup(settings);
   if (command === 'rotate') result = await rotate(settings);
+  if (command === 'prepare') result = await prepare(settings);
   if (command === 'list') result = await list({ group: parsed.group });
   if (command === 'checkpoint') result = await checkpoint({ ...settings, batch: parseJson(parsed.batch), end: nonnegativeInteger(parsed.positional[0], 'checkpoint end'), noContent: !!parsed['no-content'], summary: parsed['no-content'] ? null : readInput() });
   if (command === 'commit') result = await commit({ ...settings, input: readInput() });
