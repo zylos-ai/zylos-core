@@ -527,7 +527,7 @@ Instance and group summaries share the following schema. Tokens include input an
 | `group` | string, optional | Present only for per-group reads |
 | `today`, `sevenDay` | UsagePeriod | Current local day / seven local calendar days including today |
 
-A `UsagePeriod` contains `since:string`, `until:string`, `tokens:number`, `inputTokens:number`, `outputTokens:number`, `cacheReadTokens:number`, `cacheHitRate:number|null` (0–1; null with no input), `cost:number` (USD), and `byRuntime:Record<string,UsageTotals>`. `UsageTotals` has the same numeric/rate/cost fields, without bounds or another runtime breakdown. Both known runtimes are present with zero counts if no records exist. Sums of each group's count/cost fields plus Other equal the instance fields for the same time window (Other cost is `totals.otherCost` of `/api/usage/series`); cache rates must be recomputed from summed cache/input tokens.
+A `UsagePeriod` contains `since:string`, `until:string`, `tokens:number`, `inputTokens:number`, `outputTokens:number`, `cacheReadTokens:number`, `cacheHitRate:number|null` (0–1; null with no input), `cost:number` (USD), and `byRuntime:Record<string,UsageTotals>`. `UsageTotals` has the same numeric/rate/cost fields, without bounds or another runtime breakdown. Both known runtimes are present with zero counts if no records exist. The sum of each group's `cost` plus Other's cost equals the instance `cost` for the same time window (Other's cost is `totals.otherCost` of `/api/usage/series`); Other's token counts are not returned separately; cache rates must be recomputed from summed cache/input tokens.
 
 ### GET /api/usage/summary
 
