@@ -85,7 +85,7 @@ Automatically when no TTY is available — e.g. Docker containers (without `-it`
 
 **Environment variables:**
 
-Flags can also be set via environment variables during `zylos init`. Resolution order: CLI flag > env var > existing `.env` > interactive prompt.
+Flags can also be set via environment variables during `zylos init`. Resolution order: CLI flag > env var > existing `.env` > interactive prompt. Claude credential exception: environment variables do not override credentials already in `.env`.
 
 | Environment Variable | Equivalent Flag |
 |---------------------|-----------------|
@@ -106,7 +106,7 @@ Choose the Claude credential type required by your provider: `--api-key` writes
 `ANTHROPIC_AUTH_TOKEN` and uses `Authorization: Bearer`. These options and
 `--setup-token` are mutually exclusive. Only an explicit `--api-key` or
 `--auth-token` flag replaces an existing Claude login. If Claude is already
-authenticated, `--setup-token` retains the existing login without re-verifying
+authenticated (including when `.env` already contains Claude credentials), `--setup-token` retains the existing login without re-verifying
 or saving the supplied token. Without an explicit API-key or Bearer flag,
 credential environment variables are also ignored, even when both API-key and
 Bearer variables are set. When authentication is needed, `--setup-token`
