@@ -60,9 +60,11 @@ test('bounded batch and saved inputs publish through the restricted editor witho
   const f = await fixture(t, 3);
   fs.mkdirSync(path.join(f.root, '.zylos'));
   fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ sync_batch_limit: 2 }));
+  f.db.prepare("UPDATE conversations SET channel='dashboard', content='[quote c4_id=1]' || char(10) || 'reply' WHERE id=2").run();
   const run = await startRun({ env: f.env }, f.deps);
   assert.equal(run.end, 2); assert.equal(run.batchLimit, 2); assert.equal(run.receipt, undefined);
   assert.match(fs.readFileSync(run.batch.path, 'utf8'), /count=2 upTo=2/);
+  assert.match(fs.readFileSync(run.batch.path, 'utf8'), /quoting c4_id=1 .*message 1/);
   assert.doesNotMatch(fs.readFileSync(run.batch.path, 'utf8'), /message 3/);
   for (const item of [run.batch, run.summaries, run.state, ...run.inputs.segments]) {
     const bytes = fs.readFileSync(item.path);

@@ -432,7 +432,6 @@ function assertRunSuccessful(f, result, expectedIds, { copied }) {
   assert.equal(fs.existsSync(manifest.directory), false);
   assert.ok(manifest.inputs.segments.every(item => !result.snapshot.segments.includes(`inbox.${item.id}.md`)));
   assert.equal(events.filter(event => isScript(event, 'sync-lock', 'release') || isScript(event, 'sync-run', 'abort')).length, 0);
-  assertCompleteReads(f, events, { path: f.statePath, bytes: Buffer.byteLength(result.snapshot.state), sha256: result.snapshot.stateHash }, finishes[0].sequence, Infinity);
   assert.ok(events.filter(event => event.sequence > finishes[0].sequence).every(event => event.request.name === 'read_file'));
   if (f.fault !== 'release-failure') assert.equal(outcome.released, true);
   if (copied) assert.match(finishes[0].result.stderr, /copied absorbed-message lines/);

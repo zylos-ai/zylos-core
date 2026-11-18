@@ -1,6 +1,6 @@
 # Single global Sync procedure
 
-Read [common safety and reading rules](sync-common.md) and [writing rules](sync-writing.md) completely. Use the manual working-state steps below with these global differences; never invoke sync-run.js for global Sync.
+Read [common safety and reading rules](sync-common.md) and [writing rules](sync-writing.md) and [state format](state-format.md) completely. Use the manual working-state steps below with these global differences; never invoke sync-run.js for global Sync.
 
 ## Single global Sync
 
@@ -13,7 +13,7 @@ C4 chain. Follow the working-state steps below: read-before-cleanup, recovery, s
   No token is needed; a supplied `--token` is ignored.
   Retain its full object, read every listed file in full, and supply it as
   `inputs` to commit. Pass the unchanged batch receipt to checkpoint and commit
-  as above.
+  as in the working-state steps below.
 - After reading global state, segments, and dated logs, read shared self files
   reading each complete category INDEX first, then relevant pages in full (a missing INDEX is an empty table), then the [old-file lookup](sync-writing.md#moving-from-old-files) when unmatched. Complete necessary shared edits through `edit_memory` **before**
   checkpoint, writing projects/decisions only into pages. `LEGACY_READ_ONLY`
@@ -180,7 +180,7 @@ C4 chain. Follow the working-state steps below: read-before-cleanup, recovery, s
       `reference/decisions/INDEX.md`. Otherwise report why navigation was not changed.
       Include navigation lines that still refer to the old paths, even if they
       describe those files as read-only history.
-   3. Apply the archive/restore rule below: archive eligible completed or abandoned
+   3. Apply the [archive/restore rule](sync-writing.md#archive-and-restore): archive eligible completed or abandoned
       pages, and restore archived pages mentioned again. Check every INDEX row
       whose Status is completed/abandoned and Updated is about 30 days old or
       older; archive every eligible row. Report if none qualify.
