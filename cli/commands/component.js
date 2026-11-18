@@ -237,11 +237,6 @@ export function formatSelfUpgradeCompletion(data) {
   for (const warning of data.warnings || []) {
     lines.push(typeof warning === 'string' ? `Upgrade warning: ${warning}` : `Runtime warning (${warning.runtime}): ${warning.code}: ${warning.message}`);
   }
-  if (data.checkpointAudit?.state === 'incomplete') {
-    lines.push(`Checkpoint audit: incomplete${data.checkpointAudit.error ? ': ' + data.checkpointAudit.error : ''}`);
-  } else if (data.checkpointAudit?.items?.length) {
-    lines.push(`Checkpoint audit: ${JSON.stringify(data.checkpointAudit.items)}`);
-  }
   if (data.settingsChanged) {
     lines.push('Hook settings updated.');
     if (!data.completion && !restart) lines.push('Restart the runtime to load the updated configuration.');

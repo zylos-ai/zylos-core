@@ -29,7 +29,7 @@ for(const item of ['dbCopy','registration','route','dashboard']) {
       verifyPublicationForServices:()=>{},protectedSuccess:()=>{},
       startServices:()=>({status:'done'}),verifyServices:()=>({status:'done'}),
       readModeStatus:()=>({sessionMode:'single',transition:null}),readMode:()=>({mode:'single'}),readTransition:()=>null,
-      restart:()=>({ok:true,data:{result:'exit_enqueued'}}),audit:()=>[],
+      restart:()=>({ok:true,data:{result:'exit_enqueued'}}),
     });
     assert.equal(result.success,true);
     assert.equal(result.dashboard.state,'degraded');
@@ -56,7 +56,7 @@ for(const state of ['stopped','running','restore-failed','unregistered']) test(`
     updateConfig:()=>{},ensureMemoryMigration:()=>{},commitBaselines:()=>{},verifyPublicationForServices:()=>{},protectedSuccess:()=>{},
     startServices:()=>({status:'done'}),verifyServices:()=>({status:'done'}),restartErroredServices:()=>({status:'done'}),
     readModeStatus:()=>({sessionMode:'single',transition:null}),readMode:()=>({mode:'single'}),readTransition:()=>null,
-    restart:()=>({ok:true,data:{result:'exit_enqueued'}}),audit:()=>[],
+    restart:()=>({ok:true,data:{result:'exit_enqueued'}}),
   });
   assert.equal(result.success,true);
   assert.equal(result.dashboard.state,state==='stopped'?'stopped':state==='restore-failed'?'degraded':'ready');

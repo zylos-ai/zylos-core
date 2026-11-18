@@ -213,7 +213,7 @@ test('frozen v1 owner refuses v2 without writes', t => {
   assert.deepEqual(snapshot(db), before);
   assert.throws(() => assert.throws(() => owner.inspectSchema(db), /exceeds supported/), assert.AssertionError);
 });
-test('historical out-of-range checkpoint is preserved for subsequent read-only audit', t => {
+test('historical out-of-range checkpoint end is preserved by migration', t => {
   const db = database(t); db.exec('UPDATE checkpoints SET end_conversation_id=1006 WHERE id=2');
   const before = oldRows(db); migrateExisting(db, owner); assertMigrated(db, before);
 });

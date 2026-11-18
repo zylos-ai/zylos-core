@@ -63,7 +63,6 @@ function deps(calls, extras={}) {
     readMode:()=>{calls.push('mode');return {mode:null,keyPresent:false};},
     readTransition:()=>{calls.push('transition');return null;},
     restart:async options=>{calls.push('restart');assert.equal((await options.readMode()).mode,'single');return {ok:true,data:{result:'exit_enqueued'}};},
-    audit:()=>{calls.push('audit');return [];},
     verifyPublicationForServices(){},protectedSuccess(){},
     finalizeWebConsoleRemoval:async()=>({warnings:[]}),
     ensureLogRotation:()=>({state:'present'}),
@@ -100,7 +99,7 @@ for(const failing of [false,true]) test(`finalization retains optional runtime w
     assert.equal(calls.includes('start'),false);
   }
 });
-test('tail preserves W1 and follows F1, W7, services, restart and audit order',async t=>{
+test('tail preserves W1 and follows F1, W7, services and restart order',async t=>{
   const ctx=fixture(t),calls=[];
   const state='# Old user-owned state\n';
   fs.writeFileSync(path.join(ctx.zylosDir,'memory/state.md'),state);
@@ -114,7 +113,7 @@ test('tail preserves W1 and follows F1, W7, services, restart and audit order',a
   assert.equal(result.completion.modeTransition,'unknown');
   assert.equal(result.modeStatus.error.code,'SESSION_MODE_STATUS_UNAVAILABLE');
   assert.equal(Object.hasOwn(result,'instructionFilesRebuilt'),false);
-  assert.deepEqual(calls,['thresholds','ensure','rotate','start','verify','dashboard','mode','transition','restart','audit']);
+  assert.deepEqual(calls,['thresholds','ensure','rotate','start','verify','dashboard','mode','transition','restart']);
   assert.equal(fs.readFileSync(path.join(ctx.zylosDir,'memory/state.md'),'utf8'),state);
 });
 test('session-mode status adapter invokes only the read-only command with its own timeout and root',()=>{
@@ -180,13 +179,12 @@ test('completed finalization starts the original service set',async t=>{
   assert.equal(result.success,true);
   assert.equal(calls.includes('start'),true);
 });
-test('restart path read errors are reported without submitting; audit failure is incomplete',async t=>{
+test('restart path read errors are reported without submitting',async t=>{
   const ctx=fixture(t),calls=[];
-  const result=await completeUpgradeFinalization(ctx,deps(calls,{readTransition:()=>{throw Error('DB_BUSY');},audit:()=>{throw Error('DB_BUSY');}}));
+  const result=await completeUpgradeFinalization(ctx,deps(calls,{readTransition:()=>{throw Error('DB_BUSY');}}));
   assert.equal(result.success,true);
   assert.equal(result.completion.sessionRestart,'manual_required');
   assert.equal(calls.includes('restart'),false);
-  assert.equal(result.checkpointAudit.state,'incomplete');
 });
 for(const failing of [null,'registration','route','verify','dbCopy']) test(`Dashboard ${failing || 'success'} preserves independent outcomes`,async t=>{
   const ctx=fixture(t),calls=[];

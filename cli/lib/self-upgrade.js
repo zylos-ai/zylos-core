@@ -1143,10 +1143,6 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
     completion.sessionRestart=restart.ok ? (restart.data?.result==='exit_enqueued' ? 'single_exit_enqueued' : restart.data?.result || 'accepted') : 'manual_required';
     ctx.restart=restart;
   } catch(error) {ctx.restart={ok:false,error:{code:error.code || 'RESTART_UNAVAILABLE',message:error.message}};}
-  try {
-    const audit=await (deps.audit || (async()=> (await import('../../skills/comm-bridge/scripts/c4-db.js')).auditCheckpoints()))();
-    ctx.checkpointAudit={state:'complete',items:audit};
-  } catch(error) {ctx.checkpointAudit={state:'incomplete',error:error.message};}
   completion.install='done';
   ctx.completion=completion;
   if (pm2SavePending) try {
@@ -1156,7 +1152,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
     (ctx.runtimeWarnings ||= []).push('Could not save the PM2 startup list. Run pm2 save so Web Console is not resurrected.');
   }
   (deps.protectedSuccess || protectedSuccess)(ctx);
-  return {...buildSelfUpgradeResult(ctx,null),completion,dashboard,sessionRestart:ctx.restart,checkpointAudit:ctx.checkpointAudit,
+  return {...buildSelfUpgradeResult(ctx,null),completion,dashboard,sessionRestart:ctx.restart,
     modeStatus:ctx.modeStatus,publication:ctx.publication,preparationWarnings:ctx.preparationWarnings || [],next:dashboardNext(dashboard)};
 }
 
