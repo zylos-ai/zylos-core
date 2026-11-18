@@ -5,7 +5,7 @@ export function reduceFailureContinuation(state, {runtime, event, identity, runI
   if (runtime !== 'claude' || !runId) return false;
   let retry=state.failure_retry;
   if(retry && (retry.runId!==runId || retry.sessionId!==identity.session_id || retry.pid!==identity.claude_pid)) {
-    delete state.failure_retry;retry=null;
+    delete state.failure_retry;retry=null;control=null;
   }
   if(control?.status==='failed') {
     if(retry?.notice)state.pending_notice=retry.notice;
@@ -25,7 +25,7 @@ export function reduceFailureContinuation(state, {runtime, event, identity, runI
   const frozen=(continuing ? retry.notice : null) ?? pending;
   const notice=frozen ? {...frozen,event_id:event.event_id} : null;
   const next={runId,sessionId:identity.session_id,pid:identity.claude_pid,eventId:event.event_id,
-    failedAt:event.received_at,attempts:Math.min(attempts,3),notice};
+    failedAt:event.received_at,attempts,notice};
   if(attempts>3) {
     if(notice)state.pending_notice=notice;
     delete state.failure_retry;

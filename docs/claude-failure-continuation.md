@@ -1,74 +1,88 @@
 # Claude failure continuation
 
-A current main-agent Claude `StopFailure` with `server_error`, `overloaded`, or
+A current main-agent Claude StopFailure with `server_error`, `overloaded`, or
 `network_error` schedules exactly `Continue` after 30 seconds, then 2 minutes,
-then 5 minutes if the continued turns also fail. A successful continued `Stop`
-resets the budget. Other errors keep their existing immediate notices.
-Recognized quota, authentication, model, request, context and content exclusions
-can veto a retry; text never authorizes one. Codex and AGY are unchanged.
+then 5 minutes if the continued turns also fail. After the third failed
+continuation, AM clears the retry record and the existing notice worker sends
+the ordinary service-error notice. The message does not mention retry counts.
+A successful continued Stop resets the budget. Other errors and runtimes keep
+their existing behavior; quota/request/context/content diagnostics can veto retry.
 
-## Observe and cancel in AM
+## AM owns observation and accounting
 
-This PR uses #1350's existing round classification and existing `turnStartedAt`.
-AM keeps observing throughout the waiting period. When that start time is later
-than the failure time, AM immediately expires the queued Continue and commits
-the cleared retry state. A later Stop, reader rebuild or restart cannot revive
-an already cancelled control. The marker for our own submitted Continue keeps
-its accepted round in the same retry chain.
+AM uses the existing long-lived shared reader and its unchanged `turnStartedAt`.
+Before its control is sent, a start later than the failure cancels the pending
+Continue and commits the cleared state. `turnOpen` alone is not proof of a new
+round because the failed round's closing activity hook can arrive later than
+its health hook. Late old tools also do not prove a new round.
 
-`turnOpen` alone is not successor evidence: the failed round's asynchronous
-closing hook may arrive after its health event. Busy state and late tool hooks
-also do not establish a new round. The shared reader owns prompt/dequeue rules,
-including the existing five-second Stop lag allowance; this PR does not change
-its fields, recovery behavior or interface, and adds no second round parser.
-There is no fixed failure reader in C4 delivery.
+A control in `running` has only been claimed; it may still be before paste.
+AM retains a later terminal health hook in its existing reader queue until that
+control settles. `done` confirms delivery under the standard control contract;
+a failure at or after its due time then advances the retry budget. A successful
+Stop clears it. There is no separate submission event or failure-specific binding.
+AM keeps attempts/deadlines and the frozen first recipient in its health file,
+so an AM restart can replay the terminal hook and continue from the same control.
 
-At the due time, ordinary input already pending in the scope also cancels the
-continuation silently. C4 checks this condition again before paste. Existing
-lane scheduling order is unchanged.
+At the due time AM checks for ordinary pending input and silently cancels the
+Continue if present. There is no second pending-input check in C4. The existing
+AM delivery-notification path also clears retry state when an ordinary message
+was pasted after the failure. A message pasted before failure does not cancel;
+notifications for controls do not clear their own continuation budget.
 
-## Persistence and delivery
+The shared reader's prompt/dequeue rules and five-second Stop lag allowance are
+unchanged. This PR adds no shared reader interface, recovery semantics, round
+parser, event type or database schema. Esc itself never triggers continuation.
 
-- AM's existing sole health writer persists group-scoped retry deadlines and
-  attempt counts. The first failure's notification recipient is frozen.
-- C4 reuses delayed idle controls, bound run/session/pane identity and internal
-  `failureContinue` metadata. Idempotent insertion returns the original row,
-  including terminal rows, across a queue-commit/health-write crash.
-- Control content is exactly `Continue`, without `Meanwhile,` or an ack suffix.
-  A persisted submission marker precedes paste. A subsequent accepted prompt
-  confirms submission; the marker alone prevents replay of an uncertain paste.
-  The health-event tail is used for submission accounting and later failures,
-  not to infer round starts.
-- No notice is sent during retrying. After three continued turns fail, the
-  existing first-failure worker sends one bilingual exhaustion notice using its
-  existing reservation and restart-uncertainty rules.
-- Pending retries suppress a stale overload-screen restart for their own run.
-  Replacement of the run or session invalidates the retry.
+## Standard control delivery
 
-No database table or column changes are required. Esc itself never triggers
-continuation.
+The producer reuses delayed idle controls bound to the existing run/session/pane
+identity. C4 recognizes a bound idle `Continue` using existing fields and sends
+exactly that word, without `Meanwhile,` or an acknowledgment suffix. Before
+paste it rereads the control row only to respect a cancellation already committed
+by AM. It does not read failure events or classify rounds.
 
-## Known limitation
+Transport errors follow existing control retry behavior, including safe requeue
+before paste. If delivery finally becomes `failed`, AM restores the original
+failure notice instead of silently abandoning the request. A newer failure
+expires an older pending control before its health replay marker is published.
+No extra idempotency or uncertain-paste replay prevention is added.
 
-If an entire successor round is never observed in time, AM can miss its start
-and an additional Continue can be sent. Examples include a stalled monitor,
-a restart during that interval, a transcript cursor that has not reached the
-relevant records, or Claude omitting dequeue. This can happen even when the
-records exist; the limitation is not restricted to missing records or restarts.
-The accepted design does not add history recovery to close this gap.
+## Accepted limitations
 
-## Validation
+- If a successor round is never observed in time, an extra Continue can be sent,
+  including with complete records during monitor stalls, restart, or transcript
+  backlog. Once cancellation is committed, later reader history loss does not
+  revive that control.
+- An uncertain paste follows standard control delivery and can repeat Continue.
+- If C4 sends before AM saves the returned control ID and AM crashes in that
+  gap, recovery can enqueue another Continue. Ordinary pending-row supersession
+  does not provide exactly-once recovery for a completed row.
+- Input arriving after AM's due-time check but before paste can follow Continue.
+- If dispatcher crashes/restarts while delivering Continue, its running row can
+  remain unsettled. That failure neither retries nor notifies until a later
+  ordinary message is delivered and AM receives its existing one-way hint.
+  The hint is not durable and can be lost during AM restart; another later
+  message is then needed. This PR does not change control startup recovery or
+  add compensating signals or timeouts.
 
-The isolated integration connects a real shared SessionActivity reader to AM
-and the C4 database: a dequeue 0.2 seconds after failure is observed and cancels
-before its 25-second Stop and 30-second deadline, with no later replay after
-restart. Other cases cover 30s/2m/5m, exhaustion and the frozen recipient,
-ordinary-input cancellation/no replay, error/runtime exclusions, identity changes,
-queue-commit crash recovery and successful Stop reset. Delivery tests use an
-injected adapter for exact content, idle gating, queued input, stale identity
-and ambiguous-paste no replay. No live Claude, tmux or network is involved.
+## Validation boundary
 
-Real-Claude review still covers a mid-response disconnect, actual delayed
-Continue delivery and repeated-failure exhaustion, user notice suppression,
-incoming-message cancellation, AM restart and Esc. Synthetic hooks and injected
-adapters do not establish these live-runtime outcomes.
+Isolated integration uses real SessionActivity, HealthEventReader, HealthStore
+and the C4 fixture database to complete three failed continuations and send one
+ordinary service-error notice. A terminal failure arriving while control is
+running waits, then settles after done. Other cases cover persisted deadlines,
+frozen recipient, AM restart, successful Stop, eligibility, new-round and due
+pending-input cancellation, and a final transport failure with a waiting hook.
+
+The native timing case observes dequeue at failure+0.2s, cancels at +1s before
+Stop at +25s and the +30s deadline, and never replays after state reopen.
+Supervisor assembly exercises its real private notification socket: an old
+paste does not cancel, a later ordinary paste releases an orphan running retry,
+and a subsequent failure can start a fresh retry. Delivery tests cover exact
+content, persisted cancellation and pre-paste error requeue. Shared reader and
+hook files are unchanged. Tests do not use live Claude, tmux or network services.
+
+Real-Claude reviewer execution covers disconnect, actual 30s/2m/5m delivery,
+ordinary error notification, user-input cancellation, AM/dispatcher restart and
+Esc. Synthetic hooks and injected adapters do not establish those live outcomes.

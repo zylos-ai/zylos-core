@@ -40,7 +40,7 @@ function setup(t,runtime='claude') {
 
 // Boundary: Health hooks → retry state → C4 deadline → notice worker. Run for retry/notice changes; skip otherwise.
 // Isolated temp run directory and in-memory database only; no runtime/tmux/network I/O.
-test('durable 30s/2m/5m schedule, exact content, frozen recipient and one exhaustion notice',async t=>{
+test('three failed continuations preserve delays and send one existing error notice',async t=>{
  const f=setup(t);
  const native=new SessionActivity({runDir:f.scene.runDir,runId:'r1',sessionId:'s1',runtime:'claude',startedAt:f.now()});
  t.after(()=>native.close());
@@ -83,7 +83,7 @@ test('durable 30s/2m/5m schedule, exact content, frozen recipient and one exhaus
  await processFirstFailureNotices(options);await processFirstFailureNotices(options);await f.process();
  assert.equal(sent.length,1);assert.match(sent[0],/服务返回了服务端错误或过载/);assert.doesNotMatch(sent[0],/重试 3 次|Automatic retries/);
  assert.equal(f.db.prepare('SELECT count(*) n FROM control_queue').get().n,3);
- // A fresh failure after exhaustion starts a new chain even if its start was
+ // A fresh failure after the retry budget ends starts a new chain even if its start was
  // never sampled. The visible failure must not be swallowed by old exhaustion.
  const fresh=f.write('stop_failure','network_error');hook('stop',fresh.received_at+1);
  await f.consume();await f.process({readNativeActivity});

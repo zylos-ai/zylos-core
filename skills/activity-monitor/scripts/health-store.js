@@ -196,6 +196,9 @@ export class HealthStore {
   consume(raw, { identity, quota, fallbackId, sessionGroup = 'origin', runId, retryControl, expireControl } = {}) {
     const event = sanitizeHealthEvent(raw, fallbackId);
     const prior = this.read(sessionGroup);
+    // A delivery notification queued ahead of this hook may have cleared or
+    // replaced the retry after its control was sampled outside this writer.
+    if(retryControl?.id!==prior.failure_retry?.controlId)retryControl=null;
     if (!['stop', 'stop_failure'].includes(event.event)) return { state: prior, status: 'ignored', reason: 'nonterminal_event' };
     if (event.received_at <= (prior.last_processed?.received_at ?? 0)) return { state: prior, status: 'ignored', reason: 'replay' };
     const result = reduceHealthEvidence(prior, event, { identity, quota, now: this.now() });
