@@ -207,7 +207,8 @@ test('default protected initial finalizer publishes real preparation, closes jou
   assert.equal(Object.hasOwn(result, 'instructionFilesRebuilt'), false);
   assert.equal(result.completion.modeTransition, 'pending_auto');
   assert.ok(f.calls.indexOf('start') > f.calls.indexOf('ensure-memory'));
-  assert.ok(f.calls.indexOf('restart') > f.calls.indexOf('verify'));
+  assert.equal(f.calls.includes('restart'), false);
+  assert.equal(result.completion.sessionRestart, 'closed_by_system');
   assertDataPreserved(f);
 });
 
@@ -784,7 +785,8 @@ test('optional runtime CLI warning survives successful finalization alongside pr
     'Existing preparation warning',
   ]);
   assert.deepEqual(result.warnings,[{code:'RUNTIME_CLI_UNAVAILABLE',runtime:'codex',message:'CLI installation failed or command not on PATH'}]);
-  assert.equal(f.calls.filter(call => call === 'restart').length, 1);
+  assert.equal(f.calls.includes('restart'), false);
+  assert.equal(result.completion.sessionRestart, 'closed_by_system');
   assertDataPreserved(f);
 });
 

@@ -138,8 +138,8 @@ test('takeover migration 20 failure restores the copy, leaves Core upgrade_compl
   assert.equal(result.success, true);
   assert.equal(result.completion.install, 'done');
   assert.equal(result.completion.dashboard, 'degraded');
-  assert.equal(restartCalls, 1);
-  assert.equal(result.completion.sessionRestart, 'single_exit_enqueued');
+  assert.equal(restartCalls, 0);
+  assert.equal(result.completion.sessionRestart, 'closed_by_system');
   const registration = result.dashboard.errors.find(error => error.item === 'registration');
   assert.equal(registration?.code, 'dashboard_migration_failed', JSON.stringify(result.dashboard));
   assert.match(registration.message, /restored from the takeover copy/);
@@ -187,7 +187,7 @@ test('hung health headers and bodies time out after a full step window and Core 
     const script=`
       import {completeUpgradeFinalization} from ${JSON.stringify(path.join(repo,'cli/lib/self-upgrade.js'))};
       import * as dashboardOwner from ${JSON.stringify(path.join(repo,'cli/lib/dashboard-install.js'))};
-      const ctx={zylosDir:process.env.ZYLOS_DIR,from:'0.9.3',to:'new',journal:{firstTakeover:false},servicesWereRunning:[],steps:[],mergeConflicts:[],mergedFiles:[]};
+      const ctx={zylosDir:process.env.ZYLOS_DIR,from:'1.0.0',to:'new',journal:{firstTakeover:false},servicesWereRunning:[],steps:[],mergeConflicts:[],mergedFiles:[]};
       let restartCalls=0;const started=Date.now();
       const result=await completeUpgradeFinalization(ctx,{...(${prerequisites.toString()})(),dashboardOwner,
         restart:()=>{restartCalls++;return {ok:true,data:{result:'exit_enqueued'}};}});
