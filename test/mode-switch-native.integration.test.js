@@ -8,13 +8,15 @@ import { guardDatabase } from '../skills/comm-bridge/scripts/sqlite-schema.js';
 import * as schema from '../skills/comm-bridge/scripts/c4-schema.js';
 import { createStore } from '../skills/comm-bridge/scripts/c4-v2-store.js';
 import { ModeSwitchCoordinator } from '../skills/activity-monitor/scripts/mode-switch.js';
+import { deliveryFixture } from '../skills/comm-bridge/scripts/__tests__/helpers/session-delivery-fixture.js';
 
 // Acceptance boundary: actual coordinator and schema-guarded private file SQLite.
 // Scene observation, lifecycle stop, dispatcher confirmation, and config writing
 // are injected. These cases do not prove real tmux/session or PM2 behavior.
 // Run through the official isolated Node runner, under a separate Unix user.
 // Every fixture owns its config, memory tree, and DB; teardown closes the DB and
-// removes only that temporary tree. No services, external sends, or child work.
+// removes only that temporary tree. These coordinator-only fixtures start no
+// services, external sends, or child work; the process case declares its boundary.
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'native-mode-'));
   const db = new Database(path.join(root, 'c4.db'));
@@ -210,4 +212,155 @@ test('native gating waits for sole Origin running input while retaining its scen
   assert.deepEqual(f.scenes[0], scene);
   assert.equal(JSON.stringify(f.rows('control_queue').filter(row => row.session_group === 'origin')), controls);
   assert.equal(f.store.getDrainFence('origin'), null); assert.deepEqual(f.writes, []); assert.deepEqual(f.restarts, []);
+});
+
+// Acceptance boundary: real native coordinator, C4 selection/claim/conditional
+// delivery recording, and SessionDelivery share this case's private file DB.
+// Run for cutover/delivery group ownership changes with the upstream storage and
+// scoped-delivery APIs present. Terminal paste/Enter I/O is a bounded fixture;
+// this proves no real dispatcher restart, runtime transport, or reattachment.
+// The official runner and separate user isolate all paths; fixture teardown
+// stops delivery work before its owned DB/files are removed.
+test('native roundtrip delivers queued input to Origin in single and retains unclaimed group input for multi', async t => {
+  const f = fixture(t); f.completeOriginInput();
+  const first = f.db.prepare("SELECT * FROM conversations WHERE content='external pending'").get();
+  const second = f.store.insertConversation('in', 'fixture', 'waiting-room', 'unclaimed group input', { groupName: 'waiting' });
+  assert.notEqual(first.session_group, 'origin'); assert.notEqual(second.session_group, 'origin');
+  assert.equal(f.store.getNextPending().id, first.id);
+  assert.equal(f.store.getNextPending({ sessionGroups: [second.session_group] }).id, second.id);
+  const secondBefore = JSON.stringify(f.db.prepare('SELECT * FROM conversations WHERE id=?').get(second.id));
+  const memory = JSON.stringify(f.tree());
+  const coverage = JSON.stringify({ checkpoints: f.rows('checkpoints'), cursors: f.rows('origin_sync_cursors') });
+  const single = f.owner(), singleRunId = await f.begin(single, 'single');
+  await single.advance(); await single.advance();
+  assert.equal(f.store.getModeTransition(), null); assert.equal(f.readConfig().session_mode, 'single');
+  assert.equal(f.store.getModeTransition({ runId: singleRunId }).cutoff, null);
+  const selected = f.store.getNextPending(); assert.equal(selected.id, first.id);
+  assert.equal(f.db.prepare('SELECT session_group FROM conversations WHERE id=?').get(first.id).session_group, first.session_group);
+  const delivery = deliveryFixture(t, { storage: { db: f.db, store: f.store }, mode: 'single' });
+  try {
+    assert.equal(delivery.db, f.db, 'delivery must share the transition ledger');
+    assert.equal(f.store.claimConversation(selected.id), true);
+    assert.equal(f.db.prepare('SELECT session_group FROM conversations WHERE id=?').get(first.id).session_group, first.session_group);
+    assert.equal((await delivery.delivery.deliverConversation(selected)).delivered, true);
+    const saved = f.db.prepare('SELECT * FROM conversations WHERE id=?').get(first.id);
+    assert.equal(saved.status, 'delivered'); assert.equal(saved.session_group, 'origin');
+    assert.equal(saved.content, first.content);
+    assert.deepEqual(delivery.calls.filter(call => call[0] === 'paste'), [['paste', 'origin']]);
+    assert.ok(delivery.calls.filter(call => call[0] === 'keys').every(call => call[1] === 'origin'));
+    assert.equal(JSON.stringify(f.db.prepare('SELECT * FROM conversations WHERE id=?').get(second.id)), secondBefore);
+    const multi = f.owner(), multiRunId = await f.begin(multi, 'multi');
+    await multi.advance(); await multi.advance();
+    assert.equal(f.store.getModeTransition(), null); assert.equal(f.readConfig().session_mode, 'multi');
+    assert.equal(f.store.getModeTransition({ runId: multiRunId }).cutoff, null);
+    assert.equal(JSON.stringify(f.db.prepare('SELECT * FROM conversations WHERE id=?').get(second.id)), secondBefore);
+    const resumed = f.store.getNextPending({ sessionGroups: [second.session_group] });
+    assert.equal(resumed.id, second.id); assert.equal(resumed.session_group, second.session_group);
+    assert.equal(resumed.status, 'pending');
+    assert.equal(JSON.stringify(f.tree()), memory);
+    assert.equal(JSON.stringify({ checkpoints: f.rows('checkpoints'), cursors: f.rows('origin_sync_cursors') }), coverage);
+    assert.equal(f.events.some(event => event.event === 'absorb'), false);
+  } finally {
+    await delivery.delivery.stop();
+  }
+});
+
+// Boundary: actual supervisor process/socket/loop and private persisted C4 survive
+// SIGKILL in gating, then accept cancellation through the real client. Runtime
+// observation is empty and an actual running Origin input holds the gate; this
+// proves process restart/cancellation, not real runtime or dispatcher behavior.
+test('actual supervisor process killed in native gating resumes and cancels without changing payload', { timeout: 15000 }, async t => {
+  const { fork } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const { submit } = await import('../cli/lib/am-sock-client.js');
+  const root = fs.mkdtempSync('/tmp/msc-');
+  const configFile = path.join(root, '.zylos/config.json'), filename = path.join(root, 'comm-bridge/c4.db');
+  for (const name of ['.zylos', 'comm-bridge', 'home', 'tmp', 'pm2', 'memory/session-groups/origin']) fs.mkdirSync(path.join(root, name), { recursive: true });
+  fs.writeFileSync(configFile, '{"runtime":"claude","session_mode":"multi","retained":"physical config"}\n');
+  fs.writeFileSync(path.join(root, 'memory/session-groups/origin/state.md'), 'retained Origin state\n');
+  fs.writeFileSync(path.join(root, 'memory/session-groups/origin/inbox.md'), 'retained Origin inbox\n');
+  const db = new Database(filename); guardDatabase(db, schema); db.pragma('journal_mode=WAL');
+  const socketPath = path.join(root, 'activity-monitor/am.sock');
+  const worker = fileURLToPath(new URL('./fixtures/mode-switch-supervisor-worker.js', import.meta.url));
+  const children = [];
+  const abortChildren = () => { for (const record of children) if (!record.settled) record.child.kill('SIGKILL'); };
+  t.signal.addEventListener('abort', abortChildren, { once: true });
+  const rows = table => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all();
+  const memory = (directory = path.join(root, 'memory'), prefix = '') => fs.readdirSync(directory).sort().flatMap(name => {
+    const file = path.join(directory, name), relative = path.join(prefix, name);
+    return fs.statSync(file).isDirectory() ? [[relative, 'directory'], ...memory(file, relative)] : [[relative, fs.readFileSync(file).toString('base64')]];
+  });
+  const payload = () => JSON.stringify({ conversations: rows('conversations'), controls: rows('control_queue'),
+    checkpoints: rows('checkpoints'), cursors: rows('origin_sync_cursors'), endings: rows('run_endings'),
+    config: fs.readFileSync(configFile).toString('base64'), memory: memory() });
+  const spawnWorker = () => {
+    const child = fork(worker, [], { env: { ...process.env, HOME: path.join(root, 'home'), ZYLOS_DIR: root,
+      PM2_HOME: path.join(root, 'pm2'), TMPDIR: path.join(root, 'tmp'), TMUX_TMPDIR: path.join(root, 'tmp'),
+      ZYLOS_PACKAGE_ROOT: process.env.ZYLOS_PACKAGE_ROOT }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+    let output = '', failure, settled = false;
+    const messages = [], waiters = [];
+    const closed = new Promise(resolve => child.once('close', (code, signal) => { settled = true; resolve({ code, signal });
+      for (const pending of waiters.splice(0)) pending.reject(new Error(`worker exited ${code}/${signal}: ${output}`)); }));
+    const rejectAll = error => { failure = error; for (const pending of waiters.splice(0)) pending.reject(error); };
+    child.on('error', rejectAll);
+    for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => {
+      if (failure) return;
+      if (Buffer.byteLength(output) + bytes.length > 65536) { rejectAll(new Error('worker output exceeded bound')); child.kill('SIGKILL'); return; }
+      output += bytes.toString();
+    });
+    child.on('message', message => {
+      if (failure) return;
+      if (message?.type === 'failed') return rejectAll(new Error(`worker failed: ${message.error}`));
+      const index = waiters.findIndex(pending => pending.match(message));
+      if (index >= 0) waiters.splice(index, 1)[0].resolve(message);
+      else { messages.push(message); if (messages.length > 16) { rejectAll(new Error('worker IPC exceeded bound')); child.kill('SIGKILL'); } }
+    });
+    const wait = (match, timeout = 4000) => new Promise((resolve, reject) => {
+      const index = messages.findIndex(match);
+      if (index >= 0) return resolve(messages.splice(index, 1)[0]);
+      if (failure || settled) return reject(failure ?? new Error(`worker already exited: ${output}`));
+      const pending = { match, resolve: value => { clearTimeout(timer); resolve(value); }, reject: error => { clearTimeout(timer); reject(error); } };
+      const timer = setTimeout(() => { const index = waiters.indexOf(pending); if (index >= 0) waiters.splice(index, 1); reject(new Error(`worker IPC deadline: ${output}`)); }, timeout);
+      waiters.push(pending);
+    });
+    const boundedClose = async timeout => {
+      let timer;
+      try { return await Promise.race([closed, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('worker close deadline')), timeout); })]); }
+      finally { clearTimeout(timer); }
+    };
+    const record = { child, wait, boundedClose, get settled() { return settled; } }; children.push(record); return record;
+  };
+  try {
+    db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status,session_group) VALUES('in','fixture','origin','actual running Origin input','running','origin')").run();
+    db.prepare("INSERT INTO control_queue(raw_content,content,status,created_at,updated_at,session_group) VALUES('origin role','origin role','pending',1,1,'origin'),('ordinary role','ordinary role','pending',1,1,'ordinary'),('origin running','origin running','running',1,1,'origin')").run();
+    db.prepare("INSERT INTO run_endings(session_group,run_id,reason,ended_at,continuation_pending) VALUES('origin','previous-origin','upgrade',1,1),('ordinary','previous-ordinary','upgrade',1,1)").run();
+    const before = payload(), first = spawnWorker();
+    assert.equal((await first.wait(message => message.type === 'ready')).phase, null);
+    const accepted = await submit({ version: 1, type: 'mode_switch', requestId: 'process-crash-switch', target: 'single' }, { socketPath });
+    assert.equal(accepted.kind, 'accepted'); assert.equal(accepted.reply.result, 'accepted');
+    first.child.send({ type: 'tick', id: 1 });
+    const gated = await first.wait(message => message.type === 'ticked' && message.id === 1);
+    assert.equal(gated.phase, 'gating'); assert.equal(gated.forbiddenCalls, 0); assert.deepEqual(gated.gates, ['*']); assert.equal(payload(), before);
+    first.child.kill('SIGKILL'); assert.equal((await first.boundedClose(2000)).signal, 'SIGKILL');
+    assert.equal(payload(), before);
+    const second = spawnWorker(), resumed = await second.wait(message => message.type === 'ready');
+    assert.equal(resumed.phase, 'gating'); assert.equal(resumed.forbiddenCalls, 0); assert.deepEqual(resumed.gates, ['*']); assert.equal(payload(), before);
+    const cancelled = await submit({ version: 1, type: 'mode_switch_cancel', requestId: 'process-crash-cancel', runId: accepted.reply.runId }, { socketPath });
+    assert.equal(cancelled.kind, 'accepted'); assert.equal(cancelled.reply.result, 'cancelled');
+    assert.equal(db.prepare('SELECT phase FROM mode_transitions WHERE run_id=?').get(accepted.reply.runId).phase, 'cancelled');
+    assert.deepEqual(rows('drain_fences'), []); assert.equal(payload(), before);
+    second.child.send({ type: 'state', id: 2 });
+    assert.equal((await second.wait(message => message.type === 'state' && message.id === 2)).forbiddenCalls, 0);
+  } finally {
+    for (const record of children) {
+      if (!record.settled) {
+        record.child.kill('SIGTERM');
+        try { await record.boundedClose(1500); }
+        catch { record.child.kill('SIGKILL'); await record.boundedClose(1500); }
+      }
+      assert.equal(record.settled, true, 'all supervisor child processes must close before fixture deletion');
+    }
+    t.signal.removeEventListener('abort', abortChildren);
+    db.close(); fs.rmSync(root, { recursive: true, force: true });
+  }
 });
