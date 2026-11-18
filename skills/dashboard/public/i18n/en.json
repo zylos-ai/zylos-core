@@ -417,5 +417,12 @@
   "memory.conflict_later": "Not now",
   "memory.diff_truncatedOne": "+{count} more line not shown",
   "fleet_manage.purge_revoked_statusOne": "Purged {count} revoked key",
-  "observer.history.redactedOne": "{count} redaction"
+  "observer.history.redactedOne": "{count} redaction",
+  "actions.upgrade_runtime": "Upgrade {runtime}",
+  "confirm.upgrade_runtime": "Upgrade {runtime}?",
+  "result.agy_updated": "Antigravity updated. Restart session to apply.",
+  "result.agy_upgrade_failed": "Antigravity upgrade failed: {error}",
+  "result.runtime_upgrade_unsupported": "CLI upgrade is not supported for runtime: {runtime}",
+  "result.agy_upgrade_incomplete": "Antigravity upgrade did not complete within 5 minutes. Check the installed version before retrying.",
+  "result.agy_upgrade_unknown": "Antigravity upgrade result is unknown. Check the installed version before retrying; the update may still be running."
 }

@@ -15,7 +15,7 @@ import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import dns from 'node:dns/promises';
-import { ZYLOS_DIR, CONFIG_DIR, SKILLS_DIR, COMPONENTS_FILE, ENV_FILE, readSessionMode } from '../lib/config.js';
+import { ZYLOS_DIR, CONFIG_DIR, SKILLS_DIR, COMPONENTS_FILE, ENV_FILE, readSessionMode, readZylosConfigOrThrow } from '../lib/config.js';
 import { readEnvFile, ensureEnvFilePrivate } from '../lib/env.js';
 import { loadComponents } from '../lib/components.js';
 import { fetchLatestTagAsync, compareSemverDesc } from '../lib/github.js';
@@ -25,6 +25,7 @@ import { parseSkillMd } from '../lib/skill.js';
 import { bold, dim, green, red, yellow, heading } from '../lib/colors.js';
 import { getTmuxCapability, describeTmuxSendKeys } from '../lib/tmux-send-keys.js';
 import { resolveCliSession } from '../lib/cli-session.js';
+import { getSessionAdapter } from '../lib/runtime/index.js';
 import { collectStatus } from '../lib/status-view.js';
 import { resolveTargetRuntime } from '../lib/session-state-reader.js';
 import { describeOrigin, formatOriginDescription } from '../lib/origin-presence.js';
@@ -234,6 +235,27 @@ function checkCodexCli() {
   return { installed: true, version };
 }
 
+function checkAgyCli() {
+  if (!commandExists('agy')) return { installed: false };
+  let version = 'unknown';
+  try {
+    version = execFileSync('agy', ['--version'], {
+      encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
+    }).trim().split('\n')[0];
+  } catch {}
+  return { installed: true, version };
+}
+
+const diagnosticRuntimes = {
+  claude: { display: 'Claude', host: 'api.anthropic.com' },
+  codex: { display: 'Codex', host: 'api.openai.com' },
+  agy: { display: 'Antigravity', host: 'generativelanguage.googleapis.com' },
+};
+const runtimeDiagnostics = runtime => Object.hasOwn(diagnosticRuntimes, runtime) ? diagnosticRuntimes[runtime] : null;
+const authenticationHint = runtime => runtime === 'agy' ? 'Run: zylos runtime agy --save-apikey <key>'
+  : runtime === 'codex' ? 'Run: codex login' : 'Run zylos init to authenticate';
+
 function checkAutonomousMode() {
   try {
     const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
@@ -296,12 +318,26 @@ export function formatDoctorSessionModeStatus(value) {
   return lines;
 }
 
-export async function collectDiagnostics(env, { resolve = resolveCliSession, network = checkNetwork,
+export async function collectDiagnostics(env, { resolve = () => resolveCliSession({
+  adapter: runtime => runtimeDiagnostics(runtime) ? getSessionAdapter(runtime) : null,
+  resolveRuntime: async group => {
+    try { return await resolveTargetRuntime(group); }
+    catch (error) {
+      // Report an unsupported configured runtime without treating it as Claude.
+      // Other configuration errors keep their existing failure behavior.
+      if (error.code === 'CONFIG_UNREADABLE' && error.cause?.code === 'RUNTIME_UNSUPPORTED') {
+        return readZylosConfigOrThrow().runtime;
+      }
+      throw error;
+    }
+  },
+}), network = checkNetwork,
   pm2Check = checkPm2Installed, tmuxCheck = checkTmuxInstalled, psCheck = checkPs, modeStatus = readDoctorSessionModeStatus } = {}) {
   const selected = await resolve();
   const runtime = selected.runtime;
-  const display = runtime === 'unknown' ? 'Unknown runtime' : runtime === 'codex' ? 'Codex' : 'Claude';
-  const apiHost = runtime === 'unknown' ? null : runtime === 'codex' ? 'api.openai.com' : 'api.anthropic.com';
+  const details = runtimeDiagnostics(runtime);
+  const display = details?.display ?? 'Unknown runtime';
+  const apiHost = details?.host ?? null;
   const networkPromise = apiHost ? network(env, apiHost) : Promise.resolve({ dns: false, proxy: null, reachable: false, reason: 'runtime_unknown', details: {} });
 
   const tmux = tmuxCheck();
@@ -311,16 +347,20 @@ export async function collectDiagnostics(env, { resolve = resolveCliSession, net
   const net = await networkPromise;
 
   // Runtime-specific CLI/auth checks.
-  // Both runtimes use adapter.checkAuth() for consistency with the running process.
+  // All supported runtimes use the same auth check as the running process.
   let cli, authStatus, autonomous;
-  if (runtime === 'unknown') {
+  if (!details) {
     cli = { installed: false, reason: 'runtime_unknown' };
     authStatus = 'uncertain';
     autonomous = false;
-  } else if (runtime !== 'codex') {
+  } else if (runtime === 'claude') {
     cli = checkClaudeCli();
     authStatus = cli.installed ? (await selected.adapter.checkAuth()).status : 'failure';
     autonomous = cli.installed ? checkAutonomousMode() : false;
+  } else if (runtime === 'agy') {
+    cli = checkAgyCli();
+    authStatus = cli.installed ? (await selected.adapter.checkAuth()).status : 'failure';
+    autonomous = true; // not applicable for Antigravity
   } else {
     // Codex runtime — check Codex CLI and auth status.
     cli = checkCodexCli();
@@ -374,6 +414,8 @@ export function buildDiagnosticJson(diag, coreVersion) {
   }
   if (diag.runtime === 'unknown') {
     issues.push({ id: 'runtime_unknown', label: 'Runtime identity unavailable', hint: 'Inspect the session launch identity before runtime-specific checks' });
+  } else if (!runtimeDiagnostics(diag.runtime)) {
+    issues.push({ id: 'runtime_unknown', label: `Diagnostics unavailable for runtime: ${diag.runtime}`, hint: 'This runtime does not provide diagnostics' });
   } else if (!diag.system.network.reachable) {
     const net = diag.system.network;
     let hint = 'Check internet connection and firewall settings.';
@@ -393,17 +435,17 @@ export function buildDiagnosticJson(diag, coreVersion) {
       hint: `Could not tighten it automatically; as the file's owner run: chmod 600 ${ENV_FILE}` });
   }
   const runtimeLabel = diag.display;
-  if (diag.runtime !== 'unknown' && !diag.ai.cli.installed) {
+  if (runtimeDiagnostics(diag.runtime) && !diag.ai.cli.installed) {
     issues.push({ id: 'cli_missing', label: `${runtimeLabel} CLI not installed`, hint: 'Run zylos init' });
   }
   if (diag.ai.cli.installed && !diag.ai.networkSkipped && diag.ai.authStatus === 'failure') {
-    const hint = diag.runtime === 'codex' ? 'Run: codex login' : 'Run zylos init to authenticate';
+    const hint = authenticationHint(diag.runtime);
     issues.push({ id: 'cli_not_authed', label: `${runtimeLabel} not authorized`, hint });
   }
   if (diag.ai.cli.installed && !diag.ai.networkSkipped && diag.ai.authStatus === 'uncertain') {
     issues.push({ id: 'cli_auth_unverified', label: `${runtimeLabel} auth check inconclusive`, hint: 'Retry after network/API health is stable' });
   }
-  if (diag.runtime !== 'codex' && diag.ai.cli.installed && diag.ai.auth && !diag.ai.autonomous) {
+  if (diag.runtime === 'claude' && diag.ai.cli.installed && diag.ai.auth && !diag.ai.autonomous) {
     issues.push({ id: 'autonomous_off', label: 'Autonomous mode not accepted', hint: 'Set skipDangerousModePermissionPrompt in ~/.claude/settings.json' });
   }
   if (diag.system.pm2.installed) {
@@ -424,8 +466,8 @@ export function buildDiagnosticJson(diag, coreVersion) {
         label: 'Origin has pending work but has not started for over 5 minutes',
         hint: 'Check router startup diagnostics: ~/zylos/comm-bridge/router-events.jsonl (start_always, activate_failed, wait_health)' },
       auth_wait: { id: 'origin_auth_wait',
-        label: `Origin is waiting for ${diag.targetRuntime === 'codex' ? 'Codex' : 'Claude'} authentication`,
-        hint: diag.targetRuntime === 'codex' ? 'Run: codex login' : 'Run zylos init to authenticate' },
+        label: `Origin is waiting for ${runtimeDiagnostics(diag.targetRuntime)?.display ?? diag.targetRuntime} authentication`,
+        hint: authenticationHint(diag.targetRuntime) },
       need_unreadable: { id: 'origin_status_unavailable', label: 'Origin wake status unavailable', hint: 'Run: zylos status --json' },
     };
     if (descriptions[diag.origin.state]) issues.push(descriptions[diag.origin.state]);
@@ -433,6 +475,7 @@ export function buildDiagnosticJson(diag, coreVersion) {
 
   return {
     version: coreVersion.success ? coreVersion.version : null,
+    ...(diag.runtime === 'agy' || !runtimeDiagnostics(diag.runtime) ? { runtime: diag.runtime, display: diag.display } : {}),
     timestamp: new Date().toISOString(),
     passed: issues.length === 0,
     groups: {
@@ -459,7 +502,7 @@ export function buildDiagnosticJson(diag, coreVersion) {
         checks: {
           cli: { ok: diag.ai.cli.installed, version: diag.ai.cli.version || null },
           auth: { ok: diag.ai.auth, status: diag.ai.authStatus },
-          autonomous: { ok: diag.ai.autonomous },
+          autonomous: diag.runtime === 'agy' ? { ok: null, skipped: true } : { ok: diag.ai.autonomous },
         },
       },
       services: {
@@ -497,7 +540,9 @@ function displaySystemGroup(diag, jsonGroup) {
   checks.push(ps.ok ? 'ps available'
     : yellow(`ps ${ps.reason === 'not_found' ? 'not found' : `could not be run (${ps.reason})`}: ${ps.hint}`));
 
-  if (net.reachable) {
+  if (!runtimeDiagnostics(diag.runtime)) {
+    checks.push(dim('network: skipped (runtime diagnostics unavailable)'));
+  } else if (net.reachable) {
     let label = `network: ${diag.apiHost} reachable`;
     if (net.proxy) label += dim(' (via proxy)');
     checks.push(label);
@@ -520,6 +565,11 @@ function displaySystemGroup(diag, jsonGroup) {
 }
 
 function displayAiGroup(diag, jsonGroup) {
+  if (!runtimeDiagnostics(diag.runtime)) {
+    console.log(groupHeader('AI Service', 'skip'));
+    console.log(SKIP(`This runtime does not provide diagnostics: ${diag.runtime}`));
+    return;
+  }
   if (jsonGroup.skipped) {
     console.log(groupHeader('AI Service', 'skip'));
     console.log(SKIP('skipped (requires network)'));
@@ -530,7 +580,7 @@ function displayAiGroup(diag, jsonGroup) {
   const checks = [];
   const { cli, auth, authStatus, autonomous } = diag.ai;
 
-  const cliLabel = diag.runtime === 'codex' ? 'Codex CLI' : 'Claude CLI';
+  const cliLabel = `${diag.display} CLI`;
   if (cli.installed) {
     checks.push(`${cliLabel} ${dim(cli.version ?? '')}`);
   } else {
@@ -545,7 +595,7 @@ function displayAiGroup(diag, jsonGroup) {
     } else {
       checks.push(red('not authorized'));
     }
-    if (auth) {
+    if (auth && diag.runtime !== 'agy') {
       if (autonomous) {
         checks.push('autonomous mode accepted');
       } else {
@@ -1005,7 +1055,7 @@ export async function doctorCommand(args, upstreamSource) {
   }
 
   // No auto-fix — bottom message based on network availability
-  if (!diag.system.network.reachable) {
+  if (runtimeDiagnostics(diag.runtime) && !diag.system.network.reachable) {
     console.log(`\n  ${yellow('Check your network connection and run')} ${bold('zylos doctor')} ${yellow('again.')}\n`);
   } else {
     console.log(`\n  ${yellow('Run')} ${bold('zylos init')} ${yellow('to set up your environment.')}\n`);
