@@ -222,7 +222,9 @@ export function writeOutcome(status, value) {
 export function writeMessage(outcome, t = key => key) {
   if (outcome?.result === 'done') return null;
   if (outcome?.result === 'rejected') {
-    const key = permissionErrorKey(outcome.code) ?? (EXPLAINED.has(outcome.code) ? 'wb.schedule.error.' + outcome.code : null);
+    const permission = permissionErrorKey(outcome.code);
+    if (permission) return t(permission);
+    const key = EXPLAINED.has(outcome.code) ? 'wb.schedule.error.' + outcome.code : null;
     const hint = key ? t(key) : null;
     if (hint && FORM_CODES.has(outcome.code)) return hint;
     return [hint, outcome.message].filter(Boolean).join(' · ') || outcome.code;

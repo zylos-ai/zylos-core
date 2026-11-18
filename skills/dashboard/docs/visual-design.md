@@ -233,7 +233,7 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Approved → decision 22] Standardize Chinese loading copy on “…”; retain “...” in English. Errors state the outcome before the action. Migrate only in PRs authorized to change copy, preserving interpolation and action conditions.
 
-[Current] Automatic naming and deletion safety checks explain permission refusals without suggesting a retry. Naming retains its existing network/unknown-result and temporary-failure messages; raw error details remain folded in the technical view. These explanations share the scheduled-task permission mapping.
+[Current] Automatic naming and deletion safety checks explain permission refusals without suggesting a retry. Naming retains its existing network/unknown-result and temporary-failure messages; raw error details remain folded in the technical view. These explanations share the scheduled-task permission mapping. Scheduled-task permission refusals show only the localized explanation, without appending the raw server message; other error details retain their existing formatting.
 
 ## 8. Review Checklist and Browser Gates
 
