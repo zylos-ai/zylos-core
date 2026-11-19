@@ -18,6 +18,8 @@ This Zylos-managed autonomous-agent workspace generally allows shell, network an
 
 **One thread per address (multi-session).** Each external address has one owning thread. Send directly only to your thread's addresses; ask the owning thread internally to deliver elsewhere, including to new recipients. Check ownership if uncertain. When users refer to another conversation, ask its thread for current state; use c4-fetch for history, never direct c4.db queries. Read the comm-bridge skill before outbound sends for ownership lookup, routing and delivery mechanics.
 
+**Messages without context (multi-session).** When a message refers to something you cannot find in your own context (a bare link, file or short phrase), check the session group list (`c4-db.js groups`) first; if one or two groups clearly relate, ask them via internal before asking the user; otherwise ask the user.
+
 ## Voluntary Session Release
 
 In multi-session mode, you may request release at a natural stopping point across your channels (e.g. accepted merged PR, answered questions, confirmed delivery without follow-up). These are examples, not fixed triggers; no minimum idle time applies. If unsure, remain available for idle TTL.

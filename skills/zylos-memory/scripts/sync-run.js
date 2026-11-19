@@ -11,6 +11,7 @@ import { createStore } from '../../comm-bridge/scripts/c4-v2-store.js';
 import { readZylosConfigStrict } from '../../comm-bridge/scripts/local-config.js';
 import { SKILLS_DIR } from '../../comm-bridge/scripts/c4-config.js';
 import { formatUnsummarized } from '../../comm-bridge/scripts/c4-fetch-format.js';
+import { removeOwnedTree } from '../../comm-bridge/scripts/remove-owned-tree.js';
 import { createBatchReceipt } from '../../comm-bridge/scripts/c4-sync-batch.js';
 import { parseSupervisorConfiguration } from '../../activity-monitor/scripts/supervisor-configuration.js';
 
@@ -44,7 +45,12 @@ export async function closeRun(settings) {
   const scope = await memoryScope(settings.env);
   const warnings = [];
   const dir = directory(scope, settings.token);
-  try { if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true }); }
+  try {
+    if (fs.existsSync(dir)) {
+      const root = fs.realpathSync(scope.runDir);
+      removeOwnedTree(root, path.join(root, path.basename(dir)));
+    }
+  }
   catch (error) { warnings.push(`Export cleanup failed: ${error.message}`); }
   let released = false;
   try { await release(settingsFor(settings)); released = true; }
@@ -63,9 +69,10 @@ export async function startRun(settings = {}, deps = {}) {
     const manifest = await guard(active, scope => {
       // Acquisition proved every older group token stale. Remove only owned
       // run directories, under the guard so an old worker cannot remove ours.
-      for (const name of fs.readdirSync(scope.runDir)) {
+      const root = fs.realpathSync(scope.runDir);
+      for (const name of fs.readdirSync(root)) {
         if (/^group-sync-[0-9a-f]{32}$/.test(name) && name !== prefix + token) {
-          fs.rmSync(path.join(scope.runDir, name), { recursive: true });
+          removeOwnedTree(root, path.join(root, name));
         }
       }
       const dir = directory(scope, token);
