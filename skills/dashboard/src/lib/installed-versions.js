@@ -1,12 +1,15 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { loadCoreModule } from './core-modules.js';
+
+const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
 
 const execute = promisify(execFile);
 
 // Share concurrent timer/action refreshes; failed commands retain the last value.
 export function createInstalledVersionReader({ run = execute } = {}) {
   let pending = null;
-  let versions = { zylos: null, claude: null, codex: null, agy: null };
+  let versions = { zylos: null, ...Object.fromEntries(SUPPORTED_RUNTIMES.map(runtime => [runtime, null])) };
   return function read() {
     if (pending) return pending;
     pending = Promise.all(Object.keys(versions).map(async command => {

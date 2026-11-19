@@ -1,3 +1,4 @@
+import { runtimesWith } from './runtime/descriptors.js';
 import path from 'node:path';
 import { openReadStore } from './c4-read-store.js';
 import { zylosRoot } from './session-group-paths.js';
@@ -130,7 +131,7 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
     return (await resolve({ sessionGroup, sessionMode: sessionGroup === null ? 'single' : 'multi' })).runtime;
   }
   async function readAccountSamples(runtime) {
-    if (!['claude','codex'].includes(runtime)) throw new TypeError('Unknown runtime');
+    if (!runtimesWith('accountQuota').includes(runtime)) throw new TypeError('Unknown runtime');
     const samples = [];
     const connection = await open(connectionOptions);
     try {

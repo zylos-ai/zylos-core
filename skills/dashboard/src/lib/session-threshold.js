@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadCoreModule } from './core-modules.js';
+
+const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
 const { modelThreshold, readDefaultModels, readCodexModelWindows } = await loadCoreModule('model-rotation-thresholds.js');
 const { usageModelFacts } = await loadCoreModule('session-usage-reader.js');
 
@@ -12,7 +14,7 @@ export function readThresholdPolicy(zylosDir) {
 }
 
 export function sessionThreshold(policy, { runtime, usage, launchConfig, desiredModel } = {}) {
-  if (!['claude', 'codex', 'agy'].includes(runtime)) return null;
+  if (!SUPPORTED_RUNTIMES.includes(runtime)) return null;
   const facts = desiredModel !== undefined ? { model: desiredModel } : usageModelFacts(usage, runtime, launchConfig);
   if (!facts.model) return null;
   return modelThreshold(policy.config, { runtime, ...facts,

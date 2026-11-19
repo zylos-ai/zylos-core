@@ -1,6 +1,4 @@
-import { readInstanceConfigurationIssue } from '../lib/instance-config-status.js';
 import { describeOrigin, formatOriginDescription } from '../lib/origin-presence.js';
-import { resolveTargetRuntime } from '../lib/session-state-reader.js';
 /**
  * Service management commands
  */
@@ -90,7 +88,7 @@ export function collectHostStatus({ exec = execFileSync, disk = () => fs.statfsS
   return result;
 }
 
-export async function showStatus(args = [], { collect, host = collectHostStatus, resolveRuntime = resolveTargetRuntime, load = () => import('../lib/status-view.js'), alertNotice = alertTargetNotice, configIssue = readInstanceConfigurationIssue } = {}) {
+export async function showStatus(args = [], { collect, host = collectHostStatus, resolveRuntime, load = () => import('../lib/status-view.js'), alertNotice = alertTargetNotice, configIssue } = {}) {
   const json = args.includes('--json');
   let result;
   if (args.some(arg => arg !== '--json') || args.filter(arg => arg === '--json').length > 1) {
@@ -98,7 +96,11 @@ export async function showStatus(args = [], { collect, host = collectHostStatus,
   } else {
     try { result = { ok: true, data: await (collect || (await load()).collectStatus)() }; }
     catch (error) {
-      const configurationIssue = configIssue();
+      let configurationIssue;
+      try {
+        const readIssue = configIssue ?? (await import('../lib/instance-config-status.js')).readInstanceConfigurationIssue;
+        configurationIssue = readIssue();
+      } catch { /* A failed status read still has its own error response. */ }
       result = { ok: false, error: { code: 'STATUS_UNAVAILABLE', message: error.message, persisted: [] },
         ...(configurationIssue ? { configurationIssue } : {}) };
     }
@@ -124,7 +126,10 @@ export async function showStatus(args = [], { collect, host = collectHostStatus,
       console.log(`Session mode: ${result.data.sessionMode ?? 'single'}`);
       let targetRuntime = null;
       if (result.data.view === 'multi') {
-        try { targetRuntime = await resolveRuntime('origin'); } catch { /* Health cannot be attributed without a target. */ }
+        try {
+          const resolve = resolveRuntime ?? (await import('../lib/session-state-reader.js')).resolveTargetRuntime;
+          targetRuntime = await resolve('origin');
+        } catch { /* Health cannot be attributed without a target. */ }
       }
       for (const row of [result.data.origin, ...result.data.groups]) {
         const description = row === result.data.origin && result.data.view === 'multi'

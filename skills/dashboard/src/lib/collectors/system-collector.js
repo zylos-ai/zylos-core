@@ -2,6 +2,9 @@ import os from 'node:os';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createCgroupCollector } from '../cgroup-resources.js';
+import { loadCoreModule } from '../core-modules.js';
+
+const { DEFAULT_RUNTIME } = await loadCoreModule('runtime/descriptors.js');
 
 export function parseVmStatFreeMem(vmStatOutput) {
   const pageSizeMatch = vmStatOutput.match(/page size of (\d+) bytes/);
@@ -57,7 +60,7 @@ export class SystemCollector {
   async collect() {
     const now = new Date().toISOString();
     const collectedAt = Date.now();
-    const runtime = this.config.runtime || 'claude';
+    const runtime = this.config.runtime || DEFAULT_RUNTIME;
     const data = {};
 
     try {

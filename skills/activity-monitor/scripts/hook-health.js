@@ -4,12 +4,13 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isMainModule } from './is-main-module.js';
 import { getClaudePid } from './claude-pid.js';
-import { readHealthQuota } from './health-quota.js';
 import { matchHealthNoticeText } from './health-notice-match.js';
 import { loadCoreModule } from './core-modules.js';
 const { appendEvent } = await loadCoreModule('event-log.js');
 const { runDirFromEnv, RUN_FILES } = await loadCoreModule('session-group-paths.js');
 import { runtimeRoot } from './runtime-generation.js';
+
+const { DEFAULT_RUNTIME, runtimesWith } = await loadCoreModule('runtime/descriptors.js');
 
 const EVENTS = { SessionStart: 'session_start', UserPromptSubmit: 'prompt_submit', StopFailure: 'stop_failure', Stop: 'stop' };
 const ERRORS = new Set(['rate_limit', 'authentication_failed', 'billing_error', 'overloaded', 'server_error', 'network_error', 'model_not_found']);
@@ -21,9 +22,9 @@ export function collectHealthHook(payload, { zylosDir = runtimeRoot(), nowMs = D
   if (!session || !Number.isSafeInteger(pid) || pid <= 0) return null;
   if (payload.hook_event_name === 'StopFailure' && !identifier(payload.error)) return null;
   const location = runDirFromEnv({...env, ZYLOS_DIR:zylosDir});
-  let runtime = 'claude';
-  try { runtime = JSON.parse(env.ZYLOS_MODEL_CONFIG || '{}')?.runtime || 'claude'; } catch { /* Preserve native Claude publication for malformed optional metadata. */ }
-  if (!['claude', 'agy'].includes(runtime)) return null;
+  let runtime = DEFAULT_RUNTIME;
+  try { runtime = JSON.parse(env.ZYLOS_MODEL_CONFIG || '{}')?.runtime || DEFAULT_RUNTIME; } catch { /* Preserve native Claude publication for malformed optional metadata. */ }
+  if (!runtimesWith('hookHealth').includes(runtime)) return null;
   const event = { v:1, session_group:location.kind === 'legacy' ? null : (location.sessionGroup || 'origin'), run_id:env.ZYLOS_RUN_ID || null, schema_version: 1, event_id: randomUUID(), source: 'hook', runtime,
     type: 'runtime_health', session_id: session, prompt_id: identifier(payload.prompt_id),
     event: EVENTS[payload.hook_event_name], error: payload.hook_event_name === 'StopFailure' ? (ERRORS.has(payload.error) ? payload.error : 'unknown') : null,
@@ -31,8 +32,6 @@ export function collectHealthHook(payload, { zylosDir = runtimeRoot(), nowMs = D
   if (event.event === 'stop_failure') {
     const match = matchHealthNoticeText(payload);
     if (match) event.notice_match = match;
-    const quota = readHealthQuota({ identity: event, zylosDir, nowMs });
-    if (quota) event.quota = quota;
   }
   appendEvent(path.join(location.dir,RUN_FILES.EVENTS),event);
   return event;

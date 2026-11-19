@@ -1,4 +1,7 @@
 import { dayBoundsUTC } from '../day-bounds.js';
+import { loadCoreModule } from '../core-modules.js';
+
+const { runtimesWith } = await loadCoreModule('runtime/descriptors.js');
 
 export function resolveUsageTimezone(tz) {
   try {
@@ -124,7 +127,7 @@ export function usageTokenRows(store, { since, until, bucket = 'day', tz = 'UTC'
 }
 
 export function summarizeCosts(rows) {
-  const byRuntime = { claude: 0, codex: 0 };
+  const byRuntime = Object.fromEntries(runtimesWith('usage').map(runtime => [runtime, 0]));
   let total = 0;
   for (const row of rows) {
     total += row.value;

@@ -4,6 +4,9 @@ import { ClaudeHistory } from './claude-history.js';
 import { CodexHistory } from './codex-history.js';
 import { createHistoryScope } from './history-scope.js';
 import { createRedactor } from '../redaction/engine.js';
+import { loadCoreModule } from '../core-modules.js';
+
+const { DEFAULT_RUNTIME } = await loadCoreModule('runtime/descriptors.js');
 
 // Transcript readers exist only for these runtimes. Other runtimes have no
 // imported history yet and must never inherit another runtime's file reader.
@@ -71,7 +74,7 @@ export class HistoryService {
     this.store = store;
     this.resolveScope = resolveScope || (parser ? null : createHistoryScope({ config, store, readCurrentSessionId, readGroupKey }));
     this.scopedParsers = new Map();
-    this.runtime = config.runtime || 'claude';
+    this.runtime = config.runtime || DEFAULT_RUNTIME;
     const Parser = parserForRuntime(this.runtime);
     this.parser = parser || new Parser({ zylosDir: config.zylosDir, store, stateEngine });
     this.redactor = redactor || createRedactor({ zylosDir: config.zylosDir, allowlist: config.history?.redactionAllowlist || [] });

@@ -9,6 +9,8 @@ import os from 'node:os';
 import { getCodexModels, codexEffortsForModel } from './codex-models.js';
 import { isNewerVersion } from './version-utils.js';
 import { loadCoreModule } from './core-modules.js';
+
+const { DEFAULT_RUNTIME, runtimesWith } = await loadCoreModule('runtime/descriptors.js');
 const { modelThreshold, thresholdLimit, readDefaultModels, readCodexModelWindows, migrateModelThresholds, setModelThreshold } = await loadCoreModule('model-rotation-thresholds.js');
 const { resolveSessionHotTtl, HOT_TTL_MIN_MINUTES, HOT_TTL_MAX_MINUTES } = await loadCoreModule('session-hot-ttl.js');
 const { readConfigStrict, configUnreadable } = await loadCoreModule('config-store.js');
@@ -143,7 +145,7 @@ export async function handleAction(action, body, config, { timezone } = {}) {
 }
 
 async function switchModel(reqId, body, config, zylosDir) {
-  if (body?.runtime !== undefined && !['claude', 'codex'].includes(body.runtime)) {
+  if (body?.runtime !== undefined && !runtimesWith('modelOverride').includes(body.runtime)) {
     return { ok: false, error: 'INVALID_RUNTIME' };
   }
   const model = body?.model;
@@ -151,7 +153,7 @@ async function switchModel(reqId, body, config, zylosDir) {
     return { ok: false, error: 'invalid_model', message: 'model is required', messageKey: 'result.invalid_model' };
   }
 
-  const runtime = body?.runtime ?? (config.runtime || process.env.ZYLOS_RUNTIME || 'claude');
+  const runtime = body?.runtime ?? (config.runtime || process.env.ZYLOS_RUNTIME || DEFAULT_RUNTIME);
   await migrateModelThresholds({ zylosDir });
 
   if (runtime === 'claude') {
@@ -189,11 +191,11 @@ function effortsForModel(model) {
 }
 
 async function switchEffort(reqId, body, config, zylosDir) {
-  if (body?.runtime !== undefined && !['claude', 'codex'].includes(body.runtime)) {
+  if (body?.runtime !== undefined && !runtimesWith('modelOverride').includes(body.runtime)) {
     return { ok: false, error: 'INVALID_RUNTIME' };
   }
   const effort = body?.effort;
-  const runtime = body?.runtime ?? (config.runtime || process.env.ZYLOS_RUNTIME || 'claude');
+  const runtime = body?.runtime ?? (config.runtime || process.env.ZYLOS_RUNTIME || DEFAULT_RUNTIME);
 
   if (runtime === 'claude') {
     const settings = readSettings(zylosDir);
@@ -302,7 +304,7 @@ async function upgradeZylos(reqId, zylosDir) {
 }
 
 async function upgradeRuntimeCli(reqId, config) {
-  const runtime = config.runtime || process.env.ZYLOS_RUNTIME || 'claude';
+  const runtime = config.runtime || process.env.ZYLOS_RUNTIME || DEFAULT_RUNTIME;
   if (runtime === 'agy') {
     log(reqId, 'exec: agy update');
     try {
@@ -406,7 +408,7 @@ async function setSessionHotTtl(reqId, body, zylosDir) {
 }
 
 export function getActionsMeta(config) {
-  const runtime = config.runtime || process.env.ZYLOS_RUNTIME || 'claude';
+  const runtime = config.runtime || process.env.ZYLOS_RUNTIME || DEFAULT_RUNTIME;
   const codexModels = runtime === 'codex' ? getCodexModels() : [];
 
   const claudeModels = [

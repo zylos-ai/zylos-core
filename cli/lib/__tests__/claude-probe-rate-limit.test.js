@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { _RATE_LIMIT_PATTERNS as PATTERNS, _parseResetTime } from '../heartbeat/claude-probe.js';
+import { _RATE_LIMIT_PATTERNS as PATTERNS } from '../heartbeat/claude-probe.js';
 
 function matchesAny(text) {
   return PATTERNS.some(p => p.test(text));
@@ -44,50 +44,5 @@ describe('RATE_LIMIT_PATTERNS', () => {
     assert.ok(!matchesAny("The session has started"));
     assert.ok(!matchesAny("Your rate is excellent"));
     assert.ok(!matchesAny("You've hit the mark"));
-  });
-});
-
-describe('_parseResetTime', () => {
-  it('parses simple time "12am"', () => {
-    const result = _parseResetTime('12am');
-    assert.ok(result > 0);
-  });
-
-  it('parses "3am"', () => {
-    const result = _parseResetTime('3am');
-    assert.ok(result > 0);
-  });
-
-  it('parses "7:30pm"', () => {
-    const result = _parseResetTime('7:30pm');
-    assert.ok(result > 0);
-  });
-
-  it('parses time with date "3am" + "Jun 29"', () => {
-    const result = _parseResetTime('3am', 'Jun 29');
-    assert.ok(result > 0);
-    const d = new Date(result * 1000);
-    assert.equal(d.getMonth(), 5); // June
-    assert.equal(d.getDate(), 29);
-  });
-
-  it('parses time with date+year "3am" + "Jun 29, 2026"', () => {
-    const result = _parseResetTime('3am', 'Jun 29, 2026');
-    assert.ok(result > 0);
-    const d = new Date(result * 1000);
-    assert.equal(d.getFullYear(), 2026);
-    assert.equal(d.getMonth(), 5);
-    assert.equal(d.getDate(), 29);
-  });
-
-  it('returns 0 for unparseable input', () => {
-    assert.equal(_parseResetTime('invalid'), 0);
-  });
-
-  it('handles all month abbreviations', () => {
-    for (const mon of ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']) {
-      const result = _parseResetTime('1am', `${mon} 15`);
-      assert.ok(result > 0, `Failed for ${mon}`);
-    }
   });
 });

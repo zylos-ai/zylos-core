@@ -5,6 +5,9 @@ import { initialHealthEvidence, reduceHealthEvidence, sanitizeHealthEvent, safeH
 import { durableJson, runtimeRoot, syncDirectory } from './runtime-generation.js';
 import { reduceFailureContinuation } from './failure-continuation.js';
 import { currentOutageNotice } from './outage-notice.js';
+import { loadCoreModule } from './core-modules.js';
+
+const { DEFAULT_RUNTIME } = await loadCoreModule('runtime/descriptors.js');
 
 export const HEALTH_GROUP_IDLE_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -100,7 +103,7 @@ function fromFile(record,runtime,sessionGroup) {
 
 // AM is the only writer. Health, replay marker and pending reply commit together.
 export class HealthStore {
-  constructor({ runtime = 'claude', zylosDir = runtimeRoot(), now = Date.now, freezeNotice = () => null, log = () => {} } = {}) {
+  constructor({ runtime = DEFAULT_RUNTIME, zylosDir = runtimeRoot(), now = Date.now, freezeNotice = () => null, log = () => {} } = {}) {
     this.runtime = runtime; this.now = now; this.freezeNotice = freezeNotice; this.log=log; this.loaded=false;
     this.file = path.join(zylosDir, 'activity-monitor', 'runtime-health', `${runtime}.json`);
     this.initial = {...initialHealthEvidence(),rateLimitActive:false,groups:{},scheduling:{...ENGINE_DEFAULTS}};

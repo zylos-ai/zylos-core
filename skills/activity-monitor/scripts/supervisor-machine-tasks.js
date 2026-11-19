@@ -6,6 +6,8 @@ import { loadCoreModule } from './core-modules.js';
 import { durableJson } from './runtime-generation.js';
 import { enqueueMachineControl } from './machine-control.js';
 import { UsageMonitor } from './usage-monitor.js';
+
+const { runtimesWith } = await loadCoreModule('runtime/descriptors.js');
 const { readSessionMode, readZylosConfigOrThrow } = await loadCoreModule('config.js');
 const { readRuntimeHealth, readAccountUsage } = await loadCoreModule('session-state-reader.js');
 const { zylosRoot } = await loadCoreModule('session-group-paths.js');
@@ -86,7 +88,7 @@ export class SupervisorMachineTasks {
     const upgradeDue=enabled(config.upgrade_check_enabled,true) && dailyDue('upgrade-check-state',6);
     const dailyUpgradeDue=enabled(config.daily_upgrade_enabled,false) && dailyDue('daily-upgrade-state',5);
     const healthDue=enabled(config.health_check_enabled,true) && !this.pending.has('health-check') && seconds-(this.state('health-check-state')?.last_check_at??0)>=86400;
-    const usageDue=['claude','codex'].flatMap(runtime=>{
+    const usageDue=runtimesWith('accountQuota').flatMap(runtime=>{
       const monitor=this.monitor(runtime,config,parts.hour);
       if(this.pending.has(`usage:${runtime}`))return [];
       const sample=monitor.isMonitorEnabled() && seconds-monitor.getLastMonitorRunAt()>=monitor.options.checkIntervalSec;

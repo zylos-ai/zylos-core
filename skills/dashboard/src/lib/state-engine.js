@@ -1,6 +1,8 @@
 import path from 'node:path';
 import { loadCoreModule } from './core-modules.js';
 
+const { DEFAULT_RUNTIME, runtimesWith } = await loadCoreModule('runtime/descriptors.js');
+
 const { readConfigStrict } = await loadCoreModule('config-store.js');
 const { readJsonSample } = await loadCoreModule('session-usage-reader.js');
 
@@ -458,7 +460,7 @@ export class StateEngine {
   async initialize() {
     try {
       const snapshot = this.store.latestSnapshot(
-        this._config.runtime || 'claude',
+        this._config.runtime || DEFAULT_RUNTIME,
         this._currentSessionId()
       );
       if (snapshot) {
@@ -572,7 +574,7 @@ export class StateEngine {
       lastProgressType: null,
       collectorLivenessAvailable: this._isCollectorLivenessAvailable(),
       activeOtelSpan: false,
-      runtime: this._config.runtime || 'claude'
+      runtime: this._config.runtime || DEFAULT_RUNTIME
     };
 
     return deriveAgentState(signals);
@@ -614,7 +616,7 @@ export class StateEngine {
   }
 
   _isForeignRuntimeEvent(event) {
-    const currentRuntime = this._config.runtime || 'claude';
+    const currentRuntime = this._config.runtime || DEFAULT_RUNTIME;
     return Boolean(event?.runtime && event.runtime !== currentRuntime);
   }
 
@@ -771,7 +773,7 @@ export class StateEngine {
 
   _saveSnapshot() {
     this.store.saveSnapshot({
-      runtime: this._config.runtime || 'claude',
+      runtime: this._config.runtime || DEFAULT_RUNTIME,
       session_id: this._currentSessionId(),
       running_tool: JSON.stringify({
         tools: Object.fromEntries(this._state.runningTools),
@@ -805,7 +807,7 @@ export class StateEngine {
       const allHealth = this.store.getSourceHealth();
       const now = this._now();
 
-      const currentRuntime = this._config.runtime || 'claude';
+      const currentRuntime = this._config.runtime || DEFAULT_RUNTIME;
       const formatEntry = (name, { signalType = null, capability = 'supported', maxAgeS = 30, eventDriven = false, checkedWhenIdle = false } = {}) => {
         if (capability === 'unsupported') {
           return {
@@ -860,7 +862,7 @@ export class StateEngine {
 
       return {
         runtime_progress: {
-          jsonl_usage: !['claude', 'codex'].includes(currentRuntime)
+          jsonl_usage: !runtimesWith('usage').includes(currentRuntime)
             ? formatEntry('jsonl_usage', { capability: 'unsupported' })
             : currentRuntime === 'codex'
             ? formatEntry('codex_rollout', { signalType: 'collector_liveness', checkedWhenIdle: true })

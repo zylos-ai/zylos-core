@@ -3,6 +3,9 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 import { inspectDatabase, migrateDatabase } from './schema.js';
+import { loadCoreModule } from './core-modules.js';
+
+const { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
 
 export class Store {
   constructor(dbPath) {
@@ -406,8 +409,8 @@ export class Store {
     const version = this.db.pragma('data_version', { simple: true });
     if (!this._historyAttribution || version !== this._historyDataVersion) {
       const rows = this.db.prepare(`SELECT session_id, runtime, session_group, MAX(timestamp) AS latest_timestamp, MAX(event_seq) AS latest_seq FROM runtime_events
-        WHERE session_id IS NOT NULL AND runtime IN ('claude', 'codex', 'agy')
-        GROUP BY session_id, runtime, session_group ORDER BY MAX(timestamp) DESC, MAX(event_seq) DESC`).all();
+        WHERE session_id IS NOT NULL AND runtime IN (${SUPPORTED_RUNTIMES.map(() => '?').join(', ')})
+        GROUP BY session_id, runtime, session_group ORDER BY MAX(timestamp) DESC, MAX(event_seq) DESC`).all(...SUPPORTED_RUNTIMES);
       this._historyAttribution = new Map(rows.map(row => [JSON.stringify([row.session_id, row.runtime, row.session_group]), row]));
       this._historyDataVersion = version;
       this.historyRevision++;
@@ -423,7 +426,7 @@ export class Store {
       ingest_id: event.ingest_id,
       event_seq: seq,
       timestamp: event.timestamp,
-      runtime: event.runtime || 'claude',
+      runtime: event.runtime || DEFAULT_RUNTIME,
       session_id: event.session_id || null,
       session_group: event.session_group ?? null,
       run_id: event.run_id ?? null,
@@ -435,8 +438,8 @@ export class Store {
       source: event.source || 'hook',
       confidence: event.confidence || 'actual'
     });
-    if (info.changes && event.session_id && ['claude', 'codex', 'agy'].includes(event.runtime || 'claude')) {
-      const row = { session_id: event.session_id, runtime: event.runtime || 'claude', session_group: event.session_group ?? null };
+    if (info.changes && event.session_id && SUPPORTED_RUNTIMES.includes(event.runtime || DEFAULT_RUNTIME)) {
+      const row = { session_id: event.session_id, runtime: event.runtime || DEFAULT_RUNTIME, session_group: event.session_group ?? null };
       const key = JSON.stringify([row.session_id, row.runtime, row.session_group]);
       if (!this._historyAttribution?.has(key)) this.historyRevision++;
       if (this._historyAttribution) {
@@ -534,7 +537,7 @@ export class Store {
   _runMetricInsert(stmt, point) {
     const info = stmt.run({
       timestamp: point.timestamp,
-      runtime: point.runtime || 'claude',
+      runtime: point.runtime || DEFAULT_RUNTIME,
       session_id: point.session_id || null,
       session_group: point.session_group ?? null,
       metric_name: point.metric_name,
@@ -698,7 +701,7 @@ export class Store {
     this._insertFact.run({
       timestamp: fact.timestamp,
       fact_type: fact.fact_type,
-      runtime: fact.runtime || 'claude',
+      runtime: fact.runtime || DEFAULT_RUNTIME,
       session_id: fact.session_id || null,
       project: fact.project || null,
       data: fact.data ? JSON.stringify(fact.data) : null

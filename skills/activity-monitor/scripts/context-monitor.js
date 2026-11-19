@@ -4,6 +4,8 @@ import { loadCoreModule } from './core-modules.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isMainModule } from './is-main-module.js';
+
+const { DEFAULT_RUNTIME } = await loadCoreModule('runtime/descriptors.js');
 const { runDirFromEnv, RUN_FILES, hookErrorLogPath } = await loadCoreModule('session-group-paths.js');
 
 function failureIdentity(env) {
@@ -29,8 +31,8 @@ export function publishContextSample(raw, { env = process.env, now = Date.now() 
   const status = typeof raw === 'string' ? JSON.parse(raw) : raw;
   if (!status || typeof status !== 'object' || Array.isArray(status)) throw new Error('Invalid statusLine sample');
   const location = runDirFromEnv(env);
-  let runtime = 'claude';
-  try { runtime = JSON.parse(env.ZYLOS_MODEL_CONFIG || '{}')?.runtime || 'claude'; } catch { /* Preserve native Claude publication for malformed optional metadata. */ }
+  let runtime = DEFAULT_RUNTIME;
+  try { runtime = JSON.parse(env.ZYLOS_MODEL_CONFIG || '{}')?.runtime || DEFAULT_RUNTIME; } catch { /* Preserve native Claude publication for malformed optional metadata. */ }
   const sample = { ...status };
   if (runtime === 'agy') {
     // Native statusLine transcript_path is not the CLI transcript. Hooks own that association.

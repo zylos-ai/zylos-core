@@ -1,3 +1,4 @@
+import { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES } from '../lib/runtime/descriptors.js';
 import { writeCorePackageLocation } from '../lib/core-package-location.js';
 import { migrateModelThresholds } from '../lib/model-rotation-thresholds.js';
 import { applyDashboardRoute } from '../lib/dashboard-install.js';
@@ -1743,8 +1744,8 @@ export function validateInitOptions(opts, { deferApiFormat = false } = {}) {
   }
 
   // Runtime validation
-  if (opts.runtime && !['claude', 'codex', 'agy'].includes(opts.runtime)) {
-    return `Invalid runtime: "${opts.runtime}".\n  Supported: claude, codex, agy\n  Example: zylos init --runtime codex`;
+  if (opts.runtime && !SUPPORTED_RUNTIMES.includes(opts.runtime)) {
+    return `Invalid runtime: "${opts.runtime}".\n  Supported: ${SUPPORTED_RUNTIMES.join(', ')}\n  Example: zylos init --runtime codex`;
   }
 
   // Timezone validation
@@ -2353,7 +2354,7 @@ export async function initCommand(args) {
       );
       selectedRuntime = runtimeIdx === 2 ? 'codex' : 'claude';
     } else {
-      selectedRuntime = 'claude'; // backward-compatible default for non-interactive mode
+      selectedRuntime = DEFAULT_RUNTIME; // backward-compatible default for non-interactive mode
     }
   }
   if (!quiet && !existingRuntime) {

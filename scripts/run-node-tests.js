@@ -58,6 +58,7 @@ const ROOT_NODE_TESTS = [
   'test/history-reminders.integration.test.js',
   'test/chat-quote.integration.test.js',
   'test/origin-conversation.integration.test.js',
+  'test/runtime-literal-guard.test.js',
   'test/test-location.test.js',
   'test/control-prompt-length.test.js',
   'test/group-deletion.integration.test.js',

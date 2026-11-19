@@ -71,6 +71,7 @@ test('Core state enforces readiness, freshness and runtime-specific account usag
     },
   };
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
+    if (name === 'runtime/descriptors.js') return import('../../../cli/lib/runtime/descriptors.js');
     if (name === 'config.js') return { readSessionMode: () => ({ mode: 'multi', keyPresent: true }) };
     if (name === 'session-group-paths.js') return { listGroupTmuxSessions: async () => [{ sessionGroup: 'origin' }] };
     assert.fail(`Unexpected core module ${name}`);

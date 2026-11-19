@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import { sanitizeHealthQuota } from './health-quota.js';
 import { classifyHealthNotice, sanitizeNoticeMatch } from './health-notice-classification.js';
+import { loadCoreModule } from './core-modules.js';
+
+const { runtimesWith } = await loadCoreModule('runtime/descriptors.js');
 
 export const HOOK_ERRORS = new Set(['rate_limit', 'authentication_failed', 'billing_error', 'overloaded', 'server_error', 'network_error', 'model_not_found']);
 const id = value => typeof value === 'string' && /^[A-Za-z0-9._:-]{1,200}$/.test(value);
@@ -9,7 +12,7 @@ export const HEALTH_EVENT_MAX_AGE_MS = 300000;
 export const QUOTA_MAX_AGE_MS = 60000;
 
 export function sanitizeHealthEvent(raw, fallbackId) {
-  if (!raw || raw.schema_version !== 1 || raw.source !== 'hook' || !['claude', 'agy'].includes(raw.runtime) || !uuid(raw.event_id) || !id(raw.session_id) || (raw.prompt_id !== null && !id(raw.prompt_id)) || !['session_start','prompt_submit','stop_failure','stop'].includes(raw.event) || !Number.isSafeInteger(raw.received_at) || !Number.isSafeInteger(raw.claude_pid) || raw.claude_pid <= 0 || (raw.event === 'stop_failure' && !id(raw.error))) {
+  if (!raw || raw.schema_version !== 1 || raw.source !== 'hook' || !runtimesWith('hookHealth').includes(raw.runtime) || !uuid(raw.event_id) || !id(raw.session_id) || (raw.prompt_id !== null && !id(raw.prompt_id)) || !['session_start','prompt_submit','stop_failure','stop'].includes(raw.event) || !Number.isSafeInteger(raw.received_at) || !Number.isSafeInteger(raw.claude_pid) || raw.claude_pid <= 0 || (raw.event === 'stop_failure' && !id(raw.error))) {
     return { event_id: `invalid:${createHash('sha256').update(String(fallbackId)).digest('hex')}`, source: 'invalid', received_at: 0 };
   }
   const event = Object.fromEntries(['schema_version','event_id','source','runtime','session_id','prompt_id','event','received_at','claude_pid'].map(key => [key,raw[key]]));
@@ -48,7 +51,7 @@ export function safeHealthReason(health, reason) {
 export function reduceHealthEvidence(state, event, { identity, now, quota = null, maxAgeMs = HEALTH_EVENT_MAX_AGE_MS } = {}) {
   const ignored = reason => ({ state, status: 'ignored', reason });
   if (event.source === 'invalid') return ignored('invalid_event');
-  if (!identity || !identity.session_id || !Number.isSafeInteger(identity.claude_pid) || identity.claude_pid<=0 || !['claude', 'agy'].includes(identity.runtime)) return ignored('missing_runtime_proof');
+  if (!identity || !identity.session_id || !Number.isSafeInteger(identity.claude_pid) || identity.claude_pid<=0 || !runtimesWith('hookHealth').includes(identity.runtime)) return ignored('missing_runtime_proof');
   if (event.runtime !== identity.runtime) return ignored('foreign_runtime_or_session');
   if (event.session_id !== identity.session_id || event.claude_pid !== identity.claude_pid) return ignored('foreign_runtime_or_session');
   if (now-event.received_at < 0 || now-event.received_at > maxAgeMs) return ignored('stale_event');

@@ -1,11 +1,14 @@
 import { dataError, requireGroup } from './c4-session-group.js';
+import { loadCoreModule } from './router/core-modules.js';
+
+const { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
 
 const PAGE = 100;
 
 export function configFunctions({ read, write, snapshot, get, all, run, knownGroup, dependencies }) {
   function runtime(value) {
     if (typeof value !== 'string' || !value) throw dataError('INVALID_ARGS', 'runtime is required');
-    const supported = dependencies.supportedRuntimes ?? ['claude', 'codex', 'agy'];
+    const supported = dependencies.supportedRuntimes ?? SUPPORTED_RUNTIMES;
     if (!supported.includes(value)) throw dataError('RUNTIME_UNSUPPORTED', `Unsupported runtime: ${value}`);
     return value;
   }
@@ -16,7 +19,7 @@ export function configFunctions({ read, write, snapshot, get, all, run, knownGro
     if (!result || !['missing', 'ok'].includes(result.state)) throw dataError('CONFIG_UNREADABLE', 'Cannot read instance configuration', { cause: result?.error });
     const config = result.state === 'missing' ? {} : result.config;
     if (!config || typeof config !== 'object' || Array.isArray(config)) throw dataError('CONFIG_UNREADABLE', 'Invalid instance configuration');
-    const selected = config.runtime ?? 'claude';
+    const selected = config.runtime ?? DEFAULT_RUNTIME;
     try { runtime(selected); } catch (cause) { throw dataError('CONFIG_UNREADABLE', 'Invalid baseline runtime', { cause }); }
     if (config.session_mode !== undefined && !['single', 'multi'].includes(config.session_mode)) throw dataError('CONFIG_UNREADABLE', 'Invalid baseline session mode');
     return { runtime: selected, sessionMode: config.session_mode ?? 'single' };
