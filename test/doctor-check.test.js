@@ -12,7 +12,7 @@ const hints = ['Check: pm2 logs worker-a', 'Check: pm2 logs worker-b'];
 const cleanup = [];
 afterEach(() => { for (const clean of cleanup.splice(0)) clean(); });
 
-function runDoctor(args, { state = 'fail', network = 'up', mode = 'single', origin = 'sleeping', group = 'origin', runtime = 'claude', alertTarget, sender = false, sessionMode, capacity, web = '', coreConfig = {}, dashboardConfig, inheritedEnv = {}, ps = false } = {}) {
+function runDoctor(args, { state = 'fail', authUncertain = false, mode = 'single', origin = 'sleeping', group = 'origin', runtime = 'claude', alertTarget, sender = false, sessionMode, capacity, web = '', coreConfig = {}, dashboardConfig, inheritedEnv = {}, ps = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'doc-')));
   cleanup.push(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, 'package.json'), '{"type":"module"}');
@@ -48,7 +48,8 @@ function runDoctor(args, { state = 'fail', network = 'up', mode = 'single', orig
     fs.writeFileSync(path.join(directory, 'send.js'), '');
   }
   const env = { ...dirs, PATH: bin, CLAUDE_BIN: path.join(bin, 'claude'),
-    DOCTOR_TEST_ROOT: root, DOCTOR_TEST_STATE: state, DOCTOR_TEST_NETWORK: network,
+    DOCTOR_TEST_ROOT: root, DOCTOR_TEST_STATE: state,
+    ...(authUncertain ? { DOCTOR_TEST_AUTH_UNCERTAIN: '1' } : {}),
     DOCTOR_TEST_MODE: sessionMode ?? mode, DOCTOR_TEST_ORIGIN: origin, ZYLOS_SESSION_GROUP: group, DOCTOR_TEST_RUNTIME: runtime,
     DOCTOR_TEST_TMUX_SOCKET: path.join(dirs.TMPDIR, 'tmux.sock'), DOCTOR_TEST_WEB: web, NO_COLOR: '1',
     ZYLOS_GH_RETRY_DELAY_MS: '', ...inheritedEnv };
@@ -194,17 +195,23 @@ for (const args of [['--json'], ['--check', '--json']]) {
   }
 }
 
-// Boundary: unavailable network keeps the existing manual network guidance.
+// Boundary: an inconclusive auth probe gives manual network guidance in check mode.
 // Run for doctor check/hint/bottom-message changes; skip unrelated product changes.
-test('check mode keeps network failure guidance without repair', () => {
-  const result = runDoctor(['--check'], { state: 'pass', network: 'down' });
+test('check mode gives network guidance for inconclusive authentication without repair', () => {
+  const options = { state: 'pass', authUncertain: true };
+  const hint = 'Check the network connection and firewall, then retry';
+  const result = runDoctor(['--check'], options);
   assert.equal(result.status, 1, result.stderr);
-  assert.match(result.stdout, /Cannot reach api\.anthropic\.com/);
-  assert.match(result.stdout, /Check internet connection and firewall settings\./);
+  assert.ok(result.stdout.includes(hint));
   assert.match(result.stdout, /Check your network connection and run zylos doctor again\./);
   assert.equal(result.repairs.length, 0);
   assert.equal(result.probes.length, 1);
   assert.equal(result.versions.length, 1);
+
+  const machine = runDoctor(['--check', '--json'], options);
+  assert.equal(machine.status, 1, machine.stderr);
+  assert.equal(JSON.parse(machine.stdout).issues.find(issue => issue.id === 'cli_auth_unverified')?.hint, hint);
+  assert.equal(machine.repairs.length, 0);
 });
 
 for (const [origin, pattern] of [
@@ -264,7 +271,7 @@ test('absent Codex Origin authentication issue gives the Codex login hint', () =
   assert.equal(result.status, 1, result.stderr);
   const json = JSON.parse(result.stdout);
   assert.equal(json.groups.services.session.origin, 'auth_wait');
-  assert.deepEqual(json.issues, [{ id: 'origin_auth_wait', label: 'Origin is waiting for Codex authentication', hint: 'Run: codex login' }]);
+  assert.deepEqual(json.issues, [{ id: 'origin_auth_wait', label: 'Origin is waiting for Codex authentication', hint: 'Replace credentials or log in again with zylos auth codex' }]);
   assert.equal(result.repairs.length, 0);
 });
 

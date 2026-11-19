@@ -125,6 +125,7 @@ function checkPm2Installed() {
   return { installed: true, version };
 }
 
+/** PM2 uses ps to discover descendants when stopping or restarting processes. */
 export function checkPs({ execute = execFileSync } = {}) {
   try {
     execute('ps', ['-p', String(process.pid)], { stdio: 'ignore', timeout: 5000 });

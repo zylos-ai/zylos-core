@@ -4,12 +4,23 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { collectDiagnostics, buildDiagnosticJson } from '../../commands/doctor.js';
 
 test('doctor selects runtime CLI and authentication checks through the implementation', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'doctor-runtime-'));
-  const saved = process.env.PATH, calls = path.join(root, 'calls');
-  t.after(() => { process.env.PATH = saved; fs.rmSync(root, { recursive: true, force: true }); });
+  const saved = { HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR, PATH: process.env.PATH };
+  const calls = path.join(root, 'calls');
+  process.env.HOME = path.join(root, 'home');
+  process.env.ZYLOS_DIR = path.join(root, 'zylos');
+  t.after(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  fs.mkdirSync(process.env.HOME);
+  fs.mkdirSync(process.env.ZYLOS_DIR);
+  const { collectDiagnostics, buildDiagnosticJson } = await import('../../commands/doctor.js');
   fs.symlinkSync('/usr/bin/which', path.join(root, 'which'));
   for (const command of ['agy', 'claude', 'codex']) fs.writeFileSync(path.join(root, command),
     `#!${process.execPath}\nimport fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(calls)}, process.argv[1]+' '+process.argv.slice(2).join(' ')+'\\n'); console.log('1.5.11');`, { mode: 0o755 });

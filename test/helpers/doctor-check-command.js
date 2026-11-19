@@ -21,7 +21,13 @@ if (command === 'ps') {
   console.log(binary);
 } else if (command === 'claude') {
   if (args[0] === '--version') console.log('Claude Code 1.0.0');
-  else if (args[0] === '-p' && args[1] === 'ping') console.log('pong');
+  else if (args[0] === '-p' && args[1] === 'ping') {
+    if (process.env.DOCTOR_TEST_AUTH_UNCERTAIN === '1') {
+      console.error('api_error: fixture connection unavailable');
+      process.exit(1);
+    }
+    console.log('pong');
+  }
   else if (args[0] === '-p' && args[1].startsWith('You are a Zylos repair agent.')) {
     if (process.env.DOCTOR_TEST_STATE === 'repair_once') {
       fs.writeFileSync(path.join(root, 'repaired'), 'done');
@@ -68,5 +74,5 @@ if (command === 'ps') {
     }
   } else process.exit(2);
 } else if (command === 'curl') {
-  console.log(args.includes('-w') ? '200' : '[]');
+  console.log('[]');
 } else process.exit(2);
