@@ -11,8 +11,8 @@ C4 chain. Follow the working-state steps below: read-before-cleanup, recovery, s
   Multiple source groups still yield one global checkpoint.
 - In these working-state steps, run the read-only `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list`.
   No token is needed; a supplied `--token` is ignored.
-  Retain its full object, read every listed file in full, and supply it as
-  `inputs` to commit. Pass the unchanged batch receipt to checkpoint and commit
+  Save its full object to a file, read every listed file in full, and load
+  that saved object as `inputs` to commit. Pass the unchanged batch receipt to checkpoint and commit
   as in the working-state steps below.
 - After reading global state, segments, and dated logs, read shared self files
   reading each complete category INDEX first, then relevant pages in full (a missing INDEX is an empty table), then the [old-file lookup](sync-writing.md#moving-from-old-files) when unmatched. Complete necessary shared edits through `edit_memory` **before**
@@ -41,17 +41,31 @@ C4 chain. Follow the working-state steps below: read-before-cleanup, recovery, s
 
 1. Acquire. Read `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js unsummarized  --json`. If count is zero,
    release and report no input. Do not cleanup, rotate, or consume inbox.
-2. Fetch `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --unsummarized  --up-to <safeEnd> --limit <batchLimit> --out <FILE>`.
-   Stdout is metadata: count, first/last IDs, file bytes and SHA-256, and a batch
-   receipt `{"scope":...,"after":...,"end":...,"sha256":...}`. Read the full
-   batch file in byte ranges. Save its rows, latest summary, and the
-   receipt unchanged. This batch's returned end, rather than a later observed
-   frontier, is the checkpoint target. Recover truncated output using the bounded
-   read retries above. A read failure ends the run before any cleanup/rotation.
+2. Retain this run's private directory path as `exportDir`, the acquired token
+   as `T`, and the resolved frontier/limit as `safeEnd`/`batchLimit`. Save command
+   JSON stdout directly to files there; never transcribe receipts, list objects,
+   or hashes into a submission. These files share the private directory's
+   existing cleanup rule. Fetch:
+
+   ```bash
+   node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --unsummarized --up-to "$safeEnd" --limit "$batchLimit" --out "$exportDir/batch" > "$exportDir/batch-meta.json"
+   ```
+
+   Read the saved metadata: count, first/last IDs, file bytes and SHA-256, and a
+   batch receipt in `batch`: `{"scope":...,"after":...,"end":...,"sha256":...}`. Read the full
+   batch export in byte ranges. Retain its rows, latest summary, and metadata
+   file unchanged. This batch's returned end, rather than a later observed
+   frontier, is the checkpoint target. Recover truncated output using the
+   bounded read retries above. A read failure ends the run before any
+   cleanup/rotation.
 3. Run `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js cleanup --token T`, then `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js rotate --token T`.
-   Run the read-only `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list`.
-   No token is needed; a supplied `--token` is ignored.
-   Save the complete returned object as `inputs`:
+   Save the complete read-only list result as `inputs`:
+
+   ```bash
+   node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list > "$exportDir/inputs.json"
+   ```
+
+   No token is needed; a supplied `--token` is ignored. Read this saved object:
    `{"scope":...,"statePath":"<absolute state path>","segments":[{"id":...,"path":"<absolute>","bytes":...,"sha256":...}],"sessions":[{"path":"<absolute>","bytes":...,"sha256":...}]}`.
    Read the entire state at the returned `statePath`, in all bounded byte ranges
    with no gaps, before reconciling or preparing changes. This is mandatory for
@@ -95,9 +109,18 @@ C4 chain. Follow the working-state steps below: read-before-cleanup, recovery, s
    prove delivery; uncertain or failed sends are not completion evidence.
    Do **not** rewrite or manually copy the block. Leave any script-copied
    block unchanged; commit strips that copy and preserves the official lines. Keep a separate
-   `followedUpIds` array; no progress means an empty array.
-7. Send the summary on stdin to
-   `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js checkpoint <batch-end> --token T --batch '<receipt JSON>'`.
+   `followedUpIds` array; no progress means an empty array. Save that worker-judged
+   array as JSON in `"$exportDir/followed-up-ids.json"`; only these IDs are manually
+   supplied, never the batch receipt or input manifest.
+7. Send the summary on stdin, generating both the target and `--batch` from the
+   saved metadata (replace the heredoc body with the actual summary):
+
+   ```bash
+   node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js checkpoint "$(node --input-type=module -e 'import fs from "node:fs"; console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).batch.end)' "$exportDir/batch-meta.json")" --token "$T" --batch "$(node --input-type=module -e 'import fs from "node:fs"; console.log(JSON.stringify(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).batch))' "$exportDir/batch-meta.json")" <<'SUMMARY'
+   <checkpoint summary>
+   SUMMARY
+   ```
+
    Checkpoint recomputes and verifies the receipt against the database rows.
    Only after success, run
    `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js prepare --token T`.
@@ -122,10 +145,23 @@ C4 chain. Follow the working-state steps below: read-before-cleanup, recovery, s
    fragment in edit mode; in rewrite mode create a valid new header. Retain all
    unresolved work. Existing drafts are never overwritten: EXISTS means inspect
    the current draft under the common corrected-call rules. The restricted tool
-   selects this scope's token-named file. Then send JSON
-   `{"followedUpIds":[],"batch":<receipt>,"inputs":<complete list object>}`
-   on stdin to `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js commit --token T`, replacing the empty array only
-   with proven followed-up IDs. Commit verifies the batch, checkpoint coverage,
+   selects this scope's token-named file. Generate commit stdin from the saved
+   metadata, input manifest, and worker-judged followed-up IDs:
+
+   ```bash
+   node --input-type=module - "$exportDir/batch-meta.json" "$exportDir/inputs.json" "$exportDir/followed-up-ids.json" <<'NODE' | node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js commit --token "$T"
+   import fs from 'node:fs';
+   const [batchPath, inputsPath, followedUpPath] = process.argv.slice(2);
+   const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
+   process.stdout.write(JSON.stringify({
+     followedUpIds: read(followedUpPath),
+     batch: read(batchPath).batch,
+     inputs: read(inputsPath),
+   }));
+   NODE
+   ```
+
+   Commit verifies the batch, checkpoint coverage,
    the exact current segment IDs, absolute paths and hashes, then writes those
    segment IDs into the published state header and sets `synced_at` from the
    script clock at publication, in UTC with milliseconds. The worker-supplied

@@ -14,31 +14,51 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
    release and return. Process oldest bookmarks first. The raw-row budget is the
    Origin budget resolved above; checkpoint summaries do not consume it. Create
    this run's private export directory as in the common rules.
-2. For each candidate G, export
-   `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --origin-sync --group G --summaries-only --out <private dir>/<n>-summaries`
-   (n is a run-local counter). Stdout is metadata: the absolute `path`, `count`,
-   `firstId`, `lastId`, `bytes`, `sha256`, and a summary `receipt`
+2. For each candidate, set `G` to its group and `n` to a run-local counter.
+   Retain the private directory path as `exportDir` and the acquired token as
+   `T`. Save command JSON stdout directly to metadata files in that directory;
+   never transcribe receipts, list objects, or hashes into a submission. These
+   files share the private directory's existing cleanup rule. Export summaries:
+
+   ```bash
+   rawMeta=''
+   node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --origin-sync --group "$G" --summaries-only --out "$exportDir/$n-summaries" > "$exportDir/$n-summaries-meta.json"
+   ```
+
+   Read the saved metadata JSON: the absolute `path`, `count`, `firstId`,
+   `lastId`, `bytes`, `sha256`, and summary `receipt`
    `{"scope":...,"after":...,"end":...,"coverageEnd":...,"count":...,"sha256":...}`.
-   Save the receipt unchanged; C is its `coverageEnd`. Read the whole file at
+   Keep the metadata file unchanged; C is its receipt’s `coverageEnd`. Read the whole file at
    the returned path by the byte-range rule above (8192-byte ranges with a
    four-byte overlap), including when it is one long JSON line. A truncated range
    is unread: use the bounded read retries above. If that group's export or read
    fails after applicable read/corrected-call retries,
    skip its merge and cursor advance, record why, and continue other groups
    under the common failure rules. The immediate-stop token rule applies.
-3. If budget remains, export
-   `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --origin-sync --group G --raw-only --after C --limit <remaining> --out <private dir>/<n>-raw`,
-   using the saved C. Deduct the metadata `count`, save its raw `receipt`
-   (`scope`, `after`, `end`, `count`, `sha256`) unchanged, and read the whole
+3. Reset `rawMeta` to the empty string for each candidate. If budget remains,
+   retain it as `remaining` and run:
+
+   ```bash
+   C=$(node --input-type=module -e 'import fs from "node:fs"; console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).receipt.coverageEnd)' "$exportDir/$n-summaries-meta.json")
+   node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --origin-sync --group "$G" --raw-only --after "$C" --limit "$remaining" --out "$exportDir/$n-raw" > "$exportDir/$n-raw-meta.json"
+   rawMeta="$exportDir/$n-raw-meta.json"
+   ```
+
+   Deduct the saved metadata `count`, retain its raw `receipt`
+   (`scope`, `after`, `end`, `count`, `sha256`) unchanged in that file, and read the whole
    file the same way. A limited read's receipt ends at its last returned row;
    the cursor cannot move past it. If this export or read fails after the bounded
    read retries or applicable corrected-call retries under the common rules,
    neither cursor for G advances. With budget exhausted, skip the raw export;
-   the raw receipt
-   is then `null`.
-4. For each group actually processed, run the read-only
-   `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list --group G`
-   and save the complete returned object as that group's `inputs`. The script
+   leave `rawMeta` empty so the generated raw receipt is then `null`. Retain
+   `G`, `n`, and `rawMeta` together for this group's advance.
+4. For each group actually processed, save the complete read-only list result:
+
+   ```bash
+   node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list --group "$G" > "$exportDir/$n-inputs.json"
+   ```
+
+   Read this saved object as that group's `inputs`. The script
    chooses the first log date from G's Origin cursor update (the latest seven
    calendar days when there is no cursor), in the configured timezone. Read each
    returned `sessions[].path` in full. It returns only scope and sessions for
@@ -114,10 +134,23 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
       Report if there are no such pointers or the old files remain in place.
 
    Audit errors follow the common retry/report-only rules and do not block
-   advancement. The immediate-stop token rule applies. For each successful group run
-   `node ~/zylos/.claude/skills/zylos-memory/scripts/origin-cursor.js advance --group G --token T` with stdin
-   `{"summary":<summary receipt>,"raw":<raw receipt or null>,"inputs":<list --group G result>}`,
-   all exactly as returned. The script recomputes both receipts from the
+   advancement. The immediate-stop token rule applies. For each successful group,
+   generate advance stdin from that group's saved files:
+
+   ```bash
+   node --input-type=module - "$exportDir/$n-summaries-meta.json" "$rawMeta" "$exportDir/$n-inputs.json" <<'NODE' | node ~/zylos/.claude/skills/zylos-memory/scripts/origin-cursor.js advance --group "$G" --token "$T"
+   import fs from 'node:fs';
+   const [summaryPath, rawPath, inputsPath] = process.argv.slice(2);
+   const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
+   process.stdout.write(JSON.stringify({
+     summary: read(summaryPath).receipt,
+     raw: rawPath ? read(rawPath).receipt : null,
+     inputs: read(inputsPath),
+   }));
+   NODE
+   ```
+
+   The script recomputes both receipts from the
    database and the session-log list, then sets the summary cursor to the
    summary receipt's `end` and the raw cursor to the raw receipt's `end`; without
    a raw receipt, new summaries move the raw cursor to max(S,min(C,upTo)) and no
