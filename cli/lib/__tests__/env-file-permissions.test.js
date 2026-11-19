@@ -144,8 +144,8 @@ describe('.env file permissions', { skip: !posix && 'POSIX permission bits only'
 
   test('doctor fails on an .env it could not tighten and passes a tightened one', async () => {
     const { buildDiagnosticJson } = await import('../../commands/doctor.js');
-    const diag = envFile => ({ runtime: 'claude', display: 'Claude', apiHost: 'example.test',
-      system: { tmux: { installed: true }, pm2: { installed: true, version: '6.0.0' }, network: { reachable: true }, envFile },
+    const diag = envFile => ({ runtime: 'claude', display: 'Claude',
+      system: { tmux: { installed: true }, pm2: { installed: true, version: '6.0.0' }, envFile },
       ai: { cli: { installed: true }, auth: true, autonomous: true }, services: { running: false, procs: [] } });
 
     const open = buildDiagnosticJson(diag({ ok: false, mode: '644', fixed: false }), { success: false });
@@ -167,7 +167,7 @@ describe('.env file permissions', { skip: !posix && 'POSIX permission bits only'
     const { collectDiagnostics } = await import('../../commands/doctor.js');
     fs.writeFileSync(envFile, 'A=1\n');
     fs.chmodSync(envFile, 0o644);
-    const diag = await collectDiagnostics({}, {
+    const diag = await collectDiagnostics(new Map(), {
       resolve: async () => ({ runtime: 'unknown', sessionGroup: null, live: { tmuxName: 'zylos-test-none' } }),
       pm2Check: () => ({ installed: false }),
     });

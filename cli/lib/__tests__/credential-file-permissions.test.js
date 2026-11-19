@@ -1,3 +1,4 @@
+import { runtimeAuthFixture } from './helpers/runtime-auth.js';
 import test, { after, beforeEach, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -133,10 +134,10 @@ describe('owner-only credential files', { skip: !posix && 'POSIX permission bits
       assert.equal(mode(userSettings), '644');
     });
 
-    test('runtime base URL save leaves settings owner-only without warnings', () => {
+    test('runtime base URL save leaves settings owner-only without warnings', async () => {
       worldReadable(userSettings, { env: { ANTHROPIC_API_KEY: 'credential-value-0008' } });
       const warnings = [];
-      assert.equal(applyBaseUrl('claude', 'https://relay.example.test', warnings), true);
+      assert.equal(applyBaseUrl(await runtimeAuthFixture('claude'), 'https://relay.example.test', warnings), true);
       assert.equal(mode(userSettings), '600');
       assert.deepEqual(warnings, []);
     });

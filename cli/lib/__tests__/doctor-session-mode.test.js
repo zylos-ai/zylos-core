@@ -13,9 +13,9 @@ const statusOptions = (transition = row) => ({
   readMode: () => ({ mode: 'single' }), readEvents: () => [], probeSupervisor: () => true,
 });
 const healthy = sessionModeStatus => ({
-  runtime: 'claude', display: 'Claude', apiHost: 'fixture.invalid', sessionModeStatus,
-  system: { tmux: { installed: true }, pm2: { installed: true }, network: { reachable: true } },
-  ai: { cli: { installed: true }, auth: true, authStatus: 'success', autonomous: true },
+  runtime: 'claude', display: 'Claude', sessionModeStatus,
+  system: { tmux: { installed: true }, pm2: { installed: true } },
+  ai: { cli: { installed: true }, auth: true, authStatus: 'success', autonomous: true, autonomousApplicable: true },
   services: { running: true, total: 1, procs: [{ name: 'activity-monitor', pm2_env: { status: 'online' } }], session: false },
 });
 const version = { success: true, version: '1.0.0' };
@@ -43,10 +43,10 @@ test('doctor collector retains authoritative gating phase and blocker', async ()
   let reads = 0;
   const modeStatus = () => readDoctorSessionModeStatus({ databaseExists: () => true,
     readStatus: () => { reads++; return readSessionModeStatus(statusOptions()); } });
-  const diag = await collectDiagnostics({}, {
+  const diag = await collectDiagnostics(new Map(), {
     resolve: () => ({ runtime: 'unknown', sessionGroup: null, live: { tmuxName: 'unused' } }),
     tmuxCheck: () => ({ installed: false }), pm2Check: () => ({ installed: false }),
-    network: () => assert.fail('unknown runtime must not probe network'), modeStatus,
+    modeStatus,
   });
   assert.equal(reads, 1);
   assert.equal(diag.sessionModeStatus.status.transition.phase, 'gating');

@@ -1,3 +1,4 @@
+import { runtimeAuthFixture } from './helpers/runtime-auth.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -123,7 +124,7 @@ for (const json of [false, true]) {
       process.exitCode = 0;
       result = await runtimeCommand(['codex', '--no-validate', ...(json ? ['--json'] : [])], {
         execute: (target, flags) => executeRuntimeSwitch(target, flags, {
-          read: () => ({ state: 'ok', config: readConfig() }), exists: () => true,
+          read: () => ({ state: 'ok', config: readConfig() }), runtimeFor: runtimeAuthFixture,
           hooksReady: () => ({ ready: true }), identity: group => scenes.readIdentity(group),
           write: update => updateZylosConfigLocked(update, { configFile, lockFile: `${configFile}.lock` }),
           send: (request, options) => {

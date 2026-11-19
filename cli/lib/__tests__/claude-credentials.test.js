@@ -1,3 +1,4 @@
+import { runtimeAuthFixture } from './helpers/runtime-auth.js';
 import test, { after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -25,6 +26,9 @@ console.log('Claude credential isolation: ' + JSON.stringify({ HOME: home, ZYLOS
 const { saveApiKey, saveApiKeyToEnv, saveAuthToken, saveAuthTokenToEnv,
   saveSetupToken, saveSetupTokenToEnv, isValidBaseUrl,
   saveClaudeBaseUrl, computeRelayTraffic, relayLoginNotice, syncClaudeRelayTraffic } = await import('../runtime-setup.js');
+const { getRuntime } = await import('../runtime/index.js');
+const claude = await getRuntime('claude');
+
 const { launchEnvironment } = await import('../runtime/session-command.js');
 const { applyBaseUrl, applyCredentials, parseRuntimeFlags, validateRuntimeFlags, executeRuntimeSwitch, runtimeCommand } = await import('../../commands/runtime.js');
 const { executeAuth, authCommand } = await import('../../commands/auth.js');
@@ -148,44 +152,44 @@ test('pairing rule: relay or API credential on; setup token or no credential on 
 
 test('configuring a relay base URL turns the relay traffic setting on in .env and process', () => {
   assert.deepEqual(relayFlagState(), RELAY_OFF);
-  assert.equal(applyBaseUrl('claude', relayUrl + '/v1'), true);
+  assert.equal(applyBaseUrl(claude, relayUrl + '/v1'), true);
   assert.deepEqual(relayFlagState(), RELAY_ON);
-  assert.equal(applyBaseUrl('claude', relayUrl + '/v1'), true, 'saving the same relay again is safe');
+  assert.equal(applyBaseUrl(claude, relayUrl + '/v1'), true, 'saving the same relay again is safe');
   assert.deepEqual(relayFlagState(), RELAY_ON);
 });
 
 test('configuring a relay base URL rewrites a wrong or duplicated existing value to a single 1', () => {
   fs.writeFileSync(envFile, fs.readFileSync(envFile, 'utf8') + `${relayFlag}=0\nexport ${relayFlag}=1\n`);
-  assert.equal(applyBaseUrl('claude', relayUrl), true);
+  assert.equal(applyBaseUrl(claude, relayUrl), true);
   assert.deepEqual(relayFlagState(), RELAY_ON);
   assert.equal(parseDotEnv(fs.readFileSync(envFile)).KEEP, 'unchanged');
 });
 
 test('configuring the official base URL without a credential removes the relay traffic setting from .env and process', () => {
   seedRelayFlagOn();
-  assert.equal(applyBaseUrl('claude', officialUrl), true);
+  assert.equal(applyBaseUrl(claude, officialUrl), true);
   assert.deepEqual(relayFlagState(), RELAY_OFF);
   assert.equal(parseDotEnv(fs.readFileSync(envFile)).KEEP, 'unchanged');
 });
 
 test('zylos runtime: API key on the official API turns the setting on; setup token turns it off', () => {
-  assert.equal(applyBaseUrl('claude', officialUrl), true);
+  assert.equal(applyBaseUrl(claude, officialUrl), true);
   assert.deepEqual(relayFlagState(), RELAY_OFF);
-  assert.equal(applyCredentials('claude', { apiKey: 'sk-ant-api03-' + secret() }), true);
+  assert.equal(applyCredentials(claude, { apiKey: 'sk-ant-api03-' + secret() }), true);
   assert.deepEqual(relayFlagState(), RELAY_ON, 'API key + official');
-  assert.equal(applyCredentials('claude', { setupToken: 'sk-ant-oat01-' + secret() }), true);
+  assert.equal(applyCredentials(claude, { setupToken: 'sk-ant-oat01-' + secret() }), true);
   assert.deepEqual(relayFlagState(), RELAY_OFF, 'setup token + official');
 });
 
 test('zylos runtime: switching base URL and credential recomputes the setting each time', () => {
   for (const [step, expected] of [
-    [() => applyBaseUrl('claude', relayUrl), RELAY_ON],
-    [() => applyCredentials('claude', { setupToken: 'sk-ant-oat01-' + secret() }), RELAY_ON],
-    [() => applyBaseUrl('claude', officialUrl), RELAY_OFF],
-    [() => applyCredentials('claude', { apiKey: 'sk-ant-api03-' + secret() }), RELAY_ON],
-    [() => applyBaseUrl('claude', 'https://relay-2.example.test/api'), RELAY_ON],
-    [() => applyCredentials('claude', { setupToken: 'sk-ant-oat01-' + secret() }), RELAY_ON],
-    [() => applyBaseUrl('claude', officialUrl + '/'), RELAY_OFF],
+    [() => applyBaseUrl(claude, relayUrl), RELAY_ON],
+    [() => applyCredentials(claude, { setupToken: 'sk-ant-oat01-' + secret() }), RELAY_ON],
+    [() => applyBaseUrl(claude, officialUrl), RELAY_OFF],
+    [() => applyCredentials(claude, { apiKey: 'sk-ant-api03-' + secret() }), RELAY_ON],
+    [() => applyBaseUrl(claude, 'https://relay-2.example.test/api'), RELAY_ON],
+    [() => applyCredentials(claude, { setupToken: 'sk-ant-oat01-' + secret() }), RELAY_ON],
+    [() => applyBaseUrl(claude, officialUrl + '/'), RELAY_OFF],
   ]) {
     assert.equal(step(), true);
     assert.deepEqual(relayFlagState(), expected, step.toString());
@@ -196,9 +200,9 @@ test('a saved API key wins over a claude.ai login file: --save-apikey then --sav
   const loginFile = path.join(home, '.claude', '.credentials.json');
   t.after(() => fs.rmSync(loginFile, { force: true }));
   fs.writeFileSync(loginFile, JSON.stringify({ claudeAiOauth: { refreshToken: 'synthetic-refresh' } }));
-  assert.equal(applyCredentials('claude', { apiKey: 'sk-ant-api03-' + secret() }), true);
+  assert.equal(applyCredentials(claude, { apiKey: 'sk-ant-api03-' + secret() }), true);
   assert.deepEqual(relayFlagState(), RELAY_ON, 'after --save-apikey');
-  assert.equal(applyBaseUrl('claude', officialUrl), true);
+  assert.equal(applyBaseUrl(claude, officialUrl), true);
   assert.deepEqual(relayFlagState(), RELAY_ON, 'after --save-base-url https://api.anthropic.com');
   assert.ok(parseDotEnv(fs.readFileSync(envFile)).ANTHROPIC_API_KEY, 'the API key is still saved');
 });
@@ -218,7 +222,7 @@ test('the setting ignores settings.json: its API key and relay address do not co
   process.env[relayFlag] = '1';
   assert.equal(syncClaudeRelayTraffic(), true);
   assert.deepEqual(relayFlagState(), RELAY_OFF, 'settings.json has a relay base URL and an API key, .env has neither');
-  assert.equal(applyBaseUrl('claude', officialUrl), true);
+  assert.equal(applyBaseUrl(claude, officialUrl), true);
   assert.deepEqual(relayFlagState(), RELAY_OFF, 'official URL saved, settings.json API key ignored');
 });
 
@@ -230,16 +234,16 @@ async function saveEverything() {
   assert.equal(saveAuthToken('bearer-' + secret()), true);
   assert.equal(saveSetupToken('sk-ant-oat01-' + secret()), true);
   assert.equal(saveClaudeBaseUrl(relayUrl), true);
-  assert.equal(applyCredentials('claude', { apiKey: 'sk-ant-api03-' + secret() }), true);
-  assert.equal(applyCredentials('claude', { setupToken: 'sk-ant-oat01-' + secret() }), true);
-  assert.equal(applyBaseUrl('claude', relayUrl), true);
-  assert.equal(applyBaseUrl('claude', officialUrl), true);
+  assert.equal(applyCredentials(claude, { apiKey: 'sk-ant-api03-' + secret() }), true);
+  assert.equal(applyCredentials(claude, { setupToken: 'sk-ant-oat01-' + secret() }), true);
+  assert.equal(applyBaseUrl(claude, relayUrl), true);
+  assert.equal(applyBaseUrl(claude, officialUrl), true);
   assert.equal(persistInitCredentials({ authToken: 'bearer-' + secret(), claudeBaseUrl: relayUrl }, quiet), true);
   assert.equal(persistInitCredentials({ apiKey: 'sk-ant-api03-' + secret() }, quiet), true);
   assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + secret() }, quiet), true);
   assert.equal(persistInitCredentials({ subscriptionLogin: true, claudeBaseUrl: officialUrl }, quiet), true);
-  const auth = await executeAuth(['claude'], { exists: () => true, spawn: () => ({ status: 0 }),
-    runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'success' }) } }), notifyRecovery: () => true });
+  const auth = await executeAuth(['claude'], { spawn: () => ({ status: 0 }),
+    findRuntime: runtimeAuthFixture, notifyRecovery: () => true });
   assert.equal(auth.ok, true);
   assert.equal(syncClaudeRelayTraffic(), true);
 }
@@ -263,20 +267,20 @@ for (const [leftover, expected] of [[true, 'on'], [false, 'off']]) {
   test(`zylos auth claude subscription login on the official API ${leftover ? 'with' : 'without'} a leftover .env API key leaves the setting ${expected}`, async t => {
     const loginFile = path.join(home, '.claude', '.credentials.json');
     t.after(() => fs.rmSync(loginFile, { force: true }));
-    assert.equal(applyBaseUrl('claude', officialUrl), true);
+    assert.equal(applyBaseUrl(claude, officialUrl), true);
     if (leftover) fs.appendFileSync(envFile, `ANTHROPIC_API_KEY=sk-ant-api03-${secret()}\n`);
     seedRelayFlagOn();
-    const result = await executeAuth(['claude'], { exists: () => true,
+    const result = await executeAuth(['claude'], {
       spawn: () => { fs.writeFileSync(loginFile, JSON.stringify({ claudeAiOauth: { refreshToken: 'synthetic-refresh' } })); return { status: 0 }; },
-      runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'success' }) } }), notifyRecovery: () => true });
+      findRuntime: runtimeAuthFixture, notifyRecovery: () => true });
     assert.equal(result.ok, true);
     assert.deepEqual(relayFlagState(), leftover ? RELAY_ON : RELAY_OFF);
   });
 }
 
 test('a login behind a saved relay keeps the relay and gets a notice with the command to go direct', () => {
-  assert.equal(applyBaseUrl('claude', relayUrl), true);
-  assert.equal(applyCredentials('claude', { setupToken: 'sk-ant-oat01-' + secret() }), true);
+  assert.equal(applyBaseUrl(claude, relayUrl), true);
+  assert.equal(applyCredentials(claude, { setupToken: 'sk-ant-oat01-' + secret() }), true);
   assert.deepEqual(relayFlagState(), RELAY_ON, 'the switch follows the kept relay');
   const notice = relayLoginNotice();
   assert.match(notice, /Still using the relay https:\/\/relay\.example\.test/);
@@ -285,12 +289,12 @@ test('a login behind a saved relay keeps the relay and gets a notice with the co
 });
 
 test('`zylos runtime claude --save-base-url https://api.anthropic.com` sets the official URL in .env and the process and turns the switch off', () => {
-  assert.equal(applyBaseUrl('claude', relayUrl), true);
-  assert.equal(applyCredentials('claude', { setupToken: 'sk-ant-oat01-' + secret() }), true);
+  assert.equal(applyBaseUrl(claude, relayUrl), true);
+  assert.equal(applyCredentials(claude, { setupToken: 'sk-ant-oat01-' + secret() }), true);
   assert.deepEqual(relayFlagState(), RELAY_ON);
   const parsed = parseRuntimeFlags(['--save-base-url', 'https://api.anthropic.com']);
-  assert.equal(validateRuntimeFlags('claude', parsed), null);
-  assert.equal(applyBaseUrl('claude', parsed.baseUrl), true);
+  assert.equal(validateRuntimeFlags(claude, parsed), null);
+  assert.equal(applyBaseUrl(claude, parsed.baseUrl), true);
   assert.equal(parseDotEnv(fs.readFileSync(envFile)).ANTHROPIC_BASE_URL, officialUrl);
   assert.equal(process.env.ANTHROPIC_BASE_URL, officialUrl);
   assert.deepEqual(relayFlagState(), RELAY_OFF);
@@ -377,7 +381,7 @@ const PRIVATE = 0o600;
 // zylos runtime with its real credential and base URL saves; everything after the save is stubbed.
 const runtimeDeps = (target = 'claude', changes = {}) => ({
   read: () => ({ state: 'ok', config: { runtime: target, session_mode: 'multi' } }), mode: () => ({ mode: 'multi' }),
-  runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'success' }) } }), exists: () => true,
+  runtimeFor: runtimeAuthFixture,
   hooksReady: () => ({ ready: true, pendingMigration: false }),
   write: () => ({ previous: { runtime: target }, config: { runtime: target, session_mode: 'multi' }, changed: false }),
   observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }), identity: async () => ({ present: false }), ...changes });
@@ -386,8 +390,8 @@ const overrideWarnings = result => {
   assert.equal(result.ok, true, JSON.stringify(result.error));
   return result.data.warnings.filter(item => item.code === OVERRIDE);
 };
-const loginSave = (runtime = 'claude') => executeAuth([runtime], { exists: () => true, spawn: () => ({ status: 0 }),
-  runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'success' }) } }), notifyRecovery: () => true });
+const loginSave = (runtime = 'claude') => executeAuth([runtime], { spawn: () => ({ status: 0 }),
+  findRuntime: runtimeAuthFixture, notifyRecovery: () => true });
 
 test('zylos runtime --save-apikey: a different settings.json API key is named once, without either value', async () => {
   const hand = handSecret(), saved = 'sk-ant-api03-' + secret();
@@ -419,7 +423,7 @@ test('zylos runtime --save-base-url: a different relay address and switch value 
 });
 
 test('the go-direct command while settings.json keeps a relay and the switch on: both are named', async () => {
-  assert.equal(applyCredentials('claude', { setupToken: 'sk-ant-oat01-' + secret() }), true);
+  assert.equal(applyCredentials(claude, { setupToken: 'sk-ant-oat01-' + secret() }), true);
   const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_BASE_URL: relayUrl, [relayFlag]: '1' } }), PRIVATE);
   const [warning] = overrideWarnings(await runtimeSave(['--save-base-url', officialUrl]));
   assert.equal(parseDotEnv(fs.readFileSync(envFile))[relayFlag], undefined, 'zylos turned the switch off');
@@ -491,7 +495,7 @@ test('missing, env-less and unparseable settings.json print nothing and every sa
 // failure result still carries the warning (error.warnings) and the text output
 // prints it before the error.
 for (const [name, changes, code] of [
-  ['the auth probe fails', { runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'failure' }) } }) }, 'AUTH_FAILED'],
+  ['the auth probe fails', { runtimeFor: id => runtimeAuthFixture(id, { auth: { checkAuth: () => ({ status: 'failure' }) } }) }, 'AUTH_FAILED'],
   ['hooks are not ready', { hooksReady: () => ({ ready: false }) }, 'HOOKS_NOT_READY'],
   ['the config write fails', { write: () => { throw Object.assign(new Error('config write failed'), { code: 'CONFIG_WRITE_FAILED' }); } }, 'CONFIG_WRITE_FAILED'],
 ]) test(`zylos runtime --save-apikey keeps the settings.json warning when ${name} after the save`, async () => {
@@ -511,7 +515,7 @@ for (const [name, changes, code] of [
 test('zylos runtime text output prints the settings.json warning before the error when the probe fails', async () => {
   const hand = handSecret(), saved = 'sk-ant-api03-' + secret();
   const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: hand } }), PRIVATE);
-  const failing = runtimeDeps('claude', { runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'failure' }) } }) });
+  const failing = runtimeDeps('claude', { runtimeFor: id => runtimeAuthFixture(id, { auth: { checkAuth: () => ({ status: 'failure' }) } }) });
   const errors = [], logs = [], original = { error: console.error, log: console.log }, exitCode = process.exitCode;
   console.error = line => errors.push(String(line)); console.log = line => logs.push(String(line));
   let result;
@@ -532,7 +536,7 @@ test('Codex saves never report the Claude settings.json warning', async () => {
   const saved = await runtimeSave(['--save-apikey', 'sk-codex-' + secret()], { target: 'codex' });
   assert.equal(saved.ok, true, JSON.stringify(saved.error));
   assert.equal(saved.data.warnings.some(item => item.code === OVERRIDE), false, 'zylos runtime codex --save-apikey');
-  const failed = await runtimeSave(['--save-apikey', 'sk-codex-' + secret()], { target: 'codex', runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'failure' }) } }) });
+  const failed = await runtimeSave(['--save-apikey', 'sk-codex-' + secret()], { target: 'codex', runtimeFor: id => runtimeAuthFixture(id, { auth: { checkAuth: () => ({ status: 'failure' }) } }) });
   assert.equal(failed.ok, false);
   assert.equal((failed.error.warnings ?? []).some(item => item.code === OVERRIDE), false, 'failed zylos runtime codex --save-apikey');
   const login = await loginSave('codex');
@@ -558,8 +562,8 @@ test('init with a subscription login only (no base URL) names an API key left in
 // settings.json `env` over the values zylos passed. The failure names any key
 // there that overrides the values the check used (read only), even though
 // nothing was saved yet. Codex and successful checks are unchanged.
-const failedLogin = (runtime = 'claude', status = 'failure') => executeAuth([runtime], { exists: () => true, spawn: () => ({ status: 0 }),
-  runtimeFor: () => ({ auth: { checkAuth: async () => ({ status }) } }), notifyRecovery: () => true });
+const failedLogin = (runtime = 'claude', status = 'failure') => executeAuth([runtime], { spawn: () => ({ status: 0 }),
+  findRuntime: id => runtimeAuthFixture(id, { auth: { checkAuth: () => ({ status }) } }), notifyRecovery: () => true });
 const failureOverrides = result => {
   assert.equal(result.ok, false);
   return (result.error.warnings ?? []).filter(item => item.code === OVERRIDE);
@@ -586,7 +590,7 @@ test('zylos auth claude text output prints the settings.json warning before the 
   const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: hand } }));
   const errors = [], logs = [], original = { error: console.error, log: console.log }, exitCode = process.exitCode;
   console.error = line => errors.push(String(line)); console.log = line => logs.push(String(line));
-  try { await authCommand(['claude'], { exists: () => true, spawn: () => ({ status: 0 }), runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'failure' }) } }) }); }
+  try { await authCommand(['claude'], { spawn: () => ({ status: 0 }), findRuntime: id => runtimeAuthFixture(id, { auth: { checkAuth: () => ({ status: 'failure' }) } }) }); }
   finally { console.error = original.error; console.log = original.log; assert.equal(process.exitCode, 1, 'the exit code stays 1'); process.exitCode = exitCode; }
   const warning = errors.findIndex(line => line.startsWith(`Warning [${OVERRIDE}]: `));
   assert.ok(warning >= 0, 'the warning is printed on stderr');

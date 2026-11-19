@@ -189,11 +189,10 @@ test('doctor and uninstall propagate missing directory before service actions', 
   t.mock.method(console, 'log', () => {});
   syncBuiltinESMExports();
   t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
-  await assert.rejects(collectDiagnostics({}, {
+  await assert.rejects(collectDiagnostics(new Map(), {
     resolve: async () => ({ runtime: 'unknown', live: { tmuxName: 'fixture' } }),
     tmuxCheck: () => ({ installed: true }), pm2Check: () => ({ installed: false }),
     psCheck: () => ({ installed: true }),
-    network: () => assert.fail('unknown runtime must skip network'),
   }), { code });
   await assert.rejects(selfUninstall(['--force']), { code });
   assert.equal(calls, 0);

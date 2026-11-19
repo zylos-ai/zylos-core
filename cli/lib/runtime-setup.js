@@ -189,6 +189,12 @@ export function credentialFilePermissionWarnings(files) {
   return warnings;
 }
 
+export function warnUnrestrictedCredentialFiles(files, warnings) {
+  for (const message of credentialFilePermissionWarnings(files)) {
+    warnings.push({ code: 'CREDENTIAL_FILE_NOT_PRIVATE', message });
+  }
+}
+
 const CLAUDE_CREDENTIAL_COMMENTS = {
   ANTHROPIC_API_KEY: 'Anthropic API key (set by zylos init)',
   ANTHROPIC_AUTH_TOKEN: 'Anthropic auth token (set by zylos init)',

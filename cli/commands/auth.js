@@ -1,15 +1,12 @@
 import { spawn as spawnChild } from 'node:child_process';
-import { getRuntime, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
-import { commandExists } from '../lib/shell-utils.js';
+import { findRuntime, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
+import { UNSUPPORTED } from '../lib/runtime/contract.js';
 import { notifyAuthCompleted } from '../lib/am-sock-client.js';
-import { claudeSettingsOverrideNotice, relayLoginNotice, syncClaudeRelayTraffic } from '../lib/runtime-setup.js';
-import { claudeProbeEnvironment } from '../lib/runtime/session-command.js';
-import { ZYLOS_DIR } from '../lib/config.js';
 
-export function runNativeAuth(runtime, args) {
+export function runNativeAuth(command, args) {
   return new Promise(resolve => {
     let cancelled = false;
-    const child = spawnChild(runtime, args, { stdio: ['inherit', 2, 2] });
+    const child = spawnChild(command, args, { stdio: ['inherit', 2, 2] });
     const interrupt = () => { cancelled = true; child.kill('SIGINT'); };
     process.on('SIGINT', interrupt);
     const finish = result => {
@@ -21,44 +18,47 @@ export function runNativeAuth(runtime, args) {
   });
 }
 
-export async function executeAuth(args, { exists = commandExists, runtimeFor = getRuntime, spawn = runNativeAuth,
-  notifyRecovery = notifyAuthCompleted, syncRelayTraffic = syncClaudeRelayTraffic, relayNotice = relayLoginNotice } = {}) {
+export async function executeAuth(args, { findRuntime: lookupRuntime = findRuntime, spawn = runNativeAuth,
+  notifyRecovery = notifyAuthCompleted } = {}) {
   const runtime = args[0];
   const deviceCode = args.includes('--device-code');
+  const rt = runtime ? await lookupRuntime(runtime) : null;
+  const login = rt?.auth.nativeLogin;
   const invalid = args.slice(1).some(arg => !['--json', '--device-code'].includes(arg)) ||
     ['--json', '--device-code'].some(flag => args.filter(arg => arg === flag).length > 1) ||
-    (deviceCode && runtime !== 'codex');
+    (deviceCode && (!login || login === UNSUPPORTED || !login.deviceArgs));
   if (!runtime || invalid) return { ok: false, error: { code: 'INVALID_ARGUMENT', message: 'Usage: zylos auth <runtime> [--device-code (codex)] [--json]', persisted: [] } };
   if (!SUPPORTED_RUNTIMES.includes(runtime)) return { ok: false, error: { code: 'RUNTIME_UNSUPPORTED', message: 'Unsupported runtime', persisted: [] } };
-  if (!exists(runtime)) return { ok: false, error: { code: 'RUNTIME_NOT_INSTALLED', message: 'Run zylos init first', persisted: [] } };
+  const command = rt.identity.findExecutable();
+  if (command === null) return { ok: false, error: { code: 'RUNTIME_NOT_INSTALLED', message: 'Run zylos init first', persisted: [] } };
   try {
-    const result = runtime === 'agy' ? { status: 0 } : await spawn(runtime, runtime === 'claude' ? ['auth', 'login'] : ['login', ...(deviceCode ? ['--device-auth'] : [])], { stdio: ['inherit', 2, 2] });
+    const result = login === UNSUPPORTED
+      ? { status: 0 }
+      : await spawn(command, deviceCode ? login.deviceArgs : login.args);
     if (result.signal || result.status === 130) return { ok: false, error: { code: 'AUTH_CANCELLED', message: 'Authentication cancelled', persisted: null, configChanged: false } };
     if (result.error || result.status !== 0) throw new Error('Native authentication failed');
     let checked;
-    try { checked = await (await runtimeFor(runtime)).auth.checkAuth(); }
+    try { checked = await rt.auth.checkAuth(); }
     catch { checked = { status: 'uncertain' }; }
     if (checked.status !== 'success') {
-      // The failed check ran Claude Code, which takes settings.json `env` over the
-      // values zylos passed: name any key there that overrides them (read only).
-      const override = runtime === 'claude' ? claudeSettingsOverrideNotice(claudeProbeEnvironment(ZYLOS_DIR, process.env)) : null;
+      const warnings = rt.auth.overrideWarnings === UNSUPPORTED ? [] : rt.auth.overrideWarnings({ against: 'probe' });
       return { ok: false, error: { code: checked.status === 'failure' ? 'AUTH_FAILED' : 'AUTH_NOT_CONFIRMED',
-        message: runtime === 'agy' ? 'Gemini API key was not confirmed; run zylos runtime agy --save-apikey <key>' : 'Authentication was not confirmed', persisted: null, configChanged: false,
-        ...(override ? { warnings: [{ code: 'CLAUDE_SETTINGS_OVERRIDE', message: override }] } : {}) } };
+        message: `Authentication was not confirmed; ${rt.auth.remedy}`, persisted: null, configChanged: false,
+        ...(warnings.length ? { warnings } : {}) } };
     }
-    // Subscription login: recompute the relay traffic setting from the saved state before the session restarts.
-    if (runtime === 'claude' && !syncRelayTraffic()) {
-      return { ok: false, error: { code: 'CREDENTIAL_SAVE_FAILED',
-        message: 'Authenticated, but CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC could not be updated', persisted: null, configChanged: false } };
+    let relay = [];
+    if (rt.auth.afterLogin !== UNSUPPORTED) {
+      const after = await rt.auth.afterLogin();
+      if (!after.ok) {
+        return { ok: false, error: { code: 'CREDENTIAL_SAVE_FAILED',
+          message: after.message, persisted: null, configChanged: false } };
+      }
+      relay = after.warnings;
     }
-    const relay = runtime === 'claude' ? relayNotice() : null;
-    // settings.json values that would override the recomputed setting (read only).
-    const override = runtime === 'claude' ? claudeSettingsOverrideNotice() : null;
+    const override = rt.auth.overrideWarnings === UNSUPPORTED ? [] : rt.auth.overrideWarnings({ against: 'saved' });
     let recoveryNotified = false;
     try { recoveryNotified = await notifyRecovery(runtime) === true; } catch {}
-    return { ok: true, data: { runtime, authStatus: 'success', recoveryNotified,
-      warnings: [...(relay ? [{ code: 'RELAY_BASE_URL_KEPT', message: relay }] : []),
-        ...(override ? [{ code: 'CLAUDE_SETTINGS_OVERRIDE', message: override }] : [])] } };
+    return { ok: true, data: { runtime, authStatus: 'success', recoveryNotified, warnings: [...relay, ...override] } };
   } catch (error) { return { ok: false, error: { code: 'AUTH_FAILED', message: error.message, persisted: null, configChanged: false } }; }
 }
 

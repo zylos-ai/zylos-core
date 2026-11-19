@@ -83,3 +83,13 @@ export async function prepare(options = {}) {
   try { sessionEnv = claudeProbeEnvironment(root, env); } catch { /* launch reports an unreadable .env */ }
   await ensureOnboardingComplete(root, env, PRE_APPROVED_KEYS.map(key => sessionEnv[key]).filter(Boolean));
 }
+
+export function checkAutonomous({ home = os.homedir() } = {}) {
+  const hint = 'Set skipDangerousModePermissionPrompt in ~/.claude/settings.json';
+  try {
+    const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
+    return { accepted: Boolean(settings.skipDangerousModePermissionPrompt), hint };
+  } catch {
+    return { accepted: false, hint };
+  }
+}

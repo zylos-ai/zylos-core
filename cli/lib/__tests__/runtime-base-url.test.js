@@ -1,3 +1,4 @@
+import { runtimeAuthFixture } from './helpers/runtime-auth.js';
 import assert from 'node:assert/strict';
 import { after, describe, test } from 'node:test';
 import fs from 'node:fs';
@@ -23,7 +24,7 @@ describe('runtime base URL support', () => {
     const { parseRuntimeFlags, validateRuntimeFlags } = await import('../../commands/runtime.js');
     const privatePart = 'private-url-value';
     for (const address of [`https://user:${privatePart}@example.com`, `https://example.com/?key=${privatePart}`, `https://example.com/#${privatePart}`, 'https://example.com?', 'https://example.com#']) {
-      const result = validateRuntimeFlags('claude', parseRuntimeFlags(['--save-base-url', address]));
+      const result = validateRuntimeFlags(await runtimeAuthFixture('claude'), parseRuntimeFlags(['--save-base-url', address]));
       assert.ok(result?.error, 'credential-bearing URLs must be rejected');
       assert.ok(!JSON.stringify(result).includes(privatePart), 'validation must not reflect input');
     }
@@ -74,7 +75,7 @@ describe('runtime base URL support', () => {
     assert.deepEqual(await runtimeHooksReady('claude'), { ready: true, pendingMigration: true });
     let writes = 0;
     const deps = { read: () => ({ state: 'ok', config: { runtime: 'codex', session_mode: 'multi' } }),
-      exists: () => true, runtimeFor: () => ({ auth: { checkAuth: () => assert.fail('no-validate must skip auth') } }),
+      runtimeFor: id => runtimeAuthFixture(id, { auth: { checkAuth: () => assert.fail('no-validate must skip auth') } }),
       write: () => { writes++; return { previous: { runtime: 'codex' }, config: { runtime: 'claude', session_mode: 'multi' }, changed: true }; },
       observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }) };
     assert.equal((await executeRuntimeSwitch('claude', ['--no-validate'], deps)).ok, true);
@@ -134,7 +135,7 @@ describe('runtime base URL support', () => {
   test('validateRuntimeFlags rejects invalid saved base URL values', async () => {
     const { validateRuntimeFlags } = await import('../../commands/runtime.js');
 
-    const error = validateRuntimeFlags('codex', {
+    const error = validateRuntimeFlags(await runtimeAuthFixture('codex'), {
       apiKey: null,
       setupToken: null,
       baseUrl: 'not-a-url',
@@ -146,8 +147,8 @@ describe('runtime base URL support', () => {
   test('applyBaseUrl writes Claude and Codex base URLs to the expected config', async () => {
     const runtimeModule = await import('../../commands/runtime.js');
 
-    assert.equal(runtimeModule.applyBaseUrl('claude', 'https://claude-proxy.example.com'), true);
-    assert.equal(runtimeModule.applyBaseUrl('codex', 'https://codex-proxy.example.com/v1'), true);
+    assert.equal(runtimeModule.applyBaseUrl(await runtimeAuthFixture('claude'), 'https://claude-proxy.example.com'), true);
+    assert.equal(runtimeModule.applyBaseUrl(await runtimeAuthFixture('codex'), 'https://codex-proxy.example.com/v1'), true);
 
     const envContent = fs.readFileSync(path.join(process.env.ZYLOS_DIR, '.env'), 'utf8');
     assert.match(envContent, /ANTHROPIC_BASE_URL=https:\/\/claude-proxy\.example\.com/);

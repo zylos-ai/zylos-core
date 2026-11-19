@@ -22,24 +22,8 @@ import { desiredClaudeHooks, syncHooks, detectStopFailureSupport, detectSubagent
 import { syncAgyConfig, isAgyConfigReady } from '../lib/agy-setup.js';
 import { isCodexTrustValid, getCodexVersion } from '../lib/codex-hooks.js';
 import { isSplitInstructionsActive, buildInstructionFile, assertInstructionReady } from '../lib/runtime/instruction-builder.js';
-import { commandExists } from '../lib/shell-utils.js';
-import {
-  credentialFilePermissionWarnings,
-  credentialFiles,
-  isValidBaseUrl,
-  saveApiKey,
-  saveApiKeyToEnv,
-  saveClaudeBaseUrlToEnv,
-  saveSetupToken,
-  saveSetupTokenToEnv,
-  syncClaudeRelayTraffic,
-  relayLoginNotice,
-  claudeSettingsOverrideNotice,
-  saveCodexApiKey,
-  saveAgyApiKey,
-  saveCodexBaseUrlToEnv,
-  writeCodexConfig,
-} from '../lib/runtime-setup.js';
+import { UNSUPPORTED } from '../lib/runtime/contract.js';
+import { isValidBaseUrl } from '../lib/runtime-setup.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -108,64 +92,15 @@ function showStatus() {
 
 // ── Credential save helpers ───────────────────────────────────────────────
 
-// Credential files that stay readable by others after a save are reported as warnings.
-function warnUnrestrictedCredentialFiles(target, warnings) {
-  for (const message of credentialFilePermissionWarnings(credentialFiles(target))) {
-    warnings.push({ code: 'CREDENTIAL_FILE_NOT_PRIVATE', message });
-  }
+export function applyCredentials(rt, creds, warnings = []) {
+  const kind = creds.setupToken ? 'setupToken' : creds.apiKey ? 'apiKey' : null;
+  if (!kind || rt.auth.saveCredential === UNSUPPORTED) return false;
+  return rt.auth.saveCredential(kind, creds[kind], warnings);
 }
 
-/**
- * Save credentials for the target runtime and write to .env.
- * Returns true on success, false on failure.
- *
- * @param {string} target - 'claude' | 'codex'
- * @param {{ apiKey?: string, setupToken?: string }} creds
- * @param {Array<{code: string, message: string}>} [warnings] - receives credential file permission warnings
- * @returns {boolean}
- */
-export function applyCredentials(target, creds, warnings = []) {
-  if (target === 'claude') {
-    if (creds.setupToken) {
-      if (!saveSetupToken(creds.setupToken)) return false;
-      saveSetupTokenToEnv(creds.setupToken);
-      if (!syncClaudeRelayTraffic()) return false;
-      warnUnrestrictedCredentialFiles(target, warnings);
-      return true;
-    }
-    if (creds.apiKey) {
-      if (!saveApiKey(creds.apiKey)) return false;
-      saveApiKeyToEnv(creds.apiKey);
-      if (!syncClaudeRelayTraffic()) return false;
-      warnUnrestrictedCredentialFiles(target, warnings);
-      return true;
-    }
-  } else if (target === 'agy') {
-    if (!creds.apiKey || !saveAgyApiKey(creds.apiKey)) return false;
-    warnUnrestrictedCredentialFiles(target, warnings);
-    return true;
-  } else if (target === 'codex') {
-    if (creds.apiKey) {
-      if (!saveCodexApiKey(creds.apiKey)) return false;
-      warnUnrestrictedCredentialFiles(target, warnings);
-      return true;
-    }
-  }
-  return false;
-}
-
-export function applyBaseUrl(target, baseUrl, warnings = []) {
-  if (target === 'claude') {
-    if (!saveClaudeBaseUrlToEnv(baseUrl)) return false;
-    if (!syncClaudeRelayTraffic()) return false;
-    warnUnrestrictedCredentialFiles(target, warnings);
-    return true;
-  }
-  if (target === 'codex') {
-    if (!saveCodexBaseUrlToEnv(baseUrl)) return false;
-    return writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: baseUrl });
-  }
-  return false;
+export function applyBaseUrl(rt, baseUrl, warnings = []) {
+  if (rt.auth.saveBaseUrl === UNSUPPORTED) return false;
+  return rt.auth.saveBaseUrl(baseUrl, warnings);
 }
 
 export function parseRuntimeFlags(flags) {
@@ -185,7 +120,7 @@ export function parseRuntimeFlags(flags) {
   };
 }
 
-export function validateRuntimeFlags(target, parsed) {
+export function validateRuntimeFlags(rt, parsed) {
   const valueFlags = new Set(['--save-apikey', '--save-setup-token', '--save-base-url']);
   const seen = new Set();
   for (let index = 0; index < (parsed.flags || []).length; index++) {
@@ -194,37 +129,32 @@ export function validateRuntimeFlags(target, parsed) {
     seen.add(flag);
     if (valueFlags.has(flag)) index++;
   }
-  if (target === 'agy' && parsed.hasBaseUrl) return { error: '--save-base-url is not supported for agy' };
-  if (target !== 'claude' && parsed.hasSetupToken) return { error: '--save-setup-token requires claude' };
+  if (rt.auth.saveBaseUrl === UNSUPPORTED && parsed.hasBaseUrl) return { error: `--save-base-url is not supported for ${rt.id}` };
+  const kinds = rt.auth.credentialKinds === UNSUPPORTED ? {} : rt.auth.credentialKinds;
+  if (parsed.hasSetupToken && !Object.hasOwn(kinds, 'setupToken')) return { error: '--save-setup-token requires claude' };
   if (parsed.hasApiKey && parsed.hasSetupToken) return { error: 'Choose either API key or setup token' };
   if (parsed.hasApiKey && (!parsed.apiKey || parsed.apiKey.startsWith('--'))) {
     return {
       error: 'Missing value for --save-apikey.',
-      example: target === 'codex'
-        ? 'zylos runtime codex --save-apikey sk-proj-xxx'
-        : 'zylos runtime claude --save-apikey sk-ant-api-xxx',
+      example: `zylos runtime ${rt.id} --save-apikey ${kinds.apiKey}`,
     };
   }
   if (parsed.hasSetupToken && (!parsed.setupToken || parsed.setupToken.startsWith('--'))) {
     return {
       error: 'Missing value for --save-setup-token.',
-      example: 'zylos runtime claude --save-setup-token sk-ant-oat-xxx',
+      example: `zylos runtime ${rt.id} --save-setup-token ${kinds.setupToken}`,
     };
   }
   if (parsed.hasBaseUrl && (!parsed.baseUrl || parsed.baseUrl.startsWith('--'))) {
     return {
       error: 'Missing value for --save-base-url.',
-      example: target === 'codex'
-        ? 'zylos runtime codex --save-base-url https://proxy.example.com/v1'
-        : 'zylos runtime claude --save-base-url https://claude-proxy.example.com',
+      example: `zylos runtime ${rt.id} --save-base-url ${rt.auth.baseUrlExample}`,
     };
   }
   if (parsed.baseUrl && !isValidBaseUrl(parsed.baseUrl)) {
     return {
       error: 'Invalid base URL. Use an HTTP(S) URL without credentials, query, or fragment.',
-      example: target === 'codex'
-        ? 'zylos runtime codex --save-base-url https://proxy.example.com/v1'
-        : 'zylos runtime claude --save-base-url https://claude-proxy.example.com',
+      example: `zylos runtime ${rt.id} --save-base-url ${rt.auth.baseUrlExample}`,
     };
   }
   return null;
@@ -323,9 +253,9 @@ async function reclaimSingleRuntime(live, group, warnings, { send, lookup, reque
 }
 
 export async function executeRuntimeSwitch(target, flags, { read = readZylosConfigStrict, mode = readSessionMode,
-  exists = commandExists, runtimeFor = getRuntime, credentials = applyCredentials, baseUrl = applyBaseUrl,
+  runtimeFor = getRuntime, prepareCli, credentials = applyCredentials, baseUrl = applyBaseUrl,
   hooksReady = runtimeHooksReady, write = updateZylosConfigLocked, observe = observeRuntimeGroups,
-  identity = readLiveIdentity, send = submit, lookup = lookupRestartRequest, relayNotice = relayLoginNotice,
+  identity = readLiveIdentity, send = submit, lookup = lookupRestartRequest,
   requestId = () => `cli-rt-${Date.now()}-${randomBytes(6).toString('hex')}` } = {}) {
   const credentialsSaved = [], warnings = [];
   // A failure after a save keeps the warnings collected so far (for example a
@@ -334,10 +264,10 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
     ...(warnings.length ? { warnings: [...warnings] } : {}), ...extra } });
   const parsed = parseRuntimeFlags(flags);
   if (!SUPPORTED_RUNTIMES.includes(target)) return fail('RUNTIME_UNSUPPORTED', 'Unsupported runtime');
-  const invalid = validateRuntimeFlags(target, parsed);
-  if (invalid) return fail('INVALID_ARGUMENT', invalid.error);
   let selected;
   try { selected = await runtimeFor(target); } catch (error) { return fail('RUNTIME_UNSUPPORTED', error.message); }
+  const invalid = validateRuntimeFlags(selected, parsed);
+  if (invalid) return fail('INVALID_ARGUMENT', invalid.error);
   let config;
   try {
     const result = read();
@@ -348,24 +278,33 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
   let baseline = previousBaseline, changed = false;
   const fullPath = previousBaseline !== target || parsed.hasApiKey || parsed.hasSetupToken || parsed.hasBaseUrl;
   if (fullPath) {
-    if (!exists(target)) return fail('RUNTIME_NOT_INSTALLED', `${target} CLI missing; run zylos init`);
+    if (selected.identity.findExecutable() === null) {
+      try {
+        const { installCliOnUse } = await import('./init.js');
+        const installation = await installCliOnUse(selected, { prepare: prepareCli });
+        if (!installation.attempted) return fail('RUNTIME_NOT_INSTALLED', `${target} CLI missing; run zylos init`);
+        if (!installation.ok) return fail('RUNTIME_NOT_INSTALLED', installation.message);
+        for (const { message } of installation.notices) {
+          warnings.push({ code: 'RUNTIME_CLI_INSTALL_NOTICE', message });
+        }
+      } catch (error) {
+        return fail('RUNTIME_NOT_INSTALLED', error.message);
+      }
+    }
     try {
       for (const [key, value, save] of [
-        ['apiKey', parsed.apiKey, () => credentials(target, { apiKey: parsed.apiKey }, warnings)],
-        ['setupToken', parsed.setupToken, () => credentials(target, { setupToken: parsed.setupToken }, warnings)],
-        ['baseUrl', parsed.baseUrl, () => baseUrl(target, parsed.baseUrl, warnings)],
+        ['apiKey', parsed.apiKey, () => credentials(selected, { apiKey: parsed.apiKey }, warnings)],
+        ['setupToken', parsed.setupToken, () => credentials(selected, { setupToken: parsed.setupToken }, warnings)],
+        ['baseUrl', parsed.baseUrl, () => baseUrl(selected, parsed.baseUrl, warnings)],
       ]) {
         if (value) { if (!await save()) return fail('CREDENTIAL_SAVE_FAILED', `Could not save ${key}`); credentialsSaved.push(key); }
       }
     } catch (error) { return fail('CREDENTIAL_SAVE_FAILED', error.message); }
-    if (target === 'claude' && parsed.setupToken && !parsed.baseUrl) {
-      const relay = relayNotice();
-      if (relay) warnings.push({ code: 'RELAY_BASE_URL_KEPT', message: relay });
+    if (credentialsSaved.includes('setupToken') && !parsed.baseUrl && selected.auth.afterLogin !== UNSUPPORTED) {
+      warnings.push(...(await selected.auth.afterLogin()).warnings);
     }
-    // settings.json values that would override what this run saved (read only).
-    if (target === 'claude' && credentialsSaved.length) {
-      const override = claudeSettingsOverrideNotice();
-      if (override) warnings.push({ code: 'CLAUDE_SETTINGS_OVERRIDE', message: override });
+    if (credentialsSaved.length && selected.auth.overrideWarnings !== UNSUPPORTED) {
+      warnings.push(...selected.auth.overrideWarnings({ against: 'saved' }));
     }
     try {
       if (target === 'agy') {
@@ -383,11 +322,8 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
       try { auth = await selected.auth.checkAuth(); } catch { auth = { status: 'uncertain' }; }
       if (auth.status !== 'success') {
         const rejected = auth.status === 'failure';
-        const remedy = target === 'agy'
-          ? `replace the API key with zylos runtime agy --save-apikey <key>`
-          : `replace credentials or log in again with zylos auth ${target}`;
         const message = rejected
-          ? `${target} credentials rejected or not logged in; ${remedy}`
+          ? `${target} credentials rejected or not logged in; ${selected.auth.remedy}`
           : `${target} authentication could not be confirmed; check network/proxy connectivity, then retry zylos runtime ${target}`;
         return fail(rejected ? 'AUTH_FAILED' : 'AUTH_NOT_CONFIRMED', message, { authStatus: rejected ? 'failure' : 'uncertain' });
       }

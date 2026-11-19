@@ -4,6 +4,12 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { classifyCodexLoginStatus } from '../../auth-parsers.js';
+import { ZYLOS_DIR } from '../../config.js';
+import {
+  credentialFiles as runtimeCredentialFiles, warnUnrestrictedCredentialFiles,
+  saveCodexApiKey, saveCodexBaseUrlToEnv, writeCodexConfig,
+} from '../../runtime-setup.js';
+import { UNSUPPORTED } from '../contract.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -95,3 +101,31 @@ export async function checkAuth(options = {}) {
     return { status: 'uncertain', reason: 'http_probe_network_error' };
   }
 }
+
+const credentialFiles = () => runtimeCredentialFiles('codex');
+
+function saveCredential(kind, value, warnings) {
+  if (kind !== 'apiKey' || !saveCodexApiKey(value)) return false;
+  warnUnrestrictedCredentialFiles(credentialFiles(), warnings);
+  return true;
+}
+
+function saveBaseUrl(url) {
+  return saveCodexBaseUrlToEnv(url) && writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: url });
+}
+
+export const auth = Object.freeze({
+  checkAuth,
+  remedy: 'replace credentials or log in again with zylos auth codex',
+  credentialFiles,
+  credentialKinds: Object.freeze({ apiKey: 'sk-proj-xxx' }),
+  saveCredential,
+  saveBaseUrl,
+  baseUrlExample: 'https://proxy.example.com/v1',
+  nativeLogin: Object.freeze({
+    args: Object.freeze(['login']),
+    deviceArgs: Object.freeze(['login', '--device-auth']),
+  }),
+  afterLogin: UNSUPPORTED,
+  overrideWarnings: UNSUPPORTED,
+});

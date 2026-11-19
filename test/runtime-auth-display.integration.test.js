@@ -9,6 +9,7 @@
 // skills/dashboard/public/js/action-result.js change; otherwise it can be skipped.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { runtimeAuthFixture } from '../cli/lib/__tests__/helpers/runtime-auth.js';
 import { executeRuntimeSwitch } from '../cli/commands/runtime.js';
 import { sendCommandJson } from '../skills/dashboard/src/lib/http.js';
 import { formatActionResult } from '../skills/dashboard/public/js/action-result.js';
@@ -24,8 +25,7 @@ test('runtime auth remedies remain distinct through Dashboard HTTP and page form
     for (const status of ['failure', 'uncertain']) {
       reply = await executeRuntimeSwitch(runtime, [], {
         read: () => ({ state: 'ok', config: { runtime: runtime === 'claude' ? 'codex' : 'claude' } }),
-        runtimeFor: () => ({ auth: { checkAuth: async () => ({ status }) } }),
-        exists: () => true, hooksReady: () => ({ ready: true }),
+        runtimeFor: id => runtimeAuthFixture(id, { auth: { checkAuth: () => ({ status }) } }), hooksReady: () => ({ ready: true }),
         write: () => assert.fail('authentication rejection must not save runtime'),
       });
       const result = await handleAction('switch-runtime', { runtime, request: `${runtime}-${status}` }, {});

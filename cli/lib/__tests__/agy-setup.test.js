@@ -1,3 +1,4 @@
+import { runtimeAuthFixture } from './helpers/runtime-auth.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -88,14 +89,14 @@ test('Antigravity setup dry run writes no files', t => {
   assert.equal(fs.existsSync(path.join(f.home, '.gemini')), false);
 });
 
-test('Antigravity API key save replaces duplicate dotenv entries and stays private', t => {
+test('Antigravity API key save replaces duplicate dotenv entries and stays private', async t => {
   const file = path.join(ZYLOS_DIR, '.env');
   fs.mkdirSync(ZYLOS_DIR, { recursive: true });
   const prior = fs.existsSync(file) ? fs.readFileSync(file) : null;
   const priorKey = process.env.GEMINI_API_KEY;
   t.after(() => { if (prior) fs.writeFileSync(file, prior); else fs.rmSync(file, { force: true }); if (priorKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = priorKey; });
   fs.writeFileSync(file, 'KEEP=yes\nGEMINI_API_KEY=old\nexport GEMINI_API_KEY = duplicate\n');
-  assert.equal(applyCredentials('agy', { apiKey: 'isolated-fake-key' }), true);
+  assert.equal(applyCredentials(await runtimeAuthFixture('agy'), { apiKey: 'isolated-fake-key' }), true);
   const content = fs.readFileSync(file, 'utf8');
   assert.equal(content.split('\n').filter(line => /^GEMINI_API_KEY=/.test(line)).length, 1);
   assert.match(content, /KEEP=yes/);
@@ -105,20 +106,22 @@ test('Antigravity API key save replaces duplicate dotenv entries and stays priva
   assert.equal(fs.readFileSync(file, 'utf8'), content);
 });
 
-test('Antigravity CLI flags allow API keys and reject subscription and base URL modes', () => {
-  assert.equal(validateRuntimeFlags('agy', parseRuntimeFlags(['--save-apikey', 'fake'])), null);
-  assert.match(validateRuntimeFlags('agy', parseRuntimeFlags(['--save-setup-token', 'fake'])).error, /requires claude/);
-  assert.match(validateRuntimeFlags('agy', parseRuntimeFlags(['--save-base-url', 'https://example.com'])).error, /not supported/);
+test('Antigravity CLI flags allow API keys and reject subscription and base URL modes', async () => {
+  const agy = await runtimeAuthFixture('agy');
+  assert.equal(validateRuntimeFlags(agy, parseRuntimeFlags(['--save-apikey', 'fake'])), null);
+  assert.equal(validateRuntimeFlags(agy, parseRuntimeFlags(['--save-apikey'])).example, 'zylos runtime agy --save-apikey <key>');
+  assert.match(validateRuntimeFlags(agy, parseRuntimeFlags(['--save-setup-token', 'fake'])).error, /requires claude/);
+  assert.match(validateRuntimeFlags(agy, parseRuntimeFlags(['--save-base-url', 'https://example.com'])).error, /not supported/);
   assert.equal(validateInitOptions({ runtime: 'agy' }), null);
 });
 
 test('Antigravity auth checks saved API key without opening native login', async () => {
   let native = 0, notified = 0;
-  const result = await executeAuth(['agy'], { exists: () => true, spawn: async () => { native++; }, runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'success' }) } }), notifyRecovery: async () => { notified++; return true; } });
+  const result = await executeAuth(['agy'], { spawn: async () => { native++; }, findRuntime: runtimeAuthFixture, notifyRecovery: async () => { notified++; return true; } });
   assert.equal(result.ok, true);
   assert.equal(native, 0);
   assert.equal(notified, 1);
-  const failed = await executeAuth(['agy'], { exists: () => true, runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'failure' }) } }) });
+  const failed = await executeAuth(['agy'], { findRuntime: id => runtimeAuthFixture(id, { auth: { checkAuth: () => ({ status: 'failure' }) } }) });
   assert.equal(failed.error.code, 'AUTH_FAILED');
   assert.match(failed.error.message, /save-apikey/);
 });

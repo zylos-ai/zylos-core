@@ -290,9 +290,9 @@ for (const code of ['CHECKPOINT_GAP', 'CUTOVER_COVERAGE_CONFLICT']) {
       assert.equal(cli.data.globalGate.present, true);
       const doctorValue = { status: cli.data, error: null, skipped: false };
       assert.match(formatDoctorSessionModeStatus(doctorValue).join('\n'), new RegExp(`Mode transition blocked: cutover_failed:${code}`));
-      const doctor = buildDiagnosticJson({ runtime: 'claude', display: 'Claude', apiHost: 'fixture.invalid', sessionModeStatus: doctorValue,
-        system: { tmux: { installed: true }, pm2: { installed: true }, network: { reachable: true } },
-        ai: { cli: { installed: true }, auth: true, authStatus: 'success', autonomous: true },
+      const doctor = buildDiagnosticJson({ runtime: 'claude', display: 'Claude', sessionModeStatus: doctorValue,
+        system: { tmux: { installed: true }, pm2: { installed: true } },
+        ai: { cli: { installed: true }, auth: true, authStatus: 'success', autonomous: true, autonomousApplicable: true },
         services: { running: true, total: 1, procs: [{ name: 'activity-monitor', pm2_env: { status: 'online' } }] },
       }, { success: true, version: 'fixture' });
       assert.equal(doctor.passed, false);

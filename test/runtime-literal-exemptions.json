@@ -1,98 +1,8 @@
 [
   {
-    "file": "cli/commands/auth.js",
-    "text": "(deviceCode && runtime !== 'codex');",
-    "reason": "dispatch:auth: Selects runtime-specific login, credential verification, or result handling."
-  },
-  {
-    "file": "cli/commands/auth.js",
-    "text": "const result = runtime === 'agy' ? { status: 0 } : await spawn(runtime, runtime === 'claude' ? ['auth', 'login'] : ['login', ...(deviceCode ? ['--device-auth'] : [])], { stdio: ['inherit', 2, 2] });",
-    "reason": "dispatch:auth: Selects runtime-specific login, credential verification, or result handling."
-  },
-  {
-    "file": "cli/commands/auth.js",
-    "text": "const override = runtime === 'claude' ? claudeSettingsOverrideNotice(claudeProbeEnvironment(ZYLOS_DIR, process.env)) : null;",
-    "reason": "dispatch:auth: Selects runtime-specific login, credential verification, or result handling."
-  },
-  {
-    "file": "cli/commands/auth.js",
-    "text": "message: runtime === 'agy' ? 'Gemini API key was not confirmed; run zylos runtime agy --save-apikey <key>' : 'Authentication was not confirmed', persisted: null, configChanged: false,",
-    "reason": "dispatch:auth: Selects runtime-specific login, credential verification, or result handling."
-  },
-  {
-    "file": "cli/commands/auth.js",
-    "text": "if (runtime === 'claude' && !syncRelayTraffic()) {",
-    "reason": "dispatch:auth: Selects runtime-specific login, credential verification, or result handling."
-  },
-  {
-    "file": "cli/commands/auth.js",
-    "text": "const relay = runtime === 'claude' ? relayNotice() : null;",
-    "reason": "dispatch:auth: Selects runtime-specific login, credential verification, or result handling."
-  },
-  {
-    "file": "cli/commands/auth.js",
-    "text": "const override = runtime === 'claude' ? claudeSettingsOverrideNotice() : null;",
-    "reason": "dispatch:auth: Selects runtime-specific login, credential verification, or result handling."
-  },
-  {
     "file": "cli/commands/config.js",
     "text": "const runtime = key === 'new_session_threshold' ? 'claude' : 'codex';",
     "reason": "legacy: Reads one of the two fixed pre-group threshold keys."
-  },
-  {
-    "file": "cli/commands/doctor.js",
-    "text": "claude: { display: 'Claude', host: 'api.anthropic.com' },",
-    "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
-  },
-  {
-    "file": "cli/commands/doctor.js",
-    "text": "codex: { display: 'Codex', host: 'api.openai.com' },",
-    "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
-  },
-  {
-    "file": "cli/commands/doctor.js",
-    "text": "agy: { display: 'Antigravity', host: 'generativelanguage.googleapis.com' },",
-    "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
-  },
-  {
-    "file": "cli/commands/doctor.js",
-    "text": "const authenticationHint = runtime => runtime === 'agy' ? 'Run: zylos runtime agy --save-apikey <key>'",
-    "reason": "text: Preserves the existing runtime-specific authentication hint."
-  },
-  {
-    "file": "cli/commands/doctor.js",
-    "text": ": runtime === 'codex' ? 'Run: codex login' : 'Run zylos init to authenticate';",
-    "reason": "text: Preserves the existing runtime-specific authentication hint."
-  },
-  {
-    "file": "cli/commands/doctor.js",
-    "text": "} else if (runtime === 'claude') {",
-    "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
-  },
-  {
-    "file": "cli/commands/doctor.js",
-    "text": "} else if (runtime === 'agy') {",
-    "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
-  },
-  {
-    "file": "cli/commands/doctor.js",
-    "text": "if (diag.runtime === 'claude' && diag.ai.cli.installed && diag.ai.auth && !diag.ai.autonomous) {",
-    "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
-  },
-  {
-    "file": "cli/commands/doctor.js",
-    "text": "...(diag.runtime === 'agy' || !runtimeDiagnostics(diag.runtime) ? { runtime: diag.runtime, display: diag.display } : {}),",
-    "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
-  },
-  {
-    "file": "cli/commands/doctor.js",
-    "text": "autonomous: diag.runtime === 'agy' ? { ok: null, skipped: true } : { ok: diag.ai.autonomous },",
-    "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
-  },
-  {
-    "file": "cli/commands/doctor.js",
-    "text": "if (auth && diag.runtime !== 'agy') {",
-    "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
   },
   {
     "file": "cli/commands/doctor.js",
@@ -376,56 +286,6 @@
   },
   {
     "file": "cli/commands/runtime.js",
-    "text": "if (target === 'claude') {",
-    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "} else if (target === 'agy') {",
-    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "} else if (target === 'codex') {",
-    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "if (target === 'claude') {",
-    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "if (target === 'codex') {",
-    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "if (target === 'agy' && parsed.hasBaseUrl) return { error: '--save-base-url is not supported for agy' };",
-    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "if (target !== 'claude' && parsed.hasSetupToken) return { error: '--save-setup-token requires claude' };",
-    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "example: target === 'codex'",
-    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "example: target === 'codex'",
-    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "example: target === 'codex'",
-    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
-  },
-  {
-    "file": "cli/commands/runtime.js",
     "text": "const instruction = path.join(ZYLOS_DIR, target === 'claude' ? 'CLAUDE.md' : 'AGENTS.md');",
     "reason": "dispatch:instructions: Selects the existing runtime instruction filename or readiness action."
   },
@@ -446,16 +306,6 @@
   },
   {
     "file": "cli/commands/runtime.js",
-    "text": "if (target === 'claude' && parsed.setupToken && !parsed.baseUrl) {",
-    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "if (target === 'claude' && credentialsSaved.length) {",
-    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
-  },
-  {
-    "file": "cli/commands/runtime.js",
     "text": "if (target === 'agy') {",
     "reason": "dispatch:hooks: Checks or refreshes runtime-specific hook and configuration readiness."
   },
@@ -463,11 +313,6 @@
     "file": "cli/commands/runtime.js",
     "text": "buildInstructionFile('agy', { zylosDir: ZYLOS_DIR });",
     "reason": "dispatch:instructions: Selects the existing runtime instruction filename or readiness action."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "const remedy = target === 'agy'",
-    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
   },
   {
     "file": "cli/commands/runtime.js",

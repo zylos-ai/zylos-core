@@ -50,8 +50,13 @@ async function fixture(t, runtime, scenario, { missing = false, timeout, killAft
       }
     });
   }
-  const { auth } = await getRuntime(runtime);
-  return { options, auth: { checkAuth: () => auth.checkAuth(options) } };
+  const rt = await getRuntime(runtime);
+  return {
+    ...rt,
+    options,
+    identity: { ...rt.identity, findExecutable: () => missing ? null : command },
+    auth: { ...rt.auth, checkAuth: () => rt.auth.checkAuth(options) },
+  };
 }
 
 for (const [stream, output] of [['stderr', 'Not logged in'], ['stdout', 'Not logged in']]) {
@@ -180,7 +185,7 @@ async function assertSwitchRejected(target, adapter, status) {
     const result = await runtimeCommand([target, '--json'], {
       execute: (runtime, flags) => executeRuntimeSwitch(runtime, flags, {
         read: () => ({ state: 'ok', config: { runtime: target === 'claude' ? 'codex' : 'claude' } }),
-        runtimeFor: () => adapter, exists: () => true, hooksReady: () => ({ ready: true }),
+        runtimeFor: () => adapter, hooksReady: () => ({ ready: true }),
         write: () => assert.fail('rejected auth must not persist the runtime'),
       }),
     });

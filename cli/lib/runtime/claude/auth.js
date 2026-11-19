@@ -3,6 +3,11 @@ import { promisify } from 'node:util';
 import { ZYLOS_DIR } from '../../config.js';
 import { claudeProbeEnvironment } from '../session-command.js';
 import { childRuntimeEnv } from '../../child-runtime-env.js';
+import {
+  credentialFiles as runtimeCredentialFiles, warnUnrestrictedCredentialFiles,
+  saveApiKey, saveApiKeyToEnv, saveSetupToken, saveSetupTokenToEnv, saveClaudeBaseUrlToEnv,
+  syncClaudeRelayTraffic, relayLoginNotice, claudeSettingsOverrideNotice,
+} from '../../runtime-setup.js';
 
 const execFileAsync = promisify(execFile);
 const ENV_VARS_TO_STRIP = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT'];
@@ -69,3 +74,56 @@ export async function checkAuth(options = {}) {
     return { status: 'uncertain', reason: 'cli_probe_unexpected_error' };
   }
 }
+
+const credentialFiles = () => runtimeCredentialFiles('claude');
+const credentialKinds = Object.freeze({ apiKey: 'sk-ant-api-xxx', setupToken: 'sk-ant-oat-xxx' });
+const nativeLogin = Object.freeze({ args: Object.freeze(['auth', 'login']), deviceArgs: null });
+
+function saveCredential(kind, value, warnings) {
+  if (kind === 'setupToken') {
+    if (!saveSetupToken(value)) return false;
+    saveSetupTokenToEnv(value);
+  } else if (kind === 'apiKey') {
+    if (!saveApiKey(value)) return false;
+    saveApiKeyToEnv(value);
+  } else {
+    return false;
+  }
+  if (!syncClaudeRelayTraffic()) return false;
+  warnUnrestrictedCredentialFiles(credentialFiles(), warnings);
+  return true;
+}
+
+function saveBaseUrl(url, warnings) {
+  if (!saveClaudeBaseUrlToEnv(url) || !syncClaudeRelayTraffic()) return false;
+  warnUnrestrictedCredentialFiles(credentialFiles(), warnings);
+  return true;
+}
+
+async function afterLogin() {
+  if (!syncClaudeRelayTraffic()) {
+    return { ok: false, message: 'Authenticated, but CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC could not be updated', warnings: [] };
+  }
+  const message = relayLoginNotice();
+  return { ok: true, warnings: message ? [{ code: 'RELAY_BASE_URL_KEPT', message }] : [] };
+}
+
+function overrideWarnings({ against }) {
+  const message = against === 'probe'
+    ? claudeSettingsOverrideNotice(claudeProbeEnvironment(ZYLOS_DIR, process.env))
+    : claudeSettingsOverrideNotice();
+  return message ? [{ code: 'CLAUDE_SETTINGS_OVERRIDE', message }] : [];
+}
+
+export const auth = Object.freeze({
+  checkAuth,
+  remedy: 'replace credentials or log in again with zylos auth claude',
+  credentialFiles,
+  credentialKinds,
+  saveCredential,
+  saveBaseUrl,
+  baseUrlExample: 'https://claude-proxy.example.com',
+  nativeLogin,
+  afterLogin,
+  overrideWarnings,
+});

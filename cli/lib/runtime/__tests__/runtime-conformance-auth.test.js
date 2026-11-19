@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { getRuntime } from '../index.js';
+import { UNSUPPORTED } from '../contract.js';
+import { getRuntime, SUPPORTED_RUNTIMES } from '../index.js';
 
 for (const id of ['claude', 'codex']) {
   test(`${id} classifies CLI login statuses from recorded samples`, async t => {
@@ -29,3 +30,19 @@ for (const id of ['claude', 'codex']) {
     }
   });
 }
+
+test('authentication metadata and optional capabilities agree', async () => {
+  for (const id of SUPPORTED_RUNTIMES) {
+    const { auth } = await getRuntime(id);
+    assert.equal(typeof auth.remedy, 'string', id);
+    assert.ok(auth.remedy.trim(), id);
+    const files = auth.credentialFiles();
+    assert.ok(Array.isArray(files) && files.every(file => path.isAbsolute(file)), id);
+    assert.equal(auth.credentialKinds === UNSUPPORTED, auth.saveCredential === UNSUPPORTED, id);
+    assert.equal(auth.baseUrlExample === UNSUPPORTED, auth.saveBaseUrl === UNSUPPORTED, id);
+    if (auth.nativeLogin !== UNSUPPORTED) {
+      assert.ok(Array.isArray(auth.nativeLogin.args), id);
+      assert.ok(auth.nativeLogin.deviceArgs === null || Array.isArray(auth.nativeLogin.deviceArgs), id);
+    }
+  }
+});

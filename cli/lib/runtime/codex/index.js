@@ -1,4 +1,4 @@
-import { checkAuth } from './auth.js';
+import { auth } from './auth.js';
 import { prepare } from './launch.js';
 import { install, probeVersion, postUpgradeSync } from './install.js';
 import { UNSUPPORTED } from '../contract.js';
@@ -25,7 +25,7 @@ export default Object.freeze({
     }),
     postUpgradeSync,
   }),
-  auth: Object.freeze({ checkAuth }),
-  launch: Object.freeze({ prepare }),
+  auth,
+  launch: Object.freeze({ prepare, checkAutonomous: UNSUPPORTED }),
   input: Object.freeze({ bracketedPaste: false }),
 });

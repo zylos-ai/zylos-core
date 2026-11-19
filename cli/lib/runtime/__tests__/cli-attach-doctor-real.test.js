@@ -36,9 +36,8 @@ test('review P2: doctor finds an exact isolated tmux session with unreadable run
   const resolve = () => resolveCliSession({ mode: () => ({ mode: 'single' }),
     identity: async () => ({ present: true, runtime: 'unknown', tmuxName: 'zylos-group-origin' }),
     runtimeFor: () => assert.fail('unknown must not construct an adapter') });
-  const options = { resolve, pm2Check: () => ({ installed: false }),
-    network: () => assert.fail('unknown runtime must not choose a provider') };
-  const diag = await collectDiagnostics({}, options);
+  const options = { resolve, pm2Check: () => ({ installed: false }) };
+  const diag = await collectDiagnostics(new Map(), options);
   assert.equal(diag.services.session, true);
   assert.equal(diag.ai.authStatus, 'uncertain');
   assert.equal(diag.ai.cli.reason, 'runtime_unknown');
@@ -46,7 +45,7 @@ test('review P2: doctor finds an exact isolated tmux session with unreadable run
   assert.ok(view.issues.some(issue => issue.id === 'runtime_unknown'));
   assert.equal(view.issues.some(issue => issue.id === 'cli_missing'), false);
   f.tmux('kill-session', '-t', '=zylos-group-origin');
-  assert.equal((await collectDiagnostics({}, options)).services.session, false);
+  assert.equal((await collectDiagnostics(new Map(), options)).services.session, false);
 });
 
 test('review status: real CLI is read-only and single mode does not expose group sessions', t => {

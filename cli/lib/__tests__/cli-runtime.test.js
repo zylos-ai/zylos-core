@@ -1,3 +1,4 @@
+import { runtimeAuthFixture } from './helpers/runtime-auth.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import fs from 'node:fs';
@@ -7,21 +8,26 @@ import { updateConfigWithLock } from '../config-lock.js';
 import { readConfigStrict } from '../config-store.js';
 import { executeRuntimeSwitch, observeRuntimeGroups, runtimeCommand } from '../../commands/runtime.js';
 
-function fixture(overrides = {}) {
+function fixture({ target = 'codex', findExecutable, checkAuth, ...overrides } = {}) {
   const calls = [];
   const deps = {
     read: () => { calls.push('read'); return { state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }; },
     mode: () => ({ mode: 'multi' }),
-    runtimeFor: () => { calls.push('adapter'); return { auth: { checkAuth: async () => { calls.push('auth'); return { status: 'success' }; } } }; },
-    exists: () => { calls.push('exists'); return true; },
+    runtimeFor: id => {
+      calls.push('adapter');
+      return runtimeAuthFixture(id, {
+        findExecutable: findExecutable ?? (() => { calls.push('exists'); return '/fixture/bin/' + id; }),
+        auth: { checkAuth: checkAuth ?? (() => { calls.push('auth'); return { status: 'success' }; }) },
+      });
+    },
     credentials: () => { calls.push('credentials'); return true; },
     hooksReady: () => { calls.push('hooks'); return { ready: true, pendingMigration: false }; },
-    write: () => { calls.push('write'); return { previous: { runtime: 'claude' }, config: { runtime: 'codex', session_mode: 'multi' }, changed: true }; },
+    write: () => { calls.push('write'); return { previous: { runtime: 'claude' }, config: { runtime: target, session_mode: 'multi' }, changed: true }; },
     observe: async () => { calls.push('observe'); return { groups: [], groupsComplete: true, observationErrors: [] }; },
     identity: async () => ({ present: false }),
     ...overrides,
   };
-  return { calls, run: flags => executeRuntimeSwitch('codex', flags || [], deps) };
+  return { calls, run: flags => executeRuntimeSwitch(target, flags || [], deps) };
 }
 
 test('runtime prechecks are ordered and stop before persistence', async () => {
@@ -29,17 +35,41 @@ test('runtime prechecks are ordered and stop before persistence', async () => {
   assert.equal((await success.run()).data.result, 'saved');
   assert.deepEqual(success.calls, ['adapter', 'read', 'exists', 'hooks', 'auth', 'write', 'observe']);
   for (const [override, code, expected] of [
-    [{ exists: () => false }, 'RUNTIME_NOT_INSTALLED', ['adapter', 'read']],
+    [{ findExecutable: () => null, prepareCli: () => { assert.fail('always-installed runtime must not run the installer'); } }, 'RUNTIME_NOT_INSTALLED', ['adapter', 'read']],
     [{ read: () => ({ state: 'error' }) }, 'CONFIG_UNREADABLE', ['adapter']],
     [{ hooksReady: () => ({ ready: false, pendingMigration: false }) }, 'HOOKS_NOT_READY', ['adapter', 'read', 'exists']],
-    [{ runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'uncertain' }) } }) }, 'AUTH_NOT_CONFIRMED', ['read', 'exists', 'hooks']],
+    [{ checkAuth: () => ({ status: 'uncertain' }) }, 'AUTH_NOT_CONFIRMED', ['adapter', 'read', 'exists', 'hooks']],
   ]) {
     const f = fixture(override); const result = await f.run();
+    if (code === 'RUNTIME_NOT_INSTALLED') assert.equal(result.error.message, 'codex CLI missing; run zylos init');
     assert.equal(result.error.code, code); assert.deepEqual(result.error.persisted, []); assert.deepEqual(f.calls, expected);
   }
   const invalid = fixture();
   assert.equal((await invalid.run(['--unknown'])).error.code, 'INVALID_ARGUMENT');
-  assert.deepEqual(invalid.calls, []);
+  assert.deepEqual(invalid.calls, ['adapter']);
+});
+
+test('runtime switch installs a missing Antigravity CLI before saving the default', async () => {
+  const prepared = [];
+  const f = fixture({ target: 'agy', findExecutable: () => null, prepareCli: options => {
+    f.calls.push('prepare');
+    prepared.push(options);
+    return { completed: ['agy.cli'], failed: [], installed: ['agy'], notices: [{ runtime: 'agy', message: 'N' }] };
+  } });
+  const result = await f.run();
+  assert.equal(result.data.result, 'saved');
+  assert.deepEqual(prepared, [{ runtimes: ['agy'] }]);
+  assert.deepEqual(f.calls, ['adapter', 'read', 'prepare', 'hooks', 'auth', 'write', 'observe']);
+  assert.ok(result.data.warnings.some(({ code, message }) => code === 'RUNTIME_CLI_INSTALL_NOTICE' && message === 'N'));
+});
+
+test('runtime switch stops before credential or config writes when Antigravity installation fails', async () => {
+  const f = fixture({ target: 'agy', findExecutable: () => null, prepareCli: () => ({
+    failed: [{ item: 'agy.cli', message: 'M' }],
+  }) });
+  const result = await f.run(['--save-apikey', 'fixture-key']);
+  assert.deepEqual(result.error, { code: 'RUNTIME_NOT_INSTALLED', message: 'M', persisted: [] });
+  assert.deepEqual(f.calls, ['adapter', 'read']);
 });
 
 test('JSON credentials and failed precheck emit exactly the final envelope', async () => {
@@ -61,14 +91,14 @@ test('JSON credentials and failed precheck emit exactly the final envelope', asy
 });
 
 test('auth failure is rejected by the runtime command with exit code 1', async () => {
-  const f = fixture({ runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'failure' }) } }) });
+  const f = fixture({ checkAuth: () => ({ status: 'failure' }) });
   const original = console.log, previousExit = process.exitCode;
   console.log = () => {};
   try {
     const result = await runtimeCommand(['codex', '--json'], { execute: (_runtime, flags) => f.run(flags) });
     assert.equal(result.ok, false); assert.equal(result.error.code, 'AUTH_FAILED');
     assert.equal(result.error.authStatus, 'failure'); assert.equal(process.exitCode, 1);
-    assert.deepEqual(result.error.persisted, []); assert.deepEqual(f.calls, ['read', 'exists', 'hooks']);
+    assert.deepEqual(result.error.persisted, []); assert.deepEqual(f.calls, ['adapter', 'read', 'exists', 'hooks']);
   } finally { console.log = original; process.exitCode = previousExit; }
 });
 
@@ -78,11 +108,10 @@ for (const target of ['claude', 'codex', 'agy']) {
     for (const [status, code] of [['failure', 'AUTH_FAILED'], ['uncertain', 'AUTH_NOT_CONFIRMED'], ['throws', 'AUTH_NOT_CONFIRMED']]) {
       const result = await executeRuntimeSwitch(target, ['--save-apikey', 'fixture-key'], {
         read: () => ({ state: 'ok', config: { runtime: target === 'claude' ? 'codex' : 'claude', session_mode: 'multi' } }),
-        runtimeFor: () => ({ auth: { checkAuth: async () => {
+        runtimeFor: id => runtimeAuthFixture(id, { auth: { checkAuth: () => {
           if (status === 'throws') throw new Error('private probe error');
           return { status };
-        } } }),
-        exists: () => true, credentials: () => true, hooksReady: () => ({ ready: true }),
+        } } }), credentials: () => true, hooksReady: () => ({ ready: true }),
         write: () => { assert.fail('must not save runtime after rejected or uncertain auth'); },
         observe: () => { assert.fail('must not observe sessions after failed precheck'); },
       });
@@ -201,11 +230,17 @@ test('Claude setup-token save without a new base URL warns that the saved relay 
   ]) {
     let asked = 0;
     const deps = { read: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }), mode: () => ({ mode: 'multi' }),
-      runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'success' }) } }), exists: () => true, credentials: () => true, baseUrl: () => true,
+      runtimeFor: id => runtimeAuthFixture(id, { auth: {
+        checkAuth: () => ({ status: 'success' }),
+        afterLogin: () => {
+          asked++;
+          return { ok: true, warnings: notice ? [{ code: 'RELAY_BASE_URL_KEPT', message: notice }] : [] };
+        },
+      } }),
+      credentials: () => true, baseUrl: () => true,
       hooksReady: () => ({ ready: true, pendingMigration: false }),
       write: () => ({ previous: { runtime: 'claude' }, config: { runtime: 'claude', session_mode: 'multi' }, changed: false }),
-      observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }), identity: async () => ({ present: false }),
-      relayNotice: () => { asked++; return notice; } };
+      observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }), identity: async () => ({ present: false }) };
     const result = await executeRuntimeSwitch('claude', flags, deps);
     assert.equal(result.ok, true, JSON.stringify(result.error));
     const warning = result.data.warnings.find(item => item.code === 'RELAY_BASE_URL_KEPT');

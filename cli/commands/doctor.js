@@ -11,10 +11,7 @@ import { prepareUpstreams, withUpstreamSnapshot } from '../lib/upstreams.js';
 
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
-import https from 'node:https';
-import os from 'node:os';
 import path from 'node:path';
-import dns from 'node:dns/promises';
 import { ZYLOS_DIR, CONFIG_DIR, SKILLS_DIR, COMPONENTS_FILE, ENV_FILE, readSessionMode, readZylosConfigOrThrow } from '../lib/config.js';
 import { readEnvFile, ensureEnvFilePrivate } from '../lib/env.js';
 import { loadComponents } from '../lib/components.js';
@@ -25,7 +22,8 @@ import { parseSkillMd } from '../lib/skill.js';
 import { bold, dim, green, red, yellow, heading } from '../lib/colors.js';
 import { getTmuxCapability, describeTmuxSendKeys } from '../lib/tmux-send-keys.js';
 import { resolveCliSession } from '../lib/cli-session.js';
-import { getRuntime } from '../lib/runtime/index.js';
+import { findRuntime, runtimeDisplayName, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
+import { UNSUPPORTED } from '../lib/runtime/contract.js';
 import { collectStatus } from '../lib/status-view.js';
 import { resolveTargetRuntime } from '../lib/session-state-reader.js';
 import { describeOrigin, formatOriginDescription } from '../lib/origin-presence.js';
@@ -127,80 +125,6 @@ function checkPm2Installed() {
   return { installed: true, version };
 }
 
-async function checkNetwork(env, apiHost) {
-  const results = { dns: false, proxy: null, reachable: false, details: {} };
-  const proxy = env.get('HTTPS_PROXY') || env.get('https_proxy') || process.env.HTTPS_PROXY || '';
-
-  if (proxy) {
-    results.proxy = proxy;
-  }
-
-  // DNS check
-  try {
-    const addrs = await dns.resolve4(apiHost);
-    results.dns = true;
-    results.details.resolved = addrs[0];
-  } catch (err) {
-    results.details.dnsError = err.code || err.message;
-    return results;
-  }
-
-  // Reachability check
-  if (commandExists('curl')) {
-    try {
-      const curlArgs = ['-s', '--connect-timeout', '5', '--max-time', '10',
-        '-o', '/dev/null', '-w', '%{http_code}'];
-      if (proxy) curlArgs.push('--proxy', proxy);
-      curlArgs.push(`https://${apiHost}/`);
-      const code = execFileSync('curl', curlArgs, {
-        encoding: 'utf8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'],
-      }).trim();
-      // Any HTTP response (even 4xx) means network works
-      results.reachable = true;
-      results.details.httpCode = code;
-    } catch {
-      // If curl itself fails, check if proxy is the issue
-      if (proxy) {
-        try {
-          const directArgs = ['-s', '--connect-timeout', '5', '--max-time', '10',
-            '-o', '/dev/null', '-w', '%{http_code}', `https://${apiHost}/`];
-          execFileSync('curl', directArgs, {
-            encoding: 'utf8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'],
-          });
-          results.details.proxyIssue = true;
-        } catch {
-          results.details.proxyIssue = false;
-        }
-      }
-    }
-  } else {
-    // Fallback: node https (no proxy support)
-    try {
-      await new Promise((resolve, reject) => {
-        const req = https.request({
-          hostname: apiHost, port: 443, path: '/', method: 'HEAD', timeout: 10000,
-        }, (res) => {
-          results.reachable = true;
-          results.details.httpCode = String(res.statusCode);
-          res.resume();
-          resolve();
-        });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-        req.end();
-      });
-    } catch {
-      // Cannot reach — note proxy can't be tested without curl
-      if (proxy) {
-        results.details.noCurl = true;
-      }
-    }
-  }
-
-  return results;
-}
-
-/** PM2 uses ps to discover descendants when stopping or restarting processes. */
 export function checkPs({ execute = execFileSync } = {}) {
   try {
     execute('ps', ['-p', String(process.pid)], { stdio: 'ignore', timeout: 5000 });
@@ -214,23 +138,10 @@ export function psHint() {
   return 'Without ps, PM2 restarts may leave old processes running and cause duplicate message delivery; install procps';
 }
 
-const diagnosticRuntimes = {
-  claude: { display: 'Claude', host: 'api.anthropic.com' },
-  codex: { display: 'Codex', host: 'api.openai.com' },
-  agy: { display: 'Antigravity', host: 'generativelanguage.googleapis.com' },
-};
-const runtimeDiagnostics = runtime => Object.hasOwn(diagnosticRuntimes, runtime) ? diagnosticRuntimes[runtime] : null;
-const authenticationHint = runtime => runtime === 'agy' ? 'Run: zylos runtime agy --save-apikey <key>'
-  : runtime === 'codex' ? 'Run: codex login' : 'Run zylos init to authenticate';
+const isRegistered = runtime => SUPPORTED_RUNTIMES.includes(runtime);
 
-function checkAutonomousMode() {
-  try {
-    const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    return !!settings.skipDangerousModePermissionPrompt;
-  } catch {
-    return false;
-  }
+function remedyHint(remedy) {
+  return remedy ? remedy[0].toUpperCase() + remedy.slice(1) : 'This runtime does not provide diagnostics';
 }
 
 function checkPm2Services() {
@@ -287,7 +198,7 @@ export function formatDoctorSessionModeStatus(value) {
 }
 
 export async function collectDiagnostics(env, { resolve = () => resolveCliSession({
-  runtimeFor: runtime => runtimeDiagnostics(runtime) ? getRuntime(runtime) : null,
+  runtimeFor: findRuntime,
   resolveRuntime: async group => {
     try { return await resolveTargetRuntime(group); }
     catch (error) {
@@ -299,45 +210,37 @@ export async function collectDiagnostics(env, { resolve = () => resolveCliSessio
       throw error;
     }
   },
-}), network = checkNetwork,
+}),
   pm2Check = checkPm2Installed, tmuxCheck = checkTmuxInstalled, psCheck = checkPs, modeStatus = readDoctorSessionModeStatus } = {}) {
   const selected = await resolve();
   const runtime = selected.runtime;
-  const details = runtimeDiagnostics(runtime);
-  const display = details?.display ?? 'Unknown runtime';
-  const apiHost = details?.host ?? null;
-  const networkPromise = apiHost ? network(env, apiHost) : Promise.resolve({ dns: false, proxy: null, reachable: false, reason: 'runtime_unknown', details: {} });
+  const known = isRegistered(runtime);
+  const display = known ? runtimeDisplayName(runtime) : 'Unknown runtime';
+  const proxy = env.get('HTTPS_PROXY') || env.get('https_proxy') || process.env.HTTPS_PROXY || '';
 
   const tmux = tmuxCheck();
   const pm2 = pm2Check();
   const ps = psCheck();
   const envFile = ensureEnvFilePrivate();
-  const net = await networkPromise;
 
-  // Runtime-specific CLI/auth checks.
-  // All supported runtimes use the same auth check as the running process.
-  let cli, authStatus, autonomous;
-  if (details) {
-    const rt = await getRuntime(runtime);
+  let cli = { installed: false, reason: 'runtime_unknown' };
+  let authStatus = 'uncertain';
+  let autonomous = false, autonomousApplicable = false, autonomousHint = null, authRemedy = null;
+  if (known) {
+    const rt = selected.runtimeImpl;
     const probe = await rt.install.probeVersion({ profile: 'doctor' });
     cli = probe.installed
       ? { installed: true, version: probe.probeFailed ? 'unknown' : probe.version }
       : { installed: false };
-  }
-  if (!details) {
-    cli = { installed: false, reason: 'runtime_unknown' };
-    authStatus = 'uncertain';
-    autonomous = false;
-  } else if (runtime === 'claude') {
-    authStatus = cli.installed ? (await selected.runtimeImpl.auth.checkAuth()).status : 'failure';
-    autonomous = cli.installed ? checkAutonomousMode() : false;
-  } else if (runtime === 'agy') {
-    authStatus = cli.installed ? (await selected.runtimeImpl.auth.checkAuth()).status : 'failure';
-    autonomous = true; // not applicable for Antigravity
-  } else {
-    // Codex runtime — check Codex CLI and auth status.
-    authStatus = cli.installed ? (await selected.runtimeImpl.auth.checkAuth()).status : 'failure';
-    autonomous = true; // not applicable for Codex
+    authStatus = cli.installed ? (await rt.auth.checkAuth()).status : 'failure';
+    autonomousApplicable = rt.launch.checkAutonomous !== UNSUPPORTED;
+    if (!autonomousApplicable) autonomous = true;
+    else if (cli.installed) {
+      const result = rt.launch.checkAutonomous();
+      autonomous = result.accepted;
+      autonomousHint = result.hint;
+    }
+    authRemedy = rt.auth.remedy;
   }
   const auth = authStatus === 'success';
 
@@ -355,10 +258,12 @@ export async function collectDiagnostics(env, { resolve = () => resolveCliSessio
     origin = describeOrigin({ ...status, targetRuntime, nowSec: Math.floor(status.readAt / 1000) });
   }
 
+  const targetAuthRemedy = (await findRuntime(targetRuntime))?.auth.remedy ?? null;
   return {
-    runtime, display, apiHost, sessionMode, sessionModeStatus, sessionGroup: selected.sessionGroup ?? null, origin, targetRuntime, originNeed,
-    system: { tmux, pm2, ps, network: net, envFile },
-    ai: { cli, auth, authStatus, autonomous, networkSkipped: !net.reachable },
+    runtime, display, proxy, sessionMode, sessionModeStatus, sessionGroup: selected.sessionGroup ?? null,
+    origin, targetRuntime, originNeed, authRemedy, targetAuthRemedy,
+    system: { tmux, pm2, ps, envFile },
+    ai: { cli, auth, authStatus, autonomous, autonomousApplicable, autonomousHint },
     services: { ...services, session },
   };
 }
@@ -386,39 +291,29 @@ export function buildDiagnosticJson(diag, coreVersion) {
   }
   if (diag.runtime === 'unknown') {
     issues.push({ id: 'runtime_unknown', label: 'Runtime identity unavailable', hint: 'Inspect the session launch identity before runtime-specific checks' });
-  } else if (!runtimeDiagnostics(diag.runtime)) {
+  } else if (!isRegistered(diag.runtime)) {
     issues.push({ id: 'runtime_unknown', label: `Diagnostics unavailable for runtime: ${diag.runtime}`, hint: 'This runtime does not provide diagnostics' });
-  } else if (!diag.system.network.reachable) {
-    const net = diag.system.network;
-    let hint = 'Check internet connection and firewall settings.';
-    if (net.proxy) {
-      hint = `Check HTTPS_PROXY in .env (current: ${net.proxy})`;
-      if (net.details.proxyIssue) {
-        hint += ' — proxy appears down, direct connection works';
-      }
-    }
-    if (!net.dns && net.details.dnsError) {
-      hint += ` (DNS: ${net.details.dnsError})`;
-    }
-    issues.push({ id: 'network_unreachable', label: `Cannot reach ${diag.apiHost}`, hint });
   }
   if (diag.system.envFile?.ok === false) {
     issues.push({ id: 'env_permissions', label: `${ENV_FILE} is accessible to other users (mode ${diag.system.envFile.mode})`,
       hint: `Could not tighten it automatically; as the file's owner run: chmod 600 ${ENV_FILE}` });
   }
   const runtimeLabel = diag.display;
-  if (runtimeDiagnostics(diag.runtime) && !diag.ai.cli.installed) {
+  if (isRegistered(diag.runtime) && !diag.ai.cli.installed) {
     issues.push({ id: 'cli_missing', label: `${runtimeLabel} CLI not installed`, hint: 'Run zylos init' });
   }
-  if (diag.ai.cli.installed && !diag.ai.networkSkipped && diag.ai.authStatus === 'failure') {
-    const hint = authenticationHint(diag.runtime);
+  if (diag.ai.cli.installed && diag.ai.authStatus === 'failure') {
+    const hint = remedyHint(diag.authRemedy);
     issues.push({ id: 'cli_not_authed', label: `${runtimeLabel} not authorized`, hint });
   }
-  if (diag.ai.cli.installed && !diag.ai.networkSkipped && diag.ai.authStatus === 'uncertain') {
-    issues.push({ id: 'cli_auth_unverified', label: `${runtimeLabel} auth check inconclusive`, hint: 'Retry after network/API health is stable' });
+  if (diag.ai.cli.installed && diag.ai.authStatus === 'uncertain') {
+    const hint = diag.proxy
+      ? `Check the network and HTTPS_PROXY in .env (current: ${diag.proxy}), then retry`
+      : 'Check the network connection and firewall, then retry';
+    issues.push({ id: 'cli_auth_unverified', label: `${runtimeLabel} auth check inconclusive`, hint });
   }
-  if (diag.runtime === 'claude' && diag.ai.cli.installed && diag.ai.auth && !diag.ai.autonomous) {
-    issues.push({ id: 'autonomous_off', label: 'Autonomous mode not accepted', hint: 'Set skipDangerousModePermissionPrompt in ~/.claude/settings.json' });
+  if (diag.ai.autonomousApplicable && diag.ai.cli.installed && diag.ai.auth && !diag.ai.autonomous) {
+    issues.push({ id: 'autonomous_off', label: 'Autonomous mode not accepted', hint: diag.ai.autonomousHint });
   }
   if (diag.system.pm2.installed) {
     if (!diag.services.running || diag.services.total === 0) {
@@ -438,21 +333,23 @@ export function buildDiagnosticJson(diag, coreVersion) {
         label: 'Origin has pending work but has not started for over 5 minutes',
         hint: 'Check router startup diagnostics: ~/zylos/comm-bridge/router-events.jsonl (start_always, activate_failed, wait_health)' },
       auth_wait: { id: 'origin_auth_wait',
-        label: `Origin is waiting for ${runtimeDiagnostics(diag.targetRuntime)?.display ?? diag.targetRuntime} authentication`,
-        hint: authenticationHint(diag.targetRuntime) },
+        label: `Origin is waiting for ${runtimeDisplayName(diag.targetRuntime)} authentication`,
+        hint: remedyHint(diag.targetAuthRemedy) },
       need_unreadable: { id: 'origin_status_unavailable', label: 'Origin wake status unavailable', hint: 'Run: zylos status --json' },
     };
     if (descriptions[diag.origin.state]) issues.push(descriptions[diag.origin.state]);
   }
 
+  const aiSkipped = !isRegistered(diag.runtime);
   return {
     version: coreVersion.success ? coreVersion.version : null,
-    ...(diag.runtime === 'agy' || !runtimeDiagnostics(diag.runtime) ? { runtime: diag.runtime, display: diag.display } : {}),
+    runtime: diag.runtime,
+    display: diag.display,
     timestamp: new Date().toISOString(),
     passed: issues.length === 0,
     groups: {
       system: {
-        passed: diag.system.tmux.installed && diag.system.pm2.installed && diag.system.network.reachable &&
+        passed: diag.system.tmux.installed && diag.system.pm2.installed &&
           diag.system.envFile?.ok !== false,
         checks: {
           tmux: { ok: diag.system.tmux.installed, version: diag.system.tmux.version || null,
@@ -463,18 +360,17 @@ export function buildDiagnosticJson(diag, coreVersion) {
           ps: diag.system.ps?.available === false
             ? { ok: false, level: 'warning', reason: diag.system.ps.reason, hint: psHint() }
             : { ok: true },
-          network: { ok: diag.system.network.reachable, host: diag.apiHost, proxy: diag.system.network.proxy || null },
           envFile: { ok: diag.system.envFile?.ok !== false, mode: diag.system.envFile?.mode ?? null,
             fixed: diag.system.envFile?.fixed === true },
         },
       },
       ai_service: {
-        passed: diag.ai.networkSkipped ? null : (diag.ai.cli.installed && diag.ai.auth && diag.ai.autonomous),
-        skipped: diag.ai.networkSkipped,
+        passed: aiSkipped ? null : (diag.ai.cli.installed && diag.ai.auth && diag.ai.autonomous),
+        skipped: aiSkipped,
         checks: {
           cli: { ok: diag.ai.cli.installed, version: diag.ai.cli.version || null },
           auth: { ok: diag.ai.auth, status: diag.ai.authStatus },
-          autonomous: diag.runtime === 'agy' ? { ok: null, skipped: true } : { ok: diag.ai.autonomous },
+          autonomous: diag.ai.autonomousApplicable ? { ok: diag.ai.autonomous } : { ok: null, skipped: true },
         },
       },
       services: {
@@ -494,7 +390,7 @@ export function buildDiagnosticJson(diag, coreVersion) {
 
 function displaySystemGroup(diag, jsonGroup) {
   const checks = [];
-  const { tmux, pm2: pm2Info, network: net } = diag.system;
+  const { tmux, pm2: pm2Info } = diag.system;
 
   if (tmux.installed) {
     checks.push(describeTmuxSendKeys(tmux));
@@ -512,20 +408,6 @@ function displaySystemGroup(diag, jsonGroup) {
   checks.push(ps.ok ? 'ps available'
     : yellow(`ps ${ps.reason === 'not_found' ? 'not found' : `could not be run (${ps.reason})`}: ${ps.hint}`));
 
-  if (!runtimeDiagnostics(diag.runtime)) {
-    checks.push(dim('network: skipped (runtime diagnostics unavailable)'));
-  } else if (net.reachable) {
-    let label = `network: ${diag.apiHost} reachable`;
-    if (net.proxy) label += dim(' (via proxy)');
-    checks.push(label);
-  } else {
-    if (!net.dns) {
-      checks.push(red(`network: DNS failed for ${diag.apiHost}`));
-    } else {
-      checks.push(red(`network: cannot reach ${diag.apiHost}`));
-    }
-  }
-
   if (diag.system.envFile?.ok === false) {
     checks.push(red(`.env accessible to other users (mode ${diag.system.envFile.mode})`));
   } else if (diag.system.envFile?.fixed) {
@@ -537,18 +419,11 @@ function displaySystemGroup(diag, jsonGroup) {
 }
 
 function displayAiGroup(diag, jsonGroup) {
-  if (!runtimeDiagnostics(diag.runtime)) {
+  if (!isRegistered(diag.runtime)) {
     console.log(groupHeader('AI Service', 'skip'));
     console.log(SKIP(`This runtime does not provide diagnostics: ${diag.runtime}`));
     return;
   }
-  if (jsonGroup.skipped) {
-    console.log(groupHeader('AI Service', 'skip'));
-    console.log(SKIP('skipped (requires network)'));
-    logToFile('check: ai_service — skipped');
-    return;
-  }
-
   const checks = [];
   const { cli, auth, authStatus, autonomous } = diag.ai;
 
@@ -567,7 +442,7 @@ function displayAiGroup(diag, jsonGroup) {
     } else {
       checks.push(red('not authorized'));
     }
-    if (auth && diag.runtime !== 'agy') {
+    if (auth && diag.ai.autonomousApplicable) {
       if (autonomous) {
         checks.push('autonomous mode accepted');
       } else {
@@ -709,7 +584,7 @@ export function discoverChannels(pm2Procs, env, tmuxSession, components, { zylos
 function isClaudeReady(diag) {
   // Auto-fix via `claude -p` is only available when Claude is the active runtime.
   if (diag.runtime !== 'claude') return false;
-  return diag.ai.cli.installed && diag.ai.auth && diag.ai.autonomous && diag.system.network.reachable;
+  return diag.ai.cli.installed && diag.ai.auth && diag.ai.autonomous;
 }
 
 function runClaudeFix(diagnosticJson) {
@@ -914,50 +789,48 @@ export async function doctorCommand(args, upstreamSource) {
 
   // ── Phase 5: Updates ──────────────────────────────────────────
 
-  if (diag.system.network.reachable) {
+  try {
+    const targets = [];
+
+    if (coreVersion.success) {
+      targets.push({ name: 'zylos-core', repo: 'zylos-ai/zylos-core', current: coreVersion.version });
+    }
+
+    for (const [name, info] of Object.entries(components)) {
+      if (!info.repo || !info.version) continue;
+      targets.push({ name, repo: info.repo, current: info.version });
+    }
+
+    let prepared;
     try {
-      const targets = [];
-
-      if (coreVersion.success) {
-        targets.push({ name: 'zylos-core', repo: 'zylos-ai/zylos-core', current: coreVersion.version });
-      }
-
-      for (const [name, info] of Object.entries(components)) {
-        if (!info.repo || !info.version) continue;
-        targets.push({ name, repo: info.repo, current: info.version });
-      }
-
-      let prepared;
+      prepared = await prepareUpstreams({ source: upstreamSource });
+    } catch (err) {
+      console.error(`Upstream version check unavailable: ${err.message}`);
+      throw err;
+    }
+    const results = await withUpstreamSnapshot(prepared, () => concurrentMap(targets, async (target) => {
       try {
-        prepared = await prepareUpstreams({ source: upstreamSource });
+        const latest = await fetchLatestTagAsync(target.repo, target.name === 'zylos-core'
+          ? { major: target.current.replace(/^v/, '').split('.')[0] } : {});
+        if (latest && compareSemverDesc(target.current, latest) > 0) {
+          return { ...target, latest };
+        }
       } catch (err) {
-        console.error(`Upstream version check unavailable: ${err.message}`);
-        throw err;
+        logToFile(`warn: version check failed for ${target.name}: ${err.message}`);
       }
-      const results = await withUpstreamSnapshot(prepared, () => concurrentMap(targets, async (target) => {
-        try {
-          const latest = await fetchLatestTagAsync(target.repo, target.name === 'zylos-core'
-            ? { major: target.current.replace(/^v/, '').split('.')[0] } : {});
-          if (latest && compareSemverDesc(target.current, latest) > 0) {
-            return { ...target, latest };
-          }
-        } catch (err) {
-          logToFile(`warn: version check failed for ${target.name}: ${err.message}`);
-        }
-        return null;
-      }, VERSION_CHECK_CONCURRENCY));
+      return null;
+    }, VERSION_CHECK_CONCURRENCY));
 
-      const updates = results.filter(Boolean);
+    const updates = results.filter(Boolean);
 
-      if (updates.length > 0) {
-        console.log(`\n${bold('Updates available')}`);
-        for (const u of updates) {
-          console.log(`  ${u.name.padEnd(16)} ${dim(u.current)} → ${green(u.latest)}`);
-        }
-        console.log(`\n  ${dim("Run")} ${bold('zylos upgrade --all')} ${dim('to update.')}`);
+    if (updates.length > 0) {
+      console.log(`\n${bold('Updates available')}`);
+      for (const u of updates) {
+        console.log(`  ${u.name.padEnd(16)} ${dim(u.current)} → ${green(u.latest)}`);
       }
-    } catch {} // Optional version checks remain silent; profile setup errors are reported above.
-  }
+      console.log(`\n  ${dim("Run")} ${bold('zylos upgrade --all')} ${dim('to update.')}`);
+    }
+  } catch {} // Optional version checks remain silent; profile setup errors are reported above.
 
   // ── Phase 6: Handle issues ────────────────────────────────────
 
@@ -1026,8 +899,8 @@ export async function doctorCommand(args, upstreamSource) {
     process.exit(1);
   }
 
-  // No auto-fix — bottom message based on network availability
-  if (runtimeDiagnostics(diag.runtime) && !diag.system.network.reachable) {
+  // No auto-fix — suggest a retry if the authorization probe was inconclusive.
+  if (isRegistered(diag.runtime) && diag.ai.cli.installed && diag.ai.authStatus === 'uncertain') {
     console.log(`\n  ${yellow('Check your network connection and run')} ${bold('zylos doctor')} ${yellow('again.')}\n`);
   } else {
     console.log(`\n  ${yellow('Run')} ${bold('zylos init')} ${yellow('to set up your environment.')}\n`);

@@ -1,3 +1,4 @@
+import { runtimeAuthFixture } from './helpers/runtime-auth.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -37,8 +38,8 @@ async function fixture(t, { baseline = 'claude', live = old, response = { ok: tr
     fs.rmSync(dir, { recursive: true, force: true });
   });
   const deps = {
-    read: () => readConfigStrict(file), mode: () => ({ mode: 'single' }), exists: () => true,
-    runtimeFor: () => ({ auth: { checkAuth: async () => { calls.auth++; return { status: 'success' }; } } }),
+    read: () => readConfigStrict(file), mode: () => ({ mode: 'single' }),
+    runtimeFor: id => runtimeAuthFixture(id, { auth: { checkAuth: () => { calls.auth++; return { status: 'success' }; } } }),
     credentials: () => { calls.credentials++; return true; }, hooksReady: () => ({ ready: true }),
     write: update => { calls.writes++; return updateConfigWithLock({ configFile: file, lockFile: `${file}.lock`, update }); },
     identity: async group => { calls.identities.push(group); if (live instanceof Error) throw live; return live; },
@@ -146,11 +147,11 @@ test('single/null observer reads only the unique session, multi never submits', 
     }, list: () => { throw new Error('must not list'); }, overrides: () => { throw new Error('must not read overrides'); } });
     assert.equal(observed.groups.length, 1); assert.equal(observed.groups[0].status, 'pending_reclaim');
     const result = await executeRuntimeSwitch('codex', [], { read: () => ({ state: 'ok', config: { runtime: 'codex' } }), mode: () => ({ mode }),
-      runtimeFor: () => ({}), identity: async () => ({ ...old, runtime: 'codex' }) });
+      runtimeFor: runtimeAuthFixture, identity: async () => ({ ...old, runtime: 'codex' }) });
     assert.equal(result.data.reclaim, null); assert.equal(result.data.groups[0].status, 'effective');
   }
   const result = await executeRuntimeSwitch('codex', [], { read: () => ({ state: 'ok', config: { runtime: 'codex' } }), mode: () => ({ mode: 'multi' }),
-    runtimeFor: () => ({}), observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }),
+    runtimeFor: runtimeAuthFixture, observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }),
     send: () => { throw new Error('multi must not submit'); } });
   assert.equal(result.data.reclaim, null);
 });

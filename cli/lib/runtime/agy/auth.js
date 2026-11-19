@@ -1,6 +1,10 @@
 import { execFile } from 'node:child_process';
 import { launchEnvironment } from '../session-command.js';
 import { ZYLOS_DIR } from '../../config.js';
+import {
+  credentialFiles as runtimeCredentialFiles, warnUnrestrictedCredentialFiles, saveAgyApiKey,
+} from '../../runtime-setup.js';
+import { UNSUPPORTED } from '../contract.js';
 
 const MODELS_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 
@@ -38,3 +42,24 @@ export async function checkAuth(options = {}) {
     return { status: 'uncertain', reason: 'http_probe_network_error' };
   }
 }
+
+const credentialFiles = () => runtimeCredentialFiles('agy');
+
+function saveCredential(kind, value, warnings) {
+  if (kind !== 'apiKey' || !saveAgyApiKey(value)) return false;
+  warnUnrestrictedCredentialFiles(credentialFiles(), warnings);
+  return true;
+}
+
+export const auth = Object.freeze({
+  checkAuth,
+  remedy: 'replace the API key with zylos runtime agy --save-apikey <key>',
+  credentialFiles,
+  credentialKinds: Object.freeze({ apiKey: '<key>' }),
+  saveCredential,
+  saveBaseUrl: UNSUPPORTED,
+  baseUrlExample: UNSUPPORTED,
+  nativeLogin: UNSUPPORTED,
+  afterLogin: UNSUPPORTED,
+  overrideWarnings: UNSUPPORTED,
+});
