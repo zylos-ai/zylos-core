@@ -96,3 +96,41 @@ test('session launch script passes parsed dotenv values to a real child', t => {
   assert.equal(Object.hasOwn(result, 'tmux'), false);
   assert.equal(fs.existsSync(script.file), false);
 });
+
+for (const clean of [true, false]) {
+  test(`Claude cache defaults survive environment policy in clean mode ${clean}`, t => {
+    const root = fixture(t);
+    fs.mkdirSync(path.join(root, '.zylos'));
+    fs.writeFileSync(path.join(root, '.zylos/runtime-env.manifest'), '# no cache entries\n');
+    fs.writeFileSync(path.join(root, '.env'), `ZYLOS_CLEAN_ENV=${clean}\nCLAUDE_CODE_PROMPT_CACHE_TTL=\nCLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=\n`);
+    const env = launchEnvironment(root, { HOME: root, PATH: '/bin',
+      CLAUDE_CODE_PROMPT_CACHE_TTL: '5m', CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '1h' }, { runtime: 'claude' });
+    assert.equal(env.CLAUDE_CODE_PROMPT_CACHE_TTL, '1h');
+    assert.equal(env.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL, '5m');
+    fs.writeFileSync(path.join(root, '.env'), `ZYLOS_CLEAN_ENV=${clean}\n`);
+    const missing = launchEnvironment(root, { HOME: root, PATH: '/bin' }, { runtime: 'claude' });
+    assert.equal(missing.CLAUDE_CODE_PROMPT_CACHE_TTL, '1h');
+    assert.equal(missing.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL, '5m');
+  });
+
+  test(`other runtimes omit Claude cache variables in clean mode ${clean}`, t => {
+    const root = fixture(t);
+    const values = { CLAUDE_CODE_PROMPT_CACHE_TTL: '1h', CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '5m' };
+    fs.writeFileSync(path.join(root, '.env'), `ZYLOS_CLEAN_ENV=${clean}\nZYLOS_TMUX_ENV=${Object.keys(values).join(',')}\n` +
+      Object.entries(values).map(([key, value]) => `${key}=${value}\n`).join(''));
+    for (const runtime of ['codex', 'agy']) {
+      const env = launchEnvironment(root, { HOME: root, PATH: '/bin', ...values }, { runtime });
+      for (const key of Object.keys(values)) assert.equal(Object.hasOwn(env, key), false);
+    }
+  });
+}
+
+test('Claude cache dotenv overrides are independent', t => {
+  const root = fixture(t);
+  for (const [key, value] of [['CLAUDE_CODE_PROMPT_CACHE_TTL', '5m'], ['CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL', '1h']]) {
+    fs.writeFileSync(path.join(root, '.env'), `${key}=${value}\n`);
+    const env = launchEnvironment(root, { HOME: root, PATH: '/bin' }, { runtime: 'claude' });
+    assert.equal(env.CLAUDE_CODE_PROMPT_CACHE_TTL, key === 'CLAUDE_CODE_PROMPT_CACHE_TTL' ? value : '1h');
+    assert.equal(env.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL, key === 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL' ? value : '5m');
+  }
+});

@@ -49,7 +49,7 @@ function fixture(mode = 'multi', kind = 'origin') {
   };
   f.deps = deps;
   f.lifecycle = new SupervisorLifecycle(deps, { now: () => now });
-  f.context = { configuration: { mode }, scenes: [{ ...scene }], fences: [], restartRequests: [], transition: null };
+  f.context = { configuration: { mode, hotTtlSeconds: 1800 }, scenes: [{ ...scene }], fences: [], restartRequests: [], transition: null };
   f.range = { count: 60, nonempty: true, firstAt: now, firstConversationId: 1 };
   f.run = () => f.lifecycle.syncScope(scene, kind, f.range, f.context);
   f.periodic = () => f.lifecycle.checkSync([scene], f.context);

@@ -14,7 +14,7 @@ function positiveInteger(value) {
 export function resolveSessionHotTtl(config = {}, env = process.env) {
   const environmentValue = positiveInteger(env[ENV_KEY]);
   const configuredValue = positiveInteger(config.session_hot_ttl_seconds);
-  const seconds = environmentValue ?? configuredValue ?? 1800;
+  const seconds = environmentValue ?? configuredValue ?? 3300;
   const environmentSet = env[ENV_KEY] !== undefined;
   const mode = config.session_mode === undefined ? 'single'
     : ['single', 'multi'].includes(config.session_mode) ? config.session_mode : null;

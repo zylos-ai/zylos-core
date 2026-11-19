@@ -22,7 +22,7 @@ function fixture(mode = 'multi', configuration = {}) {
     scene: { sessionGroup: mode === 'single' ? null : 'a', present: true, ready: true,
       runtime: 'claude', runId: 'run-a', sessionId: 'session-a', runDir: '/isolated/run',
       createdAt: 0, state: 'idle', idleSince: 0, processRunning: true, usagePercent: 0 },
-    configuration: { mode, syncThreshold: 15, ...configuration },
+    configuration: { mode, syncThreshold: 15, hotTtlSeconds: 1800, ...configuration },
     marker: { held: false, stale: false }, controls: [], markerReads: [],
     backlog: { total: 0, groups: [] }, rangeReads: [], transition: null,
   };
