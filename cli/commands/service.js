@@ -122,11 +122,11 @@ export async function showStatus(args = [], { collect, host = collectHostStatus,
       console.log(heading('Zylos Status'));
       console.log(`Session mode: ${result.data.sessionMode ?? 'single'}`);
       let targetRuntime = null;
-      if (result.data.view === 'multi') {
+      if (result.data.view === 'multi' || result.data.sessionMode === 'single') {
         try { targetRuntime = await resolveRuntime('origin'); } catch { /* Health cannot be attributed without a target. */ }
       }
       for (const row of [result.data.origin, ...result.data.groups]) {
-        const description = row === result.data.origin && result.data.view === 'multi'
+        const description = row === result.data.origin && (result.data.view === 'multi' || result.data.sessionMode === 'single')
           ? describeOrigin({ ...result.data, targetRuntime, nowSec: Math.floor(result.data.readAt / 1000) }) : null;
         const message = description && formatOriginDescription(description, targetRuntime, result.data.originNeed);
         console.log(message ? `  origin: ${message}` : `  ${row.sessionGroup ?? 'single'}: ${row.presence} (${row.runtime ?? 'unknown'})`);

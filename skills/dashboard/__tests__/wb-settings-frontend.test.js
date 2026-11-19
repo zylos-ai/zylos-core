@@ -70,7 +70,7 @@ test('settings loader reads one group snapshot and one first batch on each open 
 
 test('idle reclaim minutes reject invalid drafts and save one confirmed global action', async () => {
   const document = documentFixture(), root = node(document, 'div'), sent = [], asked = [];
-  renderHotTtl(root, { metadata: { claude: hotTtlMeta() }, document, t, confirm: async text => { asked.push(text); return true; },
+  renderHotTtl(root, { metadata: { claude: hotTtlMeta({ mode: 'single' }) }, document, t, confirm: async text => { asked.push(text); return true; },
     execute: async (action, body, options) => { sent.push({ action, body, options }); return true; } });
   const input = root.querySelector('#settings-hot-ttl-minutes'), save = root.querySelector('#settings-save-hot-ttl');
   assert.equal(input.value, '30'); assert.equal(input.min, '5'); assert.equal(input.max, '1440'); assert.equal(input.step, '1');
@@ -138,7 +138,7 @@ test('idle reclaim rechecks write and metadata locks after confirmation resolves
     if (change === 'write access') writable = false;
     if (change === 'read only') meta.session_hot_ttl.read_only = true;
     if (change === 'environment') meta.session_hot_ttl.environment_set = true;
-    if (change === 'mode') meta.session_hot_ttl.mode = 'single';
+    if (change === 'mode') meta.session_hot_ttl.mode = null;
     decision.resolve(true); await click;
     assert.equal(sent.length, 0, change + ' changed while the confirmation was open');
   }

@@ -37,8 +37,8 @@ async function control(content, target, zylosDir) {
 
 export async function handleCoreAction(action, body, config) {
   const { readSessionMode } = await loadCoreModule('config.js');
-  const { mode } = readSessionMode();
-  const sessionGroup = mode === 'multi' ? 'origin' : null;
+  const { keyPresent } = readSessionMode();
+  const sessionGroup = keyPresent ? 'origin' : null;
   if (body?.sessionGroup !== undefined && body.sessionGroup !== sessionGroup) return { ok: false, error: 'TARGET_SCOPE_MISMATCH', messageKey: 'result.target_scope_mismatch', message: 'Refresh the Origin target before submitting.' };
   const target = Object.freeze({ sessionGroup, runId: body?.runId, sessionId: body?.sessionId || null });
   if (['interrupt', 'chop-chop'].includes(action)) {
@@ -61,8 +61,8 @@ export async function handleCoreAction(action, body, config) {
     const request = { version: 1, type: 'manual_restart', requestId, ...(target.runId ? { expectedRunId: target.runId } : {}), ...(target.sessionId ? { expectedSessionId: target.sessionId } : {}) };
     const result = await submit(request, { deadlineAt });
     if (result.kind === 'accepted' || result.kind === 'rejected') {
-      const messageKey = mode === 'multi' && result.reply.result === 'already_stopped' ? 'result.restart_wake_requested'
-        : mode === 'multi' && result.kind === 'rejected' && result.reply.reason === 'wake_failed' ? 'result.restart_wake_failed'
+      const messageKey = keyPresent && result.reply.result === 'already_stopped' ? 'result.restart_wake_requested'
+        : keyPresent && result.kind === 'rejected' && result.reply.reason === 'wake_failed' ? 'result.restart_wake_failed'
         : result.kind === 'rejected' ? (result.reply.result === 'stale_target' ? 'result.restart_target_changed' : 'result.restart_rejected')
         : result.reply.result === 'already_stopped' ? 'result.restart_already_stopped'
         : result.reply.result === 'already_accepted' ? 'result.restart_already_accepted' : 'result.restart_accepted';

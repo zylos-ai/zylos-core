@@ -62,6 +62,51 @@ test('a restarted supervisor resumes an absent group through the persistent cont
   assert.equal(f.db.listRunEndings([group])[0].continuationPending, 0);
 });
 
+// Native single reconciliation -> real Store wake demand -> real Router launch.
+// Run for mode eligibility/continuation wiring; skip unrelated UI. The official
+// runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; private session files and
+// in-memory SQLite only. Launch and clock are injected, no tmux/process/network;
+// fixture teardown stops Router and closes/removes its resources.
+test('native single restarts a missing Origin while only pruning ordinary occupancy', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'single-continue-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const env = { ZYLOS_DIR: root };
+  const f = routerFixture(t, { mode: 'single' });
+  t.diagnostic(JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: root,
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, database: ':memory:', tmux: 'not used' }));
+  // A running row left by multi before switching to native single.
+  f.sqlite.prepare("INSERT INTO slot_occupancy(session_group,run_id,state,held_until,created_at) VALUES('old-group','old-group-run','running',NULL,?)").run(f.now() / 1000);
+  const directory = groupRunDir('origin', env);
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, 'current-session.json'), JSON.stringify({ runId: 'origin-crash', ts: f.now() - 1000 }));
+  const reads = [];
+  const supervisor = new SupervisorRunEndings({ db: f.db, env, now: f.now,
+    readFile: (file, ...args) => { reads.push(path.basename(path.dirname(file))); return fs.readFile(file, ...args); },
+    readIdentity: f.deps.readLiveIdentity, reportError: error => { throw error; } });
+  const context = { configuration: { mode: 'single', legacy: false }, scenes: [] };
+  f.advance(31000);
+  await supervisor.advance(context);
+  const ending = f.db.listRunEndings(['origin'])[0];
+  assert.equal(ending?.runId, 'origin-crash');
+  assert.equal(ending.reason, 'unexpected');
+  assert.equal(ending.continuationPending, 1);
+  assert.equal(f.db.getOriginNeed(f.now() / 1000, { sessionMode: 'single' }).continuation.pending, true);
+  assert.equal(f.db.listRunEndings(['old-group']).length, 0);
+  assert.deepEqual(reads, ['origin']);
+  assert.equal(f.db.listSlotOccupancy().length, 0);
+  f.create();
+  await f.router.initialize();
+  await f.rounds(2);
+  f.advance(5000);
+  await f.rounds(5);
+  const launches = () => f.calls.filter(call => call[0] === 'launch' && call[1].sessionGroup === 'origin');
+  assert.equal(launches().length, 1);
+  assert.equal(f.db.listRunEndings(['origin'])[0].continuationPending, 0);
+  await supervisor.advance(context);
+  await f.rounds(3);
+  assert.equal(launches().length, 1);
+});
+
 // Cutover contract: the first-migration coordinator commits its phase before
 // changing persistent restart markers. Run for phase-ordering/marker changes;
 // all database state is fixture-local and conversion has no filesystem side effects.

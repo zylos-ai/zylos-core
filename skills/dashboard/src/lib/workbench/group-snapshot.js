@@ -287,7 +287,8 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
           lastSendFailed: send?.lastSendFailed ?? null, consecutiveFailures: send?.consecutiveFailures ?? null }];
       });
     }
-    value.rows = sortRows(rows);
+    value.rows = sortRows(rows).map(row => status?.sessionMode === 'single' && row.sessionGroup === null
+      ? { ...row, sessionGroup: 'origin' } : row);
     return value;
   }
   async function activity(range, at = now()) {

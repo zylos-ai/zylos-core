@@ -57,7 +57,7 @@ export async function collectStatus({ mode = readSessionMode, list = listGroupTm
       cooldownUntil: source === 'record' ? record.cooldownUntil : null,
       updatedAt: source === 'record' ? record.updatedAt : null };
   }
-  const originNeed = view === 'multi' ? (await facts({ nowSec: Math.floor(readAt / 1000) })).originNeed : null;
+  const originNeed = view === 'multi' || sessionMode === 'single' ? (await facts({ nowSec: Math.floor(readAt / 1000), sessionMode: sessionMode === 'single' ? 'single' : 'multi' })).originNeed : null;
   return { sessionMode, view, origin, originNeed, groups, groupListError, runtimeHealth, supervisorPaused, readAt,
     ...(configurationIssue ? { configurationIssue } : {}) };
 }

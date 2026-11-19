@@ -29,6 +29,3 @@ export function modeSwitchDonePath(runId, scope, env = process.env) {
 export function modeSwitchUngroupedPath(runId, env = process.env) {
   return path.join(modeSwitchDir(runId, env), 'ungrouped.md');
 }
-export function modeSwitchGroupPath(runId, group, env = process.env) {
-  return path.join(modeSwitchDir(runId, env), `${assertSessionGroup(group)}.md`);
-}

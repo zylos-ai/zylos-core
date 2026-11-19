@@ -65,11 +65,12 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
   const sessionObservations = {
     reader,
     async get() {
-      const group = mode === 'single' ? null : 'origin';
-      const groups = mode === 'single' ? [null] : [...new Set(['origin', ...keys])];
+      const effectiveMode = mode ?? 'single';
+      const group = effectiveMode === 'single' ? null : 'origin';
+      const groups = effectiveMode === 'single' ? [null] : [...new Set(['origin', ...keys])];
       const values = await Promise.all(groups.map(async key =>
         [key, structuredClone(await reader.readSessionState(key))]));
-      return { mode: modeError ? 'unreadable' : mode, group, observations: new Map(values) };
+      return { mode: modeError ? 'unreadable' : effectiveMode, sessionMode: mode, group, observations: new Map(values) };
     },
     peek() { return null; },
   };
@@ -490,14 +491,19 @@ for (const failure of ['statusError', 'modeError', 'c4Error', 'queueError', 'ove
 // Integration: Cross-module single-view boundary; run for view or activity query changes.
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live
 // tmux/PM2/network. Fixture cleanup closes owned resources; auth timer is stopped.
-test('single view keeps its null-key row and projects Origin activity', async t => {
-  const f = fixture(t); f.setMode('single');
-  const value = await f.service.getSnapshot();
-  assert.equal(value.rows.length, 1); assert.equal(value.rows[0].sessionGroup, null); assert.equal(value.hasOlder, null);
-  assert.equal(value.rows[0].desired, null);
-  f.events.length = 0; const activity = await f.service.activity('60m');
-  assert.ok(f.events.some(filter => filter.sessionGroup === 'origin' && filter.includeLegacyOrigin));
-  assert.deepEqual(Object.keys(activity.groups), ['origin']);
+test('single views project the accepted Origin scope and activity', async t => {
+  for (const mode of ['single', null]) {
+    const f = fixture(t); f.setMode(mode);
+    const value = await f.service.getSnapshot(), sessionGroup = mode === 'single' ? 'origin' : null;
+    assert.equal(value.rows.length, 1); assert.equal(value.rows[0].sessionGroup, sessionGroup); assert.equal(value.hasOlder, null);
+    assert.equal(value.rows[0].desired, null);
+    assert.equal(value.instance.sessionModeStatus.sessionMode, 'single');
+    const detail = await createGroupsApi({ workbench: f.service }).detail('origin', { include: [] });
+    assert.equal(detail.sessionGroup, sessionGroup);
+    f.events.length = 0; const activity = await f.service.activity('60m');
+    assert.ok(f.events.some(filter => filter.sessionGroup === 'origin' && filter.includeLegacyOrigin));
+    assert.deepEqual(Object.keys(activity.groups), ['origin']);
+  }
 });
 
 // Actual event/C4 databases, snapshot and authenticated loopback activity route.
@@ -1286,7 +1292,7 @@ test('single Origin duration fallback reads hook attribution without widening th
   add('other-run', 'origin', 'old-run', 'stop', 1000);
   add('future-stop', 'origin', 'single-run', 'stop', -60000);
   const value = await f.service.getSnapshot(), origin = value.rows[0];
-  assert.equal(origin.sessionGroup, null); assert.equal(origin.working.on, true);
+  assert.equal(origin.sessionGroup, 'origin'); assert.equal(origin.working.on, true);
   assert.equal(origin.working.since, null, 'only the current command keeps work active');
   assert.equal(origin.duration, 3600);
   const detail = await createGroupsApi({ workbench: f.service }).detail('origin', { include: [] });

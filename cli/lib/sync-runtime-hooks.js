@@ -616,9 +616,9 @@ export async function enqueueRestartIfNeeded({
 } = {}) {
   const deadline = deadlineAt ?? now() + 10000;
   try {
-    const mode = readMode().mode ?? 'single';
+    const configuration = readMode();
     const transition = await readTransition();
-    if (mode === 'multi' || transition) {
+    if (configuration.keyPresent || configuration.mode === 'multi' || transition) {
       if (!Number.isSafeInteger(deadline)) throw Object.assign(new Error('Invalid restart deadline'), { code: 'INVALID_INPUT' });
       if (now() >= deadline) {
         errorLog('Settings hooks: restart not submitted: deadline_exceeded');
@@ -635,9 +635,9 @@ export async function enqueueRestartIfNeeded({
         } else {
           const code = outcome.reply.code;
           if (code === 'single_mode') {
-            const currentMode = readMode().mode ?? 'single';
+            const currentMode = readMode();
             const currentTransition = await readTransition();
-            if (currentMode === 'single' && !currentTransition) {
+            if (!currentMode.keyPresent && currentMode.mode !== 'multi' && !currentTransition) {
               return enqueueSingleRestart();
             }
           }

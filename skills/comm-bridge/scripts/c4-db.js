@@ -487,7 +487,6 @@ export const recordRunEnd = (...args) => store.recordRunEnd(...args);
 export const listRunEndings = (...args) => store.listRunEndings(...args);
 export const listPendingContinuations = (...args) => store.listPendingContinuations(...args);
 export const clearContinuation = (...args) => store.clearContinuation(...args);
-export const clearAllContinuations = (...args) => store.clearAllContinuations(...args);
 export const clearContinuationsExceptOrigin = (...args) => store.clearContinuationsExceptOrigin(...args);
 export const insertControl = (...args) => store.insertControl(...args);
 export const getNextPendingControl = (...args) => store.getNextPendingControl(...args);

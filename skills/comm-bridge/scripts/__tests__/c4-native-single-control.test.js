@@ -62,7 +62,7 @@ test('native single clears a previous Origin continuation and rejects inactive s
   assert.throws(() => legacy.clearContinuation('origin', { runId: 'new' }), { code: 'INVALID_ARGS' });
 });
 
-test('cutover clears other continuations while preserving Origin and the all-group primitive', t => {
+test('cutover clears other continuations while preserving Origin', t => {
   const { store, db } = fixture(t);
   for (const group of ['origin', 'a', 'b']) store.recordRunEnd(group, { runId: 'old', reason: 'unexpected' });
   assert.deepEqual(store.clearContinuationsExceptOrigin(), { cleared: 2 });
@@ -70,7 +70,6 @@ test('cutover clears other continuations while preserving Origin and the all-gro
     { session_group: 'a', continuation_pending: 0 }, { session_group: 'b', continuation_pending: 0 }, { session_group: 'origin', continuation_pending: 1 },
   ]);
   assert.deepEqual(store.clearContinuationsExceptOrigin(), { cleared: 0 });
-  assert.deepEqual(store.clearAllContinuations(), { cleared: 1 });
 });
 
 test('internal cleanup rejects absent or ineligible transitions without changing messages', t => {

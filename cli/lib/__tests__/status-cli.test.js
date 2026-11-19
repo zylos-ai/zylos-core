@@ -103,14 +103,14 @@ test('CLI emits one JSON line for invalid args, reader load failure, and success
   } finally { console.log = log; process.exitCode = previousExit; }
 });
 
-test('status adds only the projected Origin need in multi and null in single', async () => {
+test('status projects Origin need in multi and keeps pre-migration instances unchanged', async () => {
   let seconds;
   const projection = { inbound: 0, controls: 0, continuation: true, oldestAt: 1 };
   const multi = await collectStatus(fixture({ facts: ({ nowSec }) => { seconds = nowSec; return { originNeed: projection, transitionOpen: true, fenced: true }; } }));
   assert.equal(seconds, 2);
   assert.deepEqual(multi.originNeed, projection);
   assert.equal('transitionOpen' in multi, false);
-  const single = await collectStatus(fixture({ mode: () => ({ mode: 'single' }), facts: () => assert.fail('single must not read C4') }));
+  const single = await collectStatus(fixture({ mode: () => ({ mode: null }), facts: () => assert.fail('pre-migration instances must not read C4') }));
   assert.equal(single.originNeed, null);
 });
 
