@@ -39,14 +39,14 @@ test('control claim=false ends lane round without claiming business', async t =>
 
 test('recovery control before startup prompt before triggering conversation; clear reloads identity', async t => {
   const f = routerFixture(t); f.put('origin'); const row = f.add('a');
-  const launch = f.deps.getSessionAdapter;
-  f.deps.getSessionAdapter = runtime => ({ ...launch(runtime), launch: async input => {
-    await launch(runtime).launch(input);
+  const launch = f.deps.session;
+  f.deps.session = { ...launch, launch: async input => {
+    await launch.launch(input);
     const prompt = f.db.insertControl('prompt', { sessionGroup: 'a', priority: 2, appendAckSuffix: false });
     const recovery = f.db.insertControl('recovery', { sessionGroup: 'a', priority: 0, bypassState: true, appendAckSuffix: false });
     f.current.get('a').startupControlIds = [prompt.id];
     f.calls.push(['expected', recovery.id, prompt.id]);
-  } });
+  } };
   const router = f.create(); await router.initialize(); await f.rounds(7);
   const expected = f.calls.find(x => x[0] === 'expected').slice(1);
   assert.deepEqual(f.calls.filter(x => x[0] === 'control').map(x => x[1]), expected);
@@ -61,12 +61,12 @@ test('recovery control before startup prompt before triggering conversation; cle
 test('startup prompt fence or health block requeues trigger without retry', async t => {
   for (const blockedBy of ['fence', 'health']) await t.test(blockedBy, async t => {
     const f = routerFixture(t); f.put('origin'); const row = f.add('a');
-    const adapter = f.deps.getSessionAdapter;
-    f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
-      await adapter(runtime).launch(input);
+    const adapter = f.deps.session;
+    f.deps.session = { ...adapter, launch: async input => {
+      await adapter.launch(input);
       const prompt = f.db.insertControl('prompt', { sessionGroup: 'a', appendAckSuffix: false }); f.current.get('a').startupControlIds = [prompt.id];
       if (blockedBy === 'fence') f.db.setDrainFence('*');
-    } });
+    } };
     if (blockedBy === 'health') f.deps.deliverControl = async row => { f.sqlite.prepare("UPDATE control_queue SET status='pending' WHERE id=?").run(row.id); return { blocked: true }; };
     const router = f.create(); await router.initialize(); await f.rounds(5);
     assert.equal(f.row(row.id).status, 'pending'); assert.equal(f.row(row.id).retry_count, 0);

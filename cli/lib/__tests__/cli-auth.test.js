@@ -4,7 +4,7 @@ import { executeAuth, authCommand } from '../../commands/auth.js';
 
 const authenticated = {
   exists: () => true, spawn: () => ({ status: 0 }),
-  adapter: () => ({ checkAuth: () => ({ status: 'success' }) }),
+  runtimeFor: () => ({ auth: { checkAuth: () => ({ status: 'success' }) } }),
   syncRelayTraffic: () => true, relayNotice: () => null,
 };
 
@@ -81,7 +81,7 @@ test('failed or unconfirmed authentication never sends a recovery notification',
   for (const status of ['failure', 'uncertain', 'throw']) {
     let calls = 0;
     const result = await executeAuth(['codex'], { ...authenticated,
-      adapter: () => ({ checkAuth() { if (status === 'throw') throw new Error('check failed'); return { status }; } }),
+      runtimeFor: () => ({ auth: { checkAuth() { if (status === 'throw') throw new Error('check failed'); return { status }; } } }),
       notifyRecovery: () => { calls++; return true; } });
     assert.equal(result.ok, false);
     assert.equal(calls, 0);
@@ -120,7 +120,7 @@ test('native auth stdio is interactive with stdout reserved; only confirmed auth
         spawn: (command, args, options) => {
           calls++; assert.equal(command, runtime); assert.deepEqual(args, runtime === 'claude' ? ['auth', 'login'] : ['login']);
           assert.deepEqual(options.stdio, ['inherit', 2, 2]); return { status: 0 };
-        }, adapter: () => ({ checkAuth: async () => ({ status }) }), syncRelayTraffic: () => true, relayNotice: () => null });
+        }, runtimeFor: () => ({ auth: { checkAuth: async () => ({ status }) } }), syncRelayTraffic: () => true, relayNotice: () => null });
       assert.equal(calls, 1); assert.equal(result.ok, status === 'success');
       if (!result.ok) {
         assert.equal(result.error.persisted, null); assert.equal(result.error.configChanged, false);
@@ -134,20 +134,20 @@ test('review P2: Codex device-code option maps to native device auth without cha
   for (const flags of [[], ['--device-code']]) {
     const result = await executeAuth(['codex', ...flags, '--json'], { exists: () => true,
       spawn: (name, argv) => { assert.equal(name, 'codex'); assert.deepEqual(argv, ['login', ...(flags.length ? ['--device-auth'] : [])]); return { status: 0 }; },
-      adapter: () => ({ checkAuth: () => ({ status: 'success' }) }) });
+      runtimeFor: () => ({ auth: { checkAuth: () => ({ status: 'success' }) } }) });
     assert.equal(result.ok, true);
   }
   assert.equal((await executeAuth(['claude', '--device-code'], {
     exists: () => assert.fail('invalid flags must be rejected before CLI lookup'),
     spawn: () => assert.fail('invalid flags must not start native auth'),
-    adapter: () => assert.fail('invalid flags must not probe auth'),
+    runtimeFor: () => assert.fail('invalid flags must not probe auth'),
   })).error.code, 'INVALID_ARGUMENT');
 });
 
 test('native cancellation/failure preserves credential uncertainty and never probes success', { timeout: 5000 }, async () => {
   for (const native of [{ status: 130 }, { signal: 'SIGINT' }, { status: 1 }, { error: new Error('spawn') }]) {
     const result = await executeAuth(['codex'], { exists: () => true, spawn: () => native,
-      adapter: () => { throw new Error('must not probe'); } });
+      runtimeFor: () => { throw new Error('must not probe'); } });
     assert.equal(result.ok, false); assert.equal(result.error.persisted, null); assert.equal(result.error.configChanged, false);
     assert.equal(result.error.code, native.signal || native.status === 130 ? 'AUTH_CANCELLED' : 'AUTH_FAILED');
   }

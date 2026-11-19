@@ -3,7 +3,7 @@
  *
  * Zero imports / no side effects by design: this leaf module is shared by both
  * `runtime-setup.js` (the `zylos init` flow) and the runtime adapters
- * (`runtime/codex.js`, runtime-switch + health probe) without dragging
+ * (`runtime/codex/auth.js`, runtime-switch + health probe) without dragging
  * `node:child_process` into adapter test graphs that mock it.
  *
  * Both parsers key off explicit signals rather than process exit codes, which

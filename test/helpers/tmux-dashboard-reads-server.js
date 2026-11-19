@@ -9,14 +9,14 @@ assert.equal(fs.realpathSync(process.env.HOME), process.env.HOME);
 assert.ok(process.env.TEST_PRIVATE_SOCKET.startsWith(path.dirname(process.env.HOME) + path.sep));
 
 if (process.argv.includes('--deliver')) {
+  const { createSessionOps } = await import('../../cli/lib/runtime/session-ops.js');
   const { openTmuxConnection } = await import('../../cli/lib/runtime/tmux-connection.js');
   const { resolveSessionTarget } = await import('../../cli/lib/runtime/session-target.js');
-  const { SessionAdapter } = await import('../../cli/lib/runtime/session-adapter.js');
   const connection = await openTmuxConnection({ socketPath: process.env.TEST_PRIVATE_SOCKET });
   try {
     const target = await resolveSessionTarget({ sessionGroup: 'origin', connection });
-    const adapter = new SessionAdapter();
-    await adapter.sendText({ connection, target, text: 'dashboard-delivery-control' });
+    const adapter = createSessionOps();
+    await adapter.sendText({ runtime: 'claude', connection, target, text: 'dashboard-delivery-control' });
     await adapter.sendKeys({ connection, target, keys: ['Enter'] });
     console.log('DELIVERED');
   } finally { connection.close(); }

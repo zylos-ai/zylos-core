@@ -175,7 +175,7 @@ export function createActivationManager(context) {
           launchConfig, conversation_id: candidate?.id ?? null, backoffCount: state.resident.failures });
         // Publish the in-flight launch before releasing runtime admission.
         if (token && requests.get(requestRuntime) === token) requests.delete(requestRuntime);
-        activation.launchTiming = (await deps.getSessionAdapter(launchConfig.runtime).launch({ sessionGroup: group, runId, launchConfig, sessionMode: state.mode }))?.launchTiming;
+        activation.launchTiming = (await deps.session.launch({ runtime: launchConfig.runtime, sessionGroup: group, runId, launchConfig, sessionMode: state.mode }))?.launchTiming;
       } catch (error) { activation.launchError = error; }
       activation.launchSettled = true;
       if (activation.launchError && activation.launchError.code !== 'NAME_CONFLICT') recordFailureTiming(activation);
@@ -258,7 +258,7 @@ export function createActivationManager(context) {
         context.continuationRestarts.started(group);
         diagnostic('activate_continuation', { session_group: group, runId, runtime: launchConfig.runtime });
         if (token && requests.get(requestRuntime) === token) requests.delete(requestRuntime);
-        activation.launchTiming = (await deps.getSessionAdapter(launchConfig.runtime).launch({ sessionGroup: group, runId, launchConfig, sessionMode: state.mode }))?.launchTiming;
+        activation.launchTiming = (await deps.session.launch({ runtime: launchConfig.runtime, sessionGroup: group, runId, launchConfig, sessionMode: state.mode }))?.launchTiming;
       } catch (error) { activation.launchError = error; }
       activation.launchSettled = true;
       if (activation.launchError && activation.launchError.code !== 'NAME_CONFLICT') recordFailureTiming(activation);
@@ -329,7 +329,7 @@ export function createActivationManager(context) {
       }
       if (!activation.launchError && now() - activation.startedAt < options.readyTimeoutMs) return;
       recordFailureTiming(activation);
-      await deps.getSessionAdapter(activation.launchConfig.runtime).stop({
+      await deps.session.stop({
         tmuxName: context.tmuxName(group), expectedRunId: activation.runId,
       });
     } catch (error) {

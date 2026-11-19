@@ -113,11 +113,11 @@ test('Antigravity CLI flags allow API keys and reject subscription and base URL 
 
 test('Antigravity auth checks saved API key without opening native login', async () => {
   let native = 0, notified = 0;
-  const result = await executeAuth(['agy'], { exists: () => true, spawn: async () => { native++; }, adapter: () => ({ checkAuth: async () => ({ status: 'success' }) }), notifyRecovery: async () => { notified++; return true; } });
+  const result = await executeAuth(['agy'], { exists: () => true, spawn: async () => { native++; }, runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'success' }) } }), notifyRecovery: async () => { notified++; return true; } });
   assert.equal(result.ok, true);
   assert.equal(native, 0);
   assert.equal(notified, 1);
-  const failed = await executeAuth(['agy'], { exists: () => true, adapter: () => ({ checkAuth: async () => ({ status: 'failure' }) }) });
+  const failed = await executeAuth(['agy'], { exists: () => true, runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'failure' }) } }) });
   assert.equal(failed.error.code, 'AUTH_FAILED');
   assert.match(failed.error.message, /save-apikey/);
 });

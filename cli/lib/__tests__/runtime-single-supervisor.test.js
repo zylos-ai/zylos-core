@@ -5,7 +5,8 @@ import path from 'node:path';
 import { readyTmuxTarget } from '../../../test/helpers/ready-tmux-target.js';
 import { seedCodexTrustFixture } from '../../../test/helpers/codex-trust.js';
 import { runtimeCommand, executeRuntimeSwitch } from '../../commands/runtime.js';
-import { getSessionAdapter } from '../runtime/index.js';
+import { createSessionOps } from '../runtime/session-ops.js';
+import { launchSession } from '../runtime/launch-flow.js';
 import { updateZylosConfigLocked } from '../config.js';
 import { submit } from '../am-sock-client.js';
 import { supervisorDiagnosticPath } from '../session-group-paths.js';
@@ -35,6 +36,12 @@ setInterval(() => {}, 1000);
 `, { mode: 0o700 });
   let clock = Date.now();
   const events = [], launches = [];
+  const sessionOptions = { root: f.root, env: f.env,
+    tmux: { binary: f.binary, socketPath: f.socketPath, configFile: '/dev/null' },
+    runtimeExecutable: () => executable };
+  const session = createSessionOps(sessionOptions);
+  const launch = input => launchSession(input, sessionOptions);
+  session.launch = async input => { launches.push(input); return launch(input); };
   const router = createRouter({ db: { ...db,
     getControlById: id => f.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id),
     expireTimedOutControls: () => 0, cleanupControlQueue: () => 0 },
@@ -42,14 +49,7 @@ setInterval(() => {}, 1000);
     readLiveIdentity: group => scenes.readIdentity(group), readLiveIdentities: groups => scenes.readIdentities(groups), readCurrentSession: scenes.readReady,
     listGroupTmuxSessions: () => assert.fail('single does not list groups'),
     readRuntimeHealth: () => ({ health: 'ok', publicHealth: 'ok' }),
-    getSessionAdapter: runtime => {
-      const adapter = getSessionAdapter(runtime, { root: f.root, env: f.env,
-        tmux: { binary: f.binary, socketPath: f.socketPath, configFile: '/dev/null' },
-        runtimeExecutable: () => executable });
-      const launch = adapter.launch.bind(adapter);
-      adapter.launch = async input => { launches.push(input); return launch(input); };
-      return adapter;
-    },
+    session,
     submit: () => assert.fail('single activation must not submit start_attempt'),
     deliverControl: () => assert.fail('fixture has no pending controls'),
     deliverConversation: () => assert.fail('fixture has no pending conversations'),

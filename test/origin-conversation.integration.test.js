@@ -16,7 +16,8 @@ import { ChatSender } from '../skills/dashboard/src/lib/chat/send.js';
 import { ChatHistory } from '../skills/dashboard/src/lib/chat/history.js';
 import { ensureOriginConversation, ORIGIN_CONVERSATION_ID } from '../skills/dashboard/src/lib/chat/origin.js';
 import { isolatedTmux } from './helpers/isolated-tmux.js';
-import { getSessionAdapter } from '../cli/lib/runtime/index.js';
+import { createSessionOps } from '../cli/lib/runtime/session-ops.js';
+import { launchSession } from '../cli/lib/runtime/launch-flow.js';
 import { createSessionReader } from '../cli/lib/session-state-reader-async.js';
 import { readReadyIdentity } from '../cli/lib/runtime/session-target.js';
 import { listGroupTmuxSessions } from '../cli/lib/session-group-paths.js';
@@ -98,14 +99,15 @@ setInterval(()=>{},1000);
   const db = { ...f.store,
     getControlById: id => f.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id),
     expireTimedOutControls: () => 0, cleanupControlQueue: () => 0 };
+  const sessionOptions = { root: tm.dir, tmux,
+    env: { PATH: process.env.PATH, HOME: tm.dir, ZYLOS_DIR: tm.dir }, runtimeExecutable: () => executable };
   const deps = { db, now: () => clock,
     readSessionMode: () => ({ mode: readMode(), keyPresent: true }),
     readLiveIdentity: sessions.readLiveIdentity, readLiveIdentities: sessions.readLiveIdentities,
     readCurrentSession: readReadyIdentity,
     listGroupTmuxSessions: () => listGroupTmuxSessions(tmux),
     readRuntimeHealth: () => ({ health: 'ok', publicHealth: 'ok' }),
-    getSessionAdapter: selected => getSessionAdapter(selected, { root: tm.dir, tmux,
-      env: { PATH: process.env.PATH, HOME: tm.dir, ZYLOS_DIR: tm.dir }, runtimeExecutable: () => executable }),
+    session: { ...createSessionOps(sessionOptions), launch: input => launchSession(input, sessionOptions) },
     submit: async () => assert.fail('a healthy launch must not submit start_attempt'),
     deliverControl: async () => assert.fail('fixture has no controls'),
     deliverConversation: async (message, identity) => {

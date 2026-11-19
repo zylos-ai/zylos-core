@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 const { groupRunDir, legacyRunDir, RUN_FILES, zylosRoot } = await loadCoreModule('session-group-paths.js');
 const { buildInstructionFile } = await loadCoreModule('runtime/instruction-builder.js');
-const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
+const { createSessionOps } = await loadCoreModule('runtime/session-ops.js');
 const { openTmuxConnection, tmuxError } = await loadCoreModule('runtime/tmux-connection.js');
 const { observeSessionTarget } = await loadCoreModule('runtime/session-target.js');
 import { createSinglePreparation, createLegacyMigration } from './resident.js';
@@ -19,7 +19,7 @@ const lifecycleCaches = ['tool-event-stream-state.json', 'session-tool-state.jso
 export function createLifecycleProviders({ env = process.env, tmux = {}, now = Date.now,
   diagnostic = () => {}, log = () => {},
   open = openTmuxConnection, observe = observeSessionTarget, readProcessTree,
-  adapter = runtime => getSessionAdapter(runtime, { env, tmux }),
+  session = createSessionOps({ env, tmux }),
   buildInstructions = runtime => buildInstructionFile(runtime, { zylosDir: zylosRoot(env) }),
   readLegacyStatus: statusOverride,
 } = {}) {
@@ -93,12 +93,11 @@ export function createLifecycleProviders({ env = process.env, tmux = {}, now = D
         throw tmuxError('TARGET_GONE', 'Legacy target was replaced before exit');
       }
       if (target.runId !== live.runId || target.runtime !== live.runtime) throw tmuxError('RUNID_MISMATCH', 'Legacy runtime identity changed');
-      const runtimeAdapter = adapter(target.runtime);
-      await runtimeAdapter.sendText({ target, connection, text: '/exit' });
-      await runtimeAdapter.sendKeys({ target, connection, keys: ['Enter'] });
+      await session.sendText({ runtime: target.runtime, target, connection, text: '/exit' });
+      await session.sendKeys({ target, connection, keys: ['Enter'] });
     } finally { await connection?.close(); }
   }
   const migration = createLegacyMigration({ readLegacy, readLegacyStatus: statusOverride ?? readLegacyStatus,
-    sendExit, getSessionAdapter: adapter, readUpgradeMarker, readUpgradeJournal, diagnostic, now });
+    sendExit, session, readUpgradeMarker, readUpgradeJournal, diagnostic, now });
   return { prepareSingle, ...migration };
 }

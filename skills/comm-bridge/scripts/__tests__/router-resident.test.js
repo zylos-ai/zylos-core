@@ -20,7 +20,7 @@ test('legacy waits idle, sends exit once, confirms disappearance; busy target fo
   const calls = [];
   const migration = createLegacyMigration({ now: () => now, readLegacy: async name => live.get(name) ?? {present:false},
     readLegacyStatus: async name => ({state:name==='claude-main'?'idle':'busy', idle_seconds:4}),
-    sendExit: async target => calls.push(['exit',target.tmuxName]), getSessionAdapter: runtime => ({stop: async input => { calls.push(['stop',runtime,input]); live.delete(input.tmuxName); }}),
+    sendExit: async target => calls.push(['exit',target.tmuxName]), session: {stop: async input => { calls.push(['stop',input]); live.delete(input.tmuxName); }},
     diagnostic: (event, fields) => calls.push([event,fields]) });
   const entries = await migration.findLegacySessions(); await migration.advanceLegacy(entries); await migration.advanceLegacy(entries);
   assert.deepEqual(calls.filter(x => x[0]==='exit'), [['exit','claude-main']]);
@@ -28,14 +28,14 @@ test('legacy waits idle, sends exit once, confirms disappearance; busy target fo
   now = 299999; await migration.advanceLegacy(entries);
   assert.equal(calls.some(x => x[0] === 'stop'), false);
   now = 300000; await migration.advanceLegacy(entries);
-  assert.deepEqual(calls.find(x => x[0]==='stop'), ['stop','codex',{tmuxName:'codex-main',expectedRunId:'old'}]);
+  assert.deepEqual(calls.find(x => x[0]==='stop'), ['stop', {tmuxName:'codex-main',expectedRunId:'old'}]);
   assert.deepEqual(calls.filter(x => x[0]==='legacy_tmux_stopped').map(x => x[1].reason), ['exited','forced']);
 });
 
 test('unknown legacy runtime never guesses adapter; failed stop remains pending', async () => {
   let now = 0, runtime = 'unknown', stopCount = 0;
   const migration = createLegacyMigration({ now:()=>now, readLegacy:async name => ({present:name==='claude-main',runtime,tmuxName:name,runId:null}),
-    readLegacyStatus:async()=>({state:'busy'}),sendExit:async()=>assert.fail('busy'),getSessionAdapter:()=>({stop:async()=>{stopCount++;throw Error('unconfirmed');}}) });
+    readLegacyStatus:async()=>({state:'busy'}),sendExit:async()=>assert.fail('busy'),session: {stop:async()=>{stopCount++;throw Error('unconfirmed');}} });
   const entries=await migration.findLegacySessions(); now=300001; await migration.advanceLegacy(entries); assert.equal(stopCount,0);
   runtime='claude';await migration.advanceLegacy(entries); assert.equal(stopCount,1);assert.equal(entries[0].stopped,false);
 });
@@ -48,7 +48,7 @@ for (const runtime of ['claude', 'codex']) {
       readLegacy: async name => ({ present: name === 'claude-main', tmuxName: name, runtime, runId: null }),
       readLegacyStatus: async () => ({ state: 'idle', idle_seconds: 3 }),
       sendExit: async () => { now += 50; },
-      getSessionAdapter: () => ({ stop: async () => { stops++; } }),
+      session: { stop: async () => { stops++; } },
       diagnostic: (event, fields) => events.push({ event, ...fields }),
     });
     const entries = await migration.findLegacySessions();
@@ -70,7 +70,7 @@ test('failed exit submission does not start the sixty second timer', async () =>
     readLegacy: async name => ({ present: name === 'claude-main', tmuxName: name, runtime: 'codex', runId: null }),
     readLegacyStatus: async () => ({ state: 'idle', idle_seconds: 3 }),
     sendExit: async () => { throw Error('submission failed'); },
-    getSessionAdapter: () => ({ stop: async () => { stops++; } }),
+    session: { stop: async () => { stops++; } },
   });
   const entries = await migration.findLegacySessions(); await migration.advanceLegacy(entries);
   now = 60000; await migration.advanceLegacy(entries);
@@ -87,7 +87,7 @@ for (const runtime of ['claude', 'codex']) {
       readLegacy: async name => ({ present: present && name === 'claude-main', tmuxName: name, runtime, runId: null }),
       readLegacyStatus: async () => ({ state: 'idle', idle_seconds: 3 }),
       sendExit: async () => { exits++; },
-      getSessionAdapter: () => ({ stop: async () => { stops++; } }),
+      session: { stop: async () => { stops++; } },
       diagnostic: (event, fields) => events.push({ event, ...fields }),
     });
     const entries = await migration.findLegacySessions(); await migration.advanceLegacy(entries);
@@ -108,7 +108,7 @@ for (const reason of ['exit_timeout', 'startup_timeout']) {
       readLegacy: async name => ({ present: name === 'claude-main', tmuxName: name, runtime: 'claude', runId: null }),
       readLegacyStatus: async () => ({ state: reason === 'exit_timeout' ? 'idle' : 'busy', idle_seconds: 3 }),
       sendExit: async () => {},
-      getSessionAdapter: () => ({ stop: async () => { if (++stops <= 3) throw Error('stop failed'); } }),
+      session: { stop: async () => { if (++stops <= 3) throw Error('stop failed'); } },
       diagnostic: (event, fields) => events.push({ event, ...fields }),
     });
     const entries = await migration.findLegacySessions();
@@ -152,7 +152,7 @@ function upgradeMigration({ runtime, status = { state: 'busy', idle_seconds: 0 }
     readLegacy: async name => ({ present: present && name === 'claude-main', tmuxName: name, runtime, runId: null }),
     readLegacyStatus: async () => (typeof status === 'function' ? status() : status),
     sendExit: async () => calls.push('exit'),
-    getSessionAdapter: name => ({ stop: async input => { calls.push(['stop', name, input]); present = false; } }),
+    session: { stop: async input => { calls.push(['stop', input]); present = false; } },
     readUpgradeMarker: records.readUpgradeMarker, readUpgradeJournal: records.readUpgradeJournal,
     diagnostic: (event, fields) => events.push({ event, ...fields }) });
   return { migration, clock, calls, events, records };
@@ -164,7 +164,7 @@ test('codex legacy session is stopped on the first round after the upgrade finis
   f.clock.now = 1000; await f.migration.advanceLegacy(entries);
   assert.deepEqual(f.calls, []);
   f.records.finish(); f.clock.now = 2000; await f.migration.advanceLegacy(entries);
-  assert.deepEqual(f.calls, [['stop', 'codex', { tmuxName: 'claude-main', expectedRunId: null }]]);
+  assert.deepEqual(f.calls, [['stop', { tmuxName: 'claude-main', expectedRunId: null }]]);
   await f.migration.advanceLegacy(entries);
   assert.equal(entries[0].stopped, true);
   assert.deepEqual(f.events, [
@@ -192,7 +192,7 @@ test('claude idle after the upgrade gets exit and keeps the sixty second exit de
   f.clock.now = 60999; await f.migration.advanceLegacy(entries);
   assert.deepEqual(f.calls, ['exit']);
   f.clock.now = 61000; await f.migration.advanceLegacy(entries);
-  assert.deepEqual(f.calls.at(-1), ['stop', 'claude', { tmuxName: 'claude-main', expectedRunId: null }]);
+  assert.deepEqual(f.calls.at(-1), ['stop', { tmuxName: 'claude-main', expectedRunId: null }]);
   assert.equal(f.events[0].reason, 'exit_timeout');
 });
 
@@ -201,7 +201,7 @@ test('claude busy after the upgrade is stopped without exit', async () => {
   const entries = await f.migration.findLegacySessions();
   await f.migration.advanceLegacy(entries);
   f.records.finish(); f.clock.now = 1000; await f.migration.advanceLegacy(entries);
-  assert.deepEqual(f.calls, [['stop', 'claude', { tmuxName: 'claude-main', expectedRunId: null }]]);
+  assert.deepEqual(f.calls, [['stop', { tmuxName: 'claude-main', expectedRunId: null }]]);
   assert.equal(f.events[0].reason, 'upgrade_complete');
 });
 
@@ -292,10 +292,10 @@ for (const health of ['ok', 'auth_failed']) {
 test('failed Origin launches retain the five ten twenty forty sixty second backoff', async t => {
   const f = routerFixture(t);
   f.db.insertControl('Needed work', { sessionGroup: 'origin', appendAckSuffix: false });
-  f.deps.getSessionAdapter = () => ({
+  f.deps.session = {
     launch: async input => { f.calls.push(['launch', input]); throw new Error('launch failed'); },
     stop: async input => { f.calls.push(['stop', input]); },
-  });
+  };
   const router = f.create(); await router.initialize(); await f.rounds(2);
   for (const [index, delay] of [5000, 10000, 20000, 40000, 60000].entries()) {
     f.advance(delay - 1); await f.rounds(2);
@@ -309,12 +309,12 @@ test('failed Origin launches retain the five ten twenty forty sixty second backo
 test('a stable ready Origin clears failure backoff before an hour asleep and a fresh demand', async t => {
   const f = routerFixture(t);
   f.db.insertControl('Initial work', { sessionGroup: 'origin', appendAckSuffix: false });
-  const adapter = f.deps.getSessionAdapter;
+  const adapter = f.deps.session;
   let failuresLeft = 2;
-  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+  f.deps.session = { ...adapter, launch: async input => {
     if (failuresLeft-- > 0) { f.calls.push(['launch', input]); throw new Error('launch failed'); }
-    return adapter(runtime).launch(input);
-  } });
+    return adapter.launch(input);
+  } };
   const router = f.create(); await router.initialize(); await f.rounds(2);
   for (const delay of [5000, 10000, 20000]) { f.advance(delay); await f.rounds(3); }
   assert.equal(router.state.resident.failures, 3);
@@ -335,7 +335,7 @@ test('legacy migration only observes the two runtimes that predate managed group
     readLegacy: async tmuxName => { names.push(tmuxName); return { present: false }; },
     readLegacyStatus: async () => assert.fail('Absent legacy session has no status'),
     sendExit: async () => assert.fail('No legacy session should be stopped'),
-    getSessionAdapter: () => assert.fail('No legacy session should need an adapter'),
+    session: { stop: () => assert.fail('Absent legacy session should not reach stop') },
     readUpgradeMarker: async () => assert.fail('Upgrade records are read only for found legacy sessions'),
   });
   assert.deepEqual(await migration.findLegacySessions(), []);

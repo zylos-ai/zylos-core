@@ -1,9 +1,10 @@
+import { createSessionOps } from '../../../../cli/lib/runtime/session-ops.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import fs from 'node:fs';
 import { ChildProcess } from 'node:child_process';
-import { ClaudeAdapter } from '../../../../cli/lib/runtime/claude.js';
+
 import { sceneRotationThreshold } from '../supervisor-lifecycle.js';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { SupervisorScenes } from '../supervisor-scenes.js';
@@ -118,7 +119,6 @@ test('scene threshold uses the identity-validated model and observed window', {t
   }
 });
 
-
 // Boundary: repeated READY observations and adapter calls on a private tmux
 // socket. Run for pane observation/liveness changes; unrelated work may skip.
 // readyTmuxTarget owns isolated environment, SQLite, processes and cleanup.
@@ -136,8 +136,8 @@ test('repeated multi READY observations and adapter liveness use pane PID withou
   const forbiddenTree = async () => { treeCalls++; throw Error('READY observation scanned process tree'); };
   const scenes = service(f, {readProcessTree:forbiddenTree});
   const defaults = service(f);
-  const adapter = new ClaudeAdapter({tmux:{socketPath:f.socketPath,binary:f.binary},env:f.env,readProcessTree:forbiddenTree});
-  const defaultAdapter = new ClaudeAdapter({tmux:{socketPath:f.socketPath,binary:f.binary},env:f.env});
+  const adapter = createSessionOps({tmux:{socketPath:f.socketPath,binary:f.binary},env:f.env,readProcessTree:forbiddenTree});
+  const defaultAdapter = createSessionOps({tmux:{socketPath:f.socketPath,binary:f.binary},env:f.env});
   const spawned = [], spawn = ChildProcess.prototype.spawn;
   t.mock.method(ChildProcess.prototype,'spawn',function(options) {
     spawned.push(path.basename(options.file));

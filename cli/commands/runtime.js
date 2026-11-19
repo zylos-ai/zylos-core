@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { readZylosConfigOrThrow, readZylosConfigStrict, readSessionMode, updateZylosConfigLocked, ZYLOS_DIR } from '../lib/config.js';
-import { getSessionAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
+import { getRuntime, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { listGroupTmuxSessions } from '../lib/session-group-paths.js';
 import { readLiveIdentity } from '../lib/session-state-reader.js';
 import { submit, lookupRestartRequest } from '../lib/am-sock-client.js';
@@ -321,7 +321,7 @@ async function reclaimSingleRuntime(live, group, warnings, { send, lookup, reque
 }
 
 export async function executeRuntimeSwitch(target, flags, { read = readZylosConfigStrict, mode = readSessionMode,
-  exists = commandExists, adapter = getSessionAdapter, credentials = applyCredentials, baseUrl = applyBaseUrl,
+  exists = commandExists, runtimeFor = getRuntime, credentials = applyCredentials, baseUrl = applyBaseUrl,
   hooksReady = runtimeHooksReady, write = updateZylosConfigLocked, observe = observeRuntimeGroups,
   identity = readLiveIdentity, send = submit, lookup = lookupRestartRequest, relayNotice = relayLoginNotice,
   requestId = () => `cli-rt-${Date.now()}-${randomBytes(6).toString('hex')}` } = {}) {
@@ -335,7 +335,7 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
   const invalid = validateRuntimeFlags(target, parsed);
   if (invalid) return fail('INVALID_ARGUMENT', invalid.error);
   let selected;
-  try { selected = adapter(target); } catch (error) { return fail('RUNTIME_UNSUPPORTED', error.message); }
+  try { selected = await runtimeFor(target); } catch (error) { return fail('RUNTIME_UNSUPPORTED', error.message); }
   let config;
   try {
     const result = read();
@@ -378,7 +378,7 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
     if (parsed.noValidate) warnings.push({ code: 'AUTH_CHECK_SKIPPED', message: 'Authentication check skipped (--no-validate)' });
     else {
       let auth;
-      try { auth = await selected.checkAuth(); } catch { auth = { status: 'uncertain' }; }
+      try { auth = await selected.auth.checkAuth(); } catch { auth = { status: 'uncertain' }; }
       if (auth.status !== 'success') {
         const rejected = auth.status === 'failure';
         const remedy = target === 'agy'

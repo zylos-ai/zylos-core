@@ -6,7 +6,7 @@ test('real same-name replacement proves original session gone and is never rebou
  const f=await fixture(t),key='same-name-run';
  f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
  const original=f.snapshot('target'),independent=await service(f,key);let replacement;
- f.adapter.options.dependencies={...actualDependencies,revalidateSessionTarget:async options=>{
+ f.options.dependencies={...actualDependencies,revalidateSessionTarget:async options=>{
   f.command('kill-session','-t',options.target.tmuxSessionId);
   f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
   replacement=f.snapshot('target');return actualDependencies.revalidateSessionTarget(options);
@@ -22,7 +22,7 @@ test('real same-socket server replacement does not reopen or act on the new serv
  const generation=f.command('display-message','-p','#{pid}:#{start_time}');let replacement,newOrigin,newGeneration,opens=0;
  const oldServerPid=Number(generation.split(':')[0]),injectionErrors=[];let oldServerExited=false,readCode,stopCode;
  assert.ok(Number.isSafeInteger(oldServerPid)&&oldServerPid>0);
- f.adapter.options.dependencies={...actualDependencies,
+ f.options.dependencies={...actualDependencies,
   openTmuxConnection:options=>{opens++;return actualDependencies.openTmuxConnection(options)},
   revalidateSessionTarget:async options=>{
    try {

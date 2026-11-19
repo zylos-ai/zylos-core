@@ -36,7 +36,7 @@ test('exit controls settle after pane removal and do not reach replacement runs'
     env: Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX'].map(key => [key, process.env[key]])) }));
   const { createDelivery } = await import('../skills/comm-bridge/scripts/router/delivery.js');
   const { resolveSessionTarget } = await import('../cli/lib/runtime/session-target.js');
-  const { getSessionAdapter } = await import('../cli/lib/runtime/index.js');
+  const { createSessionOps } = await import('../cli/lib/runtime/session-ops.js');
   const { tmuxNameForGroup } = await import('../cli/lib/session-group-paths.js');
   const tmux = { socketPath: f.socketPath, binary: f.binary, configFile: '/dev/null' };
   // Keep the server alive when the runtime pane exits, as the managed host does.
@@ -78,7 +78,7 @@ const prompt=()=>process.stdout.write('\\x1b[2J\\x1b[H❯ ');prompt();process.st
       const delivery = createDelivery({ db, getSessionMode: () => mode,
         resolveSessionTarget: args => { assert.equal(args.sessionGroup, mode === 'single' ? null : group); return resolveSessionTarget({ ...args, readReady: async () => identity }); },
         readSessionState: async () => ({ identity: { ...identity, runtime, ready: true }, status: { valid: true, value: { state: 'idle', idle_seconds: 10, proc: { alive: true }, health: 'ok' } } }),
-        readRuntimeHealth: () => ({ health: 'ok' }), getSessionAdapter: r => getSessionAdapter(r, { tmux }),
+        readRuntimeHealth: () => ({ health: 'ok' }), session: createSessionOps({ tmux }),
         notifyDelivered() {}, diagnostic: (event, fields) => { if (event === 'delivery_failed') diagnostics.push(fields.reason); },
       }, { tmux, periodicEnabled: false, captureEnabled: false, verifyWaitMs: 50 });
       t.after(() => delivery.stop());

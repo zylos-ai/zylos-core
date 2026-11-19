@@ -5,7 +5,7 @@ import { tmuxError as fail } from '../../comm-bridge/scripts/tmux-protocol.js';
 const { groupRunDir, listGroupTmuxSessions, tmuxNameForGroup } = await loadCoreModule('session-group-paths.js');
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
 const { observeSessionTarget, revalidateSessionTarget, readProcessTree: systemProcessTree } = await loadCoreModule('runtime/session-target.js');
-const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
+const { createSessionOps } = await loadCoreModule('runtime/session-ops.js');
 const { usageModelFacts } = await loadCoreModule('session-usage-reader.js');
 const { createSessionReader } = await loadCoreModule('session-state-reader-async.js');
 
@@ -27,10 +27,10 @@ const sameRun = (scene, target) => target.present && target.runId === scene.runI
 export class SupervisorScenes {
   constructor({ env = process.env, connectionOptions = {}, readMode, readActivity,
     readUsage, now = Date.now, open = openTmuxConnection, observeTarget = observeSessionTarget,
-    listSessions = listGroupTmuxSessions, readProcessTree = systemProcessTree, adapterFor = getSessionAdapter,
+    listSessions = listGroupTmuxSessions, readProcessTree = systemProcessTree, sessionOps = createSessionOps,
     reportError = () => {} } = {}) {
     Object.assign(this, { env, connectionOptions, readMode, readActivity, readUsage, now,
-      open, observeTarget, listSessions, readProcessTree, adapterFor, reportError });
+      open, observeTarget, listSessions, readProcessTree, sessionOps, reportError });
     this.readReady = async group => {
       try { return JSON.parse(await fs.readFile(path.join(groupRunDir(group ?? 'origin', env), 'current-session.json'), 'utf8')); }
       catch { return null; }
@@ -174,16 +174,16 @@ export class SupervisorScenes {
       const target = await this.observeTarget({ sessionGroup: scene.sessionGroup, tmuxName: scene.tmuxName, connection,
         readReady: this.readReady, readProcessTree: async () => [] });
       if (!sameRun(scene, target)) throw fail('RUNID_MISMATCH', 'Pinned target changed');
-      return await operation({ connection, target, adapter: this.adapterFor(target.runtime) });
+      return await operation({ connection, target });
     } finally { connection?.close(); }
   }
 
   async readScreen(scene) {
-    return this.withTarget(scene, ({ connection, target, adapter }) => adapter.captureScreen({ connection, target }));
+    return this.withTarget(scene, ({ connection, target }) => this.sessionOps({}).captureScreen({ connection, target }));
   }
 
   async stop(scene) {
-    return this.adapterFor(scene.runtime, { tmux: this.connectionOptions, env: this.env })
+    return this.sessionOps({ tmux: this.connectionOptions, env: this.env })
       .stop({ tmuxName: scene.tmuxName, expectedRunId: scene.runId });
   }
 }

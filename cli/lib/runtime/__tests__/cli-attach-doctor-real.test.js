@@ -14,7 +14,7 @@ test('review P2: attach installs a real client-attached hint for an unknown runt
   const f = readyTmuxTarget(t, { prefix: 'cli-attach-real-', ledger: false });
   const selected = await resolveCliSession({ mode: () => ({ mode: 'single' }),
     identity: async () => ({ present: true, runtime: 'unknown', tmuxName: 'zylos-group-origin' }),
-    adapter: () => assert.fail('unknown F2 must not select an adapter') });
+    runtimeFor: () => assert.fail('unknown F2 must not select an adapter') });
   let attached = false;
   await attachCommand({ resolve: async () => selected, exec: (command, argv) => {
     assert.equal(command, 'tmux');
@@ -35,7 +35,7 @@ test('review P2: doctor finds an exact isolated tmux session with unreadable run
   } });
   const resolve = () => resolveCliSession({ mode: () => ({ mode: 'single' }),
     identity: async () => ({ present: true, runtime: 'unknown', tmuxName: 'zylos-group-origin' }),
-    adapter: () => assert.fail('unknown must not construct an adapter') });
+    runtimeFor: () => assert.fail('unknown must not construct an adapter') });
   const options = { resolve, pm2Check: () => ({ installed: false }),
     network: () => assert.fail('unknown runtime must not choose a provider') };
   const diag = await collectDiagnostics({}, options);

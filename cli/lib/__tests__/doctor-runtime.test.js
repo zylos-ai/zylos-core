@@ -16,9 +16,9 @@ test('doctor selects Antigravity CLI, Gemini connectivity and adapter authentica
   const hosts = [];
   let status = 'success', authChecks = 0;
   const collect = runtime => collectDiagnostics(new Map(), {
-    resolve: () => ({ runtime, sessionGroup: null, live: { tmuxName: 'fixture' }, adapter: {
+    resolve: () => ({ runtime, sessionGroup: null, live: { tmuxName: 'fixture' }, runtimeImpl: { auth: {
       checkAuth: async () => { authChecks++; return { status }; },
-    } }),
+    } } }),
     network: async (_, host) => { hosts.push(host); return { reachable: true, dns: true, details: {} }; },
     tmuxCheck: () => ({ installed: false }), pm2Check: () => ({ installed: false }),
     psCheck: () => ({ available: true }), modeStatus: () => null,

@@ -54,7 +54,7 @@ function setup(t, { mode = 'multi', phase } = {}) {
     openTmuxConnection: async () => ({ command: async args => args.at(-1) === '#{cursor_x}' ? '2' : '0', close: async () => {} }),
     resolveSessionTarget: async ({ sessionGroup }) => { calls.push(['resolve', sessionGroup]); return target(sessionGroup); },
     revalidateSessionTarget: async () => {},
-    getSessionAdapter: () => ({
+    session: {
       sendText: async input => { calls.push(['paste', input.target.sessionGroup, input.text]);
         if (input.target.sessionGroup === a && !blockedOnce && ['paste','backoff'].includes(phase)) {
           blockedOnce = true;
@@ -64,7 +64,7 @@ function setup(t, { mode = 'multi', phase } = {}) {
         if (input.target.sessionGroup === a && !blockedOnce && phase === 'enter') { blockedOnce = true; await wait(); } },
       captureScreen: async () => '❯ ',
       launch: async () => assert.fail('fixture has READY scene'), stop: async () => assert.fail('fixture has READY scene'),
-    }),
+    },
     sleep: async ms => { if ((phase === 'idle' && ms === 31) || (phase === 'backoff' && ms === 37)) await wait(); },
     notifyDelivered: fields => { calls.push(['notify', fields]); },
     findLegacySessions: async () => [], advanceLegacy: async () => {}, prepareSingle: async () => {},
@@ -166,12 +166,12 @@ test('factory: actual single directs a non-null group through null origin target
 test('factory: blocked paste in live A does not prevent absent B from launching and delivering', async t => {
   const f = setup(t, { phase: 'paste' }), bScene = f.scenes.get(f.b);
   f.scenes.delete(f.b);
-  const originalAdapter = f.overrides.getSessionAdapter;
+  const originalAdapter = f.overrides.session;
   const launches = [];
-  f.overrides.getSessionAdapter = runtime => ({ ...originalAdapter(runtime), launch: async input => {
+  f.overrides.session = { ...originalAdapter, launch: async input => {
     launches.push(input); assert.equal(input.sessionGroup, f.b);
     f.scenes.set(f.b, { ...bScene, runId: input.runId });
-  } });
+  } };
   const readCurrent = f.overrides.readCurrentSession;
   f.overrides.readCurrentSession = async group => ({ ...await readCurrent(group), runId: f.scenes.get(group)?.runId });
   const first = f.add(), other = f.add(f.b);
@@ -189,11 +189,11 @@ test('factory: held launch in absent A does not block existing READY B delivery'
   const launchHold = deferred(); t.after(() => launchHold.resolve());
   const f = setup(t), aScene = f.scenes.get(f.a); let launching = false;
   f.scenes.delete(f.a);
-  const originalAdapter = f.overrides.getSessionAdapter;
-  f.overrides.getSessionAdapter = runtime => ({ ...originalAdapter(runtime), launch: async input => {
+  const originalAdapter = f.overrides.session;
+  f.overrides.session = { ...originalAdapter, launch: async input => {
     assert.equal(input.sessionGroup, f.a); launching = true;
     await launchHold.promise; f.scenes.set(f.a, { ...aScene, runId: input.runId });
-  } });
+  } };
   const readCurrent = f.overrides.readCurrentSession;
   f.overrides.readCurrentSession = async group => ({ ...await readCurrent(group), runId: f.scenes.get(group)?.runId });
   const first = f.add(), other = f.add(f.b);
@@ -218,15 +218,15 @@ for (const runtime of ['claude', 'codex']) for (const outcome of ['timeout', 'bo
     delete f.options.readyTimeoutMs;
     f.overrides.now = () => clock;
     f.scenes.delete(f.a);
-    f.overrides.getSessionAdapter = selected => ({
+    f.overrides.session = {
       launch: async input => {
-        assert.equal(selected, runtime); launchInput = input; started = true;
+        assert.equal(input.runtime, runtime); launchInput = input; started = true;
         if (outcome === 'late-launch') await gate.promise;
         f.scenes.set(f.a, { present: true, ready: outcome === 'late-launch', runtime,
           runId: input.runId, sessionId: 'ready-business', tmuxName: tmuxNameForGroup(f.a), createdAt: Math.floor(clock/1000) });
       },
       stop: async input => { assert.equal(input.expectedRunId, launchInput.runId); stops++; f.scenes.delete(f.a); },
-    });
+    };
     f.overrides.readCurrentSession = async group => {
       const scene = f.scenes.get(group);
       return scene?.ready ? { runId: scene.runId, sessionId: scene.sessionId, startupControlIds: [] } : null;

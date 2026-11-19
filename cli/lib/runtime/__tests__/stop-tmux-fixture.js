@@ -4,7 +4,7 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import assert from 'node:assert/strict';
-import {SessionAdapter} from '../session-adapter.js';
+import {createSessionOps} from '../session-ops.js';
 import * as tmuxConnection from '../tmux-connection.js';
 import * as sessionTarget from '../session-target.js';
 export {LEGACY_TMUX_NAMES} from '../../session-group-paths.js';
@@ -22,11 +22,11 @@ export async function fixture(t,{origin=true}={}) {
     beforeCleanup:async()=>{for(const close of cleanup)await close();}});
   if(origin)command('-f','/dev/null','new-session','-d','-s','origin','-e','ZYLOS_RUN_ID=outside-origin','sleep 60');
   const snapshot=name=>command('display-message','-p','-t',`=${name}:`,'#{session_id}:#{pane_id}:#{pane_pid}:#{ZYLOS_RUN_ID}');
-  return {dir,command,snapshot,cleanup,origin:origin?snapshot('origin'):null,
-    adapter:new SessionAdapter({dependencies:actualDependencies,tmux:{binary,socketPath,sessionName:origin?'origin':undefined}})};
+  const options={dependencies:actualDependencies,tmux:{binary,socketPath,sessionName:origin?'origin':undefined}};
+  return {dir,command,snapshot,cleanup,origin:origin?snapshot('origin'):null,options,adapter:createSessionOps(options)};
 }
 export function interceptCommand(f, intercept) {
-  f.adapter.options.dependencies={...actualDependencies,openTmuxConnection:async options=>{
+  f.options.dependencies={...actualDependencies,openTmuxConnection:async options=>{
     const connection=await actualDependencies.openTmuxConnection(options);
     const command=connection.command.bind(connection);
     connection.command=(args,guard)=>intercept(args,(next=args)=>command(next,guard),connection);

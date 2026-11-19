@@ -54,12 +54,12 @@ function dispatcherFixture(sandbox, api, sessionGroup) {
     },
     resolveSessionTarget: async ({ sessionGroup: group }) => ({ ...scenes.get(group), sessionGroup: group, sessionId: '$1' }),
     revalidateSessionTarget: async () => {},
-    getSessionAdapter: () => ({
+    session: {
       sendText: async ({ target, text }) => { assert.equal(sent.length, 0); sent.push({ group: target.sessionGroup, text }); },
       sendKeys: async () => {}, captureScreen: async () => '❯ ',
       launch: async () => assert.fail('Private READY fixture must not launch a runtime'),
       stop: async () => assert.fail('Private READY fixture must not stop a runtime'),
-    }),
+    },
     notifyDelivered() {}, sleep: async () => {},
     findLegacySessions: async () => [], advanceLegacy: async () => {}, prepareSingle: async () => {},
     submit: async () => assert.fail('Private READY fixture must not submit a launch'),

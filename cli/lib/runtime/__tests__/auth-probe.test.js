@@ -6,8 +6,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import http from 'node:http';
 import { once } from 'node:events';
-import { CodexAdapter } from '../codex.js';
-import { ClaudeAdapter } from '../claude.js';
+import { getRuntime } from '../index.js';
 import { executeRuntimeSwitch, runtimeCommand } from '../../../commands/runtime.js';
 
 // Integration boundary: real adapters and execFile with a private fake CLI.
@@ -51,19 +50,20 @@ async function fixture(t, runtime, scenario, { missing = false, timeout, killAft
       }
     });
   }
-  return runtime === 'codex' ? new CodexAdapter(options) : new ClaudeAdapter(options);
+  const { auth } = await getRuntime(runtime);
+  return { options, auth: { checkAuth: () => auth.checkAuth(options) } };
 }
 
 for (const [stream, output] of [['stderr', 'Not logged in'], ['stdout', 'Not logged in']]) {
   test(`Codex exit one with logged-out text on ${stream} confirms failure`, async t => {
     const adapter = await fixture(t, 'codex', { [stream]: output });
-    assert.deepEqual(await adapter.checkAuth(), { status: 'failure', reason: 'not_logged_in' });
+    assert.deepEqual(await adapter.auth.checkAuth(), { status: 'failure', reason: 'not_logged_in' });
   });
 }
 
 test('Codex failed-command auth classification combines stdout and stderr', async t => {
   const adapter = await fixture(t, 'codex', { stdout: 'Not ', stderr: 'logged in' });
-  assert.deepEqual(await adapter.checkAuth(), { status: 'failure', reason: 'not_logged_in' });
+  assert.deepEqual(await adapter.auth.checkAuth(), { status: 'failure', reason: 'not_logged_in' });
 });
 
 for (const [name, scenario, options] of [
@@ -75,18 +75,18 @@ for (const [name, scenario, options] of [
 ]) {
   test(`Codex ${name} remains uncertain`, async t => {
     const adapter = await fixture(t, 'codex', scenario, options);
-    assert.deepEqual(await adapter.checkAuth(), { status: 'uncertain', reason: 'codex_login_status_unavailable' });
+    assert.deepEqual(await adapter.auth.checkAuth(), { status: 'uncertain', reason: 'codex_login_status_unavailable' });
   });
 }
 
 test('Claude exit one with logged-out stdout confirms failure', async t => {
   const adapter = await fixture(t, 'claude', { stdout: 'Not logged in · Please run /login' });
-  assert.deepEqual(await adapter.checkAuth(), { status: 'failure', reason: 'cli_probe_not_logged_in' });
+  assert.deepEqual(await adapter.auth.checkAuth(), { status: 'failure', reason: 'cli_probe_not_logged_in' });
 });
 
 test('Claude exit one with logged-out stderr confirms failure', async t => {
   const adapter = await fixture(t, 'claude', { stderr: 'Not logged in · Please run /login' });
-  assert.deepEqual(await adapter.checkAuth(), { status: 'failure', reason: 'cli_probe_not_logged_in' });
+  assert.deepEqual(await adapter.auth.checkAuth(), { status: 'failure', reason: 'cli_probe_not_logged_in' });
 });
 
 const claudeRejections = [
@@ -99,7 +99,7 @@ for (const output of claudeRejections) {
   for (const stream of ['stdout', 'stderr']) {
     test(`Claude exit one with ${output} on ${stream} confirms failure`, async t => {
       const adapter = await fixture(t, 'claude', { [stream]: output });
-      assert.deepEqual(await adapter.checkAuth(), { status: 'failure', reason: 'cli_probe_credentials_rejected' });
+      assert.deepEqual(await adapter.auth.checkAuth(), { status: 'failure', reason: 'cli_probe_credentials_rejected' });
     });
   }
   for (const termination of ['signal', 'timeout']) {
@@ -108,7 +108,7 @@ for (const output of claudeRejections) {
       const adapter = await fixture(t, 'claude', { stdout: output,
         ...(termination === 'signal' ? { signal: 'SIGTERM' } : { wait: true }) },
       { timeout: 1000, trace });
-      assert.equal((await adapter.checkAuth()).status, 'uncertain');
+      assert.equal((await adapter.auth.checkAuth()).status, 'uncertain');
       assert.equal(trace.stdout, output, 'rejection text must be captured before interruption');
       assert.equal(typeof trace.code === 'number', false);
       assert.equal(trace.signal, 'SIGTERM');
@@ -120,14 +120,14 @@ for (const output of claudeRejections) {
 for (const transient of ['api_error', 'rate_limit_error']) {
   test(`Claude explicit rejection mixed with ${transient} remains uncertain`, async t => {
     const adapter = await fixture(t, 'claude', { stdout: claudeRejections[0], stderr: transient });
-    assert.deepEqual(await adapter.checkAuth(), { status: 'uncertain', reason: 'cli_probe_uncertain' });
+    assert.deepEqual(await adapter.auth.checkAuth(), { status: 'uncertain', reason: 'cli_probe_uncertain' });
   });
 }
 
 for (const transient of ['rate_limit_error', 'api_error']) {
   test(`Claude ${transient} remains transient beside another tool's logged-out text`, async t => {
     const adapter = await fixture(t, 'claude', { stderr: `[mcp] github: Not logged in\n${transient}` });
-    assert.deepEqual(await adapter.checkAuth(), { status: 'uncertain', reason: 'cli_probe_uncertain' });
+    assert.deepEqual(await adapter.auth.checkAuth(), { status: 'uncertain', reason: 'cli_probe_uncertain' });
   });
 }
 
@@ -140,7 +140,7 @@ for (const runtime of ['codex', 'claude']) {
         killAfterOutput: termination === 'external signal', timeout: 1000 });
       const reason = runtime === 'codex' ? 'codex_login_status_unavailable'
         : termination === 'self signal' ? 'cli_probe_unexpected_error' : 'cli_probe_uncertain';
-      assert.deepEqual(await adapter.checkAuth(), { status: 'uncertain', reason });
+      assert.deepEqual(await adapter.auth.checkAuth(), { status: 'uncertain', reason });
       assert.equal(trace.stderr, 'Not logged in', 'the child printed the auth text before termination');
       assert.equal(trace.signal, 'SIGTERM');
       assert.equal(trace.killed, termination !== 'self signal');
@@ -158,7 +158,7 @@ for (const [name, scenario, result] of [
 ]) {
   test(`Claude ${name} preserves its existing result`, async t => {
     const adapter = await fixture(t, 'claude', scenario);
-    assert.deepEqual(await adapter.checkAuth(), result);
+    assert.deepEqual(await adapter.auth.checkAuth(), result);
   });
 }
 
@@ -167,7 +167,7 @@ for (const termination of ['signal', 'timeout']) {
     const adapter = await fixture(t, 'claude', { stderr: 'authentication_error',
       ...(termination === 'signal' ? { signal: 'SIGTERM' } : { wait: true }) },
     termination === 'timeout' ? { timeout: 1000 } : {});
-    const result = await adapter.checkAuth();
+    const result = await adapter.auth.checkAuth();
     assert.equal(result.status, 'uncertain');
   });
 }
@@ -180,7 +180,7 @@ async function assertSwitchRejected(target, adapter, status) {
     const result = await runtimeCommand([target, '--json'], {
       execute: (runtime, flags) => executeRuntimeSwitch(runtime, flags, {
         read: () => ({ state: 'ok', config: { runtime: target === 'claude' ? 'codex' : 'claude' } }),
-        adapter: () => adapter, exists: () => true, hooksReady: () => ({ ready: true }),
+        runtimeFor: () => adapter, exists: () => true, hooksReady: () => ({ ready: true }),
         write: () => assert.fail('rejected auth must not persist the runtime'),
       }),
     });

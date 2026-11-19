@@ -25,7 +25,7 @@ import { parseSkillMd } from '../lib/skill.js';
 import { bold, dim, green, red, yellow, heading } from '../lib/colors.js';
 import { getTmuxCapability, describeTmuxSendKeys } from '../lib/tmux-send-keys.js';
 import { resolveCliSession } from '../lib/cli-session.js';
-import { getSessionAdapter } from '../lib/runtime/index.js';
+import { getRuntime } from '../lib/runtime/index.js';
 import { collectStatus } from '../lib/status-view.js';
 import { resolveTargetRuntime } from '../lib/session-state-reader.js';
 import { describeOrigin, formatOriginDescription } from '../lib/origin-presence.js';
@@ -321,7 +321,7 @@ export function formatDoctorSessionModeStatus(value) {
 }
 
 export async function collectDiagnostics(env, { resolve = () => resolveCliSession({
-  adapter: runtime => runtimeDiagnostics(runtime) ? getSessionAdapter(runtime) : null,
+  runtimeFor: runtime => runtimeDiagnostics(runtime) ? getRuntime(runtime) : null,
   resolveRuntime: async group => {
     try { return await resolveTargetRuntime(group); }
     catch (error) {
@@ -357,16 +357,16 @@ export async function collectDiagnostics(env, { resolve = () => resolveCliSessio
     autonomous = false;
   } else if (runtime === 'claude') {
     cli = checkClaudeCli();
-    authStatus = cli.installed ? (await selected.adapter.checkAuth()).status : 'failure';
+    authStatus = cli.installed ? (await selected.runtimeImpl.auth.checkAuth()).status : 'failure';
     autonomous = cli.installed ? checkAutonomousMode() : false;
   } else if (runtime === 'agy') {
     cli = checkAgyCli();
-    authStatus = cli.installed ? (await selected.adapter.checkAuth()).status : 'failure';
+    authStatus = cli.installed ? (await selected.runtimeImpl.auth.checkAuth()).status : 'failure';
     autonomous = true; // not applicable for Antigravity
   } else {
     // Codex runtime — check Codex CLI and auth status.
     cli = checkCodexCli();
-    authStatus = cli.installed ? (await selected.adapter.checkAuth()).status : 'failure';
+    authStatus = cli.installed ? (await selected.runtimeImpl.auth.checkAuth()).status : 'failure';
     autonomous = true; // not applicable for Codex
   }
   const auth = authStatus === 'success';

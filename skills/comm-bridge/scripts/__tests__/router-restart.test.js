@@ -45,12 +45,12 @@ function persistedRouter(t) {
       readLiveIdentity: async group => scene.get(group) ?? { present: false, ready: false },
       listGroupTmuxSessions: async () => [...scene].map(([sessionGroup, live]) => ({ sessionGroup, tmuxName: live.tmuxName })),
       readCurrentSession: async group => current.get(group), readRuntimeHealth: () => ({ health: 'ok' }),
-      getSessionAdapter: () => ({ launch: async input => {
+      session: { launch: async input => {
         assert.equal(scene.has(input.sessionGroup), false, 'never launch a second managed scene for the group');
         calls.push(['launch', generation, input]);
         put(input.sessionGroup, { ready: launchReady, runId: input.runId });
         if (launchReady) calls.push(['prompts', generation, prompts(input.sessionGroup)]);
-      }, stop: async input => { calls.push(['stop', generation, input]); scene.delete('a'); } }),
+      }, stop: async input => { calls.push(['stop', generation, input]); scene.delete('a'); } },
       submit: async () => assert.fail('healthy runtime must not register'),
       deliverControl: async row => {
         calls.push(['control', generation, row.id]);

@@ -98,7 +98,7 @@ try {
         readSessionState: async () => ({ identity: target, status: { valid: true, value: { state: 'idle', health: 'ok' } } }),
         readRuntimeHealth: () => ({ health: 'ok' }),
         readCurrentSession: async () => ({ runId: target.runId, sessionId: 'consumer-session' }),
-        getSessionAdapter: () => ({ sendText: async ({ text }) => { sent = text; }, sendKeys: async () => {}, captureScreen: async () => '❯ ' }),
+        session: { sendText: async ({ text }) => { sent = text; }, sendKeys: async () => {}, captureScreen: async () => '❯ ' },
         formatConversation, notifyDelivered: () => {}, sleep: async () => {},
         db: { markDelivered: () => true, requeueConversation: () => assert.fail('consumer delivery requeued'), failDelivery: () => assert.fail('consumer delivery failed') },
       }, { periodicEnabled: false, captureEnabled: false });

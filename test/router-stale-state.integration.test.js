@@ -8,7 +8,7 @@ import { readyTmuxTarget } from './helpers/ready-tmux-target.js';
 import { createSessionReader } from '../cli/lib/session-state-reader-async.js';
 import { observeSessionTarget, resolveSessionTarget } from '../cli/lib/runtime/session-target.js';
 import { openTmuxConnection } from '../cli/lib/runtime/tmux-connection.js';
-import { getSessionAdapter } from '../cli/lib/runtime/index.js';
+import { createSessionOps } from '../cli/lib/runtime/session-ops.js';
 
 // Covers stale file -> real reader -> router -> guarded tmux paste/Enter -> DB.
 // Run for sample freshness/delivery gates; skip unrelated UI. Official runner
@@ -37,7 +37,7 @@ test('stale status delivers promptly to a ready isolated session and rejects unh
   writeStatus('ok');
   const events = [];
   const delivery = createDelivery({ db: f.store, getSessionMode: () => 'single', openTmuxConnection,
-    resolveSessionTarget: options => resolveSessionTarget({ ...options, readReady }), getSessionAdapter,
+    resolveSessionTarget: options => resolveSessionTarget({ ...options, readReady }), session: createSessionOps(),
     readSessionState: reader.readSessionState, readRuntimeHealth: () => ({ health: 'ok' }),
     readCurrentSession: readReady, formatConversation: row => row.content, notifyDelivered: () => {},
     diagnostic: (event, fields) => events.push({ event, ...fields }),

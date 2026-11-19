@@ -1,8 +1,9 @@
+import { launchSession } from '../launch-flow.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ClaudeAdapter } from '../claude.js';
+
 import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
 
 function fixture(t) {
@@ -14,8 +15,8 @@ function fixture(t) {
   const executable = path.join(tmux.dir, 'claude');
   fs.writeFileSync(executable, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "2.1.59 (Claude Code)"; exit 0; fi\nexec sleep 60\n', { mode: 0o700 });
   const env = { HOME: home, ZYLOS_DIR: root, PATH: process.env.PATH, CLAUDE_BIN: executable };
-  const adapter = new ClaudeAdapter({ root, env,
-    tmux: { binary: tmux.binary, socketPath: tmux.socketPath, configFile: '/dev/null' } });
+  const adapterOptions = { root, env,
+    tmux: { binary: tmux.binary, socketPath: tmux.socketPath, configFile: '/dev/null' } };
   const files = { config: path.join(home, '.claude.json'), settings: path.join(home, '.claude', 'settings.json') };
   const config = {
     hasCompletedOnboarding: true, lastOnboardingVersion: 'existing-version', effortCalloutDismissed: true,
@@ -28,11 +29,11 @@ function fixture(t) {
     fs.writeFileSync(files.settings, JSON.stringify(settings, null, 4) + '\n\n');
   };
   async function launch() {
-    const result = await adapter.launch({ sessionGroup: null, runId: 'onboarding-test', sessionMode: 'single', launchConfig: { runtime: 'claude', mode: 'default' } });
+    const result = await launchSession({ runtime: 'claude', sessionGroup: null, runId: 'onboarding-test', sessionMode: 'single', launchConfig: { runtime: 'claude', mode: 'default' } }, adapterOptions);
     assert.equal(result.tmuxName, 'zylos-group-origin');
     assert.equal(tmux.tmux('list-panes', '-t', '=zylos-group-origin', '-F', '#{pane_current_command}'), 'sleep');
   }
-  return { home, root, config, settings, files, write, launch, adapter };
+  return { home, root, config, settings, files, write, launch, options: adapterOptions };
 }
 
 for (const state of ['missing', 'false']) for (const missing of ['onboarding', 'trust', 'permission']) {
@@ -179,8 +180,8 @@ test('Claude launch trusts the real startup directory when root is a symlink', a
   const f = fixture(t);
   const linkedRoot = path.join(f.home, 'linked-zylos');
   fs.symlinkSync(f.root, linkedRoot, 'dir');
-  f.adapter.options.root = linkedRoot;
-  f.adapter.options.env.ZYLOS_DIR = linkedRoot;
+  f.options.root = linkedRoot;
+  f.options.env.ZYLOS_DIR = linkedRoot;
   await f.launch();
   const config = JSON.parse(fs.readFileSync(f.files.config));
   const realRoot = fs.realpathSync(linkedRoot);

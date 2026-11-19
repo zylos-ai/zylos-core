@@ -103,11 +103,11 @@ function fixture(t, { mode = 'single', runtime = 'claude', group = null, pausePa
     readSessionState: async () => ({ identity: { ...target }, status: { valid: true, value: sample() } }),
     readRuntimeHealth: () => ({ health: 'ok' }), readCurrentSession: async () => ({ runId: scene.runId, sessionId: scene.sessionId }),
     formatConversation: row => row.content,
-    getSessionAdapter: () => ({
+    session: {
       sendText: async ({ text }) => { calls.push(['paste-start', text]); pasted.push(text); pastedReady(); if (pausePaste) await pasteGate; calls.push(['paste-end', text]); },
       sendKeys: async ({ keys: value }) => { calls.push(['key', ...value]); keys.push(value); },
       captureScreen: async () => '❯ ',
-    }), notifyDelivered: () => {},
+    }, notifyDelivered: () => {},
   }, { periodicEnabled: false, captureEnabled: false, idleHoldMs: 0 });
   t.after(() => delivery.stop());
   const row = id => store.getControlById(id);

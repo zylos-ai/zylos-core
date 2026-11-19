@@ -1,0 +1,10 @@
+{
+  "program": "codex",
+  "version": "codex-cli 0.169.1",
+  "recordedAt": "2026-11-19T23:26:32+08:00",
+  "how": "Isolated instance as OS user zylos-test (TZ=Asia/Singapore, private HOME/CODEX_HOME in a throwaway /tmp run directory, env started from env -i), @openai/codex@0.169.1 in a temporary npm prefix. Recorded by calling the runtime factory's codex auth.checkAuth({ env, execFile }) with execFile wrapping the real promisify(child_process.execFile): the command run was exactly `codex login status` with the product's env and 10 s timeout, and the file holds the exit code, stdout and stderr that execFile returned. failure.json: CODEX_HOME is an empty directory (no auth.json); checkAuth returned failure/not_logged_in. success.json: no real Codex account is available for isolated use, so CODEX_HOME held a chatgpt-mode auth.json with obviously fake tokens (fake JWTs, fake account id 00000000-...). `codex login status` decides from the local auth.json alone: under strace -f it made no connect() call, and it printed the same output with the proxy pointed at a dead port and inside a network namespace with no interfaces. So this is the real program's logged-in output; checkAuth returned success/codex_login_status. TMPDIR pointed to a directory that does not contain CODEX_HOME (as in a normal install, where ~/.codex is not under the temp dir): with CODEX_HOME under the temp dir codex 0.169.1 adds a 'WARNING: ... Refusing to create helper binaries under temporary dir' line that a normal ~/.codex install does not print.",
+  "files": {
+    "success.json": "Logged in (chatgpt-mode auth.json, fake tokens): exit 0, \"Logged in using ChatGPT\" on stderr",
+    "failure.json": "Logged out (empty CODEX_HOME): exit 1, \"Not logged in\" on stderr"
+  }
+}

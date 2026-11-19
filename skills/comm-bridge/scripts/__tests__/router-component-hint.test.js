@@ -80,7 +80,7 @@ for (const runtime of ['claude', 'codex']) test(`${runtime} common delivery entr
     resolveSessionTarget: async () => target, revalidateSessionTarget: async () => {},
     readSessionState: async () => ({ identity: target, status: { valid: true, value: { state: 'idle', health: 'ok' } } }),
     readRuntimeHealth: () => ({ health: 'ok' }), readCurrentSession: async () => ({ runId: target.runId, sessionId: 'fixture-session' }),
-    getSessionAdapter: () => ({ sendText: async ({ text }) => { sent.push(text); }, sendKeys: async () => {}, captureScreen: async () => '❯ ' }),
+    session: { sendText: async ({ text }) => { sent.push(text); }, sendKeys: async () => {}, captureScreen: async () => '❯ ' },
     formatConversation, notifyDelivered: () => {}, sleep: async () => {},
     db: { markDelivered: () => true, requeueConversation: () => assert.fail('delivery blocked'), failDelivery: () => assert.fail('delivery failed') },
   }, { periodicEnabled: false, captureEnabled: false });

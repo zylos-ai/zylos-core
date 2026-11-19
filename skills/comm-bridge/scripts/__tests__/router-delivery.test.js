@@ -17,7 +17,7 @@ function setup(t, options = {}) {
   const state = { state: 'idle', idle_seconds: 4, health: 'ok', proc: { alive: true }, active_tools: 0, last_api_activity: 100 };
   const connection = { close: async () => calls.push(['close']), command: async args => { calls.push(['command', args]); return args.at(-1) === '#{cursor_x}' ? '2' : '0'; } };
   const adapter = {
-    sendText: async args => { calls.push(['paste', args]); },
+    sendText: async args => { assert.equal(args.runtime, target.runtime); calls.push(['paste', args]); },
     sendKeys: async args => { if (args.keys.some(key => !/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(key))) throw new TypeError('Invalid key'); calls.push(['keys', args]); },
     captureScreen: async args => { calls.push(['capture', args]); return '❯ '; },
   };
@@ -38,7 +38,7 @@ function setup(t, options = {}) {
     revalidateSessionTarget: async args => { assert.equal(args.target, target); assert.equal(args.connection, connection); calls.push(['validate']); },
     readSessionState: async (group, options) => { assert.deepEqual(options, { freshnessMs: 5000 }); return { identity: { ...target, present: true }, status: { valid: true, value: state } }; },
     readRuntimeHealth: () => ({ health: 'ok' }), readCurrentSession: async () => ({ runId: target.runId, sessionId: 's2' }),
-    getSessionAdapter: runtime => { assert.equal(runtime, target.runtime); return adapter; },
+    session: adapter,
     formatConversation: row => `safe:${row.content}`, notifyDelivered: data => { calls.push(['notify', data]); },
     diagnostic: (event, fields) => calls.push(['diagnostic', event, fields]),
   };

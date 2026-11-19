@@ -38,7 +38,7 @@ async function fixture(t, { baseline = 'claude', live = old, response = { ok: tr
   });
   const deps = {
     read: () => readConfigStrict(file), mode: () => ({ mode: 'single' }), exists: () => true,
-    adapter: () => ({ checkAuth: async () => { calls.auth++; return { status: 'success' }; } }),
+    runtimeFor: () => ({ auth: { checkAuth: async () => { calls.auth++; return { status: 'success' }; } } }),
     credentials: () => { calls.credentials++; return true; }, hooksReady: () => ({ ready: true }),
     write: update => { calls.writes++; return updateConfigWithLock({ configFile: file, lockFile: `${file}.lock`, update }); },
     identity: async group => { calls.identities.push(group); if (live instanceof Error) throw live; return live; },
@@ -146,11 +146,11 @@ test('single/null observer reads only the unique session, multi never submits', 
     }, list: () => { throw new Error('must not list'); }, overrides: () => { throw new Error('must not read overrides'); } });
     assert.equal(observed.groups.length, 1); assert.equal(observed.groups[0].status, 'pending_reclaim');
     const result = await executeRuntimeSwitch('codex', [], { read: () => ({ state: 'ok', config: { runtime: 'codex' } }), mode: () => ({ mode }),
-      adapter: () => ({}), identity: async () => ({ ...old, runtime: 'codex' }) });
+      runtimeFor: () => ({}), identity: async () => ({ ...old, runtime: 'codex' }) });
     assert.equal(result.data.reclaim, null); assert.equal(result.data.groups[0].status, 'effective');
   }
   const result = await executeRuntimeSwitch('codex', [], { read: () => ({ state: 'ok', config: { runtime: 'codex' } }), mode: () => ({ mode: 'multi' }),
-    adapter: () => ({}), observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }),
+    runtimeFor: () => ({}), observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }),
     send: () => { throw new Error('multi must not submit'); } });
   assert.equal(result.data.reclaim, null);
 });

@@ -46,7 +46,7 @@ test('Dashboard sends and question or form answers gain source identity only at 
         resolveSessionTarget: async () => target, revalidateSessionTarget: async () => {},
         readSessionState: async () => ({ identity: target, status: { valid: true, value: { state: 'idle', health: 'ok' } } }),
         readRuntimeHealth: () => ({ health: 'ok' }), readCurrentSession: async () => ({ runId: target.runId, sessionId: 'private-session' }),
-        getSessionAdapter: () => ({ sendText: async ({ text }) => { received.push({ runtime, text }); }, sendKeys: async () => {}, captureScreen: async () => '❯ ' }),
+        session: { sendText: async ({ text }) => { received.push({ runtime, text }); }, sendKeys: async () => {}, captureScreen: async () => '❯ ' },
         formatConversation: format, notifyDelivered: () => {}, sleep: async () => {},
         db: { markDelivered: () => true, requeueConversation: () => assert.fail('unexpected requeue'), failDelivery: () => assert.fail('unexpected failure') },
       }, { periodicEnabled: false, captureEnabled: false });

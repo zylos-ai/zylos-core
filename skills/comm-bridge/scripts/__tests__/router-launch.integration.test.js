@@ -6,7 +6,8 @@ import { fixture } from './c4-v2-test-helpers.js';
 import { createRouter } from '../router/scheduler.js';
 import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
 import { seedCodexTrustFixture } from '../../../../test/helpers/codex-trust.js';
-import { getSessionAdapter } from '../../../../cli/lib/runtime/index.js';
+import { createSessionOps } from '../../../../cli/lib/runtime/session-ops.js';
+import { launchSession } from '../../../../cli/lib/runtime/launch-flow.js';
 import { createSessionReader } from '../../../../cli/lib/session-state-reader-async.js';
 import { readReadyIdentity } from '../../../../cli/lib/runtime/session-target.js';
 import { listGroupTmuxSessions } from '../../../../cli/lib/session-group-paths.js';
@@ -57,6 +58,12 @@ setInterval(()=>{},1000);
     const value = resolve(input); resolved.push({ input, value }); return value;
   };
   let beforeLaunch = () => {};
+  const sessionOptions = { root: tm.dir, tmux,
+    env: { PATH: process.env.PATH, HOME: tm.dir, ZYLOS_DIR: tm.dir },
+    runtimeExecutable: () => executable };
+  const session = createSessionOps(sessionOptions);
+  const launch = input => launchSession(input, sessionOptions);
+  session.launch = async input => { launches.push(input); beforeLaunch(input); return launch(input); };
   const deps = { db, now: () => clock,
     readSessionMode: () => ({ mode, keyPresent: true }),
     readLiveIdentities: reader.readLiveIdentities,
@@ -64,14 +71,7 @@ setInterval(()=>{},1000);
     readCurrentSession: readReadyIdentity,
     listGroupTmuxSessions: () => listGroupTmuxSessions(tmux),
     readRuntimeHealth: () => ({ health: 'ok', publicHealth: 'ok' }),
-    getSessionAdapter: selected => {
-      const adapter = getSessionAdapter(selected, { root: tm.dir, tmux,
-        env: { PATH: process.env.PATH, HOME: tm.dir, ZYLOS_DIR: tm.dir },
-        runtimeExecutable: () => executable });
-      const launch = adapter.launch.bind(adapter);
-      adapter.launch = async input => { launches.push(input); beforeLaunch(input); return launch(input); };
-      return adapter;
-    },
+    session,
     submit: async () => assert.fail('healthy launch must not submit start_attempt'),
     deliverControl: async () => assert.fail('fixture has no controls'),
     deliverConversation: async (message, identity) => db.markDelivered(message.id, { sessionId: identity.sessionId }),
