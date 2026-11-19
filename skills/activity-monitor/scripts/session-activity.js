@@ -251,6 +251,7 @@ export class SessionActivity {
       this.transcriptPartial=Buffer.alloc(0);this.transcriptSkippingLine=false;
       this.codexTranscriptMatches=false;
     }
+    const readOffset=this.transcriptOffset;
     let remaining=Math.min(TRANSCRIPT_READ_BUDGET_BYTES,stat.size-this.transcriptOffset);
     // Nonblocking hooks can arrive after a result was parsed while no tool was visible.
     const trackResults=true;
@@ -280,7 +281,8 @@ export class SessionActivity {
     // An unfinished EOF record is not evidence of continued AI work. Keep its
     // bounded carry for the next append without indefinitely fencing recovery.
     this.transcriptPending=this.transcriptOffset<stat.size;
-    return stat.mtimeMs;
+    // Timestamp-only touches are not activity; count only newly read bytes.
+    return this.transcriptOffset>readOffset?stat.mtimeMs:null;
   }
   agyBusy(now) {
     // AGY publishes statusLine only on changes, with no heartbeat. A run/session
