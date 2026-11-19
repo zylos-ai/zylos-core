@@ -37,9 +37,9 @@ async function control(content, target, zylosDir) {
 
 export async function handleCoreAction(action, body, config) {
   const { readSessionMode } = await loadCoreModule('config.js');
-  const { keyPresent } = readSessionMode();
+  const { mode, keyPresent } = readSessionMode();
   const sessionGroup = keyPresent ? 'origin' : null;
-  if (body?.sessionGroup !== undefined && body.sessionGroup !== sessionGroup) return { ok: false, error: 'TARGET_SCOPE_MISMATCH', messageKey: 'result.target_scope_mismatch', message: 'Refresh the Origin target before submitting.' };
+  if (body?.sessionGroup !== undefined && body.sessionGroup !== (mode === 'multi' ? 'origin' : null)) return { ok: false, error: 'TARGET_SCOPE_MISMATCH', messageKey: 'result.target_scope_mismatch', message: 'Refresh the Origin target before submitting.' };
   const target = Object.freeze({ sessionGroup, runId: body?.runId, sessionId: body?.sessionId || null });
   if (['interrupt', 'chop-chop'].includes(action)) {
     if (typeof target.runId !== 'string' || !target.runId) return { ok: false, error: 'TARGET_REQUIRED', messageKey: 'result.target_required', message: 'Refresh and confirm the current Origin run.' };

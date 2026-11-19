@@ -392,12 +392,12 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     for (const range of ['24h', '7d', '30d']) await request(`/api/usage/series?range=${range}`);
     await request('/api/groups/telegram%3Aworking/deletion-preview', { identity: 'cookie' });
     for (const [route, method, body] of writes) await request(route, { method, body, identity: 'cookie' });
-    // Automatic naming reads the mode this instance is really in: Origin in multi, C4's only session in single.
+    // Both configured modes address Origin; only pre-migration instances keep an empty target.
     const naming = records.filter(item => item.route === '/api/groups/naming-prompt' && item.mode === next).at(-1);
-    assert.deepEqual(naming.body, { ok: true, controlId: 7, sessionGroup: next === 'multi' ? 'origin' : null });
+    assert.deepEqual(naming.body, { ok: true, controlId: 7, sessionGroup: 'origin' });
     const enqueue = cliCalls.filter(call => call[1]?.endsWith('/c4-control.js')).at(-1);
-    assert.equal(enqueue.includes('--group'), next === 'multi');
-    if (next === 'multi') assert.equal(enqueue[enqueue.indexOf('--group') + 1], 'origin');
+    assert.equal(enqueue.includes('--group'), true);
+    assert.equal(enqueue[enqueue.indexOf('--group') + 1], 'origin');
     const summary = await request('/api/usage/summary');
     const groups = await Promise.all(['origin', 'telegram:working', 'telegram:child'].map(group => request(`/api/groups/${encodeURIComponent(group)}/usage`)));
     assert.equal(groups.reduce((sum, group) => sum + group.today.tokens, 0), summary.today.tokens);

@@ -102,11 +102,11 @@ test('Origin interrupt and nudge use configured scopes accepted by C4', async t 
   fs.symlinkSync(fileURLToPath(new URL('./helpers/origin-control-child.js', import.meta.url)), script);
   for (const session_mode of ['single', 'multi', undefined]) {
     fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({ session_mode }));
-    const detail = projectGroup({ sessionGroup: session_mode ? 'origin' : null,
+    const detail = projectGroup({ sessionGroup: session_mode === 'multi' ? 'origin' : null,
       presence: 'running', live: { runId: 'observed-run', sessionId: 'observed-session', status: { valid: true, state: 'idle' } } },
     { readAt: Date.now(), instance: { sessionModeStatus: { sessionMode: session_mode ?? null } } });
     const sessionGroup = session_mode ? 'origin' : null;
-    assert.equal(detail.sessionGroup, sessionGroup);
+    assert.equal(detail.sessionGroup, session_mode === 'multi' ? 'origin' : null);
     const body = { sessionGroup: detail.sessionGroup, runId: detail.live.runId, sessionId: detail.live.sessionId };
     for (const action of ['interrupt', 'chop-chop']) {
       const result = await handleCoreAction(action, body, { zylosDir: ZYLOS_DIR });
@@ -118,7 +118,7 @@ test('Origin interrupt and nudge use configured scopes accepted by C4', async t 
         assert.equal(row.session_group, sessionGroup);
       } finally { db.close(); }
     }
-    const mismatch = await handleCoreAction('interrupt', { sessionGroup: sessionGroup === null ? 'origin' : null, runId: 'observed-run' }, { zylosDir: ZYLOS_DIR });
+    const mismatch = await handleCoreAction('interrupt', { sessionGroup: detail.sessionGroup === null ? 'origin' : null, runId: 'observed-run' }, { zylosDir: ZYLOS_DIR });
     assert.equal(mismatch.error, 'TARGET_SCOPE_MISMATCH');
   }
 });
