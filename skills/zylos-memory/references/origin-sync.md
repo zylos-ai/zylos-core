@@ -14,14 +14,19 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
    release and return. Process oldest bookmarks first. The raw-row budget is the
    Origin budget resolved above; checkpoint summaries do not consume it. Create
    this run's private export directory as in the common rules.
-2. For each candidate, set `G` to its group and `n` to a run-local counter.
-   Retain the private directory path as `exportDir` and the acquired token as
-   `T`. Save command JSON stdout directly to metadata files in that directory;
+2. Each command block runs in a new shell. At the start of **every** block,
+   replace the assignment placeholders with literal values: this run's private
+   directory from `mktemp -d`, the token from acquire, candidate G, and its
+   run-local counter n. Do not rely on variables set by an earlier tool call.
+   Save command JSON stdout directly to metadata files in that directory;
    never transcribe receipts, list objects, or hashes into a submission. These
    files share the private directory's existing cleanup rule. Export summaries:
 
    ```bash
-   rawMeta=''
+   exportDir='<private directory from mktemp -d>'
+   T='<token from acquire>'
+   G='<candidate group>'
+   n='<run-local counter for G>'
    node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --origin-sync --group "$G" --summaries-only --out "$exportDir/$n-summaries" > "$exportDir/$n-summaries-meta.json"
    ```
 
@@ -35,13 +40,16 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
    fails after applicable read/corrected-call retries,
    skip its merge and cursor advance, record why, and continue other groups
    under the common failure rules. The immediate-stop token rule applies.
-3. Reset `rawMeta` to the empty string for each candidate. If budget remains,
-   retain it as `remaining` and run:
+3. If budget remains, also fill `remaining` with its literal value and run:
 
    ```bash
+   exportDir='<private directory from mktemp -d>'
+   T='<token from acquire>'
+   G='<candidate group>'
+   n='<run-local counter for G>'
+   remaining='<remaining raw-row budget>'
    C=$(node --input-type=module -e 'import fs from "node:fs"; console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).receipt.coverageEnd)' "$exportDir/$n-summaries-meta.json")
    node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --origin-sync --group "$G" --raw-only --after "$C" --limit "$remaining" --out "$exportDir/$n-raw" > "$exportDir/$n-raw-meta.json"
-   rawMeta="$exportDir/$n-raw-meta.json"
    ```
 
    Deduct the saved metadata `count`, retain its raw `receipt`
@@ -50,11 +58,15 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
    the cursor cannot move past it. If this export or read fails after the bounded
    read retries or applicable corrected-call retries under the common rules,
    neither cursor for G advances. With budget exhausted, skip the raw export;
-   leave `rawMeta` empty so the generated raw receipt is then `null`. Retain
-   `G`, `n`, and `rawMeta` together for this group's advance.
+   no raw metadata file is created, so the generated raw receipt is then `null`.
+   Use the same G and n literals for this group's later list and advance.
 4. For each group actually processed, save the complete read-only list result:
 
    ```bash
+   exportDir='<private directory from mktemp -d>'
+   T='<token from acquire>'
+   G='<candidate group>'
+   n='<run-local counter for G>'
    node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list --group "$G" > "$exportDir/$n-inputs.json"
    ```
 
@@ -138,13 +150,17 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
    generate advance stdin from that group's saved files:
 
    ```bash
-   node --input-type=module - "$exportDir/$n-summaries-meta.json" "$rawMeta" "$exportDir/$n-inputs.json" <<'NODE' | node ~/zylos/.claude/skills/zylos-memory/scripts/origin-cursor.js advance --group "$G" --token "$T"
+   exportDir='<private directory from mktemp -d>'
+   T='<token from acquire>'
+   G='<candidate group>'
+   n='<run-local counter for G>'
+   node --input-type=module - "$exportDir/$n-summaries-meta.json" "$exportDir/$n-raw-meta.json" "$exportDir/$n-inputs.json" <<'NODE' | node ~/zylos/.claude/skills/zylos-memory/scripts/origin-cursor.js advance --group "$G" --token "$T"
    import fs from 'node:fs';
    const [summaryPath, rawPath, inputsPath] = process.argv.slice(2);
    const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
    process.stdout.write(JSON.stringify({
      summary: read(summaryPath).receipt,
-     raw: rawPath ? read(rawPath).receipt : null,
+     raw: fs.existsSync(rawPath) ? read(rawPath).receipt : null,
      inputs: read(inputsPath),
    }));
    NODE

@@ -41,13 +41,20 @@ C4 chain. Follow the working-state steps below: read-before-cleanup, recovery, s
 
 1. Acquire. Read `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js unsummarized  --json`. If count is zero,
    release and report no input. Do not cleanup, rotate, or consume inbox.
-2. Retain this run's private directory path as `exportDir`, the acquired token
-   as `T`, and the resolved frontier/limit as `safeEnd`/`batchLimit`. Save command
-   JSON stdout directly to files there; never transcribe receipts, list objects,
+2. Each command block runs in a new shell. At the start of **every** block,
+   replace assignment placeholders with literal values: this run's private
+   directory from `mktemp -d` and the token from acquire. For fetch, also fill
+   `safeEnd`/`batchLimit` with the resolved frontier/limit. Do not rely on variables
+   set by an earlier tool call. Save command JSON stdout directly to files there;
+   never transcribe receipts, list objects,
    or hashes into a submission. These files share the private directory's
    existing cleanup rule. Fetch:
 
    ```bash
+   exportDir='<private directory from mktemp -d>'
+   T='<token from acquire>'
+   safeEnd='<safeEnd from unsummarized>'
+   batchLimit='<resolved batch limit>'
    node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --unsummarized --up-to "$safeEnd" --limit "$batchLimit" --out "$exportDir/batch" > "$exportDir/batch-meta.json"
    ```
 
@@ -62,6 +69,8 @@ C4 chain. Follow the working-state steps below: read-before-cleanup, recovery, s
    Save the complete read-only list result as `inputs`:
 
    ```bash
+   exportDir='<private directory from mktemp -d>'
+   T='<token from acquire>'
    node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list > "$exportDir/inputs.json"
    ```
 
@@ -111,11 +120,21 @@ C4 chain. Follow the working-state steps below: read-before-cleanup, recovery, s
    block unchanged; commit strips that copy and preserves the official lines. Keep a separate
    `followedUpIds` array; no progress means an empty array. Save that worker-judged
    array as JSON in `"$exportDir/followed-up-ids.json"`; only these IDs are manually
-   supplied, never the batch receipt or input manifest.
+   supplied, never the batch receipt or input manifest. Write the file with
+   this command, replacing `[]` only with the proven followed-up ID array:
+
+   ```bash
+   exportDir='<private directory from mktemp -d>'
+   T='<token from acquire>'
+   printf '%s\n' '[]' > "$exportDir/followed-up-ids.json"
+   ```
+
 7. Send the summary on stdin, generating both the target and `--batch` from the
    saved metadata (replace the heredoc body with the actual summary):
 
    ```bash
+   exportDir='<private directory from mktemp -d>'
+   T='<token from acquire>'
    node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js checkpoint "$(node --input-type=module -e 'import fs from "node:fs"; console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).batch.end)' "$exportDir/batch-meta.json")" --token "$T" --batch "$(node --input-type=module -e 'import fs from "node:fs"; console.log(JSON.stringify(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).batch))' "$exportDir/batch-meta.json")" <<'SUMMARY'
    <checkpoint summary>
    SUMMARY
@@ -149,6 +168,8 @@ C4 chain. Follow the working-state steps below: read-before-cleanup, recovery, s
    metadata, input manifest, and worker-judged followed-up IDs:
 
    ```bash
+   exportDir='<private directory from mktemp -d>'
+   T='<token from acquire>'
    node --input-type=module - "$exportDir/batch-meta.json" "$exportDir/inputs.json" "$exportDir/followed-up-ids.json" <<'NODE' | node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js commit --token "$T"
    import fs from 'node:fs';
    const [batchPath, inputsPath, followedUpPath] = process.argv.slice(2);
