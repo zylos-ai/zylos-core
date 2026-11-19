@@ -219,8 +219,27 @@ test('unknown recovered busy start uses run start and transcript-only activity u
  fs.writeFileSync(transcript,'{}\n');fs.utimesSync(transcript,0.1,0.1);
  activity.consume([row('session_start',{ts:100,transcript_path:transcript})]);
  assert.equal(activity.read(5000).state,'idle');assert.equal(activity.read(6000).state,'idle');
- fs.utimesSync(transcript,7,7);assert.equal(activity.read(8000).busySince,6000);
+ fs.appendFileSync(transcript,'{}\n');fs.utimesSync(transcript,7,7);assert.equal(activity.read(8000).busySince,6000);
  assert.equal(activity.read(8500).busySince,6000);
+});
+
+// Boundary: first reads and reset cursors retain mtime activity for real bytes.
+// Run for transcript activity/rotation changes; private files only, no runtime.
+test('transcript first read, replacement and truncation retain activity timestamps',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl');
+ fs.writeFileSync(transcript,'{}\n{}\n');fs.utimesSync(transcript,1,1);
+ activity.consume([row('session_start',{ts:100,transcript_path:transcript})]);
+ assert.equal(activity.read(5000).lastActivityAt,1000);
+ const initialIdentity=activity.transcriptIdentity;
+ fs.renameSync(transcript,path.join(root,'previous.jsonl'));
+ fs.writeFileSync(transcript,'{}\n{}\n');fs.utimesSync(transcript,6,6);
+ assert.equal(activity.read(10000).lastActivityAt,6000);
+ assert.notEqual(activity.transcriptIdentity,initialIdentity);
+ const replacementIdentity=activity.transcriptIdentity;
+ fs.writeFileSync(transcript,'{}\n');fs.utimesSync(transcript,11,11);
+ assert.equal(activity.read(15000).lastActivityAt,11000);
+ assert.equal(activity.transcriptIdentity,replacementIdentity);
+ assert.equal(activity.transcriptOffset,3);
 });
 
 for(const runtime of ['claude','codex'])test(`quiet samples keep an open ${runtime} turn busy until its closing hook`,t=>{

@@ -1247,8 +1247,9 @@ test('a group\'s stored message is read on request, for that exact group, redact
 // owned temporary roots/DBs with injected Core/CLI. Run for working/freshness or
 // source-time query changes; skip unrelated rendering. No live resources,
 // network, PM2, tmux or children; fixture closes Store before removing its root.
+// Times below are written against a 30-minute TTL; pin it so the Core default can change.
 function workingFixture(t, options = {}) {
-  const f = fixture(t, options), store = new Store(path.join(f.root, 'working.db'));
+  const f = fixture(t, { hotTtlSeconds: 1800, ...options }), store = new Store(path.join(f.root, 'working.db'));
   f.addCleanup(() => store.close());
   f.live.get('telegram:g0').status.value.active_tool_details = [];
   const queries = [];
