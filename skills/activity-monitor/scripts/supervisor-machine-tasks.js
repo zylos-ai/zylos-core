@@ -7,7 +7,8 @@ import { durableJson } from './runtime-generation.js';
 import { enqueueMachineControl } from './machine-control.js';
 import { UsageMonitor } from './usage-monitor.js';
 
-const { runtimesWith } = await loadCoreModule('runtime/descriptors.js');
+const { findRuntime, runtimesWith } = await loadCoreModule('runtime/index.js');
+const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
 const { readSessionMode, readZylosConfigOrThrow } = await loadCoreModule('config.js');
 const { readRuntimeHealth, readAccountUsage } = await loadCoreModule('session-state-reader.js');
 const { zylosRoot } = await loadCoreModule('session-group-paths.js');
@@ -23,7 +24,6 @@ function runScript(script, timeoutMs) {
     reject(detail?new Error(`${error.killed?'timed out: ':''}${detail}`):error);
   }));
 }
-export const DAILY_UPGRADE_PROMPT = 'Daily upgrade. Use the upgrade-claude skill to upgrade Claude Code to the latest version.';
 export const HEALTH_CHECK_PROMPT = 'System health check. Use the health-check skill sanitized helper for PM2 services; never run or print raw pm2 jlist output. Check disk space (df -h) and memory (free -m). If any issues found, use your judgment to notify whoever is most likely to help — check your memory for a designated owner or ops person, otherwise pick the person you normally work with. Log results to ~/zylos/logs/health.log.';
 
 /** Machine maintenance never owns lifecycle state and never blocks the loop on a child. */
@@ -101,7 +101,13 @@ export class SupervisorMachineTasks {
     const healthy=health && !health.unreadable && (health.missing||health.health==='ok');
     if(healthy) {
       if(upgradeDue)this.daily('upgrade-check-state',6,parts,()=>this.execute(fileURLToPath(new URL('./upgrade-check.js',import.meta.url)),300000),{catchUp:true});
-      if(dailyUpgradeDue&&targetRuntime==='claude')this.daily('daily-upgrade-state',5,parts,()=>this.control(DAILY_UPGRADE_PROMPT),{catchUp:true});
+      if (dailyUpgradeDue) {
+        const rt = await findRuntime(targetRuntime);
+        const prompt = rt?.install.dailyUpgradePrompt;
+        if (prompt && prompt !== UNSUPPORTED) {
+          this.daily('daily-upgrade-state', 5, parts, () => this.control(prompt), { catchUp: true });
+        }
+      }
       if(healthDue) {
         this.schedule('health-check',async()=>{await this.control(HEALTH_CHECK_PROMPT);this.write('health-check-state',{last_check_at:seconds,last_check_human:date.toISOString().replace('T',' ').slice(0,19)});});
       }

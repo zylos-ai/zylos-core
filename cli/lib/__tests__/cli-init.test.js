@@ -27,6 +27,12 @@ test('init prepares both hook/instruction sets and reports partial completion', 
   assert.deepEqual(result.failed, [{ item: 'codex.hooks', message: 'trust' }]);
   const lines = []; reportInitPreparation(result, line => lines.push(line));
   assert.match(lines[0], /部分完成/); assert.match(lines.join('\n'), /Failed: codex.hooks/);
+  const withNotice = [];
+  reportInitPreparation({ ...result, notices: [{ runtime: 'agy', message: 'fixture notice' }] }, line => withNotice.push(line));
+  assert.deepEqual(withNotice, [...lines, '  Note: agy: fixture notice']);
+  const repeated = [];
+  reportInitPreparation({ ...result, notices: [] }, line => repeated.push(line));
+  assert.deepEqual(repeated, lines);
 });
 
 test('init --json text compatibility and unknown argument rejection', () => {

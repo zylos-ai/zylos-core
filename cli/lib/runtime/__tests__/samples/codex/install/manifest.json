@@ -1,0 +1,9 @@
+{
+  "program": "Codex CLI",
+  "version": "codex-cli 0.137.0",
+  "recordedAt": "2026-11-19T18:36:08Z",
+  "how": "Ran codex --version on macOS with a temporary HOME and ZYLOS_DIR.",
+  "files": {
+    "version.txt": "Unmodified stdout from --version."
+  }
+}

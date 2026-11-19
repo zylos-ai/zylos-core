@@ -41,36 +41,6 @@
   },
   {
     "file": "cli/commands/doctor.js",
-    "text": "if (!commandExists('claude')) return { installed: false };",
-    "reason": "dispatch:upgrade: Probes the runtime-specific executable and version."
-  },
-  {
-    "file": "cli/commands/doctor.js",
-    "text": "version = execFileSync('claude', ['--version'], {",
-    "reason": "dispatch:upgrade: Probes the runtime-specific executable and version."
-  },
-  {
-    "file": "cli/commands/doctor.js",
-    "text": "if (!commandExists('codex')) return { installed: false };",
-    "reason": "dispatch:upgrade: Probes the runtime-specific executable and version."
-  },
-  {
-    "file": "cli/commands/doctor.js",
-    "text": "version = execFileSync('codex', ['--version'], {",
-    "reason": "dispatch:upgrade: Probes the runtime-specific executable and version."
-  },
-  {
-    "file": "cli/commands/doctor.js",
-    "text": "if (!commandExists('agy')) return { installed: false };",
-    "reason": "dispatch:upgrade: Probes the runtime-specific executable and version."
-  },
-  {
-    "file": "cli/commands/doctor.js",
-    "text": "version = execFileSync('agy', ['--version'], {",
-    "reason": "dispatch:upgrade: Probes the runtime-specific executable and version."
-  },
-  {
-    "file": "cli/commands/doctor.js",
     "text": "claude: { display: 'Claude', host: 'api.anthropic.com' },",
     "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
   },
@@ -136,16 +106,6 @@
   },
   {
     "file": "cli/commands/init.js",
-    "text": "export async function prepareInitRuntimeClis({ runtimes = ['claude', 'codex'], exists = commandExists,",
-    "reason": "dispatch:upgrade: Controls executable installation for the existing init paths."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "install = { claude: installClaude, codex: installCodex } } = {}) {",
-    "reason": "dispatch:upgrade: Controls executable installation for the existing init paths."
-  },
-  {
-    "file": "cli/commands/init.js",
     "text": "export async function prepareInitRuntimeAssets({ runtimes = ['claude', 'codex'], result = { completed: [], failed: [] },",
     "reason": "dispatch:hooks: Controls provisioning of each runtime’s hook assets."
   },
@@ -173,11 +133,6 @@
     "file": "cli/commands/init.js",
     "text": "const result = spawnSync('claude', ['-p', 'hi', '--max-turns', '1'], {",
     "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "runtime: null,  // 'claude' | 'codex' — set via --runtime flag",
-    "reason": "text: Preserves the current init option description, runtime label, or authentication hint."
   },
   {
     "file": "cli/commands/init.js",
@@ -361,16 +316,6 @@
   },
   {
     "file": "cli/commands/init.js",
-    "text": "const preparedRuntimes = selectedRuntime === 'agy' ? ['claude', 'codex', 'agy'] : ['claude', 'codex'];",
-    "reason": "dispatch:upgrade: Controls executable installation for the existing init paths."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "let claudeJustInstalled = preparation.installed.includes('claude');",
-    "reason": "dispatch:upgrade: Controls executable installation for the existing init paths."
-  },
-  {
-    "file": "cli/commands/init.js",
     "text": "if (selectedRuntime === 'claude') {",
     "reason": "dispatch:launch: Controls the Claude-only launch terms prompt."
   },
@@ -533,16 +478,6 @@
     "file": "cli/commands/runtime.js",
     "text": "(agy: replace the key with zylos runtime agy --save-apikey <key>);",
     "reason": "text: Preserves the runtime status label, help, or credential example."
-  },
-  {
-    "file": "cli/commands/self-uninstall.js",
-    "text": "if (commandExists('claude')) {",
-    "reason": "gap: The optional removal instructions cover only the two supported entries in this flow."
-  },
-  {
-    "file": "cli/commands/self-uninstall.js",
-    "text": "if (commandExists('codex')) {",
-    "reason": "gap: The optional removal instructions cover only the two supported entries in this flow."
   },
   {
     "file": "cli/lib/claude-eval.js",
@@ -781,11 +716,6 @@
   },
   {
     "file": "cli/lib/runtime-setup.js",
-    "text": "return commandExists('claude');",
-    "reason": "dispatch:upgrade: Checks whether the Claude executable is installed."
-  },
-  {
-    "file": "cli/lib/runtime-setup.js",
     "text": "const result = spawnSync('claude', ['auth', 'status', '--json'], {",
     "reason": "dispatch:auth: Looks up runtime-specific credential files or authentication status."
   },
@@ -883,36 +813,6 @@
     "file": "cli/lib/sync-runtime-hooks.js",
     "text": "const result = { claude: { added, updated, removed }, codex: codexHooks, stopFailureSupported };",
     "reason": "dispatch:hooks: Checks native hook support or reports native hook installation results."
-  },
-  {
-    "file": "cli/lib/upgrade-post-cutoff.js",
-    "text": "if (runtime === 'codex' || fs.existsSync(path.join(codexGlobalDir, 'config.toml')) || fs.existsSync(path.join(codexGlobalDir, 'auth.json'))) {",
-    "reason": "dispatch:upgrade: Maintains Codex hook ownership during upgrades."
-  },
-  {
-    "file": "cli/lib/upgrade-post-cutoff.js",
-    "text": "if (runtime !== 'codex' && !fs.existsSync(path.join(globalDir, 'config.toml')) && !fs.existsSync(path.join(globalDir, 'auth.json'))) return { attempted: false };",
-    "reason": "dispatch:upgrade: Maintains Codex hook ownership during upgrades."
-  },
-  {
-    "file": "cli/lib/upgrade-post-cutoff.js",
-    "text": "return runtime !== 'codex' && result.fatal ? { ...result, fatal: false, warning: true } : result;",
-    "reason": "dispatch:upgrade: Maintains Codex hook ownership during upgrades."
-  },
-  {
-    "file": "cli/lib/upgrade-runtime-preparation.js",
-    "text": "prepare, exists = commandExists, install = { claude: installClaude, codex: installCodex },",
-    "reason": "dispatch:upgrade: Controls the fixed default install paths plus any selected runtime."
-  },
-  {
-    "file": "cli/lib/upgrade-runtime-preparation.js",
-    "text": "runtimes: [...new Set(['claude', 'codex', ...required])],",
-    "reason": "dispatch:upgrade: Controls the fixed default install paths plus any selected runtime."
-  },
-  {
-    "file": "cli/lib/upgrade-runtime-preparation.js",
-    "text": "install: Object.fromEntries(['claude', 'codex'].map(runtime => [runtime, () => {",
-    "reason": "dispatch:upgrade: Controls the fixed default install paths plus any selected runtime."
   },
   {
     "file": "cli/lib/upgrade-runtime-preparation.js",
@@ -1158,11 +1058,6 @@
     "file": "skills/activity-monitor/scripts/supervisor-machine-tasks.js",
     "text": "usageAlertStateFile:path.join(this.zylosDir,'activity-monitor',runtime==='claude'?'usage-alert-state.json':'usage-codex-alert-state.json'),",
     "reason": "dispatch:usage: Selects the runtime-specific alert state file."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/supervisor-machine-tasks.js",
-    "text": "if(dailyUpgradeDue&&targetRuntime==='claude')this.daily('daily-upgrade-state',5,parts,()=>this.control(DAILY_UPGRADE_PROMPT),{catchUp:true});",
-    "reason": "dispatch:upgrade: Queues the existing Claude-only daily upgrade."
   },
   {
     "file": "skills/activity-monitor/scripts/supervisor-main.js",

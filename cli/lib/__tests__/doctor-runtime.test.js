@@ -11,7 +11,7 @@ test('doctor selects Antigravity CLI, Gemini connectivity and adapter authentica
   t.after(() => { process.env.PATH = saved; fs.rmSync(root, { recursive: true, force: true }); });
   fs.symlinkSync('/usr/bin/which', path.join(root, 'which'));
   for (const command of ['agy', 'claude', 'codex']) fs.writeFileSync(path.join(root, command),
-    `#!${process.execPath}\nimport fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(calls)}, ${JSON.stringify(command)}+' '+process.argv.slice(2).join(' ')+'\\n'); console.log('1.5.11');`, { mode: 0o755 });
+    `#!${process.execPath}\nimport fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(calls)}, process.argv[1]+' '+process.argv.slice(2).join(' ')+'\\n'); console.log('1.5.11');`, { mode: 0o755 });
   process.env.PATH = root;
   const hosts = [];
   let status = 'success', authChecks = 0;
@@ -47,7 +47,7 @@ test('doctor selects Antigravity CLI, Gemini connectivity and adapter authentica
     assert.ok(json.issues.some(row => row.id === 'runtime_unknown' && /does not provide diagnostics/.test(row.hint)));
     assert.equal(json.issues.some(row => ['cli_missing', 'autonomous_off'].includes(row.id)), false);
   }
-  assert.deepEqual(fs.readFileSync(calls, 'utf8').trim().split('\n'), Array(3).fill('agy --version'));
+  assert.deepEqual(fs.readFileSync(calls, 'utf8').trim().split('\n'), Array(3).fill(`${path.join(root, 'agy')} --version`));
   for (const [runtime, display, host] of [['claude', 'Claude', 'api.anthropic.com'], ['codex', 'Codex', 'api.openai.com']]) {
     status = 'failure'; const diag = await collect(runtime); json = buildDiagnosticJson(diag, version);
     assert.equal(diag.display, display); assert.equal(diag.apiHost, host);

@@ -29,7 +29,7 @@ import { requestRuntimeRestart } from './request-runtime-restart.js';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { classifyCutoff, commitCutoff } from './upgrade-cutoff.js';
-import { preparePostCutoff, publishPostCutoff } from './upgrade-post-cutoff.js';
+import { loadPostUpgradeSync, preparePostCutoff, publishPostCutoff } from './upgrade-post-cutoff.js';
 import { prepareUpgradeRuntime, prepareUpgradeRuntimeClis } from './upgrade-runtime-preparation.js';
 import { upgradeFailureCode } from './upgrade-admission.js';
 import { finalizeWebConsoleRemoval, webConsoleRemovalNotice } from './web-console-finalize.js';
@@ -1264,7 +1264,8 @@ async function finalizeInstalledUpgrade(ctx, deps) {
     ctx.preparationWarnings=prepared.warnings || [];
     const workDir=ctx.transactionDir;
     if (!workDir) throw Error('finalizer preparation directory is unavailable');
-    const preparation=(deps.stage || preparePostCutoff)({transactionDir:workDir,zylosDir:ctx.zylosDir,...prepared});
+    const sync = await loadPostUpgradeSync();
+    const preparation=(deps.stage || preparePostCutoff)({transactionDir:workDir,zylosDir:ctx.zylosDir,...prepared,sync});
       let dashboardInstall=null;
       if (ctx.firstDashboardTakeover) {
         let owner;

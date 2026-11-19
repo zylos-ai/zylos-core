@@ -11,7 +11,7 @@ import { LEGACY_CORE_DATABASES, createCoreDbSnapshot, prepareRecoveryDependencie
 import { installUpgradeTarget } from '../upgrade-entry.js';
 import { prepareProtectedInstall } from '../upgrade-protection.js';
 import { prepareUpgradeRuntime, prepareUpgradeRuntimeClis } from '../upgrade-runtime-preparation.js';
-import { preparePostCutoff } from '../upgrade-post-cutoff.js';
+import { loadPostUpgradeSync, preparePostCutoff } from '../upgrade-post-cutoff.js';
 import { commitCutoff } from '../upgrade-cutoff.js';
 import { resumeFinalize } from '../upgrade-resume.js';
 import { migrateDatabase } from '../../../skills/comm-bridge/scripts/sqlite-schema.js';
@@ -19,6 +19,8 @@ import * as c4Schema from '../../../skills/comm-bridge/scripts/c4-schema.js';
 import * as schedulerSchema from '../../../skills/scheduler/scripts/schema.js';
 import * as webSchema from './fixtures/legacy-web-console-schema.js';
 import {installLegacyWebConsoleSchema} from './helpers/legacy-web-console.js';
+
+const sync = await loadPostUpgradeSync();
 
 const require = createRequire(import.meta.url);
 const packageRoot = path.resolve(import.meta.dirname, '../../..');
@@ -772,7 +774,7 @@ test('default initial finalizer treats uncertain cutoff as zero publication or s
 test('default resume rejects declared corrupt material with no regeneration fallback', async t => {
   const f = fixture(t);
   const result = await f.run({ stage(inputs) {
-    const staged = preparePostCutoff(inputs);
+    const staged = preparePostCutoff({ ...inputs, sync });
     const target = staged.items.hooks.targets.at(-1);
     fs.writeFileSync(path.join(inputs.transactionDir, target.stagedFile), 'corrupt declared material');
     return staged;

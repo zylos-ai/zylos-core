@@ -17,7 +17,6 @@ import { readLaunchDotenv } from './runtime/session-command.js';
 import { CLAUDE_BUILTIN_ENV_KEYS, CLAUDE_CREDENTIAL_KEYS, ZYLOS_DIR } from './config.js';
 import { writeEnvFile } from './env.js';
 import { checkPrivateFile, writePrivateFile } from './private-file.js';
-import { commandExists } from './shell-utils.js';
 import { parseClaudeAuthStatus, parseCodexLoginStatus } from './auth-parsers.js';
 import { installCoreCodexHook } from './codex-hooks.js';
 import { isOfficialClaudeBaseUrl } from './init-api-auth.js';
@@ -49,34 +48,10 @@ export function isValidBaseUrl(value) {
  * @param {string} pkg - Package name (e.g. "@openai/codex")
  * @returns {boolean}
  */
-export function installGlobalPackage(pkg) {
+export function installGlobalPackage(pkg, exec = { execFileSync }) {
   try {
-    execFileSync('npm', ['install', '-g', pkg], { stdio: 'pipe', timeout: 120000 });
+    exec.execFileSync('npm', ['install', '-g', pkg], { stdio: 'pipe', timeout: 120000 });
     return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Install the Codex CLI globally via npm.
- * @returns {boolean}
- */
-export function installCodex() {
-  return installGlobalPackage('@openai/codex');
-}
-
-/**
- * Install Claude Code via the official installer script.
- * @returns {boolean}
- */
-export function installClaude() {
-  try {
-    execSync('curl -fsSL https://claude.ai/install.sh | bash', {
-      stdio: 'pipe',
-      timeout: 300000, // 5 min — downloads ~213MB native binary
-    });
-    return commandExists('claude');
   } catch {
     return false;
   }

@@ -7,6 +7,7 @@ import { syncAgyConfig, agyConfigurationPaths, isAgyConfigReady, hasAgyZylosHook
 import { saveAgyApiKey } from '../runtime-setup.js';
 import { ZYLOS_DIR } from '../config.js';
 import { applyCredentials, validateRuntimeFlags, parseRuntimeFlags } from '../../commands/runtime.js';
+import { groupCommand } from '../../commands/group.js';
 import { executeAuth } from '../../commands/auth.js';
 import { prepareInitRuntimeClis, prepareInitRuntimeAssets, runInitAuthentication, validateInitOptions } from '../../commands/init.js';
 import { prepareUpgradeRuntimeClis } from '../upgrade-runtime-preparation.js';
@@ -122,11 +123,18 @@ test('Antigravity auth checks saved API key without opening native login', async
   assert.match(failed.error.message, /save-apikey/);
 });
 
-test('Antigravity init prepares only explicit runtimes and never installs an unknown package', async () => {
-  const missing = await prepareInitRuntimeClis({ runtimes: ['agy'], exists: () => false });
-  assert.equal(missing.failed[0].item, 'agy.cli');
+test('Antigravity init prepares only explicit runtimes', async t => {
+  const write = t.mock.method(process.stderr, 'write', () => true);
+  const missing = await prepareInitRuntimeClis({
+    runtimes: ['agy'], exists: () => false, install: { agy: async () => false },
+  });
+  assert.deepEqual(missing.failed[0], { item: 'agy.cli', message: 'CLI installation failed or command not on PATH' });
   const present = await prepareInitRuntimeClis({ runtimes: ['agy'], exists: () => true });
   assert.deepEqual(present.completed, ['agy.cli']);
+  assert.deepEqual(write.mock.calls.map(call => call.arguments), [
+    ['Installing Antigravity CLI (this can take a few minutes)…\n'],
+  ]);
+  write.mock.restore();
   const calls = [];
   const assets = await prepareInitRuntimeAssets({ runtimes: ['agy'], instruction: name => { calls.push(name); return 'instructions'; }, hooks: { agy: () => calls.push('hooks') }, exists: () => true });
   assert.deepEqual(calls, ['agy', 'hooks']);
@@ -141,5 +149,40 @@ test('Antigravity upgrade requires its installed CLI for baseline and overrides'
   fs.writeFileSync(path.join(f.zylosDir, '.zylos/config.json'), JSON.stringify({ runtime: 'agy', session_mode: 'multi' }));
   const result = await prepareUpgradeRuntimeClis({ zylosDir: f.zylosDir }, { exists: () => true, listRuntimeOverrides: () => [{ runtime: 'agy' }] });
   assert.ok(result.completed.includes('agy.cli'));
-  await assert.rejects(prepareUpgradeRuntimeClis({ zylosDir: f.zylosDir }, { exists: name => name !== 'agy', listRuntimeOverrides: () => [] }), { code: 'RUNTIME_PREPARATION_INCOMPLETE' });
+  await assert.rejects(prepareUpgradeRuntimeClis({ zylosDir: f.zylosDir }, { exists: name => name !== 'agy', install: { agy: async () => false }, listRuntimeOverrides: () => [] }), { code: 'RUNTIME_PREPARATION_INCOMPLETE' });
 });
+
+for (const ok of [true, false]) {
+  test(`group runtime set ${ok ? 'installs before saving' : 'does not save when installation fails'}`, async t => {
+    const previousExitCode = process.exitCode;
+    t.after(() => { process.exitCode = previousExitCode; });
+    const flags = ['set', '--group', 'telegram:example', '--runtime', 'agy', '--json'];
+    const stdout = [], stderr = [], calls = [];
+    const io = { stdout: { write: value => stdout.push(value) }, stderr: { write: value => stderr.push(value) } };
+    const notices = [{ runtime: 'agy', message: 'N' }];
+    const code = await groupCommand(['runtime', ...flags], {
+      io,
+      runtimeFor: id => ({ id, identity: { findExecutable: () => null } }),
+      prepareCli: options => {
+        calls.push(['prepare', options]);
+        return ok ? { completed: ['agy.cli'], failed: [], installed: ['agy'], notices }
+          : { failed: [{ item: 'agy.cli', message: 'M' }] };
+      },
+      run: (kind, args, passedIo) => {
+        calls.push(['run', kind, args]);
+        passedIo.stdout.write('{"ok":true}\n');
+        return 0;
+      },
+    });
+    assert.deepEqual(calls, [
+      ['prepare', { runtimes: ['agy'] }],
+      ...(ok ? [['run', 'runtime', flags]] : []),
+    ]);
+    assert.equal(code, ok ? 0 : 1);
+    assert.deepEqual(stderr, ok ? ['Warning [RUNTIME_CLI_INSTALL_NOTICE]: N\n'] : []);
+    assert.equal(stdout.length, 1);
+    assert.deepEqual(JSON.parse(stdout[0]), ok ? { ok: true } : {
+      ok: false, error: { code: 'RUNTIME_NOT_INSTALLED', message: 'M', persisted: [] },
+    });
+  });
+}
