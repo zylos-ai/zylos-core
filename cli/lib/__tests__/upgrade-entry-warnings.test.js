@@ -36,7 +36,7 @@ for(const mode of ['none','runtime','notice','service']) test(`downloaded upgrad
     }};
     mock.module(${JSON.stringify(url('upgrade-protection.js'))},{namedExports:{...protection,maintenance:m,
       maintenanceFor:()=>m,beginUpgrade(ctx){ctx.transactionDir=${JSON.stringify(path.join(root,'transaction'))};},
-      saveProtectedCode(){},prepareProtectedInstall(){},markInstallationIntent(){}}});
+      saveProtectedCode(){},prepareProtectedInstall(){},markInstallationIntent(){},timeUpgradeStep(_ctx,_name,work){return work();}}});
     mock.module(${JSON.stringify(url('core-db-backup.js'))},{namedExports:{...databases,
       assertDashboardUninstalled(){},inspectFirstDashboardTakeover:()=>false,inspectCoreManagesDashboardDb:()=>false,
       probeCoreDbVersions:()=>({databases:[{},{}],needsMigration:false}),preflightCoreDbUpgrade(){}}});

@@ -990,11 +990,13 @@ function worker(dir, j, payload) {
   let response;
   try {response=JSON.parse(result.stdout);} catch {}
   if(result.error || result.status!==0) {
-    throw Object.assign(Error(response?.error?.message || result.error?.message || 'SQLite worker failed'), {
+    const error=Object.assign(Error(response?.error?.message || result.error?.message || 'SQLite worker failed'), {
       code:typeof response?.error?.code === 'string' && response.error.code.length > 0
         ? response.error.code
         : 'UPGRADE_FAILED'
     });
+    if (response?.error?.databaseTimings) error.databaseTimings=response.error.databaseTimings;
+    throw error;
   }
   if(!response)throw Error('Invalid SQLite worker response');
   return response;
@@ -1032,7 +1034,7 @@ function validateDescriptor(dir, j, d) {
   }
 
 }
-function preflight(dir, j, expected, {originalDeployment = false} = {}) {
+function preflight(dir, j, expected, {originalDeployment = false, reportTimings = false} = {}) {
   const snapshotFormatVersion = expected ? databaseFormatForRows(expected.databases, expected.formatVersion) : 3;
   const restored = expected?.status === 'complete' && expected.databases.every(database =>
     database.status === 'missing' || j.dbRestore?.[database.source]?.complete === true);
@@ -1049,6 +1051,7 @@ function preflight(dir, j, expected, {originalDeployment = false} = {}) {
     dashboardOwnerManaged: j.dashboardOwnerManaged === true && !(originalDeployment && j.firstTakeover === true),
     manifest: restored ? expected : undefined,
     expectedDatabases: presence,
+    reportTimings,
     formatVersion: originalDeployment ? ORIGINAL_DEPLOYMENT_FORMAT_VERSION : snapshotFormatVersion
   });
 }

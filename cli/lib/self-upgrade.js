@@ -1177,6 +1177,7 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   ctx.databaseMode = 'migrate';
   ctx.zylosDir = deps.zylosDir || state.zylosDir || ZYLOS_DIR;
   ctx.maintenance = deps.maintenance;
+  ctx.now = deps.now;
   ctx.packageRoot = state.packageRoot;
   ctx.transactionDir=state.transactionDir;
   ctx.transactionId=state.transactionId;

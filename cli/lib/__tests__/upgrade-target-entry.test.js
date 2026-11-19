@@ -407,7 +407,8 @@ for (const error of ['', undefined]) test(`returned finalizer failure uses a rea
 
 test('target packing precedes installation intent and rejects unsafe npm archive filenames', t => {
   const input = fixture(t);
-  const ctx = {...input, maintenance:{}, protectedNpmCli:'/fixture/npm-cli.js'};
+  const ctx = {...input, journal:{}, maintenance:{update(_dir,journal,changes){Object.assign(journal,changes);}},
+    protectedNpmCli:'/fixture/npm-cli.js'};
   const calls = [];
   const deps = {runInstaller(context, options) {calls.push(options.stage); return JSON.stringify([{filename:'target.tgz'}]);}, markInstallationIntent() {calls.push('intent');}};
   installUpgradeTarget(ctx, deps);

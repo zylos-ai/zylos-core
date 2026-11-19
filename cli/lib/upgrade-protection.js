@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { rehearseCoreDbUpgrade, createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker, SNAPSHOT_FORMAT_VERSION, ORIGINAL_DEPLOYMENT_FORMAT_VERSION } from './core-db-backup.js';
+import { rehearseCoreDbUpgrade, createCoreDbSnapshot, retirePreviousCoreDbSnapshots, prepareRecoveryDependencies, runCoreDbWorker, SNAPSHOT_FORMAT_VERSION, ORIGINAL_DEPLOYMENT_FORMAT_VERSION } from './core-db-backup.js';
 const require = createRequire(import.meta.url);
 export const maintenance = require('./upgrade-maintenance.cjs');
 // A live updater must survive replacement of its own installed package too.
@@ -241,6 +241,30 @@ export function saveProtectedCode(ctx) {
     phase: 'code_saved'
   });
 }
+export function timeUpgradeStep(ctx, name, work) {
+  const m = maintenanceFor(ctx), j = ctx.journal, dir = ctx.transactionDir;
+  const timestamp = () => new Date((ctx.now ?? Date.now)()).toISOString();
+  const startedAt = timestamp();
+  m.update(dir, j, {stepTimings:{...j.stepTimings,[name]:{startedAt}}});
+  let report, failure;
+  try {
+    report = work();
+    return report;
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    const databaseTimings = (failure ?? report)?.databaseTimings;
+    const timing = {startedAt,finishedAt:timestamp(),...(databaseTimings && {databases:databaseTimings})};
+    try {
+      m.update(dir, j, {stepTimings:{...j.stepTimings,[name]:timing}});
+    } catch (error) {
+      if (!failure) throw error;
+      failure.message += `; could not record ${name} timing: ${error.message}`;
+    }
+  }
+}
+
 export function prepareProtectedInstall(ctx, overrides = {}) {
   const maintenance = maintenanceFor(ctx);
   const j = ctx.journal,
@@ -255,22 +279,21 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
     phase: 'offline'
   });
   if (j.databaseMode !== 'unchanged') {
-    (overrides.rehearse ?? rehearseCoreDbUpgrade)(j.zylosDir, ctx.tempDir, {
-      driverRoot:j.skillsDir, dashboardOwnerManaged:j.dashboardOwnerManaged
-    });
+    timeUpgradeStep(ctx, 'rehearsal', ()=>(overrides.rehearse ?? rehearseCoreDbUpgrade)(j.zylosDir, ctx.tempDir, {
+      driverRoot:j.skillsDir, dashboardOwnerManaged:j.dashboardOwnerManaged, reportTimings:true
+    }));
   }
-  const verifySnapshot=overrides.verifySnapshot ?? runCoreDbWorker;
   const snapshot = (overrides.snapshot ?? createCoreDbSnapshot)({
     zylosDir: j.zylosDir,
     transactionId: j.transactionId,
     fromVersion: j.from,
     toVersion: j.to,
     formatVersion: ctx.snapshotFormatVersion ?? SNAPSHOT_FORMAT_VERSION,
-    verifySnapshot
+    verifySnapshot: overrides.verifySnapshot,
+    timeStep: (name, work)=>timeUpgradeStep(ctx, name, work)
   });
   ctx.dbBackupDir = snapshot.dbBackupDir;
   ctx.dbManifest = snapshot.manifest;
-  ctx.backupWarnings = snapshot.warnings;
   ctx.dbSnapshotVerified = true;
   maintenance.update(dir, j, {
     phase: 'snapshot_saved',
@@ -298,8 +321,11 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
   });
   maintenance.validateDescriptor(dir, j, descriptor);
   if (j.databaseMode !== 'unchanged') {
-    const checked = maintenance.preflight(dir, j, snapshot.manifest, {originalDeployment:true});
-    if (checked.success === false) throw Error(checked.error || 'saved readonly worker self-check failed');
+    timeUpgradeStep(ctx, 'original_database_check', ()=>{
+      const checked = maintenance.preflight(dir, j, snapshot.manifest, {originalDeployment:true,reportTimings:true});
+      if (checked.success === false) throw Error(checked.error || 'saved readonly worker self-check failed');
+      return checked;
+    });
   }
   maintenance.update(dir, j, {
     phase: 'prepared',
@@ -407,12 +433,17 @@ export function protectedDataReady(ctx, overrides = {}) {
   const dir = ctx.transactionDir,
     j = maintenance.read(path.join(dir, 'journal.json'));
   if(j.phase!=='installing' || j.installationIntent!==true || j.transactionId!==ctx.transactionId) throw Error('data-ready requires own installing transaction');
+  ctx.journal = j;
   // This function runs in the newly installed finalizer. Use its worker, not
   // the frozen snapshot worker whose code predates the installed migrations.
   if (j.databaseMode !== 'unchanged') {
     const manifest = maintenance.read(path.join(j.dbBackupDir,'manifest.json'));
-    (overrides.migrate ?? runCoreDbWorker)({action:'upgrade-migrate',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,transactionDir:dir,transactionId:j.transactionId,manifest});
-    const verified=(overrides.verify ?? runCoreDbWorker)({action:'offline-preflight',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,requireCurrent:true,dashboardOwnerManaged:j.dashboardOwnerManaged===true,manifest});
+    timeUpgradeStep(ctx, 'migration', ()=>(overrides.migrate ?? runCoreDbWorker)({
+      action:'upgrade-migrate',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,transactionDir:dir,transactionId:j.transactionId,manifest,reportTimings:true
+    }));
+    const verified=timeUpgradeStep(ctx, 'post_migration_check', ()=>(overrides.verify ?? runCoreDbWorker)({
+      action:'offline-preflight',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,requireCurrent:true,dashboardOwnerManaged:j.dashboardOwnerManaged===true,manifest,reportTimings:true
+    }));
     ctx.databases=verified?.databases || null;
   }
   const current=maintenance.transaction(j.zylosDir,dir);
@@ -436,6 +467,29 @@ export function protectedSuccess(ctx) {
       servicesRestored: true
     }
   });
+  // Older transactions already handled retention during snapshot creation.
+  // This transaction still holds the controller while retiring old snapshots.
+  if (j.stepTimings?.verify_new_backup?.finishedAt && ctx.dbManifest) {
+    ctx.journal = j;
+    const warnings = [];
+    try {
+      timeUpgradeStep(ctx, 'verify_old_backups', ()=>{
+        const result = retirePreviousCoreDbSnapshots({zylosDir:j.zylosDir,manifest:ctx.dbManifest});
+        warnings.push(...result.warnings);
+        return result;
+      });
+    } catch (error) {
+      warnings.push(`Old database snapshot cleanup incomplete: ${error.message}`);
+    }
+    if (warnings.length) {
+      ctx.runtimeWarnings = [...(ctx.runtimeWarnings || j.runtimeWarnings || []), ...warnings];
+      try {
+        maintenance.update(dir, j, {runtimeWarnings:ctx.runtimeWarnings});
+      } catch (error) {
+        ctx.runtimeWarnings.push(`Could not record database snapshot cleanup warnings: ${error.message}`);
+      }
+    }
+  }
   // Finalization retains controller ownership through terminal cleanup.
   return maintenance.finishTerminal(dir,j);
 }

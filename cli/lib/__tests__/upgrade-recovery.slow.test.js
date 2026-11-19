@@ -1197,6 +1197,11 @@ test('protected recovery restores all databases after a partial migration failur
 // restores both from the snapshot and restarts services.
 test('same-version transaction restores older databases and services after a failed migration',async t=>{
  const f=await fixture(t,{olderDatabases:true,sourceVersion:'1.0.0'});
+ const previous=snapshot({zylosDir:f.root,transactionId:'previous'});
+ const previousFiles=fs.readdirSync(previous.dbBackupDir).map(name=>{
+  const file=path.join(previous.dbBackupDir,name);
+  return [file,f.m.hash(file)];
+ });
  f.m.update(f.dir,f.j,{to:'1.0.0'});
  const version=source=>{const db=new Database(f.db(source),{readonly:true});try{return db.pragma('user_version',{simple:true});}finally{db.close();}};
  const sources=['comm-bridge/c4.db','scheduler/scheduler.db'];
@@ -1219,6 +1224,8 @@ test('same-version transaction restores older databases and services after a fai
  const restoredScheduler=new Database(f.db('scheduler/scheduler.db'),{readonly:true});
  try{assert.equal(restoredScheduler.pragma('table_info(tasks)').some(column=>column.name==='session_component'),false);}finally{restoredScheduler.close();}
  const journal=f.load();
+ for(const [file,sha256] of previousFiles) assert.equal(f.m.hash(file),sha256,file);
+ assert.equal(journal.stepTimings?.verify_old_backups,undefined);
  for(const source of sources)assert.equal(journal.dbRestore?.[source]?.complete,true);
  assert.ok(f.calls.includes('start'),JSON.stringify(f.calls));
 });
