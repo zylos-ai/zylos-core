@@ -3,6 +3,7 @@ import { prepare } from './launch.js';
 import { install, probeVersion, postUpgradeSync } from './install.js';
 import { UNSUPPORTED } from '../contract.js';
 import { createIdentity } from '../shared/identity.js';
+import { createUpgradeCli } from '../shared/upgrade-cli.js';
 
 const id = 'codex';
 const identity = createIdentity(id);
@@ -14,6 +15,8 @@ export default Object.freeze({
     probeVersion: options => probeVersion(identity, options),
     install,
     installNotice: UNSUPPORTED,
+    upgradeCli: createUpgradeCli({ id, identity, timeoutMs: 60000 }),
+    latestVersion: Object.freeze({ source: 'npm', package: '@openai/codex' }),
     installsToLocalBin: false,
     dailyUpgradePrompt: UNSUPPORTED,
     uninstall: Object.freeze({

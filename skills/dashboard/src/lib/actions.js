@@ -10,7 +10,8 @@ import { getCodexModels, codexEffortsForModel } from './codex-models.js';
 import { isNewerVersion } from './version-utils.js';
 import { loadCoreModule } from './core-modules.js';
 
-const { DEFAULT_RUNTIME, runtimesWith } = await loadCoreModule('runtime/descriptors.js');
+const { DEFAULT_RUNTIME, findRuntime, runtimeDisplayName, runtimesWith } = await loadCoreModule('runtime/index.js');
+const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
 const { modelThreshold, thresholdLimit, readDefaultModels, readCodexModelWindows, migrateModelThresholds, setModelThreshold } = await loadCoreModule('model-rotation-thresholds.js');
 const { resolveSessionHotTtl, HOT_TTL_MIN_MINUTES, HOT_TTL_MAX_MINUTES } = await loadCoreModule('session-hot-ttl.js');
 const { readConfigStrict, configUnreadable } = await loadCoreModule('config-store.js');
@@ -305,62 +306,38 @@ async function upgradeZylos(reqId, zylosDir) {
 
 async function upgradeRuntimeCli(reqId, config) {
   const runtime = config.runtime || process.env.ZYLOS_RUNTIME || DEFAULT_RUNTIME;
-  if (runtime === 'agy') {
-    log(reqId, 'exec: agy update');
-    try {
-      const { readLaunchDotenv } = await loadCoreModule('runtime/session-command.js');
-      const dotenvVars = readLaunchDotenv(config.zylosDir || path.join(os.homedir(), 'zylos'));
-      const env = { ...process.env, AGY_CLI_DISABLE_AUTO_UPDATE: 'true' };
-      const proxy = Object.hasOwn(dotenvVars, 'HTTPS_PROXY') ? dotenvVars.HTTPS_PROXY : process.env.HTTPS_PROXY;
-      if (proxy) env.HTTPS_PROXY = proxy;
-      else delete env.HTTPS_PROXY;
-      const { stdout, stderr } = await execFileAsync('agy', ['update'], {
-        timeout: 300000, killSignal: 'SIGKILL', env,
-      });
-      log(reqId, `agy update done (${((stdout || '') + (stderr || '')).trim().slice(0, 200)})`);
-      return { ok: true, message: 'Antigravity updated. Restart session to apply.',
-        output: ((stdout || '') + (stderr || '')).trim(), requires_restart: true,
-        messageKey: 'result.agy_updated' };
-    } catch (err) {
-      log(reqId, `agy update failed: ${(err.stderr || err.stdout || err.message || '').slice(0, 200)}`);
-      if (err.killed || err.code === 'ETIMEDOUT') {
-        return { ok: false, error: 'deadline_exceeded', message: 'Antigravity upgrade did not complete within 5 minutes. Check the installed version before retrying.',
-          messageKey: 'result.agy_upgrade_incomplete' };
-      }
-      const error = err.stderr || err.stdout || err.message;
-      return { ok: false, error: 'upgrade_failed', message: `Antigravity upgrade failed: ${error}`,
-        messageKey: 'result.agy_upgrade_failed', messageParams: { error } };
-    }
-  }
-  if (runtime !== 'claude' && runtime !== 'codex') {
+  const rt = await findRuntime(runtime);
+  if (!rt || rt.install.upgradeCli === UNSUPPORTED) {
     return { ok: false, error: 'runtime_unsupported', message: `CLI upgrade is not supported for runtime: ${runtime}`,
       messageKey: 'result.runtime_upgrade_unsupported', messageParams: { runtime } };
   }
-  if (runtime === 'codex') {
-    log(reqId, `exec: codex update`);
-    try {
-      const { stdout, stderr } = await execFileAsync('codex', ['update'], { timeout: 60000 });
-      const output = (stdout || '') + (stderr || '');
-      log(reqId, `codex update done (${output.trim().slice(0, 200)})`);
-      return { ok: true, message: 'Codex CLI updated. Restart session to apply.', output: output.trim(), requires_restart: true, messageKey: 'result.codex_updated' };
-    } catch (err) {
-      const fallbackMsg = err.stderr || err.stdout || err.message;
-      log(reqId, `codex update failed: ${(fallbackMsg || '').slice(0, 200)}`);
-      return { ok: false, error: 'upgrade_failed', message: fallbackMsg, messageKey: 'result.upgrade_failed', messageParams: { error: fallbackMsg } };
-    }
+  const name = runtimeDisplayName(runtime);
+  log(reqId, `exec: ${runtime} update`);
+  let executionError;
+  const result = await rt.install.upgradeCli({
+    root: config.zylosDir || path.join(os.homedir(), 'zylos'),
+    execFile: async (...args) => {
+      try { return await execFileAsync(...args); }
+      catch (err) {
+        executionError = err.stderr || err.stdout || err.message;
+        throw err;
+      }
+    },
+  });
+  if (result.outcome === 'updated') {
+    log(reqId, `${runtime} update done (${result.output.slice(0, 200)})`);
+    return { ok: true, message: `${name} updated. Restart session to apply.`, output: result.output,
+      requires_restart: true, messageKey: 'result.runtime_updated', messageParams: { runtime: name } };
   }
-
-  log(reqId, `exec: claude update`);
-  try {
-    const { stdout, stderr } = await execFileAsync('claude', ['update'], { timeout: 60000 });
-    const output = (stdout || '') + (stderr || '');
-    log(reqId, `claude update done (${output.trim().slice(0, 200)})`);
-    return { ok: true, message: 'Claude Code updated. Restart session to apply.', output: output.trim(), requires_restart: true, messageKey: 'result.cc_updated' };
-  } catch (err) {
-    const fallbackMsg = err.stderr || err.stdout || err.message;
-    log(reqId, `claude update failed: ${(fallbackMsg || '').slice(0, 200)}`);
-    return { ok: false, error: 'upgrade_failed', message: fallbackMsg, messageKey: 'result.upgrade_failed', messageParams: { error: fallbackMsg } };
+  log(reqId, `${runtime} update failed: ${String(executionError || result.error || '').slice(0, 200)}`);
+  if (result.outcome === 'timeout') {
+    const minutes = result.timeoutMs / 60000;
+    return { ok: false, error: 'deadline_exceeded',
+      message: `${name} upgrade did not complete within ${minutes} minutes. Check the installed version before retrying.`,
+      messageKey: 'result.runtime_upgrade_incomplete', messageParams: { runtime: name, minutes } };
   }
+  return { ok: false, error: 'upgrade_failed', message: result.error,
+    messageKey: 'result.upgrade_failed', messageParams: { error: result.error } };
 }
 
 async function setThreshold(reqId, body, config, zylosDir) {

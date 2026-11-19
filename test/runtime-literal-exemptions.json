@@ -1166,11 +1166,6 @@
   },
   {
     "file": "skills/dashboard/src/index.js",
-    "text": "return { zylos: zylosVersion, claude: ccInstalledVersion, codex: codexInstalledVersion, agy: agyInstalledVersion };",
-    "reason": "dispatch:upgrade: Returns installed executable versions in the existing response shape."
-  },
-  {
-    "file": "skills/dashboard/src/index.js",
     "text": "const defaultModel = runtime === 'claude' ? readClaudeSettings().model : runtime === 'codex' ? readCodexRootString('model', config.zylosDir) : null;",
     "reason": "else-fallback: Preserves the Dashboard native default lookup branches and fallback."
   },
@@ -1263,36 +1258,6 @@
     "file": "skills/dashboard/src/lib/actions.js",
     "text": "if (runtime === 'claude') {",
     "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
-    "text": "if (runtime === 'agy') {",
-    "reason": "dispatch:upgrade: Dispatches to the existing per-runtime CLI upgrade."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
-    "text": "const { stdout, stderr } = await execFileAsync('agy', ['update'], {",
-    "reason": "dispatch:upgrade: Dispatches to the existing per-runtime CLI upgrade."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
-    "text": "if (runtime !== 'claude' && runtime !== 'codex') {",
-    "reason": "dispatch:upgrade: Dispatches to the existing per-runtime CLI upgrade."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
-    "text": "if (runtime === 'codex') {",
-    "reason": "dispatch:upgrade: Dispatches to the existing per-runtime CLI upgrade."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
-    "text": "const { stdout, stderr } = await execFileAsync('codex', ['update'], { timeout: 60000 });",
-    "reason": "dispatch:upgrade: Dispatches to the existing per-runtime CLI upgrade."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
-    "text": "const { stdout, stderr } = await execFileAsync('claude', ['update'], { timeout: 60000 });",
-    "reason": "dispatch:upgrade: Dispatches to the existing per-runtime CLI upgrade."
   },
   {
     "file": "skills/dashboard/src/lib/actions.js",
@@ -1640,19 +1605,9 @@
     "reason": "dispatch:dashboard: Dispatches the history parser by runtime."
   },
   {
-    "file": "skills/dashboard/src/lib/installed-versions.js",
-    "text": "if (command === 'agy') return [command, raw.match(/\\b\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?\\b/)?.[0] ?? null];",
-    "reason": "dispatch:upgrade: Parses the runtime-specific version command output."
-  },
-  {
     "file": "skills/dashboard/src/lib/observer-containment-tmux.js",
     "text": "const target = origin ? origin.tmuxName : runtime === 'codex' ? 'codex-main' : runtime === 'claude' ? 'claude-main' : null;",
     "reason": "legacy: Resolves fixed pre-group tmux session names."
-  },
-  {
-    "file": "skills/dashboard/src/lib/runtime-api.js",
-    "text": "const available = latest[runtime === 'claude' ? 'cc' : runtime] ?? null;",
-    "reason": "dispatch:upgrade: Reads the legacy Claude version checker field."
   },
   {
     "file": "skills/dashboard/src/lib/schema.js",
@@ -1715,11 +1670,6 @@
     "reason": "dispatch:dashboard: Runs a query tied to a runtime-specific transcript layout."
   },
   {
-    "file": "skills/dashboard/src/lib/version-checker.js",
-    "text": "this._latest = { zylos: null, cc: null, codex: null };",
-    "reason": "gap: The current version checker only checks Claude and Codex."
-  },
-  {
     "file": "skills/dashboard/src/lib/workbench/group-snapshot.js",
     "text": "row.model = usage?.valid ? (['claude', 'agy'].includes(row.target.runtime) ? usage.value.model?.id : usage.value.model) ?? null",
     "reason": "dispatch:usage: Projects runtime-specific model and effort fields from usage."
@@ -1735,19 +1685,9 @@
     "reason": "dispatch:dashboard: Interprets the runtime-specific rotation event."
   },
   {
-    "file": "skills/dashboard/public/js/action-result.js",
-    "text": "return action === 'upgrade-cc' && runtime === 'agy'",
-    "reason": "dispatch:upgrade: Shows an unknown CLI upgrade outcome specifically for Antigravity."
-  },
-  {
     "file": "skills/dashboard/public/js/agent-fleet.js",
     "text": "const runtimes = tile.self.runtimes ?? ['claude', 'codex'].filter(runtime => accounts[runtime] != null);",
     "reason": "legacy: Reconstructs quota runtimes for older peers that do not report the runtimes field."
-  },
-  {
-    "file": "skills/dashboard/public/js/app.js",
-    "text": "if (action === 'upgrade-cc' && actionRuntime === 'agy' && r.status >= 500",
-    "reason": "dispatch:upgrade: Handles an uncertain Antigravity CLI upgrade response."
   },
   {
     "file": "skills/dashboard/public/js/runtime-ui.js",
@@ -1773,11 +1713,6 @@
     "file": "skills/dashboard/public/js/wb/page-actions.js",
     "text": "'switch-runtime': () => body?.runtime === 'codex' ? t('confirm.switch_runtime_codex') : t('confirm.switch_runtime', { value: body?.runtime }),",
     "reason": "dispatch:dashboard: Chooses the dedicated Codex switch confirmation."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/page-actions.js",
-    "text": "'upgrade-cc': () => runtime === 'codex' ? t('confirm.upgrade_codex') : runtime === 'claude' ? t('confirm.upgrade_cc')",
-    "reason": "dispatch:upgrade: Selects dedicated Codex and Claude CLI upgrade confirmations."
   },
   {
     "file": "skills/dashboard/public/js/wb/settings-defaults.js",
@@ -1848,21 +1783,6 @@
     "file": "skills/dashboard/public/js/wb/settings-pricing.js",
     "text": "if (value === 'codex') saved[value].priorityModelPrices = structuredClone(runtimes[value].priorityModelPrices);",
     "reason": "dispatch:dashboard: Updates the saved priority-price baseline only for Codex."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/settings-version.js",
-    "text": "const codex = runtime === 'codex';",
-    "reason": "dispatch:upgrade: Selects the dedicated Codex version and CLI-upgrade presentation."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/settings-version.js",
-    "text": "root.append(element(document, 'p', `${codex ? 'Codex' : runtime === 'claude' ? 'CC' : name} · ${version ? 'v' + version : t('wb.unknown')}${update ? ' ↑' + update : ''}`));",
-    "reason": "text: Preserves the approved CC and Codex abbreviations in the version row."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/settings-version.js",
-    "text": "const label = upgrade.querySelector('#action-cli-label'); if (label) label.textContent = runtime === 'claude' || codex",
-    "reason": "dispatch:upgrade: Uses the existing dedicated upgrade-action labels for Claude and Codex."
   },
   {
     "file": "skills/dashboard/public/js/wb/settings.js",

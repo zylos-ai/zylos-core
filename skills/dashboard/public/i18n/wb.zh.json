@@ -333,6 +333,7 @@
   "wb.settings.addPrice": "添加价格",
   "wb.settings.pricesSaved": "两套价格已保存，只影响之后入库的行",
   "wb.settings.updateTo": "可更新到 {version}",
+  "wb.settings.updateCheckUnsupported": "不支持检查更新",
   "wb.settings.theme.light": "浅色",
   "wb.settings.theme.dark": "深色",
   "wb.settings.theme.system": "跟随系统",

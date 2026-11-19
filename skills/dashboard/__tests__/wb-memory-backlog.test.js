@@ -299,8 +299,6 @@ test('memory backlog HTTP route shares the detail cache and accepts read scope',
   const readable = await request('/api/memory/backlog');
   assert.equal(readable.status, 200);
   assert.equal((await readable.json()).groups[0].count, 7);
-  assert.deepEqual(versionCalls, ['zylos', 'claude', 'codex', 'agy'].map(file => ({ file, args: ['--version'] })),
-    'startup probes use the injected async transport; API reads add no version calls');
   const detail = await request('/api/groups/origin/backlog', 'admin');
   assert.equal(detail.status, 200);
   assert.equal((await detail.json()).count, 7);
@@ -332,6 +330,10 @@ test('memory backlog HTTP route shares the detail cache and accepts read scope',
     { sessionGroup: 'telegram:dm-1001', displayName: 'Product notes' },
   ]);
   assert.ok(scoped.root.children.find(node => node.path === 'session-groups').children.some(node => node.name === 'bad name'));
+  const versionCommands = ['zylos', path.join(root, 'claude'), path.join(root, 'codex'), path.join(root, 'agy')];
+  assert.deepEqual(versionCalls.toSorted((a, b) => a.file.localeCompare(b.file)),
+    versionCommands.sort((a, b) => a.localeCompare(b)).map(file => ({ file, args: ['--version'] })),
+    'startup probes use the injected async transport; API reads add no version calls');
 });
 
 // Real memory and group readers; in-memory catalog/backlog adapters only.

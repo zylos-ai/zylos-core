@@ -26,14 +26,13 @@ export function renderVersion(root, info, { upgrade, document = root.ownerDocume
     const hint = element(document, 'button', t('wb.settings.updateTo', { version: ri.zylos?.update }), 'wb-link-btn'); hint.type = 'button'; hint.id = 'settings-zylos-update';
     hint.title = t('info.zylos_update_hint', { version: ri.zylos?.update }); hint.addEventListener('click', () => onHint(hint)); root.append(hint);
   }
-  const codex = runtime === 'codex';
   const name = runtimeName(runtime);
   const version = ri[runtime]?.installed;
   const update = ri[runtime]?.update;
-  root.append(element(document, 'p', `${codex ? 'Codex' : runtime === 'claude' ? 'CC' : name} · ${version ? 'v' + version : t('wb.unknown')}${update ? ' ↑' + update : ''}`));
+  const updateNote = ri[runtime]?.update_check === 'unsupported' ? ` · ${t('wb.settings.updateCheckUnsupported')}` : '';
+  root.append(element(document, 'p', `${name} · ${version ? 'v' + version : t('wb.unknown')}${update ? ' ↑' + update : ''}${updateNote}`));
   if (upgrade) {
-    const label = upgrade.querySelector('#action-cli-label'); if (label) label.textContent = runtime === 'claude' || codex
-      ? t(codex ? 'actions.upgrade_codex' : 'actions.upgrade_cc') : t('actions.upgrade_runtime', { runtime: name });
+    const label = upgrade.querySelector('#action-cli-label'); if (label) label.textContent = t('actions.upgrade_runtime', { runtime: name });
     const badge = upgrade.querySelector('#action-cc-ver'); if (badge) { badge.textContent = version ? ' v' + version : ''; badge.classList.toggle('action-ver-dot', !!update); }
     upgrade.disabled = readOnly; upgrade.title = readOnly ? t('remote.actions_read_only_tooltip') : ''; root.append(upgrade);
   }

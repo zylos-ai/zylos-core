@@ -17,10 +17,12 @@ import { scheduleEnv } from './fixtures/schedule-env.js';
 // command starts. Only a loopback HTTP listener runs, closed with all handles below.
 test('state APIs await a fresh observation before answering idle requests', { timeout: 20000 }, async t => {
   const install = scheduleEnv(t, { link: false });
-  const previous = Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR', 'TMUX', 'DASHBOARD_PORT'].map(key => [key, process.env[key]]));
+  const previous = Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR', 'TMUX', 'DASHBOARD_PORT', 'AGY_BIN'].map(key => [key, process.env[key]]));
   for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR']) process.env[key] = install.env[key];
   delete process.env.TMUX;
   process.env.DASHBOARD_PORT = '0';
+  const agyBin = path.join(install.root, 'runtime-bin', 'agy');
+  process.env.AGY_BIN = agyBin;
   for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR']) assert.ok(process.env[key].startsWith(install.root + path.sep));
   assert.notEqual(fs.realpathSync(process.env.HOME), fs.realpathSync(os.userInfo().homedir));
   assert.ok(Buffer.byteLength(path.join(process.env.TMUX_TMPDIR, 'test.sock')) < 104);
@@ -95,6 +97,20 @@ test('state APIs await a fresh observation before answering idle requests', { ti
   await login.text();
   assert.equal(login.status, 302);
   const cookie = login.headers.getSetCookie().find(value => value.startsWith('__Secure-zylos_dashboard_session=')).split(';')[0];
+  await t.test('an admin recheck refreshes the installed runtime version immediately', async () => {
+    const headers = { cookie, origin };
+    const before = await fetch(origin + '/api/instance', { headers, signal: t.signal });
+    assert.equal(before.status, 200);
+    assert.equal((await before.json()).versions.agy.installed, null);
+    fs.mkdirSync(path.dirname(agyBin), { recursive: true });
+    fs.writeFileSync(agyBin, `#!${process.execPath}\nconsole.log('Antigravity CLI 1.5.10');\n`, { mode: 0o700 });
+    const recheck = await fetch(origin + '/api/instance/actions/recheck-runtime-cli', { method: 'POST', headers, signal: t.signal });
+    assert.equal(recheck.status, 200);
+    assert.deepEqual(await recheck.json(), { ok: true });
+    const after = await fetch(origin + '/api/instance', { headers, signal: t.signal });
+    assert.equal(after.status, 200);
+    assert.equal((await after.json()).versions.agy.installed, '1.5.10');
+  });
   const beforeOptions = sample;
   const runtimeOptions = await fetch(origin + '/api/instance/runtime-options', { headers: { cookie }, signal: t.signal });
   assert.equal(runtimeOptions.status, 200);

@@ -51,9 +51,12 @@ export function createRuntimeOverridesReader({ zylosDir, displayNames, run = pro
   };
 }
 
-export function runtimeVersionRecord(runtime, { installed = {}, latest = {} } = {}) {
+export function runtimeVersionRecord(runtime, { installed = {}, latest = {}, unsupported = [] } = {}) {
   const current = installed[runtime] ?? null;
-  const available = latest[runtime === 'claude' ? 'cc' : runtime] ?? null;
+  if (unsupported.includes(runtime)) {
+    return { installed: current, latest: null, update: null, update_check: 'unsupported' };
+  }
+  const available = latest[runtime] ?? null;
   return { installed: current, latest: available,
     update: current && available && isNewerVersion(available, current) ? available : null };
 }

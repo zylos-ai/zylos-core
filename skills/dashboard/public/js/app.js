@@ -30,6 +30,7 @@ import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPa
 import { createFleetSounds } from './fleet-sounds.js';
 import { refreshDashboardState } from './state-refresh.js';
 import { formatActionResult, actionFailureMessage } from './action-result.js';
+import { runtimeName } from './wb/plain-text.js';
 import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from './origin-lock.js';
 import { countLabel } from './count-label.js';
 
@@ -2778,7 +2779,7 @@ function createActionsModal() {
     <p id="action-mode-status" class="wb-note"></p>
     <p id="action-instance-status" class="wb-note"></p>
     <p id="action-restart-status" class="wb-note"></p>
-    <button class="wb-btn" data-action="upgrade-cc" type="button"><i class="wb-ico wb-ico-up wb-ico-xs" aria-hidden="true"></i><span id="action-cli-label">${esc(t('actions.upgrade_cc'))}</span><span class="action-ver" id="action-cc-ver"></span></button>
+    <button class="wb-btn" data-action="upgrade-cc" type="button"><i class="wb-ico wb-ico-up wb-ico-xs" aria-hidden="true"></i><span id="action-cli-label">${esc(t('actions.upgrade_runtime', { runtime: '' }).trim())}</span><span class="action-ver" id="action-cc-ver"></span></button>
   <div class="wb-note" id="action-status" role="status" hidden></div>`;
   document.body.appendChild(overlay);
   actionsModal = overlay;
@@ -2941,10 +2942,10 @@ async function sendAction(action, body) {
       body: JSON.stringify(request.body)
     });
     const result = await r.json();
-    if (action === 'upgrade-cc' && actionRuntime === 'agy' && r.status >= 500
+    if (action === 'upgrade-cc' && r.status >= 500
       && !['upgrade_failed', 'deadline_exceeded'].includes(result.error?.code ?? result.error)) {
-      result.messageKey = 'result.agy_upgrade_unknown';
-      result.messageParams = null;
+      result.messageKey = 'result.runtime_upgrade_unknown';
+      result.messageParams = { runtime: runtimeName(actionRuntime) || t('wb.unknown') };
     }
     if (action === 'restart-session' && result.requestId) {
       pendingManualRestart = result.submission === 'unknown' ? { requestId: result.requestId, submission: result.submission, runId: body?.runId } : null;
@@ -2991,7 +2992,7 @@ async function sendAction(action, body) {
   } catch (err) {
     if (statusEl) {
       statusEl.className = 'modal-status error';
-      statusEl.textContent = actionFailureMessage(action, actionRuntime, err, t);
+      statusEl.textContent = actionFailureMessage(action, runtimeName(actionRuntime) || t('wb.unknown'), err, t);
     }
     return false;
   }

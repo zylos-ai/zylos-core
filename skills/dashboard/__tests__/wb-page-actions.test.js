@@ -45,12 +45,12 @@ test('upgrading the CLI from the session controls asks first; cancelling sends n
   const no = actions({ answer: false }), c = controls();
   bindActionControls(c.root, no.run);
   await c.upgrade.dispatch('click');
-  assert.deepEqual(no.asked, ['confirm.upgrade_cc']);
+  assert.deepEqual(no.asked, ['confirm.upgrade_runtime:{"runtime":"Claude"}']);
   assert.deepEqual(no.sent, []);
   const yes = actions({ runtime: 'codex' }), c2 = controls();
   bindActionControls(c2.root, yes.run);
   await c2.upgrade.dispatch('click');
-  assert.deepEqual(yes.asked, ['confirm.upgrade_codex'], 'a Codex machine is asked about upgrading Codex');
+  assert.deepEqual(yes.asked, ['confirm.upgrade_runtime:{"runtime":"Codex"}'], 'a Codex machine is asked about upgrading Codex');
   assert.deepEqual(yes.sent, [{ action: 'upgrade-cc', body: undefined }]);
 });
 

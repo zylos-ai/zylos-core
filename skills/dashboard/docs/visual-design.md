@@ -239,7 +239,7 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] Automatic naming and deletion safety checks explain permission refusals without suggesting a retry. Naming retains its existing network/unknown-result and temporary-failure messages; raw error details remain folded in the technical view. These explanations share the scheduled-task permission mapping. Scheduled-task permission refusals show only the localized explanation, without appending the raw server message; other error details retain their existing formatting.
 
-[Current] The settings version panel and CLI upgrade confirmation use Antigravity for an `agy` instance; Claude and Codex retain their existing labels. CLI upgrade results identify Antigravity, and an unknown runtime receives an explicit unsupported result. A missing runtime name uses the localized unknown label in confirmation. Confirmed upgrade failures and deadline outcomes retain their specific messages; only lost responses and unconfirmed upstream errors show an unknown outcome. Layout and control dimensions are unchanged.
+[Current] The settings version panel, CLI upgrade action and confirmation use the runtime display names Claude, Codex and Antigravity. The Antigravity version row states that update checks are unsupported. A missing runtime name uses the localized unknown label in confirmation. Confirmed upgrade failures and deadlines retain their specific outcomes. Lost responses and unconfirmed upstream errors identify the runtime and show an unknown outcome. Layout and control dimensions are unchanged.
 
 ## 8. Review Checklist and Browser Gates
 
