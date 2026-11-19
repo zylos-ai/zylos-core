@@ -53,7 +53,7 @@ try {
   const logs = [];
   const start = () => startSupervisor({ env: process.env, db: { ...coreDb, ...db, getDb: () => database }, scenes, now: () => now,
     readMode: () => ({ mode: 'multi' }), readConfiguration: () => ({ mode: 'multi', runtime: 'claude', capacity: 2,
-      ...(scenario === 'defer' ? { hotTtlSeconds: 1 } : {}) }),
+      hotTtlSeconds: scenario === 'defer' ? 1 : 1800 }),
     resolveTargetRuntime: () => 'claude', readSyncMarker: () => ({ held: false, stale: false }),
     machineTasks: { tick() {}, stop() {} }, legacyStatus: { tick() {}, close() {} },
     sendAlert: () => assert.fail('External sends forbidden'), log: event => { if (logs.length < 64) logs.push(event); },
