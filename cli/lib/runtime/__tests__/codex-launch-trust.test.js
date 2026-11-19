@@ -152,6 +152,21 @@ test('Codex launch refreshes changed hooks before the tmux launch boundary and s
   assert.equal(calls.length, 3);
 });
 
+test('missing Codex executable rejects before tmux with RUNTIME_NOT_INSTALLED', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-missing-bin-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const env = { HOME: root, PATH: root };
+  let tmuxCalls = 0;
+  const dependencies = {
+    openTmuxConnection() {
+      tmuxCalls++;
+      assert.fail('missing Codex must not open tmux');
+    },
+  };
+  await assert.rejects(launchSession(launchArgs, { root, env, dependencies }), { code: 'RUNTIME_NOT_INSTALLED' });
+  assert.equal(tmuxCalls, 0);
+});
+
 test('Codex trust failure rejects launch before any tmux/runtime launch', async t => {
   const f = fixture(t);
   const calls = tmuxPreflight(f);

@@ -9,6 +9,7 @@ assert.equal(fs.realpathSync(process.env.HOME), process.env.HOME);
 assert.ok(process.env.TEST_PRIVATE_SOCKET.startsWith(path.dirname(process.env.HOME) + path.sep));
 
 if (process.argv.includes('--deliver')) {
+  const { createSessionOps } = await import('../../cli/lib/runtime/session-ops.js');
   const { openTmuxConnection } = await import('../../cli/lib/runtime/tmux-connection.js');
   const { resolveSessionTarget } = await import('../../cli/lib/runtime/session-target.js');
   const connection = await openTmuxConnection({ socketPath: process.env.TEST_PRIVATE_SOCKET });
