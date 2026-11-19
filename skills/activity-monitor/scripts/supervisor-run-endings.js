@@ -146,7 +146,8 @@ export class SupervisorRunEndings {
   }
 
   async advance(context) {
-    if (context.configuration.mode !== 'multi') return;
+    const { mode, legacy } = context.configuration;
+    if (mode !== 'multi' && (mode !== 'single' || legacy)) return;
     let slots;
     try { slots = await this.db.listSlotOccupancy(); }
     catch (cause) { this.reportReadFailure(cause); return; }
@@ -154,7 +155,8 @@ export class SupervisorRunEndings {
     let fences;
     try { fences = await this.db.listDrainFences(); }
     catch (cause) { this.reportReadFailure(cause); await this.pruneHeld(); return; }
-    const candidates = [...slots.filter(row => row.state === 'running'), { sessionGroup: 'origin', runId: null }]
+    const candidates = [...(mode === 'multi' ? slots.filter(row => row.state === 'running') : []),
+      { sessionGroup: 'origin', runId: null }]
       .filter(row => {
         const group = row.sessionGroup;
         if (!this.isObservable(group) || this.scenePresent(context, group)) return false;

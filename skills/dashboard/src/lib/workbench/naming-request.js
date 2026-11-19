@@ -35,9 +35,8 @@ function commandFailure(error) {
 }
 
 /**
- * Hand the naming prompt to Origin as one control. `readMode` reads this instance's session mode. Multi mode
- * addresses the `origin` group; otherwise the target stays empty, which C4 accepts only while the instance really
- * is in single mode (its one session). A queued control is the whole result: nothing waits for, or reports, the
+ * Hand the naming prompt to Origin as one control. A configured session mode addresses the `origin` group;
+ * instances without the session_mode key keep the legacy empty target. A queued control is the whole result: nothing waits for, or reports, the
  * naming itself. Failures answer with an error code and a fixed sentence; the child's own message and stderr go to
  * `log` (the service log) only.
  */
@@ -46,7 +45,7 @@ export function createNamingRequest({ zylosDir, readMode, execute = promisify(ex
   const childEnv = { ...env, ZYLOS_DIR: zylosDir };
   delete childEnv.ZYLOS_SESSION_GROUP;
   return async function sendNamingPrompt() {
-    const sessionGroup = await readMode() === 'multi' ? 'origin' : null;
+    const sessionGroup = ['single', 'multi'].includes(await readMode()) ? 'origin' : null;
     const script = path.join(zylosDir, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
     const content = namePromptText(path.join(zylosDir, '.claude', 'skills', 'dashboard', 'scripts', 'group-name.js'),
       NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH);

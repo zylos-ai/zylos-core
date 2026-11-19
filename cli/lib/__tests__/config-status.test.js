@@ -80,13 +80,14 @@ for (const [name, source, reason] of badConfigs) {
 
 const fixture = () => ({ mode: () => ({ mode: 'single' }), configIssue: () => null,
   resolveRoot: () => {}, now: () => 1234, runtimes: [],
+  facts: () => ({ originNeed: { inbound: 0, controls: 0, continuation: false, oldestAt: null } }),
   session: async () => ({ identity: { present: false }, status: { valid: false, reason: 'not_running', sampledAt: null } }) });
 
 test('healthy status projection retains the baseline shape', async () => {
   assert.deepEqual(await collectStatus(fixture()), {
     sessionMode: 'single', view: 'single', origin: { sessionGroup: null, presence: 'not_running', runId: null,
       sessionId: null, runtime: null, status: { valid: false, reason: 'not_running', state: null, idleSeconds: null, lastState: null, lastIdleSeconds: null, sampledAt: null }, error: null },
-    originNeed: null, groups: [], groupListError: null, runtimeHealth: {}, supervisorPaused: false, readAt: 1234,
+    originNeed: { inbound: 0, controls: 0, continuation: false, oldestAt: null }, groups: [], groupListError: null, runtimeHealth: {}, supervisorPaused: false, readAt: 1234,
   });
 });
 

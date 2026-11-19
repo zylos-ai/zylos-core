@@ -26,8 +26,8 @@ export async function readOriginFacts({ zylosDir = ZYLOS_DIR, nowSec = Math.floo
 }
 
 /** Human-facing interpretation; the status JSON retains the observed presence. */
-export function describeOrigin({ view, origin, originNeed, runtimeHealth, targetRuntime, nowSec }) {
-  if (view !== 'multi') return { state: origin.presence, failure: false };
+export function describeOrigin({ view, sessionMode, origin, originNeed, runtimeHealth, targetRuntime, nowSec }) {
+  if (view !== 'multi' && sessionMode !== 'single') return { state: origin.presence, failure: false };
   const readable = originNeed && !originNeed.error;
   const needed = readable && (originNeed.inbound + originNeed.controls > 0 || originNeed.continuation);
   const health = targetRuntime !== null ? runtimeHealth?.[targetRuntime] : null;

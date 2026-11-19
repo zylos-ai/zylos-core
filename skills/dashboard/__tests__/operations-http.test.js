@@ -70,7 +70,8 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
       assert.equal(args[0], path.join(root, '.claude/skills/comm-bridge/scripts/c4-control.js'));
       assert.equal(args[1], 'enqueue');
       assert.equal(args[args.indexOf('--target-run') + 1], stale ? 'old-run' : 'current-run');
-      assert.equal(args.includes('--group'), mode === 'multi');
+      assert.equal(args.includes('--group'), mode !== null);
+      if (mode !== null) assert.equal(args[args.indexOf('--group') + 1], 'origin');
       controlCalls++;
       return { stdout: JSON.stringify(stale ? { ok: false, error: { code: 'TARGET_MISMATCH', runId: 'current-run' } } : { ok: true, data: { id: controlCalls } }) };
   };

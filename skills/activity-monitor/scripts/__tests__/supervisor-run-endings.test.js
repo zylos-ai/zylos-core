@@ -23,10 +23,14 @@ test('first reconciliation after restart records each missing run exactly once w
   f.restart(); await f.step(); assert.equal(f.records().length, 2);
 });
 
-for (const gate of ['single', 'transition', 'global fence', 'group fence', 'live snapshot', 'old file']) {
+for (const gate of ['legacy single', 'transition', 'global fence', 'group fence', 'live snapshot', 'old file']) {
   test(`reconciliation does not record through ${gate}`, async t => {
     const f = await runEndingFixture(t); await f.add(); f.now += 31000;
-    if (gate === 'single') f.context.configuration.mode = 'single';
+    if (gate === 'legacy single') {
+      f.context.configuration = { mode: 'single', legacy: true };
+      f.context.scenes = [];
+      await f.write('origin');
+    }
     if (gate === 'transition') f.service.db = { ...f.store, getModeTransition: () => ({ phase: 'gating' }) };
     if (gate === 'global fence') f.store.setDrainFence('*');
     if (gate === 'group fence') f.store.setDrainFence('test:a', { reason: 'upgrade', runId: 'r1' });

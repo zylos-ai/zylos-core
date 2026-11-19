@@ -209,18 +209,6 @@ test('marker clearing rejects invalid identities and single mode without writes'
   assert.deepEqual(snapshot(db), before);
 });
 
-test('cutover clearing removes all markers including Origin without changing records or controls', t => {
-  const { db, store } = fixture(t, { now: () => clock * 1000 });
-  for (const group of ['a', 'b', 'origin']) store.recordRunEnd(group, { runId: group, reason: 'unexpected' });
-  store.recordRunEnd('idle', { runId: 'idle', reason: 'ttl' });
-  const controls = db.prepare('SELECT * FROM control_queue').all();
-  assert.deepEqual(store.clearAllContinuations(), { cleared: 3 });
-  assert.deepEqual(store.clearAllContinuations(), { cleared: 0 });
-  assert.deepEqual(store.listPendingContinuations(), []);
-  assert.deepEqual(store.listRunEndings(['a', 'b', 'origin', 'idle']).map(row => row.continuationPending), [0, 0, 0, 0]);
-  assert.deepEqual(db.prepare('SELECT * FROM control_queue').all(), controls);
-});
-
 test('run-ending reads use one scoped query and exclude unrelated historical groups', t => {
   const trace = [];
   const { db, store } = fixture(t, { now: () => clock * 1000 }, false, { verbose: sql => trace.push(sql) });
@@ -273,7 +261,7 @@ test('current schema missing the run-ending table is rejected without recreating
 
 test('public database facade exposes run-ending primitives', async () => {
   const facade = await import('../c4-db.js');
-  for (const name of ['recordRunEnd', 'listRunEndings', 'listPendingContinuations', 'clearContinuation', 'clearAllContinuations']) assert.equal(typeof facade[name], 'function');
+  for (const name of ['recordRunEnd', 'listRunEndings', 'listPendingContinuations', 'clearContinuation']) assert.equal(typeof facade[name], 'function');
 });
 
 test('current schema with the retired continuation column is rejected without mutation', t => {

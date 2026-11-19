@@ -50,15 +50,25 @@ test('subagents, missing run, disabled and malformed policy never enqueue', asyn
 
 function restartOptions(config = {}) {
   const calls = [];
-  return { calls, readMode: () => ({ mode: config.session_mode ?? null }), readTransition: () => null,
+  return { calls, readMode: () => ({ mode: config.session_mode ?? null, keyPresent: Object.hasOwn(config, 'session_mode') }), readTransition: () => null,
     exec: (...args) => calls.push(args), exists: () => true, log: () => {}, errorLog: () => {} };
 }
 
-test('stable single restart uses require-idle', async () => {
-  const options = restartOptions({ session_mode: 'single' });
+test('unmigrated single restart uses require-idle', async () => {
+  const options = restartOptions();
   assert.equal((await enqueueRestartIfNeeded(options)).submitted, true);
   assert.ok(options.calls[0][1].includes('--require-idle'));
   assert.equal(options.calls[0][1].includes('--group'), false);
+});
+
+test('native single hook updates submit an Origin restart request', async () => {
+  const options = sockFixture({ kind: 'accepted', reply: { result: 'accepted', runCount: 1 } });
+  options.readMode = () => ({ mode: 'single', keyPresent: true });
+  const result = await enqueueRestartIfNeeded(options);
+  assert.equal(result.submitted, true);
+  assert.equal(options.submits.length, 1);
+  assert.equal(options.submits[0][0].type, 'restart_all');
+  assert.equal(options.calls.length, 0);
 });
 
 test('unreadable mode or transition never falls back to exit', async () => {
@@ -128,13 +138,13 @@ test('single_mode falls back only after fresh stable single reads and keeps requ
   assert.deepEqual(options.calls[0][1].slice(1), ['enqueue', '--content', '/exit', '--priority', '1', '--require-idle', '--no-ack-suffix']);
   assert.equal(options.submits.length, 1); assert.equal(options.lookups.length, 0);
 
-  for (const current of ['multi', 'transition', 'config_error', 'transition_error']) {
+  for (const current of ['multi', 'native_single', 'transition', 'config_error', 'transition_error']) {
     const rejected = sockFixture(rejection);
     let configReads = 0, transitionReads = 0;
     rejected.readMode = () => {
       if (++configReads === 1) return { mode: 'multi' };
       if (current === 'config_error') throw new Error('unreadable config');
-      return { mode: current === 'multi' ? current : 'single' };
+      return { mode: current === 'multi' ? current : 'single', keyPresent: current === 'native_single' };
     };
     rejected.readTransition = () => {
       if (++transitionReads === 1) return null;
@@ -234,7 +244,7 @@ test('upgrade refreshes stale Codex hooks with unchanged TOML and dry-run preser
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const root = path.join(home, 'zylos');
   fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
-  fs.writeFileSync(path.join(root, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude', session_mode: 'single' }));
+  fs.writeFileSync(path.join(root, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude' }));
   const controlPath = path.join(root, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
   const restartLog = path.join(home, 'restart.jsonl');
   fs.mkdirSync(path.dirname(controlPath), { recursive: true });

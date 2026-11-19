@@ -16,8 +16,6 @@ test('W4-W6 paths isolate run and scope without creating directories',()=>{
   assert.equal(p.modeSwitchPreviousDir(run,'_global',env),`${prefix}/previous/_global`);
   assert.equal(p.modeSwitchDonePath(run,'lark:x',env),`${prefix}/previous/lark:x/.done`);
   assert.equal(p.modeSwitchUngroupedPath(run,env),`${prefix}/ungrouped.md`);
-  assert.equal(p.modeSwitchGroupPath(run,'lark:x',env),`${prefix}/lark:x.md`);
-  assert.notEqual(p.modeSwitchGroupPath(run,'lark:x',env),p.modeSwitchGroupPath(run,'lark:y',env));
   assert.notEqual(p.modeSwitchDir(run,env),p.modeSwitchDir('abcdefab-1234-1234-1234-123456789abc',env));
   for(const bad of ['',null,'../x','run']) assert.throws(()=>p.modeSwitchDir(bad,env),{code:'MODE_SWITCH_RUN_INVALID'});
   for(const bad of ['',null,'../x','_global']) assert.throws(()=>p.rulesPath(bad,env),{code:'SESSION_GROUP_INVALID'});

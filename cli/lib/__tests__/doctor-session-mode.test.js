@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { CONFIG_FILE } from '../config.js';
 import { collectDiagnostics, buildDiagnosticJson, readDoctorSessionModeStatus,
   formatDoctorSessionModeStatus, isDiagnosticOnlyIssue } from '../../commands/doctor.js';
 import { readSessionModeStatus } from '../session-mode-status.js';
@@ -39,7 +42,7 @@ test('doctor keeps session mode diagnostics out of automatic fixes', async () =>
   assert.equal(isDiagnosticOnlyIssue({ id: 'origin_unavailable' }), true);
 });
 
-test('doctor collector retains authoritative gating phase and blocker', async () => {
+test('doctor collector retains mode diagnostics and recognizes a sleeping native Origin', async t => {
   let reads = 0;
   const modeStatus = () => readDoctorSessionModeStatus({ databaseExists: () => true,
     readStatus: () => { reads++; return readSessionModeStatus(statusOptions()); } });
@@ -62,6 +65,32 @@ test('doctor collector retains authoritative gating phase and blocker', async ()
   assert.match(text, /Mode transition: single -> multi \(gating\)/);
   assert.match(text, /Global gate: present/);
   assert.match(text, /Mode transition blocked: running_control_without_deadline:machine:4698/);
+  // Exercise the real collector's null-group native-single branch. Only its
+  // status/runtime readers are injected; no tmux, PM2, CLI or network is used.
+  const previous = fs.existsSync(CONFIG_FILE) ? fs.readFileSync(CONFIG_FILE) : null;
+  fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+  t.after(() => { if (previous === null) fs.rmSync(CONFIG_FILE); else fs.writeFileSync(CONFIG_FILE, previous); });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify({ session_mode: 'single' }));
+  let statusReads = 0;
+  t.mock.module('../status-view.js', { namedExports: { collectStatus: async () => {
+    statusReads++;
+    return { view: 'single', sessionMode: 'single', origin: { presence: 'not_running' },
+      originNeed: { inbound: 0, controls: 0, continuation: false, oldestAt: null }, runtimeHealth: {}, readAt: 1000 };
+  } } });
+  t.mock.module('../session-state-reader.js', { namedExports: {
+    ...await import('../session-state-reader.js'),
+    resolveTargetRuntime: async group => { assert.equal(group, 'origin'); return 'codex'; },
+  } });
+  const { collectDiagnostics: collectNative } = await import('../../commands/doctor.js?native-single-sleep');
+  const native = await collectNative({}, {
+    resolve: () => ({ runtime: 'unknown', sessionGroup: null, live: { tmuxName: 'unused' } }),
+    tmuxCheck: () => ({ installed: false }), pm2Check: () => ({ installed: false }),
+    psCheck: () => ({ available: true }), network: () => assert.fail('no network expected'),
+    modeStatus: async () => ({ skipped: true, status: null, error: null }),
+  });
+  assert.equal(statusReads, 1);
+  assert.deepEqual(native.origin, { state: 'sleeping', failure: false });
+  assert.equal(native.services.session, false);
 });
 
 for (const transition of [null, { ...row, reason: null }]) {

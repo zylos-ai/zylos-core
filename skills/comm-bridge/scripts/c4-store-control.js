@@ -132,7 +132,7 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
       const { orphans, minAgeSeconds } = options;
       if (!Array.isArray(orphans) || !Number.isSafeInteger(minAgeSeconds) || minAgeSeconds < 0) throw dataError('INVALID_ARGS', 'Invalid slot pruning options');
       for (const row of orphans) { slotOptions(row, ['sessionGroup', 'runId']); slotGroup(row.sessionGroup); slotRun(row.runId); }
-      multiSlots();
+      if (!baseline().keyPresent) throw dataError('INVALID_ARGS', 'Slot pruning requires an active migrated session scope');
       const current = seconds();
       const deletedHeld = run(c, "DELETE FROM slot_occupancy WHERE state='held' AND held_until<=?", current).changes;
       const deletedOrphans = [];
@@ -154,7 +154,6 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
       if (!config.keyPresent || (config.sessionMode === 'single' && sessionGroup !== 'origin')) throw dataError('INVALID_ARGS', 'Continuations require an active migrated session scope');
       return { cleared: run(c, 'UPDATE run_endings SET continuation_pending=0 WHERE session_group=? AND continuation_pending=1 AND run_id<>?', sessionGroup, runId).changes > 0 };
     }),
-    clearAllContinuations: () => write(c => ({ cleared: run(c, 'UPDATE run_endings SET continuation_pending=0 WHERE continuation_pending=1').changes })),
     clearContinuationsExceptOrigin: () => write(c => ({ cleared: run(c, "UPDATE run_endings SET continuation_pending=0 WHERE continuation_pending=1 AND session_group<>'origin'").changes })),
     getNextPendingControl: (current = seconds(), { sessionGroups } = {}) => {
       let sql = 'session_group IS NULL', args = [];

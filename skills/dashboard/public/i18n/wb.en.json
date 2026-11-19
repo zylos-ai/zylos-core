@@ -979,7 +979,7 @@
   "wb.settings.hotTtl.readOnly": "This value is read-only here; it cannot be changed on this page.",
   "wb.settings.hotTtl.environment": "Set by an environment variable; read-only.",
   "wb.settings.hotTtl.environmentInvalid": "An invalid environment variable is set. The effective fallback value is shown; this setting remains read-only.",
-  "wb.settings.hotTtl.single": "Not used in single-session mode. Switch to multiple groups to edit.",
+  "wb.settings.hotTtl.single": "In single mode, this setting applies to Origin. Instances awaiting mode migration remain read-only.",
   "wb.settings.hotTtl.exactSeconds": "Effective value: {minutes} min {remainder} sec ({seconds} seconds).",
   "wb.settings.hotTtl.confirm": "Reclaim idle group sessions and Origin after {minutes} minutes? This applies at the next reclaim check; memory and conversations are kept.",
   "wb.settings.hotTtl.saved": "Saved. The next reclaim check uses this time; no service restart is needed.",
