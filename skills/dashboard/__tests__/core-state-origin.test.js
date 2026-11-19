@@ -256,5 +256,16 @@ test('native single Origin sleeps and reports wake demand consistently with CLI 
     assert.ok(lines.some(line => line.includes(({ sleeping: 'Origin is asleep', waking: 'Origin is waking up', wake_overdue: 'Origin has pending work' })[state])));
     assert.equal(lines.some(line => /not_running|offline/i.test(line)), false);
   }
+  const lines = [], log = console.log;
+  console.log = line => lines.push(line);
+  try {
+    await showStatus([], { collect: () => ({ view: 'single', sessionMode: 'single',
+      origin: { presence: 'not_running', status: { valid: false } }, groups: [], originNeed: { inbound: 1, controls: 0, continuation: false, oldestAt: 700 },
+      runtimeHealth: { codex: { health: 'auth_failed' } }, readAt: now }),
+      resolveRuntime: async group => { assert.equal(group, 'origin'); return 'codex'; },
+      host: () => ({ services: [], disk: null }), alertNotice: () => ({ kind: 'ready' }) });
+  } finally { console.log = log; }
+  assert.match(lines.join('\n'), /Origin is waiting for codex authentication/);
+  assert.equal(lines.some(line => /not_running|offline/i.test(line)), false);
   assert.equal(describeOrigin({ view: 'single', sessionMode: null, origin: { presence: 'not_running' }, originNeed: need }).state, 'not_running');
 });
