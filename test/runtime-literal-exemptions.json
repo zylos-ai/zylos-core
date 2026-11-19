@@ -1838,5 +1838,140 @@
     "file": "skills/dashboard/src/lib/workbench/runs.js",
     "text": "if (event.runtime === 'codex' && !metadata?.oldSessionId) return 'rotate';",
     "reason": "dispatch:dashboard: Interprets the runtime-specific rotation event."
+  },
+  {
+    "file": "skills/dashboard/public/js/action-result.js",
+    "text": "return action === 'upgrade-cc' && runtime === 'agy'",
+    "reason": "dispatch:upgrade: Shows an unknown CLI upgrade outcome specifically for Antigravity."
+  },
+  {
+    "file": "skills/dashboard/public/js/agent-fleet.js",
+    "text": "const runtimes = tile.self.runtimes ?? ['claude', 'codex'].filter(runtime => accounts[runtime] != null);",
+    "reason": "legacy: Reconstructs quota runtimes for older peers that do not report the runtimes field."
+  },
+  {
+    "file": "skills/dashboard/public/js/app.js",
+    "text": "if (action === 'upgrade-cc' && actionRuntime === 'agy' && r.status >= 500",
+    "reason": "dispatch:upgrade: Handles an uncertain Antigravity CLI upgrade response."
+  },
+  {
+    "file": "skills/dashboard/public/js/runtime-ui.js",
+    "text": "options: [...(meta.runtime === 'codex' && !meta.current_model ? [{ value: '', labelKey: 'actions.unset', disabled: true, selected: true }] : []), ...models, { value: '__custom__', labelKey: 'actions.custom' }],",
+    "reason": "dispatch:dashboard: Offers a disabled unset model entry for Codex metadata."
+  },
+  {
+    "file": "skills/dashboard/public/js/runtime-ui.js",
+    "text": "const unavailable = meta.runtime === 'codex' && !list.includes(currentEffort);",
+    "reason": "dispatch:dashboard: Marks an unrecognized current Codex effort as unavailable."
+  },
+  {
+    "file": "skills/dashboard/public/js/runtime-ui.js",
+    "text": "hidden: !list.length && meta.runtime !== 'codex',",
+    "reason": "dispatch:dashboard: Retains the Codex effort control when the catalog is empty."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/group-config.js",
+    "text": "if (!model || !['claude', 'codex', 'agy'].includes(runtime) || Number.isFinite(state.meta[runtime]?.model_thresholds?.[model])) return;",
+    "reason": "inconsistent: Threshold reads accept Antigravity while the Dashboard threshold action still rejects it."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/page-actions.js",
+    "text": "'switch-runtime': () => body?.runtime === 'codex' ? t('confirm.switch_runtime_codex') : t('confirm.switch_runtime', { value: body?.runtime }),",
+    "reason": "dispatch:dashboard: Chooses the dedicated Codex switch confirmation."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/page-actions.js",
+    "text": "'upgrade-cc': () => runtime === 'codex' ? t('confirm.upgrade_codex') : runtime === 'claude' ? t('confirm.upgrade_cc')",
+    "reason": "dispatch:upgrade: Selects dedicated Codex and Claude CLI upgrade confirmations."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/settings-defaults.js",
+    "text": "const runtimes = ['claude', 'codex'];",
+    "reason": "gap: Default-engine settings currently offer only Claude and Codex."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/settings-defaults.js",
+    "text": "const engineName = runtime => runtime === 'codex' ? 'Codex' : 'Claude Code';",
+    "reason": "text: The default-engine controls use the existing Claude Code and Codex labels."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/settings-defaults.js",
+    "text": "return [runtime === 'codex' ? t('confirm.switch_runtime_codex') : t('confirm.switch_runtime', { value: engineName(runtime) }), runtimeConfirmation(snapshot, t)].join('\\n');",
+    "reason": "dispatch:dashboard: Uses a dedicated confirmation when saving Codex as the default engine."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
+    "text": "let runtime = data.active === 'codex' ? 'codex' : 'claude', expanded = false, stopped = false;",
+    "reason": "dispatch:dashboard: Opens the pricing tab for Codex only when explicitly active and uses Claude pricing otherwise."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
+    "text": "if (runtime === 'codex') payload.priorityModelPrices = collectPriceRows([...priorityRows.querySelectorAll('tr')]);",
+    "reason": "dispatch:dashboard: Captures the priority prices exclusive to Codex."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
+    "text": "if (value === 'codex') count += countPriceChanges(original.priorityModelPrices, value === runtime ? draftPriceRows([...priorityRows.querySelectorAll('tr')]) : payload.priorityModelPrices);",
+    "reason": "dispatch:dashboard: Counts changes to priority prices exclusive to Codex."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
+    "text": "const fast = value === runtime && value === 'claude' ? fastInput?.value ?? '' : Object.hasOwn(payload, '_editedFastMultiplier') ? String(payload._editedFastMultiplier ?? '') : fastSaved;",
+    "reason": "dispatch:dashboard: Reads the live fast-mode multiplier for the Claude tab."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
+    "text": "if (value === 'claude' && fast !== fastSaved) count++;",
+    "reason": "dispatch:dashboard: Counts changes to the Claude fast-mode multiplier."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
+    "text": "host.querySelector('#settings-priority-pricing-group').hidden = runtime !== 'codex';",
+    "reason": "dispatch:dashboard: Shows priority price controls for Codex only."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
+    "text": "host.querySelector('#settings-fast-mode-group').hidden = runtime !== 'claude';",
+    "reason": "dispatch:dashboard: Shows fast-mode multiplier controls for Claude only."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
+    "text": "text.append(element(document, 'b', item.model ?? t('wb.unknown'), 'wb-mono'), element(document, 'span', t('wb.settings.unmatchedTitle', { runtime: runtimeName(item.runtime === 'codex' ? 'codex' : 'claude') })),",
+    "reason": "dispatch:dashboard: Associates unmatched usage with the existing Codex or Claude price editor."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
+    "text": "capture(); runtime = item.runtime === 'codex' ? 'codex' : 'claude'; expanded = true;",
+    "reason": "dispatch:dashboard: Opens the appropriate existing price tab for an unmatched model."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
+    "text": "if (value === 'codex') runtimes[value].priorityModelPrices = payload.priorityModelPrices;",
+    "reason": "dispatch:dashboard: Writes the priority price field only for Codex."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
+    "text": "if (value === 'codex') saved[value].priorityModelPrices = structuredClone(runtimes[value].priorityModelPrices);",
+    "reason": "dispatch:dashboard: Updates the saved priority-price baseline only for Codex."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/settings-version.js",
+    "text": "const codex = runtime === 'codex';",
+    "reason": "dispatch:upgrade: Selects the dedicated Codex version and CLI-upgrade presentation."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/settings-version.js",
+    "text": "root.append(element(document, 'p', `${codex ? 'Codex' : runtime === 'claude' ? 'CC' : name} · ${version ? 'v' + version : t('wb.unknown')}${update ? ' ↑' + update : ''}`));",
+    "reason": "text: Preserves the approved CC and Codex abbreviations in the version row."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/settings-version.js",
+    "text": "const label = upgrade.querySelector('#action-cli-label'); if (label) label.textContent = runtime === 'claude' || codex",
+    "reason": "dispatch:upgrade: Uses the existing dedicated upgrade-action labels for Claude and Codex."
+  },
+  {
+    "file": "skills/dashboard/public/js/wb/settings.js",
+    "text": "onLoad({ snapshot: value(0), page: value(1), prices: value(2), usage: value(3), metadata: { claude: value(4), codex: value(5) } });",
+    "reason": "dispatch:dashboard: Maps the two existing runtime metadata responses to their respective engine keys."
   }
 ]

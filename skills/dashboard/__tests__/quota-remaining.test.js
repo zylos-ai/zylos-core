@@ -1,10 +1,21 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, instanceStrip } from '../public/js/wb/instance-strip.js';
-import { fleetSelfFromSnapshot, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
+
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
 import { setInstanceZone } from '../public/js/wb/instance-zone.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, instanceStrip } = await import('../public/js/wb/instance-strip.js');
+const { fleetSelfFromSnapshot, renderAgentFleetHtml } = await import('../public/js/agent-fleet.js');
 
 const fleet = { agents: [{ name: 'local', self: true, state: 'IDLE' }] };
 const pack = locale => JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
@@ -84,7 +95,6 @@ test('strip authentication and cooldown states keep their existing text and omit
     assert.ok(allNodes(box).some(node => node.classList.contains(health === 'auth_failed' ? 'wb-txt-err' : 'wb-txt-warn')));
   }
 });
-
 
 test('strip rounds fractional weekly quota in both percentage text and tooltip', () => {
   for (const locale of ['en', 'zh']) for (const level of ['plain', 'technical']) {

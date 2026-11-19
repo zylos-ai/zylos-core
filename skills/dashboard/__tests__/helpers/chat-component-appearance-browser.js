@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
 const schema = fileURLToPath(new URL('../../../comm-bridge/scripts/c4-content-schema.js', import.meta.url));
+const runtimeDescriptors = fileURLToPath(new URL('../../../../cli/lib/runtime/descriptors.js', import.meta.url));
 const fixture = fileURLToPath(new URL('./chat-component-appearance-fixture.js', import.meta.url));
 // Resolve the already provisioned dependency; never install or access a live service.
 const chart = fileURLToPath(new URL('./chart.umd.js', import.meta.resolve('chart.js')));
@@ -28,9 +29,10 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme, fix
     if (url.pathname === '/api/chat/conversations/fixture/attachments/image') {
       res.writeHead(200, { 'content-type': 'image/svg+xml' }); return res.end('<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" fill="#0f766e"/></svg>');
     }
-    const file = url.pathname === '/chat-schema.js' ? schema : url.pathname === '/fixture.js' ? fixturePath
+    const file = url.pathname === '/chat-schema.js' ? schema :
+      url.pathname === '/runtime-descriptors.js' ? runtimeDescriptors : url.pathname === '/fixture.js' ? fixturePath
       : url.pathname === '/vendor/chart.umd.js' ? chart : path.resolve(publicDir, '.' + decodeURIComponent(url.pathname));
-    if ((!file.startsWith(publicDir + path.sep) && ![schema, fixturePath, chart].includes(file)) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+    if ((!file.startsWith(publicDir + path.sep) && ![schema, runtimeDescriptors, fixturePath, chart].includes(file)) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
       if (missing.length < 5) missing.push(url.pathname); res.writeHead(404); return res.end();
     }
     const types = { '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.woff2': 'font/woff2' };

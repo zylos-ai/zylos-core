@@ -1,3 +1,4 @@
+import { registerHooks } from 'node:module';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -13,7 +14,6 @@ import { ChatHistory } from '../src/lib/chat/history.js';
 import { ChatActivity, SETTLE_MS, snapshotWorking, stepLabel, subtaskKey } from '../src/lib/chat/activity.js';
 import { handleChatHistory } from '../src/lib/chat/history-routes.js';
 import { workingHistory } from '../src/lib/workbench/working.js';
-import { livePresentation } from '../public/js/wb/conversation-activity.js';
 import { sendJson } from '../src/lib/http.js';
 import { migrateDatabase, TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { migrateSchema } from '../../comm-bridge/scripts/c4-migrations.js';
@@ -21,6 +21,16 @@ import { migrateToV2 } from '../../comm-bridge/scripts/c4-migrations-v2.js';
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
 import { CELL_A_LINES, CELL_B_LINES, CELL_C_LINES, CELL_D_LINES, V1_CHILD, V2_TASK, cellEndingAs, cellPolledInNewExec, rebase,
   v1ChildRollout, v1ParentTurn, v2CompletedTurn, v2InterruptedTurn } from './fixtures/codex-multi-agent-rollout.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { livePresentation } = await import('../public/js/wb/conversation-activity.js');
 
 const GROUP = 'dash-owned:a';
 const ID = `g:${Buffer.from(GROUP).toString('hex').toUpperCase()}`;

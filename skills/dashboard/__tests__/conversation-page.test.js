@@ -8,8 +8,11 @@ import { createDocument as conversationDocument } from './helpers/conversation-d
 
 const schemaPath = new URL('../public/chat-schema.js', import.meta.url).pathname;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
 registerHooks({
   resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
     if (context.parentURL && new URL(specifier, context.parentURL).pathname === schemaPath) return next(sourceSchema, context);
     return next(specifier, context);
   }
@@ -329,7 +332,6 @@ for (const stop of ['close', 'destroy']) {
   });
 }
 
-
 test('page reconciliation disposes charts owned by a message that leaves its snapshot', async t => {
   const document = conversationDocument(), root = document.createElement('div');
   const charts = [];
@@ -464,7 +466,6 @@ for (const locale of ['en', 'zh']) test(`push updates preserve the editor and ol
   page.close(); assert.equal(subscription, null);
 });
 
-
 test('initial ready catchup releases the loading notice without manual header read controls', async t => {
   const document = conversationDocument(), root = document.createElement('div');
   const resolvers = []; let subscription;
@@ -491,7 +492,6 @@ test('initial ready catchup releases the loading notice without manual header re
   for (const action of ['refreshMessages', 'refreshStatus']) assert.equal(root.querySelector(`.conversation-header [data-action="${action}"]`), null);
   assert.equal(allNodes(root).some(node => node.dataset.conversationId === 'g:BB'), false);
 });
-
 
 for (const locale of ['en', 'zh']) for (const retainedMessages of [0, 2]) for (const countsEstimated of [false, true]) {
   test(`completed deletion ${retainedMessages ? 'shows retained memory' : 'omits retention notice'} in ${locale} with ${countsEstimated ? 'estimated' : 'exact'} counts`, async t => {
@@ -541,7 +541,6 @@ for (const on of [true, false]) test(`unknown account health remains the header 
   assert.equal(header.classList.contains('conversation-restricted'), true);
   assert.equal(header.textContent, f.translations['chat.page.healthUnknown']);
 });
-
 
 for (const [sample, state] of [
   [{ valid: true, state: 'busy' }, { kind: 'busy' }],

@@ -1,3 +1,4 @@
+import { registerHooks } from 'node:module';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { writeMemory } from '../skills/zylos-memory/scripts/memory-write.js';
@@ -13,7 +14,16 @@ import { composeShardOutput, shardHeader } from '../skills/activity-monitor/scri
 import { DEFAULT_SHARD_BUDGET, estimateTokens, withinBudget } from '../skills/activity-monitor/scripts/shard-registry.js';
 import { formatSection } from '../skills/comm-bridge/scripts/session-format.js';
 import { createMemoryBacklog } from '../skills/dashboard/src/lib/workbench/memory-backlog.js';
-import { memoryBudgetRows } from '../skills/dashboard/public/js/wb/memory-scope.js';
+
+const browserDescriptors = new URL('../skills/dashboard/public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { memoryBudgetRows } = await import('../skills/dashboard/public/js/wb/memory-scope.js');
 
 const scripts = path.resolve('skills/zylos-memory/scripts');
 function isolation(t, { createMemory = true } = {}) {

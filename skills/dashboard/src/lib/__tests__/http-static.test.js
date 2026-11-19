@@ -55,7 +55,7 @@ async function fixture(t) {
       req.end();
     });
   }
-  return { root, files, request };
+  return { directory, root, files, request };
 }
 
 for (const url of ['/', '/index.html', '/nested/', '/_assets/index.html']) {
@@ -164,4 +164,35 @@ test('wildcard validators do not turn missing files or forbidden paths into 304'
     assert.equal(response.status, expectedStatus);
     assert.equal(response.headers.etag, undefined);
   }
+});
+
+test('runtime descriptors recover after the Core directory and asset become available', async t => {
+  const { directory, request } = await fixture(t);
+  const core = path.join(directory, 'core');
+  const previous = process.env.ZYLOS_PACKAGE_ROOT;
+  fs.mkdirSync(core);
+  process.env.ZYLOS_PACKAGE_ROOT = core;
+  t.after(() => {
+    if (previous === undefined) delete process.env.ZYLOS_PACKAGE_ROOT;
+    else process.env.ZYLOS_PACKAGE_ROOT = previous;
+  });
+
+  const url = '/_assets/runtime-descriptors.js';
+  assert.equal((await request(url)).status, 404);
+  assert.equal((await request('/app.js')).status, 200);
+
+  const lib = path.join(core, 'cli', 'lib');
+  fs.mkdirSync(path.join(lib, 'runtime'), { recursive: true });
+  fs.writeFileSync(path.join(lib, 'config.js'), '');
+  assert.equal((await request(url)).status, 404);
+
+  const body = 'export const SUPPORTED_RUNTIMES = [];';
+  fs.writeFileSync(path.join(lib, 'runtime', 'descriptors.js'), body);
+  const response = await request(url);
+  assert.equal(response.status, 200);
+  assert.equal(response.body.toString(), body);
+  assert.equal(response.headers['content-type'], 'text/javascript; charset=utf-8');
+  assert.equal(response.headers['cache-control'], 'no-cache');
+  assert.ok(response.headers.etag);
+  assert.equal((await request(url, { headers: { 'if-none-match': response.headers.etag } })).status, 304);
 });

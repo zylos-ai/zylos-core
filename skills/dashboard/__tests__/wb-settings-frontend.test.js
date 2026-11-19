@@ -1,15 +1,27 @@
+import { registerHooks } from 'node:module';
 import { formatZoned, setInstanceZone } from '../public/js/wb/instance-zone.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { composeSettings, createSettingsLoader, settingsSections, resetSettingsDrafts } from '../public/js/wb/settings.js';
-import { defaultGroups, modelFollowers, runtimeHealth, runtimeConfirmation, createOverrideSearch, renderDefaults, renderHotTtl, modelSaveConfirmation } from '../public/js/wb/settings-defaults.js';
-import { createPricingPanel, appendPriceRow, collectPriceRows, countPriceChanges, draftPriceRows, visiblePricePrefixes } from '../public/js/wb/settings-pricing.js';
-import { keyActionConfirmation, keyCounts, remoteStatus, renderKeyTable, renderRemoteAgents } from '../public/js/wb/settings-access.js';
-import { mountLanguageControl, mountThemeControl } from '../public/js/wb/settings-ui.js';
-import { coreVersion, renderBrandVersion, renderVersion } from '../public/js/wb/settings-version.js';
+
 import { documentFixture, node } from './fixtures/settings-dom.js';
 import { deferred, tick } from './fixtures/workbench-dom.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { composeSettings, createSettingsLoader, settingsSections, resetSettingsDrafts } = await import('../public/js/wb/settings.js');
+const { defaultGroups, modelFollowers, runtimeHealth, runtimeConfirmation, createOverrideSearch, renderDefaults, renderHotTtl, modelSaveConfirmation } = await import('../public/js/wb/settings-defaults.js');
+const { createPricingPanel, appendPriceRow, collectPriceRows, countPriceChanges, draftPriceRows, visiblePricePrefixes } = await import('../public/js/wb/settings-pricing.js');
+const { keyActionConfirmation, keyCounts, remoteStatus, renderKeyTable, renderRemoteAgents } = await import('../public/js/wb/settings-access.js');
+const { mountLanguageControl, mountThemeControl } = await import('../public/js/wb/settings-ui.js');
+const { coreVersion, renderBrandVersion, renderVersion } = await import('../public/js/wb/settings-version.js');
+
 const t = (key, params = {}) => key + (Object.keys(params).length ? ':' + JSON.stringify(params) : '');
 const hotTtlMeta = (overrides = {}) => ({ session_hot_ttl: { seconds: 1800, minutes: 30, source: 'config', mode: 'multi', read_only: false,
   environment_set: false, environment_valid: false, min_minutes: 5, max_minutes: 1440, ...overrides } });
@@ -540,7 +552,6 @@ test('removed header entry selectors have no startup bindings and account contro
   for (const key of Object.keys(zh)) assert.ok(Object.hasOwn(en, key), key);
 });
 
-
 test('settings draft reset clears target-specific controls and disables writes until new data loads', () => {
   const fixture = priceFixture(), defaults = node(fixture.document, 'div', 'settings-defaults'); fixture.root.append(defaults); defaults.append(node(fixture.document, 'button', 'old-target'));
   const idleReclaim = node(fixture.document, 'div', 'settings-idle-reclaim'); fixture.root.append(idleReclaim); idleReclaim.append(node(fixture.document, 'input', 'settings-hot-ttl-minutes'));
@@ -749,7 +760,6 @@ test('the pricing panel reports unsaved changes to its navigation badge and save
   panel.destroy(); assert.equal(counts.at(-1), 0); assert.equal(bar.hidden, true);
 });
 
-
 test('model thresholds switch with the selected model and save an explicit engine/model only', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
   const meta = { runtime: 'claude', current_model: 'opus', current_effort: 'high', models: [{ id: 'opus' }, { id: 'opus[1m]' }],
@@ -791,7 +801,6 @@ test('custom model threshold waits for metadata and ignores a late response for 
   panel.destroy();
 });
 
-
 test('an unchanged migrated threshold outside new write limits does not block effort changes', async () => {
   for (const previous of [5, 100]) {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
@@ -806,7 +815,6 @@ test('an unchanged migrated threshold outside new write limits does not block ef
   panel.destroy();
   }
 });
-
 
 test('threshold-only save reports next-decision effect in both interface languages', async () => {
   for (const locale of ['en', 'zh']) {
@@ -824,7 +832,6 @@ test('threshold-only save reports next-decision effect in both interface languag
     panel.destroy();
   }
 });
-
 
 test('a custom model requests its own threshold instead of showing the current model fallback', async () => {
   const document = documentFixture(), root = document.createElement('div'), requests = [], response = deferred();
@@ -852,7 +859,6 @@ test('a custom model requests its own threshold instead of showing the current m
   panel.destroy();
 });
 
-
 test('settings group status labels include sample age and last-known status tooltip', () => {
   const document = documentFixture(), root = node(document, 'div');
   const data = snapshot(), sampledAt = Date.now() - 20000;
@@ -877,7 +883,6 @@ test('pricing tabs render English for one and two running groups', () => {
     panel.destroy();
   }
 });
-
 
 test('settings hydrates only the bounded running rows to recover explicit detail override provenance', async () => {
   for (const failure of [false, true]) {
@@ -918,7 +923,6 @@ test('key table formats UTC key clocks in the instance timezone', () => {
     assert.doesNotMatch(row.textContent, /2026-02-03T04:05/);
   } finally { setInstanceZone(null); }
 });
-
 
 test('default model without effort options hides the whole field and restores it on model change', async () => {
   const document = documentFixture(), root = node(document, 'div');

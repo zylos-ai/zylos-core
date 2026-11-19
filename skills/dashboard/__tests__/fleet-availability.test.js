@@ -1,7 +1,17 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { FleetPoller, stateToFleetRecord } from '../src/lib/fleet-poller.js';
-import { buildAgentFleetView, fleetSelfFromSnapshot, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { buildAgentFleetView, fleetSelfFromSnapshot, renderAgentFleetHtml } = await import('../public/js/agent-fleet.js');
 
 // Real conversion and rendering modules, in-memory inputs only; no HTTP,
 // process, configuration or database resource is opened.

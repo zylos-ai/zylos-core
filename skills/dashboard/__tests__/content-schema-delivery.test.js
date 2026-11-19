@@ -11,6 +11,7 @@ import { COMPONENT_DEFINITIONS, REGISTERED_COMPONENT_KEYS, VIEW_SCHEMA, FORM_CON
 
 const publicRoot = path.resolve(fileURLToPath(new URL('../public/', import.meta.url)));
 const schemaPath = fileURLToPath(new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url));
+const descriptorsPath = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url);
 const appReference = source => /src="__ASSET_ROOT__\/(js\/app\.js)"/.exec(source)?.[1];
 const entrySource = fs.readFileSync(path.join(publicRoot, 'index.html'), 'utf8');
 const stylesheetReference = source => /href="__ASSET_ROOT__\/(css\/conversation\.css)"/.exec(source)?.[1];
@@ -137,6 +138,13 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
       assert.match(importLine(await moduleAt(moduleUrl), 'plain-text.js'), /from ['"]\.\/plain-text\.js['"]/,
         'internal renderer and page share the post-merge plain-text module');
     }
+    const plainTextUrl = new URL(currentImport(pageUrl, 'plain-text'), pageUrl).href;
+    const plainText = await moduleAt(plainTextUrl);
+    const descriptorsSpecifier = /from ['"]([^'"]+)['"]/.exec(importLine(plainText, 'runtime-descriptors.js'))?.[1];
+    assert.match(descriptorsSpecifier ?? '', /^\.\.?\//, 'browser descriptors use a relative import');
+    const descriptorsUrl = new URL(descriptorsSpecifier, plainTextUrl);
+    assert.equal(descriptorsUrl.pathname, prefix + '/_assets/runtime-descriptors.js');
+    assert.equal(await moduleAt(descriptorsUrl.href), fs.readFileSync(descriptorsPath, 'utf8'));
     for (const [parent, names] of [[appUrl, ['chat-drafts']],
       [activeModules.get('conversation-content'), ['chat-view', 'conversation-charts']]]) {
       const source = await moduleAt(parent);

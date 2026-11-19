@@ -1,12 +1,23 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { createDocument, allNodes, deferred, tick, Node } from './fixtures/workbench-dom.js';
-import { renderUsage, createUsagePage, usagePath, formatUsageCount, bucketLabels, compactCount } from '../public/js/wb/usage.js';
-import { renderHost, createHostPanel } from '../public/js/wb/host-panel.js';
-import { instanceStrip, quotaReset } from '../public/js/wb/instance-strip.js';
+
 import { setInstanceZone } from '../public/js/wb/instance-zone.js';
 import { markCurrentTab } from '../public/js/wb/view-mode.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { renderUsage, createUsagePage, usagePath, formatUsageCount, bucketLabels, compactCount } = await import('../public/js/wb/usage.js');
+const { renderHost, createHostPanel } = await import('../public/js/wb/host-panel.js');
+const { instanceStrip, quotaReset } = await import('../public/js/wb/instance-strip.js');
 
 // Direct modules with injected DOM, charts and reads; no browser, network, storage or processes.
 const fixture = () => {
@@ -307,7 +318,6 @@ test('technical usage renders unavailable runtime history as unknown instead of 
   view.destroy(); assert.equal(f.destroyed(), 4);
 });
 
-
 test('message counts distinguish unreadable and zero in both locales and detail levels', () => {
   const sampledAt = '2026-11-06T04:00:00.000Z';
   for (const locale of ['en', 'zh']) {
@@ -558,7 +568,6 @@ test('host changing range, owner, detail level or reopening rebuilds the panel',
   } finally { panel.destroy(); }
 });
 
-
 test('cache rate keeps a single measured bucket visible including zero without filling missing buckets', () => {
   for (const rate of [0, 0.623]) {
     const f = fixture();
@@ -575,7 +584,6 @@ test('cache rate keeps a single measured bucket visible including zero without f
     view.destroy();
   }
 });
-
 
 test('cache rate marks each isolated finite bucket while contiguous values stay lines', () => {
   for (const [rates, radii] of [

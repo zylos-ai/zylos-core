@@ -4,13 +4,16 @@ import fs from 'node:fs';
 import { registerHooks } from 'node:module';
 import { createDocument, allNodes, tick, deferred } from './helpers/conversation-dom.js';
 import { CONTENT_PREFIX, parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
-import { createChatAttachment, chatAttachmentURL, attachmentDisplayText } from '../public/js/wb/chat-attachments.js';
 import { buildAnnotatedContent, splitContentAndAttachments } from '../../comm-bridge/scripts/attachment-annotations.js';
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
+  if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
   if (context.parentURL && new URL(specifier, context.parentURL).pathname.endsWith('/public/chat-schema.js')) return next(sourceSchema, context);
   return next(specifier, context);
 } });
+const { createChatAttachment, chatAttachmentURL, attachmentDisplayText } = await import('../public/js/wb/chat-attachments.js');
 const { renderChatContent } = await import('../public/js/wb/chat-blocks.js');
 const { renderConversationContent } = await import('../public/js/wb/conversation-content.js');
 const fixture = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/attachment-blocks.json', import.meta.url)));
@@ -272,7 +275,6 @@ test('plain history metadata patches add replace and remove only owned media res
   assert.equal(root.querySelector('.chat-message-text'), body); assert.equal(layouts >= 3, true);
   root.destroy(); root.updateAttachments([record()]); assert.equal(root.querySelector('.chat-attachment'), null);
 });
-
 
 test('loaded images use natural portrait and landscape ratios and collapse after failure', t => {
   for (const [width, height] of [[800, 1200], [1800, 600]]) {

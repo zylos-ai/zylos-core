@@ -1,9 +1,10 @@
+import { runtimesWith } from '../runtime-descriptors.js';
 import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, quotaRecordedTime } from './wb/instance-strip.js';
 import { counted } from './count-label.js';
 import { recoveryTime } from './wb/cooldown.js';
 import { formatZoned, instanceZoneReady } from './wb/instance-zone.js';
 
-import { fallbackName, platformOf } from './wb/plain-text.js';
+import { fallbackName, platformOf, runtimeName } from './wb/plain-text.js';
 
 const REASON_BADGE_REASONS = new Set(['unreachable', 'auth_failed', 'version_unsupported', 'timeout', 'conn_refused', 'bad_payload', 'offline']);
 const LINK_CHIP_QUALITIES = new Set(['slow', 'degraded', 'stale']);
@@ -296,7 +297,7 @@ export function fleetSelfFromSnapshot(snapshot) {
     supervisorPaused: snapshot?.instance?.supervisorPaused ?? null,
     runtimes: accountRuntimes(snapshot ?? {}),
     accountRecords: snapshot?.instance?.accounts ?? {},
-    accounts: Object.fromEntries(['claude', 'codex'].map((runtime) => [runtime, accountUsedPercent(snapshot?.instance?.accounts?.[runtime])]))
+    accounts: Object.fromEntries(runtimesWith('accountQuota').map((runtime) => [runtime, accountUsedPercent(snapshot?.instance?.accounts?.[runtime])]))
   };
 }
 
@@ -317,7 +318,7 @@ function quotaBars(tile, labels) {
   const accounts = tile.self?.accounts;
   if (accounts) {
     const runtimes = tile.self.runtimes ?? ['claude', 'codex'].filter(runtime => accounts[runtime] != null);
-    const rows = runtimes.map(runtime => quotaBar(runtime === 'codex' ? 'Codex' : 'Claude', accounts[runtime], labels, tile.self.accountRecords?.[runtime]));
+    const rows = runtimes.map(runtime => quotaBar(runtimeName(runtime), accounts[runtime], labels, tile.self.accountRecords?.[runtime]));
     if (rows.length) return `<div class="wb-qbars">${rows.join('')}</div>`;
   }
   return `<div class="wb-qbars">${quotaBar(labels.rate7d, tile.rate7dPct, labels, tile.rate7dRecord)}</div>`;
@@ -461,7 +462,7 @@ export function renderFleetAttention(root, items = [], t = key => key) {
     if (item.group !== undefined) { node.type = 'button'; node.dataset.fleetGroup = item.group; }
     const at = item.kind === 'rate_limited' && instanceZoneReady() ? recoveryTime(item.until) : null;
     const values = { channel: item.channel ?? '', count: item.count ?? item.count30m ?? '',
-      service: item.service ?? '', runtime: item.runtime ? item.runtime.charAt(0).toUpperCase() + item.runtime.slice(1) : '',
+      service: item.service ?? '', runtime: item.runtime ? runtimeName(item.runtime) : '',
       time: at === null ? '' : formatZoned(at, undefined, { hour: '2-digit', minute: '2-digit' }),
       group: item.group ?? '', reason: item.reasonCode ?? item.source ?? '' };
     const key = 'wb.attention.' + item.kind + (item.kind === 'rate_limited' && at === null ? '_unknown' : '');

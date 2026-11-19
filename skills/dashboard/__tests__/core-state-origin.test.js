@@ -1,10 +1,20 @@
+import { registerHooks } from 'node:module';
 import { AccountUsageCache } from '../src/lib/account-usage-cache.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { CoreState, projectOrigin } from '../src/lib/core-state.js';
 import { describeOrigin } from '../../../cli/lib/origin-presence.js';
-import { stateMood, buildAgentFleetView, defaultAgentFleetLabels } from '../public/js/agent-fleet.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { stateMood, buildAgentFleetView, defaultAgentFleetLabels } = await import('../public/js/agent-fleet.js');
 
 const absent = () => ({ identity: { present: false, ready: false, runtime: 'unknown' }, status: { valid: false, reason: 'not_running' }, usage: { valid: false } });
 const live = () => ({ identity: { present: true, ready: true, runtime: 'claude', runId: 'run-current', sessionId: 'session-current' }, status: { valid: true, reason: null, value: { state: 'busy' } }, usage: { valid: false } });

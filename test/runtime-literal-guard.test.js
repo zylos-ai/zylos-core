@@ -16,7 +16,7 @@ const reasons = [
   'dispatch:upgrade', 'dispatch:auth', 'dispatch:launch', 'dispatch:instructions',
   'dispatch:delivery', 'dispatch:hooks', 'dispatch:context', 'dispatch:usage',
   'dispatch:health', 'dispatch:dashboard', 'else-fallback', 'gap', 'inconsistent',
-  'legacy', 'default-runtime', 'text', 'sql-check', 'tool-use',
+  'legacy', 'text', 'sql-check', 'tool-use',
 ];
 const ids = SUPPORTED_RUNTIMES.join('|');
 const runtimeLiteral = new RegExp("(['\"`])(?:" + ids + ")\\1|(?:^|[^a-zA-Z0-9_$.-])(?:" + ids + ')\\s*:');
@@ -66,8 +66,7 @@ test('hard-coded runtime IDs match the exemption inventory', () => {
   }
 
   for (const file of [...productFiles('cli'), ...productFiles('skills')]) {
-    // The browser migration extends the literal scan to public/.
-    if (runtimeDirectory(file) || file.startsWith('skills/dashboard/public/')) continue;
+    if (runtimeDirectory(file)) continue;
     for (const [index, raw] of fs.readFileSync(path.join(root, file), 'utf8').split(/\r?\n/).entries()) {
       const line = raw.trim();
       if (/^(?:\/\/|\/\*|\*)/.test(line) || !runtimeLiteral.test(line)) continue;

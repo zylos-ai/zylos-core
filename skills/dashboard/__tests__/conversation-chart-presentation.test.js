@@ -1,8 +1,18 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Chart, registerables } from 'chart.js';
-import { conversationChartConfig, conversationChartResource } from '../public/js/wb/conversation-charts.js';
 import { createDocument } from './helpers/conversation-dom.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { conversationChartConfig, conversationChartResource } = await import('../public/js/wb/conversation-charts.js');
 
 Chart.register(...registerables);
 

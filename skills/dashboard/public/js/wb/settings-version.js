@@ -1,4 +1,5 @@
-import { element } from './plain-text.js';
+import { DEFAULT_RUNTIME } from '../../runtime-descriptors.js';
+import { element, runtimeName } from './plain-text.js';
 
 // The Core version an instance reports in versions (`zylos --version`). Dashboard ships inside Core and
 // has no version of its own. A missing answer, or the CLI's "unknown", is not a version.
@@ -18,7 +19,7 @@ export function renderBrandVersion(el, info) {
 
 // The viewed instance's Core version with its update hint, the AI engine CLI and its upgrade button
 // (the original generated action node), in both views.
-export function renderVersion(root, info, { upgrade, document = root.ownerDocument, t = key => key, readOnly = false, runtime = 'claude', onHint = () => {} } = {}) {
+export function renderVersion(root, info, { upgrade, document = root.ownerDocument, t = key => key, readOnly = false, runtime = DEFAULT_RUNTIME, onHint = () => {} } = {}) {
   const ri = info ?? {}, core = coreVersion(ri);
   root.replaceChildren(element(document, 'p', 'zylos · ' + (core ? 'v' + core : t('wb.unknown'))));
   if (ri.zylos?.update) {
@@ -26,7 +27,7 @@ export function renderVersion(root, info, { upgrade, document = root.ownerDocume
     hint.title = t('info.zylos_update_hint', { version: ri.zylos?.update }); hint.addEventListener('click', () => onHint(hint)); root.append(hint);
   }
   const codex = runtime === 'codex';
-  const name = runtime === 'agy' ? 'Antigravity' : runtime;
+  const name = runtimeName(runtime);
   const version = ri[runtime]?.installed;
   const update = ri[runtime]?.update;
   root.append(element(document, 'p', `${codex ? 'Codex' : runtime === 'claude' ? 'CC' : name} · ${version ? 'v' + version : t('wb.unknown')}${update ? ' ↑' + update : ''}`));

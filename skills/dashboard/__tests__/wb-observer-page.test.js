@@ -1,6 +1,16 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide, observerReturnPage } from '../public/js/wb/observer-page.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide, observerReturnPage } = await import('../public/js/wb/observer-page.js');
 
 const healthy = { state: 'installed', desired: { enabled: true } };
 
@@ -88,7 +98,6 @@ test('the viewed machine\'s access comes from its key: only an admin key may con
   assert.equal(observerPageUsable(healthy, viewedAccess({ fleetAgents })), true);
 });
 
-
 test('the running group chooser counts actual live identities while Origin sleeps', () => {
   const snapshot = { rows: [
     { sessionGroup: 'origin', presence: 'not_running', live: null },
@@ -149,7 +158,6 @@ test('a newer group choice or machine switch cancels an older pending choice', a
   assert.equal(await pending, false);
   assert.equal(connected.join(','), 'new');
 });
-
 
 test('observer group labels use the same readable fallback as the board', () => {
   const t = key => ({ 'wb.platform.lark': 'Lark', 'wb.term.origin': 'Origin' }[key] ?? key);

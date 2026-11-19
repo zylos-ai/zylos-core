@@ -1,3 +1,4 @@
+import { runtimeName } from './plain-text.js';
 import { createActionRunner } from './action-runner.js';
 
 /** The question the page asks before an action that changes the running agent. */
@@ -10,7 +11,7 @@ export function actionConfirmText(action, body, { t, runtime = null, effortLabel
     'switch-effort': () => t('confirm.switch_effort', { value: effortLabel(body?.effort) }),
     'upgrade-zylos': () => t('confirm.upgrade_zylos'),
     'upgrade-cc': () => runtime === 'codex' ? t('confirm.upgrade_codex') : runtime === 'claude' ? t('confirm.upgrade_cc')
-      : t('confirm.upgrade_runtime', { runtime: runtime === 'agy' ? 'Antigravity' : runtime || t('wb.unknown') }),
+      : t('confirm.upgrade_runtime', { runtime: runtimeName(runtime) || t('wb.unknown') }),
   };
   return labels[action]?.() || t('confirm.fallback', { action });
 }

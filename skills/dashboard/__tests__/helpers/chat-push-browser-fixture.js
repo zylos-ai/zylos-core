@@ -20,6 +20,7 @@ import { CONTENT_PREFIX } from '../../../comm-bridge/scripts/c4-content-schema.j
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
 const schemaFile = fileURLToPath(new URL('../../../comm-bridge/scripts/c4-content-schema.js', import.meta.url));
+const runtimeDescriptors = fileURLToPath(new URL('../../../../cli/lib/runtime/descriptors.js', import.meta.url));
 const group = 'dash-browser:push', conversationId = 'g:' + Buffer.from(group).toString('hex').toUpperCase();
 const protocol = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/c4-content-protocol.json', import.meta.url)));
 const envelope = structuredClone(protocol.valid.find(row => row.envelope?.blocks?.some(block => block.type === 'form_intent')).envelope);
@@ -121,8 +122,9 @@ await page.openGroup(${JSON.stringify(group)},{channel:'dashboard'});window.read
         return json(res, { error: 'fixture_unknown_endpoint' }, 404);
       }
       if (url.pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }
-      const file = url.pathname === '/chat-schema.js' ? schemaFile : path.resolve(publicDir, '.' + url.pathname);
-      if (file !== schemaFile && !file.startsWith(publicDir + path.sep)) { res.writeHead(403); return res.end(); }
+      const file = url.pathname === '/chat-schema.js' ? schemaFile :
+      url.pathname === '/runtime-descriptors.js' ? runtimeDescriptors : path.resolve(publicDir, '.' + url.pathname);
+      if (file !== schemaFile && file !== runtimeDescriptors && !file.startsWith(publicDir + path.sep)) { res.writeHead(403); return res.end(); }
       try { res.writeHead(200, { 'content-type': file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.json') ? 'application/json' : 'application/octet-stream' }); res.end(fs.readFileSync(file)); }
       catch { res.writeHead(404); res.end(); }
     } catch (error) { json(res, { error: error.code || 'fixture_error' }, error.statusCode || 500); }

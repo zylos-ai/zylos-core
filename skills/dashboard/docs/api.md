@@ -6,6 +6,18 @@ This reference describes Dashboard HTTP routes, including health, instance, sess
 
 Paths are relative to the Dashboard base URL. For example, with the default HTTP mount, `/api/instance` is available at `/dashboard/api/instance`. Group IDs are URL-encoded session-group keys such as `telegram%3Aexample`, or `origin` for the single session and the multi-session Origin. Display names are not IDs.
 
+## Runtime Descriptors Asset
+
+`GET /_assets/runtime-descriptors.js` serves the installed Core runtime registry as a JavaScript module. The request takes no parameters and does not require authentication. It returns 200 with `Content-Type: text/javascript; charset=utf-8`, `Cache-Control: no-cache`, and an ETag. A matching `If-None-Match` returns 304. An unresolved Core directory or missing descriptor file returns 404.
+
+Example request in a Dashboard mounted under a reverse-proxy prefix:
+
+```http
+GET /dashboard/_assets/runtime-descriptors.js
+```
+
+Fleet views load the local module through `/fleet/:name/_assets/runtime-descriptors.js` under the same base prefix.
+
 ## Access and Common Results
 
 - **Public**: no login required.

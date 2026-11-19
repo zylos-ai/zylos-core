@@ -1,6 +1,16 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { computeFleetTransitions, isWorkingMood } from '../public/js/fleet-sounds.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { computeFleetTransitions, isWorkingMood } = await import('../public/js/fleet-sounds.js');
 
 const agent = (name, state, extra = {}) => ({ name, state, ...extra });
 

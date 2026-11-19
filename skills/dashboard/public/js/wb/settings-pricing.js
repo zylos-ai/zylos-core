@@ -1,3 +1,4 @@
+import { runtimesWith } from '../../runtime-descriptors.js';
 import { countLabel } from '../count-label.js';
 import { element, icon, runtimeName } from './plain-text.js';
 import { money } from './instance-strip.js';
@@ -96,7 +97,7 @@ export function createPricingPanel({ root, host, snapshot, data, usage = {}, doc
   const summary = element(document, 'p', undefined, 'wb-price-sum'), unmatched = element(document, 'div');
   const tabs = element(document, 'div', undefined, 'wb-rt-tabs'); tabs.setAttribute('role', 'tablist');
   const tabButtons = new Map();
-  for (const value of ['claude', 'codex']) {
+  for (const value of runtimesWith('usage')) {
     const button = element(document, 'button', undefined, 'wb-rt-tab'); button.type = 'button'; button.id = 'settings-price-tab-' + value; button.setAttribute('role', 'tab');
     button.addEventListener('click', () => { try { capture(); runtime = value; expanded = false; render(); } catch (error) { status.textContent = error.message; status.hidden = false; } });
     tabs.append(button); tabButtons.set(value, button);
@@ -127,7 +128,7 @@ export function createPricingPanel({ root, host, snapshot, data, usage = {}, doc
   /** Unsaved changes per engine: the visible tab is read as typed, the other one from its captured draft. */
   function changes() {
     const counts = {};
-    for (const value of ['claude', 'codex']) {
+    for (const value of runtimesWith('usage')) {
       const payload = drafts[value], original = saved[value] ?? {};
       const base = value === runtime ? { ...hiddenBuiltIns(payload), ...draftPriceRows([...baseRows.querySelectorAll('tr')]) } : payload.modelPrices;
       let count = countPriceChanges(original.modelPrices, base);
@@ -149,7 +150,7 @@ export function createPricingPanel({ root, host, snapshot, data, usage = {}, doc
       if (counts[value]) button.append(element(document, 'span', t('wb.settings.changedN', { count: counts[value] }), 'wb-dirty'));
     }
     if (savebar) savebar.hidden = !total;
-    if (dirtyText) dirtyText.textContent = t('wb.settings.unsavedList', { list: ['claude', 'codex'].filter(value => counts[value]).map(value => t('wb.settings.unsavedRuntime', { runtime: runtimeName(value), count: counts[value] })).join(t('wb.settings.listSep')) });
+    if (dirtyText) dirtyText.textContent = t('wb.settings.unsavedList', { list: runtimesWith('usage').filter(value => counts[value]).map(value => t('wb.settings.unsavedRuntime', { runtime: runtimeName(value), count: counts[value] })).join(t('wb.settings.listSep')) });
     onDirty(total);
     return total;
   }
@@ -176,7 +177,7 @@ export function createPricingPanel({ root, host, snapshot, data, usage = {}, doc
     summary.replaceChildren();
     if (usage == null) summary.append(element(document, 'span', t('wb.unknown') + ' · ' + t('wb.readFailed')));
     else {
-      for (const value of ['claude', 'codex']) {
+      for (const value of runtimesWith('usage')) {
         const part = element(document, 'span', undefined, 'wb-price-sum-rt');
         part.append(element(document, 'i', undefined, 'wb-sw wb-sw-' + value), element(document, 'span', runtimeName(value)),
           element(document, 'b', money(usedModels.filter(row => row.runtime === value).reduce((sum, row) => sum + Number(row.cost ?? 0), 0))));
@@ -214,7 +215,7 @@ export function createPricingPanel({ root, host, snapshot, data, usage = {}, doc
       try {
         capture();
         const runtimes = {};
-        for (const value of ['claude', 'codex']) {
+        for (const value of runtimesWith('usage')) {
           const payload = drafts[value]; runtimes[value] = { modelPrices: payload.modelPrices };
           if (value === 'codex') runtimes[value].priorityModelPrices = payload.priorityModelPrices;
           else if (Object.hasOwn(payload, '_editedFastMultiplier')) runtimes[value].fastModeMultiplier = payload._editedFastMultiplier;
@@ -222,7 +223,7 @@ export function createPricingPanel({ root, host, snapshot, data, usage = {}, doc
         await write({ runtimes });
         if (stopped) return;
         // What was written is the new baseline: dirty marks, the save bar and the navigation count all clear.
-        for (const value of ['claude', 'codex']) {
+        for (const value of runtimesWith('usage')) {
           saved[value] ??= {};
           saved[value].modelPrices = structuredClone(runtimes[value].modelPrices);
           if (value === 'codex') saved[value].priorityModelPrices = structuredClone(runtimes[value].priorityModelPrices);

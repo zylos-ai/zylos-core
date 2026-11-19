@@ -1,10 +1,21 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { axisLabels, dayTime, deliveryLine, groupTasks, laneDots, laneTicks, missText, mountSchedule, targetLabel, untilText, writeMessage,
-  writeOutcome, statusCounts } from '../public/js/wb/schedule.js';
-import { createForm, createPreviewer, formPayload, initialForm, saveAllowed } from '../public/js/wb/schedule-form.js';
+
 import { allNodes, createDocument, deferred, tick } from './fixtures/workbench-dom.js';
 import { packTranslator } from './fixtures/schedule-env.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { axisLabels, dayTime, deliveryLine, groupTasks, laneDots, laneTicks, missText, mountSchedule, targetLabel, untilText, writeMessage,
+  writeOutcome, statusCounts } = await import('../public/js/wb/schedule.js');
+const { createForm, createPreviewer, formPayload, initialForm, saveAllowed } = await import('../public/js/wb/schedule-form.js');
 
 const t = packTranslator();
 const textOf = node => allNodes(node).map(item => item.text ?? '').join('|');
@@ -399,7 +410,6 @@ test('a refused write explains the refusal and rows hold two sibling buttons', a
   assert.equal(textOf(form).includes('结果未知'), false);
 });
 
-
 // Pure time helpers with a fixed clock in the scheduler's zone (Asia/Singapore, UTC+8).
 const SGT = 'Asia/Singapore', at = (hours, minutes = 0) => Date.UTC(2027, 0, 15, hours - 8, minutes) / 1000;
 
@@ -748,7 +758,6 @@ test('all search pages combine active and completed matches without repeating ac
   assert.ok(searches.at(-1).path.includes('cursor='));
 });
 
-
 test('delivery rates exclude old timeouts while history preserves them without a last-error card', async context => {
   const rows = [
     { id: 3, status: 'timeout', executedAt: 1799999990, completedAt: 1800000000, duration: 10000, error: 'TASK_TIMEOUT' },
@@ -812,7 +821,6 @@ test('weekly delivery summary keeps legacy timeouts visible without a false wors
   const timeouts = allNodes(legend).find(node => node.classList.contains('wb-timeout'));
   assert.match(timeouts.textContent, /超时64/);
 });
-
 
 test('structured preview validation failures block saving and unavailable previews retain scheduler validation', async () => {
   for (const [status, code, valid] of [[400, 'invalid_cron', false], [503, 'cron_preview_unavailable', null]]) {

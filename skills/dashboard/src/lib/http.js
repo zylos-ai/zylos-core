@@ -1,3 +1,4 @@
+import { resolveCoreDirectory } from './core-modules.js';
 import { projectApiTimestamps } from './wire-time.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -177,6 +178,17 @@ export function serveStatic(req, res, rootDir) {
       const stat = fs.statSync(schema);
       if (!stat.isFile()) return false;
       sendStaticFile(req, res, schema, stat);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  if (pathname === '/_assets/runtime-descriptors.js') {
+    try {
+      const file = path.join(resolveCoreDirectory(), 'runtime/descriptors.js');
+      const stat = fs.statSync(file);
+      if (!stat.isFile()) return false;
+      sendStaticFile(req, res, file, stat);
       return true;
     } catch {
       return false;

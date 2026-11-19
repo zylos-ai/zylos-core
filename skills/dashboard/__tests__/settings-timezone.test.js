@@ -1,9 +1,19 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mountTimezoneSettings, validTimezone } from '../public/js/wb/settings-timezone.js';
 import { canonicalTimezoneName, timezoneOptions } from '../public/js/wb/timezone-names.js';
 import { documentFixture } from './fixtures/settings-dom.js';
 import { deferred } from './fixtures/workbench-dom.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { mountTimezoneSettings, validTimezone } = await import('../public/js/wb/settings-timezone.js');
 
 const settings = (extra = {}) => ({ tz: 'UTC', writable: true, read_only_reason: null,
   restart_status: 'known', restart_services: [{ name: 'scheduler', status: 'online' }], ...extra });
@@ -257,7 +267,6 @@ test('restart service labels cover the core monitor and dispatcher', async () =>
   assert.equal(f.root.querySelector('#settings-timezone-services').textContent,
     'wb.settings.timezone.activityMonitorwb.settings.timezone.dispatcher');
 });
-
 
 test('a structured restart failure names failed services and retains only those for retry', async () => {
   const f = fixture({ restart: async () => {
