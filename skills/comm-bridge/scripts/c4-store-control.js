@@ -185,8 +185,6 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
       const t = target(value); return write(c => all(c, `UPDATE control_queue SET status='timeout',last_error='SESSION_ENDED',updated_at=? WHERE status='running' AND updated_at<? AND ${t.sql} RETURNING id,session_group,raw_content`, seconds(), deliveredBefore, ...t.args));
     },
     countNonTerminalControls: value => { const t = target(value); return read(c => get(c, `SELECT COALESCE(SUM(status='pending'),0) AS pending,COALESCE(SUM(status='running'),0) AS running FROM control_queue WHERE status IN ('pending','running') AND ${t.sql}`, ...t.args)); },
-    // Newest unfinished runtime switch (/exit or /clear) for the target, in Unix seconds, or null.
-    latestSessionSwitchAt: value => { const t = target(value); return read(c => get(c, `SELECT MAX(created_at) AS at FROM control_queue WHERE status IN ('pending','running') AND raw_content IN ('/exit','/clear') AND ${t.sql}`, ...t.args)?.at ?? null); },
     listRunningControlsWithoutDeadline: value => {
       const t = target(value);
       return read(c => all(c, `SELECT id FROM control_queue WHERE status='running' AND ack_deadline_at IS NULL AND ${t.sql} ORDER BY id`, ...t.args).map(row => row.id));

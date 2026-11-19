@@ -137,7 +137,7 @@ test('preservation options reject malformed values and remain exclusive to pendi
     assert.throws(() => store.expirePendingControls(input), { code: 'INVALID_ARGS' });
   }
   const input = { allSessionGroups: true, keepOrigin: true };
-  for (const method of ['countNonTerminalControls', 'latestSessionSwitchAt', 'listRunningControlsWithoutDeadline']) assert.throws(() => store[method](input), { code: 'INVALID_ARGS' });
+  for (const method of ['countNonTerminalControls', 'listRunningControlsWithoutDeadline']) assert.throws(() => store[method](input), { code: 'INVALID_ARGS' });
   assert.throws(() => store.expireStaleRunningControls(input, { deliveredBefore: 100 }), { code: 'INVALID_ARGS' });
 });
 
