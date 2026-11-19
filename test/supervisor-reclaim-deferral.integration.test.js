@@ -74,7 +74,7 @@ test('accepted deferral cancels immediately and real transcript updates restart 
     present: true, ready: true, processRunning: true, createdAt: 0, runDir: root,
     launchConfig: { runtime: 'claude', mode: 'default' } };
   const controls = [], fences = [];
-  const context = { configuration: { mode: 'multi' }, scenes: [scene], fences, restartRequests: [] };
+  const context = { configuration: { mode: 'multi', hotTtlSeconds: 1800 }, scenes: [scene], fences, restartRequests: [] };
   const db = { getModeTransition: () => null, listDrainFences: () => fences,
     getLastActivity: () => ({ ts: 0 }), getUnsummarizedRange: () => ({ count: 0 }),
     resolveSessionLaunchConfig: () => scene.launchConfig,
