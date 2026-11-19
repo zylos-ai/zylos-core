@@ -194,7 +194,6 @@ for (const [group, pending] of [['fixture:a', false], ['fixture:a', true], ['ori
     readSessionState: async () => ({ state: { valid: true, value: 'idle' } }),
     getSessionAdapter: () => ({ launch: async input => { launches.push(input); put(input.runId); }, stop: () => { throw new Error('Unexpected router stop'); } }),
     submit: async () => ({ kind: 'accepted', reply: { ok: true, result: 'not_restricted' } }),
-    findLegacySessions: async () => [], advanceLegacy: async () => {}, prepareSingle: async () => {},
     notifyDelivered: async () => {}, log: () => {},
     deliverConversation: async row => db.markDelivered(row.id, { sessionId: 'fixture' }),
     deliverControl: async row => { f.db.prepare("UPDATE control_queue SET status='done' WHERE id=? AND status='running'").run(row.id); },

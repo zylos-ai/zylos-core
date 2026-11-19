@@ -825,7 +825,6 @@ for (const scoped of [true,false]) test(`single health ${scoped?'targets scoped 
   f.scenes.observe=async()=>[scene]; f.scenes.observeGroup=async()=>scene;
   f.scenes.bindTarget=async()=>({expectedRunId:'r'});
   await f.supervisor.loop.deps.readConfiguration();
-  assert.equal(await f.supervisor.observer.readMode(), 'multi');
   assert.equal(await f.supervisor.observer.canAct(scene,{requireReady:true}), scoped);
   const pending=f.supervisor.observer.requestProbe('claude',{force:true});
   await Promise.all([...f.supervisor.observer.preparations]);

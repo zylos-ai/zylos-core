@@ -8,7 +8,7 @@ import { GlobalMemoryHandoverCoordinator } from './global-memory-handover.js';
 import { ModeSwitchCoordinator } from './mode-switch.js';
 import { SupervisorLifecycle } from './supervisor-lifecycle.js';
 import { RuntimeHealthCoordinator, aggregateRuntimeDemand } from './runtime-health.js';
-import { SupervisorHealthObserver, NO_RESPONSE_SILENCE_MS } from './supervisor-health-observer.js';
+import { SupervisorHealthObserver } from './supervisor-health-observer.js';
 import { MessageRouter } from './message-router.js';
 import { SupervisorExits } from './supervisor-exits.js';
 import { SupervisorRunEndings } from './supervisor-run-endings.js';
@@ -84,7 +84,7 @@ export function createSupervisor(deps) {
     const sampled=roundContext?.scenes?.find(current=>group(current.sessionGroup)===group(scene.sessionGroup) && current.runId===scene.runId);
     if(sampled)Object.assign(sampled,{present:false,ready:false,processRunning:false});
   };
-  const health=new RuntimeHealthCoordinator({zylosDir:deps.zylosDir,now,readMode:()=> 'multi',
+  const health=new RuntimeHealthCoordinator({zylosDir:deps.zylosDir,now,
     resolveTargetRuntime:deps.resolveTargetRuntime,listScenes,probeInFlight:runtime=>observer.probeInFlight(runtime),
     readNegativeCache:(runtime,state)=>router.readNegativeCache(runtime,state.health,state.reason),clearNegativeCache:runtime=>router.clearCache(runtime),freezeNotice:deps.freezeNotice,log});
   const manualPending=(group='origin')=>admission.readRequests().some(row=>row.reason==='manual_restart' &&
@@ -95,18 +95,6 @@ export function createSupervisor(deps) {
       if(error.code!=='requests_unreadable' || group==='origin' || group===null)throw error;
       return true;
     }
-  };
-  // Single session: work during which an unanswered message is not judged silent.
-  const readMaintenance=async scene=>{
-    if(await db.getModeTransition())return 'mode_transition';
-    if(manualPending('origin'))return 'manual_restart';
-    if(await db.getDrainFence('*') || await db.getDrainFence('origin'))return 'drain_fence';
-    if(typeof readSyncMarker!=='function')throw Object.assign(new Error('Sync marker reader is unavailable'),{code:'DEPENDENCY_UNAVAILABLE',dependency:'Sync marker reader'});
-    if((await readSyncMarker({runDir:scene.runDir,kind:'global',currentRunId:scene.runId}))?.held===true)return 'memory_sync';
-    // A queued rotation, upgrade or restart switch holds until delivered; one stuck behind the stall stops holding.
-    const switchAt=await db.latestSessionSwitchAt({machine:true});
-    if(Number.isFinite(switchAt) && now()-switchAt*1000<NO_RESPONSE_SILENCE_MS)return 'session_switch';
-    return null;
   };
   const guardedAction=(scene,action,{requireOpen=false,validate=async()=>true}={})=>admission.serialize(async()=>{
     if(stopping || legacyMode(await readMode()) || await db.getModeTransition() || !manualAllows(scene.sessionGroup))return false;
@@ -178,7 +166,7 @@ export function createSupervisor(deps) {
   },readState:scene=>({...readActivity(scene),healthIdentity:scene.healthIdentity}),
     readScreen:scene=>scenes.readScreen(scene),matchScreen:deps.matchScreen,insertControl:db.insertControl,getControlById:db.getControlById,
     buildTargetBinding:scene=>scenes.bindTarget(scene),stop:(scene,validate)=>guardedAction(scene,current=>stopScene(current),validate?{requireOpen:true,validate}:{}),
-    readMode:()=> 'multi',getModeTransition:db.getModeTransition,getDrainFence:db.getDrainFence,manualPending,readMaintenance,
+    getModeTransition:db.getModeTransition,getDrainFence:db.getDrainFence,manualPending,
     resolveToolRule:deps.resolveToolRule,nudge:(scene,validate)=>nudgeSession({enqueue:async content=>{
       let result={ok:false};
       const check=current=>validate(current,{continuing:content==='continue'});

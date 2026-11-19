@@ -36,13 +36,11 @@ assert.equal(DB_PATH, path.join(process.env.ZYLOS_DIR, 'comm-bridge', 'c4.db'));
 assert.ok(DB_PATH.startsWith(fileRoot + path.sep));
 
 let fixtureSequence = 0;
-function fixture(t, { mode = 'single', runtime = 'claude', group = null, pausePaste = false } = {}) {
+function fixture(t, { mode = 'single', runtime = 'claude', group = 'origin', pausePaste = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'idle-turn-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const env = { ...process.env, ZYLOS_DIR: root, ZYLOS_RUN_ID: `isolated-run-${++fixtureSequence}`,
-    ZYLOS_MODEL_CONFIG: JSON.stringify({ runtime }) };
-  delete env.ZYLOS_SESSION_GROUP;
-  if (group) env.ZYLOS_SESSION_GROUP = group;
+    ZYLOS_MODEL_CONFIG: JSON.stringify({ runtime }), ZYLOS_SESSION_GROUP: group };
   const runDir = runDirFromEnv(env).dir;
   const socketPath = path.join(root, 'tmux.sock');
   assert.ok(socketPath.startsWith(root + path.sep));
@@ -63,14 +61,12 @@ function fixture(t, { mode = 'single', runtime = 'claude', group = null, pausePa
     // This database belongs only to this file; each sequential case starts empty.
     for (const suffix of ['', '-wal', '-shm']) fs.rmSync(DB_PATH + suffix, { force: true });
   });
-  // Single without a group is the pre-migration instance (no mode key); single with 'origin' is native single.
-  const legacy = mode === 'single' && group === null;
   const store = { ...c4db, ...createStore(database, { now: () => now,
-    readConfig: () => ({ state: 'ok', config: legacy ? { runtime } : { session_mode: mode, runtime } }),
+    readConfig: () => ({ state: 'ok', config: { session_mode: mode, runtime } }),
     validateComponent: () => true, validateModel: () => true }) };
   const target = { present: true, ready: true, runtime, runId: env.ZYLOS_RUN_ID,
     runtimeSessionId: 'isolated-session', sessionId: '$1', paneId: '%1', serverGeneration: 'isolated' };
-  const scene = { sessionGroup: group ?? 'origin', present: true, ready: true, processRunning: true,
+  const scene = { sessionGroup: group, present: true, ready: true, processRunning: true,
     runtime, runId: env.ZYLOS_RUN_ID, sessionId: 'isolated-session', runDir,
     createdAt: startedAt - 1, currentSessionTs: startedAt - 1,
     tmuxTarget: { serverGeneration: target.serverGeneration, sessionId: target.sessionId, paneId: target.paneId } };
@@ -83,7 +79,7 @@ function fixture(t, { mode = 'single', runtime = 'claude', group = null, pausePa
     stop: async value => { stops.push(value.runId); present = false; scene.present = false; scene.ready = false; scene.processRunning = false; },
   };
   const supervisor = createSupervisor({ db: store, scenes, zylosDir: root, env,
-    readConfiguration: async () => ({ mode, legacy, runtime }), readMode: async () => ({ mode, legacy }), resolveTargetRuntime: async () => runtime,
+    readConfiguration: async () => ({ mode, runtime }), readMode: async () => ({ mode, keyPresent: true }), resolveTargetRuntime: async () => runtime,
     requestStore: new RestartRequestStore({ file: path.join(root, 'requests.json') }),
     readSyncMarker: async () => null, resolveToolRule: async () => null,
     matchScreen: async () => ({}), checkAuth: async () => ({ status: 'uncertain' }),
@@ -97,7 +93,7 @@ function fixture(t, { mode = 'single', runtime = 'claude', group = null, pausePa
   const pasteReady = new Promise(resolve => { pastedReady = resolve; });
   const pasteGate = new Promise(resolve => { releasePaste = resolve; });
   t.after(() => releasePaste());
-  const delivery = createDelivery({ db: store, getSessionMode: () => mode, getSessionKeyPresent: () => !legacy, now: () => now,
+  const delivery = createDelivery({ db: store, getSessionMode: () => mode, now: () => now,
     sleep: async ms => { now += ms; },
     openTmuxConnection: async () => ({ close: async () => {}, command: async () => '0' }),
     resolveSessionTarget: async ({ sessionGroup }) => { routed.push(sessionGroup); return target; },
@@ -136,72 +132,77 @@ function fixture(t, { mode = 'single', runtime = 'claude', group = null, pausePa
 // Official runner plus this file isolate HOME, ZYLOS_DIR, PM2_HOME, short TMPDIR
 // and database before imports; each fixture reserves a private unused tmux socket.
 for (const mode of ['single', 'multi']) for (const runtime of ['claude', 'codex']) {
-  for (const group of mode === 'single' ? [null, 'origin'] : ['origin', 'telegram:isolated']) {
-    // Native single (Origin group) adds only the inactivity Escape path; the other paths match multi Origin.
-    const native = mode === 'single' && group !== null;
-    const outputs = native ? ['quiet'] : runtime === 'claude' ? ['quiet', ...(mode === 'single' ? ['streaming'] : []), 'foreground-bash', 'foreground-agent', 'escaped-tool'] : ['quiet'];
-    for (const output of outputs) for (const ending of native ? ['inactivity'] : output.startsWith('foreground-') || output === 'streaming' ? ['stop'] : output === 'escaped-tool' ? ['inactivity'] : runtime === 'codex' ? ['stop', 'inactivity', 'api-error'] : ['stop', 'inactivity']) {
-      test(`${native ? 'native single' : mode} ${runtime} ${group ?? 'origin'} holds idle controls through ${output} and delivers once after ${ending}`, { timeout: 5000 }, async t => {
-        const f = fixture(t, { mode, runtime, group });
-        const controls = [runtime === 'codex' ? '/exit' : '/clear', 'Memory Sync requested']
-          .map(content => f.store.insertControl(content, { sessionGroup: group, priority: 1, requireIdle: true, appendAckSuffix: false }));
-        const hasTool = output.startsWith('foreground-') || output === 'escaped-tool';
-        if (hasTool) f.hook('PreToolUse', { tool_use_id: 'foreground', tool_name: output === 'foreground-agent' ? 'Agent' : 'Bash' });
-        if (output === 'foreground-agent') f.hook('SubagentStart', { agent_id: 'foreground-child' });
-        const hookBytes = fs.statSync(path.join(f.runDir, 'events.jsonl')).size;
-        const samples = output === 'streaming' ? [5000, 60000, 600000, 1199999] : hasTool ? [5000, 1199999, 1200000, 1800000] : [5000, 68000, 899999, 1199999];
-        for (const elapsed of samples) {
-          f.at(f.startedAt + elapsed);
-          if (output === 'streaming') { f.output(); f.advance(4000); }
-          const observed = f.read();
-          assert.equal(observed.state, 'busy'); assert.equal(observed.turnOpen, true);
-          assert.equal(observed.tools.length, hasTool ? 1 : 0);
-          await f.interrupt();
-          assert.equal(f.escapeRows().length, 0);
-          assert.equal(fs.statSync(path.join(f.runDir, 'events.jsonl')).size, hookBytes);
+  for (const group of mode === 'single' ? ['origin'] : ['origin', 'telegram:isolated']) {
+    const native = mode === 'single';
+    const outputs = native ? (runtime === 'claude' ? ['quiet', 'streaming'] : ['quiet'])
+      : runtime === 'claude' ? ['quiet', 'foreground-bash', 'foreground-agent', 'escaped-tool'] : ['quiet'];
+    for (const output of outputs) {
+      const endings = output.startsWith('foreground-') || output === 'streaming' ? ['stop']
+        : native || output === 'escaped-tool' ? ['inactivity']
+          : runtime === 'codex' ? ['stop', 'inactivity', 'api-error'] : ['stop', 'inactivity'];
+      for (const ending of endings) {
+        test(`${native ? 'native single' : mode} ${runtime} ${group} holds idle controls through ${output} and delivers once after ${ending}`, { timeout: 5000 }, async t => {
+          const f = fixture(t, { mode, runtime, group });
+          const controls = [runtime === 'codex' ? '/exit' : '/clear', 'Memory Sync requested']
+            .map(content => f.store.insertControl(content, { sessionGroup: group, priority: 1, requireIdle: true, appendAckSuffix: false }));
+          const hasTool = output.startsWith('foreground-') || output === 'escaped-tool';
+          if (hasTool) f.hook('PreToolUse', { tool_use_id: 'foreground', tool_name: output === 'foreground-agent' ? 'Agent' : 'Bash' });
+          if (output === 'foreground-agent') f.hook('SubagentStart', { agent_id: 'foreground-child' });
+          const hookBytes = fs.statSync(path.join(f.runDir, 'events.jsonl')).size;
+          const samples = output === 'streaming' ? [5000, 60000, 600000, 1199999] : hasTool ? [5000, 1199999, 1200000, 1800000] : [5000, 68000, 899999, 1199999];
+          for (const elapsed of samples) {
+            f.at(f.startedAt + elapsed);
+            if (output === 'streaming') { f.output(); f.advance(4000); }
+            const observed = f.read();
+            assert.equal(observed.state, 'busy'); assert.equal(observed.turnOpen, true);
+            assert.equal(observed.tools.length, hasTool ? 1 : 0);
+            await f.interrupt();
+            assert.equal(f.escapeRows().length, 0);
+            assert.equal(fs.statSync(path.join(f.runDir, 'events.jsonl')).size, hookBytes);
+            for (const control of controls) {
+              assert.equal((await f.deliver(control)).blocked, true);
+              assert.equal(f.row(control.id).status, 'pending'); assert.equal(f.row(control.id).retry_count, 0);
+            }
+            assert.equal(f.pasted.length, 0); assert.equal(f.keys.length, 0);
+          }
+          if (ending === 'stop') {
+            if (hasTool) { f.hook('PostToolUse', { tool_use_id: 'foreground' }); f.advance(4000); assert.equal(f.read().turnOpen, true); }
+            f.hook('Stop'); f.advance(4000);
+          } else {
+            if (output === 'escaped-tool') {
+              f.append({ type: 'user', sessionId: f.scene.sessionId, timestamp: new Date(f.now()).toISOString(),
+                message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'foreground', is_error: true, content: 'Interrupted by user' }] } });
+              assert.equal(f.read().tools.length, 0);
+            }
+            if (ending === 'api-error') f.append({ type: 'event_msg', timestamp: new Date(f.now()).toISOString(), payload: { type: 'error', message: 'API request failed' } });
+            const lastActivityAt = f.read().lastActivityAt;
+            f.at(lastActivityAt + OPEN_TURN_INACTIVITY_TIMEOUT_MS - 1);
+            await f.interrupt(); assert.equal(f.escapeRows().length, 0); assert.equal(f.sample().state, 'busy');
+            f.advance(1);
+            assert.equal(f.read().quietTurnDue, true);
+            await f.interrupt();
+            const escapes = f.escapeRows();
+            assert.equal(escapes.length, 1); assert.equal(escapes[0].content, '[KEYSTROKE]Escape');
+            assert.equal(escapes[0].require_idle, 0); assert.equal(escapes[0].bypass_state, 1);
+            const filter = { sessionGroups: [group] };
+            assert.equal(f.store.getNextPendingControl(Math.floor(f.now() / 1000), filter).id, escapes[0].id, 'Escape precedes older normal-priority idle controls');
+            assert.equal((await f.deliver(escapes[0])).delivered, true);
+            assert.equal(f.row(escapes[0].id).status, 'done');
+            for (const elapsed of [1, 1000, OPEN_TURN_INACTIVITY_TIMEOUT_MS]) { f.advance(elapsed); await f.interrupt(); }
+            assert.equal(f.escapeRows().length, 1); assert.equal(f.keys.filter(value => value[0] === 'Escape').length, 1);
+          }
+          assert.equal(f.sample().state, 'idle');
           for (const control of controls) {
-            assert.equal((await f.deliver(control)).blocked, true);
-            assert.equal(f.row(control.id).status, 'pending'); assert.equal(f.row(control.id).retry_count, 0);
+            assert.equal((await f.deliver(control)).delivered, true);
+            assert.equal(f.row(control.id).status, 'done'); assert.equal(f.store.claimControl(control.id), false);
           }
-          assert.equal(f.pasted.length, 0); assert.equal(f.keys.length, 0);
-        }
-        if (ending === 'stop') {
-          if (hasTool) { f.hook('PostToolUse', { tool_use_id: 'foreground' }); f.advance(4000); assert.equal(f.read().turnOpen, true); }
-          f.hook('Stop'); f.advance(4000);
-        } else {
-          if (output === 'escaped-tool') {
-            f.append({ type: 'user', sessionId: f.scene.sessionId, timestamp: new Date(f.now()).toISOString(),
-              message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'foreground', is_error: true, content: 'Interrupted by user' }] } });
-            assert.equal(f.read().tools.length, 0);
-          }
-          if (ending === 'api-error') f.append({ type: 'event_msg', timestamp: new Date(f.now()).toISOString(), payload: { type: 'error', message: 'API request failed' } });
-          const lastActivityAt = f.read().lastActivityAt;
-          f.at(lastActivityAt + OPEN_TURN_INACTIVITY_TIMEOUT_MS - 1);
-          await f.interrupt(); assert.equal(f.escapeRows().length, 0); assert.equal(f.sample().state, 'busy');
-          f.advance(1);
-          assert.equal(f.read().quietTurnDue, true);
+          assert.equal(f.pasted.length, controls.length);
+          for (const control of controls) assert.equal(f.pasted.filter(value => value === (control.content.startsWith('/') ? control.content : `Meanwhile, ${control.content}`)).length, 1);
           await f.interrupt();
-          const escapes = f.escapeRows();
-          assert.equal(escapes.length, 1); assert.equal(escapes[0].content, '[KEYSTROKE]Escape');
-          assert.equal(escapes[0].require_idle, 0); assert.equal(escapes[0].bypass_state, 1);
-          const filter = group === null ? undefined : { sessionGroups: [group] };
-          assert.equal(f.store.getNextPendingControl(Math.floor(f.now() / 1000), filter).id, escapes[0].id, 'Escape precedes older normal-priority idle controls');
-          assert.equal((await f.deliver(escapes[0])).delivered, true);
-          assert.equal(f.row(escapes[0].id).status, 'done');
-          for (const elapsed of [1, 1000, OPEN_TURN_INACTIVITY_TIMEOUT_MS]) { f.advance(elapsed); await f.interrupt(); }
-          assert.equal(f.escapeRows().length, 1); assert.equal(f.keys.filter(value => value[0] === 'Escape').length, 1);
-        }
-        assert.equal(f.sample().state, 'idle');
-        for (const control of controls) {
-          assert.equal((await f.deliver(control)).delivered, true);
-          assert.equal(f.row(control.id).status, 'done'); assert.equal(f.store.claimControl(control.id), false);
-        }
-        assert.equal(f.pasted.length, controls.length);
-        for (const control of controls) assert.equal(f.pasted.filter(value => value === (control.content.startsWith('/') ? control.content : `Meanwhile, ${control.content}`)).length, 1);
-        await f.interrupt();
-        assert.equal(f.escapeRows().length, ending === 'stop' ? 0 : 1);
-        assert.ok(f.routed.every(value => value === group));
-      });
+          assert.equal(f.escapeRows().length, ending === 'stop' ? 0 : 1);
+          assert.ok(f.routed.every(value => value === group));
+        });
+      }
     }
   }
 }
@@ -220,7 +221,7 @@ for (const runtime of ['claude', 'codex']) test(`${runtime} AI work followed by 
   assert.equal(f.read().lastResponseAt, f.now());
   const lastActivityAt = f.read().lastActivityAt;
   const controls = ['/clear', 'Memory Sync requested'].map(content => f.store.insertControl(content,
-    { sessionGroup: null, priority: 1, requireIdle: true, appendAckSuffix: false }));
+    { sessionGroup: f.scene.sessionGroup, priority: 1, requireIdle: true, appendAckSuffix: false }));
   for (const elapsed of [900000, 1080000, OPEN_TURN_INACTIVITY_TIMEOUT_MS - 1]) {
     f.at(lastActivityAt + elapsed); await f.observe();
     assert.equal(f.read().state, 'busy'); assert.equal(f.escapeRows().length, 0);
@@ -229,17 +230,18 @@ for (const runtime of ['claude', 'codex']) test(`${runtime} AI work followed by 
   f.advance(1); await f.observe();
   assert.equal(f.read().state, 'idle'); assert.equal(f.escapeRows().length, 1);
   assert.equal(tracked.delivery.recovery, null); assert.equal(f.stops.length, 0);
-  const escape = f.store.getNextPendingControl(Math.floor(f.now() / 1000));
+  const nextControl = () => f.store.getNextPendingControl(Math.floor(f.now() / 1000), { sessionGroups: [f.scene.sessionGroup] });
+  const escape = nextControl();
   assert.equal(escape.content, '[KEYSTROKE]Escape');
   assert.equal(escape.priority, 0);
   // Same-second insertion exercises the id tie-breaker in the real queue.
   const laterControl = f.store.insertControl('Later idle control',
-    { sessionGroup: null, priority: 0, requireIdle: true, appendAckSuffix: false });
+    { sessionGroup: f.scene.sessionGroup, priority: 0, requireIdle: true, appendAckSuffix: false });
   assert.equal(laterControl.created_at, escape.created_at);
   assert.ok(laterControl.id > escape.id);
-  assert.equal(f.store.getNextPendingControl(Math.floor(f.now() / 1000)).id, escape.id);
+  assert.equal(nextControl().id, escape.id);
   assert.equal((await f.deliver(escape)).delivered, true);
-  assert.equal(f.store.getNextPendingControl(Math.floor(f.now() / 1000)).id, laterControl.id);
+  assert.equal(nextControl().id, laterControl.id);
   assert.equal((await f.deliver(laterControl)).delivered, true);
   for (const control of controls) assert.equal((await f.deliver(control)).delivered, true);
   for (const elapsed of [1, 1000, OPEN_TURN_INACTIVITY_TIMEOUT_MS]) { f.advance(elapsed); await f.observe(); }
@@ -257,11 +259,11 @@ for (const runtime of ['claude', 'codex']) test(`${runtime} queued inactivity Es
   const f = fixture(t, { runtime, pausePaste: true });
   f.advance(1000); f.output(); f.read();
   const message = f.store.insertConversation('in', 'telegram', 'isolated', 'keep this message');
-  const state = { mode: 'single', stopped: false, live: new Map([[null, { present: true, ready: true, runId: f.scene.runId, sessionId: f.scene.sessionId }]]), activations: new Map() };
+  const state = { mode: 'single', stopped: false, live: new Map([[f.scene.sessionGroup, { present: true, ready: true, runId: f.scene.runId, sessionId: f.scene.sessionId }]]), activations: new Map() };
   const lane = createLane({ state, now: f.now, options: { pendingMaxAgeSeconds: 3600 }, diagnostic() {}, capacityWaits: { clear() {} }, deps: {
     db: f.store, readCurrentSession: async () => ({ runId: f.scene.runId, sessionId: f.scene.sessionId, startupControlIds: [] }),
     deliverConversation: f.delivery.deliverConversation, deliverControl: f.delivery.deliverControl,
-  } }, null);
+  } }, f.scene.sessionGroup);
   t.after(() => lane.stop());
   const running = lane.kick();
   try {

@@ -27,7 +27,7 @@ function fixture(t, { watchdog = false, runtime='claude', mode = 'multi', onCont
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-nudge-'));
   const runDir = path.join(root, 'run');
   fs.mkdirSync(runDir);
-  let clock = 1792000000000, fence = null, transition = null, syncHeld = false, switchAt = null;
+  let clock = 1792000000000, fence = null, transition = null;
   const scene = { runtime, sessionGroup: mode === 'single' ? 'origin' : 'telegram:a', runId: 'run-a', sessionId: 'session-a',
     runDir, createdAt: clock, present: true, ready: true, processRunning: true };
   let current = { ...scene };
@@ -45,7 +45,6 @@ function fixture(t, { watchdog = false, runtime='claude', mode = 'multi', onCont
       return onControl(control);
     },
     getControlById: id => controls[id - 1],
-    latestSessionSwitchAt: target => { assert.deepEqual(target, { machine: true }); return switchAt; },
   };
   const scenes = {
     observe: async () => [current], readIdentity: async () => current,
@@ -56,10 +55,7 @@ function fixture(t, { watchdog = false, runtime='claude', mode = 'multi', onCont
   const supervisor = createSupervisor({ db, scenes, zylosDir: root, env: { ZYLOS_DIR: root }, now: () => clock,
     requestStore, readConfiguration: async () => ({ mode, runtime: 'claude', capacity: 3 }),
     readMode: () => ({ mode, keyPresent: true }),
-    readSyncMarker: options => {
-      assert.deepEqual(options, { runDir, kind: 'global', currentRunId: scene.runId });
-      return { held: syncHeld, stale: false };
-    }, resolveTargetRuntime: async () => runtime,
+    resolveTargetRuntime: async () => runtime,
     checkAuth: async () => ({ status: 'uncertain' }), matchScreen: async () => ({}),
     resolveToolRule: () => watchdog ? { watchdog: { enabled: true, maxRuntimeSec: 10, interruptGraceSec: 15, cooldownSec: 2 } } : null,
     log: error => errors.push(error),
@@ -94,7 +90,6 @@ function fixture(t, { watchdog = false, runtime='claude', mode = 'multi', onCont
     replaceSession: () => { current = { ...current, sessionId: 'replacement-session' }; },
     manual: () => requestStore.write([{ requestId: 'manual-test', reason: 'manual_restart', mode,
       ...(mode === 'single' ? {} : { sessionGroup: scene.sessionGroup }), expectedRunId: scene.runId, runIds: [scene.runId], acceptedAt: clock }]),
-    sync: held => { syncHeld = held; }, sessionSwitch: at => { switchAt = at; },
     observe: () => supervisor.observer.observeScene(scene),
   };
 }
@@ -395,10 +390,3 @@ for (const runtime of ['claude', 'codex']) {
     assert.deepEqual(f.errors, []);
   });
 }
-
-test('multi-session composed recovery ignores the single-session Sync marker and switch hold', { timeout: 5000 }, async t => {
-  const f = fixture(t);
-  f.sync(true); f.sessionSwitch(Math.floor(f.now() / 1000));
-  await f.observe();
-  assert.equal(f.controls.length, 2);
-});
