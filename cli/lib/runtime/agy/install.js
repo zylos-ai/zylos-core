@@ -26,9 +26,8 @@ export function probeVersion(identity, options) {
 }
 
 export async function install(identity, { root = ZYLOS_DIR, exec = { execSync, execFileSync } } = {}) {
-  let env;
+  const env = agyCliEnv(root, process.env);
   try {
-    env = agyCliEnv(root, process.env);
     exec.execSync('curl -fsSL https://antigravity.google/cli/install.sh | bash', {
       stdio: 'pipe', timeout: 600000, env,
     });

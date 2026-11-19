@@ -48,9 +48,9 @@ export function isValidBaseUrl(value) {
  * @param {string} pkg - Package name (e.g. "@openai/codex")
  * @returns {boolean}
  */
-export function installGlobalPackage(pkg, exec = { execFileSync }) {
+export function installGlobalPackage(pkg) {
   try {
-    exec.execFileSync('npm', ['install', '-g', pkg], { stdio: 'pipe', timeout: 120000 });
+    execFileSync('npm', ['install', '-g', pkg], { stdio: 'pipe', timeout: 120000 });
     return true;
   } catch {
     return false;

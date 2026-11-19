@@ -1,0 +1,9 @@
+{
+  "program": "Antigravity CLI",
+  "version": "1.5.12",
+  "recordedAt": "2026-11-19T18:51:00Z",
+  "how": "Installed with the official install.sh into a temporary HOME as a dedicated non-root test user on Linux aarch64 (DGX Spark), then ran agy --version with AGY_CLI_DISABLE_AUTO_UPDATE=true.",
+  "files": {
+    "version.txt": "Unmodified stdout from --version."
+  }
+}

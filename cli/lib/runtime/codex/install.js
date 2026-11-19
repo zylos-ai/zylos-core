@@ -12,8 +12,8 @@ export function probeVersion(identity, options) {
   return probe(identity, profiles, options);
 }
 
-export async function install({ exec } = {}) {
-  return installGlobalPackage('@openai/codex', exec);
+export async function install() {
+  return installGlobalPackage('@openai/codex');
 }
 
 export const postUpgradeSync = Object.freeze({
