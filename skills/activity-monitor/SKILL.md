@@ -51,7 +51,7 @@ the Zylos data directory, with valid environment values taking precedence:
 
 | Config key | Environment variable | Default |
 | --- | --- | --- |
-| `session_hot_ttl_seconds` | [`ZYLOS_SESSION_HOT_TTL_SECONDS`](https://github.com/zylos-ai/zylos-core/blob/main/README.md#idle-reclaim-environment) | 1800 seconds |
+| `session_hot_ttl_seconds` | [`ZYLOS_SESSION_HOT_TTL_SECONDS`](https://github.com/zylos-ai/zylos-core/blob/main/README.md#idle-reclaim-environment) | 3300 seconds |
 | `session_evict_min_idle_seconds` | `ZYLOS_SESSION_EVICT_MIN_IDLE_SECONDS` | 300 seconds |
 | `session_reclaim_defer_alert_count` | `ZYLOS_SESSION_RECLAIM_DEFER_ALERT_COUNT` | 4 requests |
 | `sync_threshold` | `ZYLOS_SYNC_THRESHOLD` | 15 conversations |
@@ -123,7 +123,7 @@ another full sequence. Actual reclaim or a new run also clears the count.
 
 Codex does not automatically start a new turn when a background task finishes.
 After deferral resets the idle clock, the session returns at the next idle check
-(by default, about 30 minutes later). If the next step depends on the background
+(by default, about 55 minutes later). If the next step depends on the background
 result, record it in the handoff or arrange for the task itself to send a
 completion message back.
 

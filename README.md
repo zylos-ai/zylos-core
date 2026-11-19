@@ -430,6 +430,11 @@ default resolution; it is not a guarantee against every TUI reconnect defect.
 
 ### Idle reclaim environment
 
+Sessions start idle reclaim preparation after 55 minutes (3300 seconds) by default.
+An existing `session_hot_ttl_seconds` config value overrides this default; a valid
+`ZYLOS_SESSION_HOT_TTL_SECONDS` environment value takes priority over config.
+The configurable range remains 5–1440 minutes.
+
 `ZYLOS_SESSION_HOT_TTL_SECONDS` must be set uniformly in the environment used
 to start the Zylos services, so Dashboard and activity-monitor both inherit it.
 Setting this variable only for an individual PM2 service is unsupported:

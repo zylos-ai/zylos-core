@@ -15,7 +15,7 @@ export function parseSupervisorConfiguration(config, env = process.env) {
   const setting = (key, fallback) => positiveInteger(env[`ZYLOS_${key.toUpperCase()}`])
     ?? positiveInteger(config[key]) ?? fallback;
   return {
-    hotTtlSeconds: setting('session_hot_ttl_seconds', 1800),
+    hotTtlSeconds: setting('session_hot_ttl_seconds', 3300),
     reclaimDeferAlertCount: setting('session_reclaim_defer_alert_count', 4),
     evictMinIdleSeconds: setting('session_evict_min_idle_seconds', 300),
     syncMinIntervalSeconds: setting('sync_min_interval_seconds', 600),

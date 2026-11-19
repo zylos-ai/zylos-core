@@ -74,6 +74,14 @@ export function launchEnvironment(root, processEnv = process.env, { runtime } = 
   if (runtime === 'claude') {
     for (const key of CLAUDE_BUILTIN_ENV_KEYS) if (dotenvVars[key]) env[key] = dotenvVars[key];
   }
+  // Cache TTL defaults belong only to Claude; nonempty .env values override them.
+  for (const [key, fallback] of Object.entries({
+    CLAUDE_CODE_PROMPT_CACHE_TTL: '1h',
+    CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '5m',
+  })) {
+    if (runtime === 'claude') env[key] = dotenvVars[key] || fallback;
+    else delete env[key];
+  }
   if (runtime === 'agy') {
     for (const key of ['GEMINI_API_KEY', 'HTTPS_PROXY']) {
       const value = Object.hasOwn(dotenvVars, key) ? dotenvVars[key] : processEnv[key];

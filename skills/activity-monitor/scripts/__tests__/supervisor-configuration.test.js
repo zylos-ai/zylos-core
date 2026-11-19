@@ -102,7 +102,7 @@ test('entry gives valid environment settings priority over real config.json', t 
 
 test('invalid optional values fall through environment, config and defaults without losing thresholds', () => {
   const defaults = parseSupervisorConfiguration({}, {});
-  assert.deepEqual(defaults, { hotTtlSeconds: 1800, reclaimDeferAlertCount: 4, evictMinIdleSeconds: 300, syncMinIntervalSeconds: 600, syncMaxIntervalSeconds: 21600,
+  assert.deepEqual(defaults, { hotTtlSeconds: 3300, reclaimDeferAlertCount: 4, evictMinIdleSeconds: 300, syncMinIntervalSeconds: 600, syncMaxIntervalSeconds: 21600,
     originSyncThreshold: 50, syncBatchLimit: 200, syncThreshold: 15 });
   const fields = ['session_reclaim_defer_alert_count', 'session_hot_ttl_seconds', 'session_evict_min_idle_seconds', 'sync_min_interval_seconds', 'sync_max_interval_seconds', 'origin_sync_threshold', 'sync_batch_limit', 'sync_threshold'];
   for (const invalid of ['', '0', '-1', '1.5', 'NaN', '12x', '9007199254740992']) {

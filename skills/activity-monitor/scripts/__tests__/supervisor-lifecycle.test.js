@@ -34,7 +34,7 @@ function fixture(Class = SupervisorLifecycle) {
     conversations: 0, runningControls: 0, withoutDeadline: 0, lastActivity: 0, unsummarized: 0,
     transition: null, pending: [], marker: { held: false, stale: false }, markerReads: [],
     backlog: { total: 0, groups: [] }, expected: { runtime: 'claude', mode: 'default' },
-    context: { configuration: { mode: 'multi', capacity: 1 } } };
+    context: { configuration: { mode: 'multi', capacity: 1, hotTtlSeconds: 1800 } } };
   const configuration = f.context.configuration;
   Object.defineProperty(f, 'context', { get: () => ({ configuration, transition: f.transition,
     scenes: f.scenes.map(s => ({ ...s })), fences: [...f.fences].map(([sessionGroup, value]) => ({ sessionGroup, ...value })), restartRequests: [...f.requests] }) });
