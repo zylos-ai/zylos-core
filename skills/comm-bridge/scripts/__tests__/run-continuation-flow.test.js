@@ -141,7 +141,7 @@ test('native gating finishes an upgrade reclaim without conversion or premature 
   f.db.setDrainFence(group, { reason: 'upgrade', runId });
   f.db.beginModeTransition('multi', 'single');
   let mode = 'multi';
-  const stops = [], conversions = [], writes = [], restarts = [];
+  const stops = [], writes = [], restarts = [];
   const observe = async () => [...f.scene.values()];
   const lifecycle = new SupervisorLifecycle({
     db: f.db, observeGroup: f.deps.readLiveIdentity, observe,
@@ -151,7 +151,6 @@ test('native gating finishes an upgrade reclaim without conversion or premature 
   const coordinator = new ModeSwitchCoordinator({
     db: f.db, lifecycle, readMode: () => ({ mode }), readConfiguration: async () => ({ runtime: 'claude' }),
     observe, readRequests: () => [],
-    convert: async row => { conversions.push(row.run_id); assert.fail('Native switching must not convert memory'); },
     writeMode: async target => { writes.push(target); mode = target; },
     restart: { advance: async request => { restarts.push(request.runId); return { confirmed: true }; } },
     diagnostic: () => {}, now: f.now,
@@ -166,7 +165,7 @@ test('native gating finishes an upgrade reclaim without conversion or premature 
   [{ sessionGroup: group, runId, reason: 'upgrade', continuationPending: 0 }]);
   assert.equal(groupControls(), 0);
   assert.equal(f.db.getModeTransition().phase, 'cutover', 'gating must finish after the existing upgrade reclaim');
-  assert.deepEqual(conversions, []); assert.deepEqual(writes, []); assert.deepEqual(restarts, []);
+  assert.deepEqual(writes, []); assert.deepEqual(restarts, []);
   assert.equal(groupControls(), 0); assert.equal(f.db.listPendingContinuations().length, 0);
 });
 

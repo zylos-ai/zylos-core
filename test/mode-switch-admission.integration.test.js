@@ -88,11 +88,9 @@ test('expired reply budget does not start a read or resend',async()=>{
 });
 // Run for public switch argument or command changes. CLI children inherit a
 // private PM2 home and short TMPDIR and use only the temporary instance root.
-for (const [name, args] of [['invalid switch target', ['switch', 'bad']], ['removed cancellation', ['cancel']]]) {
-test(`public CLI rejects ${name} with no instance writes`,()=>{
+test('public CLI rejects an invalid switch target with no instance writes',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'mode-switch-cli-args-'));cleanups.push(()=>fs.rmSync(root,{recursive:true,force:true}));
-  const child=spawnSync(process.execPath,['cli/zylos.js','session-mode',...args,'--json'],{encoding:'utf8',timeout:5000,env:{...process.env,HOME:root,ZYLOS_DIR:root}});
+  const child=spawnSync(process.execPath,['cli/zylos.js','session-mode','switch','bad','--json'],{encoding:'utf8',timeout:5000,env:{...process.env,HOME:root,ZYLOS_DIR:root}});
   expect(child.status).toBe(1);expect(JSON.parse(child.stdout).error.code).toBe('INVALID_ARGUMENT');
   expect(child.stdout.trim().split('\n')).toHaveLength(1);expect(fs.readdirSync(root)).toEqual([]);
 });
-}

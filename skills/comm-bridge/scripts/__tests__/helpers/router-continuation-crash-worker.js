@@ -62,7 +62,7 @@ router = createRouter({ db, now: () => clock,
     }
   },
   deliverConversation: async () => { throw Error('no inbound in continuation fixture'); },
-  handleExpired: async () => {}, prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
+  handleExpired: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
   diagnostic: (event, fields) => record(event, fields), alert: (event, fields) => record('alert', { alert: event, ...fields }),
 }, { poolSize: () => 1, readyTimeoutMs: 1000, pollIntervalMs: 5 });
 if (phase === 'restart' && boundary === 'before-launch') {

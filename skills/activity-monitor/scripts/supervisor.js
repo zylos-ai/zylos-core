@@ -245,7 +245,6 @@ export function createSupervisor(deps) {
     reconciliationReadFailed:error=>endings.reportReadFailure(error),
     afterRound:()=>deps.afterRound?.({health,lifecycle,admission,context:roundContext}),
     preparePublication: typeof scenes.readIdentities === 'function' ? async context=>{
-      if (context.configuration.legacy) return;
       context.publicationIdentities = new Map();
       context.publicationActivities = new Map();
       const candidates = context.scenes.filter(scene=>scene.ready && scene.processRunning===true && scene.runId && scene.sessionId);
@@ -263,7 +262,7 @@ export function createSupervisor(deps) {
       context.publicationIdentities=await scenes.readIdentities([...context.publicationActivities.keys()]);
     } : undefined,
     probeAndPublish:async(scene,context)=>{
-      if(context.configuration.legacy || !scene.ready || scene.processRunning!==true || !scene.runId || !scene.sessionId)return;
+      if(!scene.ready || scene.processRunning!==true || !scene.runId || !scene.sessionId)return;
       const matches=current=>current.present && current.ready && current.runId===scene.runId && current.sessionId===scene.sessionId && current.runtime===scene.runtime;
       // The round owns the process sample. Recheck only run/session identity at
       // publication boundaries; do not resample every read-only health check.

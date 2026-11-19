@@ -151,7 +151,9 @@ export class SupervisorAdmission {
     const configuration = await this.readMode();
     const mode = configuration.mode ?? 'single';
     const legacy = configuration.legacy === true;
-    if (legacy || (mode === 'single' && Object.hasOwn(request, 'sessionGroup') && request.sessionGroup !== 'origin')) return rejected('not_multi');
+    if (Object.hasOwn(request, 'sessionGroup') && (legacy || (mode === 'single' && request.sessionGroup !== 'origin'))) {
+      return rejected('not_multi');
+    }
     const group = request.sessionGroup ?? 'origin';
     if (await this.db.getDrainFence(group ?? 'origin') || await this.db.getDrainFence('*')) return rejected('fence_conflict');
     if (rows.some(row => row.reason === 'manual_restart')) return rejected('manual_restart_pending');
@@ -159,7 +161,7 @@ export class SupervisorAdmission {
     // null means both the process and tmux absence were positively observed.
     if (!request.expectedRunId && run !== null) return rejected('target_required');
     if (run === null) {
-      if (group === 'origin') {
+      if (!legacy && group === 'origin') {
         try { await this.db.insertControl(MANUAL_WAKE_PROMPT, { sessionGroup: 'origin', priority: 2, appendAckSuffix: false }); }
         catch { return rejected('wake_failed'); }
       }
@@ -167,7 +169,7 @@ export class SupervisorAdmission {
     }
     if (nonempty(run?.runId) && run.runId !== request.expectedRunId) return { ok: false, result: 'stale_target', currentRunId: run.runId };
     if (!nonempty(run?.runId)) return rejected('identity_unavailable');
-    if (!run.ready) return rejected('not_ready');
+    if (legacy || !run.ready) return rejected('not_ready');
     if (request.expectedSessionId !== undefined && request.expectedSessionId !== run.sessionId) return rejected('identity_unavailable');
     const row = { requestId: request.requestId, reason: 'manual_restart', acceptedAt: this.now(), runIds: [run.runId],
       mode, expectedRunId: run.runId };

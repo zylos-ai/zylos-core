@@ -2,8 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { requestRuntimeRestart } from '../request-runtime-restart.js';
 
-const base={now:()=>100,deadlineAt:1000,requestId:'producer',readMode:()=>({mode:'multi'}),readTransition:()=>null,
-  enqueueExit:()=>{throw new Error('wrong fallback');}};
+const base = { now: () => 100, deadlineAt: 1000, requestId: 'producer' };
 test('the restart producer submits one restart_all and returns an empty completion', async () => {
   let submits = 0;
   const result = await requestRuntimeRestart({ ...base, send: (request, options) => {
@@ -78,7 +77,7 @@ test('supervisor post-upgrade submission reaches a real socket that starts liste
     });
   });
   t.after(async()=>{for(const peer of peers)peer.destroy();if(server.listening)await new Promise(resolve=>server.close(resolve));fs.rmSync(root,{recursive:true,force:true});});
-  const result=await requestRuntimeRestart({readMode:()=>({mode:'multi'}),readTransition:()=>null,afterServiceRestart:true,
+  const result=await requestRuntimeRestart({afterServiceRestart:true,
     requestId:'delayed-upgrade',send:(request,options)=>submit(request,{...options,socketPath,connect:opts=>{
       attempts++;const socket=net.createConnection(opts);
       // Start the listener only after the first connection has actually failed.

@@ -9,7 +9,7 @@ import { routerFixture } from '../../../comm-bridge/scripts/__tests__/helpers/ro
 // Coverage: the production database facade, including cleanup and completion
 // writes. Run when coordinator/store facade wiring changes; skip unrelated
 // runtime changes. The official runner owns HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and
-// removes its private database on teardown. All scene/runtime/conversion/restart
+// removes its private database on teardown. All scene/runtime/restart
 // adapters are injected; no tmux socket, PM2 process or network is opened.
 test('public database facade completes legacy drain and preserves future deadlines', async t => {
   const root = fs.realpathSync(path.dirname(process.env.HOME));
@@ -30,7 +30,7 @@ test('public database facade completes legacy drain and preserves future deadlin
   const owner = new ModeSwitchCoordinator({ db,
     readMode: () => ({ mode, keyPresent: mode === 'multi' }), readConfiguration: () => ({ mode }),
     readRequests: () => [], legacyPresent: () => false, observe: () => [],
-    lifecycle: { advanceReclaim: async () => {} }, convert: async () => {},
+    lifecycle: { advanceReclaim: async () => {} },
     writeMode: value => { mode = value; }, restart: { advance: async () => ({ confirmed: true }) },
     diagnostic: event => events.push(event) });
   const insert = sqlite.prepare(`INSERT INTO control_queue(content,raw_content,status,created_at,updated_at,ack_deadline_at)
@@ -53,25 +53,27 @@ test('public database facade completes legacy drain and preserves future deadlin
   assert.equal(db.getModeTransition(), null);
   assert.equal(db.getDrainFence('*'), null);
   assert.equal(db.getLastCompletedModeTransition().phase, 'complete');
-  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM control_queue WHERE session_group='origin' AND status='pending'").get().count, 1);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM control_queue WHERE session_group='origin' AND status='pending'").get().count, 0);
 });
 
 // Coverage: real coordinator/store/router gating and activation after completion.
 // Run for legacy control cleanup or transition fence changes; skip unrelated
-// runtime/conversion changes. Official runner isolates HOME/ZYLOS_DIR/PM2_HOME
-// and short TMPDIR. SQLite is private/in-memory; runtime adapters, conversion,
+// runtime changes. Official runner isolates HOME/ZYLOS_DIR/PM2_HOME
+// and short TMPDIR. SQLite is private/in-memory; runtime adapters,
 // restart and scene observations are injected. No tmux socket, PM2 or network
 // is opened. Fixture teardown stops router work and closes the database.
 for (const deadline of [null, 1800001000]) test(`router activation after legacy drain with ${deadline === null ? 'no' : 'future'} deadline`, async t => {
   const f = routerFixture(t); let mode = 'single';
   f.dependencies.readConfig = () => ({ state: 'ok', config: { runtime: 'claude', ...(mode === 'multi' ? { session_mode: mode } : {}) } });
   f.deps.readSessionMode = () => ({ mode, keyPresent: mode === 'multi' });
+  const conversationId = Number(f.sqlite.prepare(`INSERT INTO conversations(direction,channel,endpoint_id,content,timestamp,status,session_group)
+    VALUES('in','test','queued','pending before migration',datetime(?,'unixepoch'),'pending','')`).run(f.now() / 1000).lastInsertRowid);
   const id = Number(f.sqlite.prepare(`INSERT INTO control_queue(content,raw_content,status,created_at,updated_at,ack_deadline_at)
     VALUES('exit','exit','running',1700000000,1700000000,?)`).run(deadline).lastInsertRowid);
   const owner = new ModeSwitchCoordinator({ db: f.db, now: f.now,
     readMode: () => ({ mode, keyPresent: mode === 'multi' }), readConfiguration: () => ({ mode }),
     readRequests: () => [], legacyPresent: () => false, observe: () => [],
-    lifecycle: { advanceReclaim: async () => {} }, convert: async () => {},
+    lifecycle: { advanceReclaim: async () => {} },
     writeMode: value => { mode = value; }, restart: { advance: async () => {
       await f.router.stop(); await f.create().initialize(); return { confirmed: true };
     } } });
@@ -79,7 +81,7 @@ for (const deadline of [null, 1800001000]) test(`router activation after legacy 
   f.db.setDrainFence('*');
   await f.create().initialize(); await f.rounds(2); f.advance(5000); await f.rounds(2);
   assert.equal(f.calls.filter(call => call[0] === 'launch').length, 0);
-  assert.ok(f.events.some(event => event.event === 'start_skipped_fenced'), JSON.stringify(f.events.slice(-10)));
+  assert.equal(f.row(conversationId).status, 'pending');
   for (let i = 0; i < 3; i++) await owner.advance();
   await f.rounds(2); f.advance(5000); await f.rounds(5);
   if (deadline === null) {
@@ -87,9 +89,12 @@ for (const deadline of [null, 1800001000]) test(`router activation after legacy 
     assert.equal(f.db.getControlById(id).status, 'timeout');
     assert.equal(f.calls.filter(call => call[0] === 'launch' && call[1].sessionGroup === 'origin').length, 1);
     assert.equal(f.scene.get('origin').ready, true);
+    assert.equal(f.row(conversationId).status, 'delivered');
+    assert.equal(f.row(conversationId).session_group, 'origin');
   } else {
     assert.equal(mode, 'single'); assert.equal(f.db.getModeTransition().phase, 'gating'); assert.ok(f.db.getDrainFence('*'));
     assert.equal(f.db.getControlById(id).status, 'running');
+    assert.equal(f.row(conversationId).status, 'pending');
     assert.equal(f.calls.filter(call => call[0] === 'launch').length, 0);
   }
 });

@@ -74,7 +74,7 @@ if (role === 'm4') {
     },
     deliverControl: async row => sqlite.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(row.id),
     deliverConversation: async (row, live) => db.markDelivered(row.id, { sessionId: live.sessionId }),
-    handleExpired: async () => {}, prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
+    handleExpired: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
     diagnostic: (event, fields) => trace('diagnostic', { event, ...fields }), log: value => trace('log', { value }),
   }, { poolSize: () => 4, readyTimeoutMs: 10000 });
   await router.initialize();

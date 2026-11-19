@@ -48,25 +48,9 @@ test('subagents, missing run, disabled and malformed policy never enqueue', asyn
   assert.equal(malformed.calls.length, 0);
 });
 
-function restartOptions(config = {}) {
-  const calls = [];
-  return { calls, readMode: () => ({ mode: config.session_mode ?? null, keyPresent: Object.hasOwn(config, 'session_mode') }), readTransition: () => null,
-    exec: (...args) => calls.push(args), exists: () => true, log: () => {}, errorLog: () => {} };
-}
-
-test('native single hook updates submit an Origin restart request', async () => {
-  const options = sockFixture({ kind: 'accepted', reply: { result: 'accepted', runCount: 1 } });
-  options.readMode = () => ({ mode: 'single', keyPresent: true });
-  const result = await enqueueRestartIfNeeded(options);
-  assert.equal(result.submitted, true);
-  assert.equal(options.submits.length, 1);
-  assert.equal(options.submits[0][0].type, 'restart_all');
-  assert.equal(options.calls.length, 0);
-});
-
 function sockFixture(outcome, lookup = 'unknown') {
   const submits = [], lookups = [];
-  return { ...restartOptions({ session_mode: 'multi' }), submits, lookups,
+  return { submits, lookups, log: () => {}, errorLog: () => {},
     now: () => 1000, requestId: () => 'upgrade-1000-aabbccddeeff', deadlineAt: 11000,
     submitRestart: async (...args) => { submits.push(args); return outcome; },
     lookupRestart: async (...args) => { lookups.push(args); return lookup; } };
@@ -77,10 +61,6 @@ test('hook consumer uses submit, frozen envelope and accepted results', async ()
     const runCount = result === 'done_empty' ? 0 : 3;
     const options = sockFixture({ kind: 'accepted', sent: true,
       reply: { requestId: 'upgrade-1000-aabbccddeeff', result, runCount } });
-    if (result === 'already_accepted') {
-      options.readMode = () => ({ mode: 'single' });
-      options.readTransition = () => ({ phase: 'gating' });
-    }
     const actual = await enqueueRestartIfNeeded(options);
     assert.deepEqual(actual, { submitted: true, requestId: 'upgrade-1000-aabbccddeeff', result, runCount });
     assert.equal(options.submits.length, 1);
@@ -89,23 +69,23 @@ test('hook consumer uses submit, frozen envelope and accepted results', async ()
     assert.equal(options.submits[0][1].replyMaxMs, 10000);
     assert.equal(options.submits[0][1].connectRetryEveryMs, undefined);
     assert.match(options.submits[0][1].socketPath, /activity-monitor\/am\.sock$/);
-    assert.equal(options.lookups.length, 0); assert.equal(options.calls.length, 0);
+    assert.equal(options.lookups.length, 0);
   }
 });
 
-test('definitive rejection and sent:false never look up, resubmit or fall back to exit', async () => {
+test('definitive rejection and sent:false never look up or resubmit', async () => {
   for (const code of ['manual_restart_pending', 'requests_unreadable', 'request_conflict', 'invalid_request', 'entry_not_open']) {
     const options = sockFixture({ kind: 'rejected', sent: true, reply: { requestId: 'upgrade-1000-aabbccddeeff', code } });
     const actual = await enqueueRestartIfNeeded(options);
     assert.equal(actual.submitted, false); assert.equal(actual.code, code);
     assert.deepEqual(actual.persisted, []);
     assert.equal(actual.category, ['manual_restart_pending', 'entry_not_open'].includes(code) ? 'T' : 'R');
-    assert.equal(options.lookups.length, 0); assert.equal(options.submits.length, 1); assert.equal(options.calls.length, 0);
+    assert.equal(options.lookups.length, 0); assert.equal(options.submits.length, 1);
   }
   for (const kind of ['connect_failed', 'deadline_exceeded']) {
     const options = sockFixture({ kind, sent: false });
     assert.equal((await enqueueRestartIfNeeded(options)).category, 'T');
-    assert.equal(options.lookups.length, 0); assert.equal(options.submits.length, 1); assert.equal(options.calls.length, 0);
+    assert.equal(options.lookups.length, 0); assert.equal(options.submits.length, 1);
   }
 });
 
@@ -117,7 +97,7 @@ test('all uncertain outcomes use one same-deadline lookup and never resubmit', a
       assert.equal(actual.category, 'U'); assert.equal(actual.persisted, null); assert.equal(actual.lookup, lookup);
       assert.equal(actual.submitted, ['accepted', 'done'].includes(lookup) ? true : null);
       assert.deepEqual(options.lookups, [['upgrade-1000-aabbccddeeff', { deadlineAt: 11000 }]]);
-      assert.equal(options.submits.length, 1); assert.equal(options.calls.length, 0);
+      assert.equal(options.submits.length, 1);
     }
   }
 });
@@ -129,7 +109,7 @@ test('lookup failure and exhausted budget remain fail closed', async () => {
   assert.equal(actual.category, 'U'); assert.equal(actual.lookup, 'unknown'); assert.equal(actual.submitted, null);
   const expired = sockFixture(); expired.deadlineAt = 1000;
   assert.equal((await enqueueRestartIfNeeded(expired)).sent, false);
-  assert.equal(expired.submits.length, 0); assert.equal(expired.lookups.length, 0); assert.equal(expired.calls.length, 0);
+  assert.equal(expired.submits.length, 0); assert.equal(expired.lookups.length, 0);
 });
 
 test('both-runtime preparation preserves unrelated hook identity', () => {

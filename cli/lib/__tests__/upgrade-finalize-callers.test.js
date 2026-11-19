@@ -44,8 +44,6 @@ function fixture(t, config = {}) {
     verifyServices: () => { calls.push('verify'); },
     dashboardOwner: { verifyDashboard: () => ({ state: 'ready', errors: [] }) },
     readModeStatus: () => ({ sessionMode: null, transition: null }),
-    readMode: () => ({ mode: null, keyPresent: false }),
-    readTransition: () => null,
     restart: async options => {
       calls.push('restart');
       assert.equal(Object.hasOwn(options,'deadlineAt'),false);

@@ -33,8 +33,8 @@ test('old configuration upgrade exposes the same model threshold in settings, mo
     ensureMemoryMigration(){},rotateSession(){},verifyPublicationForServices(){},protectedSuccess(){},
     startServices:()=>({status:'done'}),verifyServices:()=>({status:'done'}),
     dashboardOwner:{verifyDashboard:()=>({state:'degraded',errors:[]})},
-    readModeStatus:()=>({sessionMode:'single',transition:null}),readMode:()=>({mode:'single',keyPresent:true}),readTransition:()=>null,
-    restart:()=>({ok:true,data:{result:'exit_enqueued'}}),
+    readModeStatus:()=>({sessionMode:'single',transition:null}),
+    restart:()=>({ok:true,data:{result:'accepted'}}),
   });
   assert.equal(result.success,true);
   const config=JSON.parse(fs.readFileSync(file,'utf8'));

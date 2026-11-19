@@ -142,11 +142,24 @@ test('absent Origin writes an unbound wake before replying and enqueue failure l
   f.db.insertControl = () => { throw new Error('write failed'); };
   assert.equal((await f.admission.handle(manual())).reason, 'wake_failed');
   assert.deepEqual(f.store.read(), []); assert.equal(fs.existsSync(f.file), false);
+});
+
+test('pre-migration manual restart verifies Origin absence without writing a wake or intent', async t => {
+  const f = fixture(t);
   f.state.mode = 'single'; f.state.keyPresent = false;
-  for (const expected of [true, false]) {
-    const request = manual(); if (!expected) delete request.expectedRunId;
-    assert.equal((await f.admission.handle(request)).reason, 'not_multi');
-  }
+  const request = manual(); delete request.expectedRunId;
+  const observed = [];
+  f.admission.readRun = group => { observed.push(group); return f.state.run; };
+  f.db.insertControl = () => assert.fail('a pre-migration instance cannot wake Origin');
+  assert.equal((await f.admission.handle({ ...request, sessionGroup: 'origin' })).reason, 'not_multi');
+  assert.deepEqual(observed, []);
+  f.state.run = { ready: false };
+  assert.equal((await f.admission.handle(request)).reason, 'target_required');
+  f.state.run = null;
+  assert.equal((await f.admission.handle(request)).result, 'already_stopped');
+  assert.deepEqual(observed, ['origin', 'origin']);
+  assert.equal(fs.existsSync(f.file), false);
+  assert.equal(f.state.fences.size, 0);
 });
 test('stale, incomplete and starting identity cannot become manual targets', async t => {
   const f = fixture(t); f.state.run.runId='new';

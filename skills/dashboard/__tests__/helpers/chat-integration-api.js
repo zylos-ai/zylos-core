@@ -233,7 +233,6 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
         readConfiguration: () => ({ runtime: 'claude', session_mode: readMode() }), readRequests: () => [],
         legacyPresent: () => false, globalMemoryPending: () => false, observe: () => [],
         lifecycle: { advanceReclaim: () => assert.fail('No runtime exists in this HTTP fixture') },
-        convert: () => assert.fail('Native switching must not convert memory'),
         writeMode: target => fs.writeFileSync(modePath, JSON.stringify({ runtime: 'claude', session_mode: target })),
         restart: { advance: async () => ({ confirmed: true }) } });
       const accepted = await coordinator.handle({ target: 'single' });

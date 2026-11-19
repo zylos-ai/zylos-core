@@ -77,7 +77,7 @@ test('three targets count and expire only pending, preserve running and terminal
       const running = add(s, scope, 'running', { ackDeadlineAt: scope === null ? null : NOW + 10 }); s.claimControl(running.id); rows.push(running);
       const done = add(s, scope, 'done'); db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(done.id); rows.push(done);
     }
-    assert.deepEqual(s.countNonTerminalControls(target), { pending: scopes.length, running: scopes.length, runningWithoutDeadline: scopes.includes(null) ? 1 : 0 });
+    assert.deepEqual(s.countNonTerminalControls(target), { pending: scopes.length, running: scopes.length });
     const expected = rows.filter(r => scopes.includes(r.session_group) && r.raw_content === 'pending');
     assert.deepEqual(s.expirePendingControls(target), expected.map(r => ({ id: r.id, session_group: r.session_group, raw_content: r.raw_content })));
     for (const r of rows) {

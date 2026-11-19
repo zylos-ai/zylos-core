@@ -552,7 +552,7 @@ for(const failure of [null,'thresholds','ensure','state'])test(`closed writer ac
    commitBaselines:()=>{available();return {status:'done'};},
    startServices:()=>{assert.doesNotThrow(()=>require(stable).assertCoreDatabaseAvailable(f.root));started++;return {status:'done'};},
    verifyServices:()=>({status:'done'}),dashboardOwner:{verifyDashboard:()=>({state:'ready',errors:[]})},
-   readMode:()=>({mode:'single',keyPresent:true}),readTransition:()=>null,restart:()=>({ok:true}),protectedSuccess:()=>{}
+   restart:()=>({ok:true}),protectedSuccess:()=>{}
  });
  assert.equal(result.success,!failure,JSON.stringify(result));
  assert.equal(started,failure?0:1);

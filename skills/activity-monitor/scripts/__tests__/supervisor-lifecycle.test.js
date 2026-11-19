@@ -31,7 +31,7 @@ function fixture(Class = SupervisorLifecycle) {
     assert.ok(env[key].startsWith(root + path.sep)); fs.mkdirSync(env[key], { recursive: true });
   }
   const f = { now: 2_000_000, scenes: [scene()], fences: new Map(), requests: [], controls: [], events: [], stops: [], forgotten: [],
-    conversations: 0, runningControls: 0, withoutDeadline: 0, lastActivity: 0, unsummarized: 0,
+    conversations: 0, runningControls: 0, lastActivity: 0, unsummarized: 0,
     transition: null, pending: [], marker: { held: false, stale: false }, markerReads: [],
     backlog: { total: 0, groups: [] }, expected: { runtime: 'claude', mode: 'default' },
     context: { configuration: { mode: 'multi', capacity: 1, hotTtlSeconds: 1800 } } };
@@ -51,7 +51,7 @@ function fixture(Class = SupervisorLifecycle) {
     recordRunEnd: (g, options) => { f.endings ??= []; f.endings.push({ sessionGroup: g, ...options }); f.fences.delete(g); return { recorded: true }; },
     countRunningConversations: () => f.conversations,
     countGlobalRunningConversations: () => f.conversations,
-    countNonTerminalControls: () => ({ running: f.runningControls, runningWithoutDeadline: f.withoutDeadline }),
+    countNonTerminalControls: () => ({ running: f.runningControls }),
     expireStaleRunningControls: () => [],
     getLastActivity: () => ({ ts: f.lastActivity }),
     getUnsummarizedRange: () => ({ count: f.unsummarized, firstAt: f.unsummarized ? 1_000_000 : null, lastConversationId: f.unsummarized || null }),
@@ -1291,7 +1291,7 @@ test('persisted lifecycle prompts reject replacement runs and never count as Ori
   });
 });
 
-test('completed fenced reclaims record each reason while cancelled and single paths do not', async () => {
+test('completed fenced reclaims record each reason while cancelled paths do not', async () => {
   for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'mode_switch', 'model_config']) {
     for (const present of [false, true]) {
       const f = fixture(), fence = f.fence(reason); if (!present) f.scenes = [];
@@ -1302,9 +1302,6 @@ test('completed fenced reclaims record each reason while cancelled and single pa
     const cancelled = fixture(), row = cancelled.fence(reason); cancelled.scenes[0].state = 'busy';
     await cancelled.lifecycle.advanceReclaim(row, cancelled.context); assert.equal(cancelled.endings, undefined);
   }
-  const single = fixture(); single.context.configuration.mode = 'single'; single.context.configuration.legacy = true; single.scenes = [];
-  await single.lifecycle.advanceReclaim({ sessionGroup: null, runId: 'single', reason: 'auth' }, single.context, { unfenced: true });
-  assert.equal(single.endings, undefined);
 });
 
 test('replacement current-session identity clears only while unreadable or old identity still records', async () => {

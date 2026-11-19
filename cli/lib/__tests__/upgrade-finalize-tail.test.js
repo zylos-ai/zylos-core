@@ -60,8 +60,6 @@ function deps(calls, extras={}) {
     verifyServices:()=>{calls.push('verify');return {status:'done'};},
     dashboardOwner:{verifyDashboard:()=>{calls.push('dashboard');return {state:'degraded',errors:[]};}},
     readModeStatus:()=>{throw Object.assign(Error('session-mode status is unavailable'),{code:'SESSION_MODE_STATUS_UNAVAILABLE'});},
-    readMode:()=>{calls.push('mode');return {mode:null,keyPresent:false};},
-    readTransition:()=>{calls.push('transition');return null;},
     restart:async options=>{calls.push('restart');assert.deepEqual(options,{afterServiceRestart:true});return {ok:true,data:{result:'accepted'}};},
     verifyPublicationForServices(){},protectedSuccess(){},
     finalizeWebConsoleRemoval:async()=>({warnings:[]}),
@@ -135,8 +133,7 @@ for(const outcome of ['unavailable','invalid-json','rejected']) test(`session-mo
 test('mode transition reporting uses session-mode status independently of restart routing',async t=>{
   const ctx=fixture(t),calls=[];
   const result=await completeUpgradeFinalization(ctx,deps(calls,{
-    readModeStatus:()=>({ok:true,data:{sessionMode:'multi',transition:null}}),
-    readTransition:()=>({phase:'gating'})
+    readModeStatus:()=>({ok:true,data:{sessionMode:'multi',transition:null}})
   }));
   assert.equal(result.completion.modeTransition,'none');
   assert.deepEqual(result.modeStatus,{state:'observed',sessionMode:'multi',transition:null});

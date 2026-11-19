@@ -316,7 +316,7 @@ test('single recovery and unordered hook verification ignore busy activity and r
     if (kind === 'single') f.setMode('single');
     const result = kind === 'hook' ? f.observer.requestVerification('claude') : f.observer.requestProbe('claude');
     await Promise.all([...f.observer.preparations]);
-    const row = f.controls[0]; assert.ok(row); assert.equal(row.sessionGroup, kind === 'single' ? null : 'origin');
+    const row = f.controls[0]; assert.ok(row); assert.equal(row.sessionGroup, 'origin');
     assert.equal(row.targetBinding.runId, scene.runId);
     assert.equal(row.ackDeadlineAt, f.now() / 1000 + (kind === 'single' ? 120 : 300));
     row.status = 'timeout'; f.advance(kind === 'single' ? 120000 : 300000); await f.observer.tick();

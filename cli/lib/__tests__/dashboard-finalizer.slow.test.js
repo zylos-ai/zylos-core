@@ -60,7 +60,6 @@ function prerequisites() {
     updateConfig: () => {}, ensureMemoryMigration: () => {}, verifyPublicationForServices: () => {}, protectedSuccess: () => {},
     startServices: () => ({ status: 'done' }), verifyServices: () => ({ status: 'done' }),
     readModeStatus: () => ({ sessionMode: 'single', transition: null }),
-    readMode: () => ({ mode: 'single' }), readTransition: () => null,
     restart: () => ({ ok: true, data: { result: 'accepted' } }),
     ensureLogRotation: () => ({ state: 'present' })
   };

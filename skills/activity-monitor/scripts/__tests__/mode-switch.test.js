@@ -9,7 +9,8 @@ const error = code => Object.assign(new Error(code), { code });
 function fixture(overrides = {}) {
   let keyPresent = false;
   let row = null, mode = 'single', time = 1800000000000, fences = [], sourceScenes = [], legacy = false, requests = [];
-  const events = [], calls = [], controls = { machine: { running: 0, runningWithoutDeadline: 0 }, allSessionGroups: { running: 0, runningWithoutDeadline: 0 } };
+  const events = [], calls = [], controls = { machine: { running: 0 }, allSessionGroups: { running: 0 } };
+  const withoutDeadline = { machine: [], allSessionGroups: [] };
   const db = {
     getModeTransition: () => row,
     expireLegacyRunningControls: () => ({ count: 0, ids: [] }),
@@ -18,7 +19,7 @@ function fixture(overrides = {}) {
     setDrainFence: (group, options = {}) => { if (!fences.some(f => f.sessionGroup === group)) fences.push({ sessionGroup: group, reason: options.reason ?? null, runId: options.runId ?? null, createdAt: time / 1000 }); },
     listDrainFences: () => fences,
     countNonTerminalControls: target => target.sessionGroup ? { running: 0 } : controls[Object.keys(target)[0]],
-    listRunningControlsWithoutDeadline: target => !target.sessionGroup && controls[Object.keys(target)[0]].runningWithoutDeadline ? [4, 8] : [],
+    listRunningControlsWithoutDeadline: target => withoutDeadline[Object.keys(target)[0]] ?? [],
     countGlobalRunningConversations: () => 0,
     countRunningConversations: () => 0,
     voidInternalForSingle: () => calls.push('voidInternal'),
@@ -31,7 +32,7 @@ function fixture(overrides = {}) {
     writeMode: value => { calls.push('writeMode'); mode = value; },
     restart: { advance: async () => ({ confirmed: true }) }, diagnostic: event => events.push(event), now: () => time,
     ...overrides };
-  return { db, deps, events, calls, controls, create: () => new ModeSwitchCoordinator(deps), get row() { return row; },
+  return { db, deps, events, calls, controls, withoutDeadline, create: () => new ModeSwitchCoordinator(deps), get row() { return row; },
     set keyPresent(value) { keyPresent = value; }, set row(value) { row = value; }, set mode(value) { mode = value; }, set time(value) { time = value; }, set fences(value) { fences = value; }, get fences() { return fences; },
     set scenes(value) { sourceScenes = value; }, set legacy(value) { legacy = value; }, set requests(value) { requests = value; } };
 }
@@ -84,12 +85,12 @@ for (const phase of ['gating', 'converting', 'cutover']) test(`recovery preserve
 });
 
 test('blocked events deduplicate consecutive reasons, A to B to A emits and success unblocks', async () => {
-  const f = fixture(), owner = f.create(); await owner.handle(request); f.controls.machine = { running: 2, runningWithoutDeadline: 2 };
+  const f = fixture(), owner = f.create(); await owner.handle(request); f.controls.machine = { running: 2 }; f.withoutDeadline.machine = [4, 8];
   await owner.advance(); await owner.advance();
-  f.controls.machine = { running: 0, runningWithoutDeadline: 0 }; f.controls.allSessionGroups = { running: 2, runningWithoutDeadline: 2 }; await owner.advance();
-  f.controls.machine = { running: 2, runningWithoutDeadline: 2 }; await owner.advance();
+  f.controls.machine = { running: 0 }; f.withoutDeadline.machine = []; f.controls.allSessionGroups = { running: 2 }; f.withoutDeadline.allSessionGroups = [4, 8]; await owner.advance();
+  f.controls.machine = { running: 2 }; f.withoutDeadline.machine = [4, 8]; await owner.advance();
   assert.equal(f.events.filter(x => x.event === 'transition_blocked').length, 3);
-  f.controls.machine = f.controls.allSessionGroups = { running: 0, runningWithoutDeadline: 0 }; await owner.advance();
+  f.controls.machine = f.controls.allSessionGroups = { running: 0 }; f.withoutDeadline.machine = f.withoutDeadline.allSessionGroups = []; await owner.advance();
   assert.equal(f.events.filter(x => x.event === 'transition_unblocked').length, 1); assert.equal(f.row.reason, null);
 });
 
@@ -177,7 +178,7 @@ for (const code of ['DB_BUSY', 'DB_READ_FAILED']) test(`missing-deadline detail 
   const expected = Object.assign(error(code), { persisted: [] });
   f.db.listRunningControlsWithoutDeadline = target => { assert.deepEqual(target, { machine: true }); throw expected; };
   const owner = f.create(); await owner.handle(request);
-  f.controls.machine = { running: 1, runningWithoutDeadline: 1 };
+  f.controls.machine = { running: 1 }; f.withoutDeadline.machine = [4, 8];
   await assert.rejects(owner.advance(), actual => actual === expected);
   assert.equal(f.row.phase, 'gating'); assert.equal(f.row.reason, null);
   assert.deepEqual(f.fences.map(fence => fence.sessionGroup), ['*']);
@@ -201,7 +202,7 @@ test('empty deadline lists allow cutover and only running counts gate it', async
   let running = 1;
   f.db.countNonTerminalControls = target => {
     reads.push(['count', target]);
-    return { running, get runningWithoutDeadline() { throw new Error('obsolete deadline count read'); } };
+    return { running };
   };
   const owner = f.create(); await owner.handle(request); await owner.advance();
   assert.equal(f.row.phase, 'gating'); assert.equal(f.row.reason, null);
@@ -307,7 +308,7 @@ for (const deadline of [null, 1800001000]) test(`old machine control with ${dead
   const owner = new ModeSwitchCoordinator({ db: store, now: () => clock,
     readMode: () => ({ mode, keyPresent: false }), readConfiguration: () => ({ mode }),
     readRequests: () => [], legacyPresent: () => false, observe: () => [],
-    lifecycle: { stopForModeSwitch: async () => {}, advanceReclaim: async () => {} }, convert: async () => {},
+    lifecycle: { stopForModeSwitch: async () => {}, advanceReclaim: async () => {} },
     writeMode: target => { mode = target; }, restart: { advance: async () => ({ confirmed: true }) },
     diagnostic: event => events.push(event) });
   assert.equal((await owner.handle(request)).result, 'accepted');
@@ -327,7 +328,7 @@ for (const deadline of [null, 1800001000]) test(`old machine control with ${dead
 for (const obstacle of ['legacy-live', 'legacy-unknown', 'legacy-error', 'source-live', 'source-error', 'extra-fence', 'db-error']) {
   test(`legacy cleanup preserves gating for ${obstacle}`, async () => {
     const f = fixture(), owner = f.create(); await owner.handle(request);
-    f.controls.machine = { running: 1, runningWithoutDeadline: 1 };
+    f.controls.machine = { running: 1 }; f.withoutDeadline.machine = [4, 8];
     let cleanups = 0;
     owner.db.expireLegacyRunningControls = () => { cleanups++; if (obstacle === 'db-error') throw error('DB_BUSY'); return { count: 1, ids: [4] }; };
     if (obstacle === 'legacy-live') f.legacy = true;
@@ -351,7 +352,7 @@ for (const obstacle of ['legacy-live', 'legacy-unknown', 'legacy-error', 'source
 
 test('ineligible controls keep one stable blocker without claiming cleanup', async () => {
   const f = fixture(), owner = f.create(); await owner.handle(request);
-  f.controls.machine = { running: 1, runningWithoutDeadline: 1 };
+  f.controls.machine = { running: 1 }; f.withoutDeadline.machine = [4, 8];
   await owner.advance(); await owner.advance();
   assert.equal(f.row.reason, 'running_control_without_deadline:machine:4,8');
   assert.equal(f.events.filter(event => event.event === 'transition_blocked').length, 1);
@@ -364,7 +365,7 @@ test('ineligible controls keep one stable blocker without claiming cleanup', asy
 test('multi-to-single never applies legacy machine cleanup', async () => {
   const f = fixture(); f.mode = 'multi'; const owner = f.create();
   f.db.expireLegacyRunningControls = () => assert.fail('reverse transition must not clean legacy controls');
-  f.controls.machine = { running: 1, runningWithoutDeadline: 1 };
+  f.controls.machine = { running: 1 }; f.withoutDeadline.machine = [4, 8];
   await owner.handle({ ...request, target: 'single' }); await owner.advance();
   assert.equal(f.row.reason, 'running_control_without_deadline:machine:4,8');
   assert.equal(f.row.phase, 'gating');

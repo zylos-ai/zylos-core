@@ -152,7 +152,6 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
     ensureMemoryMigration: () => { calls.push('ensure-memory'); return {}; },
     startServices: () => { calls.push('start'); return { status: 'done' }; },
     verifyServices: () => { calls.push('verify'); return { status: 'done' }; },
-    readMode: () => ({ mode: 'single', keyPresent: true }), readTransition: () => null,
     restart: () => { calls.push('restart'); return { ok: true, data: { result: 'accepted' } }; },
   };
   const load = () => m.transaction(root, dir);
@@ -547,7 +546,7 @@ test('real finalizer stdout remains JSON when publication changes global Codex c
         updateConfig(){},ensureMemoryMigration(){},rotateSession(){},commitBaselines:()=>({status:'done'}),
         startServices:()=>({status:'done'}),verifyServices:()=>({status:'done'}),
         dashboardOwner:{copyDashboardDb:()=>({ok:true}),applyDashboardRegistration:()=>({state:'done'}),applyDashboardRoute:()=>({state:'done'}),verifyDashboard:()=>({state:'ready',errors:[]})},
-        readModeStatus:()=>({sessionMode:null,transition:null}),readMode:()=>({mode:null,keyPresent:false}),readTransition:()=>null,
+        readModeStatus:()=>({sessionMode:null,transition:null}),
         restart:()=>({ok:true,data:{result:'accepted'}}),
       });
       process.stdout.write(JSON.stringify(result)+'\\n');
