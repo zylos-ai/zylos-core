@@ -13,6 +13,7 @@ const ROOT_NODE_TESTS = [
   'test/mode-switch-native.integration.test.js',
   'test/global-memory-handover.integration.test.js',
   'test/failure-continuation.integration.test.js',
+  'test/group-sync-run.integration.test.js',
   'test/memory-budget-browser.test.js',
   'test/memory-startup-budget.integration.test.js',
   'test/session-start-failure.integration.test.js',

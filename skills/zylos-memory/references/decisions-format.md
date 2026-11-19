@@ -7,7 +7,7 @@ Record deliberate choices and their rationale by topic, one topic per page under
 alternatives. Read `reference/decisions/INDEX.md` first, then relevant pages;
 when unmatched, Grep the directory including `archive/`, then consult the
 read-only old `reference/decisions.md` or `reference/legacy/` before creating a
-new topic. See [moving from old files](sync-procedures.md#moving-from-old-files).
+new topic. See [moving from old files](sync-writing.md#moving-from-old-files).
 
 Use a short ASCII filename containing lowercase letters, digits and hyphens,
 with a `.md` extension and at most 48 characters including the extension.

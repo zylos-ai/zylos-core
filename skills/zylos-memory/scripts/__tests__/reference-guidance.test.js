@@ -4,7 +4,12 @@ import fs from 'node:fs';
 import { GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT, REFERENCE_REORG_PROMPT } from '../sync-prompts.js';
 
 const read = name => fs.readFileSync(new URL(`../../references/${name}.md`, import.meta.url), 'utf8');
-const sync = read('sync-procedures');
+const common = read('sync-common');
+const writing = read('sync-writing');
+const groupDoc = read('group-sync');
+const originDoc = read('origin-sync');
+const globalDoc = read('global-sync');
+const sync = [common, groupDoc, originDoc, globalDoc, writing].join('\n');
 const reorg = read('reference-reorg');
 const skill = fs.readFileSync(new URL('../../SKILL.md', import.meta.url), 'utf8');
 const writer = read('memory-write');
@@ -25,7 +30,7 @@ test('Sync procedures use a fixed temporary state name without path placeholders
   assert.match(normalize(format), /The tool maps this fixed name to the current scope's temporary state file for the acquired token/);
   assert.match(sync, /"path":"state\.md\.tmp"/);
   for (const section of [between(sync, '## Group Sync', '## Origin Sync'),
-    between(sync, '## Single global Sync', '## Moving from old files')]) {
+    globalDoc]) {
     assert.match(section, /`state\.md\.tmp`/);
   }
   assert.match(normalize(sync), /STATE_DOCUMENT_INVALID`: correct `state\.md\.tmp` through `edit_memory`/);
@@ -33,7 +38,7 @@ test('Sync procedures use a fixed temporary state name without path placeholders
 });
 
 test('Sync parents consume Codex worker outcomes before ending their turn', () => {
-  const parent = normalize(between(skill, '## Parent result handling', '## Writing rules'));
+  const parent = normalize(between(skill, '## Parent result handling', '## Ordinary running-thread memory'));
   assert.match(parent, /apply to group, Origin, and global Sync/);
   assert.match(parent, /Claude: continue current work without waiting/);
   assert.match(parent, /Codex: continue useful current work after launching/);
@@ -50,7 +55,7 @@ test('Sync parents consume Codex worker outcomes before ending their turn', () =
 test('the skill holds the launch and selection rules the background Sync controls point to', () => {
   const text = normalize(skill);
   for (const prompt of [GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT]) {
-    assert.ok(prompt.includes('Read the zylos-memory skill') && prompt.includes('Parent result handling'));
+    assert.ok(prompt.includes('Read only the zylos-memory SKILL.md parent instructions') && prompt.includes('Parent result handling'));
   }
   assert.ok(skill.includes('\n## Parent result handling\n'));
   assert.match(text, /Use the runtime in the current running session's immutable launch snapshot\./);
@@ -58,7 +63,11 @@ test('the skill holds the launch and selection rules the background Sync control
   assert.match(text, /`group Sync` with a nonempty `ZYLOS_SESSION_GROUP` uses kind=group and `zylos-group-sync`, including in `origin`: it syncs origin's own working state/);
   assert.match(text, /Only a prompt naming `Origin Sync` selects kind=origin and `zylos-origin-sync`; this job can run only in the `origin` group/);
   assert.match(text, /`group Sync` with no group and a `ZYLOS_RUN_ID` uses single global Sync \(kind=global, `zylos-global-sync`\)/);
-  assert.match(text, /Read \[the complete Sync procedures\]\(references\/sync-procedures\.md\) before taking a token/);
+  for (const kind of ['group', 'origin', 'global']) assert.ok(skill.includes(`references/${kind}-sync.md`));
+  assert.ok(skill.includes('Old queued prompts'));
+  // Parent-only launch/result rules plus explicit per-job file lists and API navigation.
+  // 9 KiB retains the small-parent budget without clipping required instructions.
+  assert.ok(Buffer.byteLength(skill) < 9 * 1024);
   assert.match(text, /Start a background subagent when requested and continue the current work, following the runtime-specific result handling below\./);
 });
 
@@ -71,37 +80,37 @@ test('background Sync controls name distinct jobs', () => {
 test('Sync procedures select the named job even in origin', () => {
   const group = normalize(between(sync, '## Group Sync', '## Origin Sync'));
   const origin = normalize(between(sync, '## Origin Sync', '## Single global Sync'));
-  assert.match(group, /control prompt names `group Sync` and a session group is bound, including `origin`; use `zylos-group-sync` in Claude/);
-  assert.match(group, /origin group's own working state\. Set kind=group/);
+  assert.match(group, /Execute only group Sync with a bound inherited ZYLOS_SESSION_GROUP/);
+  assert.match(group, /including origin's own working state.*kind=group/);
   assert.match(origin, /only when the control prompt names `Origin Sync`; use `zylos-origin-sync` in Claude/);
   assert.match(origin, /Being in origin does not select this job/);
 });
 
 test('Sync parents send owner reports only to addresses their thread handles', () => {
-  const parent = normalize(between(skill, '## Parent result handling', '## Writing rules'));
+  const parent = normalize(between(skill, '## Parent result handling', '## Ordinary running-thread memory'));
   assert.match(parent, /Send directly only to addresses your own thread handles; to reach any other owner address, send an internal message to the owning thread asking it to deliver the report \(One thread per address\)/);
   assert.doesNotMatch(parent, /existing channel route/);
 });
 
 test('Codex Sync parents stop waiting for a worker that is gone', () => {
-  const parent = normalize(between(skill, '## Parent result handling', '## Writing rules'));
+  const parent = normalize(between(skill, '## Parent result handling', '## Ordinary running-thread memory'));
   assert.match(parent, /wait again while keeping the input channel responsive\. If the worker no longer exists, has been closed, or its result can no longer be retrieved, stop waiting and treat it as a result that cannot be retrieved\./);
   assert.match(parent, /If the result cannot be retrieved, report that failure without claiming Sync succeeded/);
 });
 
 test('Sync parents judge success or failure only from the worker final result', () => {
-  const parent = normalize(between(skill, '## Parent result handling', '## Writing rules'));
+  const parent = normalize(between(skill, '## Parent result handling', '## Ordinary running-thread memory'));
   assert.match(parent, /Only the worker's final result decides whether Sync succeeded or failed\. Messages the worker sends while it is still running are not a Sync outcome; do not report success or failure from them\./);
 });
 
 test('state guidance assigns committed segment IDs to the commit script', () => {
   const group = normalize(between(sync, '## Group Sync', '## Origin Sync'));
-  const global = normalize(between(sync, '## Single global Sync', '## Moving from old files'));
+  const global = normalize(globalDoc);
   assert.match(group, /The commit script fills `inbox_committed` from this round's listed segments/);
   assert.match(group, /a prepared copy may retain its old value, while a newly created state leaves it empty/);
   assert.match(group, /then writes those segment IDs into the published state header/);
   assert.doesNotMatch(group, /List all read segment IDs in its `inbox_committed` header|and the state's segment IDs/);
-  assert.match(global, /Follow Group Sync's read-before-cleanup, recovery, summary, temporary state, commit, and failure sequence/);
+  assert.match(global, /read-before-cleanup, recovery, summary, temporary state, commit, and failure sequence/);
   const format = normalize(read('state-format'));
   assert.match(format, /The commit script fills `inbox_committed` from this round's listed, verified segments/);
   assert.ok(format.includes('When creating a missing state, leave it empty.'));
@@ -127,11 +136,11 @@ test('guidance requires all audit items and their results before Origin cursor a
 });
 
 test('guidance places the global audit checklist before checkpoint and preserves report-only failures', () => {
-  const global = between(sync, '## Single global Sync', '## Moving from old files');
-  assert.match(normalize(global), /Before checkpoint, follow the Origin step 7 checker and conditional checklist/);
+  const global = globalDoc;
+  assert.match(normalize(global), /Before checkpoint, follow the checker and conditional checklist in the Shared audit section below/);
   assert.match(normalize(global), /one result sentence per item/);
   assert.match(normalize(global), /follow the common rules and do not block checkpoint/);
-  assert.equal((global.match(/Before checkpoint, follow the Origin step 7/g) || []).length, 1);
+  assert.equal((global.match(/Before checkpoint, follow the checker and conditional checklist in the Shared audit section below/g) || []).length, 1);
   assert.doesNotMatch(global, /Audit content, navigation and size as in Origin step 7/);
 });
 
@@ -157,13 +166,13 @@ test('guidance uses bounded read-only source reads available in each runtime', (
   const lookup = between(sync, '## Moving from old files', '## Archive and restore');
   assert.doesNotMatch(lookup, /TOOL_UNAVAILABLE|Read\/Glob\/Grep/);
   assert.doesNotMatch(reorg, /TOOL_UNAVAILABLE|Read\/Glob\/Grep/);
-  assert.match(normalize(skill), /Read inputs with Read \(offset\/limit\), Glob, or read-only Bash commands `grep -n`, `rg -n`, `sed -n '<a>,<b>p'`, and bounded `dd` byte reads; use Grep when available/);
+  assert.match(normalize(writing), /Read inputs with Read \(offset\/limit\), Glob, or read-only Bash commands `grep -n`, `rg -n`, `sed -n '<a>,<b>p'`, and bounded `dd` byte reads; use Grep when available/);
   assert.match(normalize(sync), /Use byte ranges even when a file contains one very long line/);
   assert.match(normalize(sync), /`dd if="<returned absolute path>" bs=1 skip=0 count=8192 status=none`/);
   assert.match(normalize(sync), /Continue at skip=8188, then 16376, increasing by 8188/);
   assert.match(normalize(sync), /the ranges must cover every byte with/);
   assert.match(normalize(sync), /Never claim a full read from a hash match/);
-  assert.match(normalize(skill), /Memory writes still use only the documented tools and scripts/);
+  assert.match(normalize(writing), /Memory writes still use only the documented tools and scripts/);
   assert.doesNotMatch(skill, /Use Read\/Glob\/Grep for inputs and Bash only/);
 });
 
@@ -192,7 +201,7 @@ test('export guidance shares bounded reading and visible-tail steps', () => {
 test('Sync workers read complete byte ranges without manually checking file size or hash', () => {
   const fetch = fs.readFileSync(new URL('../../../comm-bridge/references/c4-fetch.md', import.meta.url), 'utf8');
   const agents = ['group', 'origin', 'global'].map(kind => fs.readFileSync(new URL(`../../agents/zylos-${kind}-sync.md`, import.meta.url), 'utf8'));
-  for (const source of [sync, skill, fetch, ...agents]) {
+  for (const source of [sync, common, fetch, ...agents]) {
     const text = normalize(source);
     assert.match(text, /Use reported byte counts only as byte-range read endpoints/);
     assert.doesNotMatch(text, /verify (?:its|the reported|each) (?:reported )?(?:byte count|bytes\/hash)|Read and verify all exported|read\/verify every listed|wc -c|sha256sum|shasum/);
@@ -203,7 +212,7 @@ test('Sync workers read complete byte ranges without manually checking file size
     assert.match(text, /[Bb]ounded read retries/);
     assert.match(text, /Complete byte-range reads/);
   }
-  for (const source of [sync, skill, fetch]) {
+  for (const source of [sync, common, fetch]) {
     const text = normalize(source);
     assert.match(text, /direct `exec_command` when exposed/);
     assert.match(text, /in code mode, (?:each range needs )?its own `functions.exec`(?: invocation)? containing one `exec_command`/);
@@ -214,21 +223,21 @@ test('Sync workers read complete byte ranges without manually checking file size
   assert.match(text, /Never claim a full read from a hash match/);
   assert.match(text, /Checkpoint recomputes and verifies the receipt against the database rows/);
   assert.match(text, /Commit verifies the batch, checkpoint coverage, the exact current segment IDs, absolute paths and hashes/);
-  assert.match(normalize(skill), /Do not infer completion from the first\/last lines or a successful hash check alone/);
+  assert.match(normalize(writing), /Do not infer completion from the first\/last lines or a successful hash check alone/);
   assert.match(normalize(fetch), /hashes, grep or word counts do not establish a full read/);
 });
 
 test('all Sync entry points preserve visible tails and remove only their own exports without force', () => {
   const fetch = fs.readFileSync(new URL('../../../comm-bridge/references/c4-fetch.md', import.meta.url), 'utf8');
   const agents = ['group', 'origin', 'global'].map(kind => fs.readFileSync(new URL(`../../agents/zylos-${kind}-sync.md`, import.meta.url), 'utf8'));
-  for (const source of [skill, ...agents]) {
+  for (const source of [writing, ...agents]) {
     const text = normalize(source);
     assert.match(text, /Complete byte-range reads steps/);
     assert.match(text, /For every exported file and every listed input/);
     assert.match(text, /`tail -c 64 "<returned absolute path>" \| od -An -v -c` after the full text read/);
     assert.match(text, /trailing whitespace is visible in only a few lines/);
   }
-  for (const source of [sync, fetch, skill, ...agents]) {
+  for (const source of [sync, fetch, writing, ...agents.filter((_, index) => index !== 0)]) {
     assert.ok(source.includes('rm -r "<absolute path of this run\'s private directory>"'));
     assert.match(normalize(source), /only this run's (?:own )?private (?:export )?directory/);
     assert.doesNotMatch(source, /rm -[a-z]*f/);
@@ -285,11 +294,11 @@ test('Sync guidance centralizes corrected-call retries and preserves partial wri
 test('Sync commands use installed paths listed at the beginning of the procedure', () => {
   const table = between(sync, '| Script | Installed path |', 'The zylos-memory scripts');
   const paths = [...table.matchAll(/`(~\/zylos\/\.claude\/skills\/[^`]+\.js)`/g)].map(match => match[1]);
-  assert.equal(paths.length, 10);
+  assert.equal(paths.length, 11);
   const commands = [...sync.matchAll(/`node ([^`\s]+\.js)(?:\s|`)/g)];
   assert.ok(commands.length > 20);
   for (const [, command] of commands) assert.ok(paths.includes(command), command);
-  assert.doesNotMatch(sync.slice(sync.indexOf('## Common')), /`(?:sync-lock|sync-files|origin-cursor|reference-index|request-rotation|c4-fetch|c4-db|c4-send)\.js(?:\s|`)/);
+  assert.doesNotMatch([common, groupDoc, originDoc, globalDoc].join('\n').slice(common.indexOf('## Common')), /`(?:sync-lock|sync-files|origin-cursor|reference-index|request-rotation|c4-fetch|c4-db|c4-send)\.js(?:\s|`)/);
 });
 
 test('Origin guidance keeps exported receipts and script-selected logs through cursor advancement', () => {
