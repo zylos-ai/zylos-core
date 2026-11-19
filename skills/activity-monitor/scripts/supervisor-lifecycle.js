@@ -405,7 +405,7 @@ export class SupervisorLifecycle {
   }
 
   activeSubagents(scene, context) {
-    const ttl = (context.configuration.hotTtlSeconds ?? 1800) * 1000;
+    const ttl = (context.configuration.hotTtlSeconds ?? 3300) * 1000;
     return scene.activeSubagents?.some(agent => finite(agent.lastActivityAt) && this.now() - agent.lastActivityAt < ttl) ?? false;
   }
 
@@ -420,7 +420,7 @@ export class SupervisorLifecycle {
     if (preparation?.runId === scene.runId && last >= preparation.at) return false;
     const [from, until] = reason === 'evict' ? this.evictionCheckWindow(scene) : [Infinity, Infinity];
     if (last >= from && last <= until) return false;
-    const seconds = reason === 'ttl' ? context.configuration.hotTtlSeconds ?? 1800 : context.configuration.evictMinIdleSeconds ?? 300;
+    const seconds = reason === 'ttl' ? context.configuration.hotTtlSeconds ?? 3300 : context.configuration.evictMinIdleSeconds ?? 300;
     return this.now() - last < seconds * 1000;
   }
 
@@ -660,7 +660,7 @@ export class SupervisorLifecycle {
     // restart that clock; C4 messages and the other activity sources still can.
     const now = this.now(), last = await this.lastActivity(scene,
       preparation?.runId === scene.runId ? preparation.at : Infinity);
-    const ttl = (context.configuration.hotTtlSeconds ?? 1800) * 1000;
+    const ttl = (context.configuration.hotTtlSeconds ?? 3300) * 1000;
     if (preparation && (preparation.runId !== scene.runId || last > preparation.at)) {
       this.ttlPreparation.delete(group);
       return;

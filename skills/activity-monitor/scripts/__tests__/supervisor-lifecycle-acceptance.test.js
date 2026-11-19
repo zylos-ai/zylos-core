@@ -198,7 +198,7 @@ test('absent Origin Sync creates one real unbound demand and preserves deduplica
 test('Origin TTL persists its check and requires durable group and Origin repair before reclaim', async t => {
   const sql = databaseFixture(t), f = localFixture(t, SupervisorLifecycle, { db: sql.store });
   f.deps.env = { ZYLOS_DIR: f.root };
-  f.scene.createdAt = f.now - 2_000_000;
+  f.scene.createdAt = f.now - 3_300_000;
   f.db.getLastActivity = () => null;
   f.db.getControlById = id => sql.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id);
   // Threshold 1 with two Origin group rows keeps the group Sync due before reclaim.
@@ -251,7 +251,7 @@ test('Origin TTL persists its check and requires durable group and Origin repair
 test('TTL without Sync backlog sends only the bound check control and reclaims once it terminates', async t => {
   for (const group of ['a', 'origin']) for (const status of ['done', 'timeout']) await t.test(`${group} ${status}`, async t => {
     const sql = databaseFixture(t), f = localFixture(t, SupervisorLifecycle, { db: sql.store });
-    f.scene = { ...f.scene, sessionGroup: group, createdAt: f.now - 2_000_000 };
+    f.scene = { ...f.scene, sessionGroup: group, createdAt: f.now - 3_300_000 };
     f.db.getLastActivity = () => null;
     f.db.getControlById = id => sql.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id);
     f.db.getUnsummarizedRange = () => ({ count: 0, firstAt: null });
