@@ -282,7 +282,8 @@ export class SessionActivity {
     // bounded carry for the next append without indefinitely fencing recovery.
     this.transcriptPending=this.transcriptOffset<stat.size;
     // Timestamp-only touches are not activity; count only newly read bytes.
-    return this.transcriptOffset>readOffset?stat.mtimeMs:null;
+    if(this.transcriptOffset>readOffset)this.lastActivityAt=Math.max(this.lastActivityAt,stat.mtimeMs);
+    return stat.mtimeMs;
   }
   agyBusy(now) {
     // AGY publishes statusLine only on changes, with no heartbeat. A run/session
@@ -331,7 +332,6 @@ export class SessionActivity {
     const transcriptMtimeMs=this.runtime==='agy'?null:this.readTranscript();
     this.applyDequeue();
     if(this.runtime!=='agy')this.applyQuietTurnClose();
-    if(Number.isFinite(transcriptMtimeMs))this.lastActivityAt=Math.max(this.lastActivityAt,transcriptMtimeMs);
     // Open API/model waits remain busy until the supervisor admits Escape.
     const busy=this.runtime==='agy'?this.agyBusy(now):this.turn || this.tools.size>0 || this.runtime==='claude' && this.transcriptPending || now-this.lastActivityAt<3000;
     if(busy){

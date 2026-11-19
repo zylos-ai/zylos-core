@@ -18,9 +18,15 @@ function fixture(t) {
   const observer=new SupervisorLegacyStatus({env:f.env,connectionOptions:{socketPath:f.socketPath,binary:f.binary},now:()=>now,readHealth:()=>({health:'ok'})});
   t.after(()=>observer.close());return {...f,dir,foreground,observer,now};
 }
+// Boundary: repeated transcript sampling through the real legacy observer and
+// private tmux/SQLite fixtures. Run for legacy transcript/state changes; unrelated
+// UI may skip. The official runner and fixture own all paths and cleanup.
 test('legacy and new Origin publish separate identities; newest unrelated transcript cannot make legacy busy', {timeout:15000}, async t=>{
   const f=fixture(t),legacy=await f.observer.tick();
   assert.equal(legacy.sessionId,'old-session');assert.equal(legacy.runId,null);assert.equal(legacy.state,'idle');
+  const repeated=await f.observer.tick();
+  assert.equal(repeated.state,'idle','the same unchanged transcript remains observable on the next poll');
+  assert.equal(repeated.last_activity,legacy.last_activity);
   const statusFile=path.join(f.root,'activity-monitor/session-groups/origin/agent-status.json');
   publishSessionStatus({statusFile,scene:{ready:true,runId:'run-1',sessionId:'session-1',runtime:'claude'},
     activity:{sessionId:'session-1',state:'busy',lastActivityAt:f.now,tools:[]},health:{health:'ok'},now:f.now});
