@@ -251,6 +251,7 @@ export class SessionActivity {
       this.transcriptPartial=Buffer.alloc(0);this.transcriptSkippingLine=false;
       this.codexTranscriptMatches=false;
     }
+    const readOffset=this.transcriptOffset;
     let remaining=Math.min(TRANSCRIPT_READ_BUDGET_BYTES,stat.size-this.transcriptOffset);
     // Nonblocking hooks can arrive after a result was parsed while no tool was visible.
     const trackResults=true;
@@ -280,6 +281,8 @@ export class SessionActivity {
     // An unfinished EOF record is not evidence of continued AI work. Keep its
     // bounded carry for the next append without indefinitely fencing recovery.
     this.transcriptPending=this.transcriptOffset<stat.size;
+    // Timestamp-only touches are not activity; count only newly read bytes.
+    if(this.transcriptOffset>readOffset)this.lastActivityAt=Math.max(this.lastActivityAt,stat.mtimeMs);
     return stat.mtimeMs;
   }
   agyBusy(now) {
@@ -329,7 +332,6 @@ export class SessionActivity {
     const transcriptMtimeMs=this.runtime==='agy'?null:this.readTranscript();
     this.applyDequeue();
     if(this.runtime!=='agy')this.applyQuietTurnClose();
-    if(Number.isFinite(transcriptMtimeMs))this.lastActivityAt=Math.max(this.lastActivityAt,transcriptMtimeMs);
     // Open API/model waits remain busy until the supervisor admits Escape.
     const busy=this.runtime==='agy'?this.agyBusy(now):this.turn || this.tools.size>0 || this.runtime==='claude' && this.transcriptPending || now-this.lastActivityAt<3000;
     if(busy){

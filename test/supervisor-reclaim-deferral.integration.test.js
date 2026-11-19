@@ -62,10 +62,10 @@ test('deferral command reports reason-only acceptance and refusal as JSON', asyn
 });
 
 // Boundary: real transcript sampling composed with lifecycle deferral. Run when
-// idle reset or transcript activity changes; unrelated request parsing may
-// skip. Private files, in-memory DB/transport and injected clock avoid live
+// idle reset, transcript activity or timestamp-only touches change; unrelated
+// request parsing may skip. Private files, in-memory DB/transport and injected clock avoid live
 // tmux/PM2/network; the official runner isolates every runtime path.
-test('accepted deferral cancels immediately and real transcript updates restart the idle interval', async t => {
+test('accepted deferral and transcript appends reset idle while timestamp-only touches preserve the deadline', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'deferred-transcript-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   console.log('Transcript isolation:', JSON.stringify({ root, HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR, PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, database: 'injected', transport: 'injected' }));
@@ -104,10 +104,19 @@ test('accepted deferral cancels immediately and real transcript updates restart 
   assert.equal(lifecycle.ttlPreparation.has('a'), false);
   assert.equal(lifecycle.ttlReset.get('a').at, now - 1000); assert.equal(fences.length, 0);
   assert.equal(lifecycle.reclaimDeferrals.get('a').count, 1);
-  now += 1799999; await lifecycle.checkTtl(scene, context);
+  const lastWriteAt = now, size = fs.statSync(transcript).size;
+  now += 1799999;
+  fs.utimesSync(transcript, now / 1000, now / 1000);
+  assert.equal(fs.statSync(transcript).size, size);
+  assert.ok(Math.abs(fs.statSync(transcript).mtimeMs - now) < 1, 'touch updates mtime within filesystem precision');
+  Object.assign(scene, activity.read(now));
+  assert.equal(scene.lastActivityAt, lastWriteAt);
+  assert.equal(scene.state, 'idle');
+  await lifecycle.checkTtl(scene, context);
   assert.equal(controls.length, 1, 'transcript activity postpones the next idle check');
-  now += 1; await lifecycle.checkTtl(scene, context);
+  now += 1; Object.assign(scene, activity.read(now)); await lifecycle.checkTtl(scene, context);
   assert.equal(controls.length, 2);
+  assert.equal(lifecycle.ttlPreparation.has('a'), true, 'touch does not postpone preparation at hotTtlSeconds');
 });
 
 // Boundary: real supervisor socket admission reads changed configuration without
