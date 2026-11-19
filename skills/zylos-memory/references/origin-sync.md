@@ -23,14 +23,16 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
    files share the private directory's existing cleanup rule. Export summaries:
 
    ```bash
+   set -o pipefail
    exportDir='<private directory from mktemp -d>'
    T='<token from acquire>'
    G='<candidate group>'
    n='<run-local counter for G>'
-   node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --origin-sync --group "$G" --summaries-only --out "$exportDir/$n-summaries" > "$exportDir/$n-summaries-meta.json"
+   node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --origin-sync --group "$G" --summaries-only --out "$exportDir/$n-summaries" | tee "$exportDir/$n-summaries-meta.json"
    ```
 
-   Read the saved metadata JSON: the absolute `path`, `count`, `firstId`,
+   Use the metadata JSON printed by the command (also saved for submission);
+   do not read the metadata file separately: the absolute `path`, `count`, `firstId`,
    `lastId`, `bytes`, `sha256`, and summary `receipt`
    `{"scope":...,"after":...,"end":...,"coverageEnd":...,"count":...,"sha256":...}`.
    Keep the metadata file unchanged; C is its receipt’s `coverageEnd`. Read the whole file at
@@ -43,16 +45,18 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
 3. If budget remains, also fill `remaining` with its literal value and run:
 
    ```bash
+   set -o pipefail
    exportDir='<private directory from mktemp -d>'
    T='<token from acquire>'
    G='<candidate group>'
    n='<run-local counter for G>'
    remaining='<remaining raw-row budget>'
    C=$(node --input-type=module -e 'import fs from "node:fs"; console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).receipt.coverageEnd)' "$exportDir/$n-summaries-meta.json")
-   node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --origin-sync --group "$G" --raw-only --after "$C" --limit "$remaining" --out "$exportDir/$n-raw" > "$exportDir/$n-raw-meta.json"
+   node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --origin-sync --group "$G" --raw-only --after "$C" --limit "$remaining" --out "$exportDir/$n-raw" | tee "$exportDir/$n-raw-meta.json"
    ```
 
-   Deduct the saved metadata `count`, retain its raw `receipt`
+   Use the printed metadata without a separate metadata-file read. Deduct its
+   `count`, retain its raw `receipt`
    (`scope`, `after`, `end`, `count`, `sha256`) unchanged in that file, and read the whole
    file the same way. A limited read's receipt ends at its last returned row;
    the cursor cannot move past it. If this export or read fails after the bounded
@@ -63,14 +67,16 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
 4. For each group actually processed, save the complete read-only list result:
 
    ```bash
+   set -o pipefail
    exportDir='<private directory from mktemp -d>'
    T='<token from acquire>'
    G='<candidate group>'
    n='<run-local counter for G>'
-   node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list --group "$G" > "$exportDir/$n-inputs.json"
+   node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list --group "$G" | tee "$exportDir/$n-inputs.json"
    ```
 
-   Read this saved object as that group's `inputs`. The script
+   Use the printed object as that group's `inputs` (also saved for submission);
+   do not read the metadata file separately. The script
    chooses the first log date from G's Origin cursor update (the latest seven
    calendar days when there is no cursor), in the configured timezone. Read each
    returned `sessions[].path` in full. It returns only scope and sessions for

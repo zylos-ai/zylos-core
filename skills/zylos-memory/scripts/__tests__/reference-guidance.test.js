@@ -142,8 +142,8 @@ test('global guidance preserves audit order, report-only failures and saved inpu
   assert.match(normalize(global), /follow the common rules and do not block checkpoint/);
   assert.equal((global.match(/Before checkpoint, follow the checker and conditional checklist in the Shared audit section below/g) || []).length, 1);
   assert.doesNotMatch(global, /Audit content, navigation and size as in Origin step 7/);
-  assert.ok(global.includes('--out "$exportDir/batch" > "$exportDir/batch-meta.json"'));
-  assert.ok(global.includes('list > "$exportDir/inputs.json"'));
+  assert.ok(global.includes('--out "$exportDir/batch" | tee "$exportDir/batch-meta.json"'));
+  assert.ok(global.includes('list | tee "$exportDir/inputs.json"'));
   assert.match(normalize(global), /generating both the target and `--batch` from the saved metadata/);
   assert.match(global, /batch\.end/);
   assert.match(global, /JSON\.stringify\(JSON\.parse\(fs\.readFileSync\(process\.argv\[1\], "utf8"\)\)\.batch\)/);
@@ -152,10 +152,12 @@ test('global guidance preserves audit order, report-only failures and saved inpu
   assert.match(global, /inputs: read\(inputsPath\)/);
   assert.ok(global.includes("printf '%s\\n' '[]' > \"$exportDir/followed-up-ids.json\""));
   for (const block of global.matchAll(/   ```bash\n([\s\S]*?)   ```/g)) {
+    if (block[1].includes('| tee ')) assert.ok(block[1].startsWith('   set -o pipefail\n'));
     for (const assignment of ["exportDir='<private directory from mktemp -d>'", "T='<token from acquire>'"])
       assert.ok(block[1].includes(assignment), assignment);
   }
   assert.match(normalize(global), /Do not rely on variables set by an earlier tool call/);
+  assert.match(global, /do not read the metadata file separately/);
 });
 
 test('guidance keeps input drift terminal without replaying completed checkpoints', () => {
@@ -317,11 +319,11 @@ test('Sync commands use installed paths listed at the beginning of the procedure
 
 test('Origin guidance keeps exported receipts and script-selected logs through cursor advancement', () => {
   const origin = normalize(between(sync, '## Origin Sync', '## Single global Sync'));
-  assert.ok(origin.includes('--summaries-only --out "$exportDir/$n-summaries" > "$exportDir/$n-summaries-meta.json"'));
+  assert.ok(origin.includes('--summaries-only --out "$exportDir/$n-summaries" | tee "$exportDir/$n-summaries-meta.json"'));
   assert.match(origin, /Keep the metadata file unchanged; C is its receipt’s `coverageEnd`/);
-  assert.ok(origin.includes('--raw-only --after "$C" --limit "$remaining" --out "$exportDir/$n-raw" > "$exportDir/$n-raw-meta.json"'));
+  assert.ok(origin.includes('--raw-only --after "$C" --limit "$remaining" --out "$exportDir/$n-raw" | tee "$exportDir/$n-raw-meta.json"'));
   assert.match(origin, /retain its raw `receipt`/);
-  assert.ok(origin.includes('list --group "$G" > "$exportDir/$n-inputs.json"'));
+  assert.ok(origin.includes('list --group "$G" | tee "$exportDir/$n-inputs.json"'));
   assert.match(origin, /chooses the first log date from G's Origin cursor update/);
   assert.match(origin, /summary: read\(summaryPath\)\.receipt/);
   assert.match(origin, /raw: fs\.existsSync\(rawPath\) \? read\(rawPath\)\.receipt : null/);
@@ -329,10 +331,12 @@ test('Origin guidance keeps exported receipts and script-selected logs through c
   assert.doesNotMatch(origin, /rawMeta/);
   assert.ok(origin.includes('"$exportDir/$n-raw-meta.json" "$exportDir/$n-inputs.json"'));
   for (const block of originDoc.matchAll(/   ```bash\n([\s\S]*?)   ```/g)) {
+    if (block[1].includes('| tee ')) assert.ok(block[1].startsWith('   set -o pipefail\n'));
     for (const assignment of ["exportDir='<private directory from mktemp -d>'", "T='<token from acquire>'", "G='<candidate group>'", "n='<run-local counter for G>'"])
       assert.ok(block[1].includes(assignment), assignment);
   }
   assert.match(origin, /Do not rely on variables set by an earlier tool call/);
+  assert.match(origin, /do not read the metadata file separately/);
   assert.match(origin, /Never supply cursor numbers/);
   assert.match(origin, /`INPUT_CHANGED` receives no retry and stops later writes/);
   assert.doesNotMatch(origin, /--synced|--checkpoint|--since/);

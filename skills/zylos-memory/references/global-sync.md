@@ -51,14 +51,17 @@ C4 chain. Follow the working-state steps below: read-before-cleanup, recovery, s
    existing cleanup rule. Fetch:
 
    ```bash
+   set -o pipefail
    exportDir='<private directory from mktemp -d>'
    T='<token from acquire>'
    safeEnd='<safeEnd from unsummarized>'
    batchLimit='<resolved batch limit>'
-   node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --unsummarized --up-to "$safeEnd" --limit "$batchLimit" --out "$exportDir/batch" > "$exportDir/batch-meta.json"
+   node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --unsummarized --up-to "$safeEnd" --limit "$batchLimit" --out "$exportDir/batch" | tee "$exportDir/batch-meta.json"
    ```
 
-   Read the saved metadata: count, first/last IDs, file bytes and SHA-256, and a
+   Use the metadata printed by the command (also saved for submission);
+   do not read the metadata file separately. It contains count, first/last IDs,
+   file bytes and SHA-256, and a
    batch receipt in `batch`: `{"scope":...,"after":...,"end":...,"sha256":...}`. Read the full
    batch export in byte ranges. Retain its rows, latest summary, and metadata
    file unchanged. This batch's returned end, rather than a later observed
@@ -69,12 +72,15 @@ C4 chain. Follow the working-state steps below: read-before-cleanup, recovery, s
    Save the complete read-only list result as `inputs`:
 
    ```bash
+   set -o pipefail
    exportDir='<private directory from mktemp -d>'
    T='<token from acquire>'
-   node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list > "$exportDir/inputs.json"
+   node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list | tee "$exportDir/inputs.json"
    ```
 
-   No token is needed; a supplied `--token` is ignored. Read this saved object:
+   No token is needed; a supplied `--token` is ignored. Use the printed object
+   (also saved for submission);
+   do not read the metadata file separately:
    `{"scope":...,"statePath":"<absolute state path>","segments":[{"id":...,"path":"<absolute>","bytes":...,"sha256":...}],"sessions":[{"path":"<absolute>","bytes":...,"sha256":...}]}`.
    Read the entire state at the returned `statePath`, in all bounded byte ranges
    with no gaps, before reconciling or preparing changes. This is mandatory for
