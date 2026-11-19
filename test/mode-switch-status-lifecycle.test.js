@@ -37,7 +37,7 @@ async function deliverOrigin(t, storage, expectedIds) {
 // uses an in-memory database and injected runtime/dispatcher I/O, with no tmux
 // socket or external service. Stop the router before fixture teardown.
 test('upgrade waits for the baseline and then delivers queued legacy input under Origin in order', async t => {
-  let mode = null, baselinePresent = true, legacyTicks = 0, groupObservations = 0;
+  let mode = null, baselinePresent = true, legacyTicks = 0;
   const readMode = () => modeReader(mode);
   const storage = routerFixture(t);
   storage.deps.readSessionMode = readMode;
@@ -46,25 +46,31 @@ test('upgrade waits for the baseline and then delivers queued legacy input under
   const { store, sqlite: db } = storage;
   assert.equal(db.pragma('user_version', { simple: true }), 4);
   assert.equal(db.pragma('table_info(mode_transitions)').some(column => column.name === 'kind'), false);
+  const origin = store.insertConversation('in', 'dashboard', 'origin', 'already assigned to Origin');
+  assert.equal(origin.session_group, 'origin');
   const ids = [queue(db, 'first'), queue(db, 'second')];
+  const expectedOriginIds = [origin.id, ...ids];
+  const originHead = db.prepare("SELECT head_id FROM group_heads WHERE session_group='origin'").pluck();
+  assert.equal(originHead.get(), origin.id);
   const oldDelivery = queue(db, 'already delivered', 'delivered');
   const other = store.insertConversation('in', 'fixture', 'other', 'other group', { groupName: 'room' });
   db.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE status='pending'").run(clock / 1000);
   storage.deps.findLegacySessions = () => ['baseline'];
   storage.deps.advanceLegacy = () => { legacyTicks++; };
-  const list = storage.deps.listGroupTmuxSessions;
-  storage.deps.listGroupTmuxSessions = () => { groupObservations++; return list(); };
   const router = storage.create();
   await router.initialize();
-  await storage.rounds(3);
-  assert.equal(groupObservations, 0, 'the pre-migration tick does not enter group scheduling');
+  for (let round = 0; round < 3; round++) {
+    storage.advance(10000);
+    await storage.rounds();
+    assert.equal(storage.calls.some(([operation]) => operation === 'launch'), false,
+      'pending Origin input must not launch a session while the baseline is present');
+  }
   await router.stop();
-  assert.equal(storage.calls.some(([operation]) => operation === 'launch'), false);
   assert.equal(legacyTicks, 3);
   const owner = cutover(store, readMode, target => { mode = target; }, () => baselinePresent);
   await owner.automatic();
   assert.equal(store.getModeTransition(), null);
-  assert.equal(db.prepare("SELECT count(*) FROM conversations WHERE status='pending'").pluck().get(), 3);
+  assert.equal(db.prepare("SELECT count(*) FROM conversations WHERE status='pending'").pluck().get(), 4);
   baselinePresent = false;
   await owner.automatic();
   const { run_id: runId } = store.getModeTransition();
@@ -75,7 +81,7 @@ test('upgrade waits for the baseline and then delivers queued legacy input under
   assert.equal(mode, 'multi');
   assert.equal(store.getModeTransition({ runId }).phase, 'complete');
   assert.equal(store.getDrainFence('*'), null);
-  assert.equal(db.prepare("SELECT head_id FROM group_heads WHERE session_group='origin'").pluck().get(), ids.at(-1));
+  assert.equal(originHead.get(), ids.at(-1));
   assert.equal(db.prepare('SELECT session_group FROM conversations WHERE id=?').pluck().get(oldDelivery), '');
   assert.equal(db.prepare('SELECT session_group FROM conversations WHERE id=?').pluck().get(other.id), other.session_group);
   assert.equal(db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 0);
@@ -85,12 +91,11 @@ test('upgrade waits for the baseline and then delivers queued legacy input under
     if (row.session_group === 'origin') delivered.push(row.id);
   };
   await storage.create().initialize();
-  for (let round = 0; round < 12 && delivered.length < ids.length; round++) {
+  for (let round = 0; round < 12 && delivered.length < expectedOriginIds.length; round++) {
     storage.advance(1000);
     await storage.rounds();
   }
-  assert.deepEqual(delivered, ids);
-  assert.ok(groupObservations > 0, 'the configured router observes group sessions');
+  assert.deepEqual(delivered, expectedOriginIds);
   assert.equal(storage.calls.filter(([op, input]) => op === 'launch' && input.sessionGroup === 'origin').length, 1);
 });
 

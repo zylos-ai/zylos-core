@@ -49,7 +49,7 @@ test('every check prohibits messages and requires a current-record handoff witho
 
 test('only the idle reclaim check offers deferral; restart checks name interrupted work in the handoff', () => {
   const running = section('1. Running work');
-  const [idle, restart] = running.split('- **Upgrade, single-session upgrade and configuration restart checks:**');
+  const [idle, restart] = running.split('- **Upgrade and configuration restart checks:**');
   assert.ok(idle.includes('**Idle reclaim check:** Only one thing can hold the reclaim: work this session itself started that is still running '
     + 'and whose result it is waiting for — a background command, a Monitor watcher, a background subagent or workflow. A Memory Sync is not '
     + 'such work: the supervisor already waits for it before reclaiming, so do not defer for it. If there is such work, run '
@@ -60,7 +60,7 @@ test('only the idle reclaim check offers deferral; restart checks name interrupt
   assert.equal(normalized.match(/defer-reclaim/g).length, 1);
   assert.ok(fs.statSync(installed('~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js')).isFile());
   const finish = section('4. Finish');
-  assert.ok(finish.includes('**Idle reclaim, upgrade and single-session upgrade restart checks:** Then acknowledge.'));
+  assert.ok(finish.includes('**Idle reclaim and upgrade restart checks:** Then acknowledge.'));
   assert.ok(finish.includes('**Configuration restart check:** Then submit ready_for_config_reclaim through the supervisor. '
     + 'After acceptance, finish this control and the current turn.'));
 });
