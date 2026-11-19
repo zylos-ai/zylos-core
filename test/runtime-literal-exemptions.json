@@ -1,0 +1,1842 @@
+[
+  {
+    "file": "cli/commands/auth.js",
+    "text": "(deviceCode && runtime !== 'codex');",
+    "reason": "dispatch:auth: Selects runtime-specific login, credential verification, or result handling."
+  },
+  {
+    "file": "cli/commands/auth.js",
+    "text": "const result = runtime === 'agy' ? { status: 0 } : await spawn(runtime, runtime === 'claude' ? ['auth', 'login'] : ['login', ...(deviceCode ? ['--device-auth'] : [])], { stdio: ['inherit', 2, 2] });",
+    "reason": "dispatch:auth: Selects runtime-specific login, credential verification, or result handling."
+  },
+  {
+    "file": "cli/commands/auth.js",
+    "text": "const override = runtime === 'claude' ? claudeSettingsOverrideNotice(claudeProbeEnvironment(ZYLOS_DIR, process.env)) : null;",
+    "reason": "dispatch:auth: Selects runtime-specific login, credential verification, or result handling."
+  },
+  {
+    "file": "cli/commands/auth.js",
+    "text": "message: runtime === 'agy' ? 'Gemini API key was not confirmed; run zylos runtime agy --save-apikey <key>' : 'Authentication was not confirmed', persisted: null, configChanged: false,",
+    "reason": "dispatch:auth: Selects runtime-specific login, credential verification, or result handling."
+  },
+  {
+    "file": "cli/commands/auth.js",
+    "text": "if (runtime === 'claude' && !syncRelayTraffic()) {",
+    "reason": "dispatch:auth: Selects runtime-specific login, credential verification, or result handling."
+  },
+  {
+    "file": "cli/commands/auth.js",
+    "text": "const relay = runtime === 'claude' ? relayNotice() : null;",
+    "reason": "dispatch:auth: Selects runtime-specific login, credential verification, or result handling."
+  },
+  {
+    "file": "cli/commands/auth.js",
+    "text": "const override = runtime === 'claude' ? claudeSettingsOverrideNotice() : null;",
+    "reason": "dispatch:auth: Selects runtime-specific login, credential verification, or result handling."
+  },
+  {
+    "file": "cli/commands/config.js",
+    "text": "const runtime = key === 'new_session_threshold' ? 'claude' : 'codex';",
+    "reason": "legacy: Reads one of the two fixed pre-group threshold keys."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "if (!commandExists('claude')) return { installed: false };",
+    "reason": "dispatch:upgrade: Probes the runtime-specific executable and version."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "version = execFileSync('claude', ['--version'], {",
+    "reason": "dispatch:upgrade: Probes the runtime-specific executable and version."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "if (!commandExists('codex')) return { installed: false };",
+    "reason": "dispatch:upgrade: Probes the runtime-specific executable and version."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "version = execFileSync('codex', ['--version'], {",
+    "reason": "dispatch:upgrade: Probes the runtime-specific executable and version."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "if (!commandExists('agy')) return { installed: false };",
+    "reason": "dispatch:upgrade: Probes the runtime-specific executable and version."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "version = execFileSync('agy', ['--version'], {",
+    "reason": "dispatch:upgrade: Probes the runtime-specific executable and version."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "claude: { display: 'Claude', host: 'api.anthropic.com' },",
+    "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "codex: { display: 'Codex', host: 'api.openai.com' },",
+    "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "agy: { display: 'Antigravity', host: 'generativelanguage.googleapis.com' },",
+    "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "const authenticationHint = runtime => runtime === 'agy' ? 'Run: zylos runtime agy --save-apikey <key>'",
+    "reason": "text: Preserves the existing runtime-specific authentication hint."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": ": runtime === 'codex' ? 'Run: codex login' : 'Run zylos init to authenticate';",
+    "reason": "text: Preserves the existing runtime-specific authentication hint."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "} else if (runtime === 'claude') {",
+    "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "} else if (runtime === 'agy') {",
+    "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "if (diag.runtime === 'claude' && diag.ai.cli.installed && diag.ai.auth && !diag.ai.autonomous) {",
+    "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "...(diag.runtime === 'agy' || !runtimeDiagnostics(diag.runtime) ? { runtime: diag.runtime, display: diag.display } : {}),",
+    "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "autonomous: diag.runtime === 'agy' ? { ok: null, skipped: true } : { ok: diag.ai.autonomous },",
+    "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "if (auth && diag.runtime !== 'agy') {",
+    "reason": "dispatch:auth: Selects runtime-specific diagnostic data and checks."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "if (diag.runtime !== 'claude') return false;",
+    "reason": "tool-use: The repair command invokes Claude as a tool."
+  },
+  {
+    "file": "cli/commands/doctor.js",
+    "text": "const proc = spawn('claude', ['-p', prompt, ...permArgs], {",
+    "reason": "tool-use: The repair command invokes Claude as a tool."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "export async function prepareInitRuntimeClis({ runtimes = ['claude', 'codex'], exists = commandExists,",
+    "reason": "dispatch:upgrade: Controls executable installation for the existing init paths."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "install = { claude: installClaude, codex: installCodex } } = {}) {",
+    "reason": "dispatch:upgrade: Controls executable installation for the existing init paths."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "export async function prepareInitRuntimeAssets({ runtimes = ['claude', 'codex'], result = { completed: [], failed: [] },",
+    "reason": "dispatch:hooks: Controls provisioning of each runtime’s hook assets."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "hooks = { claude: async () => {",
+    "reason": "dispatch:hooks: Controls provisioning of each runtime’s hook assets."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (!(await runtimeHooksReady('claude')).ready) throw new Error('Claude hooks/instructions not ready');",
+    "reason": "dispatch:hooks: Controls provisioning of each runtime’s hook assets."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "}, codex: () => {",
+    "reason": "dispatch:hooks: Controls provisioning of each runtime’s hook assets."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "}, agy: () => syncAgyConfig({ zylosDir: ZYLOS_DIR }) }, exists = fs.existsSync } = {}) {",
+    "reason": "dispatch:hooks: Controls provisioning of each runtime’s hook assets."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "const result = spawnSync('claude', ['-p', 'hi', '--max-turns', '1'], {",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "runtime: null,  // 'claude' | 'codex' — set via --runtime flag",
+    "reason": "text: Preserves the current init option description, runtime label, or authentication hint."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "const key = runtime === 'codex' ? 'OPENAI_BASE_URL' : 'ANTHROPIC_BASE_URL';",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "const native = read(path.join(home, runtime === 'codex' ? '.codex/config.toml' : '.claude/settings.json'));",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "const value = runtime === 'codex' ? parseToml(native).openai_base_url : JSON.parse(native)?.env?.ANTHROPIC_BASE_URL;",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (runtime === 'claude' && opts.baseUrl === null) opts.baseUrl = savedInitBaseUrl('claude', { zylosDir, home });",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (runtime === 'codex' && opts.codexBaseUrl === null) opts.codexBaseUrl = savedInitBaseUrl('codex', { zylosDir, home });",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "return parseClaudeAuthStatus(spawn('claude', ['auth', 'status', '--json'], {",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "authenticated = () => commandExists('claude') && isInitClaudeAuthenticated({ root }), log = console.log } = {}) {",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "agyAuth = async () => (await getRuntime('agy')).auth.checkAuth(),",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "const base = runtime === 'codex' ? opts.codexBaseUrl : opts.baseUrl;",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (runtime === 'codex') saveCodexBase(base);",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (runtime === 'codex') pendingCodexBaseUrl = base;",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (runtime === 'codex') codexApiAttempted = true;",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "activateBase('claude');",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (selectedRuntime === 'agy') {",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "const agyAuthenticated = exists('agy') && checked.status === 'success';",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (selectedRuntime === 'codex') {",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (exists('codex')) {",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "const validation = prepareApi('codex');",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (codexAuthenticated && opts.codexBaseUrl) activateBase('codex');",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "const configurationError = prepareApi('codex');",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (codexAuthenticated && opts.codexBaseUrl) activateBase('codex');",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "login('codex', ['login', '--device-auth']);",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "login('codex', ['login']);",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (exists('claude')) {",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "const validation = prepareApi('claude');",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (opts.baseUrl) activateBase('claude');",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "login('script', ['-q', '/dev/null', 'claude']);",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "login('claude', []);",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "log(`    ${dim('Run \"claude\" to authenticate then \"zylos init\" again.')}`);",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "const validation = prepareApi('claude');",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (opts.baseUrl) activateBase('claude');",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "} // end if (exists('claude')) — Step 6",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (opts.baseUrl && !claudeApiAttempted && !opts.apiKey && !opts.authToken) activateBase('claude');",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (opts.codexBaseUrl && !codexApiAttempted && (selectedRuntime !== 'codex' || !opts.codexApiKey)) activateBase('codex');",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "selectedRuntime = runtimeIdx === 2 ? 'codex' : 'claude';",
+    "reason": "gap: The existing interactive choice offers Claude and Codex only."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "const runtimeLabel = { claude: 'Claude Code', codex: 'Codex (OpenAI)', agy: 'Antigravity CLI (Google)' }[selectedRuntime];",
+    "reason": "text: Preserves the current init option description, runtime label, or authentication hint."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "const preparedRuntimes = selectedRuntime === 'agy' ? ['claude', 'codex', 'agy'] : ['claude', 'codex'];",
+    "reason": "dispatch:upgrade: Controls executable installation for the existing init paths."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "let claudeJustInstalled = preparation.installed.includes('claude');",
+    "reason": "dispatch:upgrade: Controls executable installation for the existing init paths."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (selectedRuntime === 'claude') {",
+    "reason": "dispatch:launch: Controls the Claude-only launch terms prompt."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "console.log(`Non-selected runtime: use zylos auth ${selectedRuntime === 'claude' ? 'codex' : 'claude'} when needed.`);",
+    "reason": "text: Preserves the current init option description, runtime label, or authentication hint."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (selectedRuntime === 'claude' && claudeAuthenticated && !skipConfirm && needsBypassAcceptance()) {",
+    "reason": "dispatch:launch: Controls the Claude-only launch terms prompt."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (selectedRuntime === 'codex' ? !codexAuthenticated : !claudeAuthenticated) {",
+    "reason": "else-fallback: The non-Codex authentication prompt uses the existing Claude branch."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "const runtimeName = selectedRuntime === 'codex' ? 'Codex' : 'Claude Code';",
+    "reason": "else-fallback: The non-Codex authentication prompt uses the existing Claude branch."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "console.log(`Non-selected runtime: use zylos auth ${selectedRuntime === 'claude' ? 'codex' : 'claude'} when needed.`);",
+    "reason": "text: Preserves the current init option description, runtime label, or authentication hint."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (selectedRuntime === 'claude' && claudeAuthenticated && !skipConfirm && needsBypassAcceptance()) {",
+    "reason": "dispatch:launch: Controls the Claude-only launch terms prompt."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "const runtimeAuthOk = selectedRuntime === 'agy' ? authentication.agyAuthenticated : selectedRuntime === 'codex' ? codexAuthenticated : claudeAuthenticated;",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (selectedRuntime === 'agy') {",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "} else if (selectedRuntime === 'codex') {",
+    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
+  },
+  {
+    "file": "cli/commands/migrate-instructions.js",
+    "text": "log(`Instruction migration committed. Marker: ${instructionPaths('claude', { zylosDir: root }).markerPath}`);",
+    "reason": "dispatch:instructions: Reports the existing instruction migration marker path."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "const label = { claude: 'Claude Code (Anthropic)', codex: 'Codex (OpenAI)', agy: 'Antigravity CLI (Google)' }[current] || current;",
+    "reason": "text: Preserves the runtime status label, help, or credential example."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "if (target === 'claude') {",
+    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "} else if (target === 'agy') {",
+    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "} else if (target === 'codex') {",
+    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "if (target === 'claude') {",
+    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "if (target === 'codex') {",
+    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "if (target === 'agy' && parsed.hasBaseUrl) return { error: '--save-base-url is not supported for agy' };",
+    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "if (target !== 'claude' && parsed.hasSetupToken) return { error: '--save-setup-token requires claude' };",
+    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "example: target === 'codex'",
+    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "example: target === 'codex'",
+    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "example: target === 'codex'",
+    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "const instruction = path.join(ZYLOS_DIR, target === 'claude' ? 'CLAUDE.md' : 'AGENTS.md');",
+    "reason": "dispatch:instructions: Selects the existing runtime instruction filename or readiness action."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "if (target === 'agy') {",
+    "reason": "dispatch:hooks: Checks or refreshes runtime-specific hook and configuration readiness."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "try { assertInstructionReady('agy', { zylosDir: ZYLOS_DIR }); }",
+    "reason": "dispatch:instructions: Selects the existing runtime instruction filename or readiness action."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "if (target === 'codex') return { ready: isCodexTrustValid({ zylosDir: ZYLOS_DIR, projectDir: ZYLOS_DIR, codexVersion: getCodexVersion() }).valid, pendingMigration };",
+    "reason": "dispatch:hooks: Checks or refreshes runtime-specific hook and configuration readiness."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "if (target === 'claude' && parsed.setupToken && !parsed.baseUrl) {",
+    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "if (target === 'claude' && credentialsSaved.length) {",
+    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "if (target === 'agy') {",
+    "reason": "dispatch:hooks: Checks or refreshes runtime-specific hook and configuration readiness."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "buildInstructionFile('agy', { zylosDir: ZYLOS_DIR });",
+    "reason": "dispatch:instructions: Selects the existing runtime instruction filename or readiness action."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "const remedy = target === 'agy'",
+    "reason": "dispatch:auth: Handles the existing runtime-specific credential options and validation."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "agy:     --save-apikey <key>             GEMINI_API_KEY (no personal subscription login)",
+    "reason": "text: Preserves the runtime status label, help, or credential example."
+  },
+  {
+    "file": "cli/commands/runtime.js",
+    "text": "(agy: replace the key with zylos runtime agy --save-apikey <key>);",
+    "reason": "text: Preserves the runtime status label, help, or credential example."
+  },
+  {
+    "file": "cli/commands/self-uninstall.js",
+    "text": "if (commandExists('claude')) {",
+    "reason": "gap: The optional removal instructions cover only the two supported entries in this flow."
+  },
+  {
+    "file": "cli/commands/self-uninstall.js",
+    "text": "if (commandExists('codex')) {",
+    "reason": "gap: The optional removal instructions cover only the two supported entries in this flow."
+  },
+  {
+    "file": "cli/lib/claude-eval.js",
+    "text": "const child = spawn('claude', ['--print', '--output-format', 'text'], {",
+    "reason": "tool-use: Runs a one-shot Claude evaluation."
+  },
+  {
+    "file": "cli/lib/codex-hooks.js",
+    "text": "export function getCodexVersion({ codexBin = process.env.CODEX_BIN || 'codex', execFileSyncImpl } = {}) {",
+    "reason": "dispatch:hooks: Invokes Codex-specific hook version, trust, or configuration commands."
+  },
+  {
+    "file": "cli/lib/codex-hooks.js",
+    "text": "codexBin = process.env.CODEX_BIN || 'codex',",
+    "reason": "dispatch:hooks: Invokes Codex-specific hook version, trust, or configuration commands."
+  },
+  {
+    "file": "cli/lib/codex-hooks.js",
+    "text": "const codexBin = process.env.ZYLOS_CODEX_BIN || 'codex';",
+    "reason": "dispatch:hooks: Invokes Codex-specific hook version, trust, or configuration commands."
+  },
+  {
+    "file": "cli/lib/codex-hooks.js",
+    "text": "codexBin = process.env.CODEX_BIN || 'codex',",
+    "reason": "dispatch:hooks: Invokes Codex-specific hook version, trust, or configuration commands."
+  },
+  {
+    "file": "cli/lib/model-rotation-thresholds.js",
+    "text": "const LEGACY_KEYS = { claude: 'new_session_threshold', codex: 'codex_new_session_threshold' };",
+    "reason": "legacy: Reads the fixed pre-group threshold settings."
+  },
+  {
+    "file": "cli/lib/model-rotation-thresholds.js",
+    "text": "if (runtime === 'agy') return true;",
+    "reason": "dispatch:context: Retains runtime-specific threshold and context-window rules."
+  },
+  {
+    "file": "cli/lib/model-rotation-thresholds.js",
+    "text": "if (runtime !== 'codex') return false;",
+    "reason": "dispatch:context: Retains runtime-specific threshold and context-window rules."
+  },
+  {
+    "file": "cli/lib/model-rotation-thresholds.js",
+    "text": "return options.runtime === 'claude' && isLargeWindow(options) && !model.toLowerCase().includes('[1m]')",
+    "reason": "dispatch:context: Retains runtime-specific threshold and context-window rules."
+  },
+  {
+    "file": "cli/lib/model-rotation-thresholds.js",
+    "text": "const family = options.runtime === 'claude' ? claudeAlias(key) : null;",
+    "reason": "dispatch:context: Retains runtime-specific threshold and context-window rules."
+  },
+  {
+    "file": "cli/lib/model-rotation-thresholds.js",
+    "text": "|| (options.runtime === 'claude' && isAlias(defaultModel) && candidates(options).includes(defaultKey));",
+    "reason": "dispatch:context: Retains runtime-specific threshold and context-window rules."
+  },
+  {
+    "file": "cli/lib/model-rotation-thresholds.js",
+    "text": "for (const runtime of ['claude', 'codex']) {",
+    "reason": "legacy: Reads the fixed pre-group threshold settings."
+  },
+  {
+    "file": "cli/lib/model-rotation-thresholds.js",
+    "text": "if ((!Object.hasOwn(LEGACY_KEYS, runtime) && runtime !== 'agy') || !cleanModel(model)) {",
+    "reason": "inconsistent: Core accepts agy thresholds while the Dashboard action rejects them."
+  },
+  {
+    "file": "cli/lib/recorded-account-usage.js",
+    "text": "if (runtime === 'claude') {",
+    "reason": "else-fallback: Non-Claude runtimes reach the existing alternate quota read path."
+  },
+  {
+    "file": "cli/lib/recorded-account-usage.js",
+    "text": "if (runtime === 'claude' && !latest) {",
+    "reason": "else-fallback: Non-Claude runtimes reach the existing alternate quota read path."
+  },
+  {
+    "file": "cli/lib/runtime/codex-launch-trust.js",
+    "text": "codexBin = 'codex', env = process.env }) {",
+    "reason": "dispatch:launch: Supplies the executable name for the Codex launch trust check."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "systemPath: path.join(instructionsDir, `${runtime === 'agy' ? 'codex' : runtime}-system.md`),",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "outputPath: path.join(root, runtime === 'claude' ? 'CLAUDE.md' : 'AGENTS.md'),",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "return fs.existsSync(instructionPaths('claude', { zylosDir }).markerPath);",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "const paths = instructionPaths('agy', { zylosDir });",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "const paths = instructionPaths('claude', { zylosDir });",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "for (const runtime of ['claude', 'codex']) {",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "return [path.resolve(zylosDir), instructionPaths('claude', { zylosDir }).instructionsDir];",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "const markerPath = instructionPaths('claude', { zylosDir }).markerPath;",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "const claude = instructionPaths('claude', { zylosDir });",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "const systems = Object.fromEntries(['claude', 'codex'].map(runtime => [",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "{ name: 'codex-system', path: instructionPaths('codex', { zylosDir }).systemPath, content: systems.codex },",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "for (const runtime of ['claude', 'codex']) {",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "const claude = instructionPaths('claude', { zylosDir });",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "const claude = instructionPaths('claude', { zylosDir });",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "const legacyArtifacts = [claude.userPath, claude.outputPath, instructionPaths('codex', { zylosDir }).outputPath];",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "const systems = Object.fromEntries(['claude', 'codex'].map(runtime => [",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "{ name: 'codex-system', path: instructionPaths('codex', { zylosDir }).systemPath, content: systems.codex },",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "for (const runtime of ['claude', 'codex']) {",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "const claude = instructionPaths('claude', { zylosDir });",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/instruction-builder.js",
+    "text": "for (const runtime of ['claude', 'codex']) {",
+    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
+  },
+  {
+    "file": "cli/lib/runtime/launch-flow.js",
+    "text": "const help = (runtime === 'codex' || launchConfig?.mode === 'override') ? await (options.runtimeHelp || runtimeHelpAsync)(command,env,{ timeoutMs: remaining() }) : '';",
+    "reason": "dispatch:launch: Selects launch help, prompts, or argument placement for the current runtime."
+  },
+  {
+    "file": "cli/lib/runtime/launch-flow.js",
+    "text": "if (runtime === 'claude' && upgrade.prompt) args.push('--');",
+    "reason": "dispatch:launch: Selects launch help, prompts, or argument placement for the current runtime."
+  },
+  {
+    "file": "cli/lib/runtime/launch-flow.js",
+    "text": "['codex', 'agy'].includes(runtime) ? args.length - 1 : undefined,",
+    "reason": "dispatch:launch: Selects launch help, prompts, or argument placement for the current runtime."
+  },
+  {
+    "file": "cli/lib/runtime/session-command.js",
+    "text": "const efforts = runtime === 'claude' ? ['low','medium','high','max'] : ['none','minimal','low','medium','high','xhigh'];",
+    "reason": "dispatch:launch: Selects per-runtime launch arguments, effort validation, environment, or cache settings."
+  },
+  {
+    "file": "cli/lib/runtime/session-command.js",
+    "text": "if (!efforts.includes(config.effort) || !/(?:^|\\s)--model(?:\\s|[,=])/m.test(help) || (runtime === 'claude' && !/(?:^|\\s)--effort(?:\\s|[,=])/m.test(help))) throw adapterError('MODEL_CONFIG_REJECTED');",
+    "reason": "dispatch:launch: Selects per-runtime launch arguments, effort validation, environment, or cache settings."
+  },
+  {
+    "file": "cli/lib/runtime/session-command.js",
+    "text": "if (runtime === 'claude') {",
+    "reason": "dispatch:launch: Selects per-runtime launch arguments, effort validation, environment, or cache settings."
+  },
+  {
+    "file": "cli/lib/runtime/session-command.js",
+    "text": "} else if (runtime === 'agy') {",
+    "reason": "dispatch:launch: Selects per-runtime launch arguments, effort validation, environment, or cache settings."
+  },
+  {
+    "file": "cli/lib/runtime/session-command.js",
+    "text": "if (runtime === 'claude') {",
+    "reason": "dispatch:launch: Selects per-runtime launch arguments, effort validation, environment, or cache settings."
+  },
+  {
+    "file": "cli/lib/runtime/session-command.js",
+    "text": "if (runtime === 'claude') env[key] = dotenvVars[key] || fallback;",
+    "reason": "dispatch:launch: Selects per-runtime launch arguments, effort validation, environment, or cache settings."
+  },
+  {
+    "file": "cli/lib/runtime/session-command.js",
+    "text": "if (runtime === 'agy') {",
+    "reason": "dispatch:launch: Selects per-runtime launch arguments, effort validation, environment, or cache settings."
+  },
+  {
+    "file": "cli/lib/runtime/session-command.js",
+    "text": "try { sessionEnv = launchEnvironment(root, processEnv, { runtime: 'claude' }); }",
+    "reason": "dispatch:auth: Builds environment for the Claude-specific credential probe."
+  },
+  {
+    "file": "cli/lib/runtime-setup.js",
+    "text": "return commandExists('claude');",
+    "reason": "dispatch:upgrade: Checks whether the Claude executable is installed."
+  },
+  {
+    "file": "cli/lib/runtime-setup.js",
+    "text": "const result = spawnSync('claude', ['auth', 'status', '--json'], {",
+    "reason": "dispatch:auth: Looks up runtime-specific credential files or authentication status."
+  },
+  {
+    "file": "cli/lib/runtime-setup.js",
+    "text": "const result = spawnSync('codex', ['login', 'status'], {",
+    "reason": "dispatch:auth: Looks up runtime-specific credential files or authentication status."
+  },
+  {
+    "file": "cli/lib/runtime-setup.js",
+    "text": "if (runtime === 'codex') return [path.join(home, '.codex', 'auth.json')];",
+    "reason": "dispatch:auth: Looks up runtime-specific credential files or authentication status."
+  },
+  {
+    "file": "cli/lib/runtime-setup.js",
+    "text": "if (runtime === 'agy') return [path.join(ZYLOS_DIR, '.env')];",
+    "reason": "dispatch:auth: Looks up runtime-specific credential files or authentication status."
+  },
+  {
+    "file": "cli/lib/session-state-reader-async.js",
+    "text": "if (['claude', 'agy'].includes(target.runtime)) usage = readJsonSample(path.join(dir, 'statusline.json'), 'usage');",
+    "reason": "dispatch:context: Selects per-runtime usage sample location or freshness."
+  },
+  {
+    "file": "cli/lib/session-state-reader-async.js",
+    "text": "if (target.runtime === 'codex') {",
+    "reason": "dispatch:context: Selects per-runtime usage sample location or freshness."
+  },
+  {
+    "file": "cli/lib/session-state-reader-async.js",
+    "text": "usage:sampleResult(usage, target, final, target.runtime === 'agy' ? Infinity : usageFreshnessMs, now()) }];",
+    "reason": "dispatch:context: Selects per-runtime usage sample location or freshness."
+  },
+  {
+    "file": "cli/lib/session-state-reader-async.js",
+    "text": "if (['claude', 'agy'].includes(first.runtime)) usage = readJsonSample(path.join(dir, 'statusline.json'), 'usage');",
+    "reason": "dispatch:context: Selects per-runtime usage sample location or freshness."
+  },
+  {
+    "file": "cli/lib/session-state-reader-async.js",
+    "text": "if (first.runtime === 'codex') {",
+    "reason": "dispatch:context: Selects per-runtime usage sample location or freshness."
+  },
+  {
+    "file": "cli/lib/session-state-reader-async.js",
+    "text": "usage: sampleResult(usage, first, last, first.runtime === 'agy' ? Infinity : usageFreshnessMs, now()) };",
+    "reason": "dispatch:context: Selects per-runtime usage sample location or freshness."
+  },
+  {
+    "file": "cli/lib/session-state-reader-async.js",
+    "text": "const sample = runtime === 'claude' ? readJsonSample(path.join(groupRunDir(sessionGroup, env), 'statusline.json'), 'usage') :",
+    "reason": "else-fallback: The scoped quota reader branches between existing Claude and Codex sources."
+  },
+  {
+    "file": "cli/lib/session-state-reader-async.js",
+    "text": "if (runtime === 'codex') {",
+    "reason": "else-fallback: The scoped quota reader branches between existing Claude and Codex sources."
+  },
+  {
+    "file": "cli/lib/session-usage-reader.js",
+    "text": "if (!identity?.present || !identity.ready || identity.runtime !== 'codex') return null;",
+    "reason": "dispatch:usage: Identifies the Codex-specific event or rollout format."
+  },
+  {
+    "file": "cli/lib/session-usage-reader.js",
+    "text": "const event = completeRows(events.text).findLast(row => Number.isInteger(row.v) && row.v >= 1 && Number.isSafeInteger(row.ts) && row.ts >= 0 && row.event === 'session_start' && row.runtime === 'codex' &&",
+    "reason": "dispatch:usage: Identifies the Codex-specific event or rollout format."
+  },
+  {
+    "file": "cli/lib/session-usage-reader.js",
+    "text": "row.runtime === 'codex' && row.session_group === sessionGroup && typeof row.run_id === 'string' &&",
+    "reason": "dispatch:usage: Identifies the Codex-specific event or rollout format."
+  },
+  {
+    "file": "cli/lib/session-usage-reader.js",
+    "text": "const actual = runtime === 'claude' ? value?.model?.id : runtime === 'agy' ? value?.model?.id ?? value?.model : value?.model;",
+    "reason": "else-fallback: Unknown runtimes reach the existing Codex-shaped usage handling."
+  },
+  {
+    "file": "cli/lib/session-usage-reader.js",
+    "text": "const window = ['claude', 'agy'].includes(runtime) ? value?.context_window?.context_window_size ?? (runtime === 'agy' ? 1_048_576 : null) : value?.contextUsage?.ceiling;",
+    "reason": "else-fallback: Unknown runtimes reach the existing Codex-shaped usage handling."
+  },
+  {
+    "file": "cli/lib/sync-runtime-hooks.js",
+    "text": "export function detectStopFailureSupport({ execFileSyncImpl = execFileSync, binary = process.env.CLAUDE_BIN || 'claude' } = {}) {",
+    "reason": "dispatch:hooks: Checks native hook support or reports native hook installation results."
+  },
+  {
+    "file": "cli/lib/sync-runtime-hooks.js",
+    "text": "export function detectSubagentHooksSupport({ execFileSyncImpl = execFileSync, binary = process.env.CLAUDE_BIN || 'claude' } = {}) {",
+    "reason": "dispatch:hooks: Checks native hook support or reports native hook installation results."
+  },
+  {
+    "file": "cli/lib/sync-runtime-hooks.js",
+    "text": "const result = { claude: { added, updated, removed }, codex: codexHooks, stopFailureSupported };",
+    "reason": "dispatch:hooks: Checks native hook support or reports native hook installation results."
+  },
+  {
+    "file": "cli/lib/upgrade-post-cutoff.js",
+    "text": "if (runtime === 'codex' || fs.existsSync(path.join(codexGlobalDir, 'config.toml')) || fs.existsSync(path.join(codexGlobalDir, 'auth.json'))) {",
+    "reason": "dispatch:upgrade: Maintains Codex hook ownership during upgrades."
+  },
+  {
+    "file": "cli/lib/upgrade-post-cutoff.js",
+    "text": "if (runtime !== 'codex' && !fs.existsSync(path.join(globalDir, 'config.toml')) && !fs.existsSync(path.join(globalDir, 'auth.json'))) return { attempted: false };",
+    "reason": "dispatch:upgrade: Maintains Codex hook ownership during upgrades."
+  },
+  {
+    "file": "cli/lib/upgrade-post-cutoff.js",
+    "text": "return runtime !== 'codex' && result.fatal ? { ...result, fatal: false, warning: true } : result;",
+    "reason": "dispatch:upgrade: Maintains Codex hook ownership during upgrades."
+  },
+  {
+    "file": "cli/lib/upgrade-runtime-preparation.js",
+    "text": "prepare, exists = commandExists, install = { claude: installClaude, codex: installCodex },",
+    "reason": "dispatch:upgrade: Controls the fixed default install paths plus any selected runtime."
+  },
+  {
+    "file": "cli/lib/upgrade-runtime-preparation.js",
+    "text": "runtimes: [...new Set(['claude', 'codex', ...required])],",
+    "reason": "dispatch:upgrade: Controls the fixed default install paths plus any selected runtime."
+  },
+  {
+    "file": "cli/lib/upgrade-runtime-preparation.js",
+    "text": "install: Object.fromEntries(['claude', 'codex'].map(runtime => [runtime, () => {",
+    "reason": "dispatch:upgrade: Controls the fixed default install paths plus any selected runtime."
+  },
+  {
+    "file": "cli/lib/upgrade-runtime-preparation.js",
+    "text": "const claude = instructionPaths('claude', { zylosDir });",
+    "reason": "dispatch:instructions: Stages the existing per-runtime instruction files and migration marker."
+  },
+  {
+    "file": "cli/lib/upgrade-runtime-preparation.js",
+    "text": "for (const name of ['claude', 'codex']) {",
+    "reason": "dispatch:instructions: Stages the existing per-runtime instruction files and migration marker."
+  },
+  {
+    "file": "cli/lib/upgrade-runtime-preparation.js",
+    "text": "for (const name of ['claude', 'codex']) {",
+    "reason": "dispatch:instructions: Stages the existing per-runtime instruction files and migration marker."
+  },
+  {
+    "file": "cli/lib/upgrade-runtime-preparation.js",
+    "text": "const shadow = instructionPaths(name === 'CLAUDE.md' ? 'claude' : 'codex', { zylosDir: migrationRoot });",
+    "reason": "dispatch:instructions: Stages the existing per-runtime instruction files and migration marker."
+  },
+  {
+    "file": "cli/lib/upgrade-runtime-preparation.js",
+    "text": "const live = instructionPaths(name === 'CLAUDE.md' ? 'claude' : 'codex', { zylosDir });",
+    "reason": "dispatch:instructions: Stages the existing per-runtime instruction files and migration marker."
+  },
+  {
+    "file": "cli/lib/upgrade-runtime-preparation.js",
+    "text": "add(relative(claude.markerPath), readRegular(instructionPaths('claude', { zylosDir: migrationRoot }).markerPath));",
+    "reason": "dispatch:instructions: Stages the existing per-runtime instruction files and migration marker."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/context-monitor.js",
+    "text": "if (runtime === 'agy') {",
+    "reason": "dispatch:context: Normalizes Antigravity-specific context inputs."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/failure-continuation.js",
+    "text": "if (runtime !== 'claude' || !runId) return false;",
+    "reason": "dispatch:health: Limits stop-failure continuation to the matching Claude run."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/failure-continuation.js",
+    "text": "if(!current?.ready || current.runId!==retry.runId || current.sessionId!==retry.sessionId || current.runtime!=='claude') {",
+    "reason": "dispatch:health: Limits stop-failure continuation to the matching Claude run."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/health-event-reader.js",
+    "text": "const retry=scene.runtime==='claude' && ['stop','stop_failure'].includes(event.event)",
+    "reason": "dispatch:health: Only Claude stop events have failure-continuation semantics."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/health-evidence.js",
+    "text": "if (!event.prompt_id && event.runtime !== 'agy') return { state: next, status: 'processed', reason: 'missing_prompt', verify: true };",
+    "reason": "dispatch:health: Interprets runtime-specific hook and failure evidence."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/health-evidence.js",
+    "text": "const health = event.error === 'rate_limit' ? 'rate_limited' : event.error === 'authentication_failed' ? 'auth_failed' : event.runtime === 'agy' ? 'unavailable' : null;",
+    "reason": "dispatch:health: Interprets runtime-specific hook and failure evidence."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/health-quota.js",
+    "text": "return identity?.runtime==='claude'&&id(identity.session_id)&&Number.isSafeInteger(identity.claude_pid)&&identity.claude_pid>0;",
+    "reason": "dispatch:health: Validates identity for Claude statusline quota evidence."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/hook-auth-prompt.js",
+    "text": "'--target-run', env.ZYLOS_RUN_ID, '--expected-runtime', 'claude',",
+    "reason": "dispatch:hooks: Binds the native Claude hook to its expected runtime."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/launch-config-shape.js",
+    "text": "const efforts = config.runtime === 'claude' ? ['low', 'medium', 'high', 'max'] : ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];",
+    "reason": "dispatch:launch: Selects the valid effort names for the existing launch path."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/outage-notice.js",
+    "text": "identity?.runtime !== 'claude' ||",
+    "reason": "dispatch:health: Uses runtime-specific quota evidence when annotating an outage."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/pane-process.js",
+    "text": "const RUNTIMES = new Set(['claude', 'codex']);",
+    "reason": "dispatch:hooks: Classifies runtime-specific pane processes and hook descendants."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/pane-process.js",
+    "text": "export const isNativeCodex = comm => typeof comm === 'string' && path.basename(comm).replace(/\\.exe$/, '') === 'codex';",
+    "reason": "dispatch:hooks: Classifies runtime-specific pane processes and hook descendants."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/pane-process.js",
+    "text": "runtime === 'codex' && typeof paneComm === 'string' && paneComm.length > 0 && !isNativeCodex(paneComm);",
+    "reason": "dispatch:hooks: Classifies runtime-specific pane processes and hook descendants."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/pane-process.js",
+    "text": "if (record.runtime === 'codex' && trigger.ppid === record.panePid) {",
+    "reason": "dispatch:hooks: Classifies runtime-specific pane processes and hook descendants."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/pane-process.js",
+    "text": "if (location.includes('/.codex/')) return 'codex';",
+    "reason": "dispatch:usage: Maps known transcript path markers to their runtime."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/pane-process.js",
+    "text": "if (location.includes('/.claude/')) return 'claude';",
+    "reason": "dispatch:usage: Maps known transcript path markers to their runtime."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "if(this.runtime!=='claude')return;",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "if(this.runtime==='claude' && this.turn && this.turnStartedAt===startedAt) {",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "if(this.runtime==='agy')this.agyIdleSince=fact.ts;",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "if(this.runtime==='claude' && row.event==='stop' && Number.isFinite(row.ts))claudeCutoff ??= row.ts-STOP_HOOK_LAG_MS;",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "const keep=Number.isFinite(row.ts) && row.ts>=this.startedAt && (this.runtime==='claude'?",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "this.runtime!=='claude' && ['prompt','stop'].includes(row.event)))boundary=true;",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "if(['agy','claude'].includes(this.runtime) && Number.isFinite(row.last_native_activity_at) &&",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "if(this.runtime==='claude' && row.event==='idle')continue;",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "const startsPrompt=row.event==='prompt' && (this.runtime!=='claude' || !this.turn);",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "if(this.runtime==='claude' && !row.agent_id &&",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "if(this.runtime==='claude'){this.busySince=row.ts;this.lastHookStartAt=row.ts;}",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "if(this.runtime==='agy') {this.agyIdleSince=null;this.lastResponseAt=Math.max(this.lastResponseAt ?? -Infinity,row.ts);}",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "if(this.runtime==='claude') {",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "if(this.runtime==='agy')this.agyIdleSince=row.ts;",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "if(this.runtime==='claude' && value.type==='queue-operation' && value.operation==='dequeue' &&",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "if(this.runtime==='codex') {",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "if(this.runtime==='claude')this.mainAction(ts);",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "let stat;try{stat=fs.statSync(this.transcriptPath);}catch(error){if(this.runtime!=='claude' && error.code!=='ENOENT')throw error;this.forgetDequeue();return null;}",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "try{this.transcriptFd=fs.openSync(this.transcriptPath,'r');}catch(error){if(this.runtime!=='claude')throw error;this.forgetDequeue();return null;}",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "catch(error){if(this.runtime!=='claude')throw error;this.forgetDequeue();return null;}",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "const transcriptMtimeMs=this.runtime==='agy'?null:this.readTranscript();",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "if(this.runtime!=='agy')this.applyQuietTurnClose();",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/session-activity.js",
+    "text": "const busy=this.runtime==='agy'?this.agyBusy(now):this.turn || this.tools.size>0 || this.runtime==='claude' && this.transcriptPending || now-this.lastActivityAt<3000;",
+    "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/supervisor-exits.js",
+    "text": "if (scene.runtime === 'codex' && Number.isFinite(scene.currentSessionTs)) {",
+    "reason": "dispatch:delivery: Uses the Codex exit signal when matching the session lifecycle."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/supervisor-health-observer.js",
+    "text": "const continuationOwnsScreen=scene.runtime==='claude' && retry?.runId===scene.runId && retry.sessionId===scene.sessionId;",
+    "reason": "dispatch:health: Lets matching Claude continuation own screen recovery."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/supervisor-legacy-status.js",
+    "text": "if(foreground.runtime==='claude')this.activity.transcriptPath=path.join(this.env.HOME,'.claude','projects',",
+    "reason": "legacy: Resolves the fixed pre-group Claude transcript location."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/supervisor-machine-tasks.js",
+    "text": "usageAlertStateFile:path.join(this.zylosDir,'activity-monitor',runtime==='claude'?'usage-alert-state.json':'usage-codex-alert-state.json'),",
+    "reason": "dispatch:usage: Selects the runtime-specific alert state file."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/supervisor-machine-tasks.js",
+    "text": "if(dailyUpgradeDue&&targetRuntime==='claude')this.daily('daily-upgrade-state',5,parts,()=>this.control(DAILY_UPGRADE_PROMPT),{catchUp:true});",
+    "reason": "dispatch:upgrade: Queues the existing Claude-only daily upgrade."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/supervisor-main.js",
+    "text": "matchScreen:(runtime,screen)=>runtime==='agy'?{}:(runtime==='claude'?matchClaudeScreen:matchCodexScreen)(screen),",
+    "reason": "dispatch:health: Chooses the runtime health probe or invokes Claude failure continuation."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/supervisor-main.js",
+    "text": "if(scene.runtime==='claude') await coordinator.serial(scene.runtime,()=>processFailureContinuation({",
+    "reason": "dispatch:health: Chooses the runtime health probe or invokes Claude failure continuation."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/supervisor-scenes.js",
+    "text": "const percent = ['claude', 'agy'].includes(scene.runtime) ? value.context_window?.used_percentage :",
+    "reason": "dispatch:usage: Reads a runtime-specific usage sample shape."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/supervisor.js",
+    "text": "if(notification.runtime==='claude')await health.serial('claude',()=>{",
+    "reason": "dispatch:health: Serializes continuation with the Claude health store after delivery."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/supervisor.js",
+    "text": "const store=health.store('claude'),state=store.read(delivered.sessionGroup),retry=state.failure_retry;",
+    "reason": "dispatch:health: Serializes continuation with the Claude health store after delivery."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/tool-rules.js",
+    "text": "runtime: 'claude',",
+    "reason": "dispatch:health: Defines the Claude-specific watchdog tool rule."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/tool-rules.js",
+    "text": "enabled: runtimeId === 'claude' && watchdogEnabled,",
+    "reason": "dispatch:health: Defines the Claude-specific watchdog tool rule."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/usage-monitor.js",
+    "text": "if (this.runtimeId === 'codex') return 0;",
+    "reason": "dispatch:usage: Selects runtime-specific account quota polling behavior."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/usage-monitor.js",
+    "text": "if (this.runtimeId === 'codex') return this.options.usageCodexStateFile;",
+    "reason": "else-fallback: Unknown runtimes use the same usage state path as Claude."
+  },
+  {
+    "file": "skills/comm-bridge/scripts/c4-channel-hooks.js",
+    "text": "const candidates = context.runtime === 'codex' ? [env.CODEX_SESSION_ID]",
+    "reason": "dispatch:hooks: Reads the runtime-specific native session ID variable."
+  },
+  {
+    "file": "skills/comm-bridge/scripts/c4-channel-hooks.js",
+    "text": ": context.runtime === 'claude' ? [env.CLAUDE_SESSION_ID]",
+    "reason": "dispatch:hooks: Reads the runtime-specific native session ID variable."
+  },
+  {
+    "file": "skills/comm-bridge/scripts/router/delivery.js",
+    "text": "if (target.runtime === 'agy') {",
+    "reason": "dispatch:delivery: Preserves runtime-specific paste, input, and session-clear behavior."
+  },
+  {
+    "file": "skills/comm-bridge/scripts/router/delivery.js",
+    "text": "if (verdict === 'has_content' && target.runtime === 'claude') {",
+    "reason": "dispatch:delivery: Preserves runtime-specific paste, input, and session-clear behavior."
+  },
+  {
+    "file": "skills/comm-bridge/scripts/router/delivery.js",
+    "text": "const agyInputReady = target.runtime !== 'agy' || isKeystrokeControl(item) || await inputState() === 'empty';",
+    "reason": "dispatch:delivery: Preserves runtime-specific paste, input, and session-clear behavior."
+  },
+  {
+    "file": "skills/comm-bridge/scripts/router/delivery.js",
+    "text": "const clearAgy = target.runtime === 'agy' && type === 'control' && content === '/clear';",
+    "reason": "dispatch:delivery: Preserves runtime-specific paste, input, and session-clear behavior."
+  },
+  {
+    "file": "skills/comm-bridge/scripts/router/lifecycle.js",
+    "text": "if (!['claude', 'codex'].includes(live.runtime)) throw tmuxError('RUNTIME_UNSUPPORTED', 'Legacy runtime is unknown');",
+    "reason": "legacy: Only accepts fixed pre-group session identities."
+  },
+  {
+    "file": "skills/comm-bridge/scripts/router/resident.js",
+    "text": "const closeNow = finished && (live.runtime === 'codex' || live.runtime === 'claude' && !entry.exitSent);",
+    "reason": "legacy: Handles the fixed pre-group resident session set."
+  },
+  {
+    "file": "skills/comm-bridge/scripts/router/resident.js",
+    "text": "if (live.runtime === 'claude' && await sendExitWhenIdle(entry, live)) return;",
+    "reason": "legacy: Handles the fixed pre-group resident session set."
+  },
+  {
+    "file": "skills/comm-bridge/scripts/router/resident.js",
+    "text": "if (!['claude', 'codex'].includes(live.runtime)) {",
+    "reason": "legacy: Handles the fixed pre-group resident session set."
+  },
+  {
+    "file": "skills/comm-bridge/scripts/runtime-delivery.js",
+    "text": "return readZylosConfigOrThrow().runtime === 'codex' ? 'codex-main' : 'claude-main';",
+    "reason": "legacy: Reads fixed single-session names and identity fields from legacy data."
+  },
+  {
+    "file": "skills/comm-bridge/scripts/runtime-delivery.js",
+    "text": "return { runtime:'claude', session_id:foreground.session_id, claude_pid:foreground.claude_pid };",
+    "reason": "legacy: Reads fixed single-session names and identity fields from legacy data."
+  },
+  {
+    "file": "skills/dashboard/src/index.js",
+    "text": "return { zylos: zylosVersion, claude: ccInstalledVersion, codex: codexInstalledVersion, agy: agyInstalledVersion };",
+    "reason": "dispatch:upgrade: Returns installed executable versions in the existing response shape."
+  },
+  {
+    "file": "skills/dashboard/src/index.js",
+    "text": "const defaultModel = runtime === 'claude' ? readClaudeSettings().model : runtime === 'codex' ? readCodexRootString('model', config.zylosDir) : null;",
+    "reason": "else-fallback: Preserves the Dashboard native default lookup branches and fallback."
+  },
+  {
+    "file": "skills/dashboard/src/index.js",
+    "text": "const defaultEffort = runtime === 'claude' ? readClaudeSettings().effortLevel : runtime === 'codex' ? readCodexRootString('model_reasoning_effort', config.zylosDir) : null;",
+    "reason": "else-fallback: Preserves the Dashboard native default lookup branches and fallback."
+  },
+  {
+    "file": "skills/dashboard/src/index.js",
+    "text": "return Object.keys(DEFAULT_RUNTIME_MODEL_PRICES[runtime === 'codex' ? 'codex' : 'claude'] || {});",
+    "reason": "dispatch:dashboard: Reads and writes runtime-specific price configuration fields."
+  },
+  {
+    "file": "skills/dashboard/src/index.js",
+    "text": "const rt = runtime === 'codex' ? 'codex' : 'claude';",
+    "reason": "dispatch:dashboard: Reads and writes runtime-specific price configuration fields."
+  },
+  {
+    "file": "skills/dashboard/src/index.js",
+    "text": "return runtime === 'claude' || runtime === 'codex';",
+    "reason": "dispatch:dashboard: Reads and writes runtime-specific price configuration fields."
+  },
+  {
+    "file": "skills/dashboard/src/index.js",
+    "text": "const priceRuntime = runtime === 'codex' ? 'codex' : 'claude';",
+    "reason": "dispatch:dashboard: Reads and writes runtime-specific price configuration fields."
+  },
+  {
+    "file": "skills/dashboard/src/index.js",
+    "text": "const fastModeMultiplier = priceRuntime === 'claude' ? fastModeMultiplierForRuntime(config, priceRuntime) : null;",
+    "reason": "dispatch:dashboard: Reads and writes runtime-specific price configuration fields."
+  },
+  {
+    "file": "skills/dashboard/src/index.js",
+    "text": "priorityModelPrices: priceRuntime === 'codex' ? modelPricesForRuntime(config, priceRuntime, 'priority') : null,",
+    "reason": "dispatch:dashboard: Reads and writes runtime-specific price configuration fields."
+  },
+  {
+    "file": "skills/dashboard/src/index.js",
+    "text": "mode: priceRuntime === 'codex' ? 'service_tier' : 'multiplier',",
+    "reason": "dispatch:dashboard: Reads and writes runtime-specific price configuration fields."
+  },
+  {
+    "file": "skills/dashboard/src/index.js",
+    "text": "serviceTier: priceRuntime === 'codex' ? 'priority' : null,",
+    "reason": "dispatch:dashboard: Reads and writes runtime-specific price configuration fields."
+  },
+  {
+    "file": "skills/dashboard/src/index.js",
+    "text": "if (runtime !== 'codex') errors.push(`priorityModelPrices is not supported for ${runtime} runtime`);",
+    "reason": "dispatch:dashboard: Reads and writes runtime-specific price configuration fields."
+  },
+  {
+    "file": "skills/dashboard/src/index.js",
+    "text": "if (runtime !== 'claude') errors.push(`fastModeMultiplier is not supported for ${runtime} runtime`);",
+    "reason": "dispatch:dashboard: Reads and writes runtime-specific price configuration fields."
+  },
+  {
+    "file": "skills/dashboard/src/index.js",
+    "text": "if (runtime === 'claude') existing.modelPrices = patch.modelPrices;",
+    "reason": "dispatch:dashboard: Reads and writes runtime-specific price configuration fields."
+  },
+  {
+    "file": "skills/dashboard/src/index.js",
+    "text": "existing.runtimeFastModeMultipliers = { ...(existing.runtimeFastModeMultipliers || {}), claude: patch.fastModeMultiplier };",
+    "reason": "dispatch:dashboard: Reads and writes runtime-specific price configuration fields."
+  },
+  {
+    "file": "skills/dashboard/src/index.js",
+    "text": "codex: { ...(existing.runtimeServiceTierModelPrices?.codex || {}), priority: patch.priorityModelPrices } };",
+    "reason": "dispatch:dashboard: Reads and writes runtime-specific price configuration fields."
+  },
+  {
+    "file": "skills/dashboard/src/index.js",
+    "text": "claude: patch.fastModeMultiplier ?? DEFAULT_RUNTIME_FAST_MODE_MULTIPLIERS.claude };",
+    "reason": "dispatch:dashboard: Reads and writes runtime-specific price configuration fields."
+  },
+  {
+    "file": "skills/dashboard/src/index.js",
+    "text": "codex: { ...(config.runtimeServiceTierModelPrices?.codex || {}), priority: patch.priorityModelPrices } };",
+    "reason": "dispatch:dashboard: Reads and writes runtime-specific price configuration fields."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "if (runtime === 'claude') {",
+    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "if (runtime === 'claude') {",
+    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "if (runtime === 'agy') {",
+    "reason": "dispatch:upgrade: Dispatches to the existing per-runtime CLI upgrade."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "const { stdout, stderr } = await execFileAsync('agy', ['update'], {",
+    "reason": "dispatch:upgrade: Dispatches to the existing per-runtime CLI upgrade."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "if (runtime !== 'claude' && runtime !== 'codex') {",
+    "reason": "dispatch:upgrade: Dispatches to the existing per-runtime CLI upgrade."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "if (runtime === 'codex') {",
+    "reason": "dispatch:upgrade: Dispatches to the existing per-runtime CLI upgrade."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "const { stdout, stderr } = await execFileAsync('codex', ['update'], { timeout: 60000 });",
+    "reason": "dispatch:upgrade: Dispatches to the existing per-runtime CLI upgrade."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "const { stdout, stderr } = await execFileAsync('claude', ['update'], { timeout: 60000 });",
+    "reason": "dispatch:upgrade: Dispatches to the existing per-runtime CLI upgrade."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "if (!['claude', 'codex'].includes(body?.runtime)) return { ok: false, error: 'INVALID_RUNTIME' };",
+    "reason": "inconsistent: This threshold API rejects agy while other threshold consumers recognize it."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "const codexModels = runtime === 'codex' ? getCodexModels() : [];",
+    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "const models = runtime === 'claude'",
+    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "const efforts_by_model = runtime === 'claude'",
+    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "const settings = runtime === 'claude' ? readSettings(zylosDir) : {};",
+    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "const codexModel = runtime === 'codex' ? nativeModels.codex : null;",
+    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "const codexEffort = runtime === 'codex' ? readCodexRootString('model_reasoning_effort', zylosDir) : null;",
+    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "const currentCodexModel = runtime === 'codex'",
+    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "if (runtime === 'codex') {",
+    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "const currentModel = runtime === 'claude' ? nativeModels.claude : currentCodexModel;",
+    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
+  },
+  {
+    "file": "skills/dashboard/src/lib/actions.js",
+    "text": "current_effort: runtime === 'claude'",
+    "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
+  },
+  {
+    "file": "skills/dashboard/src/lib/chat/activity.js",
+    "text": "if (event.runtime === 'codex') {",
+    "reason": "else-fallback: Preserves interpretation of the existing Claude and Codex activity vocabularies."
+  },
+  {
+    "file": "skills/dashboard/src/lib/chat/activity.js",
+    "text": "else if (event.type === 'subagent_start' && agentOf(event) && event.runtime !== 'codex') {",
+    "reason": "else-fallback: Preserves interpretation of the existing Claude and Codex activity vocabularies."
+  },
+  {
+    "file": "skills/dashboard/src/lib/chat/activity.js",
+    "text": "if (event.runtime === 'codex' ? event.type !== 'tool_call' : event.type !== 'pre_tool_use') return false;",
+    "reason": "else-fallback: Preserves interpretation of the existing Claude and Codex activity vocabularies."
+  },
+  {
+    "file": "skills/dashboard/src/lib/chat/activity.js",
+    "text": "if (event.runtime !== 'codex') return !CLAUDE_AGENT_TOOLS.has(tool) && !!meta.tool_use_id;",
+    "reason": "else-fallback: Preserves interpretation of the existing Claude and Codex activity vocabularies."
+  },
+  {
+    "file": "skills/dashboard/src/lib/chat/activity.js",
+    "text": "if (event.runtime === 'codex' && ['pre_tool_use', 'post_tool_use', 'post_tool_failure'].includes(event.type)) continue;",
+    "reason": "else-fallback: Preserves interpretation of the existing Claude and Codex activity vocabularies."
+  },
+  {
+    "file": "skills/dashboard/src/lib/chat/activity.js",
+    "text": "if (event.runtime !== 'codex' && ['tool_call', 'tool_result'].includes(event.type)) continue;",
+    "reason": "else-fallback: Preserves interpretation of the existing Claude and Codex activity vocabularies."
+  },
+  {
+    "file": "skills/dashboard/src/lib/chat/activity.js",
+    "text": "if (event.runtime === 'codex' && typeof meta.resumes_cell === 'string') {",
+    "reason": "else-fallback: Preserves interpretation of the existing Claude and Codex activity vocabularies."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/codex-rollout-collector.js",
+    "text": "const written = await this._transcripts.collect('codex', (mapping, isOriginCurrent) => {",
+    "reason": "dispatch:dashboard: Collects Codex rollout events and usage in the native format."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/codex-rollout-collector.js",
+    "text": "const current = runId == null ? null : this.store.currentOriginTranscript('codex', runId);",
+    "reason": "dispatch:dashboard: Collects Codex rollout events and usage in the native format."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/codex-rollout-collector.js",
+    "text": "runtime: 'codex',",
+    "reason": "dispatch:dashboard: Collects Codex rollout events and usage in the native format."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/codex-rollout-collector.js",
+    "text": "runtime: 'codex',",
+    "reason": "dispatch:dashboard: Collects Codex rollout events and usage in the native format."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/codex-rollout-collector.js",
+    "text": "runtime: 'codex',",
+    "reason": "dispatch:dashboard: Collects Codex rollout events and usage in the native format."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/codex-rollout-collector.js",
+    "text": "runtime: 'codex',",
+    "reason": "dispatch:dashboard: Collects Codex rollout events and usage in the native format."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/codex-rollout-collector.js",
+    "text": "runtime: 'codex',",
+    "reason": "dispatch:dashboard: Collects Codex rollout events and usage in the native format."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/codex-rollout-collector.js",
+    "text": "runtime: 'codex',",
+    "reason": "dispatch:dashboard: Collects Codex rollout events and usage in the native format."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/codex-rollout-collector.js",
+    "text": "runtime: 'codex',",
+    "reason": "dispatch:dashboard: Collects Codex rollout events and usage in the native format."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/codex-rollout-collector.js",
+    "text": "runtime: 'codex',",
+    "reason": "dispatch:dashboard: Collects Codex rollout events and usage in the native format."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/codex-rollout-collector.js",
+    "text": "runtime: 'codex',",
+    "reason": "dispatch:dashboard: Collects Codex rollout events and usage in the native format."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/codex-rollout-collector.js",
+    "text": "const prices = modelPricesForRuntime(this.config, 'codex', serviceTier);",
+    "reason": "dispatch:dashboard: Collects Codex rollout events and usage in the native format."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/conversation-collector.js",
+    "text": "const prices = modelPricesForRuntime(this.config, 'claude');",
+    "reason": "dispatch:dashboard: Collects Claude transcript events and usage in the native format."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/conversation-collector.js",
+    "text": "const multiplier = speed === 'fast' ? (fastModeMultiplierForRuntime(this.config, 'claude', price) || 6) : 1;",
+    "reason": "dispatch:dashboard: Collects Claude transcript events and usage in the native format."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/conversation-collector.js",
+    "text": "const written = await this.transcripts.collect('claude', (mapping, originCurrent) => {",
+    "reason": "dispatch:dashboard: Collects Claude transcript events and usage in the native format."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/conversation-collector.js",
+    "text": "runtime: 'claude',",
+    "reason": "dispatch:dashboard: Collects Claude transcript events and usage in the native format."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/conversation-collector.js",
+    "text": "runtime: 'claude',",
+    "reason": "dispatch:dashboard: Collects Claude transcript events and usage in the native format."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/conversation-collector.js",
+    "text": "timestamp, runtime: 'claude', session_id: sessionId, session_group: group,",
+    "reason": "dispatch:dashboard: Collects Claude transcript events and usage in the native format."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/usage-transcripts.js",
+    "text": "if (row.runtime === 'codex' && inserted.changes === 1 && ['origin', null].includes(row.session_group)) {",
+    "reason": "dispatch:dashboard: Resolves runtime-specific active transcript identity and lifecycle."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/usage-transcripts.js",
+    "text": "if (fs.existsSync(file)) insert({ transcript_path: file, runtime: 'claude', session_id: status.session_id });",
+    "reason": "dispatch:dashboard: Resolves runtime-specific active transcript identity and lifecycle."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/usage-transcripts.js",
+    "text": "if (row.runtime === 'codex' && row.run_id != null && row.run_id === current) {",
+    "reason": "dispatch:dashboard: Resolves runtime-specific active transcript identity and lifecycle."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/usage-transcripts.js",
+    "text": "return this.store.currentOriginTranscript('codex', current)?.transcript_path === row.transcript_path;",
+    "reason": "dispatch:dashboard: Resolves runtime-specific active transcript identity and lifecycle."
+  },
+  {
+    "file": "skills/dashboard/src/lib/collectors/usage-transcripts.js",
+    "text": "const ended = snapshot && (row.runtime === 'claude' && row.run_id == null &&",
+    "reason": "dispatch:dashboard: Resolves runtime-specific active transcript identity and lifecycle."
+  },
+  {
+    "file": "skills/dashboard/src/lib/config.js",
+    "text": "claude: DEFAULT_CLAUDE_MODEL_PRICES,",
+    "reason": "dispatch:dashboard: Reads runtime-specific prices, tiers, and fast-mode multipliers."
+  },
+  {
+    "file": "skills/dashboard/src/lib/config.js",
+    "text": "codex: DEFAULT_CODEX_MODEL_PRICES",
+    "reason": "dispatch:dashboard: Reads runtime-specific prices, tiers, and fast-mode multipliers."
+  },
+  {
+    "file": "skills/dashboard/src/lib/config.js",
+    "text": "codex: {",
+    "reason": "dispatch:dashboard: Reads runtime-specific prices, tiers, and fast-mode multipliers."
+  },
+  {
+    "file": "skills/dashboard/src/lib/config.js",
+    "text": "claude: 6",
+    "reason": "dispatch:dashboard: Reads runtime-specific prices, tiers, and fast-mode multipliers."
+  },
+  {
+    "file": "skills/dashboard/src/lib/config.js",
+    "text": "claude: {",
+    "reason": "dispatch:dashboard: Reads runtime-specific prices, tiers, and fast-mode multipliers."
+  },
+  {
+    "file": "skills/dashboard/src/lib/config.js",
+    "text": "codex: {",
+    "reason": "dispatch:dashboard: Reads runtime-specific prices, tiers, and fast-mode multipliers."
+  },
+  {
+    "file": "skills/dashboard/src/lib/config.js",
+    "text": "claude: Number(loaded.runtimeFastModeMultipliers?.claude ?? loaded.fastModeMultiplier ?? DEFAULT_RUNTIME_FAST_MODE_MULTIPLIERS.claude)",
+    "reason": "dispatch:dashboard: Reads runtime-specific prices, tiers, and fast-mode multipliers."
+  },
+  {
+    "file": "skills/dashboard/src/lib/config.js",
+    "text": "codex: {",
+    "reason": "dispatch:dashboard: Reads runtime-specific prices, tiers, and fast-mode multipliers."
+  },
+  {
+    "file": "skills/dashboard/src/lib/config.js",
+    "text": "const rt = runtime === 'codex' ? 'codex' : 'claude';",
+    "reason": "dispatch:dashboard: Reads runtime-specific prices, tiers, and fast-mode multipliers."
+  },
+  {
+    "file": "skills/dashboard/src/lib/config.js",
+    "text": "if (rt === 'codex' && tier === 'priority') {",
+    "reason": "dispatch:dashboard: Reads runtime-specific prices, tiers, and fast-mode multipliers."
+  },
+  {
+    "file": "skills/dashboard/src/lib/config.js",
+    "text": "const rt = runtime === 'codex' ? 'codex' : 'claude';",
+    "reason": "dispatch:dashboard: Reads runtime-specific prices, tiers, and fast-mode multipliers."
+  },
+  {
+    "file": "skills/dashboard/src/lib/config.js",
+    "text": ": config?.runtimeFastModeMultipliers?.[rt] ?? (rt === 'claude' ? config?.fastModeMultiplier : null);",
+    "reason": "dispatch:dashboard: Reads runtime-specific prices, tiers, and fast-mode multipliers."
+  },
+  {
+    "file": "skills/dashboard/src/lib/config.js",
+    "text": "return config?.runtimeFastModeMultipliers?.[rt] ?? (rt === 'claude' ? config?.fastModeMultiplier : null) ?? null;",
+    "reason": "dispatch:dashboard: Reads runtime-specific prices, tiers, and fast-mode multipliers."
+  },
+  {
+    "file": "skills/dashboard/src/lib/group-deletion-storage.js",
+    "text": "const root = path.join(homeDir, row.runtime === 'claude' ? '.claude/projects' : '.codex/sessions');",
+    "reason": "dispatch:dashboard: Resolves runtime-specific transcript storage and cleanup semantics."
+  },
+  {
+    "file": "skills/dashboard/src/lib/group-deletion-storage.js",
+    "text": "if (row.runtime === 'claude') {",
+    "reason": "dispatch:dashboard: Resolves runtime-specific transcript storage and cleanup semantics."
+  },
+  {
+    "file": "skills/dashboard/src/lib/group-deletion-storage.js",
+    "text": "} else if (row.runtime !== 'codex' || !/^rollout-[^/]+\\.jsonl$/.test(path.basename(file))) throw fail('group_delete_path_unavailable');",
+    "reason": "dispatch:dashboard: Resolves runtime-specific transcript storage and cleanup semantics."
+  },
+  {
+    "file": "skills/dashboard/src/lib/group-deletion-storage.js",
+    "text": "targets.push([file, path.join(homeDir, row.runtime === 'claude' ? '.claude/projects' : '.codex/sessions')]);",
+    "reason": "dispatch:dashboard: Resolves runtime-specific transcript storage and cleanup semantics."
+  },
+  {
+    "file": "skills/dashboard/src/lib/group-deletion-storage.js",
+    "text": "if (row.runtime === 'claude' && !row.parent_path) {",
+    "reason": "dispatch:dashboard: Resolves runtime-specific transcript storage and cleanup semantics."
+  },
+  {
+    "file": "skills/dashboard/src/lib/group-deletion-storage.js",
+    "text": "if (row.runtime !== 'claude' || row.parent_path) continue;",
+    "reason": "dispatch:dashboard: Resolves runtime-specific transcript storage and cleanup semantics."
+  },
+  {
+    "file": "skills/dashboard/src/lib/group-deletion-storage.js",
+    "text": "if (row.runtime === 'claude') {",
+    "reason": "dispatch:dashboard: Resolves runtime-specific transcript storage and cleanup semantics."
+  },
+  {
+    "file": "skills/dashboard/src/lib/history/claude-history.js",
+    "text": "return { runtime: 'claude', current: null, sessions };",
+    "reason": "dispatch:dashboard: Reports history from the Claude transcript layout."
+  },
+  {
+    "file": "skills/dashboard/src/lib/history/claude-history.js",
+    "text": "return { runtime: 'claude', current: paths.has(current) ? current : null, sessions };",
+    "reason": "dispatch:dashboard: Reports history from the Claude transcript layout."
+  },
+  {
+    "file": "skills/dashboard/src/lib/history/codex-history.js",
+    "text": "const rows = this.store?.listCodexRolloutPaths?.('codex') || this.store?.db?.prepare(",
+    "reason": "dispatch:dashboard: Reads and labels history from Codex rollouts."
+  },
+  {
+    "file": "skills/dashboard/src/lib/history/codex-history.js",
+    "text": ").all('codex') || [];",
+    "reason": "dispatch:dashboard: Reads and labels history from Codex rollouts."
+  },
+  {
+    "file": "skills/dashboard/src/lib/history/codex-history.js",
+    "text": "return { runtime: 'codex', current: null, sessions };",
+    "reason": "dispatch:dashboard: Reads and labels history from Codex rollouts."
+  },
+  {
+    "file": "skills/dashboard/src/lib/history/codex-history.js",
+    "text": "const latest = this.store?.latestCodexRolloutPath?.('codex');",
+    "reason": "dispatch:dashboard: Reads and labels history from Codex rollouts."
+  },
+  {
+    "file": "skills/dashboard/src/lib/history/codex-history.js",
+    "text": "return { runtime: 'codex', current, sessions };",
+    "reason": "dispatch:dashboard: Reads and labels history from Codex rollouts."
+  },
+  {
+    "file": "skills/dashboard/src/lib/history/history-service.js",
+    "text": "const parserForRuntime = runtime => runtime === 'claude' ? ClaudeHistory : runtime === 'codex' ? CodexHistory : EmptyHistory;",
+    "reason": "dispatch:dashboard: Dispatches the history parser by runtime."
+  },
+  {
+    "file": "skills/dashboard/src/lib/installed-versions.js",
+    "text": "if (command === 'agy') return [command, raw.match(/\\b\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?\\b/)?.[0] ?? null];",
+    "reason": "dispatch:upgrade: Parses the runtime-specific version command output."
+  },
+  {
+    "file": "skills/dashboard/src/lib/observer-containment-tmux.js",
+    "text": "const target = origin ? origin.tmuxName : runtime === 'codex' ? 'codex-main' : runtime === 'claude' ? 'claude-main' : null;",
+    "reason": "legacy: Resolves fixed pre-group tmux session names."
+  },
+  {
+    "file": "skills/dashboard/src/lib/runtime-api.js",
+    "text": "const available = latest[runtime === 'claude' ? 'cc' : runtime] ?? null;",
+    "reason": "dispatch:upgrade: Reads the legacy Claude version checker field."
+  },
+  {
+    "file": "skills/dashboard/src/lib/schema.js",
+    "text": "runtime TEXT NOT NULL DEFAULT 'claude',",
+    "reason": "sql-check: Preserves the released SQLite column default or constraint."
+  },
+  {
+    "file": "skills/dashboard/src/lib/schema.js",
+    "text": "runtime TEXT NOT NULL DEFAULT 'claude',",
+    "reason": "sql-check: Preserves the released SQLite column default or constraint."
+  },
+  {
+    "file": "skills/dashboard/src/lib/schema.js",
+    "text": "runtime TEXT NOT NULL DEFAULT 'claude',",
+    "reason": "sql-check: Preserves the released SQLite column default or constraint."
+  },
+  {
+    "file": "skills/dashboard/src/lib/schema.js",
+    "text": "runtime TEXT NOT NULL CHECK (runtime IN ('claude','codex')),",
+    "reason": "sql-check: Preserves the released SQLite column default or constraint."
+  },
+  {
+    "file": "skills/dashboard/src/lib/session-observations.js",
+    "text": "if (identity.runtime === 'codex') {",
+    "reason": "dispatch:usage: Reads runtime-specific sample fields and sources."
+  },
+  {
+    "file": "skills/dashboard/src/lib/session-observations.js",
+    "text": "if (identity.runtime !== 'claude') return null;",
+    "reason": "dispatch:usage: Reads runtime-specific sample fields and sources."
+  },
+  {
+    "file": "skills/dashboard/src/lib/state-engine.js",
+    "text": ": currentRuntime === 'codex'",
+    "reason": "dispatch:dashboard: Reads runtime-specific transcript usage in the Dashboard state loop."
+  },
+  {
+    "file": "skills/dashboard/src/lib/store.js",
+    "text": "this._claudeMainTranscripts = this.db.prepare(\"SELECT * FROM usage_transcripts WHERE status = 'active' AND runtime = 'claude' AND parent_path IS NULL\");",
+    "reason": "dispatch:dashboard: Runs a query tied to a runtime-specific transcript layout."
+  },
+  {
+    "file": "skills/dashboard/src/lib/store.js",
+    "text": "AND (@runtime IS NULL OR COALESCE(NULLIF(runtime, ''), 'claude') = @runtime)",
+    "reason": "legacy: Interprets empty runtime fields written by legacy Dashboard versions."
+  },
+  {
+    "file": "skills/dashboard/src/lib/store.js",
+    "text": "upsertCodexRolloutPath({ runtime = 'codex', sessionId, transcriptPath, lastEventAt }) {",
+    "reason": "dispatch:dashboard: Runs a query tied to a runtime-specific transcript layout."
+  },
+  {
+    "file": "skills/dashboard/src/lib/store.js",
+    "text": "latestCodexRolloutPath(runtime = 'codex') {",
+    "reason": "dispatch:dashboard: Runs a query tied to a runtime-specific transcript layout."
+  },
+  {
+    "file": "skills/dashboard/src/lib/store.js",
+    "text": "WHERE runtime = 'codex'",
+    "reason": "dispatch:dashboard: Runs a query tied to a runtime-specific transcript layout."
+  },
+  {
+    "file": "skills/dashboard/src/lib/version-checker.js",
+    "text": "this._latest = { zylos: null, cc: null, codex: null };",
+    "reason": "gap: The current version checker only checks Claude and Codex."
+  },
+  {
+    "file": "skills/dashboard/src/lib/workbench/group-snapshot.js",
+    "text": "row.model = usage?.valid ? (['claude', 'agy'].includes(row.target.runtime) ? usage.value.model?.id : usage.value.model) ?? null",
+    "reason": "dispatch:usage: Projects runtime-specific model and effort fields from usage."
+  },
+  {
+    "file": "skills/dashboard/src/lib/workbench/group-snapshot.js",
+    "text": "row.effort = usage?.valid ? (row.target.runtime === 'agy' ? usage.value.model?.effort :",
+    "reason": "dispatch:usage: Projects runtime-specific model and effort fields from usage."
+  },
+  {
+    "file": "skills/dashboard/src/lib/workbench/runs.js",
+    "text": "if (event.runtime === 'codex' && !metadata?.oldSessionId) return 'rotate';",
+    "reason": "dispatch:dashboard: Interprets the runtime-specific rotation event."
+  }
+]

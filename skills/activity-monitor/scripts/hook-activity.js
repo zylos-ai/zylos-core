@@ -4,6 +4,8 @@ import { loadCoreModule } from './core-modules.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isMainModule } from './is-main-module.js';
+
+const { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
 const { appendEvent } = await loadCoreModule('event-log.js');
 const { runDirFromEnv, RUN_FILES, hookErrorLogPath } = await loadCoreModule('session-group-paths.js');
 
@@ -24,8 +26,8 @@ export function handleHookActivity(data, { nowMs=Date.now(), env=process.env } =
   const event=EVENTS[data?.hook_event_name];
   if (!event || (event==='idle' && data.notification_type!=='idle_prompt')) return null;
   const location=runDirFromEnv(env);
-  const runtime=env.ZYLOS_MODEL_CONFIG ? JSON.parse(env.ZYLOS_MODEL_CONFIG).runtime : 'claude';
-  if (!['claude','codex','agy'].includes(runtime) || typeof data.session_id!=='string' || !data.session_id) return null;
+  const runtime=env.ZYLOS_MODEL_CONFIG ? JSON.parse(env.ZYLOS_MODEL_CONFIG).runtime : DEFAULT_RUNTIME;
+  if (!SUPPORTED_RUNTIMES.includes(runtime) || typeof data.session_id!=='string' || !data.session_id) return null;
   const record={v:1,ts:nowMs,event,runtime,session_group:location.kind==='legacy'?null:(location.sessionGroup || 'origin'),run_id:env.ZYLOS_RUN_ID || null,session_id:data.session_id};
   for(const field of ['agent_id','agent_type','turn_id','model','permission_mode','transcript_path']) if(Object.hasOwn(data,field))record[field]=data[field];
   if(['pre_tool','post_tool','post_tool_failure','permission_request'].includes(event)) {

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { loadCoreModule } from './core-modules.js';
 
+const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
+
 const HEALTH_STATES = new Set(['ok', 'auth_failed', 'rate_limited', 'unavailable', 'down', 'recovering']);
 
 /** Share only an in-flight check; settlement always releases it. */
@@ -42,14 +44,14 @@ export async function readReadiness({ load = loadCoreModule } = {}) {
       }
       catch { /* Observation failure is distinct from confirmed absence. */ }
     }
-    for (const runtime of ['claude', 'codex', 'agy']) {
+    for (const runtime of SUPPORTED_RUNTIMES) {
       let record;
       try { record = await reader.readRuntimeHealth(runtime); } catch { record = { unreadable: true }; }
       const source = record?.missing ? 'missing' : record?.unreadable || !HEALTH_STATES.has(record?.health) ? 'unreadable' : 'record';
       runtimeHealth[runtime] = { source, health: source === 'record' ? record.health : null };
     }
   } catch {
-    for (const runtime of ['claude', 'codex', 'agy']) runtimeHealth[runtime] = { source: 'unreadable', health: null };
+    for (const runtime of SUPPORTED_RUNTIMES) runtimeHealth[runtime] = { source: 'unreadable', health: null };
   }
   const reason = !supervisor ? 'supervisor_unavailable'
     : sessionMode === 'single' && sessionRunning === false ? 'session_not_running' : null;

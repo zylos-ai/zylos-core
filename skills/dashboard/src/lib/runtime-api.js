@@ -3,8 +3,11 @@ import { promisify } from 'node:util';
 import { getActionsMeta } from './actions.js';
 import { sendJson } from './http.js';
 import { isNewerVersion } from './version-utils.js';
+import { loadCoreModule } from './core-modules.js';
 
-export const DASHBOARD_RUNTIMES = ['claude', 'codex', 'agy'];
+const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
+
+export const DASHBOARD_RUNTIMES = SUPPORTED_RUNTIMES;
 
 function runtimeOverrideSearchTerm(q) {
   const term = String(q ?? '').trim();

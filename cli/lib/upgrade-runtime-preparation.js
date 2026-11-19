@@ -1,9 +1,9 @@
+import { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES } from './runtime/descriptors.js';
 import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createStore } from '../../skills/comm-bridge/scripts/c4-v2-store.js';
 import { renderInstruction } from './runtime/assembler.mjs';
 import { instructionPaths, readInstructionFormatVersion, CURRENT_INSTRUCTION_FORMAT_VERSION,
   hasSplitTransactionResidue, activateMigratedSplitInstructions } from './runtime/instruction-builder.js';
@@ -30,6 +30,7 @@ async function readRuntimeOverrides(ctx) {
   try {
     // Pre-multi databases have no D10 overrides. Never migrate during preparation.
     if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='group_runtime_overrides'").get()) return [];
+    const { createStore } = await import('../../skills/comm-bridge/scripts/c4-v2-store.js');
     return createStore(db).listGroupRuntimeOverrides();
   } finally { db.close(); }
 }
@@ -40,15 +41,15 @@ export async function prepareUpgradeRuntimeClis(ctx, {
   const config = readConfigStrict(path.join(ctx.zylosDir, '.zylos/config.json'));
   if (config.state === 'error') throw config.error;
   const current = config.state === 'ok' ? config.config : {};
-  const runtime = current.runtime ?? 'claude';
-  if (!['claude', 'codex', 'agy'].includes(runtime)) throw Error('Unsupported preparation runtime');
+  const runtime = current.runtime ?? DEFAULT_RUNTIME;
+  if (!SUPPORTED_RUNTIMES.includes(runtime)) throw Error('Unsupported preparation runtime');
   if (current.session_mode !== undefined && !['single', 'multi'].includes(current.session_mode)) throw Error('Unsupported preparation session mode');
   const required = new Set([runtime]);
   if (current.session_mode === 'multi') {
     const overrides = await listRuntimeOverrides(ctx);
     if (!Array.isArray(overrides)) throw Error('Invalid runtime overrides');
     for (const item of overrides) {
-      if (!['claude', 'codex', 'agy'].includes(item?.runtime)) throw Error('Unsupported preparation group runtime');
+      if (!SUPPORTED_RUNTIMES.includes(item?.runtime)) throw Error('Unsupported preparation group runtime');
       required.add(item.runtime);
     }
   }
@@ -95,8 +96,8 @@ export function prepareUpgradeRuntime(ctx, {
   const templatesDir = path.join(sourceRoot, 'templates');
   const config = readConfigStrict(path.join(zylosDir, '.zylos/config.json'));
   if (config.state === 'error') throw config.error;
-  const runtime = config.state === 'ok' ? config.config.runtime || 'claude' : 'claude';
-  if (!['claude', 'codex', 'agy'].includes(runtime)) throw Error('Unsupported preparation runtime');
+  const runtime = config.state === 'ok' ? config.config.runtime || DEFAULT_RUNTIME : DEFAULT_RUNTIME;
+  if (!SUPPORTED_RUNTIMES.includes(runtime)) throw Error('Unsupported preparation runtime');
   const replacements = [];
   const warnings = [];
   const add = (relative, content, kind = 'instructions', id) => {

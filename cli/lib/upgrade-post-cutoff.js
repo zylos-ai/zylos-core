@@ -1,3 +1,4 @@
+import { DEFAULT_RUNTIME } from './runtime/descriptors.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -68,7 +69,7 @@ export function removeLegacyDashboardHooks(config, zylosDir) {
 }
 
 /** Stage already-rendered instruction/settings bytes without writing shared files. */
-export function preparePostCutoff({ transactionDir, zylosDir, replacements, runtime = 'claude', homeDir = os.homedir() }) {
+export function preparePostCutoff({ transactionDir, zylosDir, replacements, runtime = DEFAULT_RUNTIME, homeDir = os.homedir() }) {
   const codexGlobalDir = path.join(path.resolve(homeDir), '.codex');
   const targets = [];
   const add = (root, relative, kind, content, id) => {
@@ -149,7 +150,7 @@ export function validatePostCutoff({ transactionDir, journal }) {
 function reconcileCodexConfig({ projectDir, homeDir, onWrite }) {
   const config = readConfigStrict(path.join(projectDir, '.zylos', 'config.json'));
   if (config.state === 'error') throw config.error;
-  const runtime = config.state === 'ok' ? config.config.runtime : 'claude';
+  const runtime = config.state === 'ok' ? config.config.runtime : DEFAULT_RUNTIME;
   const globalDir = path.join(homeDir, '.codex');
   if (runtime !== 'codex' && !fs.existsSync(path.join(globalDir, 'config.toml')) && !fs.existsSync(path.join(globalDir, 'auth.json'))) return { attempted: false };
   // The reused 0.9.1 writer resolves os.homedir internally. Refuse a moved

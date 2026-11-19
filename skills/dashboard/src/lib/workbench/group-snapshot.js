@@ -14,6 +14,8 @@ import { workingHistory, END_TYPES, TOOL_TYPES, CHILD_TYPES, MAIN_ACTION_TYPES, 
 const { resolveSessionHotTtl } = await defaultLoadCoreModule('session-hot-ttl.js');
 import { readPool, poolPositions } from './pool-capacity.js';
 
+const { runtimesWith } = await defaultLoadCoreModule('runtime/descriptors.js');
+
 const emptyNames = { listAll: () => new Map(), search: () => [] };
 const activationTypes = ['activate_new', 'start_always', 'activate_failed', 'activate_timeout'];
 const activityLookbackLimit = 200;
@@ -151,7 +153,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     if (!accountsCache || at - accountsCache.at >= 30000) {
       const accounts = {}, accountSources = {};
       if (!reader) reader = sessionObservations.reader;
-      await Promise.all(['claude', 'codex'].map(async runtime => {
+      await Promise.all(runtimesWith('accountQuota').map(async runtime => {
         try {
           const sample = await reader.readAccountUsage(runtime, { allowRecorded: true });
           const weekly = sample?.value?.seven_day ?? sample?.value?.sevenDay;

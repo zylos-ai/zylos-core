@@ -26,7 +26,8 @@ test('CoreState and live-only reads share real account scan until 30s expiry, pr
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'account-cache-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const lib = path.join(root, 'package/cli/lib');
-  fs.mkdirSync(lib, { recursive: true });
+  fs.mkdirSync(path.join(lib, 'runtime'), { recursive: true });
+  fs.copyFileSync(new URL('../cli/lib/runtime/descriptors.js', import.meta.url), path.join(lib, 'runtime/descriptors.js'));
   fs.writeFileSync(path.join(root, 'package/package.json'), '{"type":"module"}');
   fs.writeFileSync(path.join(lib, 'config.js'), 'export function readSessionMode(){return {mode:"single"}}');
   const createReaderUrl = new URL('../cli/lib/session-state-reader-async.js', import.meta.url).href;

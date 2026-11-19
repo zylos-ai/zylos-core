@@ -59,6 +59,7 @@ test('switch-runtime forwards all supported runtimes to the CLI and rejects unkn
   };
   t.mock.module('node:child_process', { namedExports: { ...childProcess, execFile } });
   t.mock.module('../core-modules.js', { namedExports: { loadCoreModule: async name => {
+    if (name === 'runtime/descriptors.js') return import('../../../../../cli/lib/runtime/descriptors.js');
     assert.equal(name, 'config.js');
     return { readSessionMode: () => ({ mode: 'multi' }) };
   } } });

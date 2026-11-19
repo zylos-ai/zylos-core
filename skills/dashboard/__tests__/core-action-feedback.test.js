@@ -112,6 +112,7 @@ test('every Core action return path has a bilingual message key', async t => {
   t.mock.module('node:timers/promises', { namedExports: { ...timerPromises, setTimeout: async milliseconds => { assert.equal(milliseconds, 500); } } });
   t.mock.method(globalThis, 'setTimeout', (callback, milliseconds) => { schedules.push({ callback, milliseconds }); return { unref() {} }; });
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
+    if (name === 'runtime/descriptors.js') return import('../../../cli/lib/runtime/descriptors.js');
     if (name === 'config.js') return { readSessionMode: () => ({ mode }) };
     if (name === 'session-nudge.js') return import('../../../cli/lib/session-nudge.js');
     if (name === 'am-sock-client.js') return {

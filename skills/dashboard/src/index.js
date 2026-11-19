@@ -100,6 +100,8 @@ import { VersionChecker } from './lib/version-checker.js';
 import { isNewerVersion } from './lib/version-utils.js';
 import { DASHBOARD_RUNTIMES, createRuntimeOverridesReader, runtimeVersionRecord as projectRuntimeVersion, runtimeDefaults, handleRuntimeOptions } from './lib/runtime-api.js';
 
+const { DEFAULT_RUNTIME, runtimesWith } = await loadCoreModule('runtime/descriptors.js');
+
 const { readConfigStrict } = await loadCoreModule('config-store.js');
 const startedAt = new Date();
 const MEMORY_WRITE_BODY_MAX_BYTES = 2 * 1024 * 1024 + 64 * 1024;
@@ -132,8 +134,7 @@ await migratePasswordIfNeeded(config);
 const scheduleTz = createScheduleTz({ zylosDir: config.zylosDir });
 await scheduleTz();
 const instanceTz = () => scheduleTz.current().tz;
-const activeRuntime = loadZylosConfig(config.zylosDir).runtime || process.env.ZYLOS_RUNTIME || 'claude';
-const isClaudeRuntime = activeRuntime === 'claude';
+const activeRuntime = loadZylosConfig(config.zylosDir).runtime || process.env.ZYLOS_RUNTIME || DEFAULT_RUNTIME;
 config.runtime = activeRuntime;
 
 // 1-2. Store
@@ -1234,7 +1235,7 @@ function validateModelPrices(modelPrices, runtime, requiredModels = builtInModel
 }
 
 function allSettingsPayload() {
-  return { active: activeRuntime, runtimes: { claude: settingsPayload('claude'), codex: settingsPayload('codex') } };
+  return { active: activeRuntime, runtimes: Object.fromEntries(runtimesWith('usage').map(runtime => [runtime, settingsPayload(runtime)])) };
 }
 
 function validateRuntimeSettings(body, runtime) {
@@ -1275,7 +1276,7 @@ async function handleSettingsUpdate(req, res) {
     } else {
       updates = body.runtimes;
       for (const runtime of Object.keys(updates)) {
-        if (!['claude', 'codex'].includes(runtime)) errors.push(`Unknown keys not allowed: ${runtime}`);
+        if (!runtimesWith('usage').includes(runtime)) errors.push(`Unknown keys not allowed: ${runtime}`);
       }
     }
   } else updates = {};

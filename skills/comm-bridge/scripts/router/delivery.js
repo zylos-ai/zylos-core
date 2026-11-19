@@ -16,6 +16,8 @@ import { DELIVERY_DELAY_BASE, DELIVERY_DELAY_PER_KB, DELIVERY_DELAY_MAX, MAX_RET
   PERIODIC_ENTER_INTERVAL_MS, PERIODIC_ENTER_MAX_ATTEMPTS, ENTER_CAPTURE_ENABLED, BRACKETED_PASTE_ENABLED, REQUIRE_IDLE_MIN_SECONDS,
   REQUIRE_IDLE_POST_SEND_HOLD_MS, REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS, REQUIRE_IDLE_EXECUTION_POLL_MS } from '../c4-config.js';
 
+const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
+
 const failure = adapterError;
 const offline = state => state === 'offline' || state === 'stopped';
 export function getDeliveryDelay(bytes) {
@@ -38,7 +40,7 @@ export function isRecoveryHeartbeatPhase(phase) { return phase === 'recovery' ||
 export function isBypassState(item) { return item.type === 'control' && item.bypass_state === 1; }
 export function isKeystrokeControl(item) { return item.type === 'control' && (item.content || '').startsWith('[KEYSTROKE]'); }
 export function parseKeystrokeKey(content) { return (content || '').slice('[KEYSTROKE]'.length).trim(); }
-export function isExitLifecycleControl(item, runtime) { return item.type === 'control' && ['claude', 'codex', 'agy'].includes(runtime) && item.content === '/exit'; }
+export function isExitLifecycleControl(item, runtime) { return item.type === 'control' && SUPPORTED_RUNTIMES.includes(runtime) && item.content === '/exit'; }
 export function shouldAutoAckHeartbeat({ item, agentState, procState, confirmedActive }) {
   return Boolean(item?.content?.includes('Heartbeat check') && !isRecoveryHeartbeatPhase(getHeartbeatPhase(item.content)) &&
     agentState?.healthy === true && !offline(agentState.state) && procState?.alive === true && confirmedActive);
@@ -106,7 +108,7 @@ export function createDelivery(deps, configuration = {}) {
       try {
         connection = await open(options.tmux ?? {});
         const target = await resolve({ sessionGroup: group, connection });
-        if (stopped || !target.ready || !['claude', 'codex', 'agy'].includes(target.runtime)) throw failure('ENTER_UNVERIFIED');
+        if (stopped || !target.ready || !SUPPORTED_RUNTIMES.includes(target.runtime)) throw failure('ENTER_UNVERIFIED');
         entry.fields = { ...entry.fields, runId: target.runId, runtime: target.runtime };
         await captureBound({ target, connection }, entry.fields, 'before', { kind: 'periodic' });
         await revalidate({ target, connection });
@@ -317,7 +319,7 @@ export function createDelivery(deps, configuration = {}) {
             (binding.expectedSessionId != null && binding.expectedSessionId !== target.runtimeSessionId)) throw failure('RUNID_MISMATCH');
         }
         if (!target.ready) { gateCode = 'wait_ready'; }
-        else if (!['claude', 'codex', 'agy'].includes(target.runtime)) { gateCode = 'runtime_unknown'; try { deps.alert?.('runtime_unknown', fields); } catch {} }
+        else if (!SUPPORTED_RUNTIMES.includes(target.runtime)) { gateCode = 'runtime_unknown'; try { deps.alert?.('runtime_unknown', fields); } catch {} }
         else {
         state = await readState();
         const item = { ...row, type };

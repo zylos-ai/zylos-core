@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { loadCoreModule } from '../core-modules.js';
 
+const { DEFAULT_RUNTIME } = await loadCoreModule('runtime/descriptors.js');
+
 // Historical selection uses imported attribution and files only. It must remain
 // available for offline groups without opening tmux or starting Observer.
 export function createHistoryScope({ config = {}, store, load = loadCoreModule, readCurrentSessionId, readGroupKey } = {}) {
@@ -39,7 +41,7 @@ export function createHistoryScope({ config = {}, store, load = loadCoreModule, 
         catch { /* Legacy single-session installations may have no sample. */ }
       }
     }
-    const runtime = selected.find(row => row.session_id === current)?.runtime || selected[0]?.runtime || config.runtime || 'claude';
+    const runtime = selected.find(row => row.session_id === current)?.runtime || selected[0]?.runtime || config.runtime || DEFAULT_RUNTIME;
     const sessionIds = new Set(selected.filter(row => row.runtime === runtime).map(row => row.session_id));
     if (current) sessionIds.add(current);
     const excludedSessionIds = new Set(attribution.filter(row => !belongs(row) && row.runtime === runtime).map(row => row.session_id));

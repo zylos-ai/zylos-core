@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { loadCoreModule } from './core-modules.js';
 import { tmuxError as fail } from '../../comm-bridge/scripts/tmux-protocol.js';
+
+const { runtimesWith } = await loadCoreModule('runtime/descriptors.js');
 const { groupRunDir, listGroupTmuxSessions, tmuxNameForGroup } = await loadCoreModule('session-group-paths.js');
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
 const { observeSessionTarget, revalidateSessionTarget, readProcessTree: systemProcessTree } = await loadCoreModule('runtime/session-target.js');
@@ -93,7 +95,7 @@ export class SupervisorScenes {
       scene.runtimePid = target.runtimePid;
       if (Number.isSafeInteger(scene.runtimePid) && scene.runtimePid > 0) {
         scene.proc = { pid: scene.runtimePid, alive: true, last_sample_at: this.now() };
-        if (scene.ready && ['claude', 'agy'].includes(scene.runtime)) scene.healthIdentity = { runtime: scene.runtime, session_id: scene.sessionId, claude_pid: scene.runtimePid };
+        if (scene.ready && runtimesWith('hookHealth').includes(scene.runtime)) scene.healthIdentity = { runtime: scene.runtime, session_id: scene.sessionId, claude_pid: scene.runtimePid };
       }
       if (scene.ready) {
         if (this.readActivity) {

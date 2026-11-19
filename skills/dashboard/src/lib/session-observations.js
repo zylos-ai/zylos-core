@@ -1,6 +1,8 @@
 import path from 'node:path';
 import { loadCoreModule as defaultLoadCoreModule } from './core-modules.js';
 
+const { runtimesWith } = await defaultLoadCoreModule('runtime/descriptors.js');
+
 /** One identity-validated batch shared by Origin, fleet and account projections.
  * This provider owns no timers: only an explicit observer can initiate tmux IO. */
 export function createSessionObservations({ loadCoreModule = defaultLoadCoreModule,
@@ -8,7 +10,7 @@ export function createSessionObservations({ loadCoreModule = defaultLoadCoreModu
   let cache = null, pending = null;
   const env = { ...process.env, ZYLOS_DIR: zylosDir };
   async function accountSnapshot(runtime) {
-    if (!['claude', 'codex'].includes(runtime)) throw new TypeError('Unknown runtime');
+    if (!runtimesWith('accountQuota').includes(runtime)) throw new TypeError('Unknown runtime');
     const { readRecordedAccountUsage } = await loadCoreModule('recorded-account-usage.js');
     const samples = [...(cache?.observations.values() ?? [])]
       .filter(item => item.identity.present && item.identity.ready && item.identity.runtime === runtime &&

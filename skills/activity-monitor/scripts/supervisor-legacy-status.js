@@ -4,6 +4,8 @@ import { loadCoreModule } from './core-modules.js';
 import { SessionActivity } from './session-activity.js';
 import { durableJson } from './runtime-generation.js';
 import { publicHealthFields } from './status-writer.js';
+
+const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
 const { legacyRunDir, zylosRoot } = await loadCoreModule('session-group-paths.js');
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
 const { observeSessionTarget, readTargetRuntime, revalidateSessionTarget, readProcessTree } = await loadCoreModule('runtime/session-target.js');
@@ -20,7 +22,7 @@ export class SupervisorLegacyStatus {
   foreground() {
     try {
       const value=JSON.parse(fs.readFileSync(path.join(this.directory,'foreground-session.json'),'utf8'));
-      return value?.version===1 && ['claude','codex','agy'].includes(value.runtime) && typeof value.session_id==='string' &&
+      return value?.version===1 && SUPPORTED_RUNTIMES.includes(value.runtime) && typeof value.session_id==='string' &&
         /^[A-Za-z0-9_-]+$/.test(value.session_id) && Number.isSafeInteger(value.claude_pid) && value.claude_pid>1 &&
         Number.isSafeInteger(value.observed_at) && value.observed_at>=0 ? value : null;
     } catch{return null;}

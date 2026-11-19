@@ -4,6 +4,8 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { loadCoreModule } from './core-modules.js';
 
+const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
+
 const execute = promisify(execFile);
 const isTargetError = code => code === 'STALE_TARGET' || String(code || '').startsWith('TARGET_');
 function envelope(text) {
@@ -85,7 +87,7 @@ export async function handleCoreAction(action, body, config) {
       messageParams: { value: body.mode, code: result.error?.code || 'unknown' } };
   }
   if (action === 'switch-runtime') {
-    if (!['claude', 'codex', 'agy'].includes(body?.runtime)) return { ok: false, error: 'INVALID_RUNTIME', messageKey: 'result.invalid_runtime' };
+    if (!SUPPORTED_RUNTIMES.includes(body?.runtime)) return { ok: false, error: 'INVALID_RUNTIME', messageKey: 'result.invalid_runtime' };
     const result = await command('zylos', ['runtime', body.runtime, '--json'], { timeout: 65000 });
     const saved = result.ok && result.data?.result === 'saved';
     const unchanged = result.ok && result.data?.result === 'unchanged';

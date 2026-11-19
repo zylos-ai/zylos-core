@@ -2,6 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { claudeProjectSlug } from '../claude-project-path.js';
 import { sameSourceFile } from '../source-file-identity.js';
+import { loadCoreModule } from '../core-modules.js';
+
+const { runtimesWith } = await loadCoreModule('runtime/descriptors.js');
 
 const DAY = 86400000;
 const INACTIVE_MS = 30 * 60000;
@@ -56,7 +59,7 @@ export class UsageTranscripts {
       byte_offset: Number.isSafeInteger(offsets[row.transcript_path]) && offsets[row.transcript_path] >= 0
         ? offsets[row.transcript_path] : 0 }, stamp);
     for (const row of this.store.transcriptStartsSince(cutoff)) {
-      if (!['claude', 'codex'].includes(row.runtime) || !row.session_id ||
+      if (!runtimesWith('usage').includes(row.runtime) || !row.session_id ||
           typeof row.transcript_path !== 'string' || !path.isAbsolute(row.transcript_path) ||
           !row.transcript_path.endsWith('.jsonl')) continue;
       const inserted = insert(row);

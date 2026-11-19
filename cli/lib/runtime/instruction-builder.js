@@ -1,3 +1,4 @@
+import { SUPPORTED_RUNTIMES } from './descriptors.js';
 import { removeOwnedTree } from '../../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -72,7 +73,7 @@ export function writeInstructionFormatVersion({
 }
 
 function assertRuntime(runtime) {
-  if (runtime !== 'claude' && runtime !== 'codex' && runtime !== 'agy') {
+  if (!SUPPORTED_RUNTIMES.includes(runtime)) {
     throw new TypeError(`Unsupported runtime: ${runtime}`);
   }
 }
@@ -129,11 +130,6 @@ export function assertInstructionReady(runtime, { zylosDir = ZYLOS_DIR } = {}) {
     throw new Error(`${runtime} instruction file was not prepared before launch: ${paths.outputPath}`);
   }
   return true;
-}
-
-export function buildAllInstructionFiles(options = {}) {
-  buildInstructionFile('claude', options);
-  buildInstructionFile('codex', options);
 }
 
 export function getInstructionFilePath(runtime, options = {}) {

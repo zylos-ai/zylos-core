@@ -1,5 +1,7 @@
 import { loadCoreModule } from './core-modules.js';
 
+const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
+
 const unavailable = () => Object.assign(new Error('Selected group has no ready managed session'), { code: 'agent_session_unavailable' });
 
 // Resolve through this installation's Core reader, never a caller-supplied tmux name.
@@ -19,7 +21,7 @@ export function createObserverTargets({ load = loadCoreModule } = {}) {
     try { identity = await readLiveIdentity(group); } catch { throw unavailable(); }
     const expectedName = paths.tmuxNameForGroup(group ?? 'origin');
     if (!identity?.present || !identity.ready || !identity.runId ||
-        !['claude', 'codex', 'agy'].includes(identity.runtime) || identity.tmuxName !== expectedName) throw unavailable();
+        !SUPPORTED_RUNTIMES.includes(identity.runtime) || identity.tmuxName !== expectedName) throw unavailable();
     return { sessionMode, sessionGroup: group, tmuxName: identity.tmuxName, runId: identity.runId, runtime: identity.runtime };
   };
   return { mode, resolve };
@@ -31,7 +33,7 @@ export function sameObserverTarget(left, right) {
 }
 
 export async function validObserverBinding(binding, target, runId) {
-  if (!binding || !['claude', 'codex', 'agy'].includes(binding.runtime) || typeof binding.runId !== 'string' || !binding.runId ||
+  if (!binding || !SUPPORTED_RUNTIMES.includes(binding.runtime) || typeof binding.runId !== 'string' || !binding.runId ||
       binding.runId !== runId || binding.tmuxName !== target) return false;
   if (binding.sessionMode === 'single') return binding.sessionGroup === null && target === 'zylos-group-origin';
   if (binding.sessionMode !== 'multi' || typeof binding.sessionGroup !== 'string') return false;

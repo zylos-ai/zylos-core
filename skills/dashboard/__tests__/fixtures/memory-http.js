@@ -133,6 +133,7 @@ export async function setupMemoryHttp(t) {
   } });
   t.mock.module('../../src/lib/core-modules.js', { namedExports: {
     loadCoreModule: async name => {
+      if (name === 'runtime/descriptors.js') return import('../../../../cli/lib/runtime/descriptors.js');
       if (name === 'config.js') return { ZYLOS_DIR: root, readSessionMode: () => ({ mode: 'multi' }) };
       if (['model-rotation-thresholds.js', 'session-usage-reader.js', 'session-hot-ttl.js', 'config-store.js', 'config-lock.js', 'private-file.js', 'pm2.js'].includes(name)) {
         return import(new URL(`../../../../cli/lib/${name}`, import.meta.url));

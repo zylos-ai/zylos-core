@@ -1,5 +1,7 @@
 /** Runtime selection is explicit: use the observed runtime or resolved configuration. */
-export const SUPPORTED_RUNTIMES = Object.freeze(['claude', 'codex', 'agy']);
+import { SUPPORTED_RUNTIMES } from './descriptors.js';
+
+export { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES, runtimeDisplayName, runtimesWith } from './descriptors.js';
 const cache = new Map();
 
 export async function getRuntime(id) {

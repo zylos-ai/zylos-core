@@ -77,6 +77,7 @@ test('Core state reads Origin facts only for absence or authentication and reads
       ? { value: { fiveHour: { usedPercentage: 37 }, sevenDay: { usedPercentage: 61 } }, live: accountLive, recordedAt: 1000 } : null }; },
   };
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
+    if (name === 'runtime/descriptors.js') return import('../../../cli/lib/runtime/descriptors.js');
     if (name === 'config.js') return { readSessionMode: () => ({ mode }) };
     if (name === 'session-group-paths.js') return { listGroupTmuxSessions: async () => [{ sessionGroup: 'other' }] };
     if (name === 'origin-presence.js') return { describeOrigin, readOriginFacts: async ({ zylosDir, nowSec }) => {
@@ -140,6 +141,7 @@ test('Core state ignores live sample timestamps and notifies recorded provenance
   let record = { value: { seven_day: { used_percentage: 21 } }, live: true, recordedAt: 1000 };
   let changes = 0;
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
+    if (name === 'runtime/descriptors.js') return import('../../../cli/lib/runtime/descriptors.js');
     if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
     if (name === 'session-group-paths.js') return {};
     assert.fail(`Unexpected core module ${name}`);
@@ -189,6 +191,7 @@ test('Origin states retain Fleet labels and reachability', () => {
 test('manual restart distinguishes wake requests and failed wake writes in multi mode', async t => {
   let mode = 'multi', reply = { kind: 'accepted', reply: { result: 'already_stopped' } }, submissions = 0;
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
+    if (name === 'runtime/descriptors.js') return import('../../../cli/lib/runtime/descriptors.js');
     if (name === 'config.js') return { readSessionMode: () => ({ mode }) };
     if (name === 'am-sock-client.js') return { submit: async () => { submissions++; return reply; }, lookupRestartRequest: async () => assert.fail('accepted result requires no lookup') };
     assert.fail(`Unexpected module ${name}`);

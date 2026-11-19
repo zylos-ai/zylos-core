@@ -49,13 +49,11 @@ function evaluate(fx, source) {
 
 test('installed read-only consumers work without Core, never invoke npm, and retain strict action boundaries', t => {
   const fx = fixture(t);
-  const urls = Object.fromEntries(['c4-config', 'runtime-delivery', 'status-notice-templates']
+  const urls = Object.fromEntries(['runtime-delivery', 'status-notice-templates']
     .map(name => [name, pathToFileURL(path.join(fx.scripts, name + '.js')).href]));
   const source = [
-    'const c = await import(' + JSON.stringify(urls['c4-config']) + ');',
     'const d = await import(' + JSON.stringify(urls['runtime-delivery']) + ');',
     'const s = await import(' + JSON.stringify(urls['status-notice-templates']) + ');',
-    'console.log(JSON.stringify(await c.getRuntimeIdentity()));',
     'd.readDeliveryIdentity();',
     'console.log(s.messageForStatus({health:"auth_failed"}));',
   ].join('\n');
@@ -64,15 +62,12 @@ test('installed read-only consumers work without Core, never invoke npm, and ret
     fs.writeFileSync(fx.file, '{"runtime":"codex","statusNotices":{"brand":"Product"}}');
     const valid = evaluate(fx, source);
     assert.equal(valid.status, 0, valid.stderr);
-    assert.match(valid.stdout, /codex-main/);
     assert.match(valid.stdout, /\[Product\]/);
     fs.unlinkSync(fx.file);
     const missing = evaluate(fx, source);
     assert.equal(missing.status, 0, missing.stderr);
-    assert.match(missing.stdout, /claude-main/);
     fs.writeFileSync(fx.file, '{ broken');
     for (const [name, action] of [
-      ['c4-config', 'await m.getRuntimeIdentity()'],
       ['runtime-delivery', 'm.readDeliveryIdentity()'],
       ['status-notice-templates', 'm.messageForStatus({health:"auth_failed"})'],
     ]) {

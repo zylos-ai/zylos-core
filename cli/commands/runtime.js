@@ -10,13 +10,13 @@
  *   zylos runtime <name> --no-validate          Skip switch-time auth probe
  */
 
+import { DEFAULT_RUNTIME } from '../lib/runtime/descriptors.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { readZylosConfigOrThrow, readZylosConfigStrict, readSessionMode, updateZylosConfigLocked, ZYLOS_DIR } from '../lib/config.js';
 import { getRuntime, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { listGroupTmuxSessions } from '../lib/session-group-paths.js';
-import { readLiveIdentity } from '../lib/session-state-reader.js';
 import { submit, lookupRestartRequest } from '../lib/am-sock-client.js';
 import { desiredClaudeHooks, syncHooks, detectStopFailureSupport, detectSubagentHooksSupport } from '../lib/sync-runtime-hooks.js';
 import { syncAgyConfig, isAgyConfigReady } from '../lib/agy-setup.js';
@@ -44,6 +44,8 @@ import {
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 const bold   = (s) => `\x1b[1m${s}\x1b[0m`;
+
+const readLiveIdentity = async sessionGroup => (await import('../lib/session-state-reader.js')).readLiveIdentity(sessionGroup);
 
 // ── Public API ────────────────────────────────────────────────────────────
 
@@ -99,7 +101,7 @@ export async function runtimeCommand(args, { execute = executeRuntimeSwitch } = 
 
 function showStatus() {
   const cfg = readRuntimeConfig();
-  const current = cfg.runtime ?? 'claude';
+  const current = cfg.runtime ?? DEFAULT_RUNTIME;
   const label = { claude: 'Claude Code (Anthropic)', codex: 'Codex (OpenAI)', agy: 'Antigravity CLI (Google)' }[current] || current;
   console.log(`Current runtime: ${bold(label)}`);
 }
@@ -342,7 +344,7 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
     if (result.state === 'error') return fail('CONFIG_UNREADABLE', result.error?.message || 'Cannot read configuration');
     config = result.state === 'ok' ? result.config : {};
   } catch (error) { return fail('CONFIG_UNREADABLE', error.message); }
-  let previousBaseline = config.runtime ?? 'claude';
+  let previousBaseline = config.runtime ?? DEFAULT_RUNTIME;
   let baseline = previousBaseline, changed = false;
   const fullPath = previousBaseline !== target || parsed.hasApiKey || parsed.hasSetupToken || parsed.hasBaseUrl;
   if (fullPath) {
@@ -392,7 +394,7 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
     }
     try {
       const saved = write({ set: { runtime: target } });
-      previousBaseline = saved.previous.runtime ?? 'claude'; baseline = saved.config.runtime ?? 'claude';
+      previousBaseline = saved.previous.runtime ?? DEFAULT_RUNTIME; baseline = saved.config.runtime ?? DEFAULT_RUNTIME;
       config = saved.config; changed = saved.changed;
     } catch (error) {
       return fail(error.code || 'CONFIG_WRITE_FAILED', error.message, { ...(error.phase ? { phase: error.phase } : {}),

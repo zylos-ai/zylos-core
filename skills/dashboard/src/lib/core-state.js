@@ -4,6 +4,8 @@ import { createSessionObservations } from './session-observations.js';
 import { Sanitizer } from './sanitizer.js';
 import { isDeepStrictEqual } from 'node:util';
 
+const { runtimesWith } = await loadCoreModule('runtime/descriptors.js');
+
 const publicIdentity = identity => Object.fromEntries(
   ['present', 'tmuxName', 'runId', 'createdAt', 'runtime', 'ready', 'sessionId']
     .map(key => [key, identity?.[key] ?? null])
@@ -111,7 +113,7 @@ export class CoreState {
       if (mode !== 'multi' && !observation.identity.present) {
         try { targetRuntime = await this.sessionObservations.resolveOfflineRuntime(null); } catch { targetRuntime = null; }
       }
-      const accountRecord = ['claude', 'codex'].includes(targetRuntime)
+      const accountRecord = runtimesWith('accountQuota').includes(targetRuntime)
         ? await this.accountUsageCache.read(targetRuntime, { allowRecorded: true }, reader).catch(() => null) : null;
       const accountUsage = accountRecord?.value ?? null;
       const projected = projectOrigin(group, observation, this.sanitizer, facts, view);

@@ -1,3 +1,4 @@
+import { SUPPORTED_RUNTIMES } from './descriptors.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -10,7 +11,7 @@ import { tmuxError, TMUX_COMMAND as C, TMUX_FORMAT as F, isTmuxError,
 
 const exec = promisify(execFile);
 const bindings = new WeakMap();
-const known = new Set(['claude', 'codex', 'agy']);
+const known = new Set(SUPPORTED_RUNTIMES);
 
 function validReady(value) {
   return value && typeof value.runId === 'string' && value.runId && typeof value.sessionId === 'string' && value.sessionId &&

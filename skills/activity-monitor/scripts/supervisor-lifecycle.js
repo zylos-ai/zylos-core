@@ -7,6 +7,8 @@ import { MANUAL_WAKE_PROMPT } from './origin-prompts.js';
 import { captureSyncTarget, observeSyncCompletion, latestSyncFailure } from './sync-reclaim.js';
 import { CHECKPOINT_THRESHOLD } from '../../comm-bridge/scripts/c4-config.js';
 
+const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
+
 const SYNC_DIAGNOSTIC_TYPES = new Set(['origin_frequency', 'origin_idle', 'control_timeout', 'state_uncommitted']);
 const TERMINAL_CONTROLS = new Set(['done', 'timeout', 'superseded', 'failed', 'cancelled']);
 const CAPACITY_REASONS = new Set(['ttl', 'evict', 'upgrade', 'auth']);
@@ -26,7 +28,7 @@ export const EVICTION_CHECK_ACK_TIMEOUT_MS = 60000;
 export const UPGRADE_CHECK_ACK_TIMEOUT_MS = 60000;
 
 export function sceneRotationThreshold(scene, configuration) {
-  if (!['claude', 'codex', 'agy'].includes(scene.runtime)) return null;
+  if (!SUPPORTED_RUNTIMES.includes(scene.runtime)) return null;
   return modelThreshold(configuration.rotationPolicy ?? {}, {
     runtime: scene.runtime, model: scene.model, contextWindow: scene.contextWindow,
     launchConfig: scene.launchConfig,

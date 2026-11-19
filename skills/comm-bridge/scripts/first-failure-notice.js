@@ -6,7 +6,6 @@ import { reserveStatusNotice, sendStatusNotice, logStatusNotice } from './status
 import { messageForStatus } from './status-notice-templates.js';
 import { readDeliveryIdentity } from './runtime-delivery.js';
 import { runtimeRoot } from '../../activity-monitor/scripts/runtime-generation.js';
-import { readHealthQuota } from '../../activity-monitor/scripts/health-quota.js';
 import { currentOutageNotice } from '../../activity-monitor/scripts/outage-notice.js';
 
 export const FIRST_NOTICE_QUOTA_WAIT_MS = 750;
@@ -71,7 +70,7 @@ export function sendNoticeWorker(claim, message, route, { zylosDir = runtimeRoot
 
 export async function processFirstFailureNotices({ store, database = getDb(), identity = readDeliveryIdentity,
   reserve = reserveStatusNotice, send = sendNoticeWorker, now = Date.now,
-  quota = current => readHealthQuota({identity:current,nowMs:now()}), quotaWaitMs = 0, zylosDir = runtimeRoot(), sessionGroup = 'origin', mutate = operation => operation() } = {}) {
+  quota = () => null, quotaWaitMs = 0, zylosDir = runtimeRoot(), sessionGroup = 'origin', mutate = operation => operation() } = {}) {
   const intent = store.read(sessionGroup).pending_notice;
   if (!intent || intent.status !== 'pending') return 0;
   const finish = status => mutate(() => store.updatePending(intent.event_id, {status, updated_at:now()},sessionGroup));

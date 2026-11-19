@@ -1,4 +1,8 @@
-import { loadCoreModule } from './bootstrap-scope.js';
+import { loadCoreModule as loadBootstrapModule } from './bootstrap-scope.js';
+import { loadCoreModule } from './core-modules.js';
+import { TMUX_COMMAND as C, TMUX_FORMAT as F } from '../../comm-bridge/scripts/tmux-protocol.js';
+
+const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
 
 export function isSubsession(payload) {
   return Boolean(payload?.agent_id || payload?.agent_type || payload?.is_subagent);
@@ -6,7 +10,7 @@ export function isSubsession(payload) {
 
 // Managed hooks bind to F2; only legacy foreground records need ancestry.
 export async function readBootstrapIdentity(scope, { env = process.env, pid = process.pid,
-  load = loadCoreModule, open, observe, processTree } = {}) {
+  load = loadBootstrapModule, open, observe, processTree } = {}) {
   const targets = await load('runtime/session-target.js');
   open ??= (await load('runtime/tmux-connection.js')).openTmuxConnection;
   observe ??= targets.observeSessionTarget;
@@ -26,7 +30,7 @@ export async function readBootstrapIdentity(scope, { env = process.env, pid = pr
     const connection = await open();
     try {
       const target = await observe({ connection, tmuxName, sessionGroup: scope.sessionGroup, readReady: async () => null });
-      if (!target.present || !['claude', 'codex', 'agy'].includes(target.runtime)) continue;
+      if (!target.present || !SUPPORTED_RUNTIMES.includes(target.runtime)) continue;
       if (scope.kind !== 'legacy' && (target.runId !== env.ZYLOS_RUN_ID ||
         (target.rawF2.ZYLOS_SESSION_GROUP ?? null) !== (scope.sessionGroup ?? null))) continue;
       if (env.TMUX_PANE && env.TMUX_PANE !== target.paneId) continue;
@@ -46,4 +50,3 @@ export async function readBootstrapIdentity(scope, { env = process.env, pid = pr
   }
   throw Object.assign(new Error('Hook is not in the current managed runtime pane'), { code: 'IDENTITY_UNAVAILABLE' });
 }
-import { TMUX_COMMAND as C, TMUX_FORMAT as F } from '../../comm-bridge/scripts/tmux-protocol.js';

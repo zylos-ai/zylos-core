@@ -10,6 +10,7 @@ function loadCoreRuntime() {
     return Promise.all([
       import(pathToFileURL(path.join(lib, 'runtime/tmux-connection.js')).href),
       import(pathToFileURL(path.join(lib, 'runtime/session-target.js')).href),
+      import(pathToFileURL(path.join(lib, 'runtime/descriptors.js')).href),
     ]);
   })().catch(error => {
     coreModules = undefined;
@@ -23,7 +24,7 @@ export function createCoreObserver({ tmux = {} } = {}) {
   async function observe(method, options) {
     const { sessionGroup = null, sessionMode } = options ?? {};
     if (!['single', 'multi'].includes(sessionMode)) throw Object.assign(new Error('Invalid session mode'), { code: 'INVALID_ARGS' });
-    const [{ openTmuxConnection }, { observeSessionTarget, revalidateSessionTarget }] = await loadCoreRuntime();
+    const [{ openTmuxConnection }, { observeSessionTarget, revalidateSessionTarget }, { SUPPORTED_RUNTIMES }] = await loadCoreRuntime();
     let connection;
     try {
       connection = await openTmuxConnection(tmux);
@@ -37,7 +38,7 @@ export function createCoreObserver({ tmux = {} } = {}) {
         return {
           hasProcess: true,
           identityVerified: Boolean(scopeMatches && target.runId &&
-            ['claude', 'codex', 'agy'].includes(target.runtime) && target.runtime === target.launchConfig?.runtime),
+            SUPPORTED_RUNTIMES.includes(target.runtime) && target.runtime === target.launchConfig?.runtime),
           ready: target.ready, launchConfig: target.launchConfig, runId: target.runId,
         };
       }

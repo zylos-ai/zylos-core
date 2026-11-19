@@ -1,8 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { getClaudePid } from './claude-pid.js';
-import { durableJson, runtimeRoot } from './runtime-generation.js';
-import { readDeliveryIdentity } from '../../comm-bridge/scripts/runtime-delivery.js';
 
 export const HEALTH_QUOTA_MAX_AGE_MS = 60000;
 const id=value=>typeof value==='string'&&/^[A-Za-z0-9._:-]{1,200}$/.test(value);
@@ -29,27 +26,6 @@ export function sanitizeHealthQuota(snapshot,{identity,nowMs=Date.now(),maxAgeMs
   const rate_limits=windows(snapshot.rate_limits,nowMs);
   if(!Object.keys(rate_limits).length)return null;
   return {schema_version:1,source:'statusline',...Object.fromEntries(scopeKeys.map(key=>[key,identity[key]])),observed_at:snapshot.observed_at,rate_limits};
-}
-
-export function writeHealthQuota(status,{zylosDir=runtimeRoot(),nowMs=Date.now(),pid=getClaudePid(),managedIdentity=()=>readDeliveryIdentity({zylosDir})}={}) {
-  const identity={runtime:'claude',session_id:status?.session_id,claude_pid:pid};
-  if(!validIdentity(identity)||!Number.isSafeInteger(nowMs))return null;
-  const foreground=managedIdentity();
-  if(!foreground||!scopeKeys.every(key=>foreground[key]===identity[key]))return null;
-  const snapshot={schema_version:1,source:'statusline',...identity,observed_at:nowMs,rate_limits:windows(status?.rate_limits,nowMs)};
-  const directory=path.join(zylosDir,'activity-monitor','health-quota');
-  durableJson(path.join(directory,'claude.json'),snapshot);
-  return snapshot;
-}
-
-export function readHealthQuota({identity,zylosDir=runtimeRoot(),nowMs=Date.now(),maxAgeMs=HEALTH_QUOTA_MAX_AGE_MS}={}) {
-  if(!validIdentity(identity))return null;
-  try {
-    const file=path.join(zylosDir,'activity-monitor','health-quota','claude.json');
-    const stat=fs.lstatSync(file);
-    if(!stat.isFile()||stat.size>2048)return null;
-    return sanitizeHealthQuota(JSON.parse(fs.readFileSync(file,'utf8')),{identity,nowMs,maxAgeMs});
-  } catch {return null;}
 }
 
 /** Read the current group's F5 directly; no separate quota snapshot or cross-group fallback. */

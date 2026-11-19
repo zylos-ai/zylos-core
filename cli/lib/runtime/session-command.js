@@ -1,3 +1,4 @@
+import { runtimesWith } from './descriptors.js';
 import { removeOwnedTree } from '../../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -25,7 +26,7 @@ export function validateLaunchConfig(runtime, config, help = '') {
   if (Object.keys(config).some(k => !keys.includes(k))) throw adapterError('MODEL_CONFIG_REJECTED');
   if (config.mode === 'override') {
     // agy model/effort overrides are not part of the verified core contract.
-    if (runtime === 'agy') throw adapterError('MODEL_CONFIG_REJECTED');
+    if (runtimesWith('modelOverride', 'unsupported').includes(runtime)) throw adapterError('MODEL_CONFIG_REJECTED');
     if (![config.model, config.effort].every(v => typeof v === 'string' && v.trim() && !v.includes('\0'))) throw adapterError('MODEL_CONFIG_REJECTED');
     const efforts = runtime === 'claude' ? ['low','medium','high','max'] : ['none','minimal','low','medium','high','xhigh'];
     if (!efforts.includes(config.effort) || !/(?:^|\s)--model(?:\s|[,=])/m.test(help) || (runtime === 'claude' && !/(?:^|\s)--effort(?:\s|[,=])/m.test(help))) throw adapterError('MODEL_CONFIG_REJECTED');

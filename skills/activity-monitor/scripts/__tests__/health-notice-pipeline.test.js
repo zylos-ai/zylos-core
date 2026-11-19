@@ -11,7 +11,6 @@ import {freezeFirstFailureNotice,processFirstFailureNotices,sendNoticeWorker} fr
 import {reserveStatusNoticeCooldown} from '../../../comm-bridge/scripts/c4-db.js';
 import {reserveStatusNotice} from '../../../comm-bridge/scripts/status-notice.js';
 import {readDeliveryIdentity} from '../../../comm-bridge/scripts/runtime-delivery.js';
-import {writeHealthQuota,readHealthQuota} from '../health-quota.js';
 import {collectHealthHook} from '../hook-health.js';
 import {HealthStore} from '../health-store.js';
 import {HealthEventReader} from '../health-event-reader.js';
@@ -97,12 +96,15 @@ test('336ms late quota enriches reply and future reads without rewriting failure
   const f=fixture(t),at=f.now(),reset=Math.floor(at/1000)+3600;
   f.db.prepare("INSERT INTO conversations(session_group,direction,channel,endpoint_id,content,status) VALUES('fake','in','fake','original','secret','delivered')").run();
   f.collect();await f.tick();const before=f.store.read();const sent=[];
-  const quota=()=>readHealthQuota({identity:f.identity,zylosDir:f.zylosDir,nowMs:f.now()});
+  let snapshot=null;
+  const quota=()=>snapshot;
   const options={store:f.store,database:f.db,identity:()=>f.identity,now:f.now,quota,quotaWaitMs:750,
     reserve:(channel,endpoint,route)=>reserveStatusNotice(channel,endpoint,route,{reserve:input=>reserveStatusNoticeCooldown({...input,now:Math.floor(f.now()/1000)},f.db)}),
     send:async(claim,message,route)=>{sent.push({message,route});return {outcome:'sent'};}};
   await processFirstFailureNotices(options);assert.equal(sent.length,0);
-  f.setTime(at+336);writeHealthQuota({session_id:'session',rate_limits:{five_hour:{used_percentage:100,resets_at:reset}}},{...f.options,nowMs:f.now()});
+  f.setTime(at+336);
+  snapshot={schema_version:1,source:'statusline',...f.identity,observed_at:f.now(),
+    rate_limits:{five_hour:{used_percentage:100,resets_at:reset}}};
   f.setTime(at+750);await processFirstFailureNotices(options);
   assert.equal(sent.length,1);assert.equal(sent[0].route.resetAt,reset*1000);
   assert.match(sent[0].message,/expected to reset at/);
@@ -158,16 +160,16 @@ test('Darwin ps ancestry runs collector, quota, health persistence and notice wi
   const identity=proof();assert.deepEqual(identity,{runtime:'claude',...foreground});
   f.pipeline.coordinator.consumeHook=(_runtime,event)=>f.store.consume(event,{identity:proof()});
   const reset=Math.floor(at/1000)+3600;
-  writeHealthQuota({session_id:foreground.session_id,rate_limits:{five_hour:{used_percentage:100,resets_at:reset}}},
-    {zylosDir:f.zylosDir,pid:4242,nowMs:at,managedIdentity:proof});
+  const quota={schema_version:1,source:'statusline',...identity,observed_at:at,
+    rate_limits:{five_hour:{used_percentage:100,resets_at:reset}}};
   f.db.prepare("INSERT INTO conversations(session_group,direction,channel,endpoint_id,content,status) VALUES('fake','in','fake','darwin','test','delivered')").run();
   const event=collectHealthHook({hook_event_name:'StopFailure',session_id:foreground.session_id,prompt_id:'mac-prompt',error:'rate_limit'},
     {zylosDir:f.zylosDir,pid:4242,nowMs:at});
-  assert.equal(event.process_start,undefined);assert.equal(event.quota.rate_limits.five_hour.used_percentage,100);
+  assert.equal(event.process_start,undefined);assert.equal(event.quota,undefined);
   await f.tick();assert.equal(f.store.read().health,'rate_limited');
   const raw=JSON.parse(fs.readFileSync(f.store.file));assert.equal(raw.hook.pid,4242);assert.equal(raw.hook.processStart,undefined);
   const sent=[];
-  await processFirstFailureNotices({store:f.store,database:f.db,identity:proof,now:f.now,
+  await processFirstFailureNotices({store:f.store,database:f.db,identity:proof,now:f.now,quota:()=>quota,
     reserve:(channel,endpoint,route)=>reserveStatusNotice(channel,endpoint,route,{reserve:input=>reserveStatusNoticeCooldown({...input,now:Math.floor(at/1000)},f.db)}),
     send:async(claim,message,route)=>{sent.push({claim,message,route});return {outcome:'sent'};}});
   assert.equal(sent.length,1);assert.equal(sent[0].route.resetAt,reset*1000);assert.match(sent[0].message,/expected to reset at/);
