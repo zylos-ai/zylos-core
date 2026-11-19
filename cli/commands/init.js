@@ -1,4 +1,5 @@
-import { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES } from '../lib/runtime/descriptors.js';
+import { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES, getRuntime, runtimeDisplayName, runtimeInstallPolicy } from '../lib/runtime/index.js';
+import { UNSUPPORTED } from '../lib/runtime/contract.js';
 import { writeCorePackageLocation } from '../lib/core-package-location.js';
 import { migrateModelThresholds } from '../lib/model-rotation-thresholds.js';
 import { applyDashboardRoute } from '../lib/dashboard-install.js';
@@ -46,14 +47,11 @@ import { deployManifestTemplate } from '../lib/runtime/tmux-env.js';
 import { runMigrations } from '../lib/migrate.js';
 import { ensureCodexHooksTrusted } from '../lib/codex-hooks.js';
 import { syncAgyConfig } from '../lib/agy-setup.js';
-import { getRuntime } from '../lib/runtime/index.js';
 import { syncRuntimeHooks } from '../lib/sync-runtime-hooks.js';
 import { runtimeHooksReady } from './runtime.js';
 import { childRuntimeEnv } from '../lib/child-runtime-env.js';
 import {
   installGlobalPackage,
-  installCodex,
-  installClaude,
   isCodexAuthenticated,
   isValidBaseUrl,
   approveApiKey,
@@ -85,19 +83,53 @@ const TEMPLATES_SRC = path.join(PACKAGE_ROOT, 'templates');
 const MIN_NODE_MAJOR = 20;
 const MIN_NODE_MINOR = 20;
 
-export async function prepareInitRuntimeClis({ runtimes = ['claude', 'codex'], exists = commandExists,
-  install = { claude: installClaude, codex: installCodex } } = {}) {
-  const result = { completed: [], failed: [], installed: [] };
+export function alwaysInstalledIds() {
+  return SUPPORTED_RUNTIMES.filter(id => runtimeInstallPolicy(id) === 'always');
+}
+
+export async function installers() {
+  const runtimes = await Promise.all(SUPPORTED_RUNTIMES.map(getRuntime));
+  return Object.fromEntries(runtimes
+    .filter(rt => rt.install.install !== UNSUPPORTED)
+    .map(rt => [rt.id, () => rt.install.install()]));
+}
+
+export async function prepareInitRuntimeClis({
+  runtimes = alwaysInstalledIds(),
+  exists = async id => (await getRuntime(id)).identity.findExecutable() !== null,
+  install,
+  notice = async id => (await getRuntime(id)).install.installNotice,
+} = {}) {
+  install ??= await installers();
+  const result = { completed: [], failed: [], installed: [], notices: [] };
   for (const runtime of runtimes) {
     try {
-      if (!exists(runtime)) {
-        if (!install[runtime] || !await install[runtime]() || !exists(runtime)) throw new Error('CLI installation failed or command not on PATH');
+      if (!await exists(runtime)) {
+        if (install[runtime] && runtimeInstallPolicy(runtime) === 'whenUsed') {
+          process.stderr.write(`Installing ${runtimeDisplayName(runtime)} CLI (this can take a few minutes)…\n`);
+        }
+        if (!install[runtime] || !await install[runtime]() || !await exists(runtime)) {
+          throw new Error('CLI installation failed or command not on PATH');
+        }
+        const message = await notice(runtime);
         result.installed.push(runtime);
+        if (message !== UNSUPPORTED) result.notices.push({ runtime, message });
       }
       result.completed.push(`${runtime}.cli`);
-    } catch (error) { result.failed.push({ item: `${runtime}.cli`, message: error.message }); }
+    } catch (error) {
+      result.failed.push({ item: `${runtime}.cli`, message: error.message });
+    }
   }
   return result;
+}
+
+export async function installCliOnUse(rt, { prepare = prepareInitRuntimeClis } = {}) {
+  if (rt.identity.findExecutable() !== null || runtimeInstallPolicy(rt.id) !== 'whenUsed') {
+    return { attempted: false };
+  }
+  const result = await prepare({ runtimes: [rt.id] });
+  if (result.failed.length) return { attempted: true, ok: false, message: result.failed[0].message };
+  return { attempted: true, ok: true, notices: result.notices ?? [] };
 }
 
 export async function prepareInitRuntimeAssets({ runtimes = ['claude', 'codex'], result = { completed: [], failed: [] },
@@ -127,6 +159,7 @@ export function reportInitPreparation(result, log = console.log) {
   if (result.failed.length) log('Runtime preparation partially completed (部分完成).');
   for (const item of result.completed) log(`  Completed: ${item}`);
   for (const { item, message } of result.failed) log(`  Failed: ${item}: ${message}`);
+  for (const { runtime, message } of result.notices ?? []) log(`  Note: ${runtime}: ${message}`);
 }
 
 export function runInitNativeLogin(command, args, { spawn = spawnSync, exit = code => process.exit(code) } = {}) {
@@ -1557,7 +1590,7 @@ export function parseInitFlags(args) {
     help: false,
     skipConsent: false,
     timezone: null,
-    runtime: null,  // 'claude' | 'codex' — set via --runtime flag
+    runtime: null,  // a registered runtime id — set via --runtime flag
     setupToken: null,
     apiKey: null,
     authToken: null,
@@ -2166,7 +2199,7 @@ Options:
   Save a default explicitly: zylos upstream set <source>; remove it: zylos upstream clear.
   -y, --yes                  Force non-interactive mode (even with a TTY)
   -q, --quiet                Minimal output
-  --runtime <name>           Agent runtime: claude (default), codex, or agy (preinstalled)
+  --runtime <name>           Agent runtime: claude (default), codex, or agy
   --timezone <tz>            Set timezone (IANA format, e.g., Asia/Shanghai)
   --setup-token <token>      Authenticate with Claude setup token
   --api-key <key>            Claude credential sent as x-api-key
@@ -2229,7 +2262,8 @@ export async function initCommand(args) {
   resolveFromEnv(opts);
 
   // Validate options
-  const validationErr = validateInitInput(opts);
+  const configuredRuntime = opts.runtime || existingConfig.runtime;
+  const validationErr = validateInitInput({ ...opts, runtime: configuredRuntime });
   if (validationErr) {
     console.error(`${error(`Error: ${validationErr}`)}`);
     process.exit(1);
@@ -2344,7 +2378,7 @@ export async function initCommand(args) {
   // Step 4.5: Select agent runtime
   // Resolution: --runtime flag > ZYLOS_RUNTIME env > existing config > interactive prompt
   const existingRuntime = existingConfig.runtime;
-  let selectedRuntime = opts.runtime || existingRuntime || null;
+  let selectedRuntime = configuredRuntime || null;
   if (!selectedRuntime) {
     if (!skipConfirm) {
       if (!quiet) console.log('');
@@ -2362,8 +2396,8 @@ export async function initCommand(args) {
     console.log(`  ${success(`Runtime: ${runtimeLabel}`)}`);
   }
 
-  // Prepare both CLIs, but authenticate only the selected runtime.
-  const preparedRuntimes = selectedRuntime === 'agy' ? ['claude', 'codex', 'agy'] : ['claude', 'codex'];
+  // Prepare the required CLIs and authenticate the selected runtime.
+  const preparedRuntimes = [...new Set([...alwaysInstalledIds(), selectedRuntime])];
   const preparation = await prepareInitRuntimeClis({ runtimes: preparedRuntimes });
   if (preparation.failed.length) exitCode = 1;
   reportInitPreparation(preparation);
@@ -2391,10 +2425,11 @@ export async function initCommand(args) {
   try { deployTemplates({ freshInstall: installState === 'fresh' }); }
   catch (error) { preparation.failed.push({ item: 'templates', message: error.message }); }
   await prepareInitRuntimeAssets({ result: preparation, runtimes: preparedRuntimes });
-  reportInitPreparation(preparation);
+  reportInitPreparation({ ...preparation, notices: [] });
   if (preparation.failed.length) exitCode = 1;
   await ensureInitMemoryMigration({ freshInstall: installState === 'fresh' });
-  let claudeJustInstalled = preparation.installed.includes('claude');
+  const installedRuntimes = await Promise.all(preparation.installed.map(getRuntime));
+  const localBinInstalled = installedRuntimes.some(rt => rt.install.installsToLocalBin === true);
   const authentication = await runInitAuthentication(opts, { runtime: selectedRuntime, skipConfirm, quiet });
   const authenticationState = consumeInitAuthenticationResult(authentication, exitCode);
   if (authenticationState.shouldStop) return;
@@ -2570,8 +2605,8 @@ export async function initCommand(args) {
 
     printDashboardInfo(dashboardAccess);
 
-    if (claudeJustInstalled) {
-      // Auto-add ~/.local/bin to shell profile so future shell sessions find claude
+    if (localBinInstalled) {
+      // Auto-add ~/.local/bin to shell profile so future shell sessions find the installed executable
       ensureLocalBinInProfile();
     }
 

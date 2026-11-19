@@ -5,7 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { legacyDashboardHooks } from '../../../skills/dashboard/__tests__/fixtures/legacy-hooks.js';
 import { prepareUpgradeRuntime } from '../upgrade-runtime-preparation.js';
-import { preparePostCutoff, publishPostCutoff, removeLegacyDashboardHooks } from '../upgrade-post-cutoff.js';
+import { loadPostUpgradeSync, preparePostCutoff, publishPostCutoff, removeLegacyDashboardHooks } from '../upgrade-post-cutoff.js';
+
+const sync = await loadPostUpgradeSync();
 const packageRoot=path.resolve(import.meta.dirname,'../../..');
 function fixture(t,runtime,statusLine) {
  const homeDir=fs.realpathSync(os.homedir());
@@ -47,7 +49,7 @@ for(const runtime of ['claude','codex']) for(const statusLineKind of ['custom','
   userHooks(staged,f.source.claude);
   assert.deepEqual(staged.statusLine,expected);
   const transactionDir=path.join(f.fixtureDir,'transaction-'+round);fs.mkdirSync(transactionDir);
-  const postCutoff=preparePostCutoff({...prepared,transactionDir,zylosDir:f.zylosDir,homeDir:f.homeDir,runtime});
+  const postCutoff=preparePostCutoff({sync,...prepared,transactionDir,zylosDir:f.zylosDir,homeDir:f.homeDir,runtime});
   const transactionId='hook-takeover-'+round,snapshotManifestHash='a'.repeat(64);
   const journal={transactionId,zylosDir:f.zylosDir,phase:'compensation_closed',snapshotManifestHash,postCutoff,
    compensationCutoff:{formatVersion:1,closed:true,transactionId,snapshotManifestHash,writer:'finalizer',closedAt:new Date().toISOString()}};

@@ -214,40 +214,6 @@ export function psHint() {
   return 'Without ps, PM2 restarts may leave old processes running and cause duplicate message delivery; install procps';
 }
 
-function checkClaudeCli() {
-  if (!commandExists('claude')) return { installed: false };
-  let version = 'unknown';
-  try {
-    version = execFileSync('claude', ['--version'], {
-      encoding: 'utf8', timeout: 30000, stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-  } catch {}
-  return { installed: true, version };
-}
-
-function checkCodexCli() {
-  if (!commandExists('codex')) return { installed: false };
-  let version = 'unknown';
-  try {
-    version = execFileSync('codex', ['--version'], {
-      encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim().split('\n')[0];
-  } catch {}
-  return { installed: true, version };
-}
-
-function checkAgyCli() {
-  if (!commandExists('agy')) return { installed: false };
-  let version = 'unknown';
-  try {
-    version = execFileSync('agy', ['--version'], {
-      encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
-    }).trim().split('\n')[0];
-  } catch {}
-  return { installed: true, version };
-}
-
 const diagnosticRuntimes = {
   claude: { display: 'Claude', host: 'api.anthropic.com' },
   codex: { display: 'Codex', host: 'api.openai.com' },
@@ -351,21 +317,25 @@ export async function collectDiagnostics(env, { resolve = () => resolveCliSessio
   // Runtime-specific CLI/auth checks.
   // All supported runtimes use the same auth check as the running process.
   let cli, authStatus, autonomous;
+  if (details) {
+    const rt = await getRuntime(runtime);
+    const probe = await rt.install.probeVersion({ profile: 'doctor' });
+    cli = probe.installed
+      ? { installed: true, version: probe.probeFailed ? 'unknown' : probe.version }
+      : { installed: false };
+  }
   if (!details) {
     cli = { installed: false, reason: 'runtime_unknown' };
     authStatus = 'uncertain';
     autonomous = false;
   } else if (runtime === 'claude') {
-    cli = checkClaudeCli();
     authStatus = cli.installed ? (await selected.runtimeImpl.auth.checkAuth()).status : 'failure';
     autonomous = cli.installed ? checkAutonomousMode() : false;
   } else if (runtime === 'agy') {
-    cli = checkAgyCli();
     authStatus = cli.installed ? (await selected.runtimeImpl.auth.checkAuth()).status : 'failure';
     autonomous = true; // not applicable for Antigravity
   } else {
     // Codex runtime — check Codex CLI and auth status.
-    cli = checkCodexCli();
     authStatus = cli.installed ? (await selected.runtimeImpl.auth.checkAuth()).status : 'failure';
     autonomous = true; // not applicable for Codex
   }

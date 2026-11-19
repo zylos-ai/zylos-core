@@ -4,7 +4,9 @@ import path from 'node:path';
 import { deployTemplates, syncCoreSkills } from '../../cli/commands/init.js';
 import { buildInstructionFile, instructionPaths } from '../../cli/lib/runtime/instruction-builder.js';
 import { prepareUpgradeRuntime } from '../../cli/lib/upgrade-runtime-preparation.js';
-import { preparePostCutoff, publishPostCutoff } from '../../cli/lib/upgrade-post-cutoff.js';
+import { loadPostUpgradeSync, preparePostCutoff, publishPostCutoff } from '../../cli/lib/upgrade-post-cutoff.js';
+
+const postUpgradeSync = await loadPostUpgradeSync();
 
 const root = process.env.ZYLOS_DIR;
 const mode = process.argv[2];
@@ -36,7 +38,7 @@ if (mode === 'refresh') {
   assert.equal(preparation.replacements.some(item => item.path === 'ZYLOS.md'), false);
   const transactionDir = path.join(process.env.TMPDIR, 'transaction');
   fs.mkdirSync(transactionDir);
-  const postCutoff = preparePostCutoff({ ...preparation, transactionDir, zylosDir: root });
+  const postCutoff = preparePostCutoff({ ...preparation, transactionDir, zylosDir: root, sync: postUpgradeSync });
   const transactionId = 'instruction-deployment-test';
   const snapshotManifestHash = 'a'.repeat(64);
   const journal = { transactionId, zylosDir: root, phase: 'compensation_closed', snapshotManifestHash,

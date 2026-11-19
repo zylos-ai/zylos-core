@@ -14,8 +14,6 @@ import { desiredClaudeHooks, syncHooks, detectStopFailureSupport, detectSubagent
   syncTemplateModelSetting, syncTemplateSetting } from './sync-runtime-hooks.js';
 import { removeLegacyDashboardHooks } from './upgrade-post-cutoff.js';
 import { readConfigStrict } from './config-store.js';
-import { commandExists } from './shell-utils.js';
-import { installClaude, installCodex } from './runtime-setup.js';
 
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, '..', '..');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -36,7 +34,7 @@ async function readRuntimeOverrides(ctx) {
 }
 
 export async function prepareUpgradeRuntimeClis(ctx, {
-  prepare, exists = commandExists, install = { claude: installClaude, codex: installCodex },
+  prepare, exists, install,
   listRuntimeOverrides = readRuntimeOverrides } = {}) {
   const config = readConfigStrict(path.join(ctx.zylosDir, '.zylos/config.json'));
   if (config.state === 'error') throw config.error;
@@ -53,13 +51,12 @@ export async function prepareUpgradeRuntimeClis(ctx, {
       required.add(item.runtime);
     }
   }
-  const prepareClis = prepare || (await import('../commands/init.js')).prepareInitRuntimeClis;
+  const { prepareInitRuntimeClis, alwaysInstalledIds, installers } = await import('../commands/init.js');
+  const prepareClis = prepare || prepareInitRuntimeClis;
   const result = await prepareClis({
     exists,
-    runtimes: [...new Set(['claude', 'codex', ...required])],
-    install: Object.fromEntries(['claude', 'codex'].map(runtime => [runtime, () => {
-      return install[runtime]();
-    }])),
+    runtimes: [...new Set([...alwaysInstalledIds(), ...required])],
+    install: install ?? await installers(),
   });
   if (!result || !Array.isArray(result.failed) || !Array.isArray(result.completed) ||
       [...required].some(name => result.failed.some(item => item.item === `${name}.cli`) || !result.completed.includes(`${name}.cli`))) {
@@ -68,6 +65,9 @@ export async function prepareUpgradeRuntimeClis(ctx, {
   }
   result.warnings = result.failed.map(item => ({ code: 'RUNTIME_CLI_UNAVAILABLE',
     runtime: item.item.replace(/\.cli$/, ''), message: item.message }));
+  for (const { runtime, message } of result.notices ?? []) {
+    result.warnings.push({ code: 'RUNTIME_CLI_INSTALL_NOTICE', runtime, message });
+  }
   return result;
 }
 

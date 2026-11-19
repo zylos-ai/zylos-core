@@ -1,13 +1,16 @@
 import test from 'node:test';
+import { prepareInitRuntimeClis } from '../../commands/init.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { prepareUpgradeRuntime, prepareUpgradeRuntimeClis } from '../upgrade-runtime-preparation.js';
-import { preparePostCutoff, validatePostCutoff, publishPostCutoff } from '../upgrade-post-cutoff.js';
+import { loadPostUpgradeSync, preparePostCutoff, validatePostCutoff, publishPostCutoff } from '../upgrade-post-cutoff.js';
 import { loadInstructionCatalog, migrationPromptPath, sha256 } from '../instruction-migration.js';
 import { isMigrationPending } from '../../../skills/activity-monitor/scripts/session-start-prompt.js';
+
+const sync = await loadPostUpgradeSync();
 
 const packageRoot = path.resolve(import.meta.dirname, '../../..');
 
@@ -28,7 +31,8 @@ test('upgrade reuses CLI preparation without login or touching the running runti
   const result = await prepareUpgradeRuntimeClis(f.ctx, {
     exists: runtime => installed.has(runtime),
     install: { claude() { throw Error('existing runtime must not be replaced'); },
-      codex() { calls.push('install-codex'); installed.add('codex'); return true; } },
+      codex() { calls.push('install-codex'); installed.add('codex'); return true; },
+      agy() { throw Error('unused agy must not be installed'); } },
   });
   assert.deepEqual(result.completed, ['claude.cli', 'codex.cli']);
   assert.deepEqual(result.installed, ['codex']);
@@ -49,6 +53,10 @@ for (const runtime of ['claude', 'codex']) {
     const calls = [];
     const optional = runtime === 'claude' ? 'codex' : 'claude';
     const result = await prepareUpgradeRuntimeClis(f.ctx, {
+      prepare: async options => ({
+        ...await prepareInitRuntimeClis(options),
+        notices: [{ runtime, message: 'fixture notice' }],
+      }),
       exists: name => name === runtime,
       install: { [runtime]: () => { throw Error('active CLI must be preserved'); },
         [optional]: () => { calls.push(optional); return false; } },
@@ -57,7 +65,8 @@ for (const runtime of ['claude', 'codex']) {
     assert.deepEqual(result.completed, [`${runtime}.cli`]);
     assert.equal(result.failed.length, 1);
     assert.deepEqual(result.warnings, [{ code: 'RUNTIME_CLI_UNAVAILABLE', runtime: optional,
-      message: 'CLI installation failed or command not on PATH' }]);
+      message: 'CLI installation failed or command not on PATH' },
+    { code: 'RUNTIME_CLI_INSTALL_NOTICE', runtime, message: 'fixture notice' }]);
   });
 
   test(`${runtime} active CLI failure still rejects when optional CLI is ready`, async t => {
@@ -183,7 +192,7 @@ test('split preparation changes no live bytes and stages both runtimes, assets a
 test('prepared replacements are valid protected publication material without live writes', t => {
   const f = fixture(t), prepared = f.prepare();
   const transactionDir = path.join(f.root, 'transaction'); fs.mkdirSync(transactionDir);
-  const postCutoff = preparePostCutoff({ ...prepared, transactionDir, zylosDir: f.zylosDir });
+  const postCutoff = preparePostCutoff({ sync, ...prepared, transactionDir, zylosDir: f.zylosDir });
   assert.equal(validatePostCutoff({ transactionDir, journal: { postCutoff, zylosDir: f.zylosDir } }).length,
     prepared.replacements.length);
   assert.equal(fs.existsSync(path.join(f.zylosDir, '.claude/agents')), false);
@@ -209,7 +218,7 @@ test('Codex runtime staging captures the intended home despite CODEX_HOME',t=>{
   try {
     const prepared=f.prepare();
     const transactionDir=path.join(f.root,'transaction');fs.mkdirSync(transactionDir);
-    const staged=preparePostCutoff({...prepared,transactionDir,zylosDir:f.zylosDir});
+    const staged=preparePostCutoff({sync,...prepared,transactionDir,zylosDir:f.zylosDir});
     assert.equal(prepared.runtime,'codex');
     assert.equal(staged.items.hooks.codexGlobalDir,path.join(f.root,'.codex'));
     assert.equal(fs.existsSync(process.env.CODEX_HOME),false);
@@ -264,7 +273,7 @@ for (const classification of ['B', 'C']) {
     assert.equal(text.includes('zylos-upgrade-render-'), false);
     assert.deepEqual(snapshot(f.zylosDir), before);
     const workDir = path.join(f.root, 'publication'); fs.mkdirSync(workDir);
-    const preparation = preparePostCutoff({ ...prepared, transactionDir: workDir, zylosDir: f.zylosDir });
+    const preparation = preparePostCutoff({ sync, ...prepared, transactionDir: workDir, zylosDir: f.zylosDir });
     const published = await publishRuntimePreparation({ workDir, zylosDir: f.zylosDir, preparation });
     assert.equal(published.ok, true);
     assert.equal(fs.readFileSync(path.join(f.zylosDir, promptRelative), 'utf8'), text);
@@ -296,7 +305,7 @@ for (const mode of ['split', 'automatic-A']) {
     assert.deepEqual(snapshot(f.zylosDir), before);
     assert.equal(isMigrationPending({ migrationPromptPath: path.join(f.zylosDir, promptRelative) }), true);
     const workDir = path.join(f.root, 'publication'); fs.mkdirSync(workDir);
-    const preparation = preparePostCutoff({ ...prepared, transactionDir: workDir, zylosDir: f.zylosDir });
+    const preparation = preparePostCutoff({ sync, ...prepared, transactionDir: workDir, zylosDir: f.zylosDir });
     const published = await publishRuntimePreparation({ workDir, zylosDir: f.zylosDir, preparation });
     assert.equal(published.ok, true, JSON.stringify(published.lastError));
     assert.equal(isMigrationPending({ migrationPromptPath: path.join(f.zylosDir, promptRelative) }), false);
@@ -315,7 +324,7 @@ for (const mode of ['split', 'automatic-A']) {
     assert.equal(fs.existsSync(file), false);
     const prepared = f.prepare();
     const workDir = path.join(f.root, 'publication'); fs.mkdirSync(workDir);
-    const preparation = preparePostCutoff({ ...prepared, transactionDir: workDir, zylosDir: f.zylosDir });
+    const preparation = preparePostCutoff({ sync, ...prepared, transactionDir: workDir, zylosDir: f.zylosDir });
     assert.equal((await publishRuntimePreparation({ workDir, zylosDir: f.zylosDir, preparation })).ok, true);
     assert.equal(fs.existsSync(file), false);
   });
@@ -325,7 +334,7 @@ test('concurrent prompt edit rejects staged cleanup and preserves the edit', asy
   const f = fixture(t), promptRelative = path.relative(f.zylosDir, migrationPromptPath({ zylosDir: f.zylosDir }));
   f.write(promptRelative, 'stale');
   const prepared = f.prepare(), workDir = path.join(f.root, 'publication'); fs.mkdirSync(workDir);
-  const preparation = preparePostCutoff({ ...prepared, transactionDir: workDir, zylosDir: f.zylosDir });
+  const preparation = preparePostCutoff({ sync, ...prepared, transactionDir: workDir, zylosDir: f.zylosDir });
   f.write(promptRelative, 'new user edit');
   const published = await publishRuntimePreparation({ workDir, zylosDir: f.zylosDir, preparation });
   assert.equal(published.ok, false);
@@ -374,7 +383,7 @@ test('legacy classification A stages conserved backups before split activation w
   assert.ok(report.includes(marker.migration.backupPath));
   assert.equal(report.includes('zylos-upgrade-render-'), false);
   const transactionDir = path.join(f.root, 'transaction'); fs.mkdirSync(transactionDir);
-  const postCutoff = preparePostCutoff({ ...result, transactionDir, zylosDir: f.zylosDir });
+  const postCutoff = preparePostCutoff({ sync, ...result, transactionDir, zylosDir: f.zylosDir });
   const materials = validatePostCutoff({ transactionDir, journal: { postCutoff, zylosDir: f.zylosDir } });
   assert.deepEqual(materials.find(item => item.target.path === `${backupRelative}/CLAUDE.md`).staged, claudeOriginal);
   assert.deepEqual(snapshot(f.zylosDir), before);
@@ -400,7 +409,7 @@ test('corrupt staged legacy backup prevents all publication', async t => {
   f.write('ZYLOS.md', loadInstructionCatalog()[0].rawContent);
   const before = snapshot(f.zylosDir), result = f.prepare();
   const transactionDir = path.join(f.root, 'transaction'); fs.mkdirSync(transactionDir);
-  const postCutoff = preparePostCutoff({ ...result, transactionDir, zylosDir: f.zylosDir });
+  const postCutoff = preparePostCutoff({ sync, ...result, transactionDir, zylosDir: f.zylosDir });
   const backup = postCutoff.items.hooks.targets.find(item => item.path.startsWith('.backup/') && item.path.endsWith('/ZYLOS.md'));
   fs.writeFileSync(path.join(transactionDir, backup.stagedFile), 'corrupt backup');
   const published = await publishRuntimePreparation({ workDir: transactionDir, zylosDir: f.zylosDir, preparation: postCutoff });

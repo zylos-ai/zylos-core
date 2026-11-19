@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { test } from 'node:test';
 import {
-  CAPABILITIES, DEFAULT_RUNTIME, RUNTIME_DESCRIPTORS, SUPPORTED_RUNTIMES, runtimeDisplayName, runtimesWith,
+  CAPABILITIES, DEFAULT_RUNTIME, RUNTIME_DESCRIPTORS, SUPPORTED_RUNTIMES, runtimeDisplayName, runtimeInstallPolicy, runtimesWith,
 } from '../descriptors.js';
 
 test('runtime descriptors declare all capabilities and match the implementation directories', () => {
@@ -12,7 +12,7 @@ test('runtime descriptors declare all capabilities and match the implementation 
   assert.ok(SUPPORTED_RUNTIMES.includes(DEFAULT_RUNTIME));
 
   for (const descriptor of RUNTIME_DESCRIPTORS) {
-    const { id, capabilities, displayName } = descriptor;
+    const { id, capabilities, displayName, installPolicy } = descriptor;
     assert.match(id, /^[a-z][a-z0-9-]{0,31}$/);
     assert.ok(Object.isFrozen(descriptor));
     assert.ok(Object.isFrozen(capabilities));
@@ -21,6 +21,8 @@ test('runtime descriptors declare all capabilities and match the implementation 
     assert.equal(typeof displayName, 'string');
     assert.ok(displayName.trim(), id);
     assert.equal(runtimeDisplayName(id), displayName);
+    assert.ok(['always', 'whenUsed'].includes(installPolicy), id);
+    assert.equal(runtimeInstallPolicy(id), installPolicy);
   }
 
   const directory = new URL('../', import.meta.url);
@@ -46,6 +48,9 @@ test('runtime descriptor queries preserve order, reject invalid capabilities and
   assert.throws(() => runtimesWith('nope'), { name: 'TypeError', message: 'Unknown runtime capability' });
   assert.throws(() => runtimesWith('usage', 'yes'), { name: 'TypeError', message: 'Unknown capability value' });
   for (const unknown of ['', 'unknown', 'constructor', undefined]) {
-    if (!SUPPORTED_RUNTIMES.includes(unknown)) assert.equal(runtimeDisplayName(unknown), unknown);
+    if (!SUPPORTED_RUNTIMES.includes(unknown)) {
+      assert.equal(runtimeDisplayName(unknown), unknown);
+      assert.equal(runtimeInstallPolicy(unknown), null);
+    }
   }
 });

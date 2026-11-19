@@ -1,0 +1,9 @@
+{
+  "program": "Claude Code",
+  "version": "2.1.296 (Claude Code)",
+  "recordedAt": "2026-11-19T18:36:08Z",
+  "how": "Ran claude --version on macOS with a temporary HOME and ZYLOS_DIR.",
+  "files": {
+    "version.txt": "Unmodified stdout from --version."
+  }
+}

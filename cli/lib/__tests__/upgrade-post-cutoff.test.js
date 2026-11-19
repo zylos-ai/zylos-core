@@ -4,8 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { preparePostCutoff, publishPostCutoff, removeLegacyDashboardHooks, dashboardHookCommands } from '../upgrade-post-cutoff.js';
+import { loadPostUpgradeSync, preparePostCutoff, publishPostCutoff, removeLegacyDashboardHooks, dashboardHookCommands } from '../upgrade-post-cutoff.js';
 import { installCoreCodexHook, coreSessionStartCommand } from '../codex-hooks.js';
+
+const sync = await loadPostUpgradeSync();
 
 function fixture(t, runtime = 'claude') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'publication-'));
@@ -14,7 +16,7 @@ function fixture(t, runtime = 'claude') {
   fs.mkdirSync(zylosDir); fs.mkdirSync(transactionDir);
   const write = (relative, value) => { const file = path.join(zylosDir, relative); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value); };
   write('CLAUDE.md', 'old instructions'); write('.claude/settings.json', '{}');
-  const postCutoff = preparePostCutoff({ zylosDir, transactionDir, homeDir: root, runtime,
+  const postCutoff = preparePostCutoff({ sync, zylosDir, transactionDir, homeDir: root, runtime,
     replacements: [{ path: 'CLAUDE.md', content: 'new instructions' }, { path: '.claude/settings.json', kind: 'claude_settings', content: '{"new":true}' }] });
   const journal = { transactionId: 'test', zylosDir, phase: 'compensation_closed', snapshotManifestHash: 'a'.repeat(64),
     compensationCutoff: { formatVersion: 1, closed: true, transactionId: 'test', snapshotManifestHash: 'a'.repeat(64), writer: 'finalizer', closedAt: new Date().toISOString() }, postCutoff };
@@ -184,7 +186,7 @@ for (const stillWarn of [false, true]) test(`warnings from interrupted attempt r
 test('CODEX_HOME ignored and same project/global TOML deduplicated', t => {
   const f = fixture(t, 'codex');
   assert.equal(f.hooks().codexGlobalDir, path.join(f.root, '.codex'));
-  const staged = preparePostCutoff({ transactionDir: f.ctx.transactionDir, zylosDir: f.ctx.zylosDir, homeDir: f.ctx.zylosDir, runtime: 'codex', replacements: [] });
+  const staged = preparePostCutoff({ sync, transactionDir: f.ctx.transactionDir, zylosDir: f.ctx.zylosDir, homeDir: f.ctx.zylosDir, runtime: 'codex', replacements: [] });
   assert.equal(staged.items.hooks.targets.filter(x => x.kind === 'codex_toml').length, 1);
 });
 

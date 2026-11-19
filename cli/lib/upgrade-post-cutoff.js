@@ -1,4 +1,5 @@
-import { DEFAULT_RUNTIME } from './runtime/descriptors.js';
+import { getRuntime, SUPPORTED_RUNTIMES } from './runtime/index.js';
+import { UNSUPPORTED } from './runtime/contract.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -68,8 +69,16 @@ export function removeLegacyDashboardHooks(config, zylosDir) {
   return next;
 }
 
+export async function loadPostUpgradeSync() {
+  const runtimes = await Promise.all(SUPPORTED_RUNTIMES.map(getRuntime));
+  const providers = runtimes.map(rt => rt.install.postUpgradeSync).filter(sync => sync !== UNSUPPORTED);
+  if (providers.length > 1) throw new Error('post-upgrade configuration publication supports one runtime');
+  return providers[0] ?? null;
+}
+
 /** Stage already-rendered instruction/settings bytes without writing shared files. */
-export function preparePostCutoff({ transactionDir, zylosDir, replacements, runtime = DEFAULT_RUNTIME, homeDir = os.homedir() }) {
+export function preparePostCutoff({ transactionDir, zylosDir, replacements, runtime, homeDir = os.homedir(), sync }) {
+  if (sync === undefined) throw new TypeError('preparePostCutoff requires sync (null when no runtime publishes)');
   const codexGlobalDir = path.join(path.resolve(homeDir), '.codex');
   const targets = [];
   const add = (root, relative, kind, content, id) => {
@@ -92,7 +101,7 @@ export function preparePostCutoff({ transactionDir, zylosDir, replacements, runt
     const id = kind === 'claude_settings' ? 't02' : (++instructionIndex === 1 ? 't01' : `t01-${instructionIndex}`);
     add('zylos', replacement.path, kind, replacement.content, replacement.id || id);
   }
-  if (runtime === 'codex' || fs.existsSync(path.join(codexGlobalDir, 'config.toml')) || fs.existsSync(path.join(codexGlobalDir, 'auth.json'))) {
+  if (sync !== null && sync.inUse({ configuredRuntime: runtime, homeDir })) {
     add('zylos', '.codex/hooks.json', 'codex_hooks', undefined, 't03');
     add('zylos', '.codex/config.toml', 'codex_toml', undefined, 't04');
     add('codexGlobal', 'config.toml', 'codex_toml', undefined, 't05');
@@ -147,17 +156,16 @@ export function validatePostCutoff({ transactionDir, journal }) {
 
 // Keep the existing writer and its Core TOML rendering; provide its historical
 // runtime qualification/result policy at this protected publication boundary.
-function reconcileCodexConfig({ projectDir, homeDir, onWrite }) {
+function reconcileCodexConfig({ projectDir, homeDir, onWrite, sync }) {
   const config = readConfigStrict(path.join(projectDir, '.zylos', 'config.json'));
   if (config.state === 'error') throw config.error;
-  const runtime = config.state === 'ok' ? config.config.runtime : DEFAULT_RUNTIME;
-  const globalDir = path.join(homeDir, '.codex');
-  if (runtime !== 'codex' && !fs.existsSync(path.join(globalDir, 'config.toml')) && !fs.existsSync(path.join(globalDir, 'auth.json'))) return { attempted: false };
+  const configuredRuntime = config.state === 'ok' ? config.config.runtime : undefined;
+  if (!sync.inUse({ configuredRuntime, homeDir })) return { attempted: false };
   // The reused 0.9.1 writer resolves os.homedir internally. Refuse a moved
   // account rather than letting resume redirect the captured global target.
   if (path.resolve(homeDir) !== path.resolve(os.homedir())) throw Error('captured Codex home no longer matches writer home');
   const result = syncCodexConfig({ projectDir, homeDir, onWrite, log: () => {} });
-  return runtime !== 'codex' && result.fatal ? { ...result, fatal: false, warning: true } : result;
+  return !sync.failureIsFatal({ configuredRuntime }) && result.fatal ? { ...result, fatal: false, warning: true } : result;
 }
 
 export async function publishPostCutoff(ctx, options = {}) {
@@ -168,7 +176,11 @@ export async function publishPostCutoff(ctx, options = {}) {
 }
 
 async function publishPrepared(ctx, { installHook = installCoreCodexHook,
-  syncConfig = reconcileCodexConfig, persist = (journal, changes) => (ctx.maintenance ?? maintenance).update(ctx.transactionDir, journal, changes),
+  syncConfig = async options => {
+    const sync = await loadPostUpgradeSync();
+    return sync === null ? { attempted: false } : reconcileCodexConfig({ ...options, sync });
+  },
+  persist = (journal, changes) => (ctx.maintenance ?? maintenance).update(ctx.transactionDir, journal, changes),
   // Crash-injection boundary; production keeps the default no-op.
   afterStep = () => {} } = {}) {
   const journal = ctx.journal;
@@ -234,7 +246,7 @@ async function publishPrepared(ctx, { installHook = installCoreCodexHook,
         await afterStep('codex_hook_installed');
       } catch (error) { throw failure('codex_config_reconcile_failed', 't03', error.message); }
       let configResult;
-      try { configResult = syncConfig({ projectDir: journal.zylosDir, homeDir: path.dirname(hooks.codexGlobalDir),
+      try { configResult = await syncConfig({ projectDir: journal.zylosDir, homeDir: path.dirname(hooks.codexGlobalDir),
         onWrite: file => { const entry = reconcile.find(e => path.resolve(e.file) === path.resolve(file)); if (entry) recordWrite(entry.target.id); } }); }
       catch (error) { throw failure('codex_config_reconcile_failed', 't04', error.message); }
       if (!configResult || configResult.fatal || configResult.attempted !== true) throw failure('codex_config_reconcile_failed', 't04', configResult?.attempted === false ? 'codex_state_changed' : configResult?.error || 'invalid Codex sync result');

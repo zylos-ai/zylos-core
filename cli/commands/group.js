@@ -1,8 +1,9 @@
+import { findRuntime } from '../lib/runtime/index.js';
 import { parseSessionGroup } from '../../skills/comm-bridge/scripts/c4-session-group.js';
 
 const usage = 'Usage: zylos group <runtime|model> <get|set|reset> [options] | zylos group overrides [--group <group>]... | zylos group overrides [--match <text>] [--after <group>] | zylos group delete <group> [--yes]';
 
-export async function groupCommand(args, { run, io = process } = {}) {
+export async function groupCommand(args, { run, io = process, runtimeFor = findRuntime, prepareCli } = {}) {
   const [kind, ...flags] = args;
   if (kind === 'delete') {
     const { runGroupDeletionCli } = await import('../lib/group-delete-cli.js');
@@ -56,6 +57,27 @@ export async function groupCommand(args, { run, io = process } = {}) {
     else console.error(`Error [${result.error.code}]: ${result.error.message}`);
     process.exitCode = 1;
     return;
+  }
+  if (kind === 'runtime' && flags[0] === 'set') {
+    const { parseConfigArgs } = await import('../../skills/comm-bridge/scripts/c4-config-handler.js');
+    let request;
+    try { ({ request } = parseConfigArgs(kind, flags)); }
+    catch { /* Let runConfigCli report the original argument error. */ }
+    const rt = request && await runtimeFor(request.runtime);
+    if (rt) {
+      const { installCliOnUse } = await import('./init.js');
+      const result = await installCliOnUse(rt, { prepare: prepareCli });
+      if (result.attempted && !result.ok) {
+        const failure = { code: 'RUNTIME_NOT_INSTALLED', message: result.message, persisted: [] };
+        if (flags.includes('--json')) io.stdout.write(`${JSON.stringify({ ok: false, error: failure })}\n`);
+        else io.stderr.write(`Error [${failure.code}]: ${failure.message}\n`);
+        process.exitCode = 1;
+        return 1;
+      }
+      for (const { message } of result.notices ?? []) {
+        io.stderr.write(`Warning [RUNTIME_CLI_INSTALL_NOTICE]: ${message}\n`);
+      }
+    }
   }
   if (run === undefined) run = (await import('../../skills/comm-bridge/scripts/c4-config-handler.js')).runConfigCli;
   let exitCode;
