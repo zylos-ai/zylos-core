@@ -11,12 +11,10 @@ function fixture(t, overrides = {}) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const memory = path.join(root, 'memory');
   fs.mkdirSync(memory);
-  let conversion = null, fences = [], requests = [], scenes = [], legacy = false, mode = { keyPresent: true, mode: 'multi' }, transition = null;
+  let fences = [], requests = [], scenes = [], legacy = false, mode = { keyPresent: true, mode: 'multi' }, transition = null;
   const controls = [], events = [];
   const db = {
     getModeTransition: () => transition, listDrainFences: () => fences,
-    getLastCompletedModeTransition: options => { assert.deepEqual(options, { memoryConversion: true }); return conversion; },
-    getGlobalCoverageEnd: () => 12, getMaxConversationId: () => 31,
     insertControl: (body, options) => { assert.deepEqual(options, { sessionGroup: 'origin', priority: 2, appendAckSuffix: false });
       const old = controls.findIndex(control => control.body === body); if (old >= 0) controls.splice(old, 1); controls.push({ body, options }); },
   };
@@ -28,7 +26,7 @@ function fixture(t, overrides = {}) {
     owner: () => new GlobalMemoryHandoverCoordinator(deps),
     inbox: () => fs.readFileSync(path.join(memory, 'session-groups/origin/inbox.md'), 'utf8'),
     directories: () => fs.readdirSync(path.join(memory, 'mode-switch')),
-    set conversion(row) { conversion = row; }, set fences(value) { fences = value; }, set requests(value) { requests = value; },
+    set fences(value) { fences = value; }, set requests(value) { requests = value; },
     set scenes(value) { scenes = value; }, set legacy(value) { legacy = value; }, set mode(value) { mode = value; }, set transition(value) { transition = value; },
   };
 }
@@ -40,7 +38,7 @@ test('whitespace material and daily history do not trigger handover', async t =>
   assert.equal(fs.existsSync(path.join(f.memory, 'mode-switch')), false);
 });
 
-test('rule 3 archives full material set, preserves groups and daily records, appends one real memory entry', async t => {
+test('handover archives the full material set, preserves groups and daily records, appends one real memory entry', async t => {
   const f = fixture(t); f.file('state.md', 'live global'); f.file('inbox.md', 'global inbox');
   f.file('inbox.20261118T123456789Z.md', 'segment'); f.file('handoff.md', 'old handoff');
   f.file('sessions/old.md', 'daily'); f.file('identity.md', 'shared');
@@ -93,7 +91,7 @@ test('incomplete directory without plan is reused, or removed when global materi
   const plan = await f.owner().advance(); assert.equal(plan.id, id); assert.equal(f.directories().length, 1);
 });
 
-test('rule 2 decision persists after state moved and exclusive template install races Origin creation', async t => {
+test('template decision persists after state moved and exclusive template install races Origin creation', async t => {
   const f = fixture(t); f.file('state.md', currentTemplate);
   let fail = true; const io = Object.create(fs);
   io.linkSync = (source, destination) => {

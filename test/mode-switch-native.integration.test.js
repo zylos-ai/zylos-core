@@ -65,7 +65,7 @@ function fixture(t) {
   return { root, db, store, scenes, reclaimed, events, writes, restarts, owner, rows, tree, payload, begin, completeOriginInput, tick: seconds => { clock += seconds * 1000; }, readConfig };
 }
 
-// Run gating and cancellation without cutover dependencies; skip only unrelated
+// Run gating without cutover dependencies; skip only unrelated
 // runtime transport work. Origin identity is observed, not a real tmux session.
 test('native gating preserves Origin while fencing only ordinary scenes', async t => {
   const f = fixture(t), coordinator = f.owner();
@@ -243,6 +243,11 @@ test('gating stops busy groups after inbound delivery settles and preserves exis
   }, { now: () => 1800000000000 });
   const row = f.store.insertConversation('in', 'fixture', 'reclaiming', 'in flight', { groupName: 'reclaiming' });
   assert.equal(f.store.claimConversation(row.id), true);
+  const control = f.store.insertControl('finish current work', {
+    sessionGroup: 'fixture:reclaiming', ackDeadlineAt: 1800000300,
+  });
+  assert.equal(f.store.claimControl(control.id), true);
+  const readControl = f.db.prepare('SELECT status, last_error FROM control_queue WHERE id=?');
   f.store.setDrainFence('fixture:reclaiming', { reason: 'ttl', runId: 'fixture:reclaiming' });
   const memory = f.tree();
   await f.begin(coordinator);
@@ -250,9 +255,13 @@ test('gating stops busy groups after inbound delivery settles and preserves exis
   assert.deepEqual(stopped, ['fixture:fresh']);
   assert.equal(f.store.getModeTransition().phase, 'gating');
   assert.equal(f.store.getDrainFence('fixture:reclaiming').reason, 'ttl');
+  assert.equal(readControl.get(control.id).status, 'running');
   assert.equal(f.store.markDelivered(row.id, { sessionId: 'delivery' }), true);
   await coordinator.advance();
   assert.deepEqual(stopped, ['fixture:fresh', 'fixture:reclaiming']);
+  const expired = readControl.get(control.id);
+  assert.equal(expired.status, 'timeout');
+  assert.equal(expired.last_error, 'SESSION_ENDED');
   assert.equal(f.store.getModeTransition().phase, 'cutover');
   assert.deepEqual(f.store.listRunEndings(['fixture:fresh', 'fixture:reclaiming']).map(row => [row.reason, row.continuationPending]), [['mode_switch', 0], ['ttl', 0]]);
   await coordinator.advance();

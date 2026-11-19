@@ -64,17 +64,11 @@ nohup node ~/zylos/.claude/skills/upgrade-claude/scripts/upgrade.js >> ~/zylos/l
 
 ## How It Works
 
-The script installs Claude Code first in every mode. Installation failure is
-reported without queueing an exit or requesting a restart.
+The script installs Claude Code first. After a successful install it submits
+`restart_all` to the supervisor in every session mode. An installation failure
+ends the command before restart submission.
 
-In multi mode or during a mode transition, installation is followed by
-`restart_all`. A refused or unknown restart result is reported without automatic
-resubmission. Supervisor acceptance does not mean new sessions are ready: each
-running session first gets up to 60 seconds to check work waiting on external
-events before it is restarted.
-
-In steady single mode:
-
-1. **Install**: Runs the native installer (`curl -fsSL https://claude.ai/install.sh | bash`) and logs the installed version.
-2. **Enqueue the check, then /exit**: Puts the waiting-work check (priority=1, block_queue_until_idle, 60-second ack deadline) and then `/exit` (priority=1, block_queue_until_idle) into the control queue. The dispatcher delivers the check first and `/exit` after the check's turn or its deadline, respecting idle detection and message blocking.
-3. **Replacement**: The dispatcher starts the replacement session after the old session exits; the replacement uses the installed version.
+The supervisor snapshots the running group sessions and gives each up to 60
+seconds to check work waiting on external events before restarting it. An empty
+snapshot returns `done_empty`. A refusal or unknown result is reported without
+automatic resubmission. Replacement sessions report readiness separately.

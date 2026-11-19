@@ -244,7 +244,6 @@ export async function observeRuntimeGroups(baseline, sessionMode, { list = listG
   overrides = async () => (await import('../../skills/comm-bridge/scripts/c4-db.js')).listGroupRuntimeOverrides(),
   identity = readLiveIdentity } = {}) {
   const result = { groups: [], groupsComplete: true, observationErrors: [] };
-  if (sessionMode === null) return result;
   const names = new Set(['origin']);
   const failures = (source, sessionGroup, error) => {
     result.groupsComplete = false;

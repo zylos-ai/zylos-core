@@ -178,7 +178,7 @@ export class ModeSwitchCoordinator {
     if (context.scenes.some(scene => scene.observationError)) throw failure('INVALID_OBSERVATION', 'Source runtime observation is unknown');
     for (const scene of context.scenes) {
       const group = scene.sessionGroup;
-      if (!group || group === 'origin' || !scene.present || !scene.ready || !scene.runId) continue;
+      if (group === 'origin' || !scene.present || !scene.ready || !scene.runId) continue;
       if (!context.fences.some(fence => fence.sessionGroup === group)) {
         await this.db.setDrainFence(group, { reason: 'mode_switch', runId: scene.runId });
       }
@@ -224,7 +224,7 @@ export class ModeSwitchCoordinator {
     const scenes = await this.observe({ configuration });
     if (scenes.some(scene => scene.observationError)) throw failure('INVALID_OBSERVATION', 'Source runtime observation is unknown');
     const conversations = await this.db.countGlobalRunningConversations();
-    if (scenes.some(scene => scene.present && scene.sessionGroup !== 'origin' && scene.sessionGroup !== null) || conversations > 0) {
+    if (scenes.some(scene => scene.present && scene.sessionGroup !== 'origin') || conversations > 0) {
       await this.unblock(row);
       return;
     }

@@ -75,6 +75,10 @@ for (const [originExists, daily] of [[false, false], [true, true]]) {
 
 for (const point of ['before-plan', 'plan', 'rename', 'append', 'enqueue']) test(`actual SIGKILL after ${point} recovers through real C4 and memory append without transition writes`, async t => {
   const f = fixture(t), before = f.snapshot();
+  const completedAt = f.db.prepare("SELECT updated_at FROM mode_transitions WHERE run_id='old-migration'").pluck().get();
+  for (const name of ['state.md', 'inbox.md']) {
+    fs.utimesSync(path.join(f.memory, name), completedAt - 1, completedAt - 1);
+  }
   const crashed = spawnSync(process.execPath, [worker, f.root, f.filename, point], { encoding: 'utf8', timeout: 10000 });
   assert.equal(crashed.signal, 'SIGKILL', crashed.stderr);
   const dirs = fs.readdirSync(path.join(f.memory, 'mode-switch')); assert.equal(dirs.length, 1);
@@ -249,10 +253,10 @@ for (const incoming of ['same bytes', 'newer global bytes', 'older global bytes'
     const f = fixture(t), events = [];
     f.deps.diagnostic = event => events.push(event);
     const io = Object.create(fs);
-    let fail = true;
+    let renameFailure = 'EIO';
     io.renameSync = (source, destination) => {
-      if (fail && destination.endsWith('/_global/state.md')) {
-        throw Object.assign(new Error('archive interrupted'), { code: 'EIO' });
+      if (renameFailure && destination.endsWith('/_global/state.md')) {
+        throw Object.assign(new Error('archive interrupted'), { code: renameFailure });
       }
       return fs.renameSync(source, destination);
     };
@@ -261,7 +265,13 @@ for (const incoming of ['same bytes', 'newer global bytes', 'older global bytes'
     const first = await owner.advance();
     assert.equal(first.code, 'EIO');
     assert.equal((await owner.advance()).id, first.id);
-    assert.equal(events.filter(event => event.event === 'global_memory_handover_failed').length, 1);
+    const failures = () => events.filter(event => event.event === 'global_memory_handover_failed')
+      .map(event => [event.run_id, event.step, event.code]);
+    assert.deepEqual(failures(), [[first.id, first.step, 'EIO']]);
+    renameFailure = 'EACCES';
+    const next = await owner.advance();
+    assert.deepEqual([next.id, next.step, next.code], [first.id, first.step, 'EACCES']);
+    assert.deepEqual(failures(), [[first.id, first.step, 'EIO'], [first.id, first.step, 'EACCES']]);
     const archive = path.join(f.memory, 'mode-switch', first.id, 'previous/_global');
     const source = path.join(f.memory, 'state.md'), destination = path.join(archive, 'state.md');
     const same = incoming === 'same bytes';
@@ -271,7 +281,7 @@ for (const incoming of ['same bytes', 'newer global bytes', 'older global bytes'
     fs.utimesSync(destination, 200, 200);
     const older = incoming === 'older global bytes';
     fs.utimesSync(source, older ? 100 : 300, older ? 100 : 300);
-    fail = false;
+    renameFailure = null;
     const plan = await owner.advance();
     assert.equal(plan.id, first.id);
     assert.equal(owner.pending(), false);

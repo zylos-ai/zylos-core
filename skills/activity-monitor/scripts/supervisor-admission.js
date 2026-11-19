@@ -98,8 +98,7 @@ export class SupervisorAdmission {
     const existing = rows.find(row => row.requestId === request.requestId);
     if (existing) return existing.reason === 'upgrade' ? { ok: true, result: 'already_accepted', runCount: existing.runIds.length } : { ok: false, code: 'request_conflict' };
     if (rows.some(row => row.reason === 'manual_restart')) return { ok: false, code: 'manual_restart_pending' };
-    const configuration = await this.readMode();
-    const runs = configuration.legacy ? [] : await this.listRuns();
+    const runs = await this.listRuns();
     if (!Array.isArray(runs) || runs.some(run => !nonempty(run?.runId))) {
       throw Object.assign(new Error('Cannot snapshot all live run identities'), { code: 'IDENTITY_UNAVAILABLE' });
     }
@@ -155,7 +154,7 @@ export class SupervisorAdmission {
       return rejected('not_multi');
     }
     const group = request.sessionGroup ?? 'origin';
-    if (await this.db.getDrainFence(group ?? 'origin') || await this.db.getDrainFence('*')) return rejected('fence_conflict');
+    if (await this.db.getDrainFence(group) || await this.db.getDrainFence('*')) return rejected('fence_conflict');
     if (rows.some(row => row.reason === 'manual_restart')) return rejected('manual_restart_pending');
     const run = await this.readRun(group);
     // null means both the process and tmux absence were positively observed.

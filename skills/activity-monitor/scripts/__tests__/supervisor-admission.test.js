@@ -64,11 +64,14 @@ test('restart completes immediately without a mode key or persisted request', as
   assert.equal((await f.admission.handle(restart('empty'))).result, 'done_empty'); assert.equal(fs.existsSync(f.file), false);
   assert.deepEqual(f.state.events, [{event:'restart_done', requestId:'empty'}]);
   f.state.mode = 'single'; f.state.keyPresent = false;
-  f.state.runs = [{ runId: 'legacy baseline' }];
+  // The 0.x baseline tmux session is excluded from the group run inventory.
+  let snapshots = 0;
+  f.admission.listRuns = () => { snapshots++; return f.state.runs; };
   const reply = await f.admission.handle(restart('single'));
   assert.equal(reply.result, 'done_empty'); assert.equal(reply.runCount, 0); assert.equal(fs.existsSync(f.file), false);
-  f.state.transition = {phase:'gating'}; f.state.runs = [{runId:'legacy'}];
+  f.state.transition = {phase:'gating'};
   assert.equal((await f.admission.handle(restart('during-transition'))).result, 'done_empty');
+  assert.equal(snapshots, 2);
 });
 
 test('active deletion admission rejects every changed ownership field before altering restart intent', async t => {

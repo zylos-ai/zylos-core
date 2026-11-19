@@ -37,29 +37,30 @@ async function deliverOrigin(t, storage, expectedIds) {
 // uses an in-memory database and injected runtime/dispatcher I/O, with no tmux
 // socket or external service. Stop the router before fixture teardown.
 test('upgrade waits for the baseline and then delivers queued legacy input under Origin in order', async t => {
-  let mode = null, baselinePresent = true, legacyTicks = 0;
+  let mode = null, baselinePresent = true, legacyTicks = 0, groupObservations = 0;
   const readMode = () => modeReader(mode);
   const storage = routerFixture(t);
   storage.deps.readSessionMode = readMode;
+  storage.dependencies.readConfig = () => ({ state: 'ok',
+    config: { runtime: 'claude', ...(mode === null ? {} : { session_mode: mode }) } });
   const { store, sqlite: db } = storage;
   assert.equal(db.pragma('user_version', { simple: true }), 4);
   assert.equal(db.pragma('table_info(mode_transitions)').some(column => column.name === 'kind'), false);
   const ids = [queue(db, 'first'), queue(db, 'second')];
   const oldDelivery = queue(db, 'already delivered', 'delivered');
   const other = store.insertConversation('in', 'fixture', 'other', 'other group', { groupName: 'room' });
+  db.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE status='pending'").run(clock / 1000);
   storage.deps.findLegacySessions = () => ['baseline'];
   storage.deps.advanceLegacy = () => { legacyTicks++; };
   const list = storage.deps.listGroupTmuxSessions;
-  storage.deps.listGroupTmuxSessions = () => {
-    assert.equal(mode, 'multi', 'group observations begin only after migration');
-    return list();
-  };
+  storage.deps.listGroupTmuxSessions = () => { groupObservations++; return list(); };
   const router = storage.create();
   await router.initialize();
-  await storage.rounds();
+  await storage.rounds(3);
+  assert.equal(groupObservations, 0, 'the pre-migration tick does not enter group scheduling');
   await router.stop();
   assert.equal(storage.calls.some(([operation]) => operation === 'launch'), false);
-  assert.equal(legacyTicks, 1);
+  assert.equal(legacyTicks, 3);
   const owner = cutover(store, readMode, target => { mode = target; }, () => baselinePresent);
   await owner.automatic();
   assert.equal(store.getModeTransition(), null);
@@ -78,7 +79,6 @@ test('upgrade waits for the baseline and then delivers queued legacy input under
   assert.equal(db.prepare('SELECT session_group FROM conversations WHERE id=?').pluck().get(oldDelivery), '');
   assert.equal(db.prepare('SELECT session_group FROM conversations WHERE id=?').pluck().get(other.id), other.session_group);
   assert.equal(db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 0);
-  db.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE status='pending'").run(clock / 1000);
   const delivered = [], delivery = deliveryFixture(t, { storage });
   storage.deps.deliverConversation = async row => {
     assert.equal((await delivery.delivery.deliverConversation(row)).delivered, true);
@@ -90,6 +90,7 @@ test('upgrade waits for the baseline and then delivers queued legacy input under
     await storage.rounds();
   }
   assert.deepEqual(delivered, ids);
+  assert.ok(groupObservations > 0, 'the configured router observes group sessions');
   assert.equal(storage.calls.filter(([op, input]) => op === 'launch' && input.sessionGroup === 'origin').length, 1);
 });
 

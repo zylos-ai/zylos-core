@@ -482,7 +482,7 @@ test('require_idle control delivers from unchanged main idle state while a backg
   assert.equal(result.delivered, true); assert.equal(sends, 1);
   assert.equal(c4.db.prepare('SELECT status FROM control_queue WHERE id=?').pluck().get(control.id), 'running');
 });
-test('Origin idle TTL without backlog writes only the check control, then fences and reclaims; legacy has no TTL', async () => {
+test('Origin idle TTL without backlog writes only the check control, then fences and reclaims', async () => {
   const f = fixture(); f.scenes = [scene('origin')];
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   assert.deepEqual(f.controls.map(control => control.content), ['check']); assert.equal(f.fences.size, 0);
@@ -493,10 +493,6 @@ test('Origin idle TTL without backlog writes only the check control, then fences
   assert.equal(fence.reason, 'ttl'); assert.equal(fence.runId, 'run-origin');
   assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
   assert.deepEqual(f.stops, ['run-origin']); assert.equal(f.controls.length, 1); assert.equal(f.fences.size, 0);
-  const single = fixture(); single.context.configuration.mode = 'single'; single.context.configuration.legacy = true; single.scenes = [scene(null)];
-  await single.lifecycle.checkTtl(single.scenes[0], single.context);
-  assert.equal(await single.lifecycle.beginReclaim(single.scenes[0], 'ttl', single.context), false);
-  assert.equal(single.controls.length, 0); assert.equal(single.fences.size, 0);
 });
 test('Origin TTL waits every preparation control and binds both Sync kinds to the same run', async () => {
   for (const summarized of [0, SYNC_DUE]) {

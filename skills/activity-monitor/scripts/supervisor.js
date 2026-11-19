@@ -97,7 +97,7 @@ export function createSupervisor(deps) {
     }
   };
   const guardedAction=(scene,action,{requireOpen=false,validate=async()=>true}={})=>admission.serialize(async()=>{
-    if(stopping || legacyMode(await readMode()) || await db.getModeTransition() || !manualAllows(scene.sessionGroup))return false;
+    if(stopping || await db.getModeTransition() || !manualAllows(scene.sessionGroup))return false;
     if(requireOpen && (await db.getDrainFence('*') || await db.getDrainFence(scene.sessionGroup)))return false;
     const current=await scenes.readIdentity(scene.sessionGroup);
     if(!current.present || !current.ready || current.runId!==scene.runId || current.runtime!==scene.runtime || oldUnique(current,await readMode()))return false;

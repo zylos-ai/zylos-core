@@ -13,7 +13,6 @@ const CAPACITY_REASONS = new Set(['ttl', 'evict', 'upgrade', 'auth']);
 const RECLAIM_REASONS = new Set([...CAPACITY_REASONS, 'mode_switch', 'model_config', 'delete', 'release']);
 const error = (code, message) => Object.assign(new Error(message), { code });
 const modeOf = context => context.configuration.mode;
-const targetOf = group => group === null ? { machine: true } : { sessionGroup: group };
 const finite = value => Number.isFinite(value);
 const groupSyncThreshold = configuration => configuration.syncThreshold ?? CHECKPOINT_THRESHOLD;
 const legacy = context => context.configuration.legacy === true;
@@ -120,7 +119,7 @@ export class SupervisorLifecycle {
     if (!scene || typeof scene.present !== 'boolean') throw error('INVALID_OBSERVATION', 'Runtime presence is unknown');
     const current = { ...scene, sessionGroup: group };
     if (context) {
-      const index = context.scenes.findIndex(item => item.sessionGroup === group || group === null && item.sessionGroup === 'origin');
+      const index = context.scenes.findIndex(item => item.sessionGroup === group);
       if (index >= 0) context.scenes[index] = current;
       else context.scenes.push(current);
     }
@@ -128,7 +127,7 @@ export class SupervisorLifecycle {
   }
 
   scene(group, context) {
-    const scene = context.scenes.find(item => item.sessionGroup === group || group === null && item.sessionGroup === 'origin');
+    const scene = context.scenes.find(item => item.sessionGroup === group);
     if (scene?.observationError) throw scene.observationError;
     if (!scene) return { sessionGroup: group, present: false };
     if (typeof scene.present !== 'boolean') throw error('INVALID_OBSERVATION', 'Runtime presence is unknown');
@@ -159,8 +158,7 @@ export class SupervisorLifecycle {
 
   stopped(scene, context) {
     this.reclaimSyncFailures.delete(scene.sessionGroup);
-    const current = context.scenes.find(item => item.runId === scene.runId &&
-      (item.sessionGroup === scene.sessionGroup || scene.sessionGroup === null && item.sessionGroup === 'origin'));
+    const current = context.scenes.find(item => item.runId === scene.runId && item.sessionGroup === scene.sessionGroup);
     if (current) Object.assign(current, { present: false, ready: false, processRunning: false });
   }
 
@@ -205,8 +203,8 @@ export class SupervisorLifecycle {
   }
 
   async running(group, { context } = {}) {
-    const conversations = group === null || group === 'origin' && context && modeOf(context) === 'single' ? await this.d.db.countGlobalRunningConversations() : await this.d.db.countRunningConversations(group);
-    const controls = await this.d.db.countNonTerminalControls(targetOf(group));
+    const conversations = group === 'origin' && context && modeOf(context) === 'single' ? await this.d.db.countGlobalRunningConversations() : await this.d.db.countRunningConversations(group);
+    const controls = await this.d.db.countNonTerminalControls({ sessionGroup: group });
     if (!Number.isInteger(conversations) || conversations < 0 || !Number.isInteger(controls.running) || controls.running < 0) {
       throw error('INVALID_OBSERVATION', 'Invalid in-flight counts');
     }
@@ -267,9 +265,8 @@ export class SupervisorLifecycle {
   }
 
   async beginReclaim(scene, reason, context, { subreason } = {}) {
-    if (reason === 'evict' && (scene.sessionGroup === 'origin' || scene.sessionGroup === null)) return false;
-    if (reason === 'ttl' && scene.sessionGroup === null) return false;
-    if (!scene.present || !scene.ready || !scene.runId || scene.sessionGroup === null) return false;
+    if (reason === 'evict' && scene.sessionGroup === 'origin') return false;
+    if (!scene.present || !scene.ready || !scene.runId) return false;
     if (this.subagentReclaimBlocked(scene, reason, context)) return false;
     if (!await this.allowed(scene.sessionGroup, context)) return false;
     const fresh = await this.observe(scene.sessionGroup, context);
@@ -311,7 +308,7 @@ export class SupervisorLifecycle {
     if (switchingGroup && scene.present) return 'waiting_inflight';
     const staleBefore = switchingGroup ? Math.floor(this.now() / 1000) + 1 : Math.floor(scene.currentSessionTs / 1000);
     if (finite(staleBefore)) {
-      const expired = await this.reclaimRead(fence, () => this.d.db.expireStaleRunningControls(targetOf(group), { deliveredBefore: staleBefore }));
+      const expired = await this.reclaimRead(fence, () => this.d.db.expireStaleRunningControls({ sessionGroup: group }, { deliveredBefore: staleBefore }));
       for (const row of expired) await this.event('control_expired', { session_group: group, control_id: row.id, run_id: fence.runId });
     }
     const counts = await this.reclaimRead(fence, () => this.running(group, { context }));
@@ -332,7 +329,7 @@ export class SupervisorLifecycle {
           return 'cancelled';
         }
         const again = await this.reclaimRead(fence, async () => fence.reason === 'delete' ? this.running(group, { context }) : {
-          conversations: group === null || group === 'origin' && modeOf(context) === 'single' ? await this.d.db.countGlobalRunningConversations() : await this.d.db.countRunningConversations(group), controls: 0,
+          conversations: group === 'origin' && modeOf(context) === 'single' ? await this.d.db.countGlobalRunningConversations() : await this.d.db.countRunningConversations(group), controls: 0,
         });
         if (again.conversations !== 0 || again.controls !== 0) {
           if (fence.reason === 'delete') return 'waiting_inflight';
@@ -777,7 +774,7 @@ export class SupervisorLifecycle {
       if (!started) this.evictionPreparation.delete(group);
       return started ? 'started' : null;
     }
-    if (group === 'origin' || group === null || !scene.present || !scene.ready || !scene.runId) return null;
+    if (group === 'origin' || !scene.present || !scene.ready || !scene.runId) return null;
     if (!await this.allowed(group, context)) return null;
     const fresh = await this.observe(group, context);
     if (!fresh.present || !fresh.ready || fresh.runId !== scene.runId) return null;
@@ -823,7 +820,7 @@ export class SupervisorLifecycle {
 
   async checkRotation(scene, context) {
     if (scene.observationError) throw scene.observationError;
-    if (legacy(context) || !await this.allowed(scene.sessionGroup, context)) return;
+    if (!await this.allowed(scene.sessionGroup, context)) return;
     if (!scene.present || !scene.ready || oldUnique(scene, context)) return;
     const threshold = sceneRotationThreshold(scene, context.configuration);
     if (!finite(scene.usagePercent) || threshold === null || scene.usagePercent < threshold) return;
@@ -864,7 +861,7 @@ export class SupervisorLifecycle {
   async checkSync(scenes, context) {
     const now = this.now();
     if (this.lastSyncCheck !== null && now - this.lastSyncCheck < this.syncCheckMs) return;
-    if (legacy(context) || context.restartRequestsError || context.transition || context.fences.some(fence => fence.sessionGroup === '*')) return;
+    if (context.restartRequestsError || context.transition || context.fences.some(fence => fence.sessionGroup === '*')) return;
     this.lastSyncCheck = now;
     await this.each(scenes, async scene => {
       if (scene.observationError) throw scene.observationError;
