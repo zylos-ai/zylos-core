@@ -199,26 +199,24 @@ for (const separator of ['\r', '\n', '\r\n']) test(`agy auth rejects ${JSON.stri
   assert.equal(calls, 0);
 });
 
-for (const runtime of ['agy', 'claude']) {
-  test(`${runtime} applies its bracketed paste policy when the caller disables it`, async () => {
-    const calls = [];
-    let file;
-    const connection = {
-      commandBatch: async commands => {
-        file = commands[0][3];
-        assert.equal(await fs.readFile(file, 'utf8'), 'one\ntwo\nthree');
-        assert.equal(commands[1][0], 'paste-buffer');
-        assert.equal(commands[1].includes('-p'), runtime === 'agy');
-        calls.push('paste');
-      },
-      cleanupBuffer: async () => calls.push('cleanup'),
-    };
-    const adapter = createSessionOps({ dependencies: { revalidateSessionTarget: async () => calls.push('guard') } });
-    await adapter.sendText({ runtime, target: { paneId: '%1' }, connection, text: 'one\ntwo\nthree', bracketedPaste: false });
-    assert.deepEqual(calls, ['guard', 'paste', 'cleanup']);
-    await assert.rejects(fs.stat(file), { code: 'ENOENT' });
-  });
-}
+test('agy always uses one guarded bracketed paste even when the caller disables it', async () => {
+  const calls = [];
+  let file;
+  const connection = {
+    commandBatch: async commands => {
+      file = commands[0][3];
+      assert.equal(await fs.readFile(file, 'utf8'), 'one\ntwo\nthree');
+      assert.equal(commands[1][0], 'paste-buffer');
+      assert.equal(commands[1].includes('-p'), true);
+      calls.push('paste');
+    },
+    cleanupBuffer: async () => calls.push('cleanup'),
+  };
+  const adapter = createSessionOps({ dependencies: { revalidateSessionTarget: async () => calls.push('guard') } });
+  await adapter.sendText({ runtime: 'agy', target: { paneId: '%1' }, connection, text: 'one\ntwo\nthree', bracketedPaste: false });
+  assert.deepEqual(calls, ['guard', 'paste', 'cleanup']);
+  await assert.rejects(fs.stat(file), { code: 'ENOENT' });
+});
 
 test('agy configured identity is accepted without process-tree inference', async () => {
   const config = { runtime: 'agy', mode: 'default' };

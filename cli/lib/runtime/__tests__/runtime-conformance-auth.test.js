@@ -8,12 +8,6 @@ import { getRuntime } from '../index.js';
 for (const id of ['claude', 'codex']) {
   test(`${id} classifies CLI login statuses from recorded samples`, async t => {
     const samples = new URL(`./samples/${id}/auth/`, import.meta.url);
-    try { await fs.access(samples); }
-    catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-      t.skip('Real CLI samples are pending reviewer recording');
-      return;
-    }
     const manifest = JSON.parse(await fs.readFile(new URL('manifest.json', samples), 'utf8'));
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'runtime-auth-sample-'));
     t.after(() => fs.rm(root, { recursive: true, force: true }));

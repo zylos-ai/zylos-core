@@ -1,5 +1,5 @@
 import { launchSession } from '../../../../cli/lib/runtime/launch-flow.js';
-import { connection, createSessionOps } from '../../../../cli/lib/runtime/session-ops.js';
+import { connection as openConnection, createSessionOps } from '../../../../cli/lib/runtime/session-ops.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -62,7 +62,7 @@ setInterval(()=>{},1000);
     await Promise.all([1, 2, 3, 4].map(async lane => {
       const group = `stress:lane${lane}`;
       for (let round = 1; round <= deliveryRounds; round++) {
-        const connection = await connection(adapterOptions);
+        const connection = await openConnection(adapterOptions);
         try {
           const target = await resolveSessionTarget({ sessionGroup: group, connection });
           const text = `lane=${lane};seq=${round};literal='double" \\ $HOME #{pid} ;`;

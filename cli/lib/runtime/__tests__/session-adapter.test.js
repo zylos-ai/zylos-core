@@ -25,6 +25,15 @@ function fixture({present = true, runId = 'r', openError, runtime = 'claude'} = 
 }
 const error = (code,cause) => Object.assign(new Error(code),{code,cause});
 
+async function launchFixture(t, options) {
+  const f = fixture(options);
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'session-launch-home-'));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  f.options.root = home;
+  f.options.env = { HOME: home, PATH: '/nonexistent' };
+  return f;
+}
+
 test('absence only: no server is false; timeout remains unavailable',async () => {
   assert.deepEqual(await fixture({openError:error('TMUX_NO_SERVER')}).adapter.isRunning({tmuxName:'x'}),{tmux:false,process:false});
   await assert.rejects(fixture({openError:error('TMUX_UNAVAILABLE','timeout')}).adapter.isRunning({tmuxName:'x'}),{code:'TMUX_UNAVAILABLE',cause:'timeout'});
@@ -123,8 +132,8 @@ test('auth checks use injected home/environment/executor without production auth
     assert.equal((await codexCheckAuth(codexOptions)).status,'failure');
   } finally {await fs.rm(home,{recursive:true,force:true});}
 });
-test('launch rejects conflicts before binary/config, then missing binary before config',async()=> {
-  const f=fixture(); f.options.paths={tmuxNameForGroup:()=> 'isolated'};
+test('launch rejects conflicts before binary/config, then missing binary before config',async t=> {
+  const f=await launchFixture(t); f.options.paths={tmuxNameForGroup:()=> 'isolated'};
   let lookedUp=false;
   f.options.runtimeExecutable=()=>{lookedUp=true;throw error('RUNTIME_NOT_INSTALLED');};
   const input={sessionGroup:null,runId:'r',sessionMode:'single',launchConfig:null};
@@ -136,8 +145,8 @@ test('launch rejects conflicts before binary/config, then missing binary before 
   await assert.rejects(launchSession({ runtime: 'claude', ...input }, f.options),{code:'MODEL_CONFIG_REJECTED'});
   assert.equal(f.calls.some(c=>c[0]==='new-session'),false);
 });
-test('launch preflight failures retain sanitized timing and close the executor',async()=>{
-  const f=fixture({present:false});
+test('launch preflight failures retain sanitized timing and close the executor',async t=>{
+  const f=await launchFixture(t, {present:false});
   f.options.paths={tmuxNameForGroup:()=> 'isolated'};
   f.dependencies.observeSessionTarget=async()=>{
     await new Promise(resolve=>setTimeout(resolve,20));
@@ -157,8 +166,8 @@ test('launch preflight failures retain sanitized timing and close the executor',
   });
   assert.deepEqual(f.calls,[['close']]);
 });
-test('launch preflight commands receive the shared remaining deadline',async()=> {
-  const f=fixture({present:false});
+test('launch preflight commands receive the shared remaining deadline',async t=> {
+  const f=await launchFixture(t, {present:false});
   f.options.paths={tmuxNameForGroup:()=> 'isolated'};
   f.options.runtimeExecutable=()=>{throw error('RUNTIME_NOT_INSTALLED');};
   f.dependencies.openTmuxConnection=async options=>{
@@ -176,8 +185,8 @@ test('launch preflight commands receive the shared remaining deadline',async()=>
   await assert.rejects(launchSession({ runtime: 'claude', sessionGroup:null,runId:'r',sessionMode:'single',
     launchConfig:{runtime:'claude',mode:'default'}}, f.options),{code:'RUNTIME_NOT_INSTALLED'});
 });
-test('unreadable executable identity fails preflight before creation',async()=> {
-  const f=fixture({present:false});f.options.paths={tmuxNameForGroup:()=> 'isolated'};
+test('unreadable executable identity fails preflight before creation',async t=> {
+  const f=await launchFixture(t, {present:false});f.options.paths={tmuxNameForGroup:()=> 'isolated'};
   f.options.runtimeExecutable=()=>'/fake';
   await assert.rejects(launchSession({ runtime: 'claude', sessionGroup:null,runId:'r',sessionMode:'single',launchConfig:{runtime:'claude',mode:'default'}}, f.options),{code:'LAUNCH_FAILED'});
   assert.equal(f.calls.some(c=>c[0]==='new-session'),false);
@@ -230,8 +239,8 @@ test('runtime capability query honors the remaining launch timeout',async t=>{
   assert.ok(performance.now()-startedAt<1000);
 });
 
-test('launch awaits runtime help and classifies invalid launch arguments as a launch failure',async()=>{
-  const f=fixture({present:false});
+test('launch awaits runtime help and classifies invalid launch arguments as a launch failure',async t=>{
+  const f=await launchFixture(t, {present:false});
   f.options.paths={tmuxNameForGroup:()=> 'isolated'};
   f.options.runtimeExecutable=()=>'/fake';
   let queried=false, helpOptions;

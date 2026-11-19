@@ -3,7 +3,7 @@ import { removeOwnedTree } from '../skills/comm-bridge/scripts/remove-owned-tree
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 
@@ -69,26 +69,7 @@ async function run(selected, env, filename) {
     });
   } finally { active = null; fs.closeSync(fd); }
 }
-// The review gate builds the known-bad variant before starting the test runner.
-function writeBadControl() {
-  const protocol = path.join(repo, 'skills/comm-bridge/scripts/tmux-protocol.js');
-  const original = fs.readFileSync(protocol, 'utf8');
-  const mutant = original.replace(/(export function tmuxGuardCondition\(binding, kind\) \{)[\s\S]*?\n\}/,
-    "$1\n  return '1';\n}");
-  if (mutant === original) throw Error('Positive control must alter the production guard');
-  const protocolFile = path.join(temporary, 'tmux-protocol.mjs');
-  fs.writeFileSync(protocolFile, mutant);
-
-  const connection = pathToFileURL(path.join(repo, 'cli/lib/runtime/tmux-connection.js'));
-  const source = fs.readFileSync(connection, 'utf8');
-  const connectionFile = path.join(temporary, 'constant-true.mjs');
-  fs.writeFileSync(connectionFile, source.replace(/(['"])(\.\/[^'"]+)\1/g, (_match, _quote, relative) =>
-    JSON.stringify(relative === './tmux-protocol.js' ? pathToFileURL(protocolFile).href : new URL(relative, connection).href)));
-  return connectionFile;
-}
-
 try {
-  const badControl = writeBadControl();
   for (const version of versions) {
     const binary = binaries.get(version);
     const binDir = path.join(temporary, version); fs.mkdirSync(binDir);
@@ -106,7 +87,7 @@ try {
     const metrics = metricsLine ? JSON.parse(metricsLine.slice(2)) : null;
     const supervisorMetrics = fs.existsSync(supervisorLog) ? JSON.parse(fs.readFileSync(supervisorLog, 'utf8')) : null;
     const badLog = path.join(output, `tmux-${version}-bad-control.tap`);
-    const bad = await run([`${testDir}/session-adapter-churn.test.js`], { ...env, ZYLOS_TMUX_BAD_CONTROL: badControl }, badLog);
+    const bad = await run([`${testDir}/session-adapter-churn.test.js`], { ...env, ZYLOS_TMUX_BAD_CONTROL: '1' }, badLog);
     const badText = fs.readFileSync(badLog, 'utf8');
     const badDetected = bad.code === 1 && badText.includes('stale-message') && badText.includes('GENERATION_CHANGED');
     const record = { version, binary, binarySha256: sha256(binary), runtime, runtimeLog, metrics,

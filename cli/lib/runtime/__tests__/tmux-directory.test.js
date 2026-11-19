@@ -123,7 +123,11 @@ test('missing directory rejects every shared client before executing any binary'
     readTrigger: () => null, exec }), { code });
   await assert.rejects(async () => runTmuxCommand(['list-sessions'], { binary: '/must-not-execute' }), { code });
   await assert.rejects(listGroupTmuxSessions({ exec }), { code });
-  const adapterOptions = { tmux: { binary: '/must-not-execute' } };
+  const adapterOptions = {
+    root,
+    env: { HOME: root, PATH: '/nonexistent' },
+    tmux: { binary: '/must-not-execute' },
+  };
   const adapter = createSessionOps(adapterOptions);
   await assert.rejects(adapter.isRunning({ tmuxName: 'test' }), { code });
   await assert.rejects(adapter.stop({ tmuxName: 'test' }), { code });

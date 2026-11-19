@@ -33,15 +33,15 @@ sets the existing `TMUX_STRESS_ENABLED=1` opt-in, fixes `TMUX_STRESS_LAUNCH_ROUN
 version. The supervisor fixture performs two launches per launch round and
 four delivery lanes, exercising the shared session reader as well as the adapter.
 
-The stress fixture uses real `launchSession`, `sendText`, and `sendKeys`
+The stress fixture uses real `SessionAdapter.launch`, `sendText`, and `sendKeys`
 calls on one private socket. It performs 300 launch/kill rounds, 150 deliveries,
 and concurrent session create/kill churn. A receiver records exact raw bytes;
 a second recorder detects delivery to the wrong pane. Server generation must
 remain unchanged. Startup is attempted once, so crashes cannot be hidden by
 retrying server creation.
 
-The matrix script prepares a temporary module copy with a constant-true guard.
-Each version runs the stale-generation fixture against that copy as a positive control. It must
+Each version also runs the same stale-generation fixture with the production
+guard condition replaced by constant true in a temporary module copy. It must
 fail with both the expected generation rejection and the incorrectly delivered
 `stale-message` visible in its assertion output. The normal fixture first
 revalidates, then replaces the server before the guarded send, preserving the

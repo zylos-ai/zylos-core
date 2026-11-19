@@ -12,7 +12,7 @@ import { resolveSessionTarget, revalidateSessionTarget } from '../session-target
 
 const binary = process.env.TEST_TMUX_BIN || 'tmux';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-const badControl = process.env.ZYLOS_TMUX_BAD_CONTROL;
+const badControl = process.env.ZYLOS_TMUX_BAD_CONTROL === '1';
 const churnStress = process.env.ZYLOS_TMUX_CHURN_STRESS === '1';
 
 async function fixture(t) {
@@ -99,13 +99,25 @@ test('real adapter survives 300 launches and 150 deliveries on one socket under 
       errors: 0, serverCrashes: 0, wrongPaneLines: 0, missingLines: 0 }));
   });
 
-test('paste rejects stale generation after server replacement',
+test('same fixture rejects stale generation; constant-true guard positive control must fail',
   { timeout: 20000, skip: !churnStress }, async t => {
     const f = await fixture(t);
     await f.launch('stress:receiver', 'old'); await f.ready('old');
-    const open = badControl
-      ? (await import(pathToFileURL(badControl).href)).openTmuxConnection
-      : openTmuxConnection;
+    let open = openTmuxConnection;
+    if (badControl) {
+      const protocolUrl = new URL('../../../../skills/comm-bridge/scripts/tmux-protocol.js', import.meta.url);
+      const original = await fs.readFile(protocolUrl, 'utf8');
+      const mutant = original.replace(/(export function tmuxGuardCondition\(binding, kind\) \{)[\s\S]*?\n\}/,
+        "$1\n  return '1';\n}");
+      assert.notEqual(mutant, original, 'Positive control must alter the production guard');
+      const protocolFile = path.join(f.dir, 'tmux-protocol.mjs');
+      await fs.writeFile(protocolFile, mutant);
+      const source = await fs.readFile(new URL('../tmux-connection.js', import.meta.url), 'utf8');
+      const connectionFile = path.join(f.dir, 'constant-true.mjs');
+      await fs.writeFile(connectionFile, source.replace(/(['"])(\.\/[^'"]+)\1/g, (_match, _quote, relative) =>
+        JSON.stringify(relative === './tmux-protocol.js' ? pathToFileURL(protocolFile).href : new URL(relative, new URL('../tmux-connection.js', import.meta.url)).href)));
+      ({ openTmuxConnection: open } = await import(pathToFileURL(connectionFile).href));
+    }
     const connection = await open(f.tmuxOptions); t.after(() => connection.close());
     const target = await resolveSessionTarget({ tmuxName: 'stress-receiver', connection, readReady: async () => null });
     const adapter = createSessionOps({ dependencies: {
