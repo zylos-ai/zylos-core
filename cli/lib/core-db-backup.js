@@ -49,9 +49,11 @@ export function runCoreDbWorker(payload,{workerPath=WORKER,nodePath=process.exec
   if(result.error||result.status!==0) {
     let failure;
     try {failure=JSON.parse(result.stdout).error;} catch {}
-    throw Object.assign(new Error(failure?.message || `SQLite ${payload.action} failed: ${result.error?.code || `exit ${result.status}`}`), {
+    const error=Object.assign(new Error(failure?.message || `SQLite ${payload.action} failed: ${result.error?.code || `exit ${result.status}`}`), {
       code:failure?.code || 'UPGRADE_FAILED'
     });
+    if(failure?.databaseTimings) error.databaseTimings=failure.databaseTimings;
+    throw error;
   }
   try{return JSON.parse(result.stdout);}catch{throw new Error('Invalid SQLite worker response');}
 }
@@ -127,7 +129,7 @@ export function cleanupCoreDbRehearsals(zylosDir) {
 // Run the downloaded release's real migration code against SQLite backup
 // copies after writers stop. The protected source databases remain unchanged;
 // their installed migrations are applied and checked again later.
-export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills'),onCleanup,dashboardOwnerManaged=true}={}) {
+export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills'),onCleanup,dashboardOwnerManaged=true,reportTimings=false}={}) {
   zylosDir=fs.realpathSync(zylosDir);
   const schemaRoot=path.join(tempDir,'skills');
   const workerPath=path.join(tempDir,'cli','lib','core-db-backup-worker.js');
@@ -155,7 +157,7 @@ export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(z
     const rehearsalDir=path.join(zylosDir,'.backup','db','.rehearsal');
     fs.mkdirSync(rehearsalDir,{mode:0o700});
     fs.chmodSync(rehearsalDir,0o700);
-    try {return runCoreDbWorker({action:'rehearse',zylosDir,schemaRoot,driverRoot,rehearsalDir,formatVersion:3,dashboardOwnerManaged},{workerPath});}
+    try {return runCoreDbWorker({action:'rehearse',zylosDir,schemaRoot,driverRoot,rehearsalDir,formatVersion:3,dashboardOwnerManaged,reportTimings},{workerPath});}
     finally {removeOwnedTree(fs.realpathSync(path.dirname(rehearsalDir)),rehearsalDir);}
   } finally {
     for (const directory of created.reverse()) {
@@ -164,44 +166,68 @@ export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(z
     }
   }
 }
-export function createCoreDbSnapshot({zylosDir,transactionId,fromVersion,toVersion,onProgress,verifySnapshot=runCoreDbWorker,formatVersion=3}) {
+export function createCoreDbSnapshot({zylosDir,transactionId,fromVersion,toVersion,onProgress,
+  verifySnapshot=runCoreDbWorker,formatVersion=3,timeStep}) {
+  const runStep=timeStep ?? ((_name,work)=>work());
+  const reportTimings=Boolean(timeStep);
   zylosDir=fs.realpathSync(zylosDir);
   if(formatVersion!==3) throw Error('New database snapshots require formatVersion 3');
   if(!/^[a-zA-Z0-9_-]+$/.test(transactionId)) throw new Error('Invalid snapshot transaction ID');
-  const root=path.join(zylosDir,'.backup','db');fs.mkdirSync(root,{recursive:true,mode:0o700});
-  syncDir(path.dirname(root));syncDir(zylosDir);
-  const staging=fs.mkdtempSync(path.join(root,'.staging-'));fs.chmodSync(staging,0o700);syncDir(root);
-  let manifest;
+  const root=path.join(zylosDir,'.backup','db');
+  const destination=path.join(root,transactionId);
+  let staging, manifest;
   try {
-    const result=runCoreDbWorker({action:'snapshot',zylosDir,stagingDir:staging,formatVersion});
-    manifest={formatVersion,function:'core-self-upgrade-db',status:'complete',id:transactionId,from:fromVersion,to:toVersion,createdAt:new Date().toISOString(),databases:result.databases};
-    if(!validComplete(manifest)) throw new Error('Incomplete snapshot group');
-    durableJson(path.join(staging,'manifest.json'),manifest);
-    const destination=path.join(root,transactionId);if(fs.existsSync(destination)) throw new Error(`Snapshot already exists: ${destination}`);
-    fs.renameSync(staging,destination);syncDir(root);
-    // Verify the published group before retiring a previously verified one.
-    verifySnapshot({action:'verify',zylosDir,dbBackupDir:destination,manifest});
+    runStep('backup',()=>{
+      fs.mkdirSync(root,{recursive:true,mode:0o700});
+      syncDir(path.dirname(root));syncDir(zylosDir);
+      staging=fs.mkdtempSync(path.join(root,'.staging-'));fs.chmodSync(staging,0o700);syncDir(root);
+      const result=runCoreDbWorker({action:'snapshot',zylosDir,stagingDir:staging,formatVersion,reportTimings});
+      manifest={formatVersion,function:'core-self-upgrade-db',status:'complete',id:transactionId,from:fromVersion,to:toVersion,createdAt:new Date().toISOString(),databases:result.databases};
+      if(!validComplete(manifest)) throw new Error('Incomplete snapshot group');
+      durableJson(path.join(staging,'manifest.json'),manifest);
+      if(fs.existsSync(destination)) throw new Error(`Snapshot already exists: ${destination}`);
+      fs.renameSync(staging,destination);syncDir(root);
+      return result;
+    });
+    // A byte-for-byte match retains the integrity evidence from the backup.
+    runStep('verify_new_backup',()=>verifySnapshot({
+      action:'verify-new-snapshot',zylosDir,dbBackupDir:destination,manifest,reportTimings
+    }));
     const warnings=[];
-    for(const entry of fs.readdirSync(root,{withFileTypes:true})) {
-      if(!entry.isDirectory()||entry.name===transactionId||entry.name.startsWith('.')) continue;
-      const oldDir=path.join(root,entry.name);
-      if(!fs.existsSync(path.join(oldDir,'manifest.json'))) continue;
-      try {
-        const old=JSON.parse(fs.readFileSync(path.join(oldDir,'manifest.json'),'utf8'));
-        if(!validComplete(old)||old.id!==entry.name||!Number.isFinite(Date.parse(old.createdAt))||Date.parse(old.createdAt)>Date.parse(manifest.createdAt)) continue;
-        runCoreDbWorker({action:'verify',zylosDir,dbBackupDir:oldDir,manifest:old});
-        removeOwnedTree(fs.realpathSync(root),oldDir);syncDir(root);
-      }catch(error){warnings.push(`Retained ${oldDir}: ${error.message}`);}
-    }
     try {onProgress?.({dbBackupDir:destination,manifest,warnings});}catch(error){warnings.push(`Progress reporting failed: ${error.message}`);}
     return {dbBackupDir:destination,manifest,warnings};
   }catch(error) {
-    if(fs.existsSync(staging)) {
+    if(staging && fs.existsSync(staging)) {
       try {durableJson(path.join(staging,'failure.json'),{status:'failed',error:error.message,transactionId,failure:{code:'SNAPSHOT_FAILED',next:'Fix the database backup failure, then retry the upgrade; installation was not started.'}});}
       catch(writeError) {error.message+=`; failure record could not be persisted: ${writeError.message}`;}
     }
     error.code='SNAPSHOT_FAILED';error.stagingDir=staging;throw error;
   }
+}
+
+// Call under the upgrade controller's ownership, after durable success and service restoration.
+export function retirePreviousCoreDbSnapshots({zylosDir,manifest}) {
+  const root=path.join(fs.realpathSync(zylosDir),'.backup','db');
+  if(fs.realpathSync(root)!==root) throw Error(`Unsafe database snapshot cleanup directory: ${root}`);
+  const warnings=[], databaseTimings=[];
+  for(const entry of fs.readdirSync(root,{withFileTypes:true})) {
+    if(!entry.isDirectory()||entry.name===manifest.id||entry.name.startsWith('.')) continue;
+    const oldDir=path.join(root,entry.name);
+    if(!fs.existsSync(path.join(oldDir,'manifest.json'))) continue;
+    const recordTimings=result=>{
+      for(const timing of result?.databaseTimings || []) databaseTimings.push({...timing,snapshotId:entry.name});
+    };
+    try {
+      const old=JSON.parse(fs.readFileSync(path.join(oldDir,'manifest.json'),'utf8'));
+      if(!validComplete(old)||old.id!==entry.name||!Number.isFinite(Date.parse(old.createdAt))||Date.parse(old.createdAt)>Date.parse(manifest.createdAt)) continue;
+      recordTimings(runCoreDbWorker({action:'verify',zylosDir,dbBackupDir:oldDir,manifest:old,reportTimings:true}));
+      removeOwnedTree(root,oldDir);syncDir(root);
+    }catch(error){
+      recordTimings(error);
+      warnings.push(`Retained ${oldDir}: ${error.message}`);
+    }
+  }
+  return {warnings,databaseTimings};
 }
 // Freeze the native driver and its runtime dependency closure before npm changes.
 export function prepareRecoveryDependencies(transactionDir,zylosDir) {

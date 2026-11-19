@@ -5,12 +5,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createRequire} from 'node:module';
+import crypto from 'node:crypto';
+import {execute} from '../core-db-backup-worker.js';
 import {spawnSync} from 'node:child_process';
 import {protectedDataReady} from '../upgrade-protection.js';
 import {fileURLToPath} from 'node:url';
 import {SUPPORTED_SCHEMA_VERSION as C4_VERSION} from '../../../skills/comm-bridge/scripts/c4-schema.js';
 import {SUPPORTED_SCHEMA_VERSION as SCHEDULER_VERSION} from '../../../skills/scheduler/scripts/schema.js';
-import {CORE_DATABASES as ALL_CORE_DATABASES,cleanupCoreDbRehearsals,createCoreDbSnapshot as snapshot,prepareRecoveryDependencies,probeCoreDbVersions as probeVersions,rehearseCoreDbUpgrade as rehearse,runCoreDbWorker as worker} from '../core-db-backup.js';
+import {CORE_DATABASES as ALL_CORE_DATABASES,cleanupCoreDbRehearsals,createCoreDbSnapshot as snapshot,prepareRecoveryDependencies,probeCoreDbVersions as probeVersions,rehearseCoreDbUpgrade as rehearse,retirePreviousCoreDbSnapshots,runCoreDbWorker as worker} from '../core-db-backup.js';
 const CORE_DATABASES=ALL_CORE_DATABASES.filter(item=>item.owner!=='dashboard');
 const createCoreDbSnapshot=options=>snapshot(options);
 const runCoreDbWorker=(payload,options)=>worker({dashboardOwnerManaged:false,...payload},options);
@@ -85,6 +87,8 @@ test('publishes only complete groups and preserves unrelated directories',t=>{
  const dir=fixture(t);const one=createCoreDbSnapshot({zylosDir:dir,transactionId:'one'});
  fs.mkdirSync(path.join(dir,'.backup/db/unrelated'));fs.writeFileSync(path.join(dir,'.backup/db/unrelated/note'),'keep');
  const two=createCoreDbSnapshot({zylosDir:dir,transactionId:'two'});
+ assert.ok(fs.existsSync(one.dbBackupDir),'publication leaves the previous group intact');
+ retirePreviousCoreDbSnapshots({zylosDir:dir,manifest:two.manifest});
  assert.ok(!fs.existsSync(one.dbBackupDir));assert.ok(fs.existsSync(two.dbBackupDir));assert.ok(fs.existsSync(path.join(dir,'.backup/db/unrelated/note')));
  assert.equal(fs.statSync(path.join(two.dbBackupDir,'manifest.json')).mode&0o777,0o600);
 });
@@ -479,4 +483,43 @@ test('rehearsal cleanup preflight failure preserves every file and reports the p
  try {assert.throws(()=>cleanupCoreDbRehearsals(dir),error=>error.code==='EACCES'&&error.removedRehearsals.length===0);}
  finally {fs.chmodSync(locked,0o700);}
  assert.equal(fs.readFileSync(path.join(target,'first.db'),'utf8'),'first');assert.equal(fs.readFileSync(path.join(locked,'last.db'),'utf8'),'last');
+});
+
+// Boundary: real worker and a small SQLite file; count only product digest
+// and integrity operations. Run for snapshot creation or verify changes.
+test('snapshot and verification each hash once and only full verification opens SQLite', {skip:!Database}, async t=>{
+ const dir=fixture(t);
+ skills(dir);
+ const source=path.join(dir,'comm-bridge/c4.db');
+ fs.mkdirSync(path.dirname(source));
+ const db=new Database(source);
+ try { db.exec("CREATE TABLE example(value TEXT); INSERT INTO example VALUES ('fixture')"); }
+ finally { db.close(); }
+ const stagingDir=path.join(dir,'snapshot');
+ fs.mkdirSync(stagingDir);
+ const digest=crypto.createHash;
+ const hashes=t.mock.method(crypto,'createHash');
+ const pragma=Database.prototype.pragma;
+ let integrityChecks=0;
+ t.mock.method(Database.prototype,'pragma',function (expression,options) {
+   if(expression==='integrity_check') integrityChecks++;
+   return pragma.call(this,expression,options);
+ });
+ const input={zylosDir:dir,databaseSource:'comm-bridge/c4.db'};
+ const {databases}=await execute({...input,action:'snapshot',stagingDir});
+ assert.equal(hashes.mock.callCount(),1);
+ assert.equal(integrityChecks,1);
+ const bytes=fs.readFileSync(path.join(stagingDir,databases[0].file));
+ assert.equal(databases[0].sha256,digest('sha256').update(bytes).digest('hex'));
+ const manifest={formatVersion:3,function:'core-self-upgrade-db',status:'complete',id:'snapshot',databases:[
+   ...databases,...ALL_CORE_DATABASES.slice(1).map(({source})=>({
+     source,status:'missing',file:null,bytes:0,sha256:null,userVersion:null,integrityCheck:null
+   }))
+ ]};
+ await execute({...input,action:'verify-new-snapshot',dbBackupDir:stagingDir,manifest,driverPath:path.join(dir,'absent-driver.cjs')});
+ assert.equal(hashes.mock.callCount(),2);
+ assert.equal(integrityChecks,1);
+ await execute({...input,action:'verify',dbBackupDir:stagingDir,manifest});
+ assert.equal(hashes.mock.callCount(),3);
+ assert.equal(integrityChecks,2);
 });
