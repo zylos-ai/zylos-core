@@ -1,19 +1,30 @@
+import fs from 'node:fs';
 import path from 'node:path';
-import { loadCoreConfigStore } from './core-config-loader.js';
 import { OPEN_MODE_TRANSITION } from './c4-transition-state.js';
 
-// Migration callbacks are synchronous. Load pure readers without importing
-// config.js; choose the instance path only when an ambiguous row needs the configuration file.
-const { readConfigStrict, configUnreadable } = await loadCoreConfigStore();
+// Migration callbacks run without an installed Core package.
 function sessionModeKeyPresent() {
   const root = process.env.ZYLOS_DIR || path.join(process.env.HOME, 'zylos');
-  const result = readConfigStrict(path.join(root, '.zylos', 'config.json'));
-  if (result.state === 'error') throw configUnreadable(result.error);
-  if (result.state === 'missing' || !Object.hasOwn(result.config, 'session_mode')) return false;
-  if (!['single', 'multi'].includes(result.config.session_mode)) {
-    throw configUnreadable(new TypeError('session_mode must be "single" or "multi"'));
+  let source;
+  try {
+    source = fs.readFileSync(path.join(root, '.zylos', 'config.json'), 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw Object.assign(new Error(`Zylos configuration is unreadable: ${error.message}`, { cause: error }), { code: 'CONFIG_UNREADABLE' });
   }
-  return true;
+  try {
+    const config = JSON.parse(source);
+    if (config === null || Array.isArray(config) || typeof config !== 'object') {
+      throw new TypeError('config.json root must be a JSON object');
+    }
+    if (!Object.hasOwn(config, 'session_mode')) return false;
+    if (!['single', 'multi'].includes(config.session_mode)) {
+      throw new TypeError('session_mode must be "single" or "multi"');
+    }
+    return true;
+  } catch (error) {
+    throw Object.assign(new Error(`Zylos configuration is unreadable: ${error.message}`, { cause: error }), { code: 'CONFIG_UNREADABLE' });
+  }
 }
 const quote = value => `"${value.replaceAll('"', '""')}"`;
 

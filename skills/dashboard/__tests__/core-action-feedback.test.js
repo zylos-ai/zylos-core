@@ -112,7 +112,7 @@ test('every Core action return path has a bilingual message key', async t => {
   t.mock.module('node:timers/promises', { namedExports: { ...timerPromises, setTimeout: async milliseconds => { assert.equal(milliseconds, 500); } } });
   t.mock.method(globalThis, 'setTimeout', (callback, milliseconds) => { schedules.push({ callback, milliseconds }); return { unref() {} }; });
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
-    if (name === 'config.js') return { readSessionMode: () => ({ mode }) };
+    if (name === 'config.js') return { readSessionMode: () => ({ mode, keyPresent: true }) };
     if (name === 'session-nudge.js') return import('../../../cli/lib/session-nudge.js');
     if (name === 'am-sock-client.js') return {
       submit: async request => { submits.push(structuredClone(request)); return structuredClone(reply); },
@@ -149,8 +149,8 @@ test('every Core action return path has a bilingual message key', async t => {
           for (const { args } of commandCalls.slice(beforeCommands)) {
             assert.equal(args[args.indexOf('--target-run') + 1], target.runId);
             assert.equal(args[args.indexOf('--expected-session') + 1], target.sessionId);
-            assert.equal(args.includes('--group'), mode === 'multi');
-            if (mode === 'multi') assert.equal(args[args.indexOf('--group') + 1], 'origin');
+            assert.equal(args.includes('--group'), true);
+            assert.equal(args[args.indexOf('--group') + 1], 'origin');
           }
         }
         const commandsAfter = commandCalls.length, submitsAfter = submits.length;
@@ -167,7 +167,7 @@ test('every Core action return path has a bilingual message key', async t => {
     await t.test(`${mode} restart acceptance, rejection and transport results`, async () => {
       for (const result of ['accepted', 'already_accepted', 'already_stopped']) {
         reply = { kind: 'accepted', reply: { ok: true, result } };
-        const expected = result === 'already_stopped' && mode === 'multi' ? 'result.restart_wake_requested' : `result.restart_${result}`;
+        const expected = result === 'already_stopped' ? 'result.restart_wake_requested' : `result.restart_${result}`;
         const response = await invoke('restart-session', body(), expected);
         assert.equal(response.ok, true);
         assert.equal(response.result, result);
@@ -176,7 +176,7 @@ test('every Core action return path has a bilingual message key', async t => {
       }
       for (const reason of ['target_required', 'transition_open', 'restart_all_pending', 'fence_conflict', 'manual_restart_pending', 'identity_unavailable', 'not_ready', 'requests_unreadable', 'request_conflict', 'wake_failed']) {
         reply = { kind: 'rejected', reply: { ok: false, result: 'rejected', reason } };
-        const expected = mode === 'multi' && reason === 'wake_failed' ? 'result.restart_wake_failed' : 'result.restart_rejected';
+        const expected = reason === 'wake_failed' ? 'result.restart_wake_failed' : 'result.restart_rejected';
         const response = await invoke('restart-session', body(), expected);
         assert.equal(response.ok, false);
         assert.equal(response.reason, reason);
