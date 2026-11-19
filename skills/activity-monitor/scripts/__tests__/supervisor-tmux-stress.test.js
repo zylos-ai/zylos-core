@@ -1,3 +1,5 @@
+import { launchSession } from '../../../../cli/lib/runtime/launch-flow.js';
+import { connection, createSessionOps } from '../../../../cli/lib/runtime/session-ops.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -5,13 +7,12 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
-import { SessionAdapter } from '../../../../cli/lib/runtime/session-adapter.js';
+
 import { createSessionReader } from '../../../../cli/lib/session-state-reader-async.js';
 import { resolveSessionTarget } from '../../../../cli/lib/runtime/session-target.js';
 import { tmuxNameForGroup } from '../../../../cli/lib/session-group-paths.js';
 const exec = promisify(execFile);
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-class Adapter extends SessionAdapter { get runtimeId() { return 'claude'; } }
 // Required AGENTS tmux matrix real-path stress. Opt-in keeps ordinary unit runs short.
 // Ported from the validated stress scenario to the shared fixture + official runner.
 test('matrix real launch/delivery under same-socket create/kill churn', {
@@ -33,12 +34,13 @@ readline.createInterface({input:process.stdin}).on('line',line=>fs.appendFileSyn
 setInterval(()=>{},1000);
 `, { mode: 0o700 });
   const options = { socketPath: f.socketPath, binary: f.binary };
-  const adapter = new Adapter({ root: f.dir, env: { ...env, CLAUDE_BIN: runtime }, tmux: options });
+  const adapterOptions = { root: f.dir, env: { ...env, CLAUDE_BIN: runtime }, tmux: options };
+  const adapter = createSessionOps(adapterOptions);
   const reader = createSessionReader({ env, connectionOptions: options });
   const stats = { version: (await exec(f.binary, ['-V'])).stdout.trim(), launchRounds: 0, launches: 0, deliveryRounds: 0,
     sends: 0, reads: 0, churnCycles: 0, errors: [], serverLost: false, foreignLines: 0, missingLines: 0, duplicates: 0 };
   const live = async () => { const current = await tmux('display-message', '-p', '-t', '=keeper:', '#{pid}:#{start_time}'); assert.equal(current, server); };
-  const launch = async group => { await adapter.launch({ sessionGroup: group, runId: `run-${group}`, sessionMode: 'multi', launchConfig: { runtime: 'claude', mode: 'default' } }); stats.launches++; };
+  const launch = async group => { await launchSession({ runtime: 'claude', sessionGroup: group, runId: `run-${group}`, sessionMode: 'multi', launchConfig: { runtime: 'claude', mode: 'default' } }, adapterOptions); stats.launches++; };
   const read = async group => { const s = await reader.readSessionState(group, { freshnessMs: 1000 }); assert.equal(s.identity.present, true); assert.equal(s.identity.runId, `run-${group}`); stats.reads++; };
   let stopping = false;
   const churn = (async () => {
@@ -60,11 +62,11 @@ setInterval(()=>{},1000);
     await Promise.all([1, 2, 3, 4].map(async lane => {
       const group = `stress:lane${lane}`;
       for (let round = 1; round <= deliveryRounds; round++) {
-        const connection = await adapter.connection();
+        const connection = await connection(adapterOptions);
         try {
           const target = await resolveSessionTarget({ sessionGroup: group, connection });
           const text = `lane=${lane};seq=${round};literal='double" \\ $HOME #{pid} ;`;
-          await adapter.sendText({ target, connection, text });
+          await adapter.sendText({ runtime: 'claude', target, connection, text });
           await adapter.sendKeys({ target, connection, keys: ['Enter'] }); stats.sends++;
           await read(group);
         } finally { connection.close(); }

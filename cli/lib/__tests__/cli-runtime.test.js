@@ -12,7 +12,7 @@ function fixture(overrides = {}) {
   const deps = {
     read: () => { calls.push('read'); return { state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }; },
     mode: () => ({ mode: 'multi' }),
-    adapter: () => { calls.push('adapter'); return { checkAuth: async () => { calls.push('auth'); return { status: 'success' }; } }; },
+    runtimeFor: () => { calls.push('adapter'); return { auth: { checkAuth: async () => { calls.push('auth'); return { status: 'success' }; } } }; },
     exists: () => { calls.push('exists'); return true; },
     credentials: () => { calls.push('credentials'); return true; },
     hooksReady: () => { calls.push('hooks'); return { ready: true, pendingMigration: false }; },
@@ -32,7 +32,7 @@ test('runtime prechecks are ordered and stop before persistence', async () => {
     [{ exists: () => false }, 'RUNTIME_NOT_INSTALLED', ['adapter', 'read']],
     [{ read: () => ({ state: 'error' }) }, 'CONFIG_UNREADABLE', ['adapter']],
     [{ hooksReady: () => ({ ready: false, pendingMigration: false }) }, 'HOOKS_NOT_READY', ['adapter', 'read', 'exists']],
-    [{ adapter: () => ({ checkAuth: async () => ({ status: 'uncertain' }) }) }, 'AUTH_NOT_CONFIRMED', ['read', 'exists', 'hooks']],
+    [{ runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'uncertain' }) } }) }, 'AUTH_NOT_CONFIRMED', ['read', 'exists', 'hooks']],
   ]) {
     const f = fixture(override); const result = await f.run();
     assert.equal(result.error.code, code); assert.deepEqual(result.error.persisted, []); assert.deepEqual(f.calls, expected);
@@ -61,7 +61,7 @@ test('JSON credentials and failed precheck emit exactly the final envelope', asy
 });
 
 test('auth failure is rejected by the runtime command with exit code 1', async () => {
-  const f = fixture({ adapter: () => ({ checkAuth: async () => ({ status: 'failure' }) }) });
+  const f = fixture({ runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'failure' }) } }) });
   const original = console.log, previousExit = process.exitCode;
   console.log = () => {};
   try {
@@ -78,10 +78,10 @@ for (const target of ['claude', 'codex', 'agy']) {
     for (const [status, code] of [['failure', 'AUTH_FAILED'], ['uncertain', 'AUTH_NOT_CONFIRMED'], ['throws', 'AUTH_NOT_CONFIRMED']]) {
       const result = await executeRuntimeSwitch(target, ['--save-apikey', 'fixture-key'], {
         read: () => ({ state: 'ok', config: { runtime: target === 'claude' ? 'codex' : 'claude', session_mode: 'multi' } }),
-        adapter: () => ({ checkAuth: async () => {
+        runtimeFor: () => ({ auth: { checkAuth: async () => {
           if (status === 'throws') throw new Error('private probe error');
           return { status };
-        } }),
+        } } }),
         exists: () => true, credentials: () => true, hooksReady: () => ({ ready: true }),
         write: () => { assert.fail('must not save runtime after rejected or uncertain auth'); },
         observe: () => { assert.fail('must not observe sessions after failed precheck'); },
@@ -201,7 +201,7 @@ test('Claude setup-token save without a new base URL warns that the saved relay 
   ]) {
     let asked = 0;
     const deps = { read: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }), mode: () => ({ mode: 'multi' }),
-      adapter: () => ({ checkAuth: async () => ({ status: 'success' }) }), exists: () => true, credentials: () => true, baseUrl: () => true,
+      runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'success' }) } }), exists: () => true, credentials: () => true, baseUrl: () => true,
       hooksReady: () => ({ ready: true, pendingMigration: false }),
       write: () => ({ previous: { runtime: 'claude' }, config: { runtime: 'claude', session_mode: 'multi' }, changed: false }),
       observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }), identity: async () => ({ present: false }),

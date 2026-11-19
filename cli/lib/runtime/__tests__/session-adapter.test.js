@@ -1,14 +1,15 @@
+import { launchSession } from '../launch-flow.js';
+import { createSessionOps } from '../session-ops.js';
+import { checkAuth as claudeCheckAuth } from '../claude/auth.js';
+import { checkAuth as codexCheckAuth } from '../codex/auth.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { SessionAdapter } from '../session-adapter.js';
-import { buildRuntimeArgs, validateLaunchConfig, writeSessionLaunchScript, runtimeHelpAsync } from '../session-command.js';
-import { ClaudeAdapter } from '../claude.js';
-import { CodexAdapter } from '../codex.js';
 
-class Adapter extends SessionAdapter { get runtimeId() { return 'claude'; } }
+import { buildRuntimeArgs, validateLaunchConfig, writeSessionLaunchScript, runtimeHelpAsync } from '../session-command.js';
+
 function fixture({present = true, runId = 'r', openError, runtime = 'claude'} = {}) {
   const calls = [], target = {present, runId, runtime, tmuxSessionId:'$7', paneId:'%8'};
   const connection = {cleanupBuffer:async name => calls.push(['delete-buffer','-b',name]), close:() => calls.push(['close']), command:async argv => { calls.push(argv); if (argv[0] === 'kill-session') target.present = false; if (argv[0] === 'display-message') {if(!target.present)throw error('TARGET_GONE');return '$7';} return 'screen'; }};
@@ -18,8 +19,9 @@ function fixture({present = true, runId = 'r', openError, runtime = 'claude'} = 
     revalidateSessionTarget:async () => { calls.push(['validate']); },
     readTargetRuntime:async () => { throw Error('isRunning must use pane observation'); },
   };
-  const adapter = new Adapter({dependencies});
-  return {adapter, dependencies, target, connection, calls};
+  const options = { dependencies };
+  const adapter = createSessionOps(options);
+  return {adapter, options, dependencies, target, connection, calls};
 }
 const error = (code,cause) => Object.assign(new Error(code),{code,cause});
 
@@ -41,14 +43,14 @@ for (const bracketedPaste of [false, true]) test(`multiline text preserves brack
     assert.equal((await fs.stat(file)).mode & 0o777,0o600);
     assert.equal(load[2],paste[paste.indexOf('-b')+1]);
   };
-  await f.adapter.sendText({target:f.target,connection:f.connection,text:'one\ntwo',bracketedPaste});
+  await f.adapter.sendText({ runtime: 'claude', target:f.target,connection:f.connection,text:'one\ntwo',bracketedPaste});
   assert.deepEqual(f.calls.map(c=>c[0]),['validate','batch','delete-buffer']);
   await assert.rejects(fs.stat(file),{code:'ENOENT'});
 });
 test('changed target refuses load and paste and still cleans temporary data',async () => {
   const f=fixture();f.connection.commandBatch=async()=>assert.fail('No batch after failed validation');
   f.dependencies.revalidateSessionTarget=async()=>{throw error('RUNID_MISMATCH');};
-  await assert.rejects(f.adapter.sendText({target:f.target,connection:f.connection,text:'hello'}),{code:'RUNID_MISMATCH'});
+  await assert.rejects(f.adapter.sendText({ runtime: 'claude', target:f.target,connection:f.connection,text:'hello'}),{code:'RUNID_MISMATCH'});
   assert.equal(f.calls.some(c=>c[0]==='load-buffer'||c[0]==='paste-buffer'),false);
 });
 test('keystroke options and command syntax are rejected before any target I/O',async()=>{
@@ -115,34 +117,34 @@ test('launch script is private, execs runtime, and omits group in single',async(
 test('auth checks use injected home/environment/executor without production auth',async()=> {
   const home=await fs.mkdtemp(path.join(os.tmpdir(),'session-runtime-auth-')); const env={HOME:home,PATH:'/empty',CODEX_HOME:path.join(home,'codex')};
   try {
-    const claude=new ClaudeAdapter({root:home,env,execFile:async (_,__,options)=>{assert.equal(options.env.HOME,home);return {stdout:'ok'};}});
-    assert.equal((await claude.checkAuth()).status,'success');
-    const codex=new CodexAdapter({env,execFile:async (_,__,options)=>{assert.equal(options.env,env);return {stderr:'Not logged in'};}});
-    assert.equal((await codex.checkAuth()).status,'failure');
+    const claudeOptions = {root:home,env,execFile:async (_,__,options)=>{assert.equal(options.env.HOME,home);return {stdout:'ok'};}};
+    assert.equal((await claudeCheckAuth(claudeOptions)).status,'success');
+    const codexOptions = {env,execFile:async (_,__,options)=>{assert.equal(options.env,env);return {stderr:'Not logged in'};}};
+    assert.equal((await codexCheckAuth(codexOptions)).status,'failure');
   } finally {await fs.rm(home,{recursive:true,force:true});}
 });
 test('launch rejects conflicts before binary/config, then missing binary before config',async()=> {
-  const f=fixture(); f.adapter.options.paths={tmuxNameForGroup:()=> 'isolated'};
+  const f=fixture(); f.options.paths={tmuxNameForGroup:()=> 'isolated'};
   let lookedUp=false;
-  f.adapter.options.runtimeExecutable=()=>{lookedUp=true;throw error('RUNTIME_NOT_INSTALLED');};
+  f.options.runtimeExecutable=()=>{lookedUp=true;throw error('RUNTIME_NOT_INSTALLED');};
   const input={sessionGroup:null,runId:'r',sessionMode:'single',launchConfig:null};
-  await assert.rejects(f.adapter.launch(input),{code:'NAME_CONFLICT'});
+  await assert.rejects(launchSession({ runtime: 'claude', ...input }, f.options),{code:'NAME_CONFLICT'});
   assert.equal(lookedUp,false);
   f.target.present=false;
-  await assert.rejects(f.adapter.launch(input),{code:'RUNTIME_NOT_INSTALLED'});
-  f.adapter.options.runtimeExecutable=()=>'/fake';
-  await assert.rejects(f.adapter.launch(input),{code:'MODEL_CONFIG_REJECTED'});
+  await assert.rejects(launchSession({ runtime: 'claude', ...input }, f.options),{code:'RUNTIME_NOT_INSTALLED'});
+  f.options.runtimeExecutable=()=>'/fake';
+  await assert.rejects(launchSession({ runtime: 'claude', ...input }, f.options),{code:'MODEL_CONFIG_REJECTED'});
   assert.equal(f.calls.some(c=>c[0]==='new-session'),false);
 });
 test('launch preflight failures retain sanitized timing and close the executor',async()=>{
   const f=fixture({present:false});
-  f.adapter.options.paths={tmuxNameForGroup:()=> 'isolated'};
+  f.options.paths={tmuxNameForGroup:()=> 'isolated'};
   f.dependencies.observeSessionTarget=async()=>{
     await new Promise(resolve=>setTimeout(resolve,20));
     throw new Error('private preflight detail');
   };
-  await assert.rejects(f.adapter.launch({sessionGroup:null,runId:'r',sessionMode:'single',
-    launchConfig:{runtime:'claude',mode:'default'}}),error=>{
+  await assert.rejects(launchSession({ runtime: 'claude', sessionGroup:null,runId:'r',sessionMode:'single',
+    launchConfig:{runtime:'claude',mode:'default'}}, f.options),error=>{
     assert.equal(error.code,'LAUNCH_FAILED');
     const timing=error.launchTiming;
     assert.equal(timing.last_phase,'preflight');
@@ -157,8 +159,8 @@ test('launch preflight failures retain sanitized timing and close the executor',
 });
 test('launch preflight commands receive the shared remaining deadline',async()=> {
   const f=fixture({present:false});
-  f.adapter.options.paths={tmuxNameForGroup:()=> 'isolated'};
-  f.adapter.options.runtimeExecutable=()=>{throw error('RUNTIME_NOT_INSTALLED');};
+  f.options.paths={tmuxNameForGroup:()=> 'isolated'};
+  f.options.runtimeExecutable=()=>{throw error('RUNTIME_NOT_INSTALLED');};
   f.dependencies.openTmuxConnection=async options=>{
     assert.ok(options.timeoutMs>9000 && options.timeoutMs<=10000);
     return f.connection;
@@ -171,13 +173,13 @@ test('launch preflight commands receive the shared remaining deadline',async()=>
     await connection.command(['list-sessions']);
     return f.target;
   };
-  await assert.rejects(f.adapter.launch({sessionGroup:null,runId:'r',sessionMode:'single',
-    launchConfig:{runtime:'claude',mode:'default'}}),{code:'RUNTIME_NOT_INSTALLED'});
+  await assert.rejects(launchSession({ runtime: 'claude', sessionGroup:null,runId:'r',sessionMode:'single',
+    launchConfig:{runtime:'claude',mode:'default'}}, f.options),{code:'RUNTIME_NOT_INSTALLED'});
 });
 test('unreadable executable identity fails preflight before creation',async()=> {
-  const f=fixture({present:false});f.adapter.options.paths={tmuxNameForGroup:()=> 'isolated'};
-  f.adapter.options.runtimeExecutable=()=>'/fake';
-  await assert.rejects(f.adapter.launch({sessionGroup:null,runId:'r',sessionMode:'single',launchConfig:{runtime:'claude',mode:'default'}}),{code:'LAUNCH_FAILED'});
+  const f=fixture({present:false});f.options.paths={tmuxNameForGroup:()=> 'isolated'};
+  f.options.runtimeExecutable=()=>'/fake';
+  await assert.rejects(launchSession({ runtime: 'claude', sessionGroup:null,runId:'r',sessionMode:'single',launchConfig:{runtime:'claude',mode:'default'}}, f.options),{code:'LAUNCH_FAILED'});
   assert.equal(f.calls.some(c=>c[0]==='new-session'),false);
 });
 
@@ -230,10 +232,10 @@ test('runtime capability query honors the remaining launch timeout',async t=>{
 
 test('launch awaits runtime help and classifies invalid launch arguments as a launch failure',async()=>{
   const f=fixture({present:false});
-  f.adapter.options.paths={tmuxNameForGroup:()=> 'isolated'};
-  f.adapter.options.runtimeExecutable=()=>'/fake';
+  f.options.paths={tmuxNameForGroup:()=> 'isolated'};
+  f.options.runtimeExecutable=()=>'/fake';
   let queried=false, helpOptions;
-  f.adapter.options.runtimeHelp=async(_command,_env,options)=>{
+  f.options.runtimeHelp=async(_command,_env,options)=>{
     helpOptions=options;
     await new Promise(resolve=>setImmediate(resolve));
     queried=true;
@@ -246,15 +248,14 @@ test('launch awaits runtime help and classifies invalid launch arguments as a la
     {sessionGroup:'group',runId:'r',sessionMode:'single'},
   ]){
     queried=false; helpOptions=undefined;
-    await assert.rejects(f.adapter.launch({...input,launchConfig}),{code:'LAUNCH_FAILED',cause:'error'});
+    await assert.rejects(launchSession({ runtime: 'claude', ...input,launchConfig}, f.options),{code:'LAUNCH_FAILED',cause:'error'});
     assert.equal(queried,true);
     assert.ok(Number.isInteger(helpOptions?.timeoutMs) && helpOptions.timeoutMs > 0 && helpOptions.timeoutMs <= 10000);
   }
-  f.adapter.options.runtimeHelp=()=>'';
-  await assert.rejects(f.adapter.launch({sessionGroup:null,runId:'r',sessionMode:'single',launchConfig}),{code:'MODEL_CONFIG_REJECTED'});
+  f.options.runtimeHelp=()=>'';
+  await assert.rejects(launchSession({ runtime: 'claude', sessionGroup:null,runId:'r',sessionMode:'single',launchConfig}, f.options),{code:'MODEL_CONFIG_REJECTED'});
   assert.equal(f.calls.some(c=>c[0]==='new-session'),false);
 });
-
 
 test('stop cannot infer session absence from a pane-level observation failure',async()=>{
   const f=fixture();

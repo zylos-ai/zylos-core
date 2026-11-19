@@ -239,7 +239,7 @@ async function saveEverything() {
   assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + secret() }, quiet), true);
   assert.equal(persistInitCredentials({ subscriptionLogin: true, claudeBaseUrl: officialUrl }, quiet), true);
   const auth = await executeAuth(['claude'], { exists: () => true, spawn: () => ({ status: 0 }),
-    adapter: () => ({ checkAuth: async () => ({ status: 'success' }) }), notifyRecovery: () => true });
+    runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'success' }) } }), notifyRecovery: () => true });
   assert.equal(auth.ok, true);
   assert.equal(syncClaudeRelayTraffic(), true);
 }
@@ -268,7 +268,7 @@ for (const [leftover, expected] of [[true, 'on'], [false, 'off']]) {
     seedRelayFlagOn();
     const result = await executeAuth(['claude'], { exists: () => true,
       spawn: () => { fs.writeFileSync(loginFile, JSON.stringify({ claudeAiOauth: { refreshToken: 'synthetic-refresh' } })); return { status: 0 }; },
-      adapter: () => ({ checkAuth: async () => ({ status: 'success' }) }), notifyRecovery: () => true });
+      runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'success' }) } }), notifyRecovery: () => true });
     assert.equal(result.ok, true);
     assert.deepEqual(relayFlagState(), leftover ? RELAY_ON : RELAY_OFF);
   });
@@ -377,7 +377,7 @@ const PRIVATE = 0o600;
 // zylos runtime with its real credential and base URL saves; everything after the save is stubbed.
 const runtimeDeps = (target = 'claude', changes = {}) => ({
   read: () => ({ state: 'ok', config: { runtime: target, session_mode: 'multi' } }), mode: () => ({ mode: 'multi' }),
-  adapter: () => ({ checkAuth: async () => ({ status: 'success' }) }), exists: () => true,
+  runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'success' }) } }), exists: () => true,
   hooksReady: () => ({ ready: true, pendingMigration: false }),
   write: () => ({ previous: { runtime: target }, config: { runtime: target, session_mode: 'multi' }, changed: false }),
   observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }), identity: async () => ({ present: false }), ...changes });
@@ -387,7 +387,7 @@ const overrideWarnings = result => {
   return result.data.warnings.filter(item => item.code === OVERRIDE);
 };
 const loginSave = (runtime = 'claude') => executeAuth([runtime], { exists: () => true, spawn: () => ({ status: 0 }),
-  adapter: () => ({ checkAuth: async () => ({ status: 'success' }) }), notifyRecovery: () => true });
+  runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'success' }) } }), notifyRecovery: () => true });
 
 test('zylos runtime --save-apikey: a different settings.json API key is named once, without either value', async () => {
   const hand = handSecret(), saved = 'sk-ant-api03-' + secret();
@@ -491,7 +491,7 @@ test('missing, env-less and unparseable settings.json print nothing and every sa
 // failure result still carries the warning (error.warnings) and the text output
 // prints it before the error.
 for (const [name, changes, code] of [
-  ['the auth probe fails', { adapter: () => ({ checkAuth: async () => ({ status: 'failure' }) }) }, 'AUTH_FAILED'],
+  ['the auth probe fails', { runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'failure' }) } }) }, 'AUTH_FAILED'],
   ['hooks are not ready', { hooksReady: () => ({ ready: false }) }, 'HOOKS_NOT_READY'],
   ['the config write fails', { write: () => { throw Object.assign(new Error('config write failed'), { code: 'CONFIG_WRITE_FAILED' }); } }, 'CONFIG_WRITE_FAILED'],
 ]) test(`zylos runtime --save-apikey keeps the settings.json warning when ${name} after the save`, async () => {
@@ -511,7 +511,7 @@ for (const [name, changes, code] of [
 test('zylos runtime text output prints the settings.json warning before the error when the probe fails', async () => {
   const hand = handSecret(), saved = 'sk-ant-api03-' + secret();
   const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: hand } }), PRIVATE);
-  const failing = runtimeDeps('claude', { adapter: () => ({ checkAuth: async () => ({ status: 'failure' }) }) });
+  const failing = runtimeDeps('claude', { runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'failure' }) } }) });
   const errors = [], logs = [], original = { error: console.error, log: console.log }, exitCode = process.exitCode;
   console.error = line => errors.push(String(line)); console.log = line => logs.push(String(line));
   let result;
@@ -532,7 +532,7 @@ test('Codex saves never report the Claude settings.json warning', async () => {
   const saved = await runtimeSave(['--save-apikey', 'sk-codex-' + secret()], { target: 'codex' });
   assert.equal(saved.ok, true, JSON.stringify(saved.error));
   assert.equal(saved.data.warnings.some(item => item.code === OVERRIDE), false, 'zylos runtime codex --save-apikey');
-  const failed = await runtimeSave(['--save-apikey', 'sk-codex-' + secret()], { target: 'codex', adapter: () => ({ checkAuth: async () => ({ status: 'failure' }) }) });
+  const failed = await runtimeSave(['--save-apikey', 'sk-codex-' + secret()], { target: 'codex', runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'failure' }) } }) });
   assert.equal(failed.ok, false);
   assert.equal((failed.error.warnings ?? []).some(item => item.code === OVERRIDE), false, 'failed zylos runtime codex --save-apikey');
   const login = await loginSave('codex');
@@ -559,7 +559,7 @@ test('init with a subscription login only (no base URL) names an API key left in
 // there that overrides the values the check used (read only), even though
 // nothing was saved yet. Codex and successful checks are unchanged.
 const failedLogin = (runtime = 'claude', status = 'failure') => executeAuth([runtime], { exists: () => true, spawn: () => ({ status: 0 }),
-  adapter: () => ({ checkAuth: async () => ({ status }) }), notifyRecovery: () => true });
+  runtimeFor: () => ({ auth: { checkAuth: async () => ({ status }) } }), notifyRecovery: () => true });
 const failureOverrides = result => {
   assert.equal(result.ok, false);
   return (result.error.warnings ?? []).filter(item => item.code === OVERRIDE);
@@ -586,7 +586,7 @@ test('zylos auth claude text output prints the settings.json warning before the 
   const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: hand } }));
   const errors = [], logs = [], original = { error: console.error, log: console.log }, exitCode = process.exitCode;
   console.error = line => errors.push(String(line)); console.log = line => logs.push(String(line));
-  try { await authCommand(['claude'], { exists: () => true, spawn: () => ({ status: 0 }), adapter: () => ({ checkAuth: async () => ({ status: 'failure' }) }) }); }
+  try { await authCommand(['claude'], { exists: () => true, spawn: () => ({ status: 0 }), runtimeFor: () => ({ auth: { checkAuth: async () => ({ status: 'failure' }) } }) }); }
   finally { console.error = original.error; console.log = original.log; assert.equal(process.exitCode, 1, 'the exit code stays 1'); process.exitCode = exitCode; }
   const warning = errors.findIndex(line => line.startsWith(`Warning [${OVERRIDE}]: `));
   assert.ok(warning >= 0, 'the warning is printed on stderr');

@@ -1,3 +1,4 @@
+import { checkAuth } from '../agy/auth.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -5,7 +6,6 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { execFile } from 'node:child_process';
-import { AgyAdapter } from '../agy.js';
 
 // Integration boundary: the real curl transport reaches a loopback-only HTTP
 // proxy selected by the saved launch environment; no Gemini request is sent.
@@ -44,15 +44,15 @@ test('agy auth uses the saved HTTPS proxy without exposing its key in CONNECT or
   console.log('isolated auth proxy paths', JSON.stringify({ ...Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(key => [key, env[key]])), proxy: savedProxy }));
   await fs.writeFile(path.join(root, '.env'), `GEMINI_API_KEY=isolated-fake-key\nHTTPS_PROXY=${savedProxy}\n`);
   let requests = 0;
-  const adapter = new AgyAdapter({ root, env, execFile: (command, args, options, callback) => {
+  const adapterOptions = { root, env, execFile: (command, args, options, callback) => {
     requests++;
     assert.equal(options.env.HTTPS_PROXY, savedProxy);
     assert.equal(JSON.stringify(args).includes('isolated-fake-key'), false);
     // If proxy handling regresses, the direct path still resolves only to
     // loopback instead of making a real request to the public API.
     return execFile(command, [...args, '--resolve', 'generativelanguage.googleapis.com:443:127.0.0.1', '--connect-timeout', '1', '--max-time', '2'], { ...options, timeout: 2500 }, callback);
-  } });
-  const result = await adapter.checkAuth();
+  } };
+  const result = await checkAuth(adapterOptions);
   assert.deepEqual(result, { status: 'uncertain', reason: 'http_probe_network_error' });
   assert.equal(requests, 1);
   assert.match(connect, /^CONNECT generativelanguage\.googleapis\.com:443 HTTP\/1\.1\r\n/);

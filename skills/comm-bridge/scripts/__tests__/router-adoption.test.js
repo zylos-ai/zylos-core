@@ -198,10 +198,10 @@ test('a launch finishing after its orphan row was pruned is adopted even above c
   const launch = deferred(); t.after(() => launch.resolve());
   const f = routerFixture(t, { poolSize: 1 }); f.put('origin'); f.add('a');
   let input;
-  f.deps.getSessionAdapter = () => ({
+  f.deps.session = {
     launch: async value => { input = value; await launch.promise; ready(f, value.sessionGroup, value.runId); },
     stop: async () => assert.fail('the ready late launch must not be stopped'),
-  });
+  };
   await f.create().initialize();
   // The first tick observes the absent pending group; the second starts it.
   for (let round = 0; round < 2; round++) { f.router.tick(); await pump(); }
@@ -222,10 +222,10 @@ test('adopting a late run protects its row from a newer conflicting activation r
   const launch = deferred(); t.after(() => launch.resolve());
   const f = routerFixture(t, { poolSize: 1 }); f.put('origin'); const message = f.add('a');
   let input;
-  f.deps.getSessionAdapter = () => ({
+  f.deps.session = {
     launch: async value => { input = value; await launch.promise; throw Object.assign(new Error('late session already exists'), { code: 'NAME_CONFLICT' }); },
     stop: async () => assert.fail('name conflict must not stop the adopted run'),
-  });
+  };
   await f.create().initialize();
   // The first tick observes the absent pending group; the second starts it.
   for (let round = 0; round < 2; round++) { f.router.tick(); await pump(); }

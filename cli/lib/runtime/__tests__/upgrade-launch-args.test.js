@@ -1,3 +1,4 @@
+import { seedCodexTrustFixture } from '../../../../test/helpers/codex-trust.js';
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -23,7 +24,8 @@ mock.module('../session-launch.js', { namedExports: {
   ...launch,
   settleLaunch: async () => ({ launched: true }),
 } });
-const { SessionAdapter } = await import('../session-adapter.js');
+
+const { launchSession } = await import('../launch-flow.js');
 
 test('throwing trusted discovery builds an isolated recovery launch', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'upgrade-discovery-'));
@@ -37,21 +39,23 @@ test('throwing trusted discovery builds an isolated recovery launch', async t =>
   context = undefined;
   captured = undefined;
   let closed = false;
-  class Adapter extends SessionAdapter { get runtimeId() { return 'codex'; } }
-  const adapter = new Adapter({
+  const codex = path.join(root, 'codex');
+  await fs.writeFile(codex, '#!/bin/sh\necho codex-fixture\n', { mode: 0o700 });
+  seedCodexTrustFixture({ root, home: root });
+  const adapterOptions = {
     root,
     env: { HOME: root, PATH: '/empty' },
     paths: { tmuxNameForGroup: () => 'isolated' },
-    runtimeExecutable: () => '/unused-runtime',
+    runtimeExecutable: () => codex,
     runtimeHelp: async () => ' --no-daemon ',
     dependencies: {
       openTmuxConnection: async () => ({ close: () => { closed = true; } }),
       observeSessionTarget: async () => ({ present: false }),
     },
-  });
+  };
   const launchConfig = { runtime: 'codex', mode: 'default' };
   const ordinary = commands.buildRuntimeArgs('codex', launchConfig, { root, help: ' --no-daemon ' });
-  assert.deepEqual(await adapter.launch({ sessionGroup: null, runId: 'isolated-run', sessionMode: 'single', launchConfig }),
+  assert.deepEqual(await launchSession({ runtime: 'codex', sessionGroup: null, runId: 'isolated-run', sessionMode: 'single', launchConfig }, adapterOptions),
     { launched: true });
   assert.equal(closed, true);
   assert.deepEqual(captured.args.slice(0, -1), ordinary.slice(0, -1));

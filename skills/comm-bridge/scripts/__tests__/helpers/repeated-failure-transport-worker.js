@@ -26,15 +26,15 @@ f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(r
 f.db.recordRunEnd('a', { runId: 'old', reason: 'unexpected' });
 const config = { runtime: 'claude', session_mode: 'multi', alert_target: 'telegram:fixture-owner' };
 const logs = [];
-const adapter = f.deps.getSessionAdapter;
+const adapter = f.deps.session;
 const deps = { ...f.deps, env: process.env,
   readZylosConfigStrict: () => ({ state: 'ok', config }),
   diagnostics: { diagnostic: f.deps.diagnostic, maintain() {} },
   log: message => { if (logs.length < 20) logs.push(String(message)); },
-  getSessionAdapter: runtime => ({ ...adapter(runtime), launch: async input => {
+  session: { ...adapter, launch: async input => {
     f.calls.push(['launch', input]);
     throw Object.assign(Error('private launch detail'), { code: 'TRANSPORT_FAILURE' });
-  } }),
+  } },
 };
 delete deps.alert;
 const { poolSize, ...options } = f.options;

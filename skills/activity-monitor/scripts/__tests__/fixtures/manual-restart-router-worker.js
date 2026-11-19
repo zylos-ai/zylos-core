@@ -7,7 +7,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createDispatcher } from '../../../../comm-bridge/scripts/router/factory.js';
 import { createStore } from '../../../../comm-bridge/scripts/c4-v2-store.js';
 import { createSessionReader } from '../../../../../cli/lib/session-state-reader-async.js';
-import { getSessionAdapter } from '../../../../../cli/lib/runtime/index.js';
+import { createSessionOps } from '../../../../../cli/lib/runtime/session-ops.js';
+import { launchSession } from '../../../../../cli/lib/runtime/launch-flow.js';
 const Database = createRequire(new URL('../../../../comm-bridge/package.json', import.meta.url))('better-sqlite3');
 const [root, socketPath, binary, mode, scenario] = process.argv.slice(2);
 const database = new Database(path.join(root, 'comm-bridge/c4.db'));
@@ -22,24 +23,23 @@ if (fs.existsSync(path.join(root, 'activity-monitor/pool-capacity.json'))) throw
 const env = { ...process.env, HOME: root, ZYLOS_DIR: root, ZYLOS_SESSION_POOL_SIZE: '4' }, tmux = { socketPath, binary, configFile: '/dev/null' };
 const reader = createSessionReader({ env, connectionOptions: tmux });
 const trace = (kind, fields = {}) => fs.appendFileSync(path.join(root, 'manual-router.jsonl'), JSON.stringify({ kind, ...fields }) + '\n');
+const sessionOptions = { env, root, tmux, runtimeExecutable: () => '/bin/false' };
+const session = createSessionOps(sessionOptions);
+const paste = session.sendText, keys = session.sendKeys, launch = input => launchSession(input, sessionOptions);
+session.sendText = async input => {
+  await paste(input); trace('paste', { runId: input.target.runId, text: input.text });
+  if (scenario === 'inflight' && !held && input.target.runId === 'run-1') {
+    held = true; process.send({ barrier: 'after-real-paste', runId: input.target.runId });
+    await new Promise(resolve => { releasePaste = resolve; });
+  }
+};
+session.sendKeys = async input => { trace('keys-attempt', { runId: input.target.runId, keys: input.keys }); await keys(input); trace('keys-sent', { runId: input.target.runId, keys: input.keys }); };
+session.launch = async input => { trace('launch', { input }); try { const result = await launch(input); trace('launch-return', { input, result }); return result; } catch(error) { trace('launch-error', { input, code: error.code, message: error.message }); throw error; } };
 const router = createDispatcher({ env, db, now, readSessionMode: () => ({ mode, keyPresent: true }),
   readZylosConfigStrict: () => ({ state: 'ok', config }),
   readSessionState: async group => ({ identity: await reader.readLiveIdentity(group), status: { valid: true, value: { state: 'idle', idle_seconds: 10, health: 'ok', proc: { alive: true } } } }),
   readRuntimeHealth: () => ({ missing: true }),
-  getSessionAdapter: runtime => {
-    const adapter = getSessionAdapter(runtime, { env, root, tmux, runtimeExecutable: () => '/bin/false' });
-    const paste = adapter.sendText.bind(adapter), keys = adapter.sendKeys.bind(adapter), launch = adapter.launch.bind(adapter);
-    adapter.sendText = async input => {
-      await paste(input); trace('paste', { runId: input.target.runId, text: input.text });
-      if (scenario === 'inflight' && !held && input.target.runId === 'run-1') {
-        held = true; process.send({ barrier: 'after-real-paste', runId: input.target.runId });
-        await new Promise(resolve => { releasePaste = resolve; });
-      }
-    };
-    adapter.sendKeys = async input => { trace('keys-attempt', { runId: input.target.runId, keys: input.keys }); await keys(input); trace('keys-sent', { runId: input.target.runId, keys: input.keys }); };
-    adapter.launch = async input => { trace('launch', { input }); try { const result = await launch(input); trace('launch-return', { input, result }); return result; } catch(error) { trace('launch-error', { input, code: error.code, message: error.message }); throw error; } };
-    return adapter;
-  },
+  session,
   sleep: async () => {}, notifyDelivered: data => trace('notify', data),
   prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
   handleExpired: async () => {}, formatConversation: row => row.content,

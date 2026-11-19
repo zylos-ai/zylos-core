@@ -50,13 +50,13 @@ test('factory sends a due supplementary Enter to only the settled message group'
     openTmuxConnection: async () => ({ command: async args => args.at(-1) === '#{cursor_x}' ? '2' : '0', close: async () => {} }),
     resolveSessionTarget: async ({ sessionGroup }) => ({ ...scenes.get(sessionGroup), sessionGroup, sessionId: `$${sessionGroup}` }),
     revalidateSessionTarget: async () => {},
-    getSessionAdapter: () => ({
+    session: {
       sendText: async ({ target, text }) => { pastes.push({ group: target.sessionGroup, text }); },
       sendKeys: async ({ target, keys: sent }) => { keys.push({ group: target.sessionGroup, keys: sent, status: ledger().status }); },
       captureScreen: async () => '❯ ',
       launch: async () => assert.fail('READY fixture must not launch'),
       stop: async () => assert.fail('READY fixture must not stop a runtime'),
-    }),
+    },
     sleep: async () => {}, notifyDelivered() {},
     findLegacySessions: async () => [], advanceLegacy: async () => {}, prepareSingle: async () => {},
     submit: async () => assert.fail('READY fixture must not start a session'),

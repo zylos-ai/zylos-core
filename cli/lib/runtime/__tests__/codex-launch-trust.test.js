@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { SessionAdapter } from '../session-adapter.js';
+import * as settlement from '../session-launch.js';
 import * as configLock from '../../config-lock.js';
 import { launchEnvironment } from '../session-command.js';
 import { codexHooksPath, codexTrustMarkerPath, isCodexTrustValid, readHooksState } from '../../codex-hooks.js';
@@ -15,10 +15,14 @@ mock.module('../../config-lock.js', { namedExports: {
   ...configLock,
   detectConfigLockCapability: (...args) => lockDetection.detect(...args),
 } });
-const { CodexAdapter } = await import('../codex.js');
+mock.module('../session-launch.js', { namedExports: {
+  ...settlement,
+  settleLaunch: async ({ script }) => { script.cleanup(); return { started: true }; },
+} });
+const { launchSession } = await import('../launch-flow.js');
 
 const version = 'codex-cli 0.146.0';
-const launchArgs = { sessionGroup: null, runId: 'trust-regression', sessionMode: 'single', launchConfig: { runtime: 'codex', mode: 'default' } };
+const launchArgs = { runtime: 'codex', sessionGroup: null, runId: 'trust-regression', sessionMode: 'single', launchConfig: { runtime: 'codex', mode: 'default' } };
 
 // Longest report: one stderr line (so its tail is plain to predict) and a message, each past its limit.
 const LONG_STDERR = Array.from({ length: 120 }, (_, i) => `chunk${String(i).padStart(3, '0')}`).join(' ') + ' api_key=SECRETLONG\n';
@@ -90,8 +94,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   const env = { ...process.env, HOME: home, ZYLOS_DIR: root, CODEX_BIN: executable, FAKE_CODEX_LOG: log };
   delete env.CODEX_HOME;
   delete env.FAKE_CODEX_FAIL;
-  const adapter = new CodexAdapter({ root, env });
-  return { dir, home, root, manifest, log, env, executable, adapter,
+  const options = { root, env, runtimeHelp: async () => ' --no-daemon ' };
+  return { dir, home, root, manifest, log, env, executable, options,
     events: () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [],
     valid: () => isCodexTrustValid({ zylosDir: root, homeDir: home, codexVersion: version }),
   };
@@ -115,21 +119,26 @@ function assertDidNotStart(error, stderrLines, report = SHORT_REPORT) {
   assert.equal(stderrLines.some(line => line.includes('SECRET')), false);
 }
 
-function baseLaunch(t, check = () => {}) {
+function tmuxPreflight(f, check = () => {}) {
   const calls = [];
-  t.mock.method(SessionAdapter.prototype, 'launch', async function (args) {
-    check(this); calls.push(args); return { started: true };
-  });
+  f.options.dependencies = {
+    openTmuxConnection: async () => {
+      check();
+      calls.push('open');
+      return { close() {} };
+    },
+    observeSessionTarget: async () => ({ present: false }),
+  };
   return calls;
 }
 
 test('Codex launch refreshes changed hooks before the tmux launch boundary and skips valid trust', async t => {
   const f = fixture(t);
-  const calls = baseLaunch(t, () => assert.equal(f.valid().valid, true, 'trust must be current before runtime launch'));
-  await f.adapter.launch(launchArgs);
+  const calls = tmuxPreflight(f, () => assert.equal(f.valid().valid, true, 'trust must be current before runtime launch'));
+  await launchSession(launchArgs, f.options);
   const marker = fs.readFileSync(codexTrustMarkerPath(f.root), 'utf8');
   assert.equal(f.events().filter(e => e.event === 'start').length, 1);
-  await f.adapter.launch(launchArgs);
+  await launchSession(launchArgs, f.options);
   assert.equal(f.events().filter(e => e.event === 'start').length, 1, 'valid marker skips app-server');
   assert.equal(fs.readFileSync(codexTrustMarkerPath(f.root), 'utf8'), marker);
 
@@ -137,7 +146,7 @@ test('Codex launch refreshes changed hooks before the tmux launch boundary and s
   hooks.hooks.SessionStart.push({ hooks: [{ type: 'command', command: 'echo new-user-hook' }] });
   fs.writeFileSync(codexHooksPath(f.root), JSON.stringify(hooks));
   assert.equal(f.valid().reason, 'hooks_json_changed');
-  await f.adapter.launch(launchArgs);
+  await launchSession(launchArgs, f.options);
   assert.equal(f.events().filter(e => e.event === 'start').length, 2);
   assert.notEqual(fs.readFileSync(codexTrustMarkerPath(f.root), 'utf8'), marker);
   assert.equal(calls.length, 3);
@@ -145,17 +154,17 @@ test('Codex launch refreshes changed hooks before the tmux launch boundary and s
 
 test('Codex trust failure rejects launch before any tmux/runtime launch', async t => {
   const f = fixture(t);
-  const calls = baseLaunch(t);
+  const calls = tmuxPreflight(f);
   f.env.FAKE_CODEX_FAIL = 'long';
   const stderrLines = [];
   const write = t.mock.method(process.stderr, 'write', chunk => { stderrLines.push(String(chunk)); return true; });
-  await assert.rejects(f.adapter.launch(launchArgs), error => { assertDidNotStart(error, stderrLines, LONG_REPORT); return true; });
+  await assert.rejects(launchSession(launchArgs, f.options), error => { assertDidNotStart(error, stderrLines, LONG_REPORT); return true; });
   write.mock.restore();
   assert.equal(calls.length, 0);
   assert.equal(fs.existsSync(codexTrustMarkerPath(f.root)), false);
   assert.deepEqual(f.events().map(e => e.event), ['start', 'failure']);
   delete f.env.FAKE_CODEX_FAIL;
-  await f.adapter.launch(launchArgs);
+  await launchSession(launchArgs, f.options);
   assert.equal(calls.length, 1, 'a subsequent launch can retry after a trust failure');
   assert.equal(f.valid().valid, true);
   assert.deepEqual(f.events().map(e => e.event), ['start', 'failure', 'start', 'end']);
@@ -163,11 +172,11 @@ test('Codex trust failure rejects launch before any tmux/runtime launch', async 
 
 test('a trust report that ends a sentence is joined without a doubled full stop', async t => {
   const f = fixture(t);
-  baseLaunch(t);
+  tmuxPreflight(f);
   f.env.FAKE_CODEX_FAIL = 'hashless';
   const stderrLines = [];
   t.mock.method(process.stderr, 'write', chunk => { stderrLines.push(String(chunk)); return true; });
-  await assert.rejects(f.adapter.launch(launchArgs), error => {
+  await assert.rejects(launchSession(launchArgs, f.options), error => {
     assert.equal(error.code, 'LAUNCH_FAILED');
     assert.equal(error.message, 'Codex did not start: Codex hook trust failed (missing_current_hash): Codex CLI "codex-cli 0.146.0" ' +
       'does not report currentHash in hooks/list (field added in Codex CLI 0.129.0). Upgrade Codex CLI to 0.129.0 or later ' +
@@ -179,24 +188,24 @@ test('a trust report that ends a sentence is joined without a doubled full stop'
 
 test('Codex trust uses the launch environment and custom CODEX_HOME without writing default home config', async t => {
   const f = fixture(t);
-  const calls = baseLaunch(t);
+  const calls = tmuxPreflight(f);
   f.env.CODEX_HOME = path.join(f.dir, 'custom-codex');
-  await f.adapter.launch(launchArgs);
+  await launchSession(launchArgs, f.options);
   assert.equal(calls.length, 1);
   assert.ok(Object.keys(readHooksState(path.join(f.env.CODEX_HOME, 'config.toml'))).length > 0);
   assert.equal(fs.existsSync(path.join(f.home, '.codex', 'config.toml')), false);
   assert.equal(f.events()[0].home, f.home);
   assert.equal(f.events()[0].codexHome, f.env.CODEX_HOME);
-  await f.adapter.launch(launchArgs);
+  await launchSession(launchArgs, f.options);
   assert.equal(f.events().filter(e => e.event === 'start').length, 1);
 });
 
 test('Codex launch ignores raw CODEX_HOME when runtime environment policy strips it', async t => {
   const f = fixture(t);
-  const calls = baseLaunch(t);
+  const calls = tmuxPreflight(f);
   fs.writeFileSync(f.manifest, 'inherit FAKE_CODEX_LOG\ninherit FAKE_CODEX_FAIL\n');
   f.env.CODEX_HOME = path.join(f.dir, 'stripped-codex');
-  await f.adapter.launch(launchArgs);
+  await launchSession(launchArgs, f.options);
   assert.equal(calls.length, 1);
   assert.equal(f.valid().valid, true);
   assert.equal(fs.existsSync(f.env.CODEX_HOME), false);
@@ -205,17 +214,17 @@ test('Codex launch ignores raw CODEX_HOME when runtime environment policy strips
 
 test('Codex launch trusts CODEX_HOME selected by the runtime dotenv policy', async t => {
   const f = fixture(t);
-  const calls = baseLaunch(t);
+  const calls = tmuxPreflight(f);
   f.env.CODEX_HOME = path.join(f.dir, 'raw-codex');
   const effectiveHome = path.join(f.dir, 'effective-codex');
   fs.writeFileSync(path.join(f.root, '.env'), `ZYLOS_TMUX_ENV=CODEX_HOME\nCODEX_HOME=${effectiveHome}\n`);
-  await f.adapter.launch(launchArgs);
+  await launchSession(launchArgs, f.options);
   assert.equal(calls.length, 1);
   assert.equal(fs.existsSync(f.env.CODEX_HOME), false);
   assert.equal(fs.existsSync(path.join(f.home, '.codex', 'config.toml')), false);
   assert.equal(f.events()[0].codexHome, effectiveHome);
   assert.ok(Object.keys(readHooksState(path.join(effectiveHome, 'config.toml'))).length > 0);
-  await f.adapter.launch(launchArgs);
+  await launchSession(launchArgs, f.options);
   assert.equal(f.events().filter(e => e.event === 'start').length, 1);
 });
 
@@ -238,14 +247,11 @@ test('independent Codex launch processes sharing one home serialize and preserve
   fs.copyFileSync(f.manifest, path.join(secondRoot, '.zylos', 'runtime-env.manifest'));
   const runner = path.join(f.dir, 'launch.mjs');
   fs.writeFileSync(runner, `import assert from 'node:assert/strict';
-import { CodexAdapter } from ${JSON.stringify(new URL('../codex.js', import.meta.url).href)};
-import { SessionAdapter } from ${JSON.stringify(new URL('../session-adapter.js', import.meta.url).href)};
+import { prepare } from ${JSON.stringify(new URL('../codex/launch.js', import.meta.url).href)};
 import { isCodexTrustValid } from ${JSON.stringify(new URL('../../codex-hooks.js', import.meta.url).href)};
 const root = process.argv[2];
-SessionAdapter.prototype.launch = async () => {
-  assert.equal(isCodexTrustValid({ zylosDir: root, homeDir: process.env.HOME, codexVersion: ${JSON.stringify(version)} }).valid, true);
-};
-await new CodexAdapter({ root, env: process.env }).launch(${JSON.stringify(launchArgs)});
+await prepare({ root, env: process.env });
+assert.equal(isCodexTrustValid({ zylosDir: root, homeDir: process.env.HOME, codexVersion: ${JSON.stringify(version)} }).valid, true);
 `);
   // Two groups of one instance plus another instance share the global config.
   // The second group must recheck the marker after acquiring the same lock.
@@ -272,8 +278,8 @@ test('Codex launch refreshes trust when neither flock nor perl is available', as
   const env = launchEnvironment(f.root, f.env);
   const warnings = [];
   t.mock.method(process.stderr, 'write', chunk => { warnings.push(String(chunk)); return true; });
-  const calls = baseLaunch(t, () => assert.equal(f.valid().valid, true));
-  await f.adapter.launch(launchArgs);
+  const calls = tmuxPreflight(f, () => assert.equal(f.valid().valid, true));
+  await launchSession(launchArgs, f.options);
   assert.equal(detect.mock.callCount(), 1, 'adapter must consume the injected no-lock capability');
   assert.equal(detect.mock.calls[0].result, null);
   assert.deepEqual(detect.mock.calls[0].arguments[0].env, env);
@@ -292,8 +298,8 @@ test('Codex rejects failed trust without lock capability before runtime launch',
   const env = launchEnvironment(f.root, f.env);
   const warnings = [];
   t.mock.method(process.stderr, 'write', chunk => { warnings.push(String(chunk)); return true; });
-  const calls = baseLaunch(t);
-  await assert.rejects(f.adapter.launch(launchArgs), error => { assertDidNotStart(error, warnings); return true; });
+  const calls = tmuxPreflight(f);
+  await assert.rejects(launchSession(launchArgs, f.options), error => { assertDidNotStart(error, warnings); return true; });
   assert.equal(calls.length, 0, 'failed unlocked worker must not enter runtime launch');
   assert.deepEqual(f.events().map(e => e.event), ['start', 'failure']);
   assert.equal(fs.existsSync(codexTrustMarkerPath(f.root)), false);
@@ -308,7 +314,7 @@ test('Codex rejects failed trust without lock capability before runtime launch',
 test('Codex trust worker leaves the parent event loop responsive and environment unchanged', async t => {
   const f = fixture(t);
   const parentEnv = { HOME: process.env.HOME, CODEX_HOME: process.env.CODEX_HOME };
-  const calls = baseLaunch(t);
+  const calls = tmuxPreflight(f);
   let observedPendingTrust = false;
   const timer = setInterval(() => {
     const events = f.events().map(e => e.event);
@@ -319,7 +325,7 @@ test('Codex trust worker leaves the parent event loop responsive and environment
     }
   }, 5);
   t.after(() => clearInterval(timer));
-  await f.adapter.launch(launchArgs);
+  await launchSession(launchArgs, f.options);
   clearInterval(timer);
   assert.equal(observedPendingTrust, true, 'parent must run while app-server trust is pending');
   assert.equal(calls.length, 1);

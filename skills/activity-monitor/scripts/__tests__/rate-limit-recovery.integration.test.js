@@ -62,9 +62,9 @@ for (const recovered of [true, false]) {
       return { kind: reply.ok ? 'accepted' : 'rejected', sent: true, reply };
     };
     let pastes = 0;
-    const originalAdapter = f.deps.getSessionAdapter;
-    f.deps.getSessionAdapter = runtime => ({ ...originalAdapter(runtime),
-      sendText: async () => { pastes++; }, sendKeys: async () => {}, captureScreen: async () => '❯ ' });
+    const originalAdapter = f.deps.session;
+    f.deps.session = { ...originalAdapter,
+      sendText: async () => { pastes++; }, sendKeys: async () => {}, captureScreen: async () => '❯ ' };
     const delivery = createDelivery({ ...f.deps, getSessionMode: () => 'multi', now: f.now,
       sleep: async ms => f.advance(ms),
       openTmuxConnection: async () => ({ close: async () => {}, command: async () => '0' }),

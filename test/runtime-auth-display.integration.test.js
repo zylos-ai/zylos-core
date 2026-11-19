@@ -24,7 +24,7 @@ test('runtime auth remedies remain distinct through Dashboard HTTP and page form
     for (const status of ['failure', 'uncertain']) {
       reply = await executeRuntimeSwitch(runtime, [], {
         read: () => ({ state: 'ok', config: { runtime: runtime === 'claude' ? 'codex' : 'claude' } }),
-        adapter: () => ({ checkAuth: async () => ({ status }) }),
+        runtimeFor: () => ({ auth: { checkAuth: async () => ({ status }) } }),
         exists: () => true, hooksReady: () => ({ ready: true }),
         write: () => assert.fail('authentication rejection must not save runtime'),
       });

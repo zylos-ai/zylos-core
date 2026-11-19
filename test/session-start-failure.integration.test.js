@@ -47,14 +47,14 @@ test('real internal send receives one terminal receipt and later work can delive
   assert.ok(original);
   f.sqlite.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE id=?").run(f.now() / 1000, original.id);
   let failing = true;
-  const base = f.deps.getSessionAdapter;
-  f.deps.getSessionAdapter = runtime => ({ ...base(runtime), launch: async input => {
+  const base = f.deps.session;
+  f.deps.session = { ...base, launch: async input => {
     if (failing && input.sessionGroup === 'chat:target') throw Object.assign(Error('private exception'), {
       code: 'LAUNCH_FAILED', cause: 'timeout', launchTiming: { new_session_ms: 10001, executor_init_ms: 0,
         exec_confirm_ms: 0, cleanup_ms: 0, total_ms: 10001, timeout_ms: 10000, last_phase: 'new_session' },
     });
-    return base(runtime).launch(input);
-  } });
+    return base.launch(input);
+  } };
   await f.create().initialize();
   await f.rounds(6);
   assert.equal(f.row(original.id).status, 'failed');

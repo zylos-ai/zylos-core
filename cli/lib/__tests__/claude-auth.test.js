@@ -50,8 +50,6 @@ process.env.ZYLOS_DIR = fakeZylosDir;
 
 after(() => { try { fs.rmSync(fakeBinDir, { recursive: true, force: true }); } catch {} });
 
-const { ClaudeAdapter } = await import('../runtime/claude.js');
-
 let originalHome;
 let originalZylosDir;
 let originalClaudeCode;
@@ -98,11 +96,13 @@ afterEach(() => {
   delete process.env.FAKE_CLAUDE_MODE;
 });
 
+const { checkAuth } = await import('../runtime/claude/auth.js');
+
 describe('Claude auth checks', () => {
   it('returns success and injects Anthropic credentials plus base URL into the probe env', async () => {
     process.env.FAKE_CLAUDE_MODE = 'success';
 
-    const result = await new ClaudeAdapter({}).checkAuth();
+    const result = await checkAuth();
     const env = JSON.parse(fs.readFileSync(envCapturePath, 'utf8'));
 
     assert.equal(result.status, 'success');
@@ -133,7 +133,7 @@ describe('Claude auth checks', () => {
     };
 
     // The supervisor env carries no Anthropic credentials; they must come from .env.
-    const result = await new ClaudeAdapter({ root, env: { PATH: process.env.PATH, HOME: os.tmpdir() }, execFile }).checkAuth();
+    const result = await checkAuth({ root, env: { PATH: process.env.PATH, HOME: os.tmpdir() }, execFile });
 
     assert.equal(result.status, 'success');
     assert.equal(calls.length, 1);
@@ -157,7 +157,7 @@ describe('Claude auth checks', () => {
         const hasCredential = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'].some(k => options.env[k]);
         return { stdout: hasCredential ? 'pong' : 'Not logged in', stderr: '' };
       };
-      const result = await new ClaudeAdapter({ root, env: { PATH: process.env.PATH, HOME: root }, execFile }).checkAuth();
+      const result = await checkAuth({ root, env: { PATH: process.env.PATH, HOME: root }, execFile });
       assert.equal(calls.length, 1);
       return { result, env: calls[0] };
     }
@@ -183,13 +183,12 @@ describe('Claude auth checks', () => {
   });
 
   it('returns failure for explicit logged-out and authentication-error signals', async () => {
-    const adapter = new ClaudeAdapter({});
 
     process.env.FAKE_CLAUDE_MODE = 'not_logged_in_stdout';
-    assert.equal((await adapter.checkAuth()).status, 'failure');
+    assert.equal((await checkAuth()).status, 'failure');
 
     process.env.FAKE_CLAUDE_MODE = 'auth_error';
-    const result = await adapter.checkAuth();
+    const result = await checkAuth();
     assert.equal(result.status, 'failure');
     assert.equal(result.reason, 'cli_probe_authentication_error');
   });
@@ -197,7 +196,7 @@ describe('Claude auth checks', () => {
   it('returns uncertain for transient probe failures', async () => {
     process.env.FAKE_CLAUDE_MODE = 'rate_limit';
 
-    const result = await new ClaudeAdapter({}).checkAuth();
+    const result = await checkAuth();
 
     assert.equal(result.status, 'uncertain');
     assert.equal(result.reason, 'cli_probe_uncertain');

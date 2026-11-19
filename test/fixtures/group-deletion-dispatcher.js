@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { runtimeTools } from '../helpers/group-deletion-runtime.js';
 import { createSessionReader } from '../../cli/lib/session-state-reader-async.js';
-import { getSessionAdapter } from '../../cli/lib/runtime/index.js';
+import { createSessionOps } from '../../cli/lib/runtime/session-ops.js';
 import { readReadyIdentity } from '../../cli/lib/runtime/session-target.js';
 process.env.C4_DISPATCHER_DISABLE_MAIN = '1';
 const { main } = await import('../../skills/comm-bridge/scripts/c4-dispatcher.js');
@@ -16,13 +16,11 @@ await main({ create: () => createDispatcher({
   readSessionState: async group => ({ identity: await reader.readLiveIdentity(group), status: { valid: true,
     value: { state: 'idle', idle_seconds: 60, health: 'ok', proc: { alive: true } } } }),
   readRuntimeHealth: () => ({ health: 'ok' }),
-  getSessionAdapter(runtime) {
-    const adapter = getSessionAdapter(runtime, { env: process.env, tmux });
-    return Object.assign(adapter, {
-      // Model invocation is the test boundary; production activation owns the
-      // run id/claim/slot, and observes this real terminal through F2/F3.
-      launch: async ({ sessionGroup, runId }) => tools.startRuntime(sessionGroup, { runId }),
-    });
+  session: {
+    ...createSessionOps({ env: process.env, tmux }),
+    // Model invocation is the test boundary; production activation owns the
+    // run id/claim/slot, and observes this real terminal through F2/F3.
+    launch: async ({ sessionGroup, runId }) => tools.startRuntime(sessionGroup, { runId }),
   },
   notifyDelivered() {}, sendStatusNotice: async () => {},
   diagnostic(event, fields) {

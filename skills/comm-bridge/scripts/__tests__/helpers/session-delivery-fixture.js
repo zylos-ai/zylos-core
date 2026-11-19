@@ -26,12 +26,12 @@ export function deliveryFixture(t) {
     revalidateSessionTarget: async ({ target, connection }) => {
       assert.equal(connection.closed, false); assert.equal(connection.target, target);
     },
-    getSessionAdapter: () => ({
+    session: {
       sendText: async args => { assert.equal(args.connection.closed, false); calls.push(['paste', args.target.sessionGroup]); },
       sendKeys: async args => { assert.equal(args.connection.closed, false); calls.push(['keys', args.target.sessionGroup, args.target.runId]); },
       captureScreen: async () => verdict === 'has_content' ? '──────────\n❯ text\n──────────'
         : verdict === 'disputed_empty' ? '──────────\n❯ \nsecond line draft\n──────────' : '──────────\n❯ \n──────────',
-    }),
+    },
     readSessionState: async () => ({ identity: { runId: run, runtime: 'claude', ready: true },
       status: { valid: true, value: { state: 'idle', idle_seconds: 5, health: 'ok' } } }),
     readRuntimeHealth: () => ({ health: 'ok' }), readCurrentSession: async () => ({ runId: run, sessionId: 'session-1' }),

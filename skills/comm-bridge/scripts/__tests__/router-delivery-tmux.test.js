@@ -7,7 +7,7 @@ import { fixture } from './c4-v2-test-helpers.js';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { openTmuxConnection } from '../../../../cli/lib/runtime/tmux-connection.js';
 import { resolveSessionTarget } from '../../../../cli/lib/runtime/session-target.js';
-import { getSessionAdapter } from '../../../../cli/lib/runtime/index.js';
+import { createSessionOps } from '../../../../cli/lib/runtime/session-ops.js';
 
 // caller integration: real isolated tmux, real adapter
 // ledger. The terminal is a recorder and is injected, not authenticated supervisor.
@@ -28,7 +28,7 @@ for (const mode of ['single', 'multi']) test(`real bound paste/Enter/cursor and 
     db: f.store, getSessionMode: () => mode,
     openTmuxConnection,
     resolveSessionTarget: options => resolveSessionTarget({ ...options, sessionGroup: 'origin', readReady: async () => terminal.ready }),
-    getSessionAdapter,
+    session: createSessionOps(),
     readSessionState: async () => ({ identity: { runId: terminal.ready.runId, runtime: 'codex', ready: true }, status: { valid: true, value: { state: 'idle', idle_seconds: 5, health: 'ok' } } }),
     readRuntimeHealth: () => ({ health: 'ok' }), readCurrentSession: async () => terminal.ready,
     formatConversation: row => row.content, notifyDelivered: data => calls.push(data),
@@ -48,11 +48,11 @@ test('actual bound target rejects run change after paste, never re-resolves duri
   const terminal = readyTmuxTarget(t, { runtime: 'codex', ledger: false });
   const f = fixture(t), row = f.store.insertConversation('in', 'telegram', 'e', 'message'); f.store.claimConversation(row.id);
   let resolutions = 0, sends = 0;
-  const adapter = getSessionAdapter('codex'), send = adapter.sendText.bind(adapter);
+  const adapter = createSessionOps(), send = adapter.sendText;
   adapter.sendText = async args => { sends++; await send(args); terminal.tmux('set-environment', '-t', 'zylos-group-origin', 'ZYLOS_RUN_ID', 'replacement'); };
   const d = createDelivery({ db: f.store, getSessionMode: () => 'single', openTmuxConnection,
     resolveSessionTarget: options => { resolutions++; return resolveSessionTarget({ ...options, readReady: async () => terminal.ready }); },
-    getSessionAdapter: () => adapter,
+    session: adapter,
     readSessionState: async () => ({ identity: { runId: terminal.ready.runId, runtime: 'codex', ready: true }, status: { valid: true, value: { state: 'idle', idle_seconds: 5, health: 'ok' } } }),
     readRuntimeHealth: () => ({ health: 'ok' }), readCurrentSession: async () => terminal.ready,
     formatConversation: row => row.content, notifyDelivered: () => {},
@@ -73,7 +73,7 @@ for (const replacement of ['server', 'pane']) for (const type of ['conversation'
     const row = type === 'conversation' ? f.store.insertConversation('in', 'telegram', 'e', 'NEVER_NEW_TARGET') :
       f.store.insertControl('NEVER_NEW_TARGET', { sessionGroup: 'origin', appendAckSuffix: false, targetBinding: type === 'directed' ? binding : null });
     (type === 'conversation' ? f.store.claimConversation : f.store.claimControl)(row.id);
-    const adapter = getSessionAdapter('codex'), original = adapter.sendText.bind(adapter);
+    const adapter = createSessionOps(), original = adapter.sendText;
     let resolutions = 0;
     adapter.sendText = async args => {
       if (replacement === 'server') {
@@ -89,7 +89,7 @@ for (const replacement of ['server', 'pane']) for (const type of ['conversation'
       retryOrFailControl: () => assert.fail('identity mismatch must not count a delivery retry'), ackControl: () => assert.fail('replacement cannot be acked') };
     const d = createDelivery({ db, getSessionMode: () => 'single', openTmuxConnection,
       resolveSessionTarget: options => { resolutions++; return resolveSessionTarget({ ...options, readReady: async () => terminal.ready }); },
-      getSessionAdapter: () => adapter,
+      session: adapter,
       readSessionState: async () => ({ identity: { runId: initial.runId, runtime: 'codex', ready: true }, status: { valid: true, value: { state: 'idle', health: 'ok' } } }),
       readRuntimeHealth: () => ({ health: 'ok' }), readCurrentSession: async () => terminal.ready,
       formatConversation: row => row.content, notifyDelivered: () => assert.fail('replacement must not be notified'),
@@ -106,10 +106,10 @@ for (const replacement of ['server', 'pane']) for (const type of ['conversation'
 test('two same-run /clear F3 replacements use current business session ids in real ledger', async t => {
   const terminal = readyTmuxTarget(t, { runtime: 'codex', ledger: false });
   const f = fixture(t); let current = { ...terminal.ready }, sends = 0;
-  const adapter = getSessionAdapter('codex');
+  const adapter = createSessionOps();
   // Actual guarded paste; cursor verdict is injected because the sleeping test
   // target is not a runtime UI. F3 changes between paste and the ledger read.
-  const original = adapter.sendText.bind(adapter);
+  const original = adapter.sendText;
   adapter.sendText = async args => { await original(args); current = { ...current, sessionId: `cleared-${++sends}` }; fs.writeFileSync(terminal.readyPath, JSON.stringify(current)); };
   adapter.captureScreen = async () => '❯ ';
   const d = createDelivery({ db: f.store, getSessionMode: () => 'single',
@@ -119,7 +119,7 @@ test('two same-run /clear F3 replacements use current business session ids in re
       return connection;
     },
     resolveSessionTarget: options => resolveSessionTarget({ ...options, readReady: async () => JSON.parse(fs.readFileSync(terminal.readyPath, 'utf8')) }),
-    getSessionAdapter: () => adapter,
+    session: adapter,
     readSessionState: async () => ({ identity: { runId: current.runId, runtime: 'codex', ready: true }, status: { valid: true, value: { state: 'idle', health: 'ok' } } }),
     readRuntimeHealth: () => ({ health: 'ok' }), readCurrentSession: async () => JSON.parse(fs.readFileSync(terminal.readyPath, 'utf8')),
     formatConversation: row => row.content, notifyDelivered: () => {},

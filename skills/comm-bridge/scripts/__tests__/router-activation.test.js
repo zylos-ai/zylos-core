@@ -71,9 +71,9 @@ test('missing/unreadable health fail open, auth blocks, existing runtime avoids 
 test('late launch and unconfirmed stop retain running row and capacity', async t => {
   const f = routerFixture(t, { poolSize: 1 }); f.put('origin'); const a = f.add('a'), b = f.add('b');
   const hold = deferred(); let stopConfirmed = false;
-  f.deps.getSessionAdapter = () => ({ launch: async input => { f.calls.push(['launch', input]); await hold.promise;
+  f.deps.session = { launch: async input => { f.calls.push(['launch', input]); await hold.promise;
     f.put(input.sessionGroup, { ready: false, runId: input.runId }); },
-    stop: async input => { f.calls.push(['stop', input]); if (!stopConfirmed) throw Object.assign(Error('unknown'), { code: 'STOP_UNCONFIRMED' }); f.scene.delete('a'); } });
+    stop: async input => { f.calls.push(['stop', input]); if (!stopConfirmed) throw Object.assign(Error('unknown'), { code: 'STOP_UNCONFIRMED' }); f.scene.delete('a'); } };
   const router = f.create(); await router.initialize(); await pump(f, 2);
   assert.equal(f.row(a.id).status, 'running'); assert.equal(f.row(b.id).status, 'pending');
   f.advance(2000); await pump(f, 2);
@@ -87,10 +87,10 @@ test('late launch and unconfirmed stop retain running row and capacity', async t
 test('NAME_CONFLICT requeues without retry and startup control invalidation precedes launch', async t => {
   const f = routerFixture(t); f.put('origin'); const row = f.add('a');
   const control = f.db.insertControl('old', { sessionGroup: 'a', appendAckSuffix: false });
-  f.deps.getSessionAdapter = () => ({ launch: async () => {
+  f.deps.session = { launch: async () => {
     assert.equal(f.db.getControlById(control.id).last_error, 'SESSION_ENDED');
     throw Object.assign(Error('exists'), { code: 'NAME_CONFLICT',
-      launchTiming: { new_session_ms: 1, total_ms: 1, last_phase: 'new_session' } }); }, stop: async () => assert.fail('no stop on name conflict') });
+      launchTiming: { new_session_ms: 1, total_ms: 1, last_phase: 'new_session' } }); }, stop: async () => assert.fail('no stop on name conflict') };
   const router = f.create(); await router.initialize(); await f.rounds(2);
   assert.equal(f.row(row.id).status, 'pending'); assert.equal(f.row(row.id).retry_count, 0);
   assert.ok(f.events.some(x => x.event === 'launch_name_conflict'));
@@ -120,10 +120,10 @@ test('branch validation rejects missing, forbidden, wrong units and mismatched i
 test('timeout observation failures alert and retain the running row and reservation', async t => {
   const f = routerFixture(t, { poolSize: 1 }); f.put('origin');
   const a = f.add('a'), b = f.add('b');
-  const adapter = f.deps.getSessionAdapter;
-  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+  const adapter = f.deps.session;
+  f.deps.session = { ...adapter, launch: async input => {
     f.calls.push(['launch', input]); f.put(input.sessionGroup, { ready: false, runId: input.runId });
-  } });
+  } };
   const router = f.create(); await router.initialize(); await f.rounds(2);
   assert.equal(f.row(a.id).status, 'running');
   const activation = router.state.activations.get('a');
@@ -152,12 +152,12 @@ for (const ready of [false, true]) {
   test(`timeout observes readiness and uses the adapter stop result; READY=${ready}`, async t => {
     const f = routerFixture(t, { poolSize: 1 }); f.put('origin');
     const row = f.add('a'), launch = deferred();
-    const adapter = f.deps.getSessionAdapter;
-    f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+    const adapter = f.deps.session;
+    f.deps.session = { ...adapter, launch: async input => {
       f.calls.push(['launch', input]);
       await launch.promise;
       f.put(input.sessionGroup, { ready, runId: input.runId });
-    } });
+    } };
     const router = f.create(); await router.initialize(); await pump(f, 2);
     f.advance(2000);
     const read = f.deps.readLiveIdentity; let reads = 0;
@@ -178,13 +178,13 @@ test('launch timing survives failed identity observation and is logged once per 
     if (observationFails && group === 'a') throw Object.assign(Error('unobservable'), { code: 'TMUX_UNAVAILABLE' });
     return read(group);
   };
-  f.deps.getSessionAdapter = () => ({ launch: async () => {
+  f.deps.session = { launch: async () => {
     observationFails = true;
     throw Object.assign(Error('private error'), { code: 'LAUNCH_FAILED', cause: 'timeout', launchTiming: {
       preflight_ms: 8000, new_session_ms: 2000, executor_init_ms: 0, exec_confirm_ms: 0, cleanup_ms: 1, total_ms: 10001,
       timeout_ms: 10000, last_phase: 'new_session',
     } });
-  }, stop: async () => assert.fail('observation must retain ownership') });
+  }, stop: async () => assert.fail('observation must retain ownership') };
   await f.create().initialize(); await f.rounds(5);
   assert.equal(f.row(row.id).status, 'running');
   assert.equal(f.row(row.id).retry_count, 0);
@@ -198,12 +198,12 @@ test('launch timing survives failed identity observation and is logged once per 
 
 test('READY timeout records launch phase durations under its separate budget', async t => {
   const f = routerFixture(t); f.put('origin'); const row = f.add('a');
-  const adapter = f.deps.getSessionAdapter;
-  f.deps.getSessionAdapter = runtime => ({ ...adapter(runtime), launch: async input => {
+  const adapter = f.deps.session;
+  f.deps.session = { ...adapter, launch: async input => {
     f.put(input.sessionGroup, { ready: false, runId: input.runId });
     return { launchTiming: { preflight_ms: 7, new_session_ms: 20, executor_init_ms: 3, exec_confirm_ms: 40,
       cleanup_ms: 1, total_ms: 64, timeout_ms: 10000, last_phase: 'exec_confirm' } };
-  } });
+  } };
   const alerts = [];
   f.deps.sendFailureAlert = (failed, reason) => {
     alerts.push({ id: failed.id, reason, status: f.row(failed.id).status });

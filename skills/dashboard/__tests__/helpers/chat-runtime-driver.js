@@ -110,7 +110,8 @@ try {
   const actualCore = await new ChatSender({ zylosDir: root }).loadCore();
   api.setInvoke(args => actualCore.receive(args));
   coreDb = await load('skills/comm-bridge/scripts/c4-db.js');
-  const { getSessionAdapter } = await load('cli/lib/runtime/index.js');
+  const { createSessionOps } = await load('cli/lib/runtime/session-ops.js');
+  const { launchSession } = await load('cli/lib/runtime/launch-flow.js');
   const { SupervisorScenes } = await load('skills/activity-monitor/scripts/supervisor-scenes.js');
   const { startSupervisor } = await load('skills/activity-monitor/scripts/supervisor-main.js');
   const { createDispatcher } = await load('skills/comm-bridge/scripts/router/factory.js');
@@ -119,8 +120,9 @@ try {
     readMode: () => ({ mode: 'multi' }), readActivity: scene => liveSupervisor?.readActivity(scene) });
   supervisor = await startSupervisor({ env: process.env, scenes, log });
   liveSupervisor = supervisor.supervisor;
+  const sessionOptions = { root, env: process.env, tmux: tmuxOptions };
   dispatcher = createDispatcher({ env: process.env, log,
-    getSessionAdapter: runtime => getSessionAdapter(runtime, { root, env: process.env, tmux: tmuxOptions }),
+    session: { ...createSessionOps(sessionOptions), launch: input => launchSession(input, sessionOptions) },
   }, { tmux: tmuxOptions });
   await dispatcher.start();
   if (attachmentScenario) {

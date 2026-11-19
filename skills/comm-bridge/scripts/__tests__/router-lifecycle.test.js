@@ -126,7 +126,7 @@ test('unknown actual runtime is never inferred from a legacy name or origin READ
   f.setStatus('idle', 10);
   write(path.join(groupRunDir('origin', f.env), 'current-session.json'), { runId: 'new', sessionId: 'new', ts: 1, startupControlIds: [] });
   let now = 0;
-  const providers = createLifecycleProviders({ ...f.options, now: () => now, adapter: () => assert.fail('unknown runtime must not select an adapter') });
+  const providers = createLifecycleProviders({ ...f.options, now: () => now, session: { sendText: () => assert.fail('unknown runtime must not reach sendText') } });
   const entries = await providers.findLegacySessions();
   assert.equal(entries[0].live.runtime, 'unknown'); assert.equal(entries[0].live.ready, false);
   await providers.advanceLegacy(entries); now = 300000; await providers.advanceLegacy(entries);

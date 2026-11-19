@@ -286,7 +286,7 @@ test('lower capacity admits a waiting group only after both required idle reclai
     stop: async scene => {
       assert.equal(f.scene.get(scene.sessionGroup)?.runId, scene.runId);
       stops.push(scene.sessionGroup);
-      await f.deps.getSessionAdapter(scene.runtime).stop({ tmuxName: scene.tmuxName, expectedRunId: scene.runId });
+      await f.deps.session.stop({ tmuxName: scene.tmuxName, expectedRunId: scene.runId });
     },
   }, { now: f.now });
   const context = { configuration: { mode: 'multi', capacity }, transition: null, restartRequests: [],

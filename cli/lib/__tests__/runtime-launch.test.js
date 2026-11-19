@@ -6,12 +6,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
-import { ClaudeAdapter } from '../runtime/claude.js';
-import { CodexAdapter } from '../runtime/codex.js';
+import { launchSession } from '../runtime/launch-flow.js';
+import { getRuntime } from '../runtime/index.js';
 import { deployManifestTemplate } from '../runtime/tmux-env.js';
 import { tmuxNameForGroup } from '../session-group-paths.js';
 
-// Frozen SessionAdapter API integration. Only the model CLI is a stand-in;
+// Session launch integration. Only the model CLI is a stand-in;
 // paths, target observation, command/env/script construction and tmux settlement
 // are production code. No child_process mock: spawn must really be exported.
 // Uses a stand-in runtime self-report and real tmux; does not validate real model/auth.
@@ -24,14 +24,14 @@ const sentinel = 'System startup trigger, not a user message. Continue with star
 const secret = 'sk-ant-synthetic-launch-test';
 const maintenance = createRequire(import.meta.url)('../upgrade-maintenance.cjs');
 
-function setup(t, Cls, { help = ' --model MODEL --effort EFFORT --no-daemon ', helpFails = false, nativeAuth = false } = {}) {
+function setup(t, runtime, { help = ' --model MODEL --effort EFFORT --no-daemon ', helpFails = false, nativeAuth = false } = {}) {
   const {dir,socketPath,tmux}=isolatedTmux(t,{prefix:'runtime-launch-',socketName:'socket',trim:false});
   const root = path.join(dir, "root with ' quote");
   const home = path.join(dir, 'home');
   const pm2Home = path.join(dir, 'pm2');
   const tmpdir = path.join(dir, 'tmp');
   fs.mkdirSync(root); fs.mkdirSync(home); fs.mkdirSync(pm2Home); fs.mkdirSync(tmpdir);
-  if (Cls === CodexAdapter) seedCodexTrustFixture({ root, home });
+  if (runtime === 'codex') seedCodexTrustFixture({ root, home });
   const command = path.join(dir, "runtime with ' quote");
   const helpLog = path.join(dir, 'help-log');
   const report = path.join(dir, 'runtime-report.json');
@@ -42,13 +42,12 @@ function setup(t, Cls, { help = ' --model MODEL --effort EFFORT --no-daemon ', h
     PATH: process.env.PATH, USER: process.env.USER || 'test',
     CLAUDE_BIN: command, CODEX_BIN: command, CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli',
     ZYLOS_SESSION_GROUP: 'stale-group', ZYLOS_RUN_ID: 'stale-run', ZYLOS_MODEL_CONFIG: 'stale-config' };
-  const adapter = new Cls({ root, env, tmux: { binary, socketPath, configFile: '/dev/null' } });
-  const runtime = adapter.runtimeId;
+  const options = { root, env, tmux: { binary, socketPath, configFile: '/dev/null' } };
   const input = { sessionGroup: null, runId: 'fresh-run', sessionMode: 'single', launchConfig: { runtime, mode: 'default' } };
   async function launch(changes = {}) {
     const request = { ...input, ...changes };
     fs.rmSync(report, { force: true });
-    const result = await adapter.launch(request);
+    const result = await launchSession({ runtime, ...request }, options);
     const pid = tmux('list-panes', '-t', result.tmuxName, '-F', '#{pane_pid}').trim();
     let observed;
     for (let attempt = 0; attempt < 100; attempt++) {
@@ -61,10 +60,10 @@ function setup(t, Cls, { help = ' --model MODEL --effort EFFORT --no-daemon ', h
   }
   async function probe() {
     fs.rmSync(probeReport, { force: true });
-    const outcome = await adapter.checkAuth();
+    const outcome = await (await getRuntime(runtime)).auth.checkAuth(options);
     return { outcome, ...JSON.parse(fs.readFileSync(probeReport, 'utf8')) };
   }
-  return { root, home, command, env, adapter, input, launch, probe, tmux, helpLog };
+  return { root, home, command, env, input, launch, probe, tmux, helpLog };
 }
 
 function publishStartupRecovery(root, { succeed = false, controller = false } = {}) {
@@ -132,9 +131,9 @@ function publishActiveRecoveryCue(root) {
     "exports.bootstrap = () => ({active:true, blocked:false, prompt:'cleanup task'});\n", {mode:0o600});
 }
 
-for (const Cls of [ClaudeAdapter, CodexAdapter]) {
-  test(`${Cls.name}: default launch observes actual exec, cwd and fresh single-session F2`, async t => {
-    const f = setup(t, Cls); const p = await f.launch();
+for (const runtime of ['claude', 'codex']) {
+  test(`${runtime}: default launch observes actual exec, cwd and fresh single-session F2`, async t => {
+    const f = setup(t, runtime); const p = await f.launch();
     assert.equal(p.result.tmuxName, tmuxNameForGroup('origin'));
     assert.equal(p.exe, fs.realpathSync(process.execPath));
     assert.equal(p.args[1], f.command);
@@ -152,11 +151,11 @@ for (const Cls of [ClaudeAdapter, CodexAdapter]) {
     const paneCommand = f.tmux('display-message', '-p', '-t', p.result.tmuxName, '#{pane_start_command}');
     assert.equal(paneCommand.includes(secret), false);
     assert.equal(paneCommand.includes('ANTHROPIC_API_KEY'), false);
-    if (Cls === CodexAdapter) assert.equal(p.args.at(-1), sentinel);
+    if (runtime === 'codex') assert.equal(p.args.at(-1), sentinel);
   });
 
-  test(`${Cls.name}: repeated fresh launches preserve manifest npm mirrors`, async t => {
-    const f = setup(t, Cls);
+  test(`${runtime}: repeated fresh launches preserve manifest npm mirrors`, async t => {
+    const f = setup(t, runtime);
     deployManifestTemplate(path.resolve(import.meta.dirname, '../../../templates/runtime-env.manifest.example'), f.root);
     f.env.npm_config_registry = 'https://registry.example.test/';
     f.env.npm_config_better_sqlite3_binary_host_mirror = 'https://binary.example.test/better-sqlite3';
@@ -167,87 +166,87 @@ for (const Cls of [ClaudeAdapter, CodexAdapter]) {
     }
   });
 
-  test(`${Cls.name}: existing name rejects without writing into the original process`, async t => {
-    const f = setup(t, Cls); const first = await f.launch();
+  test(`${runtime}: existing name rejects without writing into the original process`, async t => {
+    const f = setup(t, runtime); const first = await f.launch();
     await assert.rejects(f.launch({ runId: 'replacement-run' }), { code: 'NAME_CONFLICT' });
     assert.equal(f.tmux('list-panes', '-t', first.result.tmuxName, '-F', '#{pane_pid}').trim(), first.pid);
     assert.equal(f.tmux('list-sessions', '-F', '#{session_name}').trim(), first.result.tmuxName);
     assert.match(f.tmux('show-environment', '-t', first.result.tmuxName), /ZYLOS_RUN_ID=fresh-run/);
   });
 
-  test(`${Cls.name}: explicit override preserves quoted model argv and multi group`, async t => {
-    const f = setup(t, Cls);
+  test(`${runtime}: explicit override preserves quoted model argv and multi group`, async t => {
+    const f = setup(t, runtime);
     const config = { runtime: f.input.launchConfig.runtime, mode: 'override', model: "model with ' quote", effort: 'high' };
     const p = await f.launch({ launchConfig: config, sessionMode: 'multi', sessionGroup: 'telegram:g-123' });
     assert.equal(p.args[p.args.indexOf('--model') + 1], config.model);
     assert.equal(p.env.ZYLOS_MODEL_CONFIG, JSON.stringify(config));
     assert.equal(p.env.ZYLOS_SESSION_GROUP, 'telegram:g-123');
     assert.equal(fs.readFileSync(f.helpLog, 'utf8'), 'help\n');
-    if (Cls === ClaudeAdapter) assert.equal(p.args[p.args.indexOf('--effort') + 1], 'high');
+    if (runtime === 'claude') assert.equal(p.args[p.args.indexOf('--effort') + 1], 'high');
     else { assert.ok(p.args.includes('model_reasoning_effort="high"')); assert.ok(p.args.includes('--no-daemon')); assert.equal(p.args.at(-1), sentinel); }
   });
 
-  for(const mode of (Cls===CodexAdapter?['override','default']:['override'])) {
-    const title=mode==='override'?`${Cls.name}: capability failure rejects before tmux creation`:'Codex default capability failure rejects before creation';
+  for(const mode of (runtime==='codex'?['override','default']:['override'])) {
+    const title=mode==='override'?`${runtime}: capability failure rejects before tmux creation`:'Codex default capability failure rejects before creation';
     test(title,async t=>{
-      const f=setup(t,Cls,{helpFails:true});
+      const f=setup(t,runtime,{helpFails:true});
       const changes=mode==='default'?{}:{launchConfig:{runtime:f.input.launchConfig.runtime,mode,model:'test',effort:'high'}};
       await assert.rejects(f.launch(changes),{code:'LAUNCH_FAILED'});
       assert.throws(()=>f.tmux('list-sessions'));
     });
   }
 
-  test(`${Cls.name}: unsupported override rejects before creation`, async t => {
-    const f = setup(t, Cls, { help: ' --help ' });
+  test(`${runtime}: unsupported override rejects before creation`, async t => {
+    const f = setup(t, runtime, { help: ' --help ' });
     await assert.rejects(f.launch({ launchConfig: { runtime: f.input.launchConfig.runtime, mode: 'override', model: 'test', effort: 'high' } }), { code: 'MODEL_CONFIG_REJECTED' });
     assert.throws(() => f.tmux('list-sessions'));
   });
 
-  test(`${Cls.name}: failed automatic startup recovery reaches runtime argv`, async t => {
-    const f = setup(t, Cls);
+  test(`${runtime}: failed automatic startup recovery reaches runtime argv`, async t => {
+    const f = setup(t, runtime);
     const recovery = publishStartupRecovery(f.root);
     const p = await f.launch();
     assert.deepEqual(JSON.parse(fs.readFileSync(recovery.executed, 'utf8')), ['resume', '--transaction-dir', recovery.dir]);
     assert.match(p.args.at(-1), /SYSTEM RECOVERY TASK/);
     assert.doesNotMatch(p.args.at(-1), /undefined/);
-    if (Cls === CodexAdapter) {
+    if (runtime === 'codex') {
       assert.equal(p.args.includes(sentinel), false);
       assert.equal(p.args.at(-1).includes(sentinel), false);
     }
   });
 
-  test(`${Cls.name}: successful automatic startup recovery preserves ordinary argv`, async t => {
-    const f = setup(t, Cls);
+  test(`${runtime}: successful automatic startup recovery preserves ordinary argv`, async t => {
+    const f = setup(t, runtime);
     const recovery = publishStartupRecovery(f.root, { succeed: true });
     const p = await f.launch();
     assert.deepEqual(JSON.parse(fs.readFileSync(recovery.executed, 'utf8')), ['resume', '--transaction-dir', recovery.dir]);
     assert.doesNotMatch(JSON.stringify(p.args), /SYSTEM RECOVERY TASK/);
-    if (Cls === CodexAdapter) assert.equal(p.args.at(-1), sentinel);
+    if (runtime === 'codex') assert.equal(p.args.at(-1), sentinel);
   });
 
-  test(`${Cls.name}: live upgrade controller preserves ordinary argv`, async t => {
-    const f = setup(t, Cls);
+  test(`${runtime}: live upgrade controller preserves ordinary argv`, async t => {
+    const f = setup(t, runtime);
     const recovery = publishStartupRecovery(f.root, { controller: true });
     const p = await f.launch();
     assert.equal(fs.existsSync(recovery.executed), false);
     assert.doesNotMatch(JSON.stringify(p.args), /SYSTEM RECOVERY TASK/);
-    if (Cls === CodexAdapter) assert.equal(p.args.at(-1), sentinel);
+    if (runtime === 'codex') assert.equal(p.args.at(-1), sentinel);
   });
 
-  test(`${Cls.name}: active recovery cue appends once to the ordinary prompt`, async t => {
-    const f = setup(t, Cls);
+  test(`${runtime}: active recovery cue appends once to the ordinary prompt`, async t => {
+    const f = setup(t, runtime);
     publishActiveRecoveryCue(f.root);
     const p = await f.launch();
     const prompt = p.args.at(-1);
     assert.equal((prompt.match(/cleanup task/g) || []).length, 1);
     assert.doesNotMatch(prompt, /undefined/);
-    if (Cls === CodexAdapter) assert.equal(prompt, `${sentinel}\n\ncleanup task`);
+    if (runtime === 'codex') assert.equal(prompt, `${sentinel}\n\ncleanup task`);
     else assert.equal(prompt, 'cleanup task');
   });
 }
 
 test('Claude compat PATH is deduplicated in actual runtime environment', async t => {
-  const f = setup(t, ClaudeAdapter);
+  const f = setup(t, 'claude');
   fs.writeFileSync(path.join(f.root, '.env'), 'ZYLOS_CLEAN_ENV=false\n');
   f.env.PATH = '/usr/bin:/bin:/usr/bin:/bin';
   const p = await f.launch(); assert.equal(p.env.PATH, '/usr/bin:/bin');
@@ -257,7 +256,7 @@ for(const [mode,title,help,cycles] of [
   ['override','Codex override without daemon capability omits unsupported flag and keeps stateless sentinel',' --model MODEL ',2],
   ['default','Codex default launch without daemon capability omits unsupported flag',' --help ',1],
 ]) test(title,async t=>{
-  const f=setup(t,CodexAdapter,{help});
+  const f=setup(t,'codex',{help});
   for(let i=0;i<cycles;i++){
     const changes=mode==='default'?{}:{sessionGroup:`test:codex-${i}`,sessionMode:'multi',launchConfig:{runtime:'codex',mode,model:'test',effort:'low'}};
     const p=await f.launch(changes);
@@ -273,7 +272,7 @@ for(const [auth,title] of [
   ['status','Claude subscription login status keeps dotenv tokens in actual runtime environment'],
   ['none','Claude without a subscription login retains dotenv tokens'],
 ]) test(title,async t=>{
-  const f=setup(t,ClaudeAdapter,{nativeAuth:auth==='status'});
+  const f=setup(t,'claude',{nativeAuth:auth==='status'});
   fs.mkdirSync(path.join(f.root,'.zylos'));
   fs.writeFileSync(path.join(f.root,'.zylos/runtime-env.manifest'),'env ANTHROPIC_API_KEY\nenv CLAUDE_CODE_OAUTH_TOKEN\n');
   if(auth==='credentials'){
@@ -301,7 +300,7 @@ const builtinCases = {
   'setup token': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-synthetic-setup-token' },
 };
 async function launchAndProbe(t, dotenv, { compat = false, nativeAuth = false } = {}) {
-  const f = setup(t, ClaudeAdapter, { nativeAuth });
+  const f = setup(t, 'claude', { nativeAuth });
   if (nativeAuth) {
     // Subscription login as both a login file and `claude auth status`.
     fs.mkdirSync(path.join(f.home, '.claude'));
@@ -338,13 +337,13 @@ for (const name of ['API key', 'setup token']) test(`Claude subscription login: 
 });
 
 // The built-in passthrough is Claude-only: a Codex session launched through
-// SessionAdapter, with every Claude variable in .env and an empty manifest,
+// launchSession, with every Claude variable in .env and an empty manifest,
 // must not carry any of them (otherwise commands the Codex agent runs could read
 // the Claude credentials). Real tmux on a private socket; the model CLI is a stand-in.
-// Run when session launch env, the runtime passed by SessionAdapter.launch, or
+// Run when session launch env, the runtime passed by launchSession, or
 // the built-in list changes; skip for changes to credential saving or notices only.
 for (const compat of [false, true]) test(`Codex session gets none of the Claude variables from .env with an empty manifest (${compat ? 'compat' : 'clean'} env)`, async t => {
-  const f = setup(t, CodexAdapter);
+  const f = setup(t, 'codex');
   fs.mkdirSync(path.join(f.root, '.zylos'), { recursive: true });
   fs.writeFileSync(path.join(f.root, '.zylos/runtime-env.manifest'), '');
   const dotenv = { ...builtinCases.relay, ...builtinCases['API key'], ...builtinCases['setup token'] };
@@ -357,14 +356,14 @@ for (const compat of [false, true]) test(`Codex session gets none of the Claude 
 
 // Preserve daemon isolation through the target API.
 test('Codex default launch retains supported daemon isolation', async t => {
-  const f = setup(t, CodexAdapter);
+  const f = setup(t, 'codex');
   const p = await f.launch();
   assert.ok(p.args.includes('--no-daemon'), 'supported isolation must also apply to default model config');
 });
 
 
 test('Claude selected config directory does not borrow default HOME credentials', async t => {
-  const f = setup(t, ClaudeAdapter);
+  const f = setup(t, 'claude');
   fs.mkdirSync(path.join(f.home, '.claude'));
   fs.writeFileSync(path.join(f.home, '.claude/.credentials.json'), JSON.stringify({ claudeAiOauth: { refreshToken: 'different-account-token' } }));
   const selected = path.join(f.home, 'selected'); fs.mkdirSync(selected);

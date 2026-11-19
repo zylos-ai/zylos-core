@@ -34,7 +34,7 @@ function setup(t) {
     resolveSessionTarget: async ({ sessionGroup }) => f.scene.get(sessionGroup),
     revalidateSessionTarget: async () => {},
     readSessionState: async group => ({ identity: f.scene.get(group), status: sample }),
-    getSessionAdapter: () => ({ sendText: async ({ text }) => { calls.pastes++; sent.push(text); }, sendKeys: async () => {}, captureScreen: async () => '❯ ' }),
+    session: { sendText: async ({ text }) => { calls.pastes++; sent.push(text); }, sendKeys: async () => {}, captureScreen: async () => '❯ ' },
     formatConversation: row => row.content,
     notifyDelivered: () => {},
   }, { periodicEnabled: false, captureEnabled: false });

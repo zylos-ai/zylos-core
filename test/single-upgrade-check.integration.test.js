@@ -89,7 +89,8 @@ setInterval(()=>{},1000);\n`, { mode: 0o700 });
   t.after(() => db.close());
   const { upgradeRuntime } = await import('../skills/upgrade-claude/scripts/upgrade.js');
   const { createDispatcher } = await import('../skills/comm-bridge/scripts/router/factory.js');
-  const { getSessionAdapter } = await import('../cli/lib/runtime/index.js');
+  const { createSessionOps } = await import('../cli/lib/runtime/session-ops.js');
+  const { launchSession } = await import('../cli/lib/runtime/launch-flow.js');
   const { createSinglePreparation } = await import('../skills/comm-bridge/scripts/router/resident.js');
   const preparation = [];
   const prepareSingle = createSinglePreparation({
@@ -110,6 +111,9 @@ setInterval(()=>{},1000);\n`, { mode: 0o700 });
   const session = () => busy || pasted().length > turnsEnded ? { state: 'busy', idle_seconds: 0 } : { state: 'idle', idle_seconds: 10 };
   const ready = JSON.parse(fs.readFileSync(f.readyPath, 'utf8'));
   const currentReady = () => JSON.parse(fs.readFileSync(f.readyPath, 'utf8'));
+  const sessionOptions = { root: f.root, env: f.env,
+    tmux: { socketPath: f.socketPath, binary: f.binary, configFile: '/dev/null' },
+    runtimeExecutable: () => path.join(f.root, '.local/bin/claude') };
   dispatcher = createDispatcher({
     env: { ...process.env }, now: () => Date.now() + offset,
     readSessionState: async () => ({ identity: { runId: currentReady().runId, runtime: 'claude', ready: true },
@@ -118,9 +122,7 @@ setInterval(()=>{},1000);\n`, { mode: 0o700 });
     diagnostics: { diagnostic: (...a) => record(a), maintain() {} }, log: m => record(['log', m]), notifyDelivered() {},
     sendAlert: () => assert.fail('External send forbidden'),
     submit: async () => assert.fail('healthy single-session startup needs no supervisor start_attempt'),
-    getSessionAdapter: runtime => getSessionAdapter(runtime, { root: f.root, env: f.env,
-      tmux: { socketPath: f.socketPath, binary: f.binary, configFile: '/dev/null' },
-      runtimeExecutable: () => path.join(f.root, '.local/bin/claude') }),
+    session: { ...createSessionOps(sessionOptions), launch: input => launchSession(input, sessionOptions) },
     prepareSingle, findLegacySessions: async () => [], advanceLegacy: async () => {},
   }, { tmux: { socketPath: f.socketPath, binary: f.binary, configFile: '/dev/null' },
     delivery: { periodicEnabled: false, verifyWaitMs: 20, idleHoldMs: 1, idleWaitMs: 50, idlePollMs: 1, gateBackoffBaseMs: 1, gateBackoffMaxMs: 5 } });

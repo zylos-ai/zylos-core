@@ -186,7 +186,7 @@ for (const [group, pending] of [['fixture:a', false], ['fixture:a', true], ['ori
     readCurrentSession: async key => JSON.parse(fs.readFileSync(path.join(groupRunDir(key, env), 'current-session.json'), 'utf8')),
     readRuntimeHealth: () => ({ health: 'ok', publicHealth: 'ok' }),
     readSessionState: async () => ({ state: { valid: true, value: 'idle' } }),
-    getSessionAdapter: () => ({ launch: async input => { launches.push(input); put(input.runId); }, stop: () => { throw new Error('Unexpected router stop'); } }),
+    session: { launch: async input => { launches.push(input); put(input.runId); }, stop: () => { throw new Error('Unexpected router stop'); } },
     submit: async () => ({ kind: 'accepted', reply: { ok: true, result: 'not_restricted' } }),
     findLegacySessions: async () => [], advanceLegacy: async () => {}, prepareSingle: async () => {},
     notifyDelivered: async () => {}, log: () => {},

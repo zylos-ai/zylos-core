@@ -489,7 +489,7 @@ test('require_idle control delivers from unchanged main idle state while a backg
     openTmuxConnection: async () => ({ close() {}, command: async args => args.at(-1) === '#{cursor_x}' ? '2' : '0' }),
     resolveSessionTarget: async () => target, revalidateSessionTarget: async () => {},
     readSessionState: async () => ({ identity: target, status: { valid: true, value: status } }), readRuntimeHealth: () => ({ health: 'ok' }),
-    getSessionAdapter: () => ({ sendText: async () => { sends++; }, sendKeys: async () => {}, captureScreen: async () => '❯ ' }),
+    session: { sendText: async () => { sends++; }, sendKeys: async () => {}, captureScreen: async () => '❯ ' },
   }, { periodicEnabled: false, captureEnabled: false });
   t.after(() => delivery.stop());
   const result = await delivery.deliverControl(c4.db.prepare('SELECT * FROM control_queue WHERE id=?').get(control.id));
@@ -1305,7 +1305,7 @@ test('persisted lifecycle prompts reject replacement runs and never count as Ori
       db: c4.store, getSessionMode: () => 'multi',
       openTmuxConnection: async () => ({ close() {} }),
       resolveSessionTarget: async () => ({ ...tmuxTarget, ready: true, runtime: 'claude', runId: 'replacement' }),
-      getSessionAdapter: () => ({ sendText: () => { sends++; } }),
+      session: { sendText: () => { sends++; } },
     }, { periodicEnabled: false });
     await delivery.deliverControl(row); await delivery.stop();
     assert.equal(sends, 0);

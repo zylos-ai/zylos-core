@@ -154,12 +154,12 @@ for (const activation of ['continuation', 'inbound']) {
       if (result.cleared) order.push('clear');
       return result;
     };
-    const getAdapter = f.deps.getSessionAdapter;
-    f.deps.getSessionAdapter = runtime => ({ ...getAdapter(runtime), launch: async input => {
-      await getAdapter(runtime).launch(input);
+    const getAdapter = f.deps.session;
+    f.deps.session = { ...getAdapter, launch: async input => {
+      await getAdapter.launch(input);
       const prompt = f.db.insertControl('startup prompt', { sessionGroup: 'team', appendAckSuffix: false });
       f.current.get('team').startupControlIds = [prompt.id];
-    } });
+    } };
     const deliverControl = f.deps.deliverControl, deliverConversation = f.deps.deliverConversation;
     f.deps.deliverControl = async (row, live) => {
       received.push(row.raw_content); order.push('startup');
@@ -190,12 +190,12 @@ test('a health-blocked startup expires at idle TTL without another restart until
   f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(old.id);
   f.db.recordRunEnd('team', { runId: 'old-run', reason: 'unexpected' });
   let blocked = true;
-  const getAdapter = f.deps.getSessionAdapter, deliver = f.deps.deliverControl;
-  f.deps.getSessionAdapter = runtime => ({ ...getAdapter(runtime), launch: async input => {
-    await getAdapter(runtime).launch(input);
+  const getAdapter = f.deps.session, deliver = f.deps.deliverControl;
+  f.deps.session = { ...getAdapter, launch: async input => {
+    await getAdapter.launch(input);
     const prompt = f.db.insertControl('startup prompt', { sessionGroup: 'team', appendAckSuffix: false });
     f.current.get('team').startupControlIds = [prompt.id];
-  } });
+  } };
   f.deps.deliverControl = async (row, live) => {
     if (!blocked) return deliver(row, live);
     f.sqlite.prepare("UPDATE control_queue SET status='pending' WHERE id=?").run(row.id);

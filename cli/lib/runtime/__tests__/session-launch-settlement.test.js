@@ -123,8 +123,7 @@ test('runtime exec delayed four seconds fits the launch confirmation budget', {t
 // setupLaunch owns the private socket and all processes/scripts through teardown.
 test('eight-second tmux preflight leaves only the remaining launch budget for exec confirmation', {timeout:15000}, async t => {
   const f = await setupLaunch(t);
-  const {SessionAdapter} = await import('../session-adapter.js');
-  class Adapter extends SessionAdapter {get runtimeId(){return 'claude';}}
+  const {launchSession} = await import('../launch-flow.js');
   const command = path.join(f.dir,'slow-preflight-runtime');
   await fs.writeFile(command, '#!/bin/sh\nwhile :; do :; done\n', {mode:0o700});
   const wrapper = path.join(f.dir,'slow-preflight-tmux');
@@ -133,14 +132,14 @@ test('eight-second tmux preflight leaves only the remaining launch budget for ex
 case " $* " in *" =target: "*) sleep 8 ;; esac
 exec ${shellQuote(binary)} "$@"
 `, {mode:0o700});
-  const adapter = new Adapter({root:f.dir, runtimeExecutable:()=>command,
+  const adapterOptions = {root:f.dir, runtimeExecutable:()=>command,
     paths:{tmuxNameForGroup:()=> 'target'},
     env:{PATH:process.env.PATH,HOME:f.dir},
-    tmux:{binary:wrapper,socketPath:f.socketPath,configFile:'/dev/null'}});
+    tmux:{binary:wrapper,socketPath:f.socketPath,configFile:'/dev/null'}};
   const start = performance.now();
   let timing;
-  await assert.rejects(adapter.launch({sessionGroup:null,runId:'slow-preflight',sessionMode:'single',
-    launchConfig:{runtime:'claude',mode:'default'}}), error=>{
+  await assert.rejects(launchSession({ runtime: 'claude', sessionGroup:null,runId:'slow-preflight',sessionMode:'single',
+    launchConfig:{runtime:'claude',mode:'default'}}, adapterOptions), error=>{
     assert.equal(error.code,'LAUNCH_FAILED');
     assert.equal(error.cause,'timeout');
     timing=error.launchTiming;
@@ -166,16 +165,15 @@ test('duplicate session is NAME_CONFLICT and retains the original pane', async t
 for (const key of [null,'ANTHROPIC_API_KEY','CLAUDE_CODE_OAUTH_TOKEN']) {
   test(`Claude launch: ${key || 'neither variable'} ${key ? 'stays in the session environment' : 'is added'} and no auth status subprocess runs`,async t=>{
     const f=await setupLaunch(t);
-    const {SessionAdapter}=await import('../session-adapter.js');
-    class Adapter extends SessionAdapter {get runtimeId(){return 'claude';}}
+    const {launchSession}=await import('../launch-flow.js');
     const command=path.join(f.dir,'runtime'),report=path.join(f.dir,'runtime.json'),authReport=path.join(f.dir,'auth.json');
     await fs.writeFile(command,`#!${process.execPath}\nconst fs=require('node:fs');const report={argv:process.argv.slice(2),env:process.env};if(process.argv[2]==='auth'){fs.writeFileSync(${JSON.stringify(authReport)},JSON.stringify(report));console.log('{"loggedIn":true,"authMethod":"claude.ai"}');}else{fs.writeFileSync(${JSON.stringify(report)},JSON.stringify(report));setInterval(()=>{},1000);}\n`,{mode:0o700});
     // Exercise the cleaned launch environment, including an explicitly empty
     // variable. .env credentials are always passed, even when a subscription
     // login would report claude.ai, so launch never queries auth status.
     await fs.writeFile(path.join(f.dir,'.env'),`ZYLOS_TMUX_ENV=ANTHROPIC_API_KEY,CLAUDE_CODE_OAUTH_TOKEN\n${key ? `${key}=${key==='ANTHROPIC_API_KEY' ? 'fixture-api-key' : ''}\n` : ''}`);
-    const adapter=new Adapter({root:f.dir,env:{PATH:process.env.PATH,HOME:f.dir,CLAUDE_BIN:command},tmux:{binary,socketPath:f.socketPath,configFile:'/dev/null'}});
-    await adapter.launch({sessionGroup:null,runId:'auth-condition-run',sessionMode:'single',launchConfig:{runtime:'claude',mode:'default'}});
+    const adapterOptions = {root:f.dir,env:{PATH:process.env.PATH,HOME:f.dir,CLAUDE_BIN:command},tmux:{binary,socketPath:f.socketPath,configFile:'/dev/null'}};
+    await launchSession({ runtime: 'claude', sessionGroup:null,runId:'auth-condition-run',sessionMode:'single',launchConfig:{runtime:'claude',mode:'default'}}, adapterOptions);
     for(let i=0;i<100;i++){try{await fs.access(report);break;}catch{}await delay(10);}
     const observed=JSON.parse(await fs.readFile(report,'utf8'));
     for(const name of ['ANTHROPIC_API_KEY','CLAUDE_CODE_OAUTH_TOKEN']){
@@ -191,7 +189,6 @@ test('missing tmux executable fails without retaining the launch script or child
   await assert.rejects(f.launch({tmuxBinary:path.join(f.dir,'missing-tmux')}),{code:'LAUNCH_FAILED'});
   assert.equal(f.tmux('list-sessions','-F','#{session_name}').trim(),'keeper');
 });
-
 
 for (const locale of ['unset', 'C']) for (const scenario of ['launch-multi', 'launch-single', 'observe', 'list']) {
   test(`tmux locale ${locale}: ${scenario} succeeds without inherited UTF-8 settings`, async t => {

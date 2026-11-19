@@ -50,8 +50,8 @@ test('CLI session targets actual runtime and rejects unreadable mode without def
     const seen = [];
     const result = await resolveCliSession({ env: { ZYLOS_SESSION_GROUP: 'telegram:example' }, mode: () => ({ mode }),
       identity: async group => { seen.push(group); return { present: true, runtime: 'codex' }; },
-      resolveRuntime: () => assert.fail('present runtime must win'), adapter: runtime => runtime });
-    assert.deepEqual(seen, [expected]); assert.equal(result.runtime, 'codex'); assert.equal(result.adapter, 'codex');
+      resolveRuntime: () => assert.fail('present runtime must win'), runtimeFor: runtime => runtime });
+    assert.deepEqual(seen, [expected]); assert.equal(result.runtime, 'codex'); assert.equal(result.runtimeImpl, 'codex');
   }
   await assert.rejects(() => resolveCliSession({ mode: () => { throw new Error('bad config'); },
     identity: () => assert.fail('bad mode must stop target selection') }), /bad config/);
@@ -332,8 +332,8 @@ test('real override CLI searches literal underscores and pages case-sensitive gr
 test('multi absent display retains identity when runtime configuration cannot be read', async () => {
   const live = { present: false, tmuxName: 'zylos-group-origin' };
   const result = await resolveCliSession({ env: {}, mode: () => ({ mode: 'multi' }), identity: () => live,
-    resolveRuntime: () => { throw new Error('C4 missing'); }, adapter: () => assert.fail('unknown target has no adapter') });
-  assert.equal(result.live, live); assert.equal(result.runtime, 'unknown'); assert.equal(result.adapter, null);
+    resolveRuntime: () => { throw new Error('C4 missing'); }, runtimeFor: () => assert.fail('unknown target has no adapter') });
+  assert.equal(result.live, live); assert.equal(result.runtime, 'unknown'); assert.equal(result.runtimeImpl, null);
   await assert.rejects(resolveCliSession({ mode: () => ({ mode: 'single' }), identity: () => live,
     resolveRuntime: () => { throw new Error('C4 missing'); } }), /C4 missing/);
 });

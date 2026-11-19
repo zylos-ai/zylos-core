@@ -28,11 +28,11 @@ test('unreadable process environment/runtime tree cannot block observable tmux r
  const f=await fixture(t),key=randomUUID(),independent=await service(f,key);
  f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
  let unavailableReads=0;
- f.adapter.options.dependencies={...actualDependencies,observeSessionTarget:options=>actualDependencies.observeSessionTarget({
+ f.options.dependencies={...actualDependencies,observeSessionTarget:options=>actualDependencies.observeSessionTarget({
   ...options,readProcessTree:async()=>{unavailableReads++;throw Object.assign(new Error('process information denied'),{code:'EACCES'})},
  })};
  for(const option of ['findRunProcesses','readOwnedProcess','pinProcess','signalProcess','processSignal','stopGraceMs'])
-  Object.defineProperty(f.adapter.options,option,{get(){throw Object.assign(new Error('process environment denied'),{code:'EACCES'})}});
+  Object.defineProperty(f.options,option,{get(){throw Object.assign(new Error('process environment denied'),{code:'EACCES'})}});
  await f.adapter.stop({tmuxName:'target',expectedRunId:key});
  assert.equal(f.command('list-sessions','-F','#{session_name}'),'origin');assert.equal(f.snapshot('origin'),f.origin);
  assert.ok(unavailableReads>0,'actual resolver exercised unavailable runtime observation');

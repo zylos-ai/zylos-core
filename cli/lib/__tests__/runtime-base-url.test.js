@@ -74,7 +74,7 @@ describe('runtime base URL support', () => {
     assert.deepEqual(await runtimeHooksReady('claude'), { ready: true, pendingMigration: true });
     let writes = 0;
     const deps = { read: () => ({ state: 'ok', config: { runtime: 'codex', session_mode: 'multi' } }),
-      exists: () => true, adapter: () => ({ checkAuth: () => assert.fail('no-validate must skip auth') }),
+      exists: () => true, runtimeFor: () => ({ auth: { checkAuth: () => assert.fail('no-validate must skip auth') } }),
       write: () => { writes++; return { previous: { runtime: 'codex' }, config: { runtime: 'claude', session_mode: 'multi' }, changed: true }; },
       observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }) };
     assert.equal((await executeRuntimeSwitch('claude', ['--no-validate'], deps)).ok, true);
