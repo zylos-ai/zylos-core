@@ -74,9 +74,10 @@ test('runtime upgrades use the viewed runtime name and distinguish unknown and c
           });
           const page = await context.newPage();
           page.setDefaultTimeout(10000);
-          const screenshot = async stage => {
+          const screenshot = async (stage, target) => {
             const dir = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
             if (!dir) return;
+            await target?.evaluate(element => element.scrollIntoView({ block: 'center' }));
             fs.mkdirSync(dir, { recursive: true });
             await page.screenshot({ path: path.join(dir, `upgrade-${runtime}-${width}-${language}-${theme}-${stage}.png`) });
           };
@@ -96,7 +97,7 @@ test('runtime upgrades use the viewed runtime name and distinguish unknown and c
           console.log('Upgrade button geometry:', JSON.stringify({ runtime, width, language, theme, ...geometry }));
           await page.mouse.move(0, 0);
           await button.blur();
-          await screenshot('settings');
+          await screenshot('settings', button);
           const dialog = page.getByRole('alertdialog');
           const status = page.locator('#action-status');
           const submit = async () => {
@@ -115,7 +116,7 @@ test('runtime upgrades use the viewed runtime name and distinguish unknown and c
           try {
             await submit();
             await expectStatus(new RegExp(zh ? `${name} 已更新` : `${name} updated`));
-            await screenshot('success');
+            await screenshot('success', status);
           } finally { releaseOrigin?.(); }
           // The success follow-up is consumed before changing the next request outcome.
           await page.waitForFunction(() => !/updated|已更新/.test(document.querySelector('#action-status')?.textContent ?? ''));
@@ -124,7 +125,7 @@ test('runtime upgrades use the viewed runtime name and distinguish unknown and c
           await submit();
           const unknown = new RegExp(zh ? `${name} 升级结果未知` : `${name} upgrade result is unknown`);
           await expectStatus(unknown);
-          await screenshot('gateway-504');
+          await screenshot('gateway-504', status);
           if (runtime === 'agy') {
             for (const [kind, expected] of [['lost', unknown], ['failure', /Upgrade failed: fixture rejection|升级失败：fixture rejection/], ['timeout', /did not complete within 5 minutes|5 分钟/]]) {
               outcome = kind;
