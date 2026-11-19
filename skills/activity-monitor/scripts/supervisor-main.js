@@ -24,7 +24,7 @@ import { messageForStatus } from '../../comm-bridge/scripts/status-notice-templa
 import { systemSendEnvironment } from '../../comm-bridge/scripts/c4-system-send-env.js';
 import { CONFIG_RECLAIM_PROMPT, PRE_RECLAIM_CHECK_PROMPT, ROTATION_PROMPT, UPGRADE_RESTART_CHECK_PROMPT } from './reclaim-prompts.js';
 const { readSessionMode, readZylosConfigOrThrow } = await loadCoreModule('config.js');
-const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
+const { getRuntime } = await loadCoreModule('runtime/index.js');
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
 const { observeSessionTarget } = await loadCoreModule('runtime/session-target.js');
 const { zylosRoot, LEGACY_TMUX_NAMES } = await loadCoreModule('session-group-paths.js');
@@ -155,7 +155,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
       finally {await connection?.close();}
     },
     resolveTargetRuntime,
-    checkAuth:runtime=>getSessionAdapter(runtime).checkAuth(),
+    checkAuth:async runtime=>(await getRuntime(runtime)).auth.checkAuth(),
     matchScreen:(runtime,screen)=>runtime==='agy'?{}:(runtime==='claude'?matchClaudeScreen:matchCodexScreen)(screen),
     resolveToolRule:(runtime,tool)=>findMatchingToolRule({runtimeId:runtime,toolName:tool.name,toolInput:tool.input,config:configuration}),
     prepareReferenceReorg:()=>prepareReferenceReorg({root,now:clock()}),

@@ -81,10 +81,10 @@ export function createDelivery(deps, configuration = {}) {
     periodicGroups.get(group)?.timer.reset(reason);
     periodicGroups.delete(group);
   }
-  async function captureBound({ target, connection, adapter }, fields, phase, details = {}) {
+  async function captureBound({ target, connection }, fields, phase, details = {}) {
     if (!options.captureEnabled) return;
     try {
-      const text = await adapter.captureScreen({ target, connection });
+      const text = await deps.session.captureScreen({ target, connection });
       await revalidate({ target, connection });
       const geometry = await connection.command([C.displayMessage, '-p', '-t', target.paneId, F.geometry]);
       const status = saveEnterCapture(text, phase, { ...fields, ...details, geometry: geometry.trim() });
@@ -108,12 +108,11 @@ export function createDelivery(deps, configuration = {}) {
         const target = await resolve({ sessionGroup: group, connection });
         if (stopped || !target.ready || !['claude', 'codex', 'agy'].includes(target.runtime)) throw failure('ENTER_UNVERIFIED');
         entry.fields = { ...entry.fields, runId: target.runId, runtime: target.runtime };
-        const adapter = deps.getSessionAdapter(target.runtime);
-        await captureBound({ target, connection, adapter }, entry.fields, 'before', { kind: 'periodic' });
+        await captureBound({ target, connection }, entry.fields, 'before', { kind: 'periodic' });
         await revalidate({ target, connection });
-        await adapter.sendKeys({ target, connection, keys: ['Enter'] });
+        await deps.session.sendKeys({ target, connection, keys: ['Enter'] });
         await sleep(options.verifyWaitMs);
-        await captureBound({ target, connection, adapter }, entry.fields, 'after', { kind: 'periodic' });
+        await captureBound({ target, connection }, entry.fields, 'after', { kind: 'periodic' });
       } finally { await connection?.close(); }
     } });
     if (periodic.pending?.attempts >= options.periodicMaxAttempts) clearPeriodicEnter(group, 'exhausted');
@@ -178,7 +177,7 @@ export function createDelivery(deps, configuration = {}) {
     const fields = { session_group: group, [type === 'control' ? 'control_id' : 'conversation_id']: row.id };
     const emit = (event, details = {}) => diagnostic(event, { ...fields, ...details });
     const periodic = groupPeriodic(group, fields);
-    let connection, target, adapter, timer, draining = false, queue = Promise.resolve();
+    let connection, target, timer, draining = false, queue = Promise.resolve();
     let result = 'blocked', gateCode, gateReason, error, state = { state: 'offline' }, initial = true, sessionId = null, entered = false, pastedAt = null;
     // A control typed into the session as a message (not a key, a slash command or an auto-acknowledged heartbeat) is
     // input the agent works on, delivered like a conversation message.
@@ -190,11 +189,11 @@ export function createDelivery(deps, configuration = {}) {
       return work;
     }
     async function capture(phase, details) {
-      return captureBound({ target, connection, adapter }, fields, phase, details);
+      return captureBound({ target, connection }, fields, phase, details);
     }
     async function enter(kind) {
       emit('enter_attempt', { kind });
-      await adapter.sendKeys({ ...bound(), keys: ['Enter'] });
+      await deps.session.sendKeys({ ...bound(), keys: ['Enter'] });
       entered = true; emit('enter_sent', { kind });
     }
     function schedulePeriodic() {
@@ -233,7 +232,7 @@ export function createDelivery(deps, configuration = {}) {
       if (target.runtime === 'agy') {
         await revalidate(bound());
         const y = Number.parseInt((await connection.command([C.displayMessage, '-p', '-t', target.paneId, F.cursorY])).trim(), 10);
-        verdict = checkAgyInputState(await adapter.captureScreen(bound()), x, y);
+        verdict = checkAgyInputState(await deps.session.captureScreen(bound()), x, y);
         emit('input_check', { verdict });
         return verdict;
       }
@@ -242,13 +241,13 @@ export function createDelivery(deps, configuration = {}) {
         else {
           await revalidate(bound());
           const y = Number.parseInt((await connection.command([C.displayMessage, '-p', '-t', target.paneId, F.cursorY])).trim(), 10);
-          const prompt = findPromptY(await adapter.captureScreen(bound()));
+          const prompt = findPromptY(await deps.session.captureScreen(bound()));
           if (Number.isInteger(y) && y >= 0 && prompt >= 0) verdict = y === prompt ? 'empty' : 'has_content';
         }
       }
       if (verdict === 'has_content' && target.runtime === 'claude') {
         try {
-          const fallback = checkClaudeFallbackInputBox(await adapter.captureScreen(bound()));
+          const fallback = checkClaudeFallbackInputBox(await deps.session.captureScreen(bound()));
           if (fallback !== 'indeterminate') verdict = fallback === 'empty' ? 'disputed_empty' : fallback;
         } catch (cause) { if (isIdentityError(cause)) throw cause; }
       }
@@ -276,7 +275,7 @@ export function createDelivery(deps, configuration = {}) {
         else {
           try {
             await io(async () => {
-              if (isUsageOverlayCapture(await adapter.captureScreen(bound()))) await adapter.sendKeys({ ...bound(), keys: ['Escape'] });
+              if (isUsageOverlayCapture(await deps.session.captureScreen(bound()))) await deps.session.sendKeys({ ...bound(), keys: ['Escape'] });
             });
           } catch (cause) { if (isIdentityError(cause)) throw cause; }
         }
@@ -325,7 +324,6 @@ export function createDelivery(deps, configuration = {}) {
         const bypass = isBypassState(item);
         const health = deps.readRuntimeHealth(target.runtime);
         const publicHealth = health.missing ? 'ok' : health.unreadable ? 'unavailable' : (health.publicHealth ?? health.health);
-        if (target.runtime === 'agy') adapter = deps.getSessionAdapter(target.runtime);
         const agyInputReady = target.runtime !== 'agy' || isKeystrokeControl(item) || await inputState() === 'empty';
         if (!agyInputReady || (!bypass && (offline(state.state) || (state.health ?? 'ok') !== 'ok' || publicHealth !== 'ok')) ||
           (row.require_idle === 1 && (state.state !== 'idle' || !(Number.isFinite(state.idle_seconds) && state.idle_seconds >= REQUIRE_IDLE_MIN_SECONDS)))) {
@@ -336,14 +334,13 @@ export function createDelivery(deps, configuration = {}) {
             : gateCode === 'runtime_unavailable' ? `runtime_${publicHealth}` : gateCode;
         } else {
           finishWait(row, type, 'resumed', { ...fields });
-          adapter = deps.getSessionAdapter(target.runtime);
           const content = row.content || '';
           if (bypass && shouldAutoAckHeartbeat({ item, agentState: { state: state.state, healthy: !offline(state.state) }, procState: state.proc,
             confirmedActive: state.active_tools > 0 && Number.isFinite(state.last_api_activity) && now() / 1000 - state.last_api_activity < 60 })) {
             result = 'ack';
           } else if (isKeystrokeControl(item)) {
             periodic.reset('keystroke');
-            await io(() => adapter.sendKeys({ ...bound(), keys: [parseKeystrokeKey(content)] }));
+            await io(() => deps.session.sendKeys({ ...bound(), keys: [parseKeystrokeKey(content)] }));
             result = 'ack';
           } else {
             if (type === 'control' && content.startsWith('/')) periodic.reset('slash_control');
@@ -358,7 +355,7 @@ export function createDelivery(deps, configuration = {}) {
             }
             await io(async () => {
               if(continuation && deps.db.getControlById(row.id)?.status!=='running')throw failure('CONTROL_NOT_ACTIVE');
-              return adapter.sendText({ ...bound(), text: sanitized, bracketedPaste: BRACKETED_PASTE_ENABLED });
+              return deps.session.sendText({ ...bound(), runtime: target.runtime, text: sanitized, bracketedPaste: BRACKETED_PASTE_ENABLED });
             });
             pastedAt = now();
             try { Promise.resolve(deps.notifyDelivered({
@@ -386,7 +383,7 @@ export function createDelivery(deps, configuration = {}) {
             if (clearAgy) {
               // /clear itself does not fire SessionStart in agy. Its first
               // message does, so use the same internal sentinel as launch.
-              await io(() => adapter.sendText({ ...bound(), text: buildKickPrompt(), bracketedPaste: BRACKETED_PASTE_ENABLED }));
+              await io(() => deps.session.sendText({ ...bound(), runtime: target.runtime, text: buildKickPrompt(), bracketedPaste: BRACKETED_PASTE_ENABLED }));
               await sleep(getDeliveryDelay(Buffer.byteLength(buildKickPrompt(), 'utf8')));
               if (!await verify()) throw failure('ENTER_UNVERIFIED');
             }

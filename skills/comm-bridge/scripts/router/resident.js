@@ -17,7 +17,7 @@ export function createSinglePreparation({ clearStaleState, resetToolLifecycle, b
 
 /** Legacy observation has its own identity/state providers. It never reads the
  * new origin state and never treats a failed observation as confirmed absence. */
-export function createLegacyMigration({ readLegacy, readLegacyStatus, sendExit, getSessionAdapter,
+export function createLegacyMigration({ readLegacy, readLegacyStatus, sendExit, session,
   readUpgradeMarker = async () => null, readUpgradeJournal = async () => null,
   diagnostic = () => {}, now = Date.now, idleSeconds = 3 }) {
   const startedAt = now();
@@ -82,7 +82,7 @@ export function createLegacyMigration({ readLegacy, readLegacyStatus, sendExit, 
           entry.exitForcedLogged = true;
           diagnostic('legacy_exit_forced', { tmuxName: entry.tmuxName, reason });
         }
-        await getSessionAdapter(live.runtime).stop({ tmuxName: entry.tmuxName, expectedRunId: live.runId ?? null });
+        await session.stop({ tmuxName: entry.tmuxName, expectedRunId: live.runId ?? null });
         entry.forced = true; entry.stopped = true;
         diagnostic('legacy_tmux_stopped', { tmuxName: entry.tmuxName, reason: 'forced' });
       } catch (error) { diagnostic('legacy_stop_unconfirmed', { tmuxName: entry.tmuxName, reason: error.code ?? error.message }); }

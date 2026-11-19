@@ -15,8 +15,9 @@ import { PENDING_MAX_AGE_SECONDS, RECOVER_MAX_AGE_SECONDS, MAX_RETRIES,
  * The shared READY default can be overridden by isolated tests. */
 export function createRouter(dependencies, configuration = {}) {
   const required = ['readSessionMode','readLiveIdentities','readLiveIdentity','readCurrentSession','listGroupTmuxSessions','readRuntimeHealth',
-    'getSessionAdapter','submit','deliverControl','deliverConversation','handleExpired','prepareSingle','findLegacySessions','advanceLegacy'];
+    'submit','deliverControl','deliverConversation','handleExpired','prepareSingle','findLegacySessions','advanceLegacy'];
   for (const name of required) if (typeof dependencies[name] !== 'function') throw new TypeError(`Router dependency ${name} is required`);
+  if (!dependencies.session || typeof dependencies.session !== 'object') throw new TypeError('Router dependency session is required');
   if (!dependencies.db) throw new TypeError('Router database is required');
   const options = { pendingMaxAgeSeconds: PENDING_MAX_AGE_SECONDS, recoverMaxAgeSeconds: RECOVER_MAX_AGE_SECONDS,
     maxRetries: MAX_RETRIES, cleanupIntervalMs: CONTROL_CLEANUP_INTERVAL_MS, retentionDays: CONTROL_RETENTION_DAYS,
@@ -166,7 +167,7 @@ export function createRouter(dependencies, configuration = {}) {
           diagnostic('stop_unconfirmed', { session_group: group, reason: 'runtime_unknown' });
           deps.alert?.('stop_unconfirmed', { sessionGroup: group, reason: 'runtime_unknown' }); return;
         }
-        await deps.getSessionAdapter(last.runtime).stop({ tmuxName: last.tmuxName, expectedRunId: last.runId });
+        await deps.session.stop({ tmuxName: last.tmuxName, expectedRunId: last.runId });
         state.live.delete(group);
         diagnostic(last.runId ? 'unowned_start_stopped' : 'tmux_runid_missing', { session_group: group, runId: last.runId });
         if (!last.runId) deps.alert?.('tmux_runid_missing', { sessionGroup: group });

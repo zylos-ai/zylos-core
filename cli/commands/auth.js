@@ -1,5 +1,5 @@
 import { spawn as spawnChild } from 'node:child_process';
-import { getSessionAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
+import { getRuntime, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { notifyAuthCompleted } from '../lib/am-sock-client.js';
 import { claudeSettingsOverrideNotice, relayLoginNotice, syncClaudeRelayTraffic } from '../lib/runtime-setup.js';
@@ -21,7 +21,7 @@ export function runNativeAuth(runtime, args) {
   });
 }
 
-export async function executeAuth(args, { exists = commandExists, adapter = getSessionAdapter, spawn = runNativeAuth,
+export async function executeAuth(args, { exists = commandExists, runtimeFor = getRuntime, spawn = runNativeAuth,
   notifyRecovery = notifyAuthCompleted, syncRelayTraffic = syncClaudeRelayTraffic, relayNotice = relayLoginNotice } = {}) {
   const runtime = args[0];
   const deviceCode = args.includes('--device-code');
@@ -36,7 +36,7 @@ export async function executeAuth(args, { exists = commandExists, adapter = getS
     if (result.signal || result.status === 130) return { ok: false, error: { code: 'AUTH_CANCELLED', message: 'Authentication cancelled', persisted: null, configChanged: false } };
     if (result.error || result.status !== 0) throw new Error('Native authentication failed');
     let checked;
-    try { checked = await adapter(runtime).checkAuth(); }
+    try { checked = await (await runtimeFor(runtime)).auth.checkAuth(); }
     catch { checked = { status: 'uncertain' }; }
     if (checked.status !== 'success') {
       // The failed check ran Claude Code, which takes settings.json `env` over the

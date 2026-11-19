@@ -45,7 +45,7 @@ import { deployManifestTemplate } from '../lib/runtime/tmux-env.js';
 import { runMigrations } from '../lib/migrate.js';
 import { ensureCodexHooksTrusted } from '../lib/codex-hooks.js';
 import { syncAgyConfig } from '../lib/agy-setup.js';
-import { getSessionAdapter } from '../lib/runtime/index.js';
+import { getRuntime } from '../lib/runtime/index.js';
 import { syncRuntimeHooks } from '../lib/sync-runtime-hooks.js';
 import { runtimeHooksReady } from './runtime.js';
 import { childRuntimeEnv } from '../lib/child-runtime-env.js';
@@ -1895,7 +1895,7 @@ export async function runInitAuthentication(opts, {
   saveClaudeBase = saveClaudeBaseUrl, saveCodexBase = saveCodexBaseUrl,
   setupSave = saveSetupToken, setupVerify = verifySetupToken, setupRollback = rollbackSetupToken,
   nativeLogin = runInitNativeLogin, writeCodex = writeCodexConfig,
-  agyAuth = () => getSessionAdapter('agy').checkAuth(),
+  agyAuth = async () => (await getRuntime('agy')).auth.checkAuth(),
   log = console.log, reportError = console.error,
 } = {}) {
   let exitCode = 0, claudeApiAttempted = false, codexApiAttempted = false;
