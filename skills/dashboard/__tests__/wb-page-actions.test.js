@@ -1,9 +1,19 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { actionConfirmText, bindActionControls, createPageActions, prepareAction } from '../public/js/wb/page-actions.js';
 import { CONFIRM_ACTIONS } from '../public/js/wb/action-runner.js';
 import { documentFixture, node } from './fixtures/settings-dom.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { actionConfirmText, bindActionControls, createPageActions, prepareAction } = await import('../public/js/wb/page-actions.js');
 
 const t = (key, params = {}) => key + (Object.keys(params).length ? ':' + JSON.stringify(params) : '');
 
@@ -140,7 +150,6 @@ test('Origin restart identity is cleared on machine changes and accepted only af
   assert.ok(read >= 0 && guard > read && accept > guard, 'a late Origin read cannot become the next machine’s restart target');
 });
 
-
 test('manual restarts preserve canonical single and multi Origin scope with run binding', async () => {
   for (const sessionGroup of [null, 'origin']) {
     const a = actions({ shown: { sessionGroup, runId: 'run-exact', sessionId: 'session-exact' } });
@@ -151,7 +160,6 @@ test('manual restarts preserve canonical single and multi Origin scope with run 
   const send = app.slice(app.indexOf('async function sendAction('), app.indexOf('async function sendAction(') + 1400);
   assert.match(send, /sessionGroup: origin\.sessionGroup, runId: origin\.live\.runId/, 'the missing-run fallback preserves the canonical null or origin scope');
 });
-
 
 test('restart fallback binds only a readable run on the same viewed machine', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
@@ -165,7 +173,7 @@ test('restart fallback binds only a readable run on the same viewed machine', ()
 });
 
 test('Antigravity and unknown runtime confirmations name the viewed instance runtime', async () => {
-  for (const [runtime, name] of [['agy', 'Antigravity'], ['future', 'future'], [null, 'wb.unknown'], ['', 'wb.unknown']]) {
+  for (const [runtime, name] of [['agy', 'Antigravity'], ['future', 'Future'], [null, 'wb.unknown'], ['', 'wb.unknown']]) {
     const a = actions({ runtime }); await a.run.exec('upgrade-cc');
     assert.deepEqual(a.asked, ['confirm.upgrade_runtime:' + JSON.stringify({ runtime: name })]);
     assert.equal(a.sent.length, 1);

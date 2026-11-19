@@ -1,3 +1,4 @@
+import { DEFAULT_RUNTIME } from '../../runtime-descriptors.js';
 import { instantSeconds } from './api-time.js';
 import { listen, reconcileChildren } from './detail-update.js';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js';
@@ -213,7 +214,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
           state.configOpen = true; draw();
           try {
             const value = await config.load();
-            if (value) await config.loadMeta(value.runtime?.data?.resolved?.runtime ?? 'claude');
+            if (value) await config.loadMeta(value.runtime?.data?.resolved?.runtime ?? DEFAULT_RUNTIME);
           } catch (error) { if (error.name !== 'AbortError') { config.state.error = error.message; draw(); } }
         },
       });

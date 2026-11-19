@@ -1,7 +1,17 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Node, allNodes } from './fixtures/workbench-dom.js';
-import { mountMobileNavigation } from '../public/js/wb/mobile-navigation.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { mountMobileNavigation } = await import('../public/js/wb/mobile-navigation.js');
 
 // DOM ownership and mutation subscriptions only; real layout stays in the
 // isolated mobile browser case. No browser, network, process or storage starts.
@@ -80,7 +90,6 @@ test('mobile navigation watches availability controls without watching conversat
   } finally { navigation.destroy(); }
   assert.equal(f.observer.disconnects, 1);
 });
-
 
 test('mobile navigation discovers conversation controls created after mounting', () => {
   const f = navigationDocument(), { document } = f;

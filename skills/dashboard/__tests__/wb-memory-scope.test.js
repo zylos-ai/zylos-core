@@ -1,10 +1,20 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import { BUDGETS, WARN_THRESHOLDS, measureMemoryText } from '../../zylos-memory/scripts/memory-budget.js';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createDocument, allNodes, deferred } from './fixtures/workbench-dom.js';
-import { memoryBacklogView, memoryBacklogAge, memoryBacklogValueWidth, leaveMemoryConflict, memoryFileScope, memoryFlatFiles, memoryUpkeepNotice, memoryScope, memoryGroupLabel, memoryBudgetRows, createMemoryScope, memoryWriteMessage, saveMemoryOnce, applyMemorySave, memoryWriteAllowed, applyMemoryWriteAccess, renderMemoryPreservingEditor, captureMemorySave, memorySaveCurrent, memorySaveTargetCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent } from '../public/js/wb/memory-scope.js';
 import { parseSessionGroup } from '../../comm-bridge/scripts/c4-session-group.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { memoryBacklogView, memoryBacklogAge, memoryBacklogValueWidth, leaveMemoryConflict, memoryFileScope, memoryFlatFiles, memoryUpkeepNotice, memoryScope, memoryGroupLabel, memoryBudgetRows, createMemoryScope, memoryWriteMessage, saveMemoryOnce, applyMemorySave, memoryWriteAllowed, applyMemoryWriteAccess, renderMemoryPreservingEditor, captureMemorySave, memorySaveCurrent, memorySaveTargetCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent } = await import('../public/js/wb/memory-scope.js');
 
 // Direct product imports and injected DOM/request. Run for memory scope, charts,
 // save-result interpretation or selection changes; skip unrelated collectors.
@@ -421,7 +431,6 @@ test('sync busy preserves the write rejection without a readback and has a speci
   assert.equal(memoryWriteMessage('other', t), null);
 });
 
-
 test('save completion is fenced when the instance or selected file changes', async () => {
   const state = { selectedPath: 'state.md', file: {}, draft: 'draft' }, captured = captureMemorySave(state);
   assert.equal(memorySaveCurrent(captured, state), true);
@@ -447,14 +456,12 @@ test('a redraw after the detail level changes shows or hides the memory charts w
   f.controller.destroy();
 });
 
-
 test('group navigation after an instance change keeps the requested group selection', () => {
   let owner = 'a'; const f = fixture({ identity: () => owner });
   owner = 'b'; f.controller.selectGroup('telegram:dm-1001');
   assert.equal(f.controller.tree(tree()).children[0].path, 'session-groups/telegram:dm-1001');
   f.controller.destroy();
 });
-
 
 test('workbench language packages contain the same translation keys', async () => {
   const en = JSON.parse(await readFile(new URL('../public/i18n/wb.en.json', import.meta.url), 'utf8'));
@@ -466,7 +473,6 @@ test('workbench language packages contain the same translation keys', async () =
   }
   for (const key of Object.keys(zh)) assert.ok(Object.hasOwn(en, key), key);
 });
-
 
 test('a pending save excludes overlapping captures and releases its owner after selecting another file', async () => {
   const state = { selectedPath: 'state.md', file: {}, draft: 'draft', saving: false }, captured = captureMemorySave(state);
@@ -516,7 +522,6 @@ test('the references warning follows Core on both sides of its token threshold',
     assert.equal(row.warned, tokens >= edge); assert.equal(row.over, 0);
   }
 });
-
 
 test('successful save updates the file sha while retaining typing that arrived during the request', async () => {
   const state = { selectedPath: 'state.md', file: { path: 'state.md', text: 'old', sha256: 'old-sha' }, draft: 'submitted', editing: true, dirty: true };
@@ -595,7 +600,6 @@ test('invalid group directories and files directly under session-groups explain 
   assert.equal(memoryScope(value).shared.children.find(node => node.path === 'session-groups').children.length, 2);
   f.controller.destroy();
 });
-
 
 test('success arriving during a same-path reload is discarded without applying or persisting an empty draft', async () => {
   const state = { selectedPath: 'state.md', file: { path: 'state.md', text: 'old', sha256: 'old-sha' }, draft: 'submitted', editing: true, dirty: true };
@@ -681,7 +685,6 @@ test('repeated action renders keep invalid group drafts read-only', () => {
   applyMemoryWriteAccess(edit, save, value, 'identity.md');
   assert.equal(edit.hidden, false); assert.equal(edit.disabled, false); assert.equal(save.disabled, true, 'ordinary pending/clean restrictions remain in force');
 });
-
 
 test('memory files list flat per section, skip dot files and know their scope', () => {
   const value = tree();
@@ -813,7 +816,6 @@ test('the backlog subtitle names the gathering threshold even when no group thre
   assert.match(nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0].textContent, /wb.memory.backlogHintOrigin \{"origin":50\}/);
   f.controller.destroy();
 });
-
 
 test('memory budget labels and tooltips use B KB MB with 1024 based values', async () => {
   const f = fixture({ detail: () => 'technical', getTree: () => ({ root: dir('', [

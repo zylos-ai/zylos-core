@@ -1,15 +1,14 @@
+import { registerHooks } from 'node:module';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
-import { afterSentence, buildAgentFleetView, fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
 import { documentFixture, node } from './fixtures/settings-dom.js';
 import { validAgentSize, validObserverSize } from '../public/js/observer-size.js';
 import { agentColor } from '../src/lib/agent-color.js';
 import { markCurrentTab, tabForPath } from '../public/js/wb/view-mode.js';
 import { createRemoteAccess } from '../public/js/wb/remote-access.js';
-import { observerPageUsable, observerRecoveryReason, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide } from '../public/js/wb/observer-page.js';
 
 function deferred() {
   let resolve;
@@ -923,7 +922,6 @@ test('Observer stale renew responses cannot mutate a newer session', async () =>
   await pendingRenew;
   assert.equal(harness.context.state.observer.lease.id, 'new-lease');
 
-
 });
 
 test('Observer stale open, frame, and renew errors cannot damage a closed or newer session', async (t) => {
@@ -1808,7 +1806,6 @@ test('subagent list is height-capped with internal scroll (#259)', () => {
   assert.match(block[0], /overflow-y:\s*auto/);
 });
 
-
 test('Observer recovery status survives refresh and exposes cleanup without viewer admission', async (t) => {
   const cases = [
     { state: 'installed', desired: { enabled: false, teardownFence: true, lastError: 'teardown_failed' } },
@@ -2083,8 +2080,20 @@ test('unchanged navigation labels stay in the primary language pack', () => {
 
 // Workbench shell cases directly import product modules and inject DOM/API stubs.
 // Existing legacy cases above retain their old harness and are selected separately.
-import { mountWorkbench } from '../public/js/wb/shell.js';
 import { createDocument as wbDocument, storage as wbStorage, tick as wbTick, deferred as wbDeferred } from './fixtures/workbench-dom.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { afterSentence, buildAgentFleetView, fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderAgentFleetHtml } = await import('../public/js/agent-fleet.js');
+const { observerPageUsable, observerRecoveryReason, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide } = await import('../public/js/wb/observer-page.js');
+const { mountWorkbench } = await import('../public/js/wb/shell.js');
+
 const wbName = row => row.children[0].children[1].children[0].textContent;
 function workbenchSnapshot(kind = 'idle', key = 'a') {
   return { mode: 'multi', view: 'multi',

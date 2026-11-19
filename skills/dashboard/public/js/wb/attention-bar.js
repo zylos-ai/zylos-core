@@ -1,5 +1,5 @@
 import { countLabel } from '../count-label.js';
-import { element, fallbackName, icon } from './plain-text.js';
+import { element, fallbackName, icon, runtimeName } from './plain-text.js';
 import { recoveryTime } from './cooldown.js';
 import { formatZoned } from './instance-zone.js';
 const clock = at => formatZoned(at, undefined, { hour: '2-digit', minute: '2-digit' });
@@ -31,7 +31,7 @@ export function renderAttention(root, snapshot, { error, lastSuccess, now = Date
   };
   for (const [item, severity] of items) {
     const at = item.kind === 'rate_limited' ? recoveryTime(item.until, now) : null;
-    const values = { runtime: item.runtime ? item.runtime.charAt(0).toUpperCase() + item.runtime.slice(1) : '', count: item.count ?? item.groups?.length ?? item.count30m ?? '', channel: item.channel ?? '',
+    const values = { runtime: item.runtime ? runtimeName(item.runtime) : '', count: item.count ?? item.groups?.length ?? item.count30m ?? '', channel: item.channel ?? '',
       time: at === null ? '' : clock(at), waiting: item.waiting ?? '' };
     const key = 'wb.attention.' + item.kind + (item.kind === 'rate_limited' && at === null ? '_unknown' : '');
     const group = item.group !== undefined ? item.group : item.groups?.length === 1 ? item.groups[0] : undefined;

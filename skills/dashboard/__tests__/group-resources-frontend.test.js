@@ -1,11 +1,22 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readGroupSnapshot, groupSnapshot, instanceActionRequest } from '../public/js/wb/group-data.js';
-import { statePill, renderDistribution, modelCell, renderRow } from '../public/js/wb/board.js';
-import { renderAttention } from '../public/js/wb/attention-bar.js';
-import { systemItems, instanceStrip } from '../public/js/wb/instance-strip.js';
+
 import { formatZoned } from '../public/js/wb/instance-zone.js?v=100';
 import { createDocument } from './fixtures/workbench-dom.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { statePill, renderDistribution, modelCell, renderRow } = await import('../public/js/wb/board.js');
+const { renderAttention } = await import('../public/js/wb/attention-bar.js');
+const { systemItems, instanceStrip } = await import('../public/js/wb/instance-strip.js');
 
 // Pure page modules and injected reads/DOM: no process, database, network or source evaluation.
 test('group page requests running rows and counts separately without fetching offline rows', async () => {
@@ -131,7 +142,6 @@ test('resource tooltips distinguish host and container CPU and memory independen
   assert.equal(items[2].title.includes('resourceSource'), false);
 });
 
-
 test('compact current action preserves tool priority, received-message fallback and text safety', () => {
   const document = createDocument(), t = (key, params) => key + (params ? ' ' + JSON.stringify(params) : '');
   const minimal = compactRunning('current');
@@ -157,7 +167,6 @@ test('no-response flag coexists with primary working state and exposes its autho
   const mark = pill.children[1].children[0];
   assert.equal(mark.title, formatZoned(since));
 });
-
 
 test('single and uncertain mode strips use catalog running counts and preserve unreadable uncertainty', () => {
   for (const mode of ['single', null]) for (const listKnown of [true, false]) {

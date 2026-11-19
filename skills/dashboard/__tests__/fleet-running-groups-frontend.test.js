@@ -1,7 +1,17 @@
+import { registerHooks } from 'node:module';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
-import { buildAgentFleetView, fleetSelfFromSnapshot, handleFleetClick, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { buildAgentFleetView, fleetSelfFromSnapshot, handleFleetClick, renderAgentFleetHtml } = await import('../public/js/agent-fleet.js');
 
 // Exercise the real renderer with API-shaped inputs; no server or live state.
 function summary(extra = {}) {
@@ -147,7 +157,6 @@ test('problem and more clicks carry their machine and group without opening the 
     assert.deepEqual(calls, ['prevented', [more ? 'problems' : 'group', { agent: 'remote fixture', self, group: 'problem-group' }]]);
   }
 });
-
 
 test('instance cards ignore Origin child observations while preserving aggregate busy state', () => {
   for (const session_mode of ['single', 'multi']) {

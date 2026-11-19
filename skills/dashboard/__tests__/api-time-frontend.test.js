@@ -1,15 +1,27 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { instantMs, instantSeconds, scheduleTimes, activityTimes, conversationStampMs } from '../public/js/wb/api-time.js';
-import { dayTime, untilText, formatTime } from '../public/js/wb/schedule.js';
-import { localInputValue } from '../public/js/wb/schedule-form.js';
+
 import { recoveryTime } from '../public/js/wb/cooldown.js';
-import { systemItems, quotaRecordedTime } from '../public/js/wb/instance-strip.js';
-import { statusAnnotation } from '../public/js/wb/board.js';
-import { activityStrip } from '../public/js/wb/activity-strip.js';
+
 import { createDocument } from './fixtures/workbench-dom.js';
 import { projectApiTimestamps } from '../src/lib/wire-time.js';
 import { workbenchAnswer } from './fixtures/workbench-browser-api.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { dayTime, untilText, formatTime } = await import('../public/js/wb/schedule.js');
+const { localInputValue } = await import('../public/js/wb/schedule-form.js');
+const { systemItems, quotaRecordedTime } = await import('../public/js/wb/instance-strip.js');
+const { statusAnnotation } = await import('../public/js/wb/board.js');
+const { activityStrip } = await import('../public/js/wb/activity-strip.js');
 
 const iso = '2026-11-16T09:00:00.000+08:00', ms = Date.parse(iso), seconds = ms / 1000;
 

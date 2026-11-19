@@ -6,7 +6,10 @@ import { createDocument, allNodes, visibleNodes, visibleText, tick, deferred } f
 import { CONTENT_PREFIX, parseC4Content, makeQuestionSummary, validateAnswer } from '../../comm-bridge/scripts/c4-content-schema.js';
 const browserSchema = new URL('../public/chat-schema.js', import.meta.url).href;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
+  if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
   if (context.parentURL && new URL(specifier, context.parentURL).pathname === new URL(browserSchema).pathname) return next(sourceSchema, context);
   return next(specifier, context);
 } });
@@ -555,7 +558,6 @@ test('a saved question with invalid constraints displays unavailable without ans
   assert.equal(f.requests.length, 0);
 });
 
-
 test('other-answer disclosure is created by the question renderer and keeps the answer action', async () => {
   const f = fixture({ otherAnswerDisclosure: true });
   const details = f.nodes().find(node => node.tagName === 'DETAILS');
@@ -574,7 +576,6 @@ test('other-answer disclosure is created by the question renderer and keeps the 
   const normal = fixture();
   assert.equal(normal.nodes().some(node => node.tagName === 'DETAILS'), false);
 });
-
 
 // Injected DOM only: no network, storage, listeners or child processes.
 // Run when changing question presentation or form controls; unrelated backend changes may skip.
@@ -637,7 +638,6 @@ test('form chips share typed select values, disabled state and cleared drafts', 
   const busy = fixture({ type: 'form_intent', data: { fields }, formState: { sending: true } });
   assert.ok(busy.root.querySelectorAll('.chat-form-chip').every(chip => chip.children[0].disabled));
 });
-
 
 test('mounted lifecycle refresh keeps editing nodes while updating the accepted header and answer', async testContext => {
   const f = await mountedQuestions(testContext);

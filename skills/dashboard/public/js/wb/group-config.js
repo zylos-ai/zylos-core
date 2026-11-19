@@ -1,3 +1,4 @@
+import { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES, runtimesWith } from '../../runtime-descriptors.js';
 import { element, runtimeName } from './plain-text.js';
 
 export function responseError(value, fallback = 'request_failed') {
@@ -23,8 +24,8 @@ export function runningText(data, kind, t = key => key) {
 }
 
 export function validConfigChange(change) {
-  return change?.kind === 'runtime' ? ['inherit', 'claude', 'codex', 'agy'].includes(change.value)
-    : change?.kind === 'model' && ['claude', 'codex'].includes(change.runtime) &&
+  return change?.kind === 'runtime' ? ['inherit', ...SUPPORTED_RUNTIMES].includes(change.value)
+    : change?.kind === 'model' && runtimesWith('modelOverride').includes(change.runtime) &&
       (change.reset === true || (typeof change.model === 'string' && change.model.trim() !== '' &&
         typeof change.effort === 'string' && change.effort.trim() !== ''));
 }
@@ -47,7 +48,7 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
   }
   // Model and effort choices per engine; without them the editor falls back to free text.
   async function loadMeta(runtime) {
-    if (!['claude', 'codex', 'agy'].includes(runtime) || runtime in state.meta) return state.meta[runtime];
+    if (!SUPPORTED_RUNTIMES.includes(runtime) || runtime in state.meta) return state.meta[runtime];
     state.meta[runtime] = undefined;
     let value = null;
     try { value = await request('/api/instance/runtime-options?runtime=' + runtime); } catch {}
@@ -155,9 +156,9 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
     for (const item of choices) node.append(option(item.value ?? item, item.label ?? item));
     node.value = value; node.disabled = locked; return node;
   };
-  const resolved = state.value?.runtime?.data?.resolved?.runtime ?? 'claude';
-  const target = select(t('wb.config.targetRuntime'), ['claude', 'codex', 'agy'].map(value => ({ value, label: runtimeName(value) })), state.draft.target ?? resolved);
-  const supportsModelOverride = target.value !== 'agy';
+  const resolved = state.value?.runtime?.data?.resolved?.runtime ?? DEFAULT_RUNTIME;
+  const target = select(t('wb.config.targetRuntime'), SUPPORTED_RUNTIMES.map(value => ({ value, label: runtimeName(value) })), state.draft.target ?? resolved);
+  const supportsModelOverride = !runtimesWith('modelOverride', 'unsupported').includes(target.value);
   const meta = state.meta?.[target.value];
   const start = startingPair(state.value, target.value);
   const modelValue = state.draft.model ?? start.model;
@@ -205,7 +206,7 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
   pair.append(target, model, effort, save, cancel);
   form.append(pair, threshold, element(document, 'p', t(supportsModelOverride ? 'wb.config.pairNote' : 'wb.config.modelUnavailable'), 'wb-note'));
   // Less common: which engine this group runs on, and dropping its own model pair.
-  const runtime = select(t('wb.term.runtime'), ['inherit', 'claude', 'codex', 'agy'].map(value => ({ value, label: value === 'inherit' ? t('wb.term.inherit') : runtimeName(value) })),
+  const runtime = select(t('wb.term.runtime'), ['inherit', ...SUPPORTED_RUNTIMES].map(value => ({ value, label: value === 'inherit' ? t('wb.term.inherit') : runtimeName(value) })),
     state.draft.runtime ?? state.value?.runtime?.data?.desired?.runtime ?? 'inherit');
   runtime.addEventListener('change', () => { state.draft.runtime = runtime.value; });
   const saveRuntime = element(document, 'button', t('wb.config.saveRuntime'), 'wb-btn wb-btn-sm'); saveRuntime.type = 'button'; saveRuntime.disabled = locked;

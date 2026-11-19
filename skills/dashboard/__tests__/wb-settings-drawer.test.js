@@ -1,7 +1,17 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createSettingsDrawer } from '../public/js/wb/settings-drawer.js';
 import { documentFixture, node } from './fixtures/settings-dom.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
 
 // The phone settings drawer's state, focus, inert background and history entry, driven through the real module
 // with an injected DOM and window. Rendering (sizes, sliding, the real Back button) is in workbench-browser.test.js.

@@ -182,6 +182,8 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] The group configuration editor retains Antigravity as its selected runtime. Runtime switching remains available; model, effort, pair-save and model-reset controls are disabled for Antigravity with an explicit availability note. Control dimensions and responsive placement are unchanged.
 
+[Current] Workbench engine labels use the registered product names Claude, Codex, and Antigravity. Fleet quota bars identify the engine the quota belongs to. A newer peer’s unknown engine ID appears with its first letter capitalized.
+
 [Current] Cards and tables distinguish hierarchy through heading rows, borders, and whitespace. Empty states, errors, and loading hints belong in their page's content area; see section 7 for copy and section 3 for loading appearance.
 
 [Current] Overview separates running and offline groups with the existing segmented-control family. The mutually exclusive primary status and independent queue, blocking, capacity, start-failure, unreadable and no-response flags share the row's status area; flags stack or wrap within that cell. Loading more offline rows preserves the loaded depth on refresh. Fleet cost summaries and cards show today and seven-day costs; they have no session-cost cell or tooltip. Instance cards omit Origin child-agent badges and counts, model, effort, context percentage and rotation threshold in both plain and technical views; they require no Origin-detail request for those removed displays. Offline groups waiting for capacity keep the readable waiting-slot explanation in plain detail. Group details show today and seven-day usage; the Usage page includes the weighted cache-hit curve alongside the existing charts.

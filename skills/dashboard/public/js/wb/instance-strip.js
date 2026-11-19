@@ -1,3 +1,4 @@
+import { runtimesWith } from '../../runtime-descriptors.js';
 import { instantMs } from './api-time.js';
 import { countLabel } from '../count-label.js';
 import { element, icon, runtimeName } from './plain-text.js';
@@ -16,7 +17,7 @@ export const quotaFillColor = remaining => `hsl(${quotaHue(remaining)} var(--wb-
 export function accountRuntimes(snapshot) {
   return [...new Set([snapshot.baselineRuntime,
     ...(snapshot.rows ?? []).map(row => row.launchConfig?.runtime ?? row.target?.runtime),
-    ...['claude', 'codex'].filter(runtime => accountUsedPercent(snapshot.instance?.accounts?.[runtime]) != null)
+    ...runtimesWith('accountQuota').filter(runtime => accountUsedPercent(snapshot.instance?.accounts?.[runtime]) != null)
   ].filter(Boolean))];
 }
 const clock = at => formatZoned(at, undefined, { hour: '2-digit', minute: '2-digit' });

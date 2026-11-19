@@ -12,7 +12,10 @@ const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', i
 const legacySchema = new URL('../../../test/fixtures/c4-content-schema-legacy.js', import.meta.url).href;
 const legacyRenderer = new URL('./fixtures/chat-blocks-legacy.js', import.meta.url).href;
 const legacyPlainText = new URL('./fixtures/plain-text-legacy.js', import.meta.url).href;
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
+  if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
   if (context.parentURL && new URL(context.parentURL).pathname === new URL(legacyRenderer).pathname) {
     const resolved = new URL(specifier, context.parentURL).pathname;
     if (resolved === new URL('../../chat-schema.js', legacyRenderer).pathname) return next(legacySchema, context);

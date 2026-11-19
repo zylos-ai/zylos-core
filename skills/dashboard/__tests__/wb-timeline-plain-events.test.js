@@ -1,3 +1,4 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,12 +7,23 @@ import path from 'node:path';
 import { Store } from '../src/lib/store.js';
 import { createRuns } from '../src/lib/workbench/runs.js';
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
-import { createTimelineLoader, renderTimeline } from '../public/js/wb/detail-timeline.js';
-import { createGroupDetail } from '../public/js/wb/detail.js';
+
 import { recentRows, recentWindow } from '../public/js/wb/timeline-rows.js';
-import { repeatRow } from '../public/js/wb/detail-overview.js';
 import { setInstanceZone } from '../public/js/wb/instance-zone.js';
 import { INSTANCE_TEST_ZONE } from './helpers/instance-test-zone.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { createTimelineLoader, renderTimeline } = await import('../public/js/wb/detail-timeline.js');
+const { createGroupDetail } = await import('../public/js/wb/detail.js');
+const { repeatRow } = await import('../public/js/wb/detail-overview.js');
+
 // Times are expected in the instance zone; INSTANCE_TEST_ZONE differs from the process zone (see the helper).
 const ZONE = INSTANCE_TEST_ZONE;
 setInstanceZone(ZONE);

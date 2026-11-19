@@ -1,17 +1,29 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
-import { statePill, statusAnnotation, renderBoard, renderRow, modelCell, pendingModel, boardController, renderDistribution } from '../public/js/wb/board.js';
 import { createBoardSearch } from '../public/js/wb/board-search.js';
-import { activityStrip } from '../public/js/wb/activity-strip.js';
-import { instanceStrip, SYSTEM_STALE_MS } from '../public/js/wb/instance-strip.js';
-import { renderHostPool } from '../public/js/wb/host-panel.js';
-import { renderAttention } from '../public/js/wb/attention-bar.js';
+
 import { waitText } from '../public/js/wb/view-mode.js';
-import { renderOverview } from '../public/js/wb/detail-overview.js';
 import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
 import { setInstanceZone } from '../public/js/wb/instance-zone.js';
 import { INSTANCE_TEST_ZONE } from './helpers/instance-test-zone.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { statePill, statusAnnotation, renderBoard, renderRow, modelCell, pendingModel, boardController, renderDistribution } = await import('../public/js/wb/board.js');
+const { activityStrip } = await import('../public/js/wb/activity-strip.js');
+const { instanceStrip, SYSTEM_STALE_MS } = await import('../public/js/wb/instance-strip.js');
+const { renderHostPool } = await import('../public/js/wb/host-panel.js');
+const { renderAttention } = await import('../public/js/wb/attention-bar.js');
+const { renderOverview } = await import('../public/js/wb/detail-overview.js');
+
 // Times are expected in the instance zone; INSTANCE_TEST_ZONE differs from the process zone (see the helper).
 const ZONE = INSTANCE_TEST_ZONE;
 setInstanceZone(ZONE);
@@ -577,7 +589,6 @@ test('board and detail share snapshot queue positions while the pool reminder us
   assert.equal(waitText(null, 'plain', poolTranslator('zh')), '');
   assert.equal(waitText({ kind: 'pool_wait', position: '<img>' }, 'plain', poolTranslator('zh')), '排队中 · 第 — 个');
 });
-
 
 test('status pills distinguish stale sample age, last-status tooltip and fresh display', () => {
   const document = createDocument(), now = 1800000000000;

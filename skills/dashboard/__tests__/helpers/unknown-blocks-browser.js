@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const publicDir = fileURLToPath(new URL('../../public/', import.meta.url));
 const schema = fileURLToPath(new URL('../../../comm-bridge/scripts/c4-content-schema.js', import.meta.url));
+const runtimeDescriptors = fileURLToPath(new URL('../../../../cli/lib/runtime/descriptors.js', import.meta.url));
 const fixture = fileURLToPath(new URL('./unknown-blocks-fixture.js', import.meta.url));
 export async function runUnknownBlocksBrowser(sandbox, width) {
   console.info('unknown-block browser isolation', JSON.stringify({ ...sandbox.assertIsolation(),
@@ -19,9 +20,10 @@ export async function runUnknownBlocksBrowser(sandbox, width) {
     if (req.method !== 'GET') { res.writeHead(405); return res.end(); }
     if (url.pathname === '/') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(html); }
     if (url.pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }
-    const file = url.pathname === '/chat-schema.js' ? schema : url.pathname === '/fixture.js' ? fixture
+    const file = url.pathname === '/chat-schema.js' ? schema :
+      url.pathname === '/runtime-descriptors.js' ? runtimeDescriptors : url.pathname === '/fixture.js' ? fixture
       : path.resolve(publicDir, '.' + decodeURIComponent(url.pathname));
-    if ((!file.startsWith(publicDir) && ![schema, fixture].includes(file)) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+    if ((!file.startsWith(publicDir) && ![schema, runtimeDescriptors, fixture].includes(file)) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
       res.writeHead(404); return res.end();
     }
     res.writeHead(200, { 'content-type': { '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2' }[path.extname(file)] || 'application/octet-stream' });

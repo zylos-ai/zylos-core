@@ -6,8 +6,11 @@ import { createDocument, allNodes, tick, deferred } from './helpers/conversation
 
 const schemaPath = new URL('../public/chat-schema.js', import.meta.url).pathname;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
 registerHooks({
   resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
     if (context.parentURL && new URL(specifier, context.parentURL).pathname === schemaPath) return next(sourceSchema, context);
     return next(specifier, context);
   }
@@ -371,7 +374,6 @@ test('the group detail sits beside the conversation only where about 600px of it
     assert.ok(left >= 590 && left < 610, `${query}: about 600px of conversation remain beside the panel (${left})`);
   }
 });
-
 
 test('the conversation group sidebar keeps current state without repeating the last received preview', async t => {
   const labels = JSON.parse(readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url), 'utf8'));

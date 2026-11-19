@@ -1,3 +1,4 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -9,11 +10,20 @@ import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 // the child-process spy in place.
 const { createSchedulerCli, createScheduleWrite, formToArgs } = await import('../src/lib/workbench/schedule-write.js?direct');
 import { createScheduleRead } from '../src/lib/workbench/schedule-read.js';
-import { initialForm, formPayload } from '../public/js/wb/schedule-form.js';
 import { createScheduleTz } from '../src/lib/workbench/schedule-tz.js';
 import { AuthGate, hashApiKey } from '../src/lib/auth.js';
-import { deliveryLine, groupTasks, writeMessage, writeOutcome } from '../public/js/wb/schedule.js';
 import { scheduleEnv, packTranslator } from './fixtures/schedule-env.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { initialForm, formPayload } = await import('../public/js/wb/schedule-form.js');
+const { deliveryLine, groupTasks, writeMessage, writeOutcome } = await import('../public/js/wb/schedule.js');
 
 const TZ_URL = new URL('../../scheduler/scripts/tz.js', import.meta.url).href;
 const REPLY_FLAGS = /^--(?:reply-|clear-reply|clear-session-group)/;
@@ -367,7 +377,6 @@ test('schedule HTTP routes read, write and map errors through the real server', 
   assert.deepEqual(await unreadable.json(), { ok: false, error: { code: 'scheduler_unreadable', message: 'scheduler_unreadable' } });
   assert.equal(children.length, 4);
 });
-
 
 // Integration: real reader summary -> unchanged legacy form functions -> real
 // scheduler CLI write. Run for summary field or edit/write contract changes;

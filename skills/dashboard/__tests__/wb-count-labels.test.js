@@ -1,16 +1,28 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { renderAttention } from '../public/js/wb/attention-bar.js';
 import { waitText } from '../public/js/wb/view-mode.js';
-import { detailNumbers, renderOverview } from '../public/js/wb/detail-overview.js';
-import { renderDistribution } from '../public/js/wb/board.js';
-import { systemItems } from '../public/js/wb/instance-strip.js';
-import { createMemoryScope } from '../public/js/wb/memory-scope.js';
-import { renderDefaults, runtimeConfirmation } from '../public/js/wb/settings-defaults.js';
-import { mountSchedule } from '../public/js/wb/schedule.js';
+
 import { createDocument, allNodes, tick } from './fixtures/workbench-dom.js';
 import { documentFixture } from './fixtures/settings-dom.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { renderAttention } = await import('../public/js/wb/attention-bar.js');
+const { detailNumbers, renderOverview } = await import('../public/js/wb/detail-overview.js');
+const { renderDistribution } = await import('../public/js/wb/board.js');
+const { systemItems } = await import('../public/js/wb/instance-strip.js');
+const { createMemoryScope } = await import('../public/js/wb/memory-scope.js');
+const { renderDefaults, runtimeConfirmation } = await import('../public/js/wb/settings-defaults.js');
+const { mountSchedule } = await import('../public/js/wb/schedule.js');
+
 const en = JSON.parse(readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
 const t = (key, values = {}) => (en[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => String(values[name] ?? `{${name}}`));
 const groups = count => Array.from({ length: count }, (_, n) => ({ sessionGroup: `telegram:dm-${n}`, presence: 'running', state: { kind: 'working' }, name: { displayName: `Group ${n}` }, target: { runtime: 'claude' } }));

@@ -1,9 +1,19 @@
+import { registerHooks } from 'node:module';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import { buildAgentFleetView, defaultAgentFleetLabels, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
 import { fleetStateFromObjects, stateToFleetRecord } from '../src/lib/fleet-poller.js';
 import { fleetGroupSummary } from '../src/lib/workbench/fleet-summary.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { buildAgentFleetView, defaultAgentFleetLabels, renderAgentFleetHtml } = await import('../public/js/agent-fleet.js');
 
 const states = [
   ['BUSY', 'busy', 'Working', 'busy'], ['IDLE', 'idle', 'Idle', 'idle'],
