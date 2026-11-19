@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { validateUpgradeHandoff, upgradeFailureCode, upgradeFailureMessage } from './upgrade-admission.js';
 import { probeCoreDbVersions, preflightCoreDbUpgrade, inspectFirstDashboardTakeover, inspectCoreManagesDashboardDb, assertDashboardUninstalled } from './core-db-backup.js';
-import { beginUpgrade, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, maintenance, maintenanceFor } from './upgrade-protection.js';
+import { beginUpgrade, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, timeUpgradeStep, recovery, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { saveOriginalPackage } from './upgrade-package.js';
 import { recoveryNext, runningUpgradeNotice } from './upgrade-discovery.js';
 
@@ -108,18 +108,20 @@ export function inspectUpgradeSource(input, deps = {}) {
 }
 
 export function installUpgradeTarget(ctx, deps = {}) {
-  const m = maintenanceFor(ctx);
-  const run = deps.runInstaller ?? ((context, options) => m.runInstaller(context.transactionDir, context.journal, options));
-  const output = run(ctx, {stage:'pack-target', npmCli:ctx.protectedNpmCli,
-    args:['pack', '--ignore-scripts', '--json', '--pack-destination', ctx.tempDir], cwd:ctx.tempDir});
-  const packed = JSON.parse(output);
-  const name = packed?.length === 1 && packed[0]?.filename;
-  if (typeof name !== 'string' || path.basename(name) !== name || !name.endsWith('.tgz')) throw new Error('Invalid target npm pack result');
-  // Packing cannot replace the installed package. Open installation intent only
-  // once the exact target archive is available for npm to consume.
-  (deps.markInstallationIntent ?? markInstallationIntent)(ctx);
-  run(ctx, {stage:'install', npmCli:ctx.protectedNpmCli,
-    args:['install', '-g', path.join(ctx.tempDir, name)], cwd:ctx.tempDir});
+  return timeUpgradeStep(ctx, 'installation', () => {
+    const m = maintenanceFor(ctx);
+    const run = deps.runInstaller ?? ((context, options) => m.runInstaller(context.transactionDir, context.journal, options));
+    const output = run(ctx, {stage:'pack-target', npmCli:ctx.protectedNpmCli,
+      args:['pack', '--ignore-scripts', '--json', '--pack-destination', ctx.tempDir], cwd:ctx.tempDir});
+    const packed = JSON.parse(output);
+    const name = packed?.length === 1 && packed[0]?.filename;
+    if (typeof name !== 'string' || path.basename(name) !== name || !name.endsWith('.tgz')) throw new Error('Invalid target npm pack result');
+    // Packing cannot replace the installed package. Open installation intent only
+    // once the exact target archive is available for npm to consume.
+    (deps.markInstallationIntent ?? markInstallationIntent)(ctx);
+    run(ctx, {stage:'install', npmCli:ctx.protectedNpmCli,
+      args:['install', '-g', path.join(ctx.tempDir, name)], cwd:ctx.tempDir});
+  });
 }
 
 async function finalizeTarget(ctx) {

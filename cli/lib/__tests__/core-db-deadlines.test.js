@@ -27,18 +27,23 @@ const flush=()=>new Promise(resolve=>setImmediate(resolve));
 test('each database receives a fresh ten minute deadline after earlier databases consume their budget',async t=>{
   t.mock.timers.enable({apis:['setTimeout']});
   const {calls,spawnWorker}=children();
-  const pending=superviseDatabases({action:'snapshot'},{spawnWorker});
+  let now=0;
+  const pending=superviseDatabases({action:'snapshot',reportTimings:true},{spawnWorker,now:()=>now});
   assert.equal(DATABASE_DEADLINE_MS,600000);
   for(let index=0;index<CORE_DATABASES.length;index++) {
     assert.equal(calls.length,index+1);
     assert.equal(calls[index].input.databaseSource,CORE_DATABASES[index].source);
     t.mock.timers.tick(599999);
     assert.equal(calls[index].child.killed,false);
-    calls[index].child.finish({databases:[{source:CORE_DATABASES[index].source,status:'backed_up'}]});
+    now+=100+index;
+    calls[index].child.finish({databases:[{source:CORE_DATABASES[index].source,status:'backed_up',bytes:4096*(index+1)}]});
     await flush();
   }
   const result=await pending;
   assert.equal(result.databases.length,3);
+  assert.deepEqual(result.databaseTimings,CORE_DATABASES.map(({source},index)=>({
+    source,bytes:4096*(index+1),durationMs:100+index
+  })));
 });
 
 for(const step of ['check','copy','rehearsal']) test(`database ${step} deadline kills the active child and names its database and step`,async t=>{
