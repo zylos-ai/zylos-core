@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createRequire} from 'node:module';
-import {ORIGINAL_DEPLOYMENT_DATABASES as CORE_DATABASES} from '../core-db-backup.js';
+import {createCoreDbSnapshot,runCoreDbWorker,ORIGINAL_DEPLOYMENT_DATABASES as CORE_DATABASES} from '../core-db-backup.js';
 import {maintenance as m} from '../upgrade-protection.js';
 import {prepareProtectedInstall} from '../upgrade-protection.js';
 import {runUpgradeEntry} from '../upgrade-entry.js';
@@ -114,4 +114,39 @@ test('a missing PM2 command keeps its own error instead of the ps guidance',t=>{
   const prior=process.env.PATH;process.env.PATH=empty;
   t.after(()=>{process.env.PATH=prior;fs.rmSync(empty,{recursive:true,force:true});});
   assert.throws(()=>m.services({skillsDir:empty}),error=>/ENOENT/.test(error.message) && !/procps|ps command/i.test(error.message) && error.next===undefined);
+});
+
+// Isolated preinstall entry and frozen rollback with a private PM2 shim and
+// fixture databases. Run for new snapshot verification or rollback ordering.
+test('changed new snapshot prevents installation and leaves previous snapshot and services intact',async t=>{
+  const f=fixture(t,'tampered-snapshot');
+  const previous=createCoreDbSnapshot({zylosDir:f.root,transactionId:'previous'});
+  const snapshotFile=input=>path.join(input.dbBackupDir,input.manifest.databases.find(row=>row.source==='comm-bridge/c4.db').file);
+  const oldDb=snapshotFile(previous);
+  const before=fs.readFileSync(oldDb);
+  const result=await runUpgradeEntry({schemaVersion:1,fromVersion:'0.9.3',tempDir:f.tempDir,installedRoot:f.packageRoot,zylosDir:f.root},{
+    inspect:()=>({zylosDir:f.root,skillsDir:f.skillsDir,tempDir:f.tempDir,coreDir:f.packageRoot,from:'0.9.3',to:'0.9.4',firstTakeover:true,dashboardOwnerManaged:false,snapshotFormatVersion:3,databaseMode:'unchanged',steps:[]}),
+    resolveNpm:()=>'/fixture/npm-cli.js',validateNpmPrefix:()=>{},savePackage:()=>{},
+    prepare:ctx=>prepareProtectedInstall(ctx,{verifySnapshot(input) {
+      assert.equal(fs.readFileSync(f.state,'utf8'),'stopped');
+      const file=snapshotFile(input);
+      const fd=fs.openSync(file,'r+');
+      try { fs.writeSync(fd,Buffer.from([0]),0,1,0); }
+      finally { fs.closeSync(fd); }
+      return runCoreDbWorker(input);
+    }}),
+    install:()=>assert.fail('installer must not run'),
+    finalize:()=>assert.fail('finalizer must not run'),
+  });
+  assert.equal(result.success,false);
+  assert.equal(result.code,'SNAPSHOT_FAILED');
+  assert.match(result.error,/hash mismatch/);
+  assert.equal(result.recovery_required,false,JSON.stringify(result));
+  assert.equal(fs.readFileSync(f.state,'utf8'),'online');
+  const journal=m.read(path.join(result.transactionDir,'journal.json'));
+  assert.equal(journal.phase,'aborted_before_install');
+  assert.equal(journal.installationIntent,false);
+  assert.ok(journal.stepTimings.verify_new_backup.finishedAt);
+  assert.equal(journal.stepTimings.verify_old_backups,undefined);
+  assert.ok(fs.readFileSync(oldDb).equals(before));
 });

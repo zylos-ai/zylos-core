@@ -1,4 +1,4 @@
-// covers: cli/lib/self-upgrade.js cli/lib/core-db-backup.js cli/lib/upgrade-runtime-preparation.js cli/lib/upgrade-post-cutoff.js cli/lib/upgrade-cutoff.js cli/lib/upgrade-resume.js skills/comm-bridge/scripts/sqlite-schema.js skills/comm-bridge/scripts/c4-schema.js skills/scheduler/scripts/schema.js cli/lib/upgrade-maintenance.cjs cli/lib/core-db-backup-worker.js cli/lib/__tests__/fixtures/legacy-web-console-schema.js cli/lib/__tests__/helpers/legacy-web-console.js skills/comm-bridge/scripts/__tests__/fixtures/migration-history/
+// covers: cli/lib/self-upgrade.js cli/lib/upgrade-entry.js cli/lib/upgrade-protection.js cli/lib/core-db-backup.js cli/lib/upgrade-runtime-preparation.js cli/lib/upgrade-post-cutoff.js cli/lib/upgrade-cutoff.js cli/lib/upgrade-resume.js skills/comm-bridge/scripts/sqlite-schema.js skills/comm-bridge/scripts/c4-schema.js skills/scheduler/scripts/schema.js cli/lib/upgrade-maintenance.cjs cli/lib/core-db-backup-worker.js cli/lib/__tests__/fixtures/legacy-web-console-schema.js cli/lib/__tests__/helpers/legacy-web-console.js skills/comm-bridge/scripts/__tests__/fixtures/migration-history/
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -8,6 +8,8 @@ import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
 import { runSelfUpgradeFinalize, resumeUpgradeFinalization, restartErroredServices, step5_syncCoreSkills } from '../self-upgrade.js';
 import { LEGACY_CORE_DATABASES, createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker } from '../core-db-backup.js';
+import { installUpgradeTarget } from '../upgrade-entry.js';
+import { prepareProtectedInstall } from '../upgrade-protection.js';
 import { prepareUpgradeRuntime, prepareUpgradeRuntimeClis } from '../upgrade-runtime-preparation.js';
 import { preparePostCutoff } from '../upgrade-post-cutoff.js';
 import { commitCutoff } from '../upgrade-cutoff.js';
@@ -22,7 +24,7 @@ const require = createRequire(import.meta.url);
 const packageRoot = path.resolve(import.meta.dirname, '../../..');
 const Database = require(path.join(packageRoot, 'skills/comm-bridge/node_modules/better-sqlite3'));
 
-function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firstTakeover = true, databaseMode = 'migrate', from = '0.9.3', to = '0.9.4', olderDatabases = false } = {}) {
+function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firstTakeover = true, databaseMode = 'migrate', from = '0.9.3', to = '0.9.4', olderDatabases = false, prepareAtEntry = false } = {}) {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(temporaryBase, 'default-finalizer-')));
   const previousHome = process.env.HOME, previousPm2Home = process.env.PM2_HOME, previousPath = process.env.PATH;
   process.env.HOME = home;
@@ -103,29 +105,30 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
   if (protectedUpgrade) {
     dir = path.join(root, '.backup/self-upgrade/tx');
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const snapshot = createCoreDbSnapshot({ zylosDir: root, transactionId: 'tx', formatVersion: 3 });
-    const closure = prepareRecoveryDependencies(dir, root, { dashboardRoot: path.join(home, 'uninstalled-dashboard') });
+    const snapshot = prepareAtEntry ? null : createCoreDbSnapshot({ zylosDir: root, transactionId: 'tx', formatVersion: 3 });
+    const closure = prepareAtEntry ? null : prepareRecoveryDependencies(dir, root, { dashboardRoot: path.join(home, 'uninstalled-dashboard') });
     for (const [source, target] of [['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'],
       ['upgrade-recovery.cjs', 'runner.cjs'], ['upgrade-installer.cjs', 'installer.cjs']]) {
       fs.copyFileSync(path.join(packageRoot, 'cli/lib', source), path.join(dir, target));
       fs.chmodSync(path.join(dir, target), 0o600);
     }
-    m.durable(path.join(dir, 'descriptor.json'), { formatVersion: 1, transactionId: 'tx', ...closure,
+    if (closure) m.durable(path.join(dir, 'descriptor.json'), { formatVersion: 1, transactionId: 'tx', ...closure,
       runnerPath: path.join(dir, 'runner.cjs'), hashes: Object.fromEntries(
         ['maintenance.cjs', 'runner.cjs', 'installer.cjs','remove-owned-tree.mjs'].map(name => [name, m.hash(path.join(dir, name))])) });
     const packageJson = path.join(home, 'old-package.json'), cliRoot = path.join(home, 'old-cli');
+    const workerPath = closure?.workerPath ?? path.join(packageRoot,'cli/lib/core-db-backup-worker.js');
     fs.writeFileSync(packageJson, '{}'); fs.mkdirSync(cliRoot);
     journal = { formatVersion: 1, transactionId: 'tx', zylosDir: root, skillsDir,
-      nodePath: process.execPath, phase: 'installing', installationIntent: true,
-      databaseMode, firstTakeover, dashboardOwnerManaged:false, dbBackupDir: snapshot.dbBackupDir,
-      snapshotManifestHash: m.hash(path.join(snapshot.dbBackupDir, 'manifest.json')),
+      nodePath: process.execPath, phase: prepareAtEntry ? 'code_saved' : 'installing', installationIntent: !prepareAtEntry,
+      databaseMode, firstTakeover, dashboardOwnerManaged:false,
+      ...(snapshot && {dbBackupDir:snapshot.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshot.dbBackupDir,'manifest.json'))}),
       from, to, originalServices: [],
       coreManifest: LEGACY_CORE_DATABASES.map(item => ({ name: item.owner, existedBefore: true,
         backedUp: true, originalHash: m.treeHash(path.join(skillsDir, item.owner)),
         dependencies:{kind:'directory',sha256:m.treeHash(path.join(skillsDir,item.owner,'node_modules'))} })),
       initialIdentity: { nodePath: process.execPath, packageJson, packageHash: m.hash(packageJson),
-        cliRoot, cliHash: m.treeHash(cliRoot), workerPath: closure.workerPath,
-        workerHash: m.hash(closure.workerPath), ecosystemHash: null,
+        cliRoot, cliHash: m.treeHash(cliRoot), workerPath,
+        workerHash: m.hash(workerPath), ecosystemHash: null,
         databases: m.databasePaths(2).map(source => ({source,exists:fs.existsSync(path.join(root,source))})) } };
     m.update(dir, journal); m.marker(root, dir, journal);
     Object.assign(state, { transactionId: 'tx', transactionDir: dir });
@@ -211,6 +214,69 @@ test('default protected initial finalizer publishes real preparation, closes jou
   assert.equal(f.calls.includes('restart'), false);
   assert.equal(result.completion.sessionRestart, 'closed_by_system');
   assertDataPreserved(f);
+});
+
+// Isolated protected upgrade through preparation, installation boundary and
+// finalization. Local SQLite files, fixture services/npm, no tmux or registry.
+// Run for changes to step timing or snapshot retirement; skip unrelated changes.
+test('protected upgrade journals database steps and retires old snapshots after service verification', async t => {
+  const f = fixture(t, {prepareAtEntry:true});
+  const old = createCoreDbSnapshot({zylosDir:f.root,transactionId:'old'});
+  const damaged = createCoreDbSnapshot({zylosDir:f.root,transactionId:'damaged'});
+  const journal = f.m.read(path.join(f.dir,'journal.json'));
+  let time=0;
+  const now = () => time += 10;
+  const ctx = {...f.state,journal,maintenance:f.m,now};
+  const c4 = 'comm-bridge/c4.db';
+  const backupFile = snapshot => path.join(snapshot.dbBackupDir,snapshot.manifest.databases.find(row=>row.source===c4).file);
+  prepareProtectedInstall(ctx, {
+    rehearse(root,_target,{reportTimings}) {
+      assert.equal(reportTimings,true);
+      assert.equal(f.calls.at(-1),'stop');
+      return {databaseTimings:[c4,'scheduler/scheduler.db'].map(source=>({source,bytes:fs.statSync(path.join(root,source)).size,durationMs:7}))};
+    }
+  });
+  installUpgradeTarget(ctx, {
+    runInstaller(_ctx,{stage}) {
+      assert.equal(fs.existsSync(backupFile(old)),true);
+      if(stage==='pack-target') return JSON.stringify([{filename:'target.tgz'}]);
+    }
+  });
+  const result = await f.run({now,verifyServices() {
+    assert.ok(f.calls.includes('start'));
+    assert.equal(fs.existsSync(backupFile(old)),true);
+    assert.equal(fs.existsSync(backupFile(damaged)),true);
+    // Damage a same-size file only after the services have started. An earlier
+    // verification would have accepted it and made it eligible for deletion.
+    const file=backupFile(damaged);
+    const fd=fs.openSync(file,'r+');
+    try { fs.writeSync(fd,Buffer.from([0]),0,1,0); }
+    finally { fs.closeSync(fd); }
+    return {status:'done'};
+  }});
+  assert.equal(result.success,true,JSON.stringify(result));
+  assert.equal(fs.existsSync(old.dbBackupDir),false);
+  assert.equal(fs.existsSync(backupFile(damaged)),true);
+  assert.ok(result.warnings.some(warning=>/Retained .*damaged.*hash mismatch/.test(warning)));
+  const saved=f.load();
+  assert.deepEqual(saved.runtimeWarnings,result.warnings);
+  const timings = saved.stepTimings;
+  const ordered = ['rehearsal','backup','verify_new_backup','original_database_check','installation','migration','post_migration_check','verify_old_backups'];
+  for(const [index,name] of ordered.entries()) {
+    const timing=timings[name];
+    assert.equal(Date.parse(timing.startedAt),(2*index+1)*10,name);
+    assert.equal(Date.parse(timing.finishedAt),(2*index+2)*10,name);
+    if(name==='installation') continue;
+    assert.ok(timing.databases.length>0,name);
+    for(const database of timing.databases) {
+      assert.equal(typeof database.source,'string',name);
+      assert.ok(Number.isInteger(database.bytes) && database.bytes>=0,name);
+      assert.ok(Number.isFinite(database.durationMs) && database.durationMs>=0,name);
+    }
+  }
+  assert.deepEqual(timings.rehearsal.databases.map(({source,durationMs})=>[source,durationMs]),[[c4,7],['scheduler/scheduler.db',7]]);
+  assert.equal(timings.verify_new_backup.databases.find(row=>row.source===c4).bytes,fs.statSync(backupFile(damaged)).size);
+  assert.ok(timings.verify_old_backups.databases.some(row=>row.snapshotId==='damaged' && row.source===c4));
 });
 
 // Same-version upgrade: the installed package is its own target and the only

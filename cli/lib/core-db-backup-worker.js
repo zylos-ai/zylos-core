@@ -63,7 +63,7 @@ function failureResult(error) {
   const message=String(error.message || error).split('\n')[0]
     .replace(/(^|[\s('"`])(?:file:\/\/)?(?:[A-Za-z]:[\\/]|\/)[^\s'"`,;:)]+/g,'$1<path>');
   const code=['SCHEMA_TOO_NEW','SCHEMA_MIGRATION_FAILED'].includes(error.code) ? error.code : 'UPGRADE_FAILED';
-  return {ok:false,error:{code,message}};
+  return {ok:false,error:{code,message,databaseTimings:error.databaseTimings}};
 }
 function driver(input) {
   if(input.driverPath) return createRequire(import.meta.url)(input.driverPath);
@@ -80,7 +80,7 @@ function inspectConnection(db) {
   if(checks.length!==1 || Object.values(checks[0])[0]!=='ok') throw new Error('integrity_check failed');
   return {userVersion:db.pragma('user_version',{simple:true}),integrityCheck:'ok'};
 }
-function withStandaloneReadonly(Database, file, expectedHash, inspect) {
+function standaloneSize(file) {
   // Private snapshots are normalized to DELETE before their hash is recorded.
   // Read them directly; no disposable database copy or WAL sidecar is needed.
   const stat = fs.lstatSync(file);
@@ -90,7 +90,9 @@ function withStandaloneReadonly(Database, file, expectedHash, inspect) {
     catch (error) { if (error.code === 'ENOENT') continue; throw error; }
     throw new Error(`Unexpected standalone SQLite sidecar: ${file + suffix}`);
   }
-  if (hash(file) !== expectedHash) throw new Error(`Standalone database hash mismatch: ${file}`);
+  return stat.size;
+}
+function inspectStandaloneReadonly(Database, file, inspect) {
   // Reject a WAL header before opening: the driver could create sidecars even
   // through a readonly connection to an older, non-normalized snapshot.
   const header = Buffer.alloc(20), fd = fs.openSync(file, 'r');
@@ -107,8 +109,10 @@ function withStandaloneReadonly(Database, file, expectedHash, inspect) {
   }
 }
 
-function inspect(Database, file, expectedHash=hash(file)) {
-  return withStandaloneReadonly(Database, file, expectedHash, inspectConnection);
+function withStandaloneReadonly(Database, file, expectedHash, inspect) {
+  standaloneSize(file);
+  if (hash(file) !== expectedHash) throw new Error(`Standalone database hash mismatch: ${file}`);
+  return inspectStandaloneReadonly(Database, file, inspect);
 }
 async function ownerSchema(input,item) {
   if(item.owner==='dashboard') {
@@ -156,7 +160,7 @@ function authorizeMigration(input) {
   return j;
 }
 export async function execute(input) {
-  if(!['probe','snapshot','verify','offline-preflight','upgrade-migrate','rehearse','version-probe','dashboard-state'].includes(input.action)) throw new Error(`Unknown action: ${input.action}`);
+  if(!['probe','snapshot','verify','verify-new-snapshot','offline-preflight','upgrade-migrate','rehearse','version-probe','dashboard-state'].includes(input.action)) throw new Error(`Unknown action: ${input.action}`);
   if(input.action==='dashboard-state') {
     const source=path.join(input.zylosDir,'components/dashboard/dashboard.db');
     if(missing(source)) return {dashboardOwnerManaged:false};
@@ -334,13 +338,14 @@ export async function execute(input) {
       continue;
     }
     const source=path.join(input.zylosDir,item.source);
-    if(input.action==='verify') {
+    if(input.action==='verify' || input.action==='verify-new-snapshot') {
       if(!expected) throw new Error(`Missing manifest entry: ${item.source}`);
       if(expected.status==='missing') {rows.push({...expected});continue;}
       if(expected.status!=='backed_up'||path.basename(expected.file)!==expected.file) throw new Error('Invalid snapshot entry');
       const file=path.join(input.dbBackupDir,expected.file);
-      if(fs.statSync(file).size!==expected.bytes||hash(file)!==expected.sha256) throw new Error(`Snapshot hash mismatch: ${file}`);
-      const state=inspect(driver(input,item),file,expected.sha256);
+      if(standaloneSize(file)!==expected.bytes||hash(file)!==expected.sha256) throw new Error(`Snapshot hash mismatch: ${file}`);
+      if(input.action==='verify-new-snapshot') {rows.push({...expected});continue;}
+      const state=inspectStandaloneReadonly(driver(input,item),file,inspectConnection);
       if(state.userVersion!==expected.userVersion) throw new Error('Snapshot user_version mismatch');
       rows.push({...expected,...state});continue;
     }
@@ -436,9 +441,10 @@ export async function execute(input) {
       if (snapshot.pragma('journal_mode=DELETE', {simple:true}) !== 'delete') throw new Error('Snapshot journal mode normalization failed');
     } finally { snapshot.close(); }
     step('check');
-    const state=inspect(Database,target);
+    const bytes=standaloneSize(target), sha256=hash(target);
+    const state=inspectStandaloneReadonly(Database,target,inspectConnection);
     const fd=fs.openSync(target,'r');try{fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
-    rows.push({source:item.source,status:'backed_up',...state,file,bytes:fs.statSync(target).size,sha256:hash(target)});
+    rows.push({source:item.source,status:'backed_up',...state,file,bytes,sha256});
   }
   return {databases:rows};
 }
@@ -449,7 +455,17 @@ function isMainModule() {
 }
 // A separate process makes the deadline enforceable even while native SQLite
 // or synchronous owner migration code blocks the database child's event loop.
-export async function superviseDatabases(input, {spawnWorker=spawn, timeoutMs=DATABASE_DEADLINE_MS}={}) {
+function databaseSize(input, source, row) {
+  if (typeof row?.bytes === 'number') return row.bytes;
+  const snapshot = input.manifest?.databases?.find(entry => entry.source === source);
+  const file = input.dbBackupDir && typeof snapshot?.file === 'string'
+    ? path.join(input.dbBackupDir, path.basename(snapshot.file))
+    : path.join(input.zylosDir, source);
+  try { return fs.statSync(file).size; }
+  catch (error) { return error.code === 'ENOENT' ? 0 : null; }
+}
+
+export async function superviseDatabases(input, {spawnWorker=spawn, timeoutMs=DATABASE_DEADLINE_MS, now=()=>performance.now()}={}) {
   let items;
   if(['probe','dashboard-state'].includes(input.action)) {
     items=[{source:input.action==='probe'?'SQLite driver':'components/dashboard/dashboard.db'}];
@@ -458,7 +474,7 @@ export async function superviseDatabases(input, {spawnWorker=spawn, timeoutMs=DA
     const formatVersion=input.manifest ? input.manifest.formatVersion : input.formatVersion;
     items=rows ? databasesForFormat(databaseFormatForRows(rows,formatVersion)) : databasesForFormat(input.formatVersion ?? 3);
   }
-  const databases=[];
+  const databases=[], databaseTimings=[];
   let single,cleanup;
   if(input.action==='rehearse') {
     const directory=input.rehearsalDir;
@@ -470,6 +486,11 @@ export async function superviseDatabases(input, {spawnWorker=spawn, timeoutMs=DA
   try {
     for(const item of items) {
       let step='check';
+      const started=input.reportTimings ? now() : null;
+      const recordTiming=row=>{
+        if(started===null) return;
+        databaseTimings.push({source:item.source,bytes:databaseSize(input,item.source,row),durationMs:now()-started});
+      };
       const result=await new Promise((resolve,reject)=>{
         const child=spawnWorker(process.execPath,[fileURLToPath(import.meta.url),JSON.stringify({...input,databaseSource:item.source})],{
           stdio:['ignore','pipe','ignore','ipc'],windowsHide:true,
@@ -494,14 +515,20 @@ export async function superviseDatabases(input, {spawnWorker=spawn, timeoutMs=DA
           resolve(value);
         });
       }).catch(error=>{
+        recordTiming();
+        if(input.reportTimings) error.databaseTimings=databaseTimings;
         if(!error.message.startsWith(`${item.source}:`)) error.message=`${item.source}: ${step} failed: ${error.message}`;
         throw error;
       });
       single=result;
-      if(result.databases) databases.push(...result.databases);
+      if(result.databases) {
+        databases.push(...result.databases);
+        if(result.databases.length) recordTiming(result.databases[0]);
+      }
     }
     if(['probe','dashboard-state'].includes(input.action)) return single;
-    return input.action==='version-probe' ? {databases,needsMigration:databases.some(row=>row.needsMigration)} : {databases};
+    if(input.action==='version-probe') return {databases,needsMigration:databases.some(row=>row.needsMigration)};
+    return input.reportTimings ? {databases,databaseTimings} : {databases};
   } finally {cleanup?.();}
 }
 if(isMainModule()) {
