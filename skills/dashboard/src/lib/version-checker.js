@@ -1,4 +1,7 @@
 import https from 'node:https';
+import { loadCoreModule } from './core-modules.js';
+
+const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
 
 const TWELVE_HOURS = 12 * 60 * 60 * 1000;
 
@@ -49,38 +52,43 @@ export function fetchNpmLatest(pkg) {
 export class VersionChecker {
   constructor({
     onUpdate,
+    sources = {},
     fetchZylosLatest = () => fetchLatestTag('zylos-ai/zylos-core'),
-    fetchCcLatest = () => fetchLatestTag('anthropics/claude-code'),
-    fetchCodexLatest = fetchNpmLatest,
+    fetchGithub = fetchLatestTag,
+    fetchNpm = fetchNpmLatest,
   } = {}) {
-    this._latest = { zylos: null, cc: null, codex: null };
+    this._latest = { zylos: null };
+    this._checks = new Map([['zylos', fetchZylosLatest]]);
+    this._unsupported = new Set();
+    for (const [id, source] of Object.entries(sources)) {
+      if (source === UNSUPPORTED || !['github', 'npm'].includes(source?.source)) {
+        this._unsupported.add(id);
+        continue;
+      }
+      this._latest[id] = null;
+      this._checks.set(id, source.source === 'github' ? () => fetchGithub(source.repo) : () => fetchNpm(source.package));
+    }
     this._onUpdate = onUpdate || null;
-    this._fetchZylosLatest = fetchZylosLatest;
-    this._fetchCcLatest = fetchCcLatest;
-    this._fetchCodexLatest = fetchCodexLatest;
     this._timer = null;
   }
 
   async check() {
-    const results = await Promise.allSettled([
-      this._fetchZylosLatest(),
-      this._fetchCcLatest(),
-      this._fetchCodexLatest('@openai/codex'),
-    ]);
-    if (results[0].status === 'fulfilled' && results[0].value) {
-      this._latest.zylos = results[0].value;
-    }
-    if (results[1].status === 'fulfilled' && results[1].value) {
-      this._latest.cc = results[1].value;
-    }
-    if (results[2].status === 'fulfilled' && results[2].value) {
-      this._latest.codex = results[2].value;
+    const checks = [...this._checks];
+    const results = await Promise.allSettled(checks.map(async ([, fetch]) => fetch()));
+    for (const [index, result] of results.entries()) {
+      if (result.status === 'fulfilled' && result.value) {
+        this._latest[checks[index][0]] = result.value;
+      }
     }
     if (this._onUpdate) this._onUpdate(this._latest);
   }
 
   getLatest() {
     return { ...this._latest };
+  }
+
+  unsupportedIds() {
+    return [...this._unsupported];
   }
 
   start() {

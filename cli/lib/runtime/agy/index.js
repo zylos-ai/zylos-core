@@ -1,8 +1,9 @@
 import { checkAuth } from './auth.js';
 import { prepare } from './launch.js';
-import { install, probeVersion, installNotice } from './install.js';
+import { install, probeVersion, installNotice, agyCliEnv } from './install.js';
 import { UNSUPPORTED } from '../contract.js';
 import { createIdentity } from '../shared/identity.js';
+import { createUpgradeCli } from '../shared/upgrade-cli.js';
 
 const id = 'agy';
 const identity = createIdentity(id);
@@ -14,6 +15,8 @@ export default Object.freeze({
     probeVersion: options => probeVersion(identity, options),
     install: options => install(identity, options),
     installNotice,
+    upgradeCli: createUpgradeCli({ id, identity, timeoutMs: 300000, killSignal: 'SIGKILL', prepareEnv: agyCliEnv, timeoutIsOutcome: true }),
+    latestVersion: UNSUPPORTED,
     installsToLocalBin: true,
     dailyUpgradePrompt: UNSUPPORTED,
     uninstall: UNSUPPORTED,

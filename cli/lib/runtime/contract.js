@@ -6,6 +6,8 @@ export const RUNTIME_CONTRACT = Object.freeze({
     probeVersion: 'required',
     install: 'optional',
     installNotice: 'optional',
+    upgradeCli: 'optional',
+    latestVersion: 'optional',
     installsToLocalBin: 'optional',
     dailyUpgradePrompt: 'optional',
     uninstall: 'optional',

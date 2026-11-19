@@ -22,8 +22,10 @@ test('CLI upgrades invoke only the instance default runtime and preserve existin
       assert.equal(jsonResponse(200, result, { command: true }).status, 400);
     } else {
       assert.equal(result.ok, true); assert.equal(result.requires_restart, true);
-      assert.equal(result.messageKey, `result.${{ agy: 'agy', claude: 'cc', codex: 'codex' }[runtime]}_updated`);
-      if (runtime === 'agy') assert.match(result.message, /Antigravity/);
+      const name = { agy: 'Antigravity', claude: 'Claude', codex: 'Codex' }[runtime];
+      assert.equal(result.messageKey, 'result.runtime_updated');
+      assert.deepEqual(result.messageParams, { runtime: name });
+      assert.equal(result.message, `${name} updated. Restart session to apply.`);
     }
   }
   const recorded = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse);
@@ -31,7 +33,7 @@ test('CLI upgrades invoke only the instance default runtime and preserve existin
   assert.equal(recorded[0].auto, 'true');
 });
 
-test('Antigravity nonzero exit is a named failure without success or restart', async t => {
+test('Antigravity nonzero exit preserves the error without success or restart', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-upgrade-failure-'));
   const saved = process.env.PATH;
   t.after(() => { process.env.PATH = saved; fs.rmSync(root, { recursive: true, force: true }); });
@@ -39,17 +41,22 @@ test('Antigravity nonzero exit is a named failure without success or restart', a
   process.env.PATH = root;
   const result = await handleAction('upgrade-cc', { case: 'failed' }, { runtime: 'agy', zylosDir: root });
   assert.equal(result.ok, false); assert.equal(result.error, 'upgrade_failed');
-  assert.match(result.message, /Antigravity upgrade failed/); assert.equal(result.requires_restart, undefined);
+  assert.equal(result.message, 'download refused\n');
+  assert.equal(result.messageKey, 'result.upgrade_failed');
+  assert.equal(result.requires_restart, undefined);
 });
 
-test('lost Antigravity replies say result unknown while explicit timeout stays incomplete in both languages', async () => {
+test('lost upgrade replies identify the runtime in both languages', async () => {
   const { actionFailureMessage, formatActionResult } = await import('../../../public/js/action-result.js');
   for (const [language, expected] of [['en', /result is unknown/], ['zh', /结果未知/]]) {
     const dictionary = JSON.parse(fs.readFileSync(new URL(`../../../public/i18n/${language}.json`, import.meta.url)));
     const t = (key, params = {}) => (dictionary[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => params[name]);
-    assert.match(actionFailureMessage('upgrade-cc', 'agy', new Error('connection lost'), t), expected);
-    assert.equal(actionFailureMessage('upgrade-cc', 'claude', new Error('failed'), t), t('status.failed', { error: 'failed' }));
-    assert.match(formatActionResult({ messageKey: 'result.agy_updated' }, t), /Antigravity/);
+    for (const runtime of ['Antigravity', 'Claude', 'Codex']) {
+      const message = actionFailureMessage('upgrade-cc', runtime, new Error('connection lost'), t);
+      assert.match(message, expected);
+      assert.match(message, new RegExp(runtime));
+    }
+    assert.match(formatActionResult({ messageKey: 'result.runtime_updated', messageParams: { runtime: 'Antigravity' } }, t), /Antigravity/);
   }
 });
 

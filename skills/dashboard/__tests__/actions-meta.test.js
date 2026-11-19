@@ -194,7 +194,8 @@ test('handleAction upgrades Codex CLI under Codex runtime', async () => {
   try {
     const result = await handleAction('upgrade-cc', {}, { runtime: 'codex' });
     assert.equal(result.ok, true);
-    assert.equal(result.messageKey, 'result.codex_updated');
+    assert.equal(result.messageKey, 'result.runtime_updated');
+    assert.deepEqual(result.messageParams, { runtime: 'Codex' });
     assert.equal(fs.readFileSync(marker, 'utf8').trim(), 'updated');
   } finally {
     process.env.PATH = prevPath;

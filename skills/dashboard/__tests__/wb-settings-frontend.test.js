@@ -612,7 +612,7 @@ test('default controls retain the restart lock after an accepted runtime change'
 test('the version row shows the Core version with its update hint and the engine CLI in both views, and no Dashboard version', () => {
   const document = documentFixture(), root = document.createElement('div'), upgrade = node(document, 'button');
   renderVersion(root, { zylos: { installed: '1.0.0-beta.7', update: '1.0.0' }, claude: { installed: '2' } }, { document, upgrade, t });
-  assert.match(root.textContent, /zylos · v1\.0\.0-beta\.7/); assert.match(root.textContent, /CC · v2/);
+  assert.match(root.textContent, /zylos · v1\.0\.0-beta\.7/); assert.match(root.textContent, /Claude · v2/);
   assert.doesNotMatch(root.textContent, /Dashboard/, 'Dashboard ships inside Core and has no version of its own');
   assert.ok(root.querySelector('#settings-zylos-update')); assert.equal(root.querySelector('button'), root.querySelector('#settings-zylos-update'));
   for (const zylos_version of [undefined, null, '', ' ', 'unknown']) {

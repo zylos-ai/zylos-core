@@ -75,10 +75,11 @@ test('instance defaults and versions include Antigravity without borrowing Claud
   assert.equal(defaults.agy.model, null);
   assert.equal(defaults.agy.effort, null);
   assert.equal(defaults.agy.threshold, 40);
-  const versions = runtimeVersionRecord('agy', { installed: { claude: '2.0.0', agy: '1.5.10' }, latest: { cc: '3.0.0' } });
+  const versions = runtimeVersionRecord('agy', { installed: { claude: '2.0.0', agy: '1.5.10' }, latest: { claude: '3.0.0' }, unsupported: ['agy'] });
   assert.equal(versions.installed, '1.5.10');
   assert.equal(versions.latest, null);
   assert.equal(versions.update, null);
+  assert.equal(versions.update_check, 'unsupported');
 });
 
 test('Antigravity session thresholds follow validated model objects and the one-million-token limit', t => {

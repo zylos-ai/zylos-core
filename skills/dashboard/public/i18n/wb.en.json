@@ -333,6 +333,7 @@
   "wb.settings.addPrice": "Add price",
   "wb.settings.pricesSaved": "Both price tables saved; applies to future records only",
   "wb.settings.updateTo": "Update available: {version}",
+  "wb.settings.updateCheckUnsupported": "update check not supported",
   "wb.settings.theme.light": "Light",
   "wb.settings.theme.dark": "Dark",
   "wb.settings.theme.system": "Follow system",

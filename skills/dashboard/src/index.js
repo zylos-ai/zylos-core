@@ -100,23 +100,16 @@ import { VersionChecker } from './lib/version-checker.js';
 import { isNewerVersion } from './lib/version-utils.js';
 import { DASHBOARD_RUNTIMES, createRuntimeOverridesReader, runtimeVersionRecord as projectRuntimeVersion, runtimeDefaults, handleRuntimeOptions } from './lib/runtime-api.js';
 
-const { DEFAULT_RUNTIME, runtimesWith } = await loadCoreModule('runtime/descriptors.js');
+const { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES, getRuntime, runtimesWith } = await loadCoreModule('runtime/index.js');
 
 const { readConfigStrict } = await loadCoreModule('config-store.js');
 const startedAt = new Date();
 const MEMORY_WRITE_BODY_MAX_BYTES = 2 * 1024 * 1024 + 64 * 1024;
 
-let zylosVersion = null;
-let ccInstalledVersion = null;
-let codexInstalledVersion = null;
-let agyInstalledVersion = null;
+let installed = { zylos: null, ...Object.fromEntries(SUPPORTED_RUNTIMES.map(id => [id, null])) };
 const installedVersionReader = createInstalledVersionReader();
 async function readInstalledVersions() {
-  const versions = await installedVersionReader();
-  zylosVersion = versions.zylos;
-  ccInstalledVersion = versions.claude;
-  codexInstalledVersion = versions.codex;
-  agyInstalledVersion = versions.agy ?? null;
+  installed = await installedVersionReader();
 }
 await readInstalledVersions();
 
@@ -268,7 +261,11 @@ const scheduleFleetStateBroadcast = createCoalescedBroadcast(() => eventLoopMoni
 publishCoreStateChange = () => scheduleFleetStateBroadcast();
 
 // 6b. Version checker (polls GitHub + npm registry every 12h)
+const latestSources = Object.fromEntries(await Promise.all(SUPPORTED_RUNTIMES.map(async id => [
+  id, (await getRuntime(id)).install.latestVersion,
+])));
 const versionChecker = new VersionChecker({
+  sources: latestSources,
   onUpdate: () => {
     if (stateEngine) {
       scheduleFleetStateBroadcast();
@@ -372,10 +369,12 @@ const sendNamingPrompt = createNamingRequest({ zylosDir: config.zylosDir, readMo
 
 const runtimeOverridesPage = createRuntimeOverridesReader({ zylosDir: config.zylosDir, displayNames, run: promisify(execFile) });
 function installedVersions() {
-  return { zylos: zylosVersion, claude: ccInstalledVersion, codex: codexInstalledVersion, agy: agyInstalledVersion };
+  return { ...installed };
 }
 function runtimeVersionRecord(runtime) {
-  return projectRuntimeVersion(runtime, { installed: installedVersions(), latest: versionChecker.getLatest() });
+  return projectRuntimeVersion(runtime, {
+    installed: installedVersions(), latest: versionChecker.getLatest(), unsupported: versionChecker.unsupportedIds(),
+  });
 }
 function groupRuntimeInfo(row) {
   const runtime = row.runtime ?? row.target?.runtime ?? null;
@@ -1133,7 +1132,7 @@ async function handleApi(req, res, pathname, url) {
   if (pathname === '/api/instance/runtime-options') {
     handleRuntimeOptions(url, res, { activeRuntime,
       zylosConfig: { ...loadZylosConfig(config.zylosDir), zylosDir: config.zylosDir },
-      zylosVersion, installedVersions: installedVersions() });
+      zylosVersion: installed.zylos, installedVersions: installedVersions() });
     return true;
   }
 
@@ -1487,6 +1486,14 @@ export function createServer() {
     if (await handleInstanceTimezone(req, res, url, { auth, timezone: instanceTimezone })) return;
     if (await handleInstanceTimezoneRestart(req, res, url, { auth, timezone: instanceTimezone,
       runAction: body => handleAction('restart-timezone-services', body, { zylosDir: config.zylosDir }, { timezone: instanceTimezone }) })) return;
+
+    if (pathname === '/api/instance/actions/recheck-runtime-cli' && req.method === 'POST') {
+      try {
+        await refreshInstalledVersions();
+        sendJson(res, 200, { ok: true });
+      } catch (error) { workbenchFailure(res, error); }
+      return;
+    }
 
     const instanceAction = pathname.match(/^\/api\/instance\/actions\/(switch-mode|switch-runtime|upgrade|upgrade-runtime)$/);
     if ((instanceAction && req.method === 'POST') || (pathname === '/api/instance/defaults' && req.method === 'PUT')) {

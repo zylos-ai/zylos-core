@@ -12,7 +12,7 @@ const profiles = {
 
 export const installNotice = 'The Antigravity installer added ~/.local/bin to PATH in your existing shell startup files (such as ~/.bashrc and ~/.profile) and removed any "alias agy=" or "alias antigravity=" lines from them.';
 
-function agyCliEnv(root, env) {
+export function agyCliEnv(root, env) {
   const dotenv = readLaunchDotenv(root);
   const result = disableAutoUpdate(env);
   const proxy = Object.hasOwn(dotenv, 'HTTPS_PROXY') ? dotenv.HTTPS_PROXY : env.HTTPS_PROXY;

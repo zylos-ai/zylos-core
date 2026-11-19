@@ -116,7 +116,7 @@ Example: `GET /api/health/ready` → `{"ok":false,"error":{"code":"supervisor_un
 | `session_mode` | object | Core mode and transition state, described below |
 | `default_runtime` | string | Configured default runtime |
 | `defaults` | object | Runtime-keyed default objects described below |
-| `versions` | object | Runtime-keyed `zylos`, `claude`, `codex`, `agy` objects: `{installed:string\|null,latest:string\|null,update:string\|null}`; `update` identifies an available newer version |
+| `versions` | object | Runtime-keyed `zylos`, `claude`, `codex`, `agy` objects: `{installed:string\|null,latest:string\|null,update:string\|null}`; `update` identifies an available newer version. Antigravity includes `update_check:"unsupported"` |
 | `runtimeHealth` | object / null | Runtime-keyed health observations, including health and cooldown evidence |
 | `accounts` | object / null | Runtime-keyed weekly account quota objects or null; observations include used percentage, reset time, `recordedAt` and `live` |
 | `supervisorPaused` | boolean / null | Whether new supervisor actions are paused |
@@ -124,7 +124,7 @@ Example: `GET /api/health/ready` → `{"ok":false,"error":{"code":"supervisor_un
 | `resources` | object | One current resource sample: `scope:"host"\|"container"\|"mixed"`, `sampledAt:string\|null` (ISO), `cpu_pct:number\|null`, `cpu_count:number\|null`, `cpu_source:"container"\|"host"`, `mem_pct:number\|null`, `mem_used_bytes:number\|null`, `mem_total_bytes:number\|null`, `mem_source:"container"\|"host"`, `disk_pct:number\|null`, `disk_free_bytes:number\|null`, `disk_total_bytes:number\|null` |
 | `services` | object / null | PM2 counts `online:number`, `total:number`, plus `channels:Array<{channel:string,service:string,status:string\|null,restarts10m:number,lastSendFailed:boolean\|null,consecutiveFailures:number\|null}>`. Channels come from installed skill frontmatter `type: communication` and `lifecycle.service.name`, and must exist in the PM2 sample. `restarts10m` sums observed counter increases in the last ten minutes, beginning at zero on Dashboard startup. Send fields describe the latest C4 outbound status and failures after the latest successful outbound; null means the C4 read failed. |
 
-The `defaults` keys are `claude`, `codex` and `agy`. Antigravity has no configurable model/effort override, so its default `model` and `effort` are null. Its rotation threshold follows the one-million-token policy (40% maximum). Installed Antigravity versions come from `agy --version`; unavailable versions are null and latest/update remain null until update discovery supports this runtime.
+The `defaults` keys are `claude`, `codex` and `agy`. Antigravity has no configurable model/effort override, so its default `model` and `effort` are null. Its rotation threshold follows the one-million-token policy (40% maximum). Antigravity reports its installed version from `agy --version` when available. Its `latest` and `update` are null and `update_check` is `"unsupported"`. A missing or failed probe retains the last installed version.
 
 Each `defaults[runtime]` contains `model:string|null`, `effort:string|null`, `threshold:number`, `model_thresholds:Record<string,number>` and `session_hot_ttl:object` (effective mode, keepalive seconds and configuration/environment provenance). CPU and memory limits are resolved independently: a limited resource uses its container quota, while an explicitly unlimited resource uses host values and labels that resource’s source `host`. `scope` is `mixed` when the two sources differ, otherwise it is their common source; each resource’s source remains authoritative. An unreadable container limit keeps that resource’s source `container` with unknown measurements rather than implying unlimited host fallback. CPU percentages use the selected CPU capacity (which can be fractional); memory percentages use the selected total bytes. Disk describes the filesystem visible at the instance data directory and is independent of the CPU/memory scope. Unreadable observations remain null. There is no duplicate `system` sample or `runtime_info` object. Origin’s current model, effort, running CLI version and restart-to-apply status belong to group detail; instance versions and defaults describe installed software and configuration. Session context, cost and pool counts belong to the group and usage APIs.
 
@@ -233,11 +233,21 @@ Example: `POST /api/instance/actions/upgrade` with `{}`.
 
 Returns `ok:boolean`, optional `message:string`, `output:string`, `requires_restart:boolean` and localization fields. Restart applies the installed CLI to a session.
 
-**Runtime behavior:** Claude runs `claude update`, Codex runs `codex update`, and Antigravity runs `agy update` non-interactively (5-minute timeout, background auto-update disabled). For Antigravity only, `HTTPS_PROXY` follows session launch precedence: an entry in the instance `.env` wins over the Dashboard process environment, otherwise the process value is used. An empty `.env` entry disables the inherited value; if neither provides a nonempty value the child variable is absent. This uses the existing session dotenv reader. Claude/Codex upgrade environments are unchanged. An unknown runtime returns `runtime_unsupported` without executing a command. Antigravity success and failure messages name Antigravity; successful responses request a session restart. This action uses the instance default runtime, not a session-group override. A lost HTTP reply or an upstream 5xx without a confirmed upgrade outcome is displayed as an unknown Antigravity result; check the installed version before retrying because the update may still be running.
+**Runtime behavior:** Claude runs `claude update` and Codex runs `codex update`, each with a one-minute timeout. Antigravity runs `agy update` with a five-minute timeout and background auto-update disabled. Executable lookup honors the runtime's `<ID>_BIN` override, then uses PATH. For Antigravity, an `HTTPS_PROXY` entry in the instance `.env` wins over the process value. An empty entry removes the inherited value. Success includes `messageKey:"result.runtime_updated"` and `messageParams:{runtime:string}` with the display name. The Antigravity deadline response includes `messageKey:"result.runtime_upgrade_incomplete"` and `messageParams:{runtime:string,minutes:number}`. The browser shows an unknown outcome when the reply is lost or a gateway returns a 5xx without a confirmed result.
 
 **Errors:** 400 `runtime_unsupported`; 504 `deadline_exceeded` (Antigravity did not complete; verify the installed version before retrying); 502 `upgrade_failed`; 409 `duplicate_request`; common write errors.
 
 Example: `POST /api/instance/actions/upgrade-runtime` with `{}`.
+
+### POST /api/instance/actions/recheck-runtime-cli
+
+**Access:** Admin, including supported Fleet proxy access. **Parameters:** No request body.
+
+Refreshes installed versions for Zylos and all registered runtimes using the same reader as scheduled refreshes. Concurrent refreshes share the pending result. The response is `200 {"ok":true}`. A refresh can preserve the last known value for an unavailable executable or failed probe. Read updated values with `GET /api/instance`.
+
+**Errors:** Common write errors, including 403 `insufficient_scope` and `same_origin_required`, or 500 `internal_error` if the refresh fails.
+
+Example request: `POST /api/instance/actions/recheck-runtime-cli` with an empty body.
 
 ## Session Groups
 
