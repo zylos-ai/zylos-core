@@ -1,139 +1,130 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { fixture as storeFixture } from '../skills/comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
-import { startSupervisor } from '../skills/activity-monitor/scripts/supervisor-main.js';
-import { createModeSwitchConverter } from '../skills/activity-monitor/scripts/mode-switch-convert.js';
+import { spawnSync } from 'node:child_process';
+import { fixture } from '../skills/comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
+import { seedHistoricalAbsorption } from '../skills/comm-bridge/scripts/__tests__/fixtures/historical-absorption.js';
+import { deliveryFixture } from '../skills/comm-bridge/scripts/__tests__/helpers/session-delivery-fixture.js';
+import { routerFixture } from '../skills/comm-bridge/scripts/__tests__/helpers/router-fixture.js';
 import { ModeSwitchCoordinator } from '../skills/activity-monitor/scripts/mode-switch.js';
-import { HANDOFF_FOLLOWUP_PROMPT } from '../skills/activity-monitor/scripts/origin-prompts.js';
-import { validateStateDocument } from '../skills/zylos-memory/scripts/state-format.js';
-import { readSessionModeStatus } from '../cli/lib/session-mode-status.js';
 
-// Integration boundary: private SQLite/socket and real supervisor/converter/status;
-// run for first-migration conversion diagnostics or status recovery changes, and
-// skip for native-switch-only changes. The runner and fixture isolate paths;
-// finally stops the supervisor before closing SQLite and removing its root.
-test('first migration supervisor reason/events and readonly status agree through block, recovery and stopped supervisor', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-visible-')); const cleanup = [];
-  const { db, store } = storeFixture({ after: fn => cleanup.push(fn) }, {}, path.join(root, 'c4.db'));
-  let mode = 'single', keyPresent = false, failExport = true, service;
-  const readMode = () => ({ mode, keyPresent });
-  const converter = createModeSwitchConverter({ db: store, zylosDir: root });
-  const status = () => readSessionModeStatus({ db: store, zylosDir: root, readMode, readPm2: async () => 'stopped' });
-  try {
-    service = await startSupervisor({ env: { ...process.env, HOME: root, ZYLOS_DIR: root }, db: { ...store, getDb: () => db },
-      readMode, readConfig: () => ({ runtime: 'claude', ...(keyPresent ? { session_mode: mode } : {}) }), legacyPresent: () => false,
-      scenes: { observe: async () => [], observeGroup: async () => ({ present: false }), readIdentity: async () => ({ present: false }), listRuns: async () => [], readRun: async () => null },
-      legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} }, loopOptions: { schedule: () => 1, cancel() {} },
-      readSyncMarker: () => ({ held: false, stale: false }),
-      convertModeTransition: row => { if (failExport) throw Object.assign(new Error('export fixture failure'), { step: 'export', code: 'EIO' }); return converter(row); },
-      writeMode: target => { mode = target; keyPresent = true; }, restartDispatcherConfirmation: { advance: () => ({ confirmed: true }) },
-      sendAlert: () => { throw new Error('external notification forbidden'); }, log() {},
-    });
-    const reply = await service.supervisor.admission.handle({ version: 1, type: 'mode_switch', requestId: 'visible', target: 'multi' });
-    assert.equal(reply.result, 'accepted');
-    assert.equal(store.getModeTransition().kind, 'first_migration');
-    for (let n = 0; n < 3; n++) await service.supervisor.loop.tick();
-    const blocked = await status();
-    assert.equal(blocked.supervisor, 'reachable'); assert.equal(blocked.globalGate.present, true);
-    assert.equal(blocked.blocked.reason, 'conversion_failed:export:EIO'); assert.ok(Number.isFinite(blocked.blocked.since));
-    assert.equal(blocked.lastEvents.filter(event => event.event === 'transition_convert_failed').length, 1);
-    await service.stop(); service = null;
-    const stopped = await status();
-    for (const key of ['transition', 'globalGate', 'blocked', 'lastEvents', 'lastCompleted']) assert.deepEqual(stopped[key], blocked[key]);
-    assert.equal(stopped.supervisor, 'unreachable');
-    // Resume the real coordinator after the service has stopped to exercise its
-    // durable authority recovery without starting another external process.
-    const { ModeSwitchCoordinator } = await import('../skills/activity-monitor/scripts/mode-switch.js');
-    failExport = false;
-    const owner = new ModeSwitchCoordinator({ db: store, zylosDir: root, readMode,
-      convert: converter, writeMode: target => { mode = target; keyPresent = true; }, restart: { advance: () => ({ confirmed: true }) },
-    });
-    await owner.advance(); await owner.advance();
-    const done = await status(); assert.equal(done.transition, null); assert.equal(done.blocked, null);
-    assert.equal(done.lastCompleted.runId, reply.runId); assert.equal(done.globalGate.present, false); assert.equal(done.sessionMode, 'multi');
-  } finally { await service?.stop(); for (const fn of cleanup.reverse()) fn(); fs.rmSync(root, { recursive: true, force: true }); }
+const clock = 1800000000000;
+const modeReader = mode => ({ mode, keyPresent: mode !== null });
+function cutover(store, readMode, writeMode, legacyPresent = () => false) {
+  return new ModeSwitchCoordinator({ db: store, now: () => clock,
+    readMode, readConfiguration: () => ({}), readRequests: () => [],
+    legacyPresent, observe: () => [], writeMode,
+    restart: { advance: () => ({ confirmed: true }) } });
+}
+function queue(db, content, status = 'pending') {
+  return Number(db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('in','fixture',?,?,'')")
+    .run(content, status).lastInsertRowid);
+}
+async function deliverOrigin(t, storage, expectedIds) {
+  const delivery = deliveryFixture(t, { storage });
+  for (const expected of expectedIds) {
+    const selected = storage.store.getNextPending({ sessionGroups: ['origin'], sessionMode: 'multi' });
+    assert.equal(selected.id, expected);
+    assert.equal(storage.store.claimConversation(selected.id, { sessionMode: 'multi' }), true);
+    assert.equal((await delivery.delivery.deliverConversation(selected)).delivered, true);
+  }
+  assert.equal(storage.store.getNextPending({ sessionGroups: ['origin'], sessionMode: 'multi' }), null);
+  assert.equal(delivery.calls.filter(([operation, group]) => operation === 'paste' && group === 'origin').length, expectedIds.length);
+}
+
+// Run for migration admission, router startup, re-attribution, or scoped delivery.
+// The Node runner isolates HOME, ZYLOS_DIR, PM2_HOME and short TMPDIR. This case
+// uses an in-memory database and injected runtime/dispatcher I/O, with no tmux
+// socket or external service. Stop the router before fixture teardown.
+test('upgrade waits for the baseline and then delivers queued legacy input under Origin in order', async t => {
+  let mode = null, baselinePresent = true, legacyTicks = 0;
+  const readMode = () => modeReader(mode);
+  const storage = routerFixture(t);
+  storage.deps.readSessionMode = readMode;
+  const { store, sqlite: db } = storage;
+  assert.equal(db.pragma('user_version', { simple: true }), 4);
+  assert.equal(db.pragma('table_info(mode_transitions)').some(column => column.name === 'kind'), false);
+  const ids = [queue(db, 'first'), queue(db, 'second')];
+  const oldDelivery = queue(db, 'already delivered', 'delivered');
+  const other = store.insertConversation('in', 'fixture', 'other', 'other group', { groupName: 'room' });
+  storage.deps.findLegacySessions = () => ['baseline'];
+  storage.deps.advanceLegacy = () => { legacyTicks++; };
+  const list = storage.deps.listGroupTmuxSessions;
+  storage.deps.listGroupTmuxSessions = () => {
+    assert.equal(mode, 'multi', 'group observations begin only after migration');
+    return list();
+  };
+  const router = storage.create();
+  await router.initialize();
+  await storage.rounds();
+  await router.stop();
+  assert.equal(storage.calls.some(([operation]) => operation === 'launch'), false);
+  assert.equal(legacyTicks, 1);
+  const owner = cutover(store, readMode, target => { mode = target; }, () => baselinePresent);
+  await owner.automatic();
+  assert.equal(store.getModeTransition(), null);
+  assert.equal(db.prepare("SELECT count(*) FROM conversations WHERE status='pending'").pluck().get(), 3);
+  baselinePresent = false;
+  await owner.automatic();
+  const { run_id: runId } = store.getModeTransition();
+  await owner.advance();
+  assert.equal(store.getModeTransition().phase, 'cutover');
+  assert.equal(store.claimConversation(ids[0]), false);
+  await owner.advance();
+  assert.equal(mode, 'multi');
+  assert.equal(store.getModeTransition({ runId }).phase, 'complete');
+  assert.equal(store.getDrainFence('*'), null);
+  assert.equal(db.prepare("SELECT head_id FROM group_heads WHERE session_group='origin'").pluck().get(), ids.at(-1));
+  assert.equal(db.prepare('SELECT session_group FROM conversations WHERE id=?').pluck().get(oldDelivery), '');
+  assert.equal(db.prepare('SELECT session_group FROM conversations WHERE id=?').pluck().get(other.id), other.session_group);
+  assert.equal(db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 0);
+  db.prepare("UPDATE conversations SET timestamp=datetime(?,'unixepoch') WHERE status='pending'").run(clock / 1000);
+  const delivered = [], delivery = deliveryFixture(t, { storage });
+  storage.deps.deliverConversation = async row => {
+    assert.equal((await delivery.delivery.deliverConversation(row)).delivered, true);
+    if (row.session_group === 'origin') delivered.push(row.id);
+  };
+  await storage.create().initialize();
+  for (let round = 0; round < 12 && delivered.length < ids.length; round++) {
+    storage.advance(1000);
+    await storage.rounds();
+  }
+  assert.deepEqual(delivered, ids);
+  assert.equal(storage.calls.filter(([op, input]) => op === 'launch' && input.sessionGroup === 'origin').length, 1);
 });
 
-// Integration boundary: real coordinator, converter, schema-guarded private file
-// C4 store, and physical config/memory files; no replacement storage methods.
-// Run for automatic first-migration phases, Origin role-control preservation or
-// converter/cutover changes. Skip unrelated transport/runtime work. Scenes are
-// bounded empty observations and dispatcher confirmation is injected: this case
-// does not prove real tmux, PM2 restart, or external delivery. The official runner
-// isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; teardown closes SQLite before removing
-// the fixture root. No supervisor services or background workers are started.
-test('automatic first migration converts real memory and expires only stale execution controls at cutover', async t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'first-migration-full-')), cleanup = [];
-  t.after(() => { for (const fn of cleanup.reverse()) fn(); fs.rmSync(root, { recursive: true, force: true }); });
-  const configFile = path.join(root, '.zylos', 'config.json'); fs.mkdirSync(path.dirname(configFile), { recursive: true });
-  fs.writeFileSync(configFile, '{"runtime":"claude"}\n');
-  const readConfig = () => JSON.parse(fs.readFileSync(configFile, 'utf8'));
-  const readMode = () => { const config = readConfig(); return { mode: config.session_mode ?? null, keyPresent: Object.hasOwn(config, 'session_mode') }; };
-  const { db, store } = storeFixture({ after: fn => cleanup.push(fn) }, {
-    now: () => 1800000000000, readConfig: () => ({ state: 'ok', config: readConfig() }),
-  }, path.join(root, 'c4.db'));
-  const memory = path.join(root, 'memory'); fs.mkdirSync(memory);
-  const source = { 'state.md': '# Global state\nunfinished global work\n', 'inbox.md': '# Global inbox\nretained fact\n', 'handoff.md': '# Earlier handoff\nread completely\n' };
-  for (const [name, content] of Object.entries(source)) fs.writeFileSync(path.join(memory, name), content);
-  const ordinary = store.insertConversation('in', 'fixture', 'chat', 'ordinary pending for migration', { groupName: 'team' });
-  const origin = store.insertConversation('in', 'system', 'owner', 'origin pending for migration');
-  assert.equal(ordinary.session_group, 'fixture:team'); assert.equal(origin.session_group, 'origin');
-  const insert = db.prepare("INSERT INTO control_queue(raw_content,content,status,created_at,updated_at,session_group,target_binding) VALUES(?,?,'pending',1,1,?,?)");
-  const add = (content, group, binding = null) => Number(insert.run(content, content, group, binding).lastInsertRowid);
-  const roleId = add('retained Origin role', 'origin');
-  const pinnedId = add('stale Origin execution', 'origin', JSON.stringify({ expectedRunId: 'legacy-run', tmuxTarget: { serverGeneration: 'legacy-generation', sessionId: '$1', paneId: '%1' } }));
-  const ordinaryId = add('ordinary execution', ordinary.session_group), machineId = add('machine execution', null);
-  const beforeControls = db.prepare('SELECT * FROM control_queue ORDER BY id').all();
-  let restartCount = 0;
-  const events = [], converter = createModeSwitchConverter({ db: store, zylosDir: root });
-  const coordinator = new ModeSwitchCoordinator({ db: store, readMode, readConfiguration: readConfig,
-    readRequests: () => [], legacyPresent: () => false, observe: () => [],
-    convert: converter, now: () => 1800000000000,
-    writeMode: target => fs.writeFileSync(configFile, JSON.stringify({ ...readConfig(), session_mode: target }) + '\n'),
-    restart: { advance: () => { restartCount++; return { confirmed: true }; } }, diagnostic: event => events.push(event),
-  });
-  assert.deepEqual(readMode(), { mode: null, keyPresent: false });
-  await coordinator.automatic();
-  const runId = store.getModeTransition().run_id;
-  assert.equal(store.getModeTransition().kind, 'first_migration'); assert.equal(store.getModeTransition().phase, 'gating');
-  assert.equal(store.getDrainFence('*'), null);
-  await coordinator.advance();
-  const absorbed = store.getModeTransition();
-  assert.equal(absorbed.phase, 'converting'); assert.ok(Number.isSafeInteger(absorbed.cutoff));
-  assert.deepEqual(absorbed.absorbed_ids, [ordinary.id, origin.id]);
-  assert.deepEqual(store.getAbsorbedConversations(runId).map(row => row.id), [ordinary.id, origin.id]);
-  assert.deepEqual(db.prepare('SELECT status FROM conversations ORDER BY id').all(), [{ status: 'switch_absorbed' }, { status: 'switch_absorbed' }]);
-  await coordinator.advance();
-  const cutover = store.getModeTransition({ runId });
-  assert.equal(cutover.phase, 'cutover'); assert.equal(store.getModeTransition().phase, 'cutover');
-  assert.deepEqual(readMode(), { mode: null, keyPresent: false });
-  assert.deepEqual(db.prepare('SELECT * FROM control_queue ORDER BY id').all(), beforeControls, 'cutover phase must commit before control invalidation');
-  assert.equal(restartCount, 0);
-  const archive = path.join(memory, 'mode-switch', runId, 'previous', '_global');
-  for (const [name, content] of Object.entries(source)) {
-    assert.equal(fs.existsSync(path.join(memory, name)), false);
-    assert.equal(fs.readFileSync(path.join(archive, name), 'utf8'), content);
-  }
-  assert.equal(fs.readFileSync(path.join(archive, '.done'), 'utf8'), '');
-  for (const [scope, text] of [['origin','origin pending for migration'], ['fixture:team','ordinary pending for migration']]) {
-    const state = fs.readFileSync(path.join(memory, 'session-groups', scope, 'state.md'), 'utf8');
-    assert.equal(validateStateDocument(state, { scope }), true); assert.ok(state.includes(text));
-  }
-  const handoff = fs.readFileSync(path.join(memory, 'session-groups', 'origin', 'handoff.md'), 'utf8');
-  assert.ok(handoff.includes(runId)); assert.ok(handoff.includes('Total absorbed: 2')); assert.ok(handoff.includes(path.join(archive, 'handoff.md')));
-  await coordinator.advance();
-  assert.equal(store.getModeTransition(), null); assert.equal(store.getModeTransition({ runId }).phase, 'complete');
-  assert.equal(store.getDrainFence('*'), null); assert.deepEqual(readMode(), { mode: 'multi', keyPresent: true }); assert.equal(restartCount, 1);
-  const controls = db.prepare('SELECT * FROM control_queue ORDER BY id').all();
-  assert.deepEqual(controls.find(row => row.id === roleId), beforeControls.find(row => row.id === roleId));
-  for (const id of [pinnedId, ordinaryId, machineId]) {
-    assert.equal(controls.find(row => row.id === id).status, 'timeout'); assert.equal(controls.find(row => row.id === id).last_error, 'SESSION_ENDED');
-  }
-  const followups = controls.filter(row => row.raw_content === HANDOFF_FOLLOWUP_PROMPT);
-  assert.equal(followups.length, 1); assert.equal(followups[0].session_group, 'origin'); assert.equal(followups[0].priority, 2);
-  assert.equal(followups[0].target_binding, null); assert.equal(followups[0].status, 'pending');
-  assert.equal(events.filter(event => event.event === 'absorb').length, 1); assert.equal(events.filter(event => event.event === 'transition_complete').length, 1);
+// Run for old-row recovery, transaction atomicity, or cutover delivery. Private
+// file database and bounded worker only. The worker uses the runner's private
+// environment and a SQLite trigger to kill its own process before the commit.
+test('interrupted historical conversion requeues only its own still-absorbed messages once', { timeout: 15000 }, async t => {
+  const storage = fixture(t, {}, true);
+  const { store, db, filename } = storage;
+  assert.ok(fs.realpathSync(filename).startsWith(fs.realpathSync(process.env.TMPDIR) + '/'));
+  const earlier = queue(db, 'older completed run');
+  const previous = store.beginModeTransition('single', 'multi').runId;
+  seedHistoricalAbsorption(db, previous, [earlier], { complete: true });
+  const own = queue(db, 'interrupted run'), failed = queue(db, 'already resolved');
+  const active = store.beginModeTransition('single', 'multi').runId;
+  store.setDrainFence('*');
+  seedHistoricalAbsorption(db, active, [own, failed]);
+  db.prepare("UPDATE conversations SET status='failed' WHERE id=?").run(failed);
+  const status = id => db.prepare('SELECT status FROM conversations WHERE id=?').pluck().get(id);
+  const worker = new URL('./fixtures/mode-switch-transaction-worker.js', import.meta.url);
+  const crashed = spawnSync(process.execPath, [worker.pathname, filename, active], { encoding: 'utf8', timeout: 5000 });
+  assert.equal(crashed.signal, 'SIGKILL', crashed.stderr);
+  assert.equal(store.getModeTransition().phase, 'converting');
+  assert.equal(status(own), 'switch_absorbed');
+  let mode = 'single';
+  const owner = () => cutover(store, () => modeReader(mode), target => { mode = target; });
+  await owner().advance();
+  assert.equal(store.getModeTransition().phase, 'cutover');
+  assert.equal(status(own), 'pending');
+  await owner().advance();
+  assert.equal(store.getModeTransition(), null);
+  assert.equal(status(earlier), 'switch_absorbed');
+  assert.equal(status(failed), 'failed');
+  assert.equal(store.getAbsorbedConversations(previous)[0].id, earlier);
+  await deliverOrigin(t, storage, [own]);
+  await owner().advance();
+  assert.equal(status(own), 'delivered');
 });

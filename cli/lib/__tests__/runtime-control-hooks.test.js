@@ -54,13 +54,6 @@ function restartOptions(config = {}) {
     exec: (...args) => calls.push(args), exists: () => true, log: () => {}, errorLog: () => {} };
 }
 
-test('unmigrated single restart uses require-idle', async () => {
-  const options = restartOptions();
-  assert.equal((await enqueueRestartIfNeeded(options)).submitted, true);
-  assert.ok(options.calls[0][1].includes('--require-idle'));
-  assert.equal(options.calls[0][1].includes('--group'), false);
-});
-
 test('native single hook updates submit an Origin restart request', async () => {
   const options = sockFixture({ kind: 'accepted', reply: { result: 'accepted', runCount: 1 } });
   options.readMode = () => ({ mode: 'single', keyPresent: true });
@@ -69,16 +62,6 @@ test('native single hook updates submit an Origin restart request', async () => 
   assert.equal(options.submits.length, 1);
   assert.equal(options.submits[0][0].type, 'restart_all');
   assert.equal(options.calls.length, 0);
-});
-
-test('unreadable mode or transition never falls back to exit', async () => {
-  for (const options of [
-    { ...restartOptions(), readMode: () => { throw Object.assign(new Error('unreadable'), { code: 'CONFIG_UNREADABLE' }); } },
-    { ...restartOptions(), readTransition: () => { throw new Error('unreadable transition'); } },
-  ]) {
-    assert.equal((await enqueueRestartIfNeeded(options)).submitted, false);
-    assert.equal(options.calls.length, 0);
-  }
 });
 
 function sockFixture(outcome, lookup = 'unknown') {
@@ -111,7 +94,7 @@ test('hook consumer uses submit, frozen envelope and accepted results', async ()
 });
 
 test('definitive rejection and sent:false never look up, resubmit or fall back to exit', async () => {
-  for (const code of ['single_mode', 'manual_restart_pending', 'requests_unreadable', 'request_conflict', 'invalid_request', 'entry_not_open']) {
+  for (const code of ['manual_restart_pending', 'requests_unreadable', 'request_conflict', 'invalid_request', 'entry_not_open']) {
     const options = sockFixture({ kind: 'rejected', sent: true, reply: { requestId: 'upgrade-1000-aabbccddeeff', code } });
     const actual = await enqueueRestartIfNeeded(options);
     assert.equal(actual.submitted, false); assert.equal(actual.code, code);
@@ -123,37 +106,6 @@ test('definitive rejection and sent:false never look up, resubmit or fall back t
     const options = sockFixture({ kind, sent: false });
     assert.equal((await enqueueRestartIfNeeded(options)).category, 'T');
     assert.equal(options.lookups.length, 0); assert.equal(options.submits.length, 1); assert.equal(options.calls.length, 0);
-  }
-});
-
-test('single_mode falls back only after fresh stable single reads and keeps require-idle', async () => {
-  const rejection = { kind: 'rejected', sent: true, reply: { requestId: 'upgrade-1000-aabbccddeeff', code: 'single_mode' } };
-  const options = sockFixture(rejection);
-  let reads = 0, transitions = 0;
-  options.readMode = () => ({ mode: ++reads === 1 ? 'multi' : 'single' });
-  options.readTransition = () => { transitions++; return null; };
-  assert.deepEqual(await enqueueRestartIfNeeded(options), { submitted: true });
-  assert.equal(reads, 2); assert.equal(transitions, 2);
-  assert.equal(options.calls.length, 1);
-  assert.deepEqual(options.calls[0][1].slice(1), ['enqueue', '--content', '/exit', '--priority', '1', '--require-idle', '--no-ack-suffix']);
-  assert.equal(options.submits.length, 1); assert.equal(options.lookups.length, 0);
-
-  for (const current of ['multi', 'native_single', 'transition', 'config_error', 'transition_error']) {
-    const rejected = sockFixture(rejection);
-    let configReads = 0, transitionReads = 0;
-    rejected.readMode = () => {
-      if (++configReads === 1) return { mode: 'multi' };
-      if (current === 'config_error') throw new Error('unreadable config');
-      return { mode: current === 'multi' ? current : 'single', keyPresent: current === 'native_single' };
-    };
-    rejected.readTransition = () => {
-      if (++transitionReads === 1) return null;
-      if (current === 'transition_error') throw new Error('unreadable transition');
-      return current === 'transition' ? { phase: 'gating' } : null;
-    };
-    assert.equal((await enqueueRestartIfNeeded(rejected)).submitted, false, current);
-    assert.equal(rejected.calls.length, 0, current);
-    assert.equal(rejected.lookups.length, 0, current);
   }
 });
 
@@ -245,12 +197,6 @@ test('upgrade refreshes stale Codex hooks with unchanged TOML and dry-run preser
   const root = path.join(home, 'zylos');
   fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
   fs.writeFileSync(path.join(root, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude' }));
-  const controlPath = path.join(root, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
-  const restartLog = path.join(home, 'restart.jsonl');
-  fs.mkdirSync(path.dirname(controlPath), { recursive: true });
-  fs.writeFileSync(path.join(path.dirname(controlPath), 'package.json'), '{"type":"module"}');
-  fs.writeFileSync(controlPath, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(restartLog)}, JSON.stringify(process.argv.slice(2)) + '\\n');`);
-  const restarts = () => fs.readFileSync(restartLog, 'utf8').trim().split('\n').map(line => JSON.parse(line));
   const script = new URL('../sync-settings-hooks.js', import.meta.url);
   const run = (...args) => {
     const result = spawnSync(process.execPath, [script.pathname, ...args], {
@@ -260,7 +206,6 @@ test('upgrade refreshes stale Codex hooks with unchanged TOML and dry-run preser
     return result.stdout;
   };
   run();
-  assert.deepEqual(restarts(), [['enqueue', '--content', '/exit', '--priority', '1', '--require-idle', '--no-ack-suffix']]);
   const tomlPaths = [path.join(home, '.codex', 'config.toml'), path.join(root, '.codex', 'config.toml')];
   const beforeToml = tomlPaths.map(file => fs.readFileSync(file, 'utf8'));
   const hooksPath = path.join(root, '.codex', 'hooks.json');
@@ -270,16 +215,13 @@ test('upgrade refreshes stale Codex hooks with unchanged TOML and dry-run preser
   }] }] } });
   fs.writeFileSync(hooksPath, stale);
   run('--dry-run');
-  assert.equal(restarts().length, 1);
   assert.equal(fs.readFileSync(hooksPath, 'utf8'), stale);
   assert.match(run(), /Codex hooks refreshed/);
-  assert.equal(restarts().length, 2);
   assert.deepEqual(tomlPaths.map(file => fs.readFileSync(file, 'utf8')), beforeToml);
   const refreshed = fs.readFileSync(hooksPath, 'utf8');
   assert.doesNotMatch(refreshed, /--shard state/);
   assert.match(refreshed, /--shard c4-conversations/);
   assert.match(refreshed, /\/user\/custom-hook.js/);
   assert.match(run(), /all up to date/);
-  assert.equal(restarts().length, 2);
   assert.equal(fs.readFileSync(hooksPath, 'utf8'), refreshed);
 });

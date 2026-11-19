@@ -59,13 +59,16 @@ test('restart persists exact snapshot before reply and survives owner reconstruc
   assert.equal((await next.handle(restart('upgrade'))).result, 'already_accepted'); assert.equal(f.store.read()[0].runIds.length, 3);
   assert.equal((await next.handle(manual({requestId:'upgrade'}))).reason, 'request_conflict');
 });
-test('restart empty writes only completion and steady single refuses', async t => {
+test('restart completes immediately without a mode key or persisted request', async t => {
   const f = fixture(t); f.state.runs = [];
   assert.equal((await f.admission.handle(restart('empty'))).result, 'done_empty'); assert.equal(fs.existsSync(f.file), false);
   assert.deepEqual(f.state.events, [{event:'restart_done', requestId:'empty'}]);
-  f.state.mode = 'single'; f.state.keyPresent = false; assert.equal((await f.admission.handle(restart('single'))).code, 'single_mode');
+  f.state.mode = 'single'; f.state.keyPresent = false;
+  f.state.runs = [{ runId: 'legacy baseline' }];
+  const reply = await f.admission.handle(restart('single'));
+  assert.equal(reply.result, 'done_empty'); assert.equal(reply.runCount, 0); assert.equal(fs.existsSync(f.file), false);
   f.state.transition = {phase:'gating'}; f.state.runs = [{runId:'legacy'}];
-  assert.equal((await f.admission.handle(restart('during-transition'))).result, 'accepted');
+  assert.equal((await f.admission.handle(restart('during-transition'))).result, 'done_empty');
 });
 
 test('active deletion admission rejects every changed ownership field before altering restart intent', async t => {
@@ -142,7 +145,7 @@ test('absent Origin writes an unbound wake before replying and enqueue failure l
   f.state.mode = 'single'; f.state.keyPresent = false;
   for (const expected of [true, false]) {
     const request = manual(); if (!expected) delete request.expectedRunId;
-    assert.equal((await f.admission.handle(request)).result, 'already_stopped');
+    assert.equal((await f.admission.handle(request)).reason, 'not_multi');
   }
 });
 test('stale, incomplete and starting identity cannot become manual targets', async t => {
@@ -458,7 +461,7 @@ test('native single configuration reclaim accepts only Origin and fences its run
 });
 
 test('single restart rows retain legacy shape and allow only explicit Origin', async t => {
-  const f=fixture(t); f.state.mode='single'; f.state.keyPresent=false;
+  const f=fixture(t); f.state.mode='single'; f.state.keyPresent=true;
   assert.equal((await f.admission.handle(manual())).result,'accepted');
   const bytes=fs.readFileSync(f.file,'utf8'), [legacy]=f.store.read();
   assert.equal(Object.hasOwn(legacy,'sessionGroup'),false);
@@ -469,6 +472,7 @@ test('single restart rows retain legacy shape and allow only explicit Origin', a
     assert.equal(validateRestartRequests([{...legacy,sessionGroup}]),false);
   }
   f.store.write([]);
+  f.state.keyPresent=false;
   assert.equal((await f.admission.handle(manual({sessionGroup:'origin'}))).reason,'not_multi');
   f.state.keyPresent=true;
   assert.equal((await f.admission.handle(manual({sessionGroup:'telegram:a'}))).reason,'not_multi');

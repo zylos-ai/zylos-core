@@ -6,16 +6,20 @@ import net from 'node:net';
 import { once } from 'node:events';
 import { spawnSync } from 'node:child_process';
 import Database from 'better-sqlite3';
-import { guardDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
-import * as schema from '../../../comm-bridge/scripts/c4-schema.js';
-import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
-import { submit, lookupModeSwitch } from '../../../../cli/lib/am-sock-client.js';
-import { executeSessionMode } from '../../../../cli/commands/session-mode.js';
+import { guardDatabase } from '../skills/comm-bridge/scripts/sqlite-schema.js';
+import * as schema from '../skills/comm-bridge/scripts/c4-schema.js';
+import { createStore } from '../skills/comm-bridge/scripts/c4-v2-store.js';
+import { submit, lookupModeSwitch } from '../cli/lib/am-sock-client.js';
+import { executeSessionMode } from '../cli/commands/session-mode.js';
 
 const cleanups=[];
 afterEach(async()=>{while(cleanups.length) await cleanups.pop()();});
 async function fixture(responder) {
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'mode-switch-cli-'));
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'sw-cli-'));
+  const home = fs.realpathSync(process.env.HOME);
+  expect(root.startsWith(home + path.sep)).toBe(false);
+  console.info({ HOME: home, ZYLOS_DIR: process.env.ZYLOS_DIR, PM2_HOME: process.env.PM2_HOME,
+    TMPDIR: os.tmpdir(), database: path.join(root, 'c4.db'), socket: path.join(root, 'am.sock') });
   cleanups.push(()=>fs.rmSync(root,{recursive:true,force:true}));
   const db=new Database(path.join(root,'c4.db')); guardDatabase(db,schema);
   cleanups.push(()=>db.close());
@@ -82,9 +86,13 @@ test('expired reply budget does not start a read or resend',async()=>{
     lookup:(target,options)=>lookupModeSwitch(target,{...options,now,getModeTransition:()=>{reads++;return f.store.getModeTransition();}})});
   expect(result.ok).toBe(false);expect(result.error.code).toBe('deadline_exceeded');expect(result.error.persisted).toBeNull();expect(reads).toBe(0);expect(f.requests).toHaveLength(1);
 });
-test('public CLI dispatch rejects bad target with one JSON line and no instance writes',()=>{
+// Run for public switch argument or command changes. CLI children inherit a
+// private PM2 home and short TMPDIR and use only the temporary instance root.
+for (const [name, args] of [['invalid switch target', ['switch', 'bad']], ['removed cancellation', ['cancel']]]) {
+test(`public CLI rejects ${name} with no instance writes`,()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'mode-switch-cli-args-'));cleanups.push(()=>fs.rmSync(root,{recursive:true,force:true}));
-  const child=spawnSync(process.execPath,['cli/zylos.js','session-mode','switch','bad','--json'],{encoding:'utf8',env:{...process.env,HOME:root,ZYLOS_DIR:root}});
+  const child=spawnSync(process.execPath,['cli/zylos.js','session-mode',...args,'--json'],{encoding:'utf8',timeout:5000,env:{...process.env,HOME:root,ZYLOS_DIR:root}});
   expect(child.status).toBe(1);expect(JSON.parse(child.stdout).error.code).toBe('INVALID_ARGUMENT');
   expect(child.stdout.trim().split('\n')).toHaveLength(1);expect(fs.readdirSync(root)).toEqual([]);
 });
+}

@@ -41,7 +41,7 @@ export function validateReply(request, reply) {
       return reply.ok
         ? oneOf(reply.result, ['accepted', 'already_accepted', 'done_empty']) && integer(reply.runCount)
           && (reply.result === 'done_empty' ? reply.runCount === 0 : reply.runCount >= 1)
-        : oneOf(reply.code, ['single_mode', 'manual_restart_pending', 'requests_unreadable', 'request_conflict']);
+        : oneOf(reply.code, ['manual_restart_pending', 'requests_unreadable', 'request_conflict']);
     case 'ready_for_config_reclaim':
       return reply.ok ? oneOf(reply.result, ['accepted', 'already_accepted', 'unchanged'])
         : reply.result === 'rejected' && oneOf(reply.reason, configReasons);
@@ -54,9 +54,6 @@ export function validateReply(request, reply) {
     case 'manual_restart':
       return reply.ok ? oneOf(reply.result, ['accepted', 'already_accepted', 'already_stopped'])
         : (reply.result === 'stale_target' && nonempty(reply.currentRunId)) || (reply.result === 'rejected' && oneOf(reply.reason, manualReasons));
-    case 'mode_switch_cancel':
-      return reply.ok ? reply.result === 'cancelled' && nonempty(reply.runId) && reply.runId === request.runId
-        : oneOf(reply.code, ['run_not_open', 'not_cancellable']);
     case 'mode_switch':
       return reply.ok ? reply.result === 'noop' || (reply.result === 'accepted' && nonempty(reply.runId))
         : (reply.code === 'transition_open' && nonempty(reply.runId) && oneOf(reply.target, ['single', 'multi']))
@@ -70,7 +67,7 @@ export function submit(request, { deadlineAt, replyMaxMs = 10000, connectRetryEv
   socketPath = path.join(ZYLOS_DIR, 'activity-monitor', 'am.sock'),
   connect = options => net.createConnection(options), now = (() => { const wall = Date.now(); const mono = performance.now(); return () => wall + performance.now() - mono; })(),
 } = {}) {
-  if (!object(request) || !oneOf(request.type, ['start_attempt', 'restart_all', 'ready_for_config_reclaim', 'request_release', 'defer_reclaim', 'manual_restart', 'mode_switch', 'mode_switch_cancel', 'delete_group'])) throw new TypeError('Unsupported supervisor request');
+  if (!object(request) || !oneOf(request.type, ['start_attempt', 'restart_all', 'ready_for_config_reclaim', 'request_release', 'defer_reclaim', 'manual_restart', 'mode_switch', 'delete_group'])) throw new TypeError('Unsupported supervisor request');
   if (!Number.isFinite(replyMaxMs) || replyMaxMs <= 0 || (deadlineAt !== undefined && !integer(deadlineAt))
       || (connectRetryEveryMs !== undefined && (!Number.isFinite(connectRetryEveryMs) || connectRetryEveryMs <= 0))) throw new TypeError('Invalid supervisor deadline');
   const deadline = deadlineAt ?? now() + replyMaxMs;
@@ -196,15 +193,4 @@ export async function lookupModeSwitch(target, { deadlineAt, now = Date.now, get
   if (transition && transition.target_mode === target) return 'accepted';
   if (now() >= deadlineAt) return 'deadline_exceeded';
   return (await readMode()).mode === target ? 'done' : 'unknown';
-}
-
-/** A cancellation is resolved only by observing the pinned transition's terminal phase. */
-export async function lookupModeSwitchCancel(runId, { deadlineAt, now = Date.now, getModeTransition } = {}) {
-  if (now() >= deadlineAt) return 'deadline_exceeded';
-  if (!getModeTransition) {
-    ({ getModeTransition } = await import('../../skills/comm-bridge/scripts/c4-db.js'));
-  }
-  if (now() >= deadlineAt) return 'deadline_exceeded';
-  const transition = await getModeTransition({ runId });
-  return transition?.run_id === runId && transition.phase === 'cancelled' ? 'cancelled' : 'unknown';
 }

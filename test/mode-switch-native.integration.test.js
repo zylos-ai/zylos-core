@@ -8,6 +8,7 @@ import { guardDatabase } from '../skills/comm-bridge/scripts/sqlite-schema.js';
 import * as schema from '../skills/comm-bridge/scripts/c4-schema.js';
 import { createStore } from '../skills/comm-bridge/scripts/c4-v2-store.js';
 import { ModeSwitchCoordinator } from '../skills/activity-monitor/scripts/mode-switch.js';
+import { SupervisorLifecycle } from '../skills/activity-monitor/scripts/supervisor-lifecycle.js';
 import { deliveryFixture } from '../skills/comm-bridge/scripts/__tests__/helpers/session-delivery-fixture.js';
 
 // Acceptance boundary: actual coordinator and schema-guarded private file SQLite.
@@ -36,8 +37,7 @@ function fixture(t) {
     readMode: () => ({ mode: readConfig().session_mode, keyPresent: true }), readConfiguration: readConfig,
     readRequests: () => [], legacyPresent: () => false, globalMemoryPending: () => false,
     observe: () => scenes.map(scene => ({ ...scene })),
-    lifecycle: { advanceReclaim: fence => { reclaimed.push({ ...fence }); } },
-    convert: () => assert.fail('native switch must never invoke conversion'),
+    lifecycle: { stopForModeSwitch: () => {}, advanceReclaim: fence => { reclaimed.push({ ...fence }); } },
     writeMode: target => { writes.push(target); fs.writeFileSync(configFile, JSON.stringify({ ...readConfig(), session_mode: target }) + '\n'); },
     restart: { advance: request => { restarts.push(request); return { confirmed: true }; } },
     diagnostic: event => events.push(event),
@@ -50,7 +50,7 @@ function fixture(t) {
   const payload = () => JSON.stringify({ controls: rows('control_queue'), conversations: rows('conversations'), checkpoints: rows('checkpoints'), cursors: rows('origin_sync_cursors'), config: fs.readFileSync(configFile).toString('base64'), memory: tree() });
   const begin = async (coordinator, target = 'single') => {
     const result = await coordinator.handle({ version: 1, type: 'mode_switch', requestId: `switch-${target}`, target });
-    assert.equal(result.result, 'accepted'); assert.equal(store.getModeTransition().kind, 'switch'); return result.runId;
+    assert.equal(result.result, 'accepted'); return result.runId;
   };
   // SQL establishes persisted fixture facts; transitions under test use product APIs.
   db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status,session_group) VALUES('in','fixture','ordinary','external pending','pending','ordinary'),('in','fixture','origin','origin running','running','origin')").run();
@@ -80,51 +80,6 @@ test('native gating preserves Origin while fencing only ordinary scenes', async 
   assert.deepEqual(f.scenes[0], origin); assert.equal(f.payload(), before);
   assert.equal(f.rows('run_endings').length, 0); assert.deepEqual(f.writes, []); assert.deepEqual(f.restarts, []);
 });
-test('native cancel accepted immediately before first gating tick leaves payload bytewise unchanged', async t => {
-  const f = fixture(t), coordinator = f.owner(), before = f.payload();
-  assert.equal((await coordinator.cancel({ runId: 'absent' })).code, 'run_not_open');
-  const runId = await f.begin(coordinator);
-  assert.equal(f.store.getDrainFence('*'), null);
-  assert.deepEqual(await coordinator.cancel({ runId }), { ok: true, result: 'cancelled', runId });
-  assert.equal(f.store.getModeTransition(), null); assert.equal(f.store.getModeTransition({ runId }).phase, 'cancelled');
-  assert.equal((await coordinator.cancel({ runId })).code, 'run_not_open');
-  assert.equal(f.store.getDrainFence('*'), null); assert.equal(f.payload(), before);
-  await coordinator.advance(); assert.equal(f.payload(), before); assert.deepEqual(f.restarts, []);
-});
-test('native gating cancel restores recorded continuation rules and lets in-flight group fences finish', async t => {
-  const f = fixture(t), coordinator = f.owner();
-  f.store.recordRunEnd('before', { runId: 'before', reason: 'ttl' });
-  const runId = await f.begin(coordinator);
-  f.store.setDrainFence('*'); f.store.setDrainFence('still-draining', { reason: 'mode_switch', runId: 'late' });
-  for (const [group, reason] of [['stopped','mode_switch'],['origin','upgrade'],['crashed','unexpected'],['ttl','ttl'],['auth','auth'],['model','model_config'],['manual','manual_restart']]) {
-    f.store.recordRunEnd(group, { runId: group, reason });
-    assert.equal(f.store.listRunEndings([group])[0].continuationPending, 0);
-  }
-  const before = f.payload();
-  assert.equal((await coordinator.cancel({ runId })).result, 'cancelled');
-  assert.equal(f.payload(), before); assert.equal(f.store.getDrainFence('*'), null);
-  assert.equal(f.store.getDrainFence('still-draining').runId, 'late');
-  for (const group of ['stopped','origin','crashed','auth','model','manual']) assert.equal(f.store.listRunEndings([group])[0].continuationPending, 1, group);
-  for (const group of ['before','ttl']) assert.equal(f.store.listRunEndings([group])[0].continuationPending, 0, group);
-  assert.equal(f.store.listRunEndings(['unrecorded-crash']).length, 0);
-  f.tick(1); f.store.recordRunEnd('still-draining', { runId: 'late', reason: 'mode_switch', clearFence: true });
-  assert.equal(f.store.listRunEndings(['still-draining'])[0].continuationPending, 1); assert.equal(f.store.getDrainFence('still-draining'), null);
-});
-test('native historical converting switch fails closed after coordinator restart', async t => {
-  const f = fixture(t), runId = await f.begin(f.owner());
-  f.db.prepare("UPDATE mode_transitions SET phase='converting',cutoff=7 WHERE run_id=?").run(runId);
-  f.store.setDrainFence('*'); const before = f.payload();
-  await f.owner().advance();
-  const row = f.store.getModeTransition();
-  assert.equal(row.phase, 'converting'); assert.equal(row.reason, 'mode_conflict:converting:multi');
-  assert.equal((await f.owner().cancel({ runId })).code, 'not_cancellable');
-  assert.equal(f.payload(), before); assert.ok(f.store.getDrainFence('*')); assert.deepEqual(f.writes, []); assert.deepEqual(f.restarts, []);
-});
-
-// Cutover acceptance requires upstream dependency 3's actual keepOrigin and
-// clearContinuationsExceptOrigin APIs. No substitute storage implementation and
-// no automatic skip: run these once dependency 3 is present; until then select
-// the gating/cancel/converting cases explicitly by --test-name-pattern.
 test('native roundtrip cutover preserves Origin controls markers messages checkpoints cursors and memory', async t => {
   const f = fixture(t); f.completeOriginInput();
   assert.equal(typeof f.store.clearContinuationsExceptOrigin, 'function', 'requires upstream dependency 3');
@@ -141,7 +96,6 @@ test('native roundtrip cutover preserves Origin controls markers messages checkp
     await coordinator.advance(); assert.equal(f.store.getModeTransition().phase, 'cutover');
     assert.equal(JSON.stringify({ controls: f.rows('control_queue'), endings: f.rows('run_endings') }), beforeCutover,
       'durable cutover phase must precede execution-control invalidation');
-    assert.equal((await coordinator.cancel({ runId })).code, 'not_cancellable');
     await coordinator.advance();
     assert.equal(f.store.getModeTransition(), null); assert.equal(f.readConfig().session_mode, target);
     const completed = f.store.getModeTransition({ runId }); assert.equal(completed.phase, 'complete'); assert.equal(completed.cutoff, null);
@@ -265,102 +219,47 @@ test('native roundtrip delivers queued input to Origin in single and retains unc
   }
 });
 
-// Boundary: actual supervisor process/socket/loop and private persisted C4 survive
-// SIGKILL in gating, then accept cancellation through the real client. Runtime
-// observation is empty and an actual running Origin input holds the gate; this
-// proves process restart/cancellation, not real runtime or dispatcher behavior.
-test('actual supervisor process killed in native gating resumes and cancels without changing payload', { timeout: 15000 }, async t => {
-  const { fork } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const { submit } = await import('../cli/lib/am-sock-client.js');
-  const root = fs.mkdtempSync('/tmp/msc-');
-  const configFile = path.join(root, '.zylos/config.json'), filename = path.join(root, 'comm-bridge/c4.db');
-  for (const name of ['.zylos', 'comm-bridge', 'home', 'tmp', 'pm2', 'memory/session-groups/origin']) fs.mkdirSync(path.join(root, name), { recursive: true });
-  fs.writeFileSync(configFile, '{"runtime":"claude","session_mode":"multi","retained":"physical config"}\n');
-  fs.writeFileSync(path.join(root, 'memory/session-groups/origin/state.md'), 'retained Origin state\n');
-  fs.writeFileSync(path.join(root, 'memory/session-groups/origin/inbox.md'), 'retained Origin inbox\n');
-  const db = new Database(filename); guardDatabase(db, schema); db.pragma('journal_mode=WAL');
-  const socketPath = path.join(root, 'activity-monitor/am.sock');
-  const worker = fileURLToPath(new URL('./fixtures/mode-switch-supervisor-worker.js', import.meta.url));
-  const children = [];
-  const abortChildren = () => { for (const record of children) if (!record.settled) record.child.kill('SIGKILL'); };
-  t.signal.addEventListener('abort', abortChildren, { once: true });
-  const rows = table => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all();
-  const memory = (directory = path.join(root, 'memory'), prefix = '') => fs.readdirSync(directory).sort().flatMap(name => {
-    const file = path.join(directory, name), relative = path.join(prefix, name);
-    return fs.statSync(file).isDirectory() ? [[relative, 'directory'], ...memory(file, relative)] : [[relative, fs.readFileSync(file).toString('base64')]];
-  });
-  const payload = () => JSON.stringify({ conversations: rows('conversations'), controls: rows('control_queue'),
-    checkpoints: rows('checkpoints'), cursors: rows('origin_sync_cursors'), endings: rows('run_endings'),
-    config: fs.readFileSync(configFile).toString('base64'), memory: memory() });
-  const spawnWorker = () => {
-    const child = fork(worker, [], { env: { ...process.env, HOME: path.join(root, 'home'), ZYLOS_DIR: root,
-      PM2_HOME: path.join(root, 'pm2'), TMPDIR: path.join(root, 'tmp'), TMUX_TMPDIR: path.join(root, 'tmp'),
-      ZYLOS_PACKAGE_ROOT: process.env.ZYLOS_PACKAGE_ROOT }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
-    let output = '', failure, settled = false;
-    const messages = [], waiters = [];
-    const closed = new Promise(resolve => child.once('close', (code, signal) => { settled = true; resolve({ code, signal });
-      for (const pending of waiters.splice(0)) pending.reject(new Error(`worker exited ${code}/${signal}: ${output}`)); }));
-    const rejectAll = error => { failure = error; for (const pending of waiters.splice(0)) pending.reject(error); };
-    child.on('error', rejectAll);
-    for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => {
-      if (failure) return;
-      if (Buffer.byteLength(output) + bytes.length > 65536) { rejectAll(new Error('worker output exceeded bound')); child.kill('SIGKILL'); return; }
-      output += bytes.toString();
-    });
-    child.on('message', message => {
-      if (failure) return;
-      if (message?.type === 'failed') return rejectAll(new Error(`worker failed: ${message.error}`));
-      const index = waiters.findIndex(pending => pending.match(message));
-      if (index >= 0) waiters.splice(index, 1)[0].resolve(message);
-      else { messages.push(message); if (messages.length > 16) { rejectAll(new Error('worker IPC exceeded bound')); child.kill('SIGKILL'); } }
-    });
-    const wait = (match, timeout = 4000) => new Promise((resolve, reject) => {
-      const index = messages.findIndex(match);
-      if (index >= 0) return resolve(messages.splice(index, 1)[0]);
-      if (failure || settled) return reject(failure ?? new Error(`worker already exited: ${output}`));
-      const pending = { match, resolve: value => { clearTimeout(timer); resolve(value); }, reject: error => { clearTimeout(timer); reject(error); } };
-      const timer = setTimeout(() => { const index = waiters.indexOf(pending); if (index >= 0) waiters.splice(index, 1); reject(new Error(`worker IPC deadline: ${output}`)); }, timeout);
-      waiters.push(pending);
-    });
-    const boundedClose = async timeout => {
-      let timer;
-      try { return await Promise.race([closed, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('worker close deadline')), timeout); })]); }
-      finally { clearTimeout(timer); }
-    };
-    const record = { child, wait, boundedClose, get settled() { return settled; } }; children.push(record); return record;
-  };
-  try {
-    db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status,session_group) VALUES('in','fixture','origin','actual running Origin input','running','origin')").run();
-    db.prepare("INSERT INTO control_queue(raw_content,content,status,created_at,updated_at,session_group) VALUES('origin role','origin role','pending',1,1,'origin'),('ordinary role','ordinary role','pending',1,1,'ordinary'),('origin running','origin running','running',1,1,'origin')").run();
-    db.prepare("INSERT INTO run_endings(session_group,run_id,reason,ended_at,continuation_pending) VALUES('origin','previous-origin','upgrade',1,1),('ordinary','previous-ordinary','upgrade',1,1)").run();
-    const before = payload(), first = spawnWorker();
-    assert.equal((await first.wait(message => message.type === 'ready')).phase, null);
-    const accepted = await submit({ version: 1, type: 'mode_switch', requestId: 'process-crash-switch', target: 'single' }, { socketPath });
-    assert.equal(accepted.kind, 'accepted'); assert.equal(accepted.reply.result, 'accepted');
-    first.child.send({ type: 'tick', id: 1 });
-    const gated = await first.wait(message => message.type === 'ticked' && message.id === 1);
-    assert.equal(gated.phase, 'gating'); assert.equal(gated.forbiddenCalls, 0); assert.deepEqual(gated.gates, ['*']); assert.equal(payload(), before);
-    first.child.kill('SIGKILL'); assert.equal((await first.boundedClose(2000)).signal, 'SIGKILL');
-    assert.equal(payload(), before);
-    const second = spawnWorker(), resumed = await second.wait(message => message.type === 'ready');
-    assert.equal(resumed.phase, 'gating'); assert.equal(resumed.forbiddenCalls, 0); assert.deepEqual(resumed.gates, ['*']); assert.equal(payload(), before);
-    const cancelled = await submit({ version: 1, type: 'mode_switch_cancel', requestId: 'process-crash-cancel', runId: accepted.reply.runId }, { socketPath });
-    assert.equal(cancelled.kind, 'accepted'); assert.equal(cancelled.reply.result, 'cancelled');
-    assert.equal(db.prepare('SELECT phase FROM mode_transitions WHERE run_id=?').get(accepted.reply.runId).phase, 'cancelled');
-    assert.deepEqual(rows('drain_fences'), []); assert.equal(payload(), before);
-    second.child.send({ type: 'state', id: 2 });
-    assert.equal((await second.wait(message => message.type === 'state' && message.id === 2)).forbiddenCalls, 0);
-  } finally {
-    for (const record of children) {
-      if (!record.settled) {
-        record.child.kill('SIGTERM');
-        try { await record.boundedClose(1500); }
-        catch { record.child.kill('SIGKILL'); await record.boundedClose(1500); }
-      }
-      assert.equal(record.settled, true, 'all supervisor child processes must close before fixture deletion');
-    }
-    t.signal.removeEventListener('abort', abortChildren);
-    db.close(); fs.rmSync(root, { recursive: true, force: true });
+
+// Run for gating and reclaim changes. C4 and lifecycle are real, with the
+// official runner isolating HOME, ZYLOS_DIR, PM2_HOME and short TMPDIR. Runtime
+// observations and stops are injected and use no tmux socket or other service.
+test('gating stops busy groups after inbound delivery settles and preserves existing reclaim ownership', async t => {
+  const f = fixture(t), coordinator = f.owner();
+  f.completeOriginInput();
+  const active = f.scenes[0];
+  for (const group of ['fixture:fresh', 'fixture:reclaiming']) {
+    f.scenes.push({ sessionGroup: group, runId: group, present: true, ready: true,
+      processRunning: true, state: 'busy', activeSubagents: ['child'], currentSessionTs: 1 });
   }
+  const stopped = [];
+  coordinator.lifecycle = new SupervisorLifecycle({
+    db: f.store,
+    observeGroup: group => f.scenes.find(scene => scene.sessionGroup === group) ?? { present: false },
+    readSyncMarker: () => assert.fail('mode-switch gating must not read Sync markers'),
+    stop: scene => {
+      stopped.push(scene.sessionGroup);
+      f.scenes.splice(f.scenes.findIndex(item => item.sessionGroup === scene.sessionGroup), 1);
+    },
+  }, { now: () => 1800000000000 });
+  const row = f.store.insertConversation('in', 'fixture', 'reclaiming', 'in flight', { groupName: 'reclaiming' });
+  assert.equal(f.store.claimConversation(row.id), true);
+  f.store.setDrainFence('fixture:reclaiming', { reason: 'ttl', runId: 'fixture:reclaiming' });
+  const memory = f.tree();
+  await f.begin(coordinator);
+  await coordinator.advance();
+  assert.deepEqual(stopped, ['fixture:fresh']);
+  assert.equal(f.store.getModeTransition().phase, 'gating');
+  assert.equal(f.store.getDrainFence('fixture:reclaiming').reason, 'ttl');
+  assert.equal(f.store.markDelivered(row.id, { sessionId: 'delivery' }), true);
+  await coordinator.advance();
+  assert.deepEqual(stopped, ['fixture:fresh', 'fixture:reclaiming']);
+  assert.equal(f.store.getModeTransition().phase, 'cutover');
+  assert.deepEqual(f.store.listRunEndings(['fixture:fresh', 'fixture:reclaiming']).map(row => [row.reason, row.continuationPending]), [['mode_switch', 0], ['ttl', 0]]);
+  await coordinator.advance();
+  const back = f.owner();
+  await f.begin(back, 'multi');
+  await back.advance(); await back.advance();
+  assert.equal(f.store.getModeTransition(), null);
+  assert.deepEqual(f.scenes, [active]);
+  assert.deepEqual(f.tree(), memory);
 });

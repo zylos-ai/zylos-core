@@ -243,7 +243,6 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
       await coordinator.advance();
       assert.equal(c4.getModeTransition(), null); assert.equal(readMode(), 'single');
       const completed = c4.getModeTransition({ runId: accepted.runId });
-      assert.equal(completed.kind, 'switch');
       for (const field of ['cutoff', 'coverage_snapshot', 'absorbed_ids']) assert.equal(completed[field], null, field);
       return completed;
     },

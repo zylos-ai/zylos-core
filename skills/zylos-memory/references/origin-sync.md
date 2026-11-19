@@ -89,19 +89,8 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
    then follow "Moving from old files" below before creating a page. Other
    shared files are read as before. Deduplicate facts and associate each
    necessary edit with its input groups.
-5. Before writing any correlation's `notified` record, read the current mode
-   through Core's strict `readSessionMode()` (the same reader used by c4-send):
-   ```sh
-   node --input-type=module <<'EOF_MODE'
-   import os from 'node:os';
-   import path from 'node:path';
-   import { pathToFileURL } from 'node:url';
-   const root = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-   const { resolveCoreConfigModule } = await import(pathToFileURL(path.join(root, '.claude/skills/comm-bridge/scripts/core-config-loader.js')).href);
-   const { readSessionMode } = await import(pathToFileURL(resolveCoreConfigModule()).href);
-   console.log(readSessionMode().mode);
-   EOF_MODE
-   ```
+5. Before writing any correlation's `notified` record, run
+   `zylos session-mode status --json` and read `data.sessionMode`.
    Only `multi` permits correlation records and sends. In `single`, or if the
    read fails or returns anything else, skip both the `notified` records here
    and the sends in step 8; continue the normal merge and cursor advancement.

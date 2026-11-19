@@ -25,7 +25,6 @@ export function validSupervisorRequest(request) {
     case 'ready_for_config_reclaim': return validGroup(request.sessionGroup) && nonempty(request.expectedRunId);
     case 'defer_reclaim': return validGroup(request.sessionGroup) && nonempty(request.expectedRunId)
       && nonempty(request.reason) && request.reason.trim().length > 0;
-    case 'mode_switch_cancel': return nonempty(request.runId);
     case 'mode_switch': return ['single', 'multi'].includes(request.target);
     case 'start_attempt': return true; // The runtime owner validates its complete request in the runtime queue.
     default: return false;
@@ -35,8 +34,8 @@ export function validSupervisorRequest(request) {
 /** One queue is shared with lifecycle mutations; external waits must stay outside it. */
 export class SupervisorAdmission {
   constructor({ store = new RestartRequestStore(), db, readMode, listRuns, readRun,
-    resolveLaunchConfig, preflightReclaim, requestRelease, deferReclaim, modeSwitch, modeSwitchCancel, startAttempt, diagnostic = () => {}, now = Date.now } = {}) {
-    Object.assign(this, { store, db, readMode, listRuns, readRun, resolveLaunchConfig, preflightReclaim, requestRelease, deferReclaim, modeSwitch, modeSwitchCancel, startAttempt, diagnostic, now });
+    resolveLaunchConfig, preflightReclaim, requestRelease, deferReclaim, modeSwitch, startAttempt, diagnostic = () => {}, now = Date.now } = {}) {
+    Object.assign(this, { store, db, readMode, listRuns, readRun, resolveLaunchConfig, preflightReclaim, requestRelease, deferReclaim, modeSwitch, startAttempt, diagnostic, now });
     this.open = false; this.tail = Promise.resolve();
   }
   serialize(operation) {
@@ -62,7 +61,6 @@ export class SupervisorAdmission {
       try {
         // Mode switching has its own ordered checks; F9 is consulted only after
         // open transition, configuration, noop and legacy-session checks.
-        if (request.type === 'mode_switch_cancel') return reply(await this.modeSwitchCancel(request));
         if (request.type === 'mode_switch') {
           return reply(await this.modeSwitch(request));
         }
@@ -100,10 +98,8 @@ export class SupervisorAdmission {
     const existing = rows.find(row => row.requestId === request.requestId);
     if (existing) return existing.reason === 'upgrade' ? { ok: true, result: 'already_accepted', runCount: existing.runIds.length } : { ok: false, code: 'request_conflict' };
     if (rows.some(row => row.reason === 'manual_restart')) return { ok: false, code: 'manual_restart_pending' };
-    const transition = await this.db.getModeTransition();
     const configuration = await this.readMode();
-    if (configuration.legacy === true && !transition) return { ok: false, code: 'single_mode' };
-    const runs = await this.listRuns();
+    const runs = configuration.legacy ? [] : await this.listRuns();
     if (!Array.isArray(runs) || runs.some(run => !nonempty(run?.runId))) {
       throw Object.assign(new Error('Cannot snapshot all live run identities'), { code: 'IDENTITY_UNAVAILABLE' });
     }
@@ -155,15 +151,15 @@ export class SupervisorAdmission {
     const configuration = await this.readMode();
     const mode = configuration.mode ?? 'single';
     const legacy = configuration.legacy === true;
-    if (mode === 'single' && Object.hasOwn(request, 'sessionGroup') && (legacy || request.sessionGroup !== 'origin')) return rejected('not_multi');
-    const group = legacy ? null : request.sessionGroup ?? 'origin';
+    if (legacy || (mode === 'single' && Object.hasOwn(request, 'sessionGroup') && request.sessionGroup !== 'origin')) return rejected('not_multi');
+    const group = request.sessionGroup ?? 'origin';
     if (await this.db.getDrainFence(group ?? 'origin') || await this.db.getDrainFence('*')) return rejected('fence_conflict');
     if (rows.some(row => row.reason === 'manual_restart')) return rejected('manual_restart_pending');
     const run = await this.readRun(group);
     // null means both the process and tmux absence were positively observed.
     if (!request.expectedRunId && run !== null) return rejected('target_required');
     if (run === null) {
-      if (!legacy && group === 'origin') {
+      if (group === 'origin') {
         try { await this.db.insertControl(MANUAL_WAKE_PROMPT, { sessionGroup: 'origin', priority: 2, appendAckSuffix: false }); }
         catch { return rejected('wake_failed'); }
       }

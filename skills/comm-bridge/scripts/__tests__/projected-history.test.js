@@ -1,3 +1,4 @@
+import { seedHistoricalAbsorption } from './fixtures/historical-absorption.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -101,8 +102,8 @@ test('CLI fetch branches project full rows once in both JSON and default output'
 // remains inside the owned short TMPDIR fixture.
 test('absorbed pages, full fields and exports measure projected text without changing raw reconciliation', t => {
   const f = fixture(t), originals = seed(f, { pending: true });
-  const { runId } = f.store.beginModeTransition('single', 'multi', { kind: 'first_migration' });
-  f.store.setDrainFence('*'); f.store.absorbForTransition(runId);
+  const { runId } = f.store.beginModeTransition('single', 'multi');
+  f.store.setDrainFence('*'); seedHistoricalAbsorption(f.db, runId);
   const absorbed = originals.filter(row => row.direction === 'in');
   for (const json of [false, true]) {
     const cli = args => f.invoke('../c4-fetch.js', ['--absorbed', '--run-id', runId, ...args, ...(json ? ['--json'] : [])]);

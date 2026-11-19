@@ -218,7 +218,6 @@ export function formatSelfUpgradeCompletion(data) {
   }
   const restart = data.sessionRestart;
   if (restart?.requestId || restart?.data?.requestId) lines.push(`Restart request: ${restart.requestId || restart.data.requestId}`);
-  if (restart?.ok === true && restart.data?.result === 'closed_by_system' && restart.data.message) lines.push(restart.data.message);
   if (restart?.ok === false) {
     lines.push(`Session restart failed: ${restart.error?.code || 'RESTART_UNAVAILABLE'}${restart.error?.message ? ': ' + restart.error.message : ''}`);
   }

@@ -9,13 +9,12 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw dataError('INVALID_ARGS', 'Choose exactly one control target');
     const keys = Object.keys(value);
     const hasKeepOrigin = Object.hasOwn(value, 'keepOrigin');
-    if (hasKeepOrigin && (!allowKeepOrigin || value.allSessionGroups !== true || !['all', 'role'].includes(value.keepOrigin))) throw dataError('INVALID_ARGS', 'Invalid Origin preservation option');
+    if (hasKeepOrigin && (!allowKeepOrigin || value.allSessionGroups !== true || value.keepOrigin !== true)) throw dataError('INVALID_ARGS', 'Invalid Origin preservation option');
     if (keys.length !== (hasKeepOrigin ? 2 : 1)) throw dataError('INVALID_ARGS', 'Choose exactly one control target');
     if (value.machine === true) return { sql: 'session_group IS NULL', args: [] };
     if (value.allSessionGroups === true) {
       let sql = 'session_group IS NOT NULL';
-      if (value.keepOrigin === 'all') sql += " AND session_group<>'origin'";
-      if (value.keepOrigin === 'role') sql += " AND NOT (session_group='origin' AND target_binding IS NULL)";
+      if (value.keepOrigin) sql += " AND session_group<>'origin'";
       return { sql, args: [] };
     }
     requireGroup(value.sessionGroup); return { sql: 'session_group=?', args: [value.sessionGroup] };

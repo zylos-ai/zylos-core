@@ -126,7 +126,6 @@ function coordinator(f, events) {
     readRequests: () => [], legacyPresent: () => false,
     // Deletion and private tmux shutdown above prove that no source executor remains.
     observe: () => [], lifecycle: { advanceReclaim: () => assert.fail('No runtime remains to reclaim') },
-    convert: () => assert.fail('Native switching must not convert memory'),
     writeMode: mode => writeMode(f, mode),
     // PM2 is deliberately not started; its confirmation boundary is a receipt.
     restart: { advance: () => ({ confirmed: true, pending: false }) }, diagnostic: event => events.push(event) });
@@ -173,7 +172,6 @@ function nativePayload(f) {
       [table, f.database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()])) });
 }
 function assertNativeTransition(row) {
-  assert.equal(row.kind, 'switch');
   for (const field of ['cutoff', 'coverage_snapshot', 'absorbed_ids']) assert.equal(row[field], null, field);
 }
 

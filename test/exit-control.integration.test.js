@@ -11,11 +11,6 @@ import { readyTmuxTarget } from './helpers/ready-tmux-target.js';
 // lifecycle delivery/settlement changes; unrelated changes may skip. The runner
 // isolates HOME, ZYLOS_DIR, PM2_HOME and TMPDIR. The fixture owns a private socket
 // and database, bounds replay attempts, and kills its server on failure/timeout.
-// Upgrade cases use the real queue producers; the check answer and package
-// installer are boundaries, so real account/install success
-// remains a review acceptance check. Single cases retain the pre-migration
-// unscoped /exit chain; configured native single upgrades use Supervisor restart
-// admission instead. Multi Origin/group exercise shared delivery.
 test('exit controls settle after pane removal and do not reach replacement runs', { timeout: 60000 }, async t => {
   const realHome = fs.realpathSync(os.userInfo().homedir);
   for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
@@ -52,15 +47,12 @@ const prompt=()=>process.stdout.write('\\x1b[2J\\x1b[H❯ ');prompt();process.st
   for (const skill of ['comm-bridge', 'activity-monitor', 'scheduler']) {
     fs.symlinkSync(path.join(repository, 'skills', skill), path.join(f.root, '.claude/skills', skill));
   }
-  const { requestRuntimeRestart } = await import('../cli/lib/request-runtime-restart.js');
-  const { upgradeRuntime } = await import('../skills/upgrade-claude/scripts/upgrade.js');
   const cases = ['claude', 'codex'].flatMap(runtime => ['single', 'origin', 'group'].map(scope => ({ runtime, scope, source: 'direct' })));
-  cases.push({ runtime: 'claude', scope: 'single', source: 'runtime-upgrade' }, { runtime: 'claude', scope: 'single', source: 'core-restart' });
   for (const { runtime, scope, source } of cases) {
-    await t.test(`${runtime} ${scope === 'single' ? 'legacy single' : scope} ${source}`, async t => {
+    await t.test(`${runtime} ${scope === 'single' ? 'single' : scope} ${source}`, async t => {
       const mode = scope === 'single' ? 'single' : 'multi';
       const group = scope === 'group' ? 'telegram-exit-test' : 'origin';
-      fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ runtime, ...(mode === 'multi' ? { session_mode: mode } : {}) }));
+      fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ runtime, session_mode: mode }));
       const name = tmuxNameForGroup(group);
       t.after(() => { try { f.tmux('kill-session', '-t', name); } catch {} });
       let run = 0, identity;
@@ -68,7 +60,7 @@ const prompt=()=>process.stdout.write('\\x1b[2J\\x1b[H❯ ');prompt();process.st
         identity = { runId: `${runtime}-${scope}-${source}-${++run}`, sessionId: `session-${runtime}-${run}`, ts: 1, startupControlIds: [] };
         f.tmux('new-session', '-d', '-s', name, '-e', `ZYLOS_RUN_ID=${identity.runId}`,
           '-e', `ZYLOS_MODEL_CONFIG=${JSON.stringify({ runtime, mode: 'default' })}`,
-          ...(mode === 'multi' ? ['-e', `ZYLOS_SESSION_GROUP=${group}`] : []), process.execPath, recorder);
+          '-e', `ZYLOS_SESSION_GROUP=${group}`, process.execPath, recorder);
         for (let n = 0; n < 100; n++) {
           if (f.tmux('capture-pane', '-p', '-t', name).includes('❯')) return;
           await new Promise(resolve => setTimeout(resolve, 10));
@@ -78,7 +70,7 @@ const prompt=()=>process.stdout.write('\\x1b[2J\\x1b[H❯ ');prompt();process.st
       await start();
       const diagnostics = [];
       const delivery = createDelivery({ db, getSessionMode: () => mode,
-        resolveSessionTarget: args => { assert.equal(args.sessionGroup, mode === 'single' ? null : group); return resolveSessionTarget({ ...args, readReady: async () => identity }); },
+        resolveSessionTarget: args => { assert.equal(args.sessionGroup, group); return resolveSessionTarget({ ...args, readReady: async () => identity }); },
         readSessionState: async () => ({ identity: { ...identity, runtime, ready: true }, status: { valid: true, value: { state: 'idle', idle_seconds: 10, proc: { alive: true }, health: 'ok' } } }),
         readRuntimeHealth: () => ({ health: 'ok' }), getSessionAdapter: r => getSessionAdapter(r, { tmux }),
         notifyDelivered() {}, diagnostic: (event, fields) => { if (event === 'delivery_failed') diagnostics.push(fields.reason); },
@@ -92,50 +84,12 @@ const prompt=()=>process.stdout.write('\\x1b[2J\\x1b[H❯ ');prompt();process.st
         await delivery.deliverControl(db.getControlById(row.id));
         transitions.push(db.getControlById(row.id).status);
       };
-      const acknowledgeCheck = controls => {
-        const check = db.getControlById(controls.checkControlId);
-        row = db.getControlById(controls.exitControlId);
-        assert.ok(check.id < row.id);
-        assert.equal(row.content, '/exit');
-        // Check ordering/pasting has separate integration coverage. Model its answer here.
-        assert.equal(db.claimControl(check.id), true);
-        assert.equal(db.ackControl(check.id).status, 'done');
-      };
-      if (source === 'runtime-upgrade') {
-        let installed = false;
-        const order = [];
-        const result = await upgradeRuntime({
-          install: () => {
-            assert.equal(db.getDb().prepare("SELECT COUNT(*) AS count FROM control_queue WHERE status='pending'").get().count, 0);
-            assert.equal(count().length, 0, 'the old runtime is still running during installation');
-            installed = true;
-            order.push('install');
-          },
-          requestRestart: async () => {
-            assert.equal(installed, true);
-            order.push('restart');
-            return requestRuntimeRestart();
-          },
-        });
-        assert.equal(result.ok, true); assert.equal(installed, true);
-        assert.equal(result.data.result, 'exit_enqueued');
-        assert.deepEqual(order, ['install', 'restart']);
-        acknowledgeCheck(result.data);
-        await deliverExit();
-        assert.equal(count().length, 1, 'exit settles against the old run before replacement startup');
-        await start();
-      } else if (source === 'core-restart') {
-        const result = await requestRuntimeRestart({ afterServiceRestart: true });
-        assert.equal(result.ok, true); assert.equal(result.data.result, 'exit_enqueued');
-        acknowledgeCheck(result.data); await deliverExit(); await start();
-      } else {
-        row = db.insertControl('/exit', { appendAckSuffix: false, ...(mode === 'multi' ? { sessionGroup: group } : {}) });
+        row = db.insertControl('/exit', { appendAckSuffix: false, sessionGroup: group });
         // Bounded at two exits so the baseline bug yields finite diagnostic evidence.
         for (let attempt = 0; attempt < 2; attempt++) {
           await deliverExit(); await start();
           if (transitions.at(-1) === 'done') break;
         }
-      }
       const exits = count();
       const claimReplacement = db.claimControl(row.id);
       console.log('Exit outcome:', JSON.stringify({ runtime, scope, source, transitions, exits, failures: diagnostics, claimReplacement }));

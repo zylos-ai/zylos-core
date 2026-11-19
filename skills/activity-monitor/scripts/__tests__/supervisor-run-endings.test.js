@@ -1,3 +1,4 @@
+import { seedHistoricalAbsorption } from '../../../comm-bridge/scripts/__tests__/fixtures/historical-absorption.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -139,9 +140,9 @@ test('native switches do not hide an Origin crash behind a newer completion time
 // completion. Real Store transitions, session file, occupancy and continuation query.
 test('an ordinary group crash remains eligible after a later native switch completes', async t => {
   const f = await runEndingFixture(t);
-  const conversion = f.store.beginModeTransition('single', 'multi', { kind: 'first_migration' });
+  const conversion = f.store.beginModeTransition('single', 'multi');
   f.store.setDrainFence('*');
-  f.store.absorbForTransition(conversion.runId);
+  seedHistoricalAbsorption(f.db, conversion.runId);
   f.store.setModeTransitionPhase(conversion.runId, 'cutover');
   f.store.setModeTransitionPhase(conversion.runId, 'complete');
   const convertedAt = f.now;
@@ -156,7 +157,6 @@ test('an ordinary group crash remains eligible after a later native switch compl
   f.store.setDrainFence('*');
   f.store.setModeTransitionPhase(native.runId, 'cutover');
   const completed = f.store.setModeTransitionPhase(native.runId, 'complete');
-  assert.equal(completed.kind, 'switch');
   assert.equal(completed.cutoff, null);
   assert.ok(completed.updated_at * 1000 > convertedAt);
 

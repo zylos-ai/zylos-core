@@ -128,36 +128,32 @@ test('real running snapshot stays old after / changes and produces reclaim contr
 
 
 async function syncScopeScenario(t, Class) {
-  for (const instance of ['legacy', 'single', 'multi']) {
-    const mode = instance === 'legacy' ? 'single' : instance, legacy = instance === 'legacy';
-    const f = localFixture(t, Class); Object.assign(f.context.configuration, { mode, legacy });
+  for (const mode of ['single', 'multi']) {
+    const f = localFixture(t, Class); Object.assign(f.context.configuration, { mode });
     const insert = f.db.insertControl; let fail = true;
     f.db.insertControl = (...args) => { if (fail) throw new Error('injected write failure'); return insert(...args); };
     await assert.rejects(f.lifecycle.checkSync([f.scene], f.context), /injected write failure/);
     assert.equal(f.lifecycle.syncSent.size, 0, 'failed Sync write marked the scope sent');
     fail = false; f.now += 60000; await f.lifecycle.checkSync([f.scene], f.context);
-    assert.deepEqual(f.markerCalls.map(c => c.kind), legacy ? ['global', 'global'] : ['group', 'group', 'origin']);
+    assert.deepEqual(f.markerCalls.map(c => c.kind), ['group', 'group', 'origin']);
     assert.ok(f.markerCalls.every(c => c.currentRunId === 'old-run' && c.runDir === f.root));
-    assert.ok(f.controls.every(c => c.sessionGroup === (legacy ? null : 'origin') && c.priority === 2 && c.appendAckSuffix === false));
+    assert.ok(f.controls.every(c => c.sessionGroup === 'origin' && c.priority === 2 && c.appendAckSuffix === false));
     const count = f.controls.length;
     f.scene = { ...f.scene, present: false }; f.now += 600000;
     await f.lifecycle.checkSync([f.scene], f.context);
-    assert.equal(f.controls.length, count + (!legacy ? 1 : 0));
-    if (!legacy) {
-      assert.equal(f.controls.at(-1).content, 'origin sync');
-      assert.deepEqual(f.markerCalls.at(-1), { runDir: f.root, kind: 'origin', currentRunId: null });
-    }
+    assert.equal(f.controls.length, count + 1);
+    assert.equal(f.controls.at(-1).content, 'origin sync');
+    assert.deepEqual(f.markerCalls.at(-1), { runDir: f.root, kind: 'origin', currentRunId: null });
   }
 }
-test('Sync reads all three marker scopes and failed writes do not mark a scope sent', async t => {
+test('Sync reads group and Origin marker scopes and failed writes do not mark a scope sent', async t => {
   await syncScopeScenario(t, SupervisorLifecycle);
 });
 
 
 async function rotationScenario(t, Class) {
-  for (const instance of ['legacy', 'single', 'multi']) {
-    const mode = instance === 'legacy' ? 'single' : instance, legacy = instance === 'legacy';
-    const f = localFixture(t, Class); Object.assign(f.context.configuration, { mode, legacy });
+  for (const mode of ['single', 'multi']) {
+    const f = localFixture(t, Class); Object.assign(f.context.configuration, { mode });
     await f.lifecycle.checkRotation(f.scene, f.context);
     f.now += 299999; await f.lifecycle.checkRotation(f.scene, f.context); assert.equal(f.controls.length, 1);
     f.now++; await f.lifecycle.checkRotation(f.scene, f.context); assert.equal(f.controls.length, 2);
@@ -167,7 +163,7 @@ async function rotationScenario(t, Class) {
     f.db.insertControl = () => { throw new Error('rotation write failed'); };
     await assert.rejects(f.lifecycle.checkRotation(f.scene, f.context), /rotation write failed/);
     f.db.insertControl = insert; await f.lifecycle.checkRotation(f.scene, f.context); assert.equal(f.controls.length, 5);
-    assert.ok(f.controls.every(c => c.sessionGroup === (legacy ? null : 'origin') && c.bypassState === true && c.appendAckSuffix === false));
+    assert.ok(f.controls.every(c => c.sessionGroup === 'origin' && c.bypassState === true && c.appendAckSuffix === false));
     assert.equal(f.events.filter(e => e.event === 'rotate_done').length, 0);
     f.scene.present = false; f.now += 300000;
     await f.lifecycle.checkRotation(f.scene, f.context); assert.equal(f.controls.length, 5);

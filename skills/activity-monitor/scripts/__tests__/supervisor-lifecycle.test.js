@@ -175,20 +175,6 @@ test('Origin checks both Sync markers; stale markers permit reclaim', async () =
   f.fence('upgrade', 'origin'); f.deps.readSyncMarker = () => ({ held: true, stale: true });
   assert.equal(await f.lifecycle.advanceReclaim(row, f.context), 'done');
 });
-// no in single auth; deadline-less controls ignored and final race holds.
-test('single auth ignores only deadline-less controls and retries a final count race', async () => {
-  const f = fixture(); f.context.configuration.mode = 'single'; f.context.configuration.legacy = true; f.scenes = [scene(null)];
-  f.runningControls = 1; f.withoutDeadline = 1;
-  const row = { reason: 'auth', runId: 'run-null' }; let reads = 0;
-  f.db.countGlobalRunningConversations = () => ++reads > 1 ? 1 : 0;
-  assert.equal(await f.lifecycle.advanceReclaim(row, f.context, { unfenced: true, singleAuth: true }), 'waiting_inflight');
-  assert.equal(f.fences.size, 0); assert.deepEqual(f.stops, []);
-  assert.equal(f.events.some(event => event.event === 'reclaim_cancelled'), false);
-  f.db.countGlobalRunningConversations = () => 0;
-  assert.equal(await f.lifecycle.advanceReclaim(row, f.context, { unfenced: true, singleAuth: true }), 'done');
-  assert.deepEqual(f.forgotten, [[null, 'run-null']]);
-  assert.deepEqual(f.markerReads.map(x => x.kind), ['global', 'global']);
-});
 // final conversation check preserves the reclaim fence.
 async function finalRaceAssertion(Class) {
   const f = fixture(Class), row = f.fence('model_config'); let reads = 0;
@@ -862,17 +848,6 @@ test('failed F9 deletion preserves restart and does not emit completion', async 
   f.deps.requests.remove = () => { throw new Error('disk full'); };
   await assert.rejects(f.lifecycle.advanceRestarts(f.context)); assert.equal(f.requests.length, 1); assert.equal(f.events.length, 0);
 });
-test('legacy manual intent blocks both scene aliases before any fence exists', () => {
-  const f = fixture(); f.context.configuration.mode = 'single'; f.context.configuration.legacy = true;
-  f.requests = [{ reason: 'manual_restart', requestId: 'manual-single', mode: 'single', expectedRunId: 'run-origin' }];
-  assert.equal(f.fences.size, 0);
-  assert.equal(f.lifecycle.allowed('origin', f.context), false);
-  assert.equal(f.lifecycle.allowed(null, f.context), false);
-  f.requests = [];
-  assert.equal(f.lifecycle.allowed('origin', f.context), true);
-  assert.equal(f.lifecycle.allowed(null, f.context), true);
-});
-
 // run identity, crash windows, no idle/control-ack wait, no replacement retarget.
 test('manual stops requested Origin run immediately then waits only real conversation drain', async () => {
   const f = fixture(); f.scenes = [scene('origin', { state: 'busy' })];
@@ -923,16 +898,6 @@ test('ordinary manual completion clears its own fence without an Origin wake', a
   assert.deepEqual(f.endings, [{ sessionGroup: 'a', runId: 'run-a', reason: 'manual_restart',
     clearFence: { expectedReason: 'manual_restart', expectedRunId: 'run-a' } }]);
   assert.deepEqual(f.controls, []); assert.equal(f.fences.size, 0); assert.deepEqual(f.requests, []);
-});
-test('legacy manual restart completes with no Origin wake', async () => {
-  for (const present of [false, true]) {
-    const f = fixture(); f.context.configuration.mode = 'single'; f.context.configuration.legacy = true; f.scenes = present ? [scene(null)] : [];
-    f.requests = [{ reason: 'manual_restart', requestId: 'manual', mode: 'single', expectedRunId: 'run-null' }];
-    f.db.insertControl = () => { throw new Error('single restart must not enqueue a wake'); };
-    await f.lifecycle.advanceManual(f.context);
-    assert.equal(f.requests.length, 0); assert.equal(f.fences.size, 0); assert.deepEqual(f.controls, []);
-    assert.deepEqual(f.stops, present ? ['run-null'] : []);
-  }
 });
 test('manual crash after clear removes request without recreating fence or selecting replacement', async () => {
   const f = fixture(); f.scenes = [scene('origin', { runId: 'replacement' })];

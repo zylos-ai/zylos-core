@@ -24,7 +24,6 @@ import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { hookScriptKey, hookScriptBaseKey, getCommandHooks, HOOK_ENTRY_SCRIPT } from './hook-utils.js';
-import { readSessionMode } from './config.js';
 import { copyPrivateFile, writePrivateFile } from './private-file.js';
 import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig, resolveCodexBypassPermissions } from './runtime-setup.js';
 import { hasAgyZylosHooks, syncAgyConfig } from './agy-setup.js';
@@ -601,10 +600,6 @@ export function syncHooks(installedSettings, _templateSettings, {
 
 /** Generation is separate from restart submission so upgrade can call it after its deadline gate. */
 export async function enqueueRestartIfNeeded({
-  readMode = readSessionMode,
-  readTransition = async () => (await import('../../skills/comm-bridge/scripts/c4-db.js')).getModeTransition(),
-  exec = execFileSync,
-  exists = fs.existsSync,
   zylosDir = ZYLOS_DIR,
   log = console.log,
   errorLog = console.error,
@@ -616,60 +611,41 @@ export async function enqueueRestartIfNeeded({
 } = {}) {
   const deadline = deadlineAt ?? now() + 10000;
   try {
-    const configuration = readMode();
-    const transition = await readTransition();
-    if (configuration.keyPresent || configuration.mode === 'multi' || transition) {
-      if (!Number.isSafeInteger(deadline)) throw Object.assign(new Error('Invalid restart deadline'), { code: 'INVALID_INPUT' });
-      if (now() >= deadline) {
-        errorLog('Settings hooks: restart not submitted: deadline_exceeded');
-        return { submitted: false, code: 'deadline_exceeded', sent: false, category: 'T', persisted: [] };
-      }
-      const request = { version: 1, type: 'restart_all', requestId: requestId(), reason: 'upgrade' };
-      const outcome = await submitRestart(request, { deadlineAt: deadline, replyMaxMs: 10000,
-        socketPath: path.join(zylosDir, 'activity-monitor', 'am.sock') });
-      const kind = outcome.kind;
-      if (['accepted', 'rejected'].includes(kind)) {
-        if (kind === 'accepted') {
-          log(`Settings hooks: restart ${outcome.reply.result} (${outcome.reply.runCount} runs); readiness is not confirmed.`);
-          return { submitted: true, requestId: request.requestId, result: outcome.reply.result, runCount: outcome.reply.runCount };
-        } else {
-          const code = outcome.reply.code;
-          if (code === 'single_mode') {
-            const currentMode = readMode();
-            const currentTransition = await readTransition();
-            if (!currentMode.keyPresent && currentMode.mode !== 'multi' && !currentTransition) {
-              return enqueueSingleRestart();
-            }
-          }
-          errorLog(`Settings hooks: restart rejected: ${code}`);
-          return { submitted: false, requestId: request.requestId, code, sent: true,
-            category: ['manual_restart_pending', 'entry_not_open'].includes(code) ? 'T' : 'R', persisted: [] };
-        }
-      }
-      if (outcome?.sent === false && ['connect_failed', 'deadline_exceeded'].includes(kind)) {
-        errorLog(`Settings hooks: restart not submitted: ${kind}`);
-        return { submitted: false, requestId: request.requestId, code: kind, sent: false, category: 'T', persisted: [] };
-      }
-      let lookup = 'unknown';
-      try { lookup = await lookupRestart(request.requestId, { deadlineAt: deadline }); }
-      catch { /* Preserve uncertainty when the readback itself fails. */ }
-      errorLog(`Settings hooks: restart result uncertain (${kind || 'invalid_reply'}); lookup: ${lookup}; no resubmission.`);
-      return { submitted: ['accepted', 'done'].includes(lookup) ? true : null,
-        requestId: request.requestId, code: kind || 'invalid_reply', sent: true, category: 'U', persisted: null, lookup };
+    if (!Number.isSafeInteger(deadline)) throw Object.assign(new Error('Invalid restart deadline'), { code: 'INVALID_INPUT' });
+    if (now() >= deadline) {
+      errorLog('Settings hooks: restart not submitted: deadline_exceeded');
+      return { submitted: false, code: 'deadline_exceeded', sent: false, category: 'T', persisted: [] };
     }
-    return enqueueSingleRestart();
+    const request = { version: 1, type: 'restart_all', requestId: requestId(), reason: 'upgrade' };
+    const outcome = await submitRestart(request, { deadlineAt: deadline, replyMaxMs: 10000,
+      socketPath: path.join(zylosDir, 'activity-monitor', 'am.sock') });
+    const kind = outcome.kind;
+    if (['accepted', 'rejected'].includes(kind)) {
+      if (kind === 'accepted') {
+        log(`Settings hooks: restart ${outcome.reply.result} (${outcome.reply.runCount} runs); readiness is not confirmed.`);
+        return { submitted: true, requestId: request.requestId, result: outcome.reply.result, runCount: outcome.reply.runCount };
+      } else {
+        const code = outcome.reply.code;
+        errorLog(`Settings hooks: restart rejected: ${code}`);
+        return { submitted: false, requestId: request.requestId, code, sent: true,
+          category: ['manual_restart_pending', 'entry_not_open'].includes(code) ? 'T' : 'R', persisted: [] };
+      }
+    }
+    if (outcome?.sent === false && ['connect_failed', 'deadline_exceeded'].includes(kind)) {
+      errorLog(`Settings hooks: restart not submitted: ${kind}`);
+      return { submitted: false, requestId: request.requestId, code: kind, sent: false, category: 'T', persisted: [] };
+    }
+    let lookup = 'unknown';
+    try { lookup = await lookupRestart(request.requestId, { deadlineAt: deadline }); }
+    catch { /* Preserve uncertainty when the readback itself fails. */ }
+    errorLog(`Settings hooks: restart result uncertain (${kind || 'invalid_reply'}); lookup: ${lookup}; no resubmission.`);
+    return { submitted: ['accepted', 'done'].includes(lookup) ? true : null,
+      requestId: request.requestId, code: kind || 'invalid_reply', sent: true, category: 'U', persisted: null, lookup };
   } catch (error) {
     errorLog(`Settings hooks: restart not enqueued: ${error.code || 'ERROR'}: ${error.message}`);
     return { submitted: false, code: error.code || 'ERROR' };
   }
 
-  function enqueueSingleRestart() {
-    const c4ControlPath = path.join(zylosDir, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
-    if (!exists(c4ControlPath)) return { skipped: true, reason: 'control_missing' };
-    exec('node', [c4ControlPath, 'enqueue', '--content', '/exit', '--priority', '1', '--require-idle', '--no-ack-suffix'], { stdio: 'pipe', timeout: 10000 });
-    log('Settings hooks: restart enqueued.');
-    return { submitted: true };
-  }
 }
 
 function syncSharedRuntimeHooks({

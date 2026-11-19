@@ -30,7 +30,7 @@ export function routerFixture(t, { mode = 'multi', keyPresent = true, poolSize =
     submit: async request => { calls.push(['submit', request]); return { kind: 'accepted', sent: true, reply: { ...request, ok: true, result: 'registered', reason: 'recovery_due' } }; },
     deliverControl: async row => { calls.push(['control', row.id]); f.db.prepare("UPDATE control_queue SET status='done' WHERE id=? AND status='running'").run(row.id); },
     deliverConversation: async (row, live) => { calls.push(['conversation', row.id]); db.markDelivered(row.id, { sessionId: live.sessionId }); },
-    handleExpired: async row => calls.push(['expired', row.id]), prepareSingle: async () => calls.push(['prepare']),
+    handleExpired: async row => calls.push(['expired', row.id]),
     findLegacySessions: async () => [], advanceLegacy: async () => {}, diagnostic: (event, fields) => events.push({ event, ...fields }),
     alert: (event, fields) => calls.push(['alert', event, fields]), log: line => calls.push(['log', line]),
   };

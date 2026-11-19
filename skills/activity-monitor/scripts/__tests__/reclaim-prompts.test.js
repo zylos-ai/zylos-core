@@ -9,7 +9,7 @@ import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import * as c4Schema from '../../../comm-bridge/scripts/c4-schema.js';
 import { migrateDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
-import { CONFIG_RECLAIM_PROMPT, PRE_RECLAIM_CHECK_PROMPT, SINGLE_UPGRADE_RESTART_CHECK_PROMPT, UPGRADE_RESTART_CHECK_PROMPT } from '../reclaim-prompts.js';
+import { CONFIG_RECLAIM_PROMPT, PRE_RECLAIM_CHECK_PROMPT, UPGRADE_RESTART_CHECK_PROMPT } from '../reclaim-prompts.js';
 
 const skillsDir = fileURLToPath(new URL('../../../', import.meta.url));
 const checks = fs.readFileSync(new URL('../../references/session-checks.md', import.meta.url), 'utf8');
@@ -27,7 +27,6 @@ const LIST = /First run `node (\S+) list --json`/;
 const PROMPTS = {
   'idle reclaim check': [PRE_RECLAIM_CHECK_PROMPT, 'This session group has been idle and will be reclaimed.'],
   'upgrade restart check': [UPGRADE_RESTART_CHECK_PROMPT, 'This session group will be restarted for an upgrade.'],
-  'single-session upgrade restart check': [SINGLE_UPGRADE_RESTART_CHECK_PROMPT, 'This session will be restarted for an upgrade.'],
   'configuration restart check': [CONFIG_RECLAIM_PROMPT, 'The launch configuration changed and this session group will be restarted with it.'],
 };
 

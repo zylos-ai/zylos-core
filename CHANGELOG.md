@@ -8,12 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- `zylos session-mode cancel` cancels an open mode switch before cutover.
 - Dashboard offers the Codex models GPT-6.2-Sol, GPT-6.2-Astra and GPT-6.1 Terra (reasoning effort low through ultra) and prices them by default: Sol 2 / 0.10 cached / 10 output / 2.5 cache write per million tokens, Astra 8 / 0.40 / 40 / 10, Terra 1 / 0.05 / 5 / 1.25, Fast (priority) at twice those rates, and long-context pricing above 272K input tokens like the other GPT-6 models. Saved custom price tables keep their rows and receive the new defaults.
 
 ### Changed
 - Native single mode runs Origin on demand and reclaims it after the configured idle timeout; Dashboard can adjust that timeout in both configured modes.
-- Mode migration hands global working memory to Origin through the existing memory handover flow.
+- Mode switches preserve Origin and stop other ready sessions after their in-flight deliveries settle. On an upgrade from 0.x, inbound messages queue until the baseline session exits and the automatic switch assigns ungrouped pending messages to Origin.
+- Global working memory is handed to Origin separately after migration. Recognized installation templates are archived, and same-name archive conflicts preserve both versions when their contents differ.
+- An unfinished mode switch from an older release resumes on upgrade. If it stopped during conversion, its absorbed messages return to the queue before cutover.
 - Onboarding uses the `.zylos/onboarding-pending` marker instead of a status entry in working memory.
 - Dashboard's Origin conversation shows every message recorded under Origin, with its channel, including internal messages.
 - **Native single-session sends**: with `session_mode: "single"`, Origin's replies and sends without a session (alerts, scheduled scripts, terminal `c4-send`, system notices) are recorded under `origin` and no longer refused as cross-session; the component query still runs for the BeforeSend hook. Origin's internal messages are refused with `INTERNAL_SINGLE_MODE`. After a switch back to multi, the Origin run that crossed the switch may still answer the exact addresses delivered to it in single mode. An unreadable `config.json` keeps the multi rules with one warning line; other senders do not read the mode.

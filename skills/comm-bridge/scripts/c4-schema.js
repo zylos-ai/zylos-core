@@ -2,13 +2,12 @@ import { migrateSchema } from './c4-migrations.js';
 import { migrateToV2 } from './c4-migrations-v2.js';
 import { migrateToV3 } from './c4-migrations-v3.js';
 import { migrateToV4 } from './c4-migrations-v4.js';
-import { migrateToV5 } from './c4-migrations-v5.js';
 import { inspectLayout } from './sqlite-schema.js';
 import { rejectLegacySchemaProbe } from './upgrade-admission.js';
 
 rejectLegacySchemaProbe();
 
-export const SUPPORTED_SCHEMA_VERSION = 5;
+export const SUPPORTED_SCHEMA_VERSION = 4;
 export const supportsNewDatabase = true;
 
 export const COLUMN_DEFINITIONS = {
@@ -107,7 +106,6 @@ export const COLUMN_DEFINITIONS = {
     created_at: { type: 'INTEGER', pk: false }
   },
   mode_transitions: {
-    kind: { type: 'TEXT', pk: false },
     run_id: { type: 'TEXT', pk: true },
     source_mode: { type: 'TEXT', pk: false },
     target_mode: { type: 'TEXT', pk: false },
@@ -149,10 +147,6 @@ export const TABLES = Object.fromEntries(
 );
 
 export const MIGRATIONS = Object.freeze({
-  4: Object.freeze({ to: 5, migrate: migrateToV5, changes: {
-    rebuildTables: ['mode_transitions'],
-    addColumns: { mode_transitions: { kind: { type: 'TEXT', pk: false } } },
-  } }),
   3: Object.freeze({ to: 4, migrate: migrateToV4, changes: { rebuildTables: ['run_endings'] } }),
   2: Object.freeze({ to: 3, migrate: migrateToV3, changes: {
     rebuildTables: ['run_endings'],
@@ -183,8 +177,9 @@ export const MIGRATIONS = Object.freeze({
           'channel_namespaces', 'group_heads', 'origin_sync_cursors', 'drain_fences',
           'mode_transitions', 'group_runtime_overrides', 'group_model_overrides', 'run_endings', 'slot_occupancy',
         ]
-          .map(table => [table, Object.fromEntries(Object.entries(COLUMN_DEFINITIONS[table])
-            .filter(([name]) => !({ drain_fences: ['operation_id', 'actor'], mode_transitions: ['kind'] }[table] ?? []).includes(name)))]),
+          .map(table => [table, table === 'drain_fences'
+            ? Object.fromEntries(Object.entries(COLUMN_DEFINITIONS[table]).filter(([name]) => !['operation_id', 'actor'].includes(name)))
+            : COLUMN_DEFINITIONS[table]]),
       ),
     },
   }),

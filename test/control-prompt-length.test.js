@@ -55,7 +55,7 @@ test('every control prompt is typed as an ordinary input: within the paste lengt
   const suffix = longestAckSuffix(t);
   const list = controls();
   for (const name of ['GROUP_SYNC_PROMPT', 'ORIGIN_SYNC_PROMPT', 'PRE_RECLAIM_CHECK_PROMPT', 'CONFIG_RECLAIM_PROMPT',
-    'UPGRADE_RESTART_CHECK_PROMPT', 'SINGLE_UPGRADE_RESTART_CHECK_PROMPT', 'ROTATION_PROMPT', 'IDENTITY_ROTATION_PROMPT', 'conversation naming']) {
+    'UPGRADE_RESTART_CHECK_PROMPT', 'ROTATION_PROMPT', 'IDENTITY_ROTATION_PROMPT', 'conversation naming']) {
     assert.ok(list.some(([key]) => key === name), `${name} is measured`);
   }
   const over = [];

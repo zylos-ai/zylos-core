@@ -117,11 +117,10 @@ test('first migration enters cutover before changing persistent restart markers'
   assert.deepEqual(f.db.recordRunEnd('team', { runId: 'old-run', reason: 'unexpected' }), { recorded: true });
   f.db.recordRunEnd('origin', { runId: 'old-origin', reason: 'unexpected' });
   assert.equal(f.db.listRunEndings(['team', 'origin']).filter(row => row.continuationPending).length, 2);
-  const { runId } = f.db.beginModeTransition('single', 'multi', { kind: 'first_migration' });
+  const { runId } = f.db.beginModeTransition('single', 'multi');
   f.db.setDrainFence('*');
-  f.db.absorbForTransition(runId);
   const coordinator = new ModeSwitchCoordinator({ db: f.db, readMode: () => ({ mode: 'single', keyPresent: false }),
-    convert: async () => {}, diagnostic: () => {}, now: f.now });
+    observe: () => [], readConfiguration: () => ({}), diagnostic: () => {}, now: f.now });
   await coordinator.advance();
   assert.equal(f.db.getModeTransition().phase, 'cutover');
   assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM control_queue').get().n, 0);

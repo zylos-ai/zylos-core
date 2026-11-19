@@ -1,18 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { routerFixture } from './helpers/router-fixture.js';
-import { createSinglePreparation, createLegacyMigration } from '../router/resident.js';
-
-test('single preparation cleans lifecycle state and builds instructions in order', async () => {
-  const calls = [];
-  const prepare = createSinglePreparation({
-    clearStaleState: async runtime => calls.push(['clear',runtime]),
-    resetToolLifecycle: async runtime => calls.push(['reset',runtime]),
-    buildInstructionFile: async runtime => calls.push(['instructions',runtime]),
-  });
-  await prepare('codex');
-  assert.deepEqual(calls, [['clear','codex'],['reset','codex'],['instructions','codex']]);
-});
+import { createLegacyMigration } from '../router/resident.js';
 
 test('legacy waits idle, sends exit once, confirms disappearance; busy target forced at 300s by observed runtime', async () => {
   let now = 0; const live = new Map([['claude-main',{ present:true,tmuxName:'claude-main',runtime:'claude',runId:null }],
@@ -273,21 +262,6 @@ test('unknown runtime is not stopped early after the upgrade finishes', async ()
   f.records.finish(); f.clock.now = 1000; await f.migration.advanceLegacy(entries);
   assert.deepEqual(f.calls, []); assert.deepEqual(f.events, []);
 });
-
-for (const health of ['ok', 'auth_failed']) {
-  test(`legacy resident starts without queued work even when health is ${health}`, async t => {
-    const f = routerFixture(t, { mode: 'single', keyPresent: false });
-    f.health.set('claude', { health });
-    f.deps.readRuntimeHealth = () => assert.fail('single resident startup does not read runtime health');
-    const router = f.create(); await router.initialize(); await f.rounds(2);
-    f.advance(4999); await f.rounds(2);
-    assert.equal(f.calls.filter(row => row[0] === 'launch').length, 0);
-    f.advance(1); await f.rounds(2);
-    assert.equal(f.calls.filter(row => row[0] === 'launch').length, 1);
-    assert.equal(f.calls.find(row => row[0] === 'launch')[1].sessionGroup, null);
-    assert.equal(f.calls.filter(row => row[0] === 'submit').length, 0);
-  });
-}
 
 test('failed Origin launches retain the five ten twenty forty sixty second backoff', async t => {
   const f = routerFixture(t);

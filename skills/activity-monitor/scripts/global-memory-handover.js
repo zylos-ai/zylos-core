@@ -6,7 +6,7 @@ import { appendInbox } from '../../zylos-memory/scripts/memory-append.js';
 import { inboxSegmentName } from '../../zylos-memory/scripts/state-format.js';
 
 const material = name => ['state.md', 'inbox.md', 'handoff.md'].includes(name) || inboxSegmentName.test(name);
-const hash = text => createHash('sha256').update(text.replace(/\s/gu, '')).digest('hex');
+const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 // Published templates: Memory v5 (#53), onboarding (#291), scoped bootstrap,
 // and the scoped state template with onboarding managed separately.
 const templateHashes = new Set([
@@ -25,10 +25,10 @@ export class GlobalMemoryHandoverCoordinator {
   constructor({ db, zylosDir, readMode, readConfiguration = readMode, readRequests,
     legacyPresent, observe, serialize = operation => operation(), diagnostic = () => {},
     now = Date.now, fsImpl = fs, append = appendInbox, waitMs = 1000,
-    readMaxConversationId = () => db.getMaxConversationId(),
   } = {}) {
     Object.assign(this, { db, zylosDir, readMode, readConfiguration, readRequests, legacyPresent,
-      observe, serialize, diagnostic, now, io: fsImpl, append, waitMs, readMaxConversationId });
+      observe, serialize, diagnostic, now, io: fsImpl, append, waitMs });
+    this.lastFailure = null;
     this.memory = path.join(zylosDir, 'memory');
     this.root = path.join(this.memory, 'mode-switch');
   }
@@ -47,7 +47,7 @@ export class GlobalMemoryHandoverCoordinator {
     return this.entries(this.memory).filter(material).sort().map(name => {
       const file = path.join(this.memory, name), stat = this.io.statSync(file);
       if (!stat.isFile()) throw error('EINVAL', 'Global memory material is not a regular file');
-      return { name, mtime: Math.floor(stat.mtimeMs / 1000), nonempty: !!this.io.readFileSync(file, 'utf8').trim() };
+      return { name, nonempty: !!this.io.readFileSync(file, 'utf8').trim() };
     });
   }
 
@@ -81,7 +81,6 @@ export class GlobalMemoryHandoverCoordinator {
       if ((await this.db.listDrainFences()).some(row => ['manual_restart', 'delete'].includes(row.reason))) return;
       const scenes = await this.observe({ configuration: { ...await this.readConfiguration(), mode: mode.mode } });
       if (scenes.some(scene => scene.observationError)) throw error('INVALID_OBSERVATION', 'Unknown runtime observation');
-      if (scenes.some(scene => scene.present && scene.sessionGroup === 'origin' && scene.sourceScope === undefined)) throw error('INVALID_OBSERVATION', 'Origin scope is unknown');
       if (scenes.some(scene => scene.present &&
         (scene.sessionGroup === null || scene.sessionGroup === 'origin' && scene.sourceScope === null))) return;
       id = this.unfinished()[0] ?? null;
@@ -105,11 +104,9 @@ export class GlobalMemoryHandoverCoordinator {
         }
         step = 'plan';
         if (!id) {
-          const base = `gm-${new Date(this.now()).toISOString().replace(/[-:]/g, '')}`;
-          id = base;
-          for (let suffix = 1; this.stat(path.join(this.root, id)); suffix++) id = `${base}-${suffix}`;
+          id = `gm-${new Date(this.now()).toISOString().replace(/[-:]/g, '')}`;
         }
-        plan = await this.plan(id, files);
+        plan = this.plan(id, files);
         this.io.mkdirSync(path.join(this.root, id), { recursive: true });
         this.atomic(path.join(this.root, id, 'plan.json'), JSON.stringify(plan, null, 2) + '\n');
       }
@@ -119,12 +116,11 @@ export class GlobalMemoryHandoverCoordinator {
       for (const { name } of plan.files) {
         const source = path.join(this.memory, name), destination = path.join(archive, name);
         if (this.stat(source)) {
-          if (this.stat(destination)) throw error('EEXIST', 'Global material and archive both exist');
-          this.io.renameSync(source, destination);
+          this.archiveFile(id, name, source, destination);
         } else if (!this.stat(destination)?.isFile()) throw error('ENOENT', 'Planned material is missing');
       }
       step = 'template';
-      if (plan.rule === 2) this.installTemplate(plan.template);
+      if (plan.rule === 'template') this.installTemplate(plan.template);
       step = 'append';
       if (plan.deliver || plan.dailyRecords) {
         await this.append({ kind: plan.deliver ? 'commitment' : 'fact', content: this.body(plan, archive),
@@ -136,39 +132,62 @@ export class GlobalMemoryHandoverCoordinator {
       });
       step = 'done';
       this.atomic(path.join(archive, '.done'), '');
-      this.event('global_memory_handover', id, { files: plan.files.map(file => file.name),
-        rule: plan.rule, deliver: plan.deliver, basis: plan.basis });
+      this.lastFailure = null;
+      this.event('global_memory_handover', id, { files: this.archivedFiles(archive), rule: plan.rule, deliver: plan.deliver });
       return plan;
     } catch (cause) {
-      this.event('global_memory_handover_failed', id, { step, code: cause.code ?? 'UNKNOWN' });
+      const code = cause.code ?? 'UNKNOWN';
+      const failure = JSON.stringify([id, step, code]);
+      if (failure !== this.lastFailure) this.event('global_memory_handover_failed', id, { step, code });
+      this.lastFailure = failure;
       return { failed: true, id, step, code: cause.code ?? 'UNKNOWN' };
     }
   }
 
-  async plan(id, files) {
-    const conversion = await this.db.getLastCompletedModeTransition({ memoryConversion: true });
+  plan(id, files) {
     const installationTemplate = files.length === 1 && files[0].name === 'state.md' &&
-      templateHashes.has(hash(this.io.readFileSync(path.join(this.memory, 'state.md'), 'utf8')));
-    let rule = 3;
-    if (conversion?.target_mode === 'multi' && !this.stat(path.join(this.root, conversion.run_id, 'previous', '_global', '.done')) &&
-      files.every(file => file.mtime <= conversion.updated_at)) rule = 1;
-    else if (installationTemplate) rule = 2;
-    const plan = { version: 1, id, files: files.map(({ name, mtime }) => ({ name, mtime })), rule, deliver: rule === 3,
-      basis: { conversionRunId: conversion?.run_id ?? null, conversionUpdatedAt: conversion?.updated_at ?? null },
+      templateHashes.has(hash(this.io.readFileSync(path.join(this.memory, 'state.md'), 'utf8').replace(/\s/gu, '')));
+    const plan = { version: 1, id, files: files.map(({ name }) => ({ name })),
+      rule: installationTemplate ? 'template' : 'other', deliver: !installationTemplate,
       dailyRecords: this.entries(path.join(this.memory, 'sessions')).length > 0 };
-    if (rule === 2) plan.template = this.io.readFileSync(currentTemplatePath(), 'utf8').replace('scope=*', 'scope=origin');
-    if (plan.deliver && conversion?.target_mode === 'single') {
-      plan.interval = { B: await this.db.getGlobalCoverageEnd(), M: await this.readMaxConversationId() };
-      if (![plan.interval.B, plan.interval.M].every(value => Number.isSafeInteger(value) && value >= 0)) throw error('INVALID_DATA', 'Invalid C4 interval');
-    }
+    if (installationTemplate) plan.template = this.io.readFileSync(currentTemplatePath(), 'utf8').replace('scope=*', 'scope=origin');
     return plan;
   }
 
+  archivedFiles(archive) {
+    return this.entries(archive).filter(name => material(name) || material(name.split('.conflict-')[0])).sort();
+  }
+
+  archiveFile(id, name, source, destination) {
+    const saved = this.stat(destination);
+    if (!saved) { this.io.renameSync(source, destination); return; }
+    const incoming = this.io.statSync(source);
+    const incomingHash = hash(this.io.readFileSync(source));
+    const archivedHash = hash(this.io.readFileSync(destination));
+    const facts = { name, incomingHash, archivedHash };
+    if (incomingHash === archivedHash) {
+      this.io.unlinkSync(source);
+    } else {
+      const incomingOlder = incoming.mtimeMs < saved.mtimeMs;
+      let timestamp = Math.floor(incomingOlder ? incoming.mtimeMs : saved.mtimeMs);
+      let conflict;
+      do { conflict = `${destination}.conflict-${new Date(timestamp++).toISOString()}`; }
+      while (this.stat(conflict));
+      if (incomingOlder) this.io.renameSync(source, conflict);
+      else {
+        this.io.renameSync(destination, conflict);
+        this.io.renameSync(source, destination);
+      }
+      Object.assign(facts, { conflict: path.basename(conflict), older: incomingOlder ? 'global' : 'archive' });
+    }
+    this.event('global_memory_handover_conflict', id, facts);
+  }
+
   validate(plan, id) {
-    if (plan?.version !== 1 || plan.id !== id || ![1, 2, 3].includes(plan.rule) || plan.deliver !== (plan.rule === 3) ||
+    if (plan?.version !== 1 || plan.id !== id || !['template', 'other'].includes(plan.rule) || plan.deliver !== (plan.rule === 'other') ||
       !Array.isArray(plan.files) || !plan.files.length || plan.files.some(file => typeof file.name !== 'string' || !material(file.name)) ||
       new Set(plan.files.map(file => file.name)).size !== plan.files.length ||
-      plan.rule === 2 && typeof plan.template !== 'string') throw error('INVALID_DATA', 'Invalid handover plan');
+      plan.rule === 'template' && typeof plan.template !== 'string') throw error('INVALID_DATA', 'Invalid handover plan');
   }
 
   atomic(file, body) {
@@ -190,9 +209,8 @@ export class GlobalMemoryHandoverCoordinator {
   body(plan, archive) {
     const daily = path.join(this.memory, 'sessions');
     if (!plan.deliver) return `Global memory handover ${plan.id}: daily records remain at ${JSON.stringify(daily)}; they were not moved. Read them when needed.`;
-    return `Global memory handover ${plan.id}: archived at ${JSON.stringify(archive)}; files: ${JSON.stringify(plan.files.map(file => file.name))}. ` +
+    return `Global memory handover ${plan.id}: archived at ${JSON.stringify(archive)}; files: ${JSON.stringify(this.archivedFiles(archive))}. ` +
       `Daily records remain at ${JSON.stringify(daily)}; read when needed. Read all archived materials completely and verify actual progress before continuing. ` +
-      'Record your own work in your own working memory; in multi use internal to relay other groups\' work to their threads, and in single take it over yourself. ' +
-      (plan.interval ? `C4 interval (${plan.interval.B}, ${plan.interval.M}]: rows recorded under origin are covered by Origin\'s own Sync (already or subsequently); rows under other groups were not organized into Origin memory. Read original text by id when needed.` : '');
+      "Record your own work in your own working memory. In multi use internal to relay other groups' work to their threads, and in single take it over yourself.";
   }
 }
