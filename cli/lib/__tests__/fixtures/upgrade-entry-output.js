@@ -30,6 +30,7 @@ mock.module(at('upgrade-protection.js'), { namedExports: {
     if (rollback) {ctx.transactionDir = path.join(root, 'transaction'); ctx.upgradeProtected = true;}
   },
   saveProtectedCode: idle, prepareProtectedInstall: idle, markInstallationIntent: idle,
+  timeUpgradeStep: (_ctx, _name, work) => work(),
   recovery: () => {
     assert.ok(rollback, 'successful output fixture must not recover');
     return {attempted:true, completed:true, recovery_required:false};
