@@ -11,6 +11,11 @@ function fixture(t,runtime='claude') {
  const activity=new SessionActivity({runDir:root,runId:'r',sessionId:'s',runtime,startedAt:100});t.after(()=>activity.close());
  const row=(event,more={})=>({v:1,run_id:'r',session_id:'s',runtime,ts:200,event,...more});return {root,activity,row};
 }
+test('unregistered runtimes cannot construct a session activity reader', () => {
+  assert.throws(() => new SessionActivity({
+    runDir: os.tmpdir(), runId: 'r', sessionId: 's', runtime: 'unknown',
+  }), { code: 'RUNTIME_UNSUPPORTED' });
+});
 test('current main-agent tools only; stop timestamp and late post preserve newer tools',t=>{
  const {activity,row}=fixture(t);activity.consume([row('pre_tool',{tool_use_id:'old',session_id:'old'}),row('pre_tool',{tool_use_id:'sub',agent_id:'a'}),row('pre_tool',{tool_use_id:'a'}),row('pre_tool',{tool_use_id:'b',ts:400}),row('stop',{ts:300}),row('post_tool',{tool_use_id:'a',ts:500})]);
  assert.deepEqual([...activity.tools.keys()],['b']);activity.consume([row('stop',{ts:600})]);assert.equal(activity.read(5000).state,'idle');
@@ -798,7 +803,7 @@ test('AGY prompt resets both idle stability and the quiet-turn attempt',t=>{
  assert.equal(activity.claimQuietTurn(1000,1201000),true);
  activity.consume([row('stop',{ts:1201001}),row('prompt',{ts:1202000})]);
  const result=activity.read(1202000);
- assert.equal(activity.agyIdleSince,null);assert.equal(result.lastResponseAt,1202000);
+ assert.equal(activity.statuslineIdleSince,null);assert.equal(result.lastResponseAt,1202000);
  assert.equal(result.turnStartedAt,1202000);assert.equal(activity.quietTurnAttemptAt,null);
  assert.equal(result.quietTurnDue,false);
 });
@@ -888,9 +893,9 @@ test('AGY closed-turn task sample cannot exempt the next quiet turn',t=>{
  activity.consume([row('prompt',{ts:500})]);
  fs.writeFileSync(path.join(root,'statusline.json'),JSON.stringify({session_id:'s',agent_state:'working',
   subagents:[{id:'child',status:'running'}],zylos:{v:1,runId:'r',capturedAt:1000}}));
- assert.equal(activity.read(1000).state,'busy');assert.equal(activity.agyTasksRunning,true);
+ assert.equal(activity.read(1000).state,'busy');assert.equal(activity.statuslineTasksRunning,true);
  activity.consume([row('stop',{ts:2000})]);
- assert.equal(activity.read(2500).state,'idle');assert.equal(activity.agyTasksRunning,false);
+ assert.equal(activity.read(2500).state,'idle');assert.equal(activity.statuslineTasksRunning,false);
  activity.consume([row('prompt',{ts:3000})]);
  const result=activity.read(1203000);
  assert.equal(result.state,'busy');assert.equal(result.quietTurnDue,true);
