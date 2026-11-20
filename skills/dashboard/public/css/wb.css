@@ -1461,6 +1461,10 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
 .wb-f-list-head > :is(.wb-f-col-todayWeek, .wb-f-col-pool, .wb-f-col-host),
 .wb-f-list-row > :is(.wb-f-list-cost, .wb-f-list-pool, .wb-f-list-host) { text-align: end; font-variant-numeric: tabular-nums; }
 .wb-f-list-state, .wb-f-list-mobile { display: none; }
+@media (width > 860px) {
+  html:lang(en) .wb-f-list-name { flex-wrap: wrap; row-gap: 2px; }
+  html:lang(en) .wb-f-list-name > :is(.agent-open, b) { flex: none; max-inline-size: calc(100% - 1.5em); }
+}
 @media (max-width: 860px) {
   .wb-f-list-head, .wb-f-list-row > :is(.wb-f-list-running, .wb-f-list-condition, .wb-f-list-quota, .wb-f-list-cost, .wb-f-list-pool, .wb-f-list-host) { display: none; }
   .wb-f-list-row { grid-template-columns: minmax(0, 1fr) auto; gap: 3px 8px; padding: 10px 12px; }
