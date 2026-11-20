@@ -334,6 +334,13 @@ function fleetFixture() {
   };
 }
 
+test('Fleet returns to the last available page when machines are removed', () => {
+  const fleet = { agents: Array.from({ length: 8 }, (_, i) => ({ name: `machine-${i}`, state: 'IDLE' })) };
+  const view = buildAgentFleetView(fleet, { page: 2 });
+  assert.equal(view.page, 1);
+  assert.deepEqual(view.pageTiles.map(tile => tile.name), fleet.agents.map(agent => agent.name));
+});
+
 test('Machines page renders one card per machine with state, quota, cost and host, problems first', () => {
   const view = buildAgentFleetView(fleetFixture(), { basePath: '/dash' });
   const html = renderAgentFleetHtml(fleetFixture(), { basePath: '/dash' });
@@ -446,10 +453,10 @@ test('problem cards say why in plain words, keep the precise reason for technica
 
 test('Agent Fleet keeps self first among healthy machines and preserves color mapping when response order changes', () => {
   const fixture = fleetFixture();
-  fixture.agents[1].self = true;
+  fixture.agents[0].self = true;
   const original = buildAgentFleetView(fixture);
   const shuffledFixture = fleetFixture();
-  shuffledFixture.agents[1].self = true;
+  shuffledFixture.agents[0].self = true;
   shuffledFixture.agents = [...shuffledFixture.agents].reverse();
   const shuffled = buildAgentFleetView(shuffledFixture);
 
@@ -460,7 +467,7 @@ test('Agent Fleet keeps self first among healthy machines and preserves color ma
   assert.deepEqual(shuffledColors, originalColors);
   assert.deepEqual(shuffledHues, originalHues);
   assert.ok(Object.values(originalHues).some((hue) => hue !== 0));
-  assert.equal(shuffled.tiles[2].name, 'zylos01');
+  assert.equal(shuffled.tiles[2].name, 'zylos02');
   assert.equal(shuffled.tiles[2].isSelf, true);
 });
 

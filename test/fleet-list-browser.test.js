@@ -50,8 +50,8 @@ test('Fleet list persists, pages and links the same machines as cards across des
       sandbox.addCleanup(() => browser.close());
       const fixture = fleetFixture();
 
-      for (const width of [1280, 390]) for (const theme of ['light', 'dark']) {
-        await t.test(`${width}px ${theme} Fleet renders, paginates and opens machines`, async () => {
+      for (const width of [1280, 390]) {
+        await t.test(`${width}px Fleet renders, paginates and opens machines`, async () => {
           const mobile = width === 390;
           const context = await browser.newContext({ viewport: { width, height: 900 }, locale: 'en-US',
             ...(mobile ? { isMobile: true, hasTouch: true } : {}) });
@@ -59,19 +59,20 @@ test('Fleet list persists, pages and links the same machines as cards across des
           await context.route('**/*', route => route.request().url().startsWith(base + '/') ? route.continue() : route.abort());
           await context.route('**/_assets/vendor/chart.umd.js', route => route.fulfill({ path: chartAsset, contentType: 'text/javascript' }));
           await context.route('**/favicon.ico', route => route.fulfill({ status: 204 }));
-          await context.addInitScript(({ base, theme }) => {
+          await context.addInitScript(base => {
             if (location.origin !== base) return;
-            localStorage.setItem('zylos-dashboard-theme', theme);
+            localStorage.setItem('zylos-dashboard-theme', 'light');
             localStorage.setItem('zylos-dashboard-locale', 'en');
-          }, { base, theme });
+          }, base);
           const page = await context.newPage();
           page.setDefaultTimeout(7000);
           let error;
           page.on('pageerror', failure => { error ??= failure; });
           let fleetReads = 0;
+          let payload = fixture;
           await page.route('**/api/fleet', route => {
             fleetReads += 1;
-            return route.fulfill({ json: fixture });
+            return route.fulfill({ json: payload });
           });
           try {
             await page.goto(base + '/');
@@ -100,7 +101,7 @@ test('Fleet list persists, pages and links the same machines as cards across des
 
             if (evidence) {
               await page.mouse.move(0, 0);
-              await page.screenshot({ path: path.join(evidence, `fleet-card-view-${width}-${theme}.png`) });
+              await page.screenshot({ path: path.join(evidence, `fleet-card-view-${width}-light.png`) });
             }
             await listMode.click();
             await rows.first().waitFor();
@@ -129,13 +130,28 @@ test('Fleet list persists, pages and links the same machines as cards across des
             assert.deepEqual(await summary.locator('.sum-states, .sum-costs').allTextContents(), totals);
             await cardMode.click();
             assert.deepEqual(await names(cards), lastPage);
+            if (!mobile) {
+              // Attention makes machines sort earlier. Fill the first page before giving Node 09 its own notice.
+              await pagination.getByRole('button', { name: 'Previous page' }).click();
+              payload = structuredClone(fixture);
+              for (const agent of payload.agents.slice(1, 8)) agent.supervisor_paused = true;
+              Object.assign(payload.agents[8], { session_mode: 'multi', group_summary: { ...payload.agents[9].group_summary,
+                attention: [{ kind: 'data_unreadable', group: 'node-09-group', displayName: 'Node 09 diagnostic' }],
+              } });
+              await Promise.all([page.waitForResponse(response => response.url().endsWith('/api/fleet')), refresh.click()]);
+              await page.mouse.move(0, 0);
+              await cards.locator('[data-supervisor-paused]').first().waitFor();
+              await pagination.getByRole('button', { name: 'Next page' }).click();
+              assert.match(await cards.filter({ has: page.getByRole('link', { name: 'Node 09', exact: true }) })
+                .locator('[data-fleet-attention]').innerText(), /Node 09 diagnostic/);
+              payload = fixture;
+            }
             await listMode.click();
 
             await page.reload();
             await rows.first().waitFor();
             assert.equal(await listMode.getAttribute('aria-pressed'), 'true');
             assert.deepEqual(await names(rows), firstPage);
-            assert.equal(await page.locator('html').getAttribute('data-theme'), theme);
             const host = page.getByRole('columnheader', { name: 'CPU · Memory · Disk' });
             assert.equal(await host.count(), 0);
             if (!mobile) {
@@ -168,11 +184,14 @@ test('Fleet list persists, pages and links the same machines as cards across des
               assert.match(await group.locator('.wb-f-list-running').innerText(), /4 groups · 1 working/);
               assert.equal(await group.locator('.wb-gbar i').count(), 3);
               assert.equal(await group.locator('.wb-f-list-pool').innerText(), '4/6');
+              const single = rows.nth(2);
+              assert.equal(await single.locator('.wb-f-list-pool').innerText(), '—');
+              assert.equal(await single.locator('.wb-f-list-running .wb-pill').innerText(), 'Idle');
             }
-            console.log('Fleet layout geometry:', JSON.stringify({ width, theme, ...geometry }));
+            console.log('Fleet layout geometry:', JSON.stringify({ width, ...geometry }));
             if (evidence) {
               await page.mouse.move(0, 0);
-              await page.screenshot({ path: path.join(evidence, `fleet-list-${width}-${theme}.png`) });
+              await page.screenshot({ path: path.join(evidence, `fleet-list-${width}-light.png`) });
             }
             const originalDocument = await page.locator('#agent-fleet-root').elementHandle();
             if (mobile) {

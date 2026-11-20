@@ -400,6 +400,10 @@ function machineName(tile) {
     : `<a class="agent-open" href="${escapeHtml(tile.href)}" ${machineData(tile)} title="${name}">${name}</a>`;
 }
 
+function machineStatePill(tile) {
+  return `<span class="wb-pill wb-${escapeHtml(pillKind[tile.mood] ?? 'unknown')}" data-mood="${escapeHtml(tile.mood)}"><span class="wb-dot"></span>${escapeHtml(tile.stateLabel)}</span>`;
+}
+
 function poolText(tile) {
   const pool = tile.groupSummary?.pool;
   return pool?.used == null ? '--' : String(pool.used) + (pool.capacity == null ? '' : '/' + pool.capacity);
@@ -426,7 +430,7 @@ function renderTile(tile, labels, t) {
   </div>`;
   }
   const act = multi ? groupStates(tile, labels, t)
-    : `<div class="wb-f-act"><span class="wb-pill wb-${escapeHtml(pillKind[tile.mood] ?? 'unknown')}" data-mood="${escapeHtml(tile.mood)}"><span class="wb-dot"></span>${escapeHtml(tile.stateLabel)}</span></div>`;
+    : `<div class="wb-f-act">${machineStatePill(tile)}</div>`;
   const second = multi ? `<div>${escapeHtml(labels.pool)}<b>${escapeHtml(poolText(tile))}</b></div>` : '';
   return `<div class="wb-f-card${tile.isSelf ? ' self' : ''}" ${data} data-state="${escapeHtml(tile.mood)}"${tile.linkQuality !== 'ok' ? ` data-link-quality="${escapeHtml(tile.linkQuality)}"` : ''}>
     <div class="wb-f-top"><span class="wb-hdot"></span>${machineName(tile)}${tile.isSelf ? `<span class="wb-tag">${escapeHtml(labels.self)}</span>` : ''}<span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
@@ -504,14 +508,19 @@ function renderListRow(tile, labels, t) {
     <span>· ${escapeHtml(fill(labels.listToday, { value: tile.dailyCostLabel }))}</span>`;
   const mood = labels[tile.mood] ?? labels.unknown;
   const title = details ? ` title="${escapeHtml(details)}"` : '';
+  let activity = '<span>—</span>';
+  if (!tile.offline) {
+    activity = tile.sessionMode === 'single' ? machineStatePill(tile) :
+      `${working ? groupBar(summary, working) : ''}<span>${escapeHtml(working || (tile.sessionMode === 'multi' ? labels.summaryUnavailable : tile.stateLabel))}</span>`;
+  }
   const status = tile.offline ? '' : `<span class="wb-hdot${tile.mood === 'stuck' ? ' warn' : tile.mood === 'idle' ? ' idle' : ''}"></span>`;
   return `<div class="wb-f-list-row${tile.offline ? ' bad' : ''}${tile.isSelf ? ' self' : ''}" role="row" ${machineData(tile)} data-state="${escapeHtml(tile.mood)}">
     <div class="wb-f-list-name" role="cell">${dot}${machineName(tile)}${accessTag}${modeTag}</div>
-    <div class="wb-f-list-running" role="cell">${working ? groupBar(summary, working) : ''}<span>${escapeHtml(tile.offline ? '—' : working || (tile.sessionMode === 'multi' ? labels.summaryUnavailable : tile.stateLabel))}</span></div>
+    <div class="wb-f-list-running" role="cell">${activity}</div>
     <div class="wb-f-list-condition${problemTone}" role="cell"${title}>${situation}</div>
     <div class="wb-f-list-quota" role="cell">${tile.offline ? '—' : quotaBars(tile, labels)}</div>
     <div class="wb-f-list-cost" role="cell">${escapeHtml(tile.offline ? '—' : cost)}</div>
-    <div class="wb-f-list-pool" role="cell">${escapeHtml(tile.offline ? '—' : poolText(tile))}</div>
+    <div class="wb-f-list-pool" role="cell">${escapeHtml(tile.offline || tile.sessionMode === 'single' ? '—' : poolText(tile))}</div>
     <div class="wb-f-list-host wb-tech" role="cell">${escapeHtml(tile.offline ? '—' : host)}</div>
     <div class="wb-f-list-state" role="cell">${status}${escapeHtml(mood)}${tile.offline ? '' : '<i class="wb-ico wb-ico-chev wb-ico-xs" aria-hidden="true"></i>'}</div>
     <div class="wb-f-list-mobile" role="cell"${title}>${mobile}</div>
