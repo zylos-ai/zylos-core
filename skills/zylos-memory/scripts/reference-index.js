@@ -10,7 +10,7 @@ import { isMainModule } from './is-main-module.js';
 const statuses = { projects: ['active', 'planning', 'paused', 'completed', 'abandoned'], decisions: ['active', 'archived'] };
 // The 48-character limit includes the .md extension.
 const pageName = name => /^[a-z0-9-]+\.md$/.test(name) && name.length <= 48;
-const pagePath = (relative, archived = false) => {
+export const pagePath = (relative, archived = false) => {
   const parts = relative.split('/');
   return parts[0] === 'reference' && Object.hasOwn(statuses, parts[1]) &&
     (archived ? parts.length === 4 && parts[2] === 'archive' : parts.length === 3) && pageName(parts.at(-1));

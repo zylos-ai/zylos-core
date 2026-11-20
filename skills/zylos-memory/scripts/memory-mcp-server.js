@@ -4,6 +4,7 @@ import { isMainModule } from './is-main-module.js';
 import { createInterface } from 'node:readline';
 import { guard, memoryError, requireSyncToken } from './sync-lock.js';
 import { resolveAllowedMemoryPath, applyFragmentLocked, isSelfPath } from './self-write.js';
+import { pagePath } from './reference-index.js';
 
 const codes = new Set(['PATH_NOT_ALLOWED', 'TOKEN_MISMATCH', 'FRAGMENT_CONFLICT', 'EXISTS', 'INVALID_INPUT', 'LOCK_TIMEOUT', 'SCOPE_UNBOUND', 'WRITE_FAILED', 'LOCK_UNAVAILABLE', 'LEGACY_READ_ONLY']);
 export const EDIT_MEMORY_TOOL = {
@@ -43,6 +44,9 @@ export function createMemoryEditor(env = process.env, { fragment = applyFragment
         const requested = input.path === 'state.md.tmp' && marker.kind !== 'origin' ? temporary : input.path;
         const resolved = resolveAllowedMemoryPath({ root: scope.root, path: requested, allowed: candidate => {
           if (legacy(candidate)) throw memoryError('LEGACY_READ_ONLY', 'Legacy memory paths are read-only');
+          if (input.op === 'create' && /^reference\/(projects|decisions)\//.test(candidate)) {
+            return allowed(candidate) && (pagePath(candidate) || pagePath(candidate, true));
+          }
           return allowed(candidate);
         } });
         const result = fragment({ target: resolved.target, expected: input.op === 'create' ? null : input.expected,

@@ -73,6 +73,15 @@ test('local: group, origin and global use marker-derived target scopes', async (
   assert.equal((await global.editor(create(global.token, 'session-groups/origin/state.md'))).code, 'PATH_NOT_ALLOWED');
 });
 
+test('local: create rejects a project page filename longer than 48 characters', async () => {
+  const f = await fixture('origin', 'origin');
+  const target = `reference/projects/${'a'.repeat(46)}.md`;
+  const result = await f.editor(create(f.token, target));
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PATH_NOT_ALLOWED');
+  assert.equal(fs.existsSync(path.join(f.dir, 'memory', target)), false);
+});
+
 test('local: a missing or malformed token is a call error that keeps the lock for a retry', async () => {
   const f = await fixture('global');
   const target = path.join(f.dir, 'memory', 'identity.md');
