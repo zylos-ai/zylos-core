@@ -136,7 +136,7 @@ export class SupervisorLoop {
       }
       context.scenes = await d.observe(context);
       context.manualRequests = [];
-      if (d.checkManualFences) {
+      if (!context.configuration.legacy && d.checkManualFences) {
         try { context.manualRequests = await d.checkManualFences(context); }
         catch (error) { await d.reportError(error, { phase: 'manual-fences' }); }
       }

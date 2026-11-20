@@ -5,9 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fixture as storeFixture } from '../skills/comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { startSupervisor } from '../skills/activity-monitor/scripts/supervisor-main.js';
+import { RestartRequestStore } from '../skills/activity-monitor/scripts/restart-request-store.js';
+import { supervisorDiagnosticPath } from '../cli/lib/session-group-paths.js';
 import { readSessionModeStatus } from '../cli/lib/session-mode-status.js';
 
-// Run for startup migration, config publication or dispatcher confirmation.
+// Run for startup migration, legacy restart cleanup, config publication or dispatcher confirmation.
 // The real supervisor and SQLite use private paths and injected runtime/PM2
 // observations. Skip for unrelated changes.
 test('recreated supervisor completes the transition admitted after the baseline exits', async t => {
@@ -23,6 +25,20 @@ test('recreated supervisor completes the transition admitted after the baseline 
   assert.ok(root.startsWith(fs.realpathSync(os.tmpdir()) + path.sep));
   console.info({ HOME: env.HOME, ZYLOS_DIR: env.ZYLOS_DIR, PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR,
     database: path.join(root, 'c4.db'), socket: path.join(root, 'activity-monitor/am.sock') });
+  const requestStore = new RestartRequestStore({ file: path.join(root, 'activity-monitor', 'restart-requests.json') });
+  const legacyRunId = 'legacy-baseline-run';
+  const request = { requestId: 'legacy-restart', reason: 'manual_restart', acceptedAt: 1800000000000,
+    runIds: [legacyRunId], mode: 'single', expectedRunId: legacyRunId };
+  requestStore.write([request]);
+  store.setDrainFence('*', { reason: 'manual_restart', runId: legacyRunId });
+  const alerts = [];
+  const diagnosticFile = supervisorDiagnosticPath(env);
+  const legacyWarning = /manual_restart_(orphan_fence|blocked)/;
+  const assertNoLegacyRestartWarning = () => {
+    const diagnostics = fs.existsSync(diagnosticFile) ? fs.readFileSync(diagnosticFile, 'utf8') : '';
+    assert.doesNotMatch(diagnostics, legacyWarning);
+    assert.equal(alerts.find(message => legacyWarning.test(message)), undefined);
+  };
   let legacyPresent = true, service, begins = 0, modeKey = null, confirmed = false;
   const database = { ...store, getDb: () => db, beginModeTransition(...args) { begins++; return store.beginModeTransition(...args); } };
   const mode = () => ({ mode: modeKey, keyPresent: modeKey !== null });
@@ -34,16 +50,27 @@ test('recreated supervisor completes the transition admitted after the baseline 
       loopOptions: { schedule: () => 1, cancel() {} }, readSyncMarker: () => ({ held: false, stale: false }),
       writeMode: value => { modeKey = value; },
       restartDispatcherConfirmation: { advance: () => ({ confirmed, pending: false }) },
-      sendAlert: () => { throw new Error('external send forbidden'); }, log() {},
+      sendAlert: async (_target, message) => { alerts.push(message); return true; }, log() {},
     });
     const started = service;
     cleanups.push(() => started.stop());
   };
   await restoreServices();
-  await service.supervisor.loop.tick(); assert.equal(begins, 0);
+  for (let i = 0; i < 3; i++) {
+    await service.supervisor.loop.tick();
+    assertNoLegacyRestartWarning();
+  }
+  assert.equal(begins, 0);
+  assert.deepEqual(requestStore.read(), [request]);
+  assert.equal(store.getDrainFence('*')?.runId, legacyRunId);
   legacyPresent = false;
-  for (let i = 0; i < 4; i++) await service.supervisor.loop.tick();
-  assert.equal(begins, 1); const first = store.getModeTransition(); assert.ok(first);
+  await service.supervisor.loop.tick();
+  assert.equal(begins, 1);
+  assert.deepEqual(requestStore.read(), []);
+  assert.equal(store.getDrainFence('*'), null);
+  assertNoLegacyRestartWarning();
+  for (let i = 0; i < 3; i++) await service.supervisor.loop.tick();
+  const first = store.getModeTransition(); assert.ok(first);
   assert.equal(first.phase, 'cutover');
   assert.equal(first.reason, 'dispatcher_restart_unconfirmed');
   const previousService = service;
@@ -65,4 +92,5 @@ test('recreated supervisor completes the transition admitted after the baseline 
   assert.equal(done.transition, null);
   assert.equal(done.globalGate.present, false);
   assert.equal(done.lastCompleted.runId, first.run_id);
+  assertNoLegacyRestartWarning();
 });

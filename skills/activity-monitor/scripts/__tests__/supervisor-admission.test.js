@@ -170,6 +170,14 @@ test('stale, incomplete and starting identity cannot become manual targets', asy
   f.state.run.runId=null; assert.equal((await f.admission.handle(manual())).reason,'identity_unavailable');
   f.state.run.runId='r1'; f.state.run.ready=false; assert.equal((await f.admission.handle(manual())).reason,'not_ready');
   assert.deepEqual(f.store.read(),[]);
+
+  f.state.mode = 'single';
+  f.state.keyPresent = false;
+  f.state.run.ready = true;
+  const before = fs.existsSync(f.file);
+  assert.equal((await f.admission.handle(manual())).reason, 'not_ready');
+  assert.equal(fs.existsSync(f.file), before);
+  assert.deepEqual(f.store.read(), []);
 });
 test('absent ordinary targets do not enqueue an Origin wake with or without a pinned run', async t => {
   const f = fixture(t); f.state.run = null;
