@@ -1,9 +1,8 @@
-import { OPEN_MODE_TRANSITION } from './c4-transition-state.js';
 import { randomUUID } from 'node:crypto';
 import { dataError } from './c4-session-group.js';
 export function transitionFunctions({ read, write, snapshot, get, all, run, seconds, advanceHead }) {
   const decode = row => row ? { ...row, coverage_snapshot: row.coverage_snapshot === null ? null : JSON.parse(row.coverage_snapshot), absorbed_ids: row.absorbed_ids === null ? null : JSON.parse(row.absorbed_ids) } : null;
-  const find = (c, runId) => decode(runId === undefined ? get(c, `SELECT * FROM mode_transitions WHERE ${OPEN_MODE_TRANSITION}`) : get(c, 'SELECT * FROM mode_transitions WHERE run_id=?', runId));
+  const find = (c, runId) => decode(runId === undefined ? get(c, "SELECT * FROM mode_transitions WHERE phase<>'complete'") : get(c, 'SELECT * FROM mode_transitions WHERE run_id=?', runId));
   function required(c, id) { const row = find(c, id); if (!row) throw dataError('RUN_NOT_FOUND', 'Mode transition does not exist'); return row; }
   function onlyGlobal(c, completion = false) {
     const rows = all(c, 'SELECT * FROM drain_fences');
@@ -46,7 +45,6 @@ export function transitionFunctions({ read, write, snapshot, get, all, run, seco
       if (options.targetMode) predicates.push('target_mode=?');
       return read(c => decode(get(c, `SELECT * FROM mode_transitions WHERE ${predicates.join(' AND ')} ORDER BY updated_at DESC,created_at DESC,rowid DESC LIMIT 1`, ...(options.targetMode ? [options.targetMode] : []))));
     },
-    listGroupHeads: () => read(c => all(c, 'SELECT session_group AS sessionGroup,head_id AS headId FROM group_heads ORDER BY session_group COLLATE BINARY')),
     voidInternalForSingle: runId => write(c => {
       const row = typeof runId === 'string' && runId ? find(c, runId) : null;
       if (!row || row.phase !== 'cutover' || row.target_mode !== 'single') throw dataError('TRANSITION_PRECONDITION', 'Internal cleanup requires native single cutover');
@@ -76,7 +74,6 @@ export function transitionFunctions({ read, write, snapshot, get, all, run, seco
       run(c, 'UPDATE mode_transitions SET phase=?,reason=?,updated_at=? WHERE run_id=?', phase, reason, seconds(), runId);
       return find(c, runId);
     }),
-    getAbsorbedConversations: runId => snapshot(c => absorbed(c, required(c, runId)).map(({ id, session_group, channel, endpoint_id, timestamp, content }) => ({ id, session_group, channel, endpoint_id, timestamp, content }))),
   };
   return { api, readAbsorbed: runId => snapshot(c => { const transition = required(c, runId); return { transition, rows: absorbed(c, transition) }; }) };
 }

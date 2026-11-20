@@ -80,8 +80,7 @@ export function createSupervisor(deps) {
   const oldUnique=(scene,value=configuration)=>!legacyMode(value) && scene.sessionGroup==='origin' && scene.sourceScope===null;
   const stopScene=async scene=>{
     await scenes.stop(scene);
-    const group=value=>roundContext?.configuration?.mode==='single' && value===null?'origin':value;
-    const sampled=roundContext?.scenes?.find(current=>group(current.sessionGroup)===group(scene.sessionGroup) && current.runId===scene.runId);
+    const sampled=roundContext?.scenes?.find(current=>current.sessionGroup===scene.sessionGroup && current.runId===scene.runId);
     if(sampled)Object.assign(sampled,{present:false,ready:false,processRunning:false});
   };
   const health=new RuntimeHealthCoordinator({zylosDir:deps.zylosDir,now,
@@ -196,7 +195,7 @@ export function createSupervisor(deps) {
   lifecycle=new SupervisorLifecycle({syncObserver,env:deps.env,db,observeGroup:group=>scenes.observeGroup(group),observe:listScenes,stop:stopScene,readSyncMarker,prepareReferenceReorg,prompts,
     requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),groupRunDir:group=>groupRunDir(group,deps.env),diagnostic,reportError,
     readCurrentSession:async group=>{try{return await endings.currentSession(group);}catch{return null;}},
-    intentionalStop:(group,runId)=>exits.forget(group===null?'origin':group,runId)},{now});
+    intentionalStop:(group,runId)=>exits.forget(group,runId)},{now});
   globalMemoryHandover=new GlobalMemoryHandoverCoordinator({db,zylosDir:deps.zylosDir,readMode,readConfiguration,
     readRequests:()=>admission.readRequests(),legacyPresent:deps.legacyPresent,observe:context=>scenes.observe(context),
     serialize:operation=>admission.serialize(operation),diagnostic,now});
@@ -224,6 +223,7 @@ export function createSupervisor(deps) {
       router.clearLegacyCache(path.join(deps.zylosDir,'activity-monitor','message-router-probe-cache.json'));await deps.restoreTransition?.();
     },openAdmission:()=>admission.openEntry(),reportError,getModeTransition:db.getModeTransition,listDrainFences:db.listDrainFences,readRestartRequests:()=>admission.readRequests(),restartRequestsReadable,
     advanceAutomaticMigration:()=>modeSwitch.automatic(),
+    discardLegacyManualRestarts:fences=>modeSwitch.discardLegacyManualRestarts(fences),
     advanceTransition:()=>modeSwitch.advance(),
     advanceGlobalMemoryHandover:()=>globalMemoryHandover.advance(),
     lifecycleSerial:operation=>admission.serialize(operation),checkManualFences:context=>lifecycle.checkManualFences(context),...lifecycleMethods,observe:context=>{roundContext=context;return listScenes();},

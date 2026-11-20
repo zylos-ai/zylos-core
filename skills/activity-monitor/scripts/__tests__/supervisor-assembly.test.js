@@ -13,7 +13,7 @@ import { tmuxClientArgs } from '../../../comm-bridge/scripts/tmux-client-args.js
 function fixture(t,{batchIdentities,badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunchConfig=()=>({runtime:'claude',mode:'default'}),consumeHealthEvents,readConfiguration=async()=>({mode:'multi',runtime:'claude',capacity:2}),checkAuth=async()=>({status:'uncertain'}),alert,now=Date.now,database={},readSyncMarker,prepareReferenceReorg,prompts,resolveTargetRuntime=async()=> 'claude'}={}) {
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-assembly-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const file=path.join(root,'requests.json');if(badRequests)fs.writeFileSync(file,'broken');
- const calls=[],db={getOriginNeed:()=>({controls:{count:0},inbound:{oldestAt:null}}),getModeTransition:()=>null,listDrainFences:()=>[],getDrainFence:()=>null,listSlotOccupancy:()=>[],pruneSlots:()=>({deletedHeld:0,deletedOrphans:[]}),listPendingContinuations:()=>[],listRunEndings:()=>[],getLastCompletedModeTransition:()=>null,listPendingSessionGroups:()=>[],listGroupHeads:()=>[],getLatestContentCheckpoint:()=>null,getControlById:()=>null,resolveSessionLaunchConfig:resolveLaunchConfig,...database};
+ const calls=[],db={getOriginNeed:()=>({controls:{count:0},inbound:{oldestAt:null}}),getModeTransition:()=>null,listDrainFences:()=>[],getDrainFence:()=>null,listSlotOccupancy:()=>[],pruneSlots:()=>({deletedHeld:0,deletedOrphans:[]}),listPendingContinuations:()=>[],listRunEndings:()=>[],getLastCompletedModeTransition:()=>null,listPendingSessionGroups:()=>[],getLatestContentCheckpoint:()=>null,getControlById:()=>null,resolveSessionLaunchConfig:resolveLaunchConfig,...database};
  const scenes={observe:async()=>[],readIdentity(group) { return this.observeGroup(group); }, observeGroup:async()=>({present:false}),listRuns:async()=>[],readRun:async()=>null};
  if(batchIdentities)scenes.readIdentities=batchIdentities;
  const supervisor=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},readConfiguration,readMode,resolveTargetRuntime,requestStore:new RestartRequestStore({file}),consumeHealthEvents,checkAuth,alert,now,readSyncMarker,prepareReferenceReorg,prompts,log:item=>calls.push(item),loopOptions:{schedule:()=>1,cancel:()=>{}}});
@@ -707,19 +707,17 @@ for(const method of ['getLastCompletedModeTransition','listSlotOccupancy']) {
  });
 }
 
-test('a failed transition reread after automatic migration reaches the assembled failure timer',async t=>{
+test('a failed automatic migration reread does not start the occupancy failure timer',async t=>{
  let now=2_000_000,reads=0;
  const notices=[];
  const {supervisor,db}=fixture(t,{now:()=>now,alert:event=>notices.push(event),
-  readConfiguration:async()=>({mode:'multi',legacy:true,runtime:'claude',capacity:2})});
+  readConfiguration:async()=>({mode:'single',legacy:true,runtime:'claude',capacity:2})});
  const transition=()=>{reads++;if(reads%2===0)throw new Error('post-migration transition read failed');return null;};
  db.getModeTransition=transition;supervisor.loop.deps.getModeTransition=transition;
  supervisor.loop.deps.advanceAutomaticMigration=async()=>{};
  await supervisor.loop.start();assert.equal(reads,2);assert.equal(notices.length,0);
  now+=59000;await supervisor.loop.tick();assert.equal(reads,4);assert.equal(notices.length,0);
- now+=1000;await supervisor.loop.tick();assert.equal(reads,6);assert.equal(notices.length,1);
- assert.equal(notices[0].session_group,'*');assert.equal(notices[0].status,'retained');
- assert.equal(notices[0].slot_deleted,false);assert.match(notices[0].message,/Occupancy rows remain/);
+ now+=1000;await supervisor.loop.tick();assert.equal(reads,6);assert.equal(notices.length,0);
 });
 
 test('legacy authority read failures never send occupancy reconciliation notifications',async t=>{

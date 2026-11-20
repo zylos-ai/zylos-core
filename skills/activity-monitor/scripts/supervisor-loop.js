@@ -105,7 +105,7 @@ export class SupervisorLoop {
     const authority = async read => {
       try { return await read(); }
       catch (error) {
-        if (this.configuration && (this.configuration.mode === 'multi' || !this.configuration.legacy)) await d.reconciliationReadFailed?.(error);
+        if (this.configuration && !this.configuration.legacy) await d.reconciliationReadFailed?.(error);
         throw error;
       }
     };
@@ -125,8 +125,16 @@ export class SupervisorLoop {
       this.configuration = await d.readConfiguration(transition);
       context = { configuration: this.configuration, transition,
         fences: await authority(() => d.listDrainFences()), restartRequests: [] };
+      // A global manual fence in a configured instance can only come from
+      // the old single-session restart flow.
+      const legacyManualFence = !context.configuration.legacy &&
+        context.fences.find(fence => fence.sessionGroup === '*' && fence.reason === 'manual_restart');
+      if (legacyManualFence) {
+        context.restartRequests = await d.discardLegacyManualRestarts([legacyManualFence]);
+        context.fences = await authority(() => d.listDrainFences());
+      }
       try {
-        context.restartRequests = await d.readRestartRequests();
+        if (!legacyManualFence) context.restartRequests = await d.readRestartRequests();
         await d.restartRequestsReadable?.();
       }
       catch (error) {

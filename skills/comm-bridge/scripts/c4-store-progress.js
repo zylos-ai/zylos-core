@@ -1,5 +1,4 @@
 import { dataError, requireGroup } from './c4-session-group.js';
-import { hasOpenModeTransition } from './c4-transition-state.js';
 export function progressFunctions({ read, write, snapshot, get, all, run, seconds, dependencies }) {
   const loadable = "((direction='in' AND status='delivered') OR direction='out')";
   const scope = group => group === '*' ? { sql: '', args: [] } : { sql: ' AND session_group=?', args: [requireGroup(group)] };
@@ -14,7 +13,7 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
   function originSingle(c, group) {
     if (group !== 'origin') return false;
     if (typeof dependencies.readConfig !== 'function') throw new TypeError('Origin progress requires readConfig');
-    if (hasOpenModeTransition(c, get)) return true;
+    if (get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'")) return true;
     try {
       const result = dependencies.readConfig();
       if (result?.state === 'missing') return false;

@@ -18,7 +18,7 @@ function fixture(t) {
   let clock = 1800000000000;
   const f = { root, file, env, checkpoints: new Map(), ranges: new Map(), controls: new Map(), scopes: [] };
   f.db = { getLatestContentCheckpoint: scope => f.checkpoints.get(scope),
-    getControlById: id => f.controls.get(id), listGroupHeads: () => f.scopes.map(sessionGroup => ({ sessionGroup })),
+    getControlById: id => f.controls.get(id),
     getUnsummarizedRange: scope => f.ranges.get(scope) ?? { count: 0, firstAt: null },
     getGlobalUnsummarizedRange: () => f.ranges.get('*') ?? { count: 0, firstAt: null } };
   f.event = row => appendEvent(file, { v: 1, ts: clock, ...row });

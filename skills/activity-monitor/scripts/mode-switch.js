@@ -77,17 +77,19 @@ export class ModeSwitchCoordinator {
     if (value.keyPresent !== false || modeOf(value) !== 'single' || await this.legacyPresent()) return;
     const fences = await this.db.listDrainFences();
     if (fences.some(fence => fence.reason === 'delete')) return;
-    // Clear legacy fences even if the corresponding requests are already gone.
+    await this.discardLegacyManualRestarts(fences.filter(fence => fence.reason === 'manual_restart'));
+    const { runId } = await this.db.beginModeTransition('single', 'multi');
+    this.event('auto_migration_begin', { run_id: runId, phase: 'gating' });
+  }
+
+  async discardLegacyManualRestarts(fences) {
     for (const fence of fences) {
-      if (fence.reason === 'manual_restart') {
-        await this.db.clearDrainFence(fence.sessionGroup, { expectedReason: 'manual_restart', expectedRunId: fence.runId });
-      }
+      await this.db.clearDrainFence(fence.sessionGroup, { expectedReason: 'manual_restart', expectedRunId: fence.runId });
     }
     const requests = await this.requestStore.read();
     const remaining = requests.filter(request => request.reason !== 'manual_restart');
     if (remaining.length !== requests.length) await this.requestStore.write(remaining);
-    const { runId } = await this.db.beginModeTransition('single', 'multi');
-    this.event('auto_migration_begin', { run_id: runId, phase: 'gating' });
+    return remaining;
   }
 
   async advance() {

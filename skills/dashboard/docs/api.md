@@ -44,7 +44,7 @@ Use the spelling below as returned: `session_mode` and `sessionMode` intentional
 
 | Method / path | Access | Operations fields |
 |---|---|---|
-| `GET /api/health/ready` | Public | `ready:boolean`, `reason:"supervisor_unavailable"\|"session_not_running"\|null`, `session_mode:"single"\|"multi"\|"unreadable"`, `session_running:boolean\|null`; `runtime_health.claude` and `.codex` each contain `source:"record"\|"missing"\|"unreadable"`, `health:"ok"\|"auth_failed"\|"rate_limited"\|"unavailable"\|"down"\|"recovering"\|null` |
+| `GET /api/health/ready` | Public | `ready:boolean`, `reason:"supervisor_unavailable"\|null`, `session_mode:"single"\|"multi"\|"unreadable"`, `session_running:boolean\|null`; `runtime_health.claude`, `.codex` and `.agy` each contain `source:"record"\|"missing"\|"unreadable"`, `health:"ok"\|"auth_failed"\|"rate_limited"\|"unavailable"\|"down"\|"recovering"\|null` |
 | `GET /api/health` | Public | `ok:boolean`, `service:string`, `bootId:string` identifies this Dashboard process and changes when it restarts |
 | `POST /api/auth/token` | Public credential exchange | Bearer `zylos_ak_...` key returns `ok:true`, `token:string` (`zylos_st_...`), `expires_at:string` (ISO), `ttl_seconds:number` (86400), `scope:"read"\|"admin"` |
 | `GET /api/instance` | Read | `agent.name:string`, `default_runtime:string`, `session_mode:object` with `sessionMode:"single"\|"multi"\|"unreadable"`; see [instance fields](#get-apiinstance) for additional observations |
@@ -55,7 +55,7 @@ Use the spelling below as returned: `session_mode` and `sessionMode` intentional
 | `GET /api/groups/counts` | Read | `readAt:string` (ISO), `listKnown:boolean`, `running:{total:number,states:object,flags:object}`, `offline:{total:number,waitingSlot:number,startFailed:number}`, `pool:{used:number\|null,capacity:number\|null}\|null` |
 | `GET /api/usage/summary` | Read | `tz:string`, `tzFallback:boolean`, `scope:"all_groups"`, `today:object`, `sevenDay:object`; period and runtime fields described below |
 
-Readiness returns **HTTP 503 when not ready**, with `ready:false`, `reason` and all the other listed readiness fields still present in the JSON body. Read this body as observation data even on 503. `session_running` is observed only in single mode and is null in multi mode. Runtime health is diagnostic and does not itself determine readiness; missing/unreadable health is null. `/api/health` only establishes HTTP liveness. Use `/api/health/ready`, never the retired `?probe=ready` query.
+Readiness returns **HTTP 503 when not ready**, with `ready:false`, `reason` and all the other listed readiness fields still present in the JSON body. Read this body as observation data even on 503. `session_running` is reserved and always null. A supervisor response establishes readiness in every mode, including before migration. Runtime health is diagnostic and does not itself determine readiness; missing/unreadable health is null. `/api/health` only establishes HTTP liveness. Use `/api/health/ready`, never the retired `?probe=ready` query.
 
 Exchange the API key once and **cache/reuse the 24-hour session token** as `Authorization: Bearer zylos_st_...`. Every exchange creates a new session and compares the presented key against active keys; exchanging on every request adds unnecessary sessions and key verification work. An API key itself does not authorize data requests. Use a read key for observations and an admin key for Origin actions.
 
@@ -85,9 +85,9 @@ Example: `GET /api/health` → `{"ok":true,"service":"zylos-dashboard","bootId":
 
 **Access:** Public. **Parameters:** none.
 
-Returns `ready:boolean`, `reason:string|null`, `session_mode:"single"|"multi"|"unreadable"`, `session_running:boolean|null`, and `runtime_health:object` keyed by `claude`, `codex` and `agy`. Each runtime entry has `source:"record"|"missing"|"unreadable"` and `health:string|null`. A responsive supervisor establishes readiness unless an instance without a `session_mode` key (from before session modes) has its session confirmed absent; `session_running` is reported only for such instances and is `null` otherwise. Runtime health is diagnostic, not an admission gate.
+Returns `ready:boolean`, `reason:string|null`, `session_mode:"single"|"multi"|"unreadable"`, `session_running:boolean|null`, and `runtime_health:object` keyed by `claude`, `codex` and `agy`. Each runtime entry has `source:"record"|"missing"|"unreadable"` and `health:string|null`. A responsive supervisor establishes readiness in every mode, including instances without a `session_mode` key. `session_running` is reserved and always `null`. Runtime health is diagnostic.
 
-**Errors:** HTTP 503 with `{ok:false,error:{code,message},...readiness}` when `ready:false`; `reason` is `supervisor_unavailable` or `session_not_running`. Unavailable observations remain null.
+**Errors:** HTTP 503 with `{ok:false,error:{code,message},...readiness}` when `ready:false`; `reason` is `supervisor_unavailable`. Unavailable observations remain null.
 
 Example: `GET /api/health/ready` → `{"ok":false,"error":{"code":"supervisor_unavailable","message":"supervisor_unavailable"},"ready":false,"reason":"supervisor_unavailable","session_mode":"multi","session_running":null,"runtime_health":{"claude":{"source":"missing","health":null},"codex":{"source":"missing","health":null},"agy":{"source":"missing","health":null}}}`.
 

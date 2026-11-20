@@ -153,7 +153,7 @@ test('an ordinary group crash remains eligible after a later native switch compl
   assert.equal(f.records('test:a').length, 0);
   assert.equal(f.store.listPendingContinuations().length, 0);
   f.now += 10000;
-  const native = f.store.beginModeTransition('single', 'multi', { kind: 'switch' });
+  const native = f.store.beginModeTransition('single', 'multi');
   f.store.setDrainFence('*');
   f.store.setModeTransitionPhase(native.runId, 'cutover');
   const completed = f.store.setModeTransitionPhase(native.runId, 'complete');

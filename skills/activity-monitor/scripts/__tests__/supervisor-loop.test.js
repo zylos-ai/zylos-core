@@ -208,14 +208,14 @@ test('ending reconciliation follows exit cleanup and precedes publication and re
   await f.loop.stop();
 });
 
-test('the post-migration transition reread reports reconciliation failure before ending the round',async t=>{
+test('a failed automatic migration reread ends the pre-migration round without reconciliation',async t=>{
  let reads=0,migrations=0;const failure=new Error('transition reread failed'),reported=[];
- const f=fixture({readConfiguration:async()=>({mode:'multi',legacy:true}),
+ const f=fixture({readConfiguration:async()=>({mode:'single',legacy:true}),
   getModeTransition:async()=>{if(++reads===2)throw failure;return null;},
   advanceAutomaticMigration:async()=>{migrations++;},reconciliationReadFailed:async error=>reported.push(error)});
  t.after(()=>f.loop.stop());
  await f.loop.start();
- assert.equal(reads,2);assert.equal(migrations,1);assert.deepEqual(reported,[failure]);
+ assert.equal(reads,2);assert.equal(migrations,1);assert.deepEqual(reported,[]);
  assert.ok(f.calls.includes('error:round'));assert.equal(f.calls.includes('exits'),false);
  assert.equal(f.timers.length,1);
 });

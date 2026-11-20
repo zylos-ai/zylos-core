@@ -82,7 +82,7 @@ export class GlobalMemoryHandoverCoordinator {
       const scenes = await this.observe({ configuration: { ...await this.readConfiguration(), mode: mode.mode } });
       if (scenes.some(scene => scene.observationError)) throw error('INVALID_OBSERVATION', 'Unknown runtime observation');
       if (scenes.some(scene => scene.present &&
-        (scene.sessionGroup === null || scene.sessionGroup === 'origin' && scene.sourceScope === null))) return;
+        scene.sessionGroup === 'origin' && scene.sourceScope === null)) return;
       id = this.unfinished()[0] ?? null;
       let plan;
       if (id && this.stat(path.join(this.root, id, 'plan.json'))) {

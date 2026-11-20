@@ -40,7 +40,7 @@ test('dashboard origin uses the fixed group before routing and while storing', a
   assert.equal(calls, 1);
   assert.equal(f.db.prepare('SELECT session_group FROM conversations WHERE id=?').get(reply.id).session_group, 'origin');
   assert.equal(f.store.getChannelNamespace('dashboard'), null);
-  assert.equal(f.store.listGroupHeads().some(head => head.sessionGroup === 'dashboard:origin'), false);
+  assert.equal(f.db.prepare('SELECT 1 FROM group_heads WHERE session_group=?').get('dashboard:origin'), undefined);
 });
 
 test('dashboard origin is stored in origin in both session modes and refuses a caller-chosen group', async t => {

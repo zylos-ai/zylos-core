@@ -43,7 +43,7 @@ test('failed readiness checks release the shared promise for the next request', 
   }
 });
 
-function fixture({ mode = 'single', present = true, health = { missing: true }, responsive = true } = {}) {
+function fixture({ mode = 'single', health = { missing: true }, responsive = true } = {}) {
   const calls = [];
   return { calls, load: async name => {
     calls.push(name);
@@ -55,24 +55,23 @@ function fixture({ mode = 'single', present = true, health = { missing: true }, 
       return responsive ? { kind: 'rejected', reply: { code: 'invalid_request' } } : { kind: 'timeout' };
     } };
     if (name === 'session-state-reader.js') return {
-      readLiveIdentity: async group => { assert.equal(group, null); calls.push('identity'); return { present }; },
+      readLiveIdentity: async () => { calls.push('identity'); return { present: false }; },
       readRuntimeHealth: async () => health,
     };
     throw new Error('Unexpected module');
   } };
 }
 
-test('only supervisor response and confirmed absence of a pre-mode instance session gate readiness', async () => {
-  // A null mode is an instance without the session mode key; Origin is
-  // reclaimed when idle in single and multi, so neither reads its presence.
-  for (const mode of [null, 'single', 'multi']) for (const present of [true, false]) for (const responsive of [true, false]) {
-    const f = fixture({ mode, present, responsive });
+test('only supervisor response gates readiness in every mode', async () => {
+  // A null mode represents an instance without the session mode key.
+  for (const mode of [null, 'single', 'multi']) for (const responsive of [true, false]) {
+    const f = fixture({ mode, responsive });
     const result = await readReadiness(f);
-    assert.equal(result.ready, responsive && (mode !== null || present));
-    assert.equal(result.reason, !responsive ? 'supervisor_unavailable' : mode === null && !present ? 'session_not_running' : null);
+    assert.equal(result.ready, responsive);
+    assert.equal(result.reason, responsive ? null : 'supervisor_unavailable');
     assert.equal(result.session_mode, mode ?? 'single');
-    assert.equal(result.session_running, mode === null ? present : null);
-    assert.equal(f.calls.includes('identity'), mode === null);
+    assert.equal(result.session_running, null);
+    assert.equal(f.calls.includes('identity'), false);
   }
 });
 
@@ -102,23 +101,10 @@ test('unreadable observations remain unknown without becoming a third rejection 
   assert.deepEqual(result.runtime_health.claude, { source: 'unreadable', health: null });
   const absentMode = await readReadiness(fixture({ mode: null }));
   assert.equal(absentMode.session_mode, 'single');
-  const brokenReader = fixture({ mode: null });
-  const original = brokenReader.load;
-  brokenReader.load = async name => name === 'session-state-reader.js' ? {
-    readLiveIdentity: () => { throw new Error('/private/identity'); }, readRuntimeHealth: () => ({ missing: true }),
-  } : original(name);
-  assert.equal((await readReadiness(brokenReader)).session_running, null);
-  assert.equal((await readReadiness(brokenReader)).ready, true);
-  const incomplete = fixture({ mode: null, present: undefined });
-  const incompleteLoad = incomplete.load;
-  incomplete.load = async name => name === 'session-state-reader.js' ? {
-    readLiveIdentity: () => ({}), readRuntimeHealth: () => ({ missing: true }),
-  } : incompleteLoad(name);
-  assert.equal((await readReadiness(incomplete)).session_running, null);
 });
 
 test('unreadable mode with an absent session remains ready without inspecting identity', async () => {
-  const f = fixture({ present: false });
+  const f = fixture();
   const original = f.load;
   f.load = async name => name === 'config.js' ? {
     readSessionMode: () => { throw new Error('unreadable configuration'); },
@@ -152,7 +138,6 @@ test('agy runtime health is read independently from Claude and Codex diagnostics
   const original = f.load;
   const calls = [];
   f.load = async name => name === 'session-state-reader.js' ? {
-    readLiveIdentity: async () => ({ present: true }),
     readRuntimeHealth: async runtime => {
       calls.push(runtime);
       return runtime === 'agy' ? { health: 'auth_failed' } : { missing: true };

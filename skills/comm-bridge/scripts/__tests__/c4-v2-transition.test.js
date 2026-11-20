@@ -132,19 +132,14 @@ test('getLastCompletedModeTransition: NORMAL WAL reads committed row while write
 });
 
 
-// library snapshots and static Router census. Directory/skeleton
-// creation and real Router transport belong to integration, not this test.
 function transitionHeads(reader) {
   return reader.prepare('SELECT session_group, head_id FROM group_heads ORDER BY session_group COLLATE BINARY')
     .all().map(row => ({ sessionGroup: row.session_group, headId: row.head_id }));
 }
-function assertTransitionHeads(actual, expected) {
-  assert.deepEqual(actual, expected, ' conversion must include every group and its current head');
-}
 function assertTransitionRouterCensus(sources) {
   // Include aliases/imports as well as calls: a newly imported D6 reader must
   // trigger review even when hidden behind a local name. Direct SQL is forbidden.
-  const d6Readers = /\b(?:group_heads|listGroupHeads|listGroups|getLastActivity|getOriginSyncBacklog|claimUngroupedPendingForOrigin)\b/;
+  const d6Readers = /\b(?:group_heads|listGroups|getLastActivity|getOriginSyncBacklog|claimUngroupedPendingForOrigin)\b/;
   for (const [name, source] of sources) {
     assert.doesNotMatch(source, d6Readers, ` Router must not access D6: ${name}`);
   }
@@ -181,25 +176,9 @@ function transitionFixture(t, create = createStore) {
   assert.ok(transitionHeads(reader).some(row => row.headId === duringGate.id));
   return { db, reader, store, runId, cutoff, beforeGate };
 }
-function transitionSnapshot(db, reader, store) {
-  const before = allTables(reader);
-  const changes = db.prepare('SELECT total_changes() AS n').get().n;
-  const sql = [], prepare = db.prepare;
-  db.prepare = function(statement) { sql.push(statement); return prepare.call(this, statement); };
-  db.pragma('query_only=ON');
-  let heads;
-  try { heads = store.listGroupHeads(); }
-  finally { db.pragma('query_only=OFF'); db.prepare = prepare; }
-  assertTransitionHeads(heads, transitionHeads(reader));
-  assert.equal(sql.length, 1, ' snapshot must use one statement');
-  assert.match(sql[0], /^SELECT\b/i);
-  assert.deepEqual(allTables(reader), before, ' snapshot must not change any table');
-  assert.equal(db.prepare('SELECT total_changes() AS n').get().n, changes);
-  return heads;
-}
-test('full heads snapshots include gated and post-cutoff groups; delivery primitives never read', t => {
+test('group heads include gated and post-cutoff groups; delivery primitives never read', t => {
   const { db, reader, store, runId, cutoff, beforeGate } = transitionFixture(t);
-  const first = transitionSnapshot(db, reader, store);
+  const first = transitionHeads(reader);
   assert.equal(first.length, beforeGate.length + 1);
   // Keep the global gate active while a second connection writes a new group
   // and advances an existing head after the frozen absorption cutoff.
@@ -209,7 +188,7 @@ test('full heads snapshots include gated and post-cutoff groups; delivery primit
     const late = incoming.insertConversation('in', 'chat', 'A', 'after cutoff', { groupName: 'A' });
     const advance = incoming.insertConversation('in', 'chat', 'room', 'advance', { groupName: 'room' });
     assert.ok(late.id > cutoff); assert.ok(advance.id > cutoff);
-    const second = transitionSnapshot(db, reader, store);
+    const second = transitionHeads(reader);
     assert.equal(second.length, first.length + 1);
     assert.equal(second.find(row => row.sessionGroup === 'chat:room').headId, advance.id);
     assert.ok(!first.some(row => row.sessionGroup === 'chat:A'), 'earlier result remains a snapshot');

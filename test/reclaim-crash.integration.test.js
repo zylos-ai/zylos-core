@@ -3,6 +3,12 @@ import assert from 'node:assert/strict';
 import { createStore } from '../skills/comm-bridge/scripts/c4-v2-store.js';
 import { fixture, launch } from './fixtures/manual-restart-harness.js';
 
+// Real Supervisor recovery after SIGKILL with a running delivery or a manual
+// restart fence in the fixture database. Run for reclaim accounting, drain
+// ownership or Supervisor crash recovery changes. Skip unrelated changes.
+// Use isolated HOME, ZYLOS_DIR, PM2_HOME, short TMPDIR, a private -S tmux
+// socket and a temporary SQLite database. Fixture cleanup closes workers,
+// sockets and the database, including on failure.
 async function waiting(t) {
   const f = fixture(t), db = createStore(f.db, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) });
   f.db.exec("INSERT INTO conversations(direction,channel,endpoint_id,content,status,session_group) VALUES('in','fixture','origin','inflight','running','origin')");

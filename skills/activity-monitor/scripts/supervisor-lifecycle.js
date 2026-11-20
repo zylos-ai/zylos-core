@@ -1050,7 +1050,7 @@ export class SupervisorLifecycle {
     const marker = await this.d.readSyncMarker({ runDir: scene.runDir, kind, currentRunId: scene.runId });
     if (!marker || typeof marker.held !== 'boolean' || typeof marker.stale !== 'boolean') throw error('INVALID_OBSERVATION', 'Invalid Sync marker result');
     if (marker.held && !marker.stale) return;
-    if (!await this.beforeWrite(legacy(context) ? null : scene.sessionGroup, context, kind === 'origin' ? undefined : scene)) return;
+    if (!await this.beforeWrite(scene.sessionGroup, context, kind === 'origin' ? undefined : scene)) return;
     const checkpointId = await this.syncCheckpoint(scene, kind);
     const control = await this.d.db.insertControl(this.prompt(kind === 'origin' ? 'ORIGIN_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT'), {
       sessionGroup: scene.sessionGroup, priority: 2, appendAckSuffix: false,

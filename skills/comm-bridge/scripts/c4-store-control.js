@@ -1,4 +1,3 @@
-import { hasOpenModeTransition, continuationRequired } from './c4-transition-state.js';
 import { dataError, requireGroup, parseSessionGroup } from './c4-session-group.js';
 import { normalizeTargetBinding } from './c4-target-binding.js';
 import { fileURLToPath } from 'node:url';
@@ -38,7 +37,7 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
   // so the stored window is exactly the requested number of seconds; otherwise the store reads the clock.
   function insert(c, content, { sessionGroup = null, targetBinding = null, priority = 3, requireIdle = false, bypassState = false, ackDeadlineAt = null, availableAt = null, appendAckSuffix = true, createdAt = null } = {}) {
     const current = createdAt ?? seconds();
-    const open = hasOpenModeTransition(c, get);
+    const open = get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'");
     if (sessionGroup === null) {
       let config; try { config = baseline(); } catch (cause) { throw dataError('CONTROL_TARGET_REQUIRED', 'A control target is required when configuration cannot be read', { cause }); }
       if (open || config.keyPresent || config.sessionMode !== 'single') throw dataError('CONTROL_TARGET_REQUIRED', 'A control target is required after migration or during transition');
@@ -75,8 +74,8 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
       const recorded = previous?.run_id !== runId;
       if (recorded) {
         const current = seconds();
-        const open = hasOpenModeTransition(c, get);
-        const continuationPending = !open && continuationRequired(reason, sessionGroup) ? 1 : 0;
+        const open = get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'");
+        const continuationPending = !open && (['upgrade', 'auth', 'model_config', 'unexpected'].includes(reason) || (reason === 'manual_restart' && sessionGroup !== 'origin')) ? 1 : 0;
         run(c, 'INSERT INTO run_endings(session_group,run_id,reason,ended_at,continuation_pending) VALUES(?,?,?,?,?) ON CONFLICT(session_group) DO UPDATE SET run_id=excluded.run_id,reason=excluded.reason,ended_at=excluded.ended_at,continuation_pending=excluded.continuation_pending', sessionGroup, runId, reason, current, continuationPending);
         if (['ttl', 'evict', 'release'].includes(reason)) run(c, 'DELETE FROM slot_occupancy WHERE session_group=? AND run_id=?', sessionGroup, runId);
         else run(c, "UPDATE slot_occupancy SET state='held',held_until=? WHERE session_group=? AND run_id=? AND state='running'", current + 120, sessionGroup, runId);
