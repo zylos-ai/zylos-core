@@ -36,7 +36,12 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   let usageVersion = '1.0.0', usageModel = 'fixture-model', usageEffort = 'high', modeStatusReadable = true, originRun = 'fixture-run';
   let mode = 'single', clock = Date.now(), server, seedStore, catalogReadable = true;
   const actionCalls = [], cliCalls = [], records = [];
+  let checker, installedCore = '1.4.0', tags = ['v1.5.2', 'v2.0.0', 'v1.6.0-beta.1'];
   const savedRoot = process.env.ZYLOS_DIR;
+  const savedCodexBin = process.env.CODEX_BIN;
+  const codexBin = path.join(root, 'codex-fixture');
+  fs.writeFileSync(codexBin, '#!/bin/sh\nexit 1\n', { mode: 0o700 });
+  process.env.CODEX_BIN = codexBin;
   process.env.ZYLOS_DIR = root;
   const writeMode = next => { mode = next; clock += 3000; fs.writeFileSync(configFile, JSON.stringify({ session_mode: mode, runtime: 'claude' })); };
   writeMode('single');
@@ -60,6 +65,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     if (server) { await server.closeAttachments?.(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
     seedStore?.close();
     if (savedRoot === undefined) delete process.env.ZYLOS_DIR; else process.env.ZYLOS_DIR = savedRoot;
+    if (savedCodexBin === undefined) delete process.env.CODEX_BIN; else process.env.CODEX_BIN = savedCodexBin;
     fs.rmSync(root, { recursive: true, force: true });
   });
   assert.ok(root.startsWith(process.env.TMPDIR + path.sep));
@@ -85,6 +91,16 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     if (typeof options === 'function') callback = options;
     cliCalls.push([String(file), ...args]);
     let data;
+    if (file === 'curl') {
+      assert.equal(args.at(-1), 'https://api.github.com/repos/zylos-ai/zylos-core/tags?per_page=100');
+      queueMicrotask(() => tags ? callback(null, JSON.stringify(tags.map(name => ({ name }))), '')
+        : callback(new Error('fixture tags unavailable'), '', ''));
+      return { stdin: Object.assign(new EventEmitter(), { end() {} }) };
+    }
+    if (file === codexBin && args[0] === 'update') {
+      callback(null, 'fixture CLI updated', '');
+      return new EventEmitter();
+    }
     if (file === 'zylos' && args[0] === 'group' && args[1] === 'overrides') data = { baseline: { runtime: 'claude' }, runtime: [], model: [], runtimeTotal: 0, nextAfter: null };
     else if (file === 'zylos' && args[0] === 'group') data = { resolved: args[1] === 'runtime' ? { runtime: 'claude' } : { runtime: 'claude', mode: 'default' } };
     else if (file === process.execPath && args[0]?.endsWith('/c4-control.js') && args[1] === 'enqueue') data = { id: 7 };
@@ -98,10 +114,15 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   });
   t.mock.module('node:child_process', { namedExports: { ...childProcess, execFile: fakeExecute,
     execFileSync: () => { throw new Error('Synchronous child processes are forbidden in HTTP fixture'); } } });
-  t.mock.module('../skills/dashboard/src/lib/installed-versions.js', { namedExports: { createInstalledVersionReader: () => async () => ({ zylos: 'fixture', claude: '1.0.0', codex: '1.0.0' }) } });
+  t.mock.module('../skills/dashboard/src/lib/installed-versions.js', { namedExports: { createInstalledVersionReader: () => async () => ({ zylos: installedCore, claude: '1.0.0', codex: '1.0.0' }) } });
+  const { VersionChecker } = await import('../skills/dashboard/src/lib/version-checker.js');
+  t.mock.method(VersionChecker.prototype, 'start', function () { checker = this; });
   const actions = await import('../skills/dashboard/src/lib/actions.js');
   t.mock.module('../skills/dashboard/src/lib/actions.js', { namedExports: { ...actions,
-    handleAction: async (action, body) => { actionCalls.push({ action, body }); return { ok: true, action }; } } });
+    handleAction: async (action, body, config) => {
+      actionCalls.push({ action, body });
+      return action === 'upgrade-cc' ? actions.handleAction(action, body, config) : { ok: true, action };
+    } } });
   t.mock.module('../skills/dashboard/src/lib/workbench/core-cli.js', { namedExports: { createCoreCli: () => cli } });
   const names = await import('../skills/dashboard/src/lib/workbench/display-names.js');
   t.mock.module('../skills/dashboard/src/lib/workbench/display-names.js', { namedExports: { ...names,
@@ -231,6 +252,45 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     await request('/api/instance', { identity: 'none', expected: 401 });
     await request('/api/instance/runtime-options?runtime=claude');
   });
+  // Same isolated HTTP fixture, exercising the production poll and CLI action
+  // with fixture tag and executable responses. Run when instance upgrade routes
+  // or version selection change. Rendering-only changes can skip this boundary.
+  await t.test('instance upgrade routes expose cached Core tags and require an explicit CLI runtime', async () => {
+    const coreUpdate = '/api/instance/core-update';
+    const upgrade = '/api/instance/actions/upgrade-runtime';
+    await request(coreUpdate, { identity: 'none', expected: 401 });
+    const before = cliCalls.length;
+    assert.deepEqual(await request(coreUpdate), { current: '1.4.0', latest: null, hasUpdate: false, checkedAt: null });
+    assert.equal(cliCalls.length, before);
+    await request('/api/instance/actions/upgrade', { method: 'POST', identity: 'cookie', expected: 404 });
+    for (const body of [undefined, { runtime: 'foo' }, undefined]) {
+      const invalid = await request(upgrade, { method: 'POST', identity: 'admin', body, expected: 400 });
+      assert.deepEqual(invalid.error, { code: 'runtime_unsupported', message: 'Choose claude, codex or agy for the CLI upgrade.' });
+    }
+    assert.equal(cliCalls.slice(before).filter(([, arg]) => arg === 'update' || arg === 'upgrade').length, 0);
+
+    const checkStarted = Date.now();
+    await checker.check();
+    const updated = await request(coreUpdate);
+    assert.deepEqual(updated, { current: '1.4.0', latest: '1.5.2', hasUpdate: true, checkedAt: updated.checkedAt });
+    assert.ok(Date.parse(updated.checkedAt) >= checkStarted && Date.parse(updated.checkedAt) <= Date.now());
+    tags = null;
+    await checker.check();
+    const callsAfterCheck = cliCalls.length;
+    assert.deepEqual(await request(coreUpdate), updated);
+    assert.equal(cliCalls.length, callsAfterCheck, 'reads do not query GitHub');
+
+    installedCore = '1.5.2';
+    const result = await request(upgrade, { method: 'POST', identity: 'admin', body: { runtime: 'codex' } });
+    assert.equal(result.messageKey, 'result.runtime_updated');
+    assert.deepEqual(result.messageParams, { runtime: 'Codex' });
+    assert.equal(result.requires_restart, true);
+    assert.deepEqual(cliCalls.slice(before).filter(([, arg]) => arg === 'update'), [[codexBin, 'update']]);
+    tags = ['v2.0.0', 'v1.5.2'];
+    await checker.check();
+    const equal = await request(coreUpdate);
+    assert.deepEqual(equal, { current: '1.5.2', latest: '1.5.2', hasUpdate: false, checkedAt: equal.checkedAt });
+  });
   // Real createServer composition, group catalog, history parser and HTTP auth.
   // Run when history group admission or server wiring changes; unrelated UI may
   // skip. Mode and installation observations are supplied by this fixture;
@@ -285,7 +345,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     ['/api/schedules/once', 'DELETE'],
     ...['pause', 'resume'].map(action => [`/api/schedules/once/actions/${action}`, 'POST', {}]),
     ['/api/instance/defaults', 'PUT', { kind: 'model', model: 'fixture-model' }], ['/api/instance/name', 'PUT', { name: 'fixture-agent' }],
-    ...['switch-mode', 'switch-runtime', 'upgrade', 'upgrade-runtime'].map(action => [`/api/instance/actions/${action}`, 'POST', {}]),
+    ...['switch-mode', 'switch-runtime'].map(action => [`/api/instance/actions/${action}`, 'POST', {}]),
     ['/api/groups/telegram%3Aworking/config', 'PUT', { kind: 'runtime', value: 'claude' }],
     ['/api/groups/telegram%3Aworking/name', 'PUT', { name: 'Fixture group' }], ['/api/groups/telegram%3Aworking/name', 'DELETE'],
     ...['interrupt', 'chop-chop', 'restart'].map(action => [`/api/groups/telegram%3Aworking/actions/${action}`, 'POST', { runId: 'fixture-run' }]),
@@ -295,6 +355,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   await t.test('every object API write requires admin and every browser write requires same origin', async () => {
     const initial = actionCalls.length;
     const allWrites = [...writes,
+      ['/api/instance/actions/upgrade-runtime', 'POST', { runtime: 'codex' }],
       ['/api/keys', 'POST', {}], ['/api/keys/reader/rotate', 'POST', {}], ['/api/keys/reader', 'DELETE'], ['/api/keys/purge-revoked', 'POST', {}],
       ['/api/fleet/agents', 'POST', {}], ['/api/fleet/agents/test', 'POST', {}], ['/api/fleet/agents/remote-fixture', 'DELETE'],
       ['/api/chat/drafts', 'POST', {}], ['/api/chat/conversations/origin', 'PATCH', {}], ['/api/chat/conversations/origin/send', 'POST', {}],
@@ -383,7 +444,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       assert.equal(lean.runtimeInfo.runningVersion, '1.0.0'); assert.equal(lean.runtimeInfo.model, 'fixture-model'); assert.equal(lean.runtimeInfo.effort, 'high');
       await request('/api/groups/origin?include=invalid', { expected: 400 });
     }
-    for (const route of ['/api/groups/offline?limit=10', '/api/groups/search?q=telegram', '/api/groups/activity?range=60m', `/api/groups/${encoded}`, `/api/groups/${encoded}/usage`,
+    for (const route of ['/api/groups/offline?limit=10', '/api/groups/search?q=telegram', '/api/groups/activity?range=60m&ids=origin', `/api/groups/${encoded}`, `/api/groups/${encoded}/usage`,
       `/api/groups/${encoded}/runs`, `/api/groups/${encoded}/messages`, `/api/groups/${encoded}/events`, `/api/groups/${encoded}/backlog`,
       '/api/groups/runtime-overrides', '/api/usage/summary', '/api/usage/pricing']) await request(route);
     const restart = await request(`/api/groups/${encoded}/restarts/11111111-1111-4111-8111-111111111111`);
@@ -457,14 +518,12 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     const value = await request('/api/groups/origin?include=');
     assert.equal(value.id, 'origin'); assert.equal(Object.hasOwn(value, 'raw'), false); assert.equal(Object.hasOwn(value, 'config'), false);
     assert.equal(cliCalls.slice(before).filter(args => args.includes('--raw') || args[0] === 'group').length, 0);
-    await request('/api/instance/actions/upgrade', { method: 'POST', identity: 'cookie' });
   });
   await t.test('chat connection overflow is an explicit HTTP error', async () => {
     const mock = t.mock.method(SseHub.prototype, 'canAddChatClient', () => false);
     try { const value = await request('/api/stream?chat=1', { identity: 'cookie', expected: 429 }); assert.equal(value.error.code, 'chat_connection_limit'); }
     finally { mock.mock.restore(); }
   });
-  assert.ok(actionCalls.some(call => call.action === 'upgrade-zylos'));
   await t.test('detail restart hints use observed CLI and current configuration without leaking into instance', async () => {
     writeMode('multi');
     const settingsDir = path.join(root, '.claude'); fs.mkdirSync(settingsDir, { recursive: true });

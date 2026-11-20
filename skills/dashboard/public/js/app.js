@@ -2794,6 +2794,7 @@ function createActionsModal() {
   actionsModal = overlay;
 
   bindActionControls(overlay, pageActions(), {
+    runtime: () => state.dashboardState?.default_runtime,
     onModeSettled: async () => { syncModeSegment(); await refreshModeStatus(); },
   });
   return overlay;
@@ -2971,7 +2972,7 @@ async function sendAction(action, body) {
       return true;
     }
     if (statusEl) {
-      const isInfo = !result.ok && (result.error?.code === 'already_up_to_date' || result.error?.code === 'already_set');
+      const isInfo = !result.ok && result.error?.code === 'already_set';
       statusEl.className = result.ok ? 'modal-status success' : isInfo ? 'modal-status success' : 'modal-status error';
       statusEl.style.whiteSpace = 'pre-line';
       statusEl.textContent = formatActionResult(result, t) || (result.ok ? t('status.done') : result.error?.message);

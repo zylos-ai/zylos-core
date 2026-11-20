@@ -292,14 +292,17 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     value.rows = sortRows(rows);
     return value;
   }
-  async function activity(range, at = now()) {
+  async function activity(range, ids, at = now()) {
     if (!['60m', '6h'].includes(range)) throw Object.assign(new Error('Invalid range'), { code: 'invalid_range', statusCode: 400 });
+    const requested = new Set(ids);
+    const key = JSON.stringify([...requested].sort());
     const prior = activities.get(range);
-    if (prior && at - prior.at < 30000) return prior.value;
+    if (prior?.key === key && at - prior.at < 30000) return prior.value;
     const snapshot = await getSnapshot(at);
     const singleOrigin = snapshot.mode === 'single' && snapshot.view === 'single';
-    const rows = singleOrigin ? snapshot.rows.map(row => ({ ...row, sessionGroup: row.sessionGroup ?? 'origin' })) : snapshot.rows;
-    const keys = rows.map(row => row.sessionGroup).filter(key => key !== null);
+    const rows = snapshot.rows.filter(row => requested.has(row.sessionGroup ?? (singleOrigin ? 'origin' : null)))
+      .map(row => row.sessionGroup === null ? { ...row, sessionGroup: 'origin' } : row);
+    const keys = rows.map(row => row.sessionGroup);
     const width = range === '60m' ? 60000 : 300000, size = range === '60m' ? 60 : 72;
     const start = Math.floor(at / width) * width - (size - 1) * width;
     const events = keys.flatMap(sessionGroup => queryAllEvents(store, { sessionGroup, includeLegacyOrigin: singleOrigin,
@@ -327,7 +330,8 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       events: singleOrigin ? events.map(event => ({ ...event, session_group: event.session_group ?? 'origin' })) : events,
       inbound: singleOrigin ? inbound.map(message => ({ ...message, session_group: 'origin' })) : inbound, ttlMs: hotTtlMs });
     if (inboundError) return { ...value, inboundError: 'inbound_unreadable' };
-    activities.set(range, { at: now(), value });
+    // Keep one result per range so arbitrary ID combinations cannot grow the cache.
+    activities.set(range, { at: now(), key, value });
     return value;
   }
   // One group's stored message start, read only when someone opens it in the technical view. Key search puts the

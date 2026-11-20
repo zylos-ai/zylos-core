@@ -197,7 +197,11 @@ export function createGroupsApi({ workbench, groupConfig, getRuntimeInfo = () =>
       const matches = rowsOf(snapshot).filter(row => `${row.id}\n${row.displayName}`.toLowerCase().includes(term));
       return { rows: matches.slice(0, 50).map(row => ({ ...projectListRow(row), side: row.side })), truncated: matches.length > 50 };
     },
-    activity: range => workbench.activity((range instanceof URLSearchParams ? range.get('range') : range) || '6h'),
+    async activity(params) {
+      const ids = (params.get('ids') ?? '').split(',').map(id => id.trim());
+      if (ids.length > 100 || ids.some(id => !id)) throw failure('INVALID_IDS', 'ids must contain 1 to 100 group IDs');
+      return workbench.activity(params.get('range') || '6h', ids);
+    },
     async detail(id, { include = ['raw', 'config'] } = {}) {
       if (include instanceof URLSearchParams) include = include.has('include') ? include.get('include').split(',').filter(Boolean) : ['raw', 'config'];
       if (!Array.isArray(include) || include.some(value => !['raw', 'config'].includes(value))) throw failure('INVALID_INCLUDE', 'Include must contain raw or config');
