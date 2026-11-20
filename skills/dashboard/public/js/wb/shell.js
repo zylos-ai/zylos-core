@@ -39,6 +39,8 @@ export function mountWorkbench({ document = globalThis.document, window = global
   const labels = watchRows([document.querySelector('#wb-dist')], { document, window });
   let locateGeneration = 0, locatedGroup, snapshot = null, searchRows = null, error = null, lastSuccess = null, activity = null, activityAt = 0,
     range = '60m', activityGen = 0, cost = null, transition = null, owner = identity(), stopped = false;
+  let activityRequest = null, activityQueued = false;
+  let requestedActivityIds = new Set();
   try {
     if (storage.getItem('zylos-dashboard-activity-range') === '6h') range = '6h';
   } catch {}
@@ -180,6 +182,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     onRows: rows => {
       searchRows = rows;
       redraw();
+      refreshActivity();
     },
     onClear: () => {
       searchRows = null;
@@ -205,9 +208,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     searchInput.value = '';
     snapshot = null;
     searchRows = null;
-    activity = null;
-    activityAt = 0;
-    activityGen++;
+    resetActivity();
     cost = null;
     groupSide = 'running'; offlineDepth = 1;
     transition = null;
@@ -300,8 +301,9 @@ export function mountWorkbench({ document = globalThis.document, window = global
       const known = new Set(snapshot.rows.map(row => row.sessionGroup));
       controller.invalidate();
       offlineDepth++;
-      snapshot = { ...snapshot, rows: [...snapshot.rows, ...(value.rows ?? []).filter(row => !known.has(row.sessionGroup))], nextCursor: value.nextCursor ?? null, hasOlder: value.nextCursor != null };
+      snapshot = { ...snapshot, rows: [...snapshot.rows, ...value.rows.filter(row => !known.has(row.sessionGroup))], nextCursor: value.nextCursor ?? null, hasOlder: value.nextCursor != null };
       redraw();
+      refreshActivity();
     } catch { error = true; redraw(); }
   }
   async function refreshMode() {
@@ -314,24 +316,63 @@ export function mountWorkbench({ document = globalThis.document, window = global
     }
     if (!stopped) redraw();
   }
-  async function refreshActivity(force = false) {
-    if (!force && Date.now() - activityAt < (range === '60m' ? 60000 : 300000)) return;
-    const gen = ++activityGen;
+  function resetActivity() {
+    activity = null;
+    activityAt = 0;
+    activityGen++;
+    activityRequest = null;
+    activityQueued = false;
+    requestedActivityIds.clear();
+  }
+  async function refreshActivity() {
+    if (!snapshot || stopped) return;
+    const ids = new Set([...snapshot.rows, ...(searchRows ?? [])].map(row => row.sessionGroup).filter(Boolean));
+    const due = Date.now() - activityAt >= (range === '60m' ? 60000 : 300000);
+    const needed = [...ids].filter(id => due || !requestedActivityIds.has(id));
+    if (!needed.length) return;
+    if (activityRequest) {
+      activityQueued = true;
+      return;
+    }
+    const gen = activityGen;
+    const groups = new Map(due ? [] : Object.entries(activity?.groups ?? {}).filter(([id]) => ids.has(id)));
+    const batches = [];
+    for (let i = 0; i < needed.length; i += 100) {
+      const params = new URLSearchParams({ range, ids: needed.slice(i, i + 100).join(',') });
+      batches.push(withRequestTimeout(signal => read('/api/groups/activity?' + params, { signal }), REQUEST_TIMEOUT_MS));
+    }
+    activityRequest = Promise.all(batches);
     try {
-      const value = await read('/api/groups/activity?range=' + range);
+      const values = await activityRequest;
       if (gen !== activityGen) return;
-      activity = value;
-      activityAt = Date.now();
+      for (const { groups: entries, start, cellSeconds, inboundError } of values) {
+        for (const [id, value] of Object.entries(entries)) {
+          // A newly loaded page can cross a bucket boundary while older rows are still fresh.
+          groups.set(id, { ...value, start, cellSeconds, inboundUnknown: Boolean(inboundError) });
+        }
+      }
+      activity = { groups: Object.fromEntries(groups), inboundError: [...groups.values()].some(group => group.inboundUnknown) || values.some(value => value.inboundError) };
+      if (due) activityAt = Date.now();
+      requestedActivityIds = ids;
       redraw();
-    } catch {}
+    } catch {} finally {
+      if (gen === activityGen) {
+        activityRequest = null;
+        if (activityQueued) {
+          activityQueued = false;
+          refreshActivity();
+        }
+      }
+    }
   }
   const changeDetail = () => mode.setDetailLevel(toggle.checked ? 'technical' : 'plain');
   const input = () => search.input(searchInput.value);
   function changeRange(value) {
     range = value === '6h' ? '6h' : '60m';
+    resetActivity();
     try { storage.setItem('zylos-dashboard-activity-range', range); } catch {}
     redraw();
-    refreshActivity(true);
+    refreshActivity();
   }
   const typing = target => ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName) || target?.isContentEditable;
   // Esc closes the open drawer; j/k and arrow keys move between board rows.
@@ -454,6 +495,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
       groupDetail.updateSnapshot(snapshot);
       locatedGroup = key || snapshot?.rows.find(row => row.flags?.startFailed || row.flags?.blocked?.reason === 'auth_failed')?.sessionGroup;
       redraw();
+      refreshActivity();
       const row = [...board.querySelectorAll('.wb-row')].find(node => node.dataset.group === locatedGroup);
       row?.focus();
       row?.scrollIntoView({ block: 'center' });

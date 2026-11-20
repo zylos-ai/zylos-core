@@ -8,7 +8,6 @@ export function actionConfirmText(action, body, { t, runtime = null, effortLabel
     'switch-runtime': () => body?.runtime === 'codex' ? t('confirm.switch_runtime_codex') : t('confirm.switch_runtime', { value: body?.runtime }),
     'switch-model': () => t('confirm.switch_model', { value: body?.model }),
     'switch-effort': () => t('confirm.switch_effort', { value: effortLabel(body?.effort) }),
-    'upgrade-zylos': () => t('confirm.upgrade_zylos'),
     'upgrade-cc': () => runtime === 'codex' ? t('confirm.upgrade_codex') : runtime === 'claude' ? t('confirm.upgrade_cc')
       : t('confirm.upgrade_runtime', { runtime: runtime === 'agy' ? 'Antigravity' : runtime || t('wb.unknown') }),
   };
@@ -43,8 +42,8 @@ export function createPageActions({ t, send, confirm, readOnly, remoteTarget, sh
  * through `actions.exec`, so the ones that change the running agent are asked first.
  * - `onModeSettled()` runs after a mode change finished or was cancelled (a cancelled change restores the mode).
  */
-export function bindActionControls(root, actions, { onModeSettled = () => {} } = {}) {
-  root.querySelector('[data-action="upgrade-cc"]').addEventListener('click', () => actions.exec('upgrade-cc'));
+export function bindActionControls(root, actions, { runtime = () => null, onModeSettled = () => {} } = {}) {
+  root.querySelector('[data-action="upgrade-cc"]').addEventListener('click', () => actions.exec('upgrade-cc', { runtime: runtime() }));
 
   const modeSelect = root.querySelector('#action-mode');
   async function changeMode(mode) {

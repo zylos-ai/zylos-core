@@ -269,6 +269,8 @@ publishCoreStateChange = () => scheduleFleetStateBroadcast();
 
 // 6b. Version checker (polls GitHub + npm registry every 12h)
 const versionChecker = new VersionChecker({
+  readCoreVersion: () => zylosVersion,
+  zylosDir: config.zylosDir,
   onUpdate: () => {
     if (stateEngine) {
       scheduleFleetStateBroadcast();
@@ -977,6 +979,10 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
+  if (pathname === '/api/instance/core-update') {
+    sendJson(res, 200, versionChecker.getCoreUpdate());
+    return true;
+  }
   if (pathname === '/api/instance') {
     await Promise.all([refreshDashboardState({ fresh: true }), scheduleTz()]);
     sendJson(res, 200, buildInstancePayload());
@@ -1491,15 +1497,16 @@ export function createServer() {
     if (await handleInstanceTimezoneRestart(req, res, url, { auth, timezone: instanceTimezone,
       runAction: body => handleAction('restart-timezone-services', body, { zylosDir: config.zylosDir }, { timezone: instanceTimezone }) })) return;
 
-    const instanceAction = pathname.match(/^\/api\/instance\/actions\/(switch-mode|switch-runtime|upgrade|upgrade-runtime)$/);
+    const instanceAction = pathname.match(/^\/api\/instance\/actions\/(switch-mode|switch-runtime|upgrade-runtime)$/);
     if ((instanceAction && req.method === 'POST') || (pathname === '/api/instance/defaults' && req.method === 'PUT')) {
       try {
         const body = await readJsonBody(req, 4096, { allowEmpty: Boolean(instanceAction) });
-        const action = instanceAction ? ({ upgrade: 'upgrade-zylos', 'upgrade-runtime': 'upgrade-cc' }[instanceAction[1]] ?? instanceAction[1])
+        const action = instanceAction ? (instanceAction[1] === 'upgrade-runtime' ? 'upgrade-cc' : instanceAction[1])
           : ({ model: 'switch-model', effort: 'switch-effort', threshold: 'set-threshold', 'session-hot-ttl': 'set-session-hot-ttl' }[body?.kind]);
         if (!action) { sendJson(res, 400, { ok: false, error: { code: 'INVALID_DEFAULT', message: 'Choose model, effort, threshold or session-hot-ttl' } }); return; }
-        const result = await handleAction(action, body, { ...loadZylosConfig(config.zylosDir), zylosDir: config.zylosDir });
-        if (result.ok && ['upgrade-cc', 'upgrade-zylos'].includes(action)) eventLoopMonitor.runTask('installed-versions.refresh', refreshInstalledVersions);
+        const actionConfig = action === 'upgrade-cc' ? {} : loadZylosConfig(config.zylosDir);
+        const result = await handleAction(action, body, { ...actionConfig, zylosDir: config.zylosDir });
+        if (result.ok && action === 'upgrade-cc') eventLoopMonitor.runTask('installed-versions.refresh', refreshInstalledVersions);
         sendCommandJson(res, result.status ?? 200, result);
         if (result.ok) scheduleFleetStateBroadcast();
       } catch (error) { workbenchFailure(res, error); }

@@ -34,6 +34,7 @@ test('Antigravity upgrade labels, confirmation and lost-result feedback work acr
             return route.fulfill({ json: value });
           }
           if (url.pathname === '/api/instance/actions/upgrade-runtime') {
+            assert.deepEqual(req.postDataJSON(), { runtime: 'agy' });
             if (outcome === 'failure') return route.fulfill({ status: 502, json: { ok: false, error: { code: 'upgrade_failed', message: 'Antigravity upgrade failed: fixture rejection' }, messageKey: 'result.agy_upgrade_failed', messageParams: { error: 'fixture rejection' } } });
             if (outcome === 'timeout') return route.fulfill({ status: 504, json: { ok: false, error: { code: 'deadline_exceeded', message: 'Antigravity upgrade did not complete within 5 minutes. Check the installed version before retrying.' }, messageKey: 'result.agy_upgrade_incomplete' } });
             if (theme === 'dark') return route.fulfill({ status: 502, json: { ok: false, error: { code: 'upstream_failed', message: 'Proxy reply lost' } } });

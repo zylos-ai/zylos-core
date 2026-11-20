@@ -2151,9 +2151,37 @@ test('workbench shell detail changes redraw without network and activity range p
   assert.equal(h.calls.length, before); assert.equal(h.saved.getItem('zylos-dashboard-detail-level'), 'technical');
   const range = h.nodes.get('#wb-range'); range.children.find(button => button.dataset.range === '6h').dispatch('click'); await wbTick();
   assert.equal(h.nodes.get('#wb-range').children.find(button => button.attributes['aria-pressed'] === 'true').dataset.range, '6h');
-  assert.equal(h.saved.getItem('zylos-dashboard-activity-range'), '6h'); assert.equal(h.calls.at(-1), '/api/groups/activity?range=6h');
+  assert.equal(h.saved.getItem('zylos-dashboard-activity-range'), '6h'); assert.equal(h.calls.at(-1), '/api/groups/activity?range=6h&ids=a');
   h.stop(); assert.equal(h.intervals.size, 0); assert.equal(h.timeouts.size, 0);
 });
+test('workbench requests activity for loaded rows in batches and adds the next offline page', async context => {
+  const rows = Array.from({ length: 101 }, (_, i) => ({ id: 'offline:' + i, flags: {} }));
+  const h = workbenchHarness(context, (path, fallback) => {
+    if (path === '/api/groups/offline') return { rows, nextCursor: 'more' };
+    if (path === '/api/groups/offline?cursor=more') return { rows: [{ id: 'offline:next', flags: {} }] };
+    if (path.startsWith('/api/groups/activity?')) {
+      const ids = new URLSearchParams(path.split('?')[1]).get('ids').split(',');
+      return { start: 0, cellSeconds: 60, groups: Object.fromEntries(ids.map(id => [id, { cells: ['idle'], inbound: [] }])) };
+    }
+    return fallback(path);
+  });
+  const requested = () => h.calls.filter(path => path.startsWith('/api/groups/activity?'))
+    .map(path => new URLSearchParams(path.split('?')[1]).get('ids').split(','));
+  await wbTick(); await wbTick();
+  assert.deepEqual(requested(), [['a']]);
+  h.nodes.get('#tab-overview').querySelectorAll('.wb-group-sides')[0].children[1].dispatch('click');
+  await wbTick(); await wbTick();
+  assert.deepEqual(requested().slice(1).map(ids => ids.length), [100, 1]);
+  assert.deepEqual(requested().slice(1).flat(), rows.map(row => row.id));
+  const board = h.nodes.get('#wb-board');
+  board.children.at(-1).dispatch('click');
+  await wbTick(); await wbTick();
+  assert.deepEqual(requested().slice(3), [['offline:next']]);
+  for (const row of [board.children[0], board.children.at(-1)]) {
+    assert.equal(row.querySelectorAll('.wb-idle').length > 0, true, row.dataset.group);
+  }
+});
+
 // Independent board reads: run for groups/cost refresh wiring changes; skip unrelated UI/server work.
 // Real mounted modules use the injected DOM/fetch/timers above, with no live I/O and lifecycle cleanup.
 test('workbench shell renders groups while cost is pending and fills cost independently', { timeout: 5000 }, async context => {
@@ -2862,13 +2890,13 @@ test('locating an offline group finds its row beyond the first offline page', as
   });
   await wbTick(); await wbTick();
   const createElement = h.document.createElement.bind(h.document), scrolled = [];
-  h.document.createElement = tag => { const element = createElement(tag); element.scrollIntoView = options => scrolled.push({ element, options }); return element; };
+  h.document.createElement = tag => { const element = createElement(tag); element.scrollIntoView = options => scrolled.push({ group: element.dataset.group, options }); return element; };
   await h.locateGroup(selected.sessionGroup); await wbTick();
   const board = h.nodes.get('#wb-board');
   assert.equal(board.children[0].dataset.group, selected.sessionGroup);
   assert.equal(wbName(board.children[0]), 'Later conversation');
   assert.equal(h.document.activeElement, board.children[0]);
-  assert.equal(scrolled[0].element, board.children[0]);
+  assert.equal(scrolled[0].group, selected.sessionGroup);
   assert.deepEqual(scrolled[0].options, { block: 'center' });
   const sides = h.nodes.get('#tab-overview').querySelectorAll('.wb-group-sides')[0];
   sides.children[1].dispatch('click'); await wbTick(); await wbTick();

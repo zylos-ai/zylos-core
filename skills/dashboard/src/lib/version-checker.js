@@ -1,4 +1,17 @@
 import https from 'node:https';
+import { loadCoreModule } from './core-modules.js';
+
+async function checkCoreUpdate(current, { zylosDir, fetchZylosLatest }) {
+  const major = current?.match(/^v?(\d+)\./)?.[1];
+  if (major === undefined) return null;
+  const { fetchLatestTagAsync, compareSemverDesc } = await loadCoreModule('github.js');
+  const { prepareUpstreams, withUpstreamSnapshot } = await loadCoreModule('upstreams.js');
+  const snapshot = await prepareUpstreams({ zylosDir });
+  const latest = await withUpstreamSnapshot(snapshot, () =>
+    (fetchZylosLatest ?? fetchLatestTagAsync)('zylos-ai/zylos-core', { major }));
+  return { current, latest, hasUpdate: Boolean(latest && compareSemverDesc(current.replace(/^v/, ''), latest) > 0),
+    checkedAt: new Date().toISOString() };
+}
 
 const TWELVE_HOURS = 12 * 60 * 60 * 1000;
 
@@ -49,13 +62,17 @@ export function fetchNpmLatest(pkg) {
 export class VersionChecker {
   constructor({
     onUpdate,
-    fetchZylosLatest = () => fetchLatestTag('zylos-ai/zylos-core'),
+    readCoreVersion = () => null,
+    zylosDir,
+    fetchZylosLatest,
     fetchCcLatest = () => fetchLatestTag('anthropics/claude-code'),
     fetchCodexLatest = fetchNpmLatest,
   } = {}) {
-    this._latest = { zylos: null, cc: null, codex: null };
+    this._latest = { cc: null, codex: null };
     this._onUpdate = onUpdate || null;
-    this._fetchZylosLatest = fetchZylosLatest;
+    this._readCoreVersion = readCoreVersion;
+    this._checkCoreUpdate = () => checkCoreUpdate(readCoreVersion(), { zylosDir, fetchZylosLatest });
+    this._coreUpdate = null;
     this._fetchCcLatest = fetchCcLatest;
     this._fetchCodexLatest = fetchCodexLatest;
     this._timer = null;
@@ -63,12 +80,12 @@ export class VersionChecker {
 
   async check() {
     const results = await Promise.allSettled([
-      this._fetchZylosLatest(),
+      this._checkCoreUpdate(),
       this._fetchCcLatest(),
       this._fetchCodexLatest('@openai/codex'),
     ]);
     if (results[0].status === 'fulfilled' && results[0].value) {
-      this._latest.zylos = results[0].value;
+      this._coreUpdate = results[0].value;
     }
     if (results[1].status === 'fulfilled' && results[1].value) {
       this._latest.cc = results[1].value;
@@ -76,11 +93,15 @@ export class VersionChecker {
     if (results[2].status === 'fulfilled' && results[2].value) {
       this._latest.codex = results[2].value;
     }
-    if (this._onUpdate) this._onUpdate(this._latest);
+    if (this._onUpdate) this._onUpdate(this.getLatest());
+  }
+
+  getCoreUpdate() {
+    return this._coreUpdate ?? { current: this._readCoreVersion(), latest: null, hasUpdate: false, checkedAt: null };
   }
 
   getLatest() {
-    return { ...this._latest };
+    return { zylos: this._coreUpdate?.latest ?? null, ...this._latest };
   }
 
   start() {

@@ -160,7 +160,6 @@
   "confirm.switch_runtime_codex": "Switch to Codex? Session will restart. Dashboard will use Codex hooks and rollout metrics for runtime state, usage, cost, latency, and trends where available.",
   "confirm.switch_model": "Switch model to {value}?",
   "confirm.switch_effort": "Switch effort to {value}?",
-  "confirm.upgrade_zylos": "Upgrade zylos-core? All services will restart.",
   "confirm.upgrade_cc": "Upgrade Claude Code?",
   "confirm.upgrade_codex": "Upgrade Codex CLI?",
   "confirm.fallback": "Execute {action}?",
@@ -239,9 +238,6 @@
   "result.already_set_effort": "Effort already set to {value}",
   "result.effort_changed": "Effort changed to {value}.",
   "result.not_implemented_effort": "Effort switch is not implemented for this runtime",
-  "result.already_up_to_date": "Already on the latest version (v{version}).",
-  "result.upgrading_zylos": "Upgrading v{from} → v{to}. All services will restart.",
-  "result.upgrading_zylos_simple": "Upgrade started. All services will restart.",
   "result.zylos_upgrade_succeeded": "zylos-core upgrade completed. Current version: v{version}.",
   "result.zylos_upgrade_unverified": "zylos-core upgrade result could not be verified. Current version: v{version}.",
   "result.cc_updated": "Claude Code updated. Restart session to apply.",
@@ -422,7 +418,7 @@
   "confirm.upgrade_runtime": "Upgrade {runtime}?",
   "result.agy_updated": "Antigravity updated. Restart session to apply.",
   "result.agy_upgrade_failed": "Antigravity upgrade failed: {error}",
-  "result.runtime_upgrade_unsupported": "CLI upgrade is not supported for runtime: {runtime}",
+  "result.runtime_upgrade_unsupported": "Choose Claude, Codex or Antigravity for the CLI upgrade.",
   "result.agy_upgrade_incomplete": "Antigravity upgrade did not complete within 5 minutes. Check the installed version before retrying.",
   "result.agy_upgrade_unknown": "Antigravity upgrade result is unknown. Check the installed version before retrying; the update may still be running."
 }
