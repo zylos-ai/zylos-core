@@ -2,11 +2,13 @@
 
 ## Group Sync
 
-Read [common safety and reading rules](sync-common.md) completely and [state format](state-format.md). Execute only group Sync with a bound inherited ZYLOS_SESSION_GROUP, including origin's own working state. Use kind=group; being in origin does not select Origin Sync. All memory content writes use the parent's exact restricted edit_memory tool. No shared self-knowledge edits or user replies.
+Read [common safety and reading rules](sync-common.md) completely and [state format](state-format.md). Execute only group Sync, including origin's own working state. Use kind=group; being in origin does not select Origin Sync. All memory content writes use the parent's exact restricted edit_memory tool. No shared self-knowledge edits or user replies.
 
 ## Prepare and read
 
 Run `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-run.js start` once. It acquires its own token, checks backlog, exports the bounded batch, runs cleanup/rotate/list and exports **all** content checkpoints after valid state coverage (unknown/empty coverage uses 0). No input releases the token without cleanup/rotate or inbox changes; return that result. start failure releases itself; report its error and any cleanup warnings, without another release.
+
+`sync-run.js start` verifies the session group and run ID binding. A successful start that returns a token proves the binding. Continue directly with the returned manifest. Do not use shell commands to recheck environment variables or change the procedure based on your own suspicions about the binding.
 
 Retain the returned literal token T and manifest. The script saves receipt and the complete list object privately in the token's run directory; never copy them into commands or change run.json. The manifest supplies batch/summaries absolute paths, bytes and SHA-256; state metadata (null if missing); full inputs with statePath, ordered segments and sessions; and batch end. Read every exported file, the entire existing state, every listed segment in order and every listed session in full by the common Complete byte-range reads steps, including visible tails and the per-file ledger. Use reported byte counts only as byte-range read endpoints. Never synthesize paths. Truncated output is unread: use bounded read retries, one byte range per top-level tool call, in a fresh top-level call; do not batch ranges in loops. On Codex use direct exec_command when exposed, or its own functions.exec containing one exec_command.
 
@@ -63,6 +65,8 @@ Checkpoint recomputes and verifies the receipt against the database rows; only s
 All modes retain a valid timestamp or the fixed placeholder and the scope's valid header. Repair damaged headers by a unique fragment in edit mode. Existing drafts are never overwritten: inspect EXISTS under the common corrected-call rules. Use only edit_memory at state.md.tmp with literal token T. Set coverage to the returned batch end. The commit script fills `inbox_committed` from this round's listed segments; a prepared copy may retain its old value, while a newly created state leaves it empty.
 
 ## Publish and report
+
+Use abort only for a terminal script error or a required read or write that fails under the common failure rules. Record any worker suspicions about the binding in the report and continue the procedure.
 
 Send only `{"followedUpIds":[]}` on stdin to `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-run.js finish --token T`, with IDs only when proven followed up. The script retrieves the saved receipt and list itself. Commit verifies the batch, checkpoint coverage, the exact current segment IDs, absolute paths and hashes, then writes those segment IDs into the published state header. It preserves remaining official absorbed lines and title byte-for-byte, stamps actual UTC publication time, and reports stateBytes/stateBudgetBytes/stateOverBudget. Overflow is report-only; preserve unresolved work. Session logs may grow during Sync without rejecting commit.
 
