@@ -1,8 +1,13 @@
+// This module awaits the runtime factory at top level. Runtime implementations must not statically import it.
 import { loadCoreModule } from './core-modules.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { inputAfterStop, STOP_HOOK_LAG_MS } from '../../dashboard/src/lib/workbench/working.js';
 const { EventLogReader } = await loadCoreModule('event-log.js');
+const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
+const { getRuntime, SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/index.js');
+const BUSY = new Map(await Promise.all(SUPPORTED_RUNTIMES.map(async id => [id, (await getRuntime(id)).busy])));
+
 export const TRANSCRIPT_READ_BUDGET_BYTES=256*1024;
 export const TRANSCRIPT_LINE_LIMIT_BYTES=1024*1024;
 export const RECENT_TOOL_RESULTS_LIMIT=256;
@@ -10,7 +15,10 @@ export const OPEN_TURN_INACTIVITY_TIMEOUT_MS=20*60*1000;
 /** One current run/session, with no global latest-transcript fallback. */
 export class SessionActivity {
   constructor({runDir, runId, sessionId, runtime, startedAt=0, warn=()=>{}}) {
-    Object.assign(this,{runDir,runId,sessionId,runtime,startedAt,warn});
+    const busy = BUSY.get(runtime);
+    if (!busy) throw Object.assign(new Error(`Unsupported runtime: ${String(runtime)}`), { code: 'RUNTIME_UNSUPPORTED' });
+    Object.assign(this,{runDir,runId,sessionId,runtime,startedAt,warn,busy});
+    this.parser = busy.transcript === UNSUPPORTED ? null : busy.transcript.createParser({ sessionId, startedAt });
     this.reader=new EventLogReader(path.join(runDir,'events.jsonl'),{warn});
     this.tools=new Map();this.completed=new Set();this.results=new Set();
     this.subagents=new Map();this.lastSubagentActivityAt=null;
@@ -18,8 +26,7 @@ export class SessionActivity {
     this.transcriptFd=null;this.transcriptOffset=0;this.transcriptIdentity=null;this.turn=false;this.idleSince=null;
     this.busySince=null;this.lastIdleAt=null;this.lastResponseAt=null;
     this.transcriptPartial=Buffer.alloc(0);this.transcriptSkippingLine=false;this.transcriptPending=false;
-    this.codexTranscriptMatches=false;
-    this.agyIdleSince=null;this.agyTasksRunning=false;
+    this.statuslineIdleSince=null;this.statuslineTasksRunning=false;
     this.quietTurnAttemptAt=null;
     this.turnStartedAt=null;this.lastNativeActivityAt=startedAt;this.pendingQuietTurnClose=null;
     this.lastTurnStop=null;this.lastDequeue=null;this.recentTurnStops=[];
@@ -39,7 +46,7 @@ export class SessionActivity {
     return inputAfterStop(facts,{type:row=>row.type,at:row=>row.ts,child:()=>false})(queue);
   }
   applyDequeue() {
-    if(this.runtime!=='claude')return;
+    if(!this.busy.queuedPromptsInTurn)return;
     const ts=this.dequeueTime();
     if(ts>this.closedThrough && ts>(this.turnStartedAt ?? -Infinity)) {
       this.turn=true;this.turnStartedAt=ts;this.busySince=ts;this.quietTurnAttemptAt=null;this.pendingQuietTurnClose=null;
@@ -48,14 +55,14 @@ export class SessionActivity {
   }
   forgetDequeue() {
     const startedAt=this.dequeueTime();this.lastDequeue=null;
-    if(this.runtime==='claude' && this.turn && this.turnStartedAt===startedAt) {
+    if(this.busy.queuedPromptsInTurn && this.turn && this.turnStartedAt===startedAt) {
       this.turn=this.lastHookStartAt!==null && this.lastHookStartAt>this.closedThrough;
       if(this.turn){this.turnStartedAt=this.lastHookStartAt;this.busySince=this.lastHookStartAt;}
     }
   }
   close(){this.reader.close();if(this.transcriptFd!==null)fs.closeSync(this.transcriptFd);this.transcriptFd=null;}
   quietTurnDue(now) {
-    return this.turn && this.tools.size===0 && !this.agyTasksRunning && !this.transcriptPending &&
+    return this.turn && this.tools.size===0 && !this.statuslineTasksRunning && !this.transcriptPending &&
       now-this.lastActivityAt>=OPEN_TURN_INACTIVITY_TIMEOUT_MS;
   }
   claimQuietTurn(expectedLastActivityAt,now) {
@@ -78,7 +85,7 @@ export class SessionActivity {
     this.pendingQuietTurnClose=null;
     if(this.tools.size===0) {
       this.turn=false;this.closedThrough=Math.max(this.closedThrough,fact.ts);
-      if(this.runtime==='agy')this.agyIdleSince=fact.ts;
+      if(this.busy.source==='statusline')this.statuslineIdleSince=fact.ts;
       this.lastActivityAt=Math.max(this.lastActivityAt,fact.last_activity_at);
     }
   }
@@ -115,7 +122,7 @@ export class SessionActivity {
     }
   }
   recover() {
-    let boundary=false,responseBoundary=false,claudeCutoff=null;
+    let boundary=false,responseBoundary=false,stopCutoff=null;
     return this.reader.recoverTail(row=>{
       if(!this.matches(row))return {};
       if(!this.transcriptPath)this.associateTranscript(row);
@@ -123,11 +130,11 @@ export class SessionActivity {
       // Recover response history across newer prompt/stop boundaries without
       // replaying older turns into the current tool and busy/idle state.
       if(row.event==='session_start' || Number.isFinite(row.ts) && row.ts<=this.startedAt)responseBoundary=true;
-      if(this.runtime==='claude' && row.event==='stop' && Number.isFinite(row.ts))claudeCutoff ??= row.ts-STOP_HOOK_LAG_MS;
-      const keep=Number.isFinite(row.ts) && row.ts>=this.startedAt && (this.runtime==='claude'?
-        claudeCutoff===null || row.ts>=claudeCutoff:!boundary);
+      if(this.busy.queuedPromptsInTurn && row.event==='stop' && Number.isFinite(row.ts))stopCutoff ??= row.ts-STOP_HOOK_LAG_MS;
+      const keep=Number.isFinite(row.ts) && row.ts>=this.startedAt && (this.busy.queuedPromptsInTurn?
+        stopCutoff===null || row.ts>=stopCutoff:!boundary);
       if(Number.isFinite(row.ts) && (row.ts<=this.startedAt ||
-         this.runtime!=='claude' && ['prompt','stop'].includes(row.event)))boundary=true;
+         !this.busy.queuedPromptsInTurn && ['prompt','stop'].includes(row.event)))boundary=true;
       return {keep,done:boundary && responseBoundary && this.transcriptPath!==null};
     });
   }
@@ -141,10 +148,10 @@ export class SessionActivity {
         const activityAt=row.last_activity_at;
         if(!Number.isFinite(activityAt) || activityAt<this.startedAt || activityAt>row.ts ||
            !Number.isFinite(row.turn_started_at))continue;
-        // AGY statusLine and Claude dequeue can open a turn without a prompt
+        // A statusLine sample or dequeued input can open a turn without a prompt
         // hook. Restore the same durable attempt/admission boundary before
         // reading native samples; newer prompt/Stop boundaries take priority.
-        if(['agy','claude'].includes(this.runtime) && Number.isFinite(row.last_native_activity_at) &&
+        if((this.busy.source==='statusline' || this.busy.queuedPromptsInTurn) && Number.isFinite(row.last_native_activity_at) &&
            row.turn_started_at>=this.startedAt && row.turn_started_at<=row.last_native_activity_at && row.last_native_activity_at<=activityAt &&
            (row.last_response_at===null || Number.isFinite(row.last_response_at)) &&
            (row.event==='quiet_turn_interrupt_attempt' || Number.isSafeInteger(row.control_id) && row.control_id>0) &&
@@ -161,9 +168,9 @@ export class SessionActivity {
            (row.last_response_at===null || Number.isFinite(row.last_response_at)))this.pendingQuietTurnClose=row;
         continue;
       }
-      if(this.runtime==='claude' && row.event==='idle')continue;
-      const startsPrompt=row.event==='prompt' && (this.runtime!=='claude' || !this.turn);
-      if(this.runtime==='claude' && !row.agent_id &&
+      if(row.event==='idle')continue;
+      const startsPrompt=row.event==='prompt' && (!this.busy.queuedPromptsInTurn || !this.turn);
+      if(this.busy.queuedPromptsInTurn && !row.agent_id &&
          ['prompt','pre_tool','post_tool','post_tool_failure','permission_request'].includes(row.event))this.mainAction(row.ts);
       this.lastActivityAt=Math.max(this.lastActivityAt,row.ts);
       this.lastNativeActivityAt=Math.max(this.lastNativeActivityAt,row.ts);
@@ -173,9 +180,9 @@ export class SessionActivity {
         this.busySince=row.event==='prompt' || this.lastIdleAt!==null ? row.ts : this.startedAt;
       }
       if(startsPrompt) {
-        if(this.runtime==='claude'){this.busySince=row.ts;this.lastHookStartAt=row.ts;}
+        if(this.busy.queuedPromptsInTurn){this.busySince=row.ts;this.lastHookStartAt=row.ts;}
         this.turn=true;this.turnStartedAt=row.ts;this.quietTurnAttemptAt=null;this.pendingQuietTurnClose=null;
-        if(this.runtime==='agy') {this.agyIdleSince=null;this.lastResponseAt=Math.max(this.lastResponseAt ?? -Infinity,row.ts);}
+        if(this.busy.source==='statusline') {this.statuslineIdleSince=null;this.lastResponseAt=Math.max(this.lastResponseAt ?? -Infinity,row.ts);}
       }
       const nativeId=typeof row.tool_use_id==='string' && row.tool_use_id.length>0 ? row.tool_use_id : null;
       const id=nativeId ?? (row.event==='pre_tool' ? Symbol('unidentified tool') : null);
@@ -184,72 +191,45 @@ export class SessionActivity {
       }
       if(['post_tool','post_tool_failure'].includes(row.event) && typeof id==='string') {this.completed.add(id);this.tools.delete(id);}
       if(row.event==='stop') {
-        if(this.runtime==='claude') {
+        if(this.busy.queuedPromptsInTurn) {
           this.lastTurnStop={ts:row.ts,actionAt:this.lastMainActionAt<=row.ts?this.lastMainActionAt:-Infinity};
           this.recentTurnStops=this.recentTurnStops.filter(stop=>stop.ts>=row.ts-STOP_HOOK_LAG_MS);
           this.recentTurnStops.push(this.lastTurnStop);
         }
-        if(this.runtime==='agy')this.agyIdleSince=row.ts;
+        if(this.busy.source==='statusline')this.statuslineIdleSince=row.ts;
         this.turn=false;this.closedThrough=Math.max(this.closedThrough,row.ts);
         for(const [key,tool] of this.tools)if(tool.startedAt<=row.ts){this.completed.add(key);this.tools.delete(key);}
       }
     }
   }
   recordTranscript(value,{trackResults=false}={}) {
-    const ts=typeof value.timestamp==='string' ? Date.parse(value.timestamp) : NaN;
-    if(this.runtime==='claude' && value.type==='queue-operation' && value.operation==='dequeue' &&
-       (!value.sessionId || value.sessionId===this.sessionId) && !value.isSidechain && !value.agent_id && !value.agentId &&
-       Number.isFinite(ts) && ts>=this.startedAt)this.lastDequeue=Math.max(this.lastDequeue ?? -Infinity,ts);
-    if(this.runtime==='codex') {
-      if(value.type==='session_meta')this.codexTranscriptMatches=value.payload?.id===this.sessionId;
-      const payload=value.payload;
-      if(!this.codexTranscriptMatches || !Number.isFinite(ts) || ts<this.startedAt || value.isMeta || payload?.isMeta)return;
-      const output=value.type==='response_item' && payload?.type==='message' && payload.role==='assistant' &&
-        Array.isArray(payload.content) && payload.content.some(block=>block.type==='output_text' && typeof block.text==='string' && block.text.length>0);
-      const call=value.type==='response_item' && ['function_call','custom_tool_call'].includes(payload?.type) && typeof payload.name==='string';
-      if(output || call) {
-        this.lastResponseAt=Math.max(this.lastResponseAt ?? -Infinity,ts);
-      }
-      return;
-    }
-    const main=value.sessionId===this.sessionId && !value.isSidechain && !value.agent_id && !value.agentId &&
-      Number.isFinite(ts) && ts>=this.startedAt;
-    if(main) {
-      const message=value.message;
-      const output=value.type==='assistant' && !value.isMeta && !message?.isMeta && !value.isApiErrorMessage && !value.error &&
-        message?.role==='assistant' && typeof message.model==='string' && message.model.length>0 && message.model!=='<synthetic>' &&
-        Array.isArray(message.content) && message.content.some(block=>
-          (block.type==='text' && typeof block.text==='string' && block.text.length>0) ||
-          (block.type==='thinking' && typeof block.thinking==='string' && block.thinking.length>0) || block.type==='tool_use');
-      if(output) {
-        this.lastResponseAt=Math.max(this.lastResponseAt ?? -Infinity,ts);
-        if(this.runtime==='claude')this.mainAction(ts);
-      }
-    }
-    // Remember only a bounded recent window, including gaps before tool hooks. This
-    // also covers a result arriving before its delayed pre-tool hook.
-    if(trackResults) {
-      const content=value.message?.content ?? value.content;
-      if(Array.isArray(content))for(const block of content)if(block.type==='tool_result' && typeof block.tool_use_id==='string') {
-        this.tools.delete(block.tool_use_id);
-        this.results.delete(block.tool_use_id);this.results.add(block.tool_use_id);
-        if(this.results.size>RECENT_TOOL_RESULTS_LIMIT)this.results.delete(this.results.values().next().value);
+    const { dequeueAt, responseAt, mainActionAt, toolResultIds } = this.parser(value);
+    if (dequeueAt !== undefined) this.lastDequeue = Math.max(this.lastDequeue ?? -Infinity, dequeueAt);
+    if (responseAt !== undefined) this.lastResponseAt = Math.max(this.lastResponseAt ?? -Infinity, responseAt);
+    if (mainActionAt !== undefined) this.mainAction(mainActionAt);
+    // Remember a bounded recent window, including results that precede tool hooks.
+    if (trackResults && toolResultIds) {
+      for (const id of toolResultIds) {
+        this.tools.delete(id);
+        this.results.delete(id);
+        this.results.add(id);
+        if (this.results.size > RECENT_TOOL_RESULTS_LIMIT) this.results.delete(this.results.values().next().value);
       }
     }
   }
   readTranscript() {
     this.transcriptPending=false;
     if(!this.transcriptPath){this.forgetDequeue();return null;}
-    let stat;try{stat=fs.statSync(this.transcriptPath);}catch(error){if(this.runtime!=='claude' && error.code!=='ENOENT')throw error;this.forgetDequeue();return null;}
+    let stat;try{stat=fs.statSync(this.transcriptPath);}catch(error){if(this.busy.transcript.readFailure==='throw' && error.code!=='ENOENT')throw error;this.forgetDequeue();return null;}
     const identity=`${stat.dev}:${stat.ino}`;
     if(this.transcriptFd===null || identity!==this.transcriptIdentity || stat.size<this.transcriptOffset) {
       this.forgetDequeue();
       if(this.transcriptFd!==null)fs.closeSync(this.transcriptFd);
       this.transcriptFd=null;
-      try{this.transcriptFd=fs.openSync(this.transcriptPath,'r');}catch(error){if(this.runtime!=='claude')throw error;this.forgetDequeue();return null;}
+      try{this.transcriptFd=fs.openSync(this.transcriptPath,'r');}catch(error){if(this.busy.transcript.readFailure==='throw')throw error;this.forgetDequeue();return null;}
       this.transcriptOffset=0;this.transcriptIdentity=identity;
       this.transcriptPartial=Buffer.alloc(0);this.transcriptSkippingLine=false;
-      this.codexTranscriptMatches=false;
+      this.parser = this.busy.transcript.createParser({ sessionId: this.sessionId, startedAt: this.startedAt });
     }
     const readOffset=this.transcriptOffset;
     let remaining=Math.min(TRANSCRIPT_READ_BUDGET_BYTES,stat.size-this.transcriptOffset);
@@ -258,7 +238,7 @@ export class SessionActivity {
     const buffer=Buffer.alloc(Math.min(64*1024,remaining));
     while(remaining>0) {
       let count;try{count=fs.readSync(this.transcriptFd,buffer,0,Math.min(buffer.length,remaining),this.transcriptOffset);}
-      catch(error){if(this.runtime!=='claude')throw error;this.forgetDequeue();return null;}
+      catch(error){if(this.busy.transcript.readFailure==='throw')throw error;this.forgetDequeue();return null;}
       if(!count)break;
       this.transcriptOffset+=count;remaining-=count;
       let start=0;
@@ -285,8 +265,8 @@ export class SessionActivity {
     if(this.transcriptOffset>readOffset)this.lastActivityAt=Math.max(this.lastActivityAt,stat.mtimeMs);
     return stat.mtimeMs;
   }
-  agyBusy(now) {
-    // AGY publishes statusLine only on changes, with no heartbeat. A run/session
+  statuslineBusy(now) {
+    // The runtime publishes statusLine only on changes, with no heartbeat. A run/session
     // bound task sample remains authoritative until turn close or replacement.
     // Turn reopening and native freshness still require a post-activity sample.
     // Idle samples also close Esc-interrupted turns, which emit no Stop.
@@ -300,28 +280,28 @@ export class SessionActivity {
       // New statusLine samples are native activity; rereading one is not.
       this.lastNativeActivityAt=Math.max(this.lastNativeActivityAt,captured);
     }
-    const runningSubagent=Array.isArray(sample?.subagents) && sample.subagents.some(agent=>agent?.status==='running');
+    const activity = valid ? this.busy.statuslineActivity(sample) : { idle: false, tasksRunning: false };
     this.applyQuietTurnClose();
-    this.agyTasksRunning=Boolean(valid && captured>this.closedThrough && (sample.task_count>0 || runningSubagent));
+    this.statuslineTasksRunning=Boolean(valid && captured>this.closedThrough && activity.tasksRunning);
     // An admitted interrupt fences the preceding non-idle sample. Only a
     // newer native sample can reopen it; idle stability still takes 500ms.
     if(current && captured>this.closedThrough) {
-      if(sample.agent_state==='idle' && !this.agyTasksRunning) {
-        this.agyIdleSince ??= captured;
-        if(now-this.agyIdleSince>=500) {
+      if(activity.idle && !this.statuslineTasksRunning) {
+        this.statuslineIdleSince ??= captured;
+        if(now-this.statuslineIdleSince>=500) {
           this.turn=false;this.tools.clear();return false;
         }
         return true;
       }
-      this.agyIdleSince=null;
+      this.statuslineIdleSince=null;
       if(!this.turn) {this.turnStartedAt=captured;this.quietTurnAttemptAt=null;}
       this.turn=true;
       this.lastActivityAt=Math.max(this.lastActivityAt,captured);
       return true;
     }
     // Fully-idle Stop hooks are authoritative after a short stability interval,
-    // longer than AGY's approximately 240ms gap between queued requests.
-    return this.turn || this.tools.size>0 || this.agyIdleSince===null || now-this.agyIdleSince<500;
+    // longer than the approximately 240ms gap between queued requests.
+    return this.turn || this.tools.size>0 || this.statuslineIdleSince===null || now-this.statuslineIdleSince<500;
   }
   read(now=Date.now(), {subagentTtlMs=1800000}={}) {
     const events=this.recovered?this.reader.read():this.recover();
@@ -329,11 +309,11 @@ export class SessionActivity {
     // independent recovery are still seen by the next tail read.
     if(!this.recovered)this.recoverSubagents();
     this.consume(events);this.recovered=true;
-    const transcriptMtimeMs=this.runtime==='agy'?null:this.readTranscript();
+    const transcriptMtimeMs=this.busy.transcript===UNSUPPORTED?null:this.readTranscript();
     this.applyDequeue();
-    if(this.runtime!=='agy')this.applyQuietTurnClose();
+    if(this.busy.source!=='statusline')this.applyQuietTurnClose();
     // Open API/model waits remain busy until the supervisor admits Escape.
-    const busy=this.runtime==='agy'?this.agyBusy(now):this.turn || this.tools.size>0 || this.runtime==='claude' && this.transcriptPending || now-this.lastActivityAt<3000;
+    const busy=this.busy.source==='statusline'?this.statuslineBusy(now):this.turn || this.tools.size>0 || this.busy.queuedPromptsInTurn && this.transcriptPending || now-this.lastActivityAt<3000;
     if(busy){
       this.idleSince=null;
       // Transcript-only activity has no precise turn boundary. The last idle

@@ -1,0 +1,11 @@
+{
+  "program": "Codex CLI",
+  "version": "0.169.1",
+  "recordedAt": "2026-11-20T17:45:12Z",
+  "how": "Reviewer-recorded on DGX Spark (Linux aarch64) as the dedicated test user zylos-test with a temporary HOME and CODEX_HOME, logged in with an API key (removed after recording), interactive `codex --dangerously-bypass-approvals-and-sandbox` in a private tmux socket (pane 200x50). One small real turn that ran the shell command `echo ok` and replied DONE. transcript.jsonl holds three unmodified lines copied from the rollout file, in this order: session_meta, the assistant message before the tool call, and the tool call. This version records the shell call as response_item custom_tool_call (name exec), not function_call. sessionId is session_meta payload.id; startedAt is the session_meta timestamp (Unix ms).",
+  "sessionId": "01a1fa0f-c683-7200-b5c8-e867b12b2697",
+  "startedAt": 1795196708817,
+  "files": {
+    "transcript.jsonl": "Line 1: session_meta. Line 2: assistant message with output_text. Line 3: custom_tool_call (exec)."
+  }
+}

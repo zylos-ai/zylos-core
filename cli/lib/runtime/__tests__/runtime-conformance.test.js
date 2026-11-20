@@ -27,6 +27,21 @@ for (const id of SUPPORTED_RUNTIMES) {
       assert.equal(typeof sessionSwitch.clearSourceMarker, 'string');
       assert.ok(sessionSwitch.clearSourceMarker);
     }
+    const { busy } = runtime;
+    assert.ok(['hooks', 'statusline'].includes(busy.source));
+    assert.equal(typeof busy.queuedPromptsInTurn, 'boolean');
+    if (busy.source === 'statusline') {
+      assert.equal(typeof busy.statuslineActivity, 'function');
+      assert.equal(busy.transcript, UNSUPPORTED);
+      assert.equal(busy.queuedPromptsInTurn, false);
+    }
+    if (busy.queuedPromptsInTurn) assert.notEqual(busy.transcript, UNSUPPORTED);
+    if (busy.transcript !== UNSUPPORTED) {
+      assert.ok(Object.isFrozen(busy.transcript));
+      assert.equal(typeof busy.transcript.createParser, 'function');
+      assert.ok(['ignore', 'throw'].includes(busy.transcript.readFailure));
+    }
+    if (busy.statuslineActivity !== UNSUPPORTED) assert.equal(typeof busy.statuslineActivity, 'function');
     for (const [name, { required, members }] of Object.entries(RUNTIME_CONTRACT)) {
       assert.ok(Object.hasOwn(runtime, name), `missing capability ${name}`);
       const capability = runtime[name];

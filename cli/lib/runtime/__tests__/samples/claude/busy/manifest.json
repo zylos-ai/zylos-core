@@ -1,0 +1,11 @@
+{
+  "program": "Claude Code",
+  "version": "2.1.327",
+  "recordedAt": "2026-11-20T17:44:02Z",
+  "how": "Reviewer-recorded on DGX Spark (Linux aarch64) as the dedicated test user zylos-test with a temporary HOME, interactive `claude --dangerously-skip-permissions` in a private tmux socket (pane 200x50), API usage billing through a relay endpoint (credentials removed after recording). Two small real turns: one Bash tool call (`sleep 15 && echo ok`), then a tool-free turn during which a second message was typed and queued; Claude Code dequeued it after that turn. transcript.jsonl holds three unmodified lines copied from the session transcript, in this order: the queue-operation dequeue, the main-agent assistant text output that followed it, and the user line carrying the Bash tool_result. sessionId is the transcript's session id; startedAt is the timestamp (Unix ms) of the session's first transcript record.",
+  "sessionId": "82099484-07e7-4e01-b1c6-b31d9f9da8b1",
+  "startedAt": 1795196450958,
+  "files": {
+    "transcript.jsonl": "Line 1: queue-operation dequeue. Line 2: main-agent assistant text output. Line 3: tool_result for the Bash call."
+  }
+}

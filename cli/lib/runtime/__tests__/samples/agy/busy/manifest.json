@@ -1,0 +1,12 @@
+{
+  "program": "Antigravity CLI",
+  "version": "1.5.13",
+  "recordedAt": "2026-11-20T16:33:43Z",
+  "how": "Reviewer-recorded on DGX Spark (Linux aarch64) as the dedicated test user zylos-test with a temporary HOME, in the same session as the input screens (Gemini API key mode, AGY_CLI_DISABLE_AUTO_UPDATE=true, private tmux socket, pane 200x50). The statusLine command copied its stdin unmodified to a new file on every invocation; each sample is one of those files, chosen by the state shown on screen at that moment, without the Zylos statusLine wrapper. Captured between 16:30:04Z and 16:33:43Z.",
+  "files": {
+    "idle.json": "Idle after a completed turn: no task_count and no subagents.",
+    "background-task.json": "A background shell task (sleep) running while the main agent is idle: task_count 1.",
+    "running-subagent.json": "A subagent running a foreground sleep: subagents[0].status running.",
+    "after-escape.json": "After Esc interrupted the subagent turn: subagents[0].status completed, no running work."
+  }
+}

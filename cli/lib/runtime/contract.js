@@ -53,6 +53,12 @@ export const RUNTIME_CONTRACT = Object.freeze({
     pasteCharThreshold: 'required',
     dismissOverlay: 'optional',
   }) }),
+  busy: Object.freeze({ required: true, members: Object.freeze({
+    source: 'required',
+    queuedPromptsInTurn: 'required',
+    transcript: 'optional',
+    statuslineActivity: 'optional',
+  }) }),
   switch: Object.freeze({ required: true, members: Object.freeze({
     command: 'required',
     exitsProcess: 'required',
