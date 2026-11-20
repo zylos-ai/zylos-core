@@ -1,5 +1,9 @@
 import { createActionRunner } from './action-runner.js';
 
+// An upgrade names the engine it upgrades: the one in its request, or else the page's default.
+const upgradeText = (runtime, t) => runtime === 'codex' ? t('confirm.upgrade_codex') : runtime === 'claude' ? t('confirm.upgrade_cc')
+  : t('confirm.upgrade_runtime', { runtime: runtime === 'agy' ? 'Antigravity' : runtime || t('wb.unknown') });
+
 /** The question the page asks before an action that changes the running agent. */
 export function actionConfirmText(action, body, { t, runtime = null, effortLabel = value => value }) {
   const labels = {
@@ -8,8 +12,7 @@ export function actionConfirmText(action, body, { t, runtime = null, effortLabel
     'switch-runtime': () => body?.runtime === 'codex' ? t('confirm.switch_runtime_codex') : t('confirm.switch_runtime', { value: body?.runtime }),
     'switch-model': () => t('confirm.switch_model', { value: body?.model }),
     'switch-effort': () => t('confirm.switch_effort', { value: effortLabel(body?.effort) }),
-    'upgrade-cc': () => runtime === 'codex' ? t('confirm.upgrade_codex') : runtime === 'claude' ? t('confirm.upgrade_cc')
-      : t('confirm.upgrade_runtime', { runtime: runtime === 'agy' ? 'Antigravity' : runtime || t('wb.unknown') }),
+    'upgrade-cc': () => upgradeText(body?.runtime ?? runtime, t),
   };
   return labels[action]?.() || t('confirm.fallback', { action });
 }
@@ -19,7 +22,7 @@ const engineTitle = runtime => runtime === 'codex' ? 'Codex CLI' : runtime === '
  * The question's title names the action. Only actions that interrupt running work (switching the session mode or
  * the engine, restarting a session) get the destructive confirm button; saving a model or upgrading does not.
  */
-export function actionConfirmOptions(action, { t, runtime = null }) {
+export function actionConfirmOptions(action, { t, runtime = null, body = null }) {
   const titles = {
     'switch-mode': ['wb.settings.confirm.sessionMode', true],
     'switch-runtime': ['wb.settings.confirm.runtime', true],
@@ -28,7 +31,7 @@ export function actionConfirmOptions(action, { t, runtime = null }) {
     'switch-effort': ['wb.settings.confirm.models', false],
   };
   if (action === 'upgrade-cc') {
-    const name = engineTitle(runtime);
+    const name = engineTitle(body?.runtime ?? runtime);
     return { title: name ? t('wb.settings.confirm.upgradeEngine', { engine: name }) : t('wb.settings.confirm.upgradeEngineUnknown'), danger: false };
   }
   const [title, danger] = titles[action] ?? ['wb.settings.confirmTitle', true];
@@ -54,7 +57,7 @@ export function createPageActions({ t, send, confirm, readOnly, remoteTarget, sh
   return createActionRunner({
     t, send, confirm, readOnly, remoteTarget,
     confirmText: (action, body) => actionConfirmText(action, body, { t, runtime: runtime(), effortLabel }),
-    confirmOptions: action => actionConfirmOptions(action, { t, runtime: runtime() }),
+    confirmOptions: (action, body) => actionConfirmOptions(action, { t, runtime: runtime(), body }),
     prepare: (action, body) => prepareAction(action, body, shownSession()),
   });
 }

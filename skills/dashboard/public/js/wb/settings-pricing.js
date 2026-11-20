@@ -2,6 +2,7 @@ import { countLabel } from '../count-label.js';
 import { element, icon, runtimeName } from './plain-text.js';
 import { money } from './instance-strip.js';
 import { priceWithEditedBaseRates } from '../pricing-form.js';
+import { mountPagedList } from './paged-list.js';
 
 const fields = ['input', 'output', 'cacheRead', 'cacheCreation'];
 export function collectPriceRows(rows) {
@@ -75,10 +76,11 @@ export function appendPriceRow(tbody, prefix, prices, builtIn, { document = tbod
 }
 export const priceUsers = (snapshot, runtime) => (snapshot?.rows ?? []).filter(row => ['running', 'starting'].includes(row.presence) && row.target?.runtime === runtime);
 const matchPrefix = (prefixes, model) => prefixes.filter(prefix => model?.startsWith(prefix)).sort((a, b) => b.length - a.length)[0];
-export function visiblePricePrefixes(payload, costs = [], expanded = false) {
-  const builtIn = new Set(payload?.builtInModels ?? []), prefixes = Object.keys(payload?.modelPrices ?? {});
-  const used = new Set(costs.map(row => matchPrefix(prefixes, row.model)));
-  return prefixes.filter(prefix => expanded || !builtIn.has(prefix) || used.has(prefix));
+/** Every price row, the most used in the last 7 days first; rows without use keep their saved order. */
+export function orderedPricePrefixes(payload, costs = []) {
+  const totals = priceRowCosts(payload, costs);
+  return Object.keys(payload?.modelPrices ?? {}).map((prefix, index) => ({ prefix, index, cost: totals[prefix] ?? 0 }))
+    .sort((a, b) => b.cost - a.cost || a.index - b.index).map(row => row.prefix);
 }
 /** Last-7-day cost per price row (longest matching prefix wins). */
 export function priceRowCosts(payload, costs = []) {
@@ -89,34 +91,32 @@ export function priceRowCosts(payload, costs = []) {
 
 export function createPricingPanel({ root, host, snapshot, data, usage = {}, document = root.ownerDocument,
   t = key => key, formatTokens = value => Number(value).toLocaleString(), writable = () => true, write, onRuntime = () => {}, onDirty = () => {} }) {
-  let runtime = data.active === 'codex' ? 'codex' : 'claude', expanded = false, stopped = false;
+  let runtime = data.active === 'codex' ? 'codex' : 'claude', stopped = false;
   const saved = structuredClone(data.runtimes), drafts = structuredClone(data.runtimes), usedModels = usage?.models ?? [];
-  let renderedPrefixes = new Set();
   const top = host.querySelector('#settings-pricing-top') ?? root;
   const summary = element(document, 'p', undefined, 'wb-price-sum'), unmatched = element(document, 'div');
   const tabs = element(document, 'div', undefined, 'wb-rt-tabs'); tabs.setAttribute('role', 'tablist');
   const tabButtons = new Map();
   for (const value of ['claude', 'codex']) {
     const button = element(document, 'button', undefined, 'wb-rt-tab'); button.type = 'button'; button.id = 'settings-price-tab-' + value; button.setAttribute('role', 'tab');
-    button.addEventListener('click', () => { try { capture(); runtime = value; expanded = false; render(); } catch (error) { status.textContent = error.message; status.hidden = false; } });
+    button.addEventListener('click', () => { try { capture(); runtime = value; render(); } catch (error) { status.textContent = error.message; status.hidden = false; } });
     tabs.append(button); tabButtons.set(value, button);
   }
-  const showAll = element(document, 'button', t('wb.settings.showAll'), 'wb-link-btn'); showAll.type = 'button'; showAll.id = 'settings-price-show-all';
-  showAll.addEventListener('click', () => { try { capture(); expanded = !expanded; render(); } catch (error) { status.textContent = error.message; status.hidden = false; } });
   if (top === root) root.prepend(summary, unmatched, tabs); else top.append(summary, unmatched, tabs);
   const baseRows = host.querySelector('#settings-price-rows'), priorityRows = host.querySelector('#settings-priority-price-rows');
   const fastInput = host.querySelector('#settings-fast-multiplier'), status = host.querySelector('#settings-status');
-  const moreRow = host.querySelector('#settings-price-more') ?? root; moreRow.append(showAll);
-  const baseTitle = host.querySelector('#settings-price-title'), savebar = host.querySelector('.settings-footer'), dirtyText = host.querySelector('#settings-dirty');
+  const baseTitle = host.querySelector('#settings-price-title'), baseCount = host.querySelector('#settings-price-count'), savebar = host.querySelector('.settings-footer'), dirtyText = host.querySelector('#settings-dirty');
+  // The base price table is one of the settings page's long lists: search by model, eight rows a page. Rows off the
+  // page stay in the table, so what was typed in them is still saved.
+  const table = baseRows.closest('.settings-table-scroll') ?? baseRows;
+  const pages = mountPagedList({ document, t, list: table, rows: () => [...baseRows.querySelectorAll('tr')], text: row => row.querySelector('input')?.value ?? '', placeholder: t('wb.settings.searchModels') });
+  table.before(pages.search); table.after(pages.empty, pages.pager);
   let fastSaved = String(saved.claude?.fastMode?.configuredMultiplier ?? '');
   fastInput?.addEventListener('input', () => { fastInput.classList.toggle('wb-dirty-in', fastInput.value !== fastSaved); refreshDirty(); });
-  function hiddenBuiltIns(payload) {
-    return Object.fromEntries(Object.entries(payload.modelPrices ?? {}).filter(([key]) => (payload.builtInModels ?? []).includes(key) && !renderedPrefixes.has(key)));
-  }
   function capture() {
     const payload = drafts[runtime];
     const rendered = collectPriceRows([...baseRows.querySelectorAll('tr')]);
-    payload.modelPrices = { ...hiddenBuiltIns(payload), ...rendered };
+    payload.modelPrices = rendered;
     if (runtime === 'codex') payload.priorityModelPrices = collectPriceRows([...priorityRows.querySelectorAll('tr')]);
     else if (fastInput.value !== fastInput.dataset.initialValue) {
       const value = fastInput.value === '' ? null : Number(fastInput.value);
@@ -129,7 +129,7 @@ export function createPricingPanel({ root, host, snapshot, data, usage = {}, doc
     const counts = {};
     for (const value of ['claude', 'codex']) {
       const payload = drafts[value], original = saved[value] ?? {};
-      const base = value === runtime ? { ...hiddenBuiltIns(payload), ...draftPriceRows([...baseRows.querySelectorAll('tr')]) } : payload.modelPrices;
+      const base = value === runtime ? draftPriceRows([...baseRows.querySelectorAll('tr')]) : payload.modelPrices;
       let count = countPriceChanges(original.modelPrices, base);
       if (value === 'codex') count += countPriceChanges(original.priorityModelPrices, value === runtime ? draftPriceRows([...priorityRows.querySelectorAll('tr')]) : payload.priorityModelPrices);
       const fast = value === runtime && value === 'claude' ? fastInput?.value ?? '' : Object.hasOwn(payload, '_editedFastMultiplier') ? String(payload._editedFastMultiplier ?? '') : fastSaved;
@@ -159,10 +159,9 @@ export function createPricingPanel({ root, host, snapshot, data, usage = {}, doc
     for (const [value, button] of tabButtons) button.setAttribute('aria-selected', String(value === runtime));
     if (baseTitle) baseTitle.textContent = t('wb.settings.basePrices', { runtime: runtimeName(runtime) });
     baseRows.replaceChildren();
-    const shown = visiblePricePrefixes(payload, costs, expanded), rowCosts = priceRowCosts(payload, costs);
+    const rowCosts = priceRowCosts(payload, costs);
     const max = Math.max(1, ...Object.values(rowCosts));
-    renderedPrefixes = new Set(shown);
-    for (const key of shown) appendPriceRow(baseRows, key, payload.modelPrices[key], (payload.builtInModels ?? []).includes(key),
+    for (const key of orderedPricePrefixes(payload, costs)) appendPriceRow(baseRows, key, payload.modelPrices[key], (payload.builtInModels ?? []).includes(key),
       { document, t, saved: original.modelPrices?.[key], cost: { value: rowCosts[key] ?? 0, max }, onChange: refreshDirty });
     priorityRows.replaceChildren();
     for (const [key, prices] of Object.entries(payload.priorityModelPrices ?? {})) appendPriceRow(priorityRows, key, prices, (payload.builtInPriorityModels ?? []).includes(key),
@@ -193,16 +192,16 @@ export function createPricingPanel({ root, host, snapshot, data, usage = {}, doc
       const add = element(document, 'button', t('wb.settings.addPrice'), 'wb-btn'); add.type = 'button'; add.disabled = !writable();
       add.addEventListener('click', () => {
         try {
-          capture(); runtime = item.runtime === 'codex' ? 'codex' : 'claude'; expanded = true;
+          capture(); runtime = item.runtime === 'codex' ? 'codex' : 'claude';
           drafts[runtime].modelPrices[item.model] ??= { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
           render();
+          pages.refresh({ reveal: [...baseRows.querySelectorAll('tr')].find(row => row.dataset.prefix === item.model) });
         } catch (error) { status.textContent = error.message; status.hidden = false; }
       });
       line.append(icon(document, 'alert'), text, add); unmatched.append(line);
     }
-    const total = Object.keys(payload.modelPrices ?? {}).length;
-    showAll.textContent = expanded ? t('wb.settings.showUsed') : t('wb.settings.showAllN', { count: total, hidden: total - shown.length });
-    showAll.hidden = !expanded && shown.length === total;
+    if (baseCount) baseCount.textContent = t('wb.settings.priceCount', { count: Object.keys(payload.modelPrices ?? {}).length });
+    pages.refresh();
     [...baseRows.querySelectorAll('input'), ...baseRows.querySelectorAll('button'), ...priorityRows.querySelectorAll('input'), ...priorityRows.querySelectorAll('button'), ...host.querySelectorAll('#settings-add-model, #settings-add-priority-model, #settings-fast-multiplier, #settings-save')].forEach(node => { node.disabled = !writable(); });
     refreshDirty();
   }
@@ -242,9 +241,10 @@ export function createPricingPanel({ root, host, snapshot, data, usage = {}, doc
       if (stopped || !writable()) return;
       const row = appendPriceRow(priority ? priorityRows : baseRows, '', { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }, false,
         { document, t, cost: priority ? undefined : { value: 0, max: 1 }, onChange: refreshDirty });
+      if (!priority) pages.refresh({ reveal: row });
       refreshDirty(); row.querySelector('input')?.focus?.();
     },
     runtime: () => runtime,
-    destroy() { stopped = true; tabs.remove(); summary.remove(); unmatched.remove(); showAll.remove(); if (savebar) savebar.hidden = true; onDirty(0); },
+    destroy() { stopped = true; tabs.remove(); summary.remove(); unmatched.remove(); pages.search.remove(); pages.empty.remove(); pages.pager.remove(); table.style.minHeight = ''; if (savebar) savebar.hidden = true; onDirty(0); },
   };
 }

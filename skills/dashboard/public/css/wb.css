@@ -174,10 +174,10 @@
 /* Text in every button, segment, tab, tag and pill sits in the middle of its box: flex centring and one line
    height (Latin, Chinese, and icon with text alike), not padding. Zero specificity, so a control's own display
    (hidden, column layouts) and fixed line heights still apply; the pill keeps its height with min-height. */
-:where(.wb-btn, .wb-icon-btn, .wb-link-btn, .wb-tech-btn, .header-icon-btn, .app-header .tab, .wb-seg button, .wb-seg2 button, .wb-seg-sm button, .wb-tag, .wb-pill, .connection-pill, .wb-set-nav-btn, .wb-set-drawer-btn, .wb-detail-tabs button, .wb-chip, .wb-scope-b) { display: inline-flex; align-items: center; }
+:where(.wb-btn, .wb-icon-btn, .wb-link-btn, .wb-tech-btn, .header-icon-btn, .app-header .tab, .wb-seg button, .wb-seg2 button, .wb-seg-sm button, .wb-tag, .wb-pill, .wb-set-nav-btn, .wb-set-drawer-btn, .wb-detail-tabs button, .wb-chip, .wb-scope-b) { display: inline-flex; align-items: center; }
 :where(.wb-btn, .header-icon-btn, .app-header .tab, .wb-seg button, .wb-seg2 button, .wb-seg-sm button, .wb-detail-tabs button, .wb-chip) { justify-content: center; }
 /* `button { font: inherit }` would bring back the page's 1.5 line height, so the line height is set at class weight. */
-:is(.wb-btn, .wb-icon-btn, .wb-link-btn, .wb-tech-btn, .header-icon-btn, .wb-set-nav-btn, .wb-set-drawer-btn, .wb-pill, .connection-pill), .wb-seg button, .wb-seg2 button, .wb-detail-tabs button, .app-header .tab, .wb-chip { line-height: 1.2; }
+:is(.wb-btn, .wb-icon-btn, .wb-link-btn, .wb-tech-btn, .header-icon-btn, .wb-set-nav-btn, .wb-set-drawer-btn, .wb-pill), .wb-seg button, .wb-seg2 button, .wb-detail-tabs button, .app-header .tab, .wb-chip { line-height: 1.2; }
 .wb-pill { min-height: 24px; }
 .wb-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--text-muted); }
 
@@ -1188,6 +1188,23 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-set-drawer-h, .wb-set-drawer-btn, .wb-set-scrim { display: none; }
 .wb-set-body { flex: 1; min-width: 0; padding: 22px 28px 40px; }
 .wb-set-wrap { max-width: 920px; }
+/* The long lists (session hosts, keys, other machines, prices): search, one page of rows, the pager. Rows off the
+   page are hidden in place. */
+.wb-set-body :is(.wb-host-row, .wb-agent-row, tr)[hidden], .wb-set-body :is(.wb-plist-search, .wb-plist-pager, .wb-plist-empty)[hidden] { display: none; }
+.wb-plist-search { margin: 0 0 10px; }
+.wb-plist-search .wb-input { width: min(100%, 260px); }
+.wb-plist-pager { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 10px; color: var(--text-dim); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.wb-plist-prev .wb-ico { transform: rotate(180deg); }
+.wb-plist-empty { margin: 8px 0; }
+/* Allowlisted channels as tags; the × removes one. */
+.wb-host-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; }
+.wb-host-chip { display: inline-flex; align-items: center; gap: 2px; height: 28px; padding: 0 2px 0 10px; border: 1px solid var(--wb-line-strong); border-radius: 14px; color: var(--text); font-size: 12.5px; }
+.wb-host-chip-x { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-muted); cursor: pointer; }
+.wb-host-chip-x:hover { background: var(--wb-hover); color: var(--text); }
+.wb-version-line { margin: 0 0 4px; }
+.wb-card-lead { margin: 0 0 10px; }
+.wb-mode-note b { color: var(--text); font-weight: 600; }
+#action-mode-status:empty { display: none; }
 .wb-set-status:empty { display: none; }
 .wb-set-status > [hidden] { display: none; }
 .wb-set-sec[hidden] { display: none; }
@@ -1570,6 +1587,11 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
   .wb-set-drawer-cur > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wb-set-drawer-btn .wb-ico { color: var(--text-dim); }
   .wb-set-drawer-btn > .wb-ico:last-child { transform: rotate(90deg); }
+  /* The section button stays under the top bar while the page scrolls, so another section is always one tap away. */
+  .wb-set-drawer-btn { position: sticky; top: var(--wb-header-h); z-index: 5; box-shadow: 0 0 0 6px var(--bg); }
+  .wb-plist-search .wb-input { width: 100%; }
+  .wb-host-chip { height: 36px; padding-left: 12px; border-radius: 18px; }
+  .wb-host-chip-x { width: 36px; height: 36px; }
   @media (prefers-reduced-motion: reduce) { .wb-set-nav, .wb-set-scrim, .wb-set-drawer-open :is(.wb-set-nav, .wb-set-scrim) { transition: none; } }
   /* One 12px page edge and a lighter card padding leave the cards' content most of the width. */
   .wb-set-body { padding: 12px 12px 32px; }

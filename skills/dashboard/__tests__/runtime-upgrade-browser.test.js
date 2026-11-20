@@ -45,12 +45,12 @@ test('Antigravity upgrade labels, confirmation and lost-result feedback work acr
         const page = await context.newPage(); page.setDefaultTimeout(10000);
         await page.goto(base); await openDashboardTab(page, 'settings');
         if (width === 390) await page.locator('.wb-set-drawer-btn').click();
-        await page.locator('[data-settings-section="ui"]').click();
+        await page.locator('[data-settings-section="defaults"]').click();
         const button = page.locator('[data-action="upgrade-cc"]');
         await button.waitFor({ state: 'visible' });
         assert.match(await button.textContent(), /Antigravity/);
-        assert.match(await page.locator('#settings-version').textContent(), /Antigravity · v1.5.11/);
-        assert.doesNotMatch(await page.locator('#settings-version').textContent(), /CC|Claude/);
+        assert.match(await page.locator('#settings-engine-version').textContent(), /Antigravity · v1.5.11/);
+        assert.doesNotMatch(await page.locator('#settings-engine-version').textContent(), /CC|Claude/);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
         const geometry = await button.boundingBox();
         assert.ok(geometry.x >= 0 && geometry.x + geometry.width <= width);

@@ -206,6 +206,7 @@ function workbenchAnswerData(url, now) {
   if (p === '/api/instance') return workbenchInstanceAnswer(workbenchSnapshot(now), now);
   if (p.endsWith('/events')) { const query = new URL(url); query.searchParams.set('session_group', decodeURIComponent(p.split('/')[3])); return timeline(query, now); }
   if (p === '/api/instance/runtime-options') return meta;
+  if (p === '/api/instance/core-update') return { current: '1.0.0', latest: '1.0.0', hasUpdate: false, checkedAt: iso(now) };
   if (p === '/api/settings/pricing') return { active: 'claude', runtimes: { claude: { builtInModels: ['opus'], modelPrices: { opus: { input: 15, output: 75, cacheRead: 1.5, cacheCreation: 18.75 } },
     fastMode: { configuredMultiplier: null } },
   codex: { builtInModels: ['gpt-5.5'], modelPrices: { 'gpt-5.5': { input: 1.25, output: 10, cacheRead: 0.125, cacheCreation: 0 } },

@@ -97,7 +97,6 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     },
     runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget,
     observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide,
-    renderConnection() {}, isSseOpen: () => false,
     t: (key) => key,
     clearTimeout(id) { if (timeouts[id - 1]) timeouts[id - 1].cancelled = true; },
     clearInterval() {},
@@ -216,27 +215,6 @@ test('SSE state updates preserve the agent identity color between full state rea
   // for runtime_info, so a live update does not drop the identity colour.
   assert.match(app, /const prevAgent = state\.dashboardState\?\.agent;/);
   assert.match(app, /if \(!data\.agent && prevAgent\) state\.dashboardState\.agent = prevAgent;/);
-});
-
-test('Codex runtime renders CLI update badge in settings', () => {
-  const version = fs.readFileSync(new URL('../public/js/wb/settings-version.js', import.meta.url), 'utf8');
-  assert.match(version, /ri\[runtime\]\?\.installed/);
-  assert.match(version, /ri\[runtime\]\?\.update/);
-  assert.match(version, /badge\.classList\.toggle\('action-ver-dot', !!update\)/);
-});
-
-test('zylos-core upgrade stays an agent hint in settings', () => {
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
-  const version = fs.readFileSync(new URL('../public/js/wb/settings-version.js', import.meta.url), 'utf8');
-  const en = JSON.parse(fs.readFileSync(new URL('../public/i18n/en.json', import.meta.url), 'utf8'));
-  const zh = JSON.parse(fs.readFileSync(new URL('../public/i18n/zh.json', import.meta.url), 'utf8'));
-  assert.doesNotMatch(app, /data-action="upgrade-zylos"/);
-  assert.doesNotMatch(app, /action-zylos-ver/);
-  assert.match(app, /data-action="upgrade-cc"/);
-  assert.match(version, /hint\.title = t\('info.zylos_update_hint'/);
-  assert.match(version, /onHint\(hint\)/);
-  assert.match(en['info.zylos_update_hint'], /ask your agent: "Please upgrade your zylos-core to the latest version\."/);
-  assert.match(zh['info.zylos_update_hint'], /请升级你的 zylos-core 到最新版本/);
 });
 
 function fleetFixture() {
@@ -475,8 +453,6 @@ test('Agent Fleet uses SSE fleet events with one-shot fetch fallback', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
   assert.match(app, /function clearFleetFallback\(\)/);
   assert.match(app, /function shouldReceiveFleetEvents\(\)/);
-  assert.match(app, /function isSseOpen\(\)/);
-  assert.match(app, /!!window\.EventSource && state\.eventSource\?\.readyState === window\.EventSource\.OPEN/);
   assert.match(app, /state\.fleetViewActive && document\.visibilityState !== 'hidden'/);
   assert.match(app, /document\.addEventListener\('visibilitychange', \(\) => \{/);
   // #247: returning to the foreground refetches immediately instead of
@@ -1281,15 +1257,12 @@ test('Observer lifecycle status refresh cannot replace a newer same-target statu
   assert.equal(observerPageShown(h), false);
 });
 
-test('Observer popstate reports route failures without an unhandled rejection or stray stream', async () => {
+test('Observer popstate route failures cause no unhandled rejection or stray stream', async () => {
   const h = observerUiHarness();
-  const states = [];
-  h.context.renderConnection = (state) => states.push(state);
   h.context.renderAll = () => { throw new Error('render failed'); };
   h.context.initTabs();
   h.context.window.location.pathname = '/fleet/alpha/observer';
   await assert.doesNotReject(h.listeners.popstate());
-  assert.deepEqual(states, ['degraded']);
   assert.equal(h.sockets.length, 0);
 });
 

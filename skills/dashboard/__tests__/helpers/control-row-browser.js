@@ -198,6 +198,9 @@ export async function runControlRows(t, sandbox) {
       }
       if (!survey) {
         await page.goto(fixture.base + '/settings');
+        // The default engine card is in the AI settings section; settings opens on the account section.
+        if (width === 390) await page.locator('.wb-set-drawer-btn').click();
+        await page.locator('[data-settings-section="defaults"]').click();
         await page.locator('#settings-use-codex').click(); await settle();
         await checkRow(page, 'default engine', width === 390 ? '#settings-save-runtime, #settings-undo-runtime' : '.wb-seg-engine, #settings-save-runtime, #settings-undo-runtime', width === 390 ? { expectedHeight: 36 } : {});
         assert.ok(await page.locator('.wb-seg-engine').evaluate(el => el.getBoundingClientRect().height) > 36, 'engine retains its natural two-line height');

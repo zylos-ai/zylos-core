@@ -43,6 +43,13 @@ test('upgrading the CLI from the session controls asks first under its own title
   await c2.upgrade.dispatch('click');
   assert.deepEqual(yes.asked, ['confirm.upgrade_codex'], 'a Codex machine is asked about upgrading Codex');
   assert.deepEqual(yes.sent, [{ action: 'upgrade-cc', body: { runtime: 'codex' } }]);
+  // The default engine card upgrades the engine chosen in it, even when the page's default is another one.
+  const chosen = actions({ runtime: 'claude' }), c3 = controls();
+  bindActionControls(c3.root, chosen.run, { runtime: () => 'codex' });
+  await c3.upgrade.dispatch('click');
+  assert.deepEqual(chosen.asked, ['confirm.upgrade_codex']);
+  assert.deepEqual(chosen.options, [{ title: 'wb.settings.confirm.upgradeEngine:{"engine":"Codex CLI"}', danger: false }]);
+  assert.deepEqual(chosen.sent, [{ action: 'upgrade-cc', body: { runtime: 'codex' } }]);
 });
 
 test('switching the session mode asks first by the mode\'s shown name and a destructive button; a cancelled switch restores the mode and sends nothing', async () => {

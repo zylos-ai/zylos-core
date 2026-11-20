@@ -99,7 +99,7 @@ export function runtimeSaveConfirmation(runtime, snapshot, t = key => key) {
 }
 
 export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoot, document = root.ownerDocument,
-  t = key => key, read, execute, confirm = async () => false, writable = () => true, onGroup = () => {} } = {}) {
+  t = key => key, read, execute, confirm = async () => false, writable = () => true, onGroup = () => {}, version = () => {} } = {}) {
   // Without a confirmation dialog no change runs: every save below asks once before it acts.
   root.replaceChildren();
   const groups = defaultGroups(snapshot, page);
@@ -213,11 +213,16 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   }
   split.append(followerCol, overrideCol);
   const engineNote = element(document, 'p', t('wb.settings.runtimeNote'), 'wb-note');
-  engine.card.append(line, engineResult, split, engineNote); root.append(engine.card);
+  // The chosen engine's CLI version and its upgrade button: choosing the other engine shows and upgrades that one.
+  const engineVersion = element(document, 'div', undefined, 'wb-engine-version'); engineVersion.id = 'settings-engine-version';
+  const selectedRuntime = () => draftRuntime ?? groups.baseline ?? 'claude';
+  const drawVersion = () => version(engineVersion, selectedRuntime());
+  engine.card.append(line, engineVersion, engineResult, split, engineNote); root.append(engine.card);
   function redrawEngine() {
     for (const runtime of runtimes) segButtons[runtime].setAttribute('aria-pressed', String(draftRuntime === runtime));
     const changed = draftRuntime != null && draftRuntime !== groups.baseline;
     saveRuntime.hidden = undoRuntime.hidden = !changed;
+    drawVersion();
     refreshLocks();
   }
 
@@ -359,7 +364,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   });
   function refreshLocks() { for (const { node, lock: fn } of controls) node.disabled = fn(); }
   redrawEngine(); redrawModels();
-  return { destroy: () => { destroyed = true; search.destroy(); }, refreshLocks };
+  return { destroy: () => { destroyed = true; search.destroy(); }, refreshLocks, selectedRuntime, refreshVersion: drawVersion };
 }
 
 /** One global value, loaded and saved through the selected instance's normal action path. */
