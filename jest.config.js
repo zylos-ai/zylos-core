@@ -23,6 +23,8 @@ export default {
     '<rootDir>/test/tmux-dashboard-reads.integration.test.js',
     '<rootDir>/test/claude-upgrade-process.integration.test.js',
     '<rootDir>/test/dashboard-display-browser.test.js',
+    '<rootDir>/test/session-host-browser.test.js',
+    '<rootDir>/test/session-host-cli.integration.test.js',
     '<rootDir>/test/self-upgrade-output.integration.test.js',
     '<rootDir>/test/upgrade-running-output.integration.test.js',
     '<rootDir>/test/fleet-attention.integration.test.js',

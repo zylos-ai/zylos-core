@@ -34,6 +34,7 @@ export { composeSessionGroup, parseSessionGroup } from './c4-session-group.js';
 const store = createStore(getDb, {
   validateComponent: name => validateChannel(name, true),
   readConfig: coreConfig.readZylosConfigStrict,
+  readSessionMode: coreConfig.readSessionMode,
   resolveTarget: observeCoreTarget,
   validateModel: (runtime, pair) => {
     try {
@@ -426,6 +427,11 @@ export const ensureChannelNamespace = (...args) => store.ensureChannelNamespace(
 export const registerChannelNamespace = (...args) => store.registerChannelNamespace(...args);
 export const resolveSessionGroup = (...args) => store.resolveSessionGroup(...args);
 export const insertConversation = (...args) => store.insertConversation(...args);
+export const getSessionHost = (...args) => store.getSessionHost(...args);
+export const attachSessionHost = (...args) => store.attachSessionHost(...args);
+export const detachSessionHost = (...args) => store.detachSessionHost(...args);
+export const listSessionHosts = (...args) => store.listSessionHosts(...args);
+export const setSessionHostAllowlist = (...args) => store.setSessionHostAllowlist(...args);
 export const insertInternalMessage = (...args) => store.insertInternalMessage(...args);
 export const buildTargetBinding = async (...args) => await store.buildTargetBinding(...args);
 export const getOriginNeed = (...args) => store.getOriginNeed(...args);

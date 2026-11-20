@@ -53,7 +53,7 @@ function fixture(t, { installed = false } = {}) {
   const databasePath = path.join(zylos, 'comm-bridge', 'c4.db');
   const db = new Database(databasePath);
   guardDatabase(db, schema); db.pragma('journal_mode=WAL');
-  const store = createStore(db, { validateComponent: name => ['chat', 'dashboard'].includes(name) && fs.existsSync(path.join(skillsDir, name)) });
+  const store = createStore(db, { readSessionMode: () => ({ mode: 'multi' }), validateComponent: name => ['chat', 'dashboard'].includes(name) && fs.existsSync(path.join(skillsDir, name)) });
   const api = { ...store, getDb: () => db };
   t.after(() => { db.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const options = { api, skillsDir, env };
@@ -494,4 +494,23 @@ test('the Origin reply exception is only for Origin and only for inbound rows re
   f.env.ZYLOS_SESSION_GROUP = 'chat:a';
   f.queryGroup('b\n');
   await assert.rejects(sendExternal({ channel: 'chat', endpoint: 'chat-b|msg:1' }, body, f.options), { code: 'CROSS_SESSION_OUTBOUND' });
+});
+
+test('a host can send for an address under its own history until detached', async t => {
+  const f = fixture(t);
+  f.seed('recipient', 'a');
+  f.seed('host-home', 'b');
+  f.seed('unrelated-home', 'd');
+  f.store.attachSessionHost('chat:a', 'chat:b', 'chat:b');
+  f.env.ZYLOS_SESSION_GROUP = 'chat:b';
+  sent(f, await sendExternal(request, body, f.options), 'chat:b');
+  f.env.ZYLOS_SESSION_GROUP = 'chat:a';
+  sent(f, await sendExternal(request, body, f.options), 'chat:a');
+  f.env.ZYLOS_SESSION_GROUP = 'chat:d';
+  await assert.rejects(sendExternal(request, body, f.options), { code: 'CROSS_SESSION_OUTBOUND' });
+  assert.equal(f.store.detachSessionHost('chat:a'), true);
+  f.env.ZYLOS_SESSION_GROUP = 'chat:b';
+  await assert.rejects(sendExternal(request, body, f.options), { code: 'CROSS_SESSION_OUTBOUND' });
+  assert.equal(f.deliveries().length, 2);
+  assert.equal(f.count('conversations'), 5);
 });

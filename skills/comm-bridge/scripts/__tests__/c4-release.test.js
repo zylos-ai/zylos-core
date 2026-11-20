@@ -65,7 +65,7 @@ test('new databases validate reason nullability but leave reason values to the w
   assertUnrestrictedReason(db);
 });
 
-test('a version three opener refuses a version four database without changing it', t => {
+test('an older opener refuses the current database without changing it', t => {
   const { db } = fixture(t);
   const before = snapshot(db);
   const previous = { SUPPORTED_SCHEMA_VERSION: 3, inspectSchema: connection => inspectLayout(connection, 'c4', 3, owner.TABLES) };
