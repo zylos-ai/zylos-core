@@ -4,9 +4,8 @@ import { runtimeExecutable } from '../session-command.js';
 
 const execute = promisify(execFile);
 
-export function createIdentity(id, { launcherWrapsNative = false } = {}) {
+export function createIdentity(id) {
   return Object.freeze({
-    launcherWrapsNative,
     findExecutable(env = process.env) {
       try {
         return runtimeExecutable(id, env);

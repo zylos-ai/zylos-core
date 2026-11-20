@@ -10,7 +10,10 @@ import { createIdentity } from '../shared/identity.js';
 import { createUpgradeCli } from '../shared/upgrade-cli.js';
 
 const id = 'claude';
-const identity = createIdentity(id, { launcherWrapsNative: false });
+const identity = Object.freeze({
+  ...createIdentity(id),
+  launcherWrapsNative: false,
+});
 
 export default Object.freeze({
   id,
