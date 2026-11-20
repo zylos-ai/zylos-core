@@ -25,7 +25,7 @@ test('actions that change the running agent ask first, and cancelling sends noth
     assert.equal(yes.asked.length, 1);
     assert.deepEqual(yes.sent, [{ action, body: { value: 1 } }]);
   }
-  assert.deepEqual([...CONFIRM_ACTIONS].sort(), ['restart-session', 'switch-effort', 'switch-mode', 'switch-model', 'switch-runtime', 'upgrade-cc', 'upgrade-zylos']);
+  assert.deepEqual([...CONFIRM_ACTIONS].sort(), ['restart-session', 'switch-effort', 'switch-mode', 'switch-model', 'switch-runtime', 'upgrade-cc']);
 });
 
 test('other actions run without asking', async () => {

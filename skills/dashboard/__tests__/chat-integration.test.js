@@ -472,7 +472,7 @@ registerIntegrationCase('remote chat off, on and off enforces both direct and pr
         const search = await client.request('/api/groups/search?q=' + active.draft.localId, options);
         assert.equal(search.status, 200); assert.equal(search.body.rows.length, 1);
         assert.ok(!search.text.includes(fakeCredential));
-        const activity = await client.request('/api/groups/activity?range=60m', options);
+        const activity = await client.request('/api/groups/activity?range=60m&ids=' + encodeURIComponent(row.id), options);
         assert.equal(activity.status, 200); assert.ok(activity.body.groups[row.id]);
         assert.equal(activity.body.groups[row.id].inbound.length, 2);
       }

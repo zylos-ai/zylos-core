@@ -7,7 +7,7 @@ import { handleAction } from '../actions.js';
 import { jsonResponse } from '../http.js';
 
 // Every executable comes from this test's private PATH; real CLIs cannot run.
-test('CLI upgrades invoke only the instance default runtime and preserve existing results', async t => {
+test('CLI upgrades invoke the requested runtime and preserve existing results', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-upgrades-'));
   const calls = path.join(root, 'calls');
   const saved = process.env.PATH;
@@ -15,9 +15,9 @@ test('CLI upgrades invoke only the instance default runtime and preserve existin
   for (const runtime of ['agy', 'claude', 'codex']) fs.writeFileSync(path.join(root, runtime),
     `#!${process.execPath}\nimport fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({command:${JSON.stringify(runtime)}, args:process.argv.slice(2), auto:process.env.AGY_CLI_DISABLE_AUTO_UPDATE})+'\\n'); console.log('updated');`, { mode: 0o755 });
   process.env.PATH = root;
-  for (const runtime of ['agy', 'claude', 'codex', 'future', 'toString']) {
-    const result = await handleAction('upgrade-cc', { testRuntime: runtime, runtime: 'claude' }, { runtime, zylosDir: root });
-    if (['future', 'toString'].includes(runtime)) {
+  for (const runtime of ['agy', 'claude', 'codex', 'future', 'toString', undefined]) {
+    const result = await handleAction('upgrade-cc', { runtime }, { runtime: 'claude', zylosDir: root });
+    if (['future', 'toString', undefined].includes(runtime)) {
       assert.equal(result.ok, false); assert.equal(result.error, 'runtime_unsupported');
       assert.equal(jsonResponse(200, result, { command: true }).status, 400);
     } else {
@@ -39,7 +39,7 @@ test('Antigravity nonzero exit preserves the error without success or restart', 
   t.after(() => { process.env.PATH = saved; fs.rmSync(root, { recursive: true, force: true }); });
   fs.writeFileSync(path.join(root, 'agy'), `#!${process.execPath}\nconsole.error('download refused'); process.exit(1);`, { mode: 0o755 });
   process.env.PATH = root;
-  const result = await handleAction('upgrade-cc', { case: 'failed' }, { runtime: 'agy', zylosDir: root });
+  const result = await handleAction('upgrade-cc', { runtime: 'agy', case: 'failed' }, { zylosDir: root });
   assert.equal(result.ok, false); assert.equal(result.error, 'upgrade_failed');
   assert.equal(result.message, 'download refused\n');
   assert.equal(result.messageKey, 'result.upgrade_failed');
@@ -87,7 +87,7 @@ test('Antigravity upgrade uses the session HTTPS_PROXY precedence', async t => {
     else fs.writeFileSync(path.join(root, '.env'), entry.dotenv);
     if (entry.inherited === undefined) delete process.env.HTTPS_PROXY;
     else process.env.HTTPS_PROXY = entry.inherited;
-    const result = await handleAction('upgrade-cc', { case: entry.id }, { runtime: 'agy', zylosDir: root });
+    const result = await handleAction('upgrade-cc', { runtime: 'agy', case: entry.id }, { zylosDir: root });
     assert.equal(result.ok, true, entry.id);
     const recorded = JSON.parse(fs.readFileSync(calls, 'utf8').trim().split('\n').at(-1));
     assert.deepEqual(recorded.args, ['update']);

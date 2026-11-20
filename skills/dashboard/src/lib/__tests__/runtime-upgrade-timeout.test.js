@@ -11,7 +11,7 @@ mock.module('node:child_process', { namedExports: { ...child,
 const { handleAction } = await import('../actions.js');
 const { jsonResponse } = await import('../http.js');
 test('Antigravity timeout reports incomplete and allows five minutes without restarting a session', async () => {
-  const result = await handleAction('upgrade-cc', {}, { runtime: 'agy' });
+  const result = await handleAction('upgrade-cc', { runtime: 'agy' }, {});
   assert.equal(result.ok, false); assert.equal(result.error, 'deadline_exceeded');
   assert.equal(result.messageKey, 'result.runtime_upgrade_incomplete');
   assert.deepEqual(result.messageParams, { runtime: 'Antigravity', minutes: 5 });

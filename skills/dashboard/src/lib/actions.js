@@ -1,16 +1,14 @@
 import { handleCoreAction } from './core-actions.js';
-import { execFile, spawn } from 'node:child_process';
-import https from 'node:https';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { getCodexModels, codexEffortsForModel } from './codex-models.js';
-import { isNewerVersion } from './version-utils.js';
 import { loadCoreModule } from './core-modules.js';
 
-const { DEFAULT_RUNTIME, findRuntime, runtimeDisplayName, runtimesWith } = await loadCoreModule('runtime/index.js');
+const { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES, findRuntime, runtimeDisplayName, runtimesWith } = await loadCoreModule('runtime/index.js');
 const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
 const { modelThreshold, thresholdLimit, readDefaultModels, readCodexModelWindows, migrateModelThresholds, setModelThreshold } = await loadCoreModule('model-rotation-thresholds.js');
 const { resolveSessionHotTtl, HOT_TTL_MIN_MINUTES, HOT_TTL_MAX_MINUTES } = await loadCoreModule('session-hot-ttl.js');
@@ -107,6 +105,12 @@ export async function handleAction(action, body, config, { timezone } = {}) {
   const zylosDir = config.zylosDir || path.join(os.homedir(), 'zylos');
   log(reqId, `=> ${action} ${JSON.stringify(body || {})}`);
 
+  if (action === 'upgrade-cc' && !SUPPORTED_RUNTIMES.includes(body?.runtime)) {
+    return { ok: false, error: 'runtime_unsupported',
+      message: `Choose ${SUPPORTED_RUNTIMES.slice(0, -1).join(', ')} or ${SUPPORTED_RUNTIMES.at(-1)} for the CLI upgrade.`,
+      messageKey: 'result.runtime_upgrade_unsupported' };
+  }
+
   // Timezone restarts act only on the explicitly confirmed remaining services;
   // immediate partial-failure retries must reach fresh discovery.
   if (action !== 'restart-timezone-services' && isDuplicate(action, body)) {
@@ -127,8 +131,7 @@ export async function handleAction(action, body, config, { timezone } = {}) {
       case 'switch-effort': result = await switchEffort(reqId, body, config, zylosDir); break;
       case 'set-threshold': result = await setThreshold(reqId, body, config, zylosDir); break;
       case 'set-session-hot-ttl': result = await setSessionHotTtl(reqId, body, zylosDir); break;
-      case 'upgrade-zylos': result = await upgradeZylos(reqId, zylosDir); break;
-      case 'upgrade-cc': result = await upgradeRuntimeCli(reqId, config); break;
+      case 'upgrade-cc': result = await upgradeRuntimeCli(reqId, body.runtime, zylosDir); break;
       default: result = { ok: false, error: 'unknown_action', messageKey: 'result.unknown_action' };
     }
   } catch (err) {
@@ -236,76 +239,7 @@ async function switchEffort(reqId, body, config, zylosDir) {
   return { ok: true, message: `Effort changed to ${effort}.`, previous: prev, requires_restart: body.runtime === undefined, runtime, messageKey: 'result.effort_changed', messageParams: { value: effort, runtime } };
 }
 
-function fetchLatestGitHubTag(repo) {
-  return new Promise((resolve, reject) => {
-    const req = https.get(`https://api.github.com/repos/${repo}/releases/latest`, {
-      headers: { 'User-Agent': 'zylos-dashboard', Accept: 'application/vnd.github.v3+json' },
-      timeout: 10000,
-    }, res => {
-      let data = '';
-      res.on('data', chunk => { data += chunk; });
-      res.on('end', () => {
-        if (res.statusCode === 404) return resolve(null);
-        if (res.statusCode !== 200) return reject(new Error(`GitHub API ${res.statusCode}`));
-        try {
-          const tag = JSON.parse(data).tag_name;
-          resolve(tag ? tag.replace(/^v/, '') : null);
-        } catch (e) { reject(e); }
-      });
-    });
-    req.on('error', reject);
-    req.on('timeout', () => { req.destroy(); reject(new Error('GitHub API timeout')); });
-  });
-}
-
-async function upgradeZylos(reqId, zylosDir) {
-  let currentVersion;
-  try {
-    const { stdout } = await execFileAsync('zylos', ['--version'], { timeout: 5000 });
-    currentVersion = (stdout || '').trim();
-  } catch {
-    currentVersion = null;
-  }
-
-  let latestVersion;
-  try {
-    latestVersion = await fetchLatestGitHubTag('zylos-ai/zylos-core');
-  } catch (err) {
-    log(reqId, `version check failed: ${err.message}, proceeding with upgrade`);
-  }
-
-  if (currentVersion && latestVersion && !isNewerVersion(latestVersion, currentVersion)) {
-    log(reqId, `already up to date: v${currentVersion}`);
-    return { ok: false, error: 'already_up_to_date', message: `Already on the latest version (v${currentVersion}).`, messageKey: 'result.already_up_to_date', messageParams: { version: currentVersion } };
-  }
-
-  const upgradeMsg = latestVersion && currentVersion
-    ? `Upgrading v${currentVersion} → v${latestVersion}. All services will restart.`
-    : 'Upgrade started. All services will restart.';
-  const upgradeMsgKey = latestVersion && currentVersion ? 'result.upgrading_zylos' : 'result.upgrading_zylos_simple';
-  const upgradeMsgParams = latestVersion && currentVersion ? { from: currentVersion, to: latestVersion } : undefined;
-
-  const script = `
-    const { spawn } = require('node:child_process');
-    const child = spawn('zylos', ['upgrade', '--self', '-y'], {
-      detached: true,
-      stdio: 'ignore',
-      env: process.env
-    });
-    child.unref();
-  `;
-
-  log(reqId, `spawn double-fork detached: zylos upgrade --self -y (${currentVersion || '?'} → ${latestVersion || '?'})`);
-  const child = spawn(process.execPath, ['-e', script], {
-    detached: true, stdio: 'ignore', env: { ...process.env }
-  });
-  child.unref();
-
-  return { ok: true, message: upgradeMsg, detached: true, messageKey: upgradeMsgKey, messageParams: upgradeMsgParams };
-}
-
-async function upgradeRuntimeCli(reqId, config) {
-  const runtime = config.runtime || process.env.ZYLOS_RUNTIME || DEFAULT_RUNTIME;
+async function upgradeRuntimeCli(reqId, runtime, zylosDir) {
   const rt = await findRuntime(runtime);
   if (!rt || rt.install.upgradeCli === UNSUPPORTED) {
     return { ok: false, error: 'runtime_unsupported', message: `CLI upgrade is not supported for runtime: ${runtime}`,
@@ -315,7 +249,7 @@ async function upgradeRuntimeCli(reqId, config) {
   log(reqId, `exec: ${runtime} update`);
   let executionError;
   const result = await rt.install.upgradeCli({
-    root: config.zylosDir || path.join(os.homedir(), 'zylos'),
+    root: zylosDir,
     execFile: async (...args) => {
       try { return await execFileAsync(...args); }
       catch (err) {
