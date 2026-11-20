@@ -1462,7 +1462,7 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 @media (max-width: 760px) {
   .wb-set { flex-direction: column; background: none; }
   /* Phones: the sections live in a drawer that slides in from the left; a button at the top of the page names the current section. */
-  .wb-set-nav { position: fixed; top: 0; bottom: 0; left: 0; z-index: 61; align-self: stretch; width: min(300px, 84vw); max-height: none; padding: 8px 10px 16px; border-right: 1px solid var(--wb-line); background: var(--wb-panel); box-shadow: var(--wb-shadow); transform: translateX(-104%); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; }
+  .wb-set-nav { position: fixed; top: 0; bottom: 0; left: 0; z-index: 61; align-self: stretch; width: min(300px, 84vw); max-height: none; padding: calc(8px + env(safe-area-inset-top)) 10px calc(16px + env(safe-area-inset-bottom)) calc(10px + env(safe-area-inset-left)); border-right: 1px solid var(--wb-line); background: var(--wb-panel); box-shadow: var(--wb-shadow); transform: translateX(-104%); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; }
   .wb-set-drawer-open .wb-set-nav { transform: none; visibility: visible; transition: transform .2s ease; }
   .wb-set-drawer-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; padding: 2px 2px 8px 8px; border-bottom: 1px solid var(--wb-line); font-size: 14px; white-space: nowrap; }
   .wb-set-nav-btn { height: auto; min-height: 44px; font-size: 14.5px; }
@@ -1598,12 +1598,13 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 @media (max-width: 760px) {
   /* Keep the desktop shell hidden until mobile navigation and the address tab are ready. */
   html:not(.wb-mobile-ready) :is(.app-header, .view-stack) { visibility: hidden; }
-  html.wb-mobile-ready { --wb-header-h: 52px; }
+  html.wb-mobile-ready { --wb-header-h: calc(52px + env(safe-area-inset-top)); }
   html.wb-mobile-ready body { padding-bottom: calc(56px + env(safe-area-inset-bottom)); }
   html.wb-mobile-ready .app-header { display: none; }
   html.wb-mobile-ready .wb-mobile-topbar {
     position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 8px;
-    height: 52px; padding: 0 6px 0 16px; border-bottom: 1px solid var(--wb-line);
+    height: var(--wb-header-h); padding: env(safe-area-inset-top) calc(6px + env(safe-area-inset-right)) 0 calc(16px + env(safe-area-inset-left));
+    border-bottom: 1px solid var(--wb-line);
     background: var(--nav-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
   }
   .wb-mobile-topbar h1 { flex: 1; min-width: 0; margin: 0; font-size: 17px; font-weight: 600; line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1616,7 +1617,7 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   .wb-mobile-icon-button:disabled { opacity: .4; cursor: default; }
   html.wb-mobile-ready .wb-mobile-tabs {
     position: fixed; z-index: 40; bottom: 0; left: 0; right: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
-    padding-bottom: env(safe-area-inset-bottom); border-top: 1px solid var(--wb-line); background: var(--nav-bg);
+    padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); border-top: 1px solid var(--wb-line); background: var(--nav-bg);
     backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
   }
   .wb-mobile-tab {
@@ -1633,7 +1634,8 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   }
   html.wb-mobile-ready .wb-mobile-sheet {
     display: block; position: fixed; z-index: 211; left: 0; right: 0; bottom: 0; overflow-y: auto;
-    max-height: calc(100dvh - 24px); padding: 6px 0 calc(12px + env(safe-area-inset-bottom));
+    max-height: calc(100dvh - max(24px, env(safe-area-inset-top)));
+    padding: 6px env(safe-area-inset-right) calc(12px + env(safe-area-inset-bottom)) env(safe-area-inset-left);
     border-radius: 16px 16px 0 0; background: var(--c-raised); box-shadow: var(--wb-shadow);
   }
   .wb-mobile-sheet-grab { width: 36px; height: 4px; border-radius: 2px; margin: 4px auto 8px; background: var(--wb-line-strong); }

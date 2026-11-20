@@ -350,6 +350,102 @@ export async function runMobileConversationBrowser(t, sandbox) {
     }
     console.info('Header baseline captures:', JSON.stringify(captures)); return;
   }
+  await t.test('home screen metadata and phone controls follow the theme and safe areas', async () => {
+    const { page, context, errors } = await open({ theme: 'light' });
+    try {
+      assert.match(await page.locator('meta[name="viewport"]').getAttribute('content'), /viewport-fit=cover/);
+      const cdp = await context.newCDPSession(page);
+      const webApp = await cdp.send('Page.getAppManifest');
+      assert.equal(webApp.url, fixture.base + '/manifest.json');
+      assert.deepEqual(webApp.errors, []);
+      const manifest = JSON.parse(webApp.data);
+      assert.equal(manifest.display, 'standalone');
+      assert.equal(new URL(manifest.start_url, webApp.url).href, fixture.base + '/');
+      const { installabilityErrors } = await cdp.send('Page.getInstallabilityErrors');
+      // The test fixture uses an off-the-record context. Chromium disallows installing
+      // from that context even when the manifest and icons pass every product check.
+      assert.deepEqual(installabilityErrors.filter(error => error.errorId !== 'in-incognito'), []);
+      const { primaryIcon } = await cdp.send('Page.getManifestIcons');
+      assert.ok(primaryIcon, 'Chromium selected a usable installation icon');
+      if (evidence) {
+        fs.writeFileSync(path.join(evidence, 'manifest-inspection.json'), JSON.stringify({
+          url: webApp.url, manifest: webApp.manifest, errors: webApp.errors, installabilityErrors
+        }, null, 2));
+        fs.writeFileSync(path.join(evidence, 'chromium-primary-icon.png'), Buffer.from(primaryIcon, 'base64'));
+      }
+
+      const top = 47, bottom = 34, height = page.viewportSize().height;
+      await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top, bottom, left: 0, right: 0 } });
+      const checkTheme = async theme => {
+        const current = await page.evaluate(() => ({
+          theme: document.documentElement.dataset.theme,
+          background: getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(),
+          colors: [...document.querySelectorAll('meta[name="theme-color"]')]
+            .filter(meta => matchMedia(meta.media).matches).map(meta => meta.content)
+        }));
+        assert.equal(current.theme, theme);
+        assert.deepEqual(current.colors, [current.background]);
+      };
+      const topEdge = async (selector, minimum) => {
+        const { y } = await page.locator(selector).first().boundingBox();
+        assert.ok(y >= minimum, `${selector} top: ${y}, expected >= ${minimum}`);
+        return y;
+      };
+      const bottomEdge = async (selector, maximum) => {
+        const { y, height } = await page.locator(selector).last().boundingBox();
+        assert.ok(y + height <= maximum, `${selector} bottom: ${y + height}, expected <= ${maximum}`);
+        return y + height;
+      };
+
+      for (const theme of ['light', 'dark']) {
+        await checkTheme(theme);
+        const topbar = await page.locator('.wb-mobile-topbar').boundingBox();
+        const nav = await page.locator('#wb-mobile-nav').boundingBox();
+        assert.equal(topbar.height, 52 + top);
+        assert.equal(nav.y + nav.height, height);
+        const topAction = await topEdge('#wb-mobile-list-refresh', top);
+        const bottomTab = await bottomEdge('#wb-mobile-more', height - bottom);
+        await page.waitForFunction(() => {
+          const list = document.querySelector('.conversation-page').getBoundingClientRect();
+          const tabs = document.querySelector('#wb-mobile-nav').getBoundingClientRect();
+          return Math.abs(list.bottom - tabs.top) <= 1;
+        });
+        await shot(page, `safe-area-${theme}-navigation`);
+        await openMobileMore(page);
+        const moreBottom = await bottomEdge('#wb-mobile-more-sheet .wb-mobile-sheet-item:visible', height - bottom);
+        await shot(page, `safe-area-${theme}-more`);
+        await page.keyboard.press('Escape');
+
+        await select(page);
+        const chatBack = await topEdge('.conversation-back', top);
+        const chatInput = await bottomEdge('.conversation-input', height - bottom);
+        assert.equal(await page.locator('.conversation-composer').evaluate(node => node.getBoundingClientRect().bottom), height);
+        assert.equal((await page.locator('.conversation-input').boundingBox()).height, 44);
+        await shot(page, `safe-area-${theme}-composer`);
+        await openConversationMenu(page);
+        const chatMenu = await bottomEdge('.conversation-menu-sheet button:visible', height - bottom);
+        await shot(page, `safe-area-${theme}-conversation-menu`);
+        await page.keyboard.press('Escape');
+        await page.locator('.conversation-back').click();
+
+        await openMobileMore(page);
+        await page.locator('[data-mobile-action="settings"]').click();
+        await page.locator('.wb-set-drawer-btn').click();
+        const drawerTop = await topEdge('.wb-set-drawer-h', top);
+        const drawerBottom = await bottomEdge('.wb-set-nav-btn:visible', height - bottom);
+        await shot(page, `safe-area-${theme}-settings-drawer`);
+        measurements.push({ theme, topbar, nav, topAction, bottomTab, moreBottom, chatBack, chatInput, chatMenu, drawerTop, drawerBottom });
+        await page.keyboard.press('Escape');
+        await page.locator('[data-mobile-tab="chat"]').click();
+
+        await openMobileMore(page);
+        await page.locator('[data-mobile-action="theme"]').click();
+        await checkTheme(theme === 'dark' ? 'light' : 'dark');
+        await page.keyboard.press('Escape');
+      }
+      assert.deepEqual(errors, []);
+    } finally { await context.close(); }
+  });
   const noOverflow = async page => assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'no horizontal overflow');
   // The document can stay narrow while a control is clipped by its container.
   // Inspect the rendered control rectangles too, with a bounded fail-first scan.

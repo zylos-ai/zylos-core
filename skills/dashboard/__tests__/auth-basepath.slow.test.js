@@ -1,4 +1,4 @@
-// covers: skills/comm-bridge/scripts/sqlite-driver.js skills/dashboard/src/lib/auth.js skills/dashboard/src/lib/store.js skills/dashboard/src/lib/version-checker.js skills/dashboard/src/lib/workbench/group-snapshot.js skills/dashboard/src/lib/core-state.js skills/dashboard/src/index.js skills/dashboard/src/lib/ skills/dashboard/public/themes/ skills/dashboard/__tests__/helpers/explicit-migration.js skills/dashboard/__tests__/fixtures/schema13.js skills/dashboard/__tests__/fixtures/memory-installation.js skills/dashboard/__tests__/fixtures/fleet-object-api.js skills/dashboard/__tests__/helpers/dashboard-sign-in.js
+// covers: skills/comm-bridge/scripts/sqlite-driver.js skills/dashboard/src/lib/auth.js skills/dashboard/src/lib/store.js skills/dashboard/src/lib/version-checker.js skills/dashboard/src/lib/workbench/group-snapshot.js skills/dashboard/src/lib/core-state.js skills/dashboard/src/index.js skills/dashboard/src/lib/ skills/dashboard/public/themes/ skills/dashboard/public/index.html skills/dashboard/public/manifest.json skills/dashboard/public/icons/ skills/dashboard/__tests__/helpers/explicit-migration.js skills/dashboard/__tests__/fixtures/schema13.js skills/dashboard/__tests__/fixtures/memory-installation.js skills/dashboard/__tests__/fixtures/fleet-object-api.js skills/dashboard/__tests__/helpers/dashboard-sign-in.js
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -469,6 +469,58 @@ test('session cookie path follows the forwarded prefix and falls back to root', 
     loginCookies(multi, { base: '/dashboard' });
   } finally {
     await closeServer(server);
+  }
+});
+
+test('signed-in Dashboard serves home screen metadata and icons at either mount path', { timeout: TEST_TIMEOUT_MS }, async t => {
+  const { origin, server } = await makeServer();
+  t.after(() => closeServer(server));
+
+  for (const base of ['', '/dashboard']) {
+    const headers = base ? { 'X-Forwarded-Prefix': base } : {};
+    const login = await fetch(origin + '/login', {
+      method: 'POST', redirect: 'manual', headers, body: form({ password: 'secret' })
+    });
+    assert.equal(login.status, 302);
+    const cookie = loginCookies(login, { base }).split(';')[0];
+    const request = (url, signedIn = true) => {
+      assert.equal(url.origin, origin);
+      assert.ok(url.pathname.startsWith(base + '/'));
+      return fetch(origin + url.pathname.slice(base.length), {
+        headers: signedIn ? { ...headers, Cookie: cookie } : headers,
+        redirect: 'manual'
+      });
+    };
+
+    const entry = new URL(base + '/chat', origin);
+    const page = await request(entry);
+    assert.equal(page.status, 200);
+    const html = await page.text();
+    const link = html.match(/<link rel="manifest" href="([^"]+)" crossorigin="use-credentials">/);
+    assert.ok(link, 'the browser uses the session cookie to request the manifest');
+    const manifestUrl = new URL(link[1], entry);
+    assert.equal((await request(manifestUrl, false)).status, 302);
+    const response = await request(manifestUrl);
+    assert.equal(response.status, 200);
+    const manifest = await response.json();
+    assert.equal(manifest.name, 'Zylos Dashboard');
+    assert.equal(manifest.short_name, 'Zylos');
+    assert.equal(manifest.display, 'standalone');
+    for (const path of [manifest.start_url, manifest.scope]) {
+      assert.equal(new URL(path, manifestUrl).href, origin + base + '/');
+    }
+    assert.equal((await request(new URL(manifest.start_url, manifestUrl))).status, 200);
+    const manifestIcons = manifest.icons.map(icon => new URL(icon.src, manifestUrl));
+    const headIcons = [...html.matchAll(/<link rel="(?:apple-touch-icon|icon)"[^>]+href="([^"]+)"/g)]
+      .map(match => new URL(match[1], entry));
+    assert.equal(manifestIcons.length, 3);
+    assert.equal(headIcons.length, 2);
+    for (const icon of [...manifestIcons, ...headIcons]) {
+      const image = await request(icon);
+      assert.equal(image.status, 200, icon.pathname);
+      assert.match(image.headers.get('content-type'), /^image\//);
+      assert.ok((await image.arrayBuffer()).byteLength > 0);
+    }
   }
 });
 
