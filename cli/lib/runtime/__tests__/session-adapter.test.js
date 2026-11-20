@@ -1,3 +1,4 @@
+import { getRuntime } from '../index.js';
 import { launchSession } from '../launch-flow.js';
 import { createSessionOps } from '../session-ops.js';
 import { checkAuth as claudeCheckAuth } from '../claude/auth.js';
@@ -8,7 +9,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { buildRuntimeArgs, validateLaunchConfig, writeSessionLaunchScript, runtimeHelpAsync } from '../session-command.js';
+import { validateLaunchConfig, writeSessionLaunchScript, runtimeHelpAsync } from '../session-command.js';
 
 function fixture({present = true, runId = 'r', openError, runtime = 'claude'} = {}) {
   const calls = [], target = {present, runId, runtime, tmuxSessionId:'$7', paneId:'%8'};
@@ -70,9 +71,9 @@ test('keystroke options and command syntax are rejected before any target I/O',a
   const f=fixture();await f.adapter.sendKeys({target:f.target,connection:f.connection,keys:['Escape','Enter','C-c','M-x','F1']});
   assert.deepEqual(f.calls,[['validate'],['send-keys','-t','%8','Escape','Enter','C-c','M-x','F1']]);
 });
-test('default argv omits model and effort and both runtimes attach per-process MCP',()=> {
+test('default argv omits model and effort and both runtimes attach per-process MCP',async()=> {
   for(const runtime of ['claude','codex']) {
-    const args=buildRuntimeArgs(runtime,{runtime,mode:'default'},{root:'/isolated root'});
+    const args=(await getRuntime(runtime)).launch.buildArgs({runtime,mode:'default'},{root:'/isolated root'});
     assert.equal(args.includes('--model'),false);
     assert.equal(args.some(x=>x.includes('model_reasoning_effort')),false);
     assert.match(args.join(' '),/memory-mcp-server/);
@@ -80,21 +81,21 @@ test('default argv omits model and effort and both runtimes attach per-process M
 });
 for (const bypassPermissions of [true, false]) {
   for (const mode of ['default', 'override']) {
-    test(`Claude disables interactive tools with bypassPermissions=${bypassPermissions} and ${mode} model`, () => {
+    test(`Claude disables interactive tools with bypassPermissions=${bypassPermissions} and ${mode} model`, async () => {
       const config = { runtime: 'claude', mode, ...(mode === 'override' ? { model: 'model name', effort: 'high' } : {}) };
-      const args = buildRuntimeArgs('claude', config, { root: '/isolated root', bypassPermissions });
+      const args = (await getRuntime('claude')).launch.buildArgs(config, { root: '/isolated root', bypassPermissions });
       assert.deepEqual(args.filter(arg => arg.startsWith('--disallowedTools')),
         ['--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode,Artifact,ReportFindings,Workflow']);
       assert.equal(args.includes('--disallowedTools'), false);
       assert.equal(args.includes('--dangerously-skip-permissions'), bypassPermissions);
-      const codexArgs = buildRuntimeArgs('codex', { ...config, runtime: 'codex' },
+      const codexArgs = (await getRuntime('codex')).launch.buildArgs({ ...config, runtime: 'codex' },
         { root: '/isolated root', bypassPermissions });
       assert.equal(codexArgs.some(arg => arg.startsWith('--disallowedTools')), false);
     });
-    test(`Codex disables interactive tools with bypassPermissions=${bypassPermissions} and ${mode} model`, () => {
+    test(`Codex disables interactive tools with bypassPermissions=${bypassPermissions} and ${mode} model`, async () => {
       const settings = ['tools.experimental_request_user_input.enabled=false', 'features.goals=false', 'features.apps=false'];
       const config = { runtime: 'codex', mode, ...(mode === 'override' ? { model: 'model name', effort: 'high' } : {}) };
-      const args = buildRuntimeArgs('codex', config, { root: '/isolated root', bypassPermissions });
+      const args = (await getRuntime('codex')).launch.buildArgs(config, { root: '/isolated root', bypassPermissions });
       for (const setting of settings) {
         assert.equal(args.filter(arg => arg === setting).length, 1);
         const index = args.indexOf(setting);
@@ -105,18 +106,19 @@ for (const bypassPermissions of [true, false]) {
       assert.equal(args.includes('--dangerously-bypass-approvals-and-sandbox'), bypassPermissions);
       for (const runtime of ['claude', 'agy']) {
         if (runtime === 'agy' && mode === 'override') continue;
-        const otherArgs = buildRuntimeArgs(runtime, { ...config, runtime }, { root: '/isolated root', bypassPermissions });
+        const otherArgs = (await getRuntime(runtime)).launch.buildArgs({ ...config, runtime }, { root: '/isolated root', bypassPermissions });
         assert.equal(settings.some(setting => otherArgs.includes(setting)), false);
         assert.equal(otherArgs.includes('-c'), false);
       }
     });
   }
 }
-test('override preserves model as independent argv and rejects unsupported capability',()=> {
+test('override preserves model as independent argv and rejects unsupported capability',async()=> {
   const config={runtime:'claude',mode:'override',model:'model name',effort:'high'};
-  assert.throws(()=>validateLaunchConfig('claude',config,''),{code:'MODEL_CONFIG_REJECTED'});
-  validateLaunchConfig('claude',config,' --model MODEL --effort EFFORT ');
-  const args=buildRuntimeArgs('claude',config,{root:'/tmp'});
+  const implementation = await getRuntime('claude');
+  assert.throws(()=>validateLaunchConfig(implementation,config,''),{code:'MODEL_CONFIG_REJECTED'});
+  validateLaunchConfig(implementation,config,' --model MODEL --effort EFFORT ');
+  const args=implementation.launch.buildArgs(config,{root:'/tmp'});
   assert.equal(args[args.indexOf('--model')+1],'model name');
 });
 test('launch script is private, execs runtime, and omits group in single',async()=> {

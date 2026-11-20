@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { readProcessStart } from '../../../../skills/activity-monitor/scripts/claude-pid.js';
 import { readPaneProcess } from '../../../../skills/activity-monitor/scripts/pane-process.js';
-import { recordPaneProcess } from '../session-launch.js';
+import { recordPaneProcess } from '../launch-flow.js';
 import { setupLaunch } from './launch-tmux-fixture.js';
 const { openTmuxConnection } = await import('../tmux-connection.js');
 const { observeSessionTarget, paneReady } = await import('../session-target.js');

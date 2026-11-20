@@ -3,9 +3,39 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { ZYLOS_DIR } from '../../config.js';
+import { CLAUDE_BUILTIN_ENV_KEYS, ZYLOS_DIR } from '../../config.js';
 import { claudeProbeEnvironment } from './auth.js';
 import { writePrivateFile } from '../../private-file.js';
+import { memoryMcpServerPath } from '../session-command.js';
+
+export const env = Object.freeze({
+  fromDotenv: Object.freeze([
+    ...CLAUDE_BUILTIN_ENV_KEYS,
+    'CLAUDE_CODE_PROMPT_CACHE_TTL',
+    'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL',
+  ]),
+  fromDotenvOrProcess: Object.freeze([]),
+  fixed: Object.freeze({
+    CLAUDE_CODE_PROMPT_CACHE_TTL: '1h',
+    CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '5m',
+  }),
+});
+export const helpProbe = 'override';
+export const promptPlacement = 'separator';
+export const efforts = Object.freeze(['low', 'medium', 'high', 'max']);
+export const overrideHelpFlags = Object.freeze(['--model', '--effort']);
+
+export function buildArgs(config, { root, bypassPermissions = true }) {
+  const args = ['--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode,Artifact,ReportFindings,Workflow'];
+  if (bypassPermissions) args.push('--dangerously-skip-permissions');
+  if (config.mode === 'override') args.push('--model', config.model, '--effort', config.effort);
+  args.push('--mcp-config', JSON.stringify({
+    mcpServers: {
+      'zylos-memory': { type: 'stdio', command: 'node', args: [memoryMcpServerPath(root)] },
+    },
+  }));
+  return args;
+}
 
 const execFileAsync = promisify(execFile);
 

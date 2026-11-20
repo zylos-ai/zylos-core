@@ -6,7 +6,7 @@ import os from 'node:os';
 import { spawn, execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { LAUNCH_TIMEOUT_MS, LAUNCH_CLEANUP_TIMEOUT_MS } from '../session-launch.js';
+import { LAUNCH_TIMEOUT_MS, LAUNCH_CLEANUP_TIMEOUT_MS } from '../launch-flow.js';
 import { setupLaunch, delay, binary, assertGone } from './launch-tmux-fixture.js';
 const bound = LAUNCH_TIMEOUT_MS + LAUNCH_CLEANUP_TIMEOUT_MS;
 
@@ -29,7 +29,7 @@ test('server stopped before submission: bounded failure, natural caller exit and
   const f = await setupLaunch(t);
   const wrapper = await f.clientWrapper();
   process.kill(f.server, 'SIGSTOP');
-  const program = `import {settleLaunch} from ${JSON.stringify(new URL('../session-launch.js',import.meta.url).href)};
+  const program = `import {settleLaunch} from ${JSON.stringify(new URL('../launch-flow.js',import.meta.url).href)};
 import {writeSessionLaunchScript} from ${JSON.stringify(new URL('../session-command.js',import.meta.url).href)};
 const script=writeSessionLaunchScript({command:'/bin/sleep',args:['30'],env:{PATH:process.env.PATH},root:${JSON.stringify(f.dir)},multi:false});
 const start=performance.now();

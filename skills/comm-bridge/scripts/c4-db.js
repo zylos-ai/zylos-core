@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
  * C4 Communication Bridge - Database Module
- * Provides database operations for message logging and checkpoint management
+ * Provides database operations for message logging and checkpoint management.
+ * Awaits the runtime factory at module scope. Runtime implementations must not
+ * reach this module through static imports.
  */
 
 import { isMainModule } from './is-main-module.js';
@@ -29,6 +31,10 @@ import { observeCoreTarget } from './c4-runtime-observer.js';
 import { assertTestDatabasePath } from './c4-database-path.js';
 const coreConfig = await loadCoreConfig();
 const runtimeCommand = await import(pathToFileURL(path.join(path.dirname(resolveCoreConfigModule()), 'runtime/session-command.js')).href);
+const { SUPPORTED_RUNTIMES, getRuntime } = await import(
+  pathToFileURL(path.join(path.dirname(resolveCoreConfigModule()), 'runtime/index.js')).href
+);
+const RUNTIMES = new Map(await Promise.all(SUPPORTED_RUNTIMES.map(async id => [id, await getRuntime(id)])));
 export { composeSessionGroup, parseSessionGroup } from './c4-session-group.js';
 
 const store = createStore(getDb, {
@@ -38,9 +44,11 @@ const store = createStore(getDb, {
   resolveTarget: observeCoreTarget,
   validateModel: (runtime, pair) => {
     try {
+      const implementation = RUNTIMES.get(runtime);
+      if (!implementation) throw runtimeCommand.adapterError('RUNTIME_UNSUPPORTED');
       const command = runtimeCommand.runtimeExecutable(runtime);
       const help = runtimeCommand.runtimeHelp(command);
-      return runtimeCommand.validateLaunchConfig(runtime, { runtime, mode: 'override', ...pair }, help);
+      return runtimeCommand.validateLaunchConfig(implementation, { runtime, mode: 'override', ...pair }, help);
     } catch (cause) {
       const error = new Error('Runtime rejected model/effort configuration');
       error.code = 'MODEL_CONFIG_INVALID'; error.cause = cause;

@@ -165,11 +165,6 @@
     "reason": "else-fallback: Non-Claude runtimes reach the existing alternate quota read path."
   },
   {
-    "file": "cli/lib/runtime/codex-launch-trust.js",
-    "text": "codexBin = 'codex', env = process.env }) {",
-    "reason": "dispatch:launch: Supplies the executable name for the Codex launch trust check."
-  },
-  {
     "file": "cli/lib/runtime/instruction-builder.js",
     "text": "systemPath: path.join(instructionsDir, `${runtime === 'agy' ? 'codex' : runtime}-system.md`),",
     "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
@@ -268,56 +263,6 @@
     "file": "cli/lib/runtime/instruction-builder.js",
     "text": "for (const runtime of ['claude', 'codex']) {",
     "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/launch-flow.js",
-    "text": "const help = (runtime === 'codex' || launchConfig?.mode === 'override') ? await (options.runtimeHelp || runtimeHelpAsync)(command,env,{ timeoutMs: remaining() }) : '';",
-    "reason": "dispatch:launch: Selects launch help, prompts, or argument placement for the current runtime."
-  },
-  {
-    "file": "cli/lib/runtime/launch-flow.js",
-    "text": "if (runtime === 'claude' && upgrade.prompt) args.push('--');",
-    "reason": "dispatch:launch: Selects launch help, prompts, or argument placement for the current runtime."
-  },
-  {
-    "file": "cli/lib/runtime/launch-flow.js",
-    "text": "['codex', 'agy'].includes(runtime) ? args.length - 1 : undefined,",
-    "reason": "dispatch:launch: Selects launch help, prompts, or argument placement for the current runtime."
-  },
-  {
-    "file": "cli/lib/runtime/session-command.js",
-    "text": "const efforts = runtime === 'claude' ? ['low','medium','high','max'] : ['none','minimal','low','medium','high','xhigh'];",
-    "reason": "dispatch:launch: Selects per-runtime launch arguments, effort validation, environment, or cache settings."
-  },
-  {
-    "file": "cli/lib/runtime/session-command.js",
-    "text": "if (!efforts.includes(config.effort) || !/(?:^|\\s)--model(?:\\s|[,=])/m.test(help) || (runtime === 'claude' && !/(?:^|\\s)--effort(?:\\s|[,=])/m.test(help))) throw adapterError('MODEL_CONFIG_REJECTED');",
-    "reason": "dispatch:launch: Selects per-runtime launch arguments, effort validation, environment, or cache settings."
-  },
-  {
-    "file": "cli/lib/runtime/session-command.js",
-    "text": "if (runtime === 'claude') {",
-    "reason": "dispatch:launch: Selects per-runtime launch arguments, effort validation, environment, or cache settings."
-  },
-  {
-    "file": "cli/lib/runtime/session-command.js",
-    "text": "} else if (runtime === 'agy') {",
-    "reason": "dispatch:launch: Selects per-runtime launch arguments, effort validation, environment, or cache settings."
-  },
-  {
-    "file": "cli/lib/runtime/session-command.js",
-    "text": "if (runtime === 'claude') {",
-    "reason": "dispatch:launch: Selects per-runtime launch arguments, effort validation, environment, or cache settings."
-  },
-  {
-    "file": "cli/lib/runtime/session-command.js",
-    "text": "if (runtime === 'claude') env[key] = dotenvVars[key] || fallback;",
-    "reason": "dispatch:launch: Selects per-runtime launch arguments, effort validation, environment, or cache settings."
-  },
-  {
-    "file": "cli/lib/runtime/session-command.js",
-    "text": "if (runtime === 'agy') {",
-    "reason": "dispatch:launch: Selects per-runtime launch arguments, effort validation, environment, or cache settings."
   },
   {
     "file": "cli/lib/session-state-reader-async.js",
@@ -468,11 +413,6 @@
     "file": "skills/activity-monitor/scripts/hook-auth-prompt.js",
     "text": "'--target-run', env.ZYLOS_RUN_ID, '--expected-runtime', 'claude',",
     "reason": "dispatch:hooks: Binds the native Claude hook to its expected runtime."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/launch-config-shape.js",
-    "text": "const efforts = config.runtime === 'claude' ? ['low', 'medium', 'high', 'max'] : ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];",
-    "reason": "dispatch:launch: Selects the valid effort names for the existing launch path."
   },
   {
     "file": "skills/activity-monitor/scripts/outage-notice.js",

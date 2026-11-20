@@ -9,7 +9,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { getRuntime, SUPPORTED_RUNTIMES } from '../index.js';
-import { buildRuntimeArgs, launchEnvironment, validateLaunchConfig } from '../session-command.js';
+import { launchEnvironment, validateLaunchConfig } from '../session-command.js';
 import { readTargetRuntime } from '../session-target.js';
 import { modelThreshold, thresholdLimit } from '../../model-rotation-thresholds.js';
 import { applyUpgradePrompt } from '../upgrade-context.js';
@@ -46,20 +46,21 @@ test('registry selects agy without changing existing runtime selection', async (
   assert.equal((await getRuntime('codex')).id, 'codex');
 });
 
-test('agy launch trusts only its workspace and supplies a startup kick', () => {
+test('agy launch trusts only its workspace and supplies a startup kick', async () => {
   const root = '/isolated root/quote"$';
   const config = { runtime: 'agy', mode: 'default' };
-  assert.equal(validateLaunchConfig('agy', config), true);
-  const args = buildRuntimeArgs('agy', config, { root });
+  const implementation = await getRuntime('agy');
+  assert.equal(validateLaunchConfig(implementation, config), true);
+  const args = implementation.launch.buildArgs(config, { root });
   assert.equal(args[0], '--dangerously-skip-permissions');
   assert.deepEqual(JSON.parse(args[args.indexOf('--settings') + 1]), { modelProvider: 'gemini', trustedWorkspaces: [root] });
   assert.equal(args[args.indexOf('-i') + 1], 'System startup trigger, not a user message. Continue with startup context.');
   assert.equal(args.includes('--dangerously-bypass-approvals-and-sandbox'), false);
-  assert.throws(() => validateLaunchConfig('agy', { runtime: 'agy', mode: 'override', model: 'gemini', effort: 'high' }, ' --model MODEL '), { code: 'MODEL_CONFIG_REJECTED' });
+  assert.throws(() => validateLaunchConfig(implementation, { runtime: 'agy', mode: 'override', model: 'gemini', effort: 'high' }, ' --model MODEL '), { code: 'MODEL_CONFIG_REJECTED' });
 });
 
-test('agy upgrade recovery replaces or appends only its kick value', () => {
-  const args = buildRuntimeArgs('agy', { runtime: 'agy', mode: 'default' }, { root: '/isolated' });
+test('agy upgrade recovery replaces or appends only its kick value', async () => {
+  const args = (await getRuntime('agy')).launch.buildArgs({ runtime: 'agy', mode: 'default' }, { root: '/isolated' });
   const replaced = applyUpgradePrompt(args, 'recovery', args.length - 1);
   assert.deepEqual(replaced.slice(0, -1), args.slice(0, -1));
   assert.equal(replaced.at(-1), 'recovery');
@@ -69,7 +70,7 @@ test('agy upgrade recovery replaces or appends only its kick value', () => {
 for (const clean of [true, false]) test(`agy environment carries API mode through clean=${clean}`, async t => {
   const f = await fixture(t, `ZYLOS_CLEAN_ENV=${clean}\nGEMINI_API_KEY=saved-key\nHTTPS_PROXY=https://saved-proxy.invalid\nAGY_CLI_DISABLE_AUTO_UPDATE=false\n`);
   const inherited = { ...f.env, GEMINI_API_KEY: 'inherited-key', HTTPS_PROXY: 'https://inherited.invalid', AGY_CLI_DISABLE_AUTO_UPDATE: 'false' };
-  const env = launchEnvironment(f.root, inherited, { runtime: 'agy' });
+  const env = launchEnvironment(f.root, inherited, { runtimeEnv: (await getRuntime('agy')).launch.env });
   assert.equal(env.GEMINI_API_KEY, 'saved-key');
   assert.equal(env.HTTPS_PROXY, 'https://saved-proxy.invalid');
   assert.equal(env.AGY_CLI_DISABLE_AUTO_UPDATE, 'true');
@@ -78,11 +79,11 @@ for (const clean of [true, false]) test(`agy environment carries API mode throug
 
 test('agy environment accepts inherited API key and omits an unset proxy', async t => {
   const f = await fixture(t);
-  const env = launchEnvironment(f.root, { ...f.env, GEMINI_API_KEY: 'inherited-key' }, { runtime: 'agy' });
+  const env = launchEnvironment(f.root, { ...f.env, GEMINI_API_KEY: 'inherited-key' }, { runtimeEnv: (await getRuntime('agy')).launch.env });
   assert.equal(env.GEMINI_API_KEY, 'inherited-key');
   assert.equal(Object.hasOwn(env, 'HTTPS_PROXY'), false);
   await fs.writeFile(path.join(f.root, '.env'), 'GEMINI_API_KEY=\nHTTPS_PROXY=\n');
-  const empty = launchEnvironment(f.root, { ...f.env, GEMINI_API_KEY: 'stale', HTTPS_PROXY: 'stale' }, { runtime: 'agy' });
+  const empty = launchEnvironment(f.root, { ...f.env, GEMINI_API_KEY: 'stale', HTTPS_PROXY: 'stale' }, { runtimeEnv: (await getRuntime('agy')).launch.env });
   assert.equal(Object.hasOwn(empty, 'GEMINI_API_KEY'), false);
   assert.equal(Object.hasOwn(empty, 'HTTPS_PROXY'), false);
 });
@@ -180,10 +181,11 @@ test('agy launch rejects malformed configuration before any tmux work', async t 
 test('agy auth gives curl the same saved proxy environment as runtime launch', async t => {
   const f = await fixture(t, 'GEMINI_API_KEY=test-secret\nHTTPS_PROXY=http://saved-proxy.invalid:3128\n');
   const env = { ...f.env, HTTPS_PROXY: 'http://inherited-proxy.invalid:8080', https_proxy: 'http://stale-alias.invalid:8080' };
+  const { launch: { env: runtimeEnv } } = await getRuntime('agy');
   let calls = 0;
   const adapterOptions = { ...f, env, execFile: probeExecutor({ inspect: ({ options }) => {
     calls++;
-    assert.equal(options.env.HTTPS_PROXY, launchEnvironment(f.root, env, { runtime: 'agy' }).HTTPS_PROXY);
+    assert.equal(options.env.HTTPS_PROXY, launchEnvironment(f.root, env, { runtimeEnv }).HTTPS_PROXY);
     assert.equal(options.env.HTTPS_PROXY, 'http://saved-proxy.invalid:3128');
     assert.equal(options.env.https_proxy, 'http://saved-proxy.invalid:3128');
   } }) };

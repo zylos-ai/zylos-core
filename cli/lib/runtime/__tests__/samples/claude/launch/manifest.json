@@ -1,0 +1,9 @@
+{
+  "program": "claude",
+  "version": "2.1.296 (Claude Code)",
+  "recordedAt": "2026-11-20T13:36:20.420Z",
+  "how": "Ran the installed CLI with --help under a separate macOS user and temporary HOME, without signing in.",
+  "files": {
+    "help.txt": "Unmodified standard output from --help."
+  }
+}

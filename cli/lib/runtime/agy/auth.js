@@ -3,6 +3,7 @@ import { writeEnvFile } from '../../env.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import { env as runtimeEnv } from './launch.js';
 import { launchEnvironment } from '../session-command.js';
 import { ZYLOS_DIR } from '../../config.js';
 import { credentialEnvValue, upsertEnvValue, warnUnrestrictedCredentialFiles } from '../../runtime-setup.js';
@@ -30,7 +31,7 @@ export function requestAgyModels({ env, key, execute = execFile }) {
 
 export async function checkAuth(options = {}) {
   let env;
-  try { env = launchEnvironment(options.root || ZYLOS_DIR, options.env || process.env, { runtime: 'agy' }); }
+  try { env = launchEnvironment(options.root || ZYLOS_DIR, options.env || process.env, { runtimeEnv }); }
   catch { return { status: 'uncertain', reason: 'environment_unreadable' }; }
   const key = env.GEMINI_API_KEY;
   if (!key) return { status: 'failure', reason: 'api_key_missing' };
