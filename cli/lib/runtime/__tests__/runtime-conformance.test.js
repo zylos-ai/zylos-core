@@ -10,6 +10,22 @@ for (const id of SUPPORTED_RUNTIMES) {
     assert.ok(Object.isFrozen(runtime));
     assert.equal(runtime.launch.efforts !== UNSUPPORTED, runtimesWith('modelOverride', 'supported').includes(id),
       'modelOverride in the registry must agree with launch.efforts');
+    const { input, switch: sessionSwitch } = runtime;
+    assert.equal(typeof input.bracketedPaste, 'boolean');
+    assert.equal(typeof input.inputState, 'function');
+    assert.equal(typeof input.requireEmptyBeforePaste, 'boolean');
+    assert.ok(Number.isInteger(input.pasteCharThreshold) && input.pasteCharThreshold > 0,
+      'input.pasteCharThreshold must be a positive integer');
+    if (input.dismissOverlay !== UNSUPPORTED) assert.equal(typeof input.dismissOverlay, 'function');
+    assert.ok(['/clear', '/exit'].includes(sessionSwitch.command));
+    assert.equal(typeof sessionSwitch.exitsProcess, 'boolean');
+    if (sessionSwitch.clearFiresSessionStart !== UNSUPPORTED || !sessionSwitch.exitsProcess) {
+      assert.equal(typeof sessionSwitch.clearFiresSessionStart, 'boolean');
+    }
+    if (sessionSwitch.clearSourceMarker !== UNSUPPORTED || sessionSwitch.clearFiresSessionStart === false) {
+      assert.equal(typeof sessionSwitch.clearSourceMarker, 'string');
+      assert.ok(sessionSwitch.clearSourceMarker);
+    }
     for (const [name, { required, members }] of Object.entries(RUNTIME_CONTRACT)) {
       assert.ok(Object.hasOwn(runtime, name), `missing capability ${name}`);
       const capability = runtime[name];

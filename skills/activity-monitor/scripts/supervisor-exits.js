@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import { loadCoreModule } from './core-modules.js';
+const { findRuntime } = await loadCoreModule('runtime/index.js');
 const { handoffPath } = await loadCoreModule('session-group-paths.js');
 
 /** Volatile observations only. Diagnostic history never authorizes a stop. */
@@ -15,7 +16,8 @@ export class SupervisorExits {
   }
   async report(scene) {
     let rotated = false;
-    if (scene.runtime === 'codex' && Number.isFinite(scene.currentSessionTs)) {
+    const runtime = await findRuntime(scene.runtime);
+    if (runtime?.switch.exitsProcess === true && Number.isFinite(scene.currentSessionTs)) {
       try { rotated = (await this.stat(handoffPath(scene.sourceScope === null ? null : scene.sessionGroup, this.env))).mtimeMs > scene.currentSessionTs; }
       catch { /* Handoff is diagnostic evidence only. */ }
     }

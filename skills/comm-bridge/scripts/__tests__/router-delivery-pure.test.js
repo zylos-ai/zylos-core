@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { DELIVERY_DELAY_BASE, DELIVERY_DELAY_PER_KB, DELIVERY_DELAY_MAX } from '../c4-config.js';
 import { sanitizeMessage } from '../c4-utils.js';
-import { findPromptY, isUsageOverlayCapture, checkAgyInputState } from '../tmux-input-state.js';
-import { getDeliveryDelay, getClaudeInputBoxText, checkClaudeFallbackInputBox,
+import { findPromptY, isUsageOverlayCapture } from '../../../../cli/lib/runtime/shared/prompt-input.js';
+import { checkAgyInputState } from '../../../../cli/lib/runtime/agy/input.js';
+import { getClaudeInputBoxText, checkClaudeFallbackInputBox } from '../../../../cli/lib/runtime/claude/input.js';
+import { getDeliveryDelay,
   isBypassState, isKeystrokeControl, parseKeystrokeKey, isExitLifecycleControl,
   getHeartbeatPhase, isRecoveryHeartbeatPhase, shouldAutoAckHeartbeat } from '../router/delivery.js';
 

@@ -30,14 +30,14 @@ export function sanitizeMessage(message) {
   return message.replace(/[\x00-\x08\x0B-\x1F]/g, '');
 }
 
-export function truncateForDelivery(content, replyViaSuffix = '', convId) {
+export function truncateForDelivery(content, replyViaSuffix = '', convId, pasteCharThreshold = PASTE_CHAR_THRESHOLD) {
   const fullMessage = content + replyViaSuffix;
   const byteLength = Buffer.byteLength(fullMessage, 'utf8');
   // Measure what actually reaches the input box (the dispatcher sanitizes
-  // before pasting), the same way Claude Code does: String length > 800.
+  // before pasting) against the runtime's threshold.
   const pasteLength = sanitizeMessage(fullMessage).length;
 
-  if (byteLength <= FILE_SIZE_THRESHOLD && pasteLength <= PASTE_CHAR_THRESHOLD) {
+  if (byteLength <= FILE_SIZE_THRESHOLD && pasteLength <= pasteCharThreshold) {
     return fullMessage;
   }
 

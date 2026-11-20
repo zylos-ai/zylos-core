@@ -1,19 +1,4 @@
-export function findPromptY(capture) {
-  const lines = String(capture || '').split('\n');
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (/^\s*[›❯]/.test(lines[i])) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-export function isUsageOverlayCapture(capture) {
-  if (!capture) return false;
-  const hasUsageHeader = /Settings:\s+Status\s+Config\s+Usage/i.test(capture);
-  const hasEscHint = /Esc to cancel/i.test(capture);
-  return hasUsageHeader && hasEscHint;
-}
+import { usageOverlayKey } from '../shared/prompt-input.js';
 
 /** The nearest rules above and below the caret bound AGY's input. Panels
  * below it have their own rules. Popup selections above further options are
@@ -33,3 +18,16 @@ export function checkAgyInputState(capture, cursorX, cursorY) {
   }
   return 'has_content';
 }
+
+async function inputState({ cursorX, readCursorY, capture }) {
+  const cursorY = await readCursorY();
+  return checkAgyInputState(await capture(), cursorX, cursorY);
+}
+
+export const input = Object.freeze({
+  bracketedPaste: true,
+  inputState,
+  requireEmptyBeforePaste: true,
+  pasteCharThreshold: 800,
+  dismissOverlay: usageOverlayKey,
+});

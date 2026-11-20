@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
+import { loadCoreModule } from './router/core-modules.js';
 import { resolveCoreConfigModule } from './core-config-loader.js';
 import { sendError } from './c4-send-args.js';
 import { runHookProcess } from './c4-hook-process.js';
@@ -103,7 +104,7 @@ export function parseBeforeSendOutput(stdout) {
 
 function available(value) { return typeof value === 'string' && value.trim() !== ''; }
 
-function existingContext(channel, env) {
+async function existingContext(channel, env) {
   const context = { component: channel };
   if (available(env.ZYLOS_SESSION_GROUP)) context.session_group = env.ZYLOS_SESSION_GROUP;
   if (available(env.ZYLOS_RUN_ID)) context.run_id = env.ZYLOS_RUN_ID;
@@ -111,9 +112,13 @@ function existingContext(channel, env) {
     const runtime = JSON.parse(env.ZYLOS_MODEL_CONFIG).runtime;
     if (available(runtime)) context.runtime = runtime;
   } catch { /* Optional launch context is unavailable outside a managed run. */ }
-  const candidates = context.runtime === 'codex' ? [env.CODEX_SESSION_ID]
-    : context.runtime === 'claude' ? [env.CLAUDE_SESSION_ID]
-      : [env.CODEX_SESSION_ID, env.CLAUDE_SESSION_ID].filter(available);
+  const { findRuntime, SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/index.js');
+  const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
+  const runtimes = context.runtime ? [await findRuntime(context.runtime)] : await Promise.all(SUPPORTED_RUNTIMES.map(findRuntime));
+  const candidates = runtimes
+    .filter(runtime => runtime && runtime.hooks.sessionIdEnv !== UNSUPPORTED)
+    .map(runtime => env[runtime.hooks.sessionIdEnv])
+    .filter(available);
   if (candidates.length === 1 && available(candidates[0])) context.session_id = candidates[0];
   return context;
 }
@@ -133,7 +138,7 @@ export async function runBeforeSendHook(request, content, { skillsDir, env = pro
     version: 1, hook_event_name: 'BeforeSend', hook_id: declaration.hookId,
     request_id: randomUUID(), invocation_id: randomUUID(),
     request: { channel: request.channel, endpoint: request.endpoint, content, options },
-    context: existingContext(request.channel, env),
+    context: await existingContext(request.channel, env),
   };
   let result;
   try {

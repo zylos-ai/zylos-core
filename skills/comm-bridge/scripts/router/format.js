@@ -23,7 +23,7 @@ function withoutLegacyRoute(content, row) {
   return content.slice(0, offset).trimEnd();
 }
 
-export function formatConversation(row, { scriptPath = sendPath, ownerName = readOwnerName, lookupQuote } = {}) {
+export function formatConversation(row, { scriptPath = sendPath, ownerName = readOwnerName, lookupQuote, pasteCharThreshold } = {}) {
   const projected = withoutLegacyRoute(projectC4Content(row.content || '', { c4Id: row.id }), row);
   const content = row.channel === 'dashboard' && row.direction === 'in' ? dashboardSource(projected, ownerName(), { row, lookupQuote }) : projected;
   const attachmentHint = row.channel === 'dashboard' && row.direction === 'in'
@@ -34,5 +34,5 @@ export function formatConversation(row, { scriptPath = sendPath, ownerName = rea
     ? `\nCharts/choices/forms when useful: node ${shellQuote(path.join(SKILLS_DIR, 'dashboard', 'scripts', 'components.js'))} list --json\n`
     : '';
   const suffix = componentHint + (row.endpoint_id ? `${attachmentHint} ${replyVia(row, scriptPath)}` : '');
-  return truncateForDelivery(content, suffix, row.id);
+  return truncateForDelivery(content, suffix, row.id, pasteCharThreshold);
 }
