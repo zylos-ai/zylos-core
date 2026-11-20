@@ -22,7 +22,7 @@ function fixture(t, Coordinator = RuntimeHealthCoordinator) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-acceptance-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   let clock = T * 1000, scenes = [], probe = false, cache = null, writes = 0;
-  const health = new Coordinator({ zylosDir: root, now: () => clock, readMode: () => 'multi',
+  const health = new Coordinator({ zylosDir: root, now: () => clock,
     resolveTargetRuntime: () => 'claude', listScenes: () => scenes, probeInFlight: () => probe,
     readNegativeCache: () => cache });
   const store = health.store('claude'), originalWrite = store.write.bind(store);

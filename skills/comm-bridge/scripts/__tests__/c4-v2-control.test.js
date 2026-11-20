@@ -4,12 +4,12 @@ import Database from 'better-sqlite3';
 import { fixture } from './c4-v2-test-helpers.js';
 import { createStore } from '../c4-v2-store.js';
 const NOW = 1800000000;
-const single = { now: () => NOW * 1000, readConfig: () => ({ state: 'ok', config: { session_mode: 'single' } }) };
+const single = { now: () => NOW * 1000, readConfig: () => ({ state: 'ok', config: {} }) };
 const add = (s, sessionGroup, content = 'work', options = {}) => s.insertControl(content, { sessionGroup, appendAckSuffix: false, ...options });
 const row = (db, id) => db.prepare('SELECT * FROM control_queue WHERE id=?').get(id);
 const binding = run => ({ expectedRunId: run, tmuxTarget: { serverGeneration: 'gen', sessionId: '$1', paneId: '%2' } });
 
-test('NULL scope is allowed only in single, fails closed on bad and every open transition phase', t => {
+test('NULL scope is allowed only before migration, fails closed on bad and every open transition phase', t => {
   const { store: multi, db } = fixture(t);
   assert.throws(() => add(multi, null), { code: 'CONTROL_TARGET_REQUIRED' });
   assert.equal(db.prepare('SELECT count(*) n FROM control_queue').get().n, 0);
@@ -77,7 +77,7 @@ test('three targets count and expire only pending, preserve running and terminal
       const running = add(s, scope, 'running', { ackDeadlineAt: scope === null ? null : NOW + 10 }); s.claimControl(running.id); rows.push(running);
       const done = add(s, scope, 'done'); db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(done.id); rows.push(done);
     }
-    assert.deepEqual(s.countNonTerminalControls(target), { pending: scopes.length, running: scopes.length, runningWithoutDeadline: scopes.includes(null) ? 1 : 0 });
+    assert.deepEqual(s.countNonTerminalControls(target), { pending: scopes.length, running: scopes.length });
     const expected = rows.filter(r => scopes.includes(r.session_group) && r.raw_content === 'pending');
     assert.deepEqual(s.expirePendingControls(target), expected.map(r => ({ id: r.id, session_group: r.session_group, raw_content: r.raw_content })));
     for (const r of rows) {
@@ -252,24 +252,4 @@ test('listRunningControlsWithoutDeadline is exposed through the public c4-db fac
   const facade = await import('../c4-db.js');
   assert.equal(typeof facade.listRunningControlsWithoutDeadline, 'function');
   assert.deepEqual(facade.listRunningControlsWithoutDeadline({ machine: true }), []);
-});
-
-test('latestSessionSwitchAt reports the newest unfinished /exit or /clear for its target only', t => {
-  const { store: s, db } = fixture(t, single);
-  assert.equal(s.latestSessionSwitchAt({ machine: true }), null);
-  const setCreated = (id, at) => db.prepare('UPDATE control_queue SET created_at=? WHERE id=?').run(at, id);
-  const exit = add(s, null, '/exit'); setCreated(exit.id, NOW - 30);
-  const clear = add(s, null, '/clear'); setCreated(clear.id, NOW - 10);
-  setCreated(add(s, null, 'continue').id, NOW);
-  setCreated(add(s, null, '/exit now').id, NOW);
-  setCreated(add(s, 'a', '/clear').id, NOW);
-  assert.equal(s.latestSessionSwitchAt({ machine: true }), NOW - 10);
-  assert.equal(s.latestSessionSwitchAt({ sessionGroup: 'a' }), NOW);
-  s.claimControl(clear.id);
-  assert.equal(s.latestSessionSwitchAt({ machine: true }), NOW - 10, 'a delivered but unacknowledged switch still counts');
-  db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(clear.id);
-  assert.equal(s.latestSessionSwitchAt({ machine: true }), NOW - 30);
-  db.prepare("UPDATE control_queue SET status='timeout' WHERE id=?").run(exit.id);
-  assert.equal(s.latestSessionSwitchAt({ machine: true }), null);
-  assert.throws(() => s.latestSessionSwitchAt({}), { code: 'INVALID_ARGS' });
 });

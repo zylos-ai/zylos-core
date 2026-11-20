@@ -588,8 +588,28 @@ test('config rejects a partial pair, preserves exact Core reasons and queries on
   assert.equal(validConfigChange({ kind: 'model', runtime: 'claude', reset: true }), true);
   assert.equal(runningText({ running: { status: 'pending' } }, 'runtime', t), 'wb.config.pending');
   assert.equal(runningText({ running: { status: 'unknown', reason: 'snapshot_unavailable' } }, 'runtime', t), 'wb.config.unknown {"reason":"snapshot_unavailable"}');
-  assert.equal(runningText({ running: null, sessionMode: 'single' }, 'model', t), 'wb.config.single');
   assert.equal(runningText({ running: null, runtime: 'claude', resolved: { runtime: 'codex' } }, 'model', t), 'wb.config.otherRuntime');
+});
+
+test('configuration results without a running comparison follow the session mode', () => {
+  const baseline = { runtime: 'claude', mode: 'default' };
+  // A pre-migration instance keeps the baseline for every group, whatever was saved.
+  assert.equal(runningText({ sessionGroup: 'lark:oc_a', sessionMode: null, runtime: 'codex', resolved: baseline, running: null }, 'runtime', t), 'wb.config.single');
+  // Native single: other groups show the configuration they will use after switching back to multi.
+  const afterMulti = { runtime: 'codex', mode: 'override', model: 'gpt-6.2-sol', effort: 'high' };
+  assert.equal(runningText({ sessionGroup: 'lark:oc_a', sessionMode: 'single', resolved: afterMulti, running: null }, 'runtime', t),
+    'wb.config.afterMulti {"config":"Codex · gpt-6.2-sol · high"}');
+  // A model pair for a runtime the group will not use after the switch is still only retained.
+  assert.equal(runningText({ sessionGroup: 'lark:oc_a', sessionMode: 'single', runtime: 'codex', resolved: baseline, running: null }, 'model', t),
+    'wb.config.otherRuntime');
+  // Origin in native single is compared like a multi group.
+  assert.equal(runningText({ sessionGroup: 'origin', sessionMode: 'single', resolved: baseline, running: { status: 'applied' } }, 'runtime', t), 'wb.config.applied');
+  assert.equal(runningText({ sessionGroup: 'lark:oc_a', sessionMode: 'multi', resolved: baseline, running: { status: 'not_running' } }, 'runtime', t), 'wb.config.nextStart');
+  // The new text names the configuration in each language.
+  for (const language of ['zh', 'en']) {
+    const strings = JSON.parse(readFileSync(new URL(`../public/i18n/wb.${language}.json`, import.meta.url), 'utf8'));
+    assert.match(strings['wb.config.afterMulti'], /multi.*\{config\}/);
+  }
 });
 
 test('name edits use DELETE for blank names and show business or HTTP body errors as text', async () => {

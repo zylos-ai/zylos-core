@@ -81,6 +81,9 @@ export function answerDeliveryFixture(t) {
     if (!db.prepare('SELECT 1 FROM group_heads WHERE session_group=?').get(`${namespace}:${localId}`)) {
       c4.insertConversation('in', 'dashboard', localId, 'fixture group seed', { groupName: localId });
     }
+    // Questions are registered under the conversation of the row's endpoint.
+    store.db.prepare(`INSERT OR IGNORE INTO chat_conversations(local_id,namespace,state,created_at,updated_at)
+      VALUES (?,?,'active',1,1)`).run(localId, namespace);
     const row = c4.insertConversation('out', 'dashboard', localId, CONTENT_PREFIX + JSON.stringify(envelope), { groupName: localId });
     registerQuestion(row, { env: { ZYLOS_DIR: root } });
     return { row, envelope, sessionGroup: row.session_group, endpointId: localId };

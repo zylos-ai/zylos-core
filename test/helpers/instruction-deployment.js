@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { deployTemplates, syncCoreSkills } from '../../cli/commands/init.js';
 import { buildInstructionFile, instructionPaths } from '../../cli/lib/runtime/instruction-builder.js';
 import { prepareUpgradeRuntime } from '../../cli/lib/upgrade-runtime-preparation.js';
@@ -65,3 +66,12 @@ fs.accessSync(reference, fs.constants.R_OK);
 assert.equal(fs.readFileSync(reference, 'utf8'), fs.readFileSync(new URL('../../skills/comm-bridge/references/handoff-follow-up.md', import.meta.url), 'utf8'));
 fs.writeFileSync(path.join(root, 'memory/handoff.md'), 'unfinished work\n');
 console.log('Instruction deployment and installed handoff reference verified.');
+
+// The deployed registry resolves the packaged template, without a retired
+// .zylos/instructions/onboarding.md copy or dependence on the working directory.
+assert.equal(fs.existsSync(path.join(root, '.zylos/instructions/onboarding.md')), false);
+const shard = spawnSync(process.execPath, [path.join(root, '.claude/skills/activity-monitor/scripts/session-start-orchestrator.js'), '--shard', 'onboarding'],
+  { env: process.env, cwd: process.env.HOME, input: '{"source":"startup"}', encoding: 'utf8', timeout: 15000, maxBuffer: 65536 });
+assert.equal(shard.status, 0, shard.stderr);
+assert.equal(shard.stdout, '=== ZYLOS STARTUP CONTEXT [5/5] onboarding ===\n' + fs.readFileSync(new URL('../../templates/onboarding.md', import.meta.url), 'utf8').trimEnd() + '\n');
+console.log('Installed onboarding shard resolves the packaged template.');

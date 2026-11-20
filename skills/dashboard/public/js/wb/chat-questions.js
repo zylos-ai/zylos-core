@@ -11,7 +11,7 @@ const referenceMatches = (question, envelope, block, row) => question && !questi
   && question.questionSummary === envelope.questionSummary && envelope.interrupt?.blockId === block.id;
 
 /** A question uses its immutable message for fields and Dashboard for its current lifecycle. */
-export function renderQuestion({ document, envelope, block, row, question, canWrite = false, stateAvailable = true, statePendingPage = false, readOnlyExternal = false,
+export function renderQuestion({ document, envelope, block, row, question, canWrite = false, stateAvailable = true, statePendingPage = false, readOnlyExternal = false, readOnlyOther = false,
   t = key => key, onSubmit = null, formState = {}, onDraftChange = null, otherAnswerDisclosure = false, timeZone = null } = {}) {
   const node = (tag, text, cls) => element(document, tag, text, cls);
   const root = node('div', undefined, 'chat-question');
@@ -23,6 +23,10 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
   root.dataset.interruptId = envelope?.interruptId || '';
   root.dataset.lifecycle = lifecycle;
   if (readOnlyExternal) root.append(node('p', t('chat.question.externalReadOnly'), 'chat-question-status'));
+  // Another conversation's question shown in the Origin conversation: not answered from the card; the user replies
+  // in the Origin conversation, or answers it in its own conversation after switching back to multi. Its state
+  // belongs to that conversation, so the card shows this explanation as a full-width line instead of a status.
+  else if (readOnlyOther) root.append(node('p', t('chat.question.otherConversationReadOnly'), 'chat-notice'));
   else {
     if (statePendingPage && !question) root.append(node('p', t('chat.question.stateNotLoaded'), 'chat-question-status'));
     else if (valid || stateAvailable) root.append(node('p', t('chat.question.' + lifecycle), 'chat-question-status'));
@@ -46,7 +50,7 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
     (question.action && (question.action.id !== question.answerId || !validateAnswer(question.action, envelope, { historical: true }))) ||
     (formState.action && (formState.action.id !== question.answerId || !validateAnswer(formState.action, envelope, { historical: true }))));
   if (actionUnavailable) root.append(node('p', t('chat.question.actionUnavailable'), 'chat-error'));
-  const writable = canWrite && !readOnlyExternal && valid && !actionUnavailable && typeof onSubmit === 'function';
+  const writable = canWrite && !readOnlyExternal && !readOnlyOther && valid && !actionUnavailable && typeof onSubmit === 'function';
   const controls = [];
   let submitting = false;
   const status = node('p', '', block.type === 'form_intent' ? 'chat-error chat-form-error' : 'chat-error'); status.setAttribute('role', 'alert');

@@ -3,9 +3,9 @@ import { tmuxNameForGroup } from '../../../../../cli/lib/session-group-paths.js'
 import { createRouter } from '../../router/scheduler.js';
 export const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 export const flush = () => new Promise(resolve => setImmediate(resolve));
-export function routerFixture(t, { mode = 'multi', poolSize = 2, readyTimeoutMs = 1000, databaseFile = false, initialClock = 1800000000000 } = {}) {
+export function routerFixture(t, { mode = 'multi', keyPresent = true, poolSize = 2, readyTimeoutMs = 1000, databaseFile = false, initialClock = 1800000000000 } = {}) {
   let clock = initialClock;
-  const f = fixture(t, { now: () => clock, readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: mode } }) }, databaseFile);
+  const f = fixture(t, { now: () => clock, readConfig: () => ({ state: 'ok', config: { runtime: 'claude', ...(keyPresent ? { session_mode: mode } : {}) } }) }, databaseFile);
   const events = [], calls = [], scene = new Map(), current = new Map(), health = new Map();
   const db = { ...f.store,
     getControlById: id => f.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id),
@@ -20,7 +20,7 @@ export function routerFixture(t, { mode = 'multi', poolSize = 2, readyTimeoutMs 
     if (live.ready) current.set(group, { runId: live.runId, sessionId: live.sessionId, startupControlIds: [], ts: clock });
     return live;
   }
-  const deps = { db, now: () => clock, readSessionMode: () => { calls.push(['mode']); return { mode, keyPresent: true }; },
+  const deps = { db, now: () => clock, readSessionMode: () => { calls.push(['mode']); return { mode: keyPresent ? mode : null, keyPresent }; },
     readLiveIdentity: async group => scene.get(group) ?? { present: false, ready: false, tmuxName: tmuxNameForGroup(group ?? 'origin') },
     readCurrentSession: async group => current.get(group),
     listGroupTmuxSessions: async () => [...scene].filter(([,v]) => v.present).map(([sessionGroup,v]) => ({ sessionGroup, tmuxName: v.tmuxName, createdAt: v.createdAt })),
@@ -30,7 +30,7 @@ export function routerFixture(t, { mode = 'multi', poolSize = 2, readyTimeoutMs 
     submit: async request => { calls.push(['submit', request]); return { kind: 'accepted', sent: true, reply: { ...request, ok: true, result: 'registered', reason: 'recovery_due' } }; },
     deliverControl: async row => { calls.push(['control', row.id]); f.db.prepare("UPDATE control_queue SET status='done' WHERE id=? AND status='running'").run(row.id); },
     deliverConversation: async (row, live) => { calls.push(['conversation', row.id]); db.markDelivered(row.id, { sessionId: live.sessionId }); },
-    handleExpired: async row => calls.push(['expired', row.id]), prepareSingle: async () => calls.push(['prepare']),
+    handleExpired: async row => calls.push(['expired', row.id]),
     findLegacySessions: async () => [], advanceLegacy: async () => {}, diagnostic: (event, fields) => events.push({ event, ...fields }),
     alert: (event, fields) => calls.push(['alert', event, fields]), log: line => calls.push(['log', line]),
   };

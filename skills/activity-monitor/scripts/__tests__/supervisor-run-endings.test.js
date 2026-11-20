@@ -1,3 +1,4 @@
+import { seedHistoricalAbsorption } from '../../../comm-bridge/scripts/__tests__/fixtures/historical-absorption.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -23,10 +24,14 @@ test('first reconciliation after restart records each missing run exactly once w
   f.restart(); await f.step(); assert.equal(f.records().length, 2);
 });
 
-for (const gate of ['single', 'transition', 'global fence', 'group fence', 'live snapshot', 'old file']) {
+for (const gate of ['legacy single', 'transition', 'global fence', 'group fence', 'live snapshot', 'old file']) {
   test(`reconciliation does not record through ${gate}`, async t => {
     const f = await runEndingFixture(t); await f.add(); f.now += 31000;
-    if (gate === 'single') f.context.configuration.mode = 'single';
+    if (gate === 'legacy single') {
+      f.context.configuration = { mode: 'single', legacy: true };
+      f.context.scenes = [];
+      await f.write('origin');
+    }
     if (gate === 'transition') f.service.db = { ...f.store, getModeTransition: () => ({ phase: 'gating' }) };
     if (gate === 'global fence') f.store.setDrainFence('*');
     if (gate === 'group fence') f.store.setDrainFence('test:a', { reason: 'upgrade', runId: 'r1' });
@@ -111,4 +116,56 @@ test('an invalid session timestamp starts failure grace and is never recorded as
   await f.step(1000); assert.equal(f.slots().length, 0); assert.equal(f.records().length, 0);
   assert.equal(f.failures().length, 1); assert.equal(f.failures()[0].slot_deleted, true);
   assert.equal(f.failures()[0].session_group, 'test:a');
+});
+
+// Cross-module boundary: real completed-transition query feeds real reconciliation.
+// Run for transition-history filters; no services or external resources are used.
+test('native switches do not hide an Origin crash behind a newer completion time', async t => {
+  const f = await runEndingFixture(t);
+  await f.write('origin');
+  const sessionTime = f.now / 1000;
+  f.db.prepare(`INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,cutoff,created_at,updated_at)
+    VALUES('old-conversion','single','multi','complete',0,?,?)`).run(sessionTime-20,sessionTime-10);
+  f.db.prepare(`INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,created_at,updated_at)
+    VALUES('new-switch','single','multi','complete',?,?)`).run(sessionTime+10,sessionTime+20);
+  // A newer conversion to single also must not obscure the older multi conversion.
+  f.db.prepare(`INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,cutoff,created_at,updated_at)
+    VALUES('single-conversion','multi','single','complete',0,?,?)`).run(sessionTime+30,sessionTime+40);
+  f.now += 60000; f.context.scenes=[];
+  await f.step();
+  assert.equal(f.records().find(row=>row.sessionGroup==='origin')?.continuationPending,1);
+});
+
+// Reconciliation must retain the multi-conversion boundary across later native
+// completion. Real Store transitions, session file, occupancy and continuation query.
+test('an ordinary group crash remains eligible after a later native switch completes', async t => {
+  const f = await runEndingFixture(t);
+  const conversion = f.store.beginModeTransition('single', 'multi');
+  f.store.setDrainFence('*');
+  seedHistoricalAbsorption(f.db, conversion.runId);
+  f.store.setModeTransitionPhase(conversion.runId, 'cutover');
+  f.store.setModeTransitionPhase(conversion.runId, 'complete');
+  const convertedAt = f.now;
+
+  f.now += 10000;
+  await f.add('test:a', 'crashed-run');
+  // No live identity exists, but reconciliation has not observed the crash yet.
+  assert.equal(f.records('test:a').length, 0);
+  assert.equal(f.store.listPendingContinuations().length, 0);
+  f.now += 10000;
+  const native = f.store.beginModeTransition('single', 'multi');
+  f.store.setDrainFence('*');
+  f.store.setModeTransitionPhase(native.runId, 'cutover');
+  const completed = f.store.setModeTransitionPhase(native.runId, 'complete');
+  assert.equal(completed.cutoff, null);
+  assert.ok(completed.updated_at * 1000 > convertedAt);
+
+  await f.step(31000);
+  const ending = f.records('test:a')[0];
+  assert.equal(ending?.runId, 'crashed-run');
+  assert.equal(ending.reason, 'unexpected');
+  assert.equal(ending.continuationPending, 1);
+  assert.deepEqual(f.store.listPendingContinuations(), [{ sessionGroup: 'test:a', endedAt: ending.endedAt }]);
+  assert.equal(f.slots().find(row => row.sessionGroup === 'test:a')?.state, 'held');
+  assert.deepEqual(f.errors, []);
 });

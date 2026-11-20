@@ -307,12 +307,7 @@ export function cleanupControlQueue(cutoff) {
   return result.changes || 0;
 }
 
-/**
- * Get conversations by id range (inclusive)
- * @param {number} beginId - start conversation id
- * @param {number} endId - end conversation id
- * @returns {array} - conversation records in chronological order
- */
+/** Get conversations by id range (inclusive), in id order. */
 export function getConversationsByRange(beginId, endId, db = getDb()) {
   return db.prepare(
     'SELECT * FROM conversations WHERE id >= ? AND id <= ? ORDER BY id ASC'
@@ -487,7 +482,7 @@ export const recordRunEnd = (...args) => store.recordRunEnd(...args);
 export const listRunEndings = (...args) => store.listRunEndings(...args);
 export const listPendingContinuations = (...args) => store.listPendingContinuations(...args);
 export const clearContinuation = (...args) => store.clearContinuation(...args);
-export const clearAllContinuations = (...args) => store.clearAllContinuations(...args);
+export const clearContinuationsExceptOrigin = (...args) => store.clearContinuationsExceptOrigin(...args);
 export const insertControl = (...args) => store.insertControl(...args);
 export const getNextPendingControl = (...args) => store.getNextPendingControl(...args);
 export const claimControl = (...args) => store.claimControl(...args);
@@ -496,7 +491,6 @@ export const expireStaleRunningControls = (...args) => store.expireStaleRunningC
 export const expireLegacyRunningControls = (...args) => store.expireLegacyRunningControls(...args);
 export const countNonTerminalControls = (...args) => store.countNonTerminalControls(...args);
 export const listRunningControlsWithoutDeadline = (...args) => store.listRunningControlsWithoutDeadline(...args);
-export const latestSessionSwitchAt = (...args) => store.latestSessionSwitchAt(...args);
 export const expireControlById = (...args) => store.expireControlById(...args);
 export const failStaleTargetControl = (...args) => store.failStaleTargetControl(...args);
 export const setDrainFence = (...args) => store.setDrainFence(...args);
@@ -505,10 +499,9 @@ export const listDrainFences = (...args) => store.listDrainFences(...args);
 export const clearDrainFence = (...args) => store.clearDrainFence(...args);
 export const beginModeTransition = (...args) => store.beginModeTransition(...args);
 export const getLastCompletedModeTransition = (...args) => store.getLastCompletedModeTransition(...args);
-export const listGroupHeads = (...args) => store.listGroupHeads(...args);
-export const absorbForTransition = (...args) => store.absorbForTransition(...args);
+export const claimUngroupedPendingForOrigin = (...args) => store.claimUngroupedPendingForOrigin(...args);
+export const voidInternalForSingle = (...args) => store.voidInternalForSingle(...args);
 export const setModeTransitionPhase = (...args) => store.setModeTransitionPhase(...args);
-export const getAbsorbedConversations = (...args) => store.getAbsorbedConversations(...args);
 export const getModeTransition = (options = {}) => store.getModeTransition(options);
 
 // CLI mode: import after the facade has initialized to avoid a module cycle.

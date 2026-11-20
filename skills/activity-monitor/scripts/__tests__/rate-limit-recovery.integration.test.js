@@ -28,9 +28,9 @@ for (const recovered of [true, false]) {
       pm2: process.env.PM2_HOME, tmp: os.tmpdir(), root, database: ':memory:', tmux: 'none', network: 'none' } }));
     const f = routerFixture(t);
     const listScenes = () => [...f.scene].map(([sessionGroup, scene]) => ({ ...scene, sessionGroup, processRunning: true }));
-    const health = new RuntimeHealthCoordinator({ zylosDir: root, now: f.now, readMode: () => 'multi',
+    const health = new RuntimeHealthCoordinator({ zylosDir: root, now: f.now,
       resolveTargetRuntime: () => 'claude', listScenes });
-    const observer = new SupervisorHealthObserver({ coordinator: health, now: f.now, readMode: () => 'multi', listScenes,
+    const observer = new SupervisorHealthObserver({ coordinator: health, now: f.now, listScenes,
       readIdentity: group => f.scene.get(group), readState: () => ({ state: 'idle', tools: [] }),
       readScreen: () => recovered ? '' : 'rate limit', matchScreen: () => ({ rateLimit: { detected: !recovered } }),
       buildTargetBinding: scene => ({ expectedRunId: scene.runId,

@@ -1,3 +1,4 @@
+import { readSessionMode } from '../lib/config.js';
 import { collectStatus } from '../lib/status-view.js';
 import { describeOrigin, formatOriginDescription } from '../lib/origin-presence.js';
 /**
@@ -20,8 +21,9 @@ export async function attachCommand({ resolve = resolveCliSession, exec = execFi
     exec('tmux', [...tmuxClientArgs({ utf8: false }), C.hasSession, '-t', SESSION], { stdio: 'pipe' });
   } catch (error) {
     if (isTmuxDirectoryError(error)) throw error;
-    if (sessionGroup !== null && sessionGroup !== undefined) {
-      if (sessionGroup === 'origin') {
+    const nativeSingle = sessionGroup == null && readSessionMode().mode === 'single';
+    if (sessionGroup != null || nativeSingle) {
+      if (sessionGroup === 'origin' || nativeSingle) {
         const data = await collect();
         const description = describeOrigin({ ...data, targetRuntime: runtime, nowSec: Math.floor(data.readAt / 1000) });
         console.error(formatOriginDescription(description, runtime, data.originNeed) ?? `Origin session: ${description.state}.`);

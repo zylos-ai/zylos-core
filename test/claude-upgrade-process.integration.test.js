@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
-import { SINGLE_UPGRADE_RESTART_CHECK_PROMPT } from '../skills/activity-monitor/scripts/reclaim-prompts.js';
+import net from 'node:net';
 
 const repository = fileURLToPath(new URL('../', import.meta.url));
 
@@ -41,7 +41,7 @@ function isolatedEnvironment(t, failure = null) {
     fs.symlinkSync(path.join(repository, 'skills', skill), path.join(skills, skill));
   }
   fs.mkdirSync(path.join(zylos, '.zylos'));
-  fs.writeFileSync(path.join(zylos, '.zylos/config.json'), JSON.stringify({ session_mode: 'single' }));
+  fs.writeFileSync(path.join(zylos, '.zylos/config.json'), JSON.stringify({}));
   const database = path.join(zylos, 'comm-bridge/c4.db');
   console.log('Upgrade isolation:', JSON.stringify({ HOME: env.HOME, ZYLOS_DIR: env.ZYLOS_DIR,
     PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR, socket: path.join(tmp, 'tmux.sock'),
@@ -92,31 +92,43 @@ function controls(database) {
   finally { db.close(); }
 }
 
-// Boundary: real upgrade entry, native install pipeline and real C4 enqueue on a
+// Boundary: real upgrade entry, native install pipeline and restart_all submission on a
 // private database, with a network-free curl fixture installing a version stub.
-// Run when install/enqueue order changes; skip for unrelated edits. No service or
+// Run when install/submission order changes; skip for unrelated edits. No service or
 // tmux server is started; real authenticated replacement is a reviewer scenario.
 // Run only in isolation, never against live resources: isolate HOME, ZYLOS_DIR,
 // PM2_HOME and a short TMPDIR; reserve a private tmux socket and test database.
 // Read actual paths before starting and clean all processes/resources afterwards.
 for (const otherClaude of [false, true]) {
-  test(`single-session upgrade installs before queueing exit${otherClaude ? ' while another Claude remains running' : ''}`,
+  test(`pre-migration upgrade installs before requesting a restart${otherClaude ? ' while another Claude remains running' : ''}`,
     { timeout: 25000 }, async t => {
       const fixture = isolatedEnvironment(t);
       const claude = otherClaude ? await holdClaude(t, fixture.env) : null;
+      const socket = path.join(fixture.env.ZYLOS_DIR, 'activity-monitor/am.sock');
+      fs.mkdirSync(path.dirname(socket), { recursive: true });
+      const requests = [];
+      const server = net.createServer(connection => {
+        let input = '';
+        connection.on('data', chunk => {
+          input += chunk;
+          if (!input.includes('\n')) return;
+          const request = JSON.parse(input);
+          requests.push(request);
+          connection.end(JSON.stringify({ ...request, ok: true, result: 'done_empty', runCount: 0 }) + '\n');
+        });
+      });
+      await new Promise((resolve, reject) => server.once('error', reject).listen(socket, resolve));
+      t.after(() => new Promise(resolve => server.close(resolve)));
       const started = performance.now(), result = await runUpgrade(t, fixture);
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].type, 'restart_all');
       assert.equal(result.code, 0, result.log);
       assert.equal(result.signal, null);
       assert.ok(performance.now() - started < 15000, result.log);
       const installed = result.log.indexOf('Upgrade completed successfully');
-      const queued = result.log.indexOf('enqueued via control queue');
+      const queued = result.log.indexOf('Upgrade result: done_empty');
       assert.ok(installed >= 0 && queued > installed, result.log);
-      const rows = controls(fixture.database);
-      assert.equal(rows.length, 2);
-      assert.equal(rows[0].raw_content, SINGLE_UPGRADE_RESTART_CHECK_PROMPT);
-      assert.equal(rows[1].raw_content, '/exit');
-      assert.equal(rows[0].status, 'pending');
-      assert.equal(rows[1].status, 'pending');
+      assert.deepEqual(controls(fixture.database), []);
       assert.equal(execFileSync(path.join(fixture.env.HOME, '.local/bin/claude'), ['--version'], {
         env: fixture.env, encoding: 'utf8', timeout: 5000,
       }).trim(), 'Claude Code isolated-new');

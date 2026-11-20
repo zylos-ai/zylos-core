@@ -14,7 +14,11 @@ Keep startup context fast and local:
 
 This reference applies to Zylos Core 1.0.0 and later, including the 1.0 prerelease
 line.
-Both Claude and Codex generate the shard chain; context attachment order differs
+Claude, Codex and Antigravity use the same five core shards: identity, custom,
+references, c4-conversations and onboarding. The onboarding shard always occupies
+position 5, with an empty body unless `.zylos/onboarding-pending` exists. Its body
+comes from the packaged `templates/onboarding.md`; no deployed instruction copy
+is needed. Context attachment order differs
 as described below.
 A shard is startup context, not a place to perform network setup, authentication,
 package installation, or a large remote rules fetch.
@@ -122,9 +126,8 @@ ZYLOS_DIR=/absolute/path/to/zylos node /absolute/path/to/installed-core/cli/lib/
 `syncRuntimeHooks({ zylosDir })` is the file-writing API for Claude settings and
 Codex hooks/config; `syncHooks` alone only reconciles an in-memory Claude object.
 After changed settings and outside `--dry-run`, the CLI also calls
-`enqueueRestartIfNeeded`: in multi-session mode it can submit a Supervisor
-`restart_all`; in single-session mode it queues an idle-time `/exit` through
-c4-control. **Both modes can restart the agent**, including when a component
+`enqueueRestartIfNeeded`, which can submit `restart_all` to the supervisor in
+every mode. **This can restart the agent**, including when a component
 lifecycle hook invokes this CLI. Calling the exported file-writing API directly
 does not perform that restart step. Codex loads changed hooks on a new launch.
 Integrate synchronization with your component lifecycle; limit direct runtime
@@ -157,13 +160,13 @@ For content shard **k** (1-based position), the predecessor wait lasts at most
 `(k - 1) × T_LINK`, then the emitter is given its separate 5,500 ms wait budget.
 `T_LINK` defaults to 1,000 ms; `ZYLOS_SHARD_T_LINK_MS` changes the link wait only,
 not the emitter budget. Numeric `order` values and gaps do not add wait slots.
-The current chain has four Core content shards, so the first component is
-position 5 and can wait 4 seconds if its predecessor is absent.
+The current chain has five Core content shards, so the first component is
+position 6 and can wait 5 seconds if its predecessor is absent.
 
 If the predecessor is not ready, the header reports the actual elapsed wait:
 
 ```text
-predecessor "c4-conversations" not ready after 4000ms, continued
+predecessor "onboarding" not ready after 5000ms, continued
 ```
 
 Core then continues without that predecessor. Waits are bounded, so a slow shard

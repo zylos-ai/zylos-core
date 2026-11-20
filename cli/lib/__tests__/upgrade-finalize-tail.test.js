@@ -60,9 +60,7 @@ function deps(calls, extras={}) {
     verifyServices:()=>{calls.push('verify');return {status:'done'};},
     dashboardOwner:{verifyDashboard:()=>{calls.push('dashboard');return {state:'degraded',errors:[]};}},
     readModeStatus:()=>{throw Object.assign(Error('session-mode status is unavailable'),{code:'SESSION_MODE_STATUS_UNAVAILABLE'});},
-    readMode:()=>{calls.push('mode');return {mode:null,keyPresent:false};},
-    readTransition:()=>{calls.push('transition');return null;},
-    restart:async options=>{calls.push('restart');assert.equal((await options.readMode()).mode,'single');return {ok:true,data:{result:'exit_enqueued'}};},
+    restart:async options=>{calls.push('restart');assert.deepEqual(options,{afterServiceRestart:true});return {ok:true,data:{result:'accepted'}};},
     verifyPublicationForServices(){},protectedSuccess(){},
     finalizeWebConsoleRemoval:async()=>({warnings:[]}),
     ensureLogRotation:()=>({state:'present'}),
@@ -109,11 +107,11 @@ test('tail keeps user-owned state and runs thresholds, memory migration, session
   assert.equal(result.success,true);
   assert.equal(result.completion.install,'done');
   assert.equal(result.completion.dashboard,'degraded');
-  assert.equal(result.completion.sessionRestart,'single_exit_enqueued');
+  assert.equal(result.completion.sessionRestart,'accepted');
   assert.equal(result.completion.modeTransition,'unknown');
   assert.equal(result.modeStatus.error.code,'SESSION_MODE_STATUS_UNAVAILABLE');
   assert.equal(Object.hasOwn(result,'instructionFilesRebuilt'),false);
-  assert.deepEqual(calls,['thresholds','ensure','rotate','start','verify','dashboard','mode','transition','restart']);
+  assert.deepEqual(calls,['thresholds','ensure','rotate','start','verify','dashboard','restart']);
   assert.equal(fs.readFileSync(path.join(ctx.zylosDir,'memory/state.md'),'utf8'),state);
 });
 test('session-mode status adapter invokes only the read-only command with its own timeout and root',()=>{
@@ -135,12 +133,11 @@ for(const outcome of ['unavailable','invalid-json','rejected']) test(`session-mo
 test('mode transition reporting uses session-mode status independently of restart routing',async t=>{
   const ctx=fixture(t),calls=[];
   const result=await completeUpgradeFinalization(ctx,deps(calls,{
-    readModeStatus:()=>({ok:true,data:{sessionMode:'multi',transition:null}}),
-    readTransition:()=>({phase:'gating'})
+    readModeStatus:()=>({ok:true,data:{sessionMode:'multi',transition:null}})
   }));
   assert.equal(result.completion.modeTransition,'none');
   assert.deepEqual(result.modeStatus,{state:'observed',sessionMode:'multi',transition:null});
-  assert.equal(result.completion.sessionRestart,'single_exit_enqueued');
+  assert.equal(result.completion.sessionRestart,'accepted');
 });
 test('unreadable session-mode status remains unknown despite successful restart routing',async t=>{
   const ctx=fixture(t),calls=[];
@@ -149,7 +146,7 @@ test('unreadable session-mode status remains unknown despite successful restart 
   assert.equal(result.completion.modeTransition,'unknown');
   assert.equal(result.modeStatus.state,'unavailable');
   assert.match(result.modeStatus.error.message,/DB_BUSY/);
-  assert.equal(result.completion.sessionRestart,'single_exit_enqueued');
+  assert.equal(result.completion.sessionRestart,'accepted');
 });
 for(const failing of ['thresholds','ensure','rotate'])test(`failure in ${failing} blocks all service starts`,async t=>{
   const ctx=fixture(t),calls=[];
@@ -179,12 +176,16 @@ test('completed finalization starts the original service set',async t=>{
   assert.equal(result.success,true);
   assert.equal(calls.includes('start'),true);
 });
-test('restart path read errors are reported without submitting',async t=>{
+test('supervisor restart submission errors preserve installed upgrade and report manual restart',async t=>{
   const ctx=fixture(t),calls=[];
-  const result=await completeUpgradeFinalization(ctx,deps(calls,{readTransition:()=>{throw Error('DB_BUSY');}}));
+  const result=await completeUpgradeFinalization(ctx,deps(calls,{restart:()=>{
+    calls.push('restart');
+    throw Object.assign(Error('Socket unavailable'),{code:'RESTART_UNAVAILABLE'});
+  }}));
   assert.equal(result.success,true);
   assert.equal(result.completion.sessionRestart,'manual_required');
-  assert.equal(calls.includes('restart'),false);
+  assert.equal(result.sessionRestart.error.code,'RESTART_UNAVAILABLE');
+  assert.equal(calls.filter(call=>call==='restart').length,1);
 });
 for(const failing of [null,'registration','route','verify','dbCopy']) test(`Dashboard ${failing || 'success'} preserves independent outcomes`,async t=>{
   const ctx=fixture(t),calls=[];

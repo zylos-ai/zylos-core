@@ -15,7 +15,7 @@ import { PENDING_MAX_AGE_SECONDS, RECOVER_MAX_AGE_SECONDS, MAX_RETRIES,
  * The shared READY default can be overridden by isolated tests. */
 export function createRouter(dependencies, configuration = {}) {
   const required = ['readSessionMode','readLiveIdentities','readLiveIdentity','readCurrentSession','listGroupTmuxSessions','readRuntimeHealth',
-    'submit','deliverControl','deliverConversation','handleExpired','prepareSingle','findLegacySessions','advanceLegacy'];
+    'submit','deliverControl','deliverConversation','handleExpired','findLegacySessions','advanceLegacy'];
   for (const name of required) if (typeof dependencies[name] !== 'function') throw new TypeError(`Router dependency ${name} is required`);
   if (!dependencies.session || typeof dependencies.session !== 'object') throw new TypeError('Router dependency session is required');
   if (!dependencies.db) throw new TypeError('Router database is required');
@@ -28,7 +28,7 @@ export function createRouter(dependencies, configuration = {}) {
   }
   const deps = dependencies;
   const now = deps.now ?? Date.now;
-  const state = { mode: null, inert: false, ready: false, stopped: false, round: 0, sceneObservable: false,
+  const state = { mode: null, keyPresent: false, inert: false, ready: false, stopped: false, round: 0, sceneObservable: false,
     slots: new Map(), live: new Map(), continuations: new Map(), activations: new Map(), lanes: new Map(), listed: new Set(), legacy: [],
     resident: { failures: 0, absentSince: null, readySince: null, fenced: false } };
   const tasks = new Set();
@@ -108,7 +108,7 @@ export function createRouter(dependencies, configuration = {}) {
   };
   context.deferOpportunity = group => { attemptedRound.set(group, state.round); context.releaseOpportunity(group); };
   context.clearContinuation = (group, live) => {
-    if (state.mode !== 'multi' || !live?.present || !live.ready || !live.runId) return;
+    if (!live?.present || !live.ready || !live.runId) return;
     try {
       const pending = deps.db.listRunEndings([group]).some(row => row.continuationPending);
       if (pending && deps.db.clearContinuation(group, { runId: live.runId }).cleared) {
@@ -122,7 +122,7 @@ export function createRouter(dependencies, configuration = {}) {
     state.live.set(group, live);
     context.continuationRestarts.observe(group, live);
     context.clearContinuation(group, live);
-    if (group === null || group === 'origin') {
+    if (group === 'origin') {
       if (live.present) state.resident.absentSince = null;
       else state.resident.absentSince ??= now();
       if (live.ready) {
@@ -134,10 +134,10 @@ export function createRouter(dependencies, configuration = {}) {
   context.refreshScene = async (requested = [], { startup = false } = {}) => {
     try {
       const sessions = state.mode === 'single' ? [] : await deps.listGroupTmuxSessions();
-      const groups = state.mode === 'single' ? new Set([null]) :
+      const groups = state.mode === 'single' ? new Set(['origin']) :
         new Set(sessions.filter(row => groupFromTmuxName(row.tmuxName) === row.sessionGroup).map(row => row.sessionGroup));
       state.listed = groups;
-      const wanted = new Set([...groups, ...state.live.keys(), ...requested, state.mode === 'single' ? null : 'origin']);
+      const wanted = new Set([...groups, ...state.live.keys(), ...requested, 'origin']);
       const observation = Promise.resolve().then(() => deps.readLiveIdentities([...wanted])).then(identities => {
         for (const group of wanted) {
           if (!identities.get(group)) throw new Error('Batch identity observation is incomplete');
@@ -185,7 +185,7 @@ export function createRouter(dependencies, configuration = {}) {
   function adoptReadySlots() {
     if (!state.sceneObservable) return;
     for (const group of state.listed) {
-      if (group === null || group === 'origin') continue;
+      if (group === 'origin') continue;
       const live = state.live.get(group);
       if (!live?.present || !live.ready || !live.runId) continue;
       const own = state.slots.get(group);
@@ -216,13 +216,19 @@ export function createRouter(dependencies, configuration = {}) {
         .catch(error => diagnostic('maintenance_error', { reason: error.message })).finally(() => { maintenanceTask = null; }));
     }
     if (now() - lastMismatch >= options.mismatchIntervalMs) {
-      const counts = deps.db.countNonTerminalControls(state.mode === 'multi' ? { machine: true } : { allSessionGroups: true });
+      let counts = deps.db.countNonTerminalControls(state.mode === 'multi' ? { machine: true } : { allSessionGroups: true });
+      if (state.mode === 'single' && state.keyPresent) {
+        const machine = deps.db.countNonTerminalControls({ machine: true });
+        const origin = deps.db.countNonTerminalControls({ sessionGroup: 'origin' });
+        counts = Object.fromEntries(Object.keys(counts).map(key => [key, counts[key] + machine[key] - origin[key]]));
+      }
       if (counts.pending) { diagnostic('mode_mismatch', { count: counts.pending, mode: state.mode }); deps.alert?.('mode_mismatch', counts); }
       lastMismatch = now();
     }
-    if (state.mode === 'single' && !legacyTask) {
-      legacyTask = track(Promise.resolve().then(() => deps.advanceLegacy(state.legacy))
+    if (state.mode === 'single' && !state.keyPresent) {
+      if (!legacyTask) legacyTask = track(Promise.resolve().then(() => deps.advanceLegacy(state.legacy))
         .catch(error => diagnostic('legacy_error', { reason: error.message })).finally(() => { legacyTask = null; }));
+      return;
     }
     if (state.mode === 'multi') { context.refreshSlots(); adoptReadySlots(); }
     const pending = state.mode === 'multi' ? deps.db.listPendingSessionGroups() : [];
@@ -234,9 +240,9 @@ export function createRouter(dependencies, configuration = {}) {
     // require observation. Each round uses one batch, never per-session polling.
     if (!sceneTask) sceneTask = track(context.refreshScene([...pending, ...continuations].map(row => row.sessionGroup))
       .finally(() => { sceneTask = null; }));
-    const wanted = new Set(state.mode === 'single' ? [null] : ['origin', ...state.listed,
+    const wanted = new Set(state.mode === 'single' ? ['origin'] : ['origin', ...state.listed,
       ...pending.map(row => row.sessionGroup), ...continuations.map(row => row.sessionGroup), ...state.activations.keys()]);
-    const ordered = state.mode === 'single' ? [null] : ['origin', ...pending.sort((a,b) => a.headPriority-b.headPriority || a.headId-b.headId).map(row => row.sessionGroup), ...continuations.sort((a,b) => a.endedAt-b.endedAt || (a.sessionGroup < b.sessionGroup ? -1 : a.sessionGroup > b.sessionGroup ? 1 : 0)).map(row => row.sessionGroup), ...wanted];
+    const ordered = state.mode === 'single' ? ['origin'] : ['origin', ...pending.sort((a,b) => a.headPriority-b.headPriority || a.headId-b.headId).map(row => row.sessionGroup), ...continuations.sort((a,b) => a.endedAt-b.endedAt || (a.sessionGroup < b.sessionGroup ? -1 : a.sessionGroup > b.sessionGroup ? 1 : 0)).map(row => row.sessionGroup), ...wanted];
     for (const group of new Set(ordered)) {
       const active = state.activations.get(group);
       if (active && !active.launchSettled && now() - active.startedAt >= options.readyTimeoutMs && !active.warned) {

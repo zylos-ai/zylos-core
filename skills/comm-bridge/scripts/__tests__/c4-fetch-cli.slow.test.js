@@ -1,4 +1,4 @@
-// covers: skills/comm-bridge/scripts/c4-public-cli.js skills/comm-bridge/scripts/c4-fetch-format.js skills/comm-bridge/scripts/c4-sync-batch.js skills/comm-bridge/scripts/c4-fetch.js skills/comm-bridge/scripts/c4-db.js skills/comm-bridge/scripts/c4-checkpoint.js
+// covers: skills/comm-bridge/scripts/c4-public-cli.js skills/comm-bridge/scripts/c4-fetch-format.js skills/comm-bridge/scripts/c4-sync-batch.js skills/comm-bridge/scripts/c4-fetch.js skills/comm-bridge/scripts/c4-db.js skills/comm-bridge/scripts/c4-checkpoint.js skills/zylos-memory/scripts/sync-run.js skills/comm-bridge/scripts/__tests__/helpers/origin-sync-start.js
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
@@ -537,7 +537,8 @@ function withAbsorbed(fn) {
       import * as db from ${JSON.stringify(new URL('../c4-db.js', import.meta.url).href)};
       const rows = Array.from({ length: 23 }, (_, i) => db.insertConversation('in', 'system', 'route-' + i, '🚀'.repeat(301) + '\\n尾'));
       const { runId } = db.beginModeTransition('single', 'multi');
-      db.setDrainFence('*'); db.absorbForTransition(runId);
+      import { seedHistoricalAbsorption } from ${JSON.stringify(new URL('./fixtures/historical-absorption.js', import.meta.url).href)};
+      db.setDrainFence('*'); seedHistoricalAbsorption(db.getDb(), runId, rows.map(row => row.id));
       console.log(JSON.stringify({ runId, ids: rows.map(row => row.id) })); db.close();
     `], childOptions(env));
     assert.equal(seed.status, 0, seed.stderr);
@@ -583,5 +584,39 @@ describe('c4-fetch absorbed public CLI', () => {
         assert.equal(fs.existsSync(out), false);
       }
     });
+  });
+});
+
+// Boundary: actual public fetch and group Sync startup read one fixture SQLite
+// database with an undelivered foreign-group row. Run for either entry's store
+// configuration wiring; skip unrelated changes. withTmpDir validates and cleans
+// HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR. Runtime identity alone is injected for
+// Sync admission; no tmux socket, PM2 service, or external account is used.
+it('Origin reads cross foreign pending input only in multi mode', t => {
+  withTmpDir(({ tmpDir, env }) => {
+    const database = new Database(path.join(tmpDir, 'comm-bridge', 'c4.db'));
+    try {
+      const insert = database.prepare('INSERT INTO conversations(id,direction,channel,content,status,session_group) VALUES(?,?,?,?,?,?)');
+      insert.run(1, 'in', 'telegram', 'first Origin input', 'delivered', 'origin');
+      insert.run(2, 'in', 'telegram', 'foreign pending input', 'pending', 'telegram:other');
+      insert.run(3, 'in', 'telegram', 'latest Origin input', 'delivered', 'origin');
+    } finally { database.close(); }
+    fs.mkdirSync(path.join(tmpDir, '.zylos'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'memory/session-groups/origin'), { recursive: true });
+    const configPath = path.join(tmpDir, '.zylos/config.json');
+    for (const [mode, expectedEnd] of [['multi', 3], ['single', 1]]) {
+      fs.writeFileSync(configPath, JSON.stringify({ session_mode: mode }));
+      const scopedEnv = { ...env, ZYLOS_SESSION_GROUP: 'origin', ZYLOS_RUN_ID: 'origin-fixture-run' };
+      t.diagnostic(JSON.stringify({ mode, fetchArgs: ['--unsummarized', '--group', 'origin', '--json'],
+        syncEntry: fileURLToPath(new URL('./helpers/origin-sync-start.js', import.meta.url)),
+        paths: env, database: path.join(tmpDir, 'comm-bridge/c4.db'), tmux: 'unused' }));
+      const fetched = cli(['--unsummarized', '--group', 'origin', '--json'], scopedEnv);
+      assert.equal(fetched.status, 0, fetched.stderr);
+      const rows = JSON.parse(fetched.stdout).data.rows;
+      assert.equal(rows.at(-1).id, expectedEnd, mode);
+      const started = spawnSync(process.execPath, [fileURLToPath(new URL('./helpers/origin-sync-start.js', import.meta.url))], childOptions(scopedEnv));
+      assert.equal(started.status, 0, started.stderr);
+      assert.equal(JSON.parse(started.stdout).end, expectedEnd, mode);
+    }
   });
 });

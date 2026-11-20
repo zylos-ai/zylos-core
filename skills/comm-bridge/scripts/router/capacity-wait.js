@@ -8,7 +8,7 @@ export function createCapacityWaits({ deps, state, options, diagnostic, now, tra
   let stopped = false;
   function clear(group) { waits.delete(group); }
   function wait(group, record = null, launchConfig) {
-    if (stopped || group === null || group === 'origin') return;
+    if (stopped || group === 'origin') return;
     const config = launchConfig ?? deps.db.resolveSessionLaunchConfig({ sessionGroup: group, sessionMode: state.mode });
     const health = deps.readRuntimeHealth(config.runtime);
     // Health holds have their own notices; only healthy/fail-open admission is

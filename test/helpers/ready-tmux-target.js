@@ -9,14 +9,14 @@ import {isolatedTmux,tmuxClientEnv} from './isolated-tmux.js';
 
 // Real F1/F3, ledger and tmux; optional named sleeper is not an authenticated runtime.
 export function readyTmuxTarget(t,{prefix='c4-target-',mode='single',runtime='claude',
-  runId='run-1',sessionId='session-1',runtimeProcess=false,ledger=true,packageRoot}={}) {
+  runId='run-1',sessionId='session-1',runtimeProcess=false,ledger=true,packageRoot,keyPresent=true}={}) {
   let db;
   const f=isolatedTmux(t,{prefix,beforeCleanup:()=>db?.close()});
   const root=f.dir;
   const env=tmuxClientEnv(f,{PATH:process.env.PATH,HOME:root,ZYLOS_DIR:root,
     ZYLOS_PACKAGE_ROOT:packageRoot,LANG:'en_US.UTF-8'});
   fs.mkdirSync(path.join(root,'.zylos'));
-  fs.writeFileSync(path.join(root,'.zylos/config.json'),JSON.stringify({runtime,session_mode:mode}));
+  fs.writeFileSync(path.join(root,'.zylos/config.json'),JSON.stringify({runtime,...(keyPresent?{session_mode:mode}:{})}));
   if(ledger){
     fs.mkdirSync(path.join(root,'comm-bridge'));
     db=new Database(path.join(root,'comm-bridge/c4.db'));guardDatabase(db,schema);db.pragma('journal_mode=WAL');

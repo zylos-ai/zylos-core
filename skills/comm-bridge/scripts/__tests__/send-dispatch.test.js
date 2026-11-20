@@ -128,7 +128,8 @@ test('installed CLI checks absorbed external ownership and queues internal targe
 import * as db from ${JSON.stringify(database)};
 const row = db.insertConversation('in', 'demo', 'a\\\'"$\x60\\\\\\nroute', 'original', {groupName:'room'});
 const {runId} = db.beginModeTransition('single','multi');
-db.setDrainFence('*'); db.absorbForTransition(runId);
+import { seedHistoricalAbsorption } from ${JSON.stringify(new URL('./fixtures/historical-absorption.js', import.meta.url).href)};
+      db.setDrainFence('*'); seedHistoricalAbsorption(db.getDb(), runId, [row.id]);
 console.log(JSON.stringify({id:String(row.id),runId})); db.close();
 `], { env: fixture.env, encoding: 'utf8', timeout: 3000 });
   assert.equal(create.status, 0, create.stderr);

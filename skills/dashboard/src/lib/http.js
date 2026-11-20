@@ -26,7 +26,7 @@ const FAILURE_STATUSES = new Map([
   [404, ['task_not_found', 'group_not_found', 'session_group_not_found', 'unknown_key', 'unknown_agent', 'not_found']],
   [409, ['already_set', 'already_up_to_date', 'duplicate_request', 'environment_override', 'multi_session_required',
     'task_wrong_status', 'runtime_not_installed', 'target_scope_mismatch', 'target_mismatch', 'stale_target', 'task_ambiguous', 'transition_open', 'legacy_session_present', 'manual_restart_pending',
-    'deletion_in_progress', 'request_conflict', 'single_mode', 'not_multi', 'fence_conflict', 'restart_all_pending',
+    'deletion_in_progress', 'request_conflict', 'not_multi', 'fence_conflict', 'restart_all_pending',
     'run_changed', 'other_fence', 'deletion_preview_stale', 'deletion_ownership_mismatch', 'draft_became_active']],
   [500, ['internal_error', 'db_write_failed', 'config_store_failed', 'credential_save_failed', 'set_failed']],
   [502, ['result_unknown', 'no_reply', 'scheduler_cli_failed', 'group_delete_result_unknown', 'instance_root_mismatch', 'upgrade_failed', 'wake_failed', 'restart_failed']],

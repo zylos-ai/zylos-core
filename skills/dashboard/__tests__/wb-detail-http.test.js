@@ -196,11 +196,11 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     // The mode comes from this instance's own configuration file.
     const configFile = path.join(root, '.zylos/config.json');
     fs.mkdirSync(path.dirname(configFile), { recursive: true });
-    for (const [mode, target] of [['multi', ['--group', 'origin']], ['single', []]]) {
+    for (const [mode, target] of [['multi', ['--group', 'origin']], ['single', ['--group', 'origin']]]) {
       fs.writeFileSync(configFile, JSON.stringify({ session_mode: mode }));
       const response = await naming('admin');
       assert.equal(response.status, 200, mode);
-      assert.deepEqual(await response.json(), { ok: true, controlId: 41, sessionGroup: mode === 'multi' ? 'origin' : null });
+      assert.deepEqual(await response.json(), { ok: true, controlId: 41, sessionGroup: 'origin' });
       const call = enqueues().at(-1);
       assert.equal(call.file, process.execPath);
       assert.deepEqual(call.args.filter(arg => arg !== prompt(call)),

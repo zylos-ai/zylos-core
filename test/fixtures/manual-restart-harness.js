@@ -4,11 +4,12 @@ import path from 'node:path';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { readyTmuxTarget } from '../../../../../test/helpers/ready-tmux-target.js';
-import { submit } from '../../../../../cli/lib/am-sock-client.js';
+import { readyTmuxTarget } from '../helpers/ready-tmux-target.js';
+import { submit } from '../../cli/lib/am-sock-client.js';
 const worker = fileURLToPath(new URL('./manual-restart-worker.js', import.meta.url));
 export function fixture(t, mode = 'multi', runtime = 'claude') {
   const f = readyTmuxTarget(t, { prefix: 'i2mr-', mode, runtime, runtimeProcess: true });
+  if (mode === 'single') f.tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_SESSION_GROUP', 'origin');
   for (const target of [f.root, f.socketPath, f.db.name]) {
     assert.ok(target.startsWith(process.env.TMPDIR + path.sep), 'manual fixture must stay inside the private test root');
   }
@@ -26,7 +27,7 @@ export function fixture(t, mode = 'multi', runtime = 'claude') {
 }
 export function launch(t, f, variant = '') {
   const child = fork(worker, [f.socketPath, f.binary, f.mode, variant], { env: { ...process.env, ...f.env }, silent: true });
-  let stderr = ''; child.stderr.on('data', data => stderr += data);
+  let stderr = ''; child.stderr.on('data', data => { stderr = (stderr + data).slice(-8192); });
   const inbox = [], waiters = [];
   child.on('message', value => waiters.length ? waiters.shift().resolve(value) : inbox.push(value));
   child.on('exit', (code, signal) => { for (const waiter of waiters.splice(0)) waiter.reject(new Error(`supervisor exited ${code ?? signal}: ${stderr}`)); });

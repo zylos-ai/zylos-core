@@ -89,8 +89,8 @@ describe('split instruction assembler', () => {
     // Hashes cover the final template bytes after the managed header.
     const managedHeader = '> **Zylos-managed system instructions.** Replaced during upgrades; put custom instructions in `~/zylos/ZYLOS.md`.\n\n';
     const expected = {
-      claude: 'd01e0a9e1465000fce11e9a203e75c50745abfa084c9f2868fb0ef4b33cf07b8',
-      codex: 'ce0240693a606df478d2001d885ab56d34ec33e3ba55112920e5ac59d3030241',
+      claude: '85799d7ef20c2a5c0f43ffdfeb488137b25465a2f0ed0e9ae416c7144befb747',
+      codex: '1e09d2701316596dd6d6fdd5d66160317525702d355a6dacc43d293f2145dbc0',
     };
     for (const runtime of ['claude', 'codex']) {
       const content = fs.readFileSync(path.join(TEMPLATES_DIR, `${runtime}-system.md`), 'utf8');
@@ -190,20 +190,19 @@ describe('split instruction assembler', () => {
         assert.deepEqual(fs.readFileSync(path.join(root, name)), before[index]);
       });
       assert.ok(fs.existsSync(instructionPaths('claude', { zylosDir: root }).assemblerPath));
-      assert.ok(fs.existsSync(instructionPaths('claude', { zylosDir: root }).onboardingPath));
+      assert.equal(fs.existsSync(path.join(root, '.zylos/instructions/onboarding.md')), false);
       fs.rmSync(root, { recursive: true, force: true });
     });
   }
 
-  it('materializes onboarding.md on activation and refresh', () => {
+  it('leaves the retired onboarding asset untouched on activation and refresh', () => {
     const root = fixture();
+    const retired = path.join(root, '.zylos/instructions/onboarding.md');
     activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    const onboardingPath = instructionPaths('claude', { zylosDir: root }).onboardingPath;
-    const template = fs.readFileSync(path.join(TEMPLATES_DIR, 'onboarding.md'), 'utf8');
-    assert.equal(fs.readFileSync(onboardingPath, 'utf8'), template);
-    fs.writeFileSync(onboardingPath, 'stale local copy\n');
+    assert.equal(fs.existsSync(retired), false);
+    fs.writeFileSync(retired, 'retired local copy\n');
     refreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
-    assert.equal(fs.readFileSync(onboardingPath, 'utf8'), template);
+    assert.equal(fs.readFileSync(retired, 'utf8'), 'retired local copy\n');
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -216,7 +215,7 @@ describe('split instruction assembler', () => {
     deployInstructionAssets({ zylosDir: root, templatesDir: TEMPLATES_DIR });
     assert.equal(fs.statSync(paths.systemPath).mode & 0o777, 0o600);
     assert.equal(
-      fs.statSync(paths.onboardingPath).mode & 0o777,
+      fs.statSync(paths.assemblerPath).mode & 0o777,
       0o666 & ~process.umask(),
     );
     fs.rmSync(root, { recursive: true, force: true });

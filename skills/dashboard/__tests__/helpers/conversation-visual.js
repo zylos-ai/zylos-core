@@ -604,10 +604,10 @@ export async function runConversationVisual(t, sandbox) {
   if (output) { const file = path.join(output, 'remote-closed.png'); await page.screenshot({ path: file, fullPage: false }); shots.push(file); }
   expectedDenied = false;
   // Restore the historical-only UTF-8 fixture before exercising ordinary mode conversion.
-  // This page case does not claim converter support for legacy non-ASCII group keys.
+  // Use a current valid group key for the native-switch history fixture.
   fixture.db.prepare('UPDATE conversations SET session_group=? WHERE session_group=?').run(validExternalGroup, legacyGroup);
   fixture.db.prepare('UPDATE group_heads SET session_group=? WHERE session_group=?').run(validExternalGroup, legacyGroup);
-  await fixture.convertToSingle();
+  await fixture.switchToSingle();
   await page.goto(fixture.base + '/chat');
   await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
   await select();

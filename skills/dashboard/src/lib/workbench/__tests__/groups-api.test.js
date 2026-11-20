@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { collectStatus } from '../../../../../../cli/lib/status-view.js';
 import { createGroupSnapshot } from '../group-snapshot.js';
+import { createSessionObservations } from '../../session-observations.js';
 import { createGroupsApi, projectGroup, groupCounts } from '../groups-api.js';
 
 const now = 1800000000000;
@@ -340,5 +341,52 @@ test('all group readers accept only exact historical C4 membership and leave cur
     await assert.rejects(api.readKey(bad), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
     await assert.rejects(api.detail(bad, { include: [] }), { code: 'SESSION_GROUP_INVALID', statusCode: 400 });
     assert.equal(snapshots, before, 'unsafe shapes fail before reading catalog or optional fields');
+  }
+});
+
+// Cross-module evidence: the real shared observation batch feeds real Core status in each session
+// mode. Run for observation or status-view changes. Session reads are injected; no DB, network,
+// tmux, runtime or PM2 is opened; the root is removed after this case.
+test('the shared observation gives status a live Origin row in every session mode', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'groups-mode-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  assert.ok(root.startsWith(process.env.TMPDIR + path.sep));
+  // The configured mode, the session the batch must read, and the effective mode it keeps reporting.
+  for (const [mode, read, effective] of [[null, null, 'single'], ['single', 'origin', 'single'], ['multi', 'origin', 'multi']]) {
+    const reads = [];
+    const live = { identity: { present: true, ready: true, runId: `run-${read}`, sessionId: 's', runtime: 'claude', createdAt: now / 1000 - 10,
+      launchConfig: { runtime: 'claude', mode: 'default' } }, status: { valid: true, reason: null, sampledAt: now, value: { state: 'idle' } }, usage: { valid: false } };
+    const reader = { readAccountUsage: async () => ({}), readRuntimeHealth: () => ({ missing: true }),
+      // Only the session the mode designates is live, so reading another one shows up as not running.
+      readSessionStates: async groups => { reads.push(groups); return new Map(groups.map(group => [group, group === read ? live
+        : { identity: { present: false }, status: { valid: false, reason: 'not_running', sampledAt: null }, usage: { valid: false } }])); } };
+    const loadCoreModule = async name => {
+      if (name === 'config.js') return { readSessionMode: () => ({ mode }) };
+      if (name === 'session-state-reader.js') return reader;
+      if (['session-usage-reader.js', 'session-group-paths.js'].includes(name)) return {};
+      if (name === 'session-pool-config.js') return { readPoolCapacity: () => ({ k: 3, valid: true, fresh: true }) };
+      if (name === 'status-view.js') return { collectStatus: options => collectStatus({ ...options, now: () => now, resolveRoot: () => root,
+        configIssue: () => null, requests: () => [], facts: () => ({ originNeed: null }) }) };
+      throw new Error(`Unexpected module ${name}`);
+    };
+    const sessionObservations = createSessionObservations({ zylosDir: root, now: () => now, loadCoreModule });
+    const batch = await sessionObservations.get();
+    assert.deepEqual(reads, [[read]], `${mode}: the batch reads the session that runs`);
+    assert.equal(batch.mode, effective, `${mode}: existing readers keep the effective mode`);
+    assert.equal(batch.sessionMode, mode);
+    assert.deepEqual([...batch.observations.keys()], [effective === 'multi' ? 'origin' : null], `${mode}: the batch key is unchanged`);
+    const service = createGroupSnapshot({ zylosDir: root, now: () => now, sessionObservations, loadCoreModule,
+      cli: { runC4Db: async args => ({ ok: true, data: args[0] === 'groups' ? [] : { groups: [], globalFence: null } }),
+        readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) },
+      store: { latestEventByType: () => null, queryEvents: () => [] }, c4Reader: { listSlotOccupancy: () => [] } });
+    const value = await service.getSnapshot(now, { cachedObservations: true });
+    assert.equal(value.sources.status.ok, true, `${mode}: status was read`);
+    assert.equal(value.view, effective);
+    const origin = value.rows.find(row => row.origin);
+    assert.equal(origin.presence, 'running');
+    assert.equal(origin.live.error, null, `${mode}: no READ_FAILED`);
+    assert.equal(origin.live.runId, `run-${read}`);
+    assert.equal(origin.sessionGroup, effective === 'multi' ? 'origin' : null);
+    assert.equal(origin.launchConfig?.runtime, 'claude', `${mode}: the row keeps the observed launch configuration`);
   }
 });

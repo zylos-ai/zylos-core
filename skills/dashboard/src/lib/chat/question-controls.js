@@ -4,6 +4,8 @@ import path from 'node:path';
 import { inspectDatabase, TARGET_SCHEMA_VERSION } from '../schema.js';
 import { ChatAnswers } from './answers.js';
 import { parseC4Content } from '../../../../comm-bridge/scripts/c4-content-schema.js';
+import { endpointConversationGroup } from './origin.js';
+import { dashboardNamespaceReader } from './questions.js';
 
 /** Apply only an explicit control from an already verified authoritative out row. */
 export function recordQuestionControl(row, { env = process.env } = {}) {
@@ -23,8 +25,11 @@ export function recordQuestionControl(row, { env = process.env } = {}) {
       } catch (error) {
         throw Object.assign(new Error('Dashboard database unavailable or incompatible; complete the upgrade or restart Dashboard.', { cause: error }), { code: 'QUESTION_CONTROL_FAILED' });
       }
-      return new ChatAnswers({ store: { db } }).control({ sessionGroup: row.session_group,
-        endpointId: row.endpoint_id, envelope: parsed.envelope });
+      // Questions are registered under the conversation the row is sent to;
+      // the recording group is `origin` for every conversation in single mode.
+      const sessionGroup = endpointConversationGroup(db, row.endpoint_id, dashboardNamespaceReader(zylosDir));
+      if (!sessionGroup) throw Object.assign(new Error('chat_question_not_found'), { code: 'chat_question_not_found' });
+      return new ChatAnswers({ store: { db } }).control({ sessionGroup, endpointId: row.endpoint_id, envelope: parsed.envelope });
     } finally { db?.close(); }
   } catch (error) {
     // The channel verified this outbound C4 row before applying its overlay.

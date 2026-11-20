@@ -1,3 +1,4 @@
+import { seedHistoricalAbsorption } from './fixtures/historical-absorption.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -115,7 +116,7 @@ test('namespace, group discovery and ordinary fetch preserve safe literal reply 
 test('absorbed real CLI pages and full fields reject integrity errors without partial output', t => {
   const { store, data, cli, database }=fixture(t);
   const row=store.insertConversation('in','chat','secret endpoint','中\n\0'.repeat(2000));
-  const {runId}=store.beginModeTransition('single','multi'); store.setDrainFence('*'); store.absorbForTransition(runId);
+  const {runId}=store.beginModeTransition('single','multi'); store.setDrainFence('*'); seedHistoricalAbsorption(database, runId, [row.id]);
   assert.equal(data('c4-db.js',['mode-transition','show']).run_id,runId);
   for(const args of [[],['--summary'],['--id',String(row.id)]]) for(const json of [false,true]) {
     const out=cli('c4-fetch.js',['--absorbed','--run-id',runId,...args,...(json?['--json']:[])]).stdout;

@@ -4,8 +4,8 @@ const { handoffPath } = await loadCoreModule('session-group-paths.js');
 
 /** Volatile observations only. Diagnostic history never authorizes a stop. */
 export class SupervisorExits {
-  constructor({ scenes, db, serialize, readMode, diagnostic, env, reportError = () => {}, stat = fs.stat }) {
-    Object.assign(this, { scenes, db, serialize, readMode, diagnostic, env, reportError, stat });
+  constructor({ scenes, db, serialize, diagnostic, env, reportError = () => {}, stat = fs.stat }) {
+    Object.assign(this, { scenes, db, serialize, diagnostic, env, reportError, stat });
     this.previous = new Map();
   }
   forget(group, runId) {
@@ -14,10 +14,9 @@ export class SupervisorExits {
     return true;
   }
   async report(scene) {
-    const mode = (await this.readMode()).mode;
     let rotated = false;
     if (scene.runtime === 'codex' && Number.isFinite(scene.currentSessionTs)) {
-      try { rotated = (await this.stat(handoffPath(mode === 'single' ? null : scene.sessionGroup, this.env))).mtimeMs > scene.currentSessionTs; }
+      try { rotated = (await this.stat(handoffPath(scene.sourceScope === null ? null : scene.sessionGroup, this.env))).mtimeMs > scene.currentSessionTs; }
       catch { /* Handoff is diagnostic evidence only. */ }
     }
     this.diagnostic({ event: rotated ? 'rotate_done' : 'crash_detected', sessionGroup: scene.sessionGroup,

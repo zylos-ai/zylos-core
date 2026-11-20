@@ -37,7 +37,10 @@ configuration. Origin Sync uses Origin's actual runtime.
   Do not pass `reasoning_effort`. In the Sync result, distinguish the requested
   model (or inheritance) from the actual model verified by runtime evidence;
   if the actual model cannot be verified, report it as unverified.
-  Give the worker a self-contained message instructing it to read
+  Start the worker message with this exact sentence:
+  > You are this session's already-launched Memory Sync subagent; do not read the zylos-memory SKILL.md or launch another subagent.
+
+  Then give the worker self-contained instructions to read
   only the files listed for that job under Worker procedures. Include their paths, the requested job,
   and all facts and environment bindings it needs; it cannot see the parent
   conversation.

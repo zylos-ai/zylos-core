@@ -1,4 +1,4 @@
-import { fixture as storeFixture, modifiedStore, startHeldWriter } from './c4-v2-test-helpers.js';
+import { fixture as storeFixture, startHeldWriter } from './c4-v2-test-helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
@@ -8,95 +8,40 @@ import { createStore } from '../c4-v2-store.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
+import { randomUUID } from 'node:crypto';
 function fixture(t, filename = ':memory:') {
   const { db, store } = storeFixture(t, {}, filename);
   const state = () => ({ transitions: db.prepare('SELECT * FROM mode_transitions ORDER BY rowid').all(), messages: db.prepare('SELECT * FROM conversations ORDER BY id').all(), checkpoints: db.prepare('SELECT * FROM checkpoints ORDER BY id').all(), fences: db.prepare('SELECT * FROM drain_fences ORDER BY session_group').all() });
   return { db, store, state };
 }
-function converting(store, source = 'single') {
-  const { runId } = store.beginModeTransition(source, source === 'single' ? 'multi' : 'single'); store.setDrainFence('*'); store.absorbForTransition(runId); return runId;
-}
-test('absorption includes legacy empty scope, snapshots original coverage, and is replay stable', t => {
-  const { db, store } = fixture(t);
-  const a = store.insertConversation('out', 'foo', 'e', 'covered'); store.createCheckpoint('*', a.id, 'global');
-  const b = store.insertConversation('in', 'foo', 'e', 'pending');
-  const c = store.insertConversation('in', 'bar', 'e', 'pending');
-  const legacy = Number(db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('in','old','legacy','pending','')").run().lastInsertRowid);
-  const runId = converting(store); const first = store.absorbForTransition(runId);
-  assert.deepEqual(first, { cutoff: legacy, coverageSnapshot: { '*': a.id }, absorbedIds: [b.id, c.id, legacy] });
-  assert.deepEqual(db.prepare("SELECT id FROM conversations WHERE status='switch_absorbed' ORDER BY id").all().map(x => x.id), first.absorbedIds);
-  const later = store.insertConversation('in', 'new', 'e', 'later');
-  assert.deepEqual(store.absorbForTransition(runId), first); assert.equal(db.prepare('SELECT status FROM conversations WHERE id=?').get(later.id).status, 'pending');
-});
-test('SQL abort after status writes rolls back and all progress columns', t => {
-  const { db, store, state } = fixture(t); store.insertConversation('in', 'foo', 'e', 'pending');
-  const { runId } = store.beginModeTransition('single', 'multi'); store.setDrainFence('*');
-  const before = state();
-  db.exec("CREATE TRIGGER reject_absorb BEFORE UPDATE ON mode_transitions WHEN NEW.phase='converting' BEGIN SELECT RAISE(ABORT,'reject progress'); END");
-  assert.throws(() => store.absorbForTransition(runId), { code: 'DB_WRITE_FAILED' }); assert.deepEqual(state(), before);
-});
-for (const moment of ['before', 'after']) test(`process death ${moment} commit leaves one atomic absorption outcome`, t => {
-  const dir = mkdtempSync(join(tmpdir(), 'c4-transition-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const filename = join(dir, 'db.sqlite'); const { db, store, state } = fixture(t, filename);
-  const row = store.insertConversation('in', 'foo', 'e', 'pending'); const { runId } = store.beginModeTransition('single', 'multi'); store.setDrainFence('*');
-  const before = state();
-  const code = `import Database from ${JSON.stringify(require.resolve('better-sqlite3'))};
-import {createStore} from ${JSON.stringify(new URL('../c4-v2-store.js', import.meta.url).href)};
-const db=new Database(${JSON.stringify(filename)});
-${moment === 'before' ? `db.function('kill_here',()=>process.kill(process.pid,'SIGKILL')); db.exec("CREATE TEMP TRIGGER crash_before_progress BEFORE UPDATE ON mode_transitions BEGIN SELECT kill_here(); END");` : ''}
-createStore(db).absorbForTransition(${JSON.stringify(runId)});
-process.kill(process.pid,'SIGKILL');`;
-  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8' });
-  assert.equal(child.signal, 'SIGKILL', child.stderr);
-  if (moment === 'before') assert.deepEqual(state(), before);
-  else { assert.equal(store.getModeTransition({ runId }).phase, 'converting'); assert.deepEqual(store.getModeTransition({ runId }).absorbed_ids, [row.id]); assert.equal(db.prepare('SELECT status FROM conversations WHERE id=?').get(row.id).status, 'switch_absorbed'); }
-});
-for (const obstacle of ['extra-fence', 'running', 'missing-global']) test(`absorption rejects ${obstacle} without any data change`, t => {
-  const { store, state } = fixture(t); const row = store.insertConversation('in', 'foo', 'e', 'pending');
-  if (obstacle === 'running') store.claimConversation(row.id);
-  const { runId } = store.beginModeTransition('single', 'multi');
-  if (obstacle !== 'missing-global') store.setDrainFence('*');
-  if (obstacle === 'extra-fence') store.setDrainFence('foo', { reason: 'ttl', runId: 'old' });
-  const before = state(); assert.throws(() => store.absorbForTransition(runId), { code: 'TRANSITION_PRECONDITION' }); assert.deepEqual(state(), before);
-});
 test('begin enforces one open transition and all forbidden phase edges reject', t => {
   const { db, store, state } = fixture(t);
   assert.throws(() => store.beginModeTransition('single', 'single'), { code: 'TRANSITION_SAME_MODE' });
   const { runId } = store.beginModeTransition('single', 'multi'); const initial = state();
   assert.throws(() => store.beginModeTransition('multi', 'single'), { code: 'TRANSITION_OPEN' }); assert.deepEqual(state(), initial);
   assert.throws(() => db.prepare("INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,created_at,updated_at) VALUES('other','single','multi','gating',1,1)").run(), /UNIQUE/);
-  for (const phase of ['converting', 'cutover', 'complete', 'invalid']) { assert.throws(() => store.setModeTransitionPhase(runId, phase), { code: 'PHASE_TRANSITION_INVALID' }); assert.deepEqual(state(), initial); }
-  store.setDrainFence('*'); store.absorbForTransition(runId);
-  for (const phase of ['gating', 'complete']) assert.throws(() => store.setModeTransitionPhase(runId, phase), { code: 'PHASE_TRANSITION_INVALID' });
+  for (const phase of ['converting', 'complete', 'invalid']) { assert.throws(() => store.setModeTransitionPhase(runId, phase), { code: 'PHASE_TRANSITION_INVALID' }); assert.deepEqual(state(), initial); }
+  store.setDrainFence('*');
   store.setModeTransitionPhase(runId, 'cutover');
   for (const phase of ['gating', 'converting']) assert.throws(() => store.setModeTransitionPhase(runId, phase), { code: 'PHASE_TRANSITION_INVALID' });
   store.setModeTransitionPhase(runId, 'complete');
   for (const phase of ['gating', 'converting', 'cutover']) assert.throws(() => store.setModeTransitionPhase(runId, phase), { code: 'PHASE_TRANSITION_INVALID' });
 });
-test('multi cutover writes exactly one empty content boundary and retries do not duplicate', t => {
+test('cutover never writes a global checkpoint, including historical multi-source conversion rows', t => {
   const { db, store } = fixture(t);
-  const a = store.insertConversation('out', 'foo', 'e', 'a'); store.createCheckpoint('foo', a.id, 'summary');
-  const b = store.insertConversation('in', 'foo', 'e', 'pending'); const runId = converting(store, 'multi');
-  assert.deepEqual(store.getModeTransition({ runId }).coverage_snapshot, { foo: a.id });
-  store.setModeTransitionPhase(runId, 'cutover'); store.setModeTransitionPhase(runId, 'cutover', { reason: 'retry' });
-  const rows = db.prepare("SELECT * FROM checkpoints WHERE session_group='*' AND end_conversation_id IS NOT NULL").all();
-  assert.equal(rows.length, 1); assert.equal(rows[0].end_conversation_id, b.id); assert.equal(rows[0].summary, ''); assert.equal(rows[0].no_content, 0);
-  assert.equal(store.getModeTransition({ runId }).phase, 'cutover');
-});
-test('cutover boundary validation or post-checkpoint SQL failure rolls back both tables', t => {
-  const { db, store, state } = fixture(t); const row = store.insertConversation('in', 'foo', 'e', 'pending'); const runId = converting(store, 'multi');
-  db.prepare("UPDATE conversations SET status='pending' WHERE id=?").run(row.id);
-  const gap = state(); assert.throws(() => store.setModeTransitionPhase(runId, 'cutover'), { code: 'CHECKPOINT_GAP' }); assert.deepEqual(state(), gap);
-  db.prepare("UPDATE conversations SET status='switch_absorbed' WHERE id=?").run(row.id);
-  const before = state(); db.exec("CREATE TRIGGER reject_cutover BEFORE UPDATE ON mode_transitions WHEN NEW.phase='cutover' BEGIN SELECT RAISE(ABORT,'reject cutover'); END");
-  assert.throws(() => store.setModeTransitionPhase(runId, 'cutover'), { code: 'DB_WRITE_FAILED' }); assert.deepEqual(state(), before);
+  const message = store.insertConversation('in', 'foo', 'e', 'pending');
+  const runId = randomUUID();
+  db.prepare("INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,cutoff,coverage_snapshot,absorbed_ids,created_at,updated_at) VALUES(?,'multi','single','converting',?,'{}',?,1,1)").run(runId, message.id, JSON.stringify([message.id]));
+  db.prepare("UPDATE conversations SET status='switch_absorbed' WHERE id=?").run(message.id);
+  store.setDrainFence('*');
+  const before = db.prepare('SELECT * FROM checkpoints').all();
+  store.setModeTransitionPhase(runId, 'cutover');
+  store.setModeTransitionPhase(runId, 'cutover', { reason: 'retry' });
+  assert.deepEqual(db.prepare('SELECT * FROM checkpoints').all(), before);
 });
 for (const obstacle of ['extra-fence', 'manual-global', 'phase-write-fails', 'none']) test(`complete and fence removal are atomic with ${obstacle}`, t => {
-  const { db, store, state } = fixture(t); store.insertConversation('in', 'foo', 'e', 'pending'); const runId = converting(store); store.setModeTransitionPhase(runId, 'cutover');
+  const { db, store, state } = fixture(t); store.insertConversation('in', 'foo', 'e', 'pending'); const { runId } = store.beginModeTransition('single', 'multi'); store.setDrainFence('*'); store.setModeTransitionPhase(runId, 'cutover');
   if (obstacle === 'extra-fence') store.setDrainFence('foo', { reason: 'ttl', runId: 'old' });
   if (obstacle === 'manual-global') db.prepare("UPDATE drain_fences SET reason='manual_restart',run_id='other' WHERE session_group='*'").run();
   if (obstacle === 'phase-write-fails') db.exec("CREATE TRIGGER reject_complete BEFORE UPDATE ON mode_transitions WHEN NEW.phase='complete' BEGIN SELECT RAISE(ABORT,'reject complete'); END");
@@ -104,21 +49,6 @@ for (const obstacle of ['extra-fence', 'manual-global', 'phase-write-fails', 'no
   if (obstacle === 'none') { store.setModeTransitionPhase(runId, 'complete'); assert.equal(store.getDrainFence('*'), null); assert.equal(store.getModeTransition({ runId }).phase, 'complete'); }
   else { assert.throws(() => store.setModeTransitionPhase(runId, 'complete'), { code: obstacle === 'phase-write-fails' ? 'DB_WRITE_FAILED' : 'TRANSITION_PRECONDITION' }); assert.deepEqual(state(), before); }
 });
-test('calibration: atomicity assertion detects split transaction mutant', async t => {
-  const needle = '      run(c, "UPDATE mode_transitions SET cutoff=';
-  // Commit D1 first so rollback of the later D9 failure cannot undo absorption.
-  const mutatedCreateStore = await modifiedStore('c4-store-transition.js', needle,
-    '      c.exec("COMMIT; BEGIN IMMEDIATE");\n' + needle);
-  for (const create of [createStore, mutatedCreateStore]) {
-    const { db, state } = fixture(t); const store = create(db, { validateComponent: () => true });
-    store.insertConversation('in', 'foo', 'e', 'pending'); const { runId } = store.beginModeTransition('single', 'multi'); store.setDrainFence('*'); const before = state();
-    db.exec("CREATE TRIGGER reject_absorb BEFORE UPDATE ON mode_transitions WHEN NEW.phase='converting' BEGIN SELECT RAISE(ABORT,'reject progress'); END");
-    assert.throws(() => store.absorbForTransition(runId), { code: 'DB_WRITE_FAILED' });
-    const acceptance = () => assert.deepEqual(state(), before);
-    if (create === createStore) acceptance(); else assert.throws(acceptance, assert.AssertionError);
-  }
-});
-
 // Snapshot every table independently; total_changes also detects writes later undone.
 function allTables(db) {
   return Object.fromEntries(db.prepare("SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name").all()
@@ -161,18 +91,8 @@ test('getLastCompletedModeTransition: empty/open null, updated_at/created_at/row
   checkCompletedOrdering(t);
 });
 
-for (const order of ['created_at DESC', 'updated_at DESC,rowid DESC', 'updated_at DESC,created_at DESC,rowid ASC']) {
-  test(`getLastCompletedModeTransition calibration rejects ordering mutant: ${order}`, async t => {
-    const mutant = await modifiedStore('c4-store-transition.js', 'updated_at DESC,created_at DESC,rowid DESC', order);
-    assert.throws(() => checkCompletedOrdering(t, mutant), assert.AssertionError);
-  });
-}
-
 test('getLastCompletedModeTransition: injected driver busy maps to DB_BUSY, not null', async t => {
   const { db } = fixture(t);
-  const mutant = await modifiedStore('c4-v2-store.js',
-    "if (error.code?.startsWith('SQLITE_BUSY')) throw dataError('DB_BUSY', error.message, { cause: error });",
-    "if (error.code?.startsWith('SQLITE_BUSY')) return null;");
   const nativePrepare = db.prepare;
   db.prepare = function(sql) {
     if (sql.includes("WHERE phase='complete'")) throw Object.assign(new Error('controlled driver busy'), { code: 'SQLITE_BUSY' });
@@ -181,7 +101,6 @@ test('getLastCompletedModeTransition: injected driver busy maps to DB_BUSY, not 
   try {
     const acceptance = create => assert.throws(() => create(db).getLastCompletedModeTransition(), { code: 'DB_BUSY', persisted: [] });
     acceptance(createStore);
-    assert.throws(() => acceptance(mutant), assert.AssertionError);
   } finally { db.prepare = nativePrepare; }
 });
 
@@ -213,19 +132,14 @@ test('getLastCompletedModeTransition: NORMAL WAL reads committed row while write
 });
 
 
-// library snapshots and static Router census. Directory/skeleton
-// creation and real Router transport belong to integration, not this test.
 function transitionHeads(reader) {
   return reader.prepare('SELECT session_group, head_id FROM group_heads ORDER BY session_group COLLATE BINARY')
     .all().map(row => ({ sessionGroup: row.session_group, headId: row.head_id }));
 }
-function assertTransitionHeads(actual, expected) {
-  assert.deepEqual(actual, expected, ' conversion must include every group and its current head');
-}
 function assertTransitionRouterCensus(sources) {
   // Include aliases/imports as well as calls: a newly imported D6 reader must
   // trigger review even when hidden behind a local name. Direct SQL is forbidden.
-  const d6Readers = /\b(?:group_heads|listGroupHeads|listGroups|getLastActivity|getOriginSyncBacklog|absorbForTransition)\b/;
+  const d6Readers = /\b(?:group_heads|listGroups|getLastActivity|getOriginSyncBacklog|claimUngroupedPendingForOrigin)\b/;
   for (const [name, source] of sources) {
     assert.doesNotMatch(source, d6Readers, ` Router must not access D6: ${name}`);
   }
@@ -257,30 +171,14 @@ function transitionFixture(t, create = createStore) {
   store.setDrainFence('*');
   const duringGate = store.insertConversation('in', 'chat', 'gated', 'during gate', { groupName: 'gated' });
   assert.equal(reader.prepare('SELECT phase FROM mode_transitions WHERE run_id=?').get(runId).phase, 'gating');
-  const { cutoff } = store.absorbForTransition(runId);
-  assert.equal(reader.prepare('SELECT phase FROM mode_transitions WHERE run_id=?').get(runId).phase, 'converting');
+  const cutoff = duringGate.id;
+  db.prepare("UPDATE conversations SET status='delivered' WHERE id<=?").run(cutoff);
   assert.ok(transitionHeads(reader).some(row => row.headId === duringGate.id));
   return { db, reader, store, runId, cutoff, beforeGate };
 }
-function transitionSnapshot(db, reader, store) {
-  const before = allTables(reader);
-  const changes = db.prepare('SELECT total_changes() AS n').get().n;
-  const sql = [], prepare = db.prepare;
-  db.prepare = function(statement) { sql.push(statement); return prepare.call(this, statement); };
-  db.pragma('query_only=ON');
-  let heads;
-  try { heads = store.listGroupHeads(); }
-  finally { db.pragma('query_only=OFF'); db.prepare = prepare; }
-  assertTransitionHeads(heads, transitionHeads(reader));
-  assert.equal(sql.length, 1, ' snapshot must use one statement');
-  assert.match(sql[0], /^SELECT\b/i);
-  assert.deepEqual(allTables(reader), before, ' snapshot must not change any table');
-  assert.equal(db.prepare('SELECT total_changes() AS n').get().n, changes);
-  return heads;
-}
-test('full heads snapshots include gated and post-cutoff groups; delivery primitives never read', t => {
+test('group heads include gated and post-cutoff groups; delivery primitives never read', t => {
   const { db, reader, store, runId, cutoff, beforeGate } = transitionFixture(t);
-  const first = transitionSnapshot(db, reader, store);
+  const first = transitionHeads(reader);
   assert.equal(first.length, beforeGate.length + 1);
   // Keep the global gate active while a second connection writes a new group
   // and advances an existing head after the frozen absorption cutoff.
@@ -290,7 +188,7 @@ test('full heads snapshots include gated and post-cutoff groups; delivery primit
     const late = incoming.insertConversation('in', 'chat', 'A', 'after cutoff', { groupName: 'A' });
     const advance = incoming.insertConversation('in', 'chat', 'room', 'advance', { groupName: 'room' });
     assert.ok(late.id > cutoff); assert.ok(advance.id > cutoff);
-    const second = transitionSnapshot(db, reader, store);
+    const second = transitionHeads(reader);
     assert.equal(second.length, first.length + 1);
     assert.equal(second.find(row => row.sessionGroup === 'chat:room').headId, advance.id);
     assert.ok(!first.some(row => row.sessionGroup === 'chat:A'), 'earlier result remains a snapshot');
@@ -315,28 +213,3 @@ test('full heads snapshots include gated and post-cutoff groups; delivery primit
   } finally { writer.close(); }
   assertTransitionRouterCensus(transitionRouterSources());
 });
-test('calibration: omission of one conversion group turns the same oracle red', async t => {
-  const mutant = await modifiedStore('c4-store-transition.js',
-    'FROM group_heads ORDER BY session_group COLLATE BINARY',
-    "FROM group_heads WHERE session_group<>\\'chat:gated\\' ORDER BY session_group COLLATE BINARY");
-  const { db, reader, store } = transitionFixture(t, mutant);
-  assert.throws(() => transitionSnapshot(db, reader, store), error => {
-    assert.ok(error instanceof assert.AssertionError);
-    assert.match(error.message, / conversion must include every group/);
-    t.diagnostic(`EXPECTED RED: ${error.message.split('\n')[0]}`);
-    return true;
-  });
-});
-for (const access of ['listGroupHeads()', "db.prepare('SELECT * FROM group_heads').all()", 'getLastActivity(group)']) {
-  test(`calibration: Router access ${access} turns the same census red`, t => {
-    const sources = transitionRouterSources();
-    assertTransitionRouterCensus(sources);
-    sources[0][1] += `\n${access};\n`;
-    assert.throws(() => assertTransitionRouterCensus(sources), error => {
-      assert.ok(error instanceof assert.AssertionError);
-      assert.match(error.message, / Router must not access D6/);
-      t.diagnostic(`EXPECTED RED:  Router must not access D6 (${access})`);
-      return true;
-    });
-  });
-}

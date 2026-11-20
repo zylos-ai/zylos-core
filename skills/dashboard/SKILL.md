@@ -358,15 +358,12 @@ still shows the tabs, and their requests are refused.
 
 ### Kubernetes readiness
 
-`GET /api/health/ready` is unauthenticated and returns HTTP 503 only
-when the supervisor is absent or does not respond, or when single-session
-mode has no running session. In multi-session mode, zero running sessions
-is normal and does not prevent readiness. All other cases return HTTP 200.
-Runtime authentication failures, rate limits, missing login history, upgrades,
-restarts and mode switches are not additional readiness gates.
+`GET /api/health/ready` is unauthenticated. A responding supervisor returns
+HTTP 200 in every mode, including before migration. An unavailable supervisor
+returns HTTP 503. Session presence and runtime health do not affect readiness.
 
 Use this endpoint only as a readiness probe, never as a liveness probe.
-An upgrade/restart can briefly stop the supervisor or single session and
+An upgrade or restart can briefly stop the supervisor and
 return 503; using that as liveness would cause Kubernetes to kill the pod.
 Start with Kubernetes `timeoutSeconds: 20` and `periodSeconds: 30`, then tune
 against observed latency under load. The 1000 ms deadline below bounds only
@@ -382,9 +379,9 @@ The readiness response contains only these public facts:
 | Field | Values |
 | --- | --- |
 | `ready` | Boolean, agrees with HTTP 200/503. |
-| `reason` | `null`, `supervisor_unavailable`, or `session_not_running` (supervisor takes priority). |
-| `session_mode` | `single`, `multi`, or `null` when unreadable; an unset mode means `single`. |
-| `session_running` | Boolean for an observed single session; `null` in multi mode or when observation is unavailable. |
+| `reason` | `null` or `supervisor_unavailable`. |
+| `session_mode` | `single`, `multi`, or `unreadable`. An unset mode means `single`. |
+| `session_running` | Reserved field, always `null`. |
 | `runtime_health` | `claude` and `codex`, each with `source` (`record`, `missing`, `unreadable`) and `health` (`ok`, `auth_failed`, `rate_limited`, `unavailable`, `down`, `recovering`, or `null` without a readable record). |
 
 ### Process health and diagnostic sources

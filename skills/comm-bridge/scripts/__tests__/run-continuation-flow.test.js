@@ -62,42 +62,86 @@ test('a restarted supervisor resumes an absent group through the persistent cont
   assert.equal(f.db.listRunEndings([group])[0].continuationPending, 0);
 });
 
-// Cutover contract: the existing coordinator must clear persistent restart
-// markers through the real store. Run for marker clearing/cutover changes;
+// Native single reconciliation -> real Store wake demand -> real Router launch.
+// Run for mode eligibility/continuation wiring; skip unrelated UI. The official
+// runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; private session files and
+// in-memory SQLite only. Launch and clock are injected, no tmux/process/network;
+// fixture teardown stops Router and closes/removes its resources.
+test('native single restarts a missing Origin while only pruning ordinary occupancy', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'single-continue-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const env = { ZYLOS_DIR: root };
+  const f = routerFixture(t, { mode: 'single' });
+  t.diagnostic(JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: root,
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, database: ':memory:', tmux: 'not used' }));
+  // A running row left by multi before switching to native single.
+  f.sqlite.prepare("INSERT INTO slot_occupancy(session_group,run_id,state,held_until,created_at) VALUES('old-group','old-group-run','running',NULL,?)").run(f.now() / 1000);
+  const directory = groupRunDir('origin', env);
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, 'current-session.json'), JSON.stringify({ runId: 'origin-crash', ts: f.now() - 1000 }));
+  const reads = [];
+  const supervisor = new SupervisorRunEndings({ db: f.db, env, now: f.now,
+    readFile: (file, ...args) => { reads.push(path.basename(path.dirname(file))); return fs.readFile(file, ...args); },
+    readIdentity: f.deps.readLiveIdentity, reportError: error => { throw error; } });
+  const context = { configuration: { mode: 'single', legacy: false }, scenes: [] };
+  f.advance(31000);
+  await supervisor.advance(context);
+  const ending = f.db.listRunEndings(['origin'])[0];
+  assert.equal(ending?.runId, 'origin-crash');
+  assert.equal(ending.reason, 'unexpected');
+  assert.equal(ending.continuationPending, 1);
+  assert.equal(f.db.getOriginNeed(f.now() / 1000, { sessionMode: 'single' }).continuation.pending, true);
+  assert.equal(f.db.listRunEndings(['old-group']).length, 0);
+  assert.deepEqual(reads, ['origin']);
+  assert.equal(f.db.listSlotOccupancy().length, 0);
+  f.create();
+  await f.router.initialize();
+  await f.rounds(2);
+  f.advance(5000);
+  await f.rounds(5);
+  const launches = () => f.calls.filter(call => call[0] === 'launch' && call[1].sessionGroup === 'origin');
+  assert.equal(launches().length, 1);
+  assert.equal(f.db.listRunEndings(['origin'])[0].continuationPending, 0);
+  await supervisor.advance(context);
+  await f.rounds(3);
+  assert.equal(launches().length, 1);
+});
+
+// Cutover contract: the first-migration coordinator commits its phase before
+// changing persistent restart markers. Run for phase-ordering/marker changes;
 // all database state is fixture-local and conversion has no filesystem side effects.
-test('mode cutover clears pending restart markers through the normal coordinator', async t => {
+test('first migration enters cutover before changing persistent restart markers', async t => {
   const f = routerFixture(t);
   const message = f.add('team');
   f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(message.id);
   assert.deepEqual(f.db.recordRunEnd('team', { runId: 'old-run', reason: 'unexpected' }), { recorded: true });
   f.db.recordRunEnd('origin', { runId: 'old-origin', reason: 'unexpected' });
   assert.equal(f.db.listRunEndings(['team', 'origin']).filter(row => row.continuationPending).length, 2);
-  const { runId } = f.db.beginModeTransition('multi', 'single');
+  const { runId } = f.db.beginModeTransition('single', 'multi');
   f.db.setDrainFence('*');
-  f.db.absorbForTransition(runId);
-  const coordinator = new ModeSwitchCoordinator({ db: f.db, readMode: () => ({ mode: 'multi' }),
-    convert: async () => {}, diagnostic: () => {}, now: f.now });
+  const coordinator = new ModeSwitchCoordinator({ db: f.db, readMode: () => ({ mode: 'single', keyPresent: false }),
+    observe: () => [], readConfiguration: () => ({}), diagnostic: () => {}, now: f.now });
   await coordinator.advance();
   assert.equal(f.db.getModeTransition().phase, 'cutover');
   assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM control_queue').get().n, 0);
-  assert.deepEqual(f.db.listPendingContinuations(), []);
-  assert.ok(f.db.listRunEndings(['team', 'origin']).every(row => row.continuationPending === 0));
+  assert.equal(f.db.listPendingContinuations().length, 1);
+  assert.ok(f.db.listRunEndings(['team', 'origin']).every(row => row.continuationPending === 1));
 });
 
 
 // Real lifecycle/coordinator/store boundary: run for reclaim completion during
 // mode gating or continuation suppression/cutover changes. All C4 state is local
 // to the fixture; scene stop, conversion and dispatcher restart are injected I/O.
-test('upgrade reclaim finishes during gating without creating a continuation before cutover', async t => {
+test('native gating finishes an upgrade reclaim without conversion or premature continuation', async t => {
   const f = routerFixture(t);
   const message = f.add('gated-upgrade');
   f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(message.id);
   const group = message.session_group, runId = 'upgrade-run';
   f.put(group, { sessionGroup: group, runId, processRunning: false });
   f.db.setDrainFence(group, { reason: 'upgrade', runId });
-  const transition = f.db.beginModeTransition('multi', 'single');
+  f.db.beginModeTransition('multi', 'single');
   let mode = 'multi';
-  const stops = [], conversions = [], writes = [], restarts = [];
+  const stops = [], writes = [], restarts = [];
   const observe = async () => [...f.scene.values()];
   const lifecycle = new SupervisorLifecycle({
     db: f.db, observeGroup: f.deps.readLiveIdentity, observe,
@@ -106,8 +150,7 @@ test('upgrade reclaim finishes during gating without creating a continuation bef
   }, { now: f.now });
   const coordinator = new ModeSwitchCoordinator({
     db: f.db, lifecycle, readMode: () => ({ mode }), readConfiguration: async () => ({ runtime: 'claude' }),
-    observe, readRequests: () => [],
-    convert: async row => { conversions.push(row.run_id); },
+    observe, requestStore: { read: () => [] },
     writeMode: async target => { writes.push(target); mode = target; },
     restart: { advance: async request => { restarts.push(request.runId); return { confirmed: true }; } },
     diagnostic: () => {}, now: f.now,
@@ -121,17 +164,9 @@ test('upgrade reclaim finishes during gating without creating a continuation bef
     reason: row.reason, continuationPending: row.continuationPending })),
   [{ sessionGroup: group, runId, reason: 'upgrade', continuationPending: 0 }]);
   assert.equal(groupControls(), 0);
-  assert.equal(f.db.getModeTransition().phase, 'converting', 'gating must finish after the existing upgrade reclaim');
-  await coordinator.advance();
-  assert.deepEqual(conversions, [transition.runId]);
-  assert.equal(f.db.getModeTransition().phase, 'cutover');
-  assert.equal(groupControls(), 0);
-  assert.equal(f.db.listPendingContinuations().length, 0);
-  await coordinator.advance();
-  assert.deepEqual(writes, ['single']);assert.deepEqual(restarts, [transition.runId]);
-  assert.equal(f.db.getModeTransition(), null);
-  assert.equal(f.db.getDrainFence('*'), null);
-  assert.equal(groupControls(), 0);
+  assert.equal(f.db.getModeTransition().phase, 'cutover', 'gating must finish after the existing upgrade reclaim');
+  assert.deepEqual(writes, []); assert.deepEqual(restarts, []);
+  assert.equal(groupControls(), 0); assert.equal(f.db.listPendingContinuations().length, 0);
 });
 
 // Real Router/Store boundary with injected launch and terminal transport. Run for

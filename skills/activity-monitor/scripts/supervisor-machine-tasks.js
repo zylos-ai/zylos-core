@@ -83,7 +83,7 @@ export class SupervisorMachineTasks {
       const output=String(await this.execute(fileURLToPath(new URL('../../zylos-memory/scripts/daily-commit.js',import.meta.url)),30000)??'').trim();
       if(output)this.log(`daily-memory-commit-state: ${output}`);
     },{recordFailure:true});
-    if(context.transition)return;
+    if(context.transition || context.configuration?.legacy)return;
     const dailyDue=(id,hour)=>parts.hour>=hour && this.state(id)?.last_date!==parts.date && !this.pending.has(id);
     const upgradeDue=enabled(config.upgrade_check_enabled,true) && dailyDue('upgrade-check-state',6);
     const dailyUpgradeDue=enabled(config.daily_upgrade_enabled,false) && dailyDue('daily-upgrade-state',5);

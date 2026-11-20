@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { dataError } from './c4-session-group.js';
-export function transitionFunctions({ read, write, snapshot, get, all, run, seconds, coverage, checkpoint }) {
+export function transitionFunctions({ read, write, snapshot, get, all, run, seconds, advanceHead }) {
   const decode = row => row ? { ...row, coverage_snapshot: row.coverage_snapshot === null ? null : JSON.parse(row.coverage_snapshot), absorbed_ids: row.absorbed_ids === null ? null : JSON.parse(row.absorbed_ids) } : null;
   const find = (c, runId) => decode(runId === undefined ? get(c, "SELECT * FROM mode_transitions WHERE phase<>'complete'") : get(c, 'SELECT * FROM mode_transitions WHERE run_id=?', runId));
   function required(c, id) { const row = find(c, id); if (!row) throw dataError('RUN_NOT_FOUND', 'Mode transition does not exist'); return row; }
@@ -38,44 +38,42 @@ export function transitionFunctions({ read, write, snapshot, get, all, run, seco
       const { changes: count } = run(c, `UPDATE control_queue SET status='timeout',last_error='SESSION_ENDED',updated_at=? WHERE ${predicate}`, seconds(), row.created_at, row.created_at);
       return { count, ids };
     }),
-    getLastCompletedModeTransition: () => read(c => decode(get(c, "SELECT * FROM mode_transitions WHERE phase='complete' ORDER BY updated_at DESC,created_at DESC,rowid DESC LIMIT 1"))),
-    listGroupHeads: () => read(c => all(c, 'SELECT session_group AS sessionGroup,head_id AS headId FROM group_heads ORDER BY session_group COLLATE BINARY')),
-    absorbForTransition: runId => write(c => {
-      const row = required(c, runId);
-      if (row.phase !== 'gating' && row.cutoff !== null) return { cutoff: row.cutoff, coverageSnapshot: row.coverage_snapshot, absorbedIds: row.absorbed_ids };
-      if (row.phase !== 'gating') throw dataError('PHASE_TRANSITION_INVALID', 'Transition is not gating');
-      onlyGlobal(c);
-      if (get(c, "SELECT 1 FROM conversations WHERE direction='in' AND status='running' LIMIT 1")) throw dataError('TRANSITION_PRECONDITION', 'Running input has not drained');
-      const cutoff = get(c, 'SELECT COALESCE(MAX(id),0) AS n FROM conversations').n;
-      const coverageSnapshot = {};
-      if (row.source_mode === 'single') coverageSnapshot['*'] = coverage(c, '*');
-      else for (const head of all(c, 'SELECT * FROM group_heads ORDER BY session_group COLLATE BINARY')) { const end = coverage(c, head.session_group); if (head.head_id > end) coverageSnapshot[head.session_group] = end; }
-      const absorbedIds = all(c, "UPDATE conversations SET status='switch_absorbed' WHERE direction='in' AND status='pending' AND id<=? RETURNING id", cutoff).map(r => r.id).sort((a,b) => a-b);
-      run(c, "UPDATE mode_transitions SET cutoff=?,coverage_snapshot=?,absorbed_ids=?,phase='converting',updated_at=? WHERE run_id=?", cutoff, JSON.stringify(coverageSnapshot), JSON.stringify(absorbedIds), seconds(), runId);
-      return { cutoff, coverageSnapshot, absorbedIds };
+    getLastCompletedModeTransition: (options = {}) => {
+      if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => !['memoryConversion', 'targetMode'].includes(key)) || (Object.hasOwn(options, 'memoryConversion') && typeof options.memoryConversion !== 'boolean') || (Object.hasOwn(options, 'targetMode') && !['single', 'multi'].includes(options.targetMode))) throw dataError('INVALID_ARGS', 'Invalid completed transition options');
+      const predicates = ["phase='complete'"];
+      if (options.memoryConversion) predicates.push('cutoff IS NOT NULL');
+      if (options.targetMode) predicates.push('target_mode=?');
+      return read(c => decode(get(c, `SELECT * FROM mode_transitions WHERE ${predicates.join(' AND ')} ORDER BY updated_at DESC,created_at DESC,rowid DESC LIMIT 1`, ...(options.targetMode ? [options.targetMode] : []))));
+    },
+    voidInternalForSingle: runId => write(c => {
+      const row = typeof runId === 'string' && runId ? find(c, runId) : null;
+      if (!row || row.phase !== 'cutover' || row.target_mode !== 'single') throw dataError('TRANSITION_PRECONDITION', 'Internal cleanup requires native single cutover');
+      return all(c, "UPDATE conversations SET status='failed',delivery_action='switch_voided' WHERE channel='internal' AND direction='in' AND status='pending' AND session_group<>'origin' RETURNING id");
+    }),
+    claimUngroupedPendingForOrigin: () => write(c => {
+      const pending = "direction='in' AND status='pending' AND session_group=''";
+      const { headId } = get(c, `SELECT MAX(id) AS headId FROM conversations WHERE ${pending}`);
+      if (headId === null) return;
+      run(c, `UPDATE conversations SET session_group='origin' WHERE ${pending}`);
+      advanceHead(c, 'origin', headId);
     }),
     setModeTransitionPhase: (runId, phase, { reason = null } = {}) => write(c => {
       const row = required(c, runId);
-      if (row.phase !== phase && !((row.phase === 'converting' && phase === 'cutover') || (row.phase === 'cutover' && phase === 'complete'))) throw dataError('PHASE_TRANSITION_INVALID', 'Invalid transition phase change');
-      let cutoverCoverage;
-      if (row.phase !== phase && phase === 'cutover' && row.source_mode === 'multi') {
-        const covered = coverage(c, '*');
-        if (row.cutoff > covered) checkpoint(c, '*', row.cutoff, '', { cutover: true });
-        else {
-          // Deleted groups can leave the frozen cutoff below global coverage.
-          // A surviving row in that interval means this is not a deleted tail.
-          if (get(c, 'SELECT 1 FROM conversations WHERE id>? AND id<=? LIMIT 1', row.cutoff, covered)) {
-            throw dataError('CUTOVER_COVERAGE_CONFLICT', 'Conversations remain between the cutover cutoff and global coverage', { cutoff: row.cutoff, covered });
-          }
-          cutoverCoverage = { cutoff: row.cutoff, covered };
+      if (row.phase !== phase) {
+        const next = { gating: 'cutover', converting: 'cutover', cutover: 'complete' };
+        if (next[row.phase] !== phase) throw dataError('PHASE_TRANSITION_INVALID', 'Invalid transition phase change');
+        onlyGlobal(c, true);
+        if (row.phase === 'converting') {
+          run(c, `UPDATE conversations SET status='pending'
+            WHERE status='switch_absorbed' AND id IN (SELECT value FROM json_each(?))`,
+            JSON.stringify(row.absorbed_ids ?? []));
+        } else if (phase === 'complete') {
+          run(c, "DELETE FROM drain_fences WHERE session_group='*'");
         }
       }
-      if (row.phase !== phase && phase === 'complete') { onlyGlobal(c, true); run(c, "DELETE FROM drain_fences WHERE session_group='*'"); }
       run(c, 'UPDATE mode_transitions SET phase=?,reason=?,updated_at=? WHERE run_id=?', phase, reason, seconds(), runId);
-      const result = find(c, runId);
-      return cutoverCoverage ? { ...result, cutoverCoverage } : result;
+      return find(c, runId);
     }),
-    getAbsorbedConversations: runId => snapshot(c => absorbed(c, required(c, runId)).map(({ id, session_group, channel, endpoint_id, timestamp, content }) => ({ id, session_group, channel, endpoint_id, timestamp, content }))),
   };
   return { api, readAbsorbed: runId => snapshot(c => { const transition = required(c, runId); return { transition, rows: absorbed(c, transition) }; }) };
 }

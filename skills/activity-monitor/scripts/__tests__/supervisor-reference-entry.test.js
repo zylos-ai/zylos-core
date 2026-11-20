@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { startSupervisor } from '../supervisor-main.js';
-import { REFERENCE_REORG_PROMPT, ORIGIN_SYNC_PROMPT, GROUP_SYNC_PROMPT } from '../../../zylos-memory/scripts/sync-prompts.js';
+import { REFERENCE_REORG_PROMPT, ORIGIN_SYNC_PROMPT } from '../../../zylos-memory/scripts/sync-prompts.js';
 
 // Integration boundary: real entry construction -> Supervisor -> lifecycle ->
 // filesystem helper and actual prompt loading, with an owned Supervisor socket.
@@ -13,7 +13,7 @@ import { REFERENCE_REORG_PROMPT, ORIGIN_SYNC_PROMPT, GROUP_SYNC_PROMPT } from '.
 // changes may skip. Runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR before
 // import; fixture paths are checked below. Queue/runtime are in-memory, no tmux
 // or database is opened. Scheduling is disabled and t.after stops/removes all.
-for (const mode of ['single', 'multi']) for (const unreadable of [false, true]) {
+for (const mode of ['single', 'multi']) for (const unreadable of mode === 'single' ? [false] : [false, true]) {
   test(`${mode} entry checks references before Sync is due and preserves Sync with ${unreadable ? 'an old-file lookup failure' : 'existing old reference files'}`, { timeout: 10000 }, async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reorg-entry-'));
     const env = { ...process.env, HOME: path.join(root, 'home'), ZYLOS_DIR: path.join(root, 'z'),
@@ -33,7 +33,7 @@ for (const mode of ['single', 'multi']) for (const unreadable of [false, true]) 
     let range = { count: 0, nonempty: false, firstAt: null, firstConversationId: null };
     let service;
     t.after(async () => { try { await service?.stop(); } finally { fs.rmSync(root, { recursive: true, force: true }); } });
-    const scene = { sessionGroup: mode === 'single' ? null : 'origin', present: true, ready: true,
+    const scene = { sessionGroup: 'origin', present: true, ready: true,
       runtime: 'claude', runId: 'entry-run', sessionId: 'entry-session', runDir: root, state: 'idle', usagePercent: 0 };
     const db = {
       getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),
@@ -42,10 +42,8 @@ for (const mode of ['single', 'multi']) for (const unreadable of [false, true]) 
       listPendingContinuations: () => [], listRunEndings: () => [], getLastCompletedModeTransition: () => null,
       listPendingSessionGroups: () => [], getControlById: () => null,
       // Exercise the assembled Sync observer with no committed checkpoint yet.
-      listGroupHeads: () => mode === 'multi' ? [{ sessionGroup: 'origin' }] : [],
       getLatestContentCheckpoint: () => null,
       getUnsummarizedRange: () => ({ count: 0, firstAt: null }),
-      getGlobalUnsummarizedRange: () => range,
       getOriginSyncBacklog: () => ({ total: range.count,
         groups: [{ count: range.count, firstAt: range.firstAt, pendingCheckpoints: 0 }] }),
       resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }),
@@ -79,13 +77,13 @@ for (const mode of ['single', 'multi']) for (const unreadable of [false, true]) 
     now += 60_000;
     range = { count: 60, nonempty: true, firstAt: now, firstConversationId: 1 };
     await service.supervisor.lifecycle.checkSync([scene], context);
-    const sync = mode === 'single' ? GROUP_SYNC_PROMPT : ORIGIN_SYNC_PROMPT;
+    const sync = ORIGIN_SYNC_PROMPT;
     assert.deepEqual(rows.map(row => row.content), unreadable ? [sync] : [REFERENCE_REORG_PROMPT, sync]);
     assert.equal(rows.at(-1).priority, 2);
     if (unreadable) assert.ok(logs.some(row => row.phase === 'reference-reorganization' && row.error === 'ENOTDIR'));
     else {
       assert.equal(rows[0].priority, 3); assert.equal(rows[0].appendAckSuffix, false);
-      assert.equal(rows[0].sessionGroup, mode === 'single' ? null : 'origin');
+      assert.equal(rows[0].sessionGroup, 'origin');
     }
   });
 }

@@ -41,7 +41,9 @@ for (const mode of ['single', 'multi']) test(`real bound paste/Enter/cursor and 
   assert.equal(saved.status, 'delivered'); assert.equal(saved.session_id, terminal.ready.sessionId);
   assert.match(fs.readFileSync(log, 'utf8'), /literal '; run-shell nope\nsecond/);
   assert.equal(calls.length, 1); assert.equal(calls[0].runId, terminal.ready.runId);
-  assert.equal(calls[0].sessionGroup, mode === 'single' ? null : row.session_group);
+  const group = mode === 'single' ? 'origin' : row.session_group;
+  assert.equal(calls[0].sessionGroup, group);
+  assert.equal(saved.session_group, group);
 });
 
 test('actual bound target rejects run change after paste, never re-resolves during claim', async t => {

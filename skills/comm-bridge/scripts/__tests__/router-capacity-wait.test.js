@@ -72,7 +72,7 @@ test('health restrictions and unreadable health do not start or continue capacit
 test('unobservable scenes, free capacity and resident groups cannot start capacity waits', () => {
   const f = fixture(); f.state.sceneObservable = false; f.manager.wait('chat:one', f.row);
   f.state.sceneObservable = true; f.state.slots.clear(); f.manager.wait('chat:one', f.row);
-  f.state.slots.set('busy', {}); f.manager.wait(null, f.row); f.manager.wait('origin', f.row);
+  f.state.slots.set('busy', {}); f.manager.wait('origin', f.row);
   assert.equal(f.events.length, 0);
 });
 

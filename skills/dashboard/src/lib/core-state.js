@@ -82,7 +82,7 @@ export class CoreState {
   }
   async _read({ fresh = false } = {}) {
     try {
-      const { mode, group, observations, reader } = await this.sessionObservations.get({ fresh });
+      const { mode, sessionMode, group, observations, reader } = await this.sessionObservations.get({ fresh });
       this.lastSessionMode = mode;
       this.lastSessionGroup = group;
       const observation = observations.get(group);
@@ -96,7 +96,7 @@ export class CoreState {
         this.costKey = JSON.stringify(identities.sort((a,b) => String(a[0]).localeCompare(String(b[0]))));
       } catch { this.costKey = null; }
       let targetRuntime = observation.identity.runtime, facts = null, view = null;
-      if (mode === 'multi') {
+      if (mode === 'multi' || sessionMode === 'single') {
         if (!observation.identity.present) {
           try { targetRuntime = await this.sessionObservations.resolveOfflineRuntime('origin'); } catch { targetRuntime = null; }
         }
@@ -105,12 +105,12 @@ export class CoreState {
         if (!observation.identity.present || health?.health === 'auth_failed') {
           const { readOriginFacts, describeOrigin } = await loadCoreModule('origin-presence.js');
           const nowSec = Math.floor(Date.now() / 1000);
-          facts = await readOriginFacts({ zylosDir: this.zylosDir, nowSec });
-          view = describeOrigin({ view: 'multi', origin: { presence: !observation.identity.present ? 'not_running' : observation.identity.ready ? 'running' : 'starting' },
+          facts = await readOriginFacts({ zylosDir: this.zylosDir, nowSec, sessionMode: mode });
+          view = describeOrigin({ view: mode, sessionMode, origin: { presence: !observation.identity.present ? 'not_running' : observation.identity.ready ? 'running' : 'starting' },
             originNeed: facts.originNeed, runtimeHealth: { [targetRuntime]: health }, targetRuntime, nowSec });
         }
       }
-      if (mode !== 'multi' && !observation.identity.present) {
+      if (mode !== 'multi' && sessionMode !== 'single' && !observation.identity.present) {
         try { targetRuntime = await this.sessionObservations.resolveOfflineRuntime(null); } catch { targetRuntime = null; }
       }
       const accountRecord = runtimesWith('accountQuota').includes(targetRuntime)

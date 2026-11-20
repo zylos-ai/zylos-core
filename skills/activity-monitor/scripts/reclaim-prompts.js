@@ -7,6 +7,5 @@ const checkControlPrompt = (reason, check) =>
 // TTL reclaim and capacity/memory-pressure eviction share the approved check.
 export const PRE_RECLAIM_CHECK_PROMPT = checkControlPrompt('This session group has been idle and will be reclaimed.', 'idle reclaim check');
 export const UPGRADE_RESTART_CHECK_PROMPT = checkControlPrompt('This session group will be restarted for an upgrade.', 'upgrade restart check');
-export const SINGLE_UPGRADE_RESTART_CHECK_PROMPT = checkControlPrompt('This session will be restarted for an upgrade.', 'single-session upgrade restart check');
 export const CONFIG_RECLAIM_PROMPT = checkControlPrompt('The launch configuration changed and this session group will be restarted with it.', 'configuration restart check');
 export const ROTATION_PROMPT = 'Context usage has reached the session threshold. Complete required handoff and use the new-session skill to continue in a fresh session.';

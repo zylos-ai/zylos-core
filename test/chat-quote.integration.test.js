@@ -61,7 +61,6 @@ function dispatcherFixture(sandbox, api, sessionGroup) {
       stop: async () => assert.fail('Private READY fixture must not stop a runtime'),
     },
     notifyDelivered() {}, sleep: async () => {},
-    findLegacySessions: async () => [], advanceLegacy: async () => {}, prepareSingle: async () => {},
     submit: async () => assert.fail('Private READY fixture must not submit a launch'),
   }, { tmux: { socketPath: sandbox.paths.socket }, delivery: { periodicEnabled: false, captureEnabled: false, verifyWaitMs: 1 } });
   sandbox.addCleanup(() => dispatcher.stop());

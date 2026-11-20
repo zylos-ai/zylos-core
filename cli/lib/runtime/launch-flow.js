@@ -36,7 +36,8 @@ export async function launchSession({runtime,sessionGroup,runId,launchConfig,ses
     const command = (options.runtimeExecutable || runtimeExecutable)(runtime,env);
     const help = (runtime === 'codex' || launchConfig?.mode === 'override') ? await (options.runtimeHelp || runtimeHelpAsync)(command,env,{ timeoutMs: remaining() }) : '';
     validateLaunchConfig(runtime,launchConfig,help);
-    if (!runId || !['single','multi'].includes(sessionMode) || (sessionMode === 'single') !== (sessionGroup === null)) throw adapterError('LAUNCH_FAILED','Invalid launch arguments','error');
+    if (!runId || !['single','multi'].includes(sessionMode) ||
+        (sessionMode === 'single' ? sessionGroup !== null && sessionGroup !== 'origin' : !sessionGroup)) throw adapterError('LAUNCH_FAILED','Invalid launch arguments','error');
     const root = await fs.realpath(options.root || ZYLOS_DIR);
     const cleanEnv = launchEnvironment(root,env,{runtime:runtime});
     let args = buildRuntimeArgs(runtime, launchConfig, {root, help});
@@ -52,7 +53,7 @@ export async function launchSession({runtime,sessionGroup,runId,launchConfig,ses
       );
     }
     remaining();
-    const script = writeSessionLaunchScript({command,args,env:cleanEnv,root,multi:sessionMode === 'multi'});
+    const script = writeSessionLaunchScript({command,args,env:cleanEnv,root,multi:sessionGroup !== null});
     return await settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,script,tmux:options.tmux,
       startedAt, preflightMs: performance.now() - startedAt });
   } catch (error) {

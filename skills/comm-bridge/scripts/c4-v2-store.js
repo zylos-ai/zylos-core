@@ -110,11 +110,14 @@ export function createStore(database, dependencies = {}) {
       throw dataError('UNKNOWN_TARGET_GROUP', 'Unknown target session group');
     }
   }
+  function advanceHead(c, group, id) {
+    run(c, 'INSERT INTO group_heads(session_group,head_id) VALUES(?,?) ON CONFLICT(session_group) DO UPDATE SET head_id=max(head_id,excluded.head_id)', group, id);
+  }
   function insert(c, direction, channel, endpointId, content, group, options = {}) {
     const result = run(c, `INSERT INTO conversations(direction,channel,endpoint_id,content,status,delivery_action,priority,require_idle,session_group,session_id)
       VALUES(?,?,?,?,?,?,?,?,?,?)`, direction, channel, endpointId ?? null, content, options.status ?? (direction === 'in' ? 'pending' : 'delivered'), options.deliveryAction ?? null, options.priority ?? 3, options.requireIdle ? 1 : 0, group, direction === 'out' ? options.sessionId ?? null : null);
     const id = Number(result.lastInsertRowid);
-    run(c, 'INSERT INTO group_heads(session_group,head_id) VALUES(?,?) ON CONFLICT(session_group) DO UPDATE SET head_id=max(head_id,excluded.head_id)', group, id);
+    advanceHead(c, group, id);
     return get(c, 'SELECT * FROM conversations WHERE id=?', id);
   }
   const api = {
@@ -134,10 +137,15 @@ export function createStore(database, dependencies = {}) {
     insertConversation: (direction, channel, endpointId, content, options = {}) => write(c => {
       if (!options || typeof options !== 'object' || Array.isArray(options)) throw dataError('INVALID_ARGS', 'Expected message options');
       if (typeof content !== 'string') throw dataError('INVALID_ARGS', 'Message content must be a string');
-      const allowed = new Set(['status', 'priority', 'requireIdle', 'deliveryAction', 'groupName', 'handoffGroup', 'wholeGroup', 'sessionId']);
+      const allowed = new Set(['status', 'priority', 'requireIdle', 'deliveryAction', 'groupName', 'handoffGroup', 'wholeGroup', 'sessionId', 'recordGroup']);
       if (Object.keys(options).some(key => !allowed.has(key))) throw dataError('INVALID_ARGS', 'Unknown message option');
       if (options.status !== undefined && !(direction === 'in' ? ['pending', 'failed'] : ['delivered']).includes(options.status)) throw dataError('INVALID_ARGS', 'Invalid initial message status');
-      return insert(c, direction, channel, endpointId, content, resolve(c, direction, channel, endpointId, options), options);
+      // recordGroup is reserved for Core's outbound send: the address still
+      // resolves (and allocates its namespace binding) but the row is recorded under origin.
+      const { recordGroup, ...routing } = options;
+      if (recordGroup !== undefined && (recordGroup !== 'origin' || direction !== 'out' || channel === 'void')) throw dataError('INVALID_ARGS', 'recordGroup is reserved for Core outbound recording under origin');
+      const group = resolve(c, direction, channel, endpointId, routing);
+      return insert(c, direction, channel, endpointId, content, recordGroup ?? group, options);
     }),
     insertInternalMessage: (senderGroup, targetGroup, content, { sessionId } = {}) => write(c => {
       if (!senderGroup) throw dataError('NO_SENDER_GROUP', 'Sender session group is required');
@@ -150,10 +158,10 @@ export function createStore(database, dependencies = {}) {
       return { outRow, inRow };
     }),
   };
-  const context = { read, write, snapshot, get, all, run, knownGroup, dependencies, seconds, insert };
+  const context = { read, write, snapshot, get, all, run, knownGroup, dependencies, seconds, insert, advanceHead };
   const config = configFunctions(context);
   const progress = progressFunctions(context);
-  const transitions = transitionFunctions({ ...context, ...progress });
+  const transitions = transitionFunctions(context);
   Object.assign(api, deletionFunctions(context), deliveryFunctions(context), config.api, progress.api, controlFunctions({ ...context, baseline: config.baseline }), transitions.api);
   api.buildTargetBinding = createTargetBindingBuilder({ ...context, baseline: config.baseline, resolveTarget: dependencies.resolveTarget });
   function listGroups({ match, limit, activeSince, keyMatch, raw } = {}) {

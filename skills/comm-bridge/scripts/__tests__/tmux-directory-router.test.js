@@ -16,7 +16,7 @@ test('directory loss pauses dispatcher rounds and records exactly one event', as
   const unexpected = () => { calls++; throw Error('scheduling must pause'); };
   const deps = Object.fromEntries(['readSessionMode','readLiveIdentities','readLiveIdentity','readCurrentSession',
     'listGroupTmuxSessions','readRuntimeHealth','submit','deliverControl','deliverConversation',
-    'handleExpired','prepareSingle','findLegacySessions','advanceLegacy'].map(name => [name, unexpected]));
+    'handleExpired','findLegacySessions','advanceLegacy'].map(name => [name, unexpected]));
   deps.session = { launch: unexpected, stop: unexpected };
   deps.db = {}; deps.diagnostic = (event, fields) => events.push({ event, ...fields });
   const router = createRouter(deps, { poolSize: () => 1 });

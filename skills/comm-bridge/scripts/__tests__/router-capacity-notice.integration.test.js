@@ -97,7 +97,7 @@ fs.appendFileSync(file,JSON.stringify({argv:process.argv.slice(2),body})+'\\n');
     sendStatusNotice: sender,
     deliverConversation: async (record, live) => { assert.equal(db.markDelivered(record.id, { sessionId: live.sessionId }), true); },
     deliverControl: async () => assert.fail('the fixture enqueues no control'),
-    findLegacySessions: async () => [], advanceLegacy: async () => {}, prepareSingle: async () => {},
+    findLegacySessions: async () => [], advanceLegacy: async () => {},
   }, { delivery: { periodicEnabled: false } });
   t.after(() => dispatcher.stop());
   const rounds = async (count = 3) => {

@@ -105,7 +105,7 @@ export class SupervisorLoop {
     const authority = async read => {
       try { return await read(); }
       catch (error) {
-        if (this.configuration?.mode === 'multi') await d.reconciliationReadFailed?.(error);
+        if (this.configuration && !this.configuration.legacy) await d.reconciliationReadFailed?.(error);
         throw error;
       }
     };
@@ -115,14 +115,26 @@ export class SupervisorLoop {
       try { await d.advanceTransition(transition); }
       catch (error) { await d.reportError(error, { phase: 'transition' }); }
     }
+    if (!transition) {
+      try { await d.advanceGlobalMemoryHandover?.(); }
+      catch (error) { await d.reportError(error, { phase: 'global-memory-handover' }); }
+    }
     let context;
     await d.lifecycleSerial(async () => {
       // Sample all round authorities and scenes while socket admission is excluded.
       this.configuration = await d.readConfiguration(transition);
       context = { configuration: this.configuration, transition,
         fences: await authority(() => d.listDrainFences()), restartRequests: [] };
+      // A global manual fence in a configured instance can only come from
+      // the old single-session restart flow.
+      const legacyManualFence = !context.configuration.legacy &&
+        context.fences.find(fence => fence.sessionGroup === '*' && fence.reason === 'manual_restart');
+      if (legacyManualFence) {
+        context.restartRequests = await d.discardLegacyManualRestarts([legacyManualFence]);
+        context.fences = await authority(() => d.listDrainFences());
+      }
       try {
-        context.restartRequests = await d.readRestartRequests();
+        if (!legacyManualFence) context.restartRequests = await d.readRestartRequests();
         await d.restartRequestsReadable?.();
       }
       catch (error) {
@@ -132,7 +144,7 @@ export class SupervisorLoop {
       }
       context.scenes = await d.observe(context);
       context.manualRequests = [];
-      if (d.checkManualFences) {
+      if (!context.configuration.legacy && d.checkManualFences) {
         try { context.manualRequests = await d.checkManualFences(context); }
         catch (error) { await d.reportError(error, { phase: 'manual-fences' }); }
       }
@@ -142,7 +154,7 @@ export class SupervisorLoop {
         // Migration may have accepted a transition while holding this queue.
         context.transition = await authority(() => d.getModeTransition());
       }
-      if (!context.transition) {
+      if (!context.transition && !context.configuration.legacy) {
         for (const phase of ['advanceManual', 'advanceRestarts', 'reconcileConfiguration']) {
           try { await d[phase](context); }
           catch (error) { await d.reportError(error, { phase }); }
@@ -152,7 +164,7 @@ export class SupervisorLoop {
       }
     });
     // These workers may acquire lifecycle serialization for their own mutations.
-    await d.observeExits?.(context.scenes);
+    if (!context.configuration.legacy) await d.observeExits?.(context.scenes);
     try { await d.lifecycleSerial(() => d.reconcileRunEndings?.(context)); }
     catch (error) { await d.reportError(error, { phase: 'run-ending-reconciliation' }); }
     if (d.preparePublication) {
@@ -166,10 +178,10 @@ export class SupervisorLoop {
       // Automatic legacy migration can open a transition after the initial read.
       const transitionOpen = Boolean(transition || context.transition);
       await this.each(context.fences, fence => d.advanceReclaim(fence, context), 'reclaim');
-      if (transitionOpen) return;
+      if (transitionOpen || context.configuration.legacy) return;
       await this.each(context.scenes, scene => d.checkRotation(scene, context), 'rotation');
+      await this.each(context.scenes, scene => d.checkTtl(scene, context), 'ttl');
       if (context.configuration.mode === 'multi') {
-        await this.each(context.scenes, scene => d.checkTtl(scene, context), 'ttl');
         try { await d.checkEviction(context.scenes, context); }
         catch (error) { await d.reportError(error, { phase: 'eviction' }); }
       }

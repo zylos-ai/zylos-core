@@ -6,9 +6,6 @@ control that states the reason and names one of these checks:
 - **Idle reclaim check**: the group has been idle and will be reclaimed (TTL
   reclaim and capacity or memory-pressure eviction).
 - **Upgrade restart check**: the group will be restarted for an upgrade.
-- **Single-session upgrade restart check**: the session will be restarted for
-  an upgrade. In single-session mode it is the only session group and
-  `$ZYLOS_SESSION_GROUP` is unset.
 - **Configuration restart check**: the launch configuration changed and the
   group will be restarted with it.
 
@@ -28,7 +25,7 @@ they inherit this session's group and run identity.
   before reclaiming, so do not defer for it. If there is such work, run
   `node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js defer-reclaim --reason "<what is still running>"`,
   confirm it reports ok:true, then acknowledge this control.
-- **Upgrade, single-session upgrade and configuration restart checks:** If work
+- **Upgrade and configuration restart checks:** If work
   this session itself started is still running (a background command, a
   Monitor watcher, a background subagent or workflow), it will be interrupted
   by this restart: name it in the session handoff so the next session can rerun
@@ -54,7 +51,7 @@ Do not create scheduled tasks for anything else.
 
 ## 4. Finish
 
-- **Idle reclaim, upgrade and single-session upgrade restart checks:** Then
+- **Idle reclaim and upgrade restart checks:** Then
   acknowledge.
 - **Configuration restart check:** Then submit ready_for_config_reclaim through
   the supervisor. After acceptance, finish this control and the current turn.

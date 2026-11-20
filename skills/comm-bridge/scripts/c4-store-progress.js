@@ -1,5 +1,5 @@
 import { dataError, requireGroup } from './c4-session-group.js';
-export function progressFunctions({ read, write, snapshot, get, all, run, seconds }) {
+export function progressFunctions({ read, write, snapshot, get, all, run, seconds, dependencies }) {
   const loadable = "((direction='in' AND status='delivered') OR direction='out')";
   const scope = group => group === '*' ? { sql: '', args: [] } : { sql: ' AND session_group=?', args: [requireGroup(group)] };
   const baseline = c => get(c, "SELECT COALESCE(end_conversation_id,0) AS n FROM checkpoints WHERE session_group='*' ORDER BY id DESC LIMIT 1")?.n ?? 0;
@@ -10,20 +10,37 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
     return all(c, `SELECT * FROM conversations WHERE session_group=? AND id>? AND id<=? AND ${loadable} ORDER BY id${l.sql}`, group, after, upTo, ...l.args);
   };
   const originCursor = (c, group) => get(c, 'SELECT synced_id,checkpoint_id,updated_at FROM origin_sync_cursors WHERE session_group=?', group);
+  function originSingle(c, group) {
+    if (group !== 'origin') return false;
+    if (typeof dependencies.readConfig !== 'function') throw new TypeError('Origin progress requires readConfig');
+    if (get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'")) return true;
+    try {
+      const result = dependencies.readConfig();
+      if (result?.state === 'missing') return false;
+      const config = result?.config;
+      if (result?.state !== 'ok' || !config || typeof config !== 'object' || Array.isArray(config)) return true;
+      return config.session_mode === undefined ? false : config.session_mode !== 'multi';
+    } catch { return true; }
+  }
   function frontier(c, group, start = coverage(c, group)) {
-    const f = scope(group);
+    const single = originSingle(c, group), f = scope(single ? '*' : group);
     const gap = get(c, `SELECT MIN(id) AS n FROM conversations WHERE id>?${f.sql} AND direction='in' AND status NOT IN ('delivered','failed','switch_absorbed')`, start, ...f.args).n;
+    if (single) {
+      const head = get(c, 'SELECT COALESCE(MAX(id),?) AS n FROM conversations WHERE id>? AND session_group=?', start, start, group).n;
+      return gap === null ? head : Math.min(gap - 1, head);
+    }
     return gap === null ? get(c, `SELECT COALESCE(MAX(id),?) AS n FROM conversations WHERE id>?${f.sql}`, start, start, ...f.args).n : gap - 1;
   }
-  function checkpoint(c, group, end, summary, { noContent = false, cutover = false } = {}) {
+  function checkpoint(c, group, end, summary, { noContent = false } = {}) {
     requireGroup(group, { global: true });
     if (!Number.isSafeInteger(end) || end < 0) throw dataError('INVALID_ARGS', 'end must be a nonnegative integer');
     const covered = coverage(c, group), f = scope(group);
     if (end < covered) throw dataError('CHECKPOINT_REGRESSION', 'Checkpoint would move coverage backwards');
-    if (get(c, `SELECT 1 FROM conversations WHERE id>? AND id<=?${f.sql} AND direction='in' AND status NOT IN ('delivered','failed','switch_absorbed') LIMIT 1`, covered, end, ...f.args)) throw dataError('CHECKPOINT_GAP', 'Checkpoint crosses unfinished input');
+    const gapScope = scope(originSingle(c, group) ? '*' : group);
+    if (get(c, `SELECT 1 FROM conversations WHERE id>? AND id<=?${gapScope.sql} AND direction='in' AND status NOT IN ('delivered','failed','switch_absorbed') LIMIT 1`, covered, end, ...gapScope.args)) throw dataError('CHECKPOINT_GAP', 'Checkpoint crosses unfinished input');
     const head = get(c, `SELECT COALESCE(MAX(id),0) AS n FROM conversations WHERE 1${f.sql}`, ...f.args).n;
     if (end > head) throw dataError('CHECKPOINT_BEYOND_HEAD', 'Checkpoint exceeds message head');
-    if (noContent ? summary !== null && summary !== undefined : typeof summary !== 'string' || (!cutover && summary.length === 0)) throw dataError('SUMMARY_INVALID', 'Summary and noContent do not agree');
+    if (noContent ? summary !== null && summary !== undefined : typeof summary !== 'string' || summary.length === 0) throw dataError('SUMMARY_INVALID', 'Summary and noContent do not agree');
     const previous = get(c, 'SELECT COALESCE(end_conversation_id,0) AS n FROM checkpoints WHERE session_group=? ORDER BY id DESC LIMIT 1', group);
     const base = baseline(c);
     const start = group === '*' ? (previous?.n ?? 0) + 1 : previous && previous.n > base ? previous.n + 1 : get(c, 'SELECT MIN(id) AS n FROM conversations WHERE session_group=? AND id>?', group, base).n;

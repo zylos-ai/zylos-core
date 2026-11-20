@@ -128,18 +128,6 @@ test('Origin demand retry is seconds not rounds, excludes pool capacity, never r
   f.advance(60000); await f.rounds(2); assert.equal(router.state.resident.failures, 0);
 });
 
-test('single uses null semantic scope and origin target; global fence prevents launch', async t => {
-  const f = routerFixture(t, { mode: 'single' }); f.deps.readSessionMode = () => ({ mode: null, keyPresent: false });
-  f.db.setDrainFence('*'); const router = f.create(); await router.initialize(); await f.rounds(2);
-  f.advance(9000); await f.rounds(2); assert.equal(f.calls.some(x => x[0] === 'launch'), false);
-  // Read failure also holds the resident lane; no fallback launch.
-  f.db.getDrainFence = () => { throw Error('busy'); }; await f.rounds(2);
-  assert.equal(f.calls.some(x => x[0] === 'launch'), false);
-  f.db.getDrainFence = () => null; await f.rounds(3);
-  assert.equal(f.calls.find(x => x[0] === 'launch')[1].sessionGroup, null);
-  assert.ok(f.calls.some(x => x[0] === 'prepare'));
-});
-
 test('unowned timeout observation failure alerts without stopping or freeing capacity', async t => {
   const f = routerFixture(t, { poolSize: 1 }); f.put('origin'); f.put('a', { ready: false });
   const b = f.add('b'); const router = f.create(); await router.initialize(); await f.rounds(2);

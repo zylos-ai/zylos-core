@@ -10,7 +10,8 @@ import { isMainModule } from './is-main-module.js';
 const statuses = { projects: ['active', 'planning', 'paused', 'completed', 'abandoned'], decisions: ['active', 'archived'] };
 // The 48-character limit includes the .md extension.
 const pageName = name => /^[a-z0-9-]+\.md$/.test(name) && name.length <= 48;
-const pagePath = (relative, archived = false) => {
+export const PAGE_FILENAME_GUIDANCE = 'Page filename must use only lowercase letters, digits and hyphens, end with .md and be at most 48 characters including .md, directly under reference/projects/ or reference/decisions/, e.g. reference/projects/memory-sync-fix.md';
+export const pagePath = (relative, archived = false) => {
   const parts = relative.split('/');
   return parts[0] === 'reference' && Object.hasOwn(statuses, parts[1]) &&
     (archived ? parts.length === 4 && parts[2] === 'archive' : parts.length === 3) && pageName(parts.at(-1));
@@ -96,7 +97,7 @@ export function rebuild(root) {
 
 export function createPage(root, requested, content) {
   const permitted = p => pagePath(p);
-  if (!permitted(requested)) throw memoryError('PATH_NOT_ALLOWED', 'Expected a direct reference page path');
+  if (!permitted(requested)) throw memoryError('PATH_NOT_ALLOWED', PAGE_FILENAME_GUIDANCE);
   const { target } = resolveAllowedMemoryPath({ root, path: requested, allowed: permitted });
   publish(target, content, true);
   return { ok: true, path: requested, bytes: Buffer.byteLength(content) };

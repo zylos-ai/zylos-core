@@ -252,7 +252,7 @@ export async function collectDiagnostics(env, { resolve = () => resolveCliSessio
   const sessionMode = selected.sessionGroup == null ? 'single' : 'multi';
   const sessionModeStatus = await modeStatus();
   let origin = null, targetRuntime = null, originNeed = null;
-  if (sessionMode === 'multi' && selected.sessionGroup === 'origin' && !session) {
+  if (!session && (selected.sessionGroup === 'origin' || selected.sessionGroup == null && readSessionMode().mode === 'single')) {
     const status = await collectStatus();
     originNeed = status.originNeed;
     try { targetRuntime = await resolveTargetRuntime('origin'); } catch { /* Unknown target leaves health undecided. */ }

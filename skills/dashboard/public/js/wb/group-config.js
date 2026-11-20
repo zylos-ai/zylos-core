@@ -15,9 +15,17 @@ export async function fetchJson(fetch, path, options = {}) {
   return value;
 }
 
+// running is null without a comparison: a pre-migration instance (sessionMode null) uses its
+// baseline; a model pair for another runtime is kept; in native single only Origin runs, so
+// other groups show the configuration they will use after switching back to multi.
 export function runningText(data, kind, t = key => key) {
-  if (data?.running == null && data?.sessionMode === 'single') return t('wb.config.single');
+  if (data?.running == null && data?.sessionMode === null) return t('wb.config.single');
   if (data?.running == null && kind === 'model' && data?.runtime !== data?.resolved?.runtime) return t('wb.config.otherRuntime');
+  if (data?.running == null && data?.sessionMode === 'single' && data?.sessionGroup !== 'origin') {
+    const resolved = data?.resolved;
+    const config = [runtimeName(resolved?.runtime), resolved?.model, resolved?.effort].filter(Boolean).join(' · ');
+    return t('wb.config.afterMulti', { config });
+  }
   const running = data?.running;
   if (running?.status === 'unknown') return t('wb.config.unknown', { reason: running.reason ?? '' });
   return t('wb.config.' + ({ not_running: 'nextStart', pending: 'pending', applied: 'applied' }[running?.status] ?? 'resultUnknown'));

@@ -86,7 +86,6 @@ export function instructionPaths(runtime, { zylosDir = ZYLOS_DIR } = {}) {
     instructionsDir,
     markerPath: path.join(instructionsDir, 'meta.json'),
     assemblerPath: path.join(instructionsDir, 'assembler.mjs'),
-    onboardingPath: path.join(instructionsDir, 'onboarding.md'),
     systemPath: path.join(instructionsDir, `${runtime === 'agy' ? 'codex' : runtime}-system.md`),
     userPath: path.join(root, 'ZYLOS.md'),
     outputPath: path.join(root, runtime === 'claude' ? 'CLAUDE.md' : 'AGENTS.md'),
@@ -161,9 +160,6 @@ export function deployInstructionAssets({
     if (!fs.existsSync(source)) throw new Error(`System instruction template not found: ${source}`);
     atomicWrite(instructionPaths(runtime, { zylosDir }).systemPath, fs.readFileSync(source));
   }
-  const onboardingSource = path.join(templatesDir, 'onboarding.md');
-  if (!fs.existsSync(onboardingSource)) throw new Error(`Onboarding instruction template not found: ${onboardingSource}`);
-  atomicWrite(paths.onboardingPath, fs.readFileSync(onboardingSource));
   atomicWrite(paths.assemblerPath, fs.readFileSync(assemblerSource));
   return paths.instructionsDir;
 }
@@ -342,7 +338,6 @@ function migratedInstructionEntries({
     { name: 'user', path: claude.userPath, content: userContent },
     { name: 'claude-system', path: claude.systemPath, content: systems.claude },
     { name: 'codex-system', path: instructionPaths('codex', { zylosDir }).systemPath, content: systems.codex },
-    { name: 'onboarding', path: claude.onboardingPath, content: fs.readFileSync(path.join(templatesDir, 'onboarding.md'), 'utf8') },
     { name: 'assembler', path: claude.assemblerPath, content: fs.readFileSync(assemblerSource) },
   ];
   for (const runtime of ['claude', 'codex']) {
@@ -437,7 +432,6 @@ export function activateFreshSplitInstructions({
   const entries = [
     { name: 'claude-system', path: claude.systemPath, content: systems.claude },
     { name: 'codex-system', path: instructionPaths('codex', { zylosDir }).systemPath, content: systems.codex },
-    { name: 'onboarding', path: claude.onboardingPath, content: fs.readFileSync(path.join(templatesDir, 'onboarding.md'), 'utf8') },
     { name: 'assembler', path: claude.assemblerPath, content: fs.readFileSync(assemblerSource) },
   ];
   if (!fs.existsSync(claude.userPath)) {
@@ -505,7 +499,6 @@ export function refreshSplitInstructions({
       try { fs.unlinkSync(systemShadow); } catch { }
     }
   }
-  entries.push({ name: 'onboarding', path: claude.onboardingPath, content: fs.readFileSync(path.join(templatesDir, 'onboarding.md'), 'utf8') });
   entries.push({ name: 'assembler', path: claude.assemblerPath, content: fs.readFileSync(assemblerSource) });
   marker.refreshedAt = now.toISOString();
   marker.userSha256 = crypto.createHash('sha256').update(userContent).digest('hex');

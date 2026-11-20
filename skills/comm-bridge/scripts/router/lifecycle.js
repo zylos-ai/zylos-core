@@ -1,43 +1,21 @@
 import { loadCoreModule } from './core-modules.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-const { groupRunDir, legacyRunDir, RUN_FILES, zylosRoot } = await loadCoreModule('session-group-paths.js');
-const { buildInstructionFile } = await loadCoreModule('runtime/instruction-builder.js');
+const { legacyRunDir, RUN_FILES, zylosRoot } = await loadCoreModule('session-group-paths.js');
 const { createSessionOps } = await loadCoreModule('runtime/session-ops.js');
 const { openTmuxConnection, tmuxError } = await loadCoreModule('runtime/tmux-connection.js');
 const { observeSessionTarget } = await loadCoreModule('runtime/session-target.js');
-import { createSinglePreparation, createLegacyMigration } from './resident.js';
+import { createLegacyMigration } from './resident.js';
 
-// Only stale derived samples and pre-existing lifecycle caches are reset.
-// The current-session sample remains until the startup hook replaces it;
-// lifecycle history belongs to the supervisor.
 // Same identifier rule the upgrade uses for its transaction directories.
 const UPGRADE_TRANSACTION_ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,95}$/;
 
-const lifecycleCaches = ['tool-event-stream-state.json', 'session-tool-state.json', 'foreground-session.json'];
-
 export function createLifecycleProviders({ env = process.env, tmux = {}, now = Date.now,
-  diagnostic = () => {}, log = () => {},
+  diagnostic = () => {},
   open = openTmuxConnection, observe = observeSessionTarget, readProcessTree,
   session = createSessionOps({ env, tmux }),
-  buildInstructions = runtime => buildInstructionFile(runtime, { zylosDir: zylosRoot(env) }),
   readLegacyStatus: statusOverride,
 } = {}) {
-  const origin = groupRunDir('origin', env);
-  async function removeOriginFiles(names) {
-    // Attempt every cache independently, while retaining permission/I/O errors
-    // for the best-effort preparation diagnostic.
-    const results = await Promise.allSettled(names.map(name => fs.unlink(path.join(origin, name))));
-    const failure = results.find(result => result.status === 'rejected' && result.reason.code !== 'ENOENT');
-    if (failure) throw failure.reason;
-  }
-  const prepareSingle = createSinglePreparation({
-    log,
-    clearStaleState: () => removeOriginFiles([RUN_FILES.AGENT_STATUS, RUN_FILES.STATUSLINE]),
-    resetToolLifecycle: () => removeOriginFiles(lifecycleCaches),
-    buildInstructionFile: buildInstructions,
-  });
-
   async function readLegacy(tmuxName) {
     let connection;
     try {
@@ -97,7 +75,6 @@ export function createLifecycleProviders({ env = process.env, tmux = {}, now = D
       await session.sendKeys({ target, connection, keys: ['Enter'] });
     } finally { await connection?.close(); }
   }
-  const migration = createLegacyMigration({ readLegacy, readLegacyStatus: statusOverride ?? readLegacyStatus,
+  return createLegacyMigration({ readLegacy, readLegacyStatus: statusOverride ?? readLegacyStatus,
     sendExit, session, readUpgradeMarker, readUpgradeJournal, diagnostic, now });
-  return { prepareSingle, ...migration };
 }

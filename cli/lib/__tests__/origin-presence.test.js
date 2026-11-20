@@ -65,6 +65,34 @@ test('read facts projects counts, continuation and earliest non-null need and cl
   }
 });
 
+test('origin facts passes the caller mode to demand selection', async () => {
+  for (const sessionMode of ['single', 'multi']) {
+    const result = await readOriginFacts({ sessionMode, nowSec: 200, open: () => ({ close() {}, store: {
+      getOriginNeed(now, options) {
+        assert.equal(now, 200); assert.deepEqual(options, { sessionMode });
+        return { inbound: { count: 0, oldestAt: null }, controls: { count: 0, oldestAt: null }, continuation: { pending: false, oldestAt: null } };
+      }, getModeTransition: () => null, getDrainFence: () => null,
+    } }) });
+    assert.equal(result.originNeed.inbound, 0);
+  }
+});
+
+test('origin facts uses the multi demand view for missing, invalid or unreadable configuration', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-mode-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, '.zylos'));
+  for (const [content, expected] of [[null, 'multi'], ['{}', 'multi'], ['{broken', 'multi'], ['{"session_mode":"invalid"}', 'multi'], ['{"session_mode":"single"}', 'single'], ['{"session_mode":"multi"}', 'multi']]) {
+    if (content !== null) fs.writeFileSync(path.join(root, '.zylos/config.json'), content);
+    const result = await readOriginFacts({ zylosDir: root, open: () => ({ close() {}, store: {
+      getOriginNeed(now, options) {
+        assert.deepEqual(options, { sessionMode: expected });
+        return { inbound: { count: 0, oldestAt: null }, controls: { count: 0, oldestAt: null }, continuation: { pending: false, oldestAt: null } };
+      }, getModeTransition: () => null, getDrainFence: () => null,
+    } }) });
+    assert.equal(result.originNeed.inbound, 0);
+  }
+});
+
 // Covers the shared CLI/Dashboard reader against a temporary C4 database. Run
 // when its connection or queries change; skip for presentation-only changes.
 // The official runner isolates HOME/ZYLOS_DIR/PM2_HOME; no tmux or service runs.

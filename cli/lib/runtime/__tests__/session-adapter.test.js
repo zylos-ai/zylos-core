@@ -255,6 +255,7 @@ test('launch awaits runtime help and classifies invalid launch arguments as a la
     {sessionGroup:null,runId:'',sessionMode:'single'},
     {sessionGroup:null,runId:'r',sessionMode:'invalid'},
     {sessionGroup:'group',runId:'r',sessionMode:'single'},
+    {sessionGroup:null,runId:'r',sessionMode:'multi'},
   ]){
     queried=false; helpOptions=undefined;
     await assert.rejects(launchSession({ runtime: 'claude', ...input,launchConfig}, f.options),{code:'LAUNCH_FAILED',cause:'error'});

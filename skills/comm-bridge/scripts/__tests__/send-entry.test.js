@@ -1,3 +1,4 @@
+import { seedHistoricalAbsorption } from './fixtures/historical-absorption.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import fs from 'node:fs';
@@ -112,7 +113,7 @@ test('absorbed reply reads transition and message atomically without reusing the
   const endpoint = 'a\'"$`\\\nroute';
   const row = store.insertConversation('in', 'demo', endpoint, 'incoming', { groupName: 'group' });
   const { runId } = store.beginModeTransition('single', 'multi');
-  store.setDrainFence('*'); store.absorbForTransition(runId);
+  store.setDrainFence('*'); seedHistoricalAbsorption(db, runId, [row.id]);
   const original = api.getModeTransition;
   api.getModeTransition = options => { assert.equal(db.inTransaction, true); return original(options); };
   assert.deepEqual(readAbsorbedReply(runId, String(row.id), api), { kind: 'external', channel: 'demo', endpoint, id: row.id, runId });

@@ -15,7 +15,7 @@ registerHooks({ resolve(specifier, context, next) {
 } });
 const { renderQuestion } = await import('../public/js/wb/chat-questions.js');
 const t = key => key;
-function fixture({ type = 'choice', data = {}, status = 'paused', canWrite = true, missing = false, stateAvailable = true, statePendingPage = false, readOnlyExternal = false,
+function fixture({ type = 'choice', data = {}, status = 'paused', canWrite = true, missing = false, stateAvailable = true, statePendingPage = false, readOnlyExternal = false, readOnlyOther = false,
   mutateQuestion, formState = {}, submit = async () => {}, otherAnswerDisclosure = false, timeZone = null } = {}) {
   const defaults = type === 'choice' ? { prompt: 'Pick one', options: [{ id: 'a', label: 'First' }, { id: 'b', label: 'Second' }], action: { type: 'choice.select', target: 'answer.choice' } }
     : type === 'confirmation' ? { title: 'Proceed?', severity: 'normal', action: { type: 'confirmation.respond', target: 'answer.confirm' } }
@@ -31,7 +31,7 @@ function fixture({ type = 'choice', data = {}, status = 'paused', canWrite = tru
     status, answerId: null, action: null, actionError: null, delivery: null };
   mutateQuestion?.(question);
   const document = createDocument(), requests = [];
-  const render = () => renderQuestion({ document, row, envelope, block, question, canWrite, stateAvailable, statePendingPage, readOnlyExternal, otherAnswerDisclosure, t, formState, timeZone,
+  const render = () => renderQuestion({ document, row, envelope, block, question, canWrite, stateAvailable, statePendingPage, readOnlyExternal, readOnlyOther, otherAnswerDisclosure, t, formState, timeZone,
     onSubmit: async (action, options) => { requests.push({ action, options }); return submit(action, options); } });
   const root = render();
   return { root, render, requests, question, envelope, formState, nodes: () => allNodes(root),
@@ -392,6 +392,19 @@ test('external history explains read-only questions without claiming they are un
   assert.match(f.root.textContent, /chat.question.externalReadOnly/);
   assert.equal(f.root.textContent.includes('chat.question.unavailable'), false);
   assert.equal(f.nodes().some(node => ['BUTTON', 'INPUT', 'TEXTAREA'].includes(node.tagName)), false);
+});
+
+test("another conversation's waiting question shown in the Origin conversation is read only even with its state", () => {
+  for (const type of ['choice', 'confirmation', 'form_intent']) {
+    const writable = fixture({ type });
+    assert.ok(writable.nodes().some(node => node.tagName === 'BUTTON' && !node.disabled), `${type} is answerable in its own conversation`);
+    const f = fixture({ type, readOnlyOther: true });
+    assert.match(f.root.textContent, /chat.question.otherConversationReadOnly/);
+    assert.equal(f.root.textContent.includes('chat.question.paused'), false);
+    assert.equal(f.nodes().some(node => node.tagName === 'BUTTON' && !node.disabled), false);
+    assert.equal(f.nodes().some(node => ['INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName) && !node.disabled), false);
+    assert.equal(f.requests.length, 0);
+  }
 });
 
 test('a question whose state page is not loaded does not claim missing registration', () => {

@@ -184,7 +184,7 @@ test(`${runtime} ${entry} startup retains projected ${name} history`, async t =>
       writeFlagImpl: () => {}, registerExitFlagImpl: () => {},
     });
     output = fs.readFileSync(file, 'utf8');
-    assert.match(output, /ZYLOS STARTUP CONTEXT \[4\/4\] c4-conversations/);
+    assert.match(output, /ZYLOS STARTUP CONTEXT \[4\/5\] c4-conversations/);
   }
   checkVisible(output, rows[0]);
   assert.equal(output.includes('UNAVAILABLE'), false);

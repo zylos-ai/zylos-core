@@ -72,7 +72,7 @@ test('unchanged diagnostics avoid log reads while append, replacement, rotation 
   const switched = await readSessionModeStatus(input);
   assert.equal(switched.blocked.since, 8);
   assert.deepEqual(switched.lastEvents.map(item => item.ts), [8]);
-  assert.ok(reads > switchReads, 'run-key change rereads an unchanged file');
+  assert.equal(reads, switchReads, 'a run change filters the cached events without rereading the file');
   const afterSwitch = fs.statSync(file, { bigint: true });
   for (const key of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs']) {
     assert.equal(afterSwitch[key], beforeSwitch[key], `${key} stays unchanged across the run switch`);
@@ -114,7 +114,7 @@ test('diagnostics use only the current run, first matching reason and latest ten
     { run_id: 'other', event: 'transition_blocked', reason: row.reason, ts: 1 },
     { run_id: row.run_id, event: 'unrelated', reason: row.reason, ts: 2 },
     { run_id: row.run_id, event: 'transition_blocked', reason: row.reason, ts: 3 },
-    ...Array.from({ length: 12 }, (_, i) => ({ run_id: row.run_id, event: i % 2 ? 'absorb' : 'auto_migration_begin', ts: 10 + i })),
+    ...Array.from({ length: 12 }, (_, i) => ({ run_id: row.run_id, event: i % 2 ? 'transition_begin' : 'auto_migration_begin', ts: 10 + i })),
     { run_id: row.run_id, event: 'transition_blocked', reason: row.reason, ts: 30 },
   ];
   const status = await readSessionModeStatus(defaults({ readEvents: () => events }));
@@ -122,7 +122,7 @@ test('diagnostics use only the current run, first matching reason and latest ten
   assert.equal(status.lastEvents.length, 10);
 });
 
-test('E diagnostic loss cannot change authoritative state or socket observation', async () => {
+test('Diagnostic loss cannot change authoritative state or socket observation', async () => {
   const input = defaults({ readEvents: () => [{ run_id: row.run_id, reason: row.reason, event: 'transition_blocked', ts: 3 }] });
   const before = await readSessionModeStatus(input);
   const after = await readSessionModeStatus({ ...input, readEvents: () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); } });
@@ -180,4 +180,35 @@ test('a global manual_restart fence is present independently of any mode transit
   const status = await readSessionModeStatus(input);
   assert.deepEqual(status.globalGate, { present: true, reason: 'manual_restart', runId: 'restart-run' });
   assert.equal(status.transition, null); assert.equal(status.blocked, null);
+});
+
+test('without an open transition status shows latest ten permitted events across runs and handovers', async () => {
+  const input = defaults(); input.db.getModeTransition = () => null; input.db.getLastCompletedModeTransition = () => null;
+  const events = Array.from({ length: 15 }, (_, i) => ({ run_id: `run-${i}`, event: i % 2 ? 'global_memory_handover' : 'global_memory_handover_failed', ts: i }));
+  input.readEvents = () => [...events, { event: 'unrelated' }];
+  const status = await readSessionModeStatus(input);
+  assert.deepEqual(status.lastEvents, events.slice(-10)); assert.equal(status.transition, null);
+});
+test('open status keeps current switch events and subsequent handovers using seconds to milliseconds', async () => {
+  const input = defaults();
+  const current = { run_id: row.run_id, event: 'transition_blocked', reason: row.reason, ts: 100001 };
+  const handover = { run_id: 'gm-1', event: 'global_memory_handover', ts: 100000 };
+  const failed = { run_id: 'gm-2', event: 'global_memory_handover_failed', reason: row.reason, ts: 100002 };
+  input.readEvents = () => [
+    { run_id: 'old', event: 'transition_complete', ts: 100003 },
+    { run_id: 'gm-old', event: 'global_memory_handover', ts: 99999 },
+    { run_id: 'gm-no-time', event: 'global_memory_handover' }, handover, current, failed,
+  ];
+  const status = await readSessionModeStatus(input);
+  assert.equal(status.blocked.since, current.ts);
+  assert.deepEqual(status.lastEvents, [handover, current, failed]);
+});
+test('plain status shows handover events while authoritative transition stays absent', async () => {
+  const input = defaults(); input.db.getModeTransition = () => null; input.db.getLastCompletedModeTransition = () => null;
+  input.readEvents = () => [{ event: 'global_memory_handover', run_id: 'gm-1' }, { event: 'global_memory_handover_failed', run_id: 'gm-2' }];
+  const status = await readSessionModeStatus(input), text = formatSessionModeStatus(status);
+  assert.equal(status.transition, null); assert.equal(status.lastCompleted, null);
+  assert.match(text, /Transition: none/);
+  assert.match(text, /global_memory_handover \(gm-1\)/);
+  assert.match(text, /global_memory_handover_failed \(gm-2\)/);
 });

@@ -370,7 +370,7 @@ export function renderHotTtl(root, { metadata = {}, document = root.ownerDocumen
   const seconds = meta?.seconds;
   let baseline = Number.isFinite(seconds) ? seconds / 60 : null, busy = false;
   const min = meta?.min_minutes ?? 5, max = meta?.max_minutes ?? 1440;
-  const editable = () => meta?.mode === 'multi' && meta?.read_only === false && !meta?.environment_set;
+  const editable = () => ['single', 'multi'].includes(meta?.mode) && meta?.read_only === false && !meta?.environment_set;
   const label = element(document, 'label', t('wb.settings.hotTtl.label'), 'wb-fld-l');
   label.setAttribute('for', 'settings-hot-ttl-minutes');
   const input = element(document, 'input', undefined, 'wb-input wb-input-num');

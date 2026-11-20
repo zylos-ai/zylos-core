@@ -188,6 +188,8 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] Overview separates running and offline groups with the existing segmented-control family. The mutually exclusive primary status and independent queue, blocking, capacity, start-failure, unreadable and no-response flags share the row's status area; flags stack or wrap within that cell. Loading more offline rows preserves the loaded depth on refresh. Fleet cost summaries and cards show today and seven-day costs; they have no session-cost cell or tooltip. Instance cards omit Origin child-agent badges and counts, model, effort, context percentage and rotation threshold in both plain and technical views; they require no Origin-detail request for those removed displays. Offline groups waiting for capacity keep the readable waiting-slot explanation in plain detail. Group details show today and seven-day usage; the Usage page includes the weighted cache-hit curve alongside the existing charts.
 
+[Current] Idle reclaim settings are editable in both configured session modes unless an environment override makes them read-only. In single mode the value applies to Origin; instances awaiting mode migration remain read-only.
+
 ## 6. Responsive Layout: Tasks Remain Usable on 390 px Mobile Screens
 
 [Approved] The 390 px mobile interface must not have unintended overflow, clipped text, or obscured actions. Check touch targets separately from visible graphics; wrapped toolbars must still satisfy same-row height and centerline requirements.

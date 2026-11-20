@@ -83,6 +83,24 @@ recheck. Legacy trailing `--session-group NAME` is silently accepted and discard
 while malformed placement still fails `INVALID_ARGS`. Generated reply-via omits
 it. `--group` is not accepted. Use stdin for literal option tokens in content.
 
+In native single mode (`session_mode: "single"` in `config.json`) only Origin runs
+and it handles every address. Origin and senders without a session environment
+(no `ZYLOS_SESSION_GROUP`) read `session_mode` strictly on every send; a missing
+file or key keeps the rules
+above, and senders with any other group never read it. In native single no
+comparison is made and every outbound row, including system notices, is recorded
+under `origin`. The component is still queried: its answer only feeds the
+BeforeSend hook, and a failed query still refuses. If `config.json` cannot be
+read or holds an invalid mode, the send is not refused: it follows the multi
+rules and prints one `[C4] WARNING` line.
+
+After a switch back to multi, the Origin run that crossed the switch (or the
+first Origin run after it) may still answer the exact channel and endpoint of a
+message delivered to Origin in single mode; that reply is recorded under
+`origin`. This holds only while the latest completed switch targeted multi and
+no Origin run has ended since that switch completed. Any other address, including
+another message id in the same chat, follows the check above.
+
 System notification callers and Core PM2 service startup
 paths clear both session variables from the invoking environment, including
 `zylos start`, init, ecosystem restarts, component registration and upgrade
@@ -121,7 +139,11 @@ The sender comes from `ZYLOS_SESSION_GROUP`; the target is a full group. A targe
 may be new if its namespace belongs to an installed component; sending creates
 its message/head so its thread can start. Unknown or uninstalled namespaces fail.
 Content is stdin-only. Extra arguments, `--session-group`, and `--group` are
-rejected. A successful command reports that the message was queued.
+rejected. A successful command reports that the message was queued. In native
+single mode Origin is the only thread, so internal messages, including absorbed
+internal replies, fail `INTERNAL_SINGLE_MODE` and nothing is written; if
+`config.json` cannot be read, Origin's message is sent under the multi rules with
+one warning line.
 
 ## Failures
 

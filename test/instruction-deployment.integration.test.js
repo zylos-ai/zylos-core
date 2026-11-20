@@ -11,7 +11,8 @@ const repo = fileURLToPath(new URL('..', import.meta.url));
 const driver = fileURLToPath(new URL('./helpers/instruction-deployment.js', import.meta.url));
 
 // Boundary: actual init skill sync/template deployment, split activation and
-// upgrade preparation/publication APIs, plus installed reference. No full
+// upgrade preparation/publication APIs, installed reference and installed
+// onboarding shard resolving its packaged template. No full
 // installer, service manager, tmux or authenticated runtimes. Run for packaged
 // system templates, handoff references, sync or instruction generation changes;
 // unrelated frontend changes may skip. Every bounded child uses private paths,

@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { fixture as c4Fixture } from '../../../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { createNamingRequest, NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText } from '../naming-request.js';
 
 // Module boundary: the real naming request with the instance's session mode and the c4-control child injected.
-// No process, database or Core state is touched; each case records the exact command it would run.
+// Private in-memory C4 stores validate configured and legacy targets; no runtime or service is touched.
 const ROOT = '/fixture/zylos';
 const CONTROL = path.join(ROOT, '.claude/skills/comm-bridge/scripts/c4-control.js');
 const PROMPT = namePromptText(path.join(ROOT, '.claude/skills/dashboard/scripts/group-name.js'), NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH);
@@ -14,6 +15,7 @@ function fixture(options = {}) {
   const { reply = { stdout: JSON.stringify({ ok: true, data: { id: 41 } }) } } = options;
   const mode = Object.hasOwn(options, 'mode') ? options.mode : 'multi';
   const calls = [], logged = [];
+  const optionsForStore = options.store;
   const send = createNamingRequest({
     log: message => logged.push(message),
     zylosDir: ROOT,
@@ -21,6 +23,12 @@ function fixture(options = {}) {
     readMode: () => mode,
     execute: async (file, args, options) => {
       calls.push({ file, args, options });
+      if (optionsForStore) {
+        const groupIndex = args.indexOf('--group');
+        const row = optionsForStore.insertControl(args[args.indexOf('--content') + 1], {
+          sessionGroup: groupIndex === -1 ? null : args[groupIndex + 1], appendAckSuffix: false });
+        assert.equal(row.session_group, mode ? 'origin' : null);
+      }
       if (reply instanceof Error) throw reply;
       return reply;
     },
@@ -38,22 +46,24 @@ test('the naming prompt keeps its words and substitutes only the first CLI path'
   assert.throws(() => namePromptText(script, 'no path here', ORIGINAL_GROUP_NAME_PATH), /name_prompt_path_missing/);
 });
 
-test('multi mode queues one unacknowledged control for the origin group', async () => {
-  const { send, calls } = fixture({ mode: 'multi' });
-  assert.deepEqual(await send(), { ok: true, controlId: 41, sessionGroup: 'origin' });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].file, process.execPath);
-  assert.deepEqual(calls[0].args, [CONTROL, 'enqueue', '--content', PROMPT, '--no-ack-suffix', '--group', 'origin', '--json']);
-  assert.equal(calls[0].options.env.ZYLOS_DIR, ROOT, 'the child addresses this Dashboard instance');
-  assert.equal(Object.hasOwn(calls[0].options.env, 'ZYLOS_SESSION_GROUP'), false, 'no inherited caller group reaches C4');
+test('configured modes queue one unacknowledged control for the origin group', async t => {
+  for (const mode of ['multi', 'single']) {
+    const { store } = c4Fixture(t, { readConfig: () => ({ state: 'ok', config: { session_mode: mode } }) });
+    const { send, calls } = fixture({ mode, store });
+    assert.deepEqual(await send(), { ok: true, controlId: 41, sessionGroup: 'origin' });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].file, process.execPath);
+    assert.deepEqual(calls[0].args, [CONTROL, 'enqueue', '--content', PROMPT, '--no-ack-suffix', '--group', 'origin', '--json']);
+    assert.equal(calls[0].options.env.ZYLOS_DIR, ROOT, 'the child addresses this Dashboard instance');
+    assert.equal(Object.hasOwn(calls[0].options.env, 'ZYLOS_SESSION_GROUP'), false, 'no inherited caller group reaches C4');
+  }
 });
 
-test('single mode leaves the target to C4, which addresses the only session', async () => {
-  for (const mode of ['single', undefined]) {
-    const { send, calls } = fixture({ mode });
-    assert.deepEqual(await send(), { ok: true, controlId: 41, sessionGroup: null });
-    assert.deepEqual(calls[0].args, [CONTROL, 'enqueue', '--content', PROMPT, '--no-ack-suffix', '--json']);
-  }
+test('unmigrated mode leaves the target to C4, which addresses the only session', async t => {
+  const { store } = c4Fixture(t, { readConfig: () => ({ state: 'ok', config: {} }) });
+  const { send, calls } = fixture({ mode: undefined, store });
+  assert.deepEqual(await send(), { ok: true, controlId: 41, sessionGroup: null });
+  assert.deepEqual(calls[0].args, [CONTROL, 'enqueue', '--content', PROMPT, '--no-ack-suffix', '--json']);
 });
 
 // The child's failure as execFile reports it: the whole command line (with the prompt), install paths and a stack.

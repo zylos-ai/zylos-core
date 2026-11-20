@@ -32,10 +32,11 @@ test('CLI entry loads and invalid status arguments produce one structured result
 test('group text explains null running using mode before runtime comparison', async () => {
   const previous = process.exitCode;
   try {
-    for (const [sessionMode, expected] of [['single', /only in multi/], ['multi', /current group runtime is claude/]]) {
+    for (const [sessionMode, sessionGroup, expected] of [['single', 'telegram:example', /only in multi/], [null, 'origin', /only in multi/],
+      ['multi', 'telegram:example', /current group runtime is claude/], ['single', 'origin', /current group runtime is claude/]]) {
       let text = '';
       await groupCommand(['model', 'get'], { io: { stdout: { write: value => { text += value; } }, stderr: {} },
-        run: async (_kind, args, io) => { assert.equal(args.at(-1), '--json'); io.stdout.write(`${JSON.stringify({ ok: true, data: { running: null, sessionMode, runtime: 'codex', resolved: { runtime: 'claude' } } })}\n`); return 0; } });
+        run: async (_kind, args, io) => { assert.equal(args.at(-1), '--json'); io.stdout.write(`${JSON.stringify({ ok: true, data: { running: null, sessionGroup, sessionMode, runtime: 'codex', resolved: { runtime: 'claude' } } })}\n`); return 0; } });
       assert.match(text, expected);
     }
     let stdout = '', stderr = '';

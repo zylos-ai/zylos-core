@@ -11,7 +11,8 @@ const stop = stage => {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
 };
 const db = new Database(path.join(process.env.ZYLOS_DIR, 'comm-bridge', 'c4.db'));
-const database = { ...createStore(db), getConversationsByRange: (begin, end) => db.prepare('SELECT * FROM conversations WHERE id BETWEEN ? AND ? ORDER BY id').all(begin, end) };
+const store = createStore(db, { readConfig: () => ({ state: 'ok', config: { session_mode: 'multi' } }) });
+const database = { ...store, getConversationsByRange: (begin, end) => db.prepare('SELECT * FROM conversations WHERE id BETWEEN ? AND ? ORDER BY id').all(begin, end) };
 const after = database.getCoverageEnd('origin');
 const batch = createBatchReceipt(database.getConversationsByRange(after + 1, Number(end)).map(projectConversation), { scope: 'origin', after, end: Number(end) });
 await checkpoint({ token, end: Number(end), summary: `summary ${end}`, batch }, { database });

@@ -70,7 +70,8 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
       assert.equal(args[0], path.join(root, '.claude/skills/comm-bridge/scripts/c4-control.js'));
       assert.equal(args[1], 'enqueue');
       assert.equal(args[args.indexOf('--target-run') + 1], stale ? 'old-run' : 'current-run');
-      assert.equal(args.includes('--group'), mode === 'multi');
+      assert.equal(args.includes('--group'), mode !== null);
+      if (mode !== null) assert.equal(args[args.indexOf('--group') + 1], 'origin');
       controlCalls++;
       return { stdout: JSON.stringify(stale ? { ok: false, error: { code: 'TARGET_MISMATCH', runId: 'current-run' } } : { ok: true, data: { id: controlCalls } }) };
   };
@@ -82,7 +83,7 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
     if (['runtime/descriptors.js', 'runtime/index.js', 'runtime/contract.js'].includes(name)) return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
     if (name === 'config-store.js') return { readConfigStrict: () => ({ state: 'ok', config: { session_mode: mode, runtime: 'claude' } }) };
-    if (name === 'config.js') return { readSessionMode: () => ({ mode }) };
+    if (name === 'config.js') return { readSessionMode: () => ({ mode, keyPresent: mode !== null }) };
     if (name === 'status-view.js') return { collectStatus: options => collectStatus({ ...options,
       configIssue: () => null, resolveRoot: () => root, requests: () => ({}), facts: () => ({ originNeed: null }),
     }) };
@@ -198,7 +199,8 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
       assert.equal(live.body.service, 'zylos-dashboard'); assert.equal(typeof live.body.bootId, 'string');
       const ready = await request('/api/health/ready', token);
       assert.equal(ready.status, 200); assert.equal(ready.body.ready, true); assert.equal(ready.body.reason, null);
-      assert.equal(ready.body.session_mode, mode); assert.equal(ready.body.session_running, mode === 'single' ? true : null);
+      assert.equal(ready.body.session_mode, mode);
+      assert.equal(ready.body.session_running, null, 'readiness does not observe session presence');
       for (const runtime of ['claude', 'codex']) assert.deepEqual(ready.body.runtime_health[runtime], { source: 'record', health: 'ok' });
     }
     for (const scope of ['read', 'admin']) {
@@ -260,7 +262,7 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
     const unavailable = await request('/api/health/ready');
     assert.equal(unavailable.status, 503); assert.equal(unavailable.body.ready, false);
     assert.equal(unavailable.body.reason, 'supervisor_unavailable'); assert.equal(unavailable.body.session_mode, mode);
-    assert.equal(unavailable.body.session_running, mode === 'single' ? true : null);
+    assert.equal(unavailable.body.session_running, null);
     for (const runtime of ['claude', 'codex']) assert.deepEqual(unavailable.body.runtime_health[runtime], { source: 'record', health: 'ok' });
     supervisor = true;
     for (scenario of ['starting', 'unknown', 'waiting', 'failed']) {
@@ -285,9 +287,12 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
     }
     scenario = 'normal'; running = true;
   }
-  mode = 'single'; running = false;
+  // A pre-mode instance reports effective single mode with an independent group presence.
+  mode = null; running = false;
   const absent = await request('/api/health/ready');
-  assert.equal(absent.status, 503); assert.equal(absent.body.reason, 'session_not_running'); assert.equal(absent.body.session_running, false);
+  assert.equal(absent.status, 200); assert.equal(absent.body.ready, true);
+  assert.equal(absent.body.reason, null); assert.equal(absent.body.session_running, null);
+  assert.equal(absent.body.session_mode, 'single');
   const offline = (await request('/api/groups/origin?include=', tokens.read)).body;
   assert.equal(offline.presence, 'not_running'); assert.equal(offline.state.kind, 'offline'); assert.equal(offline.run, null);
   running = true;

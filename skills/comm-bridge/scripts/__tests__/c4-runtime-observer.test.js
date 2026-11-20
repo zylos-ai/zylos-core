@@ -54,7 +54,7 @@ test('async target observer returns exact real tmux identity and READY', async t
 
 test('a live pane with F2 identity reports process liveness', async t => {
   const { observer } = fixture(t);
-  const running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  const running = await observer.observeCoreRunning({ sessionMode: 'single' });
   assert.equal(running.hasProcess, true);
   assert.equal(running.identityVerified, true); assert.equal(running.ready, true);
   assert.deepEqual(running.launchConfig, { runtime: 'claude', mode: 'default' });
@@ -62,22 +62,33 @@ test('a live pane with F2 identity reports process liveness', async t => {
 
 test('real process observation, malformed READY and scope identity are distinct', async t => {
   const { observer, tmux, readyPath } = fixture(t, { runtimeProcess: true });
-  let running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  let running = await observer.observeCoreRunning({ sessionMode: 'single' });
   assert.equal(running.hasProcess, true); assert.equal(running.identityVerified, true);
   tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_MODEL_CONFIG', '{"runtime":"codex","mode":"default"}');
-  running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  running = await observer.observeCoreRunning({ sessionMode: 'single' });
   assert.equal(running.identityVerified, true); assert.equal(running.hasProcess, true);
   assert.equal(running.launchConfig.runtime, 'codex');
   tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_MODEL_CONFIG', '{');
-  running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  running = await observer.observeCoreRunning({ sessionMode: 'single' });
   assert.equal(running.identityVerified, false); assert.equal(running.hasProcess, true);
   tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_MODEL_CONFIG', '{"runtime":"claude","mode":"default"}');
   fs.writeFileSync(readyPath, '{}');
-  running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  running = await observer.observeCoreRunning({ sessionMode: 'single' });
   assert.equal(running.hasProcess, true); assert.equal(running.ready, false);
   tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_SESSION_GROUP', 'other');
   assert.equal((await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'multi' })).identityVerified, false);
   assert.equal((await observer.observeCoreTarget({ sessionGroup: 'origin', sessionMode: 'multi' })).sessionGroup, 'other');
+});
+
+test('native single observes Origin by its group and leaves an ungrouped session unverified', async t => {
+  const { observer, tmux } = fixture(t);
+  // A session started by older code has no group environment: Origin cannot claim it.
+  let running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  assert.equal(running.hasProcess, true); assert.equal(running.identityVerified, false);
+  tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_SESSION_GROUP', 'origin');
+  running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  assert.equal(running.identityVerified, true); assert.equal(running.ready, true); assert.equal(running.runId, 'run-1');
+  assert.equal((await observer.observeCoreRunning({ sessionMode: 'single' })).identityVerified, false);
 });
 
 test('missing run stays observable for ordered builder validation; absent differs from transport error', async t => {
@@ -128,7 +139,8 @@ test('frozen private tmux observation leaves the caller timer responsive', async
 
 for (const json of [false, true]) for (const mode of ['single', 'multi']) test(`production control CLI and builder use real isolated tmux (${mode}, json=${json})`, t => {
   const {env,tmux,db,readyPath,ready}=readyTmuxTarget(t,{prefix:'c4-binding-live-',mode,packageRoot});
-  const args = ['enqueue', '--content', 'fixture control', '--no-ack-suffix', '--target-run', 'run-1', '--expected-runtime', 'claude', '--expected-session', 'session-1', ...(mode === 'multi' ? ['--group', 'origin'] : [])];
+  tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_SESSION_GROUP', 'origin');
+  const args = ['enqueue', '--content', 'fixture control', '--no-ack-suffix', '--target-run', 'run-1', '--expected-runtime', 'claude', '--expected-session', 'session-1', '--group', 'origin'];
   const cli = (extra = [], expected) => {
     const out = spawnSync(process.execPath, [fileURLToPath(new URL('../c4-control.js', import.meta.url)), ...args, ...(json ? ['--json'] : []), ...extra], { env, encoding: 'utf8', timeout: 15000 });
     assert.equal(out.status, expected ? 1 : 0, `${out.stdout}\n${out.stderr}\n${out.error ?? ''}`);
@@ -146,7 +158,7 @@ for (const json of [false, true]) for (const mode of ['single', 'multi']) test(`
   };
   const success = cli();
   const row = db.prepare('SELECT * FROM control_queue').get();
-  assert.equal(row.session_group, mode === 'multi' ? 'origin' : null);
+  assert.equal(row.session_group, 'origin');
   const binding = JSON.parse(row.target_binding);
   if (json) assert.deepEqual(JSON.parse(success.stdout), { ok: true, data: { id: row.id, supersededCount: 0, targetBinding: binding } });
   assert.equal(binding.expectedRunId, 'run-1'); assert.equal(binding.expectedSessionId, 'session-1');
@@ -163,8 +175,7 @@ for (const json of [false, true]) for (const mode of ['single', 'multi']) test(`
   tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_RUN_ID', 'run-1');
   tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_SESSION_GROUP', 'other');
   cli([], 'TARGET_SCOPE_MISMATCH');
-  if (mode === 'multi') tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_SESSION_GROUP', 'origin');
-  else tmux('set-environment', '-u', '-t', '=zylos-group-origin', 'ZYLOS_SESSION_GROUP');
+  tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_SESSION_GROUP', 'origin');
   fs.writeFileSync(readyPath, JSON.stringify({ ...ready, runId: 'old-run' })); cli([], 'TARGET_NOT_READY');
   fs.writeFileSync(readyPath, JSON.stringify({ ...ready, sessionId: 'new-session' })); cli([], 'STALE_TARGET');
   tmux('kill-server'); cli([], 'TARGET_NOT_RUNNING');

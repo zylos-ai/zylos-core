@@ -365,7 +365,7 @@ async function setSessionHotTtl(reqId, body, zylosDir) {
   if (effective.environment_set) {
     return { ok: false, error: 'environment_override', messageKey: 'result.hot_ttl_environment' };
   }
-  if (effective.mode !== 'multi') {
+  if (effective.read_only) {
     return { ok: false, error: 'multi_session_required', messageKey: 'result.hot_ttl_multi_only' };
   }
   const minutes = typeof body?.minutes === 'number'
