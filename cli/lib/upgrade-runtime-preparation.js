@@ -122,7 +122,6 @@ export function prepareUpgradeRuntime(ctx, {
         systems[name] = readRegular(path.join(templatesDir, `${name}-system.md`));
         add(relative(instructionPaths(name, { zylosDir }).systemPath), systems[name]);
       }
-      add(relative(claude.onboardingPath), readRegular(path.join(templatesDir, 'onboarding.md')));
       add(relative(claude.assemblerPath), readRegular(path.join(sourceRoot, 'cli/lib/runtime/assembler.mjs')));
       const markerBytes = readRegular(claude.markerPath, { optional: true });
       if (markerBytes !== null) {

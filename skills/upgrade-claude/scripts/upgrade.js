@@ -62,9 +62,6 @@ async function main() {
   log('Starting upgrade process');
   const result = await upgradeRuntime();
   if (!result.ok) throw Object.assign(new Error(result.error.message), {code:result.error.code});
-  if (result.data.result === 'exit_enqueued') {
-    log(`check (id=${result.data.checkControlId}) and /exit (id=${result.data.exitControlId}) enqueued via control queue`);
-  }
   log(`Upgrade result: ${result.data.result}; replacement sessions are started by the dispatcher`);
 }
 function isMainModule() {

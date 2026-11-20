@@ -25,6 +25,9 @@ function fixture(t) {
   const file = path.join(root, 'components/dashboard/dashboard.db');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   store = new Store(file);
+  // Questions are registered under the conversation of the row's endpoint.
+  store.db.prepare(`INSERT INTO chat_conversations(local_id,namespace,state,created_at,updated_at)
+    VALUES ('mine','dashboard','active',1,1)`).run();
   const answers = new ChatAnswers({ store, now: () => 1000 });
   let serial = 0;
   function question(source = fixtures.formQuestion) {

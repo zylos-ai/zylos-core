@@ -1,3 +1,4 @@
+import { seedHistoricalAbsorption } from '../../../comm-bridge/scripts/__tests__/fixtures/historical-absorption.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -193,10 +194,9 @@ try {
     eq(database.prepare('SELECT content FROM conversations WHERE id=?').get(row.id).content, contents[1]);
   }
   outlets.push('direct insert text/JSON receipt');
-  // Genuine mode-switch absorption and conversion, without launching a runtime.
   for (const content of [contents[1], contents[2], contents[3]]) store.insertConversation('in', 'dashboard', 'alpha', content, { groupName: 'alpha' });
-  const { runId } = store.beginModeTransition('multi', 'single'); store.setDrainFence('*'); store.absorbForTransition(runId);
-  const absorbed = store.getAbsorbedConversations(runId);
+  const { runId } = store.beginModeTransition('single', 'multi'); store.setDrainFence('*'); seedHistoricalAbsorption(database, runId);
+  const absorbed = store.queries.readAbsorbed(runId).rows;
   eq(absorbed.length, 3);
   for (const json of [false, true]) {
     const args = ['--absorbed', '--run-id', runId];
@@ -213,33 +213,6 @@ try {
     }
   }
   outlets.push('absorbed text/JSON page/full/export');
-  const { createModeSwitchConverter } = await import('../../../activity-monitor/scripts/mode-switch-convert.js');
-  const conversion = createModeSwitchConverter({ db: store, zylosDir: instance })({ run_id: runId });
-  const handoff = fs.readFileSync(conversion.handoff, 'utf8'); safe(handoff, 'conversion handoff');
-  const exports = conversion.materials.filter(file => path.dirname(file) === path.join(instance, 'memory/mode-switch', runId));
-  ok(exports.length > 0, 'conversion material list includes real exports');
-  for (const file of conversion.materials) { ok(fs.statSync(file).isFile()); safe(fs.readFileSync(file, 'utf8'), 'conversion material'); }
-  for (const file of exports) { const exported = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
-    ok(exported.length > 0); for (const row of exported) { const raw = database.prepare('SELECT content FROM conversations WHERE id=?').get(row.id); eq(row.content, projectC4Content(raw.content, { c4Id: row.id })); } }
-  const state = fs.readFileSync(path.join(instance, 'memory/state.md'), 'utf8'); safe(state, 'converted state');
-  for (const row of absorbed) ok(state.includes(String(row.id)));
-  outlets.push('mode-switch state/handoff/material exports');
-  store.setModeTransitionPhase(runId, 'cutover'); store.setModeTransitionPhase(runId, 'complete');
-  // A legacy ungrouped serialized row exercises the other conversion export
-  // branch. This is test-data setup, not a product insert bypass.
-  const legacy = store.insertConversation('out', 'system', null, contents[1]);
-  database.prepare("UPDATE conversations SET session_group='' WHERE id=?").run(legacy.id);
-  const reverse = store.beginModeTransition('single', 'multi'); store.setDrainFence('*'); store.absorbForTransition(reverse.runId);
-  const converted = createModeSwitchConverter({ db: store, zylosDir: instance })({ run_id: reverse.runId });
-  const ungrouped = path.join(instance, 'memory/mode-switch', reverse.runId, 'ungrouped.md');
-  ok(converted.materials.includes(ungrouped));
-  const exportedLegacy = fs.readFileSync(ungrouped, 'utf8').trim().split('\n').map(line => JSON.parse(line));
-  eq(exportedLegacy.length, 1); eq(exportedLegacy[0].id, legacy.id);
-  eq(exportedLegacy[0].content, projectC4Content(contents[1], { c4Id: legacy.id }));
-  for (const file of converted.materials) { ok(fs.statSync(file).isFile()); safe(fs.readFileSync(file, 'utf8'), 'reverse conversion materials'); }
-  safe(fs.readFileSync(converted.handoff, 'utf8'), 'reverse conversion handoff');
-  eq(database.prepare('SELECT content FROM conversations WHERE id=?').get(legacy.id).content, contents[1]);
-  outlets.push('single-to-multi legacy ungrouped export/material list');
   for (const before of rawBefore) eq(database.prepare('SELECT content FROM conversations WHERE id=?').get(before.id).content, before.content);
   outlets.push('raw SQLite preservation');
   db.close();

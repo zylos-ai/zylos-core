@@ -5,13 +5,14 @@ import { createHash } from 'node:crypto';
 import { SKILLS_DIR } from './c4-config.js';
 import * as db from './c4-db.js';
 import { createStore } from './c4-v2-store.js';
+import { readZylosConfigStrict } from './local-config.js';
 import { createQueryHandlers } from './c4-v2-cli.js';
 import { dataError, requireGroup } from './c4-session-group.js';
 import { formatQueryError, projectConversation, shellQuote } from './c4-query-format.js';
 import { queryRejection } from './c4-entry-events.js';
 import { createBatchReceipt, createOriginRawReceipt, createOriginSummaryReceipt } from './c4-sync-batch.js';
 
-const query = createQueryHandlers(createStore(db.getDb));
+const query = createQueryHandlers(createStore(db.getDb, { readConfig: readZylosConfigStrict }));
 const sendPath = path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-send.js');
 const invalid = message => { throw dataError('INVALID_ARGS', message); };
 function helpRequested(args, values) {

@@ -52,6 +52,7 @@ function runDoctor(args, { state = 'fail', network = 'up', mode = 'single', orig
     DOCTOR_TEST_MODE: sessionMode ?? mode, DOCTOR_TEST_ORIGIN: origin, ZYLOS_SESSION_GROUP: group, DOCTOR_TEST_RUNTIME: runtime,
     DOCTOR_TEST_TMUX_SOCKET: path.join(dirs.TMPDIR, 'tmux.sock'), DOCTOR_TEST_WEB: web, NO_COLOR: '1',
     ZYLOS_GH_RETRY_DELAY_MS: '', ...inheritedEnv };
+  if (group === null) delete env.ZYLOS_SESSION_GROUP;
   for (const [key, dir] of Object.entries(dirs)) assert.equal(fs.realpathSync(env[key]), dir);
   assert.ok(Buffer.byteLength(env.DOCTOR_TEST_TMUX_SOCKET) < 100, 'Use a short temporary parent');
   const result = spawnSync(process.execPath, [child, ...args], {
@@ -77,6 +78,20 @@ test('doctor fixture rejects unrelated inherited variables', () => {
   assert.throws(() => runDoctor(['--check'], {
     inheritedEnv: { DOCTOR_UNRELATED_VARIABLE: 'fixture-only' },
   }), /Unexpected inherited variable: DOCTOR_UNRELATED_VARIABLE/);
+});
+
+// Boundary: native single CLI target resolution with a null session group.
+// Run for launch-config compatibility changes; skip unrelated doctor changes.
+// runDoctor verifies private directories, fake commands/socket and cleanup.
+test('native single doctor resolves the baseline without a session group', () => {
+  for (const args of [['--check'], ['--check', '--json']]) {
+    const result = runDoctor(args, { state: 'pass', sessionMode: 'single', group: null });
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stderr, /SESSION_GROUP_INVALID/);
+    if (args.includes('--json')) assert.equal(JSON.parse(result.stdout).passed, true);
+    else assert.match(result.stdout, /Everything is working/);
+    assert.equal(result.repairs.length, 0);
+  }
 });
 
 // Boundary: real doctor text uses the shared capacity reader, without adding a

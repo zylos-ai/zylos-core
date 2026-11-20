@@ -2195,12 +2195,14 @@ for (const malformed of ['same cursor', 'empty continuation']) {
   });
 }
 
-for (const session_mode of [null, undefined, 'unreadable']) test('unreadable instance mode stays unavailable: ' + String(session_mode), async t => {
+// A newer instance reports 'unreadable' when its mode cannot be read; it stays unavailable.
+for (const session_mode of [null, undefined, 'unreadable', { sessionMode: 'unreadable' }]) test('unreadable instance mode stays unavailable: ' + JSON.stringify(session_mode), async t => {
   const f = fixture(url => url.pathname === '/api/instance' ? { session_mode } : undefined);
   t.after(() => f.state.destroy());
   await f.state.open();
   assert.equal(f.state.snapshot().mode, null);
   assert.equal(f.state.snapshot().canCreate, false);
+  assert.equal(f.state.snapshot().error, 'chat_mode_unavailable');
 });
 
 test('historic UTF-8 groups use canonical optional status and keep readable chat', async t => {

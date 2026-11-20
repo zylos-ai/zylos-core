@@ -1,6 +1,15 @@
 export default {
   transform: {},
   testPathIgnorePatterns: [
+    '<rootDir>/test/single-origin-scheduler.test.js',
+    '<rootDir>/test/mode-switch-status-lifecycle.test.js',
+    '<rootDir>/test/supervisor-manual.integration.test.js',
+    '<rootDir>/test/manual-restart-scenes.integration.test.js',
+    '<rootDir>/test/manual-restart-router.integration.test.js',
+    '<rootDir>/test/reclaim-crash.integration.test.js',
+    '<rootDir>/test/mode-switch-upgrade-boundary.test.js',
+    '<rootDir>/test/mode-switch-native.integration.test.js',
+    '<rootDir>/test/global-memory-handover.integration.test.js',
     ...(process.env.ZYLOS_SLOW_TESTS === '1' ? [] : ['\\.slow\\.test\\.js$']),
     '<rootDir>/test/failure-continuation.integration.test.js',
     '<rootDir>/test/group-sync-run.integration.test.js',
@@ -10,6 +19,7 @@ export default {
     '<rootDir>/test/upgrade-confirmation.integration.test.js',
     '<rootDir>/test/dispatcher-startup.integration.test.js',
     '<rootDir>/test/instruction-deployment.integration.test.js',
+    '<rootDir>/test/init-onboarding.integration.test.js',
     '<rootDir>/test/tmux-dashboard-reads.integration.test.js',
     '<rootDir>/test/claude-upgrade-process.integration.test.js',
     '<rootDir>/test/dashboard-display-browser.test.js',
@@ -22,6 +32,7 @@ export default {
     '<rootDir>/test/self-upgrade-private-host.integration.test.js',
     '<rootDir>/test/require-idle-turn.integration.test.js',
     '<rootDir>/test/single-origin-activity.integration.test.js',
+    '<rootDir>/test/single-origin-supervisor.integration.test.js',
     '<rootDir>/test/dashboard-demand-poll.integration.test.js',
     '<rootDir>/test/legacy-group-reads-browser.test.js',
     '<rootDir>/test/dashboard-object-api.integration.test.js',
@@ -64,7 +75,6 @@ export default {
     '<rootDir>/test/origin-conversation.integration.test.js',
     '<rootDir>/test/web-console-process.integration.test.js',
     '<rootDir>/test/web-console-caddy.integration.test.js',
-    '<rootDir>/test/single-upgrade-check.integration.test.js',
     '<rootDir>/test/exit-control.integration.test.js',
     '<rootDir>/test/upgrade-npm-prefix.integration.test.js',
     '<rootDir>/test/upgrade-db-maintenance.integration.test.js',
@@ -75,11 +85,5 @@ export default {
   ],
   globalSetup: '<rootDir>/scripts/jest-global-setup.js',
   globalTeardown: '<rootDir>/scripts/jest-global-teardown.js',
-  // Jest covers test/ and the mode-switch integration entries placed beside
-  // activity-monitor. The Node runner excludes those two Jest entries.
-  testMatch: [
-    '<rootDir>/test/**/*.test.js',
-    '<rootDir>/skills/activity-monitor/scripts/__tests__/mode-switch-admission.integration.test.js',
-    '<rootDir>/skills/activity-monitor/scripts/__tests__/mode-switch-followup.integration.slow.test.js',
-  ],
+  testMatch: ['<rootDir>/test/**/*.test.js'],
 };

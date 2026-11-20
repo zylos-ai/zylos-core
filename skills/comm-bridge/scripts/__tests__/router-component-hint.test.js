@@ -1,3 +1,4 @@
+import { seedHistoricalAbsorption } from './fixtures/historical-absorption.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -120,7 +121,7 @@ test('agent hint stays absent from stored messages, Dashboard history, search, e
   const { runId } = store.beginModeTransition('single', 'multi');
   // Absorb a fresh pending row to exercise the real full-field export path.
   const pending = store.insertConversation('in', 'dashboard', 'other', before, { groupName: 'other' });
-  store.setDrainFence('*'); store.absorbForTransition(runId);
+  store.setDrainFence('*'); seedHistoricalAbsorption(db, runId, [pending.id]);
   const out = path.join(root, 'history-export.txt');
   query.absorbed({ runId, id: pending.id, out });
   assert.equal(fs.readFileSync(out, 'utf8'), before);

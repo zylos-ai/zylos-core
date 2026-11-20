@@ -40,7 +40,7 @@ export function createDispatcher(overrides = {}, options = {}) {
   const diagnostics = overrides.diagnostics ?? createRouterDiagnostics({ env });
   const diagnostic = overrides.diagnostic ?? diagnostics.diagnostic;
   const reader = createSessionReader({ env, connectionOptions: tmux });
-  const lifecycle = createLifecycleProviders({ env, tmux, diagnostic, log });
+  const lifecycle = createLifecycleProviders({ env, tmux, diagnostic });
   const now = overrides.now ?? Date.now;
   const poolSize = () => readPoolCapacity({ env, now: now() }).k;
   const readConfig = () => {

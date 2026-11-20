@@ -7,7 +7,7 @@ const envelope = type => ({ version: 1, type, requestId: 'fields' });
 const good = {
   restart_all: [
     { ok: true, result: 'accepted', runCount: 1 }, { ok: true, result: 'already_accepted', runCount: 2 }, { ok: true, result: 'done_empty', runCount: 0 },
-    ...['single_mode', 'manual_restart_pending', 'requests_unreadable', 'request_conflict'].map(code => ({ ok: false, code })),
+    ...['manual_restart_pending', 'requests_unreadable', 'request_conflict'].map(code => ({ ok: false, code })),
   ],
   ready_for_config_reclaim: [
     ...['accepted', 'already_accepted', 'unchanged'].map(result => ({ ok: true, result })),

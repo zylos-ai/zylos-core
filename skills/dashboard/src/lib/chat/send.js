@@ -131,9 +131,11 @@ export class ChatSender {
   _status(row, id) {
     try {
       this._binding(row);
+      // A row belongs to the conversation it comes from (its endpoint), whichever
+      // group recorded it: in single mode delivery records it under `origin`.
       const result = this._db().prepare(`SELECT direction,status,delivery_action FROM conversations
-        WHERE id=? AND direction='in' AND channel='dashboard' AND endpoint_id=? AND session_group=?`)
-        .get(id, row.localId, conversationGroup(row.namespace, row.localId));
+        WHERE id=? AND direction='in' AND channel='dashboard' AND endpoint_id=?`)
+        .get(id, row.localId);
       return result ? deliveryState(result) : 'pending_reconciliation';
     } catch { return 'pending_reconciliation'; }
   }

@@ -2,17 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
+import { createStore } from '../skills/comm-bridge/scripts/c4-v2-store.js';
 import { fixture, launch, manual, assertReply } from './fixtures/manual-restart-harness.js';
-import { tmuxNameForGroup, groupRunDir } from '../../../../cli/lib/session-group-paths.js';
+import { tmuxNameForGroup, groupRunDir } from '../cli/lib/session-group-paths.js';
 import os from 'node:os';
 import { createRequire } from 'node:module';
-import { createSupervisor } from '../supervisor.js';
-import { RestartRequestStore } from '../restart-request-store.js';
-import * as schema from '../../../comm-bridge/scripts/c4-schema.js';
-import { guardDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
-const Database = createRequire(new URL('../../../comm-bridge/package.json', import.meta.url))('better-sqlite3');
-import { MANUAL_WAKE_PROMPT } from '../origin-prompts.js';
+import { createSupervisor } from '../skills/activity-monitor/scripts/supervisor.js';
+import { RestartRequestStore } from '../skills/activity-monitor/scripts/restart-request-store.js';
+import * as schema from '../skills/comm-bridge/scripts/c4-schema.js';
+import { guardDatabase } from '../skills/comm-bridge/scripts/sqlite-schema.js';
+const Database = createRequire(new URL('../skills/comm-bridge/package.json', import.meta.url))('better-sqlite3');
+import { MANUAL_WAKE_PROMPT } from '../skills/activity-monitor/scripts/origin-prompts.js';
 
 const requestFile = f => path.join(f.root, 'activity-monitor/restart-requests.json');
 async function assertUntouched(m4, f) {
@@ -63,7 +63,7 @@ for (const mode of ['single', 'multi']) for (const runtime of ['claude', 'codex'
     for (const req of [manual('empty'), manual('old-absent', { expectedRunId: 'run-1' })]) {
       assertReply(await f.submit(req), req, 'already_stopped'); const state = await assertUntouched(m4, f); assert.equal(state.scene.present, false);
     }
-    f.tmux('new-session', '-d', '-s', 'zylos-group-origin', '-e', 'ZYLOS_RUN_ID=late-run', '-e', `ZYLOS_MODEL_CONFIG=${JSON.stringify({runtime,mode:'default'})}`, ...(mode === 'multi' ? ['-e', 'ZYLOS_SESSION_GROUP=origin'] : []), path.join(f.root, runtime), '120');
+    f.tmux('new-session', '-d', '-s', 'zylos-group-origin', '-e', 'ZYLOS_RUN_ID=late-run', '-e', `ZYLOS_MODEL_CONFIG=${JSON.stringify({runtime,mode:'default'})}`, '-e', 'ZYLOS_SESSION_GROUP=origin', path.join(f.root, runtime), '120');
     const state = await m4.command('tick'); assert.equal(state.scene.present, true); assert.deepEqual(state.requests, []); assert.deepEqual(state.fences, []); assert.deepEqual(state.stopped, []);
     assert.equal(f.tmux('show-environment', '-t', '=zylos-group-origin', 'ZYLOS_RUN_ID'), 'ZYLOS_RUN_ID=late-run');
     await m4.stop();
@@ -97,7 +97,7 @@ for (const mode of ['single', 'multi']) test(`${mode} manual restart stops busy 
 });
 async function inflight(t, mode) {
   const f = fixture(t, mode), m4 = launch(t, f); assert.equal((await m4.next()).ready, true);
-  const group = mode === 'single' ? null : 'origin';
+  const group = 'origin';
   f.db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('in','fixture','paused paste/Enter','running',?)").run(group ?? '');
   f.db.prepare("INSERT INTO control_queue(raw_content,content,status,ack_deadline_at,created_at,updated_at,session_group) VALUES('control','control','running',NULL,1,1,?)").run(group);
   const conversation = f.db.prepare('SELECT * FROM conversations').all(), control = f.db.prepare('SELECT * FROM control_queue').all();
@@ -107,26 +107,23 @@ async function inflight(t, mode) {
   const stopped = await m4.command('tick');
   assert.equal(stopped.scene.present, false); assert.equal(stopped.stopped.length, 1);
   assert.deepEqual(stopped.requests, row, 'manual inflight intent must persist'); assert.equal(stopped.fences.length, 1);
-  assert.equal(stopped.fences[0].sessionGroup, mode === 'single' ? '*' : 'origin');
+  assert.equal(stopped.fences[0].sessionGroup, 'origin');
   assert.equal(stopped.fences[0].reason, 'manual_restart'); assert.equal(stopped.fences[0].runId, 'run-1');
   assert.deepEqual(f.db.prepare('SELECT * FROM conversations').all(), conversation);
   assert.deepEqual(f.db.prepare('SELECT * FROM control_queue').all(), control);
   f.db.exec("UPDATE conversations SET status='delivered'");
   const done = await m4.command('tick'); assert.deepEqual(done.requests, []); assert.deepEqual(done.fences, []);
   const controlsAfter = f.db.prepare('SELECT * FROM control_queue ORDER BY id').all();
-  if (mode === 'single') assert.deepEqual(controlsAfter, control);
-  else {
-    assert.equal(controlsAfter.length, control.length + 1);
-    assert.deepEqual(controlsAfter.slice(0, control.length), control);
-    const wake = controlsAfter.at(-1);
-    assert.equal(wake.session_group, 'origin'); assert.equal(wake.target_binding, null);
-    assert.equal(wake.priority, 2); assert.equal(wake.status, 'pending');
-    assert.equal(wake.raw_content, MANUAL_WAKE_PROMPT); assert.equal(wake.content, MANUAL_WAKE_PROMPT);
-    const clears = done.events.filter(event => event.event === 'before_fence_clear');
-    assert.equal(clears.length, 1);
-    assert.deepEqual(clears[0].fence, stopped.fences[0], 'manual gate still held when wake is persisted');
-    assert.deepEqual(clears[0].controls, controlsAfter, 'wake must exist before the real fence clear');
-  }
+  assert.equal(controlsAfter.length, control.length + 1);
+  assert.deepEqual(controlsAfter.slice(0, control.length), control);
+  const wake = controlsAfter.at(-1);
+  assert.equal(wake.session_group, 'origin'); assert.equal(wake.target_binding, null);
+  assert.equal(wake.priority, 2); assert.equal(wake.status, 'pending');
+  assert.equal(wake.raw_content, MANUAL_WAKE_PROMPT); assert.equal(wake.content, MANUAL_WAKE_PROMPT);
+  const clears = done.events.filter(event => event.event === 'before_fence_clear');
+  assert.equal(clears.length, 1);
+  assert.deepEqual(clears[0].fence, stopped.fences[0], 'manual gate still held when wake is persisted');
+  assert.deepEqual(clears[0].controls, controlsAfter, 'wake must exist before the real fence clear');
   assert.doesNotThrow(() => f.tmux('has-session', '-t', '=fixture-keeper')); await m4.stop();
 }
 
@@ -149,7 +146,7 @@ async function crashWindow(t, mode, pause) {
   if (rows.length) assert.deepEqual(rows[0], { requestId: req.requestId, reason: 'manual_restart', acceptedAt: rows[0].acceptedAt, runIds: ['run-1'], mode, expectedRunId: 'run-1' });
   const beforeStop = ['before-intent', 'after-intent', 'after-fence'].includes(pause);
   if (beforeStop) f.tmux('rename-session', '-t', '=zylos-group-origin', 'fixture-original');
-  f.tmux('new-session', '-d', '-s', 'zylos-group-origin', '-e', 'ZYLOS_RUN_ID=replacement', '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', ...(mode === 'multi' ? ['-e', 'ZYLOS_SESSION_GROUP=origin'] : []), path.join(f.root, 'claude'), '120');
+  f.tmux('new-session', '-d', '-s', 'zylos-group-origin', '-e', 'ZYLOS_RUN_ID=replacement', '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', '-e', 'ZYLOS_SESSION_GROUP=origin', path.join(f.root, 'claude'), '120');
   fs.writeFileSync(f.readyPath, JSON.stringify({ ...f.ready, runId: 'replacement', sessionId: 'replacement-session' }));
   const second = launch(t, f), state = await second.next(); assert.equal(state.ready, true);
   assert.equal(state.scene.present, true, 'replacement must remain present'); assert.equal(state.scene.runId, 'replacement'); assert.deepEqual(state.stopped, []);
@@ -177,7 +174,7 @@ for (const mode of ['single', 'multi']) test(`${mode} actual supervisor transiti
   const upgrade = { version: 1, type: 'restart_all', requestId: 'upgrade-after-manual', reason: 'upgrade' };
   assert.deepEqual((await f.submit(upgrade)).reply, { version: 1, type: 'restart_all', requestId: upgrade.requestId, ok: false, code: 'manual_restart_pending' });
   const db = createStore(f.db, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: mode } }) });
-  db.setDrainFence(mode === 'single' ? '*' : 'origin', { reason: 'manual_restart', runId: 'other-run' });
+  db.setDrainFence('origin', { reason: 'manual_restart', runId: 'other-run' });
   const fenceBefore = db.listDrainFences();
   let state = await m4.command('tick'); assert.deepEqual(state.requests, accepted); assert.deepEqual(state.stopped, []); assert.deepEqual(db.listDrainFences(), fenceBefore);
   f.db.exec('DELETE FROM drain_fences');
@@ -190,7 +187,7 @@ for (const mode of ['single', 'multi']) test(`${mode} real Origin appearing duri
   const m4 = launch(t, f); assert.equal((await m4.next()).ready, true); await m4.command('arm-read');
   const req = manual('appearing-target'), pending = f.submit(req);
   assert.deepEqual(await m4.next(), { barrier: 'reading-target' });
-  f.tmux('new-session', '-d', '-s', 'zylos-group-origin', '-e', 'ZYLOS_RUN_ID=appeared', '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', ...(mode === 'multi' ? ['-e', 'ZYLOS_SESSION_GROUP=origin'] : []), path.join(f.root, 'claude'), '120');
+  f.tmux('new-session', '-d', '-s', 'zylos-group-origin', '-e', 'ZYLOS_RUN_ID=appeared', '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', '-e', 'ZYLOS_SESSION_GROUP=origin', path.join(f.root, 'claude'), '120');
   await m4.command('release-read'); assertReply(await pending, req, 'rejected', { reason: 'target_required' }, false);
   const state = await assertUntouched(m4, f); assert.equal(state.scene.runId, 'appeared'); await m4.stop();
 });
@@ -199,7 +196,7 @@ for (const mode of ['single', 'multi']) test(`${mode} actual tmux server restart
   const f = fixture(t, mode), m4 = launch(t, f); assert.equal((await m4.next()).ready, true);
   const req = manual('server-replaced', { expectedRunId: 'run-1' }); assertReply(await f.submit(req), req, 'accepted');
   f.tmux('kill-server'); await f.waitForServerExit();
-  f.tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'zylos-group-origin', '-e', 'ZYLOS_RUN_ID=replacement', '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', ...(mode === 'multi' ? ['-e', 'ZYLOS_SESSION_GROUP=origin'] : []), path.join(f.root, 'claude'), '120');
+  f.tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'zylos-group-origin', '-e', 'ZYLOS_RUN_ID=replacement', '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', '-e', 'ZYLOS_SESSION_GROUP=origin', path.join(f.root, 'claude'), '120');
   f.tmux('new-session', '-d', '-s', 'fixture-keeper', 'sleep', '120');
   fs.writeFileSync(f.readyPath, JSON.stringify({ ...f.ready, runId: 'replacement', sessionId: 'replacement-session' }));
   const state = await m4.command('tick'); assert.equal(state.scene.runId, 'replacement'); assert.equal(state.scene.present, true);
@@ -236,7 +233,7 @@ test('actual supervisor manual restart targets ordinary group while Origin and a
   console.log(JSON.stringify({ HOME: f.env.HOME, ZYLOS_DIR: f.env.ZYLOS_DIR, PM2_HOME: f.env.PM2_HOME,
     TMPDIR: f.env.TMPDIR, TMUX_TMPDIR: f.env.TMUX_TMPDIR, TMUX: f.env.TMUX ?? null, socket: f.socketPath,
     database: path.join(f.root, 'comm-bridge/c4.db') }));
-  assert.ok(f.root.startsWith('/tmp/')); assert.ok(Buffer.byteLength(f.socketPath) < 100);
+  assert.ok(fs.realpathSync(f.root).startsWith(fs.realpathSync(process.env.TMPDIR) + path.sep)); assert.ok(Buffer.byteLength(f.socketPath) < 100);
   const put = (key, runId) => {
     const dir = groupRunDir(key, f.env); fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'current-session.json'), JSON.stringify({ runId, sessionId: runId, ts: Date.now(), startupControlIds: [] }));

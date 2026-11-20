@@ -47,7 +47,7 @@ function fixture(t, route = 'release', group = 'chat:room', { configuration = { 
     setDrainFence: (scope, fence) => fences.set(scope, { sessionGroup: scope, ...fence }),
     clearDrainFence: scope => fences.delete(scope),
     resolveSessionLaunchConfig: () => scene.launchConfig,
-    countRunningConversations: () => 0, countNonTerminalControls: () => ({ running: 0, runningWithoutDeadline: 0 }),
+    countRunningConversations: () => 0, countNonTerminalControls: () => ({ running: 0 }),
     recordRunEnd: () => ({ recorded: true }),
   };
   const deps = { db, env, observeGroup: () => scene, bindTarget: () => ({ expectedRunId: scene.runId }),

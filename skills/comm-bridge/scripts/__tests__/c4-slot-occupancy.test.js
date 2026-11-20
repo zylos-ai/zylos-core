@@ -256,7 +256,9 @@ test('slot options reject caller timestamps and invalid identities without chang
   const single = createStore(db, { readConfig: () => ({ state: 'ok', config: { session_mode: 'single' } }) });
   assert.throws(() => take(single), { code: 'INVALID_ARGS' });
   assert.throws(() => single.releaseSlot('test:a', { runId: 'first', prior: null }), { code: 'INVALID_ARGS' });
-  assert.throws(() => single.pruneSlots({ orphans: [], minAgeSeconds: 30 }), { code: 'INVALID_ARGS' });
+  assert.deepEqual(single.pruneSlots({ orphans: [], minAgeSeconds: 30 }), { deletedHeld: 0, deletedOrphans: [] });
+  const legacy = createStore(db, { readConfig: () => ({ state: 'ok', config: {} }) });
+  assert.throws(() => legacy.pruneSlots({ orphans: [], minAgeSeconds: 30 }), { code: 'INVALID_ARGS' });
   assert.deepEqual(snapshot(db), before);
 });
 

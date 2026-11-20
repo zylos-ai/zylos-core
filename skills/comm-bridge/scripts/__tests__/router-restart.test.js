@@ -57,7 +57,7 @@ function persistedRouter(t) {
         database.db.prepare("UPDATE control_queue SET status='done' WHERE id=? AND status='running'").run(row.id);
       },
       deliverConversation: async (row, live) => { calls.push(['conversation', generation, row.id]); database.store.markDelivered(row.id, { sessionId: live.sessionId }); },
-      handleExpired: async () => {}, prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
+      handleExpired: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
       diagnostic: (event, fields) => events.push({ generation, event, ...fields }),
       alert: (event, fields) => calls.push(['alert', generation, event, fields]),
     }, { poolSize: () => 1, readyTimeoutMs: 1000 });

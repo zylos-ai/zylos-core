@@ -92,7 +92,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     return supervisor.lifecycle.checkCapacityPressure(context);
   });
   const targetReader=createSessionReader({env,connectionOptions:baseScenes.connectionOptions ?? {},resolveConfig:input=>db.resolveSessionLaunchConfig(input)});
-  const resolveTargetRuntime=async group=>targetReader.resolveTargetRuntime(group==='origin' && (await readMode()).mode==='single'?null:group);
+  const resolveTargetRuntime=async group=>targetReader.resolveTargetRuntime(group==='origin' && (await readMode()).legacy?null:group);
   const alert=event=>{
     const details=[event.requestId && `requestId=${event.requestId}`,event.reason && `reason=${event.reason}`,
       event.runtime && `runtime=${event.runtime}`,event.oldest_at!==undefined && `oldest_at=${event.oldest_at}`,event.message].filter(Boolean).join(' ');
@@ -161,9 +161,9 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     prepareReferenceReorg:()=>prepareReferenceReorg({root,now:clock()}),
     readSyncMarker:options=>{if(!syncReader)throw unavailable('Sync marker reader');return syncReader(options);},prompts,
     freezeNotice:options=>{
-      const mode=configuration?.mode ?? readMode().mode;
+      const {mode,legacy}=configuration ?? readMode();
       if(!['single','multi'].includes(mode))throw Object.assign(new Error('Notice mode is unavailable'),{code:'CONFIG_UNREADABLE'});
-      return freezeFirstFailureNotice(db.getDb(),{...options,sessionGroup:mode==='single'?null:options.sessionGroup});
+      return freezeFirstFailureNotice(db.getDb(),{...options,sessionGroup:legacy?null:options.sessionGroup});
     },
     consumeHealthEvents:async(scene,coordinator)=>{
       const identity=healthIdentity(scene);if(!identity)return;
@@ -172,10 +172,12 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
       if(results.some(result=>result?.verify))void supervisor.observer.requestVerification(scene.runtime);
       if(scene.runtime==='claude') await coordinator.serial(scene.runtime,()=>processFailureContinuation({
         store:coordinator.store(scene.runtime),scene,identity:()=>scenes.readIdentity(scene.sessionGroup),
-        bindTarget:()=>scenes.bindTarget(scene),insertControl:db.insertControl,getPending:db.getNextPending,getControl:db.getControlById,now:clock,
+        bindTarget:()=>scenes.bindTarget(scene),insertControl:db.insertControl,getControl:db.getControlById,now:clock,
+        // Native single delivers every group's inbound to Origin, so any pending inbound cancels a continuation.
+        getPending:configuration.mode==='single' && !configuration.legacy ? ()=>db.getNextPending({sessionMode:'single'}) : db.getNextPending,
         readNativeActivity:()=>supervisor.readActivity(scene),
         expireControl:async id=>{try{await db.expireControlById(id);}catch(error){if(error.code!=='CONTROL_NOT_ACTIVE')throw error;}},
-        scope:configuration.mode==='single'?null:scene.sessionGroup}));
+        scope:configuration.legacy?null:scene.sessionGroup}));
       const pending=drainFirstFailureNotices({store:coordinator.store(scene.runtime),sessionGroup:scene.sessionGroup ?? 'origin',
         identity:async()=>{const current=await scenes.readIdentity(scene.sessionGroup);return current.present && current.ready && current.runId===scene.runId && current.sessionId===scene.sessionId && current.runtime===scene.runtime?identity:null;},
         quota:current=>readScopedHealthQuota({runDir:scene.runDir,runId:scene.runId,identity:current}),mutate:fn=>coordinator.serial(scene.runtime,fn),database:db.getDb(),zylosDir:root});

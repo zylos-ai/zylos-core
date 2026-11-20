@@ -68,7 +68,7 @@ test('successful paste notifies immediately, reads current same-run F3 and drain
   assert.equal(f.calls.filter(c => c[0] === 'resolve').length, 1);
 });
 
-test('single uses null target; unknown runtime, missing READY and invalid F4 do not send', async t => {
+test('single targets Origin and withholds delivery on unknown runtime, missing READY or invalid status', async t => {
   for (const kind of ['unknown', 'ready', 'invalid']) await t.test(kind, async t => {
     const f = setup(t), row = f.message(); f.deps.getSessionMode = () => 'single';
     if (kind === 'unknown') f.target.runtime = 'unknown';
@@ -76,7 +76,7 @@ test('single uses null target; unknown runtime, missing READY and invalid F4 do 
     if (kind === 'invalid') f.deps.readSessionState = async () => ({ status: { valid: false } });
     await f.create().deliverConversation(row);
     assert.equal(f.row(row.id).status, 'pending'); assert.equal(f.row(row.id).retry_count, 0);
-    assert.equal(f.calls.find(c => c[0] === 'resolve')[1], null); assert(!f.calls.some(c => c[0] === 'paste'));
+    assert.equal(f.calls.find(c => c[0] === 'resolve')[1], 'origin'); assert(!f.calls.some(c => c[0] === 'paste'));
   });
 });
 
@@ -288,7 +288,7 @@ test('exact lifecycle /exit permits target disappearance only after successful E
       await t.test(`${runtime} ${scope} ${variant}`, async t => {
         const f = setup(t); f.target.runtime = runtime;
         f.deps.getSessionMode = () => scope === 'single' ? 'single' : 'multi';
-        const group = scope === 'single' ? null : scope === 'origin' ? 'origin' : 'telegram-test';
+        const group = scope === 'group' ? 'telegram-test' : 'origin';
         const row = f.control(variant === 'other' ? '/exit now' : '/exit', { session_group: group });
         if (variant === 'paste' || variant === 'before_enter') {
           f.adapter.sendText = async () => { throw error(variant === 'paste' ? 'PASTE_FAILED' : 'TARGET_GONE'); };

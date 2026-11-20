@@ -262,9 +262,9 @@ export async function runVisualCase(t, sandbox) {
       expectedChatDenial = false;
     }
     // The synthetic unknown status has been rendered; restore a drainable
-    // fixture input before exercising the real mode-switch checkpoint.
+    // fixture input before exercising the native mode switch.
     fixture.db.prepare('UPDATE conversations SET status=? WHERE id=?').run('pending', unknownInputId);
-    await fixture.convertToSingle();
+    await fixture.switchToSingle();
     await page.goto(fixture.base + '/chat');
     await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
     assert.equal(await page.locator('[data-action="create"]').isVisible(), true);

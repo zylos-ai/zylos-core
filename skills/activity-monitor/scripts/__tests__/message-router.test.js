@@ -63,7 +63,7 @@ test('routes share observer preparation but an absent target is not a failed pro
     restore: runtime => new Promise(resolve => resolvers.push({runtime, resolve: () => resolve(f.states[runtime])})),
     readNegativeCache: runtime => f.router.readNegativeCache(runtime),
     registeredAttempt: () => null,
-  }, readMode: () => 'multi', listScenes: () => [] });
+  }, listScenes: () => [] });
   f.router.requestProbe = runtime => observer.requestProbe(runtime);
   f.states.claude = { health: 'unavailable', reason: 'heartbeat_timeout', scheduling: {} };
   const pending = [f.router.route(request()), f.router.route(request({ requestId: '2' })), f.router.route(request({ sessionGroup: 'telegram:two', requestId: '3' }))];
@@ -129,14 +129,14 @@ test('authentication notification holds during transition and rejects invalid ru
 test('authentication without a ready scene leaves a user-message launch available and queues no probe', async t => {
   const f = fixture(t), now = 1792000000000;
   const coordinator = new RuntimeHealthCoordinator({ zylosDir: f.cacheDirectory, now: () => now,
-    readMode: () => 'multi', resolveTargetRuntime: () => 'claude', listScenes: () => [] });
+    resolveTargetRuntime: () => 'claude', listScenes: () => [] });
   const store = coordinator.store('claude'), state = store.read();
   state.health = 'unavailable';
   Object.assign(state.scheduling, { restartFailureCount: 3, lastRecoveryAt: now / 1000 - 1 });
   store.write(state);
   let controls = 0;
   const observer = new SupervisorHealthObserver({ coordinator, now: () => now,
-    readMode: () => 'multi', listScenes: () => [], insertControl: () => { controls++; } });
+    listScenes: () => [], insertControl: () => { controls++; } });
   t.after(() => observer.shutdown());
   f.router.healthCoordinator = coordinator; f.router.now = () => now;
   f.router.requestProbe = runtime => observer.requestProbe(runtime);
@@ -158,9 +158,9 @@ test('authentication recovery uses the existing observer to prefer a ready Origi
     { sessionGroup: 'origin', runtime: 'claude', ready: true, present: true, runId: 'origin-run', sessionId: 'origin-session' },
   ];
   const coordinator = new RuntimeHealthCoordinator({ zylosDir: f.cacheDirectory, now: () => now,
-    readMode: () => 'multi', resolveTargetRuntime: () => 'claude', listScenes: () => scenes });
+    resolveTargetRuntime: () => 'claude', listScenes: () => scenes });
   const store = coordinator.store('claude'), state = store.read(); state.health = 'unavailable'; store.write(state);
-  const observer = new SupervisorHealthObserver({ coordinator, now: () => now, readMode: () => 'multi', listScenes: () => scenes,
+  const observer = new SupervisorHealthObserver({ coordinator, now: () => now, listScenes: () => scenes,
     readIdentity: group => scenes.find(scene => scene.sessionGroup === group),
     buildTargetBinding: scene => ({ runId: scene.runId }), readState: () => ({ state: 'idle', tools: [] }), readScreen: () => 'healthy',
     insertControl: (content, options) => { controls.push({ id: controls.length + 1, content, ...options, status: 'done' }); return controls.at(-1); },
@@ -185,7 +185,7 @@ test('absent recovery target leaves accelerated admission uncached; completed fa
     f.coordinator.notifyUserMessage = () => accelerated;
     const observer = new SupervisorHealthObserver({ coordinator: {
       restore: () => f.states.claude, readNegativeCache: () => null, registeredAttempt: () => null,
-    }, readMode: () => 'multi', listScenes: () => [] });
+    }, listScenes: () => [] });
     t.after(() => observer.shutdown());
     f.router.requestProbe = runtime => observer.requestProbe(runtime);
     const absent = await f.router.route(request());
@@ -203,11 +203,11 @@ for (const terminal of ['failed', 'timeout']) test(`actual observer ${terminal} 
   const f = fixture(t), now = 1792000000000, controls = [];
   let scenes = [];
   const coordinator = new RuntimeHealthCoordinator({ zylosDir: f.cacheDirectory, now: () => now,
-    readMode: () => 'multi', resolveTargetRuntime: () => 'claude', listScenes: () => scenes });
+    resolveTargetRuntime: () => 'claude', listScenes: () => scenes });
   const state = coordinator.store('claude').read(); state.health = 'unavailable';
   coordinator.store('claude').write(state);
   const observer = new SupervisorHealthObserver({ coordinator, now: () => now,
-    readMode: () => 'multi', listScenes: () => scenes,
+    listScenes: () => scenes,
     readIdentity: group => scenes.find(scene => scene.sessionGroup === group),
     readState: () => ({ state: 'idle', tools: [] }), readScreen: () => 'injected failed runtime response', matchScreen: () => ({}),
     buildTargetBinding: scene => ({ runId: scene.runId }),

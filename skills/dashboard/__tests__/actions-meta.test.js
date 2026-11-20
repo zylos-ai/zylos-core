@@ -311,7 +311,7 @@ test('hot TTL actions save integer minutes as seconds and preserve unrelated con
       assert.equal(meta.minutes, minutes);
       assert.equal(meta.read_only, false);
     }
-    fs.writeFileSync(file, JSON.stringify({ ...initial, session_mode: 'single' }));
+    fs.writeFileSync(file, JSON.stringify({ session_hot_ttl_seconds: initial.session_hot_ttl_seconds }));
     const before = fs.readFileSync(file, 'utf8');
     const single = await handleAction('set-session-hot-ttl', { minutes: 25 }, { ...config, session_mode: 'multi' });
     assert.equal(single.messageKey, 'result.hot_ttl_multi_only', 'actual config mode takes precedence over a stale caller');
@@ -366,4 +366,28 @@ test('confirmed timezone restart retries immediately after a partial failure', a
   assert.equal((await handleAction('restart-timezone-services', body, {}, { timezone })).ok, true);
   assert.equal(calls, 2);
   assert.ok(Date.now() - before < 2000, 'retry reached the handler inside the old dedup window');
+});
+
+// Covers native single's Dashboard write and effective metadata, with a fixture
+// config only. Run for reclaim configuration/actions; skip unrelated settings.
+test('native single can save idle reclaim minutes while pre-migration remains read-only', async t => {
+  const zylosDir = makeZylosDir();
+  t.after(() => fs.rmSync(zylosDir, { recursive: true, force: true }));
+  const previous = process.env.ZYLOS_SESSION_HOT_TTL_SECONDS;
+  delete process.env.ZYLOS_SESSION_HOT_TTL_SECONDS;
+  t.after(() => { if (previous === undefined) delete process.env.ZYLOS_SESSION_HOT_TTL_SECONDS; else process.env.ZYLOS_SESSION_HOT_TTL_SECONDS = previous; });
+  fs.mkdirSync(path.join(zylosDir, '.zylos'));
+  const file = path.join(zylosDir, '.zylos/config.json');
+  fs.writeFileSync(file, JSON.stringify({ session_mode: 'single', runtime: 'claude' }));
+  const result = await handleAction('set-session-hot-ttl', { minutes: 27 }, { zylosDir });
+  assert.equal(result.ok, true);
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(saved.session_mode, 'single');
+  assert.equal(saved.session_hot_ttl_seconds, 1620);
+  const metadata = getActionsMeta({ ...saved, zylosDir }).session_hot_ttl;
+  assert.equal(metadata.read_only, false);
+  assert.equal(metadata.minutes, 27);
+  fs.writeFileSync(file, JSON.stringify({ runtime: 'claude' }));
+  assert.equal((await handleAction('set-session-hot-ttl', { minutes: 28 }, { zylosDir })).error, 'multi_session_required');
+  assert.equal(getActionsMeta({ runtime: 'claude', zylosDir }).session_hot_ttl.read_only, true);
 });

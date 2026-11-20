@@ -4,7 +4,7 @@
 // adapters, receipt loss and independent HTTP-process restart; run for recovery.
 // Remote access: real AuthGate + FleetProxy and data-instance settings; run for
 // auth/fleet/chat routes; unrelated block styles may skip.
-// Single: actual converter/coordinator with isolated restart acknowledgement,
+// Single: native coordinator with isolated restart acknowledgement,
 // then all three write APIs; run for mode/access/draft/answer changes.
 // Every case requires ZYLOS_CHAT_INTEGRATION=1 before DB/HTTP creation; absence
 // skips all work. No live history, PM2, tmux socket or model is used here.
@@ -511,12 +511,12 @@ registerIntegrationCase('remote chat off, on and off enforces both direct and pr
 });
 
 // Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.
-registerIntegrationCase('single mode conversion retains both history tabs and rejects draft, send and answer APIs', async (t, sandbox) => {
+registerIntegrationCase('native single switch retains both history tabs and rejects draft, send and answer APIs', async (t, sandbox) => {
   const a = await createChatApiFixture(t, sandbox);
   const active = await a.createConversation('multi history remains');
   const q = a.question(); a.addOutbound(active.draft.localId, questionContent(q));
   a.c4.insertConversation('in', 'telegram', 'external', 'external history remains', { groupName: 'external' });
-  const transition = await a.convertToSingle();
+  const transition = await a.switchToSingle();
   assert.equal(transition.target_mode, 'single');
   for (const tab of ['mine', 'external']) {
     const page = await a.request(`/api/chat/conversations?tab=${tab}`);
@@ -535,6 +535,34 @@ registerIntegrationCase('single mode conversion retains both history tabs and re
   assert.equal(a.counts.receive, before);
   assert.equal(a.store.db.prepare('SELECT COUNT(*) n FROM chat_answers').get().n, 0);
   assert.equal(a.readMode(), 'single');
+});
+
+// Isolation: private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DBs are read back; case teardown reclaims them.
+registerIntegrationCase('after the native switch to single the Origin page shows internal rows under origin but its list preview does not', async (t, sandbox) => {
+  const a = await createChatApiFixture(t, sandbox);
+  const x = await a.createConversation('started in multi');
+  const xGroup = `${x.receipt.namespace}:${x.draft.localId}`;
+  await a.switchToSingle();
+  assert.equal(a.readMode(), 'single');
+  const originRoute = `/api/chat/conversations/${encodeURIComponent(ORIGIN_CONVERSATION_ID)}`;
+  assert.equal((await a.request(`${originRoute}/send`, post({ content: 'owner asks Origin' }))).status, 200);
+  const reply = a.addOutbound('origin', 'Origin answers the owner');
+  // Core's own internal-message insert, as `c4-send internal origin` stores it.
+  const relay = a.c4.insertInternalMessage(xGroup, 'origin', 'relay from X to Origin');
+  assert.equal(a.db.prepare('SELECT session_group FROM conversations WHERE id=?').get(relay.inRow.id).session_group, 'origin');
+  const page = await a.request(`${originRoute}/messages?tab=mine`);
+  assert.equal(page.status, 200, page.text);
+  const internal = page.body.items.filter(row => row.channel === 'internal');
+  assert.deepEqual(internal.map(row => [row.id, row.direction, row.internal?.peerSessionGroup, row.internal?.content]),
+    [[relay.inRow.id, 'in', xGroup, 'relay from X to Origin']]);
+  assert.equal(page.body.items.at(-1).id, relay.inRow.id, 'the internal row is the newest row on the Origin page');
+  const list = await a.request('/api/chat/conversations?tab=mine');
+  assert.equal(list.status, 200);
+  const [origin] = list.body.items;
+  assert.equal(origin.id, ORIGIN_CONVERSATION_ID);
+  assert.equal(origin.preview, 'Origin answers the owner', 'the list preview skips the internal row');
+  assert.equal(origin.count, 2, 'the summary counts no internal rows');
+  assert.ok(reply.id < relay.inRow.id);
 });
 
 // Consumer outlets run for projection/reader/component changes. Only the same

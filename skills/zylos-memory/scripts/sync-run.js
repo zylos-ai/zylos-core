@@ -8,6 +8,7 @@ import { parseStateHeader } from './state-format.js';
 import { options, inputError, isMain, runCli, readInput, parseJson, helpRequested } from './sync-cli.js';
 import { createQueryHandlers } from '../../comm-bridge/scripts/c4-v2-cli.js';
 import { createStore } from '../../comm-bridge/scripts/c4-v2-store.js';
+import { readZylosConfigStrict } from '../../comm-bridge/scripts/local-config.js';
 import { SKILLS_DIR } from '../../comm-bridge/scripts/c4-config.js';
 import { formatUnsummarized } from '../../comm-bridge/scripts/c4-fetch-format.js';
 import { removeOwnedTree } from '../../comm-bridge/scripts/remove-owned-tree.js';
@@ -33,7 +34,7 @@ function exportFile(dir, name, value) {
 async function database(deps) {
   if (deps.database) return deps.database;
   const db = await import('../../comm-bridge/scripts/c4-db.js');
-  return Object.assign(createStore(db.getDb), { getDb: db.getDb, getConversationsByRange: db.getConversationsByRange });
+  return Object.assign(createStore(db.getDb, { readConfig: readZylosConfigStrict }), { getDb: db.getDb, getConversationsByRange: db.getConversationsByRange });
 }
 const settingsFor = settings => ({ ...settings, kind: 'group' });
 

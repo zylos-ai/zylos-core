@@ -143,3 +143,19 @@ test('daily memory failure bounds errors from an injected executor in state and 
   assert.equal(detail.length,501);
   assert.equal(detail.split('…').length-1,1);
 });
+
+test('pre-migration maintenance skips machine work and catches up after mode is set', async t => {
+  const f = fixture(t, { hour: 7, config: { daily_upgrade_enabled: true, health_check_enabled: true, usage_alert_enabled: true } });
+  let targetReads = 0;
+  f.tasks.resolveTargetRuntime = () => { targetReads++; return 'claude'; };
+  await f.tick({ configuration: { legacy: true } });
+  await settle(f.tasks);
+  assert.equal(targetReads, 0);
+  assert.deepEqual(f.calls, { controls: [], scripts: [] });
+  await f.tick({ configuration: { legacy: false } });
+  await settle(f.tasks);
+  assert.equal(targetReads, 1);
+  assert.deepEqual(f.calls.scripts, ['upgrade-check.js']);
+  assert.ok(f.calls.controls.some(args => args[2].startsWith('System health check')));
+  assert.ok(f.calls.controls.some(args => args[2].startsWith('Daily upgrade')));
+});

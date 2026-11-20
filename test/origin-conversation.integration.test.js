@@ -32,8 +32,8 @@ const dashboardDir = new URL('../skills/dashboard/', import.meta.url).pathname;
 // activation of origin, the Dashboard Origin send/history path or the session
 // mode handling of origin; UI-only changes may skip. The mode change itself
 // (transition records, drain, legacy handover) is covered by the mode-switch
-// integration tests: here the Router is stopped and restarted under the other
-// mode on the same databases. The official runner isolates HOME, ZYLOS_DIR,
+// integration tests. Here only the Router restarts under the other configured
+// mode, on the same databases and live Origin runtime. The official runner isolates HOME, ZYLOS_DIR,
 // PM2_HOME and a short TMPDIR; each case reads them back, owns one private
 // root, tmux socket and both databases, and stops the Router, kills its tmux
 // server and removes the root on success or failure.
@@ -109,11 +109,12 @@ setInterval(()=>{},1000);
     submit: async () => assert.fail('a healthy launch must not submit start_attempt'),
     deliverControl: async () => assert.fail('fixture has no controls'),
     deliverConversation: async (message, identity) => {
-      delivered.push({ id: message.id, sessionGroup: identity.sessionGroup ?? null, runId: identity.runId });
+      delivered.push({ id: message.id, runId: identity.runId });
       return db.markDelivered(message.id, { sessionId: identity.sessionId });
     },
     handleExpired: async () => assert.fail('fresh fixture must not expire'),
-    prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
+    findLegacySessions: async () => assert.fail('configured Origin must not discover baseline sessions'),
+    advanceLegacy: async () => assert.fail('configured Origin must not advance baseline sessions'),
     diagnostic() {},
   };
   const runtimes = () => fs.existsSync(records) ? fs.readFileSync(records, 'utf8').trim().split('\n').map(JSON.parse) : [];
@@ -131,9 +132,11 @@ setInterval(()=>{},1000);
     assert.equal(status(id), 'delivered', JSON.stringify({ runtimes: runtimes(), delivered }));
     return delivered.find(item => item.id === id);
   }
-  // Stop the Router and its runtimes, as a reclaim or restart leaves them.
-  async function stopAll() {
+  async function stopRouter() {
     await router?.stop(); router = null;
+  }
+  async function stopAll() {
+    await stopRouter();
     try { tm.tmux('kill-server'); } catch {}
     await tm.waitForServerExit();
   }
@@ -145,7 +148,7 @@ setInterval(()=>{},1000);
   }
   const send = content => sender.send(ORIGIN_CONVERSATION_ID, { content });
   const messages = () => history.messages(ORIGIN_CONVERSATION_ID).items.map(row => [row.direction, row.content]);
-  return { f, tm, sessions, setMode, deliver, stopAll, reply, send, messages, runtimes, history };
+  return { f, tm, sessions, setMode, deliver, stopRouter, stopAll, reply, send, messages, runtimes, history };
 }
 
 test('in multi a reclaimed Origin is woken by a send from the Origin conversation and replies there', { timeout: 60000 }, async t => {
@@ -169,18 +172,18 @@ for (const [first, second] of [['single', 'multi'], ['multi', 'single']]) {
     const before = await s.send(`Before, in ${first}.`);
     await s.deliver(before.messageId);
     const firstRuntime = s.runtimes().at(-1);
-    assert.equal(firstRuntime.group, first === 'multi' ? 'origin' : null);
+    assert.equal(firstRuntime.group, 'origin');
     await s.reply(firstRuntime, `Reply in ${first}.`);
-    await s.stopAll();
+    await s.stopRouter();
 
     s.setMode(second);
     const after = await s.send(`After, in ${second}.`);
     assert.equal(after.conversationId ?? ORIGIN_CONVERSATION_ID, ORIGIN_CONVERSATION_ID);
-    await s.deliver(after.messageId);
-    const secondRuntime = s.runtimes().at(-1);
-    assert.notEqual(secondRuntime.runId, firstRuntime.runId);
-    assert.equal(secondRuntime.group, second === 'multi' ? 'origin' : null);
-    await s.reply(secondRuntime, `Reply in ${second}.`);
+    const delivery = await s.deliver(after.messageId);
+    assert.equal(delivery.runId, firstRuntime.runId);
+    assert.equal((await s.sessions.readLiveIdentity('origin')).runId, firstRuntime.runId);
+    assert.deepEqual(s.runtimes(), [firstRuntime]);
+    await s.reply(firstRuntime, `Reply in ${second}.`);
     assert.deepEqual(s.messages(), [
       ['in', `Before, in ${first}.`], ['out', `Reply in ${first}.`],
       ['in', `After, in ${second}.`], ['out', `Reply in ${second}.`],

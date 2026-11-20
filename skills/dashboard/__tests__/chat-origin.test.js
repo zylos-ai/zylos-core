@@ -265,3 +265,45 @@ test('an internal message to origin from another session appears in the Origin c
     [['in', 'internal', group, 'please tell the owner in Origin']]);
   assert.equal(f.history.list({ tab: 'mine' }).items[0].preview, '', 'the summary still excludes internal messages');
 });
+
+// In single mode Core records the rows of every conversation and external chat
+// under `origin` when it delivers them; the Origin conversation shows them all.
+test('the Origin conversation shows every row recorded under origin with its own channel and conversation', async t => {
+  const f = fixture(t, { mode: 'single' });
+  const multi = f.authorizeAs(local, 'multi');
+  const named = f.conversations.create(), unnamed = f.conversations.create();
+  const seed = await f.sender.send(named.id, { content: 'before the switch' }, { authorize: multi });
+  await f.sender.send(unnamed.id, { content: 'another conversation' }, { authorize: multi });
+  const namedGroup = `${seed.namespace}:${named.localId}`;
+  f.store.writeGroupDisplayName(namedGroup, 'Project X', 'human');
+  const { highwater } = f.history.chatChangeSnapshot({ tab: 'mine' });
+  const shown = [
+    f.add('in', 'dashboard', 'origin', 'owner asks Origin'),
+    f.add('in', 'dashboard', named.localId, 'queued in X before the switch'),
+    f.add('out', 'dashboard', named.localId, 'Origin answers in X'),
+    f.add('out', 'dashboard', unnamed.localId, 'Origin answers the unnamed one'),
+    f.add('in', 'telegram', '-100|thread:7', '[TG GROUP:Team] from Telegram\n[MEDIA:/private/photo.jpg]'),
+  ];
+  shown.push(f.add('out', 'internal', namedGroup, 'Origin to the X thread'));
+  const latest = f.add('out', 'telegram', '-100|thread:7', 'Origin answers Telegram');
+  shown.push(latest);
+  const items = f.history.messages(ORIGIN_CONVERSATION_ID, { locale: 'en' }).items;
+  assert.deepEqual(items.map(row => row.id), shown);
+  assert.deepEqual(items.map(row => [row.channel, row.conversationName]), [
+    ['dashboard', 'Origin'], ['dashboard', 'Project X'], ['dashboard', 'Project X'], ['dashboard', null],
+    ['telegram', undefined], ['internal', undefined], ['telegram', undefined]]);
+  // An external chat's row reads as on the external page.
+  assert.equal(items[4].preview, '[TG GROUP:Team] from Telegram\n[Media] Original-channel attachment');
+  assert.deepEqual([items[5].internal.peerSessionGroup, items[5].internal.content], [namedGroup, 'Origin to the X thread']);
+  const [origin] = f.history.list({ tab: 'mine' }).items;
+  assert.equal(origin.id, ORIGIN_CONVERSATION_ID);
+  assert.equal(origin.count, shown.length - 1, 'summaries count no internal rows');
+  assert.equal(origin.preview, 'Origin answers Telegram');
+  assert.equal(origin.previewDirection, 'out');
+  assert.equal(f.history.chatChangeSnapshot({ tab: 'mine' }, { afterId: highwater }).listChanged, true);
+  assert.equal(f.history.chatChangeSnapshot({ tab: 'mine', conversationId: ORIGIN_CONVERSATION_ID }).latestId, latest);
+  // The other pages keep their rows: X shows only what is recorded in X's own group.
+  assert.deepEqual(f.history.messages(groupId(namedGroup)).items.map(row => row.content), ['before the switch']);
+  assert.equal(f.history.list({ tab: 'external' }).items.length, 0);
+  assert.throws(() => f.history.messages(groupId('origin'), { tab: 'external' }), { code: 'chat_conversation_not_found' });
+});

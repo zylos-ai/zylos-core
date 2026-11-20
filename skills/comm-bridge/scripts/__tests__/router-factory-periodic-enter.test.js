@@ -58,7 +58,7 @@ test('factory sends a due supplementary Enter to only the settled message group'
       stop: async () => assert.fail('READY fixture must not stop a runtime'),
     }),
     sleep: async () => {}, notifyDelivered() {},
-    findLegacySessions: async () => [], advanceLegacy: async () => {}, prepareSingle: async () => {},
+    findLegacySessions: async () => [], advanceLegacy: async () => {},
     submit: async () => assert.fail('READY fixture must not start a session'),
   }, { delivery: { periodicEnabled: true, periodicIntervalMs: 5000, periodicMaxAttempts: 3,
     verifyWaitMs: 1, captureEnabled: false } });

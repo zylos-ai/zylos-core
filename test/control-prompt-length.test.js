@@ -23,7 +23,7 @@ const delivered = (content, suffix) => `Meanwhile, ${content}${suffix}`;
 
 function longestAckSuffix(t) {
   const { store } = fixture(t, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'single' } }) });
-  const row = store.insertControl('probe');
+  const row = store.insertControl('probe', { sessionGroup: 'origin', ackDeadlineAt: Math.floor(Date.now() / 1000) + 300 });
   const suffix = row.content.slice('probe'.length);
   const match = suffix.match(/^ ---- ack via: node (\S+\/c4-control\.js) ack --id (\d+)$/);
   assert.ok(match, `unexpected ack suffix: ${suffix}`);
@@ -55,7 +55,7 @@ test('every control prompt is typed as an ordinary input: within the paste lengt
   const suffix = longestAckSuffix(t);
   const list = controls();
   for (const name of ['GROUP_SYNC_PROMPT', 'ORIGIN_SYNC_PROMPT', 'PRE_RECLAIM_CHECK_PROMPT', 'CONFIG_RECLAIM_PROMPT',
-    'UPGRADE_RESTART_CHECK_PROMPT', 'SINGLE_UPGRADE_RESTART_CHECK_PROMPT', 'ROTATION_PROMPT', 'IDENTITY_ROTATION_PROMPT', 'conversation naming']) {
+    'UPGRADE_RESTART_CHECK_PROMPT', 'ROTATION_PROMPT', 'IDENTITY_ROTATION_PROMPT', 'conversation naming']) {
     assert.ok(list.some(([key]) => key === name), `${name} is measured`);
   }
   const over = [];

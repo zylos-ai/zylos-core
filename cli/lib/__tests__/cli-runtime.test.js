@@ -18,7 +18,6 @@ function fixture(overrides = {}) {
     hooksReady: () => { calls.push('hooks'); return { ready: true, pendingMigration: false }; },
     write: () => { calls.push('write'); return { previous: { runtime: 'claude' }, config: { runtime: 'codex', session_mode: 'multi' }, changed: true }; },
     observe: async () => { calls.push('observe'); return { groups: [], groupsComplete: true, observationErrors: [] }; },
-    identity: async () => ({ present: false }),
     ...overrides,
   };
   return { calls, run: flags => executeRuntimeSwitch('codex', flags || [], deps) };
@@ -145,13 +144,24 @@ test('lock-return snapshot determines previous/config/changed, including concurr
   }
 });
 
-test('saved result survives single identity read errors', async () => {
-  const f = fixture({ observe: async () => { throw new Error('unavailable'); },
-    write: () => ({ previous: {}, config: { runtime: 'codex' }, changed: true }),
-    identity: async () => { throw new Error('unavailable'); } });
+test('saved baseline survives a configured single Origin identity read error', async () => {
+  const f = fixture({
+    write: () => ({ previous: { runtime: 'claude' }, config: { runtime: 'codex', session_mode: 'single' }, changed: true }),
+    observe: (baseline, mode) => observeRuntimeGroups(baseline, mode, {
+      list: () => [],
+      overrides: () => [],
+      identity: async group => { assert.equal(group, 'origin'); throw new Error('unavailable'); },
+    }),
+  });
   const result = await f.run();
-  assert.equal(result.ok, true); assert.equal(result.data.groupsComplete, false);
-  assert.equal(result.data.groups[0].status, 'unknown');
+  assert.equal(result.ok, true);
+  assert.equal(result.data.result, 'saved');
+  assert.equal(result.data.sessionMode, 'single');
+  assert.equal(result.data.groupsComplete, false);
+  assert.deepEqual(result.data.groups.map(({ sessionGroup, status }) => [sessionGroup, status]), [['origin', 'unknown']]);
+  assert.deepEqual(result.data.observationErrors, [
+    { source: 'session', sessionGroup: 'origin', code: 'READ_FAILED', message: 'unavailable' },
+  ]);
   assert.deepEqual(result.data.warnings, []);
 });
 
@@ -204,7 +214,7 @@ test('Claude setup-token save without a new base URL warns that the saved relay 
       adapter: () => ({ checkAuth: async () => ({ status: 'success' }) }), exists: () => true, credentials: () => true, baseUrl: () => true,
       hooksReady: () => ({ ready: true, pendingMigration: false }),
       write: () => ({ previous: { runtime: 'claude' }, config: { runtime: 'claude', session_mode: 'multi' }, changed: false }),
-      observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }), identity: async () => ({ present: false }),
+      observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }),
       relayNotice: () => { asked++; return notice; } };
     const result = await executeRuntimeSwitch('claude', flags, deps);
     assert.equal(result.ok, true, JSON.stringify(result.error));

@@ -75,7 +75,7 @@ test('a new ending replaces the only pending marker without changing existing co
   }
 });
 
-for (const reason of ['ttl', 'evict', 'release', 'mode_switch']) {
+for (const reason of ['ttl', 'evict', 'release']) {
   test(`a new ${reason} ending does not inherit an older pending marker`, t => {
     let now = clock;
     const { db, store } = fixture(t, { now: () => now * 1000 });
@@ -209,18 +209,6 @@ test('marker clearing rejects invalid identities and single mode without writes'
   assert.deepEqual(snapshot(db), before);
 });
 
-test('cutover clearing removes all markers including Origin without changing records or controls', t => {
-  const { db, store } = fixture(t, { now: () => clock * 1000 });
-  for (const group of ['a', 'b', 'origin']) store.recordRunEnd(group, { runId: group, reason: 'unexpected' });
-  store.recordRunEnd('idle', { runId: 'idle', reason: 'ttl' });
-  const controls = db.prepare('SELECT * FROM control_queue').all();
-  assert.deepEqual(store.clearAllContinuations(), { cleared: 3 });
-  assert.deepEqual(store.clearAllContinuations(), { cleared: 0 });
-  assert.deepEqual(store.listPendingContinuations(), []);
-  assert.deepEqual(store.listRunEndings(['a', 'b', 'origin', 'idle']).map(row => row.continuationPending), [0, 0, 0, 0]);
-  assert.deepEqual(db.prepare('SELECT * FROM control_queue').all(), controls);
-});
-
 test('run-ending reads use one scoped query and exclude unrelated historical groups', t => {
   const trace = [];
   const { db, store } = fixture(t, { now: () => clock * 1000 }, false, { verbose: sql => trace.push(sql) });
@@ -267,13 +255,13 @@ test('current schema missing the run-ending table is rejected without recreating
   store.recordRunEnd('a', { runId: 'a1', reason: 'unexpected' });
   db.exec('DROP TABLE run_endings');
   const before = snapshot(db);
-  assert.throws(() => guardDatabase(db, owner), /^Error: c4: unsupported schema 4, missing run_endings\.session_group/);
+  assert.throws(() => guardDatabase(db, owner), { message: `c4: unsupported schema ${owner.SUPPORTED_SCHEMA_VERSION}, missing run_endings.session_group` });
   assert.deepEqual(snapshot(db), before);
 });
 
 test('public database facade exposes run-ending primitives', async () => {
   const facade = await import('../c4-db.js');
-  for (const name of ['recordRunEnd', 'listRunEndings', 'listPendingContinuations', 'clearContinuation', 'clearAllContinuations']) assert.equal(typeof facade[name], 'function');
+  for (const name of ['recordRunEnd', 'listRunEndings', 'listPendingContinuations', 'clearContinuation']) assert.equal(typeof facade[name], 'function');
 });
 
 test('current schema with the retired continuation column is rejected without mutation', t => {
@@ -281,7 +269,7 @@ test('current schema with the retired continuation column is rejected without mu
   store.recordRunEnd('a', { runId: 'a1', reason: 'unexpected' });
   db.exec('ALTER TABLE run_endings RENAME COLUMN continuation_pending TO continuation_control_id');
   const before = snapshot(db);
-  assert.throws(() => guardDatabase(db, owner), /^Error: c4: unsupported schema 4, missing run_endings\.continuation_pending/);
+  assert.throws(() => guardDatabase(db, owner), { message: `c4: unsupported schema ${owner.SUPPORTED_SCHEMA_VERSION}, missing run_endings.continuation_pending` });
   assert.deepEqual(snapshot(db), before);
   assert.equal(db.pragma('user_version', { simple: true }), owner.SUPPORTED_SCHEMA_VERSION);
 });

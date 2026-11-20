@@ -1,3 +1,4 @@
+import { seedHistoricalAbsorption } from './fixtures/historical-absorption.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import fs from 'node:fs';
@@ -19,7 +20,7 @@ function setup(t, endpoint = 'route', options = { groupName: 'room' }) {
   const row = result.store.insertConversation('in', 'demo', endpoint, 'original', options);
   const { runId } = result.store.beginModeTransition('single', 'multi');
   result.store.setDrainFence('*');
-  result.store.absorbForTransition(runId);
+  seedHistoricalAbsorption(result.db, runId, [row.id]);
   const api = { ...result.store, getDb: () => result.db,
     getConversationsByRange: (a, b) => result.db.prepare('SELECT * FROM conversations WHERE id>=? AND id<=? ORDER BY id').all(a, b) };
   return { ...result, dir, script, output, row, runId, api };

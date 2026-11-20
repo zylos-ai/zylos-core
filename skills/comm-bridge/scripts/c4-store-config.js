@@ -19,7 +19,7 @@ export function configFunctions({ read, write, snapshot, get, all, run, knownGro
     const selected = config.runtime ?? 'claude';
     try { runtime(selected); } catch (cause) { throw dataError('CONFIG_UNREADABLE', 'Invalid baseline runtime', { cause }); }
     if (config.session_mode !== undefined && !['single', 'multi'].includes(config.session_mode)) throw dataError('CONFIG_UNREADABLE', 'Invalid baseline session mode');
-    return { runtime: selected, sessionMode: config.session_mode ?? 'single' };
+    return { runtime: selected, sessionMode: config.session_mode ?? 'single', keyPresent: Object.hasOwn(config, 'session_mode') };
   }
   const modelValue = (c, group, rt) => {
     const row = get(c, 'SELECT model,effort FROM group_model_overrides WHERE session_group=? AND runtime=?', group, rt);
@@ -71,8 +71,8 @@ export function configFunctions({ read, write, snapshot, get, all, run, knownGro
     }),
     resolveSessionLaunchConfig: ({ sessionGroup, sessionMode }) => {
       const base = baseline();
-      if (sessionMode === 'single') return { runtime: base.runtime, mode: 'default' };
-      if (sessionMode !== 'multi') throw dataError('SESSION_GROUP_INVALID', 'Invalid session mode');
+      if (sessionMode === 'single' && (!base.keyPresent || sessionGroup === null)) return { runtime: base.runtime, mode: 'default' };
+      if (!['single', 'multi'].includes(sessionMode)) throw dataError('SESSION_GROUP_INVALID', 'Invalid session mode');
       requireGroup(sessionGroup);
       return snapshot(c => modelValue(c, sessionGroup, runtimeValue(c, sessionGroup).runtime ?? base.runtime));
     },

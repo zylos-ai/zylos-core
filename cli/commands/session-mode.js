@@ -33,7 +33,9 @@ export async function executeSessionMode(args, {
   }
   if (response.kind === 'rejected') {
     const { code, runId, target: openTarget } = response.reply;
-    const result = failure(code, `Mode switch rejected: ${code}`);
+    const result = failure(code, code === 'global_memory_pending'
+      ? 'The supervisor will automatically hand over global working memory first; retry the switch afterward. A legacy session must finish before handover.'
+      : `Mode switch rejected: ${code}`);
     if (code === 'transition_open') Object.assign(result.error, { runId, target: openTarget });
     return result;
   }

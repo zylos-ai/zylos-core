@@ -148,10 +148,11 @@ test('dispatcher and supervisor record expire together between adjacent reads', 
 
 test('single activation never reads pool capacity', async t => {
   const f = await fixture(t, { mode: 'single', record: '{' });
+  f.add('other');
   await f.rounds();
   // Satisfy resident absence pacing before checking the single-session launch.
   f.advance(5000); await f.rounds();
-  assert.ok(f.calls.some(row => row[0] === 'launch' && row[1].sessionGroup === null));
+  assert.ok(f.calls.some(row => row[0] === 'launch' && row[1].sessionGroup === 'origin'));
   assert.equal(f.taken.length, 0); assert.equal(f.reads(), 0);
 });
 

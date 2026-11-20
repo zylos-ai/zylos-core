@@ -13,13 +13,14 @@ function fixture(t, mode, recognized) {
   // F1 intentionally differs from the observed named process.
   const {tmux,db,env}=readyTmuxTarget(t,{prefix:'c4-fallback-',mode,runtime:'codex',
     runId:'fixture-run',sessionId:'fixture-session',runtimeProcess:recognized,packageRoot});
+  tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_SESSION_GROUP', 'origin');
   tmux('set-environment', '-u', '-t', '=zylos-group-origin', 'ZYLOS_MODEL_CONFIG');
   assert.doesNotMatch(tmux('show-environment', '-t', '=zylos-group-origin'), /^ZYLOS_MODEL_CONFIG=/m);
   const rows = () => db.prepare('SELECT * FROM control_queue ORDER BY id').all();
   const run = expectedRuntime => {
     const result = spawnSync(process.execPath, [cliPath, 'enqueue', '--content', ' fixture', '--no-ack-suffix',
       '--target-run', 'fixture-run', '--expected-session', 'fixture-session', '--expected-runtime', expectedRuntime,
-      '--json', ...(mode === 'multi' ? ['--group', 'origin'] : [])], { env, encoding: 'utf8', timeout: 20000 });
+      '--json', '--group', 'origin'], { env, encoding: 'utf8', timeout: 20000 });
     assert.equal(result.error, undefined);
     assert.equal(result.stderr, '');
     assert.equal(result.stdout.trim().split('\n').length, 1);
@@ -45,7 +46,7 @@ for (const mode of ['single', 'multi']) {
     };
     const before = rows();
     assert.equal(before.length, 1);
-    assert.equal(before[0].session_group, mode === 'multi' ? 'origin' : null);
+    assert.equal(before[0].session_group, 'origin');
     assert.equal(before[0].status, 'pending');
     assert.equal(before[0].target_binding, JSON.stringify(binding));
     assert.deepEqual(success.response, { ok: true, data: { id: before[0].id, supersededCount: 0, targetBinding: binding } });

@@ -8,6 +8,8 @@ import { validateGroupName, composeSessionGroup, dataError, isDataError } from '
 import { appendEntryEvent } from './c4-entry-events.js';
 import { queryRoute } from './c4-entry-route.js';
 import { fixedAddressSessionGroup } from './c4-fixed-address.js';
+import { loadCoreModule } from './router/core-modules.js';
+const { readSessionMode } = await loadCoreModule('config.js');
 
 // Accepted option names and value consumption live in the adjacent manifest so
 // components can inspect the same argument list this receiver accepts.
@@ -92,8 +94,12 @@ export async function receive(args, dependencies = {}) {
   const binding = rawChannel ? db.getChannelNamespace(rawChannel) : null;
   const preGroup = fixedAddressSessionGroup(channel, endpoint) ??
     (rawChannel ? (binding ? composeSessionGroup(binding.namespace, groupName) : null) : 'origin');
+  let mode = {};
+  try { mode = (dependencies.readSessionMode ?? readSessionMode)(); }
+  catch { /* The route query handles unreadable configuration without losing inbound. */ }
+  const healthGroup = mode.mode === 'single' && mode.keyPresent ? 'origin' : preGroup;
   const request = { version: 2, type: 'route', requestId: `${process.pid}-${receivedAt}`, channel,
-    endpoint, noReply, receivedAt, sessionGroup: preGroup, componentName: rawChannel,
+    endpoint, noReply, receivedAt, sessionGroup: healthGroup, componentName: rawChannel,
     ...(coreSource ? { coreSide: true, coreSource } : {}) };
   const route = await routeQuery(request);
   const pending = route.decision === 'pending';
@@ -125,7 +131,7 @@ export async function receive(args, dependencies = {}) {
   if (pending || noReply) return result;
   const persisted = ['D1'];
   let claim;
-  const finalRoute = { ...route, sessionGroup: record.session_group };
+  const finalRoute = { ...route, sessionGroup: mode.mode === 'single' && mode.keyPresent ? 'origin' : record.session_group };
   try { claim = reserve(channel, endpoint, finalRoute); }
   catch {
     diagnostic(`status notice reservation failed after conversation ${record.id} committed`);

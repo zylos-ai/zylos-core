@@ -61,8 +61,9 @@ cross-channel context.
 node ~/zylos/.claude/skills/restart-claude/scripts/restart.js --json
 ```
 
-The script reads the session mode and active transition. In multi mode or during
-a transition it submits `restart_all`; steady single mode retains the queued
-`/exit` path, with the same waiting-work check queued ahead of it (at most 60
-seconds). It reports a refusal or an unknown outcome without automatically
-resubmitting. An accepted request does not mean replacement sessions are ready.
+The script submits `restart_all` to the supervisor in every session mode.
+The supervisor snapshots the running group sessions and gives each up to 60
+seconds to check work waiting on external events before restarting it. An empty
+snapshot returns `done_empty`. The script reports refusal or uncertainty
+without automatically resubmitting. Acceptance means the request was recorded.
+Replacement sessions report readiness separately.

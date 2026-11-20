@@ -8,8 +8,8 @@ import { routerFixture } from '../../../comm-bridge/scripts/__tests__/helpers/ro
 // Run for Group Sync deadline/scope changes; unrelated UI may skip. The root
 // runner isolates HOME/ZYLOS_DIR/PM2_HOME/temp/socket paths before imports. No
 // process, tmux, PM2 or network is started; router/database teardown belongs to t.
-for (const [mode, kind, group] of [['multi', 'group', 'a'], ['single', 'global', null], ['multi', 'origin', 'origin']]) {
-  test(`${kind} Sync keeps its intended deadline scope and backlog alerts remain durable`, async t => {
+for (const [mode, kind, group] of [['multi', 'group', 'a'], ['multi', 'origin', 'origin'], ['single', 'group', 'origin']]) {
+  test(`${mode} ${kind} Sync keeps its intended deadline scope and backlog alerts remain durable`, async t => {
     const f = routerFixture(t, { mode });
     const scene = { sessionGroup: group, present: true, ready: true, runtime: 'claude',
       runId: 'sync-run', sessionId: 'sync-session', runDir: '/isolated/sync', state: 'idle' };
@@ -21,13 +21,15 @@ for (const [mode, kind, group] of [['multi', 'group', 'a'], ['single', 'global',
     const context = { configuration: { mode }, scenes: [scene], fences: [], restartRequests: [], transition: null };
     const range = { count: 1000, nonempty: true, firstAt: f.now() - 100_000_000,
       alertFirstAt: f.now() - 100_000_000, firstConversationId: 1 };
-    await lifecycle.sendSyncAlert({ type: 'backlog', kind, scope: kind === 'global' ? '*' : scene.sessionGroup, backlog: range.count, lag: 100000 }, context);
+    await lifecycle.sendSyncAlert({ type: 'backlog', kind, scope: scene.sessionGroup, backlog: range.count, lag: 100000 }, context);
     await lifecycle.syncScope(scene, kind, range, context);
     const rows = f.sqlite.prepare('SELECT * FROM control_queue ORDER BY id').all();
     assert.equal(rows.length, 2);
     const alert = rows.find(row => row.content === 'sync backlog alert');
     const sync = rows.find(row => row.content === (kind === 'origin' ? 'origin sync' : 'group sync'));
     assert.ok(alert); assert.ok(sync);
+    assert.equal(alert.session_group, 'origin');
+    assert.equal(sync.session_group, group);
     assert.equal(alert.ack_deadline_at, null, 'backlog alerts retain their existing unbounded lifetime');
     assert.equal(sync.ack_deadline_at, kind === 'origin' ? null : Math.floor(f.now() / 1000) + 300);
     for (const row of rows) {
@@ -310,26 +312,6 @@ test('Origin repair failure gives cursor and lock proof instead of group checkpo
 
 // Actual marker parser + C4 + observer, isolated files only. Run when scene
 // scope mapping changes; no runtime or external process is started.
-test('single state observation preserves current run ownership of the global Sync marker', async t => {
-  const f = observableFixture(t);
-  f.context.configuration.mode = 'single';
-  f.scene.sessionGroup = 'legacy-single';
-  const row = f.db.insertConversation('out', 'system', null, 'global result');
-  f.db.createCheckpoint('*', row.id, 'global checkpoint');
-  const { readSyncMarker, markerPath } = await import('../../../zylos-memory/scripts/sync-lock.js');
-  fs.mkdirSync(f.scene.runDir, { recursive: true });
-  fs.writeFileSync(markerPath(f.scene.runDir, 'global'), JSON.stringify({ runId: f.scene.runId, kind: 'global',
-    token: 'a'.repeat(32), expiresAt: f.now() + 100000 }));
-  const calls = [];
-  f.lifecycle.d.readSyncMarker = args => { calls.push(args); return readSyncMarker(args, { now: f.now }); };
-  await f.lifecycle.syncAlerts(f.context);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].currentRunId, f.scene.runId);
-  assert.equal(calls[0].runDir, f.scene.runDir);
-  assert.equal(f.events('state_uncommitted').length, 0);
-  assert.equal(f.alerts().length, 0);
-});
-
 test('active Sync marker prevents state notification even after its control acknowledgment', async t => {
   const f = observableFixture(t);
   const row = f.db.insertConversation('out', 'system', null, 'group result');

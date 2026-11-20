@@ -18,8 +18,10 @@ const originMessageVisible = shown("'*'", "'void','system','scheduler','control'
 const visibleIn = (range, messages = false) => range?.origin
   ? messages ? originMessageVisible : originVisible
   : messages ? messageVisible : visible;
-// The Origin conversation: the fixed address `dashboard origin`, recorded in group `origin`.
-const originWhere = "c.session_group=@group AND c.channel='dashboard' AND c.endpoint_id='origin'";
+// The Origin conversation shows every row recorded under group `origin`: its
+// own address `dashboard origin`, and in single mode every conversation and
+// external chat, whose rows are recorded under `origin` at delivery.
+const originWhere = 'c.session_group=@group';
 const identity = `CASE WHEN c.session_group = '' THEN 'l:' || hex(c.channel) || ':' || hex(c.endpoint_id)
   ELSE 'g:' || hex(c.session_group) END`;
 
@@ -228,7 +230,7 @@ export class ChatHistory {
       ORDER BY COALESCE(julianday(c.timestamp), 0) DESC, c.id DESC LIMIT 1`, parameters)[0];
     return { id: ORIGIN_CONVERSATION_ID, session_group: ORIGIN, channel: 'dashboard', endpoint_id: ORIGIN,
       stamp: summary?.stamp ?? 0, count: summary?.count ?? 0, previewDirection: latest?.direction ?? null,
-      preview: latest ? conversationPreview(previewContent(latest), { locale }) : '',
+      preview: latest ? conversationPreview(previewContent(latest), { external: latest.channel !== 'dashboard', locale }) : '',
       display_name: ORIGIN_DISPLAY_NAME, localId: ORIGIN, origin: true, draft: false };
   }
 
@@ -341,40 +343,57 @@ export class ChatHistory {
     const quoted = new Map((quoteIds.length ? this._rowsByIds(range, quoteIds,
       'c.id,c.direction,c.timestamp,c.channel,c.endpoint_id,c.content', visibleIn(range, true), false) : [])
       .map(row => [row.id, row]));
+    // The Origin conversation also shows external chats' rows; each row is
+    // presented as its own channel's page would present it.
+    const externalRow = row => tab === 'external' || !['dashboard', 'internal'].includes(row.channel);
     const metadata = new Map();
     if (tab === 'mine' && this.attachments) {
-      const externalRows = batch.filter(row => row.channel !== 'internal');
-      for (let offset = 0; offset < externalRows.length; offset += 100) {
-        for (const [rowId, values] of this.attachments.metadata(externalRows.slice(offset, offset + 100))) {
+      const ownRows = batch.filter(row => row.channel === 'dashboard');
+      for (let offset = 0; offset < ownRows.length; offset += 100) {
+        for (const [rowId, values] of this.attachments.metadata(ownRows.slice(offset, offset + 100))) {
           metadata.set(rowId, values);
         }
       }
     }
-    const rowAttachments = row => row.channel === 'internal' ? [] : tab === 'external'
+    const rowAttachments = row => row.channel === 'internal' ? [] : externalRow(row)
       ? splitContentAndAttachments(row.content).attachments.map(attachment => ({
         name: attachment.name, kind: attachment.kind, sizeLabel: attachment.sizeLabel,
         available: false, external: true,
       })) : metadata.get(row.id) ?? [];
-    const peers = new Map();
+    const peers = new Map(), named = new Map();
+    const names = localId => {
+      if (!named.has(localId)) named.set(localId, this._conversationName(localId));
+      return named.get(localId);
+    };
     const items = (direction === 'before' ? page.reverse() : page).map(row => {
       const marker = rowQuote(row);
       if (marker) {
         const target = quoted.get(marker.id);
         row = { ...row, quote: { id: marker.id, direction: target?.direction ?? null,
           internal: target?.channel === 'internal',
-          timestamp: target?.timestamp ?? null, preview: target ? quotePreview(target, { external: tab === 'external', locale }) : '', available: !!target } };
+          timestamp: target?.timestamp ?? null, preview: target ? quotePreview(target, { external: externalRow(target), locale }) : '', available: !!target } };
       }
       if (row.channel === 'internal') {
         if (!peers.has(row.endpoint_id)) peers.set(row.endpoint_id, this._internalPeer(row.endpoint_id));
         return { ...row, internal: { ...peers.get(row.endpoint_id), content: internalContent(row) }, attachments: [] };
       }
       return { ...row, deliveryState: deliveryState(row),
-        preview: conversationPreview(previewContent(row), { external: tab === 'external', locale }), attachments: rowAttachments(row) };
+        preview: conversationPreview(previewContent(row), { external: externalRow(row), locale }), attachments: rowAttachments(row),
+        ...(range.origin && row.channel === 'dashboard' ? { conversationName: names(row.endpoint_id) } : {}) };
     });
     const newest = items.at(-1)?.id ?? position?.id ?? 0;
     return { items, nextCursor: more ? this._token({ scope: `messages:${tab}:${id}:${direction}`, id: next }) : null,
       afterCursor: this._token({ scope: `messages:${tab}:${id}:after`, id: newest }),
       ...(recheckIds !== undefined ? { attachmentUpdates: rechecked.map(row => ({ id: row.id, attachments: rowAttachments(row) })) } : {}) };
+  }
+
+  /** Name of the Dashboard conversation at a local ID, as the "mine" list names it. */
+  _conversationName(localId) {
+    if (localId === ORIGIN) return ORIGIN_DISPLAY_NAME;
+    try { return this.conversations?.get(localId).displayName ?? null; }
+    catch { /* A group without a Dashboard record is named like the list names it. */ }
+    const namespace = this._query("SELECT namespace FROM channel_namespaces WHERE component_name='dashboard' LIMIT 1", {})[0]?.namespace;
+    return (namespace && this.conversations?.store.getGroupDisplayName(`${namespace}:${localId}`)?.display_name) || localId;
   }
 
   _messageIds(ids) {

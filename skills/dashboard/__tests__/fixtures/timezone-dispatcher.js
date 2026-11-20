@@ -34,7 +34,6 @@ await main({ create: () => createDispatcher({
     fs.writeFileSync(path.join(root, 'verification.json'), JSON.stringify({ pid: process.pid, checks, verdict }));
     return verdict;
   } }),
-  prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
   notifyDelivered: () => {}, maintainDiagnostics: () => {},
   diagnostic(event, fields) { if (event === 'deliver') fs.writeFileSync(path.join(root, 'delivery-settled.json'), JSON.stringify({ pid: process.pid, ...fields })); },
 }, { delivery: { captureEnabled: false, periodicEnabled: false }, pollIntervalMs: 100 }) });

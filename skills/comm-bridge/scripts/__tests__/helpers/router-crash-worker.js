@@ -70,7 +70,7 @@ router = createRouter({ db, now: () => now,
       setImmediate(async () => { await router.stop(); database.close(); process.disconnect(); });
     }
   },
-  handleExpired: async () => {}, prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
+  handleExpired: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
   diagnostic: (event, fields) => record(event, fields), alert: (event, fields) => record('alert', { alert: event, ...fields }),
 }, { poolSize: () => 1, readyTimeoutMs: 1000, pollIntervalMs: 5 });
 await router.initialize();

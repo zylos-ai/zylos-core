@@ -26,7 +26,12 @@ function fixture(t, { create = true, parent = true } = {}) {
   t.after(() => { db?.close(); fs.rmSync(root, { recursive: true, force: true }); });
   assert.ok(file.startsWith(root + path.sep));
   if (parent) fs.mkdirSync(path.dirname(file), { recursive: true });
-  if (create) { db = new Database(file); migrateDatabase(db); }
+  if (create) {
+    db = new Database(file); migrateDatabase(db);
+    // Questions are registered under the conversation of the row's endpoint.
+    db.prepare(`INSERT INTO chat_conversations(local_id,namespace,state,created_at,updated_at)
+      VALUES ('mine','dashboard','active',1,1)`).run();
+  }
   return { root, env, file, db };
 }
 const count = (db, table) => db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)

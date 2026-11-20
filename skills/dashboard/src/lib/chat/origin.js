@@ -16,6 +16,23 @@ export const isOriginRecord = (namespace, localId) => namespace === ORIGIN && lo
 export const conversationGroup = (namespace, localId) =>
   isOriginRecord(namespace, localId) ? ORIGIN : `${namespace}:${localId}`;
 
+/**
+ * Session group of the Dashboard conversation at `endpointId` (its local ID),
+ * independent of the group that recorded a row: in single mode rows of every
+ * conversation are recorded under `origin`. The conversation record gives the
+ * namespace; an existing group without a record falls back to the namespace
+ * Core bound to Dashboard (`readNamespace`), the same rule Core uses to route
+ * the address. Null when neither is known.
+ */
+export function endpointConversationGroup(db, endpointId, readNamespace = () => null) {
+  if (typeof endpointId !== 'string' || !endpointId) return null;
+  const record = db.prepare('SELECT namespace FROM chat_conversations WHERE local_id=?').get(endpointId);
+  if (record?.namespace) return conversationGroup(record.namespace, endpointId);
+  if (endpointId === ORIGIN) return ORIGIN;
+  const namespace = readNamespace();
+  return namespace ? `${namespace}:${endpointId}` : null;
+}
+
 /** Idempotent; called at every Dashboard start, so new installs and upgrades both have it. */
 export function ensureOriginConversation(db, now = Date.now) {
   const stamp = now();

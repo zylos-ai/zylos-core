@@ -298,3 +298,48 @@ test('a missing Dashboard database reports a stored control failure without recr
   assert.equal(f.count('conversations'), 1);
   assert.equal(f.c4Db.prepare('SELECT content FROM conversations WHERE id=?').get(control.id).content, control.content);
 });
+
+// Boundary: real hook-free receiver process over the two private databases.
+// In single mode Core records every conversation's rows under `origin` at
+// delivery; a question and its controls belong to the conversation of the
+// row's endpoint. Run on question registration or control changes.
+const recordUnderOrigin = (f, row) => {
+  f.c4Db.prepare("UPDATE conversations SET session_group='origin' WHERE id=?").run(row.id);
+  return { ...row, session_group: 'origin' };
+};
+
+test('questions recorded under origin register under the conversation each is sent to', t => {
+  const f = setupChannelFixture(t);
+  f.insert('seed other conversation', { direction: 'in', endpoint: 'other', group: 'other' });
+  const first = f.insert(contentFor('single')), second = f.insert(contentFor('single'), { endpoint: 'other', group: 'other' });
+  const groups = [first.session_group, second.session_group];
+  assert.notEqual(groups[0], groups[1]);
+  for (const row of [first, second]) {
+    const result = f.receive(deliveryPacket(recordUnderOrigin(f, row)));
+    assert.equal(result.status, 0, result.stderr);
+  }
+  assert.deepEqual([question(f, first.id).session_group, question(f, second.id).session_group], groups);
+  assert.deepEqual([question(f, first.id).endpoint_id, question(f, second.id).endpoint_id], ['conversation_a', 'other']);
+  assert.equal(question(f, first.id).interrupt_id, question(f, second.id).interrupt_id, 'one interruptId in two conversations');
+});
+
+test('a control recorded under origin applies to the question its conversation asked earlier', t => {
+  const f = setupChannelFixture(t), row = f.insert(contentFor('single'));
+  assert.equal(f.receive(deliveryPacket(row)).status, 0);
+  assert.notEqual(row.session_group, 'origin');
+  const replacement = structuredClone(parseC4Content(contentFor('single')).envelope);
+  replacement.messageId = 'replacement_message'; replacement.interruptId = 'new_question';
+  const replacementRow = recordUnderOrigin(f, f.insert(CONTENT_PREFIX + JSON.stringify(replacement)));
+  assert.equal(f.receive(deliveryPacket(replacementRow)).status, 0);
+  assert.equal(question(f, replacementRow.id).session_group, row.session_group);
+  const control = recordUnderOrigin(f, f.insert(contentFor('replace')));
+  const applied = f.receive(deliveryPacket(control));
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.equal(question(f, row.id).status, 'superseded');
+  assert.equal(question(f, replacementRow.id).status, 'paused');
+  const stop = recordUnderOrigin(f, f.insert(contentFor('stop'), { endpoint: 'other', group: 'other' }));
+  const missing = f.receive(deliveryPacket(stop));
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /Error \[chat_question_not_found\]/);
+  assertStoredWarning(missing);
+});

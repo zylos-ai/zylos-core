@@ -41,7 +41,7 @@ export function validateReply(request, reply) {
       return reply.ok
         ? oneOf(reply.result, ['accepted', 'already_accepted', 'done_empty']) && integer(reply.runCount)
           && (reply.result === 'done_empty' ? reply.runCount === 0 : reply.runCount >= 1)
-        : oneOf(reply.code, ['single_mode', 'manual_restart_pending', 'requests_unreadable', 'request_conflict']);
+        : oneOf(reply.code, ['manual_restart_pending', 'requests_unreadable', 'request_conflict']);
     case 'ready_for_config_reclaim':
       return reply.ok ? oneOf(reply.result, ['accepted', 'already_accepted', 'unchanged'])
         : reply.result === 'rejected' && oneOf(reply.reason, configReasons);
@@ -57,7 +57,7 @@ export function validateReply(request, reply) {
     case 'mode_switch':
       return reply.ok ? reply.result === 'noop' || (reply.result === 'accepted' && nonempty(reply.runId))
         : (reply.code === 'transition_open' && nonempty(reply.runId) && oneOf(reply.target, ['single', 'multi']))
-          || oneOf(reply.code, ['config_unreadable', 'legacy_session_present', 'manual_restart_pending', 'requests_unreadable', 'deletion_in_progress']);
+          || oneOf(reply.code, ['config_unreadable', 'legacy_session_present', 'global_memory_pending', 'manual_restart_pending', 'requests_unreadable', 'deletion_in_progress']);
     default: return false;
   }
 }
