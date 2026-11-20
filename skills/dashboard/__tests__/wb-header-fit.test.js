@@ -4,13 +4,18 @@ import { currentTab, fadeNav, fitHeader, revealTab, watchHeader, NAV_ROW } from 
 
 // Header layout: pure measurement with an injected header and root; no browser,
 // network, timers beyond an injected animation frame, or child processes.
-function fixture({ content = 900, width = 800 } = {}) {
+function fixture({ content = 900, width = 800, paddingRight = 0 } = {}) {
   const classes = new Set(), props = {};
   const root = { classList: { add: name => classes.add(name), remove: name => classes.delete(name), contains: name => classes.has(name) },
     style: { setProperty: (name, value) => { props[name] = value; } } };
   // One row: the content is wider than the header; nav row: everything wraps inside it and the header grows.
-  const header = { get clientWidth() { return width; }, get scrollWidth() { return classes.has(NAV_ROW) ? width : content; },
-    getBoundingClientRect: () => ({ height: classes.has(NAV_ROW) ? 69 : 48 }) };
+  const header = {
+    ownerDocument: { defaultView: { getComputedStyle: () => ({ paddingRight: paddingRight + 'px' }) } },
+    lastElementChild: { getBoundingClientRect: () => ({ right: content }) },
+    get clientWidth() { return width; },
+    get scrollWidth() { return classes.has(NAV_ROW) ? width : Math.max(width, content); },
+    getBoundingClientRect: () => ({ right: width, height: classes.has(NAV_ROW) ? 69 : 48 })
+  };
   return { root, header, classes, props, resize: next => { width = next; } };
 }
 
@@ -23,6 +28,12 @@ test('the navigation gets its own row only while one header row would overflow, 
   assert.equal(fitHeader(f.header, f.root), false);
   assert.equal(f.classes.has(NAV_ROW), false);
   assert.equal(f.props['--wb-header-measured'], '48px', 'board head and drawer follow the real header height, not a guessed one');
+
+  const padded = fixture({ content: 843, width: 844, paddingRight: 47 });
+  assert.equal(padded.header.scrollWidth, padded.header.clientWidth);
+  assert.equal(fitHeader(padded.header, padded.root), true, 'the actions cannot occupy the right inset');
+  padded.resize(900);
+  assert.equal(fitHeader(padded.header, padded.root), false, 'one row fits in the wider content area');
 });
 
 const classList = () => { const set = new Set(); return { set, add: n => set.add(n), remove: n => set.delete(n), contains: n => set.has(n), toggle: (n, on) => { if (on) set.add(n); else set.delete(n); } }; };

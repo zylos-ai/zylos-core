@@ -220,6 +220,19 @@ html.wb-nav-row .app-header .header-left { flex: 0 1 auto; min-width: 0; overflo
 html.wb-nav-row .app-header .tab-bar { order: 10; flex: 0 0 100%; margin: 0 -16px; padding: 0 12px 6px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
 html.wb-nav-row .app-header .tab-bar::-webkit-scrollbar { display: none; }
 html.wb-nav-row .app-header .tab { flex: none; }
+/* Landscape phones and tablets use the desktop shell even in standalone mode. */
+@media (min-width: 761px) {
+  .app-header {
+    height: calc(48px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+  }
+  html.wb-nav-row .app-header { min-height: calc(48px + env(safe-area-inset-top)); }
+  html.wb-nav-row .app-header .tab-bar {
+    margin-left: min(0px, calc(env(safe-area-inset-left) - 16px));
+    margin-right: min(0px, calc(env(safe-area-inset-right) - 16px));
+  }
+  .view-stack { padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left); }
+}
 /* Where you are: settings is not a section of the navigation, so while it is open the navigation ends in a
    "Settings" entry marked as the current page, and the gear that opened it reads as pressed. */
 .app-header .tab.wb-tab-here { display: none; }
@@ -390,7 +403,7 @@ html[data-detail=plain] .wb-tech-col { display: none; }
   #tab-overview.wb-has-side .wb-row > .wb-queue { display: none; }
 }
 #wb-side[hidden], .wb-auto-name-dialog[hidden] { display: none; }
-#wb-side { position: fixed; top: var(--wb-header-h); right: 0; bottom: 0; z-index: 15; width: 480px; display: flex; flex-direction: column; border-left: 1px solid var(--wb-line); background: var(--wb-side); box-shadow: var(--wb-shadow); overflow-wrap: anywhere; }
+#wb-side { position: fixed; top: var(--wb-header-h); right: env(safe-area-inset-right); bottom: 0; z-index: 15; width: 480px; display: flex; flex-direction: column; border-left: 1px solid var(--wb-line); background: var(--wb-side); box-shadow: var(--wb-shadow); overflow-wrap: anywhere; }
 #wb-side button { font-family: inherit; }
 .wb-detail-header { flex: none; padding: 14px 18px 0; border-bottom: 1px solid var(--wb-line); background: var(--wb-side); }
 .wb-d-top { display: flex; align-items: center; gap: 8px; }
@@ -557,6 +570,10 @@ html[data-detail=plain] #observer-tab { display: none!important; }
 
 @media (max-width: 900px) {
   #wb-side:not([hidden]) { inset: 0; z-index: 55; width: auto; border-left: 0; box-shadow: none; }
+  :is(#wb-side, .wb-sched-side, .conversation-page > .wb-group-side) {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
   .wb-detail-header { padding-top: max(14px, env(safe-area-inset-top)); }
   .wb-detail-body { padding-bottom: env(safe-area-inset-bottom); }
   /* Touch screens have no tooltip, so the drawer actions carry their names. */
@@ -739,7 +756,7 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
 .wb-sched-notice { color: var(--text-dim); }
 .wb-sched-valid { color: var(--wb-work); }
 /* Drawer */
-.wb-sched-side { position: fixed; top: var(--wb-header-h); right: 0; bottom: 0; z-index: 15; width: 480px; display: flex; flex-direction: column; border-left: 1px solid var(--wb-line); background: var(--wb-side); box-shadow: var(--shadow-card); overflow-wrap: anywhere; }
+.wb-sched-side { position: fixed; top: var(--wb-header-h); right: env(safe-area-inset-right); bottom: 0; z-index: 15; width: 480px; display: flex; flex-direction: column; border-left: 1px solid var(--wb-line); background: var(--wb-side); box-shadow: var(--shadow-card); overflow-wrap: anywhere; }
 .wb-sched-side[hidden] { display: none; }
 .wb-sched-detail { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .wb-sched-detail .wb-detail-header { padding-bottom: 12px; }
@@ -1157,7 +1174,7 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 main:has(> #tab-settings.active) { padding: 0; }
 #tab-settings.active { display: block; }
 .wb-set { display: flex; min-height: calc(100dvh - var(--wb-header-h)); background: linear-gradient(to right, var(--wb-side) 0 208px, var(--wb-line) 208px 209px, transparent 209px); }
-.wb-set-nav { position: sticky; top: var(--wb-header-h); align-self: flex-start; width: 209px; flex: none; max-height: calc(100dvh - var(--wb-header-h)); display: flex; flex-direction: column; gap: 2px; padding: 14px 9px 14px 8px; overflow: auto; }
+.wb-set-nav { position: sticky; top: var(--wb-header-h); align-self: flex-start; width: 209px; flex: none; max-height: calc(100dvh - var(--wb-header-h) - env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 2px; padding: 14px 9px 14px 8px; overflow: auto; }
 .wb-set-nav-btn { display: flex; align-items: center; gap: 9px; width: 100%; height: 34px; padding: 0 10px; border: 0; border-radius: var(--wb-r); background: transparent; color: var(--text-dim); font-size: 13px; text-align: left; white-space: nowrap; cursor: pointer; }
 .wb-set-nav-btn:hover { background: var(--wb-hover); color: var(--text); }
 .wb-set-nav-btn[aria-current="true"] { background: var(--wb-accent-soft); color: var(--accent); font-weight: 600; }
@@ -1462,7 +1479,7 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 @media (max-width: 760px) {
   .wb-set { flex-direction: column; background: none; }
   /* Phones: the sections live in a drawer that slides in from the left; a button at the top of the page names the current section. */
-  .wb-set-nav { position: fixed; top: 0; bottom: 0; left: 0; z-index: 61; align-self: stretch; width: min(300px, 84vw); max-height: none; padding: 8px 10px 16px; border-right: 1px solid var(--wb-line); background: var(--wb-panel); box-shadow: var(--wb-shadow); transform: translateX(-104%); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; }
+  .wb-set-nav { position: fixed; top: 0; bottom: 0; left: 0; z-index: 61; align-self: stretch; width: min(300px, 84vw); max-height: none; padding: calc(8px + env(safe-area-inset-top)) 10px calc(16px + env(safe-area-inset-bottom)) calc(10px + env(safe-area-inset-left)); border-right: 1px solid var(--wb-line); background: var(--wb-panel); box-shadow: var(--wb-shadow); transform: translateX(-104%); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; }
   .wb-set-drawer-open .wb-set-nav { transform: none; visibility: visible; transition: transform .2s ease; }
   .wb-set-drawer-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; padding: 2px 2px 8px 8px; border-bottom: 1px solid var(--wb-line); font-size: 14px; white-space: nowrap; }
   .wb-set-nav-btn { height: auto; min-height: 44px; font-size: 14.5px; }
@@ -1598,12 +1615,13 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 @media (max-width: 760px) {
   /* Keep the desktop shell hidden until mobile navigation and the address tab are ready. */
   html:not(.wb-mobile-ready) :is(.app-header, .view-stack) { visibility: hidden; }
-  html.wb-mobile-ready { --wb-header-h: 52px; }
+  html.wb-mobile-ready { --wb-header-h: calc(52px + env(safe-area-inset-top)); }
   html.wb-mobile-ready body { padding-bottom: calc(56px + env(safe-area-inset-bottom)); }
   html.wb-mobile-ready .app-header { display: none; }
   html.wb-mobile-ready .wb-mobile-topbar {
     position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 8px;
-    height: 52px; padding: 0 6px 0 16px; border-bottom: 1px solid var(--wb-line);
+    height: var(--wb-header-h); padding: env(safe-area-inset-top) calc(6px + env(safe-area-inset-right)) 0 calc(16px + env(safe-area-inset-left));
+    border-bottom: 1px solid var(--wb-line);
     background: var(--nav-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
   }
   .wb-mobile-topbar h1 { flex: 1; min-width: 0; margin: 0; font-size: 17px; font-weight: 600; line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1616,7 +1634,7 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   .wb-mobile-icon-button:disabled { opacity: .4; cursor: default; }
   html.wb-mobile-ready .wb-mobile-tabs {
     position: fixed; z-index: 40; bottom: 0; left: 0; right: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
-    padding-bottom: env(safe-area-inset-bottom); border-top: 1px solid var(--wb-line); background: var(--nav-bg);
+    padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); border-top: 1px solid var(--wb-line); background: var(--nav-bg);
     backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
   }
   .wb-mobile-tab {
@@ -1633,7 +1651,8 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   }
   html.wb-mobile-ready .wb-mobile-sheet {
     display: block; position: fixed; z-index: 211; left: 0; right: 0; bottom: 0; overflow-y: auto;
-    max-height: calc(100dvh - 24px); padding: 6px 0 calc(12px + env(safe-area-inset-bottom));
+    max-height: calc(100dvh - max(24px, env(safe-area-inset-top)));
+    padding: 6px env(safe-area-inset-right) calc(12px + env(safe-area-inset-bottom)) env(safe-area-inset-left);
     border-radius: 16px 16px 0 0; background: var(--c-raised); box-shadow: var(--wb-shadow);
   }
   .wb-mobile-sheet-grab { width: 36px; height: 4px; border-radius: 2px; margin: 4px auto 8px; background: var(--wb-line-strong); }

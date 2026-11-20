@@ -173,6 +173,9 @@ function initTheme(theme) {
   stopTheme?.();
   stopTheme = observeTheme(selected, value => {
     document.documentElement.dataset.theme = value;
+    for (const meta of document.querySelectorAll('meta[name="theme-color"][data-theme]')) {
+      meta.media = meta.dataset.theme === value ? 'all' : 'not all';
+    }
     usagePage?.setViewDetail();
     workbench?.setViewDetail();
   });
