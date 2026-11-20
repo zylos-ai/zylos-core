@@ -1,4 +1,5 @@
 import { auth } from './auth.js';
+import { busy } from './busy.js';
 import { instructions } from './instructions.js';
 import { input } from './input.js';
 import { sessionSwitch } from './switch.js';
@@ -32,6 +33,7 @@ export default Object.freeze({
   launch: Object.freeze({ prepare, preAccept, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags, checkAutonomous }),
   instructions,
   input,
+  busy,
   switch: sessionSwitch,
   hooks: Object.freeze({ sessionIdEnv: 'CLAUDE_SESSION_ID' }),
 });
