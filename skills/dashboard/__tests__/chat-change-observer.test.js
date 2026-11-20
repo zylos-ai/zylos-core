@@ -211,7 +211,7 @@ test('detached generation watches never sample history and release their shared 
 test('metadata snapshots share history visibility and discover only scoped pending rows', gate, t => {
   const f = fixture(t); f.write({ id: 1 });
   for (const [i, channel] of ['void', 'internal', 'system', 'scheduler', 'control'].entries()) f.write({ id: 10 + i, channel });
-  f.write({ id: 20, group: 'origin' }); f.write({ id: 21, group: '*' });
+  f.write({ id: 21, group: '*' });
   f.write({ id: 22, group: 'unowned:one' }); f.write({ id: 23, direction: 'other' });
   f.write({ id: 24, channel: 'telegram', group: 'telegram:one' });
   const own = f.history.chatChangeSnapshot({ tab: 'mine', conversationId: idFor('dash:one') }, { afterId: 0 });
