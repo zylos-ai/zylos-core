@@ -1,11 +1,15 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import crypto from 'node:crypto';
+import crypto, { randomUUID } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { parse, stringify } from 'smol-toml';
-import { SIDE_EFFECT_NAMES, buildChain } from '../../skills/activity-monitor/scripts/shard-registry.js';
-import { extractScriptPath, hookEntryTarget, HOOK_ENTRY_SCRIPT } from './hook-utils.js';
+import { parse as parseDotEnv } from 'dotenv';
+import { SIDE_EFFECT_NAMES, buildChain } from '../../../../skills/activity-monitor/scripts/shard-registry.js';
+import { extractScriptPath, hookEntryTarget, HOOK_ENTRY_SCRIPT } from '../../hook-utils.js';
+import { UNSUPPORTED } from '../contract.js';
+
+const ZYLOS_DIR = path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
 
 const SESSION_START = 'SessionStart';
 const CODEX_EVENT_KEYS = {
@@ -682,3 +686,325 @@ export const _test = {
   stableJson,
   parseToml,
 };
+
+const CODEX_PROJECT_HEADER = [
+  '# Zylos project-level Codex config.',
+  '# Zylos applies overwrite, backfill, key-level, and exact-replacement settings; other settings are preserved.',
+].join('\n');
+
+const CODEX_GLOBAL_HEADER = [
+  '# Codex global config.',
+  '# Zylos manages its project trust entry and optional base URL; other settings are preserved.',
+].join('\n');
+
+const CODEX_NOTICE = {
+  hide_full_access_warning: true,
+  hide_world_writable_warning: true,
+  hide_rate_limit_model_nudge: true,
+  hide_gpt5_1_migration_prompt: true,
+  'hide_gpt-5.1-codex-max_migration_prompt': true,
+};
+
+const CODEX_MODEL_MIGRATIONS = {
+  'gpt-5.3-codex': 'gpt-5.4',
+};
+
+function tomlWithHeader(header, obj) {
+  return `${header}\n\n${stringify(obj)}`;
+}
+
+// This comment records only keys inserted by Zylos, never user values/secrets.
+// Keeping it in the same file makes config + ownership one write. If another
+// TOML writer strips it, the values become user-owned and are not auto-removed.
+const PERMISSION_MARKER = '# zylos-managed-permission-defaults: ';
+const PERMISSION_DEFAULTS = { approval_policy: 'never', sandbox_mode: 'danger-full-access' };
+
+function applyCodexPermissionDefaults(obj, content, bypass) {
+  const marker = content.split('\n').find(line => line.startsWith(PERMISSION_MARKER));
+  const previous = new Set(marker?.slice(PERMISSION_MARKER.length).split(',') ?? []);
+  const owned = [];
+  for (const [key, value] of Object.entries(PERMISSION_DEFAULTS)) {
+    const stillOwned = previous.has(key) && obj[key] === value;
+    // Explicit named or workspace configuration takes over sandbox ownership.
+    const sandboxConfigured = obj.default_permissions !== undefined || obj.sandbox_workspace_write !== undefined;
+    const enabled = bypass && !(key === 'sandbox_mode' && sandboxConfigured);
+    if (!enabled) {
+      if (stillOwned) delete obj[key];
+    } else if (obj[key] === undefined || stillOwned) {
+      obj[key] = value;
+      owned.push(key);
+    }
+  }
+  return owned.length ? PERMISSION_MARKER + owned.join(',') : '';
+}
+
+export function resolveCodexBypassPermissions(projectDir, opts = {}) {
+  if (opts.bypassPermissions != null) return opts.bypassPermissions;
+  if (process.env.CODEX_BYPASS_PERMISSIONS !== undefined) {
+    return process.env.CODEX_BYPASS_PERMISSIONS !== 'false';
+  }
+  try {
+    const env = parseDotEnv(fs.readFileSync(path.join(projectDir, '.env'), 'utf8'));
+    if (env.CODEX_BYPASS_PERMISSIONS !== undefined) return env.CODEX_BYPASS_PERMISSIONS !== 'false';
+  } catch (err) { if (err.code !== 'ENOENT') throw err; }
+  return true;
+}
+
+function writeCodexProjectConfigAtomically(configPath, content) {
+  // Preserve a user-managed symlink instead of replacing the link itself.
+  let target = configPath;
+  let mode = 0o600;
+  let existing;
+  try { existing = fs.lstatSync(configPath); }
+  catch (err) { if (err.code !== 'ENOENT') throw err; }
+  if (existing) {
+    if (existing.isSymbolicLink()) target = fs.realpathSync(configPath);
+    mode = fs.statSync(target).mode & 0o777;
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const temporary = `${target}.tmp.${randomUUID()}`;
+  let fd;
+  let created = false;
+  try {
+    fd = fs.openSync(temporary, 'wx', mode);
+    created = true;
+    fs.fchmodSync(fd, mode); // Preserve existing mode even under a stricter umask.
+    fs.writeFileSync(fd, content, 'utf8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(temporary, target);
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch { /* best effort */ }
+    if (created) try { fs.unlinkSync(temporary); } catch { /* renamed or already absent */ }
+  }
+}
+
+export function writeCodexProjectConfig(projectDir, opts = {}) {
+  const configPath = path.join(path.resolve(projectDir), '.codex', 'config.toml');
+  let existing = '';
+  try { existing = fs.readFileSync(configPath, 'utf8'); }
+  catch (err) { if (err.code !== 'ENOENT') throw err; }
+  const bypassPermissions = resolveCodexBypassPermissions(projectDir, opts);
+  const content = renderCodexProjectConfig(existing, { bypassPermissions });
+  if (bypassPermissions) {
+    const config = parse(content);
+    if (config.approval_policy !== 'never'
+      || (config.default_permissions !== undefined
+        ? config.default_permissions !== ':danger-full-access'
+        : config.sandbox_mode !== 'danger-full-access')) {
+      console.warn('Warning: explicit Codex project permissions are preserved; unattended resume may be restricted or require approval.');
+    }
+  }
+  if (content !== existing) {
+    writeCodexProjectConfigAtomically(configPath, content);
+    opts.onWrite?.(configPath);
+  }
+}
+
+/**
+ * Render project-level .codex/config.toml with headless configuration.
+ *
+ * Contains settings required for zylos unattended operation: interactive prompt
+ * suppression, feature flags, and model migration acknowledgements. These are
+ * project requirements, not user preferences.
+ *
+ * Written to <projectDir>/.codex/config.toml (Codex project-level config).
+ *
+ * @param {string} existingContent - Existing project config.toml contents (optional)
+ * @param {{ bypassPermissions?: boolean }} opts - Whether to backfill unattended permissions
+ * @returns {string}
+ */
+export function renderCodexProjectConfig(existingContent = '', opts = {}) {
+  // Do not turn malformed user configuration into unattended full access.
+  const obj = existingContent.trim() ? parse(existingContent) : {};
+  const permissionHeader = applyCodexPermissionDefaults(obj, existingContent, opts.bypassPermissions ?? true);
+
+  // Always overwrite: these values are required for unattended Zylos runtime behavior.
+  obj.check_for_update_on_startup = false;
+  obj.model_availability_nux = 'gpt-5.4';
+
+  // Backfill: default only when the user has not configured a value.
+  if (obj.model === undefined) obj.model = 'gpt-6.2-sol';
+  if (obj.model_reasoning_effort === undefined) obj.model_reasoning_effort = 'medium';
+
+  obj.features = isSection(obj.features) ? obj.features : {};
+  obj.features.multi_agent = true;
+  obj.features.fast_mode = false;
+  obj.features.hooks = true;
+
+  const existingNotice = isSection(obj.notice) ? obj.notice : {};
+  const notice = { ...CODEX_NOTICE };
+  for (const [key, value] of Object.entries(existingNotice)) {
+    if (key !== 'model_migrations' && isSection(value)) {
+      notice[key] = value;
+    }
+  }
+  notice.model_migrations = { ...CODEX_MODEL_MIGRATIONS };
+  obj.notice = notice;
+
+  return tomlWithHeader([CODEX_PROJECT_HEADER, permissionHeader].filter(Boolean).join('\n'), obj);
+}
+
+/**
+ * Render global ~/.codex/config.toml with user/environment-level settings.
+ *
+ * Contains only trust declarations and optional base URL override.
+ * Existing [projects.*] trust entries are preserved; the zylos project trust
+ * entry is always regenerated.
+ *
+ * @param {string} projectDir - The zylos working directory to pre-trust
+ * @param {string} existingContent - Existing global config.toml contents (optional)
+ * @param {{ openaiBaseUrl?: string }} opts - Optional Codex config overrides
+ * @returns {string}
+ */
+export function renderCodexGlobalConfig(projectDir, existingContent = '', opts = {}) {
+  const absProject = path.resolve(projectDir);
+  const openaiBaseUrl = opts.openaiBaseUrl || process.env.OPENAI_BASE_URL || '';
+  const obj = parseToml(existingContent);
+  if (openaiBaseUrl) {
+    obj.openai_base_url = openaiBaseUrl;
+  }
+  obj.features = isSection(obj.features) ? obj.features : {};
+  obj.features.hooks = true;
+  obj.projects = isSection(obj.projects) ? obj.projects : {};
+  obj.projects[absProject] = { trust_level: 'trusted' };
+  return tomlWithHeader(CODEX_GLOBAL_HEADER, obj);
+}
+
+/**
+ * Write Codex configuration to both project-level and global locations.
+ *
+ * - Project config (<projectDir>/.codex/config.toml): headless settings,
+ *   features, notice suppression — required for zylos unattended operation.
+ * - Global config (~/.codex/config.toml): trust declarations, optional
+ *   base URL override.
+ *
+ * Called by both `zylos init` (Codex runtime) and `zylos runtime codex` so the
+ * config is always present when switching to Codex.
+ *
+ * @param {string} projectDir - The zylos working directory to pre-trust
+ * @returns {boolean} true on success
+ */
+export function writeCodexConfig(projectDir, opts = {}) {
+  try {
+    writeCodexProjectConfig(projectDir, opts);
+
+    // Write global config
+    const globalCodexDir = path.join(os.homedir(), '.codex');
+    const globalConfigPath = path.join(globalCodexDir, 'config.toml');
+    let existing = '';
+    try {
+      existing = fs.readFileSync(globalConfigPath, 'utf8');
+    } catch { /* new file — nothing to preserve */ }
+    fs.mkdirSync(globalCodexDir, { recursive: true });
+    fs.writeFileSync(
+      globalConfigPath,
+      renderCodexGlobalConfig(projectDir, existing, opts),
+      'utf8'
+    );
+    opts.onWrite?.(globalConfigPath);
+
+    installCoreCodexHook({ zylosDir: projectDir, onWrite: opts.onWrite });
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function syncCodexConfig({
+  dryRun = false,
+  projectDir = ZYLOS_DIR,
+  homeDir = os.homedir(),
+  readFileSync = fs.readFileSync,
+  writeConfig = writeCodexConfig,
+  checkHooks = installCoreCodexHook,
+  onWrite,
+  log = console.log,
+} = {}) {
+  const globalConfigPath = path.join(homeDir, '.codex', 'config.toml');
+  const projectConfigPath = path.join(path.resolve(projectDir), '.codex', 'config.toml');
+
+  // Check both project-level and global config for drift
+  let existingGlobal = '';
+  try { existingGlobal = readFileSync(globalConfigPath, 'utf8'); } catch {}
+  let existingProject = '';
+  try { existingProject = readFileSync(projectConfigPath, 'utf8'); } catch {}
+
+  let desiredProject;
+  try {
+    const bypassPermissions = resolveCodexBypassPermissions(projectDir);
+    desiredProject = renderCodexProjectConfig(existingProject, { bypassPermissions });
+  } catch {
+    const error = 'Failed to refresh Codex project config: check TOML syntax and deployment environment.';
+    log(`  Warning: ${error}`);
+    return { attempted: true, changed: false, fatal: true, error };
+  }
+  const desiredGlobal = renderCodexGlobalConfig(projectDir, existingGlobal);
+  // .codex/hooks.json drifts independently of the TOML configs: a component
+  // shard declaration adds SessionStart commands without touching either
+  // config file. Compare the desired hook set with the file content itself.
+  const hooksCheck = checkHooks({ zylosDir: projectDir, dryRun: true });
+  if (existingProject === desiredProject && existingGlobal === desiredGlobal && !hooksCheck.changed) {
+    return { attempted: true, changed: false, fatal: false };
+  }
+
+  if (dryRun) {
+    if (existingProject !== desiredProject) log(`  ~ codex project config: ${projectConfigPath}`);
+    if (existingGlobal !== desiredGlobal) log(`  ~ codex global config: ${globalConfigPath}`);
+    if (hooksCheck.changed) log(`  ~ codex hooks: ${hooksCheck.path}`);
+    return { attempted: true, changed: true, hooksChanged: hooksCheck.changed, fatal: false };
+  }
+
+  if (!writeConfig(projectDir, { onWrite })) {
+    return {
+      attempted: true,
+      changed: false,
+      fatal: true,
+      error: 'Failed to refresh codex config.',
+    };
+  }
+
+  if (existingProject !== desiredProject) log(`  ~ codex project config: ${projectConfigPath}`);
+  if (existingGlobal !== desiredGlobal) log(`  ~ codex global config: ${globalConfigPath}`);
+  if (hooksCheck.changed) log(`  ~ codex hooks: ${hooksCheck.path}`);
+  return { attempted: true, changed: true, hooksChanged: hooksCheck.changed, fatal: false };
+}
+
+async function sync({ zylosDir = ZYLOS_DIR, dryRun } = {}) {
+  const config = syncCodexConfig({ dryRun, projectDir: zylosDir });
+  if (config.fatal) {
+    console.error(config.error);
+    throw new Error(config.error);
+  }
+
+  // Config synchronization may already have refreshed hooks.json.
+  const installed = dryRun ? { changed: false } : installCoreCodexHook({ zylosDir });
+  const entry = { ...installed, changed: installed.changed || (!dryRun && Boolean(config.hooksChanged)) };
+  if (entry.changed) console.log('Codex hooks: updated; they take effect at the next Codex session start.');
+
+  return {
+    entry,
+    changed: config.changed || entry.changed,
+    restart: entry.changed,
+    fragments: {
+      dryRun: config.changed ? ', codex config to refresh' : '',
+      done: `${config.changed ? ', Codex config refreshed' : ''}${entry.changed ? ', Codex hooks refreshed' : ''}`,
+      upToDate: `Codex config ${config.changed ? 'refreshed' : 'unchanged'}`,
+    },
+  };
+}
+
+export const hooks = Object.freeze({
+  sessionIdEnv: 'CODEX_SESSION_ID',
+  sync,
+  syncPolicy: 'always',
+  optedIn: UNSUPPORTED,
+  ready: async ({ zylosDir }) => isCodexTrustValid({ zylosDir, projectDir: zylosDir, codexVersion: getCodexVersion() }).valid,
+  trust: async ({ zylosDir }) => ensureCodexHooksTrusted({ zylosDir }),
+  features: UNSUPPORTED,
+  stage: UNSUPPORTED,
+  writeConfig: syncCodexConfig,
+  installHooks: installCoreCodexHook,
+});

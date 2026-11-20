@@ -13,7 +13,7 @@ import { launchEnvironment, validateLaunchConfig } from '../session-command.js';
 import { readTargetRuntime } from '../session-target.js';
 import { modelThreshold, thresholdLimit } from '../../model-rotation-thresholds.js';
 import { applyUpgradePrompt } from '../upgrade-context.js';
-import { agyConfigurationPaths, isAgyConfigReady } from '../../agy-setup.js';
+import { agyConfigurationPaths, isAgyConfigReady } from '../../runtime/agy/hooks.js';
 
 function probeExecutor({ status = 200, error = null, inspect = () => {} } = {}) {
   return (command, args, options, callback) => {

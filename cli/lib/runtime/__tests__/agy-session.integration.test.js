@@ -10,7 +10,7 @@ import { openTmuxConnection } from '../tmux-connection.js';
 import { resolveSessionTarget } from '../session-target.js';
 import { groupRunDir } from '../../session-group-paths.js';
 import { readPaneProcess } from '../pane-process.js';
-import { agyConfigurationPaths, isAgyConfigReady } from '../../agy-setup.js';
+import { agyConfigurationPaths, isAgyConfigReady } from '../../runtime/agy/hooks.js';
 
 // Integration boundary: real agy adapter launch, environment, identity and paste
 // through a private tmux socket, using a synthetic CLI and no model/API calls.

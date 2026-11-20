@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { it } from 'node:test';
-import { installCoreCodexHook, codexHooksPath } from '../codex-hooks.js';
+import { installCoreCodexHook, codexHooksPath } from '../runtime/codex/hooks.js';
 import { SessionActivity } from '../../../skills/activity-monitor/scripts/session-activity.js';
 import { groupRunDir } from '../session-group-paths.js';
 

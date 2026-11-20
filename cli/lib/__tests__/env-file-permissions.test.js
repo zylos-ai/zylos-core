@@ -92,7 +92,7 @@ describe('.env file permissions', { skip: !posix && 'POSIX permission bits only'
     fs.writeFileSync(path.join(process.env.ZYLOS_DIR, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude' }));
     const initModule = new URL('../../commands/init.js', import.meta.url).href;
     execFileSync(process.execPath, ['--input-type=module', '--eval',
-      `import { deployTemplates } from ${JSON.stringify(initModule)}; deployTemplates();`], {
+      `import { deployTemplates } from ${JSON.stringify(initModule)}; await deployTemplates();`], {
       stdio: 'pipe', env: { ...process.env, HOME: tmpRoot, ZYLOS_DIR: process.env.ZYLOS_DIR },
     });
     assert.equal(mode(envFile), '600');

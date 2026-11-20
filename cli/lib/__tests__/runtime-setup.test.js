@@ -18,7 +18,7 @@ process.env.ZYLOS_DIR = fakeZylosDir;
 fs.mkdirSync(fakeHome, { recursive: true });
 fs.mkdirSync(fakeZylosDir, { recursive: true });
 
-const { writeCodexConfig, renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexProjectConfig, resolveCodexBypassPermissions } = await import('../runtime-setup.js');
+const { writeCodexConfig, renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexProjectConfig, resolveCodexBypassPermissions } = await import('../runtime/codex/hooks.js');
 const { parseClaudeAuthStatus, parseCodexLoginStatus, classifyCodexLoginStatus } = await import('../auth-parsers.js');
 
 before(() => {

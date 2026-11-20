@@ -7,7 +7,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
-import { resolveCodexBypassPermissions } from '../runtime-setup.js';
+import { resolveCodexBypassPermissions } from '../runtime/codex/hooks.js';
 import { readEnvTimezone, needsBypassAcceptance } from '../../commands/init.js';
 import { ZYLOS_DIR } from '../config.js';
 import { createPrivateFixture, runPrivateFixture } from '../../../test/helpers/private-instance-fixture.js';

@@ -92,9 +92,9 @@ const wait = async (predicate, label, timeoutMs = 90000) => {
 try {
   const load = relative => import(pathToFileURL(path.join(packageRoot, relative)).href);
   const { syncRuntimeHooks } = await load('cli/lib/sync-runtime-hooks.js');
-  const { writeCodexConfig } = await load('cli/lib/runtime-setup.js');
+  const { writeCodexConfig } = await load('cli/lib/runtime/codex/hooks.js');
   // These functions configure only the already-created private fixture homes.
-  syncRuntimeHooks({ zylosDir: root, stopFailureSupported: true, log() {} });
+  await syncRuntimeHooks({ zylosDir: root, stopFailureSupported: true, log() {} });
   const resources = prepareNativeRuntimeResources(sandbox);
   check(resources.agents.length === 3 && resources.agents.every(name => fs.existsSync(path.join(resources.destination, name))), 'Packaged memory agents installed for native Sync');
   check(fs.realpathSync(resources.codexSkill) === fs.realpathSync(resources.memorySkill)

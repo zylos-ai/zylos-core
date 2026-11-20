@@ -82,7 +82,7 @@ describe('base URL support', () => {
     process.env.OPENAI_BASE_URL = 'https://openai-proxy.example.com/v1';
 
     try {
-      const { writeCodexConfig } = await import('../runtime-setup.js');
+      const { writeCodexConfig } = await import('../runtime/codex/hooks.js');
 
       assert.equal(writeCodexConfig(path.join(tmpRoot, 'zylos-project')), true);
 
@@ -109,7 +109,7 @@ describe('base URL support', () => {
     delete process.env.OPENAI_BASE_URL;
 
     try {
-      const { writeCodexConfig } = await import('../runtime-setup.js');
+      const { writeCodexConfig } = await import('../runtime/codex/hooks.js');
 
       assert.equal(
         writeCodexConfig(path.join(tmpRoot, 'zylos-project'), { openaiBaseUrl: 'https://explicit-proxy.example.com/v1' }),

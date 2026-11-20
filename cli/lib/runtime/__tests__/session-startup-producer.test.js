@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { stringify } from 'smol-toml';
-import { installCoreCodexHook, codexHooksPath, codexTrustMarkerPath, ensureHooksFeature } from '../../codex-hooks.js';
+import { installCoreCodexHook, codexHooksPath, codexTrustMarkerPath, ensureHooksFeature } from '../../runtime/codex/hooks.js';
 
 const exec = promisify(execFile);
 const runtimeDir = fileURLToPath(new URL('../', import.meta.url));

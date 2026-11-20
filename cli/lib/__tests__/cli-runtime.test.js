@@ -66,6 +66,23 @@ test('runtime switch installs a missing Antigravity CLI before saving the defaul
   assert.ok(result.data.warnings.some(({ code, message }) => code === 'RUNTIME_CLI_INSTALL_NOTICE' && message === 'N'));
 });
 
+test('runtime switch reports the default readiness error when the Codex binary is unavailable', async t => {
+  const previous = process.env.CODEX_BIN;
+  process.env.CODEX_BIN = path.join(process.env.ZYLOS_DIR, 'bin', 'missing-codex');
+  t.after(() => {
+    if (previous === undefined) delete process.env.CODEX_BIN;
+    else process.env.CODEX_BIN = previous;
+  });
+
+  const f = fixture({ hooksReady: undefined });
+  const result = await f.run(['--no-validate']);
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'RUNTIME_SETUP_INCOMPLETE');
+  assert.match(result.error.message, /^Could not check Zylos setup for Codex: .*ENOENT/);
+  assert.deepEqual(result.error.persisted, []);
+  assert.deepEqual(f.calls, ['adapter', 'read', 'exists']);
+});
+
 test('runtime switch stops before credential or config writes when Antigravity installation fails', async () => {
   const f = fixture({ target: 'agy', findExecutable: () => null, prepareCli: () => ({
     failed: [{ item: 'agy.cli', message: 'M' }],

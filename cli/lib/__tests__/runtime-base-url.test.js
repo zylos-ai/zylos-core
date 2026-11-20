@@ -33,7 +33,7 @@ describe('runtime base URL support', () => {
   test('Codex readiness returns objects for missing instructions and valid or invalid real trust', async t => {
     const { runtimeHooksReady } = await import('../../commands/runtime.js');
     const { installCoreCodexHook, codexHooksPath, codexTrustMarkerPath, hookKeyFor,
-      isCodexTrustValid } = await import('../codex-hooks.js');
+      isCodexTrustValid } = await import('../runtime/codex/hooks.js');
     const { stringify } = await import('smol-toml');
     const root = process.env.ZYLOS_DIR;
     const instruction = path.join(root, 'AGENTS.md');
@@ -68,7 +68,7 @@ describe('runtime base URL support', () => {
     const installed = path.join(process.env.ZYLOS_DIR, '.claude', 'settings.json');
     assert.deepEqual(await runtimeHooksReady('claude'), { ready: false, pendingMigration: true });
     fs.writeFileSync(instruction, 'legacy instructions\n');
-    syncRuntimeHooks({ zylosDir: process.env.ZYLOS_DIR });
+    await syncRuntimeHooks({ zylosDir: process.env.ZYLOS_DIR });
     const good = fs.readFileSync(installed);
     const userSettings = path.join(tmpRoot, '.claude', 'settings.json');
     fs.mkdirSync(path.dirname(userSettings), { recursive: true });

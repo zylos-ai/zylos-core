@@ -76,7 +76,7 @@ test('init template generator migrates legacy thresholds, prepares dual hooks an
   fs.writeFileSync(configPath, config);
   const result = run(context, `
     import { prepareInitRuntimeAssets, syncSettingsHooksAfterTemplateDeploy } from ${JSON.stringify(initUrl)};
-    syncSettingsHooksAfterTemplateDeploy();
+    await syncSettingsHooksAfterTemplateDeploy();
     const result = await prepareInitRuntimeAssets({ instruction: () => ${JSON.stringify(instruction)} });
     console.log(JSON.stringify(result));
   `);

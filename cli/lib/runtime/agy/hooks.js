@@ -2,8 +2,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ZYLOS_DIR } from './config.js';
-import { writePrivateFile } from './private-file.js';
+import { ZYLOS_DIR } from '../../config.js';
+import { writePrivateFile } from '../../private-file.js';
+import { UNSUPPORTED } from '../contract.js';
 
 function objectFile(file) {
   try {
@@ -73,3 +74,16 @@ export function hasAgyZylosHooks(home = os.homedir()) {
   try { return Object.hasOwn(objectFile(agyConfigurationPaths(home).hooks), 'zylos'); }
   catch { return false; }
 }
+
+export const hooks = Object.freeze({
+  sessionIdEnv: UNSUPPORTED,
+  sync: async options => syncAgyConfig(options),
+  syncPolicy: 'opted-in',
+  optedIn: ({ home }) => hasAgyZylosHooks(home),
+  ready: async options => isAgyConfigReady(options),
+  trust: UNSUPPORTED,
+  features: UNSUPPORTED,
+  stage: UNSUPPORTED,
+  writeConfig: UNSUPPORTED,
+  installHooks: UNSUPPORTED,
+});

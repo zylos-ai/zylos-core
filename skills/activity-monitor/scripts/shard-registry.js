@@ -4,7 +4,7 @@
  * ../references/session-start-shards.md
  *
  * Consumed by session-start-orchestrator.js, c4-session-init.js,
- * sync-runtime-hooks.js and codex-hooks.js.
+ * sync-runtime-hooks.js and the Codex runtime hook module.
  */
 
 import fs from 'node:fs';

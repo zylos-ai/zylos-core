@@ -1,5 +1,6 @@
 import { auth } from './auth.js';
 import { busy } from './busy.js';
+import { hooks } from './hooks.js';
 import { instructions } from './instructions.js';
 import { input } from './input.js';
 import { sessionSwitch } from './switch.js';
@@ -38,5 +39,5 @@ export default Object.freeze({
   input,
   busy,
   switch: sessionSwitch,
-  hooks: Object.freeze({ sessionIdEnv: 'CODEX_SESSION_ID' }),
+  hooks,
 });

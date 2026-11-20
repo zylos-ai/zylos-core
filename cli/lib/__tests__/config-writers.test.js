@@ -94,7 +94,7 @@ describe('production config writers', () => {
     const configUrl = pathToFileURL(path.join(rootDir, 'cli', 'lib', 'config.js')).href;
     const initUrl = pathToFileURL(path.join(rootDir, 'cli', 'commands', 'init.js')).href;
     const migrateUrl = pathToFileURL(path.join(rootDir, 'cli', 'lib', 'migrate.js')).href;
-    const syncUrl = pathToFileURL(path.join(rootDir, 'cli', 'lib', 'sync-runtime-hooks.js')).href;
+    const syncUrl = pathToFileURL(path.join(rootDir, 'cli', 'lib', 'runtime', 'claude', 'hooks.js')).href;
     const script = `
       const config = await import(${JSON.stringify(configUrl)});
       const init = await import(${JSON.stringify(initUrl)});
@@ -126,6 +126,7 @@ describe('production config writers', () => {
       'cli/commands/config.js',
       'cli/commands/init.js',
       'cli/lib/sync-runtime-hooks.js',
+      'cli/lib/runtime/claude/hooks.js',
       'cli/lib/migrate.js',
       'skills/http/scripts/setup-caddy.js',
     ];

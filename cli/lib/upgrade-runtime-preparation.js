@@ -1,4 +1,5 @@
-import { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES } from './runtime/descriptors.js';
+import { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES, getRuntime } from './runtime/index.js';
+import { UNSUPPORTED } from './runtime/contract.js';
 import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -10,10 +11,11 @@ import { instructionAssetPaths, instructionPaths, instructionTargets, readInstru
 import { migrateClaudeMdToZylosMd } from './migrate.js';
 import { loadInstructionCatalog, classifyInstructionBaseline, verifyInstructionConservation,
   createMigrationBackup, renderMigrationReport, migrationPromptPath, writeMigrationPrompt } from './instruction-migration.js';
-import { desiredClaudeHooks, syncHooks, detectStopFailureSupport, detectSubagentHooksSupport,
-  syncTemplateModelSetting, syncTemplateSetting } from './sync-runtime-hooks.js';
 import { removeLegacyDashboardHooks } from './upgrade-post-cutoff.js';
 import { readConfigStrict } from './config-store.js';
+
+const stagers = (await Promise.all(SUPPORTED_RUNTIMES.map(getRuntime)))
+  .map(rt => rt.hooks.stage).filter(stage => stage !== UNSUPPORTED);
 
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, '..', '..');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -85,9 +87,7 @@ export function prepareUpgradeRuntime(ctx, {
   homeDir = os.homedir(),
   generatedAt = new Date(),
   stopFailureSupported,
-  detectStopFailure = detectStopFailureSupport,
   subagentHooksSupported,
-  detectSubagentHooks = detectSubagentHooksSupport,
   classifyBaseline = classifyInstructionBaseline,
   writePrompt = writeMigrationPrompt,
 } = {}) {
@@ -246,20 +246,11 @@ export function prepareUpgradeRuntime(ctx, {
         throw Error('Expected settings and hooks objects');
       }
     } catch (cause) { throw Object.assign(Error('Cannot prepare Claude settings', { cause }), { code: 'SETTINGS_UNREADABLE' }); }
-    const healthSupported = stopFailureSupported ?? detectStopFailure();
     settings = removeLegacyDashboardHooks(settings, zylosDir);
     const existsWithStaged = file => replacements.some(item => path.join(zylosDir, item.path) === file) || fs.existsSync(file);
-    syncHooks(settings, {}, { zylosDir, log: () => {},
-      desiredHooks: desiredClaudeHooks({ zylosDir, existsSync: existsWithStaged, stopFailureSupported: healthSupported,
-        subagentHooksSupported: subagentHooksSupported ?? detectSubagentHooks() }) });
     const templateSettings = JSON.parse(readRegular(path.join(templatesDir, '.claude/settings.json')));
-    if (templateSettings.statusLine) settings.statusLine = templateSettings.statusLine;
-    else delete settings.statusLine;
-    syncTemplateModelSetting({ templateSettings, installedSettings: settings,
-      cfg: config.state === 'ok' ? config.config : {}, log: () => {} });
-    for (const key of ['autoMemoryEnabled', 'autoDreamEnabled']) {
-      syncTemplateSetting(key, { templateSettings, installedSettings: settings, log: () => {} });
-    }
+    settings = stagers[0](settings, { zylosDir, existsSync: existsWithStaged, stopFailureSupported,
+      subagentHooksSupported, templateSettings, cfg: config.state === 'ok' ? config.config : {} });
     add('.claude/settings.json', JSON.stringify(settings, null, 2) + '\n', 'claude_settings', 't02');
 
     const agentsRoot = path.join(sourceRoot, 'skills/zylos-memory/agents');

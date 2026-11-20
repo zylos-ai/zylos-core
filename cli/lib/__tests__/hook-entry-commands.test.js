@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { desiredClaudeHooks, syncHooks } from '../sync-runtime-hooks.js';
-import { codexHooksPath, installCoreCodexHook } from '../codex-hooks.js';
+import { desiredClaudeHooks, syncHooks } from '../runtime/claude/hooks.js';
+import { codexHooksPath, installCoreCodexHook } from '../runtime/codex/hooks.js';
 import { HOOK_ENTRY_SCRIPT, hookEntryTarget } from '../hook-utils.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
