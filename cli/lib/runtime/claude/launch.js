@@ -123,3 +123,43 @@ export function checkAutonomous({ home = os.homedir() } = {}) {
     return { accepted: false, hint };
   }
 }
+
+/**
+ * Pre-accept Claude Code terms and bypass permissions prompt.
+ * Writes acceptance state to config files so Claude starts without manual confirmation.
+ */
+export function preAccept() {
+  const homedir = os.homedir();
+  let changed = false;
+
+  // $HOME may not exist yet (fresh containers, provisioning into a new home).
+  fs.mkdirSync(homedir, { recursive: true });
+
+  // 1. Set hasCompletedOnboarding in ~/.claude.json
+  const claudeJsonPath = path.join(homedir, '.claude.json');
+  let claudeJson = {};
+  try {
+    claudeJson = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8'));
+  } catch {}
+  if (!claudeJson.hasCompletedOnboarding) {
+    claudeJson.hasCompletedOnboarding = true;
+    writePrivateFile(claudeJsonPath, JSON.stringify(claudeJson, null, 2) + '\n');
+    changed = true;
+  }
+
+  // 2. Set skipDangerousModePermissionPrompt in ~/.claude/settings.json
+  const claudeDir = path.join(homedir, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  const settingsPath = path.join(claudeDir, 'settings.json');
+  let settings = {};
+  try {
+    settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  } catch {}
+  if (!settings.skipDangerousModePermissionPrompt) {
+    settings.skipDangerousModePermissionPrompt = true;
+    writePrivateFile(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+    changed = true;
+  }
+
+  return changed;
+}

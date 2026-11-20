@@ -3,6 +3,7 @@ import { afterEach, describe, test } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { getRuntime } from '../runtime/index.js';
 
 const originalHome = process.env.HOME;
 const tmpRoots = [];
@@ -25,24 +26,24 @@ afterEach(() => {
   while (tmpRoots.length) fs.rmSync(tmpRoots.pop(), { recursive: true, force: true });
 });
 
-describe('preAcceptClaudeTerms', () => {
+describe('Claude terms pre-acceptance', () => {
   test('creates a missing home directory before writing ~/.claude.json', async () => {
-    const { preAcceptClaudeTerms } = await import('../../commands/init.js');
+    const { launch: { preAccept } } = await getRuntime('claude');
     const home = useFreshHome({ create: false });
 
-    assert.equal(preAcceptClaudeTerms(), true);
+    assert.equal(preAccept(), true);
 
     assert.equal(readJson(path.join(home, '.claude.json')).hasCompletedOnboarding, true);
     assert.equal(readJson(path.join(home, '.claude', 'settings.json')).skipDangerousModePermissionPrompt, true);
   });
 
   test('preserves existing settings and reports no change once accepted', async () => {
-    const { preAcceptClaudeTerms } = await import('../../commands/init.js');
+    const { launch: { preAccept } } = await getRuntime('claude');
     const home = useFreshHome({ create: true });
     fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ theme: 'dark' }));
 
-    assert.equal(preAcceptClaudeTerms(), true);
-    assert.equal(preAcceptClaudeTerms(), false);
+    assert.equal(preAccept(), true);
+    assert.equal(preAccept(), false);
 
     assert.deepEqual(readJson(path.join(home, '.claude.json')), { theme: 'dark', hasCompletedOnboarding: true });
   });

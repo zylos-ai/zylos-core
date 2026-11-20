@@ -19,7 +19,7 @@ import { listGroupTmuxSessions } from '../lib/session-group-paths.js';
 import { desiredClaudeHooks, syncHooks, detectStopFailureSupport, detectSubagentHooksSupport } from '../lib/sync-runtime-hooks.js';
 import { syncAgyConfig, isAgyConfigReady } from '../lib/agy-setup.js';
 import { isCodexTrustValid, getCodexVersion } from '../lib/codex-hooks.js';
-import { instructionPaths, isSplitInstructionsActive, buildInstructionFile, assertInstructionReady } from '../lib/runtime/instruction-builder.js';
+import { instructionPaths, isSplitInstructionsActive, buildInstructionFile } from '../lib/runtime/instruction-builder.js';
 import { UNSUPPORTED } from '../lib/runtime/contract.js';
 import { isValidBaseUrl } from '../lib/runtime-setup.js';
 
@@ -158,8 +158,6 @@ export async function runtimeHooksReady(target) {
   const pendingMigration = !isSplitInstructionsActive({ zylosDir: ZYLOS_DIR });
   if (!fs.existsSync(instruction)) return { ready: false, pendingMigration };
   if (target === 'agy') {
-    try { assertInstructionReady('agy', { zylosDir: ZYLOS_DIR }); }
-    catch { return { ready: false, pendingMigration }; }
     return { ready: isAgyConfigReady({ zylosDir: ZYLOS_DIR }), pendingMigration };
   }
   if (target === 'codex') return { ready: isCodexTrustValid({ zylosDir: ZYLOS_DIR, projectDir: ZYLOS_DIR, codexVersion: getCodexVersion() }).valid, pendingMigration };
@@ -251,16 +249,27 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
     if (credentialsSaved.length && selected.auth.overrideWarnings !== UNSUPPORTED) {
       warnings.push(...selected.auth.overrideWarnings({ against: 'saved' }));
     }
+    const name = runtimeDisplayName(target);
+    const file = instructionPaths(target, { zylosDir: ZYLOS_DIR }).outputPath;
+    try { buildInstructionFile(target, { zylosDir: ZYLOS_DIR }); }
+    catch (error) { return fail('INSTRUCTIONS_UNAVAILABLE', `Could not rebuild ${file}: ${error.message}`); }
+    if (!fs.existsSync(file)) {
+      return fail('INSTRUCTIONS_UNAVAILABLE', 'Instruction file unavailable; run zylos migrate-instructions');
+    }
+
+    let ready;
     try {
       if (target === 'agy') {
         syncAgyConfig({ zylosDir: ZYLOS_DIR });
-        buildInstructionFile('agy', { zylosDir: ZYLOS_DIR });
       }
-      const ready = await hooksReady(target);
-      if (!ready.ready) return fail('HOOKS_NOT_READY', 'Runtime hooks/instructions not ready; run zylos init');
-      if (ready.pendingMigration) warnings.push({ code: 'INSTRUCTION_PENDING_MIGRATION', message: 'Instruction migration pending; run zylos migrate-instructions' });
+      ready = await hooksReady(target);
+    } catch (error) {
+      return fail('RUNTIME_SETUP_INCOMPLETE', `Could not check Zylos setup for ${name}: ${error.message}`);
     }
-    catch (error) { return fail('HOOKS_NOT_READY', error.message); }
+    if (!ready.ready) {
+      return fail('RUNTIME_SETUP_INCOMPLETE', `Zylos setup for ${name} is missing or out of date; run zylos init`);
+    }
+    if (ready.pendingMigration) warnings.push({ code: 'INSTRUCTION_PENDING_MIGRATION', message: 'Instruction migration pending; run zylos migrate-instructions' });
     if (parsed.noValidate) warnings.push({ code: 'AUTH_CHECK_SKIPPED', message: 'Authentication check skipped (--no-validate)' });
     else {
       let auth;

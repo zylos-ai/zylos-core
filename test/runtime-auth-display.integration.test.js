@@ -8,11 +8,17 @@
 // skills/dashboard/src/lib/actions.js, the status-code table in http.js or
 // skills/dashboard/public/js/action-result.js change; otherwise it can be skipped.
 import test from 'node:test';
+import fs from 'node:fs';
+import path from 'node:path';
 import assert from 'node:assert/strict';
 import { runtimeAuthFixture } from '../cli/lib/__tests__/helpers/runtime-auth.js';
 import { executeRuntimeSwitch } from '../cli/commands/runtime.js';
 import { sendCommandJson } from '../skills/dashboard/src/lib/http.js';
 import { formatActionResult } from '../skills/dashboard/public/js/action-result.js';
+
+for (const name of ['CLAUDE.md', 'AGENTS.md']) {
+  fs.writeFileSync(path.join(process.env.ZYLOS_DIR, name), 'Legacy fixture instructions\n');
+}
 
 test('runtime auth remedies remain distinct through Dashboard HTTP and page formatting', async t => {
   let reply;

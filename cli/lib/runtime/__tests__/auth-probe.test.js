@@ -9,6 +9,10 @@ import { once } from 'node:events';
 import { getRuntime } from '../index.js';
 import { executeRuntimeSwitch, runtimeCommand } from '../../../commands/runtime.js';
 
+for (const name of ['CLAUDE.md', 'AGENTS.md']) {
+  await fs.writeFile(path.join(process.env.ZYLOS_DIR, name), 'Legacy fixture instructions\n');
+}
+
 // Integration boundary: real adapters and execFile with a private fake CLI.
 // Run for CLI auth-result parsing changes; skip unrelated session lifecycle.
 // The official runner isolates HOME/ZYLOS_DIR/PM2_HOME and short TMPDIR. Each

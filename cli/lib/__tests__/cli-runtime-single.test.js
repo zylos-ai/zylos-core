@@ -1,8 +1,14 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { executeRuntimeSwitch, runtimeCommand, observeRuntimeGroups } from '../../commands/runtime.js';
 
 import { runtimeAuthFixture } from './helpers/runtime-auth.js';
+
+for (const name of ['CLAUDE.md', 'AGENTS.md']) {
+  fs.writeFileSync(path.join(process.env.ZYLOS_DIR, name), 'Legacy fixture instructions\n');
+}
 
 const old = { present: true, runtime: 'claude', launchConfig: { runtime: 'claude', mode: 'default' } };
 

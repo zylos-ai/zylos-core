@@ -1,4 +1,4 @@
-import { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES, getRuntime, runtimeDisplayName, runtimeInstallPolicy } from '../lib/runtime/index.js';
+import { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES, findRuntime, getRuntime, runtimeDisplayName, runtimeInstallPolicy } from '../lib/runtime/index.js';
 import { UNSUPPORTED } from '../lib/runtime/contract.js';
 import { writeCorePackageLocation } from '../lib/core-package-location.js';
 import { migrateModelThresholds } from '../lib/model-rotation-thresholds.js';
@@ -30,7 +30,6 @@ import { createRequire } from 'node:module';
 import { execSync, execFileSync, spawnSync, spawn } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, readZylosConfigOrThrow, readSessionMode, updateZylosConfigLocked } from '../lib/config.js';
 import { writeEnvFile } from '../lib/env.js';
-import { writePrivateFile } from '../lib/private-file.js';
 import { generateManifest, saveMergeBaseline } from '../lib/manifest.js';
 import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
@@ -512,52 +511,12 @@ export function needsBypassAcceptance() {
 }
 
 /**
- * Pre-accept Claude Code terms and bypass permissions prompt.
- * Writes acceptance state to config files so Claude starts without manual confirmation.
- */
-export function preAcceptClaudeTerms() {
-  const homedir = os.homedir();
-  let changed = false;
-
-  // $HOME may not exist yet (fresh containers, provisioning into a new home).
-  fs.mkdirSync(homedir, { recursive: true });
-
-  // 1. Set hasCompletedOnboarding in ~/.claude.json
-  const claudeJsonPath = path.join(homedir, '.claude.json');
-  let claudeJson = {};
-  try {
-    claudeJson = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8'));
-  } catch {}
-  if (!claudeJson.hasCompletedOnboarding) {
-    claudeJson.hasCompletedOnboarding = true;
-    writePrivateFile(claudeJsonPath, JSON.stringify(claudeJson, null, 2) + '\n');
-    changed = true;
-  }
-
-  // 2. Set skipDangerousModePermissionPrompt in ~/.claude/settings.json
-  const claudeDir = path.join(homedir, '.claude');
-  fs.mkdirSync(claudeDir, { recursive: true });
-  const settingsPath = path.join(claudeDir, 'settings.json');
-  let settings = {};
-  try {
-    settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-  } catch {}
-  if (!settings.skipDangerousModePermissionPrompt) {
-    settings.skipDangerousModePermissionPrompt = true;
-    writePrivateFile(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-    changed = true;
-  }
-
-  return changed;
-}
-
-/**
  * Guide user through first-time Claude bypass permissions acceptance.
  */
-async function guideBypassAcceptance() {
+async function guideBypassAcceptance(preAccept) {
   // Init already owns first-install acceptance settings. Do not launch or
   // replace a managed runtime merely to repeat that settings preparation.
-  preAcceptClaudeTerms();
+  preAccept();
   console.log(`  ${success('Claude Code acceptance settings prepared')}`);
 }
 
@@ -2017,12 +1976,11 @@ export async function initCommand(args) {
   if (authenticationState.shouldStop) return;
   exitCode = authenticationState.exitCode;
 
-  // Pre-accept Claude Code terms (skips manual prompts on first launch).
-  // Called regardless of auth state — user may configure credentials after init.
-  if (selectedRuntime === 'claude') {
-    if (preAcceptClaudeTerms()) {
-      if (!quiet) console.log(`  ${success('Claude Code terms pre-accepted')}`);
-    }
+  // Prepare first-launch acceptance even if credentials will be configured later.
+  const selectedAdapter = await findRuntime(selectedRuntime);
+  const preAccept = selectedAdapter?.launch.preAccept;
+  if (selectedAdapter && preAccept !== UNSUPPORTED && preAccept()) {
+    if (!quiet) console.log(`  ${success('Claude Code terms pre-accepted')}`);
   }
   for (const message of credentialFilePermissionWarnings((await getRuntime(selectedRuntime)).auth.credentialFiles())) {
     console.warn(`  ${warn(message)}`);
@@ -2090,7 +2048,7 @@ export async function initCommand(args) {
       await ensureInitLogRotation({ quiet });
 
       if (selectedRuntime === 'claude' && authentication.authenticated && !skipConfirm && needsBypassAcceptance()) {
-        await guideBypassAcceptance();
+        await guideBypassAcceptance(preAccept);
       }
 
       if (!authentication.authenticated && !quiet) {
@@ -2169,7 +2127,7 @@ export async function initCommand(args) {
 
     // First-time Claude bypass acceptance (only if Claude runtime and authenticated)
     if (selectedRuntime === 'claude' && authentication.authenticated && !skipConfirm && needsBypassAcceptance()) {
-      await guideBypassAcceptance();
+      await guideBypassAcceptance(preAccept);
     }
 
     // Done

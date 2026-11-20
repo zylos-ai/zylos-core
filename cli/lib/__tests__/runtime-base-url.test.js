@@ -84,7 +84,7 @@ describe('runtime base URL support', () => {
       if (bad === null) fs.rmSync(installed); else fs.writeFileSync(installed, bad);
       const result = await executeRuntimeSwitch('claude', ['--no-validate'], deps);
       assert.deepEqual(await runtimeHooksReady('claude'), { ready: false, pendingMigration: true });
-      assert.equal(result.error.code, 'HOOKS_NOT_READY');
+      assert.equal(result.error.code, 'RUNTIME_SETUP_INCOMPLETE');
       assert.deepEqual(result.error.persisted, []);
     }
     assert.equal(writes, 1);
