@@ -29,6 +29,7 @@ const ROOT_NODE_TESTS = [
   'test/claude-upgrade-process.integration.test.js',
   'test/dashboard-display-browser.test.js',
   'test/session-host-browser.test.js',
+  'test/session-host-channels.integration.test.js',
   'test/session-host-cli.integration.test.js',
   'test/self-upgrade-output.integration.test.js',
   'test/upgrade-running-output.integration.test.js',

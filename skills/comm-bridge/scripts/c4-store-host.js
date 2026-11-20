@@ -39,6 +39,8 @@ export function hostFunctions({ read, write, snapshot, get, all, run, seconds, k
         requireGroup(source);
         return run(c, 'DELETE FROM session_hosts WHERE source_group=?', source).changes > 0;
       }),
+      listSessionHostChannels: () => read(c =>
+        all(c, 'SELECT DISTINCT component_name FROM channel_namespaces ORDER BY component_name').map(row => row.component_name)),
       listSessionHosts: () => snapshot(c => ({
         relationships: all(c, 'SELECT * FROM session_hosts ORDER BY source_group'),
         allowlist: all(c, 'SELECT channel FROM session_host_allowlist ORDER BY channel').map(row => row.channel),
