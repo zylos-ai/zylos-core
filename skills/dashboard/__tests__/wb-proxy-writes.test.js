@@ -96,6 +96,7 @@ test('workbench proxy rejects writes outside the registered table before upstrea
   for (const route of [
     { method: 'POST', path: '/api/groups/telegram%3Ateam/name', body: '{}' },
     { method: 'PUT', path: '/api/groups/telegram%3Ateam/unregistered', body: '{}' },
+    { method: 'POST', path: '/api/instance/actions/upgrade', body: '{}' },
   ]) {
     const response = await f.request(route);
     assert.equal(response.status, 403);
@@ -111,7 +112,7 @@ test('object proxy writes reject missing or cross-site browser origins before re
   const f = fixture(t, 'admin');
   for (const route of workbenchWriteRoutes.filter(route => route.path.startsWith('/api/groups/')).concat([
     {method:'PUT',path:'/api/instance/defaults',body:'{"kind":"effort","effort":"high"}'},
-    {method:'POST',path:'/api/instance/actions/upgrade',body:'{}'},
+    {method:'POST',path:'/api/instance/actions/upgrade-runtime',body:'{"runtime":"codex"}'},
     {method:'POST',path:'/api/instance/actions/switch-runtime',body:'{"runtime":"codex"}'},
   ])) {
     for (const origin of [null,'https://another-site.invalid']) {

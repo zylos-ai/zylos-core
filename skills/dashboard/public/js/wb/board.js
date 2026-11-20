@@ -151,8 +151,8 @@ export function renderBoard(root, snapshot, { rows = snapshot?.rows ?? [], query
   if (!rows.length) root.append(element(document, 'p', t(query ? 'wb.noMatch' : 'wb.noGroups'), 'wb-empty'));
   for (const row of rows) root.append(renderRow(row, { document, t, single: snapshot?.view === 'single',
     selected: selected !== undefined && row.sessionGroup === selected,
-    activity: activity ? { ...activity.groups?.[row.sessionGroup], start: activity.start, cellSeconds: activity.cellSeconds,
-      inboundUnknown: Boolean(activity.inboundError) } : null, ...options }));
+    activity: activity ? { start: activity.start, cellSeconds: activity.cellSeconds,
+      inboundUnknown: Boolean(activity.inboundError), ...activity.groups?.[row.sessionGroup] } : null, ...options }));
   if (snapshot?.hasOlder === true && !query) {
     const older = element(document, 'button', t(snapshot?.nextCursor != null ? 'wb.groups.more' : 'wb.older'), 'wb-older'); older.type = 'button';
     older.addEventListener('click', onMore); root.append(older);

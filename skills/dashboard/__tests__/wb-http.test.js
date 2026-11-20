@@ -103,12 +103,17 @@ test('workbench HTTP routes retain read authentication, method guards and source
   const token = `zylos_st_${'b'.repeat(64)}`, key = engine.store.insertApiKey({ name: 'fixture-read', keyHash: hashApiKey(`zylos_ak_${'c'.repeat(64)}`), scope: 'read' });
   engine.store.insertApiSession({ apiKeyId: Number(key.lastInsertRowid), tokenHash: crypto.createHash('sha256').update(token).digest('hex'), createdAt: Date.now(), scope: 'read', expiresAt: Date.now() + 60000 });
   const request = (route, options = {}) => fetch(origin + route, { signal: AbortSignal.timeout(3000), headers: { Authorization: `Bearer ${token}` }, ...options });
-  for (const route of ['/api/groups/running', '/api/groups/search?q=', '/api/groups/activity?range=60m', '/api/groups/telegram%3Aa']) {
+  for (const route of ['/api/groups/running', '/api/groups/search?q=', '/api/groups/activity?range=60m&ids=telegram%3Aa', '/api/groups/telegram%3Aa']) {
     assert.equal((await request(route, { headers: {} })).status, 401, route);
     assert.equal((await request(route, { method: 'POST' })).status, 403, route);
   }
+  for (const params of ['', '&ids=', '&ids=%20', '&ids=' + Array(101).fill('telegram:a').join(',')]) {
+    const response = await request('/api/groups/activity?range=60m' + params);
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, 'INVALID_IDS');
+  }
   for (const query of ['?range=1d', '?range=bogus']) {
-    const response = await request('/api/groups/activity' + query);
+    const response = await request('/api/groups/activity' + query + '&ids=telegram%3Aa');
     assert.equal(response.status, 400); assert.equal((await response.json()).error.code, 'invalid_range');
   }
   const empty = await request('/api/groups/search?q=');
@@ -118,7 +123,7 @@ test('workbench HTTP routes retain read authentication, method guards and source
   assert.equal(stored.status, 200);
   assert.equal((await service.getSnapshot()).sources.status.ok, true, 'the injected shared batch reaches status projection');
   const detail = await stored.json(); assert.equal(detail.raw, null); assert.equal(detail.id, 'telegram:a');
-  const activity = await request('/api/groups/activity?range=60m');
+  const activity = await request('/api/groups/activity?range=60m&ids=telegram%3Aa');
   assert.equal(activity.status, 200); assert.equal((await activity.json()).groups['telegram:a'].cells.length, 60);
   // Exercise real collector.collect -> index _onUpdate -> counter and state engine.
   let restarts = 12;
@@ -153,7 +158,7 @@ test('workbench HTTP routes retain read authentication, method guards and source
     metadata: {}, source: 'hook',
   }).inserted, true);
   failInbound = true;
-  const failedInbound = await request('/api/groups/activity?range=6h');
+  const failedInbound = await request('/api/groups/activity?range=6h&ids=telegram%3Aa');
   assert.equal(failedInbound.status, 200);
   const partial = await failedInbound.json();
   assert.equal(partial.inboundError, 'inbound_unreadable');
@@ -162,7 +167,7 @@ test('workbench HTTP routes retain read authentication, method guards and source
   assert.equal(Object.values(partial.groups).every(group => group.inbound.length === 0), true);
   assert.deepEqual(partial.groups['telegram:a'].inbound, []);
   failInbound = false;
-  const recoveredInbound = await request('/api/groups/activity?range=6h');
+  const recoveredInbound = await request('/api/groups/activity?range=6h&ids=telegram%3Aa');
   assert.equal(recoveredInbound.status, 200);
   assert.equal(Object.hasOwn(await recoveredInbound.json(), 'inboundError'), false);
   // Store unexpected failures map to internal_error, without exception text.

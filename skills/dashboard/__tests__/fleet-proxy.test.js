@@ -854,13 +854,13 @@ test('fleet proxy forwards SSE and whitelisted action POSTs with body', async ()
     const action = await fetch(`${hub.origin}/fleet/Remote/api/instance/actions/upgrade-runtime`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'now' })
+      body: JSON.stringify({ runtime: 'codex' })
     });
     assert.equal(action.status, 200);
     assert.deepEqual(await action.json(), { ok: true });
     assert.equal(actionAuth, 'Bearer zylos_st_secret');
     assert.equal(actionContentType, 'application/json');
-    assert.equal(actionBody, '{"mode":"now"}');
+    assert.equal(actionBody, '{"runtime":"codex"}');
   } finally {
     await hub.close();
     await remote.close();

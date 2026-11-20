@@ -268,9 +268,9 @@ test('remote chat permission preserves workbench groups and search for all API s
       const named = await http.request({ method: 'GET', path: '/api/groups/search?q=Private%20project' }, { identity, fleet });
       assert.equal(named.status, 200);
       assert.ok(JSON.parse(named.text).rows.some(row => row.id === 'dashboard:local-chat'));
-      const activity = await http.request({ method: 'GET', path: '/api/groups/activity?range=60m' }, { identity, fleet });
+      const activity = await http.request({ method: 'GET', path: '/api/groups/activity?range=60m&ids=dashboard%3Alocal-chat' }, { identity, fleet });
       assert.equal(activity.status, 200);
-      assert.deepEqual(JSON.parse(activity.text), await f.service.activity('60m'));
+      assert.deepEqual(JSON.parse(activity.text), await f.service.activity('60m', ['dashboard:local-chat']));
     }
   }
 });
@@ -495,7 +495,7 @@ test('single view keeps its null-key row and projects Origin activity', async t 
   const value = await f.service.getSnapshot();
   assert.equal(value.rows.length, 1); assert.equal(value.rows[0].sessionGroup, null); assert.equal(value.hasOlder, null);
   assert.equal(value.rows[0].desired, null);
-  f.events.length = 0; const activity = await f.service.activity('60m');
+  f.events.length = 0; const activity = await f.service.activity('60m', ['origin']);
   assert.ok(f.events.some(filter => filter.sessionGroup === 'origin' && filter.includeLegacyOrigin));
   assert.deepEqual(Object.keys(activity.groups), ['origin']);
 });
@@ -542,7 +542,7 @@ test('single Origin heatmaps combine current and legacy events with every channe
   const http = await chatHttpFixture(t, {}, { workbench: url => api.activity(url.searchParams) });
   const cell = (value, time) => value.groups.origin.cells[Math.floor((time - value.start) / (value.cellSeconds * 1000))];
   for (const range of ['60m', '6h']) {
-    const reply = await http.request({ method: 'GET', path: '/api/groups/activity?range=' + range });
+    const reply = await http.request({ method: 'GET', path: '/api/groups/activity?ids=origin&range=' + range });
     assert.equal(reply.status, 200);
     const value = JSON.parse(reply.text), width = range === '60m' ? minute : 5 * minute;
     assert.deepEqual(Object.keys(value.groups), ['origin']);
@@ -568,7 +568,7 @@ for (const range of ['60m', '6h']) test(`single Origin ${range} seeds a legacy t
   ]) store.insertEvent({ id, ingest_id: id, timestamp: new Date(time).toISOString(), runtime: 'claude',
     session_group: key, run_id: 'historical', event_type: type, category: 'activity' });
   f.store.queryEvents = filter => store.queryEvents(filter);
-  const value = await f.service.activity(range);
+  const value = await f.service.activity(range, ['origin']);
   assert.equal(value.groups.origin.cells[0], 'busy');
   assert.equal(value.groups.origin.cells[1], 'none');
   assert.equal(value.groups.origin.cells[2], 'none');
@@ -769,14 +769,46 @@ test('activity uses separate thirty-second range caches and reads every active-g
       session_group: 'telegram:g0', run_id: 'history', timestamp: new Date(f.now() - 10000).toISOString(), metadata: {} }));
     return [{ event_seq: 1001, event_type: 'activate_failed', session_group: 'telegram:g0', run_id: 'history', timestamp: new Date(f.now() - 5000).toISOString(), metadata: {} }];
   };
-  const minute = await f.service.activity('60m');
+  const minute = await f.service.activity('60m', ['origin', 'telegram:g0']);
   const failedCell = Math.floor((f.now() - 5000 - minute.start) / (minute.cellSeconds * 1000));
-  assert.equal(minute.groups['telegram:g0'].cells[failedCell], 'error');
+  assert.equal(minute.groups['origin', 'telegram:g0'].cells[failedCell], 'error');
   assert.equal(filters.length, 3);
-  f.advance(1000); assert.equal(await f.service.activity('60m'), minute); assert.equal(filters.length, 3);
-  const six = await f.service.activity('6h'); assert.equal(six.groups['telegram:g0'].cells.length, 72); assert.equal(filters.length, 6);
-  f.advance(30000); await f.service.activity('60m'); assert.equal(filters.length, 9);
-  await assert.rejects(f.service.activity('1d'), { code: 'invalid_range', statusCode: 400 });
+  f.advance(1000); assert.equal(await f.service.activity('60m', ['origin', 'telegram:g0']), minute); assert.equal(filters.length, 3);
+  const six = await f.service.activity('6h', ['origin', 'telegram:g0']); assert.equal(six.groups['origin', 'telegram:g0'].cells.length, 72); assert.equal(filters.length, 6);
+  f.advance(30000); await f.service.activity('60m', ['origin', 'telegram:g0']); assert.equal(filters.length, 9);
+  await assert.rejects(f.service.activity('1d', ['origin']), { code: 'invalid_range', statusCode: 400 });
+});
+
+// Loopback route and real snapshot activity. Run for activity validation,
+// query scoping or caching changes. Owned fixture paths and injected event,
+// C4 and Core readers keep this independent of PM2, tmux and live databases.
+test('activity queries only requested known groups and keeps responses scoped', async t => {
+  const f = fixture(t, { count: 3 });
+  const api = createGroupsApi({ workbench: f.service });
+  const http = await chatHttpFixture(t, {}, { workbench: url => api.activity(url.searchParams) });
+  const inbound = [];
+  f.c4Reader.getInboundTimes = options => { inbound.push(options.groups); return []; };
+  await f.service.getSnapshot();
+  const read = async ids => {
+    const params = new URLSearchParams({ range: '60m' });
+    if (ids !== undefined) params.set('ids', ids.join(','));
+    return http.request({ method: 'GET', path: '/api/groups/activity?' + params });
+  };
+  for (const [ids, expected] of [
+    [['telegram:g0', 'telegram:g1'], ['telegram:g0', 'telegram:g1']],
+    [['telegram:g0', 'UNKNOWN'], ['telegram:g0']],
+    [['telegram:g0'], ['telegram:g0']],
+    [['telegram:g1'], ['telegram:g1']],
+    [['UNKNOWN'], []],
+  ]) {
+    f.events.length = 0;
+    const response = await read(ids);
+    assert.equal(response.status, 200);
+    assert.deepEqual(Object.keys(JSON.parse(response.text).groups).sort(), expected);
+    assert.deepEqual([...new Set(f.events.map(filter => filter.sessionGroup))].sort(), expected);
+  }
+  assert.deepEqual(inbound.map(groups => groups.slice().sort()),
+    [['telegram:g0', 'telegram:g1'], ['telegram:g0'], ['telegram:g0'], ['telegram:g1']]);
 });
 
 // Full read-only boundary: actual Dashboard Store and C4Reader on owned SQLite
@@ -802,7 +834,7 @@ test('full snapshot and activity cycle leaves C4 and Dashboard event storage unc
   const storageBytes = file => new Map(['', '-wal'].map(suffix => [suffix, fs.existsSync(file + suffix) ? fs.readFileSync(file + suffix) : null]));
   const beforeEvents = eventBytes(), dashboardBytes = storageBytes(path.join(f.root, 'dashboard.db'));
   assert.ok(dashboardBytes.get('-wal')?.length > 0, 'fixture has WAL content to protect');
-  await f.service.getSnapshot(); await f.service.activity('60m');
+  await f.service.getSnapshot(); await f.service.activity('60m', ['telegram:g0']);
   assert.equal(c4.pragma('data_version', { simple: true }), version);
   assert.equal(fs.readFileSync(c4File).equals(beforeC4), true);
   assert.equal(eventBytes().equals(beforeEvents), true);
@@ -916,7 +948,7 @@ test('inbound read failures preserve cells, expose a source reason and remain un
   }] : [];
   f.addCleanup(() => reader.close());
   f.c4Reader.getInboundTimes = options => reader.getInboundTimes(options);
-  const activity = await f.service.activity('60m');
+  const activity = await f.service.activity('60m', ['telegram:g0']);
   assert.equal(activity.inboundError, 'inbound_unreadable');
   assert.equal(activity.groups['telegram:g0'].cells.length, 60);
   assert.equal(activity.groups['telegram:g0'].cells.includes('busy'), true);
@@ -925,14 +957,14 @@ test('inbound read failures preserve cells, expose a source reason and remain un
   fs.mkdirSync(path.join(f.root, 'comm-bridge'));
   const writer = new Database(path.join(f.root, 'comm-bridge', 'c4.db'));
   writer.exec('CREATE TABLE unrelated(id INTEGER)'); writer.close();
-  assert.equal((await f.service.activity('60m')).inboundError, 'inbound_unreadable');
+  assert.equal((await f.service.activity('60m', ['telegram:g0'])).inboundError, 'inbound_unreadable');
   reader.close();
   const fixed = new Database(path.join(f.root, 'comm-bridge', 'c4.db'));
   fixed.exec('CREATE TABLE conversations(id INTEGER PRIMARY KEY,session_group TEXT,direction TEXT,channel TEXT,timestamp TEXT)'); fixed.close();
-  const recovered = await f.service.activity('60m');
+  const recovered = await f.service.activity('60m', ['telegram:g0']);
   assert.ok(recovered.groups['telegram:g0']);
   assert.equal(Object.hasOwn(recovered, 'inboundError'), false);
-  await assert.rejects(f.service.activity(undefined), { code: 'invalid_range', statusCode: 400 });
+  await assert.rejects(f.service.activity(undefined, ['telegram:g0']), { code: 'invalid_range', statusCode: 400 });
 });
 
 // Integration: real Store queries plus snapshot-to-bucket projection. Run for
@@ -977,7 +1009,7 @@ for (const [type, metadata, closes] of [
     }
     return rows;
   };
-  const output = await f.service.activity('60m'), cells = output.groups['telegram:g0'].cells;
+  const output = await f.service.activity('60m', ['origin', 'telegram:g0']), cells = output.groups['telegram:g0'].cells;
   assert.equal(filters.length, 6);
   assert.ok(lookedBack <= 603);
   if (!closes) assert.ok(cells.every(value => value === 'busy'));
@@ -1028,13 +1060,13 @@ for (const type of ['user_prompt_submit', 'subagent_start']) {
         add(`end-${i}`, 'post_tool_use', at + 1000, { tool_use_id: `T${i}` });
       }
     })();
-    const output = await f.service.activity('60m');
+    const output = await f.service.activity('60m', ['telegram:g0']);
     assert.ok(output.groups['telegram:g0'].cells.every(value => value === 'busy'));
     assert.equal(filters.length, 6);
     assert.ok(filters.reduce((total, filter) => total + filter.returned, 0) <= 603);
     if (type === 'subagent_start') assert.equal(filters.find(filter => filter.types?.includes('pre_tool_use') && filter.agentScope === 'main').returned, 200);
     const queries = filters.length;
-    assert.equal(await f.service.activity('60m'), output);
+    assert.equal(await f.service.activity('60m', ['telegram:g0']), output);
     assert.equal(filters.length, queries);
   });
 }
@@ -1045,7 +1077,7 @@ test('a replaced run opened before the window stays busy until its in-window sto
   f.live.get('telegram:g0').identity.createdAt = (start + 40 * minute) / 1000;
   add('old-open', 'user_prompt_submit', start - 10 * minute, {}, 'replaced');
   add('old-stop', 'stop', start + 30 * minute, {}, 'replaced');
-  const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
+  const cells = (await f.service.activity('60m', ['telegram:g0'])).groups['telegram:g0'].cells;
   assert.ok(cells.slice(0, 30).every(value => value === 'busy'));
   assert.ok(cells.slice(30, 40).every(value => value === 'none'));
   assert.ok(cells.slice(40).every(value => value === 'idle'));
@@ -1058,7 +1090,7 @@ for (const type of ['user_prompt_submit', 'pre_tool_use', 'subagent_start']) {
     const { f, minute, start, add } = activityStore(t);
     add('first-ingested', 'session_start', start - minute);
     add('late-open', type, start - 3 * 86400000, type === 'subagent_start' ? { agent_id: 'child' } : { tool_use_id: 'long' });
-    const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
+    const cells = (await f.service.activity('60m', ['telegram:g0'])).groups['telegram:g0'].cells;
     assert.ok(cells.every(value => value === 'busy'));
   });
 }
@@ -1074,7 +1106,7 @@ for (const [lateType, equalTime, busy] of [
   const later = start - 10 * minute;
   add('first', lateType === 'stop' ? 'user_prompt_submit' : 'stop', later);
   add('late', lateType, earlier);
-  const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
+  const cells = (await f.service.activity('60m', ['telegram:g0'])).groups['telegram:g0'].cells;
   assert.ok(cells.every(value => value === (busy ? 'busy' : 'idle')));
   for (const type of ['user_prompt_submit', 'stop']) {
     const query = filters.find(filter => filter.types?.includes(type) && filter.agentScope === 'main' && filter.limit === 1);
@@ -1091,7 +1123,7 @@ test('pre-window stop closes tools while a child remains busy until its own end'
   add('child', 'subagent_start', start - 19 * minute, { agent_id: 'child' });
   const stop = add('stop', 'stop', start - 10 * minute);
   add('child-end', 'subagent_stop', start + 10 * minute, { agent_id: 'child' });
-  const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
+  const cells = (await f.service.activity('60m', ['telegram:g0'])).groups['telegram:g0'].cells;
   assert.ok(cells.slice(0, 10).every(value => value === 'busy'));
   assert.ok(cells.slice(10).every(value => value === 'idle'));
   const tools = filters.find(filter => filter.types?.includes('pre_tool_use') && filter.agentScope === 'main');
@@ -1112,7 +1144,7 @@ for (const [open, close, idKey] of [['pre_tool_use', 'post_tool_failure', 'tool_
       }
       add('last-end', close, start - 1000, { [idKey]: 'unmatched' });
     })();
-    const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
+    const cells = (await f.service.activity('60m', ['telegram:g0'])).groups['telegram:g0'].cells;
     assert.ok(cells.every(value => value === 'idle'));
     assert.equal(filters.length, 6);
     assert.equal(filters.find(filter => filter.types?.includes(open) && filter.agentScope === (open === 'subagent_start' ? 'child' : 'main')).returned, 200);
@@ -1126,7 +1158,7 @@ test('activity with no events paints the current run idle from its actual start'
   const f = fixture(t), start = f.now() - 10 * 60000;
   f.live.get('telegram:g0').status.value.active_tool_details = [];
   f.live.get('telegram:g0').identity.createdAt = start / 1000;
-  const output = await f.service.activity('60m'), cells = output.groups['telegram:g0'].cells;
+  const output = await f.service.activity('60m', ['origin', 'telegram:g0']), cells = output.groups['telegram:g0'].cells;
   const index = Math.floor((start - output.start) / 60000);
   assert.ok(cells.slice(0, index).every(value => value === 'none'));
   assert.ok(cells.slice(index).every(value => value === 'idle'));
@@ -1561,7 +1593,7 @@ for (const kind of ['main', 'child']) test(`working activity seeds ${kind} fresh
     add('subagent_start', 90 * minute, { agent_id: 'child' });
     add('pre_tool_use', f.now() - (start - minute), { agent_id: 'child', tool_use_id: 'still-working' });
   }
-  const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
+  const cells = (await f.service.activity('60m', ['telegram:g0'])).groups['telegram:g0'].cells;
   assert.equal(cells[0], 'busy', 'A recent pre-window event refreshes the old open work');
   assert.equal(cells[29], 'idle', 'The same shared TTL ends the interval without a lost end event');
   assert.equal(cells.at(-1), 'idle');
@@ -1576,7 +1608,7 @@ test('working activity includes offset timestamps inside its visible window', as
   f.live.get('telegram:g0').identity.createdAt = (at - 15 * 60000) / 1000;
   store.insertEvent({ id: 'offset-prompt', ingest_id: 'offset-prompt', timestamp: '2027-01-01T11:04:50+01:00',
     session_group: 'telegram:g0', run_id: 'run-telegram:g0', runtime: 'claude', event_type: 'user_prompt_submit', category: 'activity' });
-  const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
+  const cells = (await f.service.activity('60m', ['telegram:g0'])).groups['telegram:g0'].cells;
   assert.equal(cells.at(-1), 'busy', 'The in-window prompt cannot fall between lexical window and source-time seed filters');
   assert.equal((await read()).working.on, true);
 });
@@ -1602,7 +1634,7 @@ for (const position of ['current', 'before window']) test(`working preserves an 
       subagents: { count: 1, since: at - 20 * minute, lastActivityAt: at - 1.5 * minute + 500 } });
     assert.deepEqual(work.subagents.ids, ['long-child']);
   }
-  const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
+  const cells = (await f.service.activity('60m', ['telegram:g0'])).groups['telegram:g0'].cells;
   if (position === 'current') assert.equal(cells.at(-1), 'busy');
   else {
     assert.equal(cells[0], 'busy', 'A pre-window start survives more than 200 child-tool events');
@@ -1655,7 +1687,7 @@ test('working activity seeds each child freshness independently of a noisy sibli
     }
     add('subagent_stop', before(30000), { agent_id: 'noisy' });
   })();
-  const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
+  const cells = (await f.service.activity('60m', ['telegram:g0'])).groups['telegram:g0'].cells;
   assert.equal(cells[0], 'busy', 'The quiet child refreshed ten minutes before the window');
   assert.equal(cells[19], 'busy');
   assert.equal(cells[20], 'idle', 'The stopped sibling cannot extend the quiet child beyond its own TTL');

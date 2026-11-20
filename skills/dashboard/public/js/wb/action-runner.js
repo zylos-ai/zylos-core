@@ -1,5 +1,5 @@
 /** Dashboard actions that change the running agent, so the page asks before running them. */
-export const CONFIRM_ACTIONS = new Set(['switch-mode', 'restart-session', 'switch-runtime', 'switch-model', 'switch-effort', 'upgrade-zylos', 'upgrade-cc']);
+export const CONFIRM_ACTIONS = new Set(['switch-mode', 'restart-session', 'switch-runtime', 'switch-model', 'switch-effort', 'upgrade-cc']);
 
 /**
  * The page's action runner.

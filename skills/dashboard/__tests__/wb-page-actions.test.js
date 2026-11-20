@@ -33,15 +33,15 @@ function controls() {
 
 test('upgrading the CLI from the session controls asks first; cancelling sends nothing', async () => {
   const no = actions({ answer: false }), c = controls();
-  bindActionControls(c.root, no.run);
+  bindActionControls(c.root, no.run, { runtime: () => 'claude' });
   await c.upgrade.dispatch('click');
   assert.deepEqual(no.asked, ['confirm.upgrade_cc']);
   assert.deepEqual(no.sent, []);
   const yes = actions({ runtime: 'codex' }), c2 = controls();
-  bindActionControls(c2.root, yes.run);
+  bindActionControls(c2.root, yes.run, { runtime: () => 'codex' });
   await c2.upgrade.dispatch('click');
   assert.deepEqual(yes.asked, ['confirm.upgrade_codex'], 'a Codex machine is asked about upgrading Codex');
-  assert.deepEqual(yes.sent, [{ action: 'upgrade-cc', body: undefined }]);
+  assert.deepEqual(yes.sent, [{ action: 'upgrade-cc', body: { runtime: 'codex' } }]);
 });
 
 test('switching the session mode asks first; a cancelled switch restores the mode and sends nothing', async () => {
