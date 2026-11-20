@@ -79,6 +79,7 @@ test('local: create rejects a project page filename longer than 48 characters', 
   const result = await f.editor(create(f.token, target));
   assert.equal(result.ok, false);
   assert.equal(result.code, 'PATH_NOT_ALLOWED');
+  assert.equal(result.message, 'Page filename must use only lowercase letters, digits and hyphens, end with .md and be at most 48 characters including .md, directly under reference/projects/ or reference/decisions/, e.g. reference/projects/memory-sync-fix.md');
   assert.equal(fs.existsSync(path.join(f.dir, 'memory', target)), false);
 });
 
