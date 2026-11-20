@@ -772,3 +772,35 @@ Example: `GET /api/stream` with `Accept: text/event-stream`.
 - Readiness and push: [readiness.js](../src/lib/readiness.js), [sse.js](../src/lib/sse.js), [chat/stream.js](../src/lib/chat/stream.js).
 
 Retired state/system/metric/Workbench group and usage paths are absent from the public API and return 404; callers must use the object APIs above. Fleet mixed-version reads do not fall back to retired state paths.
+
+### Session hosting
+
+`GET /api/session-hosts` returns the local session hosting settings. Both
+methods require the local Dashboard admin login cookie and are unavailable
+through the Fleet proxy. `POST` also requires a same-origin request.
+
+```json
+{
+  "relationships": [
+    {"source_group":"multica:issue-12","target_group":"telegram:topic-1","attached_by":"telegram:topic-1","attached_at":"2025-10-09T08:53:20.000Z"}
+  ],
+  "allowlist": ["multica"]
+}
+```
+
+Each active relationship lists its source, effective target, initiating group
+and creation time. The timestamp is an ISO 8601 UTC string or null. The
+allowlist holds channel names whose attach notifications are muted.
+
+`POST /api/session-hosts` accepts a JSON object with one of these actions.
+
+| Action | Additional field |
+|---|---|
+| `detach` | `group`, the source session group |
+| `allow` or `disallow` | `channel`, the component name |
+
+For example, `{"action":"detach","group":"multica:issue-12"}` ends the
+relationship. The response includes the same settings snapshot and a
+`changed` boolean. A change to the notification allowlist sends an owner
+notice. Invalid input returns HTTP 400, failed access checks return 403,
+and an unavailable C4 store returns 502.

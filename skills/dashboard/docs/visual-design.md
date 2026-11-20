@@ -277,3 +277,11 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 [Approved] JS and CSS use stable URLs with `Cache-Control: no-cache` and ETag validation; HTML remains `no-store`. Delivery records actual test files, commands, pass/fail counts, and exit codes. Keep inventory tables, retest tables, screenshots, and test logs in the PR; do not commit evidence artifacts to the repository.
 
 [Approved] Run only checks relevant to this revision's scope and proven to be isolated. Organize tests according to the repository AGENTS.md rules for locations, naming, and lifecycle; do not touch live resources. For documentation-only revisions, state that there are no product or responsive changes, and check links, rule statuses, and the complete PR diff.
+
+### Session hosting in Settings
+
+Session hosting uses the existing settings card, button and input families. The
+relationship list shows group names, the initiating group, and creation time.
+Long names wrap and actions move below the text on narrow screens. Verify both
+languages and themes at 1280 px and 390 px, including action labels, focus, and
+the allowlist form.
