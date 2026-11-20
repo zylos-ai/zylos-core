@@ -220,6 +220,19 @@ html.wb-nav-row .app-header .header-left { flex: 0 1 auto; min-width: 0; overflo
 html.wb-nav-row .app-header .tab-bar { order: 10; flex: 0 0 100%; margin: 0 -16px; padding: 0 12px 6px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
 html.wb-nav-row .app-header .tab-bar::-webkit-scrollbar { display: none; }
 html.wb-nav-row .app-header .tab { flex: none; }
+/* Landscape phones and tablets use the desktop shell even in standalone mode. */
+@media (min-width: 761px) {
+  .app-header {
+    height: calc(48px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+  }
+  html.wb-nav-row .app-header { min-height: calc(48px + env(safe-area-inset-top)); }
+  html.wb-nav-row .app-header .tab-bar {
+    margin-left: min(0px, calc(env(safe-area-inset-left) - 16px));
+    margin-right: min(0px, calc(env(safe-area-inset-right) - 16px));
+  }
+  .view-stack { padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left); }
+}
 /* Where you are: settings is not a section of the navigation, so while it is open the navigation ends in a
    "Settings" entry marked as the current page, and the gear that opened it reads as pressed. */
 .app-header .tab.wb-tab-here { display: none; }
@@ -1157,7 +1170,7 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 main:has(> #tab-settings.active) { padding: 0; }
 #tab-settings.active { display: block; }
 .wb-set { display: flex; min-height: calc(100dvh - var(--wb-header-h)); background: linear-gradient(to right, var(--wb-side) 0 208px, var(--wb-line) 208px 209px, transparent 209px); }
-.wb-set-nav { position: sticky; top: var(--wb-header-h); align-self: flex-start; width: 209px; flex: none; max-height: calc(100dvh - var(--wb-header-h)); display: flex; flex-direction: column; gap: 2px; padding: 14px 9px 14px 8px; overflow: auto; }
+.wb-set-nav { position: sticky; top: var(--wb-header-h); align-self: flex-start; width: 209px; flex: none; max-height: calc(100dvh - var(--wb-header-h) - env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 2px; padding: 14px 9px 14px 8px; overflow: auto; }
 .wb-set-nav-btn { display: flex; align-items: center; gap: 9px; width: 100%; height: 34px; padding: 0 10px; border: 0; border-radius: var(--wb-r); background: transparent; color: var(--text-dim); font-size: 13px; text-align: left; white-space: nowrap; cursor: pointer; }
 .wb-set-nav-btn:hover { background: var(--wb-hover); color: var(--text); }
 .wb-set-nav-btn[aria-current="true"] { background: var(--wb-accent-soft); color: var(--accent); font-weight: 600; }

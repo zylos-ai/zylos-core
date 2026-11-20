@@ -464,7 +464,7 @@
   flex-direction:column;
   gap:7px;
   margin:0;
-  padding:10px 16px 12px;
+  padding:10px 16px max(12px, env(safe-area-inset-bottom));
   border:0;
   border-top:1px solid var(--wb-line);
   background:var(--bg);
@@ -610,7 +610,7 @@
   }
 
   .conversation-page .conversation-composer {
-    padding:8px 12px 10px
+    padding:8px 12px max(10px, env(safe-area-inset-bottom))
   }
   .conversation-page .conversation-input {
     font-size:12px

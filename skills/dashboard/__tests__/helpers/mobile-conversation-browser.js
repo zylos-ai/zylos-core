@@ -230,9 +230,9 @@ export async function runMobileConversationBrowser(t, sandbox) {
       } finally { clearTimeout(fleetTimer); releaseFleet(); await context.close(); }
     }
   });
-  const open = async ({ width = 390, locale = 'zh', theme = 'light', scene = 'idle', observerBlocked = false, detail = 'plain', sessionMode = 'multi', title = DEFAULT_TITLE, channel = 'dashboard', remote = false } = {}) => {
+  const open = async ({ width = 390, height = width < 761 ? 844 : 900, locale = 'zh', theme = 'light', scene = 'idle', observerBlocked = false, detail = 'plain', sessionMode = 'multi', title = DEFAULT_TITLE, channel = 'dashboard', remote = false } = {}) => {
     fixture.reconnect(); fixture.setScene(scene); fixture.setTitle(title); fixture.setChannel(channel); fixture.setObserverBlocked(observerBlocked); fixture.setSessionMode(sessionMode);
-    const context = await browser.newContext({ viewport: { width, height: width < 761 ? 844 : 900 }, locale: locale === 'zh' ? 'zh-CN' : 'en-US', timezoneId: 'UTC' });
+    const context = await browser.newContext({ viewport: { width, height }, locale: locale === 'zh' ? 'zh-CN' : 'en-US', timezoneId: 'UTC' });
     sandbox.addCleanup(() => context.close());
     const remoteState = { allow: true, reads: 0 }, prefix = '/fleet/phone';
     await context.route('**/*', async route => {
@@ -445,6 +445,56 @@ export async function runMobileConversationBrowser(t, sandbox) {
       }
       assert.deepEqual(errors, []);
     } finally { await context.close(); }
+
+    for (const { width, height, insets } of [
+      { width: 844, height: 390, insets: { top: 0, right: 47, bottom: 21, left: 47 } },
+      { width: 1180, height: 820, insets: { top: 24, right: 0, bottom: 20, left: 0 } }
+    ]) {
+      for (const theme of ['light', 'dark']) {
+        const { page, context, errors } = await open({ width, height, theme, locale: 'en' });
+        try {
+          const cdp = await context.newCDPSession(page);
+          await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
+          await page.waitForFunction(bottom => {
+            const input = document.querySelector('.conversation-input')?.getBoundingClientRect();
+            return input?.height && input.bottom <= innerHeight - bottom;
+          }, insets.bottom);
+          const bounds = async (selector, { checkBottom = false } = {}) => {
+            const result = await page.waitForFunction(selector => {
+              const node = document.querySelector(selector);
+              const rect = node?.getBoundingClientRect();
+              if (!rect?.width || !rect.height || getComputedStyle(node).visibility !== 'visible') return null;
+              return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+            }, selector);
+            const rect = await result.jsonValue();
+            await result.dispose();
+            assert.ok(rect.x >= insets.left && rect.x + rect.width <= width - insets.right,
+              `${selector} fits horizontally: ${JSON.stringify(rect)}`);
+            assert.ok(rect.y >= insets.top, `${selector} fits below the top inset: ${rect.y}`);
+            if (checkBottom) assert.ok(rect.y + rect.height <= height - insets.bottom,
+              `${selector} fits above the bottom inset: ${rect.y + rect.height}`);
+            return rect;
+          };
+          const brand = await bounds('.app-header .brand');
+          const actions = await bounds('.app-header .header-actions');
+          const tabs = await bounds('.app-header .tab-bar');
+          const create = await bounds('.conversation-create');
+          const list = await bounds('.conversation-list-item');
+          const input = await bounds('.conversation-input', { checkBottom: true });
+          await shot(page, `safe-area-${width}-${theme}-conversation`);
+
+          await page.locator('.app-header .tab[data-tab="overview"]').click();
+          const boardRow = await bounds('#wb-board .wb-row');
+          await shot(page, `safe-area-${width}-${theme}-overview`);
+          await page.locator('#wb-settings-btn').click();
+          const settingsNav = await bounds('.wb-set-nav', { checkBottom: true });
+          const settingsItem = await bounds('.wb-set-nav-btn:not([hidden])', { checkBottom: true });
+          await shot(page, `safe-area-${width}-${theme}-settings`);
+          measurements.push({ width, height, theme, insets, brand, actions, tabs, create, list, input, boardRow, settingsNav, settingsItem });
+          assert.deepEqual(errors, []);
+        } finally { await context.close(); }
+      }
+    }
   });
   const noOverflow = async page => assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'no horizontal overflow');
   // The document can stay narrow while a control is clipped by its container.
