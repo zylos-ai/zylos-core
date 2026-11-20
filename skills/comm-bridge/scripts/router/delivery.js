@@ -9,7 +9,6 @@ const { buildKickPrompt } = await loadCoreModule('runtime/kick-prompt.js');
 const { resolveSessionTarget, revalidateSessionTarget } = await loadCoreModule('runtime/session-target.js');
 import { PeriodicEnter } from '../periodic-enter.js';
 import { sanitizeMessage } from '../c4-utils.js';
-import { findPromptY, isUsageOverlayCapture, checkAgyInputState } from '../tmux-input-state.js';
 import { saveEnterCapture } from '../c4-diagnostic.js';
 import { DELIVERY_DELAY_BASE, DELIVERY_DELAY_PER_KB, DELIVERY_DELAY_MAX, MAX_RETRIES, RETRY_BASE_MS,
   CONTROL_MAX_RETRIES, ENTER_VERIFY_MAX_RETRIES, ENTER_VERIFY_WAIT_MS, PERIODIC_ENTER_ENABLED,
@@ -17,23 +16,13 @@ import { DELIVERY_DELAY_BASE, DELIVERY_DELAY_PER_KB, DELIVERY_DELAY_MAX, MAX_RET
   REQUIRE_IDLE_POST_SEND_HOLD_MS, REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS, REQUIRE_IDLE_EXECUTION_POLL_MS } from '../c4-config.js';
 
 const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
+const { findRuntime } = await loadCoreModule('runtime/index.js');
+const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
 
 const failure = adapterError;
 const offline = state => state === 'offline' || state === 'stopped';
 export function getDeliveryDelay(bytes) {
   return Math.min(DELIVERY_DELAY_BASE + Math.floor(bytes / 1024) * DELIVERY_DELAY_PER_KB, DELIVERY_DELAY_MAX);
-}
-export function getClaudeInputBoxText(capture) {
-  const lines = capture.split('\n');
-  const separators = lines.flatMap((line, index) => /^─{10,}/.test(line) ? [index] : []);
-  if (separators.length < 2) return null;
-  return lines.slice(separators.at(-2) + 1, separators.at(-1)).join('\n');
-}
-export function checkClaudeFallbackInputBox(capture) {
-  const text = getClaudeInputBoxText(capture);
-  if (text === null) return 'indeterminate';
-  const right = Array.from((text.split('\n')[0] || '').replace(/^\s*[›❯]/, '')).slice(0, 10).join('');
-  return right.replace(/[\p{C}\p{Z}]+/gu, '').length ? 'has_content' : 'empty';
 }
 export function getHeartbeatPhase(content) { return String(content || '').match(/\[phase=([a-z_-]+)\]/i)?.[1]?.toLowerCase() ?? 'unknown'; }
 export function isRecoveryHeartbeatPhase(phase) { return phase === 'recovery' || phase === 'post_restart'; }
@@ -60,6 +49,7 @@ export function createDelivery(deps, configuration = {}) {
   const sleep = deps.sleep ?? ((ms, signal) => delay(ms, undefined, { signal }));
   const open = deps.openTmuxConnection ?? openTmuxConnection;
   const resolve = deps.resolveSessionTarget ?? resolveSessionTarget;
+  const find = deps.findRuntime ?? findRuntime;
   const revalidate = deps.revalidateSessionTarget ?? revalidateSessionTarget;
   const active = new Set();
   const periodicGroups = new Map();
@@ -180,7 +170,7 @@ export function createDelivery(deps, configuration = {}) {
     const fields = { session_group: group, [type === 'control' ? 'control_id' : 'conversation_id']: row.id };
     const emit = (event, details = {}) => diagnostic(event, { ...fields, ...details });
     const periodic = groupPeriodic(group, fields);
-    let connection, target, timer, draining = false, queue = Promise.resolve();
+    let connection, target, runtime, timer, draining = false, queue = Promise.resolve();
     let result = 'blocked', gateCode, gateReason, error, state = { state: 'offline' }, initial = true, sessionId = null, entered = false, pastedAt = null;
     // A control typed into the session as a message (not a key, a slash command or an auto-acknowledged heartbeat) is
     // input the agent works on, delivered like a conversation message.
@@ -227,33 +217,17 @@ export function createDelivery(deps, configuration = {}) {
       if (['missing', 'unparseable'].includes(sample.status?.reason)) return { state: 'unknown' };
       return { state: 'offline' };
     }
+    const captureScreen = () => deps.session.captureScreen(bound());
     async function inputState() {
       await revalidate(bound());
       const rawX = await connection.command([C.displayMessage, '-p', '-t', target.paneId, F.cursorX]);
-      const x = Number.parseInt(rawX.trim(), 10);
-      let verdict = 'indeterminate';
-      if (target.runtime === 'agy') {
+      const cursorX = Number.parseInt(rawX.trim(), 10);
+      const readCursorY = async () => {
         await revalidate(bound());
-        const y = Number.parseInt((await connection.command([C.displayMessage, '-p', '-t', target.paneId, F.cursorY])).trim(), 10);
-        verdict = checkAgyInputState(await deps.session.captureScreen(bound()), x, y);
-        emit('input_check', { verdict });
-        return verdict;
-      }
-      if (Number.isInteger(x) && x >= 0) {
-        if (x > 2) verdict = 'has_content';
-        else {
-          await revalidate(bound());
-          const y = Number.parseInt((await connection.command([C.displayMessage, '-p', '-t', target.paneId, F.cursorY])).trim(), 10);
-          const prompt = findPromptY(await deps.session.captureScreen(bound()));
-          if (Number.isInteger(y) && y >= 0 && prompt >= 0) verdict = y === prompt ? 'empty' : 'has_content';
-        }
-      }
-      if (verdict === 'has_content' && target.runtime === 'claude') {
-        try {
-          const fallback = checkClaudeFallbackInputBox(await deps.session.captureScreen(bound()));
-          if (fallback !== 'indeterminate') verdict = fallback === 'empty' ? 'disputed_empty' : fallback;
-        } catch (cause) { if (isIdentityError(cause)) throw cause; }
-      }
+        const rawY = await connection.command([C.displayMessage, '-p', '-t', target.paneId, F.cursorY]);
+        return Number.parseInt(rawY.trim(), 10);
+      };
+      const verdict = await runtime.input.inputState({ cursorX, readCursorY, capture: captureScreen });
       emit('input_check', { verdict });
       return verdict;
     }
@@ -275,10 +249,11 @@ export function createDelivery(deps, configuration = {}) {
           continue;
         }
         if (verdict === 'has_content') await io(() => enter('verify_retry'));
-        else {
+        else if (runtime.input.dismissOverlay !== UNSUPPORTED) {
           try {
             await io(async () => {
-              if (isUsageOverlayCapture(await deps.session.captureScreen(bound()))) await deps.session.sendKeys({ ...bound(), keys: ['Escape'] });
+              const key = runtime.input.dismissOverlay(await captureScreen());
+              if (key) await deps.session.sendKeys({ ...bound(), keys: [key] });
             });
           } catch (cause) { if (isIdentityError(cause)) throw cause; }
         }
@@ -319,18 +294,19 @@ export function createDelivery(deps, configuration = {}) {
             ['serverGeneration', 'sessionId', 'paneId'].some(key => binding.tmuxTarget[key] !== target[key]) ||
             (binding.expectedSessionId != null && binding.expectedSessionId !== target.runtimeSessionId)) throw failure('RUNID_MISMATCH');
         }
+        if (target.ready) runtime = await find(target.runtime);
         if (!target.ready) { gateCode = 'wait_ready'; }
-        else if (!SUPPORTED_RUNTIMES.includes(target.runtime)) { gateCode = 'runtime_unknown'; try { deps.alert?.('runtime_unknown', fields); } catch {} }
+        else if (!runtime) { gateCode = 'runtime_unknown'; try { deps.alert?.('runtime_unknown', fields); } catch {} }
         else {
         state = await readState();
         const item = { ...row, type };
         const bypass = isBypassState(item);
         const health = deps.readRuntimeHealth(target.runtime);
         const publicHealth = health.missing ? 'ok' : health.unreadable ? 'unavailable' : (health.publicHealth ?? health.health);
-        const agyInputReady = target.runtime !== 'agy' || isKeystrokeControl(item) || await inputState() === 'empty';
-        if (!agyInputReady || (!bypass && (offline(state.state) || (state.health ?? 'ok') !== 'ok' || publicHealth !== 'ok')) ||
+        const inputReady = !runtime.input.requireEmptyBeforePaste || isKeystrokeControl(item) || await inputState() === 'empty';
+        if (!inputReady || (!bypass && (offline(state.state) || (state.health ?? 'ok') !== 'ok' || publicHealth !== 'ok')) ||
           (row.require_idle === 1 && (state.state !== 'idle' || !(Number.isFinite(state.idle_seconds) && state.idle_seconds >= REQUIRE_IDLE_MIN_SECONDS)))) {
-          gateCode = !agyInputReady ? 'input_not_empty' : !bypass && offline(state.state) ? 'session_offline'
+          gateCode = !inputReady ? 'input_not_empty' : !bypass && offline(state.state) ? 'session_offline'
             : !bypass && (state.health ?? 'ok') !== 'ok' ? 'session_unhealthy'
             : !bypass && publicHealth !== 'ok' ? 'runtime_unavailable' : 'require_idle';
           gateReason = gateCode === 'session_unhealthy' ? `session_${state.health}`
@@ -347,14 +323,17 @@ export function createDelivery(deps, configuration = {}) {
             result = 'ack';
           } else {
             if (type === 'control' && content.startsWith('/')) periodic.reset('slash_control');
-            const message = type === 'conversation' ? deps.formatConversation(row) : content.startsWith('/') || continuation ? content : `Meanwhile, ${content}`;
+            const message = type === 'conversation'
+              ? deps.formatConversation(row, { pasteCharThreshold: runtime.input.pasteCharThreshold })
+              : content.startsWith('/') || continuation ? content : `Meanwhile, ${content}`;
             const sanitized = sanitizeMessage(message);
-            const clearAgy = target.runtime === 'agy' && type === 'control' && content === '/clear';
-            if (clearAgy) {
+            const clearSource = runtime.switch.clearFiresSessionStart === false
+              && type === 'control' && content === runtime.switch.command;
+            if (clearSource) {
               await revalidate(bound());
               const directory = groupRunDir(group ?? 'origin');
               await fs.mkdir(directory, { recursive: true });
-              await fs.writeFile(path.join(directory, 'agy-session-source'), JSON.stringify({ runId: target.runId, source: 'clear' }), { mode: 0o600 });
+              await fs.writeFile(path.join(directory, runtime.switch.clearSourceMarker), JSON.stringify({ runId: target.runId, source: 'clear' }), { mode: 0o600 });
             }
             await io(async () => {
               if(continuation && deps.db.getControlById(row.id)?.status!=='running')throw failure('CONTROL_NOT_ACTIVE');
@@ -383,9 +362,9 @@ export function createDelivery(deps, configuration = {}) {
               if (type === 'conversation' || ((after.proc?.alive === false || offline(after.state)) &&
                 !(isExitLifecycleControl(item, target.runtime)))) throw failure('ENTER_UNVERIFIED');
             }
-            if (clearAgy) {
-              // /clear itself does not fire SessionStart in agy. Its first
-              // message does, so use the same internal sentinel as launch.
+            if (clearSource) {
+              // The first message after this switch fires SessionStart, so
+              // send the same internal sentinel as launch.
               await io(() => deps.session.sendText({ ...bound(), runtime: target.runtime, text: buildKickPrompt(), bracketedPaste: BRACKETED_PASTE_ENABLED }));
               await sleep(getDeliveryDelay(Buffer.byteLength(buildKickPrompt(), 'utf8')));
               if (!await verify()) throw failure('ENTER_UNVERIFIED');

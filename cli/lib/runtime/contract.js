@@ -46,5 +46,18 @@ export const RUNTIME_CONTRACT = Object.freeze({
     output: 'required',
     sessionStartInjection: 'optional',
   }) }),
-  input: Object.freeze({ required: true, members: Object.freeze({ bracketedPaste: 'required' }) }),
+  input: Object.freeze({ required: true, members: Object.freeze({
+    bracketedPaste: 'required',
+    inputState: 'required',
+    requireEmptyBeforePaste: 'required',
+    pasteCharThreshold: 'required',
+    dismissOverlay: 'optional',
+  }) }),
+  switch: Object.freeze({ required: true, members: Object.freeze({
+    command: 'required',
+    exitsProcess: 'required',
+    clearFiresSessionStart: 'optional',
+    clearSourceMarker: 'optional',
+  }) }),
+  hooks: Object.freeze({ required: true, members: Object.freeze({ sessionIdEnv: 'optional' }) }),
 });

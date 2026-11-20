@@ -1,0 +1,11 @@
+{
+  "program": "codex",
+  "version": "codex-cli 0.169.1",
+  "recordedAt": "2026-11-20T16:39:00Z",
+  "how": "Reviewer-recorded on DGX Spark (Linux aarch64) as the dedicated test user zylos-test with a temporary HOME and CODEX_HOME, @openai/codex@0.169.1 in a temporary npm prefix. Logged in with `codex login --with-api-key` using an obviously fake key (Codex only checks it when a request is sent; no message was sent, auth.json removed afterwards). Launched with --dangerously-bypass-approvals-and-sandbox in a private tmux socket, pane 200x50. Each screen is unmodified `tmux capture-pane -p` output; cursorX/cursorY are `display -p '#{cursor_x}'` / `'#{cursor_y}'` read immediately before the capture and re-read unchanged immediately after it.",
+  "files": {
+    "empty.txt": { "cursorX": 2, "cursorY": 46, "description": "Empty input box (placeholder text shown) on a fresh session." },
+    "draft.txt": { "cursorX": 21, "cursorY": 47, "description": "One-line draft typed, not sent." },
+    "slash-menu.txt": { "cursorX": 3, "cursorY": 47, "description": "Slash command menu opened by typing /." }
+  }
+}

@@ -3,6 +3,7 @@ import * as database from '../c4-db.js';
 const { readSessionMode, readZylosConfigStrict } = await loadCoreModule('config.js');
 const { createSessionReader } = await loadCoreModule('session-state-reader-async.js');
 const { readRuntimeHealth } = await loadCoreModule('session-state-reader.js');
+const { findRuntime } = await loadCoreModule('runtime/index.js');
 const { readReadyIdentity } = await loadCoreModule('runtime/session-target.js');
 const { createSessionOps } = await loadCoreModule('runtime/session-ops.js');
 const { launchSession } = await loadCoreModule('runtime/launch-flow.js');
@@ -81,7 +82,9 @@ export function createDispatcher(overrides = {}, options = {}) {
   const handleExpired = overrides.handleExpired ?? createPendingExpiryHandler({ sendFailureAlert });
   let router;
   const delivery = createDelivery({ ...providers, getSessionMode: () => router.state.mode,
-    formatConversation: overrides.formatConversation ?? (row => formatConversation(row, {
+    findRuntime: overrides.findRuntime ?? findRuntime,
+    formatConversation: overrides.formatConversation ?? ((row, options) => formatConversation(row, {
+      ...options,
       lookupQuote: current => resolveDashboardQuote(current, db.getDb()),
     })),
     notifyDelivered: overrides.notifyDelivered ?? notifyDelivered,

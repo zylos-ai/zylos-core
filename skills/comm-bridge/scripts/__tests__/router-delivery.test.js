@@ -5,8 +5,11 @@ import path from 'node:path';
 import { createRouterDiagnostics } from '../router/diagnostics.js';
 import { createJsonlStream } from '../../../../cli/lib/jsonl-stream.js';
 import assert from 'node:assert/strict';
-import { BRACKETED_PASTE_ENABLED } from '../c4-config.js';
-import { createDelivery, getDeliveryDelay, checkClaudeFallbackInputBox } from '../router/delivery.js';
+import { ATTACHMENTS_DIR, BRACKETED_PASTE_ENABLED } from '../c4-config.js';
+import { createDelivery, getDeliveryDelay } from '../router/delivery.js';
+import { formatConversation } from '../router/format.js';
+import { getRuntime } from '../../../../cli/lib/runtime/index.js';
+import { checkClaudeFallbackInputBox } from '../../../../cli/lib/runtime/claude/input.js';
 import { fixture } from './c4-v2-test-helpers.js';
 const error = code => Object.assign(new Error(code), { code });
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
@@ -66,6 +69,33 @@ test('successful paste notifies immediately, reads current same-run F3 and drain
   assert.deepEqual(f.calls.find(c => c[0] === 'notify')[1], { conversationId: row.id, channel: 'telegram', sessionGroup: row.session_group, runId: 'r1', runtime: 'codex', pastedAt: 100000 });
   for (const [kind, arg] of f.calls) if (['paste', 'keys', 'capture'].includes(kind)) { assert.equal(arg.target, f.target); assert.equal(arg.connection, f.connection); }
   assert.equal(f.calls.filter(c => c[0] === 'resolve').length, 1);
+});
+
+test('real-time delivery spills only above the target runtime paste threshold', async t => {
+  const f = setup(t);
+  const runtime = await getRuntime('claude');
+  f.target.runtime = runtime.id;
+  f.deps.findRuntime = async id => {
+    assert.equal(id, runtime.id);
+    return { ...runtime, input: { ...runtime.input, pasteCharThreshold: 5 } };
+  };
+  f.deps.formatConversation = formatConversation;
+  const delivery = f.create();
+  t.after(() => delivery.stop());
+
+  const atLimit = { ...f.message(), content: 'abcde', endpoint_id: null };
+  const aboveLimit = { ...f.message(), content: 'abcdef', endpoint_id: null };
+  const atLimitDir = path.join(ATTACHMENTS_DIR, 'conv-' + atLimit.id);
+  const aboveLimitDir = path.join(ATTACHMENTS_DIR, 'conv-' + aboveLimit.id);
+  t.after(() => Promise.all([atLimitDir, aboveLimitDir].map(dir => fs.rm(dir, { recursive: true, force: true }))));
+
+  assert.equal((await delivery.deliverConversation(atLimit)).delivered, true);
+  assert.equal((await delivery.deliverConversation(aboveLimit)).delivered, true);
+  const [first, second] = f.calls.filter(([kind]) => kind === 'paste').map(([, args]) => args.text);
+  assert.equal(first, 'abcde');
+  await assert.rejects(fs.stat(atLimitDir), { code: 'ENOENT' });
+  assert.ok(second.includes('[C4] ⚠️ TRUNCATED'));
+  assert.equal(await fs.readFile(path.join(aboveLimitDir, 'message.txt'), 'utf8'), 'abcdef');
 });
 
 test('single targets Origin and withholds delivery on unknown runtime, missing READY or invalid status', async t => {

@@ -415,11 +415,6 @@
     "reason": "dispatch:delivery: Uses the runtime’s input, hook, and transcript signals to establish activity."
   },
   {
-    "file": "skills/activity-monitor/scripts/supervisor-exits.js",
-    "text": "if (scene.runtime === 'codex' && Number.isFinite(scene.currentSessionTs)) {",
-    "reason": "dispatch:delivery: Uses the Codex exit signal when matching the session lifecycle."
-  },
-  {
     "file": "skills/activity-monitor/scripts/supervisor-health-observer.js",
     "text": "const continuationOwnsScreen=scene.runtime==='claude' && retry?.runId===scene.runId && retry.sessionId===scene.sessionId;",
     "reason": "dispatch:health: Lets matching Claude continuation own screen recovery."
@@ -478,36 +473,6 @@
     "file": "skills/activity-monitor/scripts/usage-monitor.js",
     "text": "if (this.runtimeId === 'codex') return this.options.usageCodexStateFile;",
     "reason": "else-fallback: Unknown runtimes use the same usage state path as Claude."
-  },
-  {
-    "file": "skills/comm-bridge/scripts/c4-channel-hooks.js",
-    "text": "const candidates = context.runtime === 'codex' ? [env.CODEX_SESSION_ID]",
-    "reason": "dispatch:hooks: Reads the runtime-specific native session ID variable."
-  },
-  {
-    "file": "skills/comm-bridge/scripts/c4-channel-hooks.js",
-    "text": ": context.runtime === 'claude' ? [env.CLAUDE_SESSION_ID]",
-    "reason": "dispatch:hooks: Reads the runtime-specific native session ID variable."
-  },
-  {
-    "file": "skills/comm-bridge/scripts/router/delivery.js",
-    "text": "if (target.runtime === 'agy') {",
-    "reason": "dispatch:delivery: Preserves runtime-specific paste, input, and session-clear behavior."
-  },
-  {
-    "file": "skills/comm-bridge/scripts/router/delivery.js",
-    "text": "if (verdict === 'has_content' && target.runtime === 'claude') {",
-    "reason": "dispatch:delivery: Preserves runtime-specific paste, input, and session-clear behavior."
-  },
-  {
-    "file": "skills/comm-bridge/scripts/router/delivery.js",
-    "text": "const agyInputReady = target.runtime !== 'agy' || isKeystrokeControl(item) || await inputState() === 'empty';",
-    "reason": "dispatch:delivery: Preserves runtime-specific paste, input, and session-clear behavior."
-  },
-  {
-    "file": "skills/comm-bridge/scripts/router/delivery.js",
-    "text": "const clearAgy = target.runtime === 'agy' && type === 'control' && content === '/clear';",
-    "reason": "dispatch:delivery: Preserves runtime-specific paste, input, and session-clear behavior."
   },
   {
     "file": "skills/comm-bridge/scripts/router/lifecycle.js",
