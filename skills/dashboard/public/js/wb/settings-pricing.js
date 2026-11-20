@@ -200,7 +200,7 @@ export function createPricingPanel({ root, host, snapshot, data, usage = {}, doc
       });
       line.append(icon(document, 'alert'), text, add); unmatched.append(line);
     }
-    if (baseCount) baseCount.textContent = t('wb.settings.priceCount', { count: Object.keys(payload.modelPrices ?? {}).length });
+    if (baseCount) baseCount.textContent = countLabel(t, 'wb.settings.priceCount', Object.keys(payload.modelPrices ?? {}).length);
     pages.refresh();
     [...baseRows.querySelectorAll('input'), ...baseRows.querySelectorAll('button'), ...priorityRows.querySelectorAll('input'), ...priorityRows.querySelectorAll('button'), ...host.querySelectorAll('#settings-add-model, #settings-add-priority-model, #settings-fast-multiplier, #settings-save')].forEach(node => { node.disabled = !writable(); });
     refreshDirty();

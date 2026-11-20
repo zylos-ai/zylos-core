@@ -1030,6 +1030,7 @@
   "wb.settings.prefix": "Model prefix",
   "wb.settings.priceTable": "{runtime} prices",
   "wb.settings.priceCount": "{count} models",
+  "wb.settings.priceCountOne": "{count} model",
   "wb.settings.searchModels": "Search models",
   "wb.settings.prioritySub": "Codex fast mode uses the Priority tier, billed with this table",
   "wb.settings.revert": "Discard changes",

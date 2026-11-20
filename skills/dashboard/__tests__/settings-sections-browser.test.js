@@ -67,6 +67,7 @@ test('the settings page keeps its sections in order, offers the right upgrades a
         if (url.pathname === '/api/instance/actions/upgrade-runtime') return route.fulfill({ json: { ok: true } });
         if (url.pathname === '/api/keys' && method === 'GET') return route.fulfill({ json: { keys: fixtures.keys } });
         if (url.pathname === '/api/fleet/agents' && method === 'GET') return route.fulfill({ json: { self: { name: 'browser-case' }, agents: fixtures.machines } });
+        if (url.pathname === '/api/settings/pricing' && method === 'PUT') return route.fulfill({ json: { ok: true } });
         if (url.pathname === '/api/settings/pricing' && method === 'GET') return route.fulfill({ json: { active: 'claude', runtimes: {
           claude: { builtInModels: Object.keys(fixtures.prices), modelPrices: fixtures.prices, fastMode: { configuredMultiplier: 6 } },
           codex: { builtInModels: ['gpt'], modelPrices: { gpt: rate }, priorityModelPrices: {}, builtInPriorityModels: [] } } } });
@@ -159,7 +160,7 @@ test('the settings page keeps its sections in order, offers the right upgrades a
     });
 
     await t.test('hosting, keys, machines and prices: a total, eight a page, search across pages and an empty result', async () => {
-      const { context, page, errors, pick, shot } = await open(1280, { coreUpdate: null });
+      const { context, page, errors, writes, pick, shot } = await open(1280, { coreUpdate: null });
       const lists = [
         ['machine', '#settings-host-relationships', '.wb-host-rows', '.wb-host-row', '共 11 个', 'issue-'],
         ['account', '#api-key-list', '#api-key-list', 'tbody tr', '11 个有效 · 0 个已吊销', 'key-'],
@@ -190,6 +191,21 @@ test('the settings page keeps its sections in order, offers the right upgrades a
         await shot(`${section}-no-match`);
         await search.fill('');
       }
+      // A price edited on another page is saved with every other row, after going back to the first page.
+      const pricing = page.locator('#settings-model-pricing-group');
+      await pricing.locator('.wb-plist-next').click();
+      const ninth = page.locator('#settings-price-rows tr[data-prefix="model-9"] input.settings-num').first();
+      await ninth.fill('7');
+      await pricing.locator('.wb-plist-prev').click();
+      assert.equal(await ninth.isVisible(), false, 'the edited row is on the other page');
+      await page.locator('#settings-save').click();
+      for (let i = 0; i < 50 && !writes.some(write => write.path === '/api/settings/pricing'); i++) await page.waitForTimeout(100);
+      const saved = writes.filter(write => write.path === '/api/settings/pricing');
+      assert.equal(saved.length, 1);
+      const rows = saved[0].body.runtimes.claude.modelPrices;
+      assert.deepEqual(Object.keys(rows).sort(), Object.keys(fixtures.prices).sort(), 'all 11 price rows are saved');
+      assert.equal(rows['model-9'].input, 7, 'with the edited value');
+      assert.equal(rows['model-1'].input, rate.input);
       assert.deepEqual(errors, []);
       await context.close();
     });

@@ -11,8 +11,6 @@ export const prefRows = ['detail', 'lang', 'theme', 'sound'];
 // The page's own controls these rows and the account card take over.
 const controlSelectors = { detail: '#wb-detail-toggle', sound: '#fleet-sound-toggle', logout: '#logout-btn' };
 const prefNotes = new Set(['detail', 'sound']);
-// The whole machine's cards, top to bottom; the session host list is the longest, so it comes last.
-export const machineCards = ['version', 'timezone', 'observer', 'session', 'hosts'];
 
 /** A settings card: icon + title, an optional grey subtitle and a right-aligned action slot. */
 export function settingsCard(document, { icon: name, title = '', sub = '', id } = {}) {
