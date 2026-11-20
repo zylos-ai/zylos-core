@@ -1,7 +1,6 @@
 import { parse as parseToml } from 'smol-toml';
 import { InitEndpointConfigurationError, savedInitBaseUrl } from '../shared/init-base-url.js';
 import { writeEnvFile } from '../../env.js';
-import { upsertEnvValue } from '../shared/credential-env.js';
 import { writePrivateFile } from '../../private-file.js';
 import { createIdentity } from '../shared/identity.js';
 import { verifyCodexApiKey } from '../../init-api-auth.js';
@@ -13,7 +12,7 @@ import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { classifyCodexLoginStatus, parseCodexLoginStatus } from '../../auth-parsers.js';
 import { ZYLOS_DIR } from '../../config.js';
-import { warnUnrestrictedCredentialFiles, writeCodexConfig } from '../../runtime-setup.js';
+import { upsertEnvValue, warnUnrestrictedCredentialFiles, writeCodexConfig } from '../../runtime-setup.js';
 import { UNSUPPORTED } from '../contract.js';
 
 const { findExecutable } = createIdentity('codex');

@@ -1,12 +1,11 @@
 import { createIdentity } from '../shared/identity.js';
 import { writeEnvFile } from '../../env.js';
-import { credentialEnvValue, upsertEnvValue } from '../shared/credential-env.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { launchEnvironment } from '../session-command.js';
 import { ZYLOS_DIR } from '../../config.js';
-import { warnUnrestrictedCredentialFiles } from '../../runtime-setup.js';
+import { credentialEnvValue, upsertEnvValue, warnUnrestrictedCredentialFiles } from '../../runtime-setup.js';
 import { UNSUPPORTED } from '../contract.js';
 
 const MODELS_URL = 'https://generativelanguage.googleapis.com/v1beta/models';

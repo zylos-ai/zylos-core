@@ -376,11 +376,6 @@ async function configureTimezone(skipConfirm, isReinit, resolvedTz = null, quiet
     return;
   }
 
-  if (explicitBaseFlag && configuredRuntime && (await getRuntime(configuredRuntime)).auth.saveBaseUrl === UNSUPPORTED) {
-    console.error(error(`Error: ${explicitBaseFlag} is not supported for ${configuredRuntime}`));
-    process.exit(1);
-  }
-
   // Non-interactive mode: use detected timezone
   if (skipConfirm) {
     const detected = detectSystemTimezone();

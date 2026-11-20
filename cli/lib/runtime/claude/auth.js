@@ -1,6 +1,5 @@
 import { InitEndpointConfigurationError, savedInitBaseUrl } from '../shared/init-base-url.js';
 import { writeEnvFile } from '../../env.js';
-import { credentialEnvValue, upsertEnvValue } from '../shared/credential-env.js';
 import { writePrivateFile } from '../../private-file.js';
 import { createIdentity } from '../shared/identity.js';
 import fs from 'node:fs';
@@ -14,7 +13,7 @@ import { promisify } from 'node:util';
 import { CLAUDE_BUILTIN_ENV_KEYS, CLAUDE_CREDENTIAL_KEYS, ZYLOS_DIR } from '../../config.js';
 import { launchEnvironment, readLaunchDotenv } from '../session-command.js';
 import { childRuntimeEnv } from '../../child-runtime-env.js';
-import { warnUnrestrictedCredentialFiles } from '../../runtime-setup.js';
+import { credentialEnvValue, upsertEnvValue, warnUnrestrictedCredentialFiles } from '../../runtime-setup.js';
 
 const { findExecutable } = createIdentity('claude');
 
