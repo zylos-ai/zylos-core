@@ -916,7 +916,6 @@
   "wb.settings.confirm.timezoneRestart": "重启服务以应用时区",
   "wb.settings.confirm.upgradeEngine": "升级 {engine}",
   "wb.settings.confirm.upgradeEngineUnknown": "升级 AI 引擎",
-  "wb.settings.confirm.upgradeZylos": "升级 Zylos Core",
   "wb.settings.confirm.restartSession": "重启会话",
   "wb.settings.confirm.removeMachine": "移除机器",
   "wb.settings.confirm.purgeRevoked": "清空已吊销的密钥",

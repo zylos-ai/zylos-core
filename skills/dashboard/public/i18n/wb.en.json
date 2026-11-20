@@ -916,7 +916,6 @@
   "wb.settings.confirm.timezoneRestart": "Restart services for the time zone",
   "wb.settings.confirm.upgradeEngine": "Upgrade {engine}",
   "wb.settings.confirm.upgradeEngineUnknown": "Upgrade AI engine",
-  "wb.settings.confirm.upgradeZylos": "Upgrade Zylos Core",
   "wb.settings.confirm.restartSession": "Restart session",
   "wb.settings.confirm.removeMachine": "Remove machine",
   "wb.settings.confirm.purgeRevoked": "Clear revoked keys",

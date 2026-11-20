@@ -26,7 +26,6 @@ export function actionConfirmOptions(action, { t, runtime = null }) {
     'restart-session': ['wb.settings.confirm.restartSession', true],
     'switch-model': ['wb.settings.confirm.models', false],
     'switch-effort': ['wb.settings.confirm.models', false],
-    'upgrade-zylos': ['wb.settings.confirm.upgradeZylos', false],
   };
   if (action === 'upgrade-cc') {
     const name = engineTitle(runtime);
