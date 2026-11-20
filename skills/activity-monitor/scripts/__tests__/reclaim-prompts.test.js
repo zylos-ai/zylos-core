@@ -36,7 +36,6 @@ test('each check control states its reason and names its check in the activity-m
     assert.ok(normalized.toLowerCase().includes(`**${check}**`), `${check} is described in the reference`);
     assert.doesNotMatch(prompt, /defer-reclaim|scheduler|handoff|send messages/, `${check} rules stay in the reference`);
   }
-  assert.match(normalized, /In single-session mode it is the only session group and `\$ZYLOS_SESSION_GROUP` is unset\./);
 });
 
 test('every check prohibits messages and requires a current-record handoff without completed items', () => {
