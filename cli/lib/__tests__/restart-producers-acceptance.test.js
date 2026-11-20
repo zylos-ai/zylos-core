@@ -22,9 +22,7 @@ async function fixture(t, response) {
   });
   await new Promise(resolve => server.listen(socketPath, resolve));
   t.after(async () => { for (const peer of peers) peer.destroy(); await new Promise(resolve => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true }); });
-  const restart = (options = {}) => requestRuntimeRestart({ ...options, readMode: () => ({ mode: 'multi' }), readTransition: () => null,
-    send: (request, options) => submit(request, { ...options, socketPath, replyMaxMs: 20 }), lookup: async () => { trace.push('lookup'); return 'unknown'; },
-    enqueueExit: () => { throw new Error('must not fallback to /exit'); } });
+  const restart = (options = {}) => requestRuntimeRestart({ ...options, send: (request, options) => submit(request, { ...options, socketPath, replyMaxMs: 20 }), lookup: async () => { trace.push('lookup'); return 'unknown'; } });
   return { root, requests, trace, restart };
 }
 async function invoke(t, producer, response) {

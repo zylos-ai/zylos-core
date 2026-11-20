@@ -44,12 +44,10 @@ function fixture(t, config = {}) {
     verifyServices: () => { calls.push('verify'); },
     dashboardOwner: { verifyDashboard: () => ({ state: 'ready', errors: [] }) },
     readModeStatus: () => ({ sessionMode: null, transition: null }),
-    readMode: () => ({ mode: null, keyPresent: false }),
-    readTransition: () => null,
     restart: async options => {
       calls.push('restart');
       assert.equal(Object.hasOwn(options,'deadlineAt'),false);
-      return { ok: true, data: { result: 'exit_enqueued' } };
+      return { ok: true, data: { result: 'accepted' } };
     },
   };
   return { ctx, deps, calls, configFile, read: () => JSON.parse(fs.readFileSync(configFile, 'utf8')) };
@@ -199,31 +197,3 @@ test('caller uses the configured lock window and continues finalization', async 
   assert.equal(writes, 1);
   assert.equal(f.calls.includes('start'),true);
 });
-
-test('transition read uses ordinary DB limits before restart', async t => {
-  const f = fixture(t);
-  let readFinished = false;
-  f.deps.readMode = () => ({ mode: 'single', keyPresent: true });
-  f.deps.readTransition = (...args) => {
-    assert.deepEqual(args, []);
-    readFinished = true;
-    return null;
-  };
-  const result = await completeUpgradeFinalization(f.ctx, f.deps);
-  assert.equal(readFinished, true);
-  assert.equal(result.success, true);
-  assert.equal(result.completion.sessionRestart, 'single_exit_enqueued');
-  assert.equal(f.calls.includes('restart'), true);
-});
-
-for (const read of ['readMode', 'readTransition']) {
-  for (const code of ['DB_BUSY', 'READ_FAILED']) test(`${read} ${code} prevents restart fallback`, async t => {
-    const f = fixture(t);
-    f.deps[read] = () => { throw Object.assign(Error(`${read} ${code}`), { code }); };
-    const result = await completeUpgradeFinalization(f.ctx, f.deps);
-    assert.equal(result.success, true);
-    assert.equal(result.completion.sessionRestart, 'manual_required');
-    assert.equal(result.sessionRestart.error.code, code);
-    assert.equal(f.calls.includes('restart'), false);
-  });
-}

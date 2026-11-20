@@ -1,20 +1,6 @@
 import { loadCoreModule } from './core-modules.js';
 const { LEGACY_TMUX_NAMES } = await loadCoreModule('session-group-paths.js');
 
-/** Lifecycle cleanup is provided by the owner of the per-origin files, rather
- * than invoking the old machine-wide guardian reset during legacy migration. */
-export function createSinglePreparation({ clearStaleState, resetToolLifecycle, buildInstructionFile, log = () => {} }) {
-  for (const fn of [clearStaleState, resetToolLifecycle, buildInstructionFile]) {
-    if (typeof fn !== 'function') throw new TypeError('Single preparation requires lifecycle and instruction providers');
-  }
-  return async function prepareSingle(runtime) {
-    // These are best-effort cleanups, as in the guardian being replaced.
-    try { await clearStaleState(runtime); } catch (error) { log(`Stale-state cleanup: ${error.message}`); }
-    try { await resetToolLifecycle(runtime); } catch (error) { log(`Tool lifecycle reset: ${error.message}`); }
-    await buildInstructionFile(runtime);
-  };
-}
-
 /** Legacy observation has its own identity/state providers. It never reads the
  * new origin state and never treats a failed observation as confirmed absence. */
 export function createLegacyMigration({ readLegacy, readLegacyStatus, sendExit, getSessionAdapter,

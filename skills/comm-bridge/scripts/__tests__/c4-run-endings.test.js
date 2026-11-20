@@ -28,7 +28,7 @@ for (const reason of ['ttl', 'evict', 'release', 'upgrade', 'auth', 'model_confi
     const before = db.prepare('SELECT count(*) AS n FROM conversations').get().n;
     const controlsBefore = db.prepare('SELECT count(*) AS n FROM control_queue').get().n;
     const ending = store.recordRunEnd('test:group', { runId: 'run1', reason });
-    const needed = ['upgrade', 'auth', 'model_config', 'manual_restart', 'unexpected', 'mode_switch'].includes(reason);
+    const needed = ['upgrade', 'auth', 'model_config', 'manual_restart', 'unexpected'].includes(reason);
     assert.deepEqual(ending, { recorded: true });
     assert.equal(clockCalls, 1, 'the ending timestamp is sampled inside its transaction');
     assert.deepEqual(store.listRunEndings(['test:group']), [{ sessionGroup: 'test:group', runId: 'run1', reason, endedAt: clock, continuationPending: Number(needed) }]);
@@ -43,7 +43,7 @@ test('Origin ending reasons have the same marker policy except manual restart', 
   const { db, store } = fixture(t, { now: () => clock * 1000 });
   for (const reason of ['ttl', 'evict', 'release', 'upgrade', 'auth', 'model_config', 'mode_switch', 'manual_restart', 'unexpected']) {
     assert.deepEqual(store.recordRunEnd('origin', { runId: reason, reason }), { recorded: true });
-    const needed = ['upgrade', 'auth', 'model_config', 'unexpected', 'mode_switch'].includes(reason);
+    const needed = ['upgrade', 'auth', 'model_config', 'unexpected'].includes(reason);
     assert.equal(store.listRunEndings(['origin'])[0].continuationPending, Number(needed));
     assert.deepEqual(store.listPendingContinuations(), [], 'Origin is not a normal continuation candidate');
     assert.equal(db.prepare('SELECT count(*) AS n FROM control_queue').get().n, 0);
@@ -255,7 +255,7 @@ test('current schema missing the run-ending table is rejected without recreating
   store.recordRunEnd('a', { runId: 'a1', reason: 'unexpected' });
   db.exec('DROP TABLE run_endings');
   const before = snapshot(db);
-  assert.throws(() => guardDatabase(db, owner), /^Error: c4: unsupported schema 5, missing run_endings\.session_group/);
+  assert.throws(() => guardDatabase(db, owner), { message: `c4: unsupported schema ${owner.SUPPORTED_SCHEMA_VERSION}, missing run_endings.session_group` });
   assert.deepEqual(snapshot(db), before);
 });
 
@@ -269,7 +269,7 @@ test('current schema with the retired continuation column is rejected without mu
   store.recordRunEnd('a', { runId: 'a1', reason: 'unexpected' });
   db.exec('ALTER TABLE run_endings RENAME COLUMN continuation_pending TO continuation_control_id');
   const before = snapshot(db);
-  assert.throws(() => guardDatabase(db, owner), /^Error: c4: unsupported schema 5, missing run_endings\.continuation_pending/);
+  assert.throws(() => guardDatabase(db, owner), { message: `c4: unsupported schema ${owner.SUPPORTED_SCHEMA_VERSION}, missing run_endings.continuation_pending` });
   assert.deepEqual(snapshot(db), before);
   assert.equal(db.pragma('user_version', { simple: true }), owner.SUPPORTED_SCHEMA_VERSION);
 });

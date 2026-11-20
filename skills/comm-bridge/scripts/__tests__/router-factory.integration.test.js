@@ -67,7 +67,7 @@ function setup(t, { mode = 'multi', phase } = {}) {
     }),
     sleep: async ms => { if ((phase === 'idle' && ms === 31) || (phase === 'backoff' && ms === 37)) await wait(); },
     notifyDelivered: fields => { calls.push(['notify', fields]); },
-    findLegacySessions: async () => [], advanceLegacy: async () => {}, prepareSingle: async () => {},
+    findLegacySessions: async () => [], advanceLegacy: async () => {},
     submit: async () => assert.fail('READY scene needs no start_attempt'),
   };
   const options = { readyTimeoutMs: 1000,

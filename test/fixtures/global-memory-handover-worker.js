@@ -1,10 +1,9 @@
 // Disposable process used to exercise recovery after actual process death.
 import fs from 'node:fs';
 import Database from 'better-sqlite3';
-import { createStore } from '../../../../comm-bridge/scripts/c4-v2-store.js';
-import { getMaxConversationId } from '../../../../comm-bridge/scripts/c4-db.js';
-import { appendInbox } from '../../../../zylos-memory/scripts/memory-append.js';
-import { GlobalMemoryHandoverCoordinator } from '../../global-memory-handover.js';
+import { createStore } from '../../skills/comm-bridge/scripts/c4-v2-store.js';
+import { appendInbox } from '../../skills/zylos-memory/scripts/memory-append.js';
+import { GlobalMemoryHandoverCoordinator } from '../../skills/activity-monitor/scripts/global-memory-handover.js';
 
 const [root, filename, point] = process.argv.slice(2);
 const database = new Database(filename);
@@ -19,7 +18,7 @@ io.renameSync = (source, destination) => {
   if (point === 'rename' && destination.endsWith('/previous/_global/inbox.md')) kill();
 };
 const owner = new GlobalMemoryHandoverCoordinator({
-  zylosDir: root, db: { ...store, getMaxConversationId: () => getMaxConversationId(database),
+  zylosDir: root, db: { ...store,
     insertControl: (...args) => { const result = store.insertControl(...args); if (point === 'enqueue') kill(); return result; } },
   readMode: () => ({ keyPresent: true, mode: 'multi' }), readRequests: () => [],
   legacyPresent: () => false, observe: () => [], fsImpl: io,

@@ -6,7 +6,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import Database from 'better-sqlite3';
-import { enqueueSingleUpgradeExit, SINGLE_UPGRADE_CHECK_ACK_DEADLINE_SECONDS } from '../../../../cli/lib/request-runtime-restart.js';
 
 const cli = fileURLToPath(new URL('../c4-control.js', import.meta.url));
 const clock = fileURLToPath(new URL('./fixtures/second-boundary-clock.js', import.meta.url));
@@ -36,16 +35,6 @@ function fixture(t) {
   };
   return { enqueue, row };
 }
-
-test('the single-session upgrade check keeps exactly its 60 second window when enqueue crosses a whole second', async t => {
-  const { enqueue, row } = fixture(t);
-  // The real producer's enqueue arguments; only the prompt text is fixed here.
-  const { checkControlId } = await enqueueSingleUpgradeExit({ run: async args => enqueue(args), loadPrompt: async () => 'waiting-work check' });
-  assert.equal(SINGLE_UPGRADE_CHECK_ACK_DEADLINE_SECONDS, 60);
-  const check = row(checkControlId);
-  assert.equal(check.ack_deadline_at - check.created_at, 60);
-  assert.deepEqual(check, { created_at: START_SECONDS, ack_deadline_at: START_SECONDS + 60, available_at: null });
-});
 
 test('any --ack-deadline and --available-in enqueue measures both from the same reading as created_at', t => {
   const { enqueue, row } = fixture(t);

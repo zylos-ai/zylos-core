@@ -307,11 +307,6 @@ export function cleanupControlQueue(cutoff) {
   return result.changes || 0;
 }
 
-/** Read the message head independently of timestamps or delivery state. */
-export function getMaxConversationId(db = getDb()) {
-  return db.prepare('SELECT COALESCE(MAX(id),0) AS id FROM conversations').get().id;
-}
-
 /** Get conversations by id range (inclusive), in id order. */
 export function getConversationsByRange(beginId, endId, db = getDb()) {
   return db.prepare(
@@ -496,7 +491,6 @@ export const expireStaleRunningControls = (...args) => store.expireStaleRunningC
 export const expireLegacyRunningControls = (...args) => store.expireLegacyRunningControls(...args);
 export const countNonTerminalControls = (...args) => store.countNonTerminalControls(...args);
 export const listRunningControlsWithoutDeadline = (...args) => store.listRunningControlsWithoutDeadline(...args);
-export const latestSessionSwitchAt = (...args) => store.latestSessionSwitchAt(...args);
 export const expireControlById = (...args) => store.expireControlById(...args);
 export const failStaleTargetControl = (...args) => store.failStaleTargetControl(...args);
 export const setDrainFence = (...args) => store.setDrainFence(...args);
@@ -506,7 +500,7 @@ export const clearDrainFence = (...args) => store.clearDrainFence(...args);
 export const beginModeTransition = (...args) => store.beginModeTransition(...args);
 export const getLastCompletedModeTransition = (...args) => store.getLastCompletedModeTransition(...args);
 export const listGroupHeads = (...args) => store.listGroupHeads(...args);
-export const absorbForTransition = (...args) => store.absorbForTransition(...args);
+export const claimUngroupedPendingForOrigin = (...args) => store.claimUngroupedPendingForOrigin(...args);
 export const voidInternalForSingle = (...args) => store.voidInternalForSingle(...args);
 export const setModeTransitionPhase = (...args) => store.setModeTransitionPhase(...args);
 export const getAbsorbedConversations = (...args) => store.getAbsorbedConversations(...args);

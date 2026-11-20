@@ -19,10 +19,10 @@ function fixture(mode = 'multi', configuration = {}) {
   }
   const f = {
     now: 2_000_000, firstAt: 2_000_000, endedAt: 2000, count: 500, first: 1, lastActivity: 0,
-    scene: { sessionGroup: mode === 'single' ? null : 'a', present: true, ready: true,
+    scene: { sessionGroup: mode === 'single' ? 'origin' : 'a', present: true, ready: true,
       runtime: 'claude', runId: 'run-a', sessionId: 'session-a', runDir: '/isolated/run',
       createdAt: 0, state: 'idle', idleSince: 0, processRunning: true, usagePercent: 0 },
-    configuration: { mode, legacy: mode === 'single', syncThreshold: 15, hotTtlSeconds: 1800, ...configuration },
+    configuration: { mode, syncThreshold: 15, hotTtlSeconds: 1800, ...configuration },
     marker: { held: false, stale: false }, controls: [], markerReads: [],
     backlog: { total: 0, groups: [] }, rangeReads: [], transition: null,
   };
@@ -36,7 +36,6 @@ function fixture(mode = 'multi', configuration = {}) {
       getLastCompletedModeTransition: () => null,
       listDrainFences: () => [],
       getUnsummarizedRange: group => { f.rangeReads.push(group); return range(); },
-      getGlobalUnsummarizedRange: () => { f.rangeReads.push('*'); return range(); },
       getOriginSyncBacklog: () => f.backlog,
       getLatestContentCheckpoint: () => null,
       getDeliveredFrontier: () => f.count ? f.first + f.count - 1 : 0,
@@ -67,7 +66,7 @@ function fixture(mode = 'multi', configuration = {}) {
     await f.lifecycle.checkSync(context.scenes, context);
   };
   f.syncs = () => f.controls.filter(row => row.content === 'group sync');
-  f.key = JSON.stringify([mode === 'single' ? 'global' : 'group', f.scene.sessionGroup]);
+  f.key = JSON.stringify(['group', f.scene.sessionGroup]);
   f.restart();
   return f;
 }
@@ -88,8 +87,8 @@ for (const mode of ['multi', 'single']) {
     f.count = 16;
     await f.check();
     assert.equal(f.syncs().length, 4);
-    assert.ok(f.rangeReads.every(group => group === (mode === 'single' ? '*' : 'a')));
-    assert.ok(f.syncs().every(row => row.sessionGroup === (mode === 'single' ? null : 'a')));
+    assert.ok(f.rangeReads.every(group => group === (mode === 'single' ? 'origin' : 'a')));
+    assert.ok(f.syncs().every(row => row.sessionGroup === (mode === 'single' ? 'origin' : 'a')));
   });
 
   test(`${mode} does not catch up a batch of 150 messages`, async () => {

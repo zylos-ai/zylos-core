@@ -38,7 +38,7 @@ function fixture(t, runtime = 'codex') {
   const scene = { sessionGroup: 'telegram:recovery', runtime, runId: randomUUID(),
     sessionId: 'private-session', present: true, ready: true };
   const coordinator = new RuntimeHealthCoordinator({ zylosDir: root, now: () => clock,
-    readMode: () => 'multi', resolveTargetRuntime: () => runtime, listScenes: () => [scene] });
+    resolveTargetRuntime: () => runtime, listScenes: () => [scene] });
   const health = coordinator.store(runtime), state = health.read();
   state.health = 'rate_limited'; state.rateLimitActive = true;
   state.scheduling.cooldownUntil = Math.floor(clock / 1000);
@@ -46,7 +46,7 @@ function fixture(t, runtime = 'codex') {
   const markQueued = coordinator.markProbeQueued.bind(coordinator);
   coordinator.markProbeQueued = runtime => { queued++; return markQueued(runtime); };
   const observer = new SupervisorHealthObserver({ coordinator, now: () => clock,
-    readMode: () => 'multi', listScenes: () => [scene], readIdentity: () => scene,
+    listScenes: () => [scene], readIdentity: () => scene,
     readState: () => ({ state: 'idle', tools: [] }), readScreen: () => '', matchScreen: () => ({}),
     insertControl: c4.insertControl, getControlById: c4.getControlById,
     buildTargetBinding: () => ({ expectedRunId: scene.runId,

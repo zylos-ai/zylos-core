@@ -2,14 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { startSupervisor } from '../../skills/activity-monitor/scripts/supervisor-main.js';
 import * as db from '../../skills/comm-bridge/scripts/c4-db.js';
-import { createModeSwitchConverter } from '../../skills/activity-monitor/scripts/mode-switch-convert.js';
 import { readSessionMode, writeSessionModeAtCutover } from '../../cli/lib/config.js';
 const fault = process.argv[2] ?? '';
 const logs = [], events = [];
 let restartCalls = 0, confirmationCalls = 0, service, runtimeScenes = JSON.parse(process.argv[3] ?? '[]');
 const stoppedRuns = [];
 let injectedFailure = '';
-const convert = createModeSwitchConverter({db,zylosDir:process.env.ZYLOS_DIR});
 const pause = label => { process.send({ boundary: label }); return new Promise(() => {}); };
 const database = { ...db };
 const setPhase = db.setModeTransitionPhase;
@@ -21,10 +19,9 @@ database.setModeTransitionPhase = async (...args) => {
 };
 const findScene = group => runtimeScenes.find(scene => scene.sessionGroup === group || group === null && scene.sessionGroup === 'origin') ?? { present:false };
 const scenes = { observe: async () => runtimeScenes.map(scene=>({...scene})), observeGroup: async group => ({...findScene(group)}), readIdentity: async group => ({...findScene(group)}), listRuns: async () => runtimeScenes.filter(scene=>scene.present), readRun: async group => findScene(group), stop: async scene => { stoppedRuns.push(scene.runId); runtimeScenes = runtimeScenes.filter(value=>value.runId !== scene.runId); } };
-const snapshot = () => ({ row: db.getModeTransition(), last: db.getLastCompletedModeTransition(), fences: db.listDrainFences(), mode: readSessionMode(), logs, restartCalls, confirmationCalls, stoppedRuns, messages:db.getDb().prepare('SELECT id,status FROM conversations ORDER BY id').all() });
+const snapshot = () => ({ row: db.getModeTransition(), last: db.getLastCompletedModeTransition(), fences: db.listDrainFences(), mode: readSessionMode(), logs, restartCalls, confirmationCalls, stoppedRuns, messages:db.getDb().prepare('SELECT id,status,session_group FROM conversations ORDER BY id LIMIT 20').all() });
 service = await startSupervisor({ db: database, scenes, legacyPresent: async () => false,
   legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
-  convertModeTransition: row => { if (['export','check'].includes(injectedFailure)) throw Object.assign(new Error('fixture conversion I/O failure'),{code:'EIO',step:injectedFailure}); return convert(row); },
   loopOptions: { schedule: () => 1, cancel() {} },
   writeMode: async mode => {
     if (injectedFailure==='config') throw Object.assign(new Error('fixture lock timeout'),{code:'CONFIG_LOCK_TIMEOUT'});

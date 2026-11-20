@@ -4,14 +4,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createDispatcher } from '../../../../comm-bridge/scripts/router/factory.js';
-import { createStore } from '../../../../comm-bridge/scripts/c4-v2-store.js';
-import { createSessionReader } from '../../../../../cli/lib/session-state-reader-async.js';
-import { getSessionAdapter } from '../../../../../cli/lib/runtime/index.js';
-const Database = createRequire(new URL('../../../../comm-bridge/package.json', import.meta.url))('better-sqlite3');
+import { createDispatcher } from '../../skills/comm-bridge/scripts/router/factory.js';
+import { createStore } from '../../skills/comm-bridge/scripts/c4-v2-store.js';
+import { createSessionReader } from '../../cli/lib/session-state-reader-async.js';
+import { getSessionAdapter } from '../../cli/lib/runtime/index.js';
+const Database = createRequire(new URL('../../skills/comm-bridge/package.json', import.meta.url))('better-sqlite3');
 const [root, socketPath, binary, mode, scenario] = process.argv.slice(2);
 const database = new Database(path.join(root, 'comm-bridge/c4.db'));
-const config = { runtime: 'claude', ...(mode === 'single' ? {} : { session_mode: mode }) };
+const config = { runtime: 'claude', session_mode: mode };
 let offset = 0, releasePaste, held = false;
 const now = () => Date.now() + offset;
 const store = createStore(database, { now, readConfig: () => ({ state: 'ok', config }), validateComponent: () => true });
@@ -22,7 +22,7 @@ if (fs.existsSync(path.join(root, 'activity-monitor/pool-capacity.json'))) throw
 const env = { ...process.env, HOME: root, ZYLOS_DIR: root, ZYLOS_SESSION_POOL_SIZE: '4' }, tmux = { socketPath, binary, configFile: '/dev/null' };
 const reader = createSessionReader({ env, connectionOptions: tmux });
 const trace = (kind, fields = {}) => fs.appendFileSync(path.join(root, 'manual-router.jsonl'), JSON.stringify({ kind, ...fields }) + '\n');
-const router = createDispatcher({ env, db, now, readSessionMode: () => ({ mode: mode === 'single' ? null : mode, keyPresent: mode !== 'single' }),
+const router = createDispatcher({ env, db, now, readSessionMode: () => ({ mode, keyPresent: true }),
   readZylosConfigStrict: () => ({ state: 'ok', config }),
   readSessionState: async group => ({ identity: await reader.readLiveIdentity(group), status: { valid: true, value: { state: 'idle', idle_seconds: 10, health: 'ok', proc: { alive: true } } } }),
   readRuntimeHealth: () => ({ missing: true }),
@@ -41,7 +41,7 @@ const router = createDispatcher({ env, db, now, readSessionMode: () => ({ mode: 
     return adapter;
   },
   sleep: async () => {}, notifyDelivered: data => trace('notify', data),
-  prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
+  findLegacySessions: async () => [], advanceLegacy: async () => {},
   handleExpired: async () => {}, formatConversation: row => row.content,
   diagnostic: (event, fields) => trace('diagnostic', { event, ...fields }), diagnostics: { maintain() {} }, log: message => trace('log', { message }),
 }, { tmux, readyTimeoutMs: 100, delivery: { periodicEnabled: false, verifyWaitMs: 1, verifyAttempts: 1, captureEnabled: false } });

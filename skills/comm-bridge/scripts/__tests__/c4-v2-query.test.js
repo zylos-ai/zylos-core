@@ -1,3 +1,4 @@
+import { seedHistoricalAbsorption } from './fixtures/historical-absorption.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture as storeFixture } from './c4-v2-test-helpers.js';
@@ -12,14 +13,14 @@ function fixture(t) {
   const { db, store } = storeFixture(t);
   return { db, store, query: createQueryHandlers(store) };
 }
-function absorb(store) {
-  const { runId } = store.beginModeTransition('single', 'multi', { kind: 'first_migration' }); store.setDrainFence('*'); store.absorbForTransition(runId); return runId;
+function absorb(db, store) {
+  const { runId } = store.beginModeTransition('single', 'multi'); store.setDrainFence('*'); seedHistoricalAbsorption(db, runId); return runId;
 }
 // Historical reverse conversions remain readable; current writers only migrate forward.
 function historicalSingleTarget(db) {
   const runId = randomUUID();
   const ids = db.prepare("SELECT id FROM conversations WHERE direction='in' AND status='pending' ORDER BY id").all().map(row => row.id);
-  db.prepare("INSERT INTO mode_transitions(run_id,source_mode,target_mode,kind,phase,cutoff,coverage_snapshot,absorbed_ids,created_at,updated_at) VALUES(?,'multi','single','switch','complete',?,'{}',?,1,1)")
+  db.prepare("INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,cutoff,coverage_snapshot,absorbed_ids,created_at,updated_at) VALUES(?,'multi','single','complete',?,'{}',?,1,1)")
     .run(runId, db.prepare('SELECT COALESCE(MAX(id),0) AS id FROM conversations').get().id, JSON.stringify(ids));
   db.prepare("UPDATE conversations SET status='switch_absorbed' WHERE direction='in' AND status='pending'").run();
   return runId;
@@ -35,7 +36,7 @@ test('absorbed pages default to 20 rows and advance by count across 1001 rows wi
   const { db, store, query } = fixture(t);
   const long = store.insertConversation('in', 'telegram', '"'.repeat(20000), 'a'.repeat(65536), { groupName: 'g-100123' });
   for (let i = 0; i < 1000; i++) store.insertConversation('in', 'telegram', 'private-route', 'x', { groupName: 'g-100123' });
-  const runId = absorb(store), before = db.prepare('SELECT total_changes() AS n').get().n;
+  const runId = absorb(db, store), before = db.prepare('SELECT total_changes() AS n').get().n;
   for (const json of [false, true]) {
     let after = 0; const seen = [];
     do {
@@ -70,10 +71,10 @@ test('absorbed pages default to 20 rows and advance by count across 1001 rows wi
   assert.equal(db.inTransaction, false);
 });
 test('preview takes 300 Unicode code points, preserves complete characters and marks truncation', t => {
-  const { store, query } = fixture(t);
+  const { db, store, query } = fixture(t);
   const originals = ['中'.repeat(299) + '🚀尾', '🚀'.repeat(300), '\0'.repeat(8192), '\u2028'.repeat(2730), '短\n\\\r\t正文'];
   const rows = originals.map(content => store.insertConversation('in', 'foo', 'private-route', content));
-  const runId = absorb(store);
+  const runId = absorb(db, store);
   const json = JSON.parse(query.absorbed({ runId, json: true })).data;
   for (const [index, item] of json.items.entries()) {
     const codepoints = Array.from(originals[index]);
@@ -105,10 +106,10 @@ test('page size follows limit even when encoded previews exceed the former byte 
   }
 });
 test('full text and JSON return complete UTF8 fields with end marker in text mode', t => {
-  const { store, query } = fixture(t);
+  const { db, store, query } = fixture(t);
   const originals = ['\0'.repeat(8192), '\u2028'.repeat(2730), '中\n\\\u0085🚀'.repeat(2000), ''];
   const rows = originals.map(content => store.insertConversation('in', 'foo', content || null, content));
-  const runId = absorb(store);
+  const runId = absorb(db, store);
   for (const [i, row] of rows.entries()) for (const field of ['text', 'endpoint']) {
     const output = query.absorbed({ runId, id: row.id, field });
     assert.equal(output, `absorbed-full run=${runId} id=${row.id} field=${field} bytes=${Buffer.byteLength(originals[i])}\ndata: ${escapeText(originals[i])}\nend id=${row.id} field=${field}\n`);
@@ -120,11 +121,11 @@ test('full text and JSON return complete UTF8 fields with end marker in text mod
   }
 });
 test('out exclusively creates complete original bytes and returns metadata without field content', t => {
-  const { store, query } = fixture(t);
+  const { db, store, query } = fixture(t);
   const dir = mkdtempSync(join(tmpdir(), 'c4-absorbed-out-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const content = '\0中\n\\🚀\u2028'.repeat(2000), endpoint = 'route\n"\\'.repeat(2000);
-  const row = store.insertConversation('in', 'foo', endpoint, content), runId = absorb(store);
+  const row = store.insertConversation('in', 'foo', endpoint, content), runId = absorb(db, store);
   for (const json of [false, true]) for (const field of ['text', 'endpoint']) {
     const out = join(dir, `${field}-${json}.txt`), original = field === 'text' ? content : endpoint;
     const output = query.absorbed({ runId, id: row.id, field, out, json });
@@ -138,10 +139,10 @@ test('out exclusively creates complete original bytes and returns metadata witho
   assert.throws(() => query.absorbed({ runId, id: row.id, out: join(dir, 'missing', 'file') }), { code: 'WRITE_FAILED' });
 });
 test('out removes partially written destination on driver write failure', t => {
-  const { store, query } = fixture(t);
+  const { db, store, query } = fixture(t);
   const dir = mkdtempSync(join(tmpdir(), 'c4-absorbed-write-fail-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const row = store.insertConversation('in', 'foo', 'endpoint', 'full original'), runId = absorb(store), out = join(dir, 'partial.txt');
+  const row = store.insertConversation('in', 'foo', 'endpoint', 'full original'), runId = absorb(db, store), out = join(dir, 'partial.txt');
   const realWrite = fs.writeFileSync;
   let writes = 0;
   t.mock.method(fs, 'writeFileSync', (fd, value, options) => {
@@ -155,7 +156,7 @@ test('out removes partially written destination on driver write failure', t => {
 test('missing and state-changed absorbed rows reject all formats and export before output', t => {
   const { db, store, query } = fixture(t);
   const rows = Array.from({ length: 35 }, () => store.insertConversation('in', 'foo', 'e', 'x'));
-  const runId = absorb(store), badIds = rows.map(row => row.id);
+  const runId = absorb(db, store), badIds = rows.map(row => row.id);
   db.prepare("UPDATE conversations SET status='failed'").run();
   db.prepare('DELETE FROM conversations WHERE id=?').run(rows[3].id);
   assert.throws(() => store.queries.readAbsorbed(runId), error => {
@@ -187,8 +188,8 @@ test('missing and state-changed absorbed rows reject all formats and export befo
   assert.throws(() => query.absorbed({ runId, id: rows[0].id, after: 0 }), { code: 'INVALID_ARGS' });
 });
 test('limits and conflicting or removed query options are rejected', t => {
-  const { store, query } = fixture(t);
-  const row = store.insertConversation('in', 'foo', 'e', 'x'), runId = absorb(store);
+  const { db, store, query } = fixture(t);
+  const row = store.insertConversation('in', 'foo', 'e', 'x'), runId = absorb(db, store);
   const invalidOptions = [
     ...[0, -1, 101, 1.5, NaN, '20'].map(limit => ({ limit })),
     ...[0, -1, 201, 1.5, NaN, '50'].map(limit => ({ summary: true, limit })),
@@ -207,22 +208,22 @@ test('limits and conflicting or removed query options are rejected', t => {
 test('gating is empty; forward summaries and historical reverse aggregation follow persisted transitions', t => {
   const { db, store, query } = fixture(t);
   for (const groupName of ['z', 'A', 'z']) store.insertConversation('in', 'foo', 'e', 'x', { groupName });
-  const { runId } = store.beginModeTransition('single', 'multi', { kind: 'first_migration' });
+  const { runId } = store.beginModeTransition('single', 'multi');
   assert.equal(JSON.parse(query.absorbed({ runId, json: true })).data.total, 0);
-  store.setDrainFence('*'); store.absorbForTransition(runId);
+  store.setDrainFence('*'); seedHistoricalAbsorption(db, runId);
   const summary = JSON.parse(query.absorbed({ runId, summary: true, json: true })).data;
   assert.deepEqual(summary.items.map(x => [x.scope, x.count]), [['foo:A', 1], ['foo:z', 2]]);
   assert.equal(JSON.parse(query.absorbed({ runId, summary: true, scopeAfter: 'foo:A', json: true })).data.count, 1);
   assert.throws(() => query.absorbed({ runId, id: 10000 }), { code: 'ABSORBED_NOT_IN_RUN' });
-  store.setModeTransitionPhase(runId, 'cutover'); store.setModeTransitionPhase(runId, 'complete');
+  seedHistoricalAbsorption(db, runId, summary.items.flatMap(item => db.prepare("SELECT id FROM conversations WHERE session_group=? ORDER BY id").pluck().all(item.scope)), { complete: true });
   store.insertConversation('in', 'foo', 'e', 'next', { groupName: 'z' });
   const single = historicalSingleTarget(db);
   assert.deepEqual(JSON.parse(query.absorbed({ runId: single, summary: true, json: true })).data.items[0].bySourceGroup, { 'foo:z': 1 });
 });
 test('summary scope order and continuation use BINARY rather than locale collation', t => {
-  const { store, query } = fixture(t);
+  const { db, store, query } = fixture(t);
   for (const groupName of ['a', 'B']) store.insertConversation('in', 'foo', 'e', 'x', { groupName });
-  const runId = absorb(store);
+  const runId = absorb(db, store);
   const summary = JSON.parse(query.absorbed({ runId, summary: true, json: true })).data;
   assert.deepEqual(summary.items.map(item => item.scope), ['foo:B', 'foo:a']);
   const next = JSON.parse(query.absorbed({ runId, summary: true, scopeAfter: 'foo:B', json: true })).data;
@@ -241,7 +242,7 @@ test('mismatch error lists exactly first 20 ids and retains total count', () => 
 test('summary defaults to 50 scopes and paginates up to 200 in BINARY order without DB writes', t => {
   const { db, store, query } = fixture(t);
   for (let i = 0; i < 205; i++) store.insertConversation('in', 'foo', 'e', 'x', { groupName: `g${String(i).padStart(3, '0')}${'a'.repeat(80)}` });
-  const runId = absorb(store), before = db.prepare('SELECT total_changes() AS n').get().n;
+  const runId = absorb(db, store), before = db.prepare('SELECT total_changes() AS n').get().n;
   assert.equal(JSON.parse(query.absorbed({ runId, summary: true, json: true })).data.count, 50);
   assert.equal(JSON.parse(query.absorbed({ runId, summary: true, limit: 200, json: true })).data.count, 200);
   for (const json of [false, true]) {
@@ -288,7 +289,7 @@ test('reply-via survives real POSIX shell parsing byte-for-byte', t => {
   assert.match(replyVia({ id: 2, channel: 'foo', endpoint_id: 'e' }, path + '\n'), /Core path contains control characters/);
 });
 test('global/group reads preserve scopes, checkpoint metadata and truncation upper bound', t => {
-  const { store, query } = fixture(t);
+  const { db, store, query } = fixture(t);
   const a = store.insertConversation('out', 'foo', 'e', 'a');
   store.createCheckpoint('foo', a.id, 'summary');
   const b = store.insertConversation('out', 'foo', 'e', 'b');
@@ -303,7 +304,7 @@ test('global/group reads preserve scopes, checkpoint metadata and truncation upp
   assert.equal(query.checkpoints({ group: 'foo', after: 0 })[0].summary, 'summary');
 });
 test('ordering uses latest head while matching/preview use latest external input', t => {
-  const { store, query } = fixture(t);
+  const { db, store, query } = fixture(t);
   store.insertConversation('in', 'Foo', 'e1', '研发群', { groupName: 'a' });
   store.insertConversation('in', 'bar', 'e2', 'other');
   store.insertConversation('out', 'Foo', 'e1', 'outgoing', { groupName: 'a' });

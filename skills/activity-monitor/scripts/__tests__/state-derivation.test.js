@@ -18,10 +18,10 @@ function fixture(t,runtime) {
  const activity=new SessionActivity({runDir:root,runId:'r',sessionId:'s',runtime,startedAt:clock});
  t.after(()=>activity.close());
  const row=(event,more={})=>({v:1,run_id:'r',session_id:'s',runtime,ts:clock,event,...more});
- const health=new RuntimeHealthCoordinator({zylosDir:root,now:()=>clock,readMode:()=> 'multi',resolveTargetRuntime:()=>runtime,listScenes:()=>[scene]});
+ const health=new RuntimeHealthCoordinator({zylosDir:root,now:()=>clock,resolveTargetRuntime:()=>runtime,listScenes:()=>[scene]});
  const captures=[],interrupts=[],stops=[],errors=[];
  const observer=new SupervisorHealthObserver({coordinator:health,now:()=>clock,listScenes:()=>[scene],readIdentity:()=>scene,
-  readState:()=>activity.read(clock),readMode:()=> 'multi',readScreen:()=>{captures.push(clock);return '> Ready for your next request';},matchScreen:()=>({}),
+  readState:()=>activity.read(clock),readScreen:()=>{captures.push(clock);return '> Ready for your next request';},matchScreen:()=>({}),
   resolveToolRule:()=>({watchdog:{enabled:true,maxRuntimeSec:10,interruptKey:'Escape',interruptGraceSec:5,cooldownSec:2}}),
   nudge:()=>{interrupts.push(clock);return {ok:true};},stop:()=>{stops.push(clock);return true;},log:error=>errors.push(error)});
  t.after(()=>observer.shutdown());

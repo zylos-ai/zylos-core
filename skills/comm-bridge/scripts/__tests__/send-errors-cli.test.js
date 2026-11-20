@@ -1,3 +1,4 @@
+import { seedHistoricalAbsorption } from './fixtures/historical-absorption.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -38,9 +39,9 @@ for (const absorbed of [false, true]) {
         let args = ['demo', endpoint, '--stdin'];
         if (absorbed) {
           const row = f.store.insertConversation('in', 'demo', endpoint, 'original request');
-          const { runId } = f.store.beginModeTransition('single', 'multi', { kind: 'first_migration' });
+          const { runId } = f.store.beginModeTransition('single', 'multi');
           f.store.setDrainFence('*');
-          f.store.absorbForTransition(runId);
+          seedHistoricalAbsorption(f.db, runId, [row.id]);
           args = ['--absorbed-reply', runId, String(row.id)];
         }
         const bin = path.join(root, 'bin');

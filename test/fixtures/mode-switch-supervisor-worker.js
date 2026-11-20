@@ -4,7 +4,6 @@
 import Database from 'better-sqlite3';
 import path from 'node:path';
 import { createStore } from '../../skills/comm-bridge/scripts/c4-v2-store.js';
-import { getMaxConversationId } from '../../skills/comm-bridge/scripts/c4-db.js';
 import { readSessionMode, readZylosConfigOrThrow } from '../../cli/lib/config.js';
 import { startSupervisor } from '../../skills/activity-monitor/scripts/supervisor-main.js';
 
@@ -26,7 +25,7 @@ const stop = () => stopping ??= (async () => {
 })();
 try {
   service = await startSupervisor({ env: process.env,
-    db: { ...store, getDb: () => database, getMaxConversationId: () => getMaxConversationId(database) },
+    db: { ...store, getDb: () => database },
     readMode: readSessionMode, readConfig: readZylosConfigOrThrow, legacyPresent: () => false,
     scenes: { observe: async () => [], observeGroup: async () => ({ present: false }),
       readIdentity: async () => ({ present: false }), listRuns: async () => [], readRun: async () => null,

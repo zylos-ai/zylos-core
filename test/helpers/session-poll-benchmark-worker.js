@@ -52,7 +52,7 @@ try {
       expireTimedOutControls: () => 0, cleanupControlQueue: () => 0 };
     const dispatcher = createDispatcher({ env: process.env, db,
       readSessionMode: () => ({ mode: 'multi' }), log() {}, diagnostic() {}, maintainDiagnostics() {},
-      findLegacySessions: async () => [], advanceLegacy: async () => {}, prepareSingle: async () => {} },
+    },
       { tmux: { socketPath: process.env.BENCH_SOCKET, binary: process.env.BENCH_CLIENT } });
     stop = async () => { await dispatcher.stop(); for (const cleanup of cleanups) await cleanup(); };
     await dispatcher.start();

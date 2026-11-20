@@ -136,7 +136,7 @@ export class SupervisorLoop {
       }
       context.scenes = await d.observe(context);
       context.manualRequests = [];
-      if (d.checkManualFences) {
+      if (!context.configuration.legacy && d.checkManualFences) {
         try { context.manualRequests = await d.checkManualFences(context); }
         catch (error) { await d.reportError(error, { phase: 'manual-fences' }); }
       }
@@ -146,7 +146,7 @@ export class SupervisorLoop {
         // Migration may have accepted a transition while holding this queue.
         context.transition = await authority(() => d.getModeTransition());
       }
-      if (!context.transition) {
+      if (!context.transition && !context.configuration.legacy) {
         for (const phase of ['advanceManual', 'advanceRestarts', 'reconcileConfiguration']) {
           try { await d[phase](context); }
           catch (error) { await d.reportError(error, { phase }); }
@@ -156,7 +156,7 @@ export class SupervisorLoop {
       }
     });
     // These workers may acquire lifecycle serialization for their own mutations.
-    await d.observeExits?.(context.scenes);
+    if (!context.configuration.legacy) await d.observeExits?.(context.scenes);
     try { await d.lifecycleSerial(() => d.reconcileRunEndings?.(context)); }
     catch (error) { await d.reportError(error, { phase: 'run-ending-reconciliation' }); }
     if (d.preparePublication) {
@@ -170,14 +170,12 @@ export class SupervisorLoop {
       // Automatic legacy migration can open a transition after the initial read.
       const transitionOpen = Boolean(transition || context.transition);
       await this.each(context.fences, fence => d.advanceReclaim(fence, context), 'reclaim');
-      if (transitionOpen) return;
+      if (transitionOpen || context.configuration.legacy) return;
       await this.each(context.scenes, scene => d.checkRotation(scene, context), 'rotation');
-      if (!context.configuration.legacy) {
-        await this.each(context.scenes, scene => d.checkTtl(scene, context), 'ttl');
-        if (context.configuration.mode === 'multi') {
-          try { await d.checkEviction(context.scenes, context); }
-          catch (error) { await d.reportError(error, { phase: 'eviction' }); }
-        }
+      await this.each(context.scenes, scene => d.checkTtl(scene, context), 'ttl');
+      if (context.configuration.mode === 'multi') {
+        try { await d.checkEviction(context.scenes, context); }
+        catch (error) { await d.reportError(error, { phase: 'eviction' }); }
       }
       try { await d.checkSync(context.scenes, context); }
       catch (error) { await d.reportError(error, { phase: 'sync' }); }

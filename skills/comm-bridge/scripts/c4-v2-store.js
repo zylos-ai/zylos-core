@@ -110,11 +110,14 @@ export function createStore(database, dependencies = {}) {
       throw dataError('UNKNOWN_TARGET_GROUP', 'Unknown target session group');
     }
   }
+  function advanceHead(c, group, id) {
+    run(c, 'INSERT INTO group_heads(session_group,head_id) VALUES(?,?) ON CONFLICT(session_group) DO UPDATE SET head_id=max(head_id,excluded.head_id)', group, id);
+  }
   function insert(c, direction, channel, endpointId, content, group, options = {}) {
     const result = run(c, `INSERT INTO conversations(direction,channel,endpoint_id,content,status,delivery_action,priority,require_idle,session_group,session_id)
       VALUES(?,?,?,?,?,?,?,?,?,?)`, direction, channel, endpointId ?? null, content, options.status ?? (direction === 'in' ? 'pending' : 'delivered'), options.deliveryAction ?? null, options.priority ?? 3, options.requireIdle ? 1 : 0, group, direction === 'out' ? options.sessionId ?? null : null);
     const id = Number(result.lastInsertRowid);
-    run(c, 'INSERT INTO group_heads(session_group,head_id) VALUES(?,?) ON CONFLICT(session_group) DO UPDATE SET head_id=max(head_id,excluded.head_id)', group, id);
+    advanceHead(c, group, id);
     return get(c, 'SELECT * FROM conversations WHERE id=?', id);
   }
   const api = {
@@ -155,10 +158,10 @@ export function createStore(database, dependencies = {}) {
       return { outRow, inRow };
     }),
   };
-  const context = { read, write, snapshot, get, all, run, knownGroup, dependencies, seconds, insert };
+  const context = { read, write, snapshot, get, all, run, knownGroup, dependencies, seconds, insert, advanceHead };
   const config = configFunctions(context);
   const progress = progressFunctions(context);
-  const transitions = transitionFunctions({ ...context, ...progress });
+  const transitions = transitionFunctions(context);
   Object.assign(api, deletionFunctions(context), deliveryFunctions(context), config.api, progress.api, controlFunctions({ ...context, baseline: config.baseline }), transitions.api);
   api.buildTargetBinding = createTargetBindingBuilder({ ...context, baseline: config.baseline, resolveTarget: dependencies.resolveTarget });
   function listGroups({ match, limit, activeSince, keyMatch, raw } = {}) {

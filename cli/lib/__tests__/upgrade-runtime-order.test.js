@@ -3,29 +3,16 @@ import { test } from 'node:test';
 import { upgradeRuntime } from '../../../skills/upgrade-claude/scripts/upgrade.js';
 import { requestRuntimeRestart } from '../request-runtime-restart.js';
 
-test('runtime upgrade completes installation before the shared restart producer selects its mode', async () => {
-  for (const [mode, keyPresent, transition] of [
-    ['single', false, null], ['multi', true, null],
-    ['single', false, { phase: 'gating' }],
-  ]) {
-    const calls = [];
-    const controls = { checkControlId: 7, exitControlId: 8 };
-    const result = await upgradeRuntime({
-      install: async () => { calls.push('install'); await Promise.resolve(); calls.push('installed'); },
-      requestRestart: () => requestRuntimeRestart({
-        readMode: () => { calls.push('mode'); return { mode, keyPresent }; }, readTransition: () => transition,
-        enqueueExit: () => { calls.push('enqueue'); return controls; },
-        send: async () => { calls.push('restart_all'); return { kind: 'accepted', reply: { result: 'accepted' } }; },
-      }),
-    });
-    assert.deepEqual(calls, ['install', 'installed', 'mode', !keyPresent && !transition ? 'enqueue' : 'restart_all']);
-    assert.equal(result.ok, true);
-    if (!keyPresent && !transition) {
-      assert.equal(result.data.result, 'exit_enqueued');
-      assert.equal(result.data.checkControlId, controls.checkControlId);
-      assert.equal(result.data.exitControlId, controls.exitControlId);
-    } else assert.equal(result.data.result, 'accepted');
-  }
+test('runtime upgrade completes installation before submitting restart_all', async () => {
+  const calls = [];
+  const result = await upgradeRuntime({
+    install: async () => { calls.push('install'); await Promise.resolve(); calls.push('installed'); },
+    requestRestart: () => requestRuntimeRestart({
+      send: async request => { calls.push(request.type); return { kind: 'accepted', reply: { result: 'done_empty', runCount: 0 } }; },
+    }),
+  });
+  assert.deepEqual(calls, ['install', 'installed', 'restart_all']);
+  assert.equal(result.data.result, 'done_empty');
 });
 
 test('failed installation never requests a runtime restart', async () => {

@@ -1,8 +1,8 @@
 /** One in-memory execution slot per group. No waiting lane owns another lane. */
 export function createLane(context, group) {
   const { state, deps, options, diagnostic, now } = context;
-  const filter = group === null ? undefined : { sessionGroups: [group] };
-  const modeOptions = state.keyPresent || state.mode === 'multi' ? { sessionMode: state.mode } : {};
+  const filter = { sessionGroups: [group] };
+  const modeOptions = { sessionMode: state.mode };
   const conversationFilter = { ...(state.mode === 'multi' ? filter : {}), ...modeOptions };
   let working = null;
   let startupIdentity = null;
@@ -107,15 +107,13 @@ export function createLane(context, group) {
       return context.handleUnowned(group, live);
     }
     startupIdentity = null; startupLoaded = false;
-    if (group === null || group === 'origin') {
+    if (group === 'origin') {
       state.resident.readySince = null;
       state.resident.absentSince ??= now();
-      if (group === 'origin') {
-        const row = await nextMessage();
-        if (!row) {
-          const need = deps.db.getOriginNeed(Math.floor(now() / 1000), { sessionMode: state.mode });
-          if (need.controls.count === 0 && !need.continuation?.pending) return;
-        }
+      const row = await nextMessage();
+      if (!row) {
+        const need = deps.db.getOriginNeed(Math.floor(now() / 1000), { sessionMode: state.mode });
+        if (need.controls.count === 0 && !need.continuation?.pending) return;
       }
       const delay = Math.min(5 * 2 ** Math.min(state.resident.failures, 4), 60) * 1000;
       if (now() - state.resident.absentSince >= delay) await context.activation.begin(group, null);

@@ -34,17 +34,11 @@ test('restricted admission reads only the runtime health projection', async t =>
   }
 });
 
-test('healthy Origin startup skips registration while legacy skips health admission', async t => {
-  for (const mode of ['single', 'multi']) {
-    await t.test(mode, async t => {
-      const f = routerFixture(t, { mode, keyPresent: mode !== 'single' });
-      if (mode === 'multi') {
-        f.db.insertControl('Origin work', { sessionGroup: 'origin', appendAckSuffix: false });
-        f.deps.readRuntimeHealth = () => ({ health: 'ok', publicHealth: 'ok' });
-      } else f.deps.readRuntimeHealth = () => assert.fail('single startup has no health admission');
-      f.deps.submit = () => assert.fail('healthy Origin and single startup do not register start_attempt');
-      await f.create().initialize(); await f.rounds(2); f.advance(5000); await f.rounds(2);
-      assert.equal(f.calls.filter(([kind]) => kind === 'launch').length, 1);
-    });
-  }
+test('healthy Origin startup skips recovery registration', async t => {
+  const f = routerFixture(t);
+  f.db.insertControl('Origin work', { sessionGroup: 'origin', appendAckSuffix: false });
+  f.deps.readRuntimeHealth = () => ({ health: 'ok', publicHealth: 'ok' });
+  f.deps.submit = () => assert.fail('healthy Origin startup does not register start_attempt');
+  await f.create().initialize(); await f.rounds(2); f.advance(5000); await f.rounds(2);
+  assert.equal(f.calls.filter(([kind]) => kind === 'launch').length, 1);
 });

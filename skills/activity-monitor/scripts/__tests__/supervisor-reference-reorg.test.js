@@ -6,7 +6,7 @@ import { SupervisorLifecycle } from '../supervisor-lifecycle.js';
 // memory. No files, timers, children, live database, tmux or PM2 are used.
 function fixture(mode = 'multi', kind = 'origin') {
   let now = 2_000_000;
-  const group = kind === 'global' ? null : kind === 'origin' ? 'origin' : 'a';
+  const group = kind === 'origin' ? 'origin' : 'a';
   const scene = { sessionGroup: group, present: true, ready: true, runtime: 'claude',
     runId: 'reference-run', sessionId: 'reference-session', runDir: '/isolated/reference-run',
     state: 'idle', processRunning: true, usagePercent: 0, createdAt: 0, idleSince: 0 };
@@ -20,7 +20,6 @@ function fixture(mode = 'multi', kind = 'origin') {
       listDrainFences: () => [],
       getLastActivity: () => 0,
       getUnsummarizedRange: () => ({ count: 0, firstAt: null }),
-      getGlobalUnsummarizedRange: () => f.range,
       getOriginSyncBacklog: () => ({ total: f.range.count,
         groups: [{ count: f.range.count, firstAt: f.range.firstAt, pendingCheckpoints: 0 }] }),
       insertControl: (content, options) => {
@@ -49,7 +48,7 @@ function fixture(mode = 'multi', kind = 'origin') {
   };
   f.deps = deps;
   f.lifecycle = new SupervisorLifecycle(deps, { now: () => now });
-  f.context = { configuration: { mode, legacy: kind === 'global', hotTtlSeconds: 1800 }, scenes: [{ ...scene }], fences: [], restartRequests: [], transition: null };
+  f.context = { configuration: { mode, hotTtlSeconds: 1800 }, scenes: [{ ...scene }], fences: [], restartRequests: [], transition: null };
   f.range = { count: 60, nonempty: true, firstAt: now, firstConversationId: 1 };
   f.run = () => f.lifecycle.syncScope(scene, kind, f.range, f.context);
   f.periodic = () => f.lifecycle.checkSync([scene], f.context);
@@ -62,8 +61,8 @@ function fixture(mode = 'multi', kind = 'origin') {
   return f;
 }
 
-for (const [mode, kind, group] of [['single', 'global', null], ['single', 'origin', 'origin'], ['multi', 'origin', 'origin']]) {
-  const label = kind === 'global' ? 'legacy single' : mode;
+for (const [mode, kind, group] of [['single', 'origin', 'origin'], ['multi', 'origin', 'origin']]) {
+  const label = mode;
   test(`${label} queues a reference instruction before its ordinary Sync control`, async () => {
     const f = fixture(mode, kind);
     await f.run();

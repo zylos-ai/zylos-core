@@ -126,9 +126,8 @@ ZYLOS_DIR=/absolute/path/to/zylos node /absolute/path/to/installed-core/cli/lib/
 `syncRuntimeHooks({ zylosDir })` is the file-writing API for Claude settings and
 Codex hooks/config; `syncHooks` alone only reconciles an in-memory Claude object.
 After changed settings and outside `--dry-run`, the CLI also calls
-`enqueueRestartIfNeeded`: in multi-session mode it can submit a Supervisor
-`restart_all`; in single-session mode it queues an idle-time `/exit` through
-c4-control. **Both modes can restart the agent**, including when a component
+`enqueueRestartIfNeeded`, which can submit `restart_all` to the supervisor in
+every mode. **This can restart the agent**, including when a component
 lifecycle hook invokes this CLI. Calling the exported file-writing API directly
 does not perform that restart step. Codex loads changed hooks on a new launch.
 Integrate synchronization with your component lifecycle; limit direct runtime

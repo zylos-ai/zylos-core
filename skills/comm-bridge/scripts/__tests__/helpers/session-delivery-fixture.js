@@ -4,11 +4,11 @@ import { fixture } from '../c4-v2-test-helpers.js';
 
 // Real delivery policy and conditional ledger; terminal I/O alone is supplied.
 // The outer runner must isolate HOME/ZYLOS_DIR/PM2_HOME/TMPDIR before import.
-export function deliveryFixture(t, { mode = 'multi', keyPresent = true, health = 'ok', storage } = {}) {
+export function deliveryFixture(t, { mode = 'multi', health = 'ok', storage } = {}) {
   const f = storage ?? fixture(t), events = [], calls = [], verdicts = [];
   let time = 0, verdict = 'empty', run = 'run-1';
   const deps = {
-    db: f.store, getSessionMode: () => mode, getSessionKeyPresent: () => keyPresent, now: () => time,
+    db: f.store, getSessionMode: () => mode, now: () => time,
     sleep: async ms => { time += ms; },
     openTmuxConnection: async () => {
       const connection = { closed: false, close: async () => { connection.closed = true; },

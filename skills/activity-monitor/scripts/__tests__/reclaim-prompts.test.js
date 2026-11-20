@@ -9,7 +9,7 @@ import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import * as c4Schema from '../../../comm-bridge/scripts/c4-schema.js';
 import { migrateDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
-import { CONFIG_RECLAIM_PROMPT, PRE_RECLAIM_CHECK_PROMPT, SINGLE_UPGRADE_RESTART_CHECK_PROMPT, UPGRADE_RESTART_CHECK_PROMPT } from '../reclaim-prompts.js';
+import { CONFIG_RECLAIM_PROMPT, PRE_RECLAIM_CHECK_PROMPT, UPGRADE_RESTART_CHECK_PROMPT } from '../reclaim-prompts.js';
 
 const skillsDir = fileURLToPath(new URL('../../../', import.meta.url));
 const checks = fs.readFileSync(new URL('../../references/session-checks.md', import.meta.url), 'utf8');
@@ -27,7 +27,6 @@ const LIST = /First run `node (\S+) list --json`/;
 const PROMPTS = {
   'idle reclaim check': [PRE_RECLAIM_CHECK_PROMPT, 'This session group has been idle and will be reclaimed.'],
   'upgrade restart check': [UPGRADE_RESTART_CHECK_PROMPT, 'This session group will be restarted for an upgrade.'],
-  'single-session upgrade restart check': [SINGLE_UPGRADE_RESTART_CHECK_PROMPT, 'This session will be restarted for an upgrade.'],
   'configuration restart check': [CONFIG_RECLAIM_PROMPT, 'The launch configuration changed and this session group will be restarted with it.'],
 };
 
@@ -50,7 +49,7 @@ test('every check prohibits messages and requires a current-record handoff witho
 
 test('only the idle reclaim check offers deferral; restart checks name interrupted work in the handoff', () => {
   const running = section('1. Running work');
-  const [idle, restart] = running.split('- **Upgrade, single-session upgrade and configuration restart checks:**');
+  const [idle, restart] = running.split('- **Upgrade and configuration restart checks:**');
   assert.ok(idle.includes('**Idle reclaim check:** Only one thing can hold the reclaim: work this session itself started that is still running '
     + 'and whose result it is waiting for — a background command, a Monitor watcher, a background subagent or workflow. A Memory Sync is not '
     + 'such work: the supervisor already waits for it before reclaiming, so do not defer for it. If there is such work, run '
@@ -61,7 +60,7 @@ test('only the idle reclaim check offers deferral; restart checks name interrupt
   assert.equal(normalized.match(/defer-reclaim/g).length, 1);
   assert.ok(fs.statSync(installed('~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js')).isFile());
   const finish = section('4. Finish');
-  assert.ok(finish.includes('**Idle reclaim, upgrade and single-session upgrade restart checks:** Then acknowledge.'));
+  assert.ok(finish.includes('**Idle reclaim and upgrade restart checks:** Then acknowledge.'));
   assert.ok(finish.includes('**Configuration restart check:** Then submit ready_for_config_reclaim through the supervisor. '
     + 'After acceptance, finish this control and the current turn.'));
 });

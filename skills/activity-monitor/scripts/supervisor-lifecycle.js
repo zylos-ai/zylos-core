@@ -13,13 +13,11 @@ const CAPACITY_REASONS = new Set(['ttl', 'evict', 'upgrade', 'auth']);
 const RECLAIM_REASONS = new Set([...CAPACITY_REASONS, 'mode_switch', 'model_config', 'delete', 'release']);
 const error = (code, message) => Object.assign(new Error(message), { code });
 const modeOf = context => context.configuration.mode;
-const targetOf = group => group === null ? { machine: true } : { sessionGroup: group };
 const finite = value => Number.isFinite(value);
 const groupSyncThreshold = configuration => configuration.syncThreshold ?? CHECKPOINT_THRESHOLD;
 const legacy = context => context.configuration.legacy === true;
 const oldUnique = (scene, context) => !legacy(context) && scene.sessionGroup === 'origin' && scene.sourceScope === null;
-const manualGroup = (request, context) => legacy(context) && request.mode === 'single' ? '*' : request.sessionGroup ?? 'origin';
-const manualTarget = (request, context) => legacy(context) && request.mode === 'single' ? null : request.sessionGroup ?? 'origin';
+const manualTarget = request => request.sessionGroup ?? 'origin';
 // Pre-reclaim Sync covers long-running workers; ordinary check deadlines stay separate.
 export const PRE_RECLAIM_SYNC_ACK_TIMEOUT_MS = 900000;
 // Capacity eviction waits only briefly for its pre-reclaim check.
@@ -121,7 +119,7 @@ export class SupervisorLifecycle {
     if (!scene || typeof scene.present !== 'boolean') throw error('INVALID_OBSERVATION', 'Runtime presence is unknown');
     const current = { ...scene, sessionGroup: group };
     if (context) {
-      const index = context.scenes.findIndex(item => item.sessionGroup === group || group === null && item.sessionGroup === 'origin');
+      const index = context.scenes.findIndex(item => item.sessionGroup === group);
       if (index >= 0) context.scenes[index] = current;
       else context.scenes.push(current);
     }
@@ -129,7 +127,7 @@ export class SupervisorLifecycle {
   }
 
   scene(group, context) {
-    const scene = context.scenes.find(item => item.sessionGroup === group || group === null && item.sessionGroup === 'origin');
+    const scene = context.scenes.find(item => item.sessionGroup === group);
     if (scene?.observationError) throw scene.observationError;
     if (!scene) return { sessionGroup: group, present: false };
     if (typeof scene.present !== 'boolean') throw error('INVALID_OBSERVATION', 'Runtime presence is unknown');
@@ -140,7 +138,7 @@ export class SupervisorLifecycle {
     if (context.restartRequestsError || context.transition || context.fences.some(fence => fence.sessionGroup === '*')) return false;
     if (group !== null && context.fences.some(fence => fence.sessionGroup === group)) return false;
     return !context.restartRequests.some(request => request.reason === 'manual_restart' &&
-      (manualTarget(request, context) === group || request.mode === 'single' && group === 'origin'));
+      (manualTarget(request) === group || request.mode === 'single' && group === 'origin'));
   }
 
   async refreshAuthorities(context) {
@@ -160,14 +158,13 @@ export class SupervisorLifecycle {
 
   stopped(scene, context) {
     this.reclaimSyncFailures.delete(scene.sessionGroup);
-    const current = context.scenes.find(item => item.runId === scene.runId &&
-      (item.sessionGroup === scene.sessionGroup || scene.sessionGroup === null && item.sessionGroup === 'origin'));
+    const current = context.scenes.find(item => item.runId === scene.runId && item.sessionGroup === scene.sessionGroup);
     if (current) Object.assign(current, { present: false, ready: false, processRunning: false });
   }
 
   async checkReclaimDependencies(scene, context) {
     if (typeof this.d.readSyncMarker !== 'function') throw error('DEPENDENCY_UNAVAILABLE', 'Sync marker reader is unavailable');
-    const kinds = legacy(context) || oldUnique(scene, context) ? ['global'] : scene.sessionGroup === 'origin' ? ['group', 'origin'] : ['group'];
+    const kinds = oldUnique(scene, context) ? ['global'] : scene.sessionGroup === 'origin' ? ['group', 'origin'] : ['group'];
     let unheld = true;
     for (const kind of kinds) {
       const marker = await this.d.readSyncMarker({ runDir: scene.runDir, kind, currentRunId: scene.runId });
@@ -205,14 +202,13 @@ export class SupervisorLifecycle {
     }
   }
 
-  async running(group, { withoutDeadline = false, context } = {}) {
-    const conversations = group === null || group === 'origin' && context && modeOf(context) === 'single' ? await this.d.db.countGlobalRunningConversations() : await this.d.db.countRunningConversations(group);
-    const controls = await this.d.db.countNonTerminalControls(targetOf(group));
-    if (!Number.isInteger(conversations) || conversations < 0 || !Number.isInteger(controls.running) || controls.running < 0 ||
-        (withoutDeadline && (!Number.isInteger(controls.runningWithoutDeadline) || controls.runningWithoutDeadline < 0))) {
+  async running(group, { context } = {}) {
+    const conversations = group === 'origin' && context && modeOf(context) === 'single' ? await this.d.db.countGlobalRunningConversations() : await this.d.db.countRunningConversations(group);
+    const controls = await this.d.db.countNonTerminalControls({ sessionGroup: group });
+    if (!Number.isInteger(conversations) || conversations < 0 || !Number.isInteger(controls.running) || controls.running < 0) {
       throw error('INVALID_OBSERVATION', 'Invalid in-flight counts');
     }
-    return { conversations, controls: controls.running - (withoutDeadline ? controls.runningWithoutDeadline : 0) };
+    return { conversations, controls: controls.running };
   }
 
   async clear(fence, context) {
@@ -269,9 +265,8 @@ export class SupervisorLifecycle {
   }
 
   async beginReclaim(scene, reason, context, { subreason } = {}) {
-    if (reason === 'evict' && (scene.sessionGroup === 'origin' || scene.sessionGroup === null)) return false;
-    if (reason === 'ttl' && scene.sessionGroup === null) return false;
-    if (!scene.present || !scene.ready || !scene.runId || scene.sessionGroup === null) return false;
+    if (reason === 'evict' && scene.sessionGroup === 'origin') return false;
+    if (!scene.present || !scene.ready || !scene.runId) return false;
     if (this.subagentReclaimBlocked(scene, reason, context)) return false;
     if (!await this.allowed(scene.sessionGroup, context)) return false;
     const fresh = await this.observe(scene.sessionGroup, context);
@@ -291,22 +286,32 @@ export class SupervisorLifecycle {
     return started;
   }
 
-  async advanceReclaim(fence, context, { unfenced = false, singleAuth = false } = {}) {
+  async stopForModeSwitch(scene, context) {
+    const group = scene.sessionGroup;
+    if (await this.d.db.countRunningConversations(group) !== 0) return;
+    const fresh = await this.observe(group, context);
+    if (!fresh.present || !fresh.ready || fresh.runId !== scene.runId) return;
+    await this.d.stop(fresh);
+    this.stopped(fresh, context);
+  }
+
+  async advanceReclaim(fence, context) {
     if (fence.reason === 'manual_restart' || !RECLAIM_REASONS.has(fence.reason)) return 'ignored';
-    const group = unfenced ? null : fence.sessionGroup;
+    const group = fence.sessionGroup;
     if (group === '*') return 'ignored';
     const preparedTtl = fence.reason === 'ttl' && this.ttlPreparation.get(group)?.runId === fence.runId;
-    if (!unfenced) {
-      const current = context.fences.find(item => item.sessionGroup === group);
-      if (!current || current.runId !== fence.runId || current.reason !== fence.reason) return 'changed';
-    }
+    const currentFence = context.fences.find(item => item.sessionGroup === group);
+    if (!currentFence || currentFence.runId !== fence.runId || currentFence.reason !== fence.reason) return 'changed';
     let scene = await this.reclaimRead(fence, () => this.scene(group, context));
     if (fence.reason === 'delete' && scene.present && scene.runId && scene.runId !== fence.runId) return 'changed';
-    if (finite(scene.currentSessionTs)) {
-      const expired = await this.reclaimRead(fence, () => this.d.db.expireStaleRunningControls(targetOf(group), { deliveredBefore: Math.floor(scene.currentSessionTs / 1000) }));
+    const switchingGroup = context.transition?.phase === 'gating' && group !== 'origin';
+    if (switchingGroup && scene.present) return 'waiting_inflight';
+    const staleBefore = switchingGroup ? Math.floor(this.now() / 1000) + 1 : Math.floor(scene.currentSessionTs / 1000);
+    if (finite(staleBefore)) {
+      const expired = await this.reclaimRead(fence, () => this.d.db.expireStaleRunningControls({ sessionGroup: group }, { deliveredBefore: staleBefore }));
       for (const row of expired) await this.event('control_expired', { session_group: group, control_id: row.id, run_id: fence.runId });
     }
-    const counts = await this.reclaimRead(fence, () => this.running(group, { withoutDeadline: singleAuth, context }));
+    const counts = await this.reclaimRead(fence, () => this.running(group, { context }));
     if (counts.conversations > 0 || counts.controls > 0) return 'waiting_inflight';
     if (scene.present && scene.runId === fence.runId) {
       if (typeof scene.processRunning !== 'boolean') return 'unknown_process';
@@ -317,18 +322,18 @@ export class SupervisorLifecycle {
             !await this.reclaimRead(fence, () => this.idle(scene, context, {
               ignoreSyncMarker: ['ttl', 'release'].includes(fence.reason) && this.reclaimSyncFailures.get(group) === scene.runId,
             }))) {
-          if (singleAuth || ['model_config', 'delete'].includes(fence.reason)) return 'waiting_idle';
-          if (!unfenced) await this.clear(fence, context);
+          if (['model_config', 'delete'].includes(fence.reason)) return 'waiting_idle';
+          await this.clear(fence, context);
           if (fence.reason === 'ttl') this.ttlReset.set(group, { runId: fence.runId, at: this.now() });
           await this.event('reclaim_cancelled', { session_group: group, run_id: fence.runId, reason: childBlocked ? 'subagent_activity' : 'not_idle' });
           return 'cancelled';
         }
-        const again = await this.reclaimRead(fence, async () => singleAuth ? this.running(group, { withoutDeadline: true, context }) : fence.reason === 'delete' ? this.running(group, { context }) : {
-          conversations: group === null || group === 'origin' && modeOf(context) === 'single' ? await this.d.db.countGlobalRunningConversations() : await this.d.db.countRunningConversations(group), controls: 0,
+        const again = await this.reclaimRead(fence, async () => fence.reason === 'delete' ? this.running(group, { context }) : {
+          conversations: group === 'origin' && modeOf(context) === 'single' ? await this.d.db.countGlobalRunningConversations() : await this.d.db.countRunningConversations(group), controls: 0,
         });
         if (again.conversations !== 0 || again.controls !== 0) {
-          if (singleAuth || fence.reason === 'delete') return 'waiting_inflight';
-          if (!['model_config', 'delete'].includes(fence.reason) && !unfenced) {
+          if (fence.reason === 'delete') return 'waiting_inflight';
+          if (!['model_config', 'delete'].includes(fence.reason)) {
             await this.event('reclaim_cancelled', { session_group: group, run_id: fence.runId, reason: 'inflight_after_idle' });
             await this.clear(fence, context);
             if (fence.reason === 'ttl') this.ttlReset.set(group, { runId: fence.runId, at: this.now() });
@@ -349,10 +354,8 @@ export class SupervisorLifecycle {
           return 'cancelled';
         }
         await this.reclaimRead(fence, async () => {
-          if (!unfenced) {
-            const current = await this.d.db.getDrainFence(group);
-            if (!current || current.runId !== fence.runId || current.reason !== fence.reason) throw error('FENCE_MISMATCH', 'Reclaim fence changed');
-          }
+          const current = await this.d.db.getDrainFence(group);
+          if (!current || current.runId !== fence.runId || current.reason !== fence.reason) throw error('FENCE_MISMATCH', 'Reclaim fence changed');
         });
         await this.reclaimRead(fence, async () => {
           await this.d.stop(scene);
@@ -373,14 +376,11 @@ export class SupervisorLifecycle {
       }
     }
     await this.d.intentionalStop?.(group, fence.runId);
-    if (!unfenced) {
-      const current = scene.present && scene.runId !== fence.runId ? await this.d.readCurrentSession?.(group) : null;
-      if (current?.runId && current.runId !== fence.runId) {
-        if (fence.reason === 'delete') return 'changed';
-        await this.clear(fence, context);
-      }
-      else await this.completeRun(fence, context);
-    }
+    const replacement = scene.present && scene.runId !== fence.runId ? await this.d.readCurrentSession?.(group) : null;
+    if (replacement?.runId && replacement.runId !== fence.runId) {
+      if (fence.reason === 'delete') return 'changed';
+      await this.clear(fence, context);
+    } else await this.completeRun(fence, context);
     this.ttlPreparation.delete(group);
     this.evictionPreparation.delete(group);
     this.releasePreparation.delete(group);
@@ -466,7 +466,7 @@ export class SupervisorLifecycle {
       await this.d.db.resolveSessionLaunchConfig({ sessionGroup: group, sessionMode: 'multi' }));
     if (context.transition || configurationChanged || context.restartRequests.some(row =>
       row.reason === 'upgrade' && row.runIds.includes(scene.runId) || row.reason === 'manual_restart' &&
-      (manualTarget(row, context) === group || row.mode === 'single'))) return reject('restart_pending');
+      (manualTarget(row) === group || row.mode === 'single'))) return reject('restart_pending');
     const eviction = this.evictionPreparation.get(group);
     if (eviction?.runId === scene.runId && this.now() >= eviction.deadline) return reject('preparation_expired');
     const now = this.now();
@@ -774,7 +774,7 @@ export class SupervisorLifecycle {
       if (!started) this.evictionPreparation.delete(group);
       return started ? 'started' : null;
     }
-    if (group === 'origin' || group === null || !scene.present || !scene.ready || !scene.runId) return null;
+    if (group === 'origin' || !scene.present || !scene.ready || !scene.runId) return null;
     if (!await this.allowed(group, context)) return null;
     const fresh = await this.observe(group, context);
     if (!fresh.present || !fresh.ready || fresh.runId !== scene.runId) return null;
@@ -821,8 +821,7 @@ export class SupervisorLifecycle {
   async checkRotation(scene, context) {
     if (scene.observationError) throw scene.observationError;
     if (!await this.allowed(scene.sessionGroup, context)) return;
-    if (!scene.present || !scene.ready) return;
-    if (oldUnique(scene, context)) return;
+    if (!scene.present || !scene.ready || oldUnique(scene, context)) return;
     const threshold = sceneRotationThreshold(scene, context.configuration);
     if (!finite(scene.usagePercent) || threshold === null || scene.usagePercent < threshold) return;
     const key = JSON.stringify([scene.runId, scene.sessionId]), now = this.now();
@@ -830,7 +829,7 @@ export class SupervisorLifecycle {
     if (!await this.beforeWrite(scene.sessionGroup, context, scene)) return;
     const targetBinding = await this.bindCurrentRun(scene);
     if (!targetBinding) return;
-    await this.d.db.insertControl(this.prompt('ROTATION_PROMPT', scene), { targetBinding, sessionGroup: legacy(context) ? null : scene.sessionGroup, bypassState: true, appendAckSuffix: false });
+    await this.d.db.insertControl(this.prompt('ROTATION_PROMPT', scene), { targetBinding, sessionGroup: scene.sessionGroup, bypassState: true, appendAckSuffix: false });
     this.rotationSent.set(key, now);
   }
 
@@ -864,17 +863,15 @@ export class SupervisorLifecycle {
     if (this.lastSyncCheck !== null && now - this.lastSyncCheck < this.syncCheckMs) return;
     if (context.restartRequestsError || context.transition || context.fences.some(fence => fence.sessionGroup === '*')) return;
     this.lastSyncCheck = now;
-    const single = legacy(context);
     await this.each(scenes, async scene => {
       if (scene.observationError) throw scene.observationError;
       if (!await this.allowed(scene.sessionGroup, context)) return;
       if (!scene.present || !scene.ready || oldUnique(scene, context)) return;
-      const kind = single ? 'global' : 'group';
-      const range = single ? await this.d.db.getGlobalUnsummarizedRange() : await this.d.db.getUnsummarizedRange(scene.sessionGroup);
-      await this.syncScope(scene, kind, { count: range.count, firstAt: range.firstAt,
+      const range = await this.d.db.getUnsummarizedRange(scene.sessionGroup);
+      await this.syncScope(scene, 'group', { count: range.count, firstAt: range.firstAt,
         firstConversationId: range.firstConversationId, nonempty: range.count > 0 }, context);
     });
-    if (!legacy(context) && this.allowed('origin', context) &&
+    if (this.allowed('origin', context) &&
         !scenes.some(scene => scene.sessionGroup === 'origin' &&
           (context.configuration.mode === 'single' && scene.observationError || scene.present && oldUnique(scene, context)))) {
       const origin = scenes.find(scene => scene.sessionGroup === 'origin' && scene.present && scene.ready);
@@ -916,12 +913,12 @@ export class SupervisorLifecycle {
   async syncAlerts(context) {
     if (!this.d.syncObserver) return;
     let alerts = await this.d.syncObserver.inspect(this.d.db, { ...context.configuration,
-      mode: legacy(context) ? 'single' : 'multi',
+      mode: 'multi',
       episodes: this.syncAlertEpisodes.entries(),
       activeScopes: context.scenes.filter(scene => (scene.present || scene.observationError) && !oldUnique(scene, context))
-        .map(scene => legacy(context) ? '*' : scene.sessionGroup),
+        .map(scene => scene.sessionGroup),
     }, async (scope, kind) => {
-      const scene = context.scenes.find(row => (legacy(context) ? '*' : row.sessionGroup) === scope);
+      const scene = context.scenes.find(row => row.sessionGroup === scope);
       const marker = await this.d.readSyncMarker({ runDir: scene?.runDir ?? this.d.groupRunDir(scope === '*' ? 'origin' : scope), kind, currentRunId: scene?.runId ?? null });
       return marker.held && !marker.stale;
     });
@@ -931,7 +928,7 @@ export class SupervisorLifecycle {
       if (candidate.kind === 'origin') { alerts.push(candidate); continue; }
       const trigger = [...this.d.syncObserver.groups.values()].find(row => row.kind === candidate.kind && row.scope === candidate.scope);
       const startedAt = trigger?.ts;
-      const scene = context.scenes.find(row => (legacy(context) ? '*' : row.sessionGroup) === candidate.scope && row.present);
+      const scene = context.scenes.find(row => row.sessionGroup === candidate.scope && row.present);
       if (!scene) continue;
       const code = scene && startedAt != null ? latestSyncFailure({ env: this.d.env, scene,
         target: { kind: candidate.kind, scope: candidate.scope }, startedAt }) : null;
@@ -975,11 +972,11 @@ export class SupervisorLifecycle {
       if (this.syncAlertEpisodes.claim(alert)) await this.event('sync_alert', alert);
       return this.syncAlertEpisodes.available;
     }
-    if (!await this.beforeWrite(legacy(context) ? null : 'origin', context)) return false;
+    if (!await this.beforeWrite('origin', context)) return false;
     if (!this.syncAlertEpisodes.claim(alert)) return true;
     try {
       await this.d.db.insertControl(this.prompt('SYNC_BACKLOG_ALERT', alert.kind, alert.backlog ?? 0, alert.lag ?? 0, alert.scope, alert.type, alert), {
-        sessionGroup: legacy(context) ? null : 'origin', appendAckSuffix: false,
+        sessionGroup: 'origin', appendAckSuffix: false,
       });
     } catch (cause) {
       // SQLite admission failures are definite non-enqueues; an unknown result
@@ -1056,7 +1053,7 @@ export class SupervisorLifecycle {
     if (!await this.beforeWrite(legacy(context) ? null : scene.sessionGroup, context, kind === 'origin' ? undefined : scene)) return;
     const checkpointId = await this.syncCheckpoint(scene, kind);
     const control = await this.d.db.insertControl(this.prompt(kind === 'origin' ? 'ORIGIN_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT'), {
-      sessionGroup: legacy(context) ? null : scene.sessionGroup, priority: 2, appendAckSuffix: false,
+      sessionGroup: scene.sessionGroup, priority: 2, appendAckSuffix: false,
       ...(kind === 'origin' ? {} : { ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000), createdAt: Math.floor(now / 1000) }),
     });
     const reason = [];
@@ -1120,10 +1117,10 @@ export class SupervisorLifecycle {
   }
 
   manualBlocked(request, context) {
-    const group = manualGroup(request, context);
+    const group = manualTarget(request);
     const fence = context.fences.find(item => item.sessionGroup === group);
     return context.restartRequestsError || modeOf(context) !== request.mode || context.transition ||
-      !legacy(context) && context.fences.some(item => item.sessionGroup === '*') ||
+      context.fences.some(item => item.sessionGroup === '*') ||
       fence && (fence.reason !== 'manual_restart' || fence.runId !== request.expectedRunId);
   }
 
@@ -1132,7 +1129,7 @@ export class SupervisorLifecycle {
     const requests = context.restartRequests.filter(request => request.reason === 'manual_restart');
     const activeWarnings = new Set(), allowed = [];
     for (const fence of context.fences.filter(item => item.reason === 'manual_restart')) {
-      if (!requests.some(request => manualGroup(request, context) === fence.sessionGroup && request.expectedRunId === fence.runId)) {
+      if (!requests.some(request => manualTarget(request) === fence.sessionGroup && request.expectedRunId === fence.runId)) {
         const key = JSON.stringify(['manual', 'orphan', fence.sessionGroup, fence.runId]);
         activeWarnings.add(key);
         await this.alertOnce(key, { event: 'manual_restart_orphan_fence', session_group: fence.sessionGroup, run_id: fence.runId, reason: 'intent_missing' });
@@ -1158,8 +1155,8 @@ export class SupervisorLifecycle {
     const requests = context.manualRequests ?? await this.checkManualFences(context);
     await this.each(requests, async request => {
       try {
-        const group = manualGroup(request, context);
-        const targetGroup = manualTarget(request, context);
+        const group = manualTarget(request);
+        const targetGroup = group;
         await this.refreshAuthorities(context);
         if (this.manualBlocked(request, context)) return;
         let target = await this.observe(targetGroup, context);
@@ -1190,7 +1187,7 @@ export class SupervisorLifecycle {
         if (count !== 0) return;
         await this.refreshAuthorities(context);
         if (this.manualBlocked(request, context)) return;
-        if (!legacy(context) && targetGroup === 'origin') await this.d.db.insertControl(MANUAL_WAKE_PROMPT, {
+        if (targetGroup === 'origin') await this.d.db.insertControl(MANUAL_WAKE_PROMPT, {
           sessionGroup: 'origin', priority: 2, appendAckSuffix: false,
         });
         fence = context.fences.find(item => item.sessionGroup === group);

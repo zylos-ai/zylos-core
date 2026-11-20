@@ -64,7 +64,7 @@ function finalizationFixture(t) {
     verifyServices: () => ({ status: 'done' }),
     finalizeWebConsoleRemoval: () => ({ warnings: [], pm2Changed: false }),
     dashboardOwner: { verifyDashboard: () => ({ state: 'ready', errors: [] }) },
-    readModeStatus: () => ({ sessionMode: 'multi', transition: null }), readMode: () => ({ mode: 'multi' }), readTransition: () => null,
+    readModeStatus: () => ({ sessionMode: 'multi', transition: null }),
     restart: () => { calls.push('restart'); return { ok: true, data: { result: 'accepted' } }; },
     protectedSuccess: () => { calls.push('terminal'); },
   };

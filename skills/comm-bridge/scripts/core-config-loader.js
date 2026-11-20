@@ -103,9 +103,3 @@ export async function loadCoreConfig() {
   }
   return coreConfigPromise;
 }
-
-// Load only pure readers: unlike config.js, config-store.js captures no instance
-// paths. Schema inspection must not initialize the process-wide config module.
-export async function loadCoreConfigStore() {
-  return import(pathToFileURL(path.join(path.dirname(resolveCoreConfigModule()), 'config-store.js')).href);
-}

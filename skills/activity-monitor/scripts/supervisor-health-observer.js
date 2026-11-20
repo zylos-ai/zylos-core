@@ -14,13 +14,13 @@ const sameRun = (a, b) => Boolean(a && b && a.runtime === b.runtime && a.runId &
 /** Observation owns no process launcher and never waits for an acknowledgement in tick. */
 export class SupervisorHealthObserver {
   constructor({ coordinator, listScenes, readIdentity, readState, readScreen, matchScreen,
-    insertControl, getControlById, buildTargetBinding, stop, readMode = () => ({ mode: 'multi' }),
+    insertControl, getControlById, buildTargetBinding, stop,
     getModeTransition = () => null, getDrainFence = () => null, manualPending = () => false,
-    readMaintenance = () => null, resolveToolRule = () => null, nudge, checkAuth, diagnostic = () => {}, now = Date.now,
+    resolveToolRule = () => null, nudge, checkAuth, diagnostic = () => {}, now = Date.now,
     log = () => {}, recoveryDeadlineMs = 120000 } = {}) {
     Object.assign(this, { coordinator, listScenes, readIdentity, readState, readScreen, matchScreen,
-      insertControl, getControlById, buildTargetBinding, stop, readMode, getModeTransition,
-      getDrainFence, manualPending, readMaintenance, resolveToolRule, nudge, checkAuth, diagnostic, now, log, recoveryDeadlineMs });
+      insertControl, getControlById, buildTargetBinding, stop, getModeTransition,
+      getDrainFence, manualPending, resolveToolRule, nudge, checkAuth, diagnostic, now, log, recoveryDeadlineMs });
     this.probes = new Map();
     this.scenes = new Map();
     this.verifications = new Map();
@@ -31,10 +31,6 @@ export class SupervisorHealthObserver {
     this.stopped = false;
   }
   probeInFlight(runtime) { return this.probes.has(runtime); }
-  async modeSnapshot() {
-    const value = await this.readMode();
-    return typeof value === 'string' ? { mode: value } : { ...value, mode: value?.mode === undefined ? 'multi' : value.mode };
-  }
   /** An active no-response episode owns restarts of its run until AI work or its stop ends it. */
   noResponseActive(scene) {
     const state = this.scenes.get(scene?.sessionGroup);
@@ -68,7 +64,6 @@ export class SupervisorHealthObserver {
     if(previous?.runId===runId)return false;
     const valid=async current=>{
       if(current.sessionId!==sessionId || !sameRun(scene,current) || !await this.canRecover(current))return false;
-      if((await this.modeSnapshot()).mode!=='multi' && await this.maintenanceHeld({...scene,...current}))return false;
       const fresh=await this.readState({...scene,...current});
       return fresh?.sessionId===sessionId && !fresh.transcriptPending &&
         this.responseAt(fresh)<=pastedAt && Array.isArray(fresh.tools) && fresh.tools.length===0 &&
@@ -158,18 +153,16 @@ export class SupervisorHealthObserver {
     return eligible;
   }
   async reconcileRecoveryWaits(demand, scenes) {
-    const multi = (await this.modeSnapshot()).mode === 'multi';
     for (const runtime of this.recoveryWaits.keys()) {
       const health = this.coordinator.store(runtime).read().health;
-      if (!multi || !demand.has(runtime) || health === 'ok' || health === 'auth_failed' ||
+      if (!demand.has(runtime) || health === 'ok' || health === 'auth_failed' ||
           !(await this.recoveryScenes(runtime, scenes, {requireRunning:true})).length) this.recoveryWaits.delete(runtime);
     }
   }
   async prepareProbe(probe) {
     if(this.stopped)return this.finish(probe,{recovered:false,stopped:true});
     if (!probe.force && !await this.due(probe.runtime)) return this.finish(probe,{recovered:false});
-    const { mode } = await this.modeSnapshot();
-    const idleOnly = mode === 'multi' && probe.phase === 'recovery';
+    const idleOnly = probe.phase === 'recovery';
     const scenes = await this.recoveryScenes(probe.runtime, await this.listScenes(), {requireRunning:idleOnly});
     const candidates = [];
     for (const scene of scenes) candidates.push({scene, idle:idleOnly ? (await this.readState(scene))?.state === 'idle' : true});
@@ -179,8 +172,6 @@ export class SupervisorHealthObserver {
     const forcedBusy = idleOnly && waitAt !== undefined && this.now()-waitAt >= RECOVERY_IDLE_WAIT_MS;
     let busy = false;
     for (const {scene} of candidates) {
-      // Single-session probes do not wait for idle; they leave a run under no-response recovery alone.
-      if (mode !== 'multi' && this.noResponseActive(scene)) continue;
       const binding = await this.buildTargetBinding(scene);
       // Binding construction may perform I/O; repeat identity and gates immediately before insertion.
       if (!await this.canAct(scene,{requireReady:true,requireOpen:true}) || this.stopped) continue;
@@ -188,9 +179,8 @@ export class SupervisorHealthObserver {
       if (idleOnly && !forcedBusy && (await this.readState(scene))?.state !== 'idle') {busy = true;continue;}
       const sentAt = this.now();
       const deadline = sentAt + (probe.phase === 'recovery' ? this.recoveryDeadlineMs : 300000);
-      const scope = await this.modeSnapshot();
       const control = await this.insertControl(`Heartbeat check. [phase=${probe.phase}]`, {
-        sessionGroup:scope.mode === 'multi' || scope.keyPresent === true ? scene.sessionGroup : null, targetBinding:binding,
+        sessionGroup:scene.sessionGroup, targetBinding:binding,
         priority:0,bypassState:true,ackDeadlineAt:Math.floor(deadline/1000),createdAt:Math.floor(sentAt/1000),
       });
       const controlId = control?.id;
@@ -340,9 +330,6 @@ export class SupervisorHealthObserver {
     return Number.isFinite(state?.lastResponseAt) && state.lastResponseAt<=this.now() ? state.lastResponseAt : 0;
   }
   async observeDelivery(scene,tracked,delivery,state,now) {
-    const {mode}=await this.modeSnapshot();
-    // A mode change clears active recovery; the new mode cannot act on a stale deadline.
-    if(delivery.recovery && delivery.recovery.mode!==mode)delivery.recovery=null;
     // A pair must finish even when Escape creates Stop/idle or transcript writes.
     if(delivery.recovery?.pending)return true;
     if(delivery.recovery?.sessionId!==undefined && delivery.recovery.sessionId!==scene.sessionId)delivery.recovery=null;
@@ -358,20 +345,14 @@ export class SupervisorHealthObserver {
       else if(responseAt>delivery.silenceSince)delivery.silenceSince=delivery.pastedAt;
     }
     if(!delivery.noResponseEligible)return false;
-    if(mode!=='multi' && await this.singleHold(scene,recovery)) {
-      // Silence is measured again from the end of the hold.
-      delivery.recovery=null;delivery.silenceSince=Math.max(delivery.silenceSince,now);
-      return false;
-    }
     const activityAt=delivery.silenceSince;
     const silenceMs=Math.max(0,now-(recovery ? recovery.activityAt : activityAt));
     if(!recovery && (state.transcriptPending || silenceMs<NO_RESPONSE_SILENCE_MS))return false;
     if(!recovery && now<delivery.retryAt)return true;
-    const episode=recovery ?? {mode,sessionId:scene.sessionId,activityAt,responseAt:now,pending:true,nudgedAt:null};
+    const episode=recovery ?? {sessionId:scene.sessionId,activityAt,responseAt:now,pending:true,nudgedAt:null};
     const valid=async(current,{continuing=false}={})=>{
       if(current.sessionId!==episode.sessionId || this.scenes.get(scene.sessionGroup)!==tracked ||
-        tracked.delivery!==delivery || delivery.recovery!==episode || (await this.modeSnapshot()).mode!==episode.mode ||
-        !await this.canRecover(current) || (episode.mode!=='multi' && await this.maintenanceHeld(current)))return false;
+        tracked.delivery!==delivery || delivery.recovery!==episode || !await this.canRecover(current))return false;
       if(continuing)return true;
       const fresh=await this.readState(current);
       if(fresh?.sessionId!==current.sessionId || fresh.transcriptPending)return false;
@@ -413,24 +394,6 @@ export class SupervisorHealthObserver {
     }
     return delivery.recovery!==null || now<delivery.retryAt;
   }
-  // An unreadable maintenance state holds recovery; each distinct failure is logged once.
-  async maintenanceHeld(scene) {
-    try {
-      const reason=await this.readMaintenance(scene);
-      this.maintenanceError=null;
-      return Boolean(reason);
-    } catch(error) {
-      const code=error.code ?? error.message;
-      if(this.maintenanceError!==code) {this.maintenanceError=code;this.log(error);}
-      return true;
-    }
-  }
-  /** Single session: maintenance always holds observation; health recovery holds it only before an episode starts. */
-  async singleHold(scene,recovery) {
-    if(await this.maintenanceHeld(scene))return true;
-    return !recovery && (this.probes.has(scene.runtime) || this.coordinator.store(scene.runtime).read().health!=='ok');
-  }
-
   async tick(scenes) {
     if(this.stopped)return;
     for (const probe of [...this.probes.values()]) {

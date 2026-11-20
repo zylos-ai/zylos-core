@@ -13,6 +13,7 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
   const originCursor = (c, group) => get(c, 'SELECT synced_id,checkpoint_id,updated_at FROM origin_sync_cursors WHERE session_group=?', group);
   function originSingle(c, group) {
     if (group !== 'origin') return false;
+    if (typeof dependencies.readConfig !== 'function') throw new TypeError('Origin progress requires readConfig');
     if (hasOpenModeTransition(c, get)) return true;
     try {
       const result = dependencies.readConfig();

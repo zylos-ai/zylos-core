@@ -20,7 +20,6 @@ test('keyed single sleeps without demand, then starts only Origin for other-grou
   assert.ok(launch, JSON.stringify(f.events));
   assert.equal(launch.sessionGroup, 'origin'); assert.equal(launch.sessionMode, 'single');
   assert.deepEqual(launch.launchConfig, { runtime: 'codex', mode: 'override', model: 'origin-model', effort: 'high' });
-  assert.equal(f.calls.some(call => call[0] === 'prepare'), false);
   assert.equal(f.row(row.id).status, 'delivered');
   assert.equal(f.db.listSlotOccupancy().length, 0);
 });
@@ -49,15 +48,13 @@ test('Origin fence holds all single-mode inbound and prevents demand startup', a
 });
 
 test('single delivery uses Origin target and records Origin only after verified delivery', async t => {
-  for (const keyPresent of [true, false]) await t.test(String(keyPresent), async t => {
-    const f = deliveryFixture(t, { mode: 'single', keyPresent });
-    const row = f.message('telegram'); await f.delivery.deliverConversation(row);
-    const saved = f.db.prepare('SELECT * FROM conversations WHERE id=?').get(row.id);
-    assert.equal(saved.status, 'delivered');
-    assert.equal(saved.session_group, keyPresent ? 'origin' : 'telegram');
-    assert.ok(f.calls.some(call => call[0] === 'paste' && call[1] === (keyPresent ? 'origin' : null)));
-    assert.ok(f.events.some(event => event.event === 'deliver' && event.session_group === (keyPresent ? 'origin' : null)));
-  });
+  const f = deliveryFixture(t, { mode: 'single' });
+  const row = f.message('telegram'); await f.delivery.deliverConversation(row);
+  const saved = f.db.prepare('SELECT * FROM conversations WHERE id=?').get(row.id);
+  assert.equal(saved.status, 'delivered');
+  assert.equal(saved.session_group, 'origin');
+  assert.ok(f.calls.some(call => call[0] === 'paste' && call[1] === 'origin'));
+  assert.ok(f.events.some(event => event.event === 'deliver' && event.session_group === 'origin'));
 });
 
 test('health-blocked single delivery retains source attribution and pending status', async t => {

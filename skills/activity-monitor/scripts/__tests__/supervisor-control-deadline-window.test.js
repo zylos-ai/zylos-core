@@ -78,8 +78,8 @@ test('the supervisor recovery heartbeat keeps exactly its 120 second window when
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-window-health-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const scenes = [{ sessionGroup: 'a', runtime: 'claude', runId: 'run-a', ready: true, present: true, sessionId: 'session-a' }];
-  const coordinator = new RuntimeHealthCoordinator({ zylosDir: root, now, readMode: () => 'multi', resolveTargetRuntime: () => 'claude', listScenes: () => scenes });
-  const observer = new SupervisorHealthObserver({ coordinator, now, listScenes: () => scenes, readMode: () => 'multi',
+  const coordinator = new RuntimeHealthCoordinator({ zylosDir: root, now, resolveTargetRuntime: () => 'claude', listScenes: () => scenes });
+  const observer = new SupervisorHealthObserver({ coordinator, now, listScenes: () => scenes,
     readIdentity: group => scenes.find(scene => scene.sessionGroup === group), readState: () => ({ state: 'idle', tools: [], sessionId: 'session-a' }),
     readScreen: () => '', matchScreen: () => ({}), insertControl: store.insertControl, getControlById: store.getControlById,
     buildTargetBinding: scene => ({ expectedRunId: scene.runId, tmuxTarget: { serverGeneration: 'gen', sessionId: '$1', paneId: '%1' } }),

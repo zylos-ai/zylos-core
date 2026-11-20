@@ -9,9 +9,9 @@ import { ZYLOS_DIR, readSessionMode } from './config.js';
 import { supervisorDiagnosticPath } from './session-group-paths.js';
 import { EventLogReader } from './event-log.js';
 
-const handoverEvent = event => ['global_memory_handover', 'global_memory_handover_failed'].includes(event);
+const handoverEvent = event => ['global_memory_handover', 'global_memory_handover_failed', 'global_memory_handover_conflict'].includes(event);
 const transitionEvent = event => typeof event === 'string'
-  && (event.startsWith('transition_') || event.startsWith('auto_migration_') || event === 'absorb' || handoverEvent(event));
+  && (event.startsWith('transition_') || event.startsWith('auto_migration_') || handoverEvent(event));
 const errorView = error => ({ code: error.code ?? 'READ_FAILED', message: error.message ?? String(error) });
 
 /** Observe reachability without submitting even a read request to the supervisor. */
@@ -46,22 +46,22 @@ export async function readSupervisorPm2({ env = process.env, timeoutMs = 1000 } 
 
 
 let diagnosticsCache;
-function readEvents(zylosDir, runId) {
+function readEvents(zylosDir) {
   const file = supervisorDiagnosticPath({ ZYLOS_DIR: zylosDir });
   const directory = path.dirname(file), stem = path.basename(file, '.jsonl');
   // Include rotated files and inode identity so append, truncation, replacement,
-  // rotation and retention changes all invalidate the one cached run's view.
+  // rotation and retention changes all invalidate the cached view.
   const signature = fs.readdirSync(directory).filter(name => name === path.basename(file) ||
     name.startsWith(`${stem}.`) && /^\d+$/.test(name.slice(stem.length + 1, -6)) && name.endsWith('.jsonl'))
     .sort().map(name => {
       const stat = fs.statSync(path.join(directory, name), { bigint: true });
       return [name, stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
     }).join('|');
-  if (diagnosticsCache?.file === file && diagnosticsCache.runId === runId && diagnosticsCache.signature === signature) return diagnosticsCache.events;
+  if (diagnosticsCache?.file === file && diagnosticsCache.signature === signature) return diagnosticsCache.events;
   const reader = new EventLogReader(file);
   try {
     const events = reader.read().filter(event => transitionEvent(event.event));
-    diagnosticsCache = { file, runId, signature, events };
+    diagnosticsCache = { file, signature, events };
     return events;
   }
   finally { reader.close(); }
@@ -69,7 +69,7 @@ function readEvents(zylosDir, runId) {
 
 function transitionView(row) {
   return row === null ? null : {
-    runId: row.run_id, kind: row.kind, sourceMode: row.source_mode, targetMode: row.target_mode,
+    runId: row.run_id, sourceMode: row.source_mode, targetMode: row.target_mode,
     phase: row.phase, cutoff: row.cutoff, reason: row.reason,
     createdAt: row.created_at, updatedAt: row.updated_at,
   };
@@ -93,14 +93,13 @@ export async function readSessionModeStatus(options = {}) {
   } finally { owned?.close(); }
   const transition = transitionView(row);
   const lastCompleted = completed === null ? null : {
-    runId: completed.run_id, kind: completed.kind, sourceMode: completed.source_mode,
+    runId: completed.run_id, sourceMode: completed.source_mode,
     targetMode: completed.target_mode, updatedAt: completed.updated_at,
   };
   const globalGate = { present: fence !== null, reason: fence?.reason ?? null, runId: fence?.runId ?? null };
-  const runId = transition?.runId ?? lastCompleted?.runId;
   let events = [];
   try {
-    events = (await (options.readEvents ?? readEvents)(zylosDir, runId))
+    events = (await (options.readEvents ?? readEvents)(zylosDir))
       .filter(event => transitionEvent(event.event) && (!transition ||
         (handoverEvent(event.event) ? Number.isFinite(event.ts) && event.ts >= transition.createdAt * 1000
           : event.run_id === transition.runId)));

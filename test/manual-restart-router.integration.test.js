@@ -7,7 +7,7 @@ import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fixture, launch, manual, assertReply } from './fixtures/manual-restart-harness.js';
-import { tmuxNameForGroup, groupRunDir } from '../../../../cli/lib/session-group-paths.js';
+import { tmuxNameForGroup, groupRunDir } from '../cli/lib/session-group-paths.js';
 const worker = fileURLToPath(new URL('./fixtures/manual-restart-router-worker.js', import.meta.url));
 async function m1(t, f, scenario) {
   assert.ok(fs.realpathSync(f.root).startsWith(fs.realpathSync(process.env.TMPDIR) + path.sep));
@@ -19,7 +19,7 @@ async function m1(t, f, scenario) {
   let sequence = 0, stderr = '', readyResolve, readyReject, barrierResolve;
   const pending = new Map(), barriers = [];
   const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
-  child.stderr.on('data', data => stderr += data); child.stdout.on('data', data => stderr += data);
+  child.stderr.on('data', data => { stderr = (stderr + data).slice(-8192); }); child.stdout.on('data', data => { stderr = (stderr + data).slice(-8192); });
   child.on('message', message => {
     if (message.ready) return readyResolve();
     if (message.barrier) { if (barrierResolve) { const resolve = barrierResolve; barrierResolve = null; resolve(message); } else barriers.push(message); return; }
@@ -37,8 +37,8 @@ function trace(f) { const file = path.join(f.root, 'manual-router.jsonl'); retur
 function requests(f) { const file = path.join(f.root, 'activity-monitor/restart-requests.json'); return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : []; }
 async function until(check, describe) { for (let i = 0; i < 200; i++) { if (await check()) return; await delay(10); } assert.fail(describe()); }
 for (const mode of ['single', 'multi']) test(`${mode} real dispatcher paste in flight, real supervisor manual kill retains gate until late bound Enter settles`, { timeout: 30000 }, async t => realInflight(t, mode));
-async function realInflight(t, mode, variant = '') {
-  const f = fixture(t, mode), m4 = launch(t, f, variant); assert.equal((await m4.next()).ready, true);
+async function realInflight(t, mode) {
+  const f = fixture(t, mode), m4 = launch(t, f); assert.equal((await m4.next()).ready, true);
   const router = await m1(t, f, 'inflight');
   const id = f.db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('in','fixture','OLD_PASTE_ONLY','pending',?)").run(mode === 'single' ? '' : 'origin').lastInsertRowid;
   for (let i = 0; i < 5; i++) await router.call('tick');
@@ -50,7 +50,7 @@ async function realInflight(t, mode, variant = '') {
   assert.equal(stopped.scene.present, false); assert.equal(stopped.fences.length, 1, 'real in-flight dispatcher must retain manual D8'); assert.deepEqual(stopped.requests, accepted);
   assert.equal(f.db.prepare('SELECT status FROM conversations WHERE id=?').pluck().get(id), 'running');
   // A new object at the same name cannot receive delayed Enter from the old claim.
-  f.tmux('new-session', '-d', '-s', 'zylos-group-origin', '-e', 'ZYLOS_RUN_ID=replacement', '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', ...(mode === 'multi' ? ['-e', 'ZYLOS_SESSION_GROUP=origin'] : []), path.join(f.root, 'claude'), '120');
+  f.tmux('new-session', '-d', '-s', 'zylos-group-origin', '-e', 'ZYLOS_RUN_ID=replacement', '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', '-e', 'ZYLOS_SESSION_GROUP=origin', path.join(f.root, 'claude'), '120');
   fs.writeFileSync(f.readyPath, JSON.stringify({ ...f.ready, runId: 'replacement', sessionId: 'new-session' }));
   await router.call('release'); await router.call('drain');
   assert.equal(f.db.prepare('SELECT status FROM conversations WHERE id=?').pluck().get(id), 'pending');
@@ -64,10 +64,6 @@ async function realInflight(t, mode, variant = '') {
   t.diagnostic(JSON.stringify({ mode, boundary, accounted: f.db.prepare('SELECT status,retry_count FROM conversations WHERE id=?').get(id), delayedKeys: trace(f).filter(row => row.kind.startsWith('keys-')), finalRun: done.scene.runId }));
   await router.stop(); await m4.stop();
 }
-test('detects early supervisor removal of the manual fence', { timeout: 30000 }, async t => {
-  await assert.rejects(realInflight(t, 'multi', 'early-clear'), { code: 'ERR_ASSERTION', message: /real in-flight dispatcher must retain manual D8/ });
-});
-
 // Covers replacement failure after manual intent completes, including demanded multi Origin.
 // Run for resident demand/admission changes; skip for unrelated message routing. Requires
 // private HOME/ZYLOS_DIR/PM2_HOME, short TMPDIR, private tmux -S/socket and DB; fixture cleans up.
@@ -79,13 +75,13 @@ for (const mode of ['single', 'multi']) test(`${mode} real dispatcher replacemen
     f.tmux('new-session', '-d', '-s', name, '-e', 'ZYLOS_RUN_ID=ordinary', '-e', `ZYLOS_SESSION_GROUP=${group}`, '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', path.join(f.root, 'claude'), '120');
     ordinary = { name, pid: f.tmux('display-message', '-p', '-t', `${name}:`, '#{pane_pid}') };
   }
-  const m4 = launch(t, f); assert.equal((await m4.next()).ready, true); const router = await m1(t, f, 'launch-failure');
+  const m4 = launch(t, f); assert.equal((await m4.next()).ready, true);
   const req = manual('restart-then-fail', { expectedRunId: 'run-1' }); assertReply(await f.submit(req), req, 'accepted');
   const stopped = await m4.command('tick'); assert.equal(stopped.scene.present, false); assert.deepEqual(stopped.requests, []); assert.deepEqual(stopped.fences, []);
-  if (mode === 'multi') f.db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('in','system','replacement work','pending','origin')").run();
+  const router = await m1(t, f, 'launch-failure');
   await until(async () => { await router.call('tick'); await router.call('drain'); return (await router.call('state')).resident.failures > 0; }, () => JSON.stringify(trace(f)));
   const attempts = trace(f).filter(row => row.kind === 'launch'); assert.ok(attempts.length > 0);
-  assert.ok(attempts.every(row => row.input.sessionGroup === (mode === 'single' ? null : 'origin')));
+  assert.ok(attempts.every(row => row.input.sessionGroup === 'origin'));
   assert.ok(trace(f).some(row => row.kind === 'launch-error' || row.event === 'launch_failed' || row.event === 'ready_timeout'), JSON.stringify(trace(f)));
   t.diagnostic(JSON.stringify({ mode, attempts, failures: trace(f).filter(row => row.kind === 'launch-error' || row.event === 'launch_failed' || row.event === 'ready_timeout'), resident: (await router.call('state')).resident }));
   const final = await m4.command('tick'); assert.deepEqual(final.requests, []); assert.deepEqual(final.fences, []);

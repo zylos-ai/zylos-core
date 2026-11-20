@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture } from './c4-v2-test-helpers.js';
+import { createStore } from '../c4-v2-store.js';
 
 function setup(t, readConfig = () => ({ state: 'ok', config: { session_mode: 'single' } })) {
   const f = fixture(t, { readConfig });
@@ -87,4 +88,12 @@ test('scheduled input changes its recording group only on successful delivery', 
   assert.equal(db.prepare('SELECT session_group FROM conversations WHERE id=10').get().session_group, 'telegram:a');
   s.claimConversation(10, { sessionMode: 'single' }); s.markDelivered(10, { sessionGroup: 'origin' });
   assert.equal(db.prepare('SELECT session_group FROM conversations WHERE id=10').get().session_group, 'origin');
+});
+
+test('Origin progress requires an injected reader and applies the single frontier when it fails', t => {
+  const { db, store } = fixture(t, { readConfig: () => { throw new Error('unreadable config'); } });
+  const gap = store.insertConversation('in', 'other', 'e', 'pending');
+  store.insertConversation('out', 'system', 'owner', 'later Origin output');
+  assert.throws(() => createStore(db).getUnsummarizedRange('origin'), /Origin progress requires readConfig/);
+  assert.equal(store.getUnsummarizedRange('origin').safeEnd, gap.id - 1);
 });

@@ -78,10 +78,7 @@ test('internal cleanup rejects absent or ineligible transitions without changing
   const { runId } = store.beginModeTransition('multi', 'single');
   const before = db.prepare('SELECT * FROM conversations').all();
   for (const id of [undefined, null, '', 'absent', runId]) assert.throws(() => store.voidInternalForSingle(id), { code: 'TRANSITION_PRECONDITION' });
-  db.prepare("UPDATE mode_transitions SET kind='first_migration',phase='cutover' WHERE run_id=?").run(runId);
-  assert.throws(() => store.voidInternalForSingle(runId), { code: 'TRANSITION_PRECONDITION' });
-  assert.deepEqual(db.prepare('SELECT * FROM conversations').all(), before);
-  db.prepare("UPDATE mode_transitions SET kind='switch',phase='cutover',source_mode='single',target_mode='multi' WHERE run_id=?").run(runId);
+  db.prepare("UPDATE mode_transitions SET phase='cutover',source_mode='single',target_mode='multi' WHERE run_id=?").run(runId);
   assert.throws(() => store.voidInternalForSingle(runId), { code: 'TRANSITION_PRECONDITION' });
   assert.deepEqual(db.prepare('SELECT * FROM conversations').all(), before);
 });
@@ -89,6 +86,7 @@ test('internal cleanup rejects absent or ineligible transitions without changing
 test('native single cutover voids only other pending internal input and handles later arrivals', t => {
   const { store, db } = fixture(t);
   const { runId } = store.beginModeTransition('multi', 'single');
+  store.setDrainFence('*');
   store.setModeTransitionPhase(runId, 'cutover');
   const insert = db.prepare('INSERT INTO conversations(direction,channel,content,status,session_group) VALUES(?,?,?,?,?)');
   const rows = [
@@ -116,8 +114,8 @@ test('native single cutover voids only other pending internal input and handles 
   assert.deepEqual(store.voidInternalForSingle(runId), []);
 });
 
-for (const keepOrigin of ['all', 'role', undefined]) {
-  test(`pending expiry preserves ${keepOrigin ?? 'no'} Origin controls and isolates machine/running`, t => {
+for (const keepOrigin of [true, undefined]) {
+  test(`pending expiry preserves ${keepOrigin ? 'all' : 'no'} Origin controls and isolates machine/running`, t => {
     const { store, db } = fixture(t, native);
     const role = control(store, 'origin', 'role');
     const bound = control(store, 'origin', 'bound', true);
@@ -126,7 +124,7 @@ for (const keepOrigin of ['all', 'role', undefined]) {
     db.prepare("UPDATE control_queue SET status='running' WHERE id=?").run(running.id);
     db.exec("INSERT INTO control_queue(raw_content,content,status,created_at,updated_at) VALUES('machine','machine','pending',0,0)");
     const expired = store.expirePendingControls({ allSessionGroups: true, ...(keepOrigin ? { keepOrigin } : {}) });
-    assert.deepEqual(expired.map(row => row.id).sort(), (keepOrigin === 'all' ? [other.id] : keepOrigin === 'role' ? [bound.id, other.id] : [role.id, bound.id, other.id]).sort());
+    assert.deepEqual(expired.map(row => row.id).sort(), (keepOrigin ? [other.id] : [role.id, bound.id, other.id]).sort());
     assert.equal(store.countNonTerminalControls({ machine: true }).pending, 1);
     assert.equal(store.countNonTerminalControls({ allSessionGroups: true }).running, 1);
     assert.equal(store.expirePendingControls({ machine: true }).length, 1);
@@ -135,11 +133,11 @@ for (const keepOrigin of ['all', 'role', undefined]) {
 
 test('preservation options reject malformed values and remain exclusive to pending expiry', t => {
   const { store } = fixture(t, native);
-  for (const input of [null, [], { allSessionGroups: true, keepOrigin: true }, { allSessionGroups: true, keepOrigin: undefined }, { machine: true, keepOrigin: 'all' }, { sessionGroup: 'origin', keepOrigin: 'role' }, { allSessionGroups: true, keepOrigin: 'all', extra: true }]) {
+  for (const input of [null, [], { allSessionGroups: true, keepOrigin: 'all' }, { allSessionGroups: true, keepOrigin: undefined }, { machine: true, keepOrigin: 'all' }, { sessionGroup: 'origin', keepOrigin: 'role' }, { allSessionGroups: true, keepOrigin: 'all', extra: true }]) {
     assert.throws(() => store.expirePendingControls(input), { code: 'INVALID_ARGS' });
   }
-  const input = { allSessionGroups: true, keepOrigin: 'all' };
-  for (const method of ['countNonTerminalControls', 'latestSessionSwitchAt', 'listRunningControlsWithoutDeadline']) assert.throws(() => store[method](input), { code: 'INVALID_ARGS' });
+  const input = { allSessionGroups: true, keepOrigin: true };
+  for (const method of ['countNonTerminalControls', 'listRunningControlsWithoutDeadline']) assert.throws(() => store[method](input), { code: 'INVALID_ARGS' });
   assert.throws(() => store.expireStaleRunningControls(input, { deliveredBefore: 100 }), { code: 'INVALID_ARGS' });
 });
 

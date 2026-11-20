@@ -152,8 +152,7 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
     ensureMemoryMigration: () => { calls.push('ensure-memory'); return {}; },
     startServices: () => { calls.push('start'); return { status: 'done' }; },
     verifyServices: () => { calls.push('verify'); return { status: 'done' }; },
-    readMode: () => ({ mode: 'single', keyPresent: true }), readTransition: () => null,
-    restart: () => { calls.push('restart'); return { ok: true, data: { result: 'exit_enqueued' } }; },
+    restart: () => { calls.push('restart'); return { ok: true, data: { result: 'accepted' } }; },
   };
   const load = () => m.transaction(root, dir);
   const resume = (overrides = {}) => resumeUpgradeFinalization({ zylosDir: root, transactionDir: dir,
@@ -211,8 +210,8 @@ test('default protected initial finalizer publishes real preparation, closes jou
   assert.equal(Object.hasOwn(result, 'instructionFilesRebuilt'), false);
   assert.equal(result.completion.modeTransition, 'pending_auto');
   assert.ok(f.calls.indexOf('start') > f.calls.indexOf('ensure-memory'));
-  assert.equal(f.calls.includes('restart'), false);
-  assert.equal(result.completion.sessionRestart, 'closed_by_system');
+  assert.equal(f.calls.includes('restart'), true);
+  assert.equal(result.completion.sessionRestart, 'accepted');
   assertDataPreserved(f);
 });
 
@@ -547,8 +546,8 @@ test('real finalizer stdout remains JSON when publication changes global Codex c
         updateConfig(){},ensureMemoryMigration(){},rotateSession(){},commitBaselines:()=>({status:'done'}),
         startServices:()=>({status:'done'}),verifyServices:()=>({status:'done'}),
         dashboardOwner:{copyDashboardDb:()=>({ok:true}),applyDashboardRegistration:()=>({state:'done'}),applyDashboardRoute:()=>({state:'done'}),verifyDashboard:()=>({state:'ready',errors:[]})},
-        readModeStatus:()=>({sessionMode:null,transition:null}),readMode:()=>({mode:null,keyPresent:false}),readTransition:()=>null,
-        restart:()=>({ok:true,data:{result:'exit_enqueued'}}),
+        readModeStatus:()=>({sessionMode:null,transition:null}),
+        restart:()=>({ok:true,data:{result:'accepted'}}),
       });
       process.stdout.write(JSON.stringify(result)+'\\n');
       process.exitCode=result.success?0:1;
@@ -852,8 +851,8 @@ test('optional runtime CLI warning survives successful finalization alongside pr
     'Existing preparation warning',
   ]);
   assert.deepEqual(result.warnings,[{code:'RUNTIME_CLI_UNAVAILABLE',runtime:'codex',message:'CLI installation failed or command not on PATH'}]);
-  assert.equal(f.calls.includes('restart'), false);
-  assert.equal(result.completion.sessionRestart, 'closed_by_system');
+  assert.equal(f.calls.includes('restart'), true);
+  assert.equal(result.completion.sessionRestart, 'accepted');
   assertDataPreserved(f);
 });
 

@@ -9,7 +9,11 @@ const ROOT = process.cwd();
 const ROOT_NODE_TESTS = [
   'test/single-origin-scheduler.test.js',
   'test/mode-switch-status-lifecycle.test.js',
-  'test/mode-switch-files.integration.test.js',
+  'test/supervisor-manual.integration.test.js',
+  'test/manual-restart-scenes.integration.test.js',
+  'test/manual-restart-router.integration.test.js',
+  'test/reclaim-crash.integration.test.js',
+  'test/mode-switch-upgrade-boundary.test.js',
   'test/mode-switch-native.integration.test.js',
   'test/global-memory-handover.integration.test.js',
   'test/failure-continuation.integration.test.js',
@@ -74,7 +78,6 @@ const ROOT_NODE_TESTS = [
   'test/owned-tree-deletion-policy.test.js',
   'test/owned-removal-callers.integration.test.js',
   'test/test-environment-cleanup.test.js',
-  'test/single-upgrade-check.integration.test.js',
   'test/exit-control.integration.test.js',
   'test/upgrade-npm-prefix.integration.test.js',
   'test/upgrade-db-maintenance.integration.test.js',
@@ -111,9 +114,6 @@ function walk(dir, files = []) {
 function isNodeTest(file) {
   const rel = path.relative(ROOT, file).split(path.sep).join('/');
   if (ROOT_NODE_TESTS.includes(rel)) return true;
-  // These integration entries use Jest and are selected by jest.config.js.
-  if (rel === 'skills/activity-monitor/scripts/__tests__/mode-switch-admission.integration.test.js'
-      || rel === 'skills/activity-monitor/scripts/__tests__/mode-switch-followup.integration.slow.test.js') return false;
   if (rel.startsWith('skills/dashboard/__tests__/')) return true;
   if (rel.startsWith('skills/dashboard/src/lib/') && rel.includes('/__tests__/')) return true;
   if (rel.startsWith('cli/lib/__tests__/')) return true;

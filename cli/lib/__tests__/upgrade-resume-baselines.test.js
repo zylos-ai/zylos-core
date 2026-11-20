@@ -58,8 +58,7 @@ function fixture(t, { added = false } = {}) {
     startServices: () => { starts++; return { status: 'done' }; }, verifyServices: () => ({ status: 'done' }),
     dashboardOwner: { verifyDashboard: () => ({ state: 'ready', errors: [] }) },
     readModeStatus: () => ({ sessionMode: 'single', transition: null }),
-    readMode: () => ({ mode: 'single' }), readTransition: () => null,
-    restart: () => ({ ok: true, data: { result: 'exit_enqueued' } }),
+    restart: () => ({ ok: true, data: { result: 'accepted' } }),
     protectedSuccess: ctx => m.update(dir, ctx.journal, { phase: 'upgrade_complete' }) };
   const initial = () => runSelfUpgradeFinalize({
     zylosDir: root, transactionId: 'tx', transactionDir: dir, tempDir: download }, deps);

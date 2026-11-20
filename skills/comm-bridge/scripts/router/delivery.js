@@ -172,8 +172,8 @@ export function createDelivery(deps, configuration = {}) {
   }
 
   async function deliver(row, type) {
-    const nativeSingle = deps.getSessionMode() === 'single' && deps.getSessionKeyPresent?.() === true;
-    const group = deps.getSessionMode() === 'single' ? nativeSingle ? 'origin' : null : row.session_group;
+    const single = deps.getSessionMode() === 'single';
+    const group = single ? 'origin' : row.session_group;
     const binding=type==='control' && row.target_binding ? (typeof row.target_binding==='string'?JSON.parse(row.target_binding):row.target_binding) : null;
     const continuation=type==='control' && row.content==='Continue' && row.require_idle===1 && binding?.expectedRunId && binding?.expectedSessionId;
     const fields = { session_group: group, [type === 'control' ? 'control_id' : 'conversation_id']: row.id };
@@ -446,7 +446,7 @@ export function createDelivery(deps, configuration = {}) {
       }
       // A message that waits for the session to be idle is recorded long after it was typed in: the record carries when.
       if (type === 'control') emit('deliver', { sessionId, pasted_at: pastedAt });
-      else if (!deps.db.markDelivered(row.id, { sessionId, ...(nativeSingle ? { sessionGroup: 'origin' } : {}) })) emit('mark_delivered_stale', { sessionId });
+      else if (!deps.db.markDelivered(row.id, { sessionId, ...(single ? { sessionGroup: 'origin' } : {}) })) emit('mark_delivered_stale', { sessionId });
       else emit('deliver', { sessionId, pasted_at: pastedAt });
     } else if (result === 'ack') deps.db.ackControl(row.id);
     return { delivered: result !== 'blocked', blocked: result === 'blocked', state: state.state };

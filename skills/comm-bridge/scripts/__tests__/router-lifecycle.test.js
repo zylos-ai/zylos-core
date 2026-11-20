@@ -21,29 +21,6 @@ async function until(predicate) {
   assert.fail('isolated target did not reach the expected state');
 }
 
-// dispatcher §6 and DM: resetting origin must not erase legacy
-// upgrade progress, another group's state, or current-session/event history.
-test('single preparation cleans origin samples/caches, preserves history and legacy files, and builds real instructions', async t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'router-lifecycle-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const env = { ZYLOS_DIR: dir }, origin = groupRunDir('origin', env), legacy = legacyRunDir(env), other = groupRunDir('telegram:other', env);
-  const cleared = ['agent-status.json', 'statusline.json', 'tool-event-stream-state.json', 'session-tool-state.json', 'foreground-session.json'];
-  const retained = ['current-session.json', 'events.jsonl', 'events.123.jsonl', 'events.jsonl.old'];
-  for (const base of [origin, legacy, other]) for (const name of [...cleared, ...retained]) write(path.join(base, name), `${base}/${name}`);
-  write(path.join(dir, '.zylos/instructions/meta.json'), {});
-  write(path.join(dir, '.zylos/instructions/codex-system.md'), 'System instructions');
-  write(path.join(dir, 'ZYLOS.md'), 'Owner instructions');
-  const providers = createLifecycleProviders({ env });
-  await providers.prepareSingle('codex');
-  for (const name of cleared) assert.equal(fs.existsSync(path.join(origin, name)), false);
-  for (const base of [legacy, other]) for (const name of [...cleared, ...retained]) assert.equal(fs.readFileSync(path.join(base, name), 'utf8'), `${base}/${name}`);
-  for (const name of retained) assert.equal(fs.readFileSync(path.join(origin, name), 'utf8'), `${origin}/${name}`);
-  const instructions = fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8');
-  assert.match(instructions, /System instructions/); assert.match(instructions, /Owner instructions/);
-  assert.equal(fs.existsSync(path.join(origin, 'api-activity.json')), false);
-  assert.equal(fs.existsSync(path.join(origin, 'hook-state.json')), false);
-});
-
 function tmuxFixture(t) {
   const f = isolatedTmux(t, { prefix: 'router-legacy-', env: { HOME: process.env.HOME, PATH: process.env.PATH, LANG: 'en_US.UTF-8' } });
   const env = { ZYLOS_DIR: f.dir, HOME: f.dir };

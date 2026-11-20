@@ -440,28 +440,16 @@ for(const source of ['health','exit'])test(`assembly: ${source} stop removes the
  assert.equal(metrics.ready,0);assert.equal(metrics.starting,0);
 });
 
-test('assembly: single auth null scope invalidates only its matching Origin run',async t=>{
- const {supervisor,scenes}=fixture(t);
- const original={sessionGroup:'origin',runId:'old',present:true,ready:true};
- scenes.observe=async()=>[original];scenes.stop=async()=>{};
- await supervisor.loop.deps.readConfiguration();
- const context={configuration:{mode:'single'},fences:[]};context.scenes=await supervisor.loop.deps.observe(context);
- await supervisor.lifecycle.d.stop({sessionGroup:null,runId:'old'});
- assert.equal(original.present,false);
- context.scenes[0]={sessionGroup:'origin',runId:'replacement',present:true,ready:true};
- await supervisor.lifecycle.d.stop({sessionGroup:null,runId:'old'});
- assert.equal(context.scenes[0].present,true);assert.equal(context.scenes[0].runId,'replacement');
-});
-
-test('assembly: single null scope forgets the exact Origin run from the shared exit memory',async t=>{
+test('assembly: scoped single reclaim forgets the exact Origin run from the shared exit memory',async t=>{
  const {supervisor,scenes,db,root}=fixture(t,{readMode:()=>({mode:'single'})});
  const original={sessionGroup:'origin',runId:'old',runtime:'claude',sessionId:'session-old',present:true,ready:true,processRunning:true};
  scenes.observeGroup=async()=>({present:false});
- db.countGlobalRunningConversations=()=>0;db.countNonTerminalControls=()=>({running:0,runningWithoutDeadline:0});
+ db.countGlobalRunningConversations=()=>0;db.countNonTerminalControls=()=>({running:0});
  db.expireStaleRunningControls=()=>[];
  await supervisor.loop.deps.observeExits([original]);
- const context={configuration:{mode:'single'},scenes:[{...original,processRunning:false}],fences:[],restartRequests:[]};
- assert.equal(await supervisor.lifecycle.advanceReclaim({reason:'auth',runId:'old'},context,{unfenced:true,singleAuth:true}),'done');
+ const fence={sessionGroup:'origin',reason:'auth',runId:'old'};
+ const context={configuration:{mode:'single'},scenes:[{...original,processRunning:false}],fences:[fence],restartRequests:[]};
+ assert.equal(await supervisor.lifecycle.advanceReclaim(fence,context),'done');
  await supervisor.loop.deps.observeExits([]);
  const eventsFile=path.join(root,'activity-monitor','supervisor-events.jsonl');
  const events=fs.existsSync(eventsFile)?fs.readFileSync(eventsFile,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse):[];
@@ -837,7 +825,6 @@ for (const scoped of [true,false]) test(`single health ${scoped?'targets scoped 
   f.scenes.observe=async()=>[scene]; f.scenes.observeGroup=async()=>scene;
   f.scenes.bindTarget=async()=>({expectedRunId:'r'});
   await f.supervisor.loop.deps.readConfiguration();
-  assert.equal(await f.supervisor.observer.readMode(), 'multi');
   assert.equal(await f.supervisor.observer.canAct(scene,{requireReady:true}), scoped);
   const pending=f.supervisor.observer.requestProbe('claude',{force:true});
   await Promise.all([...f.supervisor.observer.preparations]);
@@ -861,7 +848,7 @@ test('single health nudges target Origin and cannot enqueue for an unscoped upgr
   assert.equal(controls.length,2);
 });
 
-for (const legacy of [false,true]) test(`single runtime demand uses ${legacy?'baseline runtime before migration':'Origin runtime after migration'}`, async t => {
+for (const legacy of [false,true]) test(`single runtime demand ${legacy?'waits for migration':'uses configured Origin'}`, async t => {
   const resolved=[];
   const f=fixture(t,{readMode:()=>({mode:'single',legacy}),
     readConfiguration:async()=>({mode:'single',legacy,runtime:'claude'}),
@@ -872,10 +859,14 @@ for (const legacy of [false,true]) test(`single runtime demand uses ${legacy?'ba
   f.supervisor.observer.reconcileRecoveryWaits=async observed=>{demand=observed;};
   f.supervisor.observer.driveDemand=()=>{};
   await f.supervisor.loop.deps.writeMetricsAndMaintain({scenes:[],fences:[],transition:null});
-  assert.equal(demand.size,1);assert.equal(demand.has(legacy?'claude':'codex'),true);
-  assert.deepEqual([...demand.get(legacy?'claude':'codex')],['origin']);
-  if(legacy) assert.equal(resolved.length,0);
-  else {assert.ok(resolved.length>0);assert.ok(resolved.every(group=>group==='origin'));}
+  if(legacy) {
+    assert.equal(demand,undefined);
+    assert.deepEqual(resolved,[]);
+  } else {
+    assert.equal(demand.size,1);
+    assert.deepEqual([...demand.get('codex')],['origin']);
+    assert.ok(resolved.length>0);assert.ok(resolved.every(group=>group==='origin'));
+  }
 });
 
 // Boundary: real supervisor admission -> activity facts -> control insertion. Scenes/DB/clock are private injected objects; no native

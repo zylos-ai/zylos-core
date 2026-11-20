@@ -7,7 +7,7 @@ function fixture() {
  const scene={sessionGroup:'telegram:one',runId:'r1',runtime:'codex',sessionId:'s1',ready:true,present:true,processRunning:true,currentSessionTs:100,tmuxTarget:{serverGeneration:'1:1'}};
  let current={...scene};
  const scenes={observeGroup:async()=>current,stop:async value=>{stops.push(value);current={present:false};}};
- const observer=new SupervisorExits({scenes,db:{getModeTransition:()=>transition,getDrainFence:()=>fence},serialize:fn=>fn(),readMode:()=>({mode:'multi'}),diagnostic:event=>events.push(event),stat:async()=>({mtimeMs:99})});
+ const observer=new SupervisorExits({scenes,db:{getModeTransition:()=>transition,getDrainFence:()=>fence},serialize:fn=>fn(),diagnostic:event=>events.push(event),stat:async()=>({mtimeMs:99})});
  return {observer,scene,events,stops,set:value=>{current=value;},gate:value=>{transition=value;},fence:value=>{fence=value;}};
 }
 test('exited runtime is stopped and confirmed before crash diagnostic; no restart',async()=>{
@@ -37,15 +37,15 @@ test('intentional forget removes only the exact observed run',async()=>{
  assert.equal(f.observer.previous.has(f.scene.sessionGroup),false);
 });
 
-test('Codex rotation reads scoped handoff for native single and multi, global handoff only for legacy', async () => {
- for (const mode of [{mode:'single',keyPresent:true},{mode:'single',keyPresent:false},{mode:'multi',keyPresent:true}]) {
+test('Codex rotation reads the handoff selected by the observed Origin scope', async () => {
+ for (const sourceScope of ['origin', null]) {
   const f=fixture(); const root=process.env.ZYLOS_DIR;
-  f.observer.env={ZYLOS_DIR:root}; f.observer.readMode=()=>mode;
-  const expected=mode.keyPresent === false ? path.join(root,'memory','handoff.md')
+  f.observer.env={ZYLOS_DIR:root};
+  const expected=sourceScope === null ? path.join(root,'memory','handoff.md')
    : path.join(root,'memory','session-groups','origin','handoff.md');
   const reads=[];
   f.observer.stat=async file=>{reads.push(file);assert.equal(file,expected);return {mtimeMs:101};};
-  await f.observer.report({...f.scene,sessionGroup:'origin'});
+  await f.observer.report({...f.scene,sessionGroup:'origin',sourceScope});
   assert.deepEqual(reads,[expected]); assert.equal(f.events[0].event,'rotate_done');
  }
 });

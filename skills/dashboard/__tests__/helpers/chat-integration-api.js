@@ -230,10 +230,9 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
     async switchToSingle() {
       sandbox.assertIsolation();
       const coordinator = new ModeSwitchCoordinator({ db: c4, readMode: () => ({ mode: readMode(), keyPresent: true }),
-        readConfiguration: () => ({ runtime: 'claude', session_mode: readMode() }), readRequests: () => [],
+        readConfiguration: () => ({ runtime: 'claude', session_mode: readMode() }), requestStore: { read: () => [] },
         legacyPresent: () => false, globalMemoryPending: () => false, observe: () => [],
         lifecycle: { advanceReclaim: () => assert.fail('No runtime exists in this HTTP fixture') },
-        convert: () => assert.fail('Native switching must not convert memory'),
         writeMode: target => fs.writeFileSync(modePath, JSON.stringify({ runtime: 'claude', session_mode: target })),
         restart: { advance: async () => ({ confirmed: true }) } });
       const accepted = await coordinator.handle({ target: 'single' });
@@ -243,7 +242,6 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
       await coordinator.advance();
       assert.equal(c4.getModeTransition(), null); assert.equal(readMode(), 'single');
       const completed = c4.getModeTransition({ runId: accepted.runId });
-      assert.equal(completed.kind, 'switch');
       for (const field of ['cutoff', 'coverage_snapshot', 'absorbed_ids']) assert.equal(completed[field], null, field);
       return completed;
     },
