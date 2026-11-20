@@ -6,7 +6,9 @@ import { startCodexWrapper } from './helpers/codex-wrapper-ready.js';
 
 const options = { freshnessMs: 60000 };
 
-test('batch target accepts READY published by the native child of a Codex launcher pane', async t => {
+// Boundary: batch observation accepts a READY file from the direct child of a real tmux launcher pane.
+// Run after batch READY, launcher identity, or process ownership changes; skip for UI-only changes.
+test('batch target accepts READY published by the native child of a Codex launcher pane', { timeout: 20000 }, async t => {
   const { root, reader, tmux } = batchFixture(t);
   const group = 'batch-wrapper';
   const ready = await startCodexWrapper({
