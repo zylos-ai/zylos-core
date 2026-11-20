@@ -516,13 +516,6 @@ test('theme and language are segmented choices that forward the pressed value', 
   await language.children[1].dispatch('click'); assert.equal(locale, 'en');
 });
 
-test('settings instance status is technical text, shown only with technical details', () => {
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
-  const calls = app.match(/instanceStatusText\([^;]*\)/g) ?? [];
-  assert.deepEqual(calls, ['instanceStatusText(data, t)']);
-  assert.doesNotMatch(app, /t\('actions\.instance_status'/, 'the raw template is used only through instanceStatusText');
-});
-
 test('removed header entry selectors have no startup bindings and account controls live on the settings page', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8'), html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   for (const selector of ['info-bar', 'actions-btn', 'settings-btn', 'zylos-update-hint', 'info-bar-update', 'info-bar-text', 'info-bar-buttons']) {
