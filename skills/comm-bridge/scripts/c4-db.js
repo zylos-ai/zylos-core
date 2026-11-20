@@ -430,6 +430,7 @@ export const insertConversation = (...args) => store.insertConversation(...args)
 export const getSessionHost = (...args) => store.getSessionHost(...args);
 export const attachSessionHost = (...args) => store.attachSessionHost(...args);
 export const detachSessionHost = (...args) => store.detachSessionHost(...args);
+export const listSessionHostChannels = (...args) => store.listSessionHostChannels(...args);
 export const listSessionHosts = (...args) => store.listSessionHosts(...args);
 export const setSessionHostAllowlist = (...args) => store.setSessionHostAllowlist(...args);
 export const insertInternalMessage = (...args) => store.insertInternalMessage(...args);

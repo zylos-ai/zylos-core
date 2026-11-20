@@ -755,9 +755,9 @@ Retired state/system/metric/Workbench group and usage paths are absent from the 
 
 ### Session hosting
 
-`GET /api/session-hosts` returns the local session hosting settings. Both
-methods require the local Dashboard admin login cookie and are unavailable
-through the Fleet proxy. `POST` also requires a same-origin request.
+`GET /api/session-hosts` returns the local session hosting settings. All
+session hosting routes require the local Dashboard admin login cookie and are
+unavailable through the Fleet proxy. `POST` also requires a same-origin request.
 
 ```json
 {
@@ -771,6 +771,18 @@ through the Fleet proxy. `POST` also requires a same-origin request.
 Each active relationship lists its source, effective target, initiating group
 and creation time. The timestamp is an ISO 8601 UTC string or null. The
 allowlist holds channel names whose attach notifications are muted.
+
+`GET /api/session-hosts/channels` takes no parameters and lists the channel
+component names registered in the local C4 database. Names appear once, in
+alphabetical order. Channels already on the notification allowlist are included.
+
+```json
+{"channels":["dashboard","multica","telegram"]}
+```
+
+An unauthenticated request returns HTTP 401. An API session cannot replace the
+local admin login cookie and returns HTTP 403. An unavailable C4 store returns
+HTTP 502.
 
 `POST /api/session-hosts` accepts a JSON object with one of these actions.
 
