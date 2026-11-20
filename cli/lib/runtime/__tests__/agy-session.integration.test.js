@@ -8,6 +8,8 @@ import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
 
 import { openTmuxConnection } from '../tmux-connection.js';
 import { resolveSessionTarget } from '../session-target.js';
+import { groupRunDir } from '../../session-group-paths.js';
+import { readPaneProcess } from '../pane-process.js';
 import { agyConfigurationPaths, isAgyConfigReady } from '../../agy-setup.js';
 
 // Integration boundary: real agy adapter launch, environment, identity and paste
@@ -53,6 +55,10 @@ for (const sessionGroup of [null, 'telegram:agy']) test(`agy session launches wi
   connection = await openTmuxConnection({ binary: f.binary, socketPath: f.socketPath });
   const target = await resolveSessionTarget({ connection, tmuxName, readReady: async () => null });
   assert.equal(target.runtime, 'agy');
+  const record = readPaneProcess(groupRunDir(sessionGroup ?? 'origin', env));
+  assert.equal(record?.runtime, 'agy');
+  assert.equal(record.runId, 'agy-test-run');
+  assert.equal(record.panePid, target.panePid);
   const text = 'first line\nsecond line\nthird line';
   await adapter.sendText({ runtime: 'agy', target, connection, text, bracketedPaste: false });
   await adapter.sendKeys({ target, connection, keys: ['Enter'] });

@@ -81,7 +81,7 @@ export async function runHookEntry(argv = process.argv, {
   try {
     location = runDirFromEnv(env);
     trigger = readTrigger();
-    decision = classifyHookProcess({ env, dir: location.dir, trigger, readInfo });
+    decision = await classifyHookProcess({ env, dir: location.dir, trigger, readInfo });
   } catch (error) {
     decision = { verdict: 'unknown', reason: `error:${error.code || error.message}` };
   }

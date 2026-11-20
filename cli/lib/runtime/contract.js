@@ -1,7 +1,7 @@
 export const UNSUPPORTED = Object.freeze({ unsupported: true });
 
 export const RUNTIME_CONTRACT = Object.freeze({
-  identity: Object.freeze({ required: true, members: Object.freeze({ findExecutable: 'required' }) }),
+  identity: Object.freeze({ required: true, members: Object.freeze({ findExecutable: 'required', launcherWrapsNative: 'required' }) }),
   install: Object.freeze({ required: true, members: Object.freeze({
     probeVersion: 'required',
     install: 'optional',

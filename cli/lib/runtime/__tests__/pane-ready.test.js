@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { readProcessStart } from '../../../../skills/activity-monitor/scripts/claude-pid.js';
-import { readPaneProcess } from '../../../../skills/activity-monitor/scripts/pane-process.js';
+import { readPaneProcess } from '../pane-process.js';
 import { recordPaneProcess } from '../launch-flow.js';
 import { setupLaunch } from './launch-tmux-fixture.js';
 const { openTmuxConnection } = await import('../tmux-connection.js');
@@ -53,7 +53,7 @@ test('READY from another process of the run keeps the last READY of the pane pro
 });
 
 test('Codex READY from the native child of the pane wrapper is the pane process', () => {
-  const options = { runId: 'r1', runtime: 'codex', panePid: 100, readInfo: () => ({ start: '500', comm: 'node' }) };
+  const options = { runId: 'r1', runtime: 'codex', wrapsNative: true, panePid: 100, readInfo: () => ({ start: '500', comm: 'node' }) };
   const native = ready('codex-main', { runtimePid: 101, runtimeStart: '510', runtimeParentPid: 100, runtimeParentStart: '500' });
   assert.equal(paneReady('ready-codex', native, options), native);
   const exec = ready('codex-exec', { runtimePid: 150, runtimeStart: '600', runtimeParentPid: 140, runtimeParentStart: '590' });
@@ -61,7 +61,7 @@ test('Codex READY from the native child of the pane wrapper is the pane process'
 });
 
 test('a native Codex pane process ignores READY from its own direct child', () => {
-  const options = { runId: 'r1', runtime: 'codex', panePid: 100, readInfo: () => ({ start: '500', comm: 'codex' }) };
+  const options = { runId: 'r1', runtime: 'codex', wrapsNative: true, panePid: 100, readInfo: () => ({ start: '500', comm: 'codex' }) };
   const main = ready('codex-main', { runtimePid: 100, runtimeStart: '500', runtimeParentPid: 1 });
   assert.equal(paneReady('ready-native-codex', main, options), main);
   // `codex exec` or `claude -p` run by the Codex shell tool without an intermediate shell.
