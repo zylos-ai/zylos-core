@@ -230,7 +230,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
       } finally { clearTimeout(fleetTimer); releaseFleet(); await context.close(); }
     }
   });
-  const open = async ({ width = 390, height = width < 761 ? 844 : 900, locale = 'zh', theme = 'light', scene = 'idle', observerBlocked = false, detail = 'plain', sessionMode = 'multi', title = DEFAULT_TITLE, channel = 'dashboard', remote = false } = {}) => {
+  const open = async ({ width = 390, height = width < 761 ? 844 : 900, locale = 'zh', theme = 'light', scene = 'idle', observerBlocked = false, detail = 'plain', sessionMode = 'multi', title = DEFAULT_TITLE, channel = 'dashboard', remote = false, insets } = {}) => {
     fixture.reconnect(); fixture.setScene(scene); fixture.setTitle(title); fixture.setChannel(channel); fixture.setObserverBlocked(observerBlocked); fixture.setSessionMode(sessionMode);
     const context = await browser.newContext({ viewport: { width, height }, locale: locale === 'zh' ? 'zh-CN' : 'en-US', timezoneId: 'UTC' });
     sandbox.addCleanup(() => context.close());
@@ -252,6 +252,10 @@ export async function runMobileConversationBrowser(t, sandbox) {
     });
     await context.addInitScript(({ locale, theme, detail }) => { if (window !== window.top) return; localStorage.setItem('zylos-dashboard-locale', locale); localStorage.setItem('zylos-dashboard-theme', theme); localStorage.setItem('zylos-dashboard-detail-level', detail); }, { locale, theme, detail });
     const page = await context.newPage(); page.setDefaultTimeout(7000);
+    if (insets) {
+      const cdp = await context.newCDPSession(page);
+      await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
+    }
     const errors = []; page.on('pageerror', error => { if (errors.length < 5) errors.push(error.stack || error.message); });
     await page.clock.install({ time: new Date(NOW) });
     await page.goto(fixture.base + (remote ? prefix + '/' : '/chat'));
@@ -446,15 +450,16 @@ export async function runMobileConversationBrowser(t, sandbox) {
       assert.deepEqual(errors, []);
     } finally { await context.close(); }
 
-    for (const { width, height, insets } of [
-      { width: 844, height: 390, insets: { top: 0, right: 47, bottom: 21, left: 47 } },
-      { width: 1180, height: 820, insets: { top: 24, right: 0, bottom: 20, left: 0 } }
+    const landscapeInsets = { top: 0, right: 47, bottom: 21, left: 47 };
+    for (const { width, height, locale, insets } of [
+      { width: 844, height: 390, locale: 'en', insets: landscapeInsets },
+      { width: 844, height: 390, locale: 'zh', insets: landscapeInsets },
+      { width: 1180, height: 820, locale: 'en', insets: { top: 24, right: 0, bottom: 20, left: 0 } }
     ]) {
       for (const theme of ['light', 'dark']) {
-        const { page, context, errors } = await open({ width, height, theme, locale: 'en' });
+        const { page, context, errors } = await open({ width, height, theme, locale, insets });
+        const screenshotPrefix = `safe-area-${width}-${locale}-${theme}`;
         try {
-          const cdp = await context.newCDPSession(page);
-          await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
           await page.waitForFunction(bottom => {
             const input = document.querySelector('.conversation-input')?.getBoundingClientRect();
             return input?.height && input.bottom <= innerHeight - bottom;
@@ -481,16 +486,28 @@ export async function runMobileConversationBrowser(t, sandbox) {
           const create = await bounds('.conversation-create');
           const list = await bounds('.conversation-list-item');
           const input = await bounds('.conversation-input', { checkBottom: true });
-          await shot(page, `safe-area-${width}-${theme}-conversation`);
+          await shot(page, `${screenshotPrefix}-conversation`);
 
           await page.locator('.app-header .tab[data-tab="overview"]').click();
           const boardRow = await bounds('#wb-board .wb-row');
-          await shot(page, `safe-area-${width}-${theme}-overview`);
+          await shot(page, `${screenshotPrefix}-overview`);
+          let groupDetail;
+          if (width === 844 && locale === 'zh') {
+            const close = '#wb-side .wb-d-top > .wb-icon-btn';
+            await page.locator('#wb-board .wb-row').first().click();
+            groupDetail = {
+              close: await bounds(close),
+              viewConversation: await bounds('#wb-side [data-action="viewConversation"]')
+            };
+            await shot(page, `${screenshotPrefix}-group-detail`);
+            await page.locator(close).click();
+          }
           await page.locator('#wb-settings-btn').click();
+          const settingsActions = await bounds('.app-header .header-actions');
           const settingsNav = await bounds('.wb-set-nav', { checkBottom: true });
           const settingsItem = await bounds('.wb-set-nav-btn:not([hidden])', { checkBottom: true });
-          await shot(page, `safe-area-${width}-${theme}-settings`);
-          measurements.push({ width, height, theme, insets, brand, actions, tabs, create, list, input, boardRow, settingsNav, settingsItem });
+          await shot(page, `${screenshotPrefix}-settings`);
+          measurements.push({ width, height, locale, theme, insets, brand, actions, tabs, create, list, input, boardRow, groupDetail, settingsActions, settingsNav, settingsItem });
           assert.deepEqual(errors, []);
         } finally { await context.close(); }
       }

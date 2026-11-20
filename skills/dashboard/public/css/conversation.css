@@ -610,7 +610,7 @@
   }
 
   .conversation-page .conversation-composer {
-    padding:8px 12px max(10px, env(safe-area-inset-bottom))
+    padding:8px 12px 10px
   }
   .conversation-page .conversation-input {
     font-size:12px
@@ -849,7 +849,7 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 .conversation-page > .wb-group-side {
   position:fixed;
   top:var(--wb-header-h);
-  right:0;
+  right:env(safe-area-inset-right);
   bottom:0;
   z-index:15;
   width:480px;

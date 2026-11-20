@@ -403,7 +403,7 @@ html[data-detail=plain] .wb-tech-col { display: none; }
   #tab-overview.wb-has-side .wb-row > .wb-queue { display: none; }
 }
 #wb-side[hidden], .wb-auto-name-dialog[hidden] { display: none; }
-#wb-side { position: fixed; top: var(--wb-header-h); right: 0; bottom: 0; z-index: 15; width: 480px; display: flex; flex-direction: column; border-left: 1px solid var(--wb-line); background: var(--wb-side); box-shadow: var(--wb-shadow); overflow-wrap: anywhere; }
+#wb-side { position: fixed; top: var(--wb-header-h); right: env(safe-area-inset-right); bottom: 0; z-index: 15; width: 480px; display: flex; flex-direction: column; border-left: 1px solid var(--wb-line); background: var(--wb-side); box-shadow: var(--wb-shadow); overflow-wrap: anywhere; }
 #wb-side button { font-family: inherit; }
 .wb-detail-header { flex: none; padding: 14px 18px 0; border-bottom: 1px solid var(--wb-line); background: var(--wb-side); }
 .wb-d-top { display: flex; align-items: center; gap: 8px; }
@@ -570,6 +570,10 @@ html[data-detail=plain] #observer-tab { display: none!important; }
 
 @media (max-width: 900px) {
   #wb-side:not([hidden]) { inset: 0; z-index: 55; width: auto; border-left: 0; box-shadow: none; }
+  :is(#wb-side, .wb-sched-side, .conversation-page > .wb-group-side) {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
   .wb-detail-header { padding-top: max(14px, env(safe-area-inset-top)); }
   .wb-detail-body { padding-bottom: env(safe-area-inset-bottom); }
   /* Touch screens have no tooltip, so the drawer actions carry their names. */
@@ -752,7 +756,7 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
 .wb-sched-notice { color: var(--text-dim); }
 .wb-sched-valid { color: var(--wb-work); }
 /* Drawer */
-.wb-sched-side { position: fixed; top: var(--wb-header-h); right: 0; bottom: 0; z-index: 15; width: 480px; display: flex; flex-direction: column; border-left: 1px solid var(--wb-line); background: var(--wb-side); box-shadow: var(--shadow-card); overflow-wrap: anywhere; }
+.wb-sched-side { position: fixed; top: var(--wb-header-h); right: env(safe-area-inset-right); bottom: 0; z-index: 15; width: 480px; display: flex; flex-direction: column; border-left: 1px solid var(--wb-line); background: var(--wb-side); box-shadow: var(--shadow-card); overflow-wrap: anywhere; }
 .wb-sched-side[hidden] { display: none; }
 .wb-sched-detail { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .wb-sched-detail .wb-detail-header { padding-bottom: 12px; }

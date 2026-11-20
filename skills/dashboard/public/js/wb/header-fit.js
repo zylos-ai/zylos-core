@@ -5,7 +5,11 @@ export const NAV_ROW = 'wb-nav-row';
 
 export function fitHeader(header, root = header.ownerDocument.documentElement) {
   root.classList.remove(NAV_ROW);
-  const overflow = header.scrollWidth > header.clientWidth + 1;
+  // Flex items can fit inside the border box while intruding into its right padding.
+  const paddingRight = parseFloat(header.ownerDocument.defaultView.getComputedStyle(header).paddingRight);
+  const contentRight = header.getBoundingClientRect().right - paddingRight;
+  const actionsRight = header.lastElementChild?.getBoundingClientRect().right;
+  const overflow = header.scrollWidth > header.clientWidth + 1 || actionsRight > contentRight + 1;
   if (overflow) root.classList.add(NAV_ROW);
   // Sticky board head and drawer sit right under the real header height (borders included).
   root.style.setProperty('--wb-header-measured', header.getBoundingClientRect().height + 'px');
