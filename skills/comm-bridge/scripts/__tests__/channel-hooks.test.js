@@ -139,6 +139,37 @@ test('approved wire contains only the original request and Core-generated correl
   assert.notEqual(inputs[0].invocation_id, inputs[1].invocation_id);
 });
 
+test('BeforeSend only infers a session ID without a runtime from one available variable', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.root, 'x', 'check.js'), '');
+  declaration(f, { hook_id: 'check', entry: 'check.js', timeout_ms: 250 })();
+  const claudeEnv = { CLAUDE_SESSION_ID: 'claude-session' };
+  const cases = [
+    {
+      env: { ...claudeEnv, ZYLOS_MODEL_CONFIG: '{"runtime":"agy"}' },
+      context: { component: 'x', runtime: 'agy' },
+    },
+    { env: claudeEnv, context: { component: 'x', session_id: 'claude-session' } },
+    {
+      env: { ...claudeEnv, CODEX_SESSION_ID: 'codex-session' },
+      context: { component: 'x' },
+    },
+  ];
+  const request = { channel: 'x', endpoint: 'room' };
+  for (const { env, context } of cases) {
+    const inputs = [];
+    await runBeforeSendHook(request, 'original', {
+      skillsDir: f.root,
+      env,
+      run: async ({ input }) => {
+        inputs.push(JSON.parse(input).context);
+        return { exitCode: 0, stdout: '{"version":1,"decision":"continue"}' };
+      },
+    });
+    assert.deepEqual(inputs, [context]);
+  }
+});
+
 test('unknown wire fields and continue messages reject while abort text is single-line code points', () => {
   for (const value of ['bad', '[]', 'null', '{"version":2,"decision":"continue"}',
     '{"version":1,"decision":"maybe"}', '{"version":1,"decision":"continue","message":"unused"}',

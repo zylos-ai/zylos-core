@@ -16,6 +16,18 @@ test('exited runtime is stopped and confirmed before crash diagnostic; no restar
 test('same-run session change and fresh handoff are rotation diagnostics',async()=>{
  const f=fixture();await f.observer.advance([f.scene]);const next={...f.scene,sessionId:'s2'};f.set(next);await f.observer.advance([next]);assert.equal(f.events[0].event,'rotate_done');f.observer.stat=async()=>({mtimeMs:101});f.set({present:false});await f.observer.advance([]);assert.equal(f.events[1].event,'rotate_done');assert.equal(f.stops.length,0);
 });
+test('an exit stays a crash when session switching does not exit the process', async () => {
+  const f = fixture();
+  const scene = { ...f.scene, runtime: 'claude' };
+  f.observer.stat = async () => ({ mtimeMs: scene.currentSessionTs + 1 });
+  f.set(scene);
+  await f.observer.advance([scene]);
+
+  f.set({ present: false });
+  await f.observer.advance([]);
+
+  assert.deepEqual(f.events.map(({ event }) => event), ['crash_detected']);
+});
 test('/ retain ownership of stopped runtimes',async()=>{
  for(const gate of ['gate','fence']){const f=fixture();await f.observer.advance([f.scene]);f[gate]({id:'gate'});f.set({...f.scene,processRunning:false});await f.observer.advance([{...f.scene,processRunning:false}]);assert.equal(f.stops.length,0);assert.equal(f.events.length,0);}
 });
