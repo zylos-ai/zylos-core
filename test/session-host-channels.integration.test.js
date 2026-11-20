@@ -4,16 +4,11 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { once } from 'node:events';
-import { AuthGate, exchangeApiKeyForToken, generateApiKey, hashApiKey, hashPassword } from '../skills/dashboard/src/lib/auth.js';
-import { FleetProxy } from '../skills/dashboard/src/lib/fleet-proxy.js';
-import { sendJson } from '../skills/dashboard/src/lib/http.js';
-import { createSessionHostRoutes } from '../skills/dashboard/src/lib/session-host-routes.js';
-import { Store } from '../skills/dashboard/src/lib/store.js';
 
 // Covers the hosting channel route, C4 registry and local admin boundary.
 // Run when channel selection or hosting access changes. Skip UI-only changes.
-// The official runner owns HOME, ZYLOS_DIR, PM2_HOME, short TMPDIR and the
-// private tmux socket directory. Uses fixture databases and loopback HTTP only.
+// The official runner isolates HOME, PM2_HOME and TMPDIR. This case owns its
+// ZYLOS_DIR and database files beneath TMPDIR and uses loopback HTTP only.
 test('session hosting lists registered channel names for local admins', { timeout: 15_000 }, async t => {
   const { HOME, ZYLOS_DIR, PM2_HOME, TMPDIR, TMUX_TMPDIR } = process.env;
   const root = path.dirname(HOME);
@@ -26,19 +21,46 @@ test('session hosting lists registered channel names for local admins', { timeou
   assert.equal(TMPDIR, path.join(root, 'tmp'));
   assert.equal(TMUX_TMPDIR, TMPDIR);
   assert.equal(process.env.TMUX, undefined);
-  const socket = path.join(TMUX_TMPDIR, `tmux-${process.getuid()}`, 'default');
+  assert.equal(fs.realpathSync(TMPDIR), TMPDIR);
+  const caseRoot = fs.mkdtempSync(path.join(TMPDIR, 'host-'));
+  let c4, store, auth, server;
+  t.after(async () => {
+    try {
+      if (server) {
+        server.closeAllConnections();
+        await new Promise(resolve => server.close(resolve));
+      }
+      clearInterval(auth?._cleanupTimer);
+      store?.close();
+      c4?.close();
+    } finally {
+      process.env.ZYLOS_DIR = ZYLOS_DIR;
+      process.env.TMUX_TMPDIR = TMUX_TMPDIR;
+      fs.rmSync(caseRoot, { recursive: true, force: true });
+    }
+  });
+  process.env.ZYLOS_DIR = caseRoot;
+  process.env.TMUX_TMPDIR = caseRoot;
+  const socket = path.join(process.env.TMUX_TMPDIR, `tmux-${process.getuid()}`, 'default');
   assert.ok(Buffer.byteLength(socket) < 100);
   assert.equal(fs.existsSync(socket), false);
 
   const { DB_PATH } = await import('../skills/comm-bridge/scripts/c4-config.js');
-  const dashboardDb = path.join(ZYLOS_DIR, 'components/dashboard/dashboard.db');
-  assert.equal(DB_PATH, path.join(ZYLOS_DIR, 'comm-bridge/c4.db'));
+  const dashboardDb = path.join(caseRoot, 'components/dashboard/dashboard.db');
+  assert.equal(DB_PATH, path.join(caseRoot, 'comm-bridge/c4.db'));
   assert.equal(fs.existsSync(path.dirname(DB_PATH)), false);
   assert.equal(fs.existsSync(path.dirname(dashboardDb)), false);
-  console.log('Session hosting channel isolation:', { HOME, ZYLOS_DIR, PM2_HOME, TMPDIR, socket, DB_PATH, dashboardDb });
+  console.log('Session hosting channel isolation:', {
+    HOME, ZYLOS_DIR: process.env.ZYLOS_DIR, PM2_HOME, TMPDIR, socket, DB_PATH, dashboardDb,
+  });
 
-  const c4 = await import('../skills/comm-bridge/scripts/c4-db.js');
-  t.after(c4.close);
+  const { AuthGate, exchangeApiKeyForToken, generateApiKey, hashApiKey, hashPassword } =
+    await import('../skills/dashboard/src/lib/auth.js');
+  const { FleetProxy } = await import('../skills/dashboard/src/lib/fleet-proxy.js');
+  const { sendJson } = await import('../skills/dashboard/src/lib/http.js');
+  const { createSessionHostRoutes } = await import('../skills/dashboard/src/lib/session-host-routes.js');
+  const { Store } = await import('../skills/dashboard/src/lib/store.js');
+  c4 = await import('../skills/comm-bridge/scripts/c4-db.js');
   const db = c4.getDb();
   const register = db.prepare('INSERT INTO channel_namespaces (namespace, component_name) VALUES (?, ?)');
   register.run('tg', 'telegram');
@@ -47,20 +69,18 @@ test('session hosting lists registered channel names for local admins', { timeou
   c4.setSessionHostAllowlist('telegram', true);
   c4.setSessionHostAllowlist('unregistered', true);
 
-  const store = new Store(dashboardDb);
-  t.after(() => store.close());
+  store = new Store(dashboardDb);
   const config = {
     auth: { password: hashPassword('fixture-password') },
     fleet: { agents: [{ name: 'fixture' }] },
   };
-  const auth = new AuthGate(config, store);
-  t.after(() => clearInterval(auth._cleanupTimer));
+  auth = new AuthGate(config, store);
   const key = generateApiKey();
   store.insertApiKey({ name: 'fixture', keyHash: hashApiKey(key), scope: 'admin' });
   const { token } = exchangeApiKeyForToken(key);
   const route = createSessionHostRoutes({ auth });
   const fleet = new FleetProxy({ config, fetch: async () => assert.fail('Fleet must block this route before forwarding') });
-  const server = http.createServer(async (req, res) => {
+  server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
       res.apiPath = url.pathname;
@@ -71,10 +91,6 @@ test('session hosting lists registered channel names for local admins', { timeou
     }
   });
   server.listen(0, '127.0.0.1');
-  t.after(() => {
-    server.closeAllConnections();
-    return new Promise(resolve => server.close(resolve));
-  });
   await once(server, 'listening');
   const origin = `http://127.0.0.1:${server.address().port}`;
   const login = await fetch(origin + '/login', {
