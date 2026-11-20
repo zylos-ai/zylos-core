@@ -29,6 +29,7 @@ export default {
     '<rootDir>/test/upgrade-running-output.integration.test.js',
     '<rootDir>/test/fleet-attention.integration.test.js',
     '<rootDir>/test/fleet-attention-browser.test.js',
+    '<rootDir>/test/fleet-list-browser.test.js',
     '<rootDir>/test/channel-delivery.integration.test.js',
     '<rootDir>/test/channel-sync.integration.test.js',
     '<rootDir>/test/self-upgrade-private-host.integration.test.js',

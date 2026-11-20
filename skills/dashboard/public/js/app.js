@@ -222,8 +222,10 @@ function agentFleetLabels() {
   const fleet = key => t('wb.fleet.' + key);
   return {
     ...Object.fromEntries(['title', 'subtitle', 'manage', 'shortAuth', 'shortDown', 'shortVersion', 'fixAuth', 'fixDown', 'fixVersion', 'lastSeen',
-      'todayWeek', 'groups', 'host', 'rate7d', 'quotaRemaining', 'quotaUnknown', 'self', 'modeMulti', 'modeSingle', 'modeUnknown', 'open', 'toSettings', 'refresh', 'readOnly', 'admin',
-      'pool', 'empty', 'runningGroups', 'runningGroupsOne', 'allNormal', 'summaryUnavailable', 'moreProblems', 'moreProblemsOne', 'autoRestarts', 'autoRestartsOne', 'groupDuration'].map(key => [key, fleet(key)])),
+      'todayWeek', 'groups', 'host', 'rate7d', 'quotaRemaining', 'quotaUnknown', 'self', 'modeMulti', 'modeSingle', 'modeUnknown', 'refresh', 'readOnly', 'admin',
+      'machine', 'running', 'condition', 'quota', 'listGroups', 'listGroupsOne', 'listWorking', 'listLastSeen', 'listProblemCount', 'listProblemCountOne',
+      'listQuota', 'listToday', 'moreUnlisted',
+      'pageRange', 'pagination', 'previousPage', 'nextPage', 'pool', 'empty', 'runningGroups', 'runningGroupsOne', 'allNormal', 'summaryUnavailable', 'moreProblems', 'moreProblemsOne', 'autoRestarts', 'autoRestartsOne', 'groupDuration'].map(key => [key, fleet(key)])),
     groupStates: Object.fromEntries(['busy', 'waiting', 'error', 'idle', 'unknown', 'no_response'].map(key => [key, fleet('state.' + key)])),
     problemReasons: Object.fromEntries(['auth_failed', 'start_failed', 'no_response'].map(key => [key, fleet('reason.' + key)])),
     busy: t('agent_fleet.busy'),
@@ -324,10 +326,22 @@ function initFleetHoverPause() {
   });
 }
 
+const fleetLayoutStorageKey = 'zylos-dashboard-fleet-view';
+let fleetLayout = 'cards';
+let fleetPage = 1;
+
 function renderFleet() {
   const container = $('#agent-fleet-root');
   if (!container) return;
-  renderFleetPage(container, state.fleet, { t, fmtAge, basePath: BASE_PATH, labels: agentFleetLabels(), self: state.fleetSelf });
+  const view = renderFleetPage(container, state.fleet, {
+    t, fmtAge, basePath: BASE_PATH, labels: agentFleetLabels(), self: state.fleetSelf,
+    layout: fleetLayout, page: fleetPage
+  });
+  fleetPage = view.page;
+  $('#fleet-layout')?.setAttribute('aria-label', t('wb.fleet.layout'));
+  for (const button of document.querySelectorAll('#fleet-layout button')) {
+    button.setAttribute('aria-pressed', String(button.dataset.fleetLayout === fleetLayout));
+  }
   const updated = $('#fleet-updated');
   if (updated) updated.textContent = fmtAge(state.fleet?.updated_at);
   fleetSounds?.refreshLabels();
@@ -2035,11 +2049,45 @@ async function openFleetGroup(target, { list = false } = {}) {
 }
 
 function initFleetMode() {
-  $('#agent-fleet-root')?.addEventListener('click', e => handleFleetClick(e, {
-    onSettings: () => openSettingsModal('fleet'), onRefresh: () => refreshFleet().catch(() => {}),
-    onSelf: showAgentDetail, onRemote: enterRemoteAgent,
-    onGroup: target => openFleetGroup(target), onProblems: target => openFleetGroup(target, { list: true }),
-  }));
+  try {
+    if (localStorage.getItem(fleetLayoutStorageKey) === 'list') fleetLayout = 'list';
+  } catch {}
+  $('#fleet-layout')?.addEventListener('click', event => {
+    const layout = event.target.closest('button[data-fleet-layout]')?.dataset.fleetLayout;
+    if (!layout || layout === fleetLayout) return;
+    fleetLayout = layout;
+    try { localStorage.setItem(fleetLayoutStorageKey, layout); } catch {}
+    renderFleet();
+  });
+  const root = $('#agent-fleet-root');
+  root?.addEventListener('click', event => {
+    const pageButton = event.target.closest('button[data-fleet-page]');
+    if (pageButton) {
+      if (pageButton.disabled) return;
+      const step = pageButton.dataset.fleetPage;
+      const restoreFocus = document.activeElement === pageButton;
+      fleetPage += Number(step);
+      renderFleet();
+      if (restoreFocus) {
+        const next = root.querySelector(`button[data-fleet-page="${step}"]:enabled`) ??
+          root.querySelector('button[data-fleet-page]:enabled');
+        next?.focus();
+      }
+      return;
+    }
+    handleFleetClick(event, {
+      onRefresh: () => refreshFleet().catch(() => {}),
+      onSelf: () => {
+        showAgentDetail();
+        if (activeTabName() !== 'overview') activateTab('overview', true);
+      },
+      onRemote: name => {
+        if (activeTabName() !== 'overview') activateTab('overview');
+        return enterRemoteAgent(name);
+      },
+      onGroup: target => openFleetGroup(target), onProblems: target => openFleetGroup(target, { list: true }),
+    });
+  });
   $('#fleet-manage-open')?.addEventListener('click', () => openSettingsModal('fleet'));
 }
 

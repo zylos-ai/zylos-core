@@ -34,6 +34,7 @@ const ROOT_NODE_TESTS = [
   'test/upgrade-running-output.integration.test.js',
   'test/fleet-attention.integration.test.js',
   'test/fleet-attention-browser.test.js',
+  'test/fleet-list-browser.test.js',
   'test/channel-delivery.integration.test.js',
   'test/channel-sync.integration.test.js',
   'test/self-upgrade-private-host.integration.test.js',
