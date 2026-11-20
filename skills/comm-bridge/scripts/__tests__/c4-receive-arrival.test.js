@@ -18,6 +18,7 @@ function fixture(t) {
     now: () => { f.clocks++; return f.clock; },
     db: {
       getChannelNamespace: () => ({ namespace: 'telegram' }),
+      getSessionHost: () => null,
       insertConversation: (direction, channel, endpoint, content, options) => {
         f.inserted++;
         assert.equal(direction, 'in');

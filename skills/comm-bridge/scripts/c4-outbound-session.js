@@ -38,8 +38,8 @@ export function originReplyAllowed(api, channel, endpoint) {
     .get(channel, endpoint));
 }
 
-export function assertOutboundSession(senderGroup, ownerGroup, request) {
-  if (senderGroup === ownerGroup) return;
+export function assertOutboundSession(senderGroup, ownerGroup, request, hostGroup) {
+  if (senderGroup === ownerGroup || senderGroup === hostGroup) return;
   const script = fileURLToPath(new URL('./c4-send.js', import.meta.url));
   const command = `cat <<'EOF_INTERNAL' | node ${shellQuote(script)} internal ${shellQuote(ownerGroup)}`;
   const ownership = `belongs to session group "${ownerGroup}", not to this thread ("${senderGroup}"). Nothing was sent or recorded.`;

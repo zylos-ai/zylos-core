@@ -97,7 +97,9 @@ export async function receive(args, dependencies = {}) {
   let mode = {};
   try { mode = (dependencies.readSessionMode ?? readSessionMode)(); }
   catch { /* The route query handles unreadable configuration without losing inbound. */ }
-  const healthGroup = mode.mode === 'single' && mode.keyPresent ? 'origin' : preGroup;
+  const nativeSingle = mode.mode === 'single' && mode.keyPresent;
+  const hostedGroup = mode.mode === 'multi' && preGroup ? db.getSessionHost(preGroup) : null;
+  const healthGroup = nativeSingle ? 'origin' : hostedGroup ?? preGroup;
   const request = { version: 2, type: 'route', requestId: `${process.pid}-${receivedAt}`, channel,
     endpoint, noReply, receivedAt, sessionGroup: healthGroup, componentName: rawChannel,
     ...(coreSource ? { coreSide: true, coreSource } : {}) };
@@ -131,7 +133,7 @@ export async function receive(args, dependencies = {}) {
   if (pending || noReply) return result;
   const persisted = ['D1'];
   let claim;
-  const finalRoute = { ...route, sessionGroup: mode.mode === 'single' && mode.keyPresent ? 'origin' : record.session_group };
+  const finalRoute = { ...route, sessionGroup: nativeSingle ? 'origin' : record.session_group };
   try { claim = reserve(channel, endpoint, finalRoute); }
   catch {
     diagnostic(`status notice reservation failed after conversation ${record.id} committed`);
