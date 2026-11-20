@@ -1,4 +1,5 @@
 import { auth } from './auth.js';
+import { instructions } from './instructions.js';
 import { prepare, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags } from './launch.js';
 import { install, probeVersion, postUpgradeSync } from './install.js';
 import { UNSUPPORTED } from '../contract.js';
@@ -27,5 +28,6 @@ export default Object.freeze({
   }),
   auth,
   launch: Object.freeze({ prepare, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags, checkAutonomous: UNSUPPORTED }),
+  instructions,
   input: Object.freeze({ bracketedPaste: false }),
 });

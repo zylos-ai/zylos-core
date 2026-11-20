@@ -19,7 +19,7 @@ import { listGroupTmuxSessions } from '../lib/session-group-paths.js';
 import { desiredClaudeHooks, syncHooks, detectStopFailureSupport, detectSubagentHooksSupport } from '../lib/sync-runtime-hooks.js';
 import { syncAgyConfig, isAgyConfigReady } from '../lib/agy-setup.js';
 import { isCodexTrustValid, getCodexVersion } from '../lib/codex-hooks.js';
-import { isSplitInstructionsActive, buildInstructionFile, assertInstructionReady } from '../lib/runtime/instruction-builder.js';
+import { instructionPaths, isSplitInstructionsActive, buildInstructionFile, assertInstructionReady } from '../lib/runtime/instruction-builder.js';
 import { UNSUPPORTED } from '../lib/runtime/contract.js';
 import { isValidBaseUrl } from '../lib/runtime-setup.js';
 
@@ -154,7 +154,7 @@ export function validateRuntimeFlags(rt, parsed) {
 // ── Switch ────────────────────────────────────────────────────────────────
 
 export async function runtimeHooksReady(target) {
-  const instruction = path.join(ZYLOS_DIR, target === 'claude' ? 'CLAUDE.md' : 'AGENTS.md');
+  const instruction = instructionPaths(target, { zylosDir: ZYLOS_DIR }).outputPath;
   const pendingMigration = !isSplitInstructionsActive({ zylosDir: ZYLOS_DIR });
   if (!fs.existsSync(instruction)) return { ready: false, pendingMigration };
   if (target === 'agy') {

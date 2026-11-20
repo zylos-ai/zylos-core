@@ -1,14 +1,23 @@
+// Awaits the runtime factory at module scope. Runtime implementations must not
+// reach this module through static imports.
 import { SUPPORTED_RUNTIMES } from './descriptors.js';
+import { getRuntime } from './index.js';
 import { removeOwnedTree } from '../../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ZYLOS_DIR } from '../config.js';
 import {
-  assembleInstruction,
   needsRebuild as leafNeedsRebuild,
   renderInstruction,
 } from './assembler.mjs';
+import { buildInstructionFor, instructionAssetPaths, instructionPathsFor } from './shared/instruction-paths.js';
+
+export { instructionAssetPaths };
+
+const DECLARATIONS = await Promise.all(
+  SUPPORTED_RUNTIMES.map(async id => [id, (await getRuntime(id)).instructions]),
+).then(entries => new Map(entries));
 
 const PACKAGE_ROOT = path.join(import.meta.dirname, '..', '..', '..');
 const DEFAULT_TEMPLATES_DIR = path.join(PACKAGE_ROOT, 'templates');
@@ -72,28 +81,35 @@ export function writeInstructionFormatVersion({
   return { version, filePath };
 }
 
-function assertRuntime(runtime) {
-  if (!SUPPORTED_RUNTIMES.includes(runtime)) {
-    throw new TypeError(`Unsupported runtime: ${runtime}`);
-  }
+function declaration(runtime) {
+  if (!DECLARATIONS.has(runtime)) throw new TypeError(`Unsupported runtime: ${runtime}`);
+  return DECLARATIONS.get(runtime);
 }
 
-export function instructionPaths(runtime, { zylosDir = ZYLOS_DIR } = {}) {
-  assertRuntime(runtime);
-  const root = path.resolve(zylosDir);
-  const instructionsDir = path.join(root, '.zylos', 'instructions');
-  return {
-    instructionsDir,
-    markerPath: path.join(instructionsDir, 'meta.json'),
-    assemblerPath: path.join(instructionsDir, 'assembler.mjs'),
-    systemPath: path.join(instructionsDir, `${runtime === 'agy' ? 'codex' : runtime}-system.md`),
-    userPath: path.join(root, 'ZYLOS.md'),
-    outputPath: path.join(root, runtime === 'claude' ? 'CLAUDE.md' : 'AGENTS.md'),
-  };
+export function instructionPaths(runtime, options) {
+  return instructionPathsFor(declaration(runtime), options);
+}
+
+export function instructionTargets({ zylosDir = ZYLOS_DIR } = {}) {
+  const targets = new Map();
+  for (const { template, output } of DECLARATIONS.values()) {
+    const previous = targets.get(output);
+    if (previous) {
+      if (previous.template !== template) throw new Error(`Instruction output ${output} has two templates`);
+      continue;
+    }
+    targets.set(output, { template, output, ...instructionPathsFor({ template, output }, { zylosDir }) });
+  }
+  return [...targets.values()];
+}
+
+function templateTargets(targets) {
+  return [...new Set(targets.map(target => target.template))]
+    .map(template => targets.find(target => target.template === template));
 }
 
 export function isSplitInstructionsActive({ zylosDir = ZYLOS_DIR } = {}) {
-  return fs.existsSync(instructionPaths('claude', { zylosDir }).markerPath);
+  return fs.existsSync(instructionAssetPaths({ zylosDir }).markerPath);
 }
 
 export function needsRebuild(runtime, { zylosDir = ZYLOS_DIR } = {}) {
@@ -102,19 +118,8 @@ export function needsRebuild(runtime, { zylosDir = ZYLOS_DIR } = {}) {
   return leafNeedsRebuild(paths);
 }
 
-export function buildInstructionFile(runtime, { zylosDir = ZYLOS_DIR, force = false } = {}) {
-  const paths = instructionPaths(runtime, { zylosDir });
-  if (!fs.existsSync(paths.markerPath)) return paths.outputPath;
-  if (force || leafNeedsRebuild(paths)) assembleInstruction(paths);
-  return paths.outputPath;
-}
-
-export function agyInstructionContext({ zylosDir = ZYLOS_DIR } = {}) {
-  const paths = instructionPaths('agy', { zylosDir });
-  const split = fs.existsSync(paths.markerPath);
-  const system = fs.readFileSync(split ? paths.systemPath : paths.outputPath, 'utf8');
-  const precedence = 'This injection contains the complete Zylos instructions. If its runtime-specific instructions conflict with AGENTS.md in the working directory, this injection takes precedence.\n\n';
-  return precedence + (split ? [system, fs.readFileSync(paths.userPath, 'utf8')].join('\n\n') : system);
+export function buildInstructionFile(runtime, options) {
+  return buildInstructionFor(declaration(runtime), options);
 }
 
 export function assertInstructionReady(runtime, { zylosDir = ZYLOS_DIR } = {}) {
@@ -153,19 +158,19 @@ export function deployInstructionAssets({
   templatesDir = DEFAULT_TEMPLATES_DIR,
   assemblerSource = ASSEMBLER_SOURCE,
 } = {}) {
-  const paths = instructionPaths('claude', { zylosDir });
+  const paths = instructionAssetPaths({ zylosDir });
   fs.mkdirSync(paths.instructionsDir, { recursive: true });
-  for (const runtime of ['claude', 'codex']) {
-    const source = path.join(templatesDir, `${runtime}-system.md`);
+  for (const { template, systemPath } of templateTargets(instructionTargets({ zylosDir }))) {
+    const source = path.join(templatesDir, `${template}-system.md`);
     if (!fs.existsSync(source)) throw new Error(`System instruction template not found: ${source}`);
-    atomicWrite(instructionPaths(runtime, { zylosDir }).systemPath, fs.readFileSync(source));
+    atomicWrite(systemPath, fs.readFileSync(source));
   }
   atomicWrite(paths.assemblerPath, fs.readFileSync(assemblerSource));
   return paths.instructionsDir;
 }
 
 function splitTransactionRoots(zylosDir) {
-  return [path.resolve(zylosDir), instructionPaths('claude', { zylosDir }).instructionsDir];
+  return [path.resolve(zylosDir), instructionAssetPaths({ zylosDir }).instructionsDir];
 }
 
 export function hasSplitTransactionResidue(zylosDir) {
@@ -197,7 +202,7 @@ function cleanupSplitTemps(zylosDir) {
 }
 
 export function recoverSplitTransaction(zylosDir, faultInjector = () => {}) {
-  const markerPath = instructionPaths('claude', { zylosDir }).markerPath;
+  const markerPath = instructionAssetPaths({ zylosDir }).markerPath;
   let committedTransactionId;
   try {
     committedTransactionId = JSON.parse(fs.readFileSync(markerPath, 'utf8')).transactionId;
@@ -322,6 +327,14 @@ function commitEntries(entries, markerPath, markerContent, faultInjector = () =>
   }
 }
 
+function readSystemEntries(targets, templatesDir) {
+  return templateTargets(targets).map(({ template, systemPath }) => ({
+    name: `${template}-system`,
+    path: systemPath,
+    content: fs.readFileSync(path.join(templatesDir, `${template}-system.md`), 'utf8'),
+  }));
+}
+
 function migratedInstructionEntries({
   zylosDir,
   templatesDir,
@@ -329,29 +342,26 @@ function migratedInstructionEntries({
   userContent,
   generatedAt,
 }) {
-  const claude = instructionPaths('claude', { zylosDir });
-  const systems = Object.fromEntries(['claude', 'codex'].map(runtime => [
-    runtime,
-    fs.readFileSync(path.join(templatesDir, `${runtime}-system.md`), 'utf8'),
-  ]));
+  const assets = instructionAssetPaths({ zylosDir });
+  const targets = instructionTargets({ zylosDir });
+  const systemEntries = readSystemEntries(targets, templatesDir);
+  const systems = new Map(systemEntries.map(entry => [entry.path, entry.content]));
   const entries = [
-    { name: 'user', path: claude.userPath, content: userContent },
-    { name: 'claude-system', path: claude.systemPath, content: systems.claude },
-    { name: 'codex-system', path: instructionPaths('codex', { zylosDir }).systemPath, content: systems.codex },
-    { name: 'assembler', path: claude.assemblerPath, content: fs.readFileSync(assemblerSource) },
+    { name: 'user', path: assets.userPath, content: userContent },
+    ...systemEntries,
+    { name: 'assembler', path: assets.assemblerPath, content: fs.readFileSync(assemblerSource) },
   ];
-  for (const runtime of ['claude', 'codex']) {
-    const paths = instructionPaths(runtime, { zylosDir });
+  for (const paths of targets) {
     const systemShadow = `${paths.systemPath}.split-render.${process.pid}`;
     const userShadow = `${paths.userPath}.split-render.${process.pid}`;
     fs.mkdirSync(path.dirname(systemShadow), { recursive: true });
-    fs.writeFileSync(systemShadow, systems[runtime], 'utf8');
+    fs.writeFileSync(systemShadow, systems.get(paths.systemPath), 'utf8');
     fs.writeFileSync(userShadow, userContent, 'utf8');
     try {
       const content = renderInstruction({ systemPath: systemShadow, userPath: userShadow, generatedAt })
         .replaceAll(path.resolve(systemShadow), path.resolve(paths.systemPath))
         .replaceAll(path.resolve(userShadow), path.resolve(paths.userPath));
-      entries.push({ name: `${runtime}-output`, path: paths.outputPath, content });
+      entries.push({ name: `${paths.template}-output`, path: paths.outputPath, content });
     } finally {
       try { fs.unlinkSync(systemShadow); } catch { }
       try { fs.unlinkSync(userShadow); } catch { }
@@ -380,9 +390,9 @@ export function activateMigratedSplitInstructions({
     throw new TypeError('migrationMeta must be an object');
   }
   recoverSplitTransaction(zylosDir, faultInjector);
-  const claude = instructionPaths('claude', { zylosDir });
-  if (fs.existsSync(claude.markerPath)) {
-    return { active: true, alreadyActive: true, markerPath: claude.markerPath };
+  const assets = instructionAssetPaths({ zylosDir });
+  if (fs.existsSync(assets.markerPath)) {
+    return { active: true, alreadyActive: true, markerPath: assets.markerPath };
   }
   const entries = migratedInstructionEntries({
     zylosDir,
@@ -397,8 +407,8 @@ export function activateMigratedSplitInstructions({
     seedSha256: crypto.createHash('sha256').update(userContent).digest('hex'),
     migration: migrationMeta,
   };
-  commitEntries(entries, claude.markerPath, JSON.stringify(marker, null, 2) + '\n', faultInjector);
-  return { active: true, markerPath: claude.markerPath };
+  commitEntries(entries, assets.markerPath, JSON.stringify(marker, null, 2) + '\n', faultInjector);
+  return { active: true, markerPath: assets.markerPath };
 }
 
 export function activateFreshSplitInstructions({
@@ -410,45 +420,42 @@ export function activateFreshSplitInstructions({
 } = {}) {
   const hadTransactionResidue = hasSplitTransactionResidue(zylosDir);
   recoverSplitTransaction(zylosDir, faultInjector);
-  const claude = instructionPaths('claude', { zylosDir });
-  if (fs.existsSync(claude.markerPath)) {
+  const assets = instructionAssetPaths({ zylosDir });
+  if (fs.existsSync(assets.markerPath)) {
     return refreshSplitInstructions({ zylosDir, templatesDir, assemblerSource, faultInjector });
   }
 
-  const legacyArtifacts = [claude.userPath, claude.outputPath, instructionPaths('codex', { zylosDir }).outputPath];
+  const targets = instructionTargets({ zylosDir });
+  const legacyArtifacts = [assets.userPath, ...targets.map(target => target.outputPath)];
   if (!hadTransactionResidue && legacyArtifacts.some(filePath => fs.existsSync(filePath))) {
     deployInstructionAssets({ zylosDir, templatesDir, assemblerSource });
-    return { active: false, pendingMigration: true, markerPath: claude.markerPath };
+    return { active: false, pendingMigration: true, markerPath: assets.markerPath };
   }
 
-  const userContent = fs.existsSync(claude.userPath)
-    ? fs.readFileSync(claude.userPath, 'utf8')
+  const userContent = fs.existsSync(assets.userPath)
+    ? fs.readFileSync(assets.userPath, 'utf8')
     : fs.readFileSync(path.join(templatesDir, 'ZYLOS.md'), 'utf8');
-  const systems = Object.fromEntries(['claude', 'codex'].map(runtime => [
-    runtime,
-    fs.readFileSync(path.join(templatesDir, `${runtime}-system.md`), 'utf8'),
-  ]));
+  const systemEntries = readSystemEntries(targets, templatesDir);
+  const systems = new Map(systemEntries.map(entry => [entry.path, entry.content]));
   const now = new Date();
   const entries = [
-    { name: 'claude-system', path: claude.systemPath, content: systems.claude },
-    { name: 'codex-system', path: instructionPaths('codex', { zylosDir }).systemPath, content: systems.codex },
-    { name: 'assembler', path: claude.assemblerPath, content: fs.readFileSync(assemblerSource) },
+    ...systemEntries,
+    { name: 'assembler', path: assets.assemblerPath, content: fs.readFileSync(assemblerSource) },
   ];
-  if (!fs.existsSync(claude.userPath)) {
-    entries.push({ name: 'seed', path: claude.userPath, content: userContent });
+  if (!fs.existsSync(assets.userPath)) {
+    entries.push({ name: 'seed', path: assets.userPath, content: userContent });
   }
-  for (const runtime of ['claude', 'codex']) {
-    const paths = instructionPaths(runtime, { zylosDir });
+  for (const paths of targets) {
     const systemShadow = `${paths.systemPath}.split-render.${process.pid}`;
     const userShadow = `${paths.userPath}.split-render.${process.pid}`;
     fs.mkdirSync(path.dirname(systemShadow), { recursive: true });
-    fs.writeFileSync(systemShadow, systems[runtime], 'utf8');
+    fs.writeFileSync(systemShadow, systems.get(paths.systemPath), 'utf8');
     fs.writeFileSync(userShadow, userContent, 'utf8');
     try {
       const content = renderInstruction({ systemPath: systemShadow, userPath: userShadow, generatedAt: now })
         .replaceAll(path.resolve(systemShadow), path.resolve(paths.systemPath))
         .replaceAll(path.resolve(userShadow), path.resolve(paths.userPath));
-      entries.push({ name: `${runtime}-output`, path: paths.outputPath, content });
+      entries.push({ name: `${paths.template}-output`, path: paths.outputPath, content });
     } finally {
       try { fs.unlinkSync(systemShadow); } catch { }
       try { fs.unlinkSync(userShadow); } catch { }
@@ -459,12 +466,12 @@ export function activateFreshSplitInstructions({
     activatedAt: now.toISOString(),
     seedSha256: crypto.createHash('sha256').update(userContent).digest('hex'),
   };
-  commitEntries(entries, claude.markerPath, JSON.stringify(marker, null, 2) + '\n', faultInjector);
+  commitEntries(entries, assets.markerPath, JSON.stringify(marker, null, 2) + '\n', faultInjector);
   try {
     writeInstructionFormatVersion({ zylosDir, io: versionIo });
-    return { active: true, markerPath: claude.markerPath, versionWritten: true, versionWriteError: null };
+    return { active: true, markerPath: assets.markerPath, versionWritten: true, versionWriteError: null };
   } catch (versionWriteError) {
-    return { active: true, markerPath: claude.markerPath, versionWritten: false, versionWriteError };
+    return { active: true, markerPath: assets.markerPath, versionWritten: false, versionWriteError };
   }
 }
 
@@ -475,33 +482,37 @@ export function refreshSplitInstructions({
   faultInjector,
 } = {}) {
   recoverSplitTransaction(zylosDir, faultInjector);
-  const claude = instructionPaths('claude', { zylosDir });
-  if (!fs.existsSync(claude.markerPath)) {
+  const assets = instructionAssetPaths({ zylosDir });
+  if (!fs.existsSync(assets.markerPath)) {
     deployInstructionAssets({ zylosDir, templatesDir, assemblerSource });
-    return { active: false, pendingMigration: true, markerPath: claude.markerPath };
+    return { active: false, pendingMigration: true, markerPath: assets.markerPath };
   }
-  const marker = JSON.parse(fs.readFileSync(claude.markerPath, 'utf8'));
-  const userContent = fs.readFileSync(claude.userPath, 'utf8');
+  const marker = JSON.parse(fs.readFileSync(assets.markerPath, 'utf8'));
+  const userContent = fs.readFileSync(assets.userPath, 'utf8');
   const now = new Date();
   const entries = [];
-  for (const runtime of ['claude', 'codex']) {
-    const paths = instructionPaths(runtime, { zylosDir });
-    const systemContent = fs.readFileSync(path.join(templatesDir, `${runtime}-system.md`), 'utf8');
-    entries.push({ name: `${runtime}-system`, path: paths.systemPath, content: systemContent });
+  const systems = new Map();
+  for (const paths of instructionTargets({ zylosDir })) {
+    const { template } = paths;
+    if (!systems.has(template)) {
+      const systemContent = fs.readFileSync(path.join(templatesDir, `${template}-system.md`), 'utf8');
+      systems.set(template, systemContent);
+      entries.push({ name: `${template}-system`, path: paths.systemPath, content: systemContent });
+    }
     const systemShadow = `${paths.systemPath}.split-render.${process.pid}`;
     fs.mkdirSync(path.dirname(systemShadow), { recursive: true });
-    fs.writeFileSync(systemShadow, systemContent, 'utf8');
+    fs.writeFileSync(systemShadow, systems.get(template), 'utf8');
     try {
       const content = renderInstruction({ systemPath: systemShadow, userPath: paths.userPath, generatedAt: now })
         .replaceAll(path.resolve(systemShadow), path.resolve(paths.systemPath));
-      entries.push({ name: `${runtime}-output`, path: paths.outputPath, content });
+      entries.push({ name: `${paths.template}-output`, path: paths.outputPath, content });
     } finally {
       try { fs.unlinkSync(systemShadow); } catch { }
     }
   }
-  entries.push({ name: 'assembler', path: claude.assemblerPath, content: fs.readFileSync(assemblerSource) });
+  entries.push({ name: 'assembler', path: assets.assemblerPath, content: fs.readFileSync(assemblerSource) });
   marker.refreshedAt = now.toISOString();
   marker.userSha256 = crypto.createHash('sha256').update(userContent).digest('hex');
-  commitEntries(entries, claude.markerPath, JSON.stringify(marker, null, 2) + '\n', faultInjector);
-  return { active: true, markerPath: claude.markerPath };
+  commitEntries(entries, assets.markerPath, JSON.stringify(marker, null, 2) + '\n', faultInjector);
+  return { active: true, markerPath: assets.markerPath };
 }

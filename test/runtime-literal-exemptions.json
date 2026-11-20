@@ -45,11 +45,6 @@
     "reason": "dispatch:launch: Controls the Claude-only launch terms prompt."
   },
   {
-    "file": "cli/commands/migrate-instructions.js",
-    "text": "log(`Instruction migration committed. Marker: ${instructionPaths('claude', { zylosDir: root }).markerPath}`);",
-    "reason": "dispatch:instructions: Reports the existing instruction migration marker path."
-  },
-  {
     "file": "cli/commands/init.js",
     "text": "if (selectedRuntime === 'claude' && authentication.authenticated && !skipConfirm && needsBypassAcceptance()) {",
     "reason": "dispatch:launch: Controls the Claude-only launch terms prompt."
@@ -58,11 +53,6 @@
     "file": "cli/commands/init.js",
     "text": "if (selectedRuntime === 'claude' && authentication.authenticated && !skipConfirm && needsBypassAcceptance()) {",
     "reason": "dispatch:launch: Controls the Claude-only launch terms prompt."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "const instruction = path.join(ZYLOS_DIR, target === 'claude' ? 'CLAUDE.md' : 'AGENTS.md');",
-    "reason": "dispatch:instructions: Selects the existing runtime instruction filename or readiness action."
   },
   {
     "file": "cli/commands/runtime.js",
@@ -165,106 +155,6 @@
     "reason": "else-fallback: Non-Claude runtimes reach the existing alternate quota read path."
   },
   {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "systemPath: path.join(instructionsDir, `${runtime === 'agy' ? 'codex' : runtime}-system.md`),",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "outputPath: path.join(root, runtime === 'claude' ? 'CLAUDE.md' : 'AGENTS.md'),",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "return fs.existsSync(instructionPaths('claude', { zylosDir }).markerPath);",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "const paths = instructionPaths('agy', { zylosDir });",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "const paths = instructionPaths('claude', { zylosDir });",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "for (const runtime of ['claude', 'codex']) {",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "return [path.resolve(zylosDir), instructionPaths('claude', { zylosDir }).instructionsDir];",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "const markerPath = instructionPaths('claude', { zylosDir }).markerPath;",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "const claude = instructionPaths('claude', { zylosDir });",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "const systems = Object.fromEntries(['claude', 'codex'].map(runtime => [",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "{ name: 'codex-system', path: instructionPaths('codex', { zylosDir }).systemPath, content: systems.codex },",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "for (const runtime of ['claude', 'codex']) {",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "const claude = instructionPaths('claude', { zylosDir });",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "const claude = instructionPaths('claude', { zylosDir });",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "const legacyArtifacts = [claude.userPath, claude.outputPath, instructionPaths('codex', { zylosDir }).outputPath];",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "const systems = Object.fromEntries(['claude', 'codex'].map(runtime => [",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "{ name: 'codex-system', path: instructionPaths('codex', { zylosDir }).systemPath, content: systems.codex },",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "for (const runtime of ['claude', 'codex']) {",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "const claude = instructionPaths('claude', { zylosDir });",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
-    "file": "cli/lib/runtime/instruction-builder.js",
-    "text": "for (const runtime of ['claude', 'codex']) {",
-    "reason": "dispatch:instructions: Builds and migrates the existing runtime-specific instructions and markers."
-  },
-  {
     "file": "cli/lib/session-state-reader-async.js",
     "text": "if (['claude', 'agy'].includes(target.runtime)) usage = readJsonSample(path.join(dir, 'statusline.json'), 'usage');",
     "reason": "dispatch:context: Selects per-runtime usage sample location or freshness."
@@ -345,34 +235,9 @@
     "reason": "dispatch:hooks: Checks native hook support or reports native hook installation results."
   },
   {
-    "file": "cli/lib/upgrade-runtime-preparation.js",
-    "text": "const claude = instructionPaths('claude', { zylosDir });",
-    "reason": "dispatch:instructions: Stages the existing per-runtime instruction files and migration marker."
-  },
-  {
-    "file": "cli/lib/upgrade-runtime-preparation.js",
-    "text": "for (const name of ['claude', 'codex']) {",
-    "reason": "dispatch:instructions: Stages the existing per-runtime instruction files and migration marker."
-  },
-  {
-    "file": "cli/lib/upgrade-runtime-preparation.js",
-    "text": "for (const name of ['claude', 'codex']) {",
-    "reason": "dispatch:instructions: Stages the existing per-runtime instruction files and migration marker."
-  },
-  {
-    "file": "cli/lib/upgrade-runtime-preparation.js",
-    "text": "const shadow = instructionPaths(name === 'CLAUDE.md' ? 'claude' : 'codex', { zylosDir: migrationRoot });",
-    "reason": "dispatch:instructions: Stages the existing per-runtime instruction files and migration marker."
-  },
-  {
-    "file": "cli/lib/upgrade-runtime-preparation.js",
-    "text": "const live = instructionPaths(name === 'CLAUDE.md' ? 'claude' : 'codex', { zylosDir });",
-    "reason": "dispatch:instructions: Stages the existing per-runtime instruction files and migration marker."
-  },
-  {
-    "file": "cli/lib/upgrade-runtime-preparation.js",
-    "text": "add(relative(claude.markerPath), readRegular(instructionPaths('claude', { zylosDir: migrationRoot }).markerPath));",
-    "reason": "dispatch:instructions: Stages the existing per-runtime instruction files and migration marker."
+    "file": "skills/activity-monitor/scripts/agy-hooks.js",
+    "text": "const agyRuntime = await getRuntime('agy');",
+    "reason": "dispatch:hooks: Selects the implementation for the Antigravity native hook entrypoint."
   },
   {
     "file": "skills/activity-monitor/scripts/context-monitor.js",

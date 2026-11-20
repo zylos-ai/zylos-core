@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 /** Translate AGY's native hooks into the shared, run-scoped lifecycle. */
+// Awaits the runtime factory at module scope after installing the deadline.
+// Runtime implementations must not reach this module through static imports.
 import fs from 'node:fs';
 import path from 'node:path';
 import { isMainModule } from './is-main-module.js';
@@ -25,7 +27,8 @@ const [{ loadCoreModule }, { handleHookActivity }, { collectHealthHook, wakeHeal
   import('./agy-main-session.js'),
 ]);
 const { runDirFromEnv } = await loadCoreModule('session-group-paths.js');
-const { agyInstructionContext } = await loadCoreModule('runtime/instruction-builder.js');
+const { getRuntime } = await loadCoreModule('runtime/index.js');
+const agyRuntime = await getRuntime('agy');
 
 // Stop.error is an optional string in AGY's native hook schema. Keep only a
 // category: native text can contain request URLs, keys or other private data.
@@ -93,7 +96,7 @@ export async function runAgySessionStart(payload, { env = process.env, chainBuil
 }
 
 export async function handleAgyHook(payload, { eventName, env = process.env,
-  orchestrate = runAgySessionStart, instructions = agyInstructionContext,
+  orchestrate = runAgySessionStart, instructions = agyRuntime.instructions.sessionStartInjection,
   activity = handleHookActivity, health = collectHealthHook, wake = wakeHealthMonitor } = {}) {
   const event = eventName || payload?.hookEventName || payload?.hook_event_name;
   if (!['SessionStart', 'PreInvocation', 'Stop', 'PreToolUse', 'PostToolUse'].includes(event)) return null;

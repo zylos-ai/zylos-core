@@ -40,5 +40,10 @@ export const RUNTIME_CONTRACT = Object.freeze({
     overrideHelpFlags: 'optional',
     checkAutonomous: 'optional',
   }) }),
+  instructions: Object.freeze({ required: true, members: Object.freeze({
+    template: 'required',
+    output: 'required',
+    sessionStartInjection: 'optional',
+  }) }),
   input: Object.freeze({ required: true, members: Object.freeze({ bracketedPaste: 'required' }) }),
 });

@@ -5,7 +5,7 @@ import { ZYLOS_DIR } from '../lib/config.js';
 import {
   CURRENT_INSTRUCTION_FORMAT_VERSION,
   hasSplitTransactionResidue,
-  instructionPaths,
+  instructionAssetPaths,
   isSplitInstructionsActive,
   readInstructionFormatVersion,
   recoverSplitTransaction,
@@ -266,7 +266,7 @@ export async function migrateInstructionsCommand(args, {
   }
 
   log(`Backup: ${migration.backupPath}`);
-  log(`Instruction migration committed. Marker: ${instructionPaths('claude', { zylosDir: root }).markerPath}`);
+  log(`Instruction migration committed. Marker: ${instructionAssetPaths({ zylosDir: root }).markerPath}`);
   const cleanupResidue = migration.cleanupResidue;
   if (cleanupResidue) log('Committed transaction cleanup residue preserved; the next --apply will recover it.');
   const a3 = migration.a3;
