@@ -45,7 +45,7 @@ function sameLaunch(left, right) {
 // snapshot/current-session files belong to this run; presence alone is insufficient.
 // running is null for a pre-migration instance (sessionMode null), for any group
 // but origin in native single, and for a model query of a non-current runtime.
-export function configRunningApplies({ kind, runtime, sessionGroup, sessionMode, resolved }) {
+function configRunningApplies({ kind, runtime, sessionGroup, sessionMode, resolved }) {
   if (sessionMode !== 'multi' && !(sessionMode === 'single' && sessionGroup === 'origin')) return false;
   return !(kind === 'model' && runtime !== resolved.runtime);
 }

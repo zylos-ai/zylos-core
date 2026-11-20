@@ -42,7 +42,6 @@ for (const mode of ['single', 'multi']) for (const unreadable of mode === 'singl
       listPendingContinuations: () => [], listRunEndings: () => [], getLastCompletedModeTransition: () => null,
       listPendingSessionGroups: () => [], getControlById: () => null,
       // Exercise the assembled Sync observer with no committed checkpoint yet.
-      listGroupHeads: () => mode === 'multi' ? [{ sessionGroup: 'origin' }] : [],
       getLatestContentCheckpoint: () => null,
       getUnsummarizedRange: () => ({ count: 0, firstAt: null }),
       getOriginSyncBacklog: () => ({ total: range.count,

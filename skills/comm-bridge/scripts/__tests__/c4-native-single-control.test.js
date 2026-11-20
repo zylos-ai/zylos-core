@@ -142,7 +142,7 @@ test('preservation options reject malformed values and remain exclusive to pendi
 });
 
 test('single Origin need counts unfenced pending input from all groups without reading configuration', t => {
-  const { db, store } = fixture(t, { readConfig: () => assert.fail('Origin need must not read F1') });
+  const { db, store } = fixture(t, { readConfig: () => assert.fail('Origin need must not read config.json') });
   db.exec("INSERT INTO conversations(timestamp,direction,channel,content,status,session_group) VALUES ('2026-01-01 00:00:00','in','system','a','pending','other'),('2026-01-02 00:00:00','in','system','b','pending','origin'),('2026-01-03 00:00:00','in','system','c','delivered','other')");
   assert.equal(store.getOriginNeed(100, { sessionMode: 'multi' }).inbound.count, 1);
   assert.deepEqual(store.getOriginNeed(100, { sessionMode: 'single' }).inbound, { count: 2, oldestAt: Date.parse('2026-01-01T00:00:00Z') / 1000 });

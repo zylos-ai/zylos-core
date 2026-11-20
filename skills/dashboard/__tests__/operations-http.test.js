@@ -199,7 +199,7 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
       const ready = await request('/api/health/ready', token);
       assert.equal(ready.status, 200); assert.equal(ready.body.ready, true); assert.equal(ready.body.reason, null);
       assert.equal(ready.body.session_mode, mode);
-      assert.equal(ready.body.session_running, null, 'only a pre-mode instance without a mode key reads session presence');
+      assert.equal(ready.body.session_running, null, 'readiness does not observe session presence');
       for (const runtime of ['claude', 'codex']) assert.deepEqual(ready.body.runtime_health[runtime], { source: 'record', health: 'ok' });
     }
     for (const scope of ['read', 'admin']) {
@@ -286,10 +286,11 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
     }
     scenario = 'normal'; running = true;
   }
-  // A pre-mode instance (no mode key) runs as single and still requires its only session.
+  // A pre-mode instance reports effective single mode with an independent group presence.
   mode = null; running = false;
   const absent = await request('/api/health/ready');
-  assert.equal(absent.status, 503); assert.equal(absent.body.reason, 'session_not_running'); assert.equal(absent.body.session_running, false);
+  assert.equal(absent.status, 200); assert.equal(absent.body.ready, true);
+  assert.equal(absent.body.reason, null); assert.equal(absent.body.session_running, null);
   assert.equal(absent.body.session_mode, 'single');
   const offline = (await request('/api/groups/origin?include=', tokens.read)).body;
   assert.equal(offline.presence, 'not_running'); assert.equal(offline.state.kind, 'offline'); assert.equal(offline.run, null);

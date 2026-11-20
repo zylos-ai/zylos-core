@@ -152,7 +152,7 @@ test('interrupted historical conversion requeues only its own still-absorbed mes
   assert.equal(store.getModeTransition(), null);
   assert.equal(status(earlier), 'switch_absorbed');
   assert.equal(status(failed), 'failed');
-  assert.equal(store.getAbsorbedConversations(previous)[0].id, earlier);
+  assert.equal(store.queries.readAbsorbed(previous).rows[0].id, earlier);
   await deliverOrigin(t, storage, [own]);
   await owner().advance();
   assert.equal(status(own), 'delivered');

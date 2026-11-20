@@ -62,8 +62,9 @@ Hot TTL refreshes on each Supervisor round. The deferral alert count is read
 fresh when a deferral is requested. Dashboard's global idle-reclaim
 setting accepts 5–1440 whole minutes and writes seconds through the existing
 config lock; the next TTL check uses the saved value without a restart. Existing
-positive second values remain valid. The page is read-only in single-session
-mode or when the environment variable is present, and displays the effective
+positive second values remain valid. The page is editable in native single and
+multi mode. It is read-only before migration or when the environment variable
+is present, and displays the effective
 value (including fallback when that environment value is invalid). The environment
 scope follows the [authoritative README rule](https://github.com/zylos-ai/zylos-core/blob/main/README.md#idle-reclaim-environment).
 The eviction minimum remains a startup setting and requires a restart to change.

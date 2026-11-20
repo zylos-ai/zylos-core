@@ -598,7 +598,7 @@ export function mountConversationPage({
     const restricted = headerLabel !== 'running' && !waiting;
     const exceptional = headerLabel !== 'running';
     const origin = s.tab === 'mine' && isOriginConversation(s.selectedId);
-    // Only in multi is an Origin that is not running asleep, woken by the next message; in single it would be down.
+    // Origin starts on demand in both modes. Only multi shows the Asleep label.
     const asleep = origin && s.mode === 'multi' && s.groupPresence === false && !healthLabel && !s.groupWait;
     const working = !exceptional && !waking && s.groupPresence === true ? s.groupWorking : null;
     const busy = waking || !!working?.on;

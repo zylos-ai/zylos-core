@@ -70,7 +70,7 @@ async function fixture(t,{missing=false,wal=false,formatVersion=3,dashboard=fals
   fs.copyFileSync(path.resolve('skills',item.owner,'scripts',migration),path.join(owner,'scripts',migration));
   if(item.owner==='scheduler')for(const file of ['migrations-v2.js','migrations-v3.js'])fs.copyFileSync(path.resolve('skills/scheduler/scripts',file),path.join(owner,'scripts',file));
  }
- for(const file of ['sqlite-schema.js','c4-migrations-v2.js','c4-migrations-v3.js','c4-migrations-v4.js','c4-transition-state.js','core-config-loader.js','upgrade-admission.js']) fs.copyFileSync(path.resolve('skills/comm-bridge/scripts',file),path.join(skillsDir,'comm-bridge/scripts',file));
+ for(const file of ['sqlite-schema.js','c4-migrations-v2.js','c4-migrations-v3.js','c4-migrations-v4.js','core-config-loader.js','upgrade-admission.js']) fs.copyFileSync(path.resolve('skills/comm-bridge/scripts',file),path.join(skillsDir,'comm-bridge/scripts',file));
  const loader=await import(pathToFileURL(path.join(skillsDir,'comm-bridge/scripts/core-config-loader.js')));
  assert.equal(loader.resolveCoreConfigModule(),path.resolve('cli/lib/config.js'));
  assert.equal(await loader.loadCoreConfig(),await import(pathToFileURL(path.resolve('cli/lib/config.js'))));

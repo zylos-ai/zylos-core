@@ -25,28 +25,19 @@ export async function readReadiness({ load = loadCoreModule } = {}) {
     supervisor = result.kind === 'rejected' && result.reply?.code === 'invalid_request';
   } catch { /* An unavailable IPC peer cannot establish readiness. */ }
 
-  // Origin is reclaimed when idle and started again on demand in multi and in
-  // single alike, so only an instance from before session modes (no mode key)
-  // still requires its only session to be running.
-  let sessionMode = 'unreadable', sessionRunning = null, legacySingle = false;
+  // Mode is diagnostic. Supervisor response establishes readiness even
+  // before migration and when there are no running sessions.
+  let sessionMode = 'unreadable';
   try {
     const { readSessionMode } = await load('config.js');
-    const { mode, keyPresent } = readSessionMode();
-    legacySingle = keyPresent === false;
+    const { mode } = readSessionMode();
     const effective = mode ?? 'single';
     if (['single', 'multi'].includes(effective)) sessionMode = effective;
-  } catch { /* Unknown mode is not evidence that a single session is absent. */ }
+  } catch { /* Keep the unreadable mode diagnostic. */ }
 
   const runtimeHealth = {};
   try {
     const reader = await load('session-state-reader.js');
-    if (legacySingle) {
-      try {
-        const identity = await reader.readLiveIdentity(null);
-        if (typeof identity?.present === 'boolean') sessionRunning = identity.present;
-      }
-      catch { /* Observation failure is distinct from confirmed absence. */ }
-    }
     for (const runtime of ['claude', 'codex', 'agy']) {
       let record;
       try { record = await reader.readRuntimeHealth(runtime); } catch { record = { unreadable: true }; }
@@ -56,8 +47,6 @@ export async function readReadiness({ load = loadCoreModule } = {}) {
   } catch {
     for (const runtime of ['claude', 'codex', 'agy']) runtimeHealth[runtime] = { source: 'unreadable', health: null };
   }
-  const reason = !supervisor ? 'supervisor_unavailable'
-    : legacySingle && sessionRunning === false ? 'session_not_running' : null;
-  return { ready: reason === null, reason, session_mode: sessionMode,
-    session_running: sessionRunning, runtime_health: runtimeHealth };
+  return { ready: supervisor, reason: supervisor ? null : 'supervisor_unavailable', session_mode: sessionMode,
+    session_running: null, runtime_health: runtimeHealth };
 }

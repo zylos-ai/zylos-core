@@ -196,7 +196,7 @@ try {
   outlets.push('direct insert text/JSON receipt');
   for (const content of [contents[1], contents[2], contents[3]]) store.insertConversation('in', 'dashboard', 'alpha', content, { groupName: 'alpha' });
   const { runId } = store.beginModeTransition('single', 'multi'); store.setDrainFence('*'); seedHistoricalAbsorption(database, runId);
-  const absorbed = store.getAbsorbedConversations(runId);
+  const absorbed = store.queries.readAbsorbed(runId).rows;
   eq(absorbed.length, 3);
   for (const json of [false, true]) {
     const args = ['--absorbed', '--run-id', runId];

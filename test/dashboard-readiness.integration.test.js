@@ -4,7 +4,7 @@ import net from 'node:net';
 import { once } from 'node:events';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import test, { mock } from 'node:test';
+import test from 'node:test';
 import { VersionChecker } from '../skills/dashboard/src/lib/version-checker.js';
 import { EventLoopMonitor } from '../skills/dashboard/src/lib/event-loop-monitor.js';
 import { StateEngine } from '../skills/dashboard/src/lib/state-engine.js';
@@ -12,14 +12,13 @@ import { Store } from '../skills/dashboard/src/lib/store.js';
 import { generateApiKey, hashApiKey } from '../skills/dashboard/src/lib/auth.js';
 import { SupervisorAdmission } from '../skills/activity-monitor/scripts/supervisor-admission.js';
 import { createSupervisorConnectionHandler } from '../skills/activity-monitor/scripts/router-socket.js';
-import * as sessionReader from '../cli/lib/session-state-reader.js';
 import Database from '../skills/comm-bridge/scripts/sqlite-driver.js';
 import { guardDatabase } from '../skills/comm-bridge/scripts/sqlite-schema.js';
 import * as schema from '../skills/comm-bridge/scripts/c4-schema.js';
 import { createStore } from '../skills/comm-bridge/scripts/c4-v2-store.js';
 
 // Integration boundary: real Dashboard HTTP/auth, mode/health readers, socket
-// client and supervisor rejection. Only live-session observation is injected.
+// client and supervisor rejection. The fixture starts no runtime sessions.
 // Run for readiness/auth/IPC changes; skip UI-only changes. Official Node runner
 // plus the private launcher isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR and
 // private tmux socket; Dashboard DB and am.sock are owned by this test. No live
@@ -33,20 +32,8 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
   assert.ok(Buffer.byteLength(socketPath) < 104);
   console.log('Readiness isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: root,
     PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, TMUX_TMPDIR: process.env.TMUX_TMPDIR,
-    database: path.join(root, 'components/dashboard/dashboard.db'), socketPath, tmux: 'observation injected' }));
+    database: path.join(root, 'components/dashboard/dashboard.db'), socketPath, tmux: 'no sessions' }));
 
-  let present = true, identityReads = 0, identityGate = null;
-  mock.module('../cli/lib/session-state-reader.js', { namedExports: { ...sessionReader,
-    readLiveIdentity: async group => {
-      assert.equal(group, null); identityReads++;
-      if (identityGate) {
-        dashboard.emit('probe-identity-entered');
-        await identityGate;
-      }
-      return { present, ready: false, pid: 31337, runId: 'private-run', sessionId: 'private-session' };
-    },
-  } });
-  t.after(() => mock.restoreAll());
   t.mock.method(VersionChecker.prototype, 'start', () => {});
   t.mock.method(EventLoopMonitor.prototype, 'start', function () { return this; });
   t.mock.method(EventLoopMonitor.prototype, 'snapshot', () => ({ lag_ms: 0 }));
@@ -127,7 +114,6 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
         assert.deepEqual(await request(`/api/health?probe=${probe}`, headers), { status: 404, body: { ok: false, error: { code: 'not_found', message: 'not_found' } } });
       }
     }
-    assert.equal(identityReads, 0, 'retired query probes never enter the readiness reader');
   });
   // Extends the same real HTTP/auth boundary to cookie and API-session detail
   // admission. Run for health/auth changes; UI-only changes may skip this case.
@@ -161,7 +147,6 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
     assert.equal((await request('/api/usage/summary', { Cookie: cookie })).status, 200);
     assert.equal(database.getSession(sessionHash).last_activity_at, activityBefore + 1000,
       'ordinary authenticated activity still updates the cookie idle lifetime');
-    assert.equal(identityReads, 0);
   });
   await t.test('missing supervisor returns 503 without requiring login', async () => {
     const response = await ready();
@@ -176,7 +161,9 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
     });
     try {
       const before = performance.now();
-      assert.equal((await ready()).status, 503);
+      const response = await ready();
+      assert.equal(response.status, 503);
+      assert.equal(response.body.reason, 'supervisor_unavailable');
       assert.ok(performance.now() - before >= 900);
       await closed;
     } finally {
@@ -195,86 +182,81 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
     assert.equal(first.listening, false);
     assert.equal(peers.size, 0);
   });
-  await startSocket(handler);
+  let probeReads = 0, probeGate = null;
+  await startSocket(peer => {
+    probeReads++;
+    if (!probeGate) handler(peer);
+    else {
+      dashboard.emit('probe-entered');
+      void probeGate.then(() => { if (!peer.destroyed) handler(peer); });
+    }
+  });
   // Covers HTTP wiring to the shared check; run for readiness/coalescing changes,
-  // skip unrelated UI changes. Uses the same isolated servers and injected identity.
+  // skip unrelated UI changes. Uses the same isolated servers and gates the supervisor reply.
   await t.test('concurrent HTTP probes share one check while ordinary health stays independent', async () => {
     const count = 30;
-    const before = identityReads;
+    const before = probeReads;
     let release, received = 0;
-    identityGate = new Promise(resolve => { release = resolve; });
+    probeGate = new Promise(resolve => { release = resolve; });
     const onRequest = req => {
       if (req.url === '/api/health/ready' && ++received === count) dashboard.emit('probe-batch-arrived');
     };
     dashboard.on('request', onRequest);
     const arrived = once(dashboard, 'probe-batch-arrived', { signal: AbortSignal.timeout(3000) });
-    const entered = once(dashboard, 'probe-identity-entered', { signal: AbortSignal.timeout(3000) });
+    const entered = once(dashboard, 'probe-entered', { signal: AbortSignal.timeout(3000) });
     const requests = Array.from({ length: count }, ready);
     try {
       await Promise.all([arrived, entered]);
       assert.equal((await request('/api/health')).status, 200);
-      assert.equal(identityReads, before + 1);
+      assert.equal(probeReads, before + 1);
       release();
       const responses = await Promise.all(requests);
-      assert.equal(identityReads, before + 1);
+      assert.equal(probeReads, before + 1);
       for (const response of responses) assert.deepEqual(response, responses[0]);
       assert.equal(responses[0].status, 200);
-      identityGate = null;
+      probeGate = null;
       assert.equal((await ready()).status, 200);
-      assert.equal(identityReads, before + 2);
+      assert.equal(probeReads, before + 2);
     } finally {
       dashboard.off('request', onRequest);
       release();
-      identityGate = null;
+      probeGate = null;
       await Promise.allSettled(requests);
     }
   });
-  await t.test('a pre-mode instance session exists even before startup readiness or login', async () => {
+  await t.test('a pre-mode instance with no sessions is ready without login', async () => {
     const response = await ready();
     assert.equal(response.status, 200);
     assert.equal(response.body.ready, true);
     assert.equal(response.body.reason, null);
     assert.equal(response.body.session_mode, 'single');
-    assert.equal(response.body.session_running, true);
+    assert.equal(response.body.session_running, null);
     assert.deepEqual(response.body.runtime_health, { claude: { source: 'missing', health: null }, codex: { source: 'missing', health: null }, agy: { source: 'missing', health: null } });
-  });
-  await t.test('confirmed absence of a pre-mode instance session returns 503', async () => {
-    present = false;
-    const response = await ready();
-    assert.equal(response.status, 503);
-    assert.equal(response.body.reason, 'session_not_running');
-    assert.equal(response.body.session_running, false);
   });
   await t.test('native single needs no running Origin, which is reclaimed when idle', async () => {
     setMode('single');
-    const reads = identityReads;
     const response = await ready();
     assert.equal(response.status, 200);
     assert.deepEqual([response.body.ready, response.body.reason, response.body.session_mode, response.body.session_running], [true, null, 'single', null]);
-    assert.equal(identityReads, reads, 'no session presence is read');
   });
   await t.test('multi mode needs no Origin or other running sessions', async () => {
     setMode('multi');
-    const reads = identityReads;
     const response = await ready();
     assert.equal(response.status, 200);
     assert.equal(response.body.session_mode, 'multi');
     assert.equal(response.body.session_running, null);
-    assert.equal(identityReads, reads);
   });
   // Real config reader through HTTP: an unreadable mode is reported as such and
   // gates nothing. Run for readiness or mode-reporting changes; UI-only changes may skip.
   await t.test('unreadable mode configuration reports unreadable without a readiness gate', async () => {
-    const reads = identityReads;
     fs.writeFileSync(path.join(root, '.zylos/config.json'), '{ unreadable JSON');
     const response = await ready();
     assert.equal(response.status, 200);
     assert.deepEqual([response.body.ready, response.body.reason, response.body.session_mode, response.body.session_running], [true, null, 'unreadable', null]);
-    assert.equal(identityReads, reads, 'unknown mode reads no session presence');
   });
   for (const health of ['auth_failed', 'rate_limited', 'down', 'recovering']) {
     await t.test(`${health} is diagnostic in both session modes`, async () => {
-      setHealth(health); present = true;
+      setHealth(health);
       for (const mode of ['single', 'multi']) {
         setMode(mode);
         const response = await ready();

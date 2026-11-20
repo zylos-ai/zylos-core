@@ -2,6 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture } from './c4-v2-test-helpers.js';
 import { parseSessionGroup, composeSessionGroup } from '../c4-db.js';
+function groupHeads(db) {
+  return db.prepare('SELECT session_group AS sessionGroup, head_id AS headId FROM group_heads ORDER BY session_group COLLATE BINARY').all();
+}
+
 test('pure group parsing is case sensitive, splits once, rejects reserved and malformed inputs', () => {
   for (const invalid of ['', '*', 'void', 'internal', 'origin:x', 'A:x', 'a:', 'a:-b', 'a:x/y', 'a:'+'x'.repeat(96), null]) assert.equal(parseSessionGroup(invalid), null);
   for (const value of ['origin', 'abc', 'a:A:b', 'a:abc', 'a:'+'x'.repeat(95)]) assert.ok(parseSessionGroup(value));
@@ -16,7 +20,7 @@ test('namespace and message transaction rolls back allocation on invalid group a
   assert.equal(db.prepare('SELECT count(*) AS n FROM channel_namespaces').get().n, 0);
   const row = s.insertConversation('in', 'Foo', 'e', 'hello', { groupName: 'A' });
   assert.equal(row.session_group, 'foo:A');
-  assert.deepEqual(s.listGroupHeads(), [{ sessionGroup: 'foo:A', headId: row.id }]);
+  assert.deepEqual(groupHeads(db), [{ sessionGroup: 'foo:A', headId: row.id }]);
   assert.equal(s.ensureChannelNamespace('foo').namespace, 'foo-2');
   assert.equal(s.ensureChannelNamespace('origin').namespace, 'origin-2');
   assert.equal(s.getComponentByNamespace('foo'), 'Foo');
@@ -50,12 +54,12 @@ test('internal messages commit both directions and heads, or roll back everythin
   assert.equal(pair.inRow.endpoint_id, 'origin');
   assert.equal(pair.inRow.status, 'pending');
   assert.equal(pair.inRow.session_id, null);
-  const heads = s.listGroupHeads();
+  const heads = groupHeads(db);
   assert.deepEqual(heads, [{ sessionGroup: 'foo', headId: pair.inRow.id }, { sessionGroup: 'origin', headId: pair.outRow.id }]);
   db.exec("CREATE TRIGGER reject_internal BEFORE INSERT ON conversations WHEN NEW.direction='in' AND NEW.channel='internal' BEGIN SELECT RAISE(ABORT,'fixture'); END");
   assert.throws(() => s.insertInternalMessage('foo', 'origin', 'fail'), { code: 'DB_WRITE_FAILED' });
   assert.equal(db.prepare('SELECT count(*) AS n FROM conversations').get().n, 3);
-  assert.deepEqual(s.listGroupHeads(), heads);
+  assert.deepEqual(groupHeads(db), heads);
   for (const [sender, target, content, code] of [
     [null, 'foo', 'x', 'NO_SENDER_GROUP'], ['missing', 'foo', 'x', 'UNKNOWN_SENDER_GROUP'],
     ['origin', 'missing', 'x', 'UNKNOWN_TARGET_GROUP'], ['origin', 'origin', 'x', 'SELF_TARGET'],
@@ -83,7 +87,7 @@ test('internal messages create new targets only for installed namespace owners',
   assert.equal(pair.inRow.session_group, 'chat:new-person');
   assert.equal(pair.inRow.status, 'pending');
   assert.equal(s.getNextPending({ sessionGroups: ['chat:new-person'] }).id, pair.inRow.id);
-  assert.equal(s.listGroupHeads().some(head => head.sessionGroup === 'chat:new-person'), true);
+  assert.equal(groupHeads(db).some(head => head.sessionGroup === 'chat:new-person'), true);
   const fresh = s.insertInternalMessage('origin', 'fresh:person', 'first contact');
   assert.equal(s.getChannelNamespace('fresh').namespace, 'fresh');
   assert.equal(fresh.inRow.session_group, 'fresh:person');
@@ -115,6 +119,6 @@ test('dashboard origin is a fixed address in both directions without topic regis
     assert.equal(record.session_group, 'origin');
   }
   assert.equal(db.prepare('SELECT count(*) AS n FROM channel_namespaces').get().n, 0);
-  assert.equal(s.listGroupHeads().some(head => head.sessionGroup === 'dashboard:origin'), false);
+  assert.equal(groupHeads(db).some(head => head.sessionGroup === 'dashboard:origin'), false);
   assert.equal(s.insertConversation('in', 'dashboard', 'other', 'ordinary', { groupName: 'other' }).session_group, 'dashboard:other');
 });
