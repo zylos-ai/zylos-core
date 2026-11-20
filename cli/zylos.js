@@ -6,6 +6,7 @@
  */
 
 import os from 'node:os';
+import { SUPPORTED_RUNTIMES } from './lib/runtime/descriptors.js';
 import { parseUpstreamArgs, prepareUpstreams, withUpstreamSnapshot, setUpstreamSource, clearUpstreamSource, upstreamStatus } from './lib/upstreams.js';
 import { commandExists } from './lib/shell-utils.js';
 import path from 'node:path';
@@ -148,7 +149,7 @@ Setup:
                       --check   Diagnose only, no repair run
                                 (an own .env is still set to 0600)
   shell               Interactive CLI mode (REPL)
-  runtime <name>      Switch agent runtime (claude|codex)
+  runtime <name>      Set the default agent runtime (${SUPPORTED_RUNTIMES.join('|')})
   runtime status      Show currently configured runtime
   session-mode switch <single|multi> [--json]  Begin a session mode switch
   session-mode status [--json]  Read session mode and transition status

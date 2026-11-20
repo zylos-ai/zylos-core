@@ -1,3 +1,4 @@
+import { getRuntime, SUPPORTED_RUNTIMES } from '../runtime/index.js';
 import { runtimeAuthFixture } from './helpers/runtime-auth.js';
 import assert from 'node:assert/strict';
 import { after, describe, test } from 'node:test';
@@ -119,13 +120,18 @@ describe('runtime base URL support', () => {
     };
 
     try {
-      runtimeModule.showHelp();
+      await runtimeModule.showHelp();
     } finally {
       console.log = originalLog;
     }
 
     assert.match(output, /--save-base-url <url>/);
     assert.match(output, /--no-validate/);
+    for (const id of SUPPORTED_RUNTIMES) {
+      const { auth } = await getRuntime(id);
+      assert.ok(output.includes(`  ${(id + ':').padEnd(9)}${auth.cliHelp[0]}`));
+      assert.ok(output.includes(`       ${id}: ${auth.remedy}`));
+    }
   });
 
 

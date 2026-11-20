@@ -1,4 +1,4 @@
-import { findRuntime } from '../../runtime/index.js';
+import { getRuntime, findRuntime } from '../../runtime/index.js';
 
 export async function runtimeAuthFixture(id, {
   findExecutable = () => `/fixture/bin/${id}`,
@@ -10,5 +10,19 @@ export async function runtimeAuthFixture(id, {
     ...runtime,
     identity: { ...runtime.identity, findExecutable },
     auth: { ...runtime.auth, ...auth },
+  };
+}
+
+export function runtimeWithClaudeStatus(authenticated) {
+  return async id => {
+    const runtime = await getRuntime(id);
+    if (id !== 'claude') return runtime;
+    return {
+      ...runtime,
+      auth: {
+        ...runtime.auth,
+        initOptionsFromEnv: (opts, ctx) => runtime.auth.initOptionsFromEnv(opts, { ...ctx, authenticated }),
+      },
+    };
   };
 }

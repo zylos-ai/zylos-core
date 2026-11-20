@@ -1,3 +1,4 @@
+import { runtimeWithClaudeStatus } from './helpers/runtime-auth.js';
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import fs from 'node:fs';
@@ -52,7 +53,7 @@ describe('base URL support', () => {
 
     try {
       const envOnly = initModule.parseInitFlags([]);
-      initModule.resolveFromEnv(envOnly, { authenticated: () => false });
+      await initModule.resolveFromEnv(envOnly, { findRuntime: runtimeWithClaudeStatus(() => false) });
       assert.equal(envOnly.baseUrl, 'https://claude-env.example.com');
       assert.equal(envOnly.codexBaseUrl, 'https://codex-env.example.com/v1');
 
@@ -60,7 +61,7 @@ describe('base URL support', () => {
         '--base-url', 'https://claude-flag.example.com',
         '--codex-base-url', 'https://codex-flag.example.com/v1',
       ]);
-      initModule.resolveFromEnv(explicitFlags, { authenticated: () => false });
+      await initModule.resolveFromEnv(explicitFlags, { findRuntime: runtimeWithClaudeStatus(() => false) });
       assert.equal(explicitFlags.baseUrl, 'https://claude-flag.example.com');
       assert.equal(explicitFlags.codexBaseUrl, 'https://codex-flag.example.com/v1');
     } finally {

@@ -1,9 +1,10 @@
+import { SUPPORTED_RUNTIMES, runtimeDisplayName } from '../runtime/index.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG_FILE } from '../config.js';
-import { prepareInitRuntimeClis, prepareInitRuntimeAssets, reportInitPreparation, ensureInitMemoryMigration, parseInitFlags, initCommand, runInitNativeLogin } from '../../commands/init.js';
+import { chooseInitRuntime, prepareInitRuntimeClis, prepareInitRuntimeAssets, reportInitPreparation, ensureInitMemoryMigration, parseInitFlags, initCommand, runInitNativeLogin } from '../../commands/init.js';
 
 test('init prepares both CLIs idempotently and continues after one failure', async () => {
   const installed = new Set(['claude']); const calls = [];
@@ -80,4 +81,13 @@ test('init native cancellation selects 130 independently of prior partial failur
     assert.deepEqual(exits, [130]);
   }
   runInitNativeLogin('codex', ['login'], { spawn: () => ({ status: 0 }), exit: () => assert.fail('successful login must continue') });
+});
+
+test('interactive init can select the third registered runtime', async () => {
+  const selected = await chooseInitRuntime((question, labels) => {
+    assert.equal(question, '  Which agent runtime would you like to use?');
+    assert.deepEqual(labels, SUPPORTED_RUNTIMES.map(runtimeDisplayName));
+    return 3;
+  });
+  assert.equal(selected, SUPPORTED_RUNTIMES[2]);
 });

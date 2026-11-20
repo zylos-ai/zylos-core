@@ -1,8 +1,8 @@
 /**
- * zylos runtime — switch agent runtime without re-running full init.
+ * zylos runtime — set the default agent runtime.
  *
  * Usage:
- *   zylos runtime <name>                        Switch to the specified runtime (claude|codex)
+ *   zylos runtime <name>                        Set the default runtime
  *   zylos runtime status                        Show the currently configured runtime
  *   zylos runtime <name> --save-apikey <key>    Save API key and switch (all runtimes)
  *   zylos runtime <name> --save-base-url <url>  Save base URL and switch
@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { readZylosConfigOrThrow, readZylosConfigStrict, readSessionMode, updateZylosConfigLocked, ZYLOS_DIR } from '../lib/config.js';
-import { getRuntime, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
+import { getRuntime, runtimeDisplayName, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { listGroupTmuxSessions } from '../lib/session-group-paths.js';
 import { submit, lookupRestartRequest } from '../lib/am-sock-client.js';
 import { desiredClaudeHooks, syncHooks, detectStopFailureSupport, detectSubagentHooksSupport } from '../lib/sync-runtime-hooks.js';
@@ -46,7 +46,7 @@ export async function runtimeCommand(args, { execute = executeRuntimeSwitch } = 
   }
 
   if (sub === '--help' || sub === '-h' || sub === 'help') {
-    return showHelp();
+    return await showHelp();
   }
 
   // zylos runtime <name> [flags]
@@ -77,7 +77,7 @@ export async function runtimeCommand(args, { execute = executeRuntimeSwitch } = 
   }
 
   if (args.includes('--json')) console.log(JSON.stringify({ ok: false, error: { code: 'RUNTIME_UNSUPPORTED', message: `Unsupported runtime: ${sub}`, persisted: [] } }));
-  else { console.error(`Unknown subcommand: ${sub}`); showHelp(); }
+  else { console.error(`Unknown subcommand: ${sub}`); await showHelp(); }
   process.exitCode = 1;
 }
 
@@ -86,7 +86,7 @@ export async function runtimeCommand(args, { execute = executeRuntimeSwitch } = 
 function showStatus() {
   const cfg = readRuntimeConfig();
   const current = cfg.runtime ?? DEFAULT_RUNTIME;
-  const label = { claude: 'Claude Code (Anthropic)', codex: 'Codex (OpenAI)', agy: 'Antigravity CLI (Google)' }[current] || current;
+  const label = runtimeDisplayName(current);
   console.log(`Current runtime: ${bold(label)}`);
 }
 
@@ -362,12 +362,23 @@ function readRuntimeConfig() {
 
 // ── Help ──────────────────────────────────────────────────────────────────
 
-export function showHelp() {
+export async function showHelp() {
+  const authenticationOptions = [];
+  const remedies = [];
+  for (const id of SUPPORTED_RUNTIMES) {
+    const { auth } = await getRuntime(id);
+    const [first, ...rest] = auth.cliHelp;
+    if (first !== undefined) {
+      authenticationOptions.push(`  ${(id + ':').padEnd(9)}${first}`);
+      authenticationOptions.push(...rest.map(line => `           ${line}`));
+    }
+    remedies.push(`       ${id}: ${auth.remedy}`);
+  }
   console.log(`
-zylos runtime — switch agent runtime
+zylos runtime — set the default agent runtime
 
 Usage:
-  zylos runtime <name>                        Switch to the specified runtime
+  zylos runtime <name>                        Set the default runtime
   zylos runtime status                        Show currently configured runtime
   zylos runtime <name> --save-apikey <key>    Save API key and switch
   zylos runtime <name> --save-base-url <url>  Save base URL and switch
@@ -380,15 +391,7 @@ Supported runtimes:
   agy       Antigravity CLI (Google, Gemini API key only)
 
 Authentication options (if not already authenticated):
-  agy:     --save-apikey <key>             GEMINI_API_KEY (no personal subscription login)
-  Claude:  --save-apikey <sk-ant-api...>   Anthropic API key
-           --save-base-url <url>           Claude base URL
-           --save-setup-token <sk-ant-oat...>  Setup token
-           claude auth login               Browser OAuth (then retry)
-  Codex:   --save-apikey <sk-...>          OpenAI API key
-           --save-base-url <url>           Codex base URL
-           codex login --device-auth       Device auth (headless)
-           codex login                     Browser login (then retry)
+${authenticationOptions.join('\n')}
 
 Validation:
   --no-validate skips only the switch-time auth probe. Use it for prepared,
@@ -396,8 +399,8 @@ Validation:
 
 Exit codes:
   0  Success
-  1  Failed; AUTH_FAILED requires new credentials or login via zylos auth <runtime>
-     (agy: replace the key with zylos runtime agy --save-apikey <key>);
+  1  Failed; AUTH_FAILED requires new credentials or login:
+${remedies.join('\n')}
      AUTH_NOT_CONFIRMED requires checking network/proxy before retrying
 
 Examples:

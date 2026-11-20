@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { syncAgyConfig, agyConfigurationPaths, isAgyConfigReady, hasAgyZylosHooks } from '../agy-setup.js';
-import { saveAgyApiKey } from '../runtime-setup.js';
+import { saveAgyApiKey } from '../runtime/agy/auth.js';
 import { ZYLOS_DIR } from '../config.js';
 import { applyCredentials, validateRuntimeFlags, parseRuntimeFlags } from '../../commands/runtime.js';
 import { groupCommand } from '../../commands/group.js';
@@ -142,8 +142,15 @@ test('Antigravity init prepares only explicit runtimes', async t => {
   const assets = await prepareInitRuntimeAssets({ runtimes: ['agy'], instruction: name => { calls.push(name); return 'instructions'; }, hooks: { agy: () => calls.push('hooks') }, exists: () => true });
   assert.deepEqual(calls, ['agy', 'hooks']);
   assert.equal(assets.failed.length, 0);
-  const result = await runInitAuthentication({}, { runtime: 'agy', exists: () => true, agyAuth: async () => ({ status: 'success' }), nativeLogin: () => { throw Error('native login forbidden'); } });
-  assert.equal(result.agyAuthenticated, true);
+  const result = await runInitAuthentication({}, {
+    runtime: 'agy',
+    nativeLogin: () => { throw Error('native login forbidden'); },
+    deps: {
+      findExecutable: () => '/fixture/runtime',
+      agyAuth: async () => ({ status: 'success' }),
+    },
+  });
+  assert.equal(result.authenticated, true);
 });
 
 test('Antigravity upgrade requires its installed CLI for baseline and overrides', async t => {

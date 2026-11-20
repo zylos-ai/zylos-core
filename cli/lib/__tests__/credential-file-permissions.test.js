@@ -25,7 +25,10 @@ for (const key of credentialKeys) delete process.env[key];
 assert.equal(os.homedir(), home, 'HOME is isolated before any writer runs');
 console.log('Credential file isolation: ' + JSON.stringify({ HOME: os.homedir(), ZYLOS_DIR: process.env.ZYLOS_DIR, PATH: process.env.PATH, umask: '022' }));
 
-const setup = await import('../runtime-setup.js');
+const { credentialFilePermissionWarnings } = await import('../runtime-setup.js');
+const { getRuntime } = await import('../runtime/index.js');
+const claude = await import('../runtime/claude/auth.js');
+const codex = await import('../runtime/codex/auth.js');
 const { preAcceptClaudeTerms, runInitAuthentication } = await import('../../commands/init.js');
 const { applyBaseUrl } = await import('../../commands/runtime.js');
 const { persistInstalledSettingsAndSyncCoupledThreshold } = await import('../sync-runtime-hooks.js');
@@ -65,9 +68,9 @@ beforeEach(() => {
 describe('owner-only credential files', { skip: !posix && 'POSIX permission bits only' }, () => {
   describe('Claude credential writers (~/.claude.json; ~/.claude/settings.json is not written)', () => {
     for (const [label, save, key] of [
-      ['saveApiKey', setup.saveApiKey, 'ANTHROPIC_API_KEY'],
-      ['saveAuthToken', setup.saveAuthToken, 'ANTHROPIC_AUTH_TOKEN'],
-      ['saveSetupToken', setup.saveSetupToken, 'CLAUDE_CODE_OAUTH_TOKEN'],
+      ['saveApiKey', claude.saveApiKey, 'ANTHROPIC_API_KEY'],
+      ['saveAuthToken', claude.saveAuthToken, 'ANTHROPIC_AUTH_TOKEN'],
+      ['saveSetupToken', claude.saveSetupToken, 'CLAUDE_CODE_OAUTH_TOKEN'],
     ]) {
       test(`${label} creates ~/.claude.json owner-only and does not create settings.json`, () => {
         assert.equal(save('credential-value-new-file-0001'), true);
@@ -88,20 +91,20 @@ describe('owner-only credential files', { skip: !posix && 'POSIX permission bits
     }
 
     test('approveApiKey creates ~/.claude.json owner-only and tightens an existing one', () => {
-      setup.approveApiKey('credential-value-approve-0003');
+      claude.approveApiKey('credential-value-approve-0003');
       assert.equal(mode(claudeJson), '600');
       worldReadable(claudeJson, { keep: true });
-      setup.approveApiKey('credential-value-approve-0004');
+      claude.approveApiKey('credential-value-approve-0004');
       assert.equal(mode(claudeJson), '600');
       assert.equal(readJson(claudeJson).keep, true);
     });
 
     test('saveClaudeBaseUrlToEnv neither creates nor rewrites settings.json', () => {
-      assert.equal(setup.saveClaudeBaseUrlToEnv('https://relay.example.test'), true);
+      assert.equal(claude.saveClaudeBaseUrlToEnv('https://relay.example.test'), true);
       assert.equal(fs.existsSync(userSettings), false);
       worldReadable(userSettings, { env: { ANTHROPIC_API_KEY: 'credential-value-0005', ANTHROPIC_BASE_URL: 'https://hand.example.test' } });
       const before = fs.readFileSync(userSettings, 'utf8');
-      assert.equal(setup.saveClaudeBaseUrlToEnv('https://relay2.example.test'), true);
+      assert.equal(claude.saveClaudeBaseUrlToEnv('https://relay2.example.test'), true);
       assert.equal(fs.readFileSync(userSettings, 'utf8'), before);
     });
 
@@ -124,11 +127,19 @@ describe('owner-only credential files', { skip: !posix && 'POSIX permission bits
       worldReadable(userSettings, { env: { CLAUDE_CODE_OAUTH_TOKEN: 'hand-configured-token' } });
       const before = fs.readFileSync(userSettings, 'utf8');
       const result = await runInitAuthentication({ setupToken: 'credential-value-0007' }, {
-        runtime: 'claude', quiet: true, skipConfirm: true, exists: () => true, claudeStatus: () => false,
-        setupSave: () => { process.env.CLAUDE_CODE_OAUTH_TOKEN = 'credential-value-0007'; return true; },
-        setupVerify: () => ({ valid: false, authError: true }), log: () => {}, reportError: () => {},
+        runtime: 'claude',
+        quiet: true,
+        skipConfirm: true,
+        log: () => {},
+        reportError: () => {},
+        deps: {
+          findExecutable: () => '/fixture/runtime',
+          claudeStatus: () => false,
+          setupSave: () => { process.env.CLAUDE_CODE_OAUTH_TOKEN = 'credential-value-0007'; return true; },
+          setupVerify: () => ({ valid: false, authError: true }),
+        },
       });
-      assert.equal(result.claudeAuthenticated, false);
+      assert.equal(result.authenticated, false);
       assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
       assert.equal(fs.readFileSync(userSettings, 'utf8'), before);
       assert.equal(mode(userSettings), '644');
@@ -145,13 +156,13 @@ describe('owner-only credential files', { skip: !posix && 'POSIX permission bits
 
   describe('Codex credential writer (~/.codex/auth.json)', () => {
     test('saveCodexApiKey creates auth.json owner-only', () => {
-      assert.equal(setup.saveCodexApiKey('credential-value-0009'), true);
+      assert.equal(codex.saveCodexApiKey('credential-value-0009'), true);
       assert.equal(mode(codexAuth), '600');
     });
 
     test('saveCodexApiKey tightens an existing world-readable auth.json', () => {
       worldReadable(codexAuth, { tokens: { keep: true } });
-      assert.equal(setup.saveCodexApiKey('credential-value-0010'), true);
+      assert.equal(codex.saveCodexApiKey('credential-value-0010'), true);
       assert.equal(mode(codexAuth), '600');
       assert.deepEqual(readJson(codexAuth).tokens, { keep: true });
     });
@@ -262,9 +273,9 @@ describe('owner-only credential files', { skip: !posix && 'POSIX permission bits
       assert.match(fs.readFileSync(envFile, 'utf8'), /^TZ=UTC\n[\s\S]*^FIXTURE_TOKEN=credential-value-0014$/m);
     });
 
-    test('the credential file list names each runtime\'s own files', () => {
-      assert.deepEqual(setup.credentialFiles('claude'), [userSettings, claudeJson]);
-      assert.deepEqual(setup.credentialFiles('codex'), [codexAuth]);
+    test('the credential file list names each runtime\'s own files', async () => {
+      assert.deepEqual((await getRuntime('claude')).auth.credentialFiles(), [userSettings, claudeJson]);
+      assert.deepEqual((await getRuntime('codex')).auth.credentialFiles(), [codexAuth]);
     });
 
     // /dev/null is root-owned and writable by everyone: fchmod fails with EPERM, the write is harmless.
@@ -286,10 +297,10 @@ describe('owner-only credential files', { skip: !posix && 'POSIX permission bits
       assert.equal(readJson(target).written, true);
     });
 
-    test('an own world-readable credential file is tightened and not reported', () => {
+    test('an own world-readable credential file is tightened and not reported', async () => {
       worldReadable(userSettings, {});
       assert.deepEqual(checkPrivateFile(userSettings), { ok: true, mode: '600', fixed: true, previousMode: '644' });
-      assert.deepEqual(setup.credentialFilePermissionWarnings(setup.credentialFiles('claude')), []);
+      assert.deepEqual(credentialFilePermissionWarnings((await getRuntime('claude')).auth.credentialFiles()), []);
     });
 
     // Real foreign-owned file: only checked, never written.
@@ -300,7 +311,7 @@ describe('owner-only credential files', { skip: !posix && 'POSIX permission bits
     test('a foreign-owned 0644 file is reported with its real mode and left unchanged',
       { skip: !foreignUsable && `needs a root-owned 0644 ${foreign} and a non-root test user` }, () => {
         assert.deepEqual(checkPrivateFile(foreign), { ok: false, mode: '644', fixed: false });
-        const warnings = setup.credentialFilePermissionWarnings([foreign]);
+        const warnings = credentialFilePermissionWarnings([foreign]);
         assert.equal(warnings.length, 1);
         assert.match(warnings[0], /mode 644/);
         assert.ok(warnings[0].includes(`chmod 600 ${foreign}`));

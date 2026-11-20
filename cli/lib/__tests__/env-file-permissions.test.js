@@ -67,7 +67,9 @@ describe('.env file permissions', { skip: !posix && 'POSIX permission bits only'
     ['saveCodexBaseUrlToEnv', 'OPENAI_BASE_URL', 'https://openai-relay.example.test/v1'],
   ]) {
     test(`${name} leaves .env owner-only`, async () => {
-      const setup = await import('../runtime-setup.js');
+      const setup = name.startsWith('saveCodex')
+        ? await import('../runtime/codex/auth.js')
+        : await import('../runtime/claude/auth.js');
       const saved = Object.fromEntries(['ANTHROPIC_BASE_URL', 'OPENAI_API_KEY', 'OPENAI_BASE_URL'].map(k => [k, process.env[k]]));
       try {
         fs.writeFileSync(envFile, 'TZ=UTC\n');

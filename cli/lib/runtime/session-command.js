@@ -95,21 +95,6 @@ export function launchEnvironment(root, processEnv = process.env, { runtime } = 
   env.ZYLOS_DIR = root;
   return env;
 }
-/**
- * Claude auth probe environment: the inherited env, with the built-in Claude
- * variables taken exactly as a new Claude session gets them.
- */
-export function claudeProbeEnvironment(root, processEnv) {
-  const env = { ...processEnv };
-  let sessionEnv;
-  try { sessionEnv = launchEnvironment(root, processEnv, { runtime: 'claude' }); }
-  catch { return env; /* unreadable .env: session launch fails too; probe the inherited env */ }
-  for (const key of CLAUDE_BUILTIN_ENV_KEYS) {
-    if (Object.hasOwn(sessionEnv, key)) env[key] = sessionEnv[key];
-    else delete env[key];
-  }
-  return env;
-}
 /** Shell exec works on the minimum Node release too: no resident Node parent. */
 export function writeSessionLaunchScript({command,args,env,root,multi}) {
   const temporaryRoot = fs.realpathSync(os.tmpdir());

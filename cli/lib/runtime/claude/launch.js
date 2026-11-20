@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { ZYLOS_DIR } from '../../config.js';
-import { claudeProbeEnvironment } from '../session-command.js';
+import { claudeProbeEnvironment } from './auth.js';
 import { writePrivateFile } from '../../private-file.js';
 
 const execFileAsync = promisify(execFile);

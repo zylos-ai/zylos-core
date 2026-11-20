@@ -7,10 +7,18 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { ZYLOS_DIR } from '../config.js';
 import {
-  parseInitFlags, resolveFromEnv, resolveInitBaseUrl, validateInitOptions, validateInitInput, printInitHelp,
-  promptClaudeApiCredential, authenticateClaudeApiCredential, authenticateCodexApiCredential, persistInitCredentials,
+  parseInitFlags, resolveFromEnv, validateInitOptions, validateInitInput, printInitHelp,
+  persistInitCredentials,
   runInitAuthentication, continueInitAfterPersistence, consumeInitAuthenticationResult,
 } from '../../commands/init.js';
+import { authenticateClaudeApiCredential, promptClaudeApiCredential, resolveInitBaseUrl as resolveClaudeBaseUrl } from '../runtime/claude/auth.js';
+import { authenticateCodexApiCredential, resolveInitBaseUrl as resolveCodexBaseUrl } from '../runtime/codex/auth.js';
+import { runtimeWithClaudeStatus } from './helpers/runtime-auth.js';
+
+function resolveInitBaseUrl(opts, runtime, location) {
+  const resolve = runtime === 'claude' ? resolveClaudeBaseUrl : resolveCodexBaseUrl;
+  resolve(opts, location);
+}
 
 const isolation = Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(key => [key, process.env[key]]));
 const isolationRoot = path.dirname(isolation.TMPDIR || '');
@@ -51,44 +59,49 @@ test('flags and help expose explicit API-key and Bearer-token choices without pr
 for (const both of [false, true]) test(`existing Claude login ignores ambient credentials${both ? ' even when both kinds are set' : ''}`, async t => {
   isolatedCredentials(t); process.env.ANTHROPIC_AUTH_TOKEN = crypto.randomUUID();
   if (both) process.env.ANTHROPIC_API_KEY = crypto.randomUUID();
-  const opts = parseInitFlags([]); resolveFromEnv(opts);
+  const opts = parseInitFlags([]); await resolveFromEnv(opts);
   assert.equal(opts.authToken, null); assert.equal(opts.apiKey, null); assert.equal(opts.setupToken, null);
   assert.equal(validateInitOptions(opts), null);
   const calls = [];
   const result = await runInitAuthentication(opts, {
-    runtime: 'claude', quiet: true, exists: () => true, claudeStatus: () => true,
-    authClaude: () => { calls.push('verify-api'); return false; },
-    setupSave: () => { calls.push('save-setup'); return false; },
-    resolveBase: () => { calls.push('resolve-base'); },
+    runtime: 'claude',
+    quiet: true,
+    deps: {
+      findExecutable: () => '/fixture/runtime',
+      claudeStatus: () => true,
+      authClaude: () => { calls.push('verify-api'); return false; },
+      setupSave: () => { calls.push('save-setup'); return false; },
+      resolveBase: () => { calls.push('resolve-base'); },
+    },
   });
   assert.deepEqual(calls, []); assert.equal(result.failed, undefined);
-  assert.equal(result.claudeAuthenticated, true); assert.equal(result.pendingAuthToken, null); assert.equal(result.pendingApiKey, null);
+  assert.equal(result.authenticated, true); assert.equal(result.pending.claude?.authToken ?? null, null); assert.equal(result.pending.claude?.apiKey ?? null, null);
 });
 
-test('unauthenticated ambient API inputs remain mutually exclusive and explicit flags select their own kind', t => {
+test('unauthenticated ambient API inputs remain mutually exclusive and explicit flags select their own kind', async t => {
   isolatedCredentials(t); process.env.ANTHROPIC_API_KEY = crypto.randomUUID(); process.env.ANTHROPIC_AUTH_TOKEN = crypto.randomUUID();
-  const opts = parseInitFlags([]); resolveFromEnv(opts, { authenticated: () => false });
+  const opts = parseInitFlags([]); await resolveFromEnv(opts, { findRuntime: runtimeWithClaudeStatus(() => false) });
   assert.match(validateInitOptions(opts), /mutually exclusive/); assert.equal(opts.authFromEnv, true);
   for (const kind of ['api-key', 'auth-token', 'setup-token']) {
     const value = kind === 'setup-token' ? 'sk-ant-oat-' + crypto.randomUUID() : crypto.randomUUID();
     const explicit = parseInitFlags(['--' + kind, value, '--base-url', 'https://relay.example']);
     let loginLookups = 0;
-    resolveFromEnv(explicit, { authenticated: () => { loginLookups += 1; return true; } });
+    await resolveFromEnv(explicit, { findRuntime: runtimeWithClaudeStatus(() => { loginLookups += 1; return true; }) });
     assert.equal(loginLookups, 0);
     assert.equal(validateInitOptions(explicit), null); assert.equal(explicit.authFromEnv, false);
     assert.equal([explicit.apiKey, explicit.authToken, explicit.setupToken].filter(Boolean).length, 1);
   }
   process.env.CLAUDE_CODE_OAUTH_TOKEN = 'sk-ant-oat-placeholder';
-  const setup = parseInitFlags([]); resolveFromEnv(setup, { authenticated: () => false }); assert.equal(setup.apiKey, null); assert.equal(setup.authToken, null);
+  const setup = parseInitFlags([]); await resolveFromEnv(setup, { findRuntime: runtimeWithClaudeStatus(() => false) }); assert.equal(setup.apiKey, null); assert.equal(setup.authToken, null);
   for (const args of [['--api-key', 'placeholder', '--auth-token', 'placeholder'], ['--setup-token', 'sk-ant-oat-placeholder', '--auth-token', 'placeholder']]) {
     assert.match(validateInitOptions(parseInitFlags(args)), /mutually exclusive/);
   }
 });
 
-test('explicit Bearer input suppresses ambient API key input symmetrically', t => {
+test('explicit Bearer input suppresses ambient API key input symmetrically', async t => {
   isolatedCredentials(t); process.env.ANTHROPIC_API_KEY = crypto.randomUUID();
   const credential = crypto.randomUUID(); const opts = parseInitFlags(['--auth-token', credential, '--base-url', 'https://relay.example']);
-  resolveFromEnv(opts, { authenticated: () => false });
+  await resolveFromEnv(opts, { findRuntime: runtimeWithClaudeStatus(() => false) });
   assert.equal(opts.authToken === credential, true); assert.equal(opts.apiKey, null); assert.equal(opts.authFromEnv, false);
   assert.equal(validateInitOptions(opts), null);
 });
@@ -110,6 +123,7 @@ test('only relay API-key formats bypass the official prefix gate and invalid URL
 test('custom-address interactive prompt explicitly selects Bearer without probing the other header', async () => {
   const credential = crypto.randomUUID(); const questions = [], output = [];
   const result = await promptClaudeApiCredential({ baseUrl: 'https://relay.example' }, {
+    validate: validateInitOptions,
     choose: async (question, choices) => { questions.push({ question, choices }); return 2; },
     secret: async () => credential, log: value => output.push(value),
   });
@@ -117,7 +131,7 @@ test('custom-address interactive prompt explicitly selects Bearer without probin
   assert.equal(questions.length, 1); assert.match(questions[0].choices.join(' '), /x-api-key/); assert.match(questions[0].choices.join(' '), /Authorization: Bearer/);
   assert.equal(output.join('').includes(credential), false);
   let officialChoices = 0;
-  const official = await promptClaudeApiCredential({}, { choose: () => { officialChoices += 1; return 1; }, secret: async () => 'sk-ant-placeholder', log: () => {} });
+  const official = await promptClaudeApiCredential({}, { validate: validateInitOptions, choose: () => { officialChoices += 1; return 1; }, secret: async () => 'sk-ant-placeholder', log: () => {} });
   assert.equal(typeof official.apiKey, 'string'); assert.equal(officialChoices, 0);
 });
 
@@ -195,17 +209,23 @@ for (const runtime of ['claude', 'codex']) for (const source of ['deployment env
     fs.writeFileSync(native, runtime === 'claude' ? JSON.stringify({ env: { ANTHROPIC_BASE_URL: base } }) : `openai_base_url = "${base}"\n`);
   }
   const args = runtime === 'claude' ? ['--auth-token', credential] : ['--codex-api-key', credential];
-  const opts = parseInitFlags(args); resolveFromEnv(opts);
+  const opts = parseInitFlags(args); await resolveFromEnv(opts);
   assert.equal(opts.baseUrl, null); assert.equal(opts.codexBaseUrl, null);
   const nativeBefore = source === 'native configuration' && runtime === 'claude' ? fs.readFileSync(path.join(home, '.claude/settings.json'), 'utf8') : null;
-  const result = await runInitAuthentication(opts, { runtime, quiet: true, skipConfirm: true, exists: () => true,
-    resolveBase: (options, selected) => resolveInitBaseUrl(options, selected, { home, zylosDir }),
-    authClaude: (options, hooks) => { assert.equal(options.baseUrl, base); guardedCalls.push('claude'); return authenticateClaudeApiCredential(options, hooks); },
-    authCodex: (value, hooks) => { assert.equal(hooks.baseUrl, base); guardedCalls.push('codex'); return authenticateCodexApiCredential(value, hooks); },
-    writeCodex: () => true,
+  const result = await runInitAuthentication(opts, {
+    runtime,
+    quiet: true,
+    skipConfirm: true,
+    deps: {
+      findExecutable: () => '/fixture/runtime',
+      resolveBase: options => resolveInitBaseUrl(options, runtime, { home, zylosDir }),
+      authClaude: (options, hooks) => { assert.equal(options.baseUrl, base); guardedCalls.push('claude'); return authenticateClaudeApiCredential(options, hooks); },
+      authCodex: (value, hooks) => { assert.equal(hooks.baseUrl, base); guardedCalls.push('codex'); return authenticateCodexApiCredential(value, hooks); },
+      writeCodex: () => true,
+    },
   });
-  assert.equal(result.failed, undefined); assert.equal(result[runtime === 'claude' ? 'claudeAuthenticated' : 'codexAuthenticated'], true);
-  assert.equal(result[runtime === 'claude' ? 'pendingClaudeBaseUrl' : 'pendingCodexBaseUrl'], base);
+  assert.equal(result.failed, undefined); assert.equal(result.authenticated, true);
+  assert.equal(result.pending[runtime]?.baseUrl, base);
   assert.deepEqual(guardedCalls, [runtime]); assert.deepEqual(requests, [runtime === 'claude' ? '/saved/v1/messages' : '/saved/v1/models']);
   if (runtime === 'claude') {
     // The credential is selected for this run and saved to .env later; settings.json is only read.
@@ -218,18 +238,18 @@ for (const runtime of ['claude', 'codex']) for (const source of ['deployment env
   }
 });
 
-for (const runtime of ['claude', 'codex']) test(`${runtime} endpoint resolution prefers explicit input then environment then deployment configuration`, t => {
+for (const runtime of ['claude', 'codex']) test(`${runtime} endpoint resolution prefers explicit input then environment then deployment configuration`, async t => {
   const home = isolatedCredentials(t), zylosDir = path.join(home, 'zylos'); fs.mkdirSync(zylosDir);
   const envKey = runtime === 'claude' ? 'ANTHROPIC_BASE_URL' : 'OPENAI_BASE_URL';
   const args = runtime === 'claude' ? ['--auth-token', crypto.randomUUID()] : ['--codex-api-key', crypto.randomUUID()];
   fs.writeFileSync(path.join(zylosDir, '.env'), `${envKey}=https://deployment.example\nANTHROPIC_AUTH_TOKEN=unused\n`);
-  const deployment = parseInitFlags(args); resolveFromEnv(deployment); resolveInitBaseUrl(deployment, runtime, { home, zylosDir });
+  const deployment = parseInitFlags(args); await resolveFromEnv(deployment); resolveInitBaseUrl(deployment, runtime, { home, zylosDir });
   assert.equal(runtime === 'claude' ? deployment.baseUrl : deployment.codexBaseUrl, 'https://deployment.example');
   process.env[envKey] = 'https://environment.example';
-  const environment = parseInitFlags(args); resolveFromEnv(environment); resolveInitBaseUrl(environment, runtime, { home, zylosDir });
+  const environment = parseInitFlags(args); await resolveFromEnv(environment); resolveInitBaseUrl(environment, runtime, { home, zylosDir });
   assert.equal(runtime === 'claude' ? environment.baseUrl : environment.codexBaseUrl, 'https://environment.example');
   const explicit = parseInitFlags([...args, runtime === 'claude' ? '--base-url' : '--codex-base-url', 'https://explicit.example']);
-  resolveFromEnv(explicit); resolveInitBaseUrl(explicit, runtime, { home, zylosDir });
+  await resolveFromEnv(explicit); resolveInitBaseUrl(explicit, runtime, { home, zylosDir });
   assert.equal(runtime === 'claude' ? explicit.baseUrl : explicit.codexBaseUrl, 'https://explicit.example');
 });
 
@@ -237,18 +257,25 @@ for (const runtime of ['claude', 'codex']) test(`malformed saved ${runtime} endp
   const home = isolatedCredentials(t), zylosDir = path.join(home, 'zylos'); fs.mkdirSync(zylosDir);
   const native = path.join(home, runtime === 'claude' ? '.claude/settings.json' : '.codex/config.toml'); fs.mkdirSync(path.dirname(native));
   const credential = crypto.randomUUID(); fs.writeFileSync(native, runtime === 'claude' ? '{"secret":"' + credential : 'broken = [');
-  const resolveBase = (opts, chosen) => resolveInitBaseUrl(opts, chosen, { home, zylosDir });
-  const ordinary = parseInitFlags([]); resolveFromEnv(ordinary, { authenticated: () => true });
-  const hooks = { runtime, skipConfirm: true, quiet: true, exists: () => true, claudeStatus: () => true, codexStatus: () => true,
-    resolveBase, writeCodex: () => true };
+  const resolveBase = (opts, chosen) => resolveInitBaseUrl(opts, runtime, { home, zylosDir });
+  const ordinary = parseInitFlags([]); await resolveFromEnv(ordinary, { findRuntime: runtimeWithClaudeStatus(() => true) });
+  const hooks = { runtime, skipConfirm: true, quiet: true,
+    deps: { resolveBase: opts => resolveBase(opts, runtime), writeCodex: () => true,
+      findExecutable: () => '/fixture/runtime', claudeStatus: () => true, codexStatus: () => true } };
   const normal = await runInitAuthentication(ordinary, hooks);
   assert.equal(normal.failed, undefined); assert.equal(normal.exitCode, 0);
   const output = [], args = runtime === 'claude' ? ['--auth-token', credential] : ['--codex-api-key', credential];
-  const api = parseInitFlags(args); resolveFromEnv(api, { authenticated: () => true });
+  const api = parseInitFlags(args); await resolveFromEnv(api, { findRuntime: runtimeWithClaudeStatus(() => true) });
   const authCalls = [];
-  const failed = await runInitAuthentication(api, { ...hooks, reportError: message => output.push(message),
-    authClaude: () => { authCalls.push('claude'); return false; },
-    authCodex: () => { authCalls.push('codex'); return false; } });
+  const failed = await runInitAuthentication(api, {
+    ...hooks,
+    reportError: message => output.push(message),
+    deps: {
+      ...hooks.deps,
+      authClaude: () => { authCalls.push('claude'); return false; },
+      authCodex: () => { authCalls.push('codex'); return false; },
+    },
+  });
   assert.deepEqual(authCalls, []); assert.equal(failed.failed, true); assert.equal(failed.exitCode, 1); assert.equal(output.length, 1);
   assert.match(output[0], /Could not read saved API endpoint/); assert.equal(output[0].includes(credential), false); assert.doesNotMatch(output[0], /\n\s+at /);
   const explicit = parseInitFlags([...args, runtime === 'claude' ? '--base-url' : '--codex-base-url', 'https://explicit.example']);
@@ -264,19 +291,26 @@ for (const runtime of ['claude', 'codex']) test(`interactive ${runtime} API choi
   fs.mkdirSync(path.dirname(native));
   fs.writeFileSync(native, runtime === 'claude' ? '{"secret":"' + credential : 'broken = [');
   const result = await runInitAuthentication(parseInitFlags([]), {
-    runtime, quiet: true, exists: () => true, claudeStatus: () => false, codexStatus: () => false,
+    runtime,
+    quiet: true,
     choose: async () => { calls.push('choose'); return runtime === 'claude' ? 2 : 1; },
-    resolveBase: (opts, chosen) => resolveInitBaseUrl(opts, chosen, { home, zylosDir }),
-    promptClaude: async () => { calls.push('prompt-credential'); return { authToken: credential }; },
     secret: async () => { calls.push('prompt-credential'); return credential; },
-    authClaude: async () => { calls.push('verify-claude'); return false; },
-    authCodex: async () => { calls.push('verify-codex'); return false; },
-    writeCodex: () => { calls.push('write-config'); return true; },
-    log: message => output.push(message), reportError: message => output.push(message),
+    log: message => output.push(message),
+    reportError: message => output.push(message),
+    deps: {
+      findExecutable: () => '/fixture/runtime',
+      claudeStatus: () => false,
+      codexStatus: () => false,
+      resolveBase: opts => resolveInitBaseUrl(opts, runtime, { home, zylosDir }),
+      promptClaude: async () => { calls.push('prompt-credential'); return { authToken: credential }; },
+      authClaude: async () => { calls.push('verify-claude'); return false; },
+      authCodex: async () => { calls.push('verify-codex'); return false; },
+      writeCodex: () => { calls.push('write-config'); return true; },
+    },
   });
   assert.equal(result.failed, true); assert.equal(result.exitCode, 1);
   assert.deepEqual(calls, ['choose']);
-  assert.equal(result.pendingClaudeBaseUrl, null); assert.equal(result.pendingCodexBaseUrl, null);
+  assert.deepEqual(result.pending, {});
   assert.match(output.join(''), /Could not read saved API endpoint/);
   assert.equal(output.join('').includes(credential), false); assert.doesNotMatch(output.join(''), /\n\s+at /);
 });
@@ -284,55 +318,48 @@ for (const runtime of ['claude', 'codex']) test(`interactive ${runtime} API choi
 test('unexpected endpoint resolution errors propagate without invoking authentication', async t => {
   isolatedCredentials(t); const expected = new Error('controlled endpoint lookup failure'), calls = [];
   await assert.rejects(runInitAuthentication(parseInitFlags(['--auth-token', crypto.randomUUID()]), {
-    runtime: 'claude', quiet: true, exists: () => true,
-    resolveBase: () => { throw expected; },
-    authClaude: async () => { calls.push('verify'); return false; },
+    runtime: 'claude',
+    quiet: true,
+    deps: {
+      findExecutable: () => '/fixture/runtime',
+      resolveBase: () => { throw expected; },
+      authClaude: async () => { calls.push('verify'); return false; },
+    },
   }), error => error === expected);
   assert.deepEqual(calls, []);
 });
 
-for (const key of ['apiKey', 'authToken', 'setupToken']) test(`post-template ${key} persistence failure stops before any base writer`, () => {
+for (const key of ['apiKey', 'authToken', 'setupToken']) test(`post-template ${key} persistence failure stops before any base writer`, async () => {
   const calls = [], output = [], credential = crypto.randomUUID();
   const fail = () => { calls.push('credential'); return false; };
-  assert.equal(persistInitCredentials({ [key]: credential, claudeBaseUrl: 'https://relay.example', codexBaseUrl: 'https://codex.example/v1' }, {
-    saveKeyEnv: fail, saveTokenEnv: fail, saveSetupEnv: fail,
-    saveClaudeBase: () => { calls.push('base'); return true; }, saveCodexBase: () => { calls.push('base'); return true; },
-    saveCodexConfig: () => { calls.push('config'); return true; }, reportError: message => output.push(message),
-  }), false);
+  assert.equal(await persistInitCredentials({ claude: { [key]: credential, baseUrl: 'https://relay.example' }, codex: { baseUrl: 'https://codex.example/v1' } }, { reportError: message => output.push(message), deps: { saveKeyEnv: fail, saveTokenEnv: fail, saveSetupEnv: fail, saveClaudeBase: () => { calls.push('base'); return true; }, saveCodexBase: () => { calls.push('base'); return true; }, saveCodexConfig: () => { calls.push('config'); return true; } } }), false);
   assert.deepEqual(calls, ['credential']); assert.match(output.join(''), /Initialization stopped before starting services/);
   assert.equal(output.join('').includes(credential), false);
 });
 
-test('post-template native environment EISDIR failure is reported without writing the new endpoint', t => {
+test('post-template native environment EISDIR failure is reported without writing the new endpoint', async t => {
   isolatedCredentials(t); const envFile = path.join(ZYLOS_DIR, '.env');
   const existed = fs.existsSync(envFile), previous = existed ? fs.readFileSync(envFile) : null;
   if (existed) fs.unlinkSync(envFile);
   fs.mkdirSync(envFile);
   t.after(() => { fs.rmdirSync(envFile); if (previous) fs.writeFileSync(envFile, previous); });
   let baseWrites = 0; const output = [];
-  assert.equal(persistInitCredentials({ authToken: crypto.randomUUID(), claudeBaseUrl: 'https://new.example' }, {
-    saveClaudeBase: () => { baseWrites += 1; return true; }, reportError: message => output.push(message),
-  }), false);
+  assert.equal(await persistInitCredentials({ claude: { authToken: crypto.randomUUID(), baseUrl: 'https://new.example' } }, { reportError: message => output.push(message), deps: { saveClaudeBase: () => { baseWrites += 1; return true; } } }), false);
   assert.equal(baseWrites, 0); assert.match(output.join(''), /Failed to persist runtime credentials/);
 });
 
-test('post-template endpoint and Codex-config writer failures propagate and success writes each pending value once', () => {
+test('post-template endpoint and Codex-config writer failures propagate and success writes each pending value once', async () => {
   const output = [], calls = [];
-  assert.equal(persistInitCredentials({ claudeBaseUrl: 'https://relay.example' }, { saveClaudeBase: () => false, reportError: message => output.push(message) }), false);
-  assert.equal(persistInitCredentials({ codexBaseUrl: 'https://relay.example/v1' }, {
-    saveCodexBase: () => true, saveCodexConfig: () => false, reportError: message => output.push(message),
-  }), false);
-  assert.equal(persistInitCredentials({ authToken: crypto.randomUUID(), claudeBaseUrl: 'https://relay.example', codexBaseUrl: 'https://codex.example/v1' }, {
-    saveTokenEnv: () => { calls.push('token'); return true; }, saveClaudeBase: () => { calls.push('claudeBase'); return true; },
-    saveCodexBase: () => { calls.push('codexBase'); return true; }, saveCodexConfig: () => { calls.push('codexConfig'); return true; },
-  }), true);
+  assert.equal(await persistInitCredentials({ claude: { baseUrl: 'https://relay.example' } }, { reportError: message => output.push(message), deps: { saveClaudeBase: () => false } }), false);
+  assert.equal(await persistInitCredentials({ codex: { baseUrl: 'https://relay.example/v1' } }, { reportError: message => output.push(message), deps: { saveCodexBase: () => true, saveCodexConfig: () => false } }), false);
+  assert.equal(await persistInitCredentials({ claude: { authToken: crypto.randomUUID(), baseUrl: 'https://relay.example' }, codex: { baseUrl: 'https://codex.example/v1' } }, { deps: { saveTokenEnv: () => { calls.push('token'); return true; }, saveClaudeBase: () => { calls.push('claudeBase'); return true; }, saveCodexBase: () => { calls.push('codexBase'); return true; }, saveCodexConfig: () => { calls.push('codexConfig'); return true; } } }), true);
   assert.deepEqual(calls, ['token', 'claudeBase', 'codexBase', 'codexConfig']); assert.equal(output.length, 2);
 });
 
-test('saved endpoint assignments accept horizontal whitespace recognized by environment readers', t => {
+test('saved endpoint assignments accept horizontal whitespace recognized by environment readers', async t => {
   const home = isolatedCredentials(t), zylosDir = path.join(home, 'zylos'); fs.mkdirSync(zylosDir);
   fs.writeFileSync(path.join(zylosDir, '.env'), '\u00a0ANTHROPIC_BASE_URL\u00a0=\u00a0https://saved.example\n');
-  const opts = parseInitFlags(['--auth-token', crypto.randomUUID()]); resolveFromEnv(opts); resolveInitBaseUrl(opts, 'claude', { home, zylosDir });
+  const opts = parseInitFlags(['--auth-token', crypto.randomUUID()]); await resolveFromEnv(opts); resolveInitBaseUrl(opts, 'claude', { home, zylosDir });
   assert.equal(opts.baseUrl, 'https://saved.example');
 });
 
@@ -350,12 +377,26 @@ for (const runtime of ['claude', 'codex']) for (const accepted of [true, false])
     return accepted;
   };
   const activate = value => { calls.push('activate'); assert.equal(value, base); process.env[envKey] = value; return true; };
-  const result = await runInitAuthentication(opts, { runtime, skipConfirm: true, quiet: true, exists: () => true,
-    claudeStatus: () => true, codexStatus: () => true, authClaude: auth, authCodex: auth,
-    saveClaudeBase: activate, saveCodexBase: activate, writeCodex: () => true, log: message => output.push(message), reportError: message => output.push(message) });
-  assert.equal(result[runtime === 'claude' ? 'claudeAuthenticated' : 'codexAuthenticated'], accepted);
-  assert.equal(result[runtime === 'claude' ? 'pendingClaudeBaseUrl' : 'pendingCodexBaseUrl'], accepted ? base : null);
-  assert.equal(result.pendingAuthToken === credential, runtime === 'claude' && accepted);
+  const result = await runInitAuthentication(opts, {
+    runtime,
+    skipConfirm: true,
+    quiet: true,
+    log: message => output.push(message),
+    reportError: message => output.push(message),
+    deps: {
+      findExecutable: () => '/fixture/runtime',
+      claudeStatus: () => true,
+      codexStatus: () => true,
+      authClaude: auth,
+      authCodex: auth,
+      saveClaudeBase: activate,
+      saveCodexBase: activate,
+      writeCodex: () => true,
+    },
+  });
+  assert.equal(result.authenticated, accepted);
+  assert.equal(result.pending[runtime]?.baseUrl, accepted ? base : null);
+  assert.equal(result.pending.claude?.authToken === credential, runtime === 'claude' && accepted);
   assert.deepEqual(calls, accepted ? ['verify', 'activate'] : ['verify']); assert.equal(result.exitCode, accepted ? 0 : 1);
   assert.equal(process.env[envKey], accepted ? base : 'https://previous.example'); assert.equal(output.join('').includes(credential), false);
 });
@@ -377,21 +418,31 @@ for (const runtime of ['claude', 'codex']) for (const accepted of [true, false])
   fs.writeFileSync(path.join(home, '.codex/config.toml'), runtime === 'codex' ? `openai_base_url = "${base}"\n` : 'broken = [');
   const opts = parseInitFlags([]); // Runtime was selected interactively after flag parsing.
   const activate = value => { activations.push(value); process.env[envKey] = value; return true; };
-  const result = await runInitAuthentication(opts, { runtime, quiet: true, exists: () => true,
-    claudeStatus: () => false, codexStatus: () => false,
+  const result = await runInitAuthentication(opts, {
+    runtime,
+    quiet: true,
     choose: async () => { events.push('choose'); return runtime === 'claude' ? 2 : 1; },
-    resolveBase: (options, selected) => { events.push('resolve'); assert.equal(selected, runtime); resolveInitBaseUrl(options, selected, { home, zylosDir }); },
-    promptClaude: async ({ baseUrl }) => { assert.equal(baseUrl, base); return { authToken: credential }; }, secret: async () => credential,
-    authClaude: (options, hooks) => { assert.equal(options.baseUrl, base); guardedCalls.push('claude'); return authenticateClaudeApiCredential(options, hooks); },
-    authCodex: (value, hooks) => { assert.equal(hooks.baseUrl, base); guardedCalls.push('codex'); return authenticateCodexApiCredential(value, hooks); },
-    saveClaudeBase: activate, saveCodexBase: activate,
-    writeCodex: () => true, log: message => output.push(message), reportError: message => output.push(message),
+    secret: async () => credential,
+    log: message => output.push(message),
+    reportError: message => output.push(message),
+    deps: {
+      findExecutable: () => '/fixture/runtime',
+      claudeStatus: () => false,
+      codexStatus: () => false,
+      resolveBase: options => { events.push('resolve'); resolveInitBaseUrl(options, runtime, { home, zylosDir }); },
+      promptClaude: async ({ baseUrl }) => { assert.equal(baseUrl, base); return { authToken: credential }; },
+      authClaude: (options, hooks) => { assert.equal(options.baseUrl, base); guardedCalls.push('claude'); return authenticateClaudeApiCredential(options, hooks); },
+      authCodex: (value, hooks) => { assert.equal(hooks.baseUrl, base); guardedCalls.push('codex'); return authenticateCodexApiCredential(value, hooks); },
+      saveClaudeBase: activate,
+      saveCodexBase: activate,
+      writeCodex: () => true,
+    },
   });
   assert.equal(requests, 1); assert.deepEqual(events, ['choose', 'resolve']); assert.deepEqual(guardedCalls, [runtime]);
-  assert.equal(result.failed, undefined); assert.equal(result[runtime === 'claude' ? 'claudeAuthenticated' : 'codexAuthenticated'], accepted);
-  assert.equal(result[runtime === 'claude' ? 'pendingClaudeBaseUrl' : 'pendingCodexBaseUrl'], accepted ? base : null);
-  assert.equal(result.pendingApiKey, null);
-  if (runtime === 'claude') assert.equal(result.pendingAuthToken === credential, accepted);
+  assert.equal(result.failed, undefined); assert.equal(result.authenticated, accepted);
+  assert.equal(result.pending[runtime]?.baseUrl, accepted ? base : null);
+  assert.equal(result.pending.claude?.apiKey ?? null, null);
+  if (runtime === 'claude') assert.equal(result.pending.claude?.authToken === credential, accepted);
   assert.deepEqual(activations, accepted ? [base] : []);
   assert.equal(process.env[envKey], accepted ? base : 'https://previous.example'); assert.equal(output.join('').includes(credential), false);
 });
@@ -400,10 +451,19 @@ for (const kind of ['apiKey', 'authToken']) test(`explicit ${kind} replaces an e
   isolatedCredentials(t); const credential = crypto.randomUUID(), calls = [];
   const flag = { apiKey: '--api-key', authToken: '--auth-token' }[kind];
   const opts = parseInitFlags([flag, credential, '--base-url', 'https://relay.example']);
-  const result = await runInitAuthentication(opts, { runtime: 'claude', skipConfirm: true, quiet: true, exists: () => true,
-    claudeStatus: () => true, authClaude: async value => { calls.push('api'); assert.equal(value[kind] === credential, true); return true; },
-    setupSave: () => { calls.push('setup'); return false; }, saveClaudeBase: () => true });
-  assert.equal(result.claudeAuthenticated, true); assert.equal(result[{ apiKey: 'pendingApiKey', authToken: 'pendingAuthToken' }[kind]] === credential, true);
+  const result = await runInitAuthentication(opts, {
+    runtime: 'claude',
+    skipConfirm: true,
+    quiet: true,
+    deps: {
+      findExecutable: () => '/fixture/runtime',
+      claudeStatus: () => true,
+      authClaude: async value => { calls.push('api'); assert.equal(value[kind] === credential, true); return true; },
+      setupSave: () => { calls.push('setup'); return false; },
+      saveClaudeBase: () => true,
+    },
+  });
+  assert.equal(result.authenticated, true); assert.equal(result.pending.claude?.[kind] === credential, true);
   assert.deepEqual(calls, ['api']);
 });
 
@@ -411,21 +471,36 @@ test('explicit setup token preserves an existing Claude login without saving or 
   const home = isolatedCredentials(t), credential = 'sk-ant-oat-' + crypto.randomUUID(), calls = [];
   const file = path.join(home, '.claude/settings.json'); fs.mkdirSync(path.dirname(file));
   const previous = JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: crypto.randomUUID() } }); fs.writeFileSync(file, previous);
-  const result = await runInitAuthentication(parseInitFlags(['--setup-token', credential]), { runtime: 'claude', skipConfirm: true, quiet: true, exists: () => true,
-    claudeStatus: () => true,
-    setupSave: () => { calls.push('save'); return true; }, setupVerify: () => { calls.push('verify'); return { valid: false, authError: true }; },
-    setupRollback: () => { calls.push('rollback'); },
+  const result = await runInitAuthentication(parseInitFlags(['--setup-token', credential]), {
+    runtime: 'claude',
+    skipConfirm: true,
+    quiet: true,
+    deps: {
+      findExecutable: () => '/fixture/runtime',
+      claudeStatus: () => true,
+      setupSave: () => { calls.push('save'); return true; },
+      setupVerify: () => { calls.push('verify'); return { valid: false, authError: true }; },
+      setupRollback: () => { calls.push('rollback'); },
+    },
   });
-  assert.equal(result.failed, undefined); assert.equal(result.claudeAuthenticated, true); assert.equal(result.pendingSetupToken, null);
+  assert.equal(result.failed, undefined); assert.equal(result.authenticated, true); assert.equal(result.pending.claude?.setupToken, null);
   assert.deepEqual(calls, []); assert.equal(fs.readFileSync(file, 'utf8') === previous, true);
 });
 
 test('Claude selection retains an explicit Codex base-only change even with an ambient OpenAI key', async t => {
   isolatedCredentials(t); process.env.OPENAI_API_KEY = crypto.randomUUID();
-  const calls = [], base = 'https://codex.example/v1', opts = parseInitFlags(['--codex-base-url', base]); resolveFromEnv(opts, { authenticated: () => true });
-  const result = await runInitAuthentication(opts, { runtime: 'claude', quiet: true, exists: () => true, claudeStatus: () => true,
-    authCodex: () => { calls.push('verify'); return false; }, saveCodexBase: value => { calls.push('save'); assert.equal(value, base); return true; } });
-  assert.equal(result.pendingCodexBaseUrl, base); assert.deepEqual(calls, ['save']);
+  const calls = [], base = 'https://codex.example/v1', opts = parseInitFlags(['--codex-base-url', base]); await resolveFromEnv(opts, { findRuntime: runtimeWithClaudeStatus(() => true) });
+  const result = await runInitAuthentication(opts, {
+    runtime: 'claude',
+    quiet: true,
+    deps: {
+      findExecutable: () => '/fixture/runtime',
+      claudeStatus: () => true,
+      authCodex: () => { calls.push('verify'); return false; },
+      saveCodexBase: value => { calls.push('save'); assert.equal(value, base); return true; },
+    },
+  });
+  assert.equal(result.pending.codex?.baseUrl, base); assert.deepEqual(calls, ['save']);
 });
 
 for (const accepted of [false, true]) test(`post-template continuation ${accepted ? 'starts only after successful persistence' : 'stops service startup on persistence failure'}`, async () => {
@@ -439,25 +514,44 @@ for (const accepted of [false, true]) test(`post-template continuation ${accepte
 
 test('interactive setup token rejects invisible characters before saving or verification', async t => {
   isolatedCredentials(t); const credential = 'sk-ant-oat-' + crypto.randomUUID() + '\u200b', output = [], calls = [];
-  const result = await runInitAuthentication(parseInitFlags([]), { runtime: 'claude', quiet: true, exists: () => true, claudeStatus: () => false,
-    choose: async () => 3, secret: async () => credential,
-    setupSave: () => { calls.push('save'); return false; }, setupVerify: () => { calls.push('verify'); return { valid: false }; },
-    log: message => output.push(message), reportError: message => output.push(message),
+  const result = await runInitAuthentication(parseInitFlags([]), {
+    runtime: 'claude',
+    quiet: true,
+    choose: async () => 3,
+    secret: async () => credential,
+    log: message => output.push(message),
+    reportError: message => output.push(message),
+    deps: {
+      findExecutable: () => '/fixture/runtime',
+      claudeStatus: () => false,
+      setupSave: () => { calls.push('save'); return false; },
+      setupVerify: () => { calls.push('verify'); return { valid: false }; },
+    },
   });
-  assert.equal(result.claudeAuthenticated, false); assert.equal(result.pendingSetupToken, null); assert.deepEqual(calls, []);
+  assert.equal(result.authenticated, false); assert.equal(result.pending.claude?.setupToken, null); assert.deepEqual(calls, []);
   assert.match(output.join(''), /printable ASCII/); assert.equal(output.join('').includes(credential), false);
 });
 
 for (const runtime of ['claude', 'codex']) for (const available of [true, false]) test(`base-only ${runtime} change enters pending persistence with ${available ? 'an available' : 'an unavailable'} CLI without API verification`, async t => {
   isolatedCredentials(t); const base = 'https://selected.example/v1', calls = [];
   const opts = parseInitFlags([runtime === 'claude' ? '--base-url' : '--codex-base-url', base]);
-  const result = await runInitAuthentication(opts, { runtime, quiet: true, skipConfirm: true, exists: () => available,
-    claudeStatus: () => true, codexStatus: () => true,
-    resolveBase: () => { calls.push('resolve'); }, authClaude: () => { calls.push('claude-verify'); return false; }, authCodex: () => { calls.push('codex-verify'); return false; },
-    saveClaudeBase: value => { calls.push('save'); assert.equal(value, base); return true; }, saveCodexBase: value => { calls.push('save'); assert.equal(value, base); return true; },
-    writeCodex: () => true,
+  const result = await runInitAuthentication(opts, {
+    runtime,
+    quiet: true,
+    skipConfirm: true,
+    deps: {
+      findExecutable: () => available ? "/fixture/runtime" : null,
+      claudeStatus: () => true,
+      codexStatus: () => true,
+      resolveBase: () => { calls.push('resolve'); },
+      authClaude: () => { calls.push('claude-verify'); return false; },
+      authCodex: () => { calls.push('codex-verify'); return false; },
+      saveClaudeBase: value => { calls.push('save'); assert.equal(value, base); return true; },
+      saveCodexBase: value => { calls.push('save'); assert.equal(value, base); return true; },
+      writeCodex: () => true,
+    },
   });
-  assert.equal(result.failed, undefined); assert.equal(result[runtime === 'claude' ? 'pendingClaudeBaseUrl' : 'pendingCodexBaseUrl'], base);
+  assert.equal(result.failed, undefined); assert.equal(result.pending[runtime]?.baseUrl, base);
   assert.deepEqual(calls, ['save']);
 });
 
@@ -465,19 +559,34 @@ for (const [runtime, kind, flag] of [['claude', 'API key', '--api-key'], ['claud
   isolatedCredentials(t); const credential = crypto.randomUUID(), calls = [];
   const envKey = runtime === 'claude' ? 'ANTHROPIC_BASE_URL' : 'OPENAI_BASE_URL'; process.env[envKey] = 'https://previous.example';
   const args = [flag, credential, runtime === 'claude' ? '--base-url' : '--codex-base-url', 'https://new.example/v1'];
-  const result = await runInitAuthentication(parseInitFlags(args), { runtime, quiet: true, skipConfirm: true, exists: () => false,
-    authClaude: () => { calls.push('verify'); return false; }, authCodex: () => { calls.push('verify'); return false; },
-    saveClaudeBase: () => { calls.push('activate'); return true; }, saveCodexBase: () => { calls.push('activate'); return true; },
+  const result = await runInitAuthentication(parseInitFlags(args), {
+    runtime,
+    quiet: true,
+    skipConfirm: true,
+    deps: {
+      findExecutable: () => null,
+      authClaude: () => { calls.push('verify'); return false; },
+      authCodex: () => { calls.push('verify'); return false; },
+      saveClaudeBase: () => { calls.push('activate'); return true; },
+      saveCodexBase: () => { calls.push('activate'); return true; },
+    },
   });
-  assert.deepEqual(calls, []); assert.equal(result.pendingClaudeBaseUrl, null); assert.equal(result.pendingCodexBaseUrl, null);
-  assert.equal(result.pendingAuthToken, null); assert.equal(result.pendingApiKey, null); assert.equal(process.env[envKey], 'https://previous.example');
+  assert.deepEqual(calls, []); assert.equal(result.pending.claude?.baseUrl ?? null, null); assert.equal(result.pending.codex?.baseUrl ?? null, null);
+  assert.equal(result.pending.claude?.authToken ?? null, null); assert.equal(result.pending.claude?.apiKey ?? null, null); assert.equal(process.env[envKey], 'https://previous.example');
 });
 
 for (const setupLike of [false, true]) test(`official API key ${setupLike ? 'setup-token mix-up' : 'missing prefix'} reports its original diagnostic without a verification request`, async t => {
   isolatedCredentials(t); const credential = (setupLike ? 'sk-ant-oat-' : '') + crypto.randomUUID(), output = [], calls = [];
   const result = await runInitAuthentication(parseInitFlags(['--api-key', credential, '--base-url', 'https://api.anthropic.com']), {
-    runtime: 'claude', quiet: true, skipConfirm: true, exists: () => true, claudeStatus: () => true,
-    authClaude: () => { calls.push('request'); return false; }, reportError: message => output.push(message),
+    runtime: 'claude',
+    quiet: true,
+    skipConfirm: true,
+    reportError: message => output.push(message),
+    deps: {
+      findExecutable: () => '/fixture/runtime',
+      claudeStatus: () => true,
+      authClaude: () => { calls.push('request'); return false; },
+    },
   });
   assert.equal(result.failed, true); assert.equal(result.exitCode, 1); assert.deepEqual(calls, []);
   assert.match(output.join(''), setupLike ? /That looks like a setup token/ : /Invalid API key.*sk-ant-/s);
@@ -487,7 +596,12 @@ for (const setupLike of [false, true]) test(`official API key ${setupLike ? 'set
 test('unexpected authentication dependency errors propagate instead of becoming a configuration failure', async t => {
   isolatedCredentials(t); const expected = new Error('controlled authentication failure');
   await assert.rejects(runInitAuthentication(parseInitFlags(['--auth-token', crypto.randomUUID(), '--base-url', 'https://relay.example']), {
-    runtime: 'claude', quiet: true, exists: () => true, authClaude: () => { throw expected; },
+    runtime: 'claude',
+    quiet: true,
+    deps: {
+      findExecutable: () => '/fixture/runtime',
+      authClaude: () => { throw expected; },
+    },
   }), error => error === expected);
 });
 
@@ -516,10 +630,18 @@ function seedRelayFlag(t, home, baseUrl, extraEnv = '') {
 const ON = { env: true, process: '1', settingsUntouched: true }, OFF = { env: false, process: undefined, settingsUntouched: true };
 async function subscriptionLogin() {
   let statusCalls = 0, logins = 0;
-  const result = await runInitAuthentication(parseInitFlags([]), { runtime: 'claude', quiet: true, exists: () => true,
-    claudeStatus: () => statusCalls++ > 0, choose: async () => 1, nativeLogin: () => { logins += 1; }, log: () => {},
+  const result = await runInitAuthentication(parseInitFlags([]), {
+    runtime: 'claude',
+    quiet: true,
+    choose: async () => 1,
+    nativeLogin: () => { logins += 1; },
+    log: () => {},
+    deps: {
+      findExecutable: () => '/fixture/runtime',
+      claudeStatus: () => statusCalls++ > 0,
+    },
   });
-  assert.equal(logins, 1); assert.equal(result.claudeAuthenticated, true); assert.equal(result.subscriptionLogin, true);
+  assert.equal(logins, 1); assert.equal(result.authenticated, true); assert.equal(result.pending.claude?.subscriptionLogin, true);
   return result;
 }
 
@@ -534,75 +656,79 @@ for (const [where, baseUrl, leftoverKey, expected] of [
   test(`init subscription login ${where} leaves the relay traffic setting ${expected === ON ? 'on' : 'off'}`, async t => {
     const state = seedRelayFlag(t, isolatedCredentials(t), baseUrl, leftoverKey ? `ANTHROPIC_API_KEY=sk-ant-api03-${crypto.randomUUID()}\n` : '');
     const result = await subscriptionLogin();
-    assert.equal(persistInitCredentials({ setupToken: result.pendingSetupToken, subscriptionLogin: result.subscriptionLogin,
-      claudeBaseUrl: result.pendingClaudeBaseUrl }), true);
+    assert.equal(await persistInitCredentials(result.pending), true);
     assert.deepEqual(state(), expected);
   });
 }
 
 for (const [where, baseUrl] of [['without a base URL', undefined], ['on the official API', 'https://api.anthropic.com']]) {
-  test(`zylos init --auth-token ${where} turns the relay traffic setting on`, t => {
+  test(`zylos init --auth-token ${where} turns the relay traffic setting on`, async t => {
     const state = seedRelayFlag(t, isolatedCredentials(t), baseUrl);
     fs.writeFileSync(path.join(ZYLOS_DIR, '.env'), `KEEP=unchanged\n${baseUrl ? `ANTHROPIC_BASE_URL=${baseUrl}\n` : ''}`);
     delete process.env[relayFlag];
-    assert.equal(persistInitCredentials({ authToken: 'bearer-' + crypto.randomUUID() }), true);
+    assert.equal(await persistInitCredentials({ claude: { authToken: 'bearer-' + crypto.randomUUID() } }), true);
     assert.deepEqual(state(), ON);
   });
 }
 
-test('init saving only a base URL recomputes the setting (relay on, then official off)', t => {
+test('init saving only a base URL recomputes the setting (relay on, then official off)', async t => {
   const state = seedRelayFlag(t, isolatedCredentials(t), undefined);
   fs.writeFileSync(path.join(ZYLOS_DIR, '.env'), 'KEEP=unchanged\n');
   delete process.env[relayFlag];
-  assert.equal(persistInitCredentials({ claudeBaseUrl: 'https://relay.example' }), true);
+  assert.equal(await persistInitCredentials({ claude: { baseUrl: 'https://relay.example' } }), true);
   assert.deepEqual(state(), ON, 'zylos init --base-url <relay> on a logged-in machine');
-  assert.equal(persistInitCredentials({ claudeBaseUrl: 'https://api.anthropic.com' }), true);
+  assert.equal(await persistInitCredentials({ claude: { baseUrl: 'https://api.anthropic.com' } }), true);
   assert.deepEqual(state(), OFF);
 });
 
-test('init setup token and API key on the official API: setup token off, API key on, relay in the same run on', t => {
+test('init setup token and API key on the official API: setup token off, API key on, relay in the same run on', async t => {
   const state = seedRelayFlag(t, isolatedCredentials(t), 'https://api.anthropic.com');
-  assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + crypto.randomUUID() }), true);
+  assert.equal(await persistInitCredentials({ claude: { setupToken: 'sk-ant-oat01-' + crypto.randomUUID() } }), true);
   assert.deepEqual(state(), OFF, 'setup token + official');
-  assert.equal(persistInitCredentials({ apiKey: 'sk-ant-api03-' + crypto.randomUUID() }), true);
+  assert.equal(await persistInitCredentials({ claude: { apiKey: 'sk-ant-api03-' + crypto.randomUUID() } }), true);
   assert.deepEqual(state(), ON, 'API key + official');
-  assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + crypto.randomUUID() }), true);
+  assert.equal(await persistInitCredentials({ claude: { setupToken: 'sk-ant-oat01-' + crypto.randomUUID() } }), true);
   assert.deepEqual(state(), OFF, 'back to setup token');
-  assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + crypto.randomUUID(), claudeBaseUrl: 'https://relay.example' }), true);
+  assert.equal(await persistInitCredentials({ claude: { setupToken: 'sk-ant-oat01-' + crypto.randomUUID(), baseUrl: 'https://relay.example' } }), true);
   assert.deepEqual(state(), ON, 'setup token + relay in the same run');
 });
 
-test('init login without a new base URL prints the kept-relay notice; a base URL in the same run suppresses it', t => {
+test('init login without a new base URL prints the kept-relay notice; a base URL in the same run suppresses it', async t => {
   seedRelayFlag(t, isolatedCredentials(t), 'https://relay.example');
   for (const [values, expected] of [
     [{ setupToken: 'sk-ant-oat01-' + crypto.randomUUID() }, true],
     [{ subscriptionLogin: true }, true],
-    [{ setupToken: 'sk-ant-oat01-' + crypto.randomUUID(), claudeBaseUrl: 'https://relay.example' }, false],
+    [{ setupToken: 'sk-ant-oat01-' + crypto.randomUUID(), baseUrl: 'https://relay.example' }, false],
     [{ apiKey: 'sk-ant-api03-' + crypto.randomUUID() }, false],
   ]) {
     const lines = [];
-    assert.equal(persistInitCredentials(values, { log: line => lines.push(line) }), true);
+    assert.equal(await persistInitCredentials({ claude: values }, { log: line => lines.push(line) }), true);
     const notice = lines.find(line => line.includes('Still using the relay https://relay.example'));
     assert.equal(!!notice, expected, JSON.stringify(Object.keys(values)));
     if (expected) assert.match(notice, /zylos runtime claude --save-base-url https:\/\/api\.anthropic\.com/);
   }
   const official = [];
-  assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + crypto.randomUUID(), claudeBaseUrl: 'https://api.anthropic.com' }), true);
-  assert.equal(persistInitCredentials({ subscriptionLogin: true }, { log: line => official.push(line) }), true);
+  assert.equal(await persistInitCredentials({ claude: { setupToken: 'sk-ant-oat01-' + crypto.randomUUID(), baseUrl: 'https://api.anthropic.com' } }), true);
+  assert.equal(await persistInitCredentials({ claude: { subscriptionLogin: true } }, { log: line => official.push(line) }), true);
   assert.equal(official.some(line => line.includes('Still using the relay')), false, 'no kept-relay notice on the official API');
 });
 
-test('init relay-traffic recompute failure stops initialization', () => {
+test('init relay-traffic recompute failure stops initialization', async () => {
   const output = [];
-  assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + crypto.randomUUID() }, {
-    saveSetupEnv: () => true, syncRelayTraffic: () => false, reportError: message => output.push(message) }), false);
+  assert.equal(await persistInitCredentials({ claude: { setupToken: 'sk-ant-oat01-' + crypto.randomUUID() } }, { reportError: message => output.push(message), deps: { saveSetupEnv: () => true, syncRelayTraffic: () => false } }), false);
   assert.match(output.join(''), /Initialization stopped before starting services/);
 });
 
 test('Claude authentication menu uses the baseline API-key label when no address was selected', async t => {
   isolatedCredentials(t); const menus = [];
-  await runInitAuthentication(parseInitFlags([]), { runtime: 'claude', quiet: true, exists: () => true, claudeStatus: () => false,
+  await runInitAuthentication(parseInitFlags([]), {
+    runtime: 'claude',
+    quiet: true,
     choose: async (question, choices) => { menus.push(choices); return 0; },
+    deps: {
+      findExecutable: () => '/fixture/runtime',
+      claudeStatus: () => false,
+    },
   });
   assert.equal(menus.length, 1); assert.equal(menus[0][1], 'Anthropic API key');
 });
@@ -625,20 +751,20 @@ for (const [authentication, previous, expectedStop, expectedCode] of [
 });
 
 
-for (const source of ['explicit flag', 'environment']) for (const setupLike of [false, true]) test(`initial ${source} official endpoint validation reports the ${setupLike ? 'setup-token mix-up' : 'API-key prefix'} error before setup`, t => {
+for (const source of ['explicit flag', 'environment']) for (const setupLike of [false, true]) test(`initial ${source} official endpoint validation reports the ${setupLike ? 'setup-token mix-up' : 'API-key prefix'} error before setup`, async t => {
   isolatedCredentials(t); const credential = (setupLike ? 'sk-ant-oat-' : '') + crypto.randomUUID();
   const args = ['--api-key', credential];
   if (source === 'explicit flag') args.push('--base-url', 'https://api.anthropic.com');
   else process.env.ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
-  const opts = parseInitFlags(args); resolveFromEnv(opts);
+  const opts = parseInitFlags(args); await resolveFromEnv(opts);
   const validation = validateInitInput(opts);
   assert.match(validation, setupLike ? /That looks like a setup token/ : /Invalid API key.*sk-ant-/s);
   assert.equal(validation.includes(credential), false);
 });
 
-test('initial validation defers API-key format while a saved endpoint remains unresolved', t => {
+test('initial validation defers API-key format while a saved endpoint remains unresolved', async t => {
   const home = isolatedCredentials(t), credential = crypto.randomUUID();
   fs.mkdirSync(path.join(home, '.claude')); fs.writeFileSync(path.join(home, '.claude/settings.json'), '{broken');
-  const opts = parseInitFlags(['--api-key', credential]); resolveFromEnv(opts);
+  const opts = parseInitFlags(['--api-key', credential]); await resolveFromEnv(opts);
   assert.equal(opts.baseUrl, null); assert.equal(validateInitInput(opts), null);
 });

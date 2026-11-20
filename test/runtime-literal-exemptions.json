@@ -41,238 +41,8 @@
   },
   {
     "file": "cli/commands/init.js",
-    "text": "const result = spawnSync('claude', ['-p', 'hi', '--max-turns', '1'], {",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "const key = runtime === 'codex' ? 'OPENAI_BASE_URL' : 'ANTHROPIC_BASE_URL';",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "const native = read(path.join(home, runtime === 'codex' ? '.codex/config.toml' : '.claude/settings.json'));",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "const value = runtime === 'codex' ? parseToml(native).openai_base_url : JSON.parse(native)?.env?.ANTHROPIC_BASE_URL;",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (runtime === 'claude' && opts.baseUrl === null) opts.baseUrl = savedInitBaseUrl('claude', { zylosDir, home });",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (runtime === 'codex' && opts.codexBaseUrl === null) opts.codexBaseUrl = savedInitBaseUrl('codex', { zylosDir, home });",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "return parseClaudeAuthStatus(spawn('claude', ['auth', 'status', '--json'], {",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "authenticated = () => commandExists('claude') && isInitClaudeAuthenticated({ root }), log = console.log } = {}) {",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "agyAuth = async () => (await getRuntime('agy')).auth.checkAuth(),",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "const base = runtime === 'codex' ? opts.codexBaseUrl : opts.baseUrl;",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (runtime === 'codex') saveCodexBase(base);",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (runtime === 'codex') pendingCodexBaseUrl = base;",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (runtime === 'codex') codexApiAttempted = true;",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "activateBase('claude');",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (selectedRuntime === 'agy') {",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "const agyAuthenticated = exists('agy') && checked.status === 'success';",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (selectedRuntime === 'codex') {",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (exists('codex')) {",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "const validation = prepareApi('codex');",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (codexAuthenticated && opts.codexBaseUrl) activateBase('codex');",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "const configurationError = prepareApi('codex');",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (codexAuthenticated && opts.codexBaseUrl) activateBase('codex');",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "login('codex', ['login', '--device-auth']);",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "login('codex', ['login']);",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (exists('claude')) {",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "const validation = prepareApi('claude');",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (opts.baseUrl) activateBase('claude');",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "login('script', ['-q', '/dev/null', 'claude']);",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "login('claude', []);",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "log(`    ${dim('Run \"claude\" to authenticate then \"zylos init\" again.')}`);",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "const validation = prepareApi('claude');",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (opts.baseUrl) activateBase('claude');",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "} // end if (exists('claude')) — Step 6",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (opts.baseUrl && !claudeApiAttempted && !opts.apiKey && !opts.authToken) activateBase('claude');",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (opts.codexBaseUrl && !codexApiAttempted && (selectedRuntime !== 'codex' || !opts.codexApiKey)) activateBase('codex');",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "selectedRuntime = runtimeIdx === 2 ? 'codex' : 'claude';",
-    "reason": "gap: The existing interactive choice offers Claude and Codex only."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "const runtimeLabel = { claude: 'Claude Code', codex: 'Codex (OpenAI)', agy: 'Antigravity CLI (Google)' }[selectedRuntime];",
-    "reason": "text: Preserves the current init option description, runtime label, or authentication hint."
-  },
-  {
-    "file": "cli/commands/init.js",
     "text": "if (selectedRuntime === 'claude') {",
     "reason": "dispatch:launch: Controls the Claude-only launch terms prompt."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "console.log(`Non-selected runtime: use zylos auth ${selectedRuntime === 'claude' ? 'codex' : 'claude'} when needed.`);",
-    "reason": "text: Preserves the current init option description, runtime label, or authentication hint."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (selectedRuntime === 'claude' && claudeAuthenticated && !skipConfirm && needsBypassAcceptance()) {",
-    "reason": "dispatch:launch: Controls the Claude-only launch terms prompt."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (selectedRuntime === 'codex' ? !codexAuthenticated : !claudeAuthenticated) {",
-    "reason": "else-fallback: The non-Codex authentication prompt uses the existing Claude branch."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "const runtimeName = selectedRuntime === 'codex' ? 'Codex' : 'Claude Code';",
-    "reason": "else-fallback: The non-Codex authentication prompt uses the existing Claude branch."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "console.log(`Non-selected runtime: use zylos auth ${selectedRuntime === 'claude' ? 'codex' : 'claude'} when needed.`);",
-    "reason": "text: Preserves the current init option description, runtime label, or authentication hint."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (selectedRuntime === 'claude' && claudeAuthenticated && !skipConfirm && needsBypassAcceptance()) {",
-    "reason": "dispatch:launch: Controls the Claude-only launch terms prompt."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "const runtimeAuthOk = selectedRuntime === 'agy' ? authentication.agyAuthenticated : selectedRuntime === 'codex' ? codexAuthenticated : claudeAuthenticated;",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (selectedRuntime === 'agy') {",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "} else if (selectedRuntime === 'codex') {",
-    "reason": "dispatch:auth: Selects runtime-specific init authentication, credentials, or login guidance."
   },
   {
     "file": "cli/commands/migrate-instructions.js",
@@ -280,9 +50,14 @@
     "reason": "dispatch:instructions: Reports the existing instruction migration marker path."
   },
   {
-    "file": "cli/commands/runtime.js",
-    "text": "const label = { claude: 'Claude Code (Anthropic)', codex: 'Codex (OpenAI)', agy: 'Antigravity CLI (Google)' }[current] || current;",
-    "reason": "text: Preserves the runtime status label, help, or credential example."
+    "file": "cli/commands/init.js",
+    "text": "if (selectedRuntime === 'claude' && authentication.authenticated && !skipConfirm && needsBypassAcceptance()) {",
+    "reason": "dispatch:launch: Controls the Claude-only launch terms prompt."
+  },
+  {
+    "file": "cli/commands/init.js",
+    "text": "if (selectedRuntime === 'claude' && authentication.authenticated && !skipConfirm && needsBypassAcceptance()) {",
+    "reason": "dispatch:launch: Controls the Claude-only launch terms prompt."
   },
   {
     "file": "cli/commands/runtime.js",
@@ -313,16 +88,6 @@
     "file": "cli/commands/runtime.js",
     "text": "buildInstructionFile('agy', { zylosDir: ZYLOS_DIR });",
     "reason": "dispatch:instructions: Selects the existing runtime instruction filename or readiness action."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "agy:     --save-apikey <key>             GEMINI_API_KEY (no personal subscription login)",
-    "reason": "text: Preserves the runtime status label, help, or credential example."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "(agy: replace the key with zylos runtime agy --save-apikey <key>);",
-    "reason": "text: Preserves the runtime status label, help, or credential example."
   },
   {
     "file": "cli/lib/claude-eval.js",
@@ -553,31 +318,6 @@
     "file": "cli/lib/runtime/session-command.js",
     "text": "if (runtime === 'agy') {",
     "reason": "dispatch:launch: Selects per-runtime launch arguments, effort validation, environment, or cache settings."
-  },
-  {
-    "file": "cli/lib/runtime/session-command.js",
-    "text": "try { sessionEnv = launchEnvironment(root, processEnv, { runtime: 'claude' }); }",
-    "reason": "dispatch:auth: Builds environment for the Claude-specific credential probe."
-  },
-  {
-    "file": "cli/lib/runtime-setup.js",
-    "text": "const result = spawnSync('claude', ['auth', 'status', '--json'], {",
-    "reason": "dispatch:auth: Looks up runtime-specific credential files or authentication status."
-  },
-  {
-    "file": "cli/lib/runtime-setup.js",
-    "text": "const result = spawnSync('codex', ['login', 'status'], {",
-    "reason": "dispatch:auth: Looks up runtime-specific credential files or authentication status."
-  },
-  {
-    "file": "cli/lib/runtime-setup.js",
-    "text": "if (runtime === 'codex') return [path.join(home, '.codex', 'auth.json')];",
-    "reason": "dispatch:auth: Looks up runtime-specific credential files or authentication status."
-  },
-  {
-    "file": "cli/lib/runtime-setup.js",
-    "text": "if (runtime === 'agy') return [path.join(ZYLOS_DIR, '.env')];",
-    "reason": "dispatch:auth: Looks up runtime-specific credential files or authentication status."
   },
   {
     "file": "cli/lib/session-state-reader-async.js",

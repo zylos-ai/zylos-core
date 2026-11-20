@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { stripVTControlCharacters } from 'node:util';
 
 const rootDir = path.resolve(import.meta.dirname, '../../..');
 const cliPath = path.join(rootDir, 'cli', 'zylos.js');
@@ -46,7 +47,7 @@ describe('strict runtime readers', () => {
   it('defaults a missing runtime but rejects malformed F1 at the CLI boundary', () => {
     const missing = run([cliPath, 'runtime', 'status']);
     assert.equal(missing.status, 0, missing.stderr);
-    assert.match(missing.stdout, /Claude Code/);
+    assert.equal(stripVTControlCharacters(missing.stdout).trim(), 'Current runtime: Claude');
     writeConfig('{');
     const malformed = run([cliPath, 'runtime', 'status']);
     assert.notEqual(malformed.status, 0);
