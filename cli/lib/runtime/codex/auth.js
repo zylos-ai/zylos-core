@@ -12,7 +12,8 @@ import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { classifyCodexLoginStatus, parseCodexLoginStatus } from '../../auth-parsers.js';
 import { ZYLOS_DIR } from '../../config.js';
-import { upsertEnvValue, warnUnrestrictedCredentialFiles, writeCodexConfig } from '../../runtime-setup.js';
+import { upsertEnvValue, warnUnrestrictedCredentialFiles } from '../../runtime-setup.js';
+import { writeCodexConfig } from './hooks.js';
 import { UNSUPPORTED } from '../contract.js';
 
 const { findExecutable } = createIdentity('codex');

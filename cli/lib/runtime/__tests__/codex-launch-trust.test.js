@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import * as tmux from '../tmux-connection.js';
 import * as configLock from '../../config-lock.js';
 import { launchEnvironment } from '../session-command.js';
-import { codexHooksPath, codexTrustMarkerPath, isCodexTrustValid, readHooksState } from '../../codex-hooks.js';
+import { codexHooksPath, codexTrustMarkerPath, isCodexTrustValid, readHooksState } from '../../runtime/codex/hooks.js';
 
 // Keep the real detector except in tests explicitly exercising the no-lock fallback.
 const lockDetection = { detect: configLock.detectConfigLockCapability };
@@ -264,7 +264,7 @@ test('independent Codex launch processes sharing one home serialize and preserve
   const runner = path.join(f.dir, 'launch.mjs');
   fs.writeFileSync(runner, `import assert from 'node:assert/strict';
 import { prepare } from ${JSON.stringify(new URL('../codex/launch.js', import.meta.url).href)};
-import { isCodexTrustValid } from ${JSON.stringify(new URL('../../codex-hooks.js', import.meta.url).href)};
+import { isCodexTrustValid } from ${JSON.stringify(new URL('../../runtime/codex/hooks.js', import.meta.url).href)};
 const root = process.argv[2];
 await prepare({ root, env: process.env });
 assert.equal(isCodexTrustValid({ zylosDir: root, homeDir: process.env.HOME, codexVersion: ${JSON.stringify(version)} }).valid, true);

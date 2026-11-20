@@ -41,8 +41,6 @@ import {
 } from '../lib/runtime/instruction-builder.js';
 import { deployManifestTemplate } from '../lib/runtime/tmux-env.js';
 import { runMigrations } from '../lib/migrate.js';
-import { ensureCodexHooksTrusted } from '../lib/codex-hooks.js';
-import { syncAgyConfig } from '../lib/agy-setup.js';
 import { syncRuntimeHooks } from '../lib/sync-runtime-hooks.js';
 import { runtimeHooksReady } from './runtime.js';
 import { installGlobalPackage, isValidBaseUrl, credentialFilePermissionWarnings } from '../lib/runtime-setup.js';
@@ -105,17 +103,30 @@ export async function installCliOnUse(rt, { prepare = prepareInitRuntimeClis } =
   return { attempted: true, ok: true, notices: result.notices ?? [] };
 }
 
-export async function prepareInitRuntimeAssets({ runtimes = ['claude', 'codex'], result = { completed: [], failed: [] },
+export async function prepareInitRuntimeAssets({ runtimes = alwaysInstalledIds(), result = { completed: [], failed: [] },
   instruction = runtime => buildInstructionFile(runtime, { zylosDir: ZYLOS_DIR }),
-  hooks = { claude: async () => {
-    if (!(await runtimeHooksReady('claude')).ready) throw new Error('Claude hooks/instructions not ready');
-  }, codex: () => {
-    try { ensureCodexHooksTrusted({ zylosDir: ZYLOS_DIR }); }
-    catch (error) {
-      // Init does not start Codex; each Codex launch repeats the trust step and does not start Codex until it succeeds.
-      throw new Error(`${error.message.replace(/\.+$/, '')}. Codex will not start until hook trust succeeds; each Codex launch tries it again.`, { cause: error });
-    }
-  }, agy: () => syncAgyConfig({ zylosDir: ZYLOS_DIR }) }, exists = fs.existsSync } = {}) {
+  hooks, exists = fs.existsSync } = {}) {
+  if (hooks === undefined) {
+    hooks = Object.fromEntries(await Promise.all(runtimes.map(async id => {
+      const rt = await getRuntime(id);
+      const name = runtimeDisplayName(id);
+      if (rt.hooks.syncPolicy === 'opted-in') {
+        return [id, () => rt.hooks.sync({ zylosDir: ZYLOS_DIR })];
+      }
+      if (rt.hooks.trust !== UNSUPPORTED) {
+        return [id, async () => {
+          try { await rt.hooks.trust({ zylosDir: ZYLOS_DIR }); }
+          catch (error) {
+            // Init does not start the runtime; each launch repeats the trust step.
+            throw new Error(`${error.message.replace(/\.+$/, '')}. ${name} will not start until hook trust succeeds; each ${name} launch tries it again.`, { cause: error });
+          }
+        }];
+      }
+      return [id, async () => {
+        if (!(await runtimeHooksReady(id)).ready) throw new Error(`${name} hooks/instructions not ready`);
+      }];
+    })));
+  }
   for (const runtime of runtimes) {
     for (const [item, prepare] of [['instructions', () => {
       const file = instruction(runtime);
@@ -694,11 +705,11 @@ function syncPackagedClaudeMemoryAgents() {
  * - ecosystem.config.cjs: always updated (managed by zylos-core)
  * - .env, CLAUDE.md, memory/*: only created if missing (user-managed)
  */
-export function syncSettingsHooksAfterTemplateDeploy({ zylosDir = ZYLOS_DIR } = {}) {
+export async function syncSettingsHooksAfterTemplateDeploy({ zylosDir = ZYLOS_DIR } = {}) {
   return syncRuntimeHooks({ zylosDir });
 }
 
-export function deployTemplates({ freshInstall = false } = {}) {
+export async function deployTemplates({ freshInstall = false } = {}) {
   if (!fs.existsSync(TEMPLATES_SRC)) return;
 
   // ecosystem.config.cjs — always update (source of truth for service definitions)
@@ -766,7 +777,7 @@ export function deployTemplates({ freshInstall = false } = {}) {
   // npm postinstall can only sync assembler hooks for an already-materialized
   // installation. Fresh init creates the assembler above, so converge hooks
   // here after both the instruction assets and settings template exist.
-  syncSettingsHooksAfterTemplateDeploy();
+  await syncSettingsHooksAfterTemplateDeploy();
 }
 
 // ── Core Skills sync ────────────────────────────────────────────
@@ -1963,7 +1974,7 @@ export async function initCommand(args) {
   const sessionModeUpdate = initSessionModeUpdate(installState, opts.sessionMode, { keyPresent: sessionModeKeyPresent });
   if (sessionModeUpdate) updateZylosConfigLocked(sessionModeUpdate);
   runMigrations({ zylosDir: ZYLOS_DIR, templatesDir: TEMPLATES_SRC });
-  try { deployTemplates({ freshInstall: installState === 'fresh' }); }
+  try { await deployTemplates({ freshInstall: installState === 'fresh' }); }
   catch (error) { preparation.failed.push({ item: 'templates', message: error.message }); }
   await prepareInitRuntimeAssets({ result: preparation, runtimes: preparedRuntimes });
   reportInitPreparation({ ...preparation, notices: [] });

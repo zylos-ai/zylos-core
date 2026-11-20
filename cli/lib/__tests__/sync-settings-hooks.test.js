@@ -10,22 +10,20 @@ import { readProcessStart } from '../../../skills/activity-monitor/scripts/claud
 
 const {
   desiredClaudeHooks,
-  isCoreManaged,
   persistInstalledSettingsAndSyncCoupledThreshold,
-  syncCodexConfig,
-  syncRuntimeHooks,
   syncHooks,
   syncModelCoupledNewSessionThreshold,
   syncTemplateSetting,
   syncTemplateModelSetting,
-} = await import('../sync-runtime-hooks.js');
+} = await import('../runtime/claude/hooks.js');
+const { isCoreManaged, syncRuntimeHooks } = await import('../sync-runtime-hooks.js');
 const { extractScriptPath, getCommandHooks, hookScriptKey, hookScriptBaseKey, extractShardArg } = await import('../hook-utils.js');
 const {
+  syncCodexConfig, codexHooksPath, installCoreCodexHook,
   renderCodexGlobalConfig,
   renderCodexProjectConfig,
-} = await import('../runtime-setup.js');
+} = await import('../runtime/codex/hooks.js');
 const { activateFreshSplitInstructions, instructionPaths } = await import('../runtime/instruction-builder.js');
-const { codexHooksPath, installCoreCodexHook } = await import('../codex-hooks.js');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_SETTINGS_PATH = path.join(__dirname, '..', '..', '..', 'templates', '.claude', 'settings.json');
@@ -118,7 +116,7 @@ describe('desiredClaudeHooks', () => {
     execFileSync(process.execPath, [
       '--input-type=module',
       '--eval',
-      `import { deployTemplates } from ${JSON.stringify(INIT_MODULE_PATH)}; deployTemplates({ freshInstall: true });`,
+      `import { deployTemplates } from ${JSON.stringify(INIT_MODULE_PATH)}; await deployTemplates({ freshInstall: true });`,
     ], {
       stdio: 'pipe',
       env: { ...process.env, HOME: homeDir, ZYLOS_DIR: zylosDir },
@@ -1374,17 +1372,17 @@ describe('independent Antigravity hook synchronization', () => {
     return { home, zylosDir, settings: path.join(home, '.gemini/antigravity-cli/settings.json') };
   }
 
-  it('leaves Antigravity unused without creating ~/.gemini', t => {
+  it('leaves Antigravity unused without creating ~/.gemini', async t => {
     const f = isolatedHome(t, { optedIn: false });
     for (const dryRun of [true, false]) {
-      const result = syncRuntimeHooks({ zylosDir: f.zylosDir, dryRun,
+      const result = await syncRuntimeHooks({ zylosDir: f.zylosDir, dryRun,
         stopFailureSupported: false, subagentHooksSupported: false, log: () => {} });
       assert.deepEqual(result.agy, { changed: false });
       assert.equal(fs.existsSync(path.join(f.home, '.gemini')), false);
     }
   });
 
-  it('saves Claude and Codex hooks when opted-in Antigravity configuration is malformed', t => {
+  it('saves Claude and Codex hooks when opted-in Antigravity configuration is malformed', async t => {
     const f = isolatedHome(t);
     fs.mkdirSync(path.dirname(f.settings), { recursive: true });
     fs.writeFileSync(f.settings, '{"modelProvider":"gemini",}');
@@ -1392,7 +1390,7 @@ describe('independent Antigravity hook synchronization', () => {
     const originalError = console.error;
     console.error = message => errors.push(message);
     t.after(() => { console.error = originalError; });
-    const result = syncRuntimeHooks({ zylosDir: f.zylosDir, stopFailureSupported: false,
+    const result = await syncRuntimeHooks({ zylosDir: f.zylosDir, stopFailureSupported: false,
       subagentHooksSupported: false, log: () => {} });
     assert.equal(result.changed, true);
     assert.ok(result.claude.added > 0);
@@ -1408,20 +1406,20 @@ describe('independent Antigravity hook synchronization', () => {
     assert.equal(fs.readFileSync(f.settings, 'utf8'), '{"modelProvider":"gemini",}');
   });
 
-  it('repairs Antigravity-only drift without marking Claude or Codex changed', t => {
+  it('repairs Antigravity-only drift without marking Claude or Codex changed', async t => {
     const f = isolatedHome(t);
     const options = { zylosDir: f.zylosDir, stopFailureSupported: false, subagentHooksSupported: false, log: () => {} };
-    syncRuntimeHooks(options);
+    await syncRuntimeHooks(options);
     const settings = JSON.parse(fs.readFileSync(f.settings, 'utf8'));
     settings.modelProvider = 'stale';
     fs.writeFileSync(f.settings, JSON.stringify(settings));
     const claudePath = path.join(f.zylosDir, '.claude/settings.json');
     const claudeBefore = fs.readFileSync(claudePath, 'utf8');
-    const dryRun = syncRuntimeHooks({ ...options, dryRun: true });
+    const dryRun = await syncRuntimeHooks({ ...options, dryRun: true });
     assert.equal(dryRun.agy.changed, true);
     assert.equal(dryRun.changed, false);
     assert.equal(JSON.parse(fs.readFileSync(f.settings, 'utf8')).modelProvider, 'stale');
-    const result = syncRuntimeHooks(options);
+    const result = await syncRuntimeHooks(options);
     assert.equal(result.agy.changed, true);
     assert.equal(result.changed, false);
     assert.equal(result.claude.added + result.claude.updated + result.claude.removed, 0);

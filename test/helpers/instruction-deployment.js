@@ -14,7 +14,7 @@ const mode = process.argv[2];
 const user = '# Owner custom instructions\n\nKeep duplicate lines.\nKeep duplicate lines.\n中文与 literal $HOME.\n';
 const sync = syncCoreSkills();
 assert.ok(sync.installed.includes('comm-bridge'));
-deployTemplates({ freshInstall: true });
+await deployTemplates({ freshInstall: true });
 assert.equal(fs.readFileSync(path.join(root, 'ZYLOS.md'), 'utf8'),
   fs.readFileSync(new URL('../../templates/ZYLOS.md', import.meta.url), 'utf8'));
 for (const runtime of ['claude', 'codex']) {

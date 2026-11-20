@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { desiredClaudeHooks, desiredSessionStartHooks, syncHooks,
-  supportsSubagentHooksVersion, detectSubagentHooksSupport } from '../sync-runtime-hooks.js';
+import { desiredSessionStartHooks } from '../sync-runtime-hooks.js';
+import { desiredClaudeHooks, syncHooks,
+  supportsSubagentHooksVersion, detectSubagentHooksSupport } from '../runtime/claude/hooks.js';
 
 const activity = hook => hook.command?.endsWith('/skills/activity-monitor/scripts/hook-activity.js');
 

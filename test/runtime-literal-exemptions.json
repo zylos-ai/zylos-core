@@ -16,31 +16,6 @@
   },
   {
     "file": "cli/commands/init.js",
-    "text": "export async function prepareInitRuntimeAssets({ runtimes = ['claude', 'codex'], result = { completed: [], failed: [] },",
-    "reason": "dispatch:hooks: Controls provisioning of each runtime’s hook assets."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "hooks = { claude: async () => {",
-    "reason": "dispatch:hooks: Controls provisioning of each runtime’s hook assets."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (!(await runtimeHooksReady('claude')).ready) throw new Error('Claude hooks/instructions not ready');",
-    "reason": "dispatch:hooks: Controls provisioning of each runtime’s hook assets."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "}, codex: () => {",
-    "reason": "dispatch:hooks: Controls provisioning of each runtime’s hook assets."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "}, agy: () => syncAgyConfig({ zylosDir: ZYLOS_DIR }) }, exists = fs.existsSync } = {}) {",
-    "reason": "dispatch:hooks: Controls provisioning of each runtime’s hook assets."
-  },
-  {
-    "file": "cli/commands/init.js",
     "text": "if (selectedRuntime === 'claude' && authentication.authenticated && !skipConfirm && needsBypassAcceptance()) {",
     "reason": "dispatch:launch: Controls the Claude-only launch terms prompt."
   },
@@ -48,46 +23,11 @@
     "file": "cli/commands/init.js",
     "text": "if (selectedRuntime === 'claude' && authentication.authenticated && !skipConfirm && needsBypassAcceptance()) {",
     "reason": "dispatch:launch: Controls the Claude-only launch terms prompt."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "if (target === 'agy') {",
-    "reason": "dispatch:hooks: Checks or refreshes runtime-specific hook and configuration readiness."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "if (target === 'codex') return { ready: isCodexTrustValid({ zylosDir: ZYLOS_DIR, projectDir: ZYLOS_DIR, codexVersion: getCodexVersion() }).valid, pendingMigration };",
-    "reason": "dispatch:hooks: Checks or refreshes runtime-specific hook and configuration readiness."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "if (target === 'agy') {",
-    "reason": "dispatch:hooks: Checks or refreshes runtime-specific hook and configuration readiness."
   },
   {
     "file": "cli/lib/claude-eval.js",
     "text": "const child = spawn('claude', ['--print', '--output-format', 'text'], {",
     "reason": "tool-use: Runs a one-shot Claude evaluation."
-  },
-  {
-    "file": "cli/lib/codex-hooks.js",
-    "text": "export function getCodexVersion({ codexBin = process.env.CODEX_BIN || 'codex', execFileSyncImpl } = {}) {",
-    "reason": "dispatch:hooks: Invokes Codex-specific hook version, trust, or configuration commands."
-  },
-  {
-    "file": "cli/lib/codex-hooks.js",
-    "text": "codexBin = process.env.CODEX_BIN || 'codex',",
-    "reason": "dispatch:hooks: Invokes Codex-specific hook version, trust, or configuration commands."
-  },
-  {
-    "file": "cli/lib/codex-hooks.js",
-    "text": "const codexBin = process.env.ZYLOS_CODEX_BIN || 'codex';",
-    "reason": "dispatch:hooks: Invokes Codex-specific hook version, trust, or configuration commands."
-  },
-  {
-    "file": "cli/lib/codex-hooks.js",
-    "text": "codexBin = process.env.CODEX_BIN || 'codex',",
-    "reason": "dispatch:hooks: Invokes Codex-specific hook version, trust, or configuration commands."
   },
   {
     "file": "cli/lib/model-rotation-thresholds.js",
@@ -203,21 +143,6 @@
     "file": "cli/lib/session-usage-reader.js",
     "text": "const window = ['claude', 'agy'].includes(runtime) ? value?.context_window?.context_window_size ?? (runtime === 'agy' ? 1_048_576 : null) : value?.contextUsage?.ceiling;",
     "reason": "else-fallback: Unknown runtimes reach the existing Codex-shaped usage handling."
-  },
-  {
-    "file": "cli/lib/sync-runtime-hooks.js",
-    "text": "export function detectStopFailureSupport({ execFileSyncImpl = execFileSync, binary = process.env.CLAUDE_BIN || 'claude' } = {}) {",
-    "reason": "dispatch:hooks: Checks native hook support or reports native hook installation results."
-  },
-  {
-    "file": "cli/lib/sync-runtime-hooks.js",
-    "text": "export function detectSubagentHooksSupport({ execFileSyncImpl = execFileSync, binary = process.env.CLAUDE_BIN || 'claude' } = {}) {",
-    "reason": "dispatch:hooks: Checks native hook support or reports native hook installation results."
-  },
-  {
-    "file": "cli/lib/sync-runtime-hooks.js",
-    "text": "const result = { claude: { added, updated, removed }, codex: codexHooks, stopFailureSupported };",
-    "reason": "dispatch:hooks: Checks native hook support or reports native hook installation results."
   },
   {
     "file": "skills/activity-monitor/scripts/agy-hooks.js",

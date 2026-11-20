@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { stringify } from 'smol-toml';
-import { installCoreCodexHook, codexHooksPath, codexTrustMarkerPath, ensureHooksFeature } from '../../cli/lib/codex-hooks.js';
+import { installCoreCodexHook, codexHooksPath, codexTrustMarkerPath, ensureHooksFeature } from '../../cli/lib/runtime/codex/hooks.js';
 
 const requireForFixture = createRequire(import.meta.url);
 

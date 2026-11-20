@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { syncAgyConfig, agyConfigurationPaths, isAgyConfigReady, hasAgyZylosHooks } from '../agy-setup.js';
+import { syncAgyConfig, agyConfigurationPaths, isAgyConfigReady, hasAgyZylosHooks } from '../runtime/agy/hooks.js';
 import { saveAgyApiKey } from '../runtime/agy/auth.js';
 import { ZYLOS_DIR } from '../config.js';
 import { applyCredentials, validateRuntimeFlags, parseRuntimeFlags } from '../../commands/runtime.js';

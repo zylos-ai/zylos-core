@@ -9,6 +9,17 @@ for (const id of SUPPORTED_RUNTIMES) {
     assert.equal(runtime.id, id);
     assert.ok(Object.isFrozen(runtime));
     assert.equal(typeof runtime.identity.launcherWrapsNative, 'boolean');
+    const { hooks } = runtime;
+    assert.equal(typeof hooks.sync, 'function');
+    assert.equal(typeof hooks.ready, 'function');
+    assert.ok(['always', 'opted-in'].includes(hooks.syncPolicy));
+    assert.equal(hooks.optedIn !== UNSUPPORTED, hooks.syncPolicy === 'opted-in');
+    const publishesConfig = runtime.install.postUpgradeSync !== UNSUPPORTED;
+    assert.equal(hooks.writeConfig !== UNSUPPORTED, publishesConfig);
+    assert.equal(hooks.installHooks !== UNSUPPORTED, publishesConfig);
+    for (const member of ['optedIn', 'trust', 'features', 'stage', 'writeConfig', 'installHooks']) {
+      if (hooks[member] !== UNSUPPORTED) assert.equal(typeof hooks[member], 'function', `hooks.${member}`);
+    }
     assert.equal(runtime.launch.efforts !== UNSUPPORTED, runtimesWith('modelOverride', 'supported').includes(id),
       'modelOverride in the registry must agree with launch.efforts');
     const { input, switch: sessionSwitch } = runtime;
@@ -71,4 +82,9 @@ test('runtime factory refuses unsupported ids and shares loaded implementations'
   const [first, second] = await Promise.all([getRuntime('claude'), getRuntime('claude')]);
   assert.equal(first, second);
   assert.equal(await findRuntime('claude'), first);
+});
+
+test('exactly one runtime stages settings during upgrade', async () => {
+  const runtimes = await Promise.all(SUPPORTED_RUNTIMES.map(getRuntime));
+  assert.equal(runtimes.filter(runtime => runtime.hooks.stage !== UNSUPPORTED).length, 1);
 });

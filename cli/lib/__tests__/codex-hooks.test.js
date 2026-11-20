@@ -21,7 +21,7 @@ import {
   readHooksState,
   trustCodexHooksWithAppServer,
   uninstallCoreCodexHook,
-} from '../codex-hooks.js';
+} from '../runtime/codex/hooks.js';
 
 const tmpDirs = [];
 

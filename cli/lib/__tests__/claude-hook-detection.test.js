@@ -40,7 +40,7 @@ test('default Claude hook detection and readiness follow the configured binary v
       fs.writeFileSync(env.CLAUDE_BIN, `#!${process.execPath}\nif (process.argv.slice(2).join(' ') !== '--version') process.exit(9);\nconsole.log('${version} (Claude Code)');\n`, { mode: 0o755 });
       assert.ok(fs.realpathSync(process.env.CLAUDE_BIN).startsWith(root + path.sep));
       // Do not inject subagentHooksSupported: exercise the production default.
-      syncRuntimeHooks({ zylosDir: env.ZYLOS_DIR, log: () => {} });
+      await syncRuntimeHooks({ zylosDir: env.ZYLOS_DIR, log: () => {} });
       const settings = read();
       for (const event of ['SubagentStart', 'SubagentStop']) {
         assert.equal(settings.hooks[event]?.some(group => group.hooks.some(hook => /hook-activity\.js$/.test(hook.command))) ?? false, supported, event);

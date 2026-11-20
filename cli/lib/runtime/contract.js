@@ -65,5 +65,19 @@ export const RUNTIME_CONTRACT = Object.freeze({
     clearFiresSessionStart: 'optional',
     clearSourceMarker: 'optional',
   }) }),
-  hooks: Object.freeze({ required: true, members: Object.freeze({ sessionIdEnv: 'optional' }) }),
+  hooks: Object.freeze({
+    required: true,
+    members: Object.freeze({
+      sessionIdEnv: 'optional',
+      sync: 'required',
+      syncPolicy: 'required',
+      optedIn: 'optional',
+      ready: 'required',
+      trust: 'optional',
+      features: 'optional',
+      stage: 'optional',
+      writeConfig: 'optional',
+      installHooks: 'optional',
+    }),
+  }),
 });

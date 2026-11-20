@@ -2,7 +2,7 @@ import { buildInstructionFor } from '../shared/instruction-paths.js';
 import { instructions } from './instructions.js';
 import { adapterError, launchEnvironment } from '../session-command.js';
 import { ZYLOS_DIR } from '../../config.js';
-import { syncAgyConfig } from '../../agy-setup.js';
+import { syncAgyConfig } from './hooks.js';
 import { buildKickPrompt } from '../kick-prompt.js';
 import { UNSUPPORTED } from '../contract.js';
 

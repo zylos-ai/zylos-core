@@ -4,14 +4,14 @@ import { deployTemplates } from '../../cli/commands/init.js';
 import { enqueueStartupPrompt, isOnboardingPending } from '../../skills/activity-monitor/scripts/session-start-prompt.js';
 import { buildChain } from '../../skills/activity-monitor/scripts/shard-registry.js';
 import { runSessionStartShard } from '../../skills/activity-monitor/scripts/session-start-orchestrator.js';
-import { desiredClaudeHooks } from '../../cli/lib/sync-runtime-hooks.js';
-import { installCoreCodexHook, codexHooksPath } from '../../cli/lib/codex-hooks.js';
-import { syncAgyConfig, agyConfigurationPaths } from '../../cli/lib/agy-setup.js';
+import { desiredClaudeHooks } from '../../cli/lib/runtime/claude/hooks.js';
+import { installCoreCodexHook, codexHooksPath } from '../../cli/lib/runtime/codex/hooks.js';
+import { syncAgyConfig, agyConfigurationPaths } from '../../cli/lib/runtime/agy/hooks.js';
 
 const action = process.argv[2];
 const root = process.env.ZYLOS_DIR;
 if (action === 'fresh' || action === 'rerun') {
-  deployTemplates({ freshInstall: action === 'fresh' });
+  await deployTemplates({ freshInstall: action === 'fresh' });
 } else if (action === 'inspect') {
   const { chain } = buildChain();
   const onboarding = chain.find(s => s.name === 'onboarding');

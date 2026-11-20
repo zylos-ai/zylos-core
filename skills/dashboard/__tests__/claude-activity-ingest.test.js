@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { desiredClaudeHooks } from '../../../cli/lib/sync-runtime-hooks.js';
+import { desiredClaudeHooks } from '../../../cli/lib/runtime/claude/hooks.js';
 import { Store } from '../src/lib/store.js';
 import { CoreLogImporter } from '../src/lib/core-log-importer.js';
 import { UsageTranscripts } from '../src/lib/collectors/usage-transcripts.js';

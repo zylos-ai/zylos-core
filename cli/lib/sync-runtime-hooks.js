@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { migrateModelThresholds } from './model-rotation-thresholds.js';
 /**
  * Sync settings.json hooks to installed settings.
  *
@@ -21,22 +20,14 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { randomBytes } from 'node:crypto';
-import { execFileSync } from 'child_process';
-import { fileURLToPath } from 'url';
-import { hookScriptKey, hookScriptBaseKey, getCommandHooks, HOOK_ENTRY_SCRIPT } from './hook-utils.js';
-import { copyPrivateFile, writePrivateFile } from './private-file.js';
-import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig, resolveCodexBypassPermissions } from './runtime-setup.js';
-import { hasAgyZylosHooks, syncAgyConfig } from './agy-setup.js';
-import { installCoreCodexHook } from './codex-hooks.js';
+import { hookScriptKey, hookScriptBaseKey, HOOK_ENTRY_SCRIPT } from './hook-utils.js';
+import { getRuntime, runtimeDisplayName, SUPPORTED_RUNTIMES } from './runtime/index.js';
 import {
   SIDE_EFFECT_NAMES,
   buildChain,
 } from '../../skills/activity-monitor/scripts/shard-registry.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ZYLOS_DIR = path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
-const TEMPLATE_SETTINGS = path.join(__dirname, '..', '..', 'templates', '.claude', 'settings.json');
-const INSTALLED_SETTINGS = path.join(ZYLOS_DIR, '.claude', 'settings.json');
 
 export const CORE_MANAGED_HOOKS = new Set([
   // Current template hooks. Keep this append-only: when a core hook is retired,
@@ -74,11 +65,11 @@ export function hookEntryCommand(targetPath, zylosDir = ZYLOS_DIR, { quote = fal
   return `exec node ${word(entry)} ${word(targetPath)}`;
 }
 
-function zylosClaudeScript(relativePath, zylosDir = ZYLOS_DIR) {
+export function zylosClaudeScript(relativePath, zylosDir = ZYLOS_DIR) {
   return hookEntryCommand(path.resolve(zylosDir, '.claude', relativePath), zylosDir);
 }
 
-function commandHook(relativePath, options = {}, zylosDir = ZYLOS_DIR) {
+export function commandHook(relativePath, options = {}, zylosDir = ZYLOS_DIR) {
   return {
     type: 'command',
     command: zylosClaudeScript(relativePath, zylosDir),
@@ -175,429 +166,6 @@ export function reconcileAssemblerEntries(settings, { zylosDir = ZYLOS_DIR } = {
   return { settings, changed };
 }
 
-export function supportsStopFailureVersion(version) {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?: \(Claude Code\))?$/.exec(String(version).trim());
-  if (!match) return false;
-  const [major, minor, patch] = match.slice(1).map(Number);
-  // StopFailure was introduced in Claude Code 2.1.78:
-  // https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md#2178
-  return major > 2 || (major === 2 && (minor > 1 || (minor === 1 && patch >= 78)));
-}
-
-export function detectStopFailureSupport({ execFileSyncImpl = execFileSync, binary = process.env.CLAUDE_BIN || 'claude' } = {}) {
-  try {
-    return supportsStopFailureVersion(execFileSyncImpl(binary, ['--version'], { encoding: 'utf8', stdio: 'pipe', timeout: 2000 }));
-  } catch { return false; }
-}
-
-export function supportsSubagentHooksVersion(version) {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?: \(Claude Code\))?$/.exec(String(version).trim());
-  if (!match) return false;
-  const [major, minor, patch] = match.slice(1).map(Number);
-  // SubagentStart arrived in 2.0.43; register start/stop together.
-  // https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md#2043
-  return major > 2 || (major === 2 && (minor > 0 || patch >= 43));
-}
-
-export function detectSubagentHooksSupport({ execFileSyncImpl = execFileSync, binary = process.env.CLAUDE_BIN || 'claude' } = {}) {
-  try {
-    return supportsSubagentHooksVersion(execFileSyncImpl(binary, ['--version'], { encoding: 'utf8', stdio: 'pipe', timeout: 2000 }));
-  } catch { return false; }
-}
-
-export function desiredClaudeHooks({
-  zylosDir = ZYLOS_DIR,
-  existsSync = fs.existsSync,
-  stopFailureSupported = false,
-  subagentHooksSupported = false,
-} = {}) {
-  const sessionStartHooks = desiredSessionStartHooks({ zylosDir, existsSync });
-  const activityHook = commandHook(
-    'skills/activity-monitor/scripts/hook-activity.js',
-    { async: true, timeout: 5 }, zylosDir
-  );
-  const healthHook = commandHook('skills/activity-monitor/scripts/hook-health.js', { async: false, timeout: 5 }, zylosDir);
-
-  return {
-    SessionStart: ['startup', 'clear', 'compact'].map(matcher => ({
-      matcher,
-      // Keep injection entries unchanged; activity is nonblocking and emits no context.
-      hooks: [{ ...healthHook }, ...sessionStartHooks.map(hook => ({ ...hook })), { ...activityHook }],
-    })),
-    UserPromptSubmit: [
-      {
-        hooks: [{ ...healthHook }, { ...activityHook }],
-      },
-    ],
-    PreToolUse: [
-      {
-        matcher: '',
-        hooks: [{ ...activityHook }],
-      },
-    ],
-    PermissionRequest: [
-      {
-        hooks: [
-          commandHook(
-            'skills/activity-monitor/scripts/hook-auth-prompt.js',
-            { async: true, timeout: 5000 }, zylosDir
-          ),
-        ],
-      },
-    ],
-    PostToolUse: [
-      {
-        matcher: '',
-        hooks: [{ ...activityHook }],
-      },
-    ],
-    PostToolUseFailure: [
-      {
-        matcher: '',
-        hooks: [{ ...activityHook }],
-      },
-    ],
-    Stop: [
-      {
-        hooks: [{ ...healthHook }, { ...activityHook }],
-      },
-    ],
-    ...(subagentHooksSupported ? {
-      SubagentStart: [{ hooks: [{ ...activityHook }] }],
-      SubagentStop: [{ hooks: [{ ...activityHook }] }],
-    } : {}),
-    ...(stopFailureSupported ? { StopFailure: [{ hooks: [{ ...healthHook }, { ...activityHook }] }] } : {}),
-    Notification: [
-      {
-        matcher: 'idle_prompt',
-        hooks: [{ ...activityHook }],
-      },
-    ],
-  };
-}
-
-export function syncTemplateModelSetting({
-  templateSettings,
-  installedSettings,
-  dryRun = false,
-  log = console.log,
-} = {}) {
-  if (!Object.hasOwn(templateSettings, 'model') || Object.hasOwn(installedSettings, 'model')) {
-    return { changed: false };
-  }
-
-  const model = templateSettings.model;
-
-  if (!dryRun) {
-    installedSettings.model = model;
-  }
-  log(`  + model: ${model}`);
-  return { changed: true, model };
-}
-
-/**
- * Backfill a single top-level setting from the template when the installed
- * config does not already have it.  Used for boolean flags like
- * autoMemoryEnabled / autoDreamEnabled.
- */
-export function syncTemplateSetting(key, {
-  templateSettings,
-  installedSettings,
-  dryRun = false,
-  log = console.log,
-} = {}) {
-  if (!Object.hasOwn(templateSettings, key) || Object.hasOwn(installedSettings, key)) {
-    return { changed: false };
-  }
-
-  if (!dryRun) {
-    installedSettings[key] = templateSettings[key];
-  }
-  log(`  + ${key}: ${templateSettings[key]}`);
-  return { changed: true };
-}
-
-export function syncModelCoupledNewSessionThreshold({
-  modelBackfilled = false,
-  zylosDir = ZYLOS_DIR,
-  cfg,
-  defaultModels,
-  updateConfig,
-  dryRun = false,
-  log = console.log,
-} = {}) {
-  if (!modelBackfilled) return { changed: false, reason: 'model_not_backfilled' };
-  const result = migrateModelThresholds({
-    zylosDir, ...(cfg ? { config: cfg } : {}), ...(defaultModels ? { defaultModels } : {}),
-    ...(dryRun ? { updateConfig: () => ({ changed: true }) } : { updateConfig }),
-  });
-  if (result.changed) log('  + model_rotation_thresholds: model defaults migrated');
-  return { ...result, ...(!result.changed ? { reason: 'threshold_already_set' } : {}) };
-}
-
-const DEFAULT_MAX_SETTINGS_BACKUPS = 5;
-
-/**
- * Prune `<settings>.bak.<ts>` backups, keeping only the most recent `keep`.
- * Backups accumulate one-per-changed-sync and were never cleaned up. Best
- * effort: any fs error here must never break the settings write, so the
- * caller wraps this in a try/catch and we tolerate a missing directory.
- */
-export function pruneOldBackups({
-  settingsPath,
-  keep = DEFAULT_MAX_SETTINGS_BACKUPS,
-  readdirSync = fs.readdirSync,
-  unlinkSync = fs.unlinkSync,
-} = {}) {
-  const dir = path.dirname(settingsPath);
-  const base = path.basename(settingsPath);
-  const backupRe = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.bak\\.(\\d+)$`);
-  const backups = readdirSync(dir)
-    .map((name) => {
-      const m = name.match(backupRe);
-      return m ? { name, ts: Number(m[1]) } : null;
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.ts - a.ts); // newest first
-  for (const stale of backups.slice(keep)) {
-    unlinkSync(path.join(dir, stale.name));
-  }
-}
-
-export function persistInstalledSettingsAndSyncCoupledThreshold({
-  installedSettings,
-  settingsPath = INSTALLED_SETTINGS,
-  modelBackfilled = false,
-  maxBackups = DEFAULT_MAX_SETTINGS_BACKUPS,
-  mkdirSync = fs.mkdirSync,
-  writeFileSync = writePrivateFile,
-  existsSync = fs.existsSync,
-  copyFileSync = copyPrivateFile,
-  readdirSync = fs.readdirSync,
-  unlinkSync = fs.unlinkSync,
-  syncThreshold = syncModelCoupledNewSessionThreshold,
-} = {}) {
-  const dir = path.dirname(settingsPath);
-  mkdirSync(dir, { recursive: true });
-  let backupPath = null;
-  if (existsSync(settingsPath)) {
-    backupPath = `${settingsPath}.bak.${Date.now()}`;
-    copyFileSync(settingsPath, backupPath);
-  }
-  try {
-    writeFileSync(settingsPath, JSON.stringify(installedSettings, null, 2) + '\n');
-  } catch (err) {
-    if (backupPath) {
-      try { copyFileSync(backupPath, settingsPath); } catch {}
-    }
-    throw err;
-  }
-  if (backupPath) {
-    try {
-      pruneOldBackups({ settingsPath, keep: maxBackups, readdirSync, unlinkSync });
-    } catch {
-      // best effort — never fail a successful settings write over cleanup
-    }
-  }
-  return syncThreshold({ modelBackfilled, zylosDir: path.dirname(path.dirname(settingsPath)) });
-}
-
-export function syncCodexConfig({
-  dryRun = false,
-  projectDir = ZYLOS_DIR,
-  homeDir = os.homedir(),
-  readFileSync = fs.readFileSync,
-  writeConfig = writeCodexConfig,
-  checkHooks = installCoreCodexHook,
-  onWrite,
-  log = console.log,
-} = {}) {
-  const globalConfigPath = path.join(homeDir, '.codex', 'config.toml');
-  const projectConfigPath = path.join(path.resolve(projectDir), '.codex', 'config.toml');
-
-  // Check both project-level and global config for drift
-  let existingGlobal = '';
-  try { existingGlobal = readFileSync(globalConfigPath, 'utf8'); } catch {}
-  let existingProject = '';
-  try { existingProject = readFileSync(projectConfigPath, 'utf8'); } catch {}
-
-  let desiredProject;
-  try {
-    const bypassPermissions = resolveCodexBypassPermissions(projectDir);
-    desiredProject = renderCodexProjectConfig(existingProject, { bypassPermissions });
-  } catch {
-    const error = 'Failed to refresh Codex project config: check TOML syntax and deployment environment.';
-    log(`  Warning: ${error}`);
-    return { attempted: true, changed: false, fatal: true, error };
-  }
-  const desiredGlobal = renderCodexGlobalConfig(projectDir, existingGlobal);
-  // .codex/hooks.json drifts independently of the TOML configs: a component
-  // shard declaration adds SessionStart commands without touching either
-  // config file. Compare the desired hook set with the file content itself.
-  const hooksCheck = checkHooks({ zylosDir: projectDir, dryRun: true });
-  if (existingProject === desiredProject && existingGlobal === desiredGlobal && !hooksCheck.changed) {
-    return { attempted: true, changed: false, fatal: false };
-  }
-
-  if (dryRun) {
-    if (existingProject !== desiredProject) log(`  ~ codex project config: ${projectConfigPath}`);
-    if (existingGlobal !== desiredGlobal) log(`  ~ codex global config: ${globalConfigPath}`);
-    if (hooksCheck.changed) log(`  ~ codex hooks: ${hooksCheck.path}`);
-    return { attempted: true, changed: true, hooksChanged: hooksCheck.changed, fatal: false };
-  }
-
-  if (!writeConfig(projectDir, { onWrite })) {
-    return {
-      attempted: true,
-      changed: false,
-      fatal: true,
-      error: 'Failed to refresh codex config.',
-    };
-  }
-
-  if (existingProject !== desiredProject) log(`  ~ codex project config: ${projectConfigPath}`);
-  if (existingGlobal !== desiredGlobal) log(`  ~ codex global config: ${globalConfigPath}`);
-  if (hooksCheck.changed) log(`  ~ codex hooks: ${hooksCheck.path}`);
-  return { attempted: true, changed: true, hooksChanged: hooksCheck.changed, fatal: false };
-}
-
-/**
- * Sync hooks between template and installed settings (in-memory).
- * Exported for unit testing. Called by main() after loading files.
- *
- * @returns {{ added: number, updated: number, removed: number }}
- */
-export function syncHooks(installedSettings, _templateSettings, {
-  dryRun = false,
-  log = console.log,
-  desiredHooks = desiredClaudeHooks(),
-  zylosDir = ZYLOS_DIR,
-} = {}) {
-  const desiredHookGroups = desiredHooks || {};
-
-  let added = 0;
-  let updated = 0;
-  let removed = 0;
-
-  // Ensure hooks object exists
-  if (!installedSettings.hooks) installedSettings.hooks = {};
-
-  // --- Forward pass: add missing matcher groups/hooks, update hooks in matched groups ---
-  // Strategy: align by matcher group, not by individual hook across all groups.
-  //   - If installed has a group with the same matcher → add missing template
-  //     hooks and update existing hooks (command/timeout drift)
-  //   - If installed has NO group with that matcher → add the whole group from template
-  for (const [event, matchers] of Object.entries(desiredHookGroups)) {
-    if (!Array.isArray(matchers)) continue;
-    if (!Array.isArray(installedSettings.hooks[event])) {
-      installedSettings.hooks[event] = [];
-    }
-    const installedMatchers = installedSettings.hooks[event];
-
-    for (const templateGroup of matchers) {
-      const matcherValue = templateGroup.matcher !== undefined ? templateGroup.matcher : '';
-      const installedGroup = installedMatchers.find(g =>
-        (g.matcher !== undefined ? g.matcher : '') === matcherValue
-      );
-
-      if (installedGroup) {
-        // Group exists — add missing template hooks and update existing hooks
-        // (command/timeout drift). This is needed for upgrades where new core
-        // hooks are added to an existing matcher group.
-        for (const templateCmd of getCommandHooks(templateGroup)) {
-          const templateKey = hookScriptKey(templateCmd.command);
-          const existing = getCommandHooks(installedGroup).find(
-            h => hookScriptKey(h.command) === templateKey
-          );
-          if (!existing) {
-            if (!dryRun) {
-              if (!Array.isArray(installedGroup.hooks)) installedGroup.hooks = [];
-              installedGroup.hooks.push({ ...templateCmd });
-            }
-            added++;
-            log(`  + ${event}[${matcherValue}]: ${templateCmd.command}`);
-          } else if (existing.command !== templateCmd.command || existing.timeout !== templateCmd.timeout ||
-            (Object.hasOwn(templateCmd, 'async') && existing.async !== templateCmd.async)) {
-            if (!dryRun) {
-              existing.command = templateCmd.command;
-              if (templateCmd.timeout !== undefined) existing.timeout = templateCmd.timeout;
-              if (Object.hasOwn(templateCmd, 'async')) existing.async = templateCmd.async;
-            }
-            updated++;
-            log(`  ~ ${event}[${matcherValue}]: ${templateCmd.command}`);
-          }
-        }
-      } else {
-        // Group missing — add the whole group from template
-        if (!dryRun) {
-          const newGroup = { hooks: [] };
-          if (templateGroup.matcher !== undefined) newGroup.matcher = templateGroup.matcher;
-          for (const templateCmd of getCommandHooks(templateGroup)) {
-            newGroup.hooks.push({ ...templateCmd });
-          }
-          installedMatchers.push(newGroup);
-        }
-        const hookCount = getCommandHooks(templateGroup).length;
-        added += hookCount;
-        log(`  + ${event}[${matcherValue}]: added matcher group (${hookCount} hooks)`);
-      }
-    }
-  }
-
-  // --- Reverse pass: remove obsolete core hooks (matcher-aware) ---
-  // Check each installed group against its corresponding template group (same matcher).
-  // A core hook is removed if it's not present in the matching template group,
-  // even if it exists in other template groups for the same event.
-  for (const [event, matchers] of Object.entries(installedSettings.hooks)) {
-    if (!Array.isArray(matchers)) continue;
-
-    const templateMatchers = Array.isArray(desiredHookGroups[event]) ? desiredHookGroups[event] : [];
-
-    for (let gi = matchers.length - 1; gi >= 0; gi--) {
-      const group = matchers[gi];
-      if (!Array.isArray(group.hooks)) continue;
-
-      const groupMatcher = group.matcher !== undefined ? group.matcher : '';
-      const correspondingTemplate = templateMatchers.find(tm =>
-        (tm.matcher !== undefined ? tm.matcher : '') === groupMatcher
-      );
-
-      for (let hi = group.hooks.length - 1; hi >= 0; hi--) {
-        const h = group.hooks[hi];
-        if (h.type !== 'command') continue;
-
-        if (!isCoreManaged(h, { zylosDir })) continue;
-
-        const installedKey = hookScriptKey(h.command);
-        // Check only the corresponding template group, not all groups
-        const foundInTemplate = correspondingTemplate
-          ? getCommandHooks(correspondingTemplate).some(th => hookScriptKey(th.command) === installedKey)
-          : false;
-
-        if (!foundInTemplate) {
-          if (!dryRun) {
-            group.hooks.splice(hi, 1);
-          }
-          removed++;
-          log(`  - ${event}[${groupMatcher}]: ${h.command}`);
-        }
-      }
-
-      // Remove empty groups
-      if (!dryRun && group.hooks.length === 0) {
-        matchers.splice(gi, 1);
-      }
-    }
-
-    // Clean up empty event arrays
-    if (!dryRun && matchers.length === 0) {
-      delete installedSettings.hooks[event];
-    }
-  }
-
-  return { added, updated, removed };
-}
-
 /** Generation is separate from restart submission so upgrade can call it after its deadline gate. */
 export async function enqueueRestartIfNeeded({
   zylosDir = ZYLOS_DIR,
@@ -648,148 +216,64 @@ export async function enqueueRestartIfNeeded({
 
 }
 
-function syncSharedRuntimeHooks({
-  zylosDir = ZYLOS_DIR,
-  dryRun = false,
-  stopFailureSupported = detectStopFailureSupport(),
-  subagentHooksSupported = detectSubagentHooksSupport(),
-  log = console.log,
-} = {}) {
-  const settingsPath = path.join(zylosDir, '.claude', 'settings.json');
-
-  if (!fs.existsSync(TEMPLATE_SETTINGS)) {
-    console.log('Settings hooks: template not found, skipping.');
-    return;
-  }
-
-  let templateSettings, installedSettings;
-  try {
-    templateSettings = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS, 'utf8'));
-  } catch {
-    console.log('Settings hooks: failed to parse template, skipping.');
-    return;
-  }
-  try {
-    installedSettings = fs.existsSync(settingsPath)
-      ? JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
-      : {};
-    if (!installedSettings || typeof installedSettings !== 'object' || Array.isArray(installedSettings) ||
-        (installedSettings.hooks !== undefined && (!installedSettings.hooks ||
-          typeof installedSettings.hooks !== 'object' || Array.isArray(installedSettings.hooks)))) {
-      throw new Error('Expected settings and hooks objects');
+export async function syncRuntimeHooks(options = {}) {
+  const runtimes = await Promise.all(SUPPORTED_RUNTIMES.map(getRuntime));
+  const reports = [];
+  let aborted = false;
+  for (const rt of runtimes.filter(rt => rt.hooks.syncPolicy === 'always')) {
+    const report = await rt.hooks.sync(options);
+    if (report.abort) {
+      aborted = true;
+      break;
     }
-  } catch (cause) {
-    throw Object.assign(new Error('Cannot read Claude settings for hook synchronization', { cause }), { code: 'SETTINGS_UNREADABLE' });
+    reports.push([rt.id, report]);
   }
 
-  const { added, updated, removed } = syncHooks(installedSettings, templateSettings, {
-    dryRun, desiredHooks: desiredClaudeHooks({ zylosDir, stopFailureSupported, subagentHooksSupported }),
-    zylosDir, log,
-  });
-  if (!stopFailureSupported) console.log('Health hooks: StopFailure unavailable or unverified; retaining screen-based fallback.');
-
-  // --- Sync top-level statusLine from template ---
-  let statusLineChanged = false;
-  if (templateSettings.statusLine) {
-    const tsl = JSON.stringify(templateSettings.statusLine);
-    const isl = JSON.stringify(installedSettings.statusLine || null);
-    if (tsl !== isl) {
-      const symbol = installedSettings.statusLine ? '~' : '+';
-      if (!dryRun) {
-        installedSettings.statusLine = templateSettings.statusLine;
+  let result;
+  if (!aborted) {
+    const entries = Object.fromEntries(reports.map(([id, report]) => [id, report.entry]));
+    const changed = reports.some(([, report]) => report.changed);
+    const restart = reports.some(([, report]) => report.restart);
+    if (!changed) {
+      console.log('Settings hooks: all up to date (no changes).');
+      result = { ...entries, changed: false };
+    } else if (options.dryRun) {
+      const fragments = reports.map(([, report]) => report.fragments.dryRun).join('');
+      console.log(`Settings hooks (dry run): ${fragments}.`);
+      result = { ...entries, changed: true };
+    } else {
+      for (const [, report] of reports) {
+        const committed = await report.commit?.();
+        if (committed) report.fragments.done = committed.done;
       }
-      statusLineChanged = true;
-      console.log(`  ${symbol} statusLine: ${templateSettings.statusLine.command || '(set)'}`);
-    }
-  } else if (installedSettings.statusLine) {
-    // Template removed statusLine — clean up installed copy
-    if (!dryRun) {
-      delete installedSettings.statusLine;
-    }
-    statusLineChanged = true;
-    console.log(`  - statusLine: (removed)`);
-  }
-
-  const modelSync = syncTemplateModelSetting({
-    templateSettings,
-    installedSettings,
-    dryRun,
-  });
-
-  // Backfill boolean settings (autoMemoryEnabled, autoDreamEnabled)
-  const backfillKeys = ['autoMemoryEnabled', 'autoDreamEnabled'];
-  let settingsBackfilled = false;
-  for (const key of backfillKeys) {
-    const result = syncTemplateSetting(key, {
-      templateSettings,
-      installedSettings,
-      dryRun,
-    });
-    if (result.changed) settingsBackfilled = true;
-  }
-
-  const codexSync = syncCodexConfig({ dryRun, projectDir: zylosDir });
-  if (codexSync.fatal) {
-    console.error(codexSync.error);
-    throw new Error(codexSync.error);
-  }
-
-  // Hook membership can change independently of either TOML file.
-  // syncCodexConfig may already have refreshed hooks.json together with the
-  // TOML files; count that as a hooks refresh too.
-  const installedHooks = dryRun ? { changed: false } : installCoreCodexHook({ zylosDir });
-  const codexHooks = { ...installedHooks, changed: installedHooks.changed || (!dryRun && Boolean(codexSync.hooksChanged)) };
-  // Codex loads .codex/hooks.json only at launch and enqueueRestartIfNeeded()
-  // restarts Claude only, so a running Codex session keeps its old hooks.
-  if (codexHooks.changed) {
-    console.log('Codex hooks: updated; they take effect at the next Codex session start.');
-  }
-  const result = { claude: { added, updated, removed }, codex: codexHooks, stopFailureSupported };
-
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexSync.changed && !codexHooks.changed) {
-    console.log('Settings hooks: all up to date (no changes).');
-    return { ...result, changed: false };
-  }
-
-  if (dryRun) {
-    console.log(`Settings hooks (dry run): ${added} to add, ${updated} to update, ${removed} to remove${statusLineChanged ? ', statusLine to update' : ''}${modelSync.changed ? ', model to backfill' : ''}${settingsBackfilled ? ', settings to backfill' : ''}${codexSync.changed ? ', codex config to refresh' : ''}.`);
-    return { ...result, changed: true };
-  }
-
-  // Persist the native model first, then pin its per-model threshold.
-  // Migration must resolve the model that was actually saved.
-  const thresholdSync = persistInstalledSettingsAndSyncCoupledThreshold({
-    installedSettings,
-    settingsPath,
-    modelBackfilled: modelSync.changed,
-  });
-
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexHooks.changed) {
-    console.log(`Settings hooks: all up to date; Codex config ${codexSync.changed ? 'refreshed' : 'unchanged'}.`);
-    return { ...result, changed: false };
-  }
-
-  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${thresholdSync.changed ? ', new-session threshold paired' : ''}${settingsBackfilled ? ', settings backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}${codexHooks.changed ? ', Codex hooks refreshed' : ''}.`);
-
-  return { ...result, changed: true };
-}
-
-/** Antigravity synchronization reports separately and never requests a shared-runtime restart. */
-export function syncRuntimeHooks(options = {}) {
-  const result = syncSharedRuntimeHooks(options);
-  let agy = { changed: false };
-  if (hasAgyZylosHooks()) {
-    try { agy = syncAgyConfig({ zylosDir: options.zylosDir || ZYLOS_DIR, dryRun: options.dryRun || false }); }
-    catch (error) {
-      agy.error = { code: error.code || 'AGY_CONFIG_SYNC_FAILED', message: error.message };
-      console.error(`Antigravity configuration: ${agy.error.message}`);
+      if (!restart) {
+        const fragments = reports.map(([, report]) => report.fragments.upToDate).filter(Boolean).join('; ');
+        console.log(`Settings hooks: all up to date; ${fragments}.`);
+      } else {
+        const fragments = reports.map(([, report]) => report.fragments.done).join('');
+        console.log(`Settings hooks: ${fragments}.`);
+      }
+      result = { ...entries, changed: restart };
     }
   }
-  return result ? { ...result, agy } : result;
+
+  for (const rt of runtimes.filter(rt => rt.hooks.syncPolicy === 'opted-in')) {
+    let entry = { changed: false };
+    if (rt.hooks.optedIn({ home: undefined })) {
+      try {
+        entry = await rt.hooks.sync({ zylosDir: options.zylosDir || ZYLOS_DIR, dryRun: options.dryRun || false });
+      } catch (error) {
+        entry.error = { code: error.code || 'AGY_CONFIG_SYNC_FAILED', message: error.message };
+        console.error(`${runtimeDisplayName(rt.id)} configuration: ${entry.error.message}`);
+      }
+    }
+    if (result) result[rt.id] = entry;
+  }
+  return result;
 }
 
 export async function main(argv = process.argv.slice(2)) {
   const dryRun = argv.includes('--dry-run');
-  const result = syncRuntimeHooks({ dryRun });
+  const result = await syncRuntimeHooks({ dryRun });
   if (!dryRun && result?.changed) await enqueueRestartIfNeeded();
 }

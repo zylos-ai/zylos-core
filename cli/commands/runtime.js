@@ -16,9 +16,6 @@ import path from 'node:path';
 import { readZylosConfigOrThrow, readZylosConfigStrict, readSessionMode, updateZylosConfigLocked, ZYLOS_DIR } from '../lib/config.js';
 import { getRuntime, runtimeDisplayName, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { listGroupTmuxSessions } from '../lib/session-group-paths.js';
-import { desiredClaudeHooks, syncHooks, detectStopFailureSupport, detectSubagentHooksSupport } from '../lib/sync-runtime-hooks.js';
-import { syncAgyConfig, isAgyConfigReady } from '../lib/agy-setup.js';
-import { isCodexTrustValid, getCodexVersion } from '../lib/codex-hooks.js';
 import { instructionPaths, isSplitInstructionsActive, buildInstructionFile } from '../lib/runtime/instruction-builder.js';
 import { UNSUPPORTED } from '../lib/runtime/contract.js';
 import { isValidBaseUrl } from '../lib/runtime-setup.js';
@@ -157,17 +154,8 @@ export async function runtimeHooksReady(target) {
   const instruction = instructionPaths(target, { zylosDir: ZYLOS_DIR }).outputPath;
   const pendingMigration = !isSplitInstructionsActive({ zylosDir: ZYLOS_DIR });
   if (!fs.existsSync(instruction)) return { ready: false, pendingMigration };
-  if (target === 'agy') {
-    return { ready: isAgyConfigReady({ zylosDir: ZYLOS_DIR }), pendingMigration };
-  }
-  if (target === 'codex') return { ready: isCodexTrustValid({ zylosDir: ZYLOS_DIR, projectDir: ZYLOS_DIR, codexVersion: getCodexVersion() }).valid, pendingMigration };
-  try {
-    const settings = JSON.parse(fs.readFileSync(path.join(ZYLOS_DIR, '.claude', 'settings.json'), 'utf8'));
-    const copy = structuredClone(settings);
-    const changes = syncHooks(copy, null, { zylosDir: ZYLOS_DIR, dryRun: true, log: () => {},
-      desiredHooks: desiredClaudeHooks({ stopFailureSupported: detectStopFailureSupport(), subagentHooksSupported: detectSubagentHooksSupport() }) });
-    return { ready: changes.added + changes.updated + changes.removed === 0, pendingMigration };
-  } catch { return { ready: false, pendingMigration }; }
+  const rt = await getRuntime(target);
+  return { ready: await rt.hooks.ready({ zylosDir: ZYLOS_DIR }), pendingMigration };
 }
 
 export async function observeRuntimeGroups(baseline, sessionMode, { list = listGroupTmuxSessions,
@@ -259,8 +247,8 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
 
     let ready;
     try {
-      if (target === 'agy') {
-        syncAgyConfig({ zylosDir: ZYLOS_DIR });
+      if (selected.hooks.syncPolicy === 'opted-in') {
+        await selected.hooks.sync({ zylosDir: ZYLOS_DIR });
       }
       ready = await hooksReady(target);
     } catch (error) {

@@ -59,7 +59,7 @@ test('new installation templates generate Dashboard-only browser configuration',
   const init = new URL('../../commands/init.js', import.meta.url).href;
   const script = `import fs from 'node:fs'; import path from 'node:path';
     import { deployTemplates, generateCaddyfile } from ${JSON.stringify(init)};
-    deployTemplates({ freshInstall: true });
+    await deployTemplates({ freshInstall: true });
     generateCaddyfile('fixture.invalid', 'http', 8080);
     const root = process.env.ZYLOS_DIR;
     console.log(JSON.stringify({ env: fs.readFileSync(path.join(root,'.env'),'utf8'),

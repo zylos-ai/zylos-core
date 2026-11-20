@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadPostUpgradeSync, preparePostCutoff, publishPostCutoff, removeLegacyDashboardHooks, dashboardHookCommands } from '../upgrade-post-cutoff.js';
-import { installCoreCodexHook, coreSessionStartCommand } from '../codex-hooks.js';
+import { installCoreCodexHook, coreSessionStartCommand } from '../runtime/codex/hooks.js';
 
 const sync = await loadPostUpgradeSync();
 
