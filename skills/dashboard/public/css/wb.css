@@ -1717,8 +1717,8 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   justify-content: space-between;
   gap: 8px 16px;
   padding: 8px 0;
-  border-top: 1px solid var(--wb-line);
 }
+.wb-host-row + .wb-host-row { border-top: 1px solid var(--wb-line); }
 .wb-host-text { flex: 1 1 16rem; min-width: 0; font-size: 14px; line-height: 24px; overflow-wrap: anywhere; }
 .wb-host-meta { margin: 0; color: var(--c-ink-meta); font-size: 12px; line-height: 18px; }
 .wb-host-allow .wb-input { max-width: 100%; }

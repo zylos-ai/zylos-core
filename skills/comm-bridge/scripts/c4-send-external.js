@@ -82,7 +82,7 @@ export async function sendExternal(request, message, { api, skillsDir, env = pro
   // Native single: Origin handles every address, so nothing is checked and
   // every outbound row is recorded under origin; the answer only feeds the hook.
   const single = (!hasSender || senderGroup === 'origin') && await isNativeSingle(readSessionMode);
-  let recordGroup, hostedAddress;
+  let recordGroup;
   if (single) recordGroup = 'origin';
   else if (hasSender) {
     const ownerGroup = fixed || api.resolveSessionGroup('out', channel, endpoint, route);
@@ -90,15 +90,11 @@ export async function sendExternal(request, message, { api, skillsDir, env = pro
     else {
       const host = senderGroup === ownerGroup ? null : api.getSessionHost(ownerGroup);
       assertOutboundSession(senderGroup, ownerGroup, request, host);
-      if (host === senderGroup) {
-        hostedAddress = ownerGroup;
-        recordGroup = senderGroup;
-      }
+      if (host === senderGroup) recordGroup = senderGroup;
     }
   }
   const stdinDelivery = readChannelHookMetadata(channel, { skillsDir })?.delivery === 'stdin';
   await runBeforeSendHook({ ...request, ...route }, message, { skillsDir, env });
-  if (hostedAddress) assertOutboundSession(senderGroup, hostedAddress, request, api.getSessionHost(hostedAddress));
   const record = api.insertConversation('out', channel, endpoint, message,
     { status: 'delivered', ...route, ...(recordGroup ? { recordGroup } : {}), sessionId: senderSessionId(env),
       ...(env.ZYLOS_SYSTEM_SEND === '1' ? { deliveryAction: 'system_notice' } : {}) });

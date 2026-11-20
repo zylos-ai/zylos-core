@@ -32,8 +32,8 @@ export function mountSessionHostSettings(root, { t, locale, local, read, write }
     return node;
   }
 
-  function card(suffix) {
-    const { card: node } = settingsCard(document, { title: label(suffix) });
+  function card(suffix, icon) {
+    const { card: node } = settingsCard(document, { icon, title: label(suffix) });
     const rows = element(document, 'div', undefined, 'wb-host-rows');
     node.append(rows);
     list.append(node);
@@ -59,7 +59,7 @@ export function mountSessionHostSettings(root, { t, locale, local, read, write }
     list.replaceChildren();
     if (!data) return;
 
-    const relationships = card('relationships');
+    const relationships = card('relationships', 'layers');
     if (!data.relationships.length) empty(relationships, 'emptyRelationships');
     for (const record of data.relationships) {
       const when = record.attached_at ? formatZoned(record.attached_at, locale()) : '—';
@@ -68,7 +68,7 @@ export function mountSessionHostSettings(root, { t, locale, local, read, write }
       ], [action('detach', { action: 'detach', group: record.source_group }, 'wb-btn-danger-text')]);
     }
 
-    const allowlist = card('allowlist');
+    const allowlist = card('allowlist', 'alert');
     if (!data.allowlist.length) empty(allowlist, 'emptyAllowlist');
     for (const channel of data.allowlist) {
       row(allowlist, channel, [], [action('remove', { action: 'disallow', channel }, 'wb-btn-danger-text')]);

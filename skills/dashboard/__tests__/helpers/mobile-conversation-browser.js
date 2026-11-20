@@ -39,6 +39,7 @@ export async function startPage(sandbox, publicDir = currentPublic) {
       if (p.endsWith('/status') || p.endsWith('/questions')) return { items: [], nextCursor: null };
       return { conversation: conversation(id) };
     }
+    if (p === '/api/session-hosts') return { relationships: [], allowlist: [] };
     if (p === '/api/settings/timezone') return { tz: 'UTC', writable: true, restart_status: 'known', restart_services: [] };
     if (p === '/api/observer/status' && observerBlocked) return { state: 'not_installed', startupError: 'teardown_failed' };
     if (p === '/api/instance') {
