@@ -1,0 +1,11 @@
+{
+  "program": "claude",
+  "version": "2.1.327 (Claude Code)",
+  "recordedAt": "2026-11-20T16:38:29Z",
+  "how": "Reviewer-recorded on DGX Spark (Linux aarch64) as the dedicated test user zylos-test with a temporary HOME, @anthropic-ai/claude-code@2.1.327 in a temporary npm prefix, authenticated through the relay (ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN in the environment, removed afterwards), onboarding, trust and bypass acceptance pre-seeded in ~/.claude.json. Launched with --dangerously-skip-permissions in a private tmux socket, pane 200x50; no message was sent to the model. Each screen is unmodified `tmux capture-pane -p` output; cursorX/cursorY are `display -p '#{cursor_x}'` / `'#{cursor_y}'` read immediately before the capture and re-read unchanged immediately after it.",
+  "files": {
+    "empty.txt": { "cursorX": 2, "cursorY": 47, "description": "Empty input box on a fresh session." },
+    "draft.txt": { "cursorX": 21, "cursorY": 47, "description": "One-line draft typed, not sent." },
+    "slash-menu.txt": { "cursorX": 3, "cursorY": 47, "description": "Slash command menu opened by typing /." }
+  }
+}

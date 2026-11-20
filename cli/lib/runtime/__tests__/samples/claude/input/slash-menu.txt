@@ -1,0 +1,50 @@
+
+ ▐▛███▛█   Claude Code v2.1.327
+▝▜██████▀  Opus 5.5 · API Usage Billing
+ ▝▝   ▝▝   /tmp/zt-cc/ws
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ❯ /add-dir                    Add a working directory
+    /auto-mode-setup            Teach auto mode about your environment
+    /autocompact                Set how full the context gets before auto-summarizing
+    /background                 Send this session to the background and free the terminal
+    /branch                     Create a branch of the current conversation at this point
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ /
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
