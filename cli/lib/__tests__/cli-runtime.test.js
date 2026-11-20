@@ -8,6 +8,10 @@ import { updateConfigWithLock } from '../config-lock.js';
 import { readConfigStrict } from '../config-store.js';
 import { executeRuntimeSwitch, observeRuntimeGroups, runtimeCommand } from '../../commands/runtime.js';
 
+for (const name of ['CLAUDE.md', 'AGENTS.md']) {
+  fs.writeFileSync(path.join(process.env.ZYLOS_DIR, name), 'Legacy fixture instructions\n');
+}
+
 function fixture({ target = 'codex', findExecutable, checkAuth, ...overrides } = {}) {
   const calls = [];
   const deps = {
@@ -36,7 +40,7 @@ test('runtime prechecks are ordered and stop before persistence', async () => {
   for (const [override, code, expected] of [
     [{ findExecutable: () => null, prepareCli: () => { assert.fail('always-installed runtime must not run the installer'); } }, 'RUNTIME_NOT_INSTALLED', ['adapter', 'read']],
     [{ read: () => ({ state: 'error' }) }, 'CONFIG_UNREADABLE', ['adapter']],
-    [{ hooksReady: () => ({ ready: false, pendingMigration: false }) }, 'HOOKS_NOT_READY', ['adapter', 'read', 'exists']],
+    [{ hooksReady: () => ({ ready: false, pendingMigration: false }) }, 'RUNTIME_SETUP_INCOMPLETE', ['adapter', 'read', 'exists']],
     [{ checkAuth: () => ({ status: 'uncertain' }) }, 'AUTH_NOT_CONFIRMED', ['adapter', 'read', 'exists', 'hooks']],
   ]) {
     const f = fixture(override); const result = await f.run();
@@ -160,7 +164,7 @@ test('later credential/hook failures retain only confirmed saved credential item
   assert.equal(partial.calls.includes('write'), false);
   const hooks = fixture({ hooksReady: () => ({ ready: false, pendingMigration: false }) });
   const failed = await hooks.run(['--save-apikey', 'fixture-key']);
-  assert.equal(failed.error.code, 'HOOKS_NOT_READY'); assert.deepEqual(failed.error.persisted, ['apiKey']);
+  assert.equal(failed.error.code, 'RUNTIME_SETUP_INCOMPLETE'); assert.deepEqual(failed.error.persisted, ['apiKey']);
 });
 
 test('lock-return snapshot determines previous/config/changed, including concurrent writer', async () => {

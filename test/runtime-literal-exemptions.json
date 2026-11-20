@@ -41,11 +41,6 @@
   },
   {
     "file": "cli/commands/init.js",
-    "text": "if (selectedRuntime === 'claude') {",
-    "reason": "dispatch:launch: Controls the Claude-only launch terms prompt."
-  },
-  {
-    "file": "cli/commands/init.js",
     "text": "if (selectedRuntime === 'claude' && authentication.authenticated && !skipConfirm && needsBypassAcceptance()) {",
     "reason": "dispatch:launch: Controls the Claude-only launch terms prompt."
   },
@@ -58,11 +53,6 @@
     "file": "cli/commands/runtime.js",
     "text": "if (target === 'agy') {",
     "reason": "dispatch:hooks: Checks or refreshes runtime-specific hook and configuration readiness."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "try { assertInstructionReady('agy', { zylosDir: ZYLOS_DIR }); }",
-    "reason": "dispatch:instructions: Selects the existing runtime instruction filename or readiness action."
   },
   {
     "file": "cli/commands/runtime.js",
@@ -73,11 +63,6 @@
     "file": "cli/commands/runtime.js",
     "text": "if (target === 'agy') {",
     "reason": "dispatch:hooks: Checks or refreshes runtime-specific hook and configuration readiness."
-  },
-  {
-    "file": "cli/commands/runtime.js",
-    "text": "buildInstructionFile('agy', { zylosDir: ZYLOS_DIR });",
-    "reason": "dispatch:instructions: Selects the existing runtime instruction filename or readiness action."
   },
   {
     "file": "cli/lib/claude-eval.js",

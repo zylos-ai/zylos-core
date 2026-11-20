@@ -39,6 +39,7 @@ export const RUNTIME_CONTRACT = Object.freeze({
     efforts: 'optional',
     overrideHelpFlags: 'optional',
     checkAutonomous: 'optional',
+    preAccept: 'optional',
   }) }),
   instructions: Object.freeze({ required: true, members: Object.freeze({
     template: 'required',

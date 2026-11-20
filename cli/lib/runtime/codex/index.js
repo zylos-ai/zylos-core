@@ -27,7 +27,7 @@ export default Object.freeze({
     postUpgradeSync,
   }),
   auth,
-  launch: Object.freeze({ prepare, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags, checkAutonomous: UNSUPPORTED }),
+  launch: Object.freeze({ prepare, preAccept: UNSUPPORTED, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags, checkAutonomous: UNSUPPORTED }),
   instructions,
   input: Object.freeze({ bracketedPaste: false }),
 });

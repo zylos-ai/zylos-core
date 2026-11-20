@@ -29,7 +29,8 @@ const { credentialFilePermissionWarnings } = await import('../runtime-setup.js')
 const { getRuntime } = await import('../runtime/index.js');
 const claude = await import('../runtime/claude/auth.js');
 const codex = await import('../runtime/codex/auth.js');
-const { preAcceptClaudeTerms, runInitAuthentication } = await import('../../commands/init.js');
+const { launch: { preAccept } } = await getRuntime('claude');
+const { runInitAuthentication } = await import('../../commands/init.js');
 const { applyBaseUrl } = await import('../../commands/runtime.js');
 const { persistInstalledSettingsAndSyncCoupledThreshold } = await import('../sync-runtime-hooks.js');
 const { reconcileAssemblerSettingsFile, updateFailureReport } = await import('../instruction-migration.js');
@@ -109,7 +110,7 @@ describe('owner-only credential files', { skip: !posix && 'POSIX permission bits
     });
 
     test('init terms pre-acceptance creates both files owner-only', () => {
-      assert.equal(preAcceptClaudeTerms(), true);
+      assert.equal(preAccept(), true);
       assert.equal(mode(userSettings), '600');
       assert.equal(mode(claudeJson), '600');
     });
@@ -117,7 +118,7 @@ describe('owner-only credential files', { skip: !posix && 'POSIX permission bits
     test('init terms pre-acceptance tightens existing world-readable files it rewrites', () => {
       worldReadable(userSettings, { env: { ANTHROPIC_API_KEY: 'credential-value-0006' } });
       worldReadable(claudeJson, { keep: true });
-      assert.equal(preAcceptClaudeTerms(), true);
+      assert.equal(preAccept(), true);
       assert.equal(mode(userSettings), '600');
       assert.equal(mode(claudeJson), '600');
     });

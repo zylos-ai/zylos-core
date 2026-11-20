@@ -16,6 +16,9 @@ const preserved = Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PATH', relayFlag, ..
 const home = path.join(root, 'home'), zylos = path.join(root, 'zylos'), bin = path.join(root, 'bin');
 const settingsFile = path.join(home, '.claude', 'settings.json'), envFile = path.join(zylos, '.env');
 for (const dir of [home, zylos, bin, path.dirname(settingsFile)]) fs.mkdirSync(dir, { recursive: true });
+for (const name of ['CLAUDE.md', 'AGENTS.md']) {
+  fs.writeFileSync(path.join(zylos, name), 'Legacy fixture instructions\n');
+}
 fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\nprintf "fixture-version\\n"\n', { mode: 0o755 });
 process.env.HOME = home;
 process.env.ZYLOS_DIR = zylos;
@@ -497,7 +500,7 @@ test('missing, env-less and unparseable settings.json print nothing and every sa
 // prints it before the error.
 for (const [name, changes, code] of [
   ['the auth probe fails', { runtimeFor: id => runtimeAuthFixture(id, { auth: { checkAuth: () => ({ status: 'failure' }) } }) }, 'AUTH_FAILED'],
-  ['hooks are not ready', { hooksReady: () => ({ ready: false }) }, 'HOOKS_NOT_READY'],
+  ['hooks are not ready', { hooksReady: () => ({ ready: false }) }, 'RUNTIME_SETUP_INCOMPLETE'],
   ['the config write fails', { write: () => { throw Object.assign(new Error('config write failed'), { code: 'CONFIG_WRITE_FAILED' }); } }, 'CONFIG_WRITE_FAILED'],
 ]) test(`zylos runtime --save-apikey keeps the settings.json warning when ${name} after the save`, async () => {
   const hand = handSecret(), saved = 'sk-ant-api03-' + secret();
