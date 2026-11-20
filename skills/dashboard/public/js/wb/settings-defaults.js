@@ -166,7 +166,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   undoRuntime.addEventListener('click', () => { draftRuntime = groups.baseline; redrawEngine(); });
   lock(saveRuntime, () => !writable() || draftRuntime == null || draftRuntime === groups.baseline || runtimeHealth(snapshot, draftRuntime) === 'unavailable');
   saveRuntime.addEventListener('click', async () => {
-    if (saveRuntime.disabled || !(await confirm(runtimeSaveConfirmation(draftRuntime, snapshot, t)))) return;
+    if (saveRuntime.disabled || !(await confirm(runtimeSaveConfirmation(draftRuntime, snapshot, t), { title: t('wb.settings.confirm.runtime'), danger: true }))) return;
     saveRuntime.disabled = true;
     try {
       const accepted = await execute('switch-runtime', { runtime: draftRuntime }, { confirmed: true });
@@ -331,7 +331,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
     const pending = changes();
     if (save.disabled || !pending.length) return;
     // One confirmation lists every change; cancelling sends nothing and leaves the result line alone.
-    if (!(await confirm(modelSaveConfirmation(pending, t, metadata)))) return;
+    if (!(await confirm(modelSaveConfirmation(pending, t, metadata), { title: t('wb.settings.confirm.models'), danger: false }))) return;
     save.disabled = true; const applied = [];
     const report = () => {
       const left = pending.filter(change => !applied.includes(change));
@@ -408,7 +408,7 @@ export function renderHotTtl(root, { metadata = {}, document = root.ownerDocumen
   save.addEventListener('click', async () => {
     if (lockSave()) return;
     const value = minutes();
-    if (!(await confirm(t('wb.settings.hotTtl.confirm', { minutes: value })))) return;
+    if (!(await confirm(t('wb.settings.hotTtl.confirm', { minutes: value }), { title: t('wb.settings.confirm.hotTtl'), danger: false }))) return;
     if (lockSave()) return;
     busy = true; redraw();
     try {

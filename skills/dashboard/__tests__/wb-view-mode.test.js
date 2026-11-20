@@ -61,17 +61,14 @@ test('conversation navigation maps direct and fleet URLs without changing existi
     assert.equal(tabForPath(prefix + '/usage'), 'trends');
   }
 });
-test('instance status names Origin in plain words and keeps raw values for technical detail', () => {
+test('instance status keeps raw values for technical detail', () => {
   const t = (key, values) => key + (values ? ' ' + JSON.stringify(values) : '');
   const data = { view: 'multi', session_mode: { sessionMode: 'multi' }, origin: { presence: 'not_running' } };
-  assert.equal(instanceStatusText(data, 'plain', t), 'wb.term.origin · wb.state.not_running');
-  assert.equal(instanceStatusText({ origin: { state: { kind: 'working' }, mainAgent: 'busy', presence: 'running' } }, 'plain', t), 'wb.term.origin · wb.state.working');
-  assert.equal(instanceStatusText({ origin: { presence: 'mystery_state' } }, 'plain', t), 'wb.term.origin · wb.state.unknown');
-  assert.equal(instanceStatusText(data, 'technical', t),
+  assert.equal(instanceStatusText(data, t),
     'actions.instance_status {"view":"multi","mode":"multi","origin":"not_running"}');
   // Older instances report null and newer ones 'unreadable'; neither shows a raw value.
   for (const sessionMode of [null, 'unreadable']) {
-    assert.equal(instanceStatusText({ session_mode: { sessionMode }, origin: { presence: 'running' } }, 'technical', t),
+    assert.equal(instanceStatusText({ session_mode: { sessionMode }, origin: { presence: 'running' } }, t),
       'actions.instance_status {"view":"value.unknown","mode":"value.unknown","origin":"running"}', String(sessionMode));
   }
 });

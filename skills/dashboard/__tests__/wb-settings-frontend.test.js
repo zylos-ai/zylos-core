@@ -426,7 +426,9 @@ test('settings composition moves actual control nodes into cards and preserves t
   assert.equal(page.prefs.account.querySelector('#logout-btn'), logout); assert.equal(page.prefs.detail.querySelector('#wb-detail-toggle').parentElement, detailLabel);
   assert.equal(page.prefs.version.querySelector('[data-action="upgrade-cc"]'), upgrade);
   page.select('pricing'); assert.equal(page.sections.pricing.hidden, false); assert.equal(page.sections.defaults.hidden, true);
-  page.detail('technical'); page.select('observer'); page.detail('plain'); assert.equal(page.sections.observer.hidden, true); assert.equal(page.sections.defaults.hidden, false);
+  // The terminal observer section is listed and opens without technical details.
+  assert.equal(root.querySelector('nav').querySelectorAll('.wb-set-nav-btn')[settingsSections.indexOf('observer')].hidden, false);
+  page.select('observer'); assert.equal(page.sections.observer.hidden, false); assert.equal(page.sections.defaults.hidden, true);
   const actionBody = page.actionsScope.querySelector('.modal-body');
   assert.equal(mode.closest('.modal-body'), actionBody);
   assert.equal(root.querySelector('#action-threshold'), null);
@@ -514,10 +516,10 @@ test('theme and language are segmented choices that forward the pressed value', 
   await language.children[1].dispatch('click'); assert.equal(locale, 'en');
 });
 
-test('settings instance status follows the current detail level', () => {
+test('settings instance status is technical text, shown only with technical details', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
   const calls = app.match(/instanceStatusText\([^;]*\)/g) ?? [];
-  assert.deepEqual(calls, ["instanceStatusText(data, document.documentElement.dataset.detail === 'technical' ? 'technical' : 'plain', t)"]);
+  assert.deepEqual(calls, ['instanceStatusText(data, t)']);
   assert.doesNotMatch(app, /t\('actions\.instance_status'/, 'the raw template is used only through instanceStatusText');
 });
 

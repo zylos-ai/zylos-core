@@ -811,6 +811,9 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
   .wb-sched-side { inset: 0; z-index: 55; width: auto; border-left: 0; box-shadow: none; }
 }
 @media (max-width: 760px) {
+  /* Phones: the task list comes first; the numbers, charts and timeline follow it. Desktop keeps its order. */
+  .wb-sched-main { display: flex; flex-direction: column; }
+  .wb-sched-main > .wb-sched-top { order: 1; border-top: 1px solid var(--wb-line); border-bottom: 0; }
   .wb-sched-top { padding: 12px 12px 4px; }
   /* Six numbers as three columns by two rows. */
   .wb-sched-kpi { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 10px 12px; }
@@ -1298,6 +1301,11 @@ a.wb-btn { text-decoration: none; }
 .wb-rt-tab small { color: var(--text-muted); font-weight: 450; }
 .wb-rt-tab[aria-selected="true"] { border-bottom-color: var(--text); color: var(--text); font-weight: 600; }
 .settings-table-scroll, .wb-tscroll { overflow-x: auto; }
+/* While columns are still hidden to the right, the right edge fades out; scrolled to the end, the fade is gone. */
+:is(.settings-table-scroll, .wb-tscroll)[data-more-right] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
 .settings-table-scroll { padding: 4px; margin: -4px -4px -4px; scroll-padding: 4px; }
 .wb-ptable { width: 100%; min-width: 640px; border-collapse: collapse; font-size: 12.5px; }
 .wb-ptable th { padding: 6px; border-bottom: 1px solid var(--wb-line); color: var(--text-muted); font-size: 11.5px; font-weight: 500; text-align: right; white-space: nowrap; }
@@ -1320,8 +1328,11 @@ a.wb-btn { text-decoration: none; }
 .wb-pdel { width: 34px; }
 .wb-more-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 8px; }
 .wb-tip-anchor { position: relative; }
+/* Session mode: the raw instance/mode/Origin line is a technical detail. */
+html:not([data-detail=technical]) #action-instance-status { display: none; }
 .wb-sub-link { color: var(--text-muted); font-size: 12px; text-decoration: underline dotted; text-underline-offset: 3px; }
-.wb-tip-anchor .tip-popover { position: absolute; top: 22px; left: 0; z-index: 6; width: 300px; }
+/* Opaque, so the table under it does not show through its text. */
+.wb-tip-anchor .tip-popover { position: absolute; top: 22px; left: 0; z-index: 6; width: 300px; background: var(--c-raised); }
 .wb-obs-state { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; font-size: 13.5px; }
 .wb-obs-state small { color: var(--text-muted); }
 
@@ -1487,6 +1498,9 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   .wb-set-card { padding: 12px; border-radius: 10px; }
   .wb-set-card-h { margin-bottom: 8px; }
   .wb-seg-engine { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+  /* "How are models matched?" opens across the card's width instead of from the link, so it stays on screen. */
+  .wb-tip-anchor { position: static; }
+  .wb-tip-anchor .tip-popover { top: 44px; left: 12px; right: 12px; width: auto; max-width: none; }
   .wb-savebar { margin: 18px -12px 0; padding: 12px; }
   .wb-set-split { grid-template-columns: 1fr; gap: 12px; }
   .wb-pref, .wb-fld { grid-template-columns: 1fr; gap: 6px; }
@@ -1512,9 +1526,7 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   .wb-o-bar .observer-view-switch button { flex: 1 1 0; }
   .wb-o-bar > .wb-o-size-btn:not([hidden]) { display: inline-flex; flex: none; gap: 4px; }
   .wb-o-size:not(.wb-o-size-open) { display: none; }
-  /* Phones keep the key actions on screen: the dates drop out and the table no longer forces its width. */
-  .wb-ktable { min-width: 0; }
-  .wb-ktable th:nth-child(4), .wb-ktable td:nth-child(4), .wb-ktable th:nth-child(5), .wb-ktable td:nth-child(5) { display: none; }
+  /* Phones: the key table keeps every column and scrolls sideways (with the fade hint above). */
   .wb-ktable th, .wb-ktable td { padding-left: 5px; padding-right: 5px; }
   .wb-ktable td:nth-child(1) b { max-width: 7.5em; }
   .wb-k-acts { flex-wrap: wrap; row-gap: 4px; }
@@ -1539,6 +1551,13 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 @media (max-width: 760px) {
   :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side)
     :is(button, select, summary, a.wb-btn, input:not([type=checkbox], [type=radio], [type=range], [type=hidden], .wb-search input)):not(.wb-vh, .wb-switch-btn, .wb-sched-dot, .wb-set-nav-btn, .wb-set-drawer-btn) { min-height: var(--wb-control-touch); }
+  /* Text fields, number fields and dropdowns are 16px so focusing one does not zoom the page (visual-design
+     decision 14). Important: page and table rules set 12–12.5px on specific fields with higher specificity. */
+  :is(input:not([type=checkbox], [type=radio], [type=range], [type=hidden], [type=button], [type=submit], [type=file], [type=color]), select, textarea) { font-size: 16px !important; }
+  /* At 16px a search box's input would size itself from its characters and widen its row (the overview search
+     would push the time range onto a row of its own); it takes the box's free width instead. Important: page
+     rules set a width on these inputs with higher specificity. */
+  .wb-search > input { flex: 1 1 0; width: 0 !important; }
   /* A short label ("Edit" in English) must not leave a labelled button narrower than a fingertip either. */
   .wb-btn { min-width: 40px; }
   :where(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side) .wb-icon-btn { width: var(--wb-control-touch); min-width: var(--wb-control-touch); }

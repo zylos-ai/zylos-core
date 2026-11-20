@@ -3,7 +3,7 @@ import { createActionRunner } from './action-runner.js';
 /** The question the page asks before an action that changes the running agent. */
 export function actionConfirmText(action, body, { t, runtime = null, effortLabel = value => value }) {
   const labels = {
-    'switch-mode': () => t('confirm.switch_mode', { mode: body?.mode }),
+    'switch-mode': () => t('confirm.switch_mode', { mode: ['single', 'multi'].includes(body?.mode) ? t('wb.settings.session.' + body.mode) : t('wb.unknown') }),
     'restart-session': () => t('confirm.restart'),
     'switch-runtime': () => body?.runtime === 'codex' ? t('confirm.switch_runtime_codex') : t('confirm.switch_runtime', { value: body?.runtime }),
     'switch-model': () => t('confirm.switch_model', { value: body?.model }),
@@ -12,6 +12,28 @@ export function actionConfirmText(action, body, { t, runtime = null, effortLabel
       : t('confirm.upgrade_runtime', { runtime: runtime === 'agy' ? 'Antigravity' : runtime || t('wb.unknown') }),
   };
   return labels[action]?.() || t('confirm.fallback', { action });
+}
+
+const engineTitle = runtime => runtime === 'codex' ? 'Codex CLI' : runtime === 'claude' ? 'Claude Code' : runtime === 'agy' ? 'Antigravity' : null;
+/**
+ * The question's title names the action. Only actions that interrupt running work (switching the session mode or
+ * the engine, restarting a session) get the destructive confirm button; saving a model or upgrading does not.
+ */
+export function actionConfirmOptions(action, { t, runtime = null }) {
+  const titles = {
+    'switch-mode': ['wb.settings.confirm.sessionMode', true],
+    'switch-runtime': ['wb.settings.confirm.runtime', true],
+    'restart-session': ['wb.settings.confirm.restartSession', true],
+    'switch-model': ['wb.settings.confirm.models', false],
+    'switch-effort': ['wb.settings.confirm.models', false],
+    'upgrade-zylos': ['wb.settings.confirm.upgradeZylos', false],
+  };
+  if (action === 'upgrade-cc') {
+    const name = engineTitle(runtime);
+    return { title: name ? t('wb.settings.confirm.upgradeEngine', { engine: name }) : t('wb.settings.confirm.upgradeEngineUnknown'), danger: false };
+  }
+  const [title, danger] = titles[action] ?? ['wb.settings.confirmTitle', true];
+  return { title: t(title), danger };
 }
 
 /**
@@ -33,6 +55,7 @@ export function createPageActions({ t, send, confirm, readOnly, remoteTarget, sh
   return createActionRunner({
     t, send, confirm, readOnly, remoteTarget,
     confirmText: (action, body) => actionConfirmText(action, body, { t, runtime: runtime(), effortLabel }),
+    confirmOptions: action => actionConfirmOptions(action, { t, runtime: runtime() }),
     prepare: (action, body) => prepareAction(action, body, shownSession()),
   });
 }

@@ -383,7 +383,7 @@
   "observer.size.error.rows_limit": "Height can be at most {maxRows} here: the tmux status line counts toward the 200-row limit",
   "actions.session_mode": "Session mode",
   "actions.instance_status": "Instances: {view} · mode {mode} · Origin {origin}",
-  "confirm.switch_mode": "Switch the whole instance to {mode}? Active work may be interrupted.",
+  "confirm.switch_mode": "Switch the whole instance to “{mode}”? Active work may be interrupted.",
   "actions.supervisor_unreachable": "Supervisor unavailable",
   "actions.blocked_since": "Blocked since {time}",
   "actions.restart_progress": "Submission: {submission} · Old run: {completion} · New Origin: {ready}",

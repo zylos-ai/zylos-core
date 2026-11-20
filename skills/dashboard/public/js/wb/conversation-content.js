@@ -82,6 +82,9 @@ export function renderConversationContent({
     }).use(cjkFriendly);
     // Images are not part of this renderer's capability. Keep their descriptions as text.
     markdown.renderer.rules.image = (tokens, index) => markdown.utils.escapeHtml(tokens[index].content);
+    // A wide table scrolls sideways inside its own box instead of squeezing every cell to a character per line.
+    markdown.renderer.rules.table_open = () => '<div class="conversation-table-scroll"><table>\n';
+    markdown.renderer.rules.table_close = () => '</table></div>\n';
     for (const text of content.querySelectorAll('.chat-message-text')) {
       const formatted = element(document, 'div', undefined, 'chat-message-text conversation-markdown');
       formatted.innerHTML = markdown.render(text.textContent);

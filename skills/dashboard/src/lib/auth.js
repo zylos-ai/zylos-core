@@ -245,6 +245,24 @@ function loginTheme() {
 // over the system setting. Anything else, or no storage, leaves the system setting to the stylesheet.
 const LOGIN_THEME_SCRIPT = "try{var s=localStorage.getItem('zylos-dashboard-theme');if(s==='light'||s==='dark')document.documentElement.dataset.theme=s}catch(e){}";
 
+// The login page's words in both Dashboard languages. Both are in the page; the script below shows one before the
+// first paint: the language saved by the Dashboard (public/js/i18n.js STORAGE_KEY), else the browser's language.
+// Without the script the English words show.
+const LOGIN_TEXT = {
+  en: { title: 'Login - Zylos Dashboard', password: 'Password', remember: 'Remember me', signIn: 'Sign in',
+    notConfigured: 'Dashboard password is not configured. Run "zylos dashboard reset-password" to set a password before signing in.',
+    tooMany: 'Too many attempts. Try again later.', incorrect: 'Incorrect password.' },
+  zh: { title: '登录 - Zylos Dashboard', password: '密码', remember: '记住我', signIn: '登录',
+    notConfigured: 'Dashboard 还没有设置密码。先运行 "zylos dashboard reset-password" 设置密码，再登录。',
+    tooMany: '尝试次数太多，请稍后再试。', incorrect: '密码错误。' },
+};
+const LOGIN_LOCALE_SCRIPT = "var l;try{l=localStorage.getItem('zylos-dashboard-locale')}catch(e){}"
+  + "if(l!=='zh'&&l!=='en')l=String(navigator.language||'').indexOf('zh')===0?'zh':'en';"
+  + "var r=document.documentElement;r.dataset.locale=l;r.lang=l==='zh'?'zh-CN':'en';"
+  + `document.title=l==='zh'?${JSON.stringify(LOGIN_TEXT.zh.title)}:${JSON.stringify(LOGIN_TEXT.en.title)};`;
+const loginText = key => `<span class="l-en">${htmlEscape(LOGIN_TEXT.en[key])}</span><span class="l-zh" lang="zh-CN">${htmlEscape(LOGIN_TEXT.zh[key])}</span>`;
+
+/** `error` names a LOGIN_TEXT message (notConfigured, tooMany, incorrect) or is empty. */
 function loginPageHtml(base, error = '', next = '', configured = true) {
   const safeNext = next && isPathWithinBase(next, base) ? next : '';
   return `<!doctype html>
@@ -253,8 +271,8 @@ function loginPageHtml(base, error = '', next = '', configured = true) {
     <meta charset="utf-8">
     <meta name="robots" content="noindex, nofollow">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Login - Zylos Dashboard</title>
-    <script>${LOGIN_THEME_SCRIPT}</script>
+    <title>${LOGIN_TEXT.en.title}</title>
+    <script>${LOGIN_THEME_SCRIPT}${LOGIN_LOCALE_SCRIPT}</script>
     <style>
       ${loginTheme()}
       body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
@@ -270,6 +288,7 @@ function loginPageHtml(base, error = '', next = '', configured = true) {
       .login-remember input { accent-color: var(--accent); cursor: pointer; }
       .login-button { width: 100%; padding: 0.7rem; margin-top: 1rem; border: none; border-radius: 8px; background: var(--accent); color: var(--bg); font-size: 1rem; font-weight: 500; cursor: pointer; transition: background 200ms; }
       .login-button:hover { background: var(--accent-hover); }
+      :root:not([data-locale="zh"]) .l-zh, :root[data-locale="zh"] .l-en { display: none; }
     </style>
   </head>
   <body>
@@ -277,12 +296,12 @@ function loginPageHtml(base, error = '', next = '', configured = true) {
       <form class="login-panel" method="POST" action="${browserPath(base, 'login')}">
         <p class="eyebrow">Zylos</p>
         <h1>Dashboard</h1>
-        ${error ? `<p class="login-error">${htmlEscape(error)}</p>` : ''}
-        ${configured ? `<label class="login-label" for="password">Password</label>
+        ${error ? `<p class="login-error">${loginText(error)}</p>` : ''}
+        ${configured ? `<label class="login-label" for="password">${loginText('password')}</label>
         <input class="login-input" id="password" name="password" type="password" autocomplete="current-password" autofocus required>
         ${safeNext ? `<input type="hidden" name="next" value="${htmlEscape(safeNext)}">` : ''}
-        <label class="login-remember"><input type="checkbox" name="remember"> Remember me</label>
-        <button class="login-button" type="submit">Sign in</button>` : ''}
+        <label class="login-remember"><input type="checkbox" name="remember"> ${loginText('remember')}</label>
+        <button class="login-button" type="submit">${loginText('signIn')}</button>` : ''}
       </form>
     </main>
   </body>
@@ -493,7 +512,7 @@ export class AuthGate {
   async handleLogin(req, res, base, url) {
     if (!this.config.auth?.password) {
       sendHtml(res, req.method === 'GET' || req.method === 'HEAD' ? 200 : 503,
-        loginPageHtml(base, 'Dashboard password is not configured. Run "zylos dashboard reset-password" to set a password before signing in.', '', false));
+        loginPageHtml(base, 'notConfigured', '', false));
       return true;
     }
 
@@ -521,13 +540,13 @@ export class AuthGate {
     }
 
     if (isLockedOut(ip) || isGlobalLimited()) {
-      sendHtml(res, 429, loginPageHtml(base, 'Too many attempts. Try again later.', body.next));
+      sendHtml(res, 429, loginPageHtml(base, 'tooMany', body.next));
       return true;
     }
 
     if (!verifyPassword(body.password || '', this.config.auth.password)) {
       recordFailure(ip);
-      sendHtml(res, 200, loginPageHtml(base, 'Incorrect password.', body.next));
+      sendHtml(res, 200, loginPageHtml(base, 'incorrect', body.next));
       return true;
     }
 

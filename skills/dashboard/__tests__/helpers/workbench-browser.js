@@ -94,6 +94,13 @@ function measure() {
   return {
     // Compared with the screen width the case set: a phone browser widens its layout viewport to fit content.
     small, documentWidth: document.documentElement.scrollWidth, scrollY,
+    // Text fields and dropdowns drawn under 16px: a phone browser zooms the page into such a field when it gets focus.
+    smallFields: [...document.querySelectorAll('input:not([type=checkbox], [type=radio], [type=range], [type=hidden]), select, textarea')]
+      .filter(node => visible(node) && !node.matches('.wb-vh') && parseFloat(getComputedStyle(node).fontSize) < 16)
+      .map(node => `${node.tagName.toLowerCase()}#${node.id} ${getComputedStyle(node).fontSize}`).slice(0, 5),
+    scale: visualViewport?.scale ?? 1,
+    // The schedule page: its first task and the block with the numbers, charts and timeline.
+    firstTask: box('.wb-sched-row'), scheduleNumbers: box('.wb-sched-main > .wb-sched-top'), screenHeight: innerHeight,
     memoryShare: content && memoryPage ? (Math.min(innerHeight, content.bottom) - Math.max(memoryPage.top, content.top)) / (innerHeight - memoryPage.top) : null,
     memoryPageTop: memoryPage && Math.round(memoryPage.top),
     kpiRows: [...new Set(kpi)].map(top => kpi.filter(value => value === top).length),
@@ -166,12 +173,15 @@ export async function runWorkbenchBrowser(t, sandbox) {
 
   // Asking before acting: each action that changes the running agent opens the in-page question; cancelling
   // sends nothing and confirming sends exactly one request.
+  // Returns what the question showed: its title, its text and whether its confirm button is the destructive one.
   async function confirmFlow(page, button, action, body) {
     const sent = () => actions.filter(item => item.action === action);
     const before = sent().length;
     await button().click();
     const dialog = page.locator('.wb-modal[role="alertdialog"]');
     await dialog.waitFor();
+    const shown = await dialog.evaluate(node => ({ title: node.querySelector('h3').textContent, text: node.querySelector('p').textContent,
+      danger: node.querySelector('.wb-modal-acts button:last-child').classList.contains('wb-btn-danger') }));
     await dialog.locator('.wb-modal-acts button').first().click();
     await dialog.waitFor({ state: 'detached' });
     await page.waitForTimeout(300);
@@ -183,6 +193,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await page.waitForTimeout(300);
     assert.equal(sent().length, before + 1, `${action}: confirming sends one request`);
     if (body) assert.deepEqual(sent().at(-1).body, body);
+    return shown;
   }
 
   // The phone settings drawer, as the page reports it: open or not, where it sits, what has focus, which
@@ -224,17 +235,39 @@ export async function runWorkbenchBrowser(t, sandbox) {
     assert.deepEqual([state.open, state.entry], [false, false], `${what}: the drawer closes and leaves no history entry`);
   }
 
-  async function settings(width, height) {
-    const { page, context, errors, shot } = await open(width, height, '/settings');
-    // Phones reach the sections through the drawer.
-    const pick = async name => { if (width < 761) await openDrawer(page); await page.locator(`[data-settings-section="${name}"]`).click(); if (width < 761) await closed(page); };
+  // Phones reach the settings sections through the drawer.
+  async function settingsSection(page, name) {
+    const phone = page.viewportSize().width < 761;
+    if (phone) await openDrawer(page);
+    await page.locator(`[data-settings-section="${name}"]`).click();
+    if (phone) await closed(page);
+  }
+
+  async function settings(width, height, language = 'zh') {
+    const { page, context, errors, shot } = await open(width, height, '/settings', {}, language);
+    const upgrade = () => page.locator('#tab-settings [data-action="upgrade-cc"]');
+    await upgrade().waitFor({ state: 'attached' });
+    // The upgrade button sits with the versions, in whichever section holds them.
+    const section = await upgrade().evaluate(node => node.closest('section.wb-set-sec')?.id.replace('settings-section-', ''));
+    const pick = name => settingsSection(page, name);
+    await pick(section);
+    await upgrade().waitFor({ state: 'visible' });
+    // Each question is titled with its action and shows the names on screen, never internal values. Upgrading
+    // keeps work running (ordinary button); switching the session mode interrupts it (destructive button).
+    const english = language === 'en';
+    const upgradeAsked = await confirmFlow(page, upgrade, 'upgrade-cc', { runtime: 'claude' });
+    assert.deepEqual([upgradeAsked.title, upgradeAsked.danger], [english ? 'Upgrade Claude Code' : '升级 Claude Code', false]);
     await pick('defaults');
     const single = () => page.locator('#action-mode-seg button[data-mode="single"]');
     await single().waitFor({ state: 'visible' });
-    await confirmFlow(page, single, 'switch-mode', { mode: 'single' });
+    const modeAsked = await confirmFlow(page, single, 'switch-mode', { mode: 'single' });
+    assert.deepEqual([modeAsked.title, modeAsked.danger], [english ? 'Switch session mode' : '切换会话模式', true]);
+    assert.ok(modeAsked.text.includes(english ? '“Single session”' : '「单会话」'), modeAsked.text);
+    assert.doesNotMatch(modeAsked.text, /\b(single|multi)\b/);
     if (width < 761) {
       const layout = await page.evaluate(measure);
       assert.deepEqual(layout.small, [], `settings at ${width}: no control under 36px`);
+      assert.deepEqual(layout.smallFields, [], `settings at ${width}: fields are 16px`);
       assert.equal(layout.documentWidth, width, `settings at ${width}: no sideways scrolling`);
     } else {
       // Wider screens keep the section list as a sidebar; the drawer's button, title and backdrop do not show.
@@ -250,9 +283,163 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await context.close();
   }
 
-  await step('asking before switching the session mode, on a phone and a desktop screen', async () => {
+  await step('asking before upgrading the CLI or switching the session mode, on a phone and a desktop screen', async () => {
     await settings(390, 844);
     await settings(1280, 800);
+    await settings(390, 844, 'en');
+  });
+
+  // Settings: on a phone every field is 16px, so focusing one does not zoom the page. The price and key tables
+  // scroll sideways inside their card, with a fade on the right edge while columns are still hidden that is gone
+  // at the end; a desktop wide enough for them shows no fade. "How are models matched?" opens inside the screen.
+  // A created key is announced in the card that created it, right under its button, and the page stays where it was.
+  await step('settings: 16px fields on a phone, sliding tables with an edge fade, the pricing note on screen, key notices beside their button', async () => {
+    const keys = [
+      { name: 'office-mac', scope: 'read', status: 'active', created_at: '2026-11-01T02:00:00Z', last_used_at: '2026-11-19T08:00:00Z' },
+      { name: 'ci-runner', scope: 'admin', status: 'active', created_at: '2026-10-01T02:00:00Z', last_used_at: null },
+      { name: 'old-laptop', scope: 'read', status: 'revoked', created_at: '2026-09-01T02:00:00Z', revoked_at: '2026-10-01T00:00:00Z' },
+    ];
+    for (const [width, height] of [[390, 844], [1280, 800]]) {
+      const phone = width < 761;
+      const { page, context, errors, shot } = await open(width, height, '/settings');
+      const created = [];
+      await context.route('**/api/keys', route => {
+        if (route.request().method() === 'GET') return route.fulfill({ json: { keys } });
+        created.push(route.request().postDataJSON());
+        const key = { name: 'new-key', scope: 'read', status: 'active', created_at: '2026-11-20T02:00:00Z', last_used_at: null };
+        return route.fulfill({ json: { keys: [...keys, key], key, plaintext_key: 'zk_browser_case_only' } });
+      });
+      await context.route('**/api/fleet/agents', route => route.request().method() === 'GET'
+        ? route.fulfill({ json: { self: { name: 'browser-case' }, agents: [{ name: 'lab', base_url: 'https://lab.example', access: 'read' }] } }) : route.fallback());
+      await page.reload();
+      await page.locator('#api-key-list tbody tr').first().waitFor({ state: 'attached' });
+      const sections = await page.locator('[data-settings-section]').evaluateAll(buttons => buttons.filter(button => !button.hidden).map(button => button.dataset.settingsSection));
+      if (phone) for (const name of sections) {
+        await settingsSection(page, name);
+        const layout = await page.evaluate(measure);
+        assert.deepEqual(layout.smallFields, [], `${name}: fields are 16px`);
+        assert.equal(layout.documentWidth, 390, `${name}: no sideways scrolling`);
+      }
+      if (phone) {
+        const field = page.locator('#api-key-name');
+        await settingsSection(page, 'keys');
+        await field.tap();
+        assert.equal(await field.evaluate(node => node === document.activeElement), true);
+        assert.equal((await page.evaluate(measure)).scale, 1, 'focusing a field does not zoom the page');
+        await page.keyboard.press('Escape');
+      }
+      // The fade, as the page shows it: whether columns are still hidden to the right and whether the edge is masked.
+      const edge = selector => page.locator(selector).evaluate(box => {
+        const style = getComputedStyle(box);
+        return { hidden: box.scrollLeft + box.clientWidth < box.scrollWidth - 1, faded: (style.maskImage || style.webkitMaskImage || 'none') !== 'none' };
+      });
+      const slide = async (name, selector) => {
+        await settingsSection(page, name);
+        await page.locator(selector).waitFor();
+        if (!phone) { assert.deepEqual(await edge(selector), { hidden: false, faded: false }, `${name}: a desktop shows the whole table without a fade`); return; }
+        assert.deepEqual(await edge(selector), { hidden: true, faded: true }, `${name}: columns are hidden to the right and the edge fades`);
+        await shot(`${name}-table`);
+        await page.locator(selector).evaluate(box => { box.scrollLeft = box.scrollWidth; });
+        await page.waitForFunction(selector => !document.querySelector(selector).hasAttribute('data-more-right'), selector);
+        assert.deepEqual(await edge(selector), { hidden: false, faded: false }, `${name}: scrolled to the end, the fade is gone`);
+        assert.equal((await page.evaluate(measure)).documentWidth, width, `${name}: the table scrolls, not the page`);
+      };
+      await slide('pricing', '.settings-table-scroll:has(#settings-price-table)');
+      await slide('keys', '#api-key-list');
+      assert.deepEqual(await page.locator('#api-key-list th').evaluateAll(cells => cells.filter(cell => getComputedStyle(cell).display === 'none').length), 0, 'every key column is kept');
+
+      await settingsSection(page, 'pricing');
+      await page.locator('#pricing-tip').click();
+      await page.locator('#pricing-popover').waitFor();
+      const note = await page.locator('#pricing-popover').evaluate(node => { const box = node.getBoundingClientRect(); return { left: box.left, right: box.right, opaque: getComputedStyle(node).backgroundColor !== 'rgba(0, 0, 0, 0)' }; });
+      assert.ok(note.left >= 0 && note.right <= width, `the pricing note is on screen (${Math.round(note.left)}-${Math.round(note.right)})`);
+      assert.equal(note.opaque, true, 'the table under the note does not show through it');
+      assert.equal((await page.evaluate(measure)).documentWidth, width, 'the pricing note does not widen the page');
+      await shot('pricing-note');
+      await page.locator('#pricing-tip').click();
+
+      // Clearing revoked keys and removing a machine: titled with the action, destructive button; cancelling sends nothing.
+      const dialog = page.locator('.wb-modal[role="alertdialog"]'), writes = [];
+      page.on('request', request => { if (request.method() !== 'GET') writes.push(`${request.method()} ${new URL(request.url()).pathname}`); });
+      for (const [name, button, title] of [['keys', '#api-key-purge-revoked', '清空已吊销的密钥'], ['fleet', '.fleet-agent-remove', '移除机器']]) {
+        await settingsSection(page, name);
+        await page.locator(button).click();
+        await dialog.waitFor();
+        assert.deepEqual(await dialog.evaluate(node => [node.querySelector('h3').textContent, node.querySelector('.wb-modal-acts button:last-child').classList.contains('wb-btn-danger')]), [title, true]);
+        await dialog.locator('.wb-modal-acts button').first().click();
+        await dialog.waitFor({ state: 'detached' });
+      }
+      await page.waitForTimeout(300);
+      assert.deepEqual(writes, [], 'cancelling sends nothing');
+      await settingsSection(page, 'keys');
+      await page.locator('#api-key-name').fill('new-key');
+      await page.locator('#api-key-create').evaluate(node => node.scrollIntoView({ block: 'center' }));
+      const before = await page.evaluate(() => scrollY);
+      await page.locator('#api-key-create').click();
+      await page.locator('#api-key-created').waitFor();
+      const notice = await page.evaluate(() => {
+        const status = document.querySelector('#fleet-manage-status'), button = document.querySelector('#api-key-create'), box = status.getBoundingClientRect();
+        return { text: status.textContent, sameCard: status.closest('.wb-set-card') === button.closest('.wb-set-card'), underButton: status.previousElementSibling?.contains(button),
+          onScreen: box.top >= 0 && box.bottom <= innerHeight, scrollY };
+      });
+      assert.equal(created.length, 1);
+      assert.deepEqual([notice.text, notice.sameCard, notice.underButton, notice.onScreen], ['密钥已创建', true, true, true], JSON.stringify(notice));
+      assert.ok(Math.abs(notice.scrollY - before) <= 2, `the page stays where it was (${before} -> ${notice.scrollY})`);
+      await shot('key-created');
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+  });
+
+  // Terminal observer: its section shows with or without technical detail, while the raw instance line under the
+  // session mode is technical detail only. Disabling and uninstalling ask first, titled with the action;
+  // cancelling sends nothing, confirming sends once, and only uninstalling uses the destructive button. Retrying
+  // an uninstall already under way does not ask again.
+  await step('terminal observer: always in settings, disabling and uninstalling ask first; instance line only in technical detail', async () => {
+    const { page, context, errors, shot } = await open(390, 844, '/settings');
+    let status = { state: 'installed', desired: { enabled: true }, platform: 'linux-x64', version: '0.41.2' };
+    const sent = [];
+    await context.route('**/api/observer/status*', route => route.fulfill({ json: status }));
+    await context.route(/\/api\/observer\/(install|disable)$/, route => { sent.push(`${route.request().method()} ${new URL(route.request().url()).pathname}`); return route.fulfill({ json: status }); });
+    await page.reload();
+    await settingsSection(page, 'defaults');
+    await page.locator('#action-mode-seg').waitFor();
+    assert.equal(await page.locator('#action-instance-status').isVisible(), false, 'no instance line without technical detail');
+    await settingsSection(page, 'observer');
+    await page.locator('#observer-uninstall').waitFor();
+    const dialog = page.locator('.wb-modal[role="alertdialog"]');
+    const ask = async (button, request, title, danger) => {
+      await page.locator(button).click();
+      await dialog.waitFor();
+      assert.deepEqual(await dialog.evaluate(node => [node.querySelector('h3').textContent, node.querySelector('.wb-modal-acts button:last-child').classList.contains('wb-btn-danger')]), [title, danger]);
+      await shot(`observer-${button.slice(10)}-question`);
+      await dialog.locator('.wb-modal-acts button').first().click();
+      await dialog.waitFor({ state: 'detached' });
+      await page.waitForTimeout(300);
+      assert.deepEqual(sent, [], `${title}: cancelling sends nothing`);
+      await page.locator(button).click();
+      await dialog.locator('.wb-modal-acts button').last().click();
+      await page.waitForFunction(() => !document.querySelector('.observer-settings-actions button:disabled'));
+      assert.deepEqual(sent.splice(0), [request], `${title}: confirming sends once`);
+    };
+    await ask('#observer-uninstall', 'DELETE /api/observer/install', '卸载终端观察', true);
+    await ask('#observer-disable', 'POST /api/observer/disable', '禁用终端观察', false);
+    status = { state: 'installed', desired: { enabled: false, teardownFence: true, removalState: 'failed' } };
+    await page.reload();
+    await settingsSection(page, 'observer');
+    await page.locator('#observer-uninstall:has-text("重试")').click();
+    await page.waitForFunction(() => !document.querySelector('.observer-settings-actions button:disabled'));
+    assert.equal(await dialog.count(), 0, 'retrying an uninstall does not ask again');
+    assert.deepEqual(sent.splice(0), ['DELETE /api/observer/install']);
+    await context.addInitScript(() => { try { localStorage.setItem('zylos-dashboard-detail-level', 'technical'); } catch {} });
+    await page.reload();
+    await settingsSection(page, 'defaults');
+    await page.waitForFunction(() => document.querySelector('#action-instance-status')?.textContent.trim());
+    assert.equal(await page.locator('#action-instance-status').isVisible(), true, 'technical detail shows the instance line');
+    await settingsSection(page, 'observer');
+    assert.equal(await page.locator('#observer-settings-group').isVisible(), true, 'the observer section stays with technical detail');
+    assert.deepEqual(errors, []);
+    await context.close();
   });
 
   // Automatic naming: the in-page question first; cancelling sends nothing, confirming sends one request, and the
@@ -389,6 +576,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     const check = async name => {
       const layout = await page.evaluate(measure);
       assert.deepEqual(layout.small, [], `${name}: no control under 36px`);
+      assert.deepEqual(layout.smallFields, [], `${name}: fields are 16px`);
       assert.equal(layout.documentWidth, 390, `${name}: no sideways scrolling`);
       await shot(name);
       return layout;
@@ -445,6 +633,9 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await page.locator('.wb-sched-kpi .wb-sched-kpi-item').first().waitFor();
     const sched = await check('schedule');
     assert.deepEqual(sched.kpiRows, [3, 3]);
+    // The task list comes first on a phone: its first task is on the first screen, above the numbers.
+    assert.ok(sched.firstTask.bottom <= sched.screenHeight && sched.firstTask.bottom <= sched.scheduleNumbers.top,
+      `the first task (${sched.firstTask.top}-${sched.firstTask.bottom}) is on screen above the numbers (${sched.scheduleNumbers.top})`);
 
     assert.deepEqual(errors, []);
     await context.close();
@@ -698,6 +889,9 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await shot('memory-list');
     await section(page, 'schedule');
     await page.locator('.wb-sched-row').first().waitFor();
+    // A desktop keeps the numbers, charts and timeline above the task list.
+    const sched = await page.evaluate(measure);
+    assert.ok(sched.scheduleNumbers.bottom <= sched.firstTask.top, 'the numbers stay above the task list');
     await shot('schedule');
     assert.deepEqual(errors, []);
     await context.close();

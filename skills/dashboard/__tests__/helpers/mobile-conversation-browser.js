@@ -775,6 +775,38 @@ export async function runMobileConversationBrowser(t, sandbox) {
       } finally { await f.context.close(); }
     }
   });
+  // A reply with a wide Markdown table on a phone: the table scrolls sideways inside its message, each cell keeps
+  // its words on one line instead of one character per line, and the page itself does not widen.
+  await t.test('a wide table in a reply scrolls inside its message on a phone', async () => {
+    const f = await open(); const page = f.page;
+    try {
+      const table = ['| 环境 | 版本 | 状态 | 负责人 | 上次发布 | 备注 |', '|---|---|---|---|---|---|',
+        '| 测试服 | 1.0.0-beta.7 | 冒烟通过 | 发布值班 | 11-12 10:30 | 等待正式升级 |',
+        '| 正式服 | 1.0.0-beta.6 | 运行中 | 发布值班 | 11-05 09:00 | 本周四升级 |'].join('\n');
+      await page.route('**/api/chat/conversations/*/messages*', route => route.fulfill({ json: { items: [
+        { id: 3, direction: 'out', channel: 'dashboard', content: '两台服务器的现状：\n\n' + table, timestamp: iso(-60000), status: 'sent' }], nextCursor: null, afterCursor: 'after-3', tz: 'UTC' } }));
+      await select(page);
+      await page.locator('.conversation-markdown table').waitFor();
+      const layout = await page.evaluate(() => {
+        const box = document.querySelector('.conversation-table-scroll'), table = box.querySelector('table');
+        const lineHeight = parseFloat(getComputedStyle(table.querySelector('td')).lineHeight) || 20;
+        // Cells whose text breaks onto more lines than its words need: one character per line shows as many lines.
+        const tall = [...table.querySelectorAll('td, th')].filter(cell => cell.getBoundingClientRect().height > 2 * lineHeight + 16).map(cell => cell.textContent);
+        const message = box.closest('.conversation-message').getBoundingClientRect(), outer = box.getBoundingClientRect();
+        return { columns: table.rows[0].cells.length, tall, scrolls: box.scrollWidth > box.clientWidth, inside: outer.left >= message.left - 1 && outer.right <= message.right + 1,
+          page: document.documentElement.scrollWidth, viewport: innerWidth };
+      });
+      assert.equal(layout.columns, 6);
+      assert.deepEqual(layout.tall, [], 'no cell breaks its text one character per line');
+      assert.equal(layout.scrolls, true, 'the table scrolls sideways inside its box');
+      assert.equal(layout.inside, true, 'the scrolling box stays inside the message');
+      assert.equal(layout.page, layout.viewport, 'the page does not widen');
+      await shot(page, 'mobile-390-wide-table');
+      await page.locator('.conversation-table-scroll').evaluate(box => { box.scrollLeft = box.scrollWidth; });
+      await shot(page, 'mobile-390-wide-table-scrolled');
+      assert.deepEqual(f.errors, []);
+    } finally { await f.context.close(); }
+  });
   await t.test('single-mode Origin menu omits unavailable group detail', async () => {
     const f = await open({ sessionMode: 'single' }); const page = f.page;
     try {
