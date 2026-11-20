@@ -78,13 +78,10 @@ function colorForAgent(agent) {
   return agent?.color || '#64748b';
 }
 
-// This machine first, then machines with a problem, then the rest by name.
-function sortAgents(agents) {
-  const list = Array.isArray(agents) ? [...agents] : [];
-  const self = list.filter((agent) => agent?.self === true);
-  const byName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''));
-  const others = list.filter((agent) => agent?.self !== true).sort(byName);
-  return [...self, ...others.filter(isOffline), ...others.filter((agent) => !isOffline(agent))];
+function hasProblem(tile) {
+  const summary = tile.groupSummary;
+  return tile.mood === 'stuck' || tile.supervisorPaused === true ||
+    summary?.problemCount > 0 || summary?.attention?.length > 0 || summary?.autoRestarts?.count > 0;
 }
 
 function latencyLabel(value) {
@@ -160,8 +157,23 @@ export function defaultAgentFleetLabels() {
     modeMulti: 'Multi-session',
     modeSingle: 'Single session',
     modeUnknown: 'Mode unknown',
-    open: 'Open',
-    toSettings: 'Settings',
+    machine: 'Machine',
+    running: 'Running',
+    condition: 'Condition',
+    quota: 'Quota',
+    listGroups: '{count} groups',
+    listGroupsOne: '{count} group',
+    listWorking: '{count} working',
+    listLastSeen: 'last reachable {time}',
+    listProblemCount: '{count} problems',
+    listProblemCountOne: '{count} problem',
+    listQuota: 'Quota {value}',
+    listToday: 'Today {value}',
+    moreUnlisted: '{count} additional problems',
+    pageRange: '{start}–{end} / {total} machines',
+    pagination: 'Machine pages',
+    previousPage: 'Previous page',
+    nextPage: 'Next page',
     refresh: 'Refresh status',
     readOnly: 'Read-only',
     admin: 'Admin',
@@ -213,9 +225,10 @@ export function buildAgentFleetView(fleet, options = {}) {
   const basePath = options.basePath || '';
   const self = options.self || null;
   const ageText = options.ageText || ageLabel;
-  const tiles = sortAgents(fleet?.agents).map((agent) => {
-    const mood = stateMood(agent);
+  const agents = Array.isArray(fleet?.agents) ? fleet.agents : [];
+  const tiles = agents.map((agent) => {
     const offline = isOffline(agent);
+    const mood = offline ? 'offline' : stateMood(agent);
     const isSelf = agent.self === true;
     const link = agent.link && typeof agent.link === 'object' ? agent.link : null;
     const linkChip = buildLinkChip(link, labels);
@@ -250,7 +263,9 @@ export function buildAgentFleetView(fleet, options = {}) {
       supervisorPaused: isSelf ? self?.supervisorPaused ?? agent.supervisor_paused : agent.supervisor_paused,
       href: isSelf ? `${basePath}/` : `${basePath}/fleet/${encodeURIComponent(String(agent.name || ''))}/`
     };
-  });
+  }).sort((a, b) => Number(b.offline) - Number(a.offline) ||
+    Number(hasProblem(b)) - Number(hasProblem(a)) ||
+    Number(b.isSelf) - Number(a.isSelf) || a.name.localeCompare(b.name));
 
   const counts = tiles.reduce((acc, tile) => {
     acc[tile.mood] = (acc[tile.mood] || 0) + 1;
@@ -259,7 +274,6 @@ export function buildAgentFleetView(fleet, options = {}) {
 
   // Fleet-wide totals of the same two cost tiers shown on each card.
   // null (rendered '--') when no agent reports that tier at all.
-  const agents = Array.isArray(fleet?.agents) ? fleet.agents : [];
   const sumTier = (pick) => {
     let total = null;
     for (const agent of agents) {
@@ -279,8 +293,17 @@ export function buildAgentFleetView(fleet, options = {}) {
     weekly: money(sumTier((a) => a.weekly_cost))
   };
 
+  const pageSize = 8;
+  const pageCount = Math.max(1, Math.ceil(tiles.length / pageSize));
+  const page = Math.min(Math.max(1, options.page ?? 1), pageCount);
+  const offset = (page - 1) * pageSize;
   return {
     labels,
+    layout: options.layout === 'list' ? 'list' : 'cards',
+    page,
+    pageCount,
+    offset,
+    pageTiles: tiles.slice(offset, offset + pageSize),
     t: options.t || (key => ({ 'wb.term.origin': 'Origin', 'chat.unnamed': 'Untitled conversation' }[key] || key.replace('wb.platform.', ''))),
     tiles,
     counts,
@@ -331,20 +354,34 @@ function problemName(row, labels, t) {
   const known = ['telegram', 'lark', 'feishu', 'web-console', 'openmax', 'wechat'];
   return known.includes(platform) ? t('wb.platform.' + platform) : labels.groups;
 }
+const groupStateOrder = ['busy', 'idle', 'waiting', 'unknown', 'no_response', 'error'];
+
+function groupBar(summary, title) {
+  if (!summary.running) return '';
+  const segments = groupStateOrder.filter(kind => summary.counts?.[kind] > 0)
+    .map(kind => `<i class="wb-gbar-${kind}" style="flex:${Number(summary.counts[kind])}"></i>`).join('');
+  return `<div class="wb-gbar" title="${escapeHtml(title)}">${segments}</div>`;
+}
+
+function problemLabel(row, labels, t) {
+  const duration = Number.isFinite(row.durationSeconds) ? ' ' + fill(labels.groupDuration, { count: Math.floor(row.durationSeconds / 60) }) : '';
+  return {
+    name: problemName(row, labels, t),
+    reason: (labels.problemReasons[row.reason] || labels.groupStates.error) + duration
+  };
+}
+
 function groupStates(tile, labels, t) {
   const summary = tile.groupSummary;
   const status = tile.mood === 'unknown' ? `<span class="wb-pill wb-unknown" data-mood="unknown"><span class="wb-dot"></span>${escapeHtml(tile.stateLabel)}</span>` : '';
   if (!summary || !summary.listKnown) return `<div class="wb-f-act">${status}<span>${escapeHtml(labels.summaryUnavailable)}</span></div>`;
   const counts = summary.counts || {};
-  const order = ['busy', 'idle', 'waiting', 'unknown', 'no_response', 'error'];
-  const active = order.filter(kind => counts[kind] > 0);
+  const active = groupStateOrder.filter(kind => counts[kind] > 0);
   const text = [fill(counted(labels, 'runningGroups', summary.running), { count: summary.running }), ...active.map(kind => `${counts[kind]} ${labels.groupStates[kind]}`)].join(' · ');
-  const bar = summary.running ? `<div class="wb-gbar" title="${escapeHtml(text)}">${active.map(kind => `<i class="wb-gbar-${kind}" style="flex:${counts[kind]}"></i>`).join('')}</div>` : '';
+  const bar = groupBar(summary, text);
   const problems = (summary.problems || []).slice(0, 2);
   const rows = problems.map(row => {
-    const name = problemName(row, labels, t);
-    const duration = Number.isFinite(row.durationSeconds) ? ' ' + fill(labels.groupDuration, { count: Math.floor(row.durationSeconds / 60) }) : '';
-    const reason = (labels.problemReasons[row.reason] || labels.groupStates.error) + duration;
+    const { name, reason } = problemLabel(row, labels, t);
     return `<button type="button" class="wb-f-problem" data-fleet-group="${escapeHtml(row.sessionGroup)}"><i class="wb-dot wb-f-dot-${escapeHtml(row.reason)}"></i><b class="wb-f-problem-name" title="${escapeHtml(name)}">${escapeHtml(name)}</b><span class="wb-f-problem-reason" title="${escapeHtml(reason)}">${escapeHtml(reason)}</span></button>`;
   }).join('');
   const target = escapeHtml(problems[0]?.sessionGroup ?? '');
@@ -353,8 +390,27 @@ function groupStates(tile, labels, t) {
   return `${status ? `<div class="wb-f-act">${status}</div>` : ''}<div class="wb-f-act wb-f-running" title="${escapeHtml(text)}">${escapeHtml(text)}</div>${bar}<div class="wb-f-problems">${summary.problemCount ? rows + more : summary.attention?.length ? '' : `<span class="wb-f-normal">${escapeHtml(counts.unknown ? labels.summaryUnavailable : labels.allNormal)}</span>`}${restart}</div>`;
 }
 
+function machineData(tile) {
+  return `data-agent="${escapeHtml(tile.name)}"${tile.isSelf ? ' data-self="true"' : ''}`;
+}
+
+function machineName(tile) {
+  const name = escapeHtml(tile.name);
+  return tile.offline ? `<b title="${name}">${name}</b>`
+    : `<a class="agent-open" href="${escapeHtml(tile.href)}" ${machineData(tile)} title="${name}">${name}</a>`;
+}
+
+function machineStatePill(tile) {
+  return `<span class="wb-pill wb-${escapeHtml(pillKind[tile.mood] ?? 'unknown')}" data-mood="${escapeHtml(tile.mood)}"><span class="wb-dot"></span>${escapeHtml(tile.stateLabel)}</span>`;
+}
+
+function poolText(tile) {
+  const pool = tile.groupSummary?.pool;
+  return pool?.used == null ? '--' : String(pool.used) + (pool.capacity == null ? '' : '/' + pool.capacity);
+}
+
 function renderTile(tile, labels, t) {
-  const data = `data-agent="${escapeHtml(tile.name)}"${tile.isSelf ? ' data-self="true"' : ''}`;
+  const data = machineData(tile);
   const linkChip = tile.linkChip
     ? `<span class="agent-link-chip link-${escapeHtml(tile.linkChip.quality)}" title="${escapeHtml(tile.linkChip.title)}">${escapeHtml(tile.linkChip.label)}</span>`
     : '';
@@ -366,20 +422,18 @@ function renderTile(tile, labels, t) {
   if (tile.offline) {
     const seen = tile.lastSeenText;
     return `<div class="wb-f-card bad" ${data} data-state="${escapeHtml(tile.mood)}">
-    <div class="wb-f-top"><i class="wb-ico wb-ico-alert wb-ico-xs" aria-hidden="true"></i><b title="${escapeHtml(tile.name)}">${escapeHtml(tile.name)}</b><span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
+    <div class="wb-f-top"><i class="wb-ico wb-ico-alert wb-ico-xs" aria-hidden="true"></i>${machineName(tile)}<span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
     ${sub}
     <div class="wb-f-reason"><span class="wb-plain">${escapeHtml(tile.problem.short)}</span><span class="wb-tech agent-fleet-reason">${escapeHtml(tile.stateLabel)}</span><span class="wb-tech wb-mono"> · ${escapeHtml(tile.reason)}</span></div>
     <p class="wb-note">${escapeHtml(afterSentence(tile.problem.fix, seen ? fill(labels.lastSeen, { time: seen }) : ''))}</p>
-    <div class="wb-f-foot"><span class="wb-grow"></span><button class="wb-btn" type="button" data-fleet-action="settings">${escapeHtml(labels.toSettings)}</button><button class="wb-btn" type="button" data-fleet-action="refresh">${escapeHtml(labels.refresh)}</button></div>
+    <div class="wb-f-foot"><span class="wb-grow"></span><button class="wb-btn" type="button" data-fleet-action="refresh">${escapeHtml(labels.refresh)}</button></div>
   </div>`;
   }
   const act = multi ? groupStates(tile, labels, t)
-    : `<div class="wb-f-act"><span class="wb-pill wb-${escapeHtml(pillKind[tile.mood] ?? 'unknown')}" data-mood="${escapeHtml(tile.mood)}"><span class="wb-dot"></span>${escapeHtml(tile.stateLabel)}</span></div>`;
-  const pool = tile.groupSummary?.pool;
-  const poolValue = pool?.used == null ? '--' : String(pool.used) + (pool.capacity == null ? '' : '/' + pool.capacity);
-  const second = multi ? `<div>${escapeHtml(labels.pool)}<b>${escapeHtml(poolValue)}</b></div>` : '';
+    : `<div class="wb-f-act">${machineStatePill(tile)}</div>`;
+  const second = multi ? `<div>${escapeHtml(labels.pool)}<b>${escapeHtml(poolText(tile))}</b></div>` : '';
   return `<div class="wb-f-card${tile.isSelf ? ' self' : ''}" ${data} data-state="${escapeHtml(tile.mood)}"${tile.linkQuality !== 'ok' ? ` data-link-quality="${escapeHtml(tile.linkQuality)}"` : ''}>
-    <div class="wb-f-top"><span class="wb-hdot"></span><b title="${escapeHtml(tile.name)}">${escapeHtml(tile.name)}</b>${tile.isSelf ? `<span class="wb-tag">${escapeHtml(labels.self)}</span>` : ''}<span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
+    <div class="wb-f-top"><span class="wb-hdot"></span>${machineName(tile)}${tile.isSelf ? `<span class="wb-tag">${escapeHtml(labels.self)}</span>` : ''}<span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
     ${sub}
     ${tile.supervisorPaused === true ? `<div class="wb-f-reason wb-txt-warn" data-supervisor-paused>${escapeHtml(t('wb.attention.supervisor_paused'))}</div>` : ''}
     ${act}
@@ -390,8 +444,107 @@ function renderTile(tile, labels, t) {
       ${second}
       <div>${escapeHtml(labels.host)}<b>${[tile.cpuPct, tile.memPct, tile.diskPct].map((value) => value == null ? '--' : Number(value).toFixed(0)).join(' · ')}%</b></div>
     </div>
-    <div class="wb-f-foot"><span>${tile.isSelf ? '' : escapeHtml(tile.access === 'admin' ? labels.admin : labels.readOnly)}</span><span class="wb-grow"></span><a class="wb-btn agent-open" href="${escapeHtml(tile.href)}" ${data}>${escapeHtml(labels.open)}<i class="wb-ico wb-ico-chev wb-ico-xs" aria-hidden="true"></i></a></div>
+    ${tile.isSelf ? '' : `<div class="wb-f-foot">${escapeHtml(tile.access === 'admin' ? labels.admin : labels.readOnly)}</div>`}
   </div>`;
+}
+
+function listProblems(tile, labels, t) {
+  if (tile.offline) {
+    const seen = tile.lastSeenText ? fill(labels.listLastSeen, { time: tile.lastSeenText }) : '';
+    return { condition: afterSentence(labels.shortDown, seen), problemCount: 0, details: '' };
+  }
+
+  const summary = tile.groupSummary;
+  const groupProblems = summary?.problems ?? [];
+  const problems = groupProblems.map(row => {
+    const { name, reason } = problemLabel(row, labels, t);
+    return `${name} · ${reason}`;
+  });
+  const unlisted = Math.max(0, (summary?.problemCount ?? 0) - groupProblems.length);
+  const attention = (summary?.attention ?? []).map(item => attentionMessage(item, t)).filter(Boolean);
+  if (tile.supervisorPaused === true) problems.push(t('wb.attention.supervisor_paused'));
+  if (summary?.autoRestarts?.count > 0) {
+    const count = summary.autoRestarts.count;
+    problems.push(fill(counted(labels, 'autoRestarts', count), { count }).replace(/ →$/, ''));
+  }
+  if (tile.mood === 'stuck' && !problems.length && !attention.length) problems.push(tile.stateLabel);
+  const messages = [...problems, ...attention];
+  const problemCount = messages.length + unlisted;
+  const detail = unlisted ? [...messages, fill(labels.moreUnlisted, { count: unlisted })] : messages;
+  const normal = (tile.sessionMode === 'multi' && (!summary?.listKnown || summary.counts?.unknown)) || tile.mood === 'unknown'
+    ? labels.summaryUnavailable : labels.allNormal;
+  return { condition: messages[0] ?? normal, problemCount, details: detail.join('\n') };
+}
+
+function compactQuota(tile) {
+  const accounts = tile.self?.accounts;
+  const runtimes = tile.self?.runtimes ?? [];
+  const amounts = runtimes.length ? runtimes.map(runtime => accounts?.[runtime]) : [tile.rate7dPct];
+  const remaining = amounts.map(amount => remainingQuotaPercent(amount));
+  if (remaining.every(pct => pct == null)) return '';
+  return remaining.map(pctText).join(' / ');
+}
+
+function renderListRow(tile, labels, t) {
+  const summary = tile.groupSummary;
+  const running = summary?.listKnown ? fill(counted(labels, 'listGroups', summary.running), { count: summary.running }) : '';
+  const working = running ? `${running} · ${fill(labels.listWorking, { count: summary.counts?.busy ?? 0 })}` : '';
+  const { condition, problemCount, details } = listProblems(tile, labels, t);
+  const problemTone = problemCount ? (tile.mood === 'stuck' || summary?.problems?.[0]?.reason === 'no_response' ? ' warn' : ' err') : '';
+  const situation = escapeHtml(condition) + (problemCount > 1 ? ` <small>+${problemCount - 1}</small>` : '');
+  const modeTag = tile.sessionMode === 'single' ? `<span class="wb-mode-tag">${escapeHtml(labels.modeSingle)}</span>` : '';
+  const access = tile.isSelf ? labels.self : tile.access === 'read' ? labels.readOnly : '';
+  const accessTag = access ? `<span class="wb-tag">${escapeHtml(access)}</span>` : '';
+  const dot = tile.offline ? '<i class="wb-ico wb-ico-alert wb-ico-xs" aria-hidden="true"></i>'
+    : `<span class="wb-hdot${problemTone || (tile.mood === 'idle' ? ' idle' : '')}"></span>`;
+  const cost = `${tile.dailyCostLabel} / ${tile.weeklyCostLabel}`;
+  const host = [tile.cpuPct, tile.memPct, tile.diskPct].map(value => pctText(pctValue(value))).join(' · ');
+  const quota = compactQuota(tile);
+  const mobileCondition = problemCount ? fill(counted(labels, 'listProblemCount', problemCount), { count: problemCount }) : condition;
+  const mobile = tile.offline ? escapeHtml(condition) : `
+    ${running ? `<span>${escapeHtml(running)} ·</span>` : ''}
+    <span class="wb-f-list-mobile-condition${problemTone}">${escapeHtml(mobileCondition)}</span>
+    ${quota ? `<span>· ${escapeHtml(fill(labels.listQuota, { value: quota }))}</span>` : ''}
+    <span>· ${escapeHtml(fill(labels.listToday, { value: tile.dailyCostLabel }))}</span>`;
+  const mood = labels[tile.mood] ?? labels.unknown;
+  const title = details ? ` title="${escapeHtml(details)}"` : '';
+  let activity = '<span>—</span>';
+  if (!tile.offline) {
+    activity = tile.sessionMode === 'single' ? machineStatePill(tile) :
+      `${working ? groupBar(summary, working) : ''}<span>${escapeHtml(working || (tile.sessionMode === 'multi' ? labels.summaryUnavailable : tile.stateLabel))}</span>`;
+  }
+  const status = tile.offline ? '' : `<span class="wb-hdot${tile.mood === 'stuck' ? ' warn' : tile.mood === 'idle' ? ' idle' : ''}"></span>`;
+  return `<div class="wb-f-list-row${tile.offline ? ' bad' : ''}${tile.isSelf ? ' self' : ''}" role="row" ${machineData(tile)} data-state="${escapeHtml(tile.mood)}">
+    <div class="wb-f-list-name" role="cell">${dot}${machineName(tile)}${accessTag}${modeTag}</div>
+    <div class="wb-f-list-running" role="cell">${activity}</div>
+    <div class="wb-f-list-condition${problemTone}" role="cell"${title}>${situation}</div>
+    <div class="wb-f-list-quota" role="cell">${tile.offline ? '—' : quotaBars(tile, labels)}</div>
+    <div class="wb-f-list-cost" role="cell">${escapeHtml(tile.offline ? '—' : cost)}</div>
+    <div class="wb-f-list-pool" role="cell">${escapeHtml(tile.offline || tile.sessionMode === 'single' ? '—' : poolText(tile))}</div>
+    <div class="wb-f-list-host wb-tech" role="cell">${escapeHtml(tile.offline ? '—' : host)}</div>
+    <div class="wb-f-list-state" role="cell">${status}${escapeHtml(mood)}${tile.offline ? '' : '<i class="wb-ico wb-ico-chev wb-ico-xs" aria-hidden="true"></i>'}</div>
+    <div class="wb-f-list-mobile" role="cell"${title}>${mobile}</div>
+  </div>`;
+}
+
+function renderFleetList(view) {
+  const { labels, t, pageTiles } = view;
+  const columns = ['machine', 'running', 'condition', 'quota', 'todayWeek', 'pool', 'host'];
+  return `<div class="wb-f-list" role="table" aria-label="${escapeHtml(labels.title)}">
+    <div class="wb-f-list-head" role="row">${columns.map(key => `<span role="columnheader" class="wb-f-col-${key}${key === 'host' ? ' wb-tech' : ''}">${escapeHtml(labels[key])}</span>`).join('')}</div>
+    ${pageTiles.map(tile => renderListRow(tile, labels, t)).join('')}
+  </div>`;
+}
+
+function renderFleetPagination(view) {
+  if (view.pageCount <= 1) return '';
+  const { labels, page, pageCount, pageTiles, offset, tiles } = view;
+  const range = fill(labels.pageRange, { start: offset + 1, end: offset + pageTiles.length, total: tiles.length });
+  const button = (step, label, disabled) =>
+    `<button class="wb-btn wb-btn-sm" type="button" data-fleet-page="${step}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"${disabled ? ' disabled' : ''}><i class="wb-ico wb-ico-chev wb-ico-xs" aria-hidden="true"></i></button>`;
+  return `<nav class="wb-f-pagination" aria-label="${escapeHtml(labels.pagination)}"><span aria-live="polite">${escapeHtml(range)}</span>
+    ${button(-1, labels.previousPage, page === 1)}${button(1, labels.nextPage, page === pageCount)}
+  </nav>`;
 }
 
 function renderAgentFleetViewHtml(view) {
@@ -411,13 +564,14 @@ function renderAgentFleetViewHtml(view) {
         ${costCell(labels.dailyCost, view.costTotals.daily)}
         ${costCell(labels.weeklyCost, view.costTotals.weekly)}
       </span>
+      ${renderFleetPagination(view)}
     </div>`;
   const empty = view.tiles.length <= 1 ? `<p class="wb-note wb-f-empty">${escapeHtml(labels.empty)}</p>` : '';
   return `<section class="agent-fleet" data-fleet-count="${view.tiles.length}">
     ${summary}
-    <div class="wb-f-grid">
-      ${view.tiles.map((tile) => renderTile(tile, labels, t)).join('')}
-    </div>
+    ${view.layout === 'list' ? renderFleetList(view) : `<div class="wb-f-grid">
+      ${view.pageTiles.map((tile) => renderTile(tile, labels, t)).join('')}
+    </div>`}
     ${empty}
   </section>`;
 }
@@ -430,12 +584,12 @@ export function renderAgentFleetHtml(fleet, options = {}) {
  * Options the Machines page renders with: the page's labels, and "how long ago" in the page language
  * (whole hours from an hour on, the page's own short wording below that).
  */
-export function fleetPageOptions({ t, fmtAge, basePath = '', labels, self = null, now = Date.now }) {
+export function fleetPageOptions({ t, fmtAge, basePath = '', labels, self = null, now = Date.now, layout, page }) {
   const ageText = ts => {
     const seconds = Math.max(0, Math.floor((now() - Date.parse(ts)) / 1000));
     return seconds >= 3600 ? t('time.hours_exact', { h: Math.floor(seconds / 3600) }) : fmtAge(ts);
   };
-  return { basePath, labels, ageText, self, t };
+  return { basePath, labels, ageText, self, t, layout, page };
 }
 
 export function renderAgentFleet(container, fleet, options = {}) {
@@ -445,28 +599,34 @@ export function renderAgentFleet(container, fleet, options = {}) {
   const cards = container.querySelectorAll?.('.wb-f-card') ?? [];
   for (const [index, card] of Array.from(cards).entries()) {
     const root = card.querySelector('[data-fleet-attention]');
-    if (root) renderFleetAttention(root, view.tiles[index].groupSummary?.attention, view.t);
+    if (root) renderFleetAttention(root, view.pageTiles[index].groupSummary?.attention, view.t);
   }
   return view;
+}
+
+function attentionMessage(item, t) {
+  const allowed = ['channel_send_failed', 'channel_restarting', 'start_failed', 'rate_limited', 'data_unreadable'];
+  if (!allowed.includes(item?.kind)) return null;
+  const at = item.kind === 'rate_limited' && instanceZoneReady() ? recoveryTime(item.until) : null;
+  const values = { channel: item.channel ?? '', count: item.count ?? item.count30m ?? '',
+    service: item.service ?? '', runtime: item.runtime ? item.runtime.charAt(0).toUpperCase() + item.runtime.slice(1) : '',
+    time: at === null ? '' : formatZoned(at, undefined, { hour: '2-digit', minute: '2-digit' }),
+    group: item.group ?? '', reason: item.reasonCode ?? item.source ?? '' };
+  const key = 'wb.attention.' + item.kind + (item.kind === 'rate_limited' && at === null ? '_unknown' : '');
+  return t(key, values);
 }
 
 /** Diagnostics are untrusted observations, so keep every value in a text node. */
 export function renderFleetAttention(root, items = [], t = key => key) {
   root.replaceChildren();
-  const allowed = new Set(['channel_send_failed', 'channel_restarting', 'start_failed', 'rate_limited', 'data_unreadable']);
   for (const item of items ?? []) {
-    if (!allowed.has(item?.kind)) continue;
+    const message = attentionMessage(item, t);
+    if (!message) continue;
     const node = root.ownerDocument.createElement(item.group === undefined ? 'div' : 'button');
     node.className = 'wb-f-attention-item' + (item.kind === 'rate_limited' ? ' wb-txt-warn' : '');
     if (item.group !== undefined) { node.type = 'button'; node.dataset.fleetGroup = item.group; }
-    const at = item.kind === 'rate_limited' && instanceZoneReady() ? recoveryTime(item.until) : null;
-    const values = { channel: item.channel ?? '', count: item.count ?? item.count30m ?? '',
-      service: item.service ?? '', runtime: item.runtime ? item.runtime.charAt(0).toUpperCase() + item.runtime.slice(1) : '',
-      time: at === null ? '' : formatZoned(at, undefined, { hour: '2-digit', minute: '2-digit' }),
-      group: item.group ?? '', reason: item.reasonCode ?? item.source ?? '' };
-    const key = 'wb.attention.' + item.kind + (item.kind === 'rate_limited' && at === null ? '_unknown' : '');
     const label = root.ownerDocument.createElement('span');
-    label.textContent = t(key, values);
+    label.textContent = message;
     node.append(label);
     const technical = root.ownerDocument.documentElement?.dataset?.detail === 'technical';
     const details = [item.displayName ?? item.group, item.kind === 'data_unreadable'
@@ -483,14 +643,10 @@ export function renderFleetAttention(root, items = [], t = key => key) {
 }
 
 /** Renders the Machines page with the page's own options, including "how long ago" in the page language. */
-export function renderFleetPage(container, fleet, { t, fmtAge, basePath, labels, self, now } = {}) {
-  return renderAgentFleet(container, fleet, fleetPageOptions({ t, fmtAge, basePath, labels, self, now }));
+export function renderFleetPage(container, fleet, { t, fmtAge, basePath, labels, self, now, layout, page } = {}) {
+  return renderAgentFleet(container, fleet, fleetPageOptions({ t, fmtAge, basePath, labels, self, now, layout, page }));
 }
 
-/**
- * Clicks on the Machines page: a problem card's buttons open settings or re-read the fleet; "Open" opens this
- * machine's own workbench in place, or another machine through the in-page fleet proxy.
- */
 // What the header's machines icon does on the page being viewed: leave a machine opened in-page for the machines
 // page; leave a remote machine's own page (opened from another dashboard's machines page) for that dashboard; show
 // the machines page when other machines are configured; otherwise open machine settings, where they are added.
@@ -500,7 +656,7 @@ export function fleetIconAction({ remoteAgent = null, standaloneRemote = false, 
   return multiAgent ? 'fleet' : 'settings';
 }
 
-export function handleFleetClick(event, { onSettings = () => {}, onRefresh = () => {}, onSelf = () => {}, onRemote = () => {}, onGroup = () => {}, onProblems = () => {} } = {}) {
+export function handleFleetClick(event, { onRefresh = () => {}, onSelf = () => {}, onRemote = () => {}, onGroup = () => {}, onProblems = () => {} } = {}) {
   const group = event.target?.closest?.('[data-fleet-group], [data-fleet-problems]');
   if (group) {
     event.preventDefault?.();
@@ -510,8 +666,8 @@ export function handleFleetClick(event, { onSettings = () => {}, onRefresh = () 
     return;
   }
   const action = event.target?.closest?.('[data-fleet-action]');
-  if (action?.dataset.fleetAction) {
-    if (action.dataset.fleetAction === 'settings') onSettings(); else onRefresh();
+  if (action?.dataset.fleetAction === 'refresh') {
+    onRefresh();
     return;
   }
   const open = event.target?.closest?.('.agent-open');
