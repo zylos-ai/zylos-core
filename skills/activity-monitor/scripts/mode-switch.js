@@ -10,11 +10,11 @@ const modes = new Set(['single', 'multi']);
  * Admission/automatic callers hold the lifecycle queue. advance acquires it.
  */
 export class ModeSwitchCoordinator {
-  constructor({ db, readMode, readConfiguration, readRequests, legacyPresent, observe,
+  constructor({ db, readMode, readConfiguration, requestStore, legacyPresent, observe,
     lifecycle, serialize = operation => operation(), writeMode,
     globalMemoryPending = async () => false,
     restart = new DispatcherRestartConfirmation(), diagnostic = () => {}, now = Date.now } = {}) {
-    Object.assign(this, { db, readMode, readConfiguration, readRequests, legacyPresent,
+    Object.assign(this, { db, readMode, readConfiguration, requestStore, legacyPresent,
       observe, lifecycle, serialize, writeMode, globalMemoryPending, restart, diagnostic, now });
     this.lastReasons = new Map();
     this.lastAutoMigrationSkip = null;
@@ -50,7 +50,7 @@ export class ModeSwitchCoordinator {
     if (source === request.target) return { ok: true, result: 'noop' };
     if (source === 'single' && request.target === 'multi' && await this.legacyPresent()) return { ok: false, code: 'legacy_session_present' };
     if (initial.keyPresent !== false && await this.globalMemoryPending()) return { ok: false, code: 'global_memory_pending' };
-    const requests = await this.readRequests();
+    const requests = await this.requestStore.read();
     if (requests.some(row => row.reason === 'manual_restart')) return { ok: false, code: 'manual_restart_pending' };
     let current, currentValue;
     try { currentValue = await this.readMode(); current = modeOf(currentValue); if (!modes.has(current)) throw failure('CONFIG_UNREADABLE', 'Invalid session mode'); }
@@ -75,8 +75,17 @@ export class ModeSwitchCoordinator {
     if (await this.db.getModeTransition()) return;
     const value = await this.readMode();
     if (value.keyPresent !== false || modeOf(value) !== 'single' || await this.legacyPresent()) return;
-    if ((await this.readRequests()).some(request => request.reason === 'manual_restart')) return;
-    if ((await this.db.listDrainFences()).some(fence => fence.reason === 'delete')) return;
+    const fences = await this.db.listDrainFences();
+    if (fences.some(fence => fence.reason === 'delete')) return;
+    // Clear legacy fences even if the corresponding requests are already gone.
+    for (const fence of fences) {
+      if (fence.reason === 'manual_restart') {
+        await this.db.clearDrainFence(fence.sessionGroup, { expectedReason: 'manual_restart', expectedRunId: fence.runId });
+      }
+    }
+    const requests = await this.requestStore.read();
+    const remaining = requests.filter(request => request.reason !== 'manual_restart');
+    if (remaining.length !== requests.length) await this.requestStore.write(remaining);
     const { runId } = await this.db.beginModeTransition('single', 'multi');
     this.event('auto_migration_begin', { run_id: runId, phase: 'gating' });
   }

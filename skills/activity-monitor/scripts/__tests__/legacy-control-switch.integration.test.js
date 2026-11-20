@@ -29,7 +29,7 @@ test('public database facade completes legacy drain and preserves future deadlin
   const events = [];
   const owner = new ModeSwitchCoordinator({ db,
     readMode: () => ({ mode, keyPresent: mode === 'multi' }), readConfiguration: () => ({ mode }),
-    readRequests: () => [], legacyPresent: () => false, observe: () => [],
+    requestStore: { read: () => [] }, legacyPresent: () => false, observe: () => [],
     lifecycle: { advanceReclaim: async () => {} },
     writeMode: value => { mode = value; }, restart: { advance: async () => ({ confirmed: true }) },
     diagnostic: event => events.push(event) });
@@ -72,7 +72,7 @@ for (const deadline of [null, 1800001000]) test(`router activation after legacy 
     VALUES('exit','exit','running',1700000000,1700000000,?)`).run(deadline).lastInsertRowid);
   const owner = new ModeSwitchCoordinator({ db: f.db, now: f.now,
     readMode: () => ({ mode, keyPresent: mode === 'multi' }), readConfiguration: () => ({ mode }),
-    readRequests: () => [], legacyPresent: () => false, observe: () => [],
+    requestStore: { read: () => [] }, legacyPresent: () => false, observe: () => [],
     lifecycle: { advanceReclaim: async () => {} },
     writeMode: value => { mode = value; }, restart: { advance: async () => {
       await f.router.stop(); await f.create().initialize(); return { confirmed: true };

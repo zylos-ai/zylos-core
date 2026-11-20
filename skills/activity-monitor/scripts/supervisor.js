@@ -200,7 +200,7 @@ export function createSupervisor(deps) {
   globalMemoryHandover=new GlobalMemoryHandoverCoordinator({db,zylosDir:deps.zylosDir,readMode,readConfiguration,
     readRequests:()=>admission.readRequests(),legacyPresent:deps.legacyPresent,observe:context=>scenes.observe(context),
     serialize:operation=>admission.serialize(operation),diagnostic,now});
-  modeSwitch=new ModeSwitchCoordinator({db,readMode,readConfiguration,readRequests:()=>admission.readRequests(),
+  modeSwitch=new ModeSwitchCoordinator({db,readMode,readConfiguration,requestStore:admission.store,
     legacyPresent:deps.legacyPresent,observe:context=>scenes.observe(context),lifecycle,serialize:operation=>admission.serialize(operation),
     globalMemoryPending:()=>globalMemoryHandover.pending(),
     writeMode:deps.writeMode ?? writeSessionModeAtCutover,restart:deps.restartDispatcherConfirmation,diagnostic,now});

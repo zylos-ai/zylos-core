@@ -123,7 +123,7 @@ async function deleteOne(f, entry, group) {
 function coordinator(f, events) {
   return new ModeSwitchCoordinator({ db: f.store,
     readMode: () => ({ mode: config(f).session_mode, keyPresent: true }), readConfiguration: () => config(f),
-    readRequests: () => [], legacyPresent: () => false,
+    requestStore: { read: () => [] }, legacyPresent: () => false,
     // Deletion and private tmux shutdown above prove that no source executor remains.
     observe: () => [], lifecycle: { advanceReclaim: () => assert.fail('No runtime remains to reclaim') },
     writeMode: mode => writeMode(f, mode),

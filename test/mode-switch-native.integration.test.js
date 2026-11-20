@@ -35,7 +35,7 @@ function fixture(t) {
   const reclaimed = [], events = [], writes = [], restarts = [];
   const owner = () => new ModeSwitchCoordinator({ db: store, now: () => clock,
     readMode: () => ({ mode: readConfig().session_mode, keyPresent: true }), readConfiguration: readConfig,
-    readRequests: () => [], legacyPresent: () => false, globalMemoryPending: () => false,
+    requestStore: { read: () => [] }, legacyPresent: () => false, globalMemoryPending: () => false,
     observe: () => scenes.map(scene => ({ ...scene })),
     lifecycle: { stopForModeSwitch: () => {}, advanceReclaim: fence => { reclaimed.push({ ...fence }); } },
     writeMode: target => { writes.push(target); fs.writeFileSync(configFile, JSON.stringify({ ...readConfig(), session_mode: target }) + '\n'); },

@@ -150,7 +150,7 @@ test('native gating finishes an upgrade reclaim without conversion or premature 
   }, { now: f.now });
   const coordinator = new ModeSwitchCoordinator({
     db: f.db, lifecycle, readMode: () => ({ mode }), readConfiguration: async () => ({ runtime: 'claude' }),
-    observe, readRequests: () => [],
+    observe, requestStore: { read: () => [] },
     writeMode: async target => { writes.push(target); mode = target; },
     restart: { advance: async request => { restarts.push(request.runId); return { confirmed: true }; } },
     diagnostic: () => {}, now: f.now,

@@ -27,7 +27,7 @@ function fixture(overrides = {}) {
     expirePendingControls: target => calls.push(Object.keys(target)[0]),
     clearContinuationsExceptOrigin: () => { calls.push('clearContinuations'); return { cleared: 0 }; },
   };
-  const deps = { db, readMode: () => ({ mode, keyPresent: keyPresent || mode !== 'single' }), readConfiguration: () => ({ mode }), readRequests: () => requests,
+  const deps = { db, readMode: () => ({ mode, keyPresent: keyPresent || mode !== 'single' }), readConfiguration: () => ({ mode }), requestStore: { read: () => requests, write: rows => { requests = rows; } },
     legacyPresent: () => legacy, observe: () => sourceScenes, lifecycle: { stopForModeSwitch: async () => {}, advanceReclaim: async () => {} },
     writeMode: value => { calls.push('writeMode'); mode = value; },
     restart: { advance: async () => ({ confirmed: true }) }, diagnostic: event => events.push(event), now: () => time,
@@ -44,20 +44,20 @@ test('admission priority: , config, noop, legacy, manual and unreadable intent',
   assert.deepEqual(await owner.handle(request), { ok: false, code: 'transition_open', runId: 'old', target: 'single' });
   f.row = null; owner.readMode = f.deps.readMode;
   assert.equal((await owner.handle(request)).code, 'config_unreadable');
-  owner.readMode = () => ({ mode: 'multi', keyPresent: true }); owner.readRequests = () => { throw error('requests_unreadable'); };
+  owner.readMode = () => ({ mode: 'multi', keyPresent: true }); owner.requestStore.read = () => { throw error('requests_unreadable'); };
   assert.deepEqual(await owner.handle(request), { ok: true, result: 'noop' });
   owner.readMode = () => ({ mode: 'single', keyPresent: true }); f.legacy = true;
   assert.equal((await owner.handle(request)).code, 'legacy_session_present'); f.legacy = false;
-  owner.readRequests = () => [{ reason: 'manual_restart' }]; assert.equal((await owner.handle(request)).code, 'manual_restart_pending');
-  owner.readRequests = () => { throw error('requests_unreadable'); }; await assert.rejects(owner.handle(request), { code: 'requests_unreadable' });
+  owner.requestStore.read = () => [{ reason: 'manual_restart' }]; assert.equal((await owner.handle(request)).code, 'manual_restart_pending');
+  owner.requestStore.read = () => { throw error('requests_unreadable'); }; await assert.rejects(owner.handle(request), { code: 'requests_unreadable' });
   assert.deepEqual(f.calls, []);
-  owner.readRequests = () => []; assert.equal((await owner.handle(request)).result, 'accepted'); assert.deepEqual(f.calls, ['begin']);
+  owner.requestStore.read = () => []; assert.equal((await owner.handle(request)).result, 'accepted'); assert.deepEqual(f.calls, ['begin']);
 });
 
 test('actual admission wrapper defers corrupt until after noop/open checks', async () => {
   const f = fixture(), owner = f.create(); f.mode = 'multi';
   const store = { read: () => { throw error('requests_unreadable'); } };
-  owner.readRequests = () => store.read();
+  owner.requestStore = store;
   const admission = new SupervisorAdmission({ modeSwitch: request => owner.handle(request), store });
   admission.openEntry(); assert.equal((await admission.handle(request)).result, 'noop');
   f.mode = 'single'; assert.equal((await admission.handle(request)).code, 'requests_unreadable');
@@ -226,10 +226,22 @@ test('multi reclaim preserves existing reasons, waits starting scenes, cleans be
   assert.equal(f.fences.some(x=>x.sessionGroup==='*'),true);
 });
 
-test('automatic migration respects durable manual intent and unreadable intent',async()=>{
- const f=fixture({readMode:()=>({mode:null,keyPresent:false})}), owner=f.create(); f.requests=[{reason:'manual_restart'}];
- await owner.automatic(); assert.deepEqual(f.calls,[]);
- owner.readRequests=()=>{throw error('requests_unreadable');}; await assert.rejects(owner.automatic(),{code:'requests_unreadable'}); assert.deepEqual(f.calls,[]);
+test('automatic migration clears an orphaned manual fence before reading restart requests', async () => {
+  const f = fixture({ readMode: () => ({ mode: null, keyPresent: false }) });
+  const owner = f.create();
+  f.fences = [{ sessionGroup: '*', reason: 'manual_restart', runId: 'legacy' }];
+  f.db.clearDrainFence = (group, options) => {
+    assert.equal(group, '*');
+    assert.deepEqual(options, { expectedReason: 'manual_restart', expectedRunId: 'legacy' });
+    f.fences = [];
+  };
+  owner.requestStore.read = () => { throw error('requests_unreadable'); };
+  await assert.rejects(owner.automatic(), { code: 'requests_unreadable' });
+  assert.deepEqual(f.fences, []);
+  assert.deepEqual(f.calls, []);
+  owner.requestStore.read = () => [];
+  await owner.automatic();
+  assert.deepEqual(f.calls, ['begin']);
 });
 
 
@@ -249,7 +261,7 @@ test('changed between admission reads rejects before creating', async () => {
 test('accepted gating continues without re-reading later damaged', async () => {
   const f = fixture(), owner = f.create();
   await owner.handle(request);
-  owner.readRequests = () => { throw error('requests_unreadable'); };
+  owner.requestStore.read = () => { throw error('requests_unreadable'); };
   await owner.advance();
   assert.equal(f.row.phase, 'cutover');
   assert.equal(f.row.reason, null);
@@ -307,7 +319,7 @@ for (const deadline of [null, 1800001000]) test(`old machine control with ${dead
     VALUES('exit','exit','running',1700000000,1700000000,?)`).run(deadline).lastInsertRowid);
   const owner = new ModeSwitchCoordinator({ db: store, now: () => clock,
     readMode: () => ({ mode, keyPresent: false }), readConfiguration: () => ({ mode }),
-    readRequests: () => [], legacyPresent: () => false, observe: () => [],
+    requestStore: { read: () => [] }, legacyPresent: () => false, observe: () => [],
     lifecycle: { stopForModeSwitch: async () => {}, advanceReclaim: async () => {} },
     writeMode: target => { mode = target; }, restart: { advance: async () => ({ confirmed: true }) },
     diagnostic: event => events.push(event) });
