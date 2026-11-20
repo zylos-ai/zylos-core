@@ -90,13 +90,12 @@ export function observerNavEntry(status, level, t) {
 // Every group can open the observer page; sleeping groups offer its history branch.
 export const groupObservable = (entry, row) => entry?.target === 'observer' && Boolean(row);
 export const wbWritable = remoteIsReadOnly => !remoteIsReadOnly();
-const originStates = new Set(['running', 'starting', 'not_running', 'busy', 'idle', 'waiting', 'stopped', 'error', 'working', 'offline', 'stopping', 'unknown']);
-export function instanceStatusText(data = {}, level = 'plain', t = key => key) {
+/** The raw instance line under the session mode (shown only with technical details): view, mode and Origin state. */
+export function instanceStatusText(data = {}, t = key => key) {
   const state = data.origin?.state?.kind || data.origin?.presence;
   // Older instances report null and newer ones 'unreadable' when the mode cannot be read.
   const mode = ['single', 'multi'].includes(data.session_mode?.sessionMode) ? data.session_mode.sessionMode : t('value.unknown');
-  if (level === 'technical') return t('actions.instance_status', { view: mode, mode, origin: state || t('value.unknown') });
-  return t('wb.term.origin') + ' · ' + t('wb.state.' + (originStates.has(state) ? state : 'unknown'));
+  return t('actions.instance_status', { view: mode, mode, origin: state || t('value.unknown') });
 }
 export function waitText(wait, level = 'plain', t, now = Date.now()) {
   if (!wait) return '';

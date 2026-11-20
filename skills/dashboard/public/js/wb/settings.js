@@ -103,14 +103,14 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
   function showCurrent() { if (!current) return; toggleCurrent.replaceChildren(icon(document, sectionIcons[current]), element(document, 'span', t('wb.settings.section.' + current))); }
   function select(name) {
     if (!sections[name] || buttons[name].hidden) name = 'defaults';
-    // A finished key or machine notice belongs to the section it came from; one still running stays visible.
-    const notice = status.querySelector('#fleet-manage-status');
+    // A key or machine notice sits in the card that started it: a finished one is cleared on leaving its section,
+    // one still running stays there for when that section is shown again.
+    const notice = layout.querySelector('#fleet-manage-status');
     if (current && name !== current && notice && !/\bwb-status-running\b/.test(notice.className)) { notice.textContent = ''; notice.hidden = true; }
     current = name;
     for (const key of settingsSections) { sections[key].hidden = key !== name; buttons[key].setAttribute('aria-current', String(key === name)); }
     showCurrent();
   }
-  function detail(level) { const hidden = level !== 'technical'; buttons.observer.hidden = hidden; if (hidden && !sections.observer.hidden) select('defaults'); }
   function relabel() {
     nav.setAttribute('aria-label', t('wb.settings'));
     drawerTitle.textContent = t('wb.settings.sections'); drawerClose.setAttribute('aria-label', t('wb.settings.sectionsClose'));
@@ -120,8 +120,8 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
   }
   /** Unsaved-change count on a navigation item; zero hides it. */
   function badge(name, count) { badges[name].textContent = count ? String(count) : ''; badges[name].hidden = !count; badges[name].title = count ? t('wb.settings.unsaved') : ''; }
-  select('defaults'); detail(document.documentElement?.dataset.detail);
-  return { sections, prefs, select, detail, relabel, badge, drawer, actionsScope: root };
+  select('defaults');
+  return { sections, prefs, select, relabel, badge, drawer, actionsScope: root };
 }
 
 // One snapshot and one first batch per open; search owns subsequent user requests.

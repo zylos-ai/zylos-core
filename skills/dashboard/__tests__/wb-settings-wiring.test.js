@@ -19,8 +19,8 @@ function page({ answer = true } = {}) {
     append(...nodes);
     for (const added of nodes) {
       const dialog = added.querySelector('.wb-modal'); if (!dialog) continue;
-      dialogs.push({ title: dialog.children[0].textContent, body: dialog.children[1].textContent });
       const [no, yes] = dialog.querySelector('.wb-modal-acts').children;
+      dialogs.push({ title: dialog.children[0].textContent, body: dialog.children[1].textContent, danger: yes.classList.contains('wb-btn-danger') });
       queueMicrotask(() => ((Array.isArray(result.answer) ? result.answer.shift() : result.answer) ? yes : no).dispatch('click'));
     }
   };
@@ -169,6 +169,7 @@ test('saving model and effort for both engines asks once, then runs every change
   await root.querySelector('#settings-save-models').dispatch('click');
   assert.equal(p.dialogs.length, 1, 'one .wb-modal for the whole card, none per action');
   assert.match(p.dialogs[0].body, /^wb\.settings\.confirmModels/);
+  assert.deepEqual([p.dialogs[0].title, p.dialogs[0].danger], ['wb.settings.confirm.models', false], 'saving models interrupts nothing');
   assert.deepEqual(busy, [true, false], 'the page is locked only while asking');
   assert.deepEqual(sent.map(item => item.action).sort(), ['switch-effort', 'switch-effort', 'switch-model', 'switch-model']);
   assert.deepEqual(asked, [], 'the card hands its confirmed changes to the runner\'s no-ask path');
@@ -194,6 +195,7 @@ test('switching the default engine asks once and names the remote machine it act
   await root.querySelector('#settings-save-runtime').dispatch('click');
   assert.equal(p.dialogs.length, 1, 'one .wb-modal');
   assert.match(p.dialogs[0].body, /confirm\.switch_runtime_codex/);
+  assert.deepEqual([p.dialogs[0].title, p.dialogs[0].danger], ['wb.settings.confirm.runtime', true], 'switching the engine interrupts running work');
   assert.match(p.dialogs[0].body, /\nconfirm\.remote_target:\{"agent":"lab"\}$/);
   assert.deepEqual(sent, [{ action: 'switch-runtime', body: { runtime: 'codex' } }]);
 });
@@ -208,6 +210,7 @@ test('idle reclaim uses the session card mount and the existing confirmed remote
   const input = sessionRoot.querySelector('#settings-hot-ttl-minutes'); input.value = '5'; await input.dispatch('input');
   await sessionRoot.querySelector('#settings-save-hot-ttl').dispatch('click');
   assert.equal(p.dialogs.length, 1); assert.match(p.dialogs[0].body, /hotTtl\.confirm.*"minutes":5/);
+  assert.deepEqual([p.dialogs[0].title, p.dialogs[0].danger], ['wb.settings.confirm.hotTtl', false]);
   assert.match(p.dialogs[0].body, /remote_target.*lab/);
   assert.deepEqual(sent, [{ action: 'set-session-hot-ttl', body: { minutes: 5 } }]); assert.deepEqual(asked, []);
   panel.destroy();

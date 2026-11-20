@@ -22,6 +22,7 @@ import { createRemoteAccess } from './wb/remote-access.js';
 import { groupObservable, instanceStatusText, markCurrentTab, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js';
 import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide, observerReturnPage } from './wb/observer-page.js';
 import { bindActionControls, createPageActions } from './wb/page-actions.js';
+import { watchScrollHint } from './wb/scroll-hint.js';
 import { mountSchedule } from './wb/schedule.js';
 import { createUsagePage } from './wb/usage.js';
 import { ObserverHistory } from './observer-history.js';
@@ -352,7 +353,6 @@ function renderAll() {
   initFleetManageButton();
   if (settingsPage) {
     settingsPage.relabel();
-    settingsPage.detail(document.documentElement.dataset.detail);
     refreshSettingsVersion();
   }
   renderInfoBar();
@@ -2161,17 +2161,20 @@ async function copyDashboardBaseUrl() {
   try {
     if (!navigator.clipboard?.writeText) throw new Error('clipboard_unavailable');
     await navigator.clipboard.writeText(dashboardBaseUrl());
-    fleetManageStatus(t('fleet_manage.base_url_copied'), 'success');
+    fleetManageStatus(t('fleet_manage.base_url_copied'), 'success', '.api-key-copy-row');
   } catch {
-    fleetManageStatus(t('fleet_manage.copy_failed'), 'error');
+    fleetManageStatus(t('fleet_manage.copy_failed'), 'error', '.api-key-copy-row');
   }
 }
 
 let fleetManageStatusTimer = null;
 
-function fleetManageStatus(message, kind = '') {
+// A key or machine notice appears in the card whose button started it, right under `after` (a selector or node).
+function fleetManageStatus(message, kind = '', after = null) {
   const status = fleetManageModal?.querySelector('#fleet-manage-status');
   if (!status) return;
+  const anchor = typeof after === 'string' ? fleetManageModal.querySelector(after) : after;
+  if (anchor && anchor.nextElementSibling !== status) anchor.after(status);
   clearTimeout(fleetManageStatusTimer);
   fleetManageStatusTimer = null;
   status.textContent = message;
@@ -2261,7 +2264,7 @@ function settingsWiring() {
     keyPage: {
       request: async (method, path) => { const resp = await fetch(api(path), { method }); return { ok: resp.ok, data: await resp.json() }; },
       renderKeys: renderApiKeys, renderCreated: renderCreatedApiKey, createdKey: () => fleetManageModal?._createdKey ?? null,
-      status: fleetManageStatus, busy: setApiKeyBusy, errorText: fleetManageError,
+      status: (text, kind) => fleetManageStatus(text, kind, '#api-key-list'), busy: setApiKeyBusy, errorText: fleetManageError,
     },
     writable: () => !remoteIsReadOnly() && countdownTimer === null, onGroup: openWorkbenchGroup,
   });
@@ -2276,9 +2279,9 @@ async function copyCreatedApiKey() {
   try {
     if (!navigator.clipboard?.writeText) throw new Error('clipboard_unavailable');
     await navigator.clipboard.writeText(key);
-    fleetManageStatus(t('fleet_manage.key_copied'), 'success');
+    fleetManageStatus(t('fleet_manage.key_copied'), 'success', '#api-key-created');
   } catch {
-    fleetManageStatus(t('fleet_manage.copy_failed'), 'error');
+    fleetManageStatus(t('fleet_manage.copy_failed'), 'error', '#api-key-created');
   }
 }
 
@@ -2289,14 +2292,14 @@ async function loadApiKeys() {
     if (!resp.ok) throw new Error(fleetManageError(data.error?.code, t('fleet_manage.keys_load_failed')));
     renderApiKeys(data);
   } catch (err) {
-    fleetManageStatus(err.message, 'error');
+    fleetManageStatus(err.message, 'error', '#api-key-list');
   }
 }
 
 async function testFleetAgent() {
   const body = fleetFormValues();
   setFleetAddBusy(true);
-  fleetManageStatus(t('fleet_manage.testing'), 'running');
+  fleetManageStatus(t('fleet_manage.testing'), 'running', '#fleet-add-form');
   try {
     const resp = await fetch(api('/api/fleet/agents/test'), {
       method: 'POST',
@@ -2306,12 +2309,12 @@ async function testFleetAgent() {
     const data = await resp.json();
     if (!resp.ok) throw new Error(fleetManageError(data.error?.code, data.error?.message || t('fleet_manage.test_failed')));
     if (data.reachable) {
-      fleetManageStatus(t('fleet_manage.test_ok', { scope: data.scope || 'read' }), 'success');
+      fleetManageStatus(t('fleet_manage.test_ok', { scope: data.scope || 'read' }), 'success', '#fleet-add-form');
     } else {
-      fleetManageStatus(fleetManageError(data.error?.code || 'unreachable', data.error?.message || t('fleet_manage.test_failed')), 'error');
+      fleetManageStatus(fleetManageError(data.error?.code || 'unreachable', data.error?.message || t('fleet_manage.test_failed')), 'error', '#fleet-add-form');
     }
   } catch (err) {
-    fleetManageStatus(err.message, 'error');
+    fleetManageStatus(err.message, 'error', '#fleet-add-form');
   } finally {
     setFleetAddBusy(false);
   }
@@ -2320,7 +2323,7 @@ async function testFleetAgent() {
 async function saveFleetAgent() {
   const body = fleetFormValues();
   setFleetAddBusy(true);
-  fleetManageStatus(t('fleet_manage.saving'), 'running');
+  fleetManageStatus(t('fleet_manage.saving'), 'running', '#fleet-add-form');
   try {
     const resp = await fetch(api('/api/fleet/agents'), {
       method: 'POST',
@@ -2333,11 +2336,11 @@ async function saveFleetAgent() {
     fleetManageModal.querySelector('#fleet-add-url').value = '';
     fleetManageModal.querySelector('#fleet-add-key').value = '';
     renderFleetManage(data.agents ? data : await (await fetch(api('/api/fleet/agents'), { cache: 'no-store' })).json());
-    fleetManageStatus(t('fleet_manage.saved'), 'success');
+    fleetManageStatus(t('fleet_manage.saved'), 'success', '#fleet-add-form');
     await refreshFleet();
     return true;
   } catch (err) {
-    fleetManageStatus(err.message, 'error');
+    fleetManageStatus(err.message, 'error', '#fleet-add-form');
     return false;
   } finally {
     setFleetAddBusy(false);
@@ -2345,26 +2348,27 @@ async function saveFleetAgent() {
 }
 
 async function removeFleetAgent(name) {
-  if (!(await confirmSetting(t('fleet_manage.remove_confirm', { name }), { ok: t('wb.settings.fleet.remove') }))) return;
-  fleetManageStatus(t('fleet_manage.removing'), 'running');
+  if (!(await confirmSetting(t('fleet_manage.remove_confirm', { name }), { title: t('wb.settings.confirm.removeMachine'), ok: t('wb.settings.fleet.remove'), danger: true }))) return;
+  fleetManageStatus(t('fleet_manage.removing'), 'running', '#fleet-agent-list');
   try {
     const resp = await fetch(api(`/api/fleet/agents/${encodeURIComponent(name)}`), { method: 'DELETE' });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error?.message || t('fleet_manage.remove_failed'));
     renderFleetManage(data);
-    fleetManageStatus(t('fleet_manage.removed'), 'success');
+    fleetManageStatus(t('fleet_manage.removed'), 'success', '#fleet-agent-list');
     await refreshFleet();
   } catch (err) {
-    fleetManageStatus(err.message, 'error');
+    fleetManageStatus(err.message, 'error', '#fleet-agent-list');
   }
 }
 
 async function createApiKey() {
   const body = apiKeyFormValues();
   const pendingKeyName = fleetManageModal?._createdKey?.name;
-  if (pendingKeyName && !(await confirmSetting(t('fleet_manage.replace_created_key_confirm', { name: pendingKeyName }), { danger: false }))) return;
+  if (pendingKeyName && !(await confirmSetting(t('fleet_manage.replace_created_key_confirm', { name: pendingKeyName }), { title: t('wb.settings.confirm.replaceShownKey'), danger: false }))) return;
+  const createRow = fleetManageModal.querySelector('#api-key-create')?.parentElement;
   setApiKeyBusy(true);
-  fleetManageStatus(t('fleet_manage.creating_key'), 'running');
+  fleetManageStatus(t('fleet_manage.creating_key'), 'running', createRow);
   try {
     const resp = await fetch(api('/api/keys'), {
       method: 'POST',
@@ -2376,18 +2380,18 @@ async function createApiKey() {
     fleetManageModal.querySelector('#api-key-name').value = '';
     renderApiKeys(data);
     renderCreatedApiKey({ name: data.key?.name || body.name, plaintext_key: data.plaintext_key });
-    fleetManageStatus(t('fleet_manage.key_created_status'), 'success');
+    fleetManageStatus(t('fleet_manage.key_created_status'), 'success', createRow);
   } catch (err) {
-    fleetManageStatus(err.message, 'error');
+    fleetManageStatus(err.message, 'error', createRow);
   } finally {
     setApiKeyBusy(false);
   }
 }
 
 async function purgeRevokedApiKeys() {
-  if (!(await confirmSetting(t('fleet_manage.purge_revoked_confirm'), { ok: t('wb.settings.keys.purgeOk') }))) return;
+  if (!(await confirmSetting(t('fleet_manage.purge_revoked_confirm'), { title: t('wb.settings.confirm.purgeRevoked'), ok: t('wb.settings.keys.purgeOk'), danger: true }))) return;
   setApiKeyBusy(true);
-  fleetManageStatus(t('fleet_manage.purging_revoked'), 'running');
+  fleetManageStatus(t('fleet_manage.purging_revoked'), 'running', '#api-key-list');
   try {
     const resp = await fetch(api('/api/keys/purge-revoked'), { method: 'POST' });
     const data = await resp.json();
@@ -2396,9 +2400,9 @@ async function purgeRevokedApiKeys() {
     if (fleetManageModal?._createdKey?.name && !data.keys?.some(key => key.name === fleetManageModal._createdKey.name)) {
       renderCreatedApiKey(null);
     }
-    fleetManageStatus(countLabel(t, 'fleet_manage.purge_revoked_status', data.purged ?? 0), 'success');
+    fleetManageStatus(countLabel(t, 'fleet_manage.purge_revoked_status', data.purged ?? 0), 'success', '#api-key-list');
   } catch (err) {
-    fleetManageStatus(err.message, 'error');
+    fleetManageStatus(err.message, 'error', '#api-key-list');
   } finally {
     setApiKeyBusy(false);
   }
@@ -2406,7 +2410,7 @@ async function purgeRevokedApiKeys() {
 
 async function saveFleetSelfName() {
   const name = fleetManageModal.querySelector('#fleet-self-name').value.trim();
-  fleetManageStatus(t('fleet_manage.saving'), 'running');
+  fleetManageStatus(t('fleet_manage.saving'), 'running', '#fleet-self-edit');
   try {
     const resp = await fetch(api('/api/instance/name'), {
       method: 'PUT',
@@ -2415,13 +2419,13 @@ async function saveFleetSelfName() {
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(fleetManageError(data.error?.code, t('fleet_manage.save_failed')));
-    fleetManageStatus(t('fleet_manage.saved'), 'success');
+    fleetManageStatus(t('fleet_manage.saved'), 'success', '#fleet-self-edit');
     await refreshState();
     await refreshFleet();
     fleetManageModal.querySelector('#fleet-self-label').textContent = name;
     return true;
   } catch (err) {
-    fleetManageStatus(err.message, 'error');
+    fleetManageStatus(err.message, 'error', '#fleet-self-edit');
     return false;
   }
 }
@@ -2612,9 +2616,20 @@ async function refreshObserverStatus({ quiet = false, signal } = {}) {
   catch (error) { if (!quiet) throw error; return null; }
 }
 
+// Disabling and uninstalling close the open terminal view, so both ask first; only uninstalling is destructive.
+// The same buttons retrying a cleanup or an uninstall already under way finish what was asked before and do not ask again.
+function confirmObserverStop(action) {
+  const status = state.observer.status;
+  if (action === 'disable' ? observerRecoveryReason(status) : status?.desired?.removalState) return Promise.resolve(true);
+  return action === 'uninstall'
+    ? confirmSetting(t('wb.settings.observer.uninstallBody'), { title: t('wb.settings.observer.uninstallTitle'), ok: t('observer.uninstall'), danger: true })
+    : confirmSetting(t('wb.settings.observer.disableBody'), { title: t('wb.settings.observer.disableTitle'), ok: t('observer.disable'), danger: false });
+}
+
 async function runObserverLifecycle(action) {
   if (remoteIsReadOnly()) return;
   if (['install', 'enable'].includes(action) && observerRecoveryReason(state.observer.status)) return;
+  if (['disable', 'uninstall'].includes(action) && (!(await confirmObserverStop(action)) || remoteIsReadOnly())) return;
   const targetKey = observerTargetKey();
   const generation = state.observer.lifecycleGeneration = (state.observer.lifecycleGeneration || 0) + 1;
   state.observer.lifecyclePending = generation;
@@ -2678,6 +2693,7 @@ function initSettingsPage() {
   });
   settingsPage = composeSettings(root, { settings: oldSettings, fleet: oldFleet, actions: oldActions, controls, t });
   oldSettings.remove(); oldFleet.remove(); oldActions.remove();
+  for (const box of root.querySelectorAll('.settings-table-scroll, #api-key-list')) watchScrollHint(box);
   settingsModal = root; fleetManageModal = root; actionsModal = settingsPage.actionsScope;
   settingsUpgrade = root.querySelector('[data-action="upgrade-cc"]');
   settingsVersionRoot = document.createElement('div'); settingsVersionRoot.id = 'settings-version'; settingsPage.prefs.version.prepend(settingsVersionRoot);
@@ -2715,7 +2731,6 @@ function initSettingsPage() {
     refreshSettingsLocks(); refreshSettingsVersion();
   } });
   $('#wb-detail-toggle').addEventListener('change', () => {
-    settingsPage.detail($('#wb-detail-toggle').checked ? 'technical' : 'plain');
     refreshSettingsVersion();
     if (fleetManageModal?._agents) renderFleetManage({ self: { name: fleetManageModal.querySelector('#fleet-self-label').textContent }, agents: fleetManageModal._agents }, true);
   });
@@ -2746,7 +2761,7 @@ function refreshSettingsPage() {
   refreshModeStatus().catch(() => {});
   if (!REMOTE_AGENT) {
     const identity = observerTargetKey();
-    fetch(api('/api/fleet/agents'), { cache: 'no-store' }).then(async response => { if (!response.ok) throw Error('read_failed'); return response.json(); }).then(value => { if (identity === observerTargetKey()) renderFleetManage(value); }).catch(error => { if (identity === observerTargetKey()) fleetManageStatus(error.message, 'error'); });
+    fetch(api('/api/fleet/agents'), { cache: 'no-store' }).then(async response => { if (!response.ok) throw Error('read_failed'); return response.json(); }).then(value => { if (identity === observerTargetKey()) renderFleetManage(value); }).catch(error => { if (identity === observerTargetKey()) fleetManageStatus(error.message, 'error', '#fleet-agent-list'); });
     loadApiKeys();
   }
   for (const name of ['fleet', 'keys']) { const remote = Boolean(REMOTE_AGENT); const button = document.querySelector(`[data-settings-section="${name}"]`); if (button) button.hidden = remote; if (remote) settingsPage.sections[name].hidden = true; }
@@ -2841,7 +2856,8 @@ async function refreshModeStatus() {
     const data = { ...result, origin };
     if (observerTargetKey() !== targetKey) return;
     state.originGroup = origin;
-    if (instanceText) instanceText.textContent = instanceStatusText(data, document.documentElement.dataset.detail === 'technical' ? 'technical' : 'plain', t);
+    // The line is shown only with technical details on (see wb.css), so it always carries the technical text.
+    if (instanceText) instanceText.textContent = instanceStatusText(data, t);
   } catch (error) { if (observerTargetKey() !== targetKey) return; if (instanceText) instanceText.textContent = error.message; }
 }
 
@@ -2902,9 +2918,9 @@ function setModalBodyDisabled(disabled) {
   if (!disabled) renderObserverAvailability();
 }
 
-async function showConfirm(text) {
+async function showConfirm(text, options) {
   setModalBodyDisabled(true);
-  try { return await confirmSetting(text); }
+  try { return await confirmSetting(text, options); }
   finally { setModalBodyDisabled(false); }
 }
 
@@ -3156,7 +3172,6 @@ export function openWorkbenchGroup(key) {
   document.querySelector('.tab[data-tab="overview"]')?.click();
   return workbench.openGroup(key);
 }
-settingsPage?.detail(document.documentElement.dataset.detail);
 refreshSettingsVersion();
 const stopSchedule = mountSchedule({
   t, fetch: draftFetch,

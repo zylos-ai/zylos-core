@@ -162,6 +162,8 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     prevSubagentIds: new Set(),
     closeActionsModal() {},
     closeSettingsModal() {},
+    // Disabling and uninstalling ask first; these cases answer yes (the question itself is checked in the browser).
+    confirmSetting: async () => true,
     renderAll() {},
     remotePrefix: () => context.state.remoteAgent ? `/fleet/${context.state.remoteAgent}` : '',
     api: (value) => value

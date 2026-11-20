@@ -38,17 +38,17 @@ export function wireSettingsConfirmations({ document, t, runner, keyPage, remote
   const confirm = (body, { title = t('wb.settings.confirmTitle'), ok = t('btn.confirm'), danger = true } = {}) =>
     confirmDialog(document, { title, body, ok, cancel: t('btn.cancel'), danger });
   // Default-setting changes name the remote machine they act on and keep the page locked while asking.
-  async function confirmChange(text) {
+  async function confirmChange(text, options) {
     const target = remoteTarget();
     setBusy(true);
-    try { return await confirm(target ? `${text}\n${t('confirm.remote_target', { agent: target })}` : text); }
+    try { return await confirm(target ? `${text}\n${t('confirm.remote_target', { agent: target })}` : text, options); }
     finally { setBusy(false); }
   }
   const execute = confirmedRunner((action, body) => runner.runConfirmed(action, body));
   // Sends one key request. Rotating shows the new key once, and first asks before replacing a key still shown.
   async function sendKeyRequest(request, name) {
     const shown = keyPage.createdKey()?.name;
-    if (request.showsNewKey && shown && !(await confirm(t('fleet_manage.replace_created_key_confirm', { name: shown }), { danger: false }))) return;
+    if (request.showsNewKey && shown && !(await confirm(t('fleet_manage.replace_created_key_confirm', { name: shown }), { title: t('wb.settings.confirm.replaceShownKey'), danger: false }))) return;
     keyPage.busy(true);
     keyPage.status(t(request.status.running), 'running');
     try {

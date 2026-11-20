@@ -3,7 +3,7 @@ import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harne
 
 // Boundary: real frontend entry/modules/styles and fixed existing API shapes in
 // a private loopback browser fixture. Run for desktop conversation header layout,
-// mobile shell, focus/menu/composer or chat layout changes; unrelated
+// mobile shell, focus/menu/composer, chat layout or message table changes; unrelated
 // runtime/backend work may skip this opt-in.
 // The official runner/sandbox proves private HOME/ZYLOS_DIR/PM2_HOME, short
 // TMPDIR/socket/database paths before allocation. No DB/runtime/channel starts.

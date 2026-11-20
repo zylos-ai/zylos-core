@@ -389,13 +389,17 @@
   font-size:11.5px
 }
 
-.conversation-markdown table {
-  display:block;
-  overflow:auto;
+.conversation-markdown .conversation-table-scroll {
   max-width:100%;
+  overflow-x:auto
+}
+/* Columns take their natural width up to a cap; a wider table scrolls inside its box. */
+.conversation-markdown table {
+  width:max-content;
   border-collapse:collapse
 }
 .conversation-markdown th,.conversation-markdown td {
+  max-width:18em;
   padding:6px 8px;
   border:1px solid var(--wb-line)
 }

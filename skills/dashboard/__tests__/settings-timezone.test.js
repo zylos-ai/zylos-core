@@ -8,12 +8,12 @@ import { deferred } from './fixtures/workbench-dom.js';
 const settings = (extra = {}) => ({ tz: 'UTC', writable: true, read_only_reason: null,
   restart_status: 'known', restart_services: [{ name: 'scheduler', status: 'online' }], ...extra });
 function fixture(options = {}) {
-  const document = documentFixture(), root = document.createElement('div'), writes = [], restarts = [], questions = [];
+  const document = documentFixture(), root = document.createElement('div'), writes = [], restarts = [], questions = [], asked = [];
   const view = mountTimezoneSettings(root, { document,
     read: async () => settings(), write: async body => { writes.push(body); return settings({ tz: body.tz, ok: true, changed: true }); },
     restart: async body => { restarts.push(body); return { ok: true, restarted: ['scheduler'], failed: [], restart_services: [] }; },
-    confirm: async text => { questions.push(text); return true; }, ...options });
-  return { root, view, writes, restarts, questions, input: root.querySelector('select'),
+    confirm: async (text, shown) => { questions.push(text); asked.push(shown); return true; }, ...options });
+  return { root, view, writes, restarts, questions, asked, input: root.querySelector('select'),
     save: root.querySelector('#settings-timezone-save'), restart: root.querySelector('#settings-timezone-restart'),
     pending: root.querySelector('#settings-timezone-pending'), notice: root.querySelector('#settings-timezone-result'),
     policy: root.querySelector('#settings-timezone-policy') };
@@ -43,6 +43,8 @@ test('saving writes the zone and requires a separate confirmation to restart', a
   assert.equal(f.pending.hidden, false); assert.equal(f.root.querySelector('#settings-timezone-services').textContent, 'wb.settings.timezone.scheduler');
   await f.restart.dispatch('click'); assert.deepEqual(f.restarts, [{ tz: 'Asia/Singapore', confirm: true, services: ['scheduler'] }]);
   assert.equal(f.questions.length, 2); assert.equal(f.pending.hidden, true);
+  // Each question names its action; neither interrupts work, so neither uses the destructive button.
+  assert.deepEqual(f.asked, [{ title: 'wb.settings.confirm.timezone', danger: false }, { title: 'wb.settings.confirm.timezoneRestart', danger: false }]);
 });
 test('cancelled save or restart leaves the corresponding operation untouched', async () => {
   let accepted = false; const f = fixture({ confirm: async () => accepted }); await f.view.refresh(); await save(f);
