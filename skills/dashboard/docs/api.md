@@ -124,7 +124,7 @@ Example: `GET /api/health/ready` → `{"ok":false,"error":{"code":"supervisor_un
 | `resources` | object | One current resource sample: `scope:"host"\|"container"\|"mixed"`, `sampledAt:string\|null` (ISO), `cpu_pct:number\|null`, `cpu_count:number\|null`, `cpu_source:"container"\|"host"`, `mem_pct:number\|null`, `mem_used_bytes:number\|null`, `mem_total_bytes:number\|null`, `mem_source:"container"\|"host"`, `disk_pct:number\|null`, `disk_free_bytes:number\|null`, `disk_total_bytes:number\|null` |
 | `services` | object / null | PM2 counts `online:number`, `total:number`, plus `channels:Array<{channel:string,service:string,status:string\|null,restarts10m:number,lastSendFailed:boolean\|null,consecutiveFailures:number\|null}>`. Channels come from installed skill frontmatter `type: communication` and `lifecycle.service.name`, and must exist in the PM2 sample. `restarts10m` sums observed counter increases in the last ten minutes, beginning at zero on Dashboard startup. Send fields describe the latest C4 outbound status and failures after the latest successful outbound; null means the C4 read failed. |
 
-The `defaults` keys are `claude`, `codex` and `agy`. Antigravity has no configurable model/effort override, so its default `model` and `effort` are null. Its rotation threshold follows the one-million-token policy (40% maximum). Antigravity reports its installed version from `agy --version` when available. Its `latest` and `update` are null and `update_check` is `"unsupported"`. A missing or failed probe retains the last installed version.
+The `defaults` keys are `claude`, `codex` and `agy`. Antigravity has no configurable model/effort override, so its default `model` and `effort` are null. Its rotation threshold follows the one-million-token policy (40% maximum). Antigravity reports its installed version from `agy --version` when available. Its `latest` and `update` are null and `update_check` is `"unsupported"`. A missing or failed probe retains the last installed version. For `versions.zylos`, `latest` and `update` follow [core-update](#get-apiinstancecore-update): the newest stable release within the installed major version.
 
 Each `defaults[runtime]` contains `model:string|null`, `effort:string|null`, `threshold:number`, `model_thresholds:Record<string,number>` and `session_hot_ttl:object` (effective mode, keepalive seconds and configuration/environment provenance). CPU and memory limits are resolved independently: a limited resource uses its container quota, while an explicitly unlimited resource uses host values and labels that resource’s source `host`. `scope` is `mixed` when the two sources differ, otherwise it is their common source; each resource’s source remains authoritative. An unreadable container limit keeps that resource’s source `container` with unknown measurements rather than implying unlimited host fallback. CPU percentages use the selected CPU capacity (which can be fractional); memory percentages use the selected total bytes. Disk describes the filesystem visible at the instance data directory and is independent of the CPU/memory scope. Unreadable observations remain null. There is no duplicate `system` sample or `runtime_info` object. Origin’s current model, effort, running CLI version and restart-to-apply status belong to group detail; instance versions and defaults describe installed software and configuration. Session context, cost and pool counts belong to the group and usage APIs.
 
@@ -217,27 +217,29 @@ Returns `{ok:true,...CoreResult}` on success, with optional `data` and `message`
 
 Example: `POST /api/instance/actions/switch-runtime` with `{"runtime":"codex"}`.
 
-### POST /api/instance/actions/upgrade
+### GET /api/instance/core-update
 
-**Access:** Admin. **Parameters:** JSON `{}`.
+**Access:** Read. **Parameters:** none.
 
-Returns `ok:boolean`, optional `message:string`, `detached:boolean` and localization fields. `detached:true` means the upgrade process was launched; it does not prove completion.
+Returns `{current:string|null,latest:string|null,hasUpdate:boolean,checkedAt:string|null}`. `current` is the installed Zylos Core version. `latest` is the newest stable Core release tag within the installed major version (prereleases and other major versions are excluded), using the instance's configured upstream sources. `hasUpdate` is true only when `latest` is newer than `current`. `checkedAt` is the ISO time of the last successful check.
 
-**Errors:** 409 `already_up_to_date`, `duplicate_request`; 502 upgrade outcome unknown/failed; common write errors.
+The value comes from the Dashboard's existing version check, which runs at startup and every 12 hours; this request never contacts GitHub itself. Before the first successful check, `latest` and `checkedAt` are null and `hasUpdate` is false. A failed later check keeps the previous result. The Dashboard does not upgrade Core; run `zylos upgrade --self` on the host.
 
-Example: `POST /api/instance/actions/upgrade` with `{}`.
+**Errors:** common read errors.
+
+Example: `GET /api/instance/core-update` → `{"current":"1.4.0","latest":"1.5.2","hasUpdate":true,"checkedAt":"2026-11-20T04:00:00.000Z"}`.
 
 ### POST /api/instance/actions/upgrade-runtime
 
-**Access:** Admin. **Parameters:** JSON `{}`; operates on the current default runtime.
+**Access:** Admin. **Parameters:** JSON `{runtime:"claude"|"codex"|"agy"}` (required); the named runtime's CLI is upgraded, regardless of the instance default runtime.
 
 Returns `ok:boolean`, optional `message:string`, `output:string`, `requires_restart:boolean` and localization fields. Restart applies the installed CLI to a session.
 
-**Runtime behavior:** Claude runs `claude update` and Codex runs `codex update`, each with a one-minute timeout. Antigravity runs `agy update` with a five-minute timeout and background auto-update disabled. Executable lookup honors the runtime's `<ID>_BIN` override, then uses PATH. For Antigravity, an `HTTPS_PROXY` entry in the instance `.env` wins over the process value. An empty entry removes the inherited value. Success includes `messageKey:"result.runtime_updated"` and `messageParams:{runtime:string}` with the display name. The Antigravity deadline response includes `messageKey:"result.runtime_upgrade_incomplete"` and `messageParams:{runtime:string,minutes:number}`. The browser shows an unknown outcome when the reply is lost or a gateway returns a 5xx without a confirmed result.
+**Runtime behavior:** Claude runs `claude update` and Codex runs `codex update`, each with a one-minute timeout. Antigravity runs `agy update` with a five-minute timeout and background auto-update disabled. Executable lookup honors the runtime's `<ID>_BIN` override, then uses PATH. For Antigravity, an `HTTPS_PROXY` entry in the instance `.env` wins over the process value. An empty entry removes the inherited value. Success includes `messageKey:"result.runtime_updated"` and `messageParams:{runtime:string}` with the display name. The Antigravity deadline response includes `messageKey:"result.runtime_upgrade_incomplete"` and `messageParams:{runtime:string,minutes:number}`. The browser shows an unknown outcome when the reply is lost or a gateway returns a 5xx without a confirmed result. A missing or unknown `runtime` returns 400 `runtime_unsupported` without executing a command.
 
 **Errors:** 400 `runtime_unsupported`; 504 `deadline_exceeded` (Antigravity did not complete; verify the installed version before retrying); 502 `upgrade_failed`; 409 `duplicate_request`; common write errors.
 
-Example: `POST /api/instance/actions/upgrade-runtime` with `{}`.
+Example: `POST /api/instance/actions/upgrade-runtime` with `{"runtime":"codex"}`.
 
 ### POST /api/instance/actions/recheck-runtime-cli
 
@@ -337,7 +339,7 @@ Example: `GET /api/groups/search?q=team`.
 
 ### GET /api/groups/activity
 
-**Access:** Read. **Parameters:** `range=60m|6h` (default `6h`).
+**Access:** Read. **Parameters:** `range=60m|6h` (default `6h`); `ids` (required), a comma-separated list of 1–100 group IDs (`origin` for Origin). Only the requested groups are read and returned; unknown IDs are skipped and absent from `groups`. Clients with more than 100 loaded groups send several requests.
 
 Returns `{range:string,cellSeconds:number,start:string,groups:Record<string,{cells:string[],inbound:string[]}>,inboundError?:"inbound_unreadable"}`. Cells are activity classifications (`none`, `idle`, `busy`, `waiting`, `error`); inbound entries are message ISO timestamps. This heatmap retains historical activity classifications, which are separate from the current primary-state vocabulary. If inbound timestamps cannot be read, the response includes `inboundError:"inbound_unreadable"` while retaining the event classifications.
 
@@ -345,9 +347,9 @@ In single-session mode, `groups.origin` combines current `origin` and historical
 
 After switching from multi-session to single-session mode, inbound markers within the selected window (up to six hours) also include messages handled by other groups before the switch, because single-session mode reads all external inbound messages.
 
-**Errors:** 400 `invalid_range`; source read failures and common read errors.
+**Errors:** 400 `invalid_range`; 400 `INVALID_IDS` when `ids` is missing, contains an empty entry or has more than 100 entries; source read failures and common read errors.
 
-Example: `GET /api/groups/activity?range=6h`.
+Example: `GET /api/groups/activity?range=6h&ids=origin,telegram%3Aexample`.
 
 ### GET /api/groups/:id
 

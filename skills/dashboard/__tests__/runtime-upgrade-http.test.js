@@ -59,7 +59,7 @@ test('Antigravity upgrade response survives more than sixty seconds through brow
   }); assert.equal(login, 200);
   const started = Date.now();
   const result = await page.evaluate(async base => {
-    const response = await fetch(base + '/api/instance/actions/upgrade-runtime', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const response = await fetch(base + '/api/instance/actions/upgrade-runtime', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runtime: 'agy' }) });
     return { status: response.status, data: await response.json() };
   }, base);
   assert.ok(Date.now() - started >= 65000); assert.equal(result.status, 200);

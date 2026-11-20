@@ -49,7 +49,7 @@ test('upgrade waits for the baseline and then delivers queued legacy input under
   storage.dependencies.readConfig = () => ({ state: 'ok',
     config: { runtime: 'claude', ...(mode === null ? {} : { session_mode: mode }) } });
   const { store, sqlite: db } = storage;
-  assert.equal(db.pragma('user_version', { simple: true }), 4);
+  assert.equal(db.pragma('user_version', { simple: true }), 5);
   assert.equal(db.pragma('table_info(mode_transitions)').some(column => column.name === 'kind'), false);
   const origin = store.insertConversation('in', 'dashboard', 'origin', 'already assigned to Origin');
   assert.equal(origin.session_group, 'origin');

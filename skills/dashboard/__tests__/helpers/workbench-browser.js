@@ -226,15 +226,8 @@ export async function runWorkbenchBrowser(t, sandbox) {
 
   async function settings(width, height) {
     const { page, context, errors, shot } = await open(width, height, '/settings');
-    const upgrade = () => page.locator('#tab-settings [data-action="upgrade-cc"]');
-    await upgrade().waitFor({ state: 'attached' });
-    // The upgrade button sits with the versions, in whichever section holds them.
-    const section = await upgrade().evaluate(node => node.closest('section.wb-set-sec')?.id.replace('settings-section-', ''));
     // Phones reach the sections through the drawer.
     const pick = async name => { if (width < 761) await openDrawer(page); await page.locator(`[data-settings-section="${name}"]`).click(); if (width < 761) await closed(page); };
-    await pick(section);
-    await upgrade().waitFor({ state: 'visible' });
-    await confirmFlow(page, upgrade, 'upgrade-cc', {});
     await pick('defaults');
     const single = () => page.locator('#action-mode-seg button[data-mode="single"]');
     await single().waitFor({ state: 'visible' });
@@ -257,7 +250,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await context.close();
   }
 
-  await step('asking before upgrading the CLI or switching the session mode, on a phone and a desktop screen', async () => {
+  await step('asking before switching the session mode, on a phone and a desktop screen', async () => {
     await settings(390, 844);
     await settings(1280, 800);
   });

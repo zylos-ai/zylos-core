@@ -3,6 +3,18 @@ import { loadCoreModule } from './core-modules.js';
 
 const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
 
+async function checkCoreUpdate(current, { zylosDir, fetchZylosLatest }) {
+  const major = current?.match(/^v?(\d+)\./)?.[1];
+  if (major === undefined) return null;
+  const { fetchLatestTagAsync, compareSemverDesc } = await loadCoreModule('github.js');
+  const { prepareUpstreams, withUpstreamSnapshot } = await loadCoreModule('upstreams.js');
+  const snapshot = await prepareUpstreams({ zylosDir });
+  const latest = await withUpstreamSnapshot(snapshot, () =>
+    (fetchZylosLatest ?? fetchLatestTagAsync)('zylos-ai/zylos-core', { major }));
+  return { current, latest, hasUpdate: Boolean(latest && compareSemverDesc(current.replace(/^v/, ''), latest) > 0),
+    checkedAt: new Date().toISOString() };
+}
+
 const TWELVE_HOURS = 12 * 60 * 60 * 1000;
 
 function fetchLatestTag(repo) {
@@ -53,12 +65,17 @@ export class VersionChecker {
   constructor({
     onUpdate,
     sources = {},
-    fetchZylosLatest = () => fetchLatestTag('zylos-ai/zylos-core'),
+    readCoreVersion = () => null,
+    zylosDir,
+    fetchZylosLatest,
     fetchGithub = fetchLatestTag,
     fetchNpm = fetchNpmLatest,
   } = {}) {
-    this._latest = { zylos: null };
-    this._checks = new Map([['zylos', fetchZylosLatest]]);
+    this._latest = {};
+    this._readCoreVersion = readCoreVersion;
+    this._checkCoreUpdate = () => checkCoreUpdate(readCoreVersion(), { zylosDir, fetchZylosLatest });
+    this._coreUpdate = null;
+    this._checks = new Map();
     this._unsupported = new Set();
     for (const [id, source] of Object.entries(sources)) {
       if (source === UNSUPPORTED || !['github', 'npm'].includes(source?.source)) {
@@ -74,17 +91,25 @@ export class VersionChecker {
 
   async check() {
     const checks = [...this._checks];
-    const results = await Promise.allSettled(checks.map(async ([, fetch]) => fetch()));
+    const [core, ...results] = await Promise.allSettled([
+      this._checkCoreUpdate(),
+      ...checks.map(async ([, fetch]) => fetch()),
+    ]);
+    if (core.status === 'fulfilled' && core.value) this._coreUpdate = core.value;
     for (const [index, result] of results.entries()) {
       if (result.status === 'fulfilled' && result.value) {
         this._latest[checks[index][0]] = result.value;
       }
     }
-    if (this._onUpdate) this._onUpdate(this._latest);
+    if (this._onUpdate) this._onUpdate(this.getLatest());
+  }
+
+  getCoreUpdate() {
+    return this._coreUpdate ?? { current: this._readCoreVersion(), latest: null, hasUpdate: false, checkedAt: null };
   }
 
   getLatest() {
-    return { ...this._latest };
+    return { zylos: this._coreUpdate?.latest ?? null, ...this._latest };
   }
 
   unsupportedIds() {

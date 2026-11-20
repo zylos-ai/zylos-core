@@ -49,6 +49,7 @@ test('runtime upgrades use the viewed runtime name and distinguish unknown and c
               return route.fulfill({ json: value });
             }
             if (url.pathname === '/api/instance/actions/upgrade-runtime') {
+              assert.deepEqual(req.postDataJSON(), { runtime });
               if (outcome === 'success') {
                 afterSuccess = new Promise(resolve => { releaseOrigin = resolve; });
                 return route.fulfill({ json: {
