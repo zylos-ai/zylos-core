@@ -7,7 +7,7 @@ import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { readProcessInfo } from '../claude-pid.js';
-import { writePaneProcess } from '../pane-process.js';
+import { writePaneProcess } from '../../../../cli/lib/runtime/pane-process.js';
 import { childSessionRecord, hookName } from '../hook-entry.js';
 
 const scripts = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -73,28 +73,35 @@ test('a child process of the run runs nothing and prints nothing', async t => {
   assert.deepEqual(lines(f.errorLog), []);
 });
 
-test('a child SessionStart leaves exactly one cost record and nothing else', async t => {
-  const f = instance(t);
-  // A Codex pane: this process is not its pane process (nor that process's direct child).
-  const pane = spawn(process.execPath, ['-e', 'setInterval(()=>{},1e6)'], { stdio: 'ignore' });
-  t.after(() => pane.kill('SIGKILL'));
-  writePaneProcess(f.runDir, { runId: 'run-1', runtime: 'codex', panePid: pane.pid, paneStart: readProcessInfo(pane.pid).start });
-  const transcript = path.join(f.env.HOME, '.claude', 'projects', 'p', 'child-1.jsonl');
-  const result = await runEntry(t, f.env, [ACTIVITY], {
-    hook_event_name: 'SessionStart', source: 'startup', session_id: 'child-1', transcript_path: transcript,
-  });
-  assert.deepEqual([result.code, result.stdout, result.stderr], [0, '', '']);
-  const records = lines(f.ledger).map(JSON.parse);
-  assert.equal(records.length, 1);
-  const { ts, ...record } = records[0];
-  assert.ok(Number.isSafeInteger(ts));
-  assert.deepEqual(record, { v: 1, runtime: 'claude', session_group: 'g1', run_id: 'run-1', session_id: 'child-1', transcript_path: transcript });
-  assert.deepEqual(fs.readdirSync(f.runDir).sort(), ['child-sessions.jsonl', 'pane-process.json']);
+for (const runtime of ['codex', 'agy']) {
+  test(`a Claude child SessionStart under a ${runtime} pane leaves exactly one cost record`, async t => {
+    const f = instance(t);
+    // Use a separate pane for Codex and a direct child of the pane for agy.
+    let panePid = process.ppid;
+    if (runtime === 'codex') {
+      const pane = spawn(process.execPath, ['-e', 'setInterval(()=>{},1e6)'], { stdio: 'ignore' });
+      t.after(() => pane.kill('SIGKILL'));
+      panePid = pane.pid;
+    }
+    f.env.ZYLOS_MODEL_CONFIG = JSON.stringify({ runtime });
+    writePaneProcess(f.runDir, { runId: 'run-1', runtime, panePid, paneStart: readProcessInfo(panePid).start });
+    const transcript = path.join(f.env.HOME, '.claude', 'projects', 'p', 'child-1.jsonl');
+    const result = await runEntry(t, f.env, [ACTIVITY], {
+      hook_event_name: 'SessionStart', source: 'startup', session_id: 'child-1', transcript_path: transcript,
+    });
+    assert.deepEqual([result.code, result.stdout, result.stderr], [0, '', '']);
+    const records = lines(f.ledger).map(JSON.parse);
+    assert.equal(records.length, 1);
+    const { ts, ...record } = records[0];
+    assert.ok(Number.isSafeInteger(ts));
+    assert.deepEqual(record, { v: 1, runtime: 'claude', session_group: 'g1', run_id: 'run-1', session_id: 'child-1', transcript_path: transcript });
+    assert.deepEqual(fs.readdirSync(f.runDir).sort(), ['child-sessions.jsonl', 'pane-process.json']);
 
-  // Other child events of that target add nothing.
-  await runEntry(t, f.env, [ACTIVITY], { hook_event_name: 'PostToolUse', session_id: 'child-1', transcript_path: transcript });
-  assert.equal(lines(f.ledger).length, 1);
-});
+    // Other child events of that target add nothing.
+    await runEntry(t, f.env, [ACTIVITY], { hook_event_name: 'PostToolUse', session_id: 'child-1', transcript_path: transcript });
+    assert.equal(lines(f.ledger).length, 1);
+  });
+}
 
 test('a Codex child of a Claude pane is recorded under its own runtime', async t => {
   const f = instance(t);

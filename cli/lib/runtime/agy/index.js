@@ -10,7 +10,10 @@ import { createIdentity } from '../shared/identity.js';
 import { createUpgradeCli } from '../shared/upgrade-cli.js';
 
 const id = 'agy';
-const identity = createIdentity(id);
+const identity = Object.freeze({
+  ...createIdentity(id),
+  launcherWrapsNative: false,
+});
 
 export default Object.freeze({
   id,

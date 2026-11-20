@@ -8,6 +8,7 @@ for (const id of SUPPORTED_RUNTIMES) {
     const runtime = await getRuntime(id);
     assert.equal(runtime.id, id);
     assert.ok(Object.isFrozen(runtime));
+    assert.equal(typeof runtime.identity.launcherWrapsNative, 'boolean');
     assert.equal(runtime.launch.efforts !== UNSUPPORTED, runtimesWith('modelOverride', 'supported').includes(id),
       'modelOverride in the registry must agree with launch.efforts');
     const { input, switch: sessionSwitch } = runtime;

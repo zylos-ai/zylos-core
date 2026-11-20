@@ -271,26 +271,6 @@
   },
   {
     "file": "skills/activity-monitor/scripts/pane-process.js",
-    "text": "const RUNTIMES = new Set(['claude', 'codex']);",
-    "reason": "dispatch:hooks: Classifies runtime-specific pane processes and hook descendants."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/pane-process.js",
-    "text": "export const isNativeCodex = comm => typeof comm === 'string' && path.basename(comm).replace(/\\.exe$/, '') === 'codex';",
-    "reason": "dispatch:hooks: Classifies runtime-specific pane processes and hook descendants."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/pane-process.js",
-    "text": "runtime === 'codex' && typeof paneComm === 'string' && paneComm.length > 0 && !isNativeCodex(paneComm);",
-    "reason": "dispatch:hooks: Classifies runtime-specific pane processes and hook descendants."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/pane-process.js",
-    "text": "if (record.runtime === 'codex' && trigger.ppid === record.panePid) {",
-    "reason": "dispatch:hooks: Classifies runtime-specific pane processes and hook descendants."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/pane-process.js",
     "text": "if (location.includes('/.codex/')) return 'codex';",
     "reason": "dispatch:usage: Maps known transcript path markers to their runtime."
   },

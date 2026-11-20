@@ -10,7 +10,7 @@ import { TMUX_COMMAND as C, TMUX_FORMAT as F, launchFormat, parseLaunchAddress,
   parseLaunchReceipt, parseExecReceipt } from './tmux-protocol.js';
 import { groupRunDir } from '../session-group-paths.js';
 import { readProcessStart } from '../../../skills/activity-monitor/scripts/claude-pid.js';
-import { writePaneProcess } from '../../../skills/activity-monitor/scripts/pane-process.js';
+import { writePaneProcess } from './pane-process.js';
 
 export const LAUNCH_TIMEOUT_MS = 10000;
 export const LAUNCH_CLEANUP_TIMEOUT_MS = 500;

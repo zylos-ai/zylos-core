@@ -13,7 +13,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { readHookTrigger, readProcessInfo } from './claude-pid.js';
-import { belongsToPane, classifyHookProcess, readPaneProcess } from './pane-process.js';
+import { classifyHookProcess } from './pane-process.js';
 import { isMainModule } from './is-main-module.js';
 import { loadCoreModule } from './core-modules.js';
 import { TMUX_FORMAT } from '../../comm-bridge/scripts/tmux-protocol.js';
@@ -38,11 +38,12 @@ export async function checkMainProcess({
   exec = execFileSync,
 } = {}) {
   const { runDirFromEnv, tmuxNameForGroup, tmuxPaneTarget } = await loadCoreModule('session-group-paths.js');
+  const { belongsToPane, readPaneProcess } = await loadCoreModule('runtime/pane-process.js');
   let location = null, locationError = null;
   try { location = runDirFromEnv(env); } catch (error) { locationError = error.code || error.message; }
   const trigger = readTrigger();
   const decision = location
-    ? classifyHookProcess({ env, dir: location.dir, trigger, readInfo })
+    ? await classifyHookProcess({ env, dir: location.dir, trigger, readInfo })
     : { verdict: 'unknown', reason: `run_dir:${locationError}` };
   const record = location && env.ZYLOS_RUN_ID ? readPaneProcess(location.dir) : null;
   let tmuxTarget = env.TMUX_PANE || null;
@@ -53,10 +54,13 @@ export async function checkMainProcess({
   let runtime = null;
   try { runtime = JSON.parse(env.ZYLOS_MODEL_CONFIG).runtime ?? null; } catch { /* unknown */ }
   const paneInfo = tmux.panePid !== null ? readInfo(tmux.panePid) : null;
-  const tmuxPaneCheck = trigger && tmux.panePid !== null
-    ? belongsToPane({ ...trigger, parentStart: readInfo(trigger.ppid)?.start ?? null },
-      { runtime, panePid: tmux.panePid, paneStart: paneInfo?.start ?? null, paneComm: paneInfo?.comm ?? null })
-    : null;
+  let tmuxPaneCheck = null;
+  if (trigger && tmux.panePid !== null) {
+    const { findRuntime } = await loadCoreModule('runtime/index.js');
+    const wrapsNative = (await findRuntime(runtime))?.identity.launcherWrapsNative === true;
+    tmuxPaneCheck = belongsToPane({ ...trigger, parentStart: readInfo(trigger.ppid)?.start ?? null },
+      { runtime, panePid: tmux.panePid, paneStart: paneInfo?.start ?? null, paneComm: paneInfo?.comm ?? null, wrapsNative });
+  }
   return {
     determinable: decision.verdict !== 'unknown',
     mainProcess: decision.verdict === 'main',

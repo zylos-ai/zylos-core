@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync, execSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { writePaneProcess } from '../../../skills/activity-monitor/scripts/pane-process.js';
+import { writePaneProcess } from '../runtime/pane-process.js';
 import { readProcessStart } from '../../../skills/activity-monitor/scripts/claude-pid.js';
 
 const {
