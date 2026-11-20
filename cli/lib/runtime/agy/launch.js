@@ -1,4 +1,5 @@
-import { buildInstructionFile } from '../instruction-builder.js';
+import { buildInstructionFor } from '../shared/instruction-paths.js';
+import { instructions } from './instructions.js';
 import { adapterError, launchEnvironment } from '../session-command.js';
 import { ZYLOS_DIR } from '../../config.js';
 import { syncAgyConfig } from '../../agy-setup.js';
@@ -27,5 +28,5 @@ export async function prepare(options = {}) {
   const sessionEnv = launchEnvironment(root, options.env || process.env, { runtimeEnv: env });
   if (!sessionEnv.GEMINI_API_KEY) throw adapterError('LAUNCH_FAILED', 'Antigravity requires GEMINI_API_KEY; account login is not supported');
   syncAgyConfig({ zylosDir: root, home: sessionEnv.HOME });
-  buildInstructionFile('agy', { zylosDir: root });
+  buildInstructionFor(instructions, { zylosDir: root });
 }

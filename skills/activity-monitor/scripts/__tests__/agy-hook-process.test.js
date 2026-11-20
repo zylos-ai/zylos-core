@@ -29,7 +29,7 @@ function coreWithInstructions(root, instructions) {
     if (name !== 'runtime') fs.symlinkSync(path.join(repo, 'cli/lib', name), path.join(lib, name));
   }
   for (const name of fs.readdirSync(path.join(repo, 'cli/lib/runtime'))) {
-    const source = name === 'instruction-builder.js'
+    const source = name === 'index.js'
       ? fileURLToPath(new URL(`./fixtures/${instructions}`, import.meta.url)) : path.join(repo, 'cli/lib/runtime', name);
     fs.symlinkSync(source, path.join(lib, 'runtime', name));
   }

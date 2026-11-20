@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { renderInstruction } from './runtime/assembler.mjs';
-import { instructionPaths, readInstructionFormatVersion, CURRENT_INSTRUCTION_FORMAT_VERSION,
+import { instructionAssetPaths, instructionPaths, instructionTargets, readInstructionFormatVersion, CURRENT_INSTRUCTION_FORMAT_VERSION,
   hasSplitTransactionResidue, activateMigratedSplitInstructions } from './runtime/instruction-builder.js';
 import { migrateClaudeMdToZylosMd } from './migrate.js';
 import { loadInstructionCatalog, classifyInstructionBaseline, verifyInstructionConservation,
@@ -113,41 +113,43 @@ export function prepareUpgradeRuntime(ctx, {
   fs.chmodSync(scratch, 0o700);
   try {
     const version = readInstructionFormatVersion({ zylosDir });
-    const claude = instructionPaths('claude', { zylosDir });
+    const assets = instructionAssetPaths({ zylosDir });
     if (version.valid && version.version > CURRENT_INSTRUCTION_FORMAT_VERSION) {
       warnings.push(`Instruction format ${version.version} is newer than this target; preserved`);
     } else {
       if (hasSplitTransactionResidue(zylosDir)) throw Error('Unresolved split instruction transaction; recover it before upgrade');
-      const systems = {};
-      for (const name of ['claude', 'codex']) {
-        systems[name] = readRegular(path.join(templatesDir, `${name}-system.md`));
-        add(relative(instructionPaths(name, { zylosDir }).systemPath), systems[name]);
+      const targets = instructionTargets({ zylosDir });
+      const systems = new Map();
+      for (const template of new Set(targets.map(target => target.template))) {
+        const { systemPath } = targets.find(target => target.template === template);
+        const content = readRegular(path.join(templatesDir, `${template}-system.md`));
+        systems.set(template, content);
+        add(relative(systemPath), content);
       }
-      add(relative(claude.assemblerPath), readRegular(path.join(sourceRoot, 'cli/lib/runtime/assembler.mjs')));
-      const markerBytes = readRegular(claude.markerPath, { optional: true });
+      add(relative(assets.assemblerPath), readRegular(path.join(sourceRoot, 'cli/lib/runtime/assembler.mjs')));
+      const markerBytes = readRegular(assets.markerPath, { optional: true });
       if (markerBytes !== null) {
         const marker = JSON.parse(markerBytes);
         if (!marker || marker.schemaVersion !== 1) throw Error('Unsupported split instruction marker');
-        const user = readRegular(claude.userPath);
+        const user = readRegular(assets.userPath);
         const userShadow = path.join(scratch, 'user.md');
         fs.writeFileSync(userShadow, user);
-        for (const name of ['claude', 'codex']) {
-          const paths = instructionPaths(name, { zylosDir });
-          const systemShadow = path.join(scratch, `${name}-system.md`);
-          fs.writeFileSync(systemShadow, systems[name]);
+        for (const paths of targets) {
+          const systemShadow = path.join(scratch, `${paths.template}-system.md`);
+          fs.writeFileSync(systemShadow, systems.get(paths.template));
           const content = renderInstruction({ systemPath: systemShadow, userPath: userShadow, generatedAt })
             .replace(`system: ${systemShadow}\n`, `system: ${paths.systemPath}\n`)
             .replace(`user: ${userShadow}\n`, `user: ${paths.userPath}\n`);
           add(relative(paths.outputPath), content);
         }
-        add(relative(claude.markerPath), JSON.stringify({ ...marker,
+        add(relative(assets.markerPath), JSON.stringify({ ...marker,
           refreshedAt: generatedAt.toISOString(), userSha256: hash(user) }, null, 2) + '\n');
         add('.zylos/instruction-format-version', `${CURRENT_INSTRUCTION_FORMAT_VERSION}\n`);
         clearPendingPrompt();
       } else {
         // The historical v0.4 migration is safe in scratch and conserves CLAUDE.md.
-        if (readRegular(claude.userPath, { optional: true }) === null) {
-          const oldClaude = readRegular(claude.outputPath, { optional: true });
+        if (readRegular(assets.userPath, { optional: true }) === null) {
+          const oldClaude = readRegular(path.join(zylosDir, 'CLAUDE.md'), { optional: true });
           if (oldClaude !== null) {
             if (!Buffer.from(oldClaude.toString('utf8')).equals(oldClaude)) throw Error('Legacy CLAUDE.md is not valid UTF-8');
             fs.writeFileSync(path.join(scratch, 'CLAUDE.md'), oldClaude);
@@ -155,7 +157,7 @@ export function prepareUpgradeRuntime(ctx, {
             add('ZYLOS.md', readRegular(path.join(scratch, 'ZYLOS.md')));
           }
         }
-        const originalBytes = readRegular(claude.userPath, { optional: true }) ??
+        const originalBytes = readRegular(assets.userPath, { optional: true }) ??
           replacements.find(item => item.path === 'ZYLOS.md')?.content ?? null;
         let analysis;
         let conservation;
@@ -208,21 +210,23 @@ export function prepareUpgradeRuntime(ctx, {
           const seededIndex = replacements.findIndex(item => item.path === 'ZYLOS.md');
           if (seededIndex !== -1) replacements.splice(seededIndex, 1);
           add('ZYLOS.md', user);
+          const shadowTargets = instructionTargets({ zylosDir: migrationRoot });
           for (const name of ['CLAUDE.md', 'AGENTS.md']) {
-            const shadow = instructionPaths(name === 'CLAUDE.md' ? 'claude' : 'codex', { zylosDir: migrationRoot });
-            const live = instructionPaths(name === 'CLAUDE.md' ? 'claude' : 'codex', { zylosDir });
+            const shadow = shadowTargets.find(target => target.output === name);
+            const live = targets.find(target => target.output === name);
+            if (!shadow || !live) throw Error(`No instruction target writes ${name}`);
             add(name, readRegular(path.join(migrationRoot, name)).toString('utf8')
               .replace(`system: ${shadow.systemPath}\n`, `system: ${live.systemPath}\n`)
               .replace(`user: ${shadow.userPath}\n`, `user: ${live.userPath}\n`));
           }
-          add(relative(claude.markerPath), readRegular(instructionPaths('claude', { zylosDir: migrationRoot }).markerPath));
+          add(relative(assets.markerPath), readRegular(instructionAssetPaths({ zylosDir: migrationRoot }).markerPath));
           add('.zylos/instruction-format-version', `${CURRENT_INSTRUCTION_FORMAT_VERSION}\n`);
           clearPendingPrompt();
         } else {
           if (analysis && ['B', 'C'].includes(analysis.classification)) {
             try {
               const prompt = writePrompt({ zylosDir: scratch, analysis,
-                originalSha256: hash(originalBytes), systemTemplatePath: claude.systemPath });
+                originalSha256: hash(originalBytes), systemTemplatePath: instructionPaths(DEFAULT_RUNTIME, { zylosDir }).systemPath });
               add(promptRelative, readRegular(prompt.filePath));
             } catch (error) {
               warnings.push(`Could not prepare instruction migration prompt: ${error.message}`);
