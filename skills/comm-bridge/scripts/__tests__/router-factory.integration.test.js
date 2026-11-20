@@ -32,7 +32,7 @@ function setup(t, { mode = 'multi', phase } = {}) {
   const prefix = `factory${++sequence}`, a = `${prefix}a`, b = `${prefix}b`;
   for (const name of [a,b]) fs.mkdirSync(path.join(SKILLS_DIR, name), { recursive: true });
   const calls = [], held = deferred(); let holding = false, blockedOnce = false;
-  const keys = mode === 'single' ? [null] : ['origin', a, b];
+  const keys = mode === 'single' ? ['origin'] : ['origin', a, b];
   const scenes = new Map(keys.map(group => [group, { present: true, ready: true, runtime: 'codex',
     runId: `r-${group}`, sessionId: `business-${group}`, runtimeSessionId: `business-${group}`,
     tmuxName: tmuxNameForGroup(group ?? 'origin'), serverGeneration: 'test-generation', paneId: `%${group}`, createdAt: Math.floor(Date.now()/1000) }]));
@@ -67,7 +67,7 @@ function setup(t, { mode = 'multi', phase } = {}) {
     },
     sleep: async ms => { if ((phase === 'idle' && ms === 31) || (phase === 'backoff' && ms === 37)) await wait(); },
     notifyDelivered: fields => { calls.push(['notify', fields]); },
-    findLegacySessions: async () => [], advanceLegacy: async () => {}, prepareSingle: async () => {},
+    findLegacySessions: async () => [], advanceLegacy: async () => {},
     submit: async () => assert.fail('READY scene needs no start_attempt'),
   };
   const options = { readyTimeoutMs: 1000,
@@ -154,13 +154,14 @@ test('factory: actual unreadable remains inert once, even if config repaired', a
   assert.equal(dispatcher.state.inert, true); assert.equal(alerts.length, 1);
 });
 
-test('factory: actual single directs a non-null group through null origin target', async t => {
+test('factory: native single directs a non-null group through Origin and changes attribution', async t => {
   const f = setup(t, { mode: 'single' }), row = f.add();
   assert.equal(f.row(row.id).session_group, f.a);
   const dispatcher = f.create(); await dispatcher.initialize(); await dispatcher.idle(); dispatcher.tick(); await dispatcher.idle();
-  assert.equal(f.row(row.id).status, 'delivered'); assert.equal(f.row(row.id).session_id, 'business-null');
-  assert.deepEqual(f.calls.filter(c => c[0] === 'resolve'), [['resolve', null]]);
-  assert.equal(f.calls.find(c => c[0] === 'notify')[1].sessionGroup, null);
+  assert.equal(f.row(row.id).status, 'delivered'); assert.equal(f.row(row.id).session_id, 'business-origin');
+  assert.equal(f.row(row.id).session_group, 'origin');
+  assert.deepEqual(f.calls.filter(c => c[0] === 'resolve'), [['resolve', 'origin']]);
+  assert.equal(f.calls.find(c => c[0] === 'notify')[1].sessionGroup, 'origin');
 });
 
 test('factory: blocked paste in live A does not prevent absent B from launching and delivering', async t => {

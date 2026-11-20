@@ -70,13 +70,13 @@ export function createActivationManager(context) {
   }
 
   async function begin(group, candidate) {
-    const resident = group === null || group === 'origin';
+    const resident = group === 'origin';
     if (state.activations.has(group)) return;
     let requestRuntime;
     let token, slot, runId;
     try {
       if (resident) {
-        if (deps.db.getDrainFence('*') !== null || (group !== null && deps.db.getDrainFence(group) !== null)) {
+        if (deps.db.getDrainFence('*') !== null || deps.db.getDrainFence(group) !== null) {
           if (!state.resident.fenced) diagnostic('start_skipped_fenced', { session_group: group });
           state.resident.fenced = true;
           return;
@@ -84,7 +84,6 @@ export function createActivationManager(context) {
         state.resident.fenced = false;
       }
       const launchConfig = deps.db.resolveSessionLaunchConfig({ sessionGroup: group, sessionMode: state.mode });
-      if (group === null) await deps.prepareSingle(launchConfig.runtime);
       if (group === 'origin') {
         const waitHealth = waitOrigin;
         const health = deps.readRuntimeHealth(launchConfig.runtime);
@@ -201,7 +200,7 @@ export function createActivationManager(context) {
   }
 
   async function beginContinuation(group) {
-    if (state.activations.has(group) || group === null || group === 'origin') return;
+    if (state.activations.has(group) || group === 'origin') return;
     let requestRuntime, token, activation, slot, runId;
     let opportunity = false;
     try {

@@ -6,7 +6,7 @@ import { SupervisorLifecycle } from '../supervisor-lifecycle.js';
 // memory. No files, timers, children, live database, tmux or PM2 are used.
 function fixture(mode = 'multi', kind = 'origin') {
   let now = 2_000_000;
-  const group = mode === 'single' ? null : kind === 'origin' ? 'origin' : 'a';
+  const group = kind === 'origin' ? 'origin' : 'a';
   const scene = { sessionGroup: group, present: true, ready: true, runtime: 'claude',
     runId: 'reference-run', sessionId: 'reference-session', runDir: '/isolated/reference-run',
     state: 'idle', processRunning: true, usagePercent: 0, createdAt: 0, idleSince: 0 };
@@ -20,7 +20,6 @@ function fixture(mode = 'multi', kind = 'origin') {
       listDrainFences: () => [],
       getLastActivity: () => 0,
       getUnsummarizedRange: () => ({ count: 0, firstAt: null }),
-      getGlobalUnsummarizedRange: () => f.range,
       getOriginSyncBacklog: () => ({ total: f.range.count,
         groups: [{ count: f.range.count, firstAt: f.range.firstAt, pendingCheckpoints: 0 }] }),
       insertControl: (content, options) => {
@@ -62,8 +61,9 @@ function fixture(mode = 'multi', kind = 'origin') {
   return f;
 }
 
-for (const [mode, kind, group] of [['single', 'global', null], ['multi', 'origin', 'origin']]) {
-  test(`${mode} queues a reference instruction before its ordinary Sync control`, async () => {
+for (const [mode, kind, group] of [['single', 'origin', 'origin'], ['multi', 'origin', 'origin']]) {
+  const label = mode;
+  test(`${label} queues a reference instruction before its ordinary Sync control`, async () => {
     const f = fixture(mode, kind);
     await f.run();
     assert.equal(f.prepareCalls, 1);
@@ -75,7 +75,9 @@ for (const [mode, kind, group] of [['single', 'global', null], ['multi', 'origin
     assert.equal(f.errors.length, 0);
   });
 
-  test(`${mode} does not repeat a proposal on consecutive eligible Sync requests`, async () => {
+  if (mode === 'single' && kind === 'origin') continue;
+
+  test(`${label} does not repeat a proposal on consecutive eligible Sync requests`, async () => {
     const f = fixture(mode, kind);
     await f.run();
     f.advance(600_000);
@@ -91,10 +93,10 @@ for (const [mode, kind, group] of [['single', 'global', null], ['multi', 'origin
     assert.equal(f.errors.length, 0);
   });
 
-  test(`${mode} periodic checks propose with no due Sync and deduplicate the current session`, async () => {
+  test(`${label} periodic checks propose with no due Sync and deduplicate the current session`, async () => {
     const f = fixture(mode, kind);
     f.range = { count: 1, nonempty: true, firstAt: 2_000_000, firstConversationId: 1 };
-    if (mode === 'multi') {
+    if (kind === 'origin') {
       await f.lifecycle.checkTtl(f.scene, f.context);
       assert.deepEqual(f.controls.map(row => row.content), ['reclaim check', 'reclaim origin sync']);
     }
@@ -112,14 +114,14 @@ for (const [mode, kind, group] of [['single', 'global', null], ['multi', 'origin
       'only the pre-reclaim path sends Sync; ordinary Sync never becomes due');
   });
 
-  test(`${mode} periodic checks do not require any unsummarized input`, async () => {
+  test(`${label} periodic checks do not require any unsummarized input`, async () => {
     const f = fixture(mode, kind);
     f.range = { count: 0, nonempty: false, firstAt: null };
     await f.periodic();
     assert.deepEqual(f.controls.map(row => row.content), ['reference proposal']);
   });
 
-  test(`${mode} periodic checks skip absent old files and notice them on a later check`, async () => {
+  test(`${label} periodic checks skip absent old files and notice them on a later check`, async () => {
     const f = fixture(mode, kind);
     f.range = { count: 0, nonempty: false, firstAt: null };
     f.shouldPropose = false;
@@ -132,7 +134,7 @@ for (const [mode, kind, group] of [['single', 'global', null], ['multi', 'origin
     assert.deepEqual(f.controls.map(row => row.content), ['reference proposal']);
   });
 
-  test(`${mode} a replaced run or session and a Supervisor restart allow a fresh proposal`, async () => {
+  test(`${label} a replaced run or session and a Supervisor restart allow a fresh proposal`, async () => {
     const f = fixture(mode, kind);
     f.range = { count: 0, nonempty: false, firstAt: null };
     await f.periodic();
@@ -150,7 +152,7 @@ for (const [mode, kind, group] of [['single', 'global', null], ['multi', 'origin
     assert.equal(f.lifecycle.referenceReorgSent.size, 1, 'only the latest identity is retained');
   });
 
-  test(`${mode} periodic old-file errors preserve Sync and a later check retries`, async () => {
+  test(`${label} periodic old-file errors preserve Sync and a later check retries`, async () => {
     const f = fixture(mode, kind);
     f.prepareError = new Error('old-file check failed');
     await f.periodic();
@@ -164,7 +166,7 @@ for (const [mode, kind, group] of [['single', 'global', null], ['multi', 'origin
     assert.equal(f.controls.filter(row => row.content === 'reference proposal').length, 1);
   });
 
-  test(`${mode} leaves the ordinary Sync control unchanged when no old files remain`, async () => {
+  test(`${label} leaves the ordinary Sync control unchanged when no old files remain`, async () => {
     const f = fixture(mode, kind);
     f.shouldPropose = false;
     await f.run();

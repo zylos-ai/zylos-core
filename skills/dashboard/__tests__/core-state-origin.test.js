@@ -198,24 +198,88 @@ test('Origin states retain Fleet labels and reachability', () => {
   }
 });
 
-test('manual restart distinguishes wake requests and failed wake writes in multi mode', async t => {
+test('manual restart distinguishes wake requests and failed wake writes in configured modes', async t => {
   let mode = 'multi', reply = { kind: 'accepted', reply: { result: 'already_stopped' } }, submissions = 0;
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
     if (name === 'runtime/descriptors.js') return import('../../../cli/lib/runtime/descriptors.js');
-    if (name === 'config.js') return { readSessionMode: () => ({ mode }) };
+    if (name === 'config.js') return { readSessionMode: () => ({ mode, keyPresent: mode !== null }) };
     if (name === 'am-sock-client.js') return { submit: async () => { submissions++; return reply; }, lookupRestartRequest: async () => assert.fail('accepted result requires no lookup') };
     assert.fail(`Unexpected module ${name}`);
   } } });
   const { handleCoreAction } = await import(`../src/lib/core-actions.js?wake-result=${Date.now()}`);
   const config = { zylosDir: process.env.ZYLOS_DIR };
-  assert.equal((await handleCoreAction('restart-session', {}, config)).messageKey, 'result.restart_wake_requested');
-  reply = { kind: 'rejected', reply: { reason: 'wake_failed' } };
-  assert.equal((await handleCoreAction('restart-session', {}, config)).messageKey, 'result.restart_wake_failed');
-  mode = 'single'; reply = { kind: 'accepted', reply: { result: 'already_stopped' } };
+  for (mode of ['multi', 'single']) {
+    reply = { kind: 'accepted', reply: { result: 'already_stopped' } };
+    assert.equal((await handleCoreAction('restart-session', {}, config)).messageKey, 'result.restart_wake_requested');
+    reply = { kind: 'rejected', reply: { reason: 'wake_failed' } };
+    assert.equal((await handleCoreAction('restart-session', {}, config)).messageKey, 'result.restart_wake_failed');
+  }
+  mode = null; reply = { kind: 'accepted', reply: { result: 'already_stopped' } };
   const single = await handleCoreAction('restart-session', {}, config);
   assert.equal(single.messageKey, 'result.restart_already_stopped'); assert.match(single.message, /already_stopped/);
   mode = 'multi';
   assert.equal((await handleCoreAction('interrupt', {}, config)).error, 'TARGET_REQUIRED');
   assert.equal((await handleCoreAction('chop-chop', {}, config)).error, 'TARGET_REQUIRED');
-  assert.equal(submissions, 3, 'missing run targets never enqueue controls or request a wake');
+  assert.equal(submissions, 5, 'missing run targets never enqueue controls or request a wake');
+});
+
+// Covers the shared CLI status interpretation and Dashboard projection without
+// tmux, services or network. Run for native single Origin status changes.
+test('native single Origin sleeps and reports wake demand consistently with CLI status', async t => {
+  const { collectStatus } = await import('../../../cli/lib/status-view.js');
+  const { showStatus } = await import('../../../cli/commands/service.js');
+  const { buildDiagnosticJson } = await import('../../../cli/commands/doctor.js');
+  const now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  let need = { inbound: 0, controls: 0, continuation: false, oldestAt: null };
+  t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
+    if (name === 'runtime/descriptors.js') return import('../../../cli/lib/runtime/descriptors.js');
+    if (name === 'origin-presence.js') return { describeOrigin, readOriginFacts: async ({ sessionMode }) => { assert.equal(sessionMode, 'single'); return { originNeed: need, transitionOpen: false, fenced: false }; } };
+    assert.fail(`Unexpected core module ${name}`);
+  } } });
+  const { CoreState } = await import(`../src/lib/core-state.js?native-single=${now}`);
+  const core = new CoreState({ accountUsageCache: { read: async () => null }, sessionObservations: {
+    get: async () => ({ mode: 'single', sessionMode: 'single', group: null, observations: new Map([[null, absent()]]), reader: { readRuntimeHealth: async () => ({ health: 'ok' }) } }),
+    resolveOfflineRuntime: async group => { assert.equal(group, 'origin'); return 'codex'; },
+  } });
+  for (const [inbound, oldestAt, state] of [[0, null, 'sleeping'], [1, 701, 'waking'], [1, 700, 'wake_overdue']]) {
+    need = { ...need, inbound, oldestAt };
+    const status = await collectStatus({ mode: () => ({ mode: 'single', keyPresent: true }), now: () => now,
+      session: async group => { assert.equal(group, 'origin'); return absent(); },
+      health: async () => ({ missing: true }), facts: async ({ sessionMode }) => { assert.equal(sessionMode, 'single'); return { originNeed: need }; },
+      configIssue: () => null, resolveRoot() {}, requests: async () => [] });
+    assert.equal(status.origin.sessionGroup, null);
+    assert.equal(describeOrigin({ ...status, targetRuntime: 'codex', nowSec: now / 1000 }).state, state);
+    assert.equal((await core.refresh()).state, state.toUpperCase());
+    const diagnostic = buildDiagnosticJson({ runtime: 'claude', display: 'Claude', apiHost: 'fixture.invalid',
+      system: { tmux: { installed: true }, pm2: { installed: true }, network: { reachable: true } },
+      ai: { cli: { installed: true }, auth: true, authStatus: 'success', autonomous: true },
+      services: { running: true, total: 1, procs: [{ name: 'activity-monitor', pm2_env: { status: 'online' } }], session: false },
+      origin: describeOrigin({ ...status, targetRuntime: 'codex', nowSec: now / 1000 }), targetRuntime: 'codex',
+    }, { success: true, version: 'fixture' });
+    assert.equal(diagnostic.groups.services.session.origin, state);
+    assert.equal(diagnostic.passed, state !== 'wake_overdue');
+    assert.equal(diagnostic.issues.some(issue => /offline|not_running/.test(issue.label)), false);
+
+    const lines = [], log = console.log;
+    console.log = line => lines.push(line);
+    try {
+      await showStatus([], { collect: () => status, resolveRuntime: async () => 'codex',
+        host: () => ({ services: [], disk: null }), alertNotice: () => ({ kind: 'ready' }) });
+    } finally { console.log = log; }
+    assert.ok(lines.some(line => line.includes(({ sleeping: 'Origin is asleep', waking: 'Origin is waking up', wake_overdue: 'Origin has pending work' })[state])));
+    assert.equal(lines.some(line => /not_running|offline/i.test(line)), false);
+  }
+  const lines = [], log = console.log;
+  console.log = line => lines.push(line);
+  try {
+    await showStatus([], { collect: () => ({ view: 'single', sessionMode: 'single',
+      origin: { presence: 'not_running', status: { valid: false } }, groups: [], originNeed: { inbound: 1, controls: 0, continuation: false, oldestAt: 700 },
+      runtimeHealth: { codex: { health: 'auth_failed' } }, readAt: now }),
+      resolveRuntime: async group => { assert.equal(group, 'origin'); return 'codex'; },
+      host: () => ({ services: [], disk: null }), alertNotice: () => ({ kind: 'ready' }) });
+  } finally { console.log = log; }
+  assert.match(lines.join('\n'), /Origin is waiting for codex authentication/);
+  assert.equal(lines.some(line => /not_running|offline/i.test(line)), false);
+  assert.equal(describeOrigin({ view: 'single', sessionMode: null, origin: { presence: 'not_running' }, originNeed: need }).state, 'not_running');
 });

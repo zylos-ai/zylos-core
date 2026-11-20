@@ -1,12 +1,18 @@
 import { openReadStore } from './c4-read-store.js';
 import { ZYLOS_DIR } from './config.js';
+import { readConfigStrict } from './config-store.js';
+import path from 'node:path';
 
 /** Read wake demand and gates without modifying the C4 database. */
-export async function readOriginFacts({ zylosDir = ZYLOS_DIR, nowSec = Math.floor(Date.now() / 1000), open = openReadStore } = {}) {
+export async function readOriginFacts({ zylosDir = ZYLOS_DIR, nowSec = Math.floor(Date.now() / 1000), open = openReadStore, sessionMode } = {}) {
   try {
     const { store, close } = await open(zylosDir);
     try {
-      const need = await store.getOriginNeed(nowSec);
+      if (sessionMode === undefined) {
+        const configuration = readConfigStrict(path.join(zylosDir, '.zylos', 'config.json'));
+        sessionMode = configuration.state === 'ok' && configuration.config.session_mode === 'single' ? 'single' : 'multi';
+      }
+      const need = await store.getOriginNeed(nowSec, { sessionMode });
       const transition = await store.getModeTransition();
       const fence = await store.getDrainFence('origin') ?? await store.getDrainFence('*');
       const times = [need.inbound.oldestAt, need.controls.oldestAt, need.continuation.oldestAt].filter(time => time !== null);
@@ -20,8 +26,8 @@ export async function readOriginFacts({ zylosDir = ZYLOS_DIR, nowSec = Math.floo
 }
 
 /** Human-facing interpretation; the status JSON retains the observed presence. */
-export function describeOrigin({ view, origin, originNeed, runtimeHealth, targetRuntime, nowSec }) {
-  if (view !== 'multi') return { state: origin.presence, failure: false };
+export function describeOrigin({ view, sessionMode, origin, originNeed, runtimeHealth, targetRuntime, nowSec }) {
+  if (view !== 'multi' && sessionMode !== 'single') return { state: origin.presence, failure: false };
   const readable = originNeed && !originNeed.error;
   const needed = readable && (originNeed.inbound + originNeed.controls > 0 || originNeed.continuation);
   const health = targetRuntime !== null ? runtimeHealth?.[targetRuntime] : null;

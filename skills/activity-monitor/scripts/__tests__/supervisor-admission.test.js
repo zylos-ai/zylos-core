@@ -45,7 +45,7 @@ function fixture(t) {
   const db = { getModeTransition: () => state.transition, getDrainFence: g => state.fences.get(g) ?? null,
     setDrainFence: (g,f) => { if (!state.fences.has(g)) state.fences.set(g,f); },
     insertControl: (content, options) => { state.wake = {content, ...options}; } };
-  const deps = { store, db, readMode: () => ({mode:state.mode}), listRuns: () => state.runs, readRun: () => state.run,
+  const deps = { store, db, readMode: () => ({mode:state.mode,legacy:state.keyPresent === false}), listRuns: () => state.runs, readRun: () => state.run,
     resolveLaunchConfig: () => state.expected, preflightReclaim: async () => {}, now: () => 1792000000123, diagnostic: event => state.events.push(event) };
   const admission = new SupervisorAdmission(deps); admission.openEntry();
   return { root, file, store, state, db, admission, deps };
@@ -59,13 +59,19 @@ test('restart persists exact snapshot before reply and survives owner reconstruc
   assert.equal((await next.handle(restart('upgrade'))).result, 'already_accepted'); assert.equal(f.store.read()[0].runIds.length, 3);
   assert.equal((await next.handle(manual({requestId:'upgrade'}))).reason, 'request_conflict');
 });
-test('restart empty writes only completion and steady single refuses', async t => {
+test('restart completes immediately without a mode key or persisted request', async t => {
   const f = fixture(t); f.state.runs = [];
   assert.equal((await f.admission.handle(restart('empty'))).result, 'done_empty'); assert.equal(fs.existsSync(f.file), false);
   assert.deepEqual(f.state.events, [{event:'restart_done', requestId:'empty'}]);
-  f.state.mode = 'single'; assert.equal((await f.admission.handle(restart('single'))).code, 'single_mode');
-  f.state.transition = {phase:'gating'}; f.state.runs = [{runId:'legacy'}];
-  assert.equal((await f.admission.handle(restart('during-transition'))).result, 'accepted');
+  f.state.mode = 'single'; f.state.keyPresent = false;
+  // The 0.x baseline tmux session is excluded from the group run inventory.
+  let snapshots = 0;
+  f.admission.listRuns = () => { snapshots++; return f.state.runs; };
+  const reply = await f.admission.handle(restart('single'));
+  assert.equal(reply.result, 'done_empty'); assert.equal(reply.runCount, 0); assert.equal(fs.existsSync(f.file), false);
+  f.state.transition = {phase:'gating'};
+  assert.equal((await f.admission.handle(restart('during-transition'))).result, 'done_empty');
+  assert.equal(snapshots, 2);
 });
 
 test('active deletion admission rejects every changed ownership field before altering restart intent', async t => {
@@ -92,7 +98,7 @@ test('active deletion admission rejects every changed ownership field before alt
 });
 test('invalid refuses admission without changing any byte', async t => {
   const f = fixture(t);
-  const modeSwitch = new ModeSwitchCoordinator({ db:f.db, readRequests:()=>f.store.read(), readMode:()=>({mode:'single'}), legacyPresent:()=>false });
+  const modeSwitch = new ModeSwitchCoordinator({ db:f.db, requestStore:f.store, readMode:()=>({mode:'single'}), legacyPresent:()=>false });
   f.admission.modeSwitch = (...args) => modeSwitch.handle(...args);
   const good = {requestId:'x', reason:'upgrade', acceptedAt:1792000000000, runIds:['r1']};
   for (const content of ['{', '{}', JSON.stringify([{...good, extra:true}]), JSON.stringify([good,good]), JSON.stringify([{...good,runIds:[]}]), JSON.stringify([{...good,acceptedAt:null}])]) {
@@ -139,11 +145,24 @@ test('absent Origin writes an unbound wake before replying and enqueue failure l
   f.db.insertControl = () => { throw new Error('write failed'); };
   assert.equal((await f.admission.handle(manual())).reason, 'wake_failed');
   assert.deepEqual(f.store.read(), []); assert.equal(fs.existsSync(f.file), false);
-  f.state.mode = 'single';
-  for (const expected of [true, false]) {
-    const request = manual(); if (!expected) delete request.expectedRunId;
-    assert.equal((await f.admission.handle(request)).result, 'already_stopped');
-  }
+});
+
+test('pre-migration manual restart verifies Origin absence without writing a wake or intent', async t => {
+  const f = fixture(t);
+  f.state.mode = 'single'; f.state.keyPresent = false;
+  const request = manual(); delete request.expectedRunId;
+  const observed = [];
+  f.admission.readRun = group => { observed.push(group); return f.state.run; };
+  f.db.insertControl = () => assert.fail('a pre-migration instance cannot wake Origin');
+  assert.equal((await f.admission.handle({ ...request, sessionGroup: 'origin' })).reason, 'not_multi');
+  assert.deepEqual(observed, []);
+  f.state.run = { ready: false };
+  assert.equal((await f.admission.handle(request)).reason, 'target_required');
+  f.state.run = null;
+  assert.equal((await f.admission.handle(request)).result, 'already_stopped');
+  assert.deepEqual(observed, ['origin', 'origin']);
+  assert.equal(fs.existsSync(f.file), false);
+  assert.equal(f.state.fences.size, 0);
 });
 test('stale, incomplete and starting identity cannot become manual targets', async t => {
   const f = fixture(t); f.state.run.runId='new';
@@ -151,6 +170,14 @@ test('stale, incomplete and starting identity cannot become manual targets', asy
   f.state.run.runId=null; assert.equal((await f.admission.handle(manual())).reason,'identity_unavailable');
   f.state.run.runId='r1'; f.state.run.ready=false; assert.equal((await f.admission.handle(manual())).reason,'not_ready');
   assert.deepEqual(f.store.read(),[]);
+
+  f.state.mode = 'single';
+  f.state.keyPresent = false;
+  f.state.run.ready = true;
+  const before = fs.existsSync(f.file);
+  assert.equal((await f.admission.handle(manual())).reason, 'not_ready');
+  assert.equal(fs.existsSync(f.file), before);
+  assert.deepEqual(f.store.read(), []);
 });
 test('absent ordinary targets do not enqueue an Origin wake with or without a pinned run', async t => {
   const f = fixture(t); f.state.run = null;
@@ -430,4 +457,47 @@ test('release mode and identity refusal precedes unrelated unreadable restart in
   assert.equal((await f.admission.handle(release())).reason,'not_multi');
   f.state.mode='multi';f.state.transition={};assert.equal((await f.admission.handle(release())).reason,'transition_open');
   f.state.transition=null;f.state.run=null;assert.equal((await f.admission.handle(release())).reason,'run_changed');
+});
+
+test('native single accepts upgrade snapshots and targets manual restart at Origin', async t => {
+  const f = fixture(t); f.state.mode = 'single';
+  assert.equal((await f.admission.handle(restart('native-upgrade'))).result, 'accepted');
+  assert.equal(f.store.read()[0].runIds.length, 3);
+  f.store.write([]);
+  const targets = []; f.admission.readRun = group => { targets.push(group); return f.state.run; };
+  const request = manual({sessionGroup:'origin'});
+  assert.equal((await f.admission.handle(request)).result, 'accepted');
+  assert.deepEqual(targets, ['origin']);
+  assert.equal((await f.admission.handle(request)).result, 'already_accepted');
+  assert.equal(validateRestartRequests(f.store.read()), true);
+  assert.equal(f.store.read()[0].sessionGroup,'origin');
+  const recovered = new SupervisorAdmission(f.deps); recovered.restore(); recovered.openEntry();
+  assert.equal((await recovered.handle(request)).result,'already_accepted');
+  f.store.write([]); f.state.run = null;
+  assert.equal((await f.admission.handle(manual())).result, 'already_stopped');
+  assert.equal(f.state.wake.sessionGroup, 'origin');
+});
+test('native single configuration reclaim accepts only Origin and fences its run', async t => {
+  const f = fixture(t); f.state.mode = 'single';
+  assert.equal((await f.admission.handle(config())).reason, 'not_multi');
+  assert.equal((await f.admission.handle(config({sessionGroup:'origin'}))).result, 'accepted');
+  assert.equal(f.state.fences.get('origin').reason, 'model_config');
+});
+
+test('single restart rows retain legacy shape and allow only explicit Origin', async t => {
+  const f=fixture(t); f.state.mode='single'; f.state.keyPresent=true;
+  assert.equal((await f.admission.handle(manual())).result,'accepted');
+  const bytes=fs.readFileSync(f.file,'utf8'), [legacy]=f.store.read();
+  assert.equal(Object.hasOwn(legacy,'sessionGroup'),false);
+  const restored=new RestartRequestStore({file:f.file}); assert.equal(restored.read()[0].mode,'single');
+  assert.equal(fs.readFileSync(f.file,'utf8'),bytes);
+  assert.equal(validateRestartRequests([{...legacy,sessionGroup:'origin'}]),true);
+  for(const sessionGroup of ['telegram:a','bad key',null,'']) {
+    assert.equal(validateRestartRequests([{...legacy,sessionGroup}]),false);
+  }
+  f.store.write([]);
+  f.state.keyPresent=false;
+  assert.equal((await f.admission.handle(manual({sessionGroup:'origin'}))).reason,'not_multi');
+  f.state.keyPresent=true;
+  assert.equal((await f.admission.handle(manual({sessionGroup:'telegram:a'}))).reason,'not_multi');
 });

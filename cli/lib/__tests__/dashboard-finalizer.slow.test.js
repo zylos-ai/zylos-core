@@ -60,8 +60,7 @@ function prerequisites() {
     updateConfig: () => {}, ensureMemoryMigration: () => {}, verifyPublicationForServices: () => {}, protectedSuccess: () => {},
     startServices: () => ({ status: 'done' }), verifyServices: () => ({ status: 'done' }),
     readModeStatus: () => ({ sessionMode: 'single', transition: null }),
-    readMode: () => ({ mode: 'single' }), readTransition: () => null,
-    restart: () => ({ ok: true, data: { result: 'exit_enqueued' } }),
+    restart: () => ({ ok: true, data: { result: 'accepted' } }),
     ensureLogRotation: () => ({ state: 'present' })
   };
 }
@@ -130,7 +129,7 @@ test('takeover migration 20 failure restores the copy, leaves Core upgrade_compl
   let result;
   try {
     result = await completeUpgradeFinalization(ctx, { ...prerequisites(), dashboardOwner, protectedSuccess: undefined,
-      restart: () => { restartCalls++; return {ok: true, data: {result: 'exit_enqueued'}}; } });
+      restart: () => { restartCalls++; return {ok: true, data: {result: 'accepted'}}; } });
   } finally { process.env.PATH = priorPath; }
   // The migration fails before the service is started, not inside the service.
   const pm2Calls = fs.existsSync(path.join(root, 'pm2-calls'))
@@ -139,8 +138,8 @@ test('takeover migration 20 failure restores the copy, leaves Core upgrade_compl
   assert.equal(result.success, true);
   assert.equal(result.completion.install, 'done');
   assert.equal(result.completion.dashboard, 'degraded');
-  assert.equal(restartCalls, 0);
-  assert.equal(result.completion.sessionRestart, 'closed_by_system');
+  assert.equal(restartCalls, 1);
+  assert.equal(result.completion.sessionRestart, 'accepted');
   const registration = result.dashboard.errors.find(error => error.item === 'registration');
   assert.equal(registration?.code, 'dashboard_migration_failed', JSON.stringify(result.dashboard));
   assert.match(registration.message, /restored from the takeover copy/);
@@ -191,7 +190,7 @@ test('hung health headers and bodies time out after a full step window and Core 
       const ctx={zylosDir:process.env.ZYLOS_DIR,from:'1.0.0',to:'new',journal:{firstTakeover:false},servicesWereRunning:[],steps:[],mergeConflicts:[],mergedFiles:[]};
       let restartCalls=0;const started=Date.now();
       const result=await completeUpgradeFinalization(ctx,{...(${prerequisites.toString()})(),dashboardOwner,
-        restart:()=>{restartCalls++;return {ok:true,data:{result:'exit_enqueued'}};}});
+        restart:()=>{restartCalls++;return {ok:true,data:{result:'accepted'}};}});
       process.stdout.write(JSON.stringify({result,restartCalls,elapsed:Date.now()-started}));
     `;
     const child=spawn(process.execPath,['--input-type=module','-e',script],{env,stdio:['ignore','pipe','pipe'],timeout:40000});

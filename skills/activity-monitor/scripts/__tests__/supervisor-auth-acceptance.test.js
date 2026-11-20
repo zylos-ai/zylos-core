@@ -11,9 +11,9 @@ import { RestartRequestStore } from '../restart-request-store.js';
 function fixture(t, { mode = 'multi', runtime = 'codex', checkAuth, create = createSupervisor } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-auth-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const group = mode === 'single' ? null : 'lark:oc_b';
+  const group = mode === 'single' ? 'origin' : 'lark:oc_b';
   const state = { now: 1000000, live: new Map(), fences: new Map(), checks: [], stops: [],
-    running: 0, controls: 0, deadlineLess: 0, pending: true, d8Writes: 0 };
+    running: 0, controls: 0, pending: true, d8Writes: 0 };
   const db = {
     getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),
     getModeTransition: () => null, getDrainFence: g => state.fences.get(g) ?? null,
@@ -25,7 +25,7 @@ function fixture(t, { mode = 'multi', runtime = 'codex', checkAuth, create = cre
     listPendingContinuations: () => [],
     countGlobalRunningConversations: () => state.running,
     countRunningConversations: () => state.running,
-    countNonTerminalControls: () => ({ running: state.controls, runningWithoutDeadline: state.deadlineLess }),
+    countNonTerminalControls: () => ({ running: state.controls }),
     expireStaleRunningControls: () => [], getControlById: () => null,
   };
   const scenes = {
@@ -43,7 +43,7 @@ function fixture(t, { mode = 'multi', runtime = 'codex', checkAuth, create = cre
   const reopen = async () => {
     await supervisor?.stop();
     supervisor = create({ db, scenes, zylosDir: root, env: { ZYLOS_DIR: root }, now: () => state.now,
-      readMode: () => ({ mode }), readConfiguration: () => ({ mode, runtime, capacity: 4 }),
+      readMode: () => ({ mode, keyPresent: true }), readConfiguration: () => ({ mode, runtime, capacity: 4 }),
       resolveTargetRuntime: () => runtime, requestStore: new RestartRequestStore({ file: path.join(root, 'requests.json') }),
       readSyncMarker: () => ({ held: false, stale: false }),
       checkAuth: async checked => { state.checks.push(checked); return checkAuth ? checkAuth(checked) : { status: 'success' }; },
@@ -89,30 +89,6 @@ test('composed multi auth captures only affected runtime, retains until old targ
   assert.equal(f.supervisor.health.store('codex').read().health, 'ok'); assert.equal(f.state.fences.size, 0);
 });
 
-test('composed single auth preserves blocking through in-flight work and restart; deadline-less control does not prevent cleanup', async t => {
-  const f = fixture(t, { mode: 'single' }); await f.reopen(); f.seed(); f.add();
-  f.state.running = 1; await f.tick();
-  assert.equal(f.supervisor.health.store('codex').read().health, 'auth_failed'); assert.deepEqual(f.state.stops, []);
-  await f.reopen(); await f.tick(); assert.deepEqual(f.state.checks, ['codex', 'codex']);
-  f.state.running = 0; f.state.controls = 1; await f.tick();
-  assert.equal(f.supervisor.health.store('codex').read().health, 'auth_failed'); assert.deepEqual(f.state.stops, []);
-  f.state.deadlineLess = 1; await f.tick();
-  assert.equal(f.supervisor.health.store('codex').read().health, 'ok'); assert.deepEqual(f.state.stops, ['old-run']);
-  assert.equal(f.state.d8Writes, 0); assert.equal(f.state.fences.size, 0);
-});
-
-test('composed single auth stop waits while no-response recovery owns the run', async t => {
-  const f = fixture(t, { mode: 'single' }); await f.reopen(); f.seed(); f.add();
-  const owner = { sessionGroup: 'origin', runId: 'old-run', runtime: 'codex' };
-  f.supervisor.observer.notifyDelivered({ ...owner, pastedAt: f.state.now });
-  const delivery = f.supervisor.observer.sceneState(owner).delivery;
-  delivery.recovery = { mode: 'single', sessionId: 'old-run', activityAt: f.state.now, responseAt: f.state.now, pending: false, nudgedAt: f.state.now };
-  await f.tick(); await f.tick();
-  assert.deepEqual(f.state.stops, []); assert.equal(f.supervisor.health.store('codex').read().health, 'auth_failed');
-  delivery.recovery = null; await f.tick();
-  assert.deepEqual(f.state.stops, ['old-run']);
-});
-
 for (const [label, active, cooldown, expected] of [
   ['unexpired', true, 1500, 1500], ['expired', true, 900, 0], ['zero', true, 0, 0], ['no-limit', false, 0, 0],
 ]) test(`composed auth recovery after reopen retains ${label} rate-limit facts`, async t => {
@@ -126,16 +102,14 @@ for (const [label, active, cooldown, expected] of [
   assert.equal(after.scheduling.cooldownUntil, expected);
 });
 
-for (const kind of ['early', 'deadline', 'limit']) test(`composed ${kind} recovery boundary`, async t => {
+for (const kind of ['early', 'limit']) test(`composed ${kind} recovery boundary`, async t => {
   const verify = async create => {
-    const f = fixture(t, { create, mode: kind === 'deadline' ? 'single' : 'multi' });
+    const f = fixture(t, { create });
     await f.reopen(); f.seed(kind === 'limit', kind === 'limit' ? 1500 : 0);
     if (kind !== 'limit') f.add();
-    if (kind === 'deadline') { f.state.controls = 1; f.state.deadlineLess = 1; }
     await f.tick();
     const health = f.supervisor.health.store('codex').read();
     if (kind === 'early') { assert.equal(health.health, 'auth_failed'); assert.deepEqual(f.state.stops, []); }
-    if (kind === 'deadline') { assert.equal(health.health, 'ok'); assert.deepEqual(f.state.stops, ['old-run']); }
     if (kind === 'limit') { assert.equal(health.health, 'rate_limited'); assert.equal(health.scheduling.cooldownUntil, 1500); }
   };
   await verify(createSupervisor);
@@ -184,7 +158,7 @@ test(`idle startup auth recovery retires the affected run: ${mode} ${runtime}`, 
   assert.equal(f.state.checks.length, 0);
   await f.tick();
   assert.deepEqual(f.state.checks, [runtime]);
-  if (mode === 'multi') {
+  {
     const fence = f.state.fences.get(f.group);
     assert.equal(fence.reason, 'auth');
     assert.equal(f.supervisor.health.store(runtime).read().health, 'auth_failed');

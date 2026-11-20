@@ -18,7 +18,7 @@ legacyBaselineEnd getCoverageEnd getGlobalCoverageEnd getDeliveredFrontier getGl
 getUnsummarizedRange getGlobalUnsummarizedRange getUnsummarizedConversations getGlobalUnsummarizedConversations getOriginSyncBacklog getContentCheckpointsSince getOriginSyncConversations advanceOriginSyncCursor
 insertControl getNextPendingControl claimControl expirePendingControls countNonTerminalControls expireStaleRunningControls expireControlById buildTargetBinding
 setDrainFence getDrainFence listDrainFences clearDrainFence getLastActivity
-beginModeTransition getModeTransition getLastCompletedModeTransition setModeTransitionPhase absorbForTransition getAbsorbedConversations listGroupHeads
+beginModeTransition getModeTransition getLastCompletedModeTransition setModeTransitionPhase claimUngroupedPendingForOrigin
 getSessionModelConfig setSessionModelConfig resetSessionModelConfig getSessionRuntimeConfig setSessionRuntimeConfig resetSessionRuntimeConfig resolveSessionLaunchConfig listGroupRuntimeOverrides
 getDb close`.split(/\s+/);
 function root(t) { const dir = mkdtempSync(join(tmpdir(), 'c4-stage-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; }

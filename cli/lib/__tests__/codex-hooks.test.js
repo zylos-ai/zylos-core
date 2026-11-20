@@ -109,7 +109,7 @@ describe('Codex core hook installer', () => {
     // one contiguous group in chain order.
     assert.deepEqual(
       coreGroup.hooks.map(h => h.command.match(/--shard (\S+)$/)?.[1]),
-      ['identity', 'custom', 'references', 'c4-conversations', 'fg', 'start-prompt']
+      ['identity', 'custom', 'references', 'c4-conversations', 'onboarding', 'fg', 'start-prompt']
     );
     for (const hook of coreGroup.hooks) {
       assert.equal(hook.timeout, 25);
@@ -131,15 +131,15 @@ describe('Codex core hook installer', () => {
 
     const installed = installCoreCodexHook({ zylosDir });
     // Install replaces the retired no-arg command with the shard command set.
-    assert.equal(installed.commands.length, 6);
+    assert.equal(installed.commands.length, 7);
     const migrated = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
     const migratedCommands = migrated.hooks.SessionStart.flatMap(group => group.hooks.map(h => h.command));
-    assert.equal(migratedCommands.filter(c => c.includes('session-start-orchestrator.js')).length, 6);
+    assert.equal(migratedCommands.filter(c => c.includes('session-start-orchestrator.js')).length, 7);
     assert.equal(migratedCommands.some(c => c.includes('session-start-orchestrator.js') && !c.includes('--shard')), false);
 
     const removed = uninstallCoreCodexHook({ zylosDir });
 
-    assert.equal(removed.removed, 12);
+    assert.equal(removed.removed, 13);
     const config = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
     assert.equal(config.hooks.SessionStart.length, 1);
     assert.equal(config.hooks.SessionStart[0].hooks[0].command, 'node /tmp/other.js');

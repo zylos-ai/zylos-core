@@ -43,8 +43,15 @@ function sameLaunch(left, right) {
 
 // Observation is an explicit runtime-adapter boundary. identityVerified must prove the
 // snapshot/current-session files belong to this run; presence alone is insufficient.
-export function classifyConfigRunning({ kind, runtime, sessionMode, resolved, fence, observation }) {
-  if (sessionMode === 'single' || (kind === 'model' && runtime !== resolved.runtime)) return null;
+// running is null for a pre-migration instance (sessionMode null), for any group
+// but origin in native single, and for a model query of a non-current runtime.
+function configRunningApplies({ kind, runtime, sessionGroup, sessionMode, resolved }) {
+  if (sessionMode !== 'multi' && !(sessionMode === 'single' && sessionGroup === 'origin')) return false;
+  return !(kind === 'model' && runtime !== resolved.runtime);
+}
+
+export function classifyConfigRunning({ kind, runtime, sessionGroup, sessionMode, resolved, fence, observation }) {
+  if (!configRunningApplies({ kind, runtime, sessionGroup, sessionMode, resolved })) return null;
   const running = { runId: typeof observation?.runId === 'string' && observation.runId ? observation.runId : null,
     launchConfig: validLaunch(observation?.launchConfig) ? observation.launchConfig : null, status: 'unknown' };
   if (fence?.reason === 'model_config') running.status = 'pending';
@@ -89,19 +96,24 @@ export function createConfigHandler({ store, validateComponent, readSessionMode,
     const data = { sessionGroup, sessionMode: null, resolved: null, ...(kind === 'model' ? { runtime: request.runtime } : {}),
       ...(request.action === 'get' ? { desired: saved } : saved) };
     try {
+      // null = the key is absent: a pre-migration instance keeps its baseline display.
       const sessionMode = readSessionMode();
-      if (!['single', 'multi'].includes(sessionMode)) throw dataError('CONFIG_UNREADABLE', 'Invalid session mode');
+      if (![null, 'single', 'multi'].includes(sessionMode)) throw dataError('CONFIG_UNREADABLE', 'Invalid session mode');
       data.sessionMode = sessionMode;
-      const resolved = store.resolveSessionLaunchConfig({ sessionGroup, sessionMode });
+      // In native single only Origin runs; other groups show the configuration
+      // they will use after switching back to multi.
+      const resolveMode = sessionMode === 'single' && sessionGroup !== 'origin' ? 'multi' : sessionMode ?? 'single';
+      const resolved = store.resolveSessionLaunchConfig({ sessionGroup, sessionMode: resolveMode });
       if (!validLaunch(resolved)) throw dataError('CONFIG_UNREADABLE', 'Invalid resolved launch configuration');
       data.resolved = resolved;
-      if (sessionMode === 'single' || (kind === 'model' && request.runtime !== resolved.runtime)) {
+      const scope = { kind, runtime: request.runtime, sessionGroup, sessionMode, resolved };
+      if (!configRunningApplies(scope)) {
         data.running = null;
         return { ok: true, data };
       }
-      const fence = store.getDrainFence(sessionMode === 'single' ? '*' : sessionGroup);
-      const observation = await observeRunning({ sessionGroup: sessionMode === 'single' ? 'origin' : sessionGroup, sessionMode });
-      data.running = classifyConfigRunning({ kind, runtime: request.runtime, sessionMode, resolved, fence, observation });
+      const fence = store.getDrainFence(sessionGroup);
+      const observation = await observeRunning({ sessionGroup, sessionMode });
+      data.running = classifyConfigRunning({ ...scope, fence, observation });
     } catch (error) {
       data.running = { runId: null, launchConfig: null, status: 'unknown', reason: error.message, ...(error.code ? { code: error.code } : {}) };
     }
@@ -130,7 +142,7 @@ export async function runConfigCli(kind, argv, io = process) {
     const { observeCoreRunning } = await import('./c4-runtime-observer.js');
     const handler = createConfigHandler({
       store, validateComponent: name => validateChannel(name, true),
-      readSessionMode: () => readSessionMode().mode ?? 'single',
+      readSessionMode: () => readSessionMode().mode,
       observeRunning: observeCoreRunning,
     });
     const result = await handler(kind, request);

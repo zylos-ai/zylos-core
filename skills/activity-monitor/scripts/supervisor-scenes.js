@@ -19,6 +19,7 @@ const descriptor = target => ({ serverGeneration: target.serverGeneration, sessi
 function validTarget(value) {
   return value && /^\d+:\d+$/.test(value.serverGeneration) && /^\$\d+$/.test(value.sessionId) && /^%\d+$/.test(value.paneId);
 }
+const sourceScope = (group, target) => group === 'origin' && !target.rawF2?.ZYLOS_SESSION_GROUP ? null : group;
 const scopeMatches = (group, target) => group === null ? !target.rawF2?.ZYLOS_SESSION_GROUP : target.rawF2?.ZYLOS_SESSION_GROUP === group;
 const sameRun = (scene, target) => target.present && target.runId === scene.runId && target.runtime === scene.runtime &&
   target.serverGeneration === scene.tmuxTarget?.serverGeneration && target.tmuxSessionId === scene.tmuxTarget?.sessionId;
@@ -48,8 +49,8 @@ export class SupervisorScenes {
       sampleTarget: async (scope, target) => {
         const group = scope === null ? 'origin' : scope;
         // The source identity determines semantic scope across an F1 cutover.
-        const sourceScope = group === 'origin' && !target.rawF2?.ZYLOS_SESSION_GROUP ? null : scope;
-        try { return await this.observeGroup(group, { sample: { target }, scope: sourceScope, deferUsage: true }); }
+        const scopeFromTarget = sourceScope(group, target);
+        try { return await this.observeGroup(group, { sample: { target }, scope: scopeFromTarget, deferUsage: true }); }
         catch (error) { return this.failedObservation(group, error); }
       } });
     return [...samples].map(([scope, sample]) => {
@@ -78,14 +79,14 @@ export class SupervisorScenes {
   async observeGroup(group, batch = null) {
     let connection;
     try {
-      const mode = !batch && group === 'origin' ? (await this.readMode?.())?.mode : null;
-      const scope = batch ? batch.scope : group === 'origin' && mode === 'single' ? null : group;
+      let scope = batch ? batch.scope : group;
       let treePromise;
       const getTree = () => treePromise ??= this.readProcessTree();
       if (!batch) connection = await this.open(this.connectionOptions);
       const target = batch ? batch.sample.target : await this.observeTarget({ sessionGroup: scope, connection, readReady: this.readReady, readProcessTree: getTree });
       if (!target.present) return absent(group, this.env);
-      const scene = { sessionGroup: group, present: true, tmuxName: target.tmuxName,
+      if (!batch) scope = sourceScope(group, target);
+      const scene = { sessionGroup: group, sourceScope: scope, present: true, tmuxName: target.tmuxName,
         runDir: groupRunDir(group ?? 'origin', this.env), runId: target.runId, runtime: target.runtime,
         ready: target.ready && scopeMatches(scope, target), sessionId: target.sessionId,
         createdAt: target.createdAt * 1000, currentSessionTs: target.f3?.ts ?? null,
@@ -124,23 +125,25 @@ export class SupervisorScenes {
   // Publication checks observe all identities together, never authorizing actions.
   async readIdentities(groups) {
     if (!groups.length) return new Map();
-    const mode = (await this.readMode?.())?.mode;
-    const scopes = groups.map(group => group === 'origin' && mode === 'single' ? null : group);
-    const identities = await this.reader.readLiveIdentities(scopes);
-    return new Map(groups.map((group, index) => [group, identities.get(scopes[index])]));
+    const targets = await this.reader.readSessionTargets(groups);
+    return new Map(groups.map(group => {
+      const target = targets.get(group);
+      return [group, { ...target, sourceScope: sourceScope(group, target),
+        ready: target.ready && scopeMatches(sourceScope(group, target), target) }];
+    }));
   }
 
   // Run/F2/F3 identity only: no process, activity, context or usage sampling.
   async readIdentity(group) {
     let connection;
     try {
-      const mode = group === 'origin' ? (await this.readMode?.())?.mode : null;
-      const scope = group === 'origin' && mode === 'single' ? null : group;
+      let scope = group;
       connection = await this.open(this.connectionOptions);
       const target = await this.observeTarget({ sessionGroup: scope, connection,
         readReady: this.readReady, readProcessTree: async () => [] });
       if (!target.present) return absent(group, this.env);
-      return { sessionGroup: group, present: true, tmuxName: target.tmuxName,
+      scope = sourceScope(group, target);
+      return { sessionGroup: group, sourceScope: scope, present: true, tmuxName: target.tmuxName,
         runId: target.runId, runtime: target.runtime, sessionId: target.sessionId,
         ready: target.ready && scopeMatches(scope, target), launchConfig: target.launchConfig,
         tmuxTarget: descriptor(target) };

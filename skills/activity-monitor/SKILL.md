@@ -62,8 +62,9 @@ Hot TTL refreshes on each Supervisor round. The deferral alert count is read
 fresh when a deferral is requested. Dashboard's global idle-reclaim
 setting accepts 5–1440 whole minutes and writes seconds through the existing
 config lock; the next TTL check uses the saved value without a restart. Existing
-positive second values remain valid. The page is read-only in single-session
-mode or when the environment variable is present, and displays the effective
+positive second values remain valid. The page is editable in native single and
+multi mode. It is read-only before migration or when the environment variable
+is present, and displays the effective
 value (including fallback when that environment value is invalid). The environment
 scope follows the [authoritative README rule](https://github.com/zylos-ai/zylos-core/blob/main/README.md#idle-reclaim-environment).
 The eviction minimum remains a startup setting and requires a restart to change.
@@ -179,15 +180,8 @@ begins again, and sessions do not wait for each other's answers. A run that
 cannot be bound as a target gets no check, and missing reclaim dependencies
 stop the restart before any check is sent.
 
-In steady single-session mode an upgrade restart (`zylos upgrade`,
-`upgrade-claude`, `restart-claude`) has no Supervisor step: the producer queues
-the single-session upgrade restart check, opening with a single-session reason, and then `/exit`. Both
-are priority 1 and require-idle; the check has the ack suffix and a 60-second
-ack deadline. The dispatcher delivers the check first and `/exit` only once the
-session is idle after the check's turn, or after the check expires unanswered
-or undelivered at its deadline. Queued controls go before new messages, so
-activity during the wait neither overtakes nor removes `/exit`. Each restart
-request queues one check, and the producer returns as soon as both are queued.
+Core upgrade, `upgrade-claude` and `restart-claude` use this supervisor request
+in every mode. An empty group-run snapshot completes with `done_empty`.
 
 A launch configuration change still sends a single control with its 5-minute
 ack deadline and the `ready_for_config_reclaim` flow. It names the
@@ -196,11 +190,10 @@ the readiness submission.
 
 ## No-response Recovery
 
-Applies in both multi-session and single-session mode.
+Applies in multi mode and to Origin in native single mode.
 
-In both session modes, an actually pasted conversation arms no-response
-observation from its paste time. Single-session mode includes an instance
-without a configured `session_mode`. Any actual AI work after that paste disarms
+A pasted conversation arms no-response observation from its paste time. Any
+actual AI work after that paste disarms
 this observation permanently; it does not reset a silence timer. This applies
 even when the work belongs to an older turn and the new message remains queued.
 Claude and Codex use the same rule. There is no dequeue, processed-input,
@@ -239,21 +232,12 @@ screen check but does not arm no-response recovery. Session changes do not
 silently discard delivery or its screen check. Background tasks alone never
 arm detection; a new unanswered paste during background waiting does.
 
-Single-session mode uses the same rule, thresholds and actual-AI-work
-definition, with these additions:
-
-- **Maintenance holds.** While a mode transition is open, a manual restart is
-  pending, a `*` or `origin` drain fence exists, the global Memory Sync marker
-  is held, or a `/exit` or `/clear` control (rotation, runtime upgrade or
-  restart) queued less than 15 minutes ago is unfinished, no nudge or stop is
-  sent and active recovery is cleared. Silence is measured again from the end
-  of the hold. Each enqueue and the stop recheck these holds. An unreadable
-  hold source holds recovery and is logged once.
-- **Health recovery ownership.** Before an episode starts, runtime health other
-  than `ok` or a recovery probe in flight holds observation the same way.
-  Once an episode has started, it owns the run until actual AI work or its
-  stop: recovery probes skip that run, and the unfenced single-session auth
-  stop waits. A new run starts without recovery state.
+In native single mode, Origin uses the same observation, recovery and
+authentication-reclaim rules as a group session in multi mode. Recovery checks
+the current run and session identity, the mode-switch gate, and applicable
+drain fences and manual restart intent before sending keys or stopping the
+session. Before the first mode switch, Core starts no managed sessions and
+the supervisor does not run this observation loop for the old baseline session.
 
 Once actual AI work disarms observation, a later stall is outside this rule.
 The existing tool watchdog covers only enabled Claude WebFetch/WebSearch:

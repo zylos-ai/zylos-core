@@ -9,8 +9,9 @@ import { ZYLOS_DIR, readSessionMode } from './config.js';
 import { supervisorDiagnosticPath } from './session-group-paths.js';
 import { EventLogReader } from './event-log.js';
 
+const handoverEvent = event => ['global_memory_handover', 'global_memory_handover_failed', 'global_memory_handover_conflict'].includes(event);
 const transitionEvent = event => typeof event === 'string'
-  && (event.startsWith('transition_') || event.startsWith('auto_migration_') || event === 'absorb');
+  && (event.startsWith('transition_') || event.startsWith('auto_migration_') || handoverEvent(event));
 const errorView = error => ({ code: error.code ?? 'READ_FAILED', message: error.message ?? String(error) });
 
 /** Observe reachability without submitting even a read request to the supervisor. */
@@ -45,22 +46,22 @@ export async function readSupervisorPm2({ env = process.env, timeoutMs = 1000 } 
 
 
 let diagnosticsCache;
-function readEvents(zylosDir, runId) {
+function readEvents(zylosDir) {
   const file = supervisorDiagnosticPath({ ZYLOS_DIR: zylosDir });
   const directory = path.dirname(file), stem = path.basename(file, '.jsonl');
   // Include rotated files and inode identity so append, truncation, replacement,
-  // rotation and retention changes all invalidate the one cached run's view.
+  // rotation and retention changes all invalidate the cached view.
   const signature = fs.readdirSync(directory).filter(name => name === path.basename(file) ||
     name.startsWith(`${stem}.`) && /^\d+$/.test(name.slice(stem.length + 1, -6)) && name.endsWith('.jsonl'))
     .sort().map(name => {
       const stat = fs.statSync(path.join(directory, name), { bigint: true });
       return [name, stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
     }).join('|');
-  if (diagnosticsCache?.file === file && diagnosticsCache.runId === runId && diagnosticsCache.signature === signature) return diagnosticsCache.events;
+  if (diagnosticsCache?.file === file && diagnosticsCache.signature === signature) return diagnosticsCache.events;
   const reader = new EventLogReader(file);
   try {
-    const events = reader.read().filter(event => event.run_id === runId && transitionEvent(event.event));
-    diagnosticsCache = { file, runId, signature, events };
+    const events = reader.read().filter(event => transitionEvent(event.event));
+    diagnosticsCache = { file, signature, events };
     return events;
   }
   finally { reader.close(); }
@@ -96,17 +97,16 @@ export async function readSessionModeStatus(options = {}) {
     targetMode: completed.target_mode, updatedAt: completed.updated_at,
   };
   const globalGate = { present: fence !== null, reason: fence?.reason ?? null, runId: fence?.runId ?? null };
-  const runId = transition?.runId ?? lastCompleted?.runId;
   let events = [];
-  if (runId) {
-    try {
-      events = (await (options.readEvents ?? readEvents)(zylosDir, runId))
-        .filter(event => event.run_id === runId && transitionEvent(event.event));
-    } catch { /* Missing/unreadable diagnostics never hide authoritative state. */ }
-  }
+  try {
+    events = (await (options.readEvents ?? readEvents)(zylosDir))
+      .filter(event => transitionEvent(event.event) && (!transition ||
+        (handoverEvent(event.event) ? Number.isFinite(event.ts) && event.ts >= transition.createdAt * 1000
+          : event.run_id === transition.runId)));
+  } catch { /* Missing/unreadable diagnostics never hide authoritative state. */ }
   const blocked = transition?.reason ? {
     reason: transition.reason,
-    since: events.find(event => event.reason === transition.reason && Number.isFinite(event.ts))?.ts ?? null,
+    since: events.find(event => event.run_id === transition.runId && event.reason === transition.reason && Number.isFinite(event.ts))?.ts ?? null,
   } : null;
   const lastEvents = events.slice(-10);
   let reachable = false;
@@ -134,5 +134,9 @@ export function formatSessionModeStatus(data) {
   } else lines.push('Transition: none');
   if (data.blocked) lines.push(`Blocked: ${data.blocked.reason}${data.blocked.since === null ? '' : ` (since ${data.blocked.since})`}`);
   if (data.lastCompleted) lines.push(`Last completed: ${data.lastCompleted.runId} ${data.lastCompleted.sourceMode} -> ${data.lastCompleted.targetMode} (${data.lastCompleted.updatedAt})`);
+  if (data.lastEvents?.length) {
+    lines.push('Recent events:');
+    for (const event of data.lastEvents) lines.push(`  ${event.event}${event.run_id ? ` (${event.run_id})` : ''}`);
+  }
   return lines.join('\n');
 }

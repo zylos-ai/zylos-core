@@ -28,12 +28,14 @@ export function createCoreObserver({ tmux = {} } = {}) {
     let connection;
     try {
       connection = await openTmuxConnection(tmux);
-      const target = await observeSessionTarget({ sessionGroup: sessionMode === 'single' ? null : sessionGroup, connection });
+      const target = await observeSessionTarget({ sessionGroup, connection });
       if (!target.present) return method === 'running' ? { hasProcess: false } : null;
       await revalidateSessionTarget({ connection, target });
       if (method === 'running') {
-        const scopeMatches = sessionMode === 'single'
-          ? !Object.hasOwn(target.rawF2, 'ZYLOS_SESSION_GROUP')
+        // A group target (multi, or Origin in native single) must carry that group;
+        // only the ungrouped single target is the legacy session without one.
+        const scopeMatches = sessionGroup === null
+          ? sessionMode === 'single' && !Object.hasOwn(target.rawF2, 'ZYLOS_SESSION_GROUP')
           : target.rawF2.ZYLOS_SESSION_GROUP === sessionGroup;
         return {
           hasProcess: true,

@@ -7,10 +7,11 @@ import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { submit } from '../../../../cli/lib/am-sock-client.js';
-const worker=fileURLToPath(new URL('./fixtures/supervisor-manual-session-worker.js',import.meta.url));
-async function fixture(t,mode='multi',variant=''){
+const worker=fileURLToPath(new URL('./fixtures/supervisor-manual-entry-worker.js',import.meta.url));
+async function fixture(t,mode='multi'){
  const f=readyTmuxTarget(t,{prefix:'manual-session-entry-',mode,runtimeProcess:true});f.tmux('new-session','-d','-s','fixture-keeper','sleep','120');
- const child=fork(worker,[f.socketPath,f.binary,mode,variant],{env:{...process.env,...f.env},silent:true});let stderr='';child.stderr.on('data',chunk=>stderr+=chunk);
+ if(mode==='single')f.tmux('set-environment','-t','=zylos-group-origin','ZYLOS_SESSION_GROUP','origin');
+ const child=fork(worker,[f.socketPath,f.binary,mode],{env:{...process.env,...f.env},silent:true});let stderr='';child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-8192);});
  const inbox=[],waiters=[];child.on('message',m=>waiters.length?waiters.shift().resolve(m):inbox.push(m));
  child.on('exit',(code,signal)=>{for(const w of waiters.splice(0))w.reject(new Error(`Worker exited ${code??signal}: ${stderr}`));});
  const next=()=>inbox.length?Promise.resolve(inbox.shift()):new Promise((resolve,reject)=>waiters.push({resolve,reject}));
@@ -20,14 +21,14 @@ async function fixture(t,mode='multi',variant=''){
  return {...f,command,submit:()=>submit(request,{socketPath:path.join(f.root,'activity-monitor/am.sock'),deadlineAt:Date.now()+10000}),
  change:sessionId=>fs.writeFileSync(f.readyPath,JSON.stringify({...f.ready,sessionId})),async stop(){const done=once(child,'exit');await command('stop');assert.equal((await done)[0],0);}};
 }
-async function before(t,variant=''){
- const f=await fixture(t,'multi',variant);f.change('new-session');const result=await f.submit();
+async function before(t){
+ const f=await fixture(t,'multi');f.change('new-session');const result=await f.submit();
  assert.equal(result.kind,'rejected');assert.equal(result.reply.reason,'identity_unavailable');
  const state=await f.command('tick');assert.deepEqual(state.requests,[]);assert.deepEqual(state.fences,[]);assert.doesNotThrow(()=>f.tmux('has-session','-t','=zylos-group-origin'));await f.stop();
 }
-test('actual entry rejects already observed session change before manual acceptance; ignoring session fails',{timeout:20000},async t=>{await before(t);await assert.rejects(before(t,'ignore-admission-session'),{code:'ERR_ASSERTION'});});
-async function after(t,mode,variant=''){
- const f=await fixture(t,mode,variant);assert.equal((await f.submit()).kind,'accepted');f.change('new-session');
+test('actual entry rejects already observed session change before manual acceptance',{timeout:20000},async t=>{await before(t);});
+async function after(t,mode){
+ const f=await fixture(t,mode);assert.equal((await f.submit()).kind,'accepted');f.change('new-session');
  const state=await f.command('tick');assert.deepEqual(state.requests,[]);assert.deepEqual(state.fences,[]);
  assert.throws(()=>f.tmux('has-session','-t','=zylos-group-origin'));
  assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-keeper'));

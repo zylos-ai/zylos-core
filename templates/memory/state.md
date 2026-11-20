@@ -2,12 +2,10 @@
 # Working State
 
 ## Headline
-Fresh installation. Onboarding pending.
+Fresh installation.
 
 ## In Progress
 
 ## Pending
-- Status: pending
-- [ ] Complete onboarding — deliver security notice and guide owner through first project (see system instructions > Onboarding)
 
 ## Commitments

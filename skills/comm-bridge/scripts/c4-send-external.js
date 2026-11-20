@@ -6,7 +6,7 @@ import { resolveCoreConfigModule } from './core-config-loader.js';
 import { sendError } from './c4-send-args.js';
 import { safeEntryId } from './c4-entry-id.js';
 import { queryComponentSessionGroup, fixedAddressSessionGroup } from './c4-component-session-group.js';
-import { assertOutboundSession } from './c4-outbound-session.js';
+import { assertOutboundSession, isNativeSingle, originReplyAllowed, readConfiguredSessionMode } from './c4-outbound-session.js';
 import { readChannelHookMetadata, runBeforeSendHook } from './c4-channel-hooks.js';
 
 const pathsModule = path.join(path.dirname(resolveCoreConfigModule()), 'session-group-paths.js');
@@ -48,7 +48,7 @@ export function assertEndpointPassable(endpoint, id) {
   }
 }
 
-export async function sendExternal(request, message, { api, skillsDir, env = process.env } = {}) {
+export async function sendExternal(request, message, { api, skillsDir, env = process.env, readSessionMode = readConfiguredSessionMode } = {}) {
   const { channel, endpoint } = request;
   if (typeof channel !== 'string' || !channel || channel.includes('..') || /[/\\\0]/.test(channel)) {
     throw sendError('INVALID_ARGS', 'Invalid channel');
@@ -79,14 +79,20 @@ export async function sendExternal(request, message, { api, skillsDir, env = pro
     }
   }
   const route = { groupName, wholeGroup: groupName === undefined };
-  if (hasSender) {
+  // Native single: Origin handles every address, so nothing is checked and
+  // every outbound row is recorded under origin; the answer only feeds the hook.
+  const single = (!hasSender || senderGroup === 'origin') && await isNativeSingle(readSessionMode);
+  let recordGroup;
+  if (single) recordGroup = 'origin';
+  else if (hasSender) {
     const ownerGroup = fixed || api.resolveSessionGroup('out', channel, endpoint, route);
-    assertOutboundSession(senderGroup, ownerGroup, request);
+    if (senderGroup === 'origin' && ownerGroup !== 'origin' && originReplyAllowed(api, channel, endpoint)) recordGroup = 'origin';
+    else assertOutboundSession(senderGroup, ownerGroup, request);
   }
   const stdinDelivery = readChannelHookMetadata(channel, { skillsDir })?.delivery === 'stdin';
   await runBeforeSendHook({ ...request, ...route }, message, { skillsDir, env });
   const record = api.insertConversation('out', channel, endpoint, message,
-    { status: 'delivered', ...route, sessionId: senderSessionId(env),
+    { status: 'delivered', ...route, ...(recordGroup ? { recordGroup } : {}), sessionId: senderSessionId(env),
       ...(env.ZYLOS_SYSTEM_SEND === '1' ? { deliveryAction: 'system_notice' } : {}) });
   return new Promise((resolve, reject) => {
     let child;

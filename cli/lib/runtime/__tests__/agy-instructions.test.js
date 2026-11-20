@@ -16,7 +16,8 @@ function fixture(t, { split = true } = {}) {
 test('agy and Codex build byte-identical complete AGENTS in the same root', t => {
   const root = fixture(t);
   fs.appendFileSync(path.join(root, 'ZYLOS.md'), 'user rule '.repeat(4000) + '\nUSER_TAIL_MARKER');
-  const file = buildInstructionFile('codex', { zylosDir: root });
+  // These fixture writes can share an mtime with the initial render.
+  const file = buildInstructionFile('codex', { zylosDir: root, force: true });
   const codex = fs.readFileSync(file);
   assert.ok(codex.includes(Buffer.from('USER_TAIL_MARKER')));
   assert.ok(codex.includes(Buffer.from('## Codex — Runtime-Specific Rules')));

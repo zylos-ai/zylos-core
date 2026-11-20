@@ -965,9 +965,9 @@ describe('migrate-instructions command', () => {
 
   it('covers every migrated transaction entry stage and rename rollback with successful retry', async () => {
     const points = [
-      'stage:user', 'stage:claude-system', 'stage:codex-system', 'stage:onboarding',
+      'stage:user', 'stage:claude-system', 'stage:codex-system',
       'stage:assembler', 'stage:claude-output', 'stage:codex-output', 'stage:marker',
-      'rename:user', 'rename:claude-system', 'rename:codex-system', 'rename:onboarding',
+      'rename:user', 'rename:claude-system', 'rename:codex-system',
       'rename:assembler', 'rename:claude-output', 'rename:codex-output', 'rename:marker',
     ];
     for (const target of points) {

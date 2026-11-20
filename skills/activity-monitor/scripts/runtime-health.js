@@ -62,10 +62,10 @@ export async function aggregateRuntimeDemand({ mode, pendingGroups, fences = [],
 
 /** Runtime health writes share one serial section, including hook and budget writes. */
 export class RuntimeHealthCoordinator {
-  constructor({ zylosDir, now = Date.now, readMode, resolveTargetRuntime, listScenes,
+  constructor({ zylosDir, now = Date.now, resolveTargetRuntime, listScenes,
     probeInFlight = () => false, readNegativeCache = () => null, clearNegativeCache = () => {},
     freezeNotice, log = () => {}, createStore } = {}) {
-    Object.assign(this, { zylosDir, now, readMode, resolveTargetRuntime, listScenes, probeInFlight,
+    Object.assign(this, { zylosDir, now, resolveTargetRuntime, listScenes, probeInFlight,
       readNegativeCache, clearNegativeCache, freezeNotice, log });
     this.createStore = createStore ?? (runtime => new HealthStore({ runtime, zylosDir, now, freezeNotice, log }));
     this.stores = new Map();
@@ -108,7 +108,7 @@ export class RuntimeHealthCoordinator {
         !parseSessionGroup(request.sessionGroup)) return Promise.resolve(reject('invalid_request'));
     const runtime = request.runtime;
     return this.serial(runtime, async () => {
-      if (await this.readMode() !== 'multi' || await this.resolveTargetRuntime(request.sessionGroup) !== runtime) return reject('invalid_request');
+      if (await this.resolveTargetRuntime(request.sessionGroup) !== runtime) return reject('invalid_request');
       const store = this.store(runtime);
       let state;
       try { state = store.read(); } catch { return {...envelope,ok:true,result:'not_restricted'}; }

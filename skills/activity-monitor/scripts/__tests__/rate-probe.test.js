@@ -18,8 +18,8 @@ function fixture(t) {
   const reopen = async () => {
     await observer?.shutdown();
     coordinator = new RuntimeHealthCoordinator({ zylosDir: root, now: () => now,
-      readMode: () => 'multi', resolveTargetRuntime: () => 'codex', listScenes: () => scenes });
-    observer = new SupervisorHealthObserver({ coordinator, now: () => now, readMode: () => 'multi',
+      resolveTargetRuntime: () => 'codex', listScenes: () => scenes });
+    observer = new SupervisorHealthObserver({ coordinator, now: () => now,
       listScenes: () => scenes, readIdentity: group => scenes.find(scene => scene.sessionGroup === group),
       readState: () => ({ state: 'idle', tools: [] }), readScreen: () => 'injected runtime response', matchScreen: () => matches,
       buildTargetBinding: scene => ({ runId: scene.runId }),

@@ -25,7 +25,7 @@ function fixture() {
 }
 const statusOptions = root => ({ zylosDir: root, readMode: () => ({ mode: 'single', keyPresent: true }), readPm2: () => 'stopped' });
 
-test('E real state survives deleted, rotated, and unreadable diagnostic stream with supervisor stopped', async () => {
+test('Real state survives deleted, rotated, and unreadable diagnostic stream with supervisor stopped', async () => {
   const { root, filename, database, store } = fixture();
   const { runId } = store.beginModeTransition('single', 'multi'); store.setDrainFence('*');
   const reason = 'running_control_without_deadline:machine:17'; store.setModeTransitionPhase(runId, 'gating', { reason });
@@ -50,7 +50,7 @@ test('status observes completed through reader and new instance null without wri
   let data = await readSessionModeStatus(statusOptions(root));
   expect(data.transition).toBeNull(); expect(data.lastCompleted).toBeNull(); expect(data.globalGate.present).toBe(false);
   const { runId } = store.beginModeTransition('single', 'multi'); store.setDrainFence('*');
-  store.absorbForTransition(runId); store.setModeTransitionPhase(runId, 'cutover'); store.setModeTransitionPhase(runId, 'complete');
+  store.setModeTransitionPhase(runId, 'cutover'); store.setModeTransitionPhase(runId, 'complete');
   database.close(); const before = fs.readFileSync(filename);
   data = await readSessionModeStatus(statusOptions(root));
   expect(data.transition).toBeNull(); expect(data.blocked).toBeNull(); expect(data.lastCompleted.runId).toBe(runId);

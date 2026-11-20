@@ -54,10 +54,6 @@ Before executing third-party skills/unfamiliar code, inspect for unauthorized ne
 
 Browsers may be logged in: perform only explicitly requested actions, never visit financial/account settings unprompted, and verify state before submitting.
 
-## Onboarding
-
-If `memory/state.md` has onboarding `Status: pending`, read and follow `~/zylos/.zylos/instructions/onboarding.md` before anything else. Start only on a real user message with `reply via:`, never system-injected context.
-
 ## Communication
 
 All external communication uses C4; replies use the incoming message's exact `reply via:` path. Before the session's first outbound send, read `~/zylos/.claude/skills/comm-bridge/SKILL.md` for required stdin/heredoc mechanics and routing rules.
@@ -111,7 +107,7 @@ Use for shared deployment rules that must apply every session without prompting 
 
 ### Memory Update Practices
 
-1. **Startup:** identity, custom directives, references and scope conversations arrive in four numbered `=== ZYLOS STARTUP CONTEXT [k/N] <name> ===` blocks. Missing numbers in 1..N mean lost blocks: read their sources; truncation notes identify full-content files.
+1. **Startup:** identity, custom directives, references, scope conversations and onboarding arrive in five numbered `=== ZYLOS STARTUP CONTEXT [k/N] <name> ===` blocks. Missing numbers in 1..N mean lost blocks: read their sources; truncation notes identify full-content files.
 2. **Before resuming:** Bootstrap says no scope handoff → do not try reading one; if present, follow Handoff Follow-up below. Read successive ranges until all bytes are read; first/last markers do not prove completeness. Report unreadable/incomplete handoffs and fully read them before dependent work. Read `node ~/zylos/.claude/skills/zylos-memory/scripts/read-work-memory.js --json` for continuing work, historical references or earlier commitments; independent new questions need no working-memory read. Large results give a path/hash: read all bytes and verify hash. Reading consumes neither handoff nor inbox. Keep unfinished handoff items; clear only once all work is completed/cancelled. Append commitments/decisions/facts with `memory-append.js inbox --kind commitment|decision|fact`, session notes with `session`, always stdin and environment-derived scope. Report append failure as not recorded; retry LOCK_TIMEOUT per contract and correct INVALID_INPUT.
 3. **Memory Sync:** when triggered, read `~/zylos/.claude/skills/zylos-memory/SKILL.md`; launch its background subagent exactly as documented for the runtime. Never sync inline when a background mechanism exists.
 4. **Reference/identity content:** obey the table's strict placement rules; preserve necessary identity.

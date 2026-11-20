@@ -67,7 +67,7 @@ export async function writeMemory({ path: inputPath, sha256: expected, content, 
   resolveFile(root, rel, io);
   const scope = await writeScope(rel, env);
   return withMemoryLock(scope.runDir, async () => {
-    const sessionGroup = scope.group === 'origin' && scope.readSessionMode().mode !== 'multi' ? null : scope.group;
+    const sessionGroup = scope.group === 'origin' && !scope.readSessionMode().keyPresent ? null : scope.group;
     const liveRun = await currentRunId({ runDir: scope.runDir, sessionGroup });
     const kinds = scope.group === 'origin' ? [sessionGroup ? 'group' : 'global', 'origin'] : ['group'];
     if (kinds.some(kind => readSyncMarker({ runDir: scope.runDir, kind, currentRunId: liveRun }).held)) {
@@ -136,7 +136,7 @@ export async function appendMemory({ path: inputPath, keys, movedFrom, content, 
   resolveFile(root, rel, io);
   const scope = await writeScope(rel, env);
   return withMemoryLock(scope.runDir, async () => {
-    const sessionGroup = scope.group === 'origin' && scope.readSessionMode().mode !== 'multi' ? null : scope.group;
+    const sessionGroup = scope.group === 'origin' && !scope.readSessionMode().keyPresent ? null : scope.group;
     const liveRun = await currentRunId({ runDir: scope.runDir, sessionGroup });
     const kinds = scope.group === 'origin' ? [sessionGroup ? 'group' : 'global', 'origin'] : ['group'];
     if (kinds.some(kind => readSyncMarker({ runDir: scope.runDir, kind, currentRunId: liveRun }).held)) {

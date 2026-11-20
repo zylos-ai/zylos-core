@@ -13,7 +13,7 @@ test('A unreadable yields not_restricted with no write, association or access', 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'health-read-error-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const disk = new HealthStore({ zylosDir: root }), value = disk.read(); value.health = 'auth_failed'; disk.write(value);
   const before = fs.readFileSync(disk.file, 'utf8'); let reads = 0, writes = 0, caches = 0, scenes = 0;
-  const owner = new RuntimeHealthCoordinator({ zylosDir: root, readMode: () => 'multi', resolveTargetRuntime: () => 'claude',
+  const owner = new RuntimeHealthCoordinator({ zylosDir: root, resolveTargetRuntime: () => 'claude',
     listScenes: () => { scenes++; return []; }, readNegativeCache: () => { caches++; return null; },
     createStore: () => ({ read: () => { reads++; throw Object.assign(new Error('Permission denied'), { code: 'EACCES' }); }, write: () => { writes++; } }) });
   const request = { version: 1, type: 'start_attempt', requestId: 'sa-1792000000000-123456789abc', runtime: 'claude', sessionGroup: 'telegram:a', runId: randomUUID() };

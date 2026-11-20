@@ -17,7 +17,7 @@ import { routerFixture } from '../../../comm-bridge/scripts/__tests__/helpers/ro
 // scheduler, injected runtime scene/transport boundaries; no runtime is launched.
 async function socketFixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'start-attempt-protocol-')));
-  const health = new RuntimeHealthCoordinator({ zylosDir: root, readMode: () => 'multi',
+  const health = new RuntimeHealthCoordinator({ zylosDir: root,
     resolveTargetRuntime: () => 'claude', listScenes: () => [] });
   const store = health.store('claude'); const state = store.read();
   state.health = 'unavailable'; store.write(state);

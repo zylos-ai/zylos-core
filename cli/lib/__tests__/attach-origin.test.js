@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { CONFIG_FILE } from '../config.js';
 import { attachCommand } from '../../commands/attach.js';
 import { tmuxClientArgs } from '../runtime/tmux-client-args.js';
 
@@ -45,7 +48,7 @@ async function absentAttach(sessionGroup, data = status) {
   try {
     await assert.rejects(attachCommand({ resolve: async () => ({ sessionGroup, runtime: 'codex', live: { tmuxName: 'zylos-group-origin' } }),
       exec: (command, args) => { calls.push([command, args]); throw new Error('absent'); },
-      collect: async () => { assert.equal(sessionGroup, 'origin'); return data; },
+      collect: async () => { assert.ok(sessionGroup === 'origin' || sessionGroup === null && data.sessionMode === 'single'); return data; },
     }), error => error.exitCode === 1);
     assert.equal(calls.length, 1);
     assert.equal(calls[0][0], 'tmux');
@@ -63,10 +66,18 @@ test('absent Origin attach uses target runtime authentication and read errors', 
 test('absent group attach waits for its next message without reading C4', async () => {
   assert.equal(await absentAttach('telegram_group'), 'No active session for telegram_group. Group sessions start when a message for the group arrives.');
 });
-test('single absence keeps the existing initialization advice', async () => {
+test('single absence distinguishes pre-migration advice from native Origin sleep', async t => {
   const text = await absentAttach(null);
   assert.match(text, /No active codex session/);
   assert.doesNotMatch(text, /Origin is asleep|Group sessions start/);
+  // The real mode reader sees only the runner's isolated configuration.
+  const previous = fs.existsSync(CONFIG_FILE) ? fs.readFileSync(CONFIG_FILE) : null;
+  fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+  t.after(() => { if (previous === null) fs.rmSync(CONFIG_FILE); else fs.writeFileSync(CONFIG_FILE, previous); });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify({ session_mode: 'single' }));
+  const native = await absentAttach(null, { ...status, view: 'single', sessionMode: 'single' });
+  assert.match(native, /Origin is asleep/);
+  assert.doesNotMatch(native, /No active codex session|First time|zylos init/);
 });
 
 test('marker-only Origin attach reports waking or authentication and sleeps once cleared', async () => {

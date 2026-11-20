@@ -119,5 +119,4 @@ export async function listGroupTmuxSessions({ exec = execTmuxFile, socketPath, s
   return parseGroupSessionRows(output, groupFromTmuxName);
 }
 
-export { handoffPath, rulesPath, modeSwitchDir, modeSwitchPreviousDir,
-  modeSwitchDonePath, modeSwitchUngroupedPath, modeSwitchGroupPath } from './session-memory-paths.js';
+export { handoffPath, rulesPath } from './session-memory-paths.js';

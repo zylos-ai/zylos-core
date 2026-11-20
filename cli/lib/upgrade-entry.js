@@ -180,8 +180,6 @@ export async function runUpgradeEntry(input, deps = {}) {
 
 // Missing preference preserves the stdout protocol of installed older callers.
 export function outputUpgradeResult(result, { jsonOutput = true } = {}, output = process) {
-  // 0.x callers always receive JSON; stderr carries the session notice as readable text.
-  const sessionNotice = result.success && result.sessionRestart?.data?.result === 'closed_by_system' ? result.sessionRestart.data.message : null;
   if (!jsonOutput) {
     const human = humanResults.get(result) || {};
     // Older previews may leave the changelog's final line unterminated.
@@ -189,7 +187,6 @@ export function outputUpgradeResult(result, { jsonOutput = true } = {}, output =
     if (result.success) {
       output.stdout.write(`zylos-core upgraded: ${result.from} → ${result.to}.\n`);
       if(result.dashboard?.state==='stopped') output.stdout.write(`Dashboard: ${result.dashboard.message}\n`);
-      if(sessionNotice) output.stdout.write(`${sessionNotice}\n`);
     }
     else {
       output.stderr.write(`Error: ${human.running?.error || result.error || 'Core upgrade failed.'}\n`);
@@ -213,7 +210,6 @@ export function outputUpgradeResult(result, { jsonOutput = true } = {}, output =
   // Runtime CLI preparation returns objects; finalization adds plain notices.
   for(const warning of result.warnings || []) output.stderr.write(typeof warning === 'string' ? `Upgrade warning: ${warning}\n` : `Runtime warning (${warning.runtime}): ${jsonOutput ? warning.code + ': ' : ''}${warning.message}\n`);
   for(const warning of result.corePackageWarnings || []) output.stderr.write(`Core package location warning: ${warning.message}\n`);
-  if (jsonOutput && sessionNotice) output.stderr.write(`Session notice: ${sessionNotice}\n`);
   if (jsonOutput) output.stdout.write(JSON.stringify(result) + '\n');
 }
 

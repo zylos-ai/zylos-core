@@ -119,6 +119,20 @@ for (const source of ['startup', 'clear']) for (const sessionGroup of [null, 'or
   });
 }
 
+// Single-session Origin must query only its own unanswered conversations.
+// In-memory store only; the existing policy matrix covers timing and routing.
+test('single-session Origin pending replies are scoped by environment group', async t => {
+  const { db, store } = storeFixture(t);
+  const insert = db.prepare(`INSERT INTO conversations
+    (id,timestamp,direction,channel,endpoint_id,content,status,session_group)
+    VALUES (?,?,'in','telegram','private','question','delivered',?)`);
+  const scope = { mode: 'single', sessionGroup: 'origin' };
+  insert.run(1, new Date(clock - 60000).toISOString(), 'telegram:unrelated');
+  assert.equal(await startupPrompt.readStartupPendingReply(scope, clock, { database: store }), false);
+  insert.run(2, new Date(clock - 60000).toISOString(), 'origin');
+  assert.equal(await startupPrompt.readStartupPendingReply(scope, clock, { database: store }), true);
+});
+
 test('resume does not enqueue another startup prompt', async () => {
   const result = await enqueueStartupPrompt('resume', {
     execFile: async () => assert.fail('resume must not enqueue'),

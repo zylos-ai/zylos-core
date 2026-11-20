@@ -139,11 +139,11 @@ test('a fresh identity read timeout preserves occupancy past the readiness deadl
   assert.equal(f.rows()[0].state, 'running');
 });
 
-test('a slot read failure prevents pruning and single mode never reads occupancy', async t => {
+test('a slot read failure prevents pruning and legacy single never reads occupancy', async t => {
   const f = await fixture(t); let prunes = 0, reads = 0;
   f.service.db = { ...f.store, listSlotOccupancy() { reads++; throw new Error('slots unavailable'); }, pruneSlots() { prunes++; } };
   await f.service.advance(f.context); assert.equal(reads, 1); assert.equal(prunes, 0);
-  f.context.configuration.mode = 'single'; await f.service.advance(f.context);
+  f.context.configuration = { mode: 'single', legacy: true }; await f.service.advance(f.context);
   assert.equal(reads, 1); assert.equal(prunes, 0);
 });
 

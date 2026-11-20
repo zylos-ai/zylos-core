@@ -214,3 +214,22 @@ for(const sourceMode of ['single','multi'])test(`batch observation preserves ${s
   const rejected=await scenes.observeGroup('origin',{sample:{target},scope:sourceMode==='single'?'origin':null});
   assert.equal(rejected.ready,false);
 });
+
+// Boundary: real private tmux environment and READY, no authenticated runtime or
+// services. Run for Origin scope/readiness changes; unrelated changes may skip.
+// readyTmuxTarget owns its socket/process/database cleanup; the official runner
+// isolates HOME, ZYLOS_DIR, PM2_HOME and a short TMPDIR.
+for (const scoped of [true,false]) for (const mode of ['single','multi']) {
+  const runtime = 'claude';
+  test(`Origin observations derive ${scoped?'group':'global'} scope from its ${runtime} environment in ${mode}`, {timeout:15000}, async t => {
+    const f = readyTmuxTarget(t, {prefix:'origin-scope-',mode:scoped?'multi':'single',runtime});
+    const scenes = service(f, {readMode:()=>({mode})});
+    for (const observed of [await scenes.observeGroup('origin'), await scenes.readIdentity('origin'),
+      (await scenes.readIdentities(['origin'])).get('origin'), (await scenes.observe({configuration:{mode}}))[0]]) {
+      assert.equal(observed.ready, true); assert.equal(observed.runId, 'run-1'); assert.equal(observed.runtime,runtime);
+      assert.equal(observed.sourceScope, scoped?'origin':null);
+    }
+    assert.equal((await scenes.bindTarget(await scenes.readIdentity('origin'))).expectedRunId, 'run-1');
+    t.diagnostic(JSON.stringify({socket:f.socketPath,root:f.root,mode,scoped}));
+  });
+}

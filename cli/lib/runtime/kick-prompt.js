@@ -10,7 +10,7 @@
 // two would require persisted state plus proof that a launch actually
 // succeeded before committing it (see the #757 review history) — complexity
 // nothing consumes, since the authoritative first-boot signal is the
-// onboarding state in memory, not the kick text. And it stays one sentence
+// onboarding pending marker, not the kick text. And it stays one sentence
 // because the kick only fires the hook — the real guidance belongs to the
 // hook-injected startup context, and a preachy prompt would itself skew the
 // agent's behavior.

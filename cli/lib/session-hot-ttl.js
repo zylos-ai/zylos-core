@@ -22,7 +22,7 @@ export function resolveSessionHotTtl(config = {}, env = process.env) {
     seconds,
     minutes: seconds / 60,
     source: environmentValue !== undefined ? 'environment' : configuredValue !== undefined ? 'config' : 'default',
-    read_only: environmentSet || mode !== 'multi',
+    read_only: environmentSet || config.session_mode === undefined || mode === null,
     environment_set: environmentSet,
     environment_valid: environmentValue !== undefined,
     min_minutes: HOT_TTL_MIN_MINUTES,

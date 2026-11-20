@@ -319,18 +319,20 @@ test('CLI emits JSON for success, conflicts and argument errors', t => {
 });
 
 test('CLI observes the actual single or multi runtime for both Origin marker files', async t => {
-  for (const mode of ['single', 'multi']) for (const kind of ['sync', 'origin']) {
+  for (const mode of ['legacy', 'single', 'multi']) for (const kind of ['sync', 'origin']) {
     await t.test(`${mode} ${kind}`, t => {
       const f = fixture(t);
       fs.mkdirSync(path.join(f.env.ZYLOS_DIR, '.zylos'));
-      fs.writeFileSync(path.join(f.env.ZYLOS_DIR, '.zylos/config.json'), JSON.stringify({ session_mode: mode }));
-      marker(f, 'origin', kind === 'origin' ? 'origin' : mode === 'multi' ? 'group' : 'global', {
-        runId: mode === 'multi' ? 'origin-live' : 'single-live',
+      fs.writeFileSync(path.join(f.env.ZYLOS_DIR, '.zylos/config.json'), JSON.stringify(mode === 'legacy' ? {} : { session_mode: mode }));
+      marker(f, 'origin', kind === 'origin' ? 'origin' : mode === 'legacy' ? 'global' : 'group', {
+        runId: mode === 'legacy' ? 'single-live' : 'origin-live',
       });
-      const result = cli(f, { ids: { '*': 'single-live', origin: 'origin-live' } });
-      assert.equal(result.status, 2, result.stderr);
-      assert.equal(result.json.error.code, 'SYNC_BUSY');
-      assert.equal(fs.readFileSync(f.file, 'utf8'), 'original\n');
+      for (const args of [undefined, ['--append', '--path', 'identity.md']]) {
+        const result = cli(f, { args, ids: { '*': 'single-live', origin: 'origin-live' } });
+        assert.equal(result.status, 2, result.stderr);
+        assert.equal(result.json.error.code, 'SYNC_BUSY');
+        assert.equal(fs.readFileSync(f.file, 'utf8'), 'original\n');
+      }
     });
   }
 });

@@ -200,7 +200,9 @@ test('watermark, foreign groups, substrings, malformed and nonmanaged annotation
   const rows = [
     f.core.prepare('SELECT * FROM conversations WHERE id=?').get(prior.id),
     f.add(annotation, { localId: f.b.localId }),
-    f.add(annotation, { group: `dash:${f.b.localId}` }),
+    // Conversations are identified by endpoint, not recording group: another
+    // conversation's row cannot link even when recorded under this conversation's group.
+    f.add(annotation, { localId: f.b.localId, group: `dash:${f.a.localId}` }),
     f.add('prefix ' + annotation),
     f.add(annotation.slice(0, -1)),
     f.add('[attachment:file /outside/report.txt name="report.txt" 16B]'),

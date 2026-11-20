@@ -1,18 +1,19 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { requestRuntimeRestart, enqueueSingleUpgradeExit } from '../request-runtime-restart.js';
-import { SINGLE_UPGRADE_RESTART_CHECK_PROMPT } from '../../../skills/activity-monitor/scripts/reclaim-prompts.js';
+import { requestRuntimeRestart } from '../request-runtime-restart.js';
 
-const base={now:()=>100,deadlineAt:1000,requestId:'producer',readMode:()=>({mode:'multi'}),readTransition:()=>null,
-  enqueueExit:()=>{throw new Error('wrong fallback');}};
-test('producer uses supervisor in multi and transition, single exit only in steady single',async()=>{
-  const sent=[];const send=async(...args)=>{sent.push(args);return {kind:'accepted',sent:true,reply:{result:'accepted',runCount:3}};};
-  for(const [mode,transition] of [['multi',null],['single',{phase:'gating'}],[null,{phase:'gating'}]]) {
-    const result=await requestRuntimeRestart({...base,readMode:()=>({mode}),readTransition:()=>transition,send});assert.equal(result.data.runCount,3);
-  }
-  assert.equal(sent.length,3);assert.deepEqual(sent[0],[{version:1,type:'restart_all',requestId:'producer',reason:'upgrade'},{deadlineAt:1000}]);
-  let exits=0;const single=await requestRuntimeRestart({...base,readMode:()=>({mode:'single'}),send:()=>{throw new Error('must not send');},enqueueExit:()=>{exits++;return 'control 1';}});
-  assert.equal(exits,1);assert.equal(single.data.result,'exit_enqueued');
+const base = { now: () => 100, deadlineAt: 1000, requestId: 'producer' };
+test('the restart producer submits one restart_all and returns an empty completion', async () => {
+  let submits = 0;
+  const result = await requestRuntimeRestart({ ...base, send: (request, options) => {
+    submits++;
+    assert.deepEqual(request, { version: 1, type: 'restart_all', requestId: 'producer', reason: 'upgrade' });
+    assert.equal(options.deadlineAt, 1000);
+    return { kind: 'accepted', reply: { result: 'done_empty', runCount: 0 } };
+  } });
+  assert.equal(submits, 1);
+  assert.equal(result.data.result, 'done_empty');
+  assert.equal(result.data.runCount, 0);
 });
 test('producer never retries explicit refusal, connect failure or U; lookup reports facts only',async()=>{
   for(const kind of ['rejected','connect_failed','no_reply','invalid_reply','timeout','deadline_exceeded']) {
@@ -25,12 +26,11 @@ test('producer never retries explicit refusal, connect failure or U; lookup repo
     }
   }
 });
-test('producer does not downgrade transition races or invalid config to single exit',async()=>{
-  await assert.rejects(requestRuntimeRestart({...base,readMode:()=>{throw Object.assign(new Error('config'),{code:'CONFIG_UNREADABLE'});}}),{code:'CONFIG_UNREADABLE'});
-  await assert.rejects(requestRuntimeRestart({...base,readMode:()=>({mode:'single'}),enqueueExit:()=>{throw Object.assign(new Error('gate'),{code:'TRANSITION_OPEN'});}}),{code:'TRANSITION_OPEN'});
-  let reads=0;const expired=await requestRuntimeRestart({...base,now:()=>1000,readMode:()=>{reads++;}});assert.equal(expired.error.code,'deadline_exceeded');assert.equal(reads,0);
+test('expired submission budgets do not submit', async () => {
+  const result = await requestRuntimeRestart({ ...base, now: () => 1000,
+    send: () => assert.fail('expired requests do not submit') });
+  assert.equal(result.error.code, 'deadline_exceeded');
 });
-
 test('upgrade restart submission retries only connects with a 30s total budget and 1s spacing',async()=>{
   for (const afterServiceRestart of [false,true]) {
     let options;
@@ -49,15 +49,6 @@ test('upgrade restart submission uses its own 30 second window regardless of an 
       send:async(_request,options)=>{deadline=options.deadlineAt;return {kind:'connect_failed',sent:false};}});
     assert.equal(deadline,expected);
   }
-});
-
-test('upgrade submission window starts after the ordinary mode and transition reads',async()=>{
-  let now=100;
-  const result=await requestRuntimeRestart({...base,now:()=>now,afterServiceRestart:true,
-    readMode:()=>{now+=5000;return {mode:'multi'};},readTransition:()=>{now+=5000;return null;},
-    send:async(_request,options)=>{assert.equal(options.deadlineAt,40100);assert.equal(Object.hasOwn(options,'replyMaxMs'),false);return {kind:'accepted',sent:true,reply:{result:'accepted',runCount:1}};}
-  });
-  assert.equal(result.ok,true);
 });
 
 test('supervisor upgrade retries never repeat a connected uncertain or refused request',async()=>{
@@ -86,7 +77,7 @@ test('supervisor post-upgrade submission reaches a real socket that starts liste
     });
   });
   t.after(async()=>{for(const peer of peers)peer.destroy();if(server.listening)await new Promise(resolve=>server.close(resolve));fs.rmSync(root,{recursive:true,force:true});});
-  const result=await requestRuntimeRestart({readMode:()=>({mode:'multi'}),readTransition:()=>null,afterServiceRestart:true,
+  const result=await requestRuntimeRestart({afterServiceRestart:true,
     requestId:'delayed-upgrade',send:(request,options)=>submit(request,{...options,socketPath,connect:opts=>{
       attempts++;const socket=net.createConnection(opts);
       // Start the listener only after the first connection has actually failed.
@@ -95,36 +86,4 @@ test('supervisor post-upgrade submission reaches a real socket that starts liste
     }})});
   assert.equal(result.ok,true);assert.equal(result.data.runCount,2);assert.equal(attempts,2);
   assert.equal(connections,1);assert.equal(requests.length,1);assert.equal(requests[0].requestId,'delayed-upgrade');
-});
-
-test('single upgrade queues one check with a 60 second acknowledgment deadline before /exit',async()=>{
-  const runs=[];
-  const controls=await enqueueSingleUpgradeExit({loadPrompt:async()=>SINGLE_UPGRADE_RESTART_CHECK_PROMPT,
-    run:async args=>{runs.push(args);return {id:runs.length+40,supersededCount:0};}});
-  assert.deepEqual(runs,[
-    ['--content',SINGLE_UPGRADE_RESTART_CHECK_PROMPT,'--priority','1','--block-queue-until-idle','--ack-deadline','60'],
-    ['--content','/exit','--priority','1','--block-queue-until-idle','--no-ack-suffix'],
-  ]);
-  assert.deepEqual(controls,{checkControlId:41,exitControlId:42});
-});
-
-test('single upgrade queues nothing when the check prompt cannot be loaded',async()=>{
-  let runs=0;
-  await assert.rejects(enqueueSingleUpgradeExit({loadPrompt:async()=>{throw Object.assign(new Error('missing'),{code:'CHECK_PROMPT_UNAVAILABLE'});},run:async()=>{runs++;}}),
-    {code:'CHECK_PROMPT_UNAVAILABLE'});
-  assert.equal(runs,0);
-});
-
-test('single upgrade returns once both controls are queued, inside every caller deadline',async()=>{
-  // The ordinary producer has a 10 second budget and the post-upgrade call none; queueing takes no part of the
-  // 60 second check window, so neither reports deadline_exceeded even when queueing itself is slow.
-  for(const afterServiceRestart of [false,true]) {
-    let now=100;const runs=[];
-    const result=await requestRuntimeRestart({...base,now:()=>now,deadlineAt:undefined,afterServiceRestart,readMode:()=>({mode:'single'}),
-      send:()=>{throw new Error('must not send');},
-      enqueueExit:()=>enqueueSingleUpgradeExit({loadPrompt:async()=>SINGLE_UPGRADE_RESTART_CHECK_PROMPT,
-        run:async args=>{runs.push(args[1]);now+=6000;return {id:runs.length};}})});
-    assert.deepEqual(result,{ok:true,data:{result:'exit_enqueued',mode:'single',checkControlId:1,exitControlId:2}});
-    assert.deepEqual(runs,[SINGLE_UPGRADE_RESTART_CHECK_PROMPT,'/exit']);
-  }
 });

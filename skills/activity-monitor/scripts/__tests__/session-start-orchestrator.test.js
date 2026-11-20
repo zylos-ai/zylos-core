@@ -341,13 +341,13 @@ describe('session-start-orchestrator', () => {
     assert.equal(calls[0][2].killSignal, 'SIGKILL');
   });
 
-  it('detects onboarding pending from state.md content', () => {
-    assert.equal(isOnboardingPending({
-      readFileSync: () => '# Active State\n\n## Onboarding\n- Status: pending\n',
-    }), true);
-    assert.equal(isOnboardingPending({
-      readFileSync: () => '# Active State\n\n## Onboarding\n- Status: completed\n',
-    }), false);
+  it('detects onboarding pending solely from the marker existence', () => {
+    for (const present of [true, false]) {
+      assert.equal(isOnboardingPending({
+        pendingPath: '/isolated/.zylos/onboarding-pending',
+        existsSync: file => { assert.equal(file, '/isolated/.zylos/onboarding-pending'); return present; },
+      }), present);
+    }
   });
 
   it('skips startup prompt enqueue while onboarding is pending', async () => {
@@ -465,7 +465,7 @@ describe('session-start-orchestrator', () => {
 // The injection-order contract used to be the legacy assertions above
 // ("memory then C4" inside one process). With the shard split, the single
 // authoritative order is the registry chain
-// identity→custom→references→c4-conversations: shards run as
+// identity→custom→references→c4-conversations→onboarding: shards run as
 // independent hook processes and the flag chain — not process scheduling —
 // decides what lands in context first. These tests pin that contract at the
 // whole-chain level (shard-mode.test.js covers the per-link mechanics).
@@ -476,12 +476,12 @@ describe('authoritative injection order (shard chain)', () => {
       ...['identity', 'custom', 'references'].map(name => names.indexOf(name)));
     const firstC4 = Math.min(
       ...['c4-conversations'].map(name => names.indexOf(name)));
-    assert.deepEqual(names, ['identity', 'custom', 'references', 'c4-conversations']);
+    assert.deepEqual(names, ['identity', 'custom', 'references', 'c4-conversations', 'onboarding']);
     assert.ok(lastMemory >= 0 && firstC4 > lastMemory,
       `chain ${names.join('→')} must keep memory shards ahead of C4 shards`);
   });
 
-  it('four core shards launched concurrently in reverse order inject in chain order', async () => {
+  it('five core shards launched concurrently in reverse order inject in chain order', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shard-chain-order-'));
     const outPath = path.join(tmpDir, 'stdout.txt');
     const fd = fs.openSync(outPath, 'w+');

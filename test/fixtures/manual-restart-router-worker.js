@@ -4,12 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createDispatcher } from '../../../../comm-bridge/scripts/router/factory.js';
-import { createStore } from '../../../../comm-bridge/scripts/c4-v2-store.js';
-import { createSessionReader } from '../../../../../cli/lib/session-state-reader-async.js';
-import { createSessionOps } from '../../../../../cli/lib/runtime/session-ops.js';
-import { launchSession } from '../../../../../cli/lib/runtime/launch-flow.js';
-const Database = createRequire(new URL('../../../../comm-bridge/package.json', import.meta.url))('better-sqlite3');
+import { createDispatcher } from '../../skills/comm-bridge/scripts/router/factory.js';
+import { createStore } from '../../skills/comm-bridge/scripts/c4-v2-store.js';
+import { createSessionReader } from '../../cli/lib/session-state-reader-async.js';
+import { createSessionOps } from '../../cli/lib/runtime/session-ops.js';
+import { launchSession } from '../../cli/lib/runtime/launch-flow.js';
+const Database = createRequire(new URL('../../skills/comm-bridge/package.json', import.meta.url))('better-sqlite3');
 const [root, socketPath, binary, mode, scenario] = process.argv.slice(2);
 const database = new Database(path.join(root, 'comm-bridge/c4.db'));
 const config = { runtime: 'claude', session_mode: mode };
@@ -41,7 +41,7 @@ const router = createDispatcher({ env, db, now, readSessionMode: () => ({ mode, 
   readRuntimeHealth: () => ({ missing: true }),
   session,
   sleep: async () => {}, notifyDelivered: data => trace('notify', data),
-  prepareSingle: async () => {}, findLegacySessions: async () => [], advanceLegacy: async () => {},
+  findLegacySessions: async () => [], advanceLegacy: async () => {},
   handleExpired: async () => {}, formatConversation: row => row.content,
   diagnostic: (event, fields) => trace('diagnostic', { event, ...fields }), diagnostics: { maintain() {} }, log: message => trace('log', { message }),
 }, { tmux, readyTimeoutMs: 100, delivery: { periodicEnabled: false, verifyWaitMs: 1, verifyAttempts: 1, captureEnabled: false } });

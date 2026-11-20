@@ -173,3 +173,47 @@ test('canonical conversation detail preserves explicit single-session null scope
   assert.equal(conversationDetail({ presence: 'running' }).sessionGroup, 'origin', 'an omitted scope keeps the fixture default');
   assert.equal(conversationDetail({ sessionGroup: 'origin', presence: 'running' }).sessionGroup, 'origin');
 });
+
+// In single mode the Origin conversation shows other conversations' and external
+// chats' rows; each row names its channel, and only Origin's own rows can be
+// quoted or answered there.
+const protocol = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/c4-content-protocol.json', import.meta.url), 'utf8'));
+const mixedRow = (id, direction, channel, endpoint, content, extra = {}) => ({ id, direction, channel, endpoint_id: endpoint,
+  session_group: 'origin', content, timestamp: new Date(1_800_000_000_000 + id * 1000).toISOString(), status: 'delivered',
+  deliveryState: direction === 'in' ? 'delivered' : 'stored', preview: content, attachments: [], ...extra });
+test('Origin rows name their channel and only Origin\'s own rows are quotable or answerable', { timeout: 2000 }, async t => {
+  const question = protocol.valid.find(item => item.name === 'single').content;
+  const messages = [
+    mixedRow(1, 'in', 'dashboard', 'origin', 'owner asks Origin', { conversationName: 'Origin' }),
+    mixedRow(2, 'in', 'dashboard', 'x1', 'queued in X', { conversationName: 'Project X' }),
+    mixedRow(3, 'out', 'dashboard', 'x1', question, { conversationName: 'Project X' }),
+    mixedRow(4, 'out', 'dashboard', 'y1', 'to an unnamed conversation', { conversationName: null }),
+    mixedRow(5, 'in', 'telegram', '-100|thread:7', '[TG GROUP:Team] from Telegram\n[MEDIA:/private/photo.jpg]'),
+    mixedRow(6, 'out', 'telegram', '-100|thread:7', 'Origin answers Telegram'),
+  ];
+  const f = originPage(t, { mode: 'single', messages });
+  await f.page.openGroup('origin'); await tick(); await tick();
+  const article = id => f.root.querySelector(`article[data-message-id="${id}"]`);
+  const author = id => article(id).querySelector('.chat-message-author').textContent;
+  const fill = (key, params) => Object.entries(params).reduce((text, [name, value]) => text.replaceAll(`{${name}}`, value), f.translations[key]);
+  assert.deepEqual(messages.map(row => author(row.id)), [
+    fill('chat.page.dashboardRow', { channel: 'Dashboard', name: 'Origin' }),
+    fill('chat.page.dashboardRow', { channel: 'Dashboard', name: 'Project X' }),
+    fill('chat.page.dashboardRow', { channel: 'Dashboard', name: 'Project X' }),
+    fill('chat.page.dashboardRow', { channel: 'Dashboard', name: f.translations['chat.unnamed'] }),
+    fill('chat.external.received', { channel: 'Telegram' }),
+    fill('chat.external.sent', { channel: 'Telegram' }),
+  ]);
+  const quote = id => article(id).querySelector('.conversation-quote-button');
+  assert.deepEqual(messages.map(row => quote(row.id).hidden), [false, true, true, true, true, true]);
+  const card = article(3).querySelector('.chat-question');
+  assert.ok(card, 'the question is shown');
+  assert.ok(allNodes(card).some(node => node.textContent === f.translations['chat.question.otherConversationReadOnly']));
+  assert.equal(allNodes(card).some(node => node.tagName === 'BUTTON' && !node.disabled), false, 'no answer control is enabled');
+  assert.equal(article(5).querySelector('.chat-message-status').hidden, true, 'external rows show no Dashboard delivery state');
+  const telegramBody = article(5).querySelector('.chat-message-text').textContent;
+  assert.equal(telegramBody, `[TG GROUP:Team] from Telegram\n${f.translations['chat.attachment.externalMedia']}`,
+    'an external chat media line shows the original-channel label');
+  assert.equal(telegramBody.includes('/private/photo.jpg'), false, 'the local media path is not shown');
+  assert.equal(f.root.querySelector('.conversation-input').disabled, false, 'the Origin conversation stays writable');
+});

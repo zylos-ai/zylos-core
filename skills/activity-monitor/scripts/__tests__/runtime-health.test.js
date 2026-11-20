@@ -23,7 +23,7 @@ function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(),'runtime-health-'));
   t.after(() => fs.rmSync(root,{recursive:true,force:true}));
   let clock = 1792000000000, scenes = [], probe = false, cache = null;
-  const options = {zylosDir:root,now:()=>clock,readMode:()=> 'multi',resolveTargetRuntime:()=> 'claude',
+  const options = {zylosDir:root,now:()=>clock,resolveTargetRuntime:()=> 'claude',
     listScenes:()=>scenes,probeInFlight:()=>probe,readNegativeCache:()=>cache,clearNegativeCache:()=>{cache=null;}};
   const health = new RuntimeHealthCoordinator(options);
   const state = health.store('claude').read(); state.health = 'unavailable'; state.reason='runtime_unavailable'; health.store('claude').write(state);

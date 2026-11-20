@@ -314,7 +314,7 @@ export function fleetStateFromObjects(instance, counts, usage, running) {
   const count = value => Number.isSafeInteger(value) && value >= 0;
   const cost = value => value === null || typeof value === 'number' && Number.isFinite(value) && value >= 0;
   const mode = instance?.session_mode?.sessionMode;
-  if (!instance || ![null, 'single', 'multi'].includes(mode) ||
+  if (!instance || ![null, 'single', 'multi', 'unreadable'].includes(mode) ||
       typeof counts?.listKnown !== 'boolean' || !counts?.running?.states || !count(counts.running.total) ||
       stateKeys.some(key => !count(counts.running.states[key])) ||
       stateKeys.reduce((sum, key) => sum + counts.running.states[key], 0) !== counts.running.total ||
@@ -332,7 +332,7 @@ export function fleetStateFromObjects(instance, counts, usage, running) {
     flags: row.flags,
   }));
   return { agent: instance.agent, session_mode: mode,
-    state: mode === null || counts.listKnown === false ? 'UNKNOWN' : states.working > 0 ? 'BUSY' : states.unknown > 0 ? 'UNKNOWN' : 'IDLE',
+    state: !['single', 'multi'].includes(mode) || counts.listKnown === false ? 'UNKNOWN' : states.working > 0 ? 'BUSY' : states.unknown > 0 ? 'UNKNOWN' : 'IDLE',
     supervisor_paused: instance.supervisorPaused,
     runtime_info: {
       zylos_update: instance.versions?.zylos?.update ?? null,

@@ -70,7 +70,7 @@ test('missing pool/Sync dependencies preserve independent metrics and observatio
 });
 
 test('cutover refreshes mode before lifecycle actions; unreadable does not reuse stale mode',async()=>{
- let mode='single',bad=false;const f=fixture({readConfiguration:async()=>{if(bad)throw new Error('CONFIG_UNREADABLE');return {mode};}});
+ let mode='single',bad=false;const f=fixture({readConfiguration:async()=>{if(bad)throw new Error('CONFIG_UNREADABLE');return {mode,legacy:mode==='single'};}});
  await f.loop.start();assert.equal(f.calls.includes('ttl'),false);f.calls.length=0;
  mode='multi';await f.loop.tick();assert.ok(f.calls.includes('ttl'));assert.ok(f.calls.includes('evict'));f.calls.length=0;
  bad=true;await f.loop.tick();assert.deepEqual(f.calls,['error:round']);f.calls.length=0;
@@ -208,24 +208,60 @@ test('ending reconciliation follows exit cleanup and precedes publication and re
   await f.loop.stop();
 });
 
-test('the post-migration transition reread reports reconciliation failure before ending the round',async t=>{
+test('a failed automatic migration reread ends the pre-migration round without reconciliation',async t=>{
  let reads=0,migrations=0;const failure=new Error('transition reread failed'),reported=[];
- const f=fixture({readConfiguration:async()=>({mode:'multi',legacy:true}),
+ const f=fixture({readConfiguration:async()=>({mode:'single',legacy:true}),
   getModeTransition:async()=>{if(++reads===2)throw failure;return null;},
   advanceAutomaticMigration:async()=>{migrations++;},reconciliationReadFailed:async error=>reported.push(error)});
  t.after(()=>f.loop.stop());
  await f.loop.start();
- assert.equal(reads,2);assert.equal(migrations,1);assert.deepEqual(reported,[failure]);
+ assert.equal(reads,2);assert.equal(migrations,1);assert.deepEqual(reported,[]);
  assert.ok(f.calls.includes('error:round'));assert.equal(f.calls.includes('exits'),false);
  assert.equal(f.timers.length,1);
 });
 
-test('single-mode authority failures skip the reconciliation failure callback',async t=>{
- const reported=[];const f=fixture({readConfiguration:async()=>({mode:'single'}),
+test('legacy authority failures skip the reconciliation failure callback',async t=>{
+ const reported=[];const f=fixture({readConfiguration:async()=>({mode:'single',legacy:true}),
   getModeTransition:async()=>{throw new Error('single authority unavailable');},
   reconciliationReadFailed:async error=>reported.push(error)});
  t.after(()=>f.loop.stop());
  await f.loop.start();await f.loop.tick();
  assert.deepEqual(reported,[]);assert.equal(f.timers.length,2);
  assert.equal(f.calls.filter(item=>item==='error:round').length,2);
+});
+
+for (const legacy of [false,true]) test(`single loop ${legacy?'excludes legacy TTL':'runs Origin TTL without eviction'}`, async () => {
+  const f = fixture({readConfiguration:async()=>({mode:'single',legacy}),observe:async()=>[{sessionGroup:'origin'}]});
+  await f.loop.start();
+  assert.equal(f.calls.includes('ttl'), !legacy); assert.equal(f.calls.includes('evict'), false);
+  await f.loop.stop();
+});
+for (const legacy of [false,true]) test(`single authority failure ${legacy?'retains legacy diagnostics':'reports reconciliation unavailable'}`, async () => {
+  let reported=0;
+  const f = fixture({readConfiguration:async()=>({mode:'single',legacy}),
+    listDrainFences:async()=>{throw new Error('unavailable');},reconciliationReadFailed:()=>{reported++;}});
+  await f.loop.start(); assert.equal(reported,legacy?0:1); await f.loop.stop();
+});
+
+test('global handover precedes ordinary lifecycle work and an open transition suppresses it', async () => {
+  let transition = null;
+  const f = fixture({ getModeTransition: async () => transition,
+    advanceGlobalMemoryHandover: async () => f.calls.push('handover') });
+  await f.loop.start();
+  assert.ok(f.calls.indexOf('handover') < f.calls.indexOf('observe'));
+  assert.ok(f.calls.indexOf('handover') < f.calls.indexOf('manual'));
+  f.calls.length = 0; transition = { run_id: 'switch' };
+  await f.loop.tick();
+  assert.equal(f.calls.includes('handover'), false);
+  assert.equal(f.calls.includes('transition'), true);
+  await f.loop.stop();
+});
+
+test('global handover failure reports its phase and preserves ordinary delivery observations', async () => {
+  const f = fixture({ advanceGlobalMemoryHandover: async () => { throw new Error('unavailable'); } });
+  await f.loop.start();
+  assert.ok(f.calls.includes('error:global-memory-handover'));
+  assert.ok(f.calls.includes('observe'));
+  assert.ok(f.calls.includes('probe:origin'));
+  await f.loop.stop();
 });

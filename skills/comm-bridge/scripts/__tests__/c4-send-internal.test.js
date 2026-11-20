@@ -83,12 +83,10 @@ test('an installed component can receive an internal message in a new group',asy
   assertPair(f,'new group','chat:a','chat:missing');
 });
 
-test('origin and inherited background group work without a mode or target-health gate',async t=>{
+test('origin and inherited background group work without a target-health gate',async t=>{
   const f=setup(t);
-  // A late Origin retains its old environment even after a single cutover.
-  fs.writeFileSync(path.join(f.root,'.zylos/config.json'),JSON.stringify({session_mode:'single',runtime:'claude'}));
-  const result=await run(f,['internal','chat:b'],'from inherited Origin\n',{ZYLOS_SESSION_GROUP:'origin'});
-  assert.equal(result.code,0,result.stderr);assertPair(f,'from inherited Origin','origin','chat:b',null);
+  const result=await run(f,['internal','chat:b'],'from Origin\n',{ZYLOS_SESSION_GROUP:'origin'});
+  assert.equal(result.code,0,result.stderr);assertPair(f,'from Origin','origin','chat:b',null);
   const g=setup(t);const toOrigin=await run(g,['internal','origin'],'origin target\n');assert.equal(toOrigin.code,0,toOrigin.stderr);assertPair(g,'origin target','chat:a','origin');
 });
 
@@ -143,4 +141,35 @@ test('concurrent real CLI A-to-B and B-to-A commit whole pairs and monotonic hea
   const rows=internalRows(f);assert.equal(rows.length,4);
   for(let i=0;i<4;i+=2){assert.equal(rows[i].direction,'out');assert.equal(rows[i+1].direction,'in');assert.equal(rows[i+1].id,rows[i].id+1);assert.equal(rows[i].endpoint_id,rows[i+1].session_group);assert.equal(rows[i].session_group,rows[i+1].endpoint_id);}
   for(const group of ['chat:a','chat:b'])assert.equal(f.db.prepare('SELECT head_id FROM group_heads WHERE session_group=?').get(group).head_id,Math.max(...rows.filter(r=>r.session_group===group).map(r=>r.id)));
+});
+
+// Real CLI with an isolated ZYLOS_DIR and config.json; the dispatch guard stays loaded.
+test('native single refuses Origin internal messages and writes nothing',async t=>{
+  const f=setup(t);
+  fs.writeFileSync(path.join(f.root,'.zylos/config.json'),JSON.stringify({session_mode:'single',runtime:'claude'}));
+  const before=snapshot(f);
+  for(const target of ['chat:b','chat:new']){
+    const result=await run(f,['internal',target],'from Origin\n',{ZYLOS_SESSION_GROUP:'origin'});
+    assert.equal(result.code,1);assert.match(result.stderr,/^Error: INTERNAL_SINGLE_MODE: .*only the Origin thread runs/);
+    assert.deepEqual(snapshot(f),before);
+  }
+});
+
+test('an unreadable mode lets Origin send under multi rules with one warning line',async t=>{
+  const f=setup(t);
+  fs.writeFileSync(path.join(f.root,'.zylos/config.json'),'{broken');
+  const result=await run(f,['internal','chat:b'],'from Origin\n',{ZYLOS_SESSION_GROUP:'origin'});
+  assert.equal(result.code,0,result.stderr);assertPair(f,'from Origin','origin','chat:b',null);
+  assert.equal(result.stderr.trimEnd().split('\n').filter(line=>line.startsWith('[C4] WARNING: cannot read session_mode')).length,1);
+});
+
+test('a missing config and a non-Origin sender never read or warn about the mode',async t=>{
+  const f=setup(t);
+  fs.rmSync(path.join(f.root,'.zylos/config.json'));
+  const fromOrigin=await run(f,['internal','chat:b'],'no config\n',{ZYLOS_SESSION_GROUP:'origin'});
+  assert.equal(fromOrigin.code,0,fromOrigin.stderr);assert.equal(fromOrigin.stderr,'');
+  const g=setup(t);
+  fs.writeFileSync(path.join(g.root,'.zylos/config.json'),'{broken');
+  const fromGroup=await run(g,['internal','chat:b'],'group sender\n');
+  assert.equal(fromGroup.code,0,fromGroup.stderr);assert.equal(fromGroup.stderr,'');assertPair(g,'group sender');
 });

@@ -13,13 +13,13 @@ const WAIT_MS = 30 * 60 * 1000;
 // bounded in-memory inputs. No dispatcher, model API, tmux or service is used.
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'recovery-busy-'));
-  let now = 1800000000000, mode = 'multi', transition = null, matches = {};
+  let now = 1800000000000, transition = null, matches = {};
   let scenes = [], nextId = 1;
   const activity = new Map(), controls = [], stops = [], fences = new Set(), errors = [];
   const coordinator = new RuntimeHealthCoordinator({ zylosDir: root, now: () => now,
-    readMode: () => mode, resolveTargetRuntime: () => 'claude', listScenes: () => scenes });
+    resolveTargetRuntime: () => 'claude', listScenes: () => scenes });
   const observer = new SupervisorHealthObserver({ coordinator, now: () => now,
-    readMode: () => mode, listScenes: () => scenes,
+    listScenes: () => scenes,
     readIdentity: group => scenes.find(scene => scene.sessionGroup === group),
     readState: scene => activity.get(scene.runId), readScreen: () => '', matchScreen: () => matches,
     getModeTransition: () => transition, getDrainFence: group => fences.has(group),
@@ -56,7 +56,7 @@ function fixture(t) {
   };
   return { root, coordinator, observer, controls, stops, fences, add, state, setHealth, prepare,
     now: () => now, advance: ms => { now += ms; },
-    scenes: () => scenes, setScenes: value => { scenes = value; }, setMode: value => { mode = value; },
+    scenes: () => scenes, setScenes: value => { scenes = value; },
     setTransition: value => { transition = value; }, setMatches: value => { matches = value; },
     health: () => coordinator.store('claude').read(),
     bytes: () => fs.readFileSync(coordinator.store('claude').file, 'utf8'),
@@ -308,18 +308,17 @@ for (const state of ['busy', 'idle']) {
   });
 }
 
-test('single recovery and unordered hook verification ignore busy activity and retain baseline deadlines', { timeout: 5000 }, async t => {
-  for (const kind of ['single', 'hook']) for (const processRunning of [true, false]) await t.test(
-    `${kind} with processRunning=${processRunning}`, { timeout: 5000 }, async t => {
+test('unordered hook verification ignores busy activity and retains its deadline', { timeout: 5000 }, async t => {
+  for (const processRunning of [true, false]) await t.test(
+    `verification with processRunning=${processRunning}`, { timeout: 5000 }, async t => {
     const f = fixture(t), scene = f.add('origin', { tools: [{ id: 'foreground' }] });
     scene.processRunning = processRunning;
-    if (kind === 'single') f.setMode('single');
-    const result = kind === 'hook' ? f.observer.requestVerification('claude') : f.observer.requestProbe('claude');
+    const result = f.observer.requestVerification('claude');
     await Promise.all([...f.observer.preparations]);
-    const row = f.controls[0]; assert.ok(row); assert.equal(row.sessionGroup, kind === 'single' ? null : 'origin');
+    const row = f.controls[0]; assert.ok(row); assert.equal(row.sessionGroup, 'origin');
     assert.equal(row.targetBinding.runId, scene.runId);
-    assert.equal(row.ackDeadlineAt, f.now() / 1000 + (kind === 'single' ? 120 : 300));
-    row.status = 'timeout'; f.advance(kind === 'single' ? 120000 : 300000); await f.observer.tick();
+    assert.equal(row.ackDeadlineAt, f.now() / 1000 + 300);
+    row.status = 'timeout'; f.advance(300000); await f.observer.tick();
     assert.equal((await result).classification, 'other'); assert.equal(f.stops.length, 1);
     assert.equal(f.waitAt(), undefined);
   });

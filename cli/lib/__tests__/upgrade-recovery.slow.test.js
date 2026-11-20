@@ -49,11 +49,14 @@ async function fixture(t,{missing=false,wal=false,formatVersion=3,dashboard=fals
  // webConsole=false is the 1.0 layout: neither the Web Console skill nor its database.
  const owners=CORE_DATABASES.filter(item=>webConsole||item.owner!=='web-console');
  const root=fs.realpathSync(fs.mkdtempSync(path.join(process.env.UPGRADE_RECOVERY_TEST_TMPDIR || os.tmpdir(),'upgrade-recovery-')));
- const previousHome=process.env.HOME,previousPm2Home=process.env.PM2_HOME;
+ const previousHome=process.env.HOME,previousPm2Home=process.env.PM2_HOME,previousPackageRoot=process.env.ZYLOS_PACKAGE_ROOT;
  process.env.HOME=root;process.env.PM2_HOME=path.join(root,'.pm2');
+ // Copied schemas and recovery subprocesses must use this candidate package.
+ process.env.ZYLOS_PACKAGE_ROOT=path.resolve('.');
  t.after(()=>{
   if(previousHome===undefined)delete process.env.HOME;else process.env.HOME=previousHome;
   if(previousPm2Home===undefined)delete process.env.PM2_HOME;else process.env.PM2_HOME=previousPm2Home;
+  if(previousPackageRoot===undefined)delete process.env.ZYLOS_PACKAGE_ROOT;else process.env.ZYLOS_PACKAGE_ROOT=previousPackageRoot;
  });
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
@@ -67,7 +70,10 @@ async function fixture(t,{missing=false,wal=false,formatVersion=3,dashboard=fals
   fs.copyFileSync(path.resolve('skills',item.owner,'scripts',migration),path.join(owner,'scripts',migration));
   if(item.owner==='scheduler')for(const file of ['migrations-v2.js','migrations-v3.js'])fs.copyFileSync(path.resolve('skills/scheduler/scripts',file),path.join(owner,'scripts',file));
  }
- for(const file of ['sqlite-schema.js','c4-migrations-v2.js','c4-migrations-v3.js','c4-migrations-v4.js','upgrade-admission.js']) fs.copyFileSync(path.resolve('skills/comm-bridge/scripts',file),path.join(skillsDir,'comm-bridge/scripts',file));
+ for(const file of ['sqlite-schema.js','c4-migrations-v2.js','c4-migrations-v3.js','c4-migrations-v4.js','core-config-loader.js','upgrade-admission.js']) fs.copyFileSync(path.resolve('skills/comm-bridge/scripts',file),path.join(skillsDir,'comm-bridge/scripts',file));
+ const loader=await import(pathToFileURL(path.join(skillsDir,'comm-bridge/scripts/core-config-loader.js')));
+ assert.equal(loader.resolveCoreConfigModule(),path.resolve('cli/lib/config.js'));
+ assert.equal(await loader.loadCoreConfig(),await import(pathToFileURL(path.resolve('cli/lib/config.js'))));
  for(const item of owners){if(missing&&item.owner==='scheduler')continue;const mod=await import(pathToFileURL(path.join(skillsDir,item.owner,item.schema)));const p=path.join(root,item.source);fs.mkdirSync(path.dirname(p),{recursive:true});const db=new Database(p);
   // Older C4/scheduler layouts come from the released v1 samples.
   const older=olderDatabases&&{'comm-bridge':'c4-v0.9.0-v1.sql',scheduler:'scheduler-v0.9.0-v1.sql'}[item.owner];
@@ -546,7 +552,7 @@ for(const failure of [null,'thresholds','ensure','state'])test(`closed writer ac
    commitBaselines:()=>{available();return {status:'done'};},
    startServices:()=>{assert.doesNotThrow(()=>require(stable).assertCoreDatabaseAvailable(f.root));started++;return {status:'done'};},
    verifyServices:()=>({status:'done'}),dashboardOwner:{verifyDashboard:()=>({state:'ready',errors:[]})},
-   readMode:()=>({mode:'single',keyPresent:true}),readTransition:()=>null,restart:()=>({ok:true}),protectedSuccess:()=>{}
+   restart:()=>({ok:true}),protectedSuccess:()=>{}
  });
  assert.equal(result.success,!failure,JSON.stringify(result));
  assert.equal(started,failure?0:1);

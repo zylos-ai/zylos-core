@@ -19,9 +19,10 @@ export function createTargetBindingBuilder({ baseline, snapshot, knownGroup, get
     if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(k => !['sessionGroup', 'expectedRunId', 'expectedRuntime', 'expectedSessionId'].includes(k))) throw dataError('INVALID_ARGS', 'Invalid target binding options');
     const { sessionGroup = null, expectedRunId, expectedRuntime, expectedSessionId } = options;
     if (typeof expectedRunId !== 'string' || !expectedRunId || (expectedRuntime !== undefined && (typeof expectedRuntime !== 'string' || !expectedRuntime)) || (expectedSessionId != null && (typeof expectedSessionId !== 'string' || !expectedSessionId))) throw dataError('INVALID_ARGS', 'Expected target identity is required');
-    const { sessionMode } = baseline();
+    const { sessionMode, keyPresent } = baseline();
+    const grouped = sessionMode === 'multi' || keyPresent;
     snapshot(c => {
-      if (sessionMode === 'single' && sessionGroup !== null) throw dataError('TARGET_SCOPE_MISMATCH', 'Single mode does not accept a group target');
+      if (sessionMode === 'single' && sessionGroup !== (keyPresent ? 'origin' : null)) throw dataError('TARGET_SCOPE_MISMATCH', 'Single mode target does not match its scope');
       if (sessionMode === 'multi') {
         if (sessionGroup === null) throw dataError('CONTROL_TARGET_REQUIRED', 'Multi mode requires a group target');
         requireGroup(sessionGroup); knownGroup(c, sessionGroup);
@@ -34,7 +35,7 @@ export function createTargetBindingBuilder({ baseline, snapshot, knownGroup, get
     if (target.runId !== expectedRunId) throw dataError('TARGET_MISMATCH', 'The target run has changed', { runId: target.runId ?? null });
     if (!target.runtime || target.runtime === 'unknown') throw dataError('TARGET_SNAPSHOT_UNKNOWN', 'The target runtime cannot be identified');
     if (expectedRuntime !== undefined && target.runtime !== expectedRuntime) throw dataError('TARGET_RUNTIME_MISMATCH', 'The target runtime has changed');
-    if (sessionMode === 'multi' ? target.sessionGroup !== sessionGroup : target.sessionGroup !== undefined && target.sessionGroup !== null) throw dataError('TARGET_SCOPE_MISMATCH', 'The target session environment does not match its scope');
+    if (grouped ? target.sessionGroup !== sessionGroup : target.sessionGroup !== undefined && target.sessionGroup !== null) throw dataError('TARGET_SCOPE_MISMATCH', 'The target session environment does not match its scope');
     if (!target.currentSession || target.currentSession.runId !== target.runId) throw dataError('TARGET_NOT_READY', 'The target READY identity does not match');
     if (expectedSessionId != null && target.currentSession.sessionId !== expectedSessionId) throw dataError('STALE_TARGET', 'The target session has changed');
     return normalizeTargetBinding({ expectedRunId, tmuxTarget: target.tmuxTarget, expectedSessionId });
