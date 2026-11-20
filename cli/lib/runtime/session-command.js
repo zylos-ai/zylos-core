@@ -1,4 +1,4 @@
-import { runtimesWith } from './descriptors.js';
+import { UNSUPPORTED } from './contract.js';
 import { removeOwnedTree } from '../../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -7,9 +7,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { parse as parseDotenv } from 'dotenv';
 import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest } from './tmux-env.js';
-import { buildKickPrompt } from './kick-prompt.js';
 import { adapterError } from './tmux-protocol.js';
-import { CLAUDE_BUILTIN_ENV_KEYS } from '../config.js';
 export { adapterError } from './tmux-protocol.js';
 export const shellQuote = s => `'${String(s).replace(/'/g, `'\\''`)}'`;
 export function runtimeExecutable(runtime, env = process.env) {
@@ -21,38 +19,22 @@ export function runtimeExecutable(runtime, env = process.env) {
   throw adapterError('RUNTIME_NOT_INSTALLED');
 }
 export function validateLaunchConfig(runtime, config, help = '') {
-  if (!config || config.runtime !== runtime || !['default','override'].includes(config.mode)) throw adapterError('MODEL_CONFIG_REJECTED');
+  if (!config || config.runtime !== runtime.id || !['default','override'].includes(config.mode)) throw adapterError('MODEL_CONFIG_REJECTED');
   const keys = config.mode === 'default' ? ['runtime','mode'] : ['runtime','mode','model','effort'];
   if (Object.keys(config).some(k => !keys.includes(k))) throw adapterError('MODEL_CONFIG_REJECTED');
   if (config.mode === 'override') {
-    // agy model/effort overrides are not part of the verified core contract.
-    if (runtimesWith('modelOverride', 'unsupported').includes(runtime)) throw adapterError('MODEL_CONFIG_REJECTED');
+    const { efforts, overrideHelpFlags } = runtime.launch;
+    if (efforts === UNSUPPORTED) throw adapterError('MODEL_CONFIG_REJECTED');
     if (![config.model, config.effort].every(v => typeof v === 'string' && v.trim() && !v.includes('\0'))) throw adapterError('MODEL_CONFIG_REJECTED');
-    const efforts = runtime === 'claude' ? ['low','medium','high','max'] : ['none','minimal','low','medium','high','xhigh'];
-    if (!efforts.includes(config.effort) || !/(?:^|\s)--model(?:\s|[,=])/m.test(help) || (runtime === 'claude' && !/(?:^|\s)--effort(?:\s|[,=])/m.test(help))) throw adapterError('MODEL_CONFIG_REJECTED');
+    if (!efforts.includes(config.effort) || overrideHelpFlags.some(flag => {
+      const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return !new RegExp(`(?:^|\\s)${escaped}(?:\\s|[,=])`, 'm').test(help);
+    })) throw adapterError('MODEL_CONFIG_REJECTED');
   }
   return true;
 }
-export function buildRuntimeArgs(runtime, config, {root, help = '', bypassPermissions = true} = {}) {
-  const server = path.join(root, '.claude/skills/zylos-memory/scripts/memory-mcp-server.js');
-  const args = [];
-  if (runtime === 'claude') {
-    args.push('--disallowedTools=AskUserQuestion,EnterPlanMode,ExitPlanMode,Artifact,ReportFindings,Workflow');
-    if (bypassPermissions) args.push('--dangerously-skip-permissions');
-    if (config.mode === 'override') args.push('--model', config.model, '--effort', config.effort);
-    args.push('--mcp-config', JSON.stringify({mcpServers:{'zylos-memory':{type:'stdio', command:'node', args:[server]}}}));
-  } else if (runtime === 'agy') {
-    if (bypassPermissions) args.push('--dangerously-skip-permissions');
-    args.push('--settings', JSON.stringify({ modelProvider: 'gemini', trustedWorkspaces: [root] }), '-i', buildKickPrompt());
-  } else {
-    args.push('-c', 'tools.experimental_request_user_input.enabled=false', '-c', 'features.goals=false', '-c', 'features.apps=false');
-    if (/(?:^|\s)--no-daemon(?:\s|$)/m.test(help)) args.push('--no-daemon');
-    if (bypassPermissions) args.push('--dangerously-bypass-approvals-and-sandbox');
-    if (config.mode === 'override') args.push('--model', config.model, '-c', `model_reasoning_effort=${JSON.stringify(config.effort)}`);
-    for (const [key,value] of Object.entries({command:'node', args:[server], env_vars:['ZYLOS_SESSION_GROUP','ZYLOS_RUN_ID','ZYLOS_DIR']})) args.push('-c', `mcp_servers.zylos-memory.${key}=${JSON.stringify(value)}`);
-    args.push(buildKickPrompt());
-  }
-  return args;
+export function memoryMcpServerPath(root) {
+  return path.join(root, '.claude/skills/zylos-memory/scripts/memory-mcp-server.js');
 }
 /**
  * Read <root>/.env with the shared dotenv grammar, including exports, comments
@@ -65,31 +47,21 @@ export function readLaunchDotenv(root) {
   } catch (e) { if (e.code !== 'ENOENT') throw e; }
   return dotenvVars;
 }
-export function launchEnvironment(root, processEnv = process.env, { runtime } = {}) {
+export function launchEnvironment(root, processEnv = process.env, { runtimeEnv } = {}) {
   const dotenvVars = readLaunchDotenv(root);
   const {env} = dotenvVars.ZYLOS_CLEAN_ENV === 'false'
     ? buildCompatEnv({processEnv, dotenvVars})
     : buildCleanEnv({processEnv, dotenvVars, manifest:loadRuntimeEnvManifest(root), uid:process.getuid?.()});
-  // Built-in Claude passthrough, independent of runtime-env.manifest: applied
-  // after the manifest (clean and compat mode) so a manifest cannot drop it.
-  if (runtime === 'claude') {
-    for (const key of CLAUDE_BUILTIN_ENV_KEYS) if (dotenvVars[key]) env[key] = dotenvVars[key];
-  }
-  // Cache TTL defaults belong only to Claude; nonempty .env values override them.
-  for (const [key, fallback] of Object.entries({
-    CLAUDE_CODE_PROMPT_CACHE_TTL: '1h',
-    CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '5m',
-  })) {
-    if (runtime === 'claude') env[key] = dotenvVars[key] || fallback;
-    else delete env[key];
-  }
-  if (runtime === 'agy') {
-    for (const key of ['GEMINI_API_KEY', 'HTTPS_PROXY']) {
+  if (runtimeEnv) {
+    Object.assign(env, runtimeEnv.fixed);
+    for (const key of runtimeEnv.fromDotenv) {
+      if (dotenvVars[key]) env[key] = dotenvVars[key];
+    }
+    for (const key of runtimeEnv.fromDotenvOrProcess) {
       const value = Object.hasOwn(dotenvVars, key) ? dotenvVars[key] : processEnv[key];
       if (value) env[key] = value;
       else delete env[key];
     }
-    env.AGY_CLI_DISABLE_AUTO_UPDATE = 'true';
   }
   for (const key of ['ZYLOS_RUN_ID','ZYLOS_SESSION_GROUP','ZYLOS_MODEL_CONFIG','CLAUDECODE','CLAUDE_CODE_ENTRYPOINT']) delete env[key];
   env.ZYLOS_DIR = root;

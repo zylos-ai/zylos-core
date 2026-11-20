@@ -86,7 +86,7 @@ for (const [label, selected, save, saveEnv] of modes) {
     assert.equal(authLines.length, 1);
     assert.deepEqual(Object.keys(parseDotEnv(content)).filter(key => keys.includes(key)), [selected]);
     sameSecret(parseDotEnv(content)[selected], value);
-    const launched = launchEnvironment(zylos, { PATH: bin, HOME: home }, { runtime: 'claude' });
+    const launched = launchEnvironment(zylos, { PATH: bin, HOME: home }, { runtimeEnv: claude.launch.env });
     assert.deepEqual(keys.filter(key => launched[key] !== undefined), [selected]);
     sameSecret(launched[selected], value);
     sameSecret(authLines[0], `${selected}=${value}`);
@@ -212,7 +212,7 @@ for (const [form, officialLine] of [['an export line', `export ANTHROPIC_BASE_UR
   test(`the setting reads .env as the session does: a later official URL in ${form} turns the relay setting off`, () => {
     fs.writeFileSync(envFile, `KEEP=unchanged\nANTHROPIC_BASE_URL=${relayUrl}\n${officialLine}\n`);
     delete process.env[relayFlag];
-    assert.equal(launchEnvironment(zylos, { PATH: bin, HOME: home }, { runtime: 'claude' }).ANTHROPIC_BASE_URL, officialUrl, 'the session uses the later official URL');
+    assert.equal(launchEnvironment(zylos, { PATH: bin, HOME: home }, { runtimeEnv: claude.launch.env }).ANTHROPIC_BASE_URL, officialUrl, 'the session uses the later official URL');
     assert.equal(syncClaudeRelayTraffic(), true);
     assert.deepEqual(relayFlagState(), RELAY_OFF);
   });

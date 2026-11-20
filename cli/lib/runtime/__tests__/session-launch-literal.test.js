@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import { getRuntime } from '../index.js';
 import { validateLaunchConfig } from '../session-command.js';
 import { setupLaunch, assertGone } from './launch-tmux-fixture.js';
 const models=['model#[fg=red]','model##[fg=red,bold]','model#[fg=red]#{pid},}#(echo ignored)\t"\n'];
@@ -10,7 +11,7 @@ for(const sessionGroup of [null,'telegram:literal']) for(const model of models) 
     const original=f.tmux('list-panes','-t','=keeper','-F','#{pane_id}:#{pane_pid}').trim();
     f.tmux('set-environment','-g','ZYLOS_SESSION_GROUP','stale-global');
     const launchConfig={runtime:'claude',mode:'override',model,effort:'high'};
-    assert.equal(validateLaunchConfig('claude',launchConfig,' --model MODEL --effort EFFORT '),true);
+    assert.equal(validateLaunchConfig(await getRuntime('claude'),launchConfig,' --model MODEL --effort EFFORT '),true);
     const wrapper=await f.clientWrapper(mismatch?{...launchConfig,model:model+'-different'}:undefined);
     const pending=f.launch({launchConfig,sessionGroup,tmuxBinary:wrapper.file});
     if(mismatch) {

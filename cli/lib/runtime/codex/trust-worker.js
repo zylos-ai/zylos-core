@@ -1,5 +1,5 @@
 // Run synchronous trust operations in a child with the effective launch environment.
-import { ensureCodexHooksTrusted } from '../codex-hooks.js';
+import { ensureCodexHooksTrusted } from '../../codex-hooks.js';
 
 try {
   ensureCodexHooksTrusted(JSON.parse(process.argv[2]));

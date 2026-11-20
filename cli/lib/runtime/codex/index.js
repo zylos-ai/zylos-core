@@ -1,5 +1,5 @@
 import { auth } from './auth.js';
-import { prepare } from './launch.js';
+import { prepare, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags } from './launch.js';
 import { install, probeVersion, postUpgradeSync } from './install.js';
 import { UNSUPPORTED } from '../contract.js';
 import { createIdentity } from '../shared/identity.js';
@@ -26,6 +26,6 @@ export default Object.freeze({
     postUpgradeSync,
   }),
   auth,
-  launch: Object.freeze({ prepare, checkAutonomous: UNSUPPORTED }),
+  launch: Object.freeze({ prepare, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags, checkAutonomous: UNSUPPORTED }),
   input: Object.freeze({ bracketedPaste: false }),
 });

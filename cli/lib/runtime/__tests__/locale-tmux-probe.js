@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { settleLaunch } from '../session-launch.js';
+import { settleLaunch } from '../launch-flow.js';
 import { writeSessionLaunchScript } from '../session-command.js';
 import { openTmuxConnection } from '../tmux-connection.js';
 import { observeSessionTarget } from '../session-target.js';

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { findRuntime, getRuntime, SUPPORTED_RUNTIMES } from '../index.js';
+import { findRuntime, getRuntime, runtimesWith, SUPPORTED_RUNTIMES } from '../index.js';
 import { RUNTIME_CONTRACT, UNSUPPORTED } from '../contract.js';
 
 for (const id of SUPPORTED_RUNTIMES) {
@@ -8,6 +8,8 @@ for (const id of SUPPORTED_RUNTIMES) {
     const runtime = await getRuntime(id);
     assert.equal(runtime.id, id);
     assert.ok(Object.isFrozen(runtime));
+    assert.equal(runtime.launch.efforts !== UNSUPPORTED, runtimesWith('modelOverride', 'supported').includes(id),
+      'modelOverride in the registry must agree with launch.efforts');
     for (const [name, { required, members }] of Object.entries(RUNTIME_CONTRACT)) {
       assert.ok(Object.hasOwn(runtime, name), `missing capability ${name}`);
       const capability = runtime[name];

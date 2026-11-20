@@ -86,9 +86,12 @@ test('hard-coded runtime IDs match the exemption inventory', () => {
   assert.deepEqual(violations, []);
 });
 
-const moduleSpecifiers = [
+const staticModuleSpecifiers = [
   /\bimport\s*(?:(?:[\w$*{},\s]+)\bfrom\s*)?(['"])([^'"\n]+)\1/g,
   /\bexport\s*(?:\{[^}]*\}|\*(?:\s*as\s+[\w$]+)?)\s*\bfrom\s*(['"])([^'"\n]+)\1/g,
+];
+const moduleSpecifiers = [
+  ...staticModuleSpecifiers,
   /(?<![\w$.])(?:import|require)\s*\(\s*(['"`])([^'"`\n]+)\1\s*(?=[,)])/g,
   /(?<![\w$.])loadCoreModule\s*\(\s*(['"`])([^'"`\n]+)\1\s*(?=[,)])/g,
 ];
@@ -117,4 +120,50 @@ test('runtime implementations are referenced only by their factory or own implem
     }
   }
   assert.deepEqual(violations, []);
+});
+
+// Follow only static ESM edges: dynamic loads do not block evaluation of
+// their caller. Recognize the factory names and literal load paths in
+// module-scope await statements and declarations.
+const factoryAwaits = new Map([
+  ['cli/lib/runtime', /\bgetRuntime\s*\(|['"`](?:runtime\/index\.js|\.\/index\.js)['"`]/],
+  ['skills/dashboard/src/lib/runtime', /\bgetDashboardRuntime\s*\(|['"`]\.\/runtime\/index\.js['"`]/],
+]);
+const moduleAwait = /^(?:(?:export\s+)?(?:const|let|var)\s+[^=;]+?=\s*)?await\b[^;]*/gm;
+
+test('static runtime imports cannot reach a module awaiting their factory', () => {
+  const imports = new Map();
+  const awaitingFactory = new Map();
+  for (const file of [...productFiles('cli'), ...productFiles('skills')]) {
+    const source = fs.readFileSync(path.join(root, file), 'utf8');
+    const destinations = [];
+    for (const pattern of staticModuleSpecifiers) {
+      for (const [, , specifier] of source.matchAll(pattern)) {
+        if (/^\.{1,2}\//.test(specifier)) {
+          destinations.push(path.posix.normalize(path.posix.join(path.posix.dirname(file), specifier)));
+        }
+      }
+    }
+    imports.set(file, destinations);
+    const awaits = [...source.matchAll(moduleAwait)].map(match => match[0]);
+    awaitingFactory.set(file, [...factoryAwaits].filter(([, pattern]) =>
+      awaits.some(statement => pattern.test(statement))).map(([directory]) => directory));
+  }
+
+  for (const directory of runtimeRoots) {
+    const visited = new Set();
+    function visit(file, chain) {
+      if (visited.has(file) || !imports.has(file)) return;
+      visited.add(file);
+      chain.push(file);
+      if (awaitingFactory.get(file).includes(directory)) {
+        assert.fail(`Static import reaches a module awaiting ${directory}/index.js: ${chain.join(' -> ')}`);
+      }
+      for (const destination of imports.get(file)) visit(destination, chain);
+      chain.pop();
+    }
+    for (const file of imports.keys()) {
+      if (runtimeDirectory(file)?.startsWith(`${directory}/`)) visit(file, []);
+    }
+  }
 });

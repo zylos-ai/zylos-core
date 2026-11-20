@@ -15,7 +15,7 @@ import { isManagedClaudeProcess } from '../../../../skills/activity-monitor/scri
 import { checkMainProcess } from '../../../../skills/activity-monitor/scripts/main-process-check.js';
 import { targetArgs, outerArgs } from '../../../../skills/dashboard/src/lib/observer-tmux-state.js';
 
-import { settleLaunch } from '../session-launch.js';
+import { settleLaunch } from '../launch-flow.js';
 import { attachCommand } from '../../../commands/attach.js';
 import { collectDiagnostics } from '../../../commands/doctor.js';
 import { selfUninstall } from '../../../commands/self-uninstall.js';

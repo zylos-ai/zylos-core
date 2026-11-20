@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { getRuntime } from '../index.js';
 import { launchEnvironment, writeSessionLaunchScript } from '../session-command.js';
 
 function fixture(t) {
@@ -98,38 +99,40 @@ test('session launch script passes parsed dotenv values to a real child', t => {
 });
 
 for (const clean of [true, false]) {
-  test(`Claude cache defaults survive environment policy in clean mode ${clean}`, t => {
+  test(`Claude cache defaults survive environment policy in clean mode ${clean}`, async t => {
     const root = fixture(t);
+    const { launch: { env: runtimeEnv } } = await getRuntime('claude');
     fs.mkdirSync(path.join(root, '.zylos'));
     fs.writeFileSync(path.join(root, '.zylos/runtime-env.manifest'), '# no cache entries\n');
     fs.writeFileSync(path.join(root, '.env'), `ZYLOS_CLEAN_ENV=${clean}\nCLAUDE_CODE_PROMPT_CACHE_TTL=\nCLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=\n`);
     const env = launchEnvironment(root, { HOME: root, PATH: '/bin',
-      CLAUDE_CODE_PROMPT_CACHE_TTL: '5m', CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '1h' }, { runtime: 'claude' });
+      CLAUDE_CODE_PROMPT_CACHE_TTL: '5m', CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '1h' }, { runtimeEnv });
     assert.equal(env.CLAUDE_CODE_PROMPT_CACHE_TTL, '1h');
     assert.equal(env.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL, '5m');
     fs.writeFileSync(path.join(root, '.env'), `ZYLOS_CLEAN_ENV=${clean}\n`);
-    const missing = launchEnvironment(root, { HOME: root, PATH: '/bin' }, { runtime: 'claude' });
+    const missing = launchEnvironment(root, { HOME: root, PATH: '/bin' }, { runtimeEnv });
     assert.equal(missing.CLAUDE_CODE_PROMPT_CACHE_TTL, '1h');
     assert.equal(missing.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL, '5m');
   });
 
-  test(`other runtimes omit Claude cache variables in clean mode ${clean}`, t => {
+  test(`other runtimes have no default Claude cache variables in clean mode ${clean}`, async t => {
     const root = fixture(t);
-    const values = { CLAUDE_CODE_PROMPT_CACHE_TTL: '1h', CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '5m' };
-    fs.writeFileSync(path.join(root, '.env'), `ZYLOS_CLEAN_ENV=${clean}\nZYLOS_TMUX_ENV=${Object.keys(values).join(',')}\n` +
-      Object.entries(values).map(([key, value]) => `${key}=${value}\n`).join(''));
+    const keys = ['CLAUDE_CODE_PROMPT_CACHE_TTL', 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL'];
+    fs.writeFileSync(path.join(root, '.env'), `ZYLOS_CLEAN_ENV=${clean}\n`);
     for (const runtime of ['codex', 'agy']) {
-      const env = launchEnvironment(root, { HOME: root, PATH: '/bin', ...values }, { runtime });
-      for (const key of Object.keys(values)) assert.equal(Object.hasOwn(env, key), false);
+      const { launch: { env: runtimeEnv } } = await getRuntime(runtime);
+      const env = launchEnvironment(root, { HOME: root, PATH: '/bin' }, { runtimeEnv });
+      for (const key of keys) assert.equal(Object.hasOwn(env, key), false);
     }
   });
 }
 
-test('Claude cache dotenv overrides are independent', t => {
+test('Claude cache dotenv overrides are independent', async t => {
+  const { launch: { env: runtimeEnv } } = await getRuntime('claude');
   const root = fixture(t);
   for (const [key, value] of [['CLAUDE_CODE_PROMPT_CACHE_TTL', '5m'], ['CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL', '1h']]) {
     fs.writeFileSync(path.join(root, '.env'), `${key}=${value}\n`);
-    const env = launchEnvironment(root, { HOME: root, PATH: '/bin' }, { runtime: 'claude' });
+    const env = launchEnvironment(root, { HOME: root, PATH: '/bin' }, { runtimeEnv });
     assert.equal(env.CLAUDE_CODE_PROMPT_CACHE_TTL, key === 'CLAUDE_CODE_PROMPT_CACHE_TTL' ? value : '1h');
     assert.equal(env.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL, key === 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL' ? value : '5m');
   }

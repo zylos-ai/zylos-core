@@ -11,6 +11,7 @@ import { cyan, dim, error, success, warn } from '../../colors.js';
 import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CLAUDE_BUILTIN_ENV_KEYS, CLAUDE_CREDENTIAL_KEYS, ZYLOS_DIR } from '../../config.js';
+import { env as runtimeEnv } from './launch.js';
 import { launchEnvironment, readLaunchDotenv } from '../session-command.js';
 import { childRuntimeEnv } from '../../child-runtime-env.js';
 import { credentialEnvValue, upsertEnvValue, warnUnrestrictedCredentialFiles } from '../../runtime-setup.js';
@@ -408,7 +409,7 @@ export function relayLoginNotice() {
 export function claudeProbeEnvironment(root, processEnv) {
   const env = { ...processEnv };
   let sessionEnv;
-  try { sessionEnv = launchEnvironment(root, processEnv, { runtime: 'claude' }); }
+  try { sessionEnv = launchEnvironment(root, processEnv, { runtimeEnv }); }
   catch { return env; /* unreadable .env: session launch fails too; probe the inherited env */ }
   for (const key of CLAUDE_BUILTIN_ENV_KEYS) {
     if (Object.hasOwn(sessionEnv, key)) env[key] = sessionEnv[key];

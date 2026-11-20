@@ -30,6 +30,15 @@ export const RUNTIME_CONTRACT = Object.freeze({
     initPersist: 'optional',
     cliHelp: 'required',
   }) }),
-  launch: Object.freeze({ required: true, members: Object.freeze({ prepare: 'required', checkAutonomous: 'optional' }) }),
+  launch: Object.freeze({ required: true, members: Object.freeze({
+    prepare: 'required',
+    buildArgs: 'required',
+    env: 'required',
+    helpProbe: 'required',
+    promptPlacement: 'required',
+    efforts: 'optional',
+    overrideHelpFlags: 'optional',
+    checkAutonomous: 'optional',
+  }) }),
   input: Object.freeze({ required: true, members: Object.freeze({ bracketedPaste: 'required' }) }),
 });
