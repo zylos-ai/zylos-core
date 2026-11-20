@@ -18,6 +18,7 @@ function fixture(t) {
     now: () => { f.clocks++; return f.clock; },
     db: {
       getChannelNamespace: () => ({ namespace: 'telegram' }),
+      getSessionHost: () => null,
       insertConversation: (direction, channel, endpoint, content, options) => {
         f.inserted++;
         assert.equal(direction, 'in');
@@ -88,6 +89,18 @@ for (const [mode, expected] of [[{ mode: 'single', keyPresent: true }, 'origin']
     assert.equal(f.events[0].session_group, 'telegram:queue');
   });
 }
+
+test('receive queries supervisor health for the host of the address owner', async t => {
+  const f = fixture(t);
+  f.dependencies.readSessionMode = () => ({ mode: 'multi', keyPresent: true });
+  f.dependencies.db.getSessionHost = group => {
+    assert.equal(group, 'telegram:source');
+    return 'telegram:host';
+  };
+  await receive(['--channel', 'telegram', '--endpoint', 'chat-1', '--session-group', 'source',
+    '--content', 'queued'], f.dependencies);
+  assert.equal(f.request.sessionGroup, 'telegram:host');
+});
 
 test('unreadable mode keeps inbound on the route-query persistence path', async t => {
   const f = fixture(t); f.dependencies.readSessionMode = () => { throw Error('config unreadable'); };

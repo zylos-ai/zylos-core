@@ -2,12 +2,13 @@ import { migrateSchema } from './c4-migrations.js';
 import { migrateToV2 } from './c4-migrations-v2.js';
 import { migrateToV3 } from './c4-migrations-v3.js';
 import { migrateToV4 } from './c4-migrations-v4.js';
+import { migrateToV5 } from './c4-migrations-v5.js';
 import { inspectLayout } from './sqlite-schema.js';
 import { rejectLegacySchemaProbe } from './upgrade-admission.js';
 
 rejectLegacySchemaProbe();
 
-export const SUPPORTED_SCHEMA_VERSION = 4;
+export const SUPPORTED_SCHEMA_VERSION = 5;
 export const supportsNewDatabase = true;
 
 export const COLUMN_DEFINITIONS = {
@@ -140,13 +141,28 @@ export const COLUMN_DEFINITIONS = {
     runtime: { type: 'TEXT', pk: true },
     model: { type: 'TEXT', pk: false },
     effort: { type: 'TEXT', pk: false }
-  }
+  },
+  session_hosts: {
+    source_group: { type: 'TEXT', pk: true },
+    target_group: { type: 'TEXT', pk: false },
+    attached_by: { type: 'TEXT', pk: false },
+    attached_at: { type: 'INTEGER', pk: false },
+  },
+  session_host_allowlist: {
+    channel: { type: 'TEXT', pk: true },
+  },
 };
 export const TABLES = Object.fromEntries(
   Object.entries(COLUMN_DEFINITIONS).map(([table, columns]) => [table, Object.keys(columns)]),
 );
 
 export const MIGRATIONS = Object.freeze({
+  4: Object.freeze({ to: 5, migrate: migrateToV5, changes: {
+    addTables: {
+      session_hosts: COLUMN_DEFINITIONS.session_hosts,
+      session_host_allowlist: COLUMN_DEFINITIONS.session_host_allowlist,
+    },
+  } }),
   3: Object.freeze({ to: 4, migrate: migrateToV4, changes: { rebuildTables: ['run_endings'] } }),
   2: Object.freeze({ to: 3, migrate: migrateToV3, changes: {
     rebuildTables: ['run_endings'],

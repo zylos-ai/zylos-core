@@ -4,6 +4,7 @@ import { waitUntilDeadline } from './request-timeout.js';
 import { createConversationPush } from './wb/conversation-push.js';
 import { consumeDraftReset, createDraftRestoreStore, createComposeRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js';
 import { createMarkdownRenderer, markdownHtml } from './markdown-config.js';
+import { mountSessionHostSettings } from './wb/session-host-settings.js';
 import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js';
 import { createPricingPanel } from './wb/settings-pricing.js';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js';
@@ -1753,7 +1754,7 @@ function initTabs() {
     if (name === 'usage') name = 'trends';
     // Leaving settings closes its phone drawer; the drawer's history entry becomes the new page's entry.
     const reuseEntry = name !== 'settings' && Boolean(settingsPage?.drawer.leave());
-    if (name !== 'settings') { settingsLoader?.invalidate(); settingsTimezone?.invalidate(); }
+    if (name !== 'settings') { settingsLoader?.invalidate(); settingsHosts?.invalidate(); settingsTimezone?.invalidate(); }
     if (push) state.navigationGeneration += 1;
     if (name !== 'observer') state.observer.selectionGeneration += 1;
     if (name === 'memory' && remoteIsReadOnly()) name = 'overview';
@@ -2663,6 +2664,7 @@ let settingsDefaults = null;
 let settingsUpgrade = null;
 let settingsVersionRoot = null;
 let settingsChat = null;
+let settingsHosts = null;
 let settingsTimezone = null;
 
 function initSettingsPage() {
@@ -2684,6 +2686,11 @@ function initSettingsPage() {
     local: () => !REMOTE_AGENT && !state.remoteAgent,
     read: () => requestAgentJson('/api/settings/chat'),
     write: body => requestAgentJson('/api/settings/chat', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+  });
+  settingsHosts = mountSessionHostSettings(settingsPage.sections.defaults, { t, locale: getLocale,
+    local: () => !REMOTE_AGENT && !state.remoteAgent,
+    read: () => requestAgentJson('/api/session-hosts'),
+    write: body => requestAgentJson('/api/session-hosts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   });
   settingsTimezone = mountTimezoneSettings(settingsPage.sections.defaults, { t,
     read: () => requestAgentJson('/api/settings/timezone'),
@@ -2730,6 +2737,7 @@ function refreshSettingsPage() {
   closeSettingsModal();
   settingsLoader?.open();
   settingsChat?.refresh();
+  settingsHosts?.refresh();
   settingsTimezone?.refresh();
   refreshObserverStatus({ quiet: true }).catch(() => {});
   refreshModeStatus().catch(() => {});
@@ -2755,6 +2763,7 @@ function closeSettingsModal() {
   settingsLoader?.invalidate();
   fleetManageStatus('');
   settingsChat?.invalidate();
+  settingsHosts?.invalidate();
   settingsTimezone?.invalidate();
   settingsDefaults?.destroy(); settingsDefaults = null;
   settingsPricing?.destroy(); settingsPricing = null;

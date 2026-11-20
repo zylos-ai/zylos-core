@@ -101,6 +101,7 @@ export function projectApiTimestamps(pathname, value) {
     return project(value, ms('since', 'until', 'messagesSampledAt', 'buckets.*', 'costByRuntime.*.at', 'tokensByRuntime.*.at',
       'messages.*.at', 'rotations.*.at', 'cache.*.at', 'series.*.at', 'current.at', 'cpuPeak.at', 'pm2.at'));
   }
+  if (pathname === '/api/session-hosts') return project(value, seconds('relationships.*.attached_at'));
   if (pathname === '/api/auth/token') return project(value, ms('expires_at'));
   if (pathname === '/api/keys' || pathname.startsWith('/api/keys/')) return project(value,
     ms('created_at', 'last_used_at', 'revoked_at', 'key.created_at', 'key.last_used_at', 'key.revoked_at',

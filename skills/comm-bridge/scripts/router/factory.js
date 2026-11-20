@@ -17,10 +17,8 @@ import { createFailureAlertSender } from '../failure-alert.js';
 import { createPendingExpiryHandler } from './expiry.js';
 import { createRouterDiagnostics } from './diagnostics.js';
 import { createLifecycleProviders } from './lifecycle.js';
-import { execFile } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { messageForStatus } from '../status-notice-templates.js';
-import { systemSendEnvironment } from '../c4-system-send-env.js';
+import { notifyOwner as sendNotification, sendOwnerAlert } from '../c4-owner-alert.js';
 
 // The supervisor owns the transport. Loading it on use allows the scheduler's
 // independent paths to be exercised without implementing a second protocol.
@@ -48,20 +46,9 @@ export function createDispatcher(overrides = {}, options = {}) {
     catch { return {}; }
   };
   const alertController = new AbortController();
-  const sendAlert = overrides.sendAlert ?? ((target, message) => new Promise((resolve, reject) => {
-    const child = execFile(process.execPath, [fileURLToPath(new URL('../c4-send.js', import.meta.url)), target.channel, target.endpoint],
-      { env: systemSendEnvironment(env, { notice: true }), signal: alertController.signal, timeout: 30000, maxBuffer: 1024 * 1024 }, error => error ? reject(error) : resolve(true));
-    child.stdin.on('error', reject); child.stdin.end(message + '\n');
-  }));
-  // Match the existing continuation alert's lazy supervisor imports and fallback.
-  const notifyOwner = async message => {
-    const [{ SupervisorServerHealth }, { parseServerAlertTarget }] = await Promise.all([
-      import('../../../activity-monitor/scripts/supervisor-server-health.js'),
-      import('../../../activity-monitor/scripts/supervisor-server-observation.js'),
-    ]);
-    const guard = new SupervisorServerHealth({ readAlertTarget: () => parseServerAlertTarget(readConfig().alert_target), sendAlert, log });
-    await guard.notify(message);
-  };
+  const sendAlert = overrides.sendAlert ?? ((target, message) =>
+    sendOwnerAlert(target, message, { env, signal: alertController.signal }));
+  const notifyOwner = message => sendNotification(message, { readConfig, sendAlert, log });
   const failureAlert = createFailureAlertSender({
     db, notifyOwner, now: () => Math.floor(now() / 1000) });
   const sendFailureAlert = (row, reason) => {

@@ -8,6 +8,7 @@ import { progressFunctions } from './c4-store-progress.js';
 import { controlFunctions } from './c4-store-control.js';
 import { transitionFunctions } from './c4-store-transition.js';
 import { createTargetBindingBuilder } from './c4-target-binding.js';
+import { hostFunctions } from './c4-store-host.js';
 import { fixedAddressSessionGroup } from './c4-fixed-address.js';
 
 // Dependencies are private implementation inputs, never business API options.
@@ -93,7 +94,8 @@ export function createStore(database, dependencies = {}) {
     const fixed = fixedAddressSessionGroup(channel, endpointId);
     if (fixed) { installed(channel); return fixed; }
     const { namespace } = ensure(c, channel);
-    return wholeGroup ? namespace : composeSessionGroup(namespace, groupName);
+    const group = wholeGroup ? namespace : composeSessionGroup(namespace, groupName);
+    return direction === 'in' ? hosting.effectiveGroup(c, group) : group;
   }
   function internalTarget(c, targetGroup) {
     const parsed = parseSessionGroup(targetGroup);
@@ -120,7 +122,12 @@ export function createStore(database, dependencies = {}) {
     advanceHead(c, group, id);
     return get(c, 'SELECT * FROM conversations WHERE id=?', id);
   }
+  const hosting = hostFunctions({
+    read, write, snapshot, get, all, run, seconds, knownGroup, internalTarget,
+    readSessionMode: dependencies.readSessionMode,
+  });
   const api = {
+    ...hosting.api,
     getChannelNamespace: name => read(c => binding(c, name)),
     getComponentByNamespace: namespace => read(c => get(c, 'SELECT component_name FROM channel_namespaces WHERE namespace=?', namespace)?.component_name ?? null),
     ensureChannelNamespace: name => write(c => ensure(c, name)),
@@ -140,11 +147,16 @@ export function createStore(database, dependencies = {}) {
       const allowed = new Set(['status', 'priority', 'requireIdle', 'deliveryAction', 'groupName', 'handoffGroup', 'wholeGroup', 'sessionId', 'recordGroup']);
       if (Object.keys(options).some(key => !allowed.has(key))) throw dataError('INVALID_ARGS', 'Unknown message option');
       if (options.status !== undefined && !(direction === 'in' ? ['pending', 'failed'] : ['delivered']).includes(options.status)) throw dataError('INVALID_ARGS', 'Invalid initial message status');
-      // recordGroup is reserved for Core's outbound send: the address still
-      // resolves (and allocates its namespace binding) but the row is recorded under origin.
+      // Keep outbound recording with the authenticated sending session after resolving the address.
       const { recordGroup, ...routing } = options;
-      if (recordGroup !== undefined && (recordGroup !== 'origin' || direction !== 'out' || channel === 'void')) throw dataError('INVALID_ARGS', 'recordGroup is reserved for Core outbound recording under origin');
+      if (recordGroup !== undefined && (!parseSessionGroup(recordGroup) || direction !== 'out' || channel === 'void')) {
+        throw dataError('INVALID_ARGS', 'recordGroup is reserved for Core outbound recording');
+      }
       const group = resolve(c, direction, channel, endpointId, routing);
+      if (recordGroup && recordGroup !== 'origin' &&
+          (!exists(c, recordGroup) || hosting.effectiveGroup(c, group) !== recordGroup && group !== recordGroup)) {
+        throw dataError('CROSS_SESSION_OUTBOUND', `Address belongs to "${group}". Nothing was sent or recorded. Ask that thread to deliver the message.`);
+      }
       return insert(c, direction, channel, endpointId, content, recordGroup ?? group, options);
     }),
     insertInternalMessage: (senderGroup, targetGroup, content, { sessionId } = {}) => write(c => {
@@ -154,7 +166,7 @@ export function createStore(database, dependencies = {}) {
       if (senderGroup === targetGroup) throw dataError('SELF_TARGET', 'Cannot send to the sender session group');
       if (typeof content !== 'string' || !content.trim()) throw dataError('EMPTY_CONTENT', 'Message content is empty');
       const outRow = insert(c, 'out', 'internal', targetGroup, content, senderGroup, { sessionId });
-      const inRow = insert(c, 'in', 'internal', senderGroup, `[internal] Yourself, from your "${senderGroup}" session group, said: ${content}`, targetGroup);
+      const inRow = insert(c, 'in', 'internal', senderGroup, `[internal] Yourself, from your "${senderGroup}" session group, said: ${content}`, hosting.effectiveGroup(c, targetGroup));
       return { outRow, inRow };
     }),
   };

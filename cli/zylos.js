@@ -37,6 +37,7 @@ const commands = {
   runtime: async (...args) => (await import('./commands/runtime.js')).runtimeCommand(...args),
   'session-mode': async (...args) => (await import('./commands/session-mode.js')).sessionModeCommand(...args),
   auth: authCommand,
+  host: async (...args) => (await import('./commands/host.js')).hostCommand(...args),
   group: async (...args) => (await import('./commands/group.js')).groupCommand(...args),
   recovery: recoveryCommand,
   'migrate-instructions': migrateInstructionsCommand,
@@ -154,6 +155,7 @@ Setup:
   session-mode status [--json]  Read session mode and transition status
   auth <name>         Authenticate a prepared runtime (Codex: --device-code)
   group <kind>        Read or update group runtime/model configuration
+  host <command>      Manage session hosting (attach, detach, list, allow, disallow)
   migrate-instructions  Analyze/migrate legacy mixed instructions (dry-run by default)
                       --apply  Create durable backup and activate split instructions
                       --user-content <file>  User-only content for conservative C-class migration

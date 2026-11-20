@@ -87,7 +87,11 @@ export async function sendExternal(request, message, { api, skillsDir, env = pro
   else if (hasSender) {
     const ownerGroup = fixed || api.resolveSessionGroup('out', channel, endpoint, route);
     if (senderGroup === 'origin' && ownerGroup !== 'origin' && originReplyAllowed(api, channel, endpoint)) recordGroup = 'origin';
-    else assertOutboundSession(senderGroup, ownerGroup, request);
+    else {
+      const host = senderGroup === ownerGroup ? null : api.getSessionHost(ownerGroup);
+      assertOutboundSession(senderGroup, ownerGroup, request, host);
+      if (host === senderGroup) recordGroup = senderGroup;
+    }
   }
   const stdinDelivery = readChannelHookMetadata(channel, { skillsDir })?.delivery === 'stdin';
   await runBeforeSendHook({ ...request, ...route }, message, { skillsDir, env });

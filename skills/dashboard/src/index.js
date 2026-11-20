@@ -83,6 +83,7 @@ import { createGroupBacklog } from './lib/workbench/group-backlog.js';
 import { createMemoryBacklog } from './lib/workbench/memory-backlog.js';
 import { createOriginBacklog } from './lib/workbench/origin-backlog.js';
 import { createGroupActions } from './lib/workbench/group-actions.js';
+import { createSessionHostRoutes } from './lib/session-host-routes.js';
 import { createGroupDeletionRoutes } from './lib/workbench/group-deletion.js';
 import { createGroupsApi, groupCounts, projectGroup, projectListRow } from './lib/workbench/groups-api.js';
 import { usageSummary, usagePricing, createUsageCostReader } from './lib/workbench/usage-api.js';
@@ -1374,6 +1375,7 @@ async function handleMemoryApi(req, res, pathname, url) {
 export function createServer() {
   const conversations = new ChatConversations({ store, isUsed: localId => isChatLocalIdUsed(c4Reader, localId) });
   ensureOriginConversation(store.db);
+  const sessionHostRoutes = createSessionHostRoutes({ auth });
   const groupDeletionRoutes = createGroupDeletionRoutes({ auth, config, conversations });
   const attachments = new ChatAttachments({ store, c4Reader, zylosDir: config.zylosDir });
   const sender = new ChatSender({ conversations, c4Reader, zylosDir: config.zylosDir, attachments });
@@ -1463,6 +1465,7 @@ export function createServer() {
       if (await handleChatAnswers(req, res, url, { auth, config, answers, delivery: answerDelivery, sender,
         readMode: () => loadZylosConfig(config.zylosDir).session_mode })) return;
     }
+    if (await sessionHostRoutes(req, res, url)) return;
     if (await groupDeletionRoutes(req, res, url)) return;
     if (await handleChatConversations(req, res, url, { auth, config, conversations, sender,
       readMode: () => loadZylosConfig(config.zylosDir).session_mode })) return;
