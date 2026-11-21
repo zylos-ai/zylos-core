@@ -13,6 +13,7 @@ import { classifyHealthNotice } from '../health-notice-classification.js';
 import { matchHealthNoticeText } from '../health-notice-match.js';
 import { HealthStore } from '../health-store.js';
 import { MessageRouter } from '../message-router.js';
+import { messageForStatus } from '../../../comm-bridge/scripts/status-notice-templates.js';
 
 const matchNotice = payload => matchHealthNoticeText(payload, HEALTH_NOTICE_RULES);
 const hookHealth = (await getRuntime('claude')).health.hookHealth;
@@ -107,6 +108,9 @@ test('notice intent remains durable while rate-limited inbound stays pending', a
   const route=await router.route({version:1,type:'route',requestId:'test',noReply:false,receivedAt:now});
   const status=store.read();
   assert.equal(route.decision,'pending');assert.equal(route.userMessage,undefined);
+  const quota = {...snapshot({five_hour:{used_percentage:100,resets_at:reset1}}),observed_at:now};
+  const notice = store.currentNotice({identity,quota});
+  assert.match(messageForStatus({health:status.health,...notice}),/\d{4}-\d{2}-\d{2} \d{2}:\d{2} (?:UTC|[A-Za-z_]+\/[A-Za-z_]+)/);
   const revision=store.read().revision;
   store.transition('ok','',{identity,kind:'recovery',expectedRevision:revision});
   assert.equal(store.read().notice,undefined);
