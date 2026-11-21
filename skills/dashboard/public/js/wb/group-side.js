@@ -11,7 +11,7 @@ import { element, icon } from './plain-text.js';
  */
 export function createGroupSide({ document, t = key => key, fetch = globalThis.fetch, endpoint = path => path,
   identity = () => '', writable = () => true, detail = () => 'plain', isVisible = () => true,
-  onMemory = () => {}, onObserve = () => {}, observable = () => false, onConversation, onClose = ({ hide }) => hide(),
+  onConfigSaved, onMemory = () => {}, onObserve = () => {}, observable = () => false, onConversation, onClose = ({ hide }) => hide(),
   setTimer = setInterval, clearTimer = clearInterval } = {}) {
   const aside = element(document, 'aside', undefined, 'wb-group-side');
   aside.hidden = true;
@@ -34,7 +34,7 @@ export function createGroupSide({ document, t = key => key, fetch = globalThis.f
   };
   const groupDetail = createGroupDetail({ root: body, document, t,
     fetch: (path, options) => fetch(endpoint(path), options), identity, writable, detail, isVisible: visible,
-    onMemory, onObserve, observable, onConversation, showLastReceived: false, onClose: closed });
+    onConfigSaved, onMemory, onObserve, observable, onConversation, showLastReceived: false, onClose: closed });
   const controller = boardController({ visible,
     fetchSnapshot: async () => ({ snapshot: await readGroupSnapshot(read) }),
     onSnapshot: value => {
@@ -114,6 +114,7 @@ export function createGroupSide({ document, t = key => key, fetch = globalThis.f
       await opened;
     },
     close,
+    reloadConfig(sessionGroup) { if (visible() && key === sessionGroup) void groupDetail.reloadConfig(); },
     redraw() { label(); groupDetail.setViewDetail(); },
     destroy() {
       close({ focus: false });

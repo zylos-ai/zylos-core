@@ -108,12 +108,13 @@ export function runtimeInfoText(info, t = key => key, { technical = false } = {}
 export function createGroupDetail({ root, document = root.ownerDocument, fetch = globalThis.fetch,
   t = key => key, writable = () => true, detail = () => 'plain', identity = () => '', showLastReceived = true,
   onClose = () => {}, onMemory = () => {}, onRename = () => {}, onConversation, conversationAvailable = () => true, confirm, observable = () => false, onObserve = () => {},
+  configView, onConfigSaved,
   isVisible = () => document.visibilityState !== 'hidden', now = Date.now } = {}) {
   const state = { row: null, detailKnown: false, snapshot: null, historical: false, tab: 'overview', recent: [], backlog: null,
     totalEvents: 0, totalRuns: 0, unattributed: 0, currentEvents: [], error: null, lastSuccess: null, level: null,
     usage: null, configOpen: false, nameOpen: false, nameDraft: '', actionResult: '', actionBusy: false };
   let generation = 0, controller = null, owner = null, config = null, stopped = false, refreshTask = null;
-  let renderedLevel = null, configRevision = 0;
+  let renderedLevel = null, configRevision = 0, configRead = 0, rowRead = 0;
   let subagentRun = null, subagentCursor = 0, subagentReady = false, subagentController = null;
   const getWritable = () => typeof writable === 'function' ? writable() : writable;
   const getLevel = () => typeof detail === 'function' ? detail() : detail;
@@ -142,6 +143,10 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     if (!controller || !active(generation) || !state.row) return;
     const row = state.row;
     const key = row.sessionGroup ?? 'origin';
+    if (configView) {
+      configView({ row, config, revision: configRevision, save: applyConfig });
+      return;
+    }
     const header = element(document, 'header', undefined, 'wb-detail-header wb-group-head');
     const top = element(document, 'div', undefined, 'wb-d-top');
     const title = row.sessionGroup == null ? t('wb.single') : row.name?.displayName ?? fallbackName(row, t);
@@ -223,7 +228,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       if (state.configOpen) {
         const defaultRuntime = state.snapshot?.baselineRuntime;
         renderGroupConfig(sections.config, config, { document, t, writable: getWritable(), rotationThreshold: row.rotationThreshold,
-          defaultRuntime, onSave: saveConfig, onCancel: () => { state.configOpen = false; draw(); } });
+          defaultRuntime, onSave: applyConfig, onCancel: () => { state.configOpen = false; draw(); } });
         // Form handlers own their field references. A controller publication
         // changes the form; ordinary board snapshots keep the mounted editor.
         const form = [...sections.config.children].find(node => node.classList.contains('wb-cfg-edit'));
@@ -317,6 +322,42 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       restart: () => submitAction('restart', row),
     });
   }
+  // Both surfaces keep their own drafts. Reread the saved settings in the other
+  // surface, including after a partial save or a write with an uncertain reply.
+  async function applyConfig(changes) {
+    if (!onConfigSaved) return saveConfig(changes);
+    const gen = generation, key = state.row?.sessionGroup ?? 'origin';
+    const before = config.state.value;
+    await saveConfig(changes);
+    if (!active(gen) || before === config.state.value) return;
+    if (!config.state.error) { config.state.draft = {}; config.redraw(); }
+    onConfigSaved(key);
+    await reloadConfig(false);
+  }
+  async function reloadConfig(includeConfig = configView ? false : state.configOpen) {
+    if (!state.row) return;
+    const gen = generation, read = ++rowRead, key = state.row.sessionGroup ?? 'origin';
+    const settingsRead = includeConfig ? ++configRead : null;
+    const settingsCurrent = () => includeConfig && settingsRead === configRead;
+    try {
+      const row = await request('/api/groups/' + encodeURIComponent(key) + (includeConfig ? '?include=config' : '?include='));
+      if (!active(gen)) return;
+      if (read === rowRead && row?.state?.kind && (row.id ?? row.sessionGroup ?? 'origin') === key) {
+        if (state.row.live?.runId !== row.live?.runId) {
+          resetSubagents();
+          timeline.close();
+        }
+        state.row = row;
+        state.detailKnown = true;
+      }
+      if (settingsCurrent()) await config.load(row);
+    } catch (error) {
+      if (error.name !== 'AbortError' && active(gen) && settingsCurrent()) {
+        config.state.error = error.message;
+      }
+    }
+    if (active(gen) && (read === rowRead || settingsCurrent())) draw();
+  }
   async function act(action) {
     if (!state.row || !state.detailKnown || state.actionBusy || groupActionButtons(state.row, getWritable()).find(item => item.action === action)?.disabled) return;
     const body = state.row.sessionGroup == null || state.row.sessionGroup === 'origin'
@@ -393,6 +434,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     invalidateOwner();
     if (!controller || !active(generation) || !isVisible()) return Promise.resolve();
     if (refreshTask) return refreshTask;
+    const revision = rowRead;
     const gen = generation, key = state.row.sessionGroup ?? 'origin', runId = state.row.live?.runId;
     // Recent activity and the event counts cover plain events only, unless technical detail is on.
     const level = state.level = readLevel(), types = eventTypesFor('all', level);
@@ -410,7 +452,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
         request(`/api/groups/${encodeURIComponent(key)}/usage`),
       ]);
       if (!active(gen) || state.row.live?.runId !== runId || readLevel() !== level) return;
-      if (values[4].status === 'fulfilled') {
+      if (values[4].status === 'fulfilled' && revision === rowRead) {
         const detail = values[4].value;
         if (detail?.state?.kind && (detail.id ?? detail.sessionGroup ?? 'origin') === key) {
           state.row = detail; state.detailKnown = true; state.historical = false;
@@ -459,7 +501,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     state.totalEvents = state.totalRuns = state.unattributed = 0; state.usage = null; state.backlog = null; state.error = null; state.level = null;
     state.configOpen = state.nameOpen = false;
     state.actionResult = ''; state.actionBusy = false;
-    root.hidden = true; root.replaceChildren(); onClose();
+    if (!configView) { root.hidden = true; root.replaceChildren(); onClose(); }
   }
   // Esc first leaves the inline name editor, then closes the drawer. Returns whether it acted.
   function escape() {
@@ -469,7 +511,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     return true;
   }
   return {
-    state, timeline, refresh, close, act, selectTab, escape,
+    state, timeline, refresh, close, act, selectTab, escape, reloadConfig,
     async open(selection, snapshot = {}, { tab = 'overview' } = {}) {
       close();
       state.tab = tab === 'timeline' ? 'timeline' : 'overview'; stopped = false; controller = new AbortController(); owner = identity();
@@ -479,7 +521,8 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       configRevision = 0;
       config = createGroupConfig({ key, request, t, active: () => active(gen), onChange: () => { configRevision++; draw(); } });
       draw();
-      await refresh({ includeExtras: true });
+      if (configView) await reloadConfig();
+      else await refresh({ includeExtras: true });
     },
     async updateSnapshot(snapshot) {
       invalidateOwner();
