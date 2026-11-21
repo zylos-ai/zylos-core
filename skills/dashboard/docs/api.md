@@ -211,9 +211,9 @@ Example: `POST /api/instance/actions/switch-mode` with `{"mode":"multi"}`.
 
 **Access:** Admin. **Parameters:** JSON `{runtime:"claude"|"codex"|"agy"}` plus any authentication-confirmation fields required by Core's runtime-switch flow.
 
-Returns `{ok:true,...CoreResult}` on success, with optional `data` and `message`; failures use the common envelope. `AUTH_FAILED` and `AUTH_NOT_CONFIRMED` results display the original authentication error details; neither is a successful switch. `AUTH_FAILED` means rejected or missing credentials; `AUTH_NOT_CONFIRMED` means the probe could not confirm authentication.
+Returns `{ok:true,...CoreResult}` on success, with optional `data` and `message`; failures use the common envelope. `AUTH_FAILED`, `AUTH_NOT_CONFIRMED` and `RUNTIME_SETUP_INCOMPLETE` results display the original error details; none is a successful switch. `AUTH_FAILED` means rejected or missing credentials; `AUTH_NOT_CONFIRMED` means the probe could not confirm authentication.
 
-**Errors:** HTTP 403 `AUTH_FAILED` (explicit credential rejection or logged-out status for any runtime) or `AUTH_NOT_CONFIRMED` (probe could not confirm authentication); invalid runtime, supervisor/transition rejection codes, and common write errors. The two authentication errors retain distinct `error.message` remedies: replace credentials/log in for `AUTH_FAILED` (agy: `zylos runtime agy --save-apikey <key>`); check network/proxy and retry for `AUTH_NOT_CONFIRMED`.
+**Errors:** HTTP 403 `AUTH_FAILED` (explicit credential rejection or logged-out status for any runtime) or `AUTH_NOT_CONFIRMED` (probe could not confirm authentication); HTTP 502 `RUNTIME_SETUP_INCOMPLETE` (target hooks or instructions not ready; for Codex, invalid hook trust that could not be rebuilt, with the validation reason and rebuild error in `error.message`); invalid runtime, supervisor/transition rejection codes, and common write errors. The two authentication errors retain distinct `error.message` remedies: replace credentials/log in for `AUTH_FAILED` (agy: `zylos runtime agy --save-apikey <key>`); check network/proxy and retry for `AUTH_NOT_CONFIRMED`.
 
 Example: `POST /api/instance/actions/switch-runtime` with `{"runtime":"codex"}`.
 
