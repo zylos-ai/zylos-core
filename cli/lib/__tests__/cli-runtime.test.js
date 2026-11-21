@@ -136,7 +136,7 @@ test('default switch submits confirmed runs after saving and reports each refusa
   assert.equal(result.data.result, 'saved');
   assert.deepEqual(requests, [{ sessionGroup: 'chat:a', runId: 'confirmed-a' }, { sessionGroup: 'chat:b', runId: 'run-chat:b' }]);
   assert.deepEqual(result.data.groups.map(row => [row.sessionGroup, row.restart?.reason ?? row.restart?.status ?? row.status]), [
-    ['chat:a', 'fence_conflict'], ['chat:b', 'accepted'], ['chat:explicit', 'override_kept'], ['chat:starting', 'starting'], ['origin', 'not_running'],
+    ['chat:a', 'fence_conflict'], ['chat:b', 'accepted'], ['chat:explicit', 'override_kept'], ['chat:starting', 'not_ready'], ['origin', 'not_running'],
   ]);
 });
 

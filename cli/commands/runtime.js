@@ -396,11 +396,12 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
   if (changed && previousBaseline !== baseline && before) {
     const pins = parsed.confirmedRuns === undefined ? null : new Map(parsed.confirmedRuns);
     await Promise.all(observed.groups.map(async group => {
-      const { sessionGroup, runId, inherits, status } = group;
+      const { sessionGroup, runId, inherits, liveRuntime, status } = group;
       const pinned = pins ? pins.get(sessionGroup) : parsed.yes ? runId : null;
-      if (inherits === false || status === 'effective' || ['starting', 'not_running'].includes(status) && !pins?.has(sessionGroup)) return;
+      if (inherits === false || status === 'effective' || status === 'not_running' && !pins?.has(sessionGroup)) return;
+      if (status === 'starting' && liveRuntime === baseline) return;
       const reason = sessionMode !== observedMode ? 'mode_changed' : inherits === null ? 'override_state_unknown'
-        : pinned ? null : runId ? 'target_not_confirmed' : 'identity_unavailable';
+        : status === 'starting' ? 'not_ready' : pinned ? null : runId ? 'target_not_confirmed' : 'identity_unavailable';
       group.restart = reason ? { status: 'not_restarted', reason } : await restart({ sessionGroup, runId: pinned });
     }));
     const seen = new Set(observed.groups.map(group => group.sessionGroup));
