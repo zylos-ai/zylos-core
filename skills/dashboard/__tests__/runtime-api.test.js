@@ -82,8 +82,8 @@ test('instance defaults and versions include Antigravity without borrowing Claud
   assert.equal(versions.update_check, 'unsupported');
 });
 
-test('Antigravity session thresholds follow validated model objects and the one-million-token limit', t => {
-  const policy = readThresholdPolicy(fixture(t));
+test('Antigravity session thresholds follow validated model objects and the one-million-token limit', async t => {
+  const policy = await readThresholdPolicy(fixture(t));
   const facts = { runtime: 'agy', usage: { model: { id: 'gemini', effort: 'high' } } };
   assert.equal(sessionThreshold(policy, facts), 40);
   policy.config.model_rotation_thresholds = { agy: { gemini: 25 } };

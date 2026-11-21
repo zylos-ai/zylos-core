@@ -48,7 +48,7 @@ test('interleaved child sessions cannot inject, change main identity or end the 
 
 test('clear marker survives child events and only the new main kick advances identity', async t => {
   const f = fixture(t); await f.kick();
-  publishContextSample({ conversation_id: 'parent', agent_state: 'idle' }, { env: f.env, now: 2000 });
+  await publishContextSample({ conversation_id: 'parent', agent_state: 'idle' }, { env: f.env, now: 2000 });
   const marker = path.join(f.dir, 'agy-session-source');
   fs.writeFileSync(marker, JSON.stringify({ runId: 'run', source: 'clear' }));
   assert.deepEqual(await f.send('SessionStart', 'child'), {});
@@ -77,11 +77,11 @@ test('a child startup cannot replace the real bootstrap current-session record',
   assert.equal(fs.readFileSync(file, 'utf8'), before);
 });
 
-test('current run statusLine can prove main identity but a stale run cannot', t => {
+test('current run statusLine can prove main identity but a stale run cannot', async t => {
   const f = fixture(t);
-  publishContextSample({ conversation_id: 'parent' }, { env: { ...f.env, ZYLOS_RUN_ID: 'old-run' } });
+  await publishContextSample({ conversation_id: 'parent' }, { env: { ...f.env, ZYLOS_RUN_ID: 'old-run' } });
   assert.equal(hooks.mainSession.accept({ conversationId: 'parent' }, 'PreInvocation', f.env).binding, null);
-  publishContextSample({ conversation_id: 'parent' }, { env: f.env });
+  await publishContextSample({ conversation_id: 'parent' }, { env: f.env });
   assert.equal(hooks.mainSession.accept({ conversationId: 'child' }, 'SessionStart', f.env).binding, null);
   assert.equal(hooks.mainSession.accept({ conversationId: 'parent' }, 'PreInvocation', f.env).binding.record.conversationId, 'parent');
 });

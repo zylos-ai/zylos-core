@@ -3,7 +3,7 @@ import path from 'node:path';
 import { loadCoreModule } from './core-modules.js';
 import { tmuxError as fail } from '../../comm-bridge/scripts/tmux-protocol.js';
 
-const { runtimesWith } = await loadCoreModule('runtime/descriptors.js');
+const { runtimesWith, findRuntime } = await loadCoreModule('runtime/index.js');
 const { groupRunDir, listGroupTmuxSessions, tmuxNameForGroup } = await loadCoreModule('session-group-paths.js');
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
 const { observeSessionTarget, revalidateSessionTarget, readProcessTree: systemProcessTree } = await loadCoreModule('runtime/session-target.js');
@@ -53,13 +53,16 @@ export class SupervisorScenes {
         try { return await this.observeGroup(group, { sample: { target }, scope: scopeFromTarget, deferUsage: true }); }
         catch (error) { return this.failedObservation(group, error); }
       } });
-    return [...samples].map(([scope, sample]) => {
+    return Promise.all([...samples].map(async ([scope, sample]) => {
       const group = scope === null ? 'origin' : scope;
       if (sample.observationError) return this.failedObservation(group, sample.observationError);
       const scene = sample.sampled;
-      if (scene?.ready && !this.readUsage) this.applyUsage(scene, sample);
+      if (scene?.ready && !this.readUsage) {
+        const context = (await findRuntime(scene.runtime))?.context;
+        this.applyUsage(scene, sample, context);
+      }
       return scene ?? absent(group, this.env);
-    });
+    }));
   }
 
   failedObservation(group, error) {
@@ -67,12 +70,13 @@ export class SupervisorScenes {
     return { ...absent(group, this.env), present: true, processRunning: undefined, observationError: error };
   }
 
-  applyUsage(scene, sampled) {
+  applyUsage(scene, sampled, context) {
     if (sampled.identity.runId !== scene.runId || sampled.identity.sessionId !== scene.sessionId || !sampled.usage.valid) return;
     const value = sampled.usage.value;
-    Object.assign(scene, usageModelFacts(value, scene.runtime, scene.launchConfig));
-    const percent = ['claude', 'agy'].includes(scene.runtime) ? value.context_window?.used_percentage :
-      value.contextUsage?.ceiling > 0 ? 100 * value.contextUsage.used / value.contextUsage.ceiling : null;
+    Object.assign(scene, usageModelFacts(value, scene.runtime, scene.launchConfig, context));
+    const { usedPercent, usedTokens, contextWindow } = context?.usageFacts(value) ?? {};
+    const percent = Number.isFinite(usedPercent) ? usedPercent
+      : contextWindow > 0 && Number.isFinite(usedTokens) ? 100 * usedTokens / contextWindow : null;
     scene.usagePercent = Number.isFinite(percent) ? percent : null;
   }
 
@@ -108,13 +112,14 @@ export class SupervisorScenes {
             }
           }
         }
-        Object.assign(scene, usageModelFacts(null, scene.runtime, scene.launchConfig));
+        const context = (await findRuntime(scene.runtime))?.context;
+        Object.assign(scene, usageModelFacts(null, scene.runtime, scene.launchConfig, context));
         if (this.readUsage) {
           const usage = await this.readUsage(scene);
           scene.usagePercent = Number.isFinite(usage) ? usage : null;
         } else if (!batch?.deferUsage) {
           const sampled = batch?.sample ?? await this.reader.readSessionState(scope, { freshnessMs: 5000 });
-          this.applyUsage(scene, sampled);
+          this.applyUsage(scene, sampled, context);
         }
       }
       if (!batch) await revalidateSessionTarget({ connection, target });

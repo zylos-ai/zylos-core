@@ -227,9 +227,10 @@ test('agy configured identity is accepted without process-tree inference', async
   assert.deepEqual(identity.launchConfig, config);
 });
 
-test('agy rotation uses the one-million-token policy before a usage sample exists', () => {
-  assert.equal(thresholdLimit({ runtime: 'agy' }), 40);
-  assert.equal(modelThreshold({}, { runtime: 'agy', model: 'gemini' }), 40);
-  assert.equal(modelThreshold({ model_rotation_thresholds: { agy: { gemini: 90 } } }, { runtime: 'agy', model: 'gemini' }), 40);
-  assert.equal(modelThreshold({ model_rotation_thresholds: { agy: { gemini: 25 } } }, { runtime: 'agy', model: 'gemini' }), 25);
+test('agy rotation uses the one-million-token policy before a usage sample exists', async () => {
+  const { context } = await getRuntime('agy');
+  assert.equal(thresholdLimit({ runtime: 'agy', context }), 40);
+  assert.equal(modelThreshold({}, { runtime: 'agy', model: 'gemini', context }), 40);
+  assert.equal(modelThreshold({ model_rotation_thresholds: { agy: { gemini: 90 } } }, { runtime: 'agy', model: 'gemini', context }), 40);
+  assert.equal(modelThreshold({ model_rotation_thresholds: { agy: { gemini: 25 } } }, { runtime: 'agy', model: 'gemini', context }), 25);
 });

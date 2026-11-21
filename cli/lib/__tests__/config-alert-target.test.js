@@ -116,3 +116,16 @@ test('config unset alert_target on an instance without a config file succeeds wi
   assert.equal(result.status, 0, result.stderr);
   assert.equal(fs.existsSync(f.file), false);
 });
+
+test('config rejects an out-of-range legacy model threshold before reporting success', t => {
+  const f = fixture(t);
+  const settings = path.join(f.root, '.claude/settings.json');
+  fs.mkdirSync(path.dirname(settings), { recursive: true });
+  fs.writeFileSync(settings, JSON.stringify({ model: 'sonnet' }));
+
+  const result = f.run(['set', 'new_session_threshold', '200'], true);
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stderr.trim(), 'INVALID_MODEL_THRESHOLD');
+  assert.equal(result.stdout, '');
+  assert.deepEqual(fs.readFileSync(f.file), f.original);
+});

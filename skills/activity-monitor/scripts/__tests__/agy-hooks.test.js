@@ -1,3 +1,4 @@
+import { getRuntime } from '../../../../cli/lib/runtime/index.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -87,11 +88,11 @@ test('ERROR stops keep network, server and ambiguous failures separate from auth
     assert.equal(hooks.normalize({conversationId:'session',terminationReason:'ERROR',error},'Stop').error,'server_error',String(error));
   }
 });
-test('AGY statusLine carries native context and ignores its invalid transcript path',t=>{
+test('AGY statusLine carries native context and ignores its invalid transcript path',async t =>{
   const {env}=fixture(t);
-  const sample=publishContextSample({conversationId:'session',agent_state:'idle',transcript_path:'/nonexistent/desktop',context_window:{used_percentage:20,context_window_size:1048576}},{env,now:1000});
+  const sample=await publishContextSample({conversationId:'session',agent_state:'idle',transcript_path:'/nonexistent/desktop',context_window:{used_percentage:20,context_window_size:1048576}},{env,now:1000});
   assert.equal(sample.session_id,'session');assert.equal('transcript_path' in sample,false);
-  assert.equal(usageModelFacts(sample,'agy',{runtime:'agy',mode:'default'}).contextWindow,1048576);
+  assert.equal(usageModelFacts(sample,'agy',{runtime:'agy',mode:'default'},(await getRuntime('agy')).context).contextWindow,1048576);
 });
 test('busy hooks survive quiet tools and fully-idle stops debounce queued turns',t=>{
   const {dir}=fixture(t),activity=new SessionActivity({runDir:dir,runId:'run',sessionId:'session',runtime:'agy',startedAt:100});

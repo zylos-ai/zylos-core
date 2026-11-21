@@ -1,0 +1,9 @@
+{
+  "program": "Claude Code",
+  "version": "2.1.179 (Claude Code)",
+  "recordedAt": "2026-11-21T08:03:15Z",
+  "how": "Captured unmodified statusLine stdin in a private tmux session with a fresh HOME and an unprivileged Linux container user, using Asia/Singapore and a loopback Messages API fixture. The sample was published after the reply to a synthetic prompt.",
+  "files": {
+    "statusline.json": "Native statusLine from the completed conversation turn."
+  }
+}

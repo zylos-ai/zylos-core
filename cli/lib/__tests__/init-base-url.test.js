@@ -161,7 +161,7 @@ describe('fresh install new-session threshold default', () => {
     const { seedFreshInstallNewSessionThresholdDefault } = await import('../../commands/init.js');
     const updates = [];
 
-    const changed = seedFreshInstallNewSessionThresholdDefault({
+    const changed = await seedFreshInstallNewSessionThresholdDefault({
       config: { runtime: 'claude' },
       defaultModels: { claude: 'opus[1m]' },
       updateConfig: (update) => {
@@ -177,7 +177,7 @@ describe('fresh install new-session threshold default', () => {
   test('preserves an existing Claude threshold value', async () => {
     const { seedFreshInstallNewSessionThresholdDefault } = await import('../../commands/init.js');
 
-    const changed = seedFreshInstallNewSessionThresholdDefault({
+    const changed = await seedFreshInstallNewSessionThresholdDefault({
       config: { new_session_threshold: 70 },
       defaultModels: { claude: 'opus[1m]' },
       updateConfig: (update) => {

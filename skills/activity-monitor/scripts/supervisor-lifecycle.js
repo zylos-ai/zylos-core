@@ -32,7 +32,8 @@ export function sceneRotationThreshold(scene, configuration) {
   return modelThreshold(configuration.rotationPolicy ?? {}, {
     runtime: scene.runtime, model: scene.model, contextWindow: scene.contextWindow,
     launchConfig: scene.launchConfig,
-    defaultModel: configuration.defaultModels?.[scene.runtime], codexModels: configuration.codexModels,
+    context: configuration.contexts?.[scene.runtime], defaultModel: configuration.defaultModels?.[scene.runtime],
+    modelWindows: configuration.modelWindows,
   });
 }
 

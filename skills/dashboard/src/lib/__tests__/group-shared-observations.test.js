@@ -3,17 +3,21 @@ import assert from 'node:assert/strict';
 import { createGroupSnapshot } from '../workbench/group-snapshot.js';
 import { collectStatus } from '../../../../../cli/lib/status-view.js';
 
-const item = runtime => ({ identity: { present: true, ready: true, runtime, runId: runtime, sessionId: runtime },
+const item = (runtime, usage) => ({ identity: { present: true, ready: true, runtime, runId: runtime, sessionId: runtime },
   status: { valid: true, value: { state: 'idle' }, reason: null },
-  usage: { valid: true, value: { context_window: { used_percentage: 47 } } } });
+  usage: { valid: true, value: usage } });
 
 test('fleet projects each shared observation without per-group session reads and broadcast uses cached observations', async () => {
   let reads = 0, observed = null;
   const observationOptions = [];
-  const agy = { ...item('agy'), usage: { valid: true, value: {
+  const agy = item('agy', {
     model: { id: 'gemini-native', effort: 'high' }, context_window: { used_percentage: 29 }, version: '1.5.10',
-  } } };
-  const batch = { mode: 'multi', observations: new Map([['origin', item('claude')], ['other', item('codex')], ['native', agy]]) };
+  });
+  const batch = { mode: 'multi', observations: new Map([
+    ['origin', item('claude', { context_window: { used_percentage: 47 } })],
+    ['other', item('codex', { contextUsage: { used: 47, ceiling: 100 } })],
+    ['native', agy],
+  ]) };
   const provider = {
     get: async options => { reads++; observationOptions.push(options); return observed = batch; }, peek: () => observed,
     reader: { readRuntimeHealth: () => ({ missing: true }), readAccountUsage: async () => null },
@@ -50,7 +54,7 @@ test('fleet projects each shared observation without per-group session reads and
   const repeated = await workbench.getSnapshot(undefined, { cachedObservations: true });
   assert.equal(repeated, live, 'an unchanged fresh observation does not rebuild the projection');
   observed = { ...batch, observations: new Map(batch.observations) };
-  observed.observations.set('other', { ...item('codex'), usage: { valid: true, value: { context_window: { used_percentage: 62 } } } });
+  observed.observations.set('other', item('codex', { contextUsage: { used: 62, ceiling: 100 } }));
   const changed = await workbench.getSnapshot(undefined, { cachedObservations: true });
   assert.notEqual(changed, live, 'changed usage bypasses the projection cache immediately');
   assert.equal(changed.rows.find(row => row.sessionGroup === 'other').contextPct, 62);
