@@ -2751,6 +2751,7 @@ function initSettingsPage() {
   settingsHosts = mountSessionHostSettings(settingsPage.slots.hosts, { t, locale: getLocale, confirm: confirmSetting,
     local: () => !REMOTE_AGENT && !state.remoteAgent,
     read: () => requestAgentJson('/api/session-hosts'),
+    readChannels: () => requestAgentJson('/api/session-hosts/channels'),
     write: body => requestAgentJson('/api/session-hosts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   });
   settingsTimezone = mountTimezoneSettings(settingsPage.slots.timezone, { t,

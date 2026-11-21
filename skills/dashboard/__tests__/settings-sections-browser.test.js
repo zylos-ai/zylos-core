@@ -11,7 +11,7 @@ import { workbenchAnswer } from './fixtures/workbench-browser-api.js';
 // Boundary: the real settings page in a local browser with fixed API answers (the workbench fixture plus this case's
 // update check, keys, machines, prices and session hosting); writes are recorded and answered, nothing runs.
 // Run when the settings sections, their order, the zylos version card, the engine upgrade button, the long-list
-// search and pages, the hosting allowlist tags or detach question, or the phone section bar change; skip for
+// search and pages, the hosting allowlist tags, channel picker or detach question, or the phone section bar change; skip for
 // backend-only and other pages' changes. Opt-in with the same gate as the chat browser cases before any directory,
 // server or browser is allocated; the harness proves the private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/socket paths and
 // closes the browser and HTTP server when the case ends.
@@ -39,11 +39,11 @@ test('the settings page keeps its sections in order, offers the right upgrades a
     const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
     if (evidence) fs.mkdirSync(evidence, { recursive: true });
 
-    async function open(width, { coreUpdate, detail = 'plain' } = {}) {
-      const context = await browser.newContext({ viewport: { width, height: width < 761 ? 844 : 900 }, timezoneId: 'Asia/Singapore', reducedMotion: 'reduce' });
+    async function open(width, { coreUpdate, detail = 'plain', allowlist = ['multica', 'lark'], channels = [], touch = false } = {}) {
+      const context = await browser.newContext({ viewport: { width, height: width < 761 ? 844 : 900 }, hasTouch: touch, timezoneId: 'Asia/Singapore', reducedMotion: 'reduce' });
       sandbox.addCleanup(() => context.close());
       const writes = [];
-      let hosting = { allowlist: ['multica', 'lark'], relationships: fixtures.hosts };
+      let hosting = { allowlist, relationships: fixtures.hosts };
       await context.addInitScript(detail => {
         try {
           localStorage.setItem('zylos-dashboard-locale', 'zh'); localStorage.setItem('zylos-dashboard-theme', 'light');
@@ -74,12 +74,14 @@ test('the settings page keeps its sections in order, offers the right upgrades a
         if (url.pathname === '/api/session-hosts') {
           if (method === 'POST') {
             const body = request.postDataJSON();
+            if (body.action === 'allow') hosting = { ...hosting, allowlist: [...hosting.allowlist, body.channel].sort() };
             if (body.action === 'disallow') hosting = { ...hosting, allowlist: hosting.allowlist.filter(channel => channel !== body.channel) };
             if (body.action === 'detach') hosting = { ...hosting, relationships: hosting.relationships.filter(row => row.source_group !== body.group) };
             return route.fulfill({ json: { ...hosting, changed: true } });
           }
           return route.fulfill({ json: hosting });
         }
+        if (url.pathname === '/api/session-hosts/channels') return route.fulfill({ json: { channels } });
         return route.continue();
       });
       const page = await context.newPage(), errors = [];
@@ -232,6 +234,55 @@ test('the settings page keeps its sections in order, offers the right upgrades a
       assert.equal(await page.locator('.wb-host-row').count(), 11);
       assert.deepEqual(errors, []);
       await context.close();
+    });
+
+    await t.test('a channel is added only by picking a registered one not on the list yet, on desktop and phone', async () => {
+      for (const width of [1280, 390]) {
+        const { context, page, errors, writes, pick, shot } = await open(width, { coreUpdate: null, allowlist: ['telegram'], channels: ['feishu', 'telegram'], touch: width < 761 });
+        const press = locator => width < 761 ? locator.tap() : locator.click();
+        await pick('machine');
+        const card = page.locator('#settings-host-allowlist');
+        const field = card.getByRole('combobox', { name: '通道名称' });
+        const options = card.getByRole('option');
+        const add = card.getByRole('button', { name: '加入白名单', exact: true });
+        const tags = () => card.locator('.wb-host-chip').allTextContents();
+        await card.locator('.wb-host-chip').first().waitFor();
+        await press(field);
+        await card.getByRole('listbox').waitFor();
+        assert.deepEqual(await options.allTextContents(), ['feishu'], 'a channel already on the list is not offered');
+        await shot('channel-picker-open');
+        // Text that names no offered channel finds nothing and adds nothing, by button or Enter.
+        await field.fill('zzz');
+        assert.equal(await options.count(), 0);
+        await card.getByText('没有可加入的通道').waitFor();
+        await shot('channel-picker-no-match');
+        assert.equal(await add.isDisabled(), true);
+        await field.press('Enter');
+        await field.fill('telegram');
+        assert.equal(await options.count(), 0, 'nor does the name of a channel already on the list');
+        await field.press('Enter');
+        await page.waitForTimeout(300);
+        assert.deepEqual(writes, []);
+        await field.press('Escape');
+        assert.equal(await card.getByRole('listbox').isVisible(), false);
+        // Part of a name finds the channel; picking it and adding saves it beside the existing tag.
+        await field.fill('fei');
+        assert.deepEqual(await options.allTextContents(), ['feishu']);
+        await press(options.first());
+        assert.equal(await field.inputValue(), 'feishu');
+        assert.equal(await card.getByRole('listbox').isVisible(), false);
+        await press(add);
+        await page.waitForFunction(() => document.querySelectorAll('#settings-host-allowlist .wb-host-chip').length === 2);
+        assert.deepEqual(await tags(), ['feishu', 'telegram']);
+        assert.deepEqual(writes, [{ path: '/api/session-hosts', body: { action: 'allow', channel: 'feishu' } }]);
+        assert.equal(await field.inputValue(), '');
+        await press(field);
+        await card.getByText('没有可加入的通道').waitFor();
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
+        await shot('channel-picker-added');
+        assert.deepEqual(errors, []);
+        await context.close();
+      }
     });
 
     await t.test('on a phone the section bar stays at the top while the settings page scrolls', async () => {

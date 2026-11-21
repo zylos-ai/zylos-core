@@ -33,6 +33,7 @@ test('the owner can manage session hosting at desktop and phone widths', {
       validateComponent: channel => ['multica', 'telegram'].includes(channel),
     });
     store.attachSessionHost(source, longGroup, 'origin');
+    database.prepare('INSERT OR IGNORE INTO channel_namespaces (namespace, component_name) VALUES (?, ?)').run('multica', 'multica');
     const notices = [];
 
     const route = createSessionHostRoutes({
@@ -105,7 +106,9 @@ test('the owner can manage session hosting at desktop and phone widths', {
           assert.equal(await dialog.locator('h3').textContent(), '解除会话托管');
           await dialog.locator('.wb-modal-acts button').last().click();
           await panel.locator('.wb-host-row').filter({ hasText: 'issue-existing' }).waitFor({ state: 'detached' });
-          await panel.getByRole('textbox', { name: '通道名称' }).fill('multica');
+          // Channels are picked from the ones this machine has registered.
+          await panel.getByRole('combobox', { name: '通道名称' }).click();
+          await panel.getByRole('option', { name: 'multica', exact: true }).click();
           await panel.getByRole('button', { name: '加入白名单' }).click();
           // A channel's × removes it at once, without a question.
           await panel.getByRole('button', { name: '移除 multica', exact: true }).click();

@@ -1201,6 +1201,15 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-host-chip { display: inline-flex; align-items: center; gap: 2px; height: 28px; padding: 0 2px 0 10px; border: 1px solid var(--wb-line-strong); border-radius: 14px; color: var(--text); font-size: 12.5px; }
 .wb-host-chip-x { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-muted); cursor: pointer; }
 .wb-host-chip-x:hover { background: var(--wb-hover); color: var(--text); }
+/* Channels are added from a searchable list under the field: the registered channels not on the list yet. */
+.wb-host-combo { position: relative; display: inline-flex; flex: 0 1 260px; min-width: 0; }
+.wb-host-combo > .wb-input { width: 100%; padding-right: 26px; }
+.wb-host-combo > .wb-ico { position: absolute; right: 8px; top: 50%; margin-top: -6.5px; color: var(--text-muted); transform: rotate(90deg); pointer-events: none; }
+.wb-host-options { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 20; display: flex; flex-direction: column; max-height: 240px; padding: 4px; overflow-y: auto; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); box-shadow: var(--wb-shadow); }
+.wb-host-options[hidden] { display: none; }
+.wb-host-options > .wb-host-meta { padding: 6px 8px; }
+.wb-host-option { padding: 7px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.wb-host-option:hover, .wb-host-option:focus-visible { background: var(--wb-hover); }
 .wb-version-line { margin: 0 0 4px; }
 .wb-card-lead { margin: 0 0 10px; }
 .wb-mode-note b { color: var(--text); font-weight: 600; }
@@ -1592,6 +1601,8 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
   .wb-plist-search .wb-input { width: 100%; }
   .wb-host-chip { height: 36px; padding-left: 12px; border-radius: 18px; }
   .wb-host-chip-x { width: 36px; height: 36px; }
+  .wb-host-combo { flex: 1 1 100%; }
+  .wb-host-option { min-height: 36px; font-size: 14px; }
   @media (prefers-reduced-motion: reduce) { .wb-set-nav, .wb-set-scrim, .wb-set-drawer-open :is(.wb-set-nav, .wb-set-scrim) { transition: none; } }
   /* One 12px page edge and a lighter card padding leave the cards' content most of the width. */
   .wb-set-body { padding: 12px 12px 32px; }
