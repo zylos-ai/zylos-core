@@ -40,41 +40,6 @@
     "reason": "legacy: Reads the fixed pre-group threshold settings."
   },
   {
-    "file": "cli/lib/recorded-account-usage.js",
-    "text": "if (runtime === 'claude') {",
-    "reason": "else-fallback: Non-Claude runtimes reach the existing alternate quota read path."
-  },
-  {
-    "file": "cli/lib/recorded-account-usage.js",
-    "text": "if (runtime === 'claude' && !latest) {",
-    "reason": "else-fallback: Non-Claude runtimes reach the existing alternate quota read path."
-  },
-  {
-    "file": "cli/lib/session-state-reader-async.js",
-    "text": "const sample = runtime === 'claude' ? readJsonSample(path.join(groupRunDir(sessionGroup, env), 'statusline.json'), 'usage') :",
-    "reason": "else-fallback: The scoped quota reader branches between existing Claude and Codex sources."
-  },
-  {
-    "file": "cli/lib/session-state-reader-async.js",
-    "text": "if (runtime === 'codex') {",
-    "reason": "else-fallback: The scoped quota reader branches between existing Claude and Codex sources."
-  },
-  {
-    "file": "cli/lib/session-usage-reader.js",
-    "text": "if (!identity?.present || !identity.ready || identity.runtime !== 'codex') return null;",
-    "reason": "dispatch:usage: Identifies the Codex-specific event or rollout format."
-  },
-  {
-    "file": "cli/lib/session-usage-reader.js",
-    "text": "const event = completeRows(events.text).findLast(row => Number.isInteger(row.v) && row.v >= 1 && Number.isSafeInteger(row.ts) && row.ts >= 0 && row.event === 'session_start' && row.runtime === 'codex' &&",
-    "reason": "dispatch:usage: Identifies the Codex-specific event or rollout format."
-  },
-  {
-    "file": "cli/lib/session-usage-reader.js",
-    "text": "row.runtime === 'codex' && row.session_group === sessionGroup && typeof row.run_id === 'string' &&",
-    "reason": "dispatch:usage: Identifies the Codex-specific event or rollout format."
-  },
-  {
     "file": "skills/activity-monitor/scripts/agy-hooks.js",
     "text": "agyRuntime = await getRuntime('agy');",
     "reason": "hook-entry: Resolves the implementation for this fixed native hook entrypoint."
@@ -145,11 +110,6 @@
     "reason": "legacy: Resolves the fixed pre-group Claude transcript location."
   },
   {
-    "file": "skills/activity-monitor/scripts/supervisor-machine-tasks.js",
-    "text": "usageAlertStateFile:path.join(this.zylosDir,'activity-monitor',runtime==='claude'?'usage-alert-state.json':'usage-codex-alert-state.json'),",
-    "reason": "dispatch:usage: Selects the runtime-specific alert state file."
-  },
-  {
     "file": "skills/activity-monitor/scripts/supervisor-main.js",
     "text": "matchScreen:(runtime,screen)=>runtime==='agy'?{}:(runtime==='claude'?matchClaudeScreen:matchCodexScreen)(screen),",
     "reason": "dispatch:health: Chooses the runtime health probe or invokes Claude failure continuation."
@@ -178,16 +138,6 @@
     "file": "skills/activity-monitor/scripts/tool-rules.js",
     "text": "enabled: runtimeId === 'claude' && watchdogEnabled,",
     "reason": "dispatch:health: Defines the Claude-specific watchdog tool rule."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/usage-monitor.js",
-    "text": "if (this.runtimeId === 'codex') return 0;",
-    "reason": "dispatch:usage: Selects runtime-specific account quota polling behavior."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/usage-monitor.js",
-    "text": "if (this.runtimeId === 'codex') return this.options.usageCodexStateFile;",
-    "reason": "else-fallback: Unknown runtimes use the same usage state path as Claude."
   },
   {
     "file": "skills/comm-bridge/scripts/router/lifecycle.js",
@@ -678,16 +628,6 @@
     "file": "skills/dashboard/src/lib/schema.js",
     "text": "runtime TEXT NOT NULL CHECK (runtime IN ('claude','codex')),",
     "reason": "sql-check: Preserves the released SQLite column default or constraint."
-  },
-  {
-    "file": "skills/dashboard/src/lib/session-observations.js",
-    "text": "if (identity.runtime === 'codex') {",
-    "reason": "dispatch:usage: Reads runtime-specific sample fields and sources."
-  },
-  {
-    "file": "skills/dashboard/src/lib/session-observations.js",
-    "text": "if (identity.runtime !== 'claude') return null;",
-    "reason": "dispatch:usage: Reads runtime-specific sample fields and sources."
   },
   {
     "file": "skills/dashboard/src/lib/state-engine.js",

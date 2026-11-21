@@ -1,4 +1,3 @@
-import path from 'node:path';
 import { loadCoreModule as defaultLoadCoreModule } from './core-modules.js';
 
 const { runtimesWith } = await defaultLoadCoreModule('runtime/descriptors.js');
@@ -16,7 +15,7 @@ export function createSessionObservations({ loadCoreModule = defaultLoadCoreModu
       .filter(item => item.identity.present && item.identity.ready && item.identity.runtime === runtime &&
         !item.observationError && item.status.reason !== 'identity_changed' && item.sampled)
       .map(item => item.sampled).sort((a, b) => b.mtime - a.mtime);
-    return { live: samples[0]?.value ?? null, recorded: readRecordedAccountUsage(runtime, env, now(), samples) };
+    return { live: samples[0]?.value ?? null, recorded: await readRecordedAccountUsage(runtime, env, now(), samples) };
   }
   // Stable function identities let the shared account cache retain its cadence.
   const reader = {
@@ -30,10 +29,12 @@ export function createSessionObservations({ loadCoreModule = defaultLoadCoreModu
     },
   };
   async function build() {
-    const [config, sessions, usage, paths] = await Promise.all([
+    const [config, sessions, { getRuntime }] = await Promise.all([
       loadCoreModule('config.js'), loadCoreModule('session-state-reader.js'),
-      loadCoreModule('session-usage-reader.js'), loadCoreModule('session-group-paths.js'),
+      defaultLoadCoreModule('runtime/index.js'),
     ]);
+    const quotas = new Map(await Promise.all(runtimesWith('accountQuota').map(async id =>
+      [id, (await getRuntime(id)).usage.accountQuota])));
     // mode stays the effective mode (no key = single) for existing readers; sessionMode is the raw value.
     const sessionMode = config.readSessionMode().mode;
     const mode = sessionMode ?? 'single';
@@ -45,15 +46,7 @@ export function createSessionObservations({ loadCoreModule = defaultLoadCoreModu
       freshnessMs: 5000, usageFreshnessMs: Infinity, includeAllLive: mode === 'multi',
       sampleTarget(sessionGroup, identity) {
         if (!identity.present || !identity.ready) return null;
-        if (identity.runtime === 'codex') {
-          const found = usage.readCodexSampleForIdentity({ sessionGroup, identity, env, account: true });
-          return found?.sample.rateLimits ? { value: found.sample.rateLimits, mtime: found.mtime,
-            recordedAt: found.sample.capturedAt } : null;
-        }
-        if (identity.runtime !== 'claude') return null;
-        const sample = usage.readJsonSample(path.join(paths.groupRunDir(sessionGroup ?? 'origin', env), 'statusline.json'), 'usage');
-        if (sample.error || sample.identity.runId !== identity.runId || sample.identity.sessionId !== identity.sessionId || !sample.value.rate_limits) return null;
-        return { value: sample.value.rate_limits, mtime: sample.mtime, recordedAt: sample.sampledAt ?? sample.mtime };
+        return quotas.get(identity.runtime)?.readLiveSample({ sessionGroup, identity, env }) ?? null;
       },
     });
     const observations = read === group ? observed : new Map([[group, observed.get(read)]]);

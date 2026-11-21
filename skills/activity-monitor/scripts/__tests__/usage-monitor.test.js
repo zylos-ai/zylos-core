@@ -7,7 +7,7 @@ import { UsageMonitor } from '../usage-monitor.js';
 function fixture(t,runtime='claude') {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'usage-monitor-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
   const calls={control:[],samples:[]};let limits={five_hour:{used_percentage:20},seven_day:{used_percentage:45}};
-  const monitor=new UsageMonitor({runtimeId:runtime},{zylosDir:dir,usageStateFile:path.join(dir,'usage.json'),usageCodexStateFile:path.join(dir,'usage-codex.json'),usageAlertStateFile:path.join(dir,'alert.json'),
+  const monitor=new UsageMonitor({runtimeId:runtime},{zylosDir:dir,usageStateFile:path.join(dir,'usage.json'),usageAlertStateFile:path.join(dir,'alert.json'),
     monitorEnabled:true,alertEnabled:true,warnThreshold:80,highThreshold:90,criticalThreshold:95,notifyCooldownSec:14400,
     readMode:()=>({mode:'multi'}),readAccountUsage:async r=>{calls.samples.push(r);return limits;},runC4Control:args=>{calls.control.push(args);return {ok:true,output:'control 1'};},log:()=>{}});
   return {dir,monitor,calls,setLimits:value=>limits=value};

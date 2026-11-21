@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { readCodexSampleForIdentity } from '../../session-usage-reader.js';
+import { readCodexSampleForIdentity } from './rollout.js';
 import { UNSUPPORTED } from '../contract.js';
 
 // Codex rewrites its model cache when it updates; a changed file is parsed again,

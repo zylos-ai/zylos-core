@@ -37,6 +37,7 @@ export default Object.freeze({
   input,
   busy,
   context,
+  usage: UNSUPPORTED,
   switch: sessionSwitch,
   hooks,
 });
