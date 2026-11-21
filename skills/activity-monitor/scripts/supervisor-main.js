@@ -25,7 +25,7 @@ import { systemSendEnvironment } from '../../comm-bridge/scripts/c4-system-send-
 import { PRE_RECLAIM_CHECK_PROMPT, ROTATION_PROMPT, UPGRADE_RESTART_CHECK_PROMPT } from './reclaim-prompts.js';
 const { readSessionMode, readZylosConfigOrThrow } = await loadCoreModule('config.js');
 const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
-const { getRuntime, SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/index.js');
+const { getRuntime, runtimeDisplayName, SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/index.js');
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
 const { observeSessionTarget } = await loadCoreModule('runtime/session-target.js');
 const { zylosRoot, LEGACY_TMUX_NAMES } = await loadCoreModule('session-group-paths.js');
@@ -99,11 +99,22 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
   const targetReader=createSessionReader({env,connectionOptions:baseScenes.connectionOptions ?? {},resolveConfig:input=>db.resolveSessionLaunchConfig(input)});
   const resolveTargetRuntime=async group=>targetReader.resolveTargetRuntime(group==='origin' && (await readMode()).legacy?null:group);
   const alert=event=>{
-    const details=[event.requestId && `requestId=${event.requestId}`,event.reason && `reason=${event.reason}`,
-      event.runtime && `runtime=${event.runtime}`,event.oldest_at!==undefined && `oldest_at=${event.oldest_at}`,event.message].filter(Boolean).join(' ');
-    const message=event.event==='repeated_unexpected_run_end'
-      ? messageForStatus({context:'repeated_failure',noticeCode:'ended_unexpectedly',group:event.sessionGroup ?? event.session_group,count:event.count},configuration?.statusNotices ?? {})
-      : `Supervisor: ${event.event ?? 'lifecycle requires attention'} (${event.sessionGroup ?? event.session_group ?? 'global'}). ${details}`.trim();
+    const statusNotices = configuration?.statusNotices ?? {};
+    let message;
+    if (event.event === 'repeated_unexpected_run_end') {
+      message = messageForStatus({context:'repeated_failure',noticeCode:'ended_unexpectedly',group:event.sessionGroup ?? event.session_group,count:event.count},statusNotices);
+    } else if (event.event === 'origin_auth_blocked') {
+      message = messageForStatus({
+        context: 'repeated_failure',
+        noticeCode: 'origin_auth_blocked',
+        runtime: runtimeDisplayName(event.runtime),
+        oldestAt: event.oldest_at * 1000,
+      }, statusNotices);
+    } else {
+      const details=[event.requestId && `requestId=${event.requestId}`,event.reason && `reason=${event.reason}`,
+        event.message].filter(Boolean).join(' ');
+      message = `Supervisor: ${event.event ?? 'lifecycle requires attention'} (${event.sessionGroup ?? event.session_group ?? 'global'}). ${details}`.trim();
+    }
     const pending=guard.notify(message);
     pendingAlerts.add(pending);pending.finally(()=>pendingAlerts.delete(pending)).catch(log);return pending;
   };

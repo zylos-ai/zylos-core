@@ -46,9 +46,9 @@ test('Origin inbound expiry warning observes the threshold and resets only after
 // formatting or wiring; skip unrelated lifecycle work. The runner isolates HOME,
 // ZYLOS_DIR, PM2_HOME and short TMPDIR/TMUX_TMPDIR. Private am.sock, injected
 // scenes/database/sender; no live tmux/PM2/network. Stop before owned-file cleanup.
-test('Origin authentication expiry alert includes its target runtime in the actual entry message', {timeout:5000}, async t=>{
+test('Origin authentication expiry sends the bilingual owner alert with the runtime and local time', {timeout:5000}, async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'origin-alert-entry-'));
-  const now=1800000000000,oldestAt=now/1000-PENDING_MAX_AGE_SECONDS+300,messages=[];
+  const oldestAt=1795226404, now=(oldestAt+PENDING_MAX_AGE_SECONDS-300)*1000, messages=[];
   let service;
   t.after(async()=>{try{await service?.stop();}finally{fs.rmSync(root,{recursive:true,force:true});}});
   const db={getModeTransition:()=>null,listDrainFences:()=>[],getDrainFence:()=>null,
@@ -62,7 +62,7 @@ test('Origin authentication expiry alert includes its target runtime in the actu
     observeGroup:async()=>({present:false}),listRuns:async()=>[],readRun:async()=>null};
   service=await startSupervisor({env:{...process.env,HOME:root,ZYLOS_DIR:root,PM2_HOME:path.join(root,'.pm2')},
     db,scenes,now:()=>now,readMode:()=>({mode:'multi',keyPresent:true}),
-    readConfig:()=>({session_mode:'multi',runtime:'claude',session_pool_size:2}),
+    readConfig:()=>({session_mode:'multi',runtime:'claude',session_pool_size:2,statusNotices:{timeZone:'Asia/Singapore'}}),
     readMemoryInputs:async()=>({source:'host',limitBytes:8*1024**3,usedBytes:2*1024**3}),
     legacyStatus:{tick(){},close(){}},machineTasks:{tick(){},stop(){}},
     sendAlert:async(target,message)=>{messages.push({target,message});return true;},
@@ -72,9 +72,10 @@ test('Origin authentication expiry alert includes its target runtime in the actu
   await service.supervisor.loop.tick();
   assert.equal(messages.length,1);
   assert.deepEqual(messages[0].target,{channel:'dashboard',endpoint:'origin'});
-  assert.match(messages[0].message,/origin_auth_blocked/);
-  assert.match(messages[0].message,/runtime=claude/);
-  assert.ok(messages[0].message.includes(`oldest_at=${oldestAt}`));
+  assert.equal(messages[0].message, [
+    '[Zylos] Claude 登录失效，Origin 从 2026-11-21 10:00 Asia/Singapore 起有消息还没处理。系统在自动重试，登录恢复后会接着处理；如果一直不恢复，请检查 Claude 的登录。',
+    '[Zylos] Claude sign-in has failed, and Origin has had unprocessed messages since 2026-11-21 10:00 Asia/Singapore. The system keeps retrying and will continue once sign-in is restored. If it does not recover, check the Claude login.',
+  ].join('\n'));
 });
 
 test('role-only demand, rate limit, global fence, transition and legacy mode never emit an authentication expiry warning',async t=>{
