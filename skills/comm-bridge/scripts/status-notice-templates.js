@@ -37,6 +37,10 @@ const REPEATED_FAILURE_TEMPLATES = {
     zh: '对话「{group}」连续 {count} 次启动后不到 10 分钟就意外结束。系统会继续重起；如果一直这样，请检查这个对话正在做的任务或运行环境。',
     en: 'Conversation "{group}" ended unexpectedly {count} times in a row, each within 10 minutes of starting. It keeps restarting. If this continues, check the task it is working on or its runtime environment.',
   },
+  origin_auth_blocked: {
+    zh: '{runtime} 登录失效，Origin 从 {oldestAt} 起有消息还没处理。系统在自动重试，登录恢复后会接着处理；如果一直不恢复，请检查 {runtime} 的登录。',
+    en: '{runtime} sign-in has failed, and Origin has had unprocessed messages since {oldestAt}. The system keeps retrying and will continue once sign-in is restored. If it does not recover, check the {runtime} login.',
+  },
 };
 const SUFFIXES = {
   inbound: {
@@ -79,7 +83,7 @@ function formatResetTime(resetAt, requestedZone) {
 }
 
 // Configuration is trusted operator input. Runtime error text is never rendered.
-export function messageForStatus({ health, reason, noticeCode, resetAt, group, count, others, context = 'inbound' } = {}, config = readZylosConfigOrThrow().statusNotices ?? {}) {
+export function messageForStatus({ health, reason, noticeCode, resetAt, group, count, others, runtime, oldestAt, context = 'inbound' } = {}, config = readZylosConfigOrThrow().statusNotices ?? {}) {
   config = config && typeof config === 'object' ? config : {};
   const category = Object.hasOwn(DEFAULTS, noticeCode) ? noticeCode : Object.hasOwn(DEFAULTS, health) ? health : 'unavailable';
   const mode = context === 'repeated_failure' && Object.hasOwn(REPEATED_FAILURE_TEMPLATES, noticeCode) ? 'repeated_failure'
@@ -89,6 +93,7 @@ export function messageForStatus({ health, reason, noticeCode, resetAt, group, c
   const now = Date.now();
   const validReset = Number.isSafeInteger(resetAt) && resetAt > now && resetAt - now <= 8 * 86400000;
   const resetText = validReset ? formatResetTime(resetAt,config.timeZone) : null;
+  const oldestText = Number.isSafeInteger(oldestAt) ? formatResetTime(oldestAt, config.timeZone) : undefined;
   let code = ['capacity', 'repeated_failure'].includes(mode) ? noticeCode : Object.hasOwn(NOTICE_TEMPLATES,noticeCode) ? noticeCode : null;
   if (code === 'quota_exhausted_reset' && !resetText) code = 'quota_exhausted';
   // Codes and times come from structured, trusted classification. Free-form
@@ -98,9 +103,9 @@ export function messageForStatus({ health, reason, noticeCode, resetAt, group, c
       const render = (id, values) => {
         const override = config.templates?.repeated_failure?.[id]?.[locale];
         const text = validText(override, 2000) ? override.trim() : REPEATED_FAILURE_TEMPLATES[id][locale];
-        return text.replace(/\{(group|count|reason|others|code|seconds)\}/g, (token, key) => values[key] === undefined ? token : String(values[key]));
+        return text.replace(/\{(group|count|reason|others|code|seconds|runtime|oldestAt)\}/g, (token, key) => values[key] === undefined ? token : String(values[key]));
       };
-      const values = { group, count, others };
+      const values = { group, count, others, runtime, oldestAt: oldestText };
       if (noticeCode === 'could_not_restart') {
         values.reason = reason?.kind === 'timeout'
           ? render('could_not_restart_timeout', { seconds: reason.seconds })
