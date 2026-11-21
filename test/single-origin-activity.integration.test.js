@@ -47,7 +47,7 @@ for (const range of ['60m', '6h']) test(`single Origin ${range} discovers a lega
   const snapshot = await service.getSnapshot();
   assert.equal(snapshot.rows[0].sessionGroup, null);
   assert.equal(snapshot.rows[0].live?.runId ?? null, null);
-  const result = await service.activity(range);
+  const result = await service.activity(range, ['origin']);
   assert.deepEqual(Object.keys(result.groups), ['origin']);
   assert.equal(result.groups.origin.cells[0], 'busy', 'the null-group stop discovers its run and seeds the earlier prompt');
   assert.equal(result.groups.origin.cells[1], 'none', 'the stop at the next boundary ends the seeded turn');
