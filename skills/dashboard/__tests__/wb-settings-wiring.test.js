@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { confirmedRunner, keyActionRequest, wireSettingsConfirmations } from '../public/js/wb/settings-wiring.js';
+import { createSettingsLoader } from '../public/js/wb/settings.js';
 import { createActionRunner } from '../public/js/wb/action-runner.js';
 import { fleetPageOptions, renderFleetPage } from '../public/js/agent-fleet.js';
 import { documentFixture, node } from './fixtures/settings-dom.js';
@@ -43,6 +44,23 @@ const defaultsValue = () => ({
   snapshot: { listKnown: true, baselineRuntime: 'claude', instance: { runtimeHealth: { claude: { health: 'ok' }, codex: { health: 'ok' } } }, overrides: { runtime: [], model: [] }, rows: [] },
   page: { runtimeTotal: 1 }, metadata: { claude: meta('claude'), codex: meta('codex') },
 });
+
+function readDefaults(value) {
+  return async path => {
+    if (path === '/api/instance') return { ...value.snapshot.instance, default_runtime: value.snapshot.baselineRuntime };
+    if (path === '/api/groups/counts') return { listKnown: true };
+    if (path === '/api/groups/running') return { listKnown: true, rows: value.snapshot.rows };
+    if (path === '/api/groups/runtime-overrides') return value.page;
+    if (path.startsWith('/api/groups/')) {
+      const sessionGroup = decodeURIComponent(path.slice('/api/groups/'.length).split('?')[0]);
+      const row = value.snapshot.rows.find(item => item.sessionGroup === sessionGroup);
+      assert.ok(row, sessionGroup);
+      return { runtimeOverridden: false, modelOverridden: false, ...row };
+    }
+    const runtime = new URL(path, 'http://fixture').searchParams.get('runtime');
+    return value.metadata[runtime] ?? {};
+  };
+}
 
 // The page's real action runner, recording what it sends and every time it asks.
 function recordingRunner(sent, asked = []) {
@@ -161,7 +179,8 @@ test('saving model and effort for both engines asks once, then runs every change
   const p = page(), sent = [], busy = [], asked = [];
   const wiring = wired(p, { runner: recordingRunner(sent, asked), setBusy: value => busy.push(value) });
   const root = node(p.document, 'div');
-  wiring.renderDefaults(root, defaultsValue(), async () => ({}));
+  const value = defaultsValue();
+  wiring.renderDefaults(root, value, readDefaults(value));
   for (const runtime of ['claude', 'codex']) {
     const model = root.querySelector('#settings-model-' + runtime); model.value = 'two'; await model.dispatch('change');
     const effort = root.querySelector('#settings-effort-' + runtime); effort.value = runtime === 'codex' ? 'minimal' : 'low'; await effort.dispatch('change');
@@ -181,7 +200,7 @@ test('cancelling the model save sends nothing', async () => {
   const root = node(p.document, 'div');
   const value = defaultsValue();
   value.snapshot.rows = [{ sessionGroup: 'origin', target: { runtime: 'claude' }, presence: 'running' }];
-  wiring.renderDefaults(root, value, async () => ({}));
+  wiring.renderDefaults(root, value, readDefaults(value));
   const model = root.querySelector('#settings-model-claude'); model.value = 'two'; await model.dispatch('change');
   await root.querySelector('#settings-save-models').dispatch('click');
   assert.equal(p.dialogs.length, 1);
@@ -194,7 +213,7 @@ test('switching the default engine asks once and names the remote machine it act
   const root = node(p.document, 'div');
   const value = defaultsValue();
   value.snapshot.rows = [{ sessionGroup: 'origin', target: { runtime: 'claude' }, presence: 'running' }];
-  wiring.renderDefaults(root, value, async () => ({}));
+  wiring.renderDefaults(root, value, readDefaults(value));
   await root.querySelector('#settings-use-codex').dispatch('click');
   await root.querySelector('#settings-save-runtime').dispatch('click');
   assert.equal(p.dialogs.length, 1, 'one .wb-modal');
@@ -202,6 +221,29 @@ test('switching the default engine asks once and names the remote machine it act
   assert.deepEqual([p.dialogs[0].title, p.dialogs[0].danger], ['wb.settings.confirm.runtime', true], 'switching the engine interrupts running work');
   assert.match(p.dialogs[0].body, /\nconfirm\.remote_target:\{"agent":"lab"\}$/);
   assert.deepEqual(sent, [{ action: 'switch-runtime', body: { runtime: 'codex', confirmed: true } }]);
+});
+
+test('default engine and model confirmations include a session that started after Settings opened', async () => {
+  const p = page({ answer: false }), sent = [];
+  const wiring = wired(p, { runner: recordingRunner(sent) });
+  const root = node(p.document, 'div');
+  const value = defaultsValue();
+  const read = readDefaults(value);
+  let panel;
+  const loader = createSettingsLoader({ read, onLoad: settings => { panel = wiring.renderDefaults(root, settings, read); } });
+  await loader.open();
+  try {
+    value.snapshot.rows.push({ sessionGroup: 'chat:late', name: { displayName: 'Started after opening' },
+      target: { runtime: 'claude' }, presence: 'running' });
+    await root.querySelector('#settings-use-codex').dispatch('click');
+    await root.querySelector('#settings-save-runtime').dispatch('click');
+    const model = root.querySelector('#settings-model-claude');
+    model.value = 'two'; await model.dispatch('change');
+    await root.querySelector('#settings-save-models').dispatch('click');
+    assert.equal(p.dialogs.length, 2);
+    assert.ok(p.dialogs.every(dialog => dialog.danger && dialog.body.includes('Started after opening')));
+    assert.deepEqual(sent, []);
+  } finally { panel.destroy(); }
 });
 
 test('idle reclaim uses the session card mount and the existing confirmed remote action path', async () => {

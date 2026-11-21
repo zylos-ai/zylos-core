@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { composeSettings, createSettingsLoader, settingsSections, resetSettingsDrafts } from '../public/js/wb/settings.js';
-import { defaultGroups, modelFollowers, runtimeHealth, runtimeConfirmation, createOverrideSearch, renderDefaults, renderHotTtl, modelSaveConfirmation } from '../public/js/wb/settings-defaults.js';
+import { defaultGroups, modelFollowers, runtimeHealth, runtimeConfirmation, createOverrideSearch, renderDefaults as renderDefaultsCard, renderHotTtl, modelSaveConfirmation } from '../public/js/wb/settings-defaults.js';
 import { createPricingPanel, appendPriceRow, collectPriceRows, countPriceChanges, draftPriceRows, orderedPricePrefixes } from '../public/js/wb/settings-pricing.js';
 import { keyActionConfirmation, keyCounts, remoteStatus, renderKeyTable, renderRemoteAgents } from '../public/js/wb/settings-access.js';
 import { mountLanguageControl, mountThemeControl } from '../public/js/wb/settings-ui.js';
@@ -18,6 +18,8 @@ function snapshot() {
     overrides: { runtime: [{ sessionGroup: 'a', runtime: 'codex' }], model: [{ sessionGroup: 'b', runtime: 'claude' }] },
     rows: ['origin', 'a', 'b', 'c'].map(sessionGroup => ({ sessionGroup, presence: 'running', name: { displayName: 'Name ' + sessionGroup }, target: { runtime: sessionGroup === 'a' ? 'codex' : 'claude' } })) };
 }
+
+const renderDefaults = (root, options) => renderDefaultsCard(root, { readSnapshot: async () => options.snapshot, ...options });
 
 test('default lists use independent sources, include Origin, and never enumerate all overrides', () => {
   const data = snapshot(), value = defaultGroups(data, { runtimeTotal: 3, runtime: [] });
@@ -247,7 +249,10 @@ test('changing the default engine is a draft until saved and the undo restores t
   let rejection = "Fixture credentials were rejected";
   const panel = renderDefaults(root, { confirm: async () => true, snapshot: healthy, page: { runtimeTotal: 1 }, document, t, read: async () => ({}), execute: async (action, body) => { calls.push({ action, body });
     if (rejection) throw new Error(rejection);
-    return { ok: true, data: { baseline: 'codex', groups: [{ sessionGroup: 'origin', restart: { status: 'not_restarted', reason: 'fence_conflict' } }] }, messageKey: 'result.runtime_saved', messageParams: { value: 'Codex' } }; } });
+    return { ok: true, data: { baseline: 'codex', groups: [
+      { sessionGroup: 'origin', restart: { status: 'not_restarted', reason: 'fence_conflict' } },
+      { sessionGroup: 'c', restart: { status: 'unknown', reason: 'no_reply' } },
+    ] }, messageKey: 'result.runtime_saved', messageParams: { value: 'Codex' } }; } });
   const save = root.querySelector('#settings-save-runtime');
   assert.equal(save.hidden, true); assert.equal(root.querySelector('#settings-use-claude').getAttribute('aria-pressed'), 'true');
   await root.querySelector('#settings-use-codex').dispatch('click');
@@ -263,7 +268,9 @@ test('changing the default engine is a draft until saved and the undo restores t
   await save.dispatch('click');
   assert.deepEqual(calls, Array.from({ length: 2 }, () => ({ action: 'switch-runtime', body: { runtime: 'codex', confirmed: true } })));
   assert.match(root.textContent, /result.runtime_saved/);
-  assert.match(root.querySelector('#settings-engine-result').textContent, /savedRestartFailed.*Name origin.*fence_conflict/);
+  const feedback = root.querySelector('#settings-engine-result').textContent;
+  assert.match(feedback, /savedRestartFailed.*Name origin.*fence_conflict/);
+  assert.match(feedback, /savedRestartUnknown.*Name c.*no_reply/);
   assert.equal(save.hidden, true, 'successful save updates the baseline in the mounted card');
   await root.querySelector('#settings-use-claude').dispatch('click');
   await root.querySelector('#settings-undo-runtime').dispatch('click');
@@ -293,6 +300,8 @@ test('the mounted default effort uses configured metadata and only saves a user 
     assert.equal(save.hidden, false); assert.equal(save.disabled, false);
     await save.dispatch('click');
     assert.deepEqual(calls, [{ action: 'switch-effort', body: { runtime: 'claude', effort: 'high' } }]);
+    assert.deepEqual(questions[0].split('\n').map(line => line.split(':')[0]),
+      ['wb.settings.confirmModels', 'wb.settings.effortNextStart', 'wb.settings.changeEffort']);
     assert.equal(questions.length, 1); assert.equal(save.hidden, true);
     assert.equal(root.querySelector('#settings-model-result').textContent, 'wb.settings.defaultsSaved wb.settings.effortNextStart');
   } finally { panel.destroy(); }

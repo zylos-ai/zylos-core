@@ -176,7 +176,7 @@ async function switchModel(reqId, body, config, zylosDir) {
       if (body.confirmed !== true && (!observed.groupsComplete || observed.groups.some(group => ['restart_needed', 'unknown'].includes(group.status)))) {
         return { ok: false, status: 409, error: { code: 'CONFIRMATION_REQUIRED',
           message: 'Refresh the session list and confirm the affected sessions before saving.' },
-        messageKey: 'wb.settings.runtimeConfirmationRequired' };
+        messageKey: 'wb.settings.modelConfirmationRequired' };
       }
     }
   }
@@ -191,7 +191,7 @@ async function switchModel(reqId, body, config, zylosDir) {
   if (observed) {
     let modeChanged = true;
     try { modeChanged = readSessionMode().mode !== mode; } catch { /* The save succeeded; the run cannot be safely targeted. */ }
-    await restartObservedGroups(observed, { modeChanged, confirmed: body.confirmed === true });
+    await restartObservedGroups(observed, { modeChanged });
   }
   return { ok: true, message: `Model changed to ${model}.`, previous, requires_restart: body.runtime === undefined, runtime,
     ...(observed && { data: observed }), messageKey: 'result.model_changed', messageParams: { value: model, runtime } };

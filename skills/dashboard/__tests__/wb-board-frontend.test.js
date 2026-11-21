@@ -68,7 +68,7 @@ test('model text and pending comparison use launch identity, desired config and 
   value.launchConfig = { runtime: 'claude', mode: 'override', model: 'opus', effort: 'high' };
   value.desired = { ...value.launchConfig }; assert.equal(pendingModel(value), false);
   for (const key of ['runtime', 'model', 'effort']) { value.desired = { ...value.launchConfig, [key]: 'different' }; assert.equal(pendingModel(value), true); }
-  value.desired = null; assert.equal(pendingModel(value), false); value.fence = { reason: 'model_config' }; assert.equal(pendingModel(value), true);
+  value.desired = null; assert.equal(pendingModel(value), false); value.fence = { reason: 'model_config' }; assert.equal(pendingModel(value), false);
   value.target.onlyMulti = true; assert.equal(pendingModel(value), false);
   assert.equal(modelCell({ presence: 'not_running', target: null }), '—');
 });
@@ -80,7 +80,7 @@ test('running group without a readable launch configuration shows an unknown mod
   assert.equal(modelCell({ ...unreadable, target: { ...unreadable.target, runtime: 'unknown' } }, t), 'Unknown · wb.unknown');
   assert.equal(modelCell(row('b'), t), 'Claude · default');
   assert.equal(modelCell({ ...row('c'), presence: 'not_running', launchConfig: null, target: { runtime: 'codex', model: { model: 'gpt', effort: 'low' } } }, t), 'Codex · gpt · low');
-  assert.equal(pendingModel(unreadable), false); assert.equal(pendingModel({ ...unreadable, fence: { reason: 'model_config' } }), true);
+  assert.equal(pendingModel(unreadable), false); assert.equal(pendingModel({ ...unreadable, fence: { reason: 'model_config' } }), false);
   const document = createDocument();
   const cell = allNodes(renderRow(unreadable, { document, level: 'technical', t })).find(node => node.classList.contains('wb-model'));
   assert.equal(cell.textContent, 'Claude · wb.unknown');

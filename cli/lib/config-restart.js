@@ -61,13 +61,13 @@ export async function observeRuntimeGroups(baseline, sessionMode, { list = listG
   return result;
 }
 
-export async function restartObservedGroups(observed, { restart = requestConfigRestart, confirmed = true, modeChanged = false, skipStartingRuntime } = {}) {
+export async function restartObservedGroups(observed, { restart = requestConfigRestart, modeChanged = false, skipStartingRuntime } = {}) {
   await Promise.all(observed.groups.map(async group => {
     const { sessionGroup, runId, inherits, status } = group;
     if (['override_kept', 'effective', 'not_running'].includes(status) ||
       (status === 'starting' && group.liveRuntime === skipStartingRuntime)) return;
     const reason = modeChanged ? 'mode_changed' : inherits === null ? 'override_state_unknown'
-      : status === 'starting' ? 'not_ready' : !runId ? 'identity_unavailable' : !confirmed ? 'target_not_confirmed' : null;
+      : status === 'starting' ? 'not_ready' : !runId ? 'identity_unavailable' : null;
     group.restart = reason ? { status: 'not_restarted', reason } : await restart({ sessionGroup, runId });
   }));
 }

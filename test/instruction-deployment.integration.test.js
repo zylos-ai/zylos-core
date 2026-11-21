@@ -57,7 +57,11 @@ for (const mode of ['fresh', 'refresh']) test(`${mode} instruction deployment pr
     assert.doesNotMatch(groupStart.stdout, /handoff-follow-up\.md/);
     for (const output of ['CLAUDE.md', 'AGENTS.md']) {
       const instructions = fs.readFileSync(path.join(env.ZYLOS_DIR, output), 'utf8');
+      assert.match(instructions, /send a one-line transition notice via C4 before running `zylos runtime <target> --yes`/);
       assert.match(instructions, /when a handoff exists, state Pending lists Mode-switch messages, or an internal notice concerns absorbed messages, read and follow `~\/zylos\/\.claude\/skills\/comm-bridge\/references\/handoff-follow-up\.md`/);
     }
+    const authRelay = fs.readFileSync(path.join(env.ZYLOS_DIR,
+      '.claude/skills/component-management/references/runtime-switch.md'), 'utf8');
+    assert.match(authRelay, /Send a brief transition notice through the original C4 reply route, then run\s+`zylos runtime <target> --yes`/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { updateConfigWithLock } from '../config-lock.js';
 import { readConfigStrict } from '../config-store.js';
 import { executeRuntimeSwitch, runtimeCommand } from '../../commands/runtime.js';
-import { observeRuntimeGroups } from '../config-restart.js';
+import { observeRuntimeGroups, requestConfigRestart } from '../config-restart.js';
 
 function fixture(overrides = {}) {
   const calls = [];
@@ -141,6 +141,34 @@ test('default switch submits confirmed runs after saving and reports each refusa
   ]);
 });
 
+test('saving an API key for the current engine needs no restart confirmation when status is unknown', async () => {
+  const f = fixture({
+    read: () => ({ state: 'ok', config: { runtime: 'codex', session_mode: 'multi' } }),
+    observe: async () => ({ groups: [{ sessionGroup: 'origin', status: 'unknown' }], groupsComplete: false, observationErrors: [] }),
+    restart: () => assert.fail('credential-only save cannot restart a session'),
+  });
+  const result = await f.run(['--save-apikey', 'fixture-key']);
+  assert.equal(result.ok, true);
+  assert.equal(result.data.result, 'unchanged');
+  assert.deepEqual(result.data.credentialsSaved, ['apiKey']);
+  assert.equal(result.data.groups[0].status, 'unknown');
+  assert.ok(f.calls.includes('credentials'));
+  assert.ok(!f.calls.includes('write'), 'credential-only changes leave the default engine untouched');
+});
+
+test('configuration restart binds the run and reports an unknown outcome if the reply is lost', async () => {
+  const calls = [];
+  const send = async request => { calls.push(request); return { kind: 'timeout', sent: true }; };
+  const group = { sessionGroup: 'origin' };
+  assert.deepEqual(await requestConfigRestart(group, send), { status: 'not_restarted', reason: 'identity_unavailable' });
+  assert.deepEqual(calls, [], 'an unbound restart could wake a stopped Origin');
+  assert.deepEqual(await requestConfigRestart({ ...group, runId: 'run-a' }, send), { status: 'unknown', reason: 'timeout' });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].type, 'manual_restart');
+  assert.equal(calls[0].sessionGroup, 'origin');
+  assert.equal(calls[0].expectedRunId, 'run-a');
+});
+
 test('persistence errors preserve credentials and after-rename uncertainty', async () => {
   for (const phase of ['before_rename', 'after_rename']) {
     const f = fixture({ write: () => { throw Object.assign(new Error('injected'), { code: 'CONFIG_WRITE_FAILED', phase }); } });
@@ -182,6 +210,16 @@ test('confirmed baseline save reports a configured single Origin identity read e
       identity: async group => { assert.equal(group, 'origin'); throw new Error('unavailable'); },
     }),
   });
+  for (const [groups, groupsComplete, affected] of [
+    [[{ sessionGroup: 'origin', inherits: true, status: 'unknown' }], true, ['origin']],
+    [[{ sessionGroup: 'origin', inherits: true, status: 'not_running' }], false, []],
+  ]) {
+    const guarded = fixture({ observe: async () => ({ groups, groupsComplete, observationErrors: [] }) });
+    const rejected = await guarded.run();
+    assert.equal(rejected.error.code, 'CONFIRMATION_REQUIRED');
+    assert.deepEqual(rejected.error.groups, affected);
+    assert.ok(!guarded.calls.includes('write'));
+  }
   const result = await f.run(['--yes']);
   assert.equal(result.ok, true);
   assert.equal(result.data.result, 'saved');

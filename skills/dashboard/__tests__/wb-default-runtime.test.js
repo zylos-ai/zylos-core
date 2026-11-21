@@ -197,6 +197,7 @@ test('confirmed default model saves before restarting only current model followe
   const rejected = await dispatch('switch-model', body, config);
   assert.equal(rejected.status, 409);
   assert.equal(rejected.error.code, 'CONFIRMATION_REQUIRED');
+  assert.equal(rejected.messageKey, 'wb.settings.modelConfirmationRequired');
   assert.equal(JSON.parse(fs.readFileSync(claude)).model, 'opus');
   assert.deepEqual(requests, []);
 

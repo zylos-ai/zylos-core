@@ -59,12 +59,11 @@ function configRunningApplies({ kind, runtime, sessionGroup, sessionMode, resolv
   return !(kind === 'model' && runtime !== resolved.runtime);
 }
 
-export function classifyConfigRunning({ kind, runtime, sessionGroup, sessionMode, resolved, fence, observation }) {
+export function classifyConfigRunning({ kind, runtime, sessionGroup, sessionMode, resolved, observation }) {
   if (!configRunningApplies({ kind, runtime, sessionGroup, sessionMode, resolved })) return null;
   const running = { runId: typeof observation?.runId === 'string' && observation.runId ? observation.runId : null,
     launchConfig: validLaunch(observation?.launchConfig) ? observation.launchConfig : null, status: 'unknown' };
-  if (fence?.reason === 'model_config') running.status = 'pending';
-  else if (observation?.hasProcess === false) running.status = 'not_running';
+  if (observation?.hasProcess === false) running.status = 'not_running';
   else if (observation?.hasProcess !== true || observation.identityVerified !== true || typeof observation.ready !== 'boolean' || typeof observation.runId !== 'string' || !observation.runId || !validLaunch(observation.launchConfig)) {
     running.reason = 'Running identity or launch snapshot could not be verified';
   } else if (observation.ready !== true || !sameLaunch(observation.launchConfig, resolved)) running.status = 'pending';
@@ -112,10 +111,9 @@ export function createConfigHandler({ store, validateComponent, readSessionMode,
       if (active) args.beforeRestartingChange = () => {
         if (observation?.hasProcess === false) return;
         if (!request.yes) {
-          const code = observation?.hasProcess === true ? 'CONFIRMATION_REQUIRED' : 'RUNNING_STATE_UNKNOWN';
           const message = observation?.hasProcess === true ? `This change will interrupt ${sessionGroup}.`
             : `Could not verify whether ${sessionGroup} is running.`;
-          throw dataError(code, message);
+          throw dataError('CONFIRMATION_REQUIRED', message);
         }
         const runId = observation?.identityVerified ? observation.runId : null;
         target = { sessionGroup, runId, ...(observationError && { error: observationError }) };
@@ -145,7 +143,7 @@ export function createConfigHandler({ store, validateComponent, readSessionMode,
         return { ok: true, data };
       }
       const observation = await observeRunning({ sessionGroup, sessionMode });
-      data.running = classifyConfigRunning({ ...scope, fence: store.getDrainFence(sessionGroup), observation });
+      data.running = classifyConfigRunning({ ...scope, observation });
     } catch (error) {
       data.running = { runId: null, launchConfig: null, status: 'unknown', reason: error.message, ...(error.code ? { code: error.code } : {}) };
     }
@@ -188,7 +186,7 @@ export async function runConfigCli(kind, argv, io = process) {
     io.stdout.write(json ? `${JSON.stringify(result)}\n` : `OK: ${JSON.stringify(result.data)}\n`);
     return 0;
   } catch (error) {
-    const confirmation = ['CONFIRMATION_REQUIRED', 'RUNNING_STATE_UNKNOWN'].includes(error.code);
+    const confirmation = error.code === 'CONFIRMATION_REQUIRED';
     const command = confirmation ? [...argv.filter(arg => arg !== '--json'), '--yes'].map(arg =>
       /^[\w:.-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`).join(' ') : null;
     const message = confirmation ? `${error.message} To confirm, run: zylos group ${kind} ${command}` : error.message;

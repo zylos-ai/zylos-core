@@ -265,16 +265,17 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
   if (invalid) return fail('INVALID_ARGUMENT', invalid.error);
   let selected;
   try { selected = adapter(target); } catch (error) { return fail('RUNTIME_UNSUPPORTED', error.message); }
-  let config;
-  try {
+  const readConfig = () => {
     const result = read();
-    if (result.state === 'error') return fail('CONFIG_UNREADABLE', result.error?.message || 'Cannot read configuration');
-    config = result.state === 'ok' ? result.config : {};
-  } catch (error) { return fail('CONFIG_UNREADABLE', error.message); }
+    if (result.state === 'error') throw new Error(result.error?.message || 'Cannot read configuration');
+    return result.state === 'ok' ? result.config : {};
+  };
+  let config;
+  try { config = readConfig(); }
+  catch (error) { return fail('CONFIG_UNREADABLE', error.message); }
   let previousBaseline = config.runtime ?? 'claude';
   let baseline = previousBaseline, changed = false;
-  const observedMode = config.session_mode ?? null;
-  let before;
+  let before, observedMode;
   const observeFor = async (runtime, sessionMode) => {
     if (sessionMode === null) return { groups: [], groupsComplete: true, observationErrors: [] };
     try { return await observe(runtime, sessionMode); }
@@ -326,22 +327,32 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
         return fail(rejected ? 'AUTH_FAILED' : 'AUTH_NOT_CONFIRMED', message, { authStatus: rejected ? 'failure' : 'uncertain' });
       }
     }
-    if (observedMode !== null) {
-      before = await observeFor(target, observedMode);
-      const affected = before.groups.filter(row => row.inherits !== false && ['restart_needed', 'unknown'].includes(row.status));
-      if (!parsed.yes && (affected.length || !before.groupsComplete)) {
-        const groups = affected.map(row => row.sessionGroup);
-        const message = groups.length ? `This change may interrupt ${groups.join(', ')}.` : 'Could not verify which sessions are running.';
-        return fail('CONFIRMATION_REQUIRED', `${message} Rerun zylos runtime ${target} with --yes to confirm.`, { groups });
-      }
+    // A credential save can outlive another command's engine switch.
+    // Recheck the baseline before deciding whether this is still credential-only.
+    if (previousBaseline === target) {
+      try { config = readConfig(); }
+      catch (error) { return fail('CONFIG_UNREADABLE', error.message); }
+      previousBaseline = baseline = config.runtime ?? 'claude';
     }
-    try {
-      const saved = write({ set: { runtime: target } });
-      previousBaseline = saved.previous.runtime ?? 'claude'; baseline = saved.config.runtime ?? 'claude';
-      config = saved.config; changed = saved.changed;
-    } catch (error) {
-      return fail(error.code || 'CONFIG_WRITE_FAILED', error.message, { ...(error.phase ? { phase: error.phase } : {}),
-        ...(error.phase === 'after_rename' ? { persisted: null, persistedBeforeConfig: [...credentialsSaved] } : {}) });
+    if (previousBaseline !== target) {
+      observedMode = config.session_mode ?? null;
+      if (observedMode !== null) {
+        before = await observeFor(target, observedMode);
+        const affected = before.groups.filter(row => row.inherits !== false && ['restart_needed', 'unknown'].includes(row.status));
+        if (!parsed.yes && (affected.length || !before.groupsComplete)) {
+          const groups = affected.map(row => row.sessionGroup);
+          const message = groups.length ? `This change may interrupt ${groups.join(', ')}.` : 'Could not verify which sessions are running.';
+          return fail('CONFIRMATION_REQUIRED', `${message} Rerun zylos runtime ${target} with --yes to confirm.`, { groups });
+        }
+      }
+      try {
+        const saved = write({ set: { runtime: target } });
+        previousBaseline = saved.previous.runtime ?? 'claude'; baseline = saved.config.runtime ?? 'claude';
+        config = saved.config; changed = saved.changed;
+      } catch (error) {
+        return fail(error.code || 'CONFIG_WRITE_FAILED', error.message, { ...(error.phase ? { phase: error.phase } : {}),
+          ...(error.phase === 'after_rename' ? { persisted: null, persistedBeforeConfig: [...credentialsSaved] } : {}) });
+      }
     }
   }
   let sessionMode;
@@ -351,7 +362,7 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
   const observed = before ?? await observeFor(baseline, sessionMode);
   if (changed && previousBaseline !== baseline && before) {
     await restartObservedGroups(observed, {
-      restart, confirmed: parsed.yes, modeChanged: sessionMode !== observedMode, skipStartingRuntime: baseline,
+      restart, modeChanged: sessionMode !== observedMode, skipStartingRuntime: baseline,
     });
   }
   return { ok: true, data: { result: changed ? 'saved' : 'unchanged', previousBaseline, baseline,

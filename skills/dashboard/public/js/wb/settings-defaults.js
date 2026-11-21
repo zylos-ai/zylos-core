@@ -2,7 +2,7 @@ import { countLabel } from '../count-label.js';
 import { effortOptionState, modelOptionState } from '../runtime-ui.js';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js';
 import { annotateStatus } from './board.js';
-import { settingsCard } from './settings.js';
+import { readSettingsGroupSnapshot, settingsCard } from './settings.js';
 
 const running = row => ['running', 'starting'].includes(row.presence);
 export function defaultGroups(snapshot, page) {
@@ -100,7 +100,8 @@ function modelRestartFollowers(snapshot, runtime) {
 }
 /** The single confirmation for drafted defaults and their affected running sessions. */
 export function modelSaveConfirmation(changes, t = key => key, metadata = {}, snapshot) {
-  return [t('wb.settings.confirmModels'), ...changes.flatMap(change => {
+  const notes = changes.some(change => change.action === 'switch-effort') ? [t('wb.settings.effortNextStart')] : [];
+  return [t('wb.settings.confirmModels'), ...notes, ...changes.flatMap(change => {
     const label = modelChangeLabel(change, t, metadata);
     if (change.action !== 'switch-model') return [label];
     const rows = modelRestartFollowers(snapshot, change.runtime);
@@ -123,7 +124,7 @@ export function runtimeSaveConfirmation(runtime, snapshot, t = key => key) {
 }
 
 export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoot, document = root.ownerDocument,
-  t = key => key, read, execute, confirm = async () => false, writable = () => true, onGroup = () => {}, version = () => {} } = {}) {
+  t = key => key, read, readSnapshot = () => readSettingsGroupSnapshot(read), execute, confirm = async () => false, writable = () => true, onGroup = () => {}, version = () => {} } = {}) {
   root.replaceChildren();
   const groups = defaultGroups(snapshot, page);
   let destroyed = false;
@@ -197,10 +198,13 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
     savingRuntime = true;
     refreshLocks();
     try {
-      const needsConfirmation = snapshot?.listKnown !== true || groups.followers?.length !== 0;
+      const current = await readSnapshot().catch(() => null);
+      if (destroyed || !writable()) return;
+      const { followers } = defaultGroups(current);
+      const needsConfirmation = current?.listKnown !== true || followers?.length !== 0;
       if (needsConfirmation &&
-          !(await confirm(runtimeSaveConfirmation(runtime, snapshot, t), { title: t('wb.settings.confirm.runtime'), danger: true }))) return;
-      if (destroyed) return;
+          !(await confirm(runtimeSaveConfirmation(runtime, current, t), { title: t('wb.settings.confirm.runtime'), danger: true }))) return;
+      if (destroyed || !writable()) return;
       const result = await execute('switch-runtime', { runtime, ...(needsConfirmation && { confirmed: true }) }, { confirmed: true });
       if (result === false) {
         engineResult.textContent = t('wb.settings.saveFailed');
@@ -210,7 +214,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
       const saved = t(result?.messageKey ?? 'result.runtime_saved', {
         ...result?.messageParams, value: engineName(groups.baseline),
       });
-      engineResult.textContent = [saved, ...restartFailures(result?.data, groups.followers, t)].join('\n');
+      engineResult.textContent = [saved, ...restartFailures(result?.data, current?.rows, t)].join('\n');
       redrawEngine();
     } catch (error) { engineResult.textContent = error.message; }
     finally { savingRuntime = false; refreshLocks(); }
@@ -386,9 +390,6 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   save.addEventListener('click', async () => {
     const pending = changes();
     if (save.disabled || !pending.length) return;
-    const affected = pending.filter(change => change.action === 'switch-model' && modelRestartFollowers(snapshot, change.runtime)?.length !== 0);
-    const danger = affected.length > 0;
-    const needsConfirmation = danger || pending.some(change => change.action !== 'switch-model');
     savingModels = true;
     refreshLocks();
     const applied = [], failures = [];
@@ -404,8 +405,14 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
       ].join(' ');
     };
     try {
-      if (needsConfirmation && !(await confirm(modelSaveConfirmation(pending, t, metadata, snapshot), { title: t('wb.settings.confirm.models'), danger }))) return;
-      if (destroyed) return;
+      const modelChanges = pending.filter(change => change.action === 'switch-model');
+      const current = modelChanges.length ? await readSnapshot().catch(() => null) : null;
+      if (destroyed || !writable()) return;
+      const affected = modelChanges.filter(change => modelRestartFollowers(current, change.runtime)?.length !== 0);
+      const danger = affected.length > 0;
+      const needsConfirmation = danger || modelChanges.length !== pending.length;
+      if (needsConfirmation && !(await confirm(modelSaveConfirmation(pending, t, metadata, current), { title: t('wb.settings.confirm.models'), danger }))) return;
+      if (destroyed || !writable()) return;
       for (const change of pending) {
         const body = { runtime: change.runtime, [change.key]: change.value,
           ...(affected.includes(change) && { confirmed: true }),
@@ -414,7 +421,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
         const accepted = await execute(change.action, body, { confirmed: true });
         if (accepted === false) break;
         applied.push(change);
-        if (change.action === 'switch-model') failures.push(...restartFailures(accepted?.data, snapshot?.rows, t));
+        if (change.action === 'switch-model') failures.push(...restartFailures(accepted?.data, current?.rows, t));
         if (rows[change.runtime]) {
           const row = rows[change.runtime];
           row.meta = change.action === 'set-threshold'

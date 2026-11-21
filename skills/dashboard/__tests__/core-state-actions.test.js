@@ -129,7 +129,8 @@ test('runtime action reads a result returned after ten seconds without restartin
   const bin = path.join(root, 'bin');
   fs.mkdirSync(bin, { recursive: true });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  writeExecutable(path.join(bin, 'zylos'), `const args=process.argv.slice(2),result=process.env.FAKE_RUNTIME_RESULT||'saved';if(args[0]==='runtime'&&result==='saved')setTimeout(()=>console.log(JSON.stringify({ok:true,data:{result}})),10200);else console.log(JSON.stringify({ok:true,data:{result}}));`);
+  const runtimeArgs = path.join(root, 'runtime-args.json');
+  writeExecutable(path.join(bin, 'zylos'), `const args=process.argv.slice(2);require('node:fs').writeFileSync(${JSON.stringify(runtimeArgs)},JSON.stringify(args));const result=process.env.FAKE_RUNTIME_RESULT||'saved';if(args[0]==='runtime'&&result==='saved')setTimeout(()=>console.log(JSON.stringify({ok:true,data:{result}})),10200);else console.log(JSON.stringify({ok:true,data:{result}}));`);
   const pm2Log = path.join(root, 'pm2.log');
   writeExecutable(path.join(bin, 'pm2'), `require('node:fs').appendFileSync(process.env.FAKE_PM2_LOG,JSON.stringify(process.argv.slice(2))+'\\n');`);
   const previous = { PATH: process.env.PATH, ZYLOS_DIR: process.env.ZYLOS_DIR, FAKE_RUNTIME_RESULT: process.env.FAKE_RUNTIME_RESULT, FAKE_PM2_LOG: process.env.FAKE_PM2_LOG };
@@ -142,6 +143,7 @@ test('runtime action reads a result returned after ten seconds without restartin
   const config = { zylosDir };
   const saved = await handleCoreAction('switch-runtime', { runtime: 'codex' }, config);
   assert.equal(saved.ok, true); assert.equal(saved.data.result, 'saved'); assert.equal(saved.messageKey, 'result.runtime_saved');
+  assert.deepEqual(JSON.parse(fs.readFileSync(runtimeArgs, 'utf8')), ['runtime', 'codex', '--json']);
   assert.equal(Object.hasOwn(saved, 'detached'), false);
   process.env.FAKE_RUNTIME_RESULT = 'unchanged';
   const unchanged = await handleCoreAction('switch-runtime', { runtime: 'codex' }, config);
