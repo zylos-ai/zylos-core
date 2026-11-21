@@ -198,13 +198,14 @@ export class HealthStore {
     if (event.received_at <= (prior.last_processed?.received_at ?? 0)) return { state: prior, status: 'ignored', reason: 'replay' };
     return reduceHealthEvidence(prior, event, { identity, quota, authConfirmed, now: this.now() });
   }
-  needsAuthConfirmation(raw, { identity, sessionGroup = 'origin' } = {}) {
+  prepareAuthConfirmation(raw, { identity, sessionGroup = 'origin' } = {}) {
     const event = sanitizeHealthEvent(raw);
     const prior = this.read(sessionGroup);
     const result = this.#evaluateTerminalHook(event, prior, { identity, authConfirmed: true });
-    return result.reason === 'hook_failure' && result.state.health === 'auth_failed';
+    if (result.reason !== 'hook_failure' || result.state.health !== 'auth_failed') return undefined;
+    return this.freezeNotice({ runtime: this.runtime, state: result.state, identity, event, result, sessionGroup }) ?? null;
   }
-  consume(raw, { identity, quota, fallbackId, sessionGroup = 'origin', runId, retryControl, expireControl, authConfirmed } = {}) {
+  consume(raw, { identity, quota, fallbackId, sessionGroup = 'origin', runId, retryControl, expireControl, authConfirmed, frozenNotice } = {}) {
     const event = sanitizeHealthEvent(raw, fallbackId);
     const prior = this.read(sessionGroup);
     // A delivery notification queued ahead of this hook may have cleared or
@@ -217,7 +218,12 @@ export class HealthStore {
       last_processed: { received_at: event.received_at, event_id: event.event_id },
       last_hook: { event_id: event.event_id, event: event.event, error: event.error, observed_at: event.received_at,
         session_id:event.session_id, claude_pid:event.claude_pid } };
-    const pending = this.freezeNotice({ runtime: this.runtime, state: result.state, identity, event, result, sessionGroup });
+    // A completed probe supplies the final notice classification. A null
+    // frozen intent also belongs to the original event and must not reselect.
+    const pending = frozenNotice === undefined
+      ? this.freezeNotice({ runtime: this.runtime, state: result.state, identity, event, result, sessionGroup })
+      : frozenNotice && result.notice?.eligible && { ...frozenNotice, notice: result.notice,
+        health: authConfirmed ? 'auth_failed' : 'unavailable', reason: result.notice.reason || event.error };
     if (pending) result.state.pending_notice = pending;
     reduceFailureContinuation(result.state,{runtime:this.runtime,event,identity,runId,pending,control:retryControl,eligible:!result.verify && result.notice?.eligible});
     result.state.rateLimitActive = result.state.health === 'rate_limited' || (result.state.health !== 'ok' && prior.rateLimitActive);

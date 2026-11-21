@@ -49,7 +49,7 @@ test('Claude StopFailure confirmation leaves the supervisor free to publish othe
   });
   const { startSupervisor } = await import('../skills/activity-monitor/scripts/supervisor-main.js');
 
-  for (const scenario of ['success', 'failure', 'timeout', 'model access', 'replaced run']) {
+  for (const scenario of ['success', 'failure', 'timeout', 'model access', 'replaced run', 'no initial target', 'invalidated target']) {
     await t.test(scenario, async t => {
       const { db, store: c4 } = fixture(t);
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-'));
@@ -61,8 +61,6 @@ test('Claude StopFailure confirmation leaves the supervisor free to publish othe
       let service;
       const groups = ['first', 'second', 'healthy'].map(endpoint => {
         const sessionGroup = 'telegram:' + endpoint;
-        db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status,session_group) VALUES ('in','telegram',?,'work','delivered',?)")
-          .run(endpoint, sessionGroup);
         return { endpoint, sessionGroup, runDir: groupRunDir(sessionGroup, env), runId: randomUUID(),
           sessionId: randomUUID(), runtime: 'claude', runtimePid: 123, present: true, ready: true,
           processRunning: true, createdAt: now - 1000, launchConfig: { runtime: 'claude', mode: 'default' } };
@@ -89,6 +87,13 @@ test('Claude StopFailure confirmation leaves the supervisor free to publish othe
       }, { zylosDir: root, nowMs: now, pid: scene.runtimePid,
         env: { ...env, ZYLOS_SESSION_GROUP: scene.sessionGroup, ZYLOS_RUN_ID: scene.runId } });
       const endpoint = name => notices.sent.find(notice => notice.endpoint === name);
+      const receive = (scene, replyEndpoint, delivered = true) => {
+        const { id, session_group } = c4.insertConversation('in', 'telegram', replyEndpoint, 'work', { groupName: scene.endpoint });
+        assert.equal(session_group, scene.sessionGroup);
+        assert.equal(c4.claimConversation(id), true);
+        if (delivered) assert.equal(c4.markDelivered(id, { sessionId: scene.sessionId }), true);
+        return id;
+      };
       const status = scene => JSON.parse(fs.readFileSync(path.join(scene.runDir, 'agent-status.json'), 'utf8'));
 
       try {
@@ -108,6 +113,11 @@ test('Claude StopFailure confirmation leaves the supervisor free to publish othe
         const store = supervisor.health.store('claude');
         const [first, second, healthy] = groups;
         current.push(...groups);
+        const noTarget = scenario === 'no initial target';
+        const invalidated = scenario === 'invalidated target';
+        const original = noTarget ? null : receive(first, first.endpoint, !invalidated);
+        receive(second, second.endpoint);
+        receive(healthy, healthy.endpoint);
         const modelAccess = scenario === 'model access';
         const failed = scenario === 'failure';
         const failure = collect(first, modelAccess ? 'Your model policy only allows Sonnet.' : 'API Error: 403 Forbidden');
@@ -127,6 +137,9 @@ test('Claude StopFailure confirmation leaves the supervisor free to publish othe
           assert.equal(screenReads, 1);
           assert.equal(store.read(first.sessionGroup).last_processed, undefined);
           assert.equal(endpoint(first.endpoint), undefined);
+          // The later request reaches the same session with a distinct reply route.
+          if (invalidated) assert.equal(c4.requeueConversation(original), true);
+          const followUp = receive(first, 'follow-up');
           const answer = failed || scenario === 'replaced run' ? 'failure' : scenario === 'timeout' ? 'uncertain' : 'success';
           if (scenario === 'replaced run') {
             // The replacement reuses the group directory, native session ID and
@@ -140,6 +153,8 @@ test('Claude StopFailure confirmation leaves the supervisor free to publish othe
           await finishRound(supervisor.loop.tick());
           await Promise.all(notices.work.splice(0));
           assert.equal(calls, 1);
+          assert.equal(db.prepare('SELECT status FROM conversations WHERE id=?').pluck().get(followUp), 'delivered');
+          assert.equal(endpoint('follow-up'), undefined);
           if (replacementStop) {
             assert.equal(store.read(first.sessionGroup).last_processed.event_id, replacementStop.event_id);
             assert.equal(store.read().health, 'ok');
@@ -156,7 +171,14 @@ test('Claude StopFailure confirmation leaves the supervisor free to publish othe
         assert.equal(store.read().health, failed ? 'auth_failed' : 'ok');
         const expected = failed ? /reported an authentication error/ : modelAccess
           ? /current model is unavailable/ : /reported a failure for this request/;
-        assert.match(endpoint(first.endpoint).message, expected);
+        if (noTarget || invalidated) {
+          assert.equal(notices.sent.length, 0);
+          const outcome = store.read(first.sessionGroup).last_notice_outcome;
+          assert.equal(outcome?.status, invalidated ? 'suppressed' : undefined);
+          if (invalidated) assert.equal(outcome.event_id, failure.event_id);
+        } else {
+          assert.match(endpoint(first.endpoint).message, expected);
+        }
         assert.equal(endpoint(healthy.endpoint), undefined);
         const route = await supervisor.router.route({ version: 2, type: 'route', requestId: 'healthy',
           noReply: false, receivedAt: now, channel: 'telegram', endpoint: healthy.endpoint,

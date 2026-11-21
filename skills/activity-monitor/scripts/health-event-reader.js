@@ -44,13 +44,10 @@ export class HealthEventReader {
           break;
         }
         const result=await this.coordinator.consumeHook(scene.runtime,event,{identity,sessionGroup:scene.sessionGroup,quota:this.quota(identity,scene),runId:scene.runId,
-          retryControl:control,expireControl:this.expireControl,confirmAuth:confirm=>{
-            if (!stream.auth) {
-              const auth = {runId:scene.runId,sessionId:identity.session_id,pid:identity.claude_pid,confirmed:undefined};
-              stream.auth = auth;
-              void confirm().then(confirmed=>{auth.confirmed=confirmed;});
-            }
-            return stream.auth.confirmed;
+          retryControl:control,expireControl:this.expireControl,auth,confirmAuth:(confirm,frozenNotice)=>{
+            const pending = {runId:scene.runId,sessionId:identity.session_id,pid:identity.claude_pid,confirmed:undefined,frozenNotice};
+            stream.auth = pending;
+            void confirm().then(confirmed=>{pending.confirmed=confirmed;});
           }});
         results.push(result);
         if (result.status === 'awaiting_auth') break;

@@ -144,9 +144,10 @@ export class RuntimeHealthCoordinator {
     });
   }
   async consumeHook(runtime, event, options) {
-    let authConfirmed = false;
-    if (runtime === 'claude' && event.event === 'stop_failure' && event.error === 'authentication_failed' &&
-        this.checkAuth && await this.serial(runtime, () => this.store(runtime).needsAuthConfirmation(event, options))) {
+    let { confirmed: authConfirmed = false, frozenNotice } = options?.auth ?? {};
+    if (!options?.auth && runtime === 'claude' && event.event === 'stop_failure' &&
+        event.error === 'authentication_failed' && this.checkAuth) {
+      frozenNotice = await this.serial(runtime, () => this.store(runtime).prepareAuthConfirmation(event, options));
       // Probe outside the writer so concurrent checks can share the in-flight call.
       // The event reader can defer this event until the result is available.
       const confirm = async () => {
@@ -156,12 +157,17 @@ export class RuntimeHealthCoordinator {
           return false;
         }
       };
-      authConfirmed = options?.confirmAuth ? options.confirmAuth(confirm) : await confirm();
-      if (authConfirmed === undefined) return {status:'awaiting_auth'};
+      if (frozenNotice !== undefined) {
+        if (options?.confirmAuth) {
+          options.confirmAuth(confirm, frozenNotice);
+          return {status:'awaiting_auth'};
+        }
+        authConfirmed = await confirm();
+      }
     }
     return this.serial(runtime, () => {
       const store = this.store(runtime), before = store.read();
-      const result = store.consume(event, { ...options, authConfirmed });
+      const result = store.consume(event, { ...options, authConfirmed, frozenNotice });
       if (result.status === 'processed' && (result.state.health === 'ok' || result.state.health === 'auth_failed' ||
           (before.health !== 'rate_limited' && result.state.health === 'rate_limited'))) this.associations.delete(runtime);
       if (result.reason === 'hook_failure' && result.state.health === 'auth_failed') this.authRecoveries.delete(runtime);
