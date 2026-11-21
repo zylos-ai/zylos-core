@@ -2,14 +2,14 @@ import { countLabel } from '../count-label.js';
 import { effortOptionState, modelOptionState } from '../runtime-ui.js';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js';
 import { annotateStatus } from './board.js';
-import { settingsCard } from './settings.js';
+import { readSettingsGroupSnapshot, settingsCard } from './settings.js';
 
 const running = row => ['running', 'starting'].includes(row.presence);
 export function defaultGroups(snapshot, page) {
   const rows = snapshot?.rows ?? [];
   const overrides = snapshot?.overrides;
   const keys = new Set(overrides?.runtime?.map(row => row.sessionGroup) ?? []);
-  const followers = overrides == null ? null : rows.filter(row => running(row) && !keys.has(row.sessionGroup));
+  const followers = overrides == null ? null : rows.filter(row => row.presence === 'running' && !keys.has(row.sessionGroup));
   const flat = overrides == null ? [] : rows.filter(row => row.sessionGroup != null && keys.has(row.sessionGroup));
   const total = Number.isInteger(page?.runtimeTotal) ? page.runtimeTotal : null;
   return { followers, flat, total, baseline: snapshot?.baselineRuntime ?? null,
@@ -17,7 +17,8 @@ export function defaultGroups(snapshot, page) {
 }
 export function modelFollowers(snapshot, runtime) {
   if (snapshot?.overrides == null) return null;
-  return (snapshot.rows ?? []).filter(row => running(row) && row.target?.runtime === runtime &&
+  return (snapshot.rows ?? []).filter(row => running(row) && (row.effective?.runtime ?? row.target?.runtime) === runtime &&
+    !row.modelOverridden && !(row.desired?.mode === 'override' && row.desired.runtime === runtime) &&
     !snapshot.overrides.model?.some(item => item.sessionGroup === row.sessionGroup && item.runtime === runtime));
 }
 export function runtimeHealth(snapshot, runtime) {
@@ -26,8 +27,11 @@ export function runtimeHealth(snapshot, runtime) {
 }
 export function runtimeConfirmation(snapshot, t = key => key) {
   const rows = defaultGroups(snapshot).followers;
-  if (rows == null) return t('wb.settings.cannotList');
-  return [countLabel(t, 'wb.settings.interruptFollowers', rows.length), ...rows.slice(0, 5).map(row =>
+  return interruptFollowers(rows, snapshot, t);
+}
+function interruptFollowers(rows, snapshot, t, label = 'wb.settings.interruptFollowers') {
+  if (rows == null || snapshot?.listKnown === false) return t('wb.settings.cannotList');
+  return [countLabel(t, label, rows.length), ...rows.slice(0, 5).map(row =>
     row.name?.displayName ?? fallbackName(row, t)), ...(rows.length > 5 ? [t('wb.settings.moreGroups', { count: rows.length })] : [])].join('\n');
 }
 export function createOverrideSearch({ read, onChange, setTimer = setTimeout, clearTimer = clearTimeout }) {
@@ -89,9 +93,30 @@ export function modelChangeLabel(change, t = key => key, metadata = {}) {
   return t(change.key === 'model' ? 'wb.settings.changeModel' : 'wb.settings.changeEffort',
     { runtime: engineName(change.runtime), value: change.key === 'effort' ? effortText(change.value, t) : model() });
 }
-/** The single confirmation shown before saving every drafted model and effort change together. */
-export function modelSaveConfirmation(changes, t = key => key, metadata = {}) {
-  return [t('wb.settings.confirmModels'), ...changes.map(change => modelChangeLabel(change, t, metadata))].join('\n');
+function modelRestartFollowers(snapshot, runtime) {
+  if (snapshot?.listKnown !== true || snapshot.rows?.some(row => row.presence === 'running' &&
+    (row.effective?.runtime ?? row.target?.runtime) === runtime && row.modelOverridden === null)) return null;
+  return modelFollowers(snapshot, runtime)?.filter(row => row.presence === 'running') ?? null;
+}
+/** The single confirmation for drafted defaults and their affected running sessions. */
+export function modelSaveConfirmation(changes, t = key => key, metadata = {}, snapshot) {
+  const notes = changes.some(change => change.action === 'switch-effort') ? [t('wb.settings.effortNextStart')] : [];
+  return [t('wb.settings.confirmModels'), ...notes, ...changes.flatMap(change => {
+    const label = modelChangeLabel(change, t, metadata);
+    if (change.action !== 'switch-model') return [label];
+    const rows = modelRestartFollowers(snapshot, change.runtime);
+    return rows?.length === 0 ? [label] : [label, interruptFollowers(rows, snapshot, t, 'wb.settings.restartModelFollowers')];
+  })].join('\n');
+}
+function restartFailures(data, rows, t) {
+  const failed = (data?.groups ?? []).filter(group => group.restart && group.restart.status !== 'accepted');
+  const messages = failed.map(group => {
+    const row = rows?.find(row => (row.sessionGroup ?? 'origin') === group.sessionGroup);
+    return t(group.restart.status === 'unknown' ? 'wb.settings.savedRestartUnknown' : 'wb.settings.savedRestartFailed',
+      { group: row?.name?.displayName ?? row?.displayName ?? group.sessionGroup, reason: group.restart.reason });
+  });
+  if (data?.groupsComplete === false) messages.push(t('wb.settings.restartListIncomplete'));
+  return messages;
 }
 /** The engine switch confirmation: what happens, then which groups restart with it. */
 export function runtimeSaveConfirmation(runtime, snapshot, t = key => key) {
@@ -99,8 +124,7 @@ export function runtimeSaveConfirmation(runtime, snapshot, t = key => key) {
 }
 
 export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoot, document = root.ownerDocument,
-  t = key => key, read, execute, confirm = async () => false, writable = () => true, onGroup = () => {}, version = () => {} } = {}) {
-  // Without a confirmation dialog no change runs: every save below asks once before it acts.
+  t = key => key, read, readSnapshot = () => readSettingsGroupSnapshot(read), execute, confirm = async () => false, writable = () => true, onGroup = () => {}, version = () => {} } = {}) {
   root.replaceChildren();
   const groups = defaultGroups(snapshot, page);
   let destroyed = false;
@@ -144,38 +168,59 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   // ─── Default engine ───
   const engine = settingsCard(document, { icon: 'bot', title: t('wb.settings.currentRuntime'), sub: technical() ? 'zylos runtime' : '' });
   engine.card.id = 'settings-current-runtime';
-  let draftRuntime = groups.baseline;
+  let draftRuntime = groups.baseline, savingRuntime = false;
   const line = element(document, 'div', undefined, 'wb-set-inline');
   // Each engine's choice carries its own sign-in state, so the state stays under the engine it describes on any width.
   const seg = element(document, 'div', undefined, 'wb-seg2 wb-seg-engine'); seg.setAttribute('role', 'group'); seg.setAttribute('aria-label', t('wb.settings.currentRuntime'));
-  const segButtons = {};
+  const segButtons = {}, segNames = {};
   for (const runtime of runtimes) {
     const health = runtimeHealth(snapshot, runtime);
     const button = element(document, 'button', undefined); button.type = 'button'; button.id = 'settings-use-' + runtime;
     const login = element(document, 'span', undefined, 'wb-login wb-login-' + health);
     login.append(element(document, 'span', undefined, 'wb-hdot'), element(document, 'span', t('wb.settings.health.' + health)));
-    button.append(element(document, 'span', engineName(runtime), 'wb-engine-name'), login);
+    const name = element(document, 'span', undefined, 'wb-engine-name');
+    button.append(name, login);
+    segNames[runtime] = name;
     button.title = health === 'unavailable' ? t('wb.settings.health.unavailable') : '';
     button.addEventListener('click', () => { draftRuntime = runtime; redrawEngine(); });
-    lock(button, () => !writable() || health === 'unavailable');
+    lock(button, () => savingRuntime || !writable() || health === 'unavailable');
     seg.append(button); segButtons[runtime] = button;
   }
   line.append(seg);
   const saveRuntime = element(document, 'button', t('wb.settings.saveRuntime'), 'wb-btn wb-btn-primary'); saveRuntime.type = 'button'; saveRuntime.id = 'settings-save-runtime';
   const undoRuntime = element(document, 'button', t('wb.settings.undo'), 'wb-btn'); undoRuntime.type = 'button'; undoRuntime.id = 'settings-undo-runtime';
   undoRuntime.addEventListener('click', () => { draftRuntime = groups.baseline; redrawEngine(); });
-  lock(saveRuntime, () => !writable() || draftRuntime == null || draftRuntime === groups.baseline || runtimeHealth(snapshot, draftRuntime) === 'unavailable');
+  lock(undoRuntime, () => savingRuntime || !writable());
+  lock(saveRuntime, () => savingRuntime || !writable() || draftRuntime == null || draftRuntime === groups.baseline || runtimeHealth(snapshot, draftRuntime) === 'unavailable');
   saveRuntime.addEventListener('click', async () => {
-    if (saveRuntime.disabled || !(await confirm(runtimeSaveConfirmation(draftRuntime, snapshot, t), { title: t('wb.settings.confirm.runtime'), danger: true }))) return;
-    saveRuntime.disabled = true;
+    if (saveRuntime.disabled) return;
+    const runtime = draftRuntime;
+    savingRuntime = true;
+    refreshLocks();
     try {
-      const accepted = await execute('switch-runtime', { runtime: draftRuntime }, { confirmed: true });
-      engineResult.textContent = accepted === false ? t('wb.settings.saveFailed') : t('wb.settings.restartRefresh');
+      const current = await readSnapshot().catch(() => null);
+      if (destroyed || !writable()) return;
+      const { followers } = defaultGroups(current);
+      const needsConfirmation = current?.listKnown !== true || followers?.length !== 0;
+      if (needsConfirmation &&
+          !(await confirm(runtimeSaveConfirmation(runtime, current, t), { title: t('wb.settings.confirm.runtime'), danger: true }))) return;
+      if (destroyed || !writable()) return;
+      const result = await execute('switch-runtime', { runtime, ...(needsConfirmation && { confirmed: true }) }, { confirmed: true });
+      if (result === false) {
+        engineResult.textContent = t('wb.settings.saveFailed');
+        return;
+      }
+      groups.baseline = draftRuntime = result?.data?.baseline ?? runtime;
+      const saved = t(result?.messageKey ?? 'result.runtime_saved', {
+        ...result?.messageParams, value: engineName(groups.baseline),
+      });
+      engineResult.textContent = [saved, ...restartFailures(result?.data, current?.rows, t)].join('\n');
+      redrawEngine();
     } catch (error) { engineResult.textContent = error.message; }
-    finally { refreshLocks(); }
+    finally { savingRuntime = false; refreshLocks(); }
   });
   line.append(saveRuntime, undoRuntime);
-  const engineResult = element(document, 'p', '', 'wb-note'); engineResult.setAttribute('role', 'status');
+  const engineResult = element(document, 'p', '', 'wb-note'); engineResult.id = 'settings-engine-result'; engineResult.setAttribute('role', 'status');
   const split = element(document, 'div', undefined, 'wb-set-split');
   // A count of zero tells nothing, so its line is left out.
   const followerCol = element(document, 'div');
@@ -219,7 +264,15 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   const drawVersion = () => version(engineVersion, selectedRuntime());
   engine.card.append(line, engineVersion, engineResult, split, engineNote); root.append(engine.card);
   function redrawEngine() {
-    for (const runtime of runtimes) segButtons[runtime].setAttribute('aria-pressed', String(draftRuntime === runtime));
+    for (const runtime of runtimes) {
+      segButtons[runtime].setAttribute('aria-pressed', String(draftRuntime === runtime));
+      const name = segNames[runtime];
+      name.textContent = engineName(runtime);
+      if (runtime === groups.baseline) {
+        name.textContent += ' ';
+        name.append(element(document, 'span', t('wb.settings.defaultEngineBadge'), 'wb-tag'));
+      }
+    }
     const changed = draftRuntime != null && draftRuntime !== groups.baseline;
     saveRuntime.hidden = undoRuntime.hidden = !changed;
     drawVersion();
@@ -229,7 +282,8 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   // ─── Default model, effort and rotation threshold per engine ───
   const models = settingsCard(document, { icon: 'sliders', title: t('wb.settings.modelsTitle'), sub: t('wb.settings.modelsSub') });
   const drafts = {}, rows = {};
-  const result = element(document, 'p', '', 'wb-note'); result.setAttribute('role', 'status');
+  const result = element(document, 'p', '', 'wb-note'); result.id = 'settings-model-result'; result.setAttribute('role', 'status');
+  let savingModels = false;
   const undo = element(document, 'button', t('wb.settings.undo'), 'wb-btn'); undo.type = 'button';
   const save = element(document, 'button', t('btn.save'), 'wb-btn wb-btn-primary'); save.type = 'button'; save.id = 'settings-save-models';
   models.acts.append(undo, save);
@@ -308,9 +362,9 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
         ? Boolean((rows[runtime]?.meta ?? meta).model_thresholds)
         : drafts[runtime].threshold !== modelThresholdValue(rows[runtime]?.meta ?? meta, modelValue()) &&
           (!Number.isInteger(drafts[runtime].threshold) || drafts[runtime].threshold < 10 || drafts[runtime].threshold > Number(threshold.max))) };
-    lock(model, () => !writable()); lock(custom, () => !writable());
-    lock(effort, () => !writable() || effortOptionState(meta, modelValue(), drafts[runtime].effort || meta.current_effort).disabled);
-    lock(threshold, () => !writable() || !modelValue() || modelThresholdValue(rows[runtime]?.meta ?? meta, modelValue()) == null);
+    lock(model, () => savingModels || !writable()); lock(custom, () => savingModels || !writable());
+    lock(effort, () => savingModels || !writable() || effortOptionState(meta, modelValue(), drafts[runtime].effort || meta.current_effort).disabled);
+    lock(threshold, () => savingModels || !writable() || !modelValue() || modelThresholdValue(rows[runtime]?.meta ?? meta, modelValue()) == null);
     void loadThreshold();
   }
   models.card.append(element(document, 'p', t('wb.settings.nextStartNote'), 'wb-note'), result);
@@ -322,7 +376,8 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
     undo.hidden = save.hidden = !pending.length;
     refreshLocks();
   }
-  lock(save, () => !writable() || !changes().length || Object.values(rows).some(row => row.thresholdInvalid()));
+  lock(undo, () => savingModels || !writable());
+  lock(save, () => savingModels || !writable() || !changes().length || Object.values(rows).some(row => row.thresholdInvalid()));
   undo.addEventListener('click', () => {
     for (const [runtime, row] of Object.entries(rows)) {
       drafts[runtime] = { model: row.meta.current_model ?? '', effort: row.meta.current_effort ?? '' };
@@ -335,22 +390,38 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   save.addEventListener('click', async () => {
     const pending = changes();
     if (save.disabled || !pending.length) return;
-    // One confirmation lists every change; cancelling sends nothing and leaves the result line alone.
-    if (!(await confirm(modelSaveConfirmation(pending, t, metadata), { title: t('wb.settings.confirm.models'), danger: false }))) return;
-    save.disabled = true; const applied = [];
+    savingModels = true;
+    refreshLocks();
+    const applied = [], failures = [];
     const report = () => {
       const left = pending.filter(change => !applied.includes(change));
-      if (!left.length) return t('wb.settings.nextStart');
       if (!applied.length) return t('wb.settings.saveFailed');
       const list = changes => changes.map(change => modelChangeLabel(change, t, metadata)).join(t('wb.settings.listSep'));
-      return t('wb.settings.partlySaved', { done: list(applied), left: list(left) });
+      const saved = left.length ? t('wb.settings.partlySaved', { done: list(applied), left: list(left) }) : t('wb.settings.defaultsSaved');
+      return [
+        saved,
+        ...(applied.some(change => change.action === 'switch-effort') ? [t('wb.settings.effortNextStart')] : []),
+        ...(applied.some(change => change.action === 'set-threshold') ? [t('wb.settings.thresholdNextRotation')] : []),
+      ].join(' ');
     };
     try {
+      const modelChanges = pending.filter(change => change.action === 'switch-model');
+      const current = modelChanges.length ? await readSnapshot().catch(() => null) : null;
+      if (destroyed || !writable()) return;
+      const affected = modelChanges.filter(change => modelRestartFollowers(current, change.runtime)?.length !== 0);
+      const danger = affected.length > 0;
+      const needsConfirmation = danger || modelChanges.length !== pending.length;
+      if (needsConfirmation && !(await confirm(modelSaveConfirmation(pending, t, metadata, current), { title: t('wb.settings.confirm.models'), danger }))) return;
+      if (destroyed || !writable()) return;
       for (const change of pending) {
-        const body = { runtime: change.runtime, [change.key]: change.value, ...(change.action === 'set-threshold' ? { model: change.model } : {}) };
+        const body = { runtime: change.runtime, [change.key]: change.value,
+          ...(affected.includes(change) && { confirmed: true }),
+          ...(change.action === 'set-threshold' && { model: change.model }) };
+        if (destroyed) break;
         const accepted = await execute(change.action, body, { confirmed: true });
         if (accepted === false) break;
         applied.push(change);
+        if (change.action === 'switch-model') failures.push(...restartFailures(accepted?.data, current?.rows, t));
         if (rows[change.runtime]) {
           const row = rows[change.runtime];
           row.meta = change.action === 'set-threshold'
@@ -358,9 +429,13 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
             : { ...row.meta, ['current_' + change.key]: change.value };
         }
       }
-      result.textContent = report();
-    } catch (error) { result.textContent = applied.length ? report() + ' · ' + error.message : error.message; }
-    finally { metadata = Object.fromEntries(Object.entries(rows).map(([runtime, row]) => [runtime, row.meta])); redrawModels(); }
+      result.textContent = [report(), ...failures].join('\n');
+    } catch (error) { result.textContent = [...(applied.length ? [report(), ...failures] : []), error.message].join('\n'); }
+    finally {
+      if (applied.length) metadata = Object.fromEntries(Object.entries(rows).map(([runtime, row]) => [runtime, row.meta]));
+      savingModels = false;
+      redrawModels();
+    }
   });
   function refreshLocks() { for (const { node, lock: fn } of controls) node.disabled = fn(); }
   redrawEngine(); redrawModels();

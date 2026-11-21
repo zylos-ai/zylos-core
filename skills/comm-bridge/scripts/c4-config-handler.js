@@ -1,4 +1,6 @@
 import { composeSessionGroup, parseSessionGroup, validNamespace, validateGroupName, dataError } from './c4-session-group.js';
+import { pathToFileURL } from 'node:url';
+import path from 'node:path';
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 function validateRequest(kind, request) {
@@ -6,6 +8,8 @@ function validateRequest(kind, request) {
   const { action } = request;
   if (!['get', 'set', 'reset'].includes(action)) throw dataError('INVALID_ARGS', 'Expected get, set, or reset');
   const allowed = ['action', 'sessionGroup', 'componentName', 'groupName'];
+  if (action !== 'get') allowed.push('yes');
+  if (own(request, 'yes') && request.yes !== true) throw dataError('INVALID_ARGS', 'Invalid confirmation');
   if (kind === 'model' || action === 'set') allowed.push('runtime');
   if (kind === 'model' && action === 'set') allowed.push('model', 'effort');
   if (Object.keys(request).some(key => !allowed.includes(key))) throw dataError('INVALID_ARGS', 'Unexpected configuration argument');
@@ -23,6 +27,11 @@ export function parseConfigArgs(kind, argv) {
     if (flag === '--json') {
       if (json) throw dataError('INVALID_ARGS', 'Duplicate --json');
       json = true; continue;
+    }
+    if (flag === '--yes') {
+      if (own(request, 'yes')) throw dataError('INVALID_ARGS', 'Duplicate --yes');
+      request.yes = true;
+      continue;
     }
     const key = flags[flag];
     if (!key || own(request, key) || index + 1 >= argv.length || argv[index + 1].startsWith('--')) throw dataError('INVALID_ARGS', `Invalid or duplicate argument: ${flag}`);
@@ -50,12 +59,11 @@ function configRunningApplies({ kind, runtime, sessionGroup, sessionMode, resolv
   return !(kind === 'model' && runtime !== resolved.runtime);
 }
 
-export function classifyConfigRunning({ kind, runtime, sessionGroup, sessionMode, resolved, fence, observation }) {
+export function classifyConfigRunning({ kind, runtime, sessionGroup, sessionMode, resolved, observation }) {
   if (!configRunningApplies({ kind, runtime, sessionGroup, sessionMode, resolved })) return null;
   const running = { runId: typeof observation?.runId === 'string' && observation.runId ? observation.runId : null,
     launchConfig: validLaunch(observation?.launchConfig) ? observation.launchConfig : null, status: 'unknown' };
-  if (fence?.reason === 'model_config') running.status = 'pending';
-  else if (observation?.hasProcess === false) running.status = 'not_running';
+  if (observation?.hasProcess === false) running.status = 'not_running';
   else if (observation?.hasProcess !== true || observation.identityVerified !== true || typeof observation.ready !== 'boolean' || typeof observation.runId !== 'string' || !observation.runId || !validLaunch(observation.launchConfig)) {
     running.reason = 'Running identity or launch snapshot could not be verified';
   } else if (observation.ready !== true || !sameLaunch(observation.launchConfig, resolved)) running.status = 'pending';
@@ -63,7 +71,7 @@ export function classifyConfigRunning({ kind, runtime, sessionGroup, sessionMode
   return running;
 }
 
-export function createConfigHandler({ store, validateComponent, readSessionMode, observeRunning }) {
+export function createConfigHandler({ store, validateComponent, readSessionMode, observeRunning, restart }) {
   return async function handle(kind, request) {
     validateRequest(kind, request);
     let sessionGroup;
@@ -91,10 +99,33 @@ export function createConfigHandler({ store, validateComponent, readSessionMode,
     const suffix = kind === 'model' ? 'Model' : 'Runtime';
     const args = { sessionGroup };
     for (const key of ['runtime', 'model', 'effort']) if (own(request, key)) args[key] = request[key];
+    let target;
+    if (restart && request.action !== 'get') {
+      let active = true, observation, observationError;
+      try {
+        const sessionMode = readSessionMode();
+        if (![null, 'single', 'multi'].includes(sessionMode)) throw dataError('CONFIG_UNREADABLE', 'Invalid session mode');
+        active = sessionMode === 'multi' || sessionMode === 'single' && sessionGroup === 'origin';
+        if (active) observation = await observeRunning({ sessionGroup, sessionMode });
+      } catch (error) { observationError = error; }
+      if (active) args.beforeRestartingChange = () => {
+        if (observation?.hasProcess === false) return;
+        if (!request.yes) {
+          const message = observation?.hasProcess === true ? `This change will interrupt ${sessionGroup}.`
+            : `Could not verify whether ${sessionGroup} is running.`;
+          throw dataError('CONFIRMATION_REQUIRED', message);
+        }
+        const runId = observation?.identityVerified ? observation.runId : null;
+        target = { sessionGroup, runId, ...(observationError && { error: observationError }) };
+      };
+    }
     // Store owns group existence recheck and writes atomically; no wrapper retry.
     const saved = store[`${request.action}Session${suffix}Config`](args);
     const data = { sessionGroup, sessionMode: null, resolved: null, ...(kind === 'model' ? { runtime: request.runtime } : {}),
       ...(request.action === 'get' ? { desired: saved } : saved) };
+    if (target) data.restart = target.error && !target.runId
+      ? { status: 'not_restarted', reason: target.error.code ?? target.error.message }
+      : await restart(target);
     try {
       // null = the key is absent: a pre-migration instance keeps its baseline display.
       const sessionMode = readSessionMode();
@@ -111,9 +142,8 @@ export function createConfigHandler({ store, validateComponent, readSessionMode,
         data.running = null;
         return { ok: true, data };
       }
-      const fence = store.getDrainFence(sessionGroup);
       const observation = await observeRunning({ sessionGroup, sessionMode });
-      data.running = classifyConfigRunning({ ...scope, fence, observation });
+      data.running = classifyConfigRunning({ ...scope, observation });
     } catch (error) {
       data.running = { runId: null, launchConfig: null, status: 'unknown', reason: error.message, ...(error.code ? { code: error.code } : {}) };
     }
@@ -137,20 +167,31 @@ export async function runConfigCli(kind, argv, io = process) {
     const { request } = parseConfigArgs(kind, argv);
     const store = await import('./c4-db.js');
     const { validateChannel } = await import('./c4-validate.js');
-    const { loadCoreConfig } = await import('./core-config-loader.js');
+    const { loadCoreConfig, resolveCoreConfigModule } = await import('./core-config-loader.js');
     const { readSessionMode } = await loadCoreConfig();
     const { observeCoreRunning } = await import('./c4-runtime-observer.js');
     const handler = createConfigHandler({
       store, validateComponent: name => validateChannel(name, true),
       readSessionMode: () => readSessionMode().mode,
       observeRunning: observeCoreRunning,
+      restart: async target => {
+        try {
+          const module = path.join(path.dirname(resolveCoreConfigModule()), 'config-restart.js');
+          const { requestConfigRestart } = await import(pathToFileURL(module));
+          return await requestConfigRestart(target);
+        } catch (error) { return { status: 'not_restarted', reason: error.code ?? error.message }; }
+      },
     });
     const result = await handler(kind, request);
     io.stdout.write(json ? `${JSON.stringify(result)}\n` : `OK: ${JSON.stringify(result.data)}\n`);
     return 0;
   } catch (error) {
-    const result = { ok: false, error: { code: error.code ?? 'INTERNAL_ERROR', message: error.message, persisted: own(error, 'persisted') ? error.persisted : null } };
-    (json ? io.stdout : io.stderr).write(json ? `${JSON.stringify(result)}\n` : `Error [${result.error.code}]: ${error.message}\n`);
+    const confirmation = error.code === 'CONFIRMATION_REQUIRED';
+    const command = confirmation ? [...argv.filter(arg => arg !== '--json'), '--yes'].map(arg =>
+      /^[\w:.-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`).join(' ') : null;
+    const message = confirmation ? `${error.message} To confirm, run: zylos group ${kind} ${command}` : error.message;
+    const result = { ok: false, error: { code: error.code ?? 'INTERNAL_ERROR', message, persisted: own(error, 'persisted') ? error.persisted : null } };
+    (json ? io.stdout : io.stderr).write(json ? `${JSON.stringify(result)}\n` : `Error [${result.error.code}]: ${message}\n`);
     return 1;
   }
 }

@@ -64,14 +64,15 @@ export function projectGroup(row, snapshot) {
   if (pending?.count > 0) flags.queued = { count: pending.count, oldestAt: iso(pending.oldestAt),
     waitSeconds: Number.isFinite(atMillis(pending.oldestAt)) ? Math.max(0, (now - atMillis(pending.oldestAt)) / 1000) : null };
   if (row.queue?.known === false) errors.push(row.queue.reason ?? 'queue_summary_failed');
-  const runtime = row.target?.runtime ?? row.live?.runtime ?? null;
-  const health = snapshot.instance?.runtimeHealth?.[runtime];
+  const runtime = row.presence === 'starting' ? null : row.target?.runtime ?? row.live?.runtime ?? null;
+  const healthRuntime = row.presence === 'starting' ? row.live?.runtime ?? null : runtime;
+  const health = snapshot.instance?.runtimeHealth?.[healthRuntime];
   if (kind === 'working' || flags.queued) {
     if (['auth_failed', 'rate_limited', 'recovering'].includes(health?.health)) flags.blocked = {
-      reason: health.health === 'auth_failed' ? 'auth_failed' : 'rate_limited', runtime,
+      reason: health.health === 'auth_failed' ? 'auth_failed' : 'rate_limited', runtime: healthRuntime,
       recoveryAt: Number.isFinite(health.cooldownUntil) && health.cooldownUntil * 1000 > now ? iso(health.cooldownUntil * 1000) : null,
     };
-    else if (health?.source === 'unreadable' || (runtime !== null && health && health.health == null)) errors.push('runtime_health_unreadable');
+    else if (health?.source === 'unreadable' || (healthRuntime !== null && health && health.health == null)) errors.push('runtime_health_unreadable');
   }
   const pool = snapshot.instance?.pool, evidence = snapshot.groupEvidence;
   const position = evidence?.positions?.get(row.sessionGroup) ?? (row.wait?.kind === 'pool_wait' ? row.wait.position : null);
@@ -95,9 +96,9 @@ export function projectGroup(row, snapshot) {
     : kind === 'idle' ? (stale ? status.lastIdleSeconds : status.idleSeconds) ?? null : kind === 'working' ? row.duration ?? null : null;
   const id = row.sessionGroup ?? 'origin';
   const launched = ['running', 'starting'].includes(row.presence);
-  const runtimeOverridden = launched
-    ? typeof runtime === 'string' && snapshot.baselineRuntime != null ? runtime !== snapshot.baselineRuntime : null
-    : snapshot.overrides ? snapshot.overrides.runtime.some(item => item.sessionGroup === row.sessionGroup) : null;
+  const runtimeOverridden = snapshot.overrides
+    ? snapshot.overrides.runtime.some(item => item.sessionGroup === (row.sessionGroup ?? 'origin'))
+    : null;
   const modelOverridden = launched ? row.launchConfig ? row.launchConfig.mode === 'override' : null
     : snapshot.overrides ? snapshot.overrides.model.some(item => item.sessionGroup === row.sessionGroup && item.runtime === runtime) : null;
   return { ...row, id, channel: row.c4?.componentName ?? (id === 'origin' ? null : id.split(':')[0]),

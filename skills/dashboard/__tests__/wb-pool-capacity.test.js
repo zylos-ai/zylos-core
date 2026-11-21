@@ -9,6 +9,7 @@ import { collectStatus } from '../../../cli/lib/status-view.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
 import { readPool, poolPositions } from '../src/lib/workbench/pool-capacity.js';
 import { createGroupSnapshot } from '../src/lib/workbench/group-snapshot.js';
+import { projectGroup } from '../src/lib/workbench/groups-api.js';
 
 const NOW = 1800000000000;
 const freshRecord = patch => ({ v: 1, k: 3, computedAt: NOW, source: 'auto',
@@ -18,7 +19,7 @@ const pending = (sessionGroup, priority, id, extra = {}) => ({ sessionGroup,
   pending: { count: 1, oldestAt: NOW - 5000, head: { priority, id } }, running: { count: 0 }, fence: null, ...extra });
 
 function fixture(t, { record = freshRecord(), slots = [], groups = [], queues = [], globalFence = null, events = [],
-  mode = 'multi', statusMode, sample = { ready: 10, starting: 20, reclaiming: 30, waiting: 40 } } = {}) {
+  mode = 'multi', statusMode, runtimeHealth = {}, sample = { ready: 10, starting: 20, reclaiming: 30, waiting: 40 } } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-pool-'));
   fs.mkdirSync(path.join(root, 'comm-bridge'));
   fs.mkdirSync(path.join(root, 'activity-monitor'));
@@ -49,9 +50,10 @@ function fixture(t, { record = freshRecord(), slots = [], groups = [], queues = 
   const sessionReader = {
     readSessionState: async key => {
       const group = live.get(key), present = ['running', 'starting'].includes(group?.presence);
-      return { identity: { present, ready: group?.presence === 'running', runtime: present ? 'claude' : null,
+      const runtime = group?.runtime ?? 'claude';
+      return { identity: { present, ready: group?.presence === 'running', runtime: present ? runtime : null,
         runId: present ? 'live-' + key : null, createdAt: NOW / 1000 - 10,
-        launchConfig: present ? { runtime: 'claude', mode: 'default' } : null },
+        launchConfig: present ? { runtime, mode: 'default' } : null },
       status: present ? { valid: true, sampledAt: clock, value: { state: 'idle' } } : { valid: false }, usage: { valid: false } };
     },
     readAccountUsage: async () => null,
@@ -64,7 +66,7 @@ function fixture(t, { record = freshRecord(), slots = [], groups = [], queues = 
     if (name === 'config.js') return { readSessionMode: readMode };
     if (name === 'status-view.js') return { collectStatus: options => collectStatus({ ...options,
       mode: statusMode ? () => ({ mode: statusMode }) : readMode, list: () => groups, resolveRoot: () => root,
-      configIssue: () => null, facts: async () => ({ originNeed: null }), health: () => ({ missing: true }), now: () => clock }) };
+      configIssue: () => null, facts: async () => ({ originNeed: null }), health: runtime => runtimeHealth[runtime] ?? { missing: true }, now: () => clock }) };
     throw new Error('Unexpected Core module: ' + name);
   };
   const sessionObservations = {
@@ -148,8 +150,11 @@ test('snapshot joins real capacity and occupancy into inbound positions without 
 test('unexpired owners, present and activating groups do not consume inbound positions, and pure continuation stays unranked', async t => {
   const f = fixture(t, { slots: [{ group: 'held', state: 'held', until: NOW / 1000 + 120 }, { group: 'running-owner' }, { group: 'other' }],
     groups: [{ sessionGroup: 'present', presence: 'running' }, { sessionGroup: 'activating', presence: 'starting' },
+      { sessionGroup: 'starting-auth', presence: 'starting', runtime: 'codex' },
+      { sessionGroup: 'starting-rate', presence: 'starting', runtime: 'agy' },
       { sessionGroup: 'continuation', presence: 'not_running' }],
-    queues: [pending('held', 0, 1), pending('running-owner', 0, 2), pending('present', 0, 3), pending('activating', 0, 4),
+    runtimeHealth: { codex: { health: 'auth_failed' }, agy: { health: 'rate_limited', cooldownUntil: NOW / 1000 + 120 } },
+    queues: [pending('starting-auth', 0, 8), pending('starting-rate', 0, 9), pending('held', 0, 1), pending('running-owner', 0, 2), pending('present', 0, 3), pending('activating', 0, 4),
       pending('fenced', 0, 5, { fence: { reason: 'upgrade', createdAt: NOW / 1000 } }), pending('b', 1, 11), pending('c', 1, 12)] });
   const snapshot = await f.service.getSnapshot(), get = key => snapshot.rows.find(row => row.sessionGroup === key);
   assert.equal(snapshot.instance.pool.used, 3);
@@ -157,6 +162,14 @@ test('unexpired owners, present and activating groups do not consume inbound pos
   assert.deepEqual(get('c').wait, { kind: 'pool_wait', position: 2 });
   for (const key of ['held', 'running-owner']) assert.deepEqual(get(key).wait, { kind: 'unknown', reason: 'no_rule' });
   assert.equal(get('activating').wait.kind, 'starting');
+  assert.deepEqual(get('starting-auth').wait, { kind: 'auth_wait', runtime: 'codex' });
+  assert.deepEqual(get('starting-rate').wait, { kind: 'rate_wait', runtime: 'agy', cooldownUntil: NOW / 1000 + 120 });
+  for (const [key, runtime, reason] of [['starting-auth', 'codex', 'auth_failed'], ['starting-rate', 'agy', 'rate_limited']]) {
+    const group = projectGroup(get(key), snapshot);
+    assert.equal(group.runtime, null);
+    assert.equal(group.flags.blocked.runtime, runtime);
+    assert.equal(group.flags.blocked.reason, reason);
+  }
   assert.equal(get('fenced').wait.kind, 'fenced');
   assert.equal(get('continuation').wait, null);
 });

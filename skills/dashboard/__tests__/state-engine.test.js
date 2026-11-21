@@ -29,6 +29,31 @@ function makeEngine(opts = {}) {
   return { engine, now, advance };
 }
 
+test('foreground events follow the observed Origin across a runtime replacement', () => {
+  const config = { zylosDir: process.env.ZYLOS_DIR, runtime: 'claude' };
+  const claude = { runtime: 'claude', runId: 'old-run', sessionId: 'old-session' };
+  const codex = { runtime: 'codex', runId: 'new-run', sessionId: 'new-session' };
+  let live = claude;
+  const snapshots = [];
+  const engine = new StateEngine({ ...makeMockStore(), saveSnapshot: snapshot => snapshots.push(snapshot) }, {}, config,
+    { readOriginIdentity: () => live });
+  const tool = (run, id, group = 'origin') => engine.onEvent({
+    event_type: 'pre_tool_use', timestamp: new Date().toISOString(),
+    runtime: run.runtime, run_id: run.runId, session_id: run.sessionId, session_group: group,
+    metadata: { tool_use_id: id, tool_name: 'Read' }
+  });
+  tool(claude, 'old');
+  assert.deepEqual(engine.getRunningTools().map(row => row.tool_use_id), ['old']);
+  live = codex;
+  engine._periodicSnapshot();
+  assert.equal(snapshots.at(-1).session_id, codex.sessionId);
+  assert.deepEqual(Object.keys(JSON.parse(snapshots.at(-1).running_tool).tools), []);
+  tool(codex, 'new');
+  tool(claude, 'late-old');
+  tool(codex, 'other-group', 'telegram:another-group');
+  assert.deepEqual(engine.getRunningTools().map(row => row.tool_use_id), ['new']);
+});
+
 test('stop event clears running tools for that session', () => {
   const { engine } = makeEngine();
 

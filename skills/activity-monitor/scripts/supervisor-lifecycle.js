@@ -1,6 +1,4 @@
 import { SyncAlertEpisodes } from './sync-alert-episodes.js';
-import { isDeepStrictEqual } from 'node:util';
-import { validLaunchConfigSnapshot as validLaunchConfig } from './launch-config-shape.js';
 import { loadCoreModule } from './core-modules.js';
 const { modelThreshold } = await loadCoreModule('model-rotation-thresholds.js');
 import { MANUAL_WAKE_PROMPT } from './origin-prompts.js';
@@ -10,7 +8,7 @@ import { CHECKPOINT_THRESHOLD } from '../../comm-bridge/scripts/c4-config.js';
 const SYNC_DIAGNOSTIC_TYPES = new Set(['origin_frequency', 'origin_idle', 'control_timeout', 'state_uncommitted']);
 const TERMINAL_CONTROLS = new Set(['done', 'timeout', 'superseded', 'failed', 'cancelled']);
 const CAPACITY_REASONS = new Set(['ttl', 'evict', 'upgrade', 'auth']);
-const RECLAIM_REASONS = new Set([...CAPACITY_REASONS, 'mode_switch', 'model_config', 'delete', 'release']);
+const RECLAIM_REASONS = new Set([...CAPACITY_REASONS, 'mode_switch', 'delete', 'release']);
 const error = (code, message) => Object.assign(new Error(message), { code });
 const modeOf = context => context.configuration.mode;
 const finite = value => Number.isFinite(value);
@@ -83,7 +81,6 @@ export class SupervisorLifecycle {
     this.ttlReset = new Map();
     this.reclaimDeferrals = new Map();
     this.rotationSent = new Map();
-    this.configurationSent = new Map();
     this.syncSent = new Map();
     this.syncProgress = new Map();
     this.referenceReorgSent = new Map();
@@ -226,7 +223,7 @@ export class SupervisorLifecycle {
   beginRound() { this.roundToken = {}; }
 
   async completeRun(fence, context) {
-    if (legacy(context) || fence.sessionGroup === '*') return this.clear(fence, context);
+    if (legacy(context) || fence.sessionGroup === '*' || fence.reason === 'model_config') return this.clear(fence, context);
     const key = JSON.stringify([fence.sessionGroup, fence.runId]);
     const current = await this.d.db.getDrainFence(fence.sessionGroup);
     if (!current) { context.fences = context.fences.filter(item => item.sessionGroup !== fence.sessionGroup); this.runEndFailures.delete(key); return; }
@@ -296,7 +293,13 @@ export class SupervisorLifecycle {
   }
 
   async advanceReclaim(fence, context) {
-    if (fence.reason === 'manual_restart' || !RECLAIM_REASONS.has(fence.reason)) return 'ignored';
+    // Older versions persisted these fences after a handoff, without hard-restart consent.
+    if (fence.reason === 'model_config') {
+      if (fence.sessionGroup === '*') return 'ignored';
+      await this.completeRun(fence, context);
+      return 'cancelled';
+    }
+    if (!RECLAIM_REASONS.has(fence.reason)) return 'ignored';
     const group = fence.sessionGroup;
     if (group === '*') return 'ignored';
     const preparedTtl = fence.reason === 'ttl' && this.ttlPreparation.get(group)?.runId === fence.runId;
@@ -322,7 +325,7 @@ export class SupervisorLifecycle {
             !await this.reclaimRead(fence, () => this.idle(scene, context, {
               ignoreSyncMarker: ['ttl', 'release'].includes(fence.reason) && this.reclaimSyncFailures.get(group) === scene.runId,
             }))) {
-          if (['model_config', 'delete'].includes(fence.reason)) return 'waiting_idle';
+          if (fence.reason === 'delete') return 'waiting_idle';
           await this.clear(fence, context);
           if (fence.reason === 'ttl') this.ttlReset.set(group, { runId: fence.runId, at: this.now() });
           await this.event('reclaim_cancelled', { session_group: group, run_id: fence.runId, reason: childBlocked ? 'subagent_activity' : 'not_idle' });
@@ -333,11 +336,9 @@ export class SupervisorLifecycle {
         });
         if (again.conversations !== 0 || again.controls !== 0) {
           if (fence.reason === 'delete') return 'waiting_inflight';
-          if (!['model_config', 'delete'].includes(fence.reason)) {
-            await this.event('reclaim_cancelled', { session_group: group, run_id: fence.runId, reason: 'inflight_after_idle' });
-            await this.clear(fence, context);
-            if (fence.reason === 'ttl') this.ttlReset.set(group, { runId: fence.runId, at: this.now() });
-          }
+          await this.event('reclaim_cancelled', { session_group: group, run_id: fence.runId, reason: 'inflight_after_idle' });
+          await this.clear(fence, context);
+          if (fence.reason === 'ttl') this.ttlReset.set(group, { runId: fence.runId, at: this.now() });
           throw error('RECLAIM_INFLIGHT', 'Conversation appeared after drain fence');
         }
       }
@@ -462,9 +463,7 @@ export class SupervisorLifecycle {
     if (!preparation) return reject('no_preparation');
     const scene = await this.d.observeGroup(group);
     if (preparation.runId !== request.expectedRunId || scene?.runId !== request.expectedRunId) return reject('run_changed');
-    const configurationChanged = validLaunchConfig(scene.launchConfig) && !isDeepStrictEqual(scene.launchConfig,
-      await this.d.db.resolveSessionLaunchConfig({ sessionGroup: group, sessionMode: 'multi' }));
-    if (context.transition || configurationChanged || context.restartRequests.some(row =>
+    if (context.transition || context.restartRequests.some(row =>
       row.reason === 'upgrade' && row.runIds.includes(scene.runId) || row.reason === 'manual_restart' &&
       (manualTarget(row) === group || row.mode === 'single'))) return reject('restart_pending');
     const eviction = this.evictionPreparation.get(group);
@@ -831,31 +830,6 @@ export class SupervisorLifecycle {
     if (!targetBinding) return;
     await this.d.db.insertControl(this.prompt('ROTATION_PROMPT', scene), { targetBinding, sessionGroup: scene.sessionGroup, bypassState: true, appendAckSuffix: false });
     this.rotationSent.set(key, now);
-  }
-
-  async reconcileConfiguration(context) {
-    if (legacy(context)) return;
-    await this.each(context.scenes, async scene => {
-      if (scene.observationError) throw scene.observationError;
-      if (!this.allowed(scene.sessionGroup, context)) return;
-      if (!scene.present || !scene.ready || oldUnique(scene, context)) return;
-      const actual = scene.launchConfig;
-      if (!validLaunchConfig(actual)) {
-        await this.event('config_snapshot_unavailable', { session_group: scene.sessionGroup, run_id: scene.runId });
-        return;
-      }
-      const expected = await this.d.db.resolveSessionLaunchConfig({ sessionGroup: scene.sessionGroup, sessionMode: 'multi' });
-      if (!validLaunchConfig(expected)) throw error('INVALID_OBSERVATION', 'Invalid expected launch configuration');
-      if (isDeepStrictEqual(actual, expected)) return;
-      const now = this.now();
-      if (this.configurationSent.has(scene.runId) && now - this.configurationSent.get(scene.runId) < this.rotationCooldownMs) return;
-      if (!await this.beforeWrite(scene.sessionGroup, context)) return;
-      const targetBinding = await this.d.bindTarget(scene);
-      await this.d.db.insertControl(this.prompt('CONFIG_RECLAIM_PROMPT', scene, expected), { sessionGroup: scene.sessionGroup, targetBinding,
-        priority: 1, bypassState: true, appendAckSuffix: true, ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000),
-        createdAt: Math.floor(now / 1000) });
-      this.configurationSent.set(scene.runId, now);
-    });
   }
 
   async checkSync(scenes, context) {

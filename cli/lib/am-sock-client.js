@@ -12,7 +12,6 @@ const integer = Number.isSafeInteger;
 const oneOf = (x, values) => values.includes(x);
 const absent = (x, keys) => keys.every(k => !Object.hasOwn(x, k));
 const publicCodes = ['invalid_request', 'entry_not_open'];
-const configReasons = ['not_multi', 'transition_open', 'run_changed', 'not_ready', 'snapshot_unavailable', 'other_fence', 'manual_restart_pending', 'requests_unreadable'];
 const releaseReasons = ['not_multi', 'transition_open', 'run_changed', 'not_ready', 'other_fence', 'manual_restart_pending', 'requests_unreadable'];
 const manualReasons = ['target_required', 'not_multi', 'transition_open', 'restart_all_pending', 'fence_conflict', 'manual_restart_pending', 'identity_unavailable', 'not_ready', 'requests_unreadable', 'request_conflict', 'wake_failed'];
 
@@ -42,9 +41,6 @@ export function validateReply(request, reply) {
         ? oneOf(reply.result, ['accepted', 'already_accepted', 'done_empty']) && integer(reply.runCount)
           && (reply.result === 'done_empty' ? reply.runCount === 0 : reply.runCount >= 1)
         : oneOf(reply.code, ['manual_restart_pending', 'requests_unreadable', 'request_conflict']);
-    case 'ready_for_config_reclaim':
-      return reply.ok ? oneOf(reply.result, ['accepted', 'already_accepted', 'unchanged'])
-        : reply.result === 'rejected' && oneOf(reply.reason, configReasons);
     case 'request_release':
       return reply.ok ? oneOf(reply.result, ['accepted', 'already_accepted'])
         : reply.result === 'rejected' && oneOf(reply.reason, releaseReasons);
@@ -67,7 +63,7 @@ export function submit(request, { deadlineAt, replyMaxMs = 10000, connectRetryEv
   socketPath = path.join(ZYLOS_DIR, 'activity-monitor', 'am.sock'),
   connect = options => net.createConnection(options), now = (() => { const wall = Date.now(); const mono = performance.now(); return () => wall + performance.now() - mono; })(),
 } = {}) {
-  if (!object(request) || !oneOf(request.type, ['start_attempt', 'restart_all', 'ready_for_config_reclaim', 'request_release', 'defer_reclaim', 'manual_restart', 'mode_switch', 'delete_group'])) throw new TypeError('Unsupported supervisor request');
+  if (!object(request) || !oneOf(request.type, ['start_attempt', 'restart_all', 'request_release', 'defer_reclaim', 'manual_restart', 'mode_switch', 'delete_group'])) throw new TypeError('Unsupported supervisor request');
   if (!Number.isFinite(replyMaxMs) || replyMaxMs <= 0 || (deadlineAt !== undefined && !integer(deadlineAt))
       || (connectRetryEveryMs !== undefined && (!Number.isFinite(connectRetryEveryMs) || connectRetryEveryMs <= 0))) throw new TypeError('Invalid supervisor deadline');
   const deadline = deadlineAt ?? now() + replyMaxMs;

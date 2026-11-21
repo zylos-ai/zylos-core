@@ -166,6 +166,17 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
   return { sections, prefs, slots: { chat, version: versionBody, timezone, idleReclaim, hosts }, select, relabel, badge, navigation, actionsScope: root };
 }
 
+// The compact list supplies live groups. Detail distinguishes inherited settings from overrides.
+export async function readSettingsGroupSnapshot(read) {
+  const snapshot = await readGroupSnapshot(read);
+  const details = await Promise.allSettled(snapshot.rows.map(row => read('/api/groups/' + encodeURIComponent(row.sessionGroup) + '?include=')));
+  if (details.some(result => result.status === 'rejected')) return { ...snapshot, overrides: null };
+  const rows = details.map(result => result.value);
+  const overrides = rows.some(row => row.runtimeOverridden === null) ? null
+    : { runtime: rows.filter(row => row.runtimeOverridden === true), model: rows.filter(row => row.modelOverridden === true) };
+  return { ...snapshot, rows, overrides };
+}
+
 // One snapshot and one first batch per open; search owns subsequent user requests.
 export function createSettingsLoader({ read, onLoad }) {
   let generation = 0;
@@ -173,12 +184,7 @@ export function createSettingsLoader({ read, onLoad }) {
     async open() {
       const current = ++generation;
       const paths = [null, '/api/groups/runtime-overrides', '/api/settings/pricing', '/api/usage/pricing', '/api/instance/runtime-options?runtime=claude', '/api/instance/runtime-options?runtime=codex'];
-      const values = await Promise.allSettled(paths.map(path => path === null ? readGroupSnapshot(read).then(async snapshot => {
-        const details = await Promise.allSettled(snapshot.rows.map(row => read('/api/groups/' + encodeURIComponent(row.sessionGroup) + '?include=')));
-        if (details.some(result => result.status === 'rejected')) return { ...snapshot, overrides: null };
-        const rows = details.map(result => result.value);
-        return { ...snapshot, rows, overrides: { runtime: rows.filter(row => row.runtimeOverridden === true), model: rows.filter(row => row.modelOverridden === true) } };
-      }) : read(path)));
+      const values = await Promise.allSettled(paths.map(path => path === null ? readSettingsGroupSnapshot(read) : read(path)));
       if (current !== generation) return;
       const value = index => values[index].status === 'fulfilled' ? values[index].value : null;
       onLoad({ snapshot: value(0), page: value(1), prices: value(2), usage: value(3), metadata: { claude: value(4), codex: value(5) } });
@@ -191,4 +197,5 @@ export function resetSettingsDrafts(root) {
   for (const selector of ['#settings-defaults', '#settings-idle-reclaim', '#settings-price-rows', '#settings-priority-price-rows']) root.querySelector(selector)?.replaceChildren();
   for (const node of root.querySelectorAll('#settings-save, #settings-add-model, #settings-add-priority-model, #settings-fast-multiplier, #action-mode')) node.disabled = true;
   const status = root.querySelector('#settings-status'); if (status) { status.hidden = true; status.textContent = ''; }
+  root.querySelector('#settings-zylos-copied')?.remove();
 }

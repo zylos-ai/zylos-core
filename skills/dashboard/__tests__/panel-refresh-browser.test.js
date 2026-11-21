@@ -1,10 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
 import { workbenchAnswer, workbenchSnapshot, workbenchSnapshotAnswer } from './fixtures/workbench-browser-api.js';
 import { startPage } from './helpers/workbench-browser.js';
+import { createGroupConfig } from '../src/lib/workbench/group-config.js';
+import { jsonResponse } from '../src/lib/http.js';
+import { createConfigHandler, parseConfigArgs } from '../../comm-bridge/scripts/c4-config-handler.js';
+import { fixture as createConfigStore } from '../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 
 // Boundary: actual dashboard modules/styles and DOM in Chrome, fixed local HTTP APIs only.
 // Run for host/detail redraw, group configuration layout, or shell refresh/visibility changes; skip unrelated backend changes.
@@ -230,4 +235,120 @@ test('background panel refresh preserves reading position and folds', { skip: !c
       });
     }
   }, { timeoutMs: 170000 });
+});
+
+// Real browser, Dashboard CLI adapter and Core configuration handler with an in-memory
+// store. Only process transport, running observation and supervisor submission are
+// injected. Run for group save/confirmation/restart feedback; skip unrelated UI or reads.
+test('confirmed configuration of single-mode Origin displays the one CLI restart result', {
+  skip: !chatEnabled(), timeout: 120_000,
+}, async t => {
+  const sandbox = createChatSandbox(t);
+  await sandbox.runCase(async () => {
+    console.log('Group configuration browser isolation:', JSON.stringify(sandbox.assertIsolation()));
+    const { base } = await startPage(sandbox);
+    const { chromium } = await import(pathToFileURL(process.env.ZYLOS_CHAT_BROWSER_MODULE));
+    const browser = await chromium.launch({ executablePath: process.env.ZYLOS_CHAT_BROWSER_BIN, headless: true, env: sandbox.env,
+      args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
+    sandbox.addCleanup(() => browser.close());
+    const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
+    if (evidence) fs.mkdirSync(evidence, { recursive: true });
+
+    for (const width of [1280, 390]) for (const locale of ['en', 'zh']) for (const theme of ['light', 'dark']) {
+      await t.test(`${width} ${locale} ${theme}`, async variant => {
+        const snapshot = workbenchSnapshot(Date.now());
+        const origin = snapshot.rows[0];
+        Object.assign(snapshot, { mode: 'single', view: 'single', rows: [origin] });
+        const sameEngine = locale === 'zh';
+        const refused = theme === 'dark';
+        const { store } = createConfigStore(variant, { readConfig: () => ({ state: 'ok',
+          config: { runtime: 'claude', session_mode: 'single' } }) });
+        if (sameEngine) store.setSessionRuntimeConfig({ sessionGroup: 'origin', runtime: 'claude' });
+        const runId = origin.live.runId;
+        const restarts = [], writes = [], argsSent = [];
+        const handler = createConfigHandler({ store, readSessionMode: () => 'single',
+          observeRunning: () => ({ hasProcess: true, identityVerified: true, ready: true, runId, launchConfig: origin.launchConfig }),
+          restart: target => {
+            restarts.push({ ...target, config: store.resolveSessionLaunchConfig({ sessionGroup: 'origin', sessionMode: 'single' }) });
+            return refused ? { status: 'not_restarted', reason: 'fence_conflict' } : { status: 'accepted' };
+          },
+        });
+        const config = createGroupConfig({ zylosDir: sandbox.paths.zylos, execute: async (file, argv) => {
+          assert.equal(file, 'zylos');
+          const [, kind, ...args] = argv;
+          const { request } = parseConfigArgs(kind, args);
+          if (request.action !== 'get') argsSent.push(args);
+          try { return { stdout: JSON.stringify(await handler(kind, request)) }; }
+          catch (error) { return { stdout: JSON.stringify({ ok: false, error: { code: error.code, message: error.message } }) }; }
+        } });
+        const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 },
+          hasTouch: width === 390, timezoneId: 'Asia/Singapore', reducedMotion: 'reduce' });
+        try {
+          await context.addInitScript(({ locale, theme }) => {
+            localStorage.setItem('zylos-dashboard-locale', locale);
+            localStorage.setItem('zylos-dashboard-theme', theme);
+          }, { locale, theme });
+          await context.route('**/*', async route => {
+            const req = route.request(), url = new URL(req.url());
+            if (url.origin !== base) return route.abort();
+            if (url.pathname === '/_assets/vendor/chart.umd.js') return route.fulfill({ path: process.env.ZYLOS_CHAT_CHART_ASSET, contentType: 'text/javascript' });
+            if (!url.pathname.startsWith('/api/')) return route.continue();
+            if (req.method() !== 'GET') {
+              const body = req.postDataJSON();
+              writes.push({ method: req.method(), path: url.pathname, body });
+              if (req.method() !== 'PUT' || url.pathname !== '/api/groups/origin/config') return route.fulfill({ status: 404, json: {} });
+              const { status, body: result } = jsonResponse(200, await config.submit('origin', body), { command: true, write: true });
+              return route.fulfill({ status, json: result });
+            }
+            const value = workbenchSnapshotAnswer(url, snapshot, snapshot.readAt);
+            if (url.pathname === '/api/groups/origin') value.config = { ...await config.get('origin'), modelOverrides: [] };
+            if (url.pathname === '/api/instance/runtime-options' && url.searchParams.get('runtime') === 'codex') {
+              return route.fulfill({ json: { models: [{ id: 'gpt', display_name: 'GPT' }], efforts_by_model: { '*': ['high'] } } });
+            }
+            return value === undefined ? route.continue() : route.fulfill({ json: value });
+          });
+          const page = await context.newPage();
+          page.setDefaultTimeout(6000);
+          await page.goto(base + '/');
+          await page.locator('#wb-board .wb-row').first().click();
+          await page.locator('.wb-detail-config .wb-cfg-line button').click();
+          const editor = page.locator('.wb-cfg-edit');
+          await editor.locator('.wb-cfg-engine select').selectOption(sameEngine ? 'inherit' : 'codex');
+          const model = editor.locator('.wb-cfg-model select').nth(0);
+          const effort = editor.locator('.wb-cfg-model select').nth(1);
+          const modelId = sameEngine ? 'sonnet' : 'gpt';
+          const runtime = sameEngine ? 'claude' : 'codex';
+          await model.selectOption(modelId);
+          await effort.selectOption('high');
+          const save = editor.getByRole('button', { name: locale === 'zh' ? '保存' : 'Save', exact: true });
+          const dialog = page.getByRole('alertdialog');
+          await save.click();
+          await dialog.getByRole('button', { name: locale === 'zh' ? '取消' : 'Cancel' }).click();
+          assert.deepEqual(writes, []);
+          assert.deepEqual(restarts, []);
+          await save.click();
+          await dialog.waitFor();
+          const shot = async stage => {
+            if (evidence) await page.screenshot({ path: path.join(evidence, `origin-config-${width}-${locale}-${theme}-${stage}.png`) });
+          };
+          assert.match(await dialog.textContent(), locale === 'zh' ? /会打断这个组正在做的事/ : /interrupts this group’s current work/);
+          await shot('confirm');
+          await dialog.getByRole('button', { name: locale === 'zh' ? '保存并重启' : 'Save and restart' }).click();
+          const feedback = page.locator('.wb-config-result').last();
+          await page.getByText(refused ? /fence_conflict/ : locale === 'zh' ? '重启请求已接受' : 'Restart request accepted', { exact: !refused }).waitFor();
+          await feedback.scrollIntoViewIfNeeded();
+          await shot('result');
+          const modelEdit = { kind: 'model', runtime, model: modelId, effort: 'high', confirmed: true };
+          const runtimeEdit = { kind: 'runtime', value: sameEngine ? 'inherit' : 'codex', confirmed: true };
+          assert.deepEqual(writes, (sameEngine ? [runtimeEdit, modelEdit] : [modelEdit, runtimeEdit])
+            .map(body => ({ method: 'PUT', path: '/api/groups/origin/config', body })));
+          assert.equal(argsSent.length, 2);
+          assert.ok(argsSent.every(args => args.filter(arg => arg === '--yes').length === 1));
+          assert.deepEqual(restarts, [{ sessionGroup: 'origin', runId, config: { runtime, mode: 'override', model: modelId, effort: 'high' } }]);
+          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+          assert.equal(await editor.evaluate(form => form.scrollWidth <= form.clientWidth + 1), true);
+        } finally { await context.close(); }
+      });
+    }
+  }, { timeoutMs: 110_000 });
 });

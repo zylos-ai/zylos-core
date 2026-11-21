@@ -167,6 +167,7 @@
 .wb-input, .wb-cfg-edit :is(input, select) { height: 28px; min-width: 0; padding: 0 8px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text); font: inherit; font-size: 12.5px; }
 .wb-input:focus, .wb-cfg-edit :is(input, select):focus { outline: 2px solid var(--wb-accent-line); border-color: var(--accent); }
 #settings-hot-ttl-source { white-space: pre-line; }
+#settings-engine-result, #settings-model-result { white-space: pre-line; overflow-wrap: anywhere; }
 #settings-hot-ttl-minutes:disabled { background: var(--wb-hover); color: var(--text-muted); -webkit-text-fill-color: var(--text-muted); border-style: dashed; cursor: not-allowed; opacity: 1; }
 .wb-seg-sm { display: inline-flex; height: var(--wb-control-compact); vertical-align: middle; }
 .wb-seg-sm button { font-size: 11px; line-height: 18px; padding: 0 8px; cursor: pointer; white-space: nowrap; }
@@ -1308,6 +1309,7 @@ main:has(> #tab-settings.active) { padding: 0; }
 
 #settings-version p { margin: 0; color: var(--text); }
 #settings-version p + p { margin-top: 2px; color: var(--text-dim); font-size: 12px; }
+#settings-version + #settings-zylos-copied { margin-top: 2px; color: var(--text-dim); }
 .wb-switch-l { display: inline-flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 12.5px; cursor: pointer; }
 .wb-switch { position: relative; width: 36px; height: 20px; flex: none; margin: 0; border-radius: 10px; background: var(--wb-line-strong); appearance: none; -webkit-appearance: none; cursor: pointer; transition: background .15s; }
 .wb-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--wb-panel); box-shadow: var(--shadow-card); transition: left .15s; }

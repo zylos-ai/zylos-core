@@ -493,7 +493,10 @@ test('missing, env-less and unparseable settings.json print nothing and every sa
 for (const [name, changes, code] of [
   ['the auth probe fails', { adapter: () => ({ checkAuth: async () => ({ status: 'failure' }) }) }, 'AUTH_FAILED'],
   ['hooks are not ready', { hooksReady: () => ({ ready: false }) }, 'HOOKS_NOT_READY'],
-  ['the config write fails', { write: () => { throw Object.assign(new Error('config write failed'), { code: 'CONFIG_WRITE_FAILED' }); } }, 'CONFIG_WRITE_FAILED'],
+  ['the config write fails', {
+    read: () => ({ state: 'ok', config: { runtime: 'codex', session_mode: 'multi' } }),
+    write: () => { throw Object.assign(new Error('config write failed'), { code: 'CONFIG_WRITE_FAILED' }); },
+  }, 'CONFIG_WRITE_FAILED'],
 ]) test(`zylos runtime --save-apikey keeps the settings.json warning when ${name} after the save`, async () => {
   const hand = handSecret(), saved = 'sk-ant-api03-' + secret();
   const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: hand } }), PRIVATE);

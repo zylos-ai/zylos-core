@@ -29,6 +29,7 @@ export function configFunctions({ read, write, snapshot, get, all, run, knownGro
     const row = get(c, 'SELECT runtime FROM group_runtime_overrides WHERE session_group=?', group);
     return row ? { mode: 'override', runtime: row.runtime } : { mode: 'inherit' };
   };
+  const effectiveRuntime = (c, group) => runtimeValue(c, group).runtime ?? baseline().runtime;
   function configWrite(operation) {
     try { return write(operation); }
     catch (error) {
@@ -38,7 +39,7 @@ export function configFunctions({ read, write, snapshot, get, all, run, knownGro
   }
   const api = {
     getSessionModelConfig: ({ sessionGroup, runtime: rt }) => read(c => { knownGroup(c, sessionGroup); runtime(rt); return modelValue(c, sessionGroup, rt); }),
-    setSessionModelConfig: ({ sessionGroup, runtime: rt, model, effort }) => {
+    setSessionModelConfig: ({ sessionGroup, runtime: rt, model, effort, beforeRestartingChange }) => {
       runtime(rt);
       if ([model, effort].some(value => typeof value !== 'string' || !value.trim())) throw dataError('MODEL_PAIR_REQUIRED', 'Provide both nonempty model and effort');
       if (typeof dependencies.validateModel !== 'function') throw dataError('MODEL_CONFIG_INVALID', 'Runtime adapter validation is unavailable');
@@ -48,25 +49,40 @@ export function configFunctions({ read, write, snapshot, get, all, run, knownGro
         knownGroup(c, sessionGroup);
         const old = modelValue(c, sessionGroup, rt);
         const changed = old.mode !== 'override' || old.model !== model || old.effort !== effort;
-        if (changed) run(c, 'INSERT INTO group_model_overrides(session_group,runtime,model,effort) VALUES(?,?,?,?) ON CONFLICT(session_group,runtime) DO UPDATE SET model=excluded.model,effort=excluded.effort', sessionGroup, rt, model, effort);
+        if (changed) {
+          if (beforeRestartingChange && effectiveRuntime(c, sessionGroup) === rt) beforeRestartingChange();
+          run(c, 'INSERT INTO group_model_overrides(session_group,runtime,model,effort) VALUES(?,?,?,?) ON CONFLICT(session_group,runtime) DO UPDATE SET model=excluded.model,effort=excluded.effort', sessionGroup, rt, model, effort);
+        }
         return { changed, desired: { runtime: rt, mode: 'override', model, effort } };
       });
     },
-    resetSessionModelConfig: ({ sessionGroup, runtime: rt }) => { runtime(rt); return configWrite(c => {
+    resetSessionModelConfig: ({ sessionGroup, runtime: rt, beforeRestartingChange }) => { runtime(rt); return configWrite(c => {
       knownGroup(c, sessionGroup);
-      const changed = run(c, 'DELETE FROM group_model_overrides WHERE session_group=? AND runtime=?', sessionGroup, rt).changes > 0;
+      const changed = modelValue(c, sessionGroup, rt).mode === 'override';
+      if (changed) {
+        if (beforeRestartingChange && effectiveRuntime(c, sessionGroup) === rt) beforeRestartingChange();
+        run(c, 'DELETE FROM group_model_overrides WHERE session_group=? AND runtime=?', sessionGroup, rt);
+      }
       return { changed, desired: { runtime: rt, mode: 'default' } };
     }); },
     getSessionRuntimeConfig: ({ sessionGroup }) => read(c => { knownGroup(c, sessionGroup); return runtimeValue(c, sessionGroup); }),
-    setSessionRuntimeConfig: ({ sessionGroup, runtime: rt }) => { runtime(rt); return configWrite(c => {
+    setSessionRuntimeConfig: ({ sessionGroup, runtime: rt, beforeRestartingChange }) => { runtime(rt); return configWrite(c => {
       knownGroup(c, sessionGroup);
       const changed = runtimeValue(c, sessionGroup).runtime !== rt;
-      if (changed) run(c, 'INSERT INTO group_runtime_overrides(session_group,runtime) VALUES(?,?) ON CONFLICT(session_group) DO UPDATE SET runtime=excluded.runtime', sessionGroup, rt);
+      if (changed) {
+        if (beforeRestartingChange && effectiveRuntime(c, sessionGroup) !== rt) beforeRestartingChange();
+        run(c, 'INSERT INTO group_runtime_overrides(session_group,runtime) VALUES(?,?) ON CONFLICT(session_group) DO UPDATE SET runtime=excluded.runtime', sessionGroup, rt);
+      }
       return { changed, desired: { mode: 'override', runtime: rt } };
     }); },
-    resetSessionRuntimeConfig: ({ sessionGroup }) => configWrite(c => {
+    resetSessionRuntimeConfig: ({ sessionGroup, beforeRestartingChange }) => configWrite(c => {
       knownGroup(c, sessionGroup);
-      const changed = run(c, 'DELETE FROM group_runtime_overrides WHERE session_group=?', sessionGroup).changes > 0;
+      const { runtime: previous } = runtimeValue(c, sessionGroup);
+      const changed = previous !== undefined;
+      if (changed) {
+        if (beforeRestartingChange && previous !== baseline().runtime) beforeRestartingChange();
+        run(c, 'DELETE FROM group_runtime_overrides WHERE session_group=?', sessionGroup);
+      }
       return { changed, desired: { mode: 'inherit' } };
     }),
     resolveSessionLaunchConfig: ({ sessionGroup, sessionMode }) => {

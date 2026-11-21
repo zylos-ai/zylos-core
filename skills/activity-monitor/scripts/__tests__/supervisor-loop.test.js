@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 function fixture(overrides={}) {
  const calls=[],timers=[]; const rec=n=>async()=>{calls.push(n);};
- const deps={readConfiguration:async()=>({mode:'multi'}),restore:rec('restore'),openAdmission:rec('open'),reportError:async(e,d)=>calls.push(`error:${d.phase}`),getModeTransition:async()=>null,listDrainFences:async()=>[],readRestartRequests:async()=>[],lifecycleSerial:fn=>fn(),advanceTransition:rec('transition'),advanceManual:rec('manual'),advanceRestarts:rec('restarts'),reconcileConfiguration:rec('config'),observe:async()=>{calls.push('observe');return [{sessionGroup:'origin'},{sessionGroup:'tg:one'}];},observeExits:rec('exits'),probeAndPublish:async s=>calls.push(`probe:${s.sessionGroup}`),advanceReclaim:rec('reclaim'),checkRotation:rec('rotation'),checkTtl:rec('ttl'),checkEviction:rec('evict'),checkSync:rec('sync'),writeMetricsAndMaintain:rec('metrics'),...overrides};
+ const deps={readConfiguration:async()=>({mode:'multi'}),restore:rec('restore'),openAdmission:rec('open'),reportError:async(e,d)=>calls.push(`error:${d.phase}`),getModeTransition:async()=>null,listDrainFences:async()=>[],readRestartRequests:async()=>[],lifecycleSerial:fn=>fn(),advanceTransition:rec('transition'),advanceManual:rec('manual'),advanceRestarts:rec('restarts'),observe:async()=>{calls.push('observe');return [{sessionGroup:'origin'},{sessionGroup:'tg:one'}];},observeExits:rec('exits'),probeAndPublish:async s=>calls.push(`probe:${s.sessionGroup}`),advanceReclaim:rec('reclaim'),checkRotation:rec('rotation'),checkTtl:rec('ttl'),checkEviction:rec('evict'),checkSync:rec('sync'),writeMetricsAndMaintain:rec('metrics'),...overrides};
  return {calls,timers,deps,loop:new SupervisorLoop(deps,{schedule:(fn,ms)=>{timers.push({fn,ms});return timers.length;},cancel:()=>{}})};
 }
 
@@ -45,7 +45,7 @@ test('startup alert failure is reported without scheduling recovery work',async(
  await f.loop.start();await f.loop.tick();assert.deepEqual(f.calls,['error:configuration','error:startup-alert']);assert.equal(f.timers.length,0);await f.loop.stop();
 });
 // supervisor-loop: fixed stages and fresh capacity after reclaim.
-test('restore precedes admission and lifecycle shares one scene sample',async()=>{const f=fixture({listDrainFences:async()=>[{sessionGroup:'tg:one'}]});await f.loop.start();assert.deepEqual(f.calls,['restore','open','observe','manual','restarts','config','exits','probe:origin','probe:tg:one','reclaim','rotation','rotation','ttl','ttl','evict','sync','metrics']);assert.equal(f.timers[0].ms,1000);await f.loop.stop();});
+test('restore precedes admission and lifecycle shares one scene sample',async()=>{const f=fixture({listDrainFences:async()=>[{sessionGroup:'tg:one'}]});await f.loop.start();assert.deepEqual(f.calls,['restore','open','observe','manual','restarts','exits','probe:origin','probe:tg:one','reclaim','rotation','rotation','ttl','ttl','evict','sync','metrics']);assert.equal(f.timers[0].ms,1000);await f.loop.stop();});
 // one group failure does not starve another.
 test('group failure preserves other observations and next tick',async()=>{const f=fixture();f.deps.probeAndPublish=async s=>{if(s.sessionGroup==='origin')throw new Error('unobservable');f.calls.push('second');};await f.loop.start();assert.ok(f.calls.includes('error:observe'));assert.ok(f.calls.includes('second'));assert.equal(f.timers.length,1);await f.loop.stop();});
 // permits observations and existing reclaim only.
@@ -101,7 +101,7 @@ test('round shares one serialized snapshot and checks manual fences once', async
     readConfiguration: read('configuration', { mode: 'multi' }), getModeTransition: async () => { assert.equal(locked, false); counts.transition++; return null; },
     listDrainFences: read('fences', fences), readRestartRequests: read('requests', requests), observe: read('scenes', scenes),
     checkManualFences: async context => { counts.manual++; await phase(context); return []; },
-    advanceManual: phase, advanceRestarts: phase, reconcileConfiguration: phase,
+    advanceManual: phase, advanceRestarts: phase,
     checkRotation: async (scene, context) => { assert.ok(scenes.includes(scene)); await phase(context); },
     checkTtl: async (scene, context) => { assert.ok(scenes.includes(scene)); await phase(context); },
     checkEviction: async (sample, context) => { assert.equal(sample, scenes); await phase(context); },
@@ -144,7 +144,7 @@ test('completed transition precedes serial work and keeps transition-round restr
   await f.loop.start();
   assert.ok(f.calls.indexOf('transition') < f.calls.indexOf('observe'));
   assert.ok(f.calls.indexOf('probe:origin') < f.calls.indexOf('reclaim'));
-  for (const phase of ['manual','restarts','config','rotation','ttl','evict','sync']) assert.equal(f.calls.includes(phase), false, phase);
+  for (const phase of ['manual','restarts','rotation','ttl','evict','sync']) assert.equal(f.calls.includes(phase), false, phase);
   assert.equal(f.loop.configuration.mode, 'single');
   await f.loop.stop();
 });
@@ -173,7 +173,7 @@ test('every loop step exception reports its phase and schedules the next round',
  for(const [method,phase] of Object.entries({
   getModeTransition:'round',readConfiguration:'round',listDrainFences:'round',readRestartRequests:'restart-requests',
   observe:'round',checkManualFences:'manual-fences',advanceManual:'advanceManual',advanceRestarts:'advanceRestarts',
-  reconcileConfiguration:'reconcileConfiguration',observeExits:'round',probeAndPublish:'observe',updateCapacity:'capacity',advanceReclaim:'reclaim',
+  observeExits:'round',probeAndPublish:'observe',updateCapacity:'capacity',advanceReclaim:'reclaim',
   checkRotation:'rotation',checkTtl:'ttl',checkEviction:'eviction',checkSync:'sync',writeMetricsAndMaintain:'round',afterRound:'after-round',
  })) await t.test(method,async()=>{
   const f=fixture({listDrainFences:async()=>[{sessionGroup:'origin'},{sessionGroup:'tg:one'}]});
@@ -194,7 +194,7 @@ test('long-running group stays observed without starving another group or reopen
  await f.loop.start();await f.loop.tick();assert.deepEqual(seen,['origin','tg:one','origin','tg:one']);
  transition={id:'switch'};f.calls.length=0;await f.loop.tick();
  assert.deepEqual(seen.slice(-2),['origin','tg:one']);assert.ok(f.calls.includes('reclaim'));
- for(const phase of ['manual','restarts','config','rotation','ttl','evict','sync'])assert.equal(f.calls.includes(phase),false,phase);
+ for(const phase of ['manual','restarts','rotation','ttl','evict','sync'])assert.equal(f.calls.includes(phase),false,phase);
  assert.equal(f.timers.length,3);await f.loop.stop();
 });
 

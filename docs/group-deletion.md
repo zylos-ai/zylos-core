@@ -169,9 +169,7 @@ path and symlink checks.
 
 Core creates one audit and an owned delete fence. New input claims wait while
 running messages, controls and subagents finish. The runtime stops without
-automatic restart. A configuration-reclaim control can acknowledge readiness
-under the same run's delete fence; it neither replaces that fence nor schedules
-a restart. Retained input can subsequently run normally. Dashboard recreation
+automatic restart. Retained input can subsequently run normally. Dashboard recreation
 is registered only on authorized send/attachment writes after Core namespace
 and history proof; reading, attachment configuration and rename do not create
 a registration. An unregistered group rename returns 404.
