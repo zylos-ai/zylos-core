@@ -1,3 +1,4 @@
+import { getRuntime } from '../../../../cli/lib/runtime/index.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -8,6 +9,8 @@ import { RuntimeHealthCoordinator, aggregateRuntimeDemand, classifyRecoveryResul
 import { HealthStore } from '../health-store.js';
 import { MessageRouter } from '../message-router.js';
 import { SupervisorHealthObserver } from '../supervisor-health-observer.js';
+
+const hookHealth = (await getRuntime('claude')).health.hookHealth;
 
 function registered(reply) {
   assert.equal(reply.result, 'registered');
@@ -161,7 +164,7 @@ test('groups retain independent markers, frozen replies and raw group spelling a
   const f=fixture(t), now=f.now(), identity={runtime:'claude',session_id:'session',claude_pid:12};
   const store=new HealthStore({zylosDir:f.root,now:f.now,freezeNotice:({event,sessionGroup})=>({event_id:event.event_id,conversation_id:sessionGroup,channel:'test',endpoint:sessionGroup,health:'rate_limited',reason:'rate_limit_five_hour',notice:{eligible:true},created_at:event.received_at,status:'pending',...identity})});
   const event=received_at=>({schema_version:1,event_id:randomUUID(),source:'hook',runtime:'claude',...identity,prompt_id:'prompt',event:'stop_failure',error:'rate_limit',received_at});
-  store.consume(event(now),{identity,sessionGroup:'test:with_under'});store.consume(event(now-1),{identity,sessionGroup:'test:second'});
+  store.consume(event(now),{hookHealth, identity,sessionGroup:'test:with_under'});store.consume(event(now-1),{hookHealth, identity,sessionGroup:'test:second'});
   const first=store.read('test:with_under'), second=store.read('test:second');assert.equal(first.last_processed.received_at,now);assert.equal(second.last_processed.received_at,now-1);
   store.transition('ok','authentication_failed',{identity,kind:'recovery'});
   const reopened=new HealthStore({zylosDir:f.root,now:f.now});assert.equal(reopened.read().reason,'');assert.equal(reopened.read('test:with_under').pending_notice.reason,'rate_limit_five_hour');assert.equal(reopened.read('test:second').pending_notice.conversation_id,'test:second');
@@ -196,7 +199,7 @@ test('new auth failure invalidates a previously successful credential capture',a
 test('accepted current-process failure outranks conflicting screen evidence on failed recovery',async t=>{
   const f=fixture(t),runId=randomUUID(),identity={runtime:'claude',session_id:'session',claude_pid:44};
   f.health.checkAuth = () => ({status:'failure'});
-  await f.health.consumeHook('claude',{schema_version:1,source:'hook',runtime:'claude',...identity,event_id:randomUUID(),prompt_id:'prompt',event:'stop_failure',error:'authentication_failed',received_at:f.now()},{identity,sessionGroup:'telegram:a'});
+  await f.health.consumeHook('claude',{schema_version:1,source:'hook',runtime:'claude',...identity,event_id:randomUUID(),prompt_id:'prompt',event:'stop_failure',error:'authentication_failed',received_at:f.now()},{hookHealth, identity,sessionGroup:'telegram:a'});
   const answer=await f.health.applyProbeResult({runtime:'claude',runId,current:{runtime:'claude',runId},identity,terminal:'failed',matches:{rateLimit:{detected:true}}});
   assert.equal(answer.classification,'auth_error');assert.equal(f.read().health,'auth_failed');assert.equal(f.read().source,'hook');assert.equal(f.read().reason,'authentication_failed');
 });

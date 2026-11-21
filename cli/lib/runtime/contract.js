@@ -69,6 +69,12 @@ export const RUNTIME_CONTRACT = Object.freeze({
     readDefaultModel: 'optional',
     statusLine: 'optional',
   }) }),
+  health: Object.freeze({ required: true, members: Object.freeze({
+    screen: 'optional',
+    hookHealth: 'optional',
+    toolWatchdog: 'optional',
+    noticeRules: 'optional',
+  }) }),
   usage: Object.freeze({ required: false, members: Object.freeze({
     accountQuota: 'optional',
     legacyAccountRecord: 'optional',

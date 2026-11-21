@@ -1,3 +1,4 @@
+import { getRuntime } from '../../../../cli/lib/runtime/index.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -6,6 +7,8 @@ import {test} from 'node:test';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {sanitizeHealthQuota} from '../health-quota.js';
+
+const readHealthQuota = (await getRuntime('claude')).usage.healthQuota;
 
 function fixture(t) {
   const zylosDir=fs.mkdtempSync(path.join(os.tmpdir(),'health-quota-'));
@@ -81,7 +84,7 @@ test('first-failure quota reads exact run/session and never the legacy latest sn
   }));
   const env={ZYLOS_DIR:options.zylosDir,ZYLOS_RUN_ID:'run-a',ZYLOS_SESSION_GROUP:'chat:A'};
   const runDir=path.join(options.zylosDir,'activity-monitor/session-groups/chat:A');
-  const read=extra=>readScopedHealthQuota({runDir,runId:'run-a',identity,nowMs:options.nowMs,...extra});
+  const read=extra=>readScopedHealthQuota({read:readHealthQuota,runDir,runId:'run-a',identity,nowMs:options.nowMs,...extra});
   assert.equal(read(),null); // An existing legacy quota file is not evidence for this group.
   await publishContextSample({...status,secret:'exclude'},{env,now:options.nowMs});
   assert.deepEqual(read().rate_limits,status.rate_limits);assert.equal(JSON.stringify(read()).includes('secret'),false);

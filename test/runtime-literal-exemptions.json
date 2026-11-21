@@ -40,49 +40,9 @@
     "reason": "hook-entry: Resolves the implementation for this fixed native hook entrypoint."
   },
   {
-    "file": "skills/activity-monitor/scripts/failure-continuation.js",
-    "text": "if (runtime !== 'claude' || !runId) return false;",
-    "reason": "dispatch:health: Limits stop-failure continuation to the matching Claude run."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/failure-continuation.js",
-    "text": "if(!current?.ready || current.runId!==retry.runId || current.sessionId!==retry.sessionId || current.runtime!=='claude') {",
-    "reason": "dispatch:health: Limits stop-failure continuation to the matching Claude run."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/health-event-reader.js",
-    "text": "const retry=scene.runtime==='claude' && ['stop','stop_failure'].includes(event.event)",
-    "reason": "dispatch:health: Only Claude stop events have failure-continuation semantics."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/health-evidence.js",
-    "text": "if (!event.prompt_id && event.runtime !== 'agy') return { state: next, status: 'processed', reason: 'missing_prompt', verify: true };",
-    "reason": "dispatch:health: Interprets runtime-specific hook and failure evidence."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/health-evidence.js",
-    "text": "(event.runtime !== 'claude' || (authConfirmed && !modelAccessFailure));",
-    "reason": "dispatch:health: #1527 Claude StopFailure 登录确认；块 9 移除。"
-  },
-  {
-    "file": "skills/activity-monitor/scripts/health-evidence.js",
-    "text": "const health = error === 'rate_limit' ? 'rate_limited' : authFailure ? 'auth_failed' : event.runtime === 'agy' ? 'unavailable' : null;",
-    "reason": "dispatch:health: Interprets runtime-specific hook and failure evidence."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/health-quota.js",
-    "text": "return identity?.runtime==='claude'&&id(identity.session_id)&&Number.isSafeInteger(identity.claude_pid)&&identity.claude_pid>0;",
-    "reason": "dispatch:health: Validates identity for Claude statusline quota evidence."
-  },
-  {
     "file": "skills/activity-monitor/scripts/hook-activity.js",
     "text": "const runtime = env.ZYLOS_MODEL_CONFIG ? JSON.parse(env.ZYLOS_MODEL_CONFIG).runtime : 'claude';",
     "reason": "legacy: Only Claude produced hook events for the pre-run single-session location."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/outage-notice.js",
-    "text": "identity?.runtime !== 'claude' ||",
-    "reason": "dispatch:health: Uses runtime-specific quota evidence when annotating an outage."
   },
   {
     "file": "skills/activity-monitor/scripts/pane-process.js",
@@ -95,49 +55,9 @@
     "reason": "dispatch:usage: Maps known transcript path markers to their runtime."
   },
   {
-    "file": "skills/activity-monitor/scripts/runtime-health.js",
-    "text": "if (!options?.auth && runtime === 'claude' && event.event === 'stop_failure' &&",
-    "reason": "dispatch:health: #1527 Claude StopFailure 登录确认；块 9 移除。"
-  },
-  {
-    "file": "skills/activity-monitor/scripts/supervisor-health-observer.js",
-    "text": "const continuationOwnsScreen=scene.runtime==='claude' && retry?.runId===scene.runId && retry.sessionId===scene.sessionId;",
-    "reason": "dispatch:health: Lets matching Claude continuation own screen recovery."
-  },
-  {
     "file": "skills/activity-monitor/scripts/supervisor-legacy-status.js",
     "text": "if(foreground.runtime==='claude')this.activity.transcriptPath=path.join(this.env.HOME,'.claude','projects',",
     "reason": "legacy: Resolves the fixed pre-group Claude transcript location."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/supervisor-main.js",
-    "text": "matchScreen:(runtime,screen)=>runtime==='agy'?{}:(runtime==='claude'?matchClaudeScreen:matchCodexScreen)(screen),",
-    "reason": "dispatch:health: Chooses the runtime health probe or invokes Claude failure continuation."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/supervisor-main.js",
-    "text": "if(scene.runtime==='claude' && !awaitingAuth) await coordinator.serial(scene.runtime,()=>processFailureContinuation({",
-    "reason": "dispatch:health: Chooses the runtime health probe or invokes Claude failure continuation."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/supervisor.js",
-    "text": "if(notification.runtime==='claude')await health.serial('claude',()=>{",
-    "reason": "dispatch:health: Serializes continuation with the Claude health store after delivery."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/supervisor.js",
-    "text": "const store=health.store('claude'),state=store.read(delivered.sessionGroup),retry=state.failure_retry;",
-    "reason": "dispatch:health: Serializes continuation with the Claude health store after delivery."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/tool-rules.js",
-    "text": "runtime: 'claude',",
-    "reason": "dispatch:health: Defines the Claude-specific watchdog tool rule."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/tool-rules.js",
-    "text": "enabled: runtimeId === 'claude' && watchdogEnabled,",
-    "reason": "dispatch:health: Defines the Claude-specific watchdog tool rule."
   },
   {
     "file": "skills/comm-bridge/scripts/router/lifecycle.js",

@@ -1,12 +1,13 @@
-# Claude failure continuation
+# Runtime failure continuation
 
-A current main-agent Claude StopFailure with `server_error`, `overloaded`, or
+A current main-agent StopFailure from a runtime that reports hook health
+(Claude or agy), with `server_error`, `overloaded`, or
 `network_error` schedules exactly `Continue` after 30 seconds, then 2 minutes,
 then 5 minutes if the continued turns also fail. After the third failed
 continuation, AM clears the retry record and the existing notice worker sends
 the ordinary service-error notice. The message does not mention retry counts.
-A successful continued Stop resets the budget. Other errors and runtimes keep
-their existing behavior; quota/request/context/content diagnostics can veto retry.
+A successful continued Stop resets the budget. Quota, request, context and
+content diagnostics can veto retry.
 
 ## AM owns observation and accounting
 
@@ -84,8 +85,10 @@ Stop at +25s and the +30s deadline, and never replays after state reopen.
 Supervisor assembly exercises its real private notification socket: an old
 paste does not cancel, a later ordinary paste releases an orphan running retry,
 and a subsequent failure can start a fresh retry. Delivery tests cover exact
-content, persisted cancellation and pre-paste error requeue. Shared reader and
-hook files are unchanged. Tests do not use live Claude, tmux or network services.
+content, persisted cancellation and pre-paste error requeue. The agy case
+feeds server, overload and network failures and checks all three delays,
+continued readiness and one final notice. The isolated tests use fixture
+events and a fixture database.
 
 Completed real-Claude reviewer execution covers one continuation 30 seconds
 after disconnect, cancellation by new or queued user input, existing 429/401

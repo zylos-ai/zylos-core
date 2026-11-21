@@ -31,6 +31,21 @@ for (const id of SUPPORTED_RUNTIMES) {
     }
     assert.equal(runtime.launch.efforts !== UNSUPPORTED, runtimesWith('modelOverride', 'supported').includes(id),
       'modelOverride in the registry must agree with launch.efforts');
+    const { screen, hookHealth, toolWatchdog, noticeRules } = runtime.health;
+    assert.ok(screen !== UNSUPPORTED || hookHealth !== UNSUPPORTED, 'health must have an evidence source');
+    assert.equal(hookHealth !== UNSUPPORTED, runtimesWith('hookHealth').includes(id),
+      'hookHealth in the registry must agree with health.hookHealth');
+    if (screen !== UNSUPPORTED) assert.equal(typeof screen.match, 'function');
+    if (hookHealth === UNSUPPORTED) {
+      assert.equal(noticeRules, UNSUPPORTED);
+    } else {
+      assert.equal(typeof hookHealth.hookFailureHasPromptId, 'boolean');
+    }
+    if (toolWatchdog !== UNSUPPORTED) {
+      assert.ok(toolWatchdog.tools.every(tool => typeof tool === 'string'));
+      assert.equal(typeof toolWatchdog.interruptKey, 'string');
+    }
+    if (noticeRules !== UNSUPPORTED) assert.ok(Array.isArray(noticeRules));
     const { usage } = runtime;
     const accountQuota = usage === UNSUPPORTED ? UNSUPPORTED : usage.accountQuota;
     assert.equal(accountQuota !== UNSUPPORTED, runtimesWith('accountQuota', 'supported').includes(id),

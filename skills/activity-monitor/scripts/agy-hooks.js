@@ -83,7 +83,7 @@ export async function handleAgyHook(payload, { eventName, env = process.env,
   if (!normalized) return reinjection;
   if (normalized.hook_event_name === 'SessionStart') normalized.source = hooks.readSessionSource(env);
   await activity(normalized.hook_event_name === 'StopFailure' ? { ...normalized, hook_event_name: 'Stop' } : normalized, { env });
-  const evidence = health(normalized, { env, zylosDir: env.ZYLOS_DIR });
+  const evidence = await health(normalized, { env, zylosDir: env.ZYLOS_DIR });
   if (evidence) await wake({ zylosDir: env.ZYLOS_DIR });
   if (normalized.hook_event_name !== 'SessionStart') return reinjection;
   const chunks = [Buffer.from(instructions({ zylosDir: env.ZYLOS_DIR }))];

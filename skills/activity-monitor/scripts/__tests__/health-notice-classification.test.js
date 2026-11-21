@@ -1,3 +1,5 @@
+import { getRuntime } from '../../../../cli/lib/runtime/index.js';
+import { HEALTH_NOTICE_RULES } from '../../../../cli/lib/runtime/shared/health-notice-rules.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import fs from 'node:fs';
@@ -11,7 +13,9 @@ import { classifyHealthNotice } from '../health-notice-classification.js';
 import { matchHealthNoticeText } from '../health-notice-match.js';
 import { HealthStore } from '../health-store.js';
 import { MessageRouter } from '../message-router.js';
-import { messageForStatus } from '../../../comm-bridge/scripts/status-notice-templates.js';
+
+const matchNotice = payload => matchHealthNoticeText(payload, HEALTH_NOTICE_RULES);
+const hookHealth = (await getRuntime('claude')).health.hookHealth;
 
 const now = Date.now();
 const identity = { runtime:'claude', session_id:'session', claude_pid:123 };
@@ -56,7 +60,7 @@ test('legacy process-start differences do not override matching PID and session 
 
 test('trusted full windows precede negative text; without proof terminal failures remain neutral', () => {
   for (const text of ['API Error: Server is temporarily limiting requests (not your usage limit)', 'API Error: 429 Rate limit exceeded', "You've used 90% of your weekly limit", 'API Error: Repeated 529 Overloaded errors.', 'Invalid API key']) {
-    const notice_match=matchHealthNoticeText({error_details:text});
+    const notice_match=matchNotice({error_details:text});
     assert.ok(notice_match,text);
     const result=classifyHealthNotice({...base,notice_match,quota:snapshot({five_hour:{used_percentage:100}})},now);
     assert.equal(result.eligible,true); assert.equal(result.noticeCode,'quota_exhausted');
@@ -83,10 +87,9 @@ test('factual first failure notices are independent of persistent health transit
     ['unknown','unavailable','ok'],
   ]) {
       const store=fixture(t);
-      const evidence=error==='billing_error'?{}:{notice_match:{sourceId:1,kind:'model_quota'},quota:snapshot({five_hour:{used_percentage:100}})};
-      const result=store.consume({...base,error,...evidence}, {identity,authConfirmed:true});
-      // Billing is tested without supporting quota; the other classes must
-      // never adopt quota wording even when unrelated quota evidence exists.
+      const evidence=error==='billing_error'?{}:{notice_match:{sourceId:1,kind:'model_quota'}};
+      const result=store.consume({...base,error,...evidence}, {hookHealth, identity,authConfirmed:true});
+      // Non-quota errors must keep their own notice classification.
       assert.equal(result.notice.noticeCode,noticeCode);assert.equal(result.notice.eligible,true);
       const intent=store.read().pending_notice;
       assert.equal(intent.notice.noticeCode,noticeCode);
@@ -94,18 +97,16 @@ test('factual first failure notices are independent of persistent health transit
   }
 });
 
-test('matched notice evidence remains durable while rate-limited inbound stays pending', async t => {
+test('notice intent remains durable while rate-limited inbound stays pending', async t => {
   const store=fixture(t);
-  const result=store.consume({...base,quota:snapshot({five_hour:{used_percentage:100,resets_at:reset1}}),error_details:'PRIVATE'}, {identity});
-  const intent=store.read().pending_notice;
-  assert.equal(intent.notice.noticeCode,'quota_exhausted_reset');
+  store.consume({...base,error_details:'PRIVATE'}, {hookHealth, identity});
+  assert.ok(store.read().pending_notice);
   assert.doesNotMatch(fs.readFileSync(store.file,'utf8'),/PRIVATE/);
   const router=new MessageRouter({healthCoordinator:{store:()=>store,notifyUserMessage:()=>false},
     resolveTargetRuntime:()=> 'claude',requestProbe:async()=>{},cacheDirectory:path.join(path.dirname(store.file),'probe-cache'),now:()=>now});
   const route=await router.route({version:1,type:'route',requestId:'test',noReply:false,receivedAt:now});
   const status=store.read();
   assert.equal(route.decision,'pending');assert.equal(route.userMessage,undefined);
-  assert.match(messageForStatus({health:status.health,...status.notice}),/\d{4}-\d{2}-\d{2} \d{2}:\d{2} (?:UTC|[A-Za-z_]+\/[A-Za-z_]+)/);
   const revision=store.read().revision;
   store.transition('ok','',{identity,kind:'recovery',expectedRevision:revision});
   assert.equal(store.read().notice,undefined);

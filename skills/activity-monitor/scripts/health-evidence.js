@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { sanitizeHealthQuota } from './health-quota.js';
 import { classifyHealthNotice, sanitizeNoticeMatch } from './health-notice-classification.js';
 import { loadCoreModule } from './core-modules.js';
 
@@ -20,8 +19,6 @@ export function sanitizeHealthEvent(raw, fallbackId) {
   if (event.event === 'stop_failure') {
     const match = sanitizeNoticeMatch(raw.notice_match);
     if (match) event.notice_match = match;
-    const quota = sanitizeHealthQuota(raw.quota, { identity:event, nowMs:event.received_at });
-    if (quota) event.quota = quota;
   }
   return event;
 }
@@ -48,10 +45,10 @@ export function safeHealthReason(health, reason) {
   return 'runtime_unavailable';
 }
 
-export function reduceHealthEvidence(state, event, { identity, now, quota = null, authConfirmed = false, maxAgeMs = HEALTH_EVENT_MAX_AGE_MS } = {}) {
+export function reduceHealthEvidence(state, event, { identity, now, quota = null, authConfirmed = false, hookHealth, maxAgeMs = HEALTH_EVENT_MAX_AGE_MS } = {}) {
   const ignored = reason => ({ state, status: 'ignored', reason });
   if (event.source === 'invalid') return ignored('invalid_event');
-  if (!identity || !identity.session_id || !Number.isSafeInteger(identity.claude_pid) || identity.claude_pid<=0 || !runtimesWith('hookHealth').includes(identity.runtime)) return ignored('missing_runtime_proof');
+  if (!hookHealth || !identity || !identity.session_id || !Number.isSafeInteger(identity.claude_pid) || identity.claude_pid<=0 || !runtimesWith('hookHealth').includes(identity.runtime)) return ignored('missing_runtime_proof');
   if (event.runtime !== identity.runtime) return ignored('foreign_runtime_or_session');
   if (event.session_id !== identity.session_id || event.claude_pid !== identity.claude_pid) return ignored('foreign_runtime_or_session');
   if (now-event.received_at < 0 || now-event.received_at > maxAgeMs) return ignored('stale_event');
@@ -70,17 +67,16 @@ export function reduceHealthEvidence(state, event, { identity, now, quota = null
     return {state:{...next,source:'hook',evidence_id:event.event_id,hook_ok:true,hook_prompt:null,hook_pid:event.claude_pid},status:'processed',reason:'hook_ok'};
   }
   if (event.event !== 'stop_failure') return { state: next, status: 'processed', reason: 'identity_observed' };
-  if (!event.prompt_id && event.runtime !== 'agy') return { state: next, status: 'processed', reason: 'missing_prompt', verify: true };
+  if (!event.prompt_id && hookHealth.hookFailureHasPromptId) return { state: next, status: 'processed', reason: 'missing_prompt', verify: true };
   next = {...next,recovered:null};
   // Existing exclusion matches for deployment, plan and model policy errors.
   const modelAccessFailure = event.notice_match?.kind === 'excluded' && [22, 23, 24].includes(event.notice_match.sourceId);
-  const authFailure = event.error === 'authentication_failed' &&
-    (event.runtime !== 'claude' || (authConfirmed && !modelAccessFailure));
+  const authFailure = event.error === 'authentication_failed' && authConfirmed && !modelAccessFailure;
   const error = event.error === 'authentication_failed' && !authFailure
     ? (modelAccessFailure ? 'model_not_found' : 'unknown') : event.error;
   const notice = classifyHealthNotice({ ...event, error }, now);
   const classification = notice.eligible ? notice.reason : error;
-  const health = error === 'rate_limit' ? 'rate_limited' : authFailure ? 'auth_failed' : event.runtime === 'agy' ? 'unavailable' : null;
+  const health = error === 'rate_limit' ? 'rate_limited' : authFailure ? 'auth_failed' : null;
   if (!health) return { state: next, status: 'processed', notice, reason: classification === 'unknown' ? 'unmapped_error' : classification };
   return { state: { ...next, health, reason: classification, notice, source: 'hook', hook_ok:false, hook_pid:event.claude_pid, hook_prompt: event.prompt_id, evidence_id: event.event_id,
     hook_failure:{event_id:event.event_id,error:event.error,observed_at:event.received_at},

@@ -1,3 +1,4 @@
+import { getRuntime } from '../../../../cli/lib/runtime/index.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,6 +7,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { RuntimeHealthCoordinator } from '../runtime-health.js';
 import { SupervisorHealthObserver } from '../supervisor-health-observer.js';
+
+const hookHealth = (await getRuntime('claude')).health.hookHealth;
 
 const WAIT_MS = 30 * 60 * 1000;
 
@@ -239,7 +242,7 @@ test('current structured failure takes priority over waiting and conflicting pan
     f.state(scene, { tools: [{ id: 'foreground' }] }); await f.observer.tick();
     const result = await f.coordinator.consumeHook('claude', { schema_version: 1, event_id: randomUUID(),
       source: 'hook', runtime: 'claude', ...identity, prompt_id: 'prompt', event: 'stop_failure', error,
-      received_at: f.now() }, { identity, sessionGroup: scene.sessionGroup });
+      received_at: f.now() }, { hookHealth, identity, sessionGroup: scene.sessionGroup });
     assert.equal(result.status, 'processed');
     f.setMatches(error === 'rate_limit' ? { authFailure: { detected: true } } : { rateLimit: { detected: true } });
     const answer = await terminal(f, p);
@@ -264,7 +267,7 @@ test('structured authentication failure during idle waiting stops further recove
   const identity = { runtime: 'claude', session_id: scene.sessionId, claude_pid: 42 };
   const result = await f.coordinator.consumeHook('claude', { schema_version: 1, event_id: randomUUID(),
     source: 'hook', runtime: 'claude', ...identity, prompt_id: 'prompt', event: 'stop_failure',
-    error: 'authentication_failed', received_at: f.now() }, { identity, sessionGroup: scene.sessionGroup });
+    error: 'authentication_failed', received_at: f.now() }, { hookHealth, identity, sessionGroup: scene.sessionGroup });
   assert.equal(result.status, 'processed'); await f.reconcile();
   assert.equal(f.waitAt(), undefined); assert.equal(f.health().health, 'auth_failed');
   f.advance(WAIT_MS); await (await f.prepare()).result;

@@ -1,3 +1,4 @@
+import { getRuntime } from '../../../../cli/lib/runtime/index.js';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
@@ -6,6 +7,8 @@ import {
   getToolRules,
   summarizeToolInput,
 } from '../tool-rules.js';
+
+const watchdog = (await getRuntime('claude')).health.toolWatchdog;
 
 describe('tool-rules', () => {
   it('summarizes WebFetch by host', () => {
@@ -33,11 +36,13 @@ describe('tool-rules', () => {
   it('matches watchdog rule for WebFetch and WebSearch only', () => {
     const webRule = findMatchingToolRule({
       runtimeId: 'claude',
+      watchdog,
       toolName: 'WebFetch',
       toolInput: { url: 'https://example.com' }
     });
     const bashRule = findMatchingToolRule({
       runtimeId: 'claude',
+      watchdog,
       toolName: 'Bash',
       toolInput: { command: 'npm test' }
     });
@@ -49,6 +54,7 @@ describe('tool-rules', () => {
   it('allows watchdog disable via config while preserving the rule shape', () => {
     const [rule] = getToolRules({
       runtimeId: 'claude',
+      watchdog,
       config: { web_tool_watchdog_enabled: false }
     });
 
@@ -85,6 +91,7 @@ describe('tool-rules', () => {
   it('matches WebSearch to the watchdog rule', () => {
     const rule = findMatchingToolRule({
       runtimeId: 'claude',
+      watchdog,
       toolName: 'WebSearch',
       toolInput: { query: 'test' }
     });
@@ -96,14 +103,15 @@ describe('tool-rules', () => {
     assert.equal(rule, null);
   });
 
-  it('disables watchdog for non-claude runtime', () => {
-    const [rule] = getToolRules({ runtimeId: 'codex' });
-    assert.equal(rule.watchdog.enabled, false);
+  it('disables watchdog for non-claude runtime', async () => {
+    const { health } = await getRuntime('codex');
+    assert.equal(findMatchingToolRule({ runtimeId: 'codex', watchdog: health.toolWatchdog, toolName: 'WebFetch' }), null);
   });
 
   it('applies config overrides for timeout values', () => {
     const [rule] = getToolRules({
       runtimeId: 'claude',
+      watchdog,
       config: {
         web_tool_timeout_sec: 600,
         web_tool_interrupt_grace_sec: 30,
@@ -119,6 +127,7 @@ describe('tool-rules', () => {
   it('falls back to defaults for invalid config values', () => {
     const [rule] = getToolRules({
       runtimeId: 'claude',
+      watchdog,
       config: {
         web_tool_timeout_sec: -5,
         web_tool_interrupt_grace_sec: 'abc'

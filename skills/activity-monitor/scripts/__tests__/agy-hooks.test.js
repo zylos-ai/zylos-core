@@ -12,6 +12,8 @@ import { HealthStore } from '../health-store.js';
 import { usageModelFacts } from '../../../../cli/lib/session-usage-reader.js';
 import { hooks } from '../../../../cli/lib/runtime/agy/hooks.js';
 
+const agyHookHealth = (await getRuntime('agy')).health.hookHealth;
+
 function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'agy-hooks-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
@@ -58,26 +60,27 @@ test('startup SessionStart preserves injection without the answered-message remi
   assert.equal(JSON.parse(hooks.output({ event: 'SessionStart', result: result })).injectSteps[0].systemMessage.systemMessage,
     'full tail rules\nRECENT CONVERSATIONS\nOUT: already answered');
 });
-test('ERROR stops persist identity-bound unhealthy evidence without native error text',t=>{
+test('ERROR stops retain identity and schedule a retry without pausing health',async t=>{
   const {root,env}=fixture(t),now=10000;
   const native={conversationId:'session',terminationReason:'ERROR',error:'sensitive native text'};
-  const event=collectHealthHook(hooks.normalize(native,'Stop'),{zylosDir:root,env,nowMs:now,pid:123});
+  const event=await collectHealthHook(hooks.normalize(native,'Stop'),{zylosDir:root,env,nowMs:now,pid:123});
   assert.equal(event.runtime,'agy');assert.equal(event.error,'server_error');
   const store=new HealthStore({runtime:'agy',zylosDir:root,now:()=>now});
-  const result=store.consume(event,{identity:{runtime:'agy',session_id:'session',claude_pid:123}});
-  assert.equal(result.status,'processed');assert.equal(store.read().health,'unavailable');
+  const result=store.consume(event,{hookHealth:agyHookHealth,runId:'run',identity:{runtime:'agy',session_id:'session',claude_pid:123}});
+  assert.equal(result.status,'processed');assert.equal(store.read().health,'ok');
+  assert.equal(store.read().failure_retry.dueAt,now+30000);
   assert.equal(JSON.stringify(store.read()).includes('sensitive native text'),false);
 });
-test('ERROR stops classify explicit key rejection as auth failure without persisting native text', t => {
+test('ERROR stops classify explicit key rejection as auth failure without persisting native text', async t => {
   const {root,env}=fixture(t),now=10000;
   for (const error of ['HTTP 401', 'HTTP/1.1 403', 'Request failed with status code 403',
     '[403 Forbidden] rejected request', '401 Unauthorized', 'API key not valid. Please pass a valid API key.',
     'API_KEY_INVALID', 'Invalid API key', 'API key was rejected']) {
-    const event=collectHealthHook(hooks.normalize({conversationId:'session',terminationReason:'ERROR',
+    const event=await collectHealthHook(hooks.normalize({conversationId:'session',terminationReason:'ERROR',
       error: error + ' private-native-key'},'Stop'),{zylosDir:root,env,nowMs:now,pid:123});
     assert.equal(event.error,'authentication_failed',error);
     const store=new HealthStore({runtime:'agy',zylosDir:root,now:()=>now});
-    store.consume(event,{identity:{runtime:'agy',session_id:'session',claude_pid:123}});
+    store.consume(event,{authConfirmed:true,hookHealth:agyHookHealth,runId:'run',identity:{runtime:'agy',session_id:'session',claude_pid:123}});
     assert.equal(store.read().health,'auth_failed',error);
   }
   assert.equal(fs.readFileSync(path.join(root,'activity-monitor/session-groups/origin/events.jsonl'),'utf8').includes('private-native-key'),false);

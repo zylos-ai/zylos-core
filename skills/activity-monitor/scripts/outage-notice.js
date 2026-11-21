@@ -1,11 +1,11 @@
-import { sanitizeHealthQuota } from './health-quota.js';
+import { healthQuotaRuntime, sanitizeHealthQuota } from './health-quota.js';
 import { classifyHealthNotice } from './health-notice-classification.js';
 
 // This is current-outage evidence, not a retroactive change to the Hook payload.
 export function currentOutageNotice(state, identity, quota, now = Date.now()) {
   const fallback = { notice: state.notice, annotation: null };
   if (state.health !== 'rate_limited' || state.source !== 'hook' || state.recovered ||
-      identity?.runtime !== 'claude' ||
+      !healthQuotaRuntime(identity?.runtime) ||
       state.session_id !== identity.session_id || state.hook_pid !== identity.claude_pid ||
       state.hook_failure?.event_id !== state.evidence_id || state.hook_failure.error !== 'rate_limit') return fallback;
   const observed = state.hook_failure.observed_at;

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { _RATE_LIMIT_PATTERNS as PATTERNS } from '../heartbeat/claude-probe.js';
+import { _RATE_LIMIT_PATTERNS as PATTERNS } from '../claude/health.js';
 
 function matchesAny(text) {
   return PATTERNS.some(p => p.test(text));

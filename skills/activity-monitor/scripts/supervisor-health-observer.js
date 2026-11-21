@@ -230,7 +230,7 @@ export class SupervisorHealthObserver {
     const matches = health.health === 'ok' && !recoveredScreen ? await this.matchScreen(scene.runtime,screen) : {};
     if (tracked.delivery !== delivery) return false;
     const retry=this.coordinator.store(scene.runtime).read(scene.sessionGroup ?? 'origin').failure_retry;
-    const continuationOwnsScreen=scene.runtime==='claude' && retry?.runId===scene.runId && retry.sessionId===scene.sessionId;
+    const continuationOwnsScreen=retry?.runId===scene.runId && retry.sessionId===scene.sessionId;
     const authoritativeFailure=continuationOwnsScreen || state.healthFailureCurrent || (state.healthIdentity && health.source==='hook' && !health.hook_ok &&
       health.session_id===state.healthIdentity.session_id && health.hook_pid===state.healthIdentity.claude_pid);
     // Accepted current-process failure evidence outranks a pane that may still show older text.

@@ -145,7 +145,7 @@ export class RuntimeHealthCoordinator {
   }
   async consumeHook(runtime, event, options) {
     let { confirmed: authConfirmed = false, frozenNotice } = options?.auth ?? {};
-    if (!options?.auth && runtime === 'claude' && event.event === 'stop_failure' &&
+    if (!options?.auth && event.event === 'stop_failure' &&
         event.error === 'authentication_failed' && this.checkAuth) {
       frozenNotice = await this.serial(runtime, () => this.store(runtime).prepareAuthConfirmation(event, options));
       // Probe outside the writer so concurrent checks can share the in-flight call.

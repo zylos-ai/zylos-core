@@ -1,3 +1,4 @@
+import { getRuntime } from '../../../../cli/lib/runtime/index.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,6 +7,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { HealthStore, HEALTH_GROUP_IDLE_MS } from '../health-store.js';
 import { processFirstFailureNotices } from '../../../comm-bridge/scripts/first-failure-notice.js';
+
+const hookHealth = (await getRuntime('claude')).health.hookHealth;
 
 function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'health-retention-'));
@@ -40,7 +43,7 @@ test('idle cleanup protects live, queued, recent and unfinished notification gro
 });
 
 test('deleted group cleanup removes terminal evidence while preserving pending notification state',async t=>{
-  const f=fixture(t),event=f.event();f.store.consume(event,{identity:f.identity,sessionGroup:'chat:deleted'});
+  const f=fixture(t),event=f.event();f.store.consume(event,{hookHealth, identity:f.identity,sessionGroup:'chat:deleted'});
   assert.equal(await f.store.pruneGroups({isDeleted:async()=>true}),0);
   assert.equal(f.store.read('chat:deleted').pending_notice.event_id,event.event_id);
   f.store.updatePending(event.event_id,{status:'sent'},'chat:deleted');
@@ -51,14 +54,14 @@ test('deleted group cleanup removes terminal evidence while preserving pending n
 
 test('pruned group revival rejects old failure and sends a new valid failure once',async t=>{
   const f=fixture(t),group='chat:revived',old=f.event();
-  f.store.consume(old,{identity:f.identity,sessionGroup:group});
+  f.store.consume(old,{hookHealth, identity:f.identity,sessionGroup:group});
   f.store.updatePending(old.event_id,{status:'sent'},group);
   f.advance(HEALTH_GROUP_IDLE_MS);
   assert.equal(await f.store.pruneGroups(),1);
   f.store=new HealthStore({zylosDir:f.root,now:f.now,freezeNotice:f.store.freezeNotice});
-  const stale=f.store.consume(old,{identity:f.identity,sessionGroup:group});
+  const stale=f.store.consume(old,{hookHealth, identity:f.identity,sessionGroup:group});
   assert.equal(stale.reason,'stale_event');assert.equal(f.freezes(),1);
-  const fresh=f.event();f.store.consume(fresh,{identity:f.identity,sessionGroup:group});
+  const fresh=f.event();f.store.consume(fresh,{hookHealth, identity:f.identity,sessionGroup:group});
   assert.equal(f.freezes(),2);
   let sends=0;
   const options={store:f.store,sessionGroup:group,identity:async()=>f.identity,now:f.now,
@@ -66,7 +69,7 @@ test('pruned group revival rejects old failure and sends a new valid failure onc
     reserve:()=>({suppressed:false}),send:async()=>{sends++;return {outcome:'sent'};}};
   assert.equal(await processFirstFailureNotices(options),1);
   assert.equal(await processFirstFailureNotices(options),0);
-  assert.equal(f.store.consume(fresh,{identity:f.identity,sessionGroup:group}).reason,'replay');
+  assert.equal(f.store.consume(fresh,{hookHealth, identity:f.identity,sessionGroup:group}).reason,'replay');
   assert.equal(sends,1);assert.equal(f.freezes(),2);
   assert.equal(f.store.read(group).last_notice_outcome.status,'sent');
 });
@@ -97,7 +100,7 @@ test('cache detects external atomic replacements and still quarantines corrupt f
 
 test('in-flight send survives cleanup and persists its terminal outcome',async t=>{
   const f=fixture(t),group='chat:sending',event=f.event();
-  f.store.consume(event,{identity:f.identity,sessionGroup:group});
+  f.store.consume(event,{hookHealth, identity:f.identity,sessionGroup:group});
   let release,started;
   const sending=new Promise(resolve=>{started=resolve;});
   const result=processFirstFailureNotices({store:f.store,sessionGroup:group,identity:async()=>f.identity,now:f.now,

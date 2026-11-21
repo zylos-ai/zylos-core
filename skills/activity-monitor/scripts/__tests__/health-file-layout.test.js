@@ -1,9 +1,12 @@
+import { getRuntime } from '../../../../cli/lib/runtime/index.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { HealthStore } from '../health-store.js';
+
+const hookHealth = (await getRuntime('claude')).health.hookHealth;
 
 const identity={runtime:'claude',session_id:'session',claude_pid:123};
 const event={schema_version:1,source:'hook',...identity,event_id:'11111111-1111-1111-1111-111111111111',
@@ -28,7 +31,7 @@ function camelKeys(value) {
   if(!value||typeof value!=='object')return;
   for(const [key,child] of Object.entries(value)) {assert.ok(!key.includes('_'),'disk key '+key);camelKeys(child);}
 }
-function consume(f) {assert.equal(f.store.consume(event,{identity}).status,'processed');}
+function consume(f) {assert.equal(f.store.consume(event,{hookHealth, identity}).status,'processed');}
 
 test('missing health file always starts ok regardless of old projected health',t=>{
   const f=fixture(t,{initialHealth:'rate_limited',initialReason:'rate_limit_five_hour'});

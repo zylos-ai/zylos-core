@@ -1,3 +1,4 @@
+import { getRuntime } from '../../../../cli/lib/runtime/index.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
@@ -13,6 +14,8 @@ import { reserveStatusNoticeCooldown } from '../c4-db.js';
 import { reserveStatusNotice } from '../status-notice.js';
 import { messageForStatus } from '../status-notice-templates.js';
 import { HealthStore } from '../../../activity-monitor/scripts/health-store.js';
+
+const hookHealth = (await getRuntime('claude')).health.hookHealth;
 
 const identity = { runtime:'claude', session_id:'session', claude_pid:123 };
 const event = { schema_version:1, source:'hook', ...identity,
@@ -32,7 +35,7 @@ test('single mode real first-failure reservation and sender preserve the grouped
     const database=getDb(),identity=${JSON.stringify(identity)};
     database.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status,session_group) VALUES('in','fake','room','request','delivered','fake:review')").run();
     const store=new HealthStore({zylosDir:process.env.ZYLOS_DIR,now:()=>100000,freezeNotice:options=>freezeFirstFailureNotice(database,{...options,sessionGroup:null})});
-    store.consume(${JSON.stringify(event)},{identity});
+    store.consume(${JSON.stringify(event)},{hookHealth:${JSON.stringify(hookHealth)},identity});
     await processFirstFailureNotices({store,database,identity:()=>identity,zylosDir:process.env.ZYLOS_DIR});
     console.log(JSON.stringify({outcome:store.read().last_notice_outcome.status,rows:database.prepare('SELECT cooldown_key FROM status_notice_cooldowns').all()}));close();`;
   const result=spawnSync(process.execPath,['--input-type=module','-e',code],{env:{...process.env,ZYLOS_DIR:root},encoding:'utf8',timeout:10000});
@@ -88,7 +91,7 @@ function inbound(db,id,{status='delivered',channel='fake',endpoint='group|thread
     .run(id,channel,endpoint,status,sessionGroup);
 }
 function consume(store) {
-  assert.equal(store.consume(event,{identity}).status,'processed');
+  assert.equal(store.consume(event,{hookHealth, identity}).status,'processed');
   return store.read().pending_notice;
 }
 function options(f,{now=100100,scope=identity,sent=[],outcome='sent',quota=()=>null,...extra}={}) {
@@ -225,7 +228,7 @@ for (const boundary of ['identity-changed','intent-changed','send-failed']) {
 test('grouped failure freezes its own message and publishes notice updates through runtime serialization',async t=>{
   const f=fixture(t);f.store.freezeNotice=input=>freezeFirstFailureNotice(f.db,input);
   inbound(f.db,1);inbound(f.db,2);f.db.prepare('UPDATE conversations SET session_group=? WHERE id=?').run('telegram:a',1);f.db.prepare('UPDATE conversations SET session_group=? WHERE id=?').run('telegram:b',2);
-  const result=f.store.consume(event,{identity,sessionGroup:'telegram:a'});assert.equal(result.status,'processed');
+  const result=f.store.consume(event,{hookHealth, identity,sessionGroup:'telegram:a'});assert.equal(result.status,'processed');
   const intent=f.store.read('telegram:a').pending_notice;assert.equal(intent.conversation_id,1);assert.equal(intent.session_group,'telegram:a');assert.equal(f.store.read('telegram:b').pending_notice,undefined);
   let mutations=0;const sent=[];const opts=options(f,{sent});const reserve=opts.reserve;
   await processFirstFailureNotices({...opts,identity:async()=>identity,sessionGroup:'telegram:a',mutate:async fn=>{mutations++;return fn();},reserve:(channel,endpoint,route)=>{assert.equal(route.sessionGroup,'telegram:a');assert.equal(route.runtime,'claude');return reserve(channel,endpoint,route);}});
@@ -251,7 +254,7 @@ function internalFailure(t, { externalAge = 600, receipt = false } = {}) {
     session: identity.session_id, action: receipt ? 'failure_receipt' : null,
   });
   const stop = internalId => {
-    assert.equal(f.store.consume(failure,{identity,sessionGroup:group}).status,'processed');
+    assert.equal(f.store.consume(failure,{hookHealth, identity,sessionGroup:group}).status,'processed');
     const pending = f.store.read(group).pending_notice;
     assert.equal(pending.conversation_id,internalId);
     assert.equal(pending.channel,'internal');
