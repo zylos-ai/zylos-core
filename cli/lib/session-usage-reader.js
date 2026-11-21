@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+
 // Open once: an atomic rename cannot splice bytes from two different files.
 export function readSnapshot(file) {
   let fd;
