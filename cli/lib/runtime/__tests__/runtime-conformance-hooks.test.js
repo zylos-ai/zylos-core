@@ -15,7 +15,6 @@ async function recordedHooks(id) {
   }
   return {
     hooks: (await getRuntime(id)).hooks,
-    files,
     async payload(name) {
       const file = `${name}.json`;
       assert.ok(Object.hasOwn(files, file), `Missing recording: ${id}/${file}`);
@@ -28,8 +27,8 @@ for (const [id, events] of [
   ['claude', { 'stop-failure': 'StopFailure', 'subagent-pre-tool-use': 'PreToolUse' }],
   ['codex', {}],
 ]) {
-  test(`${id} native hook records retain session, source and tool identity`, async t => {
-    const { hooks, files, payload } = await recordedHooks(id);
+  test(`${id} native hook records retain session, source and tool identity`, async () => {
+    const { hooks, payload } = await recordedHooks(id);
     const normalized = {};
     for (const [name, event] of Object.entries({
       'session-start-startup': 'SessionStart',
@@ -40,10 +39,6 @@ for (const [id, events] of [
       stop: 'Stop',
       ...events,
     })) {
-      if (id === 'codex' && name === 'session-start-clear' && !Object.hasOwn(files, `${name}.json`)) {
-        t.diagnostic('Awaiting native Codex SessionStart clear recording');
-        continue;
-      }
       const native = await payload(name);
       const record = hooks.normalize(native, event);
       assert.equal(record.hook_event_name, event, name);
