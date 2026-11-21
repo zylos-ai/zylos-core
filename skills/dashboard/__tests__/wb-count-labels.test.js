@@ -7,7 +7,7 @@ import { detailNumbers, renderOverview } from '../public/js/wb/detail-overview.j
 import { renderDistribution } from '../public/js/wb/board.js';
 import { systemItems } from '../public/js/wb/instance-strip.js';
 import { createMemoryScope } from '../public/js/wb/memory-scope.js';
-import { renderDefaults, runtimeConfirmation } from '../public/js/wb/settings-defaults.js';
+import { modelSaveConfirmation, renderDefaults, runtimeConfirmation } from '../public/js/wb/settings-defaults.js';
 import { mountSchedule } from '../public/js/wb/schedule.js';
 import { createDocument, allNodes, tick } from './fixtures/workbench-dom.js';
 import { documentFixture } from './fixtures/settings-dom.js';
@@ -45,6 +45,9 @@ for (const count of [1, 2]) {
     assert.ok(root.textContent.includes(count === 1 ? 'Show this group' : 'Show these 2 groups'));
     assert.ok(root.textContent.includes(`${count} running group${noun} ${count === 1 ? 'uses' : 'use'} these defaults`), root.textContent);
     assert.ok(runtimeConfirmation(snapshot, t).includes(`${count} running group${noun} that ${count === 1 ? 'follows' : 'follow'} the default`));
+    const modelQuestion = modelSaveConfirmation([{ runtime: 'claude', action: 'switch-model', key: 'model', value: 'one' }],
+      t, {}, { ...snapshot, listKnown: true });
+    assert.ok(modelQuestion.includes(`${count} running group${noun} that ${count === 1 ? 'uses' : 'use'} this default model will restart immediately:`));
     panel.destroy();
   });
   test(`Workbench memory renders English count ${count}`, async () => {

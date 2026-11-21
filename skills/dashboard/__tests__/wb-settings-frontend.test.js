@@ -294,6 +294,7 @@ test('the mounted default effort uses configured metadata and only saves a user 
     await save.dispatch('click');
     assert.deepEqual(calls, [{ action: 'switch-effort', body: { runtime: 'claude', effort: 'high' } }]);
     assert.equal(questions.length, 1); assert.equal(save.hidden, true);
+    assert.equal(root.querySelector('#settings-model-result').textContent, 'wb.settings.defaultsSaved wb.settings.effortNextStart');
   } finally { panel.destroy(); }
 });
 async function draftBothEngines(root) {
@@ -375,7 +376,7 @@ test('cancelling the model confirmation sends nothing and shows no result', asyn
   const save = root.querySelector('#settings-save-models'), before = root.textContent;
   await save.dispatch('click');
   assert.equal(calls.length, 0); assert.equal(save.hidden, false, 'the drafts stay'); assert.equal(root.textContent, before, 'no result line appears');
-  assert.doesNotMatch(root.textContent, /wb\.settings\.(saveFailed|nextStart(?!Note)|partlySaved)/); panel.destroy();
+  assert.doesNotMatch(root.textContent, /wb\.settings\.(saveFailed|defaultsSaved|partlySaved)/); panel.destroy();
 });
 
 test('a model save that fails part way names what took effect and what did not', async () => {
@@ -883,8 +884,9 @@ test('threshold-only save reports next-decision effect in both interface languag
     const threshold = root.querySelector('#settings-threshold-claude');
     threshold.value = '60'; await threshold.dispatch('input');
     await root.querySelector('#settings-save-models').dispatch('click');
-    assert.ok(root.textContent.includes(messages['wb.settings.nextStart']));
-    assert.match(messages['wb.settings.nextStart'], locale === 'en' ? /Thresholds apply at the next rotation decision/ : /阈值在下一轮换会话判断生效/);
+    assert.equal(root.querySelector('#settings-model-result').textContent, locale === 'en'
+      ? 'Saved. Thresholds apply at the next rotation decision.'
+      : '已保存。 阈值在下一轮换会话判断生效。');
     panel.destroy();
   }
 });

@@ -423,7 +423,8 @@ test('setting the default engine and model updates the open cards and reports re
           await modelSave.click();
           await dialog.waitFor();
           const text = await dialog.textContent();
-          assert.match(text, locale === 'zh' ? /1 个组/ : /1 running group/);
+          assert.match(text, locale === 'zh' ? /会立即重启正在运行、使用这个默认模型的 1 个组/
+            : /1 running group that uses this default model will restart immediately/);
           assert.match(text, /Origin/);
           assert.doesNotMatch(text, /Telegram direct chat|Product weekly/);
         };
@@ -439,6 +440,9 @@ test('setting the default engine and model updates the open cards and reports re
         await dialog.locator('.wb-modal-acts button').last().click();
         const modelResult = page.locator('#settings-model-result');
         await modelResult.getByText(/Origin.*fence_conflict/).waitFor();
+        const [saveMessage, restartMessage] = (await modelResult.textContent()).split('\n');
+        assert.equal(saveMessage, locale === 'zh' ? '已保存。' : 'Saved.');
+        assert.match(restartMessage, /Origin.*fence_conflict/);
         assert.deepEqual(modelWrites, [{ kind: 'model', runtime: 'claude', model: 'sonnet', confirmed: true }]);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
         await modelResult.evaluate(node => node.scrollIntoView({ block: 'center' }));

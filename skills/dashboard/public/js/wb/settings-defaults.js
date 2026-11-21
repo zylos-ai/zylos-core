@@ -29,9 +29,9 @@ export function runtimeConfirmation(snapshot, t = key => key) {
   const rows = defaultGroups(snapshot).followers;
   return interruptFollowers(rows, snapshot, t);
 }
-function interruptFollowers(rows, snapshot, t) {
+function interruptFollowers(rows, snapshot, t, label = 'wb.settings.interruptFollowers') {
   if (rows == null || snapshot?.listKnown === false) return t('wb.settings.cannotList');
-  return [countLabel(t, 'wb.settings.interruptFollowers', rows.length), ...rows.slice(0, 5).map(row =>
+  return [countLabel(t, label, rows.length), ...rows.slice(0, 5).map(row =>
     row.name?.displayName ?? fallbackName(row, t)), ...(rows.length > 5 ? [t('wb.settings.moreGroups', { count: rows.length })] : [])].join('\n');
 }
 export function createOverrideSearch({ read, onChange, setTimer = setTimeout, clearTimer = clearTimeout }) {
@@ -104,7 +104,7 @@ export function modelSaveConfirmation(changes, t = key => key, metadata = {}, sn
     const label = modelChangeLabel(change, t, metadata);
     if (change.action !== 'switch-model') return [label];
     const rows = modelRestartFollowers(snapshot, change.runtime);
-    return rows?.length === 0 ? [label] : [label, interruptFollowers(rows, snapshot, t)];
+    return rows?.length === 0 ? [label] : [label, interruptFollowers(rows, snapshot, t, 'wb.settings.restartModelFollowers')];
   })].join('\n');
 }
 function restartFailures(data, rows, t) {
@@ -394,10 +394,14 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
     const applied = [], failures = [];
     const report = () => {
       const left = pending.filter(change => !applied.includes(change));
-      if (!left.length) return t('wb.settings.nextStart');
       if (!applied.length) return t('wb.settings.saveFailed');
       const list = changes => changes.map(change => modelChangeLabel(change, t, metadata)).join(t('wb.settings.listSep'));
-      return t('wb.settings.partlySaved', { done: list(applied), left: list(left) });
+      const saved = left.length ? t('wb.settings.partlySaved', { done: list(applied), left: list(left) }) : t('wb.settings.defaultsSaved');
+      return [
+        saved,
+        ...(applied.some(change => change.action === 'switch-effort') ? [t('wb.settings.effortNextStart')] : []),
+        ...(applied.some(change => change.action === 'set-threshold') ? [t('wb.settings.thresholdNextRotation')] : []),
+      ].join(' ');
     };
     try {
       if (needsConfirmation && !(await confirm(modelSaveConfirmation(pending, t, metadata, snapshot), { title: t('wb.settings.confirm.models'), danger }))) return;
