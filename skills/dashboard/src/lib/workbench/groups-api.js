@@ -217,7 +217,14 @@ export function createGroupsApi({ workbench, groupConfig, getRuntimeInfo = () =>
       };
       const [raw, config] = await Promise.all([
         readExtra('raw', async () => (await workbench.raw(id, snapshot)).raw),
-        readExtra('config', async () => groupConfig ? groupConfig.get(id) : null),
+        readExtra('config', async () => {
+          const config = await groupConfig?.get(id);
+          if (!config) return null;
+          const modelOverrides = snapshot.overrides?.model
+            .filter(item => item.sessionGroup === id)
+            .map(({ runtime, model, effort }) => ({ runtime, model, effort })) ?? null;
+          return { ...config, modelOverrides };
+        }),
       ]);
       const selected = ['running', 'starting'].includes(row.presence) ? row.launchConfig : row.target;
       return { ...row, currentAction: projectCurrentAction(row), readAt: snapshot.readAt, ...raw, ...config, runtimeInfo: getRuntimeInfo(row),

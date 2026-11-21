@@ -682,13 +682,16 @@ test('thirty live groups produce one bounded on-demand collection with no search
 test('target overrides include row 101 and model-only rows while desired stays distinct from live configuration', async t => {
   const f = fixture(t, { count: 102 });
   f.live.delete('telegram:g100'); f.live.delete('telegram:g2');
-  let requested;
+  let requested, overrideReads = 0;
   const modelOnly = { sessionGroup: 'telegram:g2', runtime: 'claude', model: 'chosen-model', effort: 'high' };
   f.cli.readOverrides = async groups => {
+    overrideReads++;
     requested = groups;
     return { ok: true, data: { baseline: { runtime: 'claude' },
       runtime: [{ sessionGroup: 'telegram:g100', runtime: 'codex' }, { sessionGroup: 'telegram:g0', runtime: 'codex' }, { sessionGroup: 'unlisted-group', runtime: 'codex' }],
-      model: [modelOnly, { sessionGroup: 'telegram:g0', runtime: 'codex', model: 'saved-model', effort: 'low' }, { sessionGroup: 'unlisted-group', runtime: 'claude', model: 'unlisted-model', effort: 'high' }] } };
+      model: [modelOnly, { sessionGroup: 'telegram:g0', runtime: 'codex', model: 'saved-model', effort: 'low' },
+        { sessionGroup: 'telegram:g0', runtime: 'claude', model: 'other-engine', effort: 'high' },
+        { sessionGroup: 'unlisted-group', runtime: 'claude', model: 'unlisted-model', effort: 'high' }] } };
   };
   const value = await f.service.getSnapshot(), rows = new Map(value.rows.map(row => [row.sessionGroup, row]));
   assert.equal(rows.get('telegram:g100').target.runtime, 'codex');
@@ -699,6 +702,16 @@ test('target overrides include row 101 and model-only rows while desired stays d
   assert.equal(requested.length, 103);
   assert.equal(requested.includes('unlisted-group'), false, 'a real override outside all row sources is not queried');
   assert.equal(rows.has('unlisted-group'), false);
+
+  const config = { runtime: { ok: true }, model: { ok: true } };
+  const api = createGroupsApi({ workbench: f.service, groupConfig: { get: async () => config } });
+  const detail = await api.detail('telegram:g0', { include: ['config'] });
+  assert.deepEqual(detail.config, { ...config, modelOverrides: [
+    { runtime: 'codex', model: 'saved-model', effort: 'low' },
+    { runtime: 'claude', model: 'other-engine', effort: 'high' },
+  ] });
+  assert.deepEqual((await api.detail('telegram:g100', { include: ['config'] })).config.modelOverrides, []);
+  assert.equal(overrideReads, 1, 'detail reuses the collected override list');
 });
 
 // Integration: Cross-module failed-source union/baseline boundary; run for source merge changes.

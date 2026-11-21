@@ -195,6 +195,7 @@ test('new auth failure invalidates a previously successful credential capture',a
 
 test('accepted current-process failure outranks conflicting screen evidence on failed recovery',async t=>{
   const f=fixture(t),runId=randomUUID(),identity={runtime:'claude',session_id:'session',claude_pid:44};
+  f.health.checkAuth = () => ({status:'failure'});
   await f.health.consumeHook('claude',{schema_version:1,source:'hook',runtime:'claude',...identity,event_id:randomUUID(),prompt_id:'prompt',event:'stop_failure',error:'authentication_failed',received_at:f.now()},{identity,sessionGroup:'telegram:a'});
   const answer=await f.health.applyProbeResult({runtime:'claude',runId,current:{runtime:'claude',runId},identity,terminal:'failed',matches:{rateLimit:{detected:true}}});
   assert.equal(answer.classification,'auth_error');assert.equal(f.read().health,'auth_failed');assert.equal(f.read().source,'hook');assert.equal(f.read().reason,'authentication_failed');

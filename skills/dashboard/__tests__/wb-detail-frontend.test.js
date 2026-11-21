@@ -21,7 +21,7 @@ registerHooks({
 const { createGroupDetail, resolveDetailRow, groupActionButtons, groupActionText, formatStartedAt } = await import('../public/js/wb/detail.js');
 const { rawKey, renderOverview, detailNumbers, activeSubagents, detailEvidence, sampleAge, toolEventLabel, configStatus, configText, groupEventCount } = await import('../public/js/wb/detail-overview.js');
 const { createTimelineLoader, attributeMessages, renderTimeline } = await import('../public/js/wb/detail-timeline.js');
-const { createGroupConfig: productGroupConfig, responseError, fetchJson, runningText, validConfigChange, renderGroupConfig, modelChoices, effortChoices, startingPair } = await import('../public/js/wb/group-config.js');
+const { createGroupConfig: productGroupConfig, responseError, fetchJson, runningText, validConfigChange, renderGroupConfig } = await import('../public/js/wb/group-config.js');
 const { saveGroupName, renderNameEditor } = await import('../public/js/wb/name-edit.js');
 const { namePromptResult, renderNameResult, sendNamePrompt } = await import('../public/js/wb/auto-name.js');
 
@@ -576,15 +576,15 @@ test('config rejects a partial pair, preserves exact Core reasons and queries on
       if (failure === 'http_error') throw Object.assign(Error('internal_error'), { body: { error: 'internal_error' } });
       return { error: 'missing_envelope' };
     } });
-    await controller.save({ kind: 'model', runtime: 'codex', model: 'model' });
+    await controller.save([{ kind: 'model', runtime: 'codex', model: 'model' }]);
     assert.equal(calls.length, 0);
-    await controller.save({ kind: 'model', runtime: 'codex', model: 'model', effort: 'high' });
+    await controller.save([{ kind: 'model', runtime: 'codex', model: 'model', effort: 'high' }]);
     assert.deepEqual(calls, ['PUT', 'GET']);
-    assert.equal(controller.state.result, 'wb.config.resultUnknown');
+    assert.match(controller.state.error, /^wb\.config\.saveUncertain/);
   }
   const controller = createGroupConfig({ key: 'a', t, request: async () => ({ ok: false, error: { code: 'SESSION_GROUP_INVALID', message: '<text>' } }) });
-  await controller.save({ kind: 'runtime', value: 'inherit' });
-  assert.equal(controller.state.error, 'SESSION_GROUP_INVALID · <text>');
+  await controller.save([{ kind: 'runtime', value: 'inherit' }]);
+  assert.equal(controller.state.error, 'wb.config.saveFailed {"setting":"wb.term.runtime","reason":"SESSION_GROUP_INVALID · <text>"}');
   assert.equal(validConfigChange({ kind: 'model', runtime: 'claude', reset: true }), true);
   assert.equal(runningText({ running: { status: 'pending' } }, 'runtime', t), 'wb.config.pending');
   assert.equal(runningText({ running: { status: 'unknown', reason: 'snapshot_unavailable' } }, 'runtime', t), 'wb.config.unknown {"reason":"snapshot_unavailable"}');
@@ -782,6 +782,275 @@ test('every group has bound action buttons and Origin translated wake replies pr
   assert.deepEqual(actions.map(item => item[1]), Array.from({ length: 3 }, () => ({ sessionGroup: 'a', runId: 'run-a', sessionId: 'session-a' })));
   assert.equal(actions.every(item => item[0].includes('/groups/a/actions/')), true);
   f.controller.destroy();
+});
+
+const configControl = (root, key) => allNodes(root).find(node => ['SELECT', 'INPUT'].includes(node.tagName) && node.getAttribute('aria-label') === key);
+
+async function groupConfigFixture(context, { presence = 'running', save = () => response({ ok: true, data: { running: { status: 'pending' } } }),
+  restart = () => response({ ok: true, submission: 'accepted', result: 'accepted' }), config } = {}) {
+  const writes = [];
+  let current = presence === 'running' ? row() : row('telegram:a', { presence, live: null });
+  const baselineRuntime = 'codex';
+  const groupConfig = {
+    runtime: { ok: true, data: { desired: { mode: 'override', runtime: 'claude' }, resolved: { runtime: 'claude' } } },
+    model: { ok: true, data: { runtime: 'claude', desired: { runtime: 'claude', mode: 'override', model: 'sonnet', effort: 'high' } } },
+    modelOverrides: [{ runtime: 'codex', model: 'pinned-gpt', effort: 'low' }],
+    ...config,
+  };
+  const catalogs = {
+    claude: { models: [{ id: 'sonnet' }, { id: 'opus' }], efforts_by_model: { '*': ['low', 'high'] } },
+    codex: { models: [{ id: 'gpt' }, { id: 'gpt-mini' }], efforts_by_model: { '*': ['low', 'high'] } },
+  };
+  const f = detailFixture(async (path, options) => {
+    if (options.method) {
+      const write = { path, method: options.method, body: JSON.parse(options.body) };
+      writes.push(write);
+      return options.method === 'PUT' ? save(write.body) : restart();
+    }
+    if (path.startsWith('/api/instance/runtime-options?')) {
+      return response(catalogs[new URL(path, 'http://fixture').searchParams.get('runtime')]);
+    }
+    if (isGroupDetail(path)) return response({ ...current, config: groupConfig });
+    return response(defaultRead(path));
+  });
+  const body = f.document.body = f.document.createElement('body');
+  f.document.addEventListener = body.addEventListener.bind(body);
+  f.document.removeEventListener = body.removeEventListener.bind(body);
+  body.append(f.root);
+  context.after(() => f.controller.destroy());
+  await f.controller.open(current, { baselineRuntime, rows: [current], listKnown: true });
+  const button = (text, root = f.root) => allNodes(root).find(node => node.tagName === 'BUTTON' && node.textContent === text);
+  button('wb.detail.modify').dispatch('click');
+  await tick();
+  const control = key => configControl(f.root, key);
+  const choose = async (key, value) => {
+    const select = control(key);
+    assert.equal(select.disabled, false);
+    assert.ok(select.children.some(option => option.value === value), `Missing choice ${value}`);
+    select.value = value;
+    select.dispatch('change');
+    await tick();
+  };
+  const dialog = () => allNodes(body).find(node => node.getAttribute('role') === 'alertdialog');
+  return { ...f, writes, button, control, dialog, choose,
+    saveButton: () => button('wb.config.save'),
+    confirmSave: () => { assert.ok(dialog()); button('wb.config.saveRestart', dialog()).dispatch('click'); },
+    feedback: () => f.root.querySelectorAll('.wb-config-result').map(node => node.textContent),
+    async replaceRun() {
+      current = row('telegram:a', { live: { runId: 'replacement-run', sessionId: 'replacement-session' } });
+      await f.controller.updateSnapshot({ baselineRuntime, rows: [current], listKnown: true });
+    },
+  };
+}
+
+test('the unified configuration form scopes model choices and starts from the saved setting of each engine', async context => {
+  const f = await groupConfigFixture(context, { config: {
+    model: { ok: true, data: { runtime: 'claude', desired: { runtime: 'claude', mode: 'default' },
+      resolved: { runtime: 'claude', model: 'sonnet', effort: 'high' } } },
+  } });
+  const form = f.root.querySelectorAll('.wb-cfg-edit')[0];
+  assert.equal(form.children[0].classList.contains('wb-cfg-engine'), true);
+  assert.equal(form.children[1].classList.contains('wb-cfg-model'), true);
+  assert.deepEqual(allNodes(form).filter(node => node.tagName === 'SELECT').map(node => node.getAttribute('aria-label')),
+    ['wb.term.runtime', 'wb.config.model', 'wb.term.effort']);
+  assert.deepEqual(allNodes(form).filter(node => node.tagName === 'BUTTON').map(node => node.textContent), ['wb.config.save', 'wb.cancel']);
+  assert.equal(f.control('wb.term.runtime').value, 'claude');
+  const models = () => f.control('wb.config.model').children.map(option => option.value);
+  assert.deepEqual(models(), ['', 'sonnet', 'opus']);
+  assert.equal(f.control('wb.config.model').children[0].textContent, 'wb.config.followGlobal');
+  assert.equal(f.control('wb.config.model').value, '');
+  assert.equal(f.control('wb.term.effort').disabled, true);
+  assert.equal(f.saveButton().disabled, true);
+  await f.choose('wb.config.model', 'opus');
+  assert.equal(f.saveButton().disabled, true, 'a concrete model needs an effort');
+  await f.choose('wb.term.runtime', 'codex');
+  assert.deepEqual(models(), ['', 'pinned-gpt', 'gpt', 'gpt-mini']);
+  assert.equal(f.control('wb.config.model').value, 'pinned-gpt');
+  assert.equal(f.control('wb.term.effort').value, 'low');
+  await f.choose('wb.term.runtime', 'inherit');
+  assert.deepEqual(models(), ['', 'pinned-gpt', 'gpt', 'gpt-mini'], 'the inherited engine uses the global Codex catalog');
+  assert.equal(f.control('wb.config.model').value, 'pinned-gpt');
+});
+
+test('following the global engine confirms once, saves only the engine, then makes the same request as manual restart', async context => {
+  const saved = deferred(), restarted = deferred();
+  const f = await groupConfigFixture(context, { save: () => saved.promise, restart: () => restarted.promise });
+  await f.choose('wb.term.runtime', 'inherit');
+  f.saveButton().dispatch('click');
+  const dialog = f.dialog();
+  assert.match(dialog.textContent, /wb\.config\.saveRestartConfirm/);
+  assert.equal(f.button('wb.config.saveRestart', dialog).classList.contains('wb-btn-danger'), true);
+  f.saveButton().dispatch('click');
+  assert.equal(f.writes.length, 0);
+  f.confirmSave();
+  await tick();
+  assert.deepEqual(f.writes, [{ path: '/api/groups/telegram%3Aa/config', method: 'PUT', body: { kind: 'runtime', value: 'inherit' } }]);
+  assert.deepEqual(f.feedback(), []);
+  saved.resolve(response({ ok: true, data: { resolved: { runtime: 'codex' }, running: { status: 'pending', launchConfig: { runtime: 'claude' } } } }));
+  await tick();
+  const expected = { path: '/api/groups/telegram%3Aa/actions/restart', method: 'POST', body: { sessionGroup: 'telegram:a', runId: 'run-a', sessionId: 'session-a' } };
+  assert.equal(f.writes.length, 2);
+  assert.deepEqual(f.writes[1], expected);
+  assert.equal(f.dialog(), undefined);
+  assert.deepEqual(f.feedback(), ['wb.config.followGlobalSaved']);
+  restarted.resolve(response({ ok: true, submission: 'accepted', result: 'accepted' }));
+  await tick();
+  assert.deepEqual(f.feedback(), ['wb.config.followGlobalSaved', 'wb.actions.accepted']);
+  const manual = f.controller.act('restart');
+  f.button('wb.actions.restart', f.dialog()).dispatch('click');
+  await manual;
+  assert.equal(f.writes.length, 3);
+  assert.deepEqual(f.writes[2], expected);
+});
+
+async function editEngineAndModel(f) {
+  await f.choose('wb.term.runtime', 'codex');
+  await f.choose('wb.config.model', 'gpt');
+  await f.choose('wb.term.effort', 'high');
+}
+
+test('cancelling the unified confirmation sends neither of the two changes', async context => {
+  const f = await groupConfigFixture(context);
+  await editEngineAndModel(f);
+  f.saveButton().dispatch('click');
+  assert.ok(f.dialog());
+  f.button('wb.cancel', f.dialog()).dispatch('click');
+  await tick();
+  assert.equal(f.dialog(), undefined);
+  assert.equal(f.writes.length, 0);
+});
+
+test('a stopped group saves directly and shows the next normal start hint', async context => {
+  const f = await groupConfigFixture(context, { presence: 'not_running',
+    save: () => response({ ok: true, data: { running: { status: 'not_running' } } }) });
+  await f.choose('wb.term.runtime', 'agy');
+  f.saveButton().dispatch('click');
+  assert.equal(f.dialog(), undefined);
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.method), ['PUT']);
+  assert.deepEqual(f.feedback(), ['wb.config.saved · wb.config.nextStart']);
+});
+
+for (const operation of [
+  { model: 'opus', name: 'choosing a model', body: { kind: 'model', runtime: 'claude', model: 'opus', effort: 'high' } },
+  { model: '', name: 'following the default model', body: { kind: 'model', runtime: 'claude', reset: true } },
+]) test(`${operation.name} saves only the model setting`, async context => {
+  const f = await groupConfigFixture(context);
+  await f.choose('wb.config.model', operation.model);
+  f.saveButton().dispatch('click');
+  assert.equal(f.writes.length, 0);
+  f.confirmSave();
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.method), ['PUT', 'POST']);
+  assert.deepEqual(f.writes[0].body, operation.body);
+  assert.deepEqual(f.feedback(), ['wb.config.saved', 'wb.actions.accepted']);
+  assert.equal(f.saveButton().disabled, true);
+});
+
+for (const status of ['pending', 'applied']) test(`both edits save in order with one confirmation when the first response is ${status}`, async context => {
+  const engine = deferred(), model = deferred();
+  const f = await groupConfigFixture(context, { save: change => change.kind === 'runtime' ? engine.promise : model.promise });
+  await editEngineAndModel(f);
+  f.saveButton().dispatch('click');
+  f.saveButton().dispatch('click');
+  assert.equal(f.writes.length, 0);
+  f.confirmSave();
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.body), [{ kind: 'runtime', value: 'codex' }]);
+  engine.resolve(response({ ok: true, data: { running: { status } } }));
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.body), [
+    { kind: 'runtime', value: 'codex' },
+    { kind: 'model', runtime: 'codex', model: 'gpt', effort: 'high' },
+  ]);
+  assert.equal(f.dialog(), undefined);
+  model.resolve(response({ ok: true, data: { running: { status: 'applied' } } }));
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.method), status === 'pending' ? ['PUT', 'PUT', 'POST'] : ['PUT', 'PUT']);
+  assert.equal(f.dialog(), undefined);
+  assert.deepEqual(f.feedback(), status === 'pending'
+    ? ['wb.config.saved', 'wb.actions.accepted'] : ['wb.config.saved · wb.config.applied']);
+});
+
+test('a failed engine save stops before the model write', async context => {
+  const f = await groupConfigFixture(context, { save: () => response({ ok: false, error: { code: 'GROUP_UNAVAILABLE' } }, 409) });
+  await editEngineAndModel(f);
+  f.saveButton().dispatch('click');
+  f.confirmSave();
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.body), [{ kind: 'runtime', value: 'codex' }]);
+  assert.deepEqual(f.feedback(), []);
+  assert.match(f.root.textContent, /wb\.config\.saveFailed.*wb\.term\.runtime.*GROUP_UNAVAILABLE/);
+});
+
+test('a failed model save shows the preceding engine save, and a user retry sends only the model', async context => {
+  let rejectModel = true;
+  const f = await groupConfigFixture(context, { save: change => change.kind === 'model' && rejectModel
+    ? response({ ok: false, error: { code: 'MODEL_CONFIG_INVALID' } }, 400)
+    : response({ ok: true, data: { running: { status: 'pending' } } }) });
+  await editEngineAndModel(f);
+  f.saveButton().dispatch('click');
+  f.confirmSave();
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.method), ['PUT', 'PUT']);
+  assert.deepEqual(f.feedback(), ['wb.config.runtimeSaved']);
+  assert.match(f.root.textContent, /wb\.config\.saveFailed.*wb\.config\.model.*MODEL_CONFIG_INVALID/);
+  rejectModel = false;
+  f.saveButton().dispatch('click');
+  f.confirmSave();
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.method), ['PUT', 'PUT', 'PUT', 'POST']);
+  assert.equal(f.writes[2].body.kind, 'model');
+});
+
+test('switching to Antigravity disables model and effort and saves only the engine', async context => {
+  const f = await groupConfigFixture(context);
+  await f.choose('wb.term.runtime', 'agy');
+  const model = f.control('wb.config.model');
+  assert.equal(model.disabled, true);
+  assert.deepEqual(model.children.map(option => option.textContent), ['wb.config.followGlobal']);
+  assert.equal(f.control('wb.term.effort').disabled, true);
+  f.saveButton().dispatch('click');
+  f.confirmSave();
+  await tick();
+  assert.deepEqual(f.writes.filter(write => write.method === 'PUT').map(write => write.body), [{ kind: 'runtime', value: 'agy' }]);
+});
+
+test('a rejected restart keeps the save result and never retargets the replacement run', async context => {
+  const saved = deferred();
+  const f = await groupConfigFixture(context, { save: () => saved.promise,
+    restart: () => response({ ok: false, submission: 'rejected', currentRunId: 'replacement-run',
+      error: { code: 'stale_target', message: 'The target run changed; refresh before restarting' } }, 409) });
+  await f.choose('wb.config.model', 'opus');
+  f.saveButton().dispatch('click');
+  f.confirmSave();
+  await tick();
+  await f.replaceRun();
+  saved.resolve(response({ ok: true, data: { running: { status: 'pending' } } }));
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.method), ['PUT', 'POST']);
+  assert.equal(f.writes[1].body.runId, 'run-a');
+  assert.deepEqual(f.feedback(), ['wb.config.saved', 'stale_target · The target run changed; refresh before restarting']);
+});
+
+test('an unknown restart outcome preserves the save result without another submission', async context => {
+  const f = await groupConfigFixture(context, { restart: async () => { throw Error('connection lost'); } });
+  await f.choose('wb.config.model', 'opus');
+  f.saveButton().dispatch('click');
+  f.confirmSave();
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.method), ['PUT', 'POST']);
+  assert.deepEqual(f.feedback(), ['wb.config.saved', 'wb.actions.unknown']);
+});
+
+test('an unknown engine save stops before the model write and shows that the setting needs checking', async context => {
+  const f = await groupConfigFixture(context, { save: () => response({ ok: false, unknown: true }, 502) });
+  await editEngineAndModel(f);
+  f.saveButton().dispatch('click');
+  f.confirmSave();
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.method), ['PUT']);
+  assert.match(f.root.textContent, /wb\.config\.saveUncertain.*wb\.term\.runtime/);
 });
 
 test('single detail filters NULL events but sends actions through the Origin route', async () => {
@@ -1432,94 +1701,6 @@ test('the configuration line says whether it is applied and where it comes from'
   assert.match(line.textContent, /wb\.config\.state\.applied/); assert.match(line.textContent, /wb\.config\.source\.override/);
 });
 
-test('a group on the default settings starts from nothing chosen, never the machine\'s model', async () => {
-  const meta = { current_model: 'fable[1m]', current_effort: 'low', models: [{ id: 'fable[1m]' }, { id: 'opus' }, { id: 'sonnet' }], efforts_by_model: { '*': ['low', 'medium', 'high'] } };
-  const open = async model => {
-    const requests = [];
-    const controller = createGroupConfig({ key: 'a', t, request: async (path, options) => { requests.push([path, options?.method ?? 'GET', options?.body]);
-      if (path.startsWith('/api/instance/runtime-options')) return meta;
-      if (options?.method) return { ok: true, data: { running: { status: 'pending' } } };
-      return { runtime: { ok: true, data: { desired: { mode: 'inherit' }, resolved: { runtime: 'claude' } } }, model: { ok: true, data: model } }; } });
-    await controller.load(); await controller.loadMeta('claude');
-    const document = createDocument(), root = document.createElement('div');
-    renderGroupConfig(root, controller, { document, t });
-    const [, select, effort, save] = allNodes(root).find(node => node.classList.contains('wb-cfg-controls')).children;
-    return { select, effort, save, requests };
-  };
-  // Core reports a default-settings launch as { runtime, mode: 'default' } with no model or effort.
-  const running = await open({ runtime: 'claude', desired: { runtime: 'claude', mode: 'default' },
-    running: { status: 'applied', launchConfig: { runtime: 'claude', mode: 'default' } }, resolved: { runtime: 'claude', mode: 'default' } });
-  assert.deepEqual([running.select.value, running.effort.value, running.save.disabled], ['', '', true], 'a running default group has no pair of its own to preselect');
-  const idle = await open({ runtime: 'claude', desired: { runtime: 'claude', mode: 'default' }, running: { status: 'not_running', launchConfig: null }, resolved: { runtime: 'claude', mode: 'default' } });
-  assert.equal(idle.select.children[0].value, ''); assert.equal(idle.select.children[0].textContent, 'wb.config.pickModel');
-  assert.deepEqual([idle.select.value, idle.effort.value], ['', ''], 'nothing is preselected from the machine-wide model');
-  assert.equal(idle.save.disabled, true, 'saving needs a chosen pair');
-  idle.select.value = 'opus'; idle.select.dispatch('change');
-  assert.equal(idle.save.disabled, true, 'a model alone is not enough');
-  idle.effort.value = 'high'; idle.effort.dispatch('change');
-  assert.equal(idle.save.disabled, false);
-  idle.save.dispatch('click'); await tick();
-  assert.deepEqual(JSON.parse(idle.requests.at(-1)[2]), { kind: 'model', runtime: 'claude', model: 'opus', effort: 'high' });
-  assert.deepEqual(startingPair({ model: { data: { desired: { runtime: 'codex', mode: 'override', model: 'gpt', effort: 'high' } } } }, 'claude'), { model: '', effort: '' },
-    'another engine\'s pair is not reused');
-});
-
-test('Antigravity configuration preserves its runtime and disables unavailable model overrides', async () => {
-  const writes = [], requests = [];
-  const controller = createGroupConfig({ key: 'native', t, request: async (path, options) => {
-    requests.push(path);
-    if (options?.method) { writes.push(JSON.parse(options.body)); return { ok: true, data: {} }; }
-    if (path.includes('/runtime-options')) return { models: [], efforts: [], current_model: null };
-    return { runtime: { ok: true, data: { desired: { runtime: 'agy' }, resolved: { runtime: 'agy' } } },
-      model: { ok: true, data: { runtime: 'agy', resolved: { runtime: 'agy', mode: 'default' } } } };
-  } });
-  await controller.load(); await controller.loadMeta('agy');
-  assert.ok(requests.includes('/api/instance/runtime-options?runtime=agy'));
-  const document = createDocument(), root = document.createElement('div');
-  renderGroupConfig(root, controller, { document, t });
-  const [target, model, effort, save] = allNodes(root).find(node => node.classList.contains('wb-cfg-controls')).children;
-  assert.equal(target.value, 'agy');
-  assert.ok(target.children.some(option => option.value === 'agy'));
-  assert.equal(model.disabled, true); assert.equal(effort.disabled, true); assert.equal(save.disabled, true);
-  assert.match(root.textContent, /wb.config.modelUnavailable/);
-  const more = allNodes(root).find(node => node.classList.contains('wb-cfg-more'));
-  const [, runtime, saveRuntime, reset] = more.children;
-  assert.equal(runtime.value, 'agy'); assert.equal(saveRuntime.disabled, false); assert.equal(reset.disabled, true);
-  saveRuntime.dispatch('click'); await tick();
-  assert.deepEqual(writes, [{ kind: 'runtime', value: 'agy' }]);
-  assert.equal(validConfigChange({ kind: 'model', runtime: 'agy', model: 'gemini', effort: 'high' }), false);
-});
-
-test('the configuration editor offers engine, model and effort as dropdowns with save and cancel, and keeps the engine switch and reset', async () => {
-  const requests = [];
-  const meta = { models: [{ id: 'opus', display_name: 'Opus' }, { id: 'sonnet' }], efforts_by_model: { opus: ['low', 'high', 'xhigh'], '*': ['low', 'medium', 'high'] } };
-  const controller = createGroupConfig({ key: 'a', t, request: async (path, options) => { requests.push([path, options?.method ?? 'GET']);
-    if (path.startsWith('/api/instance/runtime-options')) return meta;
-    if (options?.method) return { ok: true, data: { running: { status: 'pending' } } };
-    return { runtime: { ok: true, data: { desired: { runtime: 'inherit' }, resolved: { runtime: 'claude' } } }, model: { ok: true, data: { desired: { runtime: 'claude', mode: 'override', model: 'opus', effort: 'high' } } } }; } });
-  await controller.load(); await controller.loadMeta('claude'); await controller.loadMeta('claude');
-  assert.equal(requests.filter(([path]) => path.startsWith('/api/instance/runtime-options')).length, 1, 'the catalog is read once per engine');
-  const document = createDocument(), root = document.createElement('div'); let cancelled = 0;
-  renderGroupConfig(root, controller, { document, t, onCancel: () => cancelled++ });
-  const pair = allNodes(root).find(node => node.classList.contains('wb-cfg-controls'));
-  assert.deepEqual(pair.children.map(node => node.tagName), ['SELECT', 'SELECT', 'SELECT', 'BUTTON', 'BUTTON']);
-  const [, model, effort, save, cancel] = pair.children;
-  assert.deepEqual(model.children.map(node => node.value), ['', 'opus', 'sonnet']); assert.equal(model.value, 'opus', 'the group\'s own pair is preselected');
-  assert.deepEqual(effort.children.map(node => node.value), ['', 'low', 'high', 'xhigh']); assert.equal(effort.value, 'high');
-  assert.equal(save.disabled, false);
-  model.value = 'sonnet'; model.dispatch('change');
-  assert.deepEqual(effort.children.map(node => node.value), ['', 'low', 'medium', 'high'], 'efforts follow the chosen model');
-  assert.equal(effort.value, 'high', 'an effort the new model also offers is kept');
-  cancel.dispatch('click'); assert.equal(cancelled, 1);
-  save.dispatch('click'); await tick();
-  assert.deepEqual(requests.at(-1), ['/api/groups/a/config', 'PUT']);
-  const more = allNodes(root).find(node => node.classList.contains('wb-cfg-more'));
-  assert.match(more.textContent, /wb\.config\.saveRuntime/); assert.match(more.textContent, /wb\.config\.resetModel/);
-  assert.deepEqual(modelChoices(meta, 'custom-model').map(item => item.value), ['custom-model', 'opus', 'sonnet'], 'a saved model missing from the catalog stays selectable');
-  assert.deepEqual(effortChoices(null, 'x', 'max'), ['low', 'medium', 'high', 'max']);
-  assert.equal(modelChoices(null, 'x'), null, 'without a catalog the model is typed');
-});
-
 // Navigation is a callback only: no chat write or runtime action is launched.
 test('group details expose conversation navigation for real groups and Origin in both modes', async () => {
   const selected = [];
@@ -1619,14 +1800,14 @@ test('technical group details offer a terminal, including sleeping groups that e
 test('group model threshold is read only and follows the selected model and engine default', async () => {
   const document = createDocument(), root = document.createElement('div');
   const controller = { state: { value: { runtime: { data: { resolved: { runtime: 'claude' } } }, model: { data: { desired: { runtime: 'claude', mode: 'override', model: 'opus', effort: 'high' } } } },
-    meta: { claude: { current_model: 'opus', models: [{ id: 'opus' }, { id: 'opus[1m]' }], efforts_by_model: { '*': ['high'] }, model_thresholds: { opus: 70, 'opus[1m]': 40 } } } }, save() {} };
+    meta: { claude: { current_model: 'opus', models: [{ id: 'opus' }, { id: 'opus[1m]' }], efforts_by_model: { '*': ['high'] }, model_thresholds: { opus: 70, 'opus[1m]': 40 } } } }, save() {}, loadMeta() {} };
   renderGroupConfig(root, controller, { document, t, rotationThreshold: 63 });
   const line = allNodes(root).find(node => node.classList.contains('wb-cfg-threshold'));
-  const [, model] = allNodes(root).find(node => node.classList.contains('wb-cfg-controls')).children;
+  const model = configControl(root, 'wb.config.model');
   assert.match(line.textContent, /"value":70/);
   model.value = 'opus[1m]'; await model.dispatch('change'); assert.match(line.textContent, /"value":40/);
   assert.equal(allNodes(root).filter(node => node.tagName === 'INPUT' && node.type === 'number').length, 0);
-  controller.state.draft = { model: '', target: 'claude' }; root.replaceChildren();
+  controller.state.draft = { model: '', modelRuntime: 'claude' }; root.replaceChildren();
   renderGroupConfig(root, controller, { document, t, rotationThreshold: 35 });
   assert.match(allNodes(root).find(node => node.classList.contains('wb-cfg-threshold')).textContent, /"value":70/, 'default metadata wins over the old running model threshold');
 });
@@ -1757,8 +1938,7 @@ test('timeline refresh updates keyed run and activity nodes in the mounted body'
   } finally { f.controller.destroy(); }
 });
 
-// Metadata may replace a free-text model with a select while the other editor
-// controls stay mounted. Subsequent edits and save must use those live controls.
+// Catalog arrival fills the model choices. Subsequent edits and save must use the mounted controls.
 test('incremental configuration metadata and refresh keep save bound to the mounted controls', async () => {
   const meta = deferred(), posts = [], current = row('a');
   const configValue = { runtime: { data: { resolved: { runtime: 'claude' } } },
@@ -1770,22 +1950,27 @@ test('incremental configuration metadata and refresh keep save bound to the moun
     if (isGroupDetail(path)) return response({ config: configValue });
     if (path.startsWith('/api/instance/runtime-options')) return meta.promise;
     return response(defaultRead(path));
-  }, { detail: () => 'technical' });
+  }, { detail: () => 'technical', confirm: () => true });
   try {
     await f.controller.open(current, { rows: [current], listKnown: true });
     const config = f.root.querySelector('.wb-detail-config');
     allNodes(config).find(node => node.tagName === 'BUTTON' && node.textContent === 'wb.detail.modify').dispatch('click');
     await tick(); await tick();
-    const pair = () => f.root.querySelector('.wb-cfg-controls');
-    assert.equal(pair().children[1].tagName, 'INPUT', 'unavailable metadata starts with free text');
+    const pair = () => f.root.querySelector('.wb-cfg-model');
+    const typedModel = configControl(f.root, 'wb.config.model');
+    assert.equal(typedModel.tagName, 'INPUT', 'unavailable metadata starts with free text');
+    assert.equal(typedModel.value, 'opus');
+    typedModel.value = 'custom-model';
+    typedModel.dispatch('input');
     meta.resolve(response({ models: [{ id: 'opus' }, { id: 'sonnet' }], efforts_by_model: { '*': ['low', 'high'] },
       model_thresholds: { opus: 70, sonnet: 60 } }));
     await tick(); await tick();
-    assert.equal(pair().children[1].tagName, 'SELECT');
+    assert.deepEqual(configControl(f.root, 'wb.config.model').children.map(option => option.value), ['', 'custom-model', 'opus', 'sonnet']);
     const mounted = pair();
     await f.controller.updateSnapshot({ rows: [current], listKnown: true });
     assert.equal(pair(), mounted, 'background updates keep the editor mounted');
-    const [, model, effort, save] = pair().children;
+    const model = configControl(f.root, 'wb.config.model'), effort = configControl(f.root, 'wb.term.effort');
+    const save = f.root.querySelector('.wb-cfg-actions').children[0];
     model.value = 'sonnet'; model.dispatch('change');
     effort.value = 'high'; effort.dispatch('change');
     assert.equal(save.disabled, false);
@@ -1867,15 +2052,15 @@ test('an open configuration form becomes writable without retaining read-only ca
     await tick(); await tick();
     const readonlyForm = f.root.querySelector('.wb-cfg-edit');
     const revision = readonlyForm.dataset.updateKey.split(':')[1];
-    const readonlyPair = f.root.querySelector('.wb-cfg-controls');
-    assert.equal(readonlyPair.children[1].disabled, true);
-    assert.equal(readonlyPair.children[3].disabled, true);
+    assert.equal(configControl(f.root, 'wb.config.model').disabled, true);
+    assert.equal(f.root.querySelector('.wb-cfg-actions').children[0].disabled, true);
     writable = true;
     f.controller.setViewDetail();
     const writableForm = f.root.querySelector('.wb-cfg-edit');
     assert.equal(writableForm.dataset.updateKey.split(':')[1], revision, 'permission changes do not publish new configuration data');
     assert.ok(writableForm !== readonlyForm, 'the new permission gets a form with fresh callbacks');
-    const [, model, effort, save] = f.root.querySelector('.wb-cfg-controls').children;
+    const model = configControl(f.root, 'wb.config.model'), effort = configControl(f.root, 'wb.term.effort');
+    const save = f.root.querySelector('.wb-cfg-actions').children[0];
     assert.equal(model.disabled, false);
     model.value = 'sonnet'; model.dispatch('change');
     effort.value = 'high'; effort.dispatch('change');

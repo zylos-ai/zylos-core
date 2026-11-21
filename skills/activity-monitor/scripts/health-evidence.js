@@ -48,7 +48,7 @@ export function safeHealthReason(health, reason) {
   return 'runtime_unavailable';
 }
 
-export function reduceHealthEvidence(state, event, { identity, now, quota = null, maxAgeMs = HEALTH_EVENT_MAX_AGE_MS } = {}) {
+export function reduceHealthEvidence(state, event, { identity, now, quota = null, authConfirmed = false, maxAgeMs = HEALTH_EVENT_MAX_AGE_MS } = {}) {
   const ignored = reason => ({ state, status: 'ignored', reason });
   if (event.source === 'invalid') return ignored('invalid_event');
   if (!identity || !identity.session_id || !Number.isSafeInteger(identity.claude_pid) || identity.claude_pid<=0 || !runtimesWith('hookHealth').includes(identity.runtime)) return ignored('missing_runtime_proof');
@@ -72,9 +72,15 @@ export function reduceHealthEvidence(state, event, { identity, now, quota = null
   if (event.event !== 'stop_failure') return { state: next, status: 'processed', reason: 'identity_observed' };
   if (!event.prompt_id && event.runtime !== 'agy') return { state: next, status: 'processed', reason: 'missing_prompt', verify: true };
   next = {...next,recovered:null};
-  const notice = classifyHealthNotice(event, now);
-  const classification = notice.eligible ? notice.reason : event.error;
-  const health = event.error === 'rate_limit' ? 'rate_limited' : event.error === 'authentication_failed' ? 'auth_failed' : event.runtime === 'agy' ? 'unavailable' : null;
+  // Existing exclusion matches for deployment, plan and model policy errors.
+  const modelAccessFailure = event.notice_match?.kind === 'excluded' && [22, 23, 24].includes(event.notice_match.sourceId);
+  const authFailure = event.error === 'authentication_failed' &&
+    (event.runtime !== 'claude' || (authConfirmed && !modelAccessFailure));
+  const error = event.error === 'authentication_failed' && !authFailure
+    ? (modelAccessFailure ? 'model_not_found' : 'unknown') : event.error;
+  const notice = classifyHealthNotice({ ...event, error }, now);
+  const classification = notice.eligible ? notice.reason : error;
+  const health = error === 'rate_limit' ? 'rate_limited' : authFailure ? 'auth_failed' : event.runtime === 'agy' ? 'unavailable' : null;
   if (!health) return { state: next, status: 'processed', notice, reason: classification === 'unknown' ? 'unmapped_error' : classification };
   return { state: { ...next, health, reason: classification, notice, source: 'hook', hook_ok:false, hook_pid:event.claude_pid, hook_prompt: event.prompt_id, evidence_id: event.event_id,
     hook_failure:{event_id:event.event_id,error:event.error,observed_at:event.received_at},

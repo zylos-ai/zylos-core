@@ -129,6 +129,7 @@ test('detail shares its list row and adds one configuration and raw-message read
   assert.deepEqual(detail.currentAction, list.currentAction);
   assert.deepEqual(detail.currentAction, { tool: 'Read', message: 'Current received message', receivedAt: new Date(now - 1000).toISOString() });
   assert.equal(detail.raw, 'First message'); assert.equal(detail.state.kind, 'idle'); assert.equal(detail.effective.effort, 'high');
+  assert.deepEqual(detail.config, { runtime: { ok: true }, model: { ok: true }, modelOverrides: null });
   assert.equal(detail.effective.modelOverridden, true); assert.equal(rawReads, 1); assert.equal(configReads, 1);
   await assert.rejects(api.detail('telegram:absent'), { statusCode: 404 });
   await assert.rejects(api.detail('../bad'), { code: 'SESSION_GROUP_INVALID' });
