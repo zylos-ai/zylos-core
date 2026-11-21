@@ -109,7 +109,8 @@ test('background panel refresh preserves reading position and folds', { skip: !c
             if (/^\/api\/groups\/[^/]+$/.test(url.pathname) && value) {
               value.raw = 'Stored fixture message\nsecond line';
               value.config = { runtime: { ok: true, data: { resolved: { runtime: 'claude', model: 'default', effort: 'high' } } },
-                model: { ok: true, data: { resolved: { runtime: 'claude', model: 'default', effort: 'high' } } } };
+                model: { ok: true, data: { runtime: 'claude', desired: { runtime: 'claude', mode: 'default' } } },
+                modelOverrides: [] };
             }
             return value === undefined ? route.fallback() : route.fulfill({ json: value });
           });
@@ -172,12 +173,20 @@ test('background panel refresh preserves reading position and folds', { skip: !c
           await page.locator('.wb-detail-config .wb-cfg-line button').click();
           await page.locator('.wb-cfg-edit').waitFor();
           // The metadata-backed model select proves the initial asynchronous editor reads have rendered.
-          await page.waitForFunction(() => document.querySelectorAll('.wb-cfg-controls > select').length === 3);
+          const editor = page.locator('.wb-cfg-edit');
+          await editor.locator('.wb-cfg-model select').first().locator('option[value="default"]').waitFor({ state: 'attached' });
+          const layout = await editor.evaluate(form => {
+            const [engine, model, effort] = [...form.querySelectorAll('select')].map(node => node.getBoundingClientRect());
+            return { engineFirst: engine.bottom < model.top, aligned: Math.abs(model.y - effort.y) <= 1,
+              equalHeight: model.height === effort.height, height: model.height,
+              fits: form.scrollWidth <= form.clientWidth && form.getBoundingClientRect().right <= innerWidth };
+          });
+          assert.deepEqual(layout, { engineFirst: true, aligned: true, equalHeight: true, height: width === 390 ? 36 : 26, fits: true });
           console.log('Config key before', await page.locator('.wb-cfg-edit').evaluate(node => { window.configEditor = node; return node.dataset.updateKey; }));
           await page.waitForTimeout(5600);
           console.log('Config key after', await page.locator('.wb-cfg-edit').evaluate(node => node.dataset.updateKey));
           assert.equal(await page.locator('.wb-cfg-edit').evaluate(node => node === window.configEditor), true, 'config editor retained across refresh');
-          await page.locator('.wb-cfg-controls > button').last().click();
+          await editor.locator('.wb-cfg-actions button').last().click();
           await page.locator('.wb-cfg-edit').waitFor({ state: 'detached' });
           await page.locator('.wb-detail-evidence').evaluate(node => { node.open = false; });
           await page.waitForTimeout(5600);

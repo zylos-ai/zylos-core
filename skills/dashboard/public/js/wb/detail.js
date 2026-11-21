@@ -216,18 +216,18 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
           if (state.configOpen) { state.configOpen = false; draw(); return; }
           state.configOpen = true; draw();
           try {
-            const value = await config.load();
-            if (value) await config.loadMeta(value.runtime?.data?.resolved?.runtime ?? 'claude');
+            await config.load();
           } catch (error) { if (error.name !== 'AbortError') { config.state.error = error.message; draw(); } }
         },
       });
       if (state.configOpen) {
+        const defaultRuntime = state.snapshot?.baselineRuntime;
         renderGroupConfig(sections.config, config, { document, t, writable: getWritable(), rotationThreshold: row.rotationThreshold,
-          onSave: saveConfig, onCancel: () => { state.configOpen = false; draw(); } });
+          defaultRuntime, onSave: saveConfig, onCancel: () => { state.configOpen = false; draw(); } });
         // Form handlers own their field references. A controller publication
         // changes the form; ordinary board snapshots keep the mounted editor.
         const form = [...sections.config.children].find(node => node.classList.contains('wb-cfg-edit'));
-        if (form) form.dataset.updateKey = `config:${configRevision}:${getWritable()}:${row.rotationThreshold}`;
+        if (form) form.dataset.updateKey = `config:${configRevision}:${getWritable()}:${row.rotationThreshold}:${defaultRuntime}`;
       }
       const usage = element(document, 'section', undefined, 'wb-ip-card');
       usage.append(element(document, 'h3', t('wb.groupUsage.title')));
@@ -305,12 +305,12 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       if (error.name !== 'AbortError') return error.body ? groupActionText(error.body, t) : t('wb.actions.unknown');
     }
   }
-  function saveConfig(change) {
+  function saveConfig(changes) {
     if (!getWritable() || !state.row) return;
     // Bind the restart to the run shown when the user chose to save.
     const row = state.row;
-    if (!hasRunningTarget(row)) return config.save(change);
-    return config.save(change, {
+    if (!hasRunningTarget(row)) return config.save(changes);
+    return config.save(changes, {
       confirm: () => confirmRestart({
         title: 'wb.config.saveRestartTitle', body: 'wb.config.saveRestartConfirm', ok: 'wb.config.saveRestart',
       }),
