@@ -1,0 +1,9 @@
+{
+  "session_id": "412022b4-532b-46d6-839a-240ffe8714cc",
+  "transcript_path": "/tmp/zy6hooks.PdwtkDLG/.claude/projects/-tmp-zy6hooks-PdwtkDLG-workspace/412022b4-532b-46d6-839a-240ffe8714cc.jsonl",
+  "cwd": "/tmp/zy6hooks.PdwtkDLG/workspace",
+  "prompt_id": "2c10a9ac-b0c4-4d41-b2eb-aace4aeb7cb8",
+  "permission_mode": "bypassPermissions",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "First use Bash once to run printf fixture-claude, with description Hook fixture. Then use the Agent tool once and ask the subagent to use Bash once to run printf fixture-subagent. Both outputs should be synthetic. Reply DONE."
+}

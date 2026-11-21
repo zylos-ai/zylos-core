@@ -1,0 +1,17 @@
+{
+  "session_id": "412022b4-532b-46d6-839a-240ffe8714cc",
+  "transcript_path": "/tmp/zy6hooks.PdwtkDLG/.claude/projects/-tmp-zy6hooks-PdwtkDLG-workspace/412022b4-532b-46d6-839a-240ffe8714cc.jsonl",
+  "cwd": "/tmp/zy6hooks.PdwtkDLG/workspace",
+  "prompt_id": "2c10a9ac-b0c4-4d41-b2eb-aace4aeb7cb8",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "printf fixture-claude",
+    "description": "Hook fixture"
+  },
+  "tool_use_id": "toolu_01CDjMYNHkT68BKqKArGk1iT"
+}

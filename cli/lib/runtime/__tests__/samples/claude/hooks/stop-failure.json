@@ -1,0 +1,12 @@
+{
+  "session_id": "1769abc6-44a2-44a1-916f-4b0950121ae4",
+  "transcript_path": "/tmp/zy6hooks.PdwtkDLG/.claude/projects/-tmp-zy6hooks-PdwtkDLG-workspace/1769abc6-44a2-44a1-916f-4b0950121ae4.jsonl",
+  "cwd": "/tmp/zy6hooks.PdwtkDLG/workspace",
+  "prompt_id": "6ef73a03-89c3-4522-ae27-51b838a50988",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "StopFailure",
+  "error": "unknown",
+  "last_assistant_message": "API Error: 400 Fixture error"
+}
