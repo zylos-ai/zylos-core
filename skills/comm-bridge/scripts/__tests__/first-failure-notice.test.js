@@ -11,6 +11,7 @@ import * as schema from '../c4-schema.js';
 import { freezeFirstFailureNotice, processFirstFailureNotices, sendNoticeWorker } from '../first-failure-notice.js';
 import { reserveStatusNoticeCooldown } from '../c4-db.js';
 import { reserveStatusNotice } from '../status-notice.js';
+import { messageForStatus } from '../status-notice-templates.js';
 import { HealthStore } from '../../../activity-monitor/scripts/health-store.js';
 
 const identity = { runtime:'claude', session_id:'session', claude_pid:123 };
@@ -73,12 +74,12 @@ for (const mode of ['sent','sender-signal','worker-killed','spawn-error']) {
     if(mode==='spawn-error') assert.equal(row.outcome,'failed');
   });
 }
-function fixture(t, sessionGroup = 'fake') {
+function fixture(t, sessionGroup = 'fake', now = 100000) {
   fs.mkdirSync(path.join(process.env.ZYLOS_DIR,'.claude','skills','fake'),{recursive:true});
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'first-notice-file-'));
   const db = new Database(':memory:'); guardDatabase(db,schema);
   t.after(() => { db.close(); fs.rmSync(root,{recursive:true,force:true}); });
-  const store = new HealthStore({zylosDir:root,now:()=>100000,
+  const store = new HealthStore({zylosDir:root,now:()=>now,
     freezeNotice: options => freezeFirstFailureNotice(db,{...options,sessionGroup})});
   return {root,db,store};
 }
@@ -230,3 +231,105 @@ test('grouped failure freezes its own message and publishes notice updates throu
   await processFirstFailureNotices({...opts,identity:async()=>identity,sessionGroup:'telegram:a',mutate:async fn=>{mutations++;return fn();},reserve:(channel,endpoint,route)=>{assert.equal(route.sessionGroup,'telegram:a');assert.equal(route.runtime,'claude');return reserve(channel,endpoint,route);}});
   assert.equal(sent.length,1);assert.equal(mutations,2);assert.equal(f.store.read('telegram:a').last_notice_outcome.status,'sent');
 });
+
+
+function internalFailure(t, { externalAge = 600, receipt = false } = {}) {
+  const group = 'telegram:work';
+  const original = '-100|thread:work|msg:1';
+  const sender = 'telegram:sender';
+  const failure = { ...event, received_at: 1800000000000 };
+  const f = fixture(t, group, failure.received_at);
+  fs.mkdirSync(path.join(process.env.ZYLOS_DIR,'.claude','skills','telegram'),{recursive:true});
+  const request = f.db.prepare(`
+    INSERT INTO conversations(direction,channel,endpoint_id,content,status,session_group,timestamp,session_id,delivery_action)
+    VALUES ('in',?,?,'request',?,?,datetime(?,'unixepoch'),?,?)
+  `);
+  const receive = (channel, endpoint, { status = 'delivered', sessionGroup = group, age = 0, session = null, action = null } = {}) =>
+    Number(request.run(channel, endpoint, status, sessionGroup, failure.received_at / 1000 - age, session, action).lastInsertRowid);
+  receive('telegram', original, { age: externalAge, session: 'earlier-session' });
+  const internalId = receive('internal', sender, { session: identity.session_id, action: receipt ? 'failure_receipt' : null });
+  const stop = () => {
+    assert.equal(f.store.consume(failure,{identity,sessionGroup:group}).status,'processed');
+    const pending = f.store.read(group).pending_notice;
+    assert.equal(pending.conversation_id,internalId);
+    assert.equal(pending.channel,'internal');
+    assert.equal(pending.endpoint,sender);
+  };
+  const replies = () => f.db.prepare(`
+    SELECT id, endpoint_id, content, status, delivery_action FROM conversations
+    WHERE direction='in' AND channel='internal' AND session_group=?
+  `).all(sender);
+  const sent = [];
+  const op = options(f,{ sent, now:failure.received_at+100, sessionGroup:group });
+  return { ...f, group, original, sender, receive, stop, replies, sent, op };
+}
+
+test('Internal failure queues a receipt before notifying the earlier unanswered Telegram request', async t => {
+  const f = internalFailure(t);
+  f.receive('telegram','-100|thread:work|msg:2',{status:'pending'});
+  f.stop();
+  assert.deepEqual(f.replies(),[]);
+  // A new delivery during the wait must not become the recipient.
+  f.receive('telegram','-100|thread:work|msg:3');
+  f.db.prepare(`INSERT INTO conversations(direction,channel,content,status,session_group)
+    VALUES ('out','telegram','other group reply','delivered','telegram:other')`).run();
+  const send = f.op.send;
+  let receiptsAtSend;
+  f.op.send = async (claim,message,route) => {
+    receiptsAtSend = f.replies().length;
+    return send(claim,message,route);
+  };
+  assert.equal(await processFirstFailureNotices(f.op),1);
+  assert.equal(receiptsAtSend,1);
+  assert.equal(f.sent.length,1);
+  assert.equal(f.sent[0].claim.endpoint,f.original);
+  assert.deepEqual(f.replies().map(({id,...row})=>row),[{
+    endpoint_id:f.group,content:f.sent[0].message,status:'pending',delivery_action:'failure_receipt',
+  }]);
+  assert.deepEqual(f.db.prepare('SELECT head_id FROM group_heads WHERE session_group=?').get(f.sender),{head_id:f.replies()[0].id});
+  assert.equal(await processFirstFailureNotices(f.op),0);
+});
+
+test('newer outbound notice for another address in the group suppresses the Telegram fallback', async t => {
+  const f = internalFailure(t);
+  f.stop();
+  f.db.prepare(`INSERT INTO conversations(direction,channel,endpoint_id,content,status,session_group,delivery_action)
+    VALUES ('out','telegram','-200','prior notice','delivered',?,'system_notice')`).run(f.group);
+  await processFirstFailureNotices(f.op);
+  assert.equal(f.replies().length,1);
+  assert.deepEqual(f.sent,[]);
+});
+
+test('an Internal failure only queues a receipt when the external request is older than 30 minutes', async t => {
+  const f = internalFailure(t,{ externalAge:2400 });
+  f.stop();
+  await processFirstFailureNotices(f.op);
+  assert.equal(f.replies().length,1);
+  assert.deepEqual(f.sent,[]);
+});
+
+test('failure while processing a receipt never queues another receipt and still checks the Telegram request', async t => {
+  const f = internalFailure(t,{ receipt:true });
+  f.stop();
+  await processFirstFailureNotices(f.op);
+  assert.deepEqual(f.replies(),[]);
+  assert.equal(f.sent.length,1);
+  assert.equal(f.sent[0].claim.endpoint,f.original);
+});
+
+for (const suppressedChannel of ['internal','telegram']) {
+  test('the ' + suppressedChannel + ' cooldown only suppresses its own route', async t => {
+    const f = internalFailure(t);
+    f.stop();
+    const intent = f.store.read(f.group).pending_notice;
+    const route = { sessionGroup:f.group, runtime:intent.runtime, health:intent.health, reason:intent.reason };
+    // Use a different reply address for the same Telegram thread to exercise endpoint normalization.
+    f.op.reserve(suppressedChannel,suppressedChannel==='internal' ? f.sender : '-100|thread:work|msg:previous',route);
+    await processFirstFailureNotices(f.op);
+    assert.equal(f.replies().length,suppressedChannel==='internal'?0:1);
+    assert.equal(f.sent.length,suppressedChannel==='telegram'?0:1);
+    if (suppressedChannel==='telegram') {
+      assert.equal(f.replies()[0].content,messageForStatus({ ...route, context:'failure' }));
+    }
+  });
+}

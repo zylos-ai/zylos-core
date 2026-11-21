@@ -6,6 +6,7 @@ import { SKILLS_DIR, DATA_DIR } from './c4-config.js';
 import { reserveStatusNoticeCooldown, clearStatusNoticeCooldownReservation } from './c4-db.js';
 import { normalizeStatusEndpoint } from './status-endpoint.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
+import { requireGroup } from './c4-session-group.js';
 import { systemSendEnvironment } from './c4-system-send-env.js';
 export { normalizeStatusEndpoint } from './status-endpoint.js';
 
@@ -22,7 +23,8 @@ export function statusNoticeKey(channel, endpoint, health = 'unavailable', reaso
   return 'v2:' + JSON.stringify([channel, normalizeStatusEndpoint(endpoint), sessionGroup, runtime, health || 'unavailable', reason || health || 'unavailable']);
 }
 export function reserveStatusNotice(channel, endpoint, route = {}, { reserve = reserveStatusNoticeCooldown } = {}) {
-  validateTarget(channel, endpoint);
+  if (channel === 'internal') requireGroup(endpoint);
+  else validateTarget(channel, endpoint);
   const health = route.health || 'unavailable';
   const reason = route.reason || health;
   if (!route.sessionGroup || !route.runtime) throw new TypeError('Status notice requires committed sessionGroup and target runtime');
