@@ -430,7 +430,9 @@ test('Claude effort validation uses the trimmed default model', async t => {
   const result = await dispatch('switch-effort', { runtime: 'claude', effort: 'high' }, config);
   assert.equal(result.error, 'invalid_effort');
   assert.deepEqual(result.messageParams, { values: '' });
-  assert.equal(getActionsMeta(config).current_model, 'claude-haiku-4-5');
+  const meta = getActionsMeta(config);
+  assert.equal(meta.current_model, 'claude-haiku-4-5');
+  assert.ok(!meta.models.some(model => model.id === meta.current_model), 'the custom model stays outside the catalog');
   assert.equal(instanceDefaults('claude', zylosDir).model, 'claude-haiku-4-5');
   assert.equal(fs.readFileSync(file, 'utf8'), original);
 });
