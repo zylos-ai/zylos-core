@@ -69,13 +69,15 @@ it('enqueues for the observed registered runtime and falls back to the default',
   assert.equal(f.env.HOME, f.root);
   assert.equal(f.env.ZYLOS_DIR, f.root);
   assert.ok(f.socketPath.startsWith(f.root + path.sep));
-  t.diagnostic(JSON.stringify({ HOME: f.env.HOME, ZYLOS_DIR: f.env.ZYLOS_DIR,
-    PM2_HOME: f.env.PM2_HOME, TMPDIR: f.env.TMPDIR, socketPath: f.socketPath, database }));
   const controls = path.join(f.root, '.claude/skills/comm-bridge/scripts');
   fs.mkdirSync(controls, { recursive: true });
   fs.symlinkSync(path.join(packageRoot, 'skills/comm-bridge/scripts/c4-control.js'), path.join(controls, 'c4-control.js'));
   const input = JSON.stringify({ ...sampleInput, hook_event_name: 'PermissionRequest', session_id: 'session-1' });
-  const env = { ...f.env, ZYLOS_RUN_ID: 'run-1', ZYLOS_SESSION_GROUP: 'origin' };
+  const env = { ...f.env, ZYLOS_RUN_ID: 'run-1', ZYLOS_SESSION_GROUP: 'origin',
+    PM2_HOME: path.join(f.root, '.pm2'), TMPDIR: path.join(f.root, 'tmp') };
+  fs.mkdirSync(env.TMPDIR);
+  t.diagnostic(JSON.stringify({ HOME: env.HOME, ZYLOS_DIR: env.ZYLOS_DIR,
+    PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR, socketPath: f.socketPath, database }));
   const rows = f.db.prepare('SELECT raw_content, target_binding FROM control_queue ORDER BY id DESC LIMIT 1');
   const size = f.db.prepare('SELECT count(*) AS count FROM control_queue');
   const configPath = path.join(f.root, '.zylos/config.json');
