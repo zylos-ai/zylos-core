@@ -10,7 +10,7 @@ async function recordedHooks(t, id) {
   try {
     source = await fs.readFile(new URL('manifest.json', directory), 'utf8');
   } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
+    if (error.code !== 'ENOENT' || id === 'agy') throw error;
     t.skip(`Awaiting native hook recordings for ${id}`);
     return null;
   }
@@ -88,9 +88,7 @@ function pick(input, keys) {
 }
 
 test('Antigravity native hook records normalize lifecycle, failures and tool input', async t => {
-  const recordings = await recordedHooks(t, 'agy');
-  if (!recordings) return;
-  const { hooks, payload } = recordings;
+  const { hooks, payload } = await recordedHooks(t, 'agy');
   const normalized = {};
   for (const [name, event, standard] of [
     ['session-start-kick', 'SessionStart', 'SessionStart'],
@@ -101,7 +99,7 @@ test('Antigravity native hook records normalize lifecycle, failures and tool inp
     ['stop-custom-hook', 'Stop', 'Stop'],
     ['pre-tool-use', 'PreToolUse', 'PreToolUse'],
     ['post-tool-use', 'PostToolUse', 'PostToolUse'],
-    ['post-tool-use-error', 'PostToolUse', 'PostToolUseFailure'],
+    ['post-tool-use-nonzero-exit', 'PostToolUse', 'PostToolUse'],
   ]) {
     const native = await payload(name);
     const record = hooks.normalize(native, event);
@@ -126,7 +124,8 @@ test('Antigravity native hook records normalize lifecycle, failures and tool inp
   assert.equal(normalized['stop-idle'].fullyIdle, true);
   assert.equal(normalized['stop-auth-error'].error, 'authentication_failed');
   assert.equal(normalized['stop-custom-hook'].terminationReason, 'TERMINAL_CUSTOM_HOOK');
-  assert.equal(normalized['post-tool-use-error'].error, 'tool_error');
+  assert.equal((await payload('post-tool-use-nonzero-exit')).error, '');
+  assert.equal(Object.hasOwn(normalized['post-tool-use-nonzero-exit'], 'error'), false);
   const tool = normalized['pre-tool-use'];
   assert.deepEqual(hooks.toolInput(tool.tool_name, tool.tool_input), pick(tool.tool_input, ['CommandLine', 'Cwd']));
 });

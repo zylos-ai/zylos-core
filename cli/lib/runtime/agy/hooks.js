@@ -87,7 +87,8 @@ function agyStopError(error) {
   if (typeof error !== 'string') return 'server_error';
   const rejectedStatus = /\b(?:HTTP(?:\/\d(?:\.\d)?)?\s*|status(?:\s+code)?[\s:=]*)(?:401|403)\b|\b(?:401\s+Unauthorized|403\s+Forbidden)\b/i;
   const rejectedKey = /\bAPI_KEY_INVALID\b|\b(?:invalid|rejected)\s+API[ _-]?key\b|\bAPI[ _-]?key\s+(?:(?:is|was)\s+)?(?:not valid|invalid|rejected)\b/i;
-  if (rejectedStatus.test(error) || rejectedKey.test(error)) return 'authentication_failed';
+  const unauthenticatedResponse = /\bError 401, Message:[^\r\n]*?, Status: UNAUTHENTICATED(?=,|$)/;
+  if (rejectedStatus.test(error) || rejectedKey.test(error) || unauthenticatedResponse.test(error)) return 'authentication_failed';
   return /proxyconnect|connection\s+refused|\b(?:ECONNREFUSED|ENETUNREACH|EHOSTUNREACH)\b/i.test(error) ? 'network_error' : 'server_error';
 }
 
