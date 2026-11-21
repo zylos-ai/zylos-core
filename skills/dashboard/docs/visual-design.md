@@ -294,7 +294,9 @@ two cards under This machine. The allowlist shows each channel as a tag with ×;
 channels are picked from a searchable list under the field below the tags: it
 opens on click or focus, typing filters it, and it offers only the channels this
 machine has registered that are not on the allowlist yet, so typed text that names
-none of them adds nothing. The relationship list is
+none of them adds nothing. If the registered channels cannot be read, a note
+takes the field's place and only adding is unavailable: the tags and the
+relationship list still show and work. The relationship list is
 one of the settings long lists (see section 6) and shows group names, the initiating
 group, and creation time; 「解除」 asks first in a dialog titled 「解除会话托管」 with the
 red button, and cancelling sends nothing. A change's result shows in the card

@@ -318,6 +318,7 @@
   "wb.settings.host.channel": "通道名称",
   "wb.settings.host.pickChannel": "搜索或选择已登记的通道",
   "wb.settings.host.noChannels": "没有可加入的通道",
+  "wb.settings.host.channelsFailed": "无法加载已登记的通道，暂时不能添加。重新打开设置可重试。",
   "wb.settings.host.detach": "解除",
   "wb.settings.host.add": "加入白名单",
   "wb.settings.host.readFailed": "无法加载托管设置。重新打开设置可重试。",

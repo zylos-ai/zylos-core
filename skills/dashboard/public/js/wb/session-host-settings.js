@@ -8,7 +8,7 @@ import { settingsCard } from './settings.js';
  * are not notified while a group is hosted (each one a tag; its × removes it at once, since adding it back is one
  * step), and the hosting relationships as one of the settings page's long lists, where detaching asks first.
  * Channels are added from a searchable list of the registered channels not on the list yet; text that names none
- * of them adds nothing. A change's result is shown in the card that made it.
+ * of them adds nothing. If the registered channels cannot be read, only adding is unavailable. A change's result is shown in the card that made it.
  */
 export function mountSessionHostSettings(root, { t, locale, local, read, readChannels, write, confirm = async () => false }) {
   const document = root.ownerDocument;
@@ -52,7 +52,8 @@ export function mountSessionHostSettings(root, { t, locale, local, read, readCha
   options.addEventListener('pointerdown', event => event.preventDefault());
   combo.addEventListener('focusout', event => { if (!combo.contains(event.relatedTarget)) showOptions(false); });
   form.append(combo, add);
-  allow.card.append(channels, form);
+  const channelsFailed = element(document, 'p', '', 'wb-host-meta');
+  allow.card.append(channels, form, channelsFailed);
 
   const hosts = settingsCard(document, { icon: 'layers', id: 'settings-host-relationships' });
   const rows = element(document, 'div', undefined, 'wb-host-rows');
@@ -68,9 +69,9 @@ export function mountSessionHostSettings(root, { t, locale, local, read, readCha
   let generation = 0;
   let busy = false;
   let data = null;
-  let registered = [];
+  let registered = null;
 
-  const candidates = () => registered.filter(channel => !data.allowlist.includes(channel));
+  const candidates = () => (registered ?? []).filter(channel => !data.allowlist.includes(channel));
 
   function showOptions(open) {
     options.hidden = !open;
@@ -132,6 +133,9 @@ export function mountSessionHostSettings(root, { t, locale, local, read, readCha
     allow.label.textContent = label('allowlist');
     hosts.label.textContent = label('relationships');
     input.placeholder = label('pickChannel');
+    channelsFailed.textContent = label('channelsFailed');
+    form.hidden = !registered;
+    channelsFailed.hidden = !!registered;
     input.setAttribute('aria-label', label('channel'));
     add.textContent = label('add');
     list.setPlaceholder(label('search'));
@@ -148,7 +152,7 @@ export function mountSessionHostSettings(root, { t, locale, local, read, readCha
     generation++;
     busy = false;
     data = null;
-    registered = [];
+    registered = null;
     showOptions(false);
     panel.hidden = true;
     status.textContent = '';
@@ -161,10 +165,11 @@ export function mountSessionHostSettings(root, { t, locale, local, read, readCha
     if (!local()) return;
     const current = generation;
     try {
-      const [value, registry] = await Promise.all([read(), readChannels()]);
+      // The channel list only feeds adding: if it fails, the tags and hosted groups still show and work.
+      const [value, registry] = await Promise.all([read(), readChannels().catch(() => null)]);
       if (current !== generation || !local()) return;
       data = value;
-      registered = registry.channels;
+      registered = registry?.channels ?? null;
       render();
       allow.card.hidden = hosts.card.hidden = false;
       panel.hidden = false;

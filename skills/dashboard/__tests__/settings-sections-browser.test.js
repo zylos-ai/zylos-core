@@ -39,7 +39,7 @@ test('the settings page keeps its sections in order, offers the right upgrades a
     const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
     if (evidence) fs.mkdirSync(evidence, { recursive: true });
 
-    async function open(width, { coreUpdate, detail = 'plain', allowlist = ['multica', 'lark'], channels = [], touch = false } = {}) {
+    async function open(width, { coreUpdate, detail = 'plain', allowlist = ['multica', 'lark'], channels = [], channelsFail = false, touch = false } = {}) {
       const context = await browser.newContext({ viewport: { width, height: width < 761 ? 844 : 900 }, hasTouch: touch, timezoneId: 'Asia/Singapore', reducedMotion: 'reduce' });
       sandbox.addCleanup(() => context.close());
       const writes = [];
@@ -81,7 +81,7 @@ test('the settings page keeps its sections in order, offers the right upgrades a
           }
           return route.fulfill({ json: hosting });
         }
-        if (url.pathname === '/api/session-hosts/channels') return route.fulfill({ json: { channels } });
+        if (url.pathname === '/api/session-hosts/channels') return route.fulfill(channelsFail ? { status: 502, json: { error: 'session_host_unavailable' } } : { json: { channels } });
         return route.continue();
       });
       const page = await context.newPage(), errors = [];
@@ -212,12 +212,17 @@ test('the settings page keeps its sections in order, offers the right upgrades a
       await context.close();
     });
 
-    await t.test('an allowlist tag is removed at once; detaching a hosted group asks first and cancelling keeps it', async () => {
-      const { context, page, errors, writes, pick, shot } = await open(1280, { coreUpdate: null });
+    await t.test('with the channel list unavailable only adding is; a tag is removed at once; detaching asks first and cancelling keeps it', async () => {
+      const { context, page, errors, writes, pick, shot } = await open(1280, { coreUpdate: null, channelsFail: true });
       await pick('machine');
       const tags = page.locator('#settings-host-allowlist .wb-host-chip');
       await tags.first().waitFor();
       assert.deepEqual(await tags.allTextContents(), ['multica', 'lark']);
+      assert.equal(await page.locator('.wb-host-row').count(), 11, 'the hosted groups still show');
+      await page.getByText('无法加载已登记的通道，暂时不能添加。重新打开设置可重试。').waitFor();
+      assert.equal(await page.getByRole('combobox', { name: '通道名称' }).isVisible(), false);
+      await page.locator('#settings-host-allowlist').scrollIntoViewIfNeeded();
+      await shot('channels-unavailable');
       await page.getByRole('button', { name: '移除 multica', exact: true }).click();
       await page.waitForFunction(() => [...document.querySelectorAll('#settings-host-allowlist .wb-host-chip')].map(tag => tag.textContent).join() === 'lark');
       assert.equal(await dialog(page).count(), 0, 'no question for removing a tag');
