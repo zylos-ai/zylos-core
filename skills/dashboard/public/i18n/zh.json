@@ -115,7 +115,6 @@
   "source_reason.missing_model_price": "该模型缺少价格表条目",
   "tip.confidence": "状态判定的可信度。高 = 多数据源一致确认；中 = 基于部分信号推导；低 = 从过期或间接数据推断。",
   "tip.pricing": "Claude 规则和自定义 Codex 键按前缀匹配模型名。内置 Codex 键只匹配完整名称或日期快照，修改价格后也一样。未匹配的模型仍记录 token 用量，但不估算费用。",
-  "tip.threshold": "Agent 启动新会话的上下文使用率阈值，避免性能下降。建议：200K 上下文 → 70%，1M 上下文 → 30%。",
   "btn.actions": "操作",
   "btn.settings": "设置",
   "btn.save": "保存",

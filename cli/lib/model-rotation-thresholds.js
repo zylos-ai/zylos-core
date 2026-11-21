@@ -79,7 +79,7 @@ export function modelThreshold(config = {}, options = {}) {
     const value = legacyPercent(config[LEGACY_KEYS[options.runtime]]);
     if (value !== null) return value;
   }
-  return isLargeWindow(options) ? 30 : 70;
+  return isLargeWindow(options) ? 20 : 75;
 }
 
 export function readDefaultModels({ zylosDir = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'), contexts }) {

@@ -115,7 +115,6 @@
   "source_reason.missing_model_price": "Missing price table entry for this model",
   "tip.confidence": "How certain is this state? High = multiple data sources agree; Medium = derived from partial signals; Low = inferred from stale or indirect data.",
   "tip.pricing": "Claude entries and custom Codex keys match model names by prefix. Built-in Codex keys match only exact IDs or dated snapshots, even with edited rates. Unmatched models retain token usage without a cost estimate.",
-  "tip.threshold": "The context level at which the agent should start a new session to avoid degraded performance. Recommended: 200K context → 70%, 1M context → 30%.",
   "btn.actions": "Actions",
   "btn.settings": "Settings",
   "btn.save": "Save",

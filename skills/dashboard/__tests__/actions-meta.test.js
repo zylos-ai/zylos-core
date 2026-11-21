@@ -100,7 +100,7 @@ test('getActionsMeta keeps Claude model and effort controls for Claude runtime',
   assert.ok(meta.models.length > 0);
   assert.ok(Object.keys(meta.efforts_by_model).length > 0);
   assert.equal(meta.current_effort, null, 'session effort does not replace an unset configured default');
-  assert.equal(meta.new_session_threshold, 70, 'without a configured model the legacy value has no model identity');
+  assert.equal(meta.new_session_threshold, 75, 'without a configured model the legacy value has no model identity');
 });
 test('Claude model list includes defaults with display names and specific versions', () => {
   const meta = getActionsMeta(
@@ -275,7 +275,7 @@ test('metadata keeps a fixed Claude version separate from the default model alia
     const meta = getActionsMeta({ runtime: 'claude', zylosDir, thresholdModel: 'claude-opus-4-6[1m]',
       model_rotation_thresholds: { claude: { 'opus[1m]': 25 } } }, {});
     assert.equal(meta.model_thresholds['opus[1m]'], 25);
-    assert.equal(meta.model_thresholds['claude-opus-4-6[1m]'], 30);
+    assert.equal(meta.model_thresholds['claude-opus-4-6[1m]'], 20);
   } finally { fs.rmSync(zylosDir, { recursive: true, force: true }); }
 });
 
@@ -288,7 +288,7 @@ test('changing the default model pins the legacy threshold before the model chan
     assert.equal((await handleAction('switch-model', { runtime: 'claude', model: 'sonnet' }, { zylosDir })).ok, true);
     const stored = JSON.parse(fs.readFileSync(path.join(zylosDir, '.zylos/config.json'), 'utf8'));
     const meta = getActionsMeta({ ...stored, zylosDir, runtime: 'claude' }, {});
-    assert.equal(meta.model_thresholds.opus, 64); assert.equal(meta.model_thresholds.sonnet, 70);
+    assert.equal(meta.model_thresholds.opus, 64); assert.equal(meta.model_thresholds.sonnet, 75);
   } finally { fs.rmSync(zylosDir, { recursive: true, force: true }); }
 });
 
