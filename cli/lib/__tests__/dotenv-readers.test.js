@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 import { resolveCodexBypassPermissions } from '../runtime/codex/hooks.js';
-import { readEnvTimezone, needsBypassAcceptance } from '../../commands/init.js';
+import { readEnvTimezone } from '../../commands/init.js';
 import { ZYLOS_DIR } from '../config.js';
 import { createPrivateFixture, runPrivateFixture } from '../../../test/helpers/private-instance-fixture.js';
 import { readEnvFile, writeEnvEntries } from '../env.js';
@@ -67,18 +67,16 @@ test('Codex permission preference uses dotenv and preserves explicit precedence'
   assert.throws(() => resolveCodexBypassPermissions(path.join(root, 'unreadable')), { code: 'EISDIR' });
 });
 
-test('init reads timezone and bypass preference with dotenv', () => {
+test('init reads timezone with dotenv', () => {
   fs.mkdirSync(ZYLOS_DIR, { recursive: true });
   const file = path.join(ZYLOS_DIR, '.env');
   assert.equal(fs.existsSync(file), false, 'runner provides a fresh isolated instance');
   try {
     fs.writeFileSync(file, [
       'TZ=obsolete', 'export TZ="UTC" # comment',
-      'export CLAUDE_BYPASS_PERMISSIONS="false" # comment',
     ].join('\n'));
     const before = fs.readFileSync(file, 'utf8');
     assert.equal(readEnvTimezone(), 'UTC');
-    assert.equal(needsBypassAcceptance(), false);
     assert.equal(fs.readFileSync(file, 'utf8'), before);
   } finally { fs.rmSync(file, { force: true }); }
 });
