@@ -189,8 +189,6 @@ export function createSupervisor(deps) {
     cacheDirectory:path.join(deps.zylosDir,'activity-monitor','message-router-probe-cache'),
     checkAuth,requestProbe:runtime=>observer.requestProbe(runtime),log,now});
   admission=new SupervisorAdmission({db,store:deps.requestStore,readMode,listRuns:()=>scenes.listRuns(),readRun:group=>scenes.readRun(group),
-    resolveLaunchConfig:async group=>db.resolveSessionLaunchConfig({sessionGroup:group,sessionMode:(await readMode()).mode}),
-    preflightReclaim:(scene,context)=>lifecycle.checkReclaimDependencies(scene,context),
     requestRelease:async scene=>lifecycle.requestRelease(scene,{configuration:{...await (deps.readReclaimConfiguration ?? readConfiguration)(),mode:(await readMode()).mode},scenes:[scene]}),
     deferReclaim:async request=>lifecycle.deferReclaim(request,{configuration:await (deps.readReclaimConfiguration ?? readConfiguration)()}),
     modeSwitch:request=>modeSwitch.handle(request),startAttempt:request=>health.registerStartAttempt(request),diagnostic,now});
@@ -208,7 +206,7 @@ export function createSupervisor(deps) {
     legacyPresent:deps.legacyPresent,observe:context=>scenes.observe(context),lifecycle,serialize:operation=>admission.serialize(operation),
     globalMemoryPending:()=>globalMemoryHandover.pending(),
     writeMode:deps.writeMode ?? writeSessionModeAtCutover,restart:deps.restartDispatcherConfirmation,diagnostic,now});
-  const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','reconcileConfiguration','advanceReleases','advanceReclaim','checkRotation','checkTtl','checkEviction','checkSync'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
+  const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','advanceReleases','advanceReclaim','checkRotation','checkTtl','checkEviction','checkSync'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
   loop=new SupervisorLoop({
     beginRound:()=>lifecycle.beginRound(),
     readConfiguration:async transition=>{

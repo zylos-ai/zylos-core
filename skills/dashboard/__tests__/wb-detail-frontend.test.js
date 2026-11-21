@@ -786,7 +786,7 @@ test('every group has bound action buttons and Origin translated wake replies pr
 
 const configControl = (root, key) => allNodes(root).find(node => ['SELECT', 'INPUT'].includes(node.tagName) && node.getAttribute('aria-label') === key);
 
-async function groupConfigFixture(context, { presence = 'running', save = () => response({ ok: true, data: { running: { status: 'pending' } } }),
+async function groupConfigFixture(context, { presence = 'running', save = () => response({ ok: true, data: { restart: { status: 'accepted' } } }),
   restart = () => response({ ok: true, submission: 'accepted', result: 'accepted' }), config } = {}) {
   const writes = [];
   let current = presence === 'running' ? row() : row('telegram:a', { presence, live: null });
@@ -872,9 +872,9 @@ test('the unified configuration form scopes model choices and starts from the sa
   assert.equal(f.control('wb.config.model').value, 'pinned-gpt');
 });
 
-test('following the global engine confirms once, saves only the engine, then makes the same request as manual restart', async context => {
-  const saved = deferred(), restarted = deferred();
-  const f = await groupConfigFixture(context, { save: () => saved.promise, restart: () => restarted.promise });
+test('following the global engine confirms once and shows the restart result from the save', async context => {
+  const saved = deferred();
+  const f = await groupConfigFixture(context, { save: () => saved.promise });
   await f.choose('wb.term.runtime', 'inherit');
   f.saveButton().dispatch('click');
   const dialog = f.dialog();
@@ -884,23 +884,21 @@ test('following the global engine confirms once, saves only the engine, then mak
   assert.equal(f.writes.length, 0);
   f.confirmSave();
   await tick();
-  assert.deepEqual(f.writes, [{ path: '/api/groups/telegram%3Aa/config', method: 'PUT', body: { kind: 'runtime', value: 'inherit' } }]);
+  assert.deepEqual(f.writes, [{ path: '/api/groups/telegram%3Aa/config', method: 'PUT',
+    body: { kind: 'runtime', value: 'inherit', confirmed: true } }]);
   assert.deepEqual(f.feedback(), []);
-  saved.resolve(response({ ok: true, data: { resolved: { runtime: 'codex' }, running: { status: 'pending', launchConfig: { runtime: 'claude' } } } }));
+  saved.resolve(response({ ok: true, data: { resolved: { runtime: 'codex' }, running: { status: 'pending' },
+    restart: { status: 'accepted' } } }));
   await tick();
-  const expected = { path: '/api/groups/telegram%3Aa/actions/restart', method: 'POST', body: { sessionGroup: 'telegram:a', runId: 'run-a', sessionId: 'session-a' } };
-  assert.equal(f.writes.length, 2);
-  assert.deepEqual(f.writes[1], expected);
+  assert.equal(f.writes.length, 1);
   assert.equal(f.dialog(), undefined);
-  assert.deepEqual(f.feedback(), ['wb.config.followGlobalSaved']);
-  restarted.resolve(response({ ok: true, submission: 'accepted', result: 'accepted' }));
-  await tick();
   assert.deepEqual(f.feedback(), ['wb.config.followGlobalSaved', 'wb.actions.accepted']);
   const manual = f.controller.act('restart');
   f.button('wb.actions.restart', f.dialog()).dispatch('click');
   await manual;
-  assert.equal(f.writes.length, 3);
-  assert.deepEqual(f.writes[2], expected);
+  assert.equal(f.writes.length, 2);
+  assert.deepEqual(f.writes[1], { path: '/api/groups/telegram%3Aa/actions/restart', method: 'POST',
+    body: { sessionGroup: 'telegram:a', runId: 'run-a', sessionId: 'session-a' } });
 });
 
 async function editEngineAndModel(f) {
@@ -927,7 +925,7 @@ test('a stopped group saves directly and shows the next normal start hint', asyn
   f.saveButton().dispatch('click');
   assert.equal(f.dialog(), undefined);
   await tick();
-  assert.deepEqual(f.writes.map(write => write.method), ['PUT']);
+  assert.deepEqual(f.writes.map(write => write.body), [{ kind: 'runtime', value: 'agy' }]);
   assert.deepEqual(f.feedback(), ['wb.config.saved · wb.config.nextStart']);
 });
 
@@ -941,66 +939,84 @@ for (const operation of [
   assert.equal(f.writes.length, 0);
   f.confirmSave();
   await tick();
-  assert.deepEqual(f.writes.map(write => write.method), ['PUT', 'POST']);
-  assert.deepEqual(f.writes[0].body, operation.body);
+  assert.deepEqual(f.writes.map(write => write.method), ['PUT']);
+  assert.deepEqual(f.writes[0].body, { ...operation.body, confirmed: true });
   assert.deepEqual(f.feedback(), ['wb.config.saved', 'wb.actions.accepted']);
   assert.equal(f.saveButton().disabled, true);
 });
 
-for (const status of ['pending', 'applied']) test(`both edits save in order with one confirmation when the first response is ${status}`, async context => {
-  const engine = deferred(), model = deferred();
-  const f = await groupConfigFixture(context, { save: change => change.kind === 'runtime' ? engine.promise : model.promise });
-  await editEngineAndModel(f);
-  f.saveButton().dispatch('click');
-  f.saveButton().dispatch('click');
-  assert.equal(f.writes.length, 0);
-  f.confirmSave();
-  await tick();
-  assert.deepEqual(f.writes.map(write => write.body), [{ kind: 'runtime', value: 'codex' }]);
-  engine.resolve(response({ ok: true, data: { running: { status } } }));
-  await tick();
-  assert.deepEqual(f.writes.map(write => write.body), [
-    { kind: 'runtime', value: 'codex' },
-    { kind: 'model', runtime: 'codex', model: 'gpt', effort: 'high' },
-  ]);
-  assert.equal(f.dialog(), undefined);
-  model.resolve(response({ ok: true, data: { running: { status: 'applied' } } }));
-  await tick();
-  assert.deepEqual(f.writes.map(write => write.method), status === 'pending' ? ['PUT', 'PUT', 'POST'] : ['PUT', 'PUT']);
-  assert.equal(f.dialog(), undefined);
-  assert.deepEqual(f.feedback(), status === 'pending'
-    ? ['wb.config.saved', 'wb.actions.accepted'] : ['wb.config.saved · wb.config.applied']);
-});
+const codexModelChange = { kind: 'model', runtime: 'codex', model: 'gpt', effort: 'high', confirmed: true };
 
-test('a failed engine save stops before the model write', async context => {
-  const f = await groupConfigFixture(context, { save: () => response({ ok: false, error: { code: 'GROUP_UNAVAILABLE' } }, 409) });
-  await editEngineAndModel(f);
-  f.saveButton().dispatch('click');
-  f.confirmSave();
+for (const sameEngine of [false, true]) test(sameEngine
+  ? 'saving an engine preference for the same effective engine applies the model last'
+  : 'switching effective engines stages the target model before a restart', async context => {
+  const currentRuntime = sameEngine ? 'codex' : 'claude';
+  const runtimeChange = { kind: 'runtime', value: sameEngine ? 'inherit' : 'codex', confirmed: true };
+  const ordered = sameEngine ? [runtimeChange, codexModelChange] : [codexModelChange, runtimeChange];
+  const firstKind = ordered[0].kind;
+  const saved = deferred();
+  let firstFails = true;
+  const f = await groupConfigFixture(context, {
+    config: { runtime: { ok: true, data: { desired: { mode: 'override', runtime: currentRuntime },
+      resolved: { runtime: currentRuntime } } } },
+    save: change => change.kind === firstKind
+      ? firstFails ? response({ ok: false, error: { code: 'CONFIG_STORE_FAILED' } }, 500) : saved.promise
+      : response({ ok: true, data: { running: { status: 'pending' }, restart: { status: 'accepted' } } }),
+  });
+  if (sameEngine) {
+    await f.choose('wb.term.runtime', 'inherit');
+    await f.choose('wb.config.model', 'gpt');
+    await f.choose('wb.term.effort', 'high');
+  } else await editEngineAndModel(f);
+  const submit = () => { f.saveButton().dispatch('click'); f.confirmSave(); };
+  submit();
   await tick();
-  assert.deepEqual(f.writes.map(write => write.body), [{ kind: 'runtime', value: 'codex' }]);
+  assert.deepEqual(f.writes.map(write => write.body), [ordered[0]]);
   assert.deepEqual(f.feedback(), []);
-  assert.match(f.root.textContent, /wb\.config\.saveFailed.*wb\.term\.runtime.*GROUP_UNAVAILABLE/);
+  assert.match(f.root.textContent, /wb\.config\.saveFailed.*CONFIG_STORE_FAILED/);
+
+  firstFails = false;
+  submit();
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.body), [ordered[0], ordered[0]]);
+  saved.resolve(response({ ok: true, data: { running: { status: 'applied' } } }));
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.body), [ordered[0], ...ordered]);
+  assert.equal(f.writes.every(write => write.method === 'PUT'), true);
+  assert.equal(f.dialog(), undefined);
+  assert.deepEqual(f.feedback(), [sameEngine ? 'wb.config.followGlobalSaved' : 'wb.config.saved', 'wb.actions.accepted']);
 });
 
-test('a failed model save shows the preceding engine save, and a user retry sends only the model', async context => {
-  let rejectModel = true;
-  const f = await groupConfigFixture(context, { save: change => change.kind === 'model' && rejectModel
-    ? response({ ok: false, error: { code: 'MODEL_CONFIG_INVALID' } }, 400)
-    : response({ ok: true, data: { running: { status: 'pending' } } }) });
+test('a restart from the first save leaves the remaining edit for a fresh confirmation', async context => {
+  const f = await groupConfigFixture(context);
   await editEngineAndModel(f);
   f.saveButton().dispatch('click');
   f.confirmSave();
   await tick();
-  assert.deepEqual(f.writes.map(write => write.method), ['PUT', 'PUT']);
-  assert.deepEqual(f.feedback(), ['wb.config.runtimeSaved']);
-  assert.match(f.root.textContent, /wb\.config\.saveFailed.*wb\.config\.model.*MODEL_CONFIG_INVALID/);
-  rejectModel = false;
+  assert.deepEqual(f.writes.map(write => write.body), [codexModelChange]);
+  assert.deepEqual(f.feedback(), ['wb.config.modelSaved', 'wb.actions.accepted']);
+  assert.equal(f.saveButton().disabled, false);
+});
+
+test('a failed engine switch shows the staged model and retry sends only the engine setting', async context => {
+  let rejectEngine = true;
+  const f = await groupConfigFixture(context, { save: change => change.kind === 'model'
+    ? response({ ok: true, data: { running: null } })
+    : rejectEngine ? response({ ok: false, error: { code: 'CONFIG_STORE_FAILED' } }, 500)
+      : response({ ok: true, data: { restart: { status: 'accepted' } } }) });
+  await editEngineAndModel(f);
   f.saveButton().dispatch('click');
   f.confirmSave();
   await tick();
-  assert.deepEqual(f.writes.map(write => write.method), ['PUT', 'PUT', 'PUT', 'POST']);
-  assert.equal(f.writes[2].body.kind, 'model');
+  assert.deepEqual(f.writes.map(write => write.body.kind), ['model', 'runtime']);
+  assert.deepEqual(f.feedback(), ['wb.config.modelSaved']);
+  assert.match(f.root.textContent, /wb\.config\.saveFailed.*wb\.term\.runtime.*CONFIG_STORE_FAILED/);
+  rejectEngine = false;
+  f.saveButton().dispatch('click');
+  f.confirmSave();
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.body.kind), ['model', 'runtime', 'runtime']);
+  assert.equal(f.writes.every(write => write.method === 'PUT'), true);
 });
 
 test('switching to Antigravity disables model and effort and saves only the engine', async context => {
@@ -1013,44 +1029,43 @@ test('switching to Antigravity disables model and effort and saves only the engi
   f.saveButton().dispatch('click');
   f.confirmSave();
   await tick();
-  assert.deepEqual(f.writes.filter(write => write.method === 'PUT').map(write => write.body), [{ kind: 'runtime', value: 'agy' }]);
+  assert.deepEqual(f.writes.filter(write => write.method === 'PUT').map(write => write.body), [{ kind: 'runtime', value: 'agy', confirmed: true }]);
 });
 
-test('a rejected restart keeps the save result and never retargets the replacement run', async context => {
-  const saved = deferred();
-  const f = await groupConfigFixture(context, { save: () => saved.promise,
-    restart: () => response({ ok: false, submission: 'rejected', currentRunId: 'replacement-run',
-      error: { code: 'stale_target', message: 'The target run changed; refresh before restarting' } }, 409) });
+test('a replacement run observed while the save dialog is open needs a fresh confirmation', async context => {
+  const f = await groupConfigFixture(context);
   await f.choose('wb.config.model', 'opus');
   f.saveButton().dispatch('click');
-  f.confirmSave();
-  await tick();
   await f.replaceRun();
-  saved.resolve(response({ ok: true, data: { running: { status: 'pending' } } }));
+  f.confirmSave();
   await tick();
-  assert.deepEqual(f.writes.map(write => write.method), ['PUT', 'POST']);
-  assert.equal(f.writes[1].body.runId, 'run-a');
-  assert.deepEqual(f.feedback(), ['wb.config.saved', 'stale_target · The target run changed; refresh before restarting']);
+  assert.equal(f.writes.length, 0);
+  assert.match(f.root.textContent, /wb\.actions\.staleTarget.*replacement-run/);
 });
 
-test('an unknown restart outcome preserves the save result without another submission', async context => {
-  const f = await groupConfigFixture(context, { restart: async () => { throw Error('connection lost'); } });
+for (const [status, reason, message] of [
+  ['not_restarted', 'stale_target', 'wb.actions.notSubmitted'],
+  ['unknown', 'no_reply', 'wb.actions.unknown'],
+]) test(`a CLI restart outcome of ${status} preserves the save result and its reason`, async context => {
+  const f = await groupConfigFixture(context, { save: () => response({ ok: true, data: {
+    running: { status: 'pending' }, restart: { status, reason },
+  } }) });
   await f.choose('wb.config.model', 'opus');
   f.saveButton().dispatch('click');
   f.confirmSave();
   await tick();
-  assert.deepEqual(f.writes.map(write => write.method), ['PUT', 'POST']);
-  assert.deepEqual(f.feedback(), ['wb.config.saved', 'wb.actions.unknown']);
+  assert.deepEqual(f.writes.map(write => write.method), ['PUT']);
+  assert.deepEqual(f.feedback(), ['wb.config.saved', `${message} · ${reason}`]);
 });
 
-test('an unknown engine save stops before the model write and shows that the setting needs checking', async context => {
+test('an unknown first save stops before switching engines and shows which setting needs checking', async context => {
   const f = await groupConfigFixture(context, { save: () => response({ ok: false, unknown: true }, 502) });
   await editEngineAndModel(f);
   f.saveButton().dispatch('click');
   f.confirmSave();
   await tick();
-  assert.deepEqual(f.writes.map(write => write.method), ['PUT']);
-  assert.match(f.root.textContent, /wb\.config\.saveUncertain.*wb\.term\.runtime/);
+  assert.deepEqual(f.writes.map(write => write.body), [codexModelChange]);
+  assert.match(f.root.textContent, /wb\.config\.saveUncertain.*wb\.config\.model/);
 });
 
 test('single detail filters NULL events but sends actions through the Origin route', async () => {
@@ -1976,7 +1991,7 @@ test('incremental configuration metadata and refresh keep save bound to the moun
     assert.equal(save.disabled, false);
     save.dispatch('click'); await tick(); await tick();
     assert.equal(posts.length, 1);
-    assert.deepEqual(posts[0], { kind: 'model', runtime: 'claude', model: 'sonnet', effort: 'high' });
+    assert.deepEqual(posts[0], { kind: 'model', runtime: 'claude', model: 'sonnet', effort: 'high', confirmed: true });
   } finally { f.controller.destroy(); }
 });
 

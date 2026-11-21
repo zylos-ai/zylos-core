@@ -142,6 +142,9 @@ export class CoreState {
     }
     return this.snapshot;
   }
+  getReadyIdentity() {
+    return this.snapshot.ready && this.snapshot.runId ? this.observation?.identity ?? null : null;
+  }
   getCurrentSessionId() { return this.observation?.identity?.present && this.observation?.status?.reason !== 'identity_changed' ? this.observation.identity.sessionId : null; }
   getSingleSessionId() { return this.snapshot.sessionGroup === null ? this.getCurrentSessionId() : null; }
   getState() { return structuredClone(this.snapshot); }

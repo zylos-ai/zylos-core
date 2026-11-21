@@ -89,7 +89,7 @@ offers a deferral (`supervisor-request.js defer-reclaim`). The command derives
 the session group and run ID from the current environment and uses the
 existing supervisor socket.
 It rejects missing preparation, a different run, an already-started reclaim,
-a capacity check past its response deadline, or an upgrade/configuration restart.
+a capacity check past its response deadline, or a pending restart.
 An accepted request cancels this reclaim or eviction preparation and resets the
 idle clock immediately. TTL and eviction ordering both use this reset; the group
 must become idle for the configured eviction minimum before it can be selected
@@ -182,11 +182,6 @@ stop the restart before any check is sent.
 
 Core upgrade, `upgrade-claude` and `restart-claude` use this supervisor request
 in every mode. An empty group-run snapshot completes with `done_empty`.
-
-A launch configuration change still sends a single control with its 5-minute
-ack deadline and the `ready_for_config_reclaim` flow. It names the
-configuration restart check, with the configuration change as the reason. Background work is recorded as interrupted, without deferral, before
-the readiness submission.
 
 ## No-response Recovery
 

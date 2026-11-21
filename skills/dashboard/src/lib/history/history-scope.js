@@ -7,7 +7,7 @@ const { DEFAULT_RUNTIME } = await loadCoreModule('runtime/descriptors.js');
 // Historical selection uses imported attribution and files only. It must remain
 // available for offline groups without opening tmux or starting Observer.
 export function createHistoryScope({ config = {}, store, load = loadCoreModule, readCurrentSessionId, readGroupKey } = {}) {
-  return async function scope(params) {
+  return async function scope(params, route) {
     const group = params.get('session_group') ?? 'origin';
     const [{ assertSessionGroup }, { readSessionMode }] = await Promise.all([
       load('session-group-paths.js'), load('config.js'),
@@ -41,14 +41,22 @@ export function createHistoryScope({ config = {}, store, load = loadCoreModule, 
         catch { /* Legacy single-session installations may have no sample. */ }
       }
     }
-    const runtime = selected.find(row => row.session_id === current)?.runtime || selected[0]?.runtime || config.runtime || DEFAULT_RUNTIME;
-    const sessionIds = new Set(selected.filter(row => row.runtime === runtime).map(row => row.session_id));
-    if (current) sessionIds.add(current);
-    const excludedSessionIds = new Set(attribution.filter(row => !belongs(row) && row.runtime === runtime).map(row => row.session_id));
-    // Child runtimes started inside a session are counted for cost only, never listed.
-    for (const id of store?.childSessionIds?.() ?? []) excludedSessionIds.add(id);
-    // Unattributed pre-multi-session transcripts belong to Origin. Other groups
-    // require positive attribution, including parent ids for Claude subagents.
-    return { revision, runtime, currentSessionId: current, sessionIds: group === 'origin' ? null : sessionIds, excludedSessionIds };
+    const currentRuntime = selected.find(row => row.session_id === current)?.runtime ?? null;
+    const runtime = currentRuntime ?? selected[0]?.runtime ?? config.runtime ?? DEFAULT_RUNTIME;
+    const session = route === 'sessions' ? null : params.get('session')?.split('/')[0];
+    const ownerRuntime = selected.find(row => row.session_id === session)?.runtime;
+    const runtimes = ownerRuntime ? [ownerRuntime] : [...new Set([runtime, ...selected.map(row => row.runtime)])];
+    const children = store?.childSessionIds?.() ?? [];
+    const scopes = runtimes.map(engine => {
+      const currentSessionId = engine === (currentRuntime ?? runtime) ? current : null;
+      const sessionIds = new Set(selected.filter(row => row.runtime === engine).map(row => row.session_id));
+      if (currentSessionId) sessionIds.add(currentSessionId);
+      const excludedSessionIds = new Set(attribution.filter(row => !belongs(row) && row.runtime === engine).map(row => row.session_id));
+      // Unattributed transcripts are eligible only for Origin. Child runtimes
+      // are counted for cost only, regardless of the selected parser.
+      for (const id of children) excludedSessionIds.add(id);
+      return { revision, runtime: engine, currentSessionId, sessionIds: group === 'origin' ? null : sessionIds, excludedSessionIds };
+    });
+    return { ...scopes[0], scopes };
   };
 }

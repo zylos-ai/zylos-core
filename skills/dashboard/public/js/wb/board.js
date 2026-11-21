@@ -17,8 +17,8 @@ export function modelCell(row, t = key => key) {
     value.effort ?? value.model?.effort].filter(Boolean).join(' · ') : '—';
 }
 export function pendingModel(row) {
-  return !row.target?.onlyMulti && Boolean((row.presence === 'running' && row.launchConfig && row.desired &&
-    !same(row.launchConfig, row.desired)) || row.fence?.reason === 'model_config');
+  return !row.target?.onlyMulti && Boolean(row.presence === 'running' && row.launchConfig && row.desired &&
+    !same(row.launchConfig, row.desired));
 }
 /** Compact elapsed time: 42s, 4m12s, 41m, 2h05m. */
 export function shortDuration(seconds) {

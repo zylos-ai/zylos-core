@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { requestConfigRestart } from '../../../../cli/lib/config-restart.js';
 import { fixture as storeFixture, startHeldWriter } from './c4-v2-test-helpers.js';
 import { createConfigHandler, classifyConfigRunning, parseConfigArgs, listOverrides } from '../c4-config-handler.js';
 
@@ -17,6 +18,67 @@ test('pure CLI parser rejects conflicts, duplicates, excess flags and missing mo
   }
   assert.throws(() => parseConfigArgs('model', ['get', '--group', 'origin']), { code: 'INVALID_ARGS' });
   assert.deepEqual(parseConfigArgs('model', ['set', '--channel', 'chat', '--session-group', 'A', '--runtime', 'codex', '--model', 'm', '--effort', 'high', '--json']), { json: true, request: { action: 'set', componentName: 'chat', groupName: 'A', runtime: 'codex', model: 'm', effort: 'high' } });
+});
+test('only configuration mutations accept one explicit restart confirmation', () => {
+  const flags = ['--group', 'origin', '--yes'];
+  assert.equal(parseConfigArgs('runtime', ['reset', ...flags]).request.yes, true);
+  assert.throws(() => parseConfigArgs('runtime', ['get', ...flags]), { code: 'INVALID_ARGS' });
+  assert.throws(() => parseConfigArgs('runtime', ['reset', ...flags, '--yes']), { code: 'INVALID_ARGS' });
+});
+test('CLI keeps a running group unchanged until confirmed, then reports a rejected restart after saving', async t => {
+  let observation = { hasProcess: true, identityVerified: true, ready: true, runId: 'run-a', launchConfig: { runtime: 'claude', mode: 'default' } };
+  const targets = [];
+  const { store, handler } = fixture(t, {
+    observeRunning: () => observation,
+    restart: target => requestConfigRestart(target, async request => {
+      targets.push({ sessionGroup: request.sessionGroup, runId: request.expectedRunId });
+      assert.equal(store.getSessionRuntimeConfig({ sessionGroup: 'chat:A' }).runtime, 'codex');
+      return { kind: 'rejected', sent: true, reply: { reason: 'fence_conflict' } };
+    }),
+  });
+  const set = { action: 'set', sessionGroup: 'chat:A', runtime: 'codex' };
+  await assert.rejects(handler('runtime', set), { code: 'CONFIRMATION_REQUIRED', message: /chat:A/, persisted: [] });
+  assert.equal(store.getSessionRuntimeConfig({ sessionGroup: 'chat:A' }).mode, 'inherit');
+  const sameRuntime = await handler('runtime', { ...set, runtime: 'claude' });
+  assert.deepEqual(sameRuntime.data.desired, { mode: 'override', runtime: 'claude' });
+  assert.equal(sameRuntime.data.restart, undefined);
+  assert.deepEqual(targets, []);
+  const { data } = await handler('runtime', { ...set, yes: true });
+  assert.deepEqual(data.restart, { status: 'not_restarted', reason: 'fence_conflict' });
+  assert.deepEqual(targets, [{ sessionGroup: 'chat:A', runId: 'run-a' }]);
+  observation = { ...observation, identityVerified: false };
+  const model = { action: 'set', sessionGroup: 'chat:A', runtime: 'codex', model: 'fixture', effort: 'high' };
+  const unverified = await handler('model', { ...model, yes: true });
+  assert.deepEqual(unverified.data.restart, { status: 'not_restarted', reason: 'identity_unavailable' });
+  assert.equal(targets.length, 1, 'unverified identity must never submit a restart');
+  const reset = { action: 'reset', sessionGroup: 'chat:A' };
+  observation = {};
+  await assert.rejects(handler('runtime', reset), { code: 'CONFIRMATION_REQUIRED', message: /Could not verify whether chat:A is running/ });
+  assert.equal(store.getSessionRuntimeConfig({ sessionGroup: 'chat:A' }).runtime, 'codex');
+  observation = { hasProcess: false };
+  const offline = await handler('runtime', reset);
+  assert.equal(offline.data.changed, true);
+  assert.equal(offline.data.restart, undefined);
+  assert.equal(targets.length, 1);
+});
+test('single-mode CLI changes the running Origin model only after confirmation', async t => {
+  const requests = [];
+  const { store, handler } = fixture(t, {
+    readSessionMode: () => 'single',
+    observeRunning: ({ sessionGroup }) => {
+      assert.equal(sessionGroup, 'origin');
+      return { hasProcess: true, identityVerified: true, ready: true, runId: 'origin-run', launchConfig: { runtime: 'claude', mode: 'default' } };
+    },
+    restart: request => { requests.push(request); return { status: 'accepted' }; },
+  });
+  const set = { action: 'set', sessionGroup: 'origin', runtime: 'claude', model: 'fixture', effort: 'high' };
+  await assert.rejects(handler('model', set), { code: 'CONFIRMATION_REQUIRED' });
+  assert.equal(store.getSessionModelConfig(set).mode, 'default');
+  assert.equal((await handler('model', { ...set, yes: true })).data.restart.status, 'accepted');
+  assert.deepEqual(requests, [{ sessionGroup: 'origin', runId: 'origin-run' }]);
+  const otherRuntime = await handler('model', { ...set, runtime: 'codex' });
+  assert.equal(otherRuntime.data.changed, true);
+  assert.equal(otherRuntime.data.restart, undefined);
 });
 test('selectors only read existing namespaces and groups; exact values and unknown args rejected', async t => {
   const { handler, db } = fixture(t);
@@ -68,9 +130,8 @@ test('four-state priority returns null before sampling single or non-current run
   const resolved = { runtime: 'claude', mode: 'default' };
   const base = { kind: 'model', runtime: 'claude', sessionMode: 'multi', resolved, observation: { hasProcess: true, identityVerified: true, ready: true, runId: 'run1', launchConfig: resolved } };
   const check = (patch, status) => assert.equal(classifyConfigRunning({ ...base, ...patch }).status, status);
-  assert.equal(classifyConfigRunning({ ...base, sessionMode: 'single', fence: { reason: 'model_config' } }), null);
-  assert.equal(classifyConfigRunning({ ...base, runtime: 'codex', fence: { reason: 'model_config' } }), null);
-  check({ fence: { reason: 'model_config' }, observation: { hasProcess: false } }, 'pending');
+  assert.equal(classifyConfigRunning({ ...base, sessionMode: 'single' }), null);
+  assert.equal(classifyConfigRunning({ ...base, runtime: 'codex' }), null);
   check({ observation: { hasProcess: false } }, 'not_running');
   check({ observation: { ...base.observation, identityVerified: false } }, 'unknown');
   check({ observation: { ...base.observation, launchConfig: null } }, 'unknown');
@@ -80,28 +141,22 @@ test('four-state priority returns null before sampling single or non-current run
   check({}, 'applied');
   check({ kind: 'runtime', runtime: 'codex' }, 'applied');
 });
-test('native single observes Origin with its own fence and group target', async t => {
+test('native single observes Origin with its group target', async t => {
   const resolved = { runtime: 'claude', mode: 'default' };
   const observation = { hasProcess: true, identityVerified: true, ready: true, runId: 'run-o', launchConfig: resolved };
-  for (const [fence, expected] of [[null, 'applied'], [{ reason: 'model_config', runId: 'run-o' }, 'pending']]) {
-    const observed = [];
-    const { handler, store } = fixture(t, { readSessionMode: () => 'single', observeRunning: options => { observed.push(options); return observation; } });
-    if (fence) store.setDrainFence('origin', fence);
-    // A fence on another scope must not change Origin's state.
-    store.setDrainFence('chat:A', { reason: 'model_config', runId: 'run-a' });
-    const { data } = await handler('runtime', { action: 'get', sessionGroup: 'origin' });
-    assert.equal(data.sessionMode, 'single');
-    assert.deepEqual(data.resolved, resolved);
-    assert.equal(data.running.status, expected);
-    assert.deepEqual(observed, [{ sessionGroup: 'origin', sessionMode: 'single' }]);
-  }
+  const observed = [];
+  const { handler } = fixture(t, { readSessionMode: () => 'single', observeRunning: options => { observed.push(options); return observation; } });
+  const { data } = await handler('runtime', { action: 'get', sessionGroup: 'origin' });
+  assert.equal(data.sessionMode, 'single');
+  assert.deepEqual(data.resolved, resolved);
+  assert.equal(data.running.status, 'applied');
+  assert.deepEqual(observed, [{ sessionGroup: 'origin', sessionMode: 'single' }]);
 });
 test('native single shows other groups their multi configuration without sampling', async t => {
   const { store } = fixture(t);
   store.setSessionRuntimeConfig({ sessionGroup: 'chat:A', runtime: 'codex' });
   store.setSessionModelConfig({ sessionGroup: 'chat:A', runtime: 'codex', model: 'm', effort: 'high' });
   const forbidden = () => { throw new Error('must not sample'); };
-  store.getDrainFence = forbidden;
   const handler = createConfigHandler({ store, validateComponent: () => true, readSessionMode: () => 'single', observeRunning: forbidden });
   for (const [kind, request] of [['runtime', { action: 'get', sessionGroup: 'chat:A' }], ['model', { action: 'get', sessionGroup: 'chat:A', runtime: 'codex' }]]) {
     const { data } = await handler(kind, request);
@@ -115,7 +170,6 @@ test('a pre-migration instance reports a null mode, baseline resolution and no r
   store.insertConversation('in', 'chat', 'e', 'hello', { groupName: 'A' });
   store.setSessionRuntimeConfig({ sessionGroup: 'chat:A', runtime: 'codex' });
   const forbidden = () => { throw new Error('must not sample'); };
-  store.getDrainFence = forbidden;
   const handler = createConfigHandler({ store, validateComponent: () => true, readSessionMode: () => null, observeRunning: forbidden });
   const { data } = await handler('runtime', { action: 'get', sessionGroup: 'chat:A' });
   assert.equal(data.sessionMode, null);
@@ -143,11 +197,9 @@ test('model wrapper reads and writes exact pairs, rejects partial replacement', 
   assert.equal(store.getSessionModelConfig({ sessionGroup: 'chat:A', runtime: 'codex' }).effort, 'high');
 });
 
-test('single and non-current model return mode/resolved and skip fence/process sampling', async t => {
+test('single and non-current model return mode/resolved and skip process sampling', async t => {
   for (const sessionMode of ['single', 'multi']) {
     const { store } = fixture(t);
-    const originalFence = store.getDrainFence;
-    store.getDrainFence = () => { throw new Error('must not read fence'); };
     const handler = createConfigHandler({ store, validateComponent: () => true,
       readSessionMode: () => sessionMode,
       observeRunning: () => { throw new Error('must not sample process'); },
@@ -168,7 +220,6 @@ test('single and non-current model return mode/resolved and skip fence/process s
       assert.deepEqual(data.resolved, { runtime: 'claude', mode: 'default' });
       assert.equal(data.running, null);
     }
-    store.getDrainFence = originalFence;
   }
 });
 test('current model exposes resolved input and all four running statuses at handler boundary', async t => {

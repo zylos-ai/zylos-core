@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import crypto from 'node:crypto';
 import path from 'node:path';
@@ -10,12 +10,6 @@ const execute = promisify(execFile);
 const isTargetError = code => code === 'STALE_TARGET' || String(code || '').startsWith('TARGET_');
 function envelope(text) {
   try { const value = JSON.parse(text.trim()); return typeof value?.ok === 'boolean' ? value : null; } catch { return null; }
-}
-
-function restartDashboard() {
-  const child = spawn('pm2', ['restart', 'zylos-dashboard'], { detached: true, stdio: 'ignore' });
-  child.on('error', () => {});
-  child.unref();
 }
 
 async function command(file, args, { timeout = 10000 } = {}) {
@@ -63,7 +57,7 @@ export async function handleCoreAction(action, body, config) {
     const request = { version: 1, type: 'manual_restart', requestId, ...(target.runId ? { expectedRunId: target.runId } : {}), ...(target.sessionId ? { expectedSessionId: target.sessionId } : {}) };
     const result = await submit(request, { deadlineAt });
     if (result.kind === 'accepted' || result.kind === 'rejected') {
-      const messageKey = keyPresent && result.reply.result === 'already_stopped' ? 'result.restart_wake_requested'
+      const messageKey = keyPresent && !target.runId && result.reply.result === 'already_stopped' ? 'result.restart_wake_requested'
         : keyPresent && result.kind === 'rejected' && result.reply.reason === 'wake_failed' ? 'result.restart_wake_failed'
         : result.kind === 'rejected' ? (result.reply.result === 'stale_target' ? 'result.restart_target_changed' : 'result.restart_rejected')
         : result.reply.result === 'already_stopped' ? 'result.restart_already_stopped'
@@ -88,15 +82,15 @@ export async function handleCoreAction(action, body, config) {
   }
   if (action === 'switch-runtime') {
     if (!SUPPORTED_RUNTIMES.includes(body?.runtime)) return { ok: false, error: 'INVALID_RUNTIME', messageKey: 'result.invalid_runtime' };
-    const result = await command('zylos', ['runtime', body.runtime, '--json'], { timeout: 65000 });
+    const args = ['runtime', body.runtime, '--json'];
+    if (body.confirmed === true) args.push('--yes');
+    const result = await command('zylos', args, { timeout: 65000 });
     const saved = result.ok && result.data?.result === 'saved';
     const unchanged = result.ok && result.data?.result === 'unchanged';
-    if (saved) {
-      setTimeout(() => {
-        restartDashboard();
-      }, 1000).unref?.();
-    }
-    return { ...result, detached: saved, messageKey: saved ? 'result.runtime_saved' : unchanged ? 'result.runtime_unchanged' : 'result.runtime_unknown', messageParams: { value: body.runtime } };
+    return { ...result, messageKey: saved ? 'result.runtime_saved' : unchanged ? 'result.runtime_unchanged'
+      : result.error?.code === 'CONFIRMATION_REQUIRED' ? 'wb.settings.runtimeConfirmationRequired'
+      : result.unknown || result.error?.persisted === null ? 'result.runtime_unknown' : null,
+      messageParams: { value: body.runtime } };
   }
   return { ok: false, error: 'UNKNOWN_ACTION', messageKey: 'result.unknown_action' };
 }

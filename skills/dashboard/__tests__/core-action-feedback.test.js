@@ -168,7 +168,7 @@ test('every Core action return path has a bilingual message key', async t => {
     await t.test(`${mode} restart acceptance, rejection and transport results`, async () => {
       for (const result of ['accepted', 'already_accepted', 'already_stopped']) {
         reply = { kind: 'accepted', reply: { ok: true, result } };
-        const expected = result === 'already_stopped' ? 'result.restart_wake_requested' : `result.restart_${result}`;
+        const expected = `result.restart_${result}`;
         const response = await invoke('restart-session', body(), expected);
         assert.equal(response.ok, true);
         assert.equal(response.result, result);
@@ -289,14 +289,14 @@ test('every Core action return path has a bilingual message key', async t => {
         new Error('runtime command unavailable'),
       ]) {
         commands = [command];
-        const response = await invoke('switch-runtime', { ...body(), runtime: 'codex' });
-        assert.equal(response.messageKey, command?.data?.result === 'saved' ? 'result.runtime_saved' : command?.data?.result === 'unchanged' ? 'result.runtime_unchanged' : 'result.runtime_unknown');
+        const response = await handleCoreAction('switch-runtime', { ...body(), runtime: 'codex' }, config);
+        if (command?.ok !== false) localized(response);
+        assert.equal(response.messageKey, command?.data?.result === 'saved' ? 'result.runtime_saved' : command?.data?.result === 'unchanged' ? 'result.runtime_unchanged' : command?.ok === false ? null : 'result.runtime_unknown');
       }
     });
   }
-  assert.equal(schedules.length, 2, 'only saved runtime results schedule Dashboard restart');
-  for (const timer of schedules) { assert.equal(timer.milliseconds, 1000); timer.callback(); }
-  assert.deepEqual(spawns, Array.from({ length: 2 }, () => ({ file: 'pm2', args: ['restart', 'zylos-dashboard'] })));
+  assert.equal(schedules.length, 0);
+  assert.equal(spawns.length, 0);
 });
 
 test('English and Chinese translation keys match with optional English singular forms', () => {

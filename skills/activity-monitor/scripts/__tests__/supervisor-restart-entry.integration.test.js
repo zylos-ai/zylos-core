@@ -57,24 +57,6 @@ async function scenario(t,mutant=''){
 test('actual supervisor commit-before-reply SIGKILL preserves snapshot, rejects changed content and finishes SQLite/tmux cleanup',{timeout:20000},async t=>{await scenario(t);});
 test('actual entry crash harness rejects memory-only acceptance',{timeout:15000},async t=>{await assert.rejects(scenario(t,'memory-only'),{code:'ERR_ASSERTION'});});
 
-async function configScenario(t,mutant=''){
- const f=readyTmuxTarget(t,{prefix:'config-entry-',mode:'multi'});f.tmux('new-session','-d','-s','fixture-keeper','sleep','120');
- const config={version:1,type:'ready_for_config_reclaim',requestId:'config-entry',sessionGroup:'origin',expectedRunId:'run-1'};
- const w=await launch(t,f,'config-commit');await w.command('release');
- const lost=request(f,config);assert.deepEqual(await w.next(),{barrier:'config-committed'});await w.kill();assert.equal(await lost,null);
- const reopened=await launch(t,f,mutant);await reopened.command('release');
- assert.equal((await request(f,config)).result,'already_accepted');
- let observed=await reopened.command('unchanged');assert.equal(observed.fences.length,1);assert.equal(observed.fences[0].reason,'model_config');
- assert.equal((await request(f,config)).result,'already_accepted');
- assert.equal((await request(f,{...config,expectedRunId:'different-run'})).reason,'run_changed');
- await reopened.command('clear-config');assert.equal((await request(f,config)).result,'unchanged');
- await reopened.command('changed');assert.equal((await request(f,{...config,requestId:'fresh'})).result,'accepted');
- observed=await reopened.command('tick');assert.equal(observed.present,false);assert.deepEqual(observed.fences,[]);
- assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-keeper'));await reopened.command('stop');
-}
-test('actual supervisor SQLite commit-before-reply crash preserves one config gate across retry and input changes',{timeout:20000},async t=>{await configScenario(t);});
-test('config gate deletion on restart is detected by actual retry harness',{timeout:15000},async t=>{await assert.rejects(configScenario(t,'drop-config-gate'),{code:'ERR_ASSERTION'});});
-
 // Covers startup auth recovery with a persisted fence and busy old target through private
 // SQLite/tmux. Run when startup auth checks or retirement changes; skip unrelated changes.
 test('real supervisor SIGKILL after auth fence retains health, drains old target and rechecks credentials before clearing',{timeout:20000},async t=>{
