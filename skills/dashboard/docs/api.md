@@ -417,11 +417,13 @@ Example: `GET /api/groups/origin/backlog`.
 - `{kind:"model",runtime:"claude"|"codex",model:string,effort:string}` sets a complete pair.
 - `{kind:"model",runtime:"claude"|"codex",reset:true}` restores the runtime's default model/effort.
 
-Returns `{ok:true,data?:object,...metadata}` on success; Core failures use the common error envelope and a non-2xx status. `RESULT_UNKNOWN` means the result could not be established; read the group detail before deciding whether any retry is needed.
+Include optional `confirmed:boolean` on any change. Only `true` passes `--yes` to Core. An effective engine or active model/effort change that could interrupt a running group requires confirmation before it is stored. Saving a stopped group does not start it.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`, `SESSION_GROUP_TOO_LONG`, `INVALID_ARGUMENT`, `MODEL_PAIR_REQUIRED`, `MODEL_CONFIG_INVALID` and other Core validation rejections; 404 `SESSION_GROUP_NOT_FOUND`; 500 `CONFIG_STORE_FAILED`; 502 `RESULT_UNKNOWN`; common write errors.
+Returns `{ok:true,data?:object,...metadata}` on success. If Core tried to restart the affected run after saving, `data.restart` has `status:"accepted"|"not_restarted"|"unknown"` and an optional `reason:string`. A refused or uncertain restart leaves the change saved. The restart is bound to the run Core observes before the write. Dashboard checks for a changed run it knows about while the confirmation is open. Core can observe a newer run between confirmation and the write. The caller uses this restart result directly. For a combined edit, Dashboard sends two writes and puts the effective change last. For an engine switch, it first stores the target engine's model. If the effective engine stays the same, it stores the engine preference before writing the active model. The writes commit separately. If Core reports a restart on the first write because the effective engine changed concurrently, Dashboard leaves the remaining edit unsaved.
 
-Example: `PUT /api/groups/telegram%3Aexample/config` with `{"kind":"runtime","value":"inherit"}`.
+**Errors:** 400 `SESSION_GROUP_INVALID`, `SESSION_GROUP_TOO_LONG`, `INVALID_ARGUMENT`, `MODEL_PAIR_REQUIRED`, `MODEL_CONFIG_INVALID` and other Core validation rejections; 404 `SESSION_GROUP_NOT_FOUND`; 409 `CONFIRMATION_REQUIRED`; 500 `CONFIG_STORE_FAILED`; 502 `RESULT_UNKNOWN`; 503 `RUNNING_STATE_UNKNOWN`; common write errors. `RESULT_UNKNOWN` means the result could not be established. Read the group detail before deciding whether any retry is needed.
+
+Example: `PUT /api/groups/telegram%3Aexample/config` with `{"kind":"runtime","value":"inherit","confirmed":true}`.
 
 ### PUT /api/groups/:id/name
 
