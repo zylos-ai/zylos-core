@@ -88,7 +88,8 @@ test('first-failure quota reads exact run/session and never the legacy latest sn
   assert.equal(read(),null); // An existing legacy quota file is not evidence for this group.
   await publishContextSample({...status,secret:'exclude'},{env,now:options.nowMs});
   assert.deepEqual(read().rate_limits,status.rate_limits);assert.equal(JSON.stringify(read()).includes('secret'),false);
-  assert.equal(read({runId:'run-b'}),null);assert.equal(read({identity:{...identity,session_id:'other'}}),null);
+  assert.equal(read({runId:'run-b'}),null,'a different run cannot provide health quota');
+  assert.equal(read({identity:{...identity,session_id:'other'}}),null,'a different native session cannot provide health quota');
   assert.equal(read({identity:{...identity,runtime:'codex'}}),null);
   assert.equal(read({nowMs:options.nowMs-1}),null);assert.equal(read({nowMs:options.nowMs+60001}),null);
   const file=path.join(runDir,'statusline.json');fs.writeFileSync(file,'{');assert.equal(read(),null);
