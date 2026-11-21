@@ -78,4 +78,4 @@ Send a brief transition notice through the original C4 reply route, then run
 may restart as soon as the switch is saved. The new runtime sends its own
 ready message. Keep the transition notice focused on the switch and readiness.
 For example, "Switching now. The new session will announce when it's ready."
-`zylos attach` is for terminal users.
+Do NOT mention `zylos attach` (that is for terminal users only).
