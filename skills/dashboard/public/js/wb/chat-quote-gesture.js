@@ -8,6 +8,8 @@ export const WHEEL_IDLE_MS = 160;
 // Controls, attachment cards, code and tables keep their own gestures.
 const NO_SWIPE = 'button, a, input, textarea, select, label, summary, [contenteditable], .chat-attachment, pre, table';
 const MESSAGE = 'article[data-message-id]';
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_SLOP = 8;
 
 /**
  * Swipe-to-quote on the message list. Touch and pen swipe at any width (vertical scrolling stays with the browser:
@@ -15,7 +17,7 @@ const MESSAGE = 'article[data-message-id]';
  * horizontal swipe arrives as wheel events: their deltaX is summed, and only the events that belong to the swipe
  * are prevented, so vertical scrolling and sideways-scrollable content are untouched.
  */
-export function createQuoteGesture({ list, document = list.ownerDocument, enabled = () => true, onQuote,
+export function createQuoteGesture({ list, document = list.ownerDocument, enabled = () => true, onQuote, canHold = () => false, onHold,
   setTimeout: delay = globalThis.setTimeout, clearTimeout: cancel = globalThis.clearTimeout, wheelIdleMs = () => WHEEL_IDLE_MS }) {
   const view = document.defaultView;
   const selecting = () => view?.getSelection?.()?.isCollapsed === false;
@@ -60,17 +62,37 @@ export function createQuoteGesture({ list, document = list.ownerDocument, enable
 
   // Touch and pen.
   let touch = null;
+  let heldArticle = null;
+  const cancelHold = () => {
+    if (touch?.timer != null) cancel(touch.timer);
+    if (touch) touch.timer = null;
+  };
   const pointerDown = event => {
-    if (event.pointerType === 'mouse' || !event.isPrimary) return;
+    if (event.pointerType === 'mouse') return;
+    if (!event.isPrimary) { cancelHold(); return; }
+    heldArticle = null;
     const article = messageOf(event.target);
-    if (!article || !list.contains(article) || !enabled() || blocked(event.target, article)) return;
-    touch = { article, id: event.pointerId, x: event.clientX, y: event.clientY, active: false, dx: 0 };
+    if (!article || !list.contains(article)) return;
+    const hold = event.pointerType === 'touch' && canHold(article, event.target);
+    const swipe = enabled() && !blocked(event.target, article);
+    if (!hold && !swipe) return;
+    touch = { article, id: event.pointerId, x: event.clientX, y: event.clientY, swipe, active: false, dx: 0, timer: null };
+    if (hold) {
+      touch.timer = delay(() => {
+        touch = null;
+        if (!article.isConnected || !canHold(article, event.target)) return;
+        heldArticle = article;
+        onHold(article, event.target);
+      }, LONG_PRESS_MS);
+    }
   };
   const pointerMove = event => {
     if (!touch || event.pointerId !== touch.id) return;
     const mx = event.clientX - touch.x, my = event.clientY - touch.y;
+    if (Math.hypot(mx, my) > LONG_PRESS_SLOP) cancelHold();
+    if (!touch.swipe) return;
     if (!touch.active) {
-      // Mostly vertical: a scroll, never a swipe. Clearly horizontal and leftwards: a swipe.
+      // Mostly vertical: a scroll. Clearly horizontal and leftwards: a swipe.
       if (Math.abs(my) > 10 && Math.abs(my) > Math.abs(mx)) { touch = null; return; }
       if (!(mx < -10 && Math.abs(mx) > Math.abs(my) * 1.5)) return;
       touch.active = true;
@@ -83,14 +105,26 @@ export function createQuoteGesture({ list, document = list.ownerDocument, enable
   const pointerUp = event => {
     if (!touch || event.pointerId !== touch.id) return;
     const { article, active, dx } = touch;
+    cancelHold();
     touch = null;
-    reset(article);
+    if (active) reset(article);
     if (active && dx <= -SWIPE_DISTANCE) quote(article);
   };
   const pointerCancel = event => {
     if (!touch || event.pointerId !== touch.id) return;
+    cancelHold();
     reset(touch.article);
     touch = null;
+  };
+  const onContextMenu = event => {
+    const article = messageOf(event.target);
+    if (article && canHold(article, event.target)) event.preventDefault();
+  };
+  const onClick = event => {
+    if (!heldArticle || messageOf(event.target) !== heldArticle || event.detail === 0) return;
+    heldArticle = null;
+    event.preventDefault();
+    event.stopPropagation();
   };
   // Touch gives the touched element implicit capture; moving it to the message ends that one, which is no cancel.
   const lostCapture = event => { if (touch && event.target === touch.article) pointerCancel(event); };
@@ -134,13 +168,19 @@ export function createQuoteGesture({ list, document = list.ownerDocument, enable
     ['pointercancel', pointerCancel], ['lostpointercapture', lostCapture]];
   for (const [type, listener] of listeners) list.addEventListener(type, listener);
   list.addEventListener('wheel', onWheel, { passive: false });
+  list.addEventListener('contextmenu', onContextMenu);
+  list.addEventListener('click', onClick, true);
   return {
     destroy() {
       dropWheel();
+      cancelHold();
+      heldArticle = null;
       if (touch) reset(touch.article);
       touch = null;
       for (const [type, listener] of listeners) list.removeEventListener(type, listener);
       list.removeEventListener('wheel', onWheel, { passive: false });
+      list.removeEventListener('contextmenu', onContextMenu);
+      list.removeEventListener('click', onClick, true);
     }
   };
 }

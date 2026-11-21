@@ -101,7 +101,10 @@ test('external conversation labels identify channels and internal peers', { skip
           assert.equal(await row(page, id).locator('.conversation-internal-spacer[aria-hidden="true"]').count(), 1);
           assert.equal(await row(page, id).locator('.conversation-avatar .wb-ico').count(), 0);
         }
-        assert.equal(await row(page, outgoing.id).locator('.chat-message-author').innerText(), '发出 → OpenMax', 'use the row channel, not the Telegram history channel');
+        const author = row(page, outgoing.id).locator('.chat-message-author');
+        assert.equal(await author.textContent(), '发出 → OpenMax', 'the desktop label uses the recorded channel');
+        assert.equal(await author.isVisible(), width === 1280, 'phone replies hide their author');
+        assert.equal(await row(page, outgoing.id).locator('.conversation-avatar').isVisible(), width === 1280);
         assert.match(await row(page, relayOut.outRow.id).locator('.conversation-internal-heading').innerText(), /发出 →\s*Peer Session/);
         assert.match(await row(page, relayIn.inRow.id).locator('.conversation-internal-heading').innerText(), /收到 ←\s*Peer Session/);
         for (const id of [relayOut.outRow.id, relayIn.inRow.id]) {
@@ -116,7 +119,16 @@ test('external conversation labels identify channels and internal peers', { skip
         }
         assert.deepEqual(layout.map(value => value.in), [true, false, false, true]);
         assert.ok(layout.every(value => value.top >= 0 && value.bottom <= 900), 'all four messages are on screen');
-        assert.ok(layout[0].right > layout[1].right && layout[3].right > layout[2].right, 'incoming bubbles align right');
+        const edges = await page.locator('#wb-chat .conversation-message-list').boundingBox();
+        assert.ok(layout[3].right > layout[2].right, 'incoming internal bubbles align right');
+        if (width === 1280) {
+          assert.ok(layout[0].right > layout[1].right, 'the desktop incoming bubble aligns right');
+        } else {
+          assert.ok(Math.abs(layout[1].left - edges.x) <= 1 && Math.abs(layout[1].right - edges.x - edges.width) <= 1,
+            'the phone reply spans the stream');
+          assert.ok(layout[0].left > layout[1].left && layout[0].right >= edges.x + edges.width - 35,
+            'the phone incoming bubble still aligns right');
+        }
         assert.equal(layout[2].background, layout[3].background, 'both internal directions retain the same beige bubble');
         assert.notEqual(layout[2].background, layout[0].background);
         assert.notEqual(layout[2].background, layout[1].background);

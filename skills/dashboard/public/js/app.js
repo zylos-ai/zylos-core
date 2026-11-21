@@ -1787,8 +1787,8 @@ function initTabs() {
     });
   });
   window.addEventListener('popstate', async () => {
-    // Back that only closed the settings drawer (or the drawer removing its own entry) leaves the page as it is.
-    if (settingsPage?.drawer.popstate()) return;
+    // Same-page overlay history is handled before routing between tabs and instances.
+    if (chatPage?.popstate() || settingsPage?.drawer.popstate()) return;
     const generation = ++state.navigationGeneration;
     const path = window.location.pathname;
     // In-page remote viewing only exists on the parent document; the

@@ -1593,6 +1593,190 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-page .conversation-message-meta .conversation-quote-button[data-quoted="true"]{position:static;width:auto;height:22px;margin:0 2px;padding:0 5px;clip:auto;overflow:visible}
   .conversation-page .conversation-message-meta .conversation-quote-button[data-quoted="true"] span{display:none}
 }
+/* Copy shares the desktop quote control's row and extends beyond its existing footprint. */
+.conversation-copy-action {
+  position:relative;
+  flex:0 0 0;
+  margin-inline-start:-8px
+}
+.chat-in .conversation-copy-action { margin-inline:0 -8px }
+.conversation-copy-button {
+  position:absolute;
+  top:50%;
+  inset-inline-start:6px;
+  transform:translateY(-50%);
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
+  height:22px;
+  padding:0 7px;
+  border:1px solid transparent;
+  border-radius:6px;
+  background:transparent;
+  color:var(--text-muted);
+  font:inherit;
+  font-size:11.5px;
+  white-space:nowrap;
+  cursor:pointer;
+  opacity:0;
+  pointer-events:none
+}
+.chat-in .conversation-copy-button { inset-inline:auto 6px }
+.conversation-copy-button .wb-ico { width:13px; height:13px }
+.conversation-message:is(:hover,:focus-within) .conversation-copy-button,
+.conversation-copy-button:is(:focus-visible,[data-copied="true"]) {
+  opacity:1;
+  pointer-events:auto
+}
+.conversation-copy-button:hover { background:var(--wb-hover); color:var(--text) }
+.conversation-copy-button:focus-visible,
+.conversation-copy-menu-panel button:focus-visible,
+.conversation-select-text-back:focus-visible {
+  outline:2px solid var(--wb-accent-line);
+  outline-offset:1px
+}
+.conversation-copy-feedback { font-size:11.5px; color:var(--text-muted) }
+.conversation-copy-feedback:empty,
+.conversation-copy-feedback-announcement {
+  position:absolute;
+  width:1px;
+  height:1px;
+  overflow:hidden;
+  clip-path:inset(50%)
+}
+.conversation-message-meta .conversation-copy-feedback:not(:empty):not(.conversation-copy-feedback-announcement) {
+  order:1;
+  margin-inline-start:58px
+}
+.chat-in .conversation-message-meta .conversation-copy-feedback:not(:empty):not(.conversation-copy-feedback-announcement) {
+  margin-inline:0 58px
+}
+.conversation-copy-menu[hidden], .conversation-select-text:not([open]) { display:none }
+
+@media (max-width:760px) {
+  .conversation-page :is(.chat-out:not(.conversation-internal), .conversation-activity-message) > .conversation-avatar,
+  .conversation-page :is(.chat-out:not(.conversation-internal), .conversation-activity-message) .chat-message-author,
+  .conversation-page .chat-in .conversation-copy-action { display:none }
+  .conversation-page :is(.chat-out:not(.conversation-internal), .conversation-activity-message) > .conversation-message-body {
+    width:100%;
+    max-width:100%
+  }
+  .conversation-page :is(.chat-out:not(.conversation-internal), .conversation-activity-message) .conversation-message-meta { order:1 }
+  .conversation-page .chat-out:not(.conversation-internal) .chat-message-content > .chat-message-text,
+  .conversation-page .chat-out:not(.conversation-internal) .chat-block-markdown {
+    padding:0;
+    border-radius:0;
+    background:transparent;
+    box-shadow:none
+  }
+  .conversation-page .chat-out:not(.conversation-internal) .chat-message-content { width:100% }
+  .conversation-page .chat-out :is(.chat-block-choice, .chat-block-confirmation, .chat-block-form_intent) {
+    row-gap:4px
+  }
+  .conversation-page .chat-out :is(.chat-block-choice, .chat-block-confirmation, .chat-block-form_intent) > .chat-question-description > .chat-block-title {
+    flex-basis:max-content
+  }
+  .conversation-page .chat-out :is(.chat-block-choice, .chat-block-confirmation, .chat-block-form_intent) > .chat-question > .chat-question-status {
+    max-width:100%;
+    height:auto;
+    min-height:24px;
+    white-space:normal
+  }
+  .conversation-page .chat-out .conversation-copy-action {
+    order:-1;
+    flex:0 0 auto;
+    margin:0
+  }
+  .conversation-page .chat-out .conversation-copy-button {
+    position:static;
+    transform:none;
+    height:36px;
+    min-width:36px;
+    justify-content:center;
+    border-radius:8px;
+    opacity:1;
+    pointer-events:auto
+  }
+  .conversation-page .chat-out .conversation-copy-button[data-copied="false"] > span:last-child { display:none }
+  .conversation-page .chat-out .conversation-copy-feedback:not(.conversation-copy-feedback-announcement) { margin:0 }
+  .conversation-page .chat-in:not(.conversation-internal) .chat-message-content {
+    -webkit-touch-callout:none;
+    -webkit-user-select:none;
+    user-select:none
+  }
+}
+.conversation-copy-menu {
+  position:fixed;
+  inset:0;
+  z-index:62
+}
+.conversation-copy-menu-panel {
+  position:absolute;
+  display:grid;
+  width:max-content;
+  max-width:calc(100% - 16px);
+  padding:4px;
+  border:1px solid var(--wb-line);
+  border-radius:12px;
+  background:var(--wb-panel);
+  box-shadow:var(--wb-shadow)
+}
+.conversation-copy-menu-panel button,
+.conversation-select-text-back {
+  display:flex;
+  align-items:center;
+  border:0;
+  border-radius:8px;
+  background:transparent;
+  color:var(--text);
+  cursor:pointer
+}
+.conversation-copy-menu-panel button {
+  gap:6px;
+  min-height:36px;
+  padding:0 12px;
+  font:inherit;
+  font-size:12.5px
+}
+.conversation-copy-menu-panel button:is(:hover,:active),
+.conversation-select-text-back:is(:hover,:active) { background:var(--wb-hover) }
+.conversation-select-text[open] {
+  position:fixed;
+  inset:0;
+  display:grid;
+  grid-template-rows:auto minmax(0,1fr);
+  box-sizing:border-box;
+  width:100%;
+  height:100%;
+  max-width:none;
+  max-height:none;
+  margin:0;
+  padding:0;
+  border:0;
+  background:var(--bg);
+  color:var(--text)
+}
+.conversation-select-text-header {
+  display:flex;
+  gap:8px;
+  align-items:center;
+  padding:env(safe-area-inset-top) max(8px, env(safe-area-inset-right)) 0 max(8px, env(safe-area-inset-left));
+  border-bottom:1px solid var(--wb-line);
+  background:var(--nav-bg)
+}
+.conversation-select-text-header h2 { margin:0; font-size:16px }
+.conversation-select-text-back { width:44px; height:44px; justify-content:center }
+.conversation-select-text-body {
+  overflow:auto;
+  overscroll-behavior:contain;
+  padding:16px max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  font-size:14px;
+  line-height:24px;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  -webkit-user-select:text;
+  user-select:text
+}
 .conversation-page .conversation-message{position:relative}
 .conversation-page.conversation-quotable .conversation-message{touch-action:pan-y}
 .conversation-page .conversation-message>:is(.conversation-avatar,.conversation-message-body){transition:transform .18s var(--c-ease)}
