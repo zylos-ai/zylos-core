@@ -245,6 +245,8 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] Chat history remains usable when optional group status has no reading, including newly created groups not yet in the snapshot. Existing historical imported groups use canonical detail to read their catalog-backed status. A same-conversation refresh preserves an unfinished readiness catchup and retries it immediately through the existing scheduler; it does not wait for the fallback polling interval or carry the hint into another conversation.
 
+[Current] The default engine selector keeps the existing engine and sign-in rows. The saved engine carries a Default tag beside its name while the pressed choice reflects the draft. A successful save moves the tag in place. A rejected save shows the Core error beside the selector and leaves the draft available to retry.
+
 [Current] After Origin model, effort or CLI settings are saved, a stopped or uncertain Origin, an unreadable detail response, or a missing run ID produces a successful next-start notice without submitting a restart. A running Origin retains the canonical run-bound restart. Default settings show configured model and effort rather than Origin's current observations. Pool displays contain only used and capacity values, without source or capacity-calculation explanations.
 
 [Current] Runtime, connection, login, and delivery use distinct business copy; preserve the distinctions above.

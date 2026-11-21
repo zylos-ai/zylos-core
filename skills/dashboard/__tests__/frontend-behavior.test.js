@@ -791,8 +791,6 @@ test('remote Actions/Settings are gated by access and routed through the viewed 
   // The action runner refuses to send for a read-only key (wb-action-runner tests); the app tells it when that is.
   assert.match(app, /readOnly: \(\) => Boolean\(remoteIsReadOnly\(\)\)/);
   assert.match(app, /const actionPath = agentPath\(request\.path\);/);
-  assert.match(app, /const healthPath = agentPath\('\/api\/health'\);/);
-  assert.match(app, /startCountdownAndReload\(15, statusEl, healthPath, summary\);/);
   const reset = app.slice(app.indexOf('function resetAgentData('), app.indexOf('function enterRemoteAgent('));
   assert.match(reset, /closeActionsModal\(\);/);
   assert.match(reset, /closeSettingsModal\(\);/);

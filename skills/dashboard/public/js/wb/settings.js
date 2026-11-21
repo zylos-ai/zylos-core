@@ -169,7 +169,9 @@ export function createSettingsLoader({ read, onLoad }) {
         const details = await Promise.allSettled(snapshot.rows.map(row => read('/api/groups/' + encodeURIComponent(row.sessionGroup) + '?include=')));
         if (details.some(result => result.status === 'rejected')) return { ...snapshot, overrides: null };
         const rows = details.map(result => result.value);
-        return { ...snapshot, rows, overrides: { runtime: rows.filter(row => row.runtimeOverridden === true), model: rows.filter(row => row.modelOverridden === true) } };
+        const overrides = rows.some(row => row.runtimeOverridden === null) ? null
+          : { runtime: rows.filter(row => row.runtimeOverridden === true), model: rows.filter(row => row.modelOverridden === true) };
+        return { ...snapshot, rows, overrides };
       }) : read(path)));
       if (current !== generation) return;
       const value = index => values[index].status === 'fulfilled' ? values[index].value : null;

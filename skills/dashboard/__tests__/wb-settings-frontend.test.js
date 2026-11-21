@@ -242,7 +242,10 @@ test('default engine keeps the sign-in gate and model and effort save together p
 test('changing the default engine is a draft until saved and the undo restores the current one', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
   const healthy = { ...snapshot(), instance: { runtimeHealth: { codex: { health: 'ok' }, claude: { health: 'ok' } } } };
-  const panel = renderDefaults(root, { confirm: async () => true, snapshot: healthy, page: { runtimeTotal: 1 }, document, t, read: async () => ({}), execute: async (action, body) => { calls.push({ action, body }); return true; } });
+  let rejection = "Fixture credentials were rejected";
+  const panel = renderDefaults(root, { confirm: async () => true, snapshot: healthy, page: { runtimeTotal: 1 }, document, t, read: async () => ({}), execute: async (action, body) => { calls.push({ action, body });
+    if (rejection) throw new Error(rejection);
+    return { ok: true, data: { baseline: 'codex' }, messageKey: 'result.runtime_saved', messageParams: { value: 'Codex' } }; } });
   const save = root.querySelector('#settings-save-runtime');
   assert.equal(save.hidden, true); assert.equal(root.querySelector('#settings-use-claude').getAttribute('aria-pressed'), 'true');
   await root.querySelector('#settings-use-codex').dispatch('click');
@@ -251,7 +254,17 @@ test('changing the default engine is a draft until saved and the undo restores t
   assert.equal(save.hidden, true, 'undo drops the draft'); assert.equal(root.querySelector('#settings-use-claude').getAttribute('aria-pressed'), 'true');
   assert.equal(root.querySelector('#settings-use-codex').getAttribute('aria-pressed'), 'false'); assert.equal(calls.length, 0);
   await root.querySelector('#settings-use-codex').dispatch('click');
-  await save.dispatch('click'); assert.deepEqual(calls, [{ action: 'switch-runtime', body: { runtime: 'codex' } }]);
+  await save.dispatch('click');
+  assert.match(root.textContent, /Fixture credentials were rejected/);
+  assert.equal(save.hidden, false, 'a failed save leaves the change as a draft');
+  rejection = null;
+  await save.dispatch('click');
+  assert.deepEqual(calls, Array.from({ length: 2 }, () => ({ action: 'switch-runtime', body: { runtime: 'codex' } })));
+  assert.match(root.textContent, /result.runtime_saved/);
+  assert.equal(save.hidden, true, 'successful save updates the baseline in the mounted card');
+  await root.querySelector('#settings-use-claude').dispatch('click');
+  await root.querySelector('#settings-undo-runtime').dispatch('click');
+  assert.equal(root.querySelector('#settings-use-codex').getAttribute('aria-pressed'), 'true');
   panel.destroy();
 });
 
@@ -573,13 +586,13 @@ test('failed pricing summary is unknown while a successful empty response is zer
   const empty = priceFixture(); const good = createPricingPanel({ ...empty, usage: { models: [], unmatched: [] }, write: async () => {}, t }); assert.match(empty.root.textContent, /\$0.0000/); good.destroy();
 });
 
-test('default followers include starting and exclude absent or unknown presence per runtime override', () => {
+test('default engine confirmation counts only running followers while model followers can include starts', () => {
   const data=snapshot(); data.rows.push(
     {sessionGroup:'starting',presence:'starting',target:{runtime:'claude'}},
     {sessionGroup:'gone',presence:'not_running',target:{runtime:'claude'}},
     {sessionGroup:'unknown',presence:'unknown',target:{runtime:'claude'}});
   data.overrides.model.push({sessionGroup:'starting',runtime:'codex'});
-  assert.deepEqual(defaultGroups(data).followers.map(r=>r.sessionGroup),['origin','b','c','starting']);
+  assert.deepEqual(defaultGroups(data).followers.map(r=>r.sessionGroup),['origin','b','c']);
   assert.deepEqual(modelFollowers(data,'claude').map(r=>r.sessionGroup),['origin','c','starting']);
 });
 test('clearing pending override debounce cancels the request after 300 milliseconds', context => {

@@ -307,3 +307,88 @@ test('the settings page keeps its sections in order, offers the right upgrades a
     });
   }, { timeoutMs: 140_000 });
 });
+
+// Runs the real settings card and action sender against the browser fixture.
+// Run for default engine save or feedback changes. The fixture owns all HTTP
+// responses; no CLI, runtime, PM2 or tmux is used.
+test('setting the default engine updates the open card and shows the Core rejection reason', {
+  skip: !chatEnabled(), timeout: 90_000,
+}, async t => {
+  const sandbox = createChatSandbox(t);
+  await sandbox.runCase(async () => {
+    console.log('Default engine browser isolation:', JSON.stringify(sandbox.assertIsolation()));
+    const { base } = await startPage(sandbox);
+    const { chromium } = await import(pathToFileURL(process.env.ZYLOS_CHAT_BROWSER_MODULE));
+    const browser = await chromium.launch({ executablePath: process.env.ZYLOS_CHAT_BROWSER_BIN, headless: true,
+      env: { ...sandbox.env, TZ: 'Asia/Singapore' },
+      args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
+    sandbox.addCleanup(() => browser.close());
+    const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
+    const switchPath = '/api/instance/actions/switch-runtime';
+    for (const width of [1280, 390]) for (const theme of ['light', 'dark']) {
+      const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 },
+        timezoneId: 'Asia/Singapore', reducedMotion: 'reduce' });
+      try {
+        await context.addInitScript(theme => {
+          localStorage.setItem('zylos-dashboard-locale', 'zh');
+          localStorage.setItem('zylos-dashboard-theme', theme);
+        }, theme);
+        const writes = [];
+        await context.route('**/*', async route => {
+          const request = route.request(), url = new URL(request.url());
+          if (url.origin !== base) return route.abort();
+          if (url.pathname === '/_assets/vendor/chart.umd.js') return route.fulfill({ path: process.env.ZYLOS_CHAT_CHART_ASSET, contentType: 'text/javascript' });
+          if (url.pathname === switchPath && request.method() === 'POST') {
+            writes.push(request.postDataJSON());
+            return writes.length === 1
+              ? route.fulfill({ status: 403, json: { ok: false, error: { code: 'AUTH_FAILED', message: '测试凭据已被拒绝' } } })
+              : route.fulfill({ json: { ok: true, data: { result: 'saved', baseline: 'codex' }, messageKey: 'result.runtime_saved', messageParams: { value: 'Codex' } } });
+          }
+          return route.continue();
+        });
+        const page = await context.newPage();
+        page.setDefaultTimeout(8000);
+        await page.goto(base + '/');
+        await openDashboardTab(page, 'settings');
+        if (width === 390) await page.locator('.wb-set-drawer-btn').click();
+        await page.locator('[data-settings-section="defaults"]').click();
+        let navigations = 0;
+        page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigations++; });
+        const card = page.locator('#settings-current-runtime');
+        const save = card.locator('#settings-save-runtime');
+        const select = engine => card.locator('#settings-use-' + engine);
+        const submit = async () => {
+          await save.click();
+          await page.locator('.wb-modal[role="alertdialog"] .wb-modal-acts button').last().click();
+        };
+        await select('claude').waitFor();
+        assert.equal(await select('claude').getAttribute('aria-pressed'), 'true');
+        assert.equal(await select('claude').locator('.wb-tag').textContent(), '默认');
+        await select('codex').click();
+        await submit();
+        await card.getByText('测试凭据已被拒绝').waitFor();
+        assert.equal(await save.isVisible(), true);
+        assert.equal(await select('claude').locator('.wb-tag').textContent(), '默认');
+        const shot = async suffix => {
+          if (!evidence) return;
+          await page.evaluate(() => document.activeElement?.blur());
+          await page.mouse.move(0, 0);
+          await card.screenshot({ path: path.join(evidence, `default-engine-${width}-${theme}-${suffix}.png`) });
+        };
+        await shot('rejected');
+        await submit();
+        await card.getByText('已将默认 AI 引擎设为 Codex。').waitFor();
+        await save.waitFor({ state: 'hidden' });
+        assert.equal(await select('codex').getAttribute('aria-pressed'), 'true');
+        assert.equal(await select('codex').locator('.wb-tag').textContent(), '默认');
+        assert.equal(await select('claude').locator('.wb-tag').count(), 0);
+        assert.equal(navigations, 0);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
+        assert.deepEqual(writes, [{ runtime: 'codex' }, { runtime: 'codex' }]);
+        await shot('saved');
+      } finally {
+        await context.close();
+      }
+    }
+  });
+});
