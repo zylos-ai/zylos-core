@@ -852,10 +852,10 @@ export function mountConversationPage({
     view.history.pushState({ ...view.history.state, conversationSelectText: selectionEntry.id }, '', selectionEntry.url);
     selectTextBack.setAttribute('aria-label', t('chat.page.backToConversation'));
     text(selectTextTitle, t('chat.copy.select'));
-    const rendered = record.resource.cloneNode(true);
+    const messageText = record.resource.querySelectorAll('.chat-message-text');
+    selectTextBody.replaceChildren(...Array.from(messageText, part => part.cloneNode(true)));
     // Keep links readable in the selection view without navigating away.
-    for (const link of rendered.querySelectorAll('a[href]')) link.removeAttribute('href');
-    selectTextBody.replaceChildren(rendered);
+    for (const link of selectTextBody.querySelectorAll('a[href]')) link.removeAttribute('href');
     selectTextBody.scrollTop = 0;
     selectTextDialog.showModal();
   });

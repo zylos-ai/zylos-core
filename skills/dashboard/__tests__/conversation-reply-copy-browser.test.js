@@ -8,6 +8,10 @@ import { CONTENT_PREFIX } from '../../comm-bridge/scripts/c4-content-schema.js';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
 import { startPage } from './helpers/mobile-conversation-browser.js';
 
+// Real Dashboard entry and styles with a private loopback history fixture. Run for reply layout,
+// copy, and selection gestures or navigation. Backend-only changes can skip. The opt-in sandbox
+// verifies private HOME, ZYLOS_DIR, PM2_HOME, TMPDIR, socket and DB targets and owns browser cleanup.
+
 const wideTable = [
   '| Stage | Primary instances | Owner | Observation time | Rollback command |',
   '| --- | --- | --- | --- | --- |',
@@ -53,7 +57,7 @@ async function run(t, check, messageRows = rows) {
       const page = await context.newPage();
       page.setDefaultTimeout(8000);
       const errors = [];
-      page.on('pageerror', error => errors.push(error.message));
+      page.on('pageerror', error => { if (!errors.length) errors.push(error.message); });
       await page.goto(fixture.base + '/chat');
       await page.locator(`[data-conversation-id="${group}"]`).click();
       await page.locator(rowSelector(reply.id)).waitFor();
@@ -203,6 +207,7 @@ test('copy writes the readable text and reports success or a Clipboard API failu
 });
 
 test('holding a sent message copies or opens native text selection and Back restores the same history position', options, async t => {
+  const withAttachment = { ...sent, attachments: [{ id: 'owners', name: 'rollout-owners.pdf', kind: 'file', available: true, size: 84 }] };
   await run(t, async open => {
     for (const locale of output ? ['en', 'zh'] : ['en']) for (const theme of output ? ['light', 'dark'] : ['light']) {
       const { page, context, errors } = await open({ locale, theme });
@@ -251,7 +256,7 @@ test('holding a sent message copies or opens native text selection and Back rest
       await menu.waitFor({ state: 'hidden' });
       await hold(sentText);
       await copy.tap();
-      assert.equal(await page.evaluate(() => navigator.clipboard.readText()), await expectedText(page, sent));
+      assert.equal(await page.evaluate(() => navigator.clipboard.readText()), await expectedText(page, withAttachment));
       const feedback = page.locator(rowSelector(sent.id) + ' .conversation-copy-bubble-feedback');
       assert.equal(await feedback.innerText(), locale === 'en' ? 'Copied' : '已复制');
       assert.ok(await feedback.evaluate(el => el.getBoundingClientRect().top >= el.previousElementSibling.getBoundingClientRect().bottom));
@@ -264,9 +269,12 @@ test('holding a sent message copies or opens native text selection and Back rest
       await dialog.waitFor();
       assert.deepEqual(await dialog.boundingBox(), { x: 0, y: 0, width: 390, height: 844 });
       const text = dialog.locator('.conversation-select-text-body');
-      const renderedMessage = page.locator(rowSelector(sent.id) + ' .chat-message-content');
-      const dialogMessage = text.locator('.chat-message-content');
-      assert.equal(await dialogMessage.innerText(), await renderedMessage.innerText());
+      const dialogMessage = text.locator('.chat-message-text');
+      const original = page.locator(rowSelector(sent.id));
+      assert.equal(await original.locator('.conversation-quote-block').count(), 1);
+      assert.equal(await original.locator('.chat-attachment .chat-attachment-actions').count(), 1);
+      assert.equal(await text.locator('.conversation-quote-block, .chat-attachment').count(), 0);
+      assert.equal(await dialogMessage.innerText(), await sentText.innerText());
       assert.doesNotMatch(await dialogMessage.innerText(), /\*\*rollout\*\*/);
       const emphasis = dialogMessage.locator('strong');
       assert.equal(await emphasis.innerText(), 'rollout');
@@ -293,5 +301,5 @@ test('holding a sent message copies or opens native text selection and Back rest
       assert.deepEqual(errors, []);
       await context.close();
     }
-  });
+  }, rows.map(item => item === sent ? withAttachment : item));
 });
