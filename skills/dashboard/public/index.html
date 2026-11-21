@@ -3,7 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="robots" content="noindex, nofollow">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f7faf9" media="(prefers-color-scheme: light)" data-theme="light">
+<meta name="theme-color" content="#11171d" media="(prefers-color-scheme: dark)" data-theme="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Zylos">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="__BASE_PATH__/manifest.json" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="__ASSET_ROOT__/icons/zylos-180.png">
+<link rel="icon" href="__ASSET_ROOT__/icons/favicon.ico">
 <title>Zylos Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -53,7 +61,13 @@
         <p><span data-i18n="wb.fleet.subtitle">Every machine you can view; the ones with a problem come first.</span> <time class="freshness" id="fleet-updated">--</time></p>
       </div>
       <span class="wb-grow"></span>
-      <button class="wb-btn" id="fleet-manage-open" type="button"><i class="wb-ico wb-ico-gear wb-ico-xs" aria-hidden="true"></i><span data-i18n="wb.fleet.manage">Manage</span></button>
+      <div class="wb-f-page-actions">
+        <div class="wb-seg" id="fleet-layout" role="group" aria-label="Machine view">
+          <button type="button" data-fleet-layout="cards" aria-pressed="true"><i class="wb-ico wb-ico-fleet wb-ico-xs" aria-hidden="true"></i><span data-i18n="wb.fleet.cards">Cards</span></button>
+          <button type="button" data-fleet-layout="list" aria-pressed="false"><i class="wb-ico wb-ico-menu wb-ico-xs" aria-hidden="true"></i><span data-i18n="wb.fleet.list">List</span></button>
+        </div>
+        <button class="wb-btn" id="fleet-manage-open" type="button"><i class="wb-ico wb-ico-gear wb-ico-xs" aria-hidden="true"></i><span data-i18n="wb.fleet.manage">Manage</span></button>
+      </div>
     </div>
     <div id="agent-fleet-root"></div>
   </div>
@@ -189,7 +203,6 @@
 <section class="tab-panel" id="tab-settings" hidden>
 <label class="wb-detail wb-switch-l"><input id="wb-detail-toggle" class="wb-switch" type="checkbox" role="switch"><span data-i18n="wb.settings.pref.show">Show</span></label>
     <button class="fleet-sound-toggle wb-switch-btn" id="fleet-sound-toggle" type="button" role="switch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.73 21a2 2 0 0 1-3.46 0"/><path d="M18.63 13A17.89 17.89 0 0 1 18 8"/><path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.33-5"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-    <span class="connection-pill" id="connection-status" data-state="connecting" data-i18n="status.connecting">Connecting</span>
     <button class="wb-btn logout-btn" id="logout-btn" type="button"><i class="wb-ico wb-ico-power wb-ico-xs" aria-hidden="true"></i><span data-i18n="wb.settings.logout">Log out</span></button>
 </section>
 </main>

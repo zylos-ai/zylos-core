@@ -96,7 +96,6 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     },
     runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget,
     observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide,
-    renderConnection() {}, isSseOpen: () => false,
     t: (key) => key,
     clearTimeout(id) { if (timeouts[id - 1]) timeouts[id - 1].cancelled = true; },
     clearInterval() {},
@@ -161,6 +160,8 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     prevSubagentIds: new Set(),
     closeActionsModal() {},
     closeSettingsModal() {},
+    // Disabling and uninstalling ask first; these cases answer yes (the question itself is checked in the browser).
+    confirmSetting: async () => true,
     renderAll() {},
     remotePrefix: () => context.state.remoteAgent ? `/fleet/${context.state.remoteAgent}` : '',
     api: (value) => value
@@ -213,27 +214,6 @@ test('SSE state updates preserve the agent identity color between full state rea
   // for runtime_info, so a live update does not drop the identity colour.
   assert.match(app, /const prevAgent = state\.dashboardState\?\.agent;/);
   assert.match(app, /if \(!data\.agent && prevAgent\) state\.dashboardState\.agent = prevAgent;/);
-});
-
-test('Codex runtime renders CLI update badge in settings', () => {
-  const version = fs.readFileSync(new URL('../public/js/wb/settings-version.js', import.meta.url), 'utf8');
-  assert.match(version, /ri\[runtime\]\?\.installed/);
-  assert.match(version, /ri\[runtime\]\?\.update/);
-  assert.match(version, /badge\.classList\.toggle\('action-ver-dot', !!update\)/);
-});
-
-test('zylos-core upgrade stays an agent hint in settings', () => {
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
-  const version = fs.readFileSync(new URL('../public/js/wb/settings-version.js', import.meta.url), 'utf8');
-  const en = JSON.parse(fs.readFileSync(new URL('../public/i18n/en.json', import.meta.url), 'utf8'));
-  const zh = JSON.parse(fs.readFileSync(new URL('../public/i18n/zh.json', import.meta.url), 'utf8'));
-  assert.doesNotMatch(app, /data-action="upgrade-zylos"/);
-  assert.doesNotMatch(app, /action-zylos-ver/);
-  assert.match(app, /data-action="upgrade-cc"/);
-  assert.match(version, /hint\.title = t\('info.zylos_update_hint'/);
-  assert.match(version, /onHint\(hint\)/);
-  assert.match(en['info.zylos_update_hint'], /ask your agent: "Please upgrade your zylos-core to the latest version\."/);
-  assert.match(zh['info.zylos_update_hint'], /请升级你的 zylos-core 到最新版本/);
 });
 
 function fleetFixture() {
@@ -331,19 +311,26 @@ function fleetFixture() {
   };
 }
 
+test('Fleet returns to the last available page when machines are removed', () => {
+  const fleet = { agents: Array.from({ length: 8 }, (_, i) => ({ name: `machine-${i}`, state: 'IDLE' })) };
+  const view = buildAgentFleetView(fleet, { page: 2 });
+  assert.equal(view.page, 1);
+  assert.deepEqual(view.pageTiles.map(tile => tile.name), fleet.agents.map(agent => agent.name));
+});
+
 test('Machines page renders one card per machine with state, quota, cost and host, problems first', () => {
   const view = buildAgentFleetView(fleetFixture(), { basePath: '/dash' });
   const html = renderAgentFleetHtml(fleetFixture(), { basePath: '/dash' });
   assert.equal(view.tiles.length, 4);
   assert.deepEqual([view.counts.busy, view.counts.idle, view.counts.stuck, view.counts.offline], [1, 1, 1, 1]);
-  // Unreachable machines come before reachable ones (no self in this fixture); by name alone zz-lab would be last.
-  assert.deepEqual(view.tiles.map(tile => tile.name), ['zz-lab', 'zylos01', 'zylos02', 'zylos0t']);
+  // Unreachable and stuck machines come before healthy machines.
+  assert.deepEqual(view.tiles.map(tile => tile.name), ['zz-lab', 'zylos0t', 'zylos01', 'zylos02']);
   assert.match(html, /class="wb-f-card bad" data-agent="zz-lab"/);
   assert.match(html, /Cannot connect/);
   assert.match(html, /class="wb-tech agent-fleet-reason">Unreachable</);
   assert.match(html, /class="wb-pill wb-busy" data-mood="busy"/);
   assert.match(html, /class="wb-pill wb-waiting" data-mood="stuck"/);
-  assert.match(html, /class="wb-btn agent-open" href="\/dash\/fleet\/zylos01\/" data-agent="zylos01"/);
+  assert.match(html, /class="agent-open" href="\/dash\/fleet\/zylos01\/" data-agent="zylos01"/);
   assert.doesNotMatch(html, /GPT-5 \/ medium|Opus 4.6 \/ high|Sonnet \/ low/, 'Fleet does not show Origin model or effort');
   assert.match(html, /Today \/ 7 days/);
   assert.match(html, /CPU · Memory · Disk/);
@@ -429,7 +416,7 @@ test('a sentence that ends with a full stop is not followed by a separator', () 
   assert.equal(afterSentence('Unreachable', ''), 'Unreachable');
 });
 
-test('problem cards say why in plain words, keep the precise reason for technical view and offer settings and refresh', () => {
+test('problem cards say why in plain words, keep the precise reason for technical view and retain refresh', () => {
   const html = renderAgentFleetHtml({ agents: [
     { name: 'k', state: 'UNKNOWN', health_reason: 'auth_failed', pulse_rate: 0, base_url: 'https://k.example' },
     { name: 'v', state: 'UNKNOWN', health_reason: 'version_unsupported', pulse_rate: 0 },
@@ -437,16 +424,16 @@ test('problem cards say why in plain words, keep the precise reason for technica
   assert.match(html, /<span class="wb-plain">Key no longer valid<\/span>/);
   assert.match(html, /<span class="wb-plain">Version too old<\/span>/);
   assert.match(html, /wb-tech wb-mono"> · auth_failed/);
-  assert.equal((html.match(/data-fleet-action="settings"/g) || []).length, 2);
+  assert.equal((html.match(/data-fleet-action="settings"/g) || []).length, 0);
   assert.equal((html.match(/data-fleet-action="refresh"/g) || []).length, 2);
 });
 
-test('Agent Fleet preserves self first and stable name color mapping when response order changes', () => {
+test('Agent Fleet keeps self first among healthy machines and preserves color mapping when response order changes', () => {
   const fixture = fleetFixture();
-  fixture.agents[1].self = true;
+  fixture.agents[0].self = true;
   const original = buildAgentFleetView(fixture);
   const shuffledFixture = fleetFixture();
-  shuffledFixture.agents[1].self = true;
+  shuffledFixture.agents[0].self = true;
   shuffledFixture.agents = [...shuffledFixture.agents].reverse();
   const shuffled = buildAgentFleetView(shuffledFixture);
 
@@ -457,16 +444,14 @@ test('Agent Fleet preserves self first and stable name color mapping when respon
   assert.deepEqual(shuffledColors, originalColors);
   assert.deepEqual(shuffledHues, originalHues);
   assert.ok(Object.values(originalHues).some((hue) => hue !== 0));
-  assert.equal(shuffled.tiles[0].name, 'zylos01');
-  assert.equal(shuffled.tiles[0].isSelf, true);
+  assert.equal(shuffled.tiles[2].name, 'zylos02');
+  assert.equal(shuffled.tiles[2].isSelf, true);
 });
 
 test('Agent Fleet uses SSE fleet events with one-shot fetch fallback', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
   assert.match(app, /function clearFleetFallback\(\)/);
   assert.match(app, /function shouldReceiveFleetEvents\(\)/);
-  assert.match(app, /function isSseOpen\(\)/);
-  assert.match(app, /!!window\.EventSource && state\.eventSource\?\.readyState === window\.EventSource\.OPEN/);
   assert.match(app, /state\.fleetViewActive && document\.visibilityState !== 'hidden'/);
   assert.match(app, /document\.addEventListener\('visibilitychange', \(\) => \{/);
   // #247: returning to the foreground refetches immediately instead of
@@ -539,20 +524,19 @@ test('this machine opens its own workbench and others open through the fleet pat
   assert.equal(byName.local.href, '/dash/');
   assert.equal(byName.remote.href, '/dash/fleet/remote/');
   const html = renderAgentFleetHtml(selfFleet, { basePath: '/dash' });
-  assert.match(html, /class="wb-btn agent-open" href="\/dash\/" data-agent="local" data-self="true"/);
-  assert.match(html, /class="wb-btn agent-open" href="\/dash\/fleet\/remote\/" data-agent="remote">/);
-  // Clicking "Open": this machine opens in place, another machine through the fleet path; problem-card buttons
-  // open settings or re-read the fleet. Nothing else on the page reacts.
+  assert.match(html, /class="agent-open" href="\/dash\/" data-agent="local" data-self="true"/);
+  assert.match(html, /class="agent-open" href="\/dash\/fleet\/remote\/" data-agent="remote" title="remote">remote<\/a>/);
+  // Machine links open in place; offline card refresh re-reads the fleet.
   const document = documentFixture(), calls = [];
   const button = (className, dataset) => { const el = node(document, 'a'); el.className = className; Object.assign(el.dataset, dataset); const label = node(document, 'span'); el.append(label); return { el, label }; };
-  const handlers = { onSelf: () => calls.push('self'), onRemote: name => calls.push('remote:' + name), onSettings: () => calls.push('settings'), onRefresh: () => calls.push('refresh') };
+  const handlers = { onSelf: () => calls.push('self'), onRemote: name => calls.push('remote:' + name), onRefresh: () => calls.push('refresh') };
   const click = target => { let prevented = false; handleFleetClick({ target, preventDefault: () => { prevented = true; } }, handlers); return prevented; };
-  assert.equal(click(button('wb-btn agent-open', { agent: 'local', self: 'true' }).label), true, 'the link does not navigate away');
-  assert.equal(click(button('wb-btn agent-open', { agent: 'remote' }).el), true);
+  assert.equal(click(button('agent-open', { agent: 'local', self: 'true' }).label), true, 'the link does not navigate away');
+  assert.equal(click(button('agent-open', { agent: 'remote' }).el), true);
   click(button('wb-btn', { fleetAction: 'settings' }).label);
   click(button('wb-btn', { fleetAction: 'refresh' }).el);
   assert.equal(click(node(document, 'div')), false);
-  assert.deepEqual(calls, ['self', 'remote:remote', 'settings', 'refresh']);
+  assert.deepEqual(calls, ['self', 'remote:remote', 'refresh']);
 });
 
 test('the header machines icon is the one way back to the machines page, or opens machine settings without one', () => {
@@ -791,14 +775,6 @@ test('popstate routes /fleet/<name> paths into remote view only on the parent do
   assert.match(app, /await enterRemoteAgent\(decodeURIComponent\(m\[1\]\), \{ push: false \}\);/);
   assert.match(app, /else if \(state\.remoteAgent\) \{\s*\n\s*await exitRemoteAgent\(\{ push: false \}\);/);
   assert.match(app, /const path = name === 'overview' \? `\$\{prefix\}\/` : `\$\{prefix\}\/\$\{name === 'trends' \? 'usage' : name\}`;/);
-});
-
-test('machine cards enter remote agents in-page instead of full navigation', () => {
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  const fleetMode = app.indexOf('function initFleetMode(');
-  const block = app.slice(fleetMode, app.indexOf('function openFleetFromIcon(', fleetMode));
-  // What a click does is tested on handleFleetClick itself; here only that the app hands it the in-page entry.
-  assert.match(block, /addEventListener\('click', e => handleFleetClick\(e, \{[\s\S]*onSelf: showAgentDetail, onRemote: enterRemoteAgent,/);
 });
 
 test('remote Actions/Settings are gated by access and routed through the viewed agent', () => {
@@ -1279,15 +1255,12 @@ test('Observer lifecycle status refresh cannot replace a newer same-target statu
   assert.equal(observerPageShown(h), false);
 });
 
-test('Observer popstate reports route failures without an unhandled rejection or stray stream', async () => {
+test('Observer popstate route failures cause no unhandled rejection or stray stream', async () => {
   const h = observerUiHarness();
-  const states = [];
-  h.context.renderConnection = (state) => states.push(state);
   h.context.renderAll = () => { throw new Error('render failed'); };
   h.context.initTabs();
   h.context.window.location.pathname = '/fleet/alpha/observer';
   await assert.doesNotReject(h.listeners.popstate());
-  assert.deepEqual(states, ['degraded']);
   assert.equal(h.sockets.length, 0);
 });
 

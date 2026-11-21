@@ -365,7 +365,7 @@ export async function runConversationGenuiVisual(t, sandbox) {
   const logoutStarted = new Promise(resolve=>{resolveLogout=resolve;});
   await context.route('**/logout', route=>{logoutRoute=route;resolveLogout();});
   await page.locator('#wb-settings-btn').click();
-  await page.locator('[data-settings-section="ui"]').click();
+  await page.locator('[data-settings-section="account"]').click();
   await page.locator('#logout-btn').click(); await logoutStarted;
   assert.equal(await page.evaluate(()=>Object.keys(sessionStorage).filter(key=>key.startsWith('zylos-dashboard-form-draft:')).length),0,'actual logout handler clears stored drafts before failed transport');
   assert.ok(await root.locator('[data-field-key] input,[data-field-key] select,[data-field-key] textarea').evaluateAll(nodes=>nodes.every(control=>control.value==='')),'actual logout handler clears mounted hidden values before failed transport');

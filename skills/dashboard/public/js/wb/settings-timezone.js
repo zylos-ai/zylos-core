@@ -101,7 +101,7 @@ export function mountTimezoneSettings(root, { document = root.ownerDocument, t =
     const tz = input.value.trim(), token = generation, machine = owner;
     busy = true; render();
     try {
-      if (!(await confirm(confirmation(t('wb.settings.timezone.saveConfirm', { tz })), { danger: false }))) return;
+      if (!(await confirm(confirmation(t('wb.settings.timezone.saveConfirm', { tz })), { title: t('wb.settings.confirm.timezone'), danger: false }))) return;
       if (!current(token, machine) || !editable()) return;
       const value = await write({ tz });
       if (!current(token, machine)) return;
@@ -121,7 +121,7 @@ export function mountTimezoneSettings(root, { document = root.ownerDocument, t =
     busy = true; render();
     try {
       const body = t('wb.settings.timezone.restartConfirm', { tz, services: confirmedServices.map(serviceName).join('\n') });
-      if (!(await confirm(confirmation(body)))) return;
+      if (!(await confirm(confirmation(body), { title: t('wb.settings.confirm.timezoneRestart'), danger: false }))) return;
       if (!current(token, machine) || !editable() || input.value.trim() !== tz) return;
       const value = await restart({ tz, confirm: true, services: confirmedServices });
       if (!current(token, machine)) return;

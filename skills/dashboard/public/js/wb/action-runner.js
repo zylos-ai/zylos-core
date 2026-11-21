@@ -4,11 +4,12 @@ export const CONFIRM_ACTIONS = new Set(['switch-mode', 'restart-session', 'switc
 /**
  * The page's action runner.
  * - `exec(action, body)` asks first for the actions above, naming the remote machine when one is being viewed,
- *   and sends nothing when the answer is no.
+ *   and sends nothing when the answer is no. `confirmOptions(action, body)` gives that question's title and
+ *   whether its confirm button is the destructive one.
  * - `runConfirmed(action, body)` is for changes a card has already confirmed itself; it never asks.
  * Neither sends anything while the viewed machine was reached with a read-only key (or the page has not said).
  */
-export function createActionRunner({ t, send, confirm, confirmText, readOnly = () => true, remoteTarget = () => null, prepare = (_action, body) => body }) {
+export function createActionRunner({ t, send, confirm, confirmText, confirmOptions = () => undefined, readOnly = () => true, remoteTarget = () => null, prepare = (_action, body) => body }) {
   async function runConfirmed(action, body) {
     if (readOnly()) return false;
     return send(action, body);
@@ -18,7 +19,7 @@ export function createActionRunner({ t, send, confirm, confirmText, readOnly = (
     body = prepare(action, body);
     if (CONFIRM_ACTIONS.has(action)) {
       const text = confirmText(action, body), target = remoteTarget();
-      if (!(await confirm(target ? `${text}\n${t('confirm.remote_target', { agent: target })}` : text))) return false;
+      if (!(await confirm(target ? `${text}\n${t('confirm.remote_target', { agent: target })}` : text, confirmOptions(action, body)))) return false;
     }
     return runConfirmed(action, body);
   }

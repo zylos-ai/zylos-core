@@ -4,14 +4,20 @@ import { parseSessionGroup } from '../../../comm-bridge/scripts/c4-session-group
 import { notifySessionHostAllowlist } from '../../../comm-bridge/scripts/c4-host-notice.js';
 
 export const SESSION_HOST_PATH = '/api/session-hosts';
+export const SESSION_HOST_CHANNELS_PATH = `${SESSION_HOST_PATH}/channels`;
 
 export function createSessionHostRoutes({ auth, loadStore = () => import('../../../comm-bridge/scripts/c4-db.js'),
   notifyAllowlist = notifySessionHostAllowlist }) {
   return async (req, res, url) => {
-    if (url.pathname !== SESSION_HOST_PATH) return false;
+    const channelsRoute = url.pathname === SESSION_HOST_CHANNELS_PATH;
+    if (url.pathname !== SESSION_HOST_PATH && !channelsRoute) return false;
     const context = auth.resolveAuthContext(req);
     if (context?.kind !== 'cookie' || context.scope !== 'admin') {
       sendJson(res, 403, { error: 'local_cookie_required' });
+      return true;
+    }
+    if (channelsRoute && req.method !== 'GET') {
+      sendJson(res, 404, { error: 'not_found' });
       return true;
     }
     if (req.method === 'POST' && !isSameOriginRequest(req)) {
@@ -25,7 +31,8 @@ export function createSessionHostRoutes({ auth, loadStore = () => import('../../
     try {
       const store = await loadStore();
       if (req.method === 'GET') {
-        sendJson(res, 200, store.listSessionHosts());
+        const result = channelsRoute ? { channels: store.listSessionHostChannels() } : store.listSessionHosts();
+        sendJson(res, 200, result);
         return true;
       }
       const body = await readJsonBody(req, 4096);
