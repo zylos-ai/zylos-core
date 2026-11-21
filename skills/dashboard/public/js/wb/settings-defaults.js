@@ -9,7 +9,7 @@ export function defaultGroups(snapshot, page) {
   const rows = snapshot?.rows ?? [];
   const overrides = snapshot?.overrides;
   const keys = new Set(overrides?.runtime?.map(row => row.sessionGroup) ?? []);
-  const followers = overrides == null ? null : rows.filter(row => running(row) && !keys.has(row.sessionGroup));
+  const followers = overrides == null ? null : rows.filter(row => row.presence === 'running' && !keys.has(row.sessionGroup));
   const flat = overrides == null ? [] : rows.filter(row => row.sessionGroup != null && keys.has(row.sessionGroup));
   const total = Number.isInteger(page?.runtimeTotal) ? page.runtimeTotal : null;
   return { followers, flat, total, baseline: snapshot?.baselineRuntime ?? null,
@@ -144,35 +144,49 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   // ─── Default engine ───
   const engine = settingsCard(document, { icon: 'bot', title: t('wb.settings.currentRuntime'), sub: technical() ? 'zylos runtime' : '' });
   engine.card.id = 'settings-current-runtime';
-  let draftRuntime = groups.baseline;
+  let draftRuntime = groups.baseline, savingRuntime = false;
   const line = element(document, 'div', undefined, 'wb-set-inline');
   // Each engine's choice carries its own sign-in state, so the state stays under the engine it describes on any width.
   const seg = element(document, 'div', undefined, 'wb-seg2 wb-seg-engine'); seg.setAttribute('role', 'group'); seg.setAttribute('aria-label', t('wb.settings.currentRuntime'));
-  const segButtons = {};
+  const segButtons = {}, segNames = {};
   for (const runtime of runtimes) {
     const health = runtimeHealth(snapshot, runtime);
     const button = element(document, 'button', undefined); button.type = 'button'; button.id = 'settings-use-' + runtime;
     const login = element(document, 'span', undefined, 'wb-login wb-login-' + health);
     login.append(element(document, 'span', undefined, 'wb-hdot'), element(document, 'span', t('wb.settings.health.' + health)));
-    button.append(element(document, 'span', engineName(runtime), 'wb-engine-name'), login);
+    const name = element(document, 'span', undefined, 'wb-engine-name');
+    button.append(name, login);
+    segNames[runtime] = name;
     button.title = health === 'unavailable' ? t('wb.settings.health.unavailable') : '';
     button.addEventListener('click', () => { draftRuntime = runtime; redrawEngine(); });
-    lock(button, () => !writable() || health === 'unavailable');
+    lock(button, () => savingRuntime || !writable() || health === 'unavailable');
     seg.append(button); segButtons[runtime] = button;
   }
   line.append(seg);
   const saveRuntime = element(document, 'button', t('wb.settings.saveRuntime'), 'wb-btn wb-btn-primary'); saveRuntime.type = 'button'; saveRuntime.id = 'settings-save-runtime';
   const undoRuntime = element(document, 'button', t('wb.settings.undo'), 'wb-btn'); undoRuntime.type = 'button'; undoRuntime.id = 'settings-undo-runtime';
   undoRuntime.addEventListener('click', () => { draftRuntime = groups.baseline; redrawEngine(); });
-  lock(saveRuntime, () => !writable() || draftRuntime == null || draftRuntime === groups.baseline || runtimeHealth(snapshot, draftRuntime) === 'unavailable');
+  lock(undoRuntime, () => savingRuntime || !writable());
+  lock(saveRuntime, () => savingRuntime || !writable() || draftRuntime == null || draftRuntime === groups.baseline || runtimeHealth(snapshot, draftRuntime) === 'unavailable');
   saveRuntime.addEventListener('click', async () => {
-    if (saveRuntime.disabled || !(await confirm(runtimeSaveConfirmation(draftRuntime, snapshot, t), { title: t('wb.settings.confirm.runtime'), danger: true }))) return;
-    saveRuntime.disabled = true;
+    if (saveRuntime.disabled) return;
+    const runtime = draftRuntime;
+    savingRuntime = true;
+    refreshLocks();
     try {
-      const accepted = await execute('switch-runtime', { runtime: draftRuntime }, { confirmed: true });
-      engineResult.textContent = accepted === false ? t('wb.settings.saveFailed') : t('wb.settings.restartRefresh');
+      if (!(await confirm(runtimeSaveConfirmation(runtime, snapshot, t), { title: t('wb.settings.confirm.runtime'), danger: true })) || destroyed) return;
+      const result = await execute('switch-runtime', { runtime }, { confirmed: true });
+      if (result === false) {
+        engineResult.textContent = t('wb.settings.saveFailed');
+        return;
+      }
+      groups.baseline = draftRuntime = result?.data?.baseline ?? runtime;
+      engineResult.textContent = t(result?.messageKey ?? 'result.runtime_saved', {
+        ...result?.messageParams, value: engineName(groups.baseline),
+      });
+      redrawEngine();
     } catch (error) { engineResult.textContent = error.message; }
-    finally { refreshLocks(); }
+    finally { savingRuntime = false; refreshLocks(); }
   });
   line.append(saveRuntime, undoRuntime);
   const engineResult = element(document, 'p', '', 'wb-note'); engineResult.setAttribute('role', 'status');
@@ -219,7 +233,15 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   const drawVersion = () => version(engineVersion, selectedRuntime());
   engine.card.append(line, engineVersion, engineResult, split, engineNote); root.append(engine.card);
   function redrawEngine() {
-    for (const runtime of runtimes) segButtons[runtime].setAttribute('aria-pressed', String(draftRuntime === runtime));
+    for (const runtime of runtimes) {
+      segButtons[runtime].setAttribute('aria-pressed', String(draftRuntime === runtime));
+      const name = segNames[runtime];
+      name.textContent = engineName(runtime);
+      if (runtime === groups.baseline) {
+        name.textContent += ' ';
+        name.append(element(document, 'span', t('wb.settings.defaultEngineBadge'), 'wb-tag'));
+      }
+    }
     const changed = draftRuntime != null && draftRuntime !== groups.baseline;
     saveRuntime.hidden = undoRuntime.hidden = !changed;
     drawVersion();

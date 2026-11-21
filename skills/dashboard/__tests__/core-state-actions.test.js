@@ -123,7 +123,7 @@ test('Origin interrupt and nudge use configured scopes accepted by C4', async t 
   }
 });
 
-test('runtime action reads a result returned after ten seconds and restarts Dashboard only for a saved baseline', { timeout: 25000 }, async t => {
+test('runtime action reads a result returned after ten seconds without restarting Dashboard', { timeout: 25000 }, async t => {
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR, 'dashboard-actions-'));
   const zylosDir = path.join(root, 'zylos');
   const bin = path.join(root, 'bin');
@@ -141,14 +141,13 @@ test('runtime action reads a result returned after ten seconds and restarts Dash
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
   const config = { zylosDir };
   const saved = await handleCoreAction('switch-runtime', { runtime: 'codex' }, config);
-  assert.equal(saved.ok, true); assert.equal(saved.data.result, 'saved'); assert.equal(saved.detached, true);
-  for (let attempt = 0; attempt < 30 && !fs.existsSync(pm2Log); attempt += 1) await new Promise(resolve => setTimeout(resolve, 100));
-  assert.deepEqual(fs.readFileSync(pm2Log, 'utf8').trim().split('\n').map(JSON.parse), [['restart', 'zylos-dashboard']]);
+  assert.equal(saved.ok, true); assert.equal(saved.data.result, 'saved'); assert.equal(saved.messageKey, 'result.runtime_saved');
+  assert.equal(Object.hasOwn(saved, 'detached'), false);
   process.env.FAKE_RUNTIME_RESULT = 'unchanged';
   const unchanged = await handleCoreAction('switch-runtime', { runtime: 'codex' }, config);
-  assert.equal(unchanged.detached, false); assert.equal(unchanged.messageKey, 'result.runtime_unchanged');
+  assert.equal(Object.hasOwn(unchanged, 'detached'), false); assert.equal(unchanged.messageKey, 'result.runtime_unchanged');
   await new Promise(resolve => setTimeout(resolve, 1100));
-  assert.equal(fs.readFileSync(pm2Log, 'utf8').trim().split('\n').length, 1);
+  assert.equal(fs.existsSync(pm2Log), false, 'saving and re-saving leaves PM2 untouched');
   const mode = await handleCoreAction('switch-mode', { mode: 'multi' }, config);
   assert.equal(mode.ok, true); assert.equal(mode.data.result, 'unchanged');
 });

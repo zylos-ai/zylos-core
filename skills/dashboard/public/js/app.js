@@ -2292,7 +2292,7 @@ function settingsWiring() {
       renderKeys: renderApiKeys, renderCreated: renderCreatedApiKey, createdKey: () => fleetManageModal?._createdKey ?? null,
       status: (text, kind) => fleetManageStatus(text, kind, '#api-key-list'), busy: setApiKeyBusy, errorText: fleetManageError,
     },
-    writable: () => !remoteIsReadOnly() && countdownTimer === null, onGroup: openWorkbenchGroup,
+    writable: () => !remoteIsReadOnly(), onGroup: openWorkbenchGroup,
     engineVersion: (root, runtime) => renderEngineVersion(root, state.dashboardState?.versions, { runtime, upgrade: settingsUpgrade, t, readOnly: remoteIsReadOnly() }),
   });
 }
@@ -2758,7 +2758,7 @@ function initSettingsPage() {
     read: () => requestAgentJson('/api/settings/timezone'),
     write: body => requestAgentJson('/api/settings/timezone', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
     restart: body => requestAgentJson('/api/settings/timezone/actions/restart-services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
-    confirm: confirmSetting, writable: () => !remoteIsReadOnly(), available: () => countdownTimer === null,
+    confirm: confirmSetting, writable: () => !remoteIsReadOnly(),
     identity: observerTargetKey, target: viewedRemoteTarget, onSaved: () => refreshState().catch(() => {}),
   });
   const read = async path => { const target = observerTargetKey(); const value = await fetchJson(path); if (target !== observerTargetKey()) throw Error('view_changed'); return value; };
@@ -2937,47 +2937,6 @@ function closeActionsModal() {
   setModalBodyDisabled(false);
 }
 
-let countdownTimer = null;
-
-function startCountdownAndReload(seconds, statusEl, healthPath = '/api/health', prefix = '') {
-  if (countdownTimer) clearInterval(countdownTimer);
-  let remaining = seconds;
-
-  const btns = actionsModal?.querySelectorAll('button, select, input');
-  btns?.forEach(el => { if (!el.classList.contains('modal-close')) el.disabled = true; });
-
-  const tick = () => {
-    if (!statusEl) return;
-    statusEl.hidden = false;
-    statusEl.className = 'modal-status running';
-    statusEl.textContent = [prefix, t('status.countdown', { seconds: remaining })].filter(Boolean).join('\n');
-  };
-  tick();
-
-  countdownTimer = setInterval(() => {
-    remaining--;
-    if (remaining <= 0) {
-      clearInterval(countdownTimer);
-      countdownTimer = null;
-      if (statusEl) statusEl.textContent = t('status.reloading');
-      pollAndReload(healthPath);
-      return;
-    }
-    tick();
-  }, 1000);
-}
-
-async function pollAndReload(healthPath = '/api/health') {
-  for (let i = 0; i < 15; i++) {
-    await new Promise(r => setTimeout(r, 2000));
-    try {
-      const r = await fetch(api(healthPath), { cache: 'no-store' });
-      if (r.ok) { window.location.reload(); return; }
-    } catch {}
-  }
-  window.location.reload();
-}
-
 function setModalBodyDisabled(disabled) {
   const body = actionsModal?.querySelector('.modal-body');
   if (!body) return;
@@ -3032,7 +2991,6 @@ async function sendAction(action, body) {
     }
     const request = instanceActionRequest(action, body);
     const actionPath = agentPath(request.path);
-    const healthPath = agentPath('/api/health');
     const r = await fetch(api(actionPath), {
       method: request.method,
       headers: { 'Content-Type': 'application/json' },
@@ -3047,16 +3005,6 @@ async function sendAction(action, body) {
     if (action === 'restart-session' && result.requestId) {
       pendingManualRestart = result.submission === 'unknown' ? { requestId: result.requestId, submission: result.submission, runId: body?.runId } : null;
       if (pendingManualRestart) refreshModeStatus();
-    }
-    if (result.ok && result.detached) {
-      const summary = formatActionResult(result, t) || t('status.done');
-      if (statusEl) {
-        statusEl.className = 'modal-status success';
-        statusEl.style.whiteSpace = 'pre-line';
-        statusEl.textContent = summary;
-      }
-      startCountdownAndReload(15, statusEl, healthPath, summary);
-      return true;
     }
     if (statusEl) {
       const isInfo = !result.ok && result.error?.code === 'already_set';
@@ -3085,8 +3033,14 @@ async function sendAction(action, body) {
       if (statusEl) statusEl.hidden = true;
       await execAction('restart-session');
     }
+    if (action === 'switch-runtime') {
+      if (observerTargetKey() !== targetKey) return false;
+      if (!result.ok) throw new Error(formatActionResult(result, t) || t('wb.settings.saveFailed'));
+      return result;
+    }
     return result.ok;
   } catch (err) {
+    if (action === 'switch-runtime') throw err;
     if (statusEl) {
       statusEl.className = 'modal-status error';
       statusEl.textContent = actionFailureMessage(action, actionRuntime, err, t);
