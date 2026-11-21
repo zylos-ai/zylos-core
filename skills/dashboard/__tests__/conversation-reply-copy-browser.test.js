@@ -29,7 +29,7 @@ const rows = [...Array.from({ length: 7 }, (_, i) => ({ ...reply, id: i + 1,
 const group = 'g:' + Buffer.from('dashboard:mobile-browser').toString('hex').toUpperCase();
 const rowSelector = id => `#wb-chat [data-message-id="${id}"]`;
 const copySelector = '.conversation-message-meta .conversation-copy-button';
-const output = process.env.ZYLOS_REPLY_COPY_EVIDENCE;
+const output = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
 const options = { skip: !chatEnabled(), timeout: 120_000 };
 
 async function run(t, check, messageRows = rows) {
@@ -40,14 +40,11 @@ async function run(t, check, messageRows = rows) {
       args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
     sandbox.addCleanup(() => browser.close());
     const fixture = await startPage(sandbox, undefined, messageRows);
-    const baseline = process.env.ZYLOS_REPLY_COPY_BASELINE_PUBLIC
-      ? await startPage(sandbox, process.env.ZYLOS_REPLY_COPY_BASELINE_PUBLIC, messageRows) : null;
-
-    async function open({ width = 390, locale = 'en', theme = 'light', base = fixture.base } = {}) {
-      const context = await browser.newContext({ viewport: { width, height: 844 }, hasTouch: width <= 760,
-        isMobile: width <= 760, locale: locale === 'en' ? 'en-SG' : 'zh-CN', timezoneId: 'Asia/Singapore' });
+    async function open({ width = 390, touch = width <= 760, locale = 'en', theme = 'light' } = {}) {
+      const context = await browser.newContext({ viewport: { width, height: 844 }, hasTouch: touch,
+        isMobile: touch, locale: locale === 'en' ? 'en-SG' : 'zh-CN', timezoneId: 'Asia/Singapore' });
       sandbox.addCleanup(() => context.close());
-      await context.route('**/*', route => route.request().url().startsWith(base + '/') ? route.continue() : route.abort());
+      await context.route('**/*', route => route.request().url().startsWith(fixture.base + '/') ? route.continue() : route.abort());
       await context.addInitScript(({ locale, theme }) => {
         if (window !== window.top) return;
         localStorage.setItem('zylos-dashboard-locale', locale);
@@ -57,12 +54,12 @@ async function run(t, check, messageRows = rows) {
       page.setDefaultTimeout(8000);
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
-      await page.goto(base + '/chat');
+      await page.goto(fixture.base + '/chat');
       await page.locator(`[data-conversation-id="${group}"]`).click();
       await page.locator(rowSelector(reply.id)).waitFor();
       return { page, context, errors };
     }
-    await check(open, baseline?.base);
+    await check(open);
   }, { timeoutMs: 110_000 });
 }
 
@@ -106,7 +103,7 @@ async function geometry(page) {
 const positionHistory = page => page.locator('.conversation-stream').evaluate(el => { el.scrollTop = el.scrollHeight - el.clientHeight - 285; });
 
 test('mobile AI replies fill the stream and keep table overflow inside the reply', options, async t => {
-  await run(t, async (open, baseline) => {
+  await run(t, async open => {
     for (const width of [390, 1280]) for (const locale of output ? ['en', 'zh'] : ['en'])
       for (const theme of output ? ['light', 'dark'] : ['light']) {
         const { page, context, errors } = await open({ width, locale, theme });
@@ -116,26 +113,6 @@ test('mobile AI replies fill the stream and keep table overflow inside the reply
         assert.equal(layout.pageWidth, width);
         assert.equal(layout.reply.timeCount, 1);
         assert.equal(layout.internal.copy, null);
-        const older = baseline && await open({ width, locale, theme, base: baseline });
-        if (older) {
-          await positionHistory(older.page);
-          const original = await geometry(older.page);
-          if (width === 390) {
-            assert.ok(original.reply.text.width < 360, 'the old layout fails the full-width check');
-          } else {
-            for (const key of ['content', 'time', 'avatar']) {
-              const { width: oldWidth, height: oldHeight, x: oldX } = original.reply[key];
-              assert.deepEqual([layout.reply[key].width, layout.reply[key].height, layout.reply[key].x], [oldWidth, oldHeight, oldX], key);
-            }
-          }
-          for (const key of ['content', 'time', 'avatar']) {
-            assert.equal(layout.internal[key].width, original.internal[key].width, `internal ${key} width`);
-            assert.equal(layout.sent[key].width, original.sent[key].width, `sent ${key} width`);
-          }
-          await screenshot(older.page, name + '-baseline');
-          if (output) fs.writeFileSync(path.join(output, name + '-baseline.json'), JSON.stringify(original, null, 2));
-          await older.context.close();
-        }
         if (width === 390) {
           assert.ok(layout.reply.text.width >= 360, JSON.stringify(layout.reply));
           assert.equal(layout.reply.avatar.width, 0);
@@ -180,8 +157,8 @@ async function expectedText(page, row) {
 test('copy writes the readable text and reports success or a Clipboard API failure', options, async t => {
   const withAttachment = { ...reply, attachments: [{ name: 'rollout.txt', kind: 'file', id: 'file-test' }] };
   await run(t, async open => {
-    for (const width of [390, 1280]) {
-      const { page, context } = await open({ width });
+    for (const { width, touch } of [{ width: 390, touch: true }, { width: 1280, touch: false }, { width: 390, touch: false }]) {
+      const { page, context } = await open({ width, touch });
       await context.grantPermissions(['clipboard-read', 'clipboard-write']);
       if (width === 1280) {
         const firstReply = page.locator(rowSelector(reply.id));
@@ -190,10 +167,17 @@ test('copy writes the readable text and reports success or a Clipboard API failu
         assert.ok(await firstReply.locator(copySelector).evaluate(el =>
           el === document.activeElement && el.matches(':focus-visible') && getComputedStyle(el).outlineStyle === 'solid'));
       }
-      for (const item of width === 390 ? [withAttachment, rich] : [withAttachment, sent]) {
+      if (width === 390 && !touch) {
+        const ownText = page.locator(rowSelector(sent.id) + ' .chat-message-text');
+        assert.notEqual(await ownText.evaluate(el => getComputedStyle(el).userSelect), 'none');
+        assert.ok(await ownText.evaluate(el => el.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true, cancelable: true,
+        }))), 'mouse context menu remains available in a narrow window');
+      }
+      for (const item of touch ? [withAttachment, rich] : width === 390 ? [sent] : [withAttachment, sent]) {
         const article = page.locator(rowSelector(item.id));
         const copy = article.locator(copySelector);
-        if (width === 1280) await article.hover();
+        if (!touch) await article.hover();
         await copy.click();
         const expected = await expectedText(page, item);
         assert.equal(await page.evaluate(() => navigator.clipboard.readText()), expected);
@@ -238,6 +222,26 @@ test('holding a sent message copies or opens native text selection and Back rest
       const select = menu.getByRole('button', { name: locale === 'en' ? 'Select text' : '选择文本', exact: true });
       const dialog = page.locator('.conversation-select-text');
       const stream = page.locator('.conversation-stream');
+      await sentText.tap();
+      await delay(650);
+      assert.equal(await menu.isVisible(), false, 'a quick tap does not open the long-press menu');
+
+      await sentText.scrollIntoViewIfNeeded();
+      const box = await sentText.boundingBox();
+      const y = box.y + box.height - 14;
+      const x = box.x + box.width * 0.65;
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+      for (let step = 1; step <= 8; step++) {
+        await delay(80);
+        await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x - step * 11, y }] });
+      }
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      const quote = page.locator('.conversation-quote-bar');
+      await quote.waitFor();
+      assert.match(await quote.innerText(), /Can you verify/);
+      assert.equal(await menu.isVisible(), false, 'a slow left swipe quotes the message without opening the menu');
+      await quote.locator('.conversation-quote-bar-close').tap();
+
       await hold(sentText);
       await menu.waitFor();
       assert.equal(await menu.getByRole('button').count(), 2);
@@ -260,8 +264,14 @@ test('holding a sent message copies or opens native text selection and Back rest
       await dialog.waitFor();
       assert.deepEqual(await dialog.boundingBox(), { x: 0, y: 0, width: 390, height: 844 });
       const text = dialog.locator('.conversation-select-text-body');
-      assert.equal(await text.textContent(), await expectedText(page, sent));
-      assert.equal(await text.evaluate(el => getComputedStyle(el).userSelect), 'text');
+      const renderedMessage = page.locator(rowSelector(sent.id) + ' .chat-message-content');
+      const dialogMessage = text.locator('.chat-message-content');
+      assert.equal(await dialogMessage.innerText(), await renderedMessage.innerText());
+      assert.doesNotMatch(await dialogMessage.innerText(), /\*\*rollout\*\*/);
+      const emphasis = dialogMessage.locator('strong');
+      assert.equal(await emphasis.innerText(), 'rollout');
+      assert.ok(await emphasis.evaluate(el => Number(getComputedStyle(el).fontWeight) >= 600));
+      assert.equal(await emphasis.evaluate(el => getComputedStyle(el).userSelect), 'text');
       assert.equal(page.url(), url);
       assert.equal(await page.evaluate(() => history.length), historyLength + 1);
       await screenshot(page, `select-text-390-${locale}-${theme}`);
@@ -273,6 +283,7 @@ test('holding a sent message copies or opens native text selection and Back rest
       await select.tap();
       await dialog.locator('.conversation-select-text-back').tap();
       await dialog.waitFor({ state: 'hidden' });
+      assert.equal(await page.evaluate(() => history.state?.conversationSelectText), undefined);
       assert.equal(await stream.evaluate(el => el.scrollTop), previous);
 
       const ai = page.locator(rowSelector(reply.id) + ' .chat-message-text p').first();

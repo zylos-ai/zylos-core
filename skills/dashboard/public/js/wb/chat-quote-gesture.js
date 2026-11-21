@@ -62,7 +62,6 @@ export function createQuoteGesture({ list, document = list.ownerDocument, enable
 
   // Touch and pen.
   let touch = null;
-  let heldArticle = null;
   const cancelHold = () => {
     if (touch?.timer != null) cancel(touch.timer);
     if (touch) touch.timer = null;
@@ -70,7 +69,6 @@ export function createQuoteGesture({ list, document = list.ownerDocument, enable
   const pointerDown = event => {
     if (event.pointerType === 'mouse') return;
     if (!event.isPrimary) { cancelHold(); return; }
-    heldArticle = null;
     const article = messageOf(event.target);
     if (!article || !list.contains(article)) return;
     const hold = event.pointerType === 'touch' && canHold(article, event.target);
@@ -81,7 +79,6 @@ export function createQuoteGesture({ list, document = list.ownerDocument, enable
       touch.timer = delay(() => {
         touch = null;
         if (!article.isConnected || !canHold(article, event.target)) return;
-        heldArticle = article;
         onHold(article, event.target);
       }, LONG_PRESS_MS);
     }
@@ -119,12 +116,6 @@ export function createQuoteGesture({ list, document = list.ownerDocument, enable
   const onContextMenu = event => {
     const article = messageOf(event.target);
     if (article && canHold(article, event.target)) event.preventDefault();
-  };
-  const onClick = event => {
-    if (!heldArticle || messageOf(event.target) !== heldArticle || event.detail === 0) return;
-    heldArticle = null;
-    event.preventDefault();
-    event.stopPropagation();
   };
   // Touch gives the touched element implicit capture; moving it to the message ends that one, which is no cancel.
   const lostCapture = event => { if (touch && event.target === touch.article) pointerCancel(event); };
@@ -169,18 +160,15 @@ export function createQuoteGesture({ list, document = list.ownerDocument, enable
   for (const [type, listener] of listeners) list.addEventListener(type, listener);
   list.addEventListener('wheel', onWheel, { passive: false });
   list.addEventListener('contextmenu', onContextMenu);
-  list.addEventListener('click', onClick, true);
   return {
     destroy() {
       dropWheel();
       cancelHold();
-      heldArticle = null;
       if (touch) reset(touch.article);
       touch = null;
       for (const [type, listener] of listeners) list.removeEventListener(type, listener);
       list.removeEventListener('wheel', onWheel, { passive: false });
       list.removeEventListener('contextmenu', onContextMenu);
-      list.removeEventListener('click', onClick, true);
     }
   };
 }

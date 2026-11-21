@@ -808,7 +808,6 @@ export function mountConversationPage({
     }
     if (event.target === copyMenu) closeCopyMenu();
   }, true);
-  copyMenu.addEventListener('keydown', event => { if (event.key === 'Escape') closeCopyMenu(); });
   copyMenuButton.addEventListener('click', () => {
     const record = menuRecord;
     closeCopyMenu();
@@ -828,19 +827,9 @@ export function mountConversationPage({
   selectTextDialog.append(selectTextHeader, selectTextBody);
   page.append(selectTextDialog);
   let selectionEntry = null;
-  function renderTextSelection() {
-    selectTextBack.setAttribute('aria-label', t('chat.page.backToConversation'));
-    text(selectTextTitle, t('chat.copy.select'));
-    text(selectTextBody, selectionEntry.contents);
-    selectTextBody.scrollTop = 0;
-    selectTextDialog.showModal();
-  }
-  function dismissTextSelection() {
-    if (selectTextDialog.open) selectTextDialog.close();
-    text(selectTextBody, '');
-  }
   function leaveTextSelection() {
-    dismissTextSelection();
+    if (selectTextDialog.open) selectTextDialog.close();
+    selectTextBody.replaceChildren();
     selectionEntry = null;
   }
   function backFromTextSelection() {
@@ -859,14 +848,20 @@ export function mountConversationPage({
     selectionEntry = {
       id: view.crypto.getRandomValues(new Uint32Array(1))[0],
       url: view.location.href,
-      contents: readableText(record.row),
     };
     view.history.pushState({ ...view.history.state, conversationSelectText: selectionEntry.id }, '', selectionEntry.url);
-    renderTextSelection();
+    selectTextBack.setAttribute('aria-label', t('chat.page.backToConversation'));
+    text(selectTextTitle, t('chat.copy.select'));
+    const rendered = record.resource.cloneNode(true);
+    // Keep links readable in the selection view without navigating away.
+    for (const link of rendered.querySelectorAll('a[href]')) link.removeAttribute('href');
+    selectTextBody.replaceChildren(rendered);
+    selectTextBody.scrollTop = 0;
+    selectTextDialog.showModal();
   });
   const quoteGesture = createQuoteGesture({ list: messageList, document, enabled: () => quotable(currentSnapshot),
     onQuote: id => quoteMessage(id),
-    canHold: (article, target) => phone() && !page.hidden && Boolean(
+    canHold: (article, target) => phone() && touchFirst(view) && !page.hidden && Boolean(
       article.matches('.chat-in:not(.conversation-internal)') && target.closest('.chat-message-content')
       && !target.closest('a, button, input, textarea, select, summary, [contenteditable]')),
     onHold: showCopyMenu,
@@ -1049,7 +1044,6 @@ export function mountConversationPage({
     text(record.copyBubbleFeedback, copyFromMenu ? feedback : '');
   }
   async function copyMessage(record, fromMenu = false) {
-    const attempt = record.copyAttempt = (record.copyAttempt ?? 0) + 1;
     let result;
     try {
       if (!view.navigator.clipboard?.writeText) throw new Error('clipboard_unavailable');
@@ -1058,7 +1052,7 @@ export function mountConversationPage({
     } catch {
       result = 'failed';
     }
-    if (attempt !== record.copyAttempt || !record.node.isConnected) return;
+    if (!record.node.isConnected) return;
     view.clearTimeout(record.copyTimer);
     record.copyResult = result;
     record.copyFromMenu = fromMenu;
@@ -1955,17 +1949,9 @@ export function mountConversationPage({
     openGroup,
     popstate() {
       if (!selectionEntry) return false;
-      if (view.location.href !== selectionEntry.url || page.hidden) {
-        leaveTextSelection();
-        return false;
-      }
-      if (view.history.state?.conversationSelectText === selectionEntry.id) {
-        if (!selectTextDialog.open) renderTextSelection();
-        return true;
-      }
-      if (!selectTextDialog.open) return false;
-      dismissTextSelection();
-      return true;
+      const sameConversationPage = view.location.href === selectionEntry.url && !page.hidden;
+      leaveTextSelection();
+      return sameConversationPage;
     },
     close() {
       closeCopyMenu();

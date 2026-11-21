@@ -1628,7 +1628,9 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   opacity:1;
   pointer-events:auto
 }
-.conversation-copy-button:hover { background:var(--wb-hover); color:var(--text) }
+@media (hover:hover) {
+  .conversation-copy-button:hover { background:var(--wb-hover); color:var(--text) }
+}
 .conversation-copy-button:focus-visible,
 .conversation-copy-menu-panel button:focus-visible,
 .conversation-select-text-back:focus-visible {
@@ -1655,8 +1657,7 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 
 @media (max-width:760px) {
   .conversation-page :is(.chat-out:not(.conversation-internal), .conversation-activity-message) > .conversation-avatar,
-  .conversation-page :is(.chat-out:not(.conversation-internal), .conversation-activity-message) .chat-message-author,
-  .conversation-page .chat-in .conversation-copy-action { display:none }
+  .conversation-page :is(.chat-out:not(.conversation-internal), .conversation-activity-message) .chat-message-author { display:none }
   .conversation-page :is(.chat-out:not(.conversation-internal), .conversation-activity-message) > .conversation-message-body {
     width:100%;
     max-width:100%
@@ -1699,6 +1700,9 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   }
   .conversation-page .chat-out .conversation-copy-button[data-copied="false"] > span:last-child { display:none }
   .conversation-page .chat-out .conversation-copy-feedback:not(.conversation-copy-feedback-announcement) { margin:0 }
+}
+@media (max-width:760px) and (hover:none) and (pointer:coarse) {
+  .conversation-page .chat-in .conversation-copy-action { display:none }
   .conversation-page .chat-in:not(.conversation-internal) .chat-message-content {
     -webkit-touch-callout:none;
     -webkit-user-select:none;
@@ -1772,7 +1776,6 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   padding:16px max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   font-size:14px;
   line-height:24px;
-  white-space:pre-wrap;
   overflow-wrap:anywhere;
   -webkit-user-select:text;
   user-select:text
