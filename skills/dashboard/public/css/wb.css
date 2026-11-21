@@ -167,6 +167,7 @@
 .wb-input, .wb-cfg-edit :is(input, select) { height: 28px; min-width: 0; padding: 0 8px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text); font: inherit; font-size: 12.5px; }
 .wb-input:focus, .wb-cfg-edit :is(input, select):focus { outline: 2px solid var(--wb-accent-line); border-color: var(--accent); }
 #settings-hot-ttl-source { white-space: pre-line; }
+#settings-engine-result { white-space: pre-line; overflow-wrap: anywhere; }
 #settings-hot-ttl-minutes:disabled { background: var(--wb-hover); color: var(--text-muted); -webkit-text-fill-color: var(--text-muted); border-style: dashed; cursor: not-allowed; opacity: 1; }
 .wb-seg-sm { display: inline-flex; height: var(--wb-control-compact); vertical-align: middle; }
 .wb-seg-sm button { font-size: 11px; line-height: 18px; padding: 0 8px; cursor: pointer; white-space: nowrap; }

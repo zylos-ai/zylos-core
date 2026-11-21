@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { SupervisorLifecycle, evictionDemand, EVICTION_CHECK_ACK_TIMEOUT_MS, UPGRADE_CHECK_ACK_TIMEOUT_MS } from '../supervisor-lifecycle.js';
-import { CONFIG_RECLAIM_PROMPT } from '../reclaim-prompts.js';
 import { SessionActivity } from '../session-activity.js';
 import { publishSessionStatus } from '../status-writer.js';
 import { fixture as c4Fixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
@@ -33,7 +32,7 @@ function fixture(Class = SupervisorLifecycle) {
   const f = { now: 2_000_000, scenes: [scene()], fences: new Map(), requests: [], controls: [], events: [], stops: [], forgotten: [],
     conversations: 0, runningControls: 0, lastActivity: 0, unsummarized: 0,
     transition: null, pending: [], marker: { held: false, stale: false }, markerReads: [],
-    backlog: { total: 0, groups: [] }, expected: { runtime: 'claude', mode: 'default' },
+    backlog: { total: 0, groups: [] },
     context: { configuration: { mode: 'multi', capacity: 1, hotTtlSeconds: 1800 } } };
   const configuration = f.context.configuration;
   Object.defineProperty(f, 'context', { get: () => ({ configuration, transition: f.transition,
@@ -65,7 +64,6 @@ function fixture(Class = SupervisorLifecycle) {
     listPendingSessionGroups: () => f.pending,
     getControlById: id => f.controls.find(c => c.id === id),
     insertControl: (content, options) => { const row = { id: f.controls.length + 1, content, ...options, status: 'pending' }; f.controls.push(row); return row; },
-    resolveSessionLaunchConfig: () => f.expected,
   };
   f.deps = { db: f.db, env, observe: () => f.scenes,
     observeGroup: group => f.scenes.find(s => s.sessionGroup === group || group === null && s.sessionGroup === 'origin') ?? { present: false },
@@ -77,7 +75,7 @@ function fixture(Class = SupervisorLifecycle) {
     bindTarget: s => ({ expectedRunId: s.runId }),
     diagnostic: e => f.events.push(e),
     prompts: { PRE_RECLAIM_CHECK_PROMPT: 'check', UPGRADE_RESTART_CHECK_PROMPT: 'upgrade check', PRE_RECLAIM_SYNC_PROMPT: 'prepare', PRE_RECLAIM_ORIGIN_SYNC_PROMPT: 'prepare origin', GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync',
-      ROTATION_PROMPT: () => 'rotate', CONFIG_RECLAIM_PROMPT: () => 'config', SYNC_BACKLOG_ALERT: (kind, count, lag, scope) => `alert:${kind === 'group' ? scope : kind}` },
+      ROTATION_PROMPT: () => 'rotate', SYNC_BACKLOG_ALERT: (kind, count, lag, scope) => `alert:${kind === 'group' ? scope : kind}` },
   };
   f.lifecycle = new Class(f.deps, { now: () => f.now });
   f.publishSyncFacts = () => {
@@ -132,11 +130,11 @@ test('mode-switch duplicate reclaim calls cannot shorten the 3s idle confirmatio
   assert.equal(await f.lifecycle.advanceReclaim(fence, context), 'changed');
   assert.deepEqual(f.stops, ['run-a']);
 });
-test('ordinary busy cancels with TTL reset; model_config busy retains its fence', async () => {
-  for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'mode_switch', 'model_config']) {
+test('ordinary busy cancels with TTL reset', async () => {
+  for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'mode_switch']) {
     const f = fixture(), row = f.fence(reason); f.scenes[0].state = 'busy';
-    assert.equal(await f.lifecycle.advanceReclaim(row, f.context), reason === 'model_config' ? 'waiting_idle' : 'cancelled');
-    assert.equal(f.fences.size, reason === 'model_config' ? 1 : 0); assert.deepEqual(f.stops, []);
+    assert.equal(await f.lifecycle.advanceReclaim(row, f.context), 'cancelled');
+    assert.equal(f.fences.size, 0); assert.deepEqual(f.stops, []);
     if (reason === 'ttl') { await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0); }
   }
 });
@@ -174,18 +172,6 @@ test('Origin checks both Sync markers; stale markers permit reclaim', async () =
   assert.deepEqual(f.markerReads.map(x => x.kind), ['group', 'origin']);
   f.fence('upgrade', 'origin'); f.deps.readSyncMarker = () => ({ held: true, stale: true });
   assert.equal(await f.lifecycle.advanceReclaim(row, f.context), 'done');
-});
-// final conversation check preserves the reclaim fence.
-async function finalRaceAssertion(Class) {
-  const f = fixture(Class), row = f.fence('model_config'); let reads = 0;
-  f.db.countRunningConversations = () => ++reads > 1 ? 1 : 0;
-  await assert.rejects(f.lifecycle.advanceReclaim(row, f.context), { code: 'RECLAIM_INFLIGHT' });
-  assert.equal(f.fences.size, 1); assert.deepEqual(f.stops, []);
-  assert.equal(f.events.some(event => event.event === 'reclaim_cancelled'), false);
-}
-test('final conversation recheck', async () => {
-  await finalRaceAssertion(SupervisorLifecycle);
-
 });
 test('ordinary final in-flight race records cancellation before cleanup and remains safe if diagnostics fail',async()=>{
  for(const reason of ['ttl','evict','upgrade','auth','mode_switch']){
@@ -417,7 +403,7 @@ test('new C4 or replacement still cancels preparation while its child is active'
 });
 test('fresh subagent observations guard fence creation and final TTL or eviction stop only', async () => {
  for (const active of [true, false]) {
-  for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'mode_switch', 'model_config']) {
+  for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'mode_switch']) {
     const guarded = ['ttl', 'evict'].includes(reason);
     const f = fixture(), original = { ...f.scenes[0] };
     f.scenes[0].activeSubagents = active ? [{ agentId: 'child', lastActivityAt: f.now }] : [];
@@ -727,17 +713,6 @@ test('rotation cooldown follows successful write and run/session pair', async ()
   f.scenes[0].sessionId = 'session-2'; await f.lifecycle.checkRotation(f.scenes[0], f.context);
   assert.equal(f.controls.length, 2); assert.equal(f.events.some(e => e.event === 'rotate_done'), false);
 });
-// full immutable input comparison; no fence before acceptance.
-test('configuration compares full input and never fabricates missing snapshot', async () => {
-  const f = fixture(); f.scenes[0].launchConfig = null;
-  await f.lifecycle.reconcileConfiguration(f.context); assert.equal(f.controls.length, 0); assert.equal(f.events[0].event, 'config_snapshot_unavailable');
-  f.scenes[0].launchConfig = { runtime: 'claude', mode: 'override', model: 'm', effort: 'low' };
-  f.expected = { runtime: 'claude', mode: 'override', model: 'm', effort: 'high' };
-  await f.lifecycle.reconcileConfiguration(f.context); assert.equal(f.controls.length, 1); assert.equal(f.fences.size, 0);
-  assert.equal(f.controls[0].priority, 1); assert.equal(f.controls[0].targetBinding.expectedRunId, 'run-a');
-  f.expected = { ...f.scenes[0].launchConfig }; f.now += 300001;
-  await f.lifecycle.reconcileConfiguration(f.context); assert.equal(f.controls.length, 1);
-});
 // trigger conditions: backlog above threshold, per-scope marker, minimum interval, Origin checkpoint age.
 test('regular Sync obeys held marker and minimum interval across a run replacement', async () => {
   const f = fixture(); f.unsummarized = SYNC_DUE; f.marker = { held: true, stale: false };
@@ -911,25 +886,6 @@ test('manual mode, group-fence and global-fence conflicts preserve captured requ
   }
 });
 
-// DM : malformed observations cannot authorize config reclamation.
-test('config reconciliation rejects malformed snapshots and invalid expected input without controls', async () => {
-  const f = fixture();
-  const invalid = [null, [], { runtime: 'other', mode: 'default' }, { runtime: 'claude', mode: 'default', model: 'x' },
-    ...['', ' ', 'a\0b'].map(model => ({ runtime: 'claude', mode: 'override', model, effort: 'high' })),
-    ...['', ' ', 'xhigh', 'high\0'].map(effort => ({ runtime: 'claude', mode: 'override', model: 'x', effort })),
-    { runtime: 'codex', mode: 'override', model: 'x', effort: 'max' }];
-  for (const snapshot of invalid) {
-    f.scenes[0].launchConfig = snapshot;
-    await f.lifecycle.reconcileConfiguration(f.context);
-    assert.equal(f.controls.length, 0); assert.equal(f.fences.size, 0);
-  }
-  assert.equal(f.events.filter(e => e.event === 'config_snapshot_unavailable').length, invalid.length);
-  f.scenes[0].launchConfig = { runtime: 'claude', mode: 'default' };
-  f.expected = { runtime: 'codex', mode: 'override', model: 'x', effort: 'max' };
-  await assert.rejects(f.lifecycle.reconcileConfiguration(f.context), { code: 'INVALID_OBSERVATION' });
-  assert.equal(f.controls.length, 0);
-});
-
 // TTL: invalid numeric source timestamps must not act as expired activity.
 test('nonfinite activity timestamps cannot begin TTL or eviction reclamation', async () => {
   for (const timestamp of [NaN, Infinity, -Infinity]) {
@@ -968,7 +924,7 @@ test('manual fence diagnostics remain available during an active transition', as
 
 // Review P2-1: no drain gate before the actual Sync reader is available.
 test('reclaim preflight rejects unavailable or malformed Sync dependencies before fencing', async () => {
-  for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'mode_switch', 'model_config']) {
+  for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'mode_switch']) {
     for (const unavailable of ['missing', 'throws', 'invalid']) {
       const f = fixture(); f.scenes[0].state = 'busy';
       f.deps.readSyncMarker = unavailable === 'missing' ? undefined : unavailable === 'invalid' ? () => null :
@@ -1005,32 +961,13 @@ test('available held marker permits fencing but never permits an idle stop', asy
   assert.deepEqual(f.stops, []); assert.equal(f.fences.size, 0);
 });
 test('Sync observation failure retains every reclaim fence', async () => {
-  for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'mode_switch', 'model_config']) {
+  for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'mode_switch']) {
     const f = fixture(); await f.lifecycle.beginReclaim(f.scenes[0], reason, f.context);
     f.deps.readSyncMarker = () => { throw Object.assign(new Error('reader failed'), { code: 'DEPENDENCY_UNAVAILABLE' }); };
     await assert.rejects(f.lifecycle.advanceReclaim(f.fences.get('a'), f.context), { code: 'DEPENDENCY_UNAVAILABLE' });
     assert.equal(f.fences.size, 1); assert.deepEqual(f.stops, []);
     assert.ok(f.events.some(e => e.event === 'reclaim_observation_unavailable'));
   }
-});
-async function retainedConfigAssertion(Class) {
-  const f = fixture(Class), row = f.fence('model_config'), alerts = [];
-  f.deps.alert = event => alerts.push(event);
-  const observe = f.deps.observeGroup;
-  f.deps.observeGroup = () => { throw Object.assign(new Error('tmux unavailable'), { code: 'TMUX_UNAVAILABLE' }); };
-  for (let i = 0; i < 2; i++) {
-    await assert.rejects(f.lifecycle.advanceReclaim(row, f.context), { code: 'TMUX_UNAVAILABLE' });
-    assert.equal(f.fences.get('a'), row); assert.deepEqual(f.stops, []);
-  }
-  assert.equal(alerts.length, 1);
-  assert.equal(f.events.some(e => e.event === 'reclaim_cancelled'), false);
-  f.deps.observeGroup = observe;
-  assert.equal(await f.lifecycle.advanceReclaim(row, f.context), 'done');
-  assert.equal(f.fences.size, 0); assert.deepEqual(f.stops, ['run-a']);
-}
-test('model_config survives observation errors', async () => {
-  await retainedConfigAssertion(SupervisorLifecycle);
-
 });
 test('observation failure cannot clear a replacement fence', async () => {
   const f = fixture(), row = f.fence();
@@ -1097,7 +1034,7 @@ test('quiet lifecycle checks share sampled authorities without rereading runtime
   f.db.getModeTransition = unexpected; f.db.listDrainFences = unexpected;
   f.deps.requests.read = unexpected; f.deps.observeGroup = unexpected;
   await f.lifecycle.checkManualFences(context); await f.lifecycle.advanceRestarts(context);
-  await f.lifecycle.reconcileConfiguration(context); await f.lifecycle.checkRotation(context.scenes[0], context);
+  await f.lifecycle.checkRotation(context.scenes[0], context);
   await f.lifecycle.checkTtl(context.scenes[0], context); await f.lifecycle.checkEviction(context.scenes, context);
   await f.lifecycle.checkSync(context.scenes, context);
   assert.equal(f.controls.length, 0); assert.equal(f.stops.length, 0);
@@ -1108,7 +1045,7 @@ test('failed scene snapshots preserve upgrade intent and block lifecycle produce
   const f = fixture(); f.requests = [{ reason: 'upgrade', requestId: 'req', runIds: ['run-a'] }];
   f.scenes[0] = { ...f.scenes[0], present: false, observationError: Object.assign(new Error('unavailable'), { code: 'TMUX_UNAVAILABLE' }) };
   for (const action of [
-    () => f.lifecycle.advanceRestarts(f.context), () => f.lifecycle.reconcileConfiguration(f.context),
+    () => f.lifecycle.advanceRestarts(f.context),
     () => f.lifecycle.checkRotation(f.scenes[0], f.context), () => f.lifecycle.checkTtl(f.scenes[0], f.context),
     () => f.lifecycle.checkEviction(f.scenes, f.context), () => f.lifecycle.checkSync(f.scenes, f.context),
   ]) await assert.rejects(action(), { code: 'TMUX_UNAVAILABLE' });
@@ -1138,7 +1075,7 @@ test('unreadable intent blocks new lifecycle writes while authoritative D8 recla
   const f = fixture(), fence = f.fence(), context = f.context;
   context.restartRequestsError = new Error('corrupt F9'); f.unsummarized = 20;
   assert.deepEqual(await f.lifecycle.checkManualFences(context), []);
-  await f.lifecycle.advanceRestarts(context); await f.lifecycle.reconcileConfiguration(context);
+  await f.lifecycle.advanceRestarts(context);
   await f.lifecycle.checkRotation(context.scenes[0], context); await f.lifecycle.checkTtl(context.scenes[0], context);
   await f.lifecycle.checkSync(context.scenes, context);
   assert.equal(f.controls.length, 0);
@@ -1288,7 +1225,7 @@ test('persisted lifecycle prompts reject replacement runs and never count as Ori
 });
 
 test('completed fenced reclaims record each reason while cancelled paths do not', async () => {
-  for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'mode_switch', 'model_config']) {
+  for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'mode_switch']) {
     for (const present of [false, true]) {
       const f = fixture(), fence = f.fence(reason); if (!present) f.scenes = [];
       assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
@@ -1302,7 +1239,7 @@ test('completed fenced reclaims record each reason while cancelled paths do not'
 
 test('replacement current-session identity clears only while unreadable or old identity still records', async () => {
   for (const ready of [{ runId: 'replacement' }, { runId: 'run-a' }, null]) {
-    const f = fixture(), fence = f.fence('model_config'); f.scenes = [scene('a', { runId: 'replacement' })];
+    const f = fixture(), fence = f.fence('upgrade'); f.scenes = [scene('a', { runId: 'replacement' })];
     let reads = 0; f.deps.readCurrentSession = () => { reads++; return ready; };
     await f.lifecycle.advanceReclaim(fence, f.context);
     assert.equal(reads, 1); assert.equal(f.fences.size, 0); assert.deepEqual(f.stops, []);
@@ -1745,21 +1682,6 @@ test('the upgrade check deadline is injectable and validated separately', async 
   }
 });
 
-test('configuration restart still sends one control with the check and the five minute deadline', async () => {
-  const f = fixture(); f.expected = { runtime: 'claude', mode: 'override', model: 'm', effort: 'high' };
-  f.deps.prompts = { ...f.deps.prompts, CONFIG_RECLAIM_PROMPT };
-  await f.lifecycle.reconcileConfiguration(f.context);
-  assert.equal(f.controls.length, 1);
-  const [control] = f.controls;
-  assert.equal(control.content, CONFIG_RECLAIM_PROMPT);
-  assert.match(control.content, /run its configuration restart check now\.$/);
-  assert.equal(control.ackDeadlineAt, Math.floor((f.now + 300000) / 1000));
-  assert.equal(control.appendAckSuffix, true); assert.equal(control.priority, 1); assert.equal(control.bypassState, true);
-  assert.equal(f.fences.size, 0);
-  await f.lifecycle.reconcileConfiguration(f.context);
-  assert.equal(f.controls.length, 1, 'no second control within the cooldown');
-});
-
 const deferRequest = (extra = {}) => ({ sessionGroup: 'a', expectedRunId: 'run-a', reason: 'background command', ...extra });
 
 async function acceptTtlDeferral(f, reason = 'background command', expectedRunId = f.scenes[0].runId) {
@@ -1908,9 +1830,7 @@ test('deferral rejects absent preparation, changed run, started reclaim, expired
   assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'no_preparation');
   f.lifecycle.upgradePreparation.set('run-a', { controlId: 1, deadline: f.now + 60000 });
   assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'no_preparation');
-  f.lifecycle.upgradePreparation.clear(); f.lifecycle.configurationSent.set('run-a', f.now);
-  assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'no_preparation');
-  f.lifecycle.configurationSent.clear();
+  f.lifecycle.upgradePreparation.clear();
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   assert.equal((await f.lifecycle.deferReclaim(deferRequest({ expectedRunId: 'other' }), f.context)).reason, 'run_changed');
   f.fence(); assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'reclaim_started'); f.fences.clear();
@@ -1919,9 +1839,6 @@ test('deferral rejects absent preparation, changed run, started reclaim, expired
   assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'restart_pending'); f.requests = [];
   f.requests = [{ reason: 'manual_restart', mode: 'multi', sessionGroup: 'a', expectedRunId: 'run-a' }];
   assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'restart_pending'); f.requests = [];
-  f.expected = { runtime: 'codex', mode: 'default' };
-  assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'restart_pending');
-  f.expected = f.scenes[0].launchConfig;
   f.transition = { target: 'single' };
   assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'restart_pending'); f.transition = null;
   assert.equal(f.lifecycle.reclaimDeferrals.has('a'), false, 'rejections do not count');
@@ -2252,12 +2169,10 @@ test('native single regular Sync uses the Origin group and Origin aggregation wi
   assert.ok(f.controls.every(row => row.sessionGroup === 'origin'));
   assert.deepEqual(f.markerReads.map(row => row.kind), ['group','origin']);
 });
-test('native single rotation and configuration controls target Origin', async () => {
+test('native single rotation targets Origin', async () => {
   const f = fixture(); f.context.configuration.mode = 'single'; f.scenes = [scene('origin',{usagePercent:100})];
   await f.lifecycle.checkRotation(f.scenes[0], f.context);
-  f.expected = {runtime:'codex',mode:'default'};
-  await f.lifecycle.reconcileConfiguration(f.context);
-  assert.deepEqual(f.controls.map(row => row.content), ['rotate','config']);
+  assert.deepEqual(f.controls.map(row => row.content), ['rotate']);
   assert.ok(f.controls.every(row => row.sessionGroup === 'origin'));
 });
 test('native single manual restart retains its Origin fence until global delivery ends then wakes Origin', async () => {
@@ -2277,10 +2192,9 @@ test('native single manual restart retains its Origin fence until global deliver
 test('unscoped upgraded Origin receives no lifecycle controls and TTL reclaims directly', async () => {
   const f = fixture(); f.context.configuration.mode = 'single';
   f.scenes = [scene('origin',{sourceScope:null,usagePercent:100})]; f.unsummarized = 100;
-  f.expected = {runtime:'codex',mode:'default'}; f.backlog = {total:100,groups:[{firstAt:1}]};
+  f.backlog = {total:100,groups:[{firstAt:1}]};
   f.deps.bindTarget = () => { throw new Error('unscoped run cannot receive controls'); };
   await f.lifecycle.checkRotation(f.scenes[0], f.context);
-  await f.lifecycle.reconcileConfiguration(f.context);
   await f.lifecycle.checkSync(f.scenes, f.context);
   assert.equal(await f.lifecycle.prepareUpgrade(f.scenes[0], f.context), true);
   assert.equal(f.controls.length, 0);

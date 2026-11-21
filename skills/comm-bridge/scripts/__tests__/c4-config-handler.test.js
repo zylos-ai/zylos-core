@@ -18,6 +18,54 @@ test('pure CLI parser rejects conflicts, duplicates, excess flags and missing mo
   assert.throws(() => parseConfigArgs('model', ['get', '--group', 'origin']), { code: 'INVALID_ARGS' });
   assert.deepEqual(parseConfigArgs('model', ['set', '--channel', 'chat', '--session-group', 'A', '--runtime', 'codex', '--model', 'm', '--effort', 'high', '--json']), { json: true, request: { action: 'set', componentName: 'chat', groupName: 'A', runtime: 'codex', model: 'm', effort: 'high' } });
 });
+test('only configuration mutations accept one explicit restart confirmation', () => {
+  const flags = ['--group', 'origin', '--yes'];
+  assert.equal(parseConfigArgs('runtime', ['reset', ...flags]).request.yes, true);
+  assert.throws(() => parseConfigArgs('runtime', ['get', ...flags]), { code: 'INVALID_ARGS' });
+  assert.throws(() => parseConfigArgs('runtime', ['reset', ...flags, '--yes']), { code: 'INVALID_ARGS' });
+});
+test('CLI keeps a running group unchanged until confirmed, then reports a rejected restart after saving', async t => {
+  let observation = { hasProcess: true, identityVerified: true, ready: true, runId: 'run-a', launchConfig: { runtime: 'claude', mode: 'default' } };
+  const targets = [];
+  const { store, handler } = fixture(t, {
+    observeRunning: () => observation,
+    restart: target => {
+      targets.push(target);
+      assert.equal(store.getSessionRuntimeConfig({ sessionGroup: 'chat:A' }).runtime, 'codex');
+      return { status: 'not_restarted', reason: 'fence_conflict' };
+    },
+  });
+  const set = { action: 'set', sessionGroup: 'chat:A', runtime: 'codex' };
+  await assert.rejects(handler('runtime', set), { code: 'CONFIRMATION_REQUIRED', message: /chat:A/, persisted: [] });
+  assert.equal(store.getSessionRuntimeConfig({ sessionGroup: 'chat:A' }).mode, 'inherit');
+  const { data } = await handler('runtime', { ...set, yes: true });
+  assert.deepEqual(data.restart, { status: 'not_restarted', reason: 'fence_conflict' });
+  assert.deepEqual(targets, [{ sessionGroup: 'chat:A', runId: 'run-a' }]);
+  observation = { hasProcess: false };
+  const offline = await handler('runtime', { action: 'reset', sessionGroup: 'chat:A' });
+  assert.equal(offline.data.changed, true);
+  assert.equal(offline.data.restart, undefined);
+  assert.equal(targets.length, 1);
+});
+test('single-mode CLI changes the running Origin model only after confirmation', async t => {
+  const requests = [];
+  const { store, handler } = fixture(t, {
+    readSessionMode: () => 'single',
+    observeRunning: ({ sessionGroup }) => {
+      assert.equal(sessionGroup, 'origin');
+      return { hasProcess: true, identityVerified: true, ready: true, runId: 'origin-run', launchConfig: { runtime: 'claude', mode: 'default' } };
+    },
+    restart: request => { requests.push(request); return { status: 'accepted' }; },
+  });
+  const set = { action: 'set', sessionGroup: 'origin', runtime: 'claude', model: 'fixture', effort: 'high' };
+  await assert.rejects(handler('model', set), { code: 'CONFIRMATION_REQUIRED' });
+  assert.equal(store.getSessionModelConfig(set).mode, 'default');
+  assert.equal((await handler('model', { ...set, yes: true })).data.restart.status, 'accepted');
+  assert.deepEqual(requests, [{ sessionGroup: 'origin', runId: 'origin-run' }]);
+  const otherRuntime = await handler('model', { ...set, runtime: 'codex' });
+  assert.equal(otherRuntime.data.changed, true);
+  assert.equal(otherRuntime.data.restart, undefined);
+});
 test('selectors only read existing namespaces and groups; exact values and unknown args rejected', async t => {
   const { handler, db } = fixture(t);
   const before = db.prepare('SELECT count(*) AS n FROM channel_namespaces').get().n;

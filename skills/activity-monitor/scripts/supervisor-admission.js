@@ -1,6 +1,4 @@
 import { loadCoreModule } from './core-modules.js';
-import { isDeepStrictEqual } from 'node:util';
-import { validLaunchConfigSnapshot as validSnapshot } from './launch-config-shape.js';
 const { assertSessionGroup } = await loadCoreModule('session-group-paths.js');
 import { RestartRequestStore, validRequestId } from './restart-request-store.js';
 import { MANUAL_WAKE_PROMPT } from './origin-prompts.js';
@@ -21,8 +19,7 @@ export function validSupervisorRequest(request) {
     case 'manual_restart': return (!Object.hasOwn(request, 'expectedRunId') || nonempty(request.expectedRunId))
       && (!Object.hasOwn(request, 'expectedSessionId') || typeof request.expectedSessionId === 'string')
       && (!Object.hasOwn(request, 'sessionGroup') || validGroup(request.sessionGroup));
-    case 'request_release':
-    case 'ready_for_config_reclaim': return validGroup(request.sessionGroup) && nonempty(request.expectedRunId);
+    case 'request_release': return validGroup(request.sessionGroup) && nonempty(request.expectedRunId);
     case 'defer_reclaim': return validGroup(request.sessionGroup) && nonempty(request.expectedRunId)
       && nonempty(request.reason) && request.reason.trim().length > 0;
     case 'mode_switch': return ['single', 'multi'].includes(request.target);
@@ -34,8 +31,8 @@ export function validSupervisorRequest(request) {
 /** One queue is shared with lifecycle mutations; external waits must stay outside it. */
 export class SupervisorAdmission {
   constructor({ store = new RestartRequestStore(), db, readMode, listRuns, readRun,
-    resolveLaunchConfig, preflightReclaim, requestRelease, deferReclaim, modeSwitch, startAttempt, diagnostic = () => {}, now = Date.now } = {}) {
-    Object.assign(this, { store, db, readMode, listRuns, readRun, resolveLaunchConfig, preflightReclaim, requestRelease, deferReclaim, modeSwitch, startAttempt, diagnostic, now });
+    requestRelease, deferReclaim, modeSwitch, startAttempt, diagnostic = () => {}, now = Date.now } = {}) {
+    Object.assign(this, { store, db, readMode, listRuns, readRun, requestRelease, deferReclaim, modeSwitch, startAttempt, diagnostic, now });
     this.open = false; this.tail = Promise.resolve();
   }
   serialize(operation) {
@@ -67,17 +64,6 @@ export class SupervisorAdmission {
         if (request.type === 'defer_reclaim') {
           return reply(await this.deferReclaim(request));
         }
-        if (request.type === 'ready_for_config_reclaim') {
-          let rows = [];
-          try { rows = this.store.read(); }
-          catch (error) {
-            if (error.code !== 'requests_unreadable') throw error;
-            if (request.sessionGroup === 'origin') {
-              return reply({ ok: false, result: 'rejected', reason: error.code });
-            }
-          }
-          return reply(await this.config(request, rows));
-        }
         if (request.type === 'request_release') return reply(await this.release(request));
         const rows = this.store.read();
         switch (request.type) {
@@ -88,7 +74,7 @@ export class SupervisorAdmission {
         }
       } catch (error) {
         if (request.type === 'delete_group' && ['DELETION_PREVIEW_STALE', 'DELETION_OWNERSHIP_MISMATCH', 'DRAFT_BECAME_ACTIVE'].includes(error.code)) return reply({ ok: false, result: 'rejected', reason: error.code });
-        if (error.code !== 'requests_unreadable' || request.type === 'ready_for_config_reclaim') throw error;
+        if (error.code !== 'requests_unreadable') throw error;
         return reply(['manual_restart', 'delete_group', 'defer_reclaim', 'request_release'].includes(request.type)
           ? { ok: false, result: 'rejected', reason: error.code } : { ok: false, code: error.code });
       }
@@ -155,12 +141,12 @@ export class SupervisorAdmission {
     }
     const group = request.sessionGroup ?? 'origin';
     if (await this.db.getDrainFence(group) || await this.db.getDrainFence('*')) return rejected('fence_conflict');
-    if (rows.some(row => row.reason === 'manual_restart')) return rejected('manual_restart_pending');
+    if (rows.some(row => row.reason === 'manual_restart' && (row.sessionGroup ?? 'origin') === group)) return rejected('manual_restart_pending');
     const run = await this.readRun(group);
     // null means both the process and tmux absence were positively observed.
     if (!request.expectedRunId && run !== null) return rejected('target_required');
     if (run === null) {
-      if (!legacy && group === 'origin') {
+      if (!legacy && group === 'origin' && !request.expectedRunId) {
         try { await this.db.insertControl(MANUAL_WAKE_PROMPT, { sessionGroup: 'origin', priority: 2, appendAckSuffix: false }); }
         catch { return rejected('wake_failed'); }
       }
@@ -191,28 +177,5 @@ export class SupervisorAdmission {
     if (fence) return { ok: true, result: 'already_accepted' };
     return this.requestRelease({ ...run, sessionGroup: request.sessionGroup });
   }
-  async config(request, rows) {
-    const reject = reason => ({ ok: false, result: 'rejected', reason });
-    const configuration = await this.readMode();
-    if (configuration.mode !== 'multi' && (configuration.legacy === true || request.sessionGroup !== 'origin')) return reject('not_multi');
-    if (await this.db.getModeTransition() || await this.db.getDrainFence('*')) return reject('transition_open');
-    const run = await this.readRun(request.sessionGroup);
-    if (run?.runId !== request.expectedRunId) return reject('run_changed');
-    if (!run.ready) return reject('not_ready');
-    if (!validSnapshot(run.launchConfig)) return reject('snapshot_unavailable');
-    const fence = await this.db.getDrainFence(request.sessionGroup);
-    // Deletion already owns stopping this run. Let its in-flight configuration
-    // control finish without replacing the delete fence or scheduling a restart.
-    if (fence && (!['model_config', 'delete'].includes(fence.reason) || fence.runId !== request.expectedRunId)) return reject('other_fence');
-    if (rows.some(row => row.reason === 'manual_restart' &&
-      (row.sessionGroup ?? 'origin') === request.sessionGroup)) return reject('manual_restart_pending');
-    if (fence) return { ok: true, result: 'already_accepted' };
-    const expected = await this.resolveLaunchConfig(request.sessionGroup);
-    if (!validSnapshot(expected)) throw Object.assign(new Error('Expected launch configuration is invalid'), { code: 'CONFIG_UNREADABLE' });
-    if (isDeepStrictEqual(run.launchConfig, expected)) return { ok: true, result: 'unchanged' };
-    if (typeof this.preflightReclaim !== 'function') throw Object.assign(new Error('Reclaim preflight is unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' });
-    await this.preflightReclaim({ ...run, sessionGroup: request.sessionGroup }, { configuration: { mode: 'multi' } });
-    await this.db.setDrainFence(request.sessionGroup, { reason: 'model_config', runId: request.expectedRunId });
-    return { ok: true, result: 'accepted' };
-  }
+
 }

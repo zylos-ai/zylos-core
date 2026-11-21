@@ -1499,7 +1499,8 @@ export function createServer() {
     const instanceAction = pathname.match(/^\/api\/instance\/actions\/(switch-mode|switch-runtime|upgrade-runtime)$/);
     if ((instanceAction && req.method === 'POST') || (pathname === '/api/instance/defaults' && req.method === 'PUT')) {
       try {
-        const body = await readJsonBody(req, 4096, { allowEmpty: Boolean(instanceAction) });
+        const maxBody = instanceAction?.[1] === 'switch-runtime' ? 64 * 1024 : 4096;
+        const body = await readJsonBody(req, maxBody, { allowEmpty: Boolean(instanceAction) });
         const action = instanceAction ? (instanceAction[1] === 'upgrade-runtime' ? 'upgrade-cc' : instanceAction[1])
           : ({ model: 'switch-model', effort: 'switch-effort', threshold: 'set-threshold', 'session-hot-ttl': 'set-session-hot-ttl' }[body?.kind]);
         if (!action) { sendJson(res, 400, { ok: false, error: { code: 'INVALID_DEFAULT', message: 'Choose model, effort, threshold or session-hot-ttl' } }); return; }

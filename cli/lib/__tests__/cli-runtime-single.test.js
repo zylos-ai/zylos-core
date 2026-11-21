@@ -41,7 +41,7 @@ test('native single reports Origin and saved overrides without probing inactive 
   });
   assert.deepEqual(observed, {
     groups: [
-      { sessionGroup: 'origin', inherits: true, liveRuntime: 'claude', status: 'pending_reclaim', error: null },
+      { sessionGroup: 'origin', inherits: true, liveRuntime: 'claude', status: 'restart_needed', error: null },
       { sessionGroup: 'telegram:configured', inherits: false, liveRuntime: null, status: 'override_kept', error: null },
     ],
     groupsComplete: true, observationErrors: [],

@@ -9,7 +9,7 @@ const nonempty = value => typeof value === 'string' && value.length > 0;
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 export function validateRestartRequests(rows) {
   if (!Array.isArray(rows)) return false;
-  const ids = new Set(); let manual = 0;
+  const ids = new Set(), manualGroups = new Set();
   for (const row of rows) {
     if (!object(row) || !validRequestId(row.requestId) || ids.has(row.requestId)
         || !Number.isSafeInteger(row.acceptedAt) || row.acceptedAt < 0
@@ -17,7 +17,7 @@ export function validateRestartRequests(rows) {
     ids.add(row.requestId);
     let fields = ['requestId', 'reason', 'acceptedAt', 'runIds'];
     if (row.reason === 'manual_restart') {
-      if (++manual > 1 || !['single', 'multi'].includes(row.mode) || !nonempty(row.expectedRunId)
+      if (!['single', 'multi'].includes(row.mode) || !nonempty(row.expectedRunId)
           || row.runIds.length !== 1 || row.runIds[0] !== row.expectedRunId) return false;
       fields = [...fields, 'mode', 'expectedRunId'];
       if (Object.hasOwn(row, 'sessionGroup')) {
@@ -25,6 +25,9 @@ export function validateRestartRequests(rows) {
         try { assertSessionGroup(row.sessionGroup); } catch { return false; }
         fields.push('sessionGroup');
       }
+      const group = row.sessionGroup ?? 'origin';
+      if (manualGroups.has(group)) return false;
+      manualGroups.add(group);
     } else if (row.reason !== 'upgrade') return false;
     if (Object.keys(row).some(key => !fields.includes(key))) return false;
   }
