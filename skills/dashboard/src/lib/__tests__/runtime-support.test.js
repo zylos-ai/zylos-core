@@ -72,6 +72,8 @@ test('switch-runtime forwards all supported runtimes to the CLI and rejects unkn
     assert.deepEqual(calls.at(-1).args, ['runtime', runtime, '--json']);
     assert.equal(calls.at(-1).options.timeout, 65000);
   }
+  await handleCoreAction('switch-runtime', { runtime: 'codex', confirmed: true }, {});
+  assert.deepEqual(calls.at(-1).args, ['runtime', 'codex', '--json', '--yes']);
   assert.equal((await handleCoreAction('switch-runtime', { runtime: 'foreign' }, {})).error, 'INVALID_RUNTIME');
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 4);
 });

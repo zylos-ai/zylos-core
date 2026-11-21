@@ -60,8 +60,10 @@ for (const mode of ['single', 'multi']) for (const runtime of ['claude', 'codex'
   test(`${mode}/${runtime} actual empty Origin already_stopped has no intent, gate, stop or launch; later appearance survives`, { timeout: 25000 }, async t => {
     const f = fixture(t, mode, runtime); f.tmux('kill-session', '-t', '=zylos-group-origin');
     const m4 = launch(t, f); assert.equal((await m4.next()).ready, true);
-    for (const req of [manual('empty'), manual('old-absent', { expectedRunId: 'run-1' })]) {
+    const wakeCount = () => f.db.prepare('SELECT count(*) FROM control_queue WHERE content=?').pluck().get(MANUAL_WAKE_PROMPT);
+    for (const [req, expectedWakes] of [[manual('old-absent', { expectedRunId: 'run-1' }), 0], [manual('empty'), 1]]) {
       assertReply(await f.submit(req), req, 'already_stopped'); const state = await assertUntouched(m4, f); assert.equal(state.scene.present, false);
+      assert.equal(wakeCount(), expectedWakes);
     }
     f.tmux('new-session', '-d', '-s', 'zylos-group-origin', '-e', 'ZYLOS_RUN_ID=late-run', '-e', `ZYLOS_MODEL_CONFIG=${JSON.stringify({runtime,mode:'default'})}`, '-e', 'ZYLOS_SESSION_GROUP=origin', path.join(f.root, runtime), '120');
     const state = await m4.command('tick'); assert.equal(state.scene.present, true); assert.deepEqual(state.requests, []); assert.deepEqual(state.fences, []); assert.deepEqual(state.stopped, []);
@@ -226,7 +228,7 @@ for (const runtime of ['claude', 'codex']) test(`${runtime} stopping Origin leav
 // admission/execution/target changes; skip unrelated lifecycle work. Fresh
 // HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR, private socket/database and fixture
 // processes only; no live tmux/network. Child/service and fixture resources close.
-test('actual supervisor manual restart targets ordinary group while Origin and another group survive', { timeout: 25000 }, async t => {
+test('actual supervisor independently restarts two admitted groups while Origin survives', { timeout: 25000 }, async t => {
   const f = fixture(t), group = 'fixture:a', other = 'fixture:b';
   f.env.PM2_HOME = path.join(f.root, 'pm2'); f.env.TMPDIR = path.join(f.root, 'tmp');
   fs.mkdirSync(f.env.TMPDIR); f.env.TMUX_TMPDIR = f.root; delete f.env.TMUX;
@@ -251,11 +253,19 @@ test('actual supervisor manual restart targets ordinary group while Origin and a
   assert.equal(state.fences[0].sessionGroup, group); assert.equal(state.fences[0].reason, 'manual_restart');
   assert.equal(state.requests[0].sessionGroup, group);
   assert.equal(f.tmux('show-environment', '-t', `=${tmuxNameForGroup(other)}`, 'ZYLOS_RUN_ID'), 'ZYLOS_RUN_ID=run-b');
+  const second = manual('other', { sessionGroup: other, expectedRunId: 'run-b' });
+  assertReply(await f.submit(second), second, 'accepted');
+  const duplicate = manual('second-for-a', { sessionGroup: group, expectedRunId: 'run-a' });
+  assertReply(await f.submit(duplicate), duplicate, 'rejected', { reason: 'fence_conflict' }, false);
+  state = await m4.command('tick');
+  assert.equal(state.scene.runId, 'run-1');
+  assert.deepEqual(state.stopped.map(row => row.runId), ['run-a', 'run-b']);
+  assert.deepEqual(state.requests.map(row => row.sessionGroup), [group]);
   f.db.prepare("UPDATE conversations SET status='delivered' WHERE session_group=?").run(group);
   state = await m4.command('tick');
   assert.deepEqual(state.fences, []); assert.deepEqual(state.requests, []);
   const events = fs.readFileSync(path.join(f.root, 'activity-monitor/supervisor-events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.ok(events.some(event => event.event === 'manual_restart_done' && event.session_group === group));
+  assert.deepEqual(events.filter(event => event.event === 'manual_restart_done').map(event => event.session_group), [other, group]);
   await m4.stop();
 });
 

@@ -151,6 +151,22 @@ test('Core model validation and configuration storage failures retain their HTTP
 });
 
 
+test('group config passes only explicit boolean confirmation through to CLI writes', async () => {
+  const commands = [];
+  const restart = { status: 'not_restarted', reason: 'fence_conflict' };
+  const config = createGroupConfig({ zylosDir: '/isolated/instance', execute: async (file, args) => {
+    assert.equal(file, 'zylos');
+    commands.push(args);
+    return { stdout: JSON.stringify({ ok: true, data: { restart } }) };
+  } });
+  const reset = { kind: 'model', runtime: 'claude', reset: true };
+  for (const confirmed of [undefined, 'true', true]) {
+    assert.deepEqual((await config.submit('origin', { ...reset, confirmed })).data.restart, restart);
+  }
+  const args = ['group', 'model', 'reset', '--group', 'origin', '--runtime', 'claude', '--json'];
+  assert.deepEqual(commands, [args, args, [...args, '--yes']]);
+});
+
 test('automatic naming command refusals keep their sanitized code and sentence with HTTP failure status', async () => {
   const { createNamingRequest } = await import('../workbench/naming-request.js');
   for (const [reply, code, message, status] of [

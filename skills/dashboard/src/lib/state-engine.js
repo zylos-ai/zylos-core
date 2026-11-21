@@ -97,9 +97,11 @@ export function deriveAgentState(signals) {
 }
 
 export class StateEngine {
-  constructor(store, collectors, config, { now = () => Date.now(), onStateChange = null, readOriginPresence = async () => null } = {}) {
+  constructor(store, collectors, config, { now = () => Date.now(), onStateChange = null, readOriginPresence = async () => null, readOriginIdentity = null } = {}) {
     this.store = store;
     this._readOriginPresence = readOriginPresence;
+    this._readOriginIdentity = readOriginIdentity;
+    this._originRunId = null;
     this._originProbe = null;
     this.collectors = collectors;
     this._config = config;
@@ -130,7 +132,12 @@ export class StateEngine {
   }
 
   onEvent(event) {
-    if (this._isForeignRuntimeEvent(event)) {
+    if (this._readOriginIdentity) {
+      const origin = this._observeOriginRun();
+      if (!origin || (event.session_group != null && event.session_group !== 'origin') ||
+          event.runtime !== origin.runtime ||
+          (event.run_id ? event.run_id !== origin.runId : event.session_id !== origin.sessionId)) return;
+    } else if (this._isForeignRuntimeEvent(event)) {
       this._resetRuntimeForegroundState();
       this._broadcastStateChange();
       this._maybeSnapshot();
@@ -368,6 +375,7 @@ export class StateEngine {
   }
 
   getState() {
+    this._observeOriginRun();
     const derived = this._deriveState();
     const now = new Date(this._now()).toISOString();
 
@@ -459,9 +467,10 @@ export class StateEngine {
   }
 
   async initialize() {
+    this._observeOriginRun();
     try {
       const snapshot = this.store.latestSnapshot(
-        this._config.runtime || 'claude',
+        this._originRuntime(),
         this._currentSessionId()
       );
       if (snapshot) {
@@ -575,7 +584,7 @@ export class StateEngine {
       lastProgressType: null,
       collectorLivenessAvailable: this._isCollectorLivenessAvailable(),
       activeOtelSpan: false,
-      runtime: this._config.runtime || 'claude'
+      runtime: this._originRuntime()
     };
 
     return deriveAgentState(signals);
@@ -616,8 +625,26 @@ export class StateEngine {
     });
   }
 
+  _observeOriginRun() {
+    if (!this._readOriginIdentity) return null;
+    const origin = this._readOriginIdentity();
+    const runId = origin?.runId ?? null;
+    if (runId !== this._originRunId) {
+      this._originRunId = runId;
+      this._resetRuntimeForegroundState();
+      this._state.lastAssistantMessage = null;
+      this._state.lastProgressAt = null;
+      this._toolTombstones.clear();
+    }
+    return origin;
+  }
+
+  _originRuntime() {
+    return this._readOriginIdentity ? this._readOriginIdentity()?.runtime ?? 'unknown' : this._config.runtime || 'claude';
+  }
+
   _isForeignRuntimeEvent(event) {
-    const currentRuntime = this._config.runtime || 'claude';
+    const currentRuntime = this._originRuntime();
     return Boolean(event?.runtime && event.runtime !== currentRuntime);
   }
 
@@ -799,9 +826,11 @@ export class StateEngine {
   }
 
   _saveSnapshot() {
+    const origin = this._observeOriginRun();
+    if (this._readOriginIdentity && !origin) return;
     this.store.saveSnapshot({
-      runtime: this._config.runtime || 'claude',
-      session_id: this._currentSessionId(),
+      runtime: origin?.runtime ?? this._originRuntime(),
+      session_id: origin?.sessionId ?? this._currentSessionId(),
       running_tool: JSON.stringify({
         tools: Object.fromEntries(this._state.runningTools),
         mainSessionId: this._state.mainSessionId,
@@ -826,6 +855,7 @@ export class StateEngine {
   }
 
   _currentSessionId() {
+    if (this._readOriginIdentity) return this._readOriginIdentity()?.sessionId ?? null;
     return process.env.CLAUDE_SESSION_ID || process.env.CODEX_SESSION_ID || null;
   }
 
@@ -834,7 +864,7 @@ export class StateEngine {
       const allHealth = this.store.getSourceHealth();
       const now = this._now();
 
-      const currentRuntime = this._config.runtime || 'claude';
+      const currentRuntime = this._originRuntime();
       const formatEntry = (name, { signalType = null, capability = 'supported', maxAgeS = 30, eventDriven = false, checkedWhenIdle = false } = {}) => {
         if (capability === 'unsupported') {
           return {

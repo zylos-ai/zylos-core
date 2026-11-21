@@ -29,9 +29,6 @@ Runtime behavior differs here:
 - **Codex**: `/exit` terminates background tasks. Before enqueueing `/exit`, make sure required background work has finished.
 - **Antigravity**: check both `manage_task list` and `manage_subagents list` and ensure all background tasks and subagents have finished before enqueueing `/clear`. Background work continues after `/clear`, but its results go to the old conversation and the new conversation never receives them. `/exit` kills background tasks.
 
-For configuration reclaim, all runtimes must first wait for necessary background
-work. Do not acknowledge ready while it is still running.
-
 For each running task, note:
 - **Agent ID** (e.g., `a42c1aabc5b984e69`)
 - **What it's doing** (brief description)
@@ -94,15 +91,8 @@ node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content 
 If enqueue is rejected, report failure and retain W4; do not loop or assume the
 session will rotate.
 
-### Configuration Reclaim
-
-After W4 succeeds and required background work finishes, call the supervisor's
-`ready-for-config-reclaim` entry using only your environment's group/run identity
-(IB-41). On accepted/already_accepted, finish the turn and let the supervisor
-reclaim; do not also enqueue exit/clear. On unchanged continue working with W4
-retained. On rejection or no connection report it and retain W4. If sent but the
-reply is uncertain, retry the same (G,R) idempotently or read the request record;
-do not add a separate exit.
+If asked in chat to change the runtime or model of the session you are running
+in, reply before triggering the immediate restart so the requester receives it.
 
 ## How It Works
 

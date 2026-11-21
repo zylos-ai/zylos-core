@@ -150,7 +150,7 @@ Example: `GET /api/instance/resources?range=24h`.
 
 ### GET /api/instance/runtime-options
 
-**Access:** Read. **Parameters:** `runtime=claude|codex|agy` (default active runtime), optional `model` to include its threshold metadata.
+**Access:** Read. **Parameters:** `runtime=claude|codex|agy` (defaults to the saved instance runtime), optional `model` to include its threshold metadata.
 
 Returns `runtime:string`, `current_model:string|null`, `current_effort:string|null`, `models:Array<{id:string,display_name?:string}>`, `efforts_by_model:Record<string,string[]>`, `model_thresholds:Record<string,number>`, `model_threshold_max:Record<string,number>`, `new_session_threshold:number`, `session_hot_ttl:object`, `zylos_version:string`, `runtime_cli:string`, and `cc_version:string|null`. For Antigravity, `current_model` and `current_effort` are null, `models` is empty and `efforts_by_model` is empty because this integration does not support model/effort overrides. `cc_version` carries the selected runtime's installed CLI version, including Antigravity; it is null when unavailable. Empty effort options mean capabilities are unknown or the model does not expose effort selection. Threshold values and maxima are percentages. These are configured defaults and available choices, not Origin runtime observations; the response never includes running_model or running_effort and does not collect Origin session evidence.
 
@@ -164,14 +164,14 @@ Example: `GET /api/instance/runtime-options?runtime=codex`.
 
 | `kind` | Other fields | Effect |
 |---|---|---|
-| `model` | `model:string`, optional `runtime:"claude"\|"codex"` | Change the selected runtime's default model |
-| `effort` | `effort:string`, optional `runtime` | Change default effort within the model's supported options |
+| `model` | `model:string`, optional `runtime:"claude"\|"codex"`, optional `confirmed:true` | Save the selected runtime's default model and request immediate restarts for running sessions that inherit it |
+| `effort` | `effort:string`, optional `runtime` | Change default effort within the model's supported options. With an explicit runtime, it applies at the next start |
 | `threshold` | `runtime`, `model:string`, `value:number\|string` | Set this model's rotation threshold, from 10 through its reported maximum |
 | `session-hot-ttl` | `minutes:number\|string` | Set idle reclaim time for group sessions and Origin (Origin only in native single mode), within the limits reported by runtime options; pre-migration instances remain read-only |
 
-Returns `ok:boolean`, optional `runtime:string`, `model:string`, `value:number`, `previous:string|null`, `requires_restart:boolean`, `minutes:number`, `seconds:number`, plus optional localized result metadata `message:string`, `messageKey:string`, `messageParams:object`. Specifying a runtime changes its defaults without requiring the active session to restart; callers should use the returned `requires_restart` value.
+Returns `ok:boolean`, optional `runtime:string`, `model:string`, `value:number`, `previous:string|null`, `requires_restart:boolean`, `minutes:number`, `seconds:number`, plus optional localized result metadata `message:string`, `messageKey:string`, `messageParams:object`. An explicit runtime model save reports immediate restart outcomes in `data.groups` using the same group result as the default runtime action below. Its `requires_restart` is false because Dashboard has already submitted the affected runs. Model and effort requests without an explicit runtime retain the Origin action contract via `requires_restart`.
 
-**Errors:** 400 `INVALID_DEFAULT`, `INVALID_RUNTIME`, `invalid_model`, `invalid_effort`, `invalid_value`; 409 `already_set`, `duplicate_request`, `environment_override`, `multi_session_required`; 503 `unknown_model_capabilities`; 500 `set_failed`; common write errors. Action failures select their HTTP response status; numeric internal `status` fields are omitted from the JSON write body.
+**Errors:** 400 `INVALID_DEFAULT`, `INVALID_RUNTIME`, `invalid_model`, `invalid_effort`, `invalid_value`; 409 `already_set`, `duplicate_request`, `environment_override`, `multi_session_required`, `CONFIRMATION_REQUIRED` (model save leaves the default unchanged if a restart may be needed and confirmation is missing); 503 `unknown_model_capabilities`; 500 `set_failed`; common write errors. Action failures select their HTTP response status; numeric internal `status` fields are omitted from the JSON write body.
 
 Example: `PUT /api/instance/defaults` with `{"kind":"threshold","runtime":"claude","model":"opus","value":80}`.
 
@@ -197,13 +197,13 @@ Example: `POST /api/instance/actions/switch-mode` with `{"mode":"multi"}`.
 
 ### POST /api/instance/actions/switch-runtime
 
-**Access:** Admin. **Parameters:** JSON `{runtime:"claude"|"codex"|"agy"}` plus any authentication-confirmation fields required by Core's runtime-switch flow.
+**Access:** Admin. **Parameters:** JSON `{runtime:"claude"|"codex"|"agy", confirmed?:true}`. Pass `confirmed: true` after the user accepts interruption. Omit it when there are no affected running sessions. Core refuses an unconfirmed operation if its observations show an affected session or cannot establish that there are none.
 
-Returns `{ok:true,...CoreResult}` on success, with optional `data` and `message`; failures use the common envelope. `AUTH_FAILED`, `AUTH_NOT_CONFIRMED` and `HOOKS_NOT_READY` results display the original error details; none is a successful switch. `AUTH_FAILED` means rejected or missing credentials; `AUTH_NOT_CONFIRMED` means the probe could not confirm authentication.
+Returns `{ok:true,...CoreResult}` on success. `data.result` is `saved` or `unchanged`, and `data.baseline` is the saved default. `data.groups` includes a `restart` result for each affected group when Core assesses immediate replacement. Its `status` is `accepted`, `not_restarted` or `unknown`. An unsuccessful or uncertain submission includes its `reason` and leaves the configuration saved. Each restart is bound to the run observed immediately before saving and is admitted independently. This also applies to default model saves. On Save, Dashboard rereads the running groups and their overrides before building the confirmation. A session that starts after the confirmation list is read can be restarted even if the dialog did not list it. Acceptance records a restart request before the replacement run is ready. Dashboard and its existing connections continue running, and the instance stream publishes the new default. Failures use the common envelope. `AUTH_FAILED`, `AUTH_NOT_CONFIRMED` and `HOOKS_NOT_READY` results display the original error details. `AUTH_FAILED` means rejected or missing credentials. `AUTH_NOT_CONFIRMED` means the probe could not confirm authentication.
 
 **Errors:** HTTP 403 `AUTH_FAILED` (explicit credential rejection or logged-out status for any runtime) or `AUTH_NOT_CONFIRMED` (probe could not confirm authentication); HTTP 503 `HOOKS_NOT_READY` (target hooks or instructions not ready; for Codex, invalid hook trust that could not be rebuilt, with the validation reason and rebuild error in `error.message`); invalid runtime, supervisor/transition rejection codes, and common write errors. The two authentication errors retain distinct `error.message` remedies: replace credentials/log in for `AUTH_FAILED` (agy: `zylos runtime agy --save-apikey <key>`); check network/proxy and retry for `AUTH_NOT_CONFIRMED`.
 
-Example: `POST /api/instance/actions/switch-runtime` with `{"runtime":"codex"}`.
+Example with one affected Origin run: `POST /api/instance/actions/switch-runtime` with `{"runtime":"codex","confirmed":true}`. HTTP 409 `CONFIRMATION_REQUIRED` leaves the default unchanged when confirmation is missing.
 
 ### GET /api/instance/core-update
 
@@ -337,7 +337,7 @@ Returns the complete group observation, including the applicable list fields plu
 
 Detail also includes `currentAction:{tool:string|null,message:string|null,receivedAt:string|null}` using the same bounded, sanitized projection as a running list row. Optional `include` extras do not change this field.
 
-`effective` contains `{runtime:string|null,model:string|null,effort:string|null,runtimeOverridden:boolean|null,modelOverridden:boolean|null}`. For a running or starting process, effective values and override flags describe the actual launch; runtime override compares that runtime with the current baseline and model override reads the launch’s override mode. Offline flags/values describe current desired configuration. Top-level override fields and `effective` use the same observations. Unknown evidence yields null. `run` is `{runId:string|null,sessionId:string|null,createdAt:string|null}|null`.
+`effective` contains `{runtime:string|null,model:string|null,effort:string|null,runtimeOverridden:boolean|null,modelOverridden:boolean|null}`. Effective runtime, model and effort describe the actual ready run. They are null while a run is starting and describe the desired configuration when offline. The runtime override flag reports whether the group explicitly selects a runtime, even when that selection equals the instance default. The model override flag reads the launch override mode for an active run and the desired model configuration when offline. Top-level override fields and `effective` use the same observations. Unknown evidence yields null. `run` is `{runId:string|null,sessionId:string|null,createdAt:string|null}|null`.
 
 When requested, `raw:string|null` contains sanitized first-message content and `config:object|null` contains Core runtime/model read envelopes. An optional read failure returns its field as null and `rawError` or `configError` as `{code:string,message:string}`; it does not fail the whole detail request. Unrequested extras and their error fields are omitted. The address remains stable across lifecycle changes.
 
@@ -417,11 +417,13 @@ Example: `GET /api/groups/origin/backlog`.
 - `{kind:"model",runtime:"claude"|"codex",model:string,effort:string}` sets a complete pair.
 - `{kind:"model",runtime:"claude"|"codex",reset:true}` restores the runtime's default model/effort.
 
-Returns `{ok:true,data?:object,...metadata}` on success; Core failures use the common error envelope and a non-2xx status. `RESULT_UNKNOWN` means the result could not be established; read the group detail before deciding whether any retry is needed.
+Include optional `confirmed:boolean` on any change. Only `true` passes `--yes` to Core. An effective engine or active model/effort change that could interrupt a running group requires confirmation before it is stored. Saving a stopped group does not start it.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`, `SESSION_GROUP_TOO_LONG`, `INVALID_ARGUMENT`, `MODEL_PAIR_REQUIRED`, `MODEL_CONFIG_INVALID` and other Core validation rejections; 404 `SESSION_GROUP_NOT_FOUND`; 500 `CONFIG_STORE_FAILED`; 502 `RESULT_UNKNOWN`; common write errors.
+Returns `{ok:true,data?:object,...metadata}` on success. If Core tried to restart the affected run after saving, `data.restart` has `status:"accepted"|"not_restarted"|"unknown"` and an optional `reason:string`. A refused or uncertain restart leaves the change saved. The restart is bound to the run Core observes before the write. Dashboard checks for a changed run it knows about while the confirmation is open. Core can observe a newer run between confirmation and the write. The caller uses this restart result directly. For a combined edit, Dashboard sends two writes and puts the effective change last. For an engine switch, it first stores the target engine's model. If the effective engine stays the same, it stores the engine preference before writing the active model. The writes commit separately. If Core reports a restart on the first write because the effective engine changed concurrently, Dashboard leaves the remaining edit unsaved.
 
-Example: `PUT /api/groups/telegram%3Aexample/config` with `{"kind":"runtime","value":"inherit"}`.
+**Errors:** 400 `SESSION_GROUP_INVALID`, `SESSION_GROUP_TOO_LONG`, `INVALID_ARGUMENT`, `MODEL_PAIR_REQUIRED`, `MODEL_CONFIG_INVALID` and other Core validation rejections; 404 `SESSION_GROUP_NOT_FOUND`; 409 `CONFIRMATION_REQUIRED` if confirmation is missing and the change may interrupt a running group or its running state cannot be verified; 500 `CONFIG_STORE_FAILED`; 502 `RESULT_UNKNOWN`; common write errors. `RESULT_UNKNOWN` means the result could not be established. Read the group detail before deciding whether any retry is needed.
+
+Example: `PUT /api/groups/telegram%3Aexample/config` with `{"kind":"runtime","value":"inherit","confirmed":true}`.
 
 ### PUT /api/groups/:id/name
 
@@ -485,9 +487,9 @@ Example: `POST /api/groups/telegram%3Aexample/actions/chop-chop` with `{"runId":
 
 ### POST /api/groups/:id/actions/restart
 
-**Access:** Admin. **Parameters:** same identity body as interrupt.
+**Access:** Admin. **Parameters:** same identity body as interrupt. For a stopped Origin, an empty body requests a wake. A run-bound request for an absent target returns `already_stopped` without waking it.
 
-Returns the supervisor result with `ok:boolean`, `requestId?:string`, `submission:"accepted"|"rejected"|"unknown"|"not_submitted"`, optional `completion:string`, `unknown?:boolean`; failures use `error:{code,message}` and non-2xx HTTP status. Origin uses the same public address and Core's Origin action implementation. Query the restart resource to establish progress.
+Returns the supervisor result with `ok:boolean`, `requestId?:string`, `submission:"accepted"|"rejected"|"unknown"|"not_submitted"`, optional `completion:string`, `unknown?:boolean`; failures use `error:{code,message}` and non-2xx HTTP status. Each group can have one pending manual restart. Requests for different groups are admitted independently. Origin uses the same public address and Core's Origin action implementation. Query the restart resource to establish progress.
 
 **Errors:** same target/mode/access errors as interrupt; `INSTANCE_ROOT_MISMATCH`; supervisor rejection/unavailable result codes.
 
@@ -618,7 +620,7 @@ Schedule `nextRunAt`, `lastRunAt`, `updatedAt`, history `executedAt`/`completedA
 
 | Method/path | Access, input and result | Errors / example |
 |---|---|---|
-| `GET /api/settings/pricing` | Read. Returns `{active,runtimes:{claude,codex}}`; runtime objects contain built-in model names, effective model prices, priority prices where applicable, configured prices and fast-mode metadata. Prices use input/output/cacheRead/cacheCreation per million tokens. | Common read errors. Example: `GET /api/settings/pricing`. |
+| `GET /api/settings/pricing` | Read. Returns `{active,runtimes:{claude,codex}}`; `active` is the saved instance default. Runtime objects contain built-in model names, effective model prices, priority prices where applicable, configured prices and fast-mode metadata. Prices use input/output/cacheRead/cacheCreation per million tokens. | Common read errors. Example: `GET /api/settings/pricing`. |
 | `PUT /api/settings/pricing` | Admin. JSON `{runtimes:{claude?:{modelPrices?,fastModeMultiplier?},codex?:{modelPrices?,priorityModelPrices?}}}`. Returns `{ok:true,active,runtimes}`. Claude multiplier can be null to restore default. Prices must be finite nonnegative numbers; built-in models cannot be removed. | 400 `invalid_pricing` / `invalid_request`; 500 save failure. Example body: `{"runtimes":{"claude":{"fastModeMultiplier":2}}}`. The single-runtime request format is removed. |
 | `GET /api/settings/timezone` | Read. Returns `{tz,writable,read_only_reason,restart_services,restart_status}`. `tz` is an IANA name or null; the service list is advisory. | Common read errors. Example: `GET /api/settings/timezone`. |
 | `PUT /api/settings/timezone` | Admin. JSON `{tz:string}`. Saves instance `.env` without restarting services; returns `{ok:true,tz,previous,changed,...restartAdvice}`. | 400 `invalid_timezone`, `timezone_unavailable_on_host`; 503 `tz_env_read_error` when `.env` cannot be read; 500 `tz_write_failed` when saving `.env` fails. A body that cannot be read also uses the `invalid_timezone` code rather than the common ones: invalid JSON returns 400 `invalid_timezone` and a body over 4 KiB returns 413 `invalid_timezone`. Example body: `{"tz":"Asia/Singapore"}`. |
@@ -675,7 +677,7 @@ Chat validation uses HTTP 400 (`invalid_chat_parameters`, invalid conversation/c
 | `POST /api/observer/leases/:id/release` | Releases owned lease → `{ok:true,released:true}`; missing owned lease is idempotent. Example: `POST /api/observer/leases/<id>/release`. |
 | `GET /observer/frame` | HTML terminal frame; `X-Observer-Lease` header required. HEAD is supported. Example: `GET /observer/frame` with lease header. |
 | `GET /observer/stream` | WebSocket upgrade with the observer protocol and lease credentials. Query parameters are rejected. Example: connect to `/observer/stream` using the issued lease. |
-| `GET /api/observer/history/sessions` | Optional `session_group` (default Origin); in single mode a non-Origin selection returns 400 `invalid_session_group`. Existing historical keys follow the same C4-catalog membership rules as group detail (unreadable catalog: 502 `group_catalog_unreadable`, unknown/unsafe key: 400 `invalid_session_group`) → `{runtime,current,sessions}`. Each list request refreshes discovery and file metadata (including appended titles/bytes/timestamps and Codex event ordering), reusing parsed metadata; entries/content/search retain scoped snapshots. Example: `GET /api/observer/history/sessions?session_group=telegram%3Ateam`. |
+| `GET /api/observer/history/sessions` | Optional `session_group` (default Origin); in single mode a non-Origin selection returns 400 `invalid_session_group`. Existing historical keys follow the same C4-catalog membership rules as group detail (unreadable catalog: 502 `group_catalog_unreadable`, unknown/unsafe key: 400 `invalid_session_group`) → `{runtime,current,sessions}`. A group can list sessions recorded under different runtimes. Mixed-runtime lists are ordered by descending update time. Entries, content and search use the requested session’s recorded runtime. Each list request refreshes discovery and file metadata (including appended titles/bytes/timestamps and Codex event ordering), reusing parsed metadata; entries/content/search retain scoped snapshots. Example: `GET /api/observer/history/sessions?session_group=telegram%3Ateam`. |
 | `GET /api/observer/history/entries` | Same group, required `session`, optional `before|after|around`, `limit=1..200`, `internal=0|1` → entries, updates and older/newer cursors. Example: `GET /api/observer/history/entries?session_group=origin&session=<id>`. |
 | `GET /api/observer/history/content` | Same group, required `session,entry,field`, optional text `offset` → UTF-16 text chunk `{text,offset,next,total}` or binary bytes. Example: `GET /api/observer/history/content?session_group=origin&session=<id>&entry=o:0&field=text`. |
 | `GET /api/observer/history/search` | Same group, required `session,q` (2–200 chars), optional `limit=1..200`, `before` and `internal=1` to include internal entries → `{matches:Array<{entry,snippet}>,before,hasMore}`. Example: `GET /api/observer/history/search?session_group=origin&session=<id>&q=hello`. |

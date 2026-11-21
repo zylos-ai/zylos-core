@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { updateConfigWithLock } from '../config-lock.js';
 import { readConfigStrict } from '../config-store.js';
-import { executeRuntimeSwitch, observeRuntimeGroups, runtimeCommand } from '../../commands/runtime.js';
+import { executeRuntimeSwitch, runtimeCommand } from '../../commands/runtime.js';
+import { observeRuntimeGroups, requestConfigRestart } from '../config-restart.js';
 
 function fixture(overrides = {}) {
   const calls = [];
@@ -26,7 +27,7 @@ function fixture(overrides = {}) {
 test('runtime prechecks are ordered and stop before persistence', async () => {
   const success = fixture();
   assert.equal((await success.run()).data.result, 'saved');
-  assert.deepEqual(success.calls, ['adapter', 'read', 'exists', 'hooks', 'auth', 'write', 'observe']);
+  assert.deepEqual(success.calls, ['adapter', 'read', 'exists', 'hooks', 'auth', 'observe', 'write']);
   for (const [override, code, expected] of [
     [{ exists: () => false }, 'RUNTIME_NOT_INSTALLED', ['adapter', 'read']],
     [{ read: () => ({ state: 'error' }) }, 'CONFIG_UNREADABLE', ['adapter']],
@@ -110,7 +111,62 @@ test('unchanged skips install/hooks/auth/write; no-validate only skips auth', as
   assert.deepEqual(same.calls, ['adapter', 'observe']);
   const f = fixture(); const result = await f.run(['--no-validate']);
   assert.equal(result.ok, true); assert.equal(result.data.warnings[0].code, 'AUTH_CHECK_SKIPPED');
-  assert.deepEqual(f.calls, ['adapter', 'read', 'exists', 'hooks', 'write', 'observe']);
+  assert.deepEqual(f.calls, ['adapter', 'read', 'exists', 'hooks', 'observe', 'write']);
+});
+
+test('default switch submits confirmed runs after saving and reports each refusal independently', async () => {
+  const requests = [];
+  const f = fixture({
+    observe: async (baseline, mode) => observeRuntimeGroups(baseline, mode, {
+      list: () => ['chat:a', 'chat:b', 'chat:explicit', 'chat:starting'].map(sessionGroup => ({ sessionGroup })),
+      overrides: () => [{ sessionGroup: 'chat:explicit' }],
+      identity: sessionGroup => sessionGroup === 'origin' ? { present: false }
+        : { present: true, ready: sessionGroup !== 'chat:starting', runId: `run-${sessionGroup}`, runtime: 'claude', launchConfig: { runtime: 'claude', mode: 'default' } },
+    }),
+    restart: target => {
+      assert.ok(f.calls.includes('write'));
+      requests.push(target);
+      return target.sessionGroup === 'chat:a' ? { status: 'not_restarted', reason: 'fence_conflict' } : { status: 'accepted' };
+    },
+  });
+  const unconfirmed = await f.run();
+  assert.equal(unconfirmed.error.code, 'CONFIRMATION_REQUIRED');
+  assert.deepEqual(unconfirmed.error.groups, ['chat:a', 'chat:b']);
+  assert.equal(f.calls.includes('write'), false);
+  const result = await f.run(['--yes']);
+  assert.equal(result.data.result, 'saved');
+  assert.deepEqual(requests, [{ sessionGroup: 'chat:a', runId: 'run-chat:a' }, { sessionGroup: 'chat:b', runId: 'run-chat:b' }]);
+  assert.deepEqual(result.data.groups.map(row => [row.sessionGroup, row.restart?.reason ?? row.restart?.status ?? row.status]), [
+    ['chat:a', 'fence_conflict'], ['chat:b', 'accepted'], ['chat:explicit', 'override_kept'], ['chat:starting', 'not_ready'], ['origin', 'not_running'],
+  ]);
+});
+
+test('saving an API key for the current engine needs no restart confirmation when status is unknown', async () => {
+  const f = fixture({
+    read: () => ({ state: 'ok', config: { runtime: 'codex', session_mode: 'multi' } }),
+    observe: async () => ({ groups: [{ sessionGroup: 'origin', status: 'unknown' }], groupsComplete: false, observationErrors: [] }),
+    restart: () => assert.fail('credential-only save cannot restart a session'),
+  });
+  const result = await f.run(['--save-apikey', 'fixture-key']);
+  assert.equal(result.ok, true);
+  assert.equal(result.data.result, 'unchanged');
+  assert.deepEqual(result.data.credentialsSaved, ['apiKey']);
+  assert.equal(result.data.groups[0].status, 'unknown');
+  assert.ok(f.calls.includes('credentials'));
+  assert.ok(!f.calls.includes('write'), 'credential-only changes leave the default engine untouched');
+});
+
+test('configuration restart binds the run and reports an unknown outcome if the reply is lost', async () => {
+  const calls = [];
+  const send = async request => { calls.push(request); return { kind: 'timeout', sent: true }; };
+  const group = { sessionGroup: 'origin' };
+  assert.deepEqual(await requestConfigRestart(group, send), { status: 'not_restarted', reason: 'identity_unavailable' });
+  assert.deepEqual(calls, [], 'an unbound restart could wake a stopped Origin');
+  assert.deepEqual(await requestConfigRestart({ ...group, runId: 'run-a' }, send), { status: 'unknown', reason: 'timeout' });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].type, 'manual_restart');
+  assert.equal(calls[0].sessionGroup, 'origin');
+  assert.equal(calls[0].expectedRunId, 'run-a');
 });
 
 test('persistence errors preserve credentials and after-rename uncertainty', async () => {
@@ -120,7 +176,7 @@ test('persistence errors preserve credentials and after-rename uncertainty', asy
     assert.equal(result.error.phase, phase);
     assert.deepEqual(result.error.persisted, phase === 'after_rename' ? null : ['apiKey']);
     if (phase === 'after_rename') assert.deepEqual(result.error.persistedBeforeConfig, ['apiKey']);
-    assert.equal(f.calls.includes('observe'), false);
+    assert.equal(f.calls.includes('observe'), true);
   }
 });
 
@@ -144,8 +200,9 @@ test('lock-return snapshot determines previous/config/changed, including concurr
   }
 });
 
-test('saved baseline survives a configured single Origin identity read error', async () => {
+test('confirmed baseline save reports a configured single Origin identity read error', async () => {
   const f = fixture({
+    read: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'single' } }),
     write: () => ({ previous: { runtime: 'claude' }, config: { runtime: 'codex', session_mode: 'single' }, changed: true }),
     observe: (baseline, mode) => observeRuntimeGroups(baseline, mode, {
       list: () => [],
@@ -153,7 +210,17 @@ test('saved baseline survives a configured single Origin identity read error', a
       identity: async group => { assert.equal(group, 'origin'); throw new Error('unavailable'); },
     }),
   });
-  const result = await f.run();
+  for (const [groups, groupsComplete, affected] of [
+    [[{ sessionGroup: 'origin', inherits: true, status: 'unknown' }], true, ['origin']],
+    [[{ sessionGroup: 'origin', inherits: true, status: 'not_running' }], false, []],
+  ]) {
+    const guarded = fixture({ observe: async () => ({ groups, groupsComplete, observationErrors: [] }) });
+    const rejected = await guarded.run();
+    assert.equal(rejected.error.code, 'CONFIRMATION_REQUIRED');
+    assert.deepEqual(rejected.error.groups, affected);
+    assert.ok(!guarded.calls.includes('write'));
+  }
+  const result = await f.run(['--yes']);
   assert.equal(result.ok, true);
   assert.equal(result.data.result, 'saved');
   assert.equal(result.data.sessionMode, 'single');
@@ -174,7 +241,7 @@ test('group union uses explicit override priority and preserves unknown identiti
       : { present: true, runtime: group === 'c' ? 'codex' : 'claude', launchConfig: {} },
   });
   assert.deepEqual(result.groups.map(group => [group.sessionGroup, group.status]), [
-    ['a', 'pending_reclaim'], ['b', 'override_kept'], ['c', 'effective'], ['d', 'not_running'], ['e', 'unknown'], ['origin', 'pending_reclaim'],
+    ['a', 'restart_needed'], ['b', 'override_kept'], ['c', 'effective'], ['d', 'not_running'], ['e', 'unknown'], ['origin', 'restart_needed'],
   ]);
   const failed = await observeRuntimeGroups('codex', 'unreadable', {
     list: async () => { throw new Error('tmux'); }, overrides: async () => { throw new Error('busy'); },

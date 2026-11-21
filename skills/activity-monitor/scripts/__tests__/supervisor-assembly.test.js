@@ -330,15 +330,6 @@ test('assembly: one failed probe poll cannot starve another runtime or auth reco
 });
 
 
-test('assembly: config reclaim resolves mode at admission, after cutover',async t=>{
- let mode='single';const selected=[];
- const {supervisor}=fixture(t,{readMode:()=>({mode}),resolveLaunchConfig:input=>{selected.push(input);return {runtime:'claude',mode:'default'};}});
- await supervisor.loop.deps.readConfiguration();
- await supervisor.admission.resolveLaunchConfig('chat:A');mode='multi';
- await supervisor.admission.resolveLaunchConfig('chat:A');
- assert.deepEqual(selected,[{sessionGroup:'chat:A',sessionMode:'single'},{sessionGroup:'chat:A',sessionMode:'multi'}]);
-});
-
 test('assembly: stopped, unknown, or no-longer-ready processes cannot refresh',async t=>{
  const {supervisor,scenes,root}=fixture(t);
  const scene={sessionGroup:'chat:A',runtime:'claude',runId:'r',sessionId:'s',runDir:root,createdAt:100,ready:true,present:true,processRunning:true};

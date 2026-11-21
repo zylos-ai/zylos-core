@@ -183,6 +183,23 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
       'CLI deletion through another connection invalidates cached group membership');
     assert.equal(attributionScans, 2, 'external commit refreshes attribution once');
   } finally { external.close(); }
+  // A runtime replacement adds history to the same group. Both sessions
+  // remain listed, and opening either still selects its own file parser.
+  const replacement = path.join(codexRoot, 'rollout-team-replacement.jsonl');
+  await fs.copyFile(rollout, replacement);
+  t.after(() => fs.rm(replacement, { force: true }));
+  store.insertEvent({ id: 'team-replacement', ingest_id: 'team-replacement', session_id: 'team-codex',
+    session_group: 'telegram:team', runtime: 'codex', event_type: 'session_start', category: 'lifecycle', timestamp: '2031-01-01T00:00:00Z' });
+  store.upsertCodexRolloutPath({ sessionId: 'team-codex', transcriptPath: replacement, lastEventAt: '2031-01-01T00:00:00Z' });
+  await fs.utimes(replacement, new Date('2029-01-01'), new Date('2029-01-01'));
+  const switched = await get('sessions', { session_group: 'telegram:team' });
+  assert.equal(switched.body.runtime, 'codex');
+  assert.deepEqual(switched.body.sessions.filter(row => row.kind === 'main').map(row => row.id), ['team-session', 'team-codex']);
+  for (const [session, needle] of [['team-session', 'team-session needle'], ['team-codex', 'codex needle']]) {
+    const search = await get('search', { session_group: 'telegram:team', session, q: needle });
+    assert.equal(search.status, 200);
+    assert.match(search.body.matches[0].snippet, new RegExp(needle));
+  }
   const readyDir = path.join(zylosDir, 'activity-monitor', 'session-groups', 'telegram:team');
   await fs.mkdir(readyDir, { recursive: true });
   await fs.writeFile(path.join(readyDir, 'current-session.json'), JSON.stringify({ sessionId: 'team-session' }));

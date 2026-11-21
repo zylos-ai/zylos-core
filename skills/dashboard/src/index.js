@@ -133,9 +133,8 @@ await migratePasswordIfNeeded(config);
 const scheduleTz = createScheduleTz({ zylosDir: config.zylosDir });
 await scheduleTz();
 const instanceTz = () => scheduleTz.current().tz;
-const activeRuntime = loadZylosConfig(config.zylosDir).runtime || process.env.ZYLOS_RUNTIME || 'claude';
-const isClaudeRuntime = activeRuntime === 'claude';
-config.runtime = activeRuntime;
+const defaultRuntime = (zylosConfig = loadZylosConfig(config.zylosDir)) => zylosConfig.runtime ?? 'claude';
+config.runtime = defaultRuntime();
 
 // 1-2. Store
 const dbPath = path.join(config.dataDir, 'dashboard.db');
@@ -171,7 +170,6 @@ const observerManager = new ObserverManager({
   coordinator: observerCoordinator,
   containment: observerContainment,
   authGate: auth,
-  runtime: activeRuntime,
   resolveTarget: observerTargets.resolve,
   sessionMode: observerTargets.mode,
   maxViewers: config.observer.maxViewers,
@@ -314,6 +312,7 @@ function getSystemMetrics() {
 // 7. State engine
 const stateEngine = new StateEngine(store, collectors, config, {
   readOriginPresence: () => sessionObservations.originPresence(),
+  readOriginIdentity: () => coreState.getReadyIdentity(),
   onStateChange: (st) => {
     scheduleFleetStateBroadcast();
   }
@@ -406,7 +405,7 @@ function buildInstancePayload() {
   const defaults = runtimeDefaults(zylosConfig);
   const resources = getSystemMetrics();
   return { agent: { ...config.agent, ...agentColor(config.agent?.name) }, tz: instanceTz(),
-    session_mode: observed.sessionModeStatus ?? { sessionMode: readFleetSessionMode(), transition: null, globalGate: null, blocked: null, supervisor: 'unknown', lastCompleted: null, lastEvents: [] }, default_runtime: zylosConfig.runtime ?? activeRuntime, defaults,
+    session_mode: observed.sessionModeStatus ?? { sessionMode: readFleetSessionMode(), transition: null, globalGate: null, blocked: null, supervisor: 'unknown', lastCompleted: null, lastEvents: [] }, default_runtime: defaultRuntime(zylosConfig), defaults,
     versions: Object.fromEntries(['zylos', ...DASHBOARD_RUNTIMES].map(runtime => [runtime, runtimeVersionRecord(runtime)])),
     runtimeHealth: observed.runtimeHealth ?? null, accounts: observed.accounts ?? null,
     supervisorPaused: observed.supervisorPaused ?? null, autoRestarts: observed.autoRestarts ?? null,
@@ -940,9 +939,9 @@ async function runInitialCollectors() {
 async function startupSequence({ initialCollectors = true } = {}) {
   if (initialCollectors) await runInitialCollectors();
 
-  // State engine initialize (snapshot restore + replay)
-  await stateEngine.initialize();
+  // Resolve the live Origin before restoring its foreground snapshot.
   await coreState.start();
+  await stateEngine.initialize();
 }
 
 function loadZylosConfig(zylosDir, fallback = {}) {
@@ -1138,8 +1137,8 @@ async function handleApi(req, res, pathname, url) {
   }
 
   if (pathname === '/api/instance/runtime-options') {
-    handleRuntimeOptions(url, res, { activeRuntime,
-      zylosConfig: { ...loadZylosConfig(config.zylosDir), zylosDir: config.zylosDir },
+    const zylosConfig = { ...loadZylosConfig(config.zylosDir), zylosDir: config.zylosDir };
+    handleRuntimeOptions(url, res, { activeRuntime: defaultRuntime(zylosConfig), zylosConfig,
       zylosVersion, installedVersions: installedVersions() });
     return true;
   }
@@ -1242,7 +1241,7 @@ function validateModelPrices(modelPrices, runtime, requiredModels = builtInModel
 }
 
 function allSettingsPayload() {
-  return { active: activeRuntime, runtimes: { claude: settingsPayload('claude'), codex: settingsPayload('codex') } };
+  return { active: defaultRuntime(), runtimes: { claude: settingsPayload('claude'), codex: settingsPayload('codex') } };
 }
 
 function validateRuntimeSettings(body, runtime) {

@@ -47,17 +47,21 @@ export async function runConversationConfigBrowser(t, sandbox) {
       const detailPath = '/api/groups/' + encodeURIComponent(mine);
       if (pathname === detailPath + '/config' && request.method() === 'PUT') {
         const change = request.postDataJSON();
-        updates.push(change.kind);
+        updates.push(change);
         if (change.kind === 'model' && failModel) return route.fulfill({ json: { ok: false, error: 'fixture rejected the model' } });
+        if (running && change.confirmed !== true) return route.fulfill({ status: 409, json: {
+          ok: false, error: { code: 'CONFIRMATION_REQUIRED' },
+        } });
         if (change.kind === 'runtime') runtime = change.value;
         else { model = change.model; effort = change.effort; }
         return route.fulfill({ json: { ok: true, data: { runtime, resolved: pair(),
           desired: change.kind === 'runtime' ? { runtime } : pair(),
-          running: { status: running ? 'pending' : 'not_running' } } } });
+          running: { status: running ? 'pending' : 'not_running' },
+          ...(running && { restart: { status: 'accepted' } }) } } });
       }
       if (pathname === detailPath + '/actions/restart') {
-        updates.push(request.postDataJSON().runId);
-        return route.fulfill({ json: { ok: true, result: 'accepted' } });
+        updates.push('unexpected restart POST');
+        return route.fulfill({ status: 500, json: { ok: false, error: 'duplicate restart' } });
       }
       if ([detailPath, '/api/groups/' + encodeURIComponent(external)].includes(pathname)) {
         const response = await route.fetch({ url: original });
@@ -169,11 +173,13 @@ export async function runConversationConfigBrowser(t, sandbox) {
       await f.ready(panel);
       await f.choose(panel, 'sonnet');
       const save = editor => editor.getByRole('button', { name: 'Save', exact: true });
+      const modelWrite = model => ({ kind: 'model', runtime: 'claude', model, effort: 'medium' });
+      const offlineWrites = [modelWrite('sonnet'), modelWrite('opus')];
       await save(panel).click();
       await side.locator('.wb-cfg-line b').filter({ hasText: 'sonnet' }).waitFor();
       assert.match(await button.innerText(), /sonnet/);
       assert.equal(await side.locator('.wb-cfg-model select').first().inputValue(), 'sonnet');
-      assert.deepEqual(updates, ['model']);
+      assert.deepEqual(updates, offlineWrites.slice(0, 1));
       await page.keyboard.press('Escape');
       await f.choose(side, 'opus');
       await save(side).click();
@@ -187,17 +193,18 @@ export async function runConversationConfigBrowser(t, sandbox) {
       await save(panel).click();
       const confirmation = page.getByRole('alertdialog');
       await confirmation.waitFor();
-      assert.deepEqual(updates, ['model', 'model']);
+      assert.deepEqual(updates, offlineWrites);
       await confirmation.getByRole('button', { name: 'Save and restart' }).click();
-      await panel.locator('.wb-config-result').filter({ hasText: 'Accepted' }).waitFor();
-      assert.deepEqual(updates, ['model', 'model', 'model', 'config-run']);
+      await panel.getByText('Restart request accepted', { exact: true }).waitFor();
+      const confirmedWrite = { ...modelWrite('sonnet'), confirmed: true };
+      assert.deepEqual(updates, [...offlineWrites, confirmedWrite]);
       assert.equal(await confirmation.count(), 0);
       f.failNextModel();
       await f.choose(panel, 'opus');
       await save(panel).click();
       await confirmation.getByRole('button', { name: 'Save and restart' }).click();
       await panel.locator('.wb-config-error').filter({ hasText: 'fixture rejected the model' }).waitFor();
-      assert.deepEqual(updates, ['model', 'model', 'model', 'config-run', 'model']);
+      assert.deepEqual(updates, [...offlineWrites, confirmedWrite, { ...modelWrite('opus'), confirmed: true }]);
       assert.deepEqual(f.errors, []);
     } finally { await f.context.close(); }
   });

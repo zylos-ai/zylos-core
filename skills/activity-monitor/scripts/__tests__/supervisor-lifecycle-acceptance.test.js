@@ -4,10 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { SupervisorLifecycle } from '../supervisor-lifecycle.js';
-import { SupervisorScenes } from '../supervisor-scenes.js';
 import { fixture as databaseFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
-import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT } from '../../../zylos-memory/scripts/sync-prompts.js';
 import { PRE_RECLAIM_CHECK_PROMPT } from '../reclaim-prompts.js';
 import { groupMemoryDir } from '../../../../cli/lib/session-group-paths.js';
@@ -32,7 +30,7 @@ function localFixture(t, Class = SupervisorLifecycle, options = {}) {
     groupRunDir: () => f.root,
     readSyncMarker: args => { f.markerCalls.push(args); return f.marker; },
     prompts: { GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync',
-      ROTATION_PROMPT: 'rotate', CONFIG_RECLAIM_PROMPT: 'config' },
+      ROTATION_PROMPT: 'rotate' },
     ...options.deps };
   const configuration = f.context.configuration;
   Object.defineProperty(f, 'context', { get: () => ({ configuration, transition: f.db.getModeTransition(),
@@ -96,36 +94,21 @@ test('consumer accepts expired/wrong-run/corrupt marker results and blocks only 
   await markerScenario(t, SupervisorLifecycle);
 });
 
-async function configScenario(t, Class) {
-  const target = readyTmuxTarget(t, { prefix: 'supervisor-config-f2-', mode: 'multi' });
-  const store = createStore(target.db, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }), validateModel: () => true });
-  const scenes = new SupervisorScenes({ env: target.env, connectionOptions: { socketPath: target.socketPath, binary: target.binary },
-    readMode: () => ({ mode: 'multi' }), readActivity: () => ({ state: 'idle', idleSince: 1 }), readUsage: () => null });
-  const old = await scenes.observeGroup('origin');
-  assert.deepEqual(old.launchConfig, { runtime: 'claude', mode: 'default' });
-  store.setSessionRuntimeConfig({ sessionGroup: 'origin', runtime: 'codex' });
-  store.setSessionModelConfig({ sessionGroup: 'origin', runtime: 'codex', model: 'new-model', effort: 'high' });
-  const expected = store.resolveSessionLaunchConfig({ sessionGroup: 'origin', sessionMode: 'multi' });
-  assert.deepEqual(expected, { runtime: 'codex', mode: 'override', model: 'new-model', effort: 'high' });
-  let calls = 0;
-  const lifecycle = new Class({ db: store, observe: () => scenes.observe({ configuration: { mode: 'multi' } }),
-    observeGroup: group => scenes.observeGroup(group), bindTarget: scene => scenes.bindTarget(scene), requests: { read: () => [] },
-    prompts: { CONFIG_RECLAIM_PROMPT: (scene, desired) => { calls++; assert.deepEqual(scene.launchConfig, old.launchConfig); assert.deepEqual(desired, expected); return 'config reclaim'; } } });
-  await lifecycle.reconcileConfiguration({ configuration: { mode: 'multi' }, transition: store.getModeTransition(),
-    fences: store.listDrainFences(), restartRequests: [], scenes: await scenes.observe({ configuration: { mode: 'multi' } }) });
-  assert.equal(calls, 1, 'new desired config hid the old running snapshot');
-  const rows = target.db.prepare('SELECT * FROM control_queue').all();
-  assert.equal(rows.length, 1); assert.equal(rows[0].priority, 1);
-  assert.equal(JSON.parse(rows[0].target_binding).expectedRunId, 'run-1');
-  assert.deepEqual((await scenes.observeGroup('origin')).launchConfig, old.launchConfig);
-  assert.equal(store.getDrainFence('origin'), null);
-}
-// Boundary: real tmux and a private C4 fixture for launch-snapshot changes.
-// Run when configuration reclamation changes; Sync/TTL/manual-only changes may skip.
-test('real running snapshot stays old after / changes and produces reclaim control', { timeout: 15000 }, async t => {
-  await configScenario(t, SupervisorLifecycle);
+// Uses a private C4 fixture to verify that an older configuration fence unblocks the queue.
+test('persisted configuration fence releases queued delivery without stopping or scheduling a restart', async t => {
+  const { store, db } = databaseFixture(t);
+  const lifecycle = new SupervisorLifecycle({ db: store, stop: () => assert.fail('old fence cannot stop a run') });
+  const group = 'chat:existing';
+  store.insertConversation('in', 'chat', 'fixture', 'queued', { groupName: 'existing' });
+  store.setDrainFence(group, { reason: 'model_config', runId: 'old-run' });
+  assert.equal(store.getNextPending({ sessionGroups: [group], sessionMode: 'multi' }), null);
+  const context = { configuration: { mode: 'multi' }, fences: store.listDrainFences() };
+  await lifecycle.advanceReclaim(context.fences[0], context);
+  assert.equal(store.getDrainFence(group), null);
+  assert.equal(store.getNextPending({ sessionGroups: [group], sessionMode: 'multi' }).content, 'queued');
+  assert.deepEqual(store.listPendingContinuations(), []);
+  assert.equal(db.prepare('SELECT COUNT(*) FROM control_queue').pluck().get(), 0);
 });
-
 
 async function syncScopeScenario(t, Class) {
   for (const mode of ['single', 'multi']) {

@@ -4,6 +4,23 @@ The database CLI, checkpoint CLI and fetch CLI share strict argument parsing and
 use the current C4 schema and store. Use an isolated `ZYLOS_DIR` for development.
 These commands do not send messages to channels.
 
+## Session configuration
+
+Use `zylos group runtime|model set|reset` to change a group's configuration.
+When a change affects a running session, the command prints the affected group
+and the command to run with `--yes`. The first attempt saves nothing and does
+not open a prompt. A confirmed write requests an immediate restart of the
+run observed before saving. The command can save offline configuration
+without confirmation.
+When an immediate restart fails or cannot be verified, the command reports the
+reason and keeps the saved configuration. In JSON output, see `data.restart`.
+The same rules apply to Origin in native single-session mode.
+
+`zylos runtime <name>` changes the instance default. Use `--yes` when the
+command lists affected running sessions. Only runs that inherit the default
+are eligible for an immediate restart. If an agent is asked in chat to switch
+its own session, it replies before triggering the restart.
+
 ## External sends and session handoffs
 
 `c4-send.js <channel> [endpoint] --stdin` asks the installed component's
