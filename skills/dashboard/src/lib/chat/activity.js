@@ -39,9 +39,8 @@ const PROMPT_DELIVERY_LAG_MS = 2_000;
 const MEMORY_SYNC_AGENTS = /^zylos-(group|origin|global)-sync$/;
 // This module awaits the Dashboard runtime factory at top level. Runtime implementations must not statically import it.
 const { SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/descriptors.js');
-const VOCAB = new Map(await Promise.all(SUPPORTED_RUNTIMES.map(async id => [
-  id, (await getDashboardRuntime(id)).activityVocabulary,
-])));
+const dashboardRuntimes = await Promise.all(SUPPORTED_RUNTIMES.map(id => getDashboardRuntime(id)));
+const VOCAB = new Map(dashboardRuntimes.map(({ id, activityVocabulary }) => [id, activityVocabulary]));
 const STANDARD = Object.freeze({
   toolEvents: 'hooks',
   stepLabel: () => ({ key: 'tool' }),

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { getActionsMeta, handleAction } from '../src/lib/actions.js';
-import catalog from '../src/lib/runtime/codex/model-catalog.js';
+import { getCodexModels, codexEffortsForModel } from '../src/lib/runtime/codex/model-catalog.js';
 
 test('catalog is independent of cache existence, corruption and replacement', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-catalog-'));
@@ -18,13 +18,10 @@ test('catalog is independent of cache existence, corruption and replacement', ()
       fs.writeFileSync(path.join(dir, 'models_cache.json'), contents);
       assert.deepEqual(getActionsMeta({ runtime: 'codex', zylosDir: dir }, {}), expected);
     }
-    assert.equal(catalog.effortsFor('fake'), null);
-    const models = catalog.models();
-    const { id } = models[0];
-    catalog.effortsFor(id).push('invented');
-    models[0].display_name = 'invented';
-    assert.ok(!catalog.effortsFor(id).includes('invented'));
-    assert.notEqual(catalog.models()[0].display_name, 'invented');
+    assert.deepEqual(codexEffortsForModel('fake'), []);
+    const models = getCodexModels();
+    models[0].efforts.push('invented');
+    assert.ok(!codexEffortsForModel(models[0].id).includes('invented'));
   } finally {
     if (previous === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previous;
@@ -78,7 +75,7 @@ for (const model of ['gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.6']) {
       const rejected = await isolatedAction('switch-effort', { effort: invalid }, config);
       assert.equal(rejected.error, 'invalid_effort');
       assert.equal(fs.readFileSync(configPath, 'utf8'), beforeReject);
-      assert.deepEqual(catalog.effortsFor('gpt-5.6'), catalog.effortsFor('gpt-5.6-sol'));
+      assert.deepEqual(codexEffortsForModel('gpt-5.6'), codexEffortsForModel('gpt-5.6-sol'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -86,15 +83,15 @@ for (const model of ['gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.6']) {
 }
 
 test('GPT-6.2 models lead the catalog with their Codex display names', () => {
-  assert.deepEqual(catalog.models().slice(0, 3).map(({ id, display_name }) => [id, display_name]), [
+  assert.deepEqual(getCodexModels().slice(0, 3).map(({ id, display_name }) => [id, display_name]), [
     ['gpt-6.2-sol', 'GPT-6.2-Sol'], ['gpt-6.2-astra', 'GPT-6.2-Astra'], ['gpt-6.1-sol', 'GPT-6.1-Sol']
   ]);
 });
 
 test('GPT-6.1 Terra follows GPT-6.1-Sol under its Codex display name', () => {
-  const ids = catalog.models().map(({ id }) => id);
+  const ids = getCodexModels().map(({ id }) => id);
   assert.equal(ids.indexOf('gpt-6.1-terra'), ids.indexOf('gpt-6.1-sol') + 1);
-  assert.equal(catalog.models().find(({ id }) => id === 'gpt-6.1-terra').display_name, 'GPT-6.1 Terra');
+  assert.equal(getCodexModels().find(({ id }) => id === 'gpt-6.1-terra').display_name, 'GPT-6.1 Terra');
 });
 
 for (const model of ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-terra']) {

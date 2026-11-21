@@ -17,13 +17,21 @@ const CODEX_MODELS = [
   { id: 'gpt-5.6', display_name: 'GPT-5.6 (Sol alias)', efforts: EXTENDED_EFFORTS },
 ];
 
+export function getCodexModels() {
+  return CODEX_MODELS.map(model => ({ ...model, efforts: [...model.efforts] }));
+}
+
+export function codexEffortsForModel(id) {
+  return [...(CODEX_MODELS.find(model => model.id === id)?.efforts || [])];
+}
+
 export default Object.freeze({
   models() {
-    return CODEX_MODELS.map(({ id, display_name }) => ({ id, display_name }));
+    return getCodexModels().map(({ id, display_name }) => ({ id, display_name }));
   },
   effortsFor(id) {
-    const entry = CODEX_MODELS.find(model => model.id === id);
-    return entry ? [...entry.efforts] : null;
+    const efforts = codexEffortsForModel(id);
+    return efforts.length ? efforts : null;
   },
   defaultEfforts: UNSUPPORTED,
   strict: true,
