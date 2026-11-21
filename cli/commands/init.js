@@ -499,38 +499,6 @@ function ensureBinInPath() {
   return true;
 }
 
-/**
- * Check if Claude bypass permissions needs first-time acceptance.
- * Returns true if bypass is enabled and hasn't been accepted yet.
- */
-export function needsBypassAcceptance() {
-  // Check if bypass is disabled in .env
-  const envPath = path.join(ZYLOS_DIR, '.env');
-  try {
-    const content = fs.readFileSync(envPath, 'utf8');
-    if (parseDotEnv(content).CLAUDE_BYPASS_PERMISSIONS === 'false') return false;
-  } catch {}
-
-  // Check if already pre-accepted via settings.json
-  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-  try {
-    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    if (settings.skipDangerousModePermissionPrompt) return false;
-  } catch {}
-
-  return true;
-}
-
-/**
- * Guide user through first-time Claude bypass permissions acceptance.
- */
-async function guideBypassAcceptance(preAccept) {
-  // Init already owns first-install acceptance settings. Do not launch or
-  // replace a managed runtime merely to repeat that settings preparation.
-  preAccept();
-  console.log(`  ${success('Claude Code acceptance settings prepared')}`);
-}
-
 // ── Installation state detection ────────────────────────────────
 
 /**
@@ -2058,10 +2026,6 @@ export async function initCommand(args) {
       }
       await ensureInitLogRotation({ quiet });
 
-      if (selectedRuntime === 'claude' && authentication.authenticated && !skipConfirm && needsBypassAcceptance()) {
-        await guideBypassAcceptance(preAccept);
-      }
-
       if (!authentication.authenticated && !quiet) {
         console.log(`\n${warn(`${runtimeDisplayName(selectedRuntime)} is not authenticated.`)}`);
         console.log(`  ${dim(`Run "zylos auth ${selectedRuntime}" to authenticate.`)}`);
@@ -2135,11 +2099,6 @@ export async function initCommand(args) {
       setupPm2Startup();
     }
     await ensureInitLogRotation({ quiet });
-
-    // First-time Claude bypass acceptance (only if Claude runtime and authenticated)
-    if (selectedRuntime === 'claude' && authentication.authenticated && !skipConfirm && needsBypassAcceptance()) {
-      await guideBypassAcceptance(preAccept);
-    }
 
     // Done
     if (!quiet) {

@@ -15,16 +15,6 @@
     "reason": "tool-use: The repair command invokes Claude as a tool."
   },
   {
-    "file": "cli/commands/init.js",
-    "text": "if (selectedRuntime === 'claude' && authentication.authenticated && !skipConfirm && needsBypassAcceptance()) {",
-    "reason": "dispatch:launch: Controls the Claude-only launch terms prompt."
-  },
-  {
-    "file": "cli/commands/init.js",
-    "text": "if (selectedRuntime === 'claude' && authentication.authenticated && !skipConfirm && needsBypassAcceptance()) {",
-    "reason": "dispatch:launch: Controls the Claude-only launch terms prompt."
-  },
-  {
     "file": "cli/lib/claude-eval.js",
     "text": "const child = spawn('claude', ['--print', '--output-format', 'text'], {",
     "reason": "tool-use: Runs a one-shot Claude evaluation."
