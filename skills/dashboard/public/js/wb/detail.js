@@ -311,19 +311,18 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     const row = state.row;
     if (!hasRunningTarget(row)) return config.save(change);
     return config.save(change, {
-      confirm: async () => await confirmRestart({
+      confirm: () => confirmRestart({
         title: 'wb.config.saveRestartTitle', body: 'wb.config.saveRestartConfirm', ok: 'wb.config.saveRestart',
-      }) && getWritable(),
+      }),
       restart: () => submitAction('restart', row),
     });
   }
   async function act(action) {
     if (!state.row || !state.detailKnown || state.actionBusy || groupActionButtons(state.row, getWritable()).find(item => item.action === action)?.disabled) return;
-    const gen = generation;
     const body = state.row.sessionGroup == null || state.row.sessionGroup === 'origin'
       ? 'confirm.restart' : 'wb.actions.restartConfirm';
     if (action === 'restart' && !await confirmRestart({ title: 'wb.actions.restartTitle', body, ok: 'wb.actions.restart' })) return;
-    if (!active(gen) || !getWritable() || state.actionBusy) return;
+    const gen = generation;
     const row = state.row;
     state.actionBusy = true; draw();
     try {
