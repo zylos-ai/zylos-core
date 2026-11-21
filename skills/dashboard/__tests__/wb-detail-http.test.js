@@ -14,8 +14,8 @@ import { EventLoopMonitor } from '../src/lib/event-loop-monitor.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
 
 // HTTP integration: actual createServer, AuthGate, route dispatch, display-name
-// service and read-only C4Reader over private SQLite. Run for detail route/auth
-// changes; skip rendering-only work. The official runner must isolate HOME,
+// service and read-only C4Reader over private SQLite. Run for detail routes,
+// configuration writes or auth changes; skip rendering-only work. Isolate HOME,
 // ZYLOS_DIR, PM2_HOME, short TMPDIR and TMUX_TMPDIR before loading this file.
 // All child_process/Core inputs are injected; no real CLI, PM2 or tmux/socket is
 // used. The loopback server and each request are bounded; teardown closes every
@@ -234,6 +234,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
   });
 
   await t.test('single message HTTP reads NULL attribution without exposing bodies or Origin rows', async () => {
+    const before = snapshotReads;
     view = 'single'; cachedSnapshot = snapshot();
     const range = '?since=2026-10-01T00%3A00%3A00Z&until=2026-10-02T00%3A00%3A00Z';
     const response = await request('/api/groups/origin/messages' + range);
@@ -242,7 +243,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     assert.deepEqual(value.messages.map(row => row.id), [1]);
     assert.deepEqual(Object.keys(value.messages[0]), ['id', 'direction', 'channel', 'timestamp']);
     assert.doesNotMatch(JSON.stringify(value), /private|content/);
-    assert.equal(snapshotReads, 0, 'message reads reuse the cached single view without rebuilding');
+    assert.equal(snapshotReads, before, 'message reads reuse the cached single view without rebuilding');
     view = 'multi'; cachedSnapshot = snapshot();
     const originResponse = await request('/api/groups/origin/messages' + range);
     assert.deepEqual((await originResponse.json()).messages.map(row => row.id), [2]);
