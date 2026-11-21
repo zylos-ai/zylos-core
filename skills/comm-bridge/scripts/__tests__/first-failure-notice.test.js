@@ -247,8 +247,10 @@ function internalFailure(t, { externalAge = 600, receipt = false } = {}) {
   const receive = (channel, endpoint, { status = 'delivered', sessionGroup = group, age = 0, session = null, action = null } = {}) =>
     Number(request.run(channel, endpoint, status, sessionGroup, failure.received_at / 1000 - age, session, action).lastInsertRowid);
   receive('telegram', original, { age: externalAge, session: 'earlier-session' });
-  const internalId = receive('internal', sender, { session: identity.session_id, action: receipt ? 'failure_receipt' : null });
-  const stop = () => {
+  const receiveInternal = () => receive('internal', sender, {
+    session: identity.session_id, action: receipt ? 'failure_receipt' : null,
+  });
+  const stop = internalId => {
     assert.equal(f.store.consume(failure,{identity,sessionGroup:group}).status,'processed');
     const pending = f.store.read(group).pending_notice;
     assert.equal(pending.conversation_id,internalId);
@@ -261,13 +263,17 @@ function internalFailure(t, { externalAge = 600, receipt = false } = {}) {
   `).all(sender);
   const sent = [];
   const op = options(f,{ sent, now:failure.received_at+100, sessionGroup:group });
-  return { ...f, group, original, sender, receive, stop, replies, sent, op };
+  return { ...f, group, original, sender, receive, receiveInternal, stop, replies, sent, op };
 }
 
 test('Internal failure queues a receipt before notifying the earlier unanswered Telegram request', async t => {
   const f = internalFailure(t);
+  f.db.prepare(`INSERT INTO conversations(direction,channel,endpoint_id,content,status,session_group)
+    VALUES ('out','internal','telegram:peer','internal handoff','delivered',?)`).run(f.group);
+  f.receive('telegram','-200|msg:1',{status:'failed'});
+  const internalId = f.receiveInternal();
   f.receive('telegram','-100|thread:work|msg:2',{status:'pending'});
-  f.stop();
+  f.stop(internalId);
   assert.deepEqual(f.replies(),[]);
   // A new delivery during the wait must not become the recipient.
   f.receive('telegram','-100|thread:work|msg:3');
@@ -292,7 +298,7 @@ test('Internal failure queues a receipt before notifying the earlier unanswered 
 
 test('newer outbound notice for another address in the group suppresses the Telegram fallback', async t => {
   const f = internalFailure(t);
-  f.stop();
+  f.stop(f.receiveInternal());
   f.db.prepare(`INSERT INTO conversations(direction,channel,endpoint_id,content,status,session_group,delivery_action)
     VALUES ('out','telegram','-200','prior notice','delivered',?,'system_notice')`).run(f.group);
   await processFirstFailureNotices(f.op);
@@ -302,7 +308,7 @@ test('newer outbound notice for another address in the group suppresses the Tele
 
 test('an Internal failure only queues a receipt when the external request is older than 30 minutes', async t => {
   const f = internalFailure(t,{ externalAge:2400 });
-  f.stop();
+  f.stop(f.receiveInternal());
   await processFirstFailureNotices(f.op);
   assert.equal(f.replies().length,1);
   assert.deepEqual(f.sent,[]);
@@ -310,7 +316,7 @@ test('an Internal failure only queues a receipt when the external request is old
 
 test('failure while processing a receipt never queues another receipt and still checks the Telegram request', async t => {
   const f = internalFailure(t,{ receipt:true });
-  f.stop();
+  f.stop(f.receiveInternal());
   await processFirstFailureNotices(f.op);
   assert.deepEqual(f.replies(),[]);
   assert.equal(f.sent.length,1);
@@ -320,7 +326,7 @@ test('failure while processing a receipt never queues another receipt and still 
 for (const suppressedChannel of ['internal','telegram']) {
   test('the ' + suppressedChannel + ' cooldown only suppresses its own route', async t => {
     const f = internalFailure(t);
-    f.stop();
+    f.stop(f.receiveInternal());
     const intent = f.store.read(f.group).pending_notice;
     const route = { sessionGroup:f.group, runtime:intent.runtime, health:intent.health, reason:intent.reason };
     // Use a different reply address for the same Telegram thread to exercise endpoint normalization.

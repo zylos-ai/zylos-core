@@ -112,11 +112,8 @@ export async function processFirstFailureNotices({ store, database = getDb(), id
   const route = {sessionGroup:target.session_group === '' ? 'origin' : target.session_group, runtime:intent.runtime,
     health:intent.health, reason:intent.reason, context:'failure',noticeKind:'first-failure',noticeCode:notice?.noticeCode,resetAt:notice?.resetAt};
   const message = messageForStatus(route);
-  const markSending = () => mutate(() => {
-    // A restart after this point must never resend this same pending intent.
-    if (store.read(sessionGroup).pending_notice?.status !== 'pending') return false;
-    return store.updatePending(intent.event_id,{status:'sending',updated_at:now()},sessionGroup);
-  });
+  // A restart after this point must never resend this same pending intent.
+  const markSending = () => mutate(() => store.updatePending(intent.event_id,{status:'sending',updated_at:now()},sessionGroup));
   const clearClaim = claim => clearStatusNoticeCooldownReservation(claim.key,claim.reservedAt,database);
   const sendExternal = async claim => {
     let outcome = 'uncertain';
