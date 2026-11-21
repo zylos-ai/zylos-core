@@ -49,6 +49,7 @@ async function run(t, check, messageRows = rows) {
       sandbox.addCleanup(() => context.close());
       await context.route('**/*', route => route.request().url().startsWith(base + '/') ? route.continue() : route.abort());
       await context.addInitScript(({ locale, theme }) => {
+        if (window !== window.top) return;
         localStorage.setItem('zylos-dashboard-locale', locale);
         localStorage.setItem('zylos-dashboard-theme', theme);
       }, { locale, theme });
