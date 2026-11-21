@@ -257,7 +257,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     const english = language === 'en';
     const upgradeAsked = await confirmFlow(page, upgrade, 'upgrade-cc', { runtime: 'claude' });
     assert.deepEqual([upgradeAsked.title, upgradeAsked.danger], [english ? 'Upgrade Claude Code' : '升级 Claude Code', false]);
-    await pick('defaults');
+    await pick('machine');
     const single = () => page.locator('#action-mode-seg button[data-mode="single"]');
     await single().waitFor({ state: 'visible' });
     const modeAsked = await confirmFlow(page, single, 'switch-mode', { mode: 'single' });
@@ -322,7 +322,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
       }
       if (phone) {
         const field = page.locator('#api-key-name');
-        await settingsSection(page, 'keys');
+        await settingsSection(page, 'account');
         await field.tap();
         assert.equal(await field.evaluate(node => node === document.activeElement), true);
         assert.equal((await page.evaluate(measure)).scale, 1, 'focusing a field does not zoom the page');
@@ -345,7 +345,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
         assert.equal((await page.evaluate(measure)).documentWidth, width, `${name}: the table scrolls, not the page`);
       };
       await slide('pricing', '.settings-table-scroll:has(#settings-price-table)');
-      await slide('keys', '#api-key-list');
+      await slide('account', '#api-key-list');
       assert.deepEqual(await page.locator('#api-key-list th').evaluateAll(cells => cells.filter(cell => getComputedStyle(cell).display === 'none').length), 0, 'every key column is kept');
 
       await settingsSection(page, 'pricing');
@@ -361,7 +361,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
       // Clearing revoked keys and removing a machine: titled with the action, destructive button; cancelling sends nothing.
       const dialog = page.locator('.wb-modal[role="alertdialog"]'), writes = [];
       page.on('request', request => { if (request.method() !== 'GET') writes.push(`${request.method()} ${new URL(request.url()).pathname}`); });
-      for (const [name, button, title] of [['keys', '#api-key-purge-revoked', '清空已吊销的密钥'], ['fleet', '.fleet-agent-remove', '移除机器']]) {
+      for (const [name, button, title] of [['account', '#api-key-purge-revoked', '清空已吊销的密钥'], ['fleet', '.fleet-agent-remove', '移除机器']]) {
         await settingsSection(page, name);
         await page.locator(button).click();
         await dialog.waitFor();
@@ -371,7 +371,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
       }
       await page.waitForTimeout(300);
       assert.deepEqual(writes, [], 'cancelling sends nothing');
-      await settingsSection(page, 'keys');
+      await settingsSection(page, 'account');
       await page.locator('#api-key-name').fill('new-key');
       await page.locator('#api-key-create').evaluate(node => node.scrollIntoView({ block: 'center' }));
       const before = await page.evaluate(() => scrollY);
@@ -402,10 +402,10 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await context.route('**/api/observer/status*', route => route.fulfill({ json: status }));
     await context.route(/\/api\/observer\/(install|disable)$/, route => { sent.push(`${route.request().method()} ${new URL(route.request().url()).pathname}`); return route.fulfill({ json: status }); });
     await page.reload();
-    await settingsSection(page, 'defaults');
+    await settingsSection(page, 'machine');
     await page.locator('#action-mode-seg').waitFor();
     assert.equal(await page.locator('#action-instance-status').isVisible(), false, 'no instance line without technical detail');
-    await settingsSection(page, 'observer');
+    await settingsSection(page, 'machine');
     await page.locator('#observer-uninstall').waitFor();
     const dialog = page.locator('.wb-modal[role="alertdialog"]');
     const ask = async (button, request, title, danger) => {
@@ -426,17 +426,17 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await ask('#observer-disable', 'POST /api/observer/disable', '禁用终端观察', false);
     status = { state: 'installed', desired: { enabled: false, teardownFence: true, removalState: 'failed' } };
     await page.reload();
-    await settingsSection(page, 'observer');
+    await settingsSection(page, 'machine');
     await page.locator('#observer-uninstall:has-text("重试")').click();
     await page.waitForFunction(() => !document.querySelector('.observer-settings-actions button:disabled'));
     assert.equal(await dialog.count(), 0, 'retrying an uninstall does not ask again');
     assert.deepEqual(sent.splice(0), ['DELETE /api/observer/install']);
     await context.addInitScript(() => { try { localStorage.setItem('zylos-dashboard-detail-level', 'technical'); } catch {} });
     await page.reload();
-    await settingsSection(page, 'defaults');
+    await settingsSection(page, 'machine');
     await page.waitForFunction(() => document.querySelector('#action-instance-status')?.textContent.trim());
     assert.equal(await page.locator('#action-instance-status').isVisible(), true, 'technical detail shows the instance line');
-    await settingsSection(page, 'observer');
+    await settingsSection(page, 'machine');
     assert.equal(await page.locator('#observer-settings-group').isVisible(), true, 'the observer section stays with technical detail');
     assert.deepEqual(errors, []);
     await context.close();
@@ -701,7 +701,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     let state = await drawerState(page);
     assert.deepEqual([state.open, state.expanded, state.visible, state.inert], [false, 'false', false, 0]);
     assert.ok(state.left < -100, `closed: the drawer is off screen (${state.left})`);
-    assert.equal(state.label, await label('defaults'), 'the button names the current section');
+    assert.equal(state.label, await label('account'), 'the button names the current section');
     assert.match(await page.locator('.wb-set-nav').evaluate(node => getComputedStyle(node).transitionDuration), /0\.2s/, 'the drawer slides');
     await shot('settings-drawer-closed');
     const settingsReads = () => reads.get('/api/settings/pricing') ?? 0;
@@ -709,7 +709,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
 
     await openDrawer(page);
     state = await drawerState(page);
-    assert.deepEqual([state.open, state.expanded, state.left, state.visible, state.focus, state.current], [true, 'true', 0, true, 'section:defaults', 'defaults']);
+    assert.deepEqual([state.open, state.expanded, state.left, state.visible, state.focus, state.current], [true, 'true', 0, true, 'section:account', 'account']);
     assert.equal(state.height, 844, 'the drawer runs the full height of the screen');
     // The prototype's sizes: 300px drawer, 44px section rows and opening button, 36×36 close button.
     const sizes = await page.evaluate(() => Object.fromEntries([['drawer', '.wb-set-nav'], ['section', '[data-settings-section="defaults"]'], ['button', '.wb-set-drawer-btn'], ['close', '.wb-set-drawer-x']]
@@ -730,12 +730,12 @@ export async function runWorkbenchBrowser(t, sandbox) {
     }
 
     const ways = [
-      ['a section', async () => page.locator('[data-settings-section="keys"]').click(), 'keys'],
-      ['the same section', async () => page.locator('[data-settings-section="keys"]').click(), 'keys'],
-      ['the backdrop', async () => page.locator('.wb-set-scrim').click({ position: { x: 360, y: 420 } }), 'keys'],
-      ['Escape', async () => page.keyboard.press('Escape'), 'keys'],
-      ['the close button', async () => page.locator('.wb-set-drawer-x').click(), 'keys'],
-      ['Back', async () => page.goBack(), 'keys'],
+      ['a section', async () => page.locator('[data-settings-section="machine"]').click(), 'machine'],
+      ['the same section', async () => page.locator('[data-settings-section="machine"]').click(), 'machine'],
+      ['the backdrop', async () => page.locator('.wb-set-scrim').click({ position: { x: 360, y: 420 } }), 'machine'],
+      ['Escape', async () => page.keyboard.press('Escape'), 'machine'],
+      ['the close button', async () => page.locator('.wb-set-drawer-x').click(), 'machine'],
+      ['Back', async () => page.goBack(), 'machine'],
     ];
     // The drawer is still open from the keyboard checks above; each later way opens it again first.
     for (const [index, [way, close, section]] of ways.entries()) {

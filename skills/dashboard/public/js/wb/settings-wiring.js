@@ -29,12 +29,13 @@ export function keyActionRequest(action, name) {
  *
  * - `runner` is the page's action runner (`createActionRunner`): the default-settings card gets its
  *   `runConfirmed`, and only once the card has confirmed the change, so nothing is asked twice or run unasked.
+ * - `engineVersion(root, runtime)` draws the chosen engine's CLI version and upgrade button inside the default engine card.
  * - `keyPage` is how key requests reach the server and the page: `request(method, path)` resolves to
  *   `{ ok, data }`; `renderKeys(data)`, `renderCreated(key | null)` (the new key shown once), `createdKey()`
  *   (the one shown now, or null), `status(text, kind)`, `busy(on)` and `errorText(code, fallback)`. The page
  *   decides nothing about which request an action makes or what its answer shows.
  */
-export function wireSettingsConfirmations({ document, t, runner, keyPage, remoteTarget = () => null, setBusy = () => {}, writable, onGroup }) {
+export function wireSettingsConfirmations({ document, t, runner, keyPage, remoteTarget = () => null, setBusy = () => {}, writable, onGroup, engineVersion }) {
   const confirm = (body, { title = t('wb.settings.confirmTitle'), ok = t('btn.confirm'), danger = true } = {}) =>
     confirmDialog(document, { title, body, ok, cancel: t('btn.cancel'), danger });
   // Default-setting changes name the remote machine they act on and keep the page locked while asking.
@@ -69,13 +70,13 @@ export function wireSettingsConfirmations({ document, t, runner, keyPage, remote
     return request ? sendKeyRequest(request, name) : undefined;
   };
   const keyTableOptions = () => ({ t, confirm, onAction });
-  const defaultsOptions = (value, read) => ({ ...value, t, read, writable, onGroup, confirm: confirmChange, execute });
+  const defaultsOptions = (value, read) => ({ ...value, t, read, writable, onGroup, version: engineVersion, confirm: confirmChange, execute });
   return {
     confirm,
     /** The key table: rotating, revoking and deleting each ask first. */
     renderKeyTable: (root, keys) => renderKeyTable(root, keys, keyTableOptions()),
-    /** The default-settings card: it confirms all of its changes once, then runs them without asking again. */
-    renderDefaults: (root, value, read) => renderDefaults(root, { ...defaultsOptions(value, read),
-      sessionRoot: root.parentElement?.querySelector('#settings-idle-reclaim') }),
+    /** The default-settings card: it confirms all of its changes once, then runs them without asking again. The idle
+     *  reclaim field goes in `sessionRoot`, inside the session mode card. */
+    renderDefaults: (root, value, read, sessionRoot) => renderDefaults(root, { ...defaultsOptions(value, read), sessionRoot }),
   };
 }

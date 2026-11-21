@@ -23,6 +23,7 @@ export function renderKeyTable(root, keys = [], { document = root.ownerDocument,
   const ordered = [...keys.filter(key => keyStatus(key) !== 'revoked'), ...keys.filter(key => keyStatus(key) === 'revoked')];
   for (const key of ordered) {
     const status = keyStatus(key), row = element(document, 'tr', undefined, 'api-key-row' + (status === 'revoked' ? ' revoked' : ''));
+    row.dataset.search = key.name;
     const name = element(document, 'td'), label = element(document, 'b', key.name); label.title = key.name; name.append(label);
     const scope = element(document, 'td'); scope.append(element(document, 'span', t(key.scope === 'admin' ? 'fleet_manage.scope_admin' : 'fleet_manage.scope_read'), 'wb-scope-b' + (key.scope === 'admin' ? ' admin' : '')));
     const state = element(document, 'td');
@@ -82,7 +83,8 @@ export function renderRemoteAgents(root, agents = [], { records = [], document =
   if (!agents.length) { root.replaceChildren(element(document, 'p', t('fleet_manage.empty'), 'wb-note')); return; }
   root.replaceChildren(...agents.map(agent => {
     const record = records.find(item => item.name === agent.name), status = remoteStatus(record);
-    const row = element(document, 'div', undefined, 'wb-agent-row'); row.dataset.agent = agent.name;
+    // The search looks in the machine's name and address.
+    const row = element(document, 'div', undefined, 'wb-agent-row'); row.dataset.agent = agent.name; row.dataset.search = `${agent.name} ${agent.base_url || ''}`;
     const name = element(document, 'b', agent.name); name.title = agent.key_masked ? `${agent.key_masked} · ${agent.access || 'read'}` : '';
     const url = element(document, 'span', agent.base_url || '', 'wb-agent-url wb-mono'); url.title = agent.base_url || '';
     const state = element(document, 'span', undefined, 'wb-agent-st' + (['auth', 'down', 'version'].includes(status.kind) ? ' bad' : ''));

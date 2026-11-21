@@ -2,11 +2,14 @@ import { readGroupSnapshot } from './group-data.js';
 import { element, icon } from './plain-text.js';
 import { createSettingsDrawer } from './settings-drawer.js';
 
-export const settingsSections = ['defaults', 'pricing', 'keys', 'fleet', 'observer', 'ui'];
-const sectionIcons = { defaults: 'bot', pricing: 'dollar', keys: 'key', fleet: 'fleet', observer: 'term', ui: 'sliders' };
-// Interface rows, top to bottom; each holds one control and an optional grey note.
-export const prefRows = ['detail', 'lang', 'theme', 'sound', 'connection', 'version', 'account'];
-const prefControls = { '#wb-detail-toggle': 'detail', '#fleet-sound-toggle': 'sound', '#connection-status': 'connection', '#logout-btn': 'account' };
+// Grouped by who a setting affects: who may enter this machine, this browser only, the whole machine, other
+// machines, the defaults for groups without their own choice, and model prices.
+export const settingsSections = ['account', 'general', 'machine', 'fleet', 'defaults', 'pricing'];
+const sectionIcons = { account: 'user', general: 'sliders', machine: 'cpu', fleet: 'fleet', defaults: 'bot', pricing: 'dollar' };
+// This browser's rows, top to bottom; each holds one control and an optional grey note.
+export const prefRows = ['detail', 'lang', 'theme', 'sound'];
+// The page's own controls these rows and the account card take over.
+const controlSelectors = { detail: '#wb-detail-toggle', sound: '#fleet-sound-toggle', logout: '#logout-btn' };
 const prefNotes = new Set(['detail', 'sound']);
 
 /** A settings card: icon + title, an optional grey subtitle and a right-aligned action slot. */
@@ -57,24 +60,24 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
   }
   const move = (source, selector, destination) => { const node = source.querySelector(selector); if (node) destination.append(node); return node; };
 
-  const defaults = element(document, 'div'); defaults.id = 'settings-defaults'; sections.defaults.append(defaults);
-  const session = settingsCard(document, { icon: 'restart', title: t('wb.settings.session.title'), sub: t('wb.settings.session.sub') });
-  relabels.push(() => { session.label.textContent = t('wb.settings.session.title'); session.sub.textContent = t('wb.settings.session.sub'); });
-  const actionBody = element(document, 'div', undefined, 'modal-body wb-set-fields'); session.card.append(actionBody); sections.defaults.append(session.card);
-  // Keep mode listeners attached to their generated controls.
-  for (const selector of ['#action-mode']) {
-    const control = actions.querySelector(selector); if (control) actionBody.append(control.closest('.action-field'));
-  }
-  for (const selector of ['#action-mode-status', '#action-instance-status', '#action-restart-status']) move(actions, selector, actionBody);
-  const idleReclaim = element(document, 'div'); idleReclaim.id = 'settings-idle-reclaim'; actionBody.append(idleReclaim);
+  const card = (name, options) => {
+    const made = settingsCard(document, { icon: options.icon, title: t(options.title), sub: options.sub ? t(options.sub) : '', id: name });
+    relabels.push(() => { made.label.textContent = t(options.title); if (options.sub) made.sub.textContent = t(options.sub); });
+    return made;
+  };
+  const note = (key, className = 'wb-note') => { const text = element(document, 'p', t(key), className); relabels.push(() => { text.textContent = t(key); }); return text; };
+  const slot = id => { const node = element(document, 'div'); node.id = id; return node; };
+  const control = name => controls.find(node => node?.matches?.(controlSelectors[name]) || node?.querySelector?.(controlSelectors[name]));
 
-  const pricingTop = element(document, 'div', undefined, 'wb-set-pricing-top'); pricingTop.id = 'settings-pricing-top'; sections.pricing.append(pricingTop);
-  for (const selector of ['#settings-model-pricing-group', '#settings-priority-pricing-group', '#settings-fast-mode-group', '#settings-readonly-note', '#settings-status', '.settings-footer']) move(settings, selector, sections.pricing);
-  for (const name of ['keys', 'fleet']) { const node = move(fleet, `.manage-panel[data-panel="${name}"]`, sections[name]); if (node) node.hidden = false; }
-  move(settings, '#observer-settings-group', sections.observer);
-  move(fleet, '#fleet-manage-status', status);
-  for (const selector of ['#action-status']) move(actions, selector, status);
+  // Account: signing out of this browser, whether other machines may open the conversations, and the keys.
+  const login = card('settings-login', { icon: 'power', title: 'wb.settings.login.title' });
+  const logout = control('logout'); if (logout) login.card.append(logout);
+  login.card.append(note('wb.settings.login.note'));
+  const chat = slot('settings-account-chat');
+  sections.account.append(login.card, chat);
+  move(fleet, '.manage-panel[data-panel="keys"]', sections.account)?.removeAttribute('hidden');
 
+  // This browser.
   const prefsCard = settingsCard(document); prefsCard.head.hidden = true;
   const prefs = {}, prefLabels = {};
   for (const name of prefRows) {
@@ -84,25 +87,56 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
     row.append(label, cell); prefsCard.card.append(row); prefs[name] = cell;
   }
   const notes = {};
-  for (const node of controls) {
-    if (!node) continue;
-    const name = Object.entries(prefControls).find(([selector]) => node.matches?.(selector) || node.querySelector?.(selector))?.[1];
-    const cell = prefs[name] ?? prefs.account; cell.append(node);
-    if (prefNotes.has(name)) { notes[name] = element(document, 'small', t('wb.settings.pref.' + name + 'Note'), 'wb-pref-note'); cell.append(notes[name]); }
+  for (const name of ['detail', 'sound']) {
+    const node = control(name); if (!node) continue;
+    prefs[name].append(node);
+    if (prefNotes.has(name)) { notes[name] = element(document, 'small', t('wb.settings.pref.' + name + 'Note'), 'wb-pref-note'); prefs[name].append(notes[name]); }
   }
-  const upgrade = actions.querySelector('[data-action="upgrade-cc"]'); if (upgrade) prefs.version.append(upgrade);
-  sections.ui.append(prefsCard.card);
+  sections.general.append(prefsCard.card);
   relabels.push(() => {
     for (const name of prefRows) prefLabels[name].textContent = t('wb.settings.pref.' + name);
-    for (const [name, note] of Object.entries(notes)) note.textContent = t('wb.settings.pref.' + name + 'Note');
+    for (const [name, text] of Object.entries(notes)) text.textContent = t('wb.settings.pref.' + name + 'Note');
   });
+
+  // The whole machine: zylos version, time zone, terminal observer, session mode, then the session hosts.
+  const version = card('settings-zylos-version', { icon: 'layers', title: 'wb.settings.version.title' });
+  const versionBody = slot('settings-version'); version.card.append(versionBody);
+  const timezone = slot('settings-machine-timezone');
+  const observer = settings.querySelector('#observer-settings-group');
+  const session = card('settings-session-mode', { icon: 'restart', title: 'wb.settings.session.title', sub: 'wb.settings.session.sub' });
+  const actionBody = element(document, 'div', undefined, 'modal-body wb-set-fields'); session.card.append(actionBody);
+  // Keep mode listeners attached to their generated controls.
+  for (const selector of ['#action-mode']) {
+    const field = actions.querySelector(selector); if (field) actionBody.append(field.closest('.action-field'));
+  }
+  // What the two modes mean, in plain words.
+  const modes = element(document, 'p', undefined, 'wb-note wb-mode-note');
+  const modeText = () => modes.replaceChildren(...['multi', 'single'].flatMap((mode, index) => [
+    ...(index ? [element(document, 'span', ' ')] : []), element(document, 'b', t('wb.settings.session.' + mode)), element(document, 'span', t('wb.settings.session.' + mode + 'Note'))]));
+  modeText(); relabels.push(modeText); actionBody.append(modes);
+  for (const selector of ['#action-mode-status', '#action-instance-status', '#action-restart-status']) move(actions, selector, actionBody);
+  const idleReclaim = slot('settings-idle-reclaim'); actionBody.append(idleReclaim);
+  const hosts = slot('settings-machine-hosts');
+  sections.machine.append(version.card, timezone, ...(observer ? [observer] : []), session.card, hosts);
+
+  // Other machines: this machine's name and address, and the machines added here.
+  const fleetPanel = move(fleet, '.manage-panel[data-panel="fleet"]', sections.fleet);
+  // The address other machines use to add this one moves here from the keys panel, under this machine's name.
+  if (fleetPanel) { fleetPanel.hidden = false; const address = sections.account.querySelector('#settings-address-card'); if (address) fleetPanel.children[0]?.after(address); }
+
+  // AI defaults and prices.
+  const defaults = slot('settings-defaults'); sections.defaults.append(defaults);
+  const pricingTop = element(document, 'div', undefined, 'wb-set-pricing-top'); pricingTop.id = 'settings-pricing-top'; sections.pricing.append(pricingTop);
+  for (const selector of ['#settings-model-pricing-group', '#settings-priority-pricing-group', '#settings-fast-mode-group', '#settings-readonly-note', '#settings-status', '.settings-footer']) move(settings, selector, sections.pricing);
+  move(fleet, '#fleet-manage-status', status);
+  for (const selector of ['#action-status']) move(actions, selector, status);
 
   layout.append(nav, scrim, body); root.append(layout);
   const drawer = createSettingsDrawer({ layout, nav, toggle, closeButton: drawerClose, scrim, window: document.defaultView });
   let current = null;
   function showCurrent() { if (!current) return; toggleCurrent.replaceChildren(icon(document, sectionIcons[current]), element(document, 'span', t('wb.settings.section.' + current))); }
   function select(name) {
-    if (!sections[name] || buttons[name].hidden) name = 'defaults';
+    if (!sections[name] || buttons[name].hidden) name = 'account';
     // A key or machine notice sits in the card that started it: a finished one is cleared on leaving its section,
     // one still running stays there for when that section is shown again.
     const notice = layout.querySelector('#fleet-manage-status');
@@ -120,8 +154,8 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
   }
   /** Unsaved-change count on a navigation item; zero hides it. */
   function badge(name, count) { badges[name].textContent = count ? String(count) : ''; badges[name].hidden = !count; badges[name].title = count ? t('wb.settings.unsaved') : ''; }
-  select('defaults');
-  return { sections, prefs, select, relabel, badge, drawer, actionsScope: root };
+  select('account');
+  return { sections, prefs, slots: { chat, version: versionBody, timezone, idleReclaim, hosts }, select, relabel, badge, drawer, actionsScope: root };
 }
 
 // One snapshot and one first batch per open; search owns subsequent user requests.

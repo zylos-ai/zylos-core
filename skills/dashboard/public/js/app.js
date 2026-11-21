@@ -10,7 +10,7 @@ import { createPricingPanel } from './wb/settings-pricing.js';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js';
 import { wireSettingsConfirmations } from './wb/settings-wiring.js';
-import { coreVersion, renderBrandVersion, renderVersion } from './wb/settings-version.js';
+import { coreVersion, renderBrandVersion, renderCoreUpdate, renderEngineVersion } from './wb/settings-version.js';
 import { mountConversationPage } from './wb/conversation-page.js';
 import { mountMobileNavigation } from './wb/mobile-navigation.js';
 import { mountChatSettings } from './wb/chat-settings.js';
@@ -19,6 +19,7 @@ import { mountWorkbench } from './wb/shell.js';
 import { watchHeader } from './wb/header-fit.js';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js';
 import { createRemoteAccess } from './wb/remote-access.js';
+import { mountPagedList } from './wb/paged-list.js';
 import { groupObservable, instanceStatusText, markCurrentTab, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js';
 import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide, observerReturnPage } from './wb/observer-page.js';
 import { bindActionControls, createPageActions } from './wb/page-actions.js';
@@ -354,19 +355,13 @@ async function refreshFleetSelf() {
   } catch { state.fleetSelf = null; }
 }
 
-function renderConnection(mode) {
-  const pill = $('#connection-status');
-  pill.dataset.state = mode;
-  pill.dataset.i18n = `status.${mode}`;
-  pill.textContent = t(pill.dataset.i18n);
-}
-
 function renderAll() {
   renderI18n();
   state.observer.history?.refreshLabels();
   initFleetManageButton();
   if (settingsPage) {
     settingsPage.relabel();
+    for (const relabel of settingsLists) relabel();
     refreshSettingsVersion();
   }
   renderInfoBar();
@@ -1047,20 +1042,10 @@ async function refreshState() {
   renderObserverPage();
 }
 
-function isSseOpen() {
-  return !!window.EventSource && state.eventSource?.readyState === window.EventSource.OPEN;
-}
-
 async function refreshFleet() {
-  try {
-    const [fleet] = await Promise.all([fetchJson('/api/fleet'), state.fleetViewActive ? refreshFleetSelf() : null]);
-    setFleet(fleet);
-    renderConnection(isSseOpen() ? 'live' : 'polling');
-    return fleet;
-  } catch (err) {
-    renderConnection('degraded');
-    throw err;
-  }
+  const [fleet] = await Promise.all([fetchJson('/api/fleet'), state.fleetViewActive ? refreshFleetSelf() : null]);
+  setFleet(fleet);
+  return fleet;
 }
 
 function setObserverNotice(message, status = 'idle') {
@@ -1617,13 +1602,8 @@ function syncFleetSubscription() {
 }
 
 async function refreshAll() {
-  const stateResult = await Promise.allSettled([refreshState()]);
-  const fetches = state.fleetViewActive ? [refreshFleet()] : [];
-  const restResults = await Promise.allSettled(fetches);
-  const all = [...stateResult, ...restResults];
-  const ok = all.some((r) => r.status === 'fulfilled');
-  const sseOpen = isSseOpen();
-  renderConnection(ok ? (sseOpen ? 'live' : 'polling') : 'degraded');
+  await Promise.allSettled([refreshState()]);
+  if (state.fleetViewActive) await Promise.allSettled([refreshFleet()]);
 }
 
 // ─── SSE ───
@@ -1682,7 +1662,6 @@ function connectSse({ ordinary = false } = {}) {
     if (state.eventSource !== source) return;
     opened = true;
     state.sseRetries = 0;
-    renderConnection('live');
     refreshState().catch(() => {});
   };
 
@@ -1693,7 +1672,6 @@ function connectSse({ ordinary = false } = {}) {
     source.close();
     state.eventSource = null;
     clearTimeout(state.sseReconnectTimer);
-    renderConnection('reconnecting');
     if (!opened && !ordinary && chatPush.streamUrl(streamPath) !== streamPath) {
       // EventSource does not expose the HTTP status. Only an explicit 429
       // admission response proves the chat connection limit was reached.
@@ -1725,8 +1703,7 @@ function connectSse({ ordinary = false } = {}) {
   for (const ev of ['instance', 'groups', 'metric_update', 'fleet', 'history_changed']) {
     state.eventSource.addEventListener(ev, (e) => {
       if (state.eventSource !== source) return;
-      try { applySse(ev, JSON.parse(e.data)); renderConnection('live'); }
-      catch { renderConnection('degraded'); }
+      try { applySse(ev, JSON.parse(e.data)); } catch {}
     });
   }
 }
@@ -1747,7 +1724,6 @@ function scheduleSseReconnect() {
       if (!r.ok) throw new Error(r.status);
     } catch {
       if (generation !== sseGeneration) return;
-      renderConnection('reconnecting');
       scheduleSseReconnect();
       return;
     }
@@ -1827,7 +1803,6 @@ function initTabs() {
         }
       }
     } catch {
-      if (generation === state.navigationGeneration) renderConnection('degraded');
       return;
     }
     if (generation !== state.navigationGeneration) return;
@@ -1879,7 +1854,7 @@ function initObserverControls() {
   });
   $('#observer-back')?.addEventListener('click', leaveObserverFocus);
   $('#observer-empty-back')?.addEventListener('click', leaveObserverFocus);
-  $('#observer-empty-settings')?.addEventListener('click', () => openSettingsModal('observer'));
+  $('#observer-empty-settings')?.addEventListener('click', () => openSettingsModal('machine'));
   $('#observer-notice-history')?.addEventListener('click', () => document.querySelector('[data-observer-view="history"]')?.click());
 
 }
@@ -2156,7 +2131,7 @@ function createFleetManageModal() {
       </div>
     </div>
     <div class="manage-panel" data-panel="keys" hidden>
-      <div class="wb-set-card">
+      <div class="wb-set-card" id="settings-address-card">
         ${head('server', 'wb.settings.keys.address')}
         <div class="wb-set-inline api-key-copy-row"><span class="wb-mono wb-addr" id="api-base-url">${esc(dashboardBaseUrl())}</span>
           <button class="wb-btn" id="api-base-url-copy" type="button"><i class="wb-ico wb-ico-copy wb-ico-xs" aria-hidden="true"></i><span data-i18n="fleet_manage.copy_key">${esc(t('fleet_manage.copy_key'))}</span></button></div>
@@ -2164,6 +2139,7 @@ function createFleetManageModal() {
       </div>
       <div class="wb-set-card">
         ${head('plus', 'fleet_manage.create_key')}
+        <p class="wb-note wb-card-lead" data-i18n="wb.settings.keys.createNote">${esc(t('wb.settings.keys.createNote'))}</p>
         <div class="wb-set-inline">
           <input class="wb-input wb-input-name" id="api-key-name" type="text" autocomplete="off" placeholder="${esc(t('wb.settings.keys.namePlaceholder'))}" aria-label="${esc(t('fleet_manage.name'))}" />
           <div class="wb-seg2" id="api-key-scope" role="group" aria-label="${esc(t('wb.settings.keys.scope'))}">
@@ -2287,6 +2263,7 @@ function renderFleetManage(data, draft = null) {
   fleetManageModal.querySelector('#fleet-agent-count').textContent = t('wb.settings.fleet.count', { count: agents.length });
   renderRemoteAgents(fleetManageModal.querySelector('#fleet-agent-list'), agents, { t, records: state.fleet?.agents ?? [],
     technical: document.documentElement.dataset.detail === 'technical', latency: (root, samples) => renderLatency(root, samples, { t }), onRemove: removeFleetAgent });
+  machineList?.refresh();
 }
 
 function renderApiKeys(data) {
@@ -2296,6 +2273,7 @@ function renderApiKeys(data) {
   if (purgeBtn) { purgeBtn.hidden = !counts.revoked; purgeBtn.textContent = t('wb.settings.keys.purge', { count: counts.revoked }); }
   fleetManageModal.querySelector('#api-key-count').textContent = t('wb.settings.keys.counts', counts);
   settingsWiring().renderKeyTable(fleetManageModal.querySelector('#api-key-list'), keys);
+  keyList?.refresh();
 }
 
 function renderCreatedApiKey(createdKey) {
@@ -2315,6 +2293,7 @@ function settingsWiring() {
       status: (text, kind) => fleetManageStatus(text, kind, '#api-key-list'), busy: setApiKeyBusy, errorText: fleetManageError,
     },
     writable: () => !remoteIsReadOnly() && countdownTimer === null, onGroup: openWorkbenchGroup,
+    engineVersion: (root, runtime) => renderEngineVersion(root, state.dashboardState?.versions, { runtime, upgrade: settingsUpgrade, t, readOnly: remoteIsReadOnly() }),
   });
 }
 function confirmSetting(body, options) {
@@ -2492,7 +2471,8 @@ function createSettingsModal() {
     <div class="wb-set-card" id="settings-model-pricing-group">
       <div class="wb-set-card-h"><h4><span id="settings-price-title"></span></h4>
         <span class="wb-set-card-sub wb-tip-anchor"><button class="wb-link-btn wb-sub-link" id="pricing-tip" type="button" data-i18n="wb.settings.howMatch">${esc(t('wb.settings.howMatch'))}</button>
-        <span class="tip-popover" id="pricing-popover" hidden><span data-i18n="tip.pricing">${t('tip.pricing')}</span> <span data-i18n="settings.base_rates_note">${esc(t('settings.base_rates_note'))}</span></span></span></div>
+        <span class="tip-popover" id="pricing-popover" hidden><span data-i18n="tip.pricing">${t('tip.pricing')}</span> <span data-i18n="settings.base_rates_note">${esc(t('settings.base_rates_note'))}</span></span></span>
+        <span class="wb-set-card-sub" id="settings-price-count"></span></div>
       <div class="settings-table-scroll"><table class="wb-ptable" id="settings-price-table">${priceHead(true)}<tbody id="settings-price-rows"></tbody></table></div>
       <div class="wb-more-row" id="settings-price-more">${addButton('settings-add-model')}</div>
     </div>
@@ -2508,6 +2488,7 @@ function createSettingsModal() {
       <p class="wb-note" data-i18n="settings.fast_defaults_note">${esc(t('settings.fast_defaults_note'))}</p>
     </div>
     <div class="wb-set-card" id="observer-settings-group">
+      ${head('term', 'wb.settings.observer.title')}
       <div class="wb-obs-state"><span class="wb-hdot" id="observer-settings-dot"></span><b id="observer-settings-state">${esc(t('status.loading'))}</b><small id="observer-settings-platform"></small></div>
       <p class="wb-note" id="observer-settings-recovery" hidden></p>
       <div class="wb-set-inline observer-settings-actions">
@@ -2724,6 +2705,16 @@ async function runObserverLifecycle(action) {
 }
 
 let settingsPage = null;
+let keyList = null;
+let machineList = null;
+const settingsLists = [];
+/** One of the settings page's long lists: search above, one page of rows, the pager below. */
+function mountSettingsList(list, rowSelector, placeholderKey) {
+  const pager = mountPagedList({ document, t, list, rows: () => [...list.querySelectorAll(rowSelector)], placeholder: t(placeholderKey) });
+  list.before(pager.search); list.after(pager.empty, pager.pager);
+  settingsLists.push(() => { pager.setPlaceholder(t(placeholderKey)); pager.relabel(); });
+  return pager;
+}
 let settingsLoader = null;
 let settingsPricing = null;
 let settingsDefaults = null;
@@ -2736,30 +2727,33 @@ let settingsTimezone = null;
 function initSettingsPage() {
   const root = $('#tab-settings');
   const oldSettings = createSettingsModal(), oldFleet = createFleetManageModal(), oldActions = createActionsModal();
-  const controls = ['#wb-detail-toggle', '#fleet-sound-toggle', '#connection-status', '#logout-btn'].map(selector => {
+  const controls = ['#wb-detail-toggle', '#fleet-sound-toggle', '#logout-btn'].map(selector => {
     const node = $(selector); return selector === '#wb-detail-toggle' ? node?.closest('label') : node;
   });
   settingsPage = composeSettings(root, { settings: oldSettings, fleet: oldFleet, actions: oldActions, controls, t });
   oldSettings.remove(); oldFleet.remove(); oldActions.remove();
   for (const box of root.querySelectorAll('.settings-table-scroll, #api-key-list')) watchScrollHint(box);
+  keyList = mountSettingsList(root.querySelector('#api-key-list'), 'tbody tr', 'wb.settings.keys.search');
+  machineList = mountSettingsList(root.querySelector('#fleet-agent-list'), '.wb-agent-row', 'wb.settings.fleet.search');
   settingsModal = root; fleetManageModal = root; actionsModal = settingsPage.actionsScope;
-  settingsUpgrade = root.querySelector('[data-action="upgrade-cc"]');
-  settingsVersionRoot = document.createElement('div'); settingsVersionRoot.id = 'settings-version'; settingsPage.prefs.version.prepend(settingsVersionRoot);
+  // The upgrade button is drawn into the default engine card each time that card renders.
+  settingsUpgrade = oldActions.querySelector('[data-action="upgrade-cc"]');
+  settingsVersionRoot = settingsPage.slots.version;
   let theme = 'light'; try { theme = localStorage.getItem(THEME_KEY) || theme; } catch {}
   mountThemeControl(settingsPage.prefs.theme, { t, value: theme, onChange: initTheme });
   mountLanguageControl(settingsPage.prefs.lang, { t, value: getLocale(), onChange: changeLocale });
   const defaults = root.querySelector('#settings-defaults');
-  settingsChat = mountChatSettings(settingsPage.sections.defaults, { t,
+  settingsChat = mountChatSettings(settingsPage.slots.chat, { t,
     local: () => !REMOTE_AGENT && !state.remoteAgent,
     read: () => requestAgentJson('/api/settings/chat'),
     write: body => requestAgentJson('/api/settings/chat', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   });
-  settingsHosts = mountSessionHostSettings(settingsPage.sections.defaults, { t, locale: getLocale,
+  settingsHosts = mountSessionHostSettings(settingsPage.slots.hosts, { t, locale: getLocale, confirm: confirmSetting,
     local: () => !REMOTE_AGENT && !state.remoteAgent,
     read: () => requestAgentJson('/api/session-hosts'),
     write: body => requestAgentJson('/api/session-hosts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   });
-  settingsTimezone = mountTimezoneSettings(settingsPage.sections.defaults, { t,
+  settingsTimezone = mountTimezoneSettings(settingsPage.slots.timezone, { t,
     read: () => requestAgentJson('/api/settings/timezone'),
     write: body => requestAgentJson('/api/settings/timezone', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
     restart: body => requestAgentJson('/api/settings/timezone/actions/restart-services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
@@ -2769,7 +2763,7 @@ function initSettingsPage() {
   const read = async path => { const target = observerTargetKey(); const value = await fetchJson(path); if (target !== observerTargetKey()) throw Error('view_changed'); return value; };
   settingsLoader = createSettingsLoader({ read, onLoad(value) {
     settingsDefaults?.destroy();
-    settingsDefaults = settingsWiring().renderDefaults(defaults, value, read);
+    settingsDefaults = settingsWiring().renderDefaults(defaults, value, read, settingsPage.slots.idleReclaim);
     settingsPricing?.destroy(); settingsPricing = null;
     if (value.prices) {
       settingsPricing = createPricingPanel({ root: settingsPage.sections.pricing, host: root, snapshot: value.snapshot,
@@ -2785,15 +2779,35 @@ function initSettingsPage() {
   refreshSettingsVersion();
 }
 
+// The zylos version card shows the last update check; the engine card draws its own CLI version.
+let coreUpdate;
 function refreshSettingsVersion() {
-  if (!settingsVersionRoot) return;
-  renderVersion(settingsVersionRoot, state.dashboardState?.versions, { runtime: state.dashboardState?.default_runtime, upgrade: settingsUpgrade, t, readOnly: remoteIsReadOnly(), onHint: toggleZylosUpdateHint });
+  if (settingsVersionRoot) renderCoreUpdate(settingsVersionRoot, coreUpdate, { t, formatTime: value => formatZoned(value, getLocale()), onUpgrade: offerCoreUpgrade });
+  settingsDefaults?.refreshVersion();
+}
+async function refreshCoreUpdate() {
+  const identity = observerTargetKey();
+  coreUpdate = undefined; refreshSettingsVersion();
+  let value = null;
+  try { value = await fetchJson('/api/instance/core-update'); } catch {}
+  if (identity !== observerTargetKey()) return;
+  coreUpdate = value; refreshSettingsVersion();
+}
+// zylos upgrades are done by the agent itself (it can recover from a failed upgrade): the page shows what to ask
+// the agent, and confirming copies it.
+async function offerCoreUpgrade(prompt) {
+  const status = settingsVersionRoot;
+  if (!(await confirmSetting(prompt, { title: t('wb.settings.version.copyTitle'), ok: t('wb.settings.version.copy'), danger: false }))) return;
+  let copied = false;
+  try { await navigator.clipboard.writeText(prompt); copied = true; } catch {}
+  const note = status.querySelector('#settings-zylos-copied') ?? Object.assign(document.createElement('p'), { id: 'settings-zylos-copied', className: 'wb-note' });
+  note.setAttribute('role', 'status'); note.textContent = t(copied ? 'wb.settings.version.copied' : 'wb.settings.version.copyFailed'); status.append(note);
 }
 function refreshSettingsLocks() {
   if (!settingsPage) return;
   applySettingsReadOnly(remoteIsReadOnly());
   if (!settingsPricing) { for (const node of settingsModal.querySelectorAll('#settings-save, #settings-add-model, #settings-add-priority-model, #settings-fast-multiplier')) node.disabled = true; }
-  for (const node of settingsPage.sections.defaults.querySelectorAll('#action-mode')) node.disabled = remoteIsReadOnly();
+  for (const node of settingsPage.sections.machine.querySelectorAll('#action-mode')) node.disabled = remoteIsReadOnly();
   syncModeSegment();
   settingsDefaults?.refreshLocks();
   settingsTimezone?.refreshLocks();
@@ -2807,14 +2821,18 @@ function refreshSettingsPage() {
   settingsTimezone?.refresh();
   refreshObserverStatus({ quiet: true }).catch(() => {});
   refreshModeStatus().catch(() => {});
+  refreshCoreUpdate();
   if (!REMOTE_AGENT) {
     const identity = observerTargetKey();
     fetch(api('/api/fleet/agents'), { cache: 'no-store' }).then(async response => { if (!response.ok) throw Error('read_failed'); return response.json(); }).then(value => { if (identity === observerTargetKey()) renderFleetManage(value); }).catch(error => { if (identity === observerTargetKey()) fleetManageStatus(error.message, 'error', '#fleet-agent-list'); });
     loadApiKeys();
   }
-  for (const name of ['fleet', 'keys']) { const remote = Boolean(REMOTE_AGENT); const button = document.querySelector(`[data-settings-section="${name}"]`); if (button) button.hidden = remote; if (remote) settingsPage.sections[name].hidden = true; }
+  // Another machine opened through this one: its keys and its own list of machines stay on that machine.
+  const remote = Boolean(REMOTE_AGENT), fleetButton = document.querySelector('[data-settings-section="fleet"]');
+  if (fleetButton) fleetButton.hidden = remote; if (remote) settingsPage.sections.fleet.hidden = true;
+  const keysPanel = settingsPage.sections.account.querySelector('.manage-panel[data-panel="keys"]'); if (keysPanel) keysPanel.hidden = remote;
 }
-function openSettingsModal(section = 'defaults') {
+function openSettingsModal(section = 'account') {
   showAgentDetail({ navigation: false });
   document.querySelectorAll('.tab').forEach(node => node.classList.remove('active'));
   markCurrentTab(document.querySelectorAll('.tab'), 'settings');
@@ -2859,7 +2877,8 @@ function createActionsModal() {
   actionsModal = overlay;
 
   bindActionControls(overlay, pageActions(), {
-    runtime: () => state.dashboardState?.default_runtime,
+    // The upgrade button sits in the default engine card and upgrades the engine chosen there.
+    runtime: () => settingsDefaults?.selectedRuntime() ?? state.dashboardState?.default_runtime,
     onModeSettled: async () => { syncModeSegment(); await refreshModeStatus(); },
   });
   return overlay;
@@ -2894,7 +2913,8 @@ async function refreshModeStatus() {
     const status = data.session_mode;
     const mode = ['single', 'multi'].includes(status?.sessionMode) ? status.sessionMode : null;
     if (mode) { const select = actionsModal.querySelector('#action-mode'); select.value = mode; select._current = mode; syncModeSegment(); }
-    text.textContent = [mode ? t('wb.settings.session.' + mode) : t('value.unknown'), status?.transition?.phase, status?.transition?.reason, status?.supervisor === 'unreachable' ? t('actions.supervisor_unreachable') : '', status?.blocked?.since ? t('actions.blocked_since', { time: formatZoned(status.blocked.since, getLocale()) }) : '', status?.error ? [t('wb.readFailed'), status.error.message].filter(Boolean).join(' · ') : ''].filter(Boolean).join(' · ');
+    // The chosen mode is already pressed above; this line only says what is not shown there.
+    text.textContent = [mode ? '' : t('value.unknown'), status?.transition?.phase, status?.transition?.reason, status?.supervisor === 'unreachable' ? t('actions.supervisor_unreachable') : '', status?.blocked?.since ? t('actions.blocked_since', { time: formatZoned(status.blocked.since, getLocale()) }) : '', status?.error ? [t('wb.readFailed'), status.error.message].filter(Boolean).join(' · ') : ''].filter(Boolean).join(' · ');
   } catch (error) { if (observerTargetKey() !== targetKey) return; if (text) text.textContent = error.message; }
   const instanceText = actionsModal?.querySelector('#action-instance-status');
   try {
@@ -2994,7 +3014,7 @@ function execAction(action, body) {
 // Sends a dashboard action. Only the page actions call this, after they have checked access and asked when needed.
 async function sendAction(action, body) {
   const targetKey = observerTargetKey();
-  const actionRuntime = state.dashboardState?.default_runtime;
+  const actionRuntime = action === 'upgrade-cc' && body?.runtime ? body.runtime : state.dashboardState?.default_runtime;
   const statusEl = actionsModal?.querySelector('#action-status');
   if (statusEl) {
     statusEl.hidden = false;
@@ -3074,31 +3094,8 @@ async function sendAction(action, body) {
   }
 }
 
-// zylos-core upgrades are done by the agent itself (it can recover from a failed
-// upgrade); the dashboard only tells the user what to ask their agent.
-let zylosHintPopover = null;
-function toggleZylosUpdateHint(anchor) {
-  if (!zylosHintPopover) {
-    zylosHintPopover = document.createElement('div');
-    zylosHintPopover.className = 'tip-popover';
-    zylosHintPopover.hidden = true;
-    document.body.appendChild(zylosHintPopover);
-  }
-  const pop = zylosHintPopover;
-  if (!anchor || !pop.hidden) { pop.hidden = true; return; }
-  const p = document.createElement('p');
-  p.textContent = anchor.getAttribute('title') || '';
-  pop.replaceChildren(p);
-  const rect = anchor.getBoundingClientRect();
-  pop.style.top = `${rect.bottom + 6}px`;
-  pop.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 288))}px`;
-  pop.hidden = false;
-}
-
 function initInfoBarButtons() {
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') toggleZylosUpdateHint(null); });
   document.addEventListener('click', e => {
-    if (!e.target.closest('#settings-zylos-update')) toggleZylosUpdateHint(null);
     if (e.target.closest('#fleet-manage-btn')) { e.preventDefault(); openFleetFromIcon(); }
   });
 }

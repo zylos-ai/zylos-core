@@ -88,19 +88,28 @@ test('the owner can manage session hosting at desktop and phone widths', {
         const page = await context.newPage();
         page.setDefaultTimeout(8000);
         await page.goto(base + '/settings');
+        // Session hosting is about the whole machine: it sits in the machine section, reached through the drawer on a phone.
+        if (width === 390) await page.locator('.wb-set-drawer-btn').click();
+        await page.locator('[data-settings-section="machine"]').click();
         const panel = page.locator('#settings-session-hosts');
         await panel.getByText(locale === 'en' ? 'Session hosting' : '会话托管', { exact: true }).waitFor();
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
         assert.equal(await page.locator('html').getAttribute('data-theme'), theme);
-        assert.equal(await panel.locator('input').evaluate(input => Math.round(input.getBoundingClientRect().height)), width === 390 ? 36 : 30);
+        assert.equal(await panel.locator('.wb-host-allow input').evaluate(input => Math.round(input.getBoundingClientRect().height)), width === 390 ? 36 : 30);
         assert.match(await panel.textContent(), /origin/);
         if (evidence) await panel.screenshot({ path: path.join(evidence, `host-${width}-${locale}-${theme}.png`) });
         if (width === 390 && locale === 'zh' && theme === 'dark') {
           await panel.locator('.wb-host-row').filter({ hasText: 'issue-existing' }).getByRole('button', { name: '解除', exact: true }).click();
+          // Detaching asks first, titled with the action.
+          const dialog = page.locator('.wb-modal[role="alertdialog"]');
+          assert.equal(await dialog.locator('h3').textContent(), '解除会话托管');
+          await dialog.locator('.wb-modal-acts button').last().click();
           await panel.locator('.wb-host-row').filter({ hasText: 'issue-existing' }).waitFor({ state: 'detached' });
           await panel.getByRole('textbox', { name: '通道名称' }).fill('multica');
           await panel.getByRole('button', { name: '加入白名单' }).click();
-          await panel.getByRole('button', { name: '移除' }).click();
+          // A channel's × removes it at once, without a question.
+          await panel.getByRole('button', { name: '移除 multica', exact: true }).click();
+          assert.equal(await page.locator('.wb-modal[role="alertdialog"]').count(), 0);
           await panel.getByText('没有免通知的通道。').waitFor();
         }
       } finally { await context.close(); }

@@ -202,10 +202,11 @@ test('switching the default engine asks once and names the remote machine it act
 
 test('idle reclaim uses the session card mount and the existing confirmed remote action path', async () => {
   const p = page(), sent = [], asked = [], section = node(p.document, 'section');
-  const root = node(p.document, 'div', 'settings-defaults'), sessionRoot = node(p.document, 'div', 'settings-idle-reclaim'); section.append(root, sessionRoot);
+  // The idle reclaim field sits in the session mode card, in another section from the default engine card.
+  const root = node(p.document, 'div', 'settings-defaults'), sessionRoot = node(p.document, 'div', 'settings-idle-reclaim'); section.append(root); node(p.document, 'section').append(sessionRoot);
   const value = defaultsValue(); value.metadata.claude.session_hot_ttl = { seconds: 1800, minutes: 30, mode: 'multi', source: 'config',
     read_only: false, environment_set: false, environment_valid: false, min_minutes: 5, max_minutes: 1440 };
-  const panel = wired(p, { runner: recordingRunner(sent, asked), remoteTarget: () => 'lab' }).renderDefaults(root, value, async () => ({}));
+  const panel = wired(p, { runner: recordingRunner(sent, asked), remoteTarget: () => 'lab' }).renderDefaults(root, value, async () => ({}), sessionRoot);
   assert.equal(root.querySelector('#settings-hot-ttl-minutes'), null, 'the global setting is outside the per-engine cards');
   const input = sessionRoot.querySelector('#settings-hot-ttl-minutes'); input.value = '5'; await input.dispatch('input');
   await sessionRoot.querySelector('#settings-save-hot-ttl').dispatch('click');
