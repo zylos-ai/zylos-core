@@ -1,3 +1,4 @@
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -19,11 +20,20 @@ import { AuthGate } from '../src/lib/auth.js';
 import { Store } from '../src/lib/store.js';
 import { EventLoopMonitor } from '../src/lib/event-loop-monitor.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
-import { configText } from '../public/js/wb/detail-overview.js';
 import { chatHttpFixture } from './helpers/chat-http.js';
 import { signIn } from './helpers/dashboard-sign-in.js';
 import { fleetGroupSummary } from '../src/lib/workbench/fleet-summary.js';
 import { importSupervisorRecords, supervisorSequences } from './helpers/supervisor-records.js';
+
+const browserDescriptors = new URL('../public/runtime-descriptors.js', import.meta.url).pathname;
+const sourceDescriptors = new URL('../../../cli/lib/runtime/descriptors.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL && new URL(specifier, context.parentURL).pathname === browserDescriptors) return next(sourceDescriptors, context);
+    return next(specifier, context);
+  },
+});
+const { configText } = await import('../public/js/wb/detail-overview.js');
 
 function fixture(t, { count = 1, statusError = false, modeError = false, overrideError = false,
   c4Error = false, queueError = false, groupListError = false, noSample = false, readPm2 = () => null, readSystem = () => null, groupKeys, displayNames, hotTtlSeconds } = {}) {
