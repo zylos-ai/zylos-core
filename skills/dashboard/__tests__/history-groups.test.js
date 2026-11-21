@@ -191,10 +191,10 @@ test('history isolates Origin, offline groups and cross-runtime sessions on ever
   store.insertEvent({ id: 'team-replacement', ingest_id: 'team-replacement', session_id: 'team-codex',
     session_group: 'telegram:team', runtime: 'codex', event_type: 'session_start', category: 'lifecycle', timestamp: '2031-01-01T00:00:00Z' });
   store.upsertCodexRolloutPath({ sessionId: 'team-codex', transcriptPath: replacement, lastEventAt: '2031-01-01T00:00:00Z' });
+  await fs.utimes(replacement, new Date('2029-01-01'), new Date('2029-01-01'));
   const switched = await get('sessions', { session_group: 'telegram:team' });
   assert.equal(switched.body.runtime, 'codex');
-  assert.ok(switched.body.sessions.some(row => row.id === 'team-codex'));
-  assert.ok(switched.body.sessions.some(row => row.id === 'team-session'));
+  assert.deepEqual(switched.body.sessions.filter(row => row.kind === 'main').map(row => row.id), ['team-session', 'team-codex']);
   for (const [session, needle] of [['team-session', 'team-session needle'], ['team-codex', 'codex needle']]) {
     const search = await get('search', { session_group: 'telegram:team', session, q: needle });
     assert.equal(search.status, 200);

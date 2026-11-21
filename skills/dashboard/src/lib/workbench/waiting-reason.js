@@ -13,7 +13,7 @@ export function waitingReason(row, { runtimeHealth = {}, activations = [], now =
   const starting = () => ({ kind: 'starting', since: row.createdAt });
   if (queue.known === false) return row.presence === 'starting' ? starting() : { kind: 'unknown', reason: 'queue_summary_failed', pendingKnown: false };
   if (queue.pending.count === 0) return row.presence === 'starting' ? starting() : null;
-  const runtime = row.target.runtime;
+  const runtime = row.presence === 'starting' ? row.live?.runtime ?? row.target.runtime : row.target.runtime;
   if (runtime == null) return { kind: 'unknown', reason: row.target.reason };
   const record = runtimeHealth[runtime];
   const health = record?.source === 'missing' ? 'ok' : record?.health;
