@@ -54,7 +54,7 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
       publish();
     } catch { /* Keep the threshold explicitly unknown until the editor is opened again. */ }
   }
-  // Keep the saved choice available even when the catalog is unavailable.
+  // The editor accepts a typed model when the catalog is unavailable.
   async function loadMeta(runtime) {
     if (!['claude', 'codex', 'agy'].includes(runtime) || runtime in state.meta) return state.meta[runtime];
     state.meta[runtime] = undefined;
@@ -226,20 +226,29 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
   const effortLabel = t('wb.term.effort');
   const pairLocked = locked || target === 'agy' || start == null;
   const draft = state.draft.modelRuntime === target ? state.draft : {};
-  const model = select(modelLabel, [
+  const manualModel = start != null && target !== 'agy' && !meta?.models?.length;
+  const modelValue = draft.model ?? start?.model ?? '';
+  const model = manualModel ? element(document, 'input') : select(modelLabel, [
     { value: '', label: t(start == null ? 'wb.unknown' : 'wb.config.followGlobal') },
-    ...modelChoices(target === 'agy' ? null : meta, start?.model),
-  ], draft.model ?? start?.model ?? '');
+    ...modelChoices(target === 'agy' ? null : meta, modelValue),
+  ], modelValue);
+  if (manualModel) {
+    model.type = 'text';
+    model.value = modelValue;
+    model.placeholder = t('wb.config.followGlobal');
+    model.setAttribute('aria-label', modelLabel);
+  }
   model.disabled = pairLocked;
+  const modelId = () => model.value.trim() ? model.value : '';
   const effortOptions = (modelId, current) => [
     option('', t('wb.config.pickEffort')),
     ...(modelId ? effortChoices(meta, modelId, current).map(value => option(value)) : []),
   ];
   const effort = select(effortLabel, [], '');
   const setEffort = value => {
-    effort.replaceChildren(...effortOptions(model.value, value));
+    effort.replaceChildren(...effortOptions(modelId(), value));
     effort.value = value;
-    effort.disabled = pairLocked || !model.value;
+    effort.disabled = pairLocked || !modelId();
   };
   setEffort(draft.effort ?? start?.effort ?? '');
   if (ready && target !== 'agy') void controller.loadMeta(target);
@@ -247,7 +256,7 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
   const threshold = element(document, 'p', '', 'wb-note wb-cfg-threshold');
   threshold.setAttribute('aria-live', 'polite');
   const showThreshold = () => {
-    const selected = model.value || meta?.current_model;
+    const selected = modelId() || meta?.current_model;
     const value = selected ? state.meta[target]?.model_thresholds?.[selected] : target === resolved ? rotationThreshold : null;
     threshold.textContent = Number.isFinite(value) ? t('wb.config.modelThreshold', { value }) : t('wb.config.modelThresholdUnknown');
     if (selected && !Number.isFinite(value) && meta) void controller.loadThreshold(target, selected);
@@ -256,9 +265,10 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
 
   const changes = () => {
     const edits = [];
+    const selected = modelId();
     if (runtime.value !== savedRuntime) edits.push({ kind: 'runtime', value: runtime.value });
-    if (!pairLocked && (model.value !== start.model || (model.value && effort.value !== start.effort))) {
-      edits.push(model.value ? { kind: 'model', runtime: target, model: model.value, effort: effort.value }
+    if (!pairLocked && (selected !== start.model || (selected && effort.value !== start.effort))) {
+      edits.push(selected ? { kind: 'model', runtime: target, model: selected, effort: effort.value }
         : { kind: 'model', runtime: target, reset: true });
     }
     return edits;
@@ -269,13 +279,14 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
     const edits = changes();
     save.disabled = locked || edits.length === 0 || !edits.every(validConfigChange);
   };
-  const rememberPair = () => { Object.assign(state.draft, { modelRuntime: target, model: model.value, effort: effort.value }); };
+  const rememberPair = () => { Object.assign(state.draft, { modelRuntime: target, model: modelId(), effort: effort.value }); };
   runtime.addEventListener('change', () => {
     state.draft = { runtime: runtime.value };
     controller.redraw();
   });
-  model.addEventListener('change', () => {
-    const kept = model.value && effortChoices(meta, model.value).includes(effort.value) ? effort.value : '';
+  model.addEventListener(manualModel ? 'input' : 'change', () => {
+    const selected = modelId();
+    const kept = selected && effortChoices(meta, selected).includes(effort.value) ? effort.value : '';
     setEffort(kept);
     rememberPair(); showThreshold(); syncSave();
   });

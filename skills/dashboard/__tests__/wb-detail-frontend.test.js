@@ -772,7 +772,7 @@ test('every group has bound action buttons and Origin translated wake replies pr
   f.controller.destroy();
 });
 
-const configControl = (root, key) => allNodes(root).find(node => node.tagName === 'SELECT' && node.getAttribute('aria-label') === key);
+const configControl = (root, key) => allNodes(root).find(node => ['SELECT', 'INPUT'].includes(node.tagName) && node.getAttribute('aria-label') === key);
 
 async function groupConfigFixture(context, { presence = 'running', save = () => response({ ok: true, data: { running: { status: 'pending' } } }),
   restart = () => response({ ok: true, submission: 'accepted', result: 'accepted' }), config } = {}) {
@@ -1953,11 +1953,15 @@ test('incremental configuration metadata and refresh keep save bound to the moun
     allNodes(config).find(node => node.tagName === 'BUTTON' && node.textContent === 'wb.detail.modify').dispatch('click');
     await tick(); await tick();
     const pair = () => f.root.querySelector('.wb-cfg-model');
-    assert.deepEqual(configControl(f.root, 'wb.config.model').children.map(option => option.value), ['', 'opus']);
+    const typedModel = configControl(f.root, 'wb.config.model');
+    assert.equal(typedModel.tagName, 'INPUT', 'unavailable metadata starts with free text');
+    assert.equal(typedModel.value, 'opus');
+    typedModel.value = 'custom-model';
+    typedModel.dispatch('input');
     meta.resolve(response({ models: [{ id: 'opus' }, { id: 'sonnet' }], efforts_by_model: { '*': ['low', 'high'] },
       model_thresholds: { opus: 70, sonnet: 60 } }));
     await tick(); await tick();
-    assert.deepEqual(configControl(f.root, 'wb.config.model').children.map(option => option.value), ['', 'opus', 'sonnet']);
+    assert.deepEqual(configControl(f.root, 'wb.config.model').children.map(option => option.value), ['', 'custom-model', 'opus', 'sonnet']);
     const mounted = pair();
     await f.controller.updateSnapshot({ rows: [current], listKnown: true });
     assert.equal(pair(), mounted, 'background updates keep the editor mounted');
