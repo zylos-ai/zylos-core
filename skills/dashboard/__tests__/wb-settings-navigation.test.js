@@ -5,7 +5,11 @@ import { createSettingsNavigation } from '../public/js/wb/settings-navigation.js
 function setup(phone = true) {
   const entries = [{ url: '/', state: null }, { url: '/settings', state: { tab: 'settings' } }];
   let index = 1, section, backs = 0, hidden = false;
-  const media = { matches: phone, addEventListener() {} };
+  let onMediaChange;
+  const media = {
+    matches: phone,
+    addEventListener(_event, listener) { onMediaChange = listener; },
+  };
   const window = {
     matchMedia: () => media,
     location: { get href() { return entries[index].url; } },
@@ -25,6 +29,11 @@ function setup(phone = true) {
     back() { index--; return navigation.popstate(); },
     forward() { index++; return navigation.popstate(); },
     hide() { hidden = true; },
+    show() { hidden = false; },
+    setPhone(matches) {
+      media.matches = matches;
+      onMediaChange();
+    },
   };
 }
 
@@ -77,4 +86,15 @@ test('leaving a phone section allows replacement, while a desktop selection adds
   assert.equal(desktop.navigation.leave(), false);
   desktop.navigation.open();
   assert.equal(desktop.section(), 'pricing', 'desktop history preserves its selected section');
+
+  const resized = setup();
+  resized.navigation.open();
+  resized.navigation.leave();
+  resized.hide();
+  resized.back();
+  resized.setPhone(false);
+  resized.show();
+  resized.forward();
+  resized.navigation.open();
+  assert.equal(resized.section(), 'account', 'reopening after a hidden resize shows the desktop Account section');
 });
