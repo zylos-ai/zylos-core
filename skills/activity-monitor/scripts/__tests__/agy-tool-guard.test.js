@@ -3,17 +3,18 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
-import { guardAgyTool, runAgyToolGuard } from '../agy-tool-guard.js';
+import { runAgyToolGuard } from '../agy-tool-guard.js';
+import { hooks } from '../../../../cli/lib/runtime/agy/hooks.js';
 
 test('question dialogs are denied with a plain text alternative', () => {
-  const result = guardAgyTool({ toolCall: { name: 'ask_question', args: {} } });
+  const result = hooks.toolGuard({ toolCall: { name: 'ask_question', args: {} } });
   assert.equal(result.decision, 'deny');
   assert.match(result.reason, /plain text/);
 });
 
 test('other tools keep the native permission policy', () => {
   for (const payload of [{ toolCall: { name: 'run_command' } }, { toolCall: { name: 'invoke_subagent' } }]) {
-    assert.deepEqual(guardAgyTool(payload), { decision: 'allow' });
+    assert.deepEqual(hooks.toolGuard(payload), { decision: 'allow' });
   }
 });
 

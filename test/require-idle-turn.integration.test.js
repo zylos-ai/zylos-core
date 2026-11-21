@@ -36,7 +36,7 @@ assert.equal(DB_PATH, path.join(process.env.ZYLOS_DIR, 'comm-bridge', 'c4.db'));
 assert.ok(DB_PATH.startsWith(fileRoot + path.sep));
 
 let fixtureSequence = 0;
-function fixture(t, { mode = 'single', runtime = 'claude', group = 'origin', pausePaste = false } = {}) {
+async function fixture(t, { mode = 'single', runtime = 'claude', group = 'origin', pausePaste = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'idle-turn-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const env = { ...process.env, ZYLOS_DIR: root, ZYLOS_RUN_ID: `isolated-run-${++fixtureSequence}`,
@@ -54,7 +54,8 @@ function fixture(t, { mode = 'single', runtime = 'claude', group = 'origin', pau
   fs.utimesSync(transcript, now / 1000, now / 1000);
   const hook = (event, more = {}) => handleHookActivity({ hook_event_name: event,
     session_id: 'isolated-session', transcript_path: transcript, ...more }, { env, nowMs: now });
-  hook('SessionStart'); hook('UserPromptSubmit');
+  await hook('SessionStart');
+  await hook('UserPromptSubmit');
   const database = c4db.getDb();
   t.after(() => {
     c4db.close();
@@ -142,12 +143,12 @@ for (const mode of ['single', 'multi']) for (const runtime of ['claude', 'codex'
           : runtime === 'codex' ? ['stop', 'inactivity', 'api-error'] : ['stop', 'inactivity'];
       for (const ending of endings) {
         test(`${native ? 'native single' : mode} ${runtime} ${group} holds idle controls through ${output} and delivers once after ${ending}`, { timeout: 5000 }, async t => {
-          const f = fixture(t, { mode, runtime, group });
+          const f = await fixture(t, { mode, runtime, group });
           const controls = [runtime === 'codex' ? '/exit' : '/clear', 'Memory Sync requested']
             .map(content => f.store.insertControl(content, { sessionGroup: group, priority: 1, requireIdle: true, appendAckSuffix: false }));
           const hasTool = output.startsWith('foreground-') || output === 'escaped-tool';
-          if (hasTool) f.hook('PreToolUse', { tool_use_id: 'foreground', tool_name: output === 'foreground-agent' ? 'Agent' : 'Bash' });
-          if (output === 'foreground-agent') f.hook('SubagentStart', { agent_id: 'foreground-child' });
+          if (hasTool) await f.hook('PreToolUse', { tool_use_id: 'foreground', tool_name: output === 'foreground-agent' ? 'Agent' : 'Bash' });
+          if (output === 'foreground-agent') await f.hook('SubagentStart', { agent_id: 'foreground-child' });
           const hookBytes = fs.statSync(path.join(f.runDir, 'events.jsonl')).size;
           const samples = output === 'streaming' ? [5000, 60000, 600000, 1199999] : hasTool ? [5000, 1199999, 1200000, 1800000] : [5000, 68000, 899999, 1199999];
           for (const elapsed of samples) {
@@ -166,8 +167,8 @@ for (const mode of ['single', 'multi']) for (const runtime of ['claude', 'codex'
             assert.equal(f.pasted.length, 0); assert.equal(f.keys.length, 0);
           }
           if (ending === 'stop') {
-            if (hasTool) { f.hook('PostToolUse', { tool_use_id: 'foreground' }); f.advance(4000); assert.equal(f.read().turnOpen, true); }
-            f.hook('Stop'); f.advance(4000);
+            if (hasTool) { await f.hook('PostToolUse', { tool_use_id: 'foreground' }); f.advance(4000); assert.equal(f.read().turnOpen, true); }
+            await f.hook('Stop'); f.advance(4000);
           } else {
             if (output === 'escaped-tool') {
               f.append({ type: 'user', sessionId: f.scene.sessionId, timestamp: new Date(f.now()).toISOString(),
@@ -212,7 +213,7 @@ for (const mode of ['single', 'multi']) for (const runtime of ['claude', 'codex'
 // Run for response/inactivity coordination changes; skip unrelated UI/docs. Same
 // isolated env/database/socket fixture, injected terminal I/O, no child processes.
 for (const runtime of ['claude', 'codex']) test(`${runtime} AI work followed by an unclosed silent turn gets one inactivity Escape`, { timeout: 5000 }, async t => {
-  const f = fixture(t, { runtime });
+  const f = await fixture(t, { runtime });
   f.supervisor.observer.notifyDelivered({ ...f.scene, pastedAt: f.startedAt });
   f.advance(1000); f.output();
   await f.observe();
@@ -256,7 +257,7 @@ for (const runtime of ['claude', 'codex']) test(`${runtime} AI work followed by 
 // Run when queue priority, inactivity insertion or lane serialization changes;
 // skip unrelated UI/docs. Same file/fixture isolation; no background processes.
 for (const runtime of ['claude', 'codex']) test(`${runtime} queued inactivity Escape waits for in-flight message submission`, { timeout: 5000 }, async t => {
-  const f = fixture(t, { runtime, pausePaste: true });
+  const f = await fixture(t, { runtime, pausePaste: true });
   f.advance(1000); f.output(); f.read();
   const message = f.store.insertConversation('in', 'telegram', 'isolated', 'keep this message');
   const state = { mode: 'single', stopped: false, live: new Map([[f.scene.sessionGroup, { present: true, ready: true, runId: f.scene.runId, sessionId: f.scene.sessionId }]]), activations: new Map() };
@@ -289,7 +290,7 @@ for (const runtime of ['claude', 'codex']) test(`${runtime} queued inactivity Es
 // one run. Run when these timers/actions change; skip unrelated UI/docs. Same
 // isolated SQLite/env; fake scene stop, no native runtime or background processes.
 for (const runtime of ['claude', 'codex']) test(`${runtime} no-response recovery stops the run before inactivity can add another Escape`, { timeout: 5000 }, async t => {
-  const f = fixture(t, { runtime });
+  const f = await fixture(t, { runtime });
   f.read();
   f.supervisor.observer.notifyDelivered({ ...f.scene, pastedAt: f.startedAt });
   f.at(f.startedAt + 899999); await f.observe();

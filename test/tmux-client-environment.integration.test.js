@@ -102,7 +102,7 @@ test('managed launch keeps identity session-local and avoids collision rereads',
       const identity = JSON.parse(fs.readFileSync(path.join(f.dir, `identity-${runId}.json`)));
       assert.deepEqual(identity, { ZYLOS_RUN_ID: runId, ZYLOS_MODEL_CONFIG: JSON.stringify(config), ZYLOS_SESSION_GROUP: group });
       const hookEnv = { ...f.env, ...identity, ZYLOS_DIR: f.dir };
-      const record = handleHookActivity({ hook_event_name: 'SessionStart', session_id: `native-${group}` }, { env: hookEnv });
+      const record = await handleHookActivity({ hook_event_name: 'SessionStart', session_id: `native-${group}` }, { env: hookEnv });
       assert.equal(record.runtime, 'claude');
       assert.equal(record.run_id, runId);
       const skillsDir = path.join(f.dir, `skills-${group}`);

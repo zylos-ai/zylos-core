@@ -6,11 +6,10 @@ import { isMainModule } from './is-main-module.js';
 const denial = reason => ({ decision: 'deny', reason });
 const invalidInput = () => denial('Cannot validate tool input. Ask the user in plain text instead.');
 
-export function guardAgyTool(payload) {
-  if (typeof payload?.toolCall?.name !== 'string' || !payload.toolCall.name) return invalidInput();
-  return payload.toolCall.name === 'ask_question'
-    ? denial('Ask the user in plain text instead of calling ask_question.')
-    : { decision: 'allow' };
+async function loadRuntime() {
+  const { loadCoreModule } = await import('./core-modules.js');
+  const { getRuntime } = await loadCoreModule('runtime/index.js');
+  return getRuntime('agy');
 }
 
 /** The native hook kills its shell on timeout, so this process owns its deadline. */
@@ -30,8 +29,12 @@ export function runAgyToolGuard({ input = process.stdin, complete, deadlineMs = 
     if (Buffer.byteLength(text) > 65536) finish(invalidInput(), 1);
   });
   input.on('error', () => finish(invalidInput(), 1));
-  input.on('end', () => {
-    try { finish(guardAgyTool(JSON.parse(text)), 0); }
+  const runtime = loadRuntime().catch(() => finish(invalidInput(), 1));
+  input.on('end', async () => {
+    try {
+      const implementation = await runtime;
+      if (!finished) finish(implementation.hooks.toolGuard(JSON.parse(text)), 0);
+    }
     catch { finish(invalidInput(), 1); }
   });
 }

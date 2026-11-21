@@ -78,6 +78,12 @@ export const RUNTIME_CONTRACT = Object.freeze({
       stage: 'optional',
       writeConfig: 'optional',
       installHooks: 'optional',
+      normalize: 'required',
+      output: 'required',
+      toolInput: 'optional',
+      mainSession: 'optional',
+      readSessionSource: 'optional',
+      toolGuard: 'optional',
     }),
   }),
 });

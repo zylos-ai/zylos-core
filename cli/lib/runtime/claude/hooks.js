@@ -7,6 +7,7 @@ import { copyPrivateFile, writePrivateFile } from '../../private-file.js';
 import { hookScriptKey, getCommandHooks } from '../../hook-utils.js';
 import { isCoreManaged, commandHook, desiredSessionStartHooks } from '../../sync-runtime-hooks.js';
 import { UNSUPPORTED } from '../contract.js';
+import { selectToolInput } from '../shared/tool-input.js';
 
 const ZYLOS_DIR = path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
 const TEMPLATE_SETTINGS = path.resolve(import.meta.dirname, '../../../..', 'templates/.claude/settings.json');
@@ -519,4 +520,10 @@ export const hooks = Object.freeze({
   stage,
   writeConfig: UNSUPPORTED,
   installHooks: UNSUPPORTED,
+  normalize: payload => payload,
+  output: ({ event, result }) => event === 'SessionStart' && typeof result?.text === 'string' ? result.text : '',
+  toolInput: selectToolInput,
+  mainSession: UNSUPPORTED,
+  readSessionSource: UNSUPPORTED,
+  toolGuard: UNSUPPORTED,
 });
