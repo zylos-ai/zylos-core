@@ -64,9 +64,9 @@ export async function aggregateRuntimeDemand({ mode, pendingGroups, fences = [],
 export class RuntimeHealthCoordinator {
   constructor({ zylosDir, now = Date.now, resolveTargetRuntime, listScenes,
     probeInFlight = () => false, readNegativeCache = () => null, clearNegativeCache = () => {},
-    freezeNotice, log = () => {}, createStore } = {}) {
+    freezeNotice, checkAuth, log = () => {}, createStore } = {}) {
     Object.assign(this, { zylosDir, now, resolveTargetRuntime, listScenes, probeInFlight,
-      readNegativeCache, clearNegativeCache, freezeNotice, log });
+      readNegativeCache, clearNegativeCache, freezeNotice, checkAuth, log });
     this.createStore = createStore ?? (runtime => new HealthStore({ runtime, zylosDir, now, freezeNotice, log }));
     this.stores = new Map();
     this.queues = new Map();
@@ -143,13 +143,24 @@ export class RuntimeHealthCoordinator {
       return true;
     });
   }
-  consumeHook(runtime, event, options) {
+  async consumeHook(runtime, event, options) {
+    let authConfirmed = false;
+    if (runtime === 'claude' && event.event === 'stop_failure' && event.error === 'authentication_failed' &&
+        this.checkAuth && await this.serial(runtime, () => this.store(runtime).needsAuthConfirmation(event, options))) {
+      // Probe outside the writer so concurrent checks can share the in-flight call.
+      // The write below revalidates event ordering after the probe.
+      try {
+        authConfirmed = (await this.checkAuth(runtime))?.status === 'failure';
+      } catch {
+        // A probe error provides no credential evidence.
+      }
+    }
     return this.serial(runtime, () => {
       const store = this.store(runtime), before = store.read();
-      const result = store.consume(event, options);
+      const result = store.consume(event, { ...options, authConfirmed });
       if (result.status === 'processed' && (result.state.health === 'ok' || result.state.health === 'auth_failed' ||
           (before.health !== 'rate_limited' && result.state.health === 'rate_limited'))) this.associations.delete(runtime);
-      if (result.status === 'processed' && event.event === 'stop_failure' && event.error === 'authentication_failed') this.authRecoveries.delete(runtime);
+      if (result.reason === 'hook_failure' && result.state.health === 'auth_failed') this.authRecoveries.delete(runtime);
       return result;
     });
   }

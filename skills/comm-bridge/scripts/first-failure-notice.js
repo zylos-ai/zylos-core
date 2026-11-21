@@ -22,7 +22,7 @@ export function freezeFirstFailureNotice(database, { runtime, identity, event, r
   if (!target) return null;
   return { event_id:event.event_id, runtime, session_group:sessionGroup, session_id:identity.session_id,
     claude_pid:identity.claude_pid, conversation_id:target.id, channel:target.channel, endpoint:target.endpoint_id,
-    health:event.error === 'rate_limit' ? 'rate_limited' : event.error === 'authentication_failed' ? 'auth_failed' : 'unavailable',
+    health:event.error === 'rate_limit' ? 'rate_limited' : result.notice.noticeCode === 'auth_failed' ? 'auth_failed' : 'unavailable',
     reason:result.notice.reason || event.error, error:event.error, created_at:event.received_at, notice:result.notice, status:'pending' };
 }
 

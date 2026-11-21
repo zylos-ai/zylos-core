@@ -85,7 +85,7 @@ export function createSupervisor(deps) {
   };
   const health=new RuntimeHealthCoordinator({zylosDir:deps.zylosDir,now,
     resolveTargetRuntime:deps.resolveTargetRuntime,listScenes,probeInFlight:runtime=>observer.probeInFlight(runtime),
-    readNegativeCache:(runtime,state)=>router.readNegativeCache(runtime,state.health,state.reason),clearNegativeCache:runtime=>router.clearCache(runtime),freezeNotice:deps.freezeNotice,log});
+    readNegativeCache:(runtime,state)=>router.readNegativeCache(runtime,state.health,state.reason),clearNegativeCache:runtime=>router.clearCache(runtime),freezeNotice:deps.freezeNotice,checkAuth:runtime=>probeAuth(runtime),log});
   const manualPending=(group='origin')=>admission.readRequests().some(row=>row.reason==='manual_restart' &&
     (row.mode==='single' ? group===null || group==='origin' : (row.sessionGroup ?? 'origin')===group));
   const manualAllows=group=>{
@@ -140,23 +140,26 @@ export function createSupervisor(deps) {
     },{requireOpen:true});
     return interrupted;
   };
-  const checkAuth=(runtime,{background=false}={})=>{
+  const probeAuth=(runtime,{background=false}={})=>{
     if(stopping)return Promise.resolve({status:'uncertain',reason:'supervisor_stopping'});
-    // Router, pane checks and pending demand share one actual adapter call.
+    // Hook confirmation, router, pane checks and pending demand share one adapter call.
     if(authFlights.has(runtime))return authFlights.get(runtime);
     // Real incoming messages may retry immediately; the 1 s loop
     // must not turn retained pending demand into repeated expensive CLI pings.
     if(background && now()<(authRetryAt.get(runtime) ?? 0))return Promise.resolve({status:'uncertain',reason:'auth_retry_backoff'});
-    const task=Promise.resolve().then(async()=>{
-      const result=await deps.checkAuth(runtime);
-      if(!stopping && (result.status==='success' || result.result==='success'))await health.beginAuthRecovery(runtime,result,await listScenes());
-      return result;
-    });
+    const task=Promise.resolve().then(()=>deps.checkAuth(runtime));
     authFlights.set(runtime,task);authChecks.add(task);
     task.finally(()=>{
       authRetryAt.set(runtime,now()+AUTH_DEMAND_RETRY_MS);
       authFlights.delete(runtime);authChecks.delete(task);
     }).catch(()=>{});return task;
+  };
+  const checkAuth=async(runtime,options)=>{
+    const result=await probeAuth(runtime,options);
+    if(!stopping && (result.status==='success' || result.result==='success') && health.store(runtime).read().health==='auth_failed') {
+      await health.beginAuthRecovery(runtime,result,await listScenes());
+    }
+    return result;
   };
   observer=new SupervisorHealthObserver({coordinator:health,listScenes,readIdentity:async group=>{
     const current=await scenes.readIdentity(group);

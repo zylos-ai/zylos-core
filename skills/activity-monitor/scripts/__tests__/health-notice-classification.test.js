@@ -84,7 +84,7 @@ test('factual first failure notices are independent of persistent health transit
   ]) {
       const store=fixture(t);
       const evidence=error==='billing_error'?{}:{notice_match:{sourceId:1,kind:'model_quota'},quota:snapshot({five_hour:{used_percentage:100}})};
-      const result=store.consume({...base,error,...evidence}, {identity});
+      const result=store.consume({...base,error,...evidence}, {identity,authConfirmed:true});
       // Billing is tested without supporting quota; the other classes must
       // never adopt quota wording even when unrelated quota evidence exists.
       assert.equal(result.notice.noticeCode,noticeCode);assert.equal(result.notice.eligible,true);
