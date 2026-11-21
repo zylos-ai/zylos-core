@@ -27,7 +27,7 @@ test('ingestion enriches from its own current , never another group or legacy qu
  const reader=new HealthEventReader({coordinator,zylosDir:root,now:()=>now});t.after(()=>reader.close());
  for(const [group,runId,usage] of [['chat:A','run-a',100],['chat:B','run-b',20]]){
   const env={ZYLOS_DIR:root,ZYLOS_SESSION_GROUP:group,ZYLOS_RUN_ID:runId};
-  publishContextSample({session_id:'s',rate_limits:{five_hour:{used_percentage:usage}}},{env,now});
+  await publishContextSample({session_id:'s',rate_limits:{five_hour:{used_percentage:usage}}},{env,now});
   const scene={sessionGroup:group,runtime:'claude',runId,runDir:path.join(root,'activity-monitor/session-groups',group)};
   appendEvent(path.join(scene.runDir,'events.jsonl'),{type:'runtime_health',runtime:'claude'});
   await reader.consumeScene(scene,{runtime:'claude',session_id:'s',claude_pid:123});

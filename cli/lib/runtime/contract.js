@@ -59,6 +59,16 @@ export const RUNTIME_CONTRACT = Object.freeze({
     transcript: 'optional',
     statuslineActivity: 'optional',
   }) }),
+  context: Object.freeze({ required: true, members: Object.freeze({
+    readUsageSample: 'required',
+    usageSampleExpires: 'required',
+    usageFacts: 'required',
+    contextWindowFor: 'required',
+    thresholdKeys: 'required',
+    readModelWindows: 'optional',
+    readDefaultModel: 'optional',
+    statusLine: 'optional',
+  }) }),
   switch: Object.freeze({ required: true, members: Object.freeze({
     command: 'required',
     exitsProcess: 'required',

@@ -1,3 +1,4 @@
+import { findRuntime } from './runtime/index.js';
 import { runtimesWith } from './runtime/descriptors.js';
 import path from 'node:path';
 import { openReadStore } from './c4-read-store.js';
@@ -50,19 +51,17 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
         const target = first.get(group ?? 'origin') ?? absent(group);
         const dir = groupRunDir(group ?? 'origin', env);
         const status = readJsonSample(path.join(dir, 'agent-status.json'), 'status');
-        let usage = { error:'missing', sampledAt:null };
-        if (['claude', 'agy'].includes(target.runtime)) usage = readJsonSample(path.join(dir, 'statusline.json'), 'usage');
-        if (target.runtime === 'codex') {
-          const found = readCodexSampleForIdentity({ sessionGroup:group, identity:target, env });
-          if (found) usage = { value:found.sample, sampledAt:found.sample.capturedAt, identity:found.sample.identity };
-        }
-        return [group, { target, status, usage, sampled:await sampleTarget?.(group, target) }];
+        const context = (await findRuntime(target.runtime))?.context;
+        const usage = context?.readUsageSample({ dir, sessionGroup: group, identity: target, env })
+          ?? { error: 'missing', sampledAt: null };
+        const usageFreshness = context?.usageSampleExpires === false ? Infinity : usageFreshnessMs;
+        return [group, { target, status, usage, usageFreshness, sampled:await sampleTarget?.(group, target) }];
       })));
       let last;
       try { last = await read(); }
       catch (error) { if (!isIdentityError(error) && error.code !== 'TMUX_NO_SERVER') throw error; last = new Map(); }
       return new Map([...samples].map(([group, sample]) => {
-        const { target, status, usage } = sample;
+        const { target, status, usage, usageFreshness } = sample;
         const final = last.get(group ?? 'origin') ?? absent(group);
         const stable = target.present && final.present && ['runId','serverGeneration','tmuxSessionId','paneId','runtime','createdAt','sessionId'].every(key => target[key] === final[key]);
         return [group, { identity:publicIdentity(target),
@@ -70,7 +69,7 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
           ...(sampleTarget ? { sampled:sample.sampled } : {}),
           ...(target.present && !stable ? { observationError:tmuxError('TARGET_GONE', 'Batch target changed during observation') } : {}),
           status:sampleResult(status, target, final, freshnessMs, now()),
-          usage:sampleResult(usage, target, final, target.runtime === 'agy' ? Infinity : usageFreshnessMs, now()) }];
+          usage:sampleResult(usage, target, final, usageFreshness, now()) }];
       }));
     } finally { await connection.close(); }
   }
@@ -94,12 +93,10 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
       const first = await read();
       const dir = groupRunDir(group ?? 'origin', env);
       const status = readJsonSample(path.join(dir, 'agent-status.json'), 'status');
-      let usage = { error: 'missing', sampledAt: null };
-      if (['claude', 'agy'].includes(first.runtime)) usage = readJsonSample(path.join(dir, 'statusline.json'), 'usage');
-      if (first.runtime === 'codex') {
-        const found = readCodexSampleForIdentity({ sessionGroup: group, identity: first, env });
-        if (found) usage = { value: found.sample, sampledAt: found.sample.capturedAt, identity: found.sample.identity };
-      }
+      const context = (await findRuntime(first.runtime))?.context;
+      const usage = context?.readUsageSample({ dir, sessionGroup: group, identity: first, env })
+        ?? { error: 'missing', sampledAt: null };
+      const usageFreshness = context?.usageSampleExpires === false ? Infinity : usageFreshnessMs;
       let last;
       try { last = await read(); }
       catch (error) {
@@ -107,7 +104,7 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
         last = absent(group);
       }
       return { identity: publicIdentity(first), status: sampleResult(status, first, last, freshnessMs, now()),
-        usage: sampleResult(usage, first, last, first.runtime === 'agy' ? Infinity : usageFreshnessMs, now()) };
+        usage: sampleResult(usage, first, last, usageFreshness, now()) };
     });
   }
   async function readCodexUsageSample({ sessionGroup }) {

@@ -1,3 +1,4 @@
+import { getRuntime } from '../runtime/index.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -73,12 +74,12 @@ test('Codex model belongs to the sampled turn and ignores a later turn or incomp
   assert.equal(readCodexSampleForIdentity({sessionGroup:'lark:x',identity,env:f.env}).sample.model,'changed');
  } finally { f.clean(); }
 });
-test('usage model facts prefer actual model and preserve the observed context class', () => {
+test('usage model facts prefer actual model and preserve the observed context class', async () => {
  const override={runtime:'claude',mode:'override',model:'sonnet'};
- assert.deepEqual(usageModelFacts({model:{id:'claude-opus-4-6'},context_window:{context_window_size:1000000}},'claude',override),{model:'claude-opus-4-6',contextWindow:1000000});
- assert.deepEqual(usageModelFacts(null,'claude',override),{model:'sonnet',contextWindow:null});
- assert.deepEqual(usageModelFacts(null,'codex',override),{model:null,contextWindow:null});
- assert.deepEqual(usageModelFacts(null,'claude',{mode:'default'}),{model:null,contextWindow:null});
+ assert.deepEqual(usageModelFacts({model:{id:'claude-opus-4-6'},context_window:{context_window_size:1000000}},'claude',override,(await getRuntime('claude')).context),{model:'claude-opus-4-6',contextWindow:1000000});
+ assert.deepEqual(usageModelFacts(null,'claude',override,(await getRuntime('claude')).context),{model:'sonnet',contextWindow:null});
+ assert.deepEqual(usageModelFacts(null,'codex',override,(await getRuntime('codex')).context),{model:null,contextWindow:null});
+ assert.deepEqual(usageModelFacts(null,'claude',{mode:'default'},(await getRuntime('claude')).context),{model:null,contextWindow:null});
 });
 
 

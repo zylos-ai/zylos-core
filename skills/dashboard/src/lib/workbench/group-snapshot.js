@@ -172,7 +172,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     }
     sources.accounts = accountsCache.sources;
     const runtimeHealth = status?.runtimeHealth ?? {};
-    const thresholdPolicy = readThresholdPolicy(zylosDir);
+    const thresholdPolicy = await readThresholdPolicy(zylosDir);
     hotTtlMs = resolveSessionHotTtl(thresholdPolicy.config).seconds * 1000;
     for (const row of rows) {
       const observation = captured.get(row.sessionGroup);
@@ -182,9 +182,13 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
         id: tool.id, name: tool.name, detail: sanitizer.sanitizeToolDetail(tool.name, tool.input), startedAt: tool.startedAt,
       })) : [];
       const usage = observation?.usage;
-      row.runningVersion = usage?.valid ? usage.value.version ?? usage.value.cliVersion ?? null : null;
-      row.contextPct = usage?.valid ? usage.value.context_window?.used_percentage ??
-        (usage.value.contextUsage?.ceiling > 0 ? usage.value.contextUsage.used / usage.value.contextUsage.ceiling * 100 : null) : null;
+      const usageRuntime = observation?.identity.runtime;
+      const context = usage?.valid && Object.hasOwn(thresholdPolicy.contexts, usageRuntime)
+        ? thresholdPolicy.contexts[usageRuntime] : null;
+      const facts = usage?.valid ? context?.usageFacts(usage.value) ?? {} : null;
+      row.runningVersion = facts?.version ?? null;
+      row.contextPct = facts?.usedPercent ?? (facts?.contextWindow > 0 && Number.isFinite(facts.usedTokens)
+        ? facts.usedTokens / facts.contextWindow * 100 : null);
       if (observation && !usage?.valid) row.contextReason = 'usage_unreadable';
       // In single mode every channel feeds the one null-key Origin session.
       const singleOrigin = status?.view === 'single' && row.sessionGroup === null;
@@ -206,10 +210,9 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
         : ov.ok ? { runtime: selectedRuntime, model: selectedModel ? { model: selectedModel.model, effort: selectedModel.effort } : 'default' }
           : { runtime: null, reason: 'override_list_failed' };
       if (status?.view === 'single') row.target.onlyMulti = true;
-      row.model = usage?.valid ? (['claude', 'agy'].includes(row.target.runtime) ? usage.value.model?.id : usage.value.model) ?? null
+      row.model = facts ? (typeof facts.model === 'string' ? facts.model : null)
         : row.launchConfig?.mode === 'override' ? row.launchConfig.model ?? null : null;
-      row.effort = usage?.valid ? (row.target.runtime === 'agy' ? usage.value.model?.effort :
-        usage.value.effort?.level ?? usage.value.reasoningEffort ?? usage.value.reasoning_effort) ?? null : row.launchConfig?.effort ?? null;
+      row.effort = facts ? facts.effort ?? null : row.launchConfig?.effort ?? null;
       row.desired = status?.view === 'single' || !ov.ok ? null : selectedModel
         ? { runtime: selectedRuntime, mode: 'override', model: selectedModel.model, effort: selectedModel.effort }
         : { runtime: selectedRuntime, mode: 'default' };

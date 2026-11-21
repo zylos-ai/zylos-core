@@ -21,12 +21,12 @@ const identity = { present: true, ready: true, runtime: 'claude', runId: 'd02786
 const statusLine = { session_id: 'session-1', model: { id: 'claude-opus-4-1', display_name: 'Opus' },
   context_window: { used_percentage: 37, context_window_size: 200000 }, version: '2.0.0' };
 
-function fixture(t, { live = identity } = {}) {
+async function fixture(t, { live = identity } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-context-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const env = { ZYLOS_DIR: root, ZYLOS_SESSION_GROUP: GROUP, ZYLOS_RUN_ID: identity.runId };
   const writtenAt = 1800000000000;
-  publishContextSample(JSON.stringify(statusLine), { env, now: writtenAt });
+  await publishContextSample(JSON.stringify(statusLine), { env, now: writtenAt });
   let clock = writtenAt;
   const reader = createSessionReader({ env: { ZYLOS_DIR: root }, now: () => clock,
     open: async () => ({ close: async () => {} }), observe: async () => live,
@@ -55,7 +55,7 @@ function fixture(t, { live = identity } = {}) {
 }
 
 test('an idle group keeps its last context use from the statusLine sample', async t => {
-  const f = fixture(t);
+  const f = await fixture(t);
   const sample = JSON.parse(fs.readFileSync(path.join(f.root, 'activity-monitor', 'session-groups', GROUP, 'statusline.json'), 'utf8'));
   assert.deepEqual(sample.zylos, { v: 1, runId: identity.runId, sessionGroup: GROUP, capturedAt: 1800000000000 });
   f.wait(42000);
@@ -65,7 +65,7 @@ test('an idle group keeps its last context use from the statusLine sample', asyn
 });
 
 test('a group whose session changed since the sample shows no context use', async t => {
-  const f = fixture(t, { live: { ...identity, sessionId: 'session-2' } });
+  const f = await fixture(t, { live: { ...identity, sessionId: 'session-2' } });
   f.wait(42000);
   const row = (await f.service.getSnapshot()).rows.find(item => item.sessionGroup === GROUP);
   assert.equal(row.contextPct, null);

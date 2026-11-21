@@ -10,7 +10,9 @@ import { loadCoreModule } from './core-modules.js';
 
 const { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES, findRuntime, runtimeDisplayName, runtimesWith } = await loadCoreModule('runtime/index.js');
 const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
-const { modelThreshold, thresholdLimit, readDefaultModels, readCodexModelWindows, migrateModelThresholds, setModelThreshold } = await loadCoreModule('model-rotation-thresholds.js');
+const { modelThreshold, thresholdLimit, loadRuntimeContexts, readDefaultModels, readModelWindows, migrateModelThresholds, setModelThreshold } = await loadCoreModule('model-rotation-thresholds.js');
+// This module awaits the runtime factory at top level. Runtime implementations must not statically import it.
+const thresholdContexts = await loadRuntimeContexts();
 const { resolveSessionHotTtl, HOT_TTL_MIN_MINUTES, HOT_TTL_MAX_MINUTES } = await loadCoreModule('session-hot-ttl.js');
 const { readConfigStrict, configUnreadable } = await loadCoreModule('config-store.js');
 const { updateConfigWithLock } = await loadCoreModule('config-lock.js');
@@ -278,7 +280,8 @@ async function setThreshold(reqId, body, config, zylosDir) {
   if (!['claude', 'codex'].includes(body?.runtime)) return { ok: false, error: 'INVALID_RUNTIME' };
   if (typeof body?.model !== 'string' || !body.model.trim()) return { ok: false, error: 'invalid_model', messageKey: 'result.invalid_model' };
   const value = typeof body.value === 'number' || (typeof body.value === 'string' && /^\d+$/.test(body.value.trim())) ? Number(body.value) : NaN;
-  const limit = thresholdLimit({ runtime: body.runtime, model: body.model, codexModels: readCodexModelWindows({}) });
+  const limit = thresholdLimit({ runtime: body.runtime, context: thresholdContexts[body.runtime], model: body.model,
+    modelWindows: readModelWindows({ contexts: thresholdContexts }) });
   if (body.value === '' || !Number.isInteger(value) || value < 10 || value > limit) {
     return { ok: false, error: 'invalid_value', message: `Threshold must be between 10 and ${limit}`, messageKey: 'result.invalid_threshold', messageParams: { max: limit } };
   }
@@ -359,7 +362,7 @@ export function getActionsMeta(config) {
 
   const zylosDir = config.zylosDir || path.join(os.homedir(), 'zylos');
   const settings = runtime === 'claude' ? readSettings(zylosDir) : {};
-  const nativeModels = readDefaultModels({ zylosDir });
+  const nativeModels = readDefaultModels({ zylosDir, contexts: thresholdContexts });
   const codexModel = runtime === 'codex' ? nativeModels.codex : null;
   const codexEffort = runtime === 'codex' ? readCodexRootString('model_reasoning_effort', zylosDir) : null;
   const currentCodexModel = runtime === 'codex'
@@ -375,9 +378,9 @@ export function getActionsMeta(config) {
   }
 
   const currentModel = runtime === 'claude' ? nativeModels.claude : currentCodexModel;
-  const windows = readCodexModelWindows({});
+  const windows = readModelWindows({ contexts: thresholdContexts });
   const thresholdModels = [...new Set([...models.map(item => item.id), currentModel, config.thresholdModel].filter(Boolean))];
-  const options = model => ({ runtime, model, defaultModel: currentModel, codexModels: windows });
+  const options = model => ({ runtime, context: thresholdContexts[runtime], model, defaultModel: currentModel, modelWindows: windows });
   const model_thresholds = Object.fromEntries(thresholdModels.map(model => [model, modelThreshold(config, options(model))]));
   const model_threshold_max = Object.fromEntries(thresholdModels.map(model => [model, thresholdLimit(options(model))]));
   const newSessionThreshold = modelThreshold(config, options(currentModel));

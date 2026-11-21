@@ -4,7 +4,7 @@ import { createSessionObservations } from './session-observations.js';
 import { Sanitizer } from './sanitizer.js';
 import { isDeepStrictEqual } from 'node:util';
 
-const { runtimesWith } = await loadCoreModule('runtime/descriptors.js');
+const { runtimesWith, findRuntime } = await loadCoreModule('runtime/index.js');
 
 const publicIdentity = identity => Object.fromEntries(
   ['present', 'tmuxName', 'runId', 'createdAt', 'runtime', 'ready', 'sessionId']
@@ -18,11 +18,11 @@ function stableBusinessValue(value) {
     .filter(([key]) => !VOLATILE_KEYS.has(key))
     .map(([key, item]) => [key, stableBusinessValue(item)]));
 }
-function businessSource(projected, observation, accountUsage, accountRecord) {
-  const usage = observation?.usage?.valid ? observation.usage.value : null;
+function businessSource(projected, facts, accountUsage, accountRecord) {
   return stableBusinessValue({
     projected,
-    contextPct: usage?.context_window?.used_percentage ?? (usage?.contextUsage?.ceiling > 0 ? usage.contextUsage.used / usage.contextUsage.ceiling * 100 : null),
+    contextPct: facts?.usedPercent ?? (facts?.contextWindow > 0 && Number.isFinite(facts.usedTokens)
+      ? facts.usedTokens / facts.contextWindow * 100 : null),
     rateLimitPct: accountUsage?.five_hour?.used_percentage ?? accountUsage?.fiveHour?.usedPercentage ?? null,
     rateLimit7dPct: accountUsage?.seven_day?.used_percentage ?? accountUsage?.sevenDay?.usedPercentage ?? null,
     accountRecord: accountRecord ? { live: accountRecord.live,
@@ -117,7 +117,10 @@ export class CoreState {
         ? await this.accountUsageCache.read(targetRuntime, { allowRecorded: true }, reader).catch(() => null) : null;
       const accountUsage = accountRecord?.value ?? null;
       const projected = projectOrigin(group, observation, this.sanitizer, facts, view);
-      const source = businessSource(projected, observation, accountUsage, accountRecord);
+      const usage = observation.usage;
+      const runtime = usage?.valid ? await findRuntime(observation.identity.runtime) : null;
+      const usageFacts = runtime?.context.usageFacts(usage.value);
+      const source = businessSource(projected, usageFacts, accountUsage, accountRecord);
       this.observation = observation;
       this.accountUsage = accountUsage;
       const changed = !isDeepStrictEqual(source, this.lastSource);

@@ -30,9 +30,9 @@ test('Codex does not pair rollout ids, stop closes unpaired tools',t=>{
  const {root,activity,row}=fixture(t,'codex');const transcript=path.join(root,'s.jsonl');fs.writeFileSync(transcript,JSON.stringify({content:[{type:'tool_result',tool_use_id:'a'}]})+'\n');
  activity.consume([row('session_start',{transcript_path:transcript}),row('pre_tool',{tool_use_id:'a'})]);activity.read();assert.equal(activity.tools.size,1);activity.consume([row('stop')]);assert.equal(activity.tools.size,0);
 });
-test('native status retained, single run writes origin with identity',t=>{
+test('native status retained, single run writes origin with identity',async t =>{
  const {root}=fixture(t);const env={ZYLOS_DIR:root,ZYLOS_RUN_ID:'r'};const original={session_id:'s',cost:{total_cost_usd:7},future:{x:true}};
- const sample=publishContextSample(original,{env,now:123});assert.deepEqual(sample,{...original,zylos:{v:1,runId:'r',sessionGroup:'origin',capturedAt:123}});
+ const sample=await publishContextSample(original,{env,now:123});assert.deepEqual(sample,{...original,zylos:{v:1,runId:'r',sessionGroup:'origin',capturedAt:123}});
  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root,'activity-monitor/session-groups/origin/statusline.json'))),sample);
  assert.equal(fs.existsSync(path.join(root,'activity-monitor/cost-log.jsonl')),false);
 });
@@ -185,18 +185,18 @@ test('B: supervisor/pool/router diagnostic mutation cannot provide activity or t
  assert.deepEqual(activity.read(10000).tools,original.tools);
 });
 
-test('grouped usage replaces native envelope and rejects missing run identity',t=>{
+test('grouped usage replaces native envelope and rejects missing run identity',async t =>{
  const {root}=fixture(t);const env={ZYLOS_DIR:root,ZYLOS_RUN_ID:'r',ZYLOS_SESSION_GROUP:'lark:x'};
- const sample=publishContextSample({session_id:'s',zylos:{v:99,runId:'foreign'}},{env,now:123});
+ const sample=await publishContextSample({session_id:'s',zylos:{v:99,runId:'foreign'}},{env,now:123});
  assert.deepEqual(sample.zylos,{v:1,runId:'r',sessionGroup:'lark:x',capturedAt:123});
  const file=path.join(root,'activity-monitor/session-groups/lark:x/statusline.json');
  assert.deepEqual(JSON.parse(fs.readFileSync(file)),sample);
- for(const runId of [undefined,'','   ']) assert.throws(()=>publishContextSample({session_id:'bad'},{env:{...env,ZYLOS_RUN_ID:runId}}),/Missing statusLine run identity/);
+ for(const runId of [undefined,'','   ']) await assert.rejects(publishContextSample({session_id:'bad'},{env:{...env,ZYLOS_RUN_ID:runId}}),/Missing statusLine run identity/);
  assert.deepEqual(JSON.parse(fs.readFileSync(file)),sample);
 });
-test('DM F14: legacy usage stays at legacy path without a fabricated run envelope',t=>{
+test('DM F14: legacy usage stays at legacy path without a fabricated run envelope',async t =>{
  const {root}=fixture(t);const original={session_id:'old',cost:{total_cost_usd:7},zylos:{v:1,runId:'forged'}};
- const sample=publishContextSample(original,{env:{ZYLOS_DIR:root},now:123});
+ const sample=await publishContextSample(original,{env:{ZYLOS_DIR:root},now:123});
  assert.deepEqual(sample,{session_id:'old',cost:{total_cost_usd:7}});
  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root,'activity-monitor/statusline.json'))),sample);
  assert.equal(original.zylos.runId,'forged');

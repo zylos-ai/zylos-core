@@ -155,7 +155,7 @@ export function syncTemplateSetting(key, {
   return { changed: true };
 }
 
-export function syncModelCoupledNewSessionThreshold({
+export async function syncModelCoupledNewSessionThreshold({
   modelBackfilled = false,
   zylosDir = ZYLOS_DIR,
   cfg,
@@ -165,7 +165,7 @@ export function syncModelCoupledNewSessionThreshold({
   log = console.log,
 } = {}) {
   if (!modelBackfilled) return { changed: false, reason: 'model_not_backfilled' };
-  const result = migrateModelThresholds({
+  const result = await migrateModelThresholds({
     zylosDir, ...(cfg ? { config: cfg } : {}), ...(defaultModels ? { defaultModels } : {}),
     ...(dryRun ? { updateConfig: () => ({ changed: true }) } : { updateConfig }),
   });
@@ -466,10 +466,10 @@ async function sync({
       dryRun: `${added} to add, ${updated} to update, ${removed} to remove${statusLineChanged ? ', statusLine to update' : ''}${modelSync.changed ? ', model to backfill' : ''}${settingsBackfilled ? ', settings to backfill' : ''}`,
       upToDate: '',
     },
-    commit() {
+    async commit() {
       // Persist the native model first, then pin its per-model threshold.
       // Migration must resolve the model that was actually saved.
-      const thresholdSync = persistInstalledSettingsAndSyncCoupledThreshold({
+      const thresholdSync = await persistInstalledSettingsAndSyncCoupledThreshold({
         installedSettings,
         settingsPath,
         modelBackfilled: modelSync.changed,

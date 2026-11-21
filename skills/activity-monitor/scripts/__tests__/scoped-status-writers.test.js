@@ -15,9 +15,9 @@ test('atomic writer and reader reject a foreign run and missing identity',t=>{
  const value=JSON.parse(fs.readFileSync(file));delete value.runId;fs.writeFileSync(file,JSON.stringify(value));assert.equal(sampleResult(readJsonSample(file,'status'),f.identity,f.identity,1000,Date.now()).reason,'identity_missing');
  assert.throws(()=>write({runId:null}),{code:'IDENTITY_UNAVAILABLE'});
 });
-test('writer preserves native payload; rejects wrong run, unknown version and stale capture',t=>{
+test('writer preserves native payload; rejects wrong run, unknown version and stale capture',async t =>{
  const f=fixture(t),now=Date.now(),raw={session_id:'s',context_window:{used_percentage:42},cost:{total_cost_usd:0.3},unknownNative:{keep:true}};
- publishContextSample(raw,{env:f.env,now});const file=path.join(f.runDir,'statusline.json');const value=JSON.parse(fs.readFileSync(file));const {zylos,...native}=value;assert.deepEqual(native,raw);assert.equal(zylos.runId,'r');
+ await publishContextSample(raw,{env:f.env,now});const file=path.join(f.runDir,'statusline.json');const value=JSON.parse(fs.readFileSync(file));const {zylos,...native}=value;assert.deepEqual(native,raw);assert.equal(zylos.runId,'r');
  const read=()=>sampleResult(readJsonSample(file,'usage'),f.identity,f.identity,1000,now);assert.equal(read().valid,true);
  value.zylos.runId='other';fs.writeFileSync(file,JSON.stringify(value));assert.equal(read().reason,'identity_mismatch');
  value.zylos.runId='r';value.zylos.v=999;fs.writeFileSync(file,JSON.stringify(value));assert.equal(read().reason,'version_unknown');
@@ -42,11 +42,11 @@ test('grouped status publishes unavailable time only from an authoritative unava
  assert.equal(limited.cooldown_until,456);assert.equal(limited.rate_limit_reset,'later');
 });
 
-test('malformed optional model configuration preserves native statusLine publication', t => {
+test('malformed optional model configuration preserves native statusLine publication', async t => {
   const f = fixture(t);
   const raw = { session_id: 's', conversation_id: 'untouched-native', transcript_path: '/native/transcript', context_window: { used_percentage: 42 } };
   for (const value of ['{ invalid optional metadata', 'null', '42']) {
-    const sample = publishContextSample(raw, { env: { ...f.env, ZYLOS_MODEL_CONFIG: value }, now: 123 });
+    const sample = await publishContextSample(raw, { env: { ...f.env, ZYLOS_MODEL_CONFIG: value }, now: 123 });
     const { zylos, ...native } = sample;
     assert.deepEqual(native, raw);
     assert.equal(zylos.runId, 'r');

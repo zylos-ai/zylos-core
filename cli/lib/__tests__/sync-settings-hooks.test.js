@@ -274,11 +274,11 @@ describe('syncTemplateModelSetting', () => {
 });
 
 describe('syncModelCoupledNewSessionThreshold', () => {
-  it('keeps the threshold implicit after model backfill without a legacy value', () => {
+  it('keeps the threshold implicit after model backfill without a legacy value', async () => {
     const updates = [];
     const logs = [];
 
-    const result = syncModelCoupledNewSessionThreshold({
+    const result = await syncModelCoupledNewSessionThreshold({
       modelBackfilled: true,
       defaultModels: { claude: 'opus[1m]' },
       cfg: {},
@@ -294,8 +294,8 @@ describe('syncModelCoupledNewSessionThreshold', () => {
     assert.deepEqual(logs, []);
   });
 
-  it('preserves an explicit threshold when model was backfilled', () => {
-    const result = syncModelCoupledNewSessionThreshold({
+  it('preserves an explicit threshold when model was backfilled', async () => {
+    const result = await syncModelCoupledNewSessionThreshold({
       modelBackfilled: true,
       defaultModels: { claude: 'opus[1m]' },
       cfg: { new_session_threshold: 70 },
@@ -312,8 +312,8 @@ describe('syncModelCoupledNewSessionThreshold', () => {
     assert.equal(result.reason, 'threshold_already_set');
   });
 
-  it('does not write threshold when model was not backfilled', () => {
-    const result = syncModelCoupledNewSessionThreshold({
+  it('does not write threshold when model was not backfilled', async () => {
+    const result = await syncModelCoupledNewSessionThreshold({
       modelBackfilled: false,
       cfg: {},
       updateConfig: () => {
@@ -328,9 +328,9 @@ describe('syncModelCoupledNewSessionThreshold', () => {
     assert.equal(result.reason, 'model_not_backfilled');
   });
 
-  it('supports dry run without writing config', () => {
+  it('supports dry run without writing config', async () => {
     const logs = [];
-    const result = syncModelCoupledNewSessionThreshold({
+    const result = await syncModelCoupledNewSessionThreshold({
       modelBackfilled: true,
       defaultModels: { claude: 'opus[1m]' },
       cfg: { new_session_threshold: 70 },

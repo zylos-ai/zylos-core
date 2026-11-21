@@ -1,3 +1,4 @@
+import { loadRuntimeContexts } from '../../../../cli/lib/model-rotation-thresholds.js';
 import { createSessionOps } from '../../../../cli/lib/runtime/session-ops.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,6 +11,8 @@ import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { SupervisorScenes } from '../supervisor-scenes.js';
 import { SupervisorServerObservation } from '../supervisor-server-observation.js';
 import { SupervisorServerHealth } from '../supervisor-server-health.js';
+
+const contexts = await loadRuntimeContexts();
 
 function service(f, options = {}) {
   return new SupervisorScenes({ env: f.env, connectionOptions: { socketPath: f.socketPath, binary: f.binary },
@@ -108,7 +111,7 @@ test('identity checks preserve the full occupancy snapshot during tmux unavailab
 test('scene threshold uses the identity-validated model and observed window', {timeout:15000}, async t => {
   const f=readyTmuxTarget(t,{prefix:'model-scene-',mode:'multi'});
   const scenes=service(f,{readUsage:undefined});
-  const configuration={rotationPolicy:{model_rotation_thresholds:{claude:{'claude-sonnet-4-6':63,'claude-opus-4-6[1m]':36}}},defaultModels:{claude:'haiku'}};
+  const configuration={contexts,rotationPolicy:{model_rotation_thresholds:{claude:{'claude-sonnet-4-6':63,'claude-opus-4-6[1m]':36}}},defaultModels:{claude:'haiku'}};
   for(const [model,window,expected] of [['claude-sonnet-4-6',200000,63],['claude-opus-4-6',1000000,36]]){
     fs.writeFileSync(path.join(path.dirname(f.readyPath),'statusline.json'),JSON.stringify({session_id:'session-1',zylos:{v:1,runId:'run-1',capturedAt:Date.now()},model:{id:model},context_window:{context_window_size:window,used_percentage:50}}));
     const observed=await scenes.observeGroup('origin');
@@ -116,6 +119,27 @@ test('scene threshold uses the identity-validated model and observed window', {t
     assert.equal(sceneRotationThreshold(observed,configuration),expected);
     const [batched]=await scenes.observe({configuration:{mode:'multi'}});
     assert.equal(batched.model,model);assert.equal(batched.contextWindow,window);assert.equal(batched.usagePercent,50);
+  }
+});
+
+test('Codex and Antigravity usage samples determine rotation scene fields', () => {
+  const scenes = new SupervisorScenes();
+  const identity = { runId: 'run', sessionId: 'session' };
+  for (const [runtime, value, expected] of [
+    ['codex', { model: 'gpt-5', contextUsage: { used: 129200, ceiling: 258400 } },
+      { model: 'gpt-5', usagePercent: 50, contextWindow: 258400, threshold: 70 }],
+    ['agy', { model: { id: 'gemini-3' }, context_window: { used_percentage: 45 } },
+      { model: 'gemini-3', usagePercent: 45, contextWindow: 1_048_576, threshold: 40 }],
+  ]) {
+    const scene = { ...identity, runtime };
+    scenes.applyUsage(scene, { identity, usage: { valid: true, value } }, contexts[runtime]);
+    const { model, contextWindow, usagePercent } = scene;
+    assert.deepEqual({ model, contextWindow, usagePercent, threshold: sceneRotationThreshold(scene, { contexts }) }, expected);
+
+    const unsampled = { ...identity, runtime };
+    scenes.applyUsage(unsampled, { identity, usage: { valid: false, value: null } }, contexts[runtime]);
+    scenes.applyUsage(unsampled, { identity: { ...identity, sessionId: 'old' }, usage: { valid: true, value } }, contexts[runtime]);
+    assert.deepEqual(unsampled, { ...identity, runtime });
   }
 });
 

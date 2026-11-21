@@ -36,38 +36,8 @@
   },
   {
     "file": "cli/lib/model-rotation-thresholds.js",
-    "text": "if (runtime === 'agy') return true;",
-    "reason": "dispatch:context: Retains runtime-specific threshold and context-window rules."
-  },
-  {
-    "file": "cli/lib/model-rotation-thresholds.js",
-    "text": "if (runtime !== 'codex') return false;",
-    "reason": "dispatch:context: Retains runtime-specific threshold and context-window rules."
-  },
-  {
-    "file": "cli/lib/model-rotation-thresholds.js",
-    "text": "return options.runtime === 'claude' && isLargeWindow(options) && !model.toLowerCase().includes('[1m]')",
-    "reason": "dispatch:context: Retains runtime-specific threshold and context-window rules."
-  },
-  {
-    "file": "cli/lib/model-rotation-thresholds.js",
-    "text": "const family = options.runtime === 'claude' ? claudeAlias(key) : null;",
-    "reason": "dispatch:context: Retains runtime-specific threshold and context-window rules."
-  },
-  {
-    "file": "cli/lib/model-rotation-thresholds.js",
-    "text": "|| (options.runtime === 'claude' && isAlias(defaultModel) && candidates(options).includes(defaultKey));",
-    "reason": "dispatch:context: Retains runtime-specific threshold and context-window rules."
-  },
-  {
-    "file": "cli/lib/model-rotation-thresholds.js",
     "text": "for (const runtime of ['claude', 'codex']) {",
     "reason": "legacy: Reads the fixed pre-group threshold settings."
-  },
-  {
-    "file": "cli/lib/model-rotation-thresholds.js",
-    "text": "if ((!Object.hasOwn(LEGACY_KEYS, runtime) && runtime !== 'agy') || !cleanModel(model)) {",
-    "reason": "inconsistent: Core accepts agy thresholds while the Dashboard action rejects them."
   },
   {
     "file": "cli/lib/recorded-account-usage.js",
@@ -78,36 +48,6 @@
     "file": "cli/lib/recorded-account-usage.js",
     "text": "if (runtime === 'claude' && !latest) {",
     "reason": "else-fallback: Non-Claude runtimes reach the existing alternate quota read path."
-  },
-  {
-    "file": "cli/lib/session-state-reader-async.js",
-    "text": "if (['claude', 'agy'].includes(target.runtime)) usage = readJsonSample(path.join(dir, 'statusline.json'), 'usage');",
-    "reason": "dispatch:context: Selects per-runtime usage sample location or freshness."
-  },
-  {
-    "file": "cli/lib/session-state-reader-async.js",
-    "text": "if (target.runtime === 'codex') {",
-    "reason": "dispatch:context: Selects per-runtime usage sample location or freshness."
-  },
-  {
-    "file": "cli/lib/session-state-reader-async.js",
-    "text": "usage:sampleResult(usage, target, final, target.runtime === 'agy' ? Infinity : usageFreshnessMs, now()) }];",
-    "reason": "dispatch:context: Selects per-runtime usage sample location or freshness."
-  },
-  {
-    "file": "cli/lib/session-state-reader-async.js",
-    "text": "if (['claude', 'agy'].includes(first.runtime)) usage = readJsonSample(path.join(dir, 'statusline.json'), 'usage');",
-    "reason": "dispatch:context: Selects per-runtime usage sample location or freshness."
-  },
-  {
-    "file": "cli/lib/session-state-reader-async.js",
-    "text": "if (first.runtime === 'codex') {",
-    "reason": "dispatch:context: Selects per-runtime usage sample location or freshness."
-  },
-  {
-    "file": "cli/lib/session-state-reader-async.js",
-    "text": "usage: sampleResult(usage, first, last, first.runtime === 'agy' ? Infinity : usageFreshnessMs, now()) };",
-    "reason": "dispatch:context: Selects per-runtime usage sample location or freshness."
   },
   {
     "file": "cli/lib/session-state-reader-async.js",
@@ -135,16 +75,6 @@
     "reason": "dispatch:usage: Identifies the Codex-specific event or rollout format."
   },
   {
-    "file": "cli/lib/session-usage-reader.js",
-    "text": "const actual = runtime === 'claude' ? value?.model?.id : runtime === 'agy' ? value?.model?.id ?? value?.model : value?.model;",
-    "reason": "else-fallback: Unknown runtimes reach the existing Codex-shaped usage handling."
-  },
-  {
-    "file": "cli/lib/session-usage-reader.js",
-    "text": "const window = ['claude', 'agy'].includes(runtime) ? value?.context_window?.context_window_size ?? (runtime === 'agy' ? 1_048_576 : null) : value?.contextUsage?.ceiling;",
-    "reason": "else-fallback: Unknown runtimes reach the existing Codex-shaped usage handling."
-  },
-  {
     "file": "skills/activity-monitor/scripts/agy-hooks.js",
     "text": "agyRuntime = await getRuntime('agy');",
     "reason": "hook-entry: Resolves the implementation for this fixed native hook entrypoint."
@@ -153,11 +83,6 @@
     "file": "skills/activity-monitor/scripts/agy-tool-guard.js",
     "text": "return getRuntime('agy');",
     "reason": "hook-entry: Resolves the implementation for this fixed native hook entrypoint."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/context-monitor.js",
-    "text": "if (runtime === 'agy') {",
-    "reason": "dispatch:context: Normalizes Antigravity-specific context inputs."
   },
   {
     "file": "skills/activity-monitor/scripts/failure-continuation.js",
@@ -233,11 +158,6 @@
     "file": "skills/activity-monitor/scripts/supervisor-main.js",
     "text": "if(scene.runtime==='claude') await coordinator.serial(scene.runtime,()=>processFailureContinuation({",
     "reason": "dispatch:health: Chooses the runtime health probe or invokes Claude failure continuation."
-  },
-  {
-    "file": "skills/activity-monitor/scripts/supervisor-scenes.js",
-    "text": "const percent = ['claude', 'agy'].includes(scene.runtime) ? value.context_window?.used_percentage :",
-    "reason": "dispatch:usage: Reads a runtime-specific usage sample shape."
   },
   {
     "file": "skills/activity-monitor/scripts/supervisor.js",
@@ -803,16 +723,6 @@
     "file": "skills/dashboard/src/lib/store.js",
     "text": "WHERE runtime = 'codex'",
     "reason": "dispatch:dashboard: Runs a query tied to a runtime-specific transcript layout."
-  },
-  {
-    "file": "skills/dashboard/src/lib/workbench/group-snapshot.js",
-    "text": "row.model = usage?.valid ? (['claude', 'agy'].includes(row.target.runtime) ? usage.value.model?.id : usage.value.model) ?? null",
-    "reason": "dispatch:usage: Projects runtime-specific model and effort fields from usage."
-  },
-  {
-    "file": "skills/dashboard/src/lib/workbench/group-snapshot.js",
-    "text": "row.effort = usage?.valid ? (row.target.runtime === 'agy' ? usage.value.model?.effort :",
-    "reason": "dispatch:usage: Projects runtime-specific model and effort fields from usage."
   },
   {
     "file": "skills/dashboard/src/lib/workbench/runs.js",

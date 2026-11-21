@@ -872,12 +872,12 @@ function installSkillDependencies() {
  * Ensure new-session threshold defaults are explicitly set in config.json.
  * Idempotent — only writes keys that are missing.
  */
-function ensureNewSessionThresholdDefaults() {
+async function ensureNewSessionThresholdDefaults() {
   return migrateModelThresholds({ zylosDir: ZYLOS_DIR });
 }
 
-export function seedFreshInstallNewSessionThresholdDefault(options = {}) {
-  return migrateModelThresholds({ zylosDir: ZYLOS_DIR, ...options }).changed;
+export async function seedFreshInstallNewSessionThresholdDefault(options = {}) {
+  return (await migrateModelThresholds({ zylosDir: ZYLOS_DIR, ...options })).changed;
 }
 
 // ── Database initialization ─────────────────────────────────────
@@ -1973,7 +1973,7 @@ export async function initCommand(args) {
   }
   const sessionModeUpdate = initSessionModeUpdate(installState, opts.sessionMode, { keyPresent: sessionModeKeyPresent });
   if (sessionModeUpdate) updateZylosConfigLocked(sessionModeUpdate);
-  runMigrations({ zylosDir: ZYLOS_DIR, templatesDir: TEMPLATES_SRC });
+  await runMigrations({ zylosDir: ZYLOS_DIR, templatesDir: TEMPLATES_SRC });
   try { await deployTemplates({ freshInstall: installState === 'fresh' }); }
   catch (error) { preparation.failed.push({ item: 'templates', message: error.message }); }
   await prepareInitRuntimeAssets({ result: preparation, runtimes: preparedRuntimes });
@@ -2030,7 +2030,7 @@ export async function initCommand(args) {
     }
 
     // Ensure new-session thresholds are explicitly set in config (idempotent)
-    ensureNewSessionThresholdDefaults();
+    await ensureNewSessionThresholdDefaults();
 
     if (!quiet) console.log(heading('Deploying templates...'));
     // Assets were prepared for both runtimes before selected-runtime auth.
@@ -2091,7 +2091,7 @@ export async function initCommand(args) {
   }
 
   // Seed the configured model defaults through the shared per-model policy.
-  seedFreshInstallNewSessionThresholdDefault();
+  await seedFreshInstallNewSessionThresholdDefault();
   updateZylosConfigLocked({ setIfAbsent: { session_mode: 'multi' } });
 
   // Step 7: Assets and data migrations are already prepared.

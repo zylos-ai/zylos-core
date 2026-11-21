@@ -1,0 +1,10 @@
+{
+  "client_version": "0.159.2",
+  "fetched_at": "2026-10-08T09:55:10.058728Z",
+  "models": [
+    {
+      "slug": "gpt-5.5",
+      "context_window": 272000
+    }
+  ]
+}

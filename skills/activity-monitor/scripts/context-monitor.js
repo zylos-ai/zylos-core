@@ -5,7 +5,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isMainModule } from './is-main-module.js';
 
-const { DEFAULT_RUNTIME } = await loadCoreModule('runtime/descriptors.js');
+const { DEFAULT_RUNTIME, findRuntime } = await loadCoreModule('runtime/index.js');
+const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
 const { runDirFromEnv, RUN_FILES, hookErrorLogPath } = await loadCoreModule('session-group-paths.js');
 
 function failureIdentity(env) {
@@ -27,18 +28,16 @@ function appendPublicationFailure(env = process.env, now = Date.now()) {
   fs.appendFileSync(file, `${new Date(now).toISOString()} session_group=${JSON.stringify(identity.sessionGroup)} run_id=${JSON.stringify(identity.runId)} statusline: invalid sample or publication failure\n`);
 }
 
-export function publishContextSample(raw, { env = process.env, now = Date.now() } = {}) {
+export async function publishContextSample(raw, { env = process.env, now = Date.now() } = {}) {
   const status = typeof raw === 'string' ? JSON.parse(raw) : raw;
   if (!status || typeof status !== 'object' || Array.isArray(status)) throw new Error('Invalid statusLine sample');
   const location = runDirFromEnv(env);
-  let runtime = DEFAULT_RUNTIME;
-  try { runtime = JSON.parse(env.ZYLOS_MODEL_CONFIG || '{}')?.runtime || DEFAULT_RUNTIME; } catch { /* Preserve native Claude publication for malformed optional metadata. */ }
-  const sample = { ...status };
-  if (runtime === 'agy') {
-    // Native statusLine transcript_path is not the CLI transcript. Hooks own that association.
-    delete sample.transcript_path;
-    sample.session_id = status.conversation_id ?? status.conversationId ?? status.session_id;
-  }
+  let id = DEFAULT_RUNTIME;
+  try { id = JSON.parse(env.ZYLOS_MODEL_CONFIG || '{}')?.runtime || DEFAULT_RUNTIME; } catch { /* Keep the default for malformed optional metadata. */ }
+  const runtime = await findRuntime(id);
+  const statusLine = runtime?.context.statusLine;
+  if (!statusLine || statusLine === UNSUPPORTED) throw new Error('Unsupported statusLine runtime');
+  const sample = statusLine.normalize({ ...status });
   if (location.kind === 'legacy') {
     // Pre-upgrade sessions have no authoritative run identity. Keep the native
     // sample at the legacy path without claiming a versioned run envelope.
@@ -61,8 +60,8 @@ if (isMainModule(import.meta.url)) {
   let input = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => { input += chunk; });
-  process.stdin.on('end', () => {
-    try { if (input.trim()) publishContextSample(input); }
+  process.stdin.on('end', async () => {
+    try { if (input.trim()) await publishContextSample(input); }
     catch (error) {
       try { appendPublicationFailure(); } catch {}
     }

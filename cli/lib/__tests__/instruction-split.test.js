@@ -586,11 +586,11 @@ describe('split instruction temporary cleanup ownership', () => {
 });
 
 describe('pre-v0.4 migration', () => {
-  it('does not let a migrated legacy CLAUDE.md fall through into fresh split activation', () => {
+  it('does not let a migrated legacy CLAUDE.md fall through into fresh split activation', async () => {
     const root = fixture();
     const legacy = Buffer.from('## Behavioral Rules\nlegacy pre-v0.4 body\n');
     fs.writeFileSync(path.join(root, 'CLAUDE.md'), legacy);
-    runMigrations({ zylosDir: root, templatesDir: TEMPLATES_DIR });
+    await runMigrations({ zylosDir: root, templatesDir: TEMPLATES_DIR });
     const migratedUser = fs.readFileSync(path.join(root, 'ZYLOS.md'));
     const result = activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
     assert.equal(result.pendingMigration, true);
@@ -600,11 +600,11 @@ describe('pre-v0.4 migration', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it('uses an explicit root, preserves CLAUDE.md, and does not activate split mode', () => {
+  it('uses an explicit root, preserves CLAUDE.md, and does not activate split mode', async () => {
     const root = fixture();
     const legacy = Buffer.from('# Legacy\ncustom\n');
     fs.writeFileSync(path.join(root, 'CLAUDE.md'), legacy);
-    const result = runMigrations({ zylosDir: root, templatesDir: TEMPLATES_DIR });
+    const result = await runMigrations({ zylosDir: root, templatesDir: TEMPLATES_DIR });
     assert.ok(result.migrated.includes('v0.4.0/claude-md-to-zylos-md'));
     assert.deepEqual(fs.readFileSync(path.join(root, 'CLAUDE.md')), legacy);
     assert.ok(fs.readFileSync(path.join(root, 'ZYLOS.md'), 'utf8').endsWith(legacy.toString()));

@@ -91,7 +91,7 @@ test('operations HTTP contracts retain observations and scoped Origin actions in
     if (name === 'session-pool-config.js') return { readPoolCapacity: () => ({ k: 4 }) };
     if (name === 'session-hot-ttl.js') return { resolveSessionHotTtl: () => ({ seconds: 1800 }) };
     if (name === 'pm2.js') return { createPm2Helpers: () => ({}) };
-    if (name === 'model-rotation-thresholds.js') return { readDefaultModels: () => ({}), readCodexModelWindows: () => ({}), modelThreshold: () => 80, thresholdLimit: () => 100 };
+    if (name === 'model-rotation-thresholds.js') return { readDefaultModels: () => ({}), loadRuntimeContexts: async () => ({}), readModelWindows: () => ({}), modelThreshold: () => 80, thresholdLimit: () => 100 };
     if (name === 'session-usage-reader.js') return { usageModelFacts: () => ({}) };
     if (['config-lock.js', 'private-file.js'].includes(name)) return {};
     if (name === 'session-state-reader.js') return {

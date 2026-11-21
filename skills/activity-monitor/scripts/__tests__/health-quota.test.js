@@ -83,12 +83,12 @@ test('first-failure quota reads exact run/session and never the legacy latest sn
   const runDir=path.join(options.zylosDir,'activity-monitor/session-groups/chat:A');
   const read=extra=>readScopedHealthQuota({runDir,runId:'run-a',identity,nowMs:options.nowMs,...extra});
   assert.equal(read(),null); // An existing legacy quota file is not evidence for this group.
-  publishContextSample({...status,secret:'exclude'},{env,now:options.nowMs});
+  await publishContextSample({...status,secret:'exclude'},{env,now:options.nowMs});
   assert.deepEqual(read().rate_limits,status.rate_limits);assert.equal(JSON.stringify(read()).includes('secret'),false);
   assert.equal(read({runId:'run-b'}),null);assert.equal(read({identity:{...identity,session_id:'other'}}),null);
   assert.equal(read({identity:{...identity,runtime:'codex'}}),null);
   assert.equal(read({nowMs:options.nowMs-1}),null);assert.equal(read({nowMs:options.nowMs+60001}),null);
   const file=path.join(runDir,'statusline.json');fs.writeFileSync(file,'{');assert.equal(read(),null);
-  publishContextSample({session_id:'session'},{env,now:options.nowMs});assert.equal(read(),null);
+  await publishContextSample({session_id:'session'},{env,now:options.nowMs});assert.equal(read(),null);
   const otherDir=path.join(options.zylosDir,'activity-monitor/session-groups/chat:B');assert.equal(read({runDir:otherDir}),null);
 });

@@ -1,3 +1,4 @@
+import { loadRuntimeContexts } from '../../../../cli/lib/model-rotation-thresholds.js';
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -11,6 +12,8 @@ import { fixture as c4Fixture } from '../../../comm-bridge/scripts/__tests__/c4-
 import { createDelivery } from '../../../comm-bridge/scripts/router/delivery.js';
 import { MANUAL_WAKE_PROMPT } from '../origin-prompts.js';
 import { groupMemoryDir } from '../../../../cli/lib/session-group-paths.js';
+
+const contexts = await loadRuntimeContexts();
 
 // Each fixture owns its persistent alert ledger and published state files.
 // No fixture can inherit another case's incident claims or touch a live tree.
@@ -34,7 +37,7 @@ function fixture(Class = SupervisorLifecycle) {
     conversations: 0, runningControls: 0, lastActivity: 0, unsummarized: 0,
     transition: null, pending: [], marker: { held: false, stale: false }, markerReads: [],
     backlog: { total: 0, groups: [] }, expected: { runtime: 'claude', mode: 'default' },
-    context: { configuration: { mode: 'multi', capacity: 1, hotTtlSeconds: 1800 } } };
+    context: { configuration: { contexts, mode: 'multi', capacity: 1, hotTtlSeconds: 1800 } } };
   const configuration = f.context.configuration;
   Object.defineProperty(f, 'context', { get: () => ({ configuration, transition: f.transition,
     scenes: f.scenes.map(s => ({ ...s })), fences: [...f.fences].map(([sessionGroup, value]) => ({ sessionGroup, ...value })), restartRequests: [...f.requests] }) });
