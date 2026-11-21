@@ -20,7 +20,7 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 4. **Recovery Liveness Detection**: Sends C4 heartbeat probes during recovery and after restarts; healthy sessions have no periodic primary heartbeat
 5. **Health Check**: Periodically enqueues system health checks (PM2, disk, memory) via the C4 control queue
 6. **Daily Upgrade**: Enqueues a Claude Code upgrade via the C4 control queue at 5:00 AM local time daily (disabled by default; enable with `zylos config set daily_upgrade_enabled true`)
-7. **Context Monitoring**: Receives context usage data after every turn; triggers the new-session handoff at thresholds read from `config.json` (`model_rotation_thresholds[engine][model]`) for the actual running model; defaults are 70% below 1M and 40% for 1M, with a shared 40% maximum for 1M
+7. **Context Monitoring**: Receives context usage data after every turn; triggers the new-session handoff at thresholds read from `config.json` (`model_rotation_thresholds[engine][model]`) for the actual running model; defaults are 70% below 1M and 30% for 1M
 
 ## Component startup context
 
@@ -473,7 +473,7 @@ Event-driven context monitoring via Claude Code's statusLine feature, replacing 
 
 - **Mechanism**: `context-monitor.js` runs as a statusLine command — Claude Code pipes context data to it via stdin after every turn (zero turn cost)
 - **Status file**: Writes `~/zylos/activity-monitor/statusline.json` with full context data (used_percentage, remaining_percentage, cost, session_id)
-- **New-session handoff** at the threshold configured via `model_rotation_thresholds[engine][model]` in `config.json`: Enqueues the new-session trigger. The actual session model and context window select the value, including group overrides. Missing values default to 70% below 1M and 40% for 1M; 1M values are capped at 40%. Legacy engine values migrate once to the corresponding native default model without losing the stored number. Priority 1, 5-minute cooldown.
+- **New-session handoff** at the threshold configured via `model_rotation_thresholds[engine][model]` in `config.json`: Enqueues the new-session trigger. The actual session model and context window select the value, including group overrides. Missing values default to 70% below 1M and 30% for 1M. Legacy engine values migrate once to the corresponding native default model without losing the stored number. Priority 1, 5-minute cooldown.
 - **Delivery**: Enqueues via C4 control queue with bypass_state — ensures the trigger reaches Claude even during long tasks
 - **Two-stage design**: The trigger message instructs Claude to start the new-session handoff flow; the actual `/clear` is gated by block-queue-until-idle in the new-session skill's final step
 - **Log**: `~/zylos/activity-monitor/context-monitor.log`

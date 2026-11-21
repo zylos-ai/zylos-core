@@ -29,7 +29,7 @@ test('uses distinct model values and defaults for actual context windows', () =>
   assert.equal(modelThreshold(config, { runtime: 'claude', context: contexts.claude, model: 'claude-opus-4-6', contextWindow: 1000000,
     defaultModel: 'opus[1m]', launchConfig: { runtime: 'claude', mode: 'default' } }), 35);
   assert.equal(modelThreshold(config, { runtime: 'claude', context: contexts.claude, model: 'haiku' }), 70);
-  assert.equal(modelThreshold(config, { runtime: 'claude', context: contexts.claude, model: 'haiku[1m]' }), 40);
+  assert.equal(modelThreshold(config, { runtime: 'claude', context: contexts.claude, model: 'haiku[1m]' }), 30);
   assert.equal(modelThreshold(config, { runtime: 'codex', context: contexts.codex, model: 'model-a', contextWindow: 200000 }), 61);
 });
 
@@ -38,22 +38,22 @@ test('keeps exact Claude versions and observed context classes separate from fam
   assert.equal(modelThreshold(config, { runtime: 'claude', context: contexts.claude, model: 'claude-opus-4-6', contextWindow: 200000 }), 63);
   assert.equal(modelThreshold(config, { runtime: 'claude', context: contexts.claude, model: 'claude-opus-4-6', contextWindow: 1000000 }), 32);
   assert.equal(modelThreshold(config, { runtime: 'claude', context: contexts.claude, model: 'claude-opus-4-7', contextWindow: 200000 }), 70);
-  assert.equal(modelThreshold(config, { runtime: 'claude', context: contexts.claude, model: 'claude-opus-4-7', contextWindow: 1000000 }), 40);
+  assert.equal(modelThreshold(config, { runtime: 'claude', context: contexts.claude, model: 'claude-opus-4-7', contextWindow: 1000000 }), 30);
   assert.equal(modelThresholdKey({ runtime: 'claude', context: contexts.claude, model: 'claude-opus-4-6', contextWindow: 1000000 }), 'claude-opus-4-6[1m]');
 });
 
 test('Claude version IDs use alias thresholds only when launched through that same alias', () => {
-  const config = { model_rotation_thresholds: { claude: { opus: 60, 'opus[1m]': 30, sonnet: 55 } } };
+  const config = { model_rotation_thresholds: { claude: { opus: 60, 'opus[1m]': 25, sonnet: 55 } } };
   const large = { runtime: 'claude', context: contexts.claude, model: 'claude-opus-5-5', contextWindow: 1000000, defaultModel: 'opus[1m]' };
-  assert.equal(modelThreshold(config, { ...large, launchConfig: { runtime: 'claude', mode: 'default' } }), 30);
-  assert.equal(modelThreshold(config, { ...large, launchConfig: { runtime: 'claude', mode: 'override', model: 'opus[1m]' } }), 30);
+  assert.equal(modelThreshold(config, { ...large, launchConfig: { runtime: 'claude', mode: 'default' } }), 25);
+  assert.equal(modelThreshold(config, { ...large, launchConfig: { runtime: 'claude', mode: 'override', model: 'opus[1m]' } }), 25);
   assert.equal(modelThreshold(config, { ...large, model: 'claude-opus-4-6[1m]',
-    launchConfig: { runtime: 'claude', mode: 'override', model: 'claude-opus-4-6[1m]' } }), 40);
-  assert.equal(modelThreshold(config, large), 40, 'a model preview has no evidence that the session used an alias');
-  assert.equal(modelThreshold(config, { ...large, defaultModel: 'opus', launchConfig: { runtime: 'claude', mode: 'default' } }), 40);
-  assert.equal(modelThreshold(config, { ...large, launchConfig: { runtime: 'claude', mode: 'override', model: 'opus' } }), 40);
-  assert.equal(modelThreshold(config, { ...large, launchConfig: { runtime: 'claude', mode: 'override', model: 'sonnet[1m]' } }), 40);
-  assert.equal(modelThreshold(config, { ...large, launchConfig: { runtime: 'codex', mode: 'override', model: 'opus[1m]' } }), 40);
+    launchConfig: { runtime: 'claude', mode: 'override', model: 'claude-opus-4-6[1m]' } }), 30);
+  assert.equal(modelThreshold(config, large), 30, 'a model preview has no evidence that the session used an alias');
+  assert.equal(modelThreshold(config, { ...large, defaultModel: 'opus', launchConfig: { runtime: 'claude', mode: 'default' } }), 30);
+  assert.equal(modelThreshold(config, { ...large, launchConfig: { runtime: 'claude', mode: 'override', model: 'opus' } }), 30);
+  assert.equal(modelThreshold(config, { ...large, launchConfig: { runtime: 'claude', mode: 'override', model: 'sonnet[1m]' } }), 30);
+  assert.equal(modelThreshold(config, { ...large, launchConfig: { runtime: 'codex', mode: 'override', model: 'opus[1m]' } }), 30);
   assert.equal(modelThreshold(config, { runtime: 'claude', context: contexts.claude, model: 'claude-opus-4-7', contextWindow: 200000,
     launchConfig: { runtime: 'claude', mode: 'override', model: 'opus' } }), 60);
   assert.equal(modelThreshold({ model_rotation_thresholds: { claude: { 'opus[1m]': 30, 'claude-opus-5-5[1m]': 35 } } },
@@ -62,8 +62,8 @@ test('Claude version IDs use alias thresholds only when launched through that sa
 
 test('uses only matching Codex cache windows and recognizes raw one million at effective 950K', () => {
   const modelWindows = { codex: [{ slug: 'large', context_window: 1000000, effective_context_window_percent: 95 }, { slug: 'small', context_window: 272000 }] };
-  assert.equal(modelThreshold({}, { runtime: 'codex', context: contexts.codex, model: 'large', contextWindow: 950000, modelWindows }), 40);
-  assert.equal(thresholdLimit({ runtime: 'codex', context: contexts.codex, model: 'large', modelWindows }), 40);
+  assert.equal(modelThreshold({}, { runtime: 'codex', context: contexts.codex, model: 'large', contextWindow: 950000, modelWindows }), 30);
+  assert.equal(thresholdLimit({ runtime: 'codex', context: contexts.codex, model: 'large', modelWindows }), 95);
   assert.equal(modelThreshold({}, { runtime: 'codex', context: contexts.codex, model: 'small', modelWindows }), 70);
   assert.equal(modelThreshold({}, { runtime: 'codex', context: contexts.codex, model: 'unknown', modelWindows }), 70);
 });
@@ -121,7 +121,7 @@ test('migration leaves absent or invalid legacy thresholds implicit instead of s
     assert.equal(result.changed, false);
     assert.equal(fs.readFileSync(f.file, 'utf8'), before);
     assert.equal(Object.hasOwn(f.read(), 'model_rotation_thresholds'), false);
-    assert.equal(modelThreshold(f.read(), { runtime: 'claude', context: contexts.claude, model: 'opus[1m]' }), 40);
+    assert.equal(modelThreshold(f.read(), { runtime: 'claude', context: contexts.claude, model: 'opus[1m]' }), 30);
   }
   f.write('.zylos/config.json', { new_session_threshold: 64 });
   assert.equal((await migrateModelThresholds({ zylosDir: f.root })).changed, true);
@@ -176,7 +176,7 @@ test('new model thresholds require at least ten while old low thresholds remain 
   }
 });
 
-test('migrates legacy values once without losing raw values and caps only effective 1M usage', async t => {
+test('migrates legacy values once without losing raw values', async t => {
   const f = fixture(t);
   f.write('.zylos/config.json', { new_session_threshold: 83, codex_new_session_threshold: 75, unknown: false });
   f.write('.claude/settings.json', { model: 'opus[1m]' });
@@ -185,7 +185,8 @@ test('migrates legacy values once without losing raw values and caps only effect
   const first = fs.readFileSync(f.file, 'utf8');
   assert.equal(f.read().model_rotation_thresholds.claude['opus[1m]'], 83);
   assert.equal(f.read().model_rotation_thresholds.codex.small, 75);
-  assert.equal(modelThreshold(f.read(), { runtime: 'claude', context: contexts.claude, model: 'claude-opus-4-6', contextWindow: 1000000 }), 40);
+  assert.equal(modelThreshold(f.read(), { runtime: 'claude', context: contexts.claude, model: 'opus[1m]' }), 83);
+  assert.equal(modelThreshold(f.read(), { runtime: 'claude', context: contexts.claude, model: 'claude-opus-4-6', contextWindow: 1000000 }), 30);
   assert.equal((await migrateModelThresholds({ zylosDir: f.root })).changed, false);
   assert.equal(fs.readFileSync(f.file, 'utf8'), first);
   f.write('.claude/settings.json', { model: 'sonnet' });
@@ -193,13 +194,13 @@ test('migrates legacy values once without losing raw values and caps only effect
   assert.equal(modelThreshold(f.read(), { runtime: 'claude', context: contexts.claude, model: 'sonnet', defaultModel: 'sonnet' }), 70);
 });
 
-test('one model update preserves sibling models and engine values with a single 1M cap', async t => {
+test('one model update preserves sibling models and engine values', async t => {
   const f = fixture(t);
   f.write('.zylos/config.json', { model_rotation_thresholds: { claude: { sonnet: 61, 'opus[1m]': 34 }, codex: { small: 73 } } });
   await setModelThreshold({ zylosDir: f.root, runtime: 'claude', model: 'sonnet', value: 67 });
   assert.deepEqual(f.read().model_rotation_thresholds, { claude: { sonnet: 67, 'opus[1m]': 34 }, codex: { small: 73 } });
-  await assert.rejects(setModelThreshold({ zylosDir: f.root, runtime: 'claude', model: 'opus[1m]', value: 41 }), error => error.code === 'INVALID_MODEL_THRESHOLD');
-  await assert.rejects(setModelThreshold({ zylosDir: f.root, runtime: 'codex', model: 'large', value: 41, modelWindows: { codex: [{ slug: 'large', context_window: 1000000 }] } }), error => error.code === 'INVALID_MODEL_THRESHOLD');
+  await assert.rejects(setModelThreshold({ zylosDir: f.root, runtime: 'claude', model: 'opus[1m]', value: 96 }), error => error.code === 'INVALID_MODEL_THRESHOLD');
+  await assert.rejects(setModelThreshold({ zylosDir: f.root, runtime: 'codex', model: 'large', value: 96, modelWindows: { codex: [{ slug: 'large', context_window: 1000000 }] } }), error => error.code === 'INVALID_MODEL_THRESHOLD');
   await assert.rejects(setModelThreshold({ zylosDir: f.root, runtime: 'claude', model: 'sonnet', value: 96 }), error => error.code === 'INVALID_MODEL_THRESHOLD');
 });
 

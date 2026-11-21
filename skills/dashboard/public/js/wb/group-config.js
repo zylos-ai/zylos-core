@@ -43,7 +43,7 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
   const publish = () => { if (active()) onChange(state); };
   const thresholdRequests = new Set();
   async function loadThreshold(runtime, model) {
-    if (!model || !['claude', 'codex', 'agy'].includes(runtime) || Number.isFinite(state.meta[runtime]?.model_thresholds?.[model])) return;
+    if (!model || !SUPPORTED_RUNTIMES.includes(runtime) || Number.isFinite(state.meta[runtime]?.model_thresholds?.[model])) return;
     const id = runtime + ':' + model;
     if (thresholdRequests.has(id)) return;
     thresholdRequests.add(id);
