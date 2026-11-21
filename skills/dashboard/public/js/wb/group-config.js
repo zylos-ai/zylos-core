@@ -1,4 +1,4 @@
-import { element, runtimeName } from './plain-text.js';
+import { element, icon, runtimeName } from './plain-text.js';
 
 export function responseError(value, fallback = 'request_failed') {
   const error = value?.error;
@@ -202,14 +202,22 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
   const locked = !writable || state.busy || !ready;
   const option = (value, label = value) => { const node = element(document, 'option', label); node.value = value; return node; };
   const select = (label, choices, value) => {
-    const node = element(document, 'select'); node.setAttribute('aria-label', label);
+    const node = element(document, 'select', undefined, 'wb-input wb-select');
+    node.setAttribute('aria-label', label);
     for (const item of choices) node.append(option(item.value ?? item, item.label ?? item));
     node.value = value;
     return node;
   };
   const field = (label, control) => {
     const wrapper = element(document, 'label', undefined, 'wb-cfg-field');
-    wrapper.append(element(document, 'span', label, 'wb-cfg-label'), control);
+    wrapper.append(element(document, 'span', label, 'wb-cfg-label'));
+    if (control.tagName === 'SELECT') {
+      const selectWrap = element(document, 'span', undefined, 'wb-select-wrap');
+      selectWrap.append(control, icon(document, 'chev', 'xs'));
+      wrapper.append(selectWrap);
+    } else {
+      wrapper.append(control);
+    }
     return wrapper;
   };
   const savedRuntime = engine?.data?.desired?.runtime ?? 'inherit';

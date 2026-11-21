@@ -480,9 +480,10 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-cfg-line b { color: var(--text); font-weight: 600; }
 .wb-cfg-line .wb-btn { margin-left: auto; }
 .wb-cfg-edit { display: grid; gap: 8px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); }
-.wb-cfg-label { color: var(--text-dim); font-size: 12px; }
+.wb-cfg-label { color: var(--text-dim); font-size: 13px; line-height: 20px; font-weight: 550; }
 .wb-cfg-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .wb-cfg-field { display: grid; gap: 4px; min-width: 0; }
+.wb-cfg-field .wb-select-wrap { width: 100%; }
 .wb-cfg-engine { display: grid; grid-template-columns: minmax(0, 1fr); }
 .wb-cfg-model { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .wb-cfg-field :is(input, select):disabled { background: var(--wb-hover); color: var(--text-muted); cursor: not-allowed; }
@@ -581,6 +582,8 @@ html[data-detail=plain] #observer-tab { display: none!important; }
   .wb-act-label { display: inline; }
 }
 @media (max-width: 760px) {
+  .wb-cfg-label { font-size: 14px; }
+  .wb-cfg-model { grid-template-columns: minmax(0, 1fr); }
   :root { --wb-header-h: 0px; }
   /* Phones: one compact row (name, technical switch, three icons) over one scrollable row of sections; both
      rows start at the same 12px edge as the page content and the header never grows a third row. */
