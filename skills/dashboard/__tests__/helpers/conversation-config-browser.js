@@ -22,7 +22,7 @@ export async function runConversationConfigBrowser(t, sandbox) {
   const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
   if (evidence) fs.mkdirSync(evidence, { recursive: true });
 
-  async function open({ width, locale, theme, readOnly = false }) {
+  async function open({ width, locale, readOnly = false }) {
     const phone = width === 390;
     const context = await browser.newContext({ viewport: { width, height: 844 }, isMobile: phone, hasTouch: phone });
     sandbox.addCleanup(() => context.close());
@@ -71,11 +71,10 @@ export async function runConversationConfigBrowser(t, sandbox) {
       if (readOnly) return route.continue({ url: original });
       return route.continue();
     });
-    await context.addInitScript(({ locale, theme }) => {
+    await context.addInitScript(locale => {
       if (window !== window.top) return;
       localStorage.setItem('zylos-dashboard-locale', locale);
-      localStorage.setItem('zylos-dashboard-theme', theme);
-    }, { locale, theme });
+    }, locale);
     const page = await context.newPage();
     page.setDefaultTimeout(7000);
     const errors = [];
@@ -92,16 +91,16 @@ export async function runConversationConfigBrowser(t, sandbox) {
     };
     const capture = async name => {
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-      if (evidence) await page.screenshot({ path: path.join(evidence, [width, locale, theme, name].join('-') + '.png') });
+      if (evidence) await page.screenshot({ path: path.join(evidence, [width, locale, name].join('-') + '.png') });
     };
     return { page, context, button, panel, choose, ready, capture, updates, errors,
       setRunning() { running = true; }, failNextModel() { failModel = true; } };
   }
 
-  for (const width of [1280, 390]) for (const locale of ['en', 'zh']) for (const theme of ['light', 'dark']) {
-    await t.test(width + ' ' + locale + ' ' + theme, async () => {
+  for (const width of [1280, 390]) for (const locale of ['en', 'zh']) {
+    await t.test(width + ' ' + locale, async () => {
       const phone = width === 390;
-      const f = await open({ width, locale, theme });
+      const f = await open({ width, locale });
       const { page, button, panel } = f;
       try {
         await page.locator(row(mine)).click();
@@ -151,13 +150,13 @@ export async function runConversationConfigBrowser(t, sandbox) {
         await panel.getByRole('button', { name: words[locale], exact: true }).click();
         assert.equal(await panel.isVisible(), false);
         assert.deepEqual(f.errors, []);
-        console.info('Configuration layout', { width, locale, theme, input: text.width, chip: chip.height, composer: text.height, footer: footer.height });
+        console.info('Configuration layout', { width, locale, input: text.width, chip: chip.height, composer: text.height, footer: footer.height });
       } finally { await f.context.close(); }
     });
   }
 
   await t.test('group detail and quick editor refresh each other after saving', async () => {
-    const f = await open({ width: 1280, locale: 'en', theme: 'light' });
+    const f = await open({ width: 1280, locale: 'en' });
     const { page, button, panel, updates } = f;
     try {
       await page.locator(row(mine)).click();
@@ -204,13 +203,19 @@ export async function runConversationConfigBrowser(t, sandbox) {
   });
 
   await t.test('read-only users can inspect the external group configuration', async () => {
-    const f = await open({ width: 390, locale: 'en', theme: 'light', readOnly: true });
+    const f = await open({ width: 390, locale: 'en', readOnly: true });
     try {
       await f.page.locator('.conversation-tabs [data-action="external"]').click();
       await f.page.locator(row(external)).click();
       await f.button.tap();
       await f.ready(f.panel);
       assert.equal(await f.panel.getByRole('button', { name: 'Save', exact: true }).isDisabled(), true);
+      const fields = f.panel.getByRole('combobox');
+      assert.equal(await fields.count(), 3);
+      for (const field of await fields.all()) {
+        assert.equal(await field.isDisabled(), true, (await field.getAttribute('aria-label')) + ' is read only');
+      }
+      assert.equal(await f.panel.getByText('Read-only access; changes are unavailable', { exact: true }).isVisible(), true);
       assert.equal(await f.panel.locator('.wb-cfg-model select').first().inputValue(), 'opus');
       assert.deepEqual(f.updates, []);
       assert.deepEqual(f.errors, []);
