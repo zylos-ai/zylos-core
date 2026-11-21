@@ -31,6 +31,35 @@ for (const id of SUPPORTED_RUNTIMES) {
     }
     assert.equal(runtime.launch.efforts !== UNSUPPORTED, runtimesWith('modelOverride', 'supported').includes(id),
       'modelOverride in the registry must agree with launch.efforts');
+    const { usage } = runtime;
+    const accountQuota = usage === UNSUPPORTED ? UNSUPPORTED : usage.accountQuota;
+    assert.equal(accountQuota !== UNSUPPORTED, runtimesWith('accountQuota', 'supported').includes(id),
+      'accountQuota in the registry must agree with usage.accountQuota');
+    if (usage === UNSUPPORTED) {
+      assert.ok(runtimesWith('accountQuota', 'unsupported').includes(id));
+      assert.ok(runtimesWith('usage', 'unsupported').includes(id));
+    } else {
+      const { legacyAccountRecord, healthQuota } = usage;
+      if (accountQuota === UNSUPPORTED) {
+        assert.equal(legacyAccountRecord, UNSUPPORTED);
+        assert.equal(healthQuota, UNSUPPORTED);
+      } else {
+        assert.ok(Object.isFrozen(accountQuota));
+        for (const [member, type] of Object.entries({
+          readLiveSample: 'function', readRecordedSample: 'function',
+          stateFile: 'string', alertStateFile: 'string', sampleOnStart: 'boolean',
+        })) {
+          assert.ok(Object.hasOwn(accountQuota, member), `missing member usage.accountQuota.${member}`);
+          assert.equal(typeof accountQuota[member], type, `usage.accountQuota.${member}`);
+        }
+      }
+      if (legacyAccountRecord !== UNSUPPORTED) assert.equal(typeof legacyAccountRecord, 'function');
+      if (healthQuota !== UNSUPPORTED) {
+        assert.equal(typeof healthQuota, 'function');
+        assert.ok(runtimesWith('hookHealth', 'supported').includes(id));
+        assert.ok(runtimesWith('accountQuota', 'supported').includes(id));
+      }
+    }
     const { input, switch: sessionSwitch } = runtime;
     assert.equal(typeof input.bracketedPaste, 'boolean');
     assert.equal(typeof input.inputState, 'function');

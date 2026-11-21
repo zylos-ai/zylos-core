@@ -20,7 +20,7 @@ export class UsageMonitor {
 
   initializeLastCheckAt(nowEpoch) {
     const usageState = this.loadUsageState();
-    if (this.runtimeId === 'codex') return 0;
+    if (this.adapter.accountQuota.sampleOnStart) return 0;
     if (usageState?.lastCheckEpoch) return usageState.lastCheckEpoch;
     return nowEpoch;
   }
@@ -177,7 +177,6 @@ export class UsageMonitor {
   }
 
   getUsageStateFile() {
-    if (this.runtimeId === 'codex') return this.options.usageCodexStateFile;
     return this.options.usageStateFile;
   }
 

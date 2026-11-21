@@ -1,4 +1,4 @@
-import { findRuntime } from './runtime/index.js';
+import { findRuntime, getRuntime } from './runtime/index.js';
 import { runtimesWith } from './runtime/descriptors.js';
 import path from 'node:path';
 import { openReadStore } from './c4-read-store.js';
@@ -8,7 +8,7 @@ import { openTmuxConnection } from './runtime/tmux-connection.js';
 import { isIdentityError, tmuxError } from './runtime/tmux-protocol.js';
 import { observeSessionTarget } from './runtime/session-target.js';
 import { observeSessionTargets } from './runtime/session-batch-observation.js';
-import { readJsonSample, readCodexSampleForIdentity, sampleResult, sameIdentity } from './session-usage-reader.js';
+import { readJsonSample, sampleResult, sameIdentity } from './session-usage-reader.js';
 import { readRecordedAccountUsage } from './recorded-account-usage.js';
 
 const publicIdentity = value => Object.fromEntries(['present','tmuxName','runId','createdAt','runtime','launchConfig','ready','sessionId'].map(key => [key, value[key]]));
@@ -107,14 +107,6 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
         usage: sampleResult(usage, first, last, usageFreshness, now()) };
     });
   }
-  async function readCodexUsageSample({ sessionGroup }) {
-    return withConnection(sessionGroup, async read => {
-      const first = await read();
-      const found = readCodexSampleForIdentity({ sessionGroup, identity: first, env });
-      const last = await read();
-      return sameIdentity(first, last) ? found?.sample ?? null : null;
-    });
-  }
   async function resolveTargetRuntime(sessionGroup) {
     const live = await readLiveIdentity(sessionGroup);
     if (live.present) return live.runtime;
@@ -129,6 +121,7 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
   }
   async function readAccountSamples(runtime) {
     if (!runtimesWith('accountQuota').includes(runtime)) throw new TypeError('Unknown runtime');
+    const { accountQuota } = (await getRuntime(runtime)).usage;
     const samples = [];
     const connection = await open(connectionOptions);
     try {
@@ -137,19 +130,14 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
       const candidates = [];
       for (const [sessionGroup, identity] of first) {
         if (!identity.ready || identity.runtime !== runtime) continue;
-        const sample = runtime === 'claude' ? readJsonSample(path.join(groupRunDir(sessionGroup, env), 'statusline.json'), 'usage') :
-          readCodexSampleForIdentity({ sessionGroup, identity, env, account:true });
+        const sample = accountQuota.readLiveSample({ sessionGroup, identity, env });
         candidates.push({ sessionGroup, identity, sample });
       }
       if (!candidates.length) return samples;
       const last = await read();
       for (const { sessionGroup, identity, sample } of candidates) {
         if (!sameIdentity(identity, last.get(sessionGroup))) continue;
-        if (runtime === 'codex') {
-          if (sample?.sample.rateLimits) samples.push({ value:sample.sample.rateLimits, mtime:sample.mtime, recordedAt:sample.sample.capturedAt });
-        } else if (!sample.error && sample.identity.runId === identity.runId && sample.identity.sessionId === identity.sessionId && sample.value.rate_limits) {
-          samples.push({ value:sample.value.rate_limits, mtime:sample.mtime, recordedAt:sample.sampledAt ?? sample.mtime });
-        }
+        if (sample) samples.push(sample);
       }
     } finally { await connection.close(); }
     samples.sort((a, b) => b.mtime - a.mtime);
@@ -164,8 +152,8 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
   async function readAccountUsageSnapshot(runtime) {
     const samples = await readAccountSamples(runtime);
     return { live: samples[0]?.value ?? null,
-      recorded: readRecordedAccountUsage(runtime, env, now(), samples) };
+      recorded: await readRecordedAccountUsage(runtime, env, now(), samples) };
   }
   return { readLiveIdentity, readSessionState, readLiveIdentities, readSessionTargets, readSessionStates,
-    resolveTargetRuntime, readCodexUsageSample, readAccountUsage, readAccountUsageSnapshot };
+    resolveTargetRuntime, readAccountUsage, readAccountUsageSnapshot };
 }

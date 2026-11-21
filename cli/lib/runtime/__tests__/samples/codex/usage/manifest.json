@@ -1,0 +1,9 @@
+{
+  "program": "Codex CLI",
+  "version": "codex-cli 0.169.1",
+  "recordedAt": "2026-11-21T14:00:24.550Z",
+  "how": "Recorded by the reviewer as the dedicated test OS user with a temporary HOME and CODEX_HOME (Asia/Singapore). Ran one real codex exec turn on a ChatGPT Pro subscription account with a synthetic prompt asking for a one-word reply. The account reported only a weekly primary window; secondary was null.",
+  "files": {
+    "rollout.jsonl": "The native turn_context of the turn and the quota-bearing token_count that followed it. Unused turn_context payload fields and the account credit balance in rate_limits were omitted; other values are unchanged."
+  }
+}
