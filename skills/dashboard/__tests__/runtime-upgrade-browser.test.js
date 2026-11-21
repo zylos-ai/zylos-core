@@ -44,7 +44,6 @@ test('Antigravity upgrade labels, confirmation and lost-result feedback work acr
         });
         const page = await context.newPage(); page.setDefaultTimeout(10000);
         await page.goto(base); await openDashboardTab(page, 'settings');
-        if (width === 390) await page.locator('.wb-set-drawer-btn').click();
         await page.locator('[data-settings-section="defaults"]').click();
         const button = page.locator('[data-action="upgrade-cc"]');
         await button.waitFor({ state: 'visible' });

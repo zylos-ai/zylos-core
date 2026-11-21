@@ -765,7 +765,7 @@ test('the header machines icon does what fleetIconAction decides', () => {
   assert.match(handler, /fleetIconAction\(\{ remoteAgent: state\.remoteAgent, standaloneRemote: Boolean\(REMOTE_AGENT\), multiAgent: state\.multiAgent \}\)/);
   assert.match(handler, /if \(action === 'exit-remote'\) exitRemoteAgent\(\);/);
   assert.match(handler, /else if \(action === 'parent'\) window\.location\.href = PARENT_DASHBOARD_PATH;/);
-  assert.match(handler, /else if \(action === 'fleet'\) showFleetView\(\);/);
+  assert.match(handler, /else if \(action === 'fleet'\) \{[\s\S]*?showFleetView\(\);/);
   assert.match(handler, /else openSettingsModal\('fleet'\);/);
 });
 

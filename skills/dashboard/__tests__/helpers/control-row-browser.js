@@ -24,7 +24,7 @@ export function measureControlRows(controlSelector = null) {
     if (el.closest('.conversation-compose-box')) return { heightException: 'composer retains its dedicated input/attachment/send dimensions' };
     if (el.closest('.chat-question')) return { heightException: 'question family has dedicated fields, chips and multiline options; question browser gate covers it' };
     if (el.matches('textarea')) return { heightException: 'multiline field grows with content' };
-    if (mobile && el.matches('.wb-mobile-icon-button,.header-icon-btn,.wb-set-nav-btn,.wb-set-drawer-btn,.conversation-back,.conversation-menu-toggle,.wb-group-side-back')) return { expectedHeight: 44 };
+    if (mobile && el.matches('.wb-mobile-icon-button,.header-icon-btn,.wb-set-nav-btn,.wb-set-back,.conversation-back,.conversation-menu-toggle,.wb-group-side-back')) return { expectedHeight: 44 };
     if (el.matches('.wb-sched-field .wb-input')) return { expectedHeight: 36 };
     if (el.matches('.wb-name-editor :is(input,select,button),.wb-cfg-controls :is(input,select,button)')) return { expectedHeight: mobile ? 36 : 26 };
     if (el.matches('.wb-group-head .wb-d-acts > *')) return { expectedHeight: mobile ? 36 : 30 };
@@ -199,7 +199,6 @@ export async function runControlRows(t, sandbox) {
       if (!survey) {
         await page.goto(fixture.base + '/settings');
         // The default engine card is in the AI settings section; settings opens on the account section.
-        if (width === 390) await page.locator('.wb-set-drawer-btn').click();
         await page.locator('[data-settings-section="defaults"]').click();
         await page.locator('#settings-use-codex').click(); await settle();
         await checkRow(page, 'default engine', width === 390 ? '#settings-save-runtime, #settings-undo-runtime' : '.wb-seg-engine, #settings-save-runtime, #settings-undo-runtime', width === 390 ? { expectedHeight: 36 } : {});
@@ -224,7 +223,10 @@ export async function runControlRows(t, sandbox) {
           if (route === '/memory') { await capture('memory'); await page.locator('#memory-tree .memory-file').first().click(); await capture('memory-file'); continue; }
           const sections = await page.locator('[data-settings-section]').evaluateAll(nodes => nodes.filter(n => !n.hidden).map(n => n.dataset.settingsSection));
           for (const section of sections) {
-            if (width === 390) { await page.locator('.wb-set-drawer-btn').click(); await page.locator('.wb-set-nav').waitFor({ state: 'visible' }); if (section === sections[0]) await capture('settings-drawer'); }
+            if (width === 390) {
+              if (section === sections[0]) await capture('settings-list');
+              else await page.locator('.wb-set-back:visible').click();
+            }
             await page.locator(`[data-settings-section="${section}"]`).click(); await capture(`settings-${section}`);
             if (section === 'pricing') {
               await page.locator('#settings-add-model').click();

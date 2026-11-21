@@ -91,9 +91,9 @@ test('the settings page keeps its sections in order, offers the right upgrades a
       await openDashboardTab(page, 'settings');
       await page.locator('[data-settings-section]').first().waitFor({ state: 'attached' });
       const pick = async name => {
-        if (width < 761) { await page.locator('.wb-set-drawer-btn').click(); await page.locator('.wb-set-drawer-open').waitFor(); }
+        const back = page.locator('.wb-set-back:visible');
+        if (await back.isVisible()) await back.click();
         await page.locator(`[data-settings-section="${name}"]`).click();
-        if (width < 761) await page.waitForFunction(() => !document.querySelector('.wb-set').classList.contains('wb-set-drawer-open'));
       };
       const shot = async name => { if (evidence) await page.screenshot({ path: path.join(evidence, `${name}-${width}.png`) }); };
       return { context, page, errors, writes, pick, shot };
@@ -104,7 +104,7 @@ test('the settings page keeps its sections in order, offers the right upgrades a
 
     await t.test('the six sections in order, opening on the account; the machine section in order with the observer shown without technical detail', async () => {
       const { context, page, errors, pick, shot } = await open(1280, { coreUpdate: { current: '1.2.0', latest: '1.2.0', hasUpdate: false, checkedAt: iso(0) } });
-      const nav = await page.locator('[data-settings-section]').evaluateAll(buttons => buttons.map(button => [button.dataset.settingsSection, button.textContent.trim(), button.getAttribute('aria-current')]));
+      const nav = await page.locator('[data-settings-section]').evaluateAll(buttons => buttons.map(button => [button.dataset.settingsSection, button.querySelector('.wb-set-nav-copy > span').textContent, button.getAttribute('aria-current')]));
       assert.deepEqual(nav, [['account', '账户', 'true'], ['general', '常规', 'false'], ['machine', '本机运行', 'false'], ['fleet', '连接其他机器', 'false'], ['defaults', 'AI 设置', 'false'], ['pricing', '模型定价', 'false']]);
       assert.equal(await page.locator('#settings-section-account .wb-set-card').first().locator('#logout-btn').count(), 1, 'signing out is at the top of the account section');
       await pick('machine');
@@ -294,7 +294,7 @@ test('the settings page keeps its sections in order, offers the right upgrades a
       const { context, page, errors, pick, shot } = await open(390, { coreUpdate: null });
       await pick('machine');
       await page.locator('#settings-session-hosts').waitFor();
-      const bar = () => page.locator('.wb-set-drawer-btn').evaluate(node => { const box = node.getBoundingClientRect(), header = document.querySelector('.app-header')?.getBoundingClientRect(); return { top: Math.round(box.top), headerBottom: Math.round(header?.bottom ?? 0), visible: box.bottom > 0 && box.top < innerHeight }; });
+      const bar = () => page.locator('.wb-set-section-head:visible').evaluate(node => { const box = node.getBoundingClientRect(), header = document.querySelector('.app-header')?.getBoundingClientRect(); return { top: Math.round(box.top), headerBottom: Math.round(header?.bottom ?? 0), visible: box.bottom > 0 && box.top < innerHeight }; });
       const before = await bar();
       await page.mouse.wheel(0, 1600); await page.waitForTimeout(200);
       assert.ok(await page.evaluate(() => scrollY > 400 || document.querySelector('.wb-set-body').scrollTop > 400 || document.scrollingElement.scrollTop > 400), 'the page scrolled');

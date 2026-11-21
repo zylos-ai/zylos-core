@@ -436,12 +436,10 @@ export async function runMobileConversationBrowser(t, sandbox) {
 
         await openMobileMore(page);
         await page.locator('[data-mobile-action="settings"]').click();
-        await page.locator('.wb-set-drawer-btn').click();
-        const drawerTop = await topEdge('.wb-set-drawer-h', top);
-        const drawerBottom = await bottomEdge('.wb-set-nav-btn:visible', height - bottom);
-        await shot(page, `safe-area-${theme}-settings-drawer`);
-        measurements.push({ theme, topbar, nav, topAction, bottomTab, moreBottom, chatBack, chatInput, chatMenu, drawerTop, drawerBottom });
-        await page.keyboard.press('Escape');
+        const settingsTop = await topEdge('.wb-set-nav-btn:visible', top);
+        const settingsBottom = await bottomEdge('.wb-set-nav-btn:visible', height - bottom);
+        await shot(page, `safe-area-${theme}-settings-list`);
+        measurements.push({ theme, topbar, nav, topAction, bottomTab, moreBottom, chatBack, chatInput, chatMenu, settingsTop, settingsBottom });
         await page.locator('[data-mobile-tab="chat"]').click();
 
         await openMobileMore(page);

@@ -90,15 +90,13 @@ test('stylesheet: on phones the open memory file keeps its header compact: back,
   assert.match(phone, /\.memory-back > span \{ position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect\(0 0 0 0\);/);
 });
 
-test('stylesheet: on phones the settings sections are a drawer from the left; every drawer selector names an element the page builds', () => {
-  const settings = read('js/wb/settings.js') + read('js/wb/settings-drawer.js');
-  assert.match(css, /^\.wb-set-drawer-h, \.wb-set-drawer-btn, \.wb-set-scrim \{ display: none; \}/m, 'wider screens show the sidebar only');
-  assert.match(phone, /\.wb-set-nav \{ position: fixed; top: 0; bottom: 0; left: 0;[^}]*align-self: stretch;[^}]*transform: translateX\(-104%\); visibility: hidden;/);
-  assert.match(phone, /\.wb-set-drawer-open \.wb-set-nav \{ transform: none; visibility: visible;/);
-  assert.match(phone, /@media \(prefers-reduced-motion: reduce\) \{ \.wb-set-nav, \.wb-set-scrim, \.wb-set-drawer-open :is\(\.wb-set-nav, \.wb-set-scrim\) \{ transition: none; \} \}/, 'no slide, open or closed');
-  const drawerClasses = new Set(css.match(/\.wb-set-(?:drawer[\w-]*|scrim)\b/g));
-  assert.ok(drawerClasses.size >= 5);
-  for (const name of drawerClasses) assert.ok(settings.includes(`'${name.slice(1)}`) || settings.includes(` ${name.slice(1)}'`), name + ' is built by the settings page');
+test('stylesheet: phones show either the section list or a sticky section heading', () => {
+  assert.match(css, /^\.wb-set-section-head \{ display: contents; \}/m);
+  assert.match(phone, /\.wb-set-list \.wb-set-nav \{ display: flex; \}/);
+  assert.match(phone, /\.wb-set-list \.wb-set-body, .* \{ display: none; \}/);
+  assert.match(phone, /\.wb-set-nav-btn \{ height: auto; min-height: 44px;/);
+  assert.match(phone, /\.wb-set-section-head \{ position: sticky; top: var\(--wb-header-h\)/);
+  assert.match(phone, /\.wb-set-back\.wb-icon-btn \{ .* width: 44px; height: 44px;/);
 });
 
 test('stylesheet: on phones usage ranges fill the row, custom dates fold onto one row, totals read as a list', () => {
