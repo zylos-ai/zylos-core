@@ -63,7 +63,7 @@ test('runtime switch installs a missing Antigravity CLI before saving the defaul
   const result = await f.run();
   assert.equal(result.data.result, 'saved');
   assert.deepEqual(prepared, [{ runtimes: ['agy'] }]);
-  assert.deepEqual(f.calls, ['adapter', 'read', 'prepare', 'hooks', 'auth', 'write', 'observe']);
+  assert.deepEqual(f.calls, ['adapter', 'read', 'prepare', 'hooks', 'auth', 'observe', 'write']);
   assert.ok(result.data.warnings.some(({ code, message }) => code === 'RUNTIME_CLI_INSTALL_NOTICE' && message === 'N'));
 });
 
