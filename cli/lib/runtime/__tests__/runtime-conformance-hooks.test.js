@@ -4,23 +4,18 @@ import test from 'node:test';
 import { getRuntime } from '../index.js';
 import { buildKickPrompt } from '../kick-prompt.js';
 
-async function recordedHooks(t, id) {
+async function recordedHooks(id) {
   const directory = new URL(`./samples/${id}/hooks/`, import.meta.url);
-  let source;
-  try {
-    source = await fs.readFile(new URL('manifest.json', directory), 'utf8');
-  } catch (error) {
-    if (error.code !== 'ENOENT' || id === 'agy') throw error;
-    t.skip(`Awaiting native hook recordings for ${id}`);
-    return null;
-  }
-  const { program, version, recordedAt, how, files } = JSON.parse(source);
+  const { program, version, recordedAt, how, files } = JSON.parse(
+    await fs.readFile(new URL('manifest.json', directory), 'utf8')
+  );
   for (const value of [program, version, recordedAt, how]) {
     assert.equal(typeof value, 'string');
     assert.ok(value);
   }
   return {
     hooks: (await getRuntime(id)).hooks,
+    files,
     async payload(name) {
       const file = `${name}.json`;
       assert.ok(Object.hasOwn(files, file), `Missing recording: ${id}/${file}`);
@@ -34,9 +29,7 @@ for (const [id, events] of [
   ['codex', {}],
 ]) {
   test(`${id} native hook records retain session, source and tool identity`, async t => {
-    const recordings = await recordedHooks(t, id);
-    if (!recordings) return;
-    const { hooks, payload } = recordings;
+    const { hooks, files, payload } = await recordedHooks(id);
     const normalized = {};
     for (const [name, event] of Object.entries({
       'session-start-startup': 'SessionStart',
@@ -47,6 +40,10 @@ for (const [id, events] of [
       stop: 'Stop',
       ...events,
     })) {
+      if (id === 'codex' && name === 'session-start-clear' && !Object.hasOwn(files, `${name}.json`)) {
+        t.diagnostic('Awaiting native Codex SessionStart clear recording');
+        continue;
+      }
       const native = await payload(name);
       const record = hooks.normalize(native, event);
       assert.equal(record.hook_event_name, event, name);
@@ -72,13 +69,13 @@ for (const [id, events] of [
       assert.ok(normalized['subagent-pre-tool-use'].agent_id);
     }
 
-    const tool = normalized['pre-tool-use'];
-    if (id === 'claude') {
+    for (const tool of [normalized['pre-tool-use'], normalized['post-tool-use']]) {
       assert.equal(tool.tool_name, 'Bash');
-      assert.deepEqual(hooks.toolInput(tool.tool_name, tool.tool_input), pick(tool.tool_input, ['command', 'description']));
-    } else {
-      assert.equal(tool.tool_name, 'functions.exec_command');
-      assert.equal(hooks.toolInput(tool.tool_name, tool.tool_input), undefined);
+      assert.equal(typeof tool.tool_input.command, 'string');
+      const expected = id === 'claude'
+        ? pick(tool.tool_input, ['command', 'description'])
+        : { command: tool.tool_input.command };
+      assert.deepEqual(hooks.toolInput(tool.tool_name, tool.tool_input), expected);
     }
   });
 }
@@ -87,8 +84,8 @@ function pick(input, keys) {
   return Object.fromEntries(keys.filter(key => Object.hasOwn(input, key)).map(key => [key, input[key]]));
 }
 
-test('Antigravity native hook records normalize lifecycle, failures and tool input', async t => {
-  const { hooks, payload } = await recordedHooks(t, 'agy');
+test('Antigravity native hook records normalize lifecycle, failures and tool input', async () => {
+  const { hooks, payload } = await recordedHooks('agy');
   const normalized = {};
   for (const [name, event, standard] of [
     ['session-start-kick', 'SessionStart', 'SessionStart'],
