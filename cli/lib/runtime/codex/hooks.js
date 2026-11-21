@@ -1002,7 +1002,16 @@ export const hooks = Object.freeze({
   sync,
   syncPolicy: 'always',
   optedIn: UNSUPPORTED,
-  ready: async ({ zylosDir }) => isCodexTrustValid({ zylosDir, projectDir: zylosDir, codexVersion: getCodexVersion() }).valid,
+  ready: async ({ zylosDir }) => {
+    const validity = isCodexTrustValid({ zylosDir, projectDir: zylosDir, codexVersion: getCodexVersion() });
+    if (validity.valid) return true;
+    try {
+      ensureCodexHooksTrusted({ zylosDir });
+    } catch (error) {
+      throw new Error(`Codex hook trust is invalid (${validity.reason}) and rebuilding it failed: ${error.message}`);
+    }
+    return true;
+  },
   trust: async ({ zylosDir }) => ensureCodexHooksTrusted({ zylosDir }),
   features: UNSUPPORTED,
   stage: UNSUPPORTED,
