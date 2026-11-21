@@ -1212,7 +1212,7 @@ test('running default-model group threshold stays unknown until the first usage 
     context_window: { context_window_size: 1000000, used_percentage: 20 } } };
   f.advance(2001);
   const sampled = (await f.service.getSnapshot()).rows.find(row => row.sessionGroup === 'telegram:waiting');
-  assert.equal(sampled.rotationThreshold, 40);
+  assert.equal(sampled.rotationThreshold, 30);
 });
 
 test('group threshold discards the previous model override when session identity changes', async t => {
@@ -1220,7 +1220,7 @@ test('group threshold discards the previous model override when session identity
   const observation = f.live.get('telegram:changing');
   observation.identity.launchConfig = { runtime: 'claude', mode: 'override', model: 'opus[1m]' };
   const before = (await f.service.getSnapshot()).rows.find(row => row.sessionGroup === 'telegram:changing');
-  assert.equal(before.rotationThreshold, 40, 'a valid captured override supplies the first-sample preview');
+  assert.equal(before.rotationThreshold, 30, 'a valid captured override supplies the first-sample preview');
   observation.status = { valid: false, reason: 'identity_changed' };
   f.advance(2001);
   const changed = (await f.service.getSnapshot()).rows.find(row => row.sessionGroup === 'telegram:changing');
@@ -1231,14 +1231,14 @@ test('group thresholds distinguish the default alias from a fixed version overri
   const f = fixture(t, { groupKeys: ['telegram:alias', 'telegram:fixed'] });
   for (const dir of ['.zylos', '.claude']) fs.mkdirSync(path.join(f.root, dir), { recursive: true });
   fs.writeFileSync(path.join(f.root, '.claude/settings.json'), JSON.stringify({ model: 'opus[1m]' }));
-  fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ model_rotation_thresholds: { claude: { 'opus[1m]': 30 } } }));
+  fs.writeFileSync(path.join(f.root, '.zylos/config.json'), JSON.stringify({ model_rotation_thresholds: { claude: { 'opus[1m]': 25 } } }));
   f.live.get('telegram:alias').usage = { valid: true, value: { model: { id: 'claude-opus-5-5' }, context_window: { context_window_size: 1000000 } } };
   const fixed = f.live.get('telegram:fixed');
   fixed.identity.launchConfig = { runtime: 'claude', mode: 'override', model: 'claude-opus-4-6[1m]' };
   fixed.usage = { valid: true, value: { model: { id: 'claude-opus-4-6' }, context_window: { context_window_size: 1000000 } } };
   const rows = (await f.service.getSnapshot()).rows;
-  assert.equal(rows.find(row => row.sessionGroup === 'telegram:alias').rotationThreshold, 30);
-  assert.equal(rows.find(row => row.sessionGroup === 'telegram:fixed').rotationThreshold, 40);
+  assert.equal(rows.find(row => row.sessionGroup === 'telegram:alias').rotationThreshold, 25);
+  assert.equal(rows.find(row => row.sessionGroup === 'telegram:fixed').rotationThreshold, 30);
 });
 
 // Injected Core CLI and owned temporary root (fixture); no live DB/PM2/tmux/network. Run for changes to the

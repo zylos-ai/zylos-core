@@ -63,7 +63,7 @@ function defaultMatches(options) {
 
 export function thresholdLimit(options = {}) {
   requireContext(options);
-  return isLargeWindow(options) ? 40 : 95;
+  return 95;
 }
 
 /** Pure policy shared by settings, session displays and the Supervisor. */
@@ -73,13 +73,13 @@ export function modelThreshold(config = {}, options = {}) {
   if (object(runtimeMap)) {
     for (const key of candidates(options)) {
       const value = Object.hasOwn(runtimeMap, key) ? percent(runtimeMap[key]) : null;
-      if (value !== null) return thresholdLimit(options) === 40 ? Math.min(value, 40) : value;
+      if (value !== null) return value;
     }
   } else if (defaultMatches(options)) {
     const value = legacyPercent(config[LEGACY_KEYS[options.runtime]]);
-    if (value !== null) return thresholdLimit(options) === 40 ? Math.min(value, 40) : value;
+    if (value !== null) return value;
   }
-  return thresholdLimit(options) === 40 ? 40 : 70;
+  return isLargeWindow(options) ? 30 : 70;
 }
 
 export function readDefaultModels({ zylosDir = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'), contexts }) {
