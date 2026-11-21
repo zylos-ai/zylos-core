@@ -1,7 +1,7 @@
 import { URL } from 'node:url';
 import { loadCoreModule } from './core-modules.js';
 
-const { DEFAULT_RUNTIME } = await loadCoreModule('runtime/descriptors.js');
+const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
 
 function toPositiveInt(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ''), 10);
@@ -58,7 +58,9 @@ export function summarizeToolInput(toolName, toolInput = {}) {
   }
 }
 
-export function getToolRules({ runtimeId = DEFAULT_RUNTIME, config = {} } = {}) {
+export function getToolRules({ runtimeId, watchdog, config = {} } = {}) {
+  if (!watchdog || watchdog === UNSUPPORTED) return [];
+
   const watchdogEnabled = toBool(config.web_tool_watchdog_enabled, true);
   const timeoutSec = toPositiveInt(config.web_tool_timeout_sec, 3600);
   const interruptGraceSec = toPositiveInt(config.web_tool_interrupt_grace_sec, 15);
@@ -67,15 +69,15 @@ export function getToolRules({ runtimeId = DEFAULT_RUNTIME, config = {} } = {}) 
   return [
     {
       id: 'web-tools-timeout',
-      runtime: 'claude',
-      tools: ['WebFetch', 'WebSearch'],
+      runtime: runtimeId,
+      tools: watchdog.tools,
       inputPredicate: () => true,
       observe: { summary: 'tool-specific' },
       policy: null,
       watchdog: {
-        enabled: runtimeId === 'claude' && watchdogEnabled,
+        enabled: watchdogEnabled,
         maxRuntimeSec: timeoutSec,
-        interruptKey: 'Escape',
+        interruptKey: watchdog.interruptKey,
         interruptGraceSec,
         escalation: 'restart',
         cooldownSec
@@ -84,10 +86,10 @@ export function getToolRules({ runtimeId = DEFAULT_RUNTIME, config = {} } = {}) 
   ];
 }
 
-export function findMatchingToolRule({ runtimeId = DEFAULT_RUNTIME, toolName, toolInput = {}, config = {} } = {}) {
+export function findMatchingToolRule({ runtimeId, watchdog, toolName, toolInput = {}, config = {} } = {}) {
   if (!toolName) return null;
 
-  for (const rule of getToolRules({ runtimeId, config })) {
+  for (const rule of getToolRules({ runtimeId, watchdog, config })) {
     if (rule.runtime !== runtimeId) continue;
     if (!rule.tools.includes(toolName)) continue;
     try {

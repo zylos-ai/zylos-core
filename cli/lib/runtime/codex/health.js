@@ -1,4 +1,5 @@
-import { detectApiErrorText } from './api-error-patterns.js';
+import { UNSUPPORTED } from '../contract.js';
+import { detectApiErrorText } from '../shared/api-error-patterns.js';
 
 const AUTH_FAILURE_PATTERNS = [
   /authentication failed/i,
@@ -8,7 +9,7 @@ const AUTH_FAILURE_PATTERNS = [
 ];
 
 /** Pure screen facts; recovery priority and cooldown belong to the supervisor. */
-export function matchCodexScreen(text) {
+function matchScreen(text) {
   const pane = typeof text === 'string' ? text : '';
   const auth = AUTH_FAILURE_PATTERNS.map(p => pane.match(p)).find(Boolean);
   const rate = null;
@@ -18,3 +19,10 @@ export function matchCodexScreen(text) {
     apiError: detectApiErrorText(pane),
   };
 }
+
+export const health = Object.freeze({
+  screen: Object.freeze({ match: matchScreen }),
+  hookHealth: UNSUPPORTED,
+  toolWatchdog: UNSUPPORTED,
+  noticeRules: UNSUPPORTED,
+});

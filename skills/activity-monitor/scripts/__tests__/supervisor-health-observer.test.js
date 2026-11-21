@@ -1,3 +1,4 @@
+import { getRuntime } from '../../../../cli/lib/runtime/index.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,6 +7,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { RuntimeHealthCoordinator } from '../runtime-health.js';
 import { SupervisorHealthObserver } from '../supervisor-health-observer.js';
+
+const watchdog = (await getRuntime('claude')).health.toolWatchdog;
 function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-health-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   let clock=1792000000000,transition=null,manual=false,matches={},state={state:'idle',tools:[],sessionId:'session-a'},auth={status:'failure'};
@@ -395,7 +398,7 @@ test('concurrent observations reserve only one pending nudge',async t=>{
 });
 test('web watchdog preserves the configured default grace and records recovery context',async t=>{
   const {findMatchingToolRule}=await import('../tool-rules.js');
-  const f=fixture(t);f.observer.resolveToolRule=(runtime,tool)=>findMatchingToolRule({runtimeId:runtime,toolName:tool.name});
+  const f=fixture(t);f.observer.resolveToolRule=(runtime,tool)=>findMatchingToolRule({runtimeId:runtime,watchdog,toolName:tool.name});
   f.setState({tools:[{id:'web',name:'WebFetch',startedAt:f.now()-3600000}]});
   await f.observer.tick();assert.equal(f.interrupts.length,1);f.advance(15000);
   await f.observer.tick();assert.equal(f.stops.length,0);f.advance(1);await f.observer.tick();

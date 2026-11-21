@@ -11,12 +11,13 @@ const { runDirFromEnv, RUN_FILES } = await loadCoreModule('session-group-paths.j
 import { runtimeRoot } from './runtime-generation.js';
 
 const { DEFAULT_RUNTIME, runtimesWith } = await loadCoreModule('runtime/descriptors.js');
+const { getRuntime } = await loadCoreModule('runtime/index.js');
 
 const EVENTS = { SessionStart: 'session_start', UserPromptSubmit: 'prompt_submit', StopFailure: 'stop_failure', Stop: 'stop' };
 const ERRORS = new Set(['rate_limit', 'authentication_failed', 'billing_error', 'overloaded', 'server_error', 'network_error', 'model_not_found']);
 const identifier = value => typeof value === 'string' && /^[A-Za-z0-9._:-]{1,200}$/.test(value) ? value : null;
 
-export function collectHealthHook(payload, { zylosDir = runtimeRoot(), nowMs = Date.now(), pid = getClaudePid(), env = process.env } = {}) {
+export async function collectHealthHook(payload, { zylosDir = runtimeRoot(), nowMs = Date.now(), pid = getClaudePid(), env = process.env } = {}) {
   if (!payload || payload.agent_id || !EVENTS[payload.hook_event_name]) return null;
   const session = identifier(payload.session_id);
   if (!session || !Number.isSafeInteger(pid) || pid <= 0) return null;
@@ -25,12 +26,13 @@ export function collectHealthHook(payload, { zylosDir = runtimeRoot(), nowMs = D
   let runtime = DEFAULT_RUNTIME;
   try { runtime = JSON.parse(env.ZYLOS_MODEL_CONFIG || '{}')?.runtime || DEFAULT_RUNTIME; } catch { /* Preserve native Claude publication for malformed optional metadata. */ }
   if (!runtimesWith('hookHealth').includes(runtime)) return null;
+  const { health } = await getRuntime(runtime);
   const event = { v:1, session_group:location.kind === 'legacy' ? null : (location.sessionGroup || 'origin'), run_id:env.ZYLOS_RUN_ID || null, schema_version: 1, event_id: randomUUID(), source: 'hook', runtime,
     type: 'runtime_health', session_id: session, prompt_id: identifier(payload.prompt_id),
     event: EVENTS[payload.hook_event_name], error: payload.hook_event_name === 'StopFailure' ? (ERRORS.has(payload.error) ? payload.error : 'unknown') : null,
     received_at: nowMs, ts: nowMs, claude_pid: pid };
   if (event.event === 'stop_failure') {
-    const match = matchHealthNoticeText(payload);
+    const match = matchHealthNoticeText(payload, health.noticeRules);
     if (match) event.notice_match = match;
   }
   appendEvent(path.join(location.dir,RUN_FILES.EVENTS),event);
@@ -59,7 +61,7 @@ if (isMainModule(import.meta.url)) {
   process.stdin.on('end', async () => {
     try {
       if (oversized) throw new Error('oversized');
-      if (collectHealthHook(JSON.parse(input || '{}'))) await wakeHealthMonitor();
+      if (await collectHealthHook(JSON.parse(input || '{}'))) await wakeHealthMonitor();
     } catch {
       process.stderr.write('Zylos health hook: event could not be persisted; screen fallback remains available.\n');
     }

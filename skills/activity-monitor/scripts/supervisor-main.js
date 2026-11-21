@@ -24,19 +24,24 @@ import { messageForStatus } from '../../comm-bridge/scripts/status-notice-templa
 import { systemSendEnvironment } from '../../comm-bridge/scripts/c4-system-send-env.js';
 import { CONFIG_RECLAIM_PROMPT, PRE_RECLAIM_CHECK_PROMPT, ROTATION_PROMPT, UPGRADE_RESTART_CHECK_PROMPT } from './reclaim-prompts.js';
 const { readSessionMode, readZylosConfigOrThrow } = await loadCoreModule('config.js');
-const { getRuntime } = await loadCoreModule('runtime/index.js');
+const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
+const { getRuntime, SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/index.js');
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
 const { observeSessionTarget } = await loadCoreModule('runtime/session-target.js');
 const { zylosRoot, LEGACY_TMUX_NAMES } = await loadCoreModule('session-group-paths.js');
 const { loadRuntimeContexts, readDefaultModels, readModelWindows } = await loadCoreModule('model-rotation-thresholds.js');
 const { resolveSessionHotTtl } = await loadCoreModule('session-hot-ttl.js');
 const { createSessionReader } = await loadCoreModule('session-state-reader-async.js');
-const { matchClaudeScreen } = await loadCoreModule('heartbeat/claude-probe.js');
-const { matchCodexScreen } = await loadCoreModule('heartbeat/codex-probe.js');
 const unavailable = name => Object.assign(new Error(`${name} is unavailable on this code baseline`),{code:'DEPENDENCY_UNAVAILABLE',dependency:name});
 
 /** Entry construction performs no launch, installation or configuration repair. */
 export async function startSupervisor({ env=process.env, log=message=>console.error(typeof message==='string'?message:JSON.stringify(message)), ...overrides }={}) {
+  const runtimes = new Map(await Promise.all(SUPPORTED_RUNTIMES.map(async id => [id, await getRuntime(id)])));
+  const healthOf = id => runtimes.get(id)?.health;
+  const healthQuotaReader = id => {
+    const usage = runtimes.get(id)?.usage;
+    return usage === UNSUPPORTED || usage?.healthQuota === UNSUPPORTED ? undefined : usage?.healthQuota;
+  };
   const root=zylosRoot(env), directory=path.join(root,'activity-monitor');
   fs.mkdirSync(directory,{recursive:true});
   const db=overrides.db ?? defaultDb, readModeSource=overrides.readMode ?? readSessionMode, readConfig=overrides.readConfig ?? readZylosConfigOrThrow;
@@ -157,8 +162,11 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     },
     resolveTargetRuntime,
     checkAuth:async runtime=>(await getRuntime(runtime)).auth.checkAuth(),
-    matchScreen:(runtime,screen)=>runtime==='agy'?{}:(runtime==='claude'?matchClaudeScreen:matchCodexScreen)(screen),
-    resolveToolRule:(runtime,tool)=>findMatchingToolRule({runtimeId:runtime,toolName:tool.name,toolInput:tool.input,config:configuration}),
+    matchScreen:(runtime,screen)=>{
+      const source=healthOf(runtime)?.screen;
+      return source && source!==UNSUPPORTED ? source.match(screen) : {};
+    },
+    resolveToolRule:(runtime,tool)=>findMatchingToolRule({runtimeId:runtime,watchdog:healthOf(runtime)?.toolWatchdog,toolName:tool.name,toolInput:tool.input,config:configuration}),
     prepareReferenceReorg:()=>prepareReferenceReorg({root,now:clock()}),
     readSyncMarker:options=>{if(!syncReader)throw unavailable('Sync marker reader');return syncReader(options);},prompts,
     freezeNotice:options=>{
@@ -168,12 +176,14 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     },
     consumeHealthEvents:async(scene,coordinator)=>{
       const identity=healthIdentity(scene);if(!identity)return;
-      events ??= new HealthEventReader({coordinator,zylosDir:root,warn:log,getControl:db.getControlById,expireControl:id=>{try{db.expireControlById(id);}catch(error){if(error.code!=='CONTROL_NOT_ACTIVE')throw error;}},quota:(identity,current)=>readScopedHealthQuota({runDir:current.runDir,runId:current.runId,identity})});
-      const results=await events.consumeScene(scene,identity);
+      events ??= new HealthEventReader({coordinator,zylosDir:root,warn:log,getControl:db.getControlById,expireControl:id=>{try{db.expireControlById(id);}catch(error){if(error.code!=='CONTROL_NOT_ACTIVE')throw error;}},quota:(identity,current)=>readScopedHealthQuota({runDir:current.runDir,runId:current.runId,identity,read:healthQuotaReader(identity.runtime)})});
+      const hook=healthOf(scene.runtime)?.hookHealth;
+      const hookHealth=hook===UNSUPPORTED ? null : hook;
+      const results=await events.consumeScene(scene,identity,{hookHealth});
       if(results.some(result=>result?.verify))void supervisor.observer.requestVerification(scene.runtime);
       const awaitingAuth=results.some(result=>result?.status==='awaiting_auth');
       // The queued terminal hook must supersede any continuation it replaces.
-      if(scene.runtime==='claude' && !awaitingAuth) await coordinator.serial(scene.runtime,()=>processFailureContinuation({
+      if(hookHealth && !awaitingAuth) await coordinator.serial(scene.runtime,()=>processFailureContinuation({
         store:coordinator.store(scene.runtime),scene,identity:()=>scenes.readIdentity(scene.sessionGroup),
         bindTarget:()=>scenes.bindTarget(scene),insertControl:db.insertControl,getControl:db.getControlById,now:clock,
         // Native single delivers every group's inbound to Origin, so any pending inbound cancels a continuation.
@@ -183,7 +193,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
         scope:configuration.legacy?null:scene.sessionGroup}));
       const pending=drainFirstFailureNotices({store:coordinator.store(scene.runtime),sessionGroup:scene.sessionGroup ?? 'origin',
         identity:async()=>{const current=await scenes.readIdentity(scene.sessionGroup);return current.present && current.ready && current.runId===scene.runId && current.sessionId===scene.sessionId && current.runtime===scene.runtime?identity:null;},
-        quota:current=>readScopedHealthQuota({runDir:scene.runDir,runId:scene.runId,identity:current}),mutate:fn=>coordinator.serial(scene.runtime,fn),database:db.getDb(),zylosDir:root});
+        quota:current=>readScopedHealthQuota({runDir:scene.runDir,runId:scene.runId,identity:current,read:healthQuotaReader(current.runtime)}),mutate:fn=>coordinator.serial(scene.runtime,fn),database:db.getDb(),zylosDir:root});
       pendingNotices.add(pending);pending.finally(()=>pendingNotices.delete(pending)).catch(log);
       return awaitingAuth;
     },alert,log,...overrides,readMode,scenes,updateCapacity,afterRound:async({context})=>{await scenes.advance?.();try{await legacy.tick();}catch(error){log({error:error.code ?? error.message,phase:'legacy-status'});}await machineTasks.tick(context);await overrides.afterRound?.();},

@@ -1,3 +1,4 @@
+import { health } from './health.js';
 import { auth } from './auth.js';
 import { context } from './context.js';
 import { busy } from './busy.js';
@@ -32,6 +33,7 @@ export default Object.freeze({
     postUpgradeSync: UNSUPPORTED,
   }),
   auth,
+  health,
   launch: Object.freeze({ prepare, preAccept: UNSUPPORTED, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags, checkAutonomous: UNSUPPORTED }),
   instructions,
   input,

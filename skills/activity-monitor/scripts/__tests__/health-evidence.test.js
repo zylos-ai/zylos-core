@@ -1,3 +1,4 @@
+import { getRuntime } from '../../../../cli/lib/runtime/index.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -5,13 +6,16 @@ import path from 'node:path';
 import {test} from 'node:test';
 import {randomUUID} from 'node:crypto';
 import {HealthStore} from '../health-store.js';
+
+const hookHealth = (await getRuntime('claude')).health.hookHealth;
+const agyHookHealth = (await getRuntime('agy')).health.hookHealth;
 const identity={runtime:'claude',session_id:'session',claude_pid:123};
 function fixture(t) {
   const zylosDir=fs.mkdtempSync(path.join(os.tmpdir(),'health-evidence-file-'));t.after(()=>fs.rmSync(zylosDir,{recursive:true,force:true}));
   let clock=Date.now();
   const store=new HealthStore({zylosDir,now:()=>clock});
   const event=(change={})=>({schema_version:1,event_id:randomUUID(),source:'hook',runtime:'claude',...identity,prompt_id:'prompt',event:'stop_failure',error:'rate_limit',received_at:clock,...change});
-  return {store,zylosDir,event,now:()=>clock,advance:()=>++clock,consume:(input,options)=>store.consume(input,{identity,...options})};
+  return {store,zylosDir,event,now:()=>clock,advance:()=>++clock,consume:(input,options)=>store.consume(input,{hookHealth, identity,...options})};
 }
 test('terminal marker and health survive restart; exact and older events replay safely',t=>{
   const f=fixture(t);const event=f.event();f.consume(event);
@@ -87,7 +91,7 @@ test('atomic write failure leaves health and marker unchanged',t=>{
   assert.throws(()=>f.consume(f.event()),/injected/);assert.deepEqual(f.store.read(),before);
 });
 
-test('agy network failures survive sanitization, persistence and public health projection', async t => {
+test('agy network failures preserve their notice classification without pausing the runtime', async t => {
   const f = fixture(t);
   const { sanitizeHealthEvent } = await import('../health-evidence.js');
   const { classifyHealthNotice } = await import('../health-notice-classification.js');
@@ -101,19 +105,18 @@ test('agy network failures survive sanitization, persistence and public health p
   assert.equal(notice.reason, 'network_error');
   assert.equal(notice.noticeCode, 'unavailable');
   const store = new HealthStore({ runtime: 'agy', zylosDir: f.zylosDir, now: f.now });
-  assert.equal(store.consume(event, { identity: agyIdentity }).reason, 'hook_failure');
+  assert.equal(store.consume(event, { hookHealth: agyHookHealth, identity: agyIdentity }).reason, 'network_error');
   const state = new HealthStore({ runtime: 'agy', zylosDir: f.zylosDir, now: f.now }).read();
-  assert.equal(state.health, 'unavailable');
-  assert.equal(state.reason, 'network_error');
-  assert.equal(state.hook_failure.error, 'network_error');
+  assert.equal(state.health, 'ok');
+  assert.equal(state.reason, '');
+  assert.equal(state.last_hook.error, 'network_error');
   const persisted = JSON.parse(fs.readFileSync(store.file, 'utf8'));
   assert.equal(persisted.v, 1);
-  assert.equal(persisted.reason, 'network_error');
+  assert.equal(persisted.reason, '');
   const status = publishSessionStatus({ statusFile: path.join(f.zylosDir, 'status.json'),
     scene: { ready: true, runId: 'run', sessionId: 'session', runtime: 'agy' },
     activity: { sessionId: 'session', state: 'idle', lastActivityAt: 1, tools: [] },
     health: state, now: f.now() });
-  assert.equal(status.health, 'unavailable');
-  assert.equal(status.unavailable_reason, 'network_error');
+  assert.equal(status.health, 'ok');
   assert.doesNotMatch(JSON.stringify(state), /PRIVATE/);
 });

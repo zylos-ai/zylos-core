@@ -1,5 +1,5 @@
-import { detectApiErrorText } from './api-error-patterns.js';
-
+import { HEALTH_NOTICE_RULES } from '../shared/health-notice-rules.js';
+import { detectApiErrorText } from '../shared/api-error-patterns.js';
 
 const RATE_LIMIT_PATTERNS = [
   /out of extra usage/i,
@@ -16,7 +16,7 @@ const AUTH_FAILURE_PATTERNS = [
 ];
 
 /** Pure screen facts; recovery priority and cooldown belong to the supervisor. */
-export function matchClaudeScreen(text) {
+function matchScreen(text) {
   const pane = typeof text === 'string' ? text : '';
   const auth = AUTH_FAILURE_PATTERNS.map(p => pane.match(p)).find(Boolean);
   const rate = RATE_LIMIT_PATTERNS.map(p => pane.match(p)).find(Boolean);
@@ -28,3 +28,10 @@ export function matchClaudeScreen(text) {
 }
 
 export { RATE_LIMIT_PATTERNS as _RATE_LIMIT_PATTERNS };
+
+export const health = Object.freeze({
+  screen: Object.freeze({ match: matchScreen }),
+  hookHealth: Object.freeze({ hookFailureHasPromptId: true }),
+  toolWatchdog: Object.freeze({ tools: Object.freeze(['WebFetch', 'WebSearch']), interruptKey: 'Escape' }),
+  noticeRules: HEALTH_NOTICE_RULES,
+});

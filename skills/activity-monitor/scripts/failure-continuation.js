@@ -1,8 +1,8 @@
 export const FAILURE_RETRY_DELAYS = [30000, 120000, 300000];
 export const RETRYABLE_FAILURES = new Set(['server_error', 'overloaded', 'network_error']);
 
-export function reduceFailureContinuation(state, {runtime, event, identity, runId, pending, control, eligible}) {
-  if (runtime !== 'claude' || !runId) return false;
+export function reduceFailureContinuation(state, {event, identity, runId, pending, control, eligible}) {
+  if (!runId) return false;
   let retry=state.failure_retry;
   if(retry && (retry.runId!==runId || retry.sessionId!==identity.session_id || retry.pid!==identity.claude_pid)) {
     delete state.failure_retry;retry=null;control=null;
@@ -43,7 +43,7 @@ export async function processFailureContinuation({store,scene,identity,bindTarge
   const state=store.read(sessionGroup),retry=state.failure_retry;
   if(!retry)return;
   const current=await identity();
-  if(!current?.ready || current.runId!==retry.runId || current.sessionId!==retry.sessionId || current.runtime!=='claude') {
+  if(!current?.ready || current.runId!==retry.runId || current.sessionId!==retry.sessionId || current.runtime!==scene.runtime) {
     delete state.failure_retry;store.write(state,sessionGroup);return;
   }
   const control=retry.controlId ? getControl(retry.controlId) : null;

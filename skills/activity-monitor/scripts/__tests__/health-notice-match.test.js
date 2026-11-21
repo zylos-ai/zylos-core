@@ -1,6 +1,9 @@
+import { HEALTH_NOTICE_RULES } from '../../../../cli/lib/runtime/shared/health-notice-rules.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {matchHealthNoticeText, HEALTH_NOTICE_TEXT_MAX_BYTES} from '../health-notice-match.js';
+
+const matchNotice = payload => matchHealthNoticeText(payload, HEALTH_NOTICE_RULES);
 import {classifyHealthNotice} from '../health-notice-classification.js';
 
 const examples = [
@@ -40,32 +43,32 @@ const examples = [
 ];
 for (const [sourceId,kind,text] of examples) {
   test(`source #${sourceId}: sanitized ${kind} diagnostic`,()=>{
-    assert.deepEqual(matchHealthNoticeText({error_details:text}),{sourceId,kind});
-    assert.equal(matchHealthNoticeText({last_assistant_message:`The customer pasted this example: ${text}`}),null);
-    assert.equal(matchHealthNoticeText({last_assistant_message:`\"${text}\"`}),null);
+    assert.deepEqual(matchNotice({error_details:text}),{sourceId,kind});
+    assert.equal(matchNotice({last_assistant_message:`The customer pasted this example: ${text}`}),null);
+    assert.equal(matchNotice({last_assistant_message:`\"${text}\"`}),null);
   });
 }
 test('normalizes case, curly apostrophes and whitespace without erasing punctuation',()=>{
-  assert.deepEqual(matchHealthNoticeText({last_assistant_message:'  YOU’VE\n hit your\tFable limit · resets 3pm '}),{sourceId:1,kind:'model_quota'});
-  assert.equal(matchHealthNoticeText({error_details:"You've reached your Fable limit"}),null);
+  assert.deepEqual(matchNotice({last_assistant_message:'  YOU’VE\n hit your\tFable limit · resets 3pm '}),{sourceId:1,kind:'model_quota'});
+  assert.equal(matchNotice({error_details:"You've reached your Fable limit"}),null);
 });
 test('error_details has priority and cannot fall back to unrelated assistant quota prose',()=>{
-  assert.equal(matchHealthNoticeText({error_details:'Unknown error',last_assistant_message:examples[0][2]}),null);
-  assert.deepEqual(matchHealthNoticeText({error_details:' ',last_assistant_message:examples[0][2]}),{sourceId:1,kind:'model_quota'});
+  assert.equal(matchNotice({error_details:'Unknown error',last_assistant_message:examples[0][2]}),null);
+  assert.deepEqual(matchNotice({error_details:' ',last_assistant_message:examples[0][2]}),{sourceId:1,kind:'model_quota'});
 });
 test('oversized text fails neutral rather than matching a truncated prefix',()=>{
-  assert.equal(matchHealthNoticeText({error_details:examples[0][2]+'x'.repeat(HEALTH_NOTICE_TEXT_MAX_BYTES)}),null);
-  assert.equal(matchHealthNoticeText({error_details:'中'.repeat(6000),last_assistant_message:examples[0][2]}),null);
+  assert.equal(matchNotice({error_details:examples[0][2]+'x'.repeat(HEALTH_NOTICE_TEXT_MAX_BYTES)}),null);
+  assert.equal(matchNotice({error_details:'中'.repeat(6000),last_assistant_message:examples[0][2]}),null);
 });
 test('negative diagnostics cannot refine into quota even when quota text follows',()=>{
   for (const id of [12,25,26]) {
     const [sourceId,kind,text]=examples.find(row=>row[0]===id);
-    assert.deepEqual(matchHealthNoticeText({error_details:`${text}. You've hit your weekly limit`}),{sourceId,kind});
+    assert.deepEqual(matchNotice({error_details:`${text}. You've hit your weekly limit`}),{sourceId,kind});
   }
 });
 test('active dialogs and broad non-diagnostic fragments do not authorize quota notices',()=>{
-  assert.deepEqual(matchHealthNoticeText({error_details:'Opus now uses usage credits'}),{sourceId:5,kind:'excluded'});
-  for (const text of ['Switch to another model to continue','Could not load my file','This service is disabled for your org','Fable limit reached · continuing on Opus uses usage credits','You have not hit your weekly limit']) assert.equal(matchHealthNoticeText({error_details:text}),null);
+  assert.deepEqual(matchNotice({error_details:'Opus now uses usage credits'}),{sourceId:5,kind:'excluded'});
+  for (const text of ['Switch to another model to continue','Could not load my file','This service is disabled for your org','Fable limit reached · continuing on Opus uses usage credits','You have not hit your weekly limit']) assert.equal(matchNotice({error_details:text}),null);
 });
 test('specific quota variants retain distinct source and kind',()=>{
   for (const [text,sourceId,kind] of [
@@ -75,7 +78,7 @@ test('specific quota variants retain distinct source and kind',()=>{
     ["You've hit your team's shared budget. /model to switch models.",4,'quota'],
     ["You've hit your usage limit · resets 3pm",0,'quota'],
     ['Your org is out of usage · add funds to continue',10,'excluded'],
-  ]) assert.deepEqual(matchHealthNoticeText({error_details:text}),{sourceId,kind});
+  ]) assert.deepEqual(matchNotice({error_details:text}),{sourceId,kind});
 });
 
 test('paid requirement and budget diagnostics never claim exhausted model quota',()=>{
@@ -84,7 +87,7 @@ test('paid requirement and budget diagnostics never claim exhausted model quota'
     ["You've hit your team's shared budget. /model to switch models.",'quota_exhausted'],
     ["You've hit your monthly spend limit. /model to switch models.",'quota_exhausted'],
   ]) {
-    const notice_match=matchHealthNoticeText({error_details:text});
+    const notice_match=matchNotice({error_details:text});
     const notice=classifyHealthNotice({error:'billing_error',notice_match,received_at:1000},1000);
     assert.equal(notice.eligible,true);assert.equal(notice.noticeCode,code);
     assert.equal(notice.resetAt,null);

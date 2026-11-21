@@ -1,3 +1,4 @@
+import { getRuntime } from '../../../../cli/lib/runtime/index.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -9,6 +10,8 @@ import { createDelivery } from '../../../comm-bridge/scripts/router/delivery.js'
 import { RuntimeHealthCoordinator } from '../runtime-health.js';
 import { SupervisorHealthObserver } from '../supervisor-health-observer.js';
 import { MessageRouter } from '../message-router.js';
+
+const hookHealth = (await getRuntime('claude')).health.hookHealth;
 
 // Boundary: real inbound routing, startup admission, health probe settlement,
 // scheduler/delivery and SQLite ledger; fake clock, process launch and probe ACK.
@@ -46,7 +49,7 @@ for (const recovered of [true, false]) {
     const oldIdentity = { runtime: 'claude', session_id: 'old-session', claude_pid: 44 };
     const hook = await health.consumeHook('claude', { schema_version: 1, source: 'hook', ...oldIdentity,
       event_id: randomUUID(), prompt_id: 'old-prompt', event: 'stop_failure', error: 'rate_limit', received_at: f.now() },
-    { identity: oldIdentity, sessionGroup: 'chat' });
+    { hookHealth, identity: oldIdentity, sessionGroup: 'chat' });
     assert.equal(hook.status, 'processed');
     assert.equal(hook.state.health, 'rate_limited');
     const state = health.store('claude').read();

@@ -1,6 +1,6 @@
 # Hook Message Refinements
 
-`matchHealthNoticeText(payload)` is a pure classifier. It returns null or a
+`matchHealthNoticeText(payload, rules)` is a pure classifier. It returns null or a
 sanitized `{sourceId, kind}`; it never returns text, model names or reset times.
 The caller applies the structured error and trusted quota-window checks first.
 A match cannot establish delivery ownership, health, recovery or quota proof.

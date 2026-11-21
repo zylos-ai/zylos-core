@@ -1154,23 +1154,23 @@ test('AGY running subagent survives later main hooks until an idle replacement',
 // Boundary: existing delivery IPC → AM clears an orphan running continuation →
 // later native failure can retry again. Run for continuation/notification changes;
 // private socket/files, injected DB/clock/scenes, no native runtime or network.
-test('ordinary delivery releases a running continuation and a later failure can retry', {timeout:5000}, async t=>{
+for (const runtime of ['claude','agy']) test(`ordinary delivery releases a running ${runtime} continuation and a later failure can retry`, {timeout:5000}, async t=>{
  const group='telegram:message',control={id:19,status:'running'};let now=1000000;
  const f=fixture(t,{now:()=>now,database:{
   getControlById:id=>id===control.id?control:null,
   expireControlById:id=>{assert.equal(id,19);control.status='timeout';}
  }});
  const {supervisor,scenes}=f;
- scenes.readRun=async()=>({runId:'r',runtime:'claude'});supervisor.admission.openEntry();
+ scenes.readRun=async()=>({runId:'r',runtime});supervisor.admission.openEntry();
  // Keep unrelated observer/lifecycle work out of this notification boundary.
  supervisor.observer.notifyDelivered=()=>{};supervisor.lifecycle.messageDelivered=()=>{};supervisor.lifecycle.workDelivered=async()=>{};
- const store=supervisor.health.store('claude');
+ const store=supervisor.health.store(runtime);
  store.write({...store.read(group),failure_retry:{runId:'r',sessionId:'s',pid:123,
   eventId:'11111111-1111-4111-8111-111111111111',failedAt:999000,dueAt:1029000,
   attempts:2,notice:null,controlId:19}},group);
  const send=await deliverySocket(t,f);
  const notification={version:2,type:'notify_delivered',requestId:'older-message',conversationId:7,
-  sessionGroup:group,runId:'r',runtime:'claude',pastedAt:998000};
+  sessionGroup:group,runId:'r',runtime,pastedAt:998000};
  await send(notification);
  assert.equal(store.read(group).failure_retry.controlId,19,'a message pasted before failure does not cancel');
  await send({...notification,requestId:'new-message',conversationId:8,pastedAt:1000000});
@@ -1178,13 +1178,15 @@ test('ordinary delivery releases a running continuation and a later failure can 
  const {HealthEventReader}=await import('../health-event-reader.js');
  const {processFailureContinuation}=await import('../failure-continuation.js');
  const {appendEvent}=await import('../../../../cli/lib/event-log.js');
- const scene={sessionGroup:group,runId:'r',sessionId:'s',runtime:'claude',ready:true,runDir:path.join(f.root,'run')};
+ const scene={sessionGroup:group,runId:'r',sessionId:'s',runtime,ready:true,runDir:path.join(f.root,'run')};
  appendEvent(path.join(scene.runDir,'events.jsonl'),{v:1,type:'runtime_health',schema_version:1,source:'hook',
-  runtime:'claude',run_id:'r',session_id:'s',claude_pid:123,event:'stop_failure',error:'server_error',
-  event_id:'22222222-2222-4222-8222-222222222222',prompt_id:'new-prompt',received_at:1001000,ts:1001000});
+  runtime,run_id:'r',session_id:'s',claude_pid:123,event:'stop_failure',error:'server_error',
+  event_id:'22222222-2222-4222-8222-222222222222',prompt_id:runtime==='claude'?'new-prompt':null,received_at:1001000,ts:1001000});
  now=1001000;
  const reader=new HealthEventReader({coordinator:supervisor.health,zylosDir:f.root,now:()=>1001000,quota:()=>null});t.after(()=>reader.close());
- await reader.consumeScene(scene,{runtime:'claude',session_id:'s',claude_pid:123});
+ const {getRuntime}=await import('../../../../cli/lib/runtime/index.js');
+ const {hookHealth}=(await getRuntime(runtime)).health;
+ await reader.consumeScene(scene,{runtime,session_id:'s',claude_pid:123},{hookHealth});
  await processFailureContinuation({store,scene,identity:async()=>scene,now:()=>1001000,
   bindTarget:async()=>({expectedRunId:'r',tmuxTarget:{serverGeneration:'g',sessionId:'$1',paneId:'%1'}}),
   insertControl:()=>({id:20})});

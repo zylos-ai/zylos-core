@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { detectApiErrorText } from '../heartbeat/api-error-patterns.js';
+import { detectApiErrorText } from '../shared/api-error-patterns.js';
 
 describe('heartbeat API error patterns', () => {
   it('detects many-image dimension limit errors', () => {

@@ -1,3 +1,4 @@
+import { getRuntime } from '../../../../cli/lib/runtime/index.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -13,6 +14,8 @@ import { freezeFirstFailureNotice, processFirstFailureNotices } from '../../../c
 import { HealthStore } from '../health-store.js';
 import { RuntimeHealthCoordinator } from '../runtime-health.js';
 import { publishSessionStatus } from '../status-writer.js';
+
+const hookHealth = (await getRuntime('claude')).health.hookHealth;
 function root(t) {const dir=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-reason-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
 const allowed=['rate_limit_unclassified','rate_limit_five_hour','rate_limit_seven_day','authentication_failed','billing_error','overloaded','server_error','model_not_found','hook_evidence_unordered','health_storage_unavailable'];
 // health-reason-roundtrip: actual serialization, new owner and projection.
@@ -34,8 +37,8 @@ test('recovery clears current reason while frozen historical notice keeps origin
  let now=1000000;const identity={runtime:'claude',session_id:'s',claude_pid:123};
  const store=new HealthStore({zylosDir,now:()=>now,freezeNotice:input=>freezeFirstFailureNotice(database,{...input,sessionGroup:null})});
  const event={schema_version:1,source:'hook',runtime:'claude',event_id:randomUUID(),session_id:'s',claude_pid:123,prompt_id:'p',event:'stop_failure',error:'authentication_failed',received_at:now};
- store.consume(event,{identity,authConfirmed:true});const failed=store.read();const pending=failed.pending_notice;
- now++;store.consume({...event,event_id:randomUUID(),event:'stop',error:null,received_at:now},{identity});assert.equal(store.read().health,'auth_failed');
+ store.consume(event,{hookHealth, identity,authConfirmed:true});const failed=store.read();const pending=failed.pending_notice;
+ now++;store.consume({...event,event_id:randomUUID(),event:'stop',error:null,received_at:now},{hookHealth, identity});assert.equal(store.read().health,'auth_failed');
  now++;store.transition('ok','authentication_failed',{identity,kind:'recovery'});
  const rebuilt=new HealthStore({zylosDir,now:()=>now});const recovered=rebuilt.read();
  const verify=state=>{assert.equal(state.health,'ok');assert.equal(state.reason,'');assert.deepEqual(state.hook_failure,failed.hook_failure);assert.equal(state.pending_notice.reason,pending.reason);assert.equal(state.pending_notice.endpoint,'original');};
