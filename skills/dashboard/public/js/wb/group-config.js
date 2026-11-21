@@ -1,4 +1,4 @@
-import { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES, runtimesWith } from '../../runtime-descriptors.js';
+import { SUPPORTED_RUNTIMES, runtimesWith } from '../../runtime-descriptors.js';
 import { element, icon, runtimeName } from './plain-text.js';
 
 export function responseError(value, fallback = 'request_failed') {
@@ -227,7 +227,7 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
     value, label: value === 'inherit' ? t('wb.config.followGlobal') : runtimeName(value),
   })), state.draft.runtime ?? savedRuntime);
   runtime.disabled = locked;
-  const resolved = engine?.data?.resolved?.runtime ?? DEFAULT_RUNTIME;
+  const resolved = engine?.data?.resolved?.runtime;
   const target = runtime.value === 'inherit' ? defaultRuntime ?? (savedRuntime === 'inherit' ? resolved : null) : runtime.value;
   const supportsModelOverride = !runtimesWith('modelOverride', 'unsupported').includes(target);
   const start = savedPair(state.value, target);
