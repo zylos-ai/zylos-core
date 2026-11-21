@@ -56,6 +56,11 @@ async function startPage(sandbox, signal) {
         res.write(`event: chat_ready\ndata: ${JSON.stringify({ version: 1, tab: stream.tab, conversationId: stream.conversationId, ids: [] })}\n\n`);
         req.on('close', () => streams.delete(stream)); return;
       }
+      if (route === '/api/groups/' + encodeURIComponent(group) && row && !row.draft) {
+        sendJson(res, 200, { id: group, sessionGroup: group, state: { kind: 'offline' }, presence: 'offline',
+          target: { runtime: 'claude', model: 'opus', effort: 'high' } });
+        return;
+      }
       if (route.startsWith('/api/')) {
         const value = workbenchAnswer(url, Date.now());
         sendJson(res, value === undefined ? 404 : 200, value ?? { error: 'not_found' }); return;
@@ -132,6 +137,8 @@ export async function runConversationCreateBrowser(t, sandbox, { signal }) {
     await page.locator('.conversation-header h2:visible').filter({ hasText: '未命名对话' }).waitFor();
     assert.equal(api.writes.length, 1, 'one click issues exactly one draft creation');
     assert.equal(api.writes[0].route, '/api/chat/drafts');
+    await page.locator('.conversation-input').focus();
+    assert.equal(await page.locator('.conversation-config-button').isVisible(), false);
     assert.equal(Object.keys(api.writes[0].body).length, 0, 'creation does not supply a name');
     assert.equal(await page.locator('.conversation-create-form input').count(), 0);
     await page.locator('.conversation-input:visible').waitFor({ state: 'visible' });
