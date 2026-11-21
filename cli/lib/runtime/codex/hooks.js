@@ -8,6 +8,7 @@ import { parse as parseDotEnv } from 'dotenv';
 import { SIDE_EFFECT_NAMES, buildChain } from '../../../../skills/activity-monitor/scripts/shard-registry.js';
 import { extractScriptPath, hookEntryTarget, HOOK_ENTRY_SCRIPT } from '../../hook-utils.js';
 import { UNSUPPORTED } from '../contract.js';
+import { selectToolInput } from '../shared/tool-input.js';
 
 const ZYLOS_DIR = path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
 
@@ -1007,4 +1008,10 @@ export const hooks = Object.freeze({
   stage: UNSUPPORTED,
   writeConfig: syncCodexConfig,
   installHooks: installCoreCodexHook,
+  normalize: payload => payload,
+  output: ({ event, result }) => event === 'SessionStart' && typeof result?.text === 'string' ? result.text : '',
+  toolInput: selectToolInput,
+  mainSession: UNSUPPORTED,
+  readSessionSource: UNSUPPORTED,
+  toolGuard: UNSUPPORTED,
 });

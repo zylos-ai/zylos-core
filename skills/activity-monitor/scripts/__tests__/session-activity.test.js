@@ -36,9 +36,9 @@ test('native status retained, single run writes origin with identity',t=>{
  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root,'activity-monitor/session-groups/origin/statusline.json'))),sample);
  assert.equal(fs.existsSync(path.join(root,'activity-monitor/cost-log.jsonl')),false);
 });
-test('hook retains subagent facts and selected tool inputs without prompt/output',t=>{
+test('hook retains subagent facts and selected tool inputs without prompt/output',async t=>{
  const {root}=fixture(t);const env={ZYLOS_DIR:root,ZYLOS_RUN_ID:'r',ZYLOS_MODEL_CONFIG:'{"runtime":"codex"}'};
- const record=handleHookActivity({hook_event_name:'PreToolUse',session_id:'s',agent_id:'sub',tool_name:'Bash',tool_use_id:'t',tool_input:{command:'ls',secret:'omit'},prompt:'omit',tool_response:'omit'},{env,nowMs:123});
+ const record=await handleHookActivity({hook_event_name:'PreToolUse',session_id:'s',agent_id:'sub',tool_name:'Bash',tool_use_id:'t',tool_input:{command:'ls',secret:'omit'},prompt:'omit',tool_response:'omit'},{env,nowMs:123});
  assert.equal(record.runtime,'codex');assert.equal(record.agent_id,'sub');assert.deepEqual(record.tool_input,{command:'ls'});assert.equal(record.session_group,'origin');assert.equal('prompt' in record,false);
 });
 
@@ -905,12 +905,12 @@ test('AGY closed-turn task sample cannot exempt the next quiet turn',t=>{
 // Boundary: native StopFailure registration feeds the same terminal reducer as
 // Stop. Late hooks cannot start a turn; a currently running tool remains busy.
 // Run for Claude turn boundaries; private files, no runtime/tmux/database.
-test('Claude terminal hooks close one turn and late hooks do not start another',t=>{
+test('Claude terminal hooks close one turn and late hooks do not start another',async t=>{
  for(const hook_event_name of ['Stop','StopFailure']) {
   const {root,activity,row}=fixture(t);
   activity.consume([row('prompt'),row('prompt',{ts:300})]);
   assert.equal(activity.turnStartedAt,200,'input queued in the old turn is not a new start');
-  const terminal=handleHookActivity({hook_event_name,session_id:'s'},
+  const terminal=await handleHookActivity({hook_event_name,session_id:'s'},
    {env:{ZYLOS_DIR:root,ZYLOS_RUN_ID:'r',ZYLOS_MODEL_CONFIG:'{"runtime":"claude"}'},nowMs:500});
   assert.equal(terminal.event,'stop');
   activity.consume([terminal]);

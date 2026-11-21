@@ -146,8 +146,13 @@
   },
   {
     "file": "skills/activity-monitor/scripts/agy-hooks.js",
-    "text": "const agyRuntime = await getRuntime('agy');",
-    "reason": "dispatch:hooks: Selects the implementation for the Antigravity native hook entrypoint."
+    "text": "agyRuntime = await getRuntime('agy');",
+    "reason": "hook-entry: Resolves the implementation for this fixed native hook entrypoint."
+  },
+  {
+    "file": "skills/activity-monitor/scripts/agy-tool-guard.js",
+    "text": "return getRuntime('agy');",
+    "reason": "hook-entry: Resolves the implementation for this fixed native hook entrypoint."
   },
   {
     "file": "skills/activity-monitor/scripts/context-monitor.js",
@@ -185,9 +190,9 @@
     "reason": "dispatch:health: Validates identity for Claude statusline quota evidence."
   },
   {
-    "file": "skills/activity-monitor/scripts/hook-auth-prompt.js",
-    "text": "'--target-run', env.ZYLOS_RUN_ID, '--expected-runtime', 'claude',",
-    "reason": "dispatch:hooks: Binds the native Claude hook to its expected runtime."
+    "file": "skills/activity-monitor/scripts/hook-activity.js",
+    "text": "const runtime = env.ZYLOS_MODEL_CONFIG ? JSON.parse(env.ZYLOS_MODEL_CONFIG).runtime : 'claude';",
+    "reason": "legacy: Only Claude produced hook events for the pre-run single-session location."
   },
   {
     "file": "skills/activity-monitor/scripts/outage-notice.js",

@@ -1,0 +1,14 @@
+{
+  "program": "Codex CLI",
+  "version": "codex-cli 0.169.1",
+  "recordedAt": "2026-11-21T07:32:47.686Z",
+  "how": "Captured native hook stdin as the dedicated test OS user in a temporary HOME and CODEX_HOME (Asia/Singapore). Trusted the capture hooks through the Codex app server and ran one real print-mode turn with the official Responses API over HTTP, prompting gpt-5.4-mini to execute printf fixture-codex. The CLI reported the native hook tool name Bash. The same CLI captured source clear after /clear and a synthetic turn in a private interactive tmux session.",
+  "files": {
+    "session-start-startup.json": "Native SessionStart from the captured turn.",
+    "user-prompt-submit.json": "Synthetic user prompt requesting a single shell command.",
+    "pre-tool-use.json": "Native PreToolUse for the shell command, emitted as Bash.",
+    "post-tool-use.json": "Matching native PostToolUse for the shell command.",
+    "stop.json": "Native Stop after the shell turn.",
+    "session-start-clear.json": "Native SessionStart after /clear and the first prompt in the new conversation."
+  }
+}

@@ -16,8 +16,12 @@ const reasons = [
   'dispatch:upgrade', 'dispatch:auth', 'dispatch:launch', 'dispatch:instructions',
   'dispatch:delivery', 'dispatch:hooks', 'dispatch:context', 'dispatch:usage',
   'dispatch:health', 'dispatch:dashboard', 'else-fallback', 'gap', 'inconsistent',
-  'legacy', 'text', 'sql-check', 'tool-use',
+  'legacy', 'text', 'sql-check', 'tool-use', 'hook-entry',
 ];
+const nativeHookEntries = new Map([
+  ['skills/activity-monitor/scripts/agy-hooks.js', "agyRuntime = await getRuntime('agy');"],
+  ['skills/activity-monitor/scripts/agy-tool-guard.js', "return getRuntime('agy');"],
+]);
 const ids = SUPPORTED_RUNTIMES.join('|');
 const runtimeLiteral = new RegExp("(['\"`])(?:" + ids + ")\\1|(?:^|[^a-zA-Z0-9_$.-])(?:" + ids + ')\\s*:');
 const registryFile = 'cli/lib/runtime/descriptors.js';
@@ -60,6 +64,9 @@ test('hard-coded runtime IDs match the exemption inventory', () => {
   for (const { file, text, reason } of exemptions) {
     if (typeof reason !== 'string' || !reasons.some(prefix => reason === prefix || reason.startsWith(`${prefix}: `))) {
       violations.push(`${file}: invalid exemption reason ${JSON.stringify(reason)} for ${text}`);
+    }
+    if (typeof reason === 'string' && reason.split(': ')[0] === 'hook-entry' && nativeHookEntries.get(file) !== text) {
+      violations.push(`${file}: hook-entry only exempts native entrypoint runtime selection: ${text}`);
     }
     const key = exemptionKey(file, text);
     pending.set(key, (pending.get(key) ?? 0) + 1);

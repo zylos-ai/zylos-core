@@ -1,0 +1,17 @@
+{
+  "program": "agy",
+  "version": "1.5.13",
+  "recordedAt": "2026-11-21T07:19:08.695Z",
+  "how": "Captured native hook stdin as a non-root user in an isolated k3s Linux arm64 sandbox (Asia/Singapore). Used the Core kick prompt, run_command including a nonzero exit, and /compact in print mode. For the 401 capture, used a dummy key against a loopback HTTP fixture returning 401 UNAUTHENTICATED. Retained payload fields as emitted.",
+  "files": {
+    "session-start-kick.json": "SessionStart from the same literal kick prompt used by Core.",
+    "pre-invocation-first.json": "Initial invocation after the kick.",
+    "pre-invocation-later.json": "Second invocation following a tool result.",
+    "stop-idle.json": "Normal fully idle Stop after the kick.",
+    "stop-auth-error.json": "Native Stop after the isolated loopback endpoint returned HTTP 401 UNAUTHENTICATED.",
+    "stop-custom-hook.json": "Native Stop after /compact.",
+    "pre-tool-use.json": "PreToolUse for the fixture run_command.",
+    "post-tool-use.json": "Native PostToolUse for run_command with an empty error field.",
+    "post-tool-use-nonzero-exit.json": "Matching native PostToolUse after the fixture command exited 7. The native error field is empty."
+  }
+}

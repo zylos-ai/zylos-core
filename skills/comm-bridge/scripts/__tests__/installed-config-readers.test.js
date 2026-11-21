@@ -81,43 +81,25 @@ test('installed read-only consumers work without Core, never invoke npm, and ret
   }
 });
 
-test('installed auth hook honors runtime and approval switch without Core or npm', t => {
+test('installed auth hook skips ineligible requests without Core or npm and rejects unreadable config', t => {
   const fx = fixture(t);
   fs.unlinkSync(path.join(fx.bin, 'npm'));
   const hook = path.join(fx.skills, 'activity-monitor/scripts/hook-auth-prompt.js');
   const payload = { hook_event_name: 'PermissionRequest', session_id: 'session-1', tool_name: 'Bash' };
-  const run = () => evaluate(fx, `
-    import { approvePermission } from ${JSON.stringify(pathToFileURL(hook).href)};
-    await approvePermission(${JSON.stringify(payload)}, {
-      env: { ...process.env, ZYLOS_RUN_ID: 'run-1', ZYLOS_MODEL_CONFIG: JSON.stringify({runtime:'claude'}) },
-      scopeReader: async () => ({sessionGroup:'lark:own'}),
-      identityReader: async () => ({runtime:'claude',runId:'run-1'}),
-    });
-  `);
-  for (const [config, shouldEnqueue] of [
-    [{}, true], [{ auto_approve_permission: false }, false],
-  ]) {
-    fs.rmSync(fx.flag, { force: true });
-    fs.writeFileSync(fx.file, JSON.stringify(config));
-    const result = run();
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(fs.existsSync(fx.flag), shouldEnqueue);
-    if (shouldEnqueue) assert.ok(JSON.parse(fs.readFileSync(fx.flag, 'utf8')).includes('[KEYSTROKE]Enter'));
-  }
-  // Installed disabled and unidentified hooks must not load Core at all.
+  const run = (input, env) => spawnSync(process.execPath, [hook], {
+    env: { ...fx.env, ...env }, input: JSON.stringify(input), encoding: 'utf8', timeout: 10000,
+  });
   for (const [config, input, env] of [
     [{}, {}, {}],
-    [{auto_approve_permission:false}, payload, {ZYLOS_RUN_ID:'run-1',ZYLOS_MODEL_CONFIG:'{"runtime":"claude"}'}],
+    [{ auto_approve_permission: false }, payload, { ZYLOS_RUN_ID: 'run-1' }],
   ]) {
-    fs.rmSync(fx.flag, {force:true});
     fs.writeFileSync(fx.file, JSON.stringify(config));
-    const skipped = spawnSync(process.execPath, [hook], {env:{...fx.env,...env}, input:JSON.stringify(input), encoding:'utf8', timeout:10000});
+    const skipped = run(input, env);
     assert.equal(skipped.status, 0, skipped.stderr);
     assert.equal(fs.existsSync(fx.flag), false);
   }
-  fs.rmSync(fx.flag, { force: true });
   fs.writeFileSync(fx.file, '{');
-  const bad = run();
+  const bad = run(payload, { ZYLOS_RUN_ID: 'run-1' });
   assert.notEqual(bad.status, 0);
   assert.match(bad.stderr, /CONFIG_UNREADABLE/);
   assert.equal(fs.existsSync(fx.flag), false);

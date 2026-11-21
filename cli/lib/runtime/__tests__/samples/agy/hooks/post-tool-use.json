@@ -1,0 +1,23 @@
+{
+  "artifactDirectoryPath": "/work/reviewer/.gemini/antigravity-cli/brain/0f3f6cba-eafa-46a7-a88f-e9fd951aba36",
+  "conversationId": "0f3f6cba-eafa-46a7-a88f-e9fd951aba36",
+  "cwd": "/work/reviewer/capture",
+  "error": "",
+  "hookEventName": "PostToolUse",
+  "lastUserInput": "Call run_command exactly once with CommandLine \"printf fixture\" and Cwd \"/work/reviewer/capture/blocked-workdir\" and WaitMsBeforeAsync 5000. It is expected to fail. Do not change the directory or retry. Reply DONE after the call.",
+  "modelName": "gemini-3.1-pro-low",
+  "stepIdx": 2,
+  "toolCall": {
+    "args": {
+      "CommandLine": "printf fixture",
+      "WaitMsBeforeAsync": 5000,
+      "toolSummary": "Run printf fixture"
+    },
+    "id": "call_668381494984885208",
+    "name": "run_command"
+  },
+  "transcriptPath": "/work/reviewer/.gemini/antigravity-cli/brain/0f3f6cba-eafa-46a7-a88f-e9fd951aba36/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/work/reviewer/capture"
+  ]
+}
