@@ -177,11 +177,11 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     for (const row of rows) {
       const observation = captured.get(row.sessionGroup);
       row.createdAt = observation?.identity.createdAt ?? null;
-      row.launchConfig = observation?.identity.launchConfig ?? null;
+      row.launchConfig = row.presence === 'starting' ? null : observation?.identity.launchConfig ?? null;
       row.tools = observation?.status.valid && Array.isArray(observation.status.value.active_tool_details) ? observation.status.value.active_tool_details.map(tool => ({
         id: tool.id, name: tool.name, detail: sanitizer.sanitizeToolDetail(tool.name, tool.input), startedAt: tool.startedAt,
       })) : [];
-      const usage = observation?.usage;
+      const usage = row.presence === 'starting' ? null : observation?.usage;
       const usageRuntime = observation?.identity.runtime;
       const context = usage?.valid && Object.hasOwn(thresholdPolicy.contexts, usageRuntime)
         ? thresholdPolicy.contexts[usageRuntime] : null;
@@ -203,8 +203,8 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       row.fence = row.queue.known === false ? null : row.queue.fence ?? q.data.globalFence;
       const selectedRuntime = ov.ok ? ov.data.runtime.find(item => item.sessionGroup === row.sessionGroup)?.runtime ?? ov.data.baseline.runtime : null;
       const selectedModel = ov.ok ? ov.data.model.find(item => item.sessionGroup === row.sessionGroup && item.runtime === selectedRuntime) : null;
-      row.target = ['running', 'starting'].includes(row.presence)
-        ? { runtime: observation?.identity.runtime ?? row.live?.runtime ?? null, model: !row.launchConfig ? null : row.launchConfig.mode === 'override'
+      row.target = row.presence === 'starting' ? { runtime: null, model: null }
+        : row.presence === 'running' ? { runtime: observation?.identity.runtime ?? row.live?.runtime ?? null, model: !row.launchConfig ? null : row.launchConfig.mode === 'override'
           ? { model: row.launchConfig.model, effort: row.launchConfig.effort } : 'default',
           ...(row.launchConfig ? {} : { reason: 'launch_config_unreadable' }) }
         : ov.ok ? { runtime: selectedRuntime, model: selectedModel ? { model: selectedModel.model, effort: selectedModel.effort } : 'default' }

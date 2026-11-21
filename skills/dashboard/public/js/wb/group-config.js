@@ -31,6 +31,12 @@ export function runningText(data, kind, t = key => key) {
   return t('wb.config.' + ({ not_running: 'nextStart', pending: 'pending', applied: 'applied' }[running?.status] ?? 'resultUnknown'));
 }
 
+function restartText(restart, t) {
+  if (restart.status === 'accepted') return t('wb.actions.accepted');
+  const key = restart.status === 'unknown' ? 'wb.actions.unknown' : 'wb.actions.notSubmitted';
+  return t(key) + (restart.reason ? ' · ' + restart.reason : '');
+}
+
 export function validConfigChange(change) {
   return change?.kind === 'runtime' ? ['inherit', ...SUPPORTED_RUNTIMES].includes(change.value)
     : change?.kind === 'model' && runtimesWith('modelOverride').includes(change.runtime) &&
@@ -79,7 +85,7 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
   }
   return {
     state, load, loadMeta, loadThreshold, redraw: publish,
-    async save(changes, { confirm, restart } = {}) {
+    async save(changes, { confirm } = {}) {
       if (!active() || confirming || state.busy || !changes.length) return;
       if (!changes.every(validConfigChange)) {
         state.error = t('wb.config.pairRequired');
@@ -98,13 +104,13 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
       state.restartResult = '';
       publish();
       try {
-        let pending = false;
         let last;
         for (const change of changes) {
           let result;
           try {
             result = await request(`/api/groups/${encodeURIComponent(key)}/config`, {
-              method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(change),
+              method: 'PUT', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(confirm ? { ...change, confirmed: true } : change),
             });
           } catch (error) {
             if (error.name === 'AbortError' || !active()) return;
@@ -125,25 +131,20 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
           }
 
           const data = result.data ?? result;
-          pending ||= data.running?.status === 'pending';
+          if (data.restart) state.restartResult = restartText(data.restart, t);
           last = { data, kind: change.kind };
           rememberWrite(state, change, result);
-          if (change.kind === 'runtime') {
-            state.result = t(change.value === 'inherit' ? 'wb.config.followGlobalSaved' : 'wb.config.runtimeSaved');
-          }
+          state.result = t(change.kind === 'model' ? 'wb.config.modelSaved'
+            : change.value === 'inherit' ? 'wb.config.followGlobalSaved' : 'wb.config.runtimeSaved');
+          // If the effective engine changed elsewhere, Core may report a
+          // restart on the first write. Leave the remaining draft for review.
+          if (data.restart && change !== changes.at(-1)) return;
         }
 
         const followsGlobal = changes.some(change => change.kind === 'runtime' && change.value === 'inherit');
         const saved = t(followsGlobal ? 'wb.config.followGlobalSaved' : 'wb.config.saved');
         state.result = saved;
-        if (restart && pending) {
-          publish();
-          const outcome = await restart();
-          if (active()) state.restartResult = outcome;
-        } else {
-          const status = pending ? t('wb.config.pending') : runningText(last.data, last.kind, t);
-          state.result += ' · ' + status;
-        }
+        if (!state.restartResult) state.result += ' · ' + runningText(last.data, last.kind, t);
       } finally {
         if (active()) { state.busy = false; publish(); }
       }
@@ -281,7 +282,10 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
       edits.push(selected ? { kind: 'model', runtime: target, model: selected, effort: effort.value }
         : { kind: 'model', runtime: target, reset: true });
     }
-    return edits;
+    // Save the setting that can restart the group last. A model for an inactive
+    // engine is staged first, while an engine preference with the same effective
+    // engine can be saved before updating that engine's model.
+    return edits.length === 2 && target !== resolved ? edits.reverse() : edits;
   };
   const save = element(document, 'button', t('wb.config.save'), 'wb-btn wb-btn-primary wb-btn-sm');
   save.type = 'button';

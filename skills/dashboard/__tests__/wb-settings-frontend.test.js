@@ -16,7 +16,7 @@ registerHooks({
   },
 });
 const { composeSettings, createSettingsLoader, settingsSections, resetSettingsDrafts } = await import('../public/js/wb/settings.js');
-const { defaultGroups, modelFollowers, runtimeHealth, runtimeConfirmation, createOverrideSearch, renderDefaults, renderHotTtl, modelSaveConfirmation } = await import('../public/js/wb/settings-defaults.js');
+const { defaultGroups, modelFollowers, runtimeHealth, runtimeConfirmation, createOverrideSearch, renderDefaults: renderDefaultsCard, renderHotTtl, modelSaveConfirmation } = await import('../public/js/wb/settings-defaults.js');
 const { createPricingPanel, appendPriceRow, collectPriceRows, countPriceChanges, draftPriceRows, orderedPricePrefixes } = await import('../public/js/wb/settings-pricing.js');
 const { keyActionConfirmation, keyCounts, remoteStatus, renderKeyTable, renderRemoteAgents } = await import('../public/js/wb/settings-access.js');
 const { mountLanguageControl, mountThemeControl } = await import('../public/js/wb/settings-ui.js');
@@ -26,10 +26,12 @@ const t = (key, params = {}) => key + (Object.keys(params).length ? ':' + JSON.s
 const hotTtlMeta = (overrides = {}) => ({ session_hot_ttl: { seconds: 1800, minutes: 30, source: 'config', mode: 'multi', read_only: false,
   environment_set: false, environment_valid: false, min_minutes: 5, max_minutes: 1440, ...overrides } });
 function snapshot() {
-  return { baselineRuntime: 'claude', hasOlder: true, instance: { runtimeHealth: { codex: { health: 'auth_failed' }, claude: { health: 'missing' } } },
+  return { baselineRuntime: 'claude', hasOlder: true, listKnown: true, instance: { runtimeHealth: { codex: { health: 'auth_failed' }, claude: { health: 'missing' } } },
     overrides: { runtime: [{ sessionGroup: 'a', runtime: 'codex' }], model: [{ sessionGroup: 'b', runtime: 'claude' }] },
     rows: ['origin', 'a', 'b', 'c'].map(sessionGroup => ({ sessionGroup, presence: 'running', name: { displayName: 'Name ' + sessionGroup }, target: { runtime: sessionGroup === 'a' ? 'codex' : 'claude' } })) };
 }
+
+const renderDefaults = (root, options) => renderDefaultsCard(root, { readSnapshot: async () => options.snapshot, ...options });
 
 test('default lists use independent sources, include Origin, and never enumerate all overrides', () => {
   const data = snapshot(), value = defaultGroups(data, { runtimeTotal: 3, runtime: [] });
@@ -49,6 +51,7 @@ test('runtime health and interruption confirmation retain unknown and unavailabl
   assert.equal(runtimeHealth({ instance: { runtimeHealth: null } }, 'codex'), 'unknown');
   assert.match(runtimeConfirmation(data, t), /Name origin/); assert.doesNotMatch(runtimeConfirmation(data, t), /Name a\n/);
   assert.match(runtimeConfirmation({ ...data, overrides: null }, t), /cannotList/);
+  assert.match(runtimeConfirmation({ ...data, listKnown: false, rows: [] }, t), /cannotList/);
   const many = { ...data, overrides: { runtime: [] }, rows: Array.from({ length: 8 }, (_, i) => ({ sessionGroup: String(i), presence: 'running', name: { displayName: 'Group ' + i } })) };
   const text = runtimeConfirmation(many, t); assert.match(text, /Group 4/); assert.doesNotMatch(text, /Group 5/); assert.match(text, /moreGroups.*8/);
 });
@@ -244,7 +247,7 @@ test('default engine keeps the sign-in gate and model and effort save together p
   const effort = root.querySelector('#settings-effort-codex'); assert.equal(effort.value, '', 'the old effort is not offered by the new model');
   effort.value = 'low'; await effort.dispatch('change'); assert.equal(save.disabled, false);
   await save.dispatch('click');
-  assert.deepEqual(calls, [{ action: 'switch-model', body: { runtime: 'codex', model: 'two' } }, { action: 'switch-effort', body: { runtime: 'codex', effort: 'low' } }]);
+  assert.deepEqual(calls, [{ action: 'switch-model', body: { runtime: 'codex', model: 'two', confirmed: true } }, { action: 'switch-effort', body: { runtime: 'codex', effort: 'low' } }]);
   assert.equal(save.hidden, true, 'saved values become the new baseline');
   model.value = '__custom__'; await model.dispatch('change'); const custom = root.querySelector('#settings-model-custom-codex');
   assert.equal(custom.hidden, false); custom.value = 'unknown'; await custom.dispatch('input'); assert.equal(effort.disabled, true);
@@ -254,7 +257,14 @@ test('default engine keeps the sign-in gate and model and effort save together p
 test('changing the default engine is a draft until saved and the undo restores the current one', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
   const healthy = { ...snapshot(), instance: { runtimeHealth: { codex: { health: 'ok' }, claude: { health: 'ok' } } } };
-  const panel = renderDefaults(root, { confirm: async () => true, snapshot: healthy, page: { runtimeTotal: 1 }, document, t, read: async () => ({}), execute: async (action, body) => { calls.push({ action, body }); return true; } });
+  healthy.rows[0].run = { runId: 'run-origin' };
+  let rejection = "Fixture credentials were rejected";
+  const panel = renderDefaults(root, { confirm: async () => true, snapshot: healthy, page: { runtimeTotal: 1 }, document, t, read: async () => ({}), execute: async (action, body) => { calls.push({ action, body });
+    if (rejection) throw new Error(rejection);
+    return { ok: true, data: { baseline: 'codex', groups: [
+      { sessionGroup: 'origin', restart: { status: 'not_restarted', reason: 'fence_conflict' } },
+      { sessionGroup: 'c', restart: { status: 'unknown', reason: 'no_reply' } },
+    ] }, messageKey: 'result.runtime_saved', messageParams: { value: 'Codex' } }; } });
   const save = root.querySelector('#settings-save-runtime');
   assert.equal(save.hidden, true); assert.equal(root.querySelector('#settings-use-claude').getAttribute('aria-pressed'), 'true');
   await root.querySelector('#settings-use-codex').dispatch('click');
@@ -263,7 +273,20 @@ test('changing the default engine is a draft until saved and the undo restores t
   assert.equal(save.hidden, true, 'undo drops the draft'); assert.equal(root.querySelector('#settings-use-claude').getAttribute('aria-pressed'), 'true');
   assert.equal(root.querySelector('#settings-use-codex').getAttribute('aria-pressed'), 'false'); assert.equal(calls.length, 0);
   await root.querySelector('#settings-use-codex').dispatch('click');
-  await save.dispatch('click'); assert.deepEqual(calls, [{ action: 'switch-runtime', body: { runtime: 'codex' } }]);
+  await save.dispatch('click');
+  assert.match(root.textContent, /Fixture credentials were rejected/);
+  assert.equal(save.hidden, false, 'a failed save leaves the change as a draft');
+  rejection = null;
+  await save.dispatch('click');
+  assert.deepEqual(calls, Array.from({ length: 2 }, () => ({ action: 'switch-runtime', body: { runtime: 'codex', confirmed: true } })));
+  assert.match(root.textContent, /result.runtime_saved/);
+  const feedback = root.querySelector('#settings-engine-result').textContent;
+  assert.match(feedback, /savedRestartFailed.*Name origin.*fence_conflict/);
+  assert.match(feedback, /savedRestartUnknown.*Name c.*no_reply/);
+  assert.equal(save.hidden, true, 'successful save updates the baseline in the mounted card');
+  await root.querySelector('#settings-use-claude').dispatch('click');
+  await root.querySelector('#settings-undo-runtime').dispatch('click');
+  assert.equal(root.querySelector('#settings-use-codex').getAttribute('aria-pressed'), 'true');
   panel.destroy();
 });
 
@@ -289,7 +312,10 @@ test('the mounted default effort uses configured metadata and only saves a user 
     assert.equal(save.hidden, false); assert.equal(save.disabled, false);
     await save.dispatch('click');
     assert.deepEqual(calls, [{ action: 'switch-effort', body: { runtime: 'claude', effort: 'high' } }]);
+    assert.deepEqual(questions[0].split('\n').map(line => line.split(':')[0]),
+      ['wb.settings.confirmModels', 'wb.settings.effortNextStart', 'wb.settings.changeEffort']);
     assert.equal(questions.length, 1); assert.equal(save.hidden, true);
+    assert.equal(root.querySelector('#settings-model-result').textContent, 'wb.settings.defaultsSaved wb.settings.effortNextStart');
   } finally { panel.destroy(); }
 });
 async function draftBothEngines(root) {
@@ -307,12 +333,32 @@ test('saving model and effort for both engines asks once, lists every change and
   await draftBothEngines(root);
   await root.querySelector('#settings-save-models').dispatch('click');
   assert.equal(asked.length, 1, 'one confirmation for the whole card');
-  assert.equal(asked[0].split('\n').length, 5, 'a heading and the four changes');
+  assert.match(asked[0], /Name origin.*\nName c/);
+  assert.doesNotMatch(asked[0], /Name b/, 'model overrides are excluded');
+  assert.match(asked[0], /Name a/, 'the explicit engine still inherits its default model');
   assert.match(asked[0], /Minimal/); assert.doesNotMatch(asked[0], /effort\.minimal/);
   assert.equal(calls.length, 4); assert.ok(calls.every(call => call.options?.confirmed === true), 'no action asks again');
   assert.equal(root.querySelector('#settings-save-models').hidden, true);
   assert.equal(modelSaveConfirmation([{ runtime: 'claude', key: 'effort', value: 'max' }], tr).split('\n').length, 2);
   assert.match(modelSaveConfirmation([{ runtime: 'codex', key: 'model', value: 'two' }], (key, params) => params ? params.value : key, { codex: { models: [{ id: 'two', display_name: 'Two Pro' }] } }), /Two Pro/, 'models are named as the dropdown shows them'); panel.destroy();
+});
+
+test('saving an engine or model with no running followers skips confirmation', async () => {
+  const document = documentFixture(), root = document.createElement('div'), calls = [];
+  const data = snapshot();
+  data.rows = data.rows.filter(row => row.sessionGroup === 'a');
+  data.instance.runtimeHealth.codex.health = 'ok';
+  const panel = renderDefaults(root, { document, snapshot: data, metadata: { claude: effortMeta('claude') }, t, read: async () => ({}),
+    confirm: async () => assert.fail('the only running session has a runtime override'),
+    execute: async (action, body) => { calls.push({ action, body }); return true; } });
+  await root.querySelector('#settings-use-codex').dispatch('click');
+  await root.querySelector('#settings-save-runtime').dispatch('click');
+  assert.deepEqual(calls, [{ action: 'switch-runtime', body: { runtime: 'codex' } }]);
+  const model = root.querySelector('#settings-model-claude');
+  model.value = 'two'; await model.dispatch('change');
+  await root.querySelector('#settings-save-models').dispatch('click');
+  assert.deepEqual(calls.at(-1), { action: 'switch-model', body: { runtime: 'claude', model: 'two' } });
+  panel.destroy();
 });
 
 test('a defaults card wired without a confirmation runs no change', async () => {
@@ -351,7 +397,7 @@ test('cancelling the model confirmation sends nothing and shows no result', asyn
   const save = root.querySelector('#settings-save-models'), before = root.textContent;
   await save.dispatch('click');
   assert.equal(calls.length, 0); assert.equal(save.hidden, false, 'the drafts stay'); assert.equal(root.textContent, before, 'no result line appears');
-  assert.doesNotMatch(root.textContent, /wb\.settings\.(saveFailed|nextStart(?!Note)|partlySaved)/); panel.destroy();
+  assert.doesNotMatch(root.textContent, /wb\.settings\.(saveFailed|defaultsSaved|partlySaved)/); panel.destroy();
 });
 
 test('a model save that fails part way names what took effect and what did not', async () => {
@@ -584,13 +630,13 @@ test('failed pricing summary is unknown while a successful empty response is zer
   const empty = priceFixture(); const good = createPricingPanel({ ...empty, usage: { models: [], unmatched: [] }, write: async () => {}, t }); assert.match(empty.root.textContent, /\$0.0000/); good.destroy();
 });
 
-test('default followers include starting and exclude absent or unknown presence per runtime override', () => {
+test('default engine confirmation counts only running followers while model followers can include starts', () => {
   const data=snapshot(); data.rows.push(
     {sessionGroup:'starting',presence:'starting',target:{runtime:'claude'}},
     {sessionGroup:'gone',presence:'not_running',target:{runtime:'claude'}},
     {sessionGroup:'unknown',presence:'unknown',target:{runtime:'claude'}});
   data.overrides.model.push({sessionGroup:'starting',runtime:'codex'});
-  assert.deepEqual(defaultGroups(data).followers.map(r=>r.sessionGroup),['origin','b','c','starting']);
+  assert.deepEqual(defaultGroups(data).followers.map(r=>r.sessionGroup),['origin','b','c']);
   assert.deepEqual(modelFollowers(data,'claude').map(r=>r.sessionGroup),['origin','c','starting']);
 });
 test('clearing pending override debounce cancels the request after 300 milliseconds', context => {
@@ -803,7 +849,7 @@ test('model thresholds switch with the selected model and save an explicit engin
   threshold.value = '10'; await threshold.dispatch('input'); assert.equal(save.disabled, false);
   threshold.value = '35'; await threshold.dispatch('input'); assert.equal(save.disabled, false);
   await save.dispatch('click');
-  assert.deepEqual(calls, [{ action: 'switch-model', body: { runtime: 'claude', model: 'opus[1m]' } },
+  assert.deepEqual(calls, [{ action: 'switch-model', body: { runtime: 'claude', model: 'opus[1m]', confirmed: true } },
     { action: 'set-threshold', body: { runtime: 'claude', model: 'opus[1m]', value: 35 } }]);
   assert.equal(save.hidden, true);
   model.value = 'opus'; await model.dispatch('change'); assert.equal(threshold.value, '70', 'the other model remains unchanged');
@@ -855,8 +901,9 @@ test('threshold-only save reports next-decision effect in both interface languag
     const threshold = root.querySelector('#settings-threshold-claude');
     threshold.value = '60'; await threshold.dispatch('input');
     await root.querySelector('#settings-save-models').dispatch('click');
-    assert.ok(root.textContent.includes(messages['wb.settings.nextStart']));
-    assert.match(messages['wb.settings.nextStart'], locale === 'en' ? /Thresholds apply at the next rotation decision/ : /阈值在下一轮换会话判断生效/);
+    assert.equal(root.querySelector('#settings-model-result').textContent, locale === 'en'
+      ? 'Saved. Thresholds apply at the next rotation decision.'
+      : '已保存。 阈值在下一轮换会话判断生效。');
     panel.destroy();
   }
 });

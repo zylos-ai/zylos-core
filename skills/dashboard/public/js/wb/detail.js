@@ -312,14 +312,20 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
   }
   function saveConfig(changes) {
     if (!getWritable() || !state.row) return;
-    // Bind the restart to the run shown when the user chose to save.
-    const row = state.row;
-    if (!hasRunningTarget(row)) return config.save(changes);
-    return config.save(changes, {
-      confirm: () => confirmRestart({
-        title: 'wb.config.saveRestartTitle', body: 'wb.config.saveRestartConfirm', ok: 'wb.config.saveRestart',
-      }),
-      restart: () => submitAction('restart', row),
+    const row = state.row, editor = config, gen = generation;
+    if (!hasRunningTarget(row)) return editor.save(changes);
+    return editor.save(changes, {
+      confirm: async () => {
+        const confirmed = await confirmRestart({
+          title: 'wb.config.saveRestartTitle', body: 'wb.config.saveRestartConfirm', ok: 'wb.config.saveRestart',
+        });
+        if (!confirmed || !active(gen) || !getWritable()) return false;
+        const currentRunId = state.row.live?.runId;
+        if (currentRunId === row.live.runId) return true;
+        editor.state.error = t('wb.actions.staleTarget', { runId: currentRunId ?? '' });
+        editor.redraw();
+        return false;
+      },
     });
   }
   // Both surfaces keep their own drafts. Reread the saved settings in the other

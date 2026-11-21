@@ -222,6 +222,58 @@ export class HistoryService {
     return { matches, before: cursor, hasMore: at >= 0 };
   }
 
+  async scopedService(group, scope, route) {
+    const key = `${group}:${scope.runtime}`;
+    let cached = this.scopedParsers.get(key);
+    // A pending discovery is shared before checking its completed version.
+    const pending = cached?.pending;
+    if (cached) {
+      try { await cached.snapshot; }
+      catch (error) {
+        if (this.scopedParsers.get(key) === cached) this.scopedParsers.delete(key);
+        throw error;
+      }
+    }
+    const discovery = cached?.parser.discoveryVersion ? await cached.parser.discoveryVersion() : null;
+    // Another request may have published a replacement while this one awaited stat.
+    const latest = this.scopedParsers.get(key);
+    if (latest !== cached && latest?.revision === scope.revision && latest.currentSessionId === scope.currentSessionId) {
+      cached = latest;
+    } else if (!cached || cached.revision !== scope.revision || cached.currentSessionId !== scope.currentSessionId || cached.discovery !== discovery
+        || (route === 'sessions' && !pending)) {
+      const Parser = parserForRuntime(scope.runtime);
+      const parser = new Parser({ ...scope, zylosDir: this.config.zylosDir, store: this.store, indexCache: this.parser.indexCache });
+      if (cached?.parser) {
+        parser.metadataCache = cached.parser.metadataCache;
+        if (parser.metadataLoads) parser.metadataLoads = cached.parser.metadataLoads;
+      }
+      const next = { parser, revision: scope.revision, currentSessionId: scope.currentSessionId, pending: true };
+      next.snapshot = parser.listSessions().then(listing => {
+        next.discovery = parser.discoverySnapshot ?? null;
+        next.pending = false;
+        return { parser, listing, paths: parser.paths };
+      });
+      cached = next;
+    }
+    this.scopedParsers.delete(key);
+    this.scopedParsers.set(key, cached);
+    while (this.scopedParsers.size > 8) this.scopedParsers.delete(this.scopedParsers.keys().next().value);
+    let snapshot;
+    try { snapshot = await cached.snapshot; }
+    catch (error) {
+      if (this.scopedParsers.get(key) === cached) this.scopedParsers.delete(key);
+      throw error;
+    }
+    const { parser, listing, paths } = snapshot;
+    const service = Object.create(this);
+    service.runtime = scope.runtime;
+    // Discovery and paths belong to one group/runtime/import generation.
+    // Each request keeps that snapshot even while another import refreshes it.
+    service.parser = Object.assign(Object.create(parser), scope, { paths, loads: new Map(),
+      listSessions: async () => ({ ...listing, current: paths.has(scope.currentSessionId) ? scope.currentSessionId : null }) });
+    return service;
+  }
+
   async handle(req, res, url) {
     const route = url.pathname.slice('/api/observer/history/'.length);
     try {
@@ -229,55 +281,22 @@ export class HistoryService {
       if (req.method !== 'GET') throw new HistoryError(404, 'not_found');
       let service = this;
       if (this.resolveScope) {
-        const scope = await this.resolveScope(url.searchParams);
-        const key = `${url.searchParams.get('session_group') ?? 'origin'}:${scope.runtime}`;
-        let cached = this.scopedParsers.get(key);
-        // A pending discovery is shared before checking its completed version.
-        const pending = cached?.pending;
-        if (cached) {
-          try { await cached.snapshot; }
-          catch (error) {
-            if (this.scopedParsers.get(key) === cached) this.scopedParsers.delete(key);
-            throw error;
-          }
+        const scope = await this.resolveScope(url.searchParams, route);
+        const group = url.searchParams.get('session_group') ?? 'origin';
+        const scopes = scope.scopes ?? [scope];
+        if (route === 'sessions') {
+          const listings = await Promise.all(scopes.map(async candidate =>
+            (await this.scopedService(group, candidate, route)).sessions()));
+          const current = listings.find(listing => listing.current)?.current ?? null;
+          const sessions = listings.flatMap(listing => listing.sessions);
+          if (listings.length > 1) sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+          sendJson(res, 200, { runtime: scope.runtime, current, sessions });
+          return true;
         }
-        const discovery = cached?.parser.discoveryVersion ? await cached.parser.discoveryVersion() : null;
-        // Another request may have published a replacement while this one awaited stat.
-        const latest = this.scopedParsers.get(key);
-        if (latest !== cached && latest?.revision === scope.revision) {
-          cached = latest;
-        } else if (!cached || cached.revision !== scope.revision || cached.discovery !== discovery
-            || (route === 'sessions' && !pending)) {
-          const Parser = parserForRuntime(scope.runtime);
-          const parser = new Parser({ ...scope, zylosDir: this.config.zylosDir, store: this.store, indexCache: this.parser.indexCache });
-          if (cached?.parser) {
-            parser.metadataCache = cached.parser.metadataCache;
-            if (parser.metadataLoads) parser.metadataLoads = cached.parser.metadataLoads;
-          }
-          const next = { parser, revision: scope.revision, pending: true };
-          next.snapshot = parser.listSessions().then(listing => {
-            next.discovery = parser.discoverySnapshot ?? null;
-            next.pending = false;
-            return { parser, listing, paths: parser.paths };
-          });
-          cached = next;
+        for (const candidate of scopes) {
+          service = await this.scopedService(group, candidate, route);
+          if (service.parser.paths.has(url.searchParams.get('session'))) break;
         }
-        this.scopedParsers.delete(key);
-        this.scopedParsers.set(key, cached);
-        while (this.scopedParsers.size > 8) this.scopedParsers.delete(this.scopedParsers.keys().next().value);
-        let snapshot;
-        try { snapshot = await cached.snapshot; }
-        catch (error) {
-          if (this.scopedParsers.get(key) === cached) this.scopedParsers.delete(key);
-          throw error;
-        }
-        const { parser, listing, paths } = snapshot;
-        service = Object.create(this);
-        service.runtime = scope.runtime;
-        // Discovery and paths belong to one group/runtime/import generation.
-        // Each request keeps that snapshot even while another import refreshes it.
-        service.parser = Object.assign(Object.create(parser), scope, { paths, loads: new Map(),
-          listSessions: async () => ({ ...listing, current: paths.has(scope.currentSessionId) ? scope.currentSessionId : null }) });
       }
       const result = route === 'sessions' ? await service.sessions() : await service[route](url.searchParams);
       if (result.binary) {

@@ -39,6 +39,7 @@ export function createGroupConfig({ zylosDir, execute = promisify(execFile), env
       if (typeof change.value !== 'string' || !change.value) {
         return { ok: false, error: { code: 'INVALID_ARGUMENT', message: 'A runtime is required' } };
       }
+      if (change.confirmed === true) args.push('--yes');
       return command(args);
     }
     if (change?.kind === 'model') {
@@ -50,6 +51,7 @@ export function createGroupConfig({ zylosDir, execute = promisify(execFile), env
         ? ['group', 'model', 'reset', '--group', key, '--runtime', change.runtime, '--json']
         : ['group', 'model', 'set', '--group', key, '--runtime', change.runtime,
           '--model', change.model, '--effort', change.effort, '--json'];
+      if (change.confirmed === true) args.push('--yes');
       return command(args);
     }
     return { ok: false, error: { code: 'INVALID_ARGUMENT', message: 'Submit one runtime or model change' } };

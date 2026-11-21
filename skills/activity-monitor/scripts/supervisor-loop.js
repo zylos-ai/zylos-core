@@ -155,7 +155,7 @@ export class SupervisorLoop {
         context.transition = await authority(() => d.getModeTransition());
       }
       if (!context.transition && !context.configuration.legacy) {
-        for (const phase of ['advanceManual', 'advanceRestarts', 'reconcileConfiguration']) {
+        for (const phase of ['advanceManual', 'advanceRestarts']) {
           try { await d[phase](context); }
           catch (error) { await d.reportError(error, { phase }); }
         }

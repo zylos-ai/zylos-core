@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { executeRuntimeSwitch, runtimeCommand, observeRuntimeGroups } from '../../commands/runtime.js';
+import { executeRuntimeSwitch, runtimeCommand } from '../../commands/runtime.js';
+import { observeRuntimeGroups } from '../config-restart.js';
 
 import { runtimeAuthFixture } from './helpers/runtime-auth.js';
 
@@ -48,7 +49,7 @@ test('native single reports Origin and saved overrides without probing inactive 
   });
   assert.deepEqual(observed, {
     groups: [
-      { sessionGroup: 'origin', inherits: true, liveRuntime: 'claude', status: 'pending_reclaim', error: null },
+      { sessionGroup: 'origin', inherits: true, liveRuntime: 'claude', status: 'restart_needed', error: null },
       { sessionGroup: 'telegram:configured', inherits: false, liveRuntime: null, status: 'override_kept', error: null },
     ],
     groupsComplete: true, observationErrors: [],

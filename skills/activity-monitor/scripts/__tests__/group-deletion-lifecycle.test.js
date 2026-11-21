@@ -7,7 +7,6 @@ import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
 import { SupervisorAdmission } from '../supervisor-admission.js';
 import { SupervisorLifecycle } from '../supervisor-lifecycle.js';
 import { validateReply } from '../../../../cli/lib/am-sock-client.js';
-import { readyForConfigReclaim } from '../supervisor-request.js';
 function fixture(t, { absent = false } = {}) {
   const db = new Database(':memory:'); guardDatabase(db, owner); t.after(() => db.close());
   const store = createStore(db, { validateComponent: () => true, readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) });
@@ -118,54 +117,6 @@ test('a post-stop replacement cannot become stopped evidence for deletion', asyn
 // Real notification -> claim -> ready admission -> delete reclaim. The private
 // in-memory writer completes the control; the singleton ack facade is not used.
 // No environment-derived database, tmux, service or model is opened.
-test('a running configuration control can acknowledge through deletion and let its own run stop', async t => {
-  const f = fixture(t);
-  f.live.launchConfig = { runtime: 'codex', mode: 'default' };
-  f.lifecycle.now = Date.now;
-  f.lifecycle.d.bindTarget = scene => JSON.stringify({ expectedRunId: scene.runId,
-    tmuxTarget: { serverGeneration: 'private', sessionId: '$1', paneId: '%1' } });
-  f.lifecycle.d.prompts = { CONFIG_RECLAIM_PROMPT: () => 'Complete the handoff and submit ready_for_config_reclaim, then finish this control.' };
-  await f.lifecycle.reconcileConfiguration(f.context());
-  const control = f.store.getNextPendingControl(Math.floor(Date.now() / 1000), { sessionGroups: ['telegram'] });
-  assert.ok(control);
-  assert.equal(f.store.claimControl(control.id), true);
-  assert.equal((await f.admission.handle(request)).result, 'accepted');
-  const fence = f.store.getDrainFence('telegram');
-  assert.equal(await f.lifecycle.advanceReclaim(fence, f.context()), 'waiting_inflight');
-
-  const response = await readyForConfigReclaim({ env: { ZYLOS_SESSION_GROUP: 'telegram', ZYLOS_RUN_ID: 'runtime-old' },
-    send: async message => {
-      const reply = await f.admission.handle(message);
-      assert.equal(validateReply(message, reply), true);
-      return { kind: reply.ok ? 'accepted' : 'rejected', sent: true, reply };
-    } });
-  assert.equal(response.ok, true, JSON.stringify(response));
-  assert.equal(response.data.result, 'already_accepted');
-  assert.deepEqual(f.store.getDrainFence('telegram'), fence);
-  assert.equal(f.store.getActiveDeletion('telegram').operationId, request.requestId);
-  assert.equal(f.db.prepare("UPDATE control_queue SET status='done' WHERE id=? AND status='running'").run(control.id).changes, 1);
-  assert.equal(f.db.prepare('SELECT status FROM control_queue WHERE id=?').get(control.id).status, 'done');
-  assert.equal(await f.lifecycle.advanceReclaim(fence, f.context()), 'done');
-  assert.deepEqual(f.state.stops, ['runtime-old']);
-  assert.equal(f.store.listRunEndings(['telegram'])[0].reason, 'delete');
-  assert.equal(f.store.listPendingContinuations().length, 0);
-  assert.deepEqual(f.store.getDrainFence('telegram'), fence);
-});
-
-test('configuration readiness cannot borrow a deletion fence from another run', async t => {
-  const f = fixture(t);
-  f.live.launchConfig = { runtime: 'claude', mode: 'default' };
-  await f.admission.handle(request);
-  const fence = f.store.getDrainFence('telegram');
-  const readiness = { version: 1, type: 'ready_for_config_reclaim', requestId: 'ready-replacement',
-    sessionGroup: 'telegram', expectedRunId: 'replacement-run' };
-  assert.equal((await f.admission.handle(readiness)).reason, 'run_changed');
-  f.live.runId = 'replacement-run';
-  assert.equal((await f.admission.handle(readiness)).reason, 'other_fence');
-  assert.deepEqual(f.store.getDrainFence('telegram'), fence);
-  assert.equal(f.state.stops.length, 0);
-});
-
 test('admission rejects a preview whose messages no longer exist before fencing the recreated group', async t => {
   const f = fixture(t), group = 'telegram', targetKey = JSON.stringify(['group', group]);
   const foreign = f.store.insertConversation('out', 'other', 'room', 'earlier unrelated message');

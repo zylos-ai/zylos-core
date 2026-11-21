@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
 import { startPage } from './helpers/workbench-browser.js';
 import { openDashboardTab } from './helpers/browser-navigation.js';
-import { workbenchAnswer } from './fixtures/workbench-browser-api.js';
+import { GROUP, workbenchAnswer } from './fixtures/workbench-browser-api.js';
 
 // Boundary: the real settings page in a local browser with fixed API answers (the workbench fixture plus this case's
 // update check, keys, machines, prices and session hosting); writes are recorded and answered, nothing runs.
@@ -134,13 +134,46 @@ test('the settings page keeps its sections in order, offers the right upgrades a
         assert.match(prompt, /从 v1\.2\.0 升级到 v1\.3\.0/);
         await shot('core-update-question');
         await dialog(page).locator('.wb-modal-acts button').last().click();
-        await card.getByText('已复制，发给 AI 就能让它升级。').waitFor();
+        await page.locator('#settings-zylos-version').getByText('已复制，发给 AI 就能让它升级。').waitFor();
         const copied = await page.evaluate(() => window.__copied);
         assert.equal(copied.length, 1); assert.match(copied[0], /从 v1\.2\.0 升级到 v1\.3\.0/);
         assert.deepEqual(writes, [], 'copying the instruction sends nothing');
         assert.deepEqual(errors, []);
         await context.close();
       }
+    });
+
+    await t.test('the copy result in the zylos version card outlasts the card redrawing and is gone after reopening settings', async () => {
+      const { context, page, errors, pick, shot } = await open(1280, { coreUpdate: { current: '1.2.0', latest: '1.3.0', hasUpdate: true, checkedAt: iso(0) } });
+      await pick('machine');
+      const card = page.locator('#settings-zylos-version'), note = page.locator('#settings-zylos-copied');
+      const copy = async () => { await page.locator('#settings-zylos-update').click(); await dialog(page).locator('.wb-modal-acts button').last().click(); await dialog(page).waitFor({ state: 'detached' }); };
+      // Redraw the card the way the page does (the technical detail switch), and prove the body was drawn anew.
+      const redraw = async () => {
+        await page.locator('#settings-version .wb-version-line').evaluate(line => { line.dataset.before = '1'; });
+        await page.locator('#wb-detail-toggle').dispatchEvent('change');
+        await page.locator('#settings-version .wb-version-line:not([data-before])').waitFor();
+      };
+      await copy();
+      await note.getByText('已复制，发给 AI 就能让它升级。').waitFor();
+      assert.match((await page.evaluate(() => window.__copied))[0], /从 v1\.2\.0 升级到 v1\.3\.0/);
+      await redraw();
+      assert.equal(await card.locator('#settings-zylos-copied').textContent(), '已复制，发给 AI 就能让它升级。', 'the copied note stays after the card redraws');
+      assert.equal(await note.isVisible(), true);
+      await shot('core-update-copied');
+      await page.evaluate(() => { navigator.clipboard.writeText = async () => { throw new Error('denied'); }; });
+      await copy();
+      await note.getByText(/^无法复制/).waitFor();
+      await redraw();
+      assert.equal(await card.locator('#settings-zylos-copied').count(), 1, 'a second copy replaces the note');
+      assert.match(await note.textContent(), /^无法复制/, 'the failure note stays after the card redraws');
+      await openDashboardTab(page, 'overview');
+      await openDashboardTab(page, 'settings');
+      await pick('machine');
+      await card.getByText(/^检查于 /).waitFor();
+      assert.equal(await note.count(), 0, 'reopening settings shows no old copy result');
+      assert.deepEqual(errors, []);
+      await context.close();
     });
 
     await t.test('the default engine card upgrades the engine chosen in it', async () => {
@@ -306,4 +339,156 @@ test('the settings page keeps its sections in order, offers the right upgrades a
       await context.close();
     });
   }, { timeoutMs: 140_000 });
+});
+
+// Runs the real settings card and action sender against the browser fixture.
+// Run for default engine or model confirmation, save, or feedback changes. The fixture owns all HTTP
+// responses; no CLI, runtime, PM2 or tmux is used.
+test('setting the default engine and model updates the open cards and reports restart refusals', {
+  skip: !chatEnabled(), timeout: 90_000,
+}, async t => {
+  const sandbox = createChatSandbox(t);
+  await sandbox.runCase(async () => {
+    console.log('Default engine browser isolation:', JSON.stringify(sandbox.assertIsolation()));
+    const { base } = await startPage(sandbox);
+    const { chromium } = await import(pathToFileURL(process.env.ZYLOS_CHAT_BROWSER_MODULE));
+    const browser = await chromium.launch({ executablePath: process.env.ZYLOS_CHAT_BROWSER_BIN, headless: true,
+      env: { ...sandbox.env, TZ: 'Asia/Singapore' },
+      args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
+    sandbox.addCleanup(() => browser.close());
+    const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
+    const switchPath = '/api/instance/actions/switch-runtime';
+    const variants = [
+      { locale: 'zh', theme: 'light', badge: '默认', rejection: '测试凭据已被拒绝', saved: '已将默认 AI 引擎设为 Codex。' },
+      { locale: 'zh', theme: 'dark', badge: '默认', rejection: '测试凭据已被拒绝', saved: '已将默认 AI 引擎设为 Codex。' },
+      { locale: 'en', theme: 'light', badge: 'Default', rejection: 'Fixture credentials were rejected', saved: 'Default AI engine saved as Codex.' },
+      { locale: 'en', theme: 'dark', badge: 'Default', rejection: 'Fixture credentials were rejected', saved: 'Default AI engine saved as Codex.' },
+    ];
+    for (const width of [1280, 390]) for (const { locale, theme, badge, rejection, saved } of variants) {
+      const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 },
+        timezoneId: 'Asia/Singapore', reducedMotion: 'reduce' });
+      try {
+        await context.addInitScript(({ locale, theme }) => {
+          localStorage.setItem('zylos-dashboard-locale', locale);
+          localStorage.setItem('zylos-dashboard-theme', theme);
+        }, { locale, theme });
+        const writes = [], modelWrites = [];
+        await context.route('**/*', async route => {
+          const request = route.request(), url = new URL(request.url());
+          if (url.origin !== base) return route.abort();
+          if (url.pathname === '/_assets/vendor/chart.umd.js') return route.fulfill({ path: process.env.ZYLOS_CHAT_CHART_ASSET, contentType: 'text/javascript' });
+          if (decodeURIComponent(url.pathname) === '/api/groups/' + GROUP) {
+            const response = await route.fetch();
+            return route.fulfill({ response, json: { ...await response.json(), modelOverridden: true } });
+          }
+          if (url.pathname === '/api/instance/defaults' && request.method() === 'PUT') {
+            modelWrites.push(request.postDataJSON());
+            return route.fulfill({ json: { ok: true, data: { groupsComplete: true, groups: [
+              { sessionGroup: 'origin', restart: { status: 'not_restarted', reason: 'fence_conflict' } },
+            ] } } });
+          }
+          if (url.pathname === switchPath && request.method() === 'POST') {
+            writes.push(request.postDataJSON());
+            return writes.length === 1
+              ? route.fulfill({ status: 403, json: { ok: false, error: { code: 'AUTH_FAILED', message: rejection } } })
+              : route.fulfill({ json: { ok: true, data: { result: 'saved', baseline: 'codex', groups: [
+                { sessionGroup: 'origin', restart: { status: 'not_restarted', reason: 'fence_conflict' } },
+                { sessionGroup: GROUP, restart: { status: 'accepted' } },
+              ] }, messageKey: 'result.runtime_saved', messageParams: { value: 'Codex' } } });
+          }
+          return route.continue();
+        });
+        const page = await context.newPage();
+        page.setDefaultTimeout(8000);
+        await page.goto(base + '/');
+        await openDashboardTab(page, 'settings');
+        const defaults = page.locator('[data-settings-section="defaults"]');
+        await defaults.waitFor({ state: 'attached' });
+        if (!await defaults.isVisible()) await page.locator('button[aria-controls="settings-nav"]').click();
+        await defaults.click();
+        let navigations = 0;
+        page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigations++; });
+        const card = page.locator('#settings-current-runtime');
+        const save = card.locator('#settings-save-runtime');
+        const select = engine => card.locator('#settings-use-' + engine);
+        const dialog = page.locator('.wb-modal[role="alertdialog"]');
+        const submit = async () => {
+          await save.click();
+          await dialog.waitFor();
+          assert.match(await dialog.textContent(), locale === 'zh' ? /2 个组/ : /2 running groups/);
+          if (evidence && !writes.length) {
+            await page.evaluate(() => document.activeElement?.blur());
+            await page.screenshot({ path: path.join(evidence, `default-confirm-${locale}-${width}-${theme}.png`) });
+          }
+          await dialog.locator('.wb-modal-acts button').last().click();
+        };
+        await select('claude').waitFor();
+        assert.equal(await select('claude').getAttribute('aria-pressed'), 'true');
+        assert.equal(await select('claude').locator('.wb-tag').textContent(), badge);
+        await select('codex').click();
+        await save.click();
+        await dialog.locator('.wb-modal-acts button').first().click();
+        await dialog.waitFor({ state: 'hidden' });
+        assert.deepEqual(writes, []);
+        await submit();
+        await card.getByText(rejection).waitFor();
+        assert.equal(await save.isVisible(), true);
+        assert.equal(await select('claude').locator('.wb-tag').textContent(), badge);
+        const shot = async suffix => {
+          if (!evidence) return;
+          await page.evaluate(() => document.activeElement?.blur());
+          await page.mouse.move(0, 0);
+          await card.screenshot({ path: path.join(evidence, `default-engine-${locale === 'en' ? 'en-' : ''}${width}-${theme}-${suffix}.png`) });
+        };
+        await shot('rejected');
+        await submit();
+        await card.getByText(saved).waitFor();
+        await card.getByText(/Origin.*fence_conflict/).waitFor();
+        await save.waitFor({ state: 'hidden' });
+        assert.equal(await select('codex').getAttribute('aria-pressed'), 'true');
+        assert.equal(await select('codex').locator('.wb-tag').textContent(), badge);
+        assert.equal(await select('claude').locator('.wb-tag').count(), 0);
+        assert.equal(navigations, 0);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
+        assert.deepEqual(writes, Array.from({ length: 2 }, () => ({ runtime: 'codex', confirmed: true })));
+        await shot('saved');
+        await page.locator('#settings-model-claude').selectOption('sonnet');
+        const modelSave = page.locator('#settings-save-models');
+        const confirmModel = async () => {
+          await modelSave.click();
+          await dialog.waitFor();
+          const text = await dialog.textContent();
+          assert.match(text, locale === 'zh' ? /会立即重启正在运行、使用这个默认模型的 1 个组/
+            : /1 running group that uses this default model will restart immediately/);
+          assert.match(text, /Origin/);
+          assert.doesNotMatch(text, /Telegram direct chat|Product weekly/);
+        };
+        await confirmModel();
+        await dialog.locator('.wb-modal-acts button').first().click();
+        await dialog.waitFor({ state: 'hidden' });
+        assert.deepEqual(modelWrites, []);
+        await confirmModel();
+        if (evidence) {
+          await page.evaluate(() => document.activeElement?.blur());
+          await page.screenshot({ path: path.join(evidence, `default-model-confirm-${locale}-${width}-${theme}.png`) });
+        }
+        await dialog.locator('.wb-modal-acts button').last().click();
+        const modelResult = page.locator('#settings-model-result');
+        await modelResult.getByText(/Origin.*fence_conflict/).waitFor();
+        const [saveMessage, restartMessage] = (await modelResult.textContent()).split('\n');
+        assert.equal(saveMessage, locale === 'zh' ? '已保存。' : 'Saved.');
+        assert.match(restartMessage, /Origin.*fence_conflict/);
+        assert.deepEqual(modelWrites, [{ kind: 'model', runtime: 'claude', model: 'sonnet', confirmed: true }]);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
+        await modelResult.evaluate(node => node.scrollIntoView({ block: 'center' }));
+        if (evidence) {
+          await page.evaluate(() => document.activeElement?.blur());
+          await page.mouse.move(0, 0);
+          await page.screenshot({ path: path.join(evidence, `default-model-result-${locale}-${width}-${theme}.png`) });
+        }
+      } finally {
+        await context.close();
+      }
+    }
+  }, { timeoutMs: 80_000 });
 });

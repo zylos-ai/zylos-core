@@ -22,7 +22,7 @@ import { findMatchingToolRule } from './tool-rules.js';
 import { PoolCapacity } from './pool-capacity.js';
 import { messageForStatus } from '../../comm-bridge/scripts/status-notice-templates.js';
 import { systemSendEnvironment } from '../../comm-bridge/scripts/c4-system-send-env.js';
-import { CONFIG_RECLAIM_PROMPT, PRE_RECLAIM_CHECK_PROMPT, ROTATION_PROMPT, UPGRADE_RESTART_CHECK_PROMPT } from './reclaim-prompts.js';
+import { PRE_RECLAIM_CHECK_PROMPT, ROTATION_PROMPT, UPGRADE_RESTART_CHECK_PROMPT } from './reclaim-prompts.js';
 const { readSessionMode, readZylosConfigOrThrow } = await loadCoreModule('config.js');
 const { UNSUPPORTED } = await loadCoreModule('runtime/contract.js');
 const { getRuntime, SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/index.js');
@@ -109,7 +109,6 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
   };
   const prompts={
     ROTATION_PROMPT,
-    CONFIG_RECLAIM_PROMPT,
     PRE_RECLAIM_CHECK_PROMPT,
     UPGRADE_RESTART_CHECK_PROMPT,
   };

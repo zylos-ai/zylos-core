@@ -176,7 +176,7 @@
   },
   {
     "file": "skills/dashboard/src/lib/actions.js",
-    "text": "if (runtime === 'claude') {",
+    "text": "const claude = runtime === 'claude';",
     "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
   },
   {

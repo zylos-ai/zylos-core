@@ -151,3 +151,60 @@ test('runtime authentication rejection keeps the Core reason visible through act
   assert.equal(formatActionResult(unknown, translate), 'Runtime result is unknown.');
   assert.equal(calls, 2);
 });
+
+// Run for changes to default model confirmation, target selection or restart
+// feedback. The real action writes only the private fixture, while session
+// discovery and the supervisor socket are supplied as inert fixture boundaries.
+test('confirmed default model saves before restarting only current model followers', async t => {
+  const { claude, config } = fixture(t);
+  const { loadCoreModule } = await import('../src/lib/core-modules.js');
+  const { observeRuntimeGroups, restartObservedGroups } = await loadCoreModule('config-restart.js');
+  const requests = [];
+  const launch = (sessionGroup, runtime = 'claude', ready = true) => ({
+    present: true, runtime, ready, runId: `run-${sessionGroup}`, launchConfig: { mode: 'default', runtime },
+  });
+  const live = {
+    origin: launch('origin'),
+    'telegram:other': launch('other', 'codex'),
+    'telegram:pinned': launch('pinned'),
+    'telegram:offline': { present: false },
+    'telegram:starting': launch('starting', 'claude', false),
+  };
+  const modelCore = t.mock.module('../src/lib/core-modules.js', { namedExports: {
+    loadCoreModule: async name => {
+      if (name === 'config.js') return { readSessionMode: () => ({ mode: 'multi' }) };
+      if (name !== 'config-restart.js') return loadCoreModule(name);
+      return {
+        observeRuntimeGroups: (target, mode, options) => observeRuntimeGroups(target, mode, {
+          ...options, list: () => Object.keys(live).map(sessionGroup => ({ sessionGroup })),
+          overrides: (_groups, modelRuntime) => {
+            assert.equal(modelRuntime, 'claude');
+            return [{ sessionGroup: 'telegram:pinned' }];
+          },
+          identity: group => live[group],
+        }),
+        restartObservedGroups: (observed, options) => restartObservedGroups(observed, { ...options, restart: target => {
+          assert.equal(JSON.parse(fs.readFileSync(claude)).model, 'sonnet');
+          requests.push(target);
+          return { status: 'not_restarted', reason: 'fence_conflict' };
+        } }),
+      };
+    },
+  } });
+  t.after(() => modelCore.restore());
+  const { handleAction: dispatch } = await import('../src/lib/actions.js?confirmed-model-followers');
+  const body = { runtime: 'claude', model: 'sonnet' };
+  const rejected = await dispatch('switch-model', body, config);
+  assert.equal(rejected.status, 409);
+  assert.equal(rejected.error.code, 'CONFIRMATION_REQUIRED');
+  assert.equal(rejected.messageKey, 'wb.settings.modelConfirmationRequired');
+  assert.equal(JSON.parse(fs.readFileSync(claude)).model, 'opus');
+  assert.deepEqual(requests, []);
+
+  const saved = await dispatch('switch-model', { ...body, confirmed: true }, config);
+  assert.equal(saved.ok, true);
+  assert.equal(saved.requires_restart, false);
+  assert.deepEqual(requests, [{ sessionGroup: 'origin', runId: 'run-origin' }]);
+  assert.deepEqual(saved.data.groups.flatMap(row => row.restart ? [[row.sessionGroup, row.restart.reason]] : []),
+    [['origin', 'fence_conflict'], ['telegram:starting', 'not_ready']]);
+});

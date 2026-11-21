@@ -35,7 +35,9 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   const configFile = path.join(root, '.zylos/config.json');
   let usageVersion = '1.0.0', usageModel = 'fixture-model', usageEffort = 'high', modeStatusReadable = true, originRun = 'fixture-run';
   let mode = 'single', clock = Date.now(), server, seedStore, catalogReadable = true;
-  const actionCalls = [], cliCalls = [], records = [];
+  let originRuntime = 'claude', originReady = true, pinWorking = false;
+  const isOrigin = key => key === null || key === 'origin';
+  const actionCalls = [], cliCalls = [], runtimeCalls = [], records = [];
   let checker, installedCore = '1.4.0', tags = ['v1.5.2', 'v2.0.0', 'v1.6.0-beta.1'];
   const savedRoot = process.env.ZYLOS_DIR;
   const savedCodexBin = process.env.CODEX_BIN;
@@ -86,7 +88,8 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     if (!catalogReadable && args[0] === 'groups') return { ok: false, reason: 'fixture_catalog_failed' };
     return { ok: true, data: args[0] === 'groups' ? args.includes('--raw') ? catalog().filter(row => row.sessionGroup === args[2]) : args.includes('--active-since') ? { groups: catalog(), hasOlder: false } : catalog()
       : args[0] === 'unsummarized' ? { count: 0, firstAt: null } : { groups: [{ sessionGroup: 'telegram:working', pending: { count: 3, oldestAt: clock - 1000, head: { id: 1, priority: 0 } }, running: { count: 0 } }], globalFence: null } };
-  }, readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) };
+  }, readOverrides: async () => ({ ok: true, data: { baseline: { runtime: JSON.parse(fs.readFileSync(configFile)).runtime },
+    runtime: pinWorking ? [{ sessionGroup: 'telegram:working', runtime: 'claude' }] : [], model: [] } }) };
   const fakeExecute = (file, args, options, callback) => {
     if (typeof options === 'function') callback = options;
     cliCalls.push([String(file), ...args]);
@@ -103,6 +106,17 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     }
     if (file === 'zylos' && args[0] === 'group' && args[1] === 'overrides') data = { baseline: { runtime: 'claude' }, runtime: [], model: [], runtimeTotal: 0, nextAfter: null };
     else if (file === 'zylos' && args[0] === 'group') data = { resolved: args[1] === 'runtime' ? { runtime: 'claude' } : { runtime: 'claude', mode: 'default' } };
+    else if (file === 'zylos' && args[0] === 'runtime') {
+      runtimeCalls.push(args);
+      const requested = args[1];
+      if (requested === 'agy') {
+        callback(null, JSON.stringify({ ok: false, error: { code: 'AUTH_FAILED', message: 'Fixture login was rejected' } }), '');
+        return new EventEmitter();
+      }
+      const current = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+      if (current.runtime !== requested) fs.writeFileSync(configFile, JSON.stringify({ ...current, runtime: requested }));
+      data = { result: current.runtime === requested ? 'unchanged' : 'saved', baseline: requested };
+    }
     else if (file === process.execPath && args[0]?.endsWith('/c4-control.js') && args[1] === 'enqueue') data = { id: 7 };
     else if (file === process.execPath && args[0]?.endsWith('/scheduler/scripts/cli.js')) { callback(null, JSON.stringify({ ok: true, data: { id: 'fixture-task' } }), ''); return new EventEmitter(); }
     else if (file === process.execPath && args[0]?.endsWith('/sync-lock.js')) { callback(null, JSON.stringify({ sync: { held: false } }), ''); return new EventEmitter(); }
@@ -121,7 +135,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   t.mock.module('../skills/dashboard/src/lib/actions.js', { namedExports: { ...actions,
     handleAction: async (action, body, config) => {
       actionCalls.push({ action, body });
-      return action === 'upgrade-cc' ? actions.handleAction(action, body, config) : { ok: true, action };
+      return action === 'upgrade-cc' || action === 'switch-runtime' && body.runtime ? actions.handleAction(action, body, config) : { ok: true, action };
     } } });
   t.mock.module('../skills/dashboard/src/lib/workbench/core-cli.js', { namedExports: { createCoreCli: () => cli } });
   const names = await import('../skills/dashboard/src/lib/workbench/display-names.js');
@@ -137,11 +151,14 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       actionCalls.push({ deletion: target, preview: options.preview }); return { ok: true, preview: options.preview, operationId: 'fixture-operation', cutoffId: 1 };
     } }),
   } });
-  const reader = { readSessionState: async key => ({ identity: { present: key === null || ['origin', 'telegram:working', 'telegram:child'].includes(key), ready: true,
-    runtime: 'claude', runId: key === null || key === 'origin' ? originRun : 'fixture-run', sessionId: 'fixture-session', createdAt: clock / 1000 - 10, launchConfig: { runtime: 'claude', mode: 'default' } },
+  const reader = { readSessionState: async key => ({ identity: { present: isOrigin(key) || ['telegram:working', 'telegram:child'].includes(key),
+    ready: isOrigin(key) ? originReady : true, runtime: isOrigin(key) ? originRuntime : 'claude',
+    runId: isOrigin(key) ? originRun : 'fixture-run', sessionId: 'fixture-session', createdAt: clock / 1000 - 10,
+    launchConfig: { runtime: isOrigin(key) ? originRuntime : 'claude', mode: 'default' } },
     status: { valid: true, sampledAt: clock, value: { state: key === 'telegram:working' ? 'busy' : 'idle' } },
     usage: { valid: true, value: { version: usageVersion, effort: { level: usageEffort }, model: { id: usageModel }, context_window: { used_percentage: 25 } } } }),
-    readLiveIdentity: async () => ({ present: true, ready: true }), readRuntimeHealth: async () => ({ missing: true }), readAccountUsage: async () => null };
+    readLiveIdentity: async key => ({ ...(await reader.readSessionState(key)).identity, tmuxName: 'zylos-group-origin' }),
+    readRuntimeHealth: async () => ({ missing: true }), readAccountUsage: async () => null };
   reader.readSessionStates = async (groups, { includeAllLive }) => {
     const keys = includeAllLive ? [...new Set([...groups, 'origin', 'telegram:working', 'telegram:child'])] : groups;
     return new Map(await Promise.all(keys.map(async key => [key, await reader.readSessionState(key)])));
@@ -486,6 +503,75 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       assert.equal(events.some(event => ['state_change', 'fleet_state', 'system_update', 'health_update'].includes(event.type)), false);
       records.push({ mode, method: 'GET', route: '/api/stream', status: response.status, events });
     } finally { clearTimeout(timeout); await reader.cancel(); controller.abort(); }
+    }
+  });
+  // Covers the instance write and default readers on the actual Dashboard HTTP
+  // server. Run for switch-runtime or default publication changes; skip visual-only edits.
+  // Core CLI responses and configuration are owned by the isolated fixture above.
+  await t.test('a default runtime save updates existing instance streams and leaves the live run attributed', async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    const response = await fetch(`${origin}/api/stream`, { headers: { Authorization: `Bearer ${tokens.read}` }, signal: controller.signal });
+    const reader = response.body.getReader(), decoder = new TextDecoder();
+    let buffer = '';
+    const nextDefault = async expected => {
+      while (!controller.signal.aborted) {
+        const { done, value } = await reader.read();
+        assert.equal(done, false, 'the existing instance stream stays open');
+        buffer += decoder.decode(value, { stream: true });
+        assert.ok(buffer.length < 65536);
+        for (let split; (split = buffer.indexOf('\n\n')) >= 0;) {
+          const packet = buffer.slice(0, split);
+          buffer = buffer.slice(split + 2);
+          const lines = packet.split('\n');
+          if (lines.includes('event: instance') && JSON.parse(lines.find(line => line.startsWith('data: ')).slice(6)).default_runtime === expected) return;
+        }
+      }
+      assert.fail(`Missing instance update for ${expected}`);
+    };
+    const action = '/api/instance/actions/switch-runtime';
+    const save = (runtime, expected = 200) => request(action, { method: 'POST',
+      body: { runtime, confirmed: true }, identity: 'admin', expected });
+    const detail = key => request('/api/groups/' + encodeURIComponent(key) + '?include=');
+    const observer = () => request('/api/observer/status?session_group=origin', { identity: 'cookie' });
+    try {
+      await nextDefault('claude');
+      pinWorking = true;
+      clock += 3000;
+      assert.equal((await detail('telegram:working')).runtimeOverridden, true, 'a pin equal to the default is still an override');
+      const before = await request('/api/health');
+      assert.equal((await save('codex')).data.result, 'saved');
+      assert.deepEqual(runtimeCalls.at(-1), ['runtime', 'codex', '--json', '--yes']);
+      await nextDefault('codex');
+      assert.equal((await request('/api/health')).bootId, before.bootId);
+      assert.equal((await request('/api/instance')).default_runtime, 'codex');
+      assert.equal((await request('/api/instance/runtime-options')).runtime_cli, 'codex');
+      assert.equal((await request('/api/settings/pricing')).active, 'codex');
+      assert.equal((await detail('origin')).effective.runtime, 'claude');
+      assert.equal((await detail('origin')).runtimeOverridden, false, 'the old runtime does not turn an inheriting run into an override');
+      assert.equal((await observer()).target.runtime, 'claude');
+      originRuntime = 'codex';
+      originRun = 'replacement-run';
+      originReady = false;
+      clock += 3000;
+      assert.equal((await detail('origin')).effective.runtime, null);
+      assert.equal((await observer()).target, null);
+      originReady = true;
+      clock += 3000;
+      assert.equal((await detail('origin')).effective.runtime, 'codex');
+      assert.equal((await observer()).target.runtime, 'codex');
+      const rejected = await save('agy', 403);
+      assert.equal(rejected.error.message, 'Fixture login was rejected');
+      assert.equal((await request('/api/instance')).default_runtime, 'codex');
+    } finally {
+      clearTimeout(timeout);
+      await reader.cancel().catch(() => {});
+      controller.abort();
+      writeMode(mode);
+      originRuntime = 'claude';
+      originRun = 'fixture-run';
+      originReady = true;
+      pinWorking = false;
     }
   });
   await t.test('real HTTP and SSE clocks have plausible years in both session modes', () => {
