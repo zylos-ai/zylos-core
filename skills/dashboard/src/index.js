@@ -1554,6 +1554,10 @@ export function createServer() {
         const result = detailWrite[2] === 'config'
           ? await groupConfig.submit(key, body)
           : await groupAction(key, detailWrite[3], body);
+        if (detailWrite[2] === 'config' && (result.ok || result.error?.code === 'RESULT_UNKNOWN')) {
+          try { await workbench.getSnapshot(undefined, { fresh: true }); }
+          catch { /* A failed readback does not change the write result. */ }
+        }
         sendCommandJson(res, 200, result);
         if (result.ok) scheduleFleetStateBroadcast();
       } catch (error) { workbenchFailure(res, error); }

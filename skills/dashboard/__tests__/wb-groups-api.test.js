@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import * as childProcess from 'node:child_process';
 import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { guardDatabase } from '../../comm-bridge/scripts/sqlite-schema.js';
 import * as c4Schema from '../../comm-bridge/scripts/c4-schema.js';
@@ -16,7 +17,11 @@ import { createGroupsApi, groupKey } from '../src/lib/workbench/groups-api.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
 import { AuthGate } from '../src/lib/auth.js';
 import { Store } from '../src/lib/store.js';
+import { EventLoopMonitor } from '../src/lib/event-loop-monitor.js';
+import { VersionChecker } from '../src/lib/version-checker.js';
+import { configText } from '../public/js/wb/detail-overview.js';
 import { chatHttpFixture } from './helpers/chat-http.js';
+import { signIn } from './helpers/dashboard-sign-in.js';
 import { fleetGroupSummary } from '../src/lib/workbench/fleet-summary.js';
 import { importSupervisorRecords, supervisorSequences } from './helpers/supervisor-records.js';
 
@@ -97,6 +102,99 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
     setNow: value => { clock = value; }, advance: value => { clock += value; }, setMode: value => { mode = value; },
     failUnexpected: value => { unexpected = value; }, now: () => clock };
 }
+
+// HTTP integration: real config PUT, cached group detail GET, and the shared
+// configuration summary. Run for config writes or snapshot refresh wiring.
+// Use the runner's isolated HOME, ZYLOS_DIR, PM2_HOME and short TMPDIR, a
+// loopback listener and a private dashboard DB. Inject Core replies, so no
+// CLI process, PM2 or tmux socket is needed. Skip for unrelated UI changes.
+test('group detail shows the saved model immediately after a config write', { timeout: 15000 }, async t => {
+  const { HOME, ZYLOS_DIR, PM2_HOME, TMPDIR, TMUX_TMPDIR, TMUX } = process.env;
+  const root = path.dirname(HOME);
+  assert.notEqual(fs.realpathSync(HOME), fs.realpathSync(os.userInfo().homedir));
+  assert.equal(ZYLOS_DIR, path.join(HOME, 'zylos'));
+  assert.equal(PM2_HOME, path.join(HOME, '.pm2'));
+  assert.equal(TMPDIR, path.join(root, 'tmp'));
+  assert.equal(TMUX_TMPDIR, TMPDIR);
+  assert.equal(TMUX, undefined);
+  assert.ok(Buffer.byteLength(path.join(TMUX_TMPDIR, 'test.sock')) < 104);
+  const dashboardDir = path.join(ZYLOS_DIR, 'components/dashboard');
+  console.log('Group config HTTP isolation:', JSON.stringify({ HOME, ZYLOS_DIR, PM2_HOME, TMPDIR, TMUX_TMPDIR,
+    database: path.join(dashboardDir, 'dashboard.db'), tmux: 'no commands', network: 'loopback only' }));
+  fs.mkdirSync(dashboardDir, { recursive: true });
+  fs.writeFileSync(path.join(dashboardDir, 'config.json'), JSON.stringify({ auth: { password: 'fixture-password' } }));
+
+  const f = fixture(t);
+  const group = 'telegram:g0', runtime = 'claude';
+  const oldModel = 'old-model', newModel = 'new-model';
+  let model = oldModel;
+  f.live.delete(group);
+  f.cli.readOverrides = async () => ({ ok: true, data: { baseline: { runtime }, runtime: [],
+    model: [{ sessionGroup: group, runtime, model, effort: 'high' }] } });
+
+  t.mock.method(EventLoopMonitor.prototype, 'start', function () { return this; });
+  t.mock.method(VersionChecker.prototype, 'start', () => {});
+  t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
+    systemSample, createGroupSnapshot: () => f.service,
+  } });
+  t.mock.module('node:child_process', { namedExports: { ...childProcess,
+    execFile(command, args, options, callback) {
+      if (args[0] === '--version') return callback(null, { stdout: '1.0.0' });
+      assert.equal(command, 'zylos');
+      assert.equal(options.env.ZYLOS_DIR, ZYLOS_DIR);
+      let data;
+      if (args[1] === 'runtime') {
+        assert.deepEqual(args, ['group', 'runtime', 'get', '--group', group, '--json']);
+        data = { resolved: { runtime } };
+      } else if (args[2] === 'get') {
+        assert.deepEqual(args, ['group', 'model', 'get', '--group', group, '--runtime', runtime, '--json']);
+        data = { resolved: { model, effort: 'high' } };
+      } else {
+        assert.deepEqual(args, ['group', 'model', 'set', '--group', group, '--runtime', runtime,
+          '--model', newModel, '--effort', 'high', '--json']);
+        model = newModel;
+      }
+      callback(null, { stdout: JSON.stringify({ ok: true, data }) });
+    },
+    execFileSync: () => assert.fail('Unexpected synchronous child process'),
+  } });
+  let server;
+  const stores = new Set(), timers = new Set();
+  const checkSchema = Store.prototype.checkSchema, interval = globalThis.setInterval;
+  t.mock.method(Store.prototype, 'checkSchema', function (...args) { stores.add(this); return checkSchema.apply(this, args); });
+  t.mock.method(globalThis, 'setInterval', (...args) => { const timer = interval(...args); timers.add(timer); return timer; });
+  f.addCleanup(async () => {
+    for (const timer of timers) clearInterval(timer);
+    if (server) {
+      server.closeAllConnections();
+      await new Promise(resolve => server.close(resolve));
+      await server.closeAttachments();
+    }
+    for (const store of stores) if (store.db.open) store.close();
+  });
+
+  const { createServer } = await import('../src/index.js');
+  server = createServer();
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const cookie = await signIn(origin, 'fixture-password');
+  const route = origin + '/api/groups/' + encodeURIComponent(group);
+  async function detail() {
+    const response = await fetch(route + '?include=config', { headers: { cookie }, signal: t.signal });
+    assert.equal(response.status, 200);
+    return response.json();
+  }
+  assert.match(configText(await detail()), /old-model/);
+  const saved = await fetch(route + '/config', { method: 'PUT', signal: t.signal,
+    headers: { cookie, origin, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind: 'model', runtime, model: newModel, effort: 'high' }) });
+  const result = await saved.json();
+  assert.equal(saved.status, 200, JSON.stringify(result));
+  assert.equal(result.ok, true);
+  const updated = await detail();
+  assert.match(configText(updated), /new-model/);
+  assert.deepEqual(updated.config.modelOverrides, [{ runtime, model: newModel, effort: 'high' }]);
+});
 
 // Collection integration: actual C4 queue/catalog SQL over a private, read-only
 // SQLite connection -> actual snapshot and public API projections in both modes.
