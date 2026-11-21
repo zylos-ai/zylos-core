@@ -994,24 +994,6 @@ export async function runWorkbenchBrowser(t, sandbox) {
   const settled = (page, machinesPage) => page.waitForFunction(machinesPage => document.querySelector('#agent-detail').hidden === machinesPage
     && document.getAnimations().every(animation => animation.playState !== 'running' || animation.effect?.getComputedTiming().iterations === Infinity), machinesPage);
 
-  await step('on a phone Fleet Manage opens its section, and the arrow opens the list', async () => {
-    const { page, errors } = await open(390, 844, '/', { reducedMotion: 'reduce' });
-    await answerFleet(page, { spark: '1.0.0-beta.7' });
-    await page.reload();
-    await settled(page, true);
-    const manage = page.locator('#fleet-manage-open');
-    await manage.click();
-    await settingsPanel(page, 'fleet').waitFor();
-    await page.goBack();
-    await manage.waitFor();
-    await manage.click();
-    await settingsBack(page).click();
-    await settingsList(page).waitFor();
-    await page.goBack();
-    await manage.waitFor();
-    assert.deepEqual(errors, []);
-  });
-
   await step('an automatic restart cannot cross machines after its Origin read settles', async () => {
     const { page, context } = await open(1280, 800, '/settings');
     await answerFleet(page, { spark: '1.0.0-beta.7' });

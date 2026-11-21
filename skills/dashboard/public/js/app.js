@@ -1791,7 +1791,7 @@ function initTabs() {
   });
   window.addEventListener('popstate', async () => {
     // List/section history changes keep the mounted settings page and its drafts.
-    if (!window.history.state?.fleetView && settingsPage?.navigation.popstate()) return;
+    if (settingsPage?.navigation.popstate()) return;
     const generation = ++state.navigationGeneration;
     const path = window.location.pathname;
     // In-page remote viewing only exists on the parent document; the
@@ -1809,11 +1809,6 @@ function initTabs() {
       return;
     }
     if (generation !== state.navigationGeneration) return;
-    if (window.history.state?.fleetView && state.multiAgent && !state.remoteAgent) {
-      activateTab('overview', false);
-      showFleetView({ navigation: false });
-      return;
-    }
     const tab = tabForPath(path);
     if (tab !== 'overview') showAgentDetail({ navigation: false });
     activateTab(tab, false);
@@ -2071,7 +2066,6 @@ function initFleetMode() {
       onGroup: target => openFleetGroup(target), onProblems: target => openFleetGroup(target, { list: true }),
     });
   });
-  $('#fleet-manage-open')?.addEventListener('click', () => openSettingsModal('fleet'));
 }
 
 // The header's machines icon (fleetIconAction decides): back to the machines page from any machine's page, or
@@ -2080,13 +2074,7 @@ function openFleetFromIcon() {
   const action = fleetIconAction({ remoteAgent: state.remoteAgent, standaloneRemote: Boolean(REMOTE_AGENT), multiAgent: state.multiAgent });
   if (action === 'exit-remote') exitRemoteAgent();
   else if (action === 'parent') window.location.href = PARENT_DASHBOARD_PATH;
-  else if (action === 'fleet') {
-    if (activeTabName() === 'settings' && settingsPage?.navigation.leave()) {
-      window.history.replaceState({ tab: 'overview', fleetView: true }, '', api('/'));
-      activateTab('overview');
-    }
-    showFleetView();
-  }
+  else if (action === 'fleet') showFleetView();
   else openSettingsModal('fleet');
 }
 
@@ -2849,11 +2837,6 @@ function refreshSettingsPage() {
   const keysPanel = settingsPage.sections.account.querySelector('.manage-panel[data-panel="keys"]'); if (keysPanel) keysPanel.hidden = remote;
 }
 function openSettingsModal(section = null) {
-  // The fleet wall shares a URL with the machine dashboard. Remember it on
-  // the entry that the Manage shortcut came from so browser Back restores it.
-  if (state.fleetViewActive) {
-    window.history.replaceState({ ...window.history.state, fleetView: true }, '');
-  }
   showAgentDetail({ navigation: false });
   activateTab('settings', true, section);
 }
