@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { detectConfigLockCapability, configLockArgs } from '../../config-lock.js';
 import { ZYLOS_DIR } from '../../config.js';
 import { buildKickPrompt } from '../kick-prompt.js';
+import { context, projectModelConfigPath, rootModelEntry } from './context.js';
 import { adapterError, launchEnvironment, memoryMcpServerPath, runtimeExecutable } from '../session-command.js';
 
 export const env = Object.freeze({
@@ -106,3 +107,49 @@ export async function prepare(options = {}) {
     throw adapterError('LAUNCH_FAILED', message, cause);
   }
 }
+
+// Effort keeps the existing double-quoted, whole-line rule, including within tables.
+const effortPattern = /^\s*model_reasoning_effort\s*=\s*"([^"]*)"\s*$/m;
+
+export const modelConfig = Object.freeze({
+  read(zylosDir) {
+    const model = context.readDefaultModel({ zylosDir });
+    try {
+      const text = fs.readFileSync(projectModelConfigPath(zylosDir), 'utf8');
+      return { model, effort: text.match(effortPattern)?.[1] || null };
+    } catch {
+      return { model, effort: null };
+    }
+  },
+
+  write(zylosDir, field, value) {
+    const file = projectModelConfigPath(zylosDir);
+    const key = field === 'model' ? 'model' : 'model_reasoning_effort';
+    let text;
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch {
+      text = '';
+    }
+    text ||= '# Zylos project-level Codex config.\n';
+    const line = `${key} = ${JSON.stringify(value)}`;
+    let previous;
+
+    if (field === 'model') {
+      const entry = rootModelEntry(text);
+      previous = entry?.value ?? null;
+      if (previous === value) return { changed: false, previous, file, key };
+      // Replace only the assignment so spacing, line endings and comments survive.
+      text = entry ? text.slice(0, entry.start) + line + text.slice(entry.end) : `${line}\n${text}`;
+    } else {
+      const match = text.match(effortPattern);
+      previous = match?.[1] || null;
+      if (previous === value) return { changed: false, previous, file, key };
+      text = match ? text.replace(effortPattern, line) : `${line}\n${text}`;
+    }
+
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, text.endsWith('\n') ? text : text + '\n', { mode: 0o600 });
+    return { changed: true, previous, file, key };
+  },
+});

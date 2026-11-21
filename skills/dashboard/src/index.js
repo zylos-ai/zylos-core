@@ -96,7 +96,7 @@ import { createScheduleRead, scheduleReadResponse } from './lib/workbench/schedu
 import { createScheduleWrite } from './lib/workbench/schedule-write.js';
 import { createScheduleTz } from './lib/workbench/schedule-tz.js';
 import { createInstanceTimezone, handleInstanceTimezone, handleInstanceTimezoneRestart } from './lib/instance-timezone.js';
-import { handleAction, readCodexRootString } from './lib/actions.js';
+import { handleAction, instanceDefaults } from './lib/actions.js';
 import { VersionChecker } from './lib/version-checker.js';
 import { isNewerVersion } from './lib/version-utils.js';
 import { DASHBOARD_RUNTIMES, createRuntimeOverridesReader, runtimeVersionRecord as projectRuntimeVersion, runtimeDefaults, handleRuntimeOptions } from './lib/runtime-api.js';
@@ -277,12 +277,6 @@ const versionChecker = new VersionChecker({
 timeMethod(versionChecker, 'check', 'versions.check-latest');
 versionChecker.start();
 
-function readClaudeSettings() {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(config.zylosDir, '.claude', 'settings.json'), 'utf8'));
-  } catch { return {}; }
-}
-
 // Installed versions are cached and refreshed asynchronously by the timer
 // and upgrade actions, never by the state broadcast path.
 const INSTALLED_VERSIONS_REFRESH_MS = 10 * 60 * 1000;
@@ -385,8 +379,7 @@ function groupRuntimeInfo(row) {
   const versions = runtimeVersionRecord(runtime);
   const runningVersion = row.runningVersion ?? null;
   const desired = row.desired ? row.desired.mode === 'override' ? row.desired : 'default' : row.target?.model;
-  const defaultModel = runtime === 'claude' ? readClaudeSettings().model : runtime === 'codex' ? readCodexRootString('model', config.zylosDir) : null;
-  const defaultEffort = runtime === 'claude' ? readClaudeSettings().effortLevel : runtime === 'codex' ? readCodexRootString('model_reasoning_effort', config.zylosDir) : null;
+  const { model: defaultModel, effort: defaultEffort } = instanceDefaults(runtime, config.zylosDir);
   const model = row.model ?? null, effort = row.effort ?? null;
   const desiredModel = typeof desired === 'object' && desired ? desired.model : defaultModel;
   const desiredEffort = typeof desired === 'object' && desired ? desired.effort : defaultEffort;

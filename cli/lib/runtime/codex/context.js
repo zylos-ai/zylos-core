@@ -64,10 +64,28 @@ export const context = Object.freeze({
   readDefaultModel({ zylosDir }) {
     try {
       // Only root TOML keys belong to the instance defaults; ignore table values.
-      const root = fs.readFileSync(path.join(zylosDir, '.codex/config.toml'), 'utf8').split(/^\s*\[/m)[0];
-      const match = root.match(/^\s*model\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')\s*(?:#.*)?$/m);
-      return match ? (match[1].startsWith('"') ? JSON.parse(match[1]) : match[1].slice(1, -1)) : null;
+      return rootModelEntry(fs.readFileSync(projectModelConfigPath(zylosDir), 'utf8'))?.value ?? null;
     } catch { return null; }
   },
   statusLine: UNSUPPORTED,
 });
+
+export function projectModelConfigPath(zylosDir) {
+  return path.join(zylosDir || path.join(os.homedir(), 'zylos'), '.codex', 'config.toml');
+}
+
+export function rootModelEntry(text) {
+  const root = text.split(/^\s*\[/m)[0];
+  const match = root.match(/^\s*(model\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*'))\s*(?:#.*)?$/dm);
+  if (!match) return null;
+
+  const literal = match[2];
+  const [start, end] = match.indices[1];
+  let value = null;
+  try {
+    value = literal.startsWith('"') ? JSON.parse(literal) : literal.slice(1, -1);
+  } catch {
+    // Preserve the existing unreadable-value result and keep the assignment location for writes.
+  }
+  return { value, start, end };
+}

@@ -1,3 +1,5 @@
+import { UNSUPPORTED } from '../contract.js';
+
 // Maintained independently of client discovery caches and pricing tables.
 const EXTENDED_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 const MAX_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -15,10 +17,14 @@ const CODEX_MODELS = [
   { id: 'gpt-5.6', display_name: 'GPT-5.6 (Sol alias)', efforts: EXTENDED_EFFORTS },
 ];
 
-export function getCodexModels() {
-  return CODEX_MODELS.map(model => ({ ...model, efforts: [...model.efforts] }));
-}
-
-export function codexEffortsForModel(id) {
-  return [...(CODEX_MODELS.find(model => model.id === id)?.efforts || [])];
-}
+export default Object.freeze({
+  models() {
+    return CODEX_MODELS.map(({ id, display_name }) => ({ id, display_name }));
+  },
+  effortsFor(id) {
+    const entry = CODEX_MODELS.find(model => model.id === id);
+    return entry ? [...entry.efforts] : null;
+  },
+  defaultEfforts: UNSUPPORTED,
+  strict: true,
+});

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { handleAction, getActionsMeta, readCodexRootString } from '../src/lib/actions.js';
+import { handleAction, getActionsMeta, instanceDefaults } from '../src/lib/actions.js';
 import { formatActionResult } from '../public/js/action-result.js';
 
 // Filesystem integration: real action validation and writes, private config files
@@ -30,7 +30,7 @@ test('explicit Codex model changes project config while keeping Claude bytes', a
   assert.equal(result.runtime, 'codex');
   assert.equal(result.requires_restart, false);
   assert.equal(result.messageParams.runtime, 'codex');
-  assert.equal(readCodexRootString('model', dir), 'gpt-x');
+  assert.equal(instanceDefaults('codex', dir).model, 'gpt-x');
   assert.match(fs.readFileSync(codex, 'utf8'), /\[other\]\nkeep = true/);
   assert.equal(fs.readFileSync(claude, 'utf8'), before);
 });
@@ -98,7 +98,7 @@ test('effort writes target each selected runtime and metadata reads saved defaul
   assert.equal(codexResult.requires_restart, false);
   assert.equal(codexResult.messageParams.runtime, 'codex');
   assert.equal(fs.readFileSync(claude, 'utf8'), beforeClaude);
-  assert.equal(readCodexRootString('model_reasoning_effort', dir), 'high');
+  assert.equal(instanceDefaults('codex', dir).effort, 'high');
   const beforeCodex = fs.readFileSync(codex, 'utf8');
   const claudeResult = await handleAction('switch-effort', { runtime: 'claude', effort: 'low' }, config);
   assert.equal(claudeResult.ok, true);

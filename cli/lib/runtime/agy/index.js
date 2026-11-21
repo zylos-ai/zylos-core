@@ -34,7 +34,7 @@ export default Object.freeze({
   }),
   auth,
   health,
-  launch: Object.freeze({ prepare, preAccept: UNSUPPORTED, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags, checkAutonomous: UNSUPPORTED }),
+  launch: Object.freeze({ modelConfig: UNSUPPORTED, prepare, preAccept: UNSUPPORTED, buildArgs, env, helpProbe, promptPlacement, efforts, overrideHelpFlags, checkAutonomous: UNSUPPORTED }),
   instructions,
   input,
   busy,
