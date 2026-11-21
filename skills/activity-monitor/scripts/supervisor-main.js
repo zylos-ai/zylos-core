@@ -109,7 +109,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
       }, statusNotices);
     } else {
       const details=[event.requestId && `requestId=${event.requestId}`,event.reason && `reason=${event.reason}`,
-        event.runtime && `runtime=${event.runtime}`,event.oldest_at!==undefined && `oldest_at=${event.oldest_at}`,event.message].filter(Boolean).join(' ');
+        event.message].filter(Boolean).join(' ');
       message = `Supervisor: ${event.event ?? 'lifecycle requires attention'} (${event.sessionGroup ?? event.session_group ?? 'global'}). ${details}`.trim();
     }
     const pending=guard.notify(message);
