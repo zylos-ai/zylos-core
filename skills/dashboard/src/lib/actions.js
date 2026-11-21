@@ -277,11 +277,10 @@ async function upgradeRuntimeCli(reqId, runtime, zylosDir) {
 }
 
 async function setThreshold(reqId, body, config, zylosDir) {
-  if (!['claude', 'codex'].includes(body?.runtime)) return { ok: false, error: 'INVALID_RUNTIME' };
+  if (!SUPPORTED_RUNTIMES.includes(body?.runtime)) return { ok: false, error: 'INVALID_RUNTIME' };
   if (typeof body?.model !== 'string' || !body.model.trim()) return { ok: false, error: 'invalid_model', messageKey: 'result.invalid_model' };
   const value = typeof body.value === 'number' || (typeof body.value === 'string' && /^\d+$/.test(body.value.trim())) ? Number(body.value) : NaN;
-  const limit = thresholdLimit({ runtime: body.runtime, context: thresholdContexts[body.runtime], model: body.model,
-    modelWindows: readModelWindows({ contexts: thresholdContexts }) });
+  const limit = thresholdLimit({ runtime: body.runtime, context: thresholdContexts[body.runtime] });
   if (body.value === '' || !Number.isInteger(value) || value < 10 || value > limit) {
     return { ok: false, error: 'invalid_value', message: `Threshold must be between 10 and ${limit}`, messageKey: 'result.invalid_threshold', messageParams: { max: limit } };
   }

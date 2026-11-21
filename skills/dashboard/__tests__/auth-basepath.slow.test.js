@@ -2019,16 +2019,16 @@ test('group thresholds follow actual session models while Fleet omits Origin ses
     assertNoSessionFields(self);
   }
   fs.writeFileSync(path.join(root, '.claude/settings.json'), JSON.stringify({ model: 'opus[1m]' }));
-  fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ model_rotation_thresholds: { claude: { 'opus[1m]': 30 } } }));
+  fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ model_rotation_thresholds: { claude: { 'opus[1m]': 25 } } }));
   const metaResponse = await fetch(running.origin + '/api/instance/runtime-options?runtime=claude&model=claude-opus-4-6%5B1m%5D', { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
   assert.equal(metaResponse.status, 200);
   const meta = await metaResponse.json();
-  assert.equal(meta.model_thresholds['opus[1m]'], 30);
-  assert.equal(meta.model_thresholds['claude-opus-4-6[1m]'], 40);
+  assert.equal(meta.model_thresholds['opus[1m]'], 25);
+  assert.equal(meta.model_thresholds['claude-opus-4-6[1m]'], 20);
   runtime = 'claude';
   for (const [model, launch, expected] of [
-    ['claude-opus-5-5', { runtime, mode: 'default' }, 30],
-    ['claude-opus-4-6', { runtime, mode: 'override', model: 'claude-opus-4-6[1m]' }, 40],
+    ['claude-opus-5-5', { runtime, mode: 'default' }, 25],
+    ['claude-opus-4-6', { runtime, mode: 'override', model: 'claude-opus-4-6[1m]' }, 20],
   ]) {
     launchConfig = launch; snapshotClock += 2100;
     usage = { valid: true, value: { model: { id: model }, context_window: { context_window_size: 1000000 } } };

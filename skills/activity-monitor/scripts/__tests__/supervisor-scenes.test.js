@@ -127,9 +127,9 @@ test('Codex and Antigravity usage samples determine rotation scene fields', () =
   const identity = { runId: 'run', sessionId: 'session' };
   for (const [runtime, value, expected] of [
     ['codex', { model: 'gpt-5', contextUsage: { used: 129200, ceiling: 258400 } },
-      { model: 'gpt-5', usagePercent: 50, contextWindow: 258400, threshold: 70 }],
+      { model: 'gpt-5', usagePercent: 50, contextWindow: 258400, threshold: 75 }],
     ['agy', { model: { id: 'gemini-3' }, context_window: { used_percentage: 45 } },
-      { model: 'gemini-3', usagePercent: 45, contextWindow: 1_048_576, threshold: 40 }],
+      { model: 'gemini-3', usagePercent: 45, contextWindow: 1_048_576, threshold: 20 }],
   ]) {
     const scene = { ...identity, runtime };
     scenes.applyUsage(scene, { identity, usage: { valid: true, value } }, contexts[runtime]);

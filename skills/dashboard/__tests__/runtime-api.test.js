@@ -52,7 +52,7 @@ for (const [activeRuntime, query] of [['agy', ''], ['claude', '?runtime=agy']]) 
     assert.equal(body.current_effort, null);
     assert.equal(body.models.length, 0, 'model overrides are unsupported');
     assert.equal(Object.keys(body.efforts_by_model).length, 0);
-    assert.equal(body.new_session_threshold, 40);
+    assert.equal(body.new_session_threshold, 20);
   });
 }
 
@@ -74,7 +74,7 @@ test('instance defaults and versions include Antigravity without borrowing Claud
   assert.equal(defaults.claude.model, 'opus');
   assert.equal(defaults.agy.model, null);
   assert.equal(defaults.agy.effort, null);
-  assert.equal(defaults.agy.threshold, 40);
+  assert.equal(defaults.agy.threshold, 20);
   const versions = runtimeVersionRecord('agy', { installed: { claude: '2.0.0', agy: '1.5.10' }, latest: { claude: '3.0.0' }, unsupported: ['agy'] });
   assert.equal(versions.installed, '1.5.10');
   assert.equal(versions.latest, null);
@@ -82,10 +82,10 @@ test('instance defaults and versions include Antigravity without borrowing Claud
   assert.equal(versions.update_check, 'unsupported');
 });
 
-test('Antigravity session thresholds follow validated model objects and the one-million-token limit', async t => {
+test('Antigravity session thresholds follow validated model objects and the one-million-token default', async t => {
   const policy = await readThresholdPolicy(fixture(t));
   const facts = { runtime: 'agy', usage: { model: { id: 'gemini', effort: 'high' } } };
-  assert.equal(sessionThreshold(policy, facts), 40);
+  assert.equal(sessionThreshold(policy, facts), 20);
   policy.config.model_rotation_thresholds = { agy: { gemini: 25 } };
   assert.equal(sessionThreshold(policy, facts), 25);
   assert.equal(sessionThreshold(policy, { runtime: 'agy', usage: null }), null);

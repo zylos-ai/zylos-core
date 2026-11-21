@@ -316,11 +316,6 @@
   },
   {
     "file": "skills/dashboard/src/lib/actions.js",
-    "text": "if (!['claude', 'codex'].includes(body?.runtime)) return { ok: false, error: 'INVALID_RUNTIME' };",
-    "reason": "inconsistent: This threshold API rejects agy while other threshold consumers recognize it."
-  },
-  {
-    "file": "skills/dashboard/src/lib/actions.js",
     "text": "const codexModels = runtime === 'codex' ? getCodexModels() : [];",
     "reason": "else-fallback: Preserves Dashboard model and effort routing through the existing runtime branches."
   },
@@ -748,11 +743,6 @@
     "file": "skills/dashboard/public/js/runtime-ui.js",
     "text": "hidden: !list.length && meta.runtime !== 'codex',",
     "reason": "dispatch:dashboard: Retains the Codex effort control when the catalog is empty."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/group-config.js",
-    "text": "if (!model || !['claude', 'codex', 'agy'].includes(runtime) || Number.isFinite(state.meta[runtime]?.model_thresholds?.[model])) return;",
-    "reason": "inconsistent: Threshold reads accept Antigravity while the Dashboard threshold action still rejects it."
   },
   {
     "file": "skills/dashboard/public/js/wb/page-actions.js",
