@@ -12,6 +12,7 @@ import { messageState, receiptState } from './chat-delivery-state.js';
 import { renderQuestion } from './chat-questions.js';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js';
 import { createGroupSide } from './group-side.js';
+import { createConversationConfig } from './conversation-config.js';
 import { createLiveArea, livePresentation } from './conversation-activity.js';
 import { createScrollGesture } from './scroll-gesture.js';
 import { createConversationDeletion, deletionPath } from './conversation-delete.js';
@@ -396,8 +397,8 @@ export function mountConversationPage({
   const receiptText = node('span');
   const receiptCheck = action('refreshStatus', () => state.refreshStatus(), 'check');
   receipt.append(receiptText, receiptCheck);
-  const readOnlyFooter = node('p', undefined, 'conversation-read-only');
-  readOnlyFooter.append(icon(document, 'lock'), node('span', t('chat.page.externalReadOnly')));
+  const configFooter = node('div', undefined, 'conversation-config-footer');
+  configFooter.hidden = true;
   const composeBox = node('div', undefined, 'conversation-compose-box');
   const input = node('textarea', undefined, 'conversation-input chat-input');
   input.rows = 1;
@@ -480,7 +481,7 @@ export function mountConversationPage({
       void requestSend();
     }
   });
-  detail.append(header, renameForm, notices, history, composer, readOnlyFooter);
+  detail.append(header, renameForm, notices, history, composer, configFooter);
   page.append(sidebar, detail);
   const menuScrim = node('button', undefined, 'conversation-menu-scrim');
   menuScrim.type = 'button';
@@ -559,6 +560,7 @@ export function mountConversationPage({
     ...groupLinks, isVisible: () => !destroyed && !page.hidden && document.visibilityState !== 'hidden',
     // The panel only shows the open conversation's group, whose conversation is this one: going to it just closes.
     onConversation: () => groupSide.close(),
+    onConfigSaved: key => quickConfig.reload(key),
     onClose: ({ focus, hide }) => {
       groupSideFor = null;
       // Hiding inside the preserved change keeps the reading position (or the pin to the bottom) as the column widens.
@@ -566,6 +568,12 @@ export function mountConversationPage({
       group.setAttribute('aria-expanded', 'false');
       if (focus && !group.hidden) (view?.innerWidth <= 760 ? menuToggle : group).focus();
     } }) : null;
+  const quickConfig = groupLinks ? createConversationConfig({ document, t,
+    request: (path, options) => fetcher(endpoint(path), options),
+    identity: () => typeof identity === 'function' ? identity() : identity,
+    writable: groupLinks.writable ?? (() => true), detail: groupLinks.detail ?? (() => 'plain'),
+    onConfigSaved: key => groupSide.reloadConfig(key),
+  }) : null;
   if (groupSide) {
     page.append(groupSide.element);
     group.setAttribute('aria-expanded', 'false');
@@ -717,6 +725,7 @@ export function mountConversationPage({
   }
   function mobileDetail(open) {
     page.classList.toggle('conversation-detail-open', open);
+    if (!open) quickConfig?.close();
     closeConversationMenu(false);
     syncMobileFocus();
     scheduleFit();
@@ -1610,7 +1619,8 @@ export function mountConversationPage({
     menuRename.disabled = s.loading || s.sending;
     renameSave.disabled = s.loading || s.sending;
     // In single, Origin's workbench row has no group key, so there is no group detail to open beside it.
-    group.hidden = !groupSide || !(current?.sessionGroup ?? current?.session_group) || isDraft(s) || origin && s.mode === 'single';
+    const sessionGroup = current?.sessionGroup ?? current?.session_group;
+    group.hidden = !groupSide || !sessionGroup || isDraft(s) || origin && s.mode === 'single';
     menuGroup.hidden = group.hidden;
     const menuItem = deletableItem(s, s.selectedId);
     menuDelete.hidden = !menuItem;
@@ -1642,11 +1652,15 @@ export function mountConversationPage({
     if (!showComposer) {
       composer.remove();
     } else if (composer.parentNode !== detail) {
-      detail.insertBefore(composer, readOnlyFooter);
+      detail.insertBefore(composer, configFooter);
     }
     composer.hidden = !showComposer;
-    readOnlyFooter.hidden = s.tab !== 'external' || !s.selectedId;
-    text(readOnlyFooter.lastElementChild, t('chat.page.externalReadOnly'));
+    if (quickConfig) {
+      const container = showComposer ? composeBox : configFooter;
+      if (quickConfig.anchor.parentNode !== container) container.insertBefore(quickConfig.anchor, showComposer ? send : null);
+      quickConfig.update(group.hidden || page.hidden ? null : sessionGroup);
+      configFooter.hidden = showComposer || group.hidden;
+    }
     composer.classList.toggle('conversation-composer-disabled', s.mode === 'single' && !origin);
     updateInputPlaceholder(s.mode);
     input.disabled = !s.canWrite || !!s.sending;
@@ -1786,18 +1800,20 @@ export function mountConversationPage({
       deletion.invalidate();
       deletionResult = null;
       groupSide?.close({ focus: false });
+      quickConfig?.update(null);
       annotations.hide();
       page.hidden = true;
       syncMobileFocus();
       state.close();
     },
-    redraw() { redraw(); groupSide?.redraw(); },
+    redraw() { redraw(); groupSide?.redraw(); quickConfig?.redraw(); },
     clearDrafts(scope) { uploadTray.clearForAuthentication(scope?.instance ? { instance: scope.instance } : undefined); state.clearDrafts(scope); },
     destroy() {
       closeConversationMenu(false);
       document.documentElement.dataset.conversationFocus = 'false';
       deletion.invalidate();
       groupSide?.destroy();
+      quickConfig?.destroy();
       destroyed = true;
       uploadTray.destroy();
       for (const resource of trayResources.values()) resource.destroy();

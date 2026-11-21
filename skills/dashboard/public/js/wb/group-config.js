@@ -66,8 +66,8 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
     publish();
     return state.meta[runtime];
   }
-  async function load() {
-    const detail = await request(`/api/groups/${encodeURIComponent(key)}`);
+  async function load(detail) {
+    detail ??= await request('/api/groups/' + encodeURIComponent(key));
     const value = detail.config;
     if (active()) {
       state.value = value;

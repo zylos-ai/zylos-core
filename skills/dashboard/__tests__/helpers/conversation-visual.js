@@ -175,16 +175,23 @@ export async function runConversationVisual(t, sandbox) {
         const first = mirror.firstElementChild.getBoundingClientRect();
         const last = mirror.lastElementChild.getBoundingClientRect();
         const button = el.parentElement.querySelector('[data-action="send"]').getBoundingClientRect();
+        const config = el.parentElement.querySelector('.conversation-config-button').getBoundingClientRect();
         const result = { height: bounds.height, lineHeight: parseFloat(style.lineHeight), lineCenter: (last.top + last.bottom) / 2,
-          buttonCenter: (button.top + button.bottom) / 2, firstTop: first.top, lastBottom: last.bottom,
+          buttonCenter: (button.top + button.bottom) / 2, configCenter: (config.top + config.bottom) / 2,
+          firstTop: first.top, lastBottom: last.bottom,
           inputTop: bounds.top, inputBottom: bounds.bottom, inputRight: bounds.right, buttonLeft: button.left,
           buttonTop: button.top, buttonBottom: button.bottom, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
         mirror.remove();
         return result;
       });
-      assert.ok(Math.abs(measurement.lineCenter - measurement.buttonCenter) <= 2, `${width} ${name}: send aligns with last line: ${JSON.stringify(measurement)}`);
       assert.ok(measurement.firstTop >= measurement.inputTop && measurement.lastBottom <= measurement.inputBottom + 1, `${width} ${name}: all lines remain visible`);
-      assert.ok(measurement.inputRight <= measurement.buttonLeft && measurement.buttonTop >= measurement.inputTop - 1 && measurement.buttonBottom <= measurement.inputBottom + 1, `${width} ${name}: send stays beside the editor`);
+      if (width === 390) {
+        assert.ok(measurement.buttonTop >= measurement.inputBottom, `${name}: Send is below the focused phone editor`);
+        assert.ok(Math.abs(measurement.configCenter - measurement.buttonCenter) <= 1, `${name}: Send aligns with the configuration button`);
+      } else {
+        assert.ok(Math.abs(measurement.lineCenter - measurement.buttonCenter) <= 2, `${width} ${name}: send aligns with last line: ${JSON.stringify(measurement)}`);
+        assert.ok(measurement.inputRight <= measurement.buttonLeft && measurement.buttonTop >= measurement.inputTop - 1 && measurement.buttonBottom <= measurement.inputBottom + 1, `${width} ${name}: send stays beside the editor`);
+      }
       if (name === 'multi-line') assert.ok(measurement.height > 4 * measurement.lineHeight, 'editor grows beyond its initial line');
       // The phone editor uses the 44px mobile control height (as mobile-conversation-browser checks).
       else assert.ok(measurement.height <= (width === 390 ? 46 : 41), 'empty and one-line editors keep a one-line height (the 40px desktop / 44px phone control height)');
@@ -571,7 +578,7 @@ export async function runConversationVisual(t, sandbox) {
   assert.equal(await page.locator('#wb-chat textarea').count(), 0);
   assert.equal(await page.locator('#wb-chat [data-action="send"]').count(), 0);
   assert.equal(await page.locator('#wb-chat .conversation-message-status:visible').count(), 0, 'pending external inbound has no stale delivery label');
-  assert.equal(await page.locator('#wb-chat .conversation-read-only').isVisible(), true);
+  assert.equal(await page.locator('#wb-chat .conversation-config-footer').isVisible(), true);
   assert.equal(await page.locator('#wb-chat .conversation-external-section').isVisible(), true);
   assert.match(await page.locator('#wb-chat .conversation-external-section').innerText(), /External channels · read only/i);
   await screenshot('external-read-only');
