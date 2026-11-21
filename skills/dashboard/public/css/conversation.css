@@ -672,20 +672,63 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
   font-size:11px;
   flex:none
 }
-.conversation-read-only {
+.conversation-config-footer {
   display:flex;
   align-items:center;
-  gap:7px;
+  flex:none;
+  min-height:40px;
+  padding:4px 16px;
   border-top:1px solid var(--wb-line);
+  background:var(--bg)
+}
+.conversation-config-anchor {
+  position:relative;
+  min-width:0;
+  max-width:46%;
+  align-self:center
+}
+.conversation-config-footer .conversation-config-anchor { max-width:100%; }
+.conversation-compose-box>.conversation-config-anchor {
+  align-self:flex-end;
+  margin-bottom:calc((var(--conversation-control-height) - var(--wb-control-compact))/2)
+}
+.conversation-config-anchor .conversation-config-button {
+  gap:6px;
+  width:100%;
+  height:var(--wb-control-compact);
+  min-width:0;
+  padding:0 8px;
+  border-radius:999px;
   color:var(--text-dim);
-  font-size:12px;
-  padding:14px 16px;
-  margin:0;
-  flex:none
+  -webkit-tap-highlight-color:transparent
 }
-.conversation-read-only .wb-ico {
-  flex:none
+.conversation-config-summary {
+  overflow:hidden;
+  white-space:nowrap;
+  text-overflow:ellipsis
 }
+.conversation-config-button .wb-ico { flex:none; transform:rotate(90deg); }
+.conversation-config-footer .conversation-config-button { border-color:transparent; background:transparent; }
+.conversation-config-footer .conversation-config-button:hover { background:var(--wb-hover); }
+.conversation-config-panel {
+  position:absolute;
+  right:0;
+  bottom:calc(100% + 8px);
+  z-index:16;
+  width:min(340px, 44vw);
+  max-height:calc(100dvh - 160px);
+  overflow:auto;
+  padding:12px;
+  border:1px solid var(--wb-line-strong);
+  border-radius:12px;
+  background:var(--wb-panel);
+  box-shadow:var(--wb-shadow)
+}
+.conversation-config-title { margin:0 0 8px; font-size:14px; line-height:20px; color:var(--text); }
+.conversation-config-grab { display:none; }
+.conversation-config-panel .wb-cfg-edit { margin:0; padding:0; border:0; }
+.conversation-config-footer .conversation-config-panel { left:0; right:auto; }
+.conversation-config-scrim { display:none; }
 .conversation-composer-disabled {
   opacity:.65
 }
@@ -780,10 +823,6 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
   .conversation-page .conversation-reload {
     width:40px;
     flex:none
-  }
-  .conversation-read-only {
-    font-size:11px;
-    padding:12px
   }
   .conversation-page .conversation-rename button {
     min-height:40px
@@ -1775,7 +1814,47 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-page .conversation-compose-box>.conversation-send[data-action=retry] { flex-basis:100%; min-width:0; max-width:100%; height:auto; min-height:44px; justify-content:center; padding:10px 14px; white-space:normal; overflow-wrap:anywhere; }
   .conversation-page .conversation-compose-hint { display:none; }
   .conversation-page .conversation-mobile-retry-hint { display:block; margin:0; padding:0 8px; color:var(--state-busy); font-size:12px; line-height:1.5; }
-  .conversation-page .conversation-read-only { justify-content:center; min-height:56px; padding:12px 16px calc(12px + env(safe-area-inset-bottom)); font-size:13px; }
+  .conversation-config-footer { padding:2px 12px calc(2px + env(safe-area-inset-bottom)); }
+  .conversation-config-anchor .conversation-config-button { height:var(--wb-control-touch); background:transparent; border-color:transparent; }
+  .conversation-config-anchor .conversation-config-button:hover { background:var(--wb-hover); }
+  .conversation-config-grab { display:block; width:36px; height:4px; margin:-8px auto 12px; border-radius:999px; background:var(--wb-line-strong); }
+  .conversation-compose-box>.conversation-config-anchor { display:none; }
+  .conversation-compose-box:has(>.conversation-config-anchor:not([hidden])):has(>.conversation-input:focus, >.conversation-config-anchor:focus-within, .conversation-config-button[aria-expanded=true]) {
+    display:grid;
+    grid-template-columns:auto auto minmax(0, 1fr) auto;
+    align-items:center;
+    gap:2px 6px;
+    padding:4px;
+    border:1px solid var(--accent);
+    border-radius:22px;
+    background:var(--wb-panel);
+    box-shadow:0 0 0 3px var(--wb-accent-soft)
+  }
+  .conversation-compose-box:has(>.conversation-config-anchor:not([hidden])):has(>.conversation-input:focus, >.conversation-config-anchor:focus-within, .conversation-config-button[aria-expanded=true])
+  >.conversation-input { border-color:transparent; background:transparent; box-shadow:none; }
+  .conversation-compose-box>.conversation-input { grid-column:1 / -1; grid-row:1; }
+  .conversation-compose-box>.conversation-attach { grid-column:1; grid-row:2; }
+  .conversation-compose-box>.conversation-annotations-button { grid-column:2; grid-row:2; }
+  .conversation-compose-box>.conversation-config-anchor { grid-column:3; grid-row:2; max-width:100%; margin-bottom:0; align-self:center; justify-self:start; }
+  .conversation-compose-box>.conversation-send { grid-column:4; grid-row:2; }
+  .conversation-compose-box>.conversation-send[data-action=retry] { grid-column:1 / -1; grid-row:3; }
+  .conversation-compose-box:has(>.conversation-input:focus, >.conversation-config-anchor:focus-within, .conversation-config-button[aria-expanded=true])>.conversation-config-anchor { display:block; }
+  .conversation-config-scrim {
+    display:block;
+    position:fixed;
+    inset:0;
+    z-index:60;
+    background:var(--wb-scrim)
+  }
+  .conversation-config-panel,.conversation-config-footer .conversation-config-panel {
+    position:fixed;
+    inset:auto 0 0;
+    z-index:61;
+    width:auto;
+    max-height:min(85dvh, calc(100dvh - env(safe-area-inset-top)));
+    padding:16px max(16px, env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    border-radius:16px 16px 0 0
+  }
 
   .conversation-page .conversation-menu-scrim { display:block; position:fixed; inset:0; z-index:60; width:100%; height:100%; margin:0; padding:0; border:0; border-radius:0; background:var(--wb-scrim); }
   .conversation-page .conversation-menu-sheet { display:block; position:fixed; inset:auto 0 0; z-index:61; max-height:min(85dvh, calc(100dvh - env(safe-area-inset-top))); overflow:auto; padding:6px 0 calc(12px + env(safe-area-inset-bottom)); border-radius:16px 16px 0 0; background:var(--wb-panel); box-shadow:var(--wb-shadow); outline:0; }

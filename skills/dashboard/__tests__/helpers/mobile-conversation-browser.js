@@ -58,7 +58,8 @@ export async function startPage(sandbox, publicDir = currentPublic) {
       row.sessionGroup = GROUP; row.name = { displayName: title }; row.state = { kind: scene === 'running' ? 'working' : 'idle' }; row.tools = []; row.flags = {};
       row.queue = { known: true, pending: { count: 0 }, running: { count: 0 }, fence: null };
       row.working = { on: scene === 'running', since: scene === 'running' ? NOW - 3 * 60000 : null, main: scene === 'running' ? { since: NOW - 3 * 60000 } : null, tools: 0, subagents: null };
-      value.rows = [row, { ...row, sessionGroup: 'origin', origin: true, name: null, state: { kind: 'idle' }, working: { on: false, since: null, main: null, tools: 0, subagents: null } }];
+      value.rows = [row, { ...row, sessionGroup: 'origin', origin: true, name: null, state: { kind: 'idle' }, working: { on: false, since: null, main: null, tools: 0, subagents: null } },
+        { ...row, sessionGroup: EXTERNAL, name: { displayName: 'Howard' }, c4: { componentName: 'telegram' } }];
       const result = workbenchSnapshotAnswer(url, value, NOW);
       if (result?.id) result.config = workbenchAnswer(new URL('http://fixture/api/groups/' + encodeURIComponent(SAMPLE_GROUP)), NOW).config;
       return result;
@@ -831,8 +832,8 @@ export async function runMobileConversationBrowser(t, sandbox) {
       await openConversationMenu(page);
       assert.equal(await page.locator('.conversation-menu-rename').isVisible(), false);
       assert.match(await menu(page).innerText(), /Telegram|telegram/);
-      await page.keyboard.press('Escape'); assert.equal(await page.locator('.conversation-read-only').isVisible(), true);
-      assert.equal(await page.locator('.conversation-composer').count(), 0, 'external conversation retains read-only footer');
+      await page.keyboard.press('Escape'); assert.equal(await page.locator('.conversation-config-footer').isVisible(), true);
+      assert.equal(await page.locator('.conversation-composer').count(), 0, 'external conversation has the configuration footer without a composer');
       await controlsFit(page, 'read-only conversation');
       await shot(page, 'mobile-390-zh-read-only');
       assert.deepEqual(f.errors, []);
