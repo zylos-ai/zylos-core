@@ -141,7 +141,7 @@ export async function handleAction(action, body, config, { timezone } = {}) {
     result = { ok: false, error: 'internal_error', message: err.message, messageKey: 'result.internal_error', messageParams: { error: err.message } };
   }
 
-  if (action === 'switch-runtime' && !result.ok && ['AUTH_FAILED', 'AUTH_NOT_CONFIRMED', 'RUNTIME_SETUP_INCOMPLETE'].includes(result.error?.code)) {
+  if (action === 'switch-runtime' && !result.ok && ['AUTH_FAILED', 'AUTH_NOT_CONFIRMED', 'INSTRUCTIONS_UNAVAILABLE', 'RUNTIME_SETUP_INCOMPLETE'].includes(result.error?.code)) {
     result = { ...result, messageKey: null,
       message: [result.error.code, result.error.message].filter(Boolean).join(': ') };
   }

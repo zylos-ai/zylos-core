@@ -8,7 +8,7 @@ test('runtime authentication and hook readiness errors display original details 
   } });
   const { handleAction } = await import('../actions.js');
   const write = process.stderr.write;
-  for (const code of ['AUTH_FAILED', 'AUTH_NOT_CONFIRMED', 'RUNTIME_SETUP_INCOMPLETE', 'RUNTIME_NOT_INSTALLED']) {
+  for (const code of ['AUTH_FAILED', 'AUTH_NOT_CONFIRMED', 'INSTRUCTIONS_UNAVAILABLE', 'RUNTIME_SETUP_INCOMPLETE', 'RUNTIME_NOT_INSTALLED']) {
     reply = { ok: false, error: { code, message: 'Original probe explanation' }, messageKey: 'result.runtime_unknown' };
     const logged = [];
     process.stderr.write = chunk => { logged.push(String(chunk)); return true; };
