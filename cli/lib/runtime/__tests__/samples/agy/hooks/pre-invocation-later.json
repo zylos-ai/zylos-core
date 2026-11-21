@@ -1,0 +1,14 @@
+{
+  "artifactDirectoryPath": "/work/reviewer/.gemini/antigravity-cli/brain/d9369788-c278-43f0-9d65-373100450fd5",
+  "conversationId": "d9369788-c278-43f0-9d65-373100450fd5",
+  "cwd": "/work/reviewer/capture",
+  "hookEventName": "PreInvocation",
+  "initialNumSteps": 3,
+  "invocationNum": 1,
+  "lastUserInput": "Call run_command exactly once, with command printf \"fixture command failed\\n\" >&2; exit 7. This intentionally failing command is a hook test. Then answer DONE, without more tool calls.",
+  "modelName": "gemini-3.1-pro-low",
+  "transcriptPath": "/work/reviewer/.gemini/antigravity-cli/brain/d9369788-c278-43f0-9d65-373100450fd5/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/work/reviewer/capture"
+  ]
+}

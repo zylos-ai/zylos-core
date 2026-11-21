@@ -1,0 +1,17 @@
+{
+  "artifactDirectoryPath": "/work/reviewer/.gemini/antigravity-cli/brain/5fbba363-f59c-42ac-935b-bf77d10714a3",
+  "continuationActive": false,
+  "conversationId": "5fbba363-f59c-42ac-935b-bf77d10714a3",
+  "cwd": "/work/reviewer/capture",
+  "error": "generating and executing: Error 401, Message: Request had invalid authentication credentials., Status: UNAUTHENTICATED, Details: []",
+  "executionNum": 0,
+  "fullyIdle": true,
+  "hookEventName": "Stop",
+  "lastUserInput": "auth-probe",
+  "modelName": "gemini-3.1-pro-low",
+  "terminationReason": "ERROR",
+  "transcriptPath": "/work/reviewer/.gemini/antigravity-cli/brain/5fbba363-f59c-42ac-935b-bf77d10714a3/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/work/reviewer/capture"
+  ]
+}
