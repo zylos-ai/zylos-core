@@ -81,8 +81,8 @@ export async function handleCoreAction(action, body, config) {
   if (action === 'switch-runtime') {
     if (!['claude', 'codex', 'agy'].includes(body?.runtime)) return { ok: false, error: 'INVALID_RUNTIME', messageKey: 'result.invalid_runtime' };
     const args = ['runtime', body.runtime, '--json'];
-    if (body.confirmedRuns !== undefined) args.push('--confirmed-runs', JSON.stringify(body.confirmedRuns));
-    const result = await command('zylos', args, { timeout: 75000 });
+    if (body.confirmed === true) args.push('--yes');
+    const result = await command('zylos', args, { timeout: 65000 });
     const saved = result.ok && result.data?.result === 'saved';
     const unchanged = result.ok && result.data?.result === 'unchanged';
     return { ...result, messageKey: saved ? 'result.runtime_saved' : unchanged ? 'result.runtime_unchanged'

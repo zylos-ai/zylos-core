@@ -157,30 +157,44 @@ async function switchModel(reqId, body, config, zylosDir) {
   }
 
   const runtime = body?.runtime ?? (config.runtime || process.env.ZYLOS_RUNTIME || 'claude');
-  await migrateModelThresholds({ zylosDir });
-
-  if (runtime === 'claude') {
-    const settings = readSettings(zylosDir);
-    const prev = settings.model;
-    if (prev === model) {
-      log(reqId, `no-op: settings.model already "${model}"`);
-      return { ok: false, error: 'already_set', message: `Model already set to ${model}`, messageKey: 'result.already_set_model', messageParams: { value: model } };
-    }
-    settings.model = model;
-    log(reqId, `write ${settingsPath(zylosDir)}: model "${prev ?? '(unset)'}" → "${model}"`);
-    writeSettings(zylosDir, settings);
-
-    return { ok: true, message: `Model changed to ${model}.`, previous: prev, requires_restart: body.runtime === undefined, runtime, messageKey: 'result.model_changed', messageParams: { value: model, runtime } };
-  }
-
-  const prev = readCodexRootString('model', zylosDir);
-  if (prev === model) {
-    log(reqId, `no-op: codex model already "${model}"`);
+  const claude = runtime === 'claude';
+  const readModel = settings => claude ? settings.model : readCodexRootString('model', zylosDir);
+  const alreadySet = () => {
+    log(reqId, `no-op: ${runtime} model already "${model}"`);
     return { ok: false, error: 'already_set', message: `Model already set to ${model}`, messageKey: 'result.already_set_model', messageParams: { value: model } };
+  };
+  if (readModel(claude ? readSettings(zylosDir) : null) === model) return alreadySet();
+
+  let observed, readSessionMode, mode, restartObservedGroups;
+  if (body.runtime !== undefined) {
+    ({ readSessionMode } = await loadCoreModule('config.js'));
+    mode = readSessionMode().mode;
+    if (mode === 'single' || mode === 'multi') {
+      let observeRuntimeGroups;
+      ({ observeRuntimeGroups, restartObservedGroups } = await loadCoreModule('config-restart.js'));
+      observed = await observeRuntimeGroups(runtime, mode, { modelRuntime: runtime });
+      if (body.confirmed !== true && (!observed.groupsComplete || observed.groups.some(group => ['restart_needed', 'unknown'].includes(group.status)))) {
+        return { ok: false, status: 409, error: { code: 'CONFIRMATION_REQUIRED',
+          message: 'Refresh the session list and confirm the affected sessions before saving.' },
+        messageKey: 'wb.settings.runtimeConfirmationRequired' };
+      }
+    }
   }
-  writeCodexRootString('model', model, zylosDir);
-  log(reqId, `write ${codexProjectConfigPath(zylosDir)}: model "${prev ?? '(unset)'}" → "${model}"`);
-  return { ok: true, message: `Model changed to ${model}.`, previous: prev, requires_restart: body.runtime === undefined, runtime, messageKey: 'result.model_changed', messageParams: { value: model, runtime } };
+  await migrateModelThresholds({ zylosDir });
+  // Discovery yields to other settings requests. Merge with the file as it stands at the write.
+  const settings = claude ? readSettings(zylosDir) : null;
+  const previous = readModel(settings);
+  if (previous === model) return alreadySet();
+  if (claude) writeSettings(zylosDir, { ...settings, model });
+  else writeCodexRootString('model', model, zylosDir);
+  log(reqId, `write ${runtime} model "${previous ?? '(unset)'}" → "${model}"`);
+  if (observed) {
+    let modeChanged = true;
+    try { modeChanged = readSessionMode().mode !== mode; } catch { /* The save succeeded; the run cannot be safely targeted. */ }
+    await restartObservedGroups(observed, { modeChanged, confirmed: body.confirmed === true });
+  }
+  return { ok: true, message: `Model changed to ${model}.`, previous, requires_restart: body.runtime === undefined, runtime,
+    ...(observed && { data: observed }), messageKey: 'result.model_changed', messageParams: { value: model, runtime } };
 }
 
 function effortsForModel(model) {

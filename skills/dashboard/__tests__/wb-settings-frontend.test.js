@@ -233,7 +233,7 @@ test('default engine keeps the sign-in gate and model and effort save together p
   const effort = root.querySelector('#settings-effort-codex'); assert.equal(effort.value, '', 'the old effort is not offered by the new model');
   effort.value = 'low'; await effort.dispatch('change'); assert.equal(save.disabled, false);
   await save.dispatch('click');
-  assert.deepEqual(calls, [{ action: 'switch-model', body: { runtime: 'codex', model: 'two' } }, { action: 'switch-effort', body: { runtime: 'codex', effort: 'low' } }]);
+  assert.deepEqual(calls, [{ action: 'switch-model', body: { runtime: 'codex', model: 'two', confirmed: true } }, { action: 'switch-effort', body: { runtime: 'codex', effort: 'low' } }]);
   assert.equal(save.hidden, true, 'saved values become the new baseline');
   model.value = '__custom__'; await model.dispatch('change'); const custom = root.querySelector('#settings-model-custom-codex');
   assert.equal(custom.hidden, false); custom.value = 'unknown'; await custom.dispatch('input'); assert.equal(effort.disabled, true);
@@ -261,7 +261,7 @@ test('changing the default engine is a draft until saved and the undo restores t
   assert.equal(save.hidden, false, 'a failed save leaves the change as a draft');
   rejection = null;
   await save.dispatch('click');
-  assert.deepEqual(calls, Array.from({ length: 2 }, () => ({ action: 'switch-runtime', body: { runtime: 'codex', confirmedRuns: [['origin', 'run-origin']] } })));
+  assert.deepEqual(calls, Array.from({ length: 2 }, () => ({ action: 'switch-runtime', body: { runtime: 'codex', confirmed: true } })));
   assert.match(root.textContent, /result.runtime_saved/);
   assert.match(root.querySelector('#settings-engine-result').textContent, /savedRestartFailed.*Name origin.*fence_conflict/);
   assert.equal(save.hidden, true, 'successful save updates the baseline in the mounted card');
@@ -311,7 +311,9 @@ test('saving model and effort for both engines asks once, lists every change and
   await draftBothEngines(root);
   await root.querySelector('#settings-save-models').dispatch('click');
   assert.equal(asked.length, 1, 'one confirmation for the whole card');
-  assert.equal(asked[0].split('\n').length, 5, 'a heading and the four changes');
+  assert.match(asked[0], /Name origin.*\nName c/);
+  assert.doesNotMatch(asked[0], /Name b/, 'model overrides are excluded');
+  assert.match(asked[0], /Name a/, 'the explicit engine still inherits its default model');
   assert.match(asked[0], /Minimal/); assert.doesNotMatch(asked[0], /effort\.minimal/);
   assert.equal(calls.length, 4); assert.ok(calls.every(call => call.options?.confirmed === true), 'no action asks again');
   assert.equal(root.querySelector('#settings-save-models').hidden, true);
@@ -319,17 +321,21 @@ test('saving model and effort for both engines asks once, lists every change and
   assert.match(modelSaveConfirmation([{ runtime: 'codex', key: 'model', value: 'two' }], (key, params) => params ? params.value : key, { codex: { models: [{ id: 'two', display_name: 'Two Pro' }] } }), /Two Pro/, 'models are named as the dropdown shows them'); panel.destroy();
 });
 
-test('saving the default engine without running followers skips confirmation', async () => {
+test('saving an engine or model with no running followers skips confirmation', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
   const data = snapshot();
   data.rows = data.rows.filter(row => row.sessionGroup === 'a');
   data.instance.runtimeHealth.codex.health = 'ok';
-  const panel = renderDefaults(root, { document, snapshot: data, t, read: async () => ({}),
+  const panel = renderDefaults(root, { document, snapshot: data, metadata: { claude: effortMeta('claude') }, t, read: async () => ({}),
     confirm: async () => assert.fail('the only running session has a runtime override'),
     execute: async (action, body) => { calls.push({ action, body }); return true; } });
   await root.querySelector('#settings-use-codex').dispatch('click');
   await root.querySelector('#settings-save-runtime').dispatch('click');
   assert.deepEqual(calls, [{ action: 'switch-runtime', body: { runtime: 'codex' } }]);
+  const model = root.querySelector('#settings-model-claude');
+  model.value = 'two'; await model.dispatch('change');
+  await root.querySelector('#settings-save-models').dispatch('click');
+  assert.deepEqual(calls.at(-1), { action: 'switch-model', body: { runtime: 'claude', model: 'two' } });
   panel.destroy();
 });
 
@@ -823,7 +829,7 @@ test('model thresholds switch with the selected model and save an explicit engin
   threshold.value = '10'; await threshold.dispatch('input'); assert.equal(save.disabled, false);
   threshold.value = '35'; await threshold.dispatch('input'); assert.equal(save.disabled, false);
   await save.dispatch('click');
-  assert.deepEqual(calls, [{ action: 'switch-model', body: { runtime: 'claude', model: 'opus[1m]' } },
+  assert.deepEqual(calls, [{ action: 'switch-model', body: { runtime: 'claude', model: 'opus[1m]', confirmed: true } },
     { action: 'set-threshold', body: { runtime: 'claude', model: 'opus[1m]', value: 35 } }]);
   assert.equal(save.hidden, true);
   model.value = 'opus'; await model.dispatch('change'); assert.equal(threshold.value, '70', 'the other model remains unchanged');

@@ -8,11 +8,8 @@ function validateRequest(kind, request) {
   const { action } = request;
   if (!['get', 'set', 'reset'].includes(action)) throw dataError('INVALID_ARGS', 'Expected get, set, or reset');
   const allowed = ['action', 'sessionGroup', 'componentName', 'groupName'];
-  if (action !== 'get') allowed.push('yes', 'expectedRunId');
+  if (action !== 'get') allowed.push('yes');
   if (own(request, 'yes') && request.yes !== true) throw dataError('INVALID_ARGS', 'Invalid confirmation');
-  if (own(request, 'expectedRunId') && (!request.yes || typeof request.expectedRunId !== 'string' || !request.expectedRunId)) {
-    throw dataError('INVALID_ARGS', 'A run binding requires --yes');
-  }
   if (kind === 'model' || action === 'set') allowed.push('runtime');
   if (kind === 'model' && action === 'set') allowed.push('model', 'effort');
   if (Object.keys(request).some(key => !allowed.includes(key))) throw dataError('INVALID_ARGS', 'Unexpected configuration argument');
@@ -24,7 +21,7 @@ function validateRequest(kind, request) {
 export function parseConfigArgs(kind, argv) {
   const request = { action: argv[0] };
   let json = false;
-  const flags = { '--group': 'sessionGroup', '--channel': 'componentName', '--session-group': 'groupName', '--runtime': 'runtime', '--model': 'model', '--effort': 'effort', '--expected-run': 'expectedRunId' };
+  const flags = { '--group': 'sessionGroup', '--channel': 'componentName', '--session-group': 'groupName', '--runtime': 'runtime', '--model': 'model', '--effort': 'effort' };
   for (let index = 1; index < argv.length; index++) {
     const flag = argv[index];
     if (flag === '--json') {
@@ -113,14 +110,14 @@ export function createConfigHandler({ store, validateComponent, readSessionMode,
         if (active) observation = await observeRunning({ sessionGroup, sessionMode });
       } catch (error) { observationError = error; }
       if (active) args.beforeRestartingChange = () => {
-        if (observation?.hasProcess === false && !request.expectedRunId) return;
+        if (observation?.hasProcess === false) return;
         if (!request.yes) {
           const code = observation?.hasProcess === true ? 'CONFIRMATION_REQUIRED' : 'RUNNING_STATE_UNKNOWN';
           const message = observation?.hasProcess === true ? `This change will interrupt ${sessionGroup}.`
             : `Could not verify whether ${sessionGroup} is running.`;
           throw dataError(code, message);
         }
-        const runId = request.expectedRunId ?? (observation?.identityVerified ? observation.runId : null);
+        const runId = observation?.identityVerified ? observation.runId : null;
         target = { sessionGroup, runId, ...(observationError && { error: observationError }) };
       };
     }

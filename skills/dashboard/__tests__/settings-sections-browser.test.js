@@ -309,9 +309,9 @@ test('the settings page keeps its sections in order, offers the right upgrades a
 });
 
 // Runs the real settings card and action sender against the browser fixture.
-// Run for default engine save or feedback changes. The fixture owns all HTTP
+// Run for default engine or model confirmation, save, or feedback changes. The fixture owns all HTTP
 // responses; no CLI, runtime, PM2 or tmux is used.
-test('setting the default engine updates the open card and shows the Core rejection reason', {
+test('setting the default engine and model updates the open cards and reports restart refusals', {
   skip: !chatEnabled(), timeout: 90_000,
 }, async t => {
   const sandbox = createChatSandbox(t);
@@ -339,11 +339,21 @@ test('setting the default engine updates the open card and shows the Core reject
           localStorage.setItem('zylos-dashboard-locale', locale);
           localStorage.setItem('zylos-dashboard-theme', theme);
         }, { locale, theme });
-        const writes = [];
+        const writes = [], modelWrites = [];
         await context.route('**/*', async route => {
           const request = route.request(), url = new URL(request.url());
           if (url.origin !== base) return route.abort();
           if (url.pathname === '/_assets/vendor/chart.umd.js') return route.fulfill({ path: process.env.ZYLOS_CHAT_CHART_ASSET, contentType: 'text/javascript' });
+          if (decodeURIComponent(url.pathname) === '/api/groups/' + GROUP) {
+            const response = await route.fetch();
+            return route.fulfill({ response, json: { ...await response.json(), modelOverridden: true } });
+          }
+          if (url.pathname === '/api/instance/defaults' && request.method() === 'PUT') {
+            modelWrites.push(request.postDataJSON());
+            return route.fulfill({ json: { ok: true, data: { groupsComplete: true, groups: [
+              { sessionGroup: 'origin', restart: { status: 'not_restarted', reason: 'fence_conflict' } },
+            ] } } });
+          }
           if (url.pathname === switchPath && request.method() === 'POST') {
             writes.push(request.postDataJSON());
             return writes.length === 1
@@ -405,11 +415,41 @@ test('setting the default engine updates the open card and shows the Core reject
         assert.equal(await select('claude').locator('.wb-tag').count(), 0);
         assert.equal(navigations, 0);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
-        assert.deepEqual(writes, Array.from({ length: 2 }, () => ({ runtime: 'codex', confirmedRuns: [['origin', 'run-origin'], [GROUP, 'run-tg']] })));
+        assert.deepEqual(writes, Array.from({ length: 2 }, () => ({ runtime: 'codex', confirmed: true })));
         await shot('saved');
+        await page.locator('#settings-model-claude').selectOption('sonnet');
+        const modelSave = page.locator('#settings-save-models');
+        const confirmModel = async () => {
+          await modelSave.click();
+          await dialog.waitFor();
+          const text = await dialog.textContent();
+          assert.match(text, locale === 'zh' ? /1 个组/ : /1 running group/);
+          assert.match(text, /Origin/);
+          assert.doesNotMatch(text, /Telegram direct chat|Product weekly/);
+        };
+        await confirmModel();
+        await dialog.locator('.wb-modal-acts button').first().click();
+        await dialog.waitFor({ state: 'hidden' });
+        assert.deepEqual(modelWrites, []);
+        await confirmModel();
+        if (evidence) {
+          await page.evaluate(() => document.activeElement?.blur());
+          await page.screenshot({ path: path.join(evidence, `default-model-confirm-${locale}-${width}-${theme}.png`) });
+        }
+        await dialog.locator('.wb-modal-acts button').last().click();
+        const modelResult = page.locator('#settings-model-result');
+        await modelResult.getByText(/Origin.*fence_conflict/).waitFor();
+        assert.deepEqual(modelWrites, [{ kind: 'model', runtime: 'claude', model: 'sonnet', confirmed: true }]);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
+        await modelResult.evaluate(node => node.scrollIntoView({ block: 'center' }));
+        if (evidence) {
+          await page.evaluate(() => document.activeElement?.blur());
+          await page.mouse.move(0, 0);
+          await page.screenshot({ path: path.join(evidence, `default-model-result-${locale}-${width}-${theme}.png`) });
+        }
       } finally {
         await context.close();
       }
     }
-  });
+  }, { timeoutMs: 80_000 });
 });

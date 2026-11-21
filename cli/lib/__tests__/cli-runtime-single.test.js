@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { executeRuntimeSwitch, runtimeCommand, observeRuntimeGroups } from '../../commands/runtime.js';
+import { executeRuntimeSwitch, runtimeCommand } from '../../commands/runtime.js';
+import { observeRuntimeGroups } from '../config-restart.js';
 
 const old = { present: true, runtime: 'claude', launchConfig: { runtime: 'claude', mode: 'default' } };
 

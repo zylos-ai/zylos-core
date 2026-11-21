@@ -3038,9 +3038,14 @@ async function sendAction(action, body) {
       if (!result.ok) throw new Error(formatActionResult(result, t) || t('wb.settings.saveFailed'));
       return result;
     }
+    if (action === 'switch-model' && body?.runtime) {
+      if (observerTargetKey() !== targetKey) return false;
+      if (result.ok) return result;
+      if (result.error?.code === 'CONFIRMATION_REQUIRED') throw new Error(formatActionResult(result, t));
+    }
     return result.ok;
   } catch (err) {
-    if (action === 'switch-runtime') throw err;
+    if (action === 'switch-runtime' || (action === 'switch-model' && body?.runtime)) throw err;
     if (statusEl) {
       statusEl.className = 'modal-status error';
       statusEl.textContent = actionFailureMessage(action, actionRuntime, err, t);

@@ -524,7 +524,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     };
     const action = '/api/instance/actions/switch-runtime';
     const save = (runtime, expected = 200) => request(action, { method: 'POST',
-      body: { runtime, confirmedRuns: [['origin', originRun]] }, identity: 'admin', expected });
+      body: { runtime, confirmed: true }, identity: 'admin', expected });
     const detail = key => request('/api/groups/' + encodeURIComponent(key) + '?include=');
     const observer = () => request('/api/observer/status?session_group=origin', { identity: 'cookie' });
     try {
@@ -534,7 +534,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       assert.equal((await detail('telegram:working')).runtimeOverridden, true, 'a pin equal to the default is still an override');
       const before = await request('/api/health');
       assert.equal((await save('codex')).data.result, 'saved');
-      assert.deepEqual(runtimeCalls.at(-1), ['runtime', 'codex', '--json', '--confirmed-runs', JSON.stringify([['origin', 'fixture-run']])]);
+      assert.deepEqual(runtimeCalls.at(-1), ['runtime', 'codex', '--json', '--yes']);
       await nextDefault('codex');
       assert.equal((await request('/api/health')).bootId, before.bootId);
       assert.equal((await request('/api/instance')).default_runtime, 'codex');

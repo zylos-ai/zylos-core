@@ -10,8 +10,8 @@ Use `zylos group runtime|model set|reset` to change a group's configuration.
 When a change affects a running session, the command prints the affected group
 and the command to run with `--yes`. The first attempt saves nothing and does
 not open a prompt. A confirmed write requests an immediate restart of the
-observed run. You can pin that run with `--expected-run <run-id>` alongside
-`--yes`. The command can save offline configuration without confirmation.
+run observed before saving. The command can save offline configuration
+without confirmation.
 When an immediate restart fails or cannot be verified, the command reports the
 reason and keeps the saved configuration. In JSON output, see `data.restart`.
 The same rules apply to Origin in native single-session mode.

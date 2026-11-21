@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { updateConfigWithLock } from '../config-lock.js';
 import { readConfigStrict } from '../config-store.js';
-import { executeRuntimeSwitch, observeRuntimeGroups, runtimeCommand } from '../../commands/runtime.js';
+import { executeRuntimeSwitch, runtimeCommand } from '../../commands/runtime.js';
+import { observeRuntimeGroups } from '../config-restart.js';
 
 function fixture(overrides = {}) {
   const calls = [];
@@ -132,9 +133,9 @@ test('default switch submits confirmed runs after saving and reports each refusa
   assert.equal(unconfirmed.error.code, 'CONFIRMATION_REQUIRED');
   assert.deepEqual(unconfirmed.error.groups, ['chat:a', 'chat:b']);
   assert.equal(f.calls.includes('write'), false);
-  const result = await f.run(['--confirmed-runs', JSON.stringify([['chat:a', 'confirmed-a'], ['chat:b', 'run-chat:b']])]);
+  const result = await f.run(['--yes']);
   assert.equal(result.data.result, 'saved');
-  assert.deepEqual(requests, [{ sessionGroup: 'chat:a', runId: 'confirmed-a' }, { sessionGroup: 'chat:b', runId: 'run-chat:b' }]);
+  assert.deepEqual(requests, [{ sessionGroup: 'chat:a', runId: 'run-chat:a' }, { sessionGroup: 'chat:b', runId: 'run-chat:b' }]);
   assert.deepEqual(result.data.groups.map(row => [row.sessionGroup, row.restart?.reason ?? row.restart?.status ?? row.status]), [
     ['chat:a', 'fence_conflict'], ['chat:b', 'accepted'], ['chat:explicit', 'override_kept'], ['chat:starting', 'not_ready'], ['origin', 'not_running'],
   ]);
