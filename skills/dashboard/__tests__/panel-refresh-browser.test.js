@@ -7,7 +7,7 @@ import { workbenchAnswer, workbenchSnapshot, workbenchSnapshotAnswer } from './f
 import { startPage } from './helpers/workbench-browser.js';
 
 // Boundary: actual dashboard modules/styles and DOM in Chrome, fixed local HTTP APIs only.
-// Run for host/detail redraw state or shell refresh/visibility changes; skip unrelated backend changes.
+// Run for host/detail redraw, group configuration layout, or shell refresh/visibility changes; skip unrelated backend changes.
 // Opt-in before allocation; sandbox proves private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/socket/DB paths,
 // closes browser/server on pass/failure/timeout. No live Core, PM2, tmux, model or database starts.
 test('background panel refresh preserves reading position and folds', { skip: !chatEnabled(), timeout: 180000 }, async t => {
@@ -84,11 +84,11 @@ test('background panel refresh preserves reading position and folds', { skip: !c
         sandbox.addCleanup(() => context.close());
         try {
           await context.route('**/*', route => route.request().url().startsWith(base + '/') ? route.continue() : route.abort());
-          await context.addInitScript(theme => {
-            localStorage.setItem('zylos-dashboard-locale', 'zh');
+          await context.addInitScript(({ theme, width }) => {
+            localStorage.setItem('zylos-dashboard-locale', width === 390 ? 'en' : 'zh');
             localStorage.setItem('zylos-dashboard-theme', theme);
             localStorage.setItem('zylos-dashboard-detail-level', 'technical');
-          }, theme);
+          }, { theme, width });
           const page = await context.newPage(); page.setDefaultTimeout(10000);
           let boardReads = 0; const fixtureAt = Date.now();
           await page.route('**/api/**', route => {
@@ -109,7 +109,8 @@ test('background panel refresh preserves reading position and folds', { skip: !c
             if (/^\/api\/groups\/[^/]+$/.test(url.pathname) && value) {
               value.raw = 'Stored fixture message\nsecond line';
               value.config = { runtime: { ok: true, data: { resolved: { runtime: 'claude', model: 'default', effort: 'high' } } },
-                model: { ok: true, data: { resolved: { runtime: 'claude', model: 'default', effort: 'high' } } } };
+                model: { ok: true, data: { runtime: 'claude', desired: { runtime: 'claude', mode: 'default' } } },
+                modelOverrides: [] };
             }
             return value === undefined ? route.fallback() : route.fulfill({ json: value });
           });
@@ -172,12 +173,49 @@ test('background panel refresh preserves reading position and folds', { skip: !c
           await page.locator('.wb-detail-config .wb-cfg-line button').click();
           await page.locator('.wb-cfg-edit').waitFor();
           // The metadata-backed model select proves the initial asynchronous editor reads have rendered.
-          await page.waitForFunction(() => document.querySelectorAll('.wb-cfg-controls > select').length === 3);
+          const editor = page.locator('.wb-cfg-edit');
+          await editor.locator('.wb-cfg-model select').first().locator('option[value="default"]').waitFor({ state: 'attached' });
+          const { boxes, labels, dropdowns, fits, modelText, modelTextFits } = await editor.evaluate(async form => {
+            await document.fonts.ready;
+            const selects = [...form.querySelectorAll('select')];
+            const model = selects[1];
+            const style = getComputedStyle(model);
+            const text = model.selectedOptions[0].label;
+            const canvas = document.createElement('canvas').getContext('2d');
+            canvas.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+            return {
+              boxes: selects.map(node => node.getBoundingClientRect().toJSON()),
+              labels: [...form.querySelectorAll('.wb-cfg-label')].map(node => {
+                const { fontSize, fontWeight, lineHeight } = getComputedStyle(node);
+                return { fontSize, fontWeight, lineHeight };
+              }),
+              dropdowns: selects.map(node => ({ fontSize: getComputedStyle(node).fontSize,
+                appearance: getComputedStyle(node).appearance,
+                sharedChevron: !!node.parentElement.matches('.wb-select-wrap') && !!node.nextElementSibling?.matches('.wb-ico-chev[aria-hidden="true"]'),
+                fullWidth: node.getBoundingClientRect().width === node.closest('label').getBoundingClientRect().width })),
+              fits: form.scrollWidth <= form.clientWidth && form.getBoundingClientRect().right <= innerWidth,
+              modelText: text,
+              modelTextFits: canvas.measureText(text).width <= model.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+            };
+          });
+          const mobile = width === 390;
+          const [engine, model, effort] = boxes;
+          assert.deepEqual(boxes.map(box => box.height), Array(3).fill(mobile ? 36 : 26));
+          assert.deepEqual(labels, Array(3).fill({ fontSize: mobile ? '14px' : '13px', fontWeight: '550', lineHeight: '20px' }));
+          assert.deepEqual(dropdowns, Array(3).fill({ fontSize: mobile ? '16px' : '12.5px', appearance: 'none', sharedChevron: true, fullWidth: true }));
+          assert.ok(fits && engine.bottom < model.top, 'the engine sits above the model without overflowing the drawer');
+          if (mobile) {
+            assert.ok(model.bottom < effort.top && model.left === effort.left && model.width === effort.width, 'model and effort fill separate rows');
+            assert.equal(modelText, 'Follow global default');
+            assert.ok(modelTextFits, 'the complete English selection fits inside the model dropdown');
+          } else {
+            assert.ok(Math.abs(model.y - effort.y) <= 1 && model.right < effort.left, 'model and effort share the desktop row');
+          }
           console.log('Config key before', await page.locator('.wb-cfg-edit').evaluate(node => { window.configEditor = node; return node.dataset.updateKey; }));
           await page.waitForTimeout(5600);
           console.log('Config key after', await page.locator('.wb-cfg-edit').evaluate(node => node.dataset.updateKey));
           assert.equal(await page.locator('.wb-cfg-edit').evaluate(node => node === window.configEditor), true, 'config editor retained across refresh');
-          await page.locator('.wb-cfg-controls > button').last().click();
+          await editor.locator('.wb-cfg-actions button').last().click();
           await page.locator('.wb-cfg-edit').waitFor({ state: 'detached' });
           await page.locator('.wb-detail-evidence').evaluate(node => { node.open = false; });
           await page.waitForTimeout(5600);
