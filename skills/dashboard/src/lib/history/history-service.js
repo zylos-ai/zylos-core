@@ -286,6 +286,7 @@ export class HistoryService {
             (await this.scopedService(group, candidate, route)).sessions()));
           const current = listings.find(listing => listing.current)?.current ?? null;
           const sessions = listings.flatMap(listing => listing.sessions);
+          if (listings.length > 1) sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
           sendJson(res, 200, { runtime: scope.runtime, current, sessions });
           return true;
         }

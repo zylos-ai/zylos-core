@@ -28,10 +28,7 @@ export function createHistoryScope({ config = {}, store, load = loadCoreModule, 
     const root = config.zylosDir || process.env.ZYLOS_DIR;
     if (root) {
       if (mode === 'multi') {
-        try {
-          const ready = JSON.parse(await fs.readFile(path.join(root, 'activity-monitor', 'session-groups', group, 'current-session.json'), 'utf8'));
-          current = ready.sessionId || null;
-        }
+        try { current = JSON.parse(await fs.readFile(path.join(root, 'activity-monitor', 'session-groups', group, 'current-session.json'), 'utf8')).sessionId || null; }
         catch { /* Offline groups retain history; there is no current session. */ }
       } else if (readCurrentSessionId) {
         // The Dashboard already samples the managed runtime identity. A missing

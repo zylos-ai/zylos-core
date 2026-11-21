@@ -325,14 +325,19 @@ test('setting the default engine updates the open card and shows the Core reject
     sandbox.addCleanup(() => browser.close());
     const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
     const switchPath = '/api/instance/actions/switch-runtime';
-    for (const width of [1280, 390]) for (const theme of ['light', 'dark']) {
+    const variants = [
+      { locale: 'zh', theme: 'light', badge: '默认', rejection: '测试凭据已被拒绝', saved: '已将默认 AI 引擎设为 Codex。' },
+      { locale: 'zh', theme: 'dark', badge: '默认', rejection: '测试凭据已被拒绝', saved: '已将默认 AI 引擎设为 Codex。' },
+      { locale: 'en', theme: 'light', badge: 'Default', rejection: 'Fixture credentials were rejected', saved: 'Default AI engine saved as Codex.' },
+    ];
+    for (const width of [1280, 390]) for (const { locale, theme, badge, rejection, saved } of variants) {
       const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 },
         timezoneId: 'Asia/Singapore', reducedMotion: 'reduce' });
       try {
-        await context.addInitScript(theme => {
-          localStorage.setItem('zylos-dashboard-locale', 'zh');
+        await context.addInitScript(({ locale, theme }) => {
+          localStorage.setItem('zylos-dashboard-locale', locale);
           localStorage.setItem('zylos-dashboard-theme', theme);
-        }, theme);
+        }, { locale, theme });
         const writes = [];
         await context.route('**/*', async route => {
           const request = route.request(), url = new URL(request.url());
@@ -341,7 +346,7 @@ test('setting the default engine updates the open card and shows the Core reject
           if (url.pathname === switchPath && request.method() === 'POST') {
             writes.push(request.postDataJSON());
             return writes.length === 1
-              ? route.fulfill({ status: 403, json: { ok: false, error: { code: 'AUTH_FAILED', message: '测试凭据已被拒绝' } } })
+              ? route.fulfill({ status: 403, json: { ok: false, error: { code: 'AUTH_FAILED', message: rejection } } })
               : route.fulfill({ json: { ok: true, data: { result: 'saved', baseline: 'codex' }, messageKey: 'result.runtime_saved', messageParams: { value: 'Codex' } } });
           }
           return route.continue();
@@ -363,24 +368,24 @@ test('setting the default engine updates the open card and shows the Core reject
         };
         await select('claude').waitFor();
         assert.equal(await select('claude').getAttribute('aria-pressed'), 'true');
-        assert.equal(await select('claude').locator('.wb-tag').textContent(), '默认');
+        assert.equal(await select('claude').locator('.wb-tag').textContent(), badge);
         await select('codex').click();
         await submit();
-        await card.getByText('测试凭据已被拒绝').waitFor();
+        await card.getByText(rejection).waitFor();
         assert.equal(await save.isVisible(), true);
-        assert.equal(await select('claude').locator('.wb-tag').textContent(), '默认');
+        assert.equal(await select('claude').locator('.wb-tag').textContent(), badge);
         const shot = async suffix => {
           if (!evidence) return;
           await page.evaluate(() => document.activeElement?.blur());
           await page.mouse.move(0, 0);
-          await card.screenshot({ path: path.join(evidence, `default-engine-${width}-${theme}-${suffix}.png`) });
+          await card.screenshot({ path: path.join(evidence, `default-engine-${locale === 'en' ? 'en-' : ''}${width}-${theme}-${suffix}.png`) });
         };
         await shot('rejected');
         await submit();
-        await card.getByText('已将默认 AI 引擎设为 Codex。').waitFor();
+        await card.getByText(saved).waitFor();
         await save.waitFor({ state: 'hidden' });
         assert.equal(await select('codex').getAttribute('aria-pressed'), 'true');
-        assert.equal(await select('codex').locator('.wb-tag').textContent(), '默认');
+        assert.equal(await select('codex').locator('.wb-tag').textContent(), badge);
         assert.equal(await select('claude').locator('.wb-tag').count(), 0);
         assert.equal(navigations, 0);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
