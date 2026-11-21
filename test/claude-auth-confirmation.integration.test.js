@@ -8,7 +8,7 @@ import { createSupervisor } from '../skills/activity-monitor/scripts/supervisor.
 import { collectHealthHook } from '../skills/activity-monitor/scripts/hook-health.js';
 import { HealthEventReader } from '../skills/activity-monitor/scripts/health-event-reader.js';
 import { RestartRequestStore } from '../skills/activity-monitor/scripts/restart-request-store.js';
-import { freezeFirstFailureNotice } from '../skills/comm-bridge/scripts/first-failure-notice.js';
+import { freezeFirstFailureNotice, processFirstFailureNotices } from '../skills/comm-bridge/scripts/first-failure-notice.js';
 import { fixture } from '../skills/comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { groupRunDir } from '../cli/lib/session-group-paths.js';
 
@@ -86,6 +86,20 @@ test('Claude StopFailure confirms shared authentication before blocking other se
       failed ? 'auth_failed' : scenario==='model access' ? 'model_unavailable' : 'unavailable');
     assert.equal(store.read(groups[0].sessionGroup).failure_retry,undefined);
     assert.equal(notice(groups[2]),undefined);
+    const sent = [];
+    const first = groups[0];
+    await processFirstFailureNotices({store,database:db,sessionGroup:first.sessionGroup,
+      identity:()=>({runtime:'claude',session_id:first.sessionId,claude_pid:123}),
+      reserve:(_channel,endpoint)=>({endpoint}),
+      mutate:fn=>supervisor.health.serial('claude',fn),
+      send:(claim,message)=>{sent.push({endpoint:claim.endpoint,message});return {outcome:'sent'};},
+    });
+    assert.equal(sent.length,1);
+    assert.equal(sent[0].endpoint,first.endpoint);
+    const expected = failed ? /reported an authentication error/ : scenario==='model access'
+      ? /current model is unavailable/ : /reported a failure for this request/;
+    assert.match(sent[0].message,expected);
+
     assert.equal((await route()).decision,failed ? 'auth_rejected' : 'pending');
     await supervisor.loop.deps.writeMetricsAndMaintain({scenes:groups,fences:[]});
     assert.equal(supervisor.health.authTargets('claude').length,0);
