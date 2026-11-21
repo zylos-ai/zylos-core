@@ -193,15 +193,24 @@ export class HealthStore {
     } else this.write({ ...state, pending_notice: { ...state.pending_notice, ...patch } },sessionGroup);
     return true;
   }
-  consume(raw, { identity, quota, fallbackId, sessionGroup = 'origin', runId, retryControl, expireControl } = {}) {
+  #evaluateTerminalHook(event, prior, { identity, quota, authConfirmed } = {}) {
+    if (!['stop', 'stop_failure'].includes(event.event)) return { state: prior, status: 'ignored', reason: 'nonterminal_event' };
+    if (event.received_at <= (prior.last_processed?.received_at ?? 0)) return { state: prior, status: 'ignored', reason: 'replay' };
+    return reduceHealthEvidence(prior, event, { identity, quota, authConfirmed, now: this.now() });
+  }
+  needsAuthConfirmation(raw, { identity, sessionGroup = 'origin' } = {}) {
+    const event = sanitizeHealthEvent(raw);
+    const prior = this.read(sessionGroup);
+    const result = this.#evaluateTerminalHook(event, prior, { identity, authConfirmed: true });
+    return result.reason === 'hook_failure' && result.state.health === 'auth_failed';
+  }
+  consume(raw, { identity, quota, fallbackId, sessionGroup = 'origin', runId, retryControl, expireControl, authConfirmed } = {}) {
     const event = sanitizeHealthEvent(raw, fallbackId);
     const prior = this.read(sessionGroup);
     // A delivery notification queued ahead of this hook may have cleared or
     // replaced the retry after its control was sampled outside this writer.
     if(retryControl?.id!==prior.failure_retry?.controlId)retryControl=null;
-    if (!['stop', 'stop_failure'].includes(event.event)) return { state: prior, status: 'ignored', reason: 'nonterminal_event' };
-    if (event.received_at <= (prior.last_processed?.received_at ?? 0)) return { state: prior, status: 'ignored', reason: 'replay' };
-    const result = reduceHealthEvidence(prior, event, { identity, quota, now: this.now() });
+    const result = this.#evaluateTerminalHook(event, prior, { identity, quota, authConfirmed });
     if (result.status !== 'processed') return result;
     const healthChanged = result.state !== prior;
     result.state = { ...result.state, revision: prior.revision + (healthChanged ? 1 : 0),

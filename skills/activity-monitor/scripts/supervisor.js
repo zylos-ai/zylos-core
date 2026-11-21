@@ -85,7 +85,7 @@ export function createSupervisor(deps) {
   };
   const health=new RuntimeHealthCoordinator({zylosDir:deps.zylosDir,now,
     resolveTargetRuntime:deps.resolveTargetRuntime,listScenes,probeInFlight:runtime=>observer.probeInFlight(runtime),
-    readNegativeCache:(runtime,state)=>router.readNegativeCache(runtime,state.health,state.reason),clearNegativeCache:runtime=>router.clearCache(runtime),freezeNotice:deps.freezeNotice,log});
+    readNegativeCache:(runtime,state)=>router.readNegativeCache(runtime,state.health,state.reason),clearNegativeCache:runtime=>router.clearCache(runtime),freezeNotice:deps.freezeNotice,checkAuth:runtime=>probeAuth(runtime),log});
   const manualPending=(group='origin')=>admission.readRequests().some(row=>row.reason==='manual_restart' &&
     (row.mode==='single' ? group===null || group==='origin' : (row.sessionGroup ?? 'origin')===group));
   const manualAllows=group=>{
@@ -140,23 +140,26 @@ export function createSupervisor(deps) {
     },{requireOpen:true});
     return interrupted;
   };
-  const checkAuth=(runtime,{background=false}={})=>{
+  const probeAuth=(runtime,{background=false}={})=>{
     if(stopping)return Promise.resolve({status:'uncertain',reason:'supervisor_stopping'});
-    // Router, pane checks and pending demand share one actual adapter call.
+    // Hook confirmation, router, pane checks and pending demand share one adapter call.
     if(authFlights.has(runtime))return authFlights.get(runtime);
     // Real incoming messages may retry immediately; the 1 s loop
     // must not turn retained pending demand into repeated expensive CLI pings.
     if(background && now()<(authRetryAt.get(runtime) ?? 0))return Promise.resolve({status:'uncertain',reason:'auth_retry_backoff'});
-    const task=Promise.resolve().then(async()=>{
-      const result=await deps.checkAuth(runtime);
-      if(!stopping && (result.status==='success' || result.result==='success'))await health.beginAuthRecovery(runtime,result,await listScenes());
-      return result;
-    });
+    const task=Promise.resolve().then(()=>deps.checkAuth(runtime));
     authFlights.set(runtime,task);authChecks.add(task);
     task.finally(()=>{
       authRetryAt.set(runtime,now()+AUTH_DEMAND_RETRY_MS);
       authFlights.delete(runtime);authChecks.delete(task);
     }).catch(()=>{});return task;
+  };
+  const checkAuth=async(runtime,options)=>{
+    const result=await probeAuth(runtime,options);
+    if(!stopping && (result.status==='success' || result.result==='success') && health.store(runtime).read().health==='auth_failed') {
+      await health.beginAuthRecovery(runtime,result,await listScenes());
+    }
+    return result;
   };
   observer=new SupervisorHealthObserver({coordinator:health,listScenes,readIdentity:async group=>{
     const current=await scenes.readIdentity(group);
@@ -243,8 +246,8 @@ export function createSupervisor(deps) {
         if(!matches(scene,first.get(scene.sessionGroup)))continue;
         try {
           const activity=readActivity(scene);
-          await deps.consumeHealthEvents?.(scene,health);
-          context.publicationActivities.set(scene.sessionGroup,activity);
+          const awaitingAuth=await deps.consumeHealthEvents?.(scene,health);
+          context.publicationActivities.set(scene.sessionGroup,{activity,awaitingAuth});
         } catch(error) { await reportError(error,{phase:'observe',sessionGroup:scene.sessionGroup}); }
       }
       context.publicationIdentities=await scenes.readIdentities([...context.publicationActivities.keys()]);
@@ -254,25 +257,25 @@ export function createSupervisor(deps) {
       const matches=current=>current.present && current.ready && current.runId===scene.runId && current.sessionId===scene.sessionId && current.runtime===scene.runtime;
       // The round owns the process sample. Recheck only run/session identity at
       // publication boundaries; do not resample every read-only health check.
-      let activity;
+      let activity,awaitingAuth;
       if(context.publicationIdentities) {
         if(!context.publicationActivities.has(scene.sessionGroup) || !matches(context.publicationIdentities.get(scene.sessionGroup) ?? {}))return;
-        activity=context.publicationActivities.get(scene.sessionGroup);
+        ({activity,awaitingAuth}=context.publicationActivities.get(scene.sessionGroup));
       } else {
         if(!matches(await scenes.readIdentity(scene.sessionGroup)))return;
         activity=readActivity(scene);
-        await deps.consumeHealthEvents?.(scene,health);
+        awaitingAuth=await deps.consumeHealthEvents?.(scene,health);
         if(!matches(await scenes.readIdentity(scene.sessionGroup)))return;
       }
       const observeBeforePublication=activity.quietTurnDue;
       if(observeBeforePublication) {
         // Existing no-response recovery gets first ownership at its earlier deadline.
-        await observer.observeScene(scene);
+        await observer.observeScene(scene,{awaitingAuth});
         if(scene.present===false)return;
         if(await interruptQuietTurn(scene))activity=readActivity(scene);
       }
       publishSessionStatus({statusFile:path.join(scene.runDir,'agent-status.json'),scene,activity,health:health.store(scene.runtime).read(),proc:scene.proc,now:now()});
-      if(!observeBeforePublication)await observer.observeScene(scene);
+      if(!observeBeforePublication)await observer.observeScene(scene,{awaitingAuth});
     },
     writeMetricsAndMaintain:async context=>{
       if (configuration.legacy) return;
