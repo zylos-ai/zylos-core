@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
 import { startPage } from './helpers/workbench-browser.js';
 import { openDashboardTab } from './helpers/browser-navigation.js';
-import { workbenchAnswer } from './fixtures/workbench-browser-api.js';
+import { GROUP, workbenchAnswer } from './fixtures/workbench-browser-api.js';
 
 // Boundary: the real settings page in a local browser with fixed API answers (the workbench fixture plus this case's
 // update check, keys, machines, prices and session hosting); writes are recorded and answered, nothing runs.
@@ -329,6 +329,7 @@ test('setting the default engine updates the open card and shows the Core reject
       { locale: 'zh', theme: 'light', badge: '默认', rejection: '测试凭据已被拒绝', saved: '已将默认 AI 引擎设为 Codex。' },
       { locale: 'zh', theme: 'dark', badge: '默认', rejection: '测试凭据已被拒绝', saved: '已将默认 AI 引擎设为 Codex。' },
       { locale: 'en', theme: 'light', badge: 'Default', rejection: 'Fixture credentials were rejected', saved: 'Default AI engine saved as Codex.' },
+      { locale: 'en', theme: 'dark', badge: 'Default', rejection: 'Fixture credentials were rejected', saved: 'Default AI engine saved as Codex.' },
     ];
     for (const width of [1280, 390]) for (const { locale, theme, badge, rejection, saved } of variants) {
       const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 },
@@ -347,7 +348,10 @@ test('setting the default engine updates the open card and shows the Core reject
             writes.push(request.postDataJSON());
             return writes.length === 1
               ? route.fulfill({ status: 403, json: { ok: false, error: { code: 'AUTH_FAILED', message: rejection } } })
-              : route.fulfill({ json: { ok: true, data: { result: 'saved', baseline: 'codex' }, messageKey: 'result.runtime_saved', messageParams: { value: 'Codex' } } });
+              : route.fulfill({ json: { ok: true, data: { result: 'saved', baseline: 'codex', groups: [
+                { sessionGroup: 'origin', restart: { status: 'not_restarted', reason: 'fence_conflict' } },
+                { sessionGroup: GROUP, restart: { status: 'accepted' } },
+              ] }, messageKey: 'result.runtime_saved', messageParams: { value: 'Codex' } } });
           }
           return route.continue();
         });
@@ -362,14 +366,25 @@ test('setting the default engine updates the open card and shows the Core reject
         const card = page.locator('#settings-current-runtime');
         const save = card.locator('#settings-save-runtime');
         const select = engine => card.locator('#settings-use-' + engine);
+        const dialog = page.locator('.wb-modal[role="alertdialog"]');
         const submit = async () => {
           await save.click();
-          await page.locator('.wb-modal[role="alertdialog"] .wb-modal-acts button').last().click();
+          await dialog.waitFor();
+          assert.match(await dialog.textContent(), locale === 'zh' ? /2 个组/ : /2 running groups/);
+          if (evidence && !writes.length) {
+            await page.evaluate(() => document.activeElement?.blur());
+            await page.screenshot({ path: path.join(evidence, `default-confirm-${locale}-${width}-${theme}.png`) });
+          }
+          await dialog.locator('.wb-modal-acts button').last().click();
         };
         await select('claude').waitFor();
         assert.equal(await select('claude').getAttribute('aria-pressed'), 'true');
         assert.equal(await select('claude').locator('.wb-tag').textContent(), badge);
         await select('codex').click();
+        await save.click();
+        await dialog.locator('.wb-modal-acts button').first().click();
+        await dialog.waitFor({ state: 'hidden' });
+        assert.deepEqual(writes, []);
         await submit();
         await card.getByText(rejection).waitFor();
         assert.equal(await save.isVisible(), true);
@@ -383,13 +398,14 @@ test('setting the default engine updates the open card and shows the Core reject
         await shot('rejected');
         await submit();
         await card.getByText(saved).waitFor();
+        await card.getByText(/Origin.*fence_conflict/).waitFor();
         await save.waitFor({ state: 'hidden' });
         assert.equal(await select('codex').getAttribute('aria-pressed'), 'true');
         assert.equal(await select('codex').locator('.wb-tag').textContent(), badge);
         assert.equal(await select('claude').locator('.wb-tag').count(), 0);
         assert.equal(navigations, 0);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
-        assert.deepEqual(writes, [{ runtime: 'codex' }, { runtime: 'codex' }]);
+        assert.deepEqual(writes, Array.from({ length: 2 }, () => ({ runtime: 'codex', confirmedRuns: [['origin', 'run-origin'], [GROUP, 'run-tg']] })));
         await shot('saved');
       } finally {
         await context.close();

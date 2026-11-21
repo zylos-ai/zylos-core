@@ -53,15 +53,11 @@ test('validates all five reply branches and mandatory relationships', () => {
     ['restart_all', { ok: true, result: 'done_empty', runCount: 2 }, false],
     ['restart_all', { ok: true, result: 'accepted', runCount: 0 }, false],
     ['restart_all', { ok: true, result: 'unknown', runCount: 1 }, false],
-    ['ready_for_config_reclaim', { ok: true, result: 'unchanged' }, true],
     ['defer_reclaim', { ok: true, result: 'accepted' }, true],
     ['defer_reclaim', { ok: true, result: 'already_accepted' }, false],
     ['defer_reclaim', { ok: false, result: 'rejected', reason: 'preparation_expired' }, true],
     ['defer_reclaim', { ok: false, result: 'rejected', reason: 'run_changed' }, true],
     ['defer_reclaim', { ok: false, result: 'rejected', reason: 'unknown' }, false],
-    ['ready_for_config_reclaim', { ok: false, result: 'rejected', reason: 'other_fence' }, true],
-    ['ready_for_config_reclaim', { ok: false, result: 'rejected', reason: 'requests_unreadable' }, true],
-    ['ready_for_config_reclaim', { ok: false, result: 'rejected', reason: 'bad' }, false],
     ['manual_restart', { ok: false, result: 'stale_target', currentRunId: 'r2' }, true],
     ['manual_restart', { ok: false, result: 'stale_target' }, false],
     ['manual_restart', { ok: false, result: 'rejected', reason: 'not_multi' }, true],
@@ -161,11 +157,11 @@ test('five-family matrix: complete, partial, reset, malformed, late and deadline
   const replies = {
     start_attempt: {ok:true,result:'registered',reason:'recovery_due'},
     restart_all: {ok:true,result:'done_empty',runCount:0},
-    ready_for_config_reclaim: {ok:true,result:'unchanged'}, manual_restart: {ok:true,result:'already_stopped'}, mode_switch:{ok:true,result:'noop'},
+    manual_restart: {ok:true,result:'already_stopped'}, mode_switch:{ok:true,result:'noop'},
   };
   const rejections = {
     start_attempt:{ok:false,code:'scene_present'}, restart_all:{ok:false,code:'entry_not_open'},
-    ready_for_config_reclaim:{ok:false,code:'entry_not_open'}, manual_restart:{ok:false,result:'stale_target',currentRunId:'new'},
+    manual_restart:{ok:false,result:'stale_target',currentRunId:'new'},
     mode_switch:{ok:false,code:'transition_open',runId:'switch',target:'multi'},
   };
   const flush = async () => { for(let i=0;i<5;i++) await Promise.resolve(); };

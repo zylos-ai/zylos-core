@@ -243,6 +243,8 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] The default engine selector keeps the existing engine and sign-in rows. The saved engine carries a Default tag beside its name while the pressed choice reflects the draft. A successful save moves the tag in place. A rejected save shows the Core error beside the selector and leaves the draft available to retry.
 
+[Current] If running sessions inherit the default engine, saving a different engine opens the restart confirmation with the affected count. With a complete list and zero affected sessions, the card saves directly. The saved result appears next to the engine selector and shows each rejected or unverified immediate restart with its session name and Core reason. Long names and reasons wrap inside the card.
+
 [Current] After Origin model, effort or CLI settings are saved, a stopped or uncertain Origin, an unreadable detail response, or a missing run ID produces a successful next-start notice without submitting a restart. A running Origin retains the canonical run-bound restart. Default settings show configured model and effort rather than Origin's current observations. Pool displays contain only used and capacity values, without source or capacity-calculation explanations.
 
 [Current] Runtime, connection, login, and delivery use distinct business copy; preserve the distinctions above.

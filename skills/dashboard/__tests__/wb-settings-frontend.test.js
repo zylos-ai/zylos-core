@@ -14,7 +14,7 @@ const t = (key, params = {}) => key + (Object.keys(params).length ? ':' + JSON.s
 const hotTtlMeta = (overrides = {}) => ({ session_hot_ttl: { seconds: 1800, minutes: 30, source: 'config', mode: 'multi', read_only: false,
   environment_set: false, environment_valid: false, min_minutes: 5, max_minutes: 1440, ...overrides } });
 function snapshot() {
-  return { baselineRuntime: 'claude', hasOlder: true, instance: { runtimeHealth: { codex: { health: 'auth_failed' }, claude: { health: 'missing' } } },
+  return { baselineRuntime: 'claude', hasOlder: true, listKnown: true, instance: { runtimeHealth: { codex: { health: 'auth_failed' }, claude: { health: 'missing' } } },
     overrides: { runtime: [{ sessionGroup: 'a', runtime: 'codex' }], model: [{ sessionGroup: 'b', runtime: 'claude' }] },
     rows: ['origin', 'a', 'b', 'c'].map(sessionGroup => ({ sessionGroup, presence: 'running', name: { displayName: 'Name ' + sessionGroup }, target: { runtime: sessionGroup === 'a' ? 'codex' : 'claude' } })) };
 }
@@ -37,6 +37,7 @@ test('runtime health and interruption confirmation retain unknown and unavailabl
   assert.equal(runtimeHealth({ instance: { runtimeHealth: null } }, 'codex'), 'unknown');
   assert.match(runtimeConfirmation(data, t), /Name origin/); assert.doesNotMatch(runtimeConfirmation(data, t), /Name a\n/);
   assert.match(runtimeConfirmation({ ...data, overrides: null }, t), /cannotList/);
+  assert.match(runtimeConfirmation({ ...data, listKnown: false, rows: [] }, t), /cannotList/);
   const many = { ...data, overrides: { runtime: [] }, rows: Array.from({ length: 8 }, (_, i) => ({ sessionGroup: String(i), presence: 'running', name: { displayName: 'Group ' + i } })) };
   const text = runtimeConfirmation(many, t); assert.match(text, /Group 4/); assert.doesNotMatch(text, /Group 5/); assert.match(text, /moreGroups.*8/);
 });
@@ -242,10 +243,11 @@ test('default engine keeps the sign-in gate and model and effort save together p
 test('changing the default engine is a draft until saved and the undo restores the current one', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
   const healthy = { ...snapshot(), instance: { runtimeHealth: { codex: { health: 'ok' }, claude: { health: 'ok' } } } };
+  healthy.rows[0].run = { runId: 'run-origin' };
   let rejection = "Fixture credentials were rejected";
   const panel = renderDefaults(root, { confirm: async () => true, snapshot: healthy, page: { runtimeTotal: 1 }, document, t, read: async () => ({}), execute: async (action, body) => { calls.push({ action, body });
     if (rejection) throw new Error(rejection);
-    return { ok: true, data: { baseline: 'codex' }, messageKey: 'result.runtime_saved', messageParams: { value: 'Codex' } }; } });
+    return { ok: true, data: { baseline: 'codex', groups: [{ sessionGroup: 'origin', restart: { status: 'not_restarted', reason: 'fence_conflict' } }] }, messageKey: 'result.runtime_saved', messageParams: { value: 'Codex' } }; } });
   const save = root.querySelector('#settings-save-runtime');
   assert.equal(save.hidden, true); assert.equal(root.querySelector('#settings-use-claude').getAttribute('aria-pressed'), 'true');
   await root.querySelector('#settings-use-codex').dispatch('click');
@@ -259,8 +261,9 @@ test('changing the default engine is a draft until saved and the undo restores t
   assert.equal(save.hidden, false, 'a failed save leaves the change as a draft');
   rejection = null;
   await save.dispatch('click');
-  assert.deepEqual(calls, Array.from({ length: 2 }, () => ({ action: 'switch-runtime', body: { runtime: 'codex' } })));
+  assert.deepEqual(calls, Array.from({ length: 2 }, () => ({ action: 'switch-runtime', body: { runtime: 'codex', confirmedRuns: [['origin', 'run-origin']] } })));
   assert.match(root.textContent, /result.runtime_saved/);
+  assert.match(root.querySelector('#settings-engine-result').textContent, /savedRestartFailed.*Name origin.*fence_conflict/);
   assert.equal(save.hidden, true, 'successful save updates the baseline in the mounted card');
   await root.querySelector('#settings-use-claude').dispatch('click');
   await root.querySelector('#settings-undo-runtime').dispatch('click');
@@ -314,6 +317,20 @@ test('saving model and effort for both engines asks once, lists every change and
   assert.equal(root.querySelector('#settings-save-models').hidden, true);
   assert.equal(modelSaveConfirmation([{ runtime: 'claude', key: 'effort', value: 'max' }], tr).split('\n').length, 2);
   assert.match(modelSaveConfirmation([{ runtime: 'codex', key: 'model', value: 'two' }], (key, params) => params ? params.value : key, { codex: { models: [{ id: 'two', display_name: 'Two Pro' }] } }), /Two Pro/, 'models are named as the dropdown shows them'); panel.destroy();
+});
+
+test('saving the default engine without running followers skips confirmation', async () => {
+  const document = documentFixture(), root = document.createElement('div'), calls = [];
+  const data = snapshot();
+  data.rows = data.rows.filter(row => row.sessionGroup === 'a');
+  data.instance.runtimeHealth.codex.health = 'ok';
+  const panel = renderDefaults(root, { document, snapshot: data, t, read: async () => ({}),
+    confirm: async () => assert.fail('the only running session has a runtime override'),
+    execute: async (action, body) => { calls.push({ action, body }); return true; } });
+  await root.querySelector('#settings-use-codex').dispatch('click');
+  await root.querySelector('#settings-save-runtime').dispatch('click');
+  assert.deepEqual(calls, [{ action: 'switch-runtime', body: { runtime: 'codex' } }]);
+  panel.destroy();
 });
 
 test('a defaults card wired without a confirmation runs no change', async () => {

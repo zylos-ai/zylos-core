@@ -55,7 +55,7 @@ export async function handleCoreAction(action, body, config) {
     const request = { version: 1, type: 'manual_restart', requestId, ...(target.runId ? { expectedRunId: target.runId } : {}), ...(target.sessionId ? { expectedSessionId: target.sessionId } : {}) };
     const result = await submit(request, { deadlineAt });
     if (result.kind === 'accepted' || result.kind === 'rejected') {
-      const messageKey = keyPresent && result.reply.result === 'already_stopped' ? 'result.restart_wake_requested'
+      const messageKey = keyPresent && !target.runId && result.reply.result === 'already_stopped' ? 'result.restart_wake_requested'
         : keyPresent && result.kind === 'rejected' && result.reply.reason === 'wake_failed' ? 'result.restart_wake_failed'
         : result.kind === 'rejected' ? (result.reply.result === 'stale_target' ? 'result.restart_target_changed' : 'result.restart_rejected')
         : result.reply.result === 'already_stopped' ? 'result.restart_already_stopped'
@@ -80,10 +80,13 @@ export async function handleCoreAction(action, body, config) {
   }
   if (action === 'switch-runtime') {
     if (!['claude', 'codex', 'agy'].includes(body?.runtime)) return { ok: false, error: 'INVALID_RUNTIME', messageKey: 'result.invalid_runtime' };
-    const result = await command('zylos', ['runtime', body.runtime, '--json'], { timeout: 65000 });
+    const args = ['runtime', body.runtime, '--json'];
+    if (body.confirmedRuns !== undefined) args.push('--confirmed-runs', JSON.stringify(body.confirmedRuns));
+    const result = await command('zylos', args, { timeout: 75000 });
     const saved = result.ok && result.data?.result === 'saved';
     const unchanged = result.ok && result.data?.result === 'unchanged';
     return { ...result, messageKey: saved ? 'result.runtime_saved' : unchanged ? 'result.runtime_unchanged'
+      : result.error?.code === 'CONFIRMATION_REQUIRED' ? 'wb.settings.runtimeConfirmationRequired'
       : result.unknown || result.error?.persisted === null ? 'result.runtime_unknown' : null,
       messageParams: { value: body.runtime } };
   }

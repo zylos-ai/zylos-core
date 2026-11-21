@@ -40,7 +40,7 @@ function harness(t) {
     requests: { read: () => [] },
     diagnostic: () => {},
     prompts: { PRE_RECLAIM_CHECK_PROMPT: 'check', PRE_RECLAIM_SYNC_PROMPT: 'prepare', PRE_RECLAIM_ORIGIN_SYNC_PROMPT: 'prepare origin',
-      UPGRADE_RESTART_CHECK_PROMPT: 'upgrade check', GROUP_SYNC_PROMPT: 'group sync', CONFIG_RECLAIM_PROMPT: () => 'config' },
+      UPGRADE_RESTART_CHECK_PROMPT: 'upgrade check', GROUP_SYNC_PROMPT: 'group sync' },
   }, { now });
   const context = { configuration: { mode: 'multi', capacity: 1 }, scenes: [{ ...scene }], fences: [], restartRequests: [], transition: null };
   const rows = () => database.prepare('SELECT raw_content, session_group, created_at, ack_deadline_at FROM control_queue ORDER BY id').all();
@@ -51,7 +51,6 @@ const SITES = [
   ['release preparation', [300, 900], ['check', 'prepare'], h => h.lifecycle.prepareRelease(h.scene, h.context, { controlIds: [] })],
   ['TTL preparation', [300, 900], ['check', 'prepare'], h => h.lifecycle.checkTtl(h.scene, h.context)],
   ['eviction check', 60, ['check'], h => h.lifecycle.checkEviction([h.scene], h.context)],
-  ['configuration restart', 300, ['config'], h => h.lifecycle.reconcileConfiguration(h.context)],
   ['group Sync', 300, ['group sync'], h => h.lifecycle.syncScope(h.scene, 'group', { count: 60, nonempty: true, firstAt: null, firstConversationId: 1 }, h.context)],
   ['multi-session upgrade check', 60, ['upgrade check'], h => h.lifecycle.prepareUpgrade(h.scene, h.context)],
 ];

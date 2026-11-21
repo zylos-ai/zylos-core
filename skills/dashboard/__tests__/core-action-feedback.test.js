@@ -167,7 +167,7 @@ test('every Core action return path has a bilingual message key', async t => {
     await t.test(`${mode} restart acceptance, rejection and transport results`, async () => {
       for (const result of ['accepted', 'already_accepted', 'already_stopped']) {
         reply = { kind: 'accepted', reply: { ok: true, result } };
-        const expected = result === 'already_stopped' ? 'result.restart_wake_requested' : `result.restart_${result}`;
+        const expected = `result.restart_${result}`;
         const response = await invoke('restart-session', body(), expected);
         assert.equal(response.ok, true);
         assert.equal(response.result, result);

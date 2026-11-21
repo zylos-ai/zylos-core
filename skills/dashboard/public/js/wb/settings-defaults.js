@@ -26,7 +26,7 @@ export function runtimeHealth(snapshot, runtime) {
 }
 export function runtimeConfirmation(snapshot, t = key => key) {
   const rows = defaultGroups(snapshot).followers;
-  if (rows == null) return t('wb.settings.cannotList');
+  if (rows == null || snapshot.listKnown === false) return t('wb.settings.cannotList');
   return [countLabel(t, 'wb.settings.interruptFollowers', rows.length), ...rows.slice(0, 5).map(row =>
     row.name?.displayName ?? fallbackName(row, t)), ...(rows.length > 5 ? [t('wb.settings.moreGroups', { count: rows.length })] : [])].join('\n');
 }
@@ -100,7 +100,6 @@ export function runtimeSaveConfirmation(runtime, snapshot, t = key => key) {
 
 export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoot, document = root.ownerDocument,
   t = key => key, read, execute, confirm = async () => false, writable = () => true, onGroup = () => {}, version = () => {} } = {}) {
-  // Without a confirmation dialog no change runs: every save below asks once before it acts.
   root.replaceChildren();
   const groups = defaultGroups(snapshot, page);
   let destroyed = false;
@@ -174,22 +173,35 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
     savingRuntime = true;
     refreshLocks();
     try {
-      if (!(await confirm(runtimeSaveConfirmation(runtime, snapshot, t), { title: t('wb.settings.confirm.runtime'), danger: true })) || destroyed) return;
-      const result = await execute('switch-runtime', { runtime }, { confirmed: true });
+      const needsConfirmation = snapshot?.listKnown !== true || groups.followers?.length !== 0;
+      if (needsConfirmation &&
+          !(await confirm(runtimeSaveConfirmation(runtime, snapshot, t), { title: t('wb.settings.confirm.runtime'), danger: true }))) return;
+      if (destroyed) return;
+      const confirmedRuns = (groups.followers ?? []).flatMap(row => {
+        const runId = row.run?.runId ?? row.live?.runId;
+        return runId ? [[row.sessionGroup ?? 'origin', runId]] : [];
+      });
+      const result = await execute('switch-runtime', { runtime, ...(needsConfirmation && { confirmedRuns }) }, { confirmed: true });
       if (result === false) {
         engineResult.textContent = t('wb.settings.saveFailed');
         return;
       }
       groups.baseline = draftRuntime = result?.data?.baseline ?? runtime;
-      engineResult.textContent = t(result?.messageKey ?? 'result.runtime_saved', {
+      const saved = t(result?.messageKey ?? 'result.runtime_saved', {
         ...result?.messageParams, value: engineName(groups.baseline),
       });
+      const failures = (result?.data?.groups ?? []).filter(group => group.restart && group.restart.status !== 'accepted');
+      engineResult.textContent = [saved, ...failures.map(group => {
+        const row = groups.followers?.find(row => (row.sessionGroup ?? 'origin') === group.sessionGroup);
+        return t(group.restart.status === 'unknown' ? 'wb.settings.savedRestartUnknown' : 'wb.settings.savedRestartFailed',
+          { group: row?.name?.displayName ?? row?.displayName ?? group.sessionGroup, reason: group.restart.reason });
+      })].join('\n');
       redrawEngine();
     } catch (error) { engineResult.textContent = error.message; }
     finally { savingRuntime = false; refreshLocks(); }
   });
   line.append(saveRuntime, undoRuntime);
-  const engineResult = element(document, 'p', '', 'wb-note'); engineResult.setAttribute('role', 'status');
+  const engineResult = element(document, 'p', '', 'wb-note'); engineResult.id = 'settings-engine-result'; engineResult.setAttribute('role', 'status');
   const split = element(document, 'div', undefined, 'wb-set-split');
   // A count of zero tells nothing, so its line is left out.
   const followerCol = element(document, 'div');

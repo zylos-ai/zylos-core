@@ -23,14 +23,14 @@ const FAILURE_STATUSES = new Map([
   [401, ['unauthorized', 'authentication_required', 'invalid_api_key']],
   [403, ['insufficient_scope', 'same_origin_required', 'local_cookie_required', 'origin_forbidden', 'auth_failed', 'auth_not_confirmed']],
   [404, ['task_not_found', 'group_not_found', 'session_group_not_found', 'unknown_key', 'unknown_agent', 'not_found']],
-  [409, ['already_set', 'duplicate_request', 'environment_override', 'multi_session_required',
+  [409, ['already_set', 'duplicate_request', 'environment_override', 'multi_session_required', 'confirmation_required',
     'task_wrong_status', 'runtime_not_installed', 'target_scope_mismatch', 'target_mismatch', 'stale_target', 'task_ambiguous', 'transition_open', 'legacy_session_present', 'manual_restart_pending',
     'deletion_in_progress', 'request_conflict', 'not_multi', 'fence_conflict', 'restart_all_pending',
     'run_changed', 'other_fence', 'deletion_preview_stale', 'deletion_ownership_mismatch', 'draft_became_active']],
   [500, ['internal_error', 'db_write_failed', 'config_store_failed', 'credential_save_failed', 'set_failed']],
   [502, ['result_unknown', 'no_reply', 'scheduler_cli_failed', 'group_delete_result_unknown', 'instance_root_mismatch', 'upgrade_failed', 'wake_failed', 'restart_failed']],
   [503, ['hooks_not_ready', 'connect_failed', 'service_discovery_unavailable', 'group_delete_supervisor_unavailable', 'unknown_model_capabilities', 'config_unreadable', 'requests_unreadable',
-    'identity_unavailable', 'dependency_unavailable', 'entry_not_open', 'not_ready', 'snapshot_unavailable', 'start_admission_closed', 'control_target_required']],
+    'identity_unavailable', 'dependency_unavailable', 'entry_not_open', 'not_ready', 'snapshot_unavailable', 'start_admission_closed', 'control_target_required', 'running_state_unknown']],
   [504, ['deadline_exceeded', 'timeout']],
 ].flatMap(([status, codes]) => codes.map(code => [code, status])));
 

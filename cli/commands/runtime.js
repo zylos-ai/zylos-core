@@ -15,6 +15,8 @@ import path from 'node:path';
 import { readZylosConfigOrThrow, readZylosConfigStrict, readSessionMode, updateZylosConfigLocked, ZYLOS_DIR } from '../lib/config.js';
 import { getSessionAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { listGroupTmuxSessions } from '../lib/session-group-paths.js';
+import { requestConfigRestart } from '../lib/config-restart.js';
+import { parseSessionGroup } from '../../skills/comm-bridge/scripts/c4-session-group.js';
 import { readLiveIdentity } from '../lib/session-state-reader.js';
 import { desiredClaudeHooks, syncHooks, detectStopFailureSupport, detectSubagentHooksSupport } from '../lib/sync-runtime-hooks.js';
 import { syncAgyConfig, isAgyConfigReady } from '../lib/agy-setup.js';
@@ -73,7 +75,7 @@ export async function runtimeCommand(args, { execute = executeRuntimeSwitch } = 
       const data = result.data;
       console.log(data.result === 'saved' ? `Baseline saved: ${data.previousBaseline} -> ${data.baseline}` : `Already on ${data.baseline} runtime.`);
       if (data.sessionMode === null) console.log('Sessions started after the first mode switch will use this baseline.');
-      for (const group of data.groups) console.log(`  ${group.sessionGroup}: ${group.status}`);
+      for (const group of data.groups) console.log(`  ${group.sessionGroup}: ${group.restart?.status ?? group.status}${group.restart?.reason ? ` (${group.restart.reason})` : ''}`);
       if (!data.groupsComplete) console.error('Group observation incomplete:', data.observationErrors.map(error => `${error.source}: ${error.message}`).join('; '));
       for (const warning of data.warnings) console.error(`Warning [${warning.code}]: ${warning.message}`);
     }
@@ -161,6 +163,11 @@ export function parseRuntimeFlags(flags) {
   const apiKeyIdx = flags.indexOf('--save-apikey');
   const setupTokenIdx = flags.indexOf('--save-setup-token');
   const baseUrlIdx = flags.indexOf('--save-base-url');
+  const confirmedIdx = flags.indexOf('--confirmed-runs');
+  let confirmedRuns;
+  if (confirmedIdx >= 0) {
+    try { confirmedRuns = JSON.parse(flags[confirmedIdx + 1]); } catch { confirmedRuns = null; }
+  }
 
   return {
     flags,
@@ -171,18 +178,23 @@ export function parseRuntimeFlags(flags) {
     hasSetupToken: setupTokenIdx >= 0,
     hasBaseUrl: baseUrlIdx >= 0,
     noValidate: flags.includes('--no-validate'),
+    yes: flags.includes('--yes'),
+    confirmedRuns,
   };
 }
 
 export function validateRuntimeFlags(target, parsed) {
-  const valueFlags = new Set(['--save-apikey', '--save-setup-token', '--save-base-url']);
+  const valueFlags = new Set(['--save-apikey', '--save-setup-token', '--save-base-url', '--confirmed-runs']);
   const seen = new Set();
   for (let index = 0; index < (parsed.flags || []).length; index++) {
     const flag = parsed.flags[index];
-    if (seen.has(flag) || (!valueFlags.has(flag) && !['--json', '--no-validate'].includes(flag))) return { error: `Invalid or duplicate option: ${flag}` };
+    if (seen.has(flag) || (!valueFlags.has(flag) && !['--json', '--no-validate', '--yes'].includes(flag))) return { error: `Invalid or duplicate option: ${flag}` };
     seen.add(flag);
     if (valueFlags.has(flag)) index++;
   }
+  if (parsed.confirmedRuns !== undefined && (!Array.isArray(parsed.confirmedRuns) ||
+    !parsed.confirmedRuns.every(row => Array.isArray(row) && row.length === 2 && parseSessionGroup(row[0]) && typeof row[1] === 'string' && row[1]) ||
+    new Set(parsed.confirmedRuns.map(row => row[0])).size !== parsed.confirmedRuns.length)) return { error: 'Invalid confirmed runs' };
   if (target === 'agy' && parsed.hasBaseUrl) return { error: '--save-base-url is not supported for agy' };
   if (target !== 'claude' && parsed.hasSetupToken) return { error: '--save-setup-token requires claude' };
   if (parsed.hasApiKey && parsed.hasSetupToken) return { error: 'Choose either API key or setup token' };
@@ -262,17 +274,22 @@ export async function observeRuntimeGroups(baseline, sessionMode, { list = listG
   };
   try { for (const row of await list()) names.add(row.sessionGroup); } catch (error) { failures('tmux', null, error); }
   let configured;
-  try { configured = await overrides(); for (const row of configured) names.add(row.sessionGroup); }
+  try {
+    configured = new Set((await overrides()).map(row => row.sessionGroup));
+    for (const group of configured) names.add(group);
+  }
   catch (error) { failures('overrides', null, error); }
   for (const sessionGroup of [...names].sort()) {
-    const inherits = configured ? !configured.some(row => row.sessionGroup === sessionGroup) : null;
+    const inherits = configured ? !configured.has(sessionGroup) : null;
     let live = null, error = null;
     try { if (sessionMode !== 'single' || sessionGroup === 'origin') live = await identity(sessionGroup); }
     catch (cause) { error = { code: 'READ_FAILED', message: cause.message }; failures('session', sessionGroup, cause); }
     const liveRuntime = live?.present ? live.runtime : null;
-    const status = inherits === false ? 'override_kept' : inherits === null || error || liveRuntime === 'unknown' || (live?.present && !live.launchConfig)
-      ? 'unknown' : liveRuntime === null ? 'not_running' : liveRuntime === baseline ? 'effective' : 'pending_reclaim';
-    result.groups.push({ sessionGroup, inherits, liveRuntime, status, error });
+    const status = inherits === false ? 'override_kept' : live?.present && live.ready === false ? 'starting'
+      : inherits === null || error || liveRuntime === 'unknown' || (live?.present && !live.launchConfig) ? 'unknown'
+      : liveRuntime === null ? 'not_running' : liveRuntime === baseline ? 'effective' : 'restart_needed';
+    result.groups.push({ sessionGroup, inherits, liveRuntime, status, error,
+      ...(live?.present && typeof live.runId === 'string' && live.runId && { runId: live.runId }) });
   }
   return result;
 }
@@ -280,7 +297,7 @@ export async function observeRuntimeGroups(baseline, sessionMode, { list = listG
 export async function executeRuntimeSwitch(target, flags, { read = readZylosConfigStrict, mode = readSessionMode,
   exists = commandExists, adapter = getSessionAdapter, credentials = applyCredentials, baseUrl = applyBaseUrl,
   hooksReady = runtimeHooksReady, write = updateZylosConfigLocked, observe = observeRuntimeGroups,
-  relayNotice = relayLoginNotice } = {}) {
+  restart = requestConfigRestart, relayNotice = relayLoginNotice } = {}) {
   const credentialsSaved = [], warnings = [];
   // A failure after a save keeps the warnings collected so far (for example a
   // settings.json key that overrides the saved credential and fails the probe).
@@ -300,6 +317,13 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
   } catch (error) { return fail('CONFIG_UNREADABLE', error.message); }
   let previousBaseline = config.runtime ?? 'claude';
   let baseline = previousBaseline, changed = false;
+  const observedMode = config.session_mode ?? null;
+  let before;
+  const observeFor = async (runtime, sessionMode) => {
+    if (sessionMode === null) return { groups: [], groupsComplete: true, observationErrors: [] };
+    try { return await observe(runtime, sessionMode); }
+    catch (error) { return { groups: [], groupsComplete: false, observationErrors: [{ source: 'session', sessionGroup: null, code: 'READ_FAILED', message: error.message }] }; }
+  };
   const fullPath = previousBaseline !== target || parsed.hasApiKey || parsed.hasSetupToken || parsed.hasBaseUrl;
   if (fullPath) {
     if (!exists(target)) return fail('RUNTIME_NOT_INSTALLED', `${target} CLI missing; run zylos init`);
@@ -346,6 +370,15 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
         return fail(rejected ? 'AUTH_FAILED' : 'AUTH_NOT_CONFIRMED', message, { authStatus: rejected ? 'failure' : 'uncertain' });
       }
     }
+    if (observedMode !== null) {
+      before = await observeFor(target, observedMode);
+      const affected = before.groups.filter(row => row.inherits !== false && ['restart_needed', 'unknown'].includes(row.status));
+      if (!parsed.yes && parsed.confirmedRuns === undefined && (affected.length || !before.groupsComplete)) {
+        const groups = affected.map(row => row.sessionGroup);
+        const message = groups.length ? `This change may interrupt ${groups.join(', ')}.` : 'Could not verify which sessions are running.';
+        return fail('CONFIRMATION_REQUIRED', `${message} Rerun zylos runtime ${target} with --yes to confirm.`, { groups });
+      }
+    }
     try {
       const saved = write({ set: { runtime: target } });
       previousBaseline = saved.previous.runtime ?? 'claude'; baseline = saved.config.runtime ?? 'claude';
@@ -359,11 +392,24 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
   try { sessionMode = fullPath ? config.session_mode ?? null : mode().mode;
     if (![null, 'single', 'multi'].includes(sessionMode)) sessionMode = 'unreadable'; }
   catch { sessionMode = 'unreadable'; }
-  let observed;
-  try { observed = sessionMode === null
-    ? { groups: [], groupsComplete: true, observationErrors: [] }
-    : await observe(baseline, sessionMode); }
-  catch (error) { observed = { groups: [], groupsComplete: false, observationErrors: [{ source: 'session', sessionGroup: null, code: 'READ_FAILED', message: error.message }] }; }
+  const observed = before ?? await observeFor(baseline, sessionMode);
+  if (changed && previousBaseline !== baseline && before) {
+    const pins = parsed.confirmedRuns === undefined ? null : new Map(parsed.confirmedRuns);
+    await Promise.all(observed.groups.map(async group => {
+      const { sessionGroup, runId, inherits, status } = group;
+      const pinned = pins ? pins.get(sessionGroup) : parsed.yes ? runId : null;
+      if (inherits === false || status === 'effective' || ['starting', 'not_running'].includes(status) && !pins?.has(sessionGroup)) return;
+      const reason = sessionMode !== observedMode ? 'mode_changed' : inherits === null ? 'override_state_unknown'
+        : pinned ? null : runId ? 'target_not_confirmed' : 'identity_unavailable';
+      group.restart = reason ? { status: 'not_restarted', reason } : await restart({ sessionGroup, runId: pinned });
+    }));
+    const seen = new Set(observed.groups.map(group => group.sessionGroup));
+    for (const [sessionGroup] of pins ?? []) {
+      if (!seen.has(sessionGroup)) observed.groups.push({ sessionGroup, inherits: null, liveRuntime: null,
+        status: observed.groupsComplete ? 'not_running' : 'unknown', error: null,
+        restart: { status: 'not_restarted', reason: observed.groupsComplete ? 'already_stopped' : 'identity_unavailable' } });
+    }
+  }
   return { ok: true, data: { result: changed ? 'saved' : 'unchanged', previousBaseline, baseline,
     credentialsSaved, sessionMode, ...observed, warnings } };
 }
@@ -380,6 +426,7 @@ zylos runtime — switch agent runtime
 
 Usage:
   zylos runtime <name>                        Switch to the specified runtime
+  zylos runtime <name> --yes                  Confirm an immediate restart of affected sessions
   zylos runtime status                        Show currently configured runtime
   zylos runtime <name> --save-apikey <key>    Save API key and switch
   zylos runtime <name> --save-base-url <url>  Save base URL and switch

@@ -37,7 +37,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   let mode = 'single', clock = Date.now(), server, seedStore, catalogReadable = true;
   let originRuntime = 'claude', originReady = true, pinWorking = false;
   const isOrigin = key => key === null || key === 'origin';
-  const actionCalls = [], cliCalls = [], records = [];
+  const actionCalls = [], cliCalls = [], runtimeCalls = [], records = [];
   let checker, installedCore = '1.4.0', tags = ['v1.5.2', 'v2.0.0', 'v1.6.0-beta.1'];
   const savedRoot = process.env.ZYLOS_DIR;
   process.env.ZYLOS_DIR = root;
@@ -102,6 +102,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     if (file === 'zylos' && args[0] === 'group' && args[1] === 'overrides') data = { baseline: { runtime: 'claude' }, runtime: [], model: [], runtimeTotal: 0, nextAfter: null };
     else if (file === 'zylos' && args[0] === 'group') data = { resolved: args[1] === 'runtime' ? { runtime: 'claude' } : { runtime: 'claude', mode: 'default' } };
     else if (file === 'zylos' && args[0] === 'runtime') {
+      runtimeCalls.push(args);
       const requested = args[1];
       if (requested === 'agy') {
         callback(null, JSON.stringify({ ok: false, error: { code: 'AUTH_FAILED', message: 'Fixture login was rejected' } }), '');
@@ -522,7 +523,8 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       assert.fail(`Missing instance update for ${expected}`);
     };
     const action = '/api/instance/actions/switch-runtime';
-    const save = (runtime, expected = 200) => request(action, { method: 'POST', body: { runtime }, identity: 'admin', expected });
+    const save = (runtime, expected = 200) => request(action, { method: 'POST',
+      body: { runtime, confirmedRuns: [['origin', originRun]] }, identity: 'admin', expected });
     const detail = key => request('/api/groups/' + encodeURIComponent(key) + '?include=');
     const observer = () => request('/api/observer/status?session_group=origin', { identity: 'cookie' });
     try {
@@ -532,6 +534,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       assert.equal((await detail('telegram:working')).runtimeOverridden, true, 'a pin equal to the default is still an override');
       const before = await request('/api/health');
       assert.equal((await save('codex')).data.result, 'saved');
+      assert.deepEqual(runtimeCalls.at(-1), ['runtime', 'codex', '--json', '--confirmed-runs', JSON.stringify([['origin', 'fixture-run']])]);
       await nextDefault('codex');
       assert.equal((await request('/api/health')).bootId, before.bootId);
       assert.equal((await request('/api/instance')).default_runtime, 'codex');

@@ -197,13 +197,13 @@ Example: `POST /api/instance/actions/switch-mode` with `{"mode":"multi"}`.
 
 ### POST /api/instance/actions/switch-runtime
 
-**Access:** Admin. **Parameters:** JSON `{runtime:"claude"|"codex"|"agy"}` plus any authentication-confirmation fields required by Core's runtime-switch flow.
+**Access:** Admin. **Parameters:** JSON `{runtime:"claude"|"codex"|"agy", confirmedRuns?:[string,string][]}`. Each confirmed pair is `[sessionGroup, runId]` from the displayed running sessions that inherit the default. Omit `confirmedRuns` when there are no affected running sessions. Core refuses an unconfirmed operation if its observations show an affected session or cannot establish that there are none.
 
-Returns `{ok:true,...CoreResult}` on success. `data.result` is `saved` or `unchanged`, and `data.baseline` is the saved default. Dashboard and its existing connections continue running; the instance stream publishes the new default. Failures use the common envelope. `AUTH_FAILED`, `AUTH_NOT_CONFIRMED` and `HOOKS_NOT_READY` results display the original error details; none is a successful switch. `AUTH_FAILED` means rejected or missing credentials; `AUTH_NOT_CONFIRMED` means the probe could not confirm authentication.
+Returns `{ok:true,...CoreResult}` on success. `data.result` is `saved` or `unchanged`, and `data.baseline` is the saved default. `data.groups` includes a `restart` result for each affected group when Core assesses immediate replacement. Its `status` is `accepted`, `not_restarted` or `unknown`. An unsuccessful or uncertain submission includes its `reason` and leaves the configuration saved. Each restart is bound to the confirmed run and is admitted independently. Acceptance records a restart request before the replacement run is ready. Dashboard and its existing connections continue running, and the instance stream publishes the new default. Failures use the common envelope. `AUTH_FAILED`, `AUTH_NOT_CONFIRMED` and `HOOKS_NOT_READY` results display the original error details. `AUTH_FAILED` means rejected or missing credentials. `AUTH_NOT_CONFIRMED` means the probe could not confirm authentication.
 
 **Errors:** HTTP 403 `AUTH_FAILED` (explicit credential rejection or logged-out status for any runtime) or `AUTH_NOT_CONFIRMED` (probe could not confirm authentication); HTTP 503 `HOOKS_NOT_READY` (target hooks or instructions not ready; for Codex, invalid hook trust that could not be rebuilt, with the validation reason and rebuild error in `error.message`); invalid runtime, supervisor/transition rejection codes, and common write errors. The two authentication errors retain distinct `error.message` remedies: replace credentials/log in for `AUTH_FAILED` (agy: `zylos runtime agy --save-apikey <key>`); check network/proxy and retry for `AUTH_NOT_CONFIRMED`.
 
-Example: `POST /api/instance/actions/switch-runtime` with `{"runtime":"codex"}`.
+Example with one affected Origin run: `POST /api/instance/actions/switch-runtime` with `{"runtime":"codex","confirmedRuns":[["origin","run-123"]]}`. HTTP 409 `CONFIRMATION_REQUIRED` leaves the default unchanged when confirmation is missing.
 
 ### GET /api/instance/core-update
 
@@ -483,9 +483,9 @@ Example: `POST /api/groups/telegram%3Aexample/actions/chop-chop` with `{"runId":
 
 ### POST /api/groups/:id/actions/restart
 
-**Access:** Admin. **Parameters:** same identity body as interrupt.
+**Access:** Admin. **Parameters:** same identity body as interrupt. For a stopped Origin, an empty body requests a wake. A run-bound request for an absent target returns `already_stopped` without waking it.
 
-Returns the supervisor result with `ok:boolean`, `requestId?:string`, `submission:"accepted"|"rejected"|"unknown"|"not_submitted"`, optional `completion:string`, `unknown?:boolean`; failures use `error:{code,message}` and non-2xx HTTP status. Origin uses the same public address and Core's Origin action implementation. Query the restart resource to establish progress.
+Returns the supervisor result with `ok:boolean`, `requestId?:string`, `submission:"accepted"|"rejected"|"unknown"|"not_submitted"`, optional `completion:string`, `unknown?:boolean`; failures use `error:{code,message}` and non-2xx HTTP status. Each group can have one pending manual restart. Requests for different groups are admitted independently. Origin uses the same public address and Core's Origin action implementation. Query the restart resource to establish progress.
 
 **Errors:** same target/mode/access errors as interrupt; `INSTANCE_ROOT_MISMATCH`; supervisor rejection/unavailable result codes.
 

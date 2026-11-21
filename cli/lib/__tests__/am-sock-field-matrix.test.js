@@ -9,10 +9,6 @@ const good = {
     { ok: true, result: 'accepted', runCount: 1 }, { ok: true, result: 'already_accepted', runCount: 2 }, { ok: true, result: 'done_empty', runCount: 0 },
     ...['manual_restart_pending', 'requests_unreadable', 'request_conflict'].map(code => ({ ok: false, code })),
   ],
-  ready_for_config_reclaim: [
-    ...['accepted', 'already_accepted', 'unchanged'].map(result => ({ ok: true, result })),
-    ...['not_multi', 'transition_open', 'run_changed', 'not_ready', 'snapshot_unavailable', 'other_fence', 'manual_restart_pending', 'requests_unreadable'].map(reason => ({ ok: false, result: 'rejected', reason })),
-  ],
   request_release: [
     ...['accepted', 'already_accepted'].map(result => ({ ok: true, result })),
     ...['not_multi', 'transition_open', 'run_changed', 'not_ready', 'other_fence', 'manual_restart_pending', 'requests_unreadable'].map(reason => ({ ok: false, result: 'rejected', reason })),
@@ -72,7 +68,6 @@ test('literal invalid reason/code, incompatible ok/result and field relationship
     ['restart_all', { ok: true, result: 'unknown_result', runCount: 0 }],
     ['manual_restart', { ok: false, result: 'rejected', reason: 'unknown_reason' }],
     ['mode_switch', { ok: false, code: 'unknown_code' }],
-    ['ready_for_config_reclaim', { ok: true, result: 'rejected', reason: 'not_multi' }],
     ['manual_restart', { ok: false, result: 'accepted' }],
     ['restart_all', { ok: true, result: 'done_empty', runCount: 2 }],
     ['restart_all', { ok: true, result: 'accepted', runCount: 0 }],

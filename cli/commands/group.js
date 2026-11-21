@@ -1,6 +1,6 @@
 import { parseSessionGroup } from '../../skills/comm-bridge/scripts/c4-session-group.js';
 
-const usage = 'Usage: zylos group <runtime|model> <get|set|reset> [options] | zylos group overrides [--group <group>]... | zylos group overrides [--match <text>] [--after <group>] | zylos group delete <group> [--yes]';
+const usage = 'Usage: zylos group <runtime|model> <get|set|reset> [options] [--yes for set/reset] | zylos group overrides [--group <group>]... | zylos group overrides [--match <text>] [--after <group>] | zylos group delete <group> [--yes]';
 
 export async function groupCommand(args, { run, io = process } = {}) {
   const [kind, ...flags] = args;
@@ -68,6 +68,8 @@ export async function groupCommand(args, { run, io = process } = {}) {
     else {
       const data = result.data;
       io.stdout.write(`OK: ${JSON.stringify(data)}\n`);
+      if (data.restart?.status === 'not_restarted') io.stderr.write(`Saved, but the immediate switch did not run for ${data.sessionGroup} (${data.restart.reason}).\n`);
+      else if (data.restart?.status === 'unknown') io.stderr.write(`Saved, but the immediate switch could not be verified for ${data.sessionGroup} (${data.restart.reason}).\n`);
       if (data.running === null) {
         // In native single, Origin runs and is compared like a multi group.
         if (data.sessionMode !== 'multi' && !(data.sessionMode === 'single' && data.sessionGroup === 'origin')) io.stdout.write('Applies only in multi session mode.\n');
