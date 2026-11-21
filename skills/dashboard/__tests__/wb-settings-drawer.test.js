@@ -187,8 +187,8 @@ test('in the settings page, choosing a section from the open drawer switches to 
   const toggle = root.querySelector('.wb-set-drawer-btn'), layout = root.querySelector('.wb-set');
   await toggle.dispatch('click');
   assert.equal(page.drawer.isOpen(), true); assert.equal(layout.classList.contains('wb-set-drawer-open'), true);
-  await root.querySelector('[data-settings-section="keys"]').dispatch('click');
-  assert.equal(page.sections.keys.hidden, false);
+  await root.querySelector('[data-settings-section="pricing"]').dispatch('click');
+  assert.equal(page.sections.pricing.hidden, false);
   assert.equal(page.drawer.isOpen(), false); assert.equal(entries.length, 1, 'the drawer entry is gone');
-  assert.equal(toggle.textContent, 'wb.settings.section.keys');
+  assert.equal(toggle.textContent, 'wb.settings.section.pricing');
 });

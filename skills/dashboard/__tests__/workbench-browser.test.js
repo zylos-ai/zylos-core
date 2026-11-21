@@ -6,14 +6,15 @@ import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harne
 // Run for changes to the workbench pages' layout, the app header (brand colour, the viewed machine's Core version), the machine panel's meta line, the header's machines icon (back to the machines page, machine settings without other machines), the phone stylesheet (portrait and a phone on its side), the usage page's cost total and its Other line, the page actions and their confirmation (automatic naming included),
 // chat-stream admission error/timeout/retry behavior and established-stream reconnects without admission probes,
 // fleet problem navigation after offline pagination,
-// memory/detail navigation, the group timeline's event filtering and order, or the phone settings drawer and the page's history handling; skip for backend-only and conversation-page-only changes. Opt-in with the same
+// memory/detail navigation, the group timeline's event filtering and order, the phone settings drawer and the page's history handling,
+// the settings page's field sizes, sliding tables, pricing note, key and machine notices, confirmation titles and buttons, or the terminal observer section; skip for backend-only and conversation-page-only changes. Opt-in with the same
 // gate as the chat browser cases before any directory, server or browser is allocated; the harness proves the
 // private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/socket paths and closes the browser and HTTP server when the case ends.
 test('workbench pages ask before acting and fit a phone screen',
-  { skip: !chatEnabled(), timeout: 240_000 }, async t => {
+  { skip: !chatEnabled(), timeout: 330_000 }, async t => {
     const sandbox = createChatSandbox(t);
     await sandbox.runCase(async () => {
       const { runWorkbenchBrowser } = await import('./helpers/workbench-browser.js');
       await runWorkbenchBrowser(t, sandbox);
-    }, { timeoutMs: 230_000 });
+    }, { timeoutMs: 320_000 });
   });

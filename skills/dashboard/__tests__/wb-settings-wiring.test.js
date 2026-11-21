@@ -29,8 +29,8 @@ function page({ answer = true } = {}) {
     append(...nodes);
     for (const added of nodes) {
       const dialog = added.querySelector('.wb-modal'); if (!dialog) continue;
-      dialogs.push({ title: dialog.children[0].textContent, body: dialog.children[1].textContent });
       const [no, yes] = dialog.querySelector('.wb-modal-acts').children;
+      dialogs.push({ title: dialog.children[0].textContent, body: dialog.children[1].textContent, danger: yes.classList.contains('wb-btn-danger') });
       queueMicrotask(() => ((Array.isArray(result.answer) ? result.answer.shift() : result.answer) ? yes : no).dispatch('click'));
     }
   };
@@ -179,6 +179,7 @@ test('saving model and effort for both engines asks once, then runs every change
   await root.querySelector('#settings-save-models').dispatch('click');
   assert.equal(p.dialogs.length, 1, 'one .wb-modal for the whole card, none per action');
   assert.match(p.dialogs[0].body, /^wb\.settings\.confirmModels/);
+  assert.deepEqual([p.dialogs[0].title, p.dialogs[0].danger], ['wb.settings.confirm.models', false], 'saving models interrupts nothing');
   assert.deepEqual(busy, [true, false], 'the page is locked only while asking');
   assert.deepEqual(sent.map(item => item.action).sort(), ['switch-effort', 'switch-effort', 'switch-model', 'switch-model']);
   assert.deepEqual(asked, [], 'the card hands its confirmed changes to the runner\'s no-ask path');
@@ -204,20 +205,23 @@ test('switching the default engine asks once and names the remote machine it act
   await root.querySelector('#settings-save-runtime').dispatch('click');
   assert.equal(p.dialogs.length, 1, 'one .wb-modal');
   assert.match(p.dialogs[0].body, /confirm\.switch_runtime_codex/);
+  assert.deepEqual([p.dialogs[0].title, p.dialogs[0].danger], ['wb.settings.confirm.runtime', true], 'switching the engine interrupts running work');
   assert.match(p.dialogs[0].body, /\nconfirm\.remote_target:\{"agent":"lab"\}$/);
   assert.deepEqual(sent, [{ action: 'switch-runtime', body: { runtime: 'codex' } }]);
 });
 
 test('idle reclaim uses the session card mount and the existing confirmed remote action path', async () => {
   const p = page(), sent = [], asked = [], section = node(p.document, 'section');
-  const root = node(p.document, 'div', 'settings-defaults'), sessionRoot = node(p.document, 'div', 'settings-idle-reclaim'); section.append(root, sessionRoot);
+  // The idle reclaim field sits in the session mode card, in another section from the default engine card.
+  const root = node(p.document, 'div', 'settings-defaults'), sessionRoot = node(p.document, 'div', 'settings-idle-reclaim'); section.append(root); node(p.document, 'section').append(sessionRoot);
   const value = defaultsValue(); value.metadata.claude.session_hot_ttl = { seconds: 1800, minutes: 30, mode: 'multi', source: 'config',
     read_only: false, environment_set: false, environment_valid: false, min_minutes: 5, max_minutes: 1440 };
-  const panel = wired(p, { runner: recordingRunner(sent, asked), remoteTarget: () => 'lab' }).renderDefaults(root, value, async () => ({}));
+  const panel = wired(p, { runner: recordingRunner(sent, asked), remoteTarget: () => 'lab' }).renderDefaults(root, value, async () => ({}), sessionRoot);
   assert.equal(root.querySelector('#settings-hot-ttl-minutes'), null, 'the global setting is outside the per-engine cards');
   const input = sessionRoot.querySelector('#settings-hot-ttl-minutes'); input.value = '5'; await input.dispatch('input');
   await sessionRoot.querySelector('#settings-save-hot-ttl').dispatch('click');
   assert.equal(p.dialogs.length, 1); assert.match(p.dialogs[0].body, /hotTtl\.confirm.*"minutes":5/);
+  assert.deepEqual([p.dialogs[0].title, p.dialogs[0].danger], ['wb.settings.confirm.hotTtl', false]);
   assert.match(p.dialogs[0].body, /remote_target.*lab/);
   assert.deepEqual(sent, [{ action: 'set-session-hot-ttl', body: { minutes: 5 } }]); assert.deepEqual(asked, []);
   panel.destroy();

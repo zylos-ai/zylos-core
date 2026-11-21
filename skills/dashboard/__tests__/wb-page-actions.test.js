@@ -19,14 +19,14 @@ const t = (key, params = {}) => key + (Object.keys(params).length ? ':' + JSON.s
 
 // The page's real actions with a recording sender and a confirmation that answers `answer` (a list answers in order).
 function actions({ answer = true, readOnly = false, remote = null, shown = { sessionGroup: 'origin', runId: 'run-1', sessionId: 's-1' }, runtime = 'claude' } = {}) {
-  const asked = [], sent = [], session = { current: shown };
+  const asked = [], options = [], sent = [], session = { current: shown };
   const run = createPageActions({
     t, readOnly: () => readOnly, remoteTarget: () => remote, shownSession: () => session.current, runtime: () => runtime,
     effortLabel: value => `effort:${value}`,
-    confirm: async text => { asked.push(text); return Array.isArray(answer) ? answer.shift() : answer; },
+    confirm: async (text, question) => { asked.push(text); options.push(question); return Array.isArray(answer) ? answer.shift() : answer; },
     send: async (action, body) => { sent.push({ action, body }); return true; },
   });
-  return { run, asked, sent, session };
+  return { run, asked, options, sent, session };
 }
 
 // The session controls as the page builds them: the CLI upgrade button, the mode select with its segmented
@@ -41,24 +41,33 @@ function controls() {
   return { root, upgrade, mode, seg };
 }
 
-test('upgrading the CLI from the session controls asks first; cancelling sends nothing', async () => {
+test('upgrading the CLI from the engine card asks first under its own title, without the destructive button; cancelling sends nothing', async () => {
   const no = actions({ answer: false }), c = controls();
   bindActionControls(c.root, no.run, { runtime: () => 'claude' });
   await c.upgrade.dispatch('click');
   assert.deepEqual(no.asked, ['confirm.upgrade_runtime:{"runtime":"Claude"}']);
+  assert.deepEqual(no.options, [{ title: 'wb.settings.confirm.upgradeEngine:{"engine":"Claude"}', danger: false }]);
   assert.deepEqual(no.sent, []);
   const yes = actions({ runtime: 'codex' }), c2 = controls();
   bindActionControls(c2.root, yes.run, { runtime: () => 'codex' });
   await c2.upgrade.dispatch('click');
   assert.deepEqual(yes.asked, ['confirm.upgrade_runtime:{"runtime":"Codex"}'], 'a Codex machine is asked about upgrading Codex');
   assert.deepEqual(yes.sent, [{ action: 'upgrade-cc', body: { runtime: 'codex' } }]);
+  // The default engine card upgrades the engine chosen in it, even when the page's default is another one.
+  const chosen = actions({ runtime: 'claude' }), c3 = controls();
+  bindActionControls(c3.root, chosen.run, { runtime: () => 'codex' });
+  await c3.upgrade.dispatch('click');
+  assert.deepEqual(chosen.asked, ['confirm.upgrade_runtime:{"runtime":"Codex"}']);
+  assert.deepEqual(chosen.options, [{ title: 'wb.settings.confirm.upgradeEngine:{"engine":"Codex"}', danger: false }]);
+  assert.deepEqual(chosen.sent, [{ action: 'upgrade-cc', body: { runtime: 'codex' } }]);
 });
 
-test('switching the session mode asks first; a cancelled switch restores the mode and sends nothing', async () => {
+test('switching the session mode asks first by the mode\'s shown name and a destructive button; a cancelled switch restores the mode and sends nothing', async () => {
   const no = actions({ answer: false }), c = controls(), settled = [];
   bindActionControls(c.root, no.run, { onModeSettled: () => settled.push(c.mode.value) });
   await c.seg[1].dispatch('click');
-  assert.deepEqual(no.asked, ['confirm.switch_mode:{"mode":"single"}']);
+  assert.deepEqual(no.asked, ['confirm.switch_mode:{"mode":"wb.settings.session.single"}']);
+  assert.deepEqual(no.options, [{ title: 'wb.settings.confirm.sessionMode', danger: true }]);
   assert.deepEqual(no.sent, []);
   assert.deepEqual(settled, ['multi'], 'the select is back on the running mode when the page redraws');
 

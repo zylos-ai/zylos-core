@@ -9,9 +9,12 @@ export class Element {
   append(...nodes) { for (const node of nodes) { node.remove(); node.parentElement = this; this.children.push(node); } }
   prepend(...nodes) { for (const node of nodes.reverse()) { node.remove(); node.parentElement = this; this.children.unshift(node); } }
   replaceChildren(...nodes) { for (const node of this.children) node.parentElement = null; this.children = []; this.text = ''; this.append(...nodes); }
+  before(...nodes) { const parent = this.parentElement; if (!parent) return; for (const node of nodes) { node.remove(); node.parentElement = parent; parent.children.splice(parent.children.indexOf(this), 0, node); } }
+  after(...nodes) { const parent = this.parentElement; if (!parent) return; let at = parent.children.indexOf(this) + 1; for (const node of nodes) { node.remove(); node.parentElement = parent; parent.children.splice(at++, 0, node); } }
   remove() { if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(node => node !== this); this.parentElement = null; }
   setAttribute(key, value) { this.attributes[key] = String(value); }
   getAttribute(key) { return this.attributes[key] ?? null; }
+  removeAttribute(key) { if (key === 'hidden') this.hidden = false; delete this.attributes[key]; }
   matches(selector) {
     if (selector.includes(',')) return selector.split(',').some(part => this.matches(part.trim()));
     const attr = selector.match(/\[([^=\]]+)(?:="([^"]*)")?\]/);

@@ -14,3 +14,15 @@ test('the login page follows the Dashboard theme, else the system, from the firs
       await runLoginThemeBrowser(t, sandbox);
     }, { timeoutMs: 110_000 });
   });
+
+// Same boundary, with a real password hash and an in-memory session store: the login page's language follows the
+// language the Dashboard saved in this browser, else the browser's, and signing in still works. Run for changes to
+// the login page's words or how the Dashboard saves its language.
+test('the login page follows the Dashboard language, else the browser, and signs in',
+  { skip: !chatEnabled(), timeout: 60_000 }, async t => {
+    const sandbox = createChatSandbox(t);
+    await sandbox.runCase(async () => {
+      const { runLoginLanguageBrowser } = await import('./helpers/login-theme-browser.js');
+      await runLoginLanguageBrowser(t, sandbox);
+    }, { timeoutMs: 50_000 });
+  });

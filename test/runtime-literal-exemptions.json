@@ -861,11 +861,6 @@
   },
   {
     "file": "skills/dashboard/public/js/wb/settings-pricing.js",
-    "text": "let runtime = data.active === 'codex' ? 'codex' : 'claude', expanded = false, stopped = false;",
-    "reason": "dispatch:dashboard: Opens the pricing tab for Codex only when explicitly active and uses Claude pricing otherwise."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
     "text": "if (runtime === 'codex') payload.priorityModelPrices = collectPriceRows([...priorityRows.querySelectorAll('tr')]);",
     "reason": "dispatch:dashboard: Captures the priority prices exclusive to Codex."
   },
@@ -898,11 +893,6 @@
     "file": "skills/dashboard/public/js/wb/settings-pricing.js",
     "text": "text.append(element(document, 'b', item.model ?? t('wb.unknown'), 'wb-mono'), element(document, 'span', t('wb.settings.unmatchedTitle', { runtime: runtimeName(item.runtime === 'codex' ? 'codex' : 'claude') })),",
     "reason": "dispatch:dashboard: Associates unmatched usage with the existing Codex or Claude price editor."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
-    "text": "capture(); runtime = item.runtime === 'codex' ? 'codex' : 'claude'; expanded = true;",
-    "reason": "dispatch:dashboard: Opens the appropriate existing price tab for an unmatched model."
   },
   {
     "file": "skills/dashboard/public/js/wb/settings-pricing.js",

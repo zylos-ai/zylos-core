@@ -80,8 +80,10 @@ test('background Sync controls name distinct jobs', () => {
 test('Sync procedures select the named job even in origin', () => {
   const group = normalize(between(sync, '## Group Sync', '## Origin Sync'));
   const origin = normalize(between(sync, '## Origin Sync', '## Single global Sync'));
-  assert.match(group, /Execute only group Sync with a bound inherited ZYLOS_SESSION_GROUP/);
-  assert.match(group, /including origin's own working state.*kind=group/);
+  assert.match(group, /Execute only group Sync, including origin's own working state\. Use kind=group/);
+  assert.match(group, /`sync-run\.js start` verifies the session group and run ID binding\. A successful start that returns a token proves the binding\. Continue directly with the returned manifest\./);
+  assert.match(group, /Do not use shell commands to recheck environment variables or change the procedure based on your own suspicions about the binding/);
+  assert.match(group, /Use abort only for a terminal script error or a required read or write that fails under the common failure rules\. Record any worker suspicions about the binding in the report and continue the procedure\./);
   assert.match(origin, /only when the control prompt names `Origin Sync`; use `zylos-origin-sync` in Claude/);
   assert.match(origin, /Being in origin does not select this job/);
 });

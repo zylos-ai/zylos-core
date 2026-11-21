@@ -1361,9 +1361,9 @@ export function mountConversationPage({
   view?.addEventListener('resize', scheduleFit);
   if (view?.ResizeObserver) {
     fitObserver = new view.ResizeObserver(scheduleFit);
-    const header = document.querySelector('.app-header');
-    if (header) {
-      fitObserver.observe(header);
+    for (const selector of ['.app-header', '.wb-mobile-topbar', '#wb-mobile-nav']) {
+      const element = document.querySelector(selector);
+      if (element) fitObserver.observe(element, { box: 'border-box' });
     }
     if (root.parentElement) {
       fitObserver.observe(root.parentElement);

@@ -1,5 +1,5 @@
 import { isSameOriginRequest } from './request-origin.js';
-import { SESSION_HOST_PATH } from './session-host-routes.js';
+import { SESSION_HOST_CHANNELS_PATH, SESSION_HOST_PATH } from './session-host-routes.js';
 import { CHAT_SETTINGS_PATH } from './chat/access.js';
 import { isGroupDeletionRoute } from './workbench/group-deletion.js';
 import crypto from 'node:crypto';
@@ -113,7 +113,8 @@ function observerLeaseId(req, suffix) {
 }
 
 function isLocalOnlyEndpoint(suffix, method) {
-  return suffix === SESSION_HOST_PATH || suffix === CHAT_SETTINGS_PATH && method !== 'GET' || suffix === '/api/fleet/agents' ||
+  return suffix === SESSION_HOST_PATH || suffix === SESSION_HOST_CHANNELS_PATH ||
+    suffix === CHAT_SETTINGS_PATH && method !== 'GET' || suffix === '/api/fleet/agents' ||
     suffix.startsWith('/api/fleet/agents/') ||
     suffix === '/api/instance/name' ||
     suffix === '/api/keys' ||

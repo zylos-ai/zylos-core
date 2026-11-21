@@ -174,10 +174,10 @@
 /* Text in every button, segment, tab, tag and pill sits in the middle of its box: flex centring and one line
    height (Latin, Chinese, and icon with text alike), not padding. Zero specificity, so a control's own display
    (hidden, column layouts) and fixed line heights still apply; the pill keeps its height with min-height. */
-:where(.wb-btn, .wb-icon-btn, .wb-link-btn, .wb-tech-btn, .header-icon-btn, .app-header .tab, .wb-seg button, .wb-seg2 button, .wb-seg-sm button, .wb-tag, .wb-pill, .connection-pill, .wb-set-nav-btn, .wb-set-drawer-btn, .wb-detail-tabs button, .wb-chip, .wb-scope-b) { display: inline-flex; align-items: center; }
+:where(.wb-btn, .wb-icon-btn, .wb-link-btn, .wb-tech-btn, .header-icon-btn, .app-header .tab, .wb-seg button, .wb-seg2 button, .wb-seg-sm button, .wb-tag, .wb-pill, .wb-set-nav-btn, .wb-set-drawer-btn, .wb-detail-tabs button, .wb-chip, .wb-scope-b) { display: inline-flex; align-items: center; }
 :where(.wb-btn, .header-icon-btn, .app-header .tab, .wb-seg button, .wb-seg2 button, .wb-seg-sm button, .wb-detail-tabs button, .wb-chip) { justify-content: center; }
 /* `button { font: inherit }` would bring back the page's 1.5 line height, so the line height is set at class weight. */
-:is(.wb-btn, .wb-icon-btn, .wb-link-btn, .wb-tech-btn, .header-icon-btn, .wb-set-nav-btn, .wb-set-drawer-btn, .wb-pill, .connection-pill), .wb-seg button, .wb-seg2 button, .wb-detail-tabs button, .app-header .tab, .wb-chip { line-height: 1.2; }
+:is(.wb-btn, .wb-icon-btn, .wb-link-btn, .wb-tech-btn, .header-icon-btn, .wb-set-nav-btn, .wb-set-drawer-btn, .wb-pill), .wb-seg button, .wb-seg2 button, .wb-detail-tabs button, .app-header .tab, .wb-chip { line-height: 1.2; }
 .wb-pill { min-height: 24px; }
 .wb-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--text-muted); }
 
@@ -220,6 +220,19 @@ html.wb-nav-row .app-header .header-left { flex: 0 1 auto; min-width: 0; overflo
 html.wb-nav-row .app-header .tab-bar { order: 10; flex: 0 0 100%; margin: 0 -16px; padding: 0 12px 6px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
 html.wb-nav-row .app-header .tab-bar::-webkit-scrollbar { display: none; }
 html.wb-nav-row .app-header .tab { flex: none; }
+/* Landscape phones and tablets use the desktop shell even in standalone mode. */
+@media (min-width: 761px) {
+  .app-header {
+    height: calc(48px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+  }
+  html.wb-nav-row .app-header { min-height: calc(48px + env(safe-area-inset-top)); }
+  html.wb-nav-row .app-header .tab-bar {
+    margin-left: min(0px, calc(env(safe-area-inset-left) - 16px));
+    margin-right: min(0px, calc(env(safe-area-inset-right) - 16px));
+  }
+  .view-stack { padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left); }
+}
 /* Where you are: settings is not a section of the navigation, so while it is open the navigation ends in a
    "Settings" entry marked as the current page, and the gear that opened it reads as pressed. */
 .app-header .tab.wb-tab-here { display: none; }
@@ -390,7 +403,7 @@ html[data-detail=plain] .wb-tech-col { display: none; }
   #tab-overview.wb-has-side .wb-row > .wb-queue { display: none; }
 }
 #wb-side[hidden], .wb-auto-name-dialog[hidden] { display: none; }
-#wb-side { position: fixed; top: var(--wb-header-h); right: 0; bottom: 0; z-index: 15; width: 480px; display: flex; flex-direction: column; border-left: 1px solid var(--wb-line); background: var(--wb-side); box-shadow: var(--wb-shadow); overflow-wrap: anywhere; }
+#wb-side { position: fixed; top: var(--wb-header-h); right: env(safe-area-inset-right); bottom: 0; z-index: 15; width: 480px; display: flex; flex-direction: column; border-left: 1px solid var(--wb-line); background: var(--wb-side); box-shadow: var(--wb-shadow); overflow-wrap: anywhere; }
 #wb-side button { font-family: inherit; }
 .wb-detail-header { flex: none; padding: 14px 18px 0; border-bottom: 1px solid var(--wb-line); background: var(--wb-side); }
 .wb-d-top { display: flex; align-items: center; gap: 8px; }
@@ -557,6 +570,10 @@ html[data-detail=plain] #observer-tab { display: none!important; }
 
 @media (max-width: 900px) {
   #wb-side:not([hidden]) { inset: 0; z-index: 55; width: auto; border-left: 0; box-shadow: none; }
+  :is(#wb-side, .wb-sched-side, .conversation-page > .wb-group-side) {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
   .wb-detail-header { padding-top: max(14px, env(safe-area-inset-top)); }
   .wb-detail-body { padding-bottom: env(safe-area-inset-bottom); }
   /* Touch screens have no tooltip, so the drawer actions carry their names. */
@@ -739,7 +756,7 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
 .wb-sched-notice { color: var(--text-dim); }
 .wb-sched-valid { color: var(--wb-work); }
 /* Drawer */
-.wb-sched-side { position: fixed; top: var(--wb-header-h); right: 0; bottom: 0; z-index: 15; width: 480px; display: flex; flex-direction: column; border-left: 1px solid var(--wb-line); background: var(--wb-side); box-shadow: var(--shadow-card); overflow-wrap: anywhere; }
+.wb-sched-side { position: fixed; top: var(--wb-header-h); right: env(safe-area-inset-right); bottom: 0; z-index: 15; width: 480px; display: flex; flex-direction: column; border-left: 1px solid var(--wb-line); background: var(--wb-side); box-shadow: var(--shadow-card); overflow-wrap: anywhere; }
 .wb-sched-side[hidden] { display: none; }
 .wb-sched-detail { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .wb-sched-detail .wb-detail-header { padding-bottom: 12px; }
@@ -811,6 +828,9 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
   .wb-sched-side { inset: 0; z-index: 55; width: auto; border-left: 0; box-shadow: none; }
 }
 @media (max-width: 760px) {
+  /* Phones: the task list comes first; the numbers, charts and timeline follow it. Desktop keeps its order. */
+  .wb-sched-main { display: flex; flex-direction: column; }
+  .wb-sched-main > .wb-sched-top { order: 1; border-top: 1px solid var(--wb-line); border-bottom: 0; }
   .wb-sched-top { padding: 12px 12px 4px; }
   /* Six numbers as three columns by two rows. */
   .wb-sched-kpi { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 10px 12px; }
@@ -1157,7 +1177,7 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 main:has(> #tab-settings.active) { padding: 0; }
 #tab-settings.active { display: block; }
 .wb-set { display: flex; min-height: calc(100dvh - var(--wb-header-h)); background: linear-gradient(to right, var(--wb-side) 0 208px, var(--wb-line) 208px 209px, transparent 209px); }
-.wb-set-nav { position: sticky; top: var(--wb-header-h); align-self: flex-start; width: 209px; flex: none; max-height: calc(100dvh - var(--wb-header-h)); display: flex; flex-direction: column; gap: 2px; padding: 14px 9px 14px 8px; overflow: auto; }
+.wb-set-nav { position: sticky; top: var(--wb-header-h); align-self: flex-start; width: 209px; flex: none; max-height: calc(100dvh - var(--wb-header-h) - env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 2px; padding: 14px 9px 14px 8px; overflow: auto; }
 .wb-set-nav-btn { display: flex; align-items: center; gap: 9px; width: 100%; height: 34px; padding: 0 10px; border: 0; border-radius: var(--wb-r); background: transparent; color: var(--text-dim); font-size: 13px; text-align: left; white-space: nowrap; cursor: pointer; }
 .wb-set-nav-btn:hover { background: var(--wb-hover); color: var(--text); }
 .wb-set-nav-btn[aria-current="true"] { background: var(--wb-accent-soft); color: var(--accent); font-weight: 600; }
@@ -1168,6 +1188,32 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-set-drawer-h, .wb-set-drawer-btn, .wb-set-scrim { display: none; }
 .wb-set-body { flex: 1; min-width: 0; padding: 22px 28px 40px; }
 .wb-set-wrap { max-width: 920px; }
+/* The long lists (session hosts, keys, other machines, prices): search, one page of rows, the pager. Rows off the
+   page are hidden in place. */
+.wb-set-body :is(.wb-host-row, .wb-agent-row, tr)[hidden], .wb-set-body :is(.wb-plist-search, .wb-plist-pager, .wb-plist-empty)[hidden] { display: none; }
+.wb-plist-search { margin: 0 0 10px; }
+.wb-plist-search .wb-input { width: min(100%, 260px); }
+.wb-plist-pager { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 10px; color: var(--text-dim); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.wb-plist-prev .wb-ico { transform: rotate(180deg); }
+.wb-plist-empty { margin: 8px 0; }
+/* Allowlisted channels as tags; the × removes one. */
+.wb-host-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; }
+.wb-host-chip { display: inline-flex; align-items: center; gap: 2px; height: 28px; padding: 0 2px 0 10px; border: 1px solid var(--wb-line-strong); border-radius: 14px; color: var(--text); font-size: 12.5px; }
+.wb-host-chip-x { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-muted); cursor: pointer; }
+.wb-host-chip-x:hover { background: var(--wb-hover); color: var(--text); }
+/* Channels are added from a searchable list under the field: the registered channels not on the list yet. */
+.wb-host-combo { position: relative; display: inline-flex; flex: 0 1 260px; min-width: 0; }
+.wb-host-combo > .wb-input { width: 100%; padding-right: 26px; }
+.wb-host-combo > .wb-ico { position: absolute; right: 8px; top: 50%; margin-top: -6.5px; color: var(--text-muted); transform: rotate(90deg); pointer-events: none; }
+.wb-host-options { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 20; display: flex; flex-direction: column; max-height: 240px; padding: 4px; overflow-y: auto; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); box-shadow: var(--wb-shadow); }
+.wb-host-options[hidden] { display: none; }
+.wb-host-options > .wb-host-meta { padding: 6px 8px; }
+.wb-host-option { padding: 7px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.wb-host-option:hover, .wb-host-option:focus-visible { background: var(--wb-hover); }
+.wb-version-line { margin: 0 0 4px; }
+.wb-card-lead { margin: 0 0 10px; }
+.wb-mode-note b { color: var(--text); font-weight: 600; }
+#action-mode-status:empty { display: none; }
 .wb-set-status:empty { display: none; }
 .wb-set-status > [hidden] { display: none; }
 .wb-set-sec[hidden] { display: none; }
@@ -1298,6 +1344,11 @@ a.wb-btn { text-decoration: none; }
 .wb-rt-tab small { color: var(--text-muted); font-weight: 450; }
 .wb-rt-tab[aria-selected="true"] { border-bottom-color: var(--text); color: var(--text); font-weight: 600; }
 .settings-table-scroll, .wb-tscroll { overflow-x: auto; }
+/* While columns are still hidden to the right, the right edge fades out; scrolled to the end, the fade is gone. */
+:is(.settings-table-scroll, .wb-tscroll)[data-more-right] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
 .settings-table-scroll { padding: 4px; margin: -4px -4px -4px; scroll-padding: 4px; }
 .wb-ptable { width: 100%; min-width: 640px; border-collapse: collapse; font-size: 12.5px; }
 .wb-ptable th { padding: 6px; border-bottom: 1px solid var(--wb-line); color: var(--text-muted); font-size: 11.5px; font-weight: 500; text-align: right; white-space: nowrap; }
@@ -1320,8 +1371,11 @@ a.wb-btn { text-decoration: none; }
 .wb-pdel { width: 34px; }
 .wb-more-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 8px; }
 .wb-tip-anchor { position: relative; }
+/* Session mode: the raw instance/mode/Origin line is a technical detail. */
+html:not([data-detail=technical]) #action-instance-status { display: none; }
 .wb-sub-link { color: var(--text-muted); font-size: 12px; text-decoration: underline dotted; text-underline-offset: 3px; }
-.wb-tip-anchor .tip-popover { position: absolute; top: 22px; left: 0; z-index: 6; width: 300px; }
+/* Opaque, so the table under it does not show through its text. */
+.wb-tip-anchor .tip-popover { position: absolute; top: 22px; left: 0; z-index: 6; width: 300px; background: var(--c-raised); }
 .wb-obs-state { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; font-size: 13.5px; }
 .wb-obs-state small { color: var(--text-muted); }
 
@@ -1367,7 +1421,15 @@ html[lang^="zh"] .wb-sent-gap { display: none; }
 .wb-page-h p { margin: 2px 0 0; color: var(--text-dim); font-size: 12.5px; }
 .wb-page-h .freshness { color: var(--text-muted); font-size: 12px; }
 .fleet-view .agent-fleet { max-width: none; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
-.fleet-view .agent-fleet-summary { margin-bottom: 12px; padding: 0; }
+.fleet-view .agent-fleet-summary { justify-content: flex-start; margin-bottom: 12px; padding: 0; }
+.fleet-view .sum-states { flex-wrap: wrap; row-gap: 5px; }
+.fleet-view .sum-seg { white-space: nowrap; }
+.agent-fleet-head { align-items: center; }
+.wb-f-page-actions, .wb-f-pagination { display: flex; align-items: center; gap: 6px; }
+.wb-f-pagination { margin-inline-start: auto; }
+.wb-f-pagination > span { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.wb-f-pagination button { min-width: var(--wb-control-compact); padding: 0; }
+.wb-f-pagination button[data-fleet-page="-1"] i { transform: rotate(180deg); }
 .fleet-view .sum-dot.dot-busy { background: var(--wb-work); }
 .fleet-view .sum-dot.dot-idle { background: var(--wb-idle); }
 .fleet-view .sum-dot.dot-stuck { background: var(--wb-wait); }
@@ -1379,9 +1441,70 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 .wb-f-card.bad { border-color: color-mix(in srgb, var(--wb-err) 40%, var(--wb-line-strong)); }
 .wb-f-card.self { box-shadow: inset 3px 0 0 var(--accent); }
 .wb-f-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.wb-f-top b { overflow: hidden; font-size: 14.5px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.wb-f-top :is(b, .agent-open) { overflow: hidden; font-size: 14.5px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.fleet-view .agent-open { min-width: 0; color: var(--text); font-weight: 650; text-decoration: none; }
+.fleet-view .agent-open:hover, .fleet-view .agent-open:focus-visible { color: var(--accent-hover); text-decoration: underline; text-underline-offset: 3px; }
 .wb-f-top > .wb-ico { color: var(--wb-err); }
 .wb-mode-tag { flex: none; padding: 0 5px; border: 1px solid var(--wb-line-strong); border-radius: 5px; color: var(--text-dim); font-size: 10.5px; font-weight: 600; line-height: 16px; white-space: nowrap; }
+.wb-f-list {
+  --fleet-host-column: ;
+  --fleet-columns: minmax(145px, 1.5fr) minmax(135px, 1.2fr) minmax(105px, 1.6fr) minmax(106px, 1fr) minmax(103px, .9fr) minmax(34px, .3fr);
+  margin-top: 14px;
+  border: 1px solid var(--wb-line-strong);
+  border-radius: 12px;
+  background: var(--wb-panel);
+}
+html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr); }
+.wb-f-list-head, .wb-f-list-row {
+  display: grid;
+  grid-template-columns: var(--fleet-columns) var(--fleet-host-column);
+  align-items: center;
+  column-gap: 10px;
+  padding: 5px 14px;
+}
+.wb-f-list-head { min-height: 34px; color: var(--text-muted); font-size: 11.5px; font-weight: 500; }
+.wb-f-list-row { position: relative; min-height: 46px; border-top: 1px solid var(--wb-line); color: var(--text-dim); font-size: 12.5px; }
+.wb-f-list-row:last-child { border-radius: 0 0 11px 11px; }
+.wb-f-list-row:not(.bad):hover { background: var(--wb-hover); }
+.wb-f-list-row.self { box-shadow: inset 3px 0 0 var(--accent); }
+.wb-f-list-row.bad { background: color-mix(in srgb, var(--wb-err) 5%, transparent); }
+.wb-f-list-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.wb-f-list-name :is(.agent-open, b) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+.wb-f-list-name .wb-tag { flex: none; }
+.wb-f-list-name .wb-ico, .wb-f-list-row.bad :is(.wb-f-list-condition, .wb-f-list-state, .wb-f-list-mobile),
+.wb-f-list-row .err { color: var(--wb-err); }
+.wb-f-list-row .warn { color: var(--wb-wait); }
+.wb-f-list-row .wb-hdot.idle { background: var(--wb-idle); }
+.wb-f-list-running { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.wb-f-list-running .wb-gbar { flex: 0 0 35%; max-width: 56px; height: 6px; }
+.wb-f-list-condition, .wb-f-list-running > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-f-list-condition small { color: var(--text-muted); }
+.wb-f-list-quota .wb-qbar { grid-template-columns: minmax(0, 1fr) 36px; }
+.wb-f-list-quota .wb-qbar > span:first-child { display: none; }
+.wb-f-list-quota .wb-qbar-tr { height: 6px; }
+.wb-f-list-quota .wb-qbars:has(> .wb-qbar + .wb-qbar) .wb-qbar > span:first-child { display: block; grid-column: 1 / -1; }
+.wb-f-list-quota .wb-quota-recorded { grid-column: 1 / -1; }
+.wb-f-list-head > :is(.wb-f-col-todayWeek, .wb-f-col-pool, .wb-f-col-host),
+.wb-f-list-row > :is(.wb-f-list-cost, .wb-f-list-pool, .wb-f-list-host) { text-align: end; font-variant-numeric: tabular-nums; }
+.wb-f-list-state, .wb-f-list-mobile { display: none; }
+@media (width > 860px) {
+  html:lang(en) .wb-f-list-name { flex-wrap: wrap; row-gap: 2px; }
+  html:lang(en) .wb-f-list-name > :is(.agent-open, b) { flex: none; max-inline-size: calc(100% - 1.5em); }
+}
+@media (max-width: 860px) {
+  .wb-f-list-head, .wb-f-list-row > :is(.wb-f-list-running, .wb-f-list-condition, .wb-f-list-quota, .wb-f-list-cost, .wb-f-list-pool, .wb-f-list-host) { display: none; }
+  .wb-f-list-row { grid-template-columns: minmax(0, 1fr) auto; gap: 3px 8px; padding: 10px 12px; }
+  .wb-f-list-head + .wb-f-list-row { border-top: 0; }
+  .wb-f-list-state { display: flex; align-items: center; gap: 4px; }
+  .wb-f-list-mobile { display: flex; gap: 4px; grid-column: 1 / -1; min-width: 0; white-space: nowrap; color: var(--text-muted); font-size: 12px; }
+  .wb-f-list-mobile-condition { overflow: hidden; text-overflow: ellipsis; }
+  .wb-f-list-row .agent-open::after { position: absolute; inset: 0; content: ""; }
+  .wb-f-list-row:has(.agent-open:focus-visible) { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+}
+@media (max-width: 760px) {
+  .wb-f-page-actions { margin-inline-start: auto; }
+  .wb-f-pagination button { min-width: var(--wb-control-touch); }
+}
 .wb-f-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: -6px; overflow: hidden; color: var(--text-muted); font-size: 11.5px; }
 .wb-f-sub .wb-mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Separators end the segment before them, so a wrapped line never starts with one. */
@@ -1462,7 +1585,7 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 @media (max-width: 760px) {
   .wb-set { flex-direction: column; background: none; }
   /* Phones: the sections live in a drawer that slides in from the left; a button at the top of the page names the current section. */
-  .wb-set-nav { position: fixed; top: 0; bottom: 0; left: 0; z-index: 61; align-self: stretch; width: min(300px, 84vw); max-height: none; padding: 8px 10px 16px; border-right: 1px solid var(--wb-line); background: var(--wb-panel); box-shadow: var(--wb-shadow); transform: translateX(-104%); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; }
+  .wb-set-nav { position: fixed; top: 0; bottom: 0; left: 0; z-index: 61; align-self: stretch; width: min(300px, 84vw); max-height: none; padding: calc(8px + env(safe-area-inset-top)) 10px calc(16px + env(safe-area-inset-bottom)) calc(10px + env(safe-area-inset-left)); border-right: 1px solid var(--wb-line); background: var(--wb-panel); box-shadow: var(--wb-shadow); transform: translateX(-104%); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; }
   .wb-set-drawer-open .wb-set-nav { transform: none; visibility: visible; transition: transform .2s ease; }
   .wb-set-drawer-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; padding: 2px 2px 8px 8px; border-bottom: 1px solid var(--wb-line); font-size: 14px; white-space: nowrap; }
   .wb-set-nav-btn { height: auto; min-height: 44px; font-size: 14.5px; }
@@ -1473,6 +1596,13 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   .wb-set-drawer-cur > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wb-set-drawer-btn .wb-ico { color: var(--text-dim); }
   .wb-set-drawer-btn > .wb-ico:last-child { transform: rotate(90deg); }
+  /* The section button stays under the top bar while the page scrolls, so another section is always one tap away. */
+  .wb-set-drawer-btn { position: sticky; top: var(--wb-header-h); z-index: 5; box-shadow: 0 0 0 6px var(--bg); }
+  .wb-plist-search .wb-input { width: 100%; }
+  .wb-host-chip { height: 36px; padding-left: 12px; border-radius: 18px; }
+  .wb-host-chip-x { width: 36px; height: 36px; }
+  .wb-host-combo { flex: 1 1 100%; }
+  .wb-host-option { min-height: 36px; font-size: 14px; }
   @media (prefers-reduced-motion: reduce) { .wb-set-nav, .wb-set-scrim, .wb-set-drawer-open :is(.wb-set-nav, .wb-set-scrim) { transition: none; } }
   /* One 12px page edge and a lighter card padding leave the cards' content most of the width. */
   .wb-set-body { padding: 12px 12px 32px; }
@@ -1487,6 +1617,9 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   .wb-set-card { padding: 12px; border-radius: 10px; }
   .wb-set-card-h { margin-bottom: 8px; }
   .wb-seg-engine { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+  /* "How are models matched?" opens across the card's width instead of from the link, so it stays on screen. */
+  .wb-tip-anchor { position: static; }
+  .wb-tip-anchor .tip-popover { top: 44px; left: 12px; right: 12px; width: auto; max-width: none; }
   .wb-savebar { margin: 18px -12px 0; padding: 12px; }
   .wb-set-split { grid-template-columns: 1fr; gap: 12px; }
   .wb-pref, .wb-fld { grid-template-columns: 1fr; gap: 6px; }
@@ -1512,9 +1645,7 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   .wb-o-bar .observer-view-switch button { flex: 1 1 0; }
   .wb-o-bar > .wb-o-size-btn:not([hidden]) { display: inline-flex; flex: none; gap: 4px; }
   .wb-o-size:not(.wb-o-size-open) { display: none; }
-  /* Phones keep the key actions on screen: the dates drop out and the table no longer forces its width. */
-  .wb-ktable { min-width: 0; }
-  .wb-ktable th:nth-child(4), .wb-ktable td:nth-child(4), .wb-ktable th:nth-child(5), .wb-ktable td:nth-child(5) { display: none; }
+  /* Phones: the key table keeps every column and scrolls sideways (with the fade hint above). */
   .wb-ktable th, .wb-ktable td { padding-left: 5px; padding-right: 5px; }
   .wb-ktable td:nth-child(1) b { max-width: 7.5em; }
   .wb-k-acts { flex-wrap: wrap; row-gap: 4px; }
@@ -1539,6 +1670,13 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 @media (max-width: 760px) {
   :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side)
     :is(button, select, summary, a.wb-btn, input:not([type=checkbox], [type=radio], [type=range], [type=hidden], .wb-search input)):not(.wb-vh, .wb-switch-btn, .wb-sched-dot, .wb-set-nav-btn, .wb-set-drawer-btn) { min-height: var(--wb-control-touch); }
+  /* Text fields, number fields and dropdowns are 16px so focusing one does not zoom the page (visual-design
+     decision 14). Important: page and table rules set 12–12.5px on specific fields with higher specificity. */
+  :is(input:not([type=checkbox], [type=radio], [type=range], [type=hidden], [type=button], [type=submit], [type=file], [type=color]), select, textarea) { font-size: 16px !important; }
+  /* At 16px a search box's input would size itself from its characters and widen its row (the overview search
+     would push the time range onto a row of its own); it takes the box's free width instead. Important: page
+     rules set a width on these inputs with higher specificity. */
+  .wb-search > input { flex: 1 1 0; width: 0 !important; }
   /* A short label ("Edit" in English) must not leave a labelled button narrower than a fingertip either. */
   .wb-btn { min-width: 40px; }
   :where(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side) .wb-icon-btn { width: var(--wb-control-touch); min-width: var(--wb-control-touch); }
@@ -1598,12 +1736,13 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 @media (max-width: 760px) {
   /* Keep the desktop shell hidden until mobile navigation and the address tab are ready. */
   html:not(.wb-mobile-ready) :is(.app-header, .view-stack) { visibility: hidden; }
-  html.wb-mobile-ready { --wb-header-h: 52px; }
+  html.wb-mobile-ready { --wb-header-h: calc(52px + env(safe-area-inset-top)); }
   html.wb-mobile-ready body { padding-bottom: calc(56px + env(safe-area-inset-bottom)); }
   html.wb-mobile-ready .app-header { display: none; }
   html.wb-mobile-ready .wb-mobile-topbar {
     position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 8px;
-    height: 52px; padding: 0 6px 0 16px; border-bottom: 1px solid var(--wb-line);
+    height: var(--wb-header-h); padding: env(safe-area-inset-top) calc(6px + env(safe-area-inset-right)) 0 calc(16px + env(safe-area-inset-left));
+    border-bottom: 1px solid var(--wb-line);
     background: var(--nav-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
   }
   .wb-mobile-topbar h1 { flex: 1; min-width: 0; margin: 0; font-size: 17px; font-weight: 600; line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1616,7 +1755,7 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   .wb-mobile-icon-button:disabled { opacity: .4; cursor: default; }
   html.wb-mobile-ready .wb-mobile-tabs {
     position: fixed; z-index: 40; bottom: 0; left: 0; right: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
-    padding-bottom: env(safe-area-inset-bottom); border-top: 1px solid var(--wb-line); background: var(--nav-bg);
+    padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); border-top: 1px solid var(--wb-line); background: var(--nav-bg);
     backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
   }
   .wb-mobile-tab {
@@ -1633,7 +1772,8 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   }
   html.wb-mobile-ready .wb-mobile-sheet {
     display: block; position: fixed; z-index: 211; left: 0; right: 0; bottom: 0; overflow-y: auto;
-    max-height: calc(100dvh - 24px); padding: 6px 0 calc(12px + env(safe-area-inset-bottom));
+    max-height: calc(100dvh - max(24px, env(safe-area-inset-top)));
+    padding: 6px env(safe-area-inset-right) calc(12px + env(safe-area-inset-bottom)) env(safe-area-inset-left);
     border-radius: 16px 16px 0 0; background: var(--c-raised); box-shadow: var(--wb-shadow);
   }
   .wb-mobile-sheet-grab { width: 36px; height: 4px; border-radius: 2px; margin: 4px auto 8px; background: var(--wb-line-strong); }

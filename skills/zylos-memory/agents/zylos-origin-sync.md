@@ -6,8 +6,8 @@ model: sonnet
 ---
 
 Resolve `.claude/skills/zylos-memory/references/origin-sync.md` under your inherited `ZYLOS_DIR`
-(default `~/zylos`), then read that procedure and sync-common.md and sync-writing.md in the same references directory completely. Do not read the parent SKILL.md or other procedures. Execute only the origin procedure
-using the inherited running-session environment. Acquire your own token.
+(default `~/zylos`), then read that procedure and sync-common.md and sync-writing.md in the same references directory completely. Do not read the parent SKILL.md or other procedures. Execute only the origin procedure.
+Acquire your own token as directed by the procedure. Successful acquisition proves the session binding. Continue without rechecking environment variables.
 All memory edits use the exact restricted tool name passed by the parent:
 Claude normally uses `mcp__zylos-memory__edit_memory`, Codex
 `mcp__zylos_memory__edit_memory`. If absent, discover an exposed tool ending in

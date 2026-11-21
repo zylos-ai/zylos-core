@@ -17,10 +17,10 @@ registerHooks({
 });
 const { composeSettings, createSettingsLoader, settingsSections, resetSettingsDrafts } = await import('../public/js/wb/settings.js');
 const { defaultGroups, modelFollowers, runtimeHealth, runtimeConfirmation, createOverrideSearch, renderDefaults, renderHotTtl, modelSaveConfirmation } = await import('../public/js/wb/settings-defaults.js');
-const { createPricingPanel, appendPriceRow, collectPriceRows, countPriceChanges, draftPriceRows, visiblePricePrefixes } = await import('../public/js/wb/settings-pricing.js');
+const { createPricingPanel, appendPriceRow, collectPriceRows, countPriceChanges, draftPriceRows, orderedPricePrefixes } = await import('../public/js/wb/settings-pricing.js');
 const { keyActionConfirmation, keyCounts, remoteStatus, renderKeyTable, renderRemoteAgents } = await import('../public/js/wb/settings-access.js');
 const { mountLanguageControl, mountThemeControl } = await import('../public/js/wb/settings-ui.js');
-const { coreVersion, renderBrandVersion, renderVersion } = await import('../public/js/wb/settings-version.js');
+const { coreVersion, coreUpgradePrompt, renderBrandVersion, renderCoreUpdate, renderEngineVersion } = await import('../public/js/wb/settings-version.js');
 
 const t = (key, params = {}) => key + (Object.keys(params).length ? ':' + JSON.stringify(params) : '');
 const hotTtlMeta = (overrides = {}) => ({ session_hot_ttl: { seconds: 1800, minutes: 30, source: 'config', mode: 'multi', read_only: false,
@@ -388,10 +388,10 @@ function priceFixture() {
   return { document, root, host, base, priority, data, rate };
 }
 
-test('two pricing tabs retain hidden builtins, custom deletion, premium rates and explicit multiplier reset in one save', async () => {
+test('two pricing tabs list every price row and keep custom deletion, premium rates and explicit multiplier reset in one save', async () => {
   const fixture = priceFixture(), writes = [];
   const panel = createPricingPanel({ ...fixture, data: fixture.data, snapshot: snapshot(), usage: { models: [{ runtime: 'claude', model: 'base-1', cost: 3 }] }, t, write: async body => writes.push(body) });
-  assert.equal(fixture.base.children.length, 2);
+  assert.deepEqual(fixture.base.children.map(row => row.dataset.prefix), ['base', 'unused', 'custom']);
   fixture.base.children.find(row => row.dataset.prefix === 'custom').remove();
   fixture.base.children[0].querySelectorAll('input')[1].value = '4';
   fixture.root.querySelector('#settings-fast-multiplier').value = '';
@@ -416,39 +416,59 @@ test('price row validation rejects duplicate, blank and nonnumeric prices withou
   const fixture = priceFixture(); appendPriceRow(fixture.base, 'x', fixture.rate, false, fixture); appendPriceRow(fixture.base, 'x', fixture.rate, false, fixture);
   assert.throws(() => collectPriceRows(fixture.base.children), /duplicate_model_prefix/); fixture.base.children[1].remove();
   fixture.base.children[0].querySelectorAll('input')[1].value = ''; assert.throws(() => collectPriceRows(fixture.base.children), /invalid_model_price/);
-  assert.deepEqual(visiblePricePrefixes({ builtInModels: ['gpt', 'gpt-x'], modelPrices: { gpt: {}, 'gpt-x': {}, custom: {} } }, [{ model: 'gpt-x-1' }]), ['gpt-x', 'custom']);
 });
 
-test('settings composition moves actual control nodes into cards and preserves their listeners', async () => {
+test('price rows list the most used in the last 7 days first, by the longest matching prefix, then the saved order', () => {
+  const prices = { modelPrices: { gpt: {}, unused: {}, 'gpt-x': {}, custom: {} } };
+  assert.deepEqual(orderedPricePrefixes(prices, [{ model: 'gpt-x-1', cost: 2 }, { model: 'gpt-4', cost: 1 }, { model: 'gpt-x-2', cost: 0.5 }]), ['gpt-x', 'gpt', 'unused', 'custom']);
+  assert.deepEqual(orderedPricePrefixes(prices, []), ['gpt', 'unused', 'gpt-x', 'custom'], 'with no use the saved order stays');
+});
+
+test('settings composition moves actual control nodes into cards grouped by who they affect and preserves their listeners', async () => {
   const document = documentFixture(), root = document.createElement('div'), settings = document.createElement('div'), fleet = document.createElement('div'), actions = document.createElement('div');
   let movedCalls = 0;
   for (const [source, tag, id] of [[settings, 'section', 'settings-model-pricing-group'], [settings, 'section', 'observer-settings-group'], [actions, 'section', 'action-status']]) { const control = node(document, tag, id); source.append(control); control.addEventListener('click', () => movedCalls++); }
   const modeField = node(document, 'div'); modeField.className = 'action-field'; const mode = node(document, 'select', 'action-mode'); modeField.append(mode); actions.append(modeField); let calls = 0; mode.addEventListener('change', () => calls++);
-  const upgrade = node(document, 'button'); upgrade.dataset.action = 'upgrade-cc'; actions.append(upgrade);
   const priceInput = node(document, 'input', 'price-input'); settings.querySelector('#settings-model-pricing-group').append(priceInput);
   for (const name of ['fleet', 'keys']) { const panel = node(document, 'section'); panel.className = 'manage-panel'; panel.dataset.panel = name; panel.hidden = true; panel.addEventListener('click', () => movedCalls++); fleet.append(panel); }
+  const selfCard = node(document, 'div', 'fleet-self-card'); fleet.querySelector('.manage-panel[data-panel="fleet"]').append(selfCard, node(document, 'div', 'fleet-agent-list'));
+  const address = node(document, 'div', 'settings-address-card'); fleet.querySelector('.manage-panel[data-panel="keys"]').append(address);
   const logout = node(document, 'button', 'logout-btn'), detailLabel = node(document, 'label'); detailLabel.append(node(document, 'input', 'wb-detail-toggle'));
   const page = composeSettings(root, { settings, fleet, actions, controls: [detailLabel, logout], document, t });
-  assert.deepEqual(settingsSections, ['defaults', 'pricing', 'keys', 'fleet', 'observer', 'ui']);
+  assert.deepEqual(settingsSections, ['account', 'general', 'machine', 'fleet', 'defaults', 'pricing']);
   assert.equal(root.querySelector('#action-mode'), mode); await mode.dispatch('change'); assert.equal(calls, 1);
   // Each section starts with its own heading and lead; content follows them (no prepend ahead of the title).
   for (const name of settingsSections) { assert.equal(page.sections[name].children[0].tagName, 'H2'); assert.equal(page.sections[name].children[1].className, 'wb-set-lead'); }
+  // The page opens on the account section: sign out, then the conversation access slot, then the keys.
+  assert.equal(page.sections.account.hidden, false);
+  assert.equal(page.sections.account.querySelector('#logout-btn'), logout);
+  assert.equal(page.sections.account.children[3], page.slots.chat);
+  assert.equal(page.sections.account.querySelector('.manage-panel').dataset.panel, 'keys'); assert.equal(page.sections.account.querySelector('.manage-panel').hidden, false);
+  assert.equal(page.prefs.detail.querySelector('#wb-detail-toggle').parentElement, detailLabel); assert.ok(page.sections.general.querySelector('[data-pref="detail"]'));
+  // The whole machine: version, time zone, terminal observer, session mode (with idle reclaim in it), session hosts.
+  const machine = page.sections.machine.children.slice(2);
+  assert.deepEqual(machine.map(child => child.id), ['settings-zylos-version', 'settings-machine-timezone', 'observer-settings-group', 'settings-session-mode', 'settings-machine-hosts']);
+  assert.equal(page.slots.version.closest('#settings-zylos-version'), machine[0]);
+  assert.equal(mode.closest('#settings-session-mode'), machine[3]); assert.equal(page.slots.idleReclaim.closest('#settings-session-mode'), machine[3]);
+  assert.match(machine[3].textContent, /wb\.settings\.session\.multi.*wb\.settings\.session\.multiNote.*wb\.settings\.session\.single.*wb\.settings\.session\.singleNote/, 'the two modes are explained once, in plain words');
+  // Other machines: the address other machines use to add this one sits under this machine's name.
+  const fleetPanel = page.sections.fleet.querySelector('.manage-panel');
+  assert.equal(fleetPanel.hidden, false); assert.equal(fleetPanel.children[0], selfCard); assert.equal(fleetPanel.children[1], address);
   assert.equal(page.sections.defaults.children[2].id, 'settings-defaults');
-  assert.equal(page.sections.keys.querySelector('.manage-panel').hidden, false);
-  assert.equal(page.prefs.account.querySelector('#logout-btn'), logout); assert.equal(page.prefs.detail.querySelector('#wb-detail-toggle').parentElement, detailLabel);
-  assert.equal(page.prefs.version.querySelector('[data-action="upgrade-cc"]'), upgrade);
-  page.select('pricing'); assert.equal(page.sections.pricing.hidden, false); assert.equal(page.sections.defaults.hidden, true);
-  page.detail('technical'); page.select('observer'); page.detail('plain'); assert.equal(page.sections.observer.hidden, true); assert.equal(page.sections.defaults.hidden, false);
+  assert.equal(priceInput.closest('#settings-section-pricing'), page.sections.pricing);
+  page.select('pricing'); assert.equal(page.sections.pricing.hidden, false); assert.equal(page.sections.account.hidden, true);
+  page.select('keys'); assert.equal(page.sections.account.hidden, false, 'an unknown section opens the account section');
   const actionBody = page.actionsScope.querySelector('.modal-body');
   assert.equal(mode.closest('.modal-body'), actionBody);
   assert.equal(root.querySelector('#action-threshold'), null);
   assert.deepEqual(actionBody.querySelectorAll('button, select, input'), [mode]);
-  assert.equal(priceInput.closest('.modal-body'), null); assert.equal(upgrade.closest('.modal-body'), null);
-  page.badge('pricing', 2); const badge = root.querySelector('nav').querySelectorAll('.wb-set-nav-n')[1]; assert.equal(badge.textContent, '2'); assert.equal(badge.hidden, false);
-  page.badge('pricing', 0); assert.equal(badge.hidden, true);
-  await page.sections.observer.querySelector('#observer-settings-group').dispatch('click');
+  assert.equal(priceInput.closest('.modal-body'), null);
+  const pricingBadge = root.querySelector('nav').querySelectorAll('.wb-set-nav-n')[settingsSections.indexOf('pricing')];
+  page.badge('pricing', 2); assert.equal(pricingBadge.textContent, '2'); assert.equal(pricingBadge.hidden, false);
+  page.badge('pricing', 0); assert.equal(pricingBadge.hidden, true);
+  await page.sections.machine.querySelector('#observer-settings-group').dispatch('click');
   await page.sections.fleet.querySelector('.manage-panel').dispatch('click');
-  await page.sections.keys.querySelector('.manage-panel').dispatch('click'); assert.equal(movedCalls, 3);
+  await page.sections.account.querySelector('.manage-panel').dispatch('click'); assert.equal(movedCalls, 3);
 });
 
 test('a finished key or machine notice clears when another settings section opens; one still running stays', () => {
@@ -456,25 +476,25 @@ test('a finished key or machine notice clears when another settings section open
   const settings = document.createElement('div'), fleet = document.createElement('div'), actions = document.createElement('div');
   const notice = node(document, 'div', 'fleet-manage-status'); fleet.append(notice);
   const page = composeSettings(root, { settings, fleet, actions, document, t });
-  page.select('keys');
+  page.select('account');
   Object.assign(notice, { textContent: 'fleet_manage.key_revoked_status', className: 'wb-note wb-status-success', hidden: false });
-  page.select('keys');
+  page.select('account');
   assert.equal(notice.textContent, 'fleet_manage.key_revoked_status', 'staying on the same section keeps it');
   page.select('defaults');
   assert.equal(notice.textContent, ''); assert.equal(notice.hidden, true);
   Object.assign(notice, { textContent: 'fleet_manage.revoking_key', className: 'wb-note wb-status-running', hidden: false });
-  page.select('keys');
+  page.select('account');
   assert.equal(notice.textContent, 'fleet_manage.revoking_key'); assert.equal(notice.hidden, false);
 });
 
 test('settings relabel updates navigation without replacing controls or changing the selected section', async () => {
   const document = documentFixture(), root = document.createElement('div');
   const settings = document.createElement('div'), fleet = document.createElement('div'), actions = document.createElement('div');
-  const localeControl = node(document, 'button', 'locale-toggle');
+  const logout = node(document, 'button', 'logout-btn');
   let locale = 'en', calls = 0;
-  localeControl.addEventListener('click', () => calls++);
-  const page = composeSettings(root, { settings, fleet, actions, controls: [localeControl], document, t: key => locale + ':' + key });
-  page.select('ui');
+  logout.addEventListener('click', () => calls++);
+  const page = composeSettings(root, { settings, fleet, actions, controls: [logout], document, t: key => locale + ':' + key });
+  page.select('general');
   const nav = root.querySelector('nav'), buttons = nav.querySelectorAll('[data-settings-section]');
   const drawerButton = root.querySelector('.wb-set-drawer-btn'), drawerClose = nav.querySelector('.wb-set-drawer-x');
   const headings = settingsSections.map(name => page.sections[name].querySelector('h2'));
@@ -486,33 +506,40 @@ test('settings relabel updates navigation without replacing controls or changing
     // The phone drawer's title, close button and the button naming the current section follow the language too.
     assert.equal(nav.querySelector('.wb-set-drawer-h').querySelector('b').textContent, locale + ':wb.settings.sections');
     assert.equal(drawerClose.getAttribute('aria-label'), locale + ':wb.settings.sectionsClose');
-    assert.equal(drawerButton.textContent, locale + ':wb.settings.section.ui');
+    assert.equal(drawerButton.textContent, locale + ':wb.settings.section.general');
     for (const [index, name] of settingsSections.entries()) {
       const button = nav.querySelectorAll('[data-settings-section]')[index];
       assert.equal(button, buttons[index]);
       assert.equal(button.textContent, locale + ':wb.settings.section.' + name);
-      assert.equal(button.getAttribute('aria-current'), String(name === 'ui'));
+      assert.equal(button.getAttribute('aria-current'), String(name === 'general'));
       assert.equal(page.sections[name].querySelector('h2'), headings[index]);
       assert.equal(headings[index].textContent, locale + ':wb.settings.section.' + name);
-      assert.equal(page.sections[name].hidden, name !== 'ui');
+      assert.equal(page.sections[name].hidden, name !== 'general');
     }
-    assert.equal(page.sections.ui.querySelector('#locale-toggle'), localeControl);
-    await localeControl.dispatch('click');
+    assert.equal(page.sections.account.querySelector('#logout-btn'), logout);
+    await logout.dispatch('click');
   }
   assert.equal(calls, 2);
-  await buttons[1].dispatch('click');
+  await buttons[settingsSections.indexOf('pricing')].dispatch('click');
   assert.equal(page.sections.pricing.hidden, false);
-  assert.equal(page.sections.ui.hidden, true);
+  assert.equal(page.sections.general.hidden, true);
   assert.equal(drawerButton.textContent, 'en:wb.settings.section.pricing', 'the drawer button names the section just chosen');
   assert.equal(drawerButton.getAttribute('aria-controls'), nav.id);
   assert.equal(drawerButton.getAttribute('aria-expanded'), 'false');
 });
 
-test('version panel reuses upgrade control, labels Codex and retains readonly reason and non-action core hint', async () => {
-  const document = documentFixture(), root = document.createElement('div'), upgrade = node(document, 'button'); upgrade.append(node(document, 'span', 'action-cli-label'), node(document, 'span', 'action-cc-ver')); let called = 0, hints = 0; upgrade.addEventListener('click', () => called++);
-  renderVersion(root, { codex: { installed: '1', update: '2' }, zylos: { installed: '3', update: '4' } }, { document, upgrade, t, runtime: 'codex', readOnly: true, onHint: () => hints++ });
-  assert.equal(upgrade.disabled, true); assert.equal(upgrade.title, 'remote.actions_read_only_tooltip'); assert.match(root.textContent, /Codex.*v1.*↑2/); await root.querySelector('#settings-zylos-update').dispatch('click'); assert.equal(hints, 1); assert.equal(called, 0);
-  renderVersion(root, { codex: { installed: '1' } }, { document, upgrade, t, runtime: 'codex', readOnly: false }); await upgrade.dispatch('click'); assert.equal(called, 1); assert.equal(upgrade.disabled, false);
+test('the engine version shows the chosen engine CLI and reuses the upgrade control, with the read-only reason', async () => {
+  const document = documentFixture(), root = document.createElement('div'), upgrade = node(document, 'button'); upgrade.append(node(document, 'span', 'action-cli-label'), node(document, 'span', 'action-cc-ver')); let called = 0; upgrade.addEventListener('click', () => called++);
+  renderEngineVersion(root, { codex: { installed: '1', update: '2' }, claude: { installed: '9' } }, { document, upgrade, t, runtime: 'codex', readOnly: true });
+  assert.match(root.textContent, /Codex · v1 ↑2/); assert.doesNotMatch(root.textContent, /v9/, 'only the chosen engine');
+  assert.equal(root.querySelector('button'), upgrade); assert.equal(upgrade.querySelector('#action-cli-label').textContent, 'actions.upgrade_runtime:{"runtime":"Codex"}');
+  assert.equal(upgrade.querySelector('#action-cc-ver').classList.contains('action-ver-dot'), true, 'a newer CLI marks the button');
+  assert.equal(upgrade.disabled, true); assert.equal(upgrade.title, 'remote.actions_read_only_tooltip');
+  renderEngineVersion(root, { codex: { installed: '1' }, claude: { installed: '9' } }, { document, upgrade, t, runtime: 'claude', readOnly: false });
+  assert.match(root.textContent, /Claude · v9/); assert.equal(upgrade.querySelector('#action-cli-label').textContent, 'actions.upgrade_runtime:{"runtime":"Claude"}');
+  assert.equal(upgrade.querySelector('#action-cc-ver').classList.contains('action-ver-dot'), false);
+  await upgrade.dispatch('click'); assert.equal(called, 1); assert.equal(upgrade.disabled, false);
+  renderEngineVersion(root, {}, { document, t, runtime: 'codex' }); assert.match(root.textContent, /Codex · wb\.unknown/); assert.equal(root.querySelector('button'), null);
 });
 
 test('theme and language are segmented choices that forward the pressed value', async () => {
@@ -524,13 +551,6 @@ test('theme and language are segmented choices that forward the pressed value', 
   const language = mountLanguageControl(root, { document, t, value: 'zh', onChange: next => locale = next });
   assert.equal(language.id, 'locale-toggle'); assert.deepEqual(language.children.map(button => button.textContent), ['中文', 'English']);
   await language.children[1].dispatch('click'); assert.equal(locale, 'en');
-});
-
-test('settings instance status follows the current detail level', () => {
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
-  const calls = app.match(/instanceStatusText\([^;]*\)/g) ?? [];
-  assert.deepEqual(calls, ["instanceStatusText(data, document.documentElement.dataset.detail === 'technical' ? 'technical' : 'plain', t)"]);
-  assert.doesNotMatch(app, /t\('actions\.instance_status'/, 'the raw template is used only through instanceStatusText');
 });
 
 test('removed header entry selectors have no startup bindings and account controls live on the settings page', () => {
@@ -609,17 +629,25 @@ test('default controls retain the restart lock after an accepted runtime change'
   panel.destroy();
 });
 
-test('the version row shows the Core version with its update hint and the engine CLI in both views, and no Dashboard version', () => {
-  const document = documentFixture(), root = document.createElement('div'), upgrade = node(document, 'button');
-  renderVersion(root, { zylos: { installed: '1.0.0-beta.7', update: '1.0.0' }, claude: { installed: '2' } }, { document, upgrade, t });
-  assert.match(root.textContent, /zylos · v1\.0\.0-beta\.7/); assert.match(root.textContent, /Claude · v2/);
+test('the zylos version card shows the checked version, offers the upgrade instruction only for a newer release, and no Dashboard version', async () => {
+  const document = documentFixture(), root = document.createElement('div'), offered = [];
+  const tt = (key, values) => values ? key + JSON.stringify(values) : key;
+  const show = update => renderCoreUpdate(root, update, { document, t: tt, formatTime: value => 'at ' + value, onUpgrade: prompt => offered.push(prompt) });
+  show({ current: '1.0.0-beta.7', latest: '1.0.0', hasUpdate: true, checkedAt: 'T1' });
+  assert.match(root.textContent, /zylos · v1\.0\.0-beta\.7/); assert.match(root.textContent, /checkedAt\{"time":"at T1"\}/);
   assert.doesNotMatch(root.textContent, /Dashboard/, 'Dashboard ships inside Core and has no version of its own');
-  assert.ok(root.querySelector('#settings-zylos-update')); assert.equal(root.querySelector('button'), root.querySelector('#settings-zylos-update'));
-  for (const zylos_version of [undefined, null, '', ' ', 'unknown']) {
-    renderVersion(root, { zylos: { installed: zylos_version }, claude: { installed: '2' } }, { document, upgrade, t });
-    assert.match(root.textContent, /zylos · wb\.unknown/, JSON.stringify(zylos_version));
-    assert.doesNotMatch(root.textContent, /zylos · v/, JSON.stringify(zylos_version));
+  const button = root.querySelector('#settings-zylos-update'); assert.match(button.textContent, /"version":"v1\.0\.0"/);
+  await button.dispatch('click');
+  assert.deepEqual(offered, [coreUpgradePrompt('1.0.0-beta.7', '1.0.0', tt)]); assert.match(offered[0], /"from":"v1\.0\.0-beta\.7","to":"v1\.0\.0"/);
+  show({ current: '1.0.0', latest: '1.0.0', hasUpdate: false, checkedAt: null });
+  assert.equal(root.querySelector('button'), null); assert.match(root.textContent, /wb\.settings\.version\.notChecked/);
+  for (const current of [undefined, null, '', ' ', 'unknown']) {
+    show({ current, latest: '2', hasUpdate: true, checkedAt: 'T2' });
+    assert.match(root.textContent, /zylos · wb\.unknown/, JSON.stringify(current)); assert.doesNotMatch(root.textContent, /zylos · v/, JSON.stringify(current));
   }
+  await root.querySelector('#settings-zylos-update').dispatch('click'); assert.match(offered.at(-1), /"from":"wb\.unknown"/);
+  show(undefined); assert.match(root.textContent, /zylos · status\.loading/); assert.equal(root.querySelector('button'), null);
+  show(null); assert.match(root.textContent, /zylos · wb\.unknown.*wb\.readFailed/); assert.equal(root.querySelector('button'), null);
 });
 
 test('the header version follows the viewed instance and never falls back to an earlier one', () => {
@@ -944,7 +972,7 @@ test('default model without effort options hides the whole field and restores it
 test('Antigravity version panel and upgrade button never inherit Claude names', () => {
   const document = documentFixture(), root = node(document, 'div'), upgrade = node(document, 'button');
   const label = node(document, 'span', 'action-cli-label'); upgrade.append(label);
-  renderVersion(root, { agy: { installed: '1.5.11' }, claude: { installed: 'wrong' } }, { document, upgrade, t, runtime: 'agy' });
+  renderEngineVersion(root, { agy: { installed: '1.5.11' }, claude: { installed: 'wrong' } }, { document, upgrade, t, runtime: 'agy' });
   assert.match(root.textContent, /Antigravity · v1.5.11/);
   assert.doesNotMatch(root.textContent, /CC|Claude|wrong/);
   assert.equal(label.textContent, t('actions.upgrade_runtime', { runtime: 'Antigravity' }));
