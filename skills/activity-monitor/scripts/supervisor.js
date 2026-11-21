@@ -246,8 +246,8 @@ export function createSupervisor(deps) {
         if(!matches(scene,first.get(scene.sessionGroup)))continue;
         try {
           const activity=readActivity(scene);
-          await deps.consumeHealthEvents?.(scene,health);
-          context.publicationActivities.set(scene.sessionGroup,activity);
+          const awaitingAuth=await deps.consumeHealthEvents?.(scene,health);
+          context.publicationActivities.set(scene.sessionGroup,{activity,awaitingAuth});
         } catch(error) { await reportError(error,{phase:'observe',sessionGroup:scene.sessionGroup}); }
       }
       context.publicationIdentities=await scenes.readIdentities([...context.publicationActivities.keys()]);
@@ -257,25 +257,25 @@ export function createSupervisor(deps) {
       const matches=current=>current.present && current.ready && current.runId===scene.runId && current.sessionId===scene.sessionId && current.runtime===scene.runtime;
       // The round owns the process sample. Recheck only run/session identity at
       // publication boundaries; do not resample every read-only health check.
-      let activity;
+      let activity,awaitingAuth;
       if(context.publicationIdentities) {
         if(!context.publicationActivities.has(scene.sessionGroup) || !matches(context.publicationIdentities.get(scene.sessionGroup) ?? {}))return;
-        activity=context.publicationActivities.get(scene.sessionGroup);
+        ({activity,awaitingAuth}=context.publicationActivities.get(scene.sessionGroup));
       } else {
         if(!matches(await scenes.readIdentity(scene.sessionGroup)))return;
         activity=readActivity(scene);
-        await deps.consumeHealthEvents?.(scene,health);
+        awaitingAuth=await deps.consumeHealthEvents?.(scene,health);
         if(!matches(await scenes.readIdentity(scene.sessionGroup)))return;
       }
       const observeBeforePublication=activity.quietTurnDue;
       if(observeBeforePublication) {
         // Existing no-response recovery gets first ownership at its earlier deadline.
-        await observer.observeScene(scene);
+        await observer.observeScene(scene,{awaitingAuth});
         if(scene.present===false)return;
         if(await interruptQuietTurn(scene))activity=readActivity(scene);
       }
       publishSessionStatus({statusFile:path.join(scene.runDir,'agent-status.json'),scene,activity,health:health.store(scene.runtime).read(),proc:scene.proc,now:now()});
-      if(!observeBeforePublication)await observer.observeScene(scene);
+      if(!observeBeforePublication)await observer.observeScene(scene,{awaitingAuth});
     },
     writeMetricsAndMaintain:async context=>{
       if (configuration.legacy) return;

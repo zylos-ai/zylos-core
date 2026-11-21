@@ -148,12 +148,16 @@ export class RuntimeHealthCoordinator {
     if (runtime === 'claude' && event.event === 'stop_failure' && event.error === 'authentication_failed' &&
         this.checkAuth && await this.serial(runtime, () => this.store(runtime).needsAuthConfirmation(event, options))) {
       // Probe outside the writer so concurrent checks can share the in-flight call.
-      // The write below revalidates event ordering after the probe.
-      try {
-        authConfirmed = (await this.checkAuth(runtime))?.status === 'failure';
-      } catch {
-        // A probe error provides no credential evidence.
-      }
+      // The event reader can defer this event until the result is available.
+      const confirm = async () => {
+        try {
+          return (await this.checkAuth(runtime))?.status === 'failure';
+        } catch {
+          return false;
+        }
+      };
+      authConfirmed = options?.confirmAuth ? options.confirmAuth(confirm) : await confirm();
+      if (authConfirmed === undefined) return {status:'awaiting_auth'};
     }
     return this.serial(runtime, () => {
       const store = this.store(runtime), before = store.read();
