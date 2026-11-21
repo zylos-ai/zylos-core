@@ -264,7 +264,6 @@ export async function runFocusClippingBrowser(sandbox, { width, theme, memoryRef
 
   if (width === 390 && await page.locator('.conversation-back').isVisible()) await page.locator('.conversation-back').click();
   await openDashboardTab(page, 'settings');
-  if (width === 390) await page.locator('.wb-set-drawer-btn').click();
   await page.locator('[data-settings-section="pricing"]').click();
   await page.locator('#settings-price-rows tr').first().waitFor();
   await screenshot('pricing-layout');

@@ -16,7 +16,7 @@ function setup(phone = true) {
     },
   };
   const navigation = createSettingsNavigation({
-    layout: { closest: () => hidden ? {} : null }, window,
+    layout: { closest: () => hidden ? {} : null, classList: { contains: () => section === null } }, window,
     select: value => { section = value; },
     showList: () => { section = null; },
   });
@@ -69,10 +69,12 @@ test('leaving a phone section allows replacement, while a desktop selection adds
   assert.equal(page.forward(), false, 'arriving from another page belongs to the page router');
 
   const desktop = setup(false);
-  desktop.navigation.open();
+  desktop.navigation.open(null);
   assert.equal(desktop.section(), 'account');
   desktop.navigation.pick('pricing');
   assert.equal(desktop.section(), 'pricing');
   assert.equal(desktop.entries.length, 2);
   assert.equal(desktop.navigation.leave(), false);
+  desktop.navigation.open();
+  assert.equal(desktop.section(), 'pricing', 'desktop history preserves its selected section');
 });

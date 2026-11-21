@@ -30,7 +30,7 @@ export function settingsCard(document, { icon: name, title = '', sub = '', id } 
 export function composeSettings(root, { settings, fleet, actions, controls = [], document = root.ownerDocument, t = key => key }) {
   root.replaceChildren();
   const layout = element(document, 'div', undefined, 'wb-set');
-  const nav = element(document, 'nav', undefined, 'wb-set-nav'); nav.setAttribute('aria-label', t('wb.settings')); nav.id = 'settings-nav';
+  const nav = element(document, 'nav', undefined, 'wb-set-nav'); nav.setAttribute('aria-label', t('wb.settings'));
   const body = element(document, 'div', undefined, 'wb-set-body');
   const wrap = element(document, 'div', undefined, 'wb-set-wrap'); body.append(wrap);
   const status = element(document, 'div', undefined, 'wb-set-status'); wrap.append(status);

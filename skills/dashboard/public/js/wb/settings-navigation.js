@@ -8,7 +8,8 @@ export function createSettingsNavigation({ layout, select, showList, window = la
   function open(section) {
     pageUrl = window?.location?.href;
     entryUrl = null;
-    select(section ?? (phone() ? null : 'account'));
+    if (section == null && phone()) select(null);
+    else if (section !== undefined || layout.classList.contains('wb-set-list')) select(section ?? 'account');
   }
 
   function pick(section) {
@@ -22,10 +23,9 @@ export function createSettingsNavigation({ layout, select, showList, window = la
   }
 
   function backToList() {
-    if (!phone()) return false;
+    if (!phone()) return;
     if (onSectionEntry()) window.history.back();
     else showList({ focus: true });
-    return true;
   }
 
   // Both edges of an old section entry belong to the same settings page.

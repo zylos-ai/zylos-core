@@ -142,21 +142,20 @@ export async function runWorkbenchBrowser(t, sandbox) {
   });
 
   // `language` is set before every load of the page, so a reload keeps it.
-  async function open(width, height, route, options = {}, language = 'zh', theme) {
+  async function open(width, height, route, options = {}, language = 'zh') {
     const phone = width < 761;
-    const context = await browser.newContext({ viewport: { width, height }, locale: 'zh-CN', timezoneId: 'Asia/Singapore',
+    const context = await browser.newContext({ viewport: { width, height }, locale: 'zh-CN', timezoneId: 'UTC',
       ...(phone ? { isMobile: true, hasTouch: true } : {}), ...options });
     live.add(context);
     context.on('close', () => live.delete(context));
     sandbox.addCleanup(() => context.close());
     await context.route('**/*', request => request.request().url().startsWith(base + '/') ? request.continue() : request.abort());
-    await context.addInitScript(({ language, theme }) => {
+    await context.addInitScript(language => {
       try {
         localStorage.setItem('zylos-dashboard-locale', language);
         localStorage.setItem('zylos-dashboard-detail-level', 'plain');
-        if (theme) localStorage.setItem('zylos-dashboard-theme', theme);
       } catch {}
-    }, { language, theme });
+    }, language);
     const page = await context.newPage();
     page.setDefaultTimeout(10_000);
     const errors = [];
@@ -661,6 +660,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     assert.deepEqual(await rows.evaluateAll(nodes => nodes.map(node => node.dataset.settingsSection)),
       ['account', 'general', 'machine', 'fleet', 'defaults', 'pricing']);
     assert.ok(await rows.evaluateAll(nodes => nodes.every(node => node.getBoundingClientRect().height >= 44)));
+    assert.equal(await list.locator('.wb-set-nav-summary:visible').count(), 6);
     assert.equal(await page.locator('.wb-set-sec:visible').count(), 0);
     const start = reads.get('/api/settings/pricing');
     const defaults = list.locator('[data-settings-section="defaults"]');
@@ -696,6 +696,9 @@ export async function runWorkbenchBrowser(t, sandbox) {
     const badge = settingsList(page).locator('[data-settings-section="pricing"] .wb-set-nav-n');
     await badge.waitFor();
     assert.equal(await badge.textContent(), '1');
+    await page.mouse.move(389, 2);
+    await page.evaluate(() => document.activeElement.blur());
+    assert.equal(await settingsList(page).locator('button:hover').count(), 0);
     await shot('settings-list-unsaved-zh-light');
     await page.goForward();
     await badge.waitFor();
@@ -746,35 +749,6 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await page.goBack();
     await page.waitForURL(url => url.pathname === '/');
     assert.deepEqual(errors, []);
-  });
-
-  await step('settings renders in both languages and themes at phone and desktop widths', async () => {
-    for (const width of [390, 1280]) for (const language of ['zh', 'en']) for (const theme of ['light', 'dark']) {
-      const { page, context, shot, errors } = await open(width, 844, '/', { reducedMotion: 'reduce' }, language, theme);
-      await section(page, 'settings');
-      await settingsList(page).waitFor();
-      const desktop = width === 1280;
-      const account = settingsPanel(page, 'account');
-      assert.equal(await account.isVisible(), desktop);
-      assert.equal(await settingsList(page).locator('[aria-current="true"]').count(), desktop ? 1 : 0);
-      assert.equal(await page.locator('.wb-set-nav-summary:visible').count(), desktop ? 0 : 6);
-      assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), theme);
-      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
-      if (desktop) assert.equal(Math.round((await settingsList(page).boundingBox()).width), 209);
-      await page.mouse.move(width - 2, 2);
-      await page.evaluate(() => document.activeElement.blur());
-      if (desktop) await account.locator('#api-key-list').waitFor();
-      await shot(`settings-${desktop ? 'account' : 'list'}-${language}-${theme}`);
-      if (!desktop) {
-        await settingsSection(page, 'defaults');
-        await page.locator('#settings-defaults select').first().waitFor();
-        await page.mouse.move(width - 2, 2);
-        await page.evaluate(() => document.activeElement.blur());
-        await shot(`settings-section-${language}-${theme}`);
-      }
-      assert.deepEqual(errors, []);
-      await context.close();
-    }
   });
 
   await step('a desktop screen keeps the name and state on one row, with the actions under them', async () => {
@@ -951,6 +925,16 @@ export async function runWorkbenchBrowser(t, sandbox) {
       await section(page, 'settings');
       await page.locator('#tab-settings.active').waitFor();
       assert.deepEqual(await current(), ['settings=page'], `${width}: settings is current`);
+      if (width === 1280) {
+        await settingsPanel(page, 'account').waitFor();
+        await settingsSection(page, 'pricing');
+        await section(page, 'memory');
+        await page.goBack();
+        await settingsPanel(page, 'pricing').waitFor();
+        assert.equal(await settingsList(page).locator('[data-settings-section="pricing"]').getAttribute('aria-current'), 'true');
+        await section(page, 'settings');
+        await settingsPanel(page, 'account').waitFor();
+      }
       assert.deepEqual(errors, []);
       await context.close();
     }
@@ -1010,7 +994,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
   const settled = (page, machinesPage) => page.waitForFunction(machinesPage => document.querySelector('#agent-detail').hidden === machinesPage
     && document.getAnimations().every(animation => animation.playState !== 'running' || animation.effect?.getComputedTiming().iterations === Infinity), machinesPage);
 
-  await step('on a phone Fleet Manage opens its section, Back restores Fleet, and remote settings hides that section', async () => {
+  await step('on a phone Fleet Manage opens its section, and the arrow opens the list', async () => {
     const { page, errors } = await open(390, 844, '/', { reducedMotion: 'reduce' });
     await answerFleet(page, { spark: '1.0.0-beta.7' });
     await page.reload();
@@ -1025,12 +1009,6 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await settingsList(page).waitFor();
     await page.goBack();
     await manage.waitFor();
-    await page.locator('#agent-fleet-root .agent-open[data-agent="spark"]').click();
-    await page.waitForFunction(() => document.querySelector('#tab-bar-agent-name').textContent === 'spark');
-    await section(page, 'settings');
-    await settingsList(page).waitFor();
-    assert.equal(await settingsList(page).locator('[data-settings-section="fleet"]').isVisible(), false);
-    assert.equal(await settingsList(page).locator('button:visible').count(), 5);
     assert.deepEqual(errors, []);
   });
 

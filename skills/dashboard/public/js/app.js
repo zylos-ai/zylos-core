@@ -2846,11 +2846,9 @@ function refreshSettingsPage() {
   // Another machine opened through this one: its keys and its own list of machines stay on that machine.
   const remote = Boolean(REMOTE_AGENT), fleetButton = document.querySelector('[data-settings-section="fleet"]');
   if (fleetButton) fleetButton.hidden = remote;
-  $('#tab-settings')?.classList.toggle('wb-set-remote', Boolean(state.remoteAgent));
   const keysPanel = settingsPage.sections.account.querySelector('.manage-panel[data-panel="keys"]'); if (keysPanel) keysPanel.hidden = remote;
 }
-function openSettingsModal(section) {
-  if (!section && !state.fleetViewActive && activeTabName() === 'settings' && settingsPage?.navigation.backToList()) return;
+function openSettingsModal(section = null) {
   // The fleet wall shares a URL with the machine dashboard. Remember it on
   // the entry that the Manage shortcut came from so browser Back restores it.
   if (state.fleetViewActive) {

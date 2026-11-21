@@ -402,10 +402,7 @@ test('setting the default engine and model updates the open cards and reports re
         page.setDefaultTimeout(8000);
         await page.goto(base + '/');
         await openDashboardTab(page, 'settings');
-        const defaults = page.locator('[data-settings-section="defaults"]');
-        await defaults.waitFor({ state: 'attached' });
-        if (!await defaults.isVisible()) await page.locator('button[aria-controls="settings-nav"]').click();
-        await defaults.click();
+        await page.locator('[data-settings-section="defaults"]').click();
         let navigations = 0;
         page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigations++; });
         const card = page.locator('#settings-current-runtime');

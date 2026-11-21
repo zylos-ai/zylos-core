@@ -93,7 +93,7 @@ test('stylesheet: on phones the open memory file keeps its header compact: back,
 test('stylesheet: phones show either the section list or a sticky section heading', () => {
   assert.match(css, /^\.wb-set-section-head \{ display: contents; \}/m);
   assert.match(phone, /\.wb-set-list \.wb-set-nav \{ display: flex; \}/);
-  assert.match(phone, /\.wb-set-list \.wb-set-body, .* \{ display: none; \}/);
+  assert.match(phone, /\.wb-set-list \.wb-set-body \{ display: none; \}/);
   assert.match(phone, /\.wb-set-nav-btn \{ height: auto; min-height: 44px;/);
   assert.match(phone, /\.wb-set-section-head \{ position: sticky; top: var\(--wb-header-h\)/);
   assert.match(phone, /\.wb-set-back\.wb-icon-btn \{ .* width: 44px; height: 44px;/);

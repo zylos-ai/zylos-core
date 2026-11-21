@@ -1591,7 +1591,7 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
   .wb-set { flex-direction: column; background: none; }
   .wb-set-nav { display: none; position: static; align-self: stretch; width: auto; max-height: none; padding: 12px 12px 32px; overflow: visible; }
   .wb-set-list .wb-set-nav { display: flex; }
-  .wb-set-list .wb-set-body, .wb-set-remote .wb-set-nav-btn[data-settings-section="fleet"] { display: none; }
+  .wb-set-list .wb-set-body { display: none; }
   .wb-set-nav-btn { height: auto; min-height: 44px; padding: 8px 12px; color: var(--text); font-size: 14.5px; white-space: normal; }
   .wb-set-nav-btn:is(:hover, :active) { background: var(--wb-hover); }
   .wb-set-nav-btn:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
