@@ -136,12 +136,14 @@ export async function handleAction(action, body, config, { timezone } = {}) {
     result = { ok: false, error: 'internal_error', message: err.message, messageKey: 'result.internal_error', messageParams: { error: err.message } };
   }
 
-  if (action === 'switch-runtime' && !result.ok && ['AUTH_FAILED', 'AUTH_NOT_CONFIRMED'].includes(result.error?.code)) {
+  if (action === 'switch-runtime' && !result.ok && ['AUTH_FAILED', 'AUTH_NOT_CONFIRMED', 'HOOKS_NOT_READY'].includes(result.error?.code)) {
     result = { ...result, messageKey: null,
       message: [result.error.code, result.error.message].filter(Boolean).join(': ') };
   }
 
-  log(reqId, `<= ${result.ok ? 'ok' : 'fail'}${result.error ? ' ' + result.error : ''}${result.message ? ' | ' + result.message : ''}`);
+  // Command envelopes carry error as { code, message }; the log names the code instead of [object Object].
+  const errorLabel = result.error && typeof result.error === 'object' ? result.error.code : result.error;
+  log(reqId, `<= ${result.ok ? 'ok' : 'fail'}${errorLabel ? ' ' + errorLabel : ''}${result.message ? ' | ' + result.message : ''}`);
   return result;
 }
 

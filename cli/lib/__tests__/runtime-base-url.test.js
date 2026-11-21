@@ -28,7 +28,7 @@ describe('runtime base URL support', () => {
       assert.ok(!JSON.stringify(result).includes(privatePart), 'validation must not reflect input');
     }
   });
-  test('Codex readiness returns objects for missing instructions and valid or invalid real trust', async t => {
+  test('Codex readiness returns objects for missing instructions and valid real trust', async t => {
     const { runtimeHooksReady } = await import('../../commands/runtime.js');
     const { installCoreCodexHook, codexHooksPath, codexTrustMarkerPath, hookKeyFor,
       isCodexTrustValid } = await import('../codex-hooks.js');
@@ -55,8 +55,6 @@ describe('runtime base URL support', () => {
     assert.deepEqual(await runtimeHooksReady('codex'), { ready: false, pendingMigration: true });
     fs.writeFileSync(instruction, '# Fixture instructions\n');
     assert.deepEqual(await runtimeHooksReady('codex'), { ready: true, pendingMigration: true });
-    fs.writeFileSync(codexTrustMarkerPath(root), JSON.stringify({ ...marker, hooksHash: 'stale' }));
-    assert.deepEqual(await runtimeHooksReady('codex'), { ready: false, pendingMigration: true });
     fs.rmSync(instruction);
   });
   test('readiness checks installed project hooks, and rejects missing/stale hooks', async t => {

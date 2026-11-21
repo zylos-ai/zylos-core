@@ -18,7 +18,7 @@ import { listGroupTmuxSessions } from '../lib/session-group-paths.js';
 import { readLiveIdentity } from '../lib/session-state-reader.js';
 import { desiredClaudeHooks, syncHooks, detectStopFailureSupport, detectSubagentHooksSupport } from '../lib/sync-runtime-hooks.js';
 import { syncAgyConfig, isAgyConfigReady } from '../lib/agy-setup.js';
-import { isCodexTrustValid, getCodexVersion } from '../lib/codex-hooks.js';
+import { isCodexTrustValid, getCodexVersion, ensureCodexHooksTrusted } from '../lib/codex-hooks.js';
 import { isSplitInstructionsActive, buildInstructionFile, assertInstructionReady } from '../lib/runtime/instruction-builder.js';
 import { commandExists } from '../lib/shell-utils.js';
 import {
@@ -221,6 +221,8 @@ export function validateRuntimeFlags(target, parsed) {
 
 // ── Switch ────────────────────────────────────────────────────────────────
 
+// Codex trust that fails validation is rebuilt once by the existing trust routine; a failed rebuild
+// makes the target not ready and its message names the validation reason and the rebuild error.
 export async function runtimeHooksReady(target) {
   const instruction = path.join(ZYLOS_DIR, target === 'claude' ? 'CLAUDE.md' : 'AGENTS.md');
   const pendingMigration = !isSplitInstructionsActive({ zylosDir: ZYLOS_DIR });
@@ -230,7 +232,16 @@ export async function runtimeHooksReady(target) {
     catch { return { ready: false, pendingMigration }; }
     return { ready: isAgyConfigReady({ zylosDir: ZYLOS_DIR }), pendingMigration };
   }
-  if (target === 'codex') return { ready: isCodexTrustValid({ zylosDir: ZYLOS_DIR, projectDir: ZYLOS_DIR, codexVersion: getCodexVersion() }).valid, pendingMigration };
+  if (target === 'codex') {
+    const validity = isCodexTrustValid({ zylosDir: ZYLOS_DIR, projectDir: ZYLOS_DIR, codexVersion: getCodexVersion() });
+    if (validity.valid) return { ready: true, pendingMigration };
+    try { ensureCodexHooksTrusted({ zylosDir: ZYLOS_DIR, projectDir: ZYLOS_DIR }); }
+    catch (error) {
+      return { ready: false, pendingMigration,
+        message: `Codex hook trust is invalid (${validity.reason}) and rebuilding it failed: ${error.message}` };
+    }
+    return { ready: true, pendingMigration };
+  }
   try {
     const settings = JSON.parse(fs.readFileSync(path.join(ZYLOS_DIR, '.claude', 'settings.json'), 'utf8'));
     const copy = structuredClone(settings);
@@ -316,7 +327,7 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
         buildInstructionFile('agy', { zylosDir: ZYLOS_DIR });
       }
       const ready = await hooksReady(target);
-      if (!ready.ready) return fail('HOOKS_NOT_READY', 'Runtime hooks/instructions not ready; run zylos init');
+      if (!ready.ready) return fail('HOOKS_NOT_READY', ready.message || 'Runtime hooks/instructions not ready; run zylos init');
       if (ready.pendingMigration) warnings.push({ code: 'INSTRUCTION_PENDING_MIGRATION', message: 'Instruction migration pending; run zylos migrate-instructions' });
     }
     catch (error) { return fail('HOOKS_NOT_READY', error.message); }
