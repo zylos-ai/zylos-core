@@ -141,12 +141,14 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 | Inputs / dropdowns / dates / search | Panel backgrounds in light theme, recessed rich-form backgrounds in dark; rich-form borders darken on hover and use danger color on error | Workbench outlines and rich-form rings coexist; disabled fields retain readable values; loading hints are usually adjacent |
 | Segmented controls | Recessed track, transparent unselected options; pale hover background; raised selected option with a light shadow and heavier text | 2 px inner focus; disabled opacity 0.5; no shared loading state |
 | Chip / question options | Selected filter chips use a pale accent background; question options have hover, pressed, and selected borders and backgrounds | Question focus follows native check controls; disabled options 0.55, check controls 0.5; loading is handled by the owning submission flow |
-| Tag / pill | Tags are compact metadata; runtime pills combine dots, hollow or dashed styles with text; connection pills distinguish live, degraded, polling, and reconnecting | Passive labels have no interaction focus or loading state; clickable pills behave as actual buttons; reconnecting dots pulse |
+| Tag / pill | Tags are compact metadata; runtime pills combine dots, hollow or dashed styles with text | Passive labels have no interaction focus or loading state; clickable pills behave as actual buttons |
 | Switches | Gray track means off, accent means on; thumb moves; hovering the sound switch does not change its on/off meaning | Keyboard focus exists; disabled and loading appearances are not fully unified and must not be claimed as fully covered |
 
 [Approved] Segmented controls retain the established colors: recessed track, raised selected surface, light shadow, and normal/selected font weights 500/600. Do not restore a solid accent-colored selected background. [Shared rules](../public/css/wb.css) lines 1597–1633 define the colors; geometry follows section 2.
 
 [Current] Check controls are 16 × 16 px, with 4 px checkbox corners and fully round radio buttons; selected marks use icon masks. Conversation activity uses a 13 px spinner and three 4 px thinking dots; working-status dots have a breathing animation. Corresponding rules already disable these effects for reduced motion.
+
+[Approved] Confirmation dialogs are titled with their action ("Switch session mode", "Uninstall terminal observer") and use the names shown on screen, never internal values such as `single`/`multi`. The red destructive confirm button is only for deleting, revoking, clearing revoked keys, uninstalling the terminal observer, removing a machine, detaching session hosting, and actions that interrupt running work (switching the default engine or the session mode, restarting a session). Saving default models, effort, idle reclaim or the time zone, restarting services for the time zone, upgrading, and disabling the terminal observer use the primary button. Approved (TG topic 5950).
 
 [Approved → decisions 19,20,21] Migrate disabled opacity, button focus, and input focus according to decisions 19,20,21; retain current segmented focus and loading treatments. Interaction-state source references: [workbench](../public/css/wb.css), [question controls](../public/css/conversation.css), [question submission](../public/js/wb/chat-questions.js).
 
@@ -194,15 +196,23 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Approved] The 390 px mobile interface must not have unintended overflow, clipped text, or obscured actions. Check touch targets separately from visible graphics; wrapped toolbars must still satisfy same-row height and centerline requirements.
 
-[Current] Mobile uses bottom navigation, a More menu, and a settings drawer for secondary entry points. The settings drawer is no wider than 300 px or 84% of the screen width. Conversation focus mode hides the workbench top bar and bottom navigation; the message input area handles safe areas and keyboard space separately.
+[Current] Mobile uses bottom navigation, a More menu, and a settings drawer for secondary entry points. The settings drawer is no wider than 300 px or 84% of the screen width. The button naming the current settings section stays under the top bar while the page scrolls, so another section is always one tap away. Conversation focus mode hides the workbench top bar and bottom navigation; the message input area handles safe areas and keyboard space separately.
 
 [Approved → decisions 3,4,13] Ordinary mobile single-line controls (buttons, inputs, search, dropdowns, dates, segmented outer tracks, interactive chips, and icon actions) have a minimum interaction frame of 36 px and are standardized on 36 px; large fields and same-row submit buttons are also 36 px. Navigation elements such as settings navigation and top-bar icons remain 44 px. Mobile composer is the decision 04 exception (msg 736): retain the 44 px-high message input, 40 × 44 px attachment button, and circular 44 × 44 px send button. Do not compress multiline options; textareas continue growing with content. Retain negative margins that enlarge mobile hit areas; preserve existing page behavior for wrapping and grouping entry points.
 
+[Current] The Dashboard home-screen entry opens in standalone mode. The app uses the existing page background tokens for browser theme colors and paints the iOS status-bar area as part of the page. The phone shell and conversation header absorb the top safe area within their own surfaces. Navigation, the composer and bottom sheets absorb the bottom inset, and the settings drawer keeps its controls within both vertical insets. On wider screens, including landscape phones and tablets, the desktop header and page content also respect the safe area. Header fitting measures the usable row inside its padding, and full-width detail panels keep controls inside the left and right insets. These insets supplement the existing control and spacing values.
+
 [Current] Dedicated layout references: [mobile navigation](../public/js/wb/mobile-navigation.js), [workbench media queries](../public/css/wb.css), [conversation media queries](../public/css/conversation.css). For fixed input areas, also check safe areas, visible height, back actions, and keyboard opening. Intentional internal scrolling in charts or tables must stay within their containers.
+
+[Current] On phones, Settings' price and key tables keep every column and scroll sideways inside their card. While columns are still hidden to the right, the right edge fades out ([scroll hint](../public/js/wb/scroll-hint.js) sets `data-more-right`); scrolled to the end, the fade is gone. Markdown tables in conversation messages scroll inside their own box, with cells at their natural width up to 18em, so a wide table does not squeeze its cells to one character per line. Text fields, number fields and dropdowns are 16 px on phones (decision 14), so focusing one does not zoom the page.
 
 [Current] With a detail drawer open, the remaining Overview board uses stacked rows through 1399 px so search and range controls do not overlap the drawer. At 390 px, primary status and flags wrap inside the existing grid cell without widening the page. The running/offline selector retains the approved segmented-control dimensions and focus states. Status pills wrap long labels and duration within their existing width, including untranslated keys while a language pack is unavailable.
 
 [Current] Technical group detail retains its folded diagnostic evidence for starting, stopping and unknown states, and for blocked, waiting-slot, start-failed or unreadable flags. A diagnostic flag can coexist with an idle or working primary state; it does not replace that state.
+
+[Current] Fleet defaults to cards and remembers the selected view in the browser. Both views use eight machines per page and order machines with problems ahead of healthy machines. The summary shows counts and costs across all pages. Online machine names open Overview. Offline names are text and their cards retain Refresh status. At phone widths, list rows pair the machine name with its state and place group count, condition, quota and today's cost directly below. The online row is one link target. Desktop list host metrics appear with Technical details.
+
+[Current] Settings' long lists (session hosting, existing keys, other machines, and the model price table) share one style: the total beside the card title, a search box once there are more than 8 rows, 8 rows a page, 「上一页 / 下一页 · 第 x / y 页」 below while there is more than one page, and 「没有匹配的结果」 when the search finds nothing. Leaving a full page keeps the list's height, so the buttons stay in place on a shorter last page or result. The front end pages the full list; rows off the page stay in place and are only hidden, so values typed in them are still saved ([paged list](../public/js/wb/paged-list.js)).
 
 [Current] Fleet summary labels and diagnostic rows wrap within their cards at desktop and mobile widths, preserving full counts and explanations. Multi-session local cards share Overview's channel send-failure/restart, start-failure, rate-limit and unreadable-data observations. Overview and Fleet unreadable group notices show the display name (or group key) and the localized status-unavailable phrase. Raw reason codes appear only with Technical details enabled and are inserted through text nodes. Channel notices describe the instance and do not link to a group.
 
@@ -216,7 +226,7 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 | Category | Current actual copy and distinctions to preserve |
 |---|---|
-| Connection | “实时 / 降级 / 轮询 / 重连中”; conversations separately use “实时更新已连接 / 实时更新未连接 · 轮询中”; these do not imply that work is in progress |
+| Connection | Conversations use “实时更新已连接 / 实时更新未连接 · 轮询中”; these do not imply that work is in progress |
 | Runtime | “忙碌 / 空闲 / 等待 / 启动中 / 未运行 / 运行中 / 未知 / 异常”; the legend uses “空闲（运行中）” |
 | Supervision paused | When the restart-request file is unreadable, show “监管已暂停新动作” (supervision has paused new actions) in the existing Overview attention area and Fleet card reason slot, using the warning color in both places; remove it when the file becomes readable again. Pausing new actions does not mean that the currently running session is unhealthy; preserve the existing runtime-status text and color |
 | Login | “未登录 / 状态未知 / 已登录”; do not label every logged-out state as offline |
@@ -241,7 +251,7 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] Automatic naming and deletion safety checks explain permission refusals without suggesting a retry. Naming retains its existing network/unknown-result and temporary-failure messages; raw error details remain folded in the technical view. These explanations share the scheduled-task permission mapping. Scheduled-task permission refusals show only the localized explanation, without appending the raw server message; other error details retain their existing formatting.
 
-[Current] The settings version panel, CLI upgrade action and confirmation use the runtime display names Claude, Codex and Antigravity. The Antigravity version row states that update checks are unsupported. A missing runtime name uses the localized unknown label in confirmation. Confirmed upgrade failures and deadlines retain their specific outcomes. Lost responses and unconfirmed upstream errors identify the runtime and show an unknown outcome. Layout and control dimensions are unchanged.
+[Current] The default engine card shows and upgrades the selected engine’s CLI. The version row, upgrade action and confirmation use the registered runtime display names Claude, Codex and Antigravity. The Antigravity version row states that update checks are unsupported. A missing runtime name uses the localized unknown label in confirmation. Confirmed upgrade failures and deadlines retain their specific outcomes. Lost responses and unconfirmed upstream errors identify the runtime and show an unknown outcome.
 
 ## 8. Review Checklist and Browser Gates
 
@@ -280,8 +290,18 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 ### Session hosting in Settings
 
-Session hosting uses the existing settings card, button and input families. The
-relationship list shows group names, the initiating group, and creation time.
-Long names wrap and actions move below the text on narrow screens. Verify both
-languages and themes at 1280 px and 390 px, including action labels, focus, and
-the allowlist form.
+Session hosting uses the existing settings card, button and input families, in
+two cards under This machine. The allowlist shows each channel as a tag with ×;
+× removes it at once without a question, since adding it back is one step. New
+channels are picked from a searchable list under the field below the tags: it
+opens on click or focus, typing filters it, and it offers only the channels this
+machine has registered that are not on the allowlist yet, so typed text that names
+none of them adds nothing. If the registered channels cannot be read, a note
+takes the field's place and only adding is unavailable: the tags and the
+relationship list still show and work. The relationship list is
+one of the settings long lists (see section 6) and shows group names, the initiating
+group, and creation time; 「解除」 asks first in a dialog titled 「解除会话托管」 with the
+red button, and cancelling sends nothing. A change's result shows in the card
+that made it. Long names wrap and actions move below the text on narrow screens.
+Verify both languages and themes at 1280 px and 390 px, including action labels,
+focus, and the allowlist field with its list open.

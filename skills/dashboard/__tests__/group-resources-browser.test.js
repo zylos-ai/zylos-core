@@ -67,6 +67,11 @@ test('separate group and instance resources render across desktop and phone page
           await page.keyboard.press('Escape');
           for (const [tab, selector] of [['trends', '#wb-usage-body .wb-usage-summary'], ['settings', '#settings-defaults'], ['schedule', '#wb-schedule'], ['memory', '#tab-memory'], ['chat', '#wb-chat']]) {
             await openDashboardTab(page, tab);
+            // Settings opens on the account section; the group defaults are in their own section.
+            if (tab === 'settings') {
+              if (width < 761) await page.locator('.wb-set-drawer-btn').click();
+              await page.locator('[data-settings-section="defaults"]').click();
+            }
             await page.locator(selector).waitFor({ state: 'visible' });
             await shot(tab);
           }

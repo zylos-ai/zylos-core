@@ -424,7 +424,7 @@ export async function runObserverBrowser(t, sandbox, signal) {
       await page.goto(base + '/settings');
       const status = page.locator('#observer-settings-state');
       if (width < 761) await page.locator('.wb-set-drawer-btn').click();
-      await page.locator('[data-settings-section="observer"]').first().click();
+      await page.locator('[data-settings-section="machine"]').first().click();
       await page.waitForFunction(() => document.querySelector('#observer-settings-state')?.textContent.includes('2'));
       if (width < 761) {
         // Closing the drawer removes its open class before the CSS slide and
@@ -442,7 +442,7 @@ export async function runObserverBrowser(t, sandbox, signal) {
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
       if (evidence) await page.screenshot({ path: path.join(evidence, `observer-settings-${locale}-${width}.png`) });
       groupCount = 0; await page.reload();
-      if (!await status.isVisible()) { if (width < 761) await page.locator('.wb-set-drawer-btn').click(); await page.locator('[data-settings-section="observer"]').first().click(); }
+      if (!await status.isVisible()) { if (width < 761) await page.locator('.wb-set-drawer-btn').click(); await page.locator('[data-settings-section="machine"]').first().click(); }
       await page.waitForFunction(() => /No groups|没有运行/.test(document.querySelector('#observer-settings-state')?.textContent || ''));
       groupCount = 2;
     } finally { await context.close(); }

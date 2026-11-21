@@ -19,7 +19,10 @@ export function mountChatSettings(root, { document = root.ownerDocument, t = key
   const status = element(document, 'p', undefined, 'wb-note');
   status.setAttribute('role', 'status');
   status.hidden = true;
-  panel.append(label, status);
+  // What turning it on allows, in plain words.
+  const note = element(document, 'p', t('wb.settings.chatNote'), 'wb-note');
+  note.dataset.i18n = 'wb.settings.chatNote';
+  panel.append(label, note, status);
   root.append(panel);
   let generation = 0, saved = false, loaded = false, pending = false;
 

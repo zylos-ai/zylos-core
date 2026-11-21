@@ -97,9 +97,9 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
     await page.goto(api.base + prefix + '/settings');
     if (width < 761) {
       await page.locator('.wb-set-drawer-btn').click();
-      await page.locator('[data-settings-section="defaults"]').click();
+      await page.locator('[data-settings-section="machine"]').click();
       await page.waitForFunction(() => getComputedStyle(document.querySelector('.wb-set-nav')).visibility === 'hidden');
-    } else await page.locator('[data-settings-section="defaults"]').click();
+    } else await page.locator('[data-settings-section="machine"]').click();
     await page.locator('#settings-timezone-value').waitFor({ state: 'visible' });
     await page.waitForFunction(() => document.querySelector('#settings-timezone-value').value !== '');
     await page.locator('#settings-timezone').scrollIntoViewIfNeeded();
