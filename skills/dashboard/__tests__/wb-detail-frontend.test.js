@@ -772,6 +772,155 @@ test('every group has bound action buttons and Origin translated wake replies pr
   f.controller.destroy();
 });
 
+async function groupConfigFixture(context, { presence = 'running', save = () => response({ ok: true, data: { running: { status: 'pending' } } }),
+  restart = () => response({ ok: true, submission: 'accepted', result: 'accepted' }) } = {}) {
+  const writes = [];
+  let current = presence === 'running' ? row() : row('telegram:a', { presence, live: null });
+  const f = detailFixture(async (path, options) => {
+    if (options.method) {
+      writes.push({ path, method: options.method, body: JSON.parse(options.body) });
+      return options.method === 'PUT' ? save() : restart();
+    }
+    if (isGroupDetail(path)) return response({ ...current, config: {
+      runtime: { ok: true, data: { desired: { runtime: 'claude' }, resolved: { runtime: 'claude' } } },
+      model: { ok: true, data: { desired: { runtime: 'claude', mode: 'override', model: 'sonnet', effort: 'high' } } },
+    } });
+    return response(defaultRead(path));
+  });
+  const body = f.document.body = f.document.createElement('body');
+  f.document.addEventListener = body.addEventListener.bind(body);
+  f.document.removeEventListener = body.removeEventListener.bind(body);
+  body.append(f.root);
+  context.after(() => f.controller.destroy());
+  await f.controller.open(current, { rows: [current], listKnown: true });
+  const button = (text, root = f.root) => allNodes(root).find(node => node.tagName === 'BUTTON' && node.textContent === text);
+  button('wb.detail.modify').dispatch('click');
+  await tick();
+  return { ...f, writes, button, feedback: () => f.root.querySelectorAll('.wb-config-result').map(node => node.textContent),
+    dialog: () => allNodes(body).find(node => node.getAttribute('role') === 'alertdialog'),
+    async replaceRun() {
+      current = row('telegram:a', { live: { runId: 'replacement-run', sessionId: 'replacement-session' } });
+      await f.controller.updateSnapshot({ rows: [current], listKnown: true });
+    },
+  };
+}
+
+test('following the global engine confirms once, saves, then uses the same bound request as manual restart', async context => {
+  const saved = deferred(), restarted = deferred();
+  const f = await groupConfigFixture(context, { save: () => saved.promise, restart: () => restarted.promise });
+  const [, engine] = f.root.querySelectorAll('.wb-cfg-more')[0].children;
+  assert.equal(engine.children[0].textContent, 'wb.config.followGlobal');
+  engine.value = 'inherit';
+  engine.dispatch('change');
+  f.button('wb.config.saveRuntime').dispatch('click');
+  const dialog = f.dialog();
+  assert.match(dialog.textContent, /wb\.config\.saveRestartConfirm/);
+  assert.equal(f.button('wb.config.saveRestart', dialog).classList.contains('wb-btn-danger'), true);
+  f.button('wb.config.saveRuntime').dispatch('click');
+  assert.equal(f.writes.length, 0);
+  f.button('wb.config.saveRestart', dialog).dispatch('click');
+  await tick();
+  assert.deepEqual(f.writes, [{ path: '/api/groups/telegram%3Aa/config', method: 'PUT', body: { kind: 'runtime', value: 'inherit' } }]);
+  assert.deepEqual(f.feedback(), []);
+  saved.resolve(response({ ok: true, data: { resolved: { runtime: 'codex' }, running: { status: 'pending', launchConfig: { runtime: 'claude' } } } }));
+  await tick();
+  const expected = { path: '/api/groups/telegram%3Aa/actions/restart', method: 'POST', body: { sessionGroup: 'telegram:a', runId: 'run-a', sessionId: 'session-a' } };
+  assert.equal(f.writes.length, 2);
+  assert.deepEqual(f.writes[1], expected);
+  assert.equal(f.dialog(), undefined);
+  assert.deepEqual(f.feedback(), ['wb.config.followGlobalSaved']);
+  restarted.resolve(response({ ok: true, submission: 'accepted', result: 'accepted' }));
+  await tick();
+  assert.deepEqual(f.feedback(), ['wb.config.followGlobalSaved', 'wb.actions.accepted']);
+  const manual = f.controller.act('restart');
+  f.button('wb.actions.restart', f.dialog()).dispatch('click');
+  await manual;
+  assert.equal(f.writes.length, 3);
+  assert.deepEqual(f.writes[2], expected);
+});
+
+test('cancelling a running group configuration confirmation makes no writes', async context => {
+  const f = await groupConfigFixture(context);
+  f.button('wb.config.saveRuntime').dispatch('click');
+  assert.ok(f.dialog());
+  f.button('wb.cancel', f.dialog()).dispatch('click');
+  await tick();
+  assert.equal(f.dialog(), undefined);
+  assert.equal(f.writes.length, 0);
+});
+
+test('saving a stopped group needs no confirmation and keeps the next-start hint', async context => {
+  const f = await groupConfigFixture(context, { presence: 'not_running',
+    save: () => response({ ok: true, data: { running: { status: 'not_running' } } }) });
+  f.button('wb.config.saveRuntime').dispatch('click');
+  assert.equal(f.dialog(), undefined);
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.method), ['PUT']);
+  assert.deepEqual(f.feedback(), ['wb.config.saved · wb.config.nextStart']);
+});
+
+for (const operation of [
+  { button: 'wb.config.save', name: 'saving the model pair', body: { kind: 'model', runtime: 'claude', model: 'sonnet', effort: 'high' } },
+  { button: 'wb.config.resetModel', name: 'resetting the model pair', body: { kind: 'model', runtime: 'claude', reset: true } },
+]) test(`${operation.name} confirms and restarts when the running configuration differs`, async context => {
+  const f = await groupConfigFixture(context);
+  f.button(operation.button).dispatch('click');
+  assert.ok(f.dialog());
+  assert.equal(f.writes.length, 0);
+  f.button('wb.config.saveRestart', f.dialog()).dispatch('click');
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.method), ['PUT', 'POST']);
+  assert.deepEqual(f.writes[0].body, operation.body);
+  assert.deepEqual(f.feedback(), ['wb.config.saved', 'wb.actions.accepted']);
+});
+
+test('a rejected restart keeps the save result and never retargets the replacement run', async context => {
+  const saved = deferred();
+  const f = await groupConfigFixture(context, { save: () => saved.promise,
+    restart: () => response({ ok: false, submission: 'rejected', currentRunId: 'replacement-run',
+      error: { code: 'stale_target', message: 'The target run changed; refresh before restarting' } }, 409) });
+  f.button('wb.config.saveRuntime').dispatch('click');
+  f.button('wb.config.saveRestart', f.dialog()).dispatch('click');
+  await tick();
+  await f.replaceRun();
+  saved.resolve(response({ ok: true, data: { running: { status: 'pending' } } }));
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.method), ['PUT', 'POST']);
+  assert.equal(f.writes[1].body.runId, 'run-a');
+  assert.deepEqual(f.feedback(), ['wb.config.saved', 'stale_target · The target run changed; refresh before restarting']);
+});
+
+test('an unknown restart outcome preserves the save result without another submission', async context => {
+  const f = await groupConfigFixture(context, { restart: async () => { throw Error('connection lost'); } });
+  f.button('wb.config.saveRuntime').dispatch('click');
+  f.button('wb.config.saveRestart', f.dialog()).dispatch('click');
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.method), ['PUT', 'POST']);
+  assert.deepEqual(f.feedback(), ['wb.config.saved', 'wb.actions.unknown']);
+});
+
+for (const failedSave of [
+  { name: 'rejected', save: () => response({ ok: false, error: { code: 'GROUP_UNAVAILABLE' } }, 409), feedback: /GROUP_UNAVAILABLE/ },
+  { name: 'of unknown outcome', save: () => response({ ok: false, unknown: true }, 502), feedback: /wb\.config\.resultUnknown/ },
+]) test(`a configuration write ${failedSave.name} leaves the restart unsubmitted`, async context => {
+  const f = await groupConfigFixture(context, { save: failedSave.save });
+  f.button('wb.config.saveRuntime').dispatch('click');
+  f.button('wb.config.saveRestart', f.dialog()).dispatch('click');
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.method), ['PUT']);
+  assert.match(f.root.textContent, failedSave.feedback);
+});
+
+test('a successful save already reflected in the running configuration needs no restart', async context => {
+  const f = await groupConfigFixture(context, { save: () => response({ ok: true, data: { running: { status: 'applied' } } }) });
+  f.button('wb.config.saveRuntime').dispatch('click');
+  assert.ok(f.dialog());
+  f.button('wb.config.saveRestart', f.dialog()).dispatch('click');
+  await tick();
+  assert.deepEqual(f.writes.map(write => write.method), ['PUT']);
+  assert.deepEqual(f.feedback(), ['wb.config.saved · wb.config.applied']);
+});
+
 test('single detail filters NULL events but sends actions through the Origin route', async () => {
   const calls = [], f = detailFixture(async (path, options) => { calls.push([path, options]); return response(isGroupDetail(path) ? row(null) : defaultRead(path)); });
   const single = row(null);
@@ -1766,7 +1915,7 @@ test('incremental configuration metadata and refresh keep save bound to the moun
     if (isGroupDetail(path)) return response({ config: configValue });
     if (path.startsWith('/api/instance/runtime-options')) return meta.promise;
     return response(defaultRead(path));
-  }, { detail: () => 'technical' });
+  }, { detail: () => 'technical', confirm: () => true });
   try {
     await f.controller.open(current, { rows: [current], listKnown: true });
     const config = f.root.querySelector('.wb-detail-config');

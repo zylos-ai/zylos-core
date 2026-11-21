@@ -20,8 +20,12 @@ export function resolveDetailRow(selection, snapshot = {}) {
   return { row: olderRow(key, { name, listKnown: false }), historical: true };
 }
 
+function hasRunningTarget(row) {
+  return ['running', 'starting'].includes(row.presence) && Boolean(row.live?.runId);
+}
+
 export function groupActionButtons(row, writable = true) {
-  const running = ['running', 'starting'].includes(row.presence) && Boolean(row.live?.runId);
+  const running = hasRunningTarget(row);
   const origin = row.sessionGroup == null || row.sessionGroup === 'origin';
   return ['interrupt', 'chop-chop', 'restart'].map(action => ({ action,
     disabled: !writable || (!running && !(origin && action === 'restart')),
@@ -219,7 +223,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       });
       if (state.configOpen) {
         renderGroupConfig(sections.config, config, { document, t, writable: getWritable(), rotationThreshold: row.rotationThreshold,
-          onCancel: () => { state.configOpen = false; draw(); } });
+          onSave: saveConfig, onCancel: () => { state.configOpen = false; draw(); } });
         // Form handlers own their field references. A controller publication
         // changes the form; ordinary board snapshots keep the mounted editor.
         const form = [...sections.config.children].find(node => node.classList.contains('wb-cfg-edit'));
@@ -285,23 +289,46 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     }
     draw();
   }
-  async function act(action) {
-    if (!state.row || !state.detailKnown || state.actionBusy || groupActionButtons(state.row, getWritable()).find(item => item.action === action)?.disabled) return;
-    const confirmation = state.row.sessionGroup == null || state.row.sessionGroup === 'origin'
-      ? 'confirm.restart' : 'wb.actions.restartConfirm';
-    if (action === 'restart' && !await (confirm ? confirm(t(confirmation)) : confirmDialog(document, { title: t('wb.actions.restartTitle'),
-      body: t(confirmation), ok: t('wb.actions.restart'), cancel: t('wb.cancel') }))) return;
-    const gen = generation;
-    const row = state.row;
-    state.actionBusy = true; draw();
+  function confirmRestart({ title, body, ok }) {
+    return confirm ? confirm(t(body)) : confirmDialog(document, {
+      title: t(title), body: t(body), ok: t(ok), cancel: t('wb.cancel'),
+    });
+  }
+  async function submitAction(action, row) {
     try {
       const value = await request(`/api/groups/${encodeURIComponent(row.sessionGroup ?? 'origin')}/actions/${action}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionGroup: row.sessionGroup, runId: row.live?.runId, sessionId: row.live?.sessionId ?? null }),
       });
-      if (active(gen)) state.actionResult = groupActionText(value, t);
+      return groupActionText(value, t);
     } catch (error) {
-      if (active(gen) && error.name !== 'AbortError') state.actionResult = error.body ? groupActionText(error.body, t) : t('wb.actions.unknown');
+      if (error.name !== 'AbortError') return error.body ? groupActionText(error.body, t) : t('wb.actions.unknown');
+    }
+  }
+  function saveConfig(change) {
+    if (!getWritable() || !state.row) return;
+    // Bind the restart to the run shown when the user chose to save.
+    const row = state.row;
+    if (!hasRunningTarget(row)) return config.save(change);
+    return config.save(change, {
+      confirm: async () => await confirmRestart({
+        title: 'wb.config.saveRestartTitle', body: 'wb.config.saveRestartConfirm', ok: 'wb.config.saveRestart',
+      }) && getWritable(),
+      restart: () => submitAction('restart', row),
+    });
+  }
+  async function act(action) {
+    if (!state.row || !state.detailKnown || state.actionBusy || groupActionButtons(state.row, getWritable()).find(item => item.action === action)?.disabled) return;
+    const gen = generation;
+    const body = state.row.sessionGroup == null || state.row.sessionGroup === 'origin'
+      ? 'confirm.restart' : 'wb.actions.restartConfirm';
+    if (action === 'restart' && !await confirmRestart({ title: 'wb.actions.restartTitle', body, ok: 'wb.actions.restart' })) return;
+    if (!active(gen) || !getWritable() || state.actionBusy) return;
+    const row = state.row;
+    state.actionBusy = true; draw();
+    try {
+      const result = await submitAction(action, row);
+      if (active(gen) && result != null) state.actionResult = result;
     } finally { if (active(gen)) { state.actionBusy = false; draw(); } }
   }
   function rememberSubagents(events) {

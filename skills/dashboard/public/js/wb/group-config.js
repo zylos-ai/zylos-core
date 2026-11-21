@@ -38,9 +38,10 @@ export function validConfigChange(change) {
 }
 
 export function createGroupConfig({ key, request, onChange = () => {}, t = key => key, active = () => true }) {
-  const state = { value: null, result: '', error: null, busy: false, meta: {} };
+  const state = { value: null, result: '', restartResult: '', error: null, busy: false, meta: {} };
   const publish = () => { if (active()) onChange(state); };
   const thresholdRequests = new Set();
+  let confirming = false;
   async function loadThreshold(runtime, model) {
     if (!model || !['claude', 'codex', 'agy'].includes(runtime) || Number.isFinite(state.meta[runtime]?.model_thresholds?.[model])) return;
     const id = runtime + ':' + model;
@@ -77,15 +78,23 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
   }
   return {
     state, load, loadMeta, loadThreshold, redraw: publish,
-    async save(change) {
-      if (state.busy) return;
+    async save(change, { confirm, restart } = {}) {
+      if (!active() || confirming || state.busy) return;
       if (!validConfigChange(change)) {
         state.error = t('wb.config.pairRequired');
         publish();
         return { ok: false, error: { code: 'MODEL_PAIR_REQUIRED' } };
       }
+      if (confirm) {
+        confirming = true;
+        try {
+          if (!await confirm() || !active()) return;
+        } finally { confirming = false; }
+      }
       state.busy = true;
       state.error = null;
+      state.result = '';
+      state.restartResult = '';
       publish();
       try {
         let result;
@@ -106,10 +115,19 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
         } else if (result.ok === false) {
           state.error = responseError(result);
         } else {
-          state.result = runningText(result.data ?? result, change.kind, t);
+          const data = result.data ?? result;
+          const shouldRestart = restart && data.running?.status === 'pending';
+          const followsGlobal = change.kind === 'runtime' && change.value === 'inherit';
+          const saved = t(followsGlobal ? 'wb.config.followGlobalSaved' : 'wb.config.saved');
+          state.result = shouldRestart ? saved : saved + ' · ' + runningText(data, change.kind, t);
           // Preserve the authoritative submitted result; the next explicit read
           // refreshes the complete runtime/model configuration.
           state.value = { ...state.value, [change.kind]: result };
+          if (shouldRestart) {
+            publish();
+            const outcome = await restart();
+            if (active()) state.restartResult = outcome;
+          }
         }
         return result;
       } finally {
@@ -152,7 +170,7 @@ export function startingPair(value, runtime) {
 
 // Edit form: engine, model and effort as one pair with save and cancel. The per-group engine
 // switch and the reset to the default model stay on a second, quieter line.
-export function renderGroupConfig(root, controller, { document = root.ownerDocument, t = key => key, writable = true, rotationThreshold = null, onCancel = () => {} } = {}) {
+export function renderGroupConfig(root, controller, { document = root.ownerDocument, t = key => key, writable = true, rotationThreshold = null, onSave = controller.save, onCancel = () => {} } = {}) {
   const { state } = controller;
   state.draft ??= {};
   const locked = !writable || state.busy;
@@ -205,7 +223,7 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
   });
   effort.addEventListener('change', () => { state.draft.effort = effort.value; syncSave(); });
   syncSave();
-  save.addEventListener('click', () => controller.save({ kind: 'model', runtime: target.value, model: model.value, effort: effort.value }));
+  save.addEventListener('click', () => onSave({ kind: 'model', runtime: target.value, model: model.value, effort: effort.value }));
   const cancel = element(document, 'button', t('wb.cancel'), 'wb-btn wb-btn-sm'); cancel.type = 'button';
   cancel.addEventListener('click', () => { state.draft = {}; onCancel(); });
   const form = element(document, 'div', undefined, 'wb-cfg-edit');
@@ -213,18 +231,22 @@ export function renderGroupConfig(root, controller, { document = root.ownerDocum
   pair.append(target, model, effort, save, cancel);
   form.append(pair, threshold, element(document, 'p', t(supportsModelOverride ? 'wb.config.pairNote' : 'wb.config.modelUnavailable'), 'wb-note'));
   // Less common: which engine this group runs on, and dropping its own model pair.
-  const runtime = select(t('wb.term.runtime'), ['inherit', 'claude', 'codex', 'agy'].map(value => ({ value, label: value === 'inherit' ? t('wb.term.inherit') : runtimeName(value) })),
+  const runtime = select(t('wb.term.runtime'), ['inherit', 'claude', 'codex', 'agy'].map(value => ({ value, label: value === 'inherit' ? t('wb.config.followGlobal') : runtimeName(value) })),
     state.draft.runtime ?? state.value?.runtime?.data?.desired?.runtime ?? 'inherit');
   runtime.addEventListener('change', () => { state.draft.runtime = runtime.value; });
   const saveRuntime = element(document, 'button', t('wb.config.saveRuntime'), 'wb-btn wb-btn-sm'); saveRuntime.type = 'button'; saveRuntime.disabled = locked;
-  saveRuntime.addEventListener('click', () => controller.save({ kind: 'runtime', value: runtime.value }));
+  saveRuntime.addEventListener('click', () => onSave({ kind: 'runtime', value: runtime.value }));
   const reset = element(document, 'button', t('wb.config.resetModel'), 'wb-link-btn'); reset.type = 'button'; reset.disabled = locked || !supportsModelOverride;
-  reset.addEventListener('click', () => controller.save({ kind: 'model', runtime: target.value, reset: true }));
+  reset.addEventListener('click', () => onSave({ kind: 'model', runtime: target.value, reset: true }));
   const more = element(document, 'div', undefined, 'wb-cfg-more');
   more.append(element(document, 'span', t('wb.term.runtime'), 'wb-cfg-label'), runtime, saveRuntime, reset);
   form.append(more);
   root.append(form);
   if (!writable) root.append(element(document, 'p', t('wb.readOnly'), 'wb-note'));
-  if (state.result) root.append(element(document, 'p', state.result, 'wb-config-result'));
+  const feedback = element(document, 'div');
+  feedback.setAttribute('role', 'status');
+  if (state.result) feedback.append(element(document, 'p', state.result, 'wb-config-result'));
+  if (state.restartResult) feedback.append(element(document, 'p', state.restartResult, 'wb-config-result'));
+  root.append(feedback);
   if (state.error) root.append(element(document, 'p', state.error, 'wb-config-error'));
 }
