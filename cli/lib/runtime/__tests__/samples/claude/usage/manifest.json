@@ -1,0 +1,9 @@
+{
+  "program": "Claude Code",
+  "version": "2.1.319",
+  "recordedAt": "2026-11-09T03:58:05.544Z",
+  "how": "Reused by the reviewer from a real statusLine written on 2026-11-09 by the Zylos statusLine command of an earlier isolated Zylos instance on the same host, under its own Linux user, while that Claude Code was signed in with a Claude Max subscription. No subscription login was available on 2026-11-21 to record a new one.",
+  "files": {
+    "statusline.json": "The native statusLine stdin with the zylos capture block, as written. Fields holding local paths and the session title (cwd, workspace, scratchpad_dir, transcript_path, session_name) were omitted; other values are unchanged."
+  }
+}
