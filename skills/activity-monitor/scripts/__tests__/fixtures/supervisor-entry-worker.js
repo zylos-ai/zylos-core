@@ -30,7 +30,7 @@ process.on('message',async message=>{
     const identity={runtime:'claude',session_id:'fixture-session',claude_pid:123};
     store.consume({schema_version:1,source:'hook',runtime:'claude',event_id:randomUUID(),session_id:identity.session_id,
       claude_pid:123,prompt_id:'p',event:'stop_failure',error:'authentication_failed',received_at:Date.now()},
-      {identity,sessionGroup:'origin'});
+      {identity,sessionGroup:'origin',authConfirmed:true});
     process.send({notice:store.read('origin').pending_notice,noticeScope});
   }
   if(message==='second') {

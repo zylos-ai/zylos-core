@@ -171,7 +171,9 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
       events ??= new HealthEventReader({coordinator,zylosDir:root,warn:log,getControl:db.getControlById,expireControl:id=>{try{db.expireControlById(id);}catch(error){if(error.code!=='CONTROL_NOT_ACTIVE')throw error;}},quota:(identity,current)=>readScopedHealthQuota({runDir:current.runDir,runId:current.runId,identity})});
       const results=await events.consumeScene(scene,identity);
       if(results.some(result=>result?.verify))void supervisor.observer.requestVerification(scene.runtime);
-      if(scene.runtime==='claude') await coordinator.serial(scene.runtime,()=>processFailureContinuation({
+      const awaitingAuth=results.some(result=>result?.status==='awaiting_auth');
+      // The queued terminal hook must supersede any continuation it replaces.
+      if(scene.runtime==='claude' && !awaitingAuth) await coordinator.serial(scene.runtime,()=>processFailureContinuation({
         store:coordinator.store(scene.runtime),scene,identity:()=>scenes.readIdentity(scene.sessionGroup),
         bindTarget:()=>scenes.bindTarget(scene),insertControl:db.insertControl,getControl:db.getControlById,now:clock,
         // Native single delivers every group's inbound to Origin, so any pending inbound cancels a continuation.
@@ -183,6 +185,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
         identity:async()=>{const current=await scenes.readIdentity(scene.sessionGroup);return current.present && current.ready && current.runId===scene.runId && current.sessionId===scene.sessionId && current.runtime===scene.runtime?identity:null;},
         quota:current=>readScopedHealthQuota({runDir:scene.runDir,runId:scene.runId,identity:current}),mutate:fn=>coordinator.serial(scene.runtime,fn),database:db.getDb(),zylosDir:root});
       pendingNotices.add(pending);pending.finally(()=>pendingNotices.delete(pending)).catch(log);
+      return awaitingAuth;
     },alert,log,...overrides,readMode,scenes,updateCapacity,afterRound:async({context})=>{await scenes.advance?.();try{await legacy.tick();}catch(error){log({error:error.code ?? error.message,phase:'legacy-status'});}await machineTasks.tick(context);await overrides.afterRound?.();},
   });
   legacy=overrides.legacyStatus ?? new SupervisorLegacyStatus({env,connectionOptions:baseScenes.connectionOptions ?? {},readHealth:runtime=>supervisor.health.store(runtime).read(),log});

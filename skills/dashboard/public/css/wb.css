@@ -164,8 +164,8 @@
 /* Pseudo-element icons take their shape from wb-icons.css (same set and stroke as .wb-ico). */
 .wb-chev::after, .wb-inst-more::after { content: ""; width: 12px; height: 12px; background: currentColor; -webkit-mask: var(--wb-ico) center/contain no-repeat; mask: var(--wb-ico) center/contain no-repeat; }
 .wb-bot::before { content: ""; width: 13px; height: 13px; background: currentColor; -webkit-mask: var(--wb-ico) center/contain no-repeat; mask: var(--wb-ico) center/contain no-repeat; }
-.wb-input, .wb-cfg-edit input, .wb-cfg-edit select { height: 28px; min-width: 0; padding: 0 8px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text); font: inherit; font-size: 12.5px; }
-.wb-input:focus, .wb-cfg-edit input:focus, .wb-cfg-edit select:focus { outline: 2px solid var(--wb-accent-line); border-color: var(--accent); }
+.wb-input, .wb-cfg-edit :is(input, select) { height: 28px; min-width: 0; padding: 0 8px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text); font: inherit; font-size: 12.5px; }
+.wb-input:focus, .wb-cfg-edit :is(input, select):focus { outline: 2px solid var(--wb-accent-line); border-color: var(--accent); }
 #settings-hot-ttl-source { white-space: pre-line; }
 #settings-hot-ttl-minutes:disabled { background: var(--wb-hover); color: var(--text-muted); -webkit-text-fill-color: var(--text-muted); border-style: dashed; cursor: not-allowed; opacity: 1; }
 .wb-seg-sm { display: inline-flex; height: var(--wb-control-compact); vertical-align: middle; }
@@ -480,13 +480,14 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-cfg-line b { color: var(--text); font-weight: 600; }
 .wb-cfg-line .wb-btn { margin-left: auto; }
 .wb-cfg-edit { display: grid; gap: 8px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); }
-.wb-cfg-label { color: var(--text-dim); font-size: 12px; }
+.wb-cfg-label { color: var(--text-dim); font-size: 13px; line-height: 20px; font-weight: 550; }
 .wb-cfg-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.wb-cfg-controls input { width: 110px; }
-.wb-cfg-controls select { max-width: 170px; }
+.wb-cfg-field { display: grid; gap: 4px; min-width: 0; }
+.wb-cfg-field .wb-select-wrap { width: 100%; }
+.wb-cfg-engine { display: grid; grid-template-columns: minmax(0, 1fr); }
+.wb-cfg-model { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.wb-cfg-field :is(input, select):disabled { background: var(--wb-hover); color: var(--text-muted); cursor: not-allowed; }
 .wb-cfg-edit .wb-note { margin: 0; }
-.wb-cfg-more { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 8px; border-top: 1px dashed var(--wb-line-strong); }
-.wb-cfg-more .wb-link-btn { margin-left: auto; font-size: 12px; }
 .wb-cfg-state { color: var(--text-dim); }
 .wb-config-result { margin: 8px 0 0; color: var(--text-dim); font-size: 12px; }
 .wb-config-error { margin: 8px 0 0; font-size: 12px; }
@@ -581,6 +582,8 @@ html[data-detail=plain] #observer-tab { display: none!important; }
   .wb-act-label { display: inline; }
 }
 @media (max-width: 760px) {
+  .wb-cfg-label { font-size: 14px; }
+  .wb-cfg-model { grid-template-columns: minmax(0, 1fr); }
   :root { --wb-header-h: 0px; }
   /* Phones: one compact row (name, technical switch, three icons) over one scrollable row of sections; both
      rows start at the same 12px edge as the page content and the header never grows a third row. */
@@ -1657,8 +1660,8 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
 :is(.wb-seg, .wb-seg2, .wb-seg-sm) { align-items: stretch; }
 :is(.wb-seg, .wb-seg2, .wb-seg-sm):not(.wb-seg-engine) > button { height: 100%; min-height: 0; }
 .wb-bh { align-items: center; }
-:is(.wb-name-editor, .wb-cfg-controls, .wb-cfg-more) { --wb-h: var(--wb-control-compact); align-items: center; }
-:is(.wb-name-editor, .wb-cfg-controls, .wb-cfg-more) :is(.wb-input, input, select, .wb-btn-sm, .wb-link-btn) { height: var(--wb-h); }
+:is(.wb-name-editor, .wb-cfg-controls) { --wb-h: var(--wb-control-compact); align-items: center; }
+:is(.wb-name-editor, .wb-cfg-controls) :is(.wb-input, input, select, .wb-btn-sm, .wb-link-btn) { height: var(--wb-h); }
 .wb-d-title-wrap > .wb-icon-btn-sm { width: var(--wb-h); height: var(--wb-h); }
 .wb-timezone-controls .wb-select, .wb-timezone-controls .wb-btn, .wb-timezone-pending .wb-btn { min-height: var(--wb-h); }
 #wb-auto-name { height: var(--wb-control-compact); }
@@ -1687,7 +1690,7 @@ html[data-detail=technical] .wb-f-list { --fleet-host-column: minmax(100px, .9fr
   /* Multiline engine options retain their content-driven height. */
   :is(.wb-seg, .wb-seg2) { height: auto; }
   :is(.wb-btn-sm, .wb-icon-btn-sm, .wb-search, .wb-input, .wb-seg, .wb-seg2, .wb-seg-sm):not(.wb-seg-engine) { height: var(--wb-control-touch); }
-  :is(.wb-name-editor, .wb-cfg-controls, .wb-cfg-more) { --wb-h: var(--wb-control-touch); }
+  :is(.wb-name-editor, .wb-cfg-controls) { --wb-h: var(--wb-control-touch); }
   :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side)
     :is(.wb-seg, .wb-seg2, .wb-seg-sm):not(.wb-seg-engine) > :is(button, .wb-btn) { height: 100%; min-height: 0; }
   .wb-date-native { min-height: 0; }

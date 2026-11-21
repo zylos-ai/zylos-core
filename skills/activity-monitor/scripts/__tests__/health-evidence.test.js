@@ -11,7 +11,7 @@ function fixture(t) {
   let clock=Date.now();
   const store=new HealthStore({zylosDir,now:()=>clock});
   const event=(change={})=>({schema_version:1,event_id:randomUUID(),source:'hook',runtime:'claude',...identity,prompt_id:'prompt',event:'stop_failure',error:'rate_limit',received_at:clock,...change});
-  return {store,zylosDir,event,now:()=>clock,advance:()=>++clock,consume:input=>store.consume(input,{identity})};
+  return {store,zylosDir,event,now:()=>clock,advance:()=>++clock,consume:(input,options)=>store.consume(input,{identity,...options})};
 }
 test('terminal marker and health survive restart; exact and older events replay safely',t=>{
   const f=fixture(t);const event=f.event();f.consume(event);
@@ -56,7 +56,7 @@ test('recovery fences reject old revisions and late failure cannot undo recovery
 test('missing prompt requests verification but newer different prompts are recognized',t=>{
   const f=fixture(t);assert.equal(f.consume(f.event({prompt_id:null})).reason,'missing_prompt');
   f.advance();f.consume(f.event());f.advance();
-  assert.equal(f.consume(f.event({prompt_id:'different',error:'authentication_failed'})).reason,'hook_failure');
+  assert.equal(f.consume(f.event({prompt_id:'different',error:'authentication_failed'}),{authConfirmed:true}).reason,'hook_failure');
   assert.equal(f.store.read().health,'auth_failed');
 });
 test('screen recovery before the first Hook retains its process identity fence',t=>{
@@ -71,7 +71,7 @@ test('legacy recovery without timestamp does not permanently suppress newer fail
   f.store.transition('ok','',{identity,kind:'recovery'});
   const state=f.store.read();delete state.recovered.observed_at;f.store.write(state);
   assert.equal(f.consume(original).reason,'replay');
-  f.advance();const later=f.consume(f.event({prompt_id:'next',error:'authentication_failed'}));
+  f.advance();const later=f.consume(f.event({prompt_id:'next',error:'authentication_failed'}),{authConfirmed:true});
   assert.equal(later.state.health,'auth_failed');assert.equal(later.state.recovered,null);
 });
 test('scheduling updates preserve revision and stale writes are rejected',t=>{

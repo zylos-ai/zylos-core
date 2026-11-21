@@ -363,6 +363,8 @@ Detail also includes `currentAction:{tool:string|null,message:string|null,receiv
 
 When requested, `raw:string|null` contains sanitized first-message content and `config:object|null` contains Core runtime/model read envelopes. An optional read failure returns its field as null and `rawError` or `configError` as `{code:string,message:string}`; it does not fail the whole detail request. Unrequested extras and their error fields are omitted. The address remains stable across lifecycle changes.
 
+`config.modelOverrides` is a read-only `Array<{runtime:string,model:string,effort:string}>|null` from the same group snapshot. It contains only the requested group's saved model and effort pairs, including pairs for runtimes other than the selected one. A runtime missing from a successful array follows the instance default. An empty array means no pairs are saved, and `null` means the snapshot could not read the overrides. For example, the field may be `[{"runtime":"codex","model":"gpt-5","effort":"high"}]` when the selected runtime is Claude.
+
 Bare keys `counts`, `running`, `offline`, `search`, `activity`, `naming-prompt` and `runtime-overrides` are reserved API namespace segments and cannot address a group detail. Use namespaced group keys rather than those bare names.
 
 **Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_INCLUDE`; 404 `GROUP_NOT_FOUND`; 502 `GROUP_CATALOG_UNREADABLE` when an unknown group cannot be checked against the catalog or a historical key cannot be verified; common read errors. Detail for a current valid key remains readable when unrelated catalog collection fails. Individual Core configuration errors can also appear inside their configuration envelopes.

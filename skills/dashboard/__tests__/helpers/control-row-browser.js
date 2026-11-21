@@ -26,7 +26,7 @@ export function measureControlRows(controlSelector = null) {
     if (el.matches('textarea')) return { heightException: 'multiline field grows with content' };
     if (mobile && el.matches('.wb-mobile-icon-button,.header-icon-btn,.wb-set-nav-btn,.wb-set-drawer-btn,.conversation-back,.conversation-menu-toggle,.wb-group-side-back')) return { expectedHeight: 44 };
     if (el.matches('.wb-sched-field .wb-input')) return { expectedHeight: 36 };
-    if (el.matches('.wb-name-editor :is(input,select,button),.wb-cfg-controls :is(input,select,button),.wb-cfg-more :is(input,select,button)')) return { expectedHeight: mobile ? 36 : 26 };
+    if (el.matches('.wb-name-editor :is(input,select,button),.wb-cfg-controls :is(input,select,button)')) return { expectedHeight: mobile ? 36 : 26 };
     if (el.matches('.wb-group-head .wb-d-acts > *')) return { expectedHeight: mobile ? 36 : 30 };
     if (el.matches('.conversation-rename :is(input,button),.wb-timezone-controls :is(select,button),.wb-timezone-pending button')) return { expectedHeight: mobile ? 36 : 30 };
     if (el.matches('.wb-d-title-wrap > .wb-icon-btn-sm,.wb-set-body :is(.wb-btn,.wb-input,.wb-select),.wb-memory-search')) return { expectedHeight: mobile ? 36 : 30 };
@@ -52,7 +52,7 @@ export function measureControlRows(controlSelector = null) {
   };
   const selectorFor = el => el.id ? '#' + CSS.escape(el.id) : el.tagName.toLowerCase() + [...el.classList].map(value => '.' + CSS.escape(value)).join('') + (el.hasAttribute('aria-label') ? `[aria-label=${JSON.stringify(el.getAttribute('aria-label'))}]` : '');
   const all = controls.map((el, index) => { const b = el.getBoundingClientRect(); let owner = el.parentElement; while (owner.parentElement && owner !== root && !/flex|grid/.test(getComputedStyle(owner).display)) owner = owner.parentElement;
-    owner = el.closest('#wb-board-head,.wb-usage-controls,.wb-sched-filters,.conversation-list-toolbar,.wb-timezone-controls,.wb-config-fields,.wb-pref-controls,.wb-d-top,.conversation-header,.wb-cfg-controls,.wb-cfg-more,.wb-name-editor,.wb-sched-pair') || owner;
+    owner = el.closest('#wb-board-head,.wb-usage-controls,.wb-sched-filters,.conversation-list-toolbar,.wb-timezone-controls,.wb-config-fields,.wb-pref-controls,.wb-d-top,.conversation-header,.wb-cfg-controls,.wb-name-editor,.wb-sched-pair') || owner;
     const contentTarget = el.matches('.wb-sched-dot,.wb-sched-select,.wb-sched-target,.conversation-list-item,.conversation-delete');
     const searchInput = el.matches('.wb-search') && el.querySelector('input');
     const inputBounds = searchInput && searchInput.getBoundingClientRect();
@@ -173,7 +173,7 @@ export async function runControlRows(t, sandbox) {
           const tabs = await page.locator('.wb-detail-tabs button').allTextContents();
           for (let i = 0; i < tabs.length; i++) { await page.locator('.wb-detail-tabs button').nth(i).click(); await capture(`group-${i}`); }
           await page.locator('.wb-detail-tabs button').first().click();
-          await page.locator('.wb-detail-config button').last().click(); await page.locator('.wb-cfg-controls').waitFor(); await capture('group-config');
+          await page.locator('.wb-detail-config button').last().click(); await page.locator('.wb-cfg-edit').waitFor(); await capture('group-config');
           await page.locator('.wb-d-title-wrap button').click(); await page.locator('.wb-name-editor input').waitFor(); await capture('group-rename');
         }
         if (survey && route === '/schedule') {

@@ -221,7 +221,7 @@ export class SupervisorHealthObserver {
     this.finish(probe,{recovered:result.classification === 'ok',classification:result.classification});
     if (result.classification === 'other') this.sceneState(probe.scene).pendingStop='recovery_failed';
   }
-  async checkDeliveredScreen(scene, tracked, delivery, state, now) {
+  async checkDeliveredScreen(scene, tracked, delivery, state, now, awaitingAuth) {
     // Consume this notification before I/O; idle ticks must not resample old text.
     delivery.screenChecked = true;
     const health=this.coordinator.store(scene.runtime).read();
@@ -238,7 +238,11 @@ export class SupervisorHealthObserver {
     else if (matches.rateLimit?.detected || matches.authFailure?.detected) {
       tracked.sticky = null;
       if(matches.rateLimit?.detected) {tracked.rateHits++;if(tracked.rateHits < 2) return false;}
-      else {tracked.rateHits=0;if((await this.checkAuth(scene.runtime))?.status !== 'failure') return false;}
+      else {
+        tracked.rateHits = 0;
+        // The current StopFailure already owns this delivery's authentication check.
+        if (awaitingAuth || (await this.checkAuth(scene.runtime))?.status !== 'failure') return false;
+      }
       if (tracked.delivery !== delivery) return false;
       await this.coordinator.applyScreenEvidence({runtime:scene.runtime,runId:scene.runId,
         current:await this.readIdentity(scene.sessionGroup),matches,identity:state.healthIdentity});
@@ -252,7 +256,7 @@ export class SupervisorHealthObserver {
     } else {tracked.sticky = null;tracked.rateHits=0;}
     return false;
   }
-  async observeScene(scene) {
+  async observeScene(scene, {awaitingAuth = false} = {}) {
     if (this.stopped || !scene.ready || !scene.runId) return;
     const tracked = this.sceneState(scene), state = await this.readState(scene), now = this.now();
     if(tracked.pendingStop) {
@@ -267,7 +271,7 @@ export class SupervisorHealthObserver {
       // A pending pair/grace owns recovery for this scene. Do not run a second
       // screen-triggered recovery or tool watchdog in parallel with it.
       if (await this.observeDelivery(scene, tracked, delivery, state, now)) return;
-      if (!delivery.screenChecked && now - delivery.pastedAt >= USER_MESSAGE_CHECK_DELAY_MS && await this.checkDeliveredScreen(scene, tracked, delivery, state, now)) return;
+      if (!delivery.screenChecked && now - delivery.pastedAt >= USER_MESSAGE_CHECK_DELAY_MS && await this.checkDeliveredScreen(scene, tracked, delivery, state, now, awaitingAuth)) return;
     }
     if (!tools.length) {tracked.watchdog=null;return;}
     if (this.coordinator.store(scene.runtime).read().health !== 'ok') {tracked.watchdog=null;return;}

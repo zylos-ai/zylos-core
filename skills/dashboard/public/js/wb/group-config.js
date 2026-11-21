@@ -1,5 +1,5 @@
 import { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES, runtimesWith } from '../../runtime-descriptors.js';
-import { element, runtimeName } from './plain-text.js';
+import { element, icon, runtimeName } from './plain-text.js';
 
 export function responseError(value, fallback = 'request_failed') {
   const error = value?.error;
@@ -39,9 +39,10 @@ export function validConfigChange(change) {
 }
 
 export function createGroupConfig({ key, request, onChange = () => {}, t = key => key, active = () => true }) {
-  const state = { value: null, result: '', error: null, busy: false, meta: {} };
+  const state = { value: null, result: '', restartResult: '', error: null, busy: false, meta: {} };
   const publish = () => { if (active()) onChange(state); };
   const thresholdRequests = new Set();
+  let confirming = false;
   async function loadThreshold(runtime, model) {
     if (!model || !SUPPORTED_RUNTIMES.includes(runtime) || Number.isFinite(state.meta[runtime]?.model_thresholds?.[model])) return;
     const id = runtime + ':' + model;
@@ -54,7 +55,7 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
       publish();
     } catch { /* Keep the threshold explicitly unknown until the editor is opened again. */ }
   }
-  // Model and effort choices per engine; without them the editor falls back to free text.
+  // The editor accepts a typed model when the catalog is unavailable.
   async function loadMeta(runtime) {
     if (!SUPPORTED_RUNTIMES.includes(runtime) || runtime in state.meta) return state.meta[runtime];
     state.meta[runtime] = undefined;
@@ -78,46 +79,90 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
   }
   return {
     state, load, loadMeta, loadThreshold, redraw: publish,
-    async save(change) {
-      if (state.busy) return;
-      if (!validConfigChange(change)) {
+    async save(changes, { confirm, restart } = {}) {
+      if (!active() || confirming || state.busy || !changes.length) return;
+      if (!changes.every(validConfigChange)) {
         state.error = t('wb.config.pairRequired');
         publish();
-        return { ok: false, error: { code: 'MODEL_PAIR_REQUIRED' } };
+        return;
+      }
+      if (confirm) {
+        confirming = true;
+        try {
+          if (!await confirm() || !active()) return;
+        } finally { confirming = false; }
       }
       state.busy = true;
       state.error = null;
+      state.result = '';
+      state.restartResult = '';
       publish();
       try {
-        let result;
-        try {
-          result = await request(`/api/groups/${encodeURIComponent(key)}/config`, {
-            method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(change),
-          });
-        } catch (error) {
-          if (error.name === 'AbortError' || !active()) return;
-          result = error.body ?? { ok: false, unknown: true };
+        let pending = false;
+        let last;
+        for (const change of changes) {
+          let result;
+          try {
+            result = await request(`/api/groups/${encodeURIComponent(key)}/config`, {
+              method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(change),
+            });
+          } catch (error) {
+            if (error.name === 'AbortError' || !active()) return;
+            result = error.body ?? { unknown: true };
+          }
+          if (!active()) return;
+          const setting = t(change.kind === 'runtime' ? 'wb.term.runtime' : 'wb.config.model');
+          const unknown = result?.unknown === true || typeof result?.ok !== 'boolean';
+          if (unknown) {
+            // Check the saved settings once after a lost reply, with no second write.
+            try { await load(); } catch { /* Keep the previously confirmed settings visible. */ }
+            if (active()) state.error = t('wb.config.saveUncertain', { setting });
+            return;
+          }
+          if (result.ok !== true) {
+            state.error = t('wb.config.saveFailed', { setting, reason: responseError(result) });
+            return;
+          }
+
+          const data = result.data ?? result;
+          pending ||= data.running?.status === 'pending';
+          last = { data, kind: change.kind };
+          rememberWrite(state, change, result);
+          if (change.kind === 'runtime') {
+            state.result = t(change.value === 'inherit' ? 'wb.config.followGlobalSaved' : 'wb.config.runtimeSaved');
+          }
         }
-        if (!active()) return;
-        if (typeof result?.ok !== 'boolean') result = { ok: false, unknown: true };
-        if (result?.unknown === true) {
-          state.result = t('wb.config.resultUnknown');
-          // A lost response is queried once, never submitted again.
-          try { await load(); } catch { state.error = t('wb.readFailed'); }
-        } else if (result.ok === false) {
-          state.error = responseError(result);
+
+        const followsGlobal = changes.some(change => change.kind === 'runtime' && change.value === 'inherit');
+        const saved = t(followsGlobal ? 'wb.config.followGlobalSaved' : 'wb.config.saved');
+        state.result = saved;
+        if (restart && pending) {
+          publish();
+          const outcome = await restart();
+          if (active()) state.restartResult = outcome;
         } else {
-          state.result = runningText(result.data ?? result, change.kind, t);
-          // Preserve the authoritative submitted result; the next explicit read
-          // refreshes the complete runtime/model configuration.
-          state.value = { ...state.value, [change.kind]: result };
+          const status = pending ? t('wb.config.pending') : runningText(last.data, last.kind, t);
+          state.result += ' · ' + status;
         }
-        return result;
       } finally {
         if (active()) { state.busy = false; publish(); }
       }
     },
   };
+}
+
+// Keep each successful write as the editor's baseline, including when the next write fails.
+function rememberWrite(state, change, result) {
+  const desired = result.data?.desired ?? (change.kind === 'runtime'
+    ? { runtime: change.value }
+    : { runtime: change.runtime, mode: change.reset ? 'default' : 'override', model: change.model, effort: change.effort });
+  const envelope = { ...result, data: { ...result.data, desired } };
+  state.value = { ...state.value, [change.kind]: envelope };
+  if (change.kind === 'model' && Array.isArray(state.value.modelOverrides)) {
+    const overrides = state.value.modelOverrides.filter(item => item.runtime !== change.runtime);
+    if (desired.mode === 'override') overrides.push(desired);
+    state.value.modelOverrides = overrides;
+  }
 }
 
 export function configSummary(value) {
@@ -126,10 +171,8 @@ export function configSummary(value) {
   return [runtime.runtime, runtime.model, runtime.effort].filter(Boolean).join(' · ');
 }
 
-/** Model choices for an engine: the catalog plus the saved value when the catalog does not list it. */
-export function modelChoices(meta, current) {
-  if (!meta) return null;
-  const list = meta.models.map(item => ({ value: item.id, label: item.display_name ?? item.id }));
+function modelChoices(meta, current) {
+  const list = (meta?.models ?? []).map(item => ({ value: item.id, label: item.display_name ?? item.id }));
   if (current && !list.some(item => item.value === current)) list.unshift({ value: current, label: current });
   return list;
 }
@@ -140,92 +183,146 @@ export function effortChoices(meta, model, current) {
   return list;
 }
 
-/**
- * The pair the editor starts from for one engine: the group's own setting, else what this group is running,
- * else what it would launch with. Never another group's or the machine's model; empty means "not chosen yet".
- */
-export function startingPair(value, runtime) {
-  const data = value?.model?.data;
-  const candidates = [data?.desired?.mode === 'override' ? data.desired : null, data?.running?.launchConfig, data?.resolved];
-  const pair = candidates.find(item => item?.runtime === runtime && typeof item.model === 'string' && item.model);
-  return pair ? { model: pair.model, effort: typeof pair.effort === 'string' ? pair.effort : '' } : { model: '', effort: '' };
+function savedPair(value, runtime) {
+  if (runtimesWith('modelOverride', 'unsupported').includes(runtime)) return { model: '', effort: '' };
+  const envelope = value?.model;
+  const data = envelope?.data;
+  const hasCurrentPair = envelope?.ok !== false && (data?.runtime ?? data?.desired?.runtime) === runtime && Boolean(runtime);
+  const pair = hasCurrentPair ? (data.desired?.mode === 'override' ? data.desired : null)
+    : value?.modelOverrides?.find(item => item.runtime === runtime);
+  if (!hasCurrentPair && !Array.isArray(value?.modelOverrides)) return null;
+  return { model: pair?.model ?? '', effort: pair?.effort ?? '' };
 }
 
-// Edit form: engine, model and effort as one pair with save and cancel. The per-group engine
-// switch and the reset to the default model stay on a second, quieter line.
-export function renderGroupConfig(root, controller, { document = root.ownerDocument, t = key => key, writable = true, rotationThreshold = null, onCancel = () => {} } = {}) {
+export function renderGroupConfig(root, controller, { document = root.ownerDocument, t = key => key, writable = true,
+  defaultRuntime, rotationThreshold = null, onSave = controller.save, onCancel = () => {} } = {}) {
   const { state } = controller;
   state.draft ??= {};
-  const locked = !writable || state.busy;
+  const engine = state.value?.runtime;
+  const ready = Boolean(engine?.data && engine.ok !== false);
+  const locked = !writable || state.busy || !ready;
   const option = (value, label = value) => { const node = element(document, 'option', label); node.value = value; return node; };
-  const select = (label, choices, value, placeholder) => {
-    const node = element(document, 'select'); node.setAttribute('aria-label', label);
-    if (placeholder) node.append(option('', placeholder));
+  const select = (label, choices, value) => {
+    const node = element(document, 'select', undefined, 'wb-input wb-select');
+    node.setAttribute('aria-label', label);
     for (const item of choices) node.append(option(item.value ?? item, item.label ?? item));
-    node.value = value; node.disabled = locked; return node;
+    node.value = value;
+    return node;
   };
-  const resolved = state.value?.runtime?.data?.resolved?.runtime ?? DEFAULT_RUNTIME;
-  const target = select(t('wb.config.targetRuntime'), SUPPORTED_RUNTIMES.map(value => ({ value, label: runtimeName(value) })), state.draft.target ?? resolved);
-  const supportsModelOverride = !runtimesWith('modelOverride', 'unsupported').includes(target.value);
-  const meta = state.meta?.[target.value];
-  const start = startingPair(state.value, target.value);
-  const modelValue = state.draft.model ?? start.model;
-  const choices = modelChoices(meta, modelValue);
-  const model = choices?.length ? select(t('wb.config.model'), choices, modelValue, t('wb.config.pickModel')) : element(document, 'input');
-  if (!choices?.length) {
-    model.value = modelValue; model.placeholder = t('wb.config.model'); model.setAttribute('aria-label', t('wb.config.model')); model.disabled = locked;
+  const field = (label, control) => {
+    const wrapper = element(document, 'label', undefined, 'wb-cfg-field');
+    wrapper.append(element(document, 'span', label, 'wb-cfg-label'));
+    if (control.tagName === 'SELECT') {
+      const selectWrap = element(document, 'span', undefined, 'wb-select-wrap');
+      selectWrap.append(control, icon(document, 'chev', 'xs'));
+      wrapper.append(selectWrap);
+    } else {
+      wrapper.append(control);
+    }
+    return wrapper;
+  };
+  const savedRuntime = engine?.data?.desired?.runtime ?? 'inherit';
+  const runtimeLabel = t('wb.term.runtime');
+  const runtime = select(runtimeLabel, ['inherit', ...SUPPORTED_RUNTIMES].map(value => ({
+    value, label: value === 'inherit' ? t('wb.config.followGlobal') : runtimeName(value),
+  })), state.draft.runtime ?? savedRuntime);
+  runtime.disabled = locked;
+  const resolved = engine?.data?.resolved?.runtime ?? DEFAULT_RUNTIME;
+  const target = runtime.value === 'inherit' ? defaultRuntime ?? (savedRuntime === 'inherit' ? resolved : null) : runtime.value;
+  const supportsModelOverride = !runtimesWith('modelOverride', 'unsupported').includes(target);
+  const start = savedPair(state.value, target);
+  const meta = state.meta[target];
+  const modelLabel = t('wb.config.model');
+  const effortLabel = t('wb.term.effort');
+  const pairLocked = locked || !supportsModelOverride || start == null;
+  const draft = state.draft.modelRuntime === target ? state.draft : {};
+  const manualModel = start != null && supportsModelOverride && !meta?.models?.length;
+  const modelValue = draft.model ?? start?.model ?? '';
+  const model = manualModel ? element(document, 'input') : select(modelLabel, [
+    { value: '', label: t(start == null ? 'wb.unknown' : 'wb.config.followGlobal') },
+    ...modelChoices(!supportsModelOverride ? null : meta, modelValue),
+  ], modelValue);
+  if (manualModel) {
+    model.type = 'text';
+    model.value = modelValue;
+    model.placeholder = t('wb.config.followGlobal');
+    model.setAttribute('aria-label', modelLabel);
   }
-  const effortValue = state.draft.effort ?? start.effort;
+  model.disabled = pairLocked;
+  const modelId = () => model.value.trim() ? model.value : '';
+  const effortOptions = (modelId, current) => [
+    option('', t('wb.config.pickEffort')),
+    ...(modelId ? effortChoices(meta, modelId, current).map(value => option(value)) : []),
+  ];
+  const effort = select(effortLabel, [], '');
+  const setEffort = value => {
+    effort.replaceChildren(...effortOptions(modelId(), value));
+    effort.value = value;
+    effort.disabled = pairLocked || !modelId();
+  };
+  setEffort(draft.effort ?? start?.effort ?? '');
+  if (ready && supportsModelOverride) void controller.loadMeta(target);
+
   const threshold = element(document, 'p', '', 'wb-note wb-cfg-threshold');
   threshold.setAttribute('aria-live', 'polite');
   const showThreshold = () => {
-    const selected = model.value.trim() || state.meta?.[target.value]?.current_model;
-    const value = selected ? state.meta?.[target.value]?.model_thresholds?.[selected] : target.value === resolved ? rotationThreshold : null;
+    const selected = modelId() || meta?.current_model;
+    const value = selected ? state.meta[target]?.model_thresholds?.[selected] : target === resolved ? rotationThreshold : null;
     threshold.textContent = Number.isFinite(value) ? t('wb.config.modelThreshold', { value }) : t('wb.config.modelThresholdUnknown');
-    if (selected && !Number.isFinite(value) && meta) void controller.loadThreshold?.(target.value, selected);
+    if (selected && !Number.isFinite(value) && meta) void controller.loadThreshold(target, selected);
   };
-  showThreshold();
-  const effort = select(t('wb.term.effort'), effortChoices(meta, model.value, effortValue), effortValue, t('wb.config.pickEffort'));
-  if (!supportsModelOverride) { model.disabled = true; effort.disabled = true; }
-  target.addEventListener('change', () => {
-    state.draft = { ...state.draft, target: target.value, model: undefined, effort: undefined };
-    void controller.loadMeta?.(target.value);
-    controller.redraw?.();
+  if (supportsModelOverride) showThreshold();
+
+  const changes = () => {
+    const edits = [];
+    const selected = modelId();
+    if (runtime.value !== savedRuntime) edits.push({ kind: 'runtime', value: runtime.value });
+    if (!pairLocked && (selected !== start.model || (selected && effort.value !== start.effort))) {
+      edits.push(selected ? { kind: 'model', runtime: target, model: selected, effort: effort.value }
+        : { kind: 'model', runtime: target, reset: true });
+    }
+    return edits;
+  };
+  const save = element(document, 'button', t('wb.config.save'), 'wb-btn wb-btn-primary wb-btn-sm');
+  save.type = 'button';
+  const syncSave = () => {
+    const edits = changes();
+    save.disabled = locked || edits.length === 0 || !edits.every(validConfigChange);
+  };
+  const rememberPair = () => { Object.assign(state.draft, { modelRuntime: target, model: modelId(), effort: effort.value }); };
+  runtime.addEventListener('change', () => {
+    state.draft = { runtime: runtime.value };
+    controller.redraw();
   });
-  const save = element(document, 'button', t('wb.config.save'), 'wb-btn wb-btn-primary wb-btn-sm'); save.type = 'button';
-  // Saving writes this group's own pair, so both halves must be chosen on purpose.
-  const syncSave = () => { save.disabled = locked || !supportsModelOverride || !model.value.trim() || !effort.value; };
-  model.addEventListener(choices?.length ? 'change' : 'input', () => {
-    state.draft.model = model.value;
-    const kept = effort.value;
-    const options = effortChoices(meta, model.value, kept);
-    effort.replaceChildren(option('', t('wb.config.pickEffort')), ...options.map(value => option(value)));
-    effort.value = options.includes(kept) ? kept : '';
-    state.draft.effort = effort.value;
-    showThreshold(); syncSave();
+  model.addEventListener(manualModel ? 'input' : 'change', () => {
+    const selected = modelId();
+    const kept = selected && effortChoices(meta, selected).includes(effort.value) ? effort.value : '';
+    setEffort(kept);
+    rememberPair(); showThreshold(); syncSave();
   });
-  effort.addEventListener('change', () => { state.draft.effort = effort.value; syncSave(); });
+  effort.addEventListener('change', () => { rememberPair(); syncSave(); });
   syncSave();
-  save.addEventListener('click', () => controller.save({ kind: 'model', runtime: target.value, model: model.value, effort: effort.value }));
-  const cancel = element(document, 'button', t('wb.cancel'), 'wb-btn wb-btn-sm'); cancel.type = 'button';
+  save.addEventListener('click', () => { if (!save.disabled) void onSave(changes()); });
+  const cancel = element(document, 'button', t('wb.cancel'), 'wb-btn wb-btn-sm');
+  cancel.type = 'button';
+  cancel.disabled = state.busy;
   cancel.addEventListener('click', () => { state.draft = {}; onCancel(); });
+
   const form = element(document, 'div', undefined, 'wb-cfg-edit');
-  const pair = element(document, 'div', undefined, 'wb-cfg-controls');
-  pair.append(target, model, effort, save, cancel);
-  form.append(pair, threshold, element(document, 'p', t(supportsModelOverride ? 'wb.config.pairNote' : 'wb.config.modelUnavailable'), 'wb-note'));
-  // Less common: which engine this group runs on, and dropping its own model pair.
-  const runtime = select(t('wb.term.runtime'), ['inherit', ...SUPPORTED_RUNTIMES].map(value => ({ value, label: value === 'inherit' ? t('wb.term.inherit') : runtimeName(value) })),
-    state.draft.runtime ?? state.value?.runtime?.data?.desired?.runtime ?? 'inherit');
-  runtime.addEventListener('change', () => { state.draft.runtime = runtime.value; });
-  const saveRuntime = element(document, 'button', t('wb.config.saveRuntime'), 'wb-btn wb-btn-sm'); saveRuntime.type = 'button'; saveRuntime.disabled = locked;
-  saveRuntime.addEventListener('click', () => controller.save({ kind: 'runtime', value: runtime.value }));
-  const reset = element(document, 'button', t('wb.config.resetModel'), 'wb-link-btn'); reset.type = 'button'; reset.disabled = locked || !supportsModelOverride;
-  reset.addEventListener('click', () => controller.save({ kind: 'model', runtime: target.value, reset: true }));
-  const more = element(document, 'div', undefined, 'wb-cfg-more');
-  more.append(element(document, 'span', t('wb.term.runtime'), 'wb-cfg-label'), runtime, saveRuntime, reset);
-  form.append(more);
+  const engineRow = element(document, 'div', undefined, 'wb-cfg-controls wb-cfg-engine');
+  engineRow.append(field(runtimeLabel, runtime));
+  const modelRow = element(document, 'div', undefined, 'wb-cfg-controls wb-cfg-model');
+  modelRow.append(field(modelLabel, model), field(effortLabel, effort));
+  const actions = element(document, 'div', undefined, 'wb-cfg-controls wb-cfg-actions');
+  actions.append(save, cancel);
+  form.append(engineRow, modelRow, !supportsModelOverride
+    ? element(document, 'p', t('wb.config.modelUnavailable'), 'wb-note') : threshold, actions);
   root.append(form);
   if (!writable) root.append(element(document, 'p', t('wb.readOnly'), 'wb-note'));
-  if (state.result) root.append(element(document, 'p', state.result, 'wb-config-result'));
+  const feedback = element(document, 'div');
+  feedback.setAttribute('role', 'status');
+  if (state.result) feedback.append(element(document, 'p', state.result, 'wb-config-result'));
+  if (state.restartResult) feedback.append(element(document, 'p', state.restartResult, 'wb-config-result'));
+  root.append(feedback);
   if (state.error) root.append(element(document, 'p', state.error, 'wb-config-error'));
 }

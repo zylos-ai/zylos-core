@@ -61,7 +61,12 @@
   },
   {
     "file": "skills/activity-monitor/scripts/health-evidence.js",
-    "text": "const health = event.error === 'rate_limit' ? 'rate_limited' : event.error === 'authentication_failed' ? 'auth_failed' : event.runtime === 'agy' ? 'unavailable' : null;",
+    "text": "(event.runtime !== 'claude' || (authConfirmed && !modelAccessFailure));",
+    "reason": "dispatch:health: #1527 Claude StopFailure 登录确认；块 9 移除。"
+  },
+  {
+    "file": "skills/activity-monitor/scripts/health-evidence.js",
+    "text": "const health = error === 'rate_limit' ? 'rate_limited' : authFailure ? 'auth_failed' : event.runtime === 'agy' ? 'unavailable' : null;",
     "reason": "dispatch:health: Interprets runtime-specific hook and failure evidence."
   },
   {
@@ -90,6 +95,11 @@
     "reason": "dispatch:usage: Maps known transcript path markers to their runtime."
   },
   {
+    "file": "skills/activity-monitor/scripts/runtime-health.js",
+    "text": "if (!options?.auth && runtime === 'claude' && event.event === 'stop_failure' &&",
+    "reason": "dispatch:health: #1527 Claude StopFailure 登录确认；块 9 移除。"
+  },
+  {
     "file": "skills/activity-monitor/scripts/supervisor-health-observer.js",
     "text": "const continuationOwnsScreen=scene.runtime==='claude' && retry?.runId===scene.runId && retry.sessionId===scene.sessionId;",
     "reason": "dispatch:health: Lets matching Claude continuation own screen recovery."
@@ -106,7 +116,7 @@
   },
   {
     "file": "skills/activity-monitor/scripts/supervisor-main.js",
-    "text": "if(scene.runtime==='claude') await coordinator.serial(scene.runtime,()=>processFailureContinuation({",
+    "text": "if(scene.runtime==='claude' && !awaitingAuth) await coordinator.serial(scene.runtime,()=>processFailureContinuation({",
     "reason": "dispatch:health: Chooses the runtime health probe or invokes Claude failure continuation."
   },
   {

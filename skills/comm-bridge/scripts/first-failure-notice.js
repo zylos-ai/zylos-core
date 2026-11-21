@@ -2,6 +2,8 @@ import { isMainModule } from './is-main-module.js';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getDb, close, clearStatusNoticeCooldownReservation } from './c4-db.js';
+import { PENDING_MAX_AGE_SECONDS } from './c4-config.js';
+import { createStore } from './c4-v2-store.js';
 import { reserveStatusNotice, sendStatusNotice, logStatusNotice } from './status-notice.js';
 import { messageForStatus } from './status-notice-templates.js';
 import { readDeliveryIdentity } from './runtime-delivery.js';
@@ -10,19 +12,38 @@ import { currentOutageNotice } from '../../activity-monitor/scripts/outage-notic
 
 export const FIRST_NOTICE_QUOTA_WAIT_MS = 750;
 
+const externalChannels = "channel NOT IN ('void','system','internal','control','scheduler')";
+const deliveredInbound = "direction='in' AND status IN ('running','delivered') AND endpoint_id IS NOT NULL AND endpoint_id!=''";
+
 // Called before the atomic health write; this endpoint cannot change afterwards.
 export function freezeFirstFailureNotice(database, { runtime, identity, event, result, sessionGroup = null }) {
   if (event.event !== 'stop_failure' || result.status !== 'processed' || result.verify || !result.notice?.eligible ||
       !identity?.session_id || !Number.isSafeInteger(identity.claude_pid) || identity.claude_pid<=0) return null;
   const target = database.prepare(`SELECT id, channel, endpoint_id FROM conversations
-    WHERE direction='in' AND status IN ('running','delivered') AND endpoint_id IS NOT NULL AND endpoint_id!=''
-    AND channel NOT IN ('void','system','internal','control','scheduler')
-    AND (? IS NULL OR session_group IS ?) ORDER BY id DESC LIMIT 1`).get(sessionGroup, sessionGroup);
+    WHERE ${deliveredInbound}
+    AND (${externalChannels} OR (channel='internal' AND ? IS NOT NULL))
+    AND (? IS NULL OR session_group IS ?) ORDER BY id DESC LIMIT 1`).get(sessionGroup, sessionGroup, sessionGroup);
   if (!target) return null;
   return { event_id:event.event_id, runtime, session_group:sessionGroup, session_id:identity.session_id,
     claude_pid:identity.claude_pid, conversation_id:target.id, channel:target.channel, endpoint:target.endpoint_id,
-    health:event.error === 'rate_limit' ? 'rate_limited' : event.error === 'authentication_failed' ? 'auth_failed' : 'unavailable',
+    health:event.error === 'rate_limit' ? 'rate_limited' : result.notice.noticeCode === 'auth_failed' ? 'auth_failed' : 'unavailable',
     reason:result.notice.reason || event.error, error:event.error, created_at:event.received_at, notice:result.notice, status:'pending' };
+}
+
+function findExternalFallback(database, intent, sessionGroup) {
+  return database.prepare(`
+    SELECT candidate.channel, candidate.endpoint_id
+    FROM (
+      SELECT id, channel, endpoint_id, timestamp FROM conversations
+      WHERE session_group=? AND id<? AND ${externalChannels} AND ${deliveredInbound}
+      ORDER BY id DESC LIMIT 1
+    ) candidate
+    WHERE ? - unixepoch(candidate.timestamp) <= ?
+      AND NOT EXISTS (
+        SELECT 1 FROM conversations
+        WHERE session_group=? AND id>candidate.id AND direction='out' AND ${externalChannels}
+      )
+  `).get(sessionGroup,intent.conversation_id,intent.created_at / 1000,PENDING_MAX_AGE_SECONDS,sessionGroup);
 }
 
 function sameScope(intent, identity) {
@@ -76,7 +97,7 @@ export async function processFirstFailureNotices({ store, database = getDb(), id
   const finish = status => mutate(() => store.updatePending(intent.event_id, {status, updated_at:now()},sessionGroup));
   const current = await identity();
   if (!sameScope(intent,current)) { await finish('stale'); return 1; }
-  const target = database.prepare('SELECT status, session_group FROM conversations WHERE id=?').get(intent.conversation_id);
+  const target = database.prepare('SELECT status, session_group, delivery_action FROM conversations WHERE id=?').get(intent.conversation_id);
   if (!['running','delivered'].includes(target?.status)) { await finish('suppressed'); return 1; }
   let notice = intent.notice;
   if (intent.error === 'rate_limit') {
@@ -89,23 +110,54 @@ export async function processFirstFailureNotices({ store, database = getDb(), id
   }
   const route = {sessionGroup:target.session_group === '' ? 'origin' : target.session_group, runtime:intent.runtime,
     health:intent.health, reason:intent.reason, context:'failure',noticeKind:'first-failure',noticeCode:notice?.noticeCode,resetAt:notice?.resetAt};
+  const message = messageForStatus(route);
+  // A restart after this point must never resend this same pending intent.
+  const markSending = () => mutate(() => store.updatePending(intent.event_id,{status:'sending',updated_at:now()},sessionGroup));
+  const clearClaim = claim => clearStatusNoticeCooldownReservation(claim.key,claim.reservedAt,database);
+  const sendExternal = async claim => {
+    let outcome = 'uncertain';
+    try { outcome = (await send(claim,message,route,{zylosDir})).outcome; }
+    catch { /* The channel might have accepted the send. Keep its reservation. */ }
+    if (outcome === 'failed') clearClaim(claim);
+    return outcome;
+  };
+
+  if (intent.channel === 'internal') {
+    if (!sameScope(intent,await identity())) { await finish('stale'); return 1; }
+    if (!await markSending()) return 0;
+
+    let receiptOutcome = 'suppressed';
+    if (target.delivery_action !== 'failure_receipt') {
+      let receiptClaim;
+      try {
+        receiptClaim = reserve('internal',intent.endpoint,route);
+        if (!receiptClaim.suppressed && createStore(database).enqueueFailureReceipt(intent.conversation_id,message)) {
+          receiptOutcome = 'sent';
+        }
+      } catch { receiptOutcome = 'failed'; }
+      if (receiptClaim && !receiptClaim.suppressed && receiptOutcome !== 'sent') clearClaim(receiptClaim);
+    }
+
+    const external = findExternalFallback(database,intent,target.session_group);
+    let externalClaim;
+    if (external) {
+      try { externalClaim = reserve(external.channel,external.endpoint_id,route); }
+      catch { await finish('failed'); return 1; }
+    }
+    await finish(externalClaim && !externalClaim.suppressed ? await sendExternal(externalClaim) : receiptOutcome);
+    return 1;
+  }
+
   let claim;
   try { claim = reserve(intent.channel,intent.endpoint,route); }
   catch { await finish('failed'); return 1; }
   if (claim.suppressed) { await finish('suppressed'); return 1; }
   if (!sameScope(intent,await identity())) {
-    clearStatusNoticeCooldownReservation(claim.key,claim.reservedAt,database);
+    clearClaim(claim);
     await finish('stale'); return 1;
   }
-  // A restart after this point must never resend this same pending intent.
-  if (!await mutate(() => store.updatePending(intent.event_id,{status:'sending',updated_at:now()},sessionGroup))) {
-    clearStatusNoticeCooldownReservation(claim.key,claim.reservedAt,database);
-    return 0;
-  }
-  let outcome = 'uncertain';
-  try { outcome = (await send(claim,messageForStatus(route),route,{zylosDir})).outcome; }
-  catch { /* The channel might have accepted the send. Keep its reservation. */ }
-  if (outcome === 'failed') clearStatusNoticeCooldownReservation(claim.key,claim.reservedAt,database);
+  if (!await markSending()) { clearClaim(claim); return 0; }
+  const outcome = await sendExternal(claim);
   await finish(outcome);
   return 1;
 }
