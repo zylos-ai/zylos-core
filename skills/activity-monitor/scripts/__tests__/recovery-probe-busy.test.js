@@ -17,7 +17,7 @@ function fixture(t) {
   let scenes = [], nextId = 1;
   const activity = new Map(), controls = [], stops = [], fences = new Set(), errors = [];
   const coordinator = new RuntimeHealthCoordinator({ zylosDir: root, now: () => now,
-    resolveTargetRuntime: () => 'claude', listScenes: () => scenes });
+    resolveTargetRuntime: () => 'claude', listScenes: () => scenes, checkAuth: () => ({status:'failure'}) });
   const observer = new SupervisorHealthObserver({ coordinator, now: () => now,
     listScenes: () => scenes,
     readIdentity: group => scenes.find(scene => scene.sessionGroup === group),

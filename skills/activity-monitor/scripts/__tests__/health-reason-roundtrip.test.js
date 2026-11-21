@@ -34,7 +34,7 @@ test('recovery clears current reason while frozen historical notice keeps origin
  let now=1000000;const identity={runtime:'claude',session_id:'s',claude_pid:123};
  const store=new HealthStore({zylosDir,now:()=>now,freezeNotice:input=>freezeFirstFailureNotice(database,{...input,sessionGroup:null})});
  const event={schema_version:1,source:'hook',runtime:'claude',event_id:randomUUID(),session_id:'s',claude_pid:123,prompt_id:'p',event:'stop_failure',error:'authentication_failed',received_at:now};
- store.consume(event,{identity});const failed=store.read();const pending=failed.pending_notice;
+ store.consume(event,{identity,authConfirmed:true});const failed=store.read();const pending=failed.pending_notice;
  now++;store.consume({...event,event_id:randomUUID(),event:'stop',error:null,received_at:now},{identity});assert.equal(store.read().health,'auth_failed');
  now++;store.transition('ok','authentication_failed',{identity,kind:'recovery'});
  const rebuilt=new HealthStore({zylosDir,now:()=>now});const recovered=rebuilt.read();

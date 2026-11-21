@@ -137,7 +137,7 @@ test('same-session recovery, normal Stop, new prompt and AM restart permit a new
   const restarted=new HealthStore({zylosDir:f.zylosDir,now:f.now,freezeNotice:input=>freezeFirstFailureNotice(f.db,{...input,sessionGroup:'fake'})});
   f.db.prepare("INSERT INTO conversations(session_group,direction,channel,endpoint_id,content,status) VALUES('fake','in','fake','next','test','delivered')").run();
   f.setTime(at+30);const next=f.collect({prompt_id:'next',error:'authentication_failed'});
-  const result=restarted.consume(next,{identity:f.identity});
+  const result=restarted.consume(next,{identity:f.identity,authConfirmed:true});
   assert.equal(result.reason,'hook_failure');assert.equal(restarted.read().health,'auth_failed');
   assert.equal(restarted.read().recovered,null);assert.equal(restarted.read().pending_notice.endpoint,'next');
   await processFirstFailureNotices({store:restarted,database:f.db,identity:()=>f.identity,now:f.now,reserve,send});
@@ -230,7 +230,7 @@ async function exactRecoveryRegression(t) {
   f.setTime(at+30);const next=f.collect({prompt_id:'next',error:'authentication_failed'});
   let publications=0;const publish=restarted.write.bind(restarted);
   restarted.write=(...args)=>{publish(...args);publications++;};
-  assert.equal(restarted.consume(next,{identity:f.identity}).reason,'hook_failure');
+  assert.equal(restarted.consume(next,{identity:f.identity,authConfirmed:true}).reason,'hook_failure');
   assert.equal(publications,1);
   const committed=JSON.parse(fs.readFileSync(restarted.file,'utf8'));
   assert.equal(committed.health,'auth_failed');
@@ -245,7 +245,7 @@ async function exactRecoveryRegression(t) {
     send:async(claim,message,route)=>{sent.push({endpoint:claim.endpoint,health:route.health});return {outcome:'sent'};}});
   assert.deepEqual(sent,[{endpoint:'next',health:'auth_failed'}]);
   const afterSend=fs.readFileSync(restarted.file,'utf8');
-  assert.equal(restarted.consume(next,{identity:f.identity}).reason,'replay');
+  assert.equal(restarted.consume(next,{identity:f.identity,authConfirmed:true}).reason,'replay');
   assert.equal(fs.readFileSync(restarted.file,'utf8'),afterSend);
 }
 test('same-identity recovery rejects intervening old event but atomically commits later failure', exactRecoveryRegression);
