@@ -2795,14 +2795,15 @@ async function refreshCoreUpdate() {
   coreUpdate = value; refreshSettingsVersion();
 }
 // zylos upgrades are done by the agent itself (it can recover from a failed upgrade): the page shows what to ask
-// the agent, and confirming copies it.
+// the agent, and confirming copies it. The copy result sits just after the card's redrawn body, so refreshing the
+// card keeps it; closing settings clears it (resetSettingsDrafts).
 async function offerCoreUpgrade(prompt) {
   const status = settingsVersionRoot;
   if (!(await confirmSetting(prompt, { title: t('wb.settings.version.copyTitle'), ok: t('wb.settings.version.copy'), danger: false }))) return;
   let copied = false;
   try { await navigator.clipboard.writeText(prompt); copied = true; } catch {}
-  const note = status.querySelector('#settings-zylos-copied') ?? Object.assign(document.createElement('p'), { id: 'settings-zylos-copied', className: 'wb-note' });
-  note.setAttribute('role', 'status'); note.textContent = t(copied ? 'wb.settings.version.copied' : 'wb.settings.version.copyFailed'); status.append(note);
+  const note = status.parentElement.querySelector('#settings-zylos-copied') ?? Object.assign(document.createElement('p'), { id: 'settings-zylos-copied', className: 'wb-note' });
+  note.setAttribute('role', 'status'); note.textContent = t(copied ? 'wb.settings.version.copied' : 'wb.settings.version.copyFailed'); status.after(note);
 }
 function refreshSettingsLocks() {
   if (!settingsPage) return;

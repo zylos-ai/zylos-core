@@ -183,4 +183,5 @@ export function resetSettingsDrafts(root) {
   for (const selector of ['#settings-defaults', '#settings-idle-reclaim', '#settings-price-rows', '#settings-priority-price-rows']) root.querySelector(selector)?.replaceChildren();
   for (const node of root.querySelectorAll('#settings-save, #settings-add-model, #settings-add-priority-model, #settings-fast-multiplier, #action-mode')) node.disabled = true;
   const status = root.querySelector('#settings-status'); if (status) { status.hidden = true; status.textContent = ''; }
+  root.querySelector('#settings-zylos-copied')?.remove();
 }
