@@ -10,16 +10,17 @@ export function deliveryFunctions({ read, write, snapshot, get, all, run, second
     values.forEach(value => requireGroup(value));
     return { sql: values.length ? ` AND session_group IN (${values.map(() => '?').join(',')})` : ' AND 0', args: values };
   }
-  function enqueueReceipt(c, id, reason) {
+  function enqueueReceipt(c, id, reason, message) {
     const row = get(c, 'SELECT id,channel,endpoint_id,session_group,delivery_action FROM conversations WHERE id=?', id);
     if (!row || row.channel !== 'internal' || !row.endpoint_id || row.delivery_action === 'failure_receipt') return;
     // The original sender is immutable routing metadata, never parsed from content.
     requireGroup(row.endpoint_id);
-    insert(c, 'in', 'internal', row.session_group,
-      messageForFailureReceipt({ ...row, reason }), row.endpoint_id,
+    return insert(c, 'in', 'internal', row.session_group,
+      message ?? messageForFailureReceipt({ ...row, reason }), row.endpoint_id,
       { deliveryAction: 'failure_receipt' });
   }
   return {
+    enqueueFailureReceipt: (id, message) => write(c => enqueueReceipt(c, id, null, message)),
     getNextPending: ({ sessionGroups, sessionMode } = {}) => { const filter = groups(sessionGroups); return read(c => get(c, `SELECT * FROM conversations WHERE direction='in' AND status='pending' AND ${deliveryFence(sessionMode)}${filter.sql} ORDER BY priority,id LIMIT 1`, ...filter.args) ?? null); },
     claimConversation: (id, { sessionMode } = {}) => write(c => run(c, `UPDATE conversations SET status='running' WHERE id=? AND direction='in' AND status='pending' AND ${deliveryFence(sessionMode)}`, id).changes > 0),
     requeueConversation: id => write(c => run(c, "UPDATE conversations SET status='pending' WHERE id=? AND direction='in' AND status='running'", id).changes > 0),
