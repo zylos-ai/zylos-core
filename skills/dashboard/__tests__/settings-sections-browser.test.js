@@ -134,13 +134,46 @@ test('the settings page keeps its sections in order, offers the right upgrades a
         assert.match(prompt, /从 v1\.2\.0 升级到 v1\.3\.0/);
         await shot('core-update-question');
         await dialog(page).locator('.wb-modal-acts button').last().click();
-        await card.getByText('已复制，发给 AI 就能让它升级。').waitFor();
+        await page.locator('#settings-zylos-version').getByText('已复制，发给 AI 就能让它升级。').waitFor();
         const copied = await page.evaluate(() => window.__copied);
         assert.equal(copied.length, 1); assert.match(copied[0], /从 v1\.2\.0 升级到 v1\.3\.0/);
         assert.deepEqual(writes, [], 'copying the instruction sends nothing');
         assert.deepEqual(errors, []);
         await context.close();
       }
+    });
+
+    await t.test('the copy result in the zylos version card outlasts the card redrawing and is gone after reopening settings', async () => {
+      const { context, page, errors, pick, shot } = await open(1280, { coreUpdate: { current: '1.2.0', latest: '1.3.0', hasUpdate: true, checkedAt: iso(0) } });
+      await pick('machine');
+      const card = page.locator('#settings-zylos-version'), note = page.locator('#settings-zylos-copied');
+      const copy = async () => { await page.locator('#settings-zylos-update').click(); await dialog(page).locator('.wb-modal-acts button').last().click(); await dialog(page).waitFor({ state: 'detached' }); };
+      // Redraw the card the way the page does (the technical detail switch), and prove the body was drawn anew.
+      const redraw = async () => {
+        await page.locator('#settings-version .wb-version-line').evaluate(line => { line.dataset.before = '1'; });
+        await page.locator('#wb-detail-toggle').dispatchEvent('change');
+        await page.locator('#settings-version .wb-version-line:not([data-before])').waitFor();
+      };
+      await copy();
+      await note.getByText('已复制，发给 AI 就能让它升级。').waitFor();
+      assert.match((await page.evaluate(() => window.__copied))[0], /从 v1\.2\.0 升级到 v1\.3\.0/);
+      await redraw();
+      assert.equal(await card.locator('#settings-zylos-copied').textContent(), '已复制，发给 AI 就能让它升级。', 'the copied note stays after the card redraws');
+      assert.equal(await note.isVisible(), true);
+      await shot('core-update-copied');
+      await page.evaluate(() => { navigator.clipboard.writeText = async () => { throw new Error('denied'); }; });
+      await copy();
+      await note.getByText(/^无法复制/).waitFor();
+      await redraw();
+      assert.equal(await card.locator('#settings-zylos-copied').count(), 1, 'a second copy replaces the note');
+      assert.match(await note.textContent(), /^无法复制/, 'the failure note stays after the card redraws');
+      await openDashboardTab(page, 'overview');
+      await openDashboardTab(page, 'settings');
+      await pick('machine');
+      await card.getByText(/^检查于 /).waitFor();
+      assert.equal(await note.count(), 0, 'reopening settings shows no old copy result');
+      assert.deepEqual(errors, []);
+      await context.close();
     });
 
     await t.test('the default engine card upgrades the engine chosen in it', async () => {

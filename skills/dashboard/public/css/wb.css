@@ -1308,6 +1308,7 @@ main:has(> #tab-settings.active) { padding: 0; }
 
 #settings-version p { margin: 0; color: var(--text); }
 #settings-version p + p { margin-top: 2px; color: var(--text-dim); font-size: 12px; }
+#settings-version + #settings-zylos-copied { margin-top: 2px; color: var(--text-dim); }
 .wb-switch-l { display: inline-flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 12.5px; cursor: pointer; }
 .wb-switch { position: relative; width: 36px; height: 20px; flex: none; margin: 0; border-radius: 10px; background: var(--wb-line-strong); appearance: none; -webkit-appearance: none; cursor: pointer; transition: background .15s; }
 .wb-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--wb-panel); box-shadow: var(--shadow-card); transition: left .15s; }
