@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { after, beforeEach, describe, it } from 'node:test';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-activity-test-'));
@@ -110,6 +112,21 @@ describe('hook-activity', () => {
       }), null);
       assert.equal(fs.existsSync(monitorDir), false);
     }
+  });
+
+  it('malformed stdin logs one error and exits successfully without recording activity', () => {
+    fs.mkdirSync(monitorDir, { recursive: true });
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL('../hook-activity.js', import.meta.url))], {
+      env: { ...process.env, ZYLOS_DIR: tmpDir, HOOK_ACTIVITY_DISABLE_MAIN: '0' },
+      input: '{', encoding: 'utf8', timeout: 3000,
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, '');
+    assert.equal(fs.existsSync(eventsFile), false);
+    const errors = fs.readFileSync(path.join(monitorDir, 'hook-activity-errors.log'), 'utf8');
+    assert.equal(errors.trimEnd().split('\n').length, 1);
   });
 
   it('records PostToolUse as post_tool event', async () => {

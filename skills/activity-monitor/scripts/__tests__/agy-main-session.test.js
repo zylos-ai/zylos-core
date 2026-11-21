@@ -95,6 +95,10 @@ test('terminal custom hook ends normally and next main invocation restores rules
   assert.equal(hooks.normalize({ conversationId: 'parent', ...stop }, 'Stop').hook_event_name, 'Stop');
   await f.send('Stop', 'new-parent', stop);
   assert.equal(await f.send('PreInvocation', 'child', { invocationNum: 0 }), null);
+  const instructions = f.options.instructions;
+  f.options.instructions = () => { throw new Error('fixture: instructions unreadable'); };
+  await assert.rejects(f.send('PreInvocation', 'new-parent', { invocationNum: 2 }), /instructions unreadable/);
+  f.options.instructions = instructions;
   const restored = await f.send('PreInvocation', 'new-parent', { invocationNum: 3 });
   assert.equal(JSON.parse(hooks.output({ event: 'PreInvocation', result: restored })).injectSteps[0].systemMessage.systemMessage, 'COMPLETE_SYSTEM_AND_USER_RULES');
   assert.equal(f.startups.length, 2, 'rule restore must not rerun startup orchestration');

@@ -64,6 +64,13 @@ describe('hook-auth-prompt', () => {
 // runtime or dispatcher: only a private tmux target whose READY is synthesized.
 it('enqueues for the observed registered runtime and falls back to the default', { timeout: 25000 }, t => {
   const f = readyTmuxTarget(t, { prefix: 'auth-target-', mode: 'multi', packageRoot });
+  const database = path.join(f.root, 'comm-bridge/c4.db');
+  assert.equal(f.db.name, database);
+  assert.equal(f.env.HOME, f.root);
+  assert.equal(f.env.ZYLOS_DIR, f.root);
+  assert.ok(f.socketPath.startsWith(f.root + path.sep));
+  t.diagnostic(JSON.stringify({ HOME: f.env.HOME, ZYLOS_DIR: f.env.ZYLOS_DIR,
+    PM2_HOME: f.env.PM2_HOME, TMPDIR: f.env.TMPDIR, socketPath: f.socketPath, database }));
   const controls = path.join(f.root, '.claude/skills/comm-bridge/scripts');
   fs.mkdirSync(controls, { recursive: true });
   fs.symlinkSync(path.join(packageRoot, 'skills/comm-bridge/scripts/c4-control.js'), path.join(controls, 'c4-control.js'));
@@ -71,13 +78,13 @@ it('enqueues for the observed registered runtime and falls back to the default',
   const env = { ...f.env, ZYLOS_RUN_ID: 'run-1', ZYLOS_SESSION_GROUP: 'origin' };
   const rows = f.db.prepare('SELECT raw_content, target_binding FROM control_queue ORDER BY id DESC LIMIT 1');
   const size = f.db.prepare('SELECT count(*) AS count FROM control_queue');
+  const configPath = path.join(f.root, '.zylos/config.json');
   let enqueued = 0;
   for (const [model, expected, policy] of [
     ['{"runtime":"codex"}', 'codex', { auto_approve_permission: true }],
     ['{bad', 'claude', {}],
     ['{"runtime":"unregistered"}', 'claude', {}],
   ]) {
-    const configPath = path.join(f.root, '.zylos/config.json');
     fs.writeFileSync(configPath, JSON.stringify({ session_mode: 'multi', ...policy }));
     f.tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_MODEL_CONFIG', JSON.stringify({ runtime: expected, mode: 'default' }));
     runHook(input, { ...env, ZYLOS_MODEL_CONFIG: model });

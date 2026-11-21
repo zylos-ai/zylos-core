@@ -98,6 +98,16 @@ test('a rejected runtime load preserves the hook exit protocol', { timeout: 9000
     assert.equal(result.stdout, stdout);
     assert.match(result.stderr, /Zylos AGY hook failed/);
   }
+  const denied = spawnSync(process.execPath, [guard], {
+    env: { ...env, ZYLOS_PACKAGE_ROOT: fake }, input: '{}', encoding: 'utf8', timeout: 2000,
+  });
+  assert.equal(denied.error, undefined);
+  assert.equal(denied.signal, null);
+  assert.equal(denied.status, 1);
+  assert.deepEqual(JSON.parse(denied.stdout), {
+    decision: 'deny',
+    reason: 'Cannot validate tool input. Ask the user in plain text instead.',
+  });
 });
 
 test('tool tracking allows execution after a lifecycle exception', t => {
