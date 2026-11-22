@@ -4,6 +4,7 @@ import Database from '../../../../comm-bridge/scripts/sqlite-driver.js';
 import { cronText } from '../../../public/js/wb/cron-text.js';
 import { dateKey, localToOffsetIso } from './schedule-tz.js';
 import { cachedDateTimeFormat } from '../date-format-cache.js';
+import { listFailure, parseListQuery } from '../list-query.js';
 
 const CRON_MODULE = new URL('../../../../scheduler/scripts/cron-utils.js', import.meta.url).href;
 const TIME_MODULE = new URL('../../../../scheduler/scripts/time-utils.js', import.meta.url).href;
@@ -100,25 +101,68 @@ function runSeries(start, step, n, until) {
   return runs;
 }
 
-function listOptions({ status = 'all', q = '', cursor = null, limit = null } = {}) {
-  status ??= 'all';
-  q = String(q ?? '').trim();
-  if (!['all', 'enabled', 'paused', 'failed', 'completed'].includes(status)) throw httpError(400, 'invalid_status');
-  const size = limit === null ? 30 : /^\d+$/.test(String(limit)) ? Number(limit) : NaN;
-  if (!Number.isInteger(size) || size < 1 || size > 100) throw httpError(400, 'invalid_limit');
-  let before = null;
-  if (cursor !== null) {
-    try {
-      if (!(status === 'completed' || status === 'all' && q) || typeof cursor !== 'string' || cursor.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(cursor)) throw Error();
-      before = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
-      if (!Array.isArray(before) || before.length !== 2 || !Number.isSafeInteger(before[0]) ||
-        typeof before[1] !== 'string' || !before[1].length || before[1].length > 512) throw Error();
-    } catch {
-      throw httpError(400, 'invalid_cursor');
-    }
-  }
-  return { status, q, before, size };
+// Status filters of the list; `enabled` covers both waiting and currently running tasks.
+const STATUS_WHERE = {
+  all: '1 = 1',
+  enabled: "status IN ('pending', 'running')",
+  paused: "status = 'paused'",
+  failed: "status = 'failed'",
+  completed: "status = 'completed'",
+};
+// The list's one order: by section (enabled, failed, paused, completed), then enabled tasks by next run
+// ascending and the other sections by last update descending, then id. The whole key ascends, so it is the
+// keyset position (section, key, id) and a later page only continues the current section or opens a new one.
+const SECTION_RANK = "CASE WHEN status IN ('pending', 'running') THEN 0 WHEN status = 'failed' THEN 1 WHEN status = 'paused' THEN 2 ELSE 3 END";
+const SECTION_KEY = `CASE WHEN status IN ('pending', 'running') THEN COALESCE(next_run_at, 0) ELSE -COALESCE(updated_at, 0) END`;
+const RECENT_RUNS = 12;
+
+const targetFilter = value => value.length > 0 && value.length <= 512 ? value : undefined;
+
+/** The task list query (list API standard): status and target filters, name search, signed keyset cursor. */
+export function scheduleListQuery(searchParams) {
+  return parseListQuery('schedules', searchParams, {
+    filters: { status: Object.keys(STATUS_WHERE), target: targetFilter }, q: true, include: ['total'],
+  });
 }
+
+/**
+ * The SQL condition selecting tasks whose delivery target (see deliveryTarget) is `target`: a session-group ID,
+ * or `origin`. deliveryTarget maps a task's component to the namespace of the first snapshot row of that
+ * component; this inverts it, so a group matches tasks of the components that map to its namespace, by
+ * session_component and session_group_name, or, for a bare namespace, by reply_channel when session_component
+ * is empty. Origin is a task with neither. `columns` lists the task table's columns, which older schemas lack.
+ */
+export function targetCondition(target, snapshotRows, columns) {
+  const session = columns.has('session_component');
+  const reply = columns.has('reply_channel');
+  const noSession = session ? 'session_component IS NULL' : '1 = 1';
+  if (target === 'origin') return { sql: `(${noSession} AND ${reply ? 'reply_channel IS NULL' : '1 = 1'})`, params: [] };
+  const colon = target.indexOf(':');
+  const namespace = colon < 0 ? target : target.slice(0, colon);
+  const name = colon < 0 ? null : target.slice(colon + 1);
+  const owners = new Map();
+  for (const row of snapshotRows ?? []) {
+    const component = row.c4?.componentName;
+    if (component == null || !row.sessionGroup || owners.has(component)) continue;
+    const split = row.sessionGroup.indexOf(':');
+    owners.set(component, split < 0 ? row.sessionGroup : row.sessionGroup.slice(0, split));
+  }
+  const components = [...owners].filter(([, owner]) => owner === namespace).map(([component]) => component);
+  const list = components.map(() => '?').join(', ');
+  const parts = [], params = [];
+  if (components.length && session) {
+    parts.push(`(session_component IN (${list}) AND session_group_name ${name === null ? 'IS NULL' : '= ?'})`);
+    params.push(...components, ...(name === null ? [] : [name]));
+  }
+  if (components.length && reply && name === null) {
+    parts.push(`(${noSession} AND reply_channel IN (${list}))`);
+    params.push(...components);
+  }
+  return parts.length ? { sql: `(${parts.join(' OR ')})`, params } : { sql: '0 = 1', params: [] };
+}
+
+const cursorPosition = position => Array.isArray(position) && position.length === 3 && Number.isSafeInteger(position[0]) &&
+  Number.isFinite(position[1]) && typeof position[2] === 'string';
 
 function serializeTask(task, history, nowSec, tz, cronUtils, resolve, fullPrompt = false) {
   const latest = history.at(-1);
@@ -216,82 +260,86 @@ export function createScheduleRead({ zylosDir, scheduleTz, getSnapshot = async (
     return task => deliveryTarget(task, rows, names);
   }
 
-  async function read(at = now(), options = {}) {
-    const { status, q, before, size } = listOptions(options);
-    if (!fs.existsSync(dbFile)) return { available: false, tasks: [] };
+  async function read(at = now(), query = scheduleListQuery(new URLSearchParams())) {
+    const status = query.filters.status ?? 'all';
+    const withTotal = query.include.has('total');
+    if (query.after !== null && !cursorPosition(query.after)) throw listFailure(400, 'invalid_cursor', 'The cursor is no longer valid; reload the first page');
+    if (!fs.existsSync(dbFile)) return { available: false, items: [], nextCursor: null, ...(withTotal ? { total: 0 } : {}) };
+    const target = query.filters.target ?? null;
+    let snapshotRows = [];
+    if (target !== null && target !== 'origin') {
+      try {
+        snapshotRows = (await getSnapshot())?.rows ?? [];
+      } catch {
+        throw listFailure(503, 'unavailable', 'The session group snapshot cannot be read');
+      }
+    }
     const nowSec = Math.floor(at / 1000);
-    let tasks, listed, recent, week, statusRows, nextCursor = null;
+    let enabledTasks, page, total, recent, week, statusRows;
     let db;
     try {
       db = openDb(dbFile);
-      // Keep the list, counts and history on one SQLite snapshot while tasks finish.
+      // Keep the page, counts and history on one SQLite snapshot while tasks finish.
       db.exec('BEGIN');
-      // The overview always spans active tasks; a completed page or search never
-      // changes the KPI or timeline. SELECT * also supports older task schemas.
-      tasks = db.prepare("SELECT * FROM tasks WHERE status != 'completed'").all();
+      // The next-24-hours lane and its KPI span every enabled task, whichever page is shown.
+      enabledTasks = db.prepare(`SELECT id, name, priority, status, type, cron_expression, interval_seconds, next_run_at
+        FROM tasks WHERE ${STATUS_WHERE.enabled}`).all();
       statusRows = db.prepare('SELECT status, count(*) AS count FROM tasks GROUP BY status').all();
-      // Preserve the former browser search, including Unicode lowercase and
-      // literal %, _ and backslashes, against full prompt bodies.
-      const match = q ? 'AND (schedule_search(name) OR schedule_search(prompt) OR schedule_search(id))' : '';
-      if (q) {
-        const needle = q.toLowerCase();
-        db.function('schedule_search', value => Number(String(value ?? '').toLowerCase().includes(needle)));
+      // q matches the task name only, with Unicode lowercase and literal %, _ and backslashes.
+      if (query.q) {
+        const needle = query.q.toLowerCase();
+        db.function('schedule_name_match', value => Number(String(value ?? '').toLowerCase().includes(needle)));
       }
-      listed = status === 'completed' ? [] : q
-        ? db.prepare(`SELECT * FROM tasks WHERE status != 'completed' ${match}`).all() : tasks;
-      if (status === 'completed' || status === 'all' && q) {
-        const cursor = before ? 'AND (COALESCE(updated_at, 0) < ? OR (COALESCE(updated_at, 0) = ? AND id < ?))' : '';
-        const params = before ? [before[0], before[0], before[1], size + 1] : [size + 1];
-        let completed = db.prepare(`SELECT * FROM tasks WHERE status = 'completed' ${match} ${cursor}
-          ORDER BY COALESCE(updated_at, 0) DESC, id DESC LIMIT ?`).all(...params);
-        if (completed.length > size) {
-          const last = completed[size - 1];
-          nextCursor = Buffer.from(JSON.stringify([last.updated_at ?? 0, last.id])).toString('base64url');
-          completed = completed.slice(0, size);
-        }
-        listed = [...listed, ...completed];
-      }
-      const visibleIds = [...new Set([...tasks, ...listed].map(task => task.id))];
-      recent = visibleIds.length ? db.prepare(`SELECT * FROM (
-          SELECT id, task_id, status, executed_at, completed_at, duration_ms, error,
-            ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY executed_at DESC, id DESC) AS rn
-          FROM task_history WHERE task_id IN (${visibleIds.map(() => '?').join(',')})) WHERE rn <= 12`).all(...visibleIds) : [];
+      const byTarget = target === null ? null
+        : targetCondition(target, snapshotRows, new Set(db.pragma('table_info(tasks)').map(column => column.name)));
+      const where = `${STATUS_WHERE[status]}${query.q ? ' AND schedule_name_match(name)' : ''}${byTarget ? ` AND ${byTarget.sql}` : ''}`;
+      const whereParams = byTarget?.params ?? [];
+      const after = query.after ? 'WHERE (section_rank, section_key, id) > (?, ?, ?)' : '';
+      page = db.prepare(`SELECT * FROM (SELECT *, ${SECTION_RANK} AS section_rank, ${SECTION_KEY} AS section_key
+        FROM tasks WHERE ${where}) ${after} ORDER BY section_rank, section_key, id LIMIT ?`)
+        .all(...whereParams, ...(query.after ?? []), query.limit + 1);
+      if (withTotal) total = db.prepare(`SELECT count(*) AS count FROM tasks WHERE ${where}`).get(...whereParams).count;
+      // Recent results only for the rows of this page.
+      const pageIds = page.slice(0, query.limit).map(task => task.id);
+      const latest = db.prepare(`SELECT id, task_id, status, executed_at, completed_at, duration_ms, error FROM task_history
+        WHERE task_id = ? ORDER BY executed_at DESC, id DESC LIMIT ${RECENT_RUNS}`);
+      recent = pageIds.flatMap(id => latest.all(id));
       week = db.prepare('SELECT status, executed_at FROM task_history WHERE executed_at >= ?').all(nowSec - 8 * DAY);
       db.exec('COMMIT');
     } catch {
-      throw httpError(503, 'scheduler_unreadable');
+      throw listFailure(503, 'unavailable', 'The scheduler database cannot be read');
     } finally {
       db?.close();
     }
+    const more = page.length > query.limit;
+    page = page.slice(0, query.limit);
     const zone = await scheduleTz();
     const tz = zone.tz ?? 'UTC';
-    const cronUtils = tasks.some(task => task.type === 'recurring') ? await importOrNull(cronModule) : null;
+    const cronUtils = [...enabledTasks, ...page].some(task => task.type === 'recurring') ? await importOrNull(cronModule) : null;
     const byTask = new Map();
     for (const row of recent) {
       const list = byTask.get(row.task_id) ?? [];
       list.push(historyRow(row));
       byTask.set(row.task_id, list);
     }
-    const resolve = await delivery([...tasks, ...listed]);
-    const kpi = { enabled: 0, paused: 0, running: 0, next24h: 0, partialPreview: false, runs7d: 0, bad7d: 0, successRate7d: null };
+    const resolve = await delivery(page);
     const counts = { all: 0, enabled: 0, paused: 0, failed: 0, completed: 0 };
+    const kpi = { enabled: 0, paused: 0, running: 0, next24h: 0, partialPreview: false, runs7d: 0, bad7d: 0, successRate7d: null };
     for (const row of statusRows) {
       counts.all += row.count;
       if (ENABLED.has(row.status)) counts.enabled += row.count;
       if (['paused', 'failed', 'completed'].includes(row.status)) counts[row.status] += row.count;
+      if (row.status === 'running') kpi.running = row.count;
     }
-    const out = new Map();
-    for (const task of [...tasks, ...listed]) {
-      if (out.has(task.id)) continue;
-      const item = serializeTask(task, (byTask.get(task.id) ?? []).slice().reverse(), nowSec, tz, cronUtils, resolve);
-      out.set(task.id, item);
-      if (ENABLED.has(task.status)) {
-        kpi.enabled++;
-        if (item.nextRuns.unavailable || item.nextRuns.truncated) kpi.partialPreview = true;
-        kpi.next24h += item.nextRuns.in24h?.length ?? 0;
-      }
-      if (task.status === 'paused') kpi.paused++;
-      if (task.status === 'running') kpi.running++;
+    kpi.enabled = counts.enabled;
+    kpi.paused = counts.paused;
+    const timelineTasks = [];
+    for (const task of enabledTasks) {
+      const upcoming = nextRuns(task, 5, nowSec, tz, cronUtils, { until: nowSec + DAY });
+      if (!Array.isArray(upcoming) || upcoming.truncated) kpi.partialPreview = true;
+      const in24h = Array.isArray(upcoming) ? upcoming.filter(time => time > nowSec && time <= nowSec + DAY) : [];
+      kpi.next24h += in24h.length;
+      if (in24h.length) timelineTasks.push({ id: task.id, name: task.name, priority: task.priority, nextRuns: { in24h } });
     }
     const days = [];
     for (let back = 6; back >= 0; back--) {
@@ -310,18 +358,18 @@ export function createScheduleRead({ zylosDir, scheduleTz, getSnapshot = async (
       if (day && ['success', 'timeout', 'failed'].includes(row.status)) day[row.status]++;
     }
     kpi.successRate7d = success + kpi.bad7d === 0 ? null : success / (success + kpi.bad7d);
+    const last = page.at(-1);
     return {
+      items: page.map(task => serializeTask(task, (byTask.get(task.id) ?? []).slice().reverse(), nowSec, tz, cronUtils, resolve)),
+      nextCursor: more ? query.nextCursor([last.section_rank, last.section_key, last.id]) : null,
+      ...(withTotal ? { total } : {}),
       available: true,
       readAt: at,
       tz: zone.tz,
-      ...(zone.tz ? {} : { tzReason: zone.reason }),
       kpi,
       daily7d: { tz, utcFallback: !zone.tz, days },
-      tasks: listed.map(task => out.get(task.id)),
-      ...(listed.length === tasks.length && listed.every((task, index) => task.id === tasks[index].id) ? {}
-        : { timelineTasks: tasks.map(task => out.get(task.id)) }),
+      timelineTasks,
       counts,
-      nextCursor,
     };
   }
 
@@ -347,29 +395,29 @@ export function createScheduleRead({ zylosDir, scheduleTz, getSnapshot = async (
     return { task: serializeTask(task, recent.reverse().map(historyRow), Math.floor(at / 1000), zone.tz ?? 'UTC', cronUtils, resolve, true) };
   }
 
-  function history(id, { before = null, beforeId = null, limit = null } = {}) {
-    const size = limit === null ? 30 : /^\d+$/.test(limit) ? Number(limit) : NaN;
-    if (!Number.isInteger(size) || size < 1 || size > 200) throw httpError(400, 'invalid_limit');
-    if ((before === null) !== (beforeId === null) ||
-      (before !== null && (!/^\d+$/.test(before) || !/^\d+$/.test(beforeId)))) {
-      throw httpError(400, 'invalid_cursor');
-    }
-    if (!fs.existsSync(dbFile)) return { rows: [], next: null };
-    let rows;
+  function history(id, query) {
+    if (query.after !== null && !(Array.isArray(query.after) && query.after.length === 2 &&
+      query.after.every(Number.isSafeInteger))) throw listFailure(400, 'invalid_cursor', 'The cursor is no longer valid; reload the first page');
+    if (!fs.existsSync(dbFile)) throw listFailure(404, 'not_found', 'The task does not exist');
+    let task, rows;
     let db;
     try {
       db = openDb(dbFile);
-      const cursor = before === null ? '' : 'AND (executed_at < ? OR (executed_at = ? AND id < ?))';
-      const params = before === null ? [id, size + 1] : [id, Number(before), Number(before), Number(beforeId), size + 1];
-      rows = db.prepare(`SELECT id, status, executed_at, completed_at, duration_ms, error FROM task_history
-        WHERE task_id = ? ${cursor} ORDER BY executed_at DESC, id DESC LIMIT ?`).all(...params);
+      db.exec('BEGIN');
+      task = db.prepare('SELECT id FROM tasks WHERE id = ?').get(id);
+      const after = query.after ? 'AND (executed_at < ? OR (executed_at = ? AND id < ?))' : '';
+      const params = query.after ? [query.after[0], query.after[0], query.after[1]] : [];
+      rows = task ? db.prepare(`SELECT id, status, executed_at, completed_at, duration_ms, error FROM task_history
+        WHERE task_id = ? ${after} ORDER BY executed_at DESC, id DESC LIMIT ?`).all(id, ...params, query.limit + 1) : [];
+      db.exec('COMMIT');
     } catch {
-      throw httpError(503, 'scheduler_unreadable');
+      throw listFailure(503, 'unavailable', 'The scheduler database cannot be read');
     } finally {
       db?.close();
     }
-    const next = rows.length > size ? { before: rows[size - 1].executed_at, beforeId: rows[size - 1].id } : null;
-    return { rows: rows.slice(0, size).map(historyRow), next };
+    if (!task) throw listFailure(404, 'not_found', 'The task does not exist');
+    const last = rows.length > query.limit ? rows[query.limit - 1] : null;
+    return { items: rows.slice(0, query.limit).map(historyRow), nextCursor: last ? query.nextCursor([last.executed_at, last.id]) : null };
   }
 
   async function preview({ kind, value, reenable = false, locale = 'zh' }, at = now()) {
@@ -405,9 +453,7 @@ export function createScheduleRead({ zylosDir, scheduleTz, getSnapshot = async (
 
 /** GET routes of the schedule page; authentication is owned by the API gate. */
 export async function scheduleReadResponse(reader, pathname, searchParams) {
-  if (pathname === '/api/schedules') return reader.read(undefined, {
-    status: searchParams.get('status'), q: searchParams.get('q'), cursor: searchParams.get('cursor'), limit: searchParams.get('limit'),
-  });
+  if (pathname === '/api/schedules') return reader.read(undefined, scheduleListQuery(searchParams));
   if (pathname === '/api/schedules/preview') {
     const preview = await reader.preview({
       kind: searchParams.get('kind'),
@@ -427,9 +473,6 @@ export async function scheduleReadResponse(reader, pathname, searchParams) {
     throw httpError(400, 'invalid_task');
   }
   if (!route[2]) return reader.detail(id);
-  return reader.history(id, {
-    before: searchParams.get('before'),
-    beforeId: searchParams.get('beforeId'),
-    limit: searchParams.get('limit'),
-  });
+  // One collection per task: a cursor issued for another task's history is rejected.
+  return reader.history(id, parseListQuery(`schedules/${id}/history`, searchParams));
 }

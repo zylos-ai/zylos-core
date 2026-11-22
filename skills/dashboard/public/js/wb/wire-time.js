@@ -40,8 +40,9 @@ const TASK = [
   ...seconds('nextRunAt', 'lastRunAt', 'updatedAt', 'recent.*.executedAt', 'recent.*.completedAt', 'nextRuns.runs.*', 'nextRuns.in24h.*'),
 ];
 const SCHEDULE = [
-  ...ms('readAt', 'iso'), ...seconds('nextRunAt', 'runs.*', 'rows.*.executedAt', 'rows.*.completedAt'),
-  ...beneath('tasks.*', TASK), ...beneath('timelineTasks.*', TASK), ...beneath('task', TASK),
+  // `items` holds task rows on the list and execution rows on a task's history.
+  ...ms('readAt', 'iso'), ...seconds('nextRunAt', 'runs.*', 'items.*.executedAt', 'items.*.completedAt'),
+  ...beneath('items.*', TASK), ...beneath('timelineTasks.*', TASK), ...beneath('task', TASK),
   // Scheduler CLI writes return its complete task row, whose time columns use seconds.
   ...seconds('data.task.next_run_at', 'data.task.last_run_at', 'data.task.created_at', 'data.task.updated_at',
     'data.task.failed_at', 'data.task.completed_at', 'data.task.running_at'),

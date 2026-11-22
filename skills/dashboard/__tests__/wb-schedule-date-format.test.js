@@ -237,7 +237,7 @@ test('schedule overview with 40,000 history rows matches recomputed week totals 
     assert.equal(result.kpi.runs7d, expected.runs7d);
     assert.equal(result.kpi.bad7d, expected.bad7d);
     assert.equal(result.kpi.successRate7d, expected.successRate7d);
-    assert.equal(result.tasks.length, 12);
+    assert.equal(result.items.length, 12);
     assert.deepEqual(result.daily7d.days.map(day => day.date),
       ['2027-11-04', '2027-11-05', '2027-11-06', '2027-11-07', '2027-11-08', '2027-11-09', '2027-11-10']);
     if (rows === 40000) assert.ok(result.kpi.runs7d > 34000);
