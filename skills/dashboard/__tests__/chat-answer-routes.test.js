@@ -150,7 +150,7 @@ test('answer acceptance uses the stored question and repeated action IDs reuse o
   const parsed = parseC4Content(first.body.answer.content).envelope;
   assert.equal(parsed.questionSummary, question.questionSummary);
   assert.equal(parsed.metadata.zylos.answerId, body.action.id);
-  assert.equal(parsed.fallbackText, `回答了 interruptId=${question.interruptId}（问题：${question.questionSummary}）：方案甲`);
+  assert.equal(parsed.fallbackText, `Re interruptId=${question.interruptId} (Q:${question.questionSummary}): 方案甲`);
   assert.equal(f.answers.question(group, question.interruptId).status, 'answered');
   const repeated = await f.request('/answers', { body: { ...body, retry: true } });
   assert.equal(repeated.status, 200);

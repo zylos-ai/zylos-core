@@ -1946,7 +1946,7 @@ export function mountConversationPage({
       quoteBarClose.setAttribute('aria-label', t('chat.quote.cancel'));
       quoteBarClose.disabled = !quotable(s);
     }
-    const outgoing = s.pending?.content ?? composeContent({ text: s.input, annotations: s.annotations, timeZone: s.tz });
+    const outgoing = s.pending?.content ?? composeContent({ text: s.input, annotations: s.annotations, timeZone: s.tz, t });
     const outgoingBytes = contentBytes(storedContent(outgoing, s.pending ? s.pending.quote : quote?.id ?? null));
     const tooLarge = outgoingBytes > MAX_CONTENT_BYTES;
     const composeMessages = [

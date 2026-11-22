@@ -5,10 +5,11 @@ export function savedAnswer(fallbackText, { interruptId = 'interrupt-one', quest
     fallbackText, action: request, metadata: { zylos: { answerId: request.id } } };
 }
 
-const question = 'Choose a plan（fast）： <script>question</script>';
-const literalAnswer = '<img src=x>\nKeep interruptId=user-text';
+const question = 'Choose a plan（fast）： <script>question</script>): More context';
+const literalAnswer = ' <img src=x>\nKeep interruptId=user-text ';
 const cases = [
-  ['matching prefix', savedAnswer(`回答了 interruptId=interrupt-one（问题：${question}）：${literalAnswer}`, { questionSummary: question }), literalAnswer],
+  ['matching legacy prefix', savedAnswer(`回答了 interruptId=interrupt-one（问题：${question}）：${literalAnswer}`, { questionSummary: question }), literalAnswer],
+  ['matching English prefix', savedAnswer(`Re interruptId=interrupt-one (Q:${question}): ${literalAnswer}`, { questionSummary: question }), literalAnswer],
   ['different interrupt', savedAnswer('回答了 interruptId=different（问题：Choose a plan）：Plan A')],
   ['different question', savedAnswer('回答了 interruptId=interrupt-one（问题：Different question）：Plan A')],
   ['prefix within text', savedAnswer('Before 回答了 interruptId=interrupt-one（问题：Choose a plan）：Plan A')],

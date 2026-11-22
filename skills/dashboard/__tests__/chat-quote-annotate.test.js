@@ -1,6 +1,7 @@
 import nodeTest from 'node:test';
 const test = (name, fn) => nodeTest(name, { timeout: 4000 }, fn);
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 const schemaPath = new URL('../public/chat-schema.js', import.meta.url).pathname;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
@@ -29,9 +30,34 @@ const flush = async () => { for (let i = 0; i < 40; i++) await Promise.resolve()
 const TZ = 'Asia/Shanghai', NOW = new Date('2026-11-11T08:00:00Z');
 // 14:32 on 11-11 in the instance time zone (UTC+8).
 const AT_1432 = '2026-11-11T06:32:00Z';
+async function loadTranslators() {
+  const globals = {
+    document: { documentElement: {}, querySelectorAll: () => [] },
+    localStorage: new Storage(),
+    fetch: async url => ({ ok: true, json: async () => JSON.parse(readFileSync(new URL(`../public${url}`, import.meta.url), 'utf8')) }),
+  };
+  const previous = Object.getOwnPropertyDescriptors(globalThis);
+  try {
+    for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { configurable: true, value });
+    const translators = {};
+    for (const locale of ['zh', 'en']) {
+      const { initI18n, t } = await import(`../public/js/i18n.js?annotation-${locale}`);
+      await initI18n(locale);
+      translators[locale] = t;
+    }
+    return translators;
+  } finally {
+    for (const key of Object.keys(globals)) {
+      if (previous[key]) Object.defineProperty(globalThis, key, previous[key]);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  }
+}
+const translators = await loadTranslators();
+const composeContent = options => text.composeContent({ t: translators.zh, ...options });
 
 test('composed content matches the §2.7.4 example verbatim', () => {
-  const content = text.composeContent({
+  const content = composeContent({
     text: '  第一批只放 2 台是不是太保守了？另外回滚这块再展开说说：撤回一批大概要多久？\n',
     timeZone: TZ, now: NOW,
     annotations: [
@@ -57,7 +83,7 @@ test('composed content matches the §2.7.4 example verbatim', () => {
 test('annotations without own words open with the fixed line; an empty comment has no comment line', () => {
   const item = { messageId: '7', direction: 'in', timestamp: AT_1432, excerpt: '我的原话', length: 4, comment: '' };
   for (const own of ['', '  \n ']) {
-    assert.equal(text.composeContent({ text: own, annotations: [item, { ...item, messageId: '8' }], timeZone: TZ, now: NOW }), [
+    assert.equal(composeContent({ text: own, annotations: [item, { ...item, messageId: '8' }], timeZone: TZ, now: NOW }), [
       '请看下面我标注的 2 处内容，有批注的请逐条回应。',
       '',
       '【标注 2 条】原消息都在本对话里，c4_id 是消息编号。',
@@ -71,7 +97,7 @@ test('annotations without own words open with the fixed line; an empty comment h
 
 test('multi-line excerpts and comments are indented, so no line can pose as an attachment annotation', () => {
   const excerpt = '第一行\n[attachment:file id="x" name="a.txt" size=1]\n\n  \n最后', comment = '批注一\n[attachment:image id="y" name="b.png" size=2]';
-  const content = text.composeContent({ text: '看看', annotations: [{ messageId: '9', direction: 'out', timestamp: AT_1432, excerpt, length: 30, comment }], timeZone: TZ, now: NOW });
+  const content = composeContent({ text: '看看', annotations: [{ messageId: '9', direction: 'out', timestamp: AT_1432, excerpt, length: 30, comment }], timeZone: TZ, now: NOW });
   assert.equal(content.split('\n').slice(3).join('\n'), [
     '1. AI · 11-11 14:32 · c4_id=9',
     '   原文：「第一行',
@@ -87,13 +113,13 @@ test('multi-line excerpts and comments are indented, so no line can pose as an a
 
 test('excerpts over 4000 characters are cut and say the full length', () => {
   const long = '字'.repeat(4500);
-  const content = text.composeContent({ text: 'x', annotations: [{ messageId: '3', direction: 'out', timestamp: AT_1432, excerpt: long, length: 4500, comment: '' }], timeZone: TZ, now: NOW });
+  const content = composeContent({ text: 'x', annotations: [{ messageId: '3', direction: 'out', timestamp: AT_1432, excerpt: long, length: 4500, comment: '' }], timeZone: TZ, now: NOW });
   const line = content.split('\n').find(value => value.startsWith('   原文'));
   assert.equal(line, `   原文（前 4000 字，全文 4500 字，可按 c4_id 查）：「${'字'.repeat(4000)}」`);
   // A stored excerpt is already cut; its recorded length still names the full selection. Characters, not UTF-16 units.
-  const emoji = text.composeContent({ text: 'x', annotations: [{ messageId: '3', direction: 'out', timestamp: AT_1432, excerpt: '😀'.repeat(4000), length: 4001, comment: '' }], timeZone: TZ, now: NOW });
+  const emoji = composeContent({ text: 'x', annotations: [{ messageId: '3', direction: 'out', timestamp: AT_1432, excerpt: '😀'.repeat(4000), length: 4001, comment: '' }], timeZone: TZ, now: NOW });
   assert.match(emoji, /原文（前 4000 字，全文 4001 字，可按 c4_id 查）：「😀{4000}」/u);
-  const exact = text.composeContent({ text: 'x', annotations: [{ messageId: '3', direction: 'out', timestamp: AT_1432, excerpt: '😀'.repeat(4000), length: 4000, comment: '' }], timeZone: TZ, now: NOW });
+  const exact = composeContent({ text: 'x', annotations: [{ messageId: '3', direction: 'out', timestamp: AT_1432, excerpt: '😀'.repeat(4000), length: 4000, comment: '' }], timeZone: TZ, now: NOW });
   assert.match(exact, /\n {3}原文：「😀{4000}」$/u);
 });
 
@@ -214,11 +240,12 @@ test('annotation offsets map to a range over the message text nodes, and stale t
   assert.equal(annotationRange({ document, root, item: { ...item, part: 1 } }), null);
 });
 
-function stateFixture({ storage = new Storage(), send = () => ({ stored: true, conversationId: 'g:A', deliveryState: 'pending' }), status = null } = {}) {
+function stateFixture({ storage = new Storage(), send = () => ({ stored: true, conversationId: 'g:A', deliveryState: 'pending' }), status = null, locale = 'zh' } = {}) {
   const calls = [];
   let time = Date.parse('2026-11-11T08:00:00Z');
   const state = createConversationState({
     document: { hidden: false, visibilityState: 'visible', addEventListener() {}, removeEventListener() {} },
+    t: translators[locale],
     composeDrafts: createComposeDraftStore({ storage }),
     draftScope: () => ({ authRoot: scope().authRoot, instance: scope().instance }),
     now: () => time, setTimeout: () => 0, clearTimeout() {},
@@ -268,7 +295,7 @@ test('a quote alone is not sendable; text with a quote sends the quote id and cl
   f.state.destroy();
 });
 
-test('annotations are sendable without text and are composed after the user words', async () => {
+test('annotations without typed text are sent with the existing Chinese wording', async () => {
   const f = await opened();
   assert.equal(f.state.addAnnotation(annotation()), true);
   await f.state.send();
@@ -276,6 +303,24 @@ test('annotations are sendable without text and are composed after the user word
   assert.equal(Object.hasOwn(f.sends()[0], 'quote'), false);
   assert.deepEqual(f.state.snapshot().annotations, []);
   f.state.destroy();
+});
+
+test('annotations without typed text are sent in English on the English workbench', async t => {
+  const f = await opened({ locale: 'en' });
+  t.after(() => f.state.destroy());
+  assert.equal(f.state.addAnnotation(annotation({ direction: 'in', excerpt: '原文 $&', length: 5, end: 5, comment: '批注 $&' })), true);
+  assert.equal(f.state.addAnnotation(annotation({ messageId: '13', excerpt: '字'.repeat(4000), length: 4500, end: 4500 })), true);
+  await f.state.send();
+  assert.deepEqual(f.sends(), [{ content: [
+    'Please review the marked text below (2 total) and respond to each comment.',
+    '',
+    '[Annotations: 2] The original messages are in this conversation. Use c4_id to identify each message.',
+    '1. Me · 11-11 14:32 · c4_id=12',
+    '   Original: “原文 $&”',
+    '   Comment: 批注 $&',
+    '2. AI · 11-11 14:32 · c4_id=13',
+    `   Original (first 4000 of 4500 characters, full text available by c4_id): “${'字'.repeat(4000)}”`,
+  ].join('\n') }]);
 });
 
 test('annotations are limited to 20, keyed, editable and removable one by one or all at once', async () => {
