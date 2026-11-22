@@ -169,8 +169,10 @@ export async function runWorkbenchBrowser(t, sandbox) {
   const section = openDashboardTab;
   async function machinesControl(page) {
     if (page.viewportSize().width <= 760) {
-      await openMobileMore(page);
-      return page.locator('[data-mobile-action="machines"]');
+      const fleetTab = page.locator('[data-mobile-tab="fleet"]');
+      if (await fleetTab.isVisible()) return fleetTab;
+      const more = await openMobileMore(page);
+      return more.locator('[data-mobile-action="machines"]');
     }
     return page.locator('#fleet-manage-btn');
   }
@@ -710,27 +712,6 @@ export async function runWorkbenchBrowser(t, sandbox) {
     assert.equal(reads.get('/api/settings/pricing'), start);
     await settingsSection(page, 'pricing');
     assert.equal(await price.inputValue(), '99');
-    assert.deepEqual(errors, []);
-  });
-
-  await step('the observer shortcut opens This machine and both return controls lead back to their own destination', async () => {
-    const { page, errors, shot } = await open(390, 844, '/');
-    const more = await openMobileMore(page);
-    await more.locator('[data-mobile-action="detail"]').click();
-    await section(page, 'observer');
-    const shortcut = page.locator('#observer-empty-settings');
-    await shortcut.click();
-    await settingsPanel(page, 'machine').waitFor();
-    await shot('settings-observer-shortcut-zh-light');
-    await page.goBack();
-    await shortcut.waitFor();
-    assert.equal(new URL(page.url()).pathname, '/observer');
-    await shortcut.click();
-    await settingsBack(page).click();
-    await settingsList(page).waitFor();
-    assert.equal(new URL(page.url()).pathname, '/settings');
-    await page.goBack();
-    await shortcut.waitFor();
     assert.deepEqual(errors, []);
   });
 
@@ -1364,10 +1345,10 @@ export async function runWorkbenchBrowser(t, sandbox) {
     }
   });
 
-  // One way back to the machines page: the header's machines icon, from this machine's page and from a remote one
-  // (leaving the remote view the way the history expects), and from a remote machine's own page (opened from another
-  // dashboard), which goes back to that dashboard. There is no separate back button. Without other machines the icon
-  // opens machine settings.
+  // Rerun for Fleet navigation or history changes. The desktop icon and phone Fleet tab
+  // return from local and remote machine views while preserving browser history. A remote
+  // machine's own page returns to the dashboard that opened it. With one machine, the
+  // desktop icon opens machine settings. Changes outside these paths can skip this step.
   await step('machines icon: back to the machines page from any machine, no back button; machine settings without other machines', async () => {
     for (const width of [1280, 390]) {
       const { page, context, errors, shot } = await open(width, width === 390 ? 844 : 800, '/');

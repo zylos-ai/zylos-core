@@ -771,6 +771,8 @@ export async function runMobileConversationBrowser(t, sandbox) {
       assert.deepEqual(f.errors, []); await noOverflow(page);
     } catch (error) { console.error('Mobile navigation case:', error); throw error; } finally { await f.context.close(); }
   });
+  // Rerun for Fleet events, mobile navigation, Fleet icons or navigation labels.
+  // Changes outside those paths can skip this loopback browser case.
   await t.test('fleet events update phone navigation and keep the server and cards icons distinct', async () => {
     for (const [width, locale] of [[390, 'zh'], [360, 'en']]) for (const theme of ['light', 'dark']) {
       const { page, context, errors } = await open({ width, locale, theme });
@@ -847,6 +849,8 @@ export async function runMobileConversationBrowser(t, sandbox) {
       } finally { await context.close(); }
     }
   });
+  // Rerun for Observer entry points or Machine Settings availability.
+  // Changes outside those paths can skip this loopback browser case.
   await t.test('observer navigation is absent when missing or disabled and the machine settings action remains', async () => {
     const cases = [
       [{ state: 'not_installed' }, 'install'],
