@@ -42,10 +42,8 @@ export async function runUnreadableAttentionBrowser(sandbox) {
         } else await page.locator('#wb-tech-btn').click();
       };
       const openMachines = async () => {
-        if (width === 390) {
-          await openMobileMore(page);
-          await page.locator('[data-mobile-action="machines"]').click();
-        } else await page.locator('#fleet-manage-btn').click();
+        if (width === 390) await openDashboardTab(page, 'fleet');
+        else await page.locator('#fleet-manage-btn').click();
       };
       await page.route('**/api/**', route => {
         const url = new URL(route.request().url());

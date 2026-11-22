@@ -133,7 +133,8 @@ export async function runRemoteAccessBrowser(t, sandbox) {
     await leftForOverview(page);
     assert.ok(refusals.some(path => path.startsWith('/api/conversations')), 'the conversation page met the refusal');
     assert.equal(await page.locator('#tab-chat').isVisible(), false);
-    assert.equal(await page.locator('#observer-tab').isVisible(), false, 'the observer entry follows');
+    await page.locator(`#wb-board [data-group="${GROUP}"]`).click();
+    assert.equal(await page.locator('#wb-side button[data-observer-group]').count(), 0, 'observer access follows the remote switch');
     // Asking for the conversation tab again keeps the overview.
     await page.evaluate(() => document.querySelector('.tab[data-tab="chat"]').click());
     assert.equal(await activeTab(page), 'overview');
@@ -141,16 +142,18 @@ export async function runRemoteAccessBrowser(t, sandbox) {
     await context.close();
   });
 
-  await t.test('an observer request refused while opening the observer hides both tabs and returns to the overview', async () => {
+  await t.test('an observer request refused while opening the observer hides the conversation tab and returns to the overview', async () => {
     const refuse = { now: null };
     const { page, context, errors, refusals } = await openRemote(refuse);
-    await page.locator('#observer-tab').waitFor({ state: 'visible' });
+    await page.locator(`#wb-board [data-group="${GROUP}"]`).click();
+    const observe = page.locator(`#wb-side button[data-observer-group="${GROUP}"]`);
+    await observe.waitFor();
     assert.equal(await shown(page, 'chat'), true, 'the remote state allows remote access');
     refuse.now = 'observer';
-    await page.locator('#observer-tab').click();
+    await observe.click();
     await leftForOverview(page);
     assert.ok(refusals.some(path => path.startsWith('/api/observer/')), 'the observer met the refusal');
-    assert.equal(await page.locator('#observer-tab').isVisible(), false);
+    assert.equal(await observe.count(), 0);
     assert.equal(await page.locator('#tab-observer').isVisible(), false);
     assert.deepEqual(errors, []);
     await context.close();

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createViewMode, term, toolLabel, resolveTheme, observeTheme, observerNavEntry, groupObservable, wbWritable, tabForPath, instanceStatusText } from '../public/js/wb/view-mode.js';
+import { createViewMode, term, toolLabel, resolveTheme, observeTheme, groupObservable, wbWritable, tabForPath, instanceStatusText } from '../public/js/wb/view-mode.js';
 import { createDocument, storage } from './fixtures/workbench-dom.js';
 
 test('view level tolerates inaccessible storage and redraws without data requests', context => {
@@ -28,29 +28,21 @@ test('system theme reacts to media changes and removes its listener', () => {
   assert.equal(values[0], 'dark'); media.matches = false; handler(); assert.equal(values[1], 'light'); stop(); assert.equal(removed, true);
   assert.equal(resolveTheme('wrong'), 'light'); assert.equal(resolveTheme('dark'), 'dark');
 });
-test('observer navigation follows detail, installation and enabled status', () => {
-  assert.equal(observerNavEntry({ installed: true, enabled: true }, 'plain'), null);
-  assert.equal(observerNavEntry(null, 'technical'), null);
-  assert.equal(observerNavEntry(undefined, 'technical'), null);
-  const primary = { 'tab.observer': 'Observer' };
-  assert.equal(observerNavEntry({ installed: true, enabled: true }, 'technical', key => primary[key] ?? key).label, 'Observer');
-  assert.equal(observerNavEntry({ installed: true, enabled: true }, 'technical').target, 'observer');
-  assert.equal(observerNavEntry({ state: 'installed', desired: { enabled: true } }, 'technical').target, 'observer');
-  assert.match(observerNavEntry({ installed: false }, 'technical').label, /去设置安装/);
-  assert.equal(observerNavEntry({ installed: true, enabled: false }, 'technical').target, 'settings');
-  assert.equal(wbWritable(() => true), false); assert.equal(wbWritable(() => false), true);
-});
-
-test('every group offers the terminal observer while the observer page is usable', () => {
-  const live = observerNavEntry({ installed: true, enabled: true }, 'technical');
-  assert.equal(groupObservable(live, { sessionGroup: 'origin' }), true);
-  assert.equal(groupObservable(live, { sessionGroup: null }), true, 'a single-session instance is its Origin');
-  assert.equal(groupObservable(live, { sessionGroup: 'telegram:sleeping', presence: 'not_running', live: null }), true, 'sleeping groups can open history');
-  assert.equal(groupObservable(live, null), false);
-  for (const sessionGroup of ['oc_123', 'cron:daily', 'Origin', 'origin-2']) assert.equal(groupObservable(live, { sessionGroup }), true, sessionGroup);
-  assert.equal(groupObservable(observerNavEntry({ installed: true, enabled: false }, 'technical'), { sessionGroup: 'origin' }), false, 'disabled goes to settings instead');
-  assert.equal(groupObservable(observerNavEntry({ installed: true, enabled: true }, 'plain'), { sessionGroup: 'origin' }), false, 'plain view has no observer');
-  assert.equal(groupObservable(null, { sessionGroup: 'origin' }), false, 'unavailable, e.g. a read-only remote');
+test('group details offer the observer when it is installed and enabled in Technical details mode', () => {
+  const legacy = { installed: true, enabled: true };
+  const modern = { state: 'installed', desired: { enabled: true } };
+  for (const row of [{ sessionGroup: 'origin' }, { sessionGroup: null },
+    { sessionGroup: 'telegram:sleeping', presence: 'not_running', live: null }]) {
+    assert.equal(groupObservable(legacy, 'technical', row), true);
+    assert.equal(groupObservable(modern, 'technical', row), true);
+    assert.equal(groupObservable(modern, 'plain', row), false);
+    assert.equal(groupObservable(null, 'technical', row), false);
+    assert.equal(groupObservable({ state: 'not_installed' }, 'technical', row), false);
+    assert.equal(groupObservable({ state: 'installed', desired: { enabled: false } }, 'technical', row), false);
+  }
+  assert.equal(groupObservable(modern, 'technical', null), false);
+  assert.equal(wbWritable(() => true), false);
+  assert.equal(wbWritable(() => false), true);
 });
 
 test('conversation navigation maps direct and fleet URLs without changing existing destinations', () => {

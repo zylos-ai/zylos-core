@@ -86,7 +86,7 @@ test('Fleet diagnostics wrap and remain literal across desktop/mobile and themes
   });
 
 // Boundary: real app, actual technical-details button and fixed local APIs in both languages.
-// Run for unreadable attention copy or detail-level changes; unrelated chat/backend gates may skip.
+// Run for unreadable attention copy, detail level, or Fleet return navigation changes; unrelated chat/backend changes may skip.
 // The sandbox owns private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/socket/DB paths and browser/HTTP cleanup.
 test('unreadable attention shows readable status until technical details are opened',
   { skip: !chatEnabled(), timeout: 120_000 }, async t => {
