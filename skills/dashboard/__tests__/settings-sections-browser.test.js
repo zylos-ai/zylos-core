@@ -74,7 +74,7 @@ test('the settings page keeps its sections in order, offers the right upgrades a
           const { items, nextCursor, total } = fleetPageFixture({ agents: fixtures.machines }, url.search);
           return route.fulfill({ json: { self: { name: 'browser-case' }, items: items.map(agent => ({
             ...agent, connection: { kind: 'unknown' },
-          })), nextCursor, total } } });
+          })), nextCursor, total } });
         }
         if (url.pathname === '/api/settings/pricing' && method === 'PUT') return route.fulfill({ json: { ok: true } });
         if (url.pathname === '/api/settings/pricing' && method === 'GET') return route.fulfill({ json: { active: 'claude', runtimes: {
