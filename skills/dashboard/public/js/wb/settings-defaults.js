@@ -447,7 +447,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
 export function renderHotTtl(root, { metadata = {}, document = root.ownerDocument, t = key => key,
   execute, confirm = async () => false, writable = () => true, lock, refreshLocks = () => {} } = {}) {
   root.replaceChildren();
-  const meta = metadata.claude?.session_hot_ttl ?? metadata.codex?.session_hot_ttl;
+  const meta = Object.values(metadata).find(m => m?.session_hot_ttl)?.session_hot_ttl;
   const seconds = meta?.seconds;
   let baseline = Number.isFinite(seconds) ? seconds / 60 : null, busy = false;
   const min = meta?.min_minutes ?? 5, max = meta?.max_minutes ?? 1440;

@@ -430,7 +430,7 @@ function priceFixture() {
   root.querySelector('#settings-fast-mode-group').append(node(document, 'input', 'settings-fast-multiplier'));
   for (const id of ['settings-status', 'settings-save', 'settings-add-model', 'settings-add-priority-model']) root.append(node(document, 'button', id));
   const rate = { input: 1, output: 2, cacheRead: 0.1, cacheCreation: 1 };
-  const data = { active: 'claude', runtimes: { claude: { builtInModels: ['base', 'unused'], modelPrices: { base: { ...rate, fastModeMultiplier: 3, longContext: { input: 2 } }, unused: rate, custom: rate }, fastMode: { configuredMultiplier: 6 } }, codex: { builtInModels: ['gpt'], modelPrices: { gpt: rate }, priorityModelPrices: { gpt: rate }, builtInPriorityModels: ['gpt'] } } };
+  const data = { active: 'claude', runtimes: { claude: { builtInModels: ['base', 'unused'], modelPrices: { base: { ...rate, fastModeMultiplier: 3, longContext: { input: 2 } }, unused: rate, custom: rate }, fastMode: { mode: 'multiplier', configuredMultiplier: 6 } }, codex: { builtInModels: ['gpt'], modelPrices: { gpt: rate }, priorityModelPrices: { gpt: rate }, builtInPriorityModels: ['gpt'], fastMode: { mode: 'service_tier' } } } };
   return { document, root, host, base, priority, data, rate };
 }
 

@@ -116,18 +116,8 @@
   },
   {
     "file": "skills/dashboard/public/js/runtime-ui.js",
-    "text": "options: [...(meta.runtime === 'codex' && !meta.current_model ? [{ value: '', labelKey: 'actions.unset', disabled: true, selected: true }] : []), ...models, { value: '__custom__', labelKey: 'actions.custom' }],",
-    "reason": "dispatch:dashboard: Offers a disabled unset model entry for Codex metadata."
-  },
-  {
-    "file": "skills/dashboard/public/js/runtime-ui.js",
-    "text": "const unavailable = meta.runtime === 'codex' && !list.includes(currentEffort);",
-    "reason": "dispatch:dashboard: Marks an unrecognized current Codex effort as unavailable."
-  },
-  {
-    "file": "skills/dashboard/public/js/runtime-ui.js",
-    "text": "hidden: !list.length && meta.runtime !== 'codex',",
-    "reason": "dispatch:dashboard: Retains the Codex effort control when the catalog is empty."
+    "text": "return meta.catalog_strict ?? (meta.runtime === 'codex');",
+    "reason": "legacy: Preserves strict catalog behavior for older fleet peers that do not return catalog_strict."
   },
   {
     "file": "skills/dashboard/public/js/wb/page-actions.js",
@@ -148,55 +138,5 @@
     "file": "skills/dashboard/public/js/wb/settings-defaults.js",
     "text": "return [runtime === 'codex' ? t('confirm.switch_runtime_codex') : t('confirm.switch_runtime', { value: engineName(runtime) }), runtimeConfirmation(snapshot, t)].join('\\n');",
     "reason": "dispatch:dashboard: Uses a dedicated confirmation when saving Codex as the default engine."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
-    "text": "if (runtime === 'codex') payload.priorityModelPrices = collectPriceRows([...priorityRows.querySelectorAll('tr')]);",
-    "reason": "dispatch:dashboard: Captures the priority prices exclusive to Codex."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
-    "text": "if (value === 'codex') count += countPriceChanges(original.priorityModelPrices, value === runtime ? draftPriceRows([...priorityRows.querySelectorAll('tr')]) : payload.priorityModelPrices);",
-    "reason": "dispatch:dashboard: Counts changes to priority prices exclusive to Codex."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
-    "text": "const fast = value === runtime && value === 'claude' ? fastInput?.value ?? '' : Object.hasOwn(payload, '_editedFastMultiplier') ? String(payload._editedFastMultiplier ?? '') : fastSaved;",
-    "reason": "dispatch:dashboard: Reads the live fast-mode multiplier for the Claude tab."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
-    "text": "if (value === 'claude' && fast !== fastSaved) count++;",
-    "reason": "dispatch:dashboard: Counts changes to the Claude fast-mode multiplier."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
-    "text": "host.querySelector('#settings-priority-pricing-group').hidden = runtime !== 'codex';",
-    "reason": "dispatch:dashboard: Shows priority price controls for Codex only."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
-    "text": "host.querySelector('#settings-fast-mode-group').hidden = runtime !== 'claude';",
-    "reason": "dispatch:dashboard: Shows fast-mode multiplier controls for Claude only."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
-    "text": "text.append(element(document, 'b', item.model ?? t('wb.unknown'), 'wb-mono'), element(document, 'span', t('wb.settings.unmatchedTitle', { runtime: runtimeName(item.runtime === 'codex' ? 'codex' : 'claude') })),",
-    "reason": "dispatch:dashboard: Associates unmatched usage with the existing Codex or Claude price editor."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
-    "text": "if (value === 'codex') runtimes[value].priorityModelPrices = payload.priorityModelPrices;",
-    "reason": "dispatch:dashboard: Writes the priority price field only for Codex."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/settings-pricing.js",
-    "text": "if (value === 'codex') saved[value].priorityModelPrices = structuredClone(runtimes[value].priorityModelPrices);",
-    "reason": "dispatch:dashboard: Updates the saved priority-price baseline only for Codex."
-  },
-  {
-    "file": "skills/dashboard/public/js/wb/settings.js",
-    "text": "onLoad({ snapshot: value(0), page: value(1), prices: value(2), usage: value(3), metadata: { claude: value(4), codex: value(5) } });",
-    "reason": "dispatch:dashboard: Maps the two existing runtime metadata responses to their respective engine keys."
   }
 ]

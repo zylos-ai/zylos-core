@@ -69,8 +69,8 @@ test('the settings page keeps its sections in order, offers the right upgrades a
         if (url.pathname === '/api/fleet/agents' && method === 'GET') return route.fulfill({ json: { self: { name: 'browser-case' }, agents: fixtures.machines } });
         if (url.pathname === '/api/settings/pricing' && method === 'PUT') return route.fulfill({ json: { ok: true } });
         if (url.pathname === '/api/settings/pricing' && method === 'GET') return route.fulfill({ json: { active: 'claude', runtimes: {
-          claude: { builtInModels: Object.keys(fixtures.prices), modelPrices: fixtures.prices, fastMode: { configuredMultiplier: 6 } },
-          codex: { builtInModels: ['gpt'], modelPrices: { gpt: rate }, priorityModelPrices: {}, builtInPriorityModels: [] } } } });
+          claude: { builtInModels: Object.keys(fixtures.prices), modelPrices: fixtures.prices, fastMode: { mode: 'multiplier', configuredMultiplier: 6 } },
+          codex: { builtInModels: ['gpt'], modelPrices: { gpt: rate }, priorityModelPrices: {}, builtInPriorityModels: [], fastMode: { mode: 'service_tier' } } } } });
         if (url.pathname === '/api/session-hosts') {
           if (method === 'POST') {
             const body = request.postDataJSON();
