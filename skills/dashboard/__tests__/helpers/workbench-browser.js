@@ -578,6 +578,12 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await page.locator('#memory-back').click();
     await page.locator(`#memory-tree .memory-file[data-path="${GROUP_FILE}"].active`).waitFor();
     assert.equal(await page.evaluate(() => location.search), '');
+    // The group picker opens on its first click and stays open once its groups arrive and the page redraws.
+    await page.locator('.wb-memory-picker input').click();
+    await page.locator('.wb-memory-picker-item').nth(1).waitFor();
+    assert.deepEqual(await page.evaluate(() => [document.activeElement?.matches('.wb-memory-picker input'), document.querySelector('.wb-memory-picker-list').hidden]),
+      [true, false], 'the picker keeps its focus and its choices');
+    await page.keyboard.press('Escape');
 
     // Overview and group detail: icon, name and state share the first row; the actions are the second row, starting
     // at the icon's left edge, one row of equal-height buttons with the conversation first.

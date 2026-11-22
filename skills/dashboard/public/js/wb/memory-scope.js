@@ -232,6 +232,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     pickerOpen = false; pickerQuery = ''; renderPicker();
   });
   pickerWrap.append(picker, pickerList);
+  const filters = element(document, 'div', undefined, 'wb-memory-filter');
   // Pressing a choice keeps focus in the field (Safari does not focus a pressed button), so the list is still
   // there when the click arrives.
   pickerList.addEventListener('mousedown', event => event.preventDefault?.());
@@ -287,7 +288,9 @@ export function createMemoryScope({ document = globalThis.document, root, charts
   function render() {
     if (!root || stopped) return;
     syncIdentity();
-    root.replaceChildren();
+    // The filter row stays mounted: taking it out would move focus off the picker or the search box whenever a
+    // read they started settles and redraws the page.
+    for (const child of [...root.childNodes]) if (child !== filters) child.remove();
     const nav = element(document, 'div', undefined, 'wb-seg wb-memory-scopes');
     nav.setAttribute('role', 'group'); nav.setAttribute('aria-label', t('wb.memory.scope'));
     for (const [value, label] of [['all', 'wb.memory.all'], ['shared', 'wb.memory.shared'], ['groups', 'wb.memory.groups']]) {
@@ -297,8 +300,8 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       }, selected === value ? 'active' : '');
       item.setAttribute('aria-pressed', String(selected === value));
     }
-    root.append(nav);
-    const filters = element(document, 'div', undefined, 'wb-memory-filter');
+    if (filters.parentNode === root) root.insertBefore(nav, filters);
+    else { filters.append(pickerWrap, searchWrap); root.append(nav, filters); }
     picker.placeholder = t('wb.memory.filter');
     picker.setAttribute('aria-label', t('wb.memory.filter'));
     picker.disabled = selected === 'shared';
@@ -309,8 +312,6 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     renderPicker();
     search.placeholder = t('wb.memory.search');
     search.setAttribute('aria-label', t('wb.memory.search'));
-    filters.append(pickerWrap, searchWrap);
-    root.append(filters);
     if (selectedGroup && groupRow(selectedGroup) === null) root.append(element(document, 'p', t('wb.memory.noGroupFiles'), 'empty-state'));
     if (selected !== 'shared' && entries.known().invalid.size) root.append(element(document, 'p', t('wb.memory.invalidGroup'), 'wb-memory-diagnostic'));
     const file = getFile();
@@ -338,7 +339,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     }
     if (list.loading) pickerList.append(element(document, 'p', t('memory.loading'), 'wb-memory-source'));
     else if (list.error) pickerList.append(element(document, 'p', t('memory.error_generic'), 'wb-memory-diagnostic'));
-    else if (!list.items.some(item => item.type === 'group')) pickerList.append(element(document, 'p', t('wb.memory.noMatch'), 'wb-memory-source'));
+    else if (!list.items.some(item => item.type === 'group')) pickerList.append(element(document, 'p', t('wb.noMatch'), 'wb-memory-source'));
   }
   function fileButton(parent, node, prefix, sizeClass = '') {
     const item = button(parent, undefined, () => onFile(node.path),

@@ -93,9 +93,16 @@ test('the group picker searches the server for groups and a group jump opens onl
   const options = () => nodesOfClass(f.root, 'wb-memory-picker-item').map(node => node.textContent);
   picker.dispatch('focus'); await settled();
   assert.deepEqual(options(), [], 'tabbing onto the picker does not open its choices, so Tab moves on to the next field');
+  // The filter row stays in the page while the picker's read settles and redraws it, so the field keeps focus.
+  const removed = [], removeChild = f.root.removeChild.bind(f.root);
+  f.root.removeChild = node => { removed.push(node); return removeChild(node); };
   picker.dispatch('click'); await settled();
+  assert.ok(f.changes.length > 0 && !removed.includes(picker.parentNode.parentNode), 'the redraw keeps the filter row mounted');
   assert.deepEqual(options(), ['wb.memory.allGroups', 'wb.platform.telegram · dm-1001telegram:dm-1001']);
   assert.ok(f.entries.reads.includes('/api/memory/entries?view=groups&limit=8'), 'a few groups at a time');
+  picker.value = 'no-such-group'; picker.dispatch('input'); await typed(); await settled();
+  assert.deepEqual(nodesOfClass(f.root, 'wb-memory-picker-list')[0].children.slice(1).map(node => node.textContent), ['wb.noMatch'],
+    'no match says no matching groups, not files');
   picker.value = 'DM-10'; picker.dispatch('input'); await typed(); await settled();
   assert.ok(f.entries.reads.includes('/api/memory/entries?view=groups&q=DM-10&limit=8'));
   nodesOfClass(f.root, 'wb-memory-picker-item')[1].dispatch('click'); await settled();

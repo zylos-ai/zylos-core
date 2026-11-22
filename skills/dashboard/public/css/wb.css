@@ -940,7 +940,7 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .memory-head .memory-refresh svg { width: 16px; height: 16px; }
 .wb-memory-filter { order: 2; display: flex; flex-basis: 100%; gap: 6px; margin: 0; }
 /* The group picker: type part of a group's name; its choices drop below the field. */
-.wb-memory-picker { position: relative; flex: 0 0 148px; min-width: 0; }
+.wb-memory-picker { position: relative; flex: 0 0 120px; min-width: 0; }
 .wb-memory-picker .wb-input { width: 100%; height: var(--wb-h); }
 .wb-memory-picker-list { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; width: max(100%, 240px); max-height: 320px; overflow: auto; padding: 4px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); box-shadow: 0 8px 24px rgba(0, 0, 0, .12); }
 .wb-memory-picker-list[hidden] { display: none; }
@@ -1023,6 +1023,8 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
   .wb-memory-bl .wb-memory-flags { grid-column: auto; margin-bottom: 4px; }
   .wb-memory-bl .wb-memory-flags:has(> :only-child) { margin-bottom: 0; }
   .memory-layout { grid-template-columns: 1fr; min-height: 0; }
+  /* Phones: the group picker and the file search share the row equally, so both placeholders show whole. */
+  .wb-memory-picker, .wb-memory-search { flex: 1 1 0; }
   .memory-tree-card { border-right: 0; }
   .memory-tree { max-height: none; }
   .memory-viewer-head { flex-wrap: wrap; justify-content: flex-start; align-items: flex-start; padding: 12px; }
