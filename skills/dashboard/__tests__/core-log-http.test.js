@@ -12,7 +12,7 @@ import { CoreLogImporter } from '../src/lib/core-log-importer.js';
 // Run when event scope, filters, importer publication or redaction changes; skip
 // for unrelated UI changes. The official runner isolates HOME/ZYLOS_DIR/PM2_HOME
 // and TMPDIR; this case uses only its private DB/HTTP server and stops the importer.
-test('group events HTTP preserves scoped pagination, unassigned Origin history, cap and redacted gaps', async t => {
+test('group event pages preserve scoped Origin history, the page cap and redaction', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'core-log-http-'));
   const modePath = path.join(root, '.zylos/config.json');
   fs.mkdirSync(path.dirname(modePath), { recursive: true });
@@ -53,62 +53,33 @@ test('group events HTTP preserves scoped pagination, unassigned Origin history, 
     assert.equal(login.status, 302);
     const cookie = login.headers.get('set-cookie');
     assert.ok(cookie);
-    const get = async query => {
-      const params = new URLSearchParams(query);
-      const unassigned = params.has('session_group') && params.get('session_group') === '' || params.get('stream') === 'router';
-      const group = params.get('session_group') || 'origin';
-      params.delete('session_group');
-      fs.writeFileSync(modePath, JSON.stringify({ session_mode: unassigned ? 'single' : 'multi' }));
-      const response = await fetch(`${origin}/api/groups/${encodeURIComponent(group)}/events?${params}`, { headers: { Cookie: cookie } });
-      assert.equal(response.status, 200);
+    const get = async (query, status = 200, group = 'origin') => {
+      const response = await fetch(`${origin}/api/groups/${encodeURIComponent(group)}/events?${query}`, { headers: { Cookie: cookie } });
+      assert.equal(response.status, status);
       return response.json();
     };
-    const scoped = await get('session_group=origin&run_id=run-a&session_id=session-a&runtime=codex&types=x&limit=2&offset=2');
-    assert.deepEqual(scoped.events.map(row => row.id), ['event-5', 'event-7']);
-    assert.equal(scoped.count, 2);
-    assert.equal(scoped.gaps.length, 1);
+    const scoped = await get('runId=run-a&level=technical&limit=2');
+    assert.deepEqual(scoped.items.map(row => row.id), ['event-1001', 'event-1003']);
+    assert.deepEqual(Object.keys(scoped), ['items', 'nextCursor', 'afterCursor']);
     assert.equal(JSON.stringify(scoped).includes(secret), false);
     assert.equal(JSON.stringify(scoped).includes(diagnosticSecret), false);
-    assert.equal((await get('session_group=other')).gaps.length, 0);
-    assert.equal((await get('stream=router')).gaps.length, 0);
-    assert.equal((await get('stream=events%3Aorigin')).gaps.length, 1);
-    // Single Origin combines current hook attribution and legacy null records
-    // before pagination; multi Origin still excludes legacy null records.
-    const unassigned = await get('session_group=&limit=2');
-    assert.deepEqual(unassigned.events.map(row => row.id), ['event-0', 'event-1']);
-    assert.deepEqual((await get('session_group=&limit=2&offset=2')).events.map(row => row.id), ['event-2', 'event-3']);
-    assert.deepEqual((await get('session_group=origin&limit=2')).events.map(row => row.id), ['event-1', 'event-3']);
-    assert.deepEqual((await get('session_group=&run_id=run-a&session_id=session-a&runtime=codex&types=x&limit=2&offset=2')).events.map(row => row.id), ['event-5', 'event-7']);
-    assert.deepEqual((await get('session_group=&until=2025-12-31T23:59:59Z')).events, []);
-    assert.equal(unassigned.gaps.length, 1);
-    assert.equal(unassigned.gaps[0].extra.stream, 'events:origin');
-    assert.equal(JSON.stringify(unassigned.gaps).includes(secret), false);
-    assert.equal((await get('run_id=nonexistent')).count, 0);
-    const after = await get('after_seq=1002');
-    const unassignedAfter = await get('session_group=&after_seq=1002');
-    assert.deepEqual(unassignedAfter.events.map(row => row.id), ['event-1002', 'event-1003']);
-    assert.deepEqual(after.events.map(row => row.id), ['event-1003']);
-    // A group must itself exceed the cap now that the resource is group-scoped.
-    for (let i = 0; i < 1000; i++) store.insertEvent({ id: `cap-${i}`, ingest_id: `cap:${i}`, timestamp: '2026-01-02T00:00:00.000Z',
-      event_type: 'x', category: 'diagnostic', runtime: 'claude', session_group: 'origin', source: 'core-log' });
-    const capped = await get('limit=10000');
-    assert.equal(capped.count, 1000);
-    store.upsertSourceHealth('core:fixture', 'history', 'healthy', { stream: 'events:origin' });
-    assert.equal((await get('session_group=origin')).gaps.length, 0);
-    store.db.transaction(() => {
-      for (let i = 0; i < 1005; i++) store.upsertSourceHealth(`core:router:gap-${i}`, 'history', 'warning',
-        { stream: 'router', reason: 'file_missing', generation: i });
-      store.upsertSourceHealth('core:other', 'history', 'warning', { stream: 'events:other' });
-    })();
-    const firstGaps = await get('stream=router&gap_limit=2');
-    const nextGaps = await get('stream=router&gap_limit=2&gap_offset=2');
-    assert.equal(firstGaps.gaps.length, 2);
-    assert.equal(nextGaps.gaps.length, 2);
-    assert.equal(firstGaps.gaps.some(row => nextGaps.gaps.some(next => row.name === next.name)), false);
-    assert.equal((await get('stream=router&gap_limit=10000')).gaps.length, 1000);
-    assert.equal((await get('stream=router')).gaps.length, 100);
-    assert.equal((await get('session_group=other')).gaps.length, 1);
-
+    const older = await get(new URLSearchParams({ runId: 'run-a', level: 'technical', limit: 2, cursor: scoped.nextCursor }));
+    assert.deepEqual(older.items.map(row => row.id), ['event-997', 'event-999']);
+    assert.equal((await get('level=technical&limit=100')).items.length, 100);
+    for (const [query, param] of [['limit=101', 'limit'], ['limit=1&limit=2', 'limit'], ['offset=1', 'offset'],
+      ['since=x', 'since'], ['session_group=origin', 'session_group'], ['filter=foo', 'filter'], ['gap_limit=2', 'gap_limit']]) {
+      const rejected = await get(query, 400);
+      assert.deepEqual([rejected.error.code, rejected.error.param], ['invalid_parameter', param]);
+    }
+    const wrongScope = await get(new URLSearchParams({ runId: 'run-a', level: 'plain', cursor: scoped.nextCursor }), 400);
+    assert.equal(wrongScope.error.code, 'invalid_cursor');
+    fs.writeFileSync(modePath, JSON.stringify({ session_mode: 'single' }));
+    const unassigned = await get('level=technical&limit=2');
+    assert.deepEqual(unassigned.items.map(row => row.id), ['event-1002', 'event-1003']);
+    const empty = await get(new URLSearchParams({ direction: 'after', level: 'technical', cursor: unassigned.afterCursor }));
+    assert.deepEqual(empty.items, []);
+    assert.equal(empty.afterCursor, unassigned.afterCursor);
+    fs.writeFileSync(modePath, JSON.stringify({ session_mode: 'multi' }));
     // Capture only construction; real importer, index onImport wiring, coalescer,
     // SSE hub and authenticated HTTP stream all execute unchanged.
     const abort = new AbortController();
@@ -133,23 +104,23 @@ test('group events HTTP preserves scoped pagination, unassigned Origin history, 
       }
       const secretFile = path.join(root, 'secret-enums.jsonl');
       fs.writeFileSync(secretFile, JSON.stringify({ v: 1, ts: 2, event: diagnosticSecret,
-        runtime: diagnosticSecret, session_group: 'enum-check', requestId: run, sessionGroup: group }) + '\n');
+        runtime: diagnosticSecret, session_group: 'ns:enum-check', requestId: run, sessionGroup: group }) + '\n');
       await importer.importFile('router', secretFile);
-      const enumSaved = store.queryEvents({ sessionGroup: 'enum-check' });
-      const enumHistory = await get('session_group=enum-check');
+      const enumSaved = store.queryEvents({ sessionGroup: 'ns:enum-check' });
+      const enumHistory = await get('level=technical', 200, 'ns:enum-check');
       assert.equal(enumSaved.length, 1);
-      for (const records of [enumSaved, enumHistory.events]) {
+      for (const records of [enumSaved, enumHistory.items]) {
         assert.equal(JSON.stringify(records).includes(diagnosticSecret), false);
         assert.equal(records[0].runtime, 'unknown');
         assert.equal(records[0].event_type, 'unknown');
         assert.equal(records[0].metadata.requestId, run);
         assert.equal(records[0].metadata.sessionGroup, group);
       }
-      const query = new URLSearchParams({ session_group: group, run_id: run, session_id: session });
-      const history = await get(query);
-      assert.equal(history.count, 1);
+      const query = new URLSearchParams({ runId: run, level: 'technical' });
+      const history = await get(query, 200, group);
+      assert.equal(history.items.length, 1);
       const saved = store.queryEvents({ sessionGroup: group, runId: run, sessionId: session })[0];
-      for (const event of [saved, history.events[0]]) {
+      for (const event of [saved, history.items[0]]) {
         assert.equal(event.session_group, group); assert.equal(event.run_id, run);
         assert.equal(event.session_id, session); assert.equal(event.metadata.stream, `events:${group}`);
         assert.equal(event.metadata.error, '[REDACTED]');

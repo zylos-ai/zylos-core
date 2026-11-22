@@ -1,8 +1,11 @@
 // This module awaits the Core runtime factory at module scope.
 // The corresponding runtime implementations must not statically import it.
 
-import { restartEffect } from '../../../public/js/wb/timeline-rows.js';
+import { eventTypesFor } from '../../../public/js/wb/timeline-rows.js';
 import { loadCoreModule } from '../core-modules.js';
+import { listFailure, parseListQuery } from '../list-query.js';
+import { isRestartExit } from './restart-effects.js';
+import { levels } from './timeline-page.js';
 
 const { getRuntime, SUPPORTED_RUNTIMES } = await loadCoreModule('runtime/index.js');
 const exitsProcess = new Map(await Promise.all(SUPPORTED_RUNTIMES.map(async id =>
@@ -13,24 +16,19 @@ export function createRuns({ store, getSnapshot = async () => ({ rows: [] }) } =
   // `types` narrows what is counted (n, totalEvents, unattributed), not which runs exist or when they
   // start and end: a run whose events are all of other types is still listed, with n 0. Counts cover the events the
   // timeline shows: an automatic restart's crash report is not one.
-  return async function runs(key, { before, limit = 3, types } = {}) {
-    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
-      throw Object.assign(new Error('Invalid run page size'), { code: 'INVALID_ARGUMENT', statusCode: 400 });
-    }
-    if (before !== undefined && !Number.isFinite(Date.parse(before))) {
-      throw Object.assign(new Error('Invalid run page boundary'), { code: 'INVALID_ARGUMENT', statusCode: 400 });
-    }
-    const snapshot = await getSnapshot() ?? { rows: [] };
+  function readRuns(key, query, snapshot) {
     const group = key === 'origin' && snapshot.view === 'single' ? null : key;
     const currentRunId = snapshot.rows?.find(row => row.sessionGroup === group)?.live?.runId ?? null;
-    const params = { key: group, limit, ...(before === undefined ? {} : { before }) };
-    const counted = Array.isArray(types) && types.length ? types.slice(0, 100) : null;
+    const params = { key: group, limit: query.limit + 1 };
+    if (query.after !== null) [params.before, params.runId] = query.after;
+    const counted = eventTypesFor('all', query.filters.level);
     const typeParams = Object.fromEntries((counted ?? []).map((type, i) => [`type${i}`, type]));
-    const counts = counted ? `SUM(CASE WHEN event_type IN (${counted.map((_, i) => `@type${i}`).join(',')}) THEN 1 ELSE 0 END)` : 'COUNT(*)';
+    const countedType = counted ? `event_type IN (${counted.map((_, i) => `@type${i}`).join(',')}) AND ` : '';
+    const counts = `SUM(CASE WHEN ${countedType}NOT ${isRestartExit()} THEN 1 ELSE 0 END)`;
     const rows = store.db.prepare(`SELECT run_id AS runId, MIN(timestamp) AS startAt,
-      MAX(timestamp) AS endAt, ${counts} AS n FROM runtime_events
+      MAX(timestamp) AS endAt, ${counts} AS n FROM runtime_events event
       WHERE session_group IS @key AND run_id IS NOT NULL GROUP BY run_id
-      ${before === undefined ? '' : 'HAVING MIN(timestamp) < @before'}
+      ${query.after === null ? '' : 'HAVING MIN(timestamp) < @before OR (MIN(timestamp) = @before AND run_id > @runId)'}
       ORDER BY startAt DESC, run_id LIMIT @limit`).all({ ...params, ...typeParams });
     const endings = store.db.prepare(`SELECT event_type, runtime, metadata FROM runtime_events
       WHERE session_group IS ? AND run_id = ?
@@ -56,29 +54,19 @@ export function createRuns({ store, getSnapshot = async () => ({ rows: [] }) } =
       return 'unknown';
     };
     const totals = store.db.prepare(`SELECT COUNT(DISTINCT run_id) AS totalRuns,
-      COALESCE(${counts}, 0) AS totalEvents FROM runtime_events
+      COALESCE(${counts}, 0) AS totalEvents FROM runtime_events event
       WHERE session_group IS @key AND run_id IS NOT NULL`).get({ key: group, ...typeParams });
-    const { unattributed } = store.db.prepare(`SELECT COALESCE(${counts}, 0) AS unattributed FROM runtime_events
+    const { unattributed } = store.db.prepare(`SELECT COALESCE(${counts}, 0) AS unattributed FROM runtime_events event
       WHERE session_group IS @key AND run_id IS NULL`).get({ key: group, ...typeParams });
-    // The crash report of an exit an automatic restart caused is not shown on the timeline (restartEffect), so the
-    // counts leave it out too, run by run, in runs that had such a restart.
-    const hidden = new Map();
-    if (!counted || counted.includes('crash_detected')) {
-      const runsWithRestart = new Map();
-      for (const event of store.db.prepare(`SELECT run_id, event_type, timestamp FROM runtime_events
-        WHERE session_group IS @key AND event_type IN ('no_response_restart','tool_timeout_restart','crash_detected')
-          AND run_id IN (SELECT run_id FROM runtime_events WHERE session_group IS @key
-            AND event_type IN ('no_response_restart','tool_timeout_restart'))`).iterate({ key: group })) {
-        if (!runsWithRestart.has(event.run_id)) runsWithRestart.set(event.run_id, []);
-        runsWithRestart.get(event.run_id).push(event);
-      }
-      for (const [runId, events] of runsWithRestart) {
-        const effect = restartEffect(events), exits = events.filter(event => effect(event) === 'exit').length;
-        if (exits) hidden.set(runId, exits);
-      }
-    }
-    const hiddenTotal = [...hidden.values()].reduce((sum, count) => sum + count, 0);
-    return { runs: rows.map(run => ({ ...run, n: run.n - (hidden.get(run.runId) ?? 0), endReason: endReason(run) })),
-      ...totals, totalEvents: totals.totalEvents - hiddenTotal, unattributed };
+    const page = rows.slice(0, query.limit);
+    const last = page.at(-1);
+    return { items: page.map(run => ({ ...run, endReason: endReason(run) })),
+      nextCursor: rows.length > query.limit ? query.nextCursor([last.startAt, last.runId]) : null,
+      ...totals, unattributed };
+  }
+  return async function runs(key, search = new URLSearchParams()) {
+    const query = parseListQuery(`group-runs:${key}`, search, { filters: { level: levels } });
+    try { return readRuns(key, query, await getSnapshot() ?? { rows: [] }); }
+    catch { throw listFailure(503, 'unavailable', 'Group runs unavailable'); }
   };
 }

@@ -542,7 +542,7 @@ test('unavailable and corrupt databases fail explicitly and existing metadata re
   const f = fixture(t);
   f.add({ id: 1, content: 'PRIVATE' });
   const a = f.history.list({ tab: 'external' }).items[0];
-  const metadata = f.reader.getGroupMessages('tg:a', { since: '2026-01-01', until: '2026-01-02' });
+  const metadata = f.reader.getGroupMessagePage('tg:a', new URLSearchParams()).items;
   assert.equal(metadata.length, 1); assert.equal(Object.hasOwn(metadata[0], 'content'), false);
   assert.deepEqual(Object.keys(metadata[0]).sort(), ['channel', 'direction', 'id', 'timestamp']);
   const missing = new C4Reader(path.join(f.root, 'missing'));
@@ -720,7 +720,7 @@ test('internal rows preserve raw facts and project peers on both histories witho
     assert.equal(list.length, 1);
     assert.equal(list[0].preview, expected);
     assert.equal(list[0].channel, tab === 'mine' ? 'dashboard' : 'telegram');
-    const recent = f.reader.getGroupMessages(list[0].session_group, { since: '2026-01-01', until: '2026-01-02' });
+    const recent = f.reader.getGroupMessagePage(list[0].session_group, new URLSearchParams()).items;
     assert.equal(recent.length, 1);
     assert.equal(recent[0].id, id);
   }

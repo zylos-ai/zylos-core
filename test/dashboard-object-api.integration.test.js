@@ -459,12 +459,14 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       assert.equal(detail.working.main, null, 'only child agents work while the main status remains idle');
       assert.equal(detail.working.subagents.count, 2, 'current hook origin and historical null records both contribute');
       assert.ok(detail.duration > 0);
-      const timeline = await request('/api/groups/origin/events?run_id=fixture-run');
-      assert.equal(timeline.events.filter(event => event.event_type === 'subagent_start').length, 2);
-      assert.ok(timeline.events.every(event => event.session_group === null || event.session_group === 'origin'));
-      const first = await request('/api/groups/origin/events?run_id=fixture-run&limit=1');
-      const second = await request('/api/groups/origin/events?run_id=fixture-run&limit=1&offset=1');
-      assert.equal(first.events.length, 1); assert.equal(second.events.length, 1); assert.notEqual(first.events[0].event_seq, second.events[0].event_seq);
+      const timeline = await request('/api/groups/origin/events?runId=fixture-run');
+      assert.equal(timeline.items.filter(event => event.event_type === 'subagent_start').length, 2);
+      assert.ok(timeline.items.every(event => event.session_group === null || event.session_group === 'origin'));
+      const first = await request('/api/groups/origin/events?runId=fixture-run&limit=1');
+      const second = await request('/api/groups/origin/events?' + new URLSearchParams({ runId: 'fixture-run', limit: 1, cursor: first.nextCursor }));
+      assert.equal(first.items.length, 1); assert.equal(second.items.length, 1); assert.notEqual(first.items[0].event_seq, second.items[0].event_seq);
+      const incompatible = await request('/api/groups/origin/events?' + new URLSearchParams({ runId: 'fixture-run', filter: 'tools', cursor: first.nextCursor }), { expected: 400 });
+      assert.equal(incompatible.error.code, 'invalid_cursor');
     }
     if (next === 'multi') {
       assert.equal(counts.offline.total, 57);

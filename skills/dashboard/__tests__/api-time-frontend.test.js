@@ -28,14 +28,17 @@ const iso = '2026-11-16T09:00:00.000+08:00', ms = Date.parse(iso), seconds = ms 
 test('ISO offset instants parse without converting durations or opaque schedule cursors', () => {
   assert.equal(instantMs(iso), ms); assert.equal(instantSeconds(iso), seconds);
   assert.ok(Number.isNaN(instantMs('not a timestamp')));
-  const wire = { readAt: iso, tasks: [{ nextRunAt: iso, recent: [{ executedAt: iso, completedAt: iso, duration: 1200 }],
-    nextRuns: { runs: [iso], in24h: [iso] } }], rows: [{ executedAt: iso }], runs: [iso], next: { before: seconds, beforeId: 42 } };
+  const wire = { readAt: iso, items: [{ nextRunAt: iso, recent: [{ executedAt: iso, completedAt: iso, duration: 1200 }],
+    nextRuns: { runs: [iso], in24h: [iso] } }], runs: [iso], nextCursor: 'opaque.cursor' };
   const data = scheduleTimes(wire);
-  assert.equal(data.readAt, ms); assert.equal(data.tasks[0].nextRunAt, seconds);
-  assert.equal(data.tasks[0].recent[0].duration, 1200); assert.equal(data.tasks[0].recent[0].executedAt, seconds);
-  assert.deepEqual(data.tasks[0].nextRuns, { runs: [seconds], in24h: [seconds] });
-  assert.deepEqual(data.next, wire.next); assert.deepEqual(data.runs, [seconds]);
-  assert.equal(data.rows[0].executedAt, seconds); assert.equal(wire.tasks[0].nextRunAt, iso);
+  assert.equal(data.readAt, ms); assert.equal(data.items[0].nextRunAt, seconds);
+  assert.equal(data.items[0].recent[0].duration, 1200); assert.equal(data.items[0].recent[0].executedAt, seconds);
+  assert.deepEqual(data.items[0].nextRuns, { runs: [seconds], in24h: [seconds] });
+  assert.equal(data.nextCursor, wire.nextCursor); assert.deepEqual(data.runs, [seconds]);
+  assert.equal(wire.items[0].nextRunAt, iso);
+  // A task's history page: execution rows under the same `items`.
+  const history = scheduleTimes({ items: [{ executedAt: iso, completedAt: iso, duration: 1200 }], nextCursor: null });
+  assert.deepEqual(history.items[0], { executedAt: seconds, completedAt: seconds, duration: 1200 });
 });
 
 test('schedule labels and input clocks accept ISO offsets', () => {

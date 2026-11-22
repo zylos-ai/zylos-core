@@ -6,8 +6,8 @@ import { element, fallbackName, icon, runtimeName } from './plain-text.js';
 import { olderRow } from './older-row.js';
 import { channelIcon, platformLabel, statePill } from './board.js';
 import { detailDisplayRow, groupEventCount, rawKey, renderOverview } from './detail-overview.js';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js';
-import { eventTypesFor, recentWindow } from './timeline-rows.js';
+import { createTimelineLoader, isInvalidCursor, renderTimeline } from './detail-timeline.js';
+import { recentWindow } from './timeline-rows.js';
 import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js';
 import { renderNameEditor } from './name-edit.js';
 import { formatZoned, zonedDay } from './instance-zone.js';
@@ -119,7 +119,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
   let generation = 0, controller = null, owner = null, config = null, stopped = false, refreshTask = null;
   let renderedLevel = null, configRevision = 0, configRead = 0, rowRead = 0;
   let recheckError = null;
-  let subagentRun = null, subagentCursor = 0, subagentReady = false, subagentController = null;
+  let subagentRun = null, subagentPage = null, subagentReady = false, subagentController = null;
   const getWritable = () => typeof writable === 'function' ? writable() : writable;
   const getLevel = () => typeof detail === 'function' ? detail() : detail;
   const readLevel = () => getLevel() === 'technical' ? 'technical' : 'plain';
@@ -407,7 +407,8 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       const id = event.agent_id ?? event.metadata?.agent_id;
       if (id == null) continue;
       const previous = agents.get(id);
-      if (previous?.event_seq != null && event.event_seq != null && previous.event_seq > event.event_seq) continue;
+      if (previous?.event_seq != null && event.event_seq != null && (previous.event_seq > event.event_seq ||
+        (previous.event_seq === event.event_seq && previous.id > event.id))) continue;
       if (['subagent_start', 'subagent_stop'].includes(event.event_type)) agents.set(id, event);
     }
     state.currentEvents = [...agents.values()];
@@ -416,7 +417,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     subagentController?.abort();
     subagentController = null;
     subagentRun = null;
-    subagentCursor = 0;
+    subagentPage = null;
     subagentReady = false;
     state.currentEvents = [];
   }
@@ -434,17 +435,28 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     // page per board snapshot, so recovery cannot restart unbounded work.
     subagentReady = true;
     do {
-      const query = new URLSearchParams({ session_group: state.row.sessionGroup ?? '', run_id: runId,
-        types: 'subagent_start,subagent_stop', order: 'asc', limit: '1000' });
-      if (subagentCursor || !initial) query.set('after_seq', String(subagentCursor));
-      const value = await request(`/api/groups/${encodeURIComponent(state.row.sessionGroup ?? 'origin')}/events?` + query, { signal });
+      const query = new URLSearchParams({ runId, filter: 'subagents', limit: '100' });
+      const after = subagentPage && !subagentPage.nextCursor;
+      const cursor = after ? subagentPage.afterCursor : subagentPage?.nextCursor;
+      if (cursor) query.set('cursor', cursor);
+      if (after && cursor) query.set('direction', 'after');
+      const path = `/api/groups/${encodeURIComponent(state.row.sessionGroup ?? 'origin')}/events?`;
+      let value;
+      try { value = await request(path + query, { signal }); }
+      catch (error) {
+        if (!cursor || !isInvalidCursor(error) || signal.aborted) throw error;
+        query.delete('cursor');
+        query.delete('direction');
+        value = await request(path + query, { signal });
+        if (signal.aborted || state.row?.live?.runId !== runId) return;
+        subagentPage = null;
+        state.currentEvents = [];
+      }
       if (signal.aborted || state.row?.live?.runId !== runId) return;
-      const events = value.events ?? [];
-      rememberSubagents(events);
-      const next = events.at(-1)?.event_seq;
-      if (events.length && (!Number.isFinite(next) || next <= subagentCursor)) throw new Error('timeline_cursor_invalid');
-      if (events.length) subagentCursor = next;
-      if (events.length < 1000) return;
+      rememberSubagents(value.items ?? []);
+      subagentPage = { nextCursor: value.nextCursor,
+        afterCursor: after || !subagentPage ? value.afterCursor : subagentPage.afterCursor };
+      if (!subagentPage.nextCursor) return;
     } while (initial);
   }
   async function selectTab(tab) {
@@ -466,11 +478,10 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     const revision = rowRead;
     const gen = generation, key = state.row.sessionGroup ?? 'origin', runId = state.row.live?.runId;
     // Recent activity and the event counts cover plain events only, unless technical detail is on.
-    const level = state.level = readLevel(), types = eventTypesFor('all', level);
+    const level = state.level = readLevel();
     // Read a window larger than the rows shown so merged repeats count every event in it.
-    const query = new URLSearchParams({ session_group: state.row.sessionGroup ?? '', order: 'desc', limit: String(recentWindow) });
-    const runsQuery = new URLSearchParams({ limit: '3' });
-    if (types?.length) { query.set('types', types.join(',')); runsQuery.set('types', types.join(',')); }
+    const query = new URLSearchParams({ level, limit: String(recentWindow) });
+    const runsQuery = new URLSearchParams({ level, limit: '3' });
     const task = (async () => {
       const values = await Promise.allSettled([
         request(`/api/groups/${encodeURIComponent(key)}/events?` + query),
@@ -498,7 +509,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       }
       if (values[5].status === 'fulfilled') state.usage = values[5].value;
       if (values[0].status === 'fulfilled') {
-        state.recent = values[0].value.events ?? [];
+        state.recent = values[0].value.items ?? [];
       }
       if (values[1].status === 'fulfilled') state.backlog = values[1].value;
       if (values[2].status === 'fulfilled') {
