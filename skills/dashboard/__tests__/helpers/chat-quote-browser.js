@@ -469,6 +469,14 @@ export async function runQuoteAnnotateBrowser(t, sandbox, { widths = [1280, 390]
     await swipe(target, -90);
     await quoteBar(page).waitFor();
     assert.match(await quoteBar(page).innerText(), /建议第一批放 2 台/);
+    const replyRow = row(page, reply.id);
+    const marker = replyRow.locator('.conversation-message-meta .conversation-quote-button[data-quoted="true"]');
+    assert.equal(await marker.isVisible(), true, 'the quoted reply has a marker in its footer');
+    assert.ok(await marker.evaluate(el => {
+      const meta = el.parentElement;
+      const content = meta.parentElement.querySelector('.chat-message-content');
+      return el.getBoundingClientRect().top >= content.getBoundingClientRect().bottom;
+    }), 'the quote marker follows the reply');
     const pre = row(page, code.id).locator('pre');
     await pre.scrollIntoViewIfNeeded();
     await page.locator('#wb-chat .conversation-quote-bar-close').click();

@@ -1790,8 +1790,8 @@ function initTabs() {
     });
   });
   window.addEventListener('popstate', async () => {
-    // List/section history changes keep the mounted settings page and its drafts.
-    if (settingsPage?.navigation.popstate()) return;
+    // Handle conversation overlays and settings history before routing between tabs and instances.
+    if (chatPage?.popstate() || settingsPage?.navigation.popstate()) return;
     const generation = ++state.navigationGeneration;
     const path = window.location.pathname;
     // In-page remote viewing only exists on the parent document; the
