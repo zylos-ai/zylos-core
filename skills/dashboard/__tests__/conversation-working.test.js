@@ -35,7 +35,7 @@ function fixture(t, { isoWire = false } = {}) {
         return isoWire ? projectApiTimestamps(u.pathname, detail) : detail;
       }
       if (u.pathname.endsWith('/send')) return { stored: true, conversationId: 'g:A' };
-      if (u.pathname === '/api/chat/conversations') return { items: [{ id: 'g:A', session_group: 'dashboard:a', stamp: 1 }], nextCursor: null };
+      if (u.pathname === '/api/conversations') return { items: [{ id: 'g:A', session_group: 'dashboard:a', stamp: 1 }], nextCursor: null };
       if (u.pathname.endsWith('/messages')) return { items: [], nextCursor: null, afterCursor: 'a' };
       if (u.pathname.endsWith('/questions') || u.pathname.endsWith('/status')) return { items: [], nextCursor: null };
       if (u.pathname.endsWith('/activity')) return { items: [], rounds: [] };

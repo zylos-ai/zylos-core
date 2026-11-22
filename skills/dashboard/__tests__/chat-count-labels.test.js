@@ -56,7 +56,8 @@ async function pageFixture(context, { retained = 1, translate = t } = {}) {
     if (options.method === 'DELETE') { deleted = true; data = { ok: true, retainedMessages: retained, groupDataRetained: true }; }
     else if (path.endsWith('/deletion-preview')) data = { operationId: 'preview', cutoffId: 1, messages: 1, attachments: 1 };
     else if (path.endsWith('/uploads/config')) data = { maxUploadBytes: 1024, maxAttachments: 20 };
-    else if (path.includes('/messages?')) data = { items: rows, nextCursor: null, afterCursor: 'after' };
+    else if (path.includes('/messages?')) data = { items: rows, nextCursor: null, afterCursor: 'after',
+      ...(path.includes('anchor=read') ? { readUpTo: 1, unreadCount: rows.length - 1 } : {}) };
     else if (path.includes('/questions?') || path.includes('/status?')) data = { items: [] };
     else if (path.includes('/api/instance')) data = { session_mode: { sessionMode: 'multi' } };
     else if (/conversations\/g%3AAA$/.test(path)) data = { conversation: { ...item, state: 'active' }, stored: false };
@@ -90,7 +91,7 @@ for (const count of [1, 2]) {
     f.page.streamEvent('chat_ready', { version: 1, ...sub, ids: [] }, sub); await flush();
     const latest = allNodes(f.root).find(node => node.dataset.action === 'latest');
     assert.equal(latest.hidden, false);
-    assert.equal(latest.textContent, `${count} new message${count === 1 ? '' : 's'}`);
-    assert.equal(latest.getAttribute('aria-label'), latest.textContent);
+    assert.equal(latest.textContent, String(count));
+    assert.equal(latest.getAttribute('aria-label'), `${count} new message${count === 1 ? '' : 's'}`);
   });
 }

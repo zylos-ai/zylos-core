@@ -489,7 +489,7 @@ test('schema 28 migration adds an empty pin order and preserves conversations, d
   const upgraded = new Store(file);
   t.after(() => upgraded.close());
   assert.deepEqual(readExisting(upgraded.db), before);
-  assert.deepEqual(upgraded.db.pragma('table_info(chat_pins)').map(column => column.name), ['conversation_id', 'position']);
+  assert.deepEqual(upgraded.db.pragma('table_info(chat_pins)').map(column => column.name), ['tab', 'conversation_id', 'position']);
   assert.deepEqual(upgraded.db.prepare('SELECT * FROM chat_pins').all(), []);
 });
 
@@ -509,4 +509,23 @@ test('the Dashboard migration chain preserves custom objects and columns from sc
   assert.equal(db.prepare('SELECT user_note FROM runtime_events WHERE id=?').pluck().get('old'), 'keep note');
   assert.equal(db.prepare('SELECT value FROM user_items').pluck().get(), 'keep row');
   assert.deepEqual(db.prepare('SELECT * FROM chat_pins').all(), []);
+});
+
+test('schema 29 carryover preserves a Mine pin and captures the deployment watermark only once', t => {
+  const file = fixture(t);
+  const store = new Store(file);
+  store.db.exec(`
+    DROP TABLE chat_read_positions;
+    DROP TABLE chat_pins;
+    DELETE FROM schema_migrations WHERE version >= 30;
+    CREATE TABLE chat_pins(conversation_id TEXT NOT NULL PRIMARY KEY, position INTEGER NOT NULL UNIQUE);
+    INSERT INTO chat_pins VALUES ('g:41', 0);
+  `);
+  const db = store.db;
+  t.after(() => store.close());
+  assert.equal(owner.inspectSchema(db).currentVersion, 29);
+  assert.equal(owner.migrate(db, { conversationHighwater: () => 912 }).currentVersion, TARGET_SCHEMA_VERSION);
+  assert.deepEqual(db.prepare('SELECT * FROM chat_pins').all(), [{ tab: 'mine', conversation_id: 'g:41', position: 0 }]);
+  assert.deepEqual(db.prepare('SELECT * FROM chat_read_positions').all(), [{ conversation_id: '', last_read: 912 }]);
+  owner.migrate(db, { conversationHighwater: () => assert.fail('watermark changes on re-open') });
 });

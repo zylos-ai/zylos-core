@@ -11,7 +11,7 @@ export const attachmentPrincipal = context => context && `${context.kind}:${cont
 
 /** Local data-instance endpoints; fleet streaming is owned by the proxy. */
 export async function handleChatAttachments(req, res, url, { auth, config, sender, attachments, readMode }) {
-  const match = /^\/api\/chat\/conversations\/([^/]+)\/(uploads(?:\/config)?|attachments\/([^/]+))$/.exec(url.pathname);
+  const match = /^\/api\/conversations\/([^/]+)\/(uploads(?:\/config)?|attachments\/([^/]+))$/.exec(url.pathname);
   if (!match) return false;
   const denied = requireChatAccess(req, auth, config);
   if (denied) { const { status, ...body } = denied; sendJson(res, status, body); return true; }

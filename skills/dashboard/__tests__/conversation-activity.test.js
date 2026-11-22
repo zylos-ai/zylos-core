@@ -207,7 +207,7 @@ function pageFixture(context, { rows, activityBody, activityStatus = () => 200, 
     const activity = path.includes('/activity?') ? new URLSearchParams(path.split('?')[1]) : null;
     if (activity) reads.push(activity.get('subtask') ?? 'live');
     const body = path === '/api/instance' ? { session_mode: { sessionMode: 'multi' } }
-      : path.startsWith('/api/chat/conversations?') ? { items: [{ id: 'g:AA', sessionGroup: 'dashboard:a', displayName: 'A' }], nextCursor: null }
+      : path.startsWith('/api/conversations?') ? { items: [{ id: 'g:AA', sessionGroup: 'dashboard:a', displayName: 'A' }], nextCursor: null }
       : path.includes('/messages?') ? { items: rows(), nextCursor: null, afterCursor: 'after' }
       : activity ? (activityStatus() !== 200 ? { error: 'not_found' } : activity.has('subtask') ? subtaskBody(activity.get('subtask')) : activityBody())
       : /\/conversations\/[^/?]+$/.test(path) ? { conversation: { id: 'g:AA', sessionGroup: 'dashboard:a', state: 'active' } }
@@ -503,7 +503,7 @@ function layoutFixture(context, { rows, older, rowHeight = () => 100 }) {
     setInterval: () => 9, clearInterval() {}, innerWidth: 1280 };
   const page = mountConversationPage({ root, document, t, fetch: async path => {
     const body = path === '/api/instance' ? { session_mode: { sessionMode: 'multi' } }
-      : path.startsWith('/api/chat/conversations?') ? { items: [{ id: 'g:AA', sessionGroup: 'dashboard:a', displayName: 'A' }], nextCursor: null }
+      : path.startsWith('/api/conversations?') ? { items: [{ id: 'g:AA', sessionGroup: 'dashboard:a', displayName: 'A' }], nextCursor: null }
       : path.includes('/messages?') && path.includes('cursor=older') ? { items: older, nextCursor: null }
       : path.includes('/messages?') ? { items: rows, nextCursor: 'older', afterCursor: 'after' }
       : path.includes('/activity?') ? idleBody()

@@ -82,7 +82,14 @@ for (const locale of ['en', 'zh']) for (const width of [1280, 390]) {
     assert.ok(layout.scrollWidth <= layout.width, 'no horizontal page overflow');
     for (const event of fixture.events) assert.ok(Object.keys(event.data).every(key => ['version','tab','conversationId','ids'].includes(key)), 'SSE carries only scoped invalidation metadata');
     assert.equal(browser.errors.length, 0); assert.equal(browser.external.length, 0);
-    assert.equal(fixture.requests.some(row => row.method !== 'GET'), false, 'readback does not resend or mutate');
+    const mutations = fixture.requests.filter(row => row.method !== 'GET');
+    for (const request of mutations) {
+      assert.deepEqual(
+        { method: request.method, path: request.path, query: request.query, status: request.status },
+        { method: 'PUT', path: fixture.readPath, query: '', status: 200 },
+        'readback permits only an accepted read-position update on this conversation',
+      );
+    }
     const result = { locale, width, height: 900, latencyMs, twoTabs, hiddenCatchup, retained, layout, controls,
       databaseRows: fixture.writer.prepare('SELECT COUNT(*) AS n FROM conversations').get().n,
       events: fixture.events.map(({ name, data }) => ({ name, data })), requests: fixture.requests,

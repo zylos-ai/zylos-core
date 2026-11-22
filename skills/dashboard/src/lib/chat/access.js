@@ -3,17 +3,17 @@ import { isOriginRecord } from './origin.js';
 
 export const CHAT_SETTINGS_PATH = '/api/settings/chat';
 
-// Named data routes; the proxy protects the entire /api/chat/ prefix.
+// Named data routes; the proxy protects the entire /api/conversations family.
 export function isChatDataRoute(method, pathname) {
   return method === 'GET' && (
-    pathname === '/api/chat/conversations' ||
-    /^\/api\/chat\/conversations\/[^/]+$/.test(pathname) ||
-    /^\/api\/chat\/conversations\/[^/]+\/(?:messages|status|questions|uploads\/config|attachments\/[^/]+)$/.test(pathname)
+    pathname === '/api/conversations' ||
+    /^\/api\/conversations\/[^/]+$/.test(pathname) ||
+    /^\/api\/conversations\/[^/]+\/(?:messages|status|activity|questions|uploads\/config|attachments\/[^/]+)$/.test(pathname)
   ) || method === 'POST' && (
-    pathname === '/api/chat/drafts' ||
-    /^\/api\/chat\/conversations\/[^/]+\/(?:send|answers|uploads)$/.test(pathname)
-  ) || method === 'PUT' && pathname === '/api/chat/pins'
-    || method === 'PATCH' && /^\/api\/chat\/conversations\/[^/]+$/.test(pathname);
+    pathname === '/api/conversations/drafts' ||
+    /^\/api\/conversations\/[^/]+\/(?:send|answers|uploads)$/.test(pathname)
+  ) || method === 'PUT' && (pathname === '/api/conversations/pins' || /^\/api\/conversations\/[^/]+\/read$/.test(pathname))
+    || method === 'PATCH' && /^\/api\/conversations\/[^/]+$/.test(pathname);
 }
 
 /** Call on the data instance before querying conversation data. */

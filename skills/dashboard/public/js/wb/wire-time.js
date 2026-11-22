@@ -106,7 +106,7 @@ export function projectApiTimestamps(pathname, value) {
   if (pathname === '/api/keys' || pathname.startsWith('/api/keys/')) return project(value,
     ms('created_at', 'last_used_at', 'revoked_at', 'key.created_at', 'key.last_used_at', 'key.revoked_at',
       'items.*.created_at', 'items.*.last_used_at', 'items.*.revoked_at'));
-  if (pathname.startsWith('/api/chat/')) return project(value, [...CHAT, ...ACTIVITY]);
+  if (pathname === '/api/conversations' || pathname.startsWith('/api/conversations/')) return project(value, [...CHAT, ...ACTIVITY]);
   if (pathname === '/api/observer/history/sessions') return project(value, ms('items.*.updatedAt'));
   if (pathname === '/api/observer/history/entries') return project(value, ms('items.*.ts', 'updates.*.ts'));
   if (pathname.startsWith('/api/observer/')) return project(value, ms('expiresAt', 'current.startedAt', 'sessions.*.startedAt',

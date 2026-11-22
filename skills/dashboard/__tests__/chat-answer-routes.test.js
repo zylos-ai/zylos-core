@@ -29,7 +29,7 @@ const error = (code, statusCode) => Object.assign(new Error(code), { code, statu
 async function fixture(t, { engine, question } = {}) {
   const sessionGroup = question?.sessionGroup ?? group;
   const expectedId = `g:${Buffer.from(sessionGroup).toString('hex').toUpperCase()}`;
-  const targetRoute = `/api/chat/conversations/${encodeURIComponent(expectedId)}`;
+  const targetRoute = `/api/conversations/${encodeURIComponent(expectedId)}`;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-answer-http-'));
   const store = engine?.store ?? new Store(path.join(root, 'dashboard.db'));
   const answers = engine?.answers ?? new ChatAnswers({ store });
@@ -178,7 +178,7 @@ test('malformed answers and forged summary or routing fields cannot accept or de
   assert.equal((await f.request('/answers', { body: foreignContext })).status, 400);
   const invalidChoice = structuredClone(body); invalidChoice.action.payload.selected = ['unregistered'];
   assert.equal((await f.request('/answers', { body: invalidChoice })).status, 400);
-  assert.equal((await f.request('/answers', { body, target: '/api/chat/conversations/foreign' })).status, 403);
+  assert.equal((await f.request('/answers', { body, target: '/api/conversations/foreign' })).status, 403);
   assert.equal((await f.request('/answers', { body: { ...body, interruptId: 'foreign_interrupt' } })).status, 404);
   assert.equal((await f.request('/answers?channel=other', { body })).status, 400);
   assert.equal((await f.request('/answers', { method: 'GET' })).status, 404);

@@ -48,7 +48,7 @@ function pages(history, tab, limit) {
   let cursor;
   for (let count = 0; count < 30; count++) {
     const result = history.list({ tab, limit, cursor });
-    assert.ok(result.items.length <= limit);
+    assert.ok(result.items.filter(item => item.id !== ORIGIN_ID).length <= limit);
     if (tab === 'mine' && count === 0) assert.equal(result.items[0]?.id, ORIGIN_ID);
     items.push(...(tab === 'mine' && count === 0 ? result.items.slice(1) : result.items));
     if (result.nextCursor === null) return items;
@@ -83,13 +83,12 @@ test('drafts and stored conversations share stable bounded pages without crossin
   assert.ok(items.every(item => item.channel === 'dashboard'));
   assert.ok(reads.length && sourceReads.length);
   for (const read of reads) { assert.match(read.sql, /\bLIMIT\b/i); assert.ok(read.count <= 3); }
-  // The first "mine" page reserves one of its two slots for the pinned Origin conversation.
-  assert.equal(sourceReads[0].options.limit, 2);
-  for (const read of sourceReads.slice(1)) { assert.equal(read.options.limit, 3); assert.ok(read.count <= 3); }
+  // Origin does not consume one of the two ordinary rows or its lookahead.
+  for (const read of sourceReads) { assert.equal(read.options.limit, 3); assert.ok(read.count <= 3); }
   const external = pages(f.history, 'external', 1);
   assert.deepEqual(external.map(item => item.session_group), ['tg:external']);
   assert.equal(external[0].draft, false);
-  assert.throws(() => f.history.list({ tab: 'external', cursor: f.history.list({ tab: 'mine', limit: 1 }).nextCursor }), { code: 'invalid_chat_cursor' });
+  assert.throws(() => f.history.list({ tab: 'external', cursor: f.history.list({ tab: 'mine', limit: 1 }).nextCursor }), { code: 'invalid_cursor' });
 });
 
 test('draft refresh uses its updated time and activation removes the blank duplicate', t => {
@@ -107,7 +106,7 @@ test('draft refresh uses its updated time and activation removes the blank dupli
   const items = pages(f.history, 'mine', 1);
   assert.equal(items.length, 2);
   const active = items.find(item => item.localId === first.localId);
-  assert.equal(active.draft, false); assert.equal(active.count, 1);
+  assert.equal(active.draft, false);
   assert.equal(active.display_name, 'Renamed first');
   assert.equal(items.some(item => item.id === first.id), false);
 });

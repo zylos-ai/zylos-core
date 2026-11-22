@@ -148,7 +148,7 @@ test('external conversation labels identify channels and internal peers', { skip
       const { context, page } = await open(1280, 'light');
       let original, patchedChannel = null;
       try {
-        await context.route('**/api/chat/conversations/**/messages?*', async route => {
+        await context.route('**/api/conversations/**/messages?*', async route => {
           const response = await route.fetch();
           const data = await response.json();
           original ??= data.items?.find(item => item.id === incoming.id);

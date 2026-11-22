@@ -226,7 +226,7 @@ function stateFixture({ storage = new Storage(), send = () => ({ stored: true, c
       calls.push({ path, options });
       const u = new URL(path, 'http://fixture');
       if (path === '/api/instance') return { session_mode: { sessionMode: 'multi' } };
-      if (u.pathname === '/api/chat/conversations') return { items: [{ id: 'g:A' }, { id: 'g:B' }], nextCursor: null, tz: TZ };
+      if (u.pathname === '/api/conversations') return { items: [{ id: 'g:A' }, { id: 'g:B' }], nextCursor: null, tz: TZ };
       if (u.pathname.endsWith('/send')) return send(options.body);
       if (u.pathname.endsWith('/messages')) return { items: [], nextCursor: null, afterCursor: 'a', tz: TZ };
       if (u.pathname.endsWith('/questions')) return { items: [], nextCursor: null };

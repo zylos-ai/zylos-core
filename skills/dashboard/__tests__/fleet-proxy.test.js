@@ -808,7 +808,8 @@ test('fleet proxy rejects unsafe API methods before reaching upstream', async ()
   }
 });
 
-test('fleet proxy forwards SSE and whitelisted action POSTs with body', async () => {
+test('fleet proxy forwards SSE and whitelisted writes with their bodies', async () => {
+  const readPath = '/api/conversations/g%3A6162/read';
   let sseAuth = null;
   let actionAuth = null;
   let actionBody = null;
@@ -820,7 +821,7 @@ test('fleet proxy forwards SSE and whitelisted action POSTs with body', async ()
       res.end('event: instance\ndata: {"ok":true}\n\n');
       return;
     }
-    if (req.url.startsWith('/api/instance/actions/')) {
+    if (req.url.startsWith('/api/instance/actions/') || req.method === 'PUT' && req.url === readPath) {
       actionAuth = req.headers.authorization;
       actionContentType = req.headers['content-type'];
       req.setEncoding('utf8');
@@ -861,6 +862,16 @@ test('fleet proxy forwards SSE and whitelisted action POSTs with body', async ()
     assert.equal(actionAuth, 'Bearer zylos_st_secret');
     assert.equal(actionContentType, 'application/json');
     assert.equal(actionBody, '{"runtime":"codex"}');
+
+    actionBody = null;
+    const read = await fetch(`${hub.origin}/fleet/Remote${readPath}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ upTo: 42 }),
+    });
+    assert.equal(read.status, 200);
+    assert.deepEqual(await read.json(), { ok: true });
+    assert.equal(actionBody, '{"upTo":42}');
   } finally {
     await hub.close();
     await remote.close();
@@ -1481,7 +1492,7 @@ test('fleet chat language headers preserve legacy remote query contracts', { tim
     proxy.handle(req, res, new URL(req.url, 'http://hub.test'));
   });
   t.after(async () => { hub.server.closeAllConnections(); await hub.close(); });
-  for (const route of ['/api/chat/conversations?tab=mine&limit=50', '/api/chat/conversations/group/messages?tab=mine&limit=50&direction=after']) {
+  for (const route of ['/api/conversations?tab=mine&limit=50', '/api/conversations/group/messages?tab=mine&limit=50&direction=after']) {
     const oldQuery = await fetch(hub.origin + '/fleet/Legacy' + route + '&locale=en');
     assert.equal(oldQuery.status, 400); await oldQuery.arrayBuffer();
     for (const locale of ['zh', 'en']) {
@@ -1772,7 +1783,7 @@ test('fleet migrates object writes and exposes remote chat policy to read caller
     assert.equal(response.status, 200, route);
     assert.deepEqual(seen.at(-1), ['GET', route]);
   }
-  for (const route of ['/api/chat/conversations', '/api/observer/history/sessions?session_group=telegram%3Ateam']) {
+  for (const route of ['/api/conversations', '/api/observer/history/sessions?session_group=telegram%3Ateam']) {
     const count = seen.length;
     const denied = await request(route, 'GET', { 'x-test-scope': 'read' });
     assert.equal(denied.status, 403, route);

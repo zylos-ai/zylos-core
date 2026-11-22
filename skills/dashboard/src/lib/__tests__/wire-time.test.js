@@ -75,7 +75,7 @@ test('schedule list, detail, history, preview and command times use ISO while cu
 test('chat, observer, fleet and key projections keep user content and identifiers opaque', () => {
   const chat = { items: [{ id: 1700000000, stamp: at / 86400000 + 2440587.5, timestamp: at,
     quote: { timestamp: at }, content: { timestamp: at, createdAt: at } }], nextCursor: 'opaque' };
-  const projected = projectApiTimestamps('/api/chat/conversations', chat);
+  const projected = projectApiTimestamps('/api/conversations', chat);
   assert.equal(projected.items[0].stamp, iso);
   assert.equal(projected.items[0].timestamp, iso);
   assert.equal(projected.items[0].quote.timestamp, iso);
@@ -111,7 +111,7 @@ test('zero clocks are unknown and event, Git and preview fields normalize actual
   const instance = projectApiTimestamps('/api/instance', { runtimeHealth: { claude: { updatedAt: at, cooldownUntil: 0 } } });
   assert.equal(instance.runtimeHealth.claude.updatedAt, iso);
   assert.equal(instance.runtimeHealth.claude.cooldownUntil, null);
-  assert.equal(projectApiTimestamps('/api/chat/conversations', { items: [{ stamp: 0 }] }).items[0].stamp, null);
+  assert.equal(projectApiTimestamps('/api/conversations', { items: [{ stamp: 0 }] }).items[0].stamp, null);
   const event = projectApiTimestamps('/api/groups/origin/events', { events: [{ metadata: { pasted_at: at, source_time: 9, received_at: 8 } }] });
   assert.equal(event.events[0].metadata.pasted_at, iso);
   assert.equal(event.events[0].metadata.source_time, 9);

@@ -12,7 +12,7 @@ import { CoreState } from '../src/lib/core-state.js';
 import { PM2Collector } from '../src/lib/collectors/pm2-collector.js';
 import { mutateConfig, withConfigLock } from '../src/lib/config-mutation.js';
 import { Store } from '../src/lib/store.js';
-import { C4Reader } from '../src/lib/c4-reader.js';
+import { C4Reader, prepareLatestReceived, receivedMessage } from '../src/lib/c4-reader.js';
 import { hashApiKey, exchangeApiKeyForToken } from '../src/lib/auth.js';
 import { signIn } from './helpers/dashboard-sign-in.js';
 
@@ -127,6 +127,7 @@ async function makeSettingsServer(t, runtime = 'claude', configBody = {}, runCli
     Store: class extends Store { constructor(...args) { super(...args); ownedStore = this; } },
   } });
   t.mock.module('../src/lib/c4-reader.js', { namedExports: {
+    prepareLatestReceived, receivedMessage,
     C4Reader: class extends C4Reader { constructor(...args) { super(...args); reader = this; } },
   } });
   t.mock.module('../src/lib/state-engine.js', { namedExports: {
