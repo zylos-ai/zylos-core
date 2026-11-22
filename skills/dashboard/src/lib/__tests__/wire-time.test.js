@@ -116,6 +116,10 @@ test('zero clocks are unknown and event, Git and preview fields normalize actual
   assert.equal(event.events[0].metadata.pasted_at, iso);
   assert.equal(event.events[0].metadata.source_time, 9);
   assert.equal(event.events[0].metadata.received_at, 8);
+  const backlog = projectApiTimestamps('/api/memory/backlog', { items: [{ firstAt: '2026-11-16 02:03:04' }], originSync: { firstAt: '2026-11-16 02:03:04' }, nextCursor: 'opaque' });
+  assert.equal(backlog.items[0].firstAt, iso);
+  assert.equal(backlog.originSync.firstAt, iso);
+  assert.equal(backlog.nextCursor, 'opaque');
   assert.equal(projectApiTimestamps('/api/memory/git', { commit: { author_date: '2026-11-16T10:03:04+08:00' } }).commit.author_date, iso);
   assert.equal(projectApiTimestamps('/api/schedules/preview', { iso: '2026-11-16T10:03:04+08:00' }).iso, iso);
 });
