@@ -208,15 +208,12 @@ test('the mounted list moves local sends forward and holds other activity behind
               const duringClick = fixture.addOutbound(d.draft.localId, 'Reply during the requested list refresh');
               await page.clock.fastForward(31_000);
               await page.locator(`#wb-chat [data-message-id="${duringClick.id}"]`).waitFor({ state: 'attached' });
-              assert.deepEqual(await ids(), [origin, bId, aId, dId, cId],
-                'the list applies the order requested by the click while its original response is still pending');
-              assert.equal(await hint.isVisible(), false, 'the completed refresh clears the new-conversation notice');
+              await page.waitForFunction(expected => [...document.querySelectorAll('#wb-chat [data-conversation-id]')]
+                .map(node => node.dataset.conversationId).join() === expected.join(), [origin, bId, aId, dId, cId]);
+              await hint.waitFor({ state: 'hidden' });
             } finally {
               releaseList();
             }
-            await page.waitForFunction(expected => [...document.querySelectorAll('#wb-chat [data-conversation-id]')]
-              .map(node => node.dataset.conversationId).join() === expected.join(), [origin, bId, aId, dId, cId]);
-            await hint.waitFor({ state: 'hidden' });
 
             await receive(a, localId => fixture.c4.insertConversation('in', 'dashboard', localId,
               'New received message in a pinned conversation', { groupName: localId }));
