@@ -20,14 +20,14 @@ const iso = offset => new Date(NOW + offset).toISOString();
 
 // Fixed existing API contracts over private loopback: the real entry/modules/styles
 // render them. No database, runtime, channel, outbound request or backend extension.
-export async function startPage(sandbox, publicDir = currentPublic) {
+export async function startPage(sandbox, publicDir = currentPublic, messageRows) {
   let scene = 'idle', connected = true, observerBlocked = false, sessionMode = 'multi', title = DEFAULT_TITLE, channel = 'dashboard';
   let listGate = null, releaseList = () => {};
   const streams = new Set(), missing = new Set(), actions = [];
   const conversation = id => ({ id, localId: 'mobile-browser', sessionGroup: id === EXT_ID ? EXTERNAL : id === ORIGIN_ID ? 'origin' : GROUP,
     channel: id === EXT_ID ? 'telegram' : id === ORIGIN_ID ? 'dashboard' : channel, state: 'active', displayName: id === EXT_ID ? 'Howard' : id === ORIGIN_ID ? 'Origin' : title,
     display_name: id === EXT_ID ? 'Howard' : id === ORIGIN_ID ? 'Origin' : title, origin: id === ORIGIN_ID });
-  const messages = [{ id: 1, direction: 'in', channel: 'dashboard', content: '发版流程改好了吗？', timestamp: iso(-5 * 60000), status: 'delivered' },
+  const messages = messageRows ?? [{ id: 1, direction: 'in', channel: 'dashboard', content: '发版流程改好了吗？', timestamp: iso(-5 * 60000), status: 'delivered' },
     { id: 2, direction: 'out', channel: 'dashboard', content: '改好了，新流程是这样：\n\n1. 推 server 的 tag，流水线自动打包\n2. 测试服先装，冒烟通过再正常升级\n3. 服务端升好后，再发布 App\n\n本地不再编译，也不用再手动传包。\n\n**已验证：** 打包结果与之前的内容一致。\n\n**还没验证：** 真正的流水线发版要等第一次推 tag 才会跑。', timestamp: iso(-2 * 60000), status: 'sent' }];
   const answer = url => {
     const p = url.pathname;
