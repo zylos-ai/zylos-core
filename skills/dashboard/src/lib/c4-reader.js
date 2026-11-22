@@ -2,6 +2,7 @@ import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import { progressFunctions } from '../../../comm-bridge/scripts/c4-store-progress.js';
 import path from 'node:path';
 import fs from 'node:fs';
+import { originVisible, visible } from './chat/visibility.js';
 
 // Keep this predicate aligned for list ordering and incremental invalidation.
 export const receivedMessage = "c.direction='in' AND c.channel<>'' AND c.channel NOT IN ('void','control')";
@@ -83,6 +84,20 @@ export class C4Reader {
           (SELECT MAX(id) FROM conversations WHERE direction='out' AND channel=? AND status='delivered'), 0)`).get(channel, channel);
       return { lastSendFailed: true, consecutiveFailures: row.count };
     } catch { return null; }
+  }
+
+  /** Latest received message, or the first visible message when there has been no input. */
+  getGroupSortMessage(sessionGroup) {
+    const db = this._open();
+    if (!db) throw new Error('Group message order unavailable');
+    if (this._groupSort?.db !== db) {
+      this._groupSort = { db,
+        received: prepareLatestReceived(db),
+        first: db.prepare(`SELECT c.id, c.timestamp FROM conversations c INDEXED BY idx_conv_group_id
+          WHERE c.session_group=? AND ((c.session_group='origin' AND ${originVisible}) OR (${visible}))
+          ORDER BY c.id LIMIT 1`) };
+    }
+    return this._groupSort.received.get(sessionGroup) ?? this._groupSort.first.get(sessionGroup) ?? null;
   }
 
   getInboundTimes({ since, groups }) {
@@ -232,6 +247,7 @@ export class C4Reader {
 
   close() {
     this._db?.close();
+    this._groupSort = null;
     this._db = null;
     this._fileIdentity = null;
   }

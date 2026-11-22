@@ -248,10 +248,11 @@ Lists contain presentation observations only. Running rows have exactly these fi
 | `flags` | object | Independent conditions, below |
 | `mainAgent` | `busy` / `idle` / `unknown` | Main Agent observation for instruction callers; UI does not display it |
 | `contextPct` | number / null | Current session context percentage |
-| `lastActivityAt` | string / null | Latest recorded C4 activity |
+| `lastActivityAt` | string / null | Time of the latest received C4 message, or the first visible message if the group has never received one. Null when neither exists |
+| `runtimeOverridden`, `modelOverridden` | boolean / null | Explicit runtime and model override observations; null when the evidence cannot establish the answer |
 | `currentAction` | `{tool:string\|null,message:string\|null,receivedAt:string\|null}` | First current tool name, latest received message excerpt (at most 120 characters), and its ISO timestamp; absent observations remain null |
 
-Offline rows have exactly `id`, `displayName`, `channel`, `lastActivityAt` and `flags`. The ID remains necessary to open detail or perform a group action. The compact action contains no tool arguments, tool detail or raw message. Lists do not include `sessionGroup`, stored `name` metadata, `side`, `presence`, `live`, `working`, `wait`, `queue`, `target`, `launchConfig`, `c4`, `tools` or any other raw observations. Search adds `side` to distinguish running and offline results.
+Offline rows include `id`, `displayName`, `channel`, `lastActivityAt`, `flags`, `runtimeOverridden` and `modelOverridden`. An offline row with a runtime override also carries its configured `runtime`. The ID remains necessary to open detail or perform a group action. The compact action contains no tool arguments, tool detail or raw message. Lists do not include `sessionGroup`, stored `name` metadata, `side`, `presence`, `live`, `working`, `wait`, `queue`, `target`, `launchConfig`, `c4`, `tools` or any other raw observations.
 
 In single-session mode, Origin receives messages from every channel group. Its pending queue count and oldest timestamp aggregate all C4 delivery queues, and its latest received-message preview is selected across those groups. The Origin row's `queued` flag, the queued-row count in `counts.running.flags.queued`, `currentAction.message`/`receivedAt`, and detail `queue`/`preview` use these same collected observations. Detail `raw` is read from the same source group as the selected preview. The queued-row count counts Origin once when its pending message count is positive. Multi-session mode keeps each group's own queue and received-message scope.
 
@@ -283,39 +284,31 @@ Flags are independent: a working row can carry both `queued` and `blocked`. Miss
 
 Returns `readAt:string`, `listKnown:boolean`, `running:{total:number,states:Record<PrimaryState,number>,flags:Record<Flag,number>}`, `offline:{total:number,waitingSlot:number,startFailed:number}`, and `pool:{used:number|null,capacity:number|null}|null`. Running state counts include working, idle, starting, stopping and unknown. `running.flags.noResponse` counts the independent no-response flag, including a row also flagged with an error. All count/pool observations are numeric or null; there are no rows, mode or capacity-provenance records. Session mode comes only from `/api/instance`. Pool capacity provenance is not exposed by instance or counts.
 
-**Errors:** 502 `GROUP_CATALOG_UNREADABLE`; common read errors. Other source availability is represented by nullable observations. In counts, `listKnown` additionally requires a readable C4 catalog; running and offline responses expose the snapshot’s live-list availability directly. Offline and search still reject an unreadable C4 catalog even when the live list is known.
+**Errors:** 502 `GROUP_CATALOG_UNREADABLE`; common read errors. Other source availability is represented by nullable observations. In counts, `listKnown` additionally requires a readable C4 catalog.
 
 Example: `GET /api/groups/counts`.
 
-### GET /api/groups/running
+### GET /api/groups
 
-**Access:** Read. **Parameters:** none; this list is not paginated.
+**Access:** Read. Supports these optional query parameters. Filters combine with AND before paging.
 
-Returns `{readAt:string,listKnown:boolean,rows:RunningRow[]}` with only the running fields listed above. Confirmed offline rows are excluded. Its practical size follows the session pool.
+| Parameter | Values and behavior |
+|---|---|
+| `side` | `running` or `offline` |
+| `flag` | `queued`, `blocked`, `waitingSlot`, `startFailed`, `unreadable`, or `noResponse`; matches a key present in the row's flags |
+| `runtime` | `claude`, `codex`, or `agy`; matches the current runtime on the running side. Starting rows have no current runtime |
+| `runtimeOverridden` | `true` or `false`; matches an explicit runtime selection, even if it equals the default. Override-only groups with no C4 messages can appear on the offline side |
+| `modelOverridden` | `true` or `false`; matches a launch model override, a desired model override for the current runtime, or a stored model override for that runtime |
+| `q` | Case-insensitive substring of the group ID/address or display name. Trimmed to a term of at most 64 characters; a blank term applies no filter |
+| `include` | `total` adds the total match count |
+| `limit` | Integer from 1 through 100, default 50 |
+| `cursor` | Opaque continuation returned by the previous page |
 
-**Errors:** common read errors.
+Returns `{items:Array<RunningRow|OfflineRow>,nextCursor:string|null,total?:number,readAt:string,listKnown:boolean}`. Origin sorts first when it matches. Other groups sort descending by `lastActivityAt` (null sorts as zero), then ascending by ID. Received messages count when their direction is inbound and their channel is neither empty, `void`, nor `control`. Outgoing replies do not update the sort time. Pass the cursor unchanged with the same filters and `q`; after `invalid_cursor`, reload the first page. `listKnown` is false if the live list is incomplete or an override filter depends on unreadable evidence.
 
-Example: `GET /api/groups/running`.
+**Errors:** 400 `invalid_parameter` with `error.param` for an unknown, repeated, or invalid query parameter; 400 `invalid_cursor`; 503 `unavailable` for an unreadable catalog or sort observations; common read errors.
 
-### GET /api/groups/offline
-
-**Access:** Read. **Parameters:** optional `q:string` (trimmed, at most 64 characters), `flag:queued|blocked|waitingSlot|startFailed|unreadable|noResponse` (one flag), `cursor:string` (opaque cursor from the previous page), `limit:integer` (1–200, default 50).
-
-Returns `{readAt:string,listKnown:boolean,rows:OfflineRow[],nextCursor:string|null}` with only the five offline fields above. Rows are ordered by descending last activity and then ID. Text matches group ID/address and display name. A flag matches only when that key exists in the row’s flags; text and flag filters combine with AND before pagination. Pass the cursor unchanged with the same filters to continue.
-
-**Errors:** 400 `INVALID_LIMIT`, `INVALID_QUERY`, `INVALID_FLAG`, `INVALID_CURSOR`; 502 `GROUP_CATALOG_UNREADABLE`; common read errors.
-
-Example: `GET /api/groups/offline?flag=startFailed&q=team&limit=20`.
-
-### GET /api/groups/search
-
-**Access:** Read. **Parameters:** `q:string`, matched against ID/address and name; empty or more than 64 characters returns no results.
-
-Returns `{rows:Array<RunningRow|OfflineRow>,truncated:boolean}`, at most 50 results across both sides. Search alone adds `side:"running"|"offline"` to each result; all other fields follow its side’s list schema.
-
-**Errors:** 502 `GROUP_CATALOG_UNREADABLE`; common read errors.
-
-Example: `GET /api/groups/search?q=team`.
+Example: `GET /api/groups?side=running&runtime=codex&modelOverridden=false&limit=8&include=total`.
 
 ### GET /api/groups/activity
 
@@ -333,21 +326,21 @@ Example: `GET /api/groups/activity?range=6h&ids=origin,telegram%3Aexample`.
 
 ### GET /api/groups/:id
 
-**Access:** Read. **Parameters:** encoded group ID; optional `include=raw,config` (default both). An empty `include=` requests neither extra; either name can be selected independently.
+**Access:** Read. **Parameters:** encoded group ID; optional `include=raw,config`. Omit the parameter to request neither part. Either name can be selected independently, once. The Origin Operations Interface retains its default of both parts and accepts an empty `include=` to omit them.
 
 Returns the complete group observation, including the applicable list fields plus `sessionGroup:string|null`, `name:object|null`, `side:"running"|"offline"`, `presence:string`, `live:object|null`, `fence:object|null`, `working:object|null`, `queue:object|null`, `wait:object|null`, `target:object|null`, `launchConfig:object|null`, `createdAt:string|null`, `c4:object|null`, `tools:array`, and other source observations. `readAt:string` is the snapshot’s ISO observation timestamp. `runtimeInfo` is the group-specific object `{runtime:string|null,model:string|null,effort:string|null,runningVersion:string|null,installedVersion:string|null,update:string|null,pendingRestart:boolean}`. Its runtime/model/effort and running version are observed group values; unavailable strings remain null. `installedVersion` is the installed version for that runtime; `update` is an available newer version string or null, using the same version comparison as `versions[runtime]`. `pendingRestart` is true only on the running side when known evidence identifies a newer installed CLI or a desired runtime/model/effort that differs from the current observation. False does not establish that unknown values match. This group-specific object does not appear in `/api/instance`.
 
 Detail also includes `currentAction:{tool:string|null,message:string|null,receivedAt:string|null}` using the same bounded, sanitized projection as a running list row. Optional `include` extras do not change this field.
 
-`effective` contains `{runtime:string|null,model:string|null,effort:string|null,runtimeOverridden:boolean|null,modelOverridden:boolean|null}`. Effective runtime, model and effort describe the actual ready run. They are null while a run is starting and describe the desired configuration when offline. The runtime override flag reports whether the group explicitly selects a runtime, even when that selection equals the instance default. The model override flag reads the launch override mode for an active run and the desired model configuration when offline. Top-level override fields and `effective` use the same observations. Unknown evidence yields null. `run` is `{runId:string|null,sessionId:string|null,createdAt:string|null}|null`.
+`effective` contains `{runtime:string|null,model:string|null,effort:string|null,runtimeOverridden:boolean|null,modelOverridden:boolean|null}`. Effective runtime, model and effort describe the actual ready run. They are null while a run is starting and describe the desired configuration when offline. The runtime override flag reports whether the group explicitly selects a runtime, even when that selection equals the instance default. The model override flag uses launch, desired and stored override evidence for the runtime; an active session without a readable launch configuration reports null. The Origin Operations Interface retains the launch override mode for an active run. Top-level override fields and `effective` use the same observations. Unknown evidence yields null. `run` is `{runId:string|null,sessionId:string|null,createdAt:string|null}|null`.
 
 When requested, `raw:string|null` contains sanitized first-message content and `config:object|null` contains Core runtime/model read envelopes. An optional read failure returns its field as null and `rawError` or `configError` as `{code:string,message:string}`; it does not fail the whole detail request. Unrequested extras and their error fields are omitted. The address remains stable across lifecycle changes.
 
 `config.modelOverrides` is a read-only `Array<{runtime:string,model:string,effort:string}>|null` from the same group snapshot. It contains only the requested group's saved model and effort pairs, including pairs for runtimes other than the selected one. A runtime missing from a successful array follows the instance default. An empty array means no pairs are saved, and `null` means the snapshot could not read the overrides. For example, the field may be `[{"runtime":"codex","model":"gpt-5","effort":"high"}]` when the selected runtime is Claude.
 
-Bare keys `counts`, `running`, `offline`, `search`, `activity`, `naming-prompt` and `runtime-overrides` are reserved API namespace segments and cannot address a group detail. Use namespaced group keys rather than those bare names.
+Group IDs other than Origin are namespaced. The retired paths `/api/groups/running`, `/api/groups/offline`, `/api/groups/search`, and `/api/groups/runtime-overrides` return 404 `not_found`.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_INCLUDE`; 404 `GROUP_NOT_FOUND`; 502 `GROUP_CATALOG_UNREADABLE` when an unknown group cannot be checked against the catalog or a historical key cannot be verified; common read errors. Detail for a current valid key remains readable when unrelated catalog collection fails. Individual Core configuration errors can also appear inside their configuration envelopes.
+**Errors:** 400 `SESSION_GROUP_INVALID` or `invalid_parameter` with `error.param` for invalid query parameters; 404 `not_found`; 502 `GROUP_CATALOG_UNREADABLE` when an unknown group cannot be checked against the catalog or a historical key cannot be verified; common read errors. Detail for a current valid key remains readable when unrelated catalog collection fails. Individual Core configuration errors can also appear inside their configuration envelopes.
 
 Group observation reads (detail, usage, runs, messages, events, backlog and restart status) also accept historical imported group IDs outside the current write grammar, such as `telegram:运维群-测试`, only when a healthy instance C4 catalog contains that exact group with C4 evidence. They reuse the same request snapshot catalog as detail; status-only rows, queue-only rows, usage/event history and filesystem presence do not prove membership. IDs are decoded exactly once and must retain a valid namespace, a nonempty local name of at most 95 characters and total length at most 128. Control characters, DEL, slash, backslash and dot-only traversal names (`.` or `..`) are rejected before catalog lookup. A literal percent in an existing name is allowed after decoding; no second decode occurs. Malformed URL encoding returns 400 `SESSION_GROUP_INVALID`.
 
@@ -355,9 +348,9 @@ Unknown historical IDs return 400 `SESSION_GROUP_INVALID`; an unreadable catalog
 
 Example historical observation: `GET /api/groups/telegram%3A%E8%BF%90%E7%BB%B4%E7%BE%A4-%E6%B5%8B%E8%AF%95/runs?limit=3`.
 
-Conversation status is an optional consumer of this detail. A newly created chat group can be absent from the snapshot: `GROUP_NOT_FOUND` means no reading yet, with a retry on the existing status cadence. Chat remains usable without a status reading; other HTTP errors retain their existing failure semantics.
+Conversation status is an optional consumer of this detail. A newly created chat group absent from the snapshot returns `not_found`. The Origin Operations Interface retains `GROUP_NOT_FOUND`. Chat remains usable without a status reading and retries on the existing status cadence.
 
-Example: `GET /api/groups/telegram%3Aexample?include=`.
+Example: `GET /api/groups/telegram%3Aexample`.
 
 ### GET /api/groups/:id/usage
 
@@ -447,16 +440,6 @@ Returns `{ok:true,data:{sessionGroup:string,displayName:string|null,source:strin
 
 Example: `DELETE /api/groups/telegram%3Aexample/name`.
 
-### GET /api/groups/runtime-overrides
-
-**Access:** Read. **Parameters:** optional `q:string` (name/address search), `after:string` (Core's opaque pagination boundary).
-
-Returns `runtime:Array<{sessionGroup:string,runtime:string,name:object|null}>`, `nextAfter:string|null`, and `runtimeTotal:number` when querying the unfiltered list. Search results need not include a total. Only explicit runtime overrides are listed; row `runtime` is `claude`, `codex` or `agy`.
-
-**Errors:** 502 `override_list_failed`; common read errors.
-
-Example: `GET /api/groups/runtime-overrides?q=team`.
-
 ### POST /api/groups/naming-prompt
 
 **Access:** Admin, including through Fleet. Local read-only credentials are rejected before forwarding; remote read-only credentials remain subject to the target’s admin gate. **Parameters:** none; any JSON body is ignored.
@@ -503,7 +486,7 @@ Example: `POST /api/groups/telegram%3Aexample/actions/restart` with `{"runId":"o
 
 Returns `requestId:string`, `completion:string` (supervisor lookup result, or `unknown`), and `group:{id:string,runId:string|null,sessionId:string|null,ready:boolean,state:object}`. This works for any group, including Origin; group identity and current state are observations, not proof that a particular restart caused them.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_REQUEST_ID`; 404 `GROUP_NOT_FOUND`; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; common read errors.
+**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_REQUEST_ID`; 404 `not_found` for groups and `GROUP_NOT_FOUND` for Origin; 502 `GROUP_CATALOG_UNREADABLE` when historical membership cannot be verified; common read errors.
 
 Example: `GET /api/groups/origin/restarts/00000000-0000-4000-8000-000000000001`.
 
@@ -706,7 +689,7 @@ Missing/disabled observer history returns 404. Rejected `/observer/stream` upgra
 
 ## Fleet
 
-`GET /api/fleet` is a read-scoped status API. Configuration and probe routes are admin and local only (see Access). A remote request is authorized both on the local proxy and the destination; no old-version fallback exists.
+`GET /api/fleet` is a read-scoped status API. Configuration and probe routes are admin and local only (see Access). A remote request is authorized both on the local proxy and the destination. Fleet checks the remote `GET /api/instance` field `versions.zylos.installed` before opening its page or reading its other APIs. Versions before `1.0.0-beta.16` and peers whose instance response has no readable version show `health_reason: "version_unsupported"`. Direct Fleet page and API requests for these peers return 502 `version_unsupported`.
 
 | Method/path | Contract and minimal example |
 |---|---|

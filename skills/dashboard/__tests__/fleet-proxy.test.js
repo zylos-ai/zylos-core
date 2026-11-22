@@ -7,7 +7,10 @@ import zlib from 'node:zlib';
 import test from 'node:test';
 import { publicDir } from '../src/lib/config.js';
 import { FleetProxy } from '../src/lib/fleet-proxy.js';
+import { FleetPoller } from '../src/lib/fleet-poller.js';
 import { acceptObserverWebSocket, connectObserverWebSocket } from '../src/lib/observer-websocket.js';
+import { renderAgentFleetHtml } from '../public/js/agent-fleet.js';
+import { objectResponse } from './fixtures/fleet-object-api.js';
 
 async function listen(handler) {
   const server = http.createServer(handler);
@@ -74,6 +77,53 @@ test('fleet proxy serves hub static frontend under agent prefix without secrets'
   } finally {
     await hub.close();
   }
+});
+
+test('Fleet blocks an older peer’s page and API until its version is upgraded', async t => {
+  const agent = { name: 'Remote', base_url: 'https://remote.invalid', read_api_key: 'fixture-key' };
+  const config = { fleet: { agents: [agent] } };
+  let installed = '1.0.0-beta.15';
+  const upstream = [];
+  const transport = async url => {
+    const parsed = new URL(url);
+    upstream.push(parsed.pathname + parsed.search);
+    if (parsed.pathname === '/api/auth/token') return Response.json({ token: 'fixture-session' });
+    return objectResponse(url, { instance: { versions: { zylos: { installed } } } });
+  };
+  const poller = new FleetPoller(config, { fetch: transport });
+  const proxy = new FleetProxy({ config, rootDir: publicDir(), poller, fetch: transport });
+  const hub = await listen((req, res) => proxy.handle(req, res, new URL(req.url, 'http://hub.test')));
+  t.after(async () => { poller.stop(); await hub.close(); });
+
+  for (const path of ['/', '/api/groups?side=running']) {
+    const response = await fetch(`${hub.origin}/fleet/Remote${path}`);
+    assert.equal(response.status, 502);
+    assert.equal((await response.json()).error.code, 'version_unsupported');
+  }
+  await poller._probeAgentLatency(agent);
+  await assert.rejects(poller._runSse(agent, poller._streamState(agent), new AbortController().signal), { reason: 'version_unsupported' });
+  assert.deepEqual(upstream, ['/api/auth/token', '/api/instance']);
+  const card = renderAgentFleetHtml(poller.getFleet());
+  assert.match(card, /Version too old/);
+  assert.doesNotMatch(card, /class="agent-open"/);
+
+  installed = '1.0.0-beta.16';
+  await poller.pollOnce();
+  assert.equal(poller.getFleet().agents[0].health_reason, 'idle');
+  assert.match(renderAgentFleetHtml(poller.getFleet()), /class="agent-open"/);
+  const page = await fetch(`${hub.origin}/fleet/Remote/`);
+  assert.equal(page.status, 200);
+  await page.text();
+  const groups = await fetch(`${hub.origin}/fleet/Remote/api/groups?side=running`);
+  assert.equal(groups.status, 200);
+  assert.ok(Array.isArray((await groups.json()).items));
+
+  installed = '1.0.0-beta.15';
+  upstream.length = 0;
+  const downgraded = await fetch(`${hub.origin}/fleet/Remote/`);
+  assert.equal(downgraded.status, 502);
+  assert.equal((await downgraded.json()).error.code, 'version_unsupported');
+  assert.deepEqual(upstream, ['/api/instance'], 'a cached token does not bypass the page-opening version check');
 });
 
 test('fleet proxy prefixes rewritten paths with the reverse-proxy base path (#159)', async () => {

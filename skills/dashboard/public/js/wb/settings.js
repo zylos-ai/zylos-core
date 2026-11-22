@@ -1,4 +1,3 @@
-import { readGroupSnapshot } from './group-data.js';
 import { element, icon } from './plain-text.js';
 import { createSettingsNavigation } from './settings-navigation.js';
 
@@ -166,28 +165,43 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
   return { sections, prefs, slots: { chat, version: versionBody, timezone, idleReclaim, hosts }, select, relabel, badge, navigation, actionsScope: root };
 }
 
-// The compact list supplies live groups. Detail distinguishes inherited settings from overrides.
-export async function readSettingsGroupSnapshot(read) {
-  const snapshot = await readGroupSnapshot(read);
-  const details = await Promise.allSettled(snapshot.rows.map(row => read('/api/groups/' + encodeURIComponent(row.sessionGroup) + '?include=')));
-  if (details.some(result => result.status === 'rejected')) return { ...snapshot, overrides: null };
-  const rows = details.map(result => result.value);
-  const overrides = rows.some(row => row.runtimeOverridden === null) ? null
-    : { runtime: rows.filter(row => row.runtimeOverridden === true), model: rows.filter(row => row.modelOverridden === true) };
-  return { ...snapshot, rows, overrides };
+export const runtimeFollowerFilter = { side: 'running', runtimeOverridden: false };
+export const runtimeOverrideFilter = { runtimeOverridden: true };
+export const modelFollowerFilter = runtime => ({ side: 'running', runtime, modelOverridden: false });
+const priceUserFilter = runtime => ({ side: 'running', runtime });
+
+export async function readSettingsGroups(read, filter, { limit, cursor, q, total = true }) {
+  const params = new URLSearchParams({ ...filter, limit });
+  if (total) params.set('include', 'total');
+  if (cursor != null) params.set('cursor', cursor);
+  if (q) params.set('q', q);
+  return read('/api/groups?' + params);
 }
 
-// One snapshot and one first batch per open; search owns subsequent user requests.
+export const knownGroupTotal = page => page?.listKnown === true && Number.isInteger(page.total) ? page.total : null;
+
 export function createSettingsLoader({ read, onLoad }) {
   let generation = 0;
   return {
     async open() {
       const current = ++generation;
-      const paths = [null, '/api/groups/runtime-overrides', '/api/settings/pricing', '/api/usage/pricing', '/api/instance/runtime-options?runtime=claude', '/api/instance/runtime-options?runtime=codex'];
-      const values = await Promise.allSettled(paths.map(path => path === null ? readSettingsGroupSnapshot(read) : read(path)));
+      const count = filter => readSettingsGroups(read, filter, { limit: 1 }).then(knownGroupTotal);
+      const values = await Promise.allSettled([
+        read('/api/instance'), read('/api/settings/pricing'), read('/api/usage/pricing'),
+        read('/api/instance/runtime-options?runtime=claude'), read('/api/instance/runtime-options?runtime=codex'),
+        count(runtimeFollowerFilter), count(runtimeOverrideFilter),
+        count(modelFollowerFilter('claude')), count(modelFollowerFilter('codex')),
+        count(priceUserFilter('claude')), count(priceUserFilter('codex')),
+      ]);
       if (current !== generation) return;
       const value = index => values[index].status === 'fulfilled' ? values[index].value : null;
-      onLoad({ snapshot: value(0), page: value(1), prices: value(2), usage: value(3), metadata: { claude: value(4), codex: value(5) } });
+      onLoad({
+        instance: value(0), prices: value(1), usage: value(2), metadata: { claude: value(3), codex: value(4) },
+        groupCounts: {
+          followers: value(5), overrides: value(6),
+          models: { claude: value(7), codex: value(8) }, pricing: { claude: value(9), codex: value(10) },
+        },
+      });
     },
     invalidate() { generation++; },
   };

@@ -61,7 +61,7 @@ export async function chatHttpFixture(t, config = {}, { workbench, localConfig =
         if (isHub) { await proxy.handle(req, res, url); return; }
         if (observer && await observer.handle(req, res, url)) return;
         if (await handleChatSettings(req, res, url, { auth, config: settings, onChange: chat => settingsChanges.push(chat) })) return;
-        if (workbench && ['/api/groups/running', '/api/groups/search', '/api/groups/activity'].includes(url.pathname)) {
+        if (workbench && ['/api/groups', '/api/groups/activity'].includes(url.pathname)) {
           sendJson(res, 200, await workbench(url)); return;
         }
         if (isChatDataRoute(req.method, url.pathname)) {

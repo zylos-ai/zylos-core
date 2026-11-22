@@ -1,3 +1,4 @@
+import { groupDetailPath } from './group-data.js';
 import { element, icon, runtimeName } from './plain-text.js';
 
 export function responseError(value, fallback = 'request_failed') {
@@ -72,7 +73,7 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
     return state.meta[runtime];
   }
   async function load(detail) {
-    detail ??= await request('/api/groups/' + encodeURIComponent(key));
+    detail ??= await request(groupDetailPath(key, 'config'));
     const value = detail.config;
     if (active()) {
       state.value = value;

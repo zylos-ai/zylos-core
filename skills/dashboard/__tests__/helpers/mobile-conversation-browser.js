@@ -52,7 +52,7 @@ export async function startPage(sandbox, publicDir = currentPublic, messageRows)
     if (p === '/api/fleet/agents') return { self: { name: 'luna' }, agents: [] };
     if (p.startsWith('/api/groups/') && p.endsWith('/runs')) return { runs: [{ runId: 'run-tg', startAt: iso(-20 * 60000), endAt: iso(-30000), n: 2, endReason: 'running' }], totalRuns: 1, totalEvents: 2, unattributed: 0 };
     if (p.startsWith('/api/groups/') && p.endsWith('/messages')) return { messages: [] };
-    if (p === '/api/groups/running' || p === '/api/groups/counts' || /^\/api\/groups\/[^/]+$/.test(p) && !['offline', 'search', 'activity', 'runtime-overrides', 'naming-prompt'].includes(p.split('/').at(-1))) {
+    if (p === '/api/groups' || p === '/api/groups/counts' || /^\/api\/groups\/[^/]+$/.test(p) && !['offline', 'search', 'activity', 'runtime-overrides', 'naming-prompt'].includes(p.split('/').at(-1))) {
       const value = workbenchSnapshot(NOW), row = value.rows.find(item => item.sessionGroup === SAMPLE_GROUP);
       value.mode = sessionMode;
       row.sessionGroup = GROUP; row.name = { displayName: title }; row.state = { kind: scene === 'running' ? 'working' : 'idle' }; row.tools = []; row.flags = {};

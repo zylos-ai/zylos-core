@@ -170,7 +170,7 @@ test('conversation list exposes deletion capability only to the local password o
 
 test('unmatched group read routes fall through without deletion authorization or Core calls', async t => {
   const f = fixture(t);
-  for (const path of ['/api/groups/search', '/api/groups/telegram%3Aexample', '/api/conversations/drafts/example']) {
+  for (const path of ['/api/groups', '/api/groups/telegram%3Aexample', '/api/conversations/drafts/example']) {
     const req = { method: 'GET', headers: {} };
     const res = { writeHead() { assert.fail('Must leave the response to the existing read route'); } };
     assert.equal(await f.handler(req, res, new URL(path, 'http://fixture')), false);

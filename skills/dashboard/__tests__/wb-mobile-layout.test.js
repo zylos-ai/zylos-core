@@ -135,7 +135,7 @@ test('stylesheet and page: on phones the terminal observer is one left-aligned c
   assert.match(css, /^\.observer-frame-shell\.wb-o-wide:not\(\[hidden\]\) \+ \.wb-o-wide-hint \{ display: block; \}/m);
   // The picker label is read by screen readers only (the select already says "choose a running group"),
   // and the one-line scope note sits in the toolbar, under the picker, before any group is chosen.
-  assert.match(html, /<span class="wb-vh" data-i18n="wb\.observer\.chooseGroup">/);
+  assert.match(html, /<label class="wb-vh" for="observer-group-select" data-i18n="wb\.observer\.chooseGroup">/);
   const bar = html.slice(html.indexOf('wb-o-bar">'), html.indexOf('class="wb-o-notice"'));
   assert.ok(bar.indexOf('id="observer-group-picker"') < bar.indexOf('data-i18n="wb.observer.scope"'), 'scope note follows the picker');
   assert.match(bar, /id="observer-size-toggle"[^>]*aria-controls="observer-size-form" aria-expanded="false"/);

@@ -4,7 +4,7 @@ import { chatEnabled, createChatSandbox } from '../skills/dashboard/__tests__/he
 const primary = '/_assets/i18n/zh.json';
 const workbench = '/_assets/i18n/wb.zh.json';
 const observer = '/api/observer/status';
-const groups = '/api/groups/running';
+const groups = '/api/groups';
 const cases = [
   // Boundary: reload with real cached Chinese packs, hung main fetch, visible rows,
   // then background healing. Rerun for primary i18n/startup changes; other work can skip.

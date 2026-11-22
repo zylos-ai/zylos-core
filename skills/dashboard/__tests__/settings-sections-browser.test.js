@@ -383,9 +383,9 @@ test('setting the default engine and model updates the open cards and reports re
           const request = route.request(), url = new URL(request.url());
           if (url.origin !== base) return route.abort();
           if (url.pathname === '/_assets/vendor/chart.umd.js') return route.fulfill({ path: process.env.ZYLOS_CHAT_CHART_ASSET, contentType: 'text/javascript' });
-          if (decodeURIComponent(url.pathname) === '/api/groups/' + GROUP) {
-            const response = await route.fetch();
-            return route.fulfill({ response, json: { ...await response.json(), modelOverridden: true } });
+          if (url.pathname === '/api/groups' && url.searchParams.get('modelOverridden') === 'false' && url.searchParams.get('runtime') === 'claude') {
+            const item = { id: 'origin', displayName: 'Origin', runtime: 'claude', state: { kind: 'working' }, modelOverridden: false };
+            return route.fulfill({ json: { items: [item], total: 1, listKnown: true, nextCursor: null } });
           }
           if (url.pathname === '/api/instance/defaults' && request.method() === 'PUT') {
             modelWrites.push(request.postDataJSON());
@@ -494,4 +494,128 @@ test('setting the default engine and model updates the open cards and reports re
       }
     }
   }, { timeoutMs: 80_000 });
+});
+
+// Run for Settings' group lists and controls. The browser calls the real frontend and a fixture HTTP collection;
+// backend filtering, cursor validity, and source provenance are covered by the groups API tests.
+test('Settings loads group pages on demand and searches the server by group display name and ID', {
+  skip: !chatEnabled(), timeout: 150_000,
+}, async t => {
+  const sandbox = createChatSandbox(t);
+  await sandbox.runCase(async () => {
+    const { base } = await startPage(sandbox);
+    const { chromium } = await import(pathToFileURL(process.env.ZYLOS_CHAT_BROWSER_MODULE));
+    const browser = await chromium.launch({ executablePath: process.env.ZYLOS_CHAT_BROWSER_BIN, headless: true,
+      env: sandbox.env, args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
+    sandbox.addCleanup(() => browser.close());
+    const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
+    if (evidence) fs.mkdirSync(evidence, { recursive: true });
+    const running = Array.from({ length: 20 }, (_, i) => ({
+      id: `telegram:running-${i + 1}`, displayName: `Running group ${i + 1}`, runtime: i < 11 ? 'codex' : 'claude',
+      runtimeOverridden: i < 3, modelOverridden: i < 2, state: { kind: 'idle' }, flags: {}, side: 'running',
+    }));
+    const offline = Array.from({ length: 22 }, (_, i) => ({
+      id: i === 21 ? 'telegram:without-history' : `telegram:offline-${i + 1}`,
+      displayName: i === 21 ? 'Never received a message' : `Offline group ${i + 1}`, runtime: 'codex',
+      runtimeOverridden: true, modelOverridden: false, flags: {}, side: 'offline',
+    }));
+    for (const width of [1280, 390]) for (const locale of ['en', 'zh']) for (const theme of ['light', 'dark']) {
+      const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, reducedMotion: 'reduce' });
+      try {
+        await context.addInitScript(({ locale, theme }) => {
+          localStorage.setItem('zylos-dashboard-locale', locale);
+          localStorage.setItem('zylos-dashboard-theme', theme);
+        }, { locale, theme });
+        const pageReads = [];
+        await context.route('**/*', route => {
+          const url = new URL(route.request().url()), query = url.searchParams;
+          if (url.origin !== base) return route.abort();
+          if (url.pathname === '/_assets/vendor/chart.umd.js') return route.fulfill({ path: process.env.ZYLOS_CHAT_CHART_ASSET, contentType: 'text/javascript' });
+          if (url.pathname === '/api/instance/runtime-options' && query.get('runtime') === 'codex') {
+            return route.fulfill({ json: { ...workbenchAnswer(url), runtime: 'codex' } });
+          }
+          if (url.pathname !== '/api/groups'
+            || !(query.has('runtimeOverridden') || query.has('modelOverridden') || query.get('include') === 'total')) return route.continue();
+          pageReads.push(query);
+          const q = query.get('q')?.toLowerCase() ?? '';
+          const matched = [...running, ...offline].filter(row =>
+            ['side', 'runtime', 'runtimeOverridden', 'modelOverridden'].every(key => !query.has(key) || query.get(key) === String(row[key])) &&
+            [row.id, row.displayName].some(name => name.toLowerCase().includes(q)));
+          const limit = Number(query.get('limit')), start = Number(query.get('cursor'));
+          return route.fulfill({ json: { listKnown: true, ...(query.get('include') === 'total' && { total: matched.length }),
+            items: matched.slice(start, start + limit),
+            nextCursor: start + limit < matched.length ? String(start + limit) : null } });
+        });
+        const page = await context.newPage();
+        page.setDefaultTimeout(8000);
+        await page.goto(base + '/');
+        await openDashboardTab(page, 'settings');
+        await page.locator('[data-settings-section="defaults"]').click();
+        const engineLists = page.locator('#settings-current-runtime .wb-glist');
+        const codexGroup = page.locator('#settings-model-codex').locator('xpath=ancestor::div[contains(@class, "wb-pref-c")]');
+        const lists = [
+          ['followers', engineLists.nth(0), 17, 'runtimeOverridden'],
+          ['overrides', engineLists.nth(1), 25, 'runtimeOverridden'],
+          ['models', codexGroup.locator('.wb-glist'), 9, 'modelOverridden'],
+        ];
+        await engineLists.first().waitFor();
+        assert.equal(pageReads.filter(query => query.get('limit') === '1').length, 6);
+        assert.equal(pageReads.filter(query => query.get('limit') === '8').length, 0);
+        const pageText = (current, pages) => locale === 'zh' ? `第 ${current} / ${pages} 页` : `Page ${current} / ${pages}`;
+        const noMatch = locale === 'zh' ? '没有匹配的结果' : 'No matching results';
+        for (const [name, list, total, filter] of lists) {
+          const shot = async suffix => {
+            if (!evidence) return;
+            await page.evaluate(() => document.activeElement?.blur());
+            await page.mouse.move(0, 0);
+            await list.evaluate(node => node.scrollIntoView({ block: 'center' }));
+            await list.screenshot({ path: path.join(evidence, `settings-groups-${name}-${locale}-${width}-${theme}-${suffix}.png`) });
+          };
+          assert.match(await list.locator('summary').textContent(), new RegExp(String(total)));
+          const rows = list.locator('.wb-gl-row'), input = list.locator('input');
+          assert.equal(await rows.count(), 0);
+          const before = pageReads.length;
+          await list.locator('summary').click();
+          const pages = Math.ceil(total / 8);
+          await list.getByText(pageText(1, pages), { exact: true }).waitFor();
+          assert.equal(await rows.count(), 8);
+          assert.equal(pageReads.length, before + 1);
+          assert.equal(pageReads.at(-1).has(filter), true);
+          const boxes = await list.locator('.wb-plist-pager button').evaluateAll(buttons =>
+            buttons.map(button => { const { y, height } = button.getBoundingClientRect(); return { height, center: y + height / 2 }; }));
+          assert.deepEqual(boxes.map(box => box.height), width === 390 ? [36, 36] : [30, 30]);
+          assert.ok(Math.abs(boxes[0].center - boxes[1].center) <= 1);
+          await shot('page-1');
+          await list.locator('.wb-plist-next').click();
+          await list.getByText(pageText(2, pages), { exact: true }).waitFor();
+          assert.equal(await rows.count(), Math.min(8, total - 8));
+          assert.equal(pageReads.length, before + 2);
+          assert.equal(pageReads.at(-1).get('cursor'), '8');
+          await shot('page-2');
+          if (name === 'overrides') {
+            for (const n of [3, 4]) {
+              await list.locator('.wb-plist-next').click();
+              await list.getByText(pageText(n, pages), { exact: true }).waitFor();
+            }
+            assert.equal(await rows.count(), 1);
+            assert.match(await rows.first().textContent(), /Never received a message/);
+            for (const term of ['Never received', 'telegram:without-history']) {
+              const result = page.waitForResponse(response => new URL(response.url()).searchParams.get('q') === term);
+              await input.fill(term);
+              await result;
+              await list.getByText('Never received a message', { exact: true }).waitFor();
+              assert.equal(await rows.count(), 1);
+              assert.equal(await list.locator('.wb-plist-pager').isVisible(), false);
+            }
+          }
+          await input.fill('unmatched-search');
+          await list.getByText(noMatch, { exact: true }).waitFor();
+          assert.equal(await rows.count(), 0);
+          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
+          await shot('no-match');
+          await list.locator('summary').click();
+        }
+      } finally { await context.close(); }
+    }
+  }, { timeoutMs: 140_000 });
 });

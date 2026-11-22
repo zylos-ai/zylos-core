@@ -54,7 +54,7 @@ export async function createAttachmentApiFixture(t, sandbox, { prototypeSource }
       '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: '隔离浏览器' } },
       '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
       '/api/settings/pricing': { active: 'claude', runtimes: { claude: { modelPrices: {}, builtInModels: [], fastMode: {} }, codex: { modelPrices: {}, builtInModels: [], priorityModelPrices: {}, builtInPriorityModels: [] } } },
-      '/api/usage/pricing': { models: [] }, '/api/groups/runtime-overrides': { runtime: [], runtimeTotal: 0, nextAfter: null } };
+      '/api/usage/pricing': { models: [] } };
     sendJson(res, 200, values[url.pathname] || {}); return true;
   } });
   sandbox.assertIsolation();

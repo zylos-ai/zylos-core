@@ -74,7 +74,6 @@ export function appendPriceRow(tbody, prefix, prices, builtIn, { document = tbod
   for (const input of inputs.slice(1)) input.classList.toggle('wb-dirty-in', Boolean(saved) && Number(input.value) !== Number(input.dataset.saved) || !saved);
   return row;
 }
-export const priceUsers = (snapshot, runtime) => (snapshot?.rows ?? []).filter(row => ['running', 'starting'].includes(row.presence) && row.target?.runtime === runtime);
 const matchPrefix = (prefixes, model) => prefixes.filter(prefix => model?.startsWith(prefix)).sort((a, b) => b.length - a.length)[0];
 /** Every price row, the most used in the last 7 days first; rows without use keep their saved order. */
 export function orderedPricePrefixes(payload, costs = []) {
@@ -89,7 +88,7 @@ export function priceRowCosts(payload, costs = []) {
   return totals;
 }
 
-export function createPricingPanel({ root, host, snapshot, data, usage = {}, document = root.ownerDocument,
+export function createPricingPanel({ root, host, groupCounts = {}, data, usage = {}, document = root.ownerDocument,
   t = key => key, formatTokens = value => Number(value).toLocaleString(), writable = () => true, write, onRuntime = () => {}, onDirty = () => {} }) {
   let runtime = data.active === 'codex' ? 'codex' : 'claude', stopped = false;
   const saved = structuredClone(data.runtimes), drafts = structuredClone(data.runtimes), usedModels = usage?.models ?? [];
@@ -141,7 +140,7 @@ export function createPricingPanel({ root, host, snapshot, data, usage = {}, doc
   function refreshDirty() {
     const counts = changes(), total = counts.claude + counts.codex;
     for (const [value, button] of tabButtons) {
-      const users = snapshot == null ? t('wb.unknown') : priceUsers(snapshot, value).length;
+      const users = groupCounts[value] ?? t('wb.unknown');
       const sw = element(document, 'i', undefined, 'wb-sw wb-sw-' + value);
       const label = element(document, 'span', t('wb.settings.priceTable', { runtime: runtimeName(value) }));
       const use = element(document, 'small', countLabel(t, 'wb.settings.priceUsers', users));

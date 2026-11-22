@@ -558,7 +558,13 @@ export async function runConversationVisual(t, sandbox) {
   assert.equal(draftWrites, writesBefore + 1);
   // UTF-8 external group is absent from the first list page; its drawer metadata must seed the header.
   await page.locator('.tab[data-tab="overview"]').click();
-  await page.locator('#wb-board [data-group]').filter({ hasText: externalName }).first().click();
+  const board = page.locator('#wb-board');
+  const loadMoreGroups = board.getByRole('button', { name: 'Load more groups', exact: true });
+  const externalGroupRow = board.locator('[data-group]').filter({ hasText: externalName });
+  await loadMoreGroups.waitFor();
+  assert.equal(await externalGroupRow.count(), 0);
+  await loadMoreGroups.click();
+  await externalGroupRow.click();
   const beforeExternalRead = messageRequests.length;
   await page.locator('#wb-side [data-action="viewConversation"]').click();
   await page.locator('#wb-chat .chat-message').filter({ hasText: 'Unicode external history outside the first page.' }).waitFor();
