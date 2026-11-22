@@ -550,6 +550,11 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       }
       assert.equal((await list('runtimeOverridden=true&q=zzz-override-only&include=total')).total, 1);
 
+      writeMode('single');
+      assert.equal((await list('side=offline&include=total')).total, 0);
+      assert.equal((await request('/api/groups/counts')).offline.total, 0);
+      writeMode('multi');
+
       for (const [query, param] of [['offset=1', 'offset'], ['side=running&side=offline', 'side'],
         ['limit=101', 'limit'], ['flag=x', 'flag'], ['include=raw', 'include']]) {
         const bad = await request(groups + '?' + query, { expected: 400 });
@@ -579,7 +584,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       db.close();
       overrideFixture = [];
       groupListReadable = true;
-      clock += 3000;
+      writeMode('multi');
     }
   });
   await t.test('ordinary stream publishes instance and counts payloads matching GET in both modes', async () => {

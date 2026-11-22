@@ -154,11 +154,13 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       if (!modelsByGroup.has(item.sessionGroup)) modelsByGroup.set(item.sessionGroup, new Map());
       modelsByGroup.get(item.sessionGroup).set(item.runtime, item);
     }
-    const known = new Set(rows.map(row => row.sessionGroup ?? 'origin'));
-    for (const sessionGroup of runtimeOverrides.keys()) if (!known.has(sessionGroup)) {
-      rows.push({ sessionGroup, presence: listKnown ? 'not_running' : 'unknown', name: names.get(sessionGroup) ?? null,
-        live: null, c4: null, preview: null, origin: false,
-        reason: listKnown ? null : statusError ?? 'group_list_failed' });
+    if (mode === 'multi') {
+      const known = new Set(rows.map(row => row.sessionGroup ?? 'origin'));
+      for (const sessionGroup of runtimeOverrides.keys()) if (!known.has(sessionGroup)) {
+        rows.push({ sessionGroup, presence: listKnown ? 'not_running' : 'unknown', name: names.get(sessionGroup) ?? null,
+          live: null, c4: null, preview: null, origin: false,
+          reason: listKnown ? null : statusError ?? 'group_list_failed' });
+      }
     }
     const messageTimes = new Map();
     let messageOrderKnown = true;
